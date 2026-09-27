@@ -1,0 +1,31 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set=0, binding=0) uniform sampler2D u_original;
+layout(set=0, binding=1) uniform sampler2D u_blurred;
+layout(set=0, binding=2) uniform sampler2D u_blurRadius;
+layout(set=0, binding=3, rgba16f) uniform writeonly image2D u_output;
+
+layout(push_constant) uniform Params {
+    float blurNear; // 16.0
+    vec2 texelSize;
+} pc;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(u_output);
+    if (coord.x >= outSize.x || coord.y >= outSize.y) return;
+
+    vec2 uv = (vec2(coord) + 0.5) * pc.texelSize;
+
+    vec3 original = texture(u_original, uv).rgb;
+    vec3 blurred = texture(u_blurred, uv).rgb;
+    float radius = texture(u_blurRadius, uv).r;
+
+    // Blend fator: 0 = original, 1 = blur
+    // Normaliza pelo blur máximo, mas preserva um pouco de original (0.85)
+    float blend = (radius / pc.blurNear) * 0.85;
+
+    vec3 final = mix(original, blurred, blend);
+    imageStore(u_output, coord, vec4(final, 1.0));
+}

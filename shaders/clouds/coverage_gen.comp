@@ -1,0 +1,233 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, r8) uniform writeonly image2DArray outCoverage;
+layout(set = 0, binding = 1, r16) uniform writeonly image2D outAltitude;
+
+struct LocalCloud {
+    vec2 center;
+    vec2 radius;
+    float rotation;
+    float density;
+    float falloff;
+    float altitude;
+    float coverage;
+    uint layerMask;
+    uint alive;   // C++ mirror: uint32_t (bool packed to 44 bytes and broke the stride)
+    uint _pad;
+};
+
+layout(set = 0, binding = 2, std430) readonly buffer LocalClouds {
+    LocalCloud clouds[];
+} localClouds;
+
+layout(push_constant) uniform Push {
+    vec2 worldMin;
+    vec2 worldMax;
+    vec2 windOffset;
+    float coverage;
+    int octaves;
+    uint seed;
+    float cloudBottom;
+    float layerSpacing;
+    int layerCount;
+    int imageSize;
+    int localCloudCount;
+} pc;
+
+int positiveMod(int v, int m) {
+    int r = v % m;
+    return r < 0 ? r + m : r;
+}
+
+float hash3D(int ix, int iy, int iz, uint seed) {
+    uint n = uint(ix) * 374761393u + uint(iy) * 668265263u + uint(iz) * 982451653u + seed * 1013904223u;
+    n = (n ^ (n >> 13u)) * 1274126177u;
+    return float(n) / float(0xFFFFFFFFu);
+}
+
+// 3D value noise: each cloud / layer samples a FIXED Z slice of the same 3D
+// field, so every cloud gets its own distinct shape instead of sharing one
+// 2D pattern. Wind still drifts XY; Z never animates, so shapes don't morph.
+float valueNoise3D(float x, float y, float z, uint seed, float period) {
+    int ix = int(floor(x));
+    int iy = int(floor(y));
+    int iz = int(floor(z));
+    float fx = fract(x);
+    float fy = fract(y);
+    float fz = fract(z);
+
+    int periodCells = int(ceil(period));
+    if (periodCells < 1) periodCells = 1;
+
+    int ix0 = positiveMod(ix, periodCells);
+    int iy0 = positiveMod(iy, periodCells);
+    int iz0 = positiveMod(iz, periodCells);
+    int ix1 = positiveMod(ix + 1, periodCells);
+    int iy1 = positiveMod(iy + 1, periodCells);
+    int iz1 = positiveMod(iz + 1, periodCells);
+
+    float a = hash3D(ix0, iy0, iz0, seed);
+    float b = hash3D(ix1, iy0, iz0, seed);
+    float c = hash3D(ix0, iy1, iz0, seed);
+    float d = hash3D(ix1, iy1, iz0, seed);
+    float e = hash3D(ix0, iy0, iz1, seed);
+    float f = hash3D(ix1, iy0, iz1, seed);
+    float g = hash3D(ix0, iy1, iz1, seed);
+    float h = hash3D(ix1, iy1, iz1, seed);
+
+    fx = fx * fx * (3.0 - 2.0 * fx);
+    fy = fy * fy * (3.0 - 2.0 * fy);
+    fz = fz * fz * (3.0 - 2.0 * fz);
+
+    return mix(mix(mix(a, b, fx), mix(c, d, fx), fy),
+               mix(mix(e, f, fx), mix(g, h, fx), fy), fz);
+}
+
+float fbm3D(float x, float y, float z, uint seed, int octaves, float persistence, float lacunarity, float basePeriod) {
+    float total = 0.0;
+    float amplitude = 1.0;
+    float frequency = 1.0;
+    float maxValue = 0.0;
+    for (int i = 0; i < octaves; ++i) {
+        total += valueNoise3D(x * frequency, y * frequency, z * frequency, seed + uint(i) * 131u, basePeriod * frequency) * amplitude;
+        maxValue += amplitude;
+        amplitude *= persistence;
+        frequency *= lacunarity;
+    }
+    return total / maxValue;
+}
+
+// Fixed Z slice per coverage layer: each altitude layer shows its own cloud
+// shapes cut from the same 3D field.
+float layerNoiseZ(int layerIndex) {
+    return float(layerIndex) * 7.31 + 2.17;
+}
+
+// Fixed Z slice per local cloud (by buffer index): every small cloud gets its
+// own distinct clump pattern.
+float localNoiseZ(int cloudIndex) {
+    return float(cloudIndex) * 3.97 + 11.13;
+}
+
+float sampleRaw(vec2 worldXZ, float noiseZ) {
+    if (pc.octaves <= 0) return 1.0;
+
+    vec2 range = pc.worldMax - pc.worldMin;
+    if (range.x <= 0.0 || range.y <= 0.0) return 1.0;
+
+    vec2 uv = (worldXZ - pc.worldMin) / range + pc.windOffset;
+    uv = fract(uv);
+
+    const float frequency = 32.0;
+    float value = fbm3D(uv.x * frequency, uv.y * frequency, noiseZ, pc.seed, pc.octaves, 0.5, 2.0, frequency);
+    return clamp(value, 0.0, 1.0);
+}
+
+float sampleCoverage(vec2 worldXZ, float noiseZ) {
+    float value = sampleRaw(worldXZ, noiseZ);
+    float threshold = 1.0 - pc.coverage;
+    value = smoothstep(threshold, threshold + 0.25, value);
+    return clamp(value, 0.0, 1.0);
+}
+
+float localCloudDensity(LocalCloud c, vec2 worldXZ, float noiseZ, float planeY) {
+    if (c.alive == 0u) return 0.0;
+    if (c.radius.x <= 0.0 || c.radius.y <= 0.0) return 0.0;
+    vec2 p = worldXZ - c.center;
+    float cr = cos(-c.rotation);
+    float sr = sin(-c.rotation);
+    vec2 rp = vec2(p.x * cr - p.y * sr, p.x * sr + p.y * cr);
+
+    float falloff = max(c.falloff, 0.01);
+    float ry = clamp(max(c.radius.x, c.radius.y) / falloff * 0.6, 6.0, 100.0);
+    float cy = planeY + ry;
+
+    float accum = 0.0;
+    int steps = 16;
+    float stepSize = (2.0 * ry) / float(steps);
+    for (int i = 0; i < steps; ++i) {
+        float py = planeY + stepSize * (float(i) + 0.5);
+        vec3 d3 = vec3(rp.x / c.radius.x, (py - cy) / ry, rp.y / c.radius.y);
+        float d = length(d3);
+        float v = 1.0 - smoothstep(0.0, 1.0, d * falloff);
+        if (v <= 0.0) continue;
+
+        float noise = fbm3D(worldXZ.x * 0.02 + c.center.x, worldXZ.y * 0.02 + c.center.y, py * 0.02 + noiseZ,
+                            pc.seed + 777u, 3, 0.5, 2.0, 4096.0);
+        float threshold = 1.0 - c.coverage;
+        noise = smoothstep(threshold, threshold + 0.35, noise);
+
+        float stepDensity = v * c.density * noise;
+        float alpha = stepDensity * 0.12;
+        accum += (1.0 - accum) * alpha;
+        if (accum > 0.99) break;
+    }
+    return accum;
+}
+
+float sampleLocalCoverage(vec2 worldXZ, int layerIndex) {
+    float planeY = pc.cloudBottom + float(layerIndex) * pc.layerSpacing;
+    float maxDensity = 0.0;
+    for (int i = 0; i < pc.localCloudCount; ++i) {
+        LocalCloud c = localClouds.clouds[i];
+        if ((c.layerMask & (1u << uint(layerIndex))) == 0u) continue;
+        maxDensity = max(maxDensity, localCloudDensity(c, worldXZ, localNoiseZ(i), planeY));
+    }
+    return maxDensity;
+}
+
+float sampleLocalAltitude(vec2 worldXZ) {
+    float alt = 0.0;
+    float weight = 0.0;
+    float planeY = pc.cloudBottom;
+    for (int i = 0; i < pc.localCloudCount; ++i) {
+        LocalCloud c = localClouds.clouds[i];
+        float d = localCloudDensity(c, worldXZ, localNoiseZ(i), planeY);
+        if (d > 0.0) {
+            alt += c.altitude * d;
+            weight += d;
+        }
+    }
+    return (weight > 0.0) ? (alt / weight) : -1.0;
+}
+
+float layerProfile(float t) {
+    float x = 1.0 - abs(t - 0.5) * 2.0;
+    return clamp(x * x, 0.0, 1.0);
+}
+
+void main() {
+    ivec3 gid = ivec3(gl_GlobalInvocationID.xyz);
+    if (gid.x >= pc.imageSize || gid.y >= pc.imageSize) return;
+
+    vec2 worldXZ = pc.worldMin + (pc.worldMax - pc.worldMin) * (vec2(gid.xy) + 0.5) / float(pc.imageSize);
+
+    float baseRaw = sampleRaw(worldXZ, layerNoiseZ(gid.z));
+    float baseCov = sampleCoverage(worldXZ, layerNoiseZ(gid.z));
+
+    // Altitude map: written once per texel (layer index 0 dispatch is enough).
+    if (gid.z == 0) {
+        float altitude = (1.0 - baseRaw) * 0.95 + baseRaw * 0.05;
+        float fine = sin(float(gid.x) * 17.0 + float(gid.y) * 23.0 + float(pc.seed)) * 0.05
+                   + cos(float(gid.x) * 11.0 - float(gid.y) * 31.0 + float(pc.seed)) * 0.07;
+        altitude = clamp(altitude + fine, 0.0, 1.0);
+
+        float localAlt = sampleLocalAltitude(worldXZ);
+        if (localAlt >= 0.0) {
+            float localCov = sampleLocalCoverage(worldXZ, 0);
+            altitude = mix(altitude, localAlt, localCov);
+        }
+        imageStore(outAltitude, gid.xy, vec4(altitude, 0.0, 0.0, 0.0));
+    }
+
+    // Coverage array: one slice per layer.
+    if (gid.z < pc.layerCount) {
+        float t = (pc.layerCount == 1) ? 0.5 : float(gid.z) / float(pc.layerCount - 1);
+        float profile = (pc.layerCount == 1) ? 1.0 : layerProfile(t);
+        float localCov = sampleLocalCoverage(worldXZ, gid.z);
+        float value = max(baseCov, localCov) * profile;
+        imageStore(outCoverage, gid, vec4(value, 0.0, 0.0, 0.0));
+    }
+}

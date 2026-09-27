@@ -1,0 +1,76 @@
+{
+  "_comment": [
+    "TEMPLATE de clima regional (G9). Copie para data/climate/<nome_do_mapa>.json",
+    "e o mapa passa a ter clima por REGIAO em vez de um estado global unico.",
+    "Mapa sem esse arquivo continua com clima global, identico ao de antes.",
+    "",
+    "O QUE VOCE AUTORA E' A CAUSA, NAO O EFEITO.",
+    "Voce descreve o que o lugar FISICAMENTE E' (uma assinatura), e os",
+    "parametros de render saem dela por applySignature(): calor visivel, ar",
+    "seco, supressao de chuva, vento e evaporacao rapida sao CONSEQUENCIA de",
+    "'quente e seco', nao sliders que voce tem que manter alinhados na mao.",
+    "",
+    "lapseRate: quanto a temperatura CAI por unidade de altura de mundo.",
+    "  0 desliga. 0.02 e' um valor razoavel para mapas legados (a taxa real da",
+    "  atmosfera e' ~6.5 C por 1000 m). Com isso o pico de um vulcao ja' fica",
+    "  mais frio que o pe dele sem voce autorar uma segunda regiao.",
+    "",
+    "Campos de signature (todos opcionais - omita o que nao for especial):",
+    "  thermalEnergy  -1..1  desvio do temperado (20 C). +1 = 50 C, -1 = -10 C",
+    "  humidity        0..1  agua no ar",
+    "  solar           0..1  insolacao",
+    "  cloudAmount     0..1  cobertura de nuvem",
+    "  turbulence      0..1  instabilidade (vira tempestade e raio)",
+    "  precipitation   0..1  intensidade do que cai",
+    "  precipType            none | rain | snow | hail | freezing",
+    "  visibility      0..1  1 = limpo; o que falta vira neblina",
+    "  wind            0..1  forca do vento",
+    "",
+    "As regioes sao aplicadas EM ORDEM sobre o clima global, entao uma regiao",
+    "posterior vence onde houver sobreposicao - e' o que voce quer para um",
+    "foco pequeno e intenso (a boca da caldeira) dentro de um maior e ameno",
+    "(o macico vulcanico).",
+    "",
+    "radius  = raio de forca total",
+    "falloff = distancia de mistura ALEM do raio (smoothstep, nao linear:",
+    "          rampa linear deixa um vinco visivel no chao)",
+    "weight  = 0..1 quanto a regiao sobrepoe o clima global"
+  ],
+
+  "lapseRate": 0.02,
+  "referenceAltitude": 0.0,
+
+  "regions": [
+    {
+      "name": "macico_vulcanico",
+      "center": [0.0, 0.0, 0.0],
+      "radius": 600.0,
+      "falloff": 500.0,
+      "weight": 0.75,
+      "signature": {
+        "thermalEnergy": 0.55,
+        "humidity": 0.15,
+        "visibility": 0.80,
+        "wind": 0.30,
+        "precipitation": 0.0,
+        "precipType": "none"
+      }
+    },
+    {
+      "name": "caldeira",
+      "center": [0.0, 0.0, 0.0],
+      "radius": 200.0,
+      "falloff": 260.0,
+      "weight": 1.0,
+      "signature": {
+        "thermalEnergy": 0.95,
+        "humidity": 0.02,
+        "solar": 0.85,
+        "visibility": 0.65,
+        "wind": 0.45,
+        "precipitation": 0.0,
+        "precipType": "none"
+      }
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set=0, binding=0) uniform sampler2D u_color;
+layout(set=0, binding=1) uniform sampler2D u_cocMap;
+layout(set=0, binding=3, rgba16f) uniform writeonly image2D u_blurOutput;
+
+layout(push_constant) uniform Params {
+    vec2 texelSize;
+    float maxBlur;
+    int sampleCount;
+    int cocChannel; // 0 for Near, 1 for Far
+    float bokehThreshold;
+    float bokehIntensity;
+} pc;
+
+const float GOLDEN_ANGLE = 2.39996323;
+
+vec3 GatherBlur(vec2 uv, float centerCoC) {
+    // 5.2 Early exit
+    if (centerCoC < 0.1) return texture(u_color, uv).rgb;
+
+    vec3 color = vec3(0.0);
+    float totalWeight = 0.0;
+
+    for (int i = 0; i < pc.sampleCount; i++) {
+        float angle = float(i) * GOLDEN_ANGLE;
+        float radius = pc.maxBlur * sqrt(float(i) / float(pc.sampleCount));
+        vec2 offset = vec2(cos(angle), sin(angle)) * radius * pc.texelSize;
+        vec2 sampleUV = uv + offset;
+
+        vec2 sampleCocVec = texture(u_cocMap, sampleUV).rg;
+        float sampleCoC = (pc.cocChannel == 0) ? sampleCocVec.r : sampleCocVec.g;
+        sampleCoC *= pc.maxBlur;
+        
+        vec3 sampleColor = texture(u_color, sampleUV).rgb;
+
+        // Bokeh highlight
+        float luma = dot(sampleColor, vec3(0.299, 0.587, 0.114));
+        float highlight = max(luma - pc.bokehThreshold, 0.0) / max(1.0 - pc.bokehThreshold, 0.01);
+        float bokehWeight = 1.0 + highlight * pc.bokehIntensity;
+
+        // Scatter-as-gather
+        float distPixels = radius;
+        float contrib = smoothstep(distPixels - 0.5, distPixels + 0.5, sampleCoC);
+
+        color += sampleColor * contrib * bokehWeight;
+        totalWeight += contrib * bokehWeight;
+    }
+
+    return totalWeight > 0.0 ? color / totalWeight : texture(u_color, uv).rgb;
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(u_blurOutput);
+    if (coord.x >= outSize.x || coord.y >= outSize.y) return;
+
+    vec2 outTexelSize = 1.0 / vec2(outSize);
+    vec2 uv = (vec2(coord) + 0.5) * outTexelSize;
+
+    vec2 centerCocVec = texture(u_cocMap, uv).rg;
+    float centerCoC = (pc.cocChannel == 0) ? centerCocVec.r : centerCocVec.g;
+    centerCoC *= pc.maxBlur;
+    
+    vec3 blurred = GatherBlur(uv, centerCoC);
+
+    imageStore(u_blurOutput, coord, vec4(blurred, 1.0));
+}

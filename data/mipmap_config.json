@@ -1,0 +1,6 @@
+{
+    "enabled": true,
+    "force_regen_on_switch": false,
+    "generation_mode": 0,
+    "show_warning_no_mipmaps": true
+}

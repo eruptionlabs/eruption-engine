@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Eruption Engine
+Comment=Eruption Engine
+Exec=@CMAKE_SOURCE_DIR@/launch.sh
+Icon=@CMAKE_SOURCE_DIR@/assets/icon/eruption_v3_512.png
+Terminal=false
+Categories=Game;

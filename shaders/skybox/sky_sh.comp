@@ -1,0 +1,68 @@
+#version 450
+// SONDA DE CEU -> SH9 (G36). Projeta o cubemap do ceu procedural (32x32 por
+// face, sem disco solar) nos 9 primeiros harmonicos esfericos. Um workgroup
+// so': 6*N*N texels / 256 threads = 24 texels por thread, reducao em shared.
+// O ambient.frag avalia a irradiancia com a formula fechada de Ramamoorthi &
+// Hanrahan 2001 ("An Efficient Representation for Irradiance Environment
+// Maps"); o directional.frag usa os mips do mesmo cubemap como especular
+// pre-filtrado. Ordem dos coeficientes: 0=L00, 1=L1-1(y), 2=L10(z), 3=L11(x),
+// 4=L2-2(xy), 5=L2-1(yz), 6=L20(3z^2-1), 7=L21(xz), 8=L22(x^2-y^2).
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) uniform samplerCube skyCube;
+layout(std430, set = 0, binding = 1) writeonly buffer SkySH { vec4 sh[9]; } outSH;
+layout(push_constant) uniform PC { uint faceSize; float maxRadiance; } pc;
+
+// Tabela de faces do Vulkan (spec "Cube Map Face Selection"): direcao do texel
+// (s,t) em [-1,1] da face f = A[f] + s*B[f] + t*C[f]. A MESMA tabela monta o
+// invViewProj de cada face no SkyProbe (C++), entao escrita e leitura batem
+// por construcao - nao ha' convencao de projecao no meio.
+const vec3 A[6] = vec3[6](vec3( 1, 0, 0), vec3(-1, 0, 0), vec3(0, 1, 0), vec3(0,-1, 0), vec3(0, 0, 1), vec3( 0, 0,-1));
+const vec3 B[6] = vec3[6](vec3( 0, 0,-1), vec3( 0, 0, 1), vec3(1, 0, 0), vec3(1, 0, 0), vec3(1, 0, 0), vec3(-1, 0, 0));
+const vec3 C[6] = vec3[6](vec3( 0,-1, 0), vec3( 0,-1, 0), vec3(0, 0, 1), vec3(0, 0,-1), vec3(0,-1, 0), vec3( 0,-1, 0));
+
+shared vec3 acc[256][9];
+
+void main() {
+    const uint tid = gl_LocalInvocationID.x;
+    vec3 s[9];
+    for (int i = 0; i < 9; ++i) s[i] = vec3(0.0);
+    const uint N = max(pc.faceSize, 1u);
+    const uint total = 6u * N * N;
+    const float invN2 = 1.0 / float(N * N);
+    for (uint idx = tid; idx < total; idx += 256u) {
+        const uint face = idx / (N * N);
+        const uint r = idx - face * N * N;
+        const uint x = r % N;
+        const uint y = r / N;
+        const float u = (float(x) + 0.5) / float(N) * 2.0 - 1.0;
+        const float v = (float(y) + 0.5) / float(N) * 2.0 - 1.0;
+        const vec3 d = normalize(A[face] + u * B[face] + v * C[face]);
+        // Angulo solido do texel: area (2/N)^2 vezes o jacobiano do cubo.
+        // Soma de todos = 4pi.
+        const float w = 4.0 * invN2 / pow(u * u + v * v + 1.0, 1.5);
+        vec3 L = textureLod(skyCube, d, 0.0).rgb;
+        L = min(L, vec3(pc.maxRadiance)); // seguranca contra um texel estourado
+        L *= w;
+        s[0] += L * 0.282095;
+        s[1] += L * 0.488603 * d.y;
+        s[2] += L * 0.488603 * d.z;
+        s[3] += L * 0.488603 * d.x;
+        s[4] += L * 1.092548 * d.x * d.y;
+        s[5] += L * 1.092548 * d.y * d.z;
+        s[6] += L * 0.315392 * (3.0 * d.z * d.z - 1.0);
+        s[7] += L * 1.092548 * d.x * d.z;
+        s[8] += L * 0.546274 * (d.x * d.x - d.y * d.y);
+    }
+    for (int i = 0; i < 9; ++i) acc[tid][i] = s[i];
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            for (int i = 0; i < 9; ++i) acc[tid][i] += acc[tid + stride][i];
+        }
+        barrier();
+    }
+    if (tid == 0u) {
+        for (int i = 0; i < 9; ++i) outSH.sh[i] = vec4(acc[0][i], 0.0);
+    }
+}

@@ -1,0 +1,39 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set=0, binding=0) uniform sampler2D u_original;
+layout(set=0, binding=1) uniform sampler2D u_fgBlurred; // Foreground (Gaussian)
+layout(set=0, binding=2) uniform sampler2D u_bgBlurred; // Background (Scatter)
+layout(set=0, binding=3, rgba16f) uniform writeonly image2D u_output;
+layout(set=0, binding=4) uniform sampler2D u_cocMap;    // R=FG Radius, G=BG CoC
+
+layout(push_constant) uniform Params {
+    vec2 texelSize;
+    float fgBlurNear; // 16.0
+    float dofMaxBlur; // background blur intensity
+} pc;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(u_output);
+    if (coord.x >= outSize.x || coord.y >= outSize.y) return;
+
+    vec2 uv = (vec2(coord) + 0.5) * pc.texelSize;
+
+    vec3 original = texture(u_original, uv).rgb;
+    vec3 fgBlurred = texture(u_fgBlurred, uv).rgb;
+    vec3 bgBlurred = texture(u_bgBlurred, uv).rgb;
+    vec2 cocs = texture(u_cocMap, uv).rg;
+
+    // 1. Background DoF Factor
+    float bgFactor = smoothstep(0.0, 1.0, cocs.g);
+    vec3 color = mix(original, bgBlurred, bgFactor);
+
+    // 2. Foreground Blur Factor (Exponential Curve requirements)
+    // mix(original, blurred, blurAmount/16.0 * 0.85)
+    float fgRadius = cocs.r;
+    float fgFactor = (fgRadius / pc.fgBlurNear) * 0.85;
+    color = mix(color, fgBlurred, fgFactor);
+
+    imageStore(u_output, coord, vec4(color, 1.0));
+}

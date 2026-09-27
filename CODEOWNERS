@@ -1,0 +1,19 @@
+# CODEOWNERS - Eruption Engine
+#
+# Todo pull request que afetar os arquivos abaixo precisa ser aprovado
+# pelo mantenedor principal antes do merge.
+#
+# Substitua @halen48 pelo seu usuário/team da organização no GitHub.
+
+# Todos os arquivos do repositório
+* @halen48
+
+# Arquivos críticos de licenciamento e governança
+LICENSE @halen48
+NOTICE @halen48
+CONTRIBUTING.md @halen48
+CODEOWNERS @halen48
+
+# Scripts e ferramentas de build
+*.sh @halen48
+CMakeLists.txt @halen48

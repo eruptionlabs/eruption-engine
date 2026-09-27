@@ -1,0 +1,80 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1) in;
+
+layout(set = 0, binding = 0, std430) buffer HistogramBuffer {
+    uint histogram[];
+};
+
+layout(set = 0, binding = 1, std430) buffer ExposureBuffer {
+    float exposure;
+    float prevLum;
+};
+
+layout(push_constant) uniform Push {
+    float minLogLum;
+    float logLumRange;
+    float timeDelta;
+    float tau;          // adaptation speed
+    uint numPixels;
+    float lowPercent;   // e.g. 0.01 for 1st percentile
+    float highPercent;  // e.g. 0.99 for 99th percentile
+} push;
+
+shared float sharedData[256];
+
+void main() {
+    uint idx = gl_LocalInvocationIndex;
+    
+    // Compute weighted sum and count
+    float weightedSum = 0.0;
+    uint count = 0u;
+    
+    for (uint i = idx; i < 256u; i += 256u) {
+        uint h = histogram[i];
+        if (h > 0u) {
+            float binLum = exp2(push.minLogLum + (float(i) / 255.0) * push.logLumRange);
+            weightedSum += float(h) * binLum;
+            count += h;
+        }
+    }
+    
+    sharedData[idx] = weightedSum;
+    barrier();
+    
+    // Parallel reduction for weighted sum
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (idx < stride) {
+            sharedData[idx] += sharedData[idx + stride];
+        }
+        barrier();
+    }
+    
+    float totalWeightedSum = sharedData[0];
+    
+    // Compute average luminance
+    float avgLum = (count > 0u) ? (totalWeightedSum / float(count)) : prevLum;
+    
+    // Clamp to avoid div by zero
+    avgLum = max(avgLum, 0.001);
+    
+    // Eye adaptation: smooth transition toward target exposure
+    // Target EV100 = 0 means avg gray (0.18) maps to mid-gray after tone mapping
+    // Exposure = 0.18 / avgLum (simplified)
+    float targetExposure = 0.18 / avgLum;
+    
+    // Temporal adaptation
+    float adaptedExposure = mix(exposure, targetExposure, 1.0 - exp(-push.timeDelta * push.tau));
+    
+    // Clamp to minimum (SDD Requirement)
+    adaptedExposure = max(adaptedExposure, 0.1);
+    
+    if (idx == 0u) {
+        exposure = adaptedExposure;
+        prevLum = avgLum;
+        // Clear histogram for next frame
+        for (uint i = 0u; i < 256u; i++) {
+            histogram[i] = 0u;
+        }
+    }
+}

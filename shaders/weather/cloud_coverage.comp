@@ -1,0 +1,67 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, r8) uniform writeonly image2D outCoverage;
+
+layout(push_constant) uniform Push {
+    vec2 worldMin;
+    vec2 worldMax;
+    vec2 windOffset;
+    float coverage;
+    int octaves;
+    int pad0;
+    int pad1;
+} pc;
+
+float ccHash2(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float ccValueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = ccHash2(i);
+    float b = ccHash2(i + vec2(1.0, 0.0));
+    float c = ccHash2(i + vec2(0.0, 1.0));
+    float d = ccHash2(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float ccFbm(vec2 p, int octaves) {
+    float total = 0.0;
+    float amplitude = 1.0;
+    float frequency = 1.0;
+    float maxValue = 0.0;
+    for (int i = 0; i < octaves; ++i) {
+        total += ccValueNoise(p * frequency) * amplitude;
+        maxValue += amplitude;
+        amplitude *= 0.5;
+        frequency *= 2.0;
+    }
+    return total / maxValue;
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outCoverage);
+    if (any(greaterThanEqual(coord, size))) return;
+
+    vec2 uv = (vec2(coord) + 0.5) / vec2(size);
+    uv += pc.windOffset;
+    uv = fract(uv);
+
+    // World-space frequency scaling: keep pattern consistent across map sizes.
+    const float frequency = 4.0;
+    vec2 p = uv * frequency;
+
+    float value = ccFbm(p, pc.octaves);
+
+    // Remap with coverage threshold.
+    float threshold = 1.0 - pc.coverage;
+    value = smoothstep(threshold, threshold + 0.4, value);
+    value = clamp(value, 0.0, 1.0);
+
+    imageStore(outCoverage, coord, vec4(value, 0.0, 0.0, 0.0));
+}

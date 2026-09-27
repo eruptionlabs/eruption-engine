@@ -1,0 +1,106 @@
+{
+  "exposure": 1.2,
+  "enable_fog": true,
+  "fog_start": 50.0,
+  "fog_end": 1000.0,
+  "fog_opacity": 0.2,
+  "fog_color": [
+    0.6,
+    0.7,
+    0.9
+  ],
+  "enable_dof": false,
+  "focal_offset": 35.0,
+  "focal_distance": 100.0,
+  "focal_range": 80.0,
+  "dof_amount": 1.5,
+  "foreground_blur_amount": 25.0,
+  "foreground_bleed": 1.5,
+  "radial_stretch": 0.5,
+  "coc_focal_distance": 230.0,
+  "coc_aperture": 0.05,
+  "coc_max_blur": 2.5,
+  "coc_zoom_factor": 1.0,
+  "coc_enable_foreground": true,
+  "visualize_coc": false,
+  "coc_enable_zoom_mapping": true,
+  "coc_focal_curve": {
+    "points": [
+      {
+        "x": 0.0,
+        "y": 1000.0,
+        "interpolation": "Linear"
+      },
+      {
+        "x": 0.25,
+        "y": 750.0,
+        "interpolation": "Linear"
+      },
+      {
+        "x": 0.5,
+        "y": 500.0,
+        "interpolation": "Linear"
+      },
+      {
+        "x": 0.75,
+        "y": 250.0,
+        "interpolation": "Linear"
+      },
+      {
+        "x": 1.0,
+        "y": 1.0,
+        "interpolation": "Linear"
+      }
+    ]
+  },
+  "coc_aperture_curve": {
+    "points": [
+      {
+        "x": 0.0,
+        "y": 0.16,
+        "interpolation": "Linear"
+      },
+      {
+        "x": 0.25,
+        "y": 0.12,
+        "interpolation": "Linear"
+      },
+      {
+        "x": 0.5,
+        "y": 0.08,
+        "interpolation": "Linear"
+      },
+      {
+        "x": 0.75,
+        "y": 0.05,
+        "interpolation": "Linear"
+      },
+      {
+        "x": 1.0,
+        "y": 0.03,
+        "interpolation": "Linear"
+      }
+    ]
+  },
+  "bokeh_threshold": 0.6,
+  "bokeh_intensity": 2.0,
+  "coc_enable_adaptive_focal": true,
+  "coc_adaptive_focal_method": "MultiRayGrid",
+  "multi_ray_weights": [
+    0.05,
+    0.1,
+    0.05,
+    0.1,
+    0.4,
+    0.1,
+    0.05,
+    0.1,
+    0.05
+  ],
+  "enable_motion_blur": true,
+  "motion_blur_amount": 1.0,
+  "enable_bloom": true,
+  "bloom_threshold": 0.75,
+  "bloom_intensity": 0.85,
+  "tone_map_mode": 1
+}

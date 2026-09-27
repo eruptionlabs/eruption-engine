@@ -1,0 +1,38 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set=0, binding=0) uniform sampler2D u_depth;
+layout(set=0, binding=3, r16f) uniform writeonly image2D u_blurRadius;
+
+layout(push_constant) uniform Params {
+    mat4 invViewProj;
+    vec4 cameraPos;
+    float blurNear;     // 16.0
+    float blurFar;      // 1.5
+    float decayRate;    // 0.15
+    vec2 texelSize;
+} pc;
+
+vec3 ReconstructWorldPos(vec2 uv, float depth) {
+    vec4 clip = vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec4 world = pc.invViewProj * clip;
+    return world.xyz / world.w;
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(u_blurRadius);
+    if (coord.x >= size.x || coord.y >= size.y) return;
+
+    vec2 uv = (vec2(coord) + 0.5) * pc.texelSize;
+
+    float depth = texture(u_depth, uv).r;
+    vec3 worldPos = ReconstructWorldPos(uv, depth);
+    float dist = length(worldPos - pc.cameraPos.xyz);
+
+    // CURVA EXPONENCIAL SUAVE - NÃO TEM THRESHOLD, NÃO TEM IF
+    float blurAmount = pc.blurFar + (pc.blurNear - pc.blurFar) 
+                     * exp(-pc.decayRate * dist);
+
+    imageStore(u_blurRadius, coord, vec4(blurAmount, 0.0, 0.0, 1.0));
+}

@@ -1,0 +1,250 @@
+{
+  "preset": "high",
+  "normal_distance": {
+    "enabled": true,
+    "shadow_opacity_enabled": true,
+    "max_distance": 1000.0,
+    "_comment": "Curvas por distancia da camera, editaveis no F2 (Lighting > Bump/Normal). X normalizado 0..1 = 0..max_distance unidades de mundo. Nos padrao = mapeamento focal do DoF: 35, 100, 180 e 1000 u.",
+    "scale_curve": [
+      {
+        "x": 0.035,
+        "y": 0.33,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 0.1,
+        "y": 0.6,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 0.18,
+        "y": 1.0,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 1.0,
+        "y": 1.0,
+        "interpolation": "Smoothstep"
+      }
+    ],
+    "smoothing_curve": [
+      {
+        "x": 0.035,
+        "y": 0.0,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 0.1,
+        "y": 1.0,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 0.18,
+        "y": 1.0,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 1.0,
+        "y": 1.0,
+        "interpolation": "Smoothstep"
+      }
+    ],
+    "shadow_opacity_curve": [
+      {
+        "x": 0.035,
+        "y": 0.72,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 0.1,
+        "y": 0.8,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 0.18,
+        "y": 0.88,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 1.0,
+        "y": 0.95,
+        "interpolation": "Smoothstep"
+      }
+    ],
+    "tessellation_enabled": true,
+    "tessellation_amplitude": 1.6,
+    "tessellation_curve": [
+      {
+        "x": 0.0,
+        "y": 8.0,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 0.05,
+        "y": 4.0,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 0.1,
+        "y": 1.0,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 1.0,
+        "y": 1.0,
+        "interpolation": "Smoothstep"
+      }
+    ],
+    "tessellation_height_gain": 3.5,
+    "tessellation_height_space": 0,
+    "tessellation_world_scale": 0.125
+  },
+  "fps_cap": 0,
+  "present_mode": "auto",
+  "presets": {
+    "low": {
+      "weather_tier": "mobile",
+      "shadow_atlas": 1024,
+      "ssao": false,
+      "motion_blur": false,
+      "chromatic_aberration": false,
+      "tilt_shift": false,
+      "dof": false,
+      "point_lights": false,
+      "gi": false,
+      "max_rain_followers": 12,
+      "max_field_clouds": 16,
+      "pom_height_scale": 0.0,
+      "geo_disp_amplitude": 0.0,
+      "geo_disp_distance": 0.0,
+      "geo_lod_budget_mb": 0,
+      "pbr_synthesis": false,
+      "contact_shadows": false,
+      "sky_probe": false,
+      "sky_probe_intensity": 1.0,
+      "irradiance_probes": false,
+      "irradiance_probe_strength": 1.0,
+      "fill_light": 0.55,
+      "smoke": true,
+      "smoke_steps": 12,
+      "smoke_sun_tap": false,
+      "smoke_detail": false,
+      "texture_max_size": 512,
+      "mesh_lod_ratio": 0.45,
+      "mesh_lod_error": 0.15,
+      "mesh_lod_distance_factor": 120.0,
+      "cloud_march_steps": 12,
+      "mesh_lod_max_tris": 4000,
+      "shadow_lod_max_tris": 800,
+      "mesh_lod_far_max_tris": 300,
+      "mesh_lod_far_distance_mul": 3.0,
+      "mesh_lod_tris_per_px": 0.5,
+      "small_object_cull_px": 2.5,
+      "shadow_caster_min_px": 1.5,
+      "wind_sway_scale": 0.35,
+      "post_scale": 1.0,
+      "render_scale": 0.7,
+      "post_format": "packed",
+      "mesh_lod_min_tris": 300,
+      "mesh_lod_min_distance": 300.0
+    },
+    "medium": {
+      "weather_tier": "medium",
+      "shadow_atlas": 1024,
+      "ssao": false,
+      "motion_blur": false,
+      "chromatic_aberration": true,
+      "dof": true,
+      "point_lights": true,
+      "max_rain_followers": 32,
+      "max_field_clouds": 28,
+      "pom_height_scale": 0.0,
+      "pom_max_steps": 8,
+      "pom_min_steps": 3,
+      "geo_disp_amplitude": 0.0,
+      "geo_disp_distance": 0.0,
+      "geo_lod_budget_mb": 0,
+      "geo_lod_edge": 12.0,
+      "geo_lod_lowpass": 0.6,
+      "geo_lod_distance": 100.0,
+      "pbr_synthesis": true,
+      "contact_shadows": false,
+      "sky_probe": true,
+      "sky_probe_intensity": 1.0,
+      "irradiance_probes": true,
+      "irradiance_probe_strength": 1.0,
+      "fill_light": 0.55,
+      "smoke": true,
+      "smoke_steps": 24,
+      "smoke_sun_tap": true,
+      "smoke_detail": false,
+      "texture_max_size": 1024,
+      "mesh_lod_ratio": 0.45,
+      "mesh_lod_error": 0.08,
+      "mesh_lod_distance_factor": 250.0,
+      "cloud_march_steps": 20,
+      "mesh_lod_max_tris": 8000,
+      "shadow_lod_max_tris": 300,
+      "mesh_lod_far_max_tris": 300,
+      "mesh_lod_far_distance_mul": 3.0,
+      "mesh_lod_tris_per_px": 0.75,
+      "small_object_cull_px": 2.5,
+      "shadow_caster_min_px": 1.0,
+      "wind_sway_scale": 0.5,
+      "post_scale": 1.0,
+      "render_scale": 0.85,
+      "post_format": "packed",
+      "mesh_lod_min_tris": 500,
+      "mesh_lod_min_distance": 300.0
+    },
+    "high": {
+      "weather_tier": "high",
+      "shadow_atlas": 3072,
+      "ssao": true,
+      "motion_blur": true,
+      "chromatic_aberration": true,
+      "dof": true,
+      "point_lights": true,
+      "max_rain_followers": 100,
+      "max_field_clouds": 40,
+      "pom_height_scale": 0.0,
+      "pom_max_steps": 12,
+      "pom_min_steps": 4,
+      "geo_disp_amplitude": 0.0,
+      "geo_disp_distance": 0.0,
+      "geo_lod_budget_mb": 0,
+      "geo_lod_edge": 8.0,
+      "geo_lod_lowpass": 0.5,
+      "geo_lod_distance": 150.0,
+      "pbr_synthesis": true,
+      "contact_shadows": true,
+      "sky_probe": true,
+      "sky_probe_intensity": 1.0,
+      "irradiance_probes": true,
+      "irradiance_probe_strength": 1.0,
+      "fill_light": 0.55,
+      "smoke": true,
+      "smoke_steps": 40,
+      "smoke_sun_tap": true,
+      "smoke_detail": true,
+      "texture_max_size": 1024,
+      "mesh_lod_ratio": 0.45,
+      "mesh_lod_error": 0.05,
+      "mesh_lod_distance_factor": 400.0,
+      "cloud_march_steps": 24,
+      "mesh_lod_max_tris": 12000,
+      "shadow_lod_max_tris": 400,
+      "mesh_lod_far_max_tris": 400,
+      "mesh_lod_far_distance_mul": 3.0,
+      "mesh_lod_tris_per_px": 1.0,
+      "small_object_cull_px": 2.5,
+      "shadow_caster_min_px": 0.75,
+      "wind_sway_scale": 0.5,
+      "post_scale": 1.0,
+      "render_scale": 1.0,
+      "post_format": "rgba16f",
+      "mesh_lod_min_tris": 800,
+      "mesh_lod_min_distance": 250.0
+    }
+  }
+}

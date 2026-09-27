@@ -1,0 +1,22 @@
+{
+    "gamepad": {
+        "cameraAxisX": 0,
+        "cameraAxisY": 1,
+        "cameraResetButton": 11,
+        "cameraSensitivity": 2.0,
+        "deadzone": 0.20000000298023224,
+        "invertCameraX": false,
+        "invertCameraY": false,
+        "movementAxisX": 2,
+        "movementAxisY": 3,
+        "movementSensitivity": 1.0,
+        "selectedGamepadIndex": 1
+    },
+    "kbMouse": {
+        "invertMouseY": false,
+        "mouseSensitivity": 0.004999999888241291,
+        "scrollSensitivity": 0.10000000149011612,
+        "sprintMultiplier": 3.0,
+        "wasdSpeed": 400.0
+    }
+}

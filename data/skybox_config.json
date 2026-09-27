@@ -1,0 +1,61 @@
+{
+  "backend": "procedural",
+  "procedural": {
+    "star_density": 0.7,
+    "star_twinkle_speed": 2.5,
+    "cloud_coverage": 0.55,
+    "cloud_speed": 0.04,
+    "cloud_scale": 2.2,
+    "cloud_softness": 0.5,
+    "cloud_thickness": 0.5,
+    "cloud_lightness": 1.0,
+    "cloud_shade": 0.55,
+    "weather": 0.0,
+    "sun_ray_count": 12,
+    "moon_phase_offset": 0.12,
+    "sun_size": 1.0,
+    "moon_size": 1.0,
+    "enable_stars": true,
+    "enable_clouds": true,
+    "debug_show_clouds_only": false
+  },
+  "cloudfluff": {
+    "enabled": true,
+    "max_clouds": 64,
+    "displacement_scale": 0.85,
+    "noise_tex_scale": 0.05,
+    "shadow_map_size": 512,
+    "wind_speed": 0.25,
+    "wind_direction": [
+      1.0,
+      0.0,
+      -0.5
+    ],
+    "scale": [
+      70.0,
+      22.0,
+      70.0
+    ],
+    "coverage": 0.7,
+    "opacity": 1.3,
+    "height_min": 60.0,
+    "height_max": 220.0,
+    "distance_min": 80.0,
+    "distance_max": 600.0,
+    "cast_shadows": false,
+    "cloud_shadow_intensity": 0.5,
+    "cloud_shadow_map_size": 512,
+    "auto_preset": true,
+    "coverage_map_backend": "cpu",
+    "coverage_map_size": 512,
+    "coverage_map_octaves": 3,
+    "coverage_map_coverage": 0.6,
+    "coverage_map_seed": 12345,
+    "spawn_in_view_chance": 0.9,
+    "vertical_spread_angle": 35.0
+  },
+  "volumetric": {
+    "enabled": false,
+    "quality": "medium"
+  }
+}
