@@ -1,0 +1,42 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D depthTex;
+layout(set = 0, binding = 1, r32ui) uniform uimage2D heightmap;
+
+layout(push_constant) uniform Push {
+    mat4 rainInvViewProj;
+    vec4 params;     // x=worldMinX, y=worldMinZ, z=worldSizeX, w=worldSizeZ
+    vec4 screenSize; // xy=heightmap size, zw=inv size
+} push;
+
+vec3 reconstructWorldPosFromTopDown(vec2 uv, float depth) {
+    vec4 ndc = vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec4 worldPos = push.rainInvViewProj * ndc;
+    return worldPos.xyz / worldPos.w;
+}
+
+void main() {
+    ivec2 hmSize = ivec2(push.screenSize.xy);
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    if (gid.x >= hmSize.x || gid.y >= hmSize.y) return;
+
+    vec2 uv = (vec2(gid) + 0.5) * push.screenSize.zw;
+    float depth = texture(depthTex, uv).r;
+    if (depth >= 1.0) return;
+
+    vec3 worldPos = reconstructWorldPosFromTopDown(uv, depth);
+
+    // Project world XZ into heightmap
+    vec2 hmUV = (worldPos.xz - push.params.xy) / push.params.zw;
+    if (any(lessThan(hmUV, vec2(0.0))) || any(greaterThan(hmUV, vec2(1.0)))) return;
+
+    ivec2 hmCoord = ivec2(hmUV * vec2(hmSize));
+    hmCoord = clamp(hmCoord, ivec2(0), hmSize - ivec2(1));
+
+    // Bias height so all stored values are non-negative and uint ordering matches float ordering
+    float yBias = worldPos.y + 10000.0;
+    uint hbits = floatBitsToUint(yBias);
+    imageAtomicMax(heightmap, hmCoord, hbits);
+}

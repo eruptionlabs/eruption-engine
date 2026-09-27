@@ -1,0 +1,48 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, r32ui) uniform readonly uimage2D srcHeightmap;
+layout(set = 0, binding = 1, r32ui) uniform writeonly uimage2D dstHeightmap;
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(srcHeightmap);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+
+    // NON-CONSTRUCTIVE blur: empty pixels stay empty.
+    // Only pixels that already have a height get smoothed against their
+    // valid neighbours. This prevents the shadow from bleeding into open
+    // space as a fake gradient.
+    uint centerH = imageLoad(srcHeightmap, gid).r;
+    if (centerH == 0u) {
+        imageStore(dstHeightmap, gid, uvec4(0u));
+        return;
+    }
+
+    float centerY = uintBitsToFloat(centerH) - 10000.0;
+    if (centerY < -9000.0) {
+        imageStore(dstHeightmap, gid, uvec4(0u));
+        return;
+    }
+
+    float sumY = centerY;
+    float weight = 1.0;
+
+    // 3x3 box blur in world-height space, ignoring empty neighbours.
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            if (x == 0 && y == 0) continue;
+            ivec2 sampleCoord = clamp(gid + ivec2(x, y), ivec2(0), size - ivec2(1));
+            uint h = imageLoad(srcHeightmap, sampleCoord).r;
+            if (h == 0u) continue;
+            float yWorld = uintBitsToFloat(h) - 10000.0;
+            if (yWorld < -9000.0) continue;
+            sumY += yWorld;
+            weight += 1.0;
+        }
+    }
+
+    float avgY = sumY / weight;
+    imageStore(dstHeightmap, gid, uvec4(floatBitsToUint(avgY + 10000.0)));
+}

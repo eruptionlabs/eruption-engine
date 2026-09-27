@@ -1,0 +1,115 @@
+{
+    "enabled": true,
+    "mode": "csm",
+    "csm_far": 1200.0,
+    "csm_lambda": 0.6,
+    "single_max_texel": 0.5,
+    "use_poisson": true,
+    "pcf_kernel_size": 5,
+    "debug_light_rays": false,
+    "enable_temporal_blend": false,
+    "enable_angle_snapping": false,
+    "enable_positional_snap": true,
+    "snap_quantize_step": 25.0,
+    "bias_value": 2e-05,
+    "normal_bias": 0.001,
+    "slope_bias": 8.0,
+    "adaptive": {
+        "enabled": true,
+        "c0_size_curve": {
+            "points": [
+                {
+                    "x": 0.10101,
+                    "y": 450.0,
+                    "interpolation": "Smoothstep"
+                },
+                {
+                    "x": 0.30303,
+                    "y": 350.0,
+                    "interpolation": "Smoothstep"
+                },
+                {
+                    "x": 0.40404,
+                    "y": 300.0,
+                    "interpolation": "Smoothstep"
+                },
+                {
+                    "x": 0.505051,
+                    "y": 250.0,
+                    "interpolation": "Smoothstep"
+                }
+            ]
+        },
+        "single_size_curve": {
+            "points": [
+                {
+                    "x": 0.0,
+                    "y": 3200.0,
+                    "interpolation": "Smoothstep"
+                },
+                {
+                    "x": 0.5,
+                    "y": 1800.0,
+                    "interpolation": "Smoothstep"
+                },
+                {
+                    "x": 1.0,
+                    "y": 1024.0,
+                    "interpolation": "Linear"
+                }
+            ]
+        },
+        "min_model_shadow_size_curve": {
+            "points": [
+                {
+                    "x": 0.0,
+                    "y": 10.0,
+                    "interpolation": "Linear"
+                },
+                {
+                    "x": 0.2,
+                    "y": 8.0,
+                    "interpolation": "Smoothstep"
+                },
+                {
+                    "x": 0.35,
+                    "y": 2.0,
+                    "interpolation": "Linear"
+                },
+                {
+                    "x": 0.5,
+                    "y": 0.0,
+                    "interpolation": "Smoothstep"
+                },
+                {
+                    "x": 1.0,
+                    "y": 0.0,
+                    "interpolation": "Linear"
+                }
+            ]
+        },
+        "far_range_curve": {
+            "points": [
+                {
+                    "x": 0.0,
+                    "y": 50000.0,
+                    "interpolation": "Smoothstep"
+                },
+                {
+                    "x": 0.5,
+                    "y": 30000.0,
+                    "interpolation": "Smoothstep"
+                },
+                {
+                    "x": 1.0,
+                    "y": 10000.0,
+                    "interpolation": "Linear"
+                }
+            ]
+        },
+        "low_pitch_size_boost": 3.0,
+        "low_pitch_max_texel": 6.0,
+        "min_shadow_texels": 1.0,
+        "csm_far_texel_bias": 4.0
+    }
+}

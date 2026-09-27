@@ -1,0 +1,63 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_depthTex;
+layout(set = 0, binding = 1) uniform sampler2D u_prevFoamTex;
+layout(set = 0, binding = 2, r8) uniform restrict writeonly image2D u_outFoamImg;
+
+layout(push_constant) uniform Push {
+    vec4 params;     // x=decay, y=foamEdgeDepth, z=nearPlane, w=farPlane
+    vec4 moreParams; // x=waterLevel, yzw=unused
+    vec2 texelSize;
+    float enable;
+    float _pad;
+    mat4 invViewProj;
+} pc;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(u_outFoamImg);
+    if (coord.x >= size.x || coord.y >= size.y) return;
+
+    vec2 uv = (vec2(coord) + 0.5) * pc.texelSize;
+
+    // Read previous accumulated foam
+    float prevFoam = texture(u_prevFoamTex, uv).r;
+
+    if (pc.enable < 0.5) {
+        imageStore(u_outFoamImg, coord, vec4(0.0));
+        return;
+    }
+
+    // UV for full-res depth texture (accum is half-res)
+    vec2 uvFullRes = uv * 0.5;
+
+    // Sample depth at this pixel
+    float d = texture(u_depthTex, uvFullRes).r;
+
+    // Reconstruct world position (same math as water.frag)
+    vec4 ndc = vec4(uvFullRes * 2.0 - 1.0, d, 1.0);
+    vec4 worldPos = pc.invViewProj * ndc;
+    worldPos /= worldPos.w;
+
+    float waterLevel = pc.moreParams.x;
+    float foamEdgeDepth = pc.params.y;
+
+    // Edge foam: where terrain height is close to water level (outer shoreline)
+    float depthDiff = worldPos.y - waterLevel;
+    depthDiff = abs(depthDiff);
+
+    float currentFoam = 0.0;
+    if (foamEdgeDepth > 0.0) {
+        // Only accumulate on the OUTER edge (shoreline)
+        float foamLine = 1.0 - smoothstep(0.0, foamEdgeDepth * 0.6, depthDiff);
+        currentFoam = foamLine;
+    }
+
+    // Accumulate: keep max of current or faded previous
+    float decay = pc.params.x;
+    float newFoam = max(currentFoam, prevFoam * decay);
+
+    imageStore(u_outFoamImg, coord, vec4(newFoam));
+}

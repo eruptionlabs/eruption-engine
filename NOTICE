@@ -1,0 +1,35 @@
+Eruption Engine
+Copyright 2026 Gdg Solucoes Digitais LTDA
+
+O codigo-fonte da engine e' licenciado sob a Apache License 2.0 (ver LICENSE).
+
+Este produto inclui ou utiliza as seguintes bibliotecas de terceiros, cada uma
+sob sua propria licenca:
+
+Obtidas em tempo de configuracao (CMake FetchContent):
+- GLFW (https://github.com/glfw/glfw) — Zlib/libpng License
+- GLM (https://github.com/g-truc/glm) — MIT License
+- VulkanMemoryAllocator (https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) — MIT License
+- shaderc (https://github.com/google/shaderc) — Apache License 2.0
+- Dear ImGui (https://github.com/ocornut/imgui) — MIT License
+- nlohmann/json (https://github.com/nlohmann/json) — MIT License
+- tinygltf (https://github.com/syoyo/tinygltf) — MIT License
+- Draco (https://github.com/google/draco) — Apache License 2.0
+- bc7enc_rdo (https://github.com/richgel999/bc7enc_rdo) — MIT / Public Domain (usa third_party/bc7enc_rdo/ se existir, senao e' baixado pelo CMake)
+
+Vendorizadas em third_party/:
+- meshoptimizer (https://github.com/zeux/meshoptimizer) — MIT License
+- ImGuizmo (https://github.com/CedricGuillemet/ImGuizmo) — MIT License
+- stb_image / stb_image_write (https://github.com/nothings/stb) — Public Domain / MIT License
+
+Dependencias de sistema em tempo de execucao:
+- Vulkan SDK (https://www.vulkan.org/) — termos da Vulkan SDK License
+- zlib (https://zlib.net/) — Zlib License
+- iconv (implementacao do sistema) — LGPL ou conforme a distribuicao
+
+Agradecimentos as comunidades e autores dessas bibliotecas.
+
+NOTA: os assets contidos na pasta assets/ (modelos, texturas, sprites, mapas e
+outros materiais audiovisuais) NAO fazem parte da licenca Apache 2.0 que rege o
+codigo-fonte, salvo indicacao expressa em contrario. Cada mapa em
+assets/external/ traz a sua origem e licenca na documentacao do proprio asset.

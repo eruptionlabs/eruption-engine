@@ -1,0 +1,149 @@
+# Build and CMake directories
+build/
+out/
+bin/
+.cache/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+src/generated/
+
+# Logs and test artifacts
+logs/
+
+# Heavy data files and archives
+data/*
+!data/*.json
+!data/hud/
+!data/hud/**
+resources.ini
+assets/hidden_alley.zip
+assets/external/
+assets/data/hidden_alley.map
+assets/Medieval\ Village/
+assets/maps/
+
+# External tooling downloaded on demand
+tools/blender/
+
+# Engine outputs, screenshots, and logs
+*.spv
+*.log
+engine_log.txt
+imgui.ini
+debug_*.png
+diagnostic_*.png
+screenshot_*.png
+warp_debug_output.txt
+scripts/tests/screenshots/
+screenshots/
+data/launcher_config.json
+data/cloud_layer_config.json
+
+# Editor backup files
+*~
+
+# IDE and OS files
+.vscode/
+.idea/
+*.suo
+*.sln
+*.vcxproj*
+.DS_Store
+Thumbs.db
+tests/*
+!tests/harness.cpp
+!tests/harness.h
+!tests/main.cpp
+!tests/maps/
+!tests/maps/**
+
+# Ignore asset icons
+assets/icon/alt
+
+# Extractor tools live in separate repo (eruption-tools) and are cloned here
+tools/extractors/
+
+# Generated PBR cache (outside git, rebuilt by cooker)
+assets/pbr/
+assets/data/texture/
+
+# Runtime-ready converted models (derived from .model, rebuilt on demand)
+assets/models/
+
+# Allow unit-test fixtures despite tests/* ignore above
+!tests/pbr/
+!tests/fixtures/
+!tests/fixtures/**
+
+# Local build artifacts
+combat_tests
+eruption-engine
+eruption-tests
+eruption-map-bundle-test
+eruption-normalgen
+pbr_cooker
+pbr_extractor
+eruption-pbr-tests
+!tools/pbr_cooker/
+!tools/pbr_extractor/
+tools/venv
+tools/__pycache__/
+.worktrees/
+draco_decoder*
+draco_encoder*
+loader_example
+
+# Generated map assets (bundles, terrain, textures, PBR cache) stay outside git.
+assets/data/
+
+# Discarded legacy assets and parsers moved out of the active source tree.
+descarte/
+
+.cai
+*.cai
+perf/__pycache__/
+build-release/
+assets/**/*.etex
+# Bake de texturas embutidas de GLB: artefato DERIVADO, regenerado no load.
+assets/**/*.etexpack
+assets/**/*.etexpack.tmp
+third_party/bc7enc_rdo/
+*.bak
+build-rel/
+build-dbg/
+demo_out/
+
+# ---- Tudo que NAO vai para o git fica em not_commit/ (raiz e por pasta) ----
+not_commit/
+**/not_commit/
+robrowser
+.claude/
+
+# Fixtures de teste e configs de clima versionados apesar das regras acima.
+!tests/*.cpp
+!tests/*.h
+!tests/shadows/
+!tests/shadows/**
+!data/climate/
+!data/climate/**
+
+# Mapa procedural parana_field vai para o repo (bake .etexpack continua fora).
+!assets/external/
+assets/external/*
+!assets/external/parana_field/
+assets/external/parana_field/*.etexpack
+assets/external/parana_field/*.etexpack.tmp
+
+# O .glb do parana_field tem 203 MB (limite do GitHub e 100 MB): vem como asset de release, nao pelo git.
+assets/external/parana_field/*.glb
+eruption-sprite-shadow-harness
+eruption-pbr-tests
+
+# Repos privados do lab (clonar no lugar para usar):
+#   git clone git@github.com:eruptionlabs/eruption-perf.git  perf
+#   git clone git@github.com:eruptionlabs/eruption-tools.git tools/scripts
+perf/
+tools/scripts/

@@ -1,0 +1,1241 @@
+{
+  "_comment": [
+    "ENVELOPES CLIMATICOS — em que regiao do espaco atmosferico cada clima vive.",
+    "Hot-reload: salvar este arquivo revalida e reaplica sem reiniciar a engine.",
+    "",
+    "POR QUE ESTES QUATRO EIXOS",
+    "Aristoteles classifica por QUENTE/FRIO x UMIDO/SECO. A meteorologia classifica",
+    "MASSA DE AR pelos mesmos dois: temperatura (Arctic/Polar/Tropical) x umidade",
+    "(continental=seco / maritime=umido), dando cA, cP, mP, cT, mT. E' o mesmo",
+    "plano - continental tropical (cT) E' o 'quente e seco' aristotelico e produz",
+    "deserto, onda de calor e tempestade de areia. A meteorologia acrescenta o que",
+    "falta a Aristoteles: ESTABILIDADE (decide se ar umido vira neblina parada ou",
+    "trovoada) e VENTO.",
+    "",
+    "FORMATO: [suporteMin, nucleoMin, nucleoMax, suporteMax]",
+    "  temperature  -1 artico .. 0 temperado .. +1 tropical (Celsius = 20 + t*30)",
+    "  humidity      0 continental/seco .. 1 maritimo/saturado",
+    "  wind          0 calmo .. 1 vendaval",
+    "  instability   0 estavel .. 1 convectivo",
+    "",
+    "NUCLEO x SUPORTE - e o que 'sem overlap' quer dizer:",
+    "  SUPORTES DEVEM se sobrepor: e' a sobreposicao deles que da' a transicao",
+    "    suave entre climas vizinhos.",
+    "  NUCLEOS NAO PODEM se sobrepor: nucleo em comum significa um estado onde",
+    "    dois climas estao 100% certos ao mesmo tempo, e a escolha vira empate.",
+    "  A engine avisa no log a cada carga/reload quais pares tem nucleo comum.",
+    "",
+    "enabled:false tira da selecao AUTOMATICA; o clima continua escolhivel na mao.",
+    "Usado para variantes que sao a mesma massa de ar com optica diferente",
+    "(arco-iris, chuva de meteoros): so' existir nao as torna um estado distinto.",
+    "",
+    "priority desempata quando a pertinencia empata.",
+    "",
+    "A categoria Extreme (tornado, cinza vulcanica, downburst) esta' FORA daqui de",
+    "proposito: nao sao estados de massa de ar, sao eventos. Continuam na mao."
+  ],
+  "types": {
+    "clear": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.12,
+        0.22,
+        0.42,
+        0.54
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 1.2
+    },
+    "partly_cloudy": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.4,
+        0.5,
+        0.66,
+        0.76
+      ],
+      "wind": [
+        0.16,
+        0.26,
+        0.44,
+        0.56
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ]
+    },
+    "light_wind": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.12,
+        0.22,
+        0.42,
+        0.54
+      ],
+      "wind": [
+        0.26,
+        0.34,
+        0.48,
+        0.6
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ]
+    },
+    "pollen": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.0,
+        0.0,
+        0.12,
+        0.24
+      ],
+      "wind": [
+        0.16,
+        0.26,
+        0.44,
+        0.56
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ]
+    },
+    "sun_halo": {
+      "temperature": [
+        -0.62,
+        -0.46,
+        -0.16,
+        -0.02
+      ],
+      "humidity": [
+        0.4,
+        0.5,
+        0.66,
+        0.76
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 0.9
+    },
+    "sun_dogs": {
+      "temperature": [
+        -0.62,
+        -0.46,
+        -0.16,
+        -0.02
+      ],
+      "humidity": [
+        0.12,
+        0.22,
+        0.42,
+        0.54
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 0.8
+    },
+    "light_pillars": {
+      "temperature": [
+        -1.0,
+        -1.0,
+        -0.62,
+        -0.48
+      ],
+      "humidity": [
+        0.12,
+        0.22,
+        0.42,
+        0.54
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 0.9
+    },
+    "god_rays": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.4,
+        0.5,
+        0.66,
+        0.76
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ],
+      "priority": 0.8
+    },
+    "green_flash": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.12,
+        0.22,
+        0.42,
+        0.54
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 0.5,
+      "enabled": false
+    },
+    "rainbow_cloud": {
+      "temperature": [
+        -0.62,
+        -0.46,
+        -0.16,
+        -0.02
+      ],
+      "humidity": [
+        0.4,
+        0.5,
+        0.66,
+        0.76
+      ],
+      "wind": [
+        0.16,
+        0.26,
+        0.44,
+        0.56
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ],
+      "priority": 0.5,
+      "enabled": false
+    },
+    "cloudy": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.64,
+        0.74,
+        0.88,
+        0.94
+      ],
+      "wind": [
+        0.16,
+        0.26,
+        0.44,
+        0.56
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ]
+    },
+    "overcast": {
+      "temperature": [
+        -0.62,
+        -0.46,
+        -0.16,
+        -0.02
+      ],
+      "humidity": [
+        0.64,
+        0.74,
+        0.88,
+        0.94
+      ],
+      "wind": [
+        0.16,
+        0.26,
+        0.44,
+        0.56
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ]
+    },
+    "smog": {
+      "temperature": [
+        0.3,
+        0.44,
+        1.0,
+        1.0
+      ],
+      "humidity": [
+        0.4,
+        0.5,
+        0.66,
+        0.76
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 1.1
+    },
+    "haze": {
+      "temperature": [
+        0.3,
+        0.44,
+        1.0,
+        1.0
+      ],
+      "humidity": [
+        0.12,
+        0.22,
+        0.42,
+        0.54
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ]
+    },
+    "drizzle": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.86,
+        0.92,
+        1.0,
+        1.0
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ]
+    },
+    "rainy": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.86,
+        0.92,
+        1.0,
+        1.0
+      ],
+      "wind": [
+        0.16,
+        0.26,
+        0.44,
+        0.56
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ]
+    },
+    "stormy": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.64,
+        0.74,
+        0.88,
+        0.94
+      ],
+      "wind": [
+        0.56,
+        0.68,
+        0.84,
+        0.96
+      ],
+      "instability": [
+        0.48,
+        0.58,
+        0.78,
+        0.88
+      ]
+    },
+    "thunderstorm": {
+      "temperature": [
+        0.3,
+        0.44,
+        1.0,
+        1.0
+      ],
+      "humidity": [
+        0.86,
+        0.92,
+        1.0,
+        1.0
+      ],
+      "wind": [
+        0.6,
+        0.72,
+        0.88,
+        1.0
+      ],
+      "instability": [
+        0.76,
+        0.86,
+        1.0,
+        1.0
+      ],
+      "priority": 1.3
+    },
+    "hail": {
+      "temperature": [
+        -0.62,
+        -0.46,
+        -0.16,
+        -0.02
+      ],
+      "humidity": [
+        0.86,
+        0.92,
+        1.0,
+        1.0
+      ],
+      "wind": [
+        0.44,
+        0.54,
+        0.74,
+        0.84
+      ],
+      "instability": [
+        0.76,
+        0.86,
+        1.0,
+        1.0
+      ],
+      "priority": 1.2
+    },
+    "freezing_rain": {
+      "temperature": [
+        -0.62,
+        -0.46,
+        -0.16,
+        -0.02
+      ],
+      "humidity": [
+        0.86,
+        0.92,
+        1.0,
+        1.0
+      ],
+      "wind": [
+        0.2,
+        0.3,
+        0.46,
+        0.58
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ],
+      "priority": 1.1
+    },
+    "rainbow": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.64,
+        0.74,
+        0.88,
+        0.94
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ],
+      "priority": 0.6,
+      "enabled": false
+    },
+    "light_snow": {
+      "temperature": [
+        -0.62,
+        -0.46,
+        -0.16,
+        -0.02
+      ],
+      "humidity": [
+        0.64,
+        0.74,
+        0.88,
+        0.94
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ]
+    },
+    "snowy": {
+      "temperature": [
+        -1.0,
+        -1.0,
+        -0.62,
+        -0.48
+      ],
+      "humidity": [
+        0.64,
+        0.74,
+        0.88,
+        0.94
+      ],
+      "wind": [
+        0.16,
+        0.26,
+        0.44,
+        0.56
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ]
+    },
+    "blizzard": {
+      "temperature": [
+        -1.0,
+        -1.0,
+        -0.62,
+        -0.48
+      ],
+      "humidity": [
+        0.86,
+        0.92,
+        1.0,
+        1.0
+      ],
+      "wind": [
+        0.72,
+        0.82,
+        1.0,
+        1.0
+      ],
+      "instability": [
+        0.48,
+        0.58,
+        0.78,
+        0.88
+      ],
+      "priority": 1.3
+    },
+    "frost": {
+      "temperature": [
+        -1.0,
+        -1.0,
+        -0.62,
+        -0.48
+      ],
+      "humidity": [
+        0.4,
+        0.5,
+        0.66,
+        0.76
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 1.1
+    },
+    "heatwave": {
+      "temperature": [
+        0.3,
+        0.44,
+        1.0,
+        1.0
+      ],
+      "humidity": [
+        0.0,
+        0.0,
+        0.12,
+        0.24
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 1.2
+    },
+    "heat_haze": {
+      "temperature": [
+        0.3,
+        0.44,
+        1.0,
+        1.0
+      ],
+      "humidity": [
+        0.0,
+        0.0,
+        0.12,
+        0.24
+      ],
+      "wind": [
+        0.16,
+        0.26,
+        0.44,
+        0.56
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ]
+    },
+    "mirage": {
+      "temperature": [
+        0.3,
+        0.44,
+        1.0,
+        1.0
+      ],
+      "humidity": [
+        0.0,
+        0.0,
+        0.12,
+        0.24
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ],
+      "priority": 0.7
+    },
+    "dust_devil": {
+      "temperature": [
+        0.3,
+        0.44,
+        1.0,
+        1.0
+      ],
+      "humidity": [
+        0.0,
+        0.0,
+        0.12,
+        0.24
+      ],
+      "wind": [
+        0.44,
+        0.54,
+        0.74,
+        0.84
+      ],
+      "instability": [
+        0.48,
+        0.58,
+        0.78,
+        0.88
+      ]
+    },
+    "dust_storm": {
+      "temperature": [
+        0.3,
+        0.44,
+        1.0,
+        1.0
+      ],
+      "humidity": [
+        0.12,
+        0.22,
+        0.42,
+        0.54
+      ],
+      "wind": [
+        0.72,
+        0.82,
+        1.0,
+        1.0
+      ],
+      "instability": [
+        0.48,
+        0.58,
+        0.78,
+        0.88
+      ]
+    },
+    "sandstorm": {
+      "temperature": [
+        0.3,
+        0.44,
+        1.0,
+        1.0
+      ],
+      "humidity": [
+        0.0,
+        0.0,
+        0.12,
+        0.24
+      ],
+      "wind": [
+        0.72,
+        0.82,
+        1.0,
+        1.0
+      ],
+      "instability": [
+        0.76,
+        0.86,
+        1.0,
+        1.0
+      ],
+      "priority": 1.2
+    },
+    "foggy": {
+      "temperature": [
+        -0.62,
+        -0.46,
+        -0.16,
+        -0.02
+      ],
+      "humidity": [
+        0.86,
+        0.92,
+        1.0,
+        1.0
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 1.2
+    },
+    "mist": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.64,
+        0.74,
+        0.88,
+        0.94
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ]
+    },
+    "ground_fog": {
+      "temperature": [
+        -0.62,
+        -0.46,
+        -0.16,
+        -0.02
+      ],
+      "humidity": [
+        0.64,
+        0.74,
+        0.88,
+        0.94
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 0.9
+    },
+    "starry_night": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.0,
+        0.0,
+        0.12,
+        0.24
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ],
+      "priority": 0.6
+    },
+    "milky_way": {
+      "temperature": [
+        -0.62,
+        -0.46,
+        -0.16,
+        -0.02
+      ],
+      "humidity": [
+        0.0,
+        0.0,
+        0.12,
+        0.24
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 0.5
+    },
+    "aurora_borealis": {
+      "temperature": [
+        -1.0,
+        -1.0,
+        -0.62,
+        -0.48
+      ],
+      "humidity": [
+        0.0,
+        0.0,
+        0.12,
+        0.24
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 0.7
+    },
+    "aurora_australis": {
+      "temperature": [
+        -1.0,
+        -1.0,
+        -0.62,
+        -0.48
+      ],
+      "humidity": [
+        0.0,
+        0.0,
+        0.12,
+        0.24
+      ],
+      "wind": [
+        0.16,
+        0.26,
+        0.44,
+        0.56
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 0.6
+    },
+    "shooting_stars": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.0,
+        0.0,
+        0.12,
+        0.24
+      ],
+      "wind": [
+        0.0,
+        0.0,
+        0.16,
+        0.28
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 0.4,
+      "enabled": false
+    },
+    "meteor_shower": {
+      "temperature": [
+        -0.62,
+        -0.46,
+        -0.16,
+        -0.02
+      ],
+      "humidity": [
+        0.0,
+        0.0,
+        0.12,
+        0.24
+      ],
+      "wind": [
+        0.16,
+        0.26,
+        0.44,
+        0.56
+      ],
+      "instability": [
+        0.18,
+        0.28,
+        0.48,
+        0.6
+      ],
+      "priority": 0.4,
+      "enabled": false
+    },
+    "tornado": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.64,
+        0.74,
+        0.88,
+        0.94
+      ],
+      "wind": [
+        0.85,
+        0.95,
+        1.0,
+        1.0
+      ],
+      "instability": [
+        0.48,
+        0.58,
+        0.78,
+        0.88
+      ]
+    },
+    "downburst": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.64,
+        0.74,
+        0.88,
+        0.94
+      ],
+      "wind": [
+        0.8,
+        0.92,
+        1.0,
+        1.0
+      ],
+      "instability": [
+        0.48,
+        0.58,
+        0.78,
+        0.88
+      ]
+    },
+    "waterspout": {
+      "temperature": [
+        -0.16,
+        -0.02,
+        0.3,
+        0.44
+      ],
+      "humidity": [
+        0.64,
+        0.74,
+        0.88,
+        0.94
+      ],
+      "wind": [
+        0.75,
+        0.86,
+        0.98,
+        1.0
+      ],
+      "instability": [
+        0.48,
+        0.58,
+        0.78,
+        0.88
+      ]
+    },
+    "volcanic_ash": {
+      "temperature": [
+        0.3,
+        0.44,
+        1.0,
+        1.0
+      ],
+      "humidity": [
+        0.4,
+        0.5,
+        0.66,
+        0.76
+      ],
+      "wind": [
+        0.3,
+        0.42,
+        0.6,
+        0.72
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 1.1
+    },
+    "fire_smoke": {
+      "temperature": [
+        0.3,
+        0.44,
+        1.0,
+        1.0
+      ],
+      "humidity": [
+        0.4,
+        0.5,
+        0.66,
+        0.76
+      ],
+      "wind": [
+        0.2,
+        0.3,
+        0.48,
+        0.6
+      ],
+      "instability": [
+        0.0,
+        0.0,
+        0.18,
+        0.3
+      ],
+      "priority": 1.1
+    }
+  }
+}

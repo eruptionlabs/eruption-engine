@@ -1,0 +1,82 @@
+{
+  "day_duration": 600.0,
+  "initial_time": 0.5,
+  "time_scale": 1.0,
+  "keyframes": [
+    {"time": 0.00, "sky_top": [0.02, 0.02, 0.05],   "sky_horizon": [0.05, 0.05, 0.1],  "sun_kelvin": 8000, "sun_direction": [0.3, -0.5, 0.8], "sun_intensity": 0.02, "ambient_color": [0.1, 0.1, 0.2],   "ambient_intensity": 4.00, "moon_color": [0.7, 0.7, 0.9], "moon_intensity": 0.3, "fog_density": 1.00,  "fog_color": [0.05, 0.05, 0.1]},
+    {"time": 0.20, "sky_top": [0.1, 0.1, 0.3],     "sky_horizon": [0.8, 0.4, 0.2],    "sun_kelvin": 3500, "sun_direction": [0.5, -0.3, 0.8], "sun_intensity": 0.15, "ambient_color": [0.3, 0.25, 0.4],  "ambient_intensity": 1.00, "moon_color": [0.7, 0.7, 0.9], "moon_intensity": 0.4, "fog_density": 0.25, "fog_color": [0.3, 0.2, 0.3]},
+    {"time": 0.25, "sky_top": [0.3, 0.4, 0.7],     "sky_horizon": [1.0, 0.7, 0.4],    "sun_kelvin": 4500, "sun_direction": [0.6, -0.1, 0.8], "sun_intensity": 0.60, "ambient_color": [0.4, 0.4, 0.5],  "ambient_intensity": 0.80, "moon_color": [0.7, 0.7, 0.9], "moon_intensity": 0.3, "fog_density": 0.20,  "fog_color": [0.5, 0.4, 0.3]},
+    {"time": 0.35, "sky_top": [0.4, 0.6, 0.9],     "sky_horizon": [0.7, 0.8, 0.9],    "sun_kelvin": 5500, "sun_direction": [0.4, 0.2, 0.9],  "sun_intensity": 1.00, "ambient_color": [0.5, 0.5, 0.6],  "ambient_intensity": 0.60, "moon_color": [0.7, 0.7, 0.9], "moon_intensity": 0.2, "fog_density": 0.15, "fog_color": [0.6, 0.7, 0.8]},
+    {"time": 0.50, "sky_top": [0.3, 0.5, 1.0],     "sky_horizon": [0.6, 0.8, 1.0],    "sun_kelvin": 5500, "sun_direction": [0.3, 0.5, 0.8],  "sun_intensity": 1.00, "ambient_color": [0.6, 0.6, 0.7],  "ambient_intensity": 0.50, "moon_color": [0.7, 0.7, 0.9], "moon_intensity": 0.1, "fog_density": 0.125, "fog_color": [0.6, 0.7, 0.9]},
+    {"time": 0.65, "sky_top": [0.3, 0.45, 0.8],    "sky_horizon": [0.7, 0.7, 0.9],    "sun_kelvin": 5000, "sun_direction": [0.2, 0.3, 0.9],  "sun_intensity": 0.80, "ambient_color": [0.5, 0.5, 0.6],  "ambient_intensity": 0.65, "moon_color": [0.7, 0.7, 0.9], "moon_intensity": 0.15,"fog_density": 0.15, "fog_color": [0.6, 0.6, 0.8]},
+    {"time": 0.75, "sky_top": [0.2, 0.2, 0.5],     "sky_horizon": [1.0, 0.5, 0.2],    "sun_kelvin": 3200, "sun_direction": [0.5, -0.2, 0.8], "sun_intensity": 0.40, "ambient_color": [0.4, 0.3, 0.4],  "ambient_intensity": 0.75, "moon_color": [0.7, 0.7, 0.9], "moon_intensity": 0.3, "fog_density": 0.20, "fog_color": [0.5, 0.3, 0.2]},
+    {"time": 0.85, "sky_top": [0.05, 0.05, 0.2],   "sky_horizon": [0.5, 0.2, 0.3],    "sun_kelvin": 2500, "sun_direction": [0.4, -0.4, 0.8], "sun_intensity": 0.10, "ambient_color": [0.2, 0.15, 0.3], "ambient_intensity": 2.00, "moon_color": [0.8, 0.8, 1.0], "moon_intensity": 0.4, "fog_density": 0.25, "fog_color": [0.15, 0.1, 0.2]}
+  ],
+  "curves": {
+    "sun_kelvin": {
+      "points": [
+        {"x": 0.00, "y": 8000, "interpolation": "Smoothstep"},
+        {"x": 0.20, "y": 3500, "interpolation": "Smoothstep"},
+        {"x": 0.25, "y": 4500, "interpolation": "Smoothstep"},
+        {"x": 0.35, "y": 5500, "interpolation": "Smoothstep"},
+        {"x": 0.50, "y": 5500, "interpolation": "Smoothstep"},
+        {"x": 0.65, "y": 5000, "interpolation": "Smoothstep"},
+        {"x": 0.75, "y": 3200, "interpolation": "Smoothstep"},
+        {"x": 0.85, "y": 2500, "interpolation": "Smoothstep"},
+        {"x": 1.00, "y": 8000, "interpolation": "Smoothstep"}
+      ]
+    },
+    "sun_intensity": {
+      "points": [
+        {"x": 0.00, "y": 0.02, "interpolation": "Smoothstep"},
+        {"x": 0.20, "y": 0.15, "interpolation": "Smoothstep"},
+        {"x": 0.25, "y": 0.60, "interpolation": "Smoothstep"},
+        {"x": 0.35, "y": 1.00, "interpolation": "Smoothstep"},
+        {"x": 0.50, "y": 1.00, "interpolation": "Smoothstep"},
+        {"x": 0.65, "y": 0.80, "interpolation": "Smoothstep"},
+        {"x": 0.75, "y": 0.40, "interpolation": "Smoothstep"},
+        {"x": 0.85, "y": 0.10, "interpolation": "Smoothstep"},
+        {"x": 1.00, "y": 0.02, "interpolation": "Smoothstep"}
+      ]
+    },
+    "ambient_intensity": {
+      "points": [
+        {"x": 0.00, "y": 4.00, "interpolation": "Smoothstep"},
+        {"x": 0.20, "y": 1.00, "interpolation": "Smoothstep"},
+        {"x": 0.25, "y": 0.80, "interpolation": "Smoothstep"},
+        {"x": 0.35, "y": 0.60, "interpolation": "Smoothstep"},
+        {"x": 0.50, "y": 0.50, "interpolation": "Smoothstep"},
+        {"x": 0.65, "y": 0.65, "interpolation": "Smoothstep"},
+        {"x": 0.75, "y": 0.75, "interpolation": "Smoothstep"},
+        {"x": 0.85, "y": 2.00, "interpolation": "Smoothstep"},
+        {"x": 1.00, "y": 4.00, "interpolation": "Smoothstep"}
+      ]
+    },
+    "moon_intensity": {
+      "points": [
+        {"x": 0.00, "y": 0.3, "interpolation": "Smoothstep"},
+        {"x": 0.20, "y": 0.4, "interpolation": "Smoothstep"},
+        {"x": 0.25, "y": 0.3, "interpolation": "Smoothstep"},
+        {"x": 0.35, "y": 0.2, "interpolation": "Smoothstep"},
+        {"x": 0.50, "y": 0.1, "interpolation": "Smoothstep"},
+        {"x": 0.65, "y": 0.15, "interpolation": "Smoothstep"},
+        {"x": 0.75, "y": 0.3, "interpolation": "Smoothstep"},
+        {"x": 0.85, "y": 0.4, "interpolation": "Smoothstep"},
+        {"x": 1.00, "y": 0.3, "interpolation": "Smoothstep"}
+      ]
+    },
+    "fog_density": {
+      "points": [
+        {"x": 0.00, "y": 1.00, "interpolation": "Smoothstep"},
+        {"x": 0.20, "y": 0.25, "interpolation": "Smoothstep"},
+        {"x": 0.25, "y": 0.20, "interpolation": "Smoothstep"},
+        {"x": 0.35, "y": 0.15, "interpolation": "Smoothstep"},
+        {"x": 0.50, "y": 0.125, "interpolation": "Smoothstep"},
+        {"x": 0.65, "y": 0.15, "interpolation": "Smoothstep"},
+        {"x": 0.75, "y": 0.20, "interpolation": "Smoothstep"},
+        {"x": 0.85, "y": 0.25, "interpolation": "Smoothstep"},
+        {"x": 1.00, "y": 1.00, "interpolation": "Smoothstep"}
+      ]
+    }
+  }
+}

@@ -1,0 +1,54 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set=0, binding=0) uniform sampler2D u_depth;
+layout(set=0, binding=3, rg16f) uniform writeonly image2D u_cocMap; // R=FG Radius, G=BG CoC
+
+layout(push_constant) uniform Params {
+    mat4 invViewProj;
+    vec4 cameraPos;
+    vec4 cameraForward;
+    vec4 focalPoint;
+    float focusDist;
+    float focusScale;
+    float fgBlurNear;   // 16.0
+    float fgBlurFar;    // 1.5
+    float fgDecayRate;  // 0.15
+    float padding;
+    vec2 texelSize;
+} pc;
+
+vec3 ReconstructWorldPos(vec2 uv, float depth) {
+    vec4 clip = vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec4 world = pc.invViewProj * clip;
+    return world.xyz / world.w;
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(u_cocMap);
+    if (coord.x >= size.x || coord.y >= size.y) return;
+
+    vec2 uv = (vec2(coord) + 0.5) * pc.texelSize;
+
+    float depth = texture(u_depth, uv).r;
+    vec3 worldPos = ReconstructWorldPos(uv, depth);
+    float dist = length(worldPos - pc.cameraPos.xyz);
+
+    // 1. Foreground Blur (Exponential)
+    float fgRadius = pc.fgBlurFar + (pc.fgBlurNear - pc.fgBlurFar) * exp(-pc.fgDecayRate * dist);
+
+    // 2. Background DoF (Scatter)
+    vec3 planeNormal = mix(vec3(0.0, 1.0, 0.0), pc.cameraForward.xyz, 0.1);
+    planeNormal = normalize(planeNormal);
+    float d = dot(planeNormal, worldPos - pc.cameraPos.xyz);
+    float fd = dot(planeNormal, pc.focalPoint.xyz - pc.cameraPos.xyz);
+    
+    // Signed CoC: +Near, -Far
+    float coc = (1.0 / d - 1.0 / fd) * pc.focusScale;
+    
+    // Background DoF is the Far part (negative coc)
+    float bgCoC = max(-coc, 0.0);
+
+    imageStore(u_cocMap, coord, vec4(fgRadius, bgCoC, 0.0, 1.0));
+}

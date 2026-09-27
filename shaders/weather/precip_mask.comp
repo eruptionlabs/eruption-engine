@@ -1,0 +1,42 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, r8) uniform writeonly image2D precipMask;
+
+struct CloudData {
+    vec4 pos;   // xyz = world position, w = radius
+    vec4 data;  // x = intensity, yzw = unused
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer CloudBuffer {
+    CloudData clouds[];
+} cloudBuffer;
+
+layout(push_constant) uniform Push {
+    vec4 worldBounds; // x=minX, y=minZ, z=sizeX, w=sizeY
+    uint cloudCount;
+    uint pad[3];
+} push;
+
+void main() {
+    ivec2 texSize = imageSize(precipMask);
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(coord, texSize))) return;
+
+    vec2 uv = (vec2(coord) + 0.5) / vec2(texSize);
+    vec2 worldPos = push.worldBounds.xy + uv * push.worldBounds.zw;
+
+    float value = 0.0;
+    for (uint i = 0u; i < push.cloudCount; ++i) {
+        CloudData c = cloudBuffer.clouds[i];
+        float d = length(worldPos - c.pos.xz);
+        float r = c.pos.w;
+        if (d < r) {
+            float falloff = 1.0 - smoothstep(0.0, r, d);
+            value = max(value, falloff * c.data.x);
+        }
+    }
+
+    imageStore(precipMask, coord, vec4(value, 0.0, 0.0, 0.0));
+}

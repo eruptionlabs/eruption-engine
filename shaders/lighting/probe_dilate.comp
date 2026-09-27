@@ -1,0 +1,28 @@
+#version 450
+// PROBES DE IRRADIANCIA (G38): dilatacao. Probe invalida (L0 < 0: dentro de
+// geometria ou enterrada) recebe a media das 26 vizinhas validas; sem
+// vizinha valida, ceu aberto (L0 = 4pi*Y00, L1 = 0) - o padrao neutro, para
+// a interpolacao trilinear nunca puxar uma superficie para o preto por causa
+// de uma probe que caiu dentro de uma parede.
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+layout(set = 0, binding = 0, rgba16f) uniform readonly image3D inProbes;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image3D outProbes;
+layout(push_constant) uniform PC { uvec4 dims; } pc;
+
+void main() {
+    ivec3 id = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(id, ivec3(pc.dims.xyz)))) return;
+    vec4 v = imageLoad(inProbes, id);
+    if (v.x >= 0.0) { imageStore(outProbes, id, v); return; }
+    vec4 acc = vec4(0.0);
+    int n = 0;
+    for (int dz = -1; dz <= 1; ++dz)
+    for (int dy = -1; dy <= 1; ++dy)
+    for (int dx = -1; dx <= 1; ++dx) {
+        ivec3 q = id + ivec3(dx, dy, dz);
+        if (any(lessThan(q, ivec3(0))) || any(greaterThanEqual(q, ivec3(pc.dims.xyz)))) continue;
+        vec4 s = imageLoad(inProbes, q);
+        if (s.x >= 0.0) { acc += s; ++n; }
+    }
+    imageStore(outProbes, id, n > 0 ? acc / float(n) : vec4(3.544908, 0.0, 0.0, 0.0));
+}

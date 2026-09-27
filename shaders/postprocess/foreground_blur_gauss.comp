@@ -1,0 +1,52 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set=0, binding=0) uniform sampler2D u_color;
+layout(set=0, binding=1) uniform sampler2D u_cocMap; // R channel is radius
+layout(set=0, binding=3, rgba16f) uniform writeonly image2D u_blurOutput;
+
+layout(push_constant) uniform Params {
+    vec2 texelSize;
+    vec2 direction; // (1,0) para H, (0,1) para V
+    int maxRadiusPixels; // 16
+} pc;
+
+const float GAUSS[17] = float[](
+    0.19638062, 0.17427083, 0.12945957, 0.07952023, 0.04032884,
+    0.01721009, 0.00613143, 0.00186554, 0.00048893, 0.00011062,
+    0.00002186, 0.0000038,  0.00000059, 0.00000008, 0.00000001,
+    0.0, 0.0
+);
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(u_blurOutput);
+    if (coord.x >= outSize.x || coord.y >= outSize.y) return;
+
+    vec2 uv = (vec2(coord) + 0.5) * (1.0 / vec2(outSize));
+
+    float radius = texture(u_cocMap, uv).r;
+
+    if (radius < 0.5) {
+        imageStore(u_blurOutput, coord, texture(u_color, uv));
+        return;
+    }
+
+    vec3 result = texture(u_color, uv).rgb * GAUSS[0];
+    float totalWeight = GAUSS[0];
+    int samples = min(int(ceil(radius)), pc.maxRadiusPixels);
+
+    for (int i = 1; i <= samples; i++) {
+        float offset = float(i) / float(samples) * radius;
+        vec2 off = pc.direction * offset * pc.texelSize;
+        vec3 s1 = texture(u_color, uv + off).rgb;
+        vec3 s2 = texture(u_color, uv - off).rgb;
+        float idx = float(i) / float(samples) * 16.0;
+        int idxLow = int(floor(idx));
+        int idxHigh = int(ceil(idx));
+        float w = mix(GAUSS[idxLow], GAUSS[min(idxHigh,16)], fract(idx));
+        result += s1 * w; result += s2 * w;
+        totalWeight += w * 2.0;
+    }
+    imageStore(u_blurOutput, coord, vec4(result / totalWeight, 1.0));
+}

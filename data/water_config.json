@@ -1,0 +1,77 @@
+{
+    "water_settings": {
+        "caustics": {
+            "depthAttenuation": 0.6399999856948853,
+            "intensity": 0.25999999046325684
+        },
+        "colors": {
+            "deep": [
+                0.0024445781018584967,
+                0.00339026958681643,
+                0.004651188850402832
+            ],
+            "shallow": [
+                0.18000000715255737,
+                0.25,
+                0.2800000011920929
+            ]
+        },
+        "enableCaustics": true,
+        "enabled": true,
+        "foam": {
+            "contactStrength": 3.6600000858306885,
+            "decay": 1.0,
+            "edgeDepth": 0.6800000071525574,
+            "enable": true,
+            "maskScale": [
+                256.0,
+                256.0
+            ],
+            "spread": 0.30000001192092896
+        },
+        "forceWater": false,
+        "normal": {
+            "octaves": 1,
+            "scale": 0.1599999964237213,
+            "strength": 0.09000000357627869
+        },
+        "surface": {
+            "reflectivity": 0.0,
+            "refractionStrength": 0.10000000149011612,
+            "roughness": 0.23999999463558197,
+            "transparency": 1.0
+        },
+        "surfaceFoam": {
+            "enable": false,
+            "roughness": 1.0,
+            "scale": 1.159999966621399,
+            "speed": 1.1699999570846558
+        },
+        "texture": {
+            "path": "",
+            "useProcedural": false
+        },
+        "version": 2,
+        "waterLevel": -0.05000000074505806,
+        "waves": {
+            "amplitude": 0.38999998569488525,
+            "frequency": 2.140000104904175,
+            "speed": 0.4300000071525574,
+            "steepness0": 0.5,
+            "steepness1": 0.4000000059604645,
+            "steepness2": 0.30000001192092896,
+            "waveDir0": [
+                0.7880105972290039,
+                0.6156616806983948
+            ],
+            "waveDir1": [
+                0.699999988079071,
+                0.699999988079071
+            ],
+            "waveDir2": [
+                -0.30000001192092896,
+                0.8999999761581421
+            ]
+        }
+    }
+}

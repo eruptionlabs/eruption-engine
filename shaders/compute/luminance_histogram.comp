@@ -1,0 +1,49 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcTexture;
+layout(set = 0, binding = 1, std430) buffer HistogramBuffer {
+    uint histogram[];
+};
+
+layout(push_constant) uniform Push {
+    float minLogLum;
+    float logLumRange;
+    float timeDelta;
+    float pad;
+} push;
+
+shared uint localHistogram[256];
+
+float luminance(vec3 color) {
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main() {
+    uint lid = gl_LocalInvocationIndex;
+    if (lid < 256u) {
+        localHistogram[lid] = 0u;
+    }
+    barrier();
+
+    ivec2 texSize = textureSize(srcTexture, 0);
+    vec2 uv = (vec2(gl_GlobalInvocationID.xy) + 0.5) / vec2(texSize);
+    
+    if (gl_GlobalInvocationID.x < uint(texSize.x) && gl_GlobalInvocationID.y < uint(texSize.y)) {
+        vec3 color = texture(srcTexture, uv).rgb;
+        float lum = luminance(color);
+        float logLum = clamp((log2(lum + 1e-5) - push.minLogLum) / push.logLumRange, 0.0, 1.0);
+        uint bin = uint(logLum * 255.0);
+        atomicAdd(localHistogram[bin], 1u);
+    }
+    
+    barrier();
+    
+    if (lid < 256u) {
+        uint localVal = localHistogram[lid];
+        if (localVal > 0u) {
+            atomicAdd(histogram[lid], localVal);
+        }
+    }
+}
