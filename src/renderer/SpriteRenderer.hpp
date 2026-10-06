@@ -98,6 +98,16 @@ struct FrameUBO {
     //     fechada sempre, mas o padrao deixa de coincidir com a textura).
     // y = escala do mundo no modo triplanar (1/u por ladrilho).
     alignas(16) Vec4 tessParams2;
+    // MATRIZES SEM JITTER (FSR). As matrizes do inicio do bloco (projection,
+    // viewProjection, inversas) sao as de RASTERIZACAO: com jitter quando ele
+    // esta ligado, e o depth do G-buffer sai delas. Estas sao as de logica e
+    // de motion vectors. Anexadas no fim como as demais.
+    alignas(16) Mat4 viewProjNoJitter;
+    alignas(16) Mat4 prevViewProjNoJitter;
+    // xy = jitter deste frame, zw = do anterior, em NDC do Vulkan (y para baixo).
+    alignas(16) Vec4 jitterNdc;
+    // windParams do frame ANTERIOR: a vegetacao reconstroi onde estava (velocidade de objeto).
+    alignas(16) Vec4 prevWindParams;
 };
 
 class SpriteRenderer {
@@ -143,6 +153,22 @@ public:
     VkDescriptorSetLayout frameUboLayout() const { return m_frameUboLayout; }
     VkDescriptorSet frameUboSet() const { return m_frameUboSet; }
 
+    // CAMADA DE SPRITES do FSR (ver SpriteLayer). createLayerPipelines recebe
+    // o layout do set 2 da camada (depth, iluminado e albedo de render).
+    struct LayerPush {
+        Mat4 view;
+        Mat4 proj;      // SEM jitter
+        Vec4 sizes;     // xy = render, zw = display
+        Vec4 planes;    // x = near, y = far
+    };
+    bool createLayerPipelines(VkDescriptorSetLayout layerInputs);
+    // Cobertura (R8) na resolucao de render; rendering ja' aberto pelo
+    // chamador com o alvo da mascara + depth do G-buffer somente leitura.
+    void drawMask(VkCommandBuffer cmd, VkBuffer instances, uint32_t count, const Mat4& viewProjJittered);
+    // Sprites na resolucao de display; rendering ja' aberto com o alvo RGBA16F.
+    void drawLayer(VkCommandBuffer cmd, VkBuffer instances, uint32_t count, VkDescriptorSet layerInputs,
+                   const LayerPush& push, VkExtent2D extent);
+
 private:
     VulkanContext* m_ctx = nullptr;
 
@@ -159,6 +185,9 @@ private:
 
     VkPipeline m_pipeline = VK_NULL_HANDLE;
     VkPipeline m_forwardPipeline = VK_NULL_HANDLE;
+    VkPipeline m_maskPipeline = VK_NULL_HANDLE;
+    VkPipeline m_layerPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_layerPipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_shadowPipeline = VK_NULL_HANDLE;
     VkPipeline m_planarShadowPipeline = VK_NULL_HANDLE;
     VkPipeline m_circleShadowPipeline = VK_NULL_HANDLE;

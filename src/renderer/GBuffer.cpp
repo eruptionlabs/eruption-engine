@@ -35,6 +35,12 @@ bool GBuffer::init(VulkanContext* ctx, uint32_t width, uint32_t height) {
                           m_emissiveImage, m_emissiveAlloc, m_emissiveView)) return false;
 
 
+    if (s_velocityEnabled &&
+        !createAttachment(VelocityFormat,
+                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          m_velocityImage, m_velocityAlloc, m_velocityView)) return false;
+
     if (!createAttachment(DepthFormat,
                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                           VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -52,6 +58,7 @@ void GBuffer::shutdown() {
     destroyAttachment(m_pbrImage, m_pbrAlloc, m_pbrView);
     destroyAttachment(m_materialImage, m_materialAlloc, m_materialView);
     destroyAttachment(m_emissiveImage, m_emissiveAlloc, m_emissiveView);
+    destroyAttachment(m_velocityImage, m_velocityAlloc, m_velocityView);
     destroyAttachment(m_depthImage, m_depthAlloc, m_depthView);
 }
 
@@ -63,7 +70,7 @@ void GBuffer::resize(uint32_t width, uint32_t height) {
 void GBuffer::beginPass(VkCommandBuffer cmd) {
     transitionToWrite(cmd);
 
-    VkRenderingAttachmentInfo colorAttachments[5];
+    VkRenderingAttachmentInfo colorAttachments[6];
 
     colorAttachments[0] = {};
     colorAttachments[0].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -105,6 +112,14 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
     colorAttachments[4].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachments[4].clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
 
+    colorAttachments[5] = {};
+    colorAttachments[5].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAttachments[5].imageView = m_velocityView;
+    colorAttachments[5].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachments[5].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[5].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachments[5].clearValue.color = {{kVelocitySentinel, kVelocitySentinel, 0.0f, 0.0f}};
+
 
     VkRenderingAttachmentInfo depthAttachment{};
     depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -118,7 +133,7 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
     renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     renderingInfo.renderArea = {{0, 0}, {m_width, m_height}};
     renderingInfo.layerCount = 1;
-    renderingInfo.colorAttachmentCount = 5;
+    renderingInfo.colorAttachmentCount = m_velocityView != VK_NULL_HANDLE ? 6u : 5u;
     renderingInfo.pColorAttachments = colorAttachments;
     renderingInfo.pDepthAttachment = &depthAttachment;
 
@@ -153,7 +168,8 @@ void GBuffer::transitionToRead(VkCommandBuffer cmd) {
         VkImageMemoryBarrier2 b{};
         b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
         b.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        b.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        // COMPUTE tambem: o CameraMotion (FSR) le' a velocidade num compute.
+        b.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
         b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         b.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -169,6 +185,7 @@ void GBuffer::transitionToRead(VkCommandBuffer cmd) {
     addColor(m_pbrImage);
     addColor(m_materialImage);
     addColor(m_emissiveImage);
+    if (m_velocityImage != VK_NULL_HANDLE) addColor(m_velocityImage);
 
     VkImageMemoryBarrier2 depthB{};
     depthB.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -211,6 +228,7 @@ void GBuffer::transitionToWrite(VkCommandBuffer cmd) {
     addColor(m_pbrImage);
     addColor(m_materialImage);
     addColor(m_emissiveImage);
+    if (m_velocityImage != VK_NULL_HANDLE) addColor(m_velocityImage);
 
     VkImageMemoryBarrier2 depthB{};
     depthB.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;

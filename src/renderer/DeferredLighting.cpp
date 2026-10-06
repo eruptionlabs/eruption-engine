@@ -938,8 +938,8 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     ubo.ssaoParams = Vec4(m_ssaoEnabled ? 1.0f : 0.0f, m_ssaoStrength, m_ssaoRadius, 0.0f);
     ubo.indirectParams = Vec4(m_envSpecEnabled ? 1.0f : 0.0f, m_envSpecIntensity,
                               m_nightAoPow, m_ambientHemiFloor);
-    ubo.viewProj = camera.viewProjectionMatrix();
-    ubo.invViewProj = glm::inverse(camera.viewProjectionMatrix());
+    ubo.viewProj = camera.viewProjJittered();
+    ubo.invViewProj = glm::inverse(camera.viewProjJittered());
     ubo.bounceParams = Vec4(m_sunBounceEnabled ? 1.0f : 0.0f, m_sunBounceStrength, m_fillLightIntensity, 0.0f);
     ubo.contactParams = Vec4(m_contactShadowEnabled ? 1.0f : 0.0f, m_contactShadowLength, 0.0f, 0.0f);
     ubo.skyHorizon = Vec4(m_env.skyHorizonColor, 0.0f);
@@ -1090,7 +1090,7 @@ void DeferredLighting::renderDirectionalPass(VkCommandBuffer cmd, const Camera& 
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
                             0, 1, &m_descSets[frameIndex], 0, nullptr);
 
-    Mat4 invViewProj = glm::inverse(camera.viewProjectionMatrix());
+    Mat4 invViewProj = glm::inverse(camera.viewProjJittered());
 
     // Upload shadow data to UBO
     ShadowUBO shadowUbo{};
@@ -1198,7 +1198,7 @@ void DeferredLighting::renderPointLights(VkCommandBuffer cmd, const Camera& came
     vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
     vkCmdBindIndexBuffer(cmd, m_sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-    Mat4 viewProj = camera.viewProjectionMatrix();
+    Mat4 viewProj = camera.viewProjJittered();
     Mat4 invViewProj = glm::inverse(viewProj);
 
     for (const auto& light : m_pointLights) {

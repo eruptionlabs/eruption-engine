@@ -67,7 +67,9 @@ void Engine::dumpMinimap(const std::string& filename) {
     vmaDestroyBuffer(m_vulkan.allocator(), staging, stagingAlloc);
 }
 
-void Engine::takeScreenshot(const std::string& filename) {
+// Leitura da saida do POST (antes da UI e do upscale final) como RGB float,
+// no formato real do alvo. takeScreenshot e o ERUPTION_TEST_ACCUM usam isto.
+void Engine::readPostOutput(std::vector<float>& rgb, uint32_t& outW, uint32_t& outH) {
     // A captura le' a imagem de saida do POST, entao o tamanho tem que ser o
     // DELA, nao o do swapchain. Enquanto os dois coincidiam isso passava; quando
     // o post roda numa resolucao menor (render/post scale), a copia estourava os
@@ -97,7 +99,8 @@ void Engine::takeScreenshot(const std::string& filename) {
     });
 
     void* mapped; vmaMapMemory(m_vulkan.allocator(), stagingAlloc, &mapped);
-    std::vector<uint8_t> pixels(w * h * 4);
+    outW = w; outH = h;
+    rgb.assign(size_t(w) * h * 3, 0.0f);
     // A captura tem que decodificar o formato REAL do alvo de post. Quando ele
     // virou B10G11R11 (metade da banda), continuar lendo half-float daria uma
     // imagem de lixo - e a screenshot e' a nossa unica verificacao visual.
@@ -105,21 +108,28 @@ void Engine::takeScreenshot(const std::string& filename) {
         const uint32_t* src = static_cast<const uint32_t*>(mapped);
         for (uint32_t i = 0; i < w * h; ++i) {
             const uint32_t p = src[i];
-            const float rgb[3] = { ufloatToFloat(p & 0x7ffu, 6),
+            const float px3[3] = { ufloatToFloat(p & 0x7ffu, 6),
                                    ufloatToFloat((p >> 11) & 0x7ffu, 6),
                                    ufloatToFloat((p >> 22) & 0x3ffu, 5) };
-            for (int c = 0; c < 3; ++c)
-                pixels[i * 4 + c] = static_cast<uint8_t>(glm::clamp(rgb[c] * 255.0f, 0.0f, 255.0f));
-            pixels[i * 4 + 3] = 255; // o formato nao tem alfa
+            for (int c = 0; c < 3; ++c) rgb[size_t(i) * 3 + c] = px3[c];
         }
     } else {
         const uint16_t* src = static_cast<const uint16_t*>(mapped);
-        for (uint32_t i = 0; i < w * h; ++i) for (int c = 0; c < 4; ++c) {
-            float f = halfToFloat(src[i * 4 + c]); pixels[i * 4 + c] = static_cast<uint8_t>(glm::clamp(f * 255.0f, 0.0f, 255.0f));
+        for (uint32_t i = 0; i < w * h; ++i) for (int c = 0; c < 3; ++c) {
+            rgb[size_t(i) * 3 + c] = halfToFloat(src[i * 4 + c]);
         }
     }
-    ImageUtils::writePNG(filename, w, h, 4, pixels.data());
     vmaUnmapMemory(m_vulkan.allocator(), stagingAlloc); vmaDestroyBuffer(m_vulkan.allocator(), staging, stagingAlloc);
+}
+
+void Engine::takeScreenshot(const std::string& filename) {
+    std::vector<float> rgb;
+    uint32_t w = 0, h = 0;
+    readPostOutput(rgb, w, h);
+    std::vector<uint8_t> pixels(size_t(w) * h * 4, 255);
+    for (size_t i = 0, n = size_t(w) * h; i < n; ++i) for (int c = 0; c < 3; ++c)
+        pixels[i * 4 + c] = static_cast<uint8_t>(glm::clamp(rgb[i * 3 + c] * 255.0f, 0.0f, 255.0f));
+    ImageUtils::writePNG(filename, w, h, 4, pixels.data());
 }
 
 void Engine::scheduleScreenshotFromSwap(const std::string& filename) {

@@ -52,7 +52,9 @@
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
+#include <array>
 #include <filesystem>
+#include <sstream>
 #include <cctype>
 
 #include "utils/ImageUtils.hpp"
@@ -60,6 +62,124 @@
 #include <vk_mem_alloc.h>
 
 namespace eruption {
+
+// Jitter sub-pixel da rasterizacao: sequencia de Halton (2, 3), a mesma
+// familia que o FSR espera. Quantidade de fases = 8 * (display/render)^2,
+// a regra do FSR 3.1: quanto mais o upscale amplia, mais posicoes por pixel
+// de saida o acumulador precisa ver antes de repetir.
+// Desligado (padrao) o jitter e' zero e as matrizes Jittered == NoJitter.
+void Engine::updateTemporalJitter() {
+    static const bool kEnv = [] {
+        const char* e = std::getenv("ERUPTION_JITTER");
+        return e && e[0] == '1';
+    }();
+    // ERUPTION_TEST_NO_JITTER=1 (debug): FSR ligado mas sem jitter - isola o
+    // que o jitter faz no resto do quadro (ex.: luz dos sprites da camada).
+    static const bool kNoJitter = std::getenv("ERUPTION_TEST_NO_JITTER") != nullptr;
+    m_temporalJitter = (kEnv || fsrActive()) && !kNoJitter;
+    m_prevJitterPx = m_jitterPx;
+    if (!m_temporalJitter) {
+        m_jitterPx = Vec2(0.0f);
+        m_camera.setJitterNdc(Vec2(0.0f));
+        return;
+    }
+    const VkExtent2D re = renderExtent();
+    const float renderW = float(std::max(1u, re.width));
+    const float renderH = float(std::max(1u, re.height));
+    const float ratio = float(std::max(1u, m_vulkan.swapExtent().width)) / renderW;
+    uint32_t phases = std::max(1u, static_cast<uint32_t>(8.0f * ratio * ratio));
+    // ERUPTION_JITTER_PHASES=N (debug): sequencia mais longa - com a cena
+    // travada e ERUPTION_TEST_ACCUM, a media de N fases e' o pixel integrado
+    // na area (supersampling), sem amostragem pontual.
+    static const uint32_t kPhases = [] {
+        const char* e = std::getenv("ERUPTION_JITTER_PHASES");
+        return e ? static_cast<uint32_t>(std::max(0, std::atoi(e))) : 0u;
+    }();
+    if (kPhases > 0) phases = kPhases;
+    auto halton = [](uint32_t index, uint32_t base) {
+        float f = 1.0f, r = 0.0f;
+        for (uint32_t i = index; i > 0; i /= base) {
+            f /= float(base);
+            r += f * float(i % base);
+        }
+        return r;
+    };
+    m_jitterIndex = (m_jitterIndex + 1) % phases;
+    const uint32_t k = m_jitterIndex + 1; // Halton(0) = 0 para as duas bases
+    m_jitterPx = Vec2(halton(k, 2) - 0.5f, halton(k, 3) - 0.5f);
+    m_camera.setJitterNdc(Vec2(2.0f * m_jitterPx.x / renderW, 2.0f * m_jitterPx.y / renderH));
+}
+
+// ERUPTION_TEST_POSE_LIST=<arquivo> (bancada de DADOS da incerteza de
+// reamostragem): percorre varias poses numa unica execucao, sem recarregar o
+// mapa. Cada linha do arquivo: "dx dz yawGraus pitchGraus dist [hora clima]",
+// com o alvo da orbita em spawn + (dx, 0, dz); hora em 0..1 do dia e clima
+// pelo nome (clear, rainy, stormy, snowy, foggy...), aplicados ao entrar na
+// pose - o aquecimento e' o que deixa o clima assentar. Para cada pose espera
+// ERUPTION_TEST_POSE_WARMUP frames (padrao 30) e grava a saida do pos (antes
+// da UI e de qualquer upscale) em ERUPTION_TEST_POSE_OUT/<indice>.png:
+//   ERUPTION_TEST_POSE_MODE=pontual -> 1 frame (o render normal);
+//   ERUPTION_TEST_POSE_MODE=raw     -> media em luz linear de
+//     ERUPTION_TEST_POSE_SAMPLES frames (use com ERUPTION_JITTER=1 e
+//     ERUPTION_JITTER_PHASES igual: cada pixel vira a media da propria area).
+// Encerra ao fim da lista.
+namespace {
+struct PoseListHook {
+    bool active = false, raw = false;
+    struct Pose { std::array<float, 5> cam; float hora = -1.0f; std::string clima; };
+    std::vector<Pose> poses;
+    size_t applied = SIZE_MAX;
+    std::string outDir;
+    int warmup = 30, samples = 64;
+    size_t idx = 0;
+    int frameInPose = 0, done = 0;
+    std::vector<double> sum;
+    uint32_t w = 0, h = 0;
+};
+PoseListHook& poseListHook() {
+    static PoseListHook s = [] {
+        PoseListHook p;
+        const char* list = std::getenv("ERUPTION_TEST_POSE_LIST");
+        const char* out = std::getenv("ERUPTION_TEST_POSE_OUT");
+        if (!list || !out) return p;
+        std::ifstream f(list);
+        std::string line;
+        while (std::getline(f, line)) {
+            std::istringstream ls(line);
+            PoseListHook::Pose v;
+            if (!(ls >> v.cam[0] >> v.cam[1] >> v.cam[2] >> v.cam[3] >> v.cam[4])) continue;
+            ls >> v.hora >> v.clima;
+            p.poses.push_back(v);
+        }
+        p.outDir = out;
+        std::error_code ec;
+        std::filesystem::create_directories(p.outDir, ec);
+        const char* m = std::getenv("ERUPTION_TEST_POSE_MODE");
+        p.raw = m && std::string(m) == "raw";
+        if (const char* e = std::getenv("ERUPTION_TEST_POSE_WARMUP")) p.warmup = std::max(1, std::atoi(e));
+        if (const char* e = std::getenv("ERUPTION_TEST_POSE_SAMPLES")) p.samples = std::max(1, std::atoi(e));
+        p.active = !p.poses.empty();
+        ERUPTION_LOG_WARN("[POSES] %zu poses, modo %s, saida %s", p.poses.size(), p.raw ? "raw" : "pontual", out);
+        return p;
+    }();
+    return s;
+}
+} // namespace
+
+// Entradas do FSR: a cor muda com o modo (HDR da iluminacao antes do pos,
+// saida do pos depois dele). Rechamar sempre que G-buffer/pos recriarem views.
+void Engine::bindFsrInputs() {
+    if (!fsrActive()) return;
+    const VkImageView color = m_upscalerMode == UpscalerMode::FsrBeforePost
+                                  ? m_deferredLighting.litImageView()
+                                  : m_postProcessor.outputView();
+    m_fsr.bindInputs(color, m_gbuffer.depthView(), m_cameraMotion.view(),
+                     m_spriteLayerActive ? m_spriteLayer.reactiveView() : VK_NULL_HANDLE);
+    if (m_spriteLayerActive) {
+        m_spriteLayer.bindLayerInputs(m_gbuffer.depthView(), m_deferredLighting.litImageView(), m_gbuffer.albedoView());
+    }
+    m_fsrReset = true;
+}
 
 void Engine::render() {
     static int frameCount = 0; frameCount++;
@@ -92,13 +212,29 @@ void Engine::render() {
         }
         m_renderW = w; m_renderH = h;
         m_gbuffer.resize(w, h); m_deferredLighting.resize(w, h); m_skybox.resize(w, h);
-        m_postProcessor.resize(std::max(64u, static_cast<uint32_t>(w * m_postScale)),
-                               std::max(64u, static_cast<uint32_t>(h * m_postScale)));
-        m_upscaleAA.resizeRenderTarget(m_postProcessor.width(), m_postProcessor.height(),
-                                       postColorFormat(m_vulkan.physicalDevice()));
-        // PostProcessor::resize() destroi e recria m_outputView (handle NOVO)
-        // - o descriptor do FXAA precisa apontar pro handle atual.
-        m_upscaleAA.bindSource(m_postProcessor.outputView());
+        m_cameraMotion.resize(w, h);
+        m_cameraMotion.bindDepth(m_gbuffer.depthView());
+        m_cameraMotion.bindObjectVelocity(m_gbuffer.velocityView());
+        const VkExtent2D disp = m_vulkan.swapExtent();
+        if (m_upscalerMode == UpscalerMode::FsrBeforePost) {
+            m_postProcessor.resize(disp.width, disp.height);
+        } else {
+            m_postProcessor.resize(std::max(64u, static_cast<uint32_t>(w * m_postScale)),
+                                   std::max(64u, static_cast<uint32_t>(h * m_postScale)));
+        }
+        if (fsrActive()) m_fsr.resize(w, h, disp.width, disp.height);
+        if (m_spriteLayerActive) m_spriteLayer.resize(w, h);
+        if (m_upscalerMode == UpscalerMode::FsrAfterPost) {
+            m_upscaleAA.resizeRenderTarget(disp.width, disp.height, Fsr3Upscaler::kOutputFormat);
+            m_upscaleAA.bindSource(m_fsr.outputView());
+        } else {
+            m_upscaleAA.resizeRenderTarget(m_postProcessor.width(), m_postProcessor.height(),
+                                           postColorFormat(m_vulkan.physicalDevice()));
+            // PostProcessor::resize() destroi e recria m_outputView (handle NOVO)
+            // - o descriptor do FXAA precisa apontar pro handle atual.
+            m_upscaleAA.bindSource(m_postProcessor.outputView());
+        }
+        bindFsrInputs();
         m_water.setSkyTexture(m_skybox.outputView(), m_skybox.outputSampler());
         m_camera.setPerspective(60.0f, (float)w / (float)h, 0.1f, 50000.0f);
         m_resized = false;
@@ -338,13 +474,23 @@ void Engine::render() {
 
     float zoomPercent = 1.0f - (m_camera.orbitDistance() - 10.0f) / (1000.0f - 10.0f);
 
+    // Jitter ANTES de qualquer matriz Jittered ser lida neste frame.
+    updateTemporalJitter();
+
     // Prepare FrameUBO earlier for shadow and gbuffer passes
     FrameUBO frameUbo{};
     frameUbo.view = m_camera.viewMatrix();
-    frameUbo.projection = m_camera.projectionMatrix();
-    frameUbo.viewProjection = m_camera.viewProjectionMatrix();
+    frameUbo.projection = m_camera.projJittered();
+    frameUbo.viewProjection = m_camera.viewProjJittered();
     frameUbo.inverseView = glm::inverse(m_camera.viewMatrix());
-    frameUbo.inverseProjection = glm::inverse(m_camera.projectionMatrix());
+    frameUbo.inverseProjection = glm::inverse(m_camera.projJittered());
+    frameUbo.viewProjNoJitter = m_camera.viewProjNoJitter();
+    frameUbo.prevViewProjNoJitter = m_prevViewProjNoJitter;
+    {
+        const VkExtent2D re = renderExtent();
+        const Vec2 toNdc(2.0f / float(std::max(1u, re.width)), 2.0f / float(std::max(1u, re.height)));
+        frameUbo.jitterNdc = Vec4(m_jitterPx * toNdc, m_prevJitterPx * toNdc);
+    }
     frameUbo.cameraPos = m_camera.position();
     frameUbo.time = m_timer.elapsed();
     frameUbo.screenResolution = Vec2(static_cast<float>(renderExtent().width), static_cast<float>(renderExtent().height));
@@ -478,6 +624,16 @@ void Engine::render() {
     const Vec3 windVec = m_weatherSystem.wind().velocity();
     // .y carrega a escala de balanco (o vento e' horizontal, o y era sempre 0).
     frameUbo.windParams = Vec4(windVec.x, m_windSwayScale, windVec.z, m_windClock);
+    // ERUPTION_TEST_NO_WIND=1 (debug): vegetacao parada. Isola o que a camera
+    // faz na imagem (cintilacao) do que o vento move de verdade.
+    static const bool kNoWind = std::getenv("ERUPTION_TEST_NO_WIND") != nullptr;
+    if (kNoWind) frameUbo.windParams = Vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    // Vento do frame anterior (velocidade de objeto da vegetacao). No primeiro
+    // frame e depois de uma troca de mapa nao ha' anterior: repete o atual.
+    if (!m_hasPrevWindParams || m_fsrReset) m_prevWindParams = frameUbo.windParams;
+    frameUbo.prevWindParams = m_prevWindParams;
+    m_prevWindParams = frameUbo.windParams;
+    m_hasPrevWindParams = true;
     // ERUPTION_TEST_WIND_DEBUG=1: o vetor que de fato chega ao vertex shader.
     static const bool kWindDbg = std::getenv("ERUPTION_TEST_WIND_DEBUG") != nullptr;
     if (kWindDbg) {
@@ -549,7 +705,7 @@ void Engine::render() {
     static const bool skyboxOnlyTest = std::getenv("ERUPTION_TEST_SKYBOX_ONLY") != nullptr;
     if (!skyboxOnlyTest) {
         if (m_currentMap) {
-            m_terrainRenderer.render(cmd, m_camera.viewProjectionMatrix(), m_camera.frustum());
+            m_terrainRenderer.render(cmd, m_camera.viewProjJittered(), m_camera.frustum());
         }
         // Pixels por unidade de mundo a distancia 1 (descarte por tamanho na tela).
         m_modelRenderer.setScreenMetrics(
@@ -561,7 +717,7 @@ void Engine::render() {
         // se afasta da malha de referencia (RMS de silhueta na mesma pose).
         static const bool forceBaseLod = std::getenv("ERUPTION_TEST_FORCE_BASE_LOD") != nullptr;
         if (forceBaseLod || m_demoForceBaseLod) m_modelRenderer.setForceBaseLod(true);
-        m_modelRenderer.render(cmd, m_camera.viewProjectionMatrix(), m_camera.frustum(), m_camera.position());
+        m_modelRenderer.render(cmd, m_camera.viewProjJittered(), m_camera.frustum(), m_camera.position());
         if (forceBaseLod || m_demoForceBaseLod) m_modelRenderer.setForceBaseLod(false);
     }
 
@@ -653,7 +809,7 @@ void Engine::render() {
     // e' um passe inteiro de skybox jogado fora todo frame. Medido em cidade-A
     // com a agua fora do quadro: a fase inteira custava 2,045 ms de CPU.
     if (!m_benchmarkThunderstormStarted && waterInView) {
-        if (!wireframeMode()) m_skybox.renderToTexture(cmd, m_dayNightCycle, m_camera.skyboxViewProjectionMatrix());
+        if (!wireframeMode()) m_skybox.renderToTexture(cmd, m_dayNightCycle, m_camera.skyboxViewProjJittered());
     }
 
     // SONDA DE CEU (G36): 6 faces de 32x32 + mips + SH9, a cada 8 frames (o
@@ -681,7 +837,7 @@ void Engine::render() {
                                   m_deferredLighting.litImage(), m_gbuffer.depthImage(),
                                   m_gbuffer.extent().width, m_gbuffer.extent().height,
                                   m_camera.nearPlane(), m_camera.farPlane(),
-                                  inverse(m_camera.viewProjectionMatrix()),
+                                  inverse(m_camera.viewProjJittered()),
                                   m_waterMenu.config);
     }
 
@@ -765,7 +921,7 @@ void Engine::render() {
         // "culling de sombra e' por frustum da LUZ" continua valendo e
         // intocada no ShadowRenderer.
         if (waterInView)
-        m_water.render(cmd, m_camera.viewProjectionMatrix(), m_camera.position(),
+        m_water.render(cmd, m_camera.viewProjJittered(), m_camera.position(),
                        m_dayNightCycle, m_timer.elapsed(),
                        m_camera.nearPlane(), m_camera.farPlane(),
                        adjustedSettings, m_waterMenu.abTestMask,
@@ -787,7 +943,7 @@ void Engine::render() {
             lavaSettings.enableSurfaceFoam = false;
             lavaSettings.transparency = 0.0f;
             lavaSettings.reflectivity = 0.05f;
-            m_water.render(cmd, m_camera.viewProjectionMatrix(), m_camera.position(),
+            m_water.render(cmd, m_camera.viewProjJittered(), m_camera.position(),
                            m_dayNightCycle, m_timer.elapsed(),
                            m_camera.nearPlane(), m_camera.farPlane(),
                            lavaSettings, m_waterMenu.abTestMask,
@@ -819,7 +975,7 @@ void Engine::render() {
 
     m_vulkan.writeTimestamp(cmd, 6, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     if (!m_benchmarkThunderstormStarted) {
-        if (!wireframeMode()) m_skybox.render(cmd, m_dayNightCycle, m_camera.skyboxViewProjectionMatrix());
+        if (!wireframeMode()) m_skybox.render(cmd, m_dayNightCycle, m_camera.skyboxViewProjJittered());
     }
     m_vulkan.writeTimestamp(cmd, 7, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     Profiler::addGpuTime("Skybox IBL", m_vulkan.timestampDeltaMs(6, 7));
@@ -830,8 +986,8 @@ void Engine::render() {
     Profiler::addGpuTime("CloudFluff Render", 0.0f);
     cpuMark(8);
 
-    m_overlayLineRenderer.render(cmd, m_camera.viewProjectionMatrix());
-    m_debugLineRenderer.render(cmd, m_camera.viewProjectionMatrix());
+    m_overlayLineRenderer.render(cmd, m_camera.viewProjJittered());
+    m_debugLineRenderer.render(cmd, m_camera.viewProjJittered());
     m_vulkan.cmdEndRendering(cmd);
 
     // Make depth readable so the cloud-shadow fullscreen pass can reconstruct world positions.
@@ -1199,7 +1355,59 @@ void Engine::render() {
     }
 
     m_vulkan.cmdImageBarrier(cmd, m_deferredLighting.litImage(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-    m_vulkan.cmdImageBarrier(cmd, m_gbuffer.depthImage(), VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    // Cobertura dos sprites (render) enquanto o depth ainda e' attachment de
+    // leitura: vira a mascara reativa do FSR logo abaixo.
+    if (m_spriteLayerActive) {
+        m_spriteLayer.renderMask(cmd, m_gbuffer.depthView(), m_spriteSystem.instanceBuffer(),
+                                 m_spriteSystem.visibleCount(), m_camera.viewProjJittered());
+        m_spriteLayer.buildReactive(cmd);
+    }
+    m_vulkan.cmdImageBarrier(cmd, m_gbuffer.depthImage(), VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    // Motion vectors de camera a partir do depth final do frame (entrada do
+    // FSR). Precisa do prevViewProjNoJitter AINDA do frame anterior: ele so'
+    // e' atualizado depois do pos.
+    m_cameraMotion.dispatch(cmd, m_camera, m_prevViewProjNoJitter);
+    auto fsrParams = [&]() {
+        Fsr3Upscaler::FrameParams fp;
+        fp.jitterPx = m_jitterPx;
+        // ERUPTION_TEST_FSR_JITTER_SIGN="sx,sy" (debug): multiplica o jitter
+        // informado ao FSR. Serve para provar a convencao de sinal: com o sinal
+        // errado a imagem parada fica mole ou "respira".
+        static const Vec2 kJitterSign = [] {
+            Vec2 sgn(1.0f);
+            if (const char* e = std::getenv("ERUPTION_TEST_FSR_JITTER_SIGN")) std::sscanf(e, "%f,%f", &sgn.x, &sgn.y);
+            return sgn;
+        }();
+        fp.jitterPx *= kJitterSign;
+        fp.nearZ = m_camera.nearPlane();
+        fp.farZ = m_camera.farPlane();
+        fp.fovY = glm::radians(m_camera.fov());
+        fp.frameTimeMs = m_timer.deltaTime() * 1000.0f;
+        fp.sharpness = m_fsrSharpness;
+        fp.reset = m_fsrReset;
+        static const bool kDebugView = std::getenv("ERUPTION_FSR_DEBUG") != nullptr;
+        fp.debugView = kDebugView;
+        m_fsrReset = false;
+        return fp;
+    };
+    if (m_upscalerMode == UpscalerMode::FsrBeforePost) {
+        m_vulkan.writeTimestamp(cmd, 42, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        m_fsr.dispatch(cmd, fsrParams());
+        m_vulkan.writeTimestamp(cmd, 43, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        Profiler::addGpuTime("FSR", m_vulkan.timestampDeltaMs(42, 43));
+        // Sprites nitidos por cima da saida do FSR, ainda em HDR linear: o pos
+        // (DoF, bloom, tonemap) passa por cima deles como antes.
+        if (m_spriteLayerActive) {
+            m_spriteLayer.renderLayer(cmd, m_fsr.outputImage(), m_fsr.outputView(),
+                                      {m_fsr.displayWidth(), m_fsr.displayHeight()},
+                                      m_spriteSystem.instanceBuffer(), m_spriteSystem.visibleCount(),
+                                      m_camera.viewMatrix(), m_camera.projNoJitter(),
+                                      m_camera.nearPlane(), m_camera.farPlane());
+        }
+    }
+    const VkImageView postHdrInput = m_upscalerMode == UpscalerMode::FsrBeforePost
+                                         ? m_fsr.outputView()
+                                         : m_deferredLighting.litImageView();
     m_vulkan.cmdImageBarrier(cmd, m_vulkan.swapImage(imageIndex), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
 
     PostProcessor::PostSettings postSettings = m_postSettings;
@@ -1365,9 +1573,9 @@ void Engine::render() {
     // O G-buffer nao carrega mais WorldPos (reconstruido do depth). Este slot
     // alimenta so' o overlay de debug de cobertura de nuvem, cujo shader
     // DECLARA u_worldPos e nunca o le' - entao o depth serve.
-    m_postProcessor.render(cmd, m_deferredLighting.litImageView(), m_gbuffer.depthView(), m_gbuffer.normalView(),
+    m_postProcessor.render(cmd, postHdrInput, m_gbuffer.depthView(), m_gbuffer.normalView(),
                            m_gbuffer.normalView(), m_shadowRenderer.shadowAtlasView(), m_camera.viewMatrix(),
-                           m_camera.projectionMatrix(), glm::inverse(m_camera.viewProjectionMatrix()), m_prevViewProj,
+                           m_camera.projNoJitter(), glm::inverse(m_camera.viewProjNoJitter()), m_prevViewProjNoJitter,
                            m_camera.position(), m_camera.nearPlane(), m_camera.farPlane(), env.sun.direction, postSettings,
                            &m_lookConfig, VK_NULL_HANDLE, m_timer.elapsed(), weatherForPost, m_weatherSystem.sunOcclusion(),
                            m_weatherSystem.moonOcclusion(), topDownDepthView, sunVisualDir, cameraDir, cloudColorView,
@@ -1383,7 +1591,7 @@ void Engine::render() {
     cpuMark(13);
 
 
-    m_prevViewProj = m_camera.viewProjectionMatrix();
+    m_prevViewProjNoJitter = m_camera.viewProjNoJitter();
 
     uint32_t sw = m_vulkan.swapExtent().width, sh = m_vulkan.swapExtent().height;
     // Era um blit BILINEAR cru (VK_FILTER_LINEAR) daqui pro swapchain - nao
@@ -1392,11 +1600,21 @@ void Engine::render() {
     // nitidez adaptativa por contraste local (escrevendo direto no
     // swapchain). Ver UpscaleAA.hpp/.cpp e os dois shaders novos pro porque
     // de nao ser SMAA/FSR1 byte-a-byte (LUT externa e pesos nao-verificaveis).
-    m_vulkan.cmdImageBarrier(cmd, m_postProcessor.outputImage(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    m_vulkan.cmdImageBarrier(cmd, m_postProcessor.outputImage(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    if (m_upscalerMode == UpscalerMode::FsrAfterPost) {
+        m_vulkan.writeTimestamp(cmd, 42, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        m_fsr.dispatch(cmd, fsrParams());
+        m_vulkan.writeTimestamp(cmd, 43, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        Profiler::addGpuTime("FSR", m_vulkan.timestampDeltaMs(42, 43));
+    }
     m_vulkan.cmdImageBarrier(cmd, m_vulkan.swapImage(imageIndex), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-    m_upscaleAA.render(cmd, m_postProcessor.outputView(), m_postProcessor.outputImage(),
+    // Com FSR a imagem ja' chega com anti-aliasing e na resolucao de display:
+    // o UpscaleAA so' copia (FXAA desligado, Catmull-Rom 1:1, sem nitidez).
+    const bool upscaleFromFsr = m_upscalerMode == UpscalerMode::FsrAfterPost;
+    m_upscaleAA.render(cmd, upscaleFromFsr ? m_fsr.outputView() : m_postProcessor.outputView(),
+                       upscaleFromFsr ? m_fsr.outputImage() : m_postProcessor.outputImage(),
                        m_vulkan.swapImageView(imageIndex), m_vulkan.swapImage(imageIndex),
-                       {sw, sh}, m_enableFXAA, m_aaSharpenAmount);
+                       {sw, sh}, fsrActive() ? false : m_enableFXAA, fsrActive() ? 0.0f : m_aaSharpenAmount);
     // takeScreenshot() (Screenshot.cpp) e o bloco de shimmer logo
     // abaixo dependem de outputImage() estar em TRANSFER_SRC_OPTIMAL no resto
     // do frame - era a pos-condicao do blit antigo. UpscaleAA::render so' LEU
@@ -1411,9 +1629,14 @@ void Engine::render() {
                                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                  0, VK_ACCESS_TRANSFER_WRITE_BIT);
 
+        // A origem e' a saida do POST: o tamanho tem que ser o DELA, nao o do
+        // swapchain (mesmo bug que deixava a screenshot preta, ver
+        // takeScreenshot). Com render/post scale < 1 o blit lia fora da
+        // imagem e a metrica media lixo.
+        const uint32_t pw = m_postProcessor.width(), ph = m_postProcessor.height();
         VkImageBlit blit{};
         blit.srcOffsets[0] = {0, 0, 0};
-        blit.srcOffsets[1] = { (int32_t)sw, (int32_t)sh, 1 };
+        blit.srcOffsets[1] = { (int32_t)(pw ? pw : sw), (int32_t)(ph ? ph : sh), 1 };
         blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         blit.srcSubresource.layerCount = 1;
         blit.dstOffsets[0] = {0, 0, 0};
@@ -1629,11 +1852,29 @@ void Engine::render() {
     static const bool kCamHookActive =
         std::getenv("ERUPTION_TEST_CAM_POSE") || std::getenv("ERUPTION_TEST_CAM_DOLLY") ||
         std::getenv("ERUPTION_TEST_CAM_PITCH") || std::getenv("ERUPTION_TEST_CAM_OSC") ||
-        std::getenv("ERUPTION_TEST_CAM_DRAG");
+        std::getenv("ERUPTION_TEST_CAM_DRAG") || std::getenv("ERUPTION_TEST_POSE_LIST");
     // ERUPTION_TEST_KEEP_PITCH_LIMITS=1: NAO alarga - serve pra testar o
     // comportamento de jogo (limites 10..70) pelo caminho de entrada real.
     static const bool kKeepLimits = std::getenv("ERUPTION_TEST_KEEP_PITCH_LIMITS") != nullptr;
     if (kCamHookActive && !kKeepLimits) m_camera.setPitchLimits(glm::radians(-89.0f), glm::radians(89.0f));
+    {
+        PoseListHook& pl = poseListHook();
+        if (pl.active && pl.idx < pl.poses.size() && m_playerController) {
+            const auto& pose = pl.poses[pl.idx];
+            if (pl.applied != pl.idx) {
+                pl.applied = pl.idx;
+                if (pose.hora >= 0.0f) {
+                    m_dayNightCycle.setTimeOfDay(pose.hora);
+                    m_dayNightCycle.setTimeScale(0.0f);
+                }
+                if (!pose.clima.empty()) setInitialWeatherType(pose.clima);
+            }
+            const auto& v = pose.cam;
+            const Vec3 sp = m_playerController->pos();
+            m_camera.setOrbitTarget(Vec3(sp.x + v[0], sp.y, sp.z + v[1]));
+            m_camera.setOrbit(glm::radians(v[2]), glm::radians(v[3]), v[4]);
+        }
+    }
     static const char* camPose = std::getenv("ERUPTION_TEST_CAM_POSE");
     if (camPose) {
         float pt[6] = {0};
@@ -1762,6 +2003,17 @@ void Engine::render() {
     }();
     if (kVmaDumpFrame > 0 && static_cast<int>(m_framesCount) == kVmaDumpFrame) {
         if (const char* dump = std::getenv("ERUPTION_TEST_VMA_DUMP")) m_vulkan.dumpVmaStats(dump);
+    }
+    // ERUPTION_TEST_MV_DUMP="caminho,frame" (debug): grava os motion vectors
+    // de camera do frame anterior (CameraMotion::dumpToFile). Espera a GPU.
+    static const char* mvDump = std::getenv("ERUPTION_TEST_MV_DUMP");
+    if (mvDump) {
+        const std::string spec(mvDump);
+        const size_t comma = spec.rfind(',');
+        if (comma != std::string::npos &&
+            static_cast<int>(m_framesCount) == std::atoi(spec.c_str() + comma + 1)) {
+            m_cameraMotion.dumpToFile(spec.substr(0, comma).c_str());
+        }
     }
     // ERUPTION_TEST_SWAP_SHOT="caminho,frame" (debug): captura o SWAPCHAIN
     // (scheduleScreenshotFromSwap), DEPOIS do ImGui compor por cima - ao
@@ -1909,6 +2161,79 @@ void Engine::render() {
         }
     }
 
+    // ERUPTION_TEST_ACCUM="caminho,frameInicial,N" (debug): media da saida do
+    // pos (antes da UI e de qualquer upscale) em N frames seguidos, em luz
+    // linear, gravada em PNG; encerra ao terminar. Com a cena travada e
+    // ERUPTION_JITTER=1 + ERUPTION_JITTER_PHASES=N, cada pixel vira a media da
+    // propria area: a imagem "raw", sem amostragem pontual.
+    {
+        PoseListHook& pl = poseListHook();
+        if (pl.active && pl.idx < pl.poses.size() && ++pl.frameInPose > pl.warmup) {
+            std::vector<float> rgb;
+            uint32_t w = 0, h = 0;
+            readPostOutput(rgb, w, h);
+            if (pl.sum.empty()) { pl.w = w; pl.h = h; pl.sum.assign(size_t(w) * h * 3, 0.0); }
+            for (size_t i = 0; i < pl.sum.size(); ++i) {
+                const float c = glm::clamp(rgb[i], 0.0f, 1.0f);
+                pl.sum[i] += c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+            }
+            const int need = pl.raw ? pl.samples : 1;
+            if (++pl.done == need) {
+                std::vector<uint8_t> px(size_t(pl.w) * pl.h * 4, 255);
+                for (size_t i = 0, n = size_t(pl.w) * pl.h; i < n; ++i) for (int c = 0; c < 3; ++c) {
+                    const double l = pl.sum[i * 3 + c] / need;
+                    const double e = l <= 0.0031308 ? l * 12.92 : 1.055 * std::pow(l, 1.0 / 2.4) - 0.055;
+                    px[i * 4 + c] = static_cast<uint8_t>(glm::clamp(e * 255.0 + 0.5, 0.0, 255.0));
+                }
+                char name[64];
+                std::snprintf(name, sizeof(name), "/%04zu.png", pl.idx);
+                ImageUtils::writePNG(pl.outDir + name, pl.w, pl.h, 4, px.data());
+                pl.sum.clear();
+                pl.done = 0;
+                pl.frameInPose = 0;
+                if (++pl.idx == pl.poses.size()) {
+                    ERUPTION_LOG_WARN("[POSES] %zu poses gravadas em %s", pl.poses.size(), pl.outDir.c_str());
+                    m_running = false;
+                }
+            }
+        }
+    }
+    static const char* kAccum = std::getenv("ERUPTION_TEST_ACCUM");
+    if (kAccum) {
+        static std::string s_path;
+        static int s_start = 0, s_count = 0, s_done = 0;
+        static std::vector<double> s_sum;
+        static uint32_t s_w = 0, s_h = 0;
+        if (s_path.empty()) {
+            std::string spec(kAccum);
+            const size_t c2 = spec.rfind(','), c1 = spec.rfind(',', c2 - 1);
+            s_path = spec.substr(0, c1);
+            s_start = std::atoi(spec.c_str() + c1 + 1);
+            s_count = std::max(1, std::atoi(spec.c_str() + c2 + 1));
+        }
+        if (static_cast<int>(m_framesCount) >= s_start && s_done < s_count) {
+            std::vector<float> rgb;
+            uint32_t w = 0, h = 0;
+            readPostOutput(rgb, w, h);
+            if (s_sum.empty()) { s_w = w; s_h = h; s_sum.assign(size_t(w) * h * 3, 0.0); }
+            for (size_t i = 0; i < s_sum.size(); ++i) {
+                const float c = glm::clamp(rgb[i], 0.0f, 1.0f); // sRGB de exibicao -> linear
+                s_sum[i] += c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+            }
+            if (++s_done == s_count) {
+                std::vector<uint8_t> px(size_t(s_w) * s_h * 4, 255);
+                for (size_t i = 0, n = size_t(s_w) * s_h; i < n; ++i) for (int c = 0; c < 3; ++c) {
+                    const double l = s_sum[i * 3 + c] / s_count;
+                    const double e = l <= 0.0031308 ? l * 12.92 : 1.055 * std::pow(l, 1.0 / 2.4) - 0.055;
+                    px[i * 4 + c] = static_cast<uint8_t>(glm::clamp(e * 255.0 + 0.5, 0.0, 255.0));
+                }
+                ImageUtils::writePNG(s_path, s_w, s_h, 4, px.data());
+                ERUPTION_LOG_WARN("[ACCUM] %d frames %ux%u -> %s", s_count, s_w, s_h, s_path.c_str());
+                m_running = false;
+            }
+        }
+    }
+
     if (!m_screenshotOnLoad.empty() && !timeSweep) {
         // Keep the user-requested camera distance so screenshots show the actual
         // camera frustum (especially important for sky/cloud visibility).
@@ -1996,7 +2321,13 @@ void Engine::render() {
     // sequencia COMPLETA - e' o unico jeito de ver um "jump" de um frame pro
     // outro. So' pra investigacao headless: e' lento (um PNG por frame).
     static const char* kDumpDir = std::getenv("ERUPTION_TEST_DUMP_FRAMES");
-    if (kDumpDir && !m_screenshotPending) {
+    // ERUPTION_TEST_DUMP_FRAMES_FROM=N: so' a partir do frame N (ex.: pular a
+    // convergencia do historico temporal do FSR nas medicoes de cintilacao).
+    static const uint32_t kDumpFrom = [] {
+        const char* e = std::getenv("ERUPTION_TEST_DUMP_FRAMES_FROM");
+        return e ? static_cast<uint32_t>(std::max(0, std::atoi(e))) : 0u;
+    }();
+    if (kDumpDir && !m_screenshotPending && static_cast<uint32_t>(m_framesCount) >= kDumpFrom) {
         static bool dirReady = false;
         if (!dirReady) {
             std::error_code ec;

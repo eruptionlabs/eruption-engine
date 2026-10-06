@@ -701,7 +701,7 @@ Vec2 PlayerController::getSpriteScreenBase(const Camera& camera, float screenW, 
     Vec3 anchorWorld = m_pos;
     anchorWorld.y += centerY;
 
-    Vec4 clip = camera.viewProjectionMatrix() * Vec4(anchorWorld, 1.0f);
+    Vec4 clip = camera.viewProjNoJitter() * Vec4(anchorWorld, 1.0f);
 
     if (clip.w <= 0.0f) return Vec2(-1.0f);
 

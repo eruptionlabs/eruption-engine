@@ -875,7 +875,7 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
 
         float orthoB = -halfSize, orthoT = halfSize;
         {
-            const Mat4 invViewProj = glm::inverse(camera.viewProjectionMatrix());
+            const Mat4 invViewProj = glm::inverse(camera.viewProjNoJitter());
             const Vec3 camPos = camera.position();
             const float groundY = camTarget.y - 300.0f; // relief allowance
             const float capHalf = m_settings.lowPitchMaxTexel *

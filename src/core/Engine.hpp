@@ -17,6 +17,9 @@
 #include "renderer/ShadowRenderer.hpp"
 #include "renderer/PostProcessor.hpp"
 #include "renderer/UpscaleAA.hpp"
+#include "renderer/CameraMotion.hpp"
+#include "renderer/Fsr3Upscaler.hpp"
+#include "renderer/SpriteLayer.hpp"
 #include "renderer/SkyProbe.hpp"
 #include "renderer/IrradianceProbes.hpp"
 #include "renderer/WeatherSystem.hpp"
@@ -384,6 +387,7 @@ private:
     void performMapSwap();
     void renderLoadingProgress();
     void takeScreenshot(const std::string& filename);
+    void readPostOutput(std::vector<float>& rgb, uint32_t& w, uint32_t& h);
     void takeScreenshotLit(const std::string& filename);
     void scheduleScreenshotFromSwap(const std::string& filename);
     void finishPendingScreenshot();
@@ -408,6 +412,31 @@ private:
     // FXAA + upscale bicubico/nitidez, no lugar do blit bilinear cru que
     // levava a imagem de RENDER pro swapchain de DISPLAY. Ver UpscaleAA.hpp.
     UpscaleAA m_upscaleAA;
+    // Motion vectors de camera (resolucao de render), entrada do FSR.
+    CameraMotion m_cameraMotion;
+    // UPSCALER. Fxaa = caminho antigo (FXAA + Catmull-Rom). Com FSR o jitter
+    // liga sozinho e o UpscaleAA vira so' a copia final pro swapchain:
+    //   FsrBeforePost: FSR na imagem HDR linear (antes de DoF/bloom/tonemap);
+    //                  o pos passa a rodar na resolucao de DISPLAY.
+    //   FsrAfterPost : FSR na saida do pos (ja' tonemapeada); o pos fica na
+    //                  resolucao de render - mais barato, mas DoF, motion blur
+    //                  e particulas entram no historico.
+    // ERUPTION_UPSCALER=fxaa|fsr|fsr_post (ou "upscaler" no preset).
+    enum class UpscalerMode { Fxaa, FsrBeforePost, FsrAfterPost };
+    UpscalerMode m_upscalerMode = UpscalerMode::Fxaa;
+    Fsr3Upscaler m_fsr;
+    // Sprites em camada sobre o FSR (pixel art nitido, sem rastro). A mascara
+    // reativa vale nos dois modos; o redesenho em resolucao de display so'
+    // no FsrBeforePost (depois do pos a imagem ja' esta' tonemapeada).
+    // ERUPTION_SPRITE_LAYER=0 desliga (A/B).
+    SpriteLayer m_spriteLayer;
+    bool m_spriteLayerActive = false;
+    bool m_fsrReset = true;
+    Vec4 m_prevWindParams = Vec4(0.0f);
+    bool m_hasPrevWindParams = false;
+    float m_fsrSharpness = 0.0f;   // 0 = sem RCAS
+    bool fsrActive() const { return m_upscalerMode != UpscalerMode::Fxaa; }
+    void bindFsrInputs();
     bool m_enableFXAA = true;
     float m_aaSharpenAmount = 0.35f;
     SkySystem m_skybox;
@@ -436,9 +465,21 @@ private:
     DioramaLookConfig m_lookConfig;
     SpritePickerUI m_spritePickerUI;
     Camera m_camera;
-    Mat4 m_prevViewProj = Mat4(1.0f);
+    Mat4 m_prevViewProjNoJitter = Mat4(1.0f);
+    // Jitter sub-pixel da rasterizacao (base do FSR). DESLIGADO por padrao:
+    // sem acumulador temporal o jitter so' ADICIONA cintilacao.
+    // ERUPTION_JITTER=1 liga (teste). Ver updateTemporalJitter() em Render.cpp.
+    bool m_temporalJitter = false;
+    uint32_t m_jitterIndex = 0;
+    Vec2 m_jitterPx = Vec2(0.0f);     // pixels de render, [-0.5, 0.5), y para baixo
+    Vec2 m_prevJitterPx = Vec2(0.0f);
+    void updateTemporalJitter();
     VkSampler m_defaultSampler = VK_NULL_HANDLE;
     VkSampler m_nearestSampler = VK_NULL_HANDLE;
+    // Samplers padrao SEM vies de mip, guardados quando o FSR troca os de cena
+    // (a UI criada antes continua apontando para eles).
+    VkSampler m_uiDefaultSampler = VK_NULL_HANDLE;
+    VkSampler m_uiNearestSampler = VK_NULL_HANDLE;
     VkDescriptorPool m_imguiPool = VK_NULL_HANDLE;
     std::vector<std::string> m_availableMaps;
     std::string m_currentMapName;

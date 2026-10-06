@@ -1,0 +1,16 @@
+#version 450
+// Mascara reativa do FSR para os sprites: max(cobertura deste frame, do
+// anterior). O frame anterior entra porque o fundo que um sprite acabou de
+// descobrir tem o sprite no historico do FSR - sem isso fica um rastro.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D u_current;
+layout(binding = 1) uniform sampler2D u_previous;
+layout(binding = 2, r8) uniform writeonly image2D u_reactive;
+layout(push_constant) uniform Params { ivec2 size; } p;
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= p.size.x || px.y >= p.size.y) return;
+    const float m = max(texelFetch(u_current, px, 0).r, texelFetch(u_previous, px, 0).r);
+    imageStore(u_reactive, px, vec4(m));
+}

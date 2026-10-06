@@ -813,6 +813,11 @@ bool VulkanContext::createLogicalDevice() {
     features13.dynamicRendering = m_supportedFeatures13.dynamicRendering;
     features13.synchronization2 = m_supportedFeatures13.synchronization2;
     features13.maintenance4 = m_supportedFeatures13.maintenance4;
+    // FSR 3.1: os passes do SDK leem alem da borda em alguns pontos (SPD mip 5,
+    // RCAS, borda 3x3 do prepare_inputs). No D3D isso devolve 0; no Vulkan e'
+    // indefinido sem robustImageAccess. Opcional: sem ele o FSR roda igual ao
+    // backend Vulkan do proprio SDK, que tambem nao liga.
+    features13.robustImageAccess = m_supportedFeatures13.robustImageAccess;
 
     VkPhysicalDeviceVulkan12Features features12{};
     features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -834,6 +839,24 @@ bool VulkanContext::createLogicalDevice() {
     features.samplerAnisotropy = m_supportedFeatures.samplerAnisotropy ? VK_TRUE : VK_FALSE;
     features.fillModeNonSolid = m_supportedFeatures.fillModeNonSolid ? VK_TRUE : VK_FALSE;
     features.wideLines = m_supportedFeatures.wideLines ? VK_TRUE : VK_FALSE;
+    // FSR 3.1: a saida do upscaler e' uma storage image SEM formato no GLSL.
+    features.shaderStorageImageWriteWithoutFormat =
+        m_supportedFeatures.shaderStorageImageWriteWithoutFormat ? VK_TRUE : VK_FALSE;
+    {
+        // O SPD (piramides de luma do FSR) usa operacoes quad de subgroup em
+        // compute. Sem elas (ou sem a escrita sem formato) o FSR fica
+        // indisponivel e o motor volta pro FXAA.
+        VkPhysicalDeviceSubgroupProperties sg{};
+        sg.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+        VkPhysicalDeviceProperties2 p2{};
+        p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        p2.pNext = &sg;
+        vkGetPhysicalDeviceProperties2(m_physicalDevice, &p2);
+        const bool quad = (sg.supportedOperations & VK_SUBGROUP_FEATURE_QUAD_BIT) &&
+                          (sg.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT);
+        m_fsrSupported = quad && m_supportedFeatures.shaderStorageImageWriteWithoutFormat &&
+                         m_deviceProperties.limits.maxComputeWorkGroupInvocations >= 256;
+    }
     // PIPELINE STATISTICS: e' o que responde "quantos triangulos REALMENTE
     // passaram pelo rasterizador", em vez de "quantos o arquivo tinha". Sem
     // isso, publicar numero de cena de referencia e' enganoso: o LOD de malha

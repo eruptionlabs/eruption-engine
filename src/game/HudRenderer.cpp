@@ -131,14 +131,14 @@ void HudRenderer::draw() {
         Vec2 base = m_player->getSpriteScreenBase(cam, ds.x, ds.y);
         const float h = m_player->spriteHeight();
         auto toScreen = [&](const Vec3& world) {
-            Vec4 clip = cam.viewProjectionMatrix() * Vec4(world, 1.0f);
+            Vec4 clip = cam.viewProjNoJitter() * Vec4(world, 1.0f);
             Vec3 ndc = Vec3(clip) / clip.w;
             return Vec2((ndc.x * 0.5f + 0.5f) * ds.x, (ndc.y * 0.5f + 0.5f) * ds.y);
         };
         // quad do billboard: no espaco de VISTA, de anchor ate anchor + up*h
         Vec4 anchorView = cam.viewMatrix() * Vec4(m_player->pos(), 1.0f);
         Vec4 topView = anchorView + Vec4(0.0f, h, 0.0f, 0.0f);
-        Vec4 clipA = cam.projectionMatrix() * anchorView, clipT = cam.projectionMatrix() * topView;
+        Vec4 clipA = cam.projNoJitter() * anchorView, clipT = cam.projNoJitter() * topView;
         Vec2 sA((clipA.x / clipA.w * 0.5f + 0.5f) * ds.x, (clipA.y / clipA.w * 0.5f + 0.5f) * ds.y);
         Vec2 sT((clipT.x / clipT.w * 0.5f + 0.5f) * ds.x, (clipT.y / clipT.w * 0.5f + 0.5f) * ds.y);
         Vec2 feet = toScreen(m_player->pos());

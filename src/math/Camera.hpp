@@ -66,16 +66,32 @@ public:
     }
 
     // Matrices
+    //
+    // DUAS projecoes, nomes explicitos de proposito (nao existe "a" projecao):
+    //   NoJitter  - logica: culling (frustum), LOD, ajuste de sombra, HUD,
+    //               picking, gizmos, motion blur, motion vectors.
+    //   Jittered  - RASTERIZACAO na resolucao de render: tudo que desenha ou
+    //               reconstroi posicao a partir do depth buffer do frame. O
+    //               depth do G-buffer e' gerado com ESTA matriz.
+    // Sem jitter ligado (setJitterNdc nunca chamado ou zero) as duas sao
+    // iguais. O jitter so' faz sentido com um acumulador temporal (FSR).
     const Mat4& viewMatrix() const { return m_view; }
-    const Mat4& projectionMatrix() const { return m_proj; }
-    Mat4 viewProjectionMatrix() const { return m_proj * m_view; }
-    Mat4 skyboxViewProjectionMatrix() const {
+    const Mat4& projNoJitter() const { return m_proj; }
+    Mat4 viewProjNoJitter() const { return m_proj * m_view; }
+    Mat4 projJittered() const;
+    Mat4 viewProjJittered() const { return projJittered() * m_view; }
+    Mat4 skyboxViewProjJittered() const {
         // Remove translation so the skybox stays at infinity and the camera position
         // does not warp reconstructed ray directions.
         Mat4 view = m_view;
         view[3] = Vec4(0.0f, 0.0f, 0.0f, 1.0f);
-        return m_proj * view;
+        return projJittered() * view;
     }
+
+    // Deslocamento sub-pixel da rasterizacao, em NDC do Vulkan (x direita,
+    // y para BAIXO; 1 pixel = 2/largura). Valido ate' o proximo set.
+    void setJitterNdc(const Vec2& jitter) { m_jitterNdc = jitter; }
+    const Vec2& jitterNdc() const { return m_jitterNdc; }
 
     // Frustum
     void updateFrustum();
@@ -107,7 +123,8 @@ private:
     Vec3 m_up = Vec3(0.0f, 1.0f, 0.0f);
 
     Mat4 m_view = Mat4(1.0f);
-    Mat4 m_proj = Mat4(1.0f);
+    Mat4 m_proj = Mat4(1.0f); // sempre SEM jitter
+    Vec2 m_jitterNdc = Vec2(0.0f);
     Frustum m_frustum;
 
     float m_near = 0.1f;

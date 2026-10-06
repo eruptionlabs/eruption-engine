@@ -53,6 +53,10 @@ layout(location = 16) out flat uvec2 outSplatTex2;
 layout(location = 17) out flat uint outBlendMaskIndex2;
 layout(location = 18) out flat float outSway;
 layout(location = 19) out vec3 outDispInfo;
+layout(location = 20) in vec3 inPrevWorldPos[];
+// Frame anterior: mesma interpolacao + o MESMO deslocamento do vertice final
+// (o balanco de vento ja' veio dos vertices de controle).
+layout(location = 20) out vec3 outPrevWorldPos;
 
 layout(set = 0, binding = 0) uniform sampler2D u_textures[];
 
@@ -192,6 +196,7 @@ float lut8(vec4 a, vec4 b, float t) {
 
 void main() {
     vec3 wp   = BARY(inWorldPos);
+    const vec3 wpBase = wp;
     vec2 uv   = BARY(inTexCoord);
     vec3 nrm  = normalize(BARY(inNormal));
 
@@ -307,5 +312,6 @@ void main() {
     }
 
     outWorldPos = wp;
+    outPrevWorldPos = BARY(inPrevWorldPos) + (wp - wpBase);
     gl_Position = push.viewProjection * vec4(wp, 1.0);
 }

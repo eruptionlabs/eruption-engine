@@ -234,8 +234,23 @@ void Camera::rebuildProjection() {
     m_proj[1][1] *= -1;
 }
 
+Mat4 Camera::projJittered() const {
+    Mat4 p = m_proj;
+    // Translacao no espaco de clip proporcional a w, entao o deslocamento em
+    // NDC e' exatamente m_jitterNdc. Perspectiva (LEFT_HANDED): w = z de
+    // vista, termo na coluna 2. Ortografica: w = 1, termo na coluna 3.
+    if (m_orthographic) {
+        p[3][0] += m_jitterNdc.x;
+        p[3][1] += m_jitterNdc.y;
+    } else {
+        p[2][0] += m_jitterNdc.x;
+        p[2][1] += m_jitterNdc.y;
+    }
+    return p;
+}
+
 void Camera::updateFrustum() {
-    m_frustum.extractFromMatrix(viewProjectionMatrix());
+    m_frustum.extractFromMatrix(viewProjNoJitter());
 }
 
 } // namespace eruption

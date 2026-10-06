@@ -1055,7 +1055,7 @@ void Engine::renderImGui() {
                     if (ImGui::BeginTabItem("Liquids")) {
                         {
                             const Mat4 waterView = m_camera.viewMatrix();
-                            const Mat4 waterProj = m_camera.projectionMatrix();
+                            const Mat4 waterProj = m_camera.projNoJitter();
                             VkExtent2D waterExt = m_vulkan.swapExtent();
                             m_waterMenu.drawUI(waterView, waterProj,
                                                (float)waterExt.width, (float)waterExt.height);
@@ -1327,7 +1327,7 @@ void Engine::renderImGui() {
                         // muda com o angulo da camera) se receber o flip
                         // direto. Desfazer aqui e' o que faz as setinhas
                         // ficarem fixas no mundo ao orbitar a camera.
-                        Mat4 gizmoProj = m_camera.projectionMatrix();
+                        Mat4 gizmoProj = m_camera.projNoJitter();
                         gizmoProj[1][1] *= -1.0f;
                         VkExtent2D ext = m_vulkan.swapExtent();
                         // SO' DESENHA COM O OBJETO NA FRENTE DA CAMERA. O
@@ -1339,7 +1339,7 @@ void Engine::renderImGui() {
                         // na esquerda", que foi o que o autor viu depois que
                         // os eixos XYZ entraram (2026-09-04). Longe demais do
                         // quadro tambem nao vale a pena desenhar.
-                        const Vec4 clipPos = m_camera.viewProjectionMatrix() *
+                        const Vec4 clipPos = m_camera.viewProjNoJitter() *
                                              Vec4(Vec3(sel.transform[3]), 1.0f);
                         const bool gizmoVisivel =
                             clipPos.w > 1e-4f &&
@@ -2313,7 +2313,7 @@ void Engine::renderImGui() {
             const auto& insts = m_modelRenderer.getInstances();
             const auto& frustum = m_camera.frustum();
             Vec3 camPos = m_camera.position();
-            Mat4 vp = m_camera.viewProjectionMatrix();
+            Mat4 vp = m_camera.viewProjNoJitter();
             float proximityRadius = 5000.0f; // Capture everything
 
             ImDrawList* dl = ImGui::GetForegroundDrawList();

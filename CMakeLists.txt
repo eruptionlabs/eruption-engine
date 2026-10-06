@@ -181,6 +181,70 @@ foreach(shader ${SHADER_SOURCES})
     list(APPEND SHADER_BINARIES ${output})
 endforeach()
 
+# FSR 3.1 (third_party/fsr3): os passes GLSL do backend Vulkan do SDK,
+# compilados aqui com as opcoes fixas do motor. Duas familias:
+#   _hdr = entrada linear HDR (FSR antes do pos), _ldr = entrada ja' tonemapeada
+#   (FSR depois do pos). O accumulate tem ainda a variante _sharpen (RCAS).
+# Opcoes: motion vectors em resolucao de render e SEM jitter (CameraMotion),
+# depth nao invertido, Lanczos de referencia (a LUT so' compensa em AMD RDNA).
+# O luma_instability recebe -Drgba8=rgba16f: o GLSL do SDK declara o
+# rw_luma_history como rgba8, mas a imagem e' RGBA16F e guarda valores > 1.
+set(FSR3_DIR ${CMAKE_SOURCE_DIR}/third_party/fsr3)
+file(GLOB FSR3_GPU_HEADERS ${FSR3_DIR}/gpu/*.h ${FSR3_DIR}/gpu/*/*.h)
+set(FSR3_PASSES prepare_inputs luma_pyramid shading_change_pyramid shading_change
+                prepare_reactivity luma_instability accumulate rcas debug_view)
+file(MAKE_DIRECTORY ${SHADER_BINARY_DIR}/fsr3)
+# Os .glsl do SDK nao tem extensao de estagio: o compilador precisa ouvir
+# "compute" explicitamente (glslangValidator -S comp / glslc -fshader-stage).
+if(GLSLANG_VALIDATOR)
+    set(FSR3_COMPILER ${GLSLANG_VALIDATOR} -V --target-env vulkan1.3 -S comp)
+else()
+    set(FSR3_COMPILER ${GLSLC_EXECUTABLE} --target-env=vulkan1.3 -fshader-stage=comp)
+endif()
+foreach(fsr_hdr 0 1)
+    if(fsr_hdr)
+        set(fsr_suffix hdr)
+    else()
+        set(fsr_suffix ldr)
+    endif()
+    foreach(fsr_pass ${FSR3_PASSES})
+        set(fsr_variants 0)
+        if(fsr_pass STREQUAL "accumulate")
+            set(fsr_variants 0 1)
+        endif()
+        foreach(fsr_sharpen ${fsr_variants})
+            set(fsr_name ${fsr_pass})
+            if(fsr_sharpen)
+                set(fsr_name ${fsr_pass}_sharpen)
+            endif()
+            set(fsr_extra "")
+            if(fsr_pass STREQUAL "luma_instability")
+                set(fsr_extra "-Drgba8=rgba16f")
+            endif()
+            set(fsr_src ${FSR3_DIR}/shaders/ffx_fsr3upscaler_${fsr_pass}_pass.glsl)
+            set(fsr_out ${SHADER_BINARY_DIR}/fsr3/${fsr_name}_${fsr_suffix}.comp.spv)
+            add_custom_command(
+                OUTPUT ${fsr_out}
+                COMMAND ${FSR3_COMPILER}
+                        -I${FSR3_DIR}/gpu -I${FSR3_DIR}/gpu/fsr3upscaler
+                        -DFFX_GPU=1 -DFFX_GLSL=1 -DFFX_HALF=0
+                        -DFFX_FSR3UPSCALER_OPTION_HDR_COLOR_INPUT=${fsr_hdr}
+                        -DFFX_FSR3UPSCALER_OPTION_LOW_RESOLUTION_MOTION_VECTORS=1
+                        -DFFX_FSR3UPSCALER_OPTION_JITTERED_MOTION_VECTORS=0
+                        -DFFX_FSR3UPSCALER_OPTION_INVERTED_DEPTH=0
+                        -DFFX_FSR3UPSCALER_OPTION_REPROJECT_USE_LANCZOS_TYPE=0
+                        -DFFX_FSR3UPSCALER_OPTION_UPSAMPLE_USE_LANCZOS_TYPE=2
+                        -DFFX_FSR3UPSCALER_OPTION_APPLY_SHARPENING=${fsr_sharpen}
+                        ${fsr_extra}
+                        ${fsr_src} -o ${fsr_out}
+                DEPENDS ${fsr_src} ${FSR3_GPU_HEADERS}
+                COMMENT "Compiling FSR3 pass: ${fsr_name}_${fsr_suffix}"
+            )
+            list(APPEND SHADER_BINARIES ${fsr_out})
+        endforeach()
+    endforeach()
+endforeach()
+
 add_custom_target(shaders ALL DEPENDS ${SHADER_BINARIES})
 
 # Shadow shader SPIR-V validation

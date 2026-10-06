@@ -21,6 +21,8 @@ Vendorizadas em third_party/:
 - meshoptimizer (https://github.com/zeux/meshoptimizer) — MIT License
 - ImGuizmo (https://github.com/CedricGuillemet/ImGuizmo) — MIT License
 - stb_image / stb_image_write (https://github.com/nothings/stb) — Public Domain / MIT License
+- AMD FidelityFX Super Resolution 3.1 upscaler, so' headers de GPU e passes GLSL
+  (https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK, tag v1.1.4) — MIT License
 
 Dependencias de sistema em tempo de execucao:
 - Vulkan SDK (https://www.vulkan.org/) — termos da Vulkan SDK License

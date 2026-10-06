@@ -224,6 +224,8 @@ private:
     std::vector<std::vector<uint64_t>> m_pipeStatsResults;
     bool m_pipeStatsSupported = false;
     bool m_tessellationSupported = false;
+    bool m_fsrSupported = false;
+    float m_textureLodBias = 0.0f;
     // Teto de subdivisao do DEVICE (limits.maxTessellationGenerationLevel).
     // 64 no desktop, mas o alvo (930M / driver velho) e' onde o tessellator e'
     // pior suportado e o limite pode ser menor - a curva do F2 ia ate' 16 sem
@@ -231,6 +233,15 @@ private:
     uint32_t m_maxTessLevel = 1;
 public:
     bool tessellationSupported() const { return m_tessellationSupported; }
+    // FSR 3.1 utilizavel neste device (subgroup quad em compute, escrita de
+    // storage image sem formato, grupo de 256 invocacoes).
+    bool fsrSupported() const { return m_fsrSupported; }
+    // Vies de mip das texturas de CENA (mipLodBias dos samplers de modelo,
+    // terreno e do sampler padrao). Negativo com FSR: a cena e' rasterizada
+    // abaixo da resolucao de saida, e o mip tem que ser o da SAIDA, senao a
+    // textura chega borrada ao upscaler. Lido na criacao dos samplers.
+    void setTextureLodBias(float bias) { m_textureLodBias = bias; }
+    float textureLodBias() const { return m_textureLodBias; }
     uint32_t maxTessellationLevel() const { return m_maxTessLevel; }
 private:
     bool m_pipeStatsActive = false;

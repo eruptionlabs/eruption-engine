@@ -37,6 +37,7 @@ bool TerrainRenderer::init(VulkanContext* ctx, BindlessDescriptor* bindless) {
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.anisotropyEnable = VK_TRUE;
     samplerInfo.maxAnisotropy = 16.0f;
+    samplerInfo.mipLodBias = m_ctx->textureLodBias(); // FSR: mip da resolucao de saida
     samplerInfo.minLod = 0.0f;
     samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
     vkCreateSampler(m_ctx->device(), &samplerInfo, nullptr, &m_sampler);
@@ -192,12 +193,8 @@ void TerrainRenderer::createPipeline() {
     layoutInfo.pPushConstantRanges = &pcRange;
     vkCreatePipelineLayout(m_ctx->device(), &layoutInfo, nullptr, &m_pipelineLayout);
 
-    std::vector<VkPipelineColorBlendAttachmentState> blends(5);
-    for (auto& b : blends) {
-        b.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        b.blendEnable = VK_FALSE;
-    }
+    // Um estado por alvo do G-buffer (inclui o de velocidade quando ligado).
+    std::vector<VkPipelineColorBlendAttachmentState> blends = GBuffer::blendStates(false);
 
     auto pipeline = PipelineBuilder()
         .setShaderStages(stages)

@@ -104,6 +104,7 @@ void Engine::setPlayerController(PlayerController* pc) {
 }
 
 bool Engine::loadMap(const std::string& name) {
+    m_fsrReset = true; // historico temporal do FSR nao vale entre mapas
     m_isInitialBoot = false; // No longer the initial boot
     TelemetryExporter::recordLoadStart(name);
     loadMapClimate(name);

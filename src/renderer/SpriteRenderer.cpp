@@ -59,6 +59,11 @@ void SpriteRenderer::shutdown() {
         vkDestroyPipeline(m_ctx->device(), m_forwardPipeline, nullptr);
         m_forwardPipeline = VK_NULL_HANDLE;
     }
+    if (m_maskPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), m_maskPipeline, nullptr);
+    if (m_layerPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), m_layerPipeline, nullptr);
+    if (m_layerPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_ctx->device(), m_layerPipelineLayout, nullptr);
+    m_maskPipeline = m_layerPipeline = VK_NULL_HANDLE;
+    m_layerPipelineLayout = VK_NULL_HANDLE;
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_pipeline, nullptr);
         m_pipeline = VK_NULL_HANDLE;
@@ -344,12 +349,9 @@ bool SpriteRenderer::createPipeline() {
     layoutInfo.pPushConstantRanges = &pushRange;
     VK_CHECK(vkCreatePipelineLayout(m_ctx->device(), &layoutInfo, nullptr, &m_pipelineLayout));
 
-    std::vector<VkPipelineColorBlendAttachmentState> blendAttachments(5);
-    for (auto& blend : blendAttachments) {
-        blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        blend.blendEnable = VK_FALSE;
-    }
+    // Um estado por alvo do G-buffer; sprite nao escreve velocidade (ele e'
+    // redesenhado na camada do FSR, e o pixel fica com o movimento de camera).
+    std::vector<VkPipelineColorBlendAttachmentState> blendAttachments = GBuffer::blendStates(false);
 
     auto pipeline = PipelineBuilder()
         .setShaderStages(stages)
@@ -1089,6 +1091,153 @@ void SpriteRenderer::renderShadow(VkCommandBuffer cmd, VkPipelineLayout shadowLa
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
                             0, 2, sets, 0, nullptr);
 
+    vkCmdDraw(cmd, 6, count, 0, 0);
+}
+
+bool SpriteRenderer::createLayerPipelines(VkDescriptorSetLayout layerInputs) {
+    if (m_maskPipeline != VK_NULL_HANDLE) return true;
+    VkDevice dev = m_ctx->device();
+    auto loadModule = [&](const char* path) -> VkShaderModule {
+        const auto code = ShaderCompiler::loadSPIRV(path);
+        if (code.empty()) {
+            ERUPTION_LOG_ERROR("SpriteRenderer: %s nao encontrado", path);
+            return VK_NULL_HANDLE;
+        }
+        VkShaderModuleCreateInfo smi{};
+        smi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smi.codeSize = code.size() * sizeof(uint32_t);
+        smi.pCode = code.data();
+        VkShaderModule m = VK_NULL_HANDLE;
+        vkCreateShaderModule(dev, &smi, nullptr, &m);
+        return m;
+    };
+
+    // Mesmo layout de vertice das outras pipelines de sprite.
+    VkVertexInputBindingDescription bindings[2]{};
+    bindings[0] = {0, sizeof(QuadVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    bindings[1] = {1, sizeof(SpriteInstanceData), VK_VERTEX_INPUT_RATE_INSTANCE};
+    VkVertexInputAttributeDescription attributes[14];
+    attributes[0] = {0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(QuadVertex, position)};
+    attributes[1] = {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(QuadVertex, uv)};
+    for (uint32_t r = 0; r < 4; ++r)
+        attributes[2 + r] = {2 + r, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
+                             static_cast<uint32_t>(offsetof(SpriteInstanceData, modelMatrix) + r * sizeof(Vec4))};
+    attributes[6] = {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SpriteInstanceData, anchorPoint)};
+    attributes[7] = {7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SpriteInstanceData, texRect)};
+    attributes[8] = {8, 1, VK_FORMAT_R32_UINT, offsetof(SpriteInstanceData, texIndex)};
+    attributes[9] = {9, 1, VK_FORMAT_R32_UINT, offsetof(SpriteInstanceData, normalTexIndex)};
+    attributes[10] = {10, 1, VK_FORMAT_R32_UINT, offsetof(SpriteInstanceData, mrahwTexIndex)};
+    attributes[11] = {11, 1, VK_FORMAT_R32_UINT, offsetof(SpriteInstanceData, flags)};
+    attributes[12] = {12, 1, VK_FORMAT_R32_UINT, offsetof(SpriteInstanceData, paletteIndex)};
+    attributes[13] = {13, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SpriteInstanceData, tintColor)};
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount = 2;
+    vertexInput.pVertexBindingDescriptions = bindings;
+    vertexInput.vertexAttributeDescriptionCount = 14;
+    vertexInput.pVertexAttributeDescriptions = attributes;
+
+    VkPipelineColorBlendAttachmentState opaque{};
+    opaque.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    auto stagesFor = [](VkShaderModule v, VkShaderModule f) {
+        std::vector<VkPipelineShaderStageCreateInfo> st(2);
+        st[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, v, "main", nullptr};
+        st[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, f, "main", nullptr};
+        return st;
+    };
+
+    // 1) Mascara: vertex do G-buffer, depth do G-buffer so' para teste.
+    VkShaderModule vMask = loadModule("gbuffer/sprite.vert.spv");
+    VkShaderModule fMask = loadModule("gbuffer/sprite_mask.frag.spv");
+    if (vMask && fMask) {
+        m_maskPipeline = PipelineBuilder()
+            .setShaderStages(stagesFor(vMask, fMask))
+            .setVertexInput(vertexInput)
+            .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            .setViewport(0, 0, 1, 1)
+            .setScissor(0, 0, 1, 1)
+            .setPolygonMode(VK_POLYGON_MODE_FILL)
+            .setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+            .setDepthState(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setBlendState({opaque})
+            .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
+            .setLayout(m_pipelineLayout)
+            .setColorAttachmentFormats({VK_FORMAT_R8_UNORM})
+            .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
+            .build(dev);
+    }
+    if (vMask) vkDestroyShaderModule(dev, vMask, nullptr);
+    if (fMask) vkDestroyShaderModule(dev, fMask, nullptr);
+
+    // 2) Camada: set 0 bindless, set 1 FrameUBO, set 2 entradas da camada.
+    const VkDescriptorSetLayout layouts[3] = {m_bindless->layout(), m_frameUboLayout, layerInputs};
+    VkPushConstantRange pr{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(LayerPush)};
+    VkPipelineLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    li.setLayoutCount = 3;
+    li.pSetLayouts = layouts;
+    li.pushConstantRangeCount = 1;
+    li.pPushConstantRanges = &pr;
+    if (vkCreatePipelineLayout(dev, &li, nullptr, &m_layerPipelineLayout) != VK_SUCCESS) return false;
+    VkShaderModule vLayer = loadModule("gbuffer/sprite_layer.vert.spv");
+    VkShaderModule fLayer = loadModule("gbuffer/sprite_layer.frag.spv");
+    if (vLayer && fLayer) {
+        m_layerPipeline = PipelineBuilder()
+            .setShaderStages(stagesFor(vLayer, fLayer))
+            .setVertexInput(vertexInput)
+            .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            .setViewport(0, 0, 1, 1)
+            .setScissor(0, 0, 1, 1)
+            .setPolygonMode(VK_POLYGON_MODE_FILL)
+            .setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+            .setDepthState(false, false, VK_COMPARE_OP_ALWAYS)
+            .setBlendState({opaque})
+            .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
+            .setLayout(m_layerPipelineLayout)
+            .setColorAttachmentFormats({VK_FORMAT_R16G16B16A16_SFLOAT})
+            .build(dev);
+    }
+    if (vLayer) vkDestroyShaderModule(dev, vLayer, nullptr);
+    if (fLayer) vkDestroyShaderModule(dev, fLayer, nullptr);
+    return m_maskPipeline != VK_NULL_HANDLE && m_layerPipeline != VK_NULL_HANDLE;
+}
+
+void SpriteRenderer::drawMask(VkCommandBuffer cmd, VkBuffer instances, uint32_t count, const Mat4& viewProjJittered) {
+    if (count == 0 || m_maskPipeline == VK_NULL_HANDLE) return;
+    // O FrameUBO ja' foi gravado neste frame pelo passe do G-buffer (mesmas
+    // matrizes com jitter): o vertex shader e' o mesmo, a cobertura bate.
+    const VkExtent2D ext = m_gbuffer->extent();
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_maskPipeline);
+    VkViewport vp{0.0f, 0.0f, float(ext.width), float(ext.height), 0.0f, 1.0f};
+    VkRect2D sc{{0, 0}, ext};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Mat4), &viewProjJittered);
+    VkBuffer vbs[2] = {m_quadVertexBuffer, instances};
+    VkDeviceSize offs[2] = {0, 0};
+    vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);
+    VkDescriptorSet sets[2] = {m_bindless->set(), m_frameUboSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 2, sets, 0, nullptr);
+    vkCmdDraw(cmd, 6, count, 0, 0);
+}
+
+void SpriteRenderer::drawLayer(VkCommandBuffer cmd, VkBuffer instances, uint32_t count, VkDescriptorSet layerInputs,
+                               const LayerPush& push, VkExtent2D extent) {
+    if (count == 0 || m_layerPipeline == VK_NULL_HANDLE) return;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layerPipeline);
+    VkViewport vp{0.0f, 0.0f, float(extent.width), float(extent.height), 0.0f, 1.0f};
+    VkRect2D sc{{0, 0}, extent};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdPushConstants(cmd, m_layerPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(LayerPush), &push);
+    VkBuffer vbs[2] = {m_quadVertexBuffer, instances};
+    VkDeviceSize offs[2] = {0, 0};
+    vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);
+    VkDescriptorSet sets[3] = {m_bindless->set(), m_frameUboSet, layerInputs};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layerPipelineLayout, 0, 3, sets, 0, nullptr);
     vkCmdDraw(cmd, 6, count, 0, 0);
 }
 

@@ -1,0 +1,69 @@
+#version 450
+// Motion vectors SO' DE CAMERA, reconstruidos do depth do G-buffer (entrada
+// do FSR). Para cada pixel: a posicao em espaco de VISTA sai do depth (que foi
+// rasterizado com a projecao COM jitter), e o vetor e' a diferenca entre onde
+// esse ponto estava no frame anterior e onde ele esta agora, as duas
+// projecoes SEM jitter. Resultado em UV (0..1), direcao atual -> anterior:
+//   mv = uvAnterior - uvAtual
+// Objetos que se movem por conta propria (vento, agua, sprites) nao entram
+// aqui: ou estao fora do FSR (sprites) ou vao pela mascara reativa.
+//
+// Por que linearizar o depth a mao em vez de usar inverse(viewProj): com
+// near 0.1 e far 50000, o depth de um ponto a 300 u e' 0.99967, e a inversa
+// da matriz inteira em float cancela termos grandes (1 - d ~ 3e-4). O
+// resultado era um vetor ~100x maior que o real numa aproximacao de camera.
+// Aqui o z sai de P32 / (d - P22) e o resto e' espaco de vista (valores
+// pequenos), com a unica matriz de mundo (viewToPrevClip) montada em double.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform sampler2D u_depth;
+layout(binding = 1, rg16f) uniform writeonly image2D u_motion;
+// Velocidade de OBJETO escrita no G-buffer pela pipeline de modelo (balanco de
+// vento). Onde ninguem escreveu fica o sentinela do clear (30000), e vale o
+// movimento de camera. So' lida com p.useObject = 1.
+layout(binding = 2) uniform sampler2D u_objectVelocity;
+
+layout(push_constant) uniform Params {
+    mat4 viewToPrevClip;  // prevViewProjNoJitter * inverse(view)
+    mat4 projNoJitter;    // vista -> clip deste frame, sem jitter
+    vec4 projJ;           // projecao COM jitter: P00, P11, deslocamento x, y
+    vec4 depthP;          // P22, P32, 1 = ortografica, -
+    vec2 invSize;
+    ivec2 size;
+    int useObject;
+} p;
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= p.size.x || px.y >= p.size.y) return;
+    if (p.useObject != 0) {
+        const vec2 ov = texelFetch(u_objectVelocity, px, 0).rg;
+        if (abs(ov.x) < 1000.0) {
+            imageStore(u_motion, px, vec4(ov, 0.0, 0.0));
+            return;
+        }
+    }
+
+    const vec2 uv = (vec2(px) + 0.5) * p.invSize;
+    const float d = texelFetch(u_depth, px, 0).r;
+    // NDC do Vulkan: x e y na mesma orientacao do UV (y para baixo).
+    const vec2 ndc = uv * 2.0 - 1.0;
+
+    // Espaco de vista (LEFT_HANDED, z para frente). Perspectiva: w = z, e o
+    // jitter/off-center soma em NDC. Ortografica: w = 1.
+    vec3 view;
+    if (p.depthP.z > 0.5) {
+        view.z = (d - p.depthP.y) / p.depthP.x;
+        view.xy = (ndc - p.projJ.zw) / p.projJ.xy;
+    } else {
+        view.z = p.depthP.y / (d - p.depthP.x);
+        view.xy = (ndc - p.projJ.zw) * view.z / p.projJ.xy;
+    }
+
+    const vec4 prev = p.viewToPrevClip * vec4(view, 1.0);
+    const vec4 cur = p.projNoJitter * vec4(view, 1.0);
+    const vec2 prevUv = prev.xy / prev.w * 0.5 + 0.5;
+    const vec2 curUv = cur.xy / cur.w * 0.5 + 0.5;
+
+    imageStore(u_motion, px, vec4(prevUv - curUv, 0.0, 0.0));
+}

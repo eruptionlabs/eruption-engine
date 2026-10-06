@@ -37,6 +37,10 @@ layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outPBR;
 layout(location = 3) out uint outMaterialID;
 layout(location = 4) out vec4 outEmissive;
+// Velocidade de objeto (6o alvo do G-buffer, so' quando ligado): UV do frame
+// anterior menos UV atual, sem jitter - mesma convencao do CameraMotion.
+layout(location = 5) out vec2 outVelocity;
+layout(location = 20) in vec3 inPrevWorldPos;
 
 layout(set = 0, binding = 0) uniform sampler2D u_textures[];
 
@@ -99,6 +103,12 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_tessLut1;
     // z = teto de inclinacao da normal em radianos (0 desliga)
     vec4 u_tessParams2;
+    // Fim do FrameUBO (FSR): matrizes SEM jitter e o vento do frame anterior,
+    // para a velocidade de objeto (vegetacao) - ver SpriteRenderer.hpp.
+    mat4 u_viewProjNoJitter;
+    mat4 u_prevViewProjNoJitter;
+    vec4 u_jitterNdc;
+    vec4 u_prevWindParams;
 };
 
 // Tabela de 8 valores com interpolacao linear. t em 0..1.
@@ -175,6 +185,13 @@ mat3 computeTBN(vec3 N, vec3 worldPos, vec2 uv) {
 }
 
 void main() {
+    {
+        // Primeiro de tudo: main() tem retornos antecipados (debug/wireframe),
+        // e um alvo sem escrita ficaria com lixo em vez do sentinela.
+        const vec4 c = u_viewProjNoJitter * vec4(inWorldPos, 1.0);
+        const vec4 p = u_prevViewProjNoJitter * vec4(inPrevWorldPos, 1.0);
+        outVelocity = (p.xy / p.w - c.xy / c.w) * 0.5;
+    }
     // MODO WIREFRAME (debugMode 3): a pipeline ja' esta' em POLYGON_MODE_LINE,
     // entao so' as ARESTAS chegam aqui. Escreve verde no emissive e zera o
     // resto - o passe de iluminacao passa o emissive direto, entao a linha sai

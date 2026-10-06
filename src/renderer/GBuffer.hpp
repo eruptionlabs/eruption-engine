@@ -69,11 +69,44 @@ public:
     static std::vector<VkFormat> colorAttachmentFormats() {
         // WorldPos SAIU: 8 B/px de um alvo cujo conteudo ja' estava inteiro no
         // depth. Os passes de iluminacao reconstroem com worldFromDepth().
-        return {AlbedoFormat, NormalFormat, PbrFormat, MaterialFormat, EmissiveFormat};
+        std::vector<VkFormat> f = {AlbedoFormat, NormalFormat, PbrFormat, MaterialFormat, EmissiveFormat};
+        if (s_velocityEnabled) f.push_back(VelocityFormat);
+        return f;
     }
 
+    // VELOCIDADE DE OBJETO (FSR): 6o alvo, opcional. So' a pipeline de modelo
+    // escreve (o balanco de vento da vegetacao); as outras declaram o alvo com
+    // mascara de escrita 0 e o pixel fica com o sentinela do clear, que o
+    // CameraMotion le' como "use o movimento de camera". Sentinela FORA do
+    // alcance fisico de proposito: zero e' o que um objeto parado escreve.
+    // Custa 4 B por FRAGMENTO no G-buffer (overdraw incluso) - desligado no
+    // preset low da 930M ate' ser medido la'. Decidido antes de criar as
+    // pipelines (setVelocityEnabled), igual aos formatos.
+    static constexpr VkFormat VelocityFormat = VK_FORMAT_R16G16_SFLOAT;
+    static constexpr float kVelocitySentinel = 30000.0f;
+    static void setVelocityEnabled(bool on) { s_velocityEnabled = on; }
+    static bool velocityEnabled() { return s_velocityEnabled; }
+    // Estado de blend de cada alvo; o de velocidade so' escreve se pedido.
+    static std::vector<VkPipelineColorBlendAttachmentState> blendStates(bool writesVelocity) {
+        std::vector<VkPipelineColorBlendAttachmentState> b(colorAttachmentFormats().size());
+        for (auto& s : b) {
+            s.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            s.blendEnable = VK_FALSE;
+        }
+        if (s_velocityEnabled) {
+            b.back().colorWriteMask = writesVelocity ? (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT) : 0;
+        }
+        return b;
+    }
+    VkImageView velocityView() const { return m_velocityView; }
+
 private:
+    static inline bool s_velocityEnabled = false;
     VulkanContext* m_ctx = nullptr;
+    VkImage m_velocityImage = VK_NULL_HANDLE;
+    VmaAllocation m_velocityAlloc = VK_NULL_HANDLE;
+    VkImageView m_velocityView = VK_NULL_HANDLE;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
 

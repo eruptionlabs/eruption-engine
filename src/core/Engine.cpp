@@ -254,7 +254,42 @@ bool Engine::init(int width, int height, const std::string& title) {
         m_renderW = static_cast<uint32_t>(width);
         m_renderH = static_cast<uint32_t>(height);
     }
+    // Upscaler: env > preset > FXAA. Decidido ANTES do G-buffer: a velocidade de
+    // objeto (6o alvo) depende dele. Com FSR o post_scale e' ignorado (abaixo).
+    {
+        std::string mode = "fxaa";
+        bool objectVelocity = true;
+        try {
+            std::ifstream pf("data/graphics.json");
+            if (pf) {
+                nlohmann::json gj; pf >> gj;
+                std::string pr = gj.value("preset", "high");
+                if (const char* pe = std::getenv("ERUPTION_TEST_GRAPHICS_PRESET")) pr = pe;
+                if (gj.contains("presets") && gj["presets"].contains(pr)) {
+                    mode = gj["presets"][pr].value("upscaler", mode);
+                    m_fsrSharpness = gj["presets"][pr].value("fsr_sharpness", m_fsrSharpness);
+                    // Velocidade de objeto (vegetacao com vento): ligada por
+                    // padrao, o preset pode desligar (low/930M: custa banda).
+                    objectVelocity = gj["presets"][pr].value("fsr_object_velocity", objectVelocity);
+                }
+            }
+        } catch (...) {}
+        if (const char* e = std::getenv("ERUPTION_UPSCALER")) mode = e;
+        if (const char* e = std::getenv("ERUPTION_FSR_SHARPNESS")) m_fsrSharpness = std::strtof(e, nullptr);
+        m_upscalerMode = mode == "fsr" ? UpscalerMode::FsrBeforePost
+                       : mode == "fsr_post" ? UpscalerMode::FsrAfterPost
+                       : UpscalerMode::Fxaa;
+        if (fsrActive() && !Fsr3Upscaler::supported(&m_vulkan)) {
+            ERUPTION_LOG_WARN("FSR pedido mas o device nao suporta: voltando ao FXAA");
+            m_upscalerMode = UpscalerMode::Fxaa;
+        }
+        if (const char* e = std::getenv("ERUPTION_FSR_OBJECT_VELOCITY")) objectVelocity = e[0] == '1';
+        GBuffer::setVelocityEnabled(fsrActive() && objectVelocity);
+    }
     if (!m_gbuffer.init(&m_vulkan, width, height)) return false;
+    if (!m_cameraMotion.init(&m_vulkan, width, height)) return false;
+    m_cameraMotion.bindDepth(m_gbuffer.depthView());
+    m_cameraMotion.bindObjectVelocity(m_gbuffer.velocityView());
     if (!m_deferredLighting.init(&m_vulkan, &m_gbuffer, &m_bindless, width, height)) return false;
     if (std::getenv("ERUPTION_TEST_FORCE_LEGACY") != nullptr) {
         m_deferredLighting.setUsePbr(false);
@@ -321,17 +356,68 @@ bool Engine::init(int width, int height, const std::string& title) {
             }
         } catch (...) { m_postScale = 1.0f; }
     }
-    if (!m_postProcessor.init(&m_vulkan,
-            std::max(64u, static_cast<uint32_t>(width * m_postScale)),
-            std::max(64u, static_cast<uint32_t>(height * m_postScale)))) return false;
+    if (fsrActive()) m_postScale = 1.0f; // o FSR resolve a escala sozinho
+    const VkExtent2D displayExt = m_vulkan.swapExtent();
+    uint32_t postW = std::max(64u, static_cast<uint32_t>(width * m_postScale));
+    uint32_t postH = std::max(64u, static_cast<uint32_t>(height * m_postScale));
+    if (m_upscalerMode == UpscalerMode::FsrBeforePost) { postW = displayExt.width; postH = displayExt.height; }
+    if (!m_postProcessor.init(&m_vulkan, postW, postH)) return false;
     m_postProcessor.setWeatherSystem(&m_weatherSystem);
+    if (fsrActive()) {
+        if (!m_fsr.init(&m_vulkan, m_upscalerMode == UpscalerMode::FsrBeforePost,
+                        static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                        displayExt.width, displayExt.height)) {
+            ERUPTION_LOG_WARN("FSR falhou ao iniciar: voltando ao FXAA");
+            m_upscalerMode = UpscalerMode::Fxaa;
+            m_postProcessor.resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+        } else {
+            // Vies de mip (recomendacao da AMD: log2(render/display) - 1). O
+            // "- 1" e' configuravel: mais negativo = textura mais nitida e mais
+            // alias para o FSR resolver - o trade-off que estamos medindo.
+            float extra = -1.0f;
+            if (const char* e = std::getenv("ERUPTION_FSR_MIP_BIAS_EXTRA")) extra = std::strtof(e, nullptr);
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(m_vulkan.physicalDevice(), &props);
+            const float maxBias = props.limits.maxSamplerLodBias;
+            const float bias = std::clamp(std::log2(float(width) / float(displayExt.width)) + extra, -maxBias, maxBias);
+            m_vulkan.setTextureLodBias(bias);
+            // Os samplers padrao ja' foram criados (ImGui/splash os usam e
+            // seguem com os antigos, vivos ate' o shutdown); as texturas de cena
+            // registradas daqui em diante pegam os novos, com vies.
+            m_uiDefaultSampler = m_defaultSampler;
+            m_uiNearestSampler = m_nearestSampler;
+            VkSamplerCreateInfo si{}; si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+            si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            si.anisotropyEnable = VK_TRUE;
+            si.maxAnisotropy = 16.0f;
+            si.mipLodBias = bias;
+            si.minLod = 0.0f;
+            si.maxLod = VK_LOD_CLAMP_NONE;
+            vkCreateSampler(m_vulkan.device(), &si, nullptr, &m_defaultSampler);
+            si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+            vkCreateSampler(m_vulkan.device(), &si, nullptr, &m_nearestSampler);
+            ERUPTION_LOG_WARN("FSR 3.1 %s: %dx%d -> %ux%u, vies de mip %.2f",
+                              m_upscalerMode == UpscalerMode::FsrBeforePost ? "antes do pos (HDR)" : "depois do pos (LDR)",
+                              width, height, displayExt.width, displayExt.height, bias);
+        }
+    }
     // FXAA + upscale bicubico/nitidez: substitui o blit bilinear que levava a
     // saida do PostProcessor (resolucao de RENDER) pro swapchain (resolucao
     // de DISPLAY). Mesma resolucao/formato que o PostProcessor usa, pra ler
     // a saida dele sem conversao.
-    if (!m_upscaleAA.init(&m_vulkan, m_postProcessor.width(), m_postProcessor.height(),
-                          postColorFormat(m_vulkan.physicalDevice()))) return false;
-    m_upscaleAA.bindSource(m_postProcessor.outputView());
+    if (m_upscalerMode == UpscalerMode::FsrAfterPost) {
+        // A entrada do UpscaleAA vira a saida do FSR (display, RGBA16F).
+        if (!m_upscaleAA.init(&m_vulkan, m_fsr.displayWidth(), m_fsr.displayHeight(),
+                              Fsr3Upscaler::kOutputFormat)) return false;
+        m_upscaleAA.bindSource(m_fsr.outputView());
+    } else {
+        if (!m_upscaleAA.init(&m_vulkan, m_postProcessor.width(), m_postProcessor.height(),
+                              postColorFormat(m_vulkan.physicalDevice()))) return false;
+        m_upscaleAA.bindSource(m_postProcessor.outputView());
+    }
+    if (fsrActive()) bindFsrInputs();
     if (!initShimmerMetric()) return false;
 
     presentLoadingScreen("", "Loading Renderers", 0.15f, true);
@@ -389,6 +475,15 @@ bool Engine::init(int width, int height, const std::string& title) {
         return this->resolveModelMesh(legacyModelPath, nodeIdx, vertices, indices);
     });
     if (!m_spriteRenderer.init(&m_vulkan, &m_gbuffer, &m_bindless)) return false;
+    if (fsrActive()) {
+        const char* sl = std::getenv("ERUPTION_SPRITE_LAYER");
+        if (!(sl && sl[0] == '0')) {
+            m_spriteLayerActive = m_spriteLayer.init(&m_vulkan, &m_spriteRenderer,
+                                                     static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+            if (!m_spriteLayerActive) ERUPTION_LOG_WARN("Camada de sprites indisponivel: sprites ficam so' no G-buffer");
+        }
+        bindFsrInputs(); // agora com a mascara reativa
+    }
     // Share SpriteRenderer's per-frame UBO with model/terrain G-Buffer pipelines
     // so their fragment shaders can access camera position, time and POM params.
     m_modelRenderer.setFrameUboSet(m_spriteRenderer.frameUboLayout(), m_spriteRenderer.frameUboSet());
@@ -875,6 +970,9 @@ void Engine::shutdown() {
     m_modelRenderer.shutdown(); m_terrainRenderer.shutdown(); m_spriteSystem.shutdown();
     m_spriteRenderer.shutdown(); m_shadowRenderer.shutdown(); m_deferredLighting.shutdown();
     m_upscaleAA.shutdown();
+    m_cameraMotion.shutdown();
+    m_spriteLayer.shutdown();
+    m_fsr.shutdown();
     m_postProcessor.shutdown(); shutdownShimmerMetric(); MipmapGenerator::shutdownCompute(&m_vulkan);
     // Independent cloud layers must be released while the Vulkan context and
     // the cloud renderer are still alive (they own VMA allocations and hold
@@ -901,6 +999,8 @@ void Engine::shutdown() {
 
     if (m_defaultSampler != VK_NULL_HANDLE) vkDestroySampler(m_vulkan.device(), m_defaultSampler, nullptr);
     if (m_nearestSampler != VK_NULL_HANDLE) vkDestroySampler(m_vulkan.device(), m_nearestSampler, nullptr);
+    if (m_uiDefaultSampler != VK_NULL_HANDLE) vkDestroySampler(m_vulkan.device(), m_uiDefaultSampler, nullptr);
+    if (m_uiNearestSampler != VK_NULL_HANDLE) vkDestroySampler(m_vulkan.device(), m_uiNearestSampler, nullptr);
 
     shutdownSplashLogo();
     shutdownMinimap();
@@ -1655,7 +1755,7 @@ float Engine::computeObstructionSingleRay() const {
 
 float Engine::computeObstructionMultiRay() const {
     float orbitDist = m_camera.orbitDistance();
-    Mat4 invVP = glm::inverse(m_camera.viewProjectionMatrix());
+    Mat4 invVP = glm::inverse(m_camera.viewProjNoJitter());
     int hits = 0;
     float sumDist = 0.0f;
     const float uv[3] = {0.25f, 0.5f, 0.75f};
@@ -1686,7 +1786,7 @@ float Engine::computeObstructionMultiRay() const {
 
 float Engine::computeObstructionScreenSpace() const {
     float orbitDist = m_camera.orbitDistance();
-    Mat4 vp = m_camera.viewProjectionMatrix();
+    Mat4 vp = m_camera.viewProjNoJitter();
     float weightedArea = 0.0f;
 
     auto projectAndAccumulate = [&](const Vec3& minP, const Vec3& maxP, float dist, float extraWeight) {

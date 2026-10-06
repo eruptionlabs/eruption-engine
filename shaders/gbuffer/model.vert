@@ -45,6 +45,9 @@ layout(location = 18) out flat float outSway;
 // x = |dot(direcao do deslocamento, normal)| - 1 significa exatamente ao
 // longo da normal; y = modulo do deslocamento em unidades de mundo.
 layout(location = 19) out vec3 outDispInfo;
+// Posicao no mundo do MESMO vertice no frame anterior (vento anterior + o
+// mesmo deslocamento): vira a velocidade de objeto no model.frag.
+layout(location = 20) out vec3 outPrevWorldPos;
 
 layout(set = 0, binding = 0) uniform sampler2D u_textures[];
 
@@ -97,6 +100,12 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_tessLut1;
     // x = 0 UV / 1 mundo, y = escala do mundo. Ver heightAt().
     vec4 u_tessParams2;
+    // Fim do FrameUBO (FSR): matrizes SEM jitter e o vento do frame anterior,
+    // para a velocidade de objeto (vegetacao) - ver SpriteRenderer.hpp.
+    mat4 u_viewProjNoJitter;
+    mat4 u_prevViewProjNoJitter;
+    vec4 u_jitterNdc;
+    vec4 u_prevWindParams;
 };
 
 // -----------------------------------------------------------------------------
@@ -113,20 +122,20 @@ layout(set = 1, binding = 0) uniform FrameUBO {
 //
 // A fase vem da posicao no mundo, entao cada moita anda no seu tempo. Sem isso
 // um campo inteiro balanca em unissono, que le como animacao e nao como vento.
-vec3 applyWindSway(vec3 worldPos, float localHeight, float sway) {
+vec3 applyWindSwayWith(vec4 windParams, vec3 worldPos, float localHeight, float sway) {
     if (sway <= 1e-4) return worldPos;
 
-    vec3 wind = u_windParams.xyz;
+    vec3 wind = windParams.xyz;
     // windParams.y carrega a ESCALA de balanco (graphics.json wind_sway_scale).
     // O vento e' sempre horizontal, entao o y do vetor era sempre 0 e a vaga
     // estava livre - nao custa slot novo de UBO.
-    float swayScale = max(u_windParams.y, 0.0);
+    float swayScale = max(windParams.y, 0.0);
     wind.y = 0.0;
     float strength = length(wind.xz);
     if (strength <= 1e-4 || swayScale <= 0.0) return worldPos;
     vec3 windDir = wind / strength;   // SO' a direcao daqui pra frente
 
-    float t = u_windParams.w;
+    float t = windParams.w;
 
     // Fase por posicao: numeros irracionais evitam que a moita caia em
     // ressonancia com a grade do terreno e apareca um padrao regular.
@@ -167,6 +176,10 @@ vec3 applyWindSway(vec3 worldPos, float localHeight, float sway) {
     // haste tem comprimento fixo. Sem isso a planta parece esticar.
     worldPos.y -= bend * 0.12 * gust;
     return worldPos;
+}
+
+vec3 applyWindSway(vec3 worldPos, float localHeight, float sway) {
+    return applyWindSwayWith(u_windParams, worldPos, localHeight, sway);
 }
 
 // Dados POR INSTANCIA (SIMT). Antes, cada instancia visivel era um
@@ -306,8 +319,13 @@ void main() {
     // mesmo com o vento chegando ao shader. A altura acima da ORIGEM da
     // instancia e' o que interessa - a base do objeto e' o engaste.
     float instBaseY = (u_inst[gl_InstanceIndex].model * vec4(0.0, 0.0, 0.0, 1.0)).y;
+    // A mesma conta com o vento do frame anterior: a instancia nao se move,
+    // so' o balanco muda, entao isto e' onde o vertice estava.
+    const vec3 prevSway = applyWindSwayWith(u_prevWindParams, worldPos.xyz, worldPos.y - instBaseY,
+                                            u_inst[gl_InstanceIndex].uvScaleDisp.w);
     worldPos.xyz = applyWindSway(worldPos.xyz, worldPos.y - instBaseY,
                                  u_inst[gl_InstanceIndex].uvScaleDisp.w);
+    const vec3 curSway = worldPos.xyz;
     outSway = u_inst[gl_InstanceIndex].uvScaleDisp.w;
     outDispInfo = vec3(0.0);
 
@@ -391,6 +409,8 @@ void main() {
 
     gl_Position = push.viewProjection * worldPos;
     outWorldPos = worldPos.xyz;
+    // Deslocamentos (POM/tesselacao) sao estaticos: o anterior leva o mesmo.
+    outPrevWorldPos = prevSway + (worldPos.xyz - curSway);
     // Sem esta atribuição o varying vai para o fragment shader com valor
     // INDEFINIDO: model.frag faz `if (inEmissiveStrength > 0.01)` e acendia
     // lava laranja em vértice aleatório de qualquer malha. O atributo é 0 em

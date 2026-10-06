@@ -57,6 +57,8 @@ layout(location = 15) out flat uvec2 outSplatTex[];
 layout(location = 16) out flat uvec2 outSplatTex2[];
 layout(location = 17) out flat uint outBlendMaskIndex2[];
 layout(location = 18) out flat float outSway[];
+layout(location = 20) in vec3 inPrevWorldPos[];
+layout(location = 20) out vec3 outPrevWorldPos[];
 // A location 19 (outDispInfo) PARA aqui: o TES escreve a dele do zero, entao
 // repassar era um varying morto - e estava declarado vec3 aqui contra vec2 la',
 // que e' VUID-RuntimeSpirv-OpEntryPoint-07754. O glslang compila cada estagio
@@ -218,6 +220,7 @@ void main() {
     outSplatTex2[gl_InvocationID] = inSplatTex2[gl_InvocationID];
     outBlendMaskIndex2[gl_InvocationID] = inBlendMaskIndex2[gl_InvocationID];
     outSway[gl_InvocationID] = inSway[gl_InvocationID];
+    outPrevWorldPos[gl_InvocationID] = inPrevWorldPos[gl_InvocationID];
 
     if (gl_InvocationID == 0) {
         // Aresta i fica OPOSTA ao vertice i: a aresta 0 liga os vertices 1 e 2.

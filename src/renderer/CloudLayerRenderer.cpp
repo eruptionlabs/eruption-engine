@@ -1028,7 +1028,7 @@ void CloudLayerRenderer::renderSmokePlume(VkCommandBuffer cmd, const SmokeEmitte
     const float yBot = e.position.y;
     const float yTop = e.position.y + e.height;
 
-    const Mat4 vp = camera.viewProjectionMatrix();
+    const Mat4 vp = camera.viewProjNoJitter();
     const Vec3 boxMin3(minX, yBot, minZ), boxMax3(maxX, yTop, maxZ);
     if (aabbOutsideFrustum(vp, boxMin3, boxMax3)) return;
 
@@ -2515,7 +2515,7 @@ void CloudLayerRenderer::destroyPipelines() {
 void CloudLayerRenderer::updateUBOs(const Camera& camera, const Vec3& sunDir, float sunIntensity,
                                     float time, uint32_t frameIndex) {
     UBO ubo{};
-    ubo.viewProj = camera.viewProjectionMatrix();
+    ubo.viewProj = camera.viewProjJittered();
     ubo.invViewProj = glm::inverse(ubo.viewProj);
     ubo.cameraPos = camera.position();
     ubo.time = time;
@@ -2647,7 +2647,7 @@ void CloudLayerRenderer::renderDebugPlane(VkCommandBuffer cmd,
     float minX = wmin.x, maxX = wmax.x;
     float minZ = wmin.z, maxZ = wmax.z;
 
-    Mat4 invVP = glm::inverse(camera.viewProjectionMatrix());
+    Mat4 invVP = glm::inverse(camera.viewProjNoJitter());
 
     Vec3 corners[8];
     int cidx = 0;
@@ -3067,7 +3067,7 @@ void CloudLayerRenderer::renderCloudLayerPlane(VkCommandBuffer cmd, uint32_t id,
     float minX = wmin.x, maxX = wmax.x;
     float minZ = wmin.z, maxZ = wmax.z;
 
-    Mat4 invVP = glm::inverse(camera.viewProjectionMatrix());
+    Mat4 invVP = glm::inverse(camera.viewProjNoJitter());
     Vec3 corners[8];
     int cidx = 0;
     for (int iz = 0; iz <= 1; ++iz) {
@@ -3167,7 +3167,7 @@ void CloudLayerRenderer::renderCloudLayerPlane(VkCommandBuffer cmd, uint32_t id,
         {
             const float yBot = planeY - layerBaseD;
             const float yTop = planeY + (legacyVolume ? m_cfg.cloudDebugThickness * 0.5f : 2.0f) + layerSpikeH;
-            const Mat4 vp = camera.viewProjectionMatrix();
+            const Mat4 vp = camera.viewProjNoJitter();
             float sx0 = 1e30f, sy0 = 1e30f, sx1 = -1e30f, sy1 = -1e30f;
             bool crossesNear = false;
             for (int i = 0; i < 8; ++i) {
@@ -3379,7 +3379,7 @@ void CloudLayerRenderer::renderCloudLayerBillboard(VkCommandBuffer cmd, uint32_t
     // ERUPTION_TEST_CLOUD_NO_LOD=1 (debug): restore the pre-optimization paths
     // (no cull, full steps, sun tap) for A/B screenshot diffs.
     static const bool kNoLod = std::getenv("ERUPTION_TEST_CLOUD_NO_LOD") != nullptr;
-    const Mat4 vp = camera.viewProjectionMatrix();
+    const Mat4 vp = camera.viewProjNoJitter();
     const Vec3 boxMin3(fminX, yBot, fminZ), boxMax3(fmaxX, yTop, fmaxZ);
     if (!kNoLod && aabbOutsideFrustum(vp, boxMin3, boxMax3)) return;
     const float camDist = aabbDistance(camera.position(), boxMin3, boxMax3);
@@ -3569,7 +3569,7 @@ void CloudLayerRenderer::renderCloudLayerShadow(VkCommandBuffer cmd, uint32_t id
                 fminX = std::min(fminX, fminX + sx); fmaxX = std::max(fmaxX, fmaxX + sx);
                 fminZ = std::min(fminZ, fminZ + sz); fmaxZ = std::max(fmaxZ, fmaxZ + sz);
             }
-            const Mat4 viewProj = camera.viewProjectionMatrix();
+            const Mat4 viewProj = camera.viewProjNoJitter();
             // Frustum cull + distance skip: off-screen clouds degenerate to a
             // full-screen pass via crossesNear, and shadows cast by clouds far
             // from the camera are invisible in the storm haze anyway.
