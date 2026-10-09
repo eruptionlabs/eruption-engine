@@ -193,7 +193,7 @@ void Editor::registerCommands() {
     add("file.reload_scene", "File", "Reload Scene", {}, [this] { reloadSceneFile(); },
         "Discards unsaved changes and loads assets/scenes/<map>.scene.luau again.")
         .enabled = [this] { return !m_engine->currentMapName().empty() && m_play == PlayState::Editing; };
-    add("file.export", "File", "Export Game...", {}, [this] { m_showExport = true; },
+    add("file.export", "File", "Export Game...", {}, [this] { m_showExport = true; m_export.profileDetected = false; },
         "Copies the maps and only what they use into a folder that runs on its own.");
     add("file.open_vscode", "File", "Open Project in VS Code", {}, [this] {
         openInExternalEditor(m_projectRoot);

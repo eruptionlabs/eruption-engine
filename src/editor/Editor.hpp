@@ -316,6 +316,7 @@ private:
         char outDir[512] = {};
         std::atomic<bool> running{false}, building{false};
         std::string status, buildStatus;
+        bool profileDetected = false, audio = true, usesSound = false; // módulos do programa do jogo
     } m_export;
     std::mutex m_exportMutex;
     void drawExportWindow();

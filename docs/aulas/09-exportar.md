@@ -7,6 +7,11 @@
    copia só o que os mapas usam: modelos, texturas, sprites, sons, prefabs, scripts
    (já compilados) e os retoques de terreno.
 
+Em **Programa do jogo**, a caixa **Som** diz se o programa leva o som (o editor
+marca sozinho quando algum script usa `audio.` ou a cena tem emissor de som). Sem
+som, o programa fica cerca de 1 MB menor. Mudou a caixa? **Compilar de novo o
+programa do jogo** antes de exportar.
+
 Na pasta exportada, `run.sh` abre o jogo. Ela pode ir para outra máquina Linux com
 Vulkan; o programa roda em qualquer processador com AVX2 (PCs de 2013 para cá).
 

@@ -331,6 +331,25 @@ endif()
 
 # Source files
 file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.hpp")
+
+# Modulos opcionais: o editor liga o que o projeto usa ao exportar (perfil de
+# build). Desligado, o modulo vira uma implementacao muda com a mesma
+# interface - nada de #if espalhado pelo motor.
+option(ERUPTION_MODULE_AUDIO "Som do jogo (miniaudio)" ON)
+option(ERUPTION_MODULE_NEURAL_PBR "PBR por rede neural no bake (src/ml)" ON)
+if(ERUPTION_MODULE_AUDIO)
+    list(REMOVE_ITEM SOURCES "${CMAKE_SOURCE_DIR}/src/audio/AudioNull.cpp")
+else()
+    list(REMOVE_ITEM SOURCES "${CMAKE_SOURCE_DIR}/src/audio/Audio.cpp" "${CMAKE_SOURCE_DIR}/src/audio/MiniaudioImpl.cpp")
+endif()
+if(ERUPTION_MODULE_NEURAL_PBR)
+    list(REMOVE_ITEM SOURCES "${CMAKE_SOURCE_DIR}/src/ml/NeuralPbrNull.cpp")
+else()
+    file(GLOB ERUPTION_ML_SOURCES "${CMAKE_SOURCE_DIR}/src/ml/*.cpp")
+    list(REMOVE_ITEM ERUPTION_ML_SOURCES "${CMAKE_SOURCE_DIR}/src/ml/NeuralPbrNull.cpp")
+    list(REMOVE_ITEM SOURCES ${ERUPTION_ML_SOURCES})
+endif()
+message(STATUS "Modulos: audio=${ERUPTION_MODULE_AUDIO} neural_pbr=${ERUPTION_MODULE_NEURAL_PBR}")
 list(APPEND SOURCES
     "${CMAKE_SOURCE_DIR}/src/utils/GpuAutoSelect.hpp"
 )
@@ -390,7 +409,7 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 FetchContent_GetProperties(miniaudio)
-if(NOT miniaudio_POPULATED)
+if(ERUPTION_MODULE_AUDIO AND NOT miniaudio_POPULATED)
     FetchContent_Populate(miniaudio)
 endif()
 set_source_files_properties("${CMAKE_SOURCE_DIR}/src/audio/MiniaudioImpl.cpp" PROPERTIES COMPILE_OPTIONS "-w")
@@ -445,7 +464,7 @@ endif()
 # sem ele a rede roda so' na GPU, e sem GPU cai no caminho analitico.
 option(ERUPTION_ONNX "Inferencia de redes neurais via ONNX Runtime" ON)
 set(ERUPTION_HAVE_ORT OFF)
-if(ERUPTION_ONNX AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+if(ERUPTION_ONNX AND ERUPTION_MODULE_NEURAL_PBR AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     FetchContent_Declare(
         onnxruntime_bin
         URL https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-linux-x64-1.30.0.tgz
@@ -542,7 +561,9 @@ if(ERUPTION_HAVE_ORT)
 endif()
 
 # Include directories
-target_include_directories(eruption-engine SYSTEM PRIVATE "${miniaudio_SOURCE_DIR}")
+if(ERUPTION_MODULE_AUDIO)
+    target_include_directories(eruption-engine SYSTEM PRIVATE "${miniaudio_SOURCE_DIR}")
+endif()
 target_include_directories(eruption-engine PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/plugins
