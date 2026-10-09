@@ -6,11 +6,15 @@
 #include "core/Logger.hpp"
 #include "renderer/DeferredLighting.hpp"
 #include "math/Types.hpp"
+#include "renderer/VulkanContext.hpp"
 
 #include <deque>
 #include <memory>
 #include <filesystem>
+#include <condition_variable>
 #include <mutex>
+#include <thread>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -48,7 +52,7 @@ public:
 private:
     enum class PlayState { Editing, Playing, Paused };
     enum class Tool { Select, Move, Rotate, Scale };
-    enum class SelectionKind { None, Model, Light, Environment };
+    enum class SelectionKind { None, Model, Light, Environment, Asset };
     struct Selection {
         SelectionKind kind = SelectionKind::None;
         int index = -1;
@@ -88,6 +92,33 @@ private:
     void drawCode();
     void codeOpen(const std::filesystem::path& file);
     bool codeSave();
+
+    // Texturas da interface (EditorAssets.cpp)
+    struct GuiTexture {
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation alloc = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        uint32_t bindlessSlot = 0xFFFFFFFFu;
+        int width = 0, height = 0;
+        bool valid() const { return set != VK_NULL_HANDLE; }
+    };
+    GuiTexture makeTexture(const uint8_t* rgba, int w, int h, bool nearest);
+    void releaseTexture(GuiTexture& t);
+    uint32_t bindTexture(GuiTexture& t);
+    void collectTextures(bool all);
+    // Miniaturas do painel Projeto
+    const GuiTexture* thumbnail(const std::string& path);
+    void thumbnailWorker();
+    void uploadThumbnails();
+    void stopThumbnails();
+    // Prévia de asset no Inspetor
+    void selectAsset(const std::filesystem::path& path);
+    void closeAssetPreview();
+    void drawAssetPreview();
+    void drawImagePreview();
+    void drawModelPreview();
+    void drawMaterialPreview();
     void rulesLoad(const std::filesystem::path& file);
     void rulesCommit(const std::string& label);
     bool rulesChip(RuleCall& call, int id, ImU32 color);
@@ -204,6 +235,53 @@ private:
         bool focus = false;
     };
     CodeState m_code;
+
+    // Texturas liberadas esperam alguns frames: a GPU ainda pode estar lendo.
+    struct DeadTexture { GuiTexture tex; uint64_t frame; };
+    std::vector<DeadTexture> m_deadTextures;
+    uint64_t m_frame = 0;
+
+    struct Thumb {
+        int state = 0; // 0 pedido, 1 pronto, 2 falhou
+        GuiTexture tex;
+        uint64_t lastUsed = 0;
+    };
+    struct ThumbResult { std::string path; std::vector<uint8_t> rgba; int w = 0, h = 0; };
+    std::unordered_map<std::string, Thumb> m_thumbs;
+    std::mutex m_thumbMutex;
+    std::condition_variable m_thumbCv;
+    std::deque<std::string> m_thumbQueue;
+    std::deque<ThumbResult> m_thumbDone;
+    std::thread m_thumbThread;
+    bool m_thumbQuit = false;
+    bool m_projectGrid = true;
+
+    struct AssetPreviewState {
+        std::filesystem::path path;
+        enum class Kind { None, Image, Model, Text } kind = Kind::None;
+        // Imagem
+        std::vector<uint8_t> rgba;     // já reduzida para no máximo 1024
+        int width = 0, height = 0;     // tamanho original
+        int fileChannels = 0;
+        int view = 0;                  // 0 cor, 1 R, 2 G, 3 B, 4 A
+        bool pixelated = false;
+        GuiTexture tex;                // vista atual
+        // Material PBR achado ao lado do arquivo
+        std::filesystem::path albedoPath, mrahwPath, normalPath;
+        GuiTexture albedo, mrahw, normal, pbrChannels[4];
+        bool materialReady = false;
+        bool cube = false;
+        // Modelo
+        std::string modelInfo;
+        struct Image { std::string name, mime; size_t offset = 0, size = 0; std::string uri; };
+        std::vector<Image> images;
+        int imageShown = -1;
+        GuiTexture embedded;
+        int instances = 0;
+        // Texto
+        std::string text;
+    };
+    AssetPreviewState m_asset;
     bool m_showCode = true;
     UiLanguage m_lang = UiLanguage::English;
     bool m_showRules = true;
