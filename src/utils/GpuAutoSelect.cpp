@@ -1,5 +1,6 @@
 #include "utils/GpuAutoSelect.hpp"
 #include "core/Logger.hpp"
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -170,13 +171,21 @@ void GpuAutoSelect::writeConfig(const std::string& vendor, const std::string& in
     std::string path = getConfigPath();
     if (path.empty()) return;
 
+    // Junta com o que já está no arquivo: ele também guarda o mapa inicial do
+    // jogo exportado (initial_map) e outras escolhas, que não podem sumir.
+    nlohmann::json cfg = nlohmann::json::object();
+    {
+        std::ifstream in(path);
+        if (in.is_open()) {
+            cfg = nlohmann::json::parse(in, nullptr, false);
+            if (!cfg.is_object()) cfg = nlohmann::json::object();
+        }
+    }
+    cfg["gpu_vendor"] = vendor;
+    cfg["gpu_index"] = index;
     std::ofstream f(path);
     if (!f.is_open()) return;
-
-    f << "{\n";
-    f << "    \"gpu_vendor\": \"" << vendor << "\",\n";
-    f << "    \"gpu_index\": \"" << index << "\"\n";
-    f << "}\n";
+    f << cfg.dump(4) << "\n";
 }
 
 bool GpuAutoSelect::ensureBestGpu() {

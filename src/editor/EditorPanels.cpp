@@ -300,14 +300,14 @@ void Editor::drawHierarchy() {
 
     const auto& chars = m_engine->characters();
     size_t liveChars = 0;
-    for (const auto& c : chars) liveChars += c.removed ? 0 : 1;
+    for (const auto& c : chars) liveChars += c.removed || c.fromNeighbor ? 0 : 1;
     if (liveChars) {
         char chdr[64];
         std::snprintf(chdr, sizeof(chdr), "Characters (%zu)###characters", liveChars);
         ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
         if (ImGui::TreeNodeEx(chdr, ImGuiTreeNodeFlags_SpanAvailWidth)) {
             for (size_t i = 0; i < chars.size(); ++i) {
-                if (chars[i].removed || !icontains(chars[i].name, m_hierarchyFilter)) continue;
+                if (chars[i].removed || chars[i].fromNeighbor || !icontains(chars[i].name, m_hierarchyFilter)) continue;
                 ImGui::PushID(static_cast<int>(i) + 1000000);
                 row({SelectionKind::Character, static_cast<int>(i)}, chars[i].name, chars[i].visible);
                 ImGui::PopID();
@@ -324,6 +324,7 @@ void Editor::drawHierarchy() {
         // objeto do mapa apagado aparece apagado (Restore o traz de volta).
         if (i >= m_original.count && !insts[i].enabled) continue;
         if (m_engine->isScatterInstance(static_cast<uint32_t>(i))) continue; // editados pelo pincel
+        if (m_engine->isRegionInstance(static_cast<uint32_t>(i))) continue;  // mapa vizinho
         if (icontains(insts[i].name, m_hierarchyFilter)) visible.push_back(static_cast<int>(i));
     }
     char hdr[64];
@@ -426,6 +427,7 @@ void Editor::drawInspector() {
             }
             ImGui::EndDisabled();
         }
+        if (ImGui::CollapsingHeader("Neighbor maps", ImGuiTreeNodeFlags_DefaultOpen)) drawNeighborMaps();
         ImGui::End();
         return;
     }
@@ -815,6 +817,93 @@ void Editor::drawConsole() {
     if (m_consoleAutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f) ImGui::SetScrollHereY(1.0f);
     ImGui::EndChild();
     ImGui::End();
+}
+
+// Mundo contínuo: mapas emendados ao aberto (gravados no scene.luau). O
+// jogador anda de um para o outro sem tela de carregamento.
+void Editor::drawNeighborMaps() {
+    ImGui::TextWrapped("Maps joined to this one. The player walks into them with no loading screen; they load when "
+                       "someone gets near the border.");
+    // Arrastando o deslocamento: mexe num rascunho e aplica ao soltar
+    // (encaixar um mapa custa mais que um frame).
+    const std::vector<SceneEdits::Neighbor> before = m_engine->worldNeighbors();
+    if (!m_neighborEditing) m_neighborEditStart = before;
+    std::vector<SceneEdits::Neighbor>& list = m_neighborEditStart;
+    bool finished = false;
+    int removeAt = -1;
+    const auto regions = m_engine->worldRegions();
+    for (size_t i = 0; i < list.size(); ++i) {
+        ImGui::PushID(static_cast<int>(i));
+        const char* state = "";
+        for (const auto& r : regions)
+            if (r.map == list[i].map) state = r.state;
+        ImGui::TextUnformatted(list[i].map.c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%s)", *state ? state : "no height grid");
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - 20);
+        if (ImGui::SmallButton("x")) removeAt = static_cast<int>(i);
+        ImGui::SetItemTooltip("Unjoin this map");
+        propertyLabel("Offset");
+        float off[3] = {list[i].offset.x, list[i].offset.y, list[i].offset.z};
+        if (ImGui::DragFloat3("##off", off, 1.0f, -100000.0f, 100000.0f, "%.0f")) {
+            list[i].offset = Vec3(off[0], off[1], off[2]);
+            m_neighborEditing = true;
+        }
+        finished |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SetItemTooltip("Where the neighbor sits relative to this map (world units).");
+        ImGui::PopID();
+    }
+    if (removeAt >= 0) {
+        list.erase(list.begin() + removeAt);
+        finished = true;
+    }
+    // Novo vizinho: escolhe o mapa e o lado; o deslocamento sai das grades.
+    static int pick = -1;
+    const auto& maps = m_engine->availableMaps();
+    std::vector<const std::string*> choices;
+    for (const auto& m : maps) {
+        if (m == m_engine->currentMapName()) continue;
+        bool used = false;
+        for (const auto& n : list) used |= n.map == m;
+        if (!used) choices.push_back(&m);
+    }
+    if (pick >= static_cast<int>(choices.size())) pick = -1;
+    propertyLabel("Join");
+    if (ImGui::BeginCombo("##join", pick >= 0 ? choices[static_cast<size_t>(pick)]->c_str() : "choose a map")) {
+        for (size_t i = 0; i < choices.size(); ++i)
+            if (ImGui::Selectable(choices[i]->c_str(), pick == static_cast<int>(i))) pick = static_cast<int>(i);
+        ImGui::EndCombo();
+    }
+    Vec2 lo, hi, nlo, nhi;
+    const bool canPlace = pick >= 0 && Engine::mapGroundArea(m_engine->currentMapName(), lo, hi) &&
+                          Engine::mapGroundArea(*choices[static_cast<size_t>(pick)], nlo, nhi);
+    if (pick >= 0 && !canPlace)
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Both maps need a height grid (New Map or Generate Map).");
+    ImGui::BeginDisabled(!canPlace);
+    // Lados na tela de cima: +X a leste, +Z ao norte.
+    const struct { const char* label; Vec3 off; } sides[] = {
+        {"East", Vec3(hi.x - nlo.x, 0.0f, lo.y - nlo.y)},
+        {"West", Vec3(lo.x - nhi.x, 0.0f, lo.y - nlo.y)},
+        {"North", Vec3(lo.x - nlo.x, 0.0f, hi.y - nlo.y)},
+        {"South", Vec3(lo.x - nlo.x, 0.0f, lo.y - nhi.y)},
+    };
+    for (size_t s = 0; s < 4; ++s) {
+        if (s) ImGui::SameLine();
+        if (ImGui::Button(sides[s].label)) {
+            list.push_back({*choices[static_cast<size_t>(pick)], sides[s].off});
+            finished = true;
+            pick = -1;
+        }
+    }
+    ImGui::EndDisabled();
+    if (finished) {
+        Engine* engine = m_engine;
+        const std::vector<SceneEdits::Neighbor> after = list;
+        m_undo.push({"Neighbor maps", [engine, before] { engine->setWorldNeighbors(before); },
+                     [engine, after] { engine->setWorldNeighbors(after); }});
+        m_engine->setWorldNeighbors(after);
+        m_neighborEditing = false;
+    }
 }
 
 } // namespace eruption

@@ -282,6 +282,7 @@ void Editor::viewportRay(float u, float v, Vec3& origin, Vec3& dir) const {
 }
 
 Editor::ViewLayer Editor::layerOfInstance(uint32_t index) const {
+    if (m_engine->isRegionInstance(index)) return LayerNeighbors;
     if (m_engine->isScatterInstance(index)) return LayerPainted;
     return index < m_original.count ? LayerMap : LayerAdded;
 }
@@ -400,7 +401,7 @@ void Editor::pickAt(float u, float v) {
     const auto& chars = m_engine->characters();
     const bool charsClickable = m_layerShow[LayerCharacters] && !m_layerLock[LayerCharacters];
     for (size_t i = 0; charsClickable && i < chars.size(); ++i) {
-        if (chars[i].removed) continue;
+        if (chars[i].removed || chars[i].parked || (chars[i].fromNeighbor && m_layerLock[LayerNeighbors])) continue;
         const Vec3 base = chars[i].position;
         const float radius = 6.0f, height = 28.0f;
         // Ponto do raio mais perto do eixo vertical (no plano XZ).

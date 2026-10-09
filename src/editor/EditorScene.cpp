@@ -67,6 +67,8 @@ void Editor::applySceneFile() {
         const int n = edits.apply(*m_engine, &m_added);
         log(LogLevel::Info, "Scene edits loaded: " + std::to_string(n) + " change(s) from " + file.generic_string());
     }
+    // Mapas vizinhos (mundo contínuo) do arquivo: antes da foto do "salvo".
+    m_engine->startWorld();
     m_savedScene = currentEdits().serialize(m_engine->currentMapName());
     m_sceneFileTime = sceneFileTime();
     m_terrainDirty = false;
@@ -93,11 +95,12 @@ void Editor::reloadSceneFile() {
     // Cópias e modelos acrescentados: apagados e sem nome (o arquivo os cria de novo).
     for (size_t i = base; i < insts.size(); ++i) {
         const uint32_t idx = static_cast<uint32_t>(i);
+        if (m_engine->isRegionInstance(idx)) continue; // mapa vizinho: o mundo cuida
         if (insts[i].enabled) mr.setInstanceEnabled(idx, false);
         mr.setInstanceName(idx, std::string());
     }
     m_engine->m_deferredLighting.getPointLights() = m_original.lights;
-    m_engine->clearCharacters(); // vêm todos do arquivo
+    m_engine->clearCharacters(true); // vêm todos do arquivo (os dos vizinhos ficam)
     m_engine->clearPlayerStart();
     select({});
     applySceneFile();
@@ -167,10 +170,11 @@ SceneEdits Editor::currentEdits() const {
         e.copies.push_back({it->second, insts[i].name, SceneEdits::Transform::from(insts[i].transform)});
     }
     for (const auto& c : m_engine->characters()) {
-        if (c.removed) continue;
+        if (c.removed || c.fromNeighbor) continue;
         e.characters.push_back({c.name, c.sprite, c.position, c.facing, !c.visible});
     }
     e.terrainLayers = m_engine->splatLayerFiles();
+    e.neighbors = m_engine->worldNeighbors();
     if (m_engine->hasPlayerStart()) {
         e.hasSpawn = true;
         e.spawn = m_engine->playerStart();

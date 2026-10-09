@@ -52,7 +52,10 @@ Vec3 gridNormal(const Engine::HeightEdit& h, uint32_t x, uint32_t z) {
 } // namespace
 
 void Engine::prepareHeightEdits(LoadedMap& map, std::vector<ModelAsset>& models) {
-    HeightEdit& h = m_heightEdit;
+    applyHeightDelta(map, models, m_heightEdit);
+}
+
+void Engine::applyHeightDelta(LoadedMap& map, std::vector<ModelAsset>& models, HeightEdit& h) {
     h = HeightEdit{};
     if (!map.terrainFromFile || map.models.empty()) return;
     const TerrainFile& ter = map.terrain;

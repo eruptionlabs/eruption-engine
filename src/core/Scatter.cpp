@@ -126,7 +126,7 @@ Mat4 Engine::scatterRoot(int group, uint32_t item) const {
 
 void Engine::clearScatter() { m_scatter.clear(); }
 
-int Engine::loadScatter(const std::string& map) {
+int Engine::loadScatter(const std::string& map, const Mat4& place) {
     m_scatter.clear();
     std::ifstream f(scatterPathFor(map), std::ios::binary);
     if (!f) return 0;
@@ -172,7 +172,7 @@ int Engine::loadScatter(const std::string& map) {
                     tr.position = Vec3(v[0], v[1], v[2]);
                     tr.rotation = Vec3(v[3], v[4], v[5]);
                     tr.scale = Vec3(v[6]);
-                    roots.push_back(tr.matrix());
+                    roots.push_back(place * tr.matrix());
                 }
             }
             lua_pop(L, 1);

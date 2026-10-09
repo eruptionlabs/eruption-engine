@@ -37,6 +37,8 @@ void Engine::initMinimap() {
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; viewInfo.subresourceRange.baseMipLevel = 0; viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0; viewInfo.subresourceRange.layerCount = 1;
     vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &m_minimapView);
+    // A interface mostra a imagem antes do primeiro desenho (ou sem mapa nenhum).
+    m_vulkan.transitionNow(m_minimapImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
     m_minimapDescriptorSet = ImGui_ImplVulkan_AddTexture(m_defaultSampler, m_minimapView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     initMinimapComposite();
 }

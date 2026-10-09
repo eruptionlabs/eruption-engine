@@ -51,6 +51,16 @@ bool Engine::navCell(float x, float z, int& gx, int& gz) const {
 }
 
 bool Engine::navWalkable(float x, float z) const {
+    const LoadedMap* map = mapAt(x, z);
+    if (map && map != m_currentMap.get()) {
+        // Vizinho do mundo contínuo: só mapas com grade (a caminhada segue o terreno).
+        if (!followsTerrain(*map)) return true;
+        const TerrainFile& t = map->terrain;
+        const int gx = int(std::floor((x - t.offsetX) / t.scale + 0.5f));
+        const int gz = int(std::floor((z - t.offsetZ) / t.scale + 0.5f));
+        return gx >= 0 && gz >= 0 && gx < int(map->navGrid.width) && gz < int(map->navGrid.height) &&
+               map->navGrid.at(uint32_t(gx), uint32_t(gz)).isWalkable();
+    }
     int gx = 0, gz = 0;
     return navCell(x, z, gx, gz) && m_currentMap->navGrid.at(uint32_t(gx), uint32_t(gz)).isWalkable();
 }

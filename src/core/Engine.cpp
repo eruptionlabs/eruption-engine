@@ -982,6 +982,11 @@ void Engine::shutdown() {
 
     clearCharacters();
     endSplatEditing();
+    for (auto& r : m_regions) {
+        if (r.job.valid()) r.job.wait();
+        releaseRegionSplat(r, true);
+    }
+    m_regions.clear();
     m_spherePreview.shutdown();
     m_modelRenderer.shutdown(); m_terrainRenderer.shutdown(); m_spriteSystem.shutdown();
     m_spriteRenderer.shutdown(); m_shadowRenderer.shutdown(); m_deferredLighting.shutdown();
@@ -1065,6 +1070,7 @@ float Engine::advanceFrame() {
     }
 
     processBackgroundLoading();
+    updateWorld(); // vizinhos do mundo contínuo entram e saem
 
     m_timer.tick();
     m_window.pollEvents();

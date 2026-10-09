@@ -54,7 +54,7 @@ bool Engine::setCharacterSprite(int index, const std::string& sprite) {
 
 int Engine::findCharacter(const std::string& name) const {
     for (size_t i = 0; i < m_characters.size(); ++i)
-        if (m_characters[i].name == name && !m_characters[i].removed) return static_cast<int>(i);
+        if (m_characters[i].name == name && !m_characters[i].removed && !m_characters[i].parked) return static_cast<int>(i);
     return -1;
 }
 
@@ -75,13 +75,18 @@ void Engine::setPlayerStart(const Vec3& p) {
     m_camera.setOrbitTarget(p + Vec3(0.0f, 7.2f, 0.0f));
 }
 
-void Engine::clearCharacters() {
-    for (auto& c : m_characters) cleanupSpriteTextures(c.look);
-    m_characters.clear();
+void Engine::clearCharacters(bool keepNeighbors) {
+    std::vector<SceneCharacter> kept;
+    for (auto& c : m_characters) {
+        if (keepNeighbors && c.fromNeighbor) kept.push_back(std::move(c));
+        else cleanupSpriteTextures(c.look);
+    }
+    m_characters = std::move(kept);
 }
 
 void Engine::updateCharacters(float dt, bool moveAlongPaths) {
     for (auto& c : m_characters) {
+        if (c.parked) continue;
         if (moveAlongPaths && c.walking) {
             c.walkTime += dt;
             const float t = std::min(1.0f, c.walkTime / c.walkDuration);

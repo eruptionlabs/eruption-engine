@@ -342,6 +342,11 @@ private:
     } m_mapgen;
     std::mutex m_mapgenMutex;
     void drawMapGenWindow();
+    // Mapas vizinhos (mundo contínuo), no Inspetor do Environment.
+    void drawNeighborMaps();
+    std::vector<SceneEdits::Neighbor> m_neighborEditStart; // rascunho enquanto arrasta
+    bool m_neighborEditing = false;
+    uint32_t m_worldVersionSeen = 0;
     void mapGenLoad(const std::filesystem::path& file);
     void mapGenSave();
     void mapGenGenerate();
@@ -367,9 +372,10 @@ private:
     bool m_terrainDirty = false;
     bool m_waterEdited = false; // nível da água mudado no Inspetor (vai para o scene.luau)
     // Camadas da vista: o que aparece e o que dá para clicar (só no editor).
-    enum ViewLayer { LayerMap, LayerAdded, LayerPainted, LayerCharacters, LayerMarkers, LayerCount };
-    bool m_layerShow[LayerCount] = {true, true, true, true, true};
-    bool m_layerLock[LayerCount] = {false, false, false, false, false};
+    enum ViewLayer { LayerMap, LayerAdded, LayerPainted, LayerCharacters, LayerMarkers, LayerNeighbors, LayerCount };
+    bool m_layerShow[LayerCount] = {true, true, true, true, true, true};
+    // Mapas vizinhos: só contexto (edita-se abrindo o mapa deles).
+    bool m_layerLock[LayerCount] = {false, false, false, false, false, true};
     ViewLayer layerOfInstance(uint32_t index) const;
     void applyLayerVisibility();
     // Pincel de objetos: paleta (modelos ou prefabs) e regras de espalhar.

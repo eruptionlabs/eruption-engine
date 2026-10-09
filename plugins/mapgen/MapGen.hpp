@@ -14,7 +14,7 @@
 // pintura, objetos espalhados, água, início do jogador e grade de caminhada.
 //
 //   return {
-//       size = 1000, seed = 7,
+//       size = 1000, seed = 7, origin = {0, 0},
 //       steps = {
 //           { "noise", scale = 320, height = 90 },
 //           { "erosion", drops = 60000 },
@@ -44,6 +44,9 @@ struct Recipe {
     float size = 1000.0f; // lado do mapa em unidades do mundo
     float cell = 8.0f;    // distância entre pontos da grade
     uint32_t seed = 1;
+    // Canto do mapa no mundo: dois mapas com a mesma receita e semente, um ao
+    // lado do outro (origin = {1000, 0}), têm o relevo contínuo na emenda.
+    float originX = 0.0f, originZ = 0.0f;
     std::vector<Step> steps;
     bool load(const std::string& path, std::string& error);
     bool parse(const std::string& source, std::string& error);

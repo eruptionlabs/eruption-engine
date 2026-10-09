@@ -463,6 +463,11 @@ void Editor::update(float dt) {
     if (!m_engine) return;
     ++m_frame;
     recordFrameTime(dt);
+    // Vizinho do mundo contínuo entrou ou saiu: camadas Mostrar/Travar valem para ele.
+    if (m_engine->worldVersion() != m_worldVersionSeen) {
+        m_worldVersionSeen = m_engine->worldVersion();
+        applyLayerVisibility();
+    }
     // ERUPTION_TEST_EDITOR_ASSET=caminho (teste): abre a prévia desse asset.
     static const char* testAsset = std::getenv("ERUPTION_TEST_EDITOR_ASSET");
     if (testAsset && m_frame == 30) selectAsset(testAsset);
@@ -623,7 +628,7 @@ void Editor::update(float dt) {
                        ? m_projectRoot / "build-export" / "eruption-engine"
                        : m_projectRoot / "eruption-engine";
         const ExportReport r = exportGame(o);
-        ERUPTION_LOG_WARN("[EXPORT] files=%zu compiled=%zu bytes=%llu missing=%zu error=%s", r.files, r.compiled,
+        ERUPTION_LOG_WARN("[EXPORT] files=%zu compiled=%zu neighbors=%zu bytes=%llu missing=%zu error=%s", r.files, r.compiled, r.neighbors,
                           static_cast<unsigned long long>(r.bytes), r.missing.size(), r.error.c_str());
         for (const auto& m : r.missing) ERUPTION_LOG_WARN("[EXPORT] missing %s", m.c_str());
     }
@@ -718,6 +723,7 @@ void Editor::update(float dt) {
             else if (what == "blocks") { rulesLoad(arg); m_rules.blocks = true; m_pendingFocus.push_back(kWinRules); }
             else if (what == "code") { codeOpen(arg); m_pendingFocus.push_back(kWinCode); }
             else if (what == "scene") m_pendingFocus.push_back(kWinScene);
+            else if (what == "env") select({SelectionKind::Environment, 0});
             else if (what == "telemetry") m_pendingFocus.push_back(kWinTelemetry);
             else if (what == "project") m_pendingFocus.push_back(kWinProject);
             else if (what == "play") play();
@@ -904,7 +910,7 @@ void Editor::drawMenuBar() {
     }
     if (ImGui::BeginMenu("View")) {
         static const char* kNames[LayerCount] = {"Map objects", "Added objects", "Painted objects", "Characters",
-                                                 "Lights and markers"};
+                                                 "Lights and markers", "Neighbor maps"};
         ImGui::TextDisabled("Show");
         bool changed = false;
         for (int l = 0; l < LayerCount; ++l) changed |= ImGui::MenuItem(kNames[l], nullptr, &m_layerShow[l]);
