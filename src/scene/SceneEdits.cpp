@@ -259,6 +259,8 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
     }
     lua_pop(L, 1);
 
+    hasSpawn = readVec(L, root, "spawn", spawn);
+
     lua_getfield(L, root, "environment");
     if (lua_istable(L, -1)) {
         const int t = lua_gettop(L);
@@ -332,6 +334,7 @@ std::string SceneEdits::serialize(const std::string& map) const {
         }
         o << "    },\n";
     }
+    if (hasSpawn) o << "    spawn = " << vec(spawn) << ",\n";
     if (hasEnvironment) {
         o << "    environment = { time = " << num(time) << ", paused = " << (paused ? "true" : "false");
         if (!weather.empty()) o << ", weather = " << quoted(weather);
@@ -381,7 +384,9 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
     }
     auto& ls = engine.deferredLighting().getPointLights();
     for (const auto& l : lights) {
-        if (l.index < 1 || l.index > static_cast<int>(ls.size())) continue;
+        if (l.index < 1 || l.index > 1024) continue;
+        // Índice além das luzes do mapa: luz criada no editor.
+        if (l.index > static_cast<int>(ls.size())) ls.resize(static_cast<size_t>(l.index));
         PointLight& p = ls[static_cast<size_t>(l.index - 1)];
         p.position = l.position;
         p.color = l.color;
@@ -394,6 +399,10 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         if (engine.findCharacter(c.name) >= 0) continue;
         const int idx = engine.addCharacter(c.name, c.sprite, c.position, c.facing);
         engine.characters()[static_cast<size_t>(idx)].visible = !c.hidden;
+        ++applied;
+    }
+    if (hasSpawn) {
+        engine.setPlayerStart(spawn);
         ++applied;
     }
     if (hasEnvironment) {

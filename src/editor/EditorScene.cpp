@@ -93,6 +93,7 @@ void Editor::reloadSceneFile() {
     }
     m_engine->m_deferredLighting.getPointLights() = m_original.lights;
     m_engine->clearCharacters(); // vêm todos do arquivo
+    m_engine->clearPlayerStart();
     select({});
     applySceneFile();
     log(LogLevel::Info, "Scene file reloaded.");
@@ -164,9 +165,14 @@ SceneEdits Editor::currentEdits() const {
         if (c.removed) continue;
         e.characters.push_back({c.name, c.sprite, c.position, c.facing, !c.visible});
     }
+    if (m_engine->hasPlayerStart()) {
+        e.hasSpawn = true;
+        e.spawn = m_engine->playerStart();
+    }
     const auto& ls = m_engine->m_deferredLighting.getPointLights();
-    for (size_t i = 0; i < ls.size() && i < m_original.lights.size(); ++i) {
-        if (sameLight(ls[i], m_original.lights[i])) continue;
+    for (size_t i = 0; i < ls.size(); ++i) {
+        const bool fromMap = i < m_original.lights.size();
+        if (fromMap ? sameLight(ls[i], m_original.lights[i]) : !ls[i].enabled) continue; // luz nova apagada = removida
         SceneEdits::Light l;
         l.index = static_cast<int>(i) + 1;
         l.position = ls[i].position;
@@ -288,6 +294,40 @@ void Editor::dropModel(const std::string& path, const Vec3& position) {
     };
     m_undo.push({"Add " + name, [setEnabled] { setEnabled(false); }, [setEnabled] { setEnabled(true); }});
     log(LogLevel::Info, "Added " + name + " (" + (prefab.empty() ? file : prefab) + ")");
+}
+
+void Editor::addPointLight() {
+    Vec3 at;
+    if (!groundPointAt(0.5f, 0.5f, at)) at = m_engine->camera().target();
+    auto& lights = m_engine->m_deferredLighting.getPointLights();
+    PointLight l;
+    l.position = at + Vec3(0.0f, 15.0f, 0.0f);
+    l.color = Vec3(1.0f, 0.85f, 0.6f);
+    l.intensity = 3.0f;
+    l.radius = 60.0f;
+    lights.push_back(l);
+    const int idx = static_cast<int>(lights.size() - 1);
+    select({SelectionKind::Light, idx});
+    Engine* engine = m_engine;
+    auto setEnabled = [engine, idx](bool on) {
+        auto& ls = engine->m_deferredLighting.getPointLights();
+        if (idx < static_cast<int>(ls.size())) ls[static_cast<size_t>(idx)].enabled = on;
+    };
+    m_undo.push({"Add light", [setEnabled] { setEnabled(false); }, [setEnabled] { setEnabled(true); }});
+}
+
+void Editor::setPlayerStartHere() {
+    Vec3 at;
+    if (!groundPointAt(0.5f, 0.5f, at)) at = m_engine->camera().target();
+    const bool had = m_engine->hasPlayerStart();
+    const Vec3 before = m_engine->playerStart();
+    Engine* engine = m_engine;
+    auto apply = [engine](bool has, const Vec3& p) {
+        if (has) engine->movePlayerStart(p); else engine->clearPlayerStart();
+    };
+    apply(true, at);
+    select({SelectionKind::Spawn, 0});
+    m_undo.push({"Player start", [apply, had, before] { apply(had, before); }, [apply, at] { apply(true, at); }});
 }
 
 void Editor::dropCharacter(const std::string& png, const Vec3& position) {

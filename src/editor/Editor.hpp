@@ -53,7 +53,7 @@ public:
 private:
     enum class PlayState { Editing, Playing, Paused };
     enum class Tool { Select, Move, Rotate, Scale };
-    enum class SelectionKind { None, Model, Light, Environment, Asset, Character };
+    enum class SelectionKind { None, Model, Light, Environment, Asset, Character, Spawn };
     struct Selection {
         SelectionKind kind = SelectionKind::None;
         int index = -1;
@@ -150,10 +150,16 @@ private:
     void pickAt(float u, float v);
     void viewportRay(float u, float v, Vec3& origin, Vec3& dir) const;
     // Instância atingida primeiro pelo raio (triângulos reais) ou -1.
-    int raycastModels(const Vec3& origin, const Vec3& dir, float& hitT) const;
+    int raycastModels(const Vec3& origin, const Vec3& dir, float& hitT, int ignore = -1) const;
+    // Altura do chão (modelos e grade .ter) abaixo de `from`.
+    bool floorBelow(const Vec3& from, int ignoreModel, float& floorY) const;
+    void snapSelectionToFloor(bool pivot);
     bool groundPointAt(float u, float v, Vec3& out) const;
     void dropModel(const std::string& path, const Vec3& position);
     void dropCharacter(const std::string& png, const Vec3& position);
+    void addPointLight();
+    void setPlayerStartHere();
+    void drawSceneMarkers(float x, float y, float w, float h);
     bool savePrefab(const std::string& path);
     void drawPrefabDialog();
     // Importador de folha de sprites (EditorSprites.cpp)

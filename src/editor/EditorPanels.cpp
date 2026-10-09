@@ -100,6 +100,7 @@ std::string Editor::selectionName(const Selection& s) const {
             return {};
         }
         case SelectionKind::Light: return "Point Light " + std::to_string(s.index);
+        case SelectionKind::Spawn: return "Player Start";
         case SelectionKind::Character: {
             const auto& cs = m_engine->characters();
             return s.index >= 0 && s.index < static_cast<int>(cs.size()) ? cs[static_cast<size_t>(s.index)].name : std::string();
@@ -121,6 +122,7 @@ bool Editor::selectionHasTransform() const {
     if (m_selection.kind == SelectionKind::Character)
         return m_selection.index >= 0 && m_selection.index < static_cast<int>(m_engine->characters().size()) &&
                !m_engine->characters()[static_cast<size_t>(m_selection.index)].removed;
+    if (m_selection.kind == SelectionKind::Spawn) return m_engine->hasPlayerStart();
     return false;
 }
 
@@ -142,6 +144,7 @@ Mat4 Editor::selectionTransform() const {
         return m_engine->modelRenderer().getInstances()[static_cast<size_t>(m_selection.index)].transform;
     if (m_selection.kind == SelectionKind::Character)
         return characterMatrix(m_engine->characters()[static_cast<size_t>(m_selection.index)]);
+    if (m_selection.kind == SelectionKind::Spawn) return glm::translate(Mat4(1.0f), m_engine->playerStart());
     Mat4 m(1.0f);
     m[3] = Vec4(m_engine->m_deferredLighting.getPointLights()[static_cast<size_t>(m_selection.index)].position, 1.0f);
     return m;
@@ -153,6 +156,8 @@ void Editor::setSelectionTransform(const Mat4& m) {
         m_engine->modelRenderer().setInstanceTransform(static_cast<uint32_t>(m_selection.index), m);
     else if (m_selection.kind == SelectionKind::Character)
         setCharacterFromMatrix(m_engine->characters()[static_cast<size_t>(m_selection.index)], m);
+    else if (m_selection.kind == SelectionKind::Spawn)
+        m_engine->movePlayerStart(Vec3(m[3]));
     else
         m_engine->m_deferredLighting.getPointLights()[static_cast<size_t>(m_selection.index)].position = Vec3(m[3]);
 }
@@ -170,6 +175,8 @@ void Editor::pushTransformEdit(const Selection& s, const Mat4& before, const Mat
         } else if (s.kind == SelectionKind::Character) {
             auto& cs = engine->characters();
             if (s.index >= 0 && s.index < static_cast<int>(cs.size())) setCharacterFromMatrix(cs[static_cast<size_t>(s.index)], m);
+        } else if (s.kind == SelectionKind::Spawn) {
+            engine->movePlayerStart(Vec3(m[3]));
         }
     };
     m_undo.push({"Transform " + selectionName(s), [apply, before] { apply(before); }, [apply, after] { apply(after); }});
@@ -184,6 +191,11 @@ void Editor::deleteSelection() {
         };
         setEnabled(false);
         m_undo.push({"Delete " + selectionName(s), [setEnabled] { setEnabled(true); }, [setEnabled] { setEnabled(false); }});
+        select({});
+    } else if (s.kind == SelectionKind::Spawn && selectionHasTransform()) {
+        const Vec3 p = m_engine->playerStart();
+        m_engine->clearPlayerStart();
+        m_undo.push({"Delete Player Start", [engine, p] { engine->movePlayerStart(p); }, [engine] { engine->clearPlayerStart(); }});
         select({});
     } else if (s.kind == SelectionKind::Character && selectionHasTransform()) {
         auto setRemoved = [engine, s](bool removed) {
@@ -266,6 +278,8 @@ void Editor::drawHierarchy() {
 
     if (icontains("Environment", m_hierarchyFilter))
         row({SelectionKind::Environment, 0}, "Environment", true);
+    if (m_engine->hasPlayerStart() && icontains("Player Start", m_hierarchyFilter))
+        row({SelectionKind::Spawn, 0}, "Player Start", true);
 
     const auto& lights = m_engine->m_deferredLighting.getPointLights();
     if (!lights.empty()) {
