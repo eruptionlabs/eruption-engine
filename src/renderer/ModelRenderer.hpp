@@ -420,6 +420,10 @@ public:
 
     const std::vector<ModelMeshGPU>& getMeshes() const { return m_meshes; }
     const std::vector<ModelInstance>& getInstances() const { return m_instances; }
+    // Edicao (editor): troca a matriz ou a visibilidade de uma instancia e
+    // refaz a AABB de mundo e o espelho quente usados pelo culling.
+    void setInstanceTransform(uint32_t index, const Mat4& transform);
+    void setInstanceEnabled(uint32_t index, bool enabled);
     const std::unordered_map<std::string, uint32_t>& getTextureCache() const { return m_textureCache; }
 
     // Publico pro popup de preview (SpherePreview.cpp) conseguir achar o

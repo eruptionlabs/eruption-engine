@@ -3069,6 +3069,34 @@ void ModelRenderer::updateAnimations(float totalElapsedMs) {
     rebuildHotData();
 }
 
+void ModelRenderer::setInstanceTransform(uint32_t index, const Mat4& transform) {
+    if (index >= m_instances.size()) return;
+    ModelInstance& inst = m_instances[index];
+    inst.transform = transform;
+    const Vec3 localMin = m_meshes[inst.meshIndex].aabbMin;
+    const Vec3 localMax = m_meshes[inst.meshIndex].aabbMax;
+    Vec3 wMin(FLT_MAX), wMax(-FLT_MAX);
+    for (int c = 0; c < 8; c++) {
+        const Vec3 corner((c & 1) ? localMax.x : localMin.x,
+                          (c & 2) ? localMax.y : localMin.y,
+                          (c & 4) ? localMax.z : localMin.z);
+        const Vec3 w = Vec3(transform * Vec4(corner, 1.0f));
+        wMin = glm::min(wMin, w);
+        wMax = glm::max(wMax, w);
+    }
+    inst.worldAabbMin = wMin;
+    inst.worldAabbMax = wMax;
+    inst.worldCenter = (wMin + wMax) * 0.5f;
+    inst.boundingRadius = glm::length(wMax - wMin) * 0.5f;
+    rebuildHotData();
+}
+
+void ModelRenderer::setInstanceEnabled(uint32_t index, bool enabled) {
+    if (index >= m_instances.size()) return;
+    m_instances[index].enabled = enabled;
+    rebuildHotData();
+}
+
 void ModelRenderer::rebuildHotData() {
     const uint32_t count = static_cast<uint32_t>(m_instances.size());
     m_instanceHot.resize(count);
