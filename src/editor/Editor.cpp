@@ -647,6 +647,7 @@ void Editor::update(float dt) {
             const std::string what = spec.substr(0, colon);
             const std::string arg = colon == std::string::npos ? std::string() : spec.substr(colon + 1);
             if (what == "rules") { rulesLoad(arg); m_pendingFocus.push_back(kWinRules); }
+            else if (what == "blocks") { rulesLoad(arg); m_rules.blocks = true; m_pendingFocus.push_back(kWinRules); }
             else if (what == "code") { codeOpen(arg); m_pendingFocus.push_back(kWinCode); }
             else if (what == "scene") m_pendingFocus.push_back(kWinScene);
             else if (what == "telemetry") m_pendingFocus.push_back(kWinTelemetry);

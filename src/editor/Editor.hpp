@@ -341,7 +341,10 @@ private:
         int addList = 0;   // 0 condição, 1 ação, 2 senão, 3 evento de regra nova
         bool openAdd = false;
         char newName[64] = "rules";
+        bool blocks = false; // vista em blocos de encaixar (mesmo arquivo, mesma folha)
     };
+    void drawRuleBlocks();
+    bool ruleBlock(RuleCall& call, int kind, ImU32 color, int rule, int list, int index);
     RulesState m_rules;
     struct CodeState {
         std::unique_ptr<::TextEditor> editor;
