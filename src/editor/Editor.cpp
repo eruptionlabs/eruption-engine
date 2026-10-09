@@ -171,6 +171,9 @@ void Editor::registerCommands() {
         m_paletteFocus = true;
         std::snprintf(m_paletteQuery, sizeof(m_paletteQuery), "map ");
     }, "Search and load one of the available maps.");
+    add("file.save", "File", "Save Scene", {ImGuiKey_S, true}, [this] { saveScene(); },
+        "Writes what you changed in this map to assets/scenes/<map>.scene.luau. The game loads it too.")
+        .enabled = [this] { return !m_engine->currentMapName().empty() && m_play == PlayState::Editing; };
     add("file.open_vscode", "File", "Open Project in VS Code", {}, [this] {
         openInExternalEditor(m_projectRoot);
     }, "Opens the project folder in Visual Studio Code (or the system default).");
@@ -191,6 +194,9 @@ void Editor::registerCommands() {
         c.altShortcut = {ImGuiKey_Z, true, true};
         c.enabled = [this] { return m_undo.canRedo(); };
     }
+    add("edit.duplicate", "Edit", "Duplicate", {ImGuiKey_D, true}, [this] { duplicateSelection(); },
+        "Copies the selected object next to it.")
+        .enabled = [this] { return m_play == PlayState::Editing && m_selection.kind == SelectionKind::Model; };
     add("edit.delete", "Edit", "Delete", {ImGuiKey_Delete}, [this] { deleteSelection(); },
         "Hides the selected object (undo brings it back).")
         .enabled = [this] { return m_selection.kind == SelectionKind::Model || m_selection.kind == SelectionKind::Light; };
@@ -504,8 +510,10 @@ void Editor::update(float dt) {
         m_framedSpawn = true;
         Camera& cam = m_engine->camera();
         cam.setOrbit(cam.orbitYaw(), 0.85f, 500.0f);
+        onMapReady();
     }
 
+    checkSceneDirty();
     if (m_play != PlayState::Playing) updateCamera(dt);
 }
 
@@ -586,6 +594,7 @@ void Editor::drawMenuBar() {
     if (!ImGui::BeginMainMenuBar()) return;
     if (ImGui::BeginMenu("File")) {
         m_commands.menuItem("file.open_map");
+        m_commands.menuItem("file.save");
         if (ImGui::BeginMenu("Recent Maps", !m_engine->availableMaps().empty())) {
             for (const auto& name : m_engine->availableMaps())
                 if (ImGui::MenuItem(name.c_str(), nullptr, name == m_engine->currentMapName()))
@@ -608,6 +617,7 @@ void Editor::drawMenuBar() {
         if (ImGui::MenuItem(rl.c_str(), EditorCommands::shortcutText(r->shortcut).c_str(), false, m_undo.canRedo()))
             m_commands.run("edit.redo");
         ImGui::Separator();
+        m_commands.menuItem("edit.duplicate");
         m_commands.menuItem("edit.delete");
         m_commands.menuItem("edit.deselect");
         m_commands.menuItem("edit.frame");
