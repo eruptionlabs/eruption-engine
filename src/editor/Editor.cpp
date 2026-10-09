@@ -313,6 +313,9 @@ void Editor::registerCommands() {
     panel("window.rules", "Rules (event sheet)", &m_showRules);
     panel("window.code", "Code", &m_showCode);
     {
+        auto& ai = add("window.ai", "Window", "AI Assistant", {}, [this] { m_showAi = !m_showAi; },
+                       "Chat that writes rules and scripts with your own API key. You review and save what it writes.");
+        ai.checked = [this] { return m_showAi; };
         auto& r = add("window.second_screen", "Window", "Second Screen (browser)", {}, [this] { m_showRemote = !m_showRemote; },
                       "Edit the game scripts from a phone, tablet or another computer on the same network.");
         r.checked = [this] { return m_showRemote; };
@@ -589,6 +592,21 @@ void Editor::update(float dt) {
         m_engine->setWaterLevel(true, float(std::atof(testWater)));
         m_envEdited = m_waterEdited = true;
     }
+    // ERUPTION_TEST_EDITOR_AI=<chave>|<mensagem>: abre o assistente e envia
+    // (teste do caminho do pedido; com chave falsa a API só recusa, sem custo).
+    static const char* testAi = std::getenv("ERUPTION_TEST_EDITOR_AI");
+    if (testAi && m_frame == 120) {
+        const std::string spec = testAi;
+        const size_t bar = spec.find('|');
+        m_showAi = true;
+        m_ai.key = spec.substr(0, bar);
+        m_ai.promptReady = false;
+        m_pendingAiMessage = spec.substr(bar + 1);
+    }
+    if (!m_pendingAiMessage.empty() && m_ai.promptReady) {
+        m_ai.client.send(m_ai.key, m_pendingAiMessage);
+        m_pendingAiMessage.clear();
+    }
     // ERUPTION_TEST_EDITOR_REMOTE=<porta>:<arquivo>: liga a segunda tela e grava
     // o token no arquivo (teste com curl).
     static const char* testRemote = std::getenv("ERUPTION_TEST_EDITOR_REMOTE");
@@ -788,6 +806,7 @@ void Editor::drawUI() {
     drawPrefabDialog();
     drawSpriteImporter();
     drawRemoteWindow();
+    drawAiWindow();
 
     if (m_focusScene) {
         m_pendingFocus.insert(m_pendingFocus.begin(), kWinScene);
@@ -899,6 +918,7 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("window.code");
         m_commands.menuItem("window.telemetry");
         m_commands.menuItem("window.second_screen");
+        m_commands.menuItem("window.ai");
         ImGui::Separator();
         if (ImGui::BeginMenu("Language / Idioma")) {
             m_commands.menuItem("window.lang_en");
