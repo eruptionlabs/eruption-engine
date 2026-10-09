@@ -17,6 +17,9 @@ public:
     };
 
     void push(Action action);
+    // Ações entre beginGroup e endGroup viram uma só (apagar vários objetos).
+    void beginGroup(const std::string& label);
+    void endGroup();
     bool undo();
     bool redo();
     void clear();
@@ -29,6 +32,9 @@ public:
 private:
     static constexpr size_t kMaxActions = 512;
     std::vector<Action> m_actions;
+    int m_groupDepth = 0;
+    std::string m_groupLabel;
+    std::vector<Action> m_group;
     size_t m_cursor = 0; // ações [0, cursor) estão aplicadas
 };
 

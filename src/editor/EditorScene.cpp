@@ -253,6 +253,27 @@ bool Editor::saveScene() {
 }
 
 void Editor::duplicateSelection() {
+    const auto list = selectionList();
+    if (list.size() > 1) {
+        // Duplica os modelos do grupo; a seleção passa a ser as cópias.
+        std::vector<Selection> copies;
+        m_undo.beginGroup("Duplicate " + std::to_string(list.size()) + " objects");
+        for (const auto& s : list) {
+            if (s.kind != SelectionKind::Model) continue;
+            m_selection = s;
+            m_extraSelection.clear();
+            duplicateOne();
+            copies.push_back(m_selection);
+        }
+        m_undo.endGroup();
+        select({});
+        for (const auto& c : copies) toggleSelect(c);
+        return;
+    }
+    duplicateOne();
+}
+
+void Editor::duplicateOne() {
     if (m_selection.kind != SelectionKind::Model || !selectionHasTransform()) return;
     ModelRenderer& mr = m_engine->modelRenderer();
     const uint32_t src = static_cast<uint32_t>(m_selection.index);
