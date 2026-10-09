@@ -1,4 +1,5 @@
 #pragma once
+#include <map>
 
 #include "renderer/VulkanContext.hpp"
 #include "renderer/WeatherSystem.hpp"
@@ -279,6 +280,17 @@ private:
     static constexpr uint32_t LENS_DROP_MAX = 16384;
     // Bindings de buffer do overlay (4/6) escritos uma vez (VUID-03047).
     bool m_weatherBufferDSWritten = false;
+    // Ultima escrita por (set, binding): ver updateSets.
+    struct WrittenDescriptor {
+        VkImageView view; VkSampler sampler; VkImageLayout layout;
+        VkBuffer buffer; VkDeviceSize offset, range;
+        bool operator==(const WrittenDescriptor& o) const {
+            return view == o.view && sampler == o.sampler && layout == o.layout && buffer == o.buffer &&
+                   offset == o.offset && range == o.range;
+        }
+    };
+    std::map<std::pair<VkDescriptorSet, uint32_t>, WrittenDescriptor> m_writeCache;
+    void updateSets(const VkWriteDescriptorSet* writes, uint32_t count);
     VkBuffer m_lensDropBuffer = VK_NULL_HANDLE;
     VmaAllocation m_lensDropAlloc = VK_NULL_HANDLE;
     void* m_lensDropMapped = nullptr;

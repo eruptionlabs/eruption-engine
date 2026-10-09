@@ -67,6 +67,14 @@ bool SkyProbe::init(VulkanContext* ctx, uint32_t faceSize) {
     for (uint32_t s = m_faceSize; s > 1; s >>= 1) ++m_mipCount;
     if (!createCube()) return false;
     if (!createCompute()) return false;
+    // O cubo é ligado à iluminação antes da primeira atualização: já nasce
+    // legível (sem descriptor indexing o validador confere o set inteiro).
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        submitBarriers(cmd, {imgBarrier(m_cube, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                        VK_IMAGE_ASPECT_COLOR_BIT, 0, m_mipCount, 0, 6)});
+    });
     return true;
 }
 

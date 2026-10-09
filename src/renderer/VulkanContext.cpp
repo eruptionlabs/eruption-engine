@@ -204,6 +204,23 @@ void VulkanContext::shutdown() {
     ERUPTION_LOG_INFO("Vulkan context shut down");
 }
 
+void VulkanContext::transitionNow(VkImage image, VkImageLayout layout, VkImageAspectFlags aspect,
+                                  uint32_t mipLevels, uint32_t layers) {
+    if (image == VK_NULL_HANDLE) return;
+    immediateSubmit([&](VkCommandBuffer cmd) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = layout;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = image;
+        b.subresourceRange = {aspect, 0, mipLevels, 0, layers};
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                             0, nullptr, 1, &b);
+    });
+}
+
 bool VulkanContext::beginFrame() {
     if (m_deviceLost) return false;
 

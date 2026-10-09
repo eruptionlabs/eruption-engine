@@ -310,6 +310,7 @@ void WaterRenderer::createRefractionResources(uint32_t width, uint32_t height) {
             m_bindless->updateTexture(m_refractionSlot[i], m_refractionView[i], m_refractionSampler);
         }
         m_bindless->flushUpdates();
+        for (VkImage img : m_refractionImage) m_ctx->transitionNow(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
     }
 
     // Depth copy (one per frame in flight)
@@ -357,6 +358,7 @@ void WaterRenderer::createRefractionResources(uint32_t width, uint32_t height) {
             m_bindless->updateTexture(m_depthCopySlot[i], m_depthCopyView[i], m_depthCopySampler);
         }
         m_bindless->flushUpdates();
+        for (VkImage img : m_depthCopyImage) m_ctx->transitionNow(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
     }
 }
 
@@ -1292,6 +1294,7 @@ void WaterRenderer::createUnderwaterResources(uint32_t width, uint32_t height) {
         m_bindless->updateTexture(m_underwaterSlot[i], m_underwaterView[i], m_underwaterSampler);
     }
     m_bindless->flushUpdates();
+    for (VkImage img : m_underwaterImage) m_ctx->transitionNow(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
 }
 
 void WaterRenderer::destroyUnderwaterResources() {

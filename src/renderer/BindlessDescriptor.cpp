@@ -173,7 +173,8 @@ void BindlessDescriptor::flushUpdates() {
     if (m_pendingUpdates.empty()) return;
     if (m_fixed) {
         // Vale a partir do proximo inicio de frame de cada set.
-        for (auto& q : m_framePending) q.insert(q.end(), m_pendingUpdates.begin(), m_pendingUpdates.end());
+        for (auto& q : m_framePending)
+            for (const auto& u : m_pendingUpdates) q[u.slot] = u;
         m_pendingUpdates.clear();
         return;
     }
@@ -181,11 +182,30 @@ void BindlessDescriptor::flushUpdates() {
     m_pendingUpdates.clear();
 }
 
+void BindlessDescriptor::syncNow() {
+    if (!m_fixed) return;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    flushUpdates();
+    bool any = false;
+    for (const auto& q : m_framePending) any |= !q.empty();
+    if (!any) return;
+    vkDeviceWaitIdle(m_ctx->device());
+    for (uint32_t f = 0; f < VulkanContext::MAX_FRAMES_IN_FLIGHT; ++f) {
+        std::vector<PendingUpdate> updates;
+        for (const auto& [slot, u] : m_framePending[f]) updates.push_back(u);
+        writeSet(m_frameSets[f], updates);
+        m_framePending[f].clear();
+    }
+}
+
 void BindlessDescriptor::onFrameBegin(uint32_t frame) {
     std::lock_guard<std::mutex> lock(m_mutex);
     auto& q = m_framePending[frame];
     if (q.empty()) return;
-    writeSet(m_frameSets[frame], q);
+    std::vector<PendingUpdate> updates;
+    updates.reserve(q.size());
+    for (const auto& [slot, u] : q) updates.push_back(u);
+    writeSet(m_frameSets[frame], updates);
     q.clear();
 }
 

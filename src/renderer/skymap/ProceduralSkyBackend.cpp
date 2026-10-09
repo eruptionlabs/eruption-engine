@@ -83,6 +83,8 @@ void ProceduralSkyBackend::createOutputImage() {
     viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_outputView);
+    // Amostrada pela água/céu antes do primeiro desenho do céu.
+    m_ctx->transitionNow(m_outputImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
 
     VkSamplerCreateInfo samplerInfo = {};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
