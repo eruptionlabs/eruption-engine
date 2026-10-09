@@ -109,6 +109,8 @@ void Editor::drawViewport() {
         dl->AddRect(pos, ImVec2(pos.x + avail.x, pos.y + avail.y), ImGui::GetColorU32(kAccent), 0.0f, 0, 2.0f);
     } else {
         drawSceneMarkers(pos.x, pos.y, avail.x, avail.y);
+        terrainBrushInput(pos.x, pos.y, avail.x, avail.y);
+        drawTerrainBrush(pos.x, pos.y, avail.x, avail.y);
         drawSelectionBounds(pos.x, pos.y, avail.x, avail.y);
         drawGizmo(pos.x, pos.y, avail.x, avail.y);
         drawViewCube(pos.x, pos.y, avail.x, avail.y);
@@ -119,7 +121,8 @@ void Editor::drawViewport() {
 
         // Clique simples (sem arrastar, fora das alças) seleciona.
         const bool gizmoBusy = ImGuizmo::IsUsing() || m_gizmoWasUsing;
-        if (m_viewportHovered && !io.KeyAlt && !gizmoBusy && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+        if (m_tool != Tool::Terrain && m_viewportHovered && !io.KeyAlt && !gizmoBusy &&
+            ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
             ImGui::GetMouseDragDelta(ImGuiMouseButton_Left).x * ImGui::GetMouseDragDelta(ImGuiMouseButton_Left).x +
                 ImGui::GetMouseDragDelta(ImGuiMouseButton_Left).y * ImGui::GetMouseDragDelta(ImGuiMouseButton_Left).y < 16.0f &&
             !ImGuizmo::IsOver()) {
@@ -413,7 +416,8 @@ void Editor::pickAt(float u, float v) {
 }
 
 void Editor::drawGizmo(float x, float y, float w, float h) {
-    const bool usable = m_play == PlayState::Editing && m_tool != Tool::Select && selectionHasTransform();
+    const bool usable = m_play == PlayState::Editing && m_tool != Tool::Select && m_tool != Tool::Terrain &&
+                        selectionHasTransform();
     if (!usable) {
         if (m_gizmoWasUsing) pushTransformEdit(m_gizmoSelection, m_gizmoBefore, selectionTransform());
         m_gizmoWasUsing = false;

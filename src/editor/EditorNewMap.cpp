@@ -3,10 +3,12 @@
 #include "editor/Editor.hpp"
 
 #include "core/Engine.hpp"
+#include "formats/TerrainParser.hpp"
 
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 
@@ -22,19 +24,21 @@ void appendBytes(std::vector<uint8_t>& out, const std::vector<T>& v) {
     out.insert(out.end(), p, p + v.size() * sizeof(T));
 }
 
-// Chão de size x size unidades, de (0,0) a (size,size) no plano XZ, em uma
-// grade de cells x cells (vértices suficientes para o culling e a sombra).
+// Passo da grade do chão: o mesmo do mapa de exemplo, e o .ter tem um ponto
+// por vértice (o pincel de terreno edita os dois juntos).
+constexpr float kGridStep = 8.0f;
+
+// Chão de size x size unidades, de (0,0) a (size,size) no plano XZ.
 bool writeFlatGroundGlb(const fs::path& file, float size, const Vec3& color, std::string& error) {
-    const int cells = 32;
+    const int cells = std::max(1, static_cast<int>(size / kGridStep));
     const int side = cells + 1;
     std::vector<float> pos, nrm, uv;
     pos.reserve(side * side * 3);
     for (int z = 0; z < side; ++z)
         for (int x = 0; x < side; ++x) {
-            const float fx = float(x) / cells, fz = float(z) / cells;
-            pos.insert(pos.end(), {fx * size, 0.0f, fz * size});
+            pos.insert(pos.end(), {x * kGridStep, 0.0f, z * kGridStep});
             nrm.insert(nrm.end(), {0.0f, 1.0f, 0.0f});
-            uv.insert(uv.end(), {fx * cells, fz * cells});
+            uv.insert(uv.end(), {x * kGridStep / 32.0f, z * kGridStep / 32.0f});
         }
     std::vector<uint32_t> idx;
     idx.reserve(cells * cells * 6);
@@ -67,7 +71,7 @@ bool writeFlatGroundGlb(const fs::path& file, float size, const Vec3& color, std
                                 {"primitives", json::array({{{"attributes", {{"POSITION", 0}, {"NORMAL", 1}, {"TEXCOORD_0", 2}}},
                                                              {"indices", 3},
                                                              {"material", 0}}})}}});
-    j["materials"] = json::array({{{"name", "Ground"},
+    j["materials"] = json::array({{{"name", "eruption_ground"},
                                    {"pbrMetallicRoughness",
                                     {{"baseColorFactor", {color.r, color.g, color.b, 1.0f}},
                                      {"metallicFactor", 0.0f},
@@ -81,7 +85,7 @@ bool writeFlatGroundGlb(const fs::path& file, float size, const Vec3& color, std
     });
     j["accessors"] = json::array({
         {{"bufferView", 0}, {"componentType", 5126}, {"count", nVerts}, {"type", "VEC3"},
-         {"min", {0.0f, 0.0f, 0.0f}}, {"max", {size, 0.0f, size}}},
+         {"min", {0.0f, 0.0f, 0.0f}}, {"max", {cells * kGridStep, 0.0f, cells * kGridStep}}},
         {{"bufferView", 1}, {"componentType", 5126}, {"count", nVerts}, {"type", "VEC3"}},
         {{"bufferView", 2}, {"componentType", 5126}, {"count", nVerts}, {"type", "VEC2"}},
         {{"bufferView", 3}, {"componentType", 5125}, {"count", idx.size()}, {"type", "SCALAR"}},
@@ -135,6 +139,17 @@ bool Editor::createFlatMap(const std::string& name, float size, std::string& err
         return false;
     }
     if (!writeFlatGroundGlb(dir / (name + ".glb"), size, Vec3(0.30f, 0.34f, 0.27f), error)) return false;
+    // Grade de altura (.ter) com um ponto por vértice do chão: altura do
+    // jogador, raios do editor e o pincel de terreno.
+    TerrainFile ter;
+    ter.version = 2;
+    ter.width = ter.height = static_cast<uint32_t>(std::max(1, static_cast<int>(size / kGridStep))) + 1;
+    ter.scale = kGridStep;
+    ter.cubes.assign(size_t(ter.width) * ter.height, TerrainCube{{0.0f, 0.0f, 0.0f, 0.0f}, -1, -1, -1});
+    if (!TerrainParser::writeEruptGndBin(ter, (dir / (name + ".ter")).string())) {
+        error = "Could not write " + (dir / (name + ".ter")).generic_string();
+        return false;
+    }
     // Sol a ~55 graus de altura; o resto do ambiente usa os padrões do motor.
     nlohmann::json env;
     env["light"] = {{"direction", {0.47f, -0.82f, 0.33f}}};

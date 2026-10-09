@@ -351,6 +351,11 @@ void Editor::drawHierarchy() {
 void Editor::drawInspector() {
     if (!ImGui::Begin("Inspector###Inspector", &m_showInspector)) { ImGui::End(); return; }
 
+    if (m_tool == Tool::Terrain) {
+        drawTerrainPanel();
+        ImGui::End();
+        return;
+    }
     if (m_selection.kind == SelectionKind::None) {
         emptyState("Select something in the Scene or the Hierarchy to see and edit its properties here.");
         ImGui::End();

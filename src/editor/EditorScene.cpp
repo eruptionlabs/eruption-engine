@@ -65,6 +65,7 @@ void Editor::applySceneFile() {
     }
     m_savedScene = currentEdits().serialize(m_engine->currentMapName());
     m_sceneFileTime = sceneFileTime();
+    m_terrainDirty = false;
     m_undo.clear();
     updateTitle(false);
 }
@@ -203,6 +204,9 @@ bool Editor::saveScene() {
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
     std::ofstream(file, std::ios::binary) << text;
+    std::string terrainError;
+    if (!m_engine->saveHeightDelta(terrainError)) log(LogLevel::Error, terrainError);
+    m_terrainDirty = false;
     m_savedScene = text;
     m_sceneFileTime = sceneFileTime();
     updateTitle(false);
@@ -427,7 +431,7 @@ void Editor::updateTitle(bool dirty) {
 void Editor::checkSceneDirty() {
     // A comparação percorre todas as instâncias: duas vezes por segundo basta.
     if (m_frame % 30 != 0 || m_engine->currentMapName().empty() || m_play != PlayState::Editing) return;
-    const bool dirty = currentEdits().serialize(m_engine->currentMapName()) != m_savedScene;
+    const bool dirty = m_terrainDirty || currentEdits().serialize(m_engine->currentMapName()) != m_savedScene;
     if (dirty != m_sceneDirty) updateTitle(dirty);
 }
 

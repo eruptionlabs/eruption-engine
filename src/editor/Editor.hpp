@@ -52,7 +52,7 @@ public:
 
 private:
     enum class PlayState { Editing, Playing, Paused };
-    enum class Tool { Select, Move, Rotate, Scale };
+    enum class Tool { Select, Move, Rotate, Scale, Terrain };
     enum class SelectionKind { None, Model, Light, Environment, Asset, Character, Spawn };
     struct Selection {
         SelectionKind kind = SelectionKind::None;
@@ -160,6 +160,11 @@ private:
     void addPointLight();
     void setPlayerStartHere();
     void drawSceneMarkers(float x, float y, float w, float h);
+    // Pincel de terreno (EditorTerrain.cpp)
+    void terrainBrushInput(float x, float y, float w, float h);
+    void endTerrainStroke();
+    void drawTerrainBrush(float x, float y, float w, float h);
+    void drawTerrainPanel();
     bool savePrefab(const std::string& path);
     void drawPrefabDialog();
     // Importador de folha de sprites (EditorSprites.cpp)
@@ -257,6 +262,16 @@ private:
     std::string m_newMapError;
     bool m_prefabOpen = false;
     bool m_showSpriteImporter = false;
+    struct TerrainBrush {
+        int mode = 0; // 0 subir/baixar, 1 suavizar, 2 aplainar
+        float size = 40.0f, strength = 20.0f, falloff = 0.5f;
+        bool stroking = false, hasCursor = false;
+        Vec3 cursor{0.0f};
+        float flattenTo = 0.0f;
+        int rect[4] = {0, 0, -1, -1};
+        std::vector<float> snapshot; // delta inteiro no começo do traço (desfazer)
+    } m_brush;
+    bool m_terrainDirty = false;
     struct SpriteImport {
         SpriteSheetSpec spec;
         SpriteSheetResult result;

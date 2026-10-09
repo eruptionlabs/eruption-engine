@@ -441,6 +441,20 @@ public:
     // Distancia ao longo do raio (mundo, dir normalizada) ate' o triangulo
     // mais proximo da instancia, ou -1. Usa a malha da CPU do modelo.
     float raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const;
+
+    // Pincel de terreno (editor): cópia na CPU dos vértices do chão como estão
+    // na GPU, e envio só dos vértices mudados no início do próximo frame.
+    void setKeepGroundVertices(bool keep) { m_keepGroundVertices = keep; }
+    std::vector<uint32_t> groundMeshes() const;
+    std::vector<TerrainVertex>* groundVertices(uint32_t mesh);
+    void patchGroundVertices(uint32_t mesh, const std::vector<uint32_t>& vertexIndices);
+    void flushVertexPatches(VkCommandBuffer cmd);
+    void growMeshBounds(uint32_t mesh, const Vec3& lo, const Vec3& hi);
+    // Sobe/desce várias instâncias de uma vez (um só rebuild do espelho quente).
+    void offsetInstancesY(const std::vector<std::pair<uint32_t, float>>& moves);
+    bool isGroundMesh(uint32_t mesh) const { return mesh < m_meshes.size() && m_meshes[mesh].isGround; }
+    // Modelo já carregado (CPU), para manter o picking igual à malha editada.
+    ModelAsset* assetFor(const std::string& path);
     const std::unordered_map<std::string, uint32_t>& getTextureCache() const { return m_textureCache; }
 
     // Publico pro popup de preview (SpherePreview.cpp) conseguir achar o
@@ -575,6 +589,9 @@ private:
     // Set com buffer novo ainda nao escrito: e' escrito no proximo uso do
     // frame dele, quando o uso anterior ja' terminou (fence do frame).
     bool m_instSetStale[kInstFrames] = {};
+    bool m_keepGroundVertices = false;
+    std::unordered_map<uint32_t, std::vector<TerrainVertex>> m_groundCpu;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> m_vertexPatches;
     bool m_shadowSetStale[kInstFrames] = {};
     VkDescriptorSet useStorageSet(VkDescriptorSet set, bool& stale, VkBuffer buffer);
     VkBuffer m_instBuffers[kInstFrames] = {};

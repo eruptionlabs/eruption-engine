@@ -582,6 +582,8 @@ void ModelRenderer::clear() {
     m_meshes.clear();
     m_instances.clear();
     m_textureSlots.clear();
+    m_groundCpu.clear();
+    m_vertexPatches.clear();
     m_animatedNodes.clear();
     m_animMatrixCache.clear();
     m_textureAnimatedNodes.clear();
@@ -1234,8 +1236,10 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             for (const auto& v : vertices) {
                 if (v.splatTex01 != 0u || v.splatTex23 != 0u) { splatGround = true; break; }
             }
+            // "eruption_ground": chão dos mapas criados no editor (File > New Map).
             const bool isGroundMesh = splatGround || profile.category == "ground" ||
-                                      nomeMaterial.find("\xEB\xB0\x94\xEB\x8B\xA5") != std::string::npos;
+                                      nomeMaterial.find("\xEB\xB0\x94\xEB\x8B\xA5") != std::string::npos ||
+                                      nomeMaterial == "eruption_ground";
             if (isGroundMesh && useIndices->size() >= 3 * 64) {
                 constexpr float kGroundCellSize = 96.0f;
                 struct Cell { std::vector<uint32_t> idx; float minX, minZ, maxX, maxZ; };
@@ -1747,6 +1751,8 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
 
             m_meshes.push_back(mesh);
             meshIndices[n] = static_cast<uint32_t>(m_meshes.size() - 1);
+            // Editor: o chão fica com cópia na CPU para o pincel de terreno.
+            if (m_keepGroundVertices && mesh.isGround) m_groundCpu[meshIndices[n]] = vertices;
         }
         // Nós que compartilham geometria (geometryShareIndex >= 0) não
         // subiram malha nenhuma: apontam para o ModelMeshGPU do dono. Passe
@@ -1881,6 +1887,98 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             m_instances.back().hasTextureAnimation = true;
         }
     }
+}
+
+std::vector<uint32_t> ModelRenderer::groundMeshes() const {
+    std::vector<uint32_t> out;
+    for (const auto& [mesh, verts] : m_groundCpu) out.push_back(mesh);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::vector<TerrainVertex>* ModelRenderer::groundVertices(uint32_t mesh) {
+    auto it = m_groundCpu.find(mesh);
+    return it == m_groundCpu.end() ? nullptr : &it->second;
+}
+
+void ModelRenderer::patchGroundVertices(uint32_t mesh, const std::vector<uint32_t>& vertexIndices) {
+    auto it = m_groundCpu.find(mesh);
+    if (it == m_groundCpu.end() || mesh >= m_meshes.size()) return;
+    auto& pending = m_vertexPatches[mesh];
+    pending.insert(pending.end(), vertexIndices.begin(), vertexIndices.end());
+}
+
+void ModelRenderer::growMeshBounds(uint32_t mesh, const Vec3& lo, const Vec3& hi) {
+    if (mesh >= m_meshes.size()) return;
+    m_meshes[mesh].aabbMin = glm::min(m_meshes[mesh].aabbMin, lo);
+    m_meshes[mesh].aabbMax = glm::max(m_meshes[mesh].aabbMax, hi);
+    for (uint32_t i = 0; i < m_instances.size(); ++i)
+        if (m_instances[i].meshIndex == mesh) setInstanceTransform(i, m_instances[i].transform); // refaz a caixa
+}
+
+void ModelRenderer::offsetInstancesY(const std::vector<std::pair<uint32_t, float>>& moves) {
+    if (moves.empty()) return;
+    for (const auto& [i, dy] : moves) {
+        if (i >= m_instances.size()) continue;
+        ModelInstance& inst = m_instances[i];
+        inst.transform[3].y += dy;
+        inst.worldAabbMin.y += dy;
+        inst.worldAabbMax.y += dy;
+        inst.worldCenter.y += dy;
+    }
+    rebuildHotData();
+}
+
+void ModelRenderer::flushVertexPatches(VkCommandBuffer cmd) {
+    if (m_vertexPatches.empty()) return;
+    // Barreira antes: frames anteriores ainda podem estar lendo esses vértices
+    // (a barreira cobre tudo que foi enviado antes na fila).
+    VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT,
+                           VK_ACCESS_TRANSFER_WRITE_BIT};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, nullptr, 0, nullptr);
+    for (auto& [mesh, list] : m_vertexPatches) {
+        auto it = m_groundCpu.find(mesh);
+        if (it == m_groundCpu.end() || list.empty()) continue;
+        std::sort(list.begin(), list.end());
+        list.erase(std::unique(list.begin(), list.end()), list.end());
+        const auto& verts = it->second;
+        const VkDeviceSize bytes = VkDeviceSize(list.size()) * sizeof(TerrainVertex);
+        VkBuffer staging = VK_NULL_HANDLE;
+        VmaAllocation alloc = VK_NULL_HANDLE;
+        if (!m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, alloc)) continue;
+        void* mapped = nullptr;
+        vmaMapMemory(m_ctx->allocator(), alloc, &mapped);
+        auto* dst = static_cast<TerrainVertex*>(mapped);
+        std::vector<VkBufferCopy> regions;
+        for (size_t k = 0; k < list.size(); ++k) {
+            dst[k] = verts[list[k]];
+            const VkDeviceSize src = VkDeviceSize(k) * sizeof(TerrainVertex);
+            const VkDeviceSize to = VkDeviceSize(list[k]) * sizeof(TerrainVertex);
+            // Vértices seguidos viram uma cópia só.
+            if (!regions.empty() && regions.back().srcOffset + regions.back().size == src &&
+                regions.back().dstOffset + regions.back().size == to)
+                regions.back().size += sizeof(TerrainVertex);
+            else
+                regions.push_back({src, to, sizeof(TerrainVertex)});
+        }
+        vmaUnmapMemory(m_ctx->allocator(), alloc);
+        vkCmdCopyBuffer(cmd, staging, m_meshes[mesh].vertexBuffer, static_cast<uint32_t>(regions.size()), regions.data());
+        VmaAllocator allocator = m_ctx->allocator();
+        m_ctx->deferFrameCleanup([allocator, staging, alloc] { vmaDestroyBuffer(allocator, staging, alloc); });
+    }
+    m_vertexPatches.clear();
+    VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_TRANSFER_WRITE_BIT,
+                          VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 1, &after, 0,
+                         nullptr, 0, nullptr);
+}
+
+ModelAsset* ModelRenderer::assetFor(const std::string& path) {
+    for (auto& m : m_lastModels)
+        if (m.filePath == path) return &m;
+    return nullptr;
 }
 
 float ModelRenderer::raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const {

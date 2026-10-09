@@ -260,6 +260,8 @@ bool Engine::loadMap(const std::string& name) {
             mod.boxMax *= 5.0f;
         }
     }
+    // Retoque de terreno salvo pelo editor: entra nos vértices antes de subir.
+    prepareHeightEdits(*loadedMap, genericModels);
     ERUPTION_LOG_WARN("Engine::loadMap: loading %zu models, %zu instances", genericModels.size(), genericInstances.size());
     // GLB maps are authored in world space; do not add a center offset.
     float modelCenterX = loadedMap->isGlbMap ? 0.0f : m_centerX;
@@ -391,12 +393,14 @@ bool Engine::loadMap(const std::string& name) {
     }
 
     auto _tLMM = std::chrono::steady_clock::now();
+    m_modelRenderer.setKeepGroundVertices(m_editorMode); // pincel de terreno
     m_modelRenderer.loadMapModels(genericModels, genericInstances, modelCenterX, modelCenterZ);
     eruption::clearPbrTextureDataPrewarm(); // free any pre-decoded PBR data not consumed
     ERUPTION_LOG_WARN("Engine::loadMap: loadMapModels took %lld ms",
         (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - _tLMM).count());
 
     flushPendingUploads();
+    if (m_editorMode) bindHeightEditToMeshes();
 
 
     ERUPTION_LOG_WARN("Engine::loadMap: ModelRenderer has %zu meshes, %zu instances, "
