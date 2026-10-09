@@ -2,6 +2,8 @@
 
 #include "utils/BinaryReader.hpp"
 #include "math/Types.hpp"
+#include "renderer/SkinRig.hpp"
+#include <memory>
 #include <vector>
 #include <string>
 #include <optional>
@@ -74,6 +76,11 @@ struct ModelFileNode {
     // ModelInstance{meshIndex, transform} já sabia fazer.
     // -1 = nó tem geometria própria (comportamento de todo asset antigo).
     int32_t geometryShareIndex = -1;
+    // Skin (animação por esqueleto): índice em ModelFile::rig->skins e, por
+    // vértice expandido, 4 ossos (2 x u16 por uint32) e 4 pesos (soma 1).
+    int32_t skin = -1;
+    std::vector<uint32_t> skinJoints; // 2 por vértice
+    std::vector<Vec4> skinWeights;
 
     // Optional per-vertex texture crossfade, authored in the GLB via the
     // _BLEND_TEX_INDEX / _BLEND_WEIGHT vertex attributes. perVertexBlendTexIds is
@@ -170,6 +177,8 @@ struct ModelFile {
     float alpha = 1.0f;
 
     std::optional<ModelAnimation> animation;
+    // Esqueleto e animações com nome (só .glb com skin).
+    std::shared_ptr<const SkinRig> rig;
 
     BoundingBox box;
     void calculateBoundingBox();

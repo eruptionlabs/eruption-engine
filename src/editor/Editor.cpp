@@ -1346,6 +1346,9 @@ void Editor::play() {
     m_snapshot.timeOfDay = m_engine->dayNightCycle().timeOfDay();
     m_snapshot.characters.clear();
     for (const auto& c : m_engine->characters()) m_snapshot.characters.push_back({c.position, c.facing, c.visible, c.sprite});
+    m_snapshot.animations.clear();
+    for (uint32_t i = 0; i < insts.size(); ++i)
+        if (m_engine->modelRenderer().isSkinned(i)) m_snapshot.animations.push_back({i, m_engine->modelRenderer().currentAnimation(i)});
     m_snapshot.playerSprite = m_engine->m_charConfig.job;
     // O jogo começa no início do jogador quando o mapa tem um.
     if (m_engine->hasPlayerStart() && m_engine->m_playerController)
@@ -1377,6 +1380,8 @@ void Editor::stop() {
     }
     auto& lights = m_engine->m_deferredLighting.getPointLights();
     if (lights.size() == m_snapshot.lights.size()) lights = m_snapshot.lights;
+    for (const auto& [i, anim] : m_snapshot.animations)
+        if (m_engine->modelRenderer().currentAnimation(i) != anim) m_engine->modelRenderer().playAnimation(i, anim);
     m_engine->dayNightCycle().setTimeOfDay(m_snapshot.timeOfDay);
     auto& chars = m_engine->characters();
     for (size_t i = 0; i < chars.size() && i < m_snapshot.characters.size(); ++i) {

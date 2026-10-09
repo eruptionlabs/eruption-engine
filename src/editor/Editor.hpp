@@ -102,6 +102,7 @@ private:
         float timeOfDay = 0.0f;
         struct Character { Vec3 position; float facing; bool visible; std::string sprite; };
         std::vector<Character> characters;
+        std::vector<std::pair<uint32_t, std::string>> animations; // modelos com esqueleto
         std::string playerSprite;
     };
 

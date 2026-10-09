@@ -63,6 +63,8 @@ const std::vector<RuleDef>& ruleCatalog() {
          "Hide {1}", "Esconder {1}"},
         {"models.set_solid", RuleKind::Action, "models", {{T::Model, "\"\""}, {T::Value, "true"}},
          "Make {1} solid: {2}", "Deixar {1} sólido: {2}"},
+        {"models.play", RuleKind::Action, "models", {{T::Model, "\"\""}, {T::Text, "\"\""}, {T::Value, "true"}},
+         "{1} plays the animation {2} (loop: {3})", "{1} toca a animação {2} (repetir: {3})"},
         {"game.save", RuleKind::Action, "game", {{T::Value, "1"}},
          "Save the game in slot {1}", "Salvar o jogo no espaço {1}"},
         {"game.load", RuleKind::Action, "game", {{T::Value, "1"}},

@@ -1,0 +1,47 @@
+#version 450
+// Skinning por esqueleto (glTF): cada vértice da pose de bind vira
+// soma(peso * matriz do osso) * posição; a normal gira junto. Lê o buffer de
+// vértices compartilhado da malha e escreve no buffer próprio da instância
+// (o resto do vértice já está lá, copiado uma vez). Posição e normal são
+// palavras de 32 bits dentro do vértice (offsets no push constant).
+layout(local_size_x = 64) in;
+
+struct SkinVertex { uint j01; uint j23; float w0; float w1; float w2; float w3; };
+
+layout(std430, binding = 0) readonly buffer Src { uint src[]; };
+layout(std430, binding = 1) readonly buffer Skin { SkinVertex skin[]; };
+layout(std430, binding = 2) readonly buffer Joints { mat4 joints[]; };
+layout(std430, binding = 3) writeonly buffer Dst { uint dst[]; };
+
+layout(push_constant) uniform Params {
+    uint vertexCount;
+    uint jointBase;    // primeira matriz desta instância no anel do frame
+    uint strideWords;  // tamanho do vértice em palavras
+    uint posWord;      // offset da posição (vec3)
+    uint nrmWord;      // offset da normal (vec3)
+} p;
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= p.vertexCount) return;
+    const SkinVertex s = skin[i];
+    const mat4 m = joints[p.jointBase + (s.j01 & 0xFFFFu)] * s.w0 +
+                   joints[p.jointBase + (s.j01 >> 16)] * s.w1 +
+                   joints[p.jointBase + (s.j23 & 0xFFFFu)] * s.w2 +
+                   joints[p.jointBase + (s.j23 >> 16)] * s.w3;
+    const uint b = i * p.strideWords;
+    const vec3 pos = vec3(uintBitsToFloat(src[b + p.posWord]), uintBitsToFloat(src[b + p.posWord + 1u]),
+                          uintBitsToFloat(src[b + p.posWord + 2u]));
+    const vec3 nrm = vec3(uintBitsToFloat(src[b + p.nrmWord]), uintBitsToFloat(src[b + p.nrmWord + 1u]),
+                          uintBitsToFloat(src[b + p.nrmWord + 2u]));
+    const vec3 sp = (m * vec4(pos, 1.0)).xyz;
+    vec3 sn = mat3(m) * nrm;
+    const float len = length(sn);
+    sn = len > 1e-8 ? sn / len : nrm;
+    dst[b + p.posWord] = floatBitsToUint(sp.x);
+    dst[b + p.posWord + 1u] = floatBitsToUint(sp.y);
+    dst[b + p.posWord + 2u] = floatBitsToUint(sp.z);
+    dst[b + p.nrmWord] = floatBitsToUint(sn.x);
+    dst[b + p.nrmWord + 1u] = floatBitsToUint(sn.y);
+    dst[b + p.nrmWord + 2u] = floatBitsToUint(sn.z);
+}

@@ -18,6 +18,7 @@ class Engine;
 //           ["nome_do_objeto"] = { position = {x, y, z}, rotation = {x, y, z}, scale = {x, y, z} },
 //           ["outro_objeto"] = { hidden = true },
 //           ["casa_1"] = { solid = true },  -- o jogador não atravessa
+//           ["boneco"] = { animation = "acenar" },  -- modelo com esqueleto
 //       },
 //       added = {
 //           { file = "assets/props/barril.glb", name = "barril_1", position = {...}, rotation = {...}, scale = {...} },
@@ -54,6 +55,7 @@ struct SceneEdits {
         Transform transform;
         bool hidden = false;
         bool solid = false; // bloqueia o jogador
+        std::string animation; // modelo com esqueleto: animação que toca ao abrir
     };
     struct Copy {
         std::string from, name;

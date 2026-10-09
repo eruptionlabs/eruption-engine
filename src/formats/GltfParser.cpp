@@ -356,6 +356,52 @@ static std::vector<T> readAccessor(const tinygltf::Model& model, int accessorInd
     return out;
 }
 
+// Elementos de um accessor como floats (até 4 componentes), aceitando float e
+// inteiros (normalizados ou não): ossos (JOINTS_0), pesos (WEIGHTS_0) e as
+// saídas das animações.
+static std::vector<Vec4> readAnyVec4Accessor(const tinygltf::Model& model, int accessorIndex) {
+    std::vector<Vec4> out;
+    if (accessorIndex < 0 || accessorIndex >= static_cast<int>(model.accessors.size())) return out;
+    const tinygltf::Accessor& a = model.accessors[accessorIndex];
+    if (a.bufferView < 0 || a.bufferView >= static_cast<int>(model.bufferViews.size())) return out;
+    const tinygltf::BufferView& view = model.bufferViews[a.bufferView];
+    const tinygltf::Buffer& buffer = model.buffers[view.buffer];
+    const int comps = tinygltf::GetNumComponentsInType(a.type);
+    const int csize = tinygltf::GetComponentSizeInBytes(a.componentType);
+    if (comps <= 0 || comps > 4 || csize <= 0) return out;
+    const size_t stride = view.byteStride ? view.byteStride : size_t(comps * csize);
+    const size_t base = view.byteOffset + a.byteOffset;
+    if (a.count == 0 || base + (a.count - 1) * stride + size_t(comps * csize) > buffer.data.size()) return out;
+    out.resize(a.count, Vec4(0.0f));
+    for (size_t i = 0; i < a.count; ++i) {
+        const uint8_t* p = buffer.data.data() + base + i * stride;
+        for (int c = 0; c < comps; ++c) {
+            const uint8_t* q = p + c * csize;
+            float v = 0.0f;
+            switch (a.componentType) {
+                case TINYGLTF_COMPONENT_TYPE_FLOAT: std::memcpy(&v, q, 4); break;
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE: v = q[0] / (a.normalized ? 255.0f : 1.0f); break;
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT: {
+                    uint16_t u;
+                    std::memcpy(&u, q, 2);
+                    v = u / (a.normalized ? 65535.0f : 1.0f);
+                    break;
+                }
+                case TINYGLTF_COMPONENT_TYPE_BYTE: v = std::max(static_cast<int8_t>(q[0]) / 127.0f, -1.0f); break;
+                case TINYGLTF_COMPONENT_TYPE_SHORT: {
+                    int16_t s;
+                    std::memcpy(&s, q, 2);
+                    v = std::max(s / 32767.0f, -1.0f);
+                    break;
+                }
+                default: break;
+            }
+            out[i][c] = v;
+        }
+    }
+    return out;
+}
+
 static std::vector<float> readFloatAccessor(const tinygltf::Model& model, int accessorIndex) {
     std::vector<float> out;
     if (accessorIndex < 0) return out;
@@ -1041,6 +1087,17 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
             if (itPos == prim.attributes.end()) continue;
 
             std::vector<Vec3> positions = readVec3Accessor(gltf, itPos->second);
+            // Skin: 4 ossos e 4 pesos por vértice (só em nó com skin).
+            std::vector<Vec4> skinJ, skinW;
+            if (gltfNode.skin >= 0 && gltfNode.skin < static_cast<int>(gltf.skins.size())) {
+                auto itJ = prim.attributes.find("JOINTS_0");
+                auto itW = prim.attributes.find("WEIGHTS_0");
+                if (itJ != prim.attributes.end() && itW != prim.attributes.end()) {
+                    skinJ = readAnyVec4Accessor(gltf, itJ->second);
+                    skinW = readAnyVec4Accessor(gltf, itW->second);
+                }
+            }
+            const bool primSkinned = gltfNode.skin >= 0 && gltfNode.skin < static_cast<int>(gltf.skins.size());
             std::vector<Vec3> normals = (itNrm != prim.attributes.end())
                                             ? readVec3Accessor(gltf, itNrm->second)
                                             : std::vector<Vec3>(positions.size(), Vec3(0.0f, 1.0f, 0.0f));
@@ -1154,6 +1211,19 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
                 node.colors.push_back(vec4ToBgra(colors[srcIdx]));
                 node.indices.push_back(static_cast<uint32_t>(node.indices.size()));
                 node.perVertexTexIds.push_back(texLocal);
+                if (primSkinned) {
+                    Vec4 j(0.0f), w(1.0f, 0.0f, 0.0f, 0.0f); // sem dados: preso ao primeiro osso
+                    if (srcIdx < skinJ.size() && srcIdx < skinW.size()) {
+                        j = skinJ[srcIdx];
+                        w = glm::max(skinW[srcIdx], Vec4(0.0f));
+                        const float sum = w.x + w.y + w.z + w.w;
+                        w = sum > 1e-6f ? w / sum : Vec4(1.0f, 0.0f, 0.0f, 0.0f);
+                    }
+                    auto u16 = [](float f) { return static_cast<uint32_t>(std::clamp(f, 0.0f, 65535.0f)) & 0xFFFFu; };
+                    node.skinJoints.push_back(u16(j.x) | (u16(j.y) << 16));
+                    node.skinJoints.push_back(u16(j.z) | (u16(j.w) << 16));
+                    node.skinWeights.push_back(w);
+                }
 
                 // Per-vertex crossfade authored in the GLB.
                 if (itBlendWeight != prim.attributes.end()) {
@@ -1224,6 +1294,19 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
                 node.perVertexSplatTexIds[sIdx].resize(node.vertices.size(), 0);
             }
         }
+        // Skin: o glTF ignora a matriz do nó da malha com skin (os vértices
+        // ficam no espaço do esqueleto; a posição vem dos ossos).
+        if (!node.skinJoints.empty()) {
+            if (node.skinJoints.size() == node.vertices.size() * 2 && node.skinWeights.size() == node.vertices.size()) {
+                node.skin = gltfNode.skin;
+                node.nodeMatrix = Mat4(1.0f);
+                node.renderMatrix = Mat4(1.0f);
+                node.parentIndex = 0xFFFFFFFF;
+            } else {
+                node.skinJoints.clear();
+                node.skinWeights.clear();
+            }
+        }
         // Same for emissive, only some primitives may carry _EMISSIVE_STRENGTH.
         if (!node.perVertexEmissive.empty() &&
             node.perVertexEmissive.size() != node.vertices.size()) {
@@ -1235,7 +1318,8 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
         smoothNormalsByAngle(node);
 
         // Soften razor silhouettes with a load-time chamfer on boundary edges.
-        addSilhouetteBevels(node);
+        // Malha com skin fica de fora: o chanfro acrescenta vértices sem ossos.
+        if (node.skin < 0) addSilhouetteBevels(node);
 
         // Compute local bounding box.
         node.box = BoundingBox();
@@ -1296,6 +1380,7 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
                 // Atributos opcionais: so' funde quando AMBOS nao os tem, para
                 // nao perder blend/splat por vertice numa fusao silenciosa.
                 if (!node.perVertexBlendTexIds.empty() || !cand.perVertexBlendTexIds.empty()) continue;
+                if (node.skin >= 0 || cand.skin >= 0) continue; // ossos e pesos não entram na comparação
                 if (!node.faces.empty() || !cand.faces.empty()) continue;
                 // Identico: vira instancia do dono e devolve a memoria.
                 node.geometryShareIndex = it->second;
@@ -1359,6 +1444,73 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
         }
 
         model.animation->duration = maxTime * 30.0f;
+    }
+
+    // Esqueleto e animações com nome (skin).
+    if (!gltf.skins.empty()) {
+        auto rig = std::make_shared<SkinRig>();
+        rig->nodes.resize(gltf.nodes.size());
+        for (size_t i = 0; i < gltf.nodes.size(); ++i) {
+            const tinygltf::Node& gn = gltf.nodes[i];
+            SkinRig::Node& rn = rig->nodes[i];
+            rn.name = gn.name;
+            rn.parent = gltfParents[i];
+            if (!gn.matrix.empty()) {
+                Vec3 skew;
+                Vec4 persp;
+                glm::decompose(nodeLocalMatrix(gn), rn.s, rn.r, rn.t, skew, persp);
+            } else {
+                if (gn.translation.size() == 3)
+                    rn.t = Vec3(float(gn.translation[0]), float(gn.translation[1]), float(gn.translation[2]));
+                if (gn.rotation.size() == 4)
+                    rn.r = glm::quat(float(gn.rotation[3]), float(gn.rotation[0]), float(gn.rotation[1]), float(gn.rotation[2]));
+                if (gn.scale.size() == 3) rn.s = Vec3(float(gn.scale[0]), float(gn.scale[1]), float(gn.scale[2]));
+            }
+        }
+        // Ordem pais-antes-de-filhos (o arquivo não garante).
+        std::vector<char> placed(gltf.nodes.size(), 0);
+        for (size_t pass = 0; pass < gltf.nodes.size() && rig->order.size() < gltf.nodes.size(); ++pass)
+            for (size_t i = 0; i < gltf.nodes.size(); ++i)
+                if (!placed[i] && (rig->nodes[i].parent < 0 || placed[static_cast<size_t>(rig->nodes[i].parent)])) {
+                    placed[i] = 1;
+                    rig->order.push_back(static_cast<int>(i));
+                }
+        for (const tinygltf::Skin& sk : gltf.skins) {
+            SkinRig::Skin s;
+            s.joints = sk.joints;
+            if (sk.inverseBindMatrices >= 0) s.inverseBind = readAccessor<Mat4>(gltf, sk.inverseBindMatrices);
+            s.inverseBind.resize(s.joints.size(), Mat4(1.0f));
+            rig->skins.push_back(std::move(s));
+        }
+        for (size_t ai = 0; ai < gltf.animations.size(); ++ai) {
+            const tinygltf::Animation& an = gltf.animations[ai];
+            SkinRig::Animation a;
+            a.name = an.name.empty() ? "animation_" + std::to_string(ai) : an.name;
+            for (const tinygltf::AnimationChannel& ch : an.channels) {
+                if (ch.sampler < 0 || ch.sampler >= static_cast<int>(an.samplers.size())) continue;
+                const tinygltf::AnimationSampler& smp = an.samplers[static_cast<size_t>(ch.sampler)];
+                SkinRig::Channel c;
+                c.node = ch.target_node;
+                if (ch.target_path == "translation") c.path = 0;
+                else if (ch.target_path == "rotation") c.path = 1;
+                else if (ch.target_path == "scale") c.path = 2;
+                else continue; // pesos de morph: fora
+                c.step = smp.interpolation == "STEP";
+                c.times = readFloatAccessor(gltf, smp.input);
+                std::vector<Vec4> vals = readAnyVec4Accessor(gltf, smp.output);
+                if (smp.interpolation == "CUBICSPLINE") { // (tangente, valor, tangente): só o valor
+                    std::vector<Vec4> mid;
+                    for (size_t k = 1; k < vals.size(); k += 3) mid.push_back(vals[k]);
+                    vals.swap(mid);
+                }
+                c.values = std::move(vals);
+                if (c.times.empty() || c.values.empty()) continue;
+                a.duration = std::max(a.duration, c.times.back());
+                a.channels.push_back(std::move(c));
+            }
+            rig->animations.push_back(std::move(a));
+        }
+        model.rig = std::move(rig);
     }
 
     model.calculateBoundingBox();

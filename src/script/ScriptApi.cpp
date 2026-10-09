@@ -486,6 +486,29 @@ int models_solid(lua_State* L) {
     lua_pushboolean(L, eng().isSolid(static_cast<uint32_t>(checkModel(L, 1))));
     return 1;
 }
+int models_play(lua_State* L) {
+    const auto i = static_cast<uint32_t>(checkModel(L, 1));
+    const char* name = luaL_optstring(L, 2, "");
+    const bool loop = lua_isnoneornil(L, 3) ? true : lua_toboolean(L, 3) != 0;
+    const float speed = static_cast<float>(luaL_optnumber(L, 4, 1.0));
+    const bool ok = eng().modelRenderer().playAnimation(i, name, loop, speed);
+    if (!ok && *name) Logger::warning("models.play: %s has no animation \"%s\"", instances()[i].name.c_str(), name);
+    lua_pushboolean(L, ok);
+    return 1;
+}
+int models_animation(lua_State* L) {
+    lua_pushstring(L, eng().modelRenderer().currentAnimation(static_cast<uint32_t>(checkModel(L, 1))).c_str());
+    return 1;
+}
+int models_animations(lua_State* L) {
+    const auto names = eng().modelRenderer().animationsOf(static_cast<uint32_t>(checkModel(L, 1)));
+    lua_createtable(L, static_cast<int>(names.size()), 0);
+    for (size_t k = 0; k < names.size(); ++k) {
+        lua_pushstring(L, names[k].c_str());
+        lua_rawseti(L, -2, static_cast<int>(k + 1));
+    }
+    return 1;
+}
 
 // ---------------------------------------------------------------- game (salvar)
 
@@ -671,6 +694,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"move_by", models_move_by}, {"rotate_by", models_rotate_by},
         {"visible", models_visible}, {"set_visible", models_set_visible},
         {"show", models_show}, {"hide", models_hide}, {"solid", models_solid}, {"set_solid", models_set_solid},
+        {"play", models_play}, {"animation", models_animation}, {"animations", models_animations},
         {nullptr, nullptr}};
     static const luaL_Reg characters[] = {
         {"exists", characters_exists}, {"position", characters_position},
@@ -852,6 +876,13 @@ declare models: {
     -- Solid models block the player (the bottom of the model: trunk, wall base).
     solid: (model: Model) -> boolean,
     set_solid: (model: Model, solid: boolean) -> (),
+    -- Models with a skeleton (.glb with skin): plays the animation by name
+    -- ("" = rest pose). loop defaults to true, speed to 1. False if it doesn't exist.
+    play: (model: Model, animation: string, loop: boolean?, speed: number?) -> boolean,
+    -- Animation playing now ("" = rest pose).
+    animation: (model: Model) -> string,
+    -- Names of the animations in the model file.
+    animations: (model: Model) -> {string},
 }
 
 -- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a

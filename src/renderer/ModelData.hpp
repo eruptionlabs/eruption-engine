@@ -6,6 +6,9 @@
 #include <glm/gtc/quaternion.hpp>
 #include <cstdint>
 #include <cfloat>
+#include <memory>
+
+#include "renderer/SkinRig.hpp"
 
 namespace eruption {
 
@@ -104,6 +107,10 @@ struct ModelNode {
     // o índice do nó "dono" da malha; este nó desenha o mesmo ModelMeshGPU com
     // outra matriz. Ver ModelFileNode::geometryShareIndex.
     int32_t geometryShareIndex = -1;
+    // Skin (ver ModelFileNode): -1 = malha rígida.
+    int32_t skin = -1;
+    std::vector<uint32_t> skinJoints;
+    std::vector<Vec4> skinWeights;
 
     // Animation tracks
     std::vector<ScaleKeyframe> scaleKeyframes;
@@ -138,6 +145,7 @@ struct ModelAsset {
 
     std::vector<std::string> textures; // global texture name list
     std::vector<ModelNode> nodes;
+    std::shared_ptr<const SkinRig> rig; // esqueleto e animações com nome (skin)
 
     // Animation metadata
     float animDuration = 0.0f;

@@ -180,6 +180,7 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
                 o.transform = readTransform(L, lua_gettop(L), o.hasTransform);
                 o.hidden = readBool(L, lua_gettop(L), "hidden", false);
                 o.solid = readBool(L, lua_gettop(L), "solid", false);
+                o.animation = readStr(L, lua_gettop(L), "animation");
                 objects.push_back(std::move(o));
             }
             lua_pop(L, 1);
@@ -380,14 +381,15 @@ std::string SceneEdits::serialize(const std::string& map) const {
     if (!objects.empty()) {
         o << "    objects = {\n";
         for (const auto& ob : objects) {
+            std::vector<std::string> parts;
+            if (ob.hidden) parts.push_back("hidden = true");
+            if (ob.solid) parts.push_back("solid = true");
+            if (!ob.animation.empty()) parts.push_back("animation = " + quoted(ob.animation));
+            if (ob.hasTransform)
+                parts.push_back("position = " + vec(ob.transform.position) + ", rotation = " + vec(ob.transform.rotation) +
+                                ", scale = " + vec(ob.transform.scale));
             o << "        [" << quoted(ob.name) << "] = { ";
-            if (ob.hidden) o << "hidden = true";
-            if (ob.solid) o << (ob.hidden ? ", " : "") << "solid = true";
-            if (ob.hasTransform) {
-                if (ob.hidden || ob.solid) o << ", ";
-                o << "position = " << vec(ob.transform.position) << ", rotation = " << vec(ob.transform.rotation)
-                  << ", scale = " << vec(ob.transform.scale);
-            }
+            for (size_t k = 0; k < parts.size(); ++k) o << (k ? ", " : "") << parts[k];
             o << " },\n";
         }
         o << "    },\n";
@@ -514,6 +516,13 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         const auto& insts = mr.getInstances();
         for (uint32_t i = 0; i < insts.size(); ++i)
             if (insts[i].name.rfind(ob.name + "/", 0) == 0) engine.setSolid(i, true);
+    }
+    // Animação inicial (modelo com esqueleto), também nos nós "nome/...".
+    for (const auto& ob : objects) {
+        if (ob.animation.empty()) continue;
+        const auto& insts = mr.getInstances();
+        for (uint32_t i = 0; i < insts.size(); ++i)
+            if (insts[i].name == ob.name || insts[i].name.rfind(ob.name + "/", 0) == 0) mr.playAnimation(i, ob.animation);
     }
     auto& ls = engine.deferredLighting().getPointLights();
     for (const auto& l : lights) {
