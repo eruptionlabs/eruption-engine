@@ -89,6 +89,14 @@ int api_log(lua_State* L) {
     return 0;
 }
 
+int ui_show_hud(lua_State* L) {
+    eng().setHudBars(lua_toboolean(L, 1) != 0);
+    return 0;
+}
+int ui_show_minimap(lua_State* L) {
+    eng().setMinimapHud(lua_toboolean(L, 1) != 0);
+    return 0;
+}
 int ui_message(lua_State* L) {
     size_t len = 0;
     const char* text = luaL_tolstring(L, 1, &len);
@@ -601,7 +609,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"start", on_start}, {"update", on_update}, {"every", on_every}, {"key", on_key},
         {"near", on_near}, {"hour", on_hour}, {"enter", on_enter}, {"leave", on_leave}, {nullptr, nullptr}};
     static const luaL_Reg vars[] = {{"get", vars_get}, {"set", vars_set}, {"add", vars_add}, {nullptr, nullptr}};
-    static const luaL_Reg ui[] = {{"message", ui_message}, {nullptr, nullptr}};
+    static const luaL_Reg ui[] = {{"message", ui_message}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
+                                  {nullptr, nullptr}};
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
@@ -688,6 +697,10 @@ declare vars: {
 declare ui: {
     -- Shows a message on screen for some seconds (default 3).
     message: (text: string, seconds: number?) -> (),
+    -- Character bars (life, mana) and the minimap with the map name and time.
+    -- Off in exported games until the game turns them on.
+    show_hud: (on: boolean) -> (),
+    show_minimap: (on: boolean) -> (),
 }
 
 declare world: {

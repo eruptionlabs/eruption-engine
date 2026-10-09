@@ -249,6 +249,27 @@ bool GpuAutoSelect::ensureBestGpu() {
         autoDetected = true;
     }
 
+    // Número salvo de outro fabricante: a ordem dos dispositivos muda (PRIME
+    // ligado só na primeira detecção, driver novo). Acha o do fabricante salvo.
+    if (!autoDetected && !envIndex && !cfgIndex.empty() && !cfgVendor.empty()) {
+        const auto gpus = enumerateGpus();
+        const int idx = std::atoi(cfgIndex.c_str());
+        const bool matches = idx >= 0 && idx < static_cast<int>(gpus.size()) &&
+                             vendorString(gpus[static_cast<size_t>(idx)].vendorID) == cfgVendor;
+        if (!gpus.empty() && !matches) {
+            int found = -1;
+            for (const auto& gpu : gpus)
+                if (vendorString(gpu.vendorID) == cfgVendor &&
+                    (found < 0 || deviceTypeRank(gpu.deviceType) > deviceTypeRank(gpus[static_cast<size_t>(found)].deviceType)))
+                    found = gpu.index;
+            if (found < 0) found = gpus[static_cast<size_t>(std::max(0, pickBestGpuIndex(gpus)))].index;
+            ERUPTION_LOG_WARN("[GpuAutoSelect] Saved GPU index %s is not %s any more; using index %d", cfgIndex.c_str(),
+                              cfgVendor.c_str(), found);
+            cfgIndex = std::to_string(found);
+            writeConfig(cfgVendor, cfgIndex);
+        }
+    }
+
     // Make sure ERUPTION_GPU_INDEX is set so VulkanContext uses the right device.
     if (!cfgIndex.empty() && std::getenv("ERUPTION_GPU_INDEX") == nullptr) {
         setenv("ERUPTION_GPU_INDEX", cfgIndex.c_str(), 1);

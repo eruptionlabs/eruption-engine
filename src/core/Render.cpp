@@ -727,7 +727,7 @@ void Engine::render() {
         m_debugLineRenderer.upload();
     }
     
-    if (!m_benchmarkThunderstorm) {
+    if (!m_benchmarkThunderstorm && m_showMinimapHud) { // minimapa escondido: nem desenha
         renderMinimap(cmd);
     cpuMark(3); // minimap fora do custo do G-buffer
     }
