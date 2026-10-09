@@ -207,6 +207,7 @@ int world_map(lua_State* L) {
 }
 int world_load_map(lua_State* L) {
     const char* map = luaL_checkstring(L, 1);
+    if (ScriptHost* host = ScriptHost::current()) host->rememberMapState(); // voltar aqui acha tudo como estava
     if (lua_isvector(L, 2)) {
         const Vec3 p = checkVec3(L, 2);
         eng().requestMap(map, &p);

@@ -265,6 +265,7 @@ void DefaultApplication::onUpdate(float deltaTime) {
         if (m_engine && m_engine->takeMapRequest(request)) {
             m_hasMapSpawn = request.hasSpawn;
             m_mapSpawn = request.spawn;
+            m_sceneEditsMap.clear(); // mesmo mapa de novo também reaplica a cena
             m_engine->loadMap(request.map);
         }
         // Edições feitas no editor (assets/scenes/<mapa>.scene.luau) valem no
@@ -288,6 +289,8 @@ void DefaultApplication::onUpdate(float deltaTime) {
             if (m_scripts && !m_scriptsPlaying) {
                 m_scripts->start();
                 m_scriptsPlaying = true;
+            } else if (m_scripts) {
+                m_scripts->mapReady(); // mapa novo: foto e o estado de quando se saiu dele
             }
         }
         if (m_engine) m_engine->updateCharacters(deltaTime, true);

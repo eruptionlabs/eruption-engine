@@ -801,6 +801,7 @@ void Editor::update(float dt) {
         m_undo.clear();
         log(LogLevel::Info, "Loading map " + name + "...");
         m_engine->loadMap(name);
+        m_lastMap.clear(); // reabrir o mesmo mapa também é mapa novo (cena, Play que continua)
     }
 
     // O painel Cena muda de tamanho enquanto se arrasta a divisória: só
@@ -1308,13 +1309,13 @@ void Editor::handleGameMapRequest() {
     if (!m_playResume.started) {
         // Mapa aberto e cena aplicada (onMapReady): volta a jogar.
         if (m_play == PlayState::Editing && m_mapReadyCount != m_playResume.readyAt) {
+            if (m_scripts) m_scripts->resumeOnNextStart(m_playResume.vars);
             play();
             m_playResume.started = true;
         }
         return;
     }
     if (m_scripts && !m_scripts->running()) return; // os scripts começam no próximo frame
-    if (m_scripts && !m_playResume.vars.empty()) m_scripts->importVars(m_playResume.vars);
     if (m_playResume.hasSpawn && m_engine->m_playerController) {
         const Vec3 p(m_playResume.spawn.x, m_engine->sampleTerrainHeight(m_playResume.spawn.x, m_playResume.spawn.z),
                      m_playResume.spawn.z);
@@ -1360,6 +1361,7 @@ void Editor::play() {
 void Editor::stop() {
     if (m_play == PlayState::Editing) return;
     m_engine->setSoundEmittersActive(false);
+    if (m_scripts && !m_playResume.active) m_scripts->clearMapStates(); // Stop de verdade: próximo Play do zero
     m_engine->setHudBars(false); // o que o jogo ligou vale só no Play
     m_engine->setMinimapHud(false);
     ModelRenderer& mr = m_engine->modelRenderer();

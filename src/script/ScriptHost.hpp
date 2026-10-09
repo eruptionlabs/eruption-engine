@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -82,6 +83,18 @@ public:
     // Variáveis como JSON (o editor guarda e devolve ao trocar de mapa no Play).
     std::string exportVars();
     bool importVars(const std::string& json);
+    // Estado de cada mapa (objetos movidos, escondidos, sólidos; personagens):
+    // foto ao abrir o mapa, guardado ao sair dele e no jogo salvo. Voltar a um
+    // mapa ou carregar o jogo devolve as coisas onde o jogo as deixou.
+    void mapReady();
+    void rememberMapState();
+    void clearMapStates() { m_mapStates.clear(); }
+    // O próximo start() continua o jogo (troca de mapa no Play do editor): as
+    // variáveis voltam e on.start não roda de novo, como no jogo exportado.
+    void resumeOnNextStart(const std::string& varsJson) {
+        m_resume = true;
+        m_resumeVars = varsJson;
+    }
 
     // Depurador (VS Code, protocolo DAP): só no build com o editor.
     ScriptDebugger* debugger() { return m_debugger.get(); }
@@ -135,6 +148,23 @@ private:
     std::vector<Handler>* m_loadingHandlers = nullptr;
     std::vector<Tween> m_tweens;
     std::vector<Message> m_messages;
+    struct BaseModel {
+        Mat4 transform{1.0f};
+        bool enabled = true, solid = false;
+    };
+    struct BaseCharacter {
+        std::string name;
+        Vec3 position{0.0f};
+        float facing = 0.0f;
+    };
+    std::string m_baselineMap;
+    std::vector<BaseModel> m_baseModels;
+    std::vector<BaseCharacter> m_baseCharacters;
+    std::map<std::string, std::string> m_mapStates; // mapa -> JSON do que mudou
+    bool m_resume = false;
+    std::string m_resumeVars;
+    std::string captureMapState() const;
+    void applyMapState(const std::string& json);
     int m_varsRef = -1;
     float m_prevHour = 0.0f;
     bool m_running = false;
