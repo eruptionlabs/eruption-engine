@@ -108,6 +108,7 @@ void Editor::drawViewport() {
         }
         dl->AddRect(pos, ImVec2(pos.x + avail.x, pos.y + avail.y), ImGui::GetColorU32(kAccent), 0.0f, 0, 2.0f);
     } else {
+        drawSceneMarkers(pos.x, pos.y, avail.x, avail.y);
         drawSelectionBounds(pos.x, pos.y, avail.x, avail.y);
         drawGizmo(pos.x, pos.y, avail.x, avail.y);
         drawViewCube(pos.x, pos.y, avail.x, avail.y);
@@ -276,7 +277,7 @@ void Editor::viewportRay(float u, float v, Vec3& origin, Vec3& dir) const {
     dir = glm::normalize(Vec3(pf) / pf.w - origin);
 }
 
-int Editor::raycastModels(const Vec3& origin, const Vec3& dir, float& hitT) const {
+int Editor::raycastModels(const Vec3& origin, const Vec3& dir, float& hitT, int ignore) const {
     const Vec3 invDir(1.0f / (std::abs(dir.x) > 1e-8f ? dir.x : 1e-8f),
                       1.0f / (std::abs(dir.y) > 1e-8f ? dir.y : 1e-8f),
                       1.0f / (std::abs(dir.z) > 1e-8f ? dir.z : 1e-8f));
@@ -286,7 +287,7 @@ int Editor::raycastModels(const Vec3& origin, const Vec3& dir, float& hitT) cons
     // testados enquanto a caixa começa antes do melhor acerto.
     std::vector<std::pair<float, uint32_t>> boxes;
     for (size_t i = 0; i < insts.size(); ++i) {
-        if (!insts[i].enabled) continue;
+        if (!insts[i].enabled || static_cast<int>(i) == ignore) continue;
         const float t = rayAabb(origin, invDir, insts[i].worldAabbMin, insts[i].worldAabbMax);
         if (t >= 0.0f) boxes.push_back({t, static_cast<uint32_t>(i)});
     }
@@ -302,6 +303,46 @@ int Editor::raycastModels(const Vec3& origin, const Vec3& dir, float& hitT) cons
         }
     }
     return best;
+}
+
+bool Editor::floorBelow(const Vec3& from, int ignoreModel, float& floorY) const {
+    const Vec3 down(0.0f, -1.0f, 0.0f);
+    float t = FLT_MAX, tt = 0.0f;
+    raycastModels(from, down, t, ignoreModel);
+    if (m_engine->raycastTerrain(from, down, std::min(t, 50000.0f), tt)) t = std::min(t, tt);
+    if (t == FLT_MAX) return false;
+    floorY = from.y - t;
+    return true;
+}
+
+void Editor::snapSelectionToFloor(bool pivot) {
+    if (m_play != PlayState::Editing || !selectionHasTransform()) return;
+    const Mat4 before = selectionTransform();
+    Mat4 after = before;
+    if (m_selection.kind == SelectionKind::Model) {
+        const ModelInstance& inst = m_engine->modelRenderer().getInstances()[static_cast<size_t>(m_selection.index)];
+        // Do alto do objeto para baixo, sem contar ele mesmo: acha o chão
+        // mesmo que o objeto esteja afundado.
+        const Vec3 c = (inst.worldAabbMin + inst.worldAabbMax) * 0.5f;
+        float floorY = 0.0f;
+        if (pivot) {
+            // O ponto de origem do objeto no chão (árvores com tronco enterrado).
+            const Vec3 p(before[3]);
+            if (!floorBelow(Vec3(p.x, std::max(p.y, inst.worldAabbMax.y) + 0.01f, p.z), m_selection.index, floorY)) return;
+            after[3].y = floorY;
+        } else {
+            if (!floorBelow(Vec3(c.x, inst.worldAabbMax.y + 0.01f, c.z), m_selection.index, floorY)) return;
+            after[3].y += floorY - inst.worldAabbMin.y;
+        }
+    } else {
+        // Personagem e luz: o ponto em si vai para o chão (a luz fica 2 acima).
+        const Vec3 p(before[3]);
+        float floorY = 0.0f;
+        if (!floorBelow(p + Vec3(0.0f, 1000.0f, 0.0f), -1, floorY)) return;
+        after[3].y = floorY + (m_selection.kind == SelectionKind::Light ? 2.0f : 0.0f);
+    }
+    setSelectionTransform(after);
+    pushTransformEdit(m_selection, before, after);
 }
 
 bool Editor::groundPointAt(float u, float v, Vec3& out) const {
@@ -345,6 +386,16 @@ void Editor::pickAt(float u, float v) {
         if (glm::length(Vec2(p.x - base.x, p.z - base.z)) > radius || p.y < base.y || p.y > base.y + height) continue;
         bestT = t;
         best = {SelectionKind::Character, static_cast<int>(i)};
+    }
+    if (m_engine->hasPlayerStart()) {
+        const Vec3 oc = m_engine->playerStart() - origin;
+        const float t = glm::dot(oc, dir);
+        const float d2 = glm::dot(oc, oc) - t * t;
+        const float r = std::max(2.0f, 0.02f * t);
+        if (t > 0.0f && t < bestT && d2 < r * r) {
+            bestT = t;
+            best = {SelectionKind::Spawn, 0};
+        }
     }
     const auto& lights = m_engine->m_deferredLighting.getPointLights();
     for (size_t i = 0; i < lights.size(); ++i) {
@@ -399,6 +450,36 @@ void Editor::drawGizmo(float x, float y, float w, float h) {
     if (using_) setSelectionTransform(model);
     if (!using_ && m_gizmoWasUsing) pushTransformEdit(m_gizmoSelection, m_gizmoBefore, selectionTransform());
     m_gizmoWasUsing = using_;
+}
+
+void Editor::drawSceneMarkers(float x, float y, float w, float h) {
+    // Pontos sem corpo na cena (início do jogador, luzes) ganham um ícone
+    // para dar para ver e clicar.
+    const Mat4 vp = m_engine->camera().viewProjNoJitter();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    auto toScreen = [&](const Vec3& p, ImVec2& out) {
+        const Vec4 c = vp * Vec4(p, 1.0f);
+        if (c.w <= 1e-3f) return false;
+        out = ImVec2(x + (c.x / c.w * 0.5f + 0.5f) * w, y + (c.y / c.w * 0.5f + 0.5f) * h);
+        return out.x >= x && out.y >= y && out.x <= x + w && out.y <= y + h;
+    };
+    ImVec2 s;
+    if (m_engine->hasPlayerStart() && toScreen(m_engine->playerStart(), s)) {
+        const bool sel = m_selection.kind == SelectionKind::Spawn;
+        const ImU32 col = sel ? ImGui::GetColorU32(kAccent) : IM_COL32(90, 200, 120, 230);
+        dl->AddCircle(s, 9.0f, col, 20, 2.5f);
+        dl->AddTriangleFilled(ImVec2(s.x - 5, s.y - 22), ImVec2(s.x + 5, s.y - 22), ImVec2(s.x, s.y - 11), col);
+        dl->AddText(ImVec2(s.x + 12, s.y - 8), col, "Start");
+    }
+    const auto& lights = m_engine->m_deferredLighting.getPointLights();
+    for (size_t i = 0; i < lights.size(); ++i) {
+        if (!toScreen(lights[i].position, s)) continue;
+        const bool sel = m_selection.kind == SelectionKind::Light && m_selection.index == static_cast<int>(i);
+        const Vec3 c = glm::clamp(lights[i].color, Vec3(0.0f), Vec3(1.0f));
+        const ImU32 fill = IM_COL32(int(c.r * 255), int(c.g * 255), int(c.b * 255), lights[i].enabled ? 200 : 60);
+        dl->AddCircleFilled(s, 5.0f, fill);
+        dl->AddCircle(s, 7.0f, sel ? ImGui::GetColorU32(kAccent) : IM_COL32(20, 20, 20, 160), 12, sel ? 2.5f : 1.0f);
+    }
 }
 
 void Editor::drawSelectionBounds(float x, float y, float w, float h) {

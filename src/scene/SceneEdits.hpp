@@ -30,6 +30,9 @@ class Engine;
 //           { name = "guarda", sprite = "assets/sprites/guarda.png", position = {...}, facing = 90 },
 //       },
 //       environment = { time = 18.5, paused = true, weather = "rainy" },
+//       spawn = {x, y, z},   -- onde o jogador começa
+//
+// Luzes com índice além das do mapa são luzes novas, criadas no editor.
 //   }
 //
 // Rotação em graus. O jogo aplica o arquivo ao carregar o mapa, então o que
@@ -90,6 +93,8 @@ struct SceneEdits {
         bool hidden = false; // começa escondido (um script mostra depois)
     };
     std::vector<Character> characters;
+    bool hasSpawn = false;
+    Vec3 spawn{0.0f};
     bool hasEnvironment = false;
     float time = 12.0f;
     bool paused = false;
@@ -97,7 +102,7 @@ struct SceneEdits {
 
     bool empty() const {
         return added.empty() && objects.empty() && copies.empty() && lights.empty() && characters.empty() &&
-               !hasEnvironment;
+               !hasEnvironment && !hasSpawn;
     }
 
     static std::filesystem::path pathFor(const std::string& map);

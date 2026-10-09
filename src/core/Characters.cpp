@@ -4,6 +4,7 @@
 #include "core/Engine.hpp"
 
 #include "core/Logger.hpp"
+#include "game/PlayerController.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -65,6 +66,13 @@ void Engine::walkCharacter(int index, const Vec3& target, float seconds) {
     c.walkTime = 0.0f;
     c.walkDuration = std::max(0.01f, seconds);
     c.walking = true;
+}
+
+void Engine::setPlayerStart(const Vec3& p) {
+    m_hasPlayerStart = true;
+    m_playerStart = p;
+    if (m_playerController) m_playerController->setPos(p);
+    m_camera.setOrbitTarget(p + Vec3(0.0f, 7.2f, 0.0f));
 }
 
 void Engine::clearCharacters() {

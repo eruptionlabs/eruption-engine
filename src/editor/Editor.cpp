@@ -209,6 +209,22 @@ void Editor::registerCommands() {
     add("edit.duplicate", "Edit", "Duplicate", {ImGuiKey_D, true}, [this] { duplicateSelection(); },
         "Copies the selected object next to it.")
         .enabled = [this] { return m_play == PlayState::Editing && m_selection.kind == SelectionKind::Model; };
+    add("edit.snap_floor", "Edit", "Drop to Floor", {ImGuiKey_End}, [this] { snapSelectionToFloor(false); },
+        "Puts the bottom of the selected object on the ground below it.")
+        .enabled = [this] { return m_play == PlayState::Editing && selectionHasTransform(); };
+    {
+        Shortcut altEnd{ImGuiKey_End};
+        altEnd.alt = true;
+        add("edit.snap_pivot", "Edit", "Drop Pivot to Floor", altEnd, [this] { snapSelectionToFloor(true); },
+            "Puts the origin point of the selected object on the ground (keeps sunk trunks and roots sunk).")
+            .enabled = [this] { return m_play == PlayState::Editing && selectionHasTransform(); };
+    }
+    add("add.light", "Add", "Point Light", {}, [this] { addPointLight(); },
+        "Adds a point light above the ground in the middle of the Scene view.")
+        .enabled = isEditing;
+    add("add.player_start", "Add", "Player Start", {}, [this] { setPlayerStartHere(); },
+        "Puts the place where the player starts on the ground in the middle of the Scene view.")
+        .enabled = isEditing;
     add("edit.delete", "Edit", "Delete", {ImGuiKey_Delete}, [this] { deleteSelection(); },
         "Hides the selected object (undo brings it back).")
         .enabled = [this] { return m_selection.kind == SelectionKind::Model || m_selection.kind == SelectionKind::Light; };
@@ -516,6 +532,28 @@ void Editor::update(float dt) {
         std::filesystem::copy_file(testExternal, SceneEdits::pathFor(m_engine->currentMapName()),
                                    std::filesystem::copy_options::overwrite_existing, ec);
     }
+    // ERUPTION_TEST_EDITOR_PROBE=x,z: escreve no log a altura do chão pelos
+    // modelos e pela grade .ter nesse ponto (diagnóstico de chão).
+    static const char* testProbe = std::getenv("ERUPTION_TEST_EDITOR_PROBE");
+    if (testProbe && m_frame == 150) {
+        float x = 0.0f, z = 0.0f;
+        std::sscanf(testProbe, "%f,%f", &x, &z);
+        const Vec3 from(x, 5000.0f, z), down(0.0f, -1.0f, 0.0f);
+        float tm = -1.0f, tt = -1.0f;
+        const int hit = raycastModels(from, down, tm);
+        const bool ter = m_engine->raycastTerrain(from, down, 50000.0f, tt);
+        ERUPTION_LOG_WARN("[PROBE] (%.1f, %.1f): model floor %.2f (%s), terrain grid %.2f, sampleTerrainHeight %.2f", x, z,
+                          hit >= 0 ? 5000.0f - tm : -1.0f,
+                          hit >= 0 ? m_engine->modelRenderer().getInstances()[static_cast<size_t>(hit)].name.c_str() : "-",
+                          ter ? 5000.0f - tt : -1.0f, m_engine->sampleTerrainHeight(x, z));
+    }
+    // ERUPTION_TEST_EDITOR_RAISE=<unidades>: levanta a seleção no frame 150.
+    static const char* testRaise = std::getenv("ERUPTION_TEST_EDITOR_RAISE");
+    if (testRaise && m_frame == 150 && selectionHasTransform()) {
+        Mat4 m = selectionTransform();
+        m[3].y += static_cast<float>(std::atof(testRaise));
+        setSelectionTransform(m);
+    }
     // ERUPTION_TEST_EDITOR_SHOW=aba[:arquivo] (prints): rules:<f>, code:<f>,
     // telemetry, palette:<texto>. ERUPTION_TEST_EDITOR_LANG=pt.
     static const char* testShow = std::getenv("ERUPTION_TEST_EDITOR_SHOW");
@@ -701,10 +739,20 @@ void Editor::drawMenuBar() {
             m_commands.run("edit.redo");
         ImGui::Separator();
         m_commands.menuItem("edit.duplicate");
+        m_commands.menuItem("edit.snap_floor");
+        m_commands.menuItem("edit.snap_pivot");
         m_commands.menuItem("edit.save_prefab");
         m_commands.menuItem("edit.delete");
         m_commands.menuItem("edit.deselect");
         m_commands.menuItem("edit.frame");
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Add")) {
+        m_commands.menuItem("add.light");
+        m_commands.menuItem("add.player_start");
+        ImGui::Separator();
+        ImGui::TextDisabled("Models, prefabs and characters:");
+        ImGui::TextDisabled("drag them from the Project panel");
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Tools")) {
@@ -1032,6 +1080,9 @@ void Editor::play() {
     m_snapshot.characters.clear();
     for (const auto& c : m_engine->characters()) m_snapshot.characters.push_back({c.position, c.facing, c.visible, c.sprite});
     m_snapshot.playerSprite = m_engine->m_charConfig.job;
+    // O jogo começa no início do jogador quando o mapa tem um.
+    if (m_engine->hasPlayerStart() && m_engine->m_playerController)
+        m_engine->m_playerController->setPos(m_engine->playerStart());
 
     Camera& c = m_engine->camera();
     c.setMaxOrbitDistance(m_savedMaxDistance);

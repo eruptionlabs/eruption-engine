@@ -407,6 +407,13 @@ public:
     // Anda quem tem caminho (só com o jogo rodando) e envia os sprites.
     void updateCharacters(float dt, bool moveAlongPaths);
     std::vector<SceneCharacter>& characters() { return m_characters; }
+    // Início do jogador vindo do scene.luau: leva o jogador (e a câmera) até lá.
+    void setPlayerStart(const Vec3& p);
+    bool hasPlayerStart() const { return m_hasPlayerStart; }
+    const Vec3& playerStart() const { return m_playerStart; }
+    void clearPlayerStart() { m_hasPlayerStart = false; }
+    // Só muda o ponto (editor arrastando), sem levar jogador nem câmera.
+    void movePlayerStart(const Vec3& p) { m_hasPlayerStart = true; m_playerStart = p; }
     float computeObstruction() const;
     float computeObstructionUncached() const;
 private:
@@ -1107,6 +1114,8 @@ private:
     static constexpr uint32_t MINIMAP_RES = 256;
     PlayerController* m_playerController = nullptr;
     std::vector<SceneCharacter> m_characters;
+    bool m_hasPlayerStart = false;
+    Vec3 m_playerStart{0.0f};
     bool loadCharacterSprite(const std::string& png, LoadedSprite& out);
     void drawCharacter(SceneCharacter& c, float dt);
 
