@@ -34,4 +34,15 @@ struct ExportReport {
 
 ExportReport exportGame(const ExportOptions& options);
 
+// Perfil de build do jogo exportado: módulos opcionais (opções ERUPTION_MODULE_*
+// do CMake). O som é detectado no projeto (scripts com audio.*, cenas com
+// emissores de som); a rede de PBR nunca vai (o modelo não é exportado).
+struct BuildProfile {
+    bool audio = true;
+};
+bool projectUsesSound(const std::filesystem::path& root);
+// Perfil com que build-export/ foi configurado (false se ainda não existe).
+bool builtProfile(const std::filesystem::path& buildDir, BuildProfile& out);
+std::string profileCMakeFlags(const BuildProfile& p);
+
 } // namespace eruption

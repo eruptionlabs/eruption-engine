@@ -5,6 +5,7 @@
 
 #include "core/Engine.hpp"
 #include "editor/EditorTheme.hpp"
+#include "editor/GameExport.hpp"
 
 #include <imgui.h>
 
@@ -58,11 +59,14 @@ void Editor::buildLeanBinary() {
     ex.building = true;
     ex.buildStatus = "Building the game program (several minutes)...";
     const std::filesystem::path root = m_projectRoot;
-    std::thread([this, root] {
+    BuildProfile profile;
+    profile.audio = ex.audio;
+    std::thread([this, root, profile] {
         const std::string dir = (root / "build-export").string();
         const std::string cmd = "cmake -S \"" + root.string() + "\" -B \"" + dir +
                                 "\" -DCMAKE_BUILD_TYPE=Release -DERUPTION_EDITOR=OFF -DERUPTION_LEAN=ON -DERUPTION_ONNX=OFF "
-                                "-DERUPTION_DEBUG=OFF > \"" + dir + ".log\" 2>&1 && cmake --build \"" + dir +
+                                "-DERUPTION_DEBUG=OFF " + profileCMakeFlags(profile) + " > \"" + dir +
+                                ".log\" 2>&1 && cmake --build \"" + dir +
                                 "\" --target eruption-engine -j4 >> \"" + dir + ".log\" 2>&1";
         const int rc = std::system(cmd.c_str());
         std::lock_guard<std::mutex> lock(m_exportMutex);
@@ -104,8 +108,22 @@ void Editor::drawExportWindow() {
     } else {
         ImGui::TextWrapped("%s", tr("The small game program is not built yet; the export would carry the editor's program."));
     }
+    // Módulos: o que o jogo leva no programa. Sem som, sai a miniaudio (~1 MB).
+    if (!ex.profileDetected) {
+        ex.profileDetected = true;
+        ex.usesSound = projectUsesSound(m_projectRoot);
+        ex.audio = ex.usesSound;
+    }
+    ImGui::Checkbox(tr("Sound"), &ex.audio);
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", ex.usesSound ? tr("(the project plays sound)") : tr("(no sound found in the project)"));
+    BuildProfile built;
+    const bool hasProfile = lean && builtProfile(m_projectRoot / "build-export", built);
+    const bool stale = lean && (!hasProfile || built.audio != ex.audio);
+    if (stale)
+        ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", tr("The game program was built with other modules: rebuild it."));
     ImGui::BeginDisabled(ex.building);
-    if (ImGui::Button(lean ? "Rebuild game program" : "Build game program")) buildLeanBinary();
+    if (ImGui::Button(lean ? tr("Rebuild game program") : tr("Build game program"))) buildLeanBinary();
     ImGui::EndDisabled();
     {
         std::lock_guard<std::mutex> lock(m_exportMutex);

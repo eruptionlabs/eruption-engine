@@ -189,4 +189,37 @@ ExportReport exportGame(const ExportOptions& o) {
     return report;
 }
 
+bool projectUsesSound(const fs::path& root) {
+    std::error_code ec;
+    auto scan = [&](const fs::path& dir, const char* needle) {
+        for (fs::recursive_directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            if (!it->is_regular_file(ec) || it->path().extension() != ".luau") continue;
+            if (it->path().filename().string().find(".d.luau") != std::string::npos) continue; // tipos da API
+            std::ifstream f(it->path(), std::ios::binary);
+            const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            if (text.find(needle) != std::string::npos) return true;
+        }
+        return false;
+    };
+    return scan(root / "assets" / "scripts", "audio.") || scan(root / "assets" / "scenes", "sounds =");
+}
+
+bool builtProfile(const fs::path& buildDir, BuildProfile& out) {
+    std::ifstream f(buildDir / "CMakeCache.txt");
+    if (!f) return false;
+    std::string line;
+    bool found = false;
+    while (std::getline(f, line)) {
+        if (line.rfind("ERUPTION_MODULE_AUDIO:BOOL=", 0) == 0) {
+            out.audio = line.substr(line.find('=') + 1) == "ON";
+            found = true;
+        }
+    }
+    return found;
+}
+
+std::string profileCMakeFlags(const BuildProfile& p) {
+    return std::string("-DERUPTION_MODULE_AUDIO=") + (p.audio ? "ON" : "OFF") + " -DERUPTION_MODULE_NEURAL_PBR=OFF";
+}
+
 } // namespace eruption
