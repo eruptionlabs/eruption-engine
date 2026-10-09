@@ -36,6 +36,7 @@ tools/blender/
 *.log
 engine_log.txt
 imgui.ini
+editor_layout.ini
 debug_*.png
 diagnostic_*.png
 screenshot_*.png

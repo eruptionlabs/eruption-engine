@@ -31,6 +31,13 @@ public:
     static void error(const char* fmt, ...);
     static void fatal(const char* fmt, ...);
 
+    // Destino extra para cada mensagem ja' formatada (o console do editor).
+    // Chamado na thread que gerou o log; o destino cuida da propria trava.
+    using Sink = void (*)(LogLevel level, const char* message, void* user);
+    // Mensagem pronta que ignora o filtro de nível (saída dos scripts do jogo).
+    static void message(LogLevel level, const char* text);
+    static void setSink(Sink sink, void* user);
+
 private:
     static void log(LogLevel level, const char* fmt, std::va_list args);
     static const char* levelToString(LogLevel level);
@@ -38,6 +45,8 @@ private:
 
     static LogLevel s_level;
     static bool s_initialized;
+    static Sink s_sink;
+    static void* s_sinkUser;
 };
 
 } // namespace eruption

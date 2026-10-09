@@ -58,11 +58,18 @@
 #include <string>
 #include <memory>
 #include <deque>
+#include <functional>
 namespace eruption {
 struct LoadedMap;
 class MapLoader;
 class PlayerController;
+class Editor;
+struct ScriptBridge;
+class ScriptHost;
 class Engine {
+    friend class Editor;
+    friend struct ScriptBridge;
+    friend class ScriptHost;
 public:
     Engine();
     ~Engine();
@@ -249,6 +256,24 @@ public:
     };
     TextureStats getTextureStats() const;
     Camera& camera() { return m_camera; }
+
+    // Editor (src/editor/). Com o editor ligado a cena e' desenhada num alvo
+    // proprio, do tamanho do painel Cena, e o swapchain recebe so' a UI.
+    // setEditorMode vale antes de init() (fonte e janela da UI).
+    void setEditorMode(bool on) { m_editorMode = on; }
+    bool editorMode() const { return m_editorMode; }
+    void setEditor(Editor* editor) { m_editor = editor; }
+    // Desenho por cima do jogo (sem editor), dentro do passe de ImGui.
+    void setGameOverlay(std::function<void()> fn) { m_gameOverlay = std::move(fn); }
+    // Tamanho da imagem final da cena: o painel Cena no editor, a janela no jogo.
+    VkExtent2D displayExtent() const {
+        return (m_editor && m_viewportW && m_viewportH) ? VkExtent2D{m_viewportW, m_viewportH}
+                                                        : m_vulkan.swapExtent();
+    }
+    // Novo tamanho do painel Cena, aplicado no comeco do proximo frame.
+    void setViewportSize(uint32_t w, uint32_t h);
+    // Descritor da imagem da cena para ImGui::Image (VK_NULL_HANDLE sem editor).
+    VkDescriptorSet viewportTexture() const { return m_viewportTexture; }
     InputConfig& inputConfig() { return m_inputConfig; }
     CharConfig& charConfig() { return m_charConfig; }
     auto* currentMap() const { return m_currentMap.get(); }
@@ -896,6 +921,9 @@ private:
     // renderArea maior que o attachment e' erro de Vulkan que nao retorna
     // codigo (VUID-VkRenderingInfo-pNext-06079/06080).
     uint32_t m_renderW = 0, m_renderH = 0;
+    // Largura de display do ultimo resize: a escala de render (m_renderW /
+    // isto) se mantem quando a janela ou o painel Cena mudam de tamanho.
+    uint32_t m_displayW = 0;
     VkExtent2D renderExtent() const {
         return (m_renderW && m_renderH) ? VkExtent2D{m_renderW, m_renderH}
                                         : m_vulkan.swapExtent();
@@ -1042,6 +1070,17 @@ private:
     VkDescriptorSet m_minimapCompositeDS = VK_NULL_HANDLE;
     static constexpr uint32_t MINIMAP_RES = 256;
     PlayerController* m_playerController = nullptr;
+
+    bool m_editorMode = false;
+    Editor* m_editor = nullptr;
+    std::function<void()> m_gameOverlay;
+    uint32_t m_viewportW = 0, m_viewportH = 0;
+    VkImage m_viewportImage = VK_NULL_HANDLE;
+    VmaAllocation m_viewportAlloc = VK_NULL_HANDLE;
+    VkImageView m_viewportView = VK_NULL_HANDLE;
+    VkDescriptorSet m_viewportTexture = VK_NULL_HANDLE;
+    void recreateViewportTarget();
+    void destroyViewportTarget();
     bool m_running = false;
     bool m_initialized = false;
     bool m_resized = false;

@@ -86,7 +86,7 @@ void Engine::updateTemporalJitter() {
     const VkExtent2D re = renderExtent();
     const float renderW = float(std::max(1u, re.width));
     const float renderH = float(std::max(1u, re.height));
-    const float ratio = float(std::max(1u, m_vulkan.swapExtent().width)) / renderW;
+    const float ratio = float(std::max(1u, displayExtent().width)) / renderW;
     uint32_t phases = std::max(1u, static_cast<uint32_t>(8.0f * ratio * ratio));
     // ERUPTION_JITTER_PHASES=N (debug): sequencia mais longa - com a cena
     // travada e ERUPTION_TEST_ACCUM, a media de N fases e' o pixel integrado
@@ -205,17 +205,19 @@ void Engine::render() {
 
     if (m_resized) {
         m_vulkan.recreateSwapchain();
-        uint32_t w = m_vulkan.swapExtent().width, h = m_vulkan.swapExtent().height;
-        if (m_renderW && m_renderH && m_vulkan.swapExtent().width) {
-            const float rs = float(m_renderW) / float(m_vulkan.swapExtent().width);
+        const VkExtent2D disp = displayExtent();
+        uint32_t w = disp.width, h = disp.height;
+        const uint32_t prevDispW = m_displayW ? m_displayW : disp.width;
+        if (m_renderW && m_renderH && prevDispW) {
+            const float rs = float(m_renderW) / float(prevDispW);
             if (rs < 0.999f) { w = std::max(64u, uint32_t(w * rs)); h = std::max(64u, uint32_t(h * rs)); }
         }
         m_renderW = w; m_renderH = h;
+        m_displayW = disp.width;
         m_gbuffer.resize(w, h); m_deferredLighting.resize(w, h); m_skybox.resize(w, h);
         m_cameraMotion.resize(w, h);
         m_cameraMotion.bindDepth(m_gbuffer.depthView());
         m_cameraMotion.bindObjectVelocity(m_gbuffer.velocityView());
-        const VkExtent2D disp = m_vulkan.swapExtent();
         if (m_upscalerMode == UpscalerMode::FsrBeforePost) {
             m_postProcessor.resize(disp.width, disp.height);
         } else {
@@ -237,6 +239,7 @@ void Engine::render() {
         bindFsrInputs();
         m_water.setSkyTexture(m_skybox.outputView(), m_skybox.outputSampler());
         m_camera.setPerspective(60.0f, (float)w / (float)h, 0.1f, 50000.0f);
+        recreateViewportTarget();
         m_resized = false;
     }
     // Process deferred deletion of old map contexts
@@ -732,7 +735,7 @@ void Engine::render() {
         }
         // Pixels por unidade de mundo a distancia 1 (descarte por tamanho na tela).
         m_modelRenderer.setScreenMetrics(
-            static_cast<float>(m_vulkan.swapExtent().height) /
+            static_cast<float>(displayExtent().height) /
             (2.0f * std::tan(glm::radians(m_camera.fov()) * 0.5f)));
         // ERUPTION_TEST_FORCE_BASE_LOD=1 (debug): forca a malha CHEIA em toda
         // instancia visivel, mesmo longe - A/B contra o LOD normal para o
@@ -1661,7 +1664,13 @@ void Engine::render() {
 
     m_prevViewProjNoJitter = m_camera.viewProjNoJitter();
 
-    uint32_t sw = m_vulkan.swapExtent().width, sh = m_vulkan.swapExtent().height;
+    // No editor a cena vai para a imagem do painel Cena e o swapchain recebe
+    // so' a UI; no jogo vai direto para o swapchain.
+    const bool toViewport = m_editor && m_viewportImage != VK_NULL_HANDLE;
+    const VkExtent2D sceneExt = toViewport ? VkExtent2D{m_viewportW, m_viewportH} : m_vulkan.swapExtent();
+    const VkImage sceneImage = toViewport ? m_viewportImage : m_vulkan.swapImage(imageIndex);
+    const VkImageView sceneView = toViewport ? m_viewportView : m_vulkan.swapImageView(imageIndex);
+    uint32_t sw = sceneExt.width, sh = sceneExt.height;
     // Era um blit BILINEAR cru (VK_FILTER_LINEAR) daqui pro swapchain - nao
     // existia AA nenhum na engine, e bilinear e' o upscale mais cego que ha'.
     // Agora: FXAA (resolucao de render) -> upscale bicubico Catmull-Rom +
@@ -1676,13 +1685,19 @@ void Engine::render() {
         Profiler::addGpuTime("FSR", m_vulkan.timestampDeltaMs(42, 43));
     }
     m_vulkan.cmdImageBarrier(cmd, m_vulkan.swapImage(imageIndex), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    if (toViewport) {
+        m_vulkan.cmdImageBarrier(cmd, sceneImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    }
     // Com FSR a imagem ja' chega com anti-aliasing e na resolucao de display:
     // o UpscaleAA so' copia (FXAA desligado, Catmull-Rom 1:1, sem nitidez).
     const bool upscaleFromFsr = m_upscalerMode == UpscalerMode::FsrAfterPost;
     m_upscaleAA.render(cmd, upscaleFromFsr ? m_fsr.outputView() : m_postProcessor.outputView(),
                        upscaleFromFsr ? m_fsr.outputImage() : m_postProcessor.outputImage(),
-                       m_vulkan.swapImageView(imageIndex), m_vulkan.swapImage(imageIndex),
+                       sceneView, sceneImage,
                        {sw, sh}, fsrActive() ? false : m_enableFXAA, fsrActive() ? 0.0f : m_aaSharpenAmount);
+    if (toViewport) {
+        m_vulkan.cmdImageBarrier(cmd, sceneImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    }
     // takeScreenshot() (Screenshot.cpp) e o bloco de shimmer logo
     // abaixo dependem de outputImage() estar em TRANSFER_SRC_OPTIMAL no resto
     // do frame - era a pos-condicao do blit antigo. UpscaleAA::render so' LEU
@@ -1739,7 +1754,9 @@ void Engine::render() {
 
     VkRenderingAttachmentInfo swapAttachment{}; swapAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     swapAttachment.imageView = m_vulkan.swapImageView(imageIndex); swapAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    swapAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; swapAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    swapAttachment.loadOp = toViewport ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+    swapAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    swapAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
     m_vulkan.cmdBeginRendering(cmd, {swapAttachment}, nullptr, nullptr, m_vulkan.swapExtent());
 
     if (!m_benchmarkThunderstorm && !(m_benchmarkHeavyRain && m_benchmarkHideHud)) {

@@ -1,3 +1,5 @@
+#include "editor/Editor.hpp"
+#include "script/ScriptHost.hpp"
 #include "game/DefaultApplication.hpp"
 #include <cstdlib>
 #include <sstream>
@@ -186,6 +188,19 @@ void DefaultApplication::onInit(Engine& engine) {
         float f = (m_cloudFalloff >= 0.0f) ? m_cloudFalloff : 1.0f;
         engine.setLocalCloudParams(r, r * (40.0f / 60.0f), f);
     }
+    if (engine.editorMode()) {
+        m_editor = std::make_unique<Editor>();
+        m_editor->init(engine);
+        engine.setEditor(m_editor.get());
+    }
+    m_scripts = std::make_unique<ScriptHost>();
+    if (!m_scripts->init(engine, "assets/scripts")) m_scripts.reset();
+    if (m_editor) m_editor->setScriptHost(m_scripts.get());
+    else if (m_scripts)
+        engine.setGameOverlay([this] {
+            const ImVec2 ds = ImGui::GetIO().DisplaySize;
+            if (m_scripts) m_scripts->drawMessages(0.0f, 0.0f, ds.x, ds.y);
+        });
     if (!m_initialMap.empty()) {
         // For headless/screenshot runs and large single-file GLB maps, load
         // synchronously so the first rendered frame already has all geometry and
@@ -211,6 +226,8 @@ void DefaultApplication::onInit(Engine& engine) {
         }
     }
     m_hud.init(&engine, m_player.get());
+    // Sem editor o jogo começa direto.
+    if (!m_editor && m_scripts) m_scripts->start();
 }
 void DefaultApplication::onUpdate(float deltaTime) {
     if (m_engine && !m_mapSequence.empty() && --m_mapSequenceCountdown <= 0) {
@@ -219,12 +236,39 @@ void DefaultApplication::onUpdate(float deltaTime) {
         ERUPTION_LOG_WARN("[MAPSEQ] carga fria #%zu: %s", m_mapSequenceIndex, next.c_str());
         m_engine->loadMap(next);
     }
-    if (m_engine && m_player) m_player->update(deltaTime);
+    if (m_scripts) m_scripts->poll();
+    if (m_editor) {
+        m_editor->update(deltaTime);
+        // Scripts começam no Play e param no Stop; a pausa só congela.
+        if (m_scripts && m_editor->inPlayMode() != m_scriptsPlaying) {
+            m_scriptsPlaying = m_editor->inPlayMode();
+            if (m_scriptsPlaying) m_scripts->start(); else m_scripts->stop();
+        }
+        // No editor a lógica de jogo só roda com Play (ou um passo em pausa).
+        if (m_editor->gameRunning()) {
+            if (m_player) m_player->update(deltaTime);
+            if (m_scripts) m_scripts->update(deltaTime);
+        }
+        m_editor->consumeStep();
+    } else {
+        if (m_engine && m_player) m_player->update(deltaTime);
+        if (m_scripts) m_scripts->update(deltaTime);
+    }
     m_hud.update();
 }
 void DefaultApplication::onRender(Engine& /*engine*/) {
 }
 void DefaultApplication::onShutdown() {
+    if (m_engine) m_engine->setGameOverlay(nullptr);
+    if (m_scripts) {
+        m_scripts->shutdown();
+        if (m_editor) m_editor->setScriptHost(nullptr);
+        m_scripts.reset();
+    }
+    if (m_editor) {
+        m_editor->shutdown();
+        m_editor.reset();
+    }
     m_hud.shutdown();
     if (m_player && m_engine) {
         m_player->shutdown();

@@ -8,6 +8,18 @@ namespace eruption {
 
 LogLevel Logger::s_level = LogLevel::Warning;
 bool Logger::s_initialized = false;
+Logger::Sink Logger::s_sink = nullptr;
+void* Logger::s_sinkUser = nullptr;
+
+void Logger::message(LogLevel level, const char* text) {
+    std::fprintf(stderr, "%s%s\033[0m\n", levelToColor(level), text);
+    if (Sink sink = s_sink) sink(level, text, s_sinkUser);
+}
+
+void Logger::setSink(Sink sink, void* user) {
+    s_sinkUser = user;
+    s_sink = sink;
+}
 
 void Logger::init() {
     s_initialized = true;
@@ -60,9 +72,17 @@ void Logger::log(LogLevel level, const char* fmt, std::va_list args) {
     const char* color = levelToColor(level);
     const char* reset = "\033[0m";
 
+    std::va_list sinkArgs;
+    va_copy(sinkArgs, args);
     std::fprintf(stderr, "%s[%s] [%s] ", color, timeBuf, levelToString(level));
     std::vfprintf(stderr, fmt, args);
     std::fprintf(stderr, "%s\n", reset);
+    if (Sink sink = s_sink) {
+        char msg[1024];
+        std::vsnprintf(msg, sizeof(msg), fmt, sinkArgs);
+        sink(level, msg, s_sinkUser);
+    }
+    va_end(sinkArgs);
 }
 
 void Logger::trace(const char* fmt, ...) { std::va_list args; va_start(args, fmt); log(LogLevel::Trace, fmt, args); va_end(args); }

@@ -7,6 +7,7 @@
 // Nada de logica mudou nessa passagem: e' recorta-e-cola verificado por
 // screenshot deterministico (RMS 0.0 contra o binario anterior).
 
+#include "editor/Editor.hpp"
 #include "core/Engine.hpp"
 #include "core/EngineInternal.hpp"
 #include "renderer/PostFormat.hpp"
@@ -500,6 +501,12 @@ void Engine::renderImGui() {
     // Cloud shadows: base strength = sun/(sun+ambient), so a dense cloud
     // darkens the ground like map geometry shadows (author feedback 2026-08-10).
     m_cloudLayerRenderer.setSceneAmbientIntensity(env.ambientIntensity);
+
+    if (m_editor) {
+        m_editor->drawUI();
+        if (!m_editor->showLegacyTools()) return;
+    }
+    if (!m_editor && m_gameOverlay) m_gameOverlay();
 
     float zoomPercent = 1.0f - (m_camera.orbitDistance() - 10.0f) / (1000.0f - 10.0f);
 

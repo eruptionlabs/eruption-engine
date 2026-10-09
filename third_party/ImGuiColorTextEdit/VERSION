@@ -1,0 +1,1 @@
+BalazsJako/ImGuiColorTextEdit ca2f9f1462e3b60e56351bc466acda448c5ea50d (2025-11-24). Mudanca local: #include "imgui_internal.h" em TextEditor.cpp (PushItemFlag no ImGui 1.90).

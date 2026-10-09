@@ -18,6 +18,9 @@ private:
     void parseArgs(int argc, char** argv);
     Engine* m_engine = nullptr;
     std::unique_ptr<class PlayerController> m_player;
+    std::unique_ptr<class Editor> m_editor;
+    std::unique_ptr<class ScriptHost> m_scripts;
+    bool m_scriptsPlaying = false;
     HudRenderer m_hud;
     bool m_autoExit = false;
     bool m_autoTest = false;

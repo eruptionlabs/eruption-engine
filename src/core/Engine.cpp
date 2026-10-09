@@ -177,6 +177,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     Logger::init();
     
     if (!m_window.init(width, height, title)) return false;
+    if (m_editorMode) m_window.maximize();
 
     width = m_window.width();
     height = m_window.height();
@@ -254,6 +255,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         }
         m_renderW = static_cast<uint32_t>(width);
         m_renderH = static_cast<uint32_t>(height);
+        m_displayW = m_vulkan.swapExtent().width;
     }
     // Upscaler: env > preset > FXAA. Decidido ANTES do G-buffer: a velocidade de
     // objeto (6o alvo) depende dele. Com FSR o post_scale e' ignorado (abaixo).
@@ -1016,6 +1018,7 @@ void Engine::shutdown() {
 
     shutdownSplashLogo();
     shutdownMinimap();
+    destroyViewportTarget();
     shutdownImGui();
 
     m_vulkan.shutdown();
@@ -2185,8 +2188,30 @@ void Engine::initImGui() {
     vkCreateDescriptorPool(m_vulkan.device(), &poolInfo, nullptr, &m_imguiPool);
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // Layout dos painéis do editor, por usuário (fora do git).
+    if (m_editorMode) io.IniFilename = "editor_layout.ini";
     io.Fonts->Clear();
-    ImFontConfig fontCfg; fontCfg.SizePixels = 14.0f; io.Fonts->AddFontDefault(&fontCfg);
+    // O editor usa uma fonte proporcional do sistema quando existe; o jogo
+    // mantem a fonte embutida do ImGui.
+    bool uiFont = false;
+    if (m_editorMode) {
+        static const char* kUiFonts[] = {
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "C:/Windows/Fonts/segoeui.ttf",
+        };
+        for (const char* f : kUiFonts) {
+            if (!std::filesystem::exists(f)) continue;
+            static const ImWchar kLatin[] = { 0x0020, 0x00FF, 0x2010, 0x2027, 0x2190, 0x21FF, 0x2300, 0x23FF, 0x25A0, 0x25FF, 0 };
+            ImFontConfig uiCfg; uiCfg.OversampleH = 2; uiCfg.OversampleV = 2;
+            uiFont = io.Fonts->AddFontFromFileTTF(f, 16.0f, &uiCfg, kLatin) != nullptr;
+            if (uiFont) break;
+        }
+    }
+    ImFontConfig fontCfg; fontCfg.SizePixels = 14.0f;
+    if (!uiFont) io.Fonts->AddFontDefault(&fontCfg);
     if (std::filesystem::exists("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")) {
         static const ImWchar koreanRanges[] = { 0xAC00, 0xD7A3, 0x3131, 0x318E, 0x4E00, 0x9FFF, 0xFF00, 0xFFEF, 0 };
         ImFontConfig cjkCfg; cjkCfg.MergeMode = true; cjkCfg.SizePixels = 14.0f; cjkCfg.OversampleH = 1; cjkCfg.OversampleV = 1;
@@ -2202,6 +2227,48 @@ void Engine::initImGui() {
     renderingInfo.colorAttachmentCount = 1; VkFormat swapFormat = m_vulkan.swapFormat();
     renderingInfo.pColorAttachmentFormats = &swapFormat; initInfo.PipelineRenderingCreateInfo = renderingInfo;
     ImGui_ImplVulkan_Init(&initInfo);
+}
+
+void Engine::setViewportSize(uint32_t w, uint32_t h) {
+    w = std::max(64u, w);
+    h = std::max(64u, h);
+    if (w == m_viewportW && h == m_viewportH) return;
+    m_viewportW = w;
+    m_viewportH = h;
+    m_resized = true;
+}
+
+void Engine::destroyViewportTarget() {
+    if (m_viewportTexture != VK_NULL_HANDLE) ImGui_ImplVulkan_RemoveTexture(m_viewportTexture);
+    if (m_viewportView != VK_NULL_HANDLE) vkDestroyImageView(m_vulkan.device(), m_viewportView, nullptr);
+    if (m_viewportImage != VK_NULL_HANDLE) vmaDestroyImage(m_vulkan.allocator(), m_viewportImage, m_viewportAlloc);
+    m_viewportTexture = VK_NULL_HANDLE;
+    m_viewportView = VK_NULL_HANDLE;
+    m_viewportImage = VK_NULL_HANDLE;
+    m_viewportAlloc = VK_NULL_HANDLE;
+}
+
+// Chamado so' dentro do bloco de resize do render(), depois do waitIdle do
+// swapchain: a imagem antiga nao esta' mais em uso por nenhum frame.
+void Engine::recreateViewportTarget() {
+    destroyViewportTarget();
+    if (!m_editor || !m_viewportW || !m_viewportH) return;
+    const VkFormat fmt = m_vulkan.swapFormat();
+    if (!m_vulkan.createImage(m_viewportW, m_viewportH, fmt,
+                              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                  VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                              VMA_MEMORY_USAGE_GPU_ONLY, m_viewportImage, m_viewportAlloc)) {
+        ERUPTION_LOG_ERROR("Editor: falha ao criar a imagem da cena %ux%u", m_viewportW, m_viewportH);
+        m_viewportImage = VK_NULL_HANDLE;
+        m_viewportAlloc = VK_NULL_HANDLE;
+        return;
+    }
+    VkImageViewCreateInfo vi{}; vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = m_viewportImage; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = fmt;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCreateImageView(m_vulkan.device(), &vi, nullptr, &m_viewportView);
+    const VkSampler sampler = m_uiDefaultSampler != VK_NULL_HANDLE ? m_uiDefaultSampler : m_defaultSampler;
+    m_viewportTexture = ImGui_ImplVulkan_AddTexture(sampler, m_viewportView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 void Engine::shutdownImGui() {

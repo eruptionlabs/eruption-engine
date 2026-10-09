@@ -47,7 +47,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG v1.90.4
+    GIT_TAG v1.90.4-docking
     GIT_SHALLOW TRUE
 )
 FetchContent_Declare(
@@ -88,6 +88,28 @@ set(DRACO_TRANSCODER_SUPPORTED OFF CACHE BOOL "" FORCE)
 set(DRACO_BACKWARDS_COMPATIBILITY OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(glfw glm vma imgui nlohmann_json tinygltf draco)
+
+# Luau: linguagem de script do jogo (MIT). VM + compilador; o gerador de
+# codigo nativo entra so' onde a plataforma permite (desktop e Android; no
+# iOS a VM interpreta).
+FetchContent_Declare(
+    luau
+    GIT_REPOSITORY https://github.com/luau-lang/luau.git
+    GIT_TAG 0.741
+    GIT_SHALLOW TRUE
+)
+set(LUAU_BUILD_CLI OFF CACHE BOOL "" FORCE)
+set(LUAU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LUAU_BUILD_WEB OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(luau)
+foreach(luau_target Luau.Ast Luau.Compiler Luau.Config Luau.Analysis Luau.EqSat Luau.CodeGen Luau.VM Luau.Common Luau.Require Luau.RequireNavigator Luau.CLI.lib)
+    if(TARGET ${luau_target})
+        get_target_property(_luau_type ${luau_target} TYPE)
+        if(NOT _luau_type STREQUAL "INTERFACE_LIBRARY")
+            target_compile_options(${luau_target} PRIVATE -w)
+        endif()
+    endif()
+endforeach()
 
 # Avoid stb_image conflicts with the engine's own ImageUtils.cpp implementation.
 target_compile_definitions(tinygltf PRIVATE
@@ -347,6 +369,9 @@ endif()
 # 3D). Vendorizado (MIT, Cedric Guillemet) por reprodutibilidade
 # de build offline, copiado do proprio exemplo do tinygltf que ja' estava
 # em _deps - mesma origem, sem dependencia nova pra baixar.
+# Editor de texto com cor de sintaxe para o painel de codigo do editor.
+list(APPEND SOURCES "${CMAKE_SOURCE_DIR}/third_party/ImGuiColorTextEdit/TextEditor.cpp")
+
 if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/ImGuizmo/ImGuizmo.h")
     list(APPEND SOURCES "${CMAKE_SOURCE_DIR}/third_party/ImGuizmo/ImGuizmo.cpp")
     message(STATUS "Gizmo de viewport: ImGuizmo encontrado")
@@ -445,6 +470,7 @@ target_include_directories(eruption-engine PRIVATE
     ${ERUPTION_BC7ENC_DIR}
     ${CMAKE_SOURCE_DIR}/third_party/meshoptimizer
     ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo
+    ${CMAKE_SOURCE_DIR}/third_party/ImGuiColorTextEdit
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
     ${nlohmann_json_SOURCE_DIR}/include
@@ -466,6 +492,7 @@ target_include_directories(eruption-engine SYSTEM PRIVATE
     ${tinygltf_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/third_party/stb
     ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo
+    ${CMAKE_SOURCE_DIR}/third_party/ImGuiColorTextEdit
 )
 
 # Link libraries
@@ -482,6 +509,10 @@ target_link_libraries(eruption-engine PRIVATE
     Threads::Threads
     z
     Iconv::Iconv
+    Luau.Ast
+    Luau.Compiler
+    Luau.VM
+    Luau.CodeGen
 )
 
 # Threads
