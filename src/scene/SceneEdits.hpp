@@ -31,6 +31,7 @@ class Engine;
 //       },
 //       environment = { time = 18.5, paused = true, weather = "rainy" },
 //       spawn = {x, y, z},   -- onde o jogador começa
+//       terrain = { layers = { "assets/textures/grama.png", ... } },  -- camadas pintáveis
 //
 // Luzes com índice além das do mapa são luzes novas, criadas no editor.
 //   }
@@ -95,6 +96,9 @@ struct SceneEdits {
     std::vector<Character> characters;
     bool hasSpawn = false;
     Vec3 spawn{0.0f};
+    // Texturas das camadas pintadas no editor (mapas sem splat próprio); as
+    // máscaras ficam em <mapa>.splat0/1.png ao lado do arquivo.
+    std::vector<std::string> terrainLayers;
     bool hasEnvironment = false;
     float time = 12.0f;
     bool paused = false;
@@ -102,10 +106,12 @@ struct SceneEdits {
 
     bool empty() const {
         return added.empty() && objects.empty() && copies.empty() && lights.empty() && characters.empty() &&
-               !hasEnvironment && !hasSpawn;
+               !hasEnvironment && !hasSpawn && terrainLayers.empty();
     }
 
     static std::filesystem::path pathFor(const std::string& map);
+    // O arquivo de cena do mapa contém `word` (decisão barata antes de carregar).
+    static bool fileMentions(const std::string& map, const char* word);
     // Falso se o arquivo existe mas não pôde ser lido (mensagem em `error`).
     bool load(const std::filesystem::path& file, std::string& error);
     std::string serialize(const std::string& map) const;

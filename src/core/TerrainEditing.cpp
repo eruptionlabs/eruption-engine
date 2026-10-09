@@ -62,6 +62,7 @@ void Engine::prepareHeightEdits(LoadedMap& map, std::vector<ModelAsset>& models)
     h.offX = ter.offsetX;
     h.offZ = ter.offsetZ;
     h.assetPath = map.models.front().filePath;
+    h.mapName = map.mapName;
     h.base.resize(size_t(h.w) * h.d);
     for (size_t g = 0; g < h.base.size(); ++g) h.base[g] = -ter.cubes[g].height[0];
     h.delta.assign(h.base.size(), 0.0f);
@@ -355,7 +356,7 @@ std::vector<float> Engine::heightDeltaRegion(int x0, int z0, int x1, int z1) con
 bool Engine::saveHeightDelta(std::string& error) const {
     const HeightEdit& h = m_heightEdit;
     if (!h.active) return true;
-    const fs::path path = heightPathFor(m_currentMapName);
+    const fs::path path = heightPathFor(h.mapName.empty() ? m_currentMapName : h.mapName);
     const bool any = std::any_of(h.delta.begin(), h.delta.end(), [](float v) { return v != 0.0f; });
     std::error_code ec;
     if (!any) {

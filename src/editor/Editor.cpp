@@ -523,19 +523,28 @@ void Editor::update(float dt) {
         else
             log(LogLevel::Error, error);
     }
-    // ERUPTION_TEST_EDITOR_SCULPT=u,v,modo (0 subir, 1 suavizar, 2 aplainar,
-    // 3 baixar): um traço de pincel de 60 frames no ponto (u,v) da cena, a
+    // ERUPTION_TEST_EDITOR_SCULPT=u,v,modo[,camada] (0 subir, 1 suavizar,
+    // 2 aplainar, 3 baixar, 4 pintar a camada): um traço de 60 frames em (u,v), a
     // partir do frame 200, com o mesmo desfazer do mouse.
+    // ERUPTION_TEST_EDITOR_LAYER=<png>: camada de terreno nova no frame 190.
+    static const char* testLayer = std::getenv("ERUPTION_TEST_EDITOR_LAYER");
+    if (testLayer && m_frame == 190) {
+        if (m_engine->addSplatLayer(testLayer)) m_terrainDirty = true;
+        else log(LogLevel::Error, std::string("Could not add terrain layer ") + testLayer);
+    }
     static const char* testSculpt = std::getenv("ERUPTION_TEST_EDITOR_SCULPT");
     if (testSculpt && m_frame >= 200 && m_frame <= 260) {
         float u = 0.5f, v = 0.5f;
-        int mode = 0;
-        std::sscanf(testSculpt, "%f,%f,%d", &u, &v, &mode);
+        int mode = 0, layer = 0;
+        std::sscanf(testSculpt, "%f,%f,%d,%d", &u, &v, &mode, &layer);
         TerrainBrush& b = m_brush;
         Vec3 at;
         if (m_frame == 200 && groundPointAt(u, v, at)) {
             b.stroking = true;
-            b.snapshot = m_engine->heightEdit().delta;
+            b.paint = mode == 4;
+            b.layer = layer;
+            if (b.paint) m_engine->beginSplatEditing();
+            b.snapshot = b.paint ? m_engine->splatEdit().weights : m_engine->heightEdit().delta;
             b.rect[0] = b.rect[1] = INT32_MAX;
             b.rect[2] = b.rect[3] = INT32_MIN;
             b.cursor = at;
@@ -545,8 +554,12 @@ void Editor::update(float dt) {
             const Engine::SculptMode modes[] = {Engine::SculptMode::Raise, Engine::SculptMode::Smooth,
                                                 Engine::SculptMode::Flatten, Engine::SculptMode::Lower};
             int r[4];
-            if (m_engine->sculptTerrain(modes[std::clamp(mode, 0, 3)], Vec2(b.cursor.x, b.cursor.z), b.size * 2.0f,
-                                        b.strength * 2.0f, b.falloff, b.flattenTo, 1.0f / 60.0f, r)) {
+            const bool ok = b.paint ? m_engine->paintSplat(b.layer, Vec2(b.cursor.x, b.cursor.z), b.size * 2.0f, 4.0f, b.falloff,
+                                                           1.0f / 60.0f, false, r)
+                                    : m_engine->sculptTerrain(modes[std::clamp(mode, 0, 3)], Vec2(b.cursor.x, b.cursor.z),
+                                                              b.size * 2.0f, b.strength * 2.0f, b.falloff, b.flattenTo,
+                                                              1.0f / 60.0f, r);
+            if (ok) {
                 b.rect[0] = std::min(b.rect[0], r[0]);
                 b.rect[1] = std::min(b.rect[1], r[1]);
                 b.rect[2] = std::max(b.rect[2], r[2]);

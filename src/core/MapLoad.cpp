@@ -17,6 +17,7 @@
 #include "utils/ImageUtils.hpp"
 #include "formats/MapLoader.hpp"
 #include "formats/ModelDataConverter.hpp"
+#include "scene/SceneEdits.hpp"
 #include "renderer/WeatherTypes.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <vk_mem_alloc.h>
@@ -140,6 +141,7 @@ bool Engine::loadMap(const std::string& name) {
     m_vulkan.waitIdle();
     clearCharacters(); // os do mapa novo vêm do scene.luau dele
     clearPlayerStart();
+    endSplatEditing();
 
     // GERACAO DO CACHE DE ASSET. Ate 2026-09-05 so' o warp (performMapSwap)
     // avancava a geracao e expulsava textura/malha velha do GlobalAssetCache;
@@ -393,14 +395,18 @@ bool Engine::loadMap(const std::string& name) {
     }
 
     auto _tLMM = std::chrono::steady_clock::now();
-    m_modelRenderer.setKeepGroundVertices(m_editorMode); // pincel de terreno
+    // Cópia do chão na CPU: pincel do editor, ou pintura salva que o jogo
+    // aplica nos vértices (mapas sem splat próprio).
+    m_modelRenderer.setKeepGroundVertices(m_editorMode || hasSavedSplat(name) ||
+                                          SceneEdits::fileMentions(name, "terrain"));
     m_modelRenderer.loadMapModels(genericModels, genericInstances, modelCenterX, modelCenterZ);
     eruption::clearPbrTextureDataPrewarm(); // free any pre-decoded PBR data not consumed
     ERUPTION_LOG_WARN("Engine::loadMap: loadMapModels took %lld ms",
         (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - _tLMM).count());
 
     flushPendingUploads();
-    if (m_editorMode) bindHeightEditToMeshes();
+    if (!m_modelRenderer.groundMeshes().empty()) bindHeightEditToMeshes();
+    if (hasSavedSplat(name)) beginSplatEditing(); // máscaras pintadas no editor
 
 
     ERUPTION_LOG_WARN("Engine::loadMap: ModelRenderer has %zu meshes, %zu instances, "

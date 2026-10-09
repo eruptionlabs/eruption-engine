@@ -165,6 +165,7 @@ private:
     void endTerrainStroke();
     void drawTerrainBrush(float x, float y, float w, float h);
     void drawTerrainPanel();
+    void drawSplatLayers();
     bool savePrefab(const std::string& path);
     void drawPrefabDialog();
     // Importador de folha de sprites (EditorSprites.cpp)
@@ -264,12 +265,14 @@ private:
     bool m_showSpriteImporter = false;
     struct TerrainBrush {
         int mode = 0; // 0 subir/baixar, 1 suavizar, 2 aplainar
+        bool paint = false; // aba Paint: pinta camadas em vez de esculpir
+        int layer = 0;      // camada pintada (-1 = base)
         float size = 40.0f, strength = 20.0f, falloff = 0.5f;
         bool stroking = false, hasCursor = false;
         Vec3 cursor{0.0f};
         float flattenTo = 0.0f;
         int rect[4] = {0, 0, -1, -1};
-        std::vector<float> snapshot; // delta inteiro no começo do traço (desfazer)
+        std::vector<float> snapshot; // delta (ou pesos) inteiro no começo do traço (desfazer)
     } m_brush;
     bool m_terrainDirty = false;
     struct SpriteImport {

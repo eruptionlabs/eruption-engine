@@ -389,6 +389,7 @@ void Engine::render() {
     m_spriteRenderer.flushUploads(cmd);
     // Vértices do chão mudados pelo pincel de terreno (editor).
     m_modelRenderer.flushVertexPatches(cmd);
+    flushSplatUploads(cmd);
 
     // ERUPTION_TEST_CPU_MARKS=1 (debug): collect the per-stage CPU timings in any
     // run, not just the benchmark modes, so a plain --screenshot capture can

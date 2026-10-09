@@ -13,6 +13,7 @@
 #include <glm/gtx/euler_angles.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -141,6 +142,14 @@ fs::path SceneEdits::pathFor(const std::string& map) {
     return fs::path("assets/scenes") / (map + ".scene.luau");
 }
 
+bool SceneEdits::fileMentions(const std::string& map, const char* word) {
+    std::ifstream f(pathFor(map), std::ios::binary);
+    if (!f) return false;
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return ss.str().find(word) != std::string::npos;
+}
+
 bool SceneEdits::load(const fs::path& file, std::string& error) {
     *this = SceneEdits{};
     std::error_code ec;
@@ -261,6 +270,21 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
 
     hasSpawn = readVec(L, root, "spawn", spawn);
 
+    lua_getfield(L, root, "terrain");
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, "layers");
+        if (lua_istable(L, -1)) {
+            const int n = lua_objlen(L, -1);
+            for (int i = 1; i <= n; ++i) {
+                lua_rawgeti(L, -1, i);
+                if (lua_isstring(L, -1)) terrainLayers.push_back(lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+
     lua_getfield(L, root, "environment");
     if (lua_istable(L, -1)) {
         const int t = lua_gettop(L);
@@ -335,6 +359,11 @@ std::string SceneEdits::serialize(const std::string& map) const {
         o << "    },\n";
     }
     if (hasSpawn) o << "    spawn = " << vec(spawn) << ",\n";
+    if (!terrainLayers.empty()) {
+        o << "    terrain = { layers = {";
+        for (size_t i = 0; i < terrainLayers.size(); ++i) o << (i ? ", " : " ") << quoted(terrainLayers[i]);
+        o << " } },\n";
+    }
     if (hasEnvironment) {
         o << "    environment = { time = " << num(time) << ", paused = " << (paused ? "true" : "false");
         if (!weather.empty()) o << ", weather = " << quoted(weather);
@@ -404,6 +433,13 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
     if (hasSpawn) {
         engine.setPlayerStart(spawn);
         ++applied;
+    }
+    const auto present = engine.splatLayerFiles();
+    for (const auto& layer : terrainLayers) {
+        if (std::find(present.begin(), present.end(), layer) != present.end()) continue; // recarga da cena
+        if (engine.splatLayerCount() >= 8) break;
+        if (engine.addSplatLayer(layer)) ++applied;
+        else ERUPTION_LOG_WARN("Terrain layer %s could not be loaded", layer.c_str());
     }
     if (hasEnvironment) {
         engine.dayNightCycle().setTimeOfDay(time / 24.0f);
