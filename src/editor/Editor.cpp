@@ -9,9 +9,14 @@
 #include <imgui_internal.h>
 #include <GLFW/glfw3.h>
 
+#if defined(__x86_64__) || defined(__i386__)
+#include <cpuid.h>
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 
 namespace eruption {
@@ -25,6 +30,7 @@ constexpr const char* kWinProject = "Project###Project";
 constexpr const char* kWinConsole = "Console###Console";
 constexpr const char* kWinRules = "Rules###Rules";
 constexpr const char* kWinCode = "Code###Code";
+constexpr const char* kWinTelemetry = "Telemetry###Telemetry";
 
 
 bool containsAllWords(const std::string& text, const char* query) {
@@ -45,8 +51,36 @@ bool containsAllWords(const std::string& text, const char* query) {
 
 } // namespace
 
+namespace {
+// Nome comercial do processador (x86: instrução CPUID; outros: vazio).
+std::string cpuName() {
+#if defined(__x86_64__) || defined(__i386__)
+    unsigned regs[12] = {};
+    if (__get_cpuid(0x80000000u, &regs[0], &regs[1], &regs[2], &regs[3]) && regs[0] >= 0x80000004u) {
+        for (unsigned i = 0; i < 3; ++i)
+            __get_cpuid(0x80000002u + i, &regs[i * 4], &regs[i * 4 + 1], &regs[i * 4 + 2], &regs[i * 4 + 3]);
+        std::string name(reinterpret_cast<const char*>(regs), sizeof(regs));
+        name.erase(name.find('\0') == std::string::npos ? name.size() : name.find('\0'));
+        for (const char* junk : {"(R)", "(TM)", " CPU", "13th Gen ", "12th Gen ", "14th Gen "}) {
+            for (size_t at; (at = name.find(junk)) != std::string::npos;) name.erase(at, std::strlen(junk));
+        }
+        const size_t first = name.find_first_not_of(' ');
+        return first == std::string::npos ? std::string() : name.substr(first);
+    }
+#endif
+    return {};
+}
+} // namespace
+
 bool Editor::init(Engine& engine) {
     m_engine = &engine;
+    m_hardware = engine.vulkan().gpuName();
+    for (const char* junk : {"NVIDIA ", "GeForce ", "AMD ", "Radeon(TM) "}) {
+        const size_t at = m_hardware.find(junk);
+        if (at != std::string::npos) m_hardware.erase(at, std::strlen(junk));
+    }
+    const std::string cpu = cpuName();
+    if (!cpu.empty()) m_hardware += "  |  " + cpu;
     m_projectRoot = std::filesystem::current_path();
     m_projectDir = m_projectRoot;
 
@@ -234,6 +268,11 @@ void Editor::registerCommands() {
     panel("window.console", "Console", &m_showConsole);
     panel("window.rules", "Rules (event sheet)", &m_showRules);
     panel("window.code", "Code", &m_showCode);
+    {
+        auto& c = add("window.telemetry", "Window", "Telemetry", {ImGuiKey_F3}, [this] { m_showTelemetry = !m_showTelemetry; },
+                      "FPS, frame time, CPU and GPU cost per pass, video memory.");
+        c.checked = [this] { return m_showTelemetry; };
+    }
     add("window.lang_en", "Window", "Language: English", {}, [this] {
         m_lang = UiLanguage::English;
         ImGui::MarkIniSettingsDirty();
@@ -339,16 +378,77 @@ void Editor::buildDefaultLayout(unsigned int dockspaceId) {
     ImGui::DockBuilderDockWindow(kWinInspector, right);
     ImGui::DockBuilderDockWindow(kWinProject, bottom);
     ImGui::DockBuilderDockWindow(kWinConsole, bottom);
+    ImGui::DockBuilderDockWindow(kWinTelemetry, bottom);
     ImGui::DockBuilderFinish(dockspaceId);
-    m_showHierarchy = m_showInspector = m_showProject = m_showConsole = m_showRules = m_showCode = true;
+    m_showHierarchy = m_showInspector = m_showProject = m_showConsole = m_showRules = m_showCode = m_showTelemetry = true;
+    m_focusScene = true;
 }
 
 void Editor::update(float dt) {
     if (!m_engine) return;
     ++m_frame;
+    recordFrameTime(dt);
     // ERUPTION_TEST_EDITOR_ASSET=caminho (teste): abre a prévia desse asset.
     static const char* testAsset = std::getenv("ERUPTION_TEST_EDITOR_ASSET");
     if (testAsset && m_frame == 30) selectAsset(testAsset);
+    // ERUPTION_TEST_EDITOR_SELECT=trecho (teste/prints): seleciona e enquadra o
+    // modelo mais perto da câmera cujo nome contém o trecho.
+    static const char* testSelect = std::getenv("ERUPTION_TEST_EDITOR_SELECT");
+    if (testSelect && m_frame == 120) {
+        // Termina com "!": seleciona sem aproximar a câmera.
+        std::string want = testSelect;
+        const bool keepCamera = !want.empty() && want.back() == '!';
+        if (keepCamera) want.pop_back();
+        const auto& insts = m_engine->modelRenderer().getInstances();
+        const Vec3 at = m_engine->camera().target();
+        int best = -1;
+        float bestD = 1e30f;
+        for (size_t i = 0; i < insts.size(); ++i) {
+            if (insts[i].name.find(want) == std::string::npos) continue;
+            const float d = glm::length(insts[i].worldCenter - at);
+            if (d < bestD) { bestD = d; best = static_cast<int>(i); }
+        }
+        if (best >= 0) {
+            select({SelectionKind::Model, best});
+            if (!keepCamera) frameSelection();
+        }
+    }
+    // ERUPTION_TEST_EDITOR_SHOW=aba[:arquivo] (prints): rules:<f>, code:<f>,
+    // telemetry, palette:<texto>. ERUPTION_TEST_EDITOR_LANG=pt.
+    static const char* testShow = std::getenv("ERUPTION_TEST_EDITOR_SHOW");
+    if (testShow && m_frame == 160) {
+        std::string all = testShow;
+        size_t start = 0;
+        while (start <= all.size()) {
+            const size_t comma = all.find(',', start);
+            const std::string spec = all.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+            start = comma == std::string::npos ? all.size() + 1 : comma + 1;
+            const size_t colon = spec.find(':');
+            const std::string what = spec.substr(0, colon);
+            const std::string arg = colon == std::string::npos ? std::string() : spec.substr(colon + 1);
+            if (what == "rules") { rulesLoad(arg); m_pendingFocus.push_back(kWinRules); }
+            else if (what == "code") { codeOpen(arg); m_pendingFocus.push_back(kWinCode); }
+            else if (what == "scene") m_pendingFocus.push_back(kWinScene);
+            else if (what == "telemetry") m_pendingFocus.push_back(kWinTelemetry);
+            else if (what == "project") m_pendingFocus.push_back(kWinProject);
+            else if (what == "play") play();
+            else if (what == "palette") {
+                m_paletteOpen = true;
+                m_paletteFocus = true;
+                std::snprintf(m_paletteQuery, sizeof(m_paletteQuery), "%s", arg.c_str());
+            }
+        }
+    }
+    if (const char* lang = std::getenv("ERUPTION_TEST_EDITOR_LANG"); lang && m_frame == 2)
+        m_lang = std::string(lang) == "pt" ? UiLanguage::Portuguese : UiLanguage::English;
+    // ERUPTION_TEST_EDITOR_CLEAN=1 (prints): console vazio e sem cartão inicial.
+    static const bool testClean = std::getenv("ERUPTION_TEST_EDITOR_CLEAN") != nullptr;
+    if (testClean && m_frame == 150) {
+        std::lock_guard<std::mutex> lock(m_consoleMutex);
+        m_console.clear();
+        m_consoleCounts[0] = m_consoleCounts[1] = m_consoleCounts[2] = 0;
+        m_showWelcome = false;
+    }
     uploadThumbnails();
     collectTextures(false);
 
@@ -436,6 +536,7 @@ void Editor::drawUI() {
 
     if (m_showRules) drawRules();
     if (m_showCode) drawCode();
+    if (m_showTelemetry) drawTelemetry();
     drawViewport();
     if (m_showHierarchy) drawHierarchy();
     if (m_showInspector) drawInspector();
@@ -443,6 +544,19 @@ void Editor::drawUI() {
     if (m_showConsole) drawConsole();
     if (m_showShortcuts) drawShortcutsWindow();
     if (m_paletteOpen) drawCommandPalette();
+
+    if (m_focusScene) {
+        m_pendingFocus.insert(m_pendingFocus.begin(), kWinScene);
+        m_focusScene = false;
+    }
+    // Traz a aba para a frente no nó onde ela está encaixada.
+    for (const char* name : m_pendingFocus) {
+        if (ImGuiWindow* w = ImGui::FindWindowByName(name)) {
+            if (w->DockNode && w->DockNode->TabBar) w->DockNode->TabBar->NextSelectedTabId = w->TabId;
+            ImGui::FocusWindow(w);
+        }
+    }
+    m_pendingFocus.clear();
 
     m_commands.dispatchShortcuts((m_viewportHovered || m_viewportFocused) && m_play != PlayState::Playing);
 }
@@ -505,6 +619,7 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("window.console");
         m_commands.menuItem("window.rules");
         m_commands.menuItem("window.code");
+        m_commands.menuItem("window.telemetry");
         ImGui::Separator();
         if (ImGui::BeginMenu("Language / Idioma")) {
             m_commands.menuItem("window.lang_en");
@@ -651,8 +766,8 @@ void Editor::drawStatusBar() {
     }
     char right[320];
     const std::string& map = m_engine->currentMapName();
-    std::snprintf(right, sizeof(right), "%s%s   %.0f FPS  %.2f ms", scripts, map.empty() ? "(no map)" : map.c_str(),
-                  m_engine->fps(), m_engine->frameTime());
+    std::snprintf(right, sizeof(right), "%s%s   %.0f FPS  %.2f ms   %s", scripts, map.empty() ? "(no map)" : map.c_str(),
+                  m_engine->fps(), m_engine->frameTime(), m_hardware.c_str());
     const float w = ImGui::CalcTextSize(right).x;
     ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 16.0f, ImGui::GetWindowWidth() - w - 12.0f));
     ImGui::TextUnformatted(right);
