@@ -345,6 +345,22 @@ private:
     // Mapas vizinhos (mundo contínuo), no Inspetor do Environment.
     void drawNeighborMaps();
     void addTriggerArea();
+    // Seleção múltipla: m_selection é a principal (gizmo, Inspetor); estas vão junto.
+    std::vector<Selection> m_extraSelection;
+    bool isSelected(const Selection& s) const;
+    void toggleSelect(const Selection& s);
+    std::vector<Selection> selectionList() const; // principal + extras válidas
+    bool hasTransformOf(const Selection& s) const;
+    Mat4 transformOf(const Selection& s) const;
+    void setTransformOf(const Selection& s, const Mat4& m);
+    // Retângulo de seleção na cena.
+    bool m_boxSelecting = false;
+    ImVec2 m_boxStart{0, 0};
+    void boxSelect(const ImVec2& a, const ImVec2& b, float x, float y, float w, float h, bool add);
+    std::vector<Mat4> m_gizmoExtraBefore;
+    void drawInstanceBounds(uint32_t index, float x, float y, float w, float h, bool primary);
+    void deleteOne();
+    void duplicateOne();
     // Troca de mapa pedida pelo jogo no Play: abre o mapa e volta a jogar com as
     // mesmas variáveis, o jogador no lugar pedido.
     struct PlayResume {

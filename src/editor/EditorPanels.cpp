@@ -87,6 +87,44 @@ bool resetButton(const char* id, bool changed) {
 void Editor::select(const Selection& s) {
     if (m_selection.kind == SelectionKind::Asset && s.kind != SelectionKind::Asset) closeAssetPreview();
     m_selection = s;
+    m_extraSelection.clear();
+}
+
+bool Editor::isSelected(const Selection& s) const {
+    return s.kind != SelectionKind::None &&
+           (m_selection == s || std::find(m_extraSelection.begin(), m_extraSelection.end(), s) != m_extraSelection.end());
+}
+
+void Editor::toggleSelect(const Selection& s) {
+    // Só itens com posição entram juntos (modelo, personagem, luz, área, início).
+    if (!hasTransformOf(s)) {
+        select(s);
+        return;
+    }
+    if (!hasTransformOf(m_selection)) {
+        select(s);
+        return;
+    }
+    if (m_selection == s) {
+        if (m_extraSelection.empty()) {
+            select({});
+        } else {
+            m_selection = m_extraSelection.front();
+            m_extraSelection.erase(m_extraSelection.begin());
+        }
+        return;
+    }
+    auto it = std::find(m_extraSelection.begin(), m_extraSelection.end(), s);
+    if (it != m_extraSelection.end()) m_extraSelection.erase(it);
+    else m_extraSelection.push_back(s);
+}
+
+std::vector<Editor::Selection> Editor::selectionList() const {
+    std::vector<Selection> out;
+    if (hasTransformOf(m_selection)) out.push_back(m_selection);
+    for (const auto& s : m_extraSelection)
+        if (hasTransformOf(s) && !(s == m_selection)) out.push_back(s);
+    return out;
 }
 
 std::string Editor::selectionName(const Selection& s) const {
@@ -116,22 +154,24 @@ std::string Editor::selectionName(const Selection& s) const {
     return {};
 }
 
-bool Editor::selectionHasTransform() const {
-    if (m_selection.kind == SelectionKind::Model)
-        return m_selection.index >= 0 &&
-               m_selection.index < static_cast<int>(m_engine->modelRenderer().getInstances().size());
-    if (m_selection.kind == SelectionKind::Light)
-        return m_selection.index >= 0 &&
-               m_selection.index < static_cast<int>(m_engine->m_deferredLighting.getPointLights().size());
-    if (m_selection.kind == SelectionKind::Character)
-        return m_selection.index >= 0 && m_selection.index < static_cast<int>(m_engine->characters().size()) &&
-               !m_engine->characters()[static_cast<size_t>(m_selection.index)].removed;
-    if (m_selection.kind == SelectionKind::Spawn) return m_engine->hasPlayerStart();
-    if (m_selection.kind == SelectionKind::Area)
-        return m_selection.index >= 0 && m_selection.index < static_cast<int>(m_engine->areas().size()) &&
-               !m_engine->areas()[static_cast<size_t>(m_selection.index)].removed;
+bool Editor::hasTransformOf(const Selection& s) const {
+    if (s.kind == SelectionKind::Model)
+        return s.index >= 0 &&
+               s.index < static_cast<int>(m_engine->modelRenderer().getInstances().size());
+    if (s.kind == SelectionKind::Light)
+        return s.index >= 0 &&
+               s.index < static_cast<int>(m_engine->m_deferredLighting.getPointLights().size());
+    if (s.kind == SelectionKind::Character)
+        return s.index >= 0 && s.index < static_cast<int>(m_engine->characters().size()) &&
+               !m_engine->characters()[static_cast<size_t>(s.index)].removed;
+    if (s.kind == SelectionKind::Spawn) return m_engine->hasPlayerStart();
+    if (s.kind == SelectionKind::Area)
+        return s.index >= 0 && s.index < static_cast<int>(m_engine->areas().size()) &&
+               !m_engine->areas()[static_cast<size_t>(s.index)].removed;
     return false;
 }
+
+bool Editor::selectionHasTransform() const { return hasTransformOf(m_selection); }
 
 namespace {
 // Personagem como matriz para o gizmo: posição + giro em Y (para onde olha).
@@ -145,32 +185,36 @@ void setCharacterFromMatrix(Engine::SceneCharacter& c, const Mat4& m) {
 }
 } // namespace
 
-Mat4 Editor::selectionTransform() const {
-    if (!selectionHasTransform()) return Mat4(1.0f);
-    if (m_selection.kind == SelectionKind::Model)
-        return m_engine->modelRenderer().getInstances()[static_cast<size_t>(m_selection.index)].transform;
-    if (m_selection.kind == SelectionKind::Character)
-        return characterMatrix(m_engine->characters()[static_cast<size_t>(m_selection.index)]);
-    if (m_selection.kind == SelectionKind::Spawn) return glm::translate(Mat4(1.0f), m_engine->playerStart());
-    if (m_selection.kind == SelectionKind::Area) return m_engine->areas()[static_cast<size_t>(m_selection.index)].matrix();
+Mat4 Editor::transformOf(const Selection& s) const {
+    if (!hasTransformOf(s)) return Mat4(1.0f);
+    if (s.kind == SelectionKind::Model)
+        return m_engine->modelRenderer().getInstances()[static_cast<size_t>(s.index)].transform;
+    if (s.kind == SelectionKind::Character)
+        return characterMatrix(m_engine->characters()[static_cast<size_t>(s.index)]);
+    if (s.kind == SelectionKind::Spawn) return glm::translate(Mat4(1.0f), m_engine->playerStart());
+    if (s.kind == SelectionKind::Area) return m_engine->areas()[static_cast<size_t>(s.index)].matrix();
     Mat4 m(1.0f);
-    m[3] = Vec4(m_engine->m_deferredLighting.getPointLights()[static_cast<size_t>(m_selection.index)].position, 1.0f);
+    m[3] = Vec4(m_engine->m_deferredLighting.getPointLights()[static_cast<size_t>(s.index)].position, 1.0f);
     return m;
 }
 
-void Editor::setSelectionTransform(const Mat4& m) {
-    if (!selectionHasTransform()) return;
-    if (m_selection.kind == SelectionKind::Model)
-        m_engine->modelRenderer().setInstanceTransform(static_cast<uint32_t>(m_selection.index), m);
-    else if (m_selection.kind == SelectionKind::Character)
-        setCharacterFromMatrix(m_engine->characters()[static_cast<size_t>(m_selection.index)], m);
-    else if (m_selection.kind == SelectionKind::Spawn)
+Mat4 Editor::selectionTransform() const { return transformOf(m_selection); }
+
+void Editor::setTransformOf(const Selection& s, const Mat4& m) {
+    if (!hasTransformOf(s)) return;
+    if (s.kind == SelectionKind::Model)
+        m_engine->modelRenderer().setInstanceTransform(static_cast<uint32_t>(s.index), m);
+    else if (s.kind == SelectionKind::Character)
+        setCharacterFromMatrix(m_engine->characters()[static_cast<size_t>(s.index)], m);
+    else if (s.kind == SelectionKind::Spawn)
         m_engine->movePlayerStart(Vec3(m[3]));
-    else if (m_selection.kind == SelectionKind::Area)
-        m_engine->areas()[static_cast<size_t>(m_selection.index)].setMatrix(m);
+    else if (s.kind == SelectionKind::Area)
+        m_engine->areas()[static_cast<size_t>(s.index)].setMatrix(m);
     else
-        m_engine->m_deferredLighting.getPointLights()[static_cast<size_t>(m_selection.index)].position = Vec3(m[3]);
+        m_engine->m_deferredLighting.getPointLights()[static_cast<size_t>(s.index)].position = Vec3(m[3]);
 }
+
+void Editor::setSelectionTransform(const Mat4& m) { setTransformOf(m_selection, m); }
 
 void Editor::pushTransformEdit(const Selection& s, const Mat4& before, const Mat4& after) {
     if (before == after || s.kind == SelectionKind::None) return;
@@ -196,6 +240,23 @@ void Editor::pushTransformEdit(const Selection& s, const Mat4& before, const Mat
 }
 
 void Editor::deleteSelection() {
+    const auto list = selectionList();
+    if (list.size() > 1) {
+        // Um desfazer para o grupo todo.
+        m_undo.beginGroup("Delete " + std::to_string(list.size()) + " objects");
+        for (const auto& s : list) {
+            m_selection = s;
+            m_extraSelection.clear();
+            deleteOne();
+        }
+        m_undo.endGroup();
+        select({});
+        return;
+    }
+    deleteOne();
+}
+
+void Editor::deleteOne() {
     const Selection s = m_selection;
     Engine* engine = m_engine;
     if (s.kind == SelectionKind::Model && selectionHasTransform()) {
@@ -273,11 +334,18 @@ void Editor::drawHierarchy() {
                                     ImGuiTreeNodeFlags_SpanAvailWidth;
     auto row = [&](const Selection& s, const std::string& label, bool enabled) {
         ImGuiTreeNodeFlags f = leaf;
-        if (m_selection == s) f |= ImGuiTreeNodeFlags_Selected;
+        if (isSelected(s)) f |= ImGuiTreeNodeFlags_Selected;
         if (!enabled) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TreeNodeEx(label.c_str(), f);
         if (!enabled) ImGui::PopStyleColor();
-        if (ImGui::IsItemClicked(ImGuiMouseButton_Left) || ImGui::IsItemClicked(ImGuiMouseButton_Right)) select(s);
+        // Ctrl/Shift soma ou tira; botão direito num já selecionado mantém o grupo (menu vale para todos).
+        const bool add = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift;
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+            if (add) toggleSelect(s);
+            else select(s);
+        } else if (ImGui::IsItemClicked(ImGuiMouseButton_Right) && !isSelected(s)) {
+            select(s);
+        }
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) frameSelection();
         if (ImGui::BeginPopupContextItem()) {
             if (ImGui::MenuItem("Frame", "F", false, s.kind != SelectionKind::Environment)) frameSelection();
@@ -479,6 +547,8 @@ void Editor::drawInspector() {
 
     const std::string name = selectionName(m_selection);
     ImGui::TextColored(kAccent, "%s", name.c_str());
+    if (const size_t more = selectionList().size(); more > 1)
+        ImGui::TextDisabled("+ %zu more selected: the tools move, rotate, scale, delete and duplicate all of them.", more - 1);
     ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {

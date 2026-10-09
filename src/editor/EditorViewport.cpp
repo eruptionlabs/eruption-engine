@@ -121,8 +121,31 @@ void Editor::drawViewport() {
             dl->AddText(ImVec2(pos.x + 10, pos.y + 8), IM_COL32(230, 190, 60, 255), "PAUSED");
         }
 
-        // Clique simples (sem arrastar, fora das alças) seleciona.
+        // Arrastar no vazio (fora das alças, sem Alt): retângulo de seleção.
         const bool gizmoBusy = ImGuizmo::IsUsing() || m_gizmoWasUsing;
+        if (m_tool != Tool::Terrain && m_viewportHovered && !io.KeyAlt && !gizmoBusy && !ImGuizmo::IsOver() &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            m_boxStart = mouse;
+            m_boxSelecting = true;
+        }
+        if (m_boxSelecting) {
+            if (gizmoBusy) {
+                m_boxSelecting = false;
+            } else if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                const ImVec2 d(mouse.x - m_boxStart.x, mouse.y - m_boxStart.y);
+                if (d.x * d.x + d.y * d.y >= 16.0f) {
+                    dl->AddRectFilled(m_boxStart, mouse, ImGui::GetColorU32(ImVec4(kAccent.x, kAccent.y, kAccent.z, 0.12f)));
+                    dl->AddRect(m_boxStart, mouse, ImGui::GetColorU32(kAccent), 0.0f, 0, 1.5f);
+                }
+            } else {
+                m_boxSelecting = false;
+                const ImVec2 d(mouse.x - m_boxStart.x, mouse.y - m_boxStart.y);
+                if (d.x * d.x + d.y * d.y >= 16.0f)
+                    boxSelect(m_boxStart, mouse, pos.x, pos.y, avail.x, avail.y, io.KeyCtrl || io.KeyShift);
+            }
+        }
+
+        // Clique simples (sem arrastar, fora das alças) seleciona.
         if (m_tool != Tool::Terrain && m_viewportHovered && !io.KeyAlt && !gizmoBusy &&
             ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
             ImGui::GetMouseDragDelta(ImGuiMouseButton_Left).x * ImGui::GetMouseDragDelta(ImGuiMouseButton_Left).x +
@@ -250,7 +273,23 @@ void Editor::cameraLookDir(const Vec3& forward) {
 void Editor::frameSelection() {
     Vec3 center(0.0f);
     float radius = 1.0f;
-    if (m_selection.kind == SelectionKind::Model) {
+    if (const auto list = selectionList(); list.size() > 1) {
+        // Grupo: enquadra a caixa de todos.
+        Vec3 lo(FLT_MAX), hi(-FLT_MAX);
+        for (const auto& s : list) {
+            if (s.kind == SelectionKind::Model) {
+                const ModelInstance& inst = m_engine->modelRenderer().getInstances()[static_cast<size_t>(s.index)];
+                lo = glm::min(lo, inst.worldAabbMin);
+                hi = glm::max(hi, inst.worldAabbMax);
+            } else {
+                const Vec3 p(transformOf(s)[3]);
+                lo = glm::min(lo, p - Vec3(5.0f));
+                hi = glm::max(hi, p + Vec3(5.0f));
+            }
+        }
+        center = (lo + hi) * 0.5f;
+        radius = std::max(1.0f, glm::length(hi - lo) * 0.5f);
+    } else if (m_selection.kind == SelectionKind::Model) {
         const auto& insts = m_engine->modelRenderer().getInstances();
         if (m_selection.index < 0 || m_selection.index >= static_cast<int>(insts.size())) return;
         const ModelInstance& inst = insts[static_cast<size_t>(m_selection.index)];
@@ -455,7 +494,53 @@ void Editor::pickAt(float u, float v) {
             best = {SelectionKind::Light, static_cast<int>(i)};
         }
     }
-    select(best);
+    // Ctrl/Shift: soma ou tira da seleção; clique no vazio com eles não limpa.
+    if (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift) {
+        if (best.kind != SelectionKind::None) toggleSelect(best);
+    } else {
+        select(best);
+    }
+}
+
+void Editor::boxSelect(const ImVec2& a, const ImVec2& b, float x, float y, float w, float h, bool add) {
+    const ImVec2 lo(std::min(a.x, b.x), std::min(a.y, b.y)), hi(std::max(a.x, b.x), std::max(a.y, b.y));
+    const Mat4 vp = m_engine->camera().viewProjNoJitter();
+    auto inside = [&](const Vec3& p) {
+        const Vec4 c = vp * Vec4(p, 1.0f);
+        if (c.w <= 1e-3f) return false;
+        const float sx = x + (c.x / c.w * 0.5f + 0.5f) * w, sy = y + (c.y / c.w * 0.5f + 0.5f) * h;
+        return sx >= lo.x && sx <= hi.x && sy >= lo.y && sy <= hi.y;
+    };
+    std::vector<Selection> hits;
+    const ModelRenderer& mr = m_engine->modelRenderer();
+    const auto& insts = mr.getInstances();
+    for (uint32_t i = 0; i < insts.size(); ++i) {
+        const ModelInstance& inst = insts[i];
+        // Chão, espalhados (pincel), vizinhos e camadas travadas ficam de fora.
+        if (!inst.enabled || inst.viewHidden || mr.isGroundMesh(inst.meshIndex) || m_engine->isScatterInstance(i) ||
+            m_layerLock[layerOfInstance(i)])
+            continue;
+        if (inside((inst.worldAabbMin + inst.worldAabbMax) * 0.5f)) hits.push_back({SelectionKind::Model, static_cast<int>(i)});
+    }
+    const auto& chars = m_engine->characters();
+    if (m_layerShow[LayerCharacters] && !m_layerLock[LayerCharacters])
+        for (size_t i = 0; i < chars.size(); ++i)
+            if (!chars[i].removed && !chars[i].fromNeighbor && !chars[i].parked && inside(chars[i].position))
+                hits.push_back({SelectionKind::Character, static_cast<int>(i)});
+    if (m_layerShow[LayerMarkers] && !m_layerLock[LayerMarkers]) {
+        const auto& areas = m_engine->areas();
+        for (size_t i = 0; i < areas.size(); ++i)
+            if (!areas[i].removed && !areas[i].fromNeighbor && inside(areas[i].center))
+                hits.push_back({SelectionKind::Area, static_cast<int>(i)});
+        const auto& lights = m_engine->m_deferredLighting.getPointLights();
+        for (size_t i = 0; i < lights.size(); ++i)
+            if (lights[i].enabled && inside(lights[i].position)) hits.push_back({SelectionKind::Light, static_cast<int>(i)});
+        if (m_engine->hasPlayerStart() && inside(m_engine->playerStart())) hits.push_back({SelectionKind::Spawn, 0});
+    }
+    if (!add) select({});
+    for (const auto& s : hits)
+        if (!isSelected(s)) toggleSelect(s);
+    if (!hits.empty()) log(LogLevel::Info, std::to_string(selectionList().size()) + " selected");
 }
 
 void Editor::drawGizmo(float x, float y, float w, float h) {
@@ -497,9 +582,24 @@ void Editor::drawGizmo(float x, float y, float w, float h) {
     if (using_ && !m_gizmoWasUsing) {
         m_gizmoBefore = selectionTransform();
         m_gizmoSelection = m_selection;
+        m_gizmoExtraBefore.clear();
+        for (const auto& s : m_extraSelection) m_gizmoExtraBefore.push_back(hasTransformOf(s) ? transformOf(s) : Mat4(1.0f));
     }
-    if (using_) setSelectionTransform(model);
-    if (!using_ && m_gizmoWasUsing) pushTransformEdit(m_gizmoSelection, m_gizmoBefore, selectionTransform());
+    if (using_) {
+        setSelectionTransform(model);
+        // Os outros selecionados seguem a mesma mudança da principal.
+        const Mat4 delta = model * glm::inverse(m_gizmoBefore);
+        for (size_t i = 0; i < m_extraSelection.size() && i < m_gizmoExtraBefore.size(); ++i)
+            if (hasTransformOf(m_extraSelection[i])) setTransformOf(m_extraSelection[i], delta * m_gizmoExtraBefore[i]);
+    }
+    if (!using_ && m_gizmoWasUsing) {
+        m_undo.beginGroup("Transform " + std::to_string(1 + m_extraSelection.size()) + " objects");
+        pushTransformEdit(m_gizmoSelection, m_gizmoBefore, selectionTransform());
+        for (size_t i = 0; i < m_extraSelection.size() && i < m_gizmoExtraBefore.size(); ++i)
+            if (hasTransformOf(m_extraSelection[i]))
+                pushTransformEdit(m_extraSelection[i], m_gizmoExtraBefore[i], transformOf(m_extraSelection[i]));
+        m_undo.endGroup();
+    }
     m_gizmoWasUsing = using_;
 }
 
@@ -558,8 +658,14 @@ void Editor::drawSceneMarkers(float x, float y, float w, float h) {
 }
 
 void Editor::drawSelectionBounds(float x, float y, float w, float h) {
-    if (m_selection.kind != SelectionKind::Model || !selectionHasTransform()) return;
-    const ModelInstance& inst = m_engine->modelRenderer().getInstances()[static_cast<size_t>(m_selection.index)];
+    for (const auto& sel : selectionList()) {
+        if (sel.kind != SelectionKind::Model) continue;
+        drawInstanceBounds(static_cast<uint32_t>(sel.index), x, y, w, h, sel == m_selection);
+    }
+}
+
+void Editor::drawInstanceBounds(uint32_t index, float x, float y, float w, float h, bool primary) {
+    const ModelInstance& inst = m_engine->modelRenderer().getInstances()[index];
     const Mat4 vp = m_engine->camera().viewProjNoJitter();
     ImVec2 p[8];
     for (int c = 0; c < 8; ++c) {
@@ -573,8 +679,8 @@ void Editor::drawSelectionBounds(float x, float y, float w, float h) {
     static const int kEdges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3},
                                       {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImU32 col = ImGui::GetColorU32(ImVec4(kAccent.x, kAccent.y, kAccent.z, 0.9f));
-    for (const auto& e : kEdges) dl->AddLine(p[e[0]], p[e[1]], col, 1.5f);
+    const ImU32 col = ImGui::GetColorU32(ImVec4(kAccent.x, kAccent.y, kAccent.z, primary ? 0.9f : 0.55f));
+    for (const auto& e : kEdges) dl->AddLine(p[e[0]], p[e[1]], col, primary ? 1.5f : 1.0f);
 }
 
 void Editor::drawViewCube(float x, float y, float w, float /*h*/) {
