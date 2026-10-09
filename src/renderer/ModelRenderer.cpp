@@ -918,962 +918,1041 @@ void ModelRenderer::loadMapModels(const std::vector<ModelAsset>& models,
         if (it == modelMap.end() && modelPath.find("data/") == 0) it = modelMap.find(modelPath.substr(5));
         if (it == modelMap.end()) continue;
 
-        const ModelAsset& asset = m_lastModels[it->second];
-        if (asset.nodes.empty()) continue;
-
-        uint32_t version = asset.versionMajor * 256 + asset.versionMinor;
-
-        // Ensure model meshes are uploaded to GPU
-        if (m_modelMeshCache.find(asset.filePath) == m_modelMeshCache.end()) {
-            std::vector<uint32_t> meshIndices(asset.nodes.size(), 0xFFFFFFFF);
-            size_t dbgReidxOk = 0, dbgReidxFail = 0, dbgVertsBefore = 0, dbgVertsAfter = 0;
-
-            std::vector<uint32_t> assetTexIndexToBindlessSlot(asset.textures.size(), 0);
-            for (size_t t = 0; t < asset.textures.size(); ++t) {
-                assetTexIndexToBindlessSlot[t] = resolveTexture(asset.textures[t]);
-            }
-
-            for (size_t n = 0; n < asset.nodes.size(); ++n) {
-                const auto& node = asset.nodes[n];
-                if (node.vertices.empty() || node.indices.empty()) continue;
-
-                std::vector<TerrainVertex> vertices;
-                vertices.reserve(node.vertices.size());
-                
-                Vec3 aabbMin(FLT_MAX);
-                Vec3 aabbMax(-FLT_MAX);
-                std::string firstTexName; // used for the PBR material profile lookup
-                // NOME DO MATERIAL, nao o da imagem embutida. O GLB traz imagens
-                // com nome sintetico ("#-00_0000.png") - o proprio parser
-                // guarda o nome do MATERIAL em node.pbrTextureNames justamente
-                // por isso. O perfil PBR e o balanco ao vento eram resolvidos
-                // pelo nome sintetico, entao NENHUM dos dois casava: no
-                // parana_field 135 das 164 malhas ficavam com sway 0 e a
-                // vegetacao nao balancava, por mais forte que fosse o vento
-                // (medido: no tornado a forca chega a 1,14 no shader e nada se
-                // mexia). As texturas de verdade do mapa chamam
-                // "pine_sapling_medium_twig", que a heuristica reconhece.
-                std::string firstPbrName;
-                if (!node.pbrTextureNames.empty()) firstPbrName = node.pbrTextureNames[0];
-
-                // Crossfade targets resolve to the same handful of slots for the
-                // whole node; cache per local texture index so the per-vertex
-                // path is a plain lookup instead of a string hash every vertex.
-                struct BlendResolved { uint32_t tex = 0, pbrIdx = 0, normalIdx = 0; bool done = false; };
-                std::vector<BlendResolved> blendCache(node.textureNames.size());
-
-                // World-space splat-mask texture resolve cache (new, optional).
-                struct MaskResolved { uint32_t tex = 0; bool done = false; };
-                std::vector<MaskResolved> maskCache(node.textureNames.size());
-                // Mesmo cache pras 4 camadas de splat: resolver por nome a
-                // cada vertice seria caro e o conjunto e' minusculo.
-                std::vector<MaskResolved> splatCache(node.textureNames.size());
-
-                // Primary texture / PBR resolve is identical for every vertex
-                // sharing a faceTexIdx. Doing the string sanitize + hash lookups
-                // per vertex (millions on a baked map GLB) was ~15s of the load;
-                // cache the result per faceTexIdx and the vertex body becomes a
-                // vector index.
-                struct FaceResolved {
-                    uint32_t texSlot = 0, pbrIdx = 0, normalIdx = 0;
-                    std::string name;
-                    bool done = false;
-                };
-                size_t faceCacheSize = node.textureNames.size();
-                if (!node.textureIds.empty()) faceCacheSize = std::max(faceCacheSize, node.textureIds.size());
-                faceCacheSize = std::max(faceCacheSize, asset.textures.size());
-                if (faceCacheSize == 0) faceCacheSize = 1;
-                std::vector<FaceResolved> faceCache(faceCacheSize);
-
-                for (size_t i = 0; i < node.vertices.size(); ++i) {
-                    uint16_t faceTexIdx = (i < node.perVertexTexIds.size()) ? node.perVertexTexIds[i] : 0;
-
-                    FaceResolved& fr = faceCache[faceTexIdx % faceCacheSize];
-                    if (!fr.done) {
-                        fr.done = true;
-                        uint32_t texSlot = 0;
-                        std::string texName;
-                        std::string pbrName;
-                        if (!node.textureNames.empty()) {
-                            // v2.3+: per-node names
-                            texName = node.textureNames[faceTexIdx % node.textureNames.size()];
-                            texSlot = resolveTexture(texName);
-                            if (!node.pbrTextureNames.empty()) {
-                                pbrName = node.pbrTextureNames[faceTexIdx % node.pbrTextureNames.size()];
-                            }
-                        } else if (!node.textureIds.empty()) {
-                            // v1.x-2.2: map local ID to global list
-                            uint32_t globalIdx = node.textureIds[faceTexIdx % node.textureIds.size()];
-                            texSlot = (globalIdx < assetTexIndexToBindlessSlot.size()) ? assetTexIndexToBindlessSlot[globalIdx] : 0;
-                            if (globalIdx < asset.textures.size()) texName = asset.textures[globalIdx];
-                            // Esse ramo (mapa mais antigo) nunca passava por
-                            // resolveTexture() - a textura ficava sem entrada
-                            // em m_textureCache, entao nunca aparecia na lista
-                            // do F1/popup de preview (autor: "o chao continua
-                            // diferente do preview" - literalmente nao dava
-                            // pra' clicar no chao de verdade).
-                            registerResolvedTexture(texName, texSlot);
-                        } else {
-                            // Fallback: use global index directly
-                            texSlot = (faceTexIdx < assetTexIndexToBindlessSlot.size()) ? assetTexIndexToBindlessSlot[faceTexIdx] : 0;
-                            if (faceTexIdx < asset.textures.size()) texName = asset.textures[faceTexIdx];
-                            registerResolvedTexture(texName, texSlot);
-                        }
-                        PbrTextureSlots pbrSlots;
-                        if (!pbrName.empty()) {
-                            pbrSlots = resolvePbrTextures(pbrName);
-                        }
-                        // Fallback para o nome da TEXTURA: o nome do material
-                        // acha o PBR cozido em disco, mas quando ele nao existe
-                        // a sintese precisa dos pixels, e textura embutida no
-                        // GLB so e' encontravel pelo nome da imagem (mangled
-                        // "#___"). Sem este fallback a ponte do cidade-D (e todo
-                        // material sem PBR cozido em mapa com textura embutida)
-                        // ficava sem normal map nenhum - ou seja, ZERO relevo.
-                        if (!pbrSlots.valid() && !texName.empty() && texName != pbrName) {
-                            pbrSlots = resolvePbrTextures(texName);
-                        }
-                        fr.texSlot = texSlot;
-                        fr.pbrIdx = pbrSlots.mrahw.index;
-                        fr.normalIdx = pbrSlots.normal.index;
-                        // PBR por SLOT de textura: o cache por nome e' chaveado
-                        // pelo nome do MATERIAL, e a lista do F1 so' tem o nome
-                        // sintetico da imagem embutida - o preview nunca achava.
-                        if (texSlot != 0 && pbrSlots.valid()) m_pbrByTexSlot.emplace(texSlot, pbrSlots);
-                        fr.name = std::move(texName);
-                    }
-                    uint32_t texSlot = fr.texSlot;
-                    PbrTextureSlots pbrSlots;
-                    pbrSlots.mrahw.index = fr.pbrIdx;
-                    pbrSlots.normal.index = fr.normalIdx;
-
-                    if (firstTexName.empty() && !fr.name.empty()) {
-                        firstTexName = fr.name;
-                    }
-
-                    // GLB-authored texture crossfade: resolve the blend-toward
-                    // texture the same way as the primary. Inert when the node
-                    // carries no _BLEND_WEIGHT data.
-                    uint32_t blendTexSlot = 0, blendPbrIdx = 0, blendNormalIdx = 0;
-                    float blendWeight = (i < node.perVertexBlendWeights.size())
-                                            ? node.perVertexBlendWeights[i] : 0.0f;
-                    if (blendWeight > 0.0f && i < node.perVertexBlendTexIds.size() &&
-                        !node.textureNames.empty()) {
-                        uint16_t bLocal = static_cast<uint16_t>(
-                            node.perVertexBlendTexIds[i] % node.textureNames.size());
-                        BlendResolved& br = blendCache[bLocal];
-                        if (!br.done) {
-                            br.done = true;
-                            br.tex = resolveTexture(node.textureNames[bLocal]);
-                            std::string bPbrName = (bLocal < node.pbrTextureNames.size())
-                                ? node.pbrTextureNames[bLocal] : node.textureNames[bLocal];
-                            if (bPbrName.empty()) bPbrName = node.textureNames[bLocal];
-                            if (!bPbrName.empty()) {
-                                PbrTextureSlots s = resolvePbrTextures(bPbrName);
-                                br.pbrIdx = s.mrahw.index;
-                                br.normalIdx = s.normal.index;
-                            }
-                        }
-                        blendTexSlot = br.tex;
-                        blendPbrIdx = br.pbrIdx;
-                        blendNormalIdx = br.normalIdx;
-                    }
-
-                    // World-space splat mask: resolve the same way as the primary
-                    // texture. Inert when the node carries no _BLEND_MASK_UV data.
-                    uint32_t maskTexSlot = 0;
-                    Vec2 maskUV(0.0f);
-                    if (i < node.perVertexBlendMaskTexIds.size() &&
-                        i < node.perVertexBlendMaskUV.size() &&
-                        node.perVertexBlendMaskTexIds[i] != 0 &&
-                        !node.textureNames.empty()) {
-                        uint16_t mLocal = static_cast<uint16_t>(
-                            node.perVertexBlendMaskTexIds[i] % node.textureNames.size());
-                        MaskResolved& mr = maskCache[mLocal];
-                        if (!mr.done) {
-                            mr.done = true;
-                            mr.tex = resolveTexture(node.textureNames[mLocal]);
-                        }
-                        maskTexSlot = mr.tex;
-                        maskUV = node.perVertexBlendMaskUV[i];
-                    }
-
-                    // Segunda mascara de splat: mesma UV da primeira (e' so'
-                    // posicao de mundo), resolve por nome do mesmo jeito.
-                    uint32_t maskTexSlot2 = 0;
-                    if (i < node.perVertexBlendMaskTexIds2.size() &&
-                        node.perVertexBlendMaskTexIds2[i] != 0 &&
-                        !node.textureNames.empty()) {
-                        uint16_t mLocal2 = static_cast<uint16_t>(
-                            node.perVertexBlendMaskTexIds2[i] % node.textureNames.size());
-                        MaskResolved& mr2 = maskCache[mLocal2];
-                        if (!mr2.done) {
-                            mr2.done = true;
-                            mr2.tex = resolveTexture(node.textureNames[mLocal2]);
-                        }
-                        maskTexSlot2 = mr2.tex;
-                    }
-
-                    TerrainVertex v{};
-                    v.position = node.vertices[i].position;
-                    v.texCoord = node.vertices[i].texCoord;
-                    v.normal = node.vertices[i].normal;
-                    v.texIndex = texSlot;
-                    v.matId = node.vertices[i].matId;
-                    v.color = node.vertices[i].color;
-                    v.pbrIndex = pbrSlots.mrahw.index;
-                    v.normalIndex = pbrSlots.normal.index;
-                    v.blendTexIndex = blendTexSlot;
-                    v.blendPbrIndex = blendPbrIdx;
-                    v.blendNormalIndex = blendNormalIdx;
-                    v.blendWeight = (blendTexSlot != 0) ? blendWeight : 0.0f;
-                    v.blendMaskIndex = maskTexSlot;
-                    v.blendMaskUV = maskUV;
-                    v.blendMaskIndex2 = maskTexSlot2;
-                    v.emissiveStrength = (i < node.perVertexEmissive.size()) ? node.perVertexEmissive[i] : 0.0f;
-                    // Splat: ate' 8 slots de 16 bits empacotados em 4 uint32. O
-                    // slot local vira slot GLOBAL de bindless do mesmo jeito
-                    // que o texSlot da camada base logo acima.
-                    if (!node.textureNames.empty()) {
-                        uint32_t sg[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-                        for (int sIdx = 0; sIdx < 8; ++sIdx) {
-                            const auto& arr = node.perVertexSplatTexIds[sIdx];
-                            if (i >= arr.size() || arr[i] == 0) continue;
-                            uint16_t sLocal = static_cast<uint16_t>(
-                                arr[i] % node.textureNames.size());
-                            MaskResolved& sr = splatCache[sLocal];
-                            if (!sr.done) {
-                                sr.done = true;
-                                sr.tex = resolveTexture(node.textureNames[sLocal]);
-                            }
-                            sg[sIdx] = sr.tex;
-                        }
-                        v.splatTex01 = (sg[0] & 0xFFFFu) | ((sg[1] & 0xFFFFu) << 16);
-                        v.splatTex23 = (sg[2] & 0xFFFFu) | ((sg[3] & 0xFFFFu) << 16);
-                        v.splatTex45 = (sg[4] & 0xFFFFu) | ((sg[5] & 0xFFFFu) << 16);
-                        v.splatTex67 = (sg[6] & 0xFFFFu) | ((sg[7] & 0xFFFFu) << 16);
-                    }
-                    vertices.push_back(v);
-
-                    aabbMin = glm::min(aabbMin, v.position);
-                    aabbMax = glm::max(aabbMax, v.position);
-                }
-
-                // Reindexa: a malha vem DESINDEXADA do parser (um vértice por
-                // canto de triângulo), o que faz o vertex shader rodar ~2,3x
-                // mais que o necessário e zera o reuso do cache pós-transform.
-                // Medido: o passe GBuffer custa o mesmo (3,41 / 3,44 / 3,55 ms)
-                // para 0,31 / 1,31 / 2,30 Mpx - não escala com resolução, logo
-                // é vértice, não fragmento. A solda é por igualdade de BYTES do
-                // vértice inteiro, então a imagem não muda.
-                // ERUPTION_NO_REINDEX=1 volta ao comportamento antigo (A/B).
-                static const bool kNoReindex = std::getenv("ERUPTION_NO_REINDEX") != nullptr;
-                const size_t reVtxCountBefore = vertices.size();
-                const std::vector<uint32_t>* useIndices = &node.indices;
-                std::vector<uint32_t> reIdx;
-                std::vector<unsigned char> reVtx;
-                if (!kNoReindex && !vertices.empty() &&
-                    reindexMesh(vertices.data(), vertices.size(), sizeof(TerrainVertex),
-                                node.indices, reVtx, reIdx)) {
-                    vertices.assign(
-                        reinterpret_cast<const TerrainVertex*>(reVtx.data()),
-                        reinterpret_cast<const TerrainVertex*>(reVtx.data()) +
-                            reVtx.size() / sizeof(TerrainVertex));
-                    useIndices = &reIdx;
-                    ++dbgReidxOk; dbgVertsBefore += reVtxCountBefore; dbgVertsAfter += vertices.size();
-                } else if (!kNoReindex) {
-                    ++dbgReidxFail; dbgVertsBefore += vertices.size(); dbgVertsAfter += vertices.size();
-                }
-
-                ModelMeshGPU mesh;
-                // Prefere o nome do MATERIAL; cai no da imagem se nao houver.
-                const std::string& nomeMaterial = !firstPbrName.empty() ? firstPbrName : firstTexName;
-                const auto& profile = getPbrProfile(nomeMaterial);
-                // ERUPTION_TEST_AABB_STATS="x0,x1,y0,y1,z0,z1": imprime malha
-                // por posicao em vez de heuristica de nome/categoria - serve
-                // pra achar o material exato debaixo de uma pose de camera
-                // conhecida, sem depender de isGroundMesh/isGround (ja'
-                // unificados no mesmo criterio - ver isGroundMesh abaixo).
-                if (const char* aabbEnv = std::getenv("ERUPTION_TEST_AABB_STATS")) {
-                    float bx0, bx1, by0, by1, bz0, bz1;
-                    if (std::sscanf(aabbEnv, "%f,%f,%f,%f,%f,%f", &bx0, &bx1, &by0, &by1, &bz0, &bz1) == 6) {
-                        const bool overlap = aabbMax.x >= bx0 && aabbMin.x <= bx1 &&
-                                            aabbMax.y >= by0 && aabbMin.y <= by1 &&
-                                            aabbMax.z >= bz0 && aabbMin.z <= bz1;
-                        if (overlap) {
-                            ERUPTION_LOG_WARN("[AABBSTATS] mat='%s' pbrName='%s' texName='%s' cat='%s' "
-                                              "aabb=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)",
-                                              nomeMaterial.c_str(), firstPbrName.c_str(), firstTexName.c_str(),
-                                              profile.category.c_str(), aabbMin.x, aabbMin.y, aabbMin.z,
-                                              aabbMax.x, aabbMax.y, aabbMax.z);
-                        }
-                    }
-                }
-                // REORDENACAO ESPACIAL DO CHAO. Ordena os triangulos por celula
-                // de kGroundCellSize e guarda o intervalo de indices de cada
-                // uma: e' o que permite desenhar SO' o pedaco perto da camera
-                // com tesselacao. Custa uma ordenacao no load e zero por frame.
-                std::vector<uint32_t> groundIdx;
-                std::vector<ModelMeshGPU::GroundCell> groundCells;
-                // MESMO criterio do mesh.isGround (ver mais abaixo): categoria,
-                // nome coreano de "chao" OU vertices com splat - no
-                // parana_field, gerado por ferramenta, e' o splat que marca.
-                bool splatGround = false;
-                for (const auto& v : vertices) {
-                    if (v.splatTex01 != 0u || v.splatTex23 != 0u) { splatGround = true; break; }
-                }
-                const bool isGroundMesh = splatGround || profile.category == "ground" ||
-                                          nomeMaterial.find("\xEB\xB0\x94\xEB\x8B\xA5") != std::string::npos;
-                if (isGroundMesh && useIndices->size() >= 3 * 64) {
-                    constexpr float kGroundCellSize = 96.0f;
-                    struct Cell { std::vector<uint32_t> idx; float minX, minZ, maxX, maxZ; };
-                    std::unordered_map<uint64_t, Cell> cells;
-                    for (size_t t = 0; t + 2 < useIndices->size(); t += 3) {
-                        const Vec3& p0 = vertices[(*useIndices)[t]].position;
-                        const Vec3& p1 = vertices[(*useIndices)[t + 1]].position;
-                        const Vec3& p2 = vertices[(*useIndices)[t + 2]].position;
-                        const float cx = (p0.x + p1.x + p2.x) / 3.0f;
-                        const float cz = (p0.z + p1.z + p2.z) / 3.0f;
-                        const int64_t gx = static_cast<int64_t>(std::floor(cx / kGroundCellSize));
-                        const int64_t gz = static_cast<int64_t>(std::floor(cz / kGroundCellSize));
-                        const uint64_t key = (static_cast<uint64_t>(gx + 32768) << 20) ^
-                                              static_cast<uint64_t>(gz + 32768);
-                        Cell& c = cells[key];
-                        if (c.idx.empty()) {
-                            c.minX = c.maxX = p0.x; c.minZ = c.maxZ = p0.z;
-                        }
-                        for (int k = 0; k < 3; ++k) {
-                            const Vec3& pp = vertices[(*useIndices)[t + k]].position;
-                            c.minX = std::min(c.minX, pp.x); c.maxX = std::max(c.maxX, pp.x);
-                            c.minZ = std::min(c.minZ, pp.z); c.maxZ = std::max(c.maxZ, pp.z);
-                            c.idx.push_back((*useIndices)[t + k]);
-                        }
-                    }
-                    groundIdx.reserve(useIndices->size());
-                    groundCells.reserve(cells.size());
-                    for (auto& kv : cells) {
-                        ModelMeshGPU::GroundCell gc{kv.second.minX, kv.second.minZ,
-                                                    kv.second.maxX, kv.second.maxZ,
-                                                    static_cast<uint32_t>(groundIdx.size()),
-                                                    static_cast<uint32_t>(kv.second.idx.size())};
-                        groundIdx.insert(groundIdx.end(), kv.second.idx.begin(), kv.second.idx.end());
-                        groundCells.push_back(gc);
-                    }
-                    // Em ORDEM DE BUFFER: o desenho funde intervalos vizinhos
-                    // com o mesmo veredito, e so' isso derruba 1.764 draws para
-                    // algumas dezenas.
-                    std::sort(groundCells.begin(), groundCells.end(),
-                              [](const ModelMeshGPU::GroundCell& a, const ModelMeshGPU::GroundCell& b) {
-                                  return a.first < b.first;
-                              });
-                    if (groundIdx.size() == useIndices->size()) {
-                        useIndices = &groundIdx;
-                        ERUPTION_LOG_WARN("[TESS] chao particionado em %zu celulas de %.0f u (%zu indices)",
-                                          groundCells.size(), kGroundCellSize, groundIdx.size());
-                    } else {
-                        groundCells.clear();
-                    }
-                }
-                // COSTURAS DO DESLOCAMENTO (autor: "fenda" - linhas finas e
-                // retas no chao, uma por borda de tile). Dois vertices na
-                // MESMA posicao mas com textura/UV/normal diferentes (borda de
-                // tile do chao legado, troca de textura) leem alturas
-                // diferentes e deslocam pra lugares diferentes - abre vao e o
-                // fundo aparece. Marca esses vertices (bit 15 do matId, que
-                // so' o debug magenta lia) e o shader zera o deslocamento
-                // neles: os dois lados da junta ficam presos no mesmo ponto.
-                // UV que difere so' por inteiro (wrap do ladrilho) nao e'
-                // costura - amostra o mesmo texel.
-                {
-                    struct PosKey { int64_t x, y, z; bool operator==(const PosKey& o) const { return x == o.x && y == o.y && z == o.z; } };
-                    struct PosHash { size_t operator()(const PosKey& k) const {
-                        return std::hash<int64_t>()(k.x * 73856093LL ^ k.y * 19349663LL ^ k.z * 83492791LL); } };
-                    std::unordered_map<PosKey, uint32_t, PosHash> first;
-                    first.reserve(vertices.size());
-                    auto fracDiff = [](float a, float b) {
-                        float d = std::fabs((a - std::floor(a)) - (b - std::floor(b)));
-                        return std::min(d, 1.0f - d);
-                    };
-                    size_t seams = 0;
-                    for (uint32_t vi = 0; vi < vertices.size(); ++vi) {
-                        const TerrainVertex& v = vertices[vi];
-                        PosKey k{static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
-                                 static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
-                                 static_cast<int64_t>(std::llround(v.position.z * 1000.0f))};
-                        auto [it, inserted] = first.try_emplace(k, vi);
-                        if (inserted) continue;
-                        TerrainVertex& o = vertices[it->second];
-                        const bool differs = o.texIndex != v.texIndex || o.pbrIndex != v.pbrIndex ||
-                                             o.splatTex01 != v.splatTex01 || o.splatTex23 != v.splatTex23 ||
-                                             fracDiff(o.texCoord.x, v.texCoord.x) > 1e-3f ||
-                                             fracDiff(o.texCoord.y, v.texCoord.y) > 1e-3f ||
-                                             glm::dot(o.normal, v.normal) < 0.999f;
-                        if (differs) {
-                            if (!(o.matId & 0x8000u)) ++seams;
-                            o.matId = static_cast<uint16_t>(o.matId | 0x8000u);
-                            vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
-                        }
-                    }
-                    // Segunda passada: todo vertice cuja posicao ja' foi marcada
-                    // (o primeiro do grupo pode ter sido marcado depois dos
-                    // outros iguais a ele).
-                    for (auto& v : vertices) {
-                        PosKey k{static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
-                                 static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
-                                 static_cast<int64_t>(std::llround(v.position.z * 1000.0f))};
-                        if (vertices[first[k]].matId & 0x8000u) v.matId = static_cast<uint16_t>(v.matId | 0x8000u);
-                    }
-                    // BORDA DA MALHA (aresta usada por UM triangulo so'): e' onde
-                    // esta malha encosta em OUTRA - no chao legado cada textura e'
-                    // uma malha separada, entao a troca de textura entre tiles e'
-                    // borda de malha, e a comparacao por posicao acima (que so'
-                    // enxerga DENTRO da malha) nao pegava. Era a fenda que sobrou.
-                    std::unordered_map<uint64_t, uint32_t> edgeUse;
-                    edgeUse.reserve(useIndices->size());
-                    auto edgeKey = [](uint32_t a, uint32_t b) {
-                        return (static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b);
-                    };
-                    for (size_t t = 0; t + 2 < useIndices->size(); t += 3)
-                        for (int e = 0; e < 3; ++e)
-                            ++edgeUse[edgeKey((*useIndices)[t + e], (*useIndices)[t + (e + 1) % 3])];
-                    size_t borderVerts = 0;
-                    for (const auto& [k, cnt] : edgeUse) {
-                        if (cnt != 1) continue;
-                        for (uint32_t vi : {static_cast<uint32_t>(k >> 32), static_cast<uint32_t>(k & 0xFFFFFFFFu)}) {
-                            if (!(vertices[vi].matId & 0x8000u)) ++borderVerts;
-                            vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
-                        }
-                    }
-                    if (isGroundMesh && std::getenv("ERUPTION_TEST_SEAM_STATS"))
-                        ERUPTION_LOG_WARN("[SEAM] chao malha %u: %zu posicoes de costura, %zu vertices de borda novos (%zu vertices)",
-                                          n, seams, borderVerts, vertices.size());
-                }
-                // DENSIDADE DE UV (mediana de |dUV|/|dPos| por aresta) - o
-                // shader usa pra amostrar a altura num mip que a grade de
-                // vertices consegue representar (Nyquist), senao a borda seca
-                // da pedra vira serrote ("borda serrilhada").
-                float meshUvPerUnit = 0.0f;
-                {
-                    std::vector<float> dens;
-                    dens.reserve(useIndices->size() / 3);
-                    // Tambem POR TEXTURA (popup de preview): mediana da malha
-                    // inteira nao serve pra' predio, que mistura tijolo,
-                    // madeira e janela em escalas diferentes.
-                    std::unordered_map<uint16_t, std::vector<float>> densByTex;
-                    for (size_t t = 0; t + 2 < useIndices->size(); t += 3) {
-                        const TerrainVertex& a = vertices[(*useIndices)[t]];
-                        const TerrainVertex& b = vertices[(*useIndices)[t + 1]];
-                        const float dp = glm::length(b.position - a.position);
-                        if (dp <= 1e-4f) continue;
-                        const float d = glm::length(b.texCoord - a.texCoord) / dp;
-                        dens.push_back(d);
-                        if (a.texIndex != 0 && a.texIndex == b.texIndex) densByTex[a.texIndex].push_back(d);
-                    }
-                    if (!dens.empty()) {
-                        std::nth_element(dens.begin(), dens.begin() + dens.size() / 2, dens.end());
-                        meshUvPerUnit = dens[dens.size() / 2];
-                    }
-                    for (auto& [slot, v] : densByTex) {
-                        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
-                        if (v[v.size() / 2] > 0.0f) m_texUvPerUnit.emplace(slot, v[v.size() / 2]);
-                    }
-                }
-                if (isGroundMesh && std::getenv("ERUPTION_TEST_SEAM_STATS"))
-                    ERUPTION_LOG_WARN("[SEAM] chao malha %u: uvPerUnit=%.4f", n, meshUvPerUnit);
-                std::string meshKey = asset.filePath + "#" + std::to_string(n);
-                if (m_meshResolver) {
-                    mesh = m_meshResolver(meshKey, vertices, *useIndices);
-                    mesh.aabbMin = aabbMin;
-                    mesh.aabbMax = aabbMax;
-                } else {
-                    VkDeviceSize vertexSize = vertices.size() * sizeof(TerrainVertex);
-                    VkDeviceSize indexSize = useIndices->size() * sizeof(uint32_t);
-                    
-                    m_ctx->createBuffer(vertexSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                        VMA_MEMORY_USAGE_GPU_ONLY, mesh.vertexBuffer, mesh.vertexAlloc);
-                    m_ctx->createBuffer(indexSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                        VMA_MEMORY_USAGE_GPU_ONLY, mesh.indexBuffer, mesh.indexAlloc);
-                    // Espelho dos PROFILE_VRAM_FREE de destroyBuffers - sem o
-                    // ALLOC o contador de Meshes so' descia (pedidos.md #5).
-                    PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, vertexSize + indexSize);
-                    
-                    VkBuffer stagingBuffer;
-                    VmaAllocation stagingAlloc;
-                    m_ctx->createBuffer(vertexSize + indexSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, stagingBuffer, stagingAlloc);
-                    void* mapped;
-                    vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
-                    std::memcpy(mapped, vertices.data(), vertexSize);
-                    std::memcpy((uint8_t*)mapped + vertexSize, useIndices->data(), indexSize);
-                    vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
-
-                    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
-                        VkBufferCopy cv{0, 0, vertexSize};
-                        vkCmdCopyBuffer(cmd, stagingBuffer, mesh.vertexBuffer, 1, &cv);
-                        VkBufferCopy ci{vertexSize, 0, indexSize};
-                        vkCmdCopyBuffer(cmd, stagingBuffer, mesh.indexBuffer, 1, &ci);
-                    });
-                    vmaDestroyBuffer(m_ctx->allocator(), stagingBuffer, stagingAlloc);
-
-                    mesh.indexCount = static_cast<uint32_t>(useIndices->size());
-                }
-                mesh.groundCells = std::move(groundCells);
-
-                // MATERIAL E VENTO DEPOIS DO RESOLVER, nunca antes. O
-                // m_meshResolver (cache de geometria) retorna um ModelMeshGPU
-                // NOVO e a atribuicao `mesh = m_meshResolver(...)` substituia a
-                // struct inteira - tudo que fosse escrito acima era descartado
-                // em silencio. Perdiam-se swayAmount, metallicScale e
-                // roughnessScale de TODA malha resolvida pelo cache.
-                // Sintoma que levou ate' aqui (autor 2026-09-02: "tem que
-                // implementar o vento, nao to vendo nada se movendo"): o vento
-                // chegava ao vertex shader (medido: 0,082 em tempo limpo, 0,76
-                // em tempestade) e o balanco por malha era calculado certo
-                // (medido: 29 de 164 malhas com sway > 0), mas o valor que
-                // chegava ao SSBO era 0,00 em todas - a vegetacao ficava
-                // congelada. Confirmado por sonda: forcar sway em todas as
-                // malhas nao mudava um pixel, enquanto deslocar sem ler o sway
-                // movia 98,65% da tela.
-                mesh.metallicScale = profile.metallic;
-                mesh.roughnessScale = profile.roughness;
-                mesh.swayAmount = resolveSwayAmount(nomeMaterial, profile.category);
-                // FATOR DE DESLOCAMENTO POR MATERIAL (tesselacao da banda
-                // perto) - ver dispScaleForCategory() em PbrMaterialProfile.hpp
-                // (fonte unica compartilhada com o popup de preview em
-                // SpherePreview.cpp). isGroundMesh (splat/nome coreano de
-                // chao/categoria - calculado acima) forca amplitude cheia
-                // mesmo quando o nome da textura nao esta' classificado no
-                // pbr_materials.json (visto num mapa de teste: a textura do
-                // chao nunca apareceu na tabela -> caia no fallback generico 0.35
-                // em vez do 1.0 que chao de verdade deveria ter, sem nada
-                // "quebrar" visivelmente - so' ficava mais fraco que devia).
-                mesh.dispScale = isGroundMesh ? 1.0f : dispScaleForCategory(profile.category);
-                mesh.uvPerUnit = meshUvPerUnit;
-
-                // ERUPTION_TEST_SWAY_ALL=<v>: forca o balanco em TODAS as malhas
-                // (diagnostico: separa "o vento nao chega" de "a heuristica de
-                // nome nao classificou nada como vegetacao").
-                static const float kSwayAll = [] {
-                    const char* e = std::getenv("ERUPTION_TEST_SWAY_ALL");
-                    return e ? static_cast<float>(std::atof(e)) : 0.0f;
-                }();
-                if (kSwayAll > 0.0f) mesh.swayAmount = kSwayAll;
-                if (std::getenv("ERUPTION_TEST_SWAY_STATS"))
-                    ERUPTION_LOG_WARN("[SWAY] %s cat=%s sway=%.2f", nomeMaterial.c_str(),
-                                      profile.category.c_str(), mesh.swayAmount);
-                // CHAO (G38): terreno que veio como modelo. Reusa isGroundMesh
-                // (calculado mais acima, pro particionamento em celulas) em vez
-                // de recalcular um criterio MAIS FRACO aqui - esta copia so'
-                // conferia "ground" em INGLES no nome, entao nunca marcava chao
-                // com nome em coreano (a palavra para chao/piso no nome da
-                // textura) a menos que o splat salvasse. Os dois
-                // criterios tinham que ser o mesmo e nao eram (ver comentario
-                // ~linha 1152).
-                mesh.isGround = isGroundMesh;
-                if (mesh.isGround && std::getenv("ERUPTION_TEST_GROUND_STATS"))
-                    ERUPTION_LOG_WARN("[GROUNDSTATS] mat='%s' cat='%s' splat=%d",
-                                      nomeMaterial.c_str(), profile.category.c_str(), splatGround ? 1 : 0);
-
-                // CASTER SOLIDO? So' se TODA textura referenciada pela malha
-                // for opaca. Basta um vertice apontar para textura com alfa
-                // para a malha inteira continuar no caminho com teste - errar
-                // para o lado do caro nao quebra imagem, o contrario faz cerca
-                // virar retangulo solido no shadow map.
-                {
-                    bool allOpaque = m_bindless != nullptr && !vertices.empty();
-                    if (allOpaque) {
-                        for (const auto& v : vertices) {
-                            if (!m_bindless->slotOpaque(v.texIndex)) { allOpaque = false; break; }
-                        }
-                    }
-                    mesh.shadowOpaque = allOpaque;
-                    if (std::getenv("ERUPTION_TEST_SHADOW_OPAQUE_CENSUS")) {
-                        static int nTot = 0, nOpaque = 0;
-                        ++nTot;
-                        if (allOpaque) ++nOpaque;
-                        ERUPTION_LOG_WARN("[SOMBRA-OPACA] malhas=%d solidas=%d", nTot, nOpaque);
-                    }
-                }
-
-                // LOD grosseiro por distância. Um index buffer simplificado
-                // sobre o MESMO vertex buffer: a instância longe desenha menos
-                // triângulo sem uma segunda cópia da malha na VRAM.
-                //
-                // Motivo medido no parana_field: 713 instâncias visíveis
-                // submetiam 3.902.788 triângulos por frame. Compartilhar
-                // geometria entre instâncias resolveu memória, mas não reduz o
-                // que é rasterizado - só LOD reduz, e é o que decide se o mapa
-                // roda na 930M.
-                if (m_meshLodRatio > 0.0f && meshLodAvailable() &&
-                    useIndices->size() >= kMeshLodMinIndices &&
-                    useIndices->size() >= size_t(m_meshLodMinTris) * 3 && !vertices.empty()) {
-                    MeshLodResult lod = simplifyMesh(&vertices[0].position.x,
-                                                     vertices.size(), sizeof(TerrainVertex),
-                                                     *useIndices, m_meshLodRatio, m_meshLodError,
-                                                     m_meshLodMaxTris,
-                                                     offsetof(TerrainVertex, texCoord),
-                                                     offsetof(TerrainVertex, texIndex),
-                                                     mesh.swayAmount > 0.0f);
-                    // FOLHAGEM: poda de cartoes com COMPENSACAO DE AREA (Cook,
-                    // Halstead, Planck, Ryu 2007 - ver MeshLod.hpp). O caminho
-                    // de cartao do simplifyMesh so' remove e para no piso de
-                    // 60% de area, entao o teto de triangulos nao era honrado:
-                    // medido no parana_demo a pitch 30, as malhas 50/51 (107 k
-                    // e 99 k tris) ficavam em 45 k/41 k no "lo" e, com 155+141
-                    // instancias, eram 9,75 M dos 17,4 M tris do frame - para
-                    // 2,7 M fragmentos (~5 triangulos por fragmento). Aqui os
-                    // cartoes que ficam CRESCEM em torno do proprio centroide e a
-                    // cobertura da copa se conserva, entao lo e far cabem no
-                    // teto de verdade. Como os vertices mudam, cada nivel tem
-                    // vertex buffer proprio (lo/farVertexBuffer).
-                    // ERUPTION_TEST_NO_CARD_PRUNE=1: volta ao caminho antigo (A/B).
-                    static const bool kNoCardPrune = std::getenv("ERUPTION_TEST_NO_CARD_PRUNE") != nullptr;
-                    bool cardLodDone = false;
-                    if (lod.cardMesh && !kNoCardPrune && mesh.swayAmount > 0.0f) {
-                        auto uploadBuf = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
-                                             VkBuffer& buf, VmaAllocation& alloc) {
-                            m_ctx->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
-                                                VMA_MEMORY_USAGE_GPU_ONLY, buf, alloc);
-                            PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, size);
-                            VkBuffer stg; VmaAllocation stgAlloc;
-                            m_ctx->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                VMA_MEMORY_USAGE_CPU_ONLY, stg, stgAlloc);
-                            void* mp = nullptr;
-                            vmaMapMemory(m_ctx->allocator(), stgAlloc, &mp);
-                            std::memcpy(mp, data, static_cast<size_t>(size));
-                            vmaUnmapMemory(m_ctx->allocator(), stgAlloc);
-                            m_ctx->immediateSubmit([&](VkCommandBuffer c) {
-                                VkBufferCopy cp{0, 0, size};
-                                vkCmdCopyBuffer(c, stg, buf, 1, &cp);
-                            });
-                            vmaDestroyBuffer(m_ctx->allocator(), stg, stgAlloc);
-                        };
-                        const size_t triCount = useIndices->size() / 3;
-                        size_t loTarget = static_cast<size_t>(double(triCount) * m_meshLodRatio);
-                        if (m_meshLodMaxTris > 0) loTarget = std::min<size_t>(loTarget, m_meshLodMaxTris);
-                        loTarget = std::max<size_t>(loTarget, 3);
-                        CardPruneResult pr = pruneCardsAreaPreserving(
-                            vertices.data(), vertices.size(), sizeof(TerrainVertex),
-                            offsetof(TerrainVertex, position), *useIndices,
-                            static_cast<uint32_t>(loTarget),
-                            offsetof(TerrainVertex, texCoord), offsetof(TerrainVertex, texIndex),
-                            kCardLodMaxScale);
-                        if (pr.valid) {
-                            uploadBuf(pr.vertices.data(), pr.vertices.size(),
-                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, mesh.loVertexBuffer, mesh.loVertexAlloc);
-                            uploadBuf(pr.indices.data(), pr.indices.size() * sizeof(uint32_t),
-                                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.loIndexBuffer, mesh.loIndexAlloc);
-                            mesh.loIndexCount = static_cast<uint32_t>(pr.indices.size());
-                            // Distancia de troca: mesma convencao do dropCards
-                            // (area removida x 0,25 x extensao), mas o crescimento
-                            // devolve a cobertura, entao so' a fracao que a escala
-                            // NAO compensou conta como erro.
-                            const float extent = glm::length(mesh.aabbMax - mesh.aabbMin);
-                            const float uncompensated = 1.0f - std::min(1.0f, pr.areaKeptRaw * pr.scale * pr.scale);
-                            const float absErr = std::max(((1.0f - pr.areaKeptRaw) * 0.08f + uncompensated * 0.25f) * extent, 1e-3f);
-                            mesh.loSwitchDistance = std::max(absErr * m_meshLodDistanceFactor, m_meshLodMinDistance);
-                            cardLodDone = true;
-                            if (m_meshLodFarMaxTris > 0 && mesh.loIndexCount / 3 > m_meshLodFarMaxTris * 2) {
-                                CardPruneResult fr = pruneCardsAreaPreserving(
-                                    vertices.data(), vertices.size(), sizeof(TerrainVertex),
-                                    offsetof(TerrainVertex, position), *useIndices,
-                                    m_meshLodFarMaxTris,
-                                    offsetof(TerrainVertex, texCoord), offsetof(TerrainVertex, texIndex),
-                                    kCardLodMaxScale * 2.0f);
-                                if (fr.valid && fr.indices.size() < mesh.loIndexCount) {
-                                    uploadBuf(fr.vertices.data(), fr.vertices.size(),
-                                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, mesh.farVertexBuffer, mesh.farVertexAlloc);
-                                    uploadBuf(fr.indices.data(), fr.indices.size() * sizeof(uint32_t),
-                                              VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.farIndexBuffer, mesh.farIndexAlloc);
-                                    mesh.farIndexCount = static_cast<uint32_t>(fr.indices.size());
-                                    mesh.farSwitchDistance = mesh.loSwitchDistance * m_meshLodFarDistanceMul;
-                                }
-                            }
-                            static const bool kCardPruneDbg = std::getenv("ERUPTION_DEBUG_LODCARDS") != nullptr;
-                            if (kCardPruneDbg)
-                                ERUPTION_LOG_WARN("[CARDPRUNE] %s: %zu -> lo %u tris (escala %.2f, area bruta %.3f, ilhas %u/%u) far %u | troca lo=%.0f far=%.0f",
-                                                  nomeMaterial.c_str(), triCount, mesh.loIndexCount / 3,
-                                                  pr.scale, pr.areaKeptRaw, pr.islandsKept, pr.islandsTotal,
-                                                  mesh.farIndexCount / 3, mesh.loSwitchDistance, mesh.farSwitchDistance);
-                        }
-                    }
-                    if (!cardLodDone && lod.valid) {
-                        const VkDeviceSize loSize = lod.indices.size() * sizeof(uint32_t);
-                        m_ctx->createBuffer(loSize,
-                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                                            VMA_MEMORY_USAGE_GPU_ONLY, mesh.loIndexBuffer, mesh.loIndexAlloc);
-                        PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, loSize);
-                        VkBuffer stg; VmaAllocation stgAlloc;
-                        m_ctx->createBuffer(loSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                            VMA_MEMORY_USAGE_CPU_ONLY, stg, stgAlloc);
-                        void* mp = nullptr;
-                        vmaMapMemory(m_ctx->allocator(), stgAlloc, &mp);
-                        std::memcpy(mp, lod.indices.data(), loSize);
-                        vmaUnmapMemory(m_ctx->allocator(), stgAlloc);
-                        m_ctx->immediateSubmit([&](VkCommandBuffer c) {
-                            VkBufferCopy cp{0, 0, loSize};
-                            vkCmdCopyBuffer(c, stg, mesh.loIndexBuffer, 1, &cp);
-                        });
-                        vmaDestroyBuffer(m_ctx->allocator(), stg, stgAlloc);
-                        mesh.loIndexCount = static_cast<uint32_t>(lod.indices.size());
-                        // Distância de troca vem do ERRO GEOMÉTRICO medido pela
-                        // simplificação, não do raio da malha. Escalar pelo raio
-                        // era exatamente o contrário do desejado: dava a maior
-                        // distância de troca justamente às malhas maiores - as
-                        // que carregam o triângulo todo - e elas nunca trocavam
-                        // (medido: troca variando de 10 a 998 unidades, com a
-                        // câmera a 400). Com o erro, uma malha cuja simplificação
-                        // desloca pouco troca cedo, e o erro já escala com o
-                        // tamanho da malha por construção.
-                        // meshopt reporta o erro RELATIVO à extensão da malha,
-                        // não em unidades de mundo: converter antes de usar.
-                        // Sem isso as distâncias de troca saíam entre 0,1 e 6,6
-                        // unidades, ou seja, o LOD entrava colado na câmera.
-                        const float extent = glm::length(mesh.aabbMax - mesh.aabbMin);
-                        const float absErr = std::max(lod.error * extent, 1e-3f);
-                        // Troca quando o erro projeta abaixo do limiar em pixels:
-                        // distância = erro_mundo * (altura_viewport / 2tan(fov/2))
-                        // / limiar_px. O fator do preset é essa constante.
-                        // Piso de distancia: nada troca de LOD perto da camera,
-                        // por menor que seja o erro geometrico da malha. Sem
-                        // isto, objeto fino (poste) troca a ~30 unidades
-                        // enquanto predio troca a ~180, e o poste pipoca.
-                        mesh.loSwitchDistance = std::max(absErr * m_meshLodDistanceFactor,
-                                                         m_meshLodMinDistance);
-
-                        // LOD DISTANTE: so' faz sentido se for bem menor que o
-                        // "lo". Simplificacao "sloppy" (sem preservar topologia)
-                        // - a esta distancia a silhueta grossa e' tudo que a
-                        // tela resolve. Entra a um multiplo da troca do "lo".
-                        if (m_meshLodFarMaxTris > 0 &&
-                            mesh.loIndexCount / 3 > m_meshLodFarMaxTris * 2) {
-                            MeshLodResult fl = simplifyMesh(&vertices[0].position.x,
-                                                            vertices.size(), sizeof(TerrainVertex),
-                                                            *useIndices,
-                                                            std::max(m_meshLodRatio * 0.25f, 0.02f),
-                                                            1.0f /* erro livre: o TETO manda */, m_meshLodFarMaxTris,
-                                                            offsetof(TerrainVertex, texCoord),
-                                                            offsetof(TerrainVertex, texIndex),
-                                                            mesh.swayAmount > 0.0f,
-                                                            // PISO DE AREA do LOD DISTANTE em malha de cartao. O
-                                                            // piso padrao (0,6: a copa so' afina) e' certo para o
-                                                            // nivel "lo", que ainda e' visto de perto - mas ele
-                                                            // tambem vetava o distante: com 60% da area obrigatoria
-                                                            // o dropCards nunca chega a 400 triangulos, o far sai
-                                                            // igual ao lo e NUNCA e' usado. Medido no parana_demo
-                                                            // (2026-09-05, pitch 15, zoom 1000): duas malhas de
-                                                            // ~100k tri x ~340 instancias ficavam em 45k CADA a
-                                                            // qualquer distancia = 30 M dos 42 M tri do frame.
-                                                            // Alem de 3x a troca do lo a copa e' pequena na tela;
-                                                            // afinar mais e' o que o olho nao ve e a GPU sente.
-                                                            kFarCardMinArea);
-                            if (fl.valid && fl.indices.size() < mesh.loIndexCount) {
-                                const VkDeviceSize faSize = fl.indices.size() * sizeof(uint32_t);
-                                m_ctx->createBuffer(faSize,
-                                                    VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                                                    VMA_MEMORY_USAGE_GPU_ONLY, mesh.farIndexBuffer, mesh.farIndexAlloc);
-                        PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, faSize);
-                                VkBuffer st3; VmaAllocation st3a;
-                                m_ctx->createBuffer(faSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                    VMA_MEMORY_USAGE_CPU_ONLY, st3, st3a);
-                                void* mp3 = nullptr;
-                                vmaMapMemory(m_ctx->allocator(), st3a, &mp3);
-                                std::memcpy(mp3, fl.indices.data(), faSize);
-                                vmaUnmapMemory(m_ctx->allocator(), st3a);
-                                m_ctx->immediateSubmit([&](VkCommandBuffer c) {
-                                    VkBufferCopy cp{0, 0, faSize};
-                                    vkCmdCopyBuffer(c, st3, mesh.farIndexBuffer, 1, &cp);
-                                });
-                                vmaDestroyBuffer(m_ctx->allocator(), st3, st3a);
-                                mesh.farIndexCount = static_cast<uint32_t>(fl.indices.size());
-                                mesh.farSwitchDistance = mesh.loSwitchDistance * m_meshLodFarDistanceMul;
-                            }
-                        }
-                    }
-
-                    // LOD exclusivo da sombra: mais agressivo, porque a
-                    // silhueta no shadow map nao resolve o detalhe (RMS 0,000
-                    // medido). So' vale a pena se for menor que o LOD de tela.
-                    if (m_shadowLodMaxTris > 0) {
-                        MeshLodResult sh = simplifyMesh(&vertices[0].position.x,
-                                                        vertices.size(), sizeof(TerrainVertex),
-                                                        *useIndices, m_meshLodRatio,
-                                                        m_meshLodError * 4.0f, m_shadowLodMaxTris,
-                                                        offsetof(TerrainVertex, texCoord),
-                                                        offsetof(TerrainVertex, texIndex),
-                                                        mesh.swayAmount > 0.0f,
-                                                        // Mesmo problema do far (ver acima): com o piso
-                                                        // de 60% de area o LOD de SOMBRA de uma copa saia
-                                                        // igual ao "lo" (45k tri) e era rejeitado logo
-                                                        // abaixo - a sombra desenhava 45k tri por arvore,
-                                                        // 680 instancias, e o passe custava 5-8 ms no
-                                                        // parana_demo (2026-09-05). A sombra e' filtrada
-                                                        // (PCSS 16 taps): copa com 30% dos cartoes ainda
-                                                        // projeta sombra continua, so' mais clara.
-                                                        kShadowCardMinArea);
-                        if (sh.valid && (mesh.loIndexCount == 0 || sh.indices.size() < mesh.loIndexCount)) {
-                            const VkDeviceSize shSize = sh.indices.size() * sizeof(uint32_t);
-                            m_ctx->createBuffer(shSize,
-                                                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                                                VMA_MEMORY_USAGE_GPU_ONLY, mesh.shIndexBuffer, mesh.shIndexAlloc);
-                        PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, shSize);
-                            VkBuffer st2; VmaAllocation st2a;
-                            m_ctx->createBuffer(shSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                VMA_MEMORY_USAGE_CPU_ONLY, st2, st2a);
-                            void* mp2 = nullptr;
-                            vmaMapMemory(m_ctx->allocator(), st2a, &mp2);
-                            std::memcpy(mp2, sh.indices.data(), shSize);
-                            vmaUnmapMemory(m_ctx->allocator(), st2a);
-                            m_ctx->immediateSubmit([&](VkCommandBuffer c) {
-                                VkBufferCopy cp{0, 0, shSize};
-                                vkCmdCopyBuffer(c, st2, mesh.shIndexBuffer, 1, &cp);
-                            });
-                            vmaDestroyBuffer(m_ctx->allocator(), st2, st2a);
-                            mesh.shIndexCount = static_cast<uint32_t>(sh.indices.size());
-                        }
-                    }
-                }
-
-                m_meshes.push_back(mesh);
-                meshIndices[n] = static_cast<uint32_t>(m_meshes.size() - 1);
-            }
-            // Nós que compartilham geometria (geometryShareIndex >= 0) não
-            // subiram malha nenhuma: apontam para o ModelMeshGPU do dono. Passe
-            // separado porque a ordem dos nós não garante que o dono venha
-            // antes. Sem isso, uma árvore instanciada 883 vezes viraria 883
-            // cópias da mesma malha na VRAM.
-            for (size_t n = 0; n < asset.nodes.size(); ++n) {
-                if (meshIndices[n] != 0xFFFFFFFF) continue;
-                int32_t src = asset.nodes[n].geometryShareIndex;
-                if (src >= 0 && src < static_cast<int32_t>(asset.nodes.size())) {
-                    meshIndices[n] = meshIndices[src];
-                }
-            }
-            if (std::getenv("ERUPTION_DEBUG_DRAWSTATS")) {
-                size_t withLod = 0; float minSw = 1e9f, maxSw = 0.0f;
-                size_t tri = 0, triLo = 0;
-                for (const auto& mm : m_meshes) {
-                    tri += mm.indexCount / 3;
-                    if (mm.loIndexCount > 0) {
-                        ++withLod; triLo += mm.loIndexCount / 3;
-                        minSw = std::min(minSw, mm.loSwitchDistance);
-                        maxSw = std::max(maxSw, mm.loSwitchDistance);
-                    } else { triLo += mm.indexCount / 3; }
-                }
-                ERUPTION_LOG_WARN("[REIDX] soldadas=%zu falhou=%zu vertices %zu -> %zu (%.2fx) "
-                                  "| vertex buffer %.1f -> %.1f MB (economia %.1f MB, %zu B/vertice)",
-                                  dbgReidxOk, dbgReidxFail, dbgVertsBefore, dbgVertsAfter,
-                                  dbgVertsAfter ? double(dbgVertsBefore)/double(dbgVertsAfter) : 1.0,
-                                  dbgVertsBefore * sizeof(TerrainVertex) / 1e6,
-                                  dbgVertsAfter * sizeof(TerrainVertex) / 1e6,
-                                  (dbgVertsBefore - dbgVertsAfter) * sizeof(TerrainVertex) / 1e6,
-                                  sizeof(TerrainVertex));
-                ERUPTION_LOG_WARN("[LODGEN] ratio=%.2f meshopt=%d malhas=%zu com_lod=%zu "
-                                  "tris_full=%zu tris_lod=%zu troca=[%.1f..%.1f]",
-                                  m_meshLodRatio, (int)meshLodAvailable(), m_meshes.size(),
-                                  withLod, tri, triLo,
-                                  withLod ? minSw : 0.0f, maxSw);
-            }
-            m_modelMeshCache[asset.filePath] = meshIndices;
-        }
-
-        // Create instances for each node
-        const auto& meshIndices = m_modelMeshCache[asset.filePath];
-        
-        // source model v1 (Y-down): source world Y-up position must be flipped to Y-down model space.
-        // source model v2 (native Y-up): keep source world Y-up position as-is.
-        Vec3 pos(ref.position.x, (version < 0x202) ? -ref.position.y : ref.position.y, ref.position.z);
-        Mat4 transMat = glm::translate(Mat4(1.0f), pos + Vec3(centerX, 0.0f, centerZ));
-        Mat4 rot = Mat4(1.0f);
-        rot = glm::rotate(rot, glm::radians(-ref.rotation.z), Vec3(0.0f, 0.0f, 1.0f));
-        rot = glm::rotate(rot, glm::radians(-ref.rotation.x), Vec3(1.0f, 0.0f, 0.0f));
-        rot = glm::rotate(rot, glm::radians(ref.rotation.y), Vec3(0.0f, 1.0f, 0.0f));
-        Vec3 scale = ref.scale;
-        if (version < 0x202) {
-            scale.y = -scale.y; // Global flip to convert Y-down to Y-up
-        }
-        Mat4 instanceMatrix = transMat * rot * glm::scale(Mat4(1.0f), scale);
-
-        Vec3 mainBBoxCenter = (asset.boxMin + asset.boxMax) * 0.5f;
-        // source model v1 / source Y-down sources: bottom is MaxY.
-        // source model v2 / native Y-up sources (e.g. exported GLB): asset is already authored
-        // with ground at y=0, so do not apply a vertical shift.
-        float groundY = (version < 0x202) ? asset.boxMax.y : 0.0f;
-
-        bool boxValid = asset.boxMin.x <= asset.boxMax.x && asset.boxMin.y <= asset.boxMax.y && asset.boxMin.z <= asset.boxMax.z;
-
-        Mat4 mainOffset = (boxValid && !asset.skipMainOffset)
-            ? glm::translate(Mat4(1.0f), Vec3(-mainBBoxCenter.x, -groundY, -mainBBoxCenter.z))
-            : Mat4(1.0f);
-
-        for (size_t n = 0; n < asset.nodes.size(); ++n) {
-            uint32_t meshIdx = meshIndices[n];
-            if (meshIdx == 0xFFFFFFFF) continue;
-
-            const auto& node = asset.nodes[n];
-
-            ModelInstance inst;
-            inst.meshIndex = meshIdx;
-            inst.transform = instanceMatrix * mainOffset * node.renderMatrix;
-            inst.name = node.name;
-            inst.assetPath = asset.filePath;
-            inst.nodeIndex = static_cast<uint32_t>(n);
-
-            // Compute world AABB
-            Vec3 wMin(FLT_MAX), wMax(-FLT_MAX);
-            Vec3 localMin = m_meshes[meshIdx].aabbMin;
-            Vec3 localMax = m_meshes[meshIdx].aabbMax;
-            for (int c = 0; c < 8; c++) {
-                Vec3 localCorner(
-                    (c & 1) ? localMax.x : localMin.x,
-                    (c & 2) ? localMax.y : localMin.y,
-                    (c & 4) ? localMax.z : localMin.z
-                );
-                Vec3 worldCorner = Vec3(inst.transform * Vec4(localCorner, 1.0f));
-                wMin = glm::min(wMin, worldCorner);
-                wMax = glm::max(wMax, worldCorner);
-            }
-            inst.worldAabbMin = wMin;
-            inst.worldAabbMax = wMax;
-            inst.worldCenter = (wMin + wMax) * 0.5f;
-
-            // Estimate world-space bounding radius from local AABB + scale
-            Vec3 localSize = m_meshes[meshIdx].aabbMax - m_meshes[meshIdx].aabbMin;
-            Vec3 worldSize = Vec3(
-                localSize.x * std::abs(scale.x),
-                localSize.y * std::abs(scale.y),
-                localSize.z * std::abs(scale.z)
-            );
-            inst.boundingRadius = glm::length(worldSize) * 0.5f;
-            m_instances.push_back(inst);
-
-            // Detect animated nodes
-            bool isAnimated = node.scaleKeyframes.size() >= 2 || node.rotKeyframes.size() >= 2 || node.posKeyframes.size() >= 2;
-            if (isAnimated) {
-                AnimatedNodeData anim;
-                anim.modelAssetIndex = it->second;
-                anim.nodeIndex = static_cast<uint32_t>(n);
-                anim.instanceMatrix = instanceMatrix;
-                anim.mainOffset = mainOffset;
-                anim.instanceIndex = static_cast<uint32_t>(m_instances.size() - 1);
-                m_animatedNodes.push_back(std::move(anim));
-            }
-
-            // Detect texture-animated nodes (lava, flowing water surfaces, etc.)
-            if (!node.animTextures.empty()) {
-                TextureAnimatedNodeData texAnim;
-                texAnim.modelAssetIndex = it->second;
-                texAnim.nodeIndex = static_cast<uint32_t>(n);
-                texAnim.instanceIndex = static_cast<uint32_t>(m_instances.size() - 1);
-                m_textureAnimatedNodes.push_back(std::move(texAnim));
-                m_instances.back().hasTextureAnimation = true;
-            }
-        }
+        appendAssetInstances(it->second, ref, centerX, centerZ);
     }
 
     m_bindless->flushUpdates();
     rebuildHotData();
     ERUPTION_LOG_INFO("ModelRenderer: loaded %zu instances (%zu unique meshes, %zu animated nodes, %zu texture-animated)",
                     m_instances.size(), m_meshes.size(), m_animatedNodes.size(), m_textureAnimatedNodes.size());
+}
+
+// Sobe as malhas do modelo (uma vez por arquivo) e cria uma instancia por no.
+void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanceDesc& ref,
+                                         float centerX, float centerZ, int onlyNode) {
+    const ModelAsset& asset = m_lastModels[assetIndex];
+    if (asset.nodes.empty()) return;
+
+    uint32_t version = asset.versionMajor * 256 + asset.versionMinor;
+
+    // Ensure model meshes are uploaded to GPU
+    if (m_modelMeshCache.find(asset.filePath) == m_modelMeshCache.end()) {
+        std::vector<uint32_t> meshIndices(asset.nodes.size(), 0xFFFFFFFF);
+        size_t dbgReidxOk = 0, dbgReidxFail = 0, dbgVertsBefore = 0, dbgVertsAfter = 0;
+
+        std::vector<uint32_t> assetTexIndexToBindlessSlot(asset.textures.size(), 0);
+        for (size_t t = 0; t < asset.textures.size(); ++t) {
+            assetTexIndexToBindlessSlot[t] = resolveTexture(asset.textures[t]);
+        }
+
+        for (size_t n = 0; n < asset.nodes.size(); ++n) {
+            const auto& node = asset.nodes[n];
+            if (node.vertices.empty() || node.indices.empty()) continue;
+
+            std::vector<TerrainVertex> vertices;
+            vertices.reserve(node.vertices.size());
+            
+            Vec3 aabbMin(FLT_MAX);
+            Vec3 aabbMax(-FLT_MAX);
+            std::string firstTexName; // used for the PBR material profile lookup
+            // NOME DO MATERIAL, nao o da imagem embutida. O GLB traz imagens
+            // com nome sintetico ("#-00_0000.png") - o proprio parser
+            // guarda o nome do MATERIAL em node.pbrTextureNames justamente
+            // por isso. O perfil PBR e o balanco ao vento eram resolvidos
+            // pelo nome sintetico, entao NENHUM dos dois casava: no
+            // parana_field 135 das 164 malhas ficavam com sway 0 e a
+            // vegetacao nao balancava, por mais forte que fosse o vento
+            // (medido: no tornado a forca chega a 1,14 no shader e nada se
+            // mexia). As texturas de verdade do mapa chamam
+            // "pine_sapling_medium_twig", que a heuristica reconhece.
+            std::string firstPbrName;
+            if (!node.pbrTextureNames.empty()) firstPbrName = node.pbrTextureNames[0];
+
+            // Crossfade targets resolve to the same handful of slots for the
+            // whole node; cache per local texture index so the per-vertex
+            // path is a plain lookup instead of a string hash every vertex.
+            struct BlendResolved { uint32_t tex = 0, pbrIdx = 0, normalIdx = 0; bool done = false; };
+            std::vector<BlendResolved> blendCache(node.textureNames.size());
+
+            // World-space splat-mask texture resolve cache (new, optional).
+            struct MaskResolved { uint32_t tex = 0; bool done = false; };
+            std::vector<MaskResolved> maskCache(node.textureNames.size());
+            // Mesmo cache pras 4 camadas de splat: resolver por nome a
+            // cada vertice seria caro e o conjunto e' minusculo.
+            std::vector<MaskResolved> splatCache(node.textureNames.size());
+
+            // Primary texture / PBR resolve is identical for every vertex
+            // sharing a faceTexIdx. Doing the string sanitize + hash lookups
+            // per vertex (millions on a baked map GLB) was ~15s of the load;
+            // cache the result per faceTexIdx and the vertex body becomes a
+            // vector index.
+            struct FaceResolved {
+                uint32_t texSlot = 0, pbrIdx = 0, normalIdx = 0;
+                std::string name;
+                bool done = false;
+            };
+            size_t faceCacheSize = node.textureNames.size();
+            if (!node.textureIds.empty()) faceCacheSize = std::max(faceCacheSize, node.textureIds.size());
+            faceCacheSize = std::max(faceCacheSize, asset.textures.size());
+            if (faceCacheSize == 0) faceCacheSize = 1;
+            std::vector<FaceResolved> faceCache(faceCacheSize);
+
+            for (size_t i = 0; i < node.vertices.size(); ++i) {
+                uint16_t faceTexIdx = (i < node.perVertexTexIds.size()) ? node.perVertexTexIds[i] : 0;
+
+                FaceResolved& fr = faceCache[faceTexIdx % faceCacheSize];
+                if (!fr.done) {
+                    fr.done = true;
+                    uint32_t texSlot = 0;
+                    std::string texName;
+                    std::string pbrName;
+                    if (!node.textureNames.empty()) {
+                        // v2.3+: per-node names
+                        texName = node.textureNames[faceTexIdx % node.textureNames.size()];
+                        texSlot = resolveTexture(texName);
+                        if (!node.pbrTextureNames.empty()) {
+                            pbrName = node.pbrTextureNames[faceTexIdx % node.pbrTextureNames.size()];
+                        }
+                    } else if (!node.textureIds.empty()) {
+                        // v1.x-2.2: map local ID to global list
+                        uint32_t globalIdx = node.textureIds[faceTexIdx % node.textureIds.size()];
+                        texSlot = (globalIdx < assetTexIndexToBindlessSlot.size()) ? assetTexIndexToBindlessSlot[globalIdx] : 0;
+                        if (globalIdx < asset.textures.size()) texName = asset.textures[globalIdx];
+                        // Esse ramo (mapa mais antigo) nunca passava por
+                        // resolveTexture() - a textura ficava sem entrada
+                        // em m_textureCache, entao nunca aparecia na lista
+                        // do F1/popup de preview (autor: "o chao continua
+                        // diferente do preview" - literalmente nao dava
+                        // pra' clicar no chao de verdade).
+                        registerResolvedTexture(texName, texSlot);
+                    } else {
+                        // Fallback: use global index directly
+                        texSlot = (faceTexIdx < assetTexIndexToBindlessSlot.size()) ? assetTexIndexToBindlessSlot[faceTexIdx] : 0;
+                        if (faceTexIdx < asset.textures.size()) texName = asset.textures[faceTexIdx];
+                        registerResolvedTexture(texName, texSlot);
+                    }
+                    PbrTextureSlots pbrSlots;
+                    if (!pbrName.empty()) {
+                        pbrSlots = resolvePbrTextures(pbrName);
+                    }
+                    // Fallback para o nome da TEXTURA: o nome do material
+                    // acha o PBR cozido em disco, mas quando ele nao existe
+                    // a sintese precisa dos pixels, e textura embutida no
+                    // GLB so e' encontravel pelo nome da imagem (mangled
+                    // "#___"). Sem este fallback a ponte do cidade-D (e todo
+                    // material sem PBR cozido em mapa com textura embutida)
+                    // ficava sem normal map nenhum - ou seja, ZERO relevo.
+                    if (!pbrSlots.valid() && !texName.empty() && texName != pbrName) {
+                        pbrSlots = resolvePbrTextures(texName);
+                    }
+                    fr.texSlot = texSlot;
+                    fr.pbrIdx = pbrSlots.mrahw.index;
+                    fr.normalIdx = pbrSlots.normal.index;
+                    // PBR por SLOT de textura: o cache por nome e' chaveado
+                    // pelo nome do MATERIAL, e a lista do F1 so' tem o nome
+                    // sintetico da imagem embutida - o preview nunca achava.
+                    if (texSlot != 0 && pbrSlots.valid()) m_pbrByTexSlot.emplace(texSlot, pbrSlots);
+                    fr.name = std::move(texName);
+                }
+                uint32_t texSlot = fr.texSlot;
+                PbrTextureSlots pbrSlots;
+                pbrSlots.mrahw.index = fr.pbrIdx;
+                pbrSlots.normal.index = fr.normalIdx;
+
+                if (firstTexName.empty() && !fr.name.empty()) {
+                    firstTexName = fr.name;
+                }
+
+                // GLB-authored texture crossfade: resolve the blend-toward
+                // texture the same way as the primary. Inert when the node
+                // carries no _BLEND_WEIGHT data.
+                uint32_t blendTexSlot = 0, blendPbrIdx = 0, blendNormalIdx = 0;
+                float blendWeight = (i < node.perVertexBlendWeights.size())
+                                        ? node.perVertexBlendWeights[i] : 0.0f;
+                if (blendWeight > 0.0f && i < node.perVertexBlendTexIds.size() &&
+                    !node.textureNames.empty()) {
+                    uint16_t bLocal = static_cast<uint16_t>(
+                        node.perVertexBlendTexIds[i] % node.textureNames.size());
+                    BlendResolved& br = blendCache[bLocal];
+                    if (!br.done) {
+                        br.done = true;
+                        br.tex = resolveTexture(node.textureNames[bLocal]);
+                        std::string bPbrName = (bLocal < node.pbrTextureNames.size())
+                            ? node.pbrTextureNames[bLocal] : node.textureNames[bLocal];
+                        if (bPbrName.empty()) bPbrName = node.textureNames[bLocal];
+                        if (!bPbrName.empty()) {
+                            PbrTextureSlots s = resolvePbrTextures(bPbrName);
+                            br.pbrIdx = s.mrahw.index;
+                            br.normalIdx = s.normal.index;
+                        }
+                    }
+                    blendTexSlot = br.tex;
+                    blendPbrIdx = br.pbrIdx;
+                    blendNormalIdx = br.normalIdx;
+                }
+
+                // World-space splat mask: resolve the same way as the primary
+                // texture. Inert when the node carries no _BLEND_MASK_UV data.
+                uint32_t maskTexSlot = 0;
+                Vec2 maskUV(0.0f);
+                if (i < node.perVertexBlendMaskTexIds.size() &&
+                    i < node.perVertexBlendMaskUV.size() &&
+                    node.perVertexBlendMaskTexIds[i] != 0 &&
+                    !node.textureNames.empty()) {
+                    uint16_t mLocal = static_cast<uint16_t>(
+                        node.perVertexBlendMaskTexIds[i] % node.textureNames.size());
+                    MaskResolved& mr = maskCache[mLocal];
+                    if (!mr.done) {
+                        mr.done = true;
+                        mr.tex = resolveTexture(node.textureNames[mLocal]);
+                    }
+                    maskTexSlot = mr.tex;
+                    maskUV = node.perVertexBlendMaskUV[i];
+                }
+
+                // Segunda mascara de splat: mesma UV da primeira (e' so'
+                // posicao de mundo), resolve por nome do mesmo jeito.
+                uint32_t maskTexSlot2 = 0;
+                if (i < node.perVertexBlendMaskTexIds2.size() &&
+                    node.perVertexBlendMaskTexIds2[i] != 0 &&
+                    !node.textureNames.empty()) {
+                    uint16_t mLocal2 = static_cast<uint16_t>(
+                        node.perVertexBlendMaskTexIds2[i] % node.textureNames.size());
+                    MaskResolved& mr2 = maskCache[mLocal2];
+                    if (!mr2.done) {
+                        mr2.done = true;
+                        mr2.tex = resolveTexture(node.textureNames[mLocal2]);
+                    }
+                    maskTexSlot2 = mr2.tex;
+                }
+
+                TerrainVertex v{};
+                v.position = node.vertices[i].position;
+                v.texCoord = node.vertices[i].texCoord;
+                v.normal = node.vertices[i].normal;
+                v.texIndex = texSlot;
+                v.matId = node.vertices[i].matId;
+                v.color = node.vertices[i].color;
+                v.pbrIndex = pbrSlots.mrahw.index;
+                v.normalIndex = pbrSlots.normal.index;
+                v.blendTexIndex = blendTexSlot;
+                v.blendPbrIndex = blendPbrIdx;
+                v.blendNormalIndex = blendNormalIdx;
+                v.blendWeight = (blendTexSlot != 0) ? blendWeight : 0.0f;
+                v.blendMaskIndex = maskTexSlot;
+                v.blendMaskUV = maskUV;
+                v.blendMaskIndex2 = maskTexSlot2;
+                v.emissiveStrength = (i < node.perVertexEmissive.size()) ? node.perVertexEmissive[i] : 0.0f;
+                // Splat: ate' 8 slots de 16 bits empacotados em 4 uint32. O
+                // slot local vira slot GLOBAL de bindless do mesmo jeito
+                // que o texSlot da camada base logo acima.
+                if (!node.textureNames.empty()) {
+                    uint32_t sg[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+                    for (int sIdx = 0; sIdx < 8; ++sIdx) {
+                        const auto& arr = node.perVertexSplatTexIds[sIdx];
+                        if (i >= arr.size() || arr[i] == 0) continue;
+                        uint16_t sLocal = static_cast<uint16_t>(
+                            arr[i] % node.textureNames.size());
+                        MaskResolved& sr = splatCache[sLocal];
+                        if (!sr.done) {
+                            sr.done = true;
+                            sr.tex = resolveTexture(node.textureNames[sLocal]);
+                        }
+                        sg[sIdx] = sr.tex;
+                    }
+                    v.splatTex01 = (sg[0] & 0xFFFFu) | ((sg[1] & 0xFFFFu) << 16);
+                    v.splatTex23 = (sg[2] & 0xFFFFu) | ((sg[3] & 0xFFFFu) << 16);
+                    v.splatTex45 = (sg[4] & 0xFFFFu) | ((sg[5] & 0xFFFFu) << 16);
+                    v.splatTex67 = (sg[6] & 0xFFFFu) | ((sg[7] & 0xFFFFu) << 16);
+                }
+                vertices.push_back(v);
+
+                aabbMin = glm::min(aabbMin, v.position);
+                aabbMax = glm::max(aabbMax, v.position);
+            }
+
+            // Reindexa: a malha vem DESINDEXADA do parser (um vértice por
+            // canto de triângulo), o que faz o vertex shader rodar ~2,3x
+            // mais que o necessário e zera o reuso do cache pós-transform.
+            // Medido: o passe GBuffer custa o mesmo (3,41 / 3,44 / 3,55 ms)
+            // para 0,31 / 1,31 / 2,30 Mpx - não escala com resolução, logo
+            // é vértice, não fragmento. A solda é por igualdade de BYTES do
+            // vértice inteiro, então a imagem não muda.
+            // ERUPTION_NO_REINDEX=1 volta ao comportamento antigo (A/B).
+            static const bool kNoReindex = std::getenv("ERUPTION_NO_REINDEX") != nullptr;
+            const size_t reVtxCountBefore = vertices.size();
+            const std::vector<uint32_t>* useIndices = &node.indices;
+            std::vector<uint32_t> reIdx;
+            std::vector<unsigned char> reVtx;
+            if (!kNoReindex && !vertices.empty() &&
+                reindexMesh(vertices.data(), vertices.size(), sizeof(TerrainVertex),
+                            node.indices, reVtx, reIdx)) {
+                vertices.assign(
+                    reinterpret_cast<const TerrainVertex*>(reVtx.data()),
+                    reinterpret_cast<const TerrainVertex*>(reVtx.data()) +
+                        reVtx.size() / sizeof(TerrainVertex));
+                useIndices = &reIdx;
+                ++dbgReidxOk; dbgVertsBefore += reVtxCountBefore; dbgVertsAfter += vertices.size();
+            } else if (!kNoReindex) {
+                ++dbgReidxFail; dbgVertsBefore += vertices.size(); dbgVertsAfter += vertices.size();
+            }
+
+            ModelMeshGPU mesh;
+            // Prefere o nome do MATERIAL; cai no da imagem se nao houver.
+            const std::string& nomeMaterial = !firstPbrName.empty() ? firstPbrName : firstTexName;
+            const auto& profile = getPbrProfile(nomeMaterial);
+            // ERUPTION_TEST_AABB_STATS="x0,x1,y0,y1,z0,z1": imprime malha
+            // por posicao em vez de heuristica de nome/categoria - serve
+            // pra achar o material exato debaixo de uma pose de camera
+            // conhecida, sem depender de isGroundMesh/isGround (ja'
+            // unificados no mesmo criterio - ver isGroundMesh abaixo).
+            if (const char* aabbEnv = std::getenv("ERUPTION_TEST_AABB_STATS")) {
+                float bx0, bx1, by0, by1, bz0, bz1;
+                if (std::sscanf(aabbEnv, "%f,%f,%f,%f,%f,%f", &bx0, &bx1, &by0, &by1, &bz0, &bz1) == 6) {
+                    const bool overlap = aabbMax.x >= bx0 && aabbMin.x <= bx1 &&
+                                        aabbMax.y >= by0 && aabbMin.y <= by1 &&
+                                        aabbMax.z >= bz0 && aabbMin.z <= bz1;
+                    if (overlap) {
+                        ERUPTION_LOG_WARN("[AABBSTATS] mat='%s' pbrName='%s' texName='%s' cat='%s' "
+                                          "aabb=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)",
+                                          nomeMaterial.c_str(), firstPbrName.c_str(), firstTexName.c_str(),
+                                          profile.category.c_str(), aabbMin.x, aabbMin.y, aabbMin.z,
+                                          aabbMax.x, aabbMax.y, aabbMax.z);
+                    }
+                }
+            }
+            // REORDENACAO ESPACIAL DO CHAO. Ordena os triangulos por celula
+            // de kGroundCellSize e guarda o intervalo de indices de cada
+            // uma: e' o que permite desenhar SO' o pedaco perto da camera
+            // com tesselacao. Custa uma ordenacao no load e zero por frame.
+            std::vector<uint32_t> groundIdx;
+            std::vector<ModelMeshGPU::GroundCell> groundCells;
+            // MESMO criterio do mesh.isGround (ver mais abaixo): categoria,
+            // nome coreano de "chao" OU vertices com splat - no
+            // parana_field, gerado por ferramenta, e' o splat que marca.
+            bool splatGround = false;
+            for (const auto& v : vertices) {
+                if (v.splatTex01 != 0u || v.splatTex23 != 0u) { splatGround = true; break; }
+            }
+            const bool isGroundMesh = splatGround || profile.category == "ground" ||
+                                      nomeMaterial.find("\xEB\xB0\x94\xEB\x8B\xA5") != std::string::npos;
+            if (isGroundMesh && useIndices->size() >= 3 * 64) {
+                constexpr float kGroundCellSize = 96.0f;
+                struct Cell { std::vector<uint32_t> idx; float minX, minZ, maxX, maxZ; };
+                std::unordered_map<uint64_t, Cell> cells;
+                for (size_t t = 0; t + 2 < useIndices->size(); t += 3) {
+                    const Vec3& p0 = vertices[(*useIndices)[t]].position;
+                    const Vec3& p1 = vertices[(*useIndices)[t + 1]].position;
+                    const Vec3& p2 = vertices[(*useIndices)[t + 2]].position;
+                    const float cx = (p0.x + p1.x + p2.x) / 3.0f;
+                    const float cz = (p0.z + p1.z + p2.z) / 3.0f;
+                    const int64_t gx = static_cast<int64_t>(std::floor(cx / kGroundCellSize));
+                    const int64_t gz = static_cast<int64_t>(std::floor(cz / kGroundCellSize));
+                    const uint64_t key = (static_cast<uint64_t>(gx + 32768) << 20) ^
+                                          static_cast<uint64_t>(gz + 32768);
+                    Cell& c = cells[key];
+                    if (c.idx.empty()) {
+                        c.minX = c.maxX = p0.x; c.minZ = c.maxZ = p0.z;
+                    }
+                    for (int k = 0; k < 3; ++k) {
+                        const Vec3& pp = vertices[(*useIndices)[t + k]].position;
+                        c.minX = std::min(c.minX, pp.x); c.maxX = std::max(c.maxX, pp.x);
+                        c.minZ = std::min(c.minZ, pp.z); c.maxZ = std::max(c.maxZ, pp.z);
+                        c.idx.push_back((*useIndices)[t + k]);
+                    }
+                }
+                groundIdx.reserve(useIndices->size());
+                groundCells.reserve(cells.size());
+                for (auto& kv : cells) {
+                    ModelMeshGPU::GroundCell gc{kv.second.minX, kv.second.minZ,
+                                                kv.second.maxX, kv.second.maxZ,
+                                                static_cast<uint32_t>(groundIdx.size()),
+                                                static_cast<uint32_t>(kv.second.idx.size())};
+                    groundIdx.insert(groundIdx.end(), kv.second.idx.begin(), kv.second.idx.end());
+                    groundCells.push_back(gc);
+                }
+                // Em ORDEM DE BUFFER: o desenho funde intervalos vizinhos
+                // com o mesmo veredito, e so' isso derruba 1.764 draws para
+                // algumas dezenas.
+                std::sort(groundCells.begin(), groundCells.end(),
+                          [](const ModelMeshGPU::GroundCell& a, const ModelMeshGPU::GroundCell& b) {
+                              return a.first < b.first;
+                          });
+                if (groundIdx.size() == useIndices->size()) {
+                    useIndices = &groundIdx;
+                    ERUPTION_LOG_WARN("[TESS] chao particionado em %zu celulas de %.0f u (%zu indices)",
+                                      groundCells.size(), kGroundCellSize, groundIdx.size());
+                } else {
+                    groundCells.clear();
+                }
+            }
+            // COSTURAS DO DESLOCAMENTO (autor: "fenda" - linhas finas e
+            // retas no chao, uma por borda de tile). Dois vertices na
+            // MESMA posicao mas com textura/UV/normal diferentes (borda de
+            // tile do chao legado, troca de textura) leem alturas
+            // diferentes e deslocam pra lugares diferentes - abre vao e o
+            // fundo aparece. Marca esses vertices (bit 15 do matId, que
+            // so' o debug magenta lia) e o shader zera o deslocamento
+            // neles: os dois lados da junta ficam presos no mesmo ponto.
+            // UV que difere so' por inteiro (wrap do ladrilho) nao e'
+            // costura - amostra o mesmo texel.
+            {
+                struct PosKey { int64_t x, y, z; bool operator==(const PosKey& o) const { return x == o.x && y == o.y && z == o.z; } };
+                struct PosHash { size_t operator()(const PosKey& k) const {
+                    return std::hash<int64_t>()(k.x * 73856093LL ^ k.y * 19349663LL ^ k.z * 83492791LL); } };
+                std::unordered_map<PosKey, uint32_t, PosHash> first;
+                first.reserve(vertices.size());
+                auto fracDiff = [](float a, float b) {
+                    float d = std::fabs((a - std::floor(a)) - (b - std::floor(b)));
+                    return std::min(d, 1.0f - d);
+                };
+                size_t seams = 0;
+                for (uint32_t vi = 0; vi < vertices.size(); ++vi) {
+                    const TerrainVertex& v = vertices[vi];
+                    PosKey k{static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
+                             static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
+                             static_cast<int64_t>(std::llround(v.position.z * 1000.0f))};
+                    auto [it, inserted] = first.try_emplace(k, vi);
+                    if (inserted) continue;
+                    TerrainVertex& o = vertices[it->second];
+                    const bool differs = o.texIndex != v.texIndex || o.pbrIndex != v.pbrIndex ||
+                                         o.splatTex01 != v.splatTex01 || o.splatTex23 != v.splatTex23 ||
+                                         fracDiff(o.texCoord.x, v.texCoord.x) > 1e-3f ||
+                                         fracDiff(o.texCoord.y, v.texCoord.y) > 1e-3f ||
+                                         glm::dot(o.normal, v.normal) < 0.999f;
+                    if (differs) {
+                        if (!(o.matId & 0x8000u)) ++seams;
+                        o.matId = static_cast<uint16_t>(o.matId | 0x8000u);
+                        vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
+                    }
+                }
+                // Segunda passada: todo vertice cuja posicao ja' foi marcada
+                // (o primeiro do grupo pode ter sido marcado depois dos
+                // outros iguais a ele).
+                for (auto& v : vertices) {
+                    PosKey k{static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
+                             static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
+                             static_cast<int64_t>(std::llround(v.position.z * 1000.0f))};
+                    if (vertices[first[k]].matId & 0x8000u) v.matId = static_cast<uint16_t>(v.matId | 0x8000u);
+                }
+                // BORDA DA MALHA (aresta usada por UM triangulo so'): e' onde
+                // esta malha encosta em OUTRA - no chao legado cada textura e'
+                // uma malha separada, entao a troca de textura entre tiles e'
+                // borda de malha, e a comparacao por posicao acima (que so'
+                // enxerga DENTRO da malha) nao pegava. Era a fenda que sobrou.
+                std::unordered_map<uint64_t, uint32_t> edgeUse;
+                edgeUse.reserve(useIndices->size());
+                auto edgeKey = [](uint32_t a, uint32_t b) {
+                    return (static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b);
+                };
+                for (size_t t = 0; t + 2 < useIndices->size(); t += 3)
+                    for (int e = 0; e < 3; ++e)
+                        ++edgeUse[edgeKey((*useIndices)[t + e], (*useIndices)[t + (e + 1) % 3])];
+                size_t borderVerts = 0;
+                for (const auto& [k, cnt] : edgeUse) {
+                    if (cnt != 1) continue;
+                    for (uint32_t vi : {static_cast<uint32_t>(k >> 32), static_cast<uint32_t>(k & 0xFFFFFFFFu)}) {
+                        if (!(vertices[vi].matId & 0x8000u)) ++borderVerts;
+                        vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
+                    }
+                }
+                if (isGroundMesh && std::getenv("ERUPTION_TEST_SEAM_STATS"))
+                    ERUPTION_LOG_WARN("[SEAM] chao malha %u: %zu posicoes de costura, %zu vertices de borda novos (%zu vertices)",
+                                      n, seams, borderVerts, vertices.size());
+            }
+            // DENSIDADE DE UV (mediana de |dUV|/|dPos| por aresta) - o
+            // shader usa pra amostrar a altura num mip que a grade de
+            // vertices consegue representar (Nyquist), senao a borda seca
+            // da pedra vira serrote ("borda serrilhada").
+            float meshUvPerUnit = 0.0f;
+            {
+                std::vector<float> dens;
+                dens.reserve(useIndices->size() / 3);
+                // Tambem POR TEXTURA (popup de preview): mediana da malha
+                // inteira nao serve pra' predio, que mistura tijolo,
+                // madeira e janela em escalas diferentes.
+                std::unordered_map<uint16_t, std::vector<float>> densByTex;
+                for (size_t t = 0; t + 2 < useIndices->size(); t += 3) {
+                    const TerrainVertex& a = vertices[(*useIndices)[t]];
+                    const TerrainVertex& b = vertices[(*useIndices)[t + 1]];
+                    const float dp = glm::length(b.position - a.position);
+                    if (dp <= 1e-4f) continue;
+                    const float d = glm::length(b.texCoord - a.texCoord) / dp;
+                    dens.push_back(d);
+                    if (a.texIndex != 0 && a.texIndex == b.texIndex) densByTex[a.texIndex].push_back(d);
+                }
+                if (!dens.empty()) {
+                    std::nth_element(dens.begin(), dens.begin() + dens.size() / 2, dens.end());
+                    meshUvPerUnit = dens[dens.size() / 2];
+                }
+                for (auto& [slot, v] : densByTex) {
+                    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+                    if (v[v.size() / 2] > 0.0f) m_texUvPerUnit.emplace(slot, v[v.size() / 2]);
+                }
+            }
+            if (isGroundMesh && std::getenv("ERUPTION_TEST_SEAM_STATS"))
+                ERUPTION_LOG_WARN("[SEAM] chao malha %u: uvPerUnit=%.4f", n, meshUvPerUnit);
+            std::string meshKey = asset.filePath + "#" + std::to_string(n);
+            if (m_meshResolver) {
+                mesh = m_meshResolver(meshKey, vertices, *useIndices);
+                mesh.aabbMin = aabbMin;
+                mesh.aabbMax = aabbMax;
+            } else {
+                VkDeviceSize vertexSize = vertices.size() * sizeof(TerrainVertex);
+                VkDeviceSize indexSize = useIndices->size() * sizeof(uint32_t);
+                
+                m_ctx->createBuffer(vertexSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_GPU_ONLY, mesh.vertexBuffer, mesh.vertexAlloc);
+                m_ctx->createBuffer(indexSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_GPU_ONLY, mesh.indexBuffer, mesh.indexAlloc);
+                // Espelho dos PROFILE_VRAM_FREE de destroyBuffers - sem o
+                // ALLOC o contador de Meshes so' descia (pedidos.md #5).
+                PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, vertexSize + indexSize);
+                
+                VkBuffer stagingBuffer;
+                VmaAllocation stagingAlloc;
+                m_ctx->createBuffer(vertexSize + indexSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, stagingBuffer, stagingAlloc);
+                void* mapped;
+                vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
+                std::memcpy(mapped, vertices.data(), vertexSize);
+                std::memcpy((uint8_t*)mapped + vertexSize, useIndices->data(), indexSize);
+                vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
+
+                m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+                    VkBufferCopy cv{0, 0, vertexSize};
+                    vkCmdCopyBuffer(cmd, stagingBuffer, mesh.vertexBuffer, 1, &cv);
+                    VkBufferCopy ci{vertexSize, 0, indexSize};
+                    vkCmdCopyBuffer(cmd, stagingBuffer, mesh.indexBuffer, 1, &ci);
+                });
+                vmaDestroyBuffer(m_ctx->allocator(), stagingBuffer, stagingAlloc);
+
+                mesh.indexCount = static_cast<uint32_t>(useIndices->size());
+            }
+            mesh.groundCells = std::move(groundCells);
+
+            // MATERIAL E VENTO DEPOIS DO RESOLVER, nunca antes. O
+            // m_meshResolver (cache de geometria) retorna um ModelMeshGPU
+            // NOVO e a atribuicao `mesh = m_meshResolver(...)` substituia a
+            // struct inteira - tudo que fosse escrito acima era descartado
+            // em silencio. Perdiam-se swayAmount, metallicScale e
+            // roughnessScale de TODA malha resolvida pelo cache.
+            // Sintoma que levou ate' aqui (autor 2026-09-02: "tem que
+            // implementar o vento, nao to vendo nada se movendo"): o vento
+            // chegava ao vertex shader (medido: 0,082 em tempo limpo, 0,76
+            // em tempestade) e o balanco por malha era calculado certo
+            // (medido: 29 de 164 malhas com sway > 0), mas o valor que
+            // chegava ao SSBO era 0,00 em todas - a vegetacao ficava
+            // congelada. Confirmado por sonda: forcar sway em todas as
+            // malhas nao mudava um pixel, enquanto deslocar sem ler o sway
+            // movia 98,65% da tela.
+            mesh.metallicScale = profile.metallic;
+            mesh.roughnessScale = profile.roughness;
+            mesh.swayAmount = resolveSwayAmount(nomeMaterial, profile.category);
+            // FATOR DE DESLOCAMENTO POR MATERIAL (tesselacao da banda
+            // perto) - ver dispScaleForCategory() em PbrMaterialProfile.hpp
+            // (fonte unica compartilhada com o popup de preview em
+            // SpherePreview.cpp). isGroundMesh (splat/nome coreano de
+            // chao/categoria - calculado acima) forca amplitude cheia
+            // mesmo quando o nome da textura nao esta' classificado no
+            // pbr_materials.json (visto num mapa de teste: a textura do
+            // chao nunca apareceu na tabela -> caia no fallback generico 0.35
+            // em vez do 1.0 que chao de verdade deveria ter, sem nada
+            // "quebrar" visivelmente - so' ficava mais fraco que devia).
+            mesh.dispScale = isGroundMesh ? 1.0f : dispScaleForCategory(profile.category);
+            mesh.uvPerUnit = meshUvPerUnit;
+
+            // ERUPTION_TEST_SWAY_ALL=<v>: forca o balanco em TODAS as malhas
+            // (diagnostico: separa "o vento nao chega" de "a heuristica de
+            // nome nao classificou nada como vegetacao").
+            static const float kSwayAll = [] {
+                const char* e = std::getenv("ERUPTION_TEST_SWAY_ALL");
+                return e ? static_cast<float>(std::atof(e)) : 0.0f;
+            }();
+            if (kSwayAll > 0.0f) mesh.swayAmount = kSwayAll;
+            if (std::getenv("ERUPTION_TEST_SWAY_STATS"))
+                ERUPTION_LOG_WARN("[SWAY] %s cat=%s sway=%.2f", nomeMaterial.c_str(),
+                                  profile.category.c_str(), mesh.swayAmount);
+            // CHAO (G38): terreno que veio como modelo. Reusa isGroundMesh
+            // (calculado mais acima, pro particionamento em celulas) em vez
+            // de recalcular um criterio MAIS FRACO aqui - esta copia so'
+            // conferia "ground" em INGLES no nome, entao nunca marcava chao
+            // com nome em coreano (a palavra para chao/piso no nome da
+            // textura) a menos que o splat salvasse. Os dois
+            // criterios tinham que ser o mesmo e nao eram (ver comentario
+            // ~linha 1152).
+            mesh.isGround = isGroundMesh;
+            if (mesh.isGround && std::getenv("ERUPTION_TEST_GROUND_STATS"))
+                ERUPTION_LOG_WARN("[GROUNDSTATS] mat='%s' cat='%s' splat=%d",
+                                  nomeMaterial.c_str(), profile.category.c_str(), splatGround ? 1 : 0);
+
+            // CASTER SOLIDO? So' se TODA textura referenciada pela malha
+            // for opaca. Basta um vertice apontar para textura com alfa
+            // para a malha inteira continuar no caminho com teste - errar
+            // para o lado do caro nao quebra imagem, o contrario faz cerca
+            // virar retangulo solido no shadow map.
+            {
+                bool allOpaque = m_bindless != nullptr && !vertices.empty();
+                if (allOpaque) {
+                    for (const auto& v : vertices) {
+                        if (!m_bindless->slotOpaque(v.texIndex)) { allOpaque = false; break; }
+                    }
+                }
+                mesh.shadowOpaque = allOpaque;
+                if (std::getenv("ERUPTION_TEST_SHADOW_OPAQUE_CENSUS")) {
+                    static int nTot = 0, nOpaque = 0;
+                    ++nTot;
+                    if (allOpaque) ++nOpaque;
+                    ERUPTION_LOG_WARN("[SOMBRA-OPACA] malhas=%d solidas=%d", nTot, nOpaque);
+                }
+            }
+
+            // LOD grosseiro por distância. Um index buffer simplificado
+            // sobre o MESMO vertex buffer: a instância longe desenha menos
+            // triângulo sem uma segunda cópia da malha na VRAM.
+            //
+            // Motivo medido no parana_field: 713 instâncias visíveis
+            // submetiam 3.902.788 triângulos por frame. Compartilhar
+            // geometria entre instâncias resolveu memória, mas não reduz o
+            // que é rasterizado - só LOD reduz, e é o que decide se o mapa
+            // roda na 930M.
+            if (m_meshLodRatio > 0.0f && meshLodAvailable() &&
+                useIndices->size() >= kMeshLodMinIndices &&
+                useIndices->size() >= size_t(m_meshLodMinTris) * 3 && !vertices.empty()) {
+                MeshLodResult lod = simplifyMesh(&vertices[0].position.x,
+                                                 vertices.size(), sizeof(TerrainVertex),
+                                                 *useIndices, m_meshLodRatio, m_meshLodError,
+                                                 m_meshLodMaxTris,
+                                                 offsetof(TerrainVertex, texCoord),
+                                                 offsetof(TerrainVertex, texIndex),
+                                                 mesh.swayAmount > 0.0f);
+                // FOLHAGEM: poda de cartoes com COMPENSACAO DE AREA (Cook,
+                // Halstead, Planck, Ryu 2007 - ver MeshLod.hpp). O caminho
+                // de cartao do simplifyMesh so' remove e para no piso de
+                // 60% de area, entao o teto de triangulos nao era honrado:
+                // medido no parana_demo a pitch 30, as malhas 50/51 (107 k
+                // e 99 k tris) ficavam em 45 k/41 k no "lo" e, com 155+141
+                // instancias, eram 9,75 M dos 17,4 M tris do frame - para
+                // 2,7 M fragmentos (~5 triangulos por fragmento). Aqui os
+                // cartoes que ficam CRESCEM em torno do proprio centroide e a
+                // cobertura da copa se conserva, entao lo e far cabem no
+                // teto de verdade. Como os vertices mudam, cada nivel tem
+                // vertex buffer proprio (lo/farVertexBuffer).
+                // ERUPTION_TEST_NO_CARD_PRUNE=1: volta ao caminho antigo (A/B).
+                static const bool kNoCardPrune = std::getenv("ERUPTION_TEST_NO_CARD_PRUNE") != nullptr;
+                bool cardLodDone = false;
+                if (lod.cardMesh && !kNoCardPrune && mesh.swayAmount > 0.0f) {
+                    auto uploadBuf = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
+                                         VkBuffer& buf, VmaAllocation& alloc) {
+                        m_ctx->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
+                                            VMA_MEMORY_USAGE_GPU_ONLY, buf, alloc);
+                        PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, size);
+                        VkBuffer stg; VmaAllocation stgAlloc;
+                        m_ctx->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                            VMA_MEMORY_USAGE_CPU_ONLY, stg, stgAlloc);
+                        void* mp = nullptr;
+                        vmaMapMemory(m_ctx->allocator(), stgAlloc, &mp);
+                        std::memcpy(mp, data, static_cast<size_t>(size));
+                        vmaUnmapMemory(m_ctx->allocator(), stgAlloc);
+                        m_ctx->immediateSubmit([&](VkCommandBuffer c) {
+                            VkBufferCopy cp{0, 0, size};
+                            vkCmdCopyBuffer(c, stg, buf, 1, &cp);
+                        });
+                        vmaDestroyBuffer(m_ctx->allocator(), stg, stgAlloc);
+                    };
+                    const size_t triCount = useIndices->size() / 3;
+                    size_t loTarget = static_cast<size_t>(double(triCount) * m_meshLodRatio);
+                    if (m_meshLodMaxTris > 0) loTarget = std::min<size_t>(loTarget, m_meshLodMaxTris);
+                    loTarget = std::max<size_t>(loTarget, 3);
+                    CardPruneResult pr = pruneCardsAreaPreserving(
+                        vertices.data(), vertices.size(), sizeof(TerrainVertex),
+                        offsetof(TerrainVertex, position), *useIndices,
+                        static_cast<uint32_t>(loTarget),
+                        offsetof(TerrainVertex, texCoord), offsetof(TerrainVertex, texIndex),
+                        kCardLodMaxScale);
+                    if (pr.valid) {
+                        uploadBuf(pr.vertices.data(), pr.vertices.size(),
+                                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, mesh.loVertexBuffer, mesh.loVertexAlloc);
+                        uploadBuf(pr.indices.data(), pr.indices.size() * sizeof(uint32_t),
+                                  VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.loIndexBuffer, mesh.loIndexAlloc);
+                        mesh.loIndexCount = static_cast<uint32_t>(pr.indices.size());
+                        // Distancia de troca: mesma convencao do dropCards
+                        // (area removida x 0,25 x extensao), mas o crescimento
+                        // devolve a cobertura, entao so' a fracao que a escala
+                        // NAO compensou conta como erro.
+                        const float extent = glm::length(mesh.aabbMax - mesh.aabbMin);
+                        const float uncompensated = 1.0f - std::min(1.0f, pr.areaKeptRaw * pr.scale * pr.scale);
+                        const float absErr = std::max(((1.0f - pr.areaKeptRaw) * 0.08f + uncompensated * 0.25f) * extent, 1e-3f);
+                        mesh.loSwitchDistance = std::max(absErr * m_meshLodDistanceFactor, m_meshLodMinDistance);
+                        cardLodDone = true;
+                        if (m_meshLodFarMaxTris > 0 && mesh.loIndexCount / 3 > m_meshLodFarMaxTris * 2) {
+                            CardPruneResult fr = pruneCardsAreaPreserving(
+                                vertices.data(), vertices.size(), sizeof(TerrainVertex),
+                                offsetof(TerrainVertex, position), *useIndices,
+                                m_meshLodFarMaxTris,
+                                offsetof(TerrainVertex, texCoord), offsetof(TerrainVertex, texIndex),
+                                kCardLodMaxScale * 2.0f);
+                            if (fr.valid && fr.indices.size() < mesh.loIndexCount) {
+                                uploadBuf(fr.vertices.data(), fr.vertices.size(),
+                                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, mesh.farVertexBuffer, mesh.farVertexAlloc);
+                                uploadBuf(fr.indices.data(), fr.indices.size() * sizeof(uint32_t),
+                                          VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.farIndexBuffer, mesh.farIndexAlloc);
+                                mesh.farIndexCount = static_cast<uint32_t>(fr.indices.size());
+                                mesh.farSwitchDistance = mesh.loSwitchDistance * m_meshLodFarDistanceMul;
+                            }
+                        }
+                        static const bool kCardPruneDbg = std::getenv("ERUPTION_DEBUG_LODCARDS") != nullptr;
+                        if (kCardPruneDbg)
+                            ERUPTION_LOG_WARN("[CARDPRUNE] %s: %zu -> lo %u tris (escala %.2f, area bruta %.3f, ilhas %u/%u) far %u | troca lo=%.0f far=%.0f",
+                                              nomeMaterial.c_str(), triCount, mesh.loIndexCount / 3,
+                                              pr.scale, pr.areaKeptRaw, pr.islandsKept, pr.islandsTotal,
+                                              mesh.farIndexCount / 3, mesh.loSwitchDistance, mesh.farSwitchDistance);
+                    }
+                }
+                if (!cardLodDone && lod.valid) {
+                    const VkDeviceSize loSize = lod.indices.size() * sizeof(uint32_t);
+                    m_ctx->createBuffer(loSize,
+                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                        VMA_MEMORY_USAGE_GPU_ONLY, mesh.loIndexBuffer, mesh.loIndexAlloc);
+                    PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, loSize);
+                    VkBuffer stg; VmaAllocation stgAlloc;
+                    m_ctx->createBuffer(loSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                        VMA_MEMORY_USAGE_CPU_ONLY, stg, stgAlloc);
+                    void* mp = nullptr;
+                    vmaMapMemory(m_ctx->allocator(), stgAlloc, &mp);
+                    std::memcpy(mp, lod.indices.data(), loSize);
+                    vmaUnmapMemory(m_ctx->allocator(), stgAlloc);
+                    m_ctx->immediateSubmit([&](VkCommandBuffer c) {
+                        VkBufferCopy cp{0, 0, loSize};
+                        vkCmdCopyBuffer(c, stg, mesh.loIndexBuffer, 1, &cp);
+                    });
+                    vmaDestroyBuffer(m_ctx->allocator(), stg, stgAlloc);
+                    mesh.loIndexCount = static_cast<uint32_t>(lod.indices.size());
+                    // Distância de troca vem do ERRO GEOMÉTRICO medido pela
+                    // simplificação, não do raio da malha. Escalar pelo raio
+                    // era exatamente o contrário do desejado: dava a maior
+                    // distância de troca justamente às malhas maiores - as
+                    // que carregam o triângulo todo - e elas nunca trocavam
+                    // (medido: troca variando de 10 a 998 unidades, com a
+                    // câmera a 400). Com o erro, uma malha cuja simplificação
+                    // desloca pouco troca cedo, e o erro já escala com o
+                    // tamanho da malha por construção.
+                    // meshopt reporta o erro RELATIVO à extensão da malha,
+                    // não em unidades de mundo: converter antes de usar.
+                    // Sem isso as distâncias de troca saíam entre 0,1 e 6,6
+                    // unidades, ou seja, o LOD entrava colado na câmera.
+                    const float extent = glm::length(mesh.aabbMax - mesh.aabbMin);
+                    const float absErr = std::max(lod.error * extent, 1e-3f);
+                    // Troca quando o erro projeta abaixo do limiar em pixels:
+                    // distância = erro_mundo * (altura_viewport / 2tan(fov/2))
+                    // / limiar_px. O fator do preset é essa constante.
+                    // Piso de distancia: nada troca de LOD perto da camera,
+                    // por menor que seja o erro geometrico da malha. Sem
+                    // isto, objeto fino (poste) troca a ~30 unidades
+                    // enquanto predio troca a ~180, e o poste pipoca.
+                    mesh.loSwitchDistance = std::max(absErr * m_meshLodDistanceFactor,
+                                                     m_meshLodMinDistance);
+
+                    // LOD DISTANTE: so' faz sentido se for bem menor que o
+                    // "lo". Simplificacao "sloppy" (sem preservar topologia)
+                    // - a esta distancia a silhueta grossa e' tudo que a
+                    // tela resolve. Entra a um multiplo da troca do "lo".
+                    if (m_meshLodFarMaxTris > 0 &&
+                        mesh.loIndexCount / 3 > m_meshLodFarMaxTris * 2) {
+                        MeshLodResult fl = simplifyMesh(&vertices[0].position.x,
+                                                        vertices.size(), sizeof(TerrainVertex),
+                                                        *useIndices,
+                                                        std::max(m_meshLodRatio * 0.25f, 0.02f),
+                                                        1.0f /* erro livre: o TETO manda */, m_meshLodFarMaxTris,
+                                                        offsetof(TerrainVertex, texCoord),
+                                                        offsetof(TerrainVertex, texIndex),
+                                                        mesh.swayAmount > 0.0f,
+                                                        // PISO DE AREA do LOD DISTANTE em malha de cartao. O
+                                                        // piso padrao (0,6: a copa so' afina) e' certo para o
+                                                        // nivel "lo", que ainda e' visto de perto - mas ele
+                                                        // tambem vetava o distante: com 60% da area obrigatoria
+                                                        // o dropCards nunca chega a 400 triangulos, o far sai
+                                                        // igual ao lo e NUNCA e' usado. Medido no parana_demo
+                                                        // (2026-09-05, pitch 15, zoom 1000): duas malhas de
+                                                        // ~100k tri x ~340 instancias ficavam em 45k CADA a
+                                                        // qualquer distancia = 30 M dos 42 M tri do frame.
+                                                        // Alem de 3x a troca do lo a copa e' pequena na tela;
+                                                        // afinar mais e' o que o olho nao ve e a GPU sente.
+                                                        kFarCardMinArea);
+                        if (fl.valid && fl.indices.size() < mesh.loIndexCount) {
+                            const VkDeviceSize faSize = fl.indices.size() * sizeof(uint32_t);
+                            m_ctx->createBuffer(faSize,
+                                                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                                VMA_MEMORY_USAGE_GPU_ONLY, mesh.farIndexBuffer, mesh.farIndexAlloc);
+                    PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, faSize);
+                            VkBuffer st3; VmaAllocation st3a;
+                            m_ctx->createBuffer(faSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                VMA_MEMORY_USAGE_CPU_ONLY, st3, st3a);
+                            void* mp3 = nullptr;
+                            vmaMapMemory(m_ctx->allocator(), st3a, &mp3);
+                            std::memcpy(mp3, fl.indices.data(), faSize);
+                            vmaUnmapMemory(m_ctx->allocator(), st3a);
+                            m_ctx->immediateSubmit([&](VkCommandBuffer c) {
+                                VkBufferCopy cp{0, 0, faSize};
+                                vkCmdCopyBuffer(c, st3, mesh.farIndexBuffer, 1, &cp);
+                            });
+                            vmaDestroyBuffer(m_ctx->allocator(), st3, st3a);
+                            mesh.farIndexCount = static_cast<uint32_t>(fl.indices.size());
+                            mesh.farSwitchDistance = mesh.loSwitchDistance * m_meshLodFarDistanceMul;
+                        }
+                    }
+                }
+
+                // LOD exclusivo da sombra: mais agressivo, porque a
+                // silhueta no shadow map nao resolve o detalhe (RMS 0,000
+                // medido). So' vale a pena se for menor que o LOD de tela.
+                if (m_shadowLodMaxTris > 0) {
+                    MeshLodResult sh = simplifyMesh(&vertices[0].position.x,
+                                                    vertices.size(), sizeof(TerrainVertex),
+                                                    *useIndices, m_meshLodRatio,
+                                                    m_meshLodError * 4.0f, m_shadowLodMaxTris,
+                                                    offsetof(TerrainVertex, texCoord),
+                                                    offsetof(TerrainVertex, texIndex),
+                                                    mesh.swayAmount > 0.0f,
+                                                    // Mesmo problema do far (ver acima): com o piso
+                                                    // de 60% de area o LOD de SOMBRA de uma copa saia
+                                                    // igual ao "lo" (45k tri) e era rejeitado logo
+                                                    // abaixo - a sombra desenhava 45k tri por arvore,
+                                                    // 680 instancias, e o passe custava 5-8 ms no
+                                                    // parana_demo (2026-09-05). A sombra e' filtrada
+                                                    // (PCSS 16 taps): copa com 30% dos cartoes ainda
+                                                    // projeta sombra continua, so' mais clara.
+                                                    kShadowCardMinArea);
+                    if (sh.valid && (mesh.loIndexCount == 0 || sh.indices.size() < mesh.loIndexCount)) {
+                        const VkDeviceSize shSize = sh.indices.size() * sizeof(uint32_t);
+                        m_ctx->createBuffer(shSize,
+                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                            VMA_MEMORY_USAGE_GPU_ONLY, mesh.shIndexBuffer, mesh.shIndexAlloc);
+                    PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, shSize);
+                        VkBuffer st2; VmaAllocation st2a;
+                        m_ctx->createBuffer(shSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                            VMA_MEMORY_USAGE_CPU_ONLY, st2, st2a);
+                        void* mp2 = nullptr;
+                        vmaMapMemory(m_ctx->allocator(), st2a, &mp2);
+                        std::memcpy(mp2, sh.indices.data(), shSize);
+                        vmaUnmapMemory(m_ctx->allocator(), st2a);
+                        m_ctx->immediateSubmit([&](VkCommandBuffer c) {
+                            VkBufferCopy cp{0, 0, shSize};
+                            vkCmdCopyBuffer(c, st2, mesh.shIndexBuffer, 1, &cp);
+                        });
+                        vmaDestroyBuffer(m_ctx->allocator(), st2, st2a);
+                        mesh.shIndexCount = static_cast<uint32_t>(sh.indices.size());
+                    }
+                }
+            }
+
+            m_meshes.push_back(mesh);
+            meshIndices[n] = static_cast<uint32_t>(m_meshes.size() - 1);
+        }
+        // Nós que compartilham geometria (geometryShareIndex >= 0) não
+        // subiram malha nenhuma: apontam para o ModelMeshGPU do dono. Passe
+        // separado porque a ordem dos nós não garante que o dono venha
+        // antes. Sem isso, uma árvore instanciada 883 vezes viraria 883
+        // cópias da mesma malha na VRAM.
+        for (size_t n = 0; n < asset.nodes.size(); ++n) {
+            if (meshIndices[n] != 0xFFFFFFFF) continue;
+            int32_t src = asset.nodes[n].geometryShareIndex;
+            if (src >= 0 && src < static_cast<int32_t>(asset.nodes.size())) {
+                meshIndices[n] = meshIndices[src];
+            }
+        }
+        if (std::getenv("ERUPTION_DEBUG_DRAWSTATS")) {
+            size_t withLod = 0; float minSw = 1e9f, maxSw = 0.0f;
+            size_t tri = 0, triLo = 0;
+            for (const auto& mm : m_meshes) {
+                tri += mm.indexCount / 3;
+                if (mm.loIndexCount > 0) {
+                    ++withLod; triLo += mm.loIndexCount / 3;
+                    minSw = std::min(minSw, mm.loSwitchDistance);
+                    maxSw = std::max(maxSw, mm.loSwitchDistance);
+                } else { triLo += mm.indexCount / 3; }
+            }
+            ERUPTION_LOG_WARN("[REIDX] soldadas=%zu falhou=%zu vertices %zu -> %zu (%.2fx) "
+                              "| vertex buffer %.1f -> %.1f MB (economia %.1f MB, %zu B/vertice)",
+                              dbgReidxOk, dbgReidxFail, dbgVertsBefore, dbgVertsAfter,
+                              dbgVertsAfter ? double(dbgVertsBefore)/double(dbgVertsAfter) : 1.0,
+                              dbgVertsBefore * sizeof(TerrainVertex) / 1e6,
+                              dbgVertsAfter * sizeof(TerrainVertex) / 1e6,
+                              (dbgVertsBefore - dbgVertsAfter) * sizeof(TerrainVertex) / 1e6,
+                              sizeof(TerrainVertex));
+            ERUPTION_LOG_WARN("[LODGEN] ratio=%.2f meshopt=%d malhas=%zu com_lod=%zu "
+                              "tris_full=%zu tris_lod=%zu troca=[%.1f..%.1f]",
+                              m_meshLodRatio, (int)meshLodAvailable(), m_meshes.size(),
+                              withLod, tri, triLo,
+                              withLod ? minSw : 0.0f, maxSw);
+        }
+        m_modelMeshCache[asset.filePath] = meshIndices;
+    }
+
+    // Create instances for each node
+    const auto& meshIndices = m_modelMeshCache[asset.filePath];
+    
+    // source model v1 (Y-down): source world Y-up position must be flipped to Y-down model space.
+    // source model v2 (native Y-up): keep source world Y-up position as-is.
+    Vec3 pos(ref.position.x, (version < 0x202) ? -ref.position.y : ref.position.y, ref.position.z);
+    Mat4 transMat = glm::translate(Mat4(1.0f), pos + Vec3(centerX, 0.0f, centerZ));
+    Mat4 rot = Mat4(1.0f);
+    rot = glm::rotate(rot, glm::radians(-ref.rotation.z), Vec3(0.0f, 0.0f, 1.0f));
+    rot = glm::rotate(rot, glm::radians(-ref.rotation.x), Vec3(1.0f, 0.0f, 0.0f));
+    rot = glm::rotate(rot, glm::radians(ref.rotation.y), Vec3(0.0f, 1.0f, 0.0f));
+    Vec3 scale = ref.scale;
+    if (version < 0x202) {
+        scale.y = -scale.y; // Global flip to convert Y-down to Y-up
+    }
+    Mat4 instanceMatrix = transMat * rot * glm::scale(Mat4(1.0f), scale);
+
+    Vec3 mainBBoxCenter = (asset.boxMin + asset.boxMax) * 0.5f;
+    // source model v1 / source Y-down sources: bottom is MaxY.
+    // source model v2 / native Y-up sources (e.g. exported GLB): asset is already authored
+    // with ground at y=0, so do not apply a vertical shift.
+    float groundY = (version < 0x202) ? asset.boxMax.y : 0.0f;
+
+    bool boxValid = asset.boxMin.x <= asset.boxMax.x && asset.boxMin.y <= asset.boxMax.y && asset.boxMin.z <= asset.boxMax.z;
+
+    Mat4 mainOffset = (boxValid && !asset.skipMainOffset)
+        ? glm::translate(Mat4(1.0f), Vec3(-mainBBoxCenter.x, -groundY, -mainBBoxCenter.z))
+        : Mat4(1.0f);
+
+    for (size_t n = 0; n < asset.nodes.size(); ++n) {
+        uint32_t meshIdx = meshIndices[n];
+        if (meshIdx == 0xFFFFFFFF) continue;
+        if (onlyNode >= 0 && static_cast<int>(n) != onlyNode) continue;
+
+        const auto& node = asset.nodes[n];
+
+        ModelInstance inst;
+        inst.meshIndex = meshIdx;
+        inst.transform = instanceMatrix * mainOffset * node.renderMatrix;
+        inst.name = node.name;
+        inst.assetPath = asset.filePath;
+        inst.nodeIndex = static_cast<uint32_t>(n);
+
+        // Compute world AABB
+        Vec3 wMin(FLT_MAX), wMax(-FLT_MAX);
+        Vec3 localMin = m_meshes[meshIdx].aabbMin;
+        Vec3 localMax = m_meshes[meshIdx].aabbMax;
+        for (int c = 0; c < 8; c++) {
+            Vec3 localCorner(
+                (c & 1) ? localMax.x : localMin.x,
+                (c & 2) ? localMax.y : localMin.y,
+                (c & 4) ? localMax.z : localMin.z
+            );
+            Vec3 worldCorner = Vec3(inst.transform * Vec4(localCorner, 1.0f));
+            wMin = glm::min(wMin, worldCorner);
+            wMax = glm::max(wMax, worldCorner);
+        }
+        inst.worldAabbMin = wMin;
+        inst.worldAabbMax = wMax;
+        inst.worldCenter = (wMin + wMax) * 0.5f;
+
+        // Estimate world-space bounding radius from local AABB + scale
+        Vec3 localSize = m_meshes[meshIdx].aabbMax - m_meshes[meshIdx].aabbMin;
+        Vec3 worldSize = Vec3(
+            localSize.x * std::abs(scale.x),
+            localSize.y * std::abs(scale.y),
+            localSize.z * std::abs(scale.z)
+        );
+        inst.boundingRadius = glm::length(worldSize) * 0.5f;
+        m_instances.push_back(inst);
+
+        // Detect animated nodes
+        bool isAnimated = node.scaleKeyframes.size() >= 2 || node.rotKeyframes.size() >= 2 || node.posKeyframes.size() >= 2;
+        if (isAnimated) {
+            AnimatedNodeData anim;
+            anim.modelAssetIndex = assetIndex;
+            anim.nodeIndex = static_cast<uint32_t>(n);
+            anim.instanceMatrix = instanceMatrix;
+            anim.mainOffset = mainOffset;
+            anim.instanceIndex = static_cast<uint32_t>(m_instances.size() - 1);
+            m_animatedNodes.push_back(std::move(anim));
+        }
+
+        // Detect texture-animated nodes (lava, flowing water surfaces, etc.)
+        if (!node.animTextures.empty()) {
+            TextureAnimatedNodeData texAnim;
+            texAnim.modelAssetIndex = assetIndex;
+            texAnim.nodeIndex = static_cast<uint32_t>(n);
+            texAnim.instanceIndex = static_cast<uint32_t>(m_instances.size() - 1);
+            m_textureAnimatedNodes.push_back(std::move(texAnim));
+            m_instances.back().hasTextureAnimation = true;
+        }
+    }
+}
+
+float ModelRenderer::raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const {
+    if (index >= m_instances.size()) return -1.0f;
+    const ModelInstance& inst = m_instances[index];
+    const ModelAsset* asset = nullptr;
+    for (const auto& m : m_lastModels)
+        if (m.filePath == inst.assetPath) { asset = &m; break; }
+    if (!asset || inst.nodeIndex >= asset->nodes.size()) return -1.0f;
+    const auto& node = asset->nodes[inst.nodeIndex];
+    if (node.vertices.empty()) return -1.0f;
+    // Raio no espaco do modelo; t continua valendo no mundo porque a direcao
+    // local nao e' normalizada.
+    const Mat4 inv = glm::inverse(inst.transform);
+    const Vec3 o = Vec3(inv * Vec4(origin, 1.0f));
+    const Vec3 d = Vec3(inv * Vec4(dir, 0.0f));
+    float best = FLT_MAX;
+    auto tri = [&](const Vec3& a, const Vec3& b, const Vec3& c) {
+        // Moller-Trumbore, dos dois lados.
+        const Vec3 e1 = b - a, e2 = c - a, pv = glm::cross(d, e2);
+        const float det = glm::dot(e1, pv);
+        if (std::abs(det) < 1e-12f) return;
+        const float invDet = 1.0f / det;
+        const Vec3 tv = o - a;
+        const float u = glm::dot(tv, pv) * invDet;
+        if (u < 0.0f || u > 1.0f) return;
+        const Vec3 qv = glm::cross(tv, e1);
+        const float v = glm::dot(d, qv) * invDet;
+        if (v < 0.0f || u + v > 1.0f) return;
+        const float t = glm::dot(e2, qv) * invDet;
+        if (t > 0.0f && t < best) best = t;
+    };
+    const auto& vs = node.vertices;
+    if (!node.indices.empty()) {
+        for (size_t i = 0; i + 2 < node.indices.size(); i += 3) {
+            const uint32_t a = node.indices[i], b = node.indices[i + 1], c = node.indices[i + 2];
+            if (a < vs.size() && b < vs.size() && c < vs.size()) tri(vs[a].position, vs[b].position, vs[c].position);
+        }
+    } else {
+        for (size_t i = 0; i + 2 < vs.size(); i += 3) tri(vs[i].position, vs[i + 1].position, vs[i + 2].position);
+    }
+    return best == FLT_MAX ? -1.0f : best;
+}
+
+uint32_t ModelRenderer::addModel(const ModelAsset& asset, const ModelInstanceDesc& ref, const std::string& nodeName) {
+    if (!hasAsset(asset.filePath)) m_lastModels.push_back(asset);
+    return addInstanceOf(asset.filePath, ref, nodeName);
+}
+
+bool ModelRenderer::hasAsset(const std::string& path) const {
+    for (const auto& m : m_lastModels)
+        if (m.filePath == path) return true;
+    return false;
+}
+
+uint32_t ModelRenderer::addInstanceOf(const std::string& path, const ModelInstanceDesc& ref, const std::string& nodeName) {
+    uint32_t assetIndex = 0;
+    while (assetIndex < m_lastModels.size() && m_lastModels[assetIndex].filePath != path) ++assetIndex;
+    if (assetIndex == m_lastModels.size()) return 0xFFFFFFFFu;
+    int onlyNode = -1;
+    if (!nodeName.empty()) {
+        const auto& nodes = m_lastModels[assetIndex].nodes;
+        for (size_t n = 0; n < nodes.size() && onlyNode < 0; ++n)
+            if (nodes[n].name == nodeName) onlyNode = static_cast<int>(n);
+        if (onlyNode < 0) return 0xFFFFFFFFu;
+    }
+    m_lastInstances.push_back(ref);
+    const uint32_t first = static_cast<uint32_t>(m_instances.size());
+    appendAssetInstances(assetIndex, ref, 0.0f, 0.0f, onlyNode);
+    m_bindless->flushUpdates();
+    rebuildHotData();
+    return m_instances.size() > first ? first : 0xFFFFFFFFu;
 }
 
 void ModelRenderer::recreatePipeline() {
@@ -1986,18 +2065,28 @@ bool ModelRenderer::ensureShadowCapacity() {
             destroyShadowBuffers(false);
             return false;
         }
-        VkDescriptorBufferInfo bi{ m_shadowBuffers[f], 0, bytes };
+        // O set de cada frame e' reescrito quando aquele frame for desenhar
+        // (useStorageSet): agora ele ainda pode estar em uso por um frame em voo.
+        m_shadowSetStale[f] = true;
+    }
+    m_shadowCapacity = cap;
+    return true;
+}
+
+VkDescriptorSet ModelRenderer::useStorageSet(VkDescriptorSet set, bool& stale, VkBuffer buffer) {
+    if (stale) {
+        VkDescriptorBufferInfo bi{buffer, 0, VK_WHOLE_SIZE};
         VkWriteDescriptorSet w{};
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.dstSet = m_shadowSets[f];
+        w.dstSet = set;
         w.dstBinding = 0;
         w.descriptorCount = 1;
         w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w.pBufferInfo = &bi;
         vkUpdateDescriptorSets(m_ctx->device(), 1, &w, 0, nullptr);
+        stale = false;
     }
-    m_shadowCapacity = cap;
-    return true;
+    return set;
 }
 
 bool ModelRenderer::ensureInstanceCapacity(uint32_t count) {
@@ -2029,15 +2118,7 @@ bool ModelRenderer::ensureInstanceCapacity(uint32_t count) {
             destroyInstanceBuffers(false);
             return false;
         }
-        VkDescriptorBufferInfo bi{ m_instBuffers[f], 0, bytes };
-        VkWriteDescriptorSet w{};
-        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.dstSet = m_instSets[f];
-        w.dstBinding = 0;
-        w.descriptorCount = 1;
-        w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        w.pBufferInfo = &bi;
-        vkUpdateDescriptorSets(m_ctx->device(), 1, &w, 0, nullptr);
+        m_instSetStale[f] = true; // ver ensureShadowCapacity
     }
     m_instCapacity = cap;
     ERUPTION_LOG_INFO("Instancing: %u slots x %u frames (%.1f KB cada)",
@@ -2153,7 +2234,8 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     VkDescriptorSet bindlessSet = m_bindless->set();
     const uint32_t instFrame = m_ctx->currentFrame() % kInstFrames;
     if (m_frameUboSet != VK_NULL_HANDLE) {
-        VkDescriptorSet sets[3] = { bindlessSet, m_frameUboSet, m_instSets[instFrame] };
+        VkDescriptorSet sets[3] = { bindlessSet, m_frameUboSet,
+                                    useStorageSet(m_instSets[instFrame], m_instSetStale[instFrame], m_instBuffers[instFrame]) };
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
                                 0, 3, sets, 0, nullptr);
     } else {
@@ -2836,7 +2918,8 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
     // sombra comum, cujo push constant e' menor: para o Vulkan os dois
     // layouts sao incompativeis e o set 0 fica invalido ao trocar de
     // pipeline. Liga de novo com o layout instanciado, junto do set 1.
-    const VkDescriptorSet instSets[2] = {m_bindless->set(), m_shadowSets[fi]};
+    const VkDescriptorSet instSets[2] = {m_bindless->set(),
+                                         useStorageSet(m_shadowSets[fi], m_shadowSetStale[fi], m_shadowBuffers[fi])};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowLayout,
                             0, 2, instSets, 0, nullptr);
     vkCmdPushConstants(cmd, shadowLayout, VK_SHADER_STAGE_VERTEX_BIT,

@@ -3,11 +3,16 @@
 #include "editor/Editor.hpp"
 
 #include "core/Engine.hpp"
+
+#include <imgui.h>
 #include "renderer/WeatherTypes.hpp"
 #include "script/ScriptApi.hpp"
 
 #include <GLFW/glfw3.h>
+#include <glm/gtc/matrix_transform.hpp>
 
+#include <filesystem>
+#include <cstdio>
 #include <fstream>
 
 namespace eruption {
@@ -39,7 +44,12 @@ void Editor::onMapReady() {
         m_original.enabled.push_back(i.enabled);
     }
     m_original.lights = m_engine->deferredLighting().getPointLights();
+    applySceneFile();
+}
+
+void Editor::applySceneFile() {
     m_copySources.clear();
+    m_added.clear();
     m_envEdited = false;
 
     SceneEdits edits;
@@ -50,12 +60,55 @@ void Editor::onMapReady() {
     } else if (!edits.empty()) {
         for (const auto& c : edits.copies) m_copySources[c.name] = c.from;
         m_envEdited = edits.hasEnvironment;
-        const int n = edits.apply(*m_engine);
+        const int n = edits.apply(*m_engine, &m_added);
         log(LogLevel::Info, "Scene edits loaded: " + std::to_string(n) + " change(s) from " + file.generic_string());
     }
     m_savedScene = currentEdits().serialize(m_engine->currentMapName());
+    m_sceneFileTime = sceneFileTime();
     m_undo.clear();
     updateTitle(false);
+}
+
+std::filesystem::file_time_type Editor::sceneFileTime() const {
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(SceneEdits::pathFor(m_engine->currentMapName()), ec);
+    return ec ? std::filesystem::file_time_type{} : t;
+}
+
+void Editor::reloadSceneFile() {
+    // Volta o mapa ao estado de quando carregou e aplica o arquivo de novo.
+    ModelRenderer& mr = m_engine->modelRenderer();
+    const auto& insts = mr.getInstances();
+    const size_t base = std::min(m_original.count, insts.size());
+    for (size_t i = 0; i < base; ++i) {
+        const uint32_t idx = static_cast<uint32_t>(i);
+        if (!sameMatrix(insts[i].transform, m_original.transforms[i])) mr.setInstanceTransform(idx, m_original.transforms[i]);
+        if (insts[i].enabled != m_original.enabled[i]) mr.setInstanceEnabled(idx, m_original.enabled[i]);
+    }
+    // Cópias e modelos acrescentados: apagados e sem nome (o arquivo os cria de novo).
+    for (size_t i = base; i < insts.size(); ++i) {
+        const uint32_t idx = static_cast<uint32_t>(i);
+        if (insts[i].enabled) mr.setInstanceEnabled(idx, false);
+        mr.setInstanceName(idx, std::string());
+    }
+    m_engine->m_deferredLighting.getPointLights() = m_original.lights;
+    select({});
+    applySceneFile();
+    log(LogLevel::Info, "Scene file reloaded.");
+}
+
+void Editor::watchSceneFile() {
+    // Uma vez por segundo: o arquivo pode ter sido mudado no VS Code ou por uma IA.
+    if (m_frame % 60 != 0 || m_engine->currentMapName().empty() || m_play != PlayState::Editing) return;
+    const auto t = sceneFileTime();
+    if (t == m_sceneFileTime) return;
+    m_sceneFileTime = t;
+    if (m_sceneDirty) {
+        log(LogLevel::Warning, "The scene file changed on disk, but this map has unsaved changes. "
+                               "File > Reload Scene discards them and loads the file.");
+        return;
+    }
+    reloadSceneFile();
 }
 
 SceneEdits Editor::currentEdits() const {
@@ -72,6 +125,33 @@ SceneEdits Editor::currentEdits() const {
         o.hasTransform = moved;
         if (moved) o.transform = SceneEdits::Transform::from(insts[i].transform);
         e.objects.push_back(std::move(o));
+    }
+    for (const auto& a : m_added) {
+        // Raiz a partir de um nó visível; todos apagados = modelo removido.
+        int k0 = -1;
+        for (uint32_t k = 0; k < a.count && k0 < 0; ++k)
+            if (a.first + k < insts.size() && insts[a.first + k].enabled) k0 = static_cast<int>(k);
+        if (k0 < 0) continue;
+        const Mat4 root = insts[a.first + k0].transform * glm::inverse(a.local[k0]);
+        SceneEdits::Added out;
+        out.file = a.prefab.empty() ? a.file : std::string();
+        out.node = a.prefab.empty() ? a.node : std::string();
+        out.prefab = a.prefab;
+        out.name = a.name;
+        out.transform = SceneEdits::Transform::from(root);
+        e.added.push_back(std::move(out));
+        for (uint32_t k = 0; k < a.count; ++k) {
+            const ModelInstance& inst = insts[a.first + k];
+            const bool hidden = !inst.enabled;
+            const bool moved = !hidden && !sameMatrix(inst.transform, root * a.local[k]);
+            if (!hidden && !moved) continue;
+            SceneEdits::Object o;
+            o.name = inst.name;
+            o.hidden = hidden;
+            o.hasTransform = moved;
+            if (moved) o.transform = SceneEdits::Transform::from(inst.transform);
+            e.objects.push_back(std::move(o));
+        }
     }
     for (size_t i = base; i < insts.size(); ++i) {
         if (!insts[i].enabled) continue; // cópia apagada
@@ -113,6 +193,7 @@ bool Editor::saveScene() {
     std::filesystem::create_directories(file.parent_path(), ec);
     std::ofstream(file, std::ios::binary) << text;
     m_savedScene = text;
+    m_sceneFileTime = sceneFileTime();
     updateTitle(false);
     log(LogLevel::Info, "Saved " + file.generic_string());
     return true;
@@ -140,6 +221,132 @@ void Editor::duplicateSelection() {
     Engine* engine = m_engine;
     auto setEnabled = [engine, idx](bool on) { engine->modelRenderer().setInstanceEnabled(idx, on); };
     m_undo.push({"Duplicate " + name, [setEnabled] { setEnabled(false); }, [setEnabled] { setEnabled(true); }});
+}
+
+namespace {
+
+// Caminho relativo à pasta do projeto quando o arquivo está dentro dela, para
+// o scene.luau continuar valendo em outra máquina.
+std::string projectPath(const std::string& path) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path rel = fs::relative(path, fs::current_path(), ec);
+    if (!ec && !rel.empty() && rel.native().rfind("..", 0) != 0) return rel.generic_string();
+    return path;
+}
+
+} // namespace
+
+void Editor::dropModel(const std::string& path, const Vec3& position) {
+    namespace fs = std::filesystem;
+    std::string file = projectPath(path), node, prefab;
+    Mat4 inner(1.0f);
+    std::string stem = fs::path(path).stem().string();
+    if (Prefab::isPrefabPath(path)) {
+        Prefab p;
+        std::string error;
+        if (!p.load(path, error)) {
+            log(LogLevel::Error, error);
+            return;
+        }
+        prefab = file;
+        file = p.file;
+        node = p.node;
+        inner = p.matrix();
+        stem = fs::path(stem).stem().string(); // "x.prefab" -> "x"
+    }
+    // Nome livre: nem "<nome>" nem "<nome>/<nó>" em uso.
+    const auto& insts = m_engine->modelRenderer().getInstances();
+    auto taken = [&insts](const std::string& n) {
+        for (const auto& i : insts)
+            if (i.name == n || i.name.rfind(n + "/", 0) == 0) return true;
+        return false;
+    };
+    std::string name;
+    for (int n = 1;; ++n) {
+        name = stem + "_" + std::to_string(n);
+        if (!taken(name)) break;
+    }
+    SceneEdits::AddedInstance added;
+    if (!SceneEdits::addModel(*m_engine, file, node, name, glm::translate(Mat4(1.0f), position), inner, added)) {
+        log(LogLevel::Error, "Could not add " + file + " (see the log above).");
+        return;
+    }
+    added.node = node;
+    added.prefab = prefab;
+    m_added.push_back(added);
+    select({SelectionKind::Model, static_cast<int>(added.first)});
+    Engine* engine = m_engine;
+    const uint32_t first = added.first, count = added.count;
+    auto setEnabled = [engine, first, count](bool on) {
+        for (uint32_t k = 0; k < count; ++k) engine->modelRenderer().setInstanceEnabled(first + k, on);
+    };
+    m_undo.push({"Add " + name, [setEnabled] { setEnabled(false); }, [setEnabled] { setEnabled(true); }});
+    log(LogLevel::Info, "Added " + name + " (" + (prefab.empty() ? file : prefab) + ")");
+}
+
+bool Editor::savePrefab(const std::string& path) {
+    if (m_selection.kind != SelectionKind::Model || !selectionHasTransform()) return false;
+    ModelRenderer& mr = m_engine->modelRenderer();
+    const uint32_t idx = static_cast<uint32_t>(m_selection.index);
+    const ModelInstance& inst = mr.getInstances()[idx];
+    Prefab p;
+    // Matriz do nó como o motor o cria, a menos de translação: a rotação e a
+    // escala do objeto relativas a ela viram as do prefab (a posição é de cada cópia).
+    Mat4 created(1.0f);
+    const SceneEdits::AddedInstance* from = nullptr;
+    for (const auto& a : m_added)
+        if (idx >= a.first && idx < a.first + a.count) from = &a;
+    if (from) {
+        p.file = from->file;
+        p.node = from->count == 1 ? from->node : inst.name.substr(inst.name.rfind('/') + 1);
+        created = glm::inverse(from->inner) * from->local[idx - from->first];
+    } else if (idx < m_original.count) {
+        p.file = inst.assetPath;
+        p.node = inst.name;
+        created = m_original.transforms[idx];
+    } else {
+        log(LogLevel::Warning, "Copies can't become prefabs yet: make the prefab from the original object.");
+        return false;
+    }
+    const SceneEdits::Transform delta = SceneEdits::Transform::from(inst.transform * glm::inverse(created));
+    p.rotation = delta.rotation;
+    p.scale = delta.scale;
+    p.file = projectPath(p.file);
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+    std::ofstream(path, std::ios::binary) << p.serialize();
+    log(LogLevel::Info, "Saved prefab " + path + ". Drag it from the Project panel into a scene.");
+    return true;
+}
+
+void Editor::drawPrefabDialog() {
+    if (m_prefabOpen) {
+        ImGui::OpenPopup("Save as Prefab");
+        m_prefabOpen = false;
+        std::string base = selectionName(m_selection);
+        base = base.substr(base.rfind('/') + 1);
+        for (char& c : base)
+            if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-')) c = '_';
+        std::snprintf(m_prefabName, sizeof(m_prefabName), "%s", base.c_str());
+    }
+    const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal("Save as Prefab", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    const bool enter = ImGui::InputText("Name", m_prefabName, sizeof(m_prefabName), ImGuiInputTextFlags_EnterReturnsTrue);
+    const std::string path = std::string("assets/prefabs/") + m_prefabName + ".prefab.luau";
+    ImGui::TextDisabled("%s", path.c_str());
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec)) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Replaces the existing prefab.");
+    ImGui::Separator();
+    ImGui::BeginDisabled(m_prefabName[0] == '\0');
+    const bool save = ImGui::Button("Save", ImVec2(120, 0)) || (enter && m_prefabName[0]);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+    if (save && savePrefab(path)) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
 }
 
 void Editor::updateTitle(bool dirty) {

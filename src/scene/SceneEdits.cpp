@@ -2,6 +2,7 @@
 #include "scene/SceneEdits.hpp"
 
 #include "core/Engine.hpp"
+#include "core/Logger.hpp"
 #include "script/ScriptApi.hpp"
 
 #include <lua.h>
@@ -106,6 +107,36 @@ SceneEdits::Transform SceneEdits::Transform::from(const Mat4& m) {
     return t;
 }
 
+bool SceneEdits::addModel(Engine& engine, const std::string& file, const std::string& node, const std::string& name,
+                          const Mat4& root, const Mat4& inner, AddedInstance& out) {
+    ModelRenderer& mr = engine.modelRenderer();
+    const int first = engine.addModelFromFile(file, Vec3(0.0f), node);
+    if (first < 0) return false;
+    out = AddedInstance{};
+    out.file = file;
+    out.name = name;
+    out.inner = inner;
+    out.first = static_cast<uint32_t>(first);
+    out.count = static_cast<uint32_t>(mr.getInstances().size()) - out.first;
+    // Centro da base do conjunto vai para a origem: um nó tirado do mapa (em
+    // coordenada de mundo) e um .glb solto se comportam igual.
+    Vec3 lo(FLT_MAX), hi(-FLT_MAX);
+    for (uint32_t k = 0; k < out.count; ++k) {
+        const ModelInstance& inst = mr.getInstances()[out.first + k];
+        lo = glm::min(lo, inst.worldAabbMin);
+        hi = glm::max(hi, inst.worldAabbMax);
+    }
+    const Mat4 center = glm::translate(Mat4(1.0f), -Vec3((lo.x + hi.x) * 0.5f, lo.y, (lo.z + hi.z) * 0.5f));
+    for (uint32_t k = 0; k < out.count; ++k) {
+        const uint32_t idx = out.first + k;
+        const ModelInstance& inst = mr.getInstances()[idx];
+        out.local.push_back(inner * center * inst.transform);
+        mr.setInstanceName(idx, out.count == 1 ? name : name + "/" + inst.name);
+        mr.setInstanceTransform(idx, root * out.local.back());
+    }
+    return true;
+}
+
 fs::path SceneEdits::pathFor(const std::string& map) {
     return fs::path("assets/scenes") / (map + ".scene.luau");
 }
@@ -144,6 +175,26 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
                 o.transform = readTransform(L, lua_gettop(L), o.hasTransform);
                 o.hidden = readBool(L, lua_gettop(L), "hidden", false);
                 objects.push_back(std::move(o));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, root, "added");
+    if (lua_istable(L, -1)) {
+        const int n = lua_objlen(L, -1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_istable(L, -1)) {
+                Added a;
+                bool any = false;
+                a.file = readStr(L, lua_gettop(L), "file");
+                a.node = readStr(L, lua_gettop(L), "node");
+                a.prefab = readStr(L, lua_gettop(L), "prefab");
+                a.name = readStr(L, lua_gettop(L), "name");
+                a.transform = readTransform(L, lua_gettop(L), any);
+                if ((!a.file.empty() || !a.prefab.empty()) && !a.name.empty()) added.push_back(std::move(a));
             }
             lua_pop(L, 1);
         }
@@ -206,6 +257,21 @@ std::string SceneEdits::serialize(const std::string& map) const {
     o << "-- Edits of the map \"" << map << "\", written by the editor (Ctrl+S).\n"
          "-- Rotation in degrees. Names that no longer exist in the map are ignored.\n"
          "return {\n";
+    if (!added.empty()) {
+        o << "    added = {\n";
+        for (const auto& a : added) {
+            o << "        { ";
+            if (!a.prefab.empty()) {
+                o << "prefab = " << quoted(a.prefab);
+            } else {
+                o << "file = " << quoted(a.file);
+                if (!a.node.empty()) o << ", node = " << quoted(a.node);
+            }
+            o << ", name = " << quoted(a.name) << ", position = " << vec(a.transform.position)
+              << ", rotation = " << vec(a.transform.rotation) << ", scale = " << vec(a.transform.scale) << " },\n";
+        }
+        o << "    },\n";
+    }
     if (!objects.empty()) {
         o << "    objects = {\n";
         for (const auto& ob : objects) {
@@ -245,9 +311,31 @@ std::string SceneEdits::serialize(const std::string& map) const {
     return o.str();
 }
 
-int SceneEdits::apply(Engine& engine) const {
+int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) const {
     ModelRenderer& mr = engine.modelRenderer();
     int applied = 0;
+    for (const auto& a : added) {
+        if (scriptFindModel(a.name) >= 0) continue;
+        std::string file = a.file, node = a.node;
+        Mat4 inner(1.0f);
+        if (!a.prefab.empty()) {
+            Prefab p;
+            std::string error;
+            if (!p.load(a.prefab, error)) {
+                ERUPTION_LOG_ERROR("%s", error.c_str());
+                continue;
+            }
+            file = p.file;
+            node = p.node;
+            inner = p.matrix();
+        }
+        AddedInstance inst;
+        if (!addModel(engine, file, node, a.name, a.transform.matrix(), inner, inst)) continue;
+        inst.node = node;
+        inst.prefab = a.prefab;
+        if (addedOut) addedOut->push_back(std::move(inst));
+        ++applied;
+    }
     for (const auto& ob : objects) {
         const int idx = scriptFindModel(ob.name);
         if (idx < 0) continue;
@@ -279,6 +367,65 @@ int SceneEdits::apply(Engine& engine) const {
         ++applied;
     }
     return applied;
+}
+
+Mat4 Prefab::matrix() const {
+    SceneEdits::Transform t;
+    t.rotation = rotation;
+    t.scale = scale;
+    return t.matrix();
+}
+
+bool Prefab::isPrefabPath(const fs::path& p) {
+    const std::string n = p.filename().string();
+    static const std::string kExt = ".prefab.luau";
+    return n.size() > kExt.size() && n.compare(n.size() - kExt.size(), kExt.size(), kExt) == 0;
+}
+
+bool Prefab::load(const fs::path& path, std::string& error) {
+    *this = Prefab{};
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        error = "Prefab not found: " + path.generic_string();
+        return false;
+    }
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    const std::string src = ss.str();
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    luaL_sandbox(L);
+    size_t size = 0;
+    char* bc = luau_compile(src.data(), src.size(), nullptr, &size);
+    const std::string chunk = "@" + path.generic_string();
+    const bool ok = luau_load(L, chunk.c_str(), bc, size, 0) == 0 && lua_pcall(L, 0, 1, 0) == 0;
+    std::free(bc);
+    if (!ok || !lua_istable(L, -1)) {
+        error = ok ? path.generic_string() + ": the file must return a table" : lua_tostring(L, -1);
+        lua_close(L);
+        return false;
+    }
+    const int t = lua_gettop(L);
+    file = readStr(L, t, "file");
+    node = readStr(L, t, "node");
+    readVec(L, t, "rotation", rotation);
+    readVec(L, t, "scale", scale);
+    lua_close(L);
+    if (file.empty()) {
+        error = path.generic_string() + ": missing 'file'";
+        return false;
+    }
+    return true;
+}
+
+std::string Prefab::serialize() const {
+    std::ostringstream o;
+    o << "-- Prefab written by the editor. Drop it on the scene from the Project panel;\n"
+         "-- changing it changes every copy placed in the maps.\n"
+         "return {\n    file = " << quoted(file) << ",\n";
+    if (!node.empty()) o << "    node = " << quoted(node) << ",\n";
+    o << "    rotation = " << vec(rotation) << ",\n    scale = " << vec(scale) << ",\n}\n";
+    return o.str();
 }
 
 } // namespace eruption

@@ -424,9 +424,23 @@ public:
     // refaz a AABB de mundo e o espelho quente usados pelo culling.
     void setInstanceTransform(uint32_t index, const Mat4& transform);
     void setInstanceEnabled(uint32_t index, bool enabled);
+    void setInstanceName(uint32_t index, const std::string& name) {
+        if (index < m_instances.size()) m_instances[index].name = name;
+    }
     // Cópia de uma instância (mesma malha) com outro nome e matriz; devolve o
     // índice novo. Os vetores por instância se ajustam sozinhos ao tamanho.
     uint32_t duplicateInstance(uint32_t source, const std::string& name, const Mat4& transform);
+    // Acrescenta um modelo ao mapa aberto (editor: arrastar um .glb para a
+    // cena). Devolve o indice da primeira instancia criada (uma por no) ou
+    // 0xFFFFFFFF se o modelo nao tinha malha.
+    // `nodeName` vazio = todos os nós; senão só o nó com esse nome.
+    uint32_t addModel(const ModelAsset& asset, const ModelInstanceDesc& ref, const std::string& nodeName = {});
+    // Mesmo que addModel para um arquivo já carregado (sem reler o .glb).
+    bool hasAsset(const std::string& path) const;
+    uint32_t addInstanceOf(const std::string& path, const ModelInstanceDesc& ref, const std::string& nodeName = {});
+    // Distancia ao longo do raio (mundo, dir normalizada) ate' o triangulo
+    // mais proximo da instancia, ou -1. Usa a malha da CPU do modelo.
+    float raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const;
     const std::unordered_map<std::string, uint32_t>& getTextureCache() const { return m_textureCache; }
 
     // Publico pro popup de preview (SpherePreview.cpp) conseguir achar o
@@ -558,6 +572,11 @@ private:
     VkDescriptorSetLayout m_instLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_instPool = VK_NULL_HANDLE;
     VkDescriptorSet m_instSets[kInstFrames] = {};
+    // Set com buffer novo ainda nao escrito: e' escrito no proximo uso do
+    // frame dele, quando o uso anterior ja' terminou (fence do frame).
+    bool m_instSetStale[kInstFrames] = {};
+    bool m_shadowSetStale[kInstFrames] = {};
+    VkDescriptorSet useStorageSet(VkDescriptorSet set, bool& stale, VkBuffer buffer);
     VkBuffer m_instBuffers[kInstFrames] = {};
     VmaAllocation m_instAllocs[kInstFrames] = {};
     void* m_instMapped[kInstFrames] = {};
@@ -696,6 +715,8 @@ private:
     void createPipeline();
     void rebuildHotData();
     void rebuildInstanceSoA();
+    void appendAssetInstances(uint32_t assetIndex, const ModelInstanceDesc& ref, float centerX, float centerZ,
+                              int onlyNode = -1);
     void cullInstances(const Frustum& frustum);
     void uploadMesh(const std::vector<struct TerrainVertex>& vertices,
                     const std::vector<uint32_t>& indices,
