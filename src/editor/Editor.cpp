@@ -532,6 +532,9 @@ void Editor::update(float dt) {
         if (m_engine->addSplatLayer(testLayer)) m_terrainDirty = true;
         else log(LogLevel::Error, std::string("Could not add terrain layer ") + testLayer);
     }
+    // ERUPTION_TEST_EDITOR_SCATTER=<glb>: o modelo entra na paleta de objetos.
+    static const char* testScatter = std::getenv("ERUPTION_TEST_EDITOR_SCATTER");
+    if (testScatter && m_frame == 190) m_scatterPalette.push_back({testScatter, "", "", "test", true});
     static const char* testSculpt = std::getenv("ERUPTION_TEST_EDITOR_SCULPT");
     if (testSculpt && m_frame >= 200 && m_frame <= 260) {
         float u = 0.5f, v = 0.5f;
@@ -542,9 +545,10 @@ void Editor::update(float dt) {
         if (m_frame == 200 && groundPointAt(u, v, at)) {
             b.stroking = true;
             b.paint = mode == 4;
+            b.objects = mode == 5;
             b.layer = layer;
             if (b.paint) m_engine->beginSplatEditing();
-            b.snapshot = b.paint ? m_engine->splatEdit().weights : m_engine->heightEdit().delta;
+            if (!b.objects) b.snapshot = b.paint ? m_engine->splatEdit().weights : m_engine->heightEdit().delta;
             b.rect[0] = b.rect[1] = INT32_MAX;
             b.rect[2] = b.rect[3] = INT32_MIN;
             b.cursor = at;
@@ -554,7 +558,11 @@ void Editor::update(float dt) {
             const Engine::SculptMode modes[] = {Engine::SculptMode::Raise, Engine::SculptMode::Smooth,
                                                 Engine::SculptMode::Flatten, Engine::SculptMode::Lower};
             int r[4];
-            const bool ok = b.paint ? m_engine->paintSplat(b.layer, Vec2(b.cursor.x, b.cursor.z), b.size * 2.0f, 4.0f, b.falloff,
+            if (b.objects) {
+                b.size = 120.0f;
+                scatterStep(1.0f / 60.0f, false);
+            }
+            const bool ok = b.objects ? false : b.paint ? m_engine->paintSplat(b.layer, Vec2(b.cursor.x, b.cursor.z), b.size * 2.0f, 4.0f, b.falloff,
                                                            1.0f / 60.0f, false, r)
                                     : m_engine->sculptTerrain(modes[std::clamp(mode, 0, 3)], Vec2(b.cursor.x, b.cursor.z),
                                                               b.size * 2.0f, b.strength * 2.0f, b.falloff, b.flattenTo,

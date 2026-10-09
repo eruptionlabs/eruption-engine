@@ -280,7 +280,7 @@ void Editor::viewportRay(float u, float v, Vec3& origin, Vec3& dir) const {
     dir = glm::normalize(Vec3(pf) / pf.w - origin);
 }
 
-int Editor::raycastModels(const Vec3& origin, const Vec3& dir, float& hitT, int ignore) const {
+int Editor::raycastModels(const Vec3& origin, const Vec3& dir, float& hitT, int ignore, bool skipScatter) const {
     const Vec3 invDir(1.0f / (std::abs(dir.x) > 1e-8f ? dir.x : 1e-8f),
                       1.0f / (std::abs(dir.y) > 1e-8f ? dir.y : 1e-8f),
                       1.0f / (std::abs(dir.z) > 1e-8f ? dir.z : 1e-8f));
@@ -291,6 +291,7 @@ int Editor::raycastModels(const Vec3& origin, const Vec3& dir, float& hitT, int 
     std::vector<std::pair<float, uint32_t>> boxes;
     for (size_t i = 0; i < insts.size(); ++i) {
         if (!insts[i].enabled || static_cast<int>(i) == ignore) continue;
+        if (skipScatter && m_engine->isScatterInstance(static_cast<uint32_t>(i))) continue;
         const float t = rayAabb(origin, invDir, insts[i].worldAabbMin, insts[i].worldAabbMax);
         if (t >= 0.0f) boxes.push_back({t, static_cast<uint32_t>(i)});
     }
@@ -308,10 +309,10 @@ int Editor::raycastModels(const Vec3& origin, const Vec3& dir, float& hitT, int 
     return best;
 }
 
-bool Editor::floorBelow(const Vec3& from, int ignoreModel, float& floorY) const {
+bool Editor::floorBelow(const Vec3& from, int ignoreModel, float& floorY, bool skipScatter) const {
     const Vec3 down(0.0f, -1.0f, 0.0f);
     float t = FLT_MAX, tt = 0.0f;
-    raycastModels(from, down, t, ignoreModel);
+    raycastModels(from, down, t, ignoreModel, skipScatter);
     if (m_engine->raycastTerrain(from, down, std::min(t, 50000.0f), tt)) t = std::min(t, tt);
     if (t == FLT_MAX) return false;
     floorY = from.y - t;
@@ -372,7 +373,8 @@ void Editor::pickAt(float u, float v) {
     Selection best;
     float bestT = FLT_MAX;
     const int model = raycastModels(origin, dir, bestT);
-    if (model >= 0) best = {SelectionKind::Model, model};
+    // Objetos espalhados pelo pincel não se selecionam um a um.
+    if (model >= 0 && !m_engine->isScatterInstance(static_cast<uint32_t>(model))) best = {SelectionKind::Model, model};
     // Personagens: cilindro em pé do tamanho de uma pessoa.
     const auto& chars = m_engine->characters();
     for (size_t i = 0; i < chars.size(); ++i) {

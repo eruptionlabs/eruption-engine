@@ -150,9 +150,9 @@ private:
     void pickAt(float u, float v);
     void viewportRay(float u, float v, Vec3& origin, Vec3& dir) const;
     // Instância atingida primeiro pelo raio (triângulos reais) ou -1.
-    int raycastModels(const Vec3& origin, const Vec3& dir, float& hitT, int ignore = -1) const;
+    int raycastModels(const Vec3& origin, const Vec3& dir, float& hitT, int ignore = -1, bool skipScatter = false) const;
     // Altura do chão (modelos e grade .ter) abaixo de `from`.
-    bool floorBelow(const Vec3& from, int ignoreModel, float& floorY) const;
+    bool floorBelow(const Vec3& from, int ignoreModel, float& floorY, bool skipScatter = false) const;
     void snapSelectionToFloor(bool pivot);
     bool groundPointAt(float u, float v, Vec3& out) const;
     void dropModel(const std::string& path, const Vec3& position);
@@ -266,6 +266,7 @@ private:
     struct TerrainBrush {
         int mode = 0; // 0 subir/baixar, 1 suavizar, 2 aplainar
         bool paint = false; // aba Paint: pinta camadas em vez de esculpir
+        bool objects = false; // aba Objects: espalha modelos
         int layer = 0;      // camada pintada (-1 = base)
         float size = 40.0f, strength = 20.0f, falloff = 0.5f;
         bool stroking = false, hasCursor = false;
@@ -275,6 +276,18 @@ private:
         std::vector<float> snapshot; // delta (ou pesos) inteiro no começo do traço (desfazer)
     } m_brush;
     bool m_terrainDirty = false;
+    // Pincel de objetos: paleta (modelos ou prefabs) e regras de espalhar.
+    struct ScatterPaletteEntry { std::string file, node, prefab, label; bool on = true; };
+    std::vector<ScatterPaletteEntry> m_scatterPalette;
+    struct ScatterSettings {
+        float density = 4.0f;           // objetos por 100 x 100 unidades
+        float scaleMin = 0.8f, scaleMax = 1.2f;
+        bool randomYaw = true, alignToGround = false;
+    } m_scatterSettings;
+    struct ScatterStroke { std::vector<std::pair<int, std::vector<uint32_t>>> added, removed; uint32_t seed = 1; } m_scatterStroke;
+    void scatterStep(float dt, bool erase);
+    void endScatterStroke();
+    void drawScatterPanel();
     struct SpriteImport {
         SpriteSheetSpec spec;
         SpriteSheetResult result;

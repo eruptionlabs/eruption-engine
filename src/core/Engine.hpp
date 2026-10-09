@@ -462,6 +462,24 @@ public:
     std::vector<std::string> splatLayerFiles() const;
     static bool hasSavedSplat(const std::string& map);
 
+    // Objetos espalhados pelo pincel (core/Scatter.cpp), por modelo.
+    struct ScatterGroup {
+        std::string file, node, prefab;
+        uint32_t templateFirst = 0;  // molde desligado de onde saem as cópias
+        std::vector<Mat4> local;     // cada nó do modelo relativo à raiz
+        struct Item { uint32_t first; bool removed; };
+        std::vector<Item> items;
+    };
+    std::vector<ScatterGroup>& scatterGroups() { return m_scatter; }
+    int scatterGroup(const std::string& file, const std::string& node, const std::string& prefab);
+    std::vector<uint32_t> scatterAdd(int group, const std::vector<Mat4>& roots);
+    void scatterSetRemoved(int group, const std::vector<uint32_t>& items, bool removed);
+    Mat4 scatterRoot(int group, uint32_t item) const;
+    bool isScatterInstance(uint32_t index) const;
+    int loadScatter(const std::string& map);
+    bool saveScatter(std::string& error) const;
+    void clearScatter();
+
     // Início do jogador vindo do scene.luau: leva o jogador (e a câmera) até lá.
     void setPlayerStart(const Vec3& p);
     bool hasPlayerStart() const { return m_hasPlayerStart; }
@@ -1171,6 +1189,7 @@ private:
     std::vector<SceneCharacter> m_characters;
     bool m_hasPlayerStart = false;
     HeightEdit m_heightEdit;
+    std::vector<ScatterGroup> m_scatter;
     SplatEdit m_splatEdit;
     void endSplatEditing();
     void flushSplatUploads(VkCommandBuffer cmd);

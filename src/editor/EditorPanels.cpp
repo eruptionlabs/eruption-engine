@@ -323,6 +323,7 @@ void Editor::drawHierarchy() {
         // Cópias e modelos acrescentados que foram apagados não aparecem; um
         // objeto do mapa apagado aparece apagado (Restore o traz de volta).
         if (i >= m_original.count && !insts[i].enabled) continue;
+        if (m_engine->isScatterInstance(static_cast<uint32_t>(i))) continue; // editados pelo pincel
         if (icontains(insts[i].name, m_hierarchyFilter)) visible.push_back(static_cast<int>(i));
     }
     char hdr[64];

@@ -1916,6 +1916,38 @@ void ModelRenderer::growMeshBounds(uint32_t mesh, const Vec3& lo, const Vec3& hi
         if (m_instances[i].meshIndex == mesh) setInstanceTransform(i, m_instances[i].transform); // refaz a caixa
 }
 
+uint32_t ModelRenderer::duplicateBatch(const std::vector<std::pair<uint32_t, Mat4>>& copies, const std::string& name) {
+    const uint32_t first = static_cast<uint32_t>(m_instances.size());
+    m_instances.reserve(m_instances.size() + copies.size());
+    for (const auto& [src, m] : copies) {
+        if (src >= m_instances.size()) continue;
+        ModelInstance copy = m_instances[src];
+        copy.name = name;
+        copy.enabled = true;
+        copy.transform = m;
+        const Vec3 lo = m_meshes[copy.meshIndex].aabbMin, hi = m_meshes[copy.meshIndex].aabbMax;
+        Vec3 wMin(FLT_MAX), wMax(-FLT_MAX);
+        for (int c = 0; c < 8; ++c) {
+            const Vec3 w = Vec3(m * Vec4((c & 1) ? hi.x : lo.x, (c & 2) ? hi.y : lo.y, (c & 4) ? hi.z : lo.z, 1.0f));
+            wMin = glm::min(wMin, w);
+            wMax = glm::max(wMax, w);
+        }
+        copy.worldAabbMin = wMin;
+        copy.worldAabbMax = wMax;
+        copy.worldCenter = (wMin + wMax) * 0.5f;
+        copy.boundingRadius = glm::length(wMax - wMin) * 0.5f;
+        m_instances.push_back(std::move(copy));
+    }
+    rebuildHotData();
+    return first;
+}
+
+void ModelRenderer::setInstancesEnabled(const std::vector<uint32_t>& indices, bool enabled) {
+    for (uint32_t i : indices)
+        if (i < m_instances.size()) m_instances[i].enabled = enabled;
+    rebuildHotData();
+}
+
 void ModelRenderer::offsetInstancesY(const std::vector<std::pair<uint32_t, float>>& moves) {
     if (moves.empty()) return;
     for (const auto& [i, dy] : moves) {

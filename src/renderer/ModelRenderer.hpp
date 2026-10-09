@@ -450,6 +450,10 @@ public:
     void patchGroundVertices(uint32_t mesh, const std::vector<uint32_t>& vertexIndices);
     void flushVertexPatches(VkCommandBuffer cmd);
     void growMeshBounds(uint32_t mesh, const Vec3& lo, const Vec3& hi);
+    // Em lote (pincel de objetos): cópias de instâncias e liga/desliga, com um
+    // só rebuild do espelho quente no fim. Devolve o índice da primeira cópia.
+    uint32_t duplicateBatch(const std::vector<std::pair<uint32_t, Mat4>>& copies, const std::string& name);
+    void setInstancesEnabled(const std::vector<uint32_t>& indices, bool enabled);
     // Sobe/desce várias instâncias de uma vez (um só rebuild do espelho quente).
     void offsetInstancesY(const std::vector<std::pair<uint32_t, float>>& moves);
     bool isGroundMesh(uint32_t mesh) const { return mesh < m_meshes.size() && m_meshes[mesh].isGround; }
