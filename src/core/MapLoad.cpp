@@ -198,7 +198,7 @@ bool Engine::loadMap(const std::string& name) {
         d.rotation = Vec3(0.0f);
         genericInstances.push_back(d);
     }
-    
+
     if (name.find("medieval_village") != std::string::npos) {
         for (auto& mod : loadedMap->models) {
             for (auto& node : mod.nodes) {

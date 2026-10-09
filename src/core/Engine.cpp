@@ -169,6 +169,7 @@ Engine::Engine() {
     if (const char* e = std::getenv("ERUPTION_TEST_AUTO_EXPOSURE")) m_autoExposureEnabled = std::stof(e) != 0.0f;
     if (const char* e = std::getenv("ERUPTION_TEST_AMBIENT_INTENSITY")) m_ambientIntensity = std::stof(e);
     if (const char* e = std::getenv("ERUPTION_TEST_NIGHT_AO")) m_nightAoContrast = std::stof(e);
+    if (const char* e = std::getenv("ERUPTION_TEST_TESS_AUDIT")) m_tessDebugMode = std::atoi(e);
 }
 Engine::~Engine() { shutdown(); }
 
@@ -489,6 +490,13 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_modelRenderer.setFrameUboSet(m_spriteRenderer.frameUboLayout(), m_spriteRenderer.frameUboSet());
     m_terrainRenderer.setFrameUboSet(m_spriteRenderer.frameUboLayout(), m_spriteRenderer.frameUboSet());
     m_spriteSystem.init(&m_vulkan, &m_spriteRenderer);
+    // Popup de preview de textura em esfera (F1 -> Object Manager ->
+    // Textures) - ver debug/SpherePreview.hpp. Mesmo FrameUBO compartilhado
+    // acima, so' que aqui e' pra' pegar sol/tempo pro fragment PROPRIO do
+    // popup (nao model.frag, que escreve no G-buffer da cena principal).
+    if (!m_spherePreview.init(&m_vulkan, &m_bindless, m_spriteRenderer.frameUboLayout(), m_spriteRenderer.frameUboSet())) {
+        ERUPTION_LOG_WARN("[SPHEREPREVIEW] falhou ao inicializar - popup de preview ficara indisponivel.");
+    }
 
     presentLoadingScreen("", "Loading Configuration", 0.3f, true);
     // Shadow settings load BEFORE ShadowRenderer::init so atlas_size from
@@ -599,8 +607,11 @@ bool Engine::init(int width, int height, const std::string& title) {
 
     // Cloud Layers (replaces CloudFluff).
     {
+        // O arquivo so' existe depois que a UI salva uma vez: num clone novo
+        // a raiz vem nula e value() estourava excecao. Sem arquivo = padroes.
         m_cloudLayerConfig.load("data/cloud_layer_config.json");
-        const auto& j = m_cloudLayerConfig.root();
+        static const nlohmann::json kNoCloudConfig = nlohmann::json::object();
+        const auto& j = m_cloudLayerConfig.root().is_object() ? m_cloudLayerConfig.root() : kNoCloudConfig;
 
         CloudLayerRenderer::Config cloudCfg{};
         cloudCfg.enabled = j.value("enabled", true);
@@ -967,6 +978,7 @@ void Engine::shutdown() {
 
     m_assetCache.shutdown(&m_vulkan, &m_bindless);
 
+    m_spherePreview.shutdown();
     m_modelRenderer.shutdown(); m_terrainRenderer.shutdown(); m_spriteSystem.shutdown();
     m_spriteRenderer.shutdown(); m_shadowRenderer.shutdown(); m_deferredLighting.shutdown();
     m_upscaleAA.shutdown();
@@ -1905,10 +1917,15 @@ void Engine::applyGraphicsPreset() {
         m_tessEnabled = nd.value("tessellation_enabled", m_tessEnabled);
         m_tessAmplitude = std::clamp(nd.value("tessellation_amplitude", m_tessAmplitude), 0.0f, 10.0f);
         m_tessHeightGain = std::clamp(nd.value("tessellation_height_gain", m_tessHeightGain), 0.1f, 8.0f);
-        m_tessHeightSpace = std::clamp(nd.value("tessellation_height_space", m_tessHeightSpace), 0, 1);
-        m_tessWorldScale = std::clamp(nd.value("tessellation_world_scale", m_tessWorldScale), 0.001f, 4.0f);
+        m_tessHeightBlur = std::clamp(nd.value("tessellation_height_blur", m_tessHeightBlur), 0.0f, 4.0f);
+        m_tessVertexSpacing = std::clamp(nd.value("tessellation_vertex_spacing", m_tessVertexSpacing), 0.0f, 4.0f);
     }
     envOverrideBool("ERUPTION_TEST_NORMAL_DIST", m_normalDistCurve);
+    // Overrides de bancada da tesselacao DEPOIS do graphics.json - no
+    // construtor eles eram sobrescritos pelo JSON e o teste nao valia nada.
+    if (const char* e = std::getenv("ERUPTION_TEST_TESS_HEIGHT_GAIN")) m_tessHeightGain = std::stof(e);
+    if (const char* e = std::getenv("ERUPTION_TEST_TESS_HEIGHT_BLUR")) m_tessHeightBlur = std::stof(e);
+    if (const char* e = std::getenv("ERUPTION_TEST_TESS_SPACING")) m_tessVertexSpacing = std::stof(e);
 
     if (p.contains("weather_tier")) {
         const std::string tier = p["weather_tier"];

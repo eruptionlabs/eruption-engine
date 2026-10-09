@@ -154,7 +154,7 @@ void main() {
     if (inBlendWeight > 0.0) {
         uint bTexIdx = nonuniformEXT(inBlendTexIndex);
         vec4 bColor = texture(u_textures[bTexIdx], uv);
-        // Height-biased blend (Terrain3D / Unreal HeightLerp family): nudge the
+        // Height-biased blend (familia "height lerp"): nudge the
         // linear per-vertex weight by the two textures' own luminance so the
         // 50% contour follows surface detail instead of the mesh triangles.
         // Kept gentle - a strong bias or added noise turns the band grainy.

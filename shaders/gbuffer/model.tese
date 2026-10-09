@@ -52,7 +52,7 @@ layout(location = 15) out flat uvec2 outSplatTex;
 layout(location = 16) out flat uvec2 outSplatTex2;
 layout(location = 17) out flat uint outBlendMaskIndex2;
 layout(location = 18) out flat float outSway;
-layout(location = 19) out vec3 outDispInfo;
+layout(location = 19) out vec4 outDispInfo;
 layout(location = 20) in vec3 inPrevWorldPos[];
 // Frame anterior: mesma interpolacao + o MESMO deslocamento do vertice final
 // (o balanco de vento ja' veio dos vertices de controle).
@@ -111,70 +111,103 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_tessParams;
     vec4 u_tessLut0;
     vec4 u_tessLut1;
-    // x = 0 UV / 1 mundo, y = escala do mundo. Ver heightAt().
+    // x = reservado, y = espacamento alvo entre vertices da tesselacao (ver model.tesc).
+    // z = teto de inclinacao da normal (radianos), w = teto de tesselacao da
+    // folhagem. Ver model.frag / model.tesc.
     vec4 u_tessParams2;
+    // Filtro passa-baixa (blur) sobre o height map, em niveis de mip
+    // somados ao mip "perto" (2.0) que heightUv() usa - 0 = sem blur extra
+    // (comportamento de antes). Slider "Height Blur".
+    float u_tessHeightBlur;
 };
 
-// ALTURA AMARRADA NO MUNDO (triplanar), nao na UV.
-//
-// O problema que isto resolve: uma coluna feita de 8 painteis, ou dois pedacos
-// de chao, encostam no mesmo ponto do MUNDO mas com UVs DIFERENTES. Amostrando
-// a altura pela UV, cada lado recebe um valor diferente, desloca para lugares
-// diferentes e ABRE UM VAO na junta (autor, 2026-09-06: "na hora que aplica o
-// tesselation elas nao tao se juntando, fica um vao aberto"). Amostrando pela
-// POSICAO DE MUNDO, dois vertices coincidentes leem exatamente o mesmo texel -
-// mesmo deslocamento, junta fechada por construcao.
-//
-// Projecao triplanar (peso pelo quadrado da normal) em vez de um eixo so':
-// escolher "o eixo dominante" reabriria a costura justamente onde a superficie
-// passa de 45 graus e o eixo troca.
+// ALTURA PELA UV DA MALHA - o relevo coincide com a textura que se ve, onde o
+// desenho e' escuro/fundo a geometria afunda (o que o olho espera). Existiu
+// tambem um modo triplanar/mundo (removido a pedido do autor - a combo nao
+// fazia sentido no menu, o modo UV e' o unico usado): amostrava pela POSICAO
+// DE MUNDO em vez da UV pra fechar juntas onde a UV quebra (coluna de varios
+// paineis, ilha de UV do chao), ao custo do relevo virar uma projecao no
+// espaco que nao acompanha mais a textura ("papel molhado"). Se essa costura
+// voltar a incomodar, e' o primeiro lugar pra olhar de novo (ver model.vert).
 //
 // Passa-alta (mip 2 menos mip 5) pelos mesmos motivos de sempre: a altura
 // cozida vem da luminancia do albedo e a banda baixa dela e' sombra pintada.
-// AS DUAS FONTES DE ALTURA, e por que existe escolha:
-//
-// UV DA MALHA: o relevo coincide com a textura que se ve - onde o desenho e'
-//   escuro/fundo, a geometria afunda. E' o que o olho espera. O preco: onde a
-//   UV quebra (dois paineis de uma coluna, ilha de UV do chao), os dois lados
-//   leem alturas diferentes e a junta ABRE.
-// MUNDO (triplanar): dois pontos coincidentes leem o mesmo texel, entao junta
-//   nunca abre. O preco: o padrao de relevo NAO acompanha mais a textura -
-//   ele passa a ser uma projecao no espaco, com o periodo do ladrilho de mundo,
-//   e le' como ondulacao mole ("papel molhado") em vez de grao da pedra.
-//
-// Nao ha' terceira opcao barata: ou a altura e' funcao da UV (e herda as
-// costuras da UV), ou e' funcao da posicao (e ignora a UV).
-// Altura pela UV da malha, em passa-alta (mip 2 menos mip 5) pelo mesmo motivo
-// de sempre: a altura cozida vem da luminancia do albedo e a banda baixa dela
-// e' a sombra pintada.
+// useAlpha=true: alfa do MRAH-W JA' E' altura normalizada (PbrMapGen faz
+// min/max por imagem no bake) - ler direto. useAlpha=false: luminancia CRUA
+// do albedo (sem bake nenhum), essa sim precisa da passa-alta (mip2 menos
+// mip5) pra jogar fora a sombra pintada - ver o comentario grande la' embaixo
+// (main()). Repetir a passa-alta TAMBEM em cima da altura ja' cozida virava
+// DERIVADA da altura (tipo detector de borda), nao a altura em si: testado
+// numa pedra de rua com grout escuro - baixar o ganho em 10x nao mudou o
+// relevo nada (a derivada satura igual pra qualquer ganho pequeno o
+// bastante pra nao zerar sozinho) e SSAO desligado tambem nao mudou, so'
+// sobrou like ruido de cristal sem relacao nenhuma com a forma da pedra
+// (autor: "nao ta com cara de paralelepipedo, ta tudo
+// distorcido"). 255/255 exato (so' possivel num UNORM de 8 bits) e' o
+// sentinela "sem dado" do bake (PbrMapGen) - vira neutro (0.5, sem vies),
+// nao "ponto mais alto".
+// MIP MINIMO PELA GRADE DE VERTICES (Nyquist): a altura e' amostrada por
+// VERTICE, entao detalhe menor que 2 espacamentos da grade vira serrote na
+// borda da pedra ("borda serrilhada"). texels por u = tamanho da textura x
+// UV por u da malha (push.uvScale.z, mediana calculada no load). IDENTICO
+// em model.vert e model.tese - o vertice de canto do patch tem que ler a
+// mesma altura que o vertice original, senao abre fenda na borda da celula.
+float dispMipFloor(uint texIdx) {
+    float spacing = u_tessParams2.y;
+    float uvPerU = push.uvScale.z;
+    if (spacing <= 0.0 || uvPerU <= 0.0) return 0.0;
+    float texels = float(textureSize(u_textures[nonuniformEXT(texIdx)], 0).x);
+    return log2(max(texels * uvPerU * spacing * 2.0, 1.0));
+}
+
 float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
-    vec4 n = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, 2.0);
-    vec4 f = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, 5.0);
+    // Blur (slider "Height Blur") sobe os mips de leitura da altura - mip
+    // maior = media de mais texels = ruido de alta frequencia sumindo antes
+    // do ganho/contraste amplificar ele. 0 = mip 2/5 originais.
+    float nearMip = max(2.0 + u_tessHeightBlur, dispMipFloor(texIdx));
+    float farMip = nearMip + 3.0;
+    if (useAlpha) {
+        float a = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, nearMip).a;
+        if (a > 0.999) return 0.5;
+        // GANHO como CONTRASTE em torno de uma LINHA DE BASE DINAMICA - nao
+        // mais 0.5 fixo, e nao mais diferenca entre dois mips proximos (isso
+        // era a passa-alta dupla que virava derivada - ja' tirado). A
+        // linha de base e' a MEDIA da textura inteira: mip 8.0 e' pedido
+        // alto de proposito, o sampler clampa sozinho no ultimo nivel que
+        // existir (pra uma textura de 256, isso e' ~1 texel = a cor media de
+        // tudo). Sem isto, textura de material fotografado real - que NAO
+        // distribui simetrico em volta de 0.5, pedra clara bate bem acima da
+        // media mas o vao/grout escuro fica so' um pouco abaixo dela - saia
+        // com o lado escuro quase sem deslocamento nenhum (autor, testado com
+        // um modo de auditoria a parte que colore vermelho/verde pelo sinal:
+        // "preto fica fixo (nem move), branca sobe" - o preto nao tava preso,
+        // ele so' tava perto da MEDIA real da textura, que 0.5 fixo tratava
+        // como se fosse alta). Ganho continua sendo o slider "Height
+        // contrast", agora esticando/comprimindo em torno da media de
+        // verdade em vez de um meio arbitrario.
+        float base = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, 8.0).a;
+        return clamp(0.5 + (a - base) * gain, 0.0, 1.0);
+    }
+    vec4 n = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, nearMip);
+    vec4 f = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, farMip);
     const vec3 kL = vec3(0.2126, 0.7152, 0.0722);
-    float hn = useAlpha ? n.a : dot(n.rgb, kL);
-    float hf = useAlpha ? f.a : dot(f.rgb, kL);
+    float hn = dot(n.rgb, kL);
+    float hf = dot(f.rgb, kL);
     return clamp(0.5 + (hn - hf) * gain, 0.0, 1.0);
 }
 
-float heightTriplanar(uint texIdx, vec3 wp, vec3 nrm, float worldScale, float gain,
-                      bool useAlpha) {
-    vec3 w = abs(nrm);
-    w = w / max(w.x + w.y + w.z, 1e-4);
-    vec2 uvX = wp.zy * worldScale;
-    vec2 uvY = wp.xz * worldScale;
-    vec2 uvZ = wp.xy * worldScale;
-    vec4 nX = textureLod(u_textures[nonuniformEXT(texIdx)], uvX, 2.0);
-    vec4 nY = textureLod(u_textures[nonuniformEXT(texIdx)], uvY, 2.0);
-    vec4 nZ = textureLod(u_textures[nonuniformEXT(texIdx)], uvZ, 2.0);
-    vec4 fX = textureLod(u_textures[nonuniformEXT(texIdx)], uvX, 5.0);
-    vec4 fY = textureLod(u_textures[nonuniformEXT(texIdx)], uvY, 5.0);
-    vec4 fZ = textureLod(u_textures[nonuniformEXT(texIdx)], uvZ, 5.0);
-    const vec3 kLum = vec3(0.2126, 0.7152, 0.0722);
-    float hNear = useAlpha ? (nX.a * w.x + nY.a * w.y + nZ.a * w.z)
-                           : (dot(nX.rgb, kLum) * w.x + dot(nY.rgb, kLum) * w.y + dot(nZ.rgb, kLum) * w.z);
-    float hFar  = useAlpha ? (fX.a * w.x + fY.a * w.y + fZ.a * w.z)
-                           : (dot(fX.rgb, kLum) * w.x + dot(fY.rgb, kLum) * w.y + dot(fZ.rgb, kLum) * w.z);
-    return clamp(0.5 + (hNear - hFar) * gain, 0.0, 1.0);
+float distToSegment(vec3 p, vec3 a, vec3 b) {
+    vec3 ab = b - a;
+    float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-8), 0.0, 1.0);
+    return length(p - (a + ab * t));
+}
+
+float seamEdgeMask(bool sa, bool sb, vec3 p, vec3 a, vec3 b, float r) {
+    if (sa && sb) return 0.0;
+    float m = 1.0;
+    if (sa) m *= smoothstep(0.0, r, distance(p, a));
+    if (sb) m *= smoothstep(0.0, r, distance(p, b));
+    return m;
 }
 
 float lut8(vec4 a, vec4 b, float t) {
@@ -187,7 +220,50 @@ float lut8(vec4 a, vec4 b, float t) {
     return mix(v0, v1, f);
 }
 
-
+// MISTURA DE ALTURA POR CAMADA DE SPLAT (mesma mascara, mesmo peso que o
+// model.frag usa pra misturar a COR - ver o bloco "hasSplat" la'). Sem isto a
+// altura ficava sempre presa na camada base (indice 0, gainH em cima da
+// textura errada) enquanto a cor via a mascara e trocava de camada em cada
+// texel - o relevo simplesmente parava de bater com o que a tela mostra toda
+// vez que uma camada de cima vencia a base (autor: "ele nao ta sendo feito
+// sobre o albedo"). Cada camada usa PASSA-ALTA da sua propria luminancia
+// (useAlpha=false: camada de splat e' so' albedo, nao tem PBR/MRAH-W propria)
+// e a mistura e' a MESMA formula do frag: soma pesada, base fecha o que sobra
+// de 1, normaliza no fim. Custa ate' 8 leituras de height a mais (1 par de
+// mip por camada ativa) so' dentro da banda perto tesselada - caro se o autor
+// usar as 8 camadas nesse alcance, mas o alcance ja' e' pequeno de proposito.
+float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 splat2,
+                     uint maskIdx, uint maskIdx2, float gain) {
+    float hBase = heightUv(baseTex, uvIn, gain, false);
+    if ((splat.x | splat.y) == 0u || maskIdx == 0u) return hBase;
+    vec4 w = textureLod(u_textures[nonuniformEXT(maskIdx)], maskUv, 0.0);
+    uint s0 =  splat.x        & 0xFFFFu;
+    uint s1 = (splat.x >> 16) & 0xFFFFu;
+    uint s2 =  splat.y        & 0xFFFFu;
+    uint s3 = (splat.y >> 16) & 0xFFFFu;
+    float wBaseSum = w.r + w.g + w.b + w.a;
+    float acc = 0.0, sum = 0.0;
+    if (s0 != 0u) { acc += heightUv(s0, uvIn, gain, false) * w.r; sum += w.r; }
+    if (s1 != 0u) { acc += heightUv(s1, uvIn, gain, false) * w.g; sum += w.g; }
+    if (s2 != 0u) { acc += heightUv(s2, uvIn, gain, false) * w.b; sum += w.b; }
+    if (s3 != 0u) { acc += heightUv(s3, uvIn, gain, false) * w.a; sum += w.a; }
+    if (maskIdx2 != 0u) {
+        vec4 w2 = textureLod(u_textures[nonuniformEXT(maskIdx2)], maskUv, 0.0);
+        uint s4 =  splat2.x        & 0xFFFFu;
+        uint s5 = (splat2.x >> 16) & 0xFFFFu;
+        uint s6 =  splat2.y        & 0xFFFFu;
+        uint s7 = (splat2.y >> 16) & 0xFFFFu;
+        wBaseSum += w2.r + w2.g + w2.b + w2.a;
+        if (s4 != 0u) { acc += heightUv(s4, uvIn, gain, false) * w2.r; sum += w2.r; }
+        if (s5 != 0u) { acc += heightUv(s5, uvIn, gain, false) * w2.g; sum += w2.g; }
+        if (s6 != 0u) { acc += heightUv(s6, uvIn, gain, false) * w2.b; sum += w2.b; }
+        if (s7 != 0u) { acc += heightUv(s7, uvIn, gain, false) * w2.a; sum += w2.a; }
+    }
+    float wBase = max(0.0, 1.0 - wBaseSum);
+    acc += hBase * wBase;
+    sum += wBase;
+    return sum > 1e-4 ? acc / sum : hBase;
+}
 
 
 // NAO nomear o parametro 'x': o preprocessador do GLSL substitui tokens, e o
@@ -207,7 +283,7 @@ void main() {
     outBlendMaskUV = BARY(inBlendMaskUV);
     outEmissiveStrength = BARY(inEmissiveStrength);
     outSway = BARY(inSway);
-    outDispInfo = vec3(1.0, 0.0, 0.0);
+    outDispInfo = vec4(1.0, 0.0, 0.0, 0.0);
     // Atributos 'flat' vem do primeiro vertice do patch: interpolar indice de
     // textura nao significa nada, e o triangulo inteiro compartilha o material.
     outTexIndex = inTexIndex[0];
@@ -234,9 +310,11 @@ void main() {
             // 1) alfa do MRAH-W, que e' a altura cozida no load (PbrMapGen
             //    escreve height em .a; .b e' a cavidade/AO).
             // 2) sem PBR proprio - o caso do CHAO COM SPLAT, que resolve
-            //    textura por camada e deixa o indice base em 0 - usa a
-            //    luminancia do albedo em PASSA-ALTA: mip 2 menos mip 5. A
-            //    luminancia crua NAO serve como altura porque estas texturas
+            //    textura por camada - usa a luminancia do albedo em
+            //    PASSA-ALTA: mip 2 menos mip 5, MISTURADA pela mesma mascara
+            //    que decide a cor (heightSplatUv acima),
+            //    nao so' a camada base. A luminancia crua NAO serve como altura
+            //    porque estas texturas
             //    de acervo tem SOMBRA PINTADA: o vale escuro do desenho virava
             //    vale de geometria e o relevo seguia o AO da textura em vez do
             //    relevo real (autor, 2026-09-06: "o que ta fazendo o AO pra
@@ -245,19 +323,55 @@ void main() {
             float h = -1.0;
             float hSrc = 0.0; // 1 = MRAH-W (altura cozida), 2 = albedo
             float gainH = max(u_normalDistParams.w, 0.1);
-            bool worldSpace = u_tessParams2.x > 0.5;
-            float wsc = max(u_tessParams2.y, 1e-4);
             if (inPbrIndex[0] != 0u) {
-                h = worldSpace ? heightTriplanar(inPbrIndex[0], wp, nrm, wsc, gainH, true)
-                                   : heightUv(inPbrIndex[0], uv, gainH, true);
+                h = heightUv(inPbrIndex[0], uv, gainH, true);
                 hSrc = 1.0;
             } else if (inTexIndex[0] != 0u) {
-                h = worldSpace ? heightTriplanar(inTexIndex[0], wp, nrm, wsc, gainH, false)
-                                   : heightUv(inTexIndex[0], uv, gainH, false);
+                // CHAO COM SPLAT: la' embaixo pode ter ate' 8 camadas por cima
+                // da base - ver heightSplatUv acima.
+                h = heightSplatUv(uv, outBlendMaskUV, inTexIndex[0], inSplatTex[0], inSplatTex2[0],
+                                    inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
                 hSrc = 2.0;
             }
             if (h >= 0.0) {
-                float ampW = u_tessParams.z * amp * push.uvScale.w;
+                // MASCARA DE COSTURA, ESTANQUE. Canto marcado (bit 15 do matId -
+                // ver ModelRenderer: posicao dividida com vertice de
+                // textura/UV/normal diferente, ou borda de malha) = 0.
+                //
+                // Regra que garante que a junta fecha: num ponto EM CIMA de uma
+                // aresta, a mascara depende SO' dos dois vertices dessa aresta
+                // (e' o unico dado que o triangulo vizinho tambem tem). A versao
+                // anterior usava distancia ate' as OUTRAS arestas do triangulo -
+                // o vizinho nao ve' essas, calculava outra mascara e abria uma
+                // fileira de fendinhas ao longo de cada aresta interna.
+                //   seamEdgeMask: aresta com os 2 cantos marcados = 0 inteira;
+                //     1 canto marcado = sobe em kSeamR a partir dele; 0 = 1.
+                //   Interior: media das 3 arestas com peso b_j*b_k (zera fora da
+                //     propria aresta, entao EM CIMA dela sobra so' ela), e o
+                //     max() com a distancia ate' a borda devolve o miolo do tile
+                //     - sem ele, triangulo com as 3 arestas marcadas ficava
+                //     chapado inteiro (metade do chao de mapa legado).
+                const float kSeamR = 0.6;
+                bool sm0 = (inMatId[0] & 0x8000u) != 0u;
+                bool sm1 = (inMatId[1] & 0x8000u) != 0u;
+                bool sm2 = (inMatId[2] & 0x8000u) != 0u;
+                vec3 bc = gl_TessCoord;
+                float we0 = bc.y * bc.z, we1 = bc.z * bc.x, we2 = bc.x * bc.y;
+                float wsum = we0 + we1 + we2;
+                float edgeBlend;
+                if (wsum < 1e-7) {
+                    bool pinned = bc.x > 0.5 ? sm0 : (bc.y > 0.5 ? sm1 : sm2);
+                    edgeBlend = pinned ? 0.0 : 1.0;
+                } else {
+                    edgeBlend = (we0 * seamEdgeMask(sm1, sm2, wp, inWorldPos[1], inWorldPos[2], kSeamR)
+                               + we1 * seamEdgeMask(sm2, sm0, wp, inWorldPos[2], inWorldPos[0], kSeamR)
+                               + we2 * seamEdgeMask(sm0, sm1, wp, inWorldPos[0], inWorldPos[1], kSeamR)) / wsum;
+                }
+                float dEdge = min(min(distToSegment(wp, inWorldPos[1], inWorldPos[2]),
+                                      distToSegment(wp, inWorldPos[2], inWorldPos[0])),
+                                  distToSegment(wp, inWorldPos[0], inWorldPos[1]));
+                float seamMask = max(edgeBlend, smoothstep(0.0, kSeamR, dEdge));
+                float ampW = u_tessParams.z * amp * push.uvScale.w * seamMask;
                 vec3 dsp = nrm * ((h - 0.5) * ampW);
                 wp += dsp;
 
@@ -274,22 +388,15 @@ void main() {
                 vec3 tB = normalize(cross(nrm, tA));
                 float eps = max(0.35, ampW * 0.5);
                 float hA, hB;
-                if (worldSpace) {
-                    hA = heightTriplanar(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0],
-                                         wp + tA * eps, nrm, wsc, gainH, hSrc < 1.5);
-                    hB = heightTriplanar(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0],
-                                         wp + tB * eps, nrm, wsc, gainH, hSrc < 1.5);
-                } else {
-                    // Em UV, o passo tangente vira passo de UV pela razao entre
-                    // a extensao do triangulo em mundo e em UV.
-                    vec2 duv = (inTexCoord[1] - inTexCoord[0]);
-                    vec3 dwp = (inWorldPos[1] - inWorldPos[0]);
-                    float sc = length(duv) / max(length(dwp), 1e-4);
-                    hA = heightUv(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0],
-                                  uv + vec2(eps * sc, 0.0), gainH, hSrc < 1.5);
-                    hB = heightUv(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0],
-                                  uv + vec2(0.0, eps * sc), gainH, hSrc < 1.5);
-                }
+                // O passo tangente vira passo de UV pela razao entre a
+                // extensao do triangulo em mundo e em UV.
+                vec2 duv = (inTexCoord[1] - inTexCoord[0]);
+                vec3 dwp = (inWorldPos[1] - inWorldPos[0]);
+                float sc = length(duv) / max(length(dwp), 1e-4);
+                hA = heightUv(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0],
+                              uv + vec2(eps * sc, 0.0), gainH, hSrc < 1.5);
+                hB = heightUv(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0],
+                              uv + vec2(0.0, eps * sc), gainH, hSrc < 1.5);
                 vec3 pA = tA * eps + nrm * ((hA - 0.5) * ampW);
                 vec3 pB = tB * eps + nrm * ((hB - 0.5) * ampW);
                 vec3 nD = cross(pA, pB);
@@ -305,7 +412,7 @@ void main() {
                 // ponto e o modulo. Fica exposto no modo de auditoria do
                 // model.frag para responder "isto esta' indo pela normal?"
                 // com numero, nao com impressao.
-                outDispInfo = vec3(dl > 1e-6 ? abs(dot(dsp / dl, nrm)) : 1.0, dl, hSrc);
+                outDispInfo = vec4(dl > 1e-6 ? abs(dot(dsp / dl, nrm)) : 1.0, dl, hSrc, h);
             }
 
         }

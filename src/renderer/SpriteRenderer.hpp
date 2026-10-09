@@ -93,11 +93,16 @@ struct FrameUBO {
     alignas(16) Vec4 tessParams;
     alignas(16) Vec4 tessLut0;
     alignas(16) Vec4 tessLut1;
-    // x = fonte da altura: 0 = UV da malha (o relevo bate com a textura que se
-    //     ve, mas abre costura onde a UV quebra), 1 = mundo/triplanar (junta
-    //     fechada sempre, mas o padrao deixa de coincidir com a textura).
-    // y = escala do mundo no modo triplanar (1/u por ladrilho).
+    // x = reservado.
+    // y = espacamento alvo entre vertices da tesselacao, em u (0 = so' a
+    //     curva, como antes) - ver densityFactor() em model.tesc.
+    // z, w = slope cap (model.frag) / foliage cap (model.tesc).
     alignas(16) Vec4 tessParams2;
+    // Filtro passa-baixa (blur) sobre o height map - slider "Height Blur"
+    // (F2). Somado ao mip "perto" que heightUv() le' em model.vert/model.tese
+    // (2.0 -> 2.0+blur). 0 = sem blur extra.
+    float tessHeightBlur;
+
     // MATRIZES SEM JITTER (FSR). As matrizes do inicio do bloco (projection,
     // viewProjection, inversas) sao as de RASTERIZACAO: com jitter quando ele
     // esta ligado, e o depth do G-buffer sai delas. Estas sao as de logica e

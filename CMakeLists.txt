@@ -306,6 +306,15 @@ if(EXISTS "${ERUPTION_BC7ENC_DIR}/rgbcx.cpp" AND EXISTS "${ERUPTION_BC7ENC_DIR}/
     )
     set_source_files_properties("${ERUPTION_BC7ENC_DIR}/rgbcx.cpp" "${ERUPTION_BC7ENC_DIR}/bc7enc.cpp"
                                 PROPERTIES COMPILE_OPTIONS "-w")
+    # Decoder (bc7decomp.cpp): o encoder sozinho nao decodifica de volta, e
+    # BcAlphaSelfTest (ERUPTION_TEST_BC7_ALPHA=1) precisa fechar o
+    # ida-e-volta pra' medir perda de contraste real, nao so' codificar.
+    if(EXISTS "${ERUPTION_BC7ENC_DIR}/bc7decomp.cpp")
+        list(APPEND SOURCES "${ERUPTION_BC7ENC_DIR}/bc7decomp.cpp")
+        set_source_files_properties("${ERUPTION_BC7ENC_DIR}/bc7decomp.cpp" PROPERTIES COMPILE_OPTIONS "-w")
+        # Include dir: ja' coberto por target_include_directories(eruption-engine
+        # ... ${ERUPTION_BC7ENC_DIR}) mais abaixo - o alvo ainda nao existe aqui.
+    endif()
     set(ERUPTION_HAVE_BC_ENCODER ON)
     message(STATUS "Encoder BC em runtime: bc7enc_rdo em ${ERUPTION_BC7ENC_DIR}")
 else()
@@ -334,8 +343,8 @@ else()
     message(STATUS "Simplificacao de malha: meshoptimizer AUSENTE - sem LOD geometrico")
 endif()
 
-# ImGuizmo (gizmo de posicao/rotacao no viewport - setinhas XYZ tipo Unity/
-# Blender/Unreal). Vendorizado (MIT, Cedric Guillemet) por reprodutibilidade
+# ImGuizmo (gizmo de posicao/rotacao no viewport - setinhas XYZ de editor
+# 3D). Vendorizado (MIT, Cedric Guillemet) por reprodutibilidade
 # de build offline, copiado do proprio exemplo do tinygltf que ja' estava
 # em _deps - mesma origem, sem dependencia nova pra baixar.
 if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/ImGuizmo/ImGuizmo.h")
@@ -343,6 +352,32 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/ImGuizmo/ImGuizmo.h")
     message(STATUS "Gizmo de viewport: ImGuizmo encontrado")
 else()
     message(STATUS "Gizmo de viewport: ImGuizmo AUSENTE")
+endif()
+
+# ONNX Runtime (Microsoft, MIT) - CPU, binario pre-compilado oficial. E' o
+# nivel CPU do executor de redes (src/ml/NeuralNet); o nivel GPU e' proprio,
+# em compute shaders Vulkan (src/ml/NnVulkan, shaders/ml/), porque o runtime
+# de GPU dele nao tem kernels para a GPU alvo (GTX 930M, sm_50). OPCIONAL:
+# sem ele a rede roda so' na GPU, e sem GPU cai no caminho analitico.
+option(ERUPTION_ONNX "Inferencia de redes neurais via ONNX Runtime" ON)
+set(ERUPTION_HAVE_ORT OFF)
+if(ERUPTION_ONNX AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    FetchContent_Declare(
+        onnxruntime_bin
+        URL https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-linux-x64-1.30.0.tgz
+    )
+    FetchContent_GetProperties(onnxruntime_bin)
+    if(NOT onnxruntime_bin_POPULATED)
+        FetchContent_Populate(onnxruntime_bin)
+    endif()
+    if(EXISTS "${onnxruntime_bin_SOURCE_DIR}/include/onnxruntime_cxx_api.h")
+        set(ERUPTION_ORT_DIR "${onnxruntime_bin_SOURCE_DIR}")
+        set(ERUPTION_HAVE_ORT ON)
+        message(STATUS "Inferencia de redes: ONNX Runtime em ${ERUPTION_ORT_DIR}")
+    endif()
+endif()
+if(NOT ERUPTION_HAVE_ORT)
+    message(STATUS "Inferencia de redes: ONNX Runtime ausente - caminhos classicos")
 endif()
 
 # Exclude legacy parsers from the main engine build (active versions live in src/formats/)
@@ -387,6 +422,16 @@ if(ERUPTION_HAVE_BC_ENCODER)
 endif()
 if(ERUPTION_HAVE_MESHOPT)
     target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_MESHOPT=1)
+endif()
+if(ERUPTION_HAVE_ORT)
+    target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_ORT=1)
+    target_include_directories(eruption-engine SYSTEM PRIVATE "${ERUPTION_ORT_DIR}/include")
+    target_link_libraries(eruption-engine PRIVATE "${ERUPTION_ORT_DIR}/lib/libonnxruntime.so")
+    # A .so vai ao lado do executavel (raiz do repo) e o RPATH aponta pra la'.
+    set_target_properties(eruption-engine PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+    file(GLOB ERUPTION_ORT_LIBS "${ERUPTION_ORT_DIR}/lib/libonnxruntime.so*")
+    add_custom_command(TARGET eruption-engine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ERUPTION_ORT_LIBS} "$<TARGET_FILE_DIR:eruption-engine>")
 endif()
 
 # Include directories
@@ -488,6 +533,7 @@ if(ERUPTION_BUILD_TOOLS)
         tools/pbr_cooker/main.cpp
         src/utils/PbrMapGen.cpp
         src/utils/NormalMapGen.cpp
+        src/utils/HeightFromAlbedo.cpp
     )
     target_include_directories(pbr_cooker PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -497,6 +543,11 @@ if(ERUPTION_BUILD_TOOLS)
     target_link_libraries(pbr_cooker PRIVATE glm)
     target_compile_definitions(pbr_cooker PRIVATE)
 
+    # Ferramentas extras de bancada, fora do repo: -DERUPTION_EXTRA_TOOLS_DIR=<pasta>.
+    set(ERUPTION_EXTRA_TOOLS_DIR "" CACHE PATH "Pasta com ferramentas extras (CMakeLists.txt proprio)")
+    if(ERUPTION_EXTRA_TOOLS_DIR AND EXISTS "${ERUPTION_EXTRA_TOOLS_DIR}/CMakeLists.txt")
+        add_subdirectory(${ERUPTION_EXTRA_TOOLS_DIR} extra_tools)
+    endif()
 endif()
 
 # Tests
@@ -536,6 +587,7 @@ if(ERUPTION_BUILD_TESTS)
     add_executable(eruption-pbr-tests tests/pbr/pbr_tests.cpp
         src/utils/PbrMapGen.cpp
         src/utils/NormalMapGen.cpp
+        src/utils/HeightFromAlbedo.cpp
     )
     target_include_directories(eruption-pbr-tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src

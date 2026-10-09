@@ -6,8 +6,10 @@
 #include "utils/ImageUtils.hpp"
 #include "utils/PbrMaterialProfile.hpp"
 #include "utils/PbrTextureLoader.hpp"
+#include "ml/NeuralPbr.hpp"
 
 #include <atomic>
+#include <cctype>
 #include <cstdlib>
 #include <chrono>
 #include <cstring>
@@ -24,7 +26,16 @@ namespace {
 
 constexpr uint32_t kPackMagic = 0x504b5445; // 'ETKP'
 // Bump when the encoder or the synthesis changes so old caches are ignored.
-constexpr uint32_t kPackVersion = 3;
+// 4 (2026-09-29): altura/normal/AO sintetizados por HeightFromAlbedo
+// (gradiente + multi-escala) - pack antigo carrega luminancia crua.
+// 5: normal hibrida multi-escala (HeightFromAlbedo, passo 6).
+// 6: altura estrutural (rede de rejunte por forma + distancia).
+// 7: peso estrutural por pixel, material organico nunca vira rejunte.
+// 8: polaridade global com troca regional so' com folga de 2x.
+// 9: escala comum de polaridade + evidencia por densidade de linha.
+// 10: histerese na mascara de rejunte.
+// 11: raio do chanfro medido so' na regiao estrutural.
+constexpr uint32_t kPackVersion = 13;
 
 void put32(std::vector<uint8_t>& v, uint32_t x) {
     const size_t o = v.size();
@@ -94,6 +105,55 @@ std::string packPathFor(const std::string& glbPath, uint32_t maxSize, bool synth
 // derivado, mas re-gerar custa 24 s num mapa grande.
 std::string legacyPackPathFor(const std::string& glbPath) { return glbPath + ".etexpack"; }
 
+// Quantas texturas cada nivel da cadeia (GPU > CPU > analitica) sintetizou.
+void logSynthesisLevels(const NeuralPbrStats& before, size_t synthesized, uint64_t micros) {
+    const NeuralPbrStats after = neuralPbrStats();
+    const size_t gpu = static_cast<size_t>(after.gpu - before.gpu), cpu = static_cast<size_t>(after.cpu - before.cpu);
+    const size_t analytic = synthesized > gpu + cpu ? synthesized - gpu - cpu : 0;
+    ERUPTION_LOG_WARN("EmbeddedTextureBake: sintese PBR de %zu texturas - rede na GPU %zu, rede na CPU %zu, "
+                      "analitica %zu (%.0f ms somados nas threads)",
+                      synthesized, gpu, cpu, analytic, micros / 1000.0);
+}
+
+// Quem sintetizou o PBR: 0 = ninguem, 1 = classica, senao a chave da rede
+// (modelo + mapeamento). Trocar de modelo invalida o pack.
+uint32_t synthKey(bool synthPbr) {
+    if (!synthPbr) return 0u;
+    const uint32_t k = neuralPbrKey();
+    return k > 1u ? k : 1u;
+}
+
+// Pack assado com a rede numa maquina vale numa maquina SEM rede (ex.: GPU
+// fraca com o PBR vindo pronto). Com rede aqui, so' o pack da mesma rede.
+bool synthKeyAccepted(uint32_t cached, bool synthPbr) {
+    const uint32_t local = synthKey(synthPbr);
+    if (cached == local) return true;
+    return local == 1u && cached > 1u;
+}
+
+// Impressao digital do .glb: hash de 64 trechos de 64 KB espalhados pelo
+// arquivo (4 MB lidos). Substitui a data de modificacao, que muda ao copiar
+// o arquivo pra outra maquina e invalidava um pack identico.
+uint64_t sourceFingerprint(const std::string& path, uint64_t size) {
+    constexpr uint64_t kChunks = 64, kChunkBytes = 64 * 1024;
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) return 0;
+    uint64_t h = 1469598103934665603ull; // FNV-1a 64
+    std::vector<char> chunk(kChunkBytes);
+    const uint64_t step = size > kChunkBytes ? (size - kChunkBytes) / (kChunks - 1) : 0;
+    for (uint64_t i = 0; i < kChunks; ++i) {
+        f.seekg(static_cast<std::streamoff>(i * step));
+        f.read(chunk.data(), static_cast<std::streamsize>(std::min<uint64_t>(kChunkBytes, size)));
+        const std::streamsize got = f.gcount();
+        for (std::streamsize b = 0; b < got; ++b) {
+            h ^= static_cast<uint8_t>(chunk[static_cast<size_t>(b)]);
+            h *= 1099511628211ull;
+        }
+        f.clear();
+    }
+    return h ^ size;
+}
+
 bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
                EmbeddedBakeResult& out) {
     std::error_code ec;
@@ -112,23 +172,19 @@ bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
 
     Reader r{buf.data(), buf.size()};
     uint32_t magic = 0, version = 0, cachedMax = 0, cachedFmt = 0, cachedSynth = 0, count = 0;
-    uint64_t srcSize = 0, srcMtime = 0;
+    uint64_t srcSize = 0, srcFingerprint = 0;
     if (!r.u32(magic) || magic != kPackMagic) return false;
     if (!r.u32(version) || version != kPackVersion) return false;
-    if (!r.u64(srcSize) || !r.u64(srcMtime)) return false;
+    if (!r.u64(srcSize) || !r.u64(srcFingerprint)) return false;
     if (!r.u32(cachedMax) || !r.u32(cachedFmt) || !r.u32(cachedSynth) || !r.u32(count)) return false;
 
-    // Invalidate on: source edited, resolution cap changed (preset), GPU format
-    // set changed, PBR synthesis toggled.
+    // Invalida se: o .glb mudou (conteudo, nao data - o pack vale em outra
+    // maquina), o teto de resolucao mudou (preset), o conjunto de formatos da
+    // GPU mudou, ou a sintese de PBR nao e' aceitavel aqui.
     const uint64_t realSize = static_cast<uint64_t>(fs::file_size(glbPath, ec));
     if (ec || realSize != srcSize) return false;
-    const auto mt = fs::last_write_time(glbPath, ec);
-    if (ec) return false;
-    const uint64_t realMtime =
-        static_cast<uint64_t>(mt.time_since_epoch().count());
-    if (realMtime != srcMtime) return false;
-    if (cachedMax != maxSize || cachedFmt != formatKey() ||
-        cachedSynth != (synthPbr ? 1u : 0u))
+    if (sourceFingerprint(glbPath, realSize) != srcFingerprint) return false;
+    if (cachedMax != maxSize || cachedFmt != formatKey() || !synthKeyAccepted(cachedSynth, synthPbr))
         return false;
 
     uint32_t hasGround = 0;
@@ -159,18 +215,15 @@ void writeCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
     std::error_code ec;
     const uint64_t srcSize = static_cast<uint64_t>(fs::file_size(glbPath, ec));
     if (ec) return;
-    const auto mt = fs::last_write_time(glbPath, ec);
-    if (ec) return;
-
     std::vector<uint8_t> buf;
     buf.reserve(res.bytes + 4096);
     put32(buf, kPackMagic);
     put32(buf, kPackVersion);
     put64(buf, srcSize);
-    put64(buf, static_cast<uint64_t>(mt.time_since_epoch().count()));
+    put64(buf, sourceFingerprint(glbPath, srcSize));
     put32(buf, maxSize);
     put32(buf, formatKey());
-    put32(buf, synthPbr ? 1u : 0u);
+    put32(buf, synthKey(synthPbr));
     put32(buf, static_cast<uint32_t>(res.textures.size()));
     put32(buf, res.hasGroundAlbedo ? 1u : 0u);
     for (int i = 0; i < 3; ++i) {
@@ -217,6 +270,47 @@ void setEmbeddedTextureMaxSize(uint32_t maxSize) { g_maxSize.store(maxSize); }
 uint32_t embeddedTextureMaxSize() { return g_maxSize.load(); }
 
 namespace {
+
+// DUMP DE DIAGNOSTICO (ERUPTION_TEST_DUMP_TEX_DIR): grava BMP 24 bpp cru, sem
+// compressao nenhuma - existe so' pra o autor OLHAR o dado bruto que o bake
+// produz, sem passar pela interpretacao de nenhum shader. BGR, bottom-up,
+// linha alinhada em 4 bytes - o formato mais chato de BMP que existe, de
+// proposito: qualquer visualizador abre sem duvida de codec.
+bool writeBmp24(const std::string& path, int w, int h, const std::vector<uint8_t>& rgb) {
+    if (w <= 0 || h <= 0 || rgb.size() != static_cast<size_t>(w) * h * 3) return false;
+    const int rowSize = ((w * 3 + 3) / 4) * 4;
+    const uint32_t pixelDataSize = static_cast<uint32_t>(rowSize) * static_cast<uint32_t>(h);
+    const uint32_t fileSize = 14 + 40 + pixelDataSize;
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f.is_open()) return false;
+    auto w16 = [&](uint16_t v) { f.write(reinterpret_cast<const char*>(&v), 2); };
+    auto w32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+    f.write("BM", 2);
+    w32(fileSize); w32(0); w32(14 + 40);
+    w32(40);                         // BITMAPINFOHEADER
+    w32(static_cast<uint32_t>(w));
+    w32(static_cast<uint32_t>(h));   // positivo = bottom-up
+    w16(1); w16(24); w32(0); w32(pixelDataSize);
+    w32(2835); w32(2835); w32(0); w32(0);
+    std::vector<uint8_t> row(static_cast<size_t>(rowSize), 0);
+    for (int y = h - 1; y >= 0; --y) {
+        for (int x = 0; x < w; ++x) {
+            const uint8_t* p = &rgb[(static_cast<size_t>(y) * w + x) * 3];
+            row[static_cast<size_t>(x) * 3 + 0] = p[2]; // B
+            row[static_cast<size_t>(x) * 3 + 1] = p[1]; // G
+            row[static_cast<size_t>(x) * 3 + 2] = p[0]; // R
+        }
+        f.write(reinterpret_cast<const char*>(row.data()), rowSize);
+    }
+    return f.good();
+}
+
+std::string sanitizeForFilename(std::string s) {
+    for (auto& c : s) {
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '.') c = '_';
+    }
+    return s;
+}
 
 // Quanto cada textura contribui para a cor da luz que o chao devolve.
 //
@@ -295,12 +389,30 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
     }
     bcCompressorInit();
 
-    if (!model.filePath.empty() &&
+    // ERUPTION_TEST_DUMP_TEX_DIR=<pasta>: pula o cache pra forcar bake FRESCO
+    // (o cache so' guarda os bytes ja' comprimidos em BC7, nao da' pra tirar
+    // BMP dali sem descomprimir) - ver o dump logo abaixo, ainda dentro do
+    // parallelFor, onde mrahw.pixels/normal.pixels ainda sao RGBA cru.
+    const bool dumpRequested = std::getenv("ERUPTION_TEST_DUMP_TEX_DIR") != nullptr;
+    if (!model.filePath.empty() && !dumpRequested &&
         readCache(model.filePath, maxTextureSize, synthesizePbr, res)) {
         ERUPTION_LOG_WARN("EmbeddedTextureBake: cache HIT '%s' (%zu texturas, %.1f MB comprimidos)",
                           model.filePath.c_str(), res.textures.size(),
                           static_cast<double>(res.bytes) / (1024.0 * 1024.0));
         return res;
+    }
+
+    // CONTEXTO DE MATERIAL pra' sintese de altura: a imagem e' ORGANICA se
+    // algum material que a usa for grama/vegetacao/terra/neve na tabela de
+    // perfis (pbrTextureNames guarda o nome do material, textureNames o da
+    // imagem embutida, no mesmo indice).
+    std::unordered_map<std::string, bool> organicImage;
+    for (const auto& node : model.nodes) {
+        for (size_t k = 0; k < node.textureNames.size() && k < node.pbrTextureNames.size(); ++k) {
+            const std::string& cat = getPbrProfile(node.pbrTextureNames[k]).category;
+            if (cat == "grass" || cat == "vegetation" || cat == "dirt" || cat == "snow")
+                organicImage[node.textureNames[k]] = true;
+        }
     }
 
     // Peso de cada textura na cor de bounce: area voltada para cima.
@@ -330,6 +442,9 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
     // the decoded pixels exist once the RGBA8 path is gone.
     std::vector<double> sumR(n, 0.0), sumG(n, 0.0), sumB(n, 0.0), sumN(n, 0.0);
     std::atomic<size_t> compressed{0};
+    std::atomic<uint64_t> synthMicros{0};
+    std::atomic<size_t> synthesized{0};
+    const NeuralPbrStats statsBefore = neuralPbrStats();
 
     JobSystem::instance().parallelFor(static_cast<uint32_t>(n), [&](uint32_t i) {
         const EmbeddedTexture& et = model.embeddedTextures[i];
@@ -389,8 +504,71 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
 
         if (synthesizePbr) {
             PbrTextureData mrahw, normal;
-            if (synthesizePbrFromPixels(pixels, w, h, 4, mrahw, normal) &&
-                mrahw.valid() && normal.valid()) {
+            const auto itOrg = organicImage.find(et.name);
+            const bool organic = itOrg != organicImage.end() && itOrg->second;
+            const auto synthStart = std::chrono::steady_clock::now();
+            const bool synthOk = synthesizePbrFromPixels(pixels, w, h, 4, mrahw, normal, organic);
+            synthMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - synthStart).count());
+            if (synthOk) ++synthesized;
+            if (synthOk && mrahw.valid() && normal.valid()) {
+                // DUMP CRU (ERUPTION_TEST_DUMP_TEX_DIR): pedido do autor pra
+                // OLHAR o MRAH-W como ele sai do bake, sem passar por shader
+                // nenhum - "talvez o problema seja esse mrahw". So' texturas
+                // com area voltada pra cima acima do limiar (candidatas a
+                // chao/piso; ERUPTION_TEST_DUMP_TEX_MINAREA, default 2% da
+                // maior) pra nao despejar as ~292 texturas do mapa inteiro.
+                if (dumpRequested) {
+                    static const float kMinAreaFrac = [] {
+                        const char* e = std::getenv("ERUPTION_TEST_DUMP_TEX_MINAREA");
+                        return e ? std::stof(e) : 0.02f;
+                    }();
+                    // ERUPTION_TEST_DUMP_TEX_NAME=<substr>: pega pelo NOME em
+                    // vez de area pra cima - a heuristica de area (acima)
+                    // pode nao pegar o material certo quando ele perde de
+                    // area total pra folhagem repetida no mapa inteiro (visto
+                    // num mapa de teste: uma textura de arvore saiu com fracao 1.0). Combina com
+                    // um match de posicao (ERUPTION_TEST_AABB_STATS no
+                    // ModelRenderer) pra descobrir o nome primeiro.
+                    static const char* kNameFilter = std::getenv("ERUPTION_TEST_DUMP_TEX_NAME");
+                    const auto itArea = upArea.find(et.name);
+                    const double frac = (itArea != upArea.end() && maxUpArea > 0.0)
+                                       ? (itArea->second / maxUpArea) : 0.0;
+                    const bool nameHit = kNameFilter && et.name.find(kNameFilter) != std::string::npos;
+                    if (nameHit || frac >= kMinAreaFrac) {
+                        const std::string dir = std::getenv("ERUPTION_TEST_DUMP_TEX_DIR");
+                        std::error_code dec;
+                        fs::create_directories(dir, dec);
+                        const std::string base = dir + "/" + sanitizeForFilename(et.name);
+
+                        std::vector<uint8_t> albRgb(static_cast<size_t>(w) * h * 3);
+                        for (size_t p = 0; p < static_cast<size_t>(w) * h; ++p) {
+                            albRgb[p * 3 + 0] = pixels[p * 4 + 0];
+                            albRgb[p * 3 + 1] = pixels[p * 4 + 1];
+                            albRgb[p * 3 + 2] = pixels[p * 4 + 2];
+                        }
+                        writeBmp24(base + "_albedo.bmp", w, h, albRgb);
+
+                        const size_t mn = static_cast<size_t>(mrahw.width) * mrahw.height;
+                        std::vector<uint8_t> mrahwRgb(mn * 3), heightGray(mn * 3);
+                        for (size_t p = 0; p < mn; ++p) {
+                            mrahwRgb[p * 3 + 0] = mrahw.pixels[p * 4 + 0]; // metallic
+                            mrahwRgb[p * 3 + 1] = mrahw.pixels[p * 4 + 1]; // roughness
+                            mrahwRgb[p * 3 + 2] = mrahw.pixels[p * 4 + 2]; // AO/cavidade
+                            const uint8_t a = mrahw.pixels[p * 4 + 3];    // altura (255=sem dado)
+                            heightGray[p * 3 + 0] = heightGray[p * 3 + 1] = heightGray[p * 3 + 2] = a;
+                        }
+                        writeBmp24(base + "_mrahw_rgb.bmp", mrahw.width, mrahw.height, mrahwRgb);
+                        writeBmp24(base + "_height_alpha.bmp", mrahw.width, mrahw.height, heightGray);
+                        std::vector<uint8_t> nrmRgb(static_cast<size_t>(normal.width) * normal.height * 3);
+                        for (size_t p = 0; p < static_cast<size_t>(normal.width) * normal.height; ++p)
+                            for (int c = 0; c < 3; ++c) nrmRgb[p * 3 + c] = normal.pixels[p * 4 + c];
+                        writeBmp24(base + "_normal.bmp", normal.width, normal.height, nrmRgb);
+
+                        ERUPTION_LOG_WARN("[TEXDUMP] %s upAreaFrac=%.3f -> %s_*.bmp",
+                                          et.name.c_str(), frac, base.c_str());
+                    }
+                }
                 // Normal: BC7, not BC5. This engine's normal maps are NOT unit
                 // length (flat blue ~239) and their alpha carries materialProps,
                 // so the two-channel BC5 + z-reconstruction convention would
@@ -455,6 +633,7 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
                       "(%.1f MB de payload BC, teto %u)",
                       compressed.load(), n, ms,
                       static_cast<double>(res.bytes) / (1024.0 * 1024.0), maxTextureSize);
+    if (synthesizePbr) logSynthesisLevels(statsBefore, synthesized.load(), synthMicros.load());
 
     if (!model.filePath.empty() && !res.textures.empty()) {
         writeCache(model.filePath, maxTextureSize, synthesizePbr, res);

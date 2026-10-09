@@ -107,9 +107,12 @@ bool synthesizePbrForAlbedoKey(const std::string& albedoKey,
 // disk-based synthesis fail and the material renders with flat fallback
 // constants (this is why parana_field showed no PBR on ~90% of its
 // materials). Safe to call from worker threads.
+// organicHint: a imagem e' usada por material organico (grama, vegetacao,
+// terra, neve) - a altura nao tenta achar rede de rejunte nela.
 bool synthesizePbrFromPixels(const std::vector<uint8_t>& pixels, int width, int height,
                              int channels,
-                             PbrTextureData& outMrahw, PbrTextureData& outNormal);
+                             PbrTextureData& outMrahw, PbrTextureData& outNormal,
+                             bool organicHint = false);
 
 // Last-resort source of albedo pixels for names that exist only inside a GLB
 // (no file on disk). The Engine registers one that searches the current map's

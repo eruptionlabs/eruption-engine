@@ -112,11 +112,16 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
 
         if (j.contains("light") && j["light"].is_object()) {
             const auto& light = j["light"];
-            if (light.contains("sunDirection") && light["sunDirection"].is_array() && light["sunDirection"].size() >= 3) {
+            // Direcao da LUZ (do sol para o chao; y < 0 = dia). O gerador
+            // procedural grava "direction"; mapas antigos, "sunDirection".
+            // So' "sunDirection" era lido, e o .env do gerador caia sempre
+            // no padrao (sol a pino).
+            const char* sunKey = light.contains("sunDirection") ? "sunDirection" : "direction";
+            if (light.contains(sunKey) && light[sunKey].is_array() && light[sunKey].size() >= 3) {
                 map.env.sunDirection = Vec3(
-                    light["sunDirection"][0].get<float>(),
-                    light["sunDirection"][1].get<float>(),
-                    light["sunDirection"][2].get<float>());
+                    light[sunKey][0].get<float>(),
+                    light[sunKey][1].get<float>(),
+                    light[sunKey][2].get<float>());
             }
             // groundAlbedo: cor do quique do chao, em 0..1. Autoritativo -
             // quando presente, ignora a media automatica das texturas.

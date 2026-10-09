@@ -1,11 +1,16 @@
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
 #include "game/DefaultApplication.hpp"
+#include "utils/BcAlphaSelfTest.hpp"
 #include "utils/GpuAutoSelect.hpp"
 #include <string>
 
 int main(int argc, char** argv) {
     eruption::Logger::init();
+
+    // ERUPTION_TEST_BC7_ALPHA=1: teste isolado do compressor de altura, sai
+    // antes de tocar GPU/janela/mapa nenhum. Ver BcAlphaSelfTest.hpp.
+    if (eruption::runBcAlphaSelfTestIfRequested()) return 0;
 
     // Detect the best Vulkan driver/GPU before any window/Vulkan initialization.
     // This may restart the process with VK_ICD_FILENAMES set, then return true.

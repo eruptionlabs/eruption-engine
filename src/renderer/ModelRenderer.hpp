@@ -41,6 +41,10 @@ struct ModelMeshGPU {
     // Fator de deslocamento da tesselacao, por material (ver createPipeline /
     // o bloco de categoria no load). 0 = superficie dura, nunca desloca.
     float dispScale = 0.35f;
+    // UV por unidade de mundo (mediana dos triangulos). Vai no push.uvScale.z
+    // pro shader escolher o mip da altura pela grade de vertices (Nyquist) -
+    // ver dispMipFloor() em model.vert/model.tese.
+    float uvPerUnit = 0.0f;
     float roughnessScale = 1.0f;
     // Quanto esta malha balanca ao vento, 0 = rigida. Resolvido no LOAD a
     // partir da categoria do material, pelo mesmo caminho de metallic/roughness
@@ -418,6 +422,27 @@ public:
     const std::vector<ModelInstance>& getInstances() const { return m_instances; }
     const std::unordered_map<std::string, uint32_t>& getTextureCache() const { return m_textureCache; }
 
+    // Publico pro popup de preview (SpherePreview.cpp) conseguir achar o
+    // MESMO MRAH-W que a malha real usaria pra essa textura, em vez de sempre
+    // cair no chute por luminancia (era o bug: preview chamava setMaterial
+    // com pbrIndex fixo em 0).
+    PbrTextureSlots resolvePbrTextures(const std::string& path);
+    // SO' LEITURA do cache (sem carregar/subir textura): seguro de chamar no
+    // meio do frame (clique do F1). Toda textura usada por malha ja' foi
+    // resolvida no load, entao pro popup de preview isto acha o MESMO MRAH-W
+    // que o chao/parede real usa - sem isto o preview ficava no chute por
+    // luminancia do shader (pbrIndex 0) e nunca batia com o mundo.
+    PbrTextureSlots cachedPbrTextures(const std::string& path) const;
+    // Mesmo PBR, achado pelo SLOT da textura (o que a lista do F1 tem).
+    PbrTextureSlots pbrForTexSlot(uint32_t slot) const;
+
+    // UV por unidade de mundo da primeira malha que usa essa textura (0 =
+    // desconhecido). Pro popup de preview mostrar na escala do mundo.
+    float uvPerUnitForSlot(uint32_t slot) const {
+        auto it = m_texUvPerUnit.find(slot);
+        return it != m_texUvPerUnit.end() ? it->second : 0.0f;
+    }
+
 private:
     VulkanContext* m_ctx = nullptr;
     BindlessDescriptor* m_bindless = nullptr;
@@ -435,6 +460,8 @@ private:
 
     std::unordered_map<std::string, uint32_t> m_textureCache;
     std::unordered_map<std::string, PbrTextureSlots> m_pbrTextureCache;
+    std::unordered_map<uint32_t, float> m_texUvPerUnit;
+    std::unordered_map<uint32_t, PbrTextureSlots> m_pbrByTexSlot;
     std::unordered_map<std::string, std::vector<uint32_t>> m_modelMeshCache;
 
     VkBuffer m_globalVertexBuffer = VK_NULL_HANDLE;
@@ -666,7 +693,16 @@ private:
                     const std::vector<uint32_t>& indices,
                     ModelMeshGPU& mesh);
     uint32_t resolveTexture(const std::string& path);
-    PbrTextureSlots resolvePbrTextures(const std::string& path);
+    // So' registra (nome ja' sanitizado -> slot) em m_textureCache, sem
+    // chamar o resolver - pros dois ramos de loadMapModels que ACHAM o slot
+    // de outro jeito (mapa de indice global do formato v1.x-2.2, ou fallback
+    // por indice direto) e nunca passavam por resolveTexture(). Sem isto
+    // aquelas texturas nunca apareciam em getTextureCache() - nem no popup
+    // de preview (F1), nem em nenhum ERUPTION_TEST_SPHERE_PREVIEW: eram
+    // exatamente as texturas de CHAO de mapas mais antigos (autor: "o chao
+    // continua diferente do preview" - a textura real do chao nem aparecia
+    // pra' clicar).
+    void registerResolvedTexture(const std::string& path, uint32_t slot);
 
     bool m_forceBaseLod = false;
     uint32_t m_lastDrawnTriangles = 0;

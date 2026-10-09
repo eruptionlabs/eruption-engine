@@ -391,10 +391,10 @@ void Engine::drawLightingControls() {
     bool dAO = (dbg & 64u) != 0;
     if (ImGui::Checkbox("Show AO (cinza)", &dAO)) dbg ^= 64u;
     m_deferredLighting.setPbrDebugMode(dbg);
-    // O composite precisa saber para pular fog/tonemap/bloom: sem isso a
-    // visualizacao ainda mudaria com a hora do dia (o fog tinge o longe com a
-    // cor do ceu). Ver post_composite.frag.
-    m_postSettings.pbrDebugActive = (dbg & 95u) != 0u;
+    // m_postSettings.pbrDebugActive (composite pula fog/tonemap/bloom) agora
+    // e' escrita incondicional em Render.cpp todo frame, a partir deste
+    // mesmo modo - tinha que sair daqui porque so' rodava com o painel
+    // aberto (headless/env var nunca via a flag). Ver o comentario la'.
 
     float pbrScale = m_deferredLighting.pbrLightScale();
     if (ImGui::SliderFloat("PBR Light Scale", &pbrScale, 0.0f, 10.0f, "%.2f")) {
@@ -436,16 +436,30 @@ void Engine::drawLightingControls() {
     // propria curva. So' o chao entra, e so' se o driver tiver o estagio.
     ImGui::Checkbox("Tessellate ground up close", &m_tessEnabled);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hardware tessellation + height displacement on ground cells near the camera. Zero extra VRAM.");
+    // DEBUG, LOGO ABAIXO DO CHECKBOX (nao escondido depois de 4 sliders): troca
+    // o g-buffer inteiro do chao tesselado por uma visualizacao (model.frag,
+    // bloco "AUDITORIA DO DESLOCAMENTO"). Serve pra responder "o relevo esta
+    // batendo com a textura?" com imagem, nao com achismo - troca ao vivo, sem
+    // reiniciar (antes so' dava por ERUPTION_TEST_TESS_AUDIT, que precisava
+    // reiniciar o motor). Fica fora do "if (m_tessEnabled)": sem tesselacao
+    // ligada todo pixel cai no azul "sem dado", o que ja' avisa o motivo.
+    // So' UM checkbox: liga o modo 3 (model.frag, "AUDITORIA DO
+    // DESLOCAMENTO"), que MOSTRA O HEIGHT MAP em cinza, por pixel, igual a
+    // textura (nao o combo de 5 opcoes de antes - virou complicacao demais
+    // pra' responder uma pergunta so': "a altura bate com a textura?").
+    bool showHeightMap = (m_tessDebugMode == 3);
+    if (ImGui::Checkbox("Debug: height map", &showHeightMap))
+        m_tessDebugMode = showHeightMap ? 3 : 0;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Gray = the exact height value used to displace, sampled per pixel straight from the texture (not per tessellated vertex). Toggle on/off over the same spot and compare against the normal view: dark texture should show dark gray here too. Needs \"Tessellate ground up close\" checked and the camera inside the near band, otherwise every pixel is blue (\"no data\").");
     if (m_tessEnabled) {
         const float camDist = m_camera.orbitDistance();
         ImGui::SliderFloat("Displacement (u)", &m_tessAmplitude, 0.0f, 6.0f, "%.2f");
         ImGui::SliderFloat("Height contrast", &m_tessHeightGain, 0.1f, 8.0f, "%.2f");
-        // TRADE, nao preferencia: um dos dois sempre custa alguma coisa.
-        ImGui::Combo("Height from", &m_tessHeightSpace, "Mesh UV (matches texture)\0World (no seams)\0");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("UV: relief lines up with the texture you see, but opens gaps where UVs break (panel joints).\nWorld: joints always closed, but the relief pattern no longer matches the visible texture.");
-        if (m_tessHeightSpace == 1)
-            ImGui::SliderFloat("World tile (1/u)", &m_tessWorldScale, 0.01f, 1.0f, "%.3f");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Gain on the high-passed height. The baked height comes from albedo luminance, so the low band is painted shading - this only amplifies the grain.");
+        ImGui::SliderFloat("Height blur (low-pass)", &m_tessHeightBlur, 0.0f, 4.0f, "%.2f");
+        ImGui::SliderFloat("Vertex spacing (u)", &m_tessVertexSpacing, 0.0f, 2.0f, "%.2f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Target distance between tessellated vertices near the camera. Smaller = more detail (stones get their shape), more triangles. 0 = distance curve only (old behavior, max 8 per edge).");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Blurs the height map before displacement (raises the mip level it's sampled from). 0 = off. Use it to kill high-frequency noise in the relief without touching Height contrast's gain.");
         SplineEditorUI::draw("Tessellation Factor by Distance", m_tessCurve,
                              0.0f, m_normalDistMax, 1.0f, 16.0f, camDist,
                              m_tessCurve.evaluate(camDist / std::max(m_normalDistMax, 1.0f)),
@@ -1267,9 +1281,35 @@ void Engine::renderImGui() {
                     }
                 }
                 if (ImGui::CollapsingHeader("Textures")) {
+                    // POPUP DE PREVIEW (debug/SpherePreview.hpp): clicar num
+                    // item da lista poe essa textura, NA HORA, numa esfera
+                    // tesselada renderizada num alvo OFFSCREEN PROPRIO - nao
+                    // mexe no mapa, nao recarrega nada, nao troca textura de
+                    // chao nenhum (a 1a versao fazia isso e estava errada).
+                    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), "Clique numa textura: abre um popup com ela numa esfera de teste tesselada.");
                     const auto& tCache = m_modelRenderer.getTextureCache();
                     if (ImGui::BeginChild("TextureList", ImVec2(0, 150), true)) {
-                        for (auto const& [path, slot] : tCache) ImGui::Text("[%u] %s", slot, path.c_str());
+                        for (auto const& [path, slot] : tCache) {
+                            char label[600];
+                            snprintf(label, sizeof(label), "[%u] %s", slot, path.c_str());
+                            const bool isSel = m_spherePreview.active() && m_spherePreview.materialLabel() == path;
+                            if (ImGui::Selectable(label, isSel)) {
+                                // pbrIndex do CACHE (cachedPbrTextures: so' leitura,
+                                // nada de upload no meio do frame - a versao com
+                                // resolvePbrTextures() quebrava o preview inteiro).
+                                // Com o MRAH-W real o popup desloca a partir do
+                                // mesmo dado que o mundo. dispScale 1.0 fixo: sem
+                                // distincao por categoria aqui, so' no chao de
+                                // verdade (ModelRenderer.cpp).
+                                {
+                                    const PbrTextureSlots pbr = m_modelRenderer.pbrForTexSlot(slot);
+                                    m_spherePreview.setMaterial(slot, pbr.mrahw.index, 1.0f, pbr.normal.index);
+                                }
+                                m_spherePreview.setWorldUvPerUnit(m_modelRenderer.uvPerUnitForSlot(slot));
+                                m_spherePreview.setMaterialLabel(path);
+                                m_spherePreview.setActive(true);
+                            }
+                        }
                         ImGui::EndChild();
                     }
                 }
@@ -1308,7 +1348,7 @@ void Engine::renderImGui() {
                         if (ImGui::SmallButton("Deselect")) m_selectedModelInstance = -1;
 
                         // Gizmo de viewport (setinhas tipo Unity/Blender/
-                        // Unreal), pedido explicito do autor - opera direto
+                        // outras engines), pedido explicito do autor - opera direto
                         // em cima de ModelInstance::transform (a mesma
                         // matriz usada pro draw), entao o efeito e' imediato
                         // e visivel; nao e' salvo no mapa (nudge de sessao,
@@ -1354,6 +1394,65 @@ void Engine::renderImGui() {
                     }
                 }
             } ImGui::End();
+        }
+
+        // POPUP DE PREVIEW (debug/SpherePreview.hpp): fica aberto sozinho,
+        // independente do painel F1 - clicar numa textura la' liga isto e
+        // continua mostrando mesmo se o F1 for fechado depois.
+        if (m_spherePreview.active()) {
+            bool open = true;
+            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(m_spherePreview.size()) + 16.0f,
+                                            static_cast<float>(m_spherePreview.size()) + 60.0f), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Texture Preview", &open)) {
+                ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "%s", m_spherePreview.materialLabel().c_str());
+                ImGui::TextDisabled("Arraste (botao esquerdo) pra girar a camera, scroll pra afastar/aproximar.");
+                // ESFERA x CUBO (pedido do autor): a curva da esfera confunde
+                // "isso e' a curvatura" com "isso e' deslocamento de verdade".
+                // Face PLANA do cubo compara direto com o chao (tambem plano) -
+                // se o cubo mostra relevo e o chao real fica liso com a MESMA
+                // textura, o bug esta' no chao, nao no preview.
+                bool isCube = m_spherePreview.shape() == SpherePreview::Shape::Cube;
+                if (ImGui::RadioButton("Esfera", !isCube)) m_spherePreview.setShape(SpherePreview::Shape::Sphere);
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Cubo (compara com chao plano)", isCube)) m_spherePreview.setShape(SpherePreview::Shape::Cube);
+                bool worldOn = m_spherePreview.worldScale();
+                if (ImGui::Checkbox("Escala do mundo", &worldOn)) m_spherePreview.setWorldScale(worldOn);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip(m_spherePreview.hasWorldUvPerUnit()
+                    ? "Textura no mesmo tamanho que no mapa (mesma densidade de UV da malha real)."
+                    : "Essa textura nao tem malha no mapa atual - usando a UV nativa da forma.");
+                ImGui::SameLine();
+                bool spinOn = m_spherePreview.spin();
+                if (ImGui::Checkbox("Girar sozinho", &spinOn)) m_spherePreview.setSpin(spinOn);
+                if (m_spherePreview.imguiTextureId()) {
+                    const float sz = static_cast<float>(m_spherePreview.size());
+                    // InvisibleButton EM VEZ DE Image puro: Image nao captura
+                    // o mouse (e' so' decoracao), entao o arrasto "vazava" pro
+                    // ImGui mover a JANELA inteira por baixo (autor: "quando eu
+                    // movo a esfera, o popup vem junto - so' devia mover se
+                    // clicar na barra"). O botao invisivel VIRA o item ativo
+                    // durante o arrasto, e enquanto algum item esta' ativo o
+                    // ImGui nao inicia o move-da-janela por cima dele - a
+                    // imagem e' so' desenhada NO RETANGULO do botao, por cima.
+                    ImGui::InvisibleButton("##sphere_canvas", ImVec2(sz, sz));
+                    const bool hovered = ImGui::IsItemHovered();
+                    const bool dragging = ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+                    ImVec2 p0 = ImGui::GetItemRectMin();
+                    ImVec2 p1 = ImGui::GetItemRectMax();
+                    ImGui::GetWindowDrawList()->AddImage(m_spherePreview.imguiTextureId(), p0, p1);
+                    // CAMERA ORBITAVEL: a esfera continua girando sozinha
+                    // (SpherePreview::m_rotation) - isto so' mexe no OLHO.
+                    if (dragging) {
+                        ImVec2 d = ImGui::GetIO().MouseDelta;
+                        m_spherePreview.orbitDrag(d.x, d.y);
+                    }
+                    if (hovered) {
+                        float wheel = ImGui::GetIO().MouseWheel;
+                        if (wheel != 0.0f) m_spherePreview.zoom(wheel);
+                    }
+                }
+            }
+            ImGui::End();
+            if (!open) m_spherePreview.setActive(false);
         }
 
         // ERUPTION_TEST_SHOW_STATS=1 (debug): open the F3 telemetry window from boot

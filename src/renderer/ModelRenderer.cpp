@@ -586,6 +586,8 @@ void ModelRenderer::clear() {
     m_textureAnimatedNodes.clear();
     m_modelMeshCache.clear();
     m_textureCache.clear();
+    m_texUvPerUnit.clear();
+    m_pbrByTexSlot.clear();
     m_lastModels.clear();
     m_lastInstances.clear();
 
@@ -825,6 +827,27 @@ uint32_t ModelRenderer::resolveTexture(const std::string& path) {
     return slot;
 }
 
+void ModelRenderer::registerResolvedTexture(const std::string& path, uint32_t slot) {
+    if (path.empty()) return;
+    std::string sanitizedPath = path;
+    std::replace(sanitizedPath.begin(), sanitizedPath.end(), '/', '\\');
+    if (!sanitizedPath.empty() && sanitizedPath[0] == '\\') sanitizedPath = sanitizedPath.substr(1);
+    m_textureCache.emplace(sanitizedPath, slot); // nao sobrescreve se ja' resolvido
+}
+
+PbrTextureSlots ModelRenderer::pbrForTexSlot(uint32_t slot) const {
+    auto it = m_pbrByTexSlot.find(slot);
+    return it != m_pbrByTexSlot.end() ? it->second : PbrTextureSlots{};
+}
+
+PbrTextureSlots ModelRenderer::cachedPbrTextures(const std::string& path) const {
+    std::string sanitizedPath = path;
+    std::replace(sanitizedPath.begin(), sanitizedPath.end(), '/', '\\');
+    if (!sanitizedPath.empty() && sanitizedPath[0] == '\\') sanitizedPath = sanitizedPath.substr(1);
+    auto it = m_pbrTextureCache.find(sanitizedPath);
+    return it != m_pbrTextureCache.end() ? it->second : PbrTextureSlots{};
+}
+
 PbrTextureSlots ModelRenderer::resolvePbrTextures(const std::string& path) {
     if (path.empty()) return PbrTextureSlots{};
 
@@ -972,10 +995,18 @@ void ModelRenderer::loadMapModels(const std::vector<ModelAsset>& models,
                             uint32_t globalIdx = node.textureIds[faceTexIdx % node.textureIds.size()];
                             texSlot = (globalIdx < assetTexIndexToBindlessSlot.size()) ? assetTexIndexToBindlessSlot[globalIdx] : 0;
                             if (globalIdx < asset.textures.size()) texName = asset.textures[globalIdx];
+                            // Esse ramo (mapa mais antigo) nunca passava por
+                            // resolveTexture() - a textura ficava sem entrada
+                            // em m_textureCache, entao nunca aparecia na lista
+                            // do F1/popup de preview (autor: "o chao continua
+                            // diferente do preview" - literalmente nao dava
+                            // pra' clicar no chao de verdade).
+                            registerResolvedTexture(texName, texSlot);
                         } else {
                             // Fallback: use global index directly
                             texSlot = (faceTexIdx < assetTexIndexToBindlessSlot.size()) ? assetTexIndexToBindlessSlot[faceTexIdx] : 0;
                             if (faceTexIdx < asset.textures.size()) texName = asset.textures[faceTexIdx];
+                            registerResolvedTexture(texName, texSlot);
                         }
                         PbrTextureSlots pbrSlots;
                         if (!pbrName.empty()) {
@@ -994,6 +1025,10 @@ void ModelRenderer::loadMapModels(const std::vector<ModelAsset>& models,
                         fr.texSlot = texSlot;
                         fr.pbrIdx = pbrSlots.mrahw.index;
                         fr.normalIdx = pbrSlots.normal.index;
+                        // PBR por SLOT de textura: o cache por nome e' chaveado
+                        // pelo nome do MATERIAL, e a lista do F1 so' tem o nome
+                        // sintetico da imagem embutida - o preview nunca achava.
+                        if (texSlot != 0 && pbrSlots.valid()) m_pbrByTexSlot.emplace(texSlot, pbrSlots);
                         fr.name = std::move(texName);
                     }
                     uint32_t texSlot = fr.texSlot;
@@ -1143,6 +1178,26 @@ void ModelRenderer::loadMapModels(const std::vector<ModelAsset>& models,
                 // Prefere o nome do MATERIAL; cai no da imagem se nao houver.
                 const std::string& nomeMaterial = !firstPbrName.empty() ? firstPbrName : firstTexName;
                 const auto& profile = getPbrProfile(nomeMaterial);
+                // ERUPTION_TEST_AABB_STATS="x0,x1,y0,y1,z0,z1": imprime malha
+                // por posicao em vez de heuristica de nome/categoria - serve
+                // pra achar o material exato debaixo de uma pose de camera
+                // conhecida, sem depender de isGroundMesh/isGround (ja'
+                // unificados no mesmo criterio - ver isGroundMesh abaixo).
+                if (const char* aabbEnv = std::getenv("ERUPTION_TEST_AABB_STATS")) {
+                    float bx0, bx1, by0, by1, bz0, bz1;
+                    if (std::sscanf(aabbEnv, "%f,%f,%f,%f,%f,%f", &bx0, &bx1, &by0, &by1, &bz0, &bz1) == 6) {
+                        const bool overlap = aabbMax.x >= bx0 && aabbMin.x <= bx1 &&
+                                            aabbMax.y >= by0 && aabbMin.y <= by1 &&
+                                            aabbMax.z >= bz0 && aabbMin.z <= bz1;
+                        if (overlap) {
+                            ERUPTION_LOG_WARN("[AABBSTATS] mat='%s' pbrName='%s' texName='%s' cat='%s' "
+                                              "aabb=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)",
+                                              nomeMaterial.c_str(), firstPbrName.c_str(), firstTexName.c_str(),
+                                              profile.category.c_str(), aabbMin.x, aabbMin.y, aabbMin.z,
+                                              aabbMax.x, aabbMax.y, aabbMax.z);
+                        }
+                    }
+                }
                 // REORDENACAO ESPACIAL DO CHAO. Ordena os triangulos por celula
                 // de kGroundCellSize e guarda o intervalo de indices de cada
                 // uma: e' o que permite desenhar SO' o pedaco perto da camera
@@ -1208,6 +1263,112 @@ void ModelRenderer::loadMapModels(const std::vector<ModelAsset>& models,
                         groundCells.clear();
                     }
                 }
+                // COSTURAS DO DESLOCAMENTO (autor: "fenda" - linhas finas e
+                // retas no chao, uma por borda de tile). Dois vertices na
+                // MESMA posicao mas com textura/UV/normal diferentes (borda de
+                // tile do chao legado, troca de textura) leem alturas
+                // diferentes e deslocam pra lugares diferentes - abre vao e o
+                // fundo aparece. Marca esses vertices (bit 15 do matId, que
+                // so' o debug magenta lia) e o shader zera o deslocamento
+                // neles: os dois lados da junta ficam presos no mesmo ponto.
+                // UV que difere so' por inteiro (wrap do ladrilho) nao e'
+                // costura - amostra o mesmo texel.
+                {
+                    struct PosKey { int64_t x, y, z; bool operator==(const PosKey& o) const { return x == o.x && y == o.y && z == o.z; } };
+                    struct PosHash { size_t operator()(const PosKey& k) const {
+                        return std::hash<int64_t>()(k.x * 73856093LL ^ k.y * 19349663LL ^ k.z * 83492791LL); } };
+                    std::unordered_map<PosKey, uint32_t, PosHash> first;
+                    first.reserve(vertices.size());
+                    auto fracDiff = [](float a, float b) {
+                        float d = std::fabs((a - std::floor(a)) - (b - std::floor(b)));
+                        return std::min(d, 1.0f - d);
+                    };
+                    size_t seams = 0;
+                    for (uint32_t vi = 0; vi < vertices.size(); ++vi) {
+                        const TerrainVertex& v = vertices[vi];
+                        PosKey k{static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
+                                 static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
+                                 static_cast<int64_t>(std::llround(v.position.z * 1000.0f))};
+                        auto [it, inserted] = first.try_emplace(k, vi);
+                        if (inserted) continue;
+                        TerrainVertex& o = vertices[it->second];
+                        const bool differs = o.texIndex != v.texIndex || o.pbrIndex != v.pbrIndex ||
+                                             o.splatTex01 != v.splatTex01 || o.splatTex23 != v.splatTex23 ||
+                                             fracDiff(o.texCoord.x, v.texCoord.x) > 1e-3f ||
+                                             fracDiff(o.texCoord.y, v.texCoord.y) > 1e-3f ||
+                                             glm::dot(o.normal, v.normal) < 0.999f;
+                        if (differs) {
+                            if (!(o.matId & 0x8000u)) ++seams;
+                            o.matId = static_cast<uint16_t>(o.matId | 0x8000u);
+                            vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
+                        }
+                    }
+                    // Segunda passada: todo vertice cuja posicao ja' foi marcada
+                    // (o primeiro do grupo pode ter sido marcado depois dos
+                    // outros iguais a ele).
+                    for (auto& v : vertices) {
+                        PosKey k{static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
+                                 static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
+                                 static_cast<int64_t>(std::llround(v.position.z * 1000.0f))};
+                        if (vertices[first[k]].matId & 0x8000u) v.matId = static_cast<uint16_t>(v.matId | 0x8000u);
+                    }
+                    // BORDA DA MALHA (aresta usada por UM triangulo so'): e' onde
+                    // esta malha encosta em OUTRA - no chao legado cada textura e'
+                    // uma malha separada, entao a troca de textura entre tiles e'
+                    // borda de malha, e a comparacao por posicao acima (que so'
+                    // enxerga DENTRO da malha) nao pegava. Era a fenda que sobrou.
+                    std::unordered_map<uint64_t, uint32_t> edgeUse;
+                    edgeUse.reserve(useIndices->size());
+                    auto edgeKey = [](uint32_t a, uint32_t b) {
+                        return (static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b);
+                    };
+                    for (size_t t = 0; t + 2 < useIndices->size(); t += 3)
+                        for (int e = 0; e < 3; ++e)
+                            ++edgeUse[edgeKey((*useIndices)[t + e], (*useIndices)[t + (e + 1) % 3])];
+                    size_t borderVerts = 0;
+                    for (const auto& [k, cnt] : edgeUse) {
+                        if (cnt != 1) continue;
+                        for (uint32_t vi : {static_cast<uint32_t>(k >> 32), static_cast<uint32_t>(k & 0xFFFFFFFFu)}) {
+                            if (!(vertices[vi].matId & 0x8000u)) ++borderVerts;
+                            vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
+                        }
+                    }
+                    if (isGroundMesh && std::getenv("ERUPTION_TEST_SEAM_STATS"))
+                        ERUPTION_LOG_WARN("[SEAM] chao malha %u: %zu posicoes de costura, %zu vertices de borda novos (%zu vertices)",
+                                          n, seams, borderVerts, vertices.size());
+                }
+                // DENSIDADE DE UV (mediana de |dUV|/|dPos| por aresta) - o
+                // shader usa pra amostrar a altura num mip que a grade de
+                // vertices consegue representar (Nyquist), senao a borda seca
+                // da pedra vira serrote ("borda serrilhada").
+                float meshUvPerUnit = 0.0f;
+                {
+                    std::vector<float> dens;
+                    dens.reserve(useIndices->size() / 3);
+                    // Tambem POR TEXTURA (popup de preview): mediana da malha
+                    // inteira nao serve pra' predio, que mistura tijolo,
+                    // madeira e janela em escalas diferentes.
+                    std::unordered_map<uint16_t, std::vector<float>> densByTex;
+                    for (size_t t = 0; t + 2 < useIndices->size(); t += 3) {
+                        const TerrainVertex& a = vertices[(*useIndices)[t]];
+                        const TerrainVertex& b = vertices[(*useIndices)[t + 1]];
+                        const float dp = glm::length(b.position - a.position);
+                        if (dp <= 1e-4f) continue;
+                        const float d = glm::length(b.texCoord - a.texCoord) / dp;
+                        dens.push_back(d);
+                        if (a.texIndex != 0 && a.texIndex == b.texIndex) densByTex[a.texIndex].push_back(d);
+                    }
+                    if (!dens.empty()) {
+                        std::nth_element(dens.begin(), dens.begin() + dens.size() / 2, dens.end());
+                        meshUvPerUnit = dens[dens.size() / 2];
+                    }
+                    for (auto& [slot, v] : densByTex) {
+                        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+                        if (v[v.size() / 2] > 0.0f) m_texUvPerUnit.emplace(slot, v[v.size() / 2]);
+                    }
+                }
+                if (isGroundMesh && std::getenv("ERUPTION_TEST_SEAM_STATS"))
+                    ERUPTION_LOG_WARN("[SEAM] chao malha %u: uvPerUnit=%.4f", n, meshUvPerUnit);
                 std::string meshKey = asset.filePath + "#" + std::to_string(n);
                 if (m_meshResolver) {
                     mesh = m_meshResolver(meshKey, vertices, *useIndices);
@@ -1265,22 +1426,18 @@ void ModelRenderer::loadMapModels(const std::vector<ModelAsset>& models,
                 mesh.roughnessScale = profile.roughness;
                 mesh.swayAmount = resolveSwayAmount(nomeMaterial, profile.category);
                 // FATOR DE DESLOCAMENTO POR MATERIAL (tesselacao da banda
-                // perto). Chao, terra e neve tem relevo de verdade e levam a
-                // amplitude cheia. Pedra e madeira levam menos: a malha de
-                // arquitetura tem triangulo GRANDE e chapado, e deslocar por
-                // altura de textura ali estica o triangulo em espeto - visto
-                // em cidade-D com amplitude 3. Telhado, metal e agua ficam em
-                // zero: superficie dura, lisa ou com shader proprio.
-                {
-                    const std::string& cat = profile.category;
-                    mesh.dispScale = (cat == "ground" || cat == "dirt" || cat == "snow") ? 1.0f
-                                   : (cat == "grass")                                   ? 0.6f
-                                   : (cat == "stone")                                   ? 0.45f
-                                   : (cat == "wood")                                    ? 0.30f
-                                   : (cat == "roof" || cat == "metal" ||
-                                      cat == "water" || cat == "vegetation")            ? 0.0f
-                                                                                        : 0.35f;
-                }
+                // perto) - ver dispScaleForCategory() em PbrMaterialProfile.hpp
+                // (fonte unica compartilhada com o popup de preview em
+                // SpherePreview.cpp). isGroundMesh (splat/nome coreano de
+                // chao/categoria - calculado acima) forca amplitude cheia
+                // mesmo quando o nome da textura nao esta' classificado no
+                // pbr_materials.json (visto num mapa de teste: a textura do
+                // chao nunca apareceu na tabela -> caia no fallback generico 0.35
+                // em vez do 1.0 que chao de verdade deveria ter, sem nada
+                // "quebrar" visivelmente - so' ficava mais fraco que devia).
+                mesh.dispScale = isGroundMesh ? 1.0f : dispScaleForCategory(profile.category);
+                mesh.uvPerUnit = meshUvPerUnit;
+
                 // ERUPTION_TEST_SWAY_ALL=<v>: forca o balanco em TODAS as malhas
                 // (diagnostico: separa "o vento nao chega" de "a heuristica de
                 // nome nao classificou nada como vegetacao").
@@ -1292,17 +1449,18 @@ void ModelRenderer::loadMapModels(const std::vector<ModelAsset>& models,
                 if (std::getenv("ERUPTION_TEST_SWAY_STATS"))
                     ERUPTION_LOG_WARN("[SWAY] %s cat=%s sway=%.2f", nomeMaterial.c_str(),
                                       profile.category.c_str(), mesh.swayAmount);
-                // CHAO (G38): terreno que veio como modelo. Tres pistas, qualquer
-                // uma basta: categoria "ground" do perfil PBR, "ground" no nome
-                // do material, ou vertices com splat (terreno procedural GLB).
-                {
-                    bool splat = false;
-                    for (const auto& v : vertices) {
-                        if (v.splatTex01 != 0u || v.splatTex23 != 0u) { splat = true; break; }
-                    }
-                    mesh.isGround = splat || profile.category == "ground" ||
-                                    nomeMaterial.find("ground") != std::string::npos;
-                }
+                // CHAO (G38): terreno que veio como modelo. Reusa isGroundMesh
+                // (calculado mais acima, pro particionamento em celulas) em vez
+                // de recalcular um criterio MAIS FRACO aqui - esta copia so'
+                // conferia "ground" em INGLES no nome, entao nunca marcava chao
+                // com nome em coreano (a palavra para chao/piso no nome da
+                // textura) a menos que o splat salvasse. Os dois
+                // criterios tinham que ser o mesmo e nao eram (ver comentario
+                // ~linha 1152).
+                mesh.isGround = isGroundMesh;
+                if (mesh.isGround && std::getenv("ERUPTION_TEST_GROUND_STATS"))
+                    ERUPTION_LOG_WARN("[GROUNDSTATS] mat='%s' cat='%s' splat=%d",
+                                      nomeMaterial.c_str(), profile.category.c_str(), splatGround ? 1 : 0);
 
                 // CASTER SOLIDO? So' se TODA textura referenciada pela malha
                 // for opaca. Basta um vertice apontar para textura com alfa
@@ -1910,8 +2068,8 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     // CROSSFADE DE LOD (cheio <-> reduzido): pre-passe SO' DE CONTAGEM, sem
     // escrever SSBO ainda - precisa saber quantos slots extras reservar antes
     // de pedir capacidade. Ver o comentario grande no laco principal abaixo
-    // para o design completo (dithered cross-fade, SOTA tipo Unity/Unreal/
-    // Cesium: https://cesium.com/blog/2022/10/20/smoother-lod-transitions-in-cesium-for-unreal/).
+    // para o design completo (dithered cross-fade, o estado da arte em
+    // transicao de LOD).
     // No wireframe o crossfade nao faz sentido (o dither abriria buracos na
     // malha) e o nivel ja' e' fixo no mais grosseiro.
     static const bool kLodFadeOff =
@@ -2061,6 +2219,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         push.alpha = runAlpha;
         push.metallicScale = mesh.metallicScale;
         push.roughnessScale = mesh.roughnessScale;
+        push.uvScale.z = mesh.uvPerUnit;
         push.uvScale.w = mesh.dispScale;
         vkCmdPushConstants(cmd, m_pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |

@@ -1,0 +1,53 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Funcao elemento a elemento; codigos = NnUnary (src/ml/NnProgram.hpp).
+layout(local_size_x = 256) in;
+#include "nn_common.glsl"
+
+layout(push_constant) uniform Params {
+    uint baseIn;
+    uint baseOut;
+    uint total;
+    uint code;
+    float param0;
+    float param1;
+} p;
+
+// Abramowitz & Stegun 7.1.26 (erro maximo 1.5e-7): GLSL nao tem erf.
+float erfApprox(float x) {
+    const float t = 1.0 / (1.0 + 0.3275911 * abs(x));
+    const float y = 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x);
+    return sign(x) * y;
+}
+
+float apply(float x) {
+    switch (p.code) {
+    case 0u: return x;
+    case 1u: return -x;
+    case 2u: return sqrt(x);
+    case 3u: return sin(x);
+    case 4u: return cos(x);
+    case 5u: return exp(x);
+    case 6u: return log(x);
+    case 7u: return abs(x);
+    case 8u: return max(x, 0.0);
+    case 9u: return 1.0 / (1.0 + exp(-x));
+    case 10u: return tanh(x);
+    case 11u: return erfApprox(x);
+    case 12u: return x > 0.0 ? p.param1 * x : p.param1 * p.param0 * (exp(x) - 1.0);
+    case 13u: return x > 0.0 ? x : p.param0 * (exp(x) - 1.0);
+    case 14u: return x > 0.0 ? x : p.param0 * x;
+    case 15u: return clamp(p.param0 * x + p.param1, 0.0, 1.0);
+    case 16u: return log(1.0 + exp(x));
+    case 17u: return 1.0 / x;
+    case 18u: return floor(x);
+    case 19u: return ceil(x);
+    default: return clamp(x, p.param0, p.param1);
+    }
+}
+
+void main() {
+    const uint i = flatIndex();
+    if (i >= p.total) return;
+    arena.data[p.baseOut + i] = apply(arena.data[p.baseIn + i]);
+}

@@ -72,7 +72,7 @@
       }
     ],
     "tessellation_enabled": true,
-    "tessellation_amplitude": 1.6,
+    "tessellation_amplitude": 2.5,
     "tessellation_curve": [
       {
         "x": 0.0,
@@ -95,9 +95,9 @@
         "interpolation": "Smoothstep"
       }
     ],
-    "tessellation_height_gain": 3.5,
-    "tessellation_height_space": 0,
-    "tessellation_world_scale": 0.125
+    "tessellation_height_gain": 1.5,
+    "tessellation_height_blur": 0.15,
+    "tessellation_vertex_spacing": 0.25
   },
   "fps_cap": 0,
   "present_mode": "auto",

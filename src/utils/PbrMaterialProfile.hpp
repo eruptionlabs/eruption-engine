@@ -50,4 +50,23 @@ inline const PbrMaterialProfile& getPbrProfile(const std::string& texturePath) {
     return PbrMaterialProfileManager::instance().getProfile(texturePath);
 }
 
+// Fator de deslocamento por categoria (push.uvScale.w / ModelMeshGPU::dispScale).
+// UNICA fonte de verdade - usado tanto pelo chao real (ModelRenderer.cpp)
+// quanto pelo popup de preview (SpherePreview.cpp), pra' nao ter dois lugares
+// que podem desalinhar (era exatamente o bug: o preview tinha 1.0 fixo,
+// ignorando a categoria de verdade do material clicado). Chao, terra e neve
+// tem relevo de verdade e levam a amplitude cheia. Pedra e madeira levam
+// menos: malha de arquitetura tem triangulo GRANDE e chapado, e deslocar por
+// altura de textura ali estica o triangulo em espeto. Telhado, metal e agua
+// ficam em zero: superficie dura, lisa ou com shader proprio.
+inline float dispScaleForCategory(const std::string& category) {
+    if (category == "ground" || category == "dirt" || category == "snow") return 1.0f;
+    if (category == "grass") return 0.6f;
+    if (category == "stone") return 0.45f;
+    if (category == "wood") return 0.30f;
+    if (category == "roof" || category == "metal" || category == "water" ||
+        category == "vegetation") return 0.0f;
+    return 0.35f;
+}
+
 } // namespace eruption
