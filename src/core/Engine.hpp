@@ -378,6 +378,13 @@ public:
     Timer& timer() { return m_timer; }
     bool& showConsole() { return m_showConsole; }
     bool& showDebugOverlay() { return m_showDebugOverlay; }
+    // Ferramentas de desenvolvimento no jogo (painéis F1..F12, console, câmera
+    // livre): ligadas no build com editor; no jogo exportado só com ERUPTION_DEV=1.
+    bool devTools() const { return m_devTools; }
+    // HUD de exemplo (barras do personagem) e minimapa: o jogo exportado só
+    // mostra se o projeto pedir (ui.show_hud / ui.show_minimap).
+    void setHudBars(bool on) { m_showHudBars = on; m_showGameHud = m_showHudBars || m_showMinimapHud; }
+    void setMinimapHud(bool on) { m_showMinimapHud = on; m_showGameHud = m_showHudBars || m_showMinimapHud; }
     bool& showStatsMenu() { return m_showStatsMenu; }
     bool& showSpritePicker() { return m_showSpritePicker; }
     bool& showResourceManager() { return m_showResourceManager; }
@@ -768,6 +775,9 @@ private:
     // Escala do balanco da vegetacao (graphics.json wind_sway_scale).
     float m_windSwayScale = 0.15f;
     bool m_showDebugOverlay = true;
+    bool m_devTools = true;
+    bool m_showGameHud = true, m_showHudBars = true, m_showMinimapHud = true;
+    void drawGameHud();
     bool m_showEffectsMenu = false; 
     bool m_showObjectMenu = false;
     bool m_showStatsMenu = false;

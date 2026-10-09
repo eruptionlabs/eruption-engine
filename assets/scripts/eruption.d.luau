@@ -33,6 +33,10 @@ declare vars: {
 declare ui: {
     -- Shows a message on screen for some seconds (default 3).
     message: (text: string, seconds: number?) -> (),
+    -- Character bars (life, mana) and the minimap with the map name and time.
+    -- Off in exported games until the game turns them on.
+    show_hud: (on: boolean) -> (),
+    show_minimap: (on: boolean) -> (),
 }
 
 declare world: {

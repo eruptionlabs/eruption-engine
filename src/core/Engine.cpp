@@ -837,7 +837,10 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_activeMapContext = std::make_unique<MapContext>();
 
     m_debugModelPivots = false;
-    m_showDebugOverlay = true;
+    m_devTools = ERUPTION_EDITOR || std::getenv("ERUPTION_DEV") != nullptr;
+    m_showDebugOverlay = m_devTools;
+    setHudBars(m_devTools);
+    setMinimapHud(m_devTools);
 
     return true;
 }

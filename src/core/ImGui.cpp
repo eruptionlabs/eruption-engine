@@ -518,6 +518,9 @@ void Engine::renderImGui() {
         dl->AddText(pos, color, text);
     };
 
+    // HUD do jogo e minimapa: à parte dos painéis de depuração (F4 só tira estes).
+    if (!m_editor && m_showGameHud) drawGameHud();
+
     if (m_showDebugOverlay) {
         m_modelRenderer.setHighlightedInstance(-1);
         if (!m_editor) {
@@ -2332,77 +2335,6 @@ void Engine::renderImGui() {
         }
         ImGui::End();
 
-        // HUD da aplicacao (separada do Control Panel)
-        if (m_playerController) m_playerController->renderApplicationHUD();
-
-        // Minimap: faz parte da HUD da aplicacao, entao vai no BackgroundDrawList -
-        // as janelas de sistema (F1..F12, Control Panel) ficam sempre por cima.
-        // Marcadores de jogador/boss tambÃ©m ficam no ForegroundDrawList.
-        // Posição/tamanho do frame são controlados pelo CSS (#minimap) quando disponíveis.
-        ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-
-        char mapBuf[256] = "";
-        if (!m_demoHidePanels && m_currentMap && m_playerController) {
-            int gx = (int)(m_playerController->pos().x / 5.0f);
-            int gz = (int)(m_playerController->pos().z / 5.0f);
-            sprintf(mapBuf, "%s [%d, %d]", m_currentMapName.c_str(), gx, gz);
-        }
-
-        float uiSize = 200.0f;
-        ImVec2 startPos(displaySize.x - 10.0f - uiSize, displaySize.y - 10.0f - uiSize);
-        if (!m_demoHidePanels && m_minimapBottomRight && m_playerController) {
-            eruption::CSSRect cssRect = m_playerController->getMinimapRect(displaySize);
-            if (cssRect.w > 0.0f && cssRect.h > 0.0f) {
-                // CSS rect now defines the minimap image size/position directly.
-                uiSize = std::max(50.0f, std::min(cssRect.w, cssRect.h));
-                startPos = ImVec2(cssRect.x, cssRect.y);
-            }
-        }
-
-        ImDrawList* dl = ImGui::GetBackgroundDrawList();
-
-        // Fantasy stone/bronze frame around minimap map only
-        ImVec2 bgMin(startPos.x - 6, startPos.y - 6);
-        ImVec2 bgMax(startPos.x + uiSize + 6, startPos.y + uiSize + 6);
-        if (!m_demoHidePanels) dl->AddRectFilled(bgMin, bgMax, IM_COL32(20, 18, 16, 235), 4.0f);
-        if (!m_demoHidePanels) dl->AddRect(bgMin, bgMax, IM_COL32(139, 90, 43, 255), 4.0f, 0, 3.0f);
-        if (!m_demoHidePanels) dl->AddRect(ImVec2(bgMin.x + 2, bgMin.y + 2), ImVec2(bgMax.x - 2, bgMax.y - 2), IM_COL32(240, 230, 210, 50), 3.0f, 0, 1.0f);
-        if (!m_demoHidePanels) dl->AddRect(ImVec2(startPos.x - 2, startPos.y - 2), ImVec2(startPos.x + uiSize + 2, startPos.y + uiSize + 2), IM_COL32(107, 143, 94, 255), 0.0f, 0, 2.0f);
-
-        if (!m_demoHidePanels && m_minimapDescriptorSet != VK_NULL_HANDLE) {
-            // Flip UVs both horizontally and vertically to match source map orientation
-            dl->AddImage((ImTextureID)m_minimapDescriptorSet, startPos, ImVec2(startPos.x + uiSize, startPos.y + uiSize), ImVec2(1, 1), ImVec2(0, 0));
-        }
-
-        // Minimap info panel: nome do mapa + coordenadas + horario (widget separado #minimap-info)
-        if (!m_demoHidePanels && m_minimapBottomRight && m_playerController) {
-            eruption::CSSRect infoRect = m_playerController->getMinimapInfoRect(displaySize);
-            if (infoRect.w > 0.0f && infoRect.h > 0.0f) {
-                // Horario do jogo (sem segundos)
-                int curT = (int)(m_dayNightCycle.timeOfDay() * 1440.0f);
-                char timeBuf[16]; sprintf(timeBuf, "%02d:%02d", curT / 60, curT % 60);
-
-                ImVec2 mapSize = ImGui::CalcTextSize(mapBuf);
-                ImVec2 timeSize = ImGui::CalcTextSize(timeBuf);
-                float boxW = std::max(mapSize.x, timeSize.x) + 12.0f;
-                float boxH = mapSize.y + timeSize.y + 12.0f;
-
-                // Centraliza a caixa de texto horizontalmente com base no minimapa real e verticalmente no retangulo CSS
-                float textX = startPos.x + (uiSize - boxW) * 0.5f;
-                float textY = infoRect.y + (infoRect.h - boxH) * 0.5f;
-
-                ImVec2 p(textX, textY);
-                dl->AddRectFilled(p, ImVec2(p.x + boxW, p.y + boxH), IM_COL32(16, 14, 12, 235), 3.0f);
-                dl->AddRect(p, ImVec2(p.x + boxW, p.y + boxH), IM_COL32(139, 90, 43, 255), 3.0f, 0, 1.0f);
-                // Centraliza cada linha horizontalmente dentro da caixa
-                drawStrokeText(dl, ImVec2(p.x + (boxW - mapSize.x) * 0.5f, p.y + 4.0f), mapBuf, IM_COL32(255, 235, 150, 255));
-                drawStrokeText(dl, ImVec2(p.x + (boxW - timeSize.x) * 0.5f, p.y + mapSize.y + 6.0f), timeBuf, IM_COL32(200, 230, 255, 255));
-            }
-        }
-
-        // Marcadores do minimapa (jogador/boss) sÃ£o desenhados DEPOIS do mapa para ficarem acima dele
-        if (m_playerController && !m_demoHidePanels) m_playerController->renderMinimapMarkers();
-
         // FPS control panel - canto superior esquerdo
         ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
         if (ImGui::Begin("FPSPanel", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBackground)) {
@@ -2526,6 +2458,91 @@ void Engine::renderImGui() {
         }
         } // !m_editor
     }
+}
+
+// HUD da aplicação (barras do personagem, minimapa com nome do mapa e hora).
+// Ligado por padrão só nas ferramentas de desenvolvimento; o jogo exportado
+// mostra se o projeto pedir (ui.show_hud / ui.show_minimap).
+void Engine::drawGameHud() {
+    auto drawStrokeText = [](ImDrawList* dl, ImVec2 pos, const char* text, ImU32 color) {
+        dl->AddText(ImVec2(pos.x - 1, pos.y - 1), IM_COL32(0, 0, 0, 255), text);
+        dl->AddText(ImVec2(pos.x + 1, pos.y - 1), IM_COL32(0, 0, 0, 255), text);
+        dl->AddText(ImVec2(pos.x - 1, pos.y + 1), IM_COL32(0, 0, 0, 255), text);
+        dl->AddText(ImVec2(pos.x + 1, pos.y + 1), IM_COL32(0, 0, 0, 255), text);
+        dl->AddText(pos, color, text);
+    };
+    // HUD da aplicacao (separada do Control Panel)
+    if (m_playerController && m_showHudBars) m_playerController->renderApplicationHUD();
+    if (!m_showMinimapHud) return;
+
+    // Minimap: faz parte da HUD da aplicacao, entao vai no BackgroundDrawList -
+    // as janelas de sistema (F1..F12, Control Panel) ficam sempre por cima.
+    // Marcadores de jogador/boss tambÃ©m ficam no ForegroundDrawList.
+    // Posição/tamanho do frame são controlados pelo CSS (#minimap) quando disponíveis.
+    ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+
+    char mapBuf[256] = "";
+    if (!m_demoHidePanels && m_currentMap && m_playerController) {
+        int gx = (int)(m_playerController->pos().x / 5.0f);
+        int gz = (int)(m_playerController->pos().z / 5.0f);
+        sprintf(mapBuf, "%s [%d, %d]", m_currentMapName.c_str(), gx, gz);
+    }
+
+    float uiSize = 200.0f;
+    ImVec2 startPos(displaySize.x - 10.0f - uiSize, displaySize.y - 10.0f - uiSize);
+    if (!m_demoHidePanels && m_minimapBottomRight && m_playerController) {
+        eruption::CSSRect cssRect = m_playerController->getMinimapRect(displaySize);
+        if (cssRect.w > 0.0f && cssRect.h > 0.0f) {
+            // CSS rect now defines the minimap image size/position directly.
+            uiSize = std::max(50.0f, std::min(cssRect.w, cssRect.h));
+            startPos = ImVec2(cssRect.x, cssRect.y);
+        }
+    }
+
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+
+    // Fantasy stone/bronze frame around minimap map only
+    ImVec2 bgMin(startPos.x - 6, startPos.y - 6);
+    ImVec2 bgMax(startPos.x + uiSize + 6, startPos.y + uiSize + 6);
+    if (!m_demoHidePanels) dl->AddRectFilled(bgMin, bgMax, IM_COL32(20, 18, 16, 235), 4.0f);
+    if (!m_demoHidePanels) dl->AddRect(bgMin, bgMax, IM_COL32(139, 90, 43, 255), 4.0f, 0, 3.0f);
+    if (!m_demoHidePanels) dl->AddRect(ImVec2(bgMin.x + 2, bgMin.y + 2), ImVec2(bgMax.x - 2, bgMax.y - 2), IM_COL32(240, 230, 210, 50), 3.0f, 0, 1.0f);
+    if (!m_demoHidePanels) dl->AddRect(ImVec2(startPos.x - 2, startPos.y - 2), ImVec2(startPos.x + uiSize + 2, startPos.y + uiSize + 2), IM_COL32(107, 143, 94, 255), 0.0f, 0, 2.0f);
+
+    if (!m_demoHidePanels && m_minimapDescriptorSet != VK_NULL_HANDLE) {
+        // Flip UVs both horizontally and vertically to match source map orientation
+        dl->AddImage((ImTextureID)m_minimapDescriptorSet, startPos, ImVec2(startPos.x + uiSize, startPos.y + uiSize), ImVec2(1, 1), ImVec2(0, 0));
+    }
+
+    // Minimap info panel: nome do mapa + coordenadas + horario (widget separado #minimap-info)
+    if (!m_demoHidePanels && m_minimapBottomRight && m_playerController) {
+        eruption::CSSRect infoRect = m_playerController->getMinimapInfoRect(displaySize);
+        if (infoRect.w > 0.0f && infoRect.h > 0.0f) {
+            // Horario do jogo (sem segundos)
+            int curT = (int)(m_dayNightCycle.timeOfDay() * 1440.0f);
+            char timeBuf[16]; sprintf(timeBuf, "%02d:%02d", curT / 60, curT % 60);
+
+            ImVec2 mapSize = ImGui::CalcTextSize(mapBuf);
+            ImVec2 timeSize = ImGui::CalcTextSize(timeBuf);
+            float boxW = std::max(mapSize.x, timeSize.x) + 12.0f;
+            float boxH = mapSize.y + timeSize.y + 12.0f;
+
+            // Centraliza a caixa de texto horizontalmente com base no minimapa real e verticalmente no retangulo CSS
+            float textX = startPos.x + (uiSize - boxW) * 0.5f;
+            float textY = infoRect.y + (infoRect.h - boxH) * 0.5f;
+
+            ImVec2 p(textX, textY);
+            dl->AddRectFilled(p, ImVec2(p.x + boxW, p.y + boxH), IM_COL32(16, 14, 12, 235), 3.0f);
+            dl->AddRect(p, ImVec2(p.x + boxW, p.y + boxH), IM_COL32(139, 90, 43, 255), 3.0f, 0, 1.0f);
+            // Centraliza cada linha horizontalmente dentro da caixa
+            drawStrokeText(dl, ImVec2(p.x + (boxW - mapSize.x) * 0.5f, p.y + 4.0f), mapBuf, IM_COL32(255, 235, 150, 255));
+            drawStrokeText(dl, ImVec2(p.x + (boxW - timeSize.x) * 0.5f, p.y + mapSize.y + 6.0f), timeBuf, IM_COL32(200, 230, 255, 255));
+        }
+    }
+
+    // Marcadores do minimapa (jogador/boss) sÃ£o desenhados DEPOIS do mapa para ficarem acima dele
+    if (m_playerController && !m_demoHidePanels) m_playerController->renderMinimapMarkers();
+
 }
 
 } // namespace eruption
