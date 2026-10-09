@@ -330,6 +330,7 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
     flushPendingUploads();
     mr.setMeshLodSuspended(false);
     mr.setKeepGroundVertices(keep);
+    const auto tModels = std::chrono::steady_clock::now();
     const uint32_t mapEnd = static_cast<uint32_t>(mr.instanceCount());
     for (uint32_t i = r.firstInstance; i < mapEnd; ++i) mr.setInstanceName(i, prefix + mr.getInstances()[i].name);
     auto findInRegion = [&](const std::string& name) -> int {
@@ -364,6 +365,7 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
         const int src = findInRegion(c.from);
         if (src >= 0) mr.duplicateInstance(static_cast<uint32_t>(src), prefix + c.name, place * c.transform.matrix());
     }
+    const auto tScene = std::chrono::steady_clock::now();
     // Objetos espalhados: lista à parte (o pincel do editor é do mapa aberto).
     {
         std::vector<ScatterGroup> mine;
@@ -371,7 +373,9 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
         loadScatter(r.map, place);
         std::swap(m_scatter, mine);
     }
+    const auto tScatter = std::chrono::steady_clock::now();
     buildRegionSplat(r, e.terrainLayers);
+    const auto tSplat = std::chrono::steady_clock::now();
     r.endInstance = static_cast<uint32_t>(mr.instanceCount());
 
     // Luzes do mapa (GLB: coordenada de mundo do próprio mapa) e as da cena.
@@ -430,13 +434,18 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
     r.waterLevel = e.waterLevel + r.offset.y;
     r.state = WorldRegion::State::Shown;
     ++m_worldVersion;
+    const auto tMisc = std::chrono::steady_clock::now();
     stitchGroundEdges();
+    const auto tStitch = std::chrono::steady_clock::now();
     rebuildWorldLights();
     if (r.hasWater) rebuildWorldWater();
-    ERUPTION_LOG_WARN("World: %s in place at (%.0f, %.0f, %.0f): %u instances, %zu characters, %lld ms", r.map.c_str(),
-                      r.offset.x, r.offset.y, r.offset.z, r.endInstance - r.firstInstance, r.characters.size(),
-                      (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
-                          .count());
+    const auto tEnd = std::chrono::steady_clock::now();
+    auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+    ERUPTION_LOG_WARN("World: %s in place at (%.0f, %.0f, %.0f): %u instances, %zu characters, %.0f ms "
+                      "(models %.1f, scene %.1f, scatter %.1f, splat %.1f, rest %.1f, seams %.1f, lights/water %.1f)",
+                      r.map.c_str(), r.offset.x, r.offset.y, r.offset.z, r.endInstance - r.firstInstance,
+                      r.characters.size(), ms(t0, tEnd), ms(t0, tModels), ms(tModels, tScene), ms(tScene, tScatter),
+                      ms(tScatter, tSplat), ms(tSplat, tMisc), ms(tMisc, tStitch), ms(tStitch, tEnd));
 }
 
 void Engine::showRegion(WorldRegion& r, bool show) {
