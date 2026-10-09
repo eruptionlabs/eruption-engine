@@ -154,3 +154,4 @@ tools/scripts/
 # Coisas ainda nao publicaveis (ex.: pesos da rede de PBR) e runtime copiado pelo build.
 /future/
 libonnxruntime*.so*
+.eruption/

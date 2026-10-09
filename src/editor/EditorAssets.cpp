@@ -2,8 +2,10 @@
 // Inspetor (imagem e canais, mapas PBR, material em esfera/cubo, modelos).
 #include "editor/Editor.hpp"
 #include "editor/EditorTheme.hpp"
+#include "editor/ModelRaster.hpp"
 
 #include "core/Engine.hpp"
+#include "utils/ImageUtils.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
@@ -192,9 +194,40 @@ void Editor::thumbnailWorker() {
         }
         ThumbResult r;
         r.path = path;
+        // Cache em disco (.eruption/thumbs): nome pelo caminho e pela data do arquivo.
+        std::error_code ec;
+        const auto mtime = fs::last_write_time(path, ec).time_since_epoch().count();
+        uint64_t hash = 1469598103934665603ull;
+        for (char c : path + "#" + std::to_string(mtime) + "#" + std::to_string(kThumbSize)) hash = (hash ^ uint8_t(c)) * 1099511628211ull;
+        char name[32];
+        std::snprintf(name, sizeof(name), "%016llx.png", static_cast<unsigned long long>(hash));
+        const fs::path cached = m_projectRoot / ".eruption" / "thumbs" / name;
         int w = 0, h = 0, ch = 0;
-        std::vector<uint8_t> full = loadImage(path, w, h, ch);
-        if (!full.empty()) r.rgba = downscale(full.data(), w, h, kThumbSize, r.w, r.h);
+        if (fs::exists(cached, ec)) {
+            std::vector<uint8_t> px = loadImage(cached, w, h, ch);
+            if (!px.empty() && ch == 4) {
+                r.rgba = std::move(px);
+                r.w = w;
+                r.h = h;
+            }
+        }
+        if (r.rgba.empty()) {
+            if (isModelFile(path)) {
+                RasterMesh mesh;
+                std::string error;
+                if (loadRasterMesh(path, mesh, error, 60000)) {
+                    rasterizeMesh(mesh, 0.7f, 0.45f, kThumbSize, kThumbSize, r.rgba);
+                    r.w = r.h = kThumbSize;
+                }
+            } else {
+                std::vector<uint8_t> full = loadImage(path, w, h, ch);
+                if (!full.empty()) r.rgba = downscale(full.data(), w, h, kThumbSize, r.w, r.h);
+            }
+            if (!r.rgba.empty()) {
+                fs::create_directories(cached.parent_path(), ec);
+                ImageUtils::writePNG(cached.string(), r.w, r.h, 4, r.rgba.data());
+            }
+        }
         std::lock_guard<std::mutex> lock(m_thumbMutex);
         m_thumbDone.push_back(std::move(r));
     }
@@ -265,6 +298,7 @@ void Editor::closeAssetPreview() {
         releaseTexture(*t);
     if (a.materialReady) m_engine->m_spherePreview.setActive(false);
     if (a.soundId) m_engine->audio().stop(a.soundId);
+    releaseTexture(a.rasterTex);
     a = AssetPreviewState{};
 }
 
@@ -431,6 +465,59 @@ void Editor::drawMaterialPreview() {
     }
 }
 
+void Editor::drawModel3D() {
+    AssetPreviewState& a = m_asset;
+    // Modelo girando com o mouse: carrega numa thread, desenha na CPU.
+    if (!a.raster && !a.rasterJob && a.rasterError.empty()) {
+        const std::string path = a.path.string();
+        a.rasterJob = std::make_shared<std::future<std::shared_ptr<RasterMesh>>>(std::async(std::launch::async, [path] {
+            auto mesh = std::make_shared<RasterMesh>();
+            std::string error;
+            if (!loadRasterMesh(path, *mesh, error)) mesh->sourceTriangles = 0, mesh->indices.clear();
+            return mesh;
+        }));
+    }
+    if (a.rasterJob && a.rasterJob->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        a.raster = a.rasterJob->get();
+        a.rasterJob.reset();
+        if (a.raster->indices.empty()) {
+            a.rasterError = "Could not draw this model.";
+            a.raster.reset();
+        }
+    }
+    {
+        const float side = std::min(ImGui::GetContentRegionAvail().x, 320.0f);
+        const ImVec2 p0 = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##model3d", ImVec2(side, side));
+        const bool dragging = ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f);
+        if (dragging) {
+            const ImVec2 d = ImGui::GetIO().MouseDelta;
+            a.yaw -= d.x * 0.01f;
+            a.pitch = std::clamp(a.pitch + d.y * 0.01f, -1.4f, 1.4f);
+        }
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(p0, ImVec2(p0.x + side, p0.y + side), IM_COL32(32, 34, 38, 255), 4.0f);
+        if (a.raster) {
+            // Menor enquanto arrasta (rápido), cheia ao soltar.
+            const int want = dragging ? 160 : int(side);
+            if (dragging || !a.rasterTex.valid() || a.rasterSize != want || ImGui::IsItemDeactivated()) {
+                std::vector<uint8_t> px;
+                rasterizeMesh(*a.raster, a.yaw, a.pitch, want, want, px);
+                releaseTexture(a.rasterTex);
+                a.rasterTex = makeTexture(px.data(), want, want, false);
+                a.rasterSize = want;
+            }
+            if (a.rasterTex.valid())
+                dl->AddImage(reinterpret_cast<ImTextureID>(a.rasterTex.set), p0, ImVec2(p0.x + side, p0.y + side));
+            ImGui::SetItemTooltip("Drag to turn the model.");
+        } else {
+            const char* msg = a.rasterError.empty() ? "Loading..." : a.rasterError.c_str();
+            const ImVec2 ts = ImGui::CalcTextSize(msg);
+            dl->AddText(ImVec2(p0.x + (side - ts.x) * 0.5f, p0.y + (side - ts.y) * 0.5f), IM_COL32(200, 200, 200, 255), msg);
+        }
+    }
+}
+
 void Editor::drawModelPreview() {
     AssetPreviewState& a = m_asset;
     if (a.modelInfo.empty()) {
@@ -570,6 +657,7 @@ void Editor::drawAssetPreview() {
             drawMaterialPreview();
             break;
         case AssetPreviewState::Kind::Model:
+            drawModel3D();
             drawModelPreview();
             break;
         case AssetPreviewState::Kind::Text:
