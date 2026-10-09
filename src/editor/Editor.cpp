@@ -233,6 +233,9 @@ void Editor::registerCommands() {
     add("add.player_start", "Add", "Player Start", {}, [this] { setPlayerStartHere(); },
         "Puts the place where the player starts on the ground in the middle of the Scene view.")
         .enabled = isEditing;
+    add("add.area", "Add", "Trigger Area", {}, [this] { addTriggerArea(); },
+        "A named box on the ground: rules and scripts react when the player walks in or out.")
+        .enabled = isEditing;
     add("edit.delete", "Edit", "Delete", {ImGuiKey_Delete}, [this] { deleteSelection(); },
         "Hides the selected object (undo brings it back).")
         .enabled = [this] { return m_selection.kind == SelectionKind::Model || m_selection.kind == SelectionKind::Light; };
@@ -724,6 +727,7 @@ void Editor::update(float dt) {
             else if (what == "code") { codeOpen(arg); m_pendingFocus.push_back(kWinCode); }
             else if (what == "scene") m_pendingFocus.push_back(kWinScene);
             else if (what == "env") select({SelectionKind::Environment, 0});
+            else if (what == "area") select({SelectionKind::Area, m_engine->findArea(arg)});
             else if (what == "telemetry") m_pendingFocus.push_back(kWinTelemetry);
             else if (what == "project") m_pendingFocus.push_back(kWinProject);
             else if (what == "play") play();
@@ -927,6 +931,7 @@ void Editor::drawMenuBar() {
     if (ImGui::BeginMenu("Add")) {
         m_commands.menuItem("add.light");
         m_commands.menuItem("add.player_start");
+        m_commands.menuItem("add.area");
         ImGui::Separator();
         ImGui::TextDisabled("Models, prefabs and characters:");
         ImGui::TextDisabled("drag them from the Project panel");

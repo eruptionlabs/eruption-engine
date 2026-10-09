@@ -79,7 +79,7 @@ public:
 private:
     enum class PlayState { Editing, Playing, Paused };
     enum class Tool { Select, Move, Rotate, Scale, Terrain };
-    enum class SelectionKind { None, Model, Light, Environment, Asset, Character, Spawn };
+    enum class SelectionKind { None, Model, Light, Environment, Asset, Character, Spawn, Area };
     struct Selection {
         SelectionKind kind = SelectionKind::None;
         int index = -1;
@@ -344,6 +344,7 @@ private:
     void drawMapGenWindow();
     // Mapas vizinhos (mundo contínuo), no Inspetor do Environment.
     void drawNeighborMaps();
+    void addTriggerArea();
     std::vector<SceneEdits::Neighbor> m_neighborEditStart; // rascunho enquanto arrasta
     bool m_neighborEditing = false;
     uint32_t m_worldVersionSeen = 0;

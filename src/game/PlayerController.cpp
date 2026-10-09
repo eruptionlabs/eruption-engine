@@ -11,6 +11,7 @@
 #include <imgui.h>
 #include <glm/glm.hpp>
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <chrono>
 #include <unordered_map>
@@ -264,6 +265,14 @@ void PlayerController::updateMovement(float dt) {
             if (Input::isGamepadButtonPressed(m_engine->inputConfig().gamepad.cameraResetButton, activeGpad))
                 m_engine->camera().resetOrbit();
         }
+        // ERUPTION_TEST_PLAYER_MOVE=dx,dz (teste): segura o controle nessa direção
+        // do mundo, passando pela colisão como um jogador de verdade.
+        static const char* testMove = std::getenv("ERUPTION_TEST_PLAYER_MOVE");
+        if (testMove) {
+            float dx = 0.0f, dz = 0.0f;
+            std::sscanf(testMove, "%f,%f", &dx, &dz);
+            move += Vec3(dx, 0.0f, dz);
+        }
         m_isMoving = false;
         if (glm::length(move) > 0.001f) {
             m_isMoving = true;
@@ -274,7 +283,12 @@ void PlayerController::updateMovement(float dt) {
                     Vec3 nextPos = m_pos + move;
                     float gatCellSize = 5.0f;
                     // Mesma célula que o editor pinta (grade do terreno quando o mapa tem uma).
-                    auto isWalkable = [&](const Vec3& p) { return m_engine->navWalkable(p.x, p.z); };
+                    // Grade de caminhada + objetos sólidos (o pé deles, com o raio do corpo).
+                    // Já dentro de um (nasceu ali, objeto movido por script): deixa sair.
+                    const bool stuck = m_engine->blockedAt(m_pos, 3.0f);
+                    auto isWalkable = [&](const Vec3& p) {
+                        return m_engine->navWalkable(p.x, p.z) && (stuck || !m_engine->blockedAt(p, 3.0f));
+                    };
                     Vec3 finalPos = m_pos;
                     if (isWalkable(Vec3(nextPos.x, m_pos.y, m_pos.z))) finalPos.x = nextPos.x;
                     if (isWalkable(Vec3(finalPos.x, m_pos.y, nextPos.z))) finalPos.z = nextPos.z;

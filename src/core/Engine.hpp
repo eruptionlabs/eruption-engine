@@ -484,6 +484,31 @@ public:
     int blockSteepSlopes(float maxDegrees);
     bool saveWalk(std::string& error) const;
 
+    // Áreas de gatilho e objetos sólidos (core/Areas.cpp).
+    // Área: caixa nomeada (girada em Y) que os scripts e as regras observam
+    // (on.enter / on.leave / player.inside).
+    struct TriggerArea {
+        std::string name;
+        Vec3 center{0.0f};
+        Vec3 size{40.0f, 30.0f, 40.0f};
+        float yaw = 0.0f; // graus
+        bool removed = false;      // apagada no editor (desfazer traz de volta)
+        bool fromNeighbor = false; // de um mapa vizinho
+        bool parked = false;       // o vizinho dela saiu de cena
+        Mat4 matrix() const;       // posição * giro * tamanho (o gizmo do editor mexe nela)
+        void setMatrix(const Mat4& m);
+        bool contains(const Vec3& p) const;
+    };
+    std::vector<TriggerArea>& areas() { return m_areas; }
+    int addArea(const std::string& name, const Vec3& center, const Vec3& size, float yawDeg);
+    int findArea(const std::string& name) const;
+    void clearAreas(bool keepNeighbors = false);
+    // Objeto sólido: o jogador não atravessa o pé dele (a parte de baixo da malha).
+    void setSolid(uint32_t instance, bool solid);
+    bool isSolid(uint32_t instance) const;
+    // Algum objeto sólido ocupa (x, z) na altura de p (raio do corpo em volta)?
+    bool blockedAt(const Vec3& p, float radius) const;
+
     // Mundo contínuo (core/World.cpp): mapas emendados ao aberto, declarados no
     // scene.luau (neighbors = {{map = "b", offset = {x, y, z}}}), entram em
     // segundo plano quando o jogador (ou a câmera do editor) chega perto e saem
@@ -1276,6 +1301,7 @@ private:
         std::vector<uint8_t> enabled; // instâncias ligadas quando o vizinho saiu de cena
         std::vector<PointLight> lights;
         std::vector<std::string> characters;
+        std::vector<std::string> areas;
         bool hasWater = false;
         float waterLevel = 0.0f;
         TextureResource splatMask[2];
@@ -1285,6 +1311,8 @@ private:
         std::vector<std::string> modelFiles; // .glb do próprio mapa (malhas só dele)
     };
     std::vector<WorldRegion> m_regions;
+    std::vector<TriggerArea> m_areas;
+    std::vector<uint8_t> m_solid; // por instância
     static const char* worldStateName(WorldRegion::State s);
     std::vector<WorldNeighbor> m_worldNeighbors;
     bool m_worldStarted = false;

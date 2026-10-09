@@ -960,6 +960,8 @@ void Engine::performMapSwap() {
 
     // ModelRenderer
     resetWorld(); // vizinhos do mapa anterior
+    clearAreas();
+    m_solid.clear();
     m_modelRenderer.clear();
     m_modelRenderer.m_lastModels = std::move(m_activeMapContext->modelAssets);
     m_modelRenderer.m_textureCache = std::move(m_activeMapContext->gpuModelTextureCache);

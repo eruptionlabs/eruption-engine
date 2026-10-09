@@ -401,6 +401,15 @@ void ScriptHost::dispatch(Script& s, float dt, float prevHour, float hour) {
             case EventKind::Hour:
                 if (crossedHour(prevHour, hour, static_cast<float>(h.number))) callRef(s, h.fnRef, 0);
                 break;
+            case EventKind::Enter:
+            case EventKind::Leave: {
+                // Área de gatilho: o pé do jogador dentro da caixa.
+                const int a = m_engine->findArea(h.text);
+                const bool inside = player && a >= 0 && m_engine->areas()[static_cast<size_t>(a)].contains(player->pos());
+                if (h.kind == EventKind::Enter ? (inside && !h.flag) : (!inside && h.flag)) callRef(s, h.fnRef, 0);
+                h.flag = inside;
+                break;
+            }
         }
     }
 }

@@ -51,7 +51,7 @@ public:
     static constexpr int kWatchdogMs = 250;
 
     // ---- usado pela API (ScriptApi.cpp)
-    enum class EventKind { Start, Update, Every, Key, Near, Hour };
+    enum class EventKind { Start, Update, Every, Key, Near, Hour, Enter, Leave };
     struct Handler {
         EventKind kind = EventKind::Start;
         int fnRef = -1;

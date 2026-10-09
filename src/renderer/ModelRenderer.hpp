@@ -447,6 +447,9 @@ public:
     // delas param de desenhar. Devolve as chaves ("arquivo#nó") das malhas base,
     // que pertencem ao cache de assets do motor.
     std::vector<std::string> releaseAsset(const std::string& filePath);
+    // Pé do objeto no chão (XZ do mundo, 4 cantos no sentido anti-horário): a
+    // caixa dos vértices da parte de baixo da malha (tronco, não a copa).
+    bool footprint(uint32_t index, Vec2 out[4]) const;
     // Mesmo que addModel para um arquivo já carregado (sem reler o .glb).
     bool hasAsset(const std::string& path) const;
     uint32_t addInstanceOf(const std::string& path, const ModelInstanceDesc& ref, const std::string& nodeName = {});
@@ -672,6 +675,7 @@ private:
     float m_meshLodFarMinDistance = 0.0f;
     float m_meshLodRatio = 0.0f;
     float m_meshLodSaved = 0.0f;
+    mutable std::unordered_map<std::string, Vec4> m_footprintCache; // "arquivo#nó" -> minX, maxX, minZ, maxZ
     float m_meshLodError = 0.05f;
     float m_meshLodDistanceFactor = 8.0f;
     // Teto absoluto de triangulos do LOD. 0 = so' a fracao.
