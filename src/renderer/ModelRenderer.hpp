@@ -397,8 +397,16 @@ public:
         Mat4 instanceMatrix = Mat4(1.0f);
         Mat4 mainOffset = Mat4(1.0f);
         uint32_t instanceIndex = 0;
+        // mainOffset * matriz animada do último frame: mover a instância
+        // (editor, cena, script) recalcula instanceMatrix a partir dela.
+        Mat4 lastLocal = Mat4(1.0f);
     };
     std::vector<AnimatedNodeData> m_animatedNodes;
+    std::unordered_map<uint32_t, size_t> m_animByInstance; // instância -> m_animatedNodes
+    size_t m_animByInstanceCount = SIZE_MAX;
+    size_t m_animQueriedCount = 0;
+    int animIndexOf(uint32_t instance);
+    void copyAnimatedNode(uint32_t source, uint32_t copy);
 
     // Per-asset animated node matrices, reused across frames (see
     // updateAnimations). `gen` marks the frame an entry was last recomputed.

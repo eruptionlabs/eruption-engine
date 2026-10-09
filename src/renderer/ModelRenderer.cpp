@@ -589,6 +589,11 @@ void ModelRenderer::clear() {
     m_vertexPatches.clear();
     m_animatedNodes.clear();
     m_animMatrixCache.clear();
+    m_animQueriedNodes.clear();
+    m_animQueriedCount = 0;
+    m_animByInstance.clear();
+    m_animByInstanceCount = SIZE_MAX;
+    g_animTopo.clear();
     m_textureAnimatedNodes.clear();
     m_modelMeshCache.clear();
     m_textureCache.clear();
@@ -1884,6 +1889,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             anim.instanceMatrix = instanceMatrix;
             anim.mainOffset = mainOffset;
             anim.instanceIndex = static_cast<uint32_t>(m_instances.size() - 1);
+            anim.lastLocal = mainOffset * node.renderMatrix;
             m_animatedNodes.push_back(std::move(anim));
         }
 
@@ -1957,6 +1963,7 @@ uint32_t ModelRenderer::duplicateBatch(const std::vector<std::pair<uint32_t, Mat
             to.loop = from.loop;
             to.speed = from.speed;
         }
+        copyAnimatedNode(src, static_cast<uint32_t>(m_instances.size() - 1));
     }
     rebuildHotData();
     return first;
@@ -1983,8 +1990,29 @@ void ModelRenderer::offsetInstancesY(const std::vector<std::pair<uint32_t, float
         inst.worldAabbMin.y += dy;
         inst.worldAabbMax.y += dy;
         inst.worldCenter.y += dy;
+        if (const int a = animIndexOf(i); a >= 0) m_animatedNodes[static_cast<size_t>(a)].instanceMatrix[3].y += dy;
     }
     rebuildHotData();
+}
+
+int ModelRenderer::animIndexOf(uint32_t instance) {
+    if (m_animatedNodes.empty()) return -1;
+    if (m_animByInstanceCount != m_animatedNodes.size()) {
+        m_animByInstance.clear();
+        for (size_t k = 0; k < m_animatedNodes.size(); ++k) m_animByInstance[m_animatedNodes[k].instanceIndex] = k;
+        m_animByInstanceCount = m_animatedNodes.size();
+    }
+    const auto it = m_animByInstance.find(instance);
+    return it == m_animByInstance.end() ? -1 : static_cast<int>(it->second);
+}
+
+void ModelRenderer::copyAnimatedNode(uint32_t source, uint32_t copy) {
+    const int a = animIndexOf(source);
+    if (a < 0) return;
+    AnimatedNodeData anim = m_animatedNodes[static_cast<size_t>(a)];
+    anim.instanceIndex = copy;
+    if (copy < m_instances.size()) anim.instanceMatrix = m_instances[copy].transform * glm::inverse(anim.lastLocal);
+    m_animatedNodes.push_back(anim);
 }
 
 void ModelRenderer::flushVertexPatches(VkCommandBuffer cmd) {
@@ -2124,7 +2152,10 @@ float ModelRenderer::raycastInstance(uint32_t index, const Vec3& origin, const V
 }
 
 uint32_t ModelRenderer::addModel(const ModelAsset& asset, const ModelInstanceDesc& ref, const std::string& nodeName) {
-    if (!hasAsset(asset.filePath)) m_lastModels.push_back(asset);
+    if (!hasAsset(asset.filePath)) {
+        m_lastModels.push_back(asset);
+        g_animTopo.clear(); // a topologia é guardada pelo endereço do asset, que pode ter mudado
+    }
     return addInstanceOf(asset.filePath, ref, nodeName);
 }
 
@@ -3318,9 +3349,13 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
 
 void ModelRenderer::updateAnimations(float totalElapsedMs) {
     // Preenche uma vez a lista de nos consultados por asset.
-    if (m_animQueriedNodes.empty() && !m_animatedNodes.empty()) {
+    // Refeita quando entram nós animados novos (modelo acrescentado, cópia).
+    if (m_animQueriedCount != m_animatedNodes.size()) {
+        m_animQueriedNodes.clear();
         for (const auto& a : m_animatedNodes)
             m_animQueriedNodes[a.modelAssetIndex].push_back(a.nodeIndex);
+        m_animQueriedCount = m_animatedNodes.size();
+        g_animTopo.clear(); // a máscara de nós necessários mudou
     }
     // --- Skeleton/transform animation ---
     if (!m_animatedNodes.empty()) {
@@ -3360,7 +3395,23 @@ void ModelRenderer::updateAnimations(float totalElapsedMs) {
             if (animatedMatrices.empty() || anim.nodeIndex >= animatedMatrices.size()) continue;
 
             Mat4 nodeRenderMatrix = animatedMatrices[anim.nodeIndex];
-            m_instances[anim.instanceIndex].transform = anim.instanceMatrix * anim.mainOffset * nodeRenderMatrix;
+            if (anim.instanceIndex >= m_instances.size()) continue;
+            anim.lastLocal = anim.mainOffset * nodeRenderMatrix;
+            ModelInstance& inst = m_instances[anim.instanceIndex];
+            inst.transform = anim.instanceMatrix * anim.lastLocal;
+            // A caixa de visibilidade acompanha o nó animado.
+            if (inst.meshIndex < m_meshes.size()) {
+                const Vec3 lo = m_meshes[inst.meshIndex].aabbMin, hi = m_meshes[inst.meshIndex].aabbMax;
+                Vec3 wMin(FLT_MAX), wMax(-FLT_MAX);
+                for (int c = 0; c < 8; ++c) {
+                    const Vec3 w = Vec3(inst.transform * Vec4((c & 1) ? hi.x : lo.x, (c & 2) ? hi.y : lo.y, (c & 4) ? hi.z : lo.z, 1.0f));
+                    wMin = glm::min(wMin, w);
+                    wMax = glm::max(wMax, w);
+                }
+                inst.worldAabbMin = wMin;
+                inst.worldAabbMax = wMax;
+                inst.worldCenter = (wMin + wMax) * 0.5f;
+            }
         }
     }
 
@@ -3426,6 +3477,11 @@ void ModelRenderer::setInstanceTransform(uint32_t index, const Mat4& transform) 
     if (index >= m_instances.size()) return;
     ModelInstance& inst = m_instances[index];
     inst.transform = transform;
+    // Nó animado: a animação continua a partir do novo lugar.
+    if (const int a = animIndexOf(index); a >= 0) {
+        AnimatedNodeData& anim = m_animatedNodes[static_cast<size_t>(a)];
+        anim.instanceMatrix = transform * glm::inverse(anim.lastLocal);
+    }
     const Vec3 localMin = m_meshes[inst.meshIndex].aabbMin;
     const Vec3 localMax = m_meshes[inst.meshIndex].aabbMax;
     Vec3 wMin(FLT_MAX), wMax(-FLT_MAX);
@@ -3462,6 +3518,7 @@ uint32_t ModelRenderer::duplicateInstance(uint32_t source, const std::string& na
         to.loop = from.loop;
         to.speed = from.speed;
     }
+    copyAnimatedNode(source, idx); // nó com animação rígida: a cópia anima também
     setInstanceTransform(idx, transform); // refaz AABB e o espelho quente
     return idx;
 }
