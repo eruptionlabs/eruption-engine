@@ -46,8 +46,9 @@ public:
     // As views precisam ser rechamadas sempre que o dono as recriar.
     // `reactive` (opcional, R8 0..1 em SHADER_READ_ONLY): onde o FSR nao deve
     // confiar no historico (ex.: sprites redesenhados depois por cima).
+    // write=false so' guarda as views (o resize logo depois escreve os sets).
     void bindInputs(VkImageView color, VkImageView depth, VkImageView motion,
-                    VkImageView reactive = VK_NULL_HANDLE);
+                    VkImageView reactive = VK_NULL_HANDLE, bool write = true);
 
     void dispatch(VkCommandBuffer cmd, const FrameParams& params);
 

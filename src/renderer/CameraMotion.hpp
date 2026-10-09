@@ -22,6 +22,12 @@ public:
     void bindDepth(VkImageView depthView);
     // Velocidade de objeto do G-buffer (opcional; VK_NULL_HANDLE = so' camera).
     void bindObjectVelocity(VkImageView velocityView);
+    // Troca as duas entradas sem escrever o descritor (o resize logo depois
+    // escreve uma vez, ja' com o alvo novo).
+    void setInputs(VkImageView depthView, VkImageView velocityView) {
+        m_depthView = depthView;
+        m_objectVelocityView = velocityView;
+    }
 
     // O depth precisa estar em SHADER_READ_ONLY_OPTIMAL. Ao voltar, o alvo
     // fica em SHADER_READ_ONLY_OPTIMAL, visivel para compute e fragment.

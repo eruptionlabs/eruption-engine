@@ -462,7 +462,14 @@ void Fsr3Upscaler::initialUploadsAndClears() {
         VkBufferImageCopy region{};
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.imageExtent = {128, 1, 1};
-        vkCmdCopyBufferToImage(cmd, staging, m_lanczosLut.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+        // Copia no layout de transferencia (o resto do tempo a LUT fica em GENERAL).
+        m_ctx->cmdImageBarrier(cmd, m_lanczosLut.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                               VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        vkCmdCopyBufferToImage(cmd, staging, m_lanczosLut.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        m_ctx->cmdImageBarrier(cmd, m_lanczosLut.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                               VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                               VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
         memoryBarrier(cmd, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
@@ -475,12 +482,13 @@ void Fsr3Upscaler::initialUploadsAndClears() {
 // ---------------------------------------------------------------------------
 // Descritores
 
-void Fsr3Upscaler::bindInputs(VkImageView color, VkImageView depth, VkImageView motion, VkImageView reactive) {
+void Fsr3Upscaler::bindInputs(VkImageView color, VkImageView depth, VkImageView motion, VkImageView reactive,
+                              bool write) {
     m_inReactive = reactive;
     m_inColor = color;
     m_inDepth = depth;
     m_inMotion = motion;
-    writeSets();
+    if (write) writeSets();
 }
 
 VkImageView Fsr3Upscaler::viewFor(Res r, uint32_t parity) const {

@@ -460,7 +460,8 @@ bool ModelRenderer::init(VulkanContext* ctx, BindlessDescriptor* bindless) {
 
     createPipeline();
 
-    m_initialized = (m_pipeline != VK_NULL_HANDLE);
+    // A pipeline nasce em setFrameUboSet (precisa do layout do UBO do frame).
+    m_initialized = true;
     return m_initialized;
 }
 
@@ -631,8 +632,14 @@ static VkCullModeFlags gbufferCullMode() {
 }
 
 void ModelRenderer::createPipeline() {
-    auto vertCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/model.vert.spv");
-    auto fragCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/model.frag.spv"); 
+    // Os shaders leem o UBO do frame (set 1). O layout dele chega depois, por
+    // setFrameUboSet, que recria a pipeline; antes disso criar seria invalido.
+    if (m_frameUboLayout == VK_NULL_HANDLE) return;
+    // Com o alvo de velocidade (FSR) os shaders calculam onde cada vertice
+    // estava no frame anterior; sem ele, a variante _novel nao paga essa conta.
+    const std::string variant = GBuffer::velocityEnabled() ? "model" : "model_novel";
+    auto vertCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/" + variant + ".vert.spv");
+    auto fragCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/" + variant + ".frag.spv"); 
     if (vertCode.empty() || fragCode.empty()) {
         ERUPTION_LOG_ERROR("ModelRenderer: Failed to load model shaders");
         return;
@@ -660,6 +667,7 @@ void ModelRenderer::createPipeline() {
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = fragModule;
     stages[1].pName = "main";
+
 
     VkVertexInputBindingDescription bindingDesc{};
     bindingDesc.binding = 0;
@@ -694,9 +702,12 @@ void ModelRenderer::createPipeline() {
     vertexInput.pVertexAttributeDescriptions = attribs.data();
 
     VkPushConstantRange pcRange{};
-    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
-                             VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT |
-                             VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+    // Os pushes por desenho usam exatamente estes estágios (o Vulkan exige
+    // que cubram tudo o que o intervalo declara); tesselação só se existir.
+    m_pushStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    if (m_ctx->tessellationSupported())
+        m_pushStages |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+    pcRange.stageFlags = m_pushStages;
     pcRange.offset = 0;
     // Push struct: viewProj (mat4) + model (mat4) + alpha + metallicScale + roughnessScale + pad (vec2)
     //              + uvTranslateRot (vec4) + uvScale (vec4)
@@ -751,8 +762,8 @@ void ModelRenderer::createPipeline() {
     // estagios a mais. Se o driver nao tiver a feature, ou os SPIR-V nao
     // existirem, fica NULL e o render usa o pipeline normal: nada quebra.
     if (m_ctx->tessellationSupported()) {
-        auto tescCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/model.tesc.spv");
-        auto teseCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/model.tese.spv");
+        auto tescCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/" + variant + ".tesc.spv");
+        auto teseCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/" + variant + ".tese.spv");
         if (!tescCode.empty() && !teseCode.empty()) {
             VkShaderModule tescModule = VK_NULL_HANDLE, teseModule = VK_NULL_HANDLE;
             VkShaderModuleCreateInfo tsm{};
@@ -2037,7 +2048,7 @@ bool ModelRenderer::ensureInstanceCapacity(uint32_t count) {
 void ModelRenderer::render(VkCommandBuffer cmd,
                            const Mat4& viewProj, const Frustum& frustum, const Vec3& cameraPos) {
     PROFILE_CPU_SCOPE(ProfilerCategory::Culling);
-    if (!m_initialized || m_instances.empty()) return;
+    if (!m_initialized || m_instances.empty() || m_pipeline == VK_NULL_HANDLE) return;
     ++m_lodFrame;
 
     // SIMD/SoA frustum cull; fills m_visibleInstanceIndices.
@@ -2221,11 +2232,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         push.roughnessScale = mesh.roughnessScale;
         push.uvScale.z = mesh.uvPerUnit;
         push.uvScale.w = mesh.dispScale;
-        vkCmdPushConstants(cmd, m_pipelineLayout,
-                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
-                           VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT |
-                           VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
-                           0, sizeof(push), &push);
+        vkCmdPushConstants(cmd, m_pipelineLayout, m_pushStages, 0, sizeof(push), &push);
         if (runVb != boundVb || runIb != boundIb) {
             VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &runVb, &offset);
@@ -2557,8 +2564,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             push.alpha = runAlpha2;
             push.metallicScale = mesh.metallicScale;
             push.roughnessScale = mesh.roughnessScale;
-            vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(push), &push);
+            vkCmdPushConstants(cmd, m_pipelineLayout, m_pushStages, 0, sizeof(push), &push);
             if (runVb2 != boundVb || runIb2 != boundIb) {
                 VkDeviceSize offset = 0;
                 vkCmdBindVertexBuffers(cmd, 0, 1, &runVb2, &offset);
@@ -2826,8 +2832,13 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
         return;
     }
     const uint32_t fi = frame % kInstFrames;
+    // O set 0 (texturas) foi ligado pelo passe de terreno com o layout de
+    // sombra comum, cujo push constant e' menor: para o Vulkan os dois
+    // layouts sao incompativeis e o set 0 fica invalido ao trocar de
+    // pipeline. Liga de novo com o layout instanciado, junto do set 1.
+    const VkDescriptorSet instSets[2] = {m_bindless->set(), m_shadowSets[fi]};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowLayout,
-                            1, 1, &m_shadowSets[fi], 0, nullptr);
+                            0, 2, instSets, 0, nullptr);
     vkCmdPushConstants(cmd, shadowLayout, VK_SHADER_STAGE_VERTEX_BIT,
                        0, sizeof(Mat4), &cascadeMatrix);
     // Vento (mesma convencao do FrameUBO, ver model.vert applyWindSway):

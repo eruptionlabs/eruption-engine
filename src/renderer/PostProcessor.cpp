@@ -294,6 +294,9 @@ void PostProcessor::createDescriptors() {
     allocInfo.descriptorSetCount = numSets;
     allocInfo.pSetLayouts = layouts.data();
     vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, m_descriptorSets.data());
+    // Conjuntos novos (init ou resize): os buffers de clima ainda nao foram
+    // escritos neles.
+    m_weatherBufferDSWritten = false;
 
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;

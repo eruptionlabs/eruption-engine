@@ -42,8 +42,9 @@ bool TerrainRenderer::init(VulkanContext* ctx, BindlessDescriptor* bindless) {
     samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
     vkCreateSampler(m_ctx->device(), &samplerInfo, nullptr, &m_sampler);
 
+    // A pipeline nasce em setFrameUboSet (precisa do layout do UBO do frame).
     createPipeline();
-    m_initialized = (m_pipeline != VK_NULL_HANDLE);
+    m_initialized = true;
     return m_initialized;
 }
 
@@ -117,6 +118,9 @@ void TerrainRenderer::recreatePipeline() {
 }
 
 void TerrainRenderer::createPipeline() {
+    // Os shaders leem o UBO do frame (set 1). O layout dele chega depois, por
+    // setFrameUboSet, que recria a pipeline; antes disso criar seria invalido.
+    if (m_frameUboLayout == VK_NULL_HANDLE) return;
     ERUPTION_LOG_INFO("TerrainRenderer::createPipeline() - loading shaders...");
     auto vertCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/terrain.vert.spv");
     auto fragCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/terrain.frag.spv");
@@ -524,6 +528,7 @@ void TerrainRenderer::uploadChunk(const TerrainMesh& mesh, TerrainChunkGPU& chun
 void TerrainRenderer::render(VkCommandBuffer cmd, const Mat4& viewProj, const Frustum& frustum) {
     uint32_t dbgIdx = 0;
     PROFILE_CPU_SCOPE(ProfilerCategory::Culling);
+    if (m_pipeline == VK_NULL_HANDLE) return;
     if (!m_initialized) {
         ERUPTION_LOG_WARN("TerrainRenderer::render skipped: not initialized");
         return;

@@ -470,7 +470,7 @@ private:
     bool m_hasPrevWindParams = false;
     float m_fsrSharpness = 0.0f;   // 0 = sem RCAS
     bool fsrActive() const { return m_upscalerMode != UpscalerMode::Fxaa; }
-    void bindFsrInputs();
+    void bindFsrInputs(bool write = true);
     bool m_enableFXAA = true;
     float m_aaSharpenAmount = 0.35f;
     SkySystem m_skybox;

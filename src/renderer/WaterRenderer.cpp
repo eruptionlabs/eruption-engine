@@ -253,6 +253,10 @@ void WaterRenderer::destroyUBO() {
 // ============================================================================
 // Refraction targets
 // ============================================================================
+void WaterRenderer::resizeRefraction(uint32_t width, uint32_t height) {
+    if (m_refractionImage[0] != VK_NULL_HANDLE) createRefractionResources(width, height);
+}
+
 void WaterRenderer::createRefractionResources(uint32_t width, uint32_t height) {
     if (m_refractionImage[0] != VK_NULL_HANDLE && m_refractionWidth == width && m_refractionHeight == height)
         return;

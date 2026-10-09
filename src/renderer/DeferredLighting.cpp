@@ -178,10 +178,16 @@ void DeferredLighting::shutdown() {
 }
 
 void DeferredLighting::resize(uint32_t width, uint32_t height) {
+    const SkyProbeBinding sky = m_skyProbeBinding;
+    const ProbeGridBinding grid = m_probeGridBinding;
     shutdown();
     m_width = width;
     m_height = height;
     init(m_ctx, m_gbuffer, m_bindless, width, height);
+    // Os descritores novos nascem sem a sonda do céu e sem a grade de
+    // irradiância: sem isto o shader lia bindings nunca escritos.
+    if (sky.view != VK_NULL_HANDLE) setSkyProbe(sky.view, sky.sampler, sky.sh, sky.shSize, sky.mips);
+    if (grid.view != VK_NULL_HANDLE) setIrradianceProbes(grid.view, grid.sampler, grid.min, grid.invExtent, grid.enabled);
 }
 
 void DeferredLighting::setEnvironment(const LightingEnvironment& env) {
@@ -806,8 +812,10 @@ void DeferredLighting::setSkyProbe(VkImageView cubeView, VkSampler sampler, VkBu
                                    VkDeviceSize shSize, uint32_t mipCount) {
     if (cubeView == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE || shBuffer == VK_NULL_HANDLE) {
         m_skyProbeBound = false;
+        m_skyProbeBinding = {};
         return;
     }
+    m_skyProbeBinding = {cubeView, sampler, shBuffer, shSize, mipCount};
     VkDescriptorImageInfo img{};
     img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     img.imageView = cubeView;
@@ -839,6 +847,7 @@ void DeferredLighting::setSkyProbe(VkImageView cubeView, VkSampler sampler, VkBu
 void DeferredLighting::setIrradianceProbes(VkImageView view, VkSampler sampler,
                                            const Vec3& gridMin, const Vec3& gridInvExtent, bool enabled) {
     if (view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE) return;
+    m_probeGridBinding = {view, sampler, gridMin, gridInvExtent, enabled};
     VkDescriptorImageInfo img{};
     img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     img.imageView = view;

@@ -64,11 +64,7 @@ layout(location = 0) out vec2 v_uv;
 layout(location = 1) out flat uint v_texIndex;
 layout(location = 2) out flat uint v_flags;
 layout(location = 3) out vec4 v_tint;
-layout(location = 4) out vec3 v_worldPos;
-layout(location = 5) out vec3 v_normal;
 layout(location = 6) out flat uint v_paletteIndex;
-layout(location = 7) out flat uint v_normalTexIndex;
-layout(location = 8) out flat uint v_mrahwTexIndex;
 
 void main() {
     mat4 model = mat4(i_modelRow0, i_modelRow1, i_modelRow2, i_modelRow3);
@@ -114,8 +110,6 @@ void main() {
         normal = normalize(cross(right, up));
     }
 
-    v_normal = normal;
-    v_worldPos = finalPos;
 
     if ((i_flags & 4u) == 0u) {
         gl_Position = p_proj * p_view * vec4(finalPos, 1.0);
@@ -128,8 +122,6 @@ void main() {
     if ((i_flags & 2u) != 0) v_uv.y = 1.0 - v_uv.y;
 
     v_texIndex = i_texIndex;
-    v_normalTexIndex = i_normalTexIndex;
-    v_mrahwTexIndex = i_mrahwTexIndex;
     v_flags = i_flags;
     v_tint = i_tintColor;
     v_paletteIndex = i_paletteIndex;
