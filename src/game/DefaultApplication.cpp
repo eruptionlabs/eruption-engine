@@ -270,6 +270,9 @@ void DefaultApplication::onUpdate(float deltaTime) {
 void DefaultApplication::onRender(Engine& /*engine*/) {
 }
 void DefaultApplication::onShutdown() {
+    // Os recursos abaixo (texturas de sprite, scripts, editor) podem estar em
+    // uso por frames ainda na GPU.
+    if (m_engine) m_engine->vulkan().waitIdle();
     if (m_engine) m_engine->setGameOverlay(nullptr);
     if (m_scripts) {
         m_scripts->shutdown();

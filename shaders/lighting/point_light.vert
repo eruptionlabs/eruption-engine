@@ -3,7 +3,6 @@
 layout(location = 0) in vec3 inPosition;
 
 layout(location = 0) out vec3 outWorldPos;
-layout(location = 1) out vec2 outUV;
 
 layout(push_constant) uniform PushConstants {
     vec3 lightPos;

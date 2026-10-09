@@ -680,6 +680,7 @@ private:
     std::vector<uint32_t> m_lodSeenFrame;
 
     bool m_tessEnabled = false;
+    VkShaderStageFlags m_pushStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     float m_tessBandDistance = 0.0f;
     VkPipeline m_tessPipeline = VK_NULL_HANDLE;
     float m_geoDispAmplitude = 0.0f;

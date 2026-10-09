@@ -426,7 +426,13 @@ bool IrradianceProbes::bake(TerrainRenderer& terrain, ModelRenderer& models,
             VkBufferImageCopy rc{};
             rc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             rc.imageExtent = {dx, dy, dz};
-            vkCmdCopyImageToBuffer(cmd, m_bakeImage, VK_IMAGE_LAYOUT_GENERAL, statsBuf, 1, &rc);
+            m_ctx->cmdImageBarrier(cmd, m_bakeImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                   VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+            vkCmdCopyImageToBuffer(cmd, m_bakeImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, statsBuf, 1, &rc);
+            m_ctx->cmdImageBarrier(cmd, m_bakeImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                                   VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                   VK_ACCESS_2_TRANSFER_READ_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
         }
     });
     // immediateSubmit espera a GPU: os alvos de profundidade ja' podem ir.

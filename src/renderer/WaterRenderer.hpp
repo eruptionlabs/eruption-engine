@@ -100,6 +100,9 @@ public:
     bool hasLava() const { return m_lavaIndexCount > 0; }
 
     // Call BEFORE the forward rendering pass begins.
+    // Recria as texturas de refracao no tamanho novo. Chamar no resize do
+    // motor (GPU ociosa); recriar dentro do frame destruiria views em uso.
+    void resizeRefraction(uint32_t width, uint32_t height);
     void prepareRefraction(VkCommandBuffer cmd,
                            VkImage sceneColorImage, VkImage sceneDepthImage,
                            uint32_t sceneWidth, uint32_t sceneHeight,

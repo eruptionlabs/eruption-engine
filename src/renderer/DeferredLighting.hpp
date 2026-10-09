@@ -202,6 +202,14 @@ public:
     VkImage litImage() const { return m_litImage; }
 
 private:
+    // Ligações feitas depois do init (sonda do céu, sondas de irradiância):
+    // o resize realoca os descritores e as reaplica a partir daqui.
+    struct SkyProbeBinding { VkImageView view = VK_NULL_HANDLE; VkSampler sampler = VK_NULL_HANDLE;
+                             VkBuffer sh = VK_NULL_HANDLE; VkDeviceSize shSize = 0; uint32_t mips = 0; };
+    SkyProbeBinding m_skyProbeBinding;
+    struct ProbeGridBinding { VkImageView view = VK_NULL_HANDLE; VkSampler sampler = VK_NULL_HANDLE;
+                              Vec3 min{0.0f}, invExtent{0.0f}; bool enabled = false; };
+    ProbeGridBinding m_probeGridBinding;
     VulkanContext* m_ctx = nullptr;
     GBuffer* m_gbuffer = nullptr;
     BindlessDescriptor* m_bindless = nullptr;

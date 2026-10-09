@@ -582,6 +582,16 @@ void VulkanContext::cmdImageBarriers(VkCommandBuffer cmd,
     vkc::cmdPipelineBarrier2(cmd, &depInfo);
 }
 
+// Validação: sempre no build Debug (salvo ERUPTION_NO_VALIDATION) e, em
+// qualquer build, com ERUPTION_VK_VALIDATION=1 (camadas + callback do motor,
+// que aceita ERUPTION_VK_BREAK para parar no gdb).
+static bool validationWanted() {
+#ifdef ERUPTION_DEBUG
+    if (std::getenv("ERUPTION_NO_VALIDATION") == nullptr) return true;
+#endif
+    return std::getenv("ERUPTION_VK_VALIDATION") != nullptr;
+}
+
 bool VulkanContext::createInstance() {
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -601,52 +611,37 @@ bool VulkanContext::createInstance() {
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
 
-#ifdef ERUPTION_DEBUG
     const std::vector<const char*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
-    // ERUPTION_NO_VALIDATION=1: desliga as camadas em tempo de execucao.
-    //
-    // Elas eram compile-time-only, e isso virou um bloqueio real: a engine
-    // acumula milhares de erros de validacao PRE-EXISTENTES por frame, uma
-    // execucao de captura gera dezenas de MB de log, e as capturas headless
-    // (--screenshot --auto-exit) passaram a estourar o timeout do harness.
-    // Quem esta' trabalhando em arte/mapa nao deve ser obrigado a pagar isso;
-    // quem esta' mexendo em barreira quer as camadas ligadas. Um env var separa
-    // os dois casos sem exigir dois builds.
-    const bool skipValidation = std::getenv("ERUPTION_NO_VALIDATION") != nullptr;
-    if (skipValidation) {
+    VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
+    if (validationWanted()) {
+        if (checkValidationLayerSupport()) {
+            createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
+            createInfo.ppEnabledLayerNames = validationLayers.data();
+            m_validationActive = true;   // o F3 avisa; ver Engine.cpp
+        } else {
+            ERUPTION_LOG_WARN("Camadas de validacao pedidas mas NAO disponiveis - esta "
+                              "execucao nao tem checagem de barreira/layout. "
+                              "Instale com: sudo apt install vulkan-validationlayers");
+        }
+        debugCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        debugCreateInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                          VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        debugCreateInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                                      VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                                      VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        debugCreateInfo.pfnUserCallback = debugCallback;
+        createInfo.pNext = &debugCreateInfo;
+    } else if (std::getenv("ERUPTION_NO_VALIDATION")) {
         ERUPTION_LOG_WARN("ERUPTION_NO_VALIDATION: camadas de validacao DESLIGADAS "
                           "(nao ha' checagem de barreira/layout nesta execucao)");
-    } else if (checkValidationLayerSupport()) {
-        createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
-        createInfo.ppEnabledLayerNames = validationLayers.data();
-        m_validationActive = true;   // o F3 avisa; ver Engine.cpp
-    } else {
-        // WARN, nao INFO: em INFO isso ficava filtrado da saida e um build Debug
-        // rodava SEM validacao nenhuma sem ninguem perceber.
-        ERUPTION_LOG_WARN("Camadas de validacao pedidas mas NAO disponiveis - esta "
-                          "execucao nao tem checagem de barreira/layout. "
-                          "Instale com: sudo apt install vulkan-validationlayers");
     }
-
-    VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
-    debugCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-    debugCreateInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                                      VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-    debugCreateInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                                  VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                                  VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-    debugCreateInfo.pfnUserCallback = debugCallback;
-    createInfo.pNext = &debugCreateInfo;
-#else
-    (void)checkValidationLayerSupport();
-#endif
 
     VK_CHECK(vkCreateInstance(&createInfo, nullptr, &m_instance));
     return true;
 }
 
 bool VulkanContext::setupDebugMessenger() {
-#ifdef ERUPTION_DEBUG
+    if (validationWanted()) {
     VkDebugUtilsMessengerCreateInfoEXT createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
     createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
@@ -660,7 +655,7 @@ bool VulkanContext::setupDebugMessenger() {
     if (func) {
         VK_CHECK(func(m_instance, &createInfo, nullptr, &m_debugMessenger));
     }
-#endif
+    }
     return true;
 }
 
@@ -1131,9 +1126,7 @@ std::vector<const char*> VulkanContext::getRequiredExtensions() {
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
     std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
 
-#ifdef ERUPTION_DEBUG
-    extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-#endif
+    if (validationWanted()) extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 
     return extensions;
 }
@@ -1340,14 +1333,15 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanContext::debugCallback(
         }
     }
 
+    // ERUPTION_VK_BREAK=<substring>: para na primeira mensagem de validacao
+    // (erro ou aviso) que contenha a substring (SIGTRAP) - rodar sob gdb para
+    // obter o call site.
+    static const char* brk = std::getenv("ERUPTION_VK_BREAK");
+    if (brk && pCallbackData->pMessage && std::strstr(pCallbackData->pMessage, brk)) {
+        ERUPTION_LOG_ERROR("[Validation][BREAK] %s", pCallbackData->pMessage);
+        raise(SIGTRAP);
+    }
     if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-        // ERUPTION_VK_BREAK=<substring>: para no primeiro erro de validacao que
-        // contenha a substring (SIGTRAP) - rodar sob gdb para obter o call site.
-        static const char* brk = std::getenv("ERUPTION_VK_BREAK");
-        if (brk && pCallbackData->pMessage && std::strstr(pCallbackData->pMessage, brk)) {
-            ERUPTION_LOG_ERROR("[Validation][BREAK] %s", pCallbackData->pMessage);
-            raise(SIGTRAP);
-        }
         ERUPTION_LOG_ERROR("[Validation] %s", pCallbackData->pMessage);
     } else if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
         ERUPTION_LOG_WARN("[Validation] %s", pCallbackData->pMessage);

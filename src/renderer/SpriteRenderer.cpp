@@ -43,6 +43,10 @@ bool SpriteRenderer::init(VulkanContext* ctx, GBuffer* gbuffer, BindlessDescript
 }
 
 void SpriteRenderer::shutdown() {
+    if (m_shadowLayoutSet != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_ctx->device(), m_shadowLayoutSet, nullptr);
+        m_shadowLayoutSet = VK_NULL_HANDLE;
+    }
     if (m_circleShadowPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_circleShadowPipeline, nullptr);
         m_circleShadowPipeline = VK_NULL_HANDLE;
@@ -1149,7 +1153,7 @@ bool SpriteRenderer::createLayerPipelines(VkDescriptorSetLayout layerInputs) {
     };
 
     // 1) Mascara: vertex do G-buffer, depth do G-buffer so' para teste.
-    VkShaderModule vMask = loadModule("gbuffer/sprite.vert.spv");
+    VkShaderModule vMask = loadModule("gbuffer/sprite_mask.vert.spv");
     VkShaderModule fMask = loadModule("gbuffer/sprite_mask.frag.spv");
     if (vMask && fMask) {
         m_maskPipeline = PipelineBuilder()

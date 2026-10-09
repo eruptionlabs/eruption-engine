@@ -63,6 +63,13 @@
 
 namespace eruption {
 
+// Timestamps do FSR. 42/43 sao da autoexposicao (PostProcessor.cpp, que vai
+// ate' 53): a colisao estragava as duas medicoes e o Vulkan acusava a consulta
+// escrita duas vezes no mesmo frame.
+constexpr uint32_t kQFsrBegin = 54;
+constexpr uint32_t kQFsrEnd = 55;
+
+
 // Jitter sub-pixel da rasterizacao: sequencia de Halton (2, 3), a mesma
 // familia que o FSR espera. Quantidade de fases = 8 * (display/render)^2,
 // a regra do FSR 3.1: quanto mais o upscale amplia, mais posicoes por pixel
@@ -168,13 +175,14 @@ PoseListHook& poseListHook() {
 
 // Entradas do FSR: a cor muda com o modo (HDR da iluminacao antes do pos,
 // saida do pos depois dele). Rechamar sempre que G-buffer/pos recriarem views.
-void Engine::bindFsrInputs() {
+void Engine::bindFsrInputs(bool write) {
     if (!fsrActive()) return;
     const VkImageView color = m_upscalerMode == UpscalerMode::FsrBeforePost
                                   ? m_deferredLighting.litImageView()
                                   : m_postProcessor.outputView();
     m_fsr.bindInputs(color, m_gbuffer.depthView(), m_cameraMotion.view(),
-                     m_spriteLayerActive ? m_spriteLayer.reactiveView() : VK_NULL_HANDLE);
+                     m_spriteLayerActive ? m_spriteLayer.reactiveView() : VK_NULL_HANDLE, write);
+    if (!write) return;
     if (m_spriteLayerActive) {
         m_spriteLayer.bindLayerInputs(m_gbuffer.depthView(), m_deferredLighting.litImageView(), m_gbuffer.albedoView());
     }
@@ -215,17 +223,22 @@ void Engine::render() {
         m_renderW = w; m_renderH = h;
         m_displayW = disp.width;
         m_gbuffer.resize(w, h); m_deferredLighting.resize(w, h); m_skybox.resize(w, h);
+        // As views novas do G-buffer antes do resize: ele recria o alvo e
+        // escreve o descritor, que nao pode apontar para as views antigas.
+        m_cameraMotion.setInputs(m_gbuffer.depthView(), m_gbuffer.velocityView());
         m_cameraMotion.resize(w, h);
-        m_cameraMotion.bindDepth(m_gbuffer.depthView());
-        m_cameraMotion.bindObjectVelocity(m_gbuffer.velocityView());
         if (m_upscalerMode == UpscalerMode::FsrBeforePost) {
             m_postProcessor.resize(disp.width, disp.height);
         } else {
             m_postProcessor.resize(std::max(64u, static_cast<uint32_t>(w * m_postScale)),
                                    std::max(64u, static_cast<uint32_t>(h * m_postScale)));
         }
-        if (fsrActive()) m_fsr.resize(w, h, disp.width, disp.height);
         if (m_spriteLayerActive) m_spriteLayer.resize(w, h);
+        if (fsrActive()) {
+            // Entradas novas antes do resize, que escreve os sets com elas.
+            bindFsrInputs(false);
+            m_fsr.resize(w, h, disp.width, disp.height);
+        }
         if (m_upscalerMode == UpscalerMode::FsrAfterPost) {
             m_upscaleAA.resizeRenderTarget(disp.width, disp.height, Fsr3Upscaler::kOutputFormat);
             m_upscaleAA.bindSource(m_fsr.outputView());
@@ -237,6 +250,7 @@ void Engine::render() {
             m_upscaleAA.bindSource(m_postProcessor.outputView());
         }
         bindFsrInputs();
+        m_water.resizeRefraction(w, h);
         m_water.setSkyTexture(m_skybox.outputView(), m_skybox.outputSampler());
         m_camera.setPerspective(60.0f, (float)w / (float)h, 0.1f, 50000.0f);
         recreateViewportTarget();
@@ -1462,10 +1476,10 @@ void Engine::render() {
         return fp;
     };
     if (m_upscalerMode == UpscalerMode::FsrBeforePost) {
-        m_vulkan.writeTimestamp(cmd, 42, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        m_vulkan.writeTimestamp(cmd, kQFsrBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         m_fsr.dispatch(cmd, fsrParams());
-        m_vulkan.writeTimestamp(cmd, 43, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-        Profiler::addGpuTime("FSR", m_vulkan.timestampDeltaMs(42, 43));
+        m_vulkan.writeTimestamp(cmd, kQFsrEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        Profiler::addGpuTime("FSR", m_vulkan.timestampDeltaMs(kQFsrBegin, kQFsrEnd));
         // Sprites nitidos por cima da saida do FSR, ainda em HDR linear: o pos
         // (DoF, bloom, tonemap) passa por cima deles como antes.
         if (m_spriteLayerActive) {
@@ -1679,10 +1693,10 @@ void Engine::render() {
     // de nao ser SMAA/FSR1 byte-a-byte (LUT externa e pesos nao-verificaveis).
     m_vulkan.cmdImageBarrier(cmd, m_postProcessor.outputImage(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
     if (m_upscalerMode == UpscalerMode::FsrAfterPost) {
-        m_vulkan.writeTimestamp(cmd, 42, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        m_vulkan.writeTimestamp(cmd, kQFsrBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         m_fsr.dispatch(cmd, fsrParams());
-        m_vulkan.writeTimestamp(cmd, 43, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-        Profiler::addGpuTime("FSR", m_vulkan.timestampDeltaMs(42, 43));
+        m_vulkan.writeTimestamp(cmd, kQFsrEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        Profiler::addGpuTime("FSR", m_vulkan.timestampDeltaMs(kQFsrBegin, kQFsrEnd));
     }
     m_vulkan.cmdImageBarrier(cmd, m_vulkan.swapImage(imageIndex), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
     if (toViewport) {

@@ -275,7 +275,7 @@ bool SpherePreview::createInstanceBuffer() {
 
 bool SpherePreview::createPipeline() {
     VkDevice dev = m_ctx->device();
-    auto vertCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/model.vert.spv");
+    auto vertCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/model_novel.vert.spv");
     auto fragCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/sphere_preview.frag.spv");
     if (vertCode.empty() || fragCode.empty()) {
         ERUPTION_LOG_ERROR("[SPHEREPREVIEW] shaders base (model.vert/sphere_preview.frag) ausentes");
@@ -364,8 +364,8 @@ bool SpherePreview::createPipeline() {
         .build(dev);
 
     if (m_ctx->tessellationSupported()) {
-        auto tescCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/model.tesc.spv");
-        auto teseCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/model.tese.spv");
+        auto tescCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/model_novel.tesc.spv");
+        auto teseCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/model_novel.tese.spv");
         if (!tescCode.empty() && !teseCode.empty()) {
             VkShaderModule tescModule = VK_NULL_HANDLE, teseModule = VK_NULL_HANDLE;
             VkShaderModuleCreateInfo tsm{};

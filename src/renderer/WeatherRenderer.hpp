@@ -377,7 +377,13 @@ private:
     VkDescriptorSetLayout m_heightmapDescLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_heightmapDescPool = VK_NULL_HANDLE;
     VkDescriptorSet m_heightmapUpdateDescSet = VK_NULL_HANDLE;
-    VkDescriptorSet m_heightmapBlurDescSet = VK_NULL_HANDLE;
+    // Blur em ida e volta: [0] heightmap -> blur, [1] blur -> heightmap.
+    // Escritos uma vez (e de novo so' se as views mudarem), nunca durante a
+    // gravacao de um frame.
+    VkDescriptorSetLayout m_heightmapBlurDescLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_heightmapBlurPipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorSet m_heightmapBlurDescSets[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkImageView m_heightmapBlurSetViews[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkPipelineLayout m_heightmapPipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_heightmapUpdatePipeline = VK_NULL_HANDLE;
     VkPipeline m_heightmapBlurPipeline = VK_NULL_HANDLE;
