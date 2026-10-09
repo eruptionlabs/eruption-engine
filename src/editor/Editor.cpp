@@ -732,7 +732,10 @@ void Editor::update(float dt) {
             else if (what == "env") select({SelectionKind::Environment, 0});
             else if (what == "area") select({SelectionKind::Area, m_engine->findArea(arg)});
             else if (what == "telemetry") m_pendingFocus.push_back(kWinTelemetry);
-            else if (what == "project") m_pendingFocus.push_back(kWinProject);
+            else if (what == "project") {
+                m_pendingFocus.push_back(kWinProject);
+                if (!arg.empty()) m_projectDir = m_projectRoot / arg; // pasta aberta no painel
+            }
             else if (what == "play") play();
             else if (what == "cmd") m_commands.run(arg);
             else if (what == "palette") {

@@ -30,6 +30,7 @@ public:
 #include "editor/GameExport.hpp"
 #include "mapgen/MapGen.hpp"
 #include "editor/UndoStack.hpp"
+#include "editor/ModelRaster.hpp"
 #include "core/Logger.hpp"
 #include "renderer/DeferredLighting.hpp"
 #include "math/Types.hpp"
@@ -37,6 +38,7 @@ public:
 
 #include <atomic>
 #include <deque>
+#include <future>
 #include <memory>
 #include <filesystem>
 #include <condition_variable>
@@ -163,6 +165,7 @@ private:
     void drawAssetPreview();
     void drawImagePreview();
     void drawModelPreview();
+    void drawModel3D(); // modelo girável (só dentro do Inspetor)
     void drawMaterialPreview();
     void rulesLoad(const std::filesystem::path& file);
     void rulesCommit(const std::string& label);
@@ -499,6 +502,13 @@ private:
     struct AssetPreviewState {
         std::filesystem::path path;
         enum class Kind { None, Image, Model, Text, Sound } kind = Kind::None;
+        // Modelo 3D girável (desenhado na CPU, ModelRaster).
+        std::shared_ptr<RasterMesh> raster;
+        std::shared_ptr<std::future<std::shared_ptr<RasterMesh>>> rasterJob;
+        std::string rasterError;
+        float yaw = 0.7f, pitch = 0.45f;
+        int rasterSize = 0;
+        GuiTexture rasterTex;
         uint32_t soundId = 0; // prévia tocando
         // Imagem
         std::vector<uint8_t> rgba;     // já reduzida para no máximo 1024

@@ -889,7 +889,9 @@ void Editor::drawProject() {
                         dl->AddRectFilled(p0, ImVec2(p0.x + cell, p0.y + cell + ImGui::GetTextLineHeight() + 6),
                                           selected ? IM_COL32(255, 60, 40, 70) : IM_COL32(255, 255, 255, 20), 4.0f);
                     const ImVec2 box0(p0.x + 8, p0.y + 4), box1(p0.x + cell - 8, p0.y + cell - 12);
-                    const GuiTexture* thumb = (!it.dir && isPreviewableImage(it.path)) ? thumbnail(it.path.string()) : nullptr;
+                    const bool model = it.path.extension() == ".glb" || it.path.extension() == ".gltf";
+                    const GuiTexture* thumb =
+                        (!it.dir && (isPreviewableImage(it.path) || model)) ? thumbnail(it.path.string()) : nullptr;
                     if (thumb) {
                         const float bw = box1.x - box0.x, bh = box1.y - box0.y;
                         const float sc = std::min(bw / thumb->width, bh / thumb->height);
