@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <unordered_map>
+#include <cctype>
 #include <cstring>
 #include <chrono>
 #include <cmath>
@@ -434,19 +436,74 @@ void Editor::drawHierarchy() {
         if (m_engine->isRegionInstance(static_cast<uint32_t>(i))) continue;  // mapa vizinho
         if (icontains(insts[i].name, m_hierarchyFilter)) visible.push_back(static_cast<int>(i));
     }
-    char hdr[64];
-    std::snprintf(hdr, sizeof(hdr), "Models (%zu)###models", visible.size());
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-    if (ImGui::TreeNodeEx(hdr, ImGuiTreeNodeFlags_SpanAvailWidth)) {
+    // Agrupado pelo nome-base ("island_tree_01_0", "_1"... -> "island_tree_01";
+    // "muro/Box" -> "muro"); quem não tem par fica em "Other".
+    struct Group {
+        std::string base;
+        std::vector<int> items;
+        bool hasSelected = false;
+    };
+    static std::vector<Group> groups;
+    static std::unordered_map<std::string, size_t> groupOf;
+    groups.clear();
+    groupOf.clear();
+    for (int i : visible) {
+        std::string base = insts[static_cast<size_t>(i)].name;
+        if (const size_t slash = base.find('/'); slash != std::string::npos) base.resize(slash);
+        size_t end = base.size();
+        while (end > 0 && std::isdigit(static_cast<unsigned char>(base[end - 1]))) --end;
+        if (end > 0 && end < base.size() && (base[end - 1] == '_' || base[end - 1] == '-' || base[end - 1] == ' ')) --end;
+        if (end > 0) base.resize(end);
+        auto [it, added] = groupOf.emplace(base, groups.size());
+        if (added) groups.push_back({base, {}});
+        Group& g = groups[it->second];
+        g.items.push_back(i);
+        g.hasSelected |= isSelected({SelectionKind::Model, i});
+    }
+    Group other{"Other", {}};
+    for (auto& g : groups)
+        if (g.items.size() == 1) {
+            other.items.push_back(g.items.front());
+            other.hasSelected |= g.hasSelected;
+        }
+    auto drawGroup = [&](const Group& g, int id) {
+        char label[160];
+        std::snprintf(label, sizeof(label), "%s (%zu)###grp%d", g.base.c_str(), g.items.size(), id);
+        if (g.hasSelected) ImGui::PushStyleColor(ImGuiCol_Text, kAccent);
+        const bool open = ImGui::TreeNodeEx(label, ImGuiTreeNodeFlags_SpanAvailWidth);
+        if (g.hasSelected) ImGui::PopStyleColor();
+        if (!open) return;
         ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(visible.size()));
+        clipper.Begin(static_cast<int>(g.items.size()));
         while (clipper.Step()) {
             for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; ++r) {
-                const int i = visible[static_cast<size_t>(r)];
+                const int i = g.items[static_cast<size_t>(r)];
                 ImGui::PushID(i);
                 const Selection s{SelectionKind::Model, i};
                 row(s, selectionName(s), insts[static_cast<size_t>(i)].enabled);
                 ImGui::PopID();
+            }
+        }
+        ImGui::TreePop();
+    };
+    char hdr[64];
+    std::snprintf(hdr, sizeof(hdr), "Models (%zu)###models", visible.size());
+    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
+    if (ImGui::TreeNodeEx(hdr, ImGuiTreeNodeFlags_SpanAvailWidth)) {
+        int id = 0;
+        for (const auto& g : groups)
+            if (g.items.size() > 1) drawGroup(g, id++);
+        if (!other.items.empty()) {
+            // Poucos modelos ao todo: sem grupo de sobra, lista direto.
+            if (other.items.size() == visible.size()) {
+                for (int i : other.items) {
+                    ImGui::PushID(i);
+                    const Selection s{SelectionKind::Model, i};
+                    row(s, selectionName(s), insts[static_cast<size_t>(i)].enabled);
+                    ImGui::PopID();
+                }
+            } else {
+                drawGroup(other, id++);
             }
         }
         ImGui::TreePop();
