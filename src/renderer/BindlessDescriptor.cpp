@@ -64,7 +64,7 @@ bool BindlessDescriptor::init(VulkanContext* ctx) {
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_defaultView);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_defaultView);
 
     VkSamplerCreateInfo samplerInfo{}; samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = VK_FILTER_NEAREST;

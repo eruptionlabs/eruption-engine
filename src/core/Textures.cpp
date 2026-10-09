@@ -62,7 +62,7 @@ bool Engine::createTextureFromPixels(const unsigned char* pixels, int w, int h, 
     vmaDestroyBuffer(m_vulkan.allocator(), staging, stagingAlloc);
 
     VkImageViewCreateInfo viewInfo{}; viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO; viewInfo.image = out.image; viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; viewInfo.format = format; viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; viewInfo.subresourceRange.levelCount = mipLevels; viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(m_vulkan.device(), &viewInfo, nullptr, &out.view);
+    vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &out.view);
     
     return true;
 }
@@ -107,7 +107,7 @@ bool Engine::createTextureFromFile(const char* path, Engine::TextureResource& ou
     vmaDestroyBuffer(m_vulkan.allocator(), staging, stagingAlloc);
 
     VkImageViewCreateInfo viewInfo{}; viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO; viewInfo.image = out.image; viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; viewInfo.format = format; viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; viewInfo.subresourceRange.levelCount = mipLevels; viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(m_vulkan.device(), &viewInfo, nullptr, &out.view);
+    vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &out.view);
     
     return true;
 }
@@ -198,7 +198,7 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
                 viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 viewInfo.subresourceRange.levelCount = e.mipCount;
                 viewInfo.subresourceRange.layerCount = 1;
-                vkCreateImageView(m_vulkan.device(), &viewInfo, nullptr, &view);
+                vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &view);
 
                 uint32_t slot = m_bindless.allocateSlotSafe();
                 // O formato que o bake escolheu E' o flag de opacidade: BC1 so' sai
@@ -301,7 +301,7 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
                 viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 viewInfo.subresourceRange.levelCount = mipLevels;
                 viewInfo.subresourceRange.layerCount = 1;
-                vkCreateImageView(m_vulkan.device(), &viewInfo, nullptr, &view);
+                vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &view);
 
                 uint32_t slot = m_bindless.allocateSlotSafe();
                 if (slot != 0) {
@@ -458,7 +458,7 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = mipLevels;
     viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(m_vulkan.device(), &viewInfo, nullptr, &view);
+    vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &view);
 
     uint32_t slot = m_bindless.allocateSlotSafe();
     if (slot != 0) {
@@ -561,7 +561,7 @@ uint32_t Engine::resolveTerrainTexture(const std::string& path) {
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = mipLevels;
     viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(m_vulkan.device(), &viewInfo, nullptr, &view);
+    vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &view);
 
     uint32_t slot = m_bindless.allocateSlotSafe();
     if (slot != 0) {

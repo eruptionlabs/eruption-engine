@@ -124,7 +124,7 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
     VkRenderingAttachmentInfo depthAttachment{};
     depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     depthAttachment.imageView = m_depthView;
-    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depthAttachment.clearValue.depthStencil = {1.0f, 0};
@@ -137,7 +137,7 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
     renderingInfo.pColorAttachments = colorAttachments;
     renderingInfo.pDepthAttachment = &depthAttachment;
 
-    vkCmdBeginRendering(cmd, &renderingInfo);
+    vkc::cmdBeginRendering(cmd, &renderingInfo);
     ERUPTION_LOG_TRACE("GBuffer::beginPass() %ux%u", m_width, m_height);
 
     VkViewport viewport{};
@@ -152,7 +152,7 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
 }
 
 void GBuffer::endPass(VkCommandBuffer cmd) {
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
 }
 
 void GBuffer::transitionToRead(VkCommandBuffer cmd) {
@@ -193,7 +193,7 @@ void GBuffer::transitionToRead(VkCommandBuffer cmd) {
     depthB.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     depthB.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     depthB.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    depthB.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthB.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthB.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     depthB.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     depthB.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -237,7 +237,7 @@ void GBuffer::transitionToWrite(VkCommandBuffer cmd) {
     depthB.srcAccessMask = 0;
     depthB.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     depthB.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depthB.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthB.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthB.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     depthB.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     depthB.image = m_depthImage;
@@ -308,7 +308,7 @@ bool GBuffer::createAttachment(VkFormat format, VkImageUsageFlags usage,
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
 
-    result = vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &view);
+    result = vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &view);
     if (result != VK_SUCCESS) {
         ERUPTION_LOG_ERROR("Failed to create GBuffer attachment view");
         return false;

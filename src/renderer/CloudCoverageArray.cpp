@@ -266,7 +266,7 @@ bool CloudCoverageArray::createImage() {
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     viewInfo.format = VK_FORMAT_R8_UNORM;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, m_layerCount};
-    if (vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_imageView) != VK_SUCCESS) {
+    if (vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_imageView) != VK_SUCCESS) {
         Logger::error("CloudCoverageArray: failed to create image view");
         return false;
     }
@@ -353,7 +353,7 @@ bool CloudCoverageArray::createAltitudeImage() {
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = VK_FORMAT_R16_UNORM;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    if (vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_altitudeView) != VK_SUCCESS) {
+    if (vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_altitudeView) != VK_SUCCESS) {
         Logger::error("CloudCoverageArray: failed to create altitude view");
         return false;
     }

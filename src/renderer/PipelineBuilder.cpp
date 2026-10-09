@@ -162,7 +162,7 @@ VkPipeline PipelineBuilder::build(VkDevice device) {
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    VkResult result = vkCreateGraphicsPipelines(device, VulkanContext::globalPipelineCache(), 1, &pipelineInfo, nullptr, &pipeline);
+    VkResult result = vkc::createGraphicsPipelines(device, VulkanContext::globalPipelineCache(), 1, &pipelineInfo, nullptr, &pipeline);
     if (result != VK_SUCCESS) {
         ERUPTION_LOG_ERROR("Failed to create graphics pipeline: %d", result);
         return VK_NULL_HANDLE;

@@ -192,7 +192,7 @@ bool SpherePreview::createTargets() {
     civ.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     civ.image = m_colorImage; civ.viewType = VK_IMAGE_VIEW_TYPE_2D; civ.format = VK_FORMAT_R8G8B8A8_UNORM;
     civ.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    if (vkCreateImageView(dev, &civ, nullptr, &m_colorView) != VK_SUCCESS) return false;
+    if (vkc::createImageView(dev, &civ, nullptr, &m_colorView) != VK_SUCCESS) return false;
 
     if (!m_ctx->createImage(kSize, kSize, VK_FORMAT_D32_SFLOAT,
                             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -204,7 +204,7 @@ bool SpherePreview::createTargets() {
     div.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     div.image = m_depthImage; div.viewType = VK_IMAGE_VIEW_TYPE_2D; div.format = VK_FORMAT_D32_SFLOAT;
     div.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-    if (vkCreateImageView(dev, &div, nullptr, &m_depthView) != VK_SUCCESS) return false;
+    if (vkc::createImageView(dev, &div, nullptr, &m_depthView) != VK_SUCCESS) return false;
 
     VkSamplerCreateInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -502,7 +502,7 @@ void SpherePreview::render(VkCommandBuffer cmd, float dt, const Vec3& cameraPos)
     colorAtt.clearValue.color = {{0.10f, 0.10f, 0.12f, 1.0f}};
     VkRenderingAttachmentInfo depthAtt{};
     depthAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    depthAtt.imageView = m_depthView; depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAtt.imageView = m_depthView; depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthAtt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; depthAtt.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAtt.clearValue.depthStencil = {1.0f, 0};
 
@@ -510,7 +510,7 @@ void SpherePreview::render(VkCommandBuffer cmd, float dt, const Vec3& cameraPos)
     ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     ri.renderArea = {{0, 0}, {kSize, kSize}};
     ri.layerCount = 1; ri.colorAttachmentCount = 1; ri.pColorAttachments = &colorAtt; ri.pDepthAttachment = &depthAtt;
-    vkCmdBeginRendering(cmd, &ri);
+    vkc::cmdBeginRendering(cmd, &ri);
 
     VkViewport vp2{0, 0, static_cast<float>(kSize), static_cast<float>(kSize), 0.0f, 1.0f};
     vkCmdSetViewport(cmd, 0, 1, &vp2);
@@ -547,7 +547,7 @@ void SpherePreview::render(VkCommandBuffer cmd, float dt, const Vec3& cameraPos)
     vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
     vkCmdDrawIndexed(cmd, static_cast<uint32_t>(m_indices.size()), 1, 0, 0, 0);
 
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
 
     VkImageMemoryBarrier2 colorToRead = colorToWrite;
     colorToRead.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;

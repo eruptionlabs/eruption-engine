@@ -143,7 +143,7 @@ static void uploadTextureViaFrameCB(VkCommandBuffer cmd, VulkanContext* ctx, Bin
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = mipLevels;
     viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(ctx->device(), &viewInfo, nullptr, &outView);
+    vkc::createImageView(ctx->device(), &viewInfo, nullptr, &outView);
 
     outSlot = bindless->allocateSlotSafe();
     if (outSlot != 0) {
@@ -226,7 +226,7 @@ static void uploadEtexViaFrameCB(VkCommandBuffer cmd, VulkanContext* ctx, Bindle
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = etex.mipCount;
     viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(ctx->device(), &viewInfo, nullptr, &outView);
+    vkc::createImageView(ctx->device(), &viewInfo, nullptr, &outView);
 
     outSlot = bindless->allocateSlotSafe();
     if (outSlot != 0) {

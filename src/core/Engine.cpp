@@ -2222,10 +2222,11 @@ void Engine::initImGui() {
     ImGui_ImplVulkan_InitInfo initInfo{};
     initInfo.Instance = m_vulkan.instance(); initInfo.PhysicalDevice = m_vulkan.physicalDevice(); initInfo.Device = m_vulkan.device();
     initInfo.QueueFamily = m_vulkan.queueFamilies().graphicsFamily; initInfo.Queue = m_vulkan.graphicsQueue();
-    initInfo.DescriptorPool = m_imguiPool; initInfo.MinImageCount = 3; initInfo.ImageCount = 3; initInfo.UseDynamicRendering = true;
-    VkPipelineRenderingCreateInfo renderingInfo{}; renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    renderingInfo.colorAttachmentCount = 1; VkFormat swapFormat = m_vulkan.swapFormat();
-    renderingInfo.pColorAttachmentFormats = &swapFormat; initInfo.PipelineRenderingCreateInfo = renderingInfo;
+    initInfo.DescriptorPool = m_imguiPool; initInfo.MinImageCount = 3; initInfo.ImageCount = 3;
+    // Render pass compatível com o swapchain (Vulkan 1.1: sem dynamic rendering).
+    initInfo.UseDynamicRendering = false;
+    initInfo.RenderPass = vkc::compatibleRenderPass({m_vulkan.swapFormat()}, VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED);
+    initInfo.Subpass = 0;
     ImGui_ImplVulkan_Init(&initInfo);
 }
 
@@ -2266,7 +2267,7 @@ void Engine::recreateViewportTarget() {
     VkImageViewCreateInfo vi{}; vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     vi.image = m_viewportImage; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = fmt;
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCreateImageView(m_vulkan.device(), &vi, nullptr, &m_viewportView);
+    vkc::createImageView(m_vulkan.device(), &vi, nullptr, &m_viewportView);
     const VkSampler sampler = m_uiDefaultSampler != VK_NULL_HANDLE ? m_uiDefaultSampler : m_defaultSampler;
     m_viewportTexture = ImGui_ImplVulkan_AddTexture(sampler, m_viewportView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }

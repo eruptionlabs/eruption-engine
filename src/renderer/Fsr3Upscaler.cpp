@@ -51,7 +51,7 @@ void memoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags2 srcStage, VkAccess
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dep.memoryBarrierCount = 1;
     dep.pMemoryBarriers = &mb;
-    vkCmdPipelineBarrier2(cmd, &dep);
+    vkc::cmdPipelineBarrier2(cmd, &dep);
 }
 
 // Entre passes: tudo em GENERAL, uma barreira de memoria compute -> compute
@@ -320,11 +320,11 @@ bool Fsr3Upscaler::createTex(Tex& t, uint32_t w, uint32_t h, VkFormat fmt, uint3
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vi.format = fmt;
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1};
-    if (vkCreateImageView(m_ctx->device(), &vi, nullptr, &t.view) != VK_SUCCESS) return false;
+    if (vkc::createImageView(m_ctx->device(), &vi, nullptr, &t.view) != VK_SUCCESS) return false;
     if (mips > 1) {
         for (uint32_t m = 0; m < 6 && m < mips; ++m) {
             vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, m, 1, 0, 1};
-            if (vkCreateImageView(m_ctx->device(), &vi, nullptr, &t.mipViews[m]) != VK_SUCCESS) return false;
+            if (vkc::createImageView(m_ctx->device(), &vi, nullptr, &t.mipViews[m]) != VK_SUCCESS) return false;
         }
     }
     return true;

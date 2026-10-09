@@ -234,7 +234,7 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
     vmaDestroyBuffer(m_vulkan.allocator(), staging, stagingAlloc);
 
     VkImageViewCreateInfo viewInfo{}; viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO; viewInfo.image = res.image; viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; viewInfo.format = format; viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; viewInfo.subresourceRange.levelCount = mipLevels; viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(m_vulkan.device(), &viewInfo, nullptr, &res.view);
+    vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &res.view);
 
     res.slot = m_bindless.allocateSlot();
     res.mipLevels = mipLevels;

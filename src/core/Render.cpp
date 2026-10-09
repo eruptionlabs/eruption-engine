@@ -858,7 +858,7 @@ void Engine::render() {
     colorAttachment.imageView = m_deferredLighting.litImageView(); colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     VkRenderingAttachmentInfo depthAttachment{}; depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    depthAttachment.imageView = m_gbuffer.depthView(); depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttachment.imageView = m_gbuffer.depthView(); depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
     // Visibilidade da agua, calculada UMA vez e usada por tudo que so' existe
@@ -912,7 +912,7 @@ void Engine::render() {
                                   m_waterMenu.config);
     }
 
-    m_vulkan.cmdImageBarrier(cmd, m_gbuffer.depthImage(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    m_vulkan.cmdImageBarrier(cmd, m_gbuffer.depthImage(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
     m_vulkan.cmdBeginRendering(cmd, {colorAttachment}, &depthAttachment, nullptr, renderExtent());
 
     // Water forward pass (transparent) — BEFORE skybox so depth buffer still has terrain
@@ -1101,7 +1101,7 @@ void Engine::render() {
             shadowInfo.colorAttachmentCount = 1;
             shadowInfo.pColorAttachments = &shadowColorAttach;
 
-            vkCmdBeginRendering(cmd, &shadowInfo);
+            vkc::cmdBeginRendering(cmd, &shadowInfo);
         }
         // Global cloud shadow: dormant while the procedural field replaces the
         // global cloud layer (each field cloud casts its own shadow below).
@@ -1127,7 +1127,7 @@ void Engine::render() {
         if (accumBegun) {
             m_cloudLayerRenderer.endCloudShadowAccumApply(cmd, m_deferredLighting.litImageView(), swapW, swapH);
         } else {
-            vkCmdEndRendering(cmd);
+            vkc::cmdEndRendering(cmd);
         }
         cpuMark(9);
     }
@@ -1135,7 +1135,7 @@ void Engine::render() {
     // Return depth buffer to a READ-ONLY attachment layout: the cloud planes
     // depth-test (no writes) and the volumetric puff shader samples the same
     // depth image via descriptor — legal only with a read-only attachment.
-    m_vulkan.cmdImageBarrier(cmd, m_gbuffer.depthImage(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    m_vulkan.cmdImageBarrier(cmd, m_gbuffer.depthImage(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
 
     // Render the cloud coverage plane after scene objects so it layers correctly.
     // cloudVolOccReady: set when the cloud volume accumulation texture holds
@@ -1153,7 +1153,7 @@ void Engine::render() {
         VkRenderingAttachmentInfo planeDepthAttach{};
         planeDepthAttach.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         planeDepthAttach.imageView = m_gbuffer.depthView();
-        planeDepthAttach.imageLayout = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+        planeDepthAttach.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         planeDepthAttach.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
         planeDepthAttach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
@@ -1165,7 +1165,7 @@ void Engine::render() {
         planeInfo.pColorAttachments = &planeColorAttach;
         planeInfo.pDepthAttachment = &planeDepthAttach;
 
-        vkCmdBeginRendering(cmd, &planeInfo);
+        vkc::cmdBeginRendering(cmd, &planeInfo);
         m_vulkan.writeTimestamp(cmd, 36, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         // Global coverage plane: dormant while the procedural field replaces
         // the global cloud layer.
@@ -1324,7 +1324,7 @@ void Engine::render() {
                 }
             }
         }
-        vkCmdEndRendering(cmd);
+        vkc::cmdEndRendering(cmd);
 
         // Half-res volume pass: all collected puffs ray-march into the
         // half-res offscreen, then a single premultiplied composite applies
@@ -1347,13 +1347,13 @@ void Engine::render() {
                 cloudVolOccReady = true;
             } else {
                 // Fallback: redraw direct into the lit image at full res.
-                vkCmdBeginRendering(cmd, &planeInfo);
+                vkc::cmdBeginRendering(cmd, &planeInfo);
                 for (const auto& [icl, tint] : pendingBillboards) {
                     m_cloudLayerRenderer.renderCloudLayerBillboard(cmd, icl->rendererId,
                                                                    icl->planeY,
                                                                    m_camera, m_gbuffer.depthView(), tint);
                 }
-                vkCmdEndRendering(cmd);
+                vkc::cmdEndRendering(cmd);
             }
         }
         m_vulkan.writeTimestamp(cmd, 37, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
@@ -1380,7 +1380,7 @@ void Engine::render() {
             sq.maxSteps = m_smokeMaxSteps;
             sq.sunTap = m_smokeSunTap;
             sq.detail = m_smokeDetail;
-            vkCmdBeginRendering(cmd, &planeInfo);
+            vkc::cmdBeginRendering(cmd, &planeInfo);
             {
                 // Scratch estatico (varredura 2026-09-02): reserve evitava
                 // realocacao, nao a alocacao+free por frame.
@@ -1418,7 +1418,7 @@ void Engine::render() {
                                                           wdir * wspd * 20.0f * sm->windScale, sq);
                 }
             }
-            vkCmdEndRendering(cmd);
+            vkc::cmdEndRendering(cmd);
             m_vulkan.writeTimestamp(cmd, 39, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             Profiler::addGpuTime("Map Smoke", m_vulkan.timestampDeltaMs(38, 39));
         }
@@ -1433,7 +1433,7 @@ void Engine::render() {
                                  m_spriteSystem.visibleCount(), m_camera.viewProjJittered());
         m_spriteLayer.buildReactive(cmd);
     }
-    m_vulkan.cmdImageBarrier(cmd, m_gbuffer.depthImage(), VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    m_vulkan.cmdImageBarrier(cmd, m_gbuffer.depthImage(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
     // Motion vectors de camera a partir do depth final do frame (entrada do
     // FSR). Precisa do prevViewProjNoJitter AINDA do frame anterior: ele so'
     // e' atualizado depois do pos.

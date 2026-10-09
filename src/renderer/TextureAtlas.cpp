@@ -199,7 +199,7 @@ void TextureAtlas::uploadToGpu() {
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = m_format;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_atlasView);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_atlasView);
 }
 
 } // namespace eruption

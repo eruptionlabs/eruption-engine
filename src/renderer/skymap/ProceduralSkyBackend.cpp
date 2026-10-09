@@ -82,7 +82,7 @@ void ProceduralSkyBackend::createOutputImage() {
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_outputView);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_outputView);
 
     VkSamplerCreateInfo samplerInfo = {};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -117,7 +117,7 @@ void ProceduralSkyBackend::createDepthImage() {
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = VK_FORMAT_D32_SFLOAT;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_depthView);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_depthView);
 }
 
 void ProceduralSkyBackend::createUBO() {
@@ -311,7 +311,7 @@ void ProceduralSkyBackend::createPipeline() {
     pipeInfo.pDynamicState = &dynState;
     pipeInfo.layout = m_layout;
 
-    vkCreateGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &m_pipeline);
+    vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &m_pipeline);
 
     vkDestroyShaderModule(m_ctx->device(), vertModule, nullptr);
     vkDestroyShaderModule(m_ctx->device(), fragModule, nullptr);
@@ -400,7 +400,7 @@ bool ProceduralSkyBackend::renderProbeFace(VkCommandBuffer cmd, const DayNightCy
     VkRenderingAttachmentInfo depthAttach = {};
     depthAttach.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     depthAttach.imageView = depthView;
-    depthAttach.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttach.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthAttach.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depthAttach.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAttach.clearValue.depthStencil = {1.0f, 0};
@@ -411,7 +411,7 @@ bool ProceduralSkyBackend::renderProbeFace(VkCommandBuffer cmd, const DayNightCy
     ri.colorAttachmentCount = 1;
     ri.pColorAttachments = &colorAttach;
     ri.pDepthAttachment = &depthAttach;
-    vkCmdBeginRendering(cmd, &ri);
+    vkc::cmdBeginRendering(cmd, &ri);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
     VkViewport vp{};
     vp.width = static_cast<float>(size);
@@ -423,7 +423,7 @@ bool ProceduralSkyBackend::renderProbeFace(VkCommandBuffer cmd, const DayNightCy
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_probeSets[face], 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
     return true;
 }
 
@@ -463,7 +463,7 @@ void ProceduralSkyBackend::renderToTexture(VkCommandBuffer cmd, const DayNightCy
     // Depth attachment
     barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barriers[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    barriers[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     barriers[1].srcAccessMask = 0;
     barriers[1].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     barriers[1].image = m_depthImage;
@@ -482,7 +482,7 @@ void ProceduralSkyBackend::renderToTexture(VkCommandBuffer cmd, const DayNightCy
     VkRenderingAttachmentInfo depthAttach = {};
     depthAttach.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     depthAttach.imageView = m_depthView;
-    depthAttach.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttach.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthAttach.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depthAttach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depthAttach.clearValue.depthStencil = {1.0f, 0};
@@ -495,15 +495,15 @@ void ProceduralSkyBackend::renderToTexture(VkCommandBuffer cmd, const DayNightCy
     renderingInfo.pColorAttachments = &colorAttach;
     renderingInfo.pDepthAttachment = &depthAttach;
 
-    vkCmdBeginRendering(cmd, &renderingInfo);
+    vkc::cmdBeginRendering(cmd, &renderingInfo);
     render(cmd, cycle, viewProj);
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
 
     barriers[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     barriers[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     barriers[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    barriers[1].oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    barriers[1].oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     barriers[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     barriers[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     barriers[1].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;

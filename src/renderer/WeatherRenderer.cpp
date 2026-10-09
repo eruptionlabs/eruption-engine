@@ -141,7 +141,7 @@ VkPipeline createParticlePipeline(VulkanContext* ctx, VkPipelineLayout layout,
     info.layout = layout;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &info, nullptr, &pipeline);
+    vkc::createGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &info, nullptr, &pipeline);
 
     vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
     vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
@@ -267,7 +267,7 @@ VkPipeline createDebugMapPipeline(VulkanContext* ctx, VkDescriptorSetLayout desc
     info.layout = *outLayout;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &info, nullptr, &pipeline);
+    vkc::createGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &info, nullptr, &pipeline);
 
     vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
     vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
@@ -388,7 +388,7 @@ VkPipeline createSplashPipeline(VulkanContext* ctx, VkPipelineLayout layout,
     info.layout = layout;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &info, nullptr, &pipeline);
+    vkc::createGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &info, nullptr, &pipeline);
 
     vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
     vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
@@ -633,9 +633,9 @@ bool WeatherRenderer::createHeightmapResources() {
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
     viewInfo.image = m_heightmapImage;
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_heightmapView);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_heightmapView);
     viewInfo.image = m_heightmapBlurImage;
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_heightmapBlurView);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_heightmapBlurView);
 
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -724,7 +724,7 @@ bool WeatherRenderer::createTopDownDepthResources() {
     viewInfo.format = VK_FORMAT_D32_SFLOAT;
     viewInfo.image = m_topDownDepthImage;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_topDownDepthView);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_topDownDepthView);
 
     return m_topDownDepthView != VK_NULL_HANDLE;
 }
@@ -769,7 +769,7 @@ void WeatherRenderer::renderTopDownDepth(VkCommandBuffer cmd,
 
     // Transition depth target to attachment-optimal (contents discarded; we clear).
     m_ctx->cmdImageBarrier(cmd, m_topDownDepthImage,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
         VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -777,7 +777,7 @@ void WeatherRenderer::renderTopDownDepth(VkCommandBuffer cmd,
     VkRenderingAttachmentInfo depthAttachment{};
     depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     depthAttachment.imageView = m_topDownDepthView;
-    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depthAttachment.clearValue.depthStencil = {1.0f, 0};
@@ -816,7 +816,7 @@ void WeatherRenderer::renderTopDownDepth(VkCommandBuffer cmd,
 
     // Make the depth target readable by the heightmap compute pass.
     m_ctx->cmdImageBarrier(cmd, m_topDownDepthImage,
-        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
         VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -1886,7 +1886,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     info.layerCount = 1;
     info.colorAttachmentCount = 1;
     info.pColorAttachments = &color;
-    vkCmdBeginRendering(cmd, &info);
+    vkc::cmdBeginRendering(cmd, &info);
 
     VkViewport vp{0, 0, (float)width, (float)height, 0, 1};
     VkRect2D scissor{{0, 0}, {width, height}};
@@ -2164,7 +2164,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
         }
     }
 
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
     wLap(3);
     if (kWrCpu && ++wN % 120 == 0) {
         ERUPTION_LOG_WARN("[WRCPU] particulas=%.2f splashes=%.2f updateDescSet_global=%.2f descSets_por_seguidor=%.2f gravacao_de_draws=%.2f (ms/frame, %u part, %u splash, %zu followers)",

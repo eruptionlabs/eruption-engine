@@ -139,7 +139,7 @@ void SpriteLayer::createTargets() {
         vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vi.format = kMaskFormat;
         vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCreateImageView(m_ctx->device(), &vi, nullptr, &img.view);
+        vkc::createImageView(m_ctx->device(), &vi, nullptr, &img.view);
     };
     for (Img& m : m_mask) make(m, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
     make(m_reactive, VK_IMAGE_USAGE_STORAGE_BIT);
@@ -235,12 +235,12 @@ void SpriteLayer::renderMask(VkCommandBuffer cmd, VkImageView depthView, VkBuffe
     VkRenderingAttachmentInfo depth{};
     depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     depth.imageView = depthView;
-    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     depth.storeOp = VK_ATTACHMENT_STORE_OP_NONE;
     m_ctx->cmdBeginRendering(cmd, {color}, &depth, nullptr, {m_w, m_h});
     m_sprites->drawMask(cmd, instances, count, viewProjJittered);
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
     m_ctx->cmdImageBarrier(cmd, mask.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -287,7 +287,7 @@ void SpriteLayer::renderLayer(VkCommandBuffer cmd, VkImage target, VkImageView t
     push.sizes = Vec4(float(m_w), float(m_h), float(targetExtent.width), float(targetExtent.height));
     push.planes = Vec4(nearZ, farZ, 0.0f, 0.0f);
     m_sprites->drawLayer(cmd, instances, count, m_layerSet, push, targetExtent);
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
     m_ctx->cmdImageBarrier(cmd, target, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
