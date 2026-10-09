@@ -623,7 +623,7 @@ void Editor::update(float dt) {
                        ? m_projectRoot / "build-export" / "eruption-engine"
                        : m_projectRoot / "eruption-engine";
         const ExportReport r = exportGame(o);
-        ERUPTION_LOG_WARN("[EXPORT] files=%zu bytes=%llu missing=%zu error=%s", r.files,
+        ERUPTION_LOG_WARN("[EXPORT] files=%zu compiled=%zu bytes=%llu missing=%zu error=%s", r.files, r.compiled,
                           static_cast<unsigned long long>(r.bytes), r.missing.size(), r.error.c_str());
         for (const auto& m : r.missing) ERUPTION_LOG_WARN("[EXPORT] missing %s", m.c_str());
     }

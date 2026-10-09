@@ -577,11 +577,17 @@ target_link_libraries(eruption-engine PRIVATE
     Threads::Threads
     z
     Iconv::Iconv
-    Luau.Ast
-    Luau.Compiler
     Luau.VM
     Luau.CodeGen
 )
+# Compilador e analisador de Luau: só no editor (o jogo exportado recebe os
+# scripts já compilados e leva só a máquina virtual).
+if(ERUPTION_EDITOR)
+    target_link_libraries(eruption-engine PRIVATE Luau.Ast Luau.Compiler)
+    target_compile_definitions(eruption-engine PRIVATE ERUPTION_LUAU_COMPILER=1)
+else()
+    target_compile_definitions(eruption-engine PRIVATE ERUPTION_LUAU_COMPILER=0)
+endif()
 
 # Threads
 find_package(Threads REQUIRED)

@@ -40,7 +40,7 @@ void Editor::startExport() {
             msg = "Export failed: " + r.error;
         } else {
             char buf[160];
-            std::snprintf(buf, sizeof(buf), "Exported %zu files (%.1f MB) to ", r.files, r.bytes / (1024.0 * 1024.0));
+            std::snprintf(buf, sizeof(buf), "Exported %zu files (%zu scripts compiled, %.1f MB) to ", r.files, r.compiled, r.bytes / (1024.0 * 1024.0));
             msg = buf + o.outDir.string();
             for (const auto& m : r.missing) msg += "\n  not found (left out): " + m;
         }
