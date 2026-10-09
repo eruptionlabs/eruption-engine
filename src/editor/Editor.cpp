@@ -754,6 +754,7 @@ void Editor::update(float dt) {
 
     mapGenPoll();
     // Troca de mapa pedida pela UI: fora do frame de render.
+    handleGameMapRequest();
     if (!m_pendingMap.empty()) {
         const std::string name = std::move(m_pendingMap);
         m_pendingMap.clear();
@@ -1245,6 +1246,40 @@ void Editor::drawShortcutsWindow() {
         ImGui::EndTable();
     }
     ImGui::End();
+}
+
+void Editor::handleGameMapRequest() {
+    Engine::MapRequest request;
+    if (m_engine->takeMapRequest(request)) {
+        if (m_play == PlayState::Editing) return; // só o jogo troca de mapa
+        m_playResume = {};
+        m_playResume.active = true;
+        m_playResume.hasSpawn = request.hasSpawn;
+        m_playResume.spawn = request.spawn;
+        if (m_scripts) m_playResume.vars = m_scripts->exportVars();
+        m_playResume.readyAt = m_mapReadyCount;
+        m_pendingMap = request.map; // para o Play e abre
+        log(LogLevel::Info, "The game went to map " + request.map);
+        return;
+    }
+    if (!m_playResume.active || m_engine->currentMapName().empty() || !m_engine->isPlayerSpawnedOnActiveMap()) return;
+    if (!m_playResume.started) {
+        // Mapa aberto e cena aplicada (onMapReady): volta a jogar.
+        if (m_play == PlayState::Editing && m_mapReadyCount != m_playResume.readyAt) {
+            play();
+            m_playResume.started = true;
+        }
+        return;
+    }
+    if (m_scripts && !m_scripts->running()) return; // os scripts começam no próximo frame
+    if (m_scripts && !m_playResume.vars.empty()) m_scripts->importVars(m_playResume.vars);
+    if (m_playResume.hasSpawn && m_engine->m_playerController) {
+        const Vec3 p(m_playResume.spawn.x, m_engine->sampleTerrainHeight(m_playResume.spawn.x, m_playResume.spawn.z),
+                     m_playResume.spawn.z);
+        m_engine->m_playerController->setPos(p);
+        m_engine->camera().setOrbitTarget(p);
+    }
+    m_playResume = {};
 }
 
 void Editor::play() {

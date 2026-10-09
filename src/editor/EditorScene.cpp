@@ -48,6 +48,7 @@ void Editor::onMapReady() {
     m_engine->loadScatter(m_engine->currentMapName());
     applySceneFile();
     applyLayerVisibility();
+    ++m_mapReadyCount;
 }
 
 void Editor::applySceneFile() {

@@ -193,6 +193,20 @@ int world_set_weather(lua_State* L) {
     ScriptBridge::setWeather(weatherTypeFromName(luaL_checkstring(L, 1)));
     return 0;
 }
+int world_map(lua_State* L) {
+    lua_pushstring(L, eng().currentMapName().c_str());
+    return 1;
+}
+int world_load_map(lua_State* L) {
+    const char* map = luaL_checkstring(L, 1);
+    if (lua_isvector(L, 2)) {
+        const Vec3 p = checkVec3(L, 2);
+        eng().requestMap(map, &p);
+    } else {
+        eng().requestMap(map, nullptr);
+    }
+    return 0;
+}
 int world_ground_height(lua_State* L) {
     lua_pushnumber(L, eng().sampleTerrainHeight(static_cast<float>(luaL_checknumber(L, 1)),
                                                 static_cast<float>(luaL_checknumber(L, 2))));
@@ -414,6 +428,38 @@ int models_solid(lua_State* L) {
     return 1;
 }
 
+// ---------------------------------------------------------------- game (salvar)
+
+std::string slotArg(lua_State* L, int arg) {
+    if (lua_isnoneornil(L, arg)) return "1";
+    if (lua_type(L, arg) == LUA_TNUMBER) return std::to_string(static_cast<int>(lua_tonumber(L, arg)));
+    return luaL_checkstring(L, arg);
+}
+int game_save(lua_State* L) {
+    ScriptHost* host = ScriptHost::current();
+    std::string error;
+    const bool ok = host && host->saveGame(slotArg(L, 1), error);
+    if (!ok) Logger::error("game.save: %s", error.c_str());
+    lua_pushboolean(L, ok);
+    return 1;
+}
+int game_load(lua_State* L) {
+    ScriptHost* host = ScriptHost::current();
+    std::string error;
+    const bool ok = host && host->loadGame(slotArg(L, 1), error);
+    if (!ok) Logger::error("game.load: %s", error.c_str());
+    lua_pushboolean(L, ok);
+    return 1;
+}
+int game_has_save(lua_State* L) {
+    lua_pushboolean(L, ScriptHost::hasSave(slotArg(L, 1)));
+    return 1;
+}
+int game_delete_save(lua_State* L) {
+    lua_pushboolean(L, ScriptHost::deleteSave(slotArg(L, 1)));
+    return 1;
+}
+
 // ---------------------------------------------------------------- audio
 
 // Ponto do som: um vector ou um modelo (o centro dele).
@@ -549,7 +595,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
-        {"ground_height", world_ground_height}, {nullptr, nullptr}};
+        {"ground_height", world_ground_height}, {"map", world_map}, {"load_map", world_load_map}, {nullptr, nullptr}};
     static const luaL_Reg player[] = {
         {"position", player_position}, {"set_position", player_set_position}, {"set_sprite", player_set_sprite}, {"near", player_near},
         {"inside", player_inside}, {nullptr, nullptr}};
@@ -582,6 +628,9 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"set_volume", audio_set_volume}, {nullptr, nullptr}};
     lib(L, "on", on);
     lib(L, "audio", audio);
+    static const luaL_Reg game[] = {{"save", game_save}, {"load", game_load}, {"has_save", game_has_save},
+                                    {"delete_save", game_delete_save}, {nullptr, nullptr}};
+    lib(L, "game", game);
     lib(L, "vars", vars);
     lib(L, "ui", ui);
     lib(L, "world", world);
@@ -643,6 +692,20 @@ declare world: {
     set_weather: (name: string) -> (),
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
+    -- Name of the map being played.
+    map: () -> string,
+    -- Goes to another map (a door, a cave); the player appears at `position`
+    -- (default: the map's Player Start).
+    load_map: (map: string, position: vector?) -> (),
+}
+
+-- Saved games: map, player position, vars, time, weather and music, kept in the
+-- player's data folder. Slots are names or numbers (default 1).
+declare game: {
+    save: (slot: (string | number)?) -> boolean,
+    load: (slot: (string | number)?) -> boolean,
+    has_save: (slot: (string | number)?) -> boolean,
+    delete_save: (slot: (string | number)?) -> boolean,
 }
 
 declare player: {

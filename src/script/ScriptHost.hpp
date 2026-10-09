@@ -67,6 +67,17 @@ public:
     void addTween(uint32_t model, const Vec3& move, float yawDegrees, float seconds);
     int varsRef() const { return m_varsRef; }
 
+    // Progresso do jogo (script/SaveGame.cpp): mapa, jogador, variáveis, hora,
+    // clima e música num JSON da pasta de dados do usuário.
+    bool saveGame(const std::string& slot, std::string& error);
+    bool loadGame(const std::string& slot, std::string& error);
+    static bool hasSave(const std::string& slot);
+    static bool deleteSave(const std::string& slot);
+    static std::filesystem::path saveDir();
+    // Variáveis como JSON (o editor guarda e devolve ao trocar de mapa no Play).
+    std::string exportVars();
+    bool importVars(const std::string& json);
+
 private:
     struct Script {
         std::filesystem::path path;

@@ -32,6 +32,8 @@ const std::vector<RuleDef>& ruleCatalog() {
          "The player is within {2} of {1}", "O jogador está a menos de {2} de {1}"},
         {"player.inside", RuleKind::Condition, "player", {{T::Area, "\"\""}},
          "The player is in area {1}", "O jogador está na área {1}"},
+        {"game.has_save", RuleKind::Condition, "game", {{T::Value, "1"}},
+         "There is a saved game in slot {1}", "Existe um jogo salvo no espaço {1}"},
         {"world.time_between", RuleKind::Condition, "world", {{T::Hour, "18"}, {T::Hour, "6"}},
          "The time is between {1}h and {2}h", "A hora está entre {1}h e {2}h"},
         {"world.is_weather", RuleKind::Condition, "world", {{T::Weather, "\"rainy\""}},
@@ -61,6 +63,12 @@ const std::vector<RuleDef>& ruleCatalog() {
          "Hide {1}", "Esconder {1}"},
         {"models.set_solid", RuleKind::Action, "models", {{T::Model, "\"\""}, {T::Value, "true"}},
          "Make {1} solid: {2}", "Deixar {1} sólido: {2}"},
+        {"game.save", RuleKind::Action, "game", {{T::Value, "1"}},
+         "Save the game in slot {1}", "Salvar o jogo no espaço {1}"},
+        {"game.load", RuleKind::Action, "game", {{T::Value, "1"}},
+         "Load the game from slot {1}", "Carregar o jogo do espaço {1}"},
+        {"world.load_map", RuleKind::Action, "game", {{T::Text, "\"\""}},
+         "Go to map {1}", "Ir para o mapa {1}"},
         {"audio.play", RuleKind::Action, "sound", {{T::Sound, "\"\""}, {T::Number, "1"}},
          "Play sound {1} at volume {2}", "Tocar o som {1} no volume {2}"},
         {"audio.play_at", RuleKind::Action, "sound", {{T::Sound, "\"\""}, {T::Model, "\"\""}, {T::Number, "1"}},
@@ -146,7 +154,7 @@ const char* categoryName(const char* category, UiLanguage lang) {
     static const struct { const char* key; const char* en; const char* pt; } kNames[] = {
         {"events", "Events", "Eventos"}, {"input", "Keyboard", "Teclado"}, {"player", "Player", "Jogador"},
         {"world", "World", "Mundo"}, {"models", "Objects", "Objetos"}, {"variables", "Variables", "Variáveis"},
-        {"screen", "Screen", "Tela"}, {"lights", "Lights", "Luzes"}, {"characters", "Characters", "Personagens"}, {"sound", "Sound", "Som"},
+        {"screen", "Screen", "Tela"}, {"lights", "Lights", "Luzes"}, {"characters", "Characters", "Personagens"}, {"sound", "Sound", "Som"}, {"game", "Game", "Jogo"},
     };
     for (const auto& n : kNames)
         if (std::strcmp(n.key, category) == 0) return lang == UiLanguage::Portuguese ? n.pt : n.en;

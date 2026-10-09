@@ -311,6 +311,22 @@ public:
     auto* currentMap() const { return m_currentMap.get(); }
     const std::vector<std::string>& availableMaps() const { return m_availableMaps; }
     void setPendingMapWarp(const std::string& map) { m_pendingMapWarp = map; }
+    // Troca de mapa pedida pelo jogo (porta, jogo salvo): quem roda o jogo
+    // (aplicação ou editor) faz a troca fora do frame e põe o jogador em `spawn`.
+    struct MapRequest {
+        std::string map;
+        bool hasSpawn = false;
+        Vec3 spawn{0.0f};
+    };
+    void requestMap(const std::string& map, const Vec3* spawn) {
+        m_mapRequest = {map, spawn != nullptr, spawn ? *spawn : Vec3(0.0f)};
+    }
+    bool takeMapRequest(MapRequest& out) {
+        if (m_mapRequest.map.empty()) return false;
+        out = std::move(m_mapRequest);
+        m_mapRequest = {};
+        return true;
+    }
     WaterRenderer& water() { return m_water; }
     WaterDebugMenu& waterMenu() { return m_waterMenu; }
     float mapBaseWaterLevel() const { return m_mapBaseWaterLevel; }
@@ -1315,6 +1331,7 @@ private:
     std::vector<WorldRegion> m_regions;
     std::vector<TriggerArea> m_areas;
     AudioSystem m_audio;
+    MapRequest m_mapRequest;
     std::vector<uint8_t> m_solid; // por instância
     static const char* worldStateName(WorldRegion::State s);
     std::vector<WorldNeighbor> m_worldNeighbors;

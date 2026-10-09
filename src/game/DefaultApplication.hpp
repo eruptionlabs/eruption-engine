@@ -22,6 +22,8 @@ private:
     std::unique_ptr<class ScriptHost> m_scripts;
     bool m_scriptsPlaying = false;
     std::string m_sceneEditsMap; // mapa cujas edições já foram aplicadas (jogo)
+    bool m_hasMapSpawn = false;  // troca de mapa pedida pelo jogo: onde o jogador aparece
+    Vec3 m_mapSpawn{0.0f};
     HudRenderer m_hud;
     bool m_autoExit = false;
     bool m_autoTest = false;
