@@ -49,6 +49,14 @@ public:
 
     // Desenha o painel do heroi (chamar dentro do frame ImGui).
     void draw();
+    // Desenha numa área (o painel Cena do editor): calcula no tamanho dela e
+    // desloca o desenho até `origin`.
+    void drawIn(ImDrawList* dl, const ImVec2& origin, const ImVec2& size);
+    // Desenho em coordenadas da área (0..size) levado depois até `origin`: o
+    // recorte vale na área durante o desenho e é deslocado junto no fim.
+    struct AreaMark { int vtx = 0, cmd = 0; };
+    static AreaMark beginArea(ImDrawList* dl, const ImVec2& size);
+    static void endArea(ImDrawList* dl, const AreaMark& mark, const ImVec2& origin);
 
     CSSRect getMinimapRect(const ImVec2& displaySize) const;
     CSSRect getMinimapInfoRect(const ImVec2& displaySize) const;

@@ -74,6 +74,7 @@ void Editor::drawViewport() {
         ImGui::Dummy(avail);
     }
 
+    if (m_play != PlayState::Editing) m_engine->drawGameHudIn(ImGui::GetWindowDrawList(), pos, avail);
     m_engine->drawSpeechBubbles(pos.x, pos.y, avail.x, avail.y, ImGui::GetIO().DeltaTime);
     if (m_scripts) m_scripts->drawMessages(pos.x, pos.y, avail.x, avail.y);
 

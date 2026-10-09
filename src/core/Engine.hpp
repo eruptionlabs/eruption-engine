@@ -57,6 +57,7 @@
 #include <vector>
 #include <iosfwd>
 #include <string>
+#include <imgui.h>
 #include <memory>
 #include <future>
 #include "scene/SceneEdits.hpp"
@@ -386,6 +387,10 @@ public:
     // mostra se o projeto pedir (ui.show_hud / ui.show_minimap).
     void setHudBars(bool on) { m_showHudBars = on; m_showGameHud = m_showHudBars || m_showMinimapHud; }
     void setMinimapHud(bool on) { m_showMinimapHud = on; m_showGameHud = m_showHudBars || m_showMinimapHud; }
+    // HUD do jogo numa área (Play do editor, dentro do painel Cena).
+    void drawGameHudIn(ImDrawList* dl, const ImVec2& origin, const ImVec2& size) {
+        if (m_showGameHud) drawGameHud(dl, origin, size);
+    }
     bool& showStatsMenu() { return m_showStatsMenu; }
     bool& showSpritePicker() { return m_showSpritePicker; }
     bool& showResourceManager() { return m_showResourceManager; }
@@ -778,7 +783,7 @@ private:
     bool m_showDebugOverlay = true;
     bool m_devTools = true;
     bool m_showGameHud = true, m_showHudBars = true, m_showMinimapHud = true;
-    void drawGameHud();
+    void drawGameHud(ImDrawList* target = nullptr, ImVec2 origin = ImVec2(0.0f, 0.0f), ImVec2 size = ImVec2(0.0f, 0.0f));
     bool m_showEffectsMenu = false; 
     bool m_showObjectMenu = false;
     bool m_showStatsMenu = false;

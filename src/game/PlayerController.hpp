@@ -3,6 +3,9 @@
 #include "math/Types.hpp"
 #include "core/Engine.hpp"
 #include <string>
+struct ImDrawList;
+struct ImVec2;
+
 namespace eruption {
 class HudRenderer;
 class PlayerController {
@@ -17,6 +20,7 @@ public:
     void update(float dt);
     void renderImGui();
     void renderApplicationHUD();
+    void renderApplicationHUDIn(ImDrawList* dl, const ImVec2& origin, const ImVec2& size);
     void renderMinimapMarkers() const;
     // Retorna a área do minimapa definida pelo CSS (#minimap), se houver.
     eruption::CSSRect getMinimapRect(const ImVec2& displaySize) const;

@@ -147,8 +147,13 @@ void HudRenderer::draw() {
             sA.y, sT.y, sA.y - sT.y, cam.orbitDistance(), glm::degrees(cam.orbitPitch()));
         --s_debugLeft;
     }
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    drawIn(ImGui::GetBackgroundDrawList(), ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize);
+}
+
+void HudRenderer::drawIn(ImDrawList* dl, const ImVec2& origin, const ImVec2& size) {
+    if (!m_engine || !dl) return;
+    const ImVec2 displaySize = size;
+    const AreaMark mark = beginArea(dl, size);
 
     // Painel inferior
     bool found = false;
@@ -201,7 +206,7 @@ void HudRenderer::draw() {
     // HP/SP sobre o personagem: duas barras retas (HP em cima, SP embaixo).
     CSSRect oh = resolveWidget("#overhead-hp-sp", displaySize, {}, &found);
     if (found && oh.w > 2.0f && oh.h > 2.0f) {
-        ImDrawList* fg = ImGui::GetBackgroundDrawList();
+        ImDrawList* fg = dl;
         const float gap = 1.0f;
         const float barH = std::max(2.0f, (oh.h - gap) * 0.5f);
         auto bar = [&](float top, float ratio, ImU32 fill) {
@@ -219,7 +224,7 @@ void HudRenderer::draw() {
     if (m_stats.castProgress > 0.0f) {
         CSSRect cb = resolveWidget("#cast-bar", displaySize, {}, &found);
         if (found && cb.w > 2.0f && cb.h > 2.0f) {
-            ImDrawList* fg = ImGui::GetBackgroundDrawList();
+            ImDrawList* fg = dl;
             const float ratio = std::clamp(m_stats.castProgress, 0.0f, 1.0f);
             const ImU32 bg = m_layout.backgroundColor("#cast-bar", IM_COL32(12, 16, 24, 240));
             const ImU32 bc = m_layout.borderColor("#cast-bar", IM_COL32(80, 110, 150, 255));
@@ -232,6 +237,31 @@ void HudRenderer::draw() {
             }
         }
     }
+    endArea(dl, mark, origin);
+}
+
+HudRenderer::AreaMark HudRenderer::beginArea(ImDrawList* dl, const ImVec2& size) {
+    dl->PushClipRect(ImVec2(0.0f, 0.0f), size, false);
+    return {dl->VtxBuffer.Size, dl->CmdBuffer.Size - 1};
+}
+
+void HudRenderer::endArea(ImDrawList* dl, const AreaMark& mark, const ImVec2& origin) {
+    if (origin.x != 0.0f || origin.y != 0.0f) {
+        for (int v = mark.vtx; v < dl->VtxBuffer.Size; ++v) {
+            dl->VtxBuffer[v].pos.x += origin.x;
+            dl->VtxBuffer[v].pos.y += origin.y;
+        }
+        // Comandos abertos desde beginArea (o recorte da área): vão junto. Antes
+        // de devolver o recorte, para o comando que ele abre não se mexer.
+        for (int c = std::max(0, mark.cmd); c < dl->CmdBuffer.Size; ++c) {
+            ImVec4& r = dl->CmdBuffer[c].ClipRect;
+            r.x += origin.x;
+            r.y += origin.y;
+            r.z += origin.x;
+            r.w += origin.y;
+        }
+    }
+    dl->PopClipRect();
 }
 
 } // namespace eruption

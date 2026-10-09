@@ -12,6 +12,7 @@
 #include "core/EngineInternal.hpp"
 #include "renderer/PostFormat.hpp"
 #include "game/PlayerController.hpp"
+#include "game/HudRenderer.hpp"
 #include "core/Logger.hpp"
 #include "core/Input.hpp"
 #include "core/JobSystem.hpp"
@@ -2463,7 +2464,11 @@ void Engine::renderImGui() {
 // HUD da aplicação (barras do personagem, minimapa com nome do mapa e hora).
 // Ligado por padrão só nas ferramentas de desenvolvimento; o jogo exportado
 // mostra se o projeto pedir (ui.show_hud / ui.show_minimap).
-void Engine::drawGameHud() {
+void Engine::drawGameHud(ImDrawList* target, ImVec2 origin, ImVec2 size) {
+    if (!target) {
+        target = ImGui::GetBackgroundDrawList();
+        size = ImGui::GetIO().DisplaySize;
+    }
     auto drawStrokeText = [](ImDrawList* dl, ImVec2 pos, const char* text, ImU32 color) {
         dl->AddText(ImVec2(pos.x - 1, pos.y - 1), IM_COL32(0, 0, 0, 255), text);
         dl->AddText(ImVec2(pos.x + 1, pos.y - 1), IM_COL32(0, 0, 0, 255), text);
@@ -2472,14 +2477,16 @@ void Engine::drawGameHud() {
         dl->AddText(pos, color, text);
     };
     // HUD da aplicacao (separada do Control Panel)
-    if (m_playerController && m_showHudBars) m_playerController->renderApplicationHUD();
+    if (m_playerController && m_showHudBars) m_playerController->renderApplicationHUDIn(target, origin, size);
     if (!m_showMinimapHud) return;
+    // O minimapa sai no canto da área e é levado até ela.
+    const HudRenderer::AreaMark mark = HudRenderer::beginArea(target, size);
 
     // Minimap: faz parte da HUD da aplicacao, entao vai no BackgroundDrawList -
     // as janelas de sistema (F1..F12, Control Panel) ficam sempre por cima.
     // Marcadores de jogador/boss tambÃ©m ficam no ForegroundDrawList.
     // Posição/tamanho do frame são controlados pelo CSS (#minimap) quando disponíveis.
-    ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    ImVec2 displaySize = size;
 
     char mapBuf[256] = "";
     if (!m_demoHidePanels && m_currentMap && m_playerController) {
@@ -2499,7 +2506,7 @@ void Engine::drawGameHud() {
         }
     }
 
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    ImDrawList* dl = target;
 
     // Fantasy stone/bronze frame around minimap map only
     ImVec2 bgMin(startPos.x - 6, startPos.y - 6);
@@ -2543,6 +2550,7 @@ void Engine::drawGameHud() {
     // Marcadores do minimapa (jogador/boss) sÃ£o desenhados DEPOIS do mapa para ficarem acima dele
     if (m_playerController && !m_demoHidePanels) m_playerController->renderMinimapMarkers();
 
+    HudRenderer::endArea(target, mark, origin);
 }
 
 } // namespace eruption
