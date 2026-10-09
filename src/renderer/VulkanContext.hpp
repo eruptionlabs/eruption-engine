@@ -145,6 +145,11 @@ public:
 
     // Synchronization helpers
     void immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& fn);
+    // Leva uma imagem recém-criada de UNDEFINED para `layout` já (submit e
+    // espera). Para imagens que entram num descritor antes do primeiro uso:
+    // sem descriptor indexing o validador confere o set inteiro.
+    void transitionNow(VkImage image, VkImageLayout layout, VkImageAspectFlags aspect,
+                       uint32_t mipLevels = 1, uint32_t layers = 1);
     void deferFrameCleanup(std::function<void()>&& fn);
 
     // Image data recovery

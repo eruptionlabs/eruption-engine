@@ -220,6 +220,7 @@ bool IrradianceProbes::bake(TerrainRenderer& terrain, ModelRenderer& models,
                             BindlessDescriptor* bindless,
                             const Vec3& sceneMin, const Vec3& sceneMax) {
     const bool useInst = instPipeline != VK_NULL_HANDLE && instLayout != VK_NULL_HANDLE;
+    if (bindless) bindless->syncNow(); // texturas do mapa já visíveis para o bake
     if (!m_ctx || shadowPipeline == VK_NULL_HANDLE || m_bakePipeline == VK_NULL_HANDLE) return false;
     const auto t0 = std::chrono::steady_clock::now();
     vkDeviceWaitIdle(m_ctx->device());

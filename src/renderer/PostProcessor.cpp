@@ -294,6 +294,7 @@ void PostProcessor::createDescriptors() {
     allocInfo.descriptorPool = m_descriptorPool;
     allocInfo.descriptorSetCount = numSets;
     allocInfo.pSetLayouts = layouts.data();
+    m_writeCache.clear();
     vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, m_descriptorSets.data());
     // Conjuntos novos (init ou resize): os buffers de clima ainda nao foram
     // escritos neles.
@@ -342,7 +343,7 @@ void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, Vk
     addWrite(view3, 3);
 
     if (count > 0) {
-        vkUpdateDescriptorSets(m_ctx->device(), count, writes, 0, nullptr);
+        updateSets(writes, count);
     }
 }
 
@@ -377,7 +378,7 @@ void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, Vk
     addWrite(view4, 8);
 
     if (count > 0) {
-        vkUpdateDescriptorSets(m_ctx->device(), count, writes, 0, nullptr);
+        updateSets(writes, count);
     }
 }
 
@@ -995,7 +996,7 @@ if (!m_ctx) return;
                 m_weatherBufferDSWritten = true;
             }
 
-            if (count > 0) vkUpdateDescriptorSets(m_ctx->device(), count, writes, 0, nullptr);
+            if (count > 0) updateSets(writes, count);
         }
         beginFullscreenPass(cmd, m_weatherView, m_width, m_height);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_weatherPipeline);
@@ -1604,6 +1605,7 @@ void PostProcessor::createLensDropCompute() {
     allocInfo.descriptorPool = m_lensDropComputePool;
     allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts = &m_lensDropComputeLayoutDesc;
+    m_writeCache.clear();
     vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, &m_lensDropComputeSet);
 
     // Bind SSBO to compute descriptor set
@@ -1618,7 +1620,7 @@ void PostProcessor::createLensDropCompute() {
     write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     write.descriptorCount = 1;
     write.pBufferInfo = &bufferInfo;
-    vkUpdateDescriptorSets(m_ctx->device(), 1, &write, 0, nullptr);
+    updateSets(&write, 1);
 
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -1764,7 +1766,7 @@ void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, Vk
     }
 
     if (count > 0) {
-        vkUpdateDescriptorSets(m_ctx->device(), count, writes, 0, nullptr);
+        updateSets(writes, count);
     }
 }
 
@@ -1811,7 +1813,7 @@ void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, Vk
     }
 
     if (count > 0) {
-        vkUpdateDescriptorSets(m_ctx->device(), count, writes, 0, nullptr);
+        updateSets(writes, count);
     }
 }
 
@@ -1882,11 +1884,13 @@ void PostProcessor::createAutoExposure() {
     for (uint32_t i = 0; i < AE_FRAMES; ++i) {
         VkDescriptorSetAllocateInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         ai.descriptorPool = m_lumDescPool; ai.descriptorSetCount = 1; ai.pSetLayouts = &m_lumHistDescLayout;
+        m_writeCache.clear();
         vkAllocateDescriptorSets(device, &ai, &m_lumHistSets[i]);
     }
     {
         VkDescriptorSetAllocateInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         ai.descriptorPool = m_lumDescPool; ai.descriptorSetCount = 1; ai.pSetLayouts = &m_lumAdaptDescLayout;
+        m_writeCache.clear();
         vkAllocateDescriptorSets(device, &ai, &m_lumAdaptSet);
         VkDescriptorBufferInfo hb{m_lumHistBuffer, 0, 256 * sizeof(uint32_t)};
         VkDescriptorBufferInfo eb{m_lumExpBuffer, 0, 2 * sizeof(float)};
@@ -1894,7 +1898,7 @@ void PostProcessor::createAutoExposure() {
         w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; w[0].dstSet = m_lumAdaptSet; w[0].dstBinding = 0;
         w[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[0].descriptorCount = 1; w[0].pBufferInfo = &hb;
         w[1] = w[0]; w[1].dstBinding = 1; w[1].pBufferInfo = &eb;
-        vkUpdateDescriptorSets(device, 2, w, 0, nullptr);
+        updateSets(w, 2);
     }
 
     // Pipelines
@@ -1967,7 +1971,7 @@ void PostProcessor::dispatchAutoExposure(VkCommandBuffer cmd, VkImageView hdrVie
     w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; w[1].dstSet = m_lumHistSets[frameIdx];
     w[1].dstBinding = 1; w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     w[1].descriptorCount = 1; w[1].pBufferInfo = &hb;
-    vkUpdateDescriptorSets(m_ctx->device(), 2, w, 0, nullptr);
+    updateSets(w, 2);
 
     // Guarantee a clean histogram (adaptation clears it each frame, but frame 0
     // starts undefined; the fill is 1KB, negligible).
@@ -2000,6 +2004,36 @@ void PostProcessor::dispatchAutoExposure(VkCommandBuffer cmd, VkImageView hdrVie
                             &m_lumAdaptSet, 0, nullptr);
     vkCmdPushConstants(cmd, m_lumAdaptLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(adaptPush), &adaptPush);
     vkCmdDispatch(cmd, 1, 1, 1);
+}
+
+void PostProcessor::updateSets(const VkWriteDescriptorSet* writes, uint32_t count) {
+    // Muitos sets daqui sao reescritos todo frame com as MESMAS views. Sem
+    // UPDATE_AFTER_BIND (GPU sem descriptor indexing) reescrever um set que o
+    // frame anterior ainda usa e' proibido; e mesmo com ele e' trabalho a toa.
+    // Grava so' o que mudou desde a ultima escrita daquele (set, binding).
+    VkWriteDescriptorSet keep[16];
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const VkWriteDescriptorSet& w = writes[i];
+        if (n == 16) {
+            vkUpdateDescriptorSets(m_ctx->device(), n, keep, 0, nullptr);
+            n = 0;
+        }
+        if (w.descriptorCount != 1 || w.dstArrayElement != 0) {
+            vkUpdateDescriptorSets(m_ctx->device(), 1, &w, 0, nullptr);
+            continue;
+        }
+        WrittenDescriptor d{};
+        if (w.pImageInfo) d = {w.pImageInfo->imageView, w.pImageInfo->sampler, w.pImageInfo->imageLayout, VK_NULL_HANDLE, 0, 0};
+        else if (w.pBufferInfo) d = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED, w.pBufferInfo->buffer,
+                                     w.pBufferInfo->offset, w.pBufferInfo->range};
+        const auto key = std::make_pair(w.dstSet, w.dstBinding);
+        auto it = m_writeCache.find(key);
+        if (it != m_writeCache.end() && it->second == d) continue;
+        m_writeCache[key] = d;
+        keep[n++] = w;
+    }
+    if (n) vkUpdateDescriptorSets(m_ctx->device(), n, keep, 0, nullptr);
 }
 
 } // namespace eruption

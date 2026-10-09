@@ -519,6 +519,9 @@ uint32_t SpriteRenderer::addPalette(const uint8_t* rgba256) {
         return 0;
     }
 
+    // Legível desde já: o conteúdo chega no próximo flushUploads, mas telas de
+    // carregamento podem desenhar antes com o array de texturas ligado.
+    m_ctx->transitionNow(pal.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
     pal.bindlessSlot = m_bindless->allocateSlot();
     m_bindless->updateTexture(pal.bindlessSlot, pal.view, m_paletteSampler);
     m_bindless->flushUpdates();

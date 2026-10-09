@@ -385,6 +385,8 @@ void Engine::render() {
 
     VkCommandBuffer cmd = m_vulkan.currentCmdBuf();
     uint32_t imageIndex = m_vulkan.currentImageIndex();
+    // Paletas novas de sprite (cópia + transição) antes de qualquer passe.
+    m_spriteRenderer.flushUploads(cmd);
 
     // ERUPTION_TEST_CPU_MARKS=1 (debug): collect the per-stage CPU timings in any
     // run, not just the benchmark modes, so a plain --screenshot capture can

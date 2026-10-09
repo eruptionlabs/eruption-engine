@@ -2,6 +2,7 @@
 
 #include "renderer/VulkanContext.hpp"
 
+#include <unordered_map>
 #include <vector>
 #include <cstdint>
 #include <mutex>
@@ -44,6 +45,11 @@ public:
     void freeSlotSafe(uint32_t slot);
     void updateTextureSafe(uint32_t slot, VkImageView view, VkSampler sampler);
     void flushUpdatesSafe();
+    // Para trabalho gravado fora do laço de frames (bakes do carregamento):
+    // no caminho de array fixo, espera a GPU e aplica as escritas pendentes em
+    // todos os sets, senão o bake vê a textura padrão no lugar das novas.
+    // Não chamar com um frame sendo gravado.
+    void syncNow();
     // Diagnostico: slots em uso e marca d'agua (o maior indice ja' entregue).
     // Se highWater encosta em MAX_BINDLESS_TEXTURES e usedSlots nao cai entre
     // cargas de mapa, alguem esta' vazando slot (ver MapLoad.cpp).
@@ -89,7 +95,9 @@ private:
     bool m_fixed = false;
     uint32_t m_slotCount = MAX_BINDLESS_TEXTURES;
     VkDescriptorSet m_frameSets[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
-    std::vector<PendingUpdate> m_framePending[VulkanContext::MAX_FRAMES_IN_FLIGHT];
+    // Só a última escrita de cada slot: uma view intermediária pode já ter sido
+    // destruída quando o frame do set chegar (slot liberado ou reaproveitado).
+    std::unordered_map<uint32_t, PendingUpdate> m_framePending[VulkanContext::MAX_FRAMES_IN_FLIGHT];
     void writeSet(VkDescriptorSet set, const std::vector<PendingUpdate>& updates);
     void onFrameBegin(uint32_t frame);
 
