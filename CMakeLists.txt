@@ -11,6 +11,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
 option(ERUPTION_BUILD_TESTS "Build tests" OFF)
 option(ERUPTION_BUILD_TOOLS "Build tools" OFF)
 option(ERUPTION_DEBUG "Debug build with validation layers" ON)
+# Exportação do jogo (File > Export Game): sem o editor e com o binário enxuto.
+option(ERUPTION_EDITOR "Build the editor into the executable" ON)
+option(ERUPTION_LEAN "Size-optimized game build: LTO, dead code removal, no symbols" OFF)
 
 # Demo map (release asset, downloaded on first configure if missing)
 include(${CMAKE_SOURCE_DIR}/cmake/DemoMap.cmake)
@@ -403,7 +406,12 @@ endif()
 # de build offline, copiado do proprio exemplo do tinygltf que ja' estava
 # em _deps - mesma origem, sem dependencia nova pra baixar.
 # Editor de texto com cor de sintaxe para o painel de codigo do editor.
-list(APPEND SOURCES "${CMAKE_SOURCE_DIR}/third_party/ImGuiColorTextEdit/TextEditor.cpp")
+if(ERUPTION_EDITOR)
+    list(APPEND SOURCES "${CMAKE_SOURCE_DIR}/third_party/ImGuiColorTextEdit/TextEditor.cpp")
+else()
+    # Jogo exportado: o codigo do editor fica de fora (o Editor.hpp vira um stub).
+    list(FILTER SOURCES EXCLUDE REGEX "/src/editor/")
+endif()
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/ImGuizmo/ImGuizmo.h")
     list(APPEND SOURCES "${CMAKE_SOURCE_DIR}/third_party/ImGuizmo/ImGuizmo.cpp")
@@ -470,12 +478,34 @@ set(IMGUI_SOURCES
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
 )
+# O backend GLFW declara tipos Vulkan proprios quando o header do Vulkan nao
+# veio antes; com LTO isso e' violacao de ODR. Com o header, usa os de verdade.
+set_source_files_properties(${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp PROPERTIES COMPILE_DEFINITIONS GLFW_INCLUDE_VULKAN)
 
 
 # Main executable
 add_executable(eruption-engine ${SOURCES} ${IMGUI_SOURCES} ${ICONS_HEADER})
 add_dependencies(eruption-engine generate_icons)
 target_compile_definitions(eruption-engine PRIVATE ERUPTION_FALLBACK_TEX_SLOTS=${ERUPTION_FALLBACK_TEX_SLOTS})
+if(ERUPTION_EDITOR)
+    target_compile_definitions(eruption-engine PRIVATE ERUPTION_EDITOR=1)
+else()
+    target_compile_definitions(eruption-engine PRIVATE ERUPTION_EDITOR=0)
+    # O binario exportado fica na pasta do build (nao sobrescreve o do editor).
+    set_target_properties(eruption-engine PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+endif()
+if(ERUPTION_LEAN)
+    # Binario do jogo exportado: funcoes e dados em secoes proprias para o
+    # linker jogar fora o que ninguem usa, otimizacao entre arquivos e sem simbolos.
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT ERUPTION_IPO OUTPUT ERUPTION_IPO_MSG)
+    if(ERUPTION_IPO)
+        set_target_properties(eruption-engine PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
+    endif()
+    target_compile_options(eruption-engine PRIVATE -ffunction-sections -fdata-sections)
+    # -flto=auto: a etapa final do LTO em paralelo (sem ela o GCC avisa e roda em serie).
+    target_link_options(eruption-engine PRIVATE -Wl,--gc-sections -s -flto=auto)
+endif()
 if(ERUPTION_HAVE_BC_ENCODER)
     target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_BC_ENCODER=1)
 endif()

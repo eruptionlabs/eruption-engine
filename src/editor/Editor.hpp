@@ -1,17 +1,40 @@
 #pragma once
 
+#if !ERUPTION_EDITOR
+// Jogo exportado sem o editor (ERUPTION_EDITOR=OFF no CMake): mesma interface
+// que o aplicativo usa, sem nada dentro. Nunca é criado (sem editor o modo é
+// sempre jogo); existe só para o código de fora não precisar de #if.
+namespace eruption {
+class Engine;
+class ScriptHost;
+class Editor {
+public:
+    bool init(Engine&) { return false; }
+    void shutdown() {}
+    void update(float) {}
+    void drawUI() {}
+    bool gameRunning() const { return true; }
+    void consumeStep() {}
+    bool inPlayMode() const { return true; }
+    void setScriptHost(ScriptHost*) {}
+};
+} // namespace eruption
+#else
+
 #include "editor/EditorCommands.hpp"
 #include "editor/RuleSheet.hpp"
 #include "scene/SceneEdits.hpp"
 #include "formats/SpriteSheet.hpp"
 #include "editor/RemoteServer.hpp"
 #include "editor/AiClient.hpp"
+#include "editor/GameExport.hpp"
 #include "editor/UndoStack.hpp"
 #include "core/Logger.hpp"
 #include "renderer/DeferredLighting.hpp"
 #include "math/Types.hpp"
 #include "renderer/VulkanContext.hpp"
 
+#include <atomic>
 #include <deque>
 #include <memory>
 #include <filesystem>
@@ -282,6 +305,18 @@ private:
     } m_ai;
     void drawAiWindow();
     std::string m_pendingAiMessage; // teste
+    // Exportação do jogo (EditorExport.cpp)
+    bool m_showExport = false;
+    struct ExportState {
+        std::vector<std::pair<std::string, bool>> maps;
+        char outDir[512] = {};
+        std::atomic<bool> running{false}, building{false};
+        std::string status, buildStatus;
+    } m_export;
+    std::mutex m_exportMutex;
+    void drawExportWindow();
+    void startExport();
+    void buildLeanBinary();
     struct TerrainBrush {
         int mode = 0; // 0 subir/baixar, 1 suavizar, 2 aplainar
         bool paint = false; // aba Paint: pinta camadas em vez de esculpir
@@ -433,3 +468,5 @@ private:
 };
 
 } // namespace eruption
+
+#endif // ERUPTION_EDITOR

@@ -186,6 +186,8 @@ void Editor::registerCommands() {
     add("file.reload_scene", "File", "Reload Scene", {}, [this] { reloadSceneFile(); },
         "Discards unsaved changes and loads assets/scenes/<map>.scene.luau again.")
         .enabled = [this] { return !m_engine->currentMapName().empty() && m_play == PlayState::Editing; };
+    add("file.export", "File", "Export Game...", {}, [this] { m_showExport = true; },
+        "Copies the maps and only what they use into a folder that runs on its own.");
     add("file.open_vscode", "File", "Open Project in VS Code", {}, [this] {
         openInExternalEditor(m_projectRoot);
     }, "Opens the project folder in Visual Studio Code (or the system default).");
@@ -592,6 +594,23 @@ void Editor::update(float dt) {
         m_engine->setWaterLevel(true, float(std::atof(testWater)));
         m_envEdited = m_waterEdited = true;
     }
+    // ERUPTION_TEST_EDITOR_EXPORT=<mapa>:<pasta>: exporta o mapa (síncrono).
+    static const char* testExport = std::getenv("ERUPTION_TEST_EDITOR_EXPORT");
+    if (testExport && m_frame == 100) {
+        const std::string spec = testExport;
+        ExportOptions o;
+        o.projectRoot = m_projectRoot;
+        o.maps = {spec.substr(0, spec.find(':'))};
+        o.outDir = spec.substr(spec.find(':') + 1);
+        std::error_code ec;
+        o.binary = std::filesystem::exists(m_projectRoot / "build-export" / "eruption-engine", ec)
+                       ? m_projectRoot / "build-export" / "eruption-engine"
+                       : m_projectRoot / "eruption-engine";
+        const ExportReport r = exportGame(o);
+        ERUPTION_LOG_WARN("[EXPORT] files=%zu bytes=%llu missing=%zu error=%s", r.files,
+                          static_cast<unsigned long long>(r.bytes), r.missing.size(), r.error.c_str());
+        for (const auto& m : r.missing) ERUPTION_LOG_WARN("[EXPORT] missing %s", m.c_str());
+    }
     // ERUPTION_TEST_EDITOR_AI=<chave>|<mensagem>: abre o assistente e envia
     // (teste do caminho do pedido; com chave falsa a API só recusa, sem custo).
     static const char* testAi = std::getenv("ERUPTION_TEST_EDITOR_AI");
@@ -807,6 +826,7 @@ void Editor::drawUI() {
     drawSpriteImporter();
     drawRemoteWindow();
     drawAiWindow();
+    drawExportWindow();
 
     if (m_focusScene) {
         m_pendingFocus.insert(m_pendingFocus.begin(), kWinScene);
@@ -838,6 +858,7 @@ void Editor::drawMenuBar() {
             ImGui::EndMenu();
         }
         ImGui::Separator();
+        m_commands.menuItem("file.export");
         m_commands.menuItem("file.open_vscode");
         ImGui::Separator();
         m_commands.menuItem("file.quit");

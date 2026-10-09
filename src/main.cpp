@@ -19,6 +19,11 @@ namespace eruption {
 // rodam como jogo para os roteiros existentes continuarem iguais.
 // --editor forca o editor mesmo nesses casos.
 static bool wantsEditor(int argc, char** argv) {
+#if !ERUPTION_EDITOR
+    (void)argc;
+    (void)argv;
+    return false; // jogo exportado: sem editor
+#endif
     bool automated = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
