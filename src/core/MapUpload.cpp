@@ -961,6 +961,7 @@ void Engine::performMapSwap() {
     // ModelRenderer
     resetWorld(); // vizinhos do mapa anterior
     clearAreas();
+    clearSoundEmitters();
     m_solid.clear();
     m_modelRenderer.clear();
     m_modelRenderer.m_lastModels = std::move(m_activeMapContext->modelAssets);

@@ -278,6 +278,7 @@ void DefaultApplication::onUpdate(float deltaTime) {
                 ERUPTION_LOG_WARN("Scene edits: %d change(s) applied to %s", edits.apply(*m_engine), m_sceneEditsMap.c_str());
             m_engine->loadScatter(m_sceneEditsMap); // objetos espalhados pelo pincel
             m_engine->startWorld();                 // mapas vizinhos (mundo contínuo)
+            m_engine->setSoundEmittersActive(true); // sons da cena tocam com o jogo
             if (m_hasMapSpawn && m_player) {
                 m_hasMapSpawn = false;
                 const Vec3 p(m_mapSpawn.x, m_engine->sampleTerrainHeight(m_mapSpawn.x, m_mapSpawn.z), m_mapSpawn.z);

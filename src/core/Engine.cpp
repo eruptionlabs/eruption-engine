@@ -1076,6 +1076,7 @@ float Engine::advanceFrame() {
 
     processBackgroundLoading();
     updateWorld(); // vizinhos do mundo contínuo entram e saem
+    updateSoundEmitters();
     m_audio.update(m_camera.position(), m_camera.forward(), m_camera.up()); // ouvinte na câmera
 
     m_timer.tick();

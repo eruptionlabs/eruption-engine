@@ -291,6 +291,13 @@ public:
         // Animação extra tocando (do sprite v3); vazia = parado/andando.
         std::string action;
         bool actionLoop = false;
+        // Comportamento: seguir o jogador ou patrulhar pontos (só com o jogo rodando).
+        enum class Behavior { None, Follow, Patrol } behavior = Behavior::None;
+        float followDistance = 30.0f;
+        std::vector<Vec3> patrol;
+        size_t patrolNext = 0;
+        float patrolWait = 0.0f, waitLeft = 0.0f, repath = 0.0f;
+        Vec3 followTarget{0.0f};
     };
     struct TextureStats {
         size_t totalTextures = 0;
@@ -468,6 +475,9 @@ public:
     bool playPlayerAction(const std::string& name, bool loop);
     bool playCharacterAction(int index, const std::string& name, bool loop);
     const std::string& playerAction() const { return m_playerAction; }
+    void followPlayer(int index, float distance);
+    void patrolCharacter(int index, const std::vector<Vec3>& points, float waitSeconds);
+    void stopCharacter(int index);
     void drawSpeechBubbles(float x, float y, float w, float h, float dt);
     void clearCharacters(bool keepNeighbors = false);
     // Anda quem tem caminho (só com o jogo rodando) e envia os sprites.
@@ -561,6 +571,21 @@ public:
         bool contains(const Vec3& p) const;
     };
     std::vector<TriggerArea>& areas() { return m_areas; }
+    // Emissor de som: um som em laço num ponto (cachoeira, fogueira, taverna).
+    // Toca com o jogo rodando, só perto do ouvinte (alcance).
+    struct SoundEmitter {
+        std::string name, file;
+        Vec3 position{0.0f};
+        float volume = 1.0f, range = 200.0f;
+        bool removed = false, fromNeighbor = false, parked = false;
+        uint32_t playing = 0; // som tocando agora (AudioSystem)
+    };
+    std::vector<SoundEmitter>& soundEmitters() { return m_soundEmitters; }
+    int addSoundEmitter(const std::string& name, const std::string& file, const Vec3& position, float volume, float range);
+    int findSoundEmitter(const std::string& name) const;
+    void clearSoundEmitters(bool keepNeighbors = false);
+    // Ligado no jogo e no Play do editor; desligado, os emissores param.
+    void setSoundEmittersActive(bool on) { m_soundEmittersActive = on; }
     int addArea(const std::string& name, const Vec3& center, const Vec3& size, float yawDeg);
     int findArea(const std::string& name) const;
     void clearAreas(bool keepNeighbors = false);
@@ -1366,6 +1391,7 @@ private:
         std::vector<PointLight> lights;
         std::vector<std::string> characters;
         std::vector<std::string> areas;
+        std::vector<std::string> sounds;
         bool hasWater = false;
         float waterLevel = 0.0f;
         TextureResource splatMask[2];
@@ -1376,6 +1402,9 @@ private:
     };
     std::vector<WorldRegion> m_regions;
     std::vector<TriggerArea> m_areas;
+    std::vector<SoundEmitter> m_soundEmitters;
+    bool m_soundEmittersActive = false;
+    void updateSoundEmitters();
     AudioSystem m_audio;
     std::string m_playerSay;
     float m_playerSayTime = 0.0f;

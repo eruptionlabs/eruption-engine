@@ -161,6 +161,7 @@ bool Engine::loadMap(const std::string& name) {
     clearScatter();
     resetWorld(); // vizinhos do mapa anterior
     clearAreas();
+    clearSoundEmitters();
     m_solid.clear();
 
     // GERACAO DO CACHE DE ASSET. Ate 2026-09-05 so' o warp (performMapSwap)

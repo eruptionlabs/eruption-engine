@@ -92,6 +92,35 @@ void Engine::clearCharacters(bool keepNeighbors) {
 }
 
 void Engine::updateCharacters(float dt, bool moveAlongPaths) {
+    for (size_t i = 0; i < m_characters.size(); ++i) {
+        SceneCharacter& c = m_characters[i];
+        if (c.parked || c.removed || !moveAlongPaths) continue;
+        if (c.behavior == SceneCharacter::Behavior::Follow && m_playerController) {
+            // Refaz o caminho de vez em quando, se o jogador se afastou.
+            const Vec3 p = m_playerController->pos();
+            const float dist = glm::length(Vec2(p.x - c.position.x, p.z - c.position.z));
+            c.repath -= dt;
+            if (dist <= c.followDistance) {
+                if (c.walking) c.walking = false;
+                c.facing = glm::degrees(std::atan2(p.x - c.position.x, p.z - c.position.z));
+            } else if (c.repath <= 0.0f && (!c.walking || glm::length(p - c.followTarget) > 15.0f)) {
+                const Vec3 to = p + glm::normalize(Vec3(c.position.x - p.x, 0.0f, c.position.z - p.z) + Vec3(1e-4f)) *
+                                        (c.followDistance * 0.8f);
+                c.followTarget = p;
+                walkCharacter(static_cast<int>(i), to, 0.0f);
+                c.speed = std::max(c.speed, 70.0f); // alcança o passo do jogador
+                c.repath = 0.4f;
+            }
+        } else if (c.behavior == SceneCharacter::Behavior::Patrol && !c.patrol.empty() && !c.walking) {
+            if (c.waitLeft > 0.0f) {
+                c.waitLeft -= dt;
+            } else {
+                walkCharacter(static_cast<int>(i), c.patrol[c.patrolNext % c.patrol.size()], 0.0f);
+                c.patrolNext = (c.patrolNext + 1) % c.patrol.size();
+                c.waitLeft = c.patrolWait;
+            }
+        }
+    }
     for (auto& c : m_characters) {
         if (c.parked) continue;
         if (moveAlongPaths && c.walking) {
@@ -218,6 +247,33 @@ void Engine::drawSpeechBubbles(float x, float y, float w, float h, float dt) {
             bubble(c.position + Vec3(0.0f, 30.0f, 0.0f), c.say, c.sayTime);
     if (m_playerSayTime > 0.0f && m_playerController)
         bubble(m_playerController->pos() + Vec3(0.0f, 30.0f, 0.0f), m_playerSay, m_playerSayTime);
+}
+
+void Engine::followPlayer(int index, float distance) {
+    if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
+    SceneCharacter& c = m_characters[static_cast<size_t>(index)];
+    c.behavior = SceneCharacter::Behavior::Follow;
+    c.followDistance = std::max(5.0f, distance);
+    c.repath = 0.0f;
+}
+
+void Engine::patrolCharacter(int index, const std::vector<Vec3>& points, float waitSeconds) {
+    if (index < 0 || index >= static_cast<int>(m_characters.size()) || points.empty()) return;
+    SceneCharacter& c = m_characters[static_cast<size_t>(index)];
+    c.behavior = SceneCharacter::Behavior::Patrol;
+    c.patrol = points;
+    c.patrolNext = 0;
+    c.patrolWait = std::max(0.0f, waitSeconds);
+    c.waitLeft = 0.0f;
+    c.walking = false;
+}
+
+void Engine::stopCharacter(int index) {
+    if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
+    SceneCharacter& c = m_characters[static_cast<size_t>(index)];
+    c.behavior = SceneCharacter::Behavior::None;
+    c.walking = false;
+    c.patrol.clear();
 }
 
 bool Engine::playPlayerAction(const std::string& name, bool loop) {

@@ -97,6 +97,12 @@ declare characters: {
     play: (name: string, animation: string, loop: boolean?) -> boolean,
     -- Extra animation playing now ("" when standing or walking).
     animation: (name: string) -> string,
+    -- Follows the player, stopping `distance` away (default 30).
+    follow: (name: string, distance: number?) -> (),
+    -- Walks between the points in a loop, waiting `wait` seconds at each (default 1).
+    patrol: (name: string, points: {vector}, wait: number?) -> (),
+    -- Stops walking, following and patrolling.
+    stop: (name: string) -> (),
     walking: (name: string) -> boolean,
     face: (name: string, degrees: number) -> (),
     show: (name: string) -> (),

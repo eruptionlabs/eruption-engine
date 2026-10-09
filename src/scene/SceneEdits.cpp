@@ -301,6 +301,26 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
     }
     lua_pop(L, 1);
 
+    lua_getfield(L, root, "sounds");
+    if (lua_istable(L, -1)) {
+        const int n = lua_objlen(L, -1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            const int t = lua_gettop(L);
+            if (lua_istable(L, t)) {
+                Sound snd;
+                snd.name = readStr(L, t, "name");
+                snd.file = readStr(L, t, "file");
+                readVec(L, t, "position", snd.position);
+                snd.volume = readNum(L, t, "volume", 1.0f);
+                snd.range = readNum(L, t, "range", 200.0f);
+                if (!snd.name.empty()) sounds.push_back(std::move(snd));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+
     lua_getfield(L, root, "neighbors");
     if (lua_istable(L, -1)) {
         const int n = lua_objlen(L, -1);
@@ -411,6 +431,13 @@ std::string SceneEdits::serialize(const std::string& map) const {
               << ", rotation = " << num(a.rotation) << " },\n";
         o << "    },\n";
     }
+    if (!sounds.empty()) {
+        o << "    sounds = {\n";
+        for (const auto& snd : sounds)
+            o << "        { name = " << quoted(snd.name) << ", file = " << quoted(snd.file) << ", position = "
+              << vec(snd.position) << ", volume = " << num(snd.volume) << ", range = " << num(snd.range) << " },\n";
+        o << "    },\n";
+    }
     if (!neighbors.empty()) {
         o << "    neighbors = {\n";
         for (const auto& nb : neighbors)
@@ -462,6 +489,11 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
     for (const auto& a : areas) {
         if (engine.findArea(a.name) >= 0) continue;
         engine.addArea(a.name, a.position, a.size, a.rotation);
+        ++applied;
+    }
+    for (const auto& snd : sounds) {
+        if (engine.findSoundEmitter(snd.name) >= 0) continue;
+        engine.addSoundEmitter(snd.name, snd.file, snd.position, snd.volume, snd.range);
         ++applied;
     }
     for (const auto& c : copies) {

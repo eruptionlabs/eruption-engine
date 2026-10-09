@@ -35,6 +35,7 @@ class Engine;
 //       terrain = { layers = { "assets/textures/grama.png", ... } },  -- camadas pintáveis
 //       neighbors = { { map = "floresta", offset = {1000, 0, 0} } },  -- mundo contínuo
 //       areas = { { name = "porta", position = {x, y, z}, size = {40, 30, 40}, rotation = 0 } },  -- gatilhos
+//       sounds = { { name = "cachoeira", file = "assets/sounds/agua.ogg", position = {...}, volume = 1, range = 200 } },
 //
 // Luzes com índice além das do mapa são luzes novas, criadas no editor.
 //   }
@@ -119,6 +120,13 @@ struct SceneEdits {
         float rotation = 0.0f;
     };
     std::vector<Area> areas;
+    // Emissor de som em laço num ponto.
+    struct Sound {
+        std::string name, file;
+        Vec3 position{0.0f};
+        float volume = 1.0f, range = 200.0f;
+    };
+    std::vector<Sound> sounds;
     bool hasEnvironment = false;
     float time = 12.0f;
     bool paused = false;
@@ -126,7 +134,7 @@ struct SceneEdits {
 
     bool empty() const {
         return added.empty() && objects.empty() && copies.empty() && lights.empty() && characters.empty() &&
-               !hasEnvironment && !hasSpawn && terrainLayers.empty() && !hasWater && neighbors.empty() && areas.empty();
+               !hasEnvironment && !hasSpawn && terrainLayers.empty() && !hasWater && neighbors.empty() && areas.empty() && sounds.empty();
     }
 
     static std::filesystem::path pathFor(const std::string& map);
