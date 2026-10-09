@@ -381,6 +381,7 @@ public:
     // Ferramentas de desenvolvimento no jogo (painéis F1..F12, console, câmera
     // livre): ligadas no build com editor; no jogo exportado só com ERUPTION_DEV=1.
     bool devTools() const { return m_devTools; }
+    bool hasEditor() const { return m_editor != nullptr; }
     // HUD de exemplo (barras do personagem) e minimapa: o jogo exportado só
     // mostra se o projeto pedir (ui.show_hud / ui.show_minimap).
     void setHudBars(bool on) { m_showHudBars = on; m_showGameHud = m_showHudBars || m_showMinimapHud; }

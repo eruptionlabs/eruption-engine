@@ -115,7 +115,8 @@ void PlayerController::updateWater(float dt) {
     }
 }
 void PlayerController::updateConfigs(float /*dt*/) {
-    if (!m_engine->devTools() || !Input::isKeyPressed(Key::F5)) return;
+    // No editor o F5 é do editor (Play); as configurações recarregam pelo menu.
+    if (!m_engine->devTools() || m_engine->hasEditor() || !Input::isKeyPressed(Key::F5)) return;
     bool anyReloaded = false;
     if (m_engine->shadowConfig().reloadIfModified()) {
         auto& shadowSettings = m_engine->shadowRenderer().settings();
@@ -179,7 +180,8 @@ void PlayerController::updateUI(float dt) {
     bool captureMouse = io.WantCaptureMouse;
     bool captureKeyboard = io.WantCaptureKeyboard;
     // Teclas de desenvolvimento: fora do jogo exportado (ERUPTION_DEV=1 traz de volta).
-    if (!captureKeyboard && m_engine->devTools()) {
+    // No Play do editor as teclas F são do editor (F5 Play, F6 Pause, F10 Step).
+    if (!captureKeyboard && m_engine->devTools() && !m_engine->hasEditor()) {
         if (Input::isKeyPressed(Key::F1)) m_engine->showObjectMenu() = !m_engine->showObjectMenu();
         if (Input::isKeyPressed(Key::F2)) m_engine->showEffectsMenu() = !m_engine->showEffectsMenu();
         if (Input::isKeyPressed(Key::F3)) m_engine->showStatsMenu() = !m_engine->showStatsMenu();
@@ -363,7 +365,7 @@ void PlayerController::updateCamera(float dt, bool captureMouse, bool captureKey
         }
     }
     // Visão tática (F7) e câmera livre (espaço): ferramentas de desenvolvimento.
-    if (!m_engine->showConsole() && !ImGui::GetIO().WantTextInput && m_engine->devTools()) {
+    if (!m_engine->showConsole() && !ImGui::GetIO().WantTextInput && m_engine->devTools() && !m_engine->hasEditor()) {
         if (Input::isKeyPressed(Key::F7)) {
             m_tacticalView = !m_tacticalView;
             if (m_tacticalView) {
