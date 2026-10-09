@@ -17,6 +17,9 @@ namespace eruption {
 //     u32 delayMs, u32 frameCount; por quadro:
 //       u32 spriteCount; por sprite: u32 image, i32 offX, i32 offY,
 //                                    f32 scaleX, f32 scaleY, f32 r, g, b, a, u32 flags (bit 0 = espelhado)
+// Versão 3 (com animações extras) acrescenta no fim:
+//   u32 namedCount; por nome: u16 len, char name[len], u32 firstAction, u32 loop
+//   (8 ações a partir de firstAction, uma por direção)
 //
 // Ações na ordem que o motor usa: 8 direções por estado (0-7 parado,
 // 8-15 andando), vistas pela câmera: 0 de frente, 1 frente-direita,
@@ -41,6 +44,13 @@ struct SpriteSheetSpec {
     };
     Anim idle{0, 0, 1, 300, true};
     Anim walk{0, 0, 4, 150, true};
+    // Animações extras com nome (atacar, pular, sentar...): scripts e regras tocam.
+    struct NamedAnim {
+        std::string name;
+        Anim anim;
+        bool loop = false; // falso: toca uma vez e volta ao parado
+    };
+    std::vector<NamedAnim> extra;
     float worldHeight = 25.0f; // altura do quadro (sem o vão do pé) no mundo
     int footOffset = 0;        // pixels transparentes abaixo do pé (cortados de cada quadro)
 };
@@ -53,7 +63,9 @@ struct SpriteSheetResult {
     int sheetW = 0, sheetH = 0, strideH = 0;    // folha e altura da célula antes do corte do pé
     struct Frame { uint32_t image; bool mirror; };
     struct Action { uint32_t delayMs; std::vector<Frame> frames; };
-    std::vector<Action> actions; // 16: parado 0-7, andando 8-15
+    std::vector<Action> actions; // 16: parado 0-7, andando 8-15; depois 8 por animação extra
+    struct Named { std::string name; uint32_t firstAction; bool loop; };
+    std::vector<Named> named;
     float scale = 1.0f;
 };
 

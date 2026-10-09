@@ -350,7 +350,7 @@ bool Engine::loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out) 
     }
 
     uint32_t version = readU32();
-    if (version == 2) return loadEruptSprV2(f, path, out);
+    if (version == 2 || version == 3) return loadEruptSprV2(f, path, out, version);
     if (version != 1) {
         ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: unsupported version %u in %s", version, path.c_str());
         return false;
@@ -445,7 +445,7 @@ bool Engine::loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out) 
     return true;
 }
 
-bool Engine::loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out) {
+bool Engine::loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out, uint32_t version) {
     auto u32 = [&]() { uint32_t v = 0; f.read(reinterpret_cast<char*>(&v), 4); return v; };
     auto i32 = [&]() { int32_t v = 0; f.read(reinterpret_cast<char*>(&v), 4); return v; };
     auto f32 = [&]() { float v = 0; f.read(reinterpret_cast<char*>(&v), 4); return v; };
@@ -532,6 +532,19 @@ bool Engine::loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSpr
         ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: truncated file %s", path.c_str());
         cleanupSpriteTextures(out);
         return false;
+    }
+    out.named.clear();
+    if (version >= 3) {
+        // Animações extras: nome -> primeira das 8 ações (uma por direção).
+        const uint32_t count = u32();
+        for (uint32_t i = 0; i < count && i < 256 && f; ++i) {
+            uint16_t len = 0;
+            f.read(reinterpret_cast<char*>(&len), 2);
+            std::string name(len, '\0');
+            f.read(name.data(), len);
+            const uint32_t first = u32(), loop = u32();
+            if (f && first + 8 <= anim.actions.size()) out.named.push_back({name, first, loop != 0});
+        }
     }
     out.act = std::move(anim);
     out.indexedTextureCount = 0;
@@ -699,7 +712,17 @@ void Engine::renderSpritePart(LoadedSprite& ls, uint32_t paletteSlot, int& frame
     // Most source sprites have 8 directions per state. 
     // Action 0-7: Idle, 8-15: Walk, 16-23: Attack1, 24-31: Hurt, 32-39: ReadyFight, etc.
     int actionIdx = direction; 
-    if (m_playerController->tacticalView()) {
+    // Animação extra pedida pelo jogo (sprite v3): por cima de parado e andar.
+    const LoadedSprite::Named* named = isBody && !m_playerAction.empty() ? ls.findNamed(m_playerAction) : nullptr;
+    if (isBody && !m_playerAction.empty() && !named) m_playerAction.clear();
+    if (named) {
+        if (m_playerActionStarted) {
+            frameIdx = 0;
+            timer = 0.0f;
+            m_playerActionStarted = false;
+        }
+        actionIdx = static_cast<int>(named->first) + direction;
+    } else if (m_playerController->tacticalView()) {
         // Tactical view: use ReadyFight (stance with weapon ready) instead of plain idle
         actionIdx = 4 * 8 + direction; // READYFIGHT = action 4
     } else if (m_playerController->isMoving()) {
@@ -734,6 +757,11 @@ void Engine::renderSpritePart(LoadedSprite& ls, uint32_t paletteSlot, int& frame
         bool isWalkAction = (actionIdx >= 8 && actionIdx <= 15);
         if (isBody || m_playerController->isMoving() || isWalkAction) {
             frameIdx = (frameIdx + 1) % action.frames.size();
+            // Uma vez só: terminou ao voltar ao primeiro quadro.
+            if (named && frameIdx == 0 && !m_playerActionLoop) {
+                m_playerAction.clear();
+                frameIdx = static_cast<int>(action.frames.size()) - 1;
+            }
         } else {
             // Head/hair frames are directions (Straight, Left, Right), not animation frames while idle
             frameIdx = 0; 
