@@ -85,13 +85,29 @@ static float sampleGlbOrTerrainHeight(const LoadedMap& map, float x, float z) {
 
 
 float Engine::sampleTerrainHeight(float x, float z) const {
-    if (!m_currentMap) return 0.0f;
-    return sampleGlbOrTerrainHeight(*m_currentMap, x, z);
+    const LoadedMap* map = mapAt(x, z); // o aberto ou um vizinho em cena
+    if (!map) return 0.0f;
+    return sampleGlbOrTerrainHeight(*map, x, z);
 }
 
 bool Engine::raycastTerrain(const Vec3& origin, const Vec3& dir, float maxT, float& hitT) const {
-    if (!m_currentMap || !m_currentMap->terrainFromFile) return false;
-    const TerrainFile& ter = m_currentMap->terrain;
+    if (!m_currentMap) return false;
+    // O chão mais perto entre o mapa aberto e os vizinhos em cena.
+    bool hit = false;
+    auto test = [&](const TerrainFile& ter) {
+        float t = 0.0f;
+        if (raycastGrid(ter, origin, dir, hit ? hitT : maxT, t) && (!hit || t < hitT)) {
+            hitT = t;
+            hit = true;
+        }
+    };
+    if (m_currentMap->terrainFromFile) test(m_currentMap->terrain);
+    for (const auto& r : m_regions)
+        if (r.state == WorldRegion::State::Shown && r.data) test(r.data->terrain);
+    return hit;
+}
+
+bool Engine::raycastGrid(const TerrainFile& ter, const Vec3& origin, const Vec3& dir, float maxT, float& hitT) {
     // Passo de meia célula: não atravessa morro fino; bisseção refina o cruzamento.
     const float step = std::max(0.5f, ter.scale * 0.5f);
     auto above = [&](float t) {
@@ -143,6 +159,7 @@ bool Engine::loadMap(const std::string& name) {
     clearPlayerStart();
     endSplatEditing();
     clearScatter();
+    resetWorld(); // vizinhos do mapa anterior
 
     // GERACAO DO CACHE DE ASSET. Ate 2026-09-05 so' o warp (performMapSwap)
     // avancava a geracao e expulsava textura/malha velha do GlobalAssetCache;
@@ -401,7 +418,8 @@ bool Engine::loadMap(const std::string& name) {
     // Cópia do chão na CPU: pincel do editor, ou pintura salva que o jogo
     // aplica nos vértices (mapas sem splat próprio).
     m_modelRenderer.setKeepGroundVertices(m_editorMode || hasSavedSplat(name) ||
-                                          SceneEdits::fileMentions(name, "terrain"));
+                                          SceneEdits::fileMentions(name, "terrain") ||
+                                          SceneEdits::fileMentions(name, "neighbors")); // bordas costuradas
     m_modelRenderer.loadMapModels(genericModels, genericInstances, modelCenterX, modelCenterZ);
     eruption::clearPbrTextureDataPrewarm(); // free any pre-decoded PBR data not consumed
     ERUPTION_LOG_WARN("Engine::loadMap: loadMapModels took %lld ms",

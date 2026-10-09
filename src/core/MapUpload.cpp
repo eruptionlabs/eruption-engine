@@ -959,6 +959,7 @@ void Engine::performMapSwap() {
     m_terrainRenderer.m_chunks = std::move(m_activeMapContext->gpuTerrainChunks);
 
     // ModelRenderer
+    resetWorld(); // vizinhos do mapa anterior
     m_modelRenderer.clear();
     m_modelRenderer.m_lastModels = std::move(m_activeMapContext->modelAssets);
     m_modelRenderer.m_textureCache = std::move(m_activeMapContext->gpuModelTextureCache);

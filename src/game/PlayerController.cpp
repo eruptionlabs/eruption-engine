@@ -315,11 +315,10 @@ void PlayerController::updateCamera(float dt, bool captureMouse, bool captureKey
         targetPos.y += m_spriteHeight * 0.5f;
         Vec3 target = m_engine->camera().target();
         target += (targetPos - target) * glm::clamp(m_cameraSmoothFactor * dt, 0.0f, 1.0f);
-        if (m_engine->currentMap()) {
-            float limitX = (float)m_engine->currentMap()->terrain.width * 10.0f;
-            float limitZ = (float)m_engine->currentMap()->terrain.height * 10.0f;
-            target.x = glm::clamp(target.x, 0.0f, limitX);
-            target.z = glm::clamp(target.z, 0.0f, limitZ);
+        Vec2 lo, hi; // mapa aberto + vizinhos em cena
+        if (m_engine->worldBounds(lo, hi)) {
+            target.x = glm::clamp(target.x, lo.x, hi.x);
+            target.z = glm::clamp(target.z, lo.y, hi.y);
         }
         m_engine->camera().setOrbitTarget(target);
     }

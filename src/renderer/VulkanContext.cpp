@@ -105,11 +105,15 @@ void VulkanContext::shutdown() {
 
     // Execute any deferred per-frame cleanups that were scheduled but never
     // reached the next frame (e.g. staging buffers uploaded on the last frame).
-    for (auto& queue : m_frameCleanupQueues) {
-        for (auto& fn : queue) {
-            fn();
+    // Uma limpeza pode agendar outra (espera de dois ciclos): repete até esvaziar.
+    for (bool any = true; any;) {
+        any = false;
+        for (auto& queue : m_frameCleanupQueues) {
+            std::vector<std::function<void()>> fns;
+            fns.swap(queue);
+            for (auto& fn : fns) fn();
+            any |= !fns.empty();
         }
-        queue.clear();
     }
 
     if (m_transferPool != VK_NULL_HANDLE) {
@@ -287,11 +291,13 @@ bool VulkanContext::beginFrame() {
                               VK_QUERY_RESULT_64_BIT);
     }
 
-    // Cleanup deferred resources for this frame slot
-    for (auto& fn : m_frameCleanupQueues[m_currentFrame]) {
-        fn();
+    // Cleanup deferred resources for this frame slot. A fila sai antes de rodar:
+    // uma limpeza pode agendar outra na mesma fila (vale para o próximo ciclo).
+    {
+        std::vector<std::function<void()>> fns;
+        fns.swap(m_frameCleanupQueues[m_currentFrame]);
+        for (auto& fn : fns) fn();
     }
-    m_frameCleanupQueues[m_currentFrame].clear();
 
     vkResetFences(m_device, 1, &m_frameFences[m_currentFrame]);
     vkResetCommandPool(m_device, m_commandPools[m_currentFrame], 0);
@@ -444,6 +450,10 @@ bool VulkanContext::createImage(uint32_t width, uint32_t height, VkFormat format
         return false;
     }
     return true;
+}
+
+void VulkanContext::deferSlotImageCleanup(std::function<void()>&& fn) {
+    deferFrameCleanup([this, f = std::move(fn)]() mutable { deferFrameCleanup(std::move(f)); });
 }
 
 void VulkanContext::deferFrameCleanup(std::function<void()>&& fn) {

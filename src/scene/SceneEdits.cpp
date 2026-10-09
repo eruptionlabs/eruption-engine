@@ -281,6 +281,23 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
     }
     lua_pop(L, 1);
 
+    lua_getfield(L, root, "neighbors");
+    if (lua_istable(L, -1)) {
+        const int n = lua_objlen(L, -1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            const int t = lua_gettop(L);
+            if (lua_istable(L, t)) {
+                Neighbor nb;
+                nb.map = readStr(L, t, "map");
+                readVec(L, t, "offset", nb.offset);
+                if (!nb.map.empty()) neighbors.push_back(std::move(nb));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+
     lua_getfield(L, root, "environment");
     if (lua_istable(L, -1)) {
         const int t = lua_gettop(L);
@@ -365,6 +382,12 @@ std::string SceneEdits::serialize(const std::string& map) const {
         o << "    terrain = { layers = {";
         for (size_t i = 0; i < terrainLayers.size(); ++i) o << (i ? ", " : " ") << quoted(terrainLayers[i]);
         o << " } },\n";
+    }
+    if (!neighbors.empty()) {
+        o << "    neighbors = {\n";
+        for (const auto& nb : neighbors)
+            o << "        { map = " << quoted(nb.map) << ", offset = " << vec(nb.offset) << " },\n";
+        o << "    },\n";
     }
     if (hasEnvironment) {
         o << "    environment = { time = " << num(time) << ", paused = " << (paused ? "true" : "false");

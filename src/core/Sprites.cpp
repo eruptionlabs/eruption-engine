@@ -551,12 +551,13 @@ void Engine::cleanupSpriteTextures(LoadedSprite& ls) {
         VkImageView view = tex.view;
         VkImage image = tex.image;
         VmaAllocation alloc = tex.alloc;
-        m_vulkan.deferFrameCleanup([dev, allocator, view, image, alloc]() {
+        m_vulkan.deferSlotImageCleanup([dev, allocator, view, image, alloc]() {
             if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
             if (image != VK_NULL_HANDLE) vmaDestroyImage(allocator, image, alloc);
         });
         m_bindless.freeSlot(tex.slot);
     }
+    m_bindless.flushUpdates(); // o slot volta à textura padrão antes de a imagem morrer
     ls.textures.clear();
     ls.indexedTextureCount = 0;
     ls.loaded = false;

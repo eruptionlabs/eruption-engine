@@ -1,9 +1,11 @@
 #include "editor/GameExport.hpp"
 
+#include "scene/SceneEdits.hpp"
 #include "script/LuauChunk.hpp"
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <deque>
 #include <fstream>
 #include <regex>
@@ -55,8 +57,29 @@ ExportReport exportGame(const ExportOptions& o) {
     };
     auto all = [](const fs::path&) { return true; };
 
+    // Mundo contínuo: os mapas emendados (nos dois sentidos) vão junto.
+    std::vector<std::string> maps = o.maps;
+    {
+        std::vector<std::pair<std::string, std::string>> links;
+        for (auto it = fs::directory_iterator(root / "assets" / "scenes", ec); !ec && it != fs::directory_iterator(); ++it) {
+            const std::string fn = it->path().filename().string();
+            const std::string suffix = ".scene.luau";
+            if (fn.size() <= suffix.size() || fn.compare(fn.size() - suffix.size(), suffix.size(), suffix) != 0) continue;
+            SceneEdits e;
+            std::string error;
+            if (readText(it->path()).find("neighbors") == std::string::npos || !e.load(it->path(), error)) continue;
+            for (const auto& n : e.neighbors) links.push_back({fn.substr(0, fn.size() - suffix.size()), n.map});
+        }
+        for (size_t i = 0; i < maps.size(); ++i)
+            for (const auto& [a, b] : links) {
+                const std::string other = a == maps[i] ? b : (b == maps[i] ? a : std::string());
+                if (!other.empty() && std::find(maps.begin(), maps.end(), other) == maps.end()) maps.push_back(other);
+            }
+        report.neighbors = maps.size() - o.maps.size();
+    }
+
     // Mapas e o que é deles.
-    for (const auto& map : o.maps) {
+    for (const auto& map : maps) {
         if (!fs::is_directory(root / "assets" / "external" / map, ec)) {
             report.error = "Map not found: " + map;
             return report;

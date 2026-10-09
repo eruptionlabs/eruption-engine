@@ -28,6 +28,7 @@ struct ExportReport {
     uint64_t bytes = 0;
     std::vector<std::string> missing; // citado em algum arquivo mas não existe
     size_t compiled = 0;               // .luau que foram como bytecode
+    size_t neighbors = 0;              // mapas vizinhos (mundo contínuo) que foram junto
     std::string error;
 };
 

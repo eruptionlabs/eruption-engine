@@ -210,6 +210,16 @@ void Editor::drawMapGenWindow() {
     ImGui::SeparatorText("Map");
     changed |= ImGui::DragFloat("Size", &r.size, 10, 64, 8000, "%.0f");
     changed |= ImGui::DragFloat("Grid step", &r.cell, 0.5f, 1, 64, "%.1f");
+    {
+        float origin[2] = {r.originX, r.originZ};
+        if (ImGui::DragFloat2("World origin", origin, 10, -1e6f, 1e6f, "%.0f")) {
+            r.originX = origin[0];
+            r.originZ = origin[1];
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
+        ImGui::SetItemTooltip("Where this map sits in a bigger world. Two maps with the same recipe and seed, "
+                              "side by side (e.g. 0,0 and 1000,0), have matching hills at the border.");
+    }
     int seed = int(r.seed);
     if (ImGui::InputInt("Seed", &seed)) { r.seed = uint32_t(std::max(0, seed)); changed = true; }
     ImGui::SameLine();

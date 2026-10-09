@@ -58,6 +58,8 @@
 #include <iosfwd>
 #include <string>
 #include <memory>
+#include <future>
+#include "scene/SceneEdits.hpp"
 #include <deque>
 #include <functional>
 namespace eruption {
@@ -167,6 +169,7 @@ public:
     float sampleTerrainHeight(float x, float z) const;
     // Raio contra a grade de altura do mapa (.ter); falso se o mapa não tem uma.
     bool raycastTerrain(const Vec3& origin, const Vec3& dir, float maxT, float& hitT) const;
+    static bool raycastGrid(const TerrainFile& ter, const Vec3& origin, const Vec3& dir, float maxT, float& hitT);
     // CLI/test hooks: spawn independent clouds (altitudes) at the player after
     // map load, tint clouds by altitude for automated tests, debug auto-spawn.
     struct PendingCloudSpawn {
@@ -262,6 +265,8 @@ public:
         float facing = 0.0f; // graus; 0 = olhando para +Z
         bool visible = true;
         bool removed = false; // apagado no editor (desfazer traz de volta)
+        bool fromNeighbor = false; // de um mapa vizinho (não se edita nem se salva aqui)
+        bool parked = false;       // o mapa vizinho dele saiu de cena
         LoadedSprite look;
         int frame = 0;
         float timer = 0.0f;
@@ -403,7 +408,7 @@ public:
     bool setCharacterSprite(int index, const std::string& sprite);
     int findCharacter(const std::string& name) const;
     void walkCharacter(int index, const Vec3& target, float seconds);
-    void clearCharacters();
+    void clearCharacters(bool keepNeighbors = false);
     // Anda quem tem caminho (só com o jogo rodando) e envia os sprites.
     void updateCharacters(float dt, bool moveAlongPaths);
     std::vector<SceneCharacter>& characters() { return m_characters; }
@@ -479,6 +484,36 @@ public:
     int blockSteepSlopes(float maxDegrees);
     bool saveWalk(std::string& error) const;
 
+    // Mundo contínuo (core/World.cpp): mapas emendados ao aberto, declarados no
+    // scene.luau (neighbors = {{map = "b", offset = {x, y, z}}}), entram em
+    // segundo plano quando o jogador (ou a câmera do editor) chega perto e saem
+    // de cena quando ele se afasta. Sem tela de carregamento.
+    using WorldNeighbor = SceneEdits::Neighbor;
+    // Vizinhos declarados pelo mapa aberto (o editor grava no scene.luau).
+    const std::vector<WorldNeighbor>& worldNeighbors() const { return m_worldNeighbors; }
+    void setWorldNeighbors(std::vector<WorldNeighbor> neighbors);
+    // Monta o mundo a partir do mapa aberto (depois de a cena dele estar aplicada).
+    void startWorld();
+    // Esconde os vizinhos e monta de novo (o arquivo de cena mudou).
+    void restartWorld();
+    struct WorldRegionInfo {
+        std::string map;
+        Vec3 offset{0.0f};
+        Vec2 boundsMin{0.0f}, boundsMax{0.0f};
+        const char* state = "";
+    };
+    std::vector<WorldRegionInfo> worldRegions() const;
+    bool isRegionInstance(uint32_t index) const;
+    // Mapa (aberto ou vizinho em cena) que tem chão em (x, z).
+    const LoadedMap* mapAt(float x, float z) const;
+    // Área com chão de todos os mapas em cena (limite da câmera).
+    bool worldBounds(Vec2& outMin, Vec2& outMax) const;
+    // Lado e área de um mapa pela grade de altura (.ter); falso se não tem.
+    static bool mapGroundArea(const std::string& map, Vec2& outMin, Vec2& outMax);
+    float worldLoadDistance = 300.0f; // distância da borda em que o vizinho entra
+    float worldReleaseSeconds = 30.0f; // fora de cena por tanto tempo: memória devolvida
+    uint32_t worldVersion() const { return m_worldVersion; } // muda quando um vizinho entra/sai
+
     // Objetos espalhados pelo pincel (core/Scatter.cpp), por modelo.
     struct ScatterGroup {
         std::string file, node, prefab;
@@ -493,7 +528,8 @@ public:
     void scatterSetRemoved(int group, const std::vector<uint32_t>& items, bool removed);
     Mat4 scatterRoot(int group, uint32_t item) const;
     bool isScatterInstance(uint32_t index) const;
-    int loadScatter(const std::string& map);
+    // `place`: deslocamento do mapa no mundo (vizinhos do mundo contínuo).
+    int loadScatter(const std::string& map, const Mat4& place = Mat4(1.0f));
     bool saveScatter(std::string& error) const;
     void clearScatter();
 
@@ -924,6 +960,15 @@ private:
             std::lock_guard<std::mutex> lock(mutex);
             modelMeshes[key] = {mesh, currentWarpId};
         }
+        // Tira do cache (quem chama libera os buffers).
+        bool takeModelMesh(const std::string& key, ModelMeshGPU& outMesh) {
+            std::lock_guard<std::mutex> lock(mutex);
+            auto it = modelMeshes.find(key);
+            if (it == modelMeshes.end()) return false;
+            outMesh = it->second.mesh;
+            modelMeshes.erase(it);
+            return true;
+        }
         struct Stats {
             size_t modelTextureCount = 0;
             size_t terrainTextureCount = 0;
@@ -1213,8 +1258,48 @@ private:
     void flushSplatUploads(VkCommandBuffer cmd);
     std::string textureNameForSlot(uint32_t slot) const;
     void prepareHeightEdits(LoadedMap& map, std::vector<ModelAsset>& models);
+    // Delta de altura salvo -> grade .ter e vértices do chão (sem estado do motor:
+    // também roda fora da thread principal, para os mapas vizinhos).
+    static void applyHeightDelta(LoadedMap& map, std::vector<ModelAsset>& models, HeightEdit& h);
     void bindHeightEditToMeshes();
-    void applySavedWalk(LoadedMap& map);
+    static void applySavedWalk(LoadedMap& map);
+    // Mundo contínuo
+    struct WorldRegionLoad;
+    struct WorldRegion {
+        std::string map;
+        Vec3 offset{0.0f};
+        Vec2 boundsMin{0.0f}, boundsMax{0.0f};
+        enum class State { Idle, Loading, Shown, Hidden, Failed } state = State::Idle;
+        std::future<std::shared_ptr<WorldRegionLoad>> job;
+        std::shared_ptr<LoadedMap> data; // grade e caminhada já no lugar do mundo
+        uint32_t firstInstance = 0, endInstance = 0;
+        std::vector<uint8_t> enabled; // instâncias ligadas quando o vizinho saiu de cena
+        std::vector<PointLight> lights;
+        std::vector<std::string> characters;
+        bool hasWater = false;
+        float waterLevel = 0.0f;
+        TextureResource splatMask[2];
+        TextureResource splatLayer[8];
+        VkSampler splatSampler = VK_NULL_HANDLE;
+        std::chrono::steady_clock::time_point hiddenAt{};
+        std::vector<std::string> modelFiles; // .glb do próprio mapa (malhas só dele)
+    };
+    std::vector<WorldRegion> m_regions;
+    static const char* worldStateName(WorldRegion::State s);
+    std::vector<WorldNeighbor> m_worldNeighbors;
+    bool m_worldStarted = false;
+    uint32_t m_worldVersion = 0;
+    void resetWorld();
+    void buildWorldGraph();
+    void updateWorld();
+    void attachRegion(WorldRegion& r, WorldRegionLoad& load);
+    void showRegion(WorldRegion& r, bool show);
+    void rebuildWorldWater();
+    void stitchGroundEdges();
+    void rebuildWorldLights();
+    bool buildRegionSplat(WorldRegion& r, const std::vector<std::string>& layers);
+    void releaseRegionSplat(WorldRegion& r, bool now = false); // now: GPU já parada
+    void releaseRegion(WorldRegion& r);
     void refreshHeightRegion(int x0, int z0, int x1, int z1);
     float gridHeightAt(float wx, float wz, int x0, int z0, int x1, int z1, const std::vector<float>* old) const;
     void reprojectOnTerrain(int x0, int z0, int x1, int z1, const std::vector<float>& oldHeights);

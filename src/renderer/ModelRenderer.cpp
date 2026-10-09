@@ -1528,7 +1528,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                                                  m_meshLodMaxTris,
                                                  offsetof(TerrainVertex, texCoord),
                                                  offsetof(TerrainVertex, texIndex),
-                                                 mesh.swayAmount > 0.0f);
+                                                 mesh.swayAmount > 0.0f, 0.6f, isGroundMesh);
                 // FOLHAGEM: poda de cartoes com COMPENSACAO DE AREA (Cook,
                 // Halstead, Planck, Ryu 2007 - ver MeshLod.hpp). O caminho
                 // de cartao do simplifyMesh so' remove e para no piso de
@@ -1681,7 +1681,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                                                         // qualquer distancia = 30 M dos 42 M tri do frame.
                                                         // Alem de 3x a troca do lo a copa e' pequena na tela;
                                                         // afinar mais e' o que o olho nao ve e a GPU sente.
-                                                        kFarCardMinArea);
+                                                        kFarCardMinArea, isGroundMesh);
                         if (fl.valid && fl.indices.size() < mesh.loIndexCount) {
                             const VkDeviceSize faSize = fl.indices.size() * sizeof(uint32_t);
                             m_ctx->createBuffer(faSize,
@@ -2066,6 +2066,40 @@ uint32_t ModelRenderer::addModel(const ModelAsset& asset, const ModelInstanceDes
     return addInstanceOf(asset.filePath, ref, nodeName);
 }
 
+std::vector<std::string> ModelRenderer::releaseAsset(const std::string& filePath) {
+    std::vector<std::string> keys;
+    auto it = m_modelMeshCache.find(filePath);
+    if (it == m_modelMeshCache.end()) return keys;
+    std::vector<ModelMeshGPU> dead;
+    std::vector<uint32_t> seen;
+    for (size_t n = 0; n < it->second.size(); ++n) {
+        const uint32_t mi = it->second[n];
+        if (mi >= m_meshes.size() || std::find(seen.begin(), seen.end(), mi) != seen.end()) continue;
+        seen.push_back(mi);
+        keys.push_back(filePath + "#" + std::to_string(n));
+        dead.push_back(m_meshes[mi]);
+        ModelMeshGPU empty{};
+        empty.isExternal = true;
+        m_meshes[mi] = empty; // índice continua válido; desenha nada
+        m_groundCpu.erase(mi);
+        m_vertexPatches.erase(mi);
+    }
+    m_modelMeshCache.erase(it);
+    for (auto& a : m_lastModels)
+        if (a.filePath == filePath) {
+            a.nodes.clear();
+            a.nodes.shrink_to_fit();
+            a.filePath.clear(); // hasAsset falso: volta a ser lido do disco
+        }
+    rebuildHotData();
+    // Os níveis de LOD são do renderizador; a base é do cache de assets (chaves).
+    VulkanContext* ctx = m_ctx;
+    ctx->deferFrameCleanup([ctx, dead]() mutable {
+        for (auto& m : dead) m.destroyLodBuffers(ctx);
+    });
+    return keys;
+}
+
 bool ModelRenderer::hasAsset(const std::string& path) const {
     for (const auto& m : m_lastModels)
         if (m.filePath == path) return true;
@@ -2441,7 +2475,9 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         // O chao e' UMA malha gigante: nele o corte e' por CELULA (so' o pedaco
         // perto vai pro patch). Os demais objetos sao pequenos e o corte por
         // instancia ja' basta.
-        const bool tessCells = tessellationActive() && mesh.isGround &&
+        // As células são faixas da malha CHEIA: um chão longe, no nível
+        // reduzido (outro buffer de índices), vai inteiro (mapa vizinho).
+        const bool tessCells = tessellationActive() && mesh.isGround && runIb == mesh.indexBuffer &&
                                m_tessBandDistance > 0.0f && !mesh.groundCells.empty();
         const bool wantTess = tessCells;
         if (!tessCells) bindPipelineFor(tessellationActive() && runNear);
@@ -3355,7 +3391,9 @@ void ModelRenderer::rebuildHotData() {
         hot.worldAabbMin = inst.worldAabbMin;
         hot.worldAabbMax = inst.worldAabbMax;
         hot.meshIndex = inst.meshIndex;
-        hot.flags = (inst.enabled && !inst.viewHidden) ? 1u : 0u;
+        // Malha liberada (mapa vizinho que saiu do mundo): a instância não desenha mais.
+        const bool hasMesh = inst.meshIndex < m_meshes.size() && m_meshes[inst.meshIndex].indexCount > 0;
+        hot.flags = (inst.enabled && !inst.viewHidden && hasMesh) ? 1u : 0u;
         hot.boundingRadius = inst.boundingRadius;
     }
     // Hot mudou (chamado 1x/frame apos animacao) - o SoA derivado dele precisa

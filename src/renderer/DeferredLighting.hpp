@@ -150,6 +150,9 @@ public:
                              const Vec3& gridMin, const Vec3& gridInvExtent, bool enabled);
     void setIrradianceProbeStrength(float strength) { m_probeStrength = std::clamp(strength, 0.0f, 1.0f); }
     std::vector<PointLight>& getPointLights() { return m_pointLights; }
+    // Luzes dos mapas vizinhos (mundo contínuo): somadas às do mapa aberto,
+    // fora da lista que a cena e o editor numeram.
+    void setExtraPointLights(std::vector<PointLight> lights) { m_extraPointLights = std::move(lights); }
 
     void setUsePbr(bool use) { m_usePbr = use; }
     bool usePbr() const { return m_usePbr; }
@@ -258,6 +261,9 @@ private:
 
     LightingEnvironment m_env;
     std::vector<PointLight> m_pointLights;
+    std::vector<PointLight> m_extraPointLights;
+    std::vector<PointLight> m_allPointLights; // m_pointLights + m_extraPointLights, montado no frame
+    const std::vector<PointLight>& allPointLights();
     bool m_pointLightsEnabled = true;
     bool m_skyProbeEnabled = false;
     bool m_skyProbeBound = false;

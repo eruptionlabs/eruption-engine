@@ -296,6 +296,16 @@ bool Recipe::parse(const std::string& source, std::string& error) {
     this->size = float(field("size", 1000));
     cell = float(field("cell", 8));
     seed = uint32_t(field("seed", 1));
+    lua_getfield(L, root, "origin");
+    if (lua_istable(L, -1)) {
+        lua_rawgeti(L, -1, 1);
+        originX = float(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+        lua_rawgeti(L, -1, 2);
+        originZ = float(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
     lua_getfield(L, root, "steps");
     if (lua_istable(L, -1)) {
         const int n = lua_objlen(L, -1);
@@ -332,7 +342,9 @@ bool Recipe::parse(const std::string& source, std::string& error) {
 std::string Recipe::serialize() const {
     std::ostringstream o;
     o << "-- Map recipe: steps run top to bottom (Map Generator in the editor).\n"
-         "return {\n    size = " << num(size) << ", cell = " << num(cell) << ", seed = " << seed << ",\n    steps = {\n";
+         "return {\n    size = " << num(size) << ", cell = " << num(cell) << ", seed = " << seed;
+    if (originX != 0.0f || originZ != 0.0f) o << ", origin = {" << num(originX) << ", " << num(originZ) << "}";
+    o << ",\n    steps = {\n";
     for (const auto& s : steps) {
         o << "        { " << quote(s.type);
         if (!s.enabled) o << ", enabled = false";
@@ -350,10 +362,15 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
          const std::function<bool(float, const char*)>& progress) {
     r = Result{};
     const int full = int(std::round(recipe.size / recipe.cell)) + 1;
-    r.w = r.d = resolution > 0 ? std::min(resolution, full) : full;
-    r.cell = recipe.size / float(r.w - 1);
+    const int n = resolution > 0 ? std::min(resolution, full) : full;
+    // Uma célula a mais em volta: inclinação, pintura e normais da borda veem o
+    // relevo do outro lado (o mapa vizinho com origin ao lado vê o mesmo). Sai no fim.
+    constexpr int A = 1;
+    r.w = r.d = n + 2 * A;
+    r.cell = recipe.size / float(n - 1);
     r.height.assign(size_t(r.w) * r.d, 0.0f);
     const float scaleToWorld = r.cell;
+    const float ox = recipe.originX - A * r.cell, oz = recipe.originZ - A * r.cell;
     int stepIndex = 0;
     for (const Step& s : recipe.steps) {
         const float base = float(stepIndex++) / std::max<size_t>(1, recipe.steps.size());
@@ -372,7 +389,7 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             const float pers = float(s.get("persistence", 0.5));
             for (int z = 0; z < r.d; ++z)
                 for (int x = 0; x < r.w; ++x) {
-                    const float wx = x * scaleToWorld / scale, wz = z * scaleToWorld / scale;
+                    const float wx = (ox + x * scaleToWorld) / scale, wz = (oz + z * scaleToWorld) / scale;
                     const float n = s.type == "noise" ? fbm(wx, wz, oct, pers, 2.0f, seed) * 0.5f + 0.5f : ridged(wx, wz, oct, seed);
                     r.height[size_t(z) * r.w + x] += n * height;
                 }
@@ -380,7 +397,7 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             const float radius = float(s.get("radius", 0.42)), depth = float(s.get("depth", 60));
             for (int z = 0; z < r.d; ++z)
                 for (int x = 0; x < r.w; ++x) {
-                    const float dx = float(x) / (r.w - 1) - 0.5f, dz = float(z) / (r.d - 1) - 0.5f;
+                    const float dx = float(x - A) / (n - 1) - 0.5f, dz = float(z - A) / (n - 1) - 0.5f;
                     const float t = std::clamp((std::sqrt(dx * dx + dz * dz) - radius) / 0.12f, 0.0f, 1.0f);
                     r.height[size_t(z) * r.w + x] -= t * t * (3 - 2 * t) * depth;
                 }
@@ -427,7 +444,8 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                 for (int x = 0; x < r.w; ++x) {
                     float m = ruleWeight(r, x, z, s);
                     if (coverage < 1.0f) {
-                        const float n = fbm(x * scaleToWorld / 80.0f, z * scaleToWorld / 80.0f, 3, 0.5f, 2.0f, seed) * 0.5f + 0.5f;
+                        const float n = fbm((ox + x * scaleToWorld) / 80.0f, (oz + z * scaleToWorld) / 80.0f, 3, 0.5f, 2.0f, seed) *
+                                            0.5f + 0.5f;
                         m *= std::clamp((n - (1.0f - coverage)) * 6.0f, 0.0f, 1.0f);
                     }
                     if (m <= 0) continue;
@@ -450,6 +468,7 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             for (float cz = 0; cz < worldSize; cz += spacing)
                 for (float cx = 0; cx < worldSize; cx += spacing) {
                     const float px = cx + rng.next() * spacing, pz = cz + rng.next() * spacing;
+                    if (px > worldSize || pz > worldSize) continue; // sorteio passou da borda
                     const int gx = std::clamp(int(px / r.cell + 0.5f), 0, r.w - 1), gz = std::clamp(int(pz / r.cell + 0.5f), 0, r.d - 1);
                     const float keep = ruleWeight(r, gx, gz, s);
                     if (keep <= 0 || rng.next() > keep) {
@@ -469,15 +488,38 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                 }
             r.scatter.push_back(std::move(g));
         } else if (s.type == "spawn") {
-            const int gx = std::clamp(int(float(s.get("x", 0.5)) * (r.w - 1)), 0, r.w - 1);
-            const int gz = std::clamp(int(float(s.get("z", 0.5)) * (r.d - 1)), 0, r.d - 1);
+            const int gx = A + std::clamp(int(float(s.get("x", 0.5)) * (n - 1)), 0, n - 1);
+            const int gz = A + std::clamp(int(float(s.get("z", 0.5)) * (n - 1)), 0, n - 1);
             r.hasSpawn = true;
-            r.spawn[0] = gx * r.cell;
+            r.spawn[0] = (gx - A) * r.cell;
             r.spawn[1] = r.h(gx, gz);
-            r.spawn[2] = gz * r.cell;
+            r.spawn[2] = (gz - A) * r.cell;
         } else if (s.type == "walk") {
             r.maxWalkSlope = float(s.get("max_slope", 40));
         }
+    }
+    // Tira a faixa extra.
+    {
+        auto crop = [&](std::vector<float>& v) {
+            std::vector<float> out(size_t(n) * n);
+            for (int z = 0; z < n; ++z)
+                for (int x = 0; x < n; ++x) out[size_t(z) * n + x] = v[size_t(z + A) * r.w + x + A];
+            v.swap(out);
+        };
+        // A pintura do mapa já viu a faixa; a caminhada (inclinação) é feita na gravação.
+        crop(r.height);
+        for (auto& l : r.layers) crop(l.weight);
+        const float lim = (n - 1) * r.cell;
+        for (auto& g : r.scatter) {
+            std::vector<ScatterGroup::Item> kept;
+            for (auto it : g.items) {
+                it.x -= A * r.cell;
+                it.z -= A * r.cell;
+                if (it.x >= 0 && it.z >= 0 && it.x <= lim && it.z <= lim) kept.push_back(it);
+            }
+            g.items.swap(kept);
+        }
+        r.w = r.d = n;
     }
     if (progress) progress(1.0f, "Done");
     return true;

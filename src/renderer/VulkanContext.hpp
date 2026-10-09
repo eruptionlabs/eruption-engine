@@ -151,6 +151,10 @@ public:
     void transitionNow(VkImage image, VkImageLayout layout, VkImageAspectFlags aspect,
                        uint32_t mipLevels = 1, uint32_t layers = 1);
     void deferFrameCleanup(std::function<void()>&& fn);
+    // Para imagem cujo slot de textura acabou de ser solto: sem bindless, o
+    // conjunto de cada frame só troca o slot quando aquele frame começa de novo,
+    // então espera dois ciclos.
+    void deferSlotImageCleanup(std::function<void()>&& fn);
 
     // Image data recovery
     bool copyImageToBuffer(VkImage image, VkBuffer buffer, uint32_t w, uint32_t h, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT);

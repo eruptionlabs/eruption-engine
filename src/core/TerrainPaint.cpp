@@ -391,3 +391,100 @@ std::vector<std::string> Engine::splatLayerFiles() const {
 }
 
 } // namespace eruption
+
+namespace eruption {
+
+// Camadas pintadas de um mapa vizinho (mundo contínuo): máscaras e texturas
+// próprias, ligadas aos vértices do chão dele. Só leitura (pinta-se no mapa aberto).
+bool Engine::buildRegionSplat(WorldRegion& r, const std::vector<std::string>& layers) {
+    if (layers.empty() || !r.data) return false;
+    const TerrainFile& t = r.data->terrain;
+    const uint32_t w = t.width, d = t.height;
+    const float scale = t.scale > 0.0f ? t.scale : 10.0f;
+    std::vector<uint8_t> mask[2];
+    for (int i = 0; i < 2; ++i) {
+        mask[i].assign(size_t(w) * d * 4, 0);
+        ImageData img = loadRawPNG(maskPathFor(r.map, i));
+        if (img.isValid()) mask[i] = resampleRGBA(img.pixels.data(), img.width, img.height, img.channels, w, d);
+    }
+    VkSamplerCreateInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    vkCreateSampler(m_vulkan.device(), &si, nullptr, &r.splatSampler);
+    for (int i = 0; i < 2; ++i) {
+        if (!createMaskImage(m_vulkan, w, d, mask[i].data(), r.splatMask[i])) return false;
+        r.splatMask[i].slot = m_bindless.allocateSlot();
+        m_bindless.updateTexture(r.splatMask[i].slot, r.splatMask[i].view, r.splatSampler);
+    }
+    uint32_t layerSlot[8] = {};
+    for (size_t l = 0; l < layers.size() && l < 8; ++l) {
+        ImageData img = loadRawPNG(layers[l]);
+        if (!img.isValid()) {
+            ERUPTION_LOG_WARN("Terrain layer %s could not be loaded", layers[l].c_str());
+            continue;
+        }
+        std::vector<uint8_t> rgba = img.channels == 4 ? img.pixels
+                                                      : resampleRGBA(img.pixels.data(), img.width, img.height, img.channels,
+                                                                     uint32_t(img.width), uint32_t(img.height));
+        TextureResource& tex = r.splatLayer[l];
+        if (!createTextureFromPixels(rgba.data(), img.width, img.height, tex)) continue;
+        tex.slot = m_bindless.allocateSlot();
+        m_bindless.updateTexture(tex.slot, tex.view, m_defaultSampler);
+        layerSlot[l] = tex.slot;
+    }
+    m_bindless.flushUpdates();
+    const uint32_t packed[4] = {layerSlot[0] | (layerSlot[1] << 16), layerSlot[2] | (layerSlot[3] << 16),
+                                layerSlot[4] | (layerSlot[5] << 16), layerSlot[6] | (layerSlot[7] << 16)};
+    const auto& insts = m_modelRenderer.getInstances();
+    std::vector<uint32_t> done;
+    for (uint32_t i = r.firstInstance; i < insts.size(); ++i) {
+        const uint32_t mesh = insts[i].meshIndex;
+        if (!m_modelRenderer.isGroundMesh(mesh) || std::find(done.begin(), done.end(), mesh) != done.end()) continue;
+        auto* verts = m_modelRenderer.groundVertices(mesh);
+        if (!verts) continue;
+        done.push_back(mesh);
+        std::vector<uint32_t> all(verts->size());
+        for (uint32_t k = 0; k < verts->size(); ++k) {
+            TerrainVertex& v = (*verts)[k];
+            const Vec3 wp = Vec3(insts[i].transform * Vec4(v.position, 1.0f));
+            v.splatTex01 = packed[0];
+            v.splatTex23 = packed[1];
+            v.splatTex45 = packed[2];
+            v.splatTex67 = packed[3];
+            v.blendMaskIndex = static_cast<uint16_t>(r.splatMask[0].slot);
+            v.blendMaskIndex2 = static_cast<uint16_t>(r.splatMask[1].slot);
+            v.blendMaskUV = Vec2(((wp.x - t.offsetX) / scale + 0.5f) / w, ((wp.z - t.offsetZ) / scale + 0.5f) / d);
+            all[k] = k;
+        }
+        m_modelRenderer.patchGroundVertices(mesh, all);
+    }
+    return !done.empty();
+}
+
+void Engine::releaseRegionSplat(WorldRegion& r, bool now) {
+    std::vector<TextureResource> texs;
+    for (auto& m : r.splatMask) texs.push_back(m);
+    for (auto& l : r.splatLayer) texs.push_back(l);
+    for (auto& m : r.splatMask) m = TextureResource{};
+    for (auto& l : r.splatLayer) l = TextureResource{};
+    const VkSampler sampler = r.splatSampler;
+    r.splatSampler = VK_NULL_HANDLE;
+    // O slot volta para a textura padrão já; a imagem só morre depois dos
+    // frames em voo (eles ainda podem amostrá-la).
+    for (const auto& t : texs)
+        if (t.image && t.slot) m_bindless.freeSlot(t.slot);
+    m_bindless.flushUpdates();
+    auto destroy = [this, texs, sampler] {
+        for (const auto& t : texs) {
+            if (!t.image) continue;
+            vkDestroyImageView(m_vulkan.device(), t.view, nullptr);
+            vmaDestroyImage(m_vulkan.allocator(), t.image, t.alloc);
+        }
+        if (sampler) vkDestroySampler(m_vulkan.device(), sampler, nullptr);
+    };
+    if (now) destroy();
+    else m_vulkan.deferSlotImageCleanup(destroy);
+}
+
+} // namespace eruption

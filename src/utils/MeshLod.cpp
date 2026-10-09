@@ -269,7 +269,8 @@ MeshLodResult simplifyMesh(const float* positions,
                            size_t uvByteOffset,
                            size_t texIdxByteOffset,
                            bool alphaHint,
-                           float minAreaKeep) {
+                           float minAreaKeep,
+                           bool lockBorder) {
     MeshLodResult out;
 #ifdef ERUPTION_HAVE_MESHOPT
     if (!positions || vertexCount < 3 || indices.size() < 3 || indices.size() % 3 != 0) return out;
@@ -333,13 +334,14 @@ MeshLodResult simplifyMesh(const float* positions,
                                            welded.data(), welded.size(),
                                            positions, vertexCount, stride,
                                            attrs, stride, weights, 2,
-                                           nullptr, target, targetError, 0, &resultError);
+                                           nullptr, target, targetError,
+                                           lockBorder ? meshopt_SimplifyLockBorder : 0, &resultError);
     }
     if (n == 0) {
         n = meshopt_simplify(simplified.data(),
                              welded.data(), welded.size(),
                              positions, vertexCount, stride,
-                             target, targetError, 0, &resultError);
+                             target, targetError, lockBorder ? meshopt_SimplifyLockBorder : 0, &resultError);
     }
 
     // ------------------------------------------------------------------
@@ -399,7 +401,7 @@ MeshLodResult simplifyMesh(const float* positions,
         if (kCardDbg)
             ERUPTION_LOG_WARN("[LODCARDS] ESTRUTURA: sloppy bloqueado (pecas=%u tris=%zu -> %zu, "
                               "alvo %zu)", cardStats.chunkyIslands, welded.size()/3, n/3, target/3);
-    } else if (n > target + target / 2) {
+    } else if (n > target + target / 2 && !lockBorder) { // o sloppy não respeita borda
         std::vector<uint32_t> sloppy(indices.size());
         float sloppyError = 0.0f;
         const size_t ns = meshopt_simplifySloppy(sloppy.data(),

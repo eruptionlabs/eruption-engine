@@ -2,6 +2,7 @@
 #include "script/ScriptHost.hpp"
 #include "scene/SceneEdits.hpp"
 #include "game/DefaultApplication.hpp"
+#include <cstdio>
 #include <cstdlib>
 #include <sstream>
 #include "game/PlayerController.hpp"
@@ -267,6 +268,7 @@ void DefaultApplication::onUpdate(float deltaTime) {
             else if (!edits.empty())
                 ERUPTION_LOG_WARN("Scene edits: %d change(s) applied to %s", edits.apply(*m_engine), m_sceneEditsMap.c_str());
             m_engine->loadScatter(m_sceneEditsMap); // objetos espalhados pelo pincel
+            m_engine->startWorld();                 // mapas vizinhos (mundo contínuo)
             if (m_scripts && !m_scriptsPlaying) {
                 m_scripts->start();
                 m_scriptsPlaying = true;
@@ -274,6 +276,32 @@ void DefaultApplication::onUpdate(float deltaTime) {
         }
         if (m_engine) m_engine->updateCharacters(deltaTime, true);
         if (m_engine && m_player) m_player->update(deltaTime);
+        // ERUPTION_TEST_PLAYER_WALK="x,z x,z ...;segundos" (teste): leva o jogador
+        // pelos pontos, no chão, a partir do frame 60 (atravessar mapas emendados).
+        static const char* testWalk = std::getenv("ERUPTION_TEST_PLAYER_WALK");
+        static int walkFrame = 0;
+        if (testWalk && m_engine && m_player && m_engine->isPlayerSpawnedOnActiveMap() && ++walkFrame >= 60) {
+            static std::vector<Vec2> pts;
+            static float seconds = 10.0f;
+            if (pts.empty()) {
+                std::string spec = testWalk;
+                const size_t semi = spec.find(';');
+                if (semi != std::string::npos) seconds = std::max(0.1f, std::stof(spec.substr(semi + 1)));
+                std::istringstream in(spec.substr(0, semi));
+                std::string p;
+                while (in >> p) {
+                    Vec2 v(0.0f);
+                    std::sscanf(p.c_str(), "%f,%f", &v.x, &v.y);
+                    pts.push_back(v);
+                }
+            }
+            if (pts.size() >= 2) {
+                const float t = std::min(1.0f, (walkFrame - 60) / (60.0f * seconds)) * float(pts.size() - 1);
+                const size_t i = std::min(pts.size() - 2, size_t(t));
+                const Vec2 p = glm::mix(pts[i], pts[i + 1], t - float(i));
+                m_player->setPos(Vec3(p.x, m_engine->sampleTerrainHeight(p.x, p.y), p.y));
+            }
+        }
         if (m_scripts) m_scripts->update(deltaTime);
     }
     m_hud.update();

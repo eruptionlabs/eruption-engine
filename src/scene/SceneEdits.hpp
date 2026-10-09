@@ -32,6 +32,7 @@ class Engine;
 //       environment = { time = 18.5, paused = true, weather = "rainy" },
 //       spawn = {x, y, z},   -- onde o jogador começa
 //       terrain = { layers = { "assets/textures/grama.png", ... } },  -- camadas pintáveis
+//       neighbors = { { map = "floresta", offset = {1000, 0, 0} } },  -- mundo contínuo
 //
 // Luzes com índice além das do mapa são luzes novas, criadas no editor.
 //   }
@@ -101,6 +102,13 @@ struct SceneEdits {
     // Texturas das camadas pintadas no editor (mapas sem splat próprio); as
     // máscaras ficam em <mapa>.splat0/1.png ao lado do arquivo.
     std::vector<std::string> terrainLayers;
+    // Mapas emendados a este (mundo contínuo): o vizinho fica deslocado de
+    // `offset` em relação a este mapa. Vale nos dois sentidos.
+    struct Neighbor {
+        std::string map;
+        Vec3 offset{0.0f};
+    };
+    std::vector<Neighbor> neighbors;
     bool hasEnvironment = false;
     float time = 12.0f;
     bool paused = false;
@@ -108,7 +116,7 @@ struct SceneEdits {
 
     bool empty() const {
         return added.empty() && objects.empty() && copies.empty() && lights.empty() && characters.empty() &&
-               !hasEnvironment && !hasSpawn && terrainLayers.empty() && !hasWater;
+               !hasEnvironment && !hasSpawn && terrainLayers.empty() && !hasWater && neighbors.empty();
     }
 
     static std::filesystem::path pathFor(const std::string& map);

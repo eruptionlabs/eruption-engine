@@ -277,6 +277,13 @@ public:
         m_shadowLodMaxTris = shadowMaxTris;
     }
 
+    // Liga/desliga a geração de LOD das malhas criadas daqui em diante (o chão
+    // de um mapa vizinho entra sem: simplificar na thread principal travava o frame).
+    void setMeshLodSuspended(bool suspended) {
+        if (suspended && m_meshLodRatio > 0.0f) { m_meshLodSaved = m_meshLodRatio; m_meshLodRatio = 0.0f; }
+        else if (!suspended && m_meshLodSaved > 0.0f) { m_meshLodRatio = m_meshLodSaved; m_meshLodSaved = 0.0f; }
+    }
+
     // LOD distante: teto de triangulos (0 desliga) e multiplo da distancia de
     // troca do "lo" a partir da qual entra.
     void setMeshLodFar(uint32_t farMaxTris, float farDistanceMul) {
@@ -436,6 +443,10 @@ public:
     // 0xFFFFFFFF se o modelo nao tinha malha.
     // `nodeName` vazio = todos os nós; senão só o nó com esse nome.
     uint32_t addModel(const ModelAsset& asset, const ModelInstanceDesc& ref, const std::string& nodeName = {});
+    // Libera as malhas de um arquivo (mapa vizinho que saiu do mundo): as instâncias
+    // delas param de desenhar. Devolve as chaves ("arquivo#nó") das malhas base,
+    // que pertencem ao cache de assets do motor.
+    std::vector<std::string> releaseAsset(const std::string& filePath);
     // Mesmo que addModel para um arquivo já carregado (sem reler o .glb).
     bool hasAsset(const std::string& path) const;
     uint32_t addInstanceOf(const std::string& path, const ModelInstanceDesc& ref, const std::string& nodeName = {});
@@ -446,6 +457,7 @@ public:
     // Pincel de terreno (editor): cópia na CPU dos vértices do chão como estão
     // na GPU, e envio só dos vértices mudados no início do próximo frame.
     void setKeepGroundVertices(bool keep) { m_keepGroundVertices = keep; }
+    bool keepGroundVertices() const { return m_keepGroundVertices; }
     std::vector<uint32_t> groundMeshes() const;
     std::vector<TerrainVertex>* groundVertices(uint32_t mesh);
     void patchGroundVertices(uint32_t mesh, const std::vector<uint32_t>& vertexIndices);
@@ -659,6 +671,7 @@ private:
     // meia tela. 0 = so' o piso do lo x 1,2.
     float m_meshLodFarMinDistance = 0.0f;
     float m_meshLodRatio = 0.0f;
+    float m_meshLodSaved = 0.0f;
     float m_meshLodError = 0.05f;
     float m_meshLodDistanceFactor = 8.0f;
     // Teto absoluto de triangulos do LOD. 0 = so' a fracao.

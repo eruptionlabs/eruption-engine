@@ -194,6 +194,13 @@ void DeferredLighting::setEnvironment(const LightingEnvironment& env) {
     m_env = env;
 }
 
+const std::vector<PointLight>& DeferredLighting::allPointLights() {
+    if (m_extraPointLights.empty()) return m_pointLights;
+    m_allPointLights = m_pointLights;
+    m_allPointLights.insert(m_allPointLights.end(), m_extraPointLights.begin(), m_extraPointLights.end());
+    return m_allPointLights;
+}
+
 void DeferredLighting::setPointLights(const std::vector<PointLight>& lights) {
     m_pointLights = lights;
 }
@@ -908,8 +915,9 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     float artificialMod = glm::mix(1.0f, 0.15f, glm::smoothstep(0.2f, 0.8f, solarIntensity));
 
     uint32_t activeLights = 0;
-    for (uint32_t i = 0; i < (uint32_t)m_pointLights.size() && activeLights < 128; i++) {
-        const auto& pl = m_pointLights[i];
+    const std::vector<PointLight>& lightList = allPointLights();
+    for (uint32_t i = 0; i < (uint32_t)lightList.size() && activeLights < 128; i++) {
+        const auto& pl = lightList[i];
         if (!pl.enabled) continue;
 
         ubo.pointLights[activeLights] = Vec4(pl.position, pl.radius);
@@ -1196,7 +1204,7 @@ void DeferredLighting::renderPointLights(VkCommandBuffer cmd, const Camera& came
     // preset intacto - e' o unico jeito de medir o custo/efeito das point
     // lights isolado (trocar de preset muda dez coisas ao mesmo tempo).
     static const bool kNoPointLights = std::getenv("ERUPTION_TEST_NO_POINT_LIGHTS") != nullptr;
-    if (!m_pointLightsEnabled || kNoPointLights || m_pointLights.empty()) return;
+    if (!m_pointLightsEnabled || kNoPointLights || (m_pointLights.empty() && m_extraPointLights.empty())) return;
 
     uint32_t frameIndex = m_ctx->currentFrame();
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pointLightPipeline);
@@ -1211,7 +1219,7 @@ void DeferredLighting::renderPointLights(VkCommandBuffer cmd, const Camera& came
     Mat4 viewProj = camera.viewProjJittered();
     Mat4 invViewProj = glm::inverse(viewProj);
 
-    for (const auto& light : m_pointLights) {
+    for (const auto& light : allPointLights()) {
         if (!light.enabled) continue;
 
         Mat4 model = glm::translate(Mat4(1.0f), light.position);

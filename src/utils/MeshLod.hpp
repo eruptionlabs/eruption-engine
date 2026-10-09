@@ -113,7 +113,10 @@ MeshLodResult simplifyMesh(const float* positions,
                            // O teto de triangulos e' ignorado abaixo deste
                            // piso: cortar 99% dos cartoes de uma copa nao e'
                            // "menos detalhe", e' a arvore sumindo.
-                           float minAreaKeep = 0.6f);
+                           float minAreaKeep = 0.6f,
+                           // Borda aberta fica onde está (chão: o mapa vizinho
+                           // encosta nela; borda que anda abre fresta).
+                           bool lockBorder = false);
 
 // PODA DE CARTOES COM COMPENSACAO DE AREA (Cook, Halstead, Planck, Ryu 2007,
 // "Stochastic Simplification of Aggregate Detail", Pixar).
