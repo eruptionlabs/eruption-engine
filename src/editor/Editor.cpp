@@ -77,6 +77,9 @@ std::string cpuName() {
 
 bool Editor::init(Engine& engine) {
     m_engine = &engine;
+    // HUD e minimapa do jogo: só quando o jogo pede (ui.show_hud), no Play.
+    engine.setHudBars(false);
+    engine.setMinimapHud(false);
     m_hardware = engine.vulkan().gpuName();
     for (const char* junk : {"NVIDIA ", "GeForce ", "AMD ", "Radeon(TM) "}) {
         const size_t at = m_hardware.find(junk);
@@ -1316,6 +1319,8 @@ void Editor::play() {
 
 void Editor::stop() {
     if (m_play == PlayState::Editing) return;
+    m_engine->setHudBars(false); // o que o jogo ligou vale só no Play
+    m_engine->setMinimapHud(false);
     ModelRenderer& mr = m_engine->modelRenderer();
     const auto& insts = mr.getInstances();
     if (insts.size() == m_snapshot.transforms.size()) {

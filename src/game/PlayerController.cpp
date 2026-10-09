@@ -575,6 +575,10 @@ void PlayerController::renderApplicationHUD() {
     if (m_hud) m_hud->draw();
 }
 
+void PlayerController::renderApplicationHUDIn(ImDrawList* dl, const ImVec2& origin, const ImVec2& size) {
+    if (m_hud) m_hud->drawIn(dl, origin, size);
+}
+
 void PlayerController::renderMinimapMarkers() const {
 }
 
