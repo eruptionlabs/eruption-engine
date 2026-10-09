@@ -178,6 +178,7 @@ void VulkanContext::shutdown() {
     destroyPipelineCache();
 
     if (m_device != VK_NULL_HANDLE) {
+        vkc::shutdown();
         vkDestroyDevice(m_device, nullptr);
         m_device = VK_NULL_HANDLE;
     }
@@ -215,6 +216,7 @@ bool VulkanContext::beginFrame() {
     using Clk = std::chrono::steady_clock;
     auto t0 = kDbgPresent ? Clk::now() : Clk::time_point{};
     vkWaitForFences(m_device, 1, &m_frameFences[m_currentFrame], VK_TRUE, UINT64_MAX);
+    vkc::beginFrame(m_currentFrame);
     auto t1 = kDbgPresent ? Clk::now() : Clk::time_point{};
 
     VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
@@ -533,11 +535,11 @@ void VulkanContext::cmdBeginRendering(VkCommandBuffer cmd,
     renderingInfo.pDepthAttachment = depthAttachment;
     renderingInfo.pStencilAttachment = stencilAttachment;
 
-    vkCmdBeginRendering(cmd, &renderingInfo);
+    vkc::cmdBeginRendering(cmd, &renderingInfo);
 }
 
 void VulkanContext::cmdEndRendering(VkCommandBuffer cmd) {
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
 }
 
 void VulkanContext::cmdImageBarrier(VkCommandBuffer cmd, VkImage image,
@@ -567,7 +569,7 @@ void VulkanContext::cmdImageBarrier(VkCommandBuffer cmd, VkImage image,
     depInfo.imageMemoryBarrierCount = 1;
     depInfo.pImageMemoryBarriers = &barrier;
 
-    vkCmdPipelineBarrier2(cmd, &depInfo);
+    vkc::cmdPipelineBarrier2(cmd, &depInfo);
 }
 
 void VulkanContext::cmdImageBarriers(VkCommandBuffer cmd,
@@ -577,7 +579,7 @@ void VulkanContext::cmdImageBarriers(VkCommandBuffer cmd,
     depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     depInfo.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
     depInfo.pImageMemoryBarriers = barriers.data();
-    vkCmdPipelineBarrier2(cmd, &depInfo);
+    vkc::cmdPipelineBarrier2(cmd, &depInfo);
 }
 
 bool VulkanContext::createInstance() {
@@ -587,7 +589,9 @@ bool VulkanContext::createInstance() {
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.pEngineName = "ERUPTION";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_3;
+    // Vulkan 1.1: o motor só usa o que existe no 1.1 (o resto vai pela camada
+    // vkc e por extensões), então roda também em Android antigo.
+    appInfo.apiVersion = VK_API_VERSION_1_1;
 
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -745,15 +749,16 @@ bool VulkanContext::pickPhysicalDevice() {
     vkGetPhysicalDeviceProperties(m_physicalDevice, &m_deviceProperties);
     vkGetPhysicalDeviceFeatures(m_physicalDevice, &m_supportedFeatures);
 
-    m_supportedFeatures13 = {};
-    m_supportedFeatures13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-    m_supportedFeatures12 = {};
-    m_supportedFeatures12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    m_supportedFeatures12.pNext = &m_supportedFeatures13;
+    m_hasImageRobustness = deviceHasExtension(m_physicalDevice, VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME);
+    m_descriptorIndexing = {};
+    m_descriptorIndexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+    m_imageRobustness = {};
+    m_imageRobustness.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES;
+    if (m_hasImageRobustness) m_descriptorIndexing.pNext = &m_imageRobustness;
 
     VkPhysicalDeviceFeatures2 features2{};
     features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    features2.pNext = &m_supportedFeatures12;
+    features2.pNext = &m_descriptorIndexing;
     vkGetPhysicalDeviceFeatures2(m_physicalDevice, &features2);
 
     // Qual GPU esta em uso era invisivel: o log "Selected GPU" e' INFO e o
@@ -808,35 +813,32 @@ bool VulkanContext::createLogicalDevice() {
         queueCreateInfos.push_back(queueCreateInfo);
     }
 
-    VkPhysicalDeviceVulkan13Features features13{};
-    features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-    features13.dynamicRendering = m_supportedFeatures13.dynamicRendering;
-    features13.synchronization2 = m_supportedFeatures13.synchronization2;
-    features13.maintenance4 = m_supportedFeatures13.maintenance4;
+    // Recursos fora do 1.1, pedidos como extensão (no 1.2/1.3 as extensões
+    // continuam expostas). dynamic rendering e synchronization2 não são
+    // usados: a camada vkc traduz para render pass e barreira do 1.1.
+    VkPhysicalDeviceDescriptorIndexingFeatures descIndexing{};
+    descIndexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+    descIndexing.runtimeDescriptorArray = m_descriptorIndexing.runtimeDescriptorArray;
+    descIndexing.shaderSampledImageArrayNonUniformIndexing = m_descriptorIndexing.shaderSampledImageArrayNonUniformIndexing;
+    descIndexing.descriptorBindingPartiallyBound = m_descriptorIndexing.descriptorBindingPartiallyBound;
+    descIndexing.descriptorBindingSampledImageUpdateAfterBind = m_descriptorIndexing.descriptorBindingSampledImageUpdateAfterBind;
+    descIndexing.descriptorBindingUpdateUnusedWhilePending = m_descriptorIndexing.descriptorBindingUpdateUnusedWhilePending;
+    descIndexing.descriptorBindingVariableDescriptorCount = m_descriptorIndexing.descriptorBindingVariableDescriptorCount;
     // FSR 3.1: os passes do SDK leem alem da borda em alguns pontos (SPD mip 5,
     // RCAS, borda 3x3 do prepare_inputs). No D3D isso devolve 0; no Vulkan e'
     // indefinido sem robustImageAccess. Opcional: sem ele o FSR roda igual ao
     // backend Vulkan do proprio SDK, que tambem nao liga.
-    features13.robustImageAccess = m_supportedFeatures13.robustImageAccess;
-
-    VkPhysicalDeviceVulkan12Features features12{};
-    features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    features12.descriptorIndexing = m_supportedFeatures12.descriptorIndexing;
-    features12.runtimeDescriptorArray = m_supportedFeatures12.runtimeDescriptorArray;
-    features12.shaderSampledImageArrayNonUniformIndexing = m_supportedFeatures12.shaderSampledImageArrayNonUniformIndexing;
-    features12.descriptorBindingPartiallyBound = m_supportedFeatures12.descriptorBindingPartiallyBound;
-    features12.descriptorBindingSampledImageUpdateAfterBind = m_supportedFeatures12.descriptorBindingSampledImageUpdateAfterBind;
-    features12.descriptorBindingUpdateUnusedWhilePending = m_supportedFeatures12.descriptorBindingUpdateUnusedWhilePending;
-    features12.descriptorBindingVariableDescriptorCount = m_supportedFeatures12.descriptorBindingVariableDescriptorCount;
-    features12.timelineSemaphore = m_supportedFeatures12.timelineSemaphore;
-    features12.bufferDeviceAddress = m_supportedFeatures12.bufferDeviceAddress;
-    features12.scalarBlockLayout = m_supportedFeatures12.scalarBlockLayout;
+    VkPhysicalDeviceImageRobustnessFeatures robustness{};
+    robustness.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES;
+    robustness.robustImageAccess = m_imageRobustness.robustImageAccess;
 
     VkPhysicalDeviceFeatures features{};
     // Only enable these if the driver actually supports them. The engine does
     // not rely on them for core rendering, so keeping them optional improves
     // compatibility with open-source drivers and older hardware.
     features.samplerAnisotropy = m_supportedFeatures.samplerAnisotropy ? VK_TRUE : VK_FALSE;
+    // G-buffer e passes com vários alvos usam blend diferente por anexo.
+    features.independentBlend = m_supportedFeatures.independentBlend ? VK_TRUE : VK_FALSE;
     features.fillModeNonSolid = m_supportedFeatures.fillModeNonSolid ? VK_TRUE : VK_FALSE;
     features.wideLines = m_supportedFeatures.wideLines ? VK_TRUE : VK_FALSE;
     // FSR 3.1: a saida do upscaler e' uma storage image SEM formato no GLSL.
@@ -877,9 +879,15 @@ bool VulkanContext::createLogicalDevice() {
                          ? m_deviceProperties.limits.maxTessellationGenerationLevel
                          : 1u;
 
-    const std::vector<const char*> deviceExtensions = {
+    std::vector<const char*> deviceExtensions = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_KHR_MAINTENANCE3_EXTENSION_NAME,
+        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
     };
+    if (m_hasImageRobustness && robustness.robustImageAccess) {
+        deviceExtensions.push_back(VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME);
+        descIndexing.pNext = &robustness;
+    }
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -888,8 +896,7 @@ bool VulkanContext::createLogicalDevice() {
     createInfo.pEnabledFeatures = &features;
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
     createInfo.ppEnabledExtensionNames = deviceExtensions.data();
-    createInfo.pNext = &features12;
-    features12.pNext = &features13;
+    createInfo.pNext = &descIndexing;
 
 #ifdef ERUPTION_DEBUG
     // In modern Vulkan, device layers are deprecated and ignored.
@@ -897,6 +904,7 @@ bool VulkanContext::createLogicalDevice() {
 #endif
 
     VK_CHECK(vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device));
+    vkc::init(m_device, MAX_FRAMES_IN_FLIGHT);
 
     vkGetDeviceQueue(m_device, m_queueFamilies.graphicsFamily, 0, &m_graphicsQueue);
     vkGetDeviceQueue(m_device, m_queueFamilies.presentFamily, 0, &m_presentQueue);
@@ -1004,7 +1012,7 @@ bool VulkanContext::createImageViews() {
         createInfo.subresourceRange.baseArrayLayer = 0;
         createInfo.subresourceRange.layerCount = 1;
 
-        VK_CHECK(vkCreateImageView(m_device, &createInfo, nullptr, &m_swapViews[i]));
+        VK_CHECK(vkc::createImageView(m_device, &createInfo, nullptr, &m_swapViews[i]));
     }
     return true;
 }
@@ -1018,7 +1026,7 @@ bool VulkanContext::createAllocator() {
     allocatorInfo.physicalDevice = m_physicalDevice;
     allocatorInfo.device = m_device;
     allocatorInfo.instance = m_instance;
-    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_1;
     allocatorInfo.pVulkanFunctions = &vulkanFunctions;
 
     VK_CHECK(vmaCreateAllocator(&allocatorInfo, &m_allocator));
@@ -1130,6 +1138,16 @@ std::vector<const char*> VulkanContext::getRequiredExtensions() {
     return extensions;
 }
 
+bool VulkanContext::deviceHasExtension(VkPhysicalDevice device, const char* name) {
+    uint32_t count = 0;
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
+    std::vector<VkExtensionProperties> exts(count);
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &count, exts.data());
+    for (const auto& e : exts)
+        if (std::strcmp(e.extensionName, name) == 0) return true;
+    return false;
+}
+
 bool VulkanContext::isDeviceSuitable(VkPhysicalDevice device) {
     QueueFamilyIndices indices = findQueueFamilies(device);
     if (!indices.isComplete()) return false;
@@ -1157,20 +1175,23 @@ bool VulkanContext::isDeviceSuitable(VkPhysicalDevice device) {
     vkGetPhysicalDeviceFeatures(device, &features);
     if (!features.samplerAnisotropy) return false;
 
-    VkPhysicalDeviceVulkan13Features features13{};
-    features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-    VkPhysicalDeviceVulkan12Features features12{};
-    features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    features12.pNext = &features13;
-
+    // Texturas sem limite fixo por material (bindless): extensão de indexação
+    // de descritores (núcleo no 1.2). Sem ela o motor ainda não tem caminho.
+    VkPhysicalDeviceProperties devProps;
+    vkGetPhysicalDeviceProperties(device, &devProps);
+    if (devProps.apiVersion < VK_API_VERSION_1_1) return false;
+    if (!deviceHasExtension(device, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME) ||
+        !deviceHasExtension(device, VK_KHR_MAINTENANCE3_EXTENSION_NAME))
+        return false;
+    VkPhysicalDeviceDescriptorIndexingFeatures di{};
+    di.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
     VkPhysicalDeviceFeatures2 features2{};
     features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    features2.pNext = &features12;
+    features2.pNext = &di;
     vkGetPhysicalDeviceFeatures2(device, &features2);
-
-    if (!features13.dynamicRendering) return false;
-    if (!features12.bufferDeviceAddress) return false;
-    if (!features12.scalarBlockLayout) return false;
+    if (!di.runtimeDescriptorArray || !di.descriptorBindingPartiallyBound ||
+        !di.shaderSampledImageArrayNonUniformIndexing || !di.descriptorBindingSampledImageUpdateAfterBind)
+        return false;
 
     // The GBuffer uses 6 color attachments; make sure the device supports them.
     VkPhysicalDeviceProperties props;

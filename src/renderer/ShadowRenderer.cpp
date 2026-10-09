@@ -177,11 +177,11 @@ void ShadowRenderer::createShadowAtlas(uint32_t size) {
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_atlasView);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_atlasView);
 
     if (m_nextAtlasImage != VK_NULL_HANDLE) {
         viewInfo.image = m_nextAtlasImage;
-        vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_nextAtlasView);
+        vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_nextAtlasView);
     }
 }
 
@@ -225,7 +225,7 @@ void ShadowRenderer::ensureNextAtlas() {
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_nextAtlasView);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_nextAtlasView);
     ERUPTION_LOG_WARN("[SOMBRA] atlas 'next' criado tardiamente a %u (temporal blend ligado em runtime)", m_currentAtlasSize);
 }
 
@@ -1037,7 +1037,7 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
     // Helper to render one atlas
     auto renderAtlas = [&](VkImage atlasImage, VkImageView atlasView, const Mat4* renderMats) {
         m_ctx->cmdImageBarrier(cmd, atlasImage,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
             0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
             VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -1052,7 +1052,7 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
             VkRenderingAttachmentInfo depthAttachment{};
             depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             depthAttachment.imageView = atlasView;
-            depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depthAttachment.loadOp = (i == 0) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
             depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             depthAttachment.clearValue.depthStencil = {1.0f, 0};
@@ -1177,7 +1177,7 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
         }
 
         m_ctx->cmdImageBarrier(cmd, atlasImage,
-            VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
             VK_IMAGE_ASPECT_DEPTH_BIT);

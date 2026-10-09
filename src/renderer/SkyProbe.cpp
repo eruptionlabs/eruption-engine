@@ -55,7 +55,7 @@ void submitBarriers(VkCommandBuffer cmd, const std::vector<VkImageMemoryBarrier2
     dep.pImageMemoryBarriers = imgs.empty() ? nullptr : imgs.data();
     dep.memoryBarrierCount = mem ? 1u : 0u;
     dep.pMemoryBarriers = mem;
-    vkCmdPipelineBarrier2(cmd, &dep);
+    vkc::cmdPipelineBarrier2(cmd, &dep);
 }
 
 } // namespace
@@ -100,12 +100,12 @@ bool SkyProbe::createCube() {
     vi.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
     vi.format = ii.format;
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, m_mipCount, 0, 6};
-    if (vkCreateImageView(dev, &vi, nullptr, &m_cubeView) != VK_SUCCESS) return false;
+    if (vkc::createImageView(dev, &vi, nullptr, &m_cubeView) != VK_SUCCESS) return false;
     for (uint32_t f = 0; f < 6; ++f) {
         VkImageViewCreateInfo fv = vi;
         fv.viewType = VK_IMAGE_VIEW_TYPE_2D;
         fv.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, f, 1};
-        if (vkCreateImageView(dev, &fv, nullptr, &m_faceViews[f]) != VK_SUCCESS) return false;
+        if (vkc::createImageView(dev, &fv, nullptr, &m_faceViews[f]) != VK_SUCCESS) return false;
     }
     // Profundidade minima: o pipeline do skybox declara D32 e o dynamic
     // rendering exige um attachment de formato igual (sem a feature
@@ -122,7 +122,7 @@ bool SkyProbe::createCube() {
     dv.viewType = VK_IMAGE_VIEW_TYPE_2D;
     dv.format = VK_FORMAT_D32_SFLOAT;
     dv.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-    if (vkCreateImageView(dev, &dv, nullptr, &m_depthView) != VK_SUCCESS) return false;
+    if (vkc::createImageView(dev, &dv, nullptr, &m_depthView) != VK_SUCCESS) return false;
 
     VkSamplerCreateInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -249,7 +249,7 @@ void SkyProbe::update(VkCommandBuffer cmd, SkySystem& sky, const DayNightCycle& 
                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_BLIT_BIT,
                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
                    VK_IMAGE_ASPECT_COLOR_BIT, 0, m_mipCount, 0, 6),
-        imgBarrier(m_depth, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+        imgBarrier(m_depth, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,

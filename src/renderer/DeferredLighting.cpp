@@ -222,7 +222,7 @@ void DeferredLighting::createLitImage() {
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_litView);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_litView);
 
     // Half-resolution SSAO chain (raw + bilateral-blurred), R8.
     m_ssaoWidth  = std::max(1u, m_width / 2);
@@ -251,7 +251,7 @@ void DeferredLighting::createLitImage() {
         vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         vi.subresourceRange.levelCount = 1;
         vi.subresourceRange.layerCount = 1;
-        vkCreateImageView(m_ctx->device(), &vi, nullptr, &view);
+        vkc::createImageView(m_ctx->device(), &vi, nullptr, &view);
     };
     makeAoImage(m_ssaoImage, m_ssaoAlloc, m_ssaoView);
     makeAoImage(m_ssaoBlurImage, m_ssaoBlurAlloc, m_ssaoBlurView);

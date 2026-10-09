@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
+#include "renderer/VkCompat.hpp"
 
 #include <vector>
 #include <string>
@@ -236,6 +237,7 @@ public:
     // FSR 3.1 utilizavel neste device (subgroup quad em compute, escrita de
     // storage image sem formato, grupo de 256 invocacoes).
     bool fsrSupported() const { return m_fsrSupported; }
+    const char* gpuName() const { return m_deviceProperties.deviceName; }
     // Vies de mip das texturas de CENA (mipLodBias dos samplers de modelo,
     // terreno e do sampler padrao). Negativo com FSR: a cena e' rasterizada
     // abaixo da resolucao de saida, e o mip tem que ser o da SAIDA, senao a
@@ -257,8 +259,10 @@ private:
 
     VkPhysicalDeviceProperties m_deviceProperties{};
     VkPhysicalDeviceFeatures m_supportedFeatures{};
-    VkPhysicalDeviceVulkan12Features m_supportedFeatures12{};
-    VkPhysicalDeviceVulkan13Features m_supportedFeatures13{};
+    VkPhysicalDeviceDescriptorIndexingFeatures m_descriptorIndexing{};
+    VkPhysicalDeviceImageRobustnessFeatures m_imageRobustness{};
+    bool m_hasImageRobustness = false;
+    static bool deviceHasExtension(VkPhysicalDevice device, const char* name);
 
     // Transfer pool for immediate submit
     VkCommandPool m_transferPool = VK_NULL_HANDLE;

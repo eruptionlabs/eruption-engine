@@ -31,7 +31,7 @@ static void barrierColorToShaderRead(VkCommandBuffer cmd, VkImage image) {
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dep.imageMemoryBarrierCount = 1;
     dep.pImageMemoryBarriers = &barrier;
-    vkCmdPipelineBarrier2(cmd, &dep);
+    vkc::cmdPipelineBarrier2(cmd, &dep);
 }
 
 static void barrierUndefinedToColorAttach(VkCommandBuffer cmd, VkImage image) {
@@ -49,7 +49,7 @@ static void barrierUndefinedToColorAttach(VkCommandBuffer cmd, VkImage image) {
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dep.imageMemoryBarrierCount = 1;
     dep.pImageMemoryBarriers = &barrier;
-    vkCmdPipelineBarrier2(cmd, &dep);
+    vkc::cmdPipelineBarrier2(cmd, &dep);
 }
 
 static void beginPass(VkCommandBuffer cmd, VkImageView view, uint32_t w, uint32_t h) {
@@ -66,7 +66,7 @@ static void beginPass(VkCommandBuffer cmd, VkImageView view, uint32_t w, uint32_
     info.layerCount = 1;
     info.colorAttachmentCount = 1;
     info.pColorAttachments = &color;
-    vkCmdBeginRendering(cmd, &info);
+    vkc::cmdBeginRendering(cmd, &info);
 
     VkViewport viewport{0, 0, (float)w, (float)h, 0, 1};
     VkRect2D scissor{{0, 0}, {w, h}};
@@ -241,7 +241,7 @@ VkPipeline UpscaleAA::createPipeline(const std::vector<uint32_t>& fragCode, VkFo
     pipeInfo.layout = layout;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    vkCreateGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &pipeline);
+    vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &pipeline);
 
     vkDestroyShaderModule(m_ctx->device(), vertModule, nullptr);
     vkDestroyShaderModule(m_ctx->device(), fragModule, nullptr);
@@ -259,7 +259,7 @@ void UpscaleAA::createRenderTarget() {
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = m_renderFormat;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_fxaaView);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_fxaaView);
     // Escreve UMA VEZ - a view e' estavel ate' o proximo resize (nao ha'
     // ping-pong por frame-in-flight). Reescrever isto TODO FRAME, como a
     // primeira versao fazia, e' exatamente o padrao que dispara
@@ -345,7 +345,7 @@ void UpscaleAA::render(VkCommandBuffer cmd, VkImageView source, VkImage sourceIm
         FxaaPush push{Vec2(1.0f / m_renderWidth, 1.0f / m_renderHeight)};
         vkCmdPushConstants(cmd, m_fxaaLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
         vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(cmd);
+        vkc::cmdEndRendering(cmd);
         barrierColorToShaderRead(cmd, m_fxaaImage);
     }
 
@@ -365,7 +365,7 @@ void UpscaleAA::render(VkCommandBuffer cmd, VkImageView source, VkImage sourceIm
         FxaaPush push{Vec2(1.0f / m_renderWidth, 1.0f / m_renderHeight)};
         vkCmdPushConstants(cmd, m_fxaaLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
         vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(cmd);
+        vkc::cmdEndRendering(cmd);
         barrierColorToShaderRead(cmd, m_fxaaImage);
     }
     // O chamador ja' deixa `dstImage` em COLOR_ATTACHMENT_OPTIMAL (mesma
@@ -380,7 +380,7 @@ void UpscaleAA::render(VkCommandBuffer cmd, VkImageView source, VkImage sourceIm
     push.sharpenAmount = sharpenAmount;
     vkCmdPushConstants(cmd, m_upscaleLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
     // Deixa dstImage em COLOR_ATTACHMENT_OPTIMAL pro ImGui desenhar em cima -
     // vkCmdEndRendering nao muda o layout sozinho, e o passe escreveu nesse
     // layout o tempo todo (beginPass usa COLOR_ATTACHMENT_OPTIMAL), entao nao

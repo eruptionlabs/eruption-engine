@@ -61,7 +61,7 @@ bool make3D(VulkanContext* ctx, uint32_t dx, uint32_t dy, uint32_t dz, VkImageUs
     vi.viewType = VK_IMAGE_VIEW_TYPE_3D;
     vi.format = ii.format;
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    return vkCreateImageView(ctx->device(), &vi, nullptr, &view) == VK_SUCCESS;
+    return vkc::createImageView(ctx->device(), &vi, nullptr, &view) == VK_SUCCESS;
 }
 } // namespace
 
@@ -178,7 +178,7 @@ bool IrradianceProbes::createDepth(DepthTarget& t) {
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vi.format = VK_FORMAT_D32_SFLOAT;
     vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-    return vkCreateImageView(m_ctx->device(), &vi, nullptr, &t.view) == VK_SUCCESS;
+    return vkc::createImageView(m_ctx->device(), &vi, nullptr, &t.view) == VK_SUCCESS;
 }
 
 void IrradianceProbes::destroyDepth(DepthTarget& t) {
@@ -326,13 +326,13 @@ bool IrradianceProbes::bake(TerrainRenderer& terrain, ModelRenderer& models,
         // menos o chao. Mapa GLB traz o terreno como modelo: sem separar, o
         // chao visto de baixo seria a base de toda laje.
         auto renderDepth = [&](DepthTarget& t, const Mat4& vp, int groundFilter) {
-            m_ctx->cmdImageBarrier(cmd, t.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            m_ctx->cmdImageBarrier(cmd, t.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
                                    0, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
             VkRenderingAttachmentInfo depth{};
             depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             depth.imageView = t.view;
-            depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             depth.clearValue.depthStencil = {1.0f, 0};
@@ -374,7 +374,7 @@ bool IrradianceProbes::bake(TerrainRenderer& terrain, ModelRenderer& models,
                 models.setShadowGroundFilter(0);
             }
             m_ctx->cmdEndRendering(cmd);
-            m_ctx->cmdImageBarrier(cmd, t.image, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            m_ctx->cmdImageBarrier(cmd, t.image, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                                    VK_IMAGE_ASPECT_DEPTH_BIT);

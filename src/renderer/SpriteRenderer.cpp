@@ -511,7 +511,7 @@ uint32_t SpriteRenderer::addPalette(const uint8_t* rgba256) {
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
-    if (vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &pal.view) != VK_SUCCESS) {
+    if (vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &pal.view) != VK_SUCCESS) {
         return 0;
     }
 

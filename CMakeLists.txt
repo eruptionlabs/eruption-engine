@@ -135,10 +135,10 @@ find_program(GLSLANG_VALIDATOR glslangValidator)
 
 if(GLSLC_EXECUTABLE)
     set(SHADER_COMPILER ${GLSLC_EXECUTABLE})
-    set(SHADER_FLAGS "--target-env=vulkan1.3" "-O" "-I${CMAKE_SOURCE_DIR}/shaders")
+    set(SHADER_FLAGS "--target-env=vulkan1.1" "-O" "-I${CMAKE_SOURCE_DIR}/shaders")
 elseif(GLSLANG_VALIDATOR)
     set(SHADER_COMPILER ${GLSLANG_VALIDATOR})
-    set(SHADER_FLAGS "-V" "--target-env" "vulkan1.3" "-I${CMAKE_SOURCE_DIR}/shaders" "-o")
+    set(SHADER_FLAGS "-V" "--target-env" "vulkan1.1" "-I${CMAKE_SOURCE_DIR}/shaders" "-o")
 else()
     message(FATAL_ERROR "No GLSL compiler found. Install glslc or glslangValidator.")
 endif()
@@ -219,9 +219,9 @@ file(MAKE_DIRECTORY ${SHADER_BINARY_DIR}/fsr3)
 # Os .glsl do SDK nao tem extensao de estagio: o compilador precisa ouvir
 # "compute" explicitamente (glslangValidator -S comp / glslc -fshader-stage).
 if(GLSLANG_VALIDATOR)
-    set(FSR3_COMPILER ${GLSLANG_VALIDATOR} -V --target-env vulkan1.3 -S comp)
+    set(FSR3_COMPILER ${GLSLANG_VALIDATOR} -V --target-env vulkan1.1 -S comp)
 else()
-    set(FSR3_COMPILER ${GLSLC_EXECUTABLE} --target-env=vulkan1.3 -fshader-stage=comp)
+    set(FSR3_COMPILER ${GLSLC_EXECUTABLE} --target-env=vulkan1.1 -fshader-stage=comp)
 endif()
 foreach(fsr_hdr 0 1)
     if(fsr_hdr)
@@ -286,7 +286,7 @@ if(SPIRV_VAL_EXECUTABLE)
         foreach(spv ${SHADOW_SPV_BINARIES})
             get_filename_component(spv_name ${spv} NAME)
             add_custom_command(TARGET validate_shadow_shaders POST_BUILD
-                COMMAND ${SPIRV_VAL_EXECUTABLE} --target-env vulkan1.3 ${spv}
+                COMMAND ${SPIRV_VAL_EXECUTABLE} --target-env vulkan1.1 ${spv}
                 COMMENT "Validating SPIR-V: ${spv_name}"
             )
         endforeach()

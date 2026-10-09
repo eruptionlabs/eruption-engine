@@ -585,7 +585,7 @@ static PbrTextureSlot uploadPbrTextureSlot(VulkanContext* ctx, BindlessDescripto
     viewInfo.subresourceRange.levelCount = mipLevels;
     viewInfo.subresourceRange.layerCount = 1;
 
-    if (vkCreateImageView(ctx->device(), &viewInfo, nullptr, &out.view) != VK_SUCCESS) {
+    if (vkc::createImageView(ctx->device(), &viewInfo, nullptr, &out.view) != VK_SUCCESS) {
         vmaDestroyImage(ctx->allocator(), out.image, out.alloc);
         out.image = VK_NULL_HANDLE;
         out.alloc = VK_NULL_HANDLE;

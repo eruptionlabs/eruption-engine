@@ -48,7 +48,7 @@ void MipmapGenerator::generateMipmapsBlit(VkCommandBuffer cmd,
         depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
         depInfo.imageMemoryBarrierCount = 1;
         depInfo.pImageMemoryBarriers = &b;
-        vkCmdPipelineBarrier2(cmd, &depInfo);
+        vkc::cmdPipelineBarrier2(cmd, &depInfo);
     };
 
     int32_t mipWidth = static_cast<int32_t>(width);
@@ -291,7 +291,7 @@ void MipmapGenerator::generateMipmapsCompute(VkCommandBuffer cmd,
         viewInfo.subresourceRange.baseMipLevel = i;
         viewInfo.subresourceRange.levelCount = 1;
         viewInfo.subresourceRange.layerCount = 1;
-        if (vkCreateImageView(ctx->device(), &viewInfo, nullptr, &views[i]) != VK_SUCCESS) {
+        if (vkc::createImageView(ctx->device(), &viewInfo, nullptr, &views[i]) != VK_SUCCESS) {
             Logger::error("MipmapGenerator: failed to create image view for level %u", i);
             for (uint32_t j = 0; j < i; j++) vkDestroyImageView(ctx->device(), views[j], nullptr);
             vkDestroyDescriptorPool(ctx->device(), localPool, nullptr);

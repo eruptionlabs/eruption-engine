@@ -182,7 +182,7 @@ void PostProcessor::createImages() {
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format = postFmt;
         viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &view);
+        vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &view);
     };
 
     createImg(m_outputImage, m_outputAlloc, m_outputView);
@@ -480,7 +480,7 @@ VkPipeline PostProcessor::createFullscreenPipeline(const std::vector<uint32_t>& 
     pipeInfo.layout = m_layout;
 
     VkPipeline pipeline;
-    vkCreateGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &pipeline);
+    vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &pipeline);
 
     vkDestroyShaderModule(m_ctx->device(), vertModule, nullptr);
     vkDestroyShaderModule(m_ctx->device(), fragModule, nullptr);
@@ -531,7 +531,7 @@ static void barrierToColorAttach(VkCommandBuffer cmd, VulkanContext* ctx, VkImag
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dep.imageMemoryBarrierCount = 1;
     dep.pImageMemoryBarriers = &barrier;
-    vkCmdPipelineBarrier2(cmd, &dep);
+    vkc::cmdPipelineBarrier2(cmd, &dep);
 }
 
 static void barrierToShaderRead(VkCommandBuffer cmd, VulkanContext* ctx, VkImage image) {
@@ -550,7 +550,7 @@ static void barrierToShaderRead(VkCommandBuffer cmd, VulkanContext* ctx, VkImage
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dep.imageMemoryBarrierCount = 1;
     dep.pImageMemoryBarriers = &barrier;
-    vkCmdPipelineBarrier2(cmd, &dep);
+    vkc::cmdPipelineBarrier2(cmd, &dep);
 }
 
 static void beginFullscreenPass(VkCommandBuffer cmd, VkImageView view, uint32_t w, uint32_t h) {
@@ -567,7 +567,7 @@ static void beginFullscreenPass(VkCommandBuffer cmd, VkImageView view, uint32_t 
     info.layerCount = 1;
     info.colorAttachmentCount = 1;
     info.pColorAttachments = &color;
-    vkCmdBeginRendering(cmd, &info);
+    vkc::cmdBeginRendering(cmd, &info);
 
     VkViewport viewport{ 0, 0, (float)w, (float)h, 0, 1 };
     VkRect2D scissor{ {0, 0}, {w, h} };
@@ -1075,7 +1075,7 @@ if (!m_ctx) return;
         wp.params.w = dropLensAmount;
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(wp), &wp);
         vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(cmd);
+        vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_weatherImage);
         m_ctx->writeTimestamp(cmd, 33, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         msOverlay = m_ctx->timestampDeltaMs(32, 33);
@@ -1140,7 +1140,7 @@ if (!m_ctx) return;
         cocPush.enable_foreground = settings.cocEnableForeground ? 1 : 0;
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(cocPush), &cocPush);
         vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(cmd);
+        vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_cocImage);
 
         // Pass 2a: Horizontal Blur
@@ -1150,7 +1150,7 @@ if (!m_ctx) return;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_blurHPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_descriptorSets[2], 0, nullptr);
         vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(cmd);
+        vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_blurHImage);
 
         // Pass 2b: Vertical Blur
@@ -1160,7 +1160,7 @@ if (!m_ctx) return;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_blurVPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_descriptorSets[3], 0, nullptr);
         vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(cmd);
+        vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_blurVImage);
 
         // Pass 3: Composite
@@ -1179,7 +1179,7 @@ if (!m_ctx) return;
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(compPush), &compPush);
         
         vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(cmd);
+        vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_dofImage);
         compositeSource = m_dofView;
     }
@@ -1213,7 +1213,7 @@ if (!m_ctx) return;
         float threshold = settings.bloomThreshold;
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(float), &threshold);
         vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(cmd);
+        vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_bloomDownImages[0]);
 
         // 2. Downsample Pyramid
@@ -1230,7 +1230,7 @@ if (!m_ctx) return;
             push.size = Vec2((float)std::max(1u, (m_width / 2) >> (i - 1)), (float)std::max(1u, (m_height / 2) >> (i - 1)));
             vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
             vkCmdDraw(cmd, 3, 1, 0, 0);
-            vkCmdEndRendering(cmd);
+            vkc::cmdEndRendering(cmd);
             barrierToShaderRead(cmd, m_ctx, m_bloomDownImages[i]);
         }
 
@@ -1258,7 +1258,7 @@ if (!m_ctx) return;
             push.size = Vec2((float)std::max(1u, (m_width / 2) >> (i + 1)), (float)std::max(1u, (m_height / 2) >> (i + 1)));
             vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
             vkCmdDraw(cmd, 3, 1, 0, 0);
-            vkCmdEndRendering(cmd);
+            vkc::cmdEndRendering(cmd);
             barrierToShaderRead(cmd, m_ctx, m_bloomUpImages[i]);
             lastView = m_bloomUpViews[i];
         }
@@ -1352,7 +1352,7 @@ if (!m_ctx) return;
     if (settings.pbrDebugActive || kPbrDebugEnv) push.gradingParams.z = 1.0f;
     vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
     // O composite e' UM draw fullscreen que faz tonemap + color grading +
     // aberracao cromatica + motion blur + vinheta + fog + bloom blend. Nao da'
     // para separar esses efeitos por timestamp (sao ramos do mesmo shader);
@@ -1385,7 +1385,7 @@ if (!m_ctx) return;
             dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
             dep.imageMemoryBarrierCount = 1;
             dep.pImageMemoryBarriers = &barrier;
-            vkCmdPipelineBarrier2(cmd, &dep);
+            vkc::cmdPipelineBarrier2(cmd, &dep);
         }
 
         updateDescriptorSet(7, gbufferWorldPos, cloudColorView);
@@ -1405,7 +1405,7 @@ if (!m_ctx) return;
         dbgPush.pad = 0.0f;
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(dbgPush), &dbgPush);
         vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(cmd);
+        vkc::cmdEndRendering(cmd);
     }
     if (settings.showCloudCoverageDebug && cloudColorView != VK_NULL_HANDLE && gbufferWorldPos != VK_NULL_HANDLE) {
         m_ctx->writeTimestamp(cmd, kQCloudDbgEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
@@ -1703,7 +1703,7 @@ void PostProcessor::dispatchLensDropCompute(VkCommandBuffer cmd, const WeatherPa
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dep.bufferMemoryBarrierCount = 1;
     dep.pBufferMemoryBarriers = &barrier;
-    vkCmdPipelineBarrier2(cmd, &dep);
+    vkc::cmdPipelineBarrier2(cmd, &dep);
 }
 
 void PostProcessor::destroyLensDropCompute() {

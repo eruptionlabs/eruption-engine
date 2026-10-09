@@ -189,7 +189,7 @@ bool CloudLayerRenderer::createTargets() {
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format = format;
         viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        if (vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &view) != VK_SUCCESS) {
+        if (vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &view) != VK_SUCCESS) {
             Logger::error("CloudLayerRenderer: failed to create target view");
             return false;
         }
@@ -258,7 +258,7 @@ bool CloudLayerRenderer::createShadowMap() {
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = VK_FORMAT_R16_SFLOAT;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    if (vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_shadowMapView) != VK_SUCCESS) {
+    if (vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_shadowMapView) != VK_SUCCESS) {
         Logger::error("CloudLayerRenderer: failed to create shadow map view");
         return false;
     }
@@ -544,7 +544,7 @@ bool CloudLayerRenderer::createDebugPlanePipeline() {
     pipeInfo.layout = m_debugPlanePipelineLayout;
 
     ERUPTION_LOG_DEBUG("CloudLayerRenderer: about to create debug plane graphics pipeline");
-    VkResult result = vkCreateGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &m_debugPlanePipeline);
+    VkResult result = vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &m_debugPlanePipeline);
     ERUPTION_LOG_DEBUG("CloudLayerRenderer: debug plane graphics pipeline result = %d", (int)result);
 
     vkDestroyShaderModule(m_ctx->device(), vsModule, nullptr);
@@ -785,7 +785,7 @@ bool CloudLayerRenderer::createBillboardPipeline() {
     pipeInfo.pDynamicState = &dyn;
     pipeInfo.layout = m_billboardPipelineLayout;
 
-    VkResult result = vkCreateGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo,
+    VkResult result = vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo,
                                                 nullptr, &m_billboardPipeline);
 
     // Half-res accum variant: identical, but alpha accumulates "over"-style
@@ -805,7 +805,7 @@ bool CloudLayerRenderer::createBillboardPipeline() {
     dynAccum.pDynamicStates = dynStatesAccum;
     pipeInfo.pColorBlendState = &cb;
     pipeInfo.pDynamicState = &dynAccum;
-    VkResult resultAccum = vkCreateGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo,
+    VkResult resultAccum = vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo,
                                                      nullptr, &m_billboardAccumPipeline);
 
     vkDestroyShaderModule(m_ctx->device(), vsModule, nullptr);
@@ -991,7 +991,7 @@ bool CloudLayerRenderer::createSmokePipeline() {
     pipeInfo.pDynamicState = &dyn;
     pipeInfo.layout = m_billboardPipelineLayout;
 
-    VkResult result = vkCreateGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo,
+    VkResult result = vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo,
                                                 nullptr, &m_smokePipeline);
     vkDestroyShaderModule(m_ctx->device(), vsModule, nullptr);
     vkDestroyShaderModule(m_ctx->device(), fsModule, nullptr);
@@ -1200,7 +1200,7 @@ void CloudLayerRenderer::updateDebugPlaneDepthDescriptor(VkImageView depthView) 
     // attachment read-only do passe). Declarar SHADER_READ_ONLY aqui gerava
     // VUID-VkDescriptorImageInfo-imageLayout-00344 em CADA draw de plano -
     // 90 mil erros por sessao no zoom 0 do parana (40 nuvens de campo).
-    depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+    depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     depthInfo.imageView = depthView;
     depthInfo.sampler = m_linearSampler;
 
@@ -1349,7 +1349,7 @@ bool CloudLayerRenderer::createCloudShadowsPipeline() {
         pipeInfo.layout = m_cloudShadowsPipelineLayout;
 
         VkPipeline pipeline = VK_NULL_HANDLE;
-        if (vkCreateGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &pipeline) != VK_SUCCESS) {
+        if (vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &pipeline) != VK_SUCCESS) {
             return VK_NULL_HANDLE;
         }
         return pipeline;
@@ -1533,7 +1533,7 @@ bool CloudLayerRenderer::createCloudShadowApplyPipeline() {
     pipeInfo.pDynamicState = &dyn;
     pipeInfo.layout = m_cloudShadowApplyPipelineLayout;
 
-    VkResult result = vkCreateGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &m_cloudShadowApplyPipeline);
+    VkResult result = vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &m_cloudShadowApplyPipeline);
 
     vkDestroyShaderModule(m_ctx->device(), vsModule, nullptr);
     vkDestroyShaderModule(m_ctx->device(), fsModule, nullptr);
@@ -1617,7 +1617,7 @@ bool CloudLayerRenderer::createShadowAccumTarget(uint32_t width, uint32_t height
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
-    if (vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_shadowAccumView) != VK_SUCCESS) {
+    if (vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_shadowAccumView) != VK_SUCCESS) {
         Logger::error("CloudLayerRenderer: failed to create shadow accum view");
         return false;
     }
@@ -1706,7 +1706,7 @@ bool CloudLayerRenderer::beginCloudShadowAccum(VkCommandBuffer cmd, uint32_t wid
     accumInfo.colorAttachmentCount = 1;
     accumInfo.pColorAttachments = &accumAttach;
 
-    vkCmdBeginRendering(cmd, &accumInfo);
+    vkc::cmdBeginRendering(cmd, &accumInfo);
     m_shadowAccumMode = true;
     return true;
 }
@@ -1714,7 +1714,7 @@ bool CloudLayerRenderer::beginCloudShadowAccum(VkCommandBuffer cmd, uint32_t wid
 void CloudLayerRenderer::endCloudShadowAccumApply(VkCommandBuffer cmd, VkImageView litView,
                                                   uint32_t width, uint32_t height) {
     if (!m_shadowAccumMode) return;
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
 
     m_ctx->cmdImageBarrier(cmd, m_shadowAccumImage,
                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -1735,7 +1735,7 @@ void CloudLayerRenderer::endCloudShadowAccumApply(VkCommandBuffer cmd, VkImageVi
     litInfo.colorAttachmentCount = 1;
     litInfo.pColorAttachments = &litAttach;
 
-    vkCmdBeginRendering(cmd, &litInfo);
+    vkc::cmdBeginRendering(cmd, &litInfo);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudShadowApplyPipeline);
     VkViewport vp{0, 0, (float)width, (float)height, 0, 1};
     vkCmdSetViewport(cmd, 0, 1, &vp);
@@ -1744,7 +1744,7 @@ void CloudLayerRenderer::endCloudShadowAccumApply(VkCommandBuffer cmd, VkImageVi
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudShadowApplyPipelineLayout,
                           0, 1, &m_cloudShadowApplySet, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
     m_shadowAccumMode = false;
 }
 
@@ -1875,7 +1875,7 @@ bool CloudLayerRenderer::createVolumeApplyPipeline() {
     pipeInfo.pDynamicState = &dyn;
     pipeInfo.layout = m_volumeApplyPipelineLayout;
 
-    VkResult result = vkCreateGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &m_volumeApplyPipeline);
+    VkResult result = vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &m_volumeApplyPipeline);
 
     vkDestroyShaderModule(m_ctx->device(), vsModule, nullptr);
     vkDestroyShaderModule(m_ctx->device(), fsModule, nullptr);
@@ -1959,7 +1959,7 @@ bool CloudLayerRenderer::createVolumeAccumTarget(uint32_t width, uint32_t height
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
-    if (vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_volumeAccumView) != VK_SUCCESS) {
+    if (vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_volumeAccumView) != VK_SUCCESS) {
         Logger::error("CloudLayerRenderer: failed to create volume accum view");
         return false;
     }
@@ -2031,7 +2031,7 @@ bool CloudLayerRenderer::beginCloudVolumeAccum(VkCommandBuffer cmd, uint32_t wid
     accumInfo.colorAttachmentCount = 1;
     accumInfo.pColorAttachments = &accumAttach;
 
-    vkCmdBeginRendering(cmd, &accumInfo);
+    vkc::cmdBeginRendering(cmd, &accumInfo);
     m_volumeAccumMode = true;
     return true;
 }
@@ -2039,7 +2039,7 @@ bool CloudLayerRenderer::beginCloudVolumeAccum(VkCommandBuffer cmd, uint32_t wid
 void CloudLayerRenderer::endCloudVolumeAccumApply(VkCommandBuffer cmd, VkImageView litView,
                                                   uint32_t width, uint32_t height) {
     if (!m_volumeAccumMode) return;
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
 
     m_ctx->cmdImageBarrier(cmd, m_volumeAccumImage,
                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -2060,7 +2060,7 @@ void CloudLayerRenderer::endCloudVolumeAccumApply(VkCommandBuffer cmd, VkImageVi
     litInfo.colorAttachmentCount = 1;
     litInfo.pColorAttachments = &litAttach;
 
-    vkCmdBeginRendering(cmd, &litInfo);
+    vkc::cmdBeginRendering(cmd, &litInfo);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeApplyPipeline);
     VkViewport vp{0, 0, (float)width, (float)height, 0, 1};
     vkCmdSetViewport(cmd, 0, 1, &vp);
@@ -2069,7 +2069,7 @@ void CloudLayerRenderer::endCloudVolumeAccumApply(VkCommandBuffer cmd, VkImageVi
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeApplyPipelineLayout,
                           0, 1, &m_volumeApplySet, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
     m_volumeAccumMode = false;
 }
 
@@ -2481,7 +2481,7 @@ bool CloudLayerRenderer::createPipelines() {
     pipeInfo.pColorBlendState = &blendState;
     pipeInfo.layout = m_pipelineLayout;
 
-    if (vkCreateGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &m_raymarchPipeline) != VK_SUCCESS) {
+    if (vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &m_raymarchPipeline) != VK_SUCCESS) {
         Logger::error("CloudLayerRenderer: failed to create raymarch pipeline");
         return false;
     }
@@ -2597,7 +2597,7 @@ void CloudLayerRenderer::render(VkCommandBuffer cmd,
     info.colorAttachmentCount = 2;
     info.pColorAttachments = colorAttach;
 
-    vkCmdBeginRendering(cmd, &info);
+    vkc::cmdBeginRendering(cmd, &info);
 
     VkViewport viewport{0, 0, (float)m_width / 2.0f, (float)m_height / 2.0f, 0, 1};
     VkRect2D scissor{{0, 0}, {m_width / 2, m_height / 2}};
@@ -2616,7 +2616,7 @@ void CloudLayerRenderer::render(VkCommandBuffer cmd,
     vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
-    vkCmdEndRendering(cmd);
+    vkc::cmdEndRendering(cmd);
 
     // Transition to shader read.
     m_ctx->cmdImageBarrier(cmd, m_cloudColorImage,

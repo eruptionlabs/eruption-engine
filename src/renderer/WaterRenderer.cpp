@@ -301,7 +301,7 @@ void WaterRenderer::createRefractionResources(uint32_t width, uint32_t height) {
         for (uint32_t i = 0; i < MAX_FRAMES; ++i) {
             vmaCreateImage(m_ctx->allocator(), &imageInfo, &allocInfo, &m_refractionImage[i], &m_refractionAlloc[i], nullptr);
             viewInfo.image = m_refractionImage[i];
-            vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_refractionView[i]);
+            vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_refractionView[i]);
             m_refractionSlot[i] = m_bindless->allocateSlot();
             m_bindless->updateTexture(m_refractionSlot[i], m_refractionView[i], m_refractionSampler);
         }
@@ -348,7 +348,7 @@ void WaterRenderer::createRefractionResources(uint32_t width, uint32_t height) {
         for (uint32_t i = 0; i < MAX_FRAMES; ++i) {
             vmaCreateImage(m_ctx->allocator(), &imageInfo, &allocInfo, &m_depthCopyImage[i], &m_depthCopyAlloc[i], nullptr);
             viewInfo.image = m_depthCopyImage[i];
-            vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_depthCopyView[i]);
+            vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_depthCopyView[i]);
             m_depthCopySlot[i] = m_bindless->allocateSlot();
             m_bindless->updateTexture(m_depthCopySlot[i], m_depthCopyView[i], m_depthCopySampler);
         }
@@ -429,7 +429,7 @@ void WaterRenderer::createFoamAccumResources(uint32_t width, uint32_t height) {
     for (uint32_t i = 0; i < FOAM_ACCUM_COUNT; ++i) {
         vmaCreateImage(m_ctx->allocator(), &imageInfo, &allocInfo, &m_foamAccumImage[i], &m_foamAccumAlloc[i], nullptr);
         viewInfo.image = m_foamAccumImage[i];
-        vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_foamAccumView[i]);
+        vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_foamAccumView[i]);
         m_foamAccumSlot[i] = m_bindless->allocateSlot();
         m_bindless->updateTexture(m_foamAccumSlot[i], m_foamAccumView[i], m_foamAccumSampler);
     }
@@ -686,7 +686,7 @@ void WaterRenderer::createFoamMaskResources() {
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = VK_FORMAT_R8_UNORM;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_foamMaskView);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_foamMaskView);
 
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -1194,7 +1194,7 @@ bool WaterRenderer::createTextureFromPixelsInternal(const uint8_t* pixels, int w
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = format;
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &view);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &view);
 
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -1283,7 +1283,7 @@ void WaterRenderer::createUnderwaterResources(uint32_t width, uint32_t height) {
     for (uint32_t i = 0; i < MAX_FRAMES; ++i) {
         vmaCreateImage(m_ctx->allocator(), &imageInfo, &allocInfo, &m_underwaterImage[i], &m_underwaterAlloc[i], nullptr);
         viewInfo.image = m_underwaterImage[i];
-        vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_underwaterView[i]);
+        vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_underwaterView[i]);
         m_underwaterSlot[i] = m_bindless->allocateSlot();
         m_bindless->updateTexture(m_underwaterSlot[i], m_underwaterView[i], m_underwaterSampler);
     }
@@ -1558,7 +1558,7 @@ void WaterRenderer::createPipeline() {
     pipelineCI.pDynamicState = &dyn;
     pipelineCI.layout = m_layout;
 
-    VK_CHECK_VOID(vkCreateGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipelineCI, nullptr, &m_pipeline));
+    VK_CHECK_VOID(vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipelineCI, nullptr, &m_pipeline));
 
     vkDestroyShaderModule(m_ctx->device(), vertModule, nullptr);
     vkDestroyShaderModule(m_ctx->device(), fragModule, nullptr);

@@ -36,7 +36,7 @@ void Engine::initMinimap() {
     viewInfo.image = m_minimapImage; viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; viewInfo.subresourceRange.baseMipLevel = 0; viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0; viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(m_vulkan.device(), &viewInfo, nullptr, &m_minimapView);
+    vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &m_minimapView);
     m_minimapDescriptorSet = ImGui_ImplVulkan_AddTexture(m_defaultSampler, m_minimapView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     initMinimapComposite();
 }

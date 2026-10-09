@@ -139,7 +139,7 @@ void CameraMotion::createTarget() {
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vi.format = kFormat;
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCreateImageView(m_ctx->device(), &vi, nullptr, &m_view);
+    vkc::createImageView(m_ctx->device(), &vi, nullptr, &m_view);
     m_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     writeSet();
 }

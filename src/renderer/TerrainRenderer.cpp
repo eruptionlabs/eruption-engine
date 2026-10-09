@@ -451,7 +451,7 @@ uint32_t TerrainRenderer::loadTerrainTexture(PackManager* assets, const std::str
     viewInfo.subresourceRange.layerCount = 1;
 
     VkImageView view;
-    vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &view);
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &view);
 
     uint32_t slot = m_bindless->allocateSlot();
     if (slot == 0) {
