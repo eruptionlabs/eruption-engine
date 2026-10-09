@@ -2,6 +2,7 @@
 
 #include "script/ScriptApi.hpp"
 #include "script/LuauChunk.hpp"
+#include "script/ScriptDebugger.hpp"
 #include "core/Engine.hpp"
 #include "core/Input.hpp"
 #include "core/Logger.hpp"
@@ -74,6 +75,19 @@ bool crossedHour(float from, float to, float target) {
 
 } // namespace
 
+ScriptHost::ScriptHost() = default;
+ScriptHost::~ScriptHost() = default;
+
+void ScriptHost::resetWatchdog() { g_callStart = std::chrono::steady_clock::now(); }
+
+void ScriptHost::reloadForDebugging() {
+    if (!L) return;
+    m_native = false;
+    setLuauDebugCompile(true);
+    for (auto& s : m_scripts) s.mtime = {}; // o próximo scan recarrega todos
+    scan();
+}
+
 bool ScriptHost::init(Engine& engine, const fs::path& dir) {
     m_engine = &engine;
     m_dir = dir;
@@ -94,6 +108,13 @@ bool ScriptHost::init(Engine& engine, const fs::path& dir) {
     m_native = luau_codegen_supported() != 0;
     if (m_native) luau_codegen_create(L);
 
+#if ERUPTION_EDITOR
+    // Porta do depurador (VS Code): ERUPTION_DEBUG_PORT, 0 desliga.
+    if (const char* p = std::getenv("ERUPTION_DEBUG_PORT"); !p || std::atoi(p) != 0) {
+        m_debugger = std::make_unique<ScriptDebugger>(*this);
+        m_debugger->listen(p ? std::atoi(p) : 4711);
+    }
+#endif
     writeTypeDefinitions();
     scan();
     Logger::warning("Scripts: %zu file(s) in %s, %s", m_scripts.size(), m_dir.string().c_str(),
@@ -102,6 +123,8 @@ bool ScriptHost::init(Engine& engine, const fs::path& dir) {
 }
 
 void ScriptHost::shutdown() {
+    if (m_debugger) m_debugger->shutdown();
+    m_debugger.reset();
     if (m_running) stop();
     for (auto& s : m_scripts) unload(s);
     m_scripts.clear();
@@ -183,6 +206,12 @@ bool ScriptHost::load(Script& s, bool keepState) {
         return false;
     }
     if (m_native) luau_codegen_compile(T, -1);
+    // Guarda a função do arquivo: o depurador marca pontos de parada nela.
+    if (s.chunkRef >= 0) lua_unref(L, s.chunkRef);
+    lua_pushvalue(T, -1);
+    s.chunkRef = lua_ref(T, -1);
+    lua_pop(T, 1);
+    if (m_debugger) m_debugger->applyBreakpoints(T, -1, s.path);
 
     std::vector<Handler> handlers;
     m_loadingHandlers = &handlers;
@@ -281,6 +310,8 @@ void ScriptHost::unload(Script& s) {
     releaseHandlers(s.handlers);
     if (s.moduleRef >= 0 && L) lua_unref(L, s.moduleRef);
     s.moduleRef = -1;
+    if (s.chunkRef >= 0 && L) lua_unref(L, s.chunkRef);
+    s.chunkRef = -1;
 }
 
 void ScriptHost::startScript(Script& s) {
@@ -352,6 +383,7 @@ void ScriptHost::scan() {
 
 void ScriptHost::poll() {
     if (!L) return;
+    if (m_debugger) m_debugger->poll();
     const auto now = std::chrono::steady_clock::now();
     if (now - m_lastScan < std::chrono::milliseconds(500)) return;
     m_lastScan = now;
@@ -512,6 +544,15 @@ void ScriptHost::writeTypeDefinitions() {
                    "}\n");
     writeIfChanged(m_dir / ".vscode" / "extensions.json",
                    "{\n    \"recommendations\": [\"JohnnyMorganz.luau-lsp\"]\n}\n");
+    // Depurador: a extensão tools/vscode-eruption liga este tipo à porta do editor.
+    writeIfChanged(m_dir / ".vscode" / "launch.json",
+                   "{\n"
+                   "    \"version\": \"0.2.0\",\n"
+                   "    \"configurations\": [\n"
+                   "        { \"type\": \"eruption\", \"request\": \"attach\", \"name\": \"Debug game scripts\", \"port\": " +
+                       std::to_string(m_debugger ? m_debugger->port() : 4711) + " }\n"
+                   "    ]\n"
+                   "}\n");
 }
 
 } // namespace eruption

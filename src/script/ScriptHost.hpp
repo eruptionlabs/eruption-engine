@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -24,8 +25,12 @@ class Engine;
 // Um erro desliga só aquele script até o arquivo ser salvo de novo. Uma
 // chamada que passa de kWatchdogMs é interrompida, para um laço infinito não
 // travar o jogo.
+class ScriptDebugger;
+
 class ScriptHost {
 public:
+    ScriptHost();
+    ~ScriptHost();
     bool init(Engine& engine, const std::filesystem::path& dir);
     void shutdown();
 
@@ -78,11 +83,21 @@ public:
     std::string exportVars();
     bool importVars(const std::string& json);
 
+    // Depurador (VS Code, protocolo DAP): só no build com o editor.
+    ScriptDebugger* debugger() { return m_debugger.get(); }
+    // Ao voltar de uma pausa do depurador: o vigia de laço infinito recomeça.
+    static void resetWatchdog();
+    // Recompila tudo sem otimizar e sem código nativo (pontos de parada, locais).
+    void reloadForDebugging();
+
 private:
+    friend class ScriptDebugger;
+    std::unique_ptr<ScriptDebugger> m_debugger;
     struct Script {
         std::filesystem::path path;
         std::filesystem::file_time_type mtime{};
         int moduleRef = -1;
+        int chunkRef = -1; // função do arquivo (pontos de parada se marcam nela)
         std::vector<Handler> handlers;
         bool failed = false;   // erro em execução: desligado até salvar de novo
         bool started = false;
