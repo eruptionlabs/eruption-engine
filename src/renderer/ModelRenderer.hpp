@@ -513,6 +513,12 @@ public:
     // posição e normal animadas nele. Sombra, G-buffer e o resto desenham essa
     // cópia como uma malha qualquer.
     void updateSkinning(VkCommandBuffer cmd, float dt);
+    // Esquece os slots de textura guardados por nome com esse prefixo (as
+    // texturas foram soltas; se o nome voltar, é resolvido de novo).
+    void forgetTextures(const std::string& prefix) {
+        for (auto it = m_textureCache.begin(); it != m_textureCache.end();)
+            it = it->first.rfind(prefix, 0) == 0 ? m_textureCache.erase(it) : std::next(it);
+    }
     bool isSkinned(uint32_t instance) const { return m_skinnedByInstance.count(instance) != 0; }
     std::vector<std::string> animationsOf(uint32_t instance) const;
     // Toca a animação pelo nome (vazio = pose de repouso). Falso se não existe.

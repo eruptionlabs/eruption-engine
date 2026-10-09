@@ -588,10 +588,34 @@ void Engine::releaseRegion(WorldRegion& r) {
             cleanupSpriteTextures(c.look);
             c.removed = true;
         }
-    m_bindless.flushUpdates(); // slots dos sprites de volta à textura padrão antes de destruir
+    // Imagens embutidas no .glb do vizinho ("#<mapa>|..."): só ele as usa.
+    const std::string embeddedPrefix = "#" + r.map + "|";
+    std::vector<ModelTextureGPU> embedded = m_assetCache.takeModelTextures(embeddedPrefix);
+    mr.forgetTextures(embeddedPrefix);
+    for (const auto& t : embedded) {
+        if (t.bindlessSlot) m_bindless.freeSlot(t.bindlessSlot);
+        if (t.pbrSlot) m_bindless.freeSlot(t.pbrSlot);
+        if (t.normalSlot) m_bindless.freeSlot(t.normalSlot);
+    }
+    if (!embedded.empty()) {
+        VkDevice dev = m_vulkan.device();
+        VmaAllocator allocator = m_vulkan.allocator();
+        m_vulkan.deferSlotImageCleanup([dev, allocator, embedded] {
+            for (const auto& t : embedded) {
+                if (t.view) vkDestroyImageView(dev, t.view, nullptr);
+                if (t.image) vmaDestroyImage(allocator, t.image, t.alloc);
+                if (t.pbrView) vkDestroyImageView(dev, t.pbrView, nullptr);
+                if (t.pbrImage) vmaDestroyImage(allocator, t.pbrImage, t.pbrAlloc);
+                if (t.normalView) vkDestroyImageView(dev, t.normalView, nullptr);
+                if (t.normalImage) vmaDestroyImage(allocator, t.normalImage, t.normalAlloc);
+            }
+        });
+    }
+    m_bindless.flushUpdates(); // slots dos sprites e das imagens de volta à textura padrão antes de destruir
     releaseRegionSplat(r);
     for (auto& t : r.splatMask) t = TextureResource{};
-    ERUPTION_LOG_WARN("World: %s released (%zu meshes, %zu instances)", r.map.c_str(), meshes, idx.size());
+    ERUPTION_LOG_WARN("World: %s released (%zu meshes, %zu embedded images, %zu instances)", r.map.c_str(), meshes,
+                      embedded.size(), idx.size());
     r.data.reset();
     r.enabled.clear();
     r.lights.clear();
