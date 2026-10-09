@@ -258,6 +258,13 @@ void DefaultApplication::onUpdate(float deltaTime) {
         }
         m_editor->consumeStep();
     } else {
+        // Porta, jogo salvo: troca de mapa pedida pelo jogo, aqui fora do frame.
+        Engine::MapRequest request;
+        if (m_engine && m_engine->takeMapRequest(request)) {
+            m_hasMapSpawn = request.hasSpawn;
+            m_mapSpawn = request.spawn;
+            m_engine->loadMap(request.map);
+        }
         // Edições feitas no editor (assets/scenes/<mapa>.scene.luau) valem no
         // jogo: aplicadas uma vez, depois que o jogador nasce no mapa.
         if (m_engine && m_engine->isPlayerSpawnedOnActiveMap() && m_engine->currentMapName() != m_sceneEditsMap) {
@@ -269,6 +276,12 @@ void DefaultApplication::onUpdate(float deltaTime) {
                 ERUPTION_LOG_WARN("Scene edits: %d change(s) applied to %s", edits.apply(*m_engine), m_sceneEditsMap.c_str());
             m_engine->loadScatter(m_sceneEditsMap); // objetos espalhados pelo pincel
             m_engine->startWorld();                 // mapas vizinhos (mundo contínuo)
+            if (m_hasMapSpawn && m_player) {
+                m_hasMapSpawn = false;
+                const Vec3 p(m_mapSpawn.x, m_engine->sampleTerrainHeight(m_mapSpawn.x, m_mapSpawn.z), m_mapSpawn.z);
+                m_player->setPos(p);
+                m_engine->camera().setOrbitTarget(p);
+            }
             if (m_scripts && !m_scriptsPlaying) {
                 m_scripts->start();
                 m_scriptsPlaying = true;

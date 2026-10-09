@@ -47,6 +47,20 @@ declare world: {
     set_weather: (name: string) -> (),
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
+    -- Name of the map being played.
+    map: () -> string,
+    -- Goes to another map (a door, a cave); the player appears at `position`
+    -- (default: the map's Player Start).
+    load_map: (map: string, position: vector?) -> (),
+}
+
+-- Saved games: map, player position, vars, time, weather and music, kept in the
+-- player's data folder. Slots are names or numbers (default 1).
+declare game: {
+    save: (slot: (string | number)?) -> boolean,
+    load: (slot: (string | number)?) -> boolean,
+    has_save: (slot: (string | number)?) -> boolean,
+    delete_save: (slot: (string | number)?) -> boolean,
 }
 
 declare player: {

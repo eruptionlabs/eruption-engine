@@ -345,6 +345,16 @@ private:
     // Mapas vizinhos (mundo contínuo), no Inspetor do Environment.
     void drawNeighborMaps();
     void addTriggerArea();
+    // Troca de mapa pedida pelo jogo no Play: abre o mapa e volta a jogar com as
+    // mesmas variáveis, o jogador no lugar pedido.
+    struct PlayResume {
+        bool active = false, started = false, hasSpawn = false;
+        Vec3 spawn{0.0f};
+        std::string vars;
+        uint32_t readyAt = 0; // m_mapReadyCount quando pediu
+    } m_playResume;
+    uint32_t m_mapReadyCount = 0; // sobe a cada mapa pronto (onMapReady)
+    void handleGameMapRequest();
     std::vector<SceneEdits::Neighbor> m_neighborEditStart; // rascunho enquanto arrasta
     bool m_neighborEditing = false;
     uint32_t m_worldVersionSeen = 0;
