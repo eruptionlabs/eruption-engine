@@ -614,19 +614,44 @@ target_compile_definitions(eruption-engine PRIVATE
     GLM_FORCE_DEPTH_ZERO_TO_ONE
     GLM_FORCE_LEFT_HANDED
     GLM_FORCE_INTRINSICS
-    GLM_FORCE_AVX2
     VMA_STATIC_VULKAN_FUNCTIONS=0
     VMA_DYNAMIC_VULKAN_FUNCTIONS=1
     TINYGLTF_NO_STB_IMAGE
     TINYGLTF_NO_STB_IMAGE_WRITE
 )
 
+# Nivel de CPU do binario. "native": so' esta maquina (desenvolvimento);
+# "x86-64-v3": AVX2/FMA, PCs de 2013 para ca' (padrao do jogo exportado);
+# "portable": SSE4.2, qualquer PC 64 bits recente. Em ARM nada disso entra.
+if(ERUPTION_LEAN)
+    set(ERUPTION_CPU_LEVEL_DEFAULT "x86-64-v3")
+else()
+    set(ERUPTION_CPU_LEVEL_DEFAULT "dev")
+endif()
+set(ERUPTION_CPU_LEVEL "${ERUPTION_CPU_LEVEL_DEFAULT}" CACHE STRING "dev, native, x86-64-v3 or portable")
+set(ERUPTION_CPU_FLAGS "")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i.86")
+    if(ERUPTION_CPU_LEVEL STREQUAL "native")
+        set(ERUPTION_CPU_FLAGS -march=native)
+    elseif(ERUPTION_CPU_LEVEL STREQUAL "portable")
+        set(ERUPTION_CPU_FLAGS -march=x86-64-v2)
+    elseif(ERUPTION_CPU_LEVEL STREQUAL "x86-64-v3")
+        set(ERUPTION_CPU_FLAGS -march=x86-64-v3)
+    else() # dev: AVX2/FMA (como sempre foi), Release ainda afina para a maquina
+        set(ERUPTION_CPU_FLAGS -mavx2 -mfma $<$<CONFIG:Release>:-march=native>)
+    endif()
+    if(NOT ERUPTION_CPU_LEVEL STREQUAL "portable")
+        target_compile_definitions(eruption-engine PRIVATE GLM_FORCE_AVX2)
+    endif()
+endif()
+message(STATUS "CPU: ${ERUPTION_CPU_LEVEL} (${ERUPTION_CPU_FLAGS})")
+
 # Compiler flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(eruption-engine PRIVATE
-        -Wall -Wextra -Wpedantic -Wno-unused-parameter -mavx2 -mfma
+        -Wall -Wextra -Wpedantic -Wno-unused-parameter ${ERUPTION_CPU_FLAGS}
         $<$<CONFIG:Debug>:-g -O0>
-        $<$<CONFIG:Release>:-O3 -march=native>
+        $<$<CONFIG:Release>:-O3>
     )
 elseif(MSVC)
     target_compile_options(eruption-engine PRIVATE
