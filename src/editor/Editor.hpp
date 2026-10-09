@@ -281,6 +281,12 @@ private:
     } m_brush;
     bool m_terrainDirty = false;
     bool m_waterEdited = false; // nível da água mudado no Inspetor (vai para o scene.luau)
+    // Camadas da vista: o que aparece e o que dá para clicar (só no editor).
+    enum ViewLayer { LayerMap, LayerAdded, LayerPainted, LayerCharacters, LayerMarkers, LayerCount };
+    bool m_layerShow[LayerCount] = {true, true, true, true, true};
+    bool m_layerLock[LayerCount] = {false, false, false, false, false};
+    ViewLayer layerOfInstance(uint32_t index) const;
+    void applyLayerVisibility();
     // Pincel de objetos: paleta (modelos ou prefabs) e regras de espalhar.
     struct ScatterPaletteEntry { std::string file, node, prefab, label; bool on = true; };
     std::vector<ScatterPaletteEntry> m_scatterPalette;

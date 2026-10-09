@@ -133,6 +133,7 @@ struct ModelInstance {
     uint32_t meshIndex = 0; // index into m_meshes
     Mat4 transform = Mat4(1.0f);
     bool enabled = true;
+    bool viewHidden = false; // escondido só na vista do editor (não é apagar)
     std::string name;
     float boundingRadius = 0.0f; // world-space bounding radius for shadow LOD
     
@@ -454,6 +455,7 @@ public:
     // só rebuild do espelho quente no fim. Devolve o índice da primeira cópia.
     uint32_t duplicateBatch(const std::vector<std::pair<uint32_t, Mat4>>& copies, const std::string& name);
     void setInstancesEnabled(const std::vector<uint32_t>& indices, bool enabled);
+    void setViewHidden(const std::vector<uint32_t>& indices, bool hidden);
     // Sobe/desce várias instâncias de uma vez (um só rebuild do espelho quente).
     void offsetInstancesY(const std::vector<std::pair<uint32_t, float>>& moves);
     bool isGroundMesh(uint32_t mesh) const { return mesh < m_meshes.size() && m_meshes[mesh].isGround; }

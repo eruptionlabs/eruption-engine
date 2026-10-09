@@ -583,6 +583,13 @@ void Editor::update(float dt) {
         m_engine->setWaterLevel(true, float(std::atof(testWater)));
         m_envEdited = m_waterEdited = true;
     }
+    // ERUPTION_TEST_EDITOR_HIDE=<camada>: esconde a camada da vista (0 mapa, 1
+    // adicionados, 2 pintados, 3 personagens, 4 marcadores) no frame 150.
+    static const char* testHide = std::getenv("ERUPTION_TEST_EDITOR_HIDE");
+    if (testHide && m_frame == 150) {
+        m_layerShow[std::clamp(std::atoi(testHide), 0, int(LayerCount) - 1)] = false;
+        applyLayerVisibility();
+    }
     // ERUPTION_TEST_EDITOR_SLOPES=<graus>: bloqueia encostas mais íngremes no frame 270.
     static const char* testSlopes = std::getenv("ERUPTION_TEST_EDITOR_SLOPES");
     if (testSlopes && m_frame == 270) {
@@ -817,6 +824,22 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("edit.delete");
         m_commands.menuItem("edit.deselect");
         m_commands.menuItem("edit.frame");
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("View")) {
+        static const char* kNames[LayerCount] = {"Map objects", "Added objects", "Painted objects", "Characters",
+                                                 "Lights and markers"};
+        ImGui::TextDisabled("Show");
+        bool changed = false;
+        for (int l = 0; l < LayerCount; ++l) changed |= ImGui::MenuItem(kNames[l], nullptr, &m_layerShow[l]);
+        ImGui::Separator();
+        ImGui::TextDisabled("Lock (can't be clicked)");
+        for (int l = 0; l < LayerCount; ++l) {
+            ImGui::PushID(l);
+            ImGui::MenuItem(kNames[l], nullptr, &m_layerLock[l]);
+            ImGui::PopID();
+        }
+        if (changed) applyLayerVisibility();
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Add")) {

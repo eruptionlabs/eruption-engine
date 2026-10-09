@@ -1942,6 +1942,12 @@ uint32_t ModelRenderer::duplicateBatch(const std::vector<std::pair<uint32_t, Mat
     return first;
 }
 
+void ModelRenderer::setViewHidden(const std::vector<uint32_t>& indices, bool hidden) {
+    for (uint32_t i : indices)
+        if (i < m_instances.size()) m_instances[i].viewHidden = hidden;
+    rebuildHotData();
+}
+
 void ModelRenderer::setInstancesEnabled(const std::vector<uint32_t>& indices, bool enabled) {
     for (uint32_t i : indices)
         if (i < m_instances.size()) m_instances[i].enabled = enabled;
@@ -3349,7 +3355,7 @@ void ModelRenderer::rebuildHotData() {
         hot.worldAabbMin = inst.worldAabbMin;
         hot.worldAabbMax = inst.worldAabbMax;
         hot.meshIndex = inst.meshIndex;
-        hot.flags = inst.enabled ? 1u : 0u;
+        hot.flags = (inst.enabled && !inst.viewHidden) ? 1u : 0u;
         hot.boundingRadius = inst.boundingRadius;
     }
     // Hot mudou (chamado 1x/frame apos animacao) - o SoA derivado dele precisa

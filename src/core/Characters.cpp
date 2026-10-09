@@ -90,7 +90,7 @@ void Engine::updateCharacters(float dt, bool moveAlongPaths) {
             c.position = c.walkFrom + d * t;
             if (t >= 1.0f) c.walking = false;
         }
-        if (c.visible && !c.removed) drawCharacter(c, dt);
+        if (c.visible && !c.removed && !hideCharactersInView) drawCharacter(c, dt);
     }
 }
 
