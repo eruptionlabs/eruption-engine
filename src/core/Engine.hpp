@@ -462,6 +462,16 @@ public:
     std::vector<std::string> splatLayerFiles() const;
     static bool hasSavedSplat(const std::string& map);
 
+    // Grade de caminhada (core/WalkGrid.cpp).
+    bool navFollowsTerrain() const;
+    bool navCell(float x, float z, int& gx, int& gz) const;
+    bool navWalkable(float x, float z) const;
+    bool paintWalk(const Vec2& center, float radius, bool block, int rect[4]);
+    std::vector<uint8_t> walkRegion(int x0, int z0, int x1, int z1) const;
+    void setWalkRegion(int x0, int z0, int x1, int z1, const std::vector<uint8_t>& blocked);
+    int blockSteepSlopes(float maxDegrees);
+    bool saveWalk(std::string& error) const;
+
     // Objetos espalhados pelo pincel (core/Scatter.cpp), por modelo.
     struct ScatterGroup {
         std::string file, node, prefab;
@@ -1196,6 +1206,7 @@ private:
     std::string textureNameForSlot(uint32_t slot) const;
     void prepareHeightEdits(LoadedMap& map, std::vector<ModelAsset>& models);
     void bindHeightEditToMeshes();
+    void applySavedWalk(LoadedMap& map);
     void refreshHeightRegion(int x0, int z0, int x1, int z1);
     float gridHeightAt(float wx, float wz, int x0, int z0, int x1, int z1, const std::vector<float>* old) const;
     void reprojectOnTerrain(int x0, int z0, int x1, int z1, const std::vector<float>& oldHeights);

@@ -110,6 +110,7 @@ void Editor::drawViewport() {
     } else {
         drawSceneMarkers(pos.x, pos.y, avail.x, avail.y);
         terrainBrushInput(pos.x, pos.y, avail.x, avail.y);
+        drawWalkOverlay(pos.x, pos.y, avail.x, avail.y);
         drawTerrainBrush(pos.x, pos.y, avail.x, avail.y);
         drawSelectionBounds(pos.x, pos.y, avail.x, avail.y);
         drawGizmo(pos.x, pos.y, avail.x, avail.y);

@@ -577,6 +577,12 @@ void Editor::update(float dt) {
             endTerrainStroke();
         }
     }
+    // ERUPTION_TEST_EDITOR_SLOPES=<graus>: bloqueia encostas mais íngremes no frame 270.
+    static const char* testSlopes = std::getenv("ERUPTION_TEST_EDITOR_SLOPES");
+    if (testSlopes && m_frame == 270) {
+        log(LogLevel::Info, std::to_string(m_engine->blockSteepSlopes(float(std::atof(testSlopes)))) + " steep cells blocked");
+        m_terrainDirty = true;
+    }
     // ERUPTION_TEST_EDITOR_SAVE=<frame> (1 = frame 240): Ctrl+S depois dos ganchos acima.
     static const char* testSaveEnv = std::getenv("ERUPTION_TEST_EDITOR_SAVE");
     static const long testSaveFrame = testSaveEnv ? (std::atol(testSaveEnv) > 1 ? std::atol(testSaveEnv) : 240) : -1;

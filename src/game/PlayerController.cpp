@@ -273,13 +273,8 @@ void PlayerController::updateMovement(float dt) {
                 if (m_snapToGat && m_engine->currentMap() && !m_tacticalView) {
                     Vec3 nextPos = m_pos + move;
                     float gatCellSize = 5.0f;
-                    auto isWalkable = [&](const Vec3& p) {
-                        int gx = (int)(p.x / gatCellSize);
-                        int gz = (int)(p.z / gatCellSize);
-                        if (gx >= 0 && gz >= 0 && gx < (int)m_engine->currentMap()->navGrid.width && gz < (int)m_engine->currentMap()->navGrid.height)
-                            return m_engine->currentMap()->navGrid.at(gx, gz).isWalkable();
-                        return false;
-                    };
+                    // Mesma célula que o editor pinta (grade do terreno quando o mapa tem uma).
+                    auto isWalkable = [&](const Vec3& p) { return m_engine->navWalkable(p.x, p.z); };
                     Vec3 finalPos = m_pos;
                     if (isWalkable(Vec3(nextPos.x, m_pos.y, m_pos.z))) finalPos.x = nextPos.x;
                     if (isWalkable(Vec3(finalPos.x, m_pos.y, nextPos.z))) finalPos.z = nextPos.z;

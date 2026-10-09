@@ -267,6 +267,10 @@ private:
         int mode = 0; // 0 subir/baixar, 1 suavizar, 2 aplainar
         bool paint = false; // aba Paint: pinta camadas em vez de esculpir
         bool objects = false; // aba Objects: espalha modelos
+        bool walk = false;    // aba Walk: grade de caminhada
+        bool walkBlock = true;
+        float maxSlope = 40.0f;
+        std::vector<uint8_t> walkSnapshot;
         int layer = 0;      // camada pintada (-1 = base)
         float size = 40.0f, strength = 20.0f, falloff = 0.5f;
         bool stroking = false, hasCursor = false;
@@ -288,6 +292,8 @@ private:
     void scatterStep(float dt, bool erase);
     void endScatterStroke();
     void drawScatterPanel();
+    void drawWalkPanel();
+    void drawWalkOverlay(float x, float y, float w, float h);
     struct SpriteImport {
         SpriteSheetSpec spec;
         SpriteSheetResult result;
