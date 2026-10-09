@@ -2,6 +2,7 @@
 
 #include "editor/EditorCommands.hpp"
 #include "editor/RuleSheet.hpp"
+#include "scene/SceneEdits.hpp"
 #include "editor/UndoStack.hpp"
 #include "core/Logger.hpp"
 #include "renderer/DeferredLighting.hpp"
@@ -89,6 +90,13 @@ private:
     void drawWelcome();
     void drawRules();
     void drawTelemetry();
+    // Cena como dado (EditorScene.cpp)
+    void onMapReady();
+    SceneEdits currentEdits() const;
+    bool saveScene();
+    void duplicateSelection();
+    void updateTitle(bool dirty);
+    void checkSceneDirty();
     void recordFrameTime(float dt);
     void drawCode();
     void codeOpen(const std::filesystem::path& file);
@@ -194,6 +202,17 @@ private:
     bool m_focusScene = false;
     std::vector<const char*> m_pendingFocus; // abas a trazer para frente no próximo desenho
     bool m_showTelemetry = true;
+    struct MapOriginal {
+        size_t count = 0;
+        std::vector<Mat4> transforms;
+        std::vector<bool> enabled;
+        std::vector<PointLight> lights;
+    };
+    MapOriginal m_original;
+    std::unordered_map<std::string, std::string> m_copySources; // cópia -> origem
+    std::string m_savedScene;
+    bool m_sceneDirty = false;
+    bool m_envEdited = false;
     static constexpr int kFrameHistory = 240;
     float m_frameTimes[kFrameHistory] = {};
     int m_frameTimeHead = 0; // layout recém-montado: aba Cena na frente

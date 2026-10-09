@@ -256,6 +256,7 @@ public:
     };
     TextureStats getTextureStats() const;
     Camera& camera() { return m_camera; }
+    DeferredLighting& deferredLighting() { return m_deferredLighting; }
 
     // Editor (src/editor/). Com o editor ligado a cena e' desenhada num alvo
     // proprio, do tamanho do painel Cena, e o swapchain recebe so' a UI.

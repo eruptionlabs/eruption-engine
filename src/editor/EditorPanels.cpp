@@ -260,10 +260,16 @@ void Editor::drawInspector() {
             char clock[16];
             std::snprintf(clock, sizeof(clock), "%02d:%02d", minutes / 60, minutes % 60);
             propertyLabel("Time");
-            if (ImGui::SliderInt("##time", &minutes, 0, 1439, clock)) dn.setTimeOfDay(static_cast<float>(minutes) / 1440.0f);
+            if (ImGui::SliderInt("##time", &minutes, 0, 1439, clock)) {
+                dn.setTimeOfDay(static_cast<float>(minutes) / 1440.0f);
+                m_envEdited = true;
+            }
             bool running = !dn.isPaused();
             propertyLabel("Advance");
-            if (ImGui::Checkbox("##run", &running)) dn.setPaused(!running);
+            if (ImGui::Checkbox("##run", &running)) {
+                dn.setPaused(!running);
+                m_envEdited = true;
+            }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Let time pass on its own");
             float scale = dn.timeScale();
             propertyLabel("Speed");
@@ -275,7 +281,10 @@ void Editor::drawInspector() {
             if (ImGui::BeginCombo("##weather", weatherTypeName(cur))) {
                 for (uint32_t t = 0; t < WeatherTypeCount; ++t) {
                     const WeatherType wt = static_cast<WeatherType>(t);
-                    if (ImGui::Selectable(weatherTypeName(wt), wt == cur)) m_engine->applyWeatherTypeFull(wt, 1.0f);
+                    if (ImGui::Selectable(weatherTypeName(wt), wt == cur)) {
+                        m_engine->applyWeatherTypeFull(wt, 1.0f);
+                        m_envEdited = true;
+                    }
                 }
                 ImGui::EndCombo();
             }

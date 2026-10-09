@@ -21,6 +21,7 @@ private:
     std::unique_ptr<class Editor> m_editor;
     std::unique_ptr<class ScriptHost> m_scripts;
     bool m_scriptsPlaying = false;
+    std::string m_sceneEditsMap; // mapa cujas edições já foram aplicadas (jogo)
     HudRenderer m_hud;
     bool m_autoExit = false;
     bool m_autoTest = false;

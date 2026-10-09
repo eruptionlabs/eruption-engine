@@ -1,5 +1,6 @@
 #include "editor/Editor.hpp"
 #include "script/ScriptHost.hpp"
+#include "scene/SceneEdits.hpp"
 #include "game/DefaultApplication.hpp"
 #include <cstdlib>
 #include <sstream>
@@ -251,6 +252,16 @@ void DefaultApplication::onUpdate(float deltaTime) {
         }
         m_editor->consumeStep();
     } else {
+        // Edições feitas no editor (assets/scenes/<mapa>.scene.luau) valem no
+        // jogo: aplicadas uma vez, depois que o jogador nasce no mapa.
+        if (m_engine && m_engine->isPlayerSpawnedOnActiveMap() && m_engine->currentMapName() != m_sceneEditsMap) {
+            m_sceneEditsMap = m_engine->currentMapName();
+            SceneEdits edits;
+            std::string error;
+            if (!edits.load(SceneEdits::pathFor(m_sceneEditsMap), error)) ERUPTION_LOG_ERROR("%s", error.c_str());
+            else if (!edits.empty())
+                ERUPTION_LOG_WARN("Scene edits: %d change(s) applied to %s", edits.apply(*m_engine), m_sceneEditsMap.c_str());
+        }
         if (m_engine && m_player) m_player->update(deltaTime);
         if (m_scripts) m_scripts->update(deltaTime);
     }

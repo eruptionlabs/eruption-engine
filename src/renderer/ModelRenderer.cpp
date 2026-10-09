@@ -3091,6 +3091,17 @@ void ModelRenderer::setInstanceTransform(uint32_t index, const Mat4& transform) 
     rebuildHotData();
 }
 
+uint32_t ModelRenderer::duplicateInstance(uint32_t source, const std::string& name, const Mat4& transform) {
+    if (source >= m_instances.size()) return 0xFFFFFFFFu;
+    ModelInstance copy = m_instances[source];
+    copy.name = name;
+    copy.enabled = true;
+    m_instances.push_back(std::move(copy));
+    const uint32_t idx = static_cast<uint32_t>(m_instances.size() - 1);
+    setInstanceTransform(idx, transform); // refaz AABB e o espelho quente
+    return idx;
+}
+
 void ModelRenderer::setInstanceEnabled(uint32_t index, bool enabled) {
     if (index >= m_instances.size()) return;
     m_instances[index].enabled = enabled;

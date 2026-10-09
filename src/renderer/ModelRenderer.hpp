@@ -424,6 +424,9 @@ public:
     // refaz a AABB de mundo e o espelho quente usados pelo culling.
     void setInstanceTransform(uint32_t index, const Mat4& transform);
     void setInstanceEnabled(uint32_t index, bool enabled);
+    // Cópia de uma instância (mesma malha) com outro nome e matriz; devolve o
+    // índice novo. Os vetores por instância se ajustam sozinhos ao tamanho.
+    uint32_t duplicateInstance(uint32_t source, const std::string& name, const Mat4& transform);
     const std::unordered_map<std::string, uint32_t>& getTextureCache() const { return m_textureCache; }
 
     // Publico pro popup de preview (SpherePreview.cpp) conseguir achar o
