@@ -376,6 +376,15 @@ void Editor::drawRules() {
     ImGui::SetNextItemWidth(120);
     if (ImGui::Combo("##lang", &langIdx, langs, 2)) m_lang = langIdx == 1 ? UiLanguage::Portuguese : UiLanguage::English;
     ImGui::SameLine();
+    {
+        // Mesma folha em duas vistas: linhas (planilha) ou blocos de encaixar.
+        int view = m_rules.blocks ? 1 : 0;
+        ImGui::SetNextItemWidth(120);
+        const char* views[] = {lang == UiLanguage::Portuguese ? "Folha" : "Sheet",
+                               lang == UiLanguage::Portuguese ? "Blocos" : "Blocks"};
+        if (ImGui::Combo("##view", &view, views, 2)) m_rules.blocks = view == 1;
+    }
+    ImGui::SameLine();
     ImGui::Checkbox(ruleUi("show_code", lang), &m_rules.showCode);
     if (!m_rules.file.empty()) {
         ImGui::SameLine();
@@ -405,6 +414,20 @@ void Editor::drawRules() {
     }
 
     const float codeW = m_rules.showCode ? std::min(420.0f, ImGui::GetContentRegionAvail().x * 0.36f) : 0.0f;
+    if (m_rules.blocks) {
+        ImGui::BeginChild("##blocks", ImVec2(ImGui::GetContentRegionAvail().x - codeW, 0));
+        drawRuleBlocks();
+        ImGui::EndChild();
+        if (m_rules.showCode) {
+            ImGui::SameLine();
+            ImGui::BeginChild("##code", ImVec2(0, 0), ImGuiChildFlags_Border, ImGuiWindowFlags_HorizontalScrollbar);
+            ImGui::TextUnformatted(m_rules.sheet.generate().c_str());
+            ImGui::EndChild();
+        }
+        ImGui::EndChild();
+        ImGui::End();
+        return;
+    }
     ImGui::BeginChild("##rows", ImVec2(ImGui::GetContentRegionAvail().x - codeW, 0), ImGuiChildFlags_None,
                       ImGuiWindowFlags_HorizontalScrollbar);
     auto& rules = m_rules.sheet.rules;
@@ -520,6 +543,288 @@ void Editor::drawRules() {
     }
     ImGui::EndChild();
     ImGui::End();
+}
+
+// ---------------------------------------------------------------- blocos
+// A mesma folha de regras desenhada como blocos de encaixar: o evento é o
+// "chapéu" de cima, as condições ficam na barra "se", as ações empilhadas
+// dentro. Arrastar da paleta encaixa; arrastar um bloco o move; soltar na
+// paleta apaga. O arquivo continua o mesmo Luau.
+
+namespace {
+
+constexpr const char* kBlockPayload = "ERUPTION_RULEBLOCK";
+
+struct BlockDrag {
+    const RuleDef* def; // da paleta
+    int rule, list, index; // bloco existente (list: 0 evento, 1 condição, 2 ação, 3 senão)
+};
+
+ImU32 darker(ImU32 c, float k) {
+    ImVec4 v = ImGui::ColorConvertU32ToFloat4(c);
+    return ImGui::GetColorU32(ImVec4(v.x * k, v.y * k, v.z * k, v.w));
+}
+
+// Forma do bloco: 0 chapéu (evento), 1 empilhável (ação), 2 condição (pílula).
+void blockShape(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, int kind) {
+    if (kind == 2) {
+        dl->AddRectFilled(a, b, col, (b.y - a.y) * 0.5f);
+        return;
+    }
+    const float r = 5.0f;
+    if (kind == 0) {
+        dl->AddRectFilled(a, b, col, 12.0f, ImDrawFlags_RoundCornersTop);
+        dl->AddRectFilled(ImVec2(a.x, b.y - r), b, col);
+    } else {
+        dl->AddRectFilled(a, b, col, r);
+        // Entalhe em cima (onde o bloco de cima encaixa).
+        dl->AddRectFilled(ImVec2(a.x + 12, a.y), ImVec2(a.x + 28, a.y + 4), darker(col, 0.55f), 2.0f);
+    }
+    // Dente embaixo (encaixa no próximo).
+    dl->AddRectFilled(ImVec2(a.x + 12, b.y), ImVec2(a.x + 28, b.y + 4), col, 2.0f);
+}
+
+} // namespace
+
+bool Editor::ruleBlock(RuleCall& call, int kind, ImU32 color, int rule, int list, int index) {
+    // Devolve true quando o bloco pede para ser apagado.
+    const std::string text = sentence(call, m_lang);
+    const ImVec2 ts = ImGui::CalcTextSize(text.c_str());
+    const ImVec2 pad(10, kind == 0 ? 9 : 6);
+    const ImVec2 size(std::max(ts.x + pad.x * 2, 120.0f), ts.y + pad.y * 2);
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImGui::PushID(rule * 4096 + list * 1024 + index);
+    ImGui::InvisibleButton("##blk", size);
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 col = call.def ? color : IM_COL32(120, 120, 125, 255);
+    blockShape(dl, p0, ImVec2(p0.x + size.x, p0.y + size.y), hovered ? darker(col, 1.12f) : col, kind);
+    dl->AddText(ImVec2(p0.x + pad.x, p0.y + pad.y), IM_COL32(255, 255, 255, 255), text.c_str());
+    if (ImGui::BeginDragDropSource()) {
+        BlockDrag d{nullptr, rule, list, index};
+        ImGui::SetDragDropPayload(kBlockPayload, &d, sizeof(d));
+        ImGui::TextUnformatted(text.c_str());
+        ImGui::EndDragDropSource();
+    }
+    // Clique (soltar sem arrastar) edita; apertar e arrastar move o bloco.
+    const ImGuiIO& io = ImGui::GetIO();
+    if (ImGui::IsItemDeactivated() && hovered && io.MouseDragMaxDistanceSqr[0] < io.MouseDragThreshold * io.MouseDragThreshold)
+        ImGui::OpenPopup("##blkedit");
+    bool remove = false;
+    if (ImGui::BeginPopup("##blkedit")) {
+        ImGui::TextUnformatted(text.c_str());
+        ImGui::Separator();
+        if (call.def) {
+            if (rulesParamEditor(call)) rulesCommit("Edit rule");
+            if (call.def->kind == RuleKind::Condition && ImGui::Checkbox(ruleUi("negate", m_lang), &call.negate))
+                rulesCommit("Edit rule");
+        } else {
+            ImGui::TextDisabled("%s", ruleUi("raw", m_lang));
+        }
+        ImGui::Separator();
+        if (ImGui::Button(ruleUi("delete", m_lang))) {
+            remove = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopID();
+    return remove;
+}
+
+void Editor::drawRuleBlocks() {
+    auto& rules = m_rules.sheet.rules;
+    const UiLanguage lang = m_lang;
+    // Recebe um bloco arrastado e o encaixa em (rule, list, index); index -1 = fim.
+    auto acceptInto = [&](int rule, int list, int index) -> bool {
+        const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kBlockPayload);
+        if (!p) return false;
+        const BlockDrag d = *static_cast<const BlockDrag*>(p->Data);
+        auto listOf = [&](int r, int l) -> std::vector<RuleCall>* {
+            if (r < 0 || r >= int(rules.size())) return nullptr;
+            return l == 1 ? &rules[size_t(r)].conditions : l == 2 ? &rules[size_t(r)].actions
+                         : l == 3 ? &rules[size_t(r)].otherwise : nullptr;
+        };
+        RuleCall moving;
+        if (d.def) {
+            moving = RuleSheet::makeCall(*d.def);
+        } else {
+            auto* src = listOf(d.rule, d.list);
+            if (!src || d.index < 0 || d.index >= int(src->size())) return false;
+            moving = (*src)[size_t(d.index)];
+            src->erase(src->begin() + d.index);
+            if (d.rule == rule && d.list == list && index > d.index) --index;
+        }
+        // Condição só entra no "se"; ação só em "faça"/"senão".
+        const bool isCond = moving.def && moving.def->kind == RuleKind::Condition;
+        if (isCond != (list == 1)) {
+            if (!d.def) rulesLoad(m_rules.file); // desfaz a retirada
+            return false;
+        }
+        auto* dst = listOf(rule, list);
+        if (!dst) return false;
+        if (index < 0 || index > int(dst->size())) index = int(dst->size());
+        dst->insert(dst->begin() + index, moving);
+        rulesCommit("Move block");
+        return true;
+    };
+
+    // Paleta à esquerda (também apaga: soltar um bloco aqui).
+    ImGui::BeginChild("##palette", ImVec2(250, 0), ImGuiChildFlags_Border | ImGuiChildFlags_ResizeX);
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##bsearch", ruleUi("search", lang), m_rules.search, sizeof(m_rules.search));
+    const char* lastCategory = nullptr;
+    for (const auto& def : ruleCatalog()) {
+        std::string label = sentence(RuleSheet::makeCall(def), lang);
+        std::string lower = label, query = m_rules.search;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+        std::transform(query.begin(), query.end(), query.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (!query.empty() && lower.find(query) == std::string::npos) continue;
+        if (!lastCategory || std::strcmp(lastCategory, def.category) != 0) {
+            lastCategory = def.category;
+            ImGui::TextColored(kAccent, "%s", categoryName(def.category, lang));
+        }
+        const ImU32 col = def.kind == RuleKind::Trigger ? kEventColor : def.kind == RuleKind::Condition ? kConditionColor
+                                                                                                         : kActionColor;
+        const int kind = def.kind == RuleKind::Trigger ? 0 : def.kind == RuleKind::Condition ? 2 : 1;
+        const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
+        const ImVec2 p0 = ImGui::GetCursorScreenPos();
+        const ImVec2 size(std::min(ImGui::GetContentRegionAvail().x, ts.x + 20), ts.y + 10);
+        ImGui::PushID(&def);
+        ImGui::InvisibleButton("##pal", size);
+        blockShape(ImGui::GetWindowDrawList(), p0, ImVec2(p0.x + size.x, p0.y + size.y), col, kind);
+        ImGui::GetWindowDrawList()->PushClipRect(p0, ImVec2(p0.x + size.x - 4, p0.y + size.y), true);
+        ImGui::GetWindowDrawList()->AddText(ImVec2(p0.x + 10, p0.y + 5), IM_COL32(255, 255, 255, 255), label.c_str());
+        ImGui::GetWindowDrawList()->PopClipRect();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", label.c_str());
+        if (ImGui::BeginDragDropSource()) {
+            BlockDrag d{&def, -1, -1, -1};
+            ImGui::SetDragDropPayload(kBlockPayload, &d, sizeof(d));
+            ImGui::TextUnformatted(label.c_str());
+            ImGui::EndDragDropSource();
+        }
+        ImGui::PopID();
+        ImGui::Dummy(ImVec2(0, 2));
+    }
+    ImGui::EndChild();
+    if (ImGui::BeginDragDropTarget()) {
+        // Soltar na paleta = apagar o bloco arrastado.
+        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kBlockPayload)) {
+            const BlockDrag d = *static_cast<const BlockDrag*>(p->Data);
+            if (!d.def && d.rule >= 0 && d.rule < int(rules.size())) {
+                Rule& r = rules[size_t(d.rule)];
+                if (d.list == 0) rules.erase(rules.begin() + d.rule);
+                else {
+                    auto& v = d.list == 1 ? r.conditions : d.list == 2 ? r.actions : r.otherwise;
+                    if (d.index >= 0 && d.index < int(v.size())) v.erase(v.begin() + d.index);
+                }
+                rulesCommit("Delete block");
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    ImGui::SameLine();
+    ImGui::BeginChild("##canvas", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    int removeRule = -1;
+    for (size_t ri = 0; ri < rules.size(); ++ri) {
+        Rule& r = rules[ri];
+        ImGui::PushID(int(ri));
+        if (r.raw) {
+            ImGui::TextDisabled("%s", r.code.c_str());
+            ImGui::PopID();
+            ImGui::Dummy(ImVec2(0, 10));
+            continue;
+        }
+        if (ruleBlock(r.trigger, 0, kEventColor, int(ri), 0, 0)) removeRule = int(ri);
+        // Condições: barra "se" com as condições em linha; aceita condição.
+        const ImVec2 cStart = ImGui::GetCursorScreenPos();
+        const bool hasIf = !r.conditions.empty();
+        {
+            ImGui::BeginGroup();
+            ImGui::AlignTextToFramePadding();
+            if (hasIf) ImGui::Indent(14);
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(hasIf ? kConditionColor : ImGui::GetColorU32(ImGuiCol_TextDisabled)),
+                               "%s", lang == UiLanguage::Portuguese ? (hasIf ? "se" : "+ se") : (hasIf ? "if" : "+ if"));
+            if (!hasIf && ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", lang == UiLanguage::Portuguese ? "Solte uma condição aqui" : "Drop a condition here");
+            int removeCond = -1;
+            for (size_t ci = 0; ci < r.conditions.size(); ++ci) {
+                ImGui::SameLine();
+                if (ruleBlock(r.conditions[ci], 2, kConditionColor, int(ri), 1, int(ci))) removeCond = int(ci);
+                if (ImGui::BeginDragDropTarget()) { acceptInto(int(ri), 1, int(ci)); ImGui::EndDragDropTarget(); }
+                if (ci + 1 < r.conditions.size()) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("%s", lang == UiLanguage::Portuguese ? "e" : "and");
+                }
+            }
+            if (hasIf) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("+");
+                ImGui::Unindent(14);
+            }
+            ImGui::EndGroup();
+            if (ImGui::BeginDragDropTarget()) { acceptInto(int(ri), 1, -1); ImGui::EndDragDropTarget(); }
+            if (removeCond >= 0) {
+                r.conditions.erase(r.conditions.begin() + removeCond);
+                rulesCommit("Delete block");
+            }
+        }
+        // Ações (faça) e senão, recuadas dentro do bloco "se".
+        auto stack = [&](std::vector<RuleCall>& list, int listId, const char* title) {
+            ImGui::Indent(22);
+            ImGui::TextDisabled("%s", title);
+            int removeAt = -1;
+            for (size_t ai = 0; ai < list.size(); ++ai) {
+                if (ruleBlock(list[ai], 1, kActionColor, int(ri), listId, int(ai))) removeAt = int(ai);
+                if (ImGui::BeginDragDropTarget()) { acceptInto(int(ri), listId, int(ai)); ImGui::EndDragDropTarget(); }
+                ImGui::Dummy(ImVec2(0, 1));
+            }
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::Button(lang == UiLanguage::Portuguese ? "+ solte uma ação" : "+ drop an action", ImVec2(150, 0));
+            ImGui::PopStyleColor();
+            if (ImGui::BeginDragDropTarget()) { acceptInto(int(ri), listId, -1); ImGui::EndDragDropTarget(); }
+            ImGui::Unindent(22);
+            if (removeAt >= 0) {
+                list.erase(list.begin() + removeAt);
+                rulesCommit("Delete block");
+            }
+        };
+        stack(r.actions, 2, ruleUi("do", lang));
+        if (hasIf || !r.otherwise.empty()) stack(r.otherwise, 3, ruleUi("else", lang));
+        // Braço do "se" abraçando as ações (só quando há condição).
+        if (hasIf) {
+            const ImVec2 cEnd = ImGui::GetCursorScreenPos();
+            dl->AddRectFilled(ImVec2(cStart.x, cStart.y), ImVec2(cStart.x + 8, cEnd.y), kConditionColor, 3.0f);
+            dl->AddRectFilled(ImVec2(cStart.x, cEnd.y), ImVec2(cStart.x + 60, cEnd.y + 6), kConditionColor, 3.0f);
+        }
+        ImGui::Dummy(ImVec2(0, 18));
+        ImGui::PopID();
+    }
+    if (removeRule >= 0) {
+        rules.erase(rules.begin() + removeRule);
+        rulesCommit("Delete rule");
+    }
+    // Área livre: evento solto aqui vira regra nova.
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::Button(lang == UiLanguage::Portuguese ? "+ solte um evento aqui para criar uma regra"
+                                                 : "+ drop an event here to start a rule",
+                  ImVec2(std::max(320.0f, ImGui::GetContentRegionAvail().x), 60));
+    ImGui::PopStyleColor();
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kBlockPayload)) {
+            const BlockDrag d = *static_cast<const BlockDrag*>(p->Data);
+            if (d.def && d.def->kind == RuleKind::Trigger) {
+                Rule nr;
+                nr.trigger = RuleSheet::makeCall(*d.def);
+                rules.push_back(std::move(nr));
+                rulesCommit("Add rule");
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+    ImGui::EndChild();
 }
 
 } // namespace eruption
