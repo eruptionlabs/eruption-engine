@@ -122,7 +122,11 @@ void main() {
     gl_Position = viewProjection * vec4(projectedPos, 1.0);
 
     v_uv = a_texCoord;
-    if ((i_flags & 1u) != 0) v_uv.x = 1.0 - v_uv.x;
+    // Sprite PNG/ERUPTSPR (bit 11): o eixo X do billboard é invertido
+    // (convenção herdada), então a arte sairia espelhada; FlipX inverte de novo.
+    bool flipU = (i_flags & 1u) != 0;
+    if ((i_flags & 2048u) != 0) flipU = !flipU;
+    if (flipU) v_uv.x = 1.0 - v_uv.x;
     if ((i_flags & 2u) != 0) v_uv.y = 1.0 - v_uv.y;
 
     v_texIndex = i_texIndex;

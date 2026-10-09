@@ -49,7 +49,23 @@ declare world: {
 declare player: {
     position: () -> vector,
     set_position: (position: vector) -> (),
+    -- Player look: a PNG, animated when the Sprite Importer's .spr sits next to it.
+    set_sprite: (png: string) -> (),
     near: (model: Model, distance: number) -> boolean,
+}
+
+declare characters: {
+    -- Characters placed in the scene (drag a PNG from the Project panel), by name.
+    exists: (name: string) -> boolean,
+    position: (name: string) -> vector,
+    set_position: (name: string, position: vector) -> (),
+    -- Walks there in `seconds`, playing the walking animation.
+    walk_to: (name: string, position: vector, seconds: number?) -> (),
+    walking: (name: string) -> boolean,
+    face: (name: string, degrees: number) -> (),
+    show: (name: string) -> (),
+    hide: (name: string) -> (),
+    set_sprite: (name: string, png: string) -> (),
 }
 
 declare camera: {

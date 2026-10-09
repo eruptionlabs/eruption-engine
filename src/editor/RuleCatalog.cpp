@@ -63,6 +63,20 @@ const std::vector<RuleDef>& ruleCatalog() {
          "Change the weather to {1}", "Mudar o clima para {1}"},
         {"player.set_position", RuleKind::Action, "player", {{T::Offset, "vector.create(0, 0, 0)"}},
          "Move the player to {1}", "Levar o jogador para {1}"},
+        {"player.set_sprite", RuleKind::Action, "player", {{T::Text, "\"assets/sprites/default.png\""}},
+         "Change the player's sprite to {1}", "Trocar o sprite do jogador por {1}"},
+        {"characters.walk_to", RuleKind::Action, "characters",
+         {{T::Character, "\"\""}, {T::Offset, "vector.create(0, 0, 0)"}, {T::Seconds, "2"}},
+         "{1} walks to {2} in {3} s", "{1} anda até {2} em {3} s"},
+        {"characters.face", RuleKind::Action, "characters", {{T::Character, "\"\""}, {T::Number, "0"}},
+         "{1} turns to {2} degrees", "{1} vira para {2} graus"},
+        {"characters.show", RuleKind::Action, "characters", {{T::Character, "\"\""}},
+         "Show {1}", "Mostrar {1}"},
+        {"characters.hide", RuleKind::Action, "characters", {{T::Character, "\"\""}},
+         "Hide {1}", "Esconder {1}"},
+        {"characters.set_sprite", RuleKind::Action, "characters",
+         {{T::Character, "\"\""}, {T::Text, "\"assets/sprites/default.png\""}},
+         "Change the sprite of {1} to {2}", "Trocar o sprite de {1} por {2}"},
     };
     return kCatalog;
 }
@@ -116,7 +130,7 @@ const char* categoryName(const char* category, UiLanguage lang) {
     static const struct { const char* key; const char* en; const char* pt; } kNames[] = {
         {"events", "Events", "Eventos"}, {"input", "Keyboard", "Teclado"}, {"player", "Player", "Jogador"},
         {"world", "World", "Mundo"}, {"models", "Objects", "Objetos"}, {"variables", "Variables", "Variáveis"},
-        {"screen", "Screen", "Tela"}, {"lights", "Lights", "Luzes"},
+        {"screen", "Screen", "Tela"}, {"lights", "Lights", "Luzes"}, {"characters", "Characters", "Personagens"},
     };
     for (const auto& n : kNames)
         if (std::strcmp(n.key, category) == 0) return lang == UiLanguage::Portuguese ? n.pt : n.en;

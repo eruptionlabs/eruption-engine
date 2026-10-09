@@ -7,6 +7,11 @@ namespace eruption {
 class HudRenderer;
 class PlayerController {
 public:
+    // Recarrega o sprite do corpo no próximo frame (o .spr pode ter mudado no disco).
+    void reloadSprite() { m_lastJob.clear(); }
+    // Editor parado (sem Play): processa os sprites enviados (personagens) e
+    // mostra o jogador onde está, sem andar nem mexer a câmera.
+    void editorSprites();
     explicit PlayerController(Engine* engine = nullptr);
     void init();
     void update(float dt);

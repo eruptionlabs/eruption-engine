@@ -3,6 +3,7 @@
 #include "editor/EditorCommands.hpp"
 #include "editor/RuleSheet.hpp"
 #include "scene/SceneEdits.hpp"
+#include "formats/SpriteSheet.hpp"
 #include "editor/UndoStack.hpp"
 #include "core/Logger.hpp"
 #include "renderer/DeferredLighting.hpp"
@@ -52,7 +53,7 @@ public:
 private:
     enum class PlayState { Editing, Playing, Paused };
     enum class Tool { Select, Move, Rotate, Scale };
-    enum class SelectionKind { None, Model, Light, Environment, Asset };
+    enum class SelectionKind { None, Model, Light, Environment, Asset, Character };
     struct Selection {
         SelectionKind kind = SelectionKind::None;
         int index = -1;
@@ -71,6 +72,9 @@ private:
         Vec3 target{0.0f};
         float yaw = 0.0f, pitch = 0.0f, distance = 0.0f;
         float timeOfDay = 0.0f;
+        struct Character { Vec3 position; float facing; bool visible; std::string sprite; };
+        std::vector<Character> characters;
+        std::string playerSprite;
     };
 
     void registerCommands();
@@ -149,8 +153,13 @@ private:
     int raycastModels(const Vec3& origin, const Vec3& dir, float& hitT) const;
     bool groundPointAt(float u, float v, Vec3& out) const;
     void dropModel(const std::string& path, const Vec3& position);
+    void dropCharacter(const std::string& png, const Vec3& position);
     bool savePrefab(const std::string& path);
     void drawPrefabDialog();
+    // Importador de folha de sprites (EditorSprites.cpp)
+    void openSpriteImporter(const std::string& png);
+    void drawSpriteImporter();
+    void usePlayerSprite(const std::string& png, bool persist);
     void drawGizmo(float x, float y, float w, float h);
     void drawViewCube(float x, float y, float w, float h);
     void drawSelectionBounds(float x, float y, float w, float h);
@@ -241,6 +250,18 @@ private:
     int m_newMapSize = 1;
     std::string m_newMapError;
     bool m_prefabOpen = false;
+    bool m_showSpriteImporter = false;
+    struct SpriteImport {
+        SpriteSheetSpec spec;
+        SpriteSheetResult result;
+        GuiTexture sheetTex;
+        std::string error;
+        int preset = 0;
+        bool dirty = false;
+        int previewWalk = 1, previewDir = 0;
+        bool previewTurn = true;
+        float previewTime = 0.0f;
+    } m_spriteImport;
     char m_prefabName[64] = {};
     bool m_paletteFocus = false;
     char m_paletteQuery[128] = {};

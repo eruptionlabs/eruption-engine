@@ -26,6 +26,9 @@ class Engine;
 //           { from = "nome_do_objeto", name = "nome_novo", position = {...}, rotation = {...}, scale = {...} },
 //       },
 //       lights = { [3] = { position = {...}, color = {r, g, b}, intensity = 2, range = 40, enabled = true } },
+//       characters = {
+//           { name = "guarda", sprite = "assets/sprites/guarda.png", position = {...}, facing = 90 },
+//       },
 //       environment = { time = 18.5, paused = true, weather = "rainy" },
 //   }
 //
@@ -79,13 +82,22 @@ struct SceneEdits {
     std::vector<Object> objects;
     std::vector<Copy> copies;
     std::vector<Light> lights;
+    // Personagem (NPC): sprite do importador, posição e para onde olha (graus).
+    struct Character {
+        std::string name, sprite;
+        Vec3 position{0.0f};
+        float facing = 0.0f;
+        bool hidden = false; // começa escondido (um script mostra depois)
+    };
+    std::vector<Character> characters;
     bool hasEnvironment = false;
     float time = 12.0f;
     bool paused = false;
     std::string weather;
 
     bool empty() const {
-        return added.empty() && objects.empty() && copies.empty() && lights.empty() && !hasEnvironment;
+        return added.empty() && objects.empty() && copies.empty() && lights.empty() && characters.empty() &&
+               !hasEnvironment;
     }
 
     static std::filesystem::path pathFor(const std::string& map);
