@@ -16,6 +16,7 @@
 #endif
 
 #include <algorithm>
+#include <fstream>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -123,6 +124,7 @@ bool Editor::init(Engine& engine) {
 
 void Editor::shutdown() {
     stopThumbnails();
+    m_remote.stop();
     if (m_engine) {
         closeAssetPreview();
         for (auto& [path, t] : m_thumbs) releaseTexture(t.tex);
@@ -151,6 +153,7 @@ void Editor::log(LogLevel level, const std::string& text) {
         if (m_console.size() > 2000) m_console.pop_front();
     }
     ++m_consoleCounts[bucket];
+    if (m_remote.running()) m_remote.pushLog(text);
 }
 
 void Editor::registerCommands() {
@@ -310,6 +313,9 @@ void Editor::registerCommands() {
     panel("window.rules", "Rules (event sheet)", &m_showRules);
     panel("window.code", "Code", &m_showCode);
     {
+        auto& r = add("window.second_screen", "Window", "Second Screen (browser)", {}, [this] { m_showRemote = !m_showRemote; },
+                      "Edit the game scripts from a phone, tablet or another computer on the same network.");
+        r.checked = [this] { return m_showRemote; };
         auto& c = add("window.telemetry", "Window", "Telemetry", {ImGuiKey_F3}, [this] { m_showTelemetry = !m_showTelemetry; },
                       "FPS, frame time, CPU and GPU cost per pass, video memory.");
         c.checked = [this] { return m_showTelemetry; };
@@ -583,6 +589,15 @@ void Editor::update(float dt) {
         m_engine->setWaterLevel(true, float(std::atof(testWater)));
         m_envEdited = m_waterEdited = true;
     }
+    // ERUPTION_TEST_EDITOR_REMOTE=<porta>:<arquivo>: liga a segunda tela e grava
+    // o token no arquivo (teste com curl).
+    static const char* testRemote = std::getenv("ERUPTION_TEST_EDITOR_REMOTE");
+    if (testRemote && m_frame == 100) {
+        const std::string spec = testRemote;
+        const size_t colon = spec.find(':');
+        if (m_remote.start(static_cast<uint16_t>(std::atoi(spec.c_str())), m_projectRoot / "assets" / "scripts"))
+            std::ofstream(spec.substr(colon + 1)) << m_remote.token();
+    }
     // ERUPTION_TEST_EDITOR_HIDE=<camada>: esconde a camada da vista (0 mapa, 1
     // adicionados, 2 pintados, 3 personagens, 4 marcadores) no frame 150.
     static const char* testHide = std::getenv("ERUPTION_TEST_EDITOR_HIDE");
@@ -772,6 +787,7 @@ void Editor::drawUI() {
     drawNewMapDialog();
     drawPrefabDialog();
     drawSpriteImporter();
+    drawRemoteWindow();
 
     if (m_focusScene) {
         m_pendingFocus.insert(m_pendingFocus.begin(), kWinScene);
@@ -882,6 +898,7 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("window.rules");
         m_commands.menuItem("window.code");
         m_commands.menuItem("window.telemetry");
+        m_commands.menuItem("window.second_screen");
         ImGui::Separator();
         if (ImGui::BeginMenu("Language / Idioma")) {
             m_commands.menuItem("window.lang_en");
