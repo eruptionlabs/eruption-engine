@@ -17,6 +17,7 @@ class Engine;
 //       objects = {
 //           ["nome_do_objeto"] = { position = {x, y, z}, rotation = {x, y, z}, scale = {x, y, z} },
 //           ["outro_objeto"] = { hidden = true },
+//           ["casa_1"] = { solid = true },  -- o jogador não atravessa
 //       },
 //       added = {
 //           { file = "assets/props/barril.glb", name = "barril_1", position = {...}, rotation = {...}, scale = {...} },
@@ -33,6 +34,7 @@ class Engine;
 //       spawn = {x, y, z},   -- onde o jogador começa
 //       terrain = { layers = { "assets/textures/grama.png", ... } },  -- camadas pintáveis
 //       neighbors = { { map = "floresta", offset = {1000, 0, 0} } },  -- mundo contínuo
+//       areas = { { name = "porta", position = {x, y, z}, size = {40, 30, 40}, rotation = 0 } },  -- gatilhos
 //
 // Luzes com índice além das do mapa são luzes novas, criadas no editor.
 //   }
@@ -50,6 +52,7 @@ struct SceneEdits {
         bool hasTransform = false;
         Transform transform;
         bool hidden = false;
+        bool solid = false; // bloqueia o jogador
     };
     struct Copy {
         std::string from, name;
@@ -109,6 +112,13 @@ struct SceneEdits {
         Vec3 offset{0.0f};
     };
     std::vector<Neighbor> neighbors;
+    // Área de gatilho: caixa nomeada (giro em Y, graus) observada por scripts e regras.
+    struct Area {
+        std::string name;
+        Vec3 position{0.0f}, size{40.0f, 30.0f, 40.0f};
+        float rotation = 0.0f;
+    };
+    std::vector<Area> areas;
     bool hasEnvironment = false;
     float time = 12.0f;
     bool paused = false;
@@ -116,7 +126,7 @@ struct SceneEdits {
 
     bool empty() const {
         return added.empty() && objects.empty() && copies.empty() && lights.empty() && characters.empty() &&
-               !hasEnvironment && !hasSpawn && terrainLayers.empty() && !hasWater && neighbors.empty();
+               !hasEnvironment && !hasSpawn && terrainLayers.empty() && !hasWater && neighbors.empty() && areas.empty();
     }
 
     static std::filesystem::path pathFor(const std::string& map);

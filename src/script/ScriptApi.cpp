@@ -125,6 +125,8 @@ int on_near(lua_State* L) {
     return addEvent(L, ScriptHost::EventKind::Near, 3, luaL_checknumber(L, 2), model);
 }
 int on_hour(lua_State* L) { return addEvent(L, ScriptHost::EventKind::Hour, 2, luaL_checknumber(L, 1), nullptr); }
+int on_enter(lua_State* L) { return addEvent(L, ScriptHost::EventKind::Enter, 2, 0.0, luaL_checkstring(L, 1)); }
+int on_leave(lua_State* L) { return addEvent(L, ScriptHost::EventKind::Leave, 2, 0.0, luaL_checkstring(L, 1)); }
 
 // ---------------------------------------------------------------- vars
 
@@ -212,6 +214,12 @@ int player_set_sprite(lua_State* L) {
     // PNG solto ou PNG com o .spr do importador ao lado (o motor prefere o .spr).
     ScriptBridge::setPlayerSprite(luaL_checkstring(L, 1));
     return 0;
+}
+int player_inside(lua_State* L) {
+    const int a = eng().findArea(luaL_checkstring(L, 1));
+    PlayerController* p = ScriptBridge::player();
+    lua_pushboolean(L, p && a >= 0 && eng().areas()[static_cast<size_t>(a)].contains(p->pos()));
+    return 1;
 }
 int player_near(lua_State* L) {
     const size_t i = checkModel(L, 1);
@@ -397,6 +405,14 @@ int models_hide(lua_State* L) {
     eng().modelRenderer().setInstanceEnabled(static_cast<uint32_t>(checkModel(L, 1)), false);
     return 0;
 }
+int models_set_solid(lua_State* L) {
+    eng().setSolid(static_cast<uint32_t>(checkModel(L, 1)), lua_toboolean(L, 2) != 0);
+    return 0;
+}
+int models_solid(lua_State* L) {
+    lua_pushboolean(L, eng().isSolid(static_cast<uint32_t>(checkModel(L, 1))));
+    return 1;
+}
 
 // ---------------------------------------------------------------- lights
 
@@ -476,7 +492,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
 
     static const luaL_Reg on[] = {
         {"start", on_start}, {"update", on_update}, {"every", on_every}, {"key", on_key},
-        {"near", on_near}, {"hour", on_hour}, {nullptr, nullptr}};
+        {"near", on_near}, {"hour", on_hour}, {"enter", on_enter}, {"leave", on_leave}, {nullptr, nullptr}};
     static const luaL_Reg vars[] = {{"get", vars_get}, {"set", vars_set}, {"add", vars_add}, {nullptr, nullptr}};
     static const luaL_Reg ui[] = {{"message", ui_message}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
@@ -485,7 +501,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"ground_height", world_ground_height}, {nullptr, nullptr}};
     static const luaL_Reg player[] = {
         {"position", player_position}, {"set_position", player_set_position}, {"set_sprite", player_set_sprite}, {"near", player_near},
-        {nullptr, nullptr}};
+        {"inside", player_inside}, {nullptr, nullptr}};
     static const luaL_Reg camera[] = {
         {"target", camera_target}, {"set_target", camera_set_target},
         {"orbit", camera_orbit}, {"set_orbit", camera_set_orbit}, {nullptr, nullptr}};
@@ -496,7 +512,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"set_rotation", models_set_rotation}, {"set_scale", models_set_scale},
         {"move_by", models_move_by}, {"rotate_by", models_rotate_by},
         {"visible", models_visible}, {"set_visible", models_set_visible},
-        {"show", models_show}, {"hide", models_hide}, {nullptr, nullptr}};
+        {"show", models_show}, {"hide", models_hide}, {"solid", models_solid}, {"set_solid", models_set_solid},
+        {nullptr, nullptr}};
     static const luaL_Reg characters[] = {
         {"exists", characters_exists}, {"position", characters_position},
         {"set_position", characters_set_position}, {"walk_to", characters_walk_to},
@@ -541,6 +558,9 @@ declare on: {
     near: (model: string, distance: number, fn: () -> ()) -> (),
     -- Fires when the clock passes this hour (0 to 24).
     hour: (hour: number, fn: () -> ()) -> (),
+    -- Fires when the player walks into / out of a trigger area (Add > Trigger Area).
+    enter: (area: string, fn: () -> ()) -> (),
+    leave: (area: string, fn: () -> ()) -> (),
 }
 
 -- Variables shared by every script. They reset when the game starts.
@@ -575,6 +595,8 @@ declare player: {
     -- Player look: a PNG, animated when the Sprite Importer's .spr sits next to it.
     set_sprite: (png: string) -> (),
     near: (model: Model, distance: number) -> boolean,
+    -- True while the player stands in the trigger area.
+    inside: (area: string) -> boolean,
 }
 
 declare characters: {
@@ -623,6 +645,9 @@ declare models: {
     set_visible: (model: Model, visible: boolean) -> (),
     show: (model: Model) -> (),
     hide: (model: Model) -> (),
+    -- Solid models block the player (the bottom of the model: trunk, wall base).
+    solid: (model: Model) -> boolean,
+    set_solid: (model: Model, solid: boolean) -> (),
 }
 
 -- Point lights of the map. Indices start at 1.

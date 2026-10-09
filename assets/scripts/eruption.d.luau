@@ -18,6 +18,9 @@ declare on: {
     near: (model: string, distance: number, fn: () -> ()) -> (),
     -- Fires when the clock passes this hour (0 to 24).
     hour: (hour: number, fn: () -> ()) -> (),
+    -- Fires when the player walks into / out of a trigger area (Add > Trigger Area).
+    enter: (area: string, fn: () -> ()) -> (),
+    leave: (area: string, fn: () -> ()) -> (),
 }
 
 -- Variables shared by every script. They reset when the game starts.
@@ -52,6 +55,8 @@ declare player: {
     -- Player look: a PNG, animated when the Sprite Importer's .spr sits next to it.
     set_sprite: (png: string) -> (),
     near: (model: Model, distance: number) -> boolean,
+    -- True while the player stands in the trigger area.
+    inside: (area: string) -> boolean,
 }
 
 declare characters: {
@@ -100,6 +105,9 @@ declare models: {
     set_visible: (model: Model, visible: boolean) -> (),
     show: (model: Model) -> (),
     hide: (model: Model) -> (),
+    -- Solid models block the player (the bottom of the model: trunk, wall base).
+    solid: (model: Model) -> boolean,
+    set_solid: (model: Model, solid: boolean) -> (),
 }
 
 -- Point lights of the map. Indices start at 1.

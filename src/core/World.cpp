@@ -406,6 +406,18 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
         m_characters[static_cast<size_t>(idx)].fromNeighbor = true;
         r.characters.push_back(name);
     }
+    r.areas.clear();
+    for (const auto& a : e.areas) {
+        const std::string name = prefix + a.name;
+        if (findArea(name) >= 0) continue;
+        const int idx = addArea(name, a.position + r.offset, a.size, a.rotation);
+        m_areas[static_cast<size_t>(idx)].fromNeighbor = true;
+        r.areas.push_back(name);
+    }
+    for (const auto& ob : e.objects) {
+        const int idx = ob.solid ? findInRegion(ob.name) : -1;
+        if (idx >= 0) setSolid(static_cast<uint32_t>(idx), true);
+    }
     r.hasWater = e.hasWater;
     r.waterLevel = e.waterLevel + r.offset.y;
     r.state = WorldRegion::State::Shown;
@@ -439,6 +451,8 @@ void Engine::showRegion(WorldRegion& r, bool show) {
     for (auto& c : m_characters)
         if (c.fromNeighbor && std::find(r.characters.begin(), r.characters.end(), c.name) != r.characters.end())
             c.parked = !show;
+    for (auto& a : m_areas)
+        if (a.fromNeighbor && std::find(r.areas.begin(), r.areas.end(), a.name) != r.areas.end()) a.parked = !show;
     r.state = show ? WorldRegion::State::Shown : WorldRegion::State::Hidden;
     if (!show) r.hiddenAt = std::chrono::steady_clock::now();
     ++m_worldVersion;
@@ -534,7 +548,11 @@ void Engine::releaseRegion(WorldRegion& r) {
     for (uint32_t i = r.firstInstance; i < r.endInstance && i < mr.instanceCount(); ++i) {
         idx.push_back(i);
         mr.setInstanceName(i, std::string());
+        setSolid(i, false);
     }
+    for (auto& a : m_areas)
+        if (a.fromNeighbor && std::find(r.areas.begin(), r.areas.end(), a.name) != r.areas.end()) a.removed = true;
+    r.areas.clear();
     mr.setInstancesEnabled(idx, false);
     // Malhas do .glb do mapa (só dele) e as imagens embutidas guardadas para ele.
     size_t meshes = 0;

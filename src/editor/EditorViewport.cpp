@@ -416,6 +416,22 @@ void Editor::pickAt(float u, float v) {
         best = {SelectionKind::Character, static_cast<int>(i)};
     }
     const bool markersClickable = m_layerShow[LayerMarkers] && !m_layerLock[LayerMarkers];
+    // Áreas: raio contra a caixa (no espaço dela, cubo de -0,5 a 0,5).
+    const auto& areas = m_engine->areas();
+    for (size_t i = 0; markersClickable && i < areas.size(); ++i) {
+        const auto& a = areas[i];
+        if (a.removed || a.parked || a.fromNeighbor) continue;
+        const Mat4 inv = glm::inverse(a.matrix());
+        const Vec3 o = Vec3(inv * Vec4(origin, 1.0f)), d = Vec3(inv * Vec4(dir, 0.0f));
+        const Vec3 invD(1.0f / (std::abs(d.x) > 1e-8f ? d.x : 1e-8f), 1.0f / (std::abs(d.y) > 1e-8f ? d.y : 1e-8f),
+                        1.0f / (std::abs(d.z) > 1e-8f ? d.z : 1e-8f));
+        const float t = rayAabb(o, invD, Vec3(-0.5f), Vec3(0.5f));
+        // Dentro da caixa (t = 0) não pega: clicar no chão dentro dela continua escolhendo o chão.
+        if (t > 0.0f && t < bestT) {
+            bestT = t;
+            best = {SelectionKind::Area, static_cast<int>(i)};
+        }
+    }
     if (markersClickable && m_engine->hasPlayerStart()) {
         const Vec3 oc = m_engine->playerStart() - origin;
         const float t = glm::dot(oc, dir);
@@ -463,6 +479,10 @@ void Editor::drawGizmo(float x, float y, float w, float h) {
     if (m_selection.kind == SelectionKind::Model) {
         if (m_tool == Tool::Rotate) { op = ImGuizmo::ROTATE; snap[0] = snap[1] = snap[2] = m_snapAngle; }
         if (m_tool == Tool::Scale) { op = ImGuizmo::SCALE; snap[0] = snap[1] = snap[2] = m_snapScale; }
+    } else if (m_selection.kind == SelectionKind::Area) {
+        // Área: gira só em Y; Scale muda o tamanho da caixa.
+        if (m_tool == Tool::Rotate) { op = ImGuizmo::ROTATE_Y; snap[0] = snap[1] = snap[2] = m_snapAngle; }
+        if (m_tool == Tool::Scale) { op = ImGuizmo::SCALE; snap[0] = snap[1] = snap[2] = m_snapScale; }
     }
     const bool snapping = m_snap || ImGui::GetIO().KeyCtrl;
 
@@ -501,6 +521,29 @@ void Editor::drawSceneMarkers(float x, float y, float w, float h) {
         dl->AddCircle(s, 9.0f, col, 20, 2.5f);
         dl->AddTriangleFilled(ImVec2(s.x - 5, s.y - 22), ImVec2(s.x + 5, s.y - 22), ImVec2(s.x, s.y - 11), col);
         dl->AddText(ImVec2(s.x + 12, s.y - 8), col, "Start");
+    }
+    // Áreas de gatilho: caixa em arame com o nome.
+    const auto& areas = m_engine->areas();
+    for (size_t i = 0; i < areas.size(); ++i) {
+        const auto& a = areas[i];
+        if (a.removed || a.parked || (a.fromNeighbor && !m_layerShow[LayerNeighbors])) continue;
+        const bool sel = m_selection.kind == SelectionKind::Area && m_selection.index == static_cast<int>(i);
+        const ImU32 col = sel ? ImGui::GetColorU32(kAccent) : (a.fromNeighbor ? IM_COL32(90, 170, 200, 120)
+                                                                              : IM_COL32(90, 200, 230, 210));
+        const Mat4 m = a.matrix();
+        ImVec2 p[8];
+        bool ok = true;
+        for (int c = 0; c < 8 && ok; ++c) {
+            const Vec3 corner((c & 1) ? 0.5f : -0.5f, (c & 2) ? 0.5f : -0.5f, (c & 4) ? 0.5f : -0.5f);
+            const Vec4 cl = vp * (m * Vec4(corner, 1.0f));
+            if (cl.w <= 1e-3f) ok = false;
+            else p[c] = ImVec2(x + (cl.x / cl.w * 0.5f + 0.5f) * w, y + (cl.y / cl.w * 0.5f + 0.5f) * h);
+        }
+        if (!ok) continue;
+        static const int kEdges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3},
+                                          {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+        for (const auto& e : kEdges) dl->AddLine(p[e[0]], p[e[1]], col, sel ? 2.0f : 1.2f);
+        if (toScreen(a.center + Vec3(0.0f, a.size.y * 0.5f, 0.0f), s)) dl->AddText(ImVec2(s.x + 4, s.y - 16), col, a.name.c_str());
     }
     const auto& lights = m_engine->m_deferredLighting.getPointLights();
     for (size_t i = 0; i < lights.size(); ++i) {

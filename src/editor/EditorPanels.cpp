@@ -101,6 +101,10 @@ std::string Editor::selectionName(const Selection& s) const {
         }
         case SelectionKind::Light: return "Point Light " + std::to_string(s.index);
         case SelectionKind::Spawn: return "Player Start";
+        case SelectionKind::Area: {
+            const auto& as = m_engine->areas();
+            return s.index >= 0 && s.index < static_cast<int>(as.size()) ? as[static_cast<size_t>(s.index)].name : std::string();
+        }
         case SelectionKind::Character: {
             const auto& cs = m_engine->characters();
             return s.index >= 0 && s.index < static_cast<int>(cs.size()) ? cs[static_cast<size_t>(s.index)].name : std::string();
@@ -123,6 +127,9 @@ bool Editor::selectionHasTransform() const {
         return m_selection.index >= 0 && m_selection.index < static_cast<int>(m_engine->characters().size()) &&
                !m_engine->characters()[static_cast<size_t>(m_selection.index)].removed;
     if (m_selection.kind == SelectionKind::Spawn) return m_engine->hasPlayerStart();
+    if (m_selection.kind == SelectionKind::Area)
+        return m_selection.index >= 0 && m_selection.index < static_cast<int>(m_engine->areas().size()) &&
+               !m_engine->areas()[static_cast<size_t>(m_selection.index)].removed;
     return false;
 }
 
@@ -145,6 +152,7 @@ Mat4 Editor::selectionTransform() const {
     if (m_selection.kind == SelectionKind::Character)
         return characterMatrix(m_engine->characters()[static_cast<size_t>(m_selection.index)]);
     if (m_selection.kind == SelectionKind::Spawn) return glm::translate(Mat4(1.0f), m_engine->playerStart());
+    if (m_selection.kind == SelectionKind::Area) return m_engine->areas()[static_cast<size_t>(m_selection.index)].matrix();
     Mat4 m(1.0f);
     m[3] = Vec4(m_engine->m_deferredLighting.getPointLights()[static_cast<size_t>(m_selection.index)].position, 1.0f);
     return m;
@@ -158,6 +166,8 @@ void Editor::setSelectionTransform(const Mat4& m) {
         setCharacterFromMatrix(m_engine->characters()[static_cast<size_t>(m_selection.index)], m);
     else if (m_selection.kind == SelectionKind::Spawn)
         m_engine->movePlayerStart(Vec3(m[3]));
+    else if (m_selection.kind == SelectionKind::Area)
+        m_engine->areas()[static_cast<size_t>(m_selection.index)].setMatrix(m);
     else
         m_engine->m_deferredLighting.getPointLights()[static_cast<size_t>(m_selection.index)].position = Vec3(m[3]);
 }
@@ -177,6 +187,9 @@ void Editor::pushTransformEdit(const Selection& s, const Mat4& before, const Mat
             if (s.index >= 0 && s.index < static_cast<int>(cs.size())) setCharacterFromMatrix(cs[static_cast<size_t>(s.index)], m);
         } else if (s.kind == SelectionKind::Spawn) {
             engine->movePlayerStart(Vec3(m[3]));
+        } else if (s.kind == SelectionKind::Area) {
+            auto& as = engine->areas();
+            if (s.index >= 0 && s.index < static_cast<int>(as.size())) as[static_cast<size_t>(s.index)].setMatrix(m);
         }
     };
     m_undo.push({"Transform " + selectionName(s), [apply, before] { apply(before); }, [apply, after] { apply(after); }});
@@ -201,6 +214,14 @@ void Editor::deleteSelection() {
         auto setRemoved = [engine, s](bool removed) {
             auto& cs = engine->characters();
             if (s.index < static_cast<int>(cs.size())) cs[static_cast<size_t>(s.index)].removed = removed;
+        };
+        setRemoved(true);
+        m_undo.push({"Delete " + selectionName(s), [setRemoved] { setRemoved(false); }, [setRemoved] { setRemoved(true); }});
+        select({});
+    } else if (s.kind == SelectionKind::Area && selectionHasTransform()) {
+        auto setRemoved = [engine, s](bool removed) {
+            auto& as = engine->areas();
+            if (s.index < static_cast<int>(as.size())) as[static_cast<size_t>(s.index)].removed = removed;
         };
         setRemoved(true);
         m_undo.push({"Delete " + selectionName(s), [setRemoved] { setRemoved(false); }, [setRemoved] { setRemoved(true); }});
@@ -292,6 +313,24 @@ void Editor::drawHierarchy() {
                 if (!icontains(name, m_hierarchyFilter)) continue;
                 ImGui::PushID(static_cast<int>(i));
                 row(s, name, lights[i].enabled);
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
+    }
+
+    const auto& areas = m_engine->areas();
+    size_t liveAreas = 0;
+    for (const auto& a : areas) liveAreas += a.removed || a.fromNeighbor ? 0 : 1;
+    if (liveAreas) {
+        char ahdr[64];
+        std::snprintf(ahdr, sizeof(ahdr), "Areas (%zu)###areas", liveAreas);
+        ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
+        if (ImGui::TreeNodeEx(ahdr, ImGuiTreeNodeFlags_SpanAvailWidth)) {
+            for (size_t i = 0; i < areas.size(); ++i) {
+                if (areas[i].removed || areas[i].fromNeighbor || !icontains(areas[i].name, m_hierarchyFilter)) continue;
+                ImGui::PushID(static_cast<int>(i) + 2000000);
+                row({SelectionKind::Area, static_cast<int>(i)}, areas[i].name, true);
                 ImGui::PopID();
             }
             ImGui::TreePop();
@@ -451,7 +490,8 @@ void Editor::drawInspector() {
             activated |= ImGui::IsItemActivated();
             finished |= ImGui::IsItemDeactivatedAfterEdit();
         };
-        const bool isModel = m_selection.kind == SelectionKind::Model;
+        // Modelo e área têm giro e tamanho (na área, o tamanho é o da caixa).
+        const bool isModel = m_selection.kind == SelectionKind::Model || m_selection.kind == SelectionKind::Area;
 
         propertyLabel("Position");
         edited |= ImGui::DragFloat3("##pos", t, 0.1f, 0.0f, 0.0f, "%.2f");
@@ -506,6 +546,16 @@ void Editor::drawInspector() {
                              [setEnabled, visible] { setEnabled(!visible); },
                              [setEnabled, visible] { setEnabled(visible); }});
             }
+            bool solid = m_engine->isSolid(static_cast<uint32_t>(m_selection.index));
+            propertyLabel("Solid");
+            if (ImGui::Checkbox("##solid", &solid)) {
+                const uint32_t idx = static_cast<uint32_t>(m_selection.index);
+                Engine* engine = m_engine;
+                engine->setSolid(idx, solid);
+                m_undo.push({std::string(solid ? "Solid " : "Not solid ") + name, [engine, idx, solid] { engine->setSolid(idx, !solid); },
+                             [engine, idx, solid] { engine->setSolid(idx, solid); }});
+            }
+            ImGui::SetItemTooltip("The player can't walk through the bottom of this model (trunk, wall base).");
             propertyLabel("Asset");
             ImGui::TextWrapped("%s", inst.assetPath.empty() ? "(embedded in the map)" : inst.assetPath.c_str());
             const Vec3 size = inst.worldAabbMax - inst.worldAabbMin;
@@ -553,6 +603,28 @@ void Editor::drawInspector() {
                 const PointLight b = before;
                 m_undo.push({"Edit " + name, [apply, b] { apply(b); }, [apply, after] { apply(after); }});
             }
+        }
+    } else if (m_selection.kind == SelectionKind::Area) {
+        Engine::TriggerArea& a = m_engine->areas()[static_cast<size_t>(m_selection.index)];
+        if (ImGui::CollapsingHeader("Trigger Area", ImGuiTreeNodeFlags_DefaultOpen)) {
+            propertyLabel("Name");
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%s", a.name.c_str());
+            if (ImGui::InputText("##aname", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue) && buf[0] &&
+                m_engine->findArea(buf) < 0) {
+                const std::string before = a.name, after = buf;
+                const int idx = m_selection.index;
+                Engine* engine = m_engine;
+                auto rename = [engine, idx](const std::string& n) {
+                    auto& as = engine->areas();
+                    if (idx < static_cast<int>(as.size())) as[static_cast<size_t>(idx)].name = n;
+                };
+                rename(after);
+                m_undo.push({"Rename area", [rename, before] { rename(before); }, [rename, after] { rename(after); }});
+            }
+            ImGui::SetItemTooltip("Rules and scripts use this name: on.enter(\"name\", ...). Press Enter to rename.");
+            ImGui::TextWrapped("Fires \"enter\" and \"leave\" when the player walks in and out. Move, Rotate and Scale "
+                               "tools change the box.");
         }
     } else if (m_selection.kind == SelectionKind::Character) {
         Engine::SceneCharacter& c = m_engine->characters()[static_cast<size_t>(m_selection.index)];

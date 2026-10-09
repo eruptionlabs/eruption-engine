@@ -74,7 +74,7 @@ std::string sentence(const RuleCall& c, UiLanguage lang) {
         std::string value = ruleArgDisplay(c.def->params[i].type, c.args[i], lang);
         if (value.empty()) value = "?";
         if (c.def->params[i].type == ParamType::Text || c.def->params[i].type == ParamType::Model ||
-            c.def->params[i].type == ParamType::Character)
+            c.def->params[i].type == ParamType::Character || c.def->params[i].type == ParamType::Area)
             value = "\"" + value + "\"";
         text.replace(at, key.size(), value);
     }
@@ -166,6 +166,18 @@ bool Editor::rulesParamEditor(RuleCall& call) {
                 }
                 if (m_engine->characters().empty())
                     ImGui::SetItemTooltip("Drag a PNG from the Project panel into the scene to add a character.");
+                break;
+            }
+            case ParamType::Area: {
+                const std::string cur = unquote(code);
+                if (ImGui::BeginCombo("##area", cur.empty() ? "(choose)" : cur.c_str())) {
+                    for (const auto& a : m_engine->areas()) {
+                        if (a.removed || a.parked) continue;
+                        if (ImGui::Selectable(a.name.c_str(), cur == a.name)) { code = quote(a.name); changed = true; }
+                    }
+                    ImGui::EndCombo();
+                }
+                if (m_engine->areas().empty()) ImGui::SetItemTooltip("Add > Trigger Area places one in the scene.");
                 break;
             }
             case ParamType::Key: {

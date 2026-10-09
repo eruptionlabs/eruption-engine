@@ -160,6 +160,8 @@ bool Engine::loadMap(const std::string& name) {
     endSplatEditing();
     clearScatter();
     resetWorld(); // vizinhos do mapa anterior
+    clearAreas();
+    m_solid.clear();
 
     // GERACAO DO CACHE DE ASSET. Ate 2026-09-05 so' o warp (performMapSwap)
     // avancava a geracao e expulsava textura/malha velha do GlobalAssetCache;

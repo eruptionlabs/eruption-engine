@@ -179,6 +179,7 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
                 o.name = lua_tostring(L, -2);
                 o.transform = readTransform(L, lua_gettop(L), o.hasTransform);
                 o.hidden = readBool(L, lua_gettop(L), "hidden", false);
+                o.solid = readBool(L, lua_gettop(L), "solid", false);
                 objects.push_back(std::move(o));
             }
             lua_pop(L, 1);
@@ -281,6 +282,25 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
     }
     lua_pop(L, 1);
 
+    lua_getfield(L, root, "areas");
+    if (lua_istable(L, -1)) {
+        const int n = lua_objlen(L, -1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            const int t = lua_gettop(L);
+            if (lua_istable(L, t)) {
+                Area a;
+                a.name = readStr(L, t, "name");
+                readVec(L, t, "position", a.position);
+                readVec(L, t, "size", a.size);
+                a.rotation = readNum(L, t, "rotation", 0.0f);
+                if (!a.name.empty()) areas.push_back(std::move(a));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+
     lua_getfield(L, root, "neighbors");
     if (lua_istable(L, -1)) {
         const int n = lua_objlen(L, -1);
@@ -342,8 +362,9 @@ std::string SceneEdits::serialize(const std::string& map) const {
         for (const auto& ob : objects) {
             o << "        [" << quoted(ob.name) << "] = { ";
             if (ob.hidden) o << "hidden = true";
+            if (ob.solid) o << (ob.hidden ? ", " : "") << "solid = true";
             if (ob.hasTransform) {
-                if (ob.hidden) o << ", ";
+                if (ob.hidden || ob.solid) o << ", ";
                 o << "position = " << vec(ob.transform.position) << ", rotation = " << vec(ob.transform.rotation)
                   << ", scale = " << vec(ob.transform.scale);
             }
@@ -382,6 +403,13 @@ std::string SceneEdits::serialize(const std::string& map) const {
         o << "    terrain = { layers = {";
         for (size_t i = 0; i < terrainLayers.size(); ++i) o << (i ? ", " : " ") << quoted(terrainLayers[i]);
         o << " } },\n";
+    }
+    if (!areas.empty()) {
+        o << "    areas = {\n";
+        for (const auto& a : areas)
+            o << "        { name = " << quoted(a.name) << ", position = " << vec(a.position) << ", size = " << vec(a.size)
+              << ", rotation = " << num(a.rotation) << " },\n";
+        o << "    },\n";
     }
     if (!neighbors.empty()) {
         o << "    neighbors = {\n";
@@ -431,11 +459,29 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         if (ob.hidden) mr.setInstanceEnabled(static_cast<uint32_t>(idx), false);
         ++applied;
     }
+    for (const auto& a : areas) {
+        if (engine.findArea(a.name) >= 0) continue;
+        engine.addArea(a.name, a.position, a.size, a.rotation);
+        ++applied;
+    }
     for (const auto& c : copies) {
         const int src = scriptFindModel(c.from);
         if (src < 0 || scriptFindModel(c.name) >= 0) continue;
         mr.duplicateInstance(static_cast<uint32_t>(src), c.name, c.transform.matrix());
         ++applied;
+    }
+    // Sólido depois das cópias (uma cópia também pode ser sólida). O nome de um
+    // modelo acrescentado com vários nós vale para todos ("muro" -> "muro/Box"...).
+    for (const auto& ob : objects) {
+        if (!ob.solid) continue;
+        const int idx = scriptFindModel(ob.name);
+        if (idx >= 0) {
+            engine.setSolid(static_cast<uint32_t>(idx), true);
+            continue;
+        }
+        const auto& insts = mr.getInstances();
+        for (uint32_t i = 0; i < insts.size(); ++i)
+            if (insts[i].name.rfind(ob.name + "/", 0) == 0) engine.setSolid(i, true);
     }
     auto& ls = engine.deferredLighting().getPointLights();
     for (const auto& l : lights) {

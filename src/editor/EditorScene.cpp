@@ -11,6 +11,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <cstdio>
 #include <fstream>
@@ -101,6 +102,9 @@ void Editor::reloadSceneFile() {
     }
     m_engine->m_deferredLighting.getPointLights() = m_original.lights;
     m_engine->clearCharacters(true); // vêm todos do arquivo (os dos vizinhos ficam)
+    m_engine->clearAreas(true);
+    for (uint32_t i = 0; i < insts.size(); ++i)
+        if (!m_engine->isRegionInstance(i)) m_engine->setSolid(i, false);
     m_engine->clearPlayerStart();
     select({});
     applySceneFile();
@@ -173,6 +177,23 @@ SceneEdits Editor::currentEdits() const {
         if (c.removed || c.fromNeighbor) continue;
         e.characters.push_back({c.name, c.sprite, c.position, c.facing, !c.visible});
     }
+    // Sólidos: marca no objeto (o do mapa, o acrescentado ou a cópia), pelo nome.
+    for (uint32_t i = 0; i < insts.size(); ++i) {
+        if (!m_engine->isSolid(i) || !insts[i].enabled || insts[i].name.empty() || m_engine->isRegionInstance(i) ||
+            m_engine->isScatterInstance(i))
+            continue;
+        auto it = std::find_if(e.objects.begin(), e.objects.end(), [&](const SceneEdits::Object& o) { return o.name == insts[i].name; });
+        if (it != e.objects.end()) {
+            it->solid = true;
+        } else {
+            SceneEdits::Object o;
+            o.name = insts[i].name;
+            o.solid = true;
+            e.objects.push_back(std::move(o));
+        }
+    }
+    for (const auto& a : m_engine->areas())
+        if (!a.removed && !a.fromNeighbor) e.areas.push_back({a.name, a.center, a.size, a.yaw});
     e.terrainLayers = m_engine->splatLayerFiles();
     e.neighbors = m_engine->worldNeighbors();
     if (m_engine->hasPlayerStart()) {
@@ -334,6 +355,22 @@ void Editor::addPointLight() {
         if (idx < static_cast<int>(ls.size())) ls[static_cast<size_t>(idx)].enabled = on;
     };
     m_undo.push({"Add light", [setEnabled] { setEnabled(false); }, [setEnabled] { setEnabled(true); }});
+}
+
+void Editor::addTriggerArea() {
+    Vec3 at;
+    if (!groundPointAt(0.5f, 0.5f, at)) at = m_engine->camera().target();
+    std::string name;
+    for (int i = 1; name.empty() || m_engine->findArea(name) >= 0; ++i) name = "area_" + std::to_string(i);
+    const Vec3 size(40.0f, 30.0f, 40.0f);
+    const int idx = m_engine->addArea(name, at + Vec3(0.0f, size.y * 0.5f, 0.0f), size, 0.0f);
+    select({SelectionKind::Area, idx});
+    Engine* engine = m_engine;
+    auto setRemoved = [engine, idx](bool removed) {
+        auto& as = engine->areas();
+        if (idx < static_cast<int>(as.size())) as[static_cast<size_t>(idx)].removed = removed;
+    };
+    m_undo.push({"Add area", [setRemoved] { setRemoved(true); }, [setRemoved] { setRemoved(false); }});
 }
 
 void Editor::setPlayerStartHere() {

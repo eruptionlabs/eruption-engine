@@ -581,6 +581,7 @@ void ModelRenderer::clear() {
     }
     m_meshes.clear();
     m_instances.clear();
+    m_footprintCache.clear();
     m_textureSlots.clear();
     m_groundCpu.clear();
     m_vertexPatches.clear();
@@ -2019,6 +2020,48 @@ ModelAsset* ModelRenderer::assetFor(const std::string& path) {
     return nullptr;
 }
 
+bool ModelRenderer::footprint(uint32_t index, Vec2 out[4]) const {
+    if (index >= m_instances.size()) return false;
+    const ModelInstance& inst = m_instances[index];
+    const std::string key = inst.assetPath + "#" + std::to_string(inst.nodeIndex);
+    auto it = m_footprintCache.find(key);
+    if (it == m_footprintCache.end()) {
+        const ModelAsset* asset = nullptr;
+        for (const auto& m : m_lastModels)
+            if (m.filePath == inst.assetPath) { asset = &m; break; }
+        if (!asset || inst.nodeIndex >= asset->nodes.size() || asset->nodes[inst.nodeIndex].vertices.empty()) return false;
+        const auto& vs = asset->nodes[inst.nodeIndex].vertices;
+        float lo = FLT_MAX, hi = -FLT_MAX;
+        for (const auto& v : vs) {
+            lo = std::min(lo, v.position.y);
+            hi = std::max(hi, v.position.y);
+        }
+        // A quinta parte de baixo (no mínimo 2 unidades): tronco, pé, base da parede.
+        const float band = lo + std::max(2.0f, (hi - lo) * 0.2f);
+        Vec4 r(FLT_MAX, -FLT_MAX, FLT_MAX, -FLT_MAX);
+        for (const auto& v : vs) {
+            if (v.position.y > band) continue;
+            r.x = std::min(r.x, v.position.x);
+            r.y = std::max(r.y, v.position.x);
+            r.z = std::min(r.z, v.position.z);
+            r.w = std::max(r.w, v.position.z);
+        }
+        it = m_footprintCache.emplace(key, r).first;
+    }
+    const Vec4 r = it->second;
+    if (r.x > r.y) return false;
+    const Vec3 local[4] = {{r.x, 0, r.z}, {r.y, 0, r.z}, {r.y, 0, r.w}, {r.x, 0, r.w}};
+    for (int k = 0; k < 4; ++k) {
+        const Vec3 w = Vec3(inst.transform * Vec4(local[k], 1.0f));
+        out[k] = Vec2(w.x, w.z);
+    }
+    // Espelhado (escala negativa): volta ao sentido anti-horário.
+    float area = 0.0f;
+    for (int k = 0; k < 4; ++k) area += out[k].x * out[(k + 1) % 4].y - out[(k + 1) % 4].x * out[k].y;
+    if (area < 0.0f) std::swap(out[1], out[3]);
+    return true;
+}
+
 float ModelRenderer::raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const {
     if (index >= m_instances.size()) return -1.0f;
     const ModelInstance& inst = m_instances[index];
@@ -2085,6 +2128,8 @@ std::vector<std::string> ModelRenderer::releaseAsset(const std::string& filePath
         m_vertexPatches.erase(mi);
     }
     m_modelMeshCache.erase(it);
+    for (auto it2 = m_footprintCache.begin(); it2 != m_footprintCache.end();)
+        it2 = it2->first.rfind(filePath + "#", 0) == 0 ? m_footprintCache.erase(it2) : std::next(it2);
     for (auto& a : m_lastModels)
         if (a.filePath == filePath) {
             a.nodes.clear();

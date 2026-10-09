@@ -23,6 +23,7 @@ enum class ParamType {
     Hour,     // 0..24
     Seconds,
     Character, // nome do personagem da cena
+    Area,      // nome da área de gatilho
 };
 
 struct RuleParam {
