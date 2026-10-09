@@ -265,6 +265,7 @@ bool Engine::loadMap(const std::string& name) {
     }
     // Retoque de terreno salvo pelo editor: entra nos vértices antes de subir.
     prepareHeightEdits(*loadedMap, genericModels);
+    applySavedWalk(*loadedMap);
     ERUPTION_LOG_WARN("Engine::loadMap: loading %zu models, %zu instances", genericModels.size(), genericInstances.size());
     // GLB maps are authored in world space; do not add a center offset.
     float modelCenterX = loadedMap->isGlbMap ? 0.0f : m_centerX;

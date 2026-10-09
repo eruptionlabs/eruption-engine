@@ -37,17 +37,28 @@ void Editor::terrainBrushInput(float x, float y, float w, float h) {
         b.hasCursor = true;
     }
     const bool canPaint = b.objects ? m_engine->currentMapName().size() > 0
+                          : b.walk  ? m_engine->navFollowsTerrain()
                                     : m_engine->terrainEditable() && (!b.paint || m_engine->splatEdit().active);
     if (!b.stroking && canPaint && b.hasCursor && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         b.stroking = true;
         if (b.objects) m_scatterStroke = {{}, {}, m_scatterStroke.seed * 1664525u + 1013904223u};
+        else if (b.walk) b.walkSnapshot = m_engine->walkRegion(0, 0, int(m_engine->currentMap()->navGrid.width) - 1,
+                                                               int(m_engine->currentMap()->navGrid.height) - 1);
         else b.snapshot = b.paint ? m_engine->splatEdit().weights : m_engine->heightEdit().delta;
         b.rect[0] = b.rect[1] = INT32_MAX;
         b.rect[2] = b.rect[3] = INT32_MIN;
         b.flattenTo = at.y; // aplainar: altura onde o traço começou
     }
     if (b.stroking && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        if (b.hasCursor && b.objects) {
+        if (b.hasCursor && b.walk) {
+            int r[4];
+            if (m_engine->paintWalk(Vec2(b.cursor.x, b.cursor.z), b.size, b.walkBlock != io.KeyCtrl, r)) {
+                b.rect[0] = std::min(b.rect[0], r[0]);
+                b.rect[1] = std::min(b.rect[1], r[1]);
+                b.rect[2] = std::max(b.rect[2], r[2]);
+                b.rect[3] = std::max(b.rect[3], r[3]);
+            }
+        } else if (b.hasCursor && b.objects) {
             scatterStep(std::min(io.DeltaTime, 0.05f), io.KeyCtrl);
         } else if (b.hasCursor && b.paint) {
             int r[4];
@@ -84,6 +95,26 @@ void Editor::endTerrainStroke() {
     b.stroking = false;
     if (b.objects) {
         endScatterStroke();
+        return;
+    }
+    if (b.walk) {
+        if (b.rect[0] > b.rect[2]) return;
+        const int x0 = b.rect[0], z0 = b.rect[1], x1 = b.rect[2], z1 = b.rect[3];
+        const uint32_t w = m_engine->currentMap()->navGrid.width;
+        std::vector<uint8_t> before;
+        for (int z = z0; z <= z1; ++z)
+            for (int xx = x0; xx <= x1; ++xx) before.push_back(b.walkSnapshot[size_t(z) * w + xx]);
+        std::vector<uint8_t> after = m_engine->walkRegion(x0, z0, x1, z1);
+        b.walkSnapshot.clear();
+        Engine* engine = m_engine;
+        bool* dirty = &m_terrainDirty;
+        auto apply = [engine, dirty, x0, z0, x1, z1](const std::vector<uint8_t>& v) {
+            engine->setWalkRegion(x0, z0, x1, z1, v);
+            *dirty = true;
+        };
+        m_undo.push({"Walk grid", [apply, before] { apply(before); }, [apply, after] { apply(after); }});
+        m_terrainDirty = true;
+        updateTitle(true);
         return;
     }
     if (b.rect[0] > b.rect[2]) return; // nada tocado
@@ -188,6 +219,61 @@ void Editor::drawSplatLayers() {
     else if (!pngSelected) ImGui::TextDisabled("Select a PNG in the Project panel to add a layer.");
 }
 
+void Editor::drawWalkPanel() {
+    TerrainBrush& b = m_brush;
+    if (!m_engine->navFollowsTerrain()) {
+        ImGui::TextWrapped("The walk grid can be painted on maps with a height grid (.ter), like the ones made with "
+                           "File > New Map.");
+        return;
+    }
+    if (ImGui::RadioButton("Block", b.walkBlock)) b.walkBlock = true;
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Allow walking", !b.walkBlock)) b.walkBlock = false;
+    ImGui::SliderFloat("Steepest walkable slope", &b.maxSlope, 5.0f, 85.0f, "%.0f deg");
+    if (ImGui::Button("Block steeper slopes")) {
+        const auto& nav = m_engine->currentMap()->navGrid;
+        const int x1 = int(nav.width) - 1, z1 = int(nav.height) - 1;
+        const std::vector<uint8_t> before = m_engine->walkRegion(0, 0, x1, z1);
+        const int n = m_engine->blockSteepSlopes(b.maxSlope);
+        const std::vector<uint8_t> after = m_engine->walkRegion(0, 0, x1, z1);
+        Engine* engine = m_engine;
+        auto apply = [engine, x1, z1](const std::vector<uint8_t>& v) { engine->setWalkRegion(0, 0, x1, z1, v); };
+        m_undo.push({"Block slopes", [apply, before] { apply(before); }, [apply, after] { apply(after); }});
+        m_terrainDirty = true;
+        updateTitle(true);
+        log(LogLevel::Info, std::to_string(n) + " cells too steep to walk.");
+    }
+    ImGui::TextDisabled("Blocked cells show in red around the brush.");
+}
+
+void Editor::drawWalkOverlay(float x, float y, float w, float h) {
+    const TerrainBrush& b = m_brush;
+    if (m_tool != Tool::Terrain || !b.walk || !b.hasCursor || !m_engine->navFollowsTerrain()) return;
+    const auto& t = m_engine->currentMap()->terrain;
+    const auto& nav = m_engine->currentMap()->navGrid;
+    const Mat4 vp = m_engine->camera().viewProjNoJitter();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    int cx = 0, cz = 0;
+    m_engine->navCell(b.cursor.x, b.cursor.z, cx, cz);
+    const int reach = std::min(60, int(b.size * 2.5f / t.scale) + 2);
+    auto proj = [&](float px, float pz, ImVec2& out) {
+        const Vec4 c = vp * Vec4(px, m_engine->sampleTerrainHeight(px, pz) + 0.3f, pz, 1.0f);
+        if (c.w <= 1e-3f) return false;
+        out = ImVec2(x + (c.x / c.w * 0.5f + 0.5f) * w, y + (c.y / c.w * 0.5f + 0.5f) * h);
+        return true;
+    };
+    for (int z = std::max(0, cz - reach); z <= std::min(int(nav.height) - 1, cz + reach); ++z)
+        for (int xx = std::max(0, cx - reach); xx <= std::min(int(nav.width) - 1, cx + reach); ++xx) {
+            if (nav.at(uint32_t(xx), uint32_t(z)).isWalkable()) continue;
+            const float px = t.offsetX + xx * t.scale, pz = t.offsetZ + z * t.scale, hs = t.scale * 0.5f;
+            ImVec2 q[4];
+            if (!proj(px - hs, pz - hs, q[0]) || !proj(px + hs, pz - hs, q[1]) || !proj(px + hs, pz + hs, q[2]) ||
+                !proj(px - hs, pz + hs, q[3]))
+                continue;
+            dl->AddQuadFilled(q[0], q[1], q[2], q[3], IM_COL32(230, 50, 40, 90));
+        }
+}
+
 void Editor::drawTerrainPanel() {
     TerrainBrush& b = m_brush;
     ImGui::SeparatorText("Terrain brush");
@@ -200,6 +286,7 @@ void Editor::drawTerrainPanel() {
         if (ImGui::BeginTabItem("Sculpt")) {
             b.paint = false;
             b.objects = false;
+            b.walk = false;
             if (!editable) notEditable();
             for (int i = 0; editable && i < IM_ARRAYSIZE(kModeNames); ++i) {
                 if (i) ImGui::SameLine();
@@ -210,13 +297,21 @@ void Editor::drawTerrainPanel() {
         if (ImGui::BeginTabItem("Paint")) {
             b.paint = true;
             b.objects = false;
+            b.walk = false;
             if (editable) drawSplatLayers(); else notEditable();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Objects")) {
             b.paint = false;
             b.objects = true;
+            b.walk = false;
             drawScatterPanel();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Walk")) {
+            b.paint = b.objects = false;
+            b.walk = true;
+            drawWalkPanel();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -227,7 +322,9 @@ void Editor::drawTerrainPanel() {
     ImGui::SliderFloat("Falloff", &b.falloff, 0.0f, 1.0f, "%.2f");
     ImGui::SetItemTooltip("0 = hard edge, 1 = fades from the center.");
     ImGui::Spacing();
-    if (b.objects) {
+    if (b.walk) {
+        ImGui::TextDisabled("Left drag: paint.  Ctrl: the opposite.");
+    } else if (b.objects) {
         ImGui::TextDisabled("Left drag: scatter.  Ctrl: erase what this brush placed.");
     } else if (b.paint) {
         ImGui::TextDisabled("Left drag: paint the layer.  Ctrl: erase it.");

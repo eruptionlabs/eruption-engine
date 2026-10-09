@@ -210,6 +210,7 @@ bool Editor::saveScene() {
     if (!m_engine->saveHeightDelta(terrainError)) log(LogLevel::Error, terrainError);
     if (!m_engine->saveSplat(terrainError)) log(LogLevel::Error, terrainError);
     if (!m_engine->saveScatter(terrainError)) log(LogLevel::Error, terrainError);
+    if (!m_engine->saveWalk(terrainError)) log(LogLevel::Error, terrainError);
     m_terrainDirty = false;
     m_savedScene = text;
     m_sceneFileTime = sceneFileTime();
