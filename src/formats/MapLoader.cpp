@@ -478,6 +478,7 @@ bool MapLoader::loadFromGlb() {
         auto terData = readFileBytes(terPath);
         if (!terData.empty()) {
             m_loadingMap->terrain = TerrainParser::parse(terData.data(), terData.size());
+            m_loadingMap->terrainFromFile = m_loadingMap->terrain.width > 0 && m_loadingMap->terrain.height > 0;
             m_loadingMap->waterPlanes = m_loadingMap->terrain.waterPlanes;
             ERUPTION_LOG_WARN("MapLoader: loaded companion terrain '%s' (%ux%u) waterPlanes=%zu",
                               terPath.string().c_str(), m_loadingMap->terrain.width, m_loadingMap->terrain.height,

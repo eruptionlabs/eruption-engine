@@ -76,7 +76,7 @@ static float sampleGlbOrTerrainHeight(const LoadedMap& map, float x, float z) {
     // it is fast, matches the authored terrain exactly, and is not confused by
     // nearby model geometry.  Fall back to vertex sampling for raw GLB maps
     // without a terrain file.
-    if (map.isGlbMap && map.terrain.width > 0 && map.terrain.height > 0) {
+    if (map.isGlbMap && map.terrainFromFile) {
         return TerrainParser::getTerrainHeightAt(map.terrain, x, z);
     }
     return sampleGlbTerrainHeight(map, x, z, 1.5f);
@@ -89,7 +89,7 @@ float Engine::sampleTerrainHeight(float x, float z) const {
 }
 
 bool Engine::raycastTerrain(const Vec3& origin, const Vec3& dir, float maxT, float& hitT) const {
-    if (!m_currentMap || m_currentMap->terrain.width == 0 || m_currentMap->terrain.height == 0) return false;
+    if (!m_currentMap || !m_currentMap->terrainFromFile) return false;
     const TerrainFile& ter = m_currentMap->terrain;
     // Passo de meia célula: não atravessa morro fino; bisseção refina o cruzamento.
     const float step = std::max(0.5f, ter.scale * 0.5f);
@@ -138,6 +138,7 @@ bool Engine::loadMap(const std::string& name) {
     TelemetryExporter::recordLoadStart(name);
     loadMapClimate(name);
     m_vulkan.waitIdle();
+    clearCharacters(); // os do mapa novo vêm do scene.luau dele
 
     // GERACAO DO CACHE DE ASSET. Ate 2026-09-05 so' o warp (performMapSwap)
     // avancava a geracao e expulsava textura/malha velha do GlobalAssetCache;

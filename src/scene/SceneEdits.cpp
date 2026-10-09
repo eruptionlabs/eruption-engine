@@ -239,6 +239,26 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
     }
     lua_pop(L, 1);
 
+    lua_getfield(L, root, "characters");
+    if (lua_istable(L, -1)) {
+        const int n = lua_objlen(L, -1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_istable(L, -1)) {
+                const int t = lua_gettop(L);
+                Character c;
+                c.name = readStr(L, t, "name");
+                c.sprite = readStr(L, t, "sprite");
+                readVec(L, t, "position", c.position);
+                c.facing = readNum(L, t, "facing", 0.0f);
+                c.hidden = readBool(L, t, "hidden", false);
+                if (!c.name.empty() && !c.sprite.empty()) characters.push_back(std::move(c));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+
     lua_getfield(L, root, "environment");
     if (lua_istable(L, -1)) {
         const int t = lua_gettop(L);
@@ -302,6 +322,16 @@ std::string SceneEdits::serialize(const std::string& map) const {
               << ", enabled = " << (l.enabled ? "true" : "false") << " },\n";
         o << "    },\n";
     }
+    if (!characters.empty()) {
+        o << "    characters = {\n";
+        for (const auto& c : characters) {
+            o << "        { name = " << quoted(c.name) << ", sprite = " << quoted(c.sprite) << ", position = "
+              << vec(c.position) << ", facing = " << num(c.facing);
+            if (c.hidden) o << ", hidden = true";
+            o << " },\n";
+        }
+        o << "    },\n";
+    }
     if (hasEnvironment) {
         o << "    environment = { time = " << num(time) << ", paused = " << (paused ? "true" : "false");
         if (!weather.empty()) o << ", weather = " << quoted(weather);
@@ -358,6 +388,12 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         p.intensity = l.intensity;
         p.radius = l.range;
         p.enabled = l.enabled;
+        ++applied;
+    }
+    for (const auto& c : characters) {
+        if (engine.findCharacter(c.name) >= 0) continue;
+        const int idx = engine.addCharacter(c.name, c.sprite, c.position, c.facing);
+        engine.characters()[static_cast<size_t>(idx)].visible = !c.hidden;
         ++applied;
     }
     if (hasEnvironment) {

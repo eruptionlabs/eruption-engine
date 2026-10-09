@@ -227,8 +227,8 @@ void DefaultApplication::onInit(Engine& engine) {
         }
     }
     m_hud.init(&engine, m_player.get());
-    // Sem editor o jogo começa direto.
-    if (!m_editor && m_scripts) m_scripts->start();
+    // Sem editor os scripts começam quando a cena do primeiro mapa já está
+    // aplicada (onUpdate): on.start já encontra personagens e objetos acrescentados.
 }
 void DefaultApplication::onUpdate(float deltaTime) {
     if (m_engine && !m_mapSequence.empty() && --m_mapSequenceCountdown <= 0) {
@@ -247,8 +247,13 @@ void DefaultApplication::onUpdate(float deltaTime) {
         }
         // No editor a lógica de jogo só roda com Play (ou um passo em pausa).
         if (m_editor->gameRunning()) {
+            if (m_engine) m_engine->updateCharacters(deltaTime, true);
             if (m_player) m_player->update(deltaTime);
             if (m_scripts) m_scripts->update(deltaTime);
+        } else if (m_engine && m_player) {
+            // Parado: personagens no lugar (animação de parado) e jogador visível.
+            m_engine->updateCharacters(deltaTime, false);
+            m_player->editorSprites();
         }
         m_editor->consumeStep();
     } else {
@@ -261,7 +266,12 @@ void DefaultApplication::onUpdate(float deltaTime) {
             if (!edits.load(SceneEdits::pathFor(m_sceneEditsMap), error)) ERUPTION_LOG_ERROR("%s", error.c_str());
             else if (!edits.empty())
                 ERUPTION_LOG_WARN("Scene edits: %d change(s) applied to %s", edits.apply(*m_engine), m_sceneEditsMap.c_str());
+            if (m_scripts && !m_scriptsPlaying) {
+                m_scripts->start();
+                m_scriptsPlaying = true;
+            }
         }
+        if (m_engine) m_engine->updateCharacters(deltaTime, true);
         if (m_engine && m_player) m_player->update(deltaTime);
         if (m_scripts) m_scripts->update(deltaTime);
     }

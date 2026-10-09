@@ -72,7 +72,8 @@ std::string sentence(const RuleCall& c, UiLanguage lang) {
         if (at == std::string::npos) continue;
         std::string value = ruleArgDisplay(c.def->params[i].type, c.args[i], lang);
         if (value.empty()) value = "?";
-        if (c.def->params[i].type == ParamType::Text || c.def->params[i].type == ParamType::Model)
+        if (c.def->params[i].type == ParamType::Text || c.def->params[i].type == ParamType::Model ||
+            c.def->params[i].type == ParamType::Character)
             value = "\"" + value + "\"";
         text.replace(at, key.size(), value);
     }
@@ -151,6 +152,19 @@ bool Editor::rulesParamEditor(RuleCall& call) {
                         ImGui::EndListBox();
                     }
                 }
+                break;
+            }
+            case ParamType::Character: {
+                const std::string cur = unquote(code);
+                if (ImGui::BeginCombo("##ch", cur.empty() ? "(choose)" : cur.c_str())) {
+                    for (const auto& ch : m_engine->characters()) {
+                        if (ch.removed) continue;
+                        if (ImGui::Selectable(ch.name.c_str(), cur == ch.name)) { code = quote(ch.name); changed = true; }
+                    }
+                    ImGui::EndCombo();
+                }
+                if (m_engine->characters().empty())
+                    ImGui::SetItemTooltip("Drag a PNG from the Project panel into the scene to add a character.");
                 break;
             }
             case ParamType::Key: {

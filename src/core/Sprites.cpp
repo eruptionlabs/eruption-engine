@@ -350,6 +350,7 @@ bool Engine::loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out) 
     }
 
     uint32_t version = readU32();
+    if (version == 2) return loadEruptSprV2(f, path, out);
     if (version != 1) {
         ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: unsupported version %u in %s", version, path.c_str());
         return false;
@@ -444,15 +445,122 @@ bool Engine::loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out) 
     return true;
 }
 
+bool Engine::loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out) {
+    auto u32 = [&]() { uint32_t v = 0; f.read(reinterpret_cast<char*>(&v), 4); return v; };
+    auto i32 = [&]() { int32_t v = 0; f.read(reinterpret_cast<char*>(&v), 4); return v; };
+    auto f32 = [&]() { float v = 0; f.read(reinterpret_cast<char*>(&v), 4); return v; };
+    const uint32_t imageCount = u32();
+    if (imageCount == 0 || imageCount > 4096) {
+        ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: invalid image count %u in %s", imageCount, path.c_str());
+        return false;
+    }
+    std::vector<std::pair<uint32_t, uint32_t>> sizes;
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        const uint32_t w = u32(), h = u32();
+        if (w == 0 || h == 0 || w > 4096 || h > 4096) {
+            ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: invalid image %ux%u in %s", w, h, path.c_str());
+            cleanupSpriteTextures(out);
+            return false;
+        }
+        SprImage img;
+        img.width = static_cast<uint16_t>(w);
+        img.height = static_cast<uint16_t>(h);
+        img.isIndexed = false;
+        img.pixels.resize(size_t(w) * h * 4);
+        f.read(reinterpret_cast<char*>(img.pixels.data()), static_cast<std::streamsize>(img.pixels.size()));
+        if (!f) {
+            ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: truncated image data in %s", path.c_str());
+            cleanupSpriteTextures(out);
+            return false;
+        }
+        // Mesmo corte de alfa do PNG (sem meia-transparência no G-buffer).
+        for (size_t p = 0; p < size_t(w) * h; ++p) {
+            uint8_t* px = &img.pixels[p * 4];
+            if (px[3] < 128) px[0] = px[1] = px[2] = px[3] = 0; else px[3] = 255;
+        }
+        createTextureFromSprImage(img, nullptr, false, out.textures, false, path);
+        sizes.push_back({w, h});
+    }
+    const uint32_t actionCount = u32();
+    if (actionCount == 0 || actionCount > 256) {
+        ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: invalid action count %u in %s", actionCount, path.c_str());
+        cleanupSpriteTextures(out);
+        return false;
+    }
+    AnimFile anim;
+    for (uint32_t a = 0; a < actionCount; ++a) {
+        ActAction action;
+        action.delay = static_cast<float>(std::max(16u, u32()));
+        const uint32_t frames = u32();
+        if (frames == 0 || frames > 256) {
+            ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: invalid frame count %u in %s", frames, path.c_str());
+            cleanupSpriteTextures(out);
+            return false;
+        }
+        for (uint32_t fr = 0; fr < frames; ++fr) {
+            ActFrame frame;
+            const uint32_t spriteCount = u32();
+            if (spriteCount == 0 || spriteCount > 64) {
+                ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: invalid sprite count %u in %s", spriteCount, path.c_str());
+                cleanupSpriteTextures(out);
+                return false;
+            }
+            for (uint32_t k = 0; k < spriteCount; ++k) {
+                ActSprite spr{};
+                spr.index = static_cast<int32_t>(u32());
+                spr.type = 1;
+                spr.offsetX = i32();
+                spr.offsetY = i32();
+                spr.scaleX = f32();
+                spr.scaleY = f32();
+                spr.color = Vec4(f32(), f32(), f32(), f32());
+                spr.flags = static_cast<int32_t>(u32());
+                if (spr.index < 0 || spr.index >= static_cast<int32_t>(imageCount)) {
+                    ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: frame uses missing image %d in %s", spr.index, path.c_str());
+                    cleanupSpriteTextures(out);
+                    return false;
+                }
+                spr.width = static_cast<int>(sizes[spr.index].first);
+                spr.height = static_cast<int>(sizes[spr.index].second);
+                frame.sprites.push_back(spr);
+            }
+            action.frames.push_back(std::move(frame));
+        }
+        anim.actions.push_back(std::move(action));
+    }
+    if (!f) {
+        ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: truncated file %s", path.c_str());
+        cleanupSpriteTextures(out);
+        return false;
+    }
+    out.act = std::move(anim);
+    out.indexedTextureCount = 0;
+    out.isPngSprite = true;
+    out.authoredTiming = true;
+    out.loaded = true;
+    m_bindless.flushUpdates();
+    ERUPTION_LOG_INFO("loadSpriteFromEruptSpr: loaded %s (v2, %u images, %u actions)", path.c_str(), imageCount, actionCount);
+    return true;
+}
+
 void Engine::cleanupSpriteTextures(LoadedSprite& ls) {
+    // Frames em voo ainda podem amostrar as texturas: destruir depois deles.
     for (auto& tex : ls.textures) {
-        if (tex.view != VK_NULL_HANDLE) vkDestroyImageView(m_vulkan.device(), tex.view, nullptr);
-        if (tex.image != VK_NULL_HANDLE) vmaDestroyImage(m_vulkan.allocator(), tex.image, tex.alloc);
+        VkDevice dev = m_vulkan.device();
+        VmaAllocator allocator = m_vulkan.allocator();
+        VkImageView view = tex.view;
+        VkImage image = tex.image;
+        VmaAllocation alloc = tex.alloc;
+        m_vulkan.deferFrameCleanup([dev, allocator, view, image, alloc]() {
+            if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
+            if (image != VK_NULL_HANDLE) vmaDestroyImage(allocator, image, alloc);
+        });
         m_bindless.freeSlot(tex.slot);
     }
     ls.textures.clear();
     ls.indexedTextureCount = 0;
     ls.loaded = false;
+    ls.authoredTiming = false;
 }
 
 Engine::TextureStats Engine::getTextureStats() const {
@@ -614,7 +722,8 @@ void Engine::renderSpritePart(LoadedSprite& ls, uint32_t paletteSlot, int& frame
     // As speed increases (including Shift), delay decreases (animation faster).
     if (m_playerController->isMoving() && !m_playerController->tacticalView()) {
         float baseSpeed = 100.0f;
-        float baseDelay = 65.0f;
+        // Sprite importado traz o atraso do andar; os antigos usam 65 ms.
+        float baseDelay = ls.authoredTiming ? delay : 65.0f;
         delay = baseDelay * (baseSpeed / std::max(1.0f, m_playerController->actualMoveSpeed()));
     }
     

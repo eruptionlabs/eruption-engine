@@ -15,6 +15,9 @@
 #include <cstring>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace eruption {
 
@@ -39,11 +42,11 @@ bool icontains(const std::string& hay, const char* needle) {
 void modelDragSource(const std::filesystem::path& p) {
     std::string e = p.extension().string();
     std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return std::tolower(c); });
-    if ((e != ".glb" && !Prefab::isPrefabPath(p)) || !ImGui::BeginDragDropSource()) return;
+    if ((e != ".glb" && e != ".png" && !Prefab::isPrefabPath(p)) || !ImGui::BeginDragDropSource()) return;
     const std::string ps = p.string();
     ImGui::SetDragDropPayload(kModelPayload, ps.c_str(), ps.size() + 1);
     ImGui::Text("%s", p.filename().string().c_str());
-    ImGui::TextDisabled("Drop on the scene to place it");
+    ImGui::TextDisabled(e == ".png" ? "Drop on the scene to place a character" : "Drop on the scene to place it");
     ImGui::EndDragDropSource();
 }
 
@@ -97,6 +100,10 @@ std::string Editor::selectionName(const Selection& s) const {
             return {};
         }
         case SelectionKind::Light: return "Point Light " + std::to_string(s.index);
+        case SelectionKind::Character: {
+            const auto& cs = m_engine->characters();
+            return s.index >= 0 && s.index < static_cast<int>(cs.size()) ? cs[static_cast<size_t>(s.index)].name : std::string();
+        }
         case SelectionKind::Environment: return "Environment";
         case SelectionKind::Asset: return m_asset.path.filename().string();
         case SelectionKind::None: break;
@@ -111,13 +118,30 @@ bool Editor::selectionHasTransform() const {
     if (m_selection.kind == SelectionKind::Light)
         return m_selection.index >= 0 &&
                m_selection.index < static_cast<int>(m_engine->m_deferredLighting.getPointLights().size());
+    if (m_selection.kind == SelectionKind::Character)
+        return m_selection.index >= 0 && m_selection.index < static_cast<int>(m_engine->characters().size()) &&
+               !m_engine->characters()[static_cast<size_t>(m_selection.index)].removed;
     return false;
 }
+
+namespace {
+// Personagem como matriz para o gizmo: posição + giro em Y (para onde olha).
+Mat4 characterMatrix(const Engine::SceneCharacter& c) {
+    return glm::rotate(glm::translate(Mat4(1.0f), c.position), glm::radians(c.facing), Vec3(0.0f, 1.0f, 0.0f));
+}
+void setCharacterFromMatrix(Engine::SceneCharacter& c, const Mat4& m) {
+    c.position = Vec3(m[3]);
+    const Vec3 z(m[2]);
+    if (std::abs(z.x) + std::abs(z.z) > 1e-5f) c.facing = glm::degrees(std::atan2(z.x, z.z));
+}
+} // namespace
 
 Mat4 Editor::selectionTransform() const {
     if (!selectionHasTransform()) return Mat4(1.0f);
     if (m_selection.kind == SelectionKind::Model)
         return m_engine->modelRenderer().getInstances()[static_cast<size_t>(m_selection.index)].transform;
+    if (m_selection.kind == SelectionKind::Character)
+        return characterMatrix(m_engine->characters()[static_cast<size_t>(m_selection.index)]);
     Mat4 m(1.0f);
     m[3] = Vec4(m_engine->m_deferredLighting.getPointLights()[static_cast<size_t>(m_selection.index)].position, 1.0f);
     return m;
@@ -127,6 +151,8 @@ void Editor::setSelectionTransform(const Mat4& m) {
     if (!selectionHasTransform()) return;
     if (m_selection.kind == SelectionKind::Model)
         m_engine->modelRenderer().setInstanceTransform(static_cast<uint32_t>(m_selection.index), m);
+    else if (m_selection.kind == SelectionKind::Character)
+        setCharacterFromMatrix(m_engine->characters()[static_cast<size_t>(m_selection.index)], m);
     else
         m_engine->m_deferredLighting.getPointLights()[static_cast<size_t>(m_selection.index)].position = Vec3(m[3]);
 }
@@ -141,6 +167,9 @@ void Editor::pushTransformEdit(const Selection& s, const Mat4& before, const Mat
             auto& lights = engine->m_deferredLighting.getPointLights();
             if (s.index >= 0 && s.index < static_cast<int>(lights.size()))
                 lights[static_cast<size_t>(s.index)].position = Vec3(m[3]);
+        } else if (s.kind == SelectionKind::Character) {
+            auto& cs = engine->characters();
+            if (s.index >= 0 && s.index < static_cast<int>(cs.size())) setCharacterFromMatrix(cs[static_cast<size_t>(s.index)], m);
         }
     };
     m_undo.push({"Transform " + selectionName(s), [apply, before] { apply(before); }, [apply, after] { apply(after); }});
@@ -155,6 +184,14 @@ void Editor::deleteSelection() {
         };
         setEnabled(false);
         m_undo.push({"Delete " + selectionName(s), [setEnabled] { setEnabled(true); }, [setEnabled] { setEnabled(false); }});
+        select({});
+    } else if (s.kind == SelectionKind::Character && selectionHasTransform()) {
+        auto setRemoved = [engine, s](bool removed) {
+            auto& cs = engine->characters();
+            if (s.index < static_cast<int>(cs.size())) cs[static_cast<size_t>(s.index)].removed = removed;
+        };
+        setRemoved(true);
+        m_undo.push({"Delete " + selectionName(s), [setRemoved] { setRemoved(false); }, [setRemoved] { setRemoved(true); }});
         select({});
     } else if (s.kind == SelectionKind::Light && selectionHasTransform()) {
         auto setEnabled = [engine, s](bool on) {
@@ -241,6 +278,24 @@ void Editor::drawHierarchy() {
                 if (!icontains(name, m_hierarchyFilter)) continue;
                 ImGui::PushID(static_cast<int>(i));
                 row(s, name, lights[i].enabled);
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
+    }
+
+    const auto& chars = m_engine->characters();
+    size_t liveChars = 0;
+    for (const auto& c : chars) liveChars += c.removed ? 0 : 1;
+    if (liveChars) {
+        char chdr[64];
+        std::snprintf(chdr, sizeof(chdr), "Characters (%zu)###characters", liveChars);
+        ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
+        if (ImGui::TreeNodeEx(chdr, ImGuiTreeNodeFlags_SpanAvailWidth)) {
+            for (size_t i = 0; i < chars.size(); ++i) {
+                if (chars[i].removed || !icontains(chars[i].name, m_hierarchyFilter)) continue;
+                ImGui::PushID(static_cast<int>(i) + 1000000);
+                row({SelectionKind::Character, static_cast<int>(i)}, chars[i].name, chars[i].visible);
                 ImGui::PopID();
             }
             ImGui::TreePop();
@@ -458,6 +513,35 @@ void Editor::drawInspector() {
                 m_undo.push({"Edit " + name, [apply, b] { apply(b); }, [apply, after] { apply(after); }});
             }
         }
+    } else if (m_selection.kind == SelectionKind::Character) {
+        Engine::SceneCharacter& c = m_engine->characters()[static_cast<size_t>(m_selection.index)];
+        if (ImGui::CollapsingHeader("Character", ImGuiTreeNodeFlags_DefaultOpen)) {
+            propertyLabel("Name");
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%s", c.name.c_str());
+            if (ImGui::InputText("##name", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue) && buf[0] &&
+                m_engine->findCharacter(buf) < 0)
+                c.name = buf;
+            ImGui::SetItemTooltip("Scripts and rules find the character by this name. Press Enter to rename.");
+            propertyLabel("Sprite");
+            ImGui::TextWrapped("%s", c.sprite.c_str());
+            const bool pngSelected = std::filesystem::path(m_projectSelected).extension() == ".png";
+            ImGui::BeginDisabled(!pngSelected);
+            if (ImGui::Button("Use PNG selected in Project")) {
+                std::error_code ec;
+                const auto rel = std::filesystem::relative(m_projectSelected, std::filesystem::current_path(), ec);
+                const std::string path = (!ec && !rel.empty() && rel.native().rfind("..", 0) != 0) ? rel.generic_string()
+                                                                                                    : m_projectSelected;
+                if (!m_engine->setCharacterSprite(m_selection.index, path)) log(LogLevel::Error, "Could not load " + path);
+            }
+            ImGui::EndDisabled();
+            propertyLabel("Facing");
+            ImGui::DragFloat("##facing", &c.facing, 1.0f, -360.0f, 360.0f, "%.0f deg");
+            ImGui::SetItemTooltip("Direction the character looks at, in degrees (0 = +Z). Rotate tool works too.");
+            propertyLabel("Visible at start");
+            ImGui::Checkbox("##vis", &c.visible);
+            ImGui::SetItemTooltip("Hidden characters can be shown later by a rule or script.");
+        }
     }
     ImGui::End();
 }
@@ -532,6 +616,10 @@ void Editor::drawProject() {
             auto contextMenu = [&](const Item& it) {
                 if (ImGui::BeginPopupContextItem()) {
                     if (!it.dir && it.path.extension() == ".luau" && ImGui::MenuItem("Edit here")) codeOpen(it.path);
+                    if (!it.dir && it.path.extension() == ".png") {
+                        if (ImGui::MenuItem("Import as Sprite Sheet...")) openSpriteImporter(it.path.string());
+                        if (ImGui::MenuItem("Use as Player Sprite")) usePlayerSprite(it.path.string(), true);
+                    }
                     if (!it.dir && ImGui::MenuItem("Open in VS Code")) openInExternalEditor(it.path);
                     if (it.dir && ImGui::MenuItem("Open folder")) m_projectDir = it.path;
                     if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(it.path.string().c_str());

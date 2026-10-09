@@ -26,6 +26,9 @@ struct LoadedMap {
 
     // Walkable surface generated for GLB maps.
     TerrainFile terrain;
+    // true quando `terrain` veio do .ter do mapa; falso = grade de reserva
+    // gerada (abaixo da geometria), que não serve para altura do chão.
+    bool terrainFromFile = false;
     NavGridFile navGrid;
 
     // Lights extracted from the GLB (if any) or defaults.

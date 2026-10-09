@@ -577,6 +577,12 @@ eruption::CSSRect PlayerController::getMinimapInfoRect(const ImVec2& displaySize
 
 static Palette s_lastBodyPal;
 static Palette s_lastHairPal;
+void PlayerController::editorSprites() {
+    m_engine->spriteSystem().processSprites(m_engine->camera().frustum(), m_engine->camera().position(),
+                                            m_engine->camera().forward());
+    updatePlayerSprites(0.0f);
+}
+
 void PlayerController::updatePlayerSprites(float dt) {
     bool jobChanged = m_engine->charConfig().job != m_lastJob;
     bool hairChanged = m_engine->charConfig().hair != m_lastHair;

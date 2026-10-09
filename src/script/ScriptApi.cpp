@@ -28,6 +28,11 @@ struct ScriptBridge {
     static std::vector<PointLight>& lights() { return engine->m_deferredLighting.getPointLights(); }
     static PlayerController* player() { return engine->m_playerController; }
     static void setWeather(WeatherType t) { engine->applyWeatherTypeFull(t, 1.0f); }
+    // Só nesta execução (não grava data/char_config.json).
+    static void setPlayerSprite(const std::string& path) {
+        engine->m_charConfig.job = path;
+        if (engine->m_playerController) engine->m_playerController->reloadSprite();
+    }
 };
 Engine* ScriptBridge::engine = nullptr;
 
@@ -203,6 +208,11 @@ int player_set_position(lua_State* L) {
     if (PlayerController* p = ScriptBridge::player()) p->setPos(checkVec3(L, 1));
     return 0;
 }
+int player_set_sprite(lua_State* L) {
+    // PNG solto ou PNG com o .spr do importador ao lado (o motor prefere o .spr).
+    ScriptBridge::setPlayerSprite(luaL_checkstring(L, 1));
+    return 0;
+}
 int player_near(lua_State* L) {
     const size_t i = checkModel(L, 1);
     const double dist = luaL_checknumber(L, 2);
@@ -215,6 +225,59 @@ int player_near(lua_State* L) {
     const Vec3 q = glm::clamp(p->pos(), inst.worldAabbMin, inst.worldAabbMax);
     lua_pushboolean(L, glm::length(p->pos() - q) <= dist);
     return 1;
+}
+
+// ---------------------------------------------------------------- characters
+// Personagens da cena, pelo nome que o editor mostra na Hierarquia.
+
+Engine::SceneCharacter* checkCharacter(lua_State* L, int arg) {
+    const char* name = luaL_checkstring(L, arg);
+    const int i = eng().findCharacter(name);
+    if (i < 0) luaL_error(L, "no character named '%s' in this map", name);
+    return &eng().characters()[static_cast<size_t>(i)];
+}
+int characters_exists(lua_State* L) {
+    lua_pushboolean(L, eng().findCharacter(luaL_checkstring(L, 1)) >= 0);
+    return 1;
+}
+int characters_position(lua_State* L) {
+    pushVec3(L, checkCharacter(L, 1)->position);
+    return 1;
+}
+int characters_set_position(lua_State* L) {
+    Engine::SceneCharacter* c = checkCharacter(L, 1);
+    c->position = checkVec3(L, 2);
+    c->walking = false;
+    return 0;
+}
+int characters_walk_to(lua_State* L) {
+    checkCharacter(L, 1);
+    eng().walkCharacter(eng().findCharacter(lua_tostring(L, 1)), checkVec3(L, 2),
+                        static_cast<float>(luaL_optnumber(L, 3, 1.0)));
+    return 0;
+}
+int characters_walking(lua_State* L) {
+    lua_pushboolean(L, checkCharacter(L, 1)->walking);
+    return 1;
+}
+int characters_face(lua_State* L) {
+    checkCharacter(L, 1)->facing = static_cast<float>(luaL_checknumber(L, 2));
+    return 0;
+}
+int characters_show(lua_State* L) {
+    checkCharacter(L, 1)->visible = true;
+    return 0;
+}
+int characters_hide(lua_State* L) {
+    checkCharacter(L, 1)->visible = false;
+    return 0;
+}
+int characters_set_sprite(lua_State* L) {
+    checkCharacter(L, 1);
+    const char* png = luaL_checkstring(L, 2);
+    if (!eng().setCharacterSprite(eng().findCharacter(lua_tostring(L, 1)), png))
+        luaL_error(L, "could not load sprite '%s'", png);
+    return 0;
 }
 
 // ---------------------------------------------------------------- camera
@@ -421,7 +484,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
         {"ground_height", world_ground_height}, {nullptr, nullptr}};
     static const luaL_Reg player[] = {
-        {"position", player_position}, {"set_position", player_set_position}, {"near", player_near},
+        {"position", player_position}, {"set_position", player_set_position}, {"set_sprite", player_set_sprite}, {"near", player_near},
         {nullptr, nullptr}};
     static const luaL_Reg camera[] = {
         {"target", camera_target}, {"set_target", camera_set_target},
@@ -434,6 +497,11 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"move_by", models_move_by}, {"rotate_by", models_rotate_by},
         {"visible", models_visible}, {"set_visible", models_set_visible},
         {"show", models_show}, {"hide", models_hide}, {nullptr, nullptr}};
+    static const luaL_Reg characters[] = {
+        {"exists", characters_exists}, {"position", characters_position},
+        {"set_position", characters_set_position}, {"walk_to", characters_walk_to},
+        {"walking", characters_walking}, {"face", characters_face}, {"show", characters_show},
+        {"hide", characters_hide}, {"set_sprite", characters_set_sprite}, {nullptr, nullptr}};
     static const luaL_Reg lights[] = {
         {"count", lights_count}, {"position", lights_position}, {"set_position", lights_set_position},
         {"color", lights_color}, {"set_color", lights_set_color}, {"intensity", lights_intensity},
@@ -449,6 +517,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "input", input);
     lib(L, "models", models);
     lib(L, "lights", lights);
+    lib(L, "characters", characters);
 }
 
 std::string scriptApiDefinitions() {
@@ -503,7 +572,23 @@ declare world: {
 declare player: {
     position: () -> vector,
     set_position: (position: vector) -> (),
+    -- Player look: a PNG, animated when the Sprite Importer's .spr sits next to it.
+    set_sprite: (png: string) -> (),
     near: (model: Model, distance: number) -> boolean,
+}
+
+declare characters: {
+    -- Characters placed in the scene (drag a PNG from the Project panel), by name.
+    exists: (name: string) -> boolean,
+    position: (name: string) -> vector,
+    set_position: (name: string, position: vector) -> (),
+    -- Walks there in `seconds`, playing the walking animation.
+    walk_to: (name: string, position: vector, seconds: number?) -> (),
+    walking: (name: string) -> boolean,
+    face: (name: string, degrees: number) -> (),
+    show: (name: string) -> (),
+    hide: (name: string) -> (),
+    set_sprite: (name: string, png: string) -> (),
 }
 
 declare camera: {

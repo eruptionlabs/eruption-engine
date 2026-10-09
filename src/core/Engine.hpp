@@ -55,6 +55,7 @@
 #include "utils/Profiler.hpp"
 #include "renderer/MapContext.hpp"
 #include <vector>
+#include <iosfwd>
 #include <string>
 #include <memory>
 #include <deque>
@@ -250,6 +251,23 @@ public:
         uint32_t indexedTextureCount = 0;
         bool loaded = false;
         bool isPngSprite = false;
+        // ERUPTSPR v2: o atraso de cada ação vem do arquivo (andar escala
+        // com a velocidade a partir dele, não do valor fixo antigo).
+        bool authoredTiming = false;
+    };
+    // Personagem da cena (NPC): ver core/Characters.cpp.
+    struct SceneCharacter {
+        std::string name, sprite;
+        Vec3 position{0.0f};
+        float facing = 0.0f; // graus; 0 = olhando para +Z
+        bool visible = true;
+        bool removed = false; // apagado no editor (desfazer traz de volta)
+        LoadedSprite look;
+        int frame = 0;
+        float timer = 0.0f;
+        bool walking = false;
+        Vec3 walkFrom{0.0f}, walkTo{0.0f};
+        float walkTime = 0.0f, walkDuration = 0.0f;
     };
     struct TextureStats {
         size_t totalTextures = 0;
@@ -373,12 +391,22 @@ public:
     RenderEffect* renderEffect(size_t i) { return m_renderEffects[i].get(); }
     void setMinimapBottomRight(bool bottomRight) { m_minimapBottomRight = bottomRight; }
     bool minimapBottomRight() const { return m_minimapBottomRight; }
+    bool loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out);
     uint32_t createTextureFromSprImage(const SprImage& img, const uint8_t* palette, bool usePalette, std::vector<TextureResource>& outResources, bool swapRB = false, const std::string& sourcePath = "");
     bool loadSpriteFromPng(const std::string& path, LoadedSprite& out);
     bool loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out);
     void cleanupSpriteTextures(LoadedSprite& ls);
     void calculateMaxCharHeight();
     void renderSpritePart(LoadedSprite& ls, uint32_t paletteSlot, int& frameIdx, float& timer, float dt, int& outCount, bool isBody = false);
+    // Personagens da cena
+    int addCharacter(const std::string& name, const std::string& sprite, const Vec3& position, float facingDeg);
+    bool setCharacterSprite(int index, const std::string& sprite);
+    int findCharacter(const std::string& name) const;
+    void walkCharacter(int index, const Vec3& target, float seconds);
+    void clearCharacters();
+    // Anda quem tem caminho (só com o jogo rodando) e envia os sprites.
+    void updateCharacters(float dt, bool moveAlongPaths);
+    std::vector<SceneCharacter>& characters() { return m_characters; }
     float computeObstruction() const;
     float computeObstructionUncached() const;
 private:
@@ -1078,6 +1106,9 @@ private:
     VkDescriptorSet m_minimapCompositeDS = VK_NULL_HANDLE;
     static constexpr uint32_t MINIMAP_RES = 256;
     PlayerController* m_playerController = nullptr;
+    std::vector<SceneCharacter> m_characters;
+    bool loadCharacterSprite(const std::string& png, LoadedSprite& out);
+    void drawCharacter(SceneCharacter& c, float dt);
 
     bool m_editorMode = false;
     Editor* m_editor = nullptr;

@@ -92,6 +92,7 @@ void Editor::reloadSceneFile() {
         mr.setInstanceName(idx, std::string());
     }
     m_engine->m_deferredLighting.getPointLights() = m_original.lights;
+    m_engine->clearCharacters(); // vêm todos do arquivo
     select({});
     applySceneFile();
     log(LogLevel::Info, "Scene file reloaded.");
@@ -158,6 +159,10 @@ SceneEdits Editor::currentEdits() const {
         auto it = m_copySources.find(insts[i].name);
         if (it == m_copySources.end()) continue;
         e.copies.push_back({it->second, insts[i].name, SceneEdits::Transform::from(insts[i].transform)});
+    }
+    for (const auto& c : m_engine->characters()) {
+        if (c.removed) continue;
+        e.characters.push_back({c.name, c.sprite, c.position, c.facing, !c.visible});
     }
     const auto& ls = m_engine->m_deferredLighting.getPointLights();
     for (size_t i = 0; i < ls.size() && i < m_original.lights.size(); ++i) {
@@ -283,6 +288,28 @@ void Editor::dropModel(const std::string& path, const Vec3& position) {
     };
     m_undo.push({"Add " + name, [setEnabled] { setEnabled(false); }, [setEnabled] { setEnabled(true); }});
     log(LogLevel::Info, "Added " + name + " (" + (prefab.empty() ? file : prefab) + ")");
+}
+
+void Editor::dropCharacter(const std::string& png, const Vec3& position) {
+    namespace fs = std::filesystem;
+    const std::string stem = fs::path(png).stem().string();
+    std::string name;
+    for (int n = 1;; ++n) {
+        name = stem + "_" + std::to_string(n);
+        if (m_engine->findCharacter(name) < 0) break;
+    }
+    // De frente para a câmera.
+    const Vec3 toCam = m_engine->camera().position() - position;
+    const float facing = glm::degrees(std::atan2(toCam.x, toCam.z));
+    const int idx = m_engine->addCharacter(name, projectPath(png), position, facing);
+    select({SelectionKind::Character, idx});
+    Engine* engine = m_engine;
+    auto setRemoved = [engine, idx](bool removed) {
+        auto& cs = engine->characters();
+        if (idx < static_cast<int>(cs.size())) cs[static_cast<size_t>(idx)].removed = removed;
+    };
+    m_undo.push({"Add " + name, [setRemoved] { setRemoved(true); }, [setRemoved] { setRemoved(false); }});
+    log(LogLevel::Info, "Added character " + name + ". Rules and scripts find it by this name.");
 }
 
 bool Editor::savePrefab(const std::string& path) {

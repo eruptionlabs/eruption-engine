@@ -22,6 +22,7 @@ enum class ParamType {
     Offset,   // vector.create(x, y, z)
     Hour,     // 0..24
     Seconds,
+    Character, // nome do personagem da cena
 };
 
 struct RuleParam {

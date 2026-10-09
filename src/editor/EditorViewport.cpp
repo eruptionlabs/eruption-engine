@@ -81,8 +81,11 @@ void Editor::drawViewport() {
         if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kModelPayload)) {
             const ImVec2 m = ImGui::GetIO().MousePos;
             Vec3 at;
-            if (groundPointAt((m.x - pos.x) / avail.x, (m.y - pos.y) / avail.y, at))
-                dropModel(static_cast<const char*>(p->Data), at);
+            const std::string path = static_cast<const char*>(p->Data);
+            if (groundPointAt((m.x - pos.x) / avail.x, (m.y - pos.y) / avail.y, at)) {
+                if (std::filesystem::path(path).extension() == ".png") dropCharacter(path, at);
+                else dropModel(path, at);
+            }
         }
         ImGui::EndDragDropTarget();
     }
@@ -252,6 +255,9 @@ void Editor::frameSelection() {
         if (m_selection.index < 0 || m_selection.index >= static_cast<int>(lights.size())) return;
         center = lights[static_cast<size_t>(m_selection.index)].position;
         radius = 4.0f;
+    } else if (m_selection.kind == SelectionKind::Character && selectionHasTransform()) {
+        center = m_engine->characters()[static_cast<size_t>(m_selection.index)].position + Vec3(0.0f, 12.0f, 0.0f);
+        radius = 20.0f;
     } else {
         return;
     }
@@ -323,6 +329,23 @@ void Editor::pickAt(float u, float v) {
     float bestT = FLT_MAX;
     const int model = raycastModels(origin, dir, bestT);
     if (model >= 0) best = {SelectionKind::Model, model};
+    // Personagens: cilindro em pé do tamanho de uma pessoa.
+    const auto& chars = m_engine->characters();
+    for (size_t i = 0; i < chars.size(); ++i) {
+        if (chars[i].removed) continue;
+        const Vec3 base = chars[i].position;
+        const float radius = 6.0f, height = 28.0f;
+        // Ponto do raio mais perto do eixo vertical (no plano XZ).
+        const Vec2 o2(origin.x - base.x, origin.z - base.z), d2(dir.x, dir.z);
+        const float dd = glm::dot(d2, d2);
+        if (dd < 1e-8f) continue;
+        const float t = -glm::dot(o2, d2) / dd;
+        if (t <= 0.0f || t >= bestT) continue;
+        const Vec3 p = origin + dir * t;
+        if (glm::length(Vec2(p.x - base.x, p.z - base.z)) > radius || p.y < base.y || p.y > base.y + height) continue;
+        bestT = t;
+        best = {SelectionKind::Character, static_cast<int>(i)};
+    }
     const auto& lights = m_engine->m_deferredLighting.getPointLights();
     for (size_t i = 0; i < lights.size(); ++i) {
         const Vec3 oc = lights[i].position - origin;

@@ -1,7 +1,6 @@
 #include "editor/Editor.hpp"
-
-#include <glm/gtc/matrix_transform.hpp>
 #include "editor/EditorTheme.hpp"
+#include "game/PlayerController.hpp"
 
 #include "core/Engine.hpp"
 #include "script/ScriptHost.hpp"
@@ -9,6 +8,7 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <glm/gtc/matrix_transform.hpp>
 #include <GLFW/glfw3.h>
 
 #if defined(__x86_64__) || defined(__i386__)
@@ -127,6 +127,7 @@ void Editor::shutdown() {
         closeAssetPreview();
         for (auto& [path, t] : m_thumbs) releaseTexture(t.tex);
         m_thumbs.clear();
+        releaseTexture(m_spriteImport.sheetTex);
         m_engine->vulkan().waitIdle();
         collectTextures(true);
     }
@@ -261,6 +262,11 @@ void Editor::registerCommands() {
     add("game.step", "Game", "Step One Frame", {ImGuiKey_F10}, [this] { step(); })
         .enabled = [this] { return m_play == PlayState::Paused; };
 
+    add("game.sprite_importer", "Game", "Sprite Importer", {}, [this] {
+        m_showSpriteImporter = true;
+        if (!m_projectSelected.empty() && std::filesystem::path(m_projectSelected).extension() == ".png")
+            openSpriteImporter(m_projectSelected);
+    }, "Cuts a PNG sprite sheet into standing and walking frames for 8 directions and saves a .spr next to it.");
     add("game.new_script", "Game", "New Script", {}, [this] {
         if (!m_scripts) return;
         const auto p = m_scripts->createScript("new_script");
@@ -467,7 +473,11 @@ void Editor::update(float dt) {
         float u = 0.5f, v = 0.5f;
         if (at != std::string::npos) std::sscanf(spec.c_str() + at + 1, "%f,%f", &u, &v);
         Vec3 p;
-        if (groundPointAt(u, v, p)) dropModel(spec.substr(0, at), p);
+        const std::string file = spec.substr(0, at);
+        if (groundPointAt(u, v, p)) {
+            if (std::filesystem::path(file).extension() == ".png") dropCharacter(file, p);
+            else dropModel(file, p);
+        }
     }
     // ERUPTION_TEST_EDITOR_PREFAB=<nome>: gira 30 graus e escala 1,5 o objeto
     // selecionado, salva como prefab e solta uma cópia em (0.3, 0.6).
@@ -481,6 +491,19 @@ void Editor::update(float dt) {
         const std::string path = std::string("assets/prefabs/") + testPrefab + ".prefab.luau";
         Vec3 p;
         if (savePrefab(path) && groundPointAt(0.3f, 0.6f, p)) dropModel(path, p);
+    }
+    // ERUPTION_TEST_EDITOR_SPRITE=<folha.png>: abre o importador com a grade
+    // padrão, grava o .spr e veste o jogador (sem gravar char_config.json).
+    static const char* testSprite = std::getenv("ERUPTION_TEST_EDITOR_SPRITE");
+    if (testSprite && m_frame == 120) {
+        openSpriteImporter(testSprite);
+        std::string error;
+        SpriteSheetResult res;
+        if (buildSpriteSheet(m_spriteImport.spec, res, error) &&
+            writeEruptSprV2(res, std::filesystem::path(testSprite).replace_extension(".spr").string(), error))
+            usePlayerSprite(testSprite, false);
+        else
+            log(LogLevel::Error, error);
     }
     // ERUPTION_TEST_EDITOR_SAVE=1: Ctrl+S depois dos ganchos acima.
     static const bool testSave = std::getenv("ERUPTION_TEST_EDITOR_SAVE") != nullptr;
@@ -630,6 +653,7 @@ void Editor::drawUI() {
     if (m_paletteOpen) drawCommandPalette();
     drawNewMapDialog();
     drawPrefabDialog();
+    drawSpriteImporter();
 
     if (m_focusScene) {
         m_pendingFocus.insert(m_pendingFocus.begin(), kWinScene);
@@ -701,6 +725,8 @@ void Editor::drawMenuBar() {
         ImGui::Separator();
         m_commands.menuItem("game.new_script");
         m_commands.menuItem("game.open_scripts");
+        ImGui::Separator();
+        m_commands.menuItem("game.sprite_importer");
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Window")) {
@@ -1003,6 +1029,9 @@ void Editor::play() {
     m_snapshot.pitch = cam.orbitPitch();
     m_snapshot.distance = cam.orbitDistance();
     m_snapshot.timeOfDay = m_engine->dayNightCycle().timeOfDay();
+    m_snapshot.characters.clear();
+    for (const auto& c : m_engine->characters()) m_snapshot.characters.push_back({c.position, c.facing, c.visible, c.sprite});
+    m_snapshot.playerSprite = m_engine->m_charConfig.job;
 
     Camera& c = m_engine->camera();
     c.setMaxOrbitDistance(m_savedMaxDistance);
@@ -1027,6 +1056,19 @@ void Editor::stop() {
     auto& lights = m_engine->m_deferredLighting.getPointLights();
     if (lights.size() == m_snapshot.lights.size()) lights = m_snapshot.lights;
     m_engine->dayNightCycle().setTimeOfDay(m_snapshot.timeOfDay);
+    auto& chars = m_engine->characters();
+    for (size_t i = 0; i < chars.size() && i < m_snapshot.characters.size(); ++i) {
+        const auto& snap = m_snapshot.characters[i];
+        chars[i].position = snap.position;
+        chars[i].facing = snap.facing;
+        chars[i].visible = snap.visible;
+        chars[i].walking = false;
+        if (chars[i].sprite != snap.sprite) m_engine->setCharacterSprite(static_cast<int>(i), snap.sprite);
+    }
+    if (m_engine->m_charConfig.job != m_snapshot.playerSprite) {
+        m_engine->m_charConfig.job = m_snapshot.playerSprite;
+        if (m_engine->m_playerController) m_engine->m_playerController->reloadSprite();
+    }
 
     Camera& cam = m_engine->camera();
     cam.setMaxOrbitDistance(20000.0f);
