@@ -418,6 +418,7 @@ public:
         std::vector<uint32_t> gpuStart, cpuStart;
         std::vector<Ref> gpuRefs, cpuRefs;
         std::string assetPath;
+        std::string mapName; // mapa dono da grade (os arquivos de retoque vêm dele)
         std::unordered_map<uint32_t, Mat4> meshTransform;
         float height(uint32_t g) const { return base[g] + delta[g]; }
     };
@@ -430,6 +431,36 @@ public:
     std::vector<float> heightDeltaRegion(int x0, int z0, int x1, int z1) const;
     void setHeightDeltaRegion(int x0, int z0, int x1, int z1, const std::vector<float>& values);
     bool saveHeightDelta(std::string& error) const;
+
+    // Pintura de camadas (core/TerrainPaint.cpp): 8 camadas em 2 máscaras RGBA,
+    // um texel por ponto da grade.
+    struct SplatEdit {
+        bool active = false, fromMap = false, painted = false;
+        uint32_t w = 0, d = 0;
+        std::vector<uint8_t> mask[2];
+        std::vector<float> weights; // 8 por ponto (não perde passos pequenos no arredondamento)
+        TextureResource gpu[2];
+        uint32_t slot[2] = {0, 0};
+        bool ownSlot[2] = {false, false};
+        VkSampler sampler = VK_NULL_HANDLE;
+        uint32_t layerSlot[8] = {};
+        std::string layerNames[8];
+        std::string layerFiles[8]; // camadas escolhidas no editor (mapas sem splat próprio)
+        TextureResource layerTex[8];
+        int dirty[2][4] = {{INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN}, {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN}};
+    };
+    const SplatEdit& splatEdit() const { return m_splatEdit; }
+    bool beginSplatEditing();
+    int splatLayerCount() const;
+    bool addSplatLayer(const std::string& png);
+    // layer -1 = base do material; `erase` tira a camada.
+    bool paintSplat(int layer, const Vec2& center, float radius, float strength, float falloff, float dt, bool erase,
+                    int rect[4]);
+    std::vector<float> splatRegion(int x0, int z0, int x1, int z1) const;
+    void setSplatRegion(int x0, int z0, int x1, int z1, const std::vector<float>& values);
+    bool saveSplat(std::string& error) const;
+    std::vector<std::string> splatLayerFiles() const;
+    static bool hasSavedSplat(const std::string& map);
 
     // Início do jogador vindo do scene.luau: leva o jogador (e a câmera) até lá.
     void setPlayerStart(const Vec3& p);
@@ -1140,6 +1171,10 @@ private:
     std::vector<SceneCharacter> m_characters;
     bool m_hasPlayerStart = false;
     HeightEdit m_heightEdit;
+    SplatEdit m_splatEdit;
+    void endSplatEditing();
+    void flushSplatUploads(VkCommandBuffer cmd);
+    std::string textureNameForSlot(uint32_t slot) const;
     void prepareHeightEdits(LoadedMap& map, std::vector<ModelAsset>& models);
     void bindHeightEditToMeshes();
     void refreshHeightRegion(int x0, int z0, int x1, int z1);

@@ -981,6 +981,7 @@ void Engine::shutdown() {
     m_assetCache.shutdown(&m_vulkan, &m_bindless);
 
     clearCharacters();
+    endSplatEditing();
     m_spherePreview.shutdown();
     m_modelRenderer.shutdown(); m_terrainRenderer.shutdown(); m_spriteSystem.shutdown();
     m_spriteRenderer.shutdown(); m_shadowRenderer.shutdown(); m_deferredLighting.shutdown();

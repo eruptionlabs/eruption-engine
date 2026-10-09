@@ -166,6 +166,7 @@ SceneEdits Editor::currentEdits() const {
         if (c.removed) continue;
         e.characters.push_back({c.name, c.sprite, c.position, c.facing, !c.visible});
     }
+    e.terrainLayers = m_engine->splatLayerFiles();
     if (m_engine->hasPlayerStart()) {
         e.hasSpawn = true;
         e.spawn = m_engine->playerStart();
@@ -206,6 +207,7 @@ bool Editor::saveScene() {
     std::ofstream(file, std::ios::binary) << text;
     std::string terrainError;
     if (!m_engine->saveHeightDelta(terrainError)) log(LogLevel::Error, terrainError);
+    if (!m_engine->saveSplat(terrainError)) log(LogLevel::Error, terrainError);
     m_terrainDirty = false;
     m_savedScene = text;
     m_sceneFileTime = sceneFileTime();
