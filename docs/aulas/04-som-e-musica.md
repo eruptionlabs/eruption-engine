@@ -11,4 +11,12 @@
      em [a ponte], volume [1]* — o som sai do lugar: mais baixo longe, do lado certo.
    - *Parar a música* para o silêncio de uma caverna.
 
+## Som no lugar
+
+Para um som que fica sempre tocando num lugar (cachoeira, fogueira, taverna), use
+**Adicionar > Emissor de som**: se um som estiver selecionado no Projeto, ele já vira
+o arquivo do emissor. No Inspetor ajuste **Volume** e **Alcance** (o círculo no
+chão mostra até onde se ouve). Ele toca em laço no Play e no jogo, só quando o
+jogador chega perto.
+
 O som sai junto quando o jogo é exportado.

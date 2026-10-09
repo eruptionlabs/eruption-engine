@@ -314,6 +314,28 @@ int player_play(lua_State* L) {
     lua_pushboolean(L, eng().playPlayerAction(luaL_optstring(L, 1, ""), lua_toboolean(L, 2) != 0));
     return 1;
 }
+int characters_follow(lua_State* L) {
+    checkCharacter(L, 1);
+    eng().followPlayer(eng().findCharacter(lua_tostring(L, 1)), static_cast<float>(luaL_optnumber(L, 2, 30.0)));
+    return 0;
+}
+int characters_patrol(lua_State* L) {
+    checkCharacter(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    std::vector<Vec3> points;
+    for (int i = 1, n = lua_objlen(L, 2); i <= n; ++i) {
+        lua_rawgeti(L, 2, i);
+        if (lua_isvector(L, -1)) points.push_back(checkVec3(L, -1));
+        lua_pop(L, 1);
+    }
+    eng().patrolCharacter(eng().findCharacter(lua_tostring(L, 1)), points, static_cast<float>(luaL_optnumber(L, 3, 1.0)));
+    return 0;
+}
+int characters_stop(lua_State* L) {
+    checkCharacter(L, 1);
+    eng().stopCharacter(eng().findCharacter(lua_tostring(L, 1)));
+    return 0;
+}
 int characters_walking(lua_State* L) {
     lua_pushboolean(L, checkCharacter(L, 1)->walking);
     return 1;
@@ -653,6 +675,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"exists", characters_exists}, {"position", characters_position},
         {"set_position", characters_set_position}, {"walk_to", characters_walk_to},
         {"walking", characters_walking}, {"face", characters_face}, {"show", characters_show}, {"say", characters_say}, {"play", characters_play}, {"animation", characters_animation},
+        {"follow", characters_follow}, {"patrol", characters_patrol}, {"stop", characters_stop},
         {"hide", characters_hide}, {"set_sprite", characters_set_sprite}, {nullptr, nullptr}};
     static const luaL_Reg lights[] = {
         {"count", lights_count}, {"position", lights_position}, {"set_position", lights_set_position},
@@ -780,6 +803,12 @@ declare characters: {
     play: (name: string, animation: string, loop: boolean?) -> boolean,
     -- Extra animation playing now ("" when standing or walking).
     animation: (name: string) -> string,
+    -- Follows the player, stopping `distance` away (default 30).
+    follow: (name: string, distance: number?) -> (),
+    -- Walks between the points in a loop, waiting `wait` seconds at each (default 1).
+    patrol: (name: string, points: {vector}, wait: number?) -> (),
+    -- Stops walking, following and patrolling.
+    stop: (name: string) -> (),
     walking: (name: string) -> boolean,
     face: (name: string, degrees: number) -> (),
     show: (name: string) -> (),

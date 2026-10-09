@@ -8,6 +8,12 @@
 desviando de objetos sólidos e do que não se anda (a grade de caminhada da aba
 **Caminhada** da ferramenta Terreno). Com 0 s ele anda no passo normal.
 
+## Seguir e patrulhar
+
+- *[cão] segue o jogador, a [30] de distância* — vai atrás e para perto.
+- *[guarda] patrulha os pontos [...], esperando [1] s* — anda de ponto em ponto, em laço.
+- *[guarda] para* — encerra o seguir e o patrulhar.
+
 ## Falar
 
 *[guarda] diz ["Alto lá!"] por [3] s* mostra um balão em cima da cabeça.

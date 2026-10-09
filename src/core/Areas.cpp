@@ -1,10 +1,12 @@
 // Áreas de gatilho (caixas nomeadas que os scripts observam) e objetos
 // sólidos (o jogador não atravessa o pé deles).
 #include "core/Engine.hpp"
+#include "core/Logger.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 
 namespace eruption {
@@ -93,6 +95,54 @@ bool Engine::blockedAt(const Vec3& p, float radius) const {
         if (inside) return true;
     }
     return false;
+}
+
+int Engine::addSoundEmitter(const std::string& name, const std::string& file, const Vec3& position, float volume,
+                            float range) {
+    SoundEmitter e;
+    e.name = name;
+    e.file = file;
+    e.position = position;
+    e.volume = volume;
+    e.range = std::max(1.0f, range);
+    m_soundEmitters.push_back(std::move(e));
+    return static_cast<int>(m_soundEmitters.size() - 1);
+}
+
+int Engine::findSoundEmitter(const std::string& name) const {
+    for (size_t i = 0; i < m_soundEmitters.size(); ++i)
+        if (m_soundEmitters[i].name == name && !m_soundEmitters[i].removed) return static_cast<int>(i);
+    return -1;
+}
+
+void Engine::clearSoundEmitters(bool keepNeighbors) {
+    for (auto& e : m_soundEmitters)
+        if ((!keepNeighbors || !e.fromNeighbor) && e.playing) m_audio.stop(e.playing, 0.3f);
+    if (!keepNeighbors) {
+        m_soundEmitters.clear();
+        return;
+    }
+    m_soundEmitters.erase(std::remove_if(m_soundEmitters.begin(), m_soundEmitters.end(),
+                                         [](const SoundEmitter& e) { return !e.fromNeighbor; }),
+                          m_soundEmitters.end());
+}
+
+void Engine::updateSoundEmitters() {
+    // Toca quem está perto do ouvinte; longe (ou parado o jogo), solta o som.
+    const Vec3 ear = m_camera.position();
+    for (auto& e : m_soundEmitters) {
+        const bool want = m_soundEmittersActive && !e.removed && !e.parked && !e.file.empty() &&
+                          glm::length(e.position - ear) < e.range * 1.2f;
+        static const bool debug = std::getenv("ERUPTION_DEBUG_SOUNDS") != nullptr;
+        if (want && (!e.playing || !m_audio.playing(e.playing))) {
+            e.playing = m_audio.playAt(e.file, e.position, e.volume, true, e.range);
+            if (debug) ERUPTION_LOG_WARN("[SOUND] %s starts (%s)", e.name.c_str(), e.file.c_str());
+        } else if (!want && e.playing) {
+            m_audio.stop(e.playing, 0.5f);
+            e.playing = 0;
+            if (debug) ERUPTION_LOG_WARN("[SOUND] %s stops", e.name.c_str());
+        }
+    }
 }
 
 } // namespace eruption

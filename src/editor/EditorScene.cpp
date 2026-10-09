@@ -105,6 +105,7 @@ void Editor::reloadSceneFile() {
     m_engine->m_deferredLighting.getPointLights() = m_original.lights;
     m_engine->clearCharacters(true); // vêm todos do arquivo (os dos vizinhos ficam)
     m_engine->clearAreas(true);
+    m_engine->clearSoundEmitters(true);
     for (uint32_t i = 0; i < insts.size(); ++i)
         if (!m_engine->isRegionInstance(i)) m_engine->setSolid(i, false);
     m_engine->clearPlayerStart();
@@ -196,6 +197,8 @@ SceneEdits Editor::currentEdits() const {
     }
     for (const auto& a : m_engine->areas())
         if (!a.removed && !a.fromNeighbor) e.areas.push_back({a.name, a.center, a.size, a.yaw});
+    for (const auto& snd : m_engine->soundEmitters())
+        if (!snd.removed && !snd.fromNeighbor) e.sounds.push_back({snd.name, snd.file, snd.position, snd.volume, snd.range});
     e.terrainLayers = m_engine->splatLayerFiles();
     e.neighbors = m_engine->worldNeighbors();
     if (m_engine->hasPlayerStart()) {
@@ -394,6 +397,29 @@ void Editor::addTriggerArea() {
         if (idx < static_cast<int>(as.size())) as[static_cast<size_t>(idx)].removed = removed;
     };
     m_undo.push({"Add area", [setRemoved] { setRemoved(true); }, [setRemoved] { setRemoved(false); }});
+}
+
+void Editor::addSoundEmitter() {
+    Vec3 at;
+    if (!groundPointAt(0.5f, 0.5f, at)) at = m_engine->camera().target();
+    std::string name;
+    for (int i = 1; name.empty() || m_engine->findSoundEmitter(name) >= 0; ++i) name = "sound_" + std::to_string(i);
+    // Um som selecionado no Projeto já vira o arquivo do emissor.
+    const std::filesystem::path sel(m_projectSelected);
+    std::string file;
+    if (sel.extension() == ".wav" || sel.extension() == ".ogg" || sel.extension() == ".mp3" || sel.extension() == ".flac") {
+        std::error_code ec;
+        const auto rel = std::filesystem::relative(sel, std::filesystem::current_path(), ec);
+        file = (!ec && !rel.empty() && rel.native().rfind("..", 0) != 0) ? rel.generic_string() : sel.string();
+    }
+    const int idx = m_engine->addSoundEmitter(name, file, at + Vec3(0.0f, 5.0f, 0.0f), 1.0f, 200.0f);
+    select({SelectionKind::Sound, idx});
+    Engine* engine = m_engine;
+    auto setRemoved = [engine, idx](bool removed) {
+        auto& ss = engine->soundEmitters();
+        if (idx < static_cast<int>(ss.size())) ss[static_cast<size_t>(idx)].removed = removed;
+    };
+    m_undo.push({"Add sound", [setRemoved] { setRemoved(true); }, [setRemoved] { setRemoved(false); }});
 }
 
 void Editor::setPlayerStartHere() {

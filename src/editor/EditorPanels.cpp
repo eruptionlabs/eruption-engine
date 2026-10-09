@@ -146,6 +146,10 @@ std::string Editor::selectionName(const Selection& s) const {
             const auto& as = m_engine->areas();
             return s.index >= 0 && s.index < static_cast<int>(as.size()) ? as[static_cast<size_t>(s.index)].name : std::string();
         }
+        case SelectionKind::Sound: {
+            const auto& ss = m_engine->soundEmitters();
+            return s.index >= 0 && s.index < static_cast<int>(ss.size()) ? ss[static_cast<size_t>(s.index)].name : std::string();
+        }
         case SelectionKind::Character: {
             const auto& cs = m_engine->characters();
             return s.index >= 0 && s.index < static_cast<int>(cs.size()) ? cs[static_cast<size_t>(s.index)].name : std::string();
@@ -171,6 +175,9 @@ bool Editor::hasTransformOf(const Selection& s) const {
     if (s.kind == SelectionKind::Area)
         return s.index >= 0 && s.index < static_cast<int>(m_engine->areas().size()) &&
                !m_engine->areas()[static_cast<size_t>(s.index)].removed;
+    if (s.kind == SelectionKind::Sound)
+        return s.index >= 0 && s.index < static_cast<int>(m_engine->soundEmitters().size()) &&
+               !m_engine->soundEmitters()[static_cast<size_t>(s.index)].removed;
     return false;
 }
 
@@ -196,6 +203,8 @@ Mat4 Editor::transformOf(const Selection& s) const {
         return characterMatrix(m_engine->characters()[static_cast<size_t>(s.index)]);
     if (s.kind == SelectionKind::Spawn) return glm::translate(Mat4(1.0f), m_engine->playerStart());
     if (s.kind == SelectionKind::Area) return m_engine->areas()[static_cast<size_t>(s.index)].matrix();
+    if (s.kind == SelectionKind::Sound)
+        return glm::translate(Mat4(1.0f), m_engine->soundEmitters()[static_cast<size_t>(s.index)].position);
     Mat4 m(1.0f);
     m[3] = Vec4(m_engine->m_deferredLighting.getPointLights()[static_cast<size_t>(s.index)].position, 1.0f);
     return m;
@@ -213,6 +222,8 @@ void Editor::setTransformOf(const Selection& s, const Mat4& m) {
         m_engine->movePlayerStart(Vec3(m[3]));
     else if (s.kind == SelectionKind::Area)
         m_engine->areas()[static_cast<size_t>(s.index)].setMatrix(m);
+    else if (s.kind == SelectionKind::Sound)
+        m_engine->soundEmitters()[static_cast<size_t>(s.index)].position = Vec3(m[3]);
     else
         m_engine->m_deferredLighting.getPointLights()[static_cast<size_t>(s.index)].position = Vec3(m[3]);
 }
@@ -237,6 +248,9 @@ void Editor::pushTransformEdit(const Selection& s, const Mat4& before, const Mat
         } else if (s.kind == SelectionKind::Area) {
             auto& as = engine->areas();
             if (s.index >= 0 && s.index < static_cast<int>(as.size())) as[static_cast<size_t>(s.index)].setMatrix(m);
+        } else if (s.kind == SelectionKind::Sound) {
+            auto& ss = engine->soundEmitters();
+            if (s.index >= 0 && s.index < static_cast<int>(ss.size())) ss[static_cast<size_t>(s.index)].position = Vec3(m[3]);
         }
     };
     m_undo.push({"Transform " + selectionName(s), [apply, before] { apply(before); }, [apply, after] { apply(after); }});
@@ -278,6 +292,14 @@ void Editor::deleteOne() {
         auto setRemoved = [engine, s](bool removed) {
             auto& cs = engine->characters();
             if (s.index < static_cast<int>(cs.size())) cs[static_cast<size_t>(s.index)].removed = removed;
+        };
+        setRemoved(true);
+        m_undo.push({"Delete " + selectionName(s), [setRemoved] { setRemoved(false); }, [setRemoved] { setRemoved(true); }});
+        select({});
+    } else if (s.kind == SelectionKind::Sound && selectionHasTransform()) {
+        auto setRemoved = [engine, s](bool removed) {
+            auto& ss = engine->soundEmitters();
+            if (s.index < static_cast<int>(ss.size())) ss[static_cast<size_t>(s.index)].removed = removed;
         };
         setRemoved(true);
         m_undo.push({"Delete " + selectionName(s), [setRemoved] { setRemoved(false); }, [setRemoved] { setRemoved(true); }});
@@ -402,6 +424,24 @@ void Editor::drawHierarchy() {
                 if (areas[i].removed || areas[i].fromNeighbor || !icontains(areas[i].name, m_hierarchyFilter)) continue;
                 ImGui::PushID(static_cast<int>(i) + 2000000);
                 row({SelectionKind::Area, static_cast<int>(i)}, areas[i].name, true);
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
+    }
+
+    const auto& sounds = m_engine->soundEmitters();
+    size_t liveSounds = 0;
+    for (const auto& e : sounds) liveSounds += e.removed || e.fromNeighbor ? 0 : 1;
+    if (liveSounds) {
+        char shdr[64];
+        std::snprintf(shdr, sizeof(shdr), "%s (%zu)###sounds", tr("Sounds"), liveSounds);
+        ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
+        if (ImGui::TreeNodeEx(shdr, ImGuiTreeNodeFlags_SpanAvailWidth)) {
+            for (size_t i = 0; i < sounds.size(); ++i) {
+                if (sounds[i].removed || sounds[i].fromNeighbor || !icontains(sounds[i].name, m_hierarchyFilter)) continue;
+                ImGui::PushID(static_cast<int>(i) + 3000000);
+                row({SelectionKind::Sound, static_cast<int>(i)}, sounds[i].name, true);
                 ImGui::PopID();
             }
             ImGui::TreePop();
@@ -731,6 +771,38 @@ void Editor::drawInspector() {
                 const PointLight b = before;
                 m_undo.push({"Edit " + name, [apply, b] { apply(b); }, [apply, after] { apply(after); }});
             }
+        }
+    } else if (m_selection.kind == SelectionKind::Sound) {
+        Engine::SoundEmitter& e = m_engine->soundEmitters()[static_cast<size_t>(m_selection.index)];
+        if (ImGui::CollapsingHeader(tr("Sound Emitter"), ImGuiTreeNodeFlags_DefaultOpen)) {
+            propertyLabel("Name");
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%s", e.name.c_str());
+            if (ImGui::InputText("##sname", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue) && buf[0] &&
+                m_engine->findSoundEmitter(buf) < 0)
+                e.name = buf;
+            propertyLabel("File");
+            ImGui::TextWrapped("%s", e.file.empty() ? tr("(none)") : e.file.c_str());
+            const std::filesystem::path sel(m_projectSelected);
+            const bool isSound = sel.extension() == ".wav" || sel.extension() == ".ogg" || sel.extension() == ".mp3" ||
+                                 sel.extension() == ".flac";
+            ImGui::BeginDisabled(!isSound);
+            if (ImGui::Button(tr("Use sound selected in Project"))) {
+                std::error_code ec;
+                const auto rel = std::filesystem::relative(sel, std::filesystem::current_path(), ec);
+                e.file = (!ec && !rel.empty() && rel.native().rfind("..", 0) != 0) ? rel.generic_string() : sel.string();
+                if (e.playing) {
+                    m_engine->audio().stop(e.playing);
+                    e.playing = 0;
+                }
+            }
+            ImGui::EndDisabled();
+            propertyLabel("Volume");
+            ImGui::SliderFloat("##svol", &e.volume, 0.0f, 2.0f, "%.2f");
+            propertyLabel("Range");
+            ImGui::DragFloat("##srange", &e.range, 1.0f, 10.0f, 5000.0f, "%.0f");
+            ImGui::SetItemTooltip("%s", tr("Heard up to this distance; quieter the farther away."));
+            ImGui::TextWrapped("%s", tr("Plays in a loop while the game runs (Play)."));
         }
     } else if (m_selection.kind == SelectionKind::Area) {
         Engine::TriggerArea& a = m_engine->areas()[static_cast<size_t>(m_selection.index)];

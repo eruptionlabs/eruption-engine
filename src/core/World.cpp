@@ -418,6 +418,14 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
         const int idx = ob.solid ? findInRegion(ob.name) : -1;
         if (idx >= 0) setSolid(static_cast<uint32_t>(idx), true);
     }
+    r.sounds.clear();
+    for (const auto& snd : e.sounds) {
+        const std::string name = prefix + snd.name;
+        if (findSoundEmitter(name) >= 0) continue;
+        const int idx = addSoundEmitter(name, snd.file, snd.position + r.offset, snd.volume, snd.range);
+        m_soundEmitters[static_cast<size_t>(idx)].fromNeighbor = true;
+        r.sounds.push_back(name);
+    }
     r.hasWater = e.hasWater;
     r.waterLevel = e.waterLevel + r.offset.y;
     r.state = WorldRegion::State::Shown;
@@ -453,6 +461,8 @@ void Engine::showRegion(WorldRegion& r, bool show) {
             c.parked = !show;
     for (auto& a : m_areas)
         if (a.fromNeighbor && std::find(r.areas.begin(), r.areas.end(), a.name) != r.areas.end()) a.parked = !show;
+    for (auto& snd : m_soundEmitters)
+        if (snd.fromNeighbor && std::find(r.sounds.begin(), r.sounds.end(), snd.name) != r.sounds.end()) snd.parked = !show;
     r.state = show ? WorldRegion::State::Shown : WorldRegion::State::Hidden;
     if (!show) r.hiddenAt = std::chrono::steady_clock::now();
     ++m_worldVersion;
@@ -553,6 +563,9 @@ void Engine::releaseRegion(WorldRegion& r) {
     for (auto& a : m_areas)
         if (a.fromNeighbor && std::find(r.areas.begin(), r.areas.end(), a.name) != r.areas.end()) a.removed = true;
     r.areas.clear();
+    for (auto& snd : m_soundEmitters)
+        if (snd.fromNeighbor && std::find(r.sounds.begin(), r.sounds.end(), snd.name) != r.sounds.end()) snd.removed = true;
+    r.sounds.clear();
     mr.setInstancesEnabled(idx, false);
     // Malhas do .glb do mapa (só dele) e as imagens embutidas guardadas para ele.
     size_t meshes = 0;

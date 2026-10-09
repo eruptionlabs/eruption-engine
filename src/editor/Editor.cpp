@@ -240,6 +240,9 @@ void Editor::registerCommands() {
     add("add.area", "Add", "Trigger Area", {}, [this] { addTriggerArea(); },
         "A named box on the ground: rules and scripts react when the player walks in or out.")
         .enabled = isEditing;
+    add("add.sound", "Add", "Sound Emitter", {}, [this] { addSoundEmitter(); },
+        "A sound that loops at a place (waterfall, campfire, tavern), heard when the player is near.")
+        .enabled = isEditing;
     add("edit.delete", "Edit", "Delete", {ImGuiKey_Delete}, [this] { deleteSelection(); },
         "Hides the selected object (undo brings it back).")
         .enabled = [this] { return m_selection.kind == SelectionKind::Model || m_selection.kind == SelectionKind::Light; };
@@ -759,6 +762,7 @@ void Editor::update(float dt) {
             else if (what == "scene") m_pendingFocus.push_back(kWinScene);
             else if (what == "env") select({SelectionKind::Environment, 0});
             else if (what == "area") select({SelectionKind::Area, m_engine->findArea(arg)});
+            else if (what == "sound") select({SelectionKind::Sound, m_engine->findSoundEmitter(arg)});
             else if (what == "telemetry") m_pendingFocus.push_back(kWinTelemetry);
             else if (what == "project") {
                 m_pendingFocus.push_back(kWinProject);
@@ -967,6 +971,7 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("add.light");
         m_commands.menuItem("add.player_start");
         m_commands.menuItem("add.area");
+        m_commands.menuItem("add.sound");
         ImGui::Separator();
         ImGui::TextDisabled("%s", tr("Models, prefabs and characters:"));
         ImGui::TextDisabled("%s", tr("drag them from the Project panel"));
@@ -1321,6 +1326,7 @@ void Editor::handleGameMapRequest() {
 
 void Editor::play() {
     if (m_play != PlayState::Editing) return;
+    m_engine->setSoundEmittersActive(true); // sons da cena tocam no Play
     const auto& insts = m_engine->modelRenderer().getInstances();
     m_snapshot.transforms.resize(insts.size());
     m_snapshot.enabled.resize(insts.size());
@@ -1353,6 +1359,7 @@ void Editor::play() {
 
 void Editor::stop() {
     if (m_play == PlayState::Editing) return;
+    m_engine->setSoundEmittersActive(false);
     m_engine->setHudBars(false); // o que o jogo ligou vale só no Play
     m_engine->setMinimapHud(false);
     ModelRenderer& mr = m_engine->modelRenderer();
@@ -1374,6 +1381,8 @@ void Editor::stop() {
         chars[i].facing = snap.facing;
         chars[i].visible = snap.visible;
         chars[i].walking = false;
+        chars[i].behavior = Engine::SceneCharacter::Behavior::None; // seguir/patrulhar vale só no Play
+        chars[i].patrol.clear();
         if (chars[i].sprite != snap.sprite) m_engine->setCharacterSprite(static_cast<int>(i), snap.sprite);
     }
     if (m_engine->m_charConfig.job != m_snapshot.playerSprite) {

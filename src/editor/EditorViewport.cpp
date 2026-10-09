@@ -484,6 +484,19 @@ void Editor::pickAt(float u, float v) {
             best = {SelectionKind::Spawn, 0};
         }
     }
+    const auto& sounds = m_engine->soundEmitters();
+    for (size_t i = 0; markersClickable && i < sounds.size(); ++i) {
+        if (sounds[i].removed || sounds[i].fromNeighbor || sounds[i].parked) continue;
+        const Vec3 oc = sounds[i].position - origin;
+        const float t = glm::dot(oc, dir);
+        if (t <= 0.0f) continue;
+        const float d2 = glm::dot(oc, oc) - t * t;
+        const float pickR = std::max(1.5f, 0.014f * t);
+        if (d2 < pickR * pickR && t < bestT) {
+            bestT = t;
+            best = {SelectionKind::Sound, static_cast<int>(i)};
+        }
+    }
     const auto& lights = m_engine->m_deferredLighting.getPointLights();
     for (size_t i = 0; markersClickable && i < lights.size(); ++i) {
         const Vec3 oc = lights[i].position - origin;
@@ -538,6 +551,10 @@ void Editor::boxSelect(const ImVec2& a, const ImVec2& b, float x, float y, float
         for (size_t i = 0; i < lights.size(); ++i)
             if (lights[i].enabled && inside(lights[i].position)) hits.push_back({SelectionKind::Light, static_cast<int>(i)});
         if (m_engine->hasPlayerStart() && inside(m_engine->playerStart())) hits.push_back({SelectionKind::Spawn, 0});
+        const auto& sounds = m_engine->soundEmitters();
+        for (size_t i = 0; i < sounds.size(); ++i)
+            if (!sounds[i].removed && !sounds[i].fromNeighbor && inside(sounds[i].position))
+                hits.push_back({SelectionKind::Sound, static_cast<int>(i)});
     }
     if (!add) select({});
     for (const auto& s : hits)
@@ -647,6 +664,31 @@ void Editor::drawSceneMarkers(float x, float y, float w, float h) {
                                           {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
         for (const auto& e : kEdges) dl->AddLine(p[e[0]], p[e[1]], col, sel ? 2.0f : 1.2f);
         if (toScreen(a.center + Vec3(0.0f, a.size.y * 0.5f, 0.0f), s)) dl->AddText(ImVec2(s.x + 4, s.y - 16), col, a.name.c_str());
+    }
+    // Emissores de som: nota musical e, selecionado, o círculo do alcance no chão.
+    const auto& sounds = m_engine->soundEmitters();
+    for (size_t i = 0; i < sounds.size(); ++i) {
+        const auto& e = sounds[i];
+        if (e.removed || e.parked || (e.fromNeighbor && !m_layerShow[LayerNeighbors])) continue;
+        const bool sel = isSelected({SelectionKind::Sound, static_cast<int>(i)});
+        const ImU32 col = sel ? ImGui::GetColorU32(kAccent) : IM_COL32(150, 200, 255, e.fromNeighbor ? 110 : 220);
+        if (sel) {
+            ImVec2 prev;
+            bool hasPrev = false;
+            for (int k = 0; k <= 40; ++k) {
+                const float ang = float(k) / 40.0f * 6.2831853f;
+                ImVec2 q;
+                const bool on = toScreen(e.position + Vec3(std::cos(ang), 0.0f, std::sin(ang)) * e.range, q);
+                if (on && hasPrev) dl->AddLine(prev, q, ImGui::GetColorU32(ImVec4(kAccent.x, kAccent.y, kAccent.z, 0.5f)), 1.2f);
+                prev = q;
+                hasPrev = on;
+            }
+        }
+        if (!toScreen(e.position, s)) continue;
+        dl->AddCircle(s, 8.0f, col, 16, 2.0f);
+        dl->AddLine(ImVec2(s.x + 1, s.y + 3), ImVec2(s.x + 1, s.y - 5), col, 2.0f);
+        dl->AddCircleFilled(ImVec2(s.x - 2, s.y + 3), 2.5f, col);
+        dl->AddText(ImVec2(s.x + 11, s.y - 8), col, e.name.c_str());
     }
     const auto& lights = m_engine->m_deferredLighting.getPointLights();
     for (size_t i = 0; i < lights.size(); ++i) {

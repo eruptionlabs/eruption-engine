@@ -81,7 +81,7 @@ public:
 private:
     enum class PlayState { Editing, Playing, Paused };
     enum class Tool { Select, Move, Rotate, Scale, Terrain };
-    enum class SelectionKind { None, Model, Light, Environment, Asset, Character, Spawn, Area };
+    enum class SelectionKind { None, Model, Light, Environment, Asset, Character, Spawn, Area, Sound };
     struct Selection {
         SelectionKind kind = SelectionKind::None;
         int index = -1;
@@ -348,6 +348,7 @@ private:
     // Mapas vizinhos (mundo contínuo), no Inspetor do Environment.
     void drawNeighborMaps();
     void addTriggerArea();
+    void addSoundEmitter();
     // Seleção múltipla: m_selection é a principal (gizmo, Inspetor); estas vão junto.
     std::vector<Selection> m_extraSelection;
     bool isSelected(const Selection& s) const;
