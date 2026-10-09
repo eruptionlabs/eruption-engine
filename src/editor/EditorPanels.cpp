@@ -407,6 +407,25 @@ void Editor::drawInspector() {
                 ImGui::EndCombo();
             }
         }
+        if (ImGui::CollapsingHeader("Water", ImGuiTreeNodeFlags_DefaultOpen)) {
+            static float level = 0.0f;
+            bool on = m_engine->waterEnabled();
+            if (!ImGui::IsAnyItemActive()) level = m_engine->waterLevel();
+            propertyLabel("Water");
+            if (ImGui::Checkbox("##water", &on)) {
+                m_engine->setWaterLevel(on, level);
+                m_envEdited = m_waterEdited = true;
+            }
+            ImGui::SetItemTooltip("A flat water surface over the whole map. Lower the ground below it (Terrain tool) to make lakes.");
+            ImGui::BeginDisabled(!on);
+            propertyLabel("Level");
+            ImGui::DragFloat("##wlevel", &level, 0.25f, -1000.0f, 5000.0f, "%.1f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                m_engine->setWaterLevel(true, level);
+                m_envEdited = m_waterEdited = true;
+            }
+            ImGui::EndDisabled();
+        }
         ImGui::End();
         return;
     }

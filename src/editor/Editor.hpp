@@ -280,6 +280,7 @@ private:
         std::vector<float> snapshot; // delta (ou pesos) inteiro no começo do traço (desfazer)
     } m_brush;
     bool m_terrainDirty = false;
+    bool m_waterEdited = false; // nível da água mudado no Inspetor (vai para o scene.luau)
     // Pincel de objetos: paleta (modelos ou prefabs) e regras de espalhar.
     struct ScatterPaletteEntry { std::string file, node, prefab, label; bool on = true; };
     std::vector<ScatterPaletteEntry> m_scatterPalette;

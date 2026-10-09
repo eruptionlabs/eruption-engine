@@ -157,4 +157,20 @@ bool Engine::saveWalk(std::string& error) const {
     return true;
 }
 
+void Engine::setWaterLevel(bool enabled, float level) {
+    if (!m_currentMap) return;
+    m_vulkan.waitIdle();
+    if (!enabled) {
+        m_water.clearWaterMesh();
+        m_waterOn = false;
+        return;
+    }
+    auto mesh = TerrainParser::generateWaterMesh(m_currentMap->terrain, 0, 0, m_currentMap->terrain.width,
+                                                 m_currentMap->terrain.height, level, 0.0f, true, false);
+    m_water.setWaterMesh(mesh);
+    cacheWaterBounds(mesh);
+    m_mapBaseWaterLevel = level;
+    m_waterOn = !mesh.vertices.empty();
+}
+
 } // namespace eruption

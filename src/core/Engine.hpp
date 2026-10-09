@@ -462,6 +462,12 @@ public:
     std::vector<std::string> splatLayerFiles() const;
     static bool hasSavedSplat(const std::string& map);
 
+    // Nível da água do mapa (lagos: cavar o terreno abaixo dele). Refaz o plano
+    // de água na hora (espera a GPU: ação de editor, não de todo frame).
+    void setWaterLevel(bool enabled, float level);
+    bool waterEnabled() const { return m_waterOn; }
+    float waterLevel() const { return m_mapBaseWaterLevel; }
+
     // Grade de caminhada (core/WalkGrid.cpp).
     bool navFollowsTerrain() const;
     bool navCell(float x, float z, int& gx, int& gz) const;
@@ -1004,6 +1010,7 @@ private:
     WaterBenchmark m_waterBenchmark;
     bool m_waterForceWaterPrev = false;
     float m_mapBaseWaterLevel = 0.0f;
+    bool m_waterOn = false; // o mapa tem plano de água agora
     ConfigManager m_shadowConfig;
     ConfigManager m_postConfig;
     ConfigManager m_graphicsConfig;

@@ -52,6 +52,7 @@ void Editor::applySceneFile() {
     m_copySources.clear();
     m_added.clear();
     m_envEdited = false;
+    m_waterEdited = false;
 
     SceneEdits edits;
     std::string error;
@@ -61,6 +62,7 @@ void Editor::applySceneFile() {
     } else if (!edits.empty()) {
         for (const auto& c : edits.copies) m_copySources[c.name] = c.from;
         m_envEdited = edits.hasEnvironment;
+        m_waterEdited = edits.hasWater;
         const int n = edits.apply(*m_engine, &m_added);
         log(LogLevel::Info, "Scene edits loaded: " + std::to_string(n) + " change(s) from " + file.generic_string());
     }
@@ -190,6 +192,10 @@ SceneEdits Editor::currentEdits() const {
         e.time = m_engine->dayNightCycle().timeOfDay() * 24.0f;
         e.paused = m_engine->dayNightCycle().isPaused();
         e.weather = weatherTypeName(m_engine->weatherSystem().currentType());
+        if (m_waterEdited && m_engine->waterEnabled()) {
+            e.hasWater = true;
+            e.waterLevel = m_engine->waterLevel();
+        }
     }
     return e;
 }
