@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
-#include <sys/stat.h>
+#include "core/Platform.hpp"
 
 namespace eruption {
 
@@ -1186,7 +1186,7 @@ bool WeatherSystem::loadTypeOverrides(const std::string& path) {
                           path.c_str(), e.what());
         return false;
     }
-    { struct stat st{}; if (stat(path.c_str(), &st) == 0) m_overrideMtime = st.st_mtime; }
+    m_overrideMtime = platform::fileTime(path);
 
     const auto types = j.find("types");
     if (types == j.end() || !types->is_object()) {
@@ -1230,9 +1230,8 @@ void WeatherSystem::applyTypeOverride(WeatherType type, WeatherParams& p) const 
 
 bool WeatherSystem::reloadOverridesIfModified() {
     if (m_overridePath.empty()) return false;
-    struct stat st{};
-    if (stat(m_overridePath.c_str(), &st) != 0) return false;
-    if (static_cast<long long>(st.st_mtime) == m_overrideMtime) return false;
+    const long long t = platform::fileTime(m_overridePath);
+    if (t == 0 || t == m_overrideMtime) return false;
     ERUPTION_LOG_WARN("[CLIMA] %s mudou, recarregando", m_overridePath.c_str());
     return loadTypeOverrides(m_overridePath);
 }

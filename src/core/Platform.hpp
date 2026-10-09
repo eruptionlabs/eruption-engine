@@ -1,0 +1,61 @@
+#pragma once
+
+// O pouco que muda de sistema para sistema (Linux, Windows, macOS, Android),
+// num lugar só.
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX // std::min/std::max continuam funcionando
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <climits>
+#elif defined(__linux__)
+#include <climits>
+#include <unistd.h>
+#endif
+
+namespace eruption::platform {
+
+// Caminho completo do programa em execução (vazio se o sistema não diz).
+inline std::filesystem::path executablePath() {
+#if defined(_WIN32)
+    wchar_t buf[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    return n > 0 && n < MAX_PATH ? std::filesystem::path(std::wstring(buf, n)) : std::filesystem::path();
+#elif defined(__APPLE__)
+    char buf[PATH_MAX];
+    uint32_t size = sizeof(buf);
+    return _NSGetExecutablePath(buf, &size) == 0 ? std::filesystem::path(buf) : std::filesystem::path();
+#elif defined(__linux__) && !defined(__ANDROID__)
+    char buf[PATH_MAX];
+    const ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    return n > 0 ? std::filesystem::path(std::string(buf, static_cast<size_t>(n))) : std::filesystem::path();
+#else
+    return {};
+#endif
+}
+
+inline void setEnv(const char* name, const char* value) {
+#if defined(_WIN32)
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
+// Data da última mudança do arquivo (0 se não existe), para recarregar quando muda.
+inline long long fileTime(const std::string& path) {
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(path, ec);
+    return ec ? 0 : static_cast<long long>(t.time_since_epoch().count());
+}
+
+} // namespace eruption::platform

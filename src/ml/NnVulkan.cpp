@@ -1,4 +1,5 @@
 #include "NnVulkan.hpp"
+#include "core/Platform.hpp"
 
 #include "NnProgram.hpp"
 
@@ -147,8 +148,9 @@ std::vector<char> loadSpirv(const std::string& name) {
     std::vector<char> code = readFile(rel);
     if (!code.empty()) return code;
     std::error_code ec;
-    const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
-    if (!ec) code = readFile((exe.parent_path() / rel).string());
+    (void)ec;
+    const fs::path exe = platform::executablePath();
+    if (!exe.empty()) code = readFile((exe.parent_path() / rel).string());
     return code;
 }
 
