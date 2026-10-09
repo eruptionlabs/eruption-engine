@@ -130,6 +130,7 @@ void Editor::shutdown() {
         for (auto& [path, t] : m_thumbs) releaseTexture(t.tex);
         m_thumbs.clear();
         releaseTexture(m_spriteImport.sheetTex);
+        releaseTexture(m_mapgen.previewTex);
         m_engine->vulkan().waitIdle();
         collectTextures(true);
     }
@@ -175,6 +176,8 @@ void Editor::registerCommands() {
     add("file.new_map", "File", "New Map...", {ImGuiKey_N, true}, [this] { m_newMapOpen = true; },
         "Creates an empty map (flat ground) in assets/external and opens it.")
         .enabled = isEditing;
+    add("file.generate_map", "File", "Generate Map...", {}, [this] { m_showMapGen = true; },
+        "Builds a map from a recipe of steps: hills, mountains, erosion, water, paint layers, objects.");
     add("file.open_map", "File", "Open Map...", {ImGuiKey_O, true}, [this] {
         m_paletteOpen = true;
         m_paletteFocus = true;
@@ -594,6 +597,19 @@ void Editor::update(float dt) {
         m_engine->setWaterLevel(true, float(std::atof(testWater)));
         m_envEdited = m_waterEdited = true;
     }
+    // ERUPTION_TEST_EDITOR_MAPGEN=<receita>|<mapa>: abre o gerador com a receita,
+    // gera o mapa em segundo plano e o abre ao terminar.
+    static const char* testMapGen = std::getenv("ERUPTION_TEST_EDITOR_MAPGEN");
+    if (testMapGen && m_frame == 100) {
+        const std::string spec = testMapGen;
+        const size_t bar = spec.find('|');
+        m_showMapGen = true;
+        mapGenLoad(spec.substr(0, bar));
+        m_mapgen.blocks = std::getenv("ERUPTION_TEST_EDITOR_MAPGEN_BLOCKS") != nullptr;
+        if (m_mapgen.blocks) m_mapgen.selected = 0;
+        std::snprintf(m_mapgen.mapName, sizeof(m_mapgen.mapName), "%s", spec.substr(bar + 1).c_str());
+        mapGenGenerate();
+    }
     // ERUPTION_TEST_EDITOR_EXPORT=<mapa>:<pasta>: exporta o mapa (síncrono).
     static const char* testExport = std::getenv("ERUPTION_TEST_EDITOR_EXPORT");
     if (testExport && m_frame == 100) {
@@ -726,6 +742,7 @@ void Editor::update(float dt) {
     uploadThumbnails();
     collectTextures(false);
 
+    mapGenPoll();
     // Troca de mapa pedida pela UI: fora do frame de render.
     if (!m_pendingMap.empty()) {
         const std::string name = std::move(m_pendingMap);
@@ -827,6 +844,7 @@ void Editor::drawUI() {
     drawRemoteWindow();
     drawAiWindow();
     drawExportWindow();
+    drawMapGenWindow();
 
     if (m_focusScene) {
         m_pendingFocus.insert(m_pendingFocus.begin(), kWinScene);
@@ -848,6 +866,7 @@ void Editor::drawMenuBar() {
     if (!ImGui::BeginMainMenuBar()) return;
     if (ImGui::BeginMenu("File")) {
         m_commands.menuItem("file.new_map");
+        m_commands.menuItem("file.generate_map");
         m_commands.menuItem("file.open_map");
         m_commands.menuItem("file.save");
         m_commands.menuItem("file.reload_scene");

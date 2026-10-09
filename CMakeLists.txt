@@ -408,6 +408,9 @@ endif()
 # Editor de texto com cor de sintaxe para o painel de codigo do editor.
 if(ERUPTION_EDITOR)
     list(APPEND SOURCES "${CMAKE_SOURCE_DIR}/third_party/ImGuiColorTextEdit/TextEditor.cpp")
+    # Plugins do editor (nao vao no jogo exportado): gerador procedural de mapas.
+    file(GLOB ERUPTION_PLUGIN_SOURCES "${CMAKE_SOURCE_DIR}/plugins/mapgen/*.cpp")
+    list(APPEND SOURCES ${ERUPTION_PLUGIN_SOURCES})
 else()
     # Jogo exportado: o codigo do editor fica de fora (o Editor.hpp vira um stub).
     list(FILTER SOURCES EXCLUDE REGEX "/src/editor/")
@@ -526,6 +529,7 @@ endif()
 # Include directories
 target_include_directories(eruption-engine PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/plugins
     ${CMAKE_SOURCE_DIR}/src/generated
     ${Vulkan_INCLUDE_DIRS}
     ${glfw_SOURCE_DIR}/include

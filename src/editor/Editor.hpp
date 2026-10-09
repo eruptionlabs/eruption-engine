@@ -28,6 +28,7 @@ public:
 #include "editor/RemoteServer.hpp"
 #include "editor/AiClient.hpp"
 #include "editor/GameExport.hpp"
+#include "mapgen/MapGen.hpp"
 #include "editor/UndoStack.hpp"
 #include "core/Logger.hpp"
 #include "renderer/DeferredLighting.hpp"
@@ -317,6 +318,36 @@ private:
     void drawExportWindow();
     void startExport();
     void buildLeanBinary();
+    // Gerador de mapas (EditorMapGen.cpp, plugins/mapgen)
+    bool m_showMapGen = false;
+    struct MapGenState {
+        std::filesystem::path file;
+        std::filesystem::file_time_type mtime{};
+        mapgen::Recipe recipe;
+        std::string error;
+        char newName[64] = "my_map";
+        char mapName[64] = {};
+        bool previewDirty = false;
+        std::atomic<bool> previewRunning{false}, generating{false};
+        bool previewReady = false;
+        std::vector<uint8_t> previewPixels;
+        int previewSize = 0;
+        std::string previewError;
+        GuiTexture previewTex;
+        float progress = 0.0f;
+        std::string stage;
+        std::string generatedMap;
+        bool blocks = false; // vista em blocos de encaixar
+        int selected = -1;
+    } m_mapgen;
+    std::mutex m_mapgenMutex;
+    void drawMapGenWindow();
+    void mapGenLoad(const std::filesystem::path& file);
+    void mapGenSave();
+    void mapGenGenerate();
+    void mapGenPoll();
+    bool mapGenStepParams(mapgen::Step& s);
+    bool drawMapGenBlocks();
     struct TerrainBrush {
         int mode = 0; // 0 subir/baixar, 1 suavizar, 2 aplainar
         bool paint = false; // aba Paint: pinta camadas em vez de esculpir
