@@ -1,5 +1,6 @@
 #include "renderer/BindlessDescriptor.hpp"
 #include "core/Logger.hpp"
+#include "renderer/ShaderCompiler.hpp"
 #include <cstring>
 #include <algorithm>
 
@@ -7,6 +8,21 @@ namespace eruption {
 
 bool BindlessDescriptor::init(VulkanContext* ctx) {
     m_ctx = ctx;
+    m_fixed = !ctx->bindless();
+    m_slotCount = m_fixed ? std::min<uint32_t>(ERUPTION_FALLBACK_TEX_SLOTS, MAX_BINDLESS_TEXTURES)
+                          : MAX_BINDLESS_TEXTURES;
+    ShaderCompiler::setNoBindless(m_fixed);
+    if (m_fixed) {
+        const auto& lim = ctx->deviceProperties().limits;
+        if (lim.maxPerStageDescriptorSamplers < m_slotCount || lim.maxPerStageDescriptorSampledImages < m_slotCount ||
+            lim.maxDescriptorSetSamplers < m_slotCount) {
+            // TODO(fallback etapa B): GPU com poucos samplers por estagio
+            // (Mali/PowerVR antigos: 16-128) precisa de textura ligada por draw.
+            ERUPTION_LOG_ERROR("No-bindless path needs %u samplers per stage; the GPU allows %u",
+                               m_slotCount, lim.maxPerStageDescriptorSamplers);
+            return false;
+        }
+    }
     if (!createLayout()) return false;
     if (!createPool()) return false;
     if (!allocateSet()) return false;
@@ -73,16 +89,25 @@ bool BindlessDescriptor::init(VulkanContext* ctx) {
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     vkCreateSampler(m_ctx->device(), &samplerInfo, nullptr, &m_defaultSampler);
 
-    updateTexture(0, m_defaultView, m_defaultSampler);
-    flushUpdates();
+    if (m_fixed) {
+        // Sem PARTIALLY_BOUND o array inteiro tem que ser valido: tudo comeca
+        // na textura padrao, nos sets de todos os frames.
+        std::vector<PendingUpdate> all(m_slotCount, PendingUpdate{0, m_defaultView, m_defaultSampler});
+        for (uint32_t i = 0; i < m_slotCount; ++i) all[i].slot = i;
+        for (VkDescriptorSet set : m_frameSets) writeSet(set, all);
+        m_ctx->addFrameBeginHook([this](uint32_t frame) { onFrameBegin(frame); });
+    } else {
+        updateTexture(0, m_defaultView, m_defaultSampler);
+        flushUpdates();
+    }
 
     // Pre-allocate free list backwards for better cache locality
     m_freeSlots.reserve(MAX_BINDLESS_TEXTURES);
-    for (uint32_t i = MAX_BINDLESS_TEXTURES - 1; i >= 1; --i) {
+    for (uint32_t i = m_slotCount - 1; i >= 1; --i) {
         m_freeSlots.push_back(i);
     }
 
-    ERUPTION_LOG_INFO("Bindless descriptor system initialized (%d slots, default at slot 0)", MAX_BINDLESS_TEXTURES);
+    ERUPTION_LOG_INFO("Bindless descriptor system initialized (%u slots, default at slot 0)", m_slotCount);
     return true;
 }
 
@@ -110,6 +135,8 @@ void BindlessDescriptor::shutdown() {
         m_layout = VK_NULL_HANDLE;
     }
     m_set = VK_NULL_HANDLE;
+    for (auto& set : m_frameSets) set = VK_NULL_HANDLE;
+    for (auto& q : m_framePending) q.clear();
     m_pendingUpdates.clear();
     m_freeSlots.clear();
 }
@@ -121,16 +148,16 @@ uint32_t BindlessDescriptor::allocateSlot() {
         ++m_allocated; m_highWater = std::max(m_highWater, m_allocated);
         return slot;
     }
-    if (m_nextSlot < MAX_BINDLESS_TEXTURES) {
+    if (m_nextSlot < m_slotCount) {
         ++m_allocated; m_highWater = std::max(m_highWater, m_allocated);
         return m_nextSlot++;
     }
-    ERUPTION_LOG_ERROR("Bindless texture array full! (max=%d)", MAX_BINDLESS_TEXTURES);
+    ERUPTION_LOG_ERROR("Bindless texture array full! (max=%u)", m_slotCount);
     return 0; // slot 0 = default/null
 }
 
 void BindlessDescriptor::freeSlot(uint32_t slot) {
-    if (slot == 0 || slot >= MAX_BINDLESS_TEXTURES) return;
+    if (slot == 0 || slot >= m_slotCount) return;
     if (m_allocated > 0) --m_allocated;
     m_freeSlots.push_back(slot);
     // Reset slot to default texture so shader doesn't access destroyed image
@@ -138,28 +165,48 @@ void BindlessDescriptor::freeSlot(uint32_t slot) {
 }
 
 void BindlessDescriptor::updateTexture(uint32_t slot, VkImageView view, VkSampler sampler) {
-    if (slot >= MAX_BINDLESS_TEXTURES) return;
+    if (slot >= m_slotCount) return;
     m_pendingUpdates.push_back({slot, view, sampler});
 }
 
 void BindlessDescriptor::flushUpdates() {
     if (m_pendingUpdates.empty()) return;
+    if (m_fixed) {
+        // Vale a partir do proximo inicio de frame de cada set.
+        for (auto& q : m_framePending) q.insert(q.end(), m_pendingUpdates.begin(), m_pendingUpdates.end());
+        m_pendingUpdates.clear();
+        return;
+    }
+    writeSet(m_set, m_pendingUpdates);
+    m_pendingUpdates.clear();
+}
+
+void BindlessDescriptor::onFrameBegin(uint32_t frame) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto& q = m_framePending[frame];
+    if (q.empty()) return;
+    writeSet(m_frameSets[frame], q);
+    q.clear();
+}
+
+void BindlessDescriptor::writeSet(VkDescriptorSet set, const std::vector<PendingUpdate>& updates) {
+    if (updates.empty()) return;
 
     std::vector<VkWriteDescriptorSet> writes;
-    writes.reserve(m_pendingUpdates.size());
+    writes.reserve(updates.size());
     std::vector<VkDescriptorImageInfo> imageInfos;
-    imageInfos.reserve(m_pendingUpdates.size());
+    imageInfos.reserve(updates.size());
 
-    for (const auto& upd : m_pendingUpdates) {
+    for (const auto& upd : updates) {
         imageInfos.push_back({upd.sampler, upd.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     }
 
-    for (size_t i = 0; i < m_pendingUpdates.size(); ++i) {
+    for (size_t i = 0; i < updates.size(); ++i) {
         VkWriteDescriptorSet write{};
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_set;
+        write.dstSet = set;
         write.dstBinding = 0;
-        write.dstArrayElement = m_pendingUpdates[i].slot;
+        write.dstArrayElement = updates[i].slot;
         write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         write.descriptorCount = 1;
         write.pImageInfo = &imageInfos[i];
@@ -167,7 +214,6 @@ void BindlessDescriptor::flushUpdates() {
     }
 
     vkUpdateDescriptorSets(m_ctx->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-    m_pendingUpdates.clear();
 }
 
 uint32_t BindlessDescriptor::allocateSlotSafe() {
@@ -194,7 +240,7 @@ bool BindlessDescriptor::createLayout() {
     VkDescriptorSetLayoutBinding textureBinding{};
     textureBinding.binding = 0;
     textureBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    textureBinding.descriptorCount = MAX_BINDLESS_TEXTURES;
+    textureBinding.descriptorCount = m_slotCount;
     textureBinding.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT;
     textureBinding.pImmutableSamplers = nullptr;
 
@@ -212,8 +258,10 @@ bool BindlessDescriptor::createLayout() {
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = 1;
     layoutInfo.pBindings = &textureBinding;
-    layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layoutInfo.pNext = &flagsInfo;
+    if (!m_fixed) {
+        layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+        layoutInfo.pNext = &flagsInfo;
+    }
 
     VK_CHECK(vkCreateDescriptorSetLayout(m_ctx->device(), &layoutInfo, nullptr, &m_layout));
     return true;
@@ -222,12 +270,13 @@ bool BindlessDescriptor::createLayout() {
 bool BindlessDescriptor::createPool() {
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = MAX_BINDLESS_TEXTURES;
+    const uint32_t sets = m_fixed ? VulkanContext::MAX_FRAMES_IN_FLIGHT : 1u;
+    poolSize.descriptorCount = m_slotCount * sets;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-    poolInfo.maxSets = 1;
+    if (!m_fixed) poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+    poolInfo.maxSets = sets;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
 
@@ -236,9 +285,21 @@ bool BindlessDescriptor::createPool() {
 }
 
 bool BindlessDescriptor::allocateSet() {
+    if (m_fixed) {
+        VkDescriptorSetLayout layouts[VulkanContext::MAX_FRAMES_IN_FLIGHT];
+        for (auto& l : layouts) l = m_layout;
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_pool;
+        allocInfo.descriptorSetCount = VulkanContext::MAX_FRAMES_IN_FLIGHT;
+        allocInfo.pSetLayouts = layouts;
+        VK_CHECK(vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, m_frameSets));
+        m_set = m_frameSets[0];
+        return true;
+    }
     VkDescriptorSetVariableDescriptorCountAllocateInfo variableInfo{};
     variableInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO;
-    uint32_t maxCount = MAX_BINDLESS_TEXTURES;
+    uint32_t maxCount = m_slotCount;
     variableInfo.descriptorSetCount = 1;
     variableInfo.pDescriptorCounts = &maxCount;
 

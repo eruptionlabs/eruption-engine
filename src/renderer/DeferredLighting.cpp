@@ -387,7 +387,7 @@ void DeferredLighting::createPipelines() {
     // Flag SO' nos combined-image-samplers (UAB de buffer exige feature propria).
     std::vector<VkDescriptorBindingFlags> uabFlags(bindings.size(), 0);
     for (size_t b = 0; b < bindings.size(); ++b)
-        if (bindings[b].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+        if (m_ctx->bindless() && bindings[b].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
             uabFlags[b] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo uabInfo{};
     uabInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
@@ -398,8 +398,9 @@ void DeferredLighting::createPipelines() {
     descLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     descLayoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
     descLayoutInfo.pBindings = bindings.data();
-    descLayoutInfo.pNext = &uabInfo;
-    descLayoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+    descLayoutInfo.pNext = m_ctx->bindless() ? &uabInfo : nullptr;
+    // Sem descriptor indexing nao ha' UPDATE_AFTER_BIND (caminho .nb).
+    if (m_ctx->bindless()) descLayoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
     vkCreateDescriptorSetLayout(m_ctx->device(), &descLayoutInfo, nullptr, &m_descLayout);
 
     // Push constants for lighting
@@ -628,7 +629,7 @@ void DeferredLighting::createDescriptors() {
     poolSizes[2].descriptorCount = 2 * MAX_FRAMES;
 
     VkDescriptorPoolCreateInfo poolInfo{}; poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+    if (m_ctx->bindless()) poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     poolInfo.maxSets = 4 * MAX_FRAMES;
     poolInfo.poolSizeCount = 3;
     poolInfo.pPoolSizes = poolSizes;

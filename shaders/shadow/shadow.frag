@@ -4,7 +4,7 @@
 layout(location = 0) in vec2 inTexCoord;
 layout(location = 1) in flat uint inTexIndex;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[];
+layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
 void main() {
     uint texIdx = nonuniformEXT(inTexIndex);

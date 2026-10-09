@@ -135,16 +135,18 @@ find_program(GLSLANG_VALIDATOR glslangValidator)
 
 if(GLSLC_EXECUTABLE)
     set(SHADER_COMPILER ${GLSLC_EXECUTABLE})
-    set(SHADER_FLAGS "--target-env=vulkan1.1" "-O" "-I${CMAKE_SOURCE_DIR}/shaders")
+    set(SHADER_FLAGS "--target-env=vulkan1.1" "-O" "-I${CMAKE_SOURCE_DIR}/shaders" "-DERUPTION_TEX_SLOTS=")
 elseif(GLSLANG_VALIDATOR)
     set(SHADER_COMPILER ${GLSLANG_VALIDATOR})
-    set(SHADER_FLAGS "-V" "--target-env" "vulkan1.1" "-I${CMAKE_SOURCE_DIR}/shaders" "-o")
+    set(SHADER_FLAGS "-V" "--target-env" "vulkan1.1" "-I${CMAKE_SOURCE_DIR}/shaders" "-DERUPTION_TEX_SLOTS=" "-o")
 else()
     message(FATAL_ERROR "No GLSL compiler found. Install glslc or glslangValidator.")
 endif()
 
 # Shader compilation
 set(SHADER_SOURCE_DIR ${CMAKE_SOURCE_DIR}/shaders)
+# Tamanho do array de texturas nos shaders .nb.spv (GPU sem descriptor indexing).
+set(ERUPTION_FALLBACK_TEX_SLOTS 4096 CACHE STRING "Texture array size of the no-bindless shader variants")
 set(SHADER_BINARY_DIR ${CMAKE_SOURCE_DIR}/shaders)
 
 file(GLOB_RECURSE SHADER_SOURCES
@@ -201,6 +203,37 @@ foreach(shader ${SHADER_SOURCES})
         )
     endif()
     list(APPEND SHADER_BINARIES ${output})
+
+    # Variante sem descriptor indexing (<nome>.nb.spv) para GPUs sem bindless:
+    # array de texturas de tamanho fixo e sem nonuniformEXT. So' para shaders
+    # que leem o array de texturas (direto ou no corpo incluido).
+    file(READ ${shader} shader_text)
+    string(REGEX MATCHALL "#include \"[^\"]+\"" shader_incs "${shader_text}")
+    foreach(inc ${shader_incs})
+        string(REGEX REPLACE "#include \"([^\"]+)\"" "\\1" inc_path "${inc}")
+        if(EXISTS ${SHADER_SOURCE_DIR}/${inc_path})
+            file(READ ${SHADER_SOURCE_DIR}/${inc_path} inc_text)
+            string(APPEND shader_text "${inc_text}")
+        endif()
+    endforeach()
+    if(shader_text MATCHES "ERUPTION_TEX_SLOTS")
+        string(REGEX REPLACE "\\.spv$" ".nb.spv" output_nb "${output}")
+        set(nb_defs "-DERUPTION_TEX_SLOTS=${ERUPTION_FALLBACK_TEX_SLOTS}" "-DnonuniformEXT=")
+        string(REPLACE "-DERUPTION_TEX_SLOTS=" "-DERUPTION_NO_BINDLESS" nb_flags "${SHADER_FLAGS}")
+        if(GLSLC_EXECUTABLE)
+            add_custom_command(OUTPUT ${output_nb}
+                COMMAND ${SHADER_COMPILER} ${shader} -o ${output_nb} ${nb_flags} ${nb_defs}
+                DEPENDS ${shader} ${SHADER_INCLUDES}
+                COMMENT "Compiling shader (no bindless): ${rel_path}")
+        else()
+            list(REMOVE_ITEM nb_flags "-o")
+            add_custom_command(OUTPUT ${output_nb}
+                COMMAND ${SHADER_COMPILER} ${shader} ${nb_flags} ${nb_defs} -o ${output_nb}
+                DEPENDS ${shader} ${SHADER_INCLUDES}
+                COMMENT "Compiling shader (no bindless): ${rel_path}")
+        endif()
+        list(APPEND SHADER_BINARIES ${output_nb})
+    endif()
 endforeach()
 
 # FSR 3.1 (third_party/fsr3): os passes GLSL do backend Vulkan do SDK,
@@ -442,6 +475,7 @@ set(IMGUI_SOURCES
 # Main executable
 add_executable(eruption-engine ${SOURCES} ${IMGUI_SOURCES} ${ICONS_HEADER})
 add_dependencies(eruption-engine generate_icons)
+target_compile_definitions(eruption-engine PRIVATE ERUPTION_FALLBACK_TEX_SLOTS=${ERUPTION_FALLBACK_TEX_SLOTS})
 if(ERUPTION_HAVE_BC_ENCODER)
     target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_BC_ENCODER=1)
 endif()

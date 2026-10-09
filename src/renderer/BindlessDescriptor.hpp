@@ -53,7 +53,9 @@ public:
     uint32_t highWater() const { return m_highWater; }
 
     VkDescriptorSetLayout layout() const { return m_layout; }
-    VkDescriptorSet set() const { return m_set; }
+    // Com array fixo (sem descriptor indexing) ha' um set por frame em voo.
+    VkDescriptorSet set() const { return m_fixed ? m_frameSets[m_ctx->currentFrame()] : m_set; }
+    uint32_t slotCount() const { return m_slotCount; }
 
 private:
     std::vector<uint8_t> m_slotOpaque;
@@ -80,6 +82,16 @@ private:
         VkSampler sampler;
     };
     std::vector<PendingUpdate> m_pendingUpdates;
+
+    // Caminho sem descriptor indexing: o array inteiro precisa estar escrito
+    // (sem PARTIALLY_BOUND) e um set em uso nao pode mudar (sem
+    // UPDATE_AFTER_BIND). Cada set recebe as escritas no inicio do seu frame.
+    bool m_fixed = false;
+    uint32_t m_slotCount = MAX_BINDLESS_TEXTURES;
+    VkDescriptorSet m_frameSets[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
+    std::vector<PendingUpdate> m_framePending[VulkanContext::MAX_FRAMES_IN_FLIGHT];
+    void writeSet(VkDescriptorSet set, const std::vector<PendingUpdate>& updates);
+    void onFrameBegin(uint32_t frame);
 
     bool createLayout();
     bool createPool();

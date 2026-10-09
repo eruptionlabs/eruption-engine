@@ -13,7 +13,7 @@ layout(location = 6) in flat uint v_paletteIndex;
 layout(location = 7) in flat uint v_normalTexIndex;
 layout(location = 8) in flat uint v_mrahwTexIndex;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[];
+layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
 layout(location = 0) out vec4 o_albedo;
 layout(location = 1) out vec4 o_normal;

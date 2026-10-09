@@ -18,6 +18,16 @@ std::vector<uint32_t> ShaderCompiler::compileGLSL(const std::string& source,
 }
 
 std::vector<uint32_t> ShaderCompiler::loadSPIRV(const std::string& filepath) {
+    static const std::string kExt = ".spv";
+    if (s_noBindless && filepath.size() > kExt.size() &&
+        filepath.compare(filepath.size() - kExt.size(), kExt.size(), kExt) == 0) {
+        auto nb = loadSPIRVExact(filepath.substr(0, filepath.size() - kExt.size()) + ".nb.spv", true);
+        if (!nb.empty()) return nb;
+    }
+    return loadSPIRVExact(filepath, false);
+}
+
+std::vector<uint32_t> ShaderCompiler::loadSPIRVExact(const std::string& filepath, bool quiet) {
     // Try multiple paths: build/shaders/<subdir>/<file>, build/shaders/<file>, build/<filepath>, <filepath>
     size_t lastSlash = filepath.find_last_of("/\\");
     std::string filename = (lastSlash != std::string::npos) ? filepath.substr(lastSlash + 1) : filepath;
@@ -57,6 +67,7 @@ std::vector<uint32_t> ShaderCompiler::loadSPIRV(const std::string& filepath) {
         }
     }
     if (!file.is_open()) {
+        if (quiet) return {};
         ERUPTION_LOG_ERROR("Failed to open SPIR-V file: %s", filepath.c_str());
         return {};
     }

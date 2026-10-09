@@ -10,7 +10,7 @@ layout(location = 5) in flat uint inFlags;
 
 layout(location = 0) out vec4 outColor;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[];
+layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
 layout(set = 1, binding = 0) uniform FrameUBO {
     mat4 view;

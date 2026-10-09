@@ -116,6 +116,9 @@ public:
     double m_dbgFenceMs = 0.0, m_dbgAcquireMs = 0.0, m_dbgPresentMs = 0.0;
     uint64_t m_dbgFrames = 0;
     uint32_t currentFrame() const { return m_currentFrame; }
+    // Chamado em beginFrame logo apos a fence do slot: o que foi gravado com
+    // aquele slot ja' terminou na GPU (ex.: atualizar descritores sem UAB).
+    void addFrameBeginHook(std::function<void(uint32_t)> hook) { m_frameBeginHooks.push_back(std::move(hook)); }
     uint32_t currentImageIndex() const { return m_imageIndex; }
     VkFence currentFrameFence() const { return m_frameFences[m_currentFrame]; }
     VkFence frameFence(uint32_t idx) const { return m_frameFences[idx % MAX_FRAMES_IN_FLIGHT]; }
@@ -226,6 +229,8 @@ private:
     bool m_pipeStatsSupported = false;
     bool m_tessellationSupported = false;
     bool m_fsrSupported = false;
+    bool m_bindless = true;
+    std::vector<std::function<void(uint32_t)>> m_frameBeginHooks;
     float m_textureLodBias = 0.0f;
     // Teto de subdivisao do DEVICE (limits.maxTessellationGenerationLevel).
     // 64 no desktop, mas o alvo (930M / driver velho) e' onde o tessellator e'
@@ -237,7 +242,12 @@ public:
     // FSR 3.1 utilizavel neste device (subgroup quad em compute, escrita de
     // storage image sem formato, grupo de 256 invocacoes).
     bool fsrSupported() const { return m_fsrSupported; }
+    // Array de texturas indexado livremente no shader (descriptor indexing).
+    // Sem ele (GPU/driver antigo, ou ERUPTION_NO_BINDLESS=1 para testar) o
+    // motor usa os shaders .nb.spv e um array fixo, um set por frame em voo.
+    bool bindless() const { return m_bindless; }
     const char* gpuName() const { return m_deviceProperties.deviceName; }
+    const VkPhysicalDeviceProperties& deviceProperties() const { return m_deviceProperties; }
     // Vies de mip das texturas de CENA (mipLodBias dos samplers de modelo,
     // terreno e do sampler padrao). Negativo com FSR: a cena e' rasterizada
     // abaixo da resolucao de saida, e o mip tem que ser o da SAIDA, senao a

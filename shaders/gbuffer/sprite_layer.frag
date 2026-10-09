@@ -20,7 +20,7 @@ layout(location = 2) in flat uint v_flags;
 layout(location = 3) in vec4 v_tint;
 layout(location = 6) in flat uint v_paletteIndex;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[];
+layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 layout(set = 2, binding = 0) uniform sampler2D u_depth;   // depth do G-buffer (render)
 layout(set = 2, binding = 1) uniform sampler2D u_lit;     // imagem iluminada (render, HDR linear)
 layout(set = 2, binding = 2) uniform sampler2D u_albedo;  // albedo do G-buffer (render)

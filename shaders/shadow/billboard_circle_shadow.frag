@@ -8,7 +8,7 @@ layout(location = 2) in float v_softness;
 layout(location = 0) out vec4 outShadow;
 
 // Set 0 reserved for bindless textures (not used but required to match pipeline layout)
-layout(set = 0, binding = 0) uniform sampler2D u_textures[];
+layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
 layout(set = 1, binding = 0) uniform FrameUBO {
     mat4 u_view;

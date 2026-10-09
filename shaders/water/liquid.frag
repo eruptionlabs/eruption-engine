@@ -11,7 +11,7 @@ layout(location = 4) in vec3 vBitangent;
 
 layout(location = 0) out vec4 fragColor;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[];
+layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
 layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 baseColorDeep;
