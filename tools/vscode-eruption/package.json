@@ -1,0 +1,32 @@
+{
+    "name": "eruption-luau-debug",
+    "displayName": "Eruption Luau Debugger",
+    "description": "Debug the game scripts of Eruption Engine: breakpoints, stepping, call stack and variables.",
+    "version": "0.1.0",
+    "publisher": "eruptionlabs",
+    "license": "Apache-2.0",
+    "engines": { "vscode": "^1.75.0" },
+    "categories": ["Debuggers"],
+    "activationEvents": ["onDebug"],
+    "main": "./extension.js",
+    "contributes": {
+        "breakpoints": [{ "language": "luau" }, { "language": "lua" }],
+        "debuggers": [
+            {
+                "type": "eruption",
+                "label": "Eruption (Luau)",
+                "languages": ["luau", "lua"],
+                "configurationAttributes": {
+                    "attach": {
+                        "properties": {
+                            "port": { "type": "number", "default": 4711, "description": "Port of the Eruption editor (ERUPTION_DEBUG_PORT)." }
+                        }
+                    }
+                },
+                "initialConfigurations": [
+                    { "type": "eruption", "request": "attach", "name": "Debug game scripts", "port": 4711 }
+                ]
+            }
+        ]
+    }
+}

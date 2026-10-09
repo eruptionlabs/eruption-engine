@@ -12,6 +12,8 @@ bool isLuauBytecode(const std::string& data);
 
 // Empilha a função do trecho em L. Devolve false com a mensagem no topo.
 bool loadLuauChunk(lua_State* L, const std::string& chunkName, const std::string& data);
+// Depurador ligado: compila sem otimizar e com o nome das variáveis locais.
+void setLuauDebugCompile(bool on);
 
 #if ERUPTION_LUAU_COMPILER
 // Fonte -> conteúdo do arquivo exportado (prefixo + bytecode). Vazio se não compila.

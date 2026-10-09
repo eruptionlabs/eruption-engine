@@ -308,6 +308,22 @@ void Editor::registerCommands() {
         codeOpen(p);
     }, "Creates a Luau script in the scripts folder and opens it.")
         .enabled = [this] { return m_scripts != nullptr; };
+    add("game.install_debugger", "Game", "Install VS Code Debugger", {}, [this] {
+        // A extensão (tools/vscode-eruption) vai para as extensões do VS Code do usuário.
+        namespace fs = std::filesystem;
+        const char* home = std::getenv("HOME");
+        const fs::path src = m_projectRoot / "tools" / "vscode-eruption";
+        if (!home || !fs::exists(src / "package.json")) {
+            log(LogLevel::Error, "The debugger extension (tools/vscode-eruption) was not found.");
+            return;
+        }
+        const fs::path dst = fs::path(home) / ".vscode" / "extensions" / "eruptionlabs.eruption-luau-debug-0.1.0";
+        std::error_code ec;
+        fs::create_directories(dst, ec);
+        fs::copy(src, dst, fs::copy_options::overwrite_existing | fs::copy_options::recursive, ec);
+        if (ec) log(LogLevel::Error, "Could not install the debugger: " + ec.message());
+        else log(LogLevel::Info, "Debugger installed in " + dst.string() + ". Restart VS Code, open assets/scripts and press F5 (Debug game scripts).");
+    }, "Puts the Eruption debugger extension in VS Code: breakpoints and stepping in the game scripts.");
     add("game.open_scripts", "Game", "Open Scripts Folder in VS Code", {}, [this] {
         if (m_scripts) openInExternalEditor(m_scripts->dir());
     }, "Autocomplete for the engine API comes from eruption.d.luau (luau-lsp extension).")
@@ -972,6 +988,7 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("game.step");
         ImGui::Separator();
         m_commands.menuItem("game.new_script");
+        m_commands.menuItem("game.install_debugger");
         m_commands.menuItem("game.open_scripts");
         ImGui::Separator();
         m_commands.menuItem("game.sprite_importer");

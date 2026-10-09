@@ -11,10 +11,13 @@
 namespace eruption {
 
 namespace {
+bool g_debugCompile = false;
 // Começa com ESC: nenhum arquivo de texto Luau começa assim.
 constexpr char kMagic[] = "\x1b" "ERUPTLBC";
 constexpr size_t kMagicSize = sizeof(kMagic) - 1;
 } // namespace
+
+void setLuauDebugCompile(bool on) { g_debugCompile = on; }
 
 bool isLuauBytecode(const std::string& data) {
     return data.size() > kMagicSize && std::memcmp(data.data(), kMagic, kMagicSize) == 0;
@@ -25,8 +28,8 @@ bool loadLuauChunk(lua_State* L, const std::string& chunkName, const std::string
         return luau_load(L, chunkName.c_str(), data.data() + kMagicSize, data.size() - kMagicSize, 0) == 0;
 #if ERUPTION_LUAU_COMPILER
     lua_CompileOptions opts{};
-    opts.optimizationLevel = 1;
-    opts.debugLevel = 1; // linhas nas mensagens de erro
+    opts.optimizationLevel = g_debugCompile ? 0 : 1;
+    opts.debugLevel = g_debugCompile ? 2 : 1; // linhas nas mensagens de erro (e locais ao depurar)
     size_t size = 0;
     char* bc = luau_compile(data.data(), data.size(), &opts, &size);
     const bool ok = luau_load(L, chunkName.c_str(), bc, size, 0) == 0;
