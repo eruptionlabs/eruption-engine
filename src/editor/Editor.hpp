@@ -5,6 +5,7 @@
 #include "scene/SceneEdits.hpp"
 #include "formats/SpriteSheet.hpp"
 #include "editor/RemoteServer.hpp"
+#include "editor/AiClient.hpp"
 #include "editor/UndoStack.hpp"
 #include "core/Logger.hpp"
 #include "renderer/DeferredLighting.hpp"
@@ -269,6 +270,18 @@ private:
     bool m_showRemote = false;
     int m_remotePort = 7777;
     void drawRemoteWindow();
+    // Assistente de IA (EditorAI.cpp)
+    bool m_showAi = false;
+    struct AiState {
+        AiClient client;
+        std::string key;
+        char keyInput[256] = {};
+        char input[4096] = {};
+        bool promptReady = false;
+        size_t lastCount = 0;
+    } m_ai;
+    void drawAiWindow();
+    std::string m_pendingAiMessage; // teste
     struct TerrainBrush {
         int mode = 0; // 0 subir/baixar, 1 suavizar, 2 aplainar
         bool paint = false; // aba Paint: pinta camadas em vez de esculpir
