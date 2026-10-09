@@ -285,9 +285,10 @@ void PlayerController::updateMovement(float dt) {
                     // Mesma célula que o editor pinta (grade do terreno quando o mapa tem uma).
                     // Grade de caminhada + objetos sólidos (o pé deles, com o raio do corpo).
                     // Já dentro de um (nasceu ali, objeto movido por script): deixa sair.
-                    const bool stuck = m_engine->blockedAt(m_pos, 3.0f);
+                    const bool stuck = m_engine->blockedAt(m_pos, 3.0f) || m_engine->characterAt(m_pos, 3.0f);
                     auto isWalkable = [&](const Vec3& p) {
-                        return m_engine->navWalkable(p.x, p.z) && (stuck || !m_engine->blockedAt(p, 3.0f));
+                        return m_engine->navWalkable(p.x, p.z) &&
+                               (stuck || (!m_engine->blockedAt(p, 3.0f) && !m_engine->characterAt(p, 3.0f)));
                     };
                     Vec3 finalPos = m_pos;
                     if (isWalkable(Vec3(nextPos.x, m_pos.y, m_pos.z))) finalPos.x = nextPos.x;

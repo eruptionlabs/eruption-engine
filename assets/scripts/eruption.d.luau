@@ -71,6 +71,8 @@ declare player: {
     near: (model: Model, distance: number) -> boolean,
     -- True while the player stands in the trigger area.
     inside: (area: string) -> boolean,
+    -- Speech bubble over the player's head for `seconds` (default 3).
+    say: (text: string, seconds: number?) -> (),
 }
 
 declare characters: {
@@ -78,8 +80,11 @@ declare characters: {
     exists: (name: string) -> boolean,
     position: (name: string) -> vector,
     set_position: (name: string, position: vector) -> (),
-    -- Walks there in `seconds`, playing the walking animation.
+    -- Walks there around solid models and blocked ground, playing the walking
+    -- animation; `seconds` sets the pace (default: normal walking speed).
     walk_to: (name: string, position: vector, seconds: number?) -> (),
+    -- Speech bubble over the head for `seconds` (default 3).
+    say: (name: string, text: string, seconds: number?) -> (),
     walking: (name: string) -> boolean,
     face: (name: string, degrees: number) -> (),
     show: (name: string) -> (),
