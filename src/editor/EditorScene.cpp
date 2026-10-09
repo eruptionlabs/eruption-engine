@@ -46,6 +46,7 @@ void Editor::onMapReady() {
     m_original.lights = m_engine->deferredLighting().getPointLights();
     m_engine->loadScatter(m_engine->currentMapName());
     applySceneFile();
+    applyLayerVisibility();
 }
 
 void Editor::applySceneFile() {

@@ -407,6 +407,7 @@ public:
     // Anda quem tem caminho (só com o jogo rodando) e envia os sprites.
     void updateCharacters(float dt, bool moveAlongPaths);
     std::vector<SceneCharacter>& characters() { return m_characters; }
+    bool hideCharactersInView = false; // vista do editor
     // Retoque de terreno (core/TerrainEditing.cpp): grade de altura do mapa
     // (.ter) + delta salvo em assets/scenes/<mapa>.height.bin.
     struct HeightEdit {
