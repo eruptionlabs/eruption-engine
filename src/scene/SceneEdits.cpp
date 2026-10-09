@@ -7,7 +7,7 @@
 
 #include <lua.h>
 #include <lualib.h>
-#include <luacode.h>
+#include "script/LuauChunk.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/euler_angles.hpp>
@@ -162,11 +162,7 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     luaL_sandbox(L);
-    size_t size = 0;
-    char* bc = luau_compile(src.data(), src.size(), nullptr, &size);
-    const std::string chunk = "@" + file.generic_string();
-    bool ok = luau_load(L, chunk.c_str(), bc, size, 0) == 0 && lua_pcall(L, 0, 1, 0) == 0;
-    std::free(bc);
+    bool ok = loadLuauChunk(L, "@" + file.generic_string(), src) && lua_pcall(L, 0, 1, 0) == 0;
     if (!ok || !lua_istable(L, -1)) {
         error = ok ? file.generic_string() + ": the file must return a table" : lua_tostring(L, -1);
         lua_close(L);
@@ -484,11 +480,7 @@ bool Prefab::load(const fs::path& path, std::string& error) {
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     luaL_sandbox(L);
-    size_t size = 0;
-    char* bc = luau_compile(src.data(), src.size(), nullptr, &size);
-    const std::string chunk = "@" + path.generic_string();
-    const bool ok = luau_load(L, chunk.c_str(), bc, size, 0) == 0 && lua_pcall(L, 0, 1, 0) == 0;
-    std::free(bc);
+    const bool ok = loadLuauChunk(L, "@" + path.generic_string(), src) && lua_pcall(L, 0, 1, 0) == 0;
     if (!ok || !lua_istable(L, -1)) {
         error = ok ? path.generic_string() + ": the file must return a table" : lua_tostring(L, -1);
         lua_close(L);

@@ -8,7 +8,7 @@
 
 #include <lua.h>
 #include <lualib.h>
-#include <luacode.h>
+#include "script/LuauChunk.hpp"
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/matrix_transform.hpp>
@@ -136,11 +136,7 @@ int Engine::loadScatter(const std::string& map) {
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     luaL_sandbox(L);
-    size_t size = 0;
-    char* bc = luau_compile(src.data(), src.size(), nullptr, &size);
-    const std::string chunk = "@" + scatterPathFor(map).generic_string();
-    const bool ok = luau_load(L, chunk.c_str(), bc, size, 0) == 0 && lua_pcall(L, 0, 1, 0) == 0;
-    std::free(bc);
+    const bool ok = loadLuauChunk(L, "@" + scatterPathFor(map).generic_string(), src) && lua_pcall(L, 0, 1, 0) == 0;
     if (!ok || !lua_istable(L, -1)) {
         ERUPTION_LOG_ERROR("%s", ok ? "scatter file must return a table" : lua_tostring(L, -1));
         lua_close(L);

@@ -1,6 +1,7 @@
 #include "script/ScriptHost.hpp"
 
 #include "script/ScriptApi.hpp"
+#include "script/LuauChunk.hpp"
 #include "core/Engine.hpp"
 #include "core/Input.hpp"
 #include "core/Logger.hpp"
@@ -8,7 +9,6 @@
 
 #include <lua.h>
 #include <lualib.h>
-#include <luacode.h>
 #include <luacodegen.h>
 
 #include <imgui.h>
@@ -172,19 +172,12 @@ void ScriptHost::releaseHandlers(std::vector<Handler>& hs) {
 
 bool ScriptHost::load(Script& s, bool keepState) {
     const std::string source = readFile(s.path);
-    lua_CompileOptions opts{};
-    opts.optimizationLevel = 1;
-    opts.debugLevel = 1;
-    size_t bcSize = 0;
-    char* bytecode = luau_compile(source.data(), source.size(), &opts, &bcSize);
     const std::string chunk = "@" + s.path.generic_string();
 
     // Thread própria com ambiente isolado (sandbox) para o módulo.
     lua_State* T = lua_newthread(L);
     luaL_sandboxthread(T);
-    const int loadStatus = luau_load(T, chunk.c_str(), bytecode, bcSize, 0);
-    std::free(bytecode);
-    if (loadStatus != 0) {
+    if (!loadLuauChunk(T, chunk, source)) {
         Logger::error("%s", lua_tostring(T, -1));
         lua_pop(L, 1); // thread
         return false;

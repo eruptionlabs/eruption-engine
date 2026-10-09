@@ -27,6 +27,7 @@ struct ExportReport {
     size_t files = 0;
     uint64_t bytes = 0;
     std::vector<std::string> missing; // citado em algum arquivo mas não existe
+    size_t compiled = 0;               // .luau que foram como bytecode
     std::string error;
 };
 

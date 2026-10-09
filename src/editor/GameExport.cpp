@@ -1,5 +1,7 @@
 #include "editor/GameExport.hpp"
 
+#include "script/LuauChunk.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <deque>
@@ -108,7 +110,19 @@ ExportReport exportGame(const ExportOptions& o) {
     for (const auto& rel : files) {
         const fs::path dst = o.outDir / rel;
         fs::create_directories(dst.parent_path(), ec);
-        fs::copy_file(root / rel, dst, fs::copy_options::overwrite_existing, ec);
+        if (rel.extension() == ".luau") {
+            // Scripts e arquivos de cena vão compilados: o jogo não leva o compilador.
+            std::string err;
+            const std::string bc = compileLuauForExport(readText(root / rel), err);
+            if (bc.empty()) {
+                report.error = rel.generic_string() + ": " + err;
+                return report;
+            }
+            std::ofstream(dst, std::ios::binary | std::ios::trunc).write(bc.data(), std::streamsize(bc.size()));
+            ++report.compiled;
+        } else {
+            fs::copy_file(root / rel, dst, fs::copy_options::overwrite_existing, ec);
+        }
         if (ec) {
             report.error = "Could not copy " + rel.generic_string() + ": " + ec.message();
             return report;
