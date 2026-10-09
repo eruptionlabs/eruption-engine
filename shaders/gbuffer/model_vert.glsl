@@ -53,7 +53,7 @@ layout(location = 19) out vec4 outDispInfo;
 layout(location = 20) out vec3 outPrevWorldPos;
 #endif
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[];
+layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
 // Prefixo do FrameUBO compartilhado (ver model.frag) - só o que o vertex
 // stage precisa; um bloco menor que o buffer é válido com offsets idênticos.

@@ -6,7 +6,7 @@ layout(location = 1) in flat uint v_texIndex;
 layout(location = 2) in flat uint v_flags;
 layout(location = 3) in flat uint v_paletteIndex;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[];
+layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
 void main() {
     if ((v_flags & 512u) == 0) discard; // SpriteFlags::CastShadow = 1 << 9

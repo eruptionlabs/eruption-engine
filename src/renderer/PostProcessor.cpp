@@ -255,7 +255,7 @@ void PostProcessor::createDescriptors() {
     // proprias (descriptorBinding*BufferUpdateAfterBind) que nao habilitamos.
     std::vector<VkDescriptorBindingFlags> uabFlags(9, 0);
     for (uint32_t b = 0; b < 9; ++b)
-        if (bindings[b].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+        if (m_ctx->bindless() && bindings[b].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
             uabFlags[b] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo uabInfo{};
     uabInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
@@ -265,8 +265,9 @@ void PostProcessor::createDescriptors() {
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = 9;
     layoutInfo.pBindings = bindings;
-    layoutInfo.pNext = &uabInfo;
-    layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+    layoutInfo.pNext = m_ctx->bindless() ? &uabInfo : nullptr;
+    // Sem descriptor indexing nao ha' UPDATE_AFTER_BIND (caminho .nb).
+    if (m_ctx->bindless()) layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
     vkCreateDescriptorSetLayout(m_ctx->device(), &layoutInfo, nullptr, &m_descriptorSetLayout);
 
     uint32_t numSets = 32;
@@ -280,7 +281,7 @@ void PostProcessor::createDescriptors() {
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+    if (m_ctx->bindless()) poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     poolInfo.maxSets = numSets;
     poolInfo.poolSizeCount = 3;
     poolInfo.pPoolSizes = poolSizes;

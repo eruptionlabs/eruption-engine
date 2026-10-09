@@ -20,7 +20,7 @@ layout(location = 2) out vec4 outPBR;
 layout(location = 3) out uint outMaterialID;
 layout(location = 4) out vec4 outEmissive;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[];
+layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;

@@ -217,6 +217,7 @@ bool VulkanContext::beginFrame() {
     auto t0 = kDbgPresent ? Clk::now() : Clk::time_point{};
     vkWaitForFences(m_device, 1, &m_frameFences[m_currentFrame], VK_TRUE, UINT64_MAX);
     vkc::beginFrame(m_currentFrame);
+    for (auto& hook : m_frameBeginHooks) hook(m_currentFrame);
     auto t1 = kDbgPresent ? Clk::now() : Clk::time_point{};
 
     VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
@@ -755,6 +756,22 @@ bool VulkanContext::pickPhysicalDevice() {
     features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     features2.pNext = &m_descriptorIndexing;
     vkGetPhysicalDeviceFeatures2(m_physicalDevice, &features2);
+    {
+        const auto& di = m_descriptorIndexing;
+        const bool ext = deviceHasExtension(m_physicalDevice, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME) &&
+                         deviceHasExtension(m_physicalDevice, VK_KHR_MAINTENANCE3_EXTENSION_NAME);
+        const char* force = std::getenv("ERUPTION_NO_BINDLESS");
+        m_bindless = ext && di.runtimeDescriptorArray && di.descriptorBindingPartiallyBound &&
+                     di.shaderSampledImageArrayNonUniformIndexing &&
+                     di.descriptorBindingSampledImageUpdateAfterBind &&
+                     di.descriptorBindingVariableDescriptorCount && !(force && force[0] == '1');
+        if (!m_bindless) {
+            m_descriptorIndexing = {};
+            m_descriptorIndexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+            ERUPTION_LOG_WARN("No descriptor indexing%s: fixed texture array (%u slots, no-bindless shaders)",
+                              force ? " (forced by ERUPTION_NO_BINDLESS)" : "", ERUPTION_FALLBACK_TEX_SLOTS);
+        }
+    }
 
     // Qual GPU esta em uso era invisivel: o log "Selected GPU" e' INFO e o
     // projeto compila com nivel WARNING. Cair em software (llvmpipe) ou na
@@ -874,14 +891,16 @@ bool VulkanContext::createLogicalDevice() {
                          ? m_deviceProperties.limits.maxTessellationGenerationLevel
                          : 1u;
 
-    std::vector<const char*> deviceExtensions = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-        VK_KHR_MAINTENANCE3_EXTENSION_NAME,
-        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
-    };
+    std::vector<const char*> deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    if (m_bindless) {
+        deviceExtensions.push_back(VK_KHR_MAINTENANCE3_EXTENSION_NAME);
+        deviceExtensions.push_back(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
+    }
+    void* featureChain = m_bindless ? static_cast<void*>(&descIndexing) : nullptr;
     if (m_hasImageRobustness && robustness.robustImageAccess) {
         deviceExtensions.push_back(VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME);
-        descIndexing.pNext = &robustness;
+        robustness.pNext = featureChain;
+        featureChain = &robustness;
     }
 
     VkDeviceCreateInfo createInfo{};
@@ -891,7 +910,7 @@ bool VulkanContext::createLogicalDevice() {
     createInfo.pEnabledFeatures = &features;
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
     createInfo.ppEnabledExtensionNames = deviceExtensions.data();
-    createInfo.pNext = &descIndexing;
+    createInfo.pNext = featureChain;
 
 #ifdef ERUPTION_DEBUG
     // In modern Vulkan, device layers are deprecated and ignored.
@@ -1173,18 +1192,8 @@ bool VulkanContext::isDeviceSuitable(VkPhysicalDevice device) {
     VkPhysicalDeviceProperties devProps;
     vkGetPhysicalDeviceProperties(device, &devProps);
     if (devProps.apiVersion < VK_API_VERSION_1_1) return false;
-    if (!deviceHasExtension(device, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME) ||
-        !deviceHasExtension(device, VK_KHR_MAINTENANCE3_EXTENSION_NAME))
-        return false;
-    VkPhysicalDeviceDescriptorIndexingFeatures di{};
-    di.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
-    VkPhysicalDeviceFeatures2 features2{};
-    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    features2.pNext = &di;
-    vkGetPhysicalDeviceFeatures2(device, &features2);
-    if (!di.runtimeDescriptorArray || !di.descriptorBindingPartiallyBound ||
-        !di.shaderSampledImageArrayNonUniformIndexing || !di.descriptorBindingSampledImageUpdateAfterBind)
-        return false;
+    // Descriptor indexing NAO e' mais requisito: sem ele o motor usa o
+    // caminho de array fixo (ver bindless()).
 
     // The GBuffer uses 6 color attachments; make sure the device supports them.
     VkPhysicalDeviceProperties props;

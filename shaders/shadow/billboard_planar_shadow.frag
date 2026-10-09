@@ -9,7 +9,7 @@ layout(location = 4) in float v_softness;
 
 layout(location = 0) out vec4 outShadow;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[];
+layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
 layout(set = 1, binding = 0) uniform FrameUBO {
     mat4 u_view;
