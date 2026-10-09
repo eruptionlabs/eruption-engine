@@ -499,7 +499,57 @@ public:
         return it != m_texUvPerUnit.end() ? it->second : 0.0f;
     }
 
+    // ANIMAÇÃO POR ESQUELETO (ModelSkinning.cpp). Cada instância de malha com
+    // skin tem uma cópia da malha com buffer de vértices próprio; a cada frame
+    // a CPU amostra a animação (matrizes dos ossos) e um compute shader escreve
+    // posição e normal animadas nele. Sombra, G-buffer e o resto desenham essa
+    // cópia como uma malha qualquer.
+    void updateSkinning(VkCommandBuffer cmd, float dt);
+    bool isSkinned(uint32_t instance) const { return m_skinnedByInstance.count(instance) != 0; }
+    std::vector<std::string> animationsOf(uint32_t instance) const;
+    // Toca a animação pelo nome (vazio = pose de repouso). Falso se não existe.
+    bool playAnimation(uint32_t instance, const std::string& name, bool loop = true, float speed = 1.0f);
+    std::string currentAnimation(uint32_t instance) const;
+    size_t skinnedCount() const { return m_skinned.size(); }
+
 private:
+    struct SkinBase {
+        std::shared_ptr<const SkinRig> rig;
+        int skin = -1;
+        uint32_t vertexCount = 0;
+        VkBuffer skinBuffer = VK_NULL_HANDLE; // ossos e pesos por vértice
+        VmaAllocation skinAlloc = VK_NULL_HANDLE;
+        std::vector<float> jointRadius;       // alcance dos vértices de cada osso (limites)
+    };
+    struct SkinnedInstance {
+        uint32_t instance = 0, baseMesh = 0, mesh = 0;
+        VkBuffer out = VK_NULL_HANDLE;
+        VmaAllocation outAlloc = VK_NULL_HANDLE;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        bool needsInit = true;
+        int anim = -1;
+        float time = 0.0f, speed = 1.0f;
+        bool loop = true;
+    };
+    std::unordered_map<uint32_t, SkinBase> m_skinBases; // malha base -> skin
+    std::vector<SkinnedInstance> m_skinned;
+    std::unordered_map<uint32_t, size_t> m_skinnedByInstance;
+    VkDescriptorSetLayout m_skinSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_skinPipeLayout = VK_NULL_HANDLE;
+    VkPipeline m_skinPipeline = VK_NULL_HANDLE;
+    std::vector<VkDescriptorPool> m_skinPools;
+    VkBuffer m_jointRing = VK_NULL_HANDLE; // matrizes dos ossos, uma faixa por frame em voo
+    VmaAllocation m_jointRingAlloc = VK_NULL_HANDLE;
+    glm::mat4* m_jointMapped = nullptr;
+    static constexpr uint32_t kJointsPerFrame = 16384;
+    bool m_skinGpuFailed = false;
+    void registerSkinBase(uint32_t mesh, const ModelAsset& asset, const ModelNode& node,
+                          const std::vector<struct TerrainVertex>& vertices);
+    void makeSkinnedInstance(uint32_t instance);
+    bool ensureSkinGpu();
+    void releaseSkinned(SkinnedInstance& s);
+    void clearSkinning(bool destroyPipeline);
+
     VulkanContext* m_ctx = nullptr;
     BindlessDescriptor* m_bindless = nullptr;
 

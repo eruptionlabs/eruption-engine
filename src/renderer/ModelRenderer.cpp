@@ -550,6 +550,7 @@ void ModelRenderer::shutdown() {
     m_instCapacity = 0;
 
     clear();
+    clearSkinning(true);
     if (m_tessPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_tessPipeline, nullptr);
         m_tessPipeline = VK_NULL_HANDLE;
@@ -576,6 +577,7 @@ void ModelRenderer::shutdown() {
 }
 
 void ModelRenderer::clear() {
+    clearSkinning(false);
     for (auto& mesh : m_meshes) {
         mesh.shutdown(m_ctx);
     }
@@ -1183,11 +1185,15 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             // vértice inteiro, então a imagem não muda.
             // ERUPTION_NO_REINDEX=1 volta ao comportamento antigo (A/B).
             static const bool kNoReindex = std::getenv("ERUPTION_NO_REINDEX") != nullptr;
+            // Skin: ossos e pesos seguem a ordem dos vértices do parser; malha
+            // com skin não é soldada nem ganha LOD (os pesos não iriam junto).
+            const bool skinnedNode = node.skin >= 0 && asset.rig && node.skinJoints.size() == node.vertices.size() * 2 &&
+                                     node.skinWeights.size() == node.vertices.size();
             const size_t reVtxCountBefore = vertices.size();
             const std::vector<uint32_t>* useIndices = &node.indices;
             std::vector<uint32_t> reIdx;
             std::vector<unsigned char> reVtx;
-            if (!kNoReindex && !vertices.empty() &&
+            if (!kNoReindex && !skinnedNode && !vertices.empty() &&
                 reindexMesh(vertices.data(), vertices.size(), sizeof(TerrainVertex),
                             node.indices, reVtx, reIdx)) {
                 vertices.assign(
@@ -1406,7 +1412,8 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                 VkDeviceSize vertexSize = vertices.size() * sizeof(TerrainVertex);
                 VkDeviceSize indexSize = useIndices->size() * sizeof(uint32_t);
                 
-                m_ctx->createBuffer(vertexSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                m_ctx->createBuffer(vertexSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, // o skinning lê a pose de bind daqui
                     VMA_MEMORY_USAGE_GPU_ONLY, mesh.vertexBuffer, mesh.vertexAlloc);
                 m_ctx->createBuffer(indexSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                     VMA_MEMORY_USAGE_GPU_ONLY, mesh.indexBuffer, mesh.indexAlloc);
@@ -1520,7 +1527,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             // geometria entre instâncias resolveu memória, mas não reduz o
             // que é rasterizado - só LOD reduz, e é o que decide se o mapa
             // roda na 930M.
-            if (m_meshLodRatio > 0.0f && meshLodAvailable() &&
+            if (m_meshLodRatio > 0.0f && meshLodAvailable() && !skinnedNode &&
                 useIndices->size() >= kMeshLodMinIndices &&
                 useIndices->size() >= size_t(m_meshLodMinTris) * 3 && !vertices.empty()) {
                 MeshLodResult lod = simplifyMesh(&vertices[0].position.x,
@@ -1752,6 +1759,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
 
             m_meshes.push_back(mesh);
             meshIndices[n] = static_cast<uint32_t>(m_meshes.size() - 1);
+            if (skinnedNode) registerSkinBase(meshIndices[n], asset, node, vertices);
             // Editor: o chão fica com cópia na CPU para o pincel de terreno.
             if (m_keepGroundVertices && mesh.isGround) m_groundCpu[meshIndices[n]] = vertices;
         }
@@ -1865,6 +1873,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
         );
         inst.boundingRadius = glm::length(worldSize) * 0.5f;
         m_instances.push_back(inst);
+        if (m_skinBases.count(meshIdx)) makeSkinnedInstance(static_cast<uint32_t>(m_instances.size() - 1));
 
         // Detect animated nodes
         bool isAnimated = node.scaleKeyframes.size() >= 2 || node.rotKeyframes.size() >= 2 || node.posKeyframes.size() >= 2;
@@ -1937,7 +1946,17 @@ uint32_t ModelRenderer::duplicateBatch(const std::vector<std::pair<uint32_t, Mat
         copy.worldAabbMax = wMax;
         copy.worldCenter = (wMin + wMax) * 0.5f;
         copy.boundingRadius = glm::length(wMax - wMin) * 0.5f;
+        const auto sk = m_skinnedByInstance.find(src);
+        if (sk != m_skinnedByInstance.end()) copy.meshIndex = m_skinned[sk->second].baseMesh;
         m_instances.push_back(std::move(copy));
+        if (sk != m_skinnedByInstance.end()) {
+            const SkinnedInstance from = m_skinned[sk->second];
+            makeSkinnedInstance(static_cast<uint32_t>(m_instances.size() - 1));
+            SkinnedInstance& to = m_skinned.back();
+            to.anim = from.anim;
+            to.loop = from.loop;
+            to.speed = from.speed;
+        }
     }
     rebuildHotData();
     return first;
@@ -2128,6 +2147,29 @@ std::vector<std::string> ModelRenderer::releaseAsset(const std::string& filePath
         m_vertexPatches.erase(mi);
     }
     m_modelMeshCache.erase(it);
+    // Instâncias animadas dessas malhas: a cópia sai junto (usava o index buffer da base).
+    for (size_t k = 0; k < m_skinned.size();) {
+        if (std::find(seen.begin(), seen.end(), m_skinned[k].baseMesh) == seen.end()) {
+            ++k;
+            continue;
+        }
+        ModelMeshGPU empty{};
+        empty.isExternal = true;
+        m_meshes[m_skinned[k].mesh] = empty;
+        releaseSkinned(m_skinned[k]);
+        m_skinned.erase(m_skinned.begin() + static_cast<std::ptrdiff_t>(k));
+    }
+    m_skinnedByInstance.clear();
+    for (size_t k = 0; k < m_skinned.size(); ++k) m_skinnedByInstance[m_skinned[k].instance] = k;
+    for (uint32_t mi : seen) {
+        auto b = m_skinBases.find(mi);
+        if (b == m_skinBases.end()) continue;
+        VmaAllocator allocator = m_ctx->allocator();
+        VkBuffer buf = b->second.skinBuffer;
+        VmaAllocation alloc = b->second.skinAlloc;
+        if (buf) m_ctx->deferFrameCleanup([allocator, buf, alloc] { vmaDestroyBuffer(allocator, buf, alloc); });
+        m_skinBases.erase(b);
+    }
     for (auto it2 = m_footprintCache.begin(); it2 != m_footprintCache.end();)
         it2 = it2->first.rfind(filePath + "#", 0) == 0 ? m_footprintCache.erase(it2) : std::next(it2);
     for (auto& a : m_lastModels)
@@ -3407,8 +3449,19 @@ uint32_t ModelRenderer::duplicateInstance(uint32_t source, const std::string& na
     ModelInstance copy = m_instances[source];
     copy.name = name;
     copy.enabled = true;
+    const auto sk = m_skinnedByInstance.find(source);
+    if (sk != m_skinnedByInstance.end()) copy.meshIndex = m_skinned[sk->second].baseMesh;
     m_instances.push_back(std::move(copy));
     const uint32_t idx = static_cast<uint32_t>(m_instances.size() - 1);
+    if (sk != m_skinnedByInstance.end()) {
+        // Cópia animada: malha própria, mesma animação.
+        const SkinnedInstance from = m_skinned[sk->second];
+        makeSkinnedInstance(idx);
+        SkinnedInstance& to = m_skinned.back();
+        to.anim = from.anim;
+        to.loop = from.loop;
+        to.speed = from.speed;
+    }
     setInstanceTransform(idx, transform); // refaz AABB e o espelho quente
     return idx;
 }

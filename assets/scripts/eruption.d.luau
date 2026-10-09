@@ -145,6 +145,13 @@ declare models: {
     -- Solid models block the player (the bottom of the model: trunk, wall base).
     solid: (model: Model) -> boolean,
     set_solid: (model: Model, solid: boolean) -> (),
+    -- Models with a skeleton (.glb with skin): plays the animation by name
+    -- ("" = rest pose). loop defaults to true, speed to 1. False if it doesn't exist.
+    play: (model: Model, animation: string, loop: boolean?, speed: number?) -> boolean,
+    -- Animation playing now ("" = rest pose).
+    animation: (model: Model) -> string,
+    -- Names of the animations in the model file.
+    animations: (model: Model) -> {string},
 }
 
 -- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a

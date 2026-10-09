@@ -195,6 +195,20 @@ SceneEdits Editor::currentEdits() const {
             e.objects.push_back(std::move(o));
         }
     }
+    // Animação inicial dos modelos com esqueleto.
+    for (uint32_t i = 0; i < insts.size(); ++i) {
+        const std::string anim = m_engine->modelRenderer().currentAnimation(i);
+        if (anim.empty() || !insts[i].enabled || insts[i].name.empty() || m_engine->isRegionInstance(i)) continue;
+        auto it = std::find_if(e.objects.begin(), e.objects.end(), [&](const SceneEdits::Object& o) { return o.name == insts[i].name; });
+        if (it != e.objects.end()) {
+            it->animation = anim;
+        } else {
+            SceneEdits::Object o;
+            o.name = insts[i].name;
+            o.animation = anim;
+            e.objects.push_back(std::move(o));
+        }
+    }
     for (const auto& a : m_engine->areas())
         if (!a.removed && !a.fromNeighbor) e.areas.push_back({a.name, a.center, a.size, a.yaw});
     for (const auto& snd : m_engine->soundEmitters())

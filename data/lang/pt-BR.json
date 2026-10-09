@@ -5,6 +5,7 @@
  "%s: syntax OK": "%s: sintaxe certa",
  "(no sound found in the project)": "(nenhum som no projeto)",
  "(none)": "(nenhum)",
+ "(rest pose)": "(pose de repouso)",
  "(the project plays sound)": "(o projeto toca som)",
  "+ %zu more selected: the tools move, rotate, scale, delete and duplicate all of them.": "+ %zu outros selecionados: as ferramentas movem, giram, escalam, apagam e duplicam todos.",
  "+ Add layer (PNG selected in Project)": "+ Camada (PNG selecionado no Projeto)",
@@ -31,6 +32,7 @@
  "Allow walking": "Liberar",
  "Along": "No comprimento",
  "Always snap to the grid steps. Holding Ctrl while dragging does the same.": "Sempre encaixa nos passos da grade. Segurar Ctrl ao arrastar faz o mesmo.",
+ "Animation": "Animação",
  "Areas": "Áreas",
  "Asset": "Arquivo",
  "Auto-scroll": "Rolar sozinho",
@@ -265,6 +267,7 @@
  "Player start": "Início do jogador",
  "Playing. F5 or Shift+F5 stops and restores the scene.": "Jogando. F5 ou Shift+F5 para e devolve a cena.",
  "Plays in a loop while the game runs (Play).": "Toca em laço enquanto o jogo roda (Play).",
+ "Plays when the map opens; scripts can change it (models.play).": "Toca ao abrir o mapa; os scripts podem trocar (models.play).",
  "Point Light": "Luz pontual",
  "Point lights: %zu": "Luzes pontuais: %zu",
  "Port": "Porta",
@@ -438,5 +441,6 @@
  "Writes what you changed in this map to assets/scenes/<map>.scene.luau. The game loads it too.": "Grava o que você mudou neste mapa em assets/scenes/<mapa>.scene.luau. O jogo também carrega.",
  "choose a map": "escolha um mapa",
  "drag them from the Project panel": "arraste do painel Projeto",
- "{1} follows the player, {2} away": "{1} segue o jogador, a {2} de distância"
+ "{1} follows the player, {2} away": "{1} segue o jogador, a {2} de distância",
+ "{1} plays the animation {2} (loop: {3})": "{1} toca a animação {2} (repetir: {3})"
 }

@@ -724,6 +724,26 @@ void Editor::drawInspector() {
                              [engine, idx, solid] { engine->setSolid(idx, solid); }});
             }
             ImGui::SetItemTooltip("%s", tr("The player can't walk through the bottom of this model (trunk, wall base)."));
+            if (m_engine->modelRenderer().isSkinned(static_cast<uint32_t>(m_selection.index))) {
+                // Modelo com esqueleto: a animação que toca ao abrir o mapa (fica na cena).
+                const uint32_t idx = static_cast<uint32_t>(m_selection.index);
+                ModelRenderer& mr = m_engine->modelRenderer();
+                const std::string cur = mr.currentAnimation(idx);
+                propertyLabel("Animation");
+                if (ImGui::BeginCombo("##anim", cur.empty() ? tr("(rest pose)") : cur.c_str())) {
+                    std::vector<std::string> names = mr.animationsOf(idx);
+                    names.insert(names.begin(), std::string());
+                    for (const auto& a : names) {
+                        if (ImGui::Selectable(a.empty() ? tr("(rest pose)") : a.c_str(), a == cur) && a != cur) {
+                            mr.playAnimation(idx, a);
+                            m_undo.push({"Animation " + name, [&mr, idx, cur] { mr.playAnimation(idx, cur); },
+                                         [&mr, idx, a] { mr.playAnimation(idx, a); }});
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip("%s", tr("Plays when the map opens; scripts can change it (models.play)."));
+            }
             propertyLabel("Asset");
             ImGui::TextWrapped("%s", inst.assetPath.empty() ? "(embedded in the map)" : inst.assetPath.c_str());
             const Vec3 size = inst.worldAabbMax - inst.worldAabbMin;

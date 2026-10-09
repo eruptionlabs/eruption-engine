@@ -92,6 +92,7 @@ public:
             // slow" — the two look identical as a high frame time.
             auto _t0 = std::chrono::steady_clock::now();
             float dt = advanceFrame();
+            m_frameDt = dt;
             auto _t1 = std::chrono::steady_clock::now();
             app.onUpdate(dt);
             auto _t2 = std::chrono::steady_clock::now();
@@ -1335,6 +1336,7 @@ private:
     float m_cpuUpdateMs = 0.0f;     // whole loop iteration (present -> present)
     float m_cpuBeginFrameMs = 0.0f; // blocked in beginFrame (fence + acquire)
     float m_cpuAdvanceMs = 0.0f;    // advanceFrame(): sim, weather, clouds, streaming
+    float m_frameDt = 0.0f; // dt do frame (animação por esqueleto no render)
     float m_cpuAppUpdateMs = 0.0f;  // app.onUpdate(): gameplay/controller
     float m_cpuRenderMs = 0.0f;     // render(): command recording + submit
     float m_cpuTailMs = 0.0f;       // onRender + input + profiler commit

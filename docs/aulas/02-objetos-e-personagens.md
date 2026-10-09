@@ -19,6 +19,14 @@ desenhar um retângulo. Mover, girar, apagar e duplicar (**Ctrl+D**) valem para 
 No **Inspetor > Modelo**, marque **Sólido**: o jogador não atravessa a base do modelo
 (o tronco de uma árvore, a parede de uma casa — a copa não conta).
 
+## Modelos animados
+
+Um `.glb` com esqueleto e animações (exportado do Blender, por exemplo) anima no
+motor. Selecione o modelo: no **Inspetor > Modelo**, **Animação** lista as animações
+do arquivo. A escolhida toca ao abrir o mapa (e já aparece mexendo no editor).
+Nas regras: *[modelo] toca a animação [nome] (repetir: [true])*; no código,
+`models.play("modelo", "andar")`.
+
 ## Prefab
 
 Ajustou um modelo (giro, tamanho)? **Editar > Salvar como prefab...** guarda isso em

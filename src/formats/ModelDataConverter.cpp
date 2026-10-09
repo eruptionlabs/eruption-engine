@@ -11,6 +11,7 @@ ModelAsset convertModelToAsset(const ModelFile& model) {
     out.boxMax = model.box.max;
     out.skipMainOffset = model.skipMainOffset;
     out.textures = model.textures;
+    out.rig = model.rig;
 
     if (model.animation.has_value()) {
         out.animDuration = model.animation->duration;
@@ -56,6 +57,9 @@ ModelAsset convertModelToAsset(const ModelFile& model) {
         n.aabbMin = node.box.min;
         n.aabbMax = node.box.max;
         n.geometryShareIndex = node.geometryShareIndex;
+        n.skin = node.skin;
+        n.skinJoints = node.skinJoints;
+        n.skinWeights = node.skinWeights;
 
         n.scaleKeyframes.reserve(node.scaleKeyframes.size());
         for (const auto& k : node.scaleKeyframes) {
