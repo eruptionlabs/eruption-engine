@@ -1,6 +1,7 @@
 // Painéis Hierarquia, Inspetor, Projeto e Console, mais a seleção e as
 // edições com desfazer.
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 #include "editor/EditorTheme.hpp"
 
 #include "core/Engine.hpp"
@@ -60,14 +61,14 @@ bool isPreviewableImage(const std::filesystem::path& p) {
 
 void emptyState(const char* text) {
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("%s", text);
+    ImGui::TextDisabled("%s", tr(text));
     ImGui::PopTextWrapPos();
 }
 
 // Linha de propriedade: rótulo à esquerda, campo ocupando o resto.
 void propertyLabel(const char* label) {
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    ImGui::TextUnformatted(tr(label));
     ImGui::SameLine(96.0f);
     ImGui::SetNextItemWidth(-28.0f);
 }
@@ -78,7 +79,7 @@ bool resetButton(const char* id, bool changed) {
     const bool pressed = ImGui::SmallButton(id);
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Reset to default");
+        ImGui::SetTooltip("%s", tr("Reset to default"));
     return pressed;
 }
 
@@ -149,7 +150,7 @@ std::string Editor::selectionName(const Selection& s) const {
             const auto& cs = m_engine->characters();
             return s.index >= 0 && s.index < static_cast<int>(cs.size()) ? cs[static_cast<size_t>(s.index)].name : std::string();
         }
-        case SelectionKind::Environment: return "Environment";
+        case SelectionKind::Environment: return tr("Environment");
         case SelectionKind::Asset: return m_asset.path.filename().string();
         case SelectionKind::None: break;
     }
@@ -320,10 +321,10 @@ void Editor::restoreSelection(const Selection& s) {
 // ---------------------------------------------------------------- hierarquia
 
 void Editor::drawHierarchy() {
-    if (!ImGui::Begin("Hierarchy###Hierarchy", &m_showHierarchy)) { ImGui::End(); return; }
+    if (!ImGui::Begin(trw("Hierarchy###Hierarchy"), &m_showHierarchy)) { ImGui::End(); return; }
 
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##hfilter", "Search objects...", m_hierarchyFilter, sizeof(m_hierarchyFilter));
+    ImGui::InputTextWithHint("##hfilter", tr("Search objects..."), m_hierarchyFilter, sizeof(m_hierarchyFilter));
 
     if (m_engine->currentMapName().empty()) {
         emptyState("Nothing here yet. Open a map with File > Open Map (Ctrl+O).");
@@ -350,15 +351,15 @@ void Editor::drawHierarchy() {
         }
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) frameSelection();
         if (ImGui::BeginPopupContextItem()) {
-            if (ImGui::MenuItem("Frame", "F", false, s.kind != SelectionKind::Environment)) frameSelection();
+            if (ImGui::MenuItem(tr("Frame"), "F", false, s.kind != SelectionKind::Environment)) frameSelection();
             if (enabled) {
-                if (ImGui::MenuItem("Delete", "Delete", false, s.kind != SelectionKind::Environment)) deleteSelection();
-            } else if (ImGui::MenuItem("Restore")) {
+                if (ImGui::MenuItem(tr("Delete"), "Delete", false, s.kind != SelectionKind::Environment)) deleteSelection();
+            } else if (ImGui::MenuItem(tr("Restore"))) {
                 restoreSelection(s);
             }
             if (s.kind == SelectionKind::Model && enabled) {
                 ImGui::Separator();
-                if (ImGui::MenuItem("Save as Prefab...")) {
+                if (ImGui::MenuItem(tr("Save as Prefab..."))) {
                     select(s);
                     m_commands.run("edit.save_prefab");
                 }
@@ -368,14 +369,14 @@ void Editor::drawHierarchy() {
     };
 
     if (icontains("Environment", m_hierarchyFilter))
-        row({SelectionKind::Environment, 0}, "Environment", true);
+        row({SelectionKind::Environment, 0}, tr("Environment"), true);
     if (m_engine->hasPlayerStart() && icontains("Player Start", m_hierarchyFilter))
-        row({SelectionKind::Spawn, 0}, "Player Start", true);
+        row({SelectionKind::Spawn, 0}, tr("Player Start"), true);
 
     const auto& lights = m_engine->m_deferredLighting.getPointLights();
     if (!lights.empty()) {
         char hdr[64];
-        std::snprintf(hdr, sizeof(hdr), "Lights (%zu)###lights", lights.size());
+        std::snprintf(hdr, sizeof(hdr), "%s (%zu)###lights", tr("Lights"), lights.size());
         if (ImGui::TreeNodeEx(hdr, ImGuiTreeNodeFlags_SpanAvailWidth)) {
             for (size_t i = 0; i < lights.size(); ++i) {
                 const Selection s{SelectionKind::Light, static_cast<int>(i)};
@@ -394,7 +395,7 @@ void Editor::drawHierarchy() {
     for (const auto& a : areas) liveAreas += a.removed || a.fromNeighbor ? 0 : 1;
     if (liveAreas) {
         char ahdr[64];
-        std::snprintf(ahdr, sizeof(ahdr), "Areas (%zu)###areas", liveAreas);
+        std::snprintf(ahdr, sizeof(ahdr), "%s (%zu)###areas", tr("Areas"), liveAreas);
         ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
         if (ImGui::TreeNodeEx(ahdr, ImGuiTreeNodeFlags_SpanAvailWidth)) {
             for (size_t i = 0; i < areas.size(); ++i) {
@@ -412,7 +413,7 @@ void Editor::drawHierarchy() {
     for (const auto& c : chars) liveChars += c.removed || c.fromNeighbor ? 0 : 1;
     if (liveChars) {
         char chdr[64];
-        std::snprintf(chdr, sizeof(chdr), "Characters (%zu)###characters", liveChars);
+        std::snprintf(chdr, sizeof(chdr), "%s (%zu)###characters", tr("Characters"), liveChars);
         ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
         if (ImGui::TreeNodeEx(chdr, ImGuiTreeNodeFlags_SpanAvailWidth)) {
             for (size_t i = 0; i < chars.size(); ++i) {
@@ -460,7 +461,7 @@ void Editor::drawHierarchy() {
         g.items.push_back(i);
         g.hasSelected |= isSelected({SelectionKind::Model, i});
     }
-    Group other{"Other", {}};
+    Group other{tr("Other"), {}};
     for (auto& g : groups)
         if (g.items.size() == 1) {
             other.items.push_back(g.items.front());
@@ -487,7 +488,7 @@ void Editor::drawHierarchy() {
         ImGui::TreePop();
     };
     char hdr[64];
-    std::snprintf(hdr, sizeof(hdr), "Models (%zu)###models", visible.size());
+    std::snprintf(hdr, sizeof(hdr), "%s (%zu)###models", tr("Models"), visible.size());
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     if (ImGui::TreeNodeEx(hdr, ImGuiTreeNodeFlags_SpanAvailWidth)) {
         int id = 0;
@@ -515,7 +516,7 @@ void Editor::drawHierarchy() {
 // ---------------------------------------------------------------- inspetor
 
 void Editor::drawInspector() {
-    if (!ImGui::Begin("Inspector###Inspector", &m_showInspector)) { ImGui::End(); return; }
+    if (!ImGui::Begin(trw("Inspector###Inspector"), &m_showInspector)) { ImGui::End(); return; }
 
     if (m_tool == Tool::Terrain) {
         drawTerrainPanel();
@@ -536,9 +537,9 @@ void Editor::drawInspector() {
 
     if (m_selection.kind == SelectionKind::Environment) {
         DayNightCycle& dn = m_engine->dayNightCycle();
-        ImGui::TextColored(kAccent, "Environment");
+        ImGui::TextColored(kAccent, "%s", tr("Environment"));
         ImGui::Separator();
-        if (ImGui::CollapsingHeader("Time of Day", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader(tr("Time of Day"), ImGuiTreeNodeFlags_DefaultOpen)) {
             int minutes = static_cast<int>(dn.timeOfDay() * 1440.0f);
             char clock[16];
             std::snprintf(clock, sizeof(clock), "%02d:%02d", minutes / 60, minutes % 60);
@@ -553,12 +554,12 @@ void Editor::drawInspector() {
                 dn.setPaused(!running);
                 m_envEdited = true;
             }
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Let time pass on its own");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", tr("Let time pass on its own"));
             float scale = dn.timeScale();
             propertyLabel("Speed");
             if (ImGui::SliderFloat("##speed", &scale, 0.1f, 8.0f, "%.1fx", ImGuiSliderFlags_Logarithmic)) dn.setTimeScale(scale);
         }
-        if (ImGui::CollapsingHeader("Weather", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader(tr("Weather"), ImGuiTreeNodeFlags_DefaultOpen)) {
             const WeatherType cur = m_engine->weatherSystem().currentType();
             propertyLabel("Type");
             if (ImGui::BeginCombo("##weather", weatherTypeName(cur))) {
@@ -572,7 +573,7 @@ void Editor::drawInspector() {
                 ImGui::EndCombo();
             }
         }
-        if (ImGui::CollapsingHeader("Water", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader(tr("Water"), ImGuiTreeNodeFlags_DefaultOpen)) {
             static float level = 0.0f;
             bool on = m_engine->waterEnabled();
             if (!ImGui::IsAnyItemActive()) level = m_engine->waterLevel();
@@ -581,7 +582,7 @@ void Editor::drawInspector() {
                 m_engine->setWaterLevel(on, level);
                 m_envEdited = m_waterEdited = true;
             }
-            ImGui::SetItemTooltip("A flat water surface over the whole map. Lower the ground below it (Terrain tool) to make lakes.");
+            ImGui::SetItemTooltip("%s", tr("A flat water surface over the whole map. Lower the ground below it (Terrain tool) to make lakes."));
             ImGui::BeginDisabled(!on);
             propertyLabel("Level");
             ImGui::DragFloat("##wlevel", &level, 0.25f, -1000.0f, 5000.0f, "%.1f");
@@ -591,7 +592,7 @@ void Editor::drawInspector() {
             }
             ImGui::EndDisabled();
         }
-        if (ImGui::CollapsingHeader("Neighbor maps", ImGuiTreeNodeFlags_DefaultOpen)) drawNeighborMaps();
+        if (ImGui::CollapsingHeader(tr("Neighbor maps"), ImGuiTreeNodeFlags_DefaultOpen)) drawNeighborMaps();
         ImGui::End();
         return;
     }
@@ -605,10 +606,10 @@ void Editor::drawInspector() {
     const std::string name = selectionName(m_selection);
     ImGui::TextColored(kAccent, "%s", name.c_str());
     if (const size_t more = selectionList().size(); more > 1)
-        ImGui::TextDisabled("+ %zu more selected: the tools move, rotate, scale, delete and duplicate all of them.", more - 1);
+        ImGui::TextDisabled(tr("+ %zu more selected: the tools move, rotate, scale, delete and duplicate all of them."), more - 1);
     ImGui::Separator();
 
-    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader(tr("Transform"), ImGuiTreeNodeFlags_DefaultOpen)) {
         const Mat4 current = selectionTransform();
         float t[3], r[3], s[3];
         ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(current), t, r, s);
@@ -659,7 +660,7 @@ void Editor::drawInspector() {
 
     if (m_selection.kind == SelectionKind::Model) {
         const ModelInstance& inst = m_engine->modelRenderer().getInstances()[static_cast<size_t>(m_selection.index)];
-        if (ImGui::CollapsingHeader("Model", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader(tr("Model"), ImGuiTreeNodeFlags_DefaultOpen)) {
             bool visible = inst.enabled;
             propertyLabel("Visible");
             if (ImGui::Checkbox("##visible", &visible)) {
@@ -682,17 +683,17 @@ void Editor::drawInspector() {
                 m_undo.push({std::string(solid ? "Solid " : "Not solid ") + name, [engine, idx, solid] { engine->setSolid(idx, !solid); },
                              [engine, idx, solid] { engine->setSolid(idx, solid); }});
             }
-            ImGui::SetItemTooltip("The player can't walk through the bottom of this model (trunk, wall base).");
+            ImGui::SetItemTooltip("%s", tr("The player can't walk through the bottom of this model (trunk, wall base)."));
             propertyLabel("Asset");
             ImGui::TextWrapped("%s", inst.assetPath.empty() ? "(embedded in the map)" : inst.assetPath.c_str());
             const Vec3 size = inst.worldAabbMax - inst.worldAabbMin;
             propertyLabel("Size");
-            ImGui::Text("%.2f x %.2f x %.2f", size.x, size.y, size.z);
+            ImGui::Text(tr("%.2f x %.2f x %.2f"), size.x, size.y, size.z);
         }
     } else if (m_selection.kind == SelectionKind::Light) {
         auto& lights = m_engine->m_deferredLighting.getPointLights();
         PointLight& light = lights[static_cast<size_t>(m_selection.index)];
-        if (ImGui::CollapsingHeader("Point Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader(tr("Point Light"), ImGuiTreeNodeFlags_DefaultOpen)) {
             static PointLight before;
             static bool editing = false;
             bool activated = false, finished = false;
@@ -716,7 +717,7 @@ void Editor::drawInspector() {
             propertyLabel("Night only");
             ImGui::Checkbox("##night", &light.nightOnly);
             if (ImGui::IsItemDeactivatedAfterEdit()) { activated = finished = true; }
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Lit only at night (lamps, lanterns)");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", tr("Lit only at night (lamps, lanterns)"));
             if (activated && !editing) { editing = true; before = snapshot; }
             if (finished && editing) {
                 editing = false;
@@ -733,7 +734,7 @@ void Editor::drawInspector() {
         }
     } else if (m_selection.kind == SelectionKind::Area) {
         Engine::TriggerArea& a = m_engine->areas()[static_cast<size_t>(m_selection.index)];
-        if (ImGui::CollapsingHeader("Trigger Area", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader(tr("Trigger Area"), ImGuiTreeNodeFlags_DefaultOpen)) {
             propertyLabel("Name");
             char buf[128];
             std::snprintf(buf, sizeof(buf), "%s", a.name.c_str());
@@ -749,25 +750,25 @@ void Editor::drawInspector() {
                 rename(after);
                 m_undo.push({"Rename area", [rename, before] { rename(before); }, [rename, after] { rename(after); }});
             }
-            ImGui::SetItemTooltip("Rules and scripts use this name: on.enter(\"name\", ...). Press Enter to rename.");
-            ImGui::TextWrapped("Fires \"enter\" and \"leave\" when the player walks in and out. Move, Rotate and Scale "
-                               "tools change the box.");
+            ImGui::SetItemTooltip("%s", tr("Rules and scripts use this name: on.enter(\"name\", ...). Press Enter to rename."));
+            ImGui::TextWrapped("%s", tr("Fires \"enter\" and \"leave\" when the player walks in and out. Move, Rotate and Scale "
+                               "tools change the box."));
         }
     } else if (m_selection.kind == SelectionKind::Character) {
         Engine::SceneCharacter& c = m_engine->characters()[static_cast<size_t>(m_selection.index)];
-        if (ImGui::CollapsingHeader("Character", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader(tr("Character"), ImGuiTreeNodeFlags_DefaultOpen)) {
             propertyLabel("Name");
             char buf[128];
             std::snprintf(buf, sizeof(buf), "%s", c.name.c_str());
             if (ImGui::InputText("##name", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue) && buf[0] &&
                 m_engine->findCharacter(buf) < 0)
                 c.name = buf;
-            ImGui::SetItemTooltip("Scripts and rules find the character by this name. Press Enter to rename.");
+            ImGui::SetItemTooltip("%s", tr("Scripts and rules find the character by this name. Press Enter to rename."));
             propertyLabel("Sprite");
             ImGui::TextWrapped("%s", c.sprite.c_str());
             const bool pngSelected = std::filesystem::path(m_projectSelected).extension() == ".png";
             ImGui::BeginDisabled(!pngSelected);
-            if (ImGui::Button("Use PNG selected in Project")) {
+            if (ImGui::Button(tr("Use PNG selected in Project"))) {
                 std::error_code ec;
                 const auto rel = std::filesystem::relative(m_projectSelected, std::filesystem::current_path(), ec);
                 const std::string path = (!ec && !rel.empty() && rel.native().rfind("..", 0) != 0) ? rel.generic_string()
@@ -777,10 +778,10 @@ void Editor::drawInspector() {
             ImGui::EndDisabled();
             propertyLabel("Facing");
             ImGui::DragFloat("##facing", &c.facing, 1.0f, -360.0f, 360.0f, "%.0f deg");
-            ImGui::SetItemTooltip("Direction the character looks at, in degrees (0 = +Z). Rotate tool works too.");
+            ImGui::SetItemTooltip("%s", tr("Direction the character looks at, in degrees (0 = +Z). Rotate tool works too."));
             propertyLabel("Visible at start");
             ImGui::Checkbox("##vis", &c.visible);
-            ImGui::SetItemTooltip("Hidden characters can be shown later by a rule or script.");
+            ImGui::SetItemTooltip("%s", tr("Hidden characters can be shown later by a rule or script."));
         }
     }
     ImGui::End();
@@ -789,10 +790,10 @@ void Editor::drawInspector() {
 // ---------------------------------------------------------------- projeto
 
 void Editor::drawProject() {
-    if (!ImGui::Begin("Project###Project", &m_showProject)) { ImGui::End(); return; }
+    if (!ImGui::Begin(trw("Project###Project"), &m_showProject)) { ImGui::End(); return; }
 
     if (ImGui::BeginTabBar("##projtabs")) {
-        if (ImGui::BeginTabItem("Files")) {
+        if (ImGui::BeginTabItem(trw("Files"))) {
             namespace fs = std::filesystem;
             struct Item { fs::path path; bool dir; };
             static fs::path listedDir;
@@ -818,7 +819,7 @@ void Editor::drawProject() {
 
             // Caminho clicável a partir da raiz do projeto.
             const fs::path rel = m_projectDir.lexically_relative(m_projectRoot);
-            if (ImGui::SmallButton("Project")) m_projectDir = m_projectRoot;
+            if (ImGui::SmallButton(tr("Project"))) m_projectDir = m_projectRoot;
             fs::path acc = m_projectRoot;
             if (rel != ".") {
                 for (const auto& part : rel) {
@@ -833,12 +834,12 @@ void Editor::drawProject() {
             ImGui::SameLine();
             if (ImGui::SmallButton(m_projectGrid ? "List" : "Grid")) m_projectGrid = !m_projectGrid;
             ImGui::SameLine();
-            if (ImGui::SmallButton("+ Script")) m_commands.run("game.new_script");
+            if (ImGui::SmallButton(tr("+ Script"))) m_commands.run("game.new_script");
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-                ImGui::SetTooltip("New Luau script in the scripts folder");
+                ImGui::SetTooltip("%s", tr("New Luau script in the scripts folder"));
             ImGui::SameLine();
             ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x));
-            ImGui::InputTextWithHint("##pfilter", "Filter...", filter, sizeof(filter));
+            ImGui::InputTextWithHint("##pfilter", tr("Filter..."), filter, sizeof(filter));
             ImGui::Separator();
 
             ImGui::BeginChild("##files");
@@ -855,14 +856,14 @@ void Editor::drawProject() {
             };
             auto contextMenu = [&](const Item& it) {
                 if (ImGui::BeginPopupContextItem()) {
-                    if (!it.dir && it.path.extension() == ".luau" && ImGui::MenuItem("Edit here")) codeOpen(it.path);
+                    if (!it.dir && it.path.extension() == ".luau" && ImGui::MenuItem(tr("Edit here"))) codeOpen(it.path);
                     if (!it.dir && it.path.extension() == ".png") {
-                        if (ImGui::MenuItem("Import as Sprite Sheet...")) openSpriteImporter(it.path.string());
-                        if (ImGui::MenuItem("Use as Player Sprite")) usePlayerSprite(it.path.string(), true);
+                        if (ImGui::MenuItem(tr("Import as Sprite Sheet..."))) openSpriteImporter(it.path.string());
+                        if (ImGui::MenuItem(tr("Use as Player Sprite"))) usePlayerSprite(it.path.string(), true);
                     }
-                    if (!it.dir && ImGui::MenuItem("Open in VS Code")) openInExternalEditor(it.path);
-                    if (it.dir && ImGui::MenuItem("Open folder")) m_projectDir = it.path;
-                    if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(it.path.string().c_str());
+                    if (!it.dir && ImGui::MenuItem(tr("Open in VS Code"))) openInExternalEditor(it.path);
+                    if (it.dir && ImGui::MenuItem(tr("Open folder"))) m_projectDir = it.path;
+                    if (ImGui::MenuItem(tr("Copy path"))) ImGui::SetClipboardText(it.path.string().c_str());
                     ImGui::EndPopup();
                 }
             };
@@ -937,10 +938,10 @@ void Editor::drawProject() {
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Maps")) {
+        if (ImGui::BeginTabItem(trw("Maps"))) {
             const auto& maps = m_engine->availableMaps();
             if (maps.empty()) emptyState("No maps found.");
-            ImGui::TextDisabled("Double-click a map to open it.");
+            ImGui::TextDisabled("%s", tr("Double-click a map to open it."));
             ImGui::BeginChild("##maps");
             for (const auto& name : maps) {
                 if (ImGui::Selectable(name.c_str(), name == m_engine->currentMapName(),
@@ -959,9 +960,9 @@ void Editor::drawProject() {
 // ---------------------------------------------------------------- console
 
 void Editor::drawConsole() {
-    if (!ImGui::Begin("Console###Console", &m_showConsole)) { ImGui::End(); return; }
+    if (!ImGui::Begin(trw("Console###Console"), &m_showConsole)) { ImGui::End(); return; }
 
-    if (ImGui::Button("Clear")) {
+    if (ImGui::Button(tr("Clear"))) {
         std::lock_guard<std::mutex> lock(m_consoleMutex);
         m_console.clear();
         m_consoleCounts[0] = m_consoleCounts[1] = m_consoleCounts[2] = 0;
@@ -970,14 +971,14 @@ void Editor::drawConsole() {
     char lbl[48];
     const char* names[3] = {"Info", "Warnings", "Errors"};
     for (int i = 0; i < 3; ++i) {
-        std::snprintf(lbl, sizeof(lbl), "%s (%u)", names[i], m_consoleCounts[i]);
+        std::snprintf(lbl, sizeof(lbl), "%s (%u)###filter%d", tr(names[i]), m_consoleCounts[i], i);
         ImGui::Checkbox(lbl, &m_consoleShow[i]);
         ImGui::SameLine();
     }
-    ImGui::Checkbox("Auto-scroll", &m_consoleAutoScroll);
+    ImGui::Checkbox(tr("Auto-scroll"), &m_consoleAutoScroll);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##cfilter", "Filter...", m_consoleFilter, sizeof(m_consoleFilter));
+    ImGui::InputTextWithHint("##cfilter", tr("Filter..."), m_consoleFilter, sizeof(m_consoleFilter));
     ImGui::Separator();
 
     ImGui::BeginChild("##log", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
@@ -999,17 +1000,17 @@ void Editor::drawConsole() {
             else if (l.level == LogLevel::Warning) col = ImVec4(0.95f, 0.78f, 0.35f, 1.0f);
             ImGui::PushID(r);
             ImGui::PushStyleColor(ImGuiCol_Text, col);
-            if (l.repeat > 1) ImGui::Text("%s  (x%u)", l.text.c_str(), l.repeat);
+            if (l.repeat > 1) ImGui::Text(tr("%s  (x%u)"), l.text.c_str(), l.repeat);
             else ImGui::TextUnformatted(l.text.c_str());
             ImGui::PopStyleColor();
             const bool hasSource = l.text.find(".luau:") != std::string::npos;
             if (hasSource && ImGui::IsItemHovered()) {
                 ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                ImGui::SetTooltip("Double-click to open this line in VS Code");
+                ImGui::SetTooltip("%s", tr("Double-click to open this line in VS Code"));
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) openSourceReference(l.text);
             }
             if (ImGui::BeginPopupContextItem("##line")) {
-                if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(l.text.c_str());
+                if (ImGui::MenuItem(tr("Copy"))) ImGui::SetClipboardText(l.text.c_str());
                 ImGui::EndPopup();
             }
             ImGui::PopID();
@@ -1023,8 +1024,8 @@ void Editor::drawConsole() {
 // Mundo contínuo: mapas emendados ao aberto (gravados no scene.luau). O
 // jogador anda de um para o outro sem tela de carregamento.
 void Editor::drawNeighborMaps() {
-    ImGui::TextWrapped("Maps joined to this one. The player walks into them with no loading screen; they load when "
-                       "someone gets near the border.");
+    ImGui::TextWrapped("%s", tr("Maps joined to this one. The player walks into them with no loading screen; they load when "
+                       "someone gets near the border."));
     // Arrastando o deslocamento: mexe num rascunho e aplica ao soltar
     // (encaixar um mapa custa mais que um frame).
     const std::vector<SceneEdits::Neighbor> before = m_engine->worldNeighbors();
@@ -1040,10 +1041,10 @@ void Editor::drawNeighborMaps() {
             if (r.map == list[i].map) state = r.state;
         ImGui::TextUnformatted(list[i].map.c_str());
         ImGui::SameLine();
-        ImGui::TextDisabled("(%s)", *state ? state : "no height grid");
+        ImGui::TextDisabled(tr("(%s)"), *state ? state : "no height grid");
         ImGui::SameLine(ImGui::GetContentRegionMax().x - 20);
-        if (ImGui::SmallButton("x")) removeAt = static_cast<int>(i);
-        ImGui::SetItemTooltip("Unjoin this map");
+        if (ImGui::SmallButton(tr("x"))) removeAt = static_cast<int>(i);
+        ImGui::SetItemTooltip("%s", tr("Unjoin this map"));
         propertyLabel("Offset");
         float off[3] = {list[i].offset.x, list[i].offset.y, list[i].offset.z};
         if (ImGui::DragFloat3("##off", off, 1.0f, -100000.0f, 100000.0f, "%.0f")) {
@@ -1051,7 +1052,7 @@ void Editor::drawNeighborMaps() {
             m_neighborEditing = true;
         }
         finished |= ImGui::IsItemDeactivatedAfterEdit();
-        ImGui::SetItemTooltip("Where the neighbor sits relative to this map (world units).");
+        ImGui::SetItemTooltip("%s", tr("Where the neighbor sits relative to this map (world units)."));
         ImGui::PopID();
     }
     if (removeAt >= 0) {
@@ -1070,7 +1071,7 @@ void Editor::drawNeighborMaps() {
     }
     if (pick >= static_cast<int>(choices.size())) pick = -1;
     propertyLabel("Join");
-    if (ImGui::BeginCombo("##join", pick >= 0 ? choices[static_cast<size_t>(pick)]->c_str() : "choose a map")) {
+    if (ImGui::BeginCombo("##join", pick >= 0 ? choices[static_cast<size_t>(pick)]->c_str() : tr("choose a map"))) {
         for (size_t i = 0; i < choices.size(); ++i)
             if (ImGui::Selectable(choices[i]->c_str(), pick == static_cast<int>(i))) pick = static_cast<int>(i);
         ImGui::EndCombo();
@@ -1079,7 +1080,7 @@ void Editor::drawNeighborMaps() {
     const bool canPlace = pick >= 0 && Engine::mapGroundArea(m_engine->currentMapName(), lo, hi) &&
                           Engine::mapGroundArea(*choices[static_cast<size_t>(pick)], nlo, nhi);
     if (pick >= 0 && !canPlace)
-        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Both maps need a height grid (New Map or Generate Map).");
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", tr("Both maps need a height grid (New Map or Generate Map)."));
     ImGui::BeginDisabled(!canPlace);
     // Lados na tela de cima: +X a leste, +Z ao norte.
     const struct { const char* label; Vec3 off; } sides[] = {
@@ -1090,7 +1091,7 @@ void Editor::drawNeighborMaps() {
     };
     for (size_t s = 0; s < 4; ++s) {
         if (s) ImGui::SameLine();
-        if (ImGui::Button(sides[s].label)) {
+        if (ImGui::Button(tr(sides[s].label))) {
             list.push_back({*choices[static_cast<size_t>(pick)], sides[s].off});
             finished = true;
             pick = -1;

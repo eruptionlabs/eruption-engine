@@ -1,4 +1,5 @@
 #include "editor/EditorCommands.hpp"
+#include "editor/Translate.hpp"
 
 namespace eruption {
 
@@ -48,10 +49,10 @@ void EditorCommands::menuItem(const std::string& id) {
     if (!c) return;
     const std::string keys = shortcutText(*c);
     const bool checked = c->checked && c->checked();
-    if (ImGui::MenuItem(c->label.c_str(), keys.empty() ? nullptr : keys.c_str(), checked, isEnabled(*c)))
+    if (ImGui::MenuItem(tr(c->label.c_str()), keys.empty() ? nullptr : keys.c_str(), checked, isEnabled(*c)))
         c->run();
     if (!c->help.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("%s", c->help.c_str());
+        ImGui::SetTooltip("%s", tr(c->help.c_str()));
 }
 
 std::string EditorCommands::shortcutText(const Shortcut& s) {

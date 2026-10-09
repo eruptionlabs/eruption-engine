@@ -1,6 +1,7 @@
 // Painel Cena: imagem do jogo, navegação da câmera de edição, seleção por
 // clique, alças de transformação e o indicador de eixos.
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 #include "editor/EditorTheme.hpp"
 
 #include "core/Engine.hpp"
@@ -42,7 +43,7 @@ float rayAabb(const Vec3& o, const Vec3& invDir, const Vec3& bmin, const Vec3& b
 
 void Editor::drawViewport() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    const bool open = ImGui::Begin("Scene###Scene", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    const bool open = ImGui::Begin(trw("Scene###Scene"), nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
     if (!open) {
         m_viewportHovered = m_viewportFocused = false;
@@ -157,11 +158,11 @@ void Editor::drawViewport() {
     }
 
     if (m_engine->currentMapName().empty()) {
-        const char* msg = "No map loaded";
+        const char* msg = tr("No map loaded");
         const ImVec2 ts = ImGui::CalcTextSize(msg);
         ImGui::SetCursorScreenPos(ImVec2(pos.x + (avail.x - ts.x) * 0.5f, pos.y + avail.y * 0.45f));
         ImGui::TextUnformatted(msg);
-        const char* btn = "Open Map...  (Ctrl+O)";
+        const char* btn = tr("Open Map...  (Ctrl+O)");
         const float bw = ImGui::CalcTextSize(btn).x + 20.0f;
         ImGui::SetCursorScreenPos(ImVec2(pos.x + (avail.x - bw) * 0.5f, ImGui::GetCursorScreenPos().y + 6));
         if (ImGui::Button(btn, ImVec2(bw, 0))) m_commands.run("file.open_map");
@@ -179,17 +180,17 @@ void Editor::drawWelcome() {
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
     if (ImGui::BeginChild("##welcome", ImVec2(cardW, 200), ImGuiChildFlags_Border | ImGuiChildFlags_AlwaysUseWindowPadding)) {
-        ImGui::TextColored(kAccent, "Getting started");
+        ImGui::TextColored(kAccent, "%s", tr("Getting started"));
         ImGui::Separator();
-        ImGui::BulletText("Hold the right mouse button to look; add WASD to fly.");
-        ImGui::BulletText("Click an object to select it; drag the arrows to move.");
-        ImGui::BulletText("W / E / R switch between move, rotate and scale.");
-        ImGui::BulletText("F5 runs the game here; stopping restores the scene.");
-        ImGui::BulletText("Lost? Ctrl+Shift+P searches every command.");
+        ImGui::BulletText("%s", tr("Hold the right mouse button to look; add WASD to fly."));
+        ImGui::BulletText("%s", tr("Click an object to select it; drag the arrows to move."));
+        ImGui::BulletText("%s", tr("W / E / R switch between move, rotate and scale."));
+        ImGui::BulletText("%s", tr("F5 runs the game here; stopping restores the scene."));
+        ImGui::BulletText("%s", tr("Lost? Ctrl+Shift+P searches every command."));
         ImGui::Spacing();
-        if (ImGui::Button("Got it")) m_showWelcome = false;
+        if (ImGui::Button(tr("Got it"))) m_showWelcome = false;
         ImGui::SameLine();
-        if (ImGui::Button("Show all shortcuts")) m_showShortcuts = true;
+        if (ImGui::Button(tr("Show all shortcuts"))) m_showShortcuts = true;
     }
     ImGui::EndChild();
     ImGui::PopStyleVar(2);
@@ -725,7 +726,7 @@ void Editor::drawViewCube(float x, float y, float w, float /*h*/) {
     }
     if (clicked >= 0) cameraLookDir(-axes[clicked].dir);
     if (nearWidget && m_viewportHovered)
-        ImGui::SetTooltip("Click an axis to look along it");
+        ImGui::SetTooltip("%s", tr("Click an axis to look along it"));
 }
 
 } // namespace eruption

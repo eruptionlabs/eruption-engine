@@ -1,6 +1,7 @@
 // Texturas da interface, miniaturas do painel Projeto e prévia de assets no
 // Inspetor (imagem e canais, mapas PBR, material em esfera/cubo, modelos).
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 #include "editor/EditorTheme.hpp"
 #include "editor/ModelRaster.hpp"
 
@@ -338,10 +339,10 @@ void Editor::selectAsset(const fs::path& path) {
 void Editor::drawImagePreview() {
     AssetPreviewState& a = m_asset;
     if (!a.tex.valid()) {
-        ImGui::TextDisabled("Could not read this image.");
+        ImGui::TextDisabled("%s", tr("Could not read this image."));
         return;
     }
-    ImGui::Text("%d x %d, %d channel(s) in the file", a.width, a.height, a.fileChannels);
+    ImGui::Text(tr("%d x %d, %d channel(s) in the file"), a.width, a.height, a.fileChannels);
     const char* views[] = {"Color", "R", "G", "B", "A"};
     for (int i = 0; i < 5; ++i) {
         if (i) ImGui::SameLine(0, 2);
@@ -360,13 +361,13 @@ void Editor::drawImagePreview() {
         if (on) ImGui::PopStyleColor();
     }
     ImGui::SameLine();
-    if (ImGui::Checkbox("Pixels", &a.pixelated)) {
+    if (ImGui::Checkbox(tr("Pixels"), &a.pixelated)) {
         const int w = a.tex.width, h = a.tex.height;
         releaseTexture(a.tex);
         const std::vector<uint8_t> ch = a.view == 0 ? a.rgba : channelImage(a.rgba, a.view - 1);
         a.tex = makeTexture(ch.data(), w, h, a.pixelated);
     }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Show pixels sharp (no filtering)");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", tr("Show pixels sharp (no filtering)"));
 
     const float avail = ImGui::GetContentRegionAvail().x;
     const float scale = std::min(avail / a.tex.width, 320.0f / a.tex.height);
@@ -385,7 +386,7 @@ void Editor::drawMaterialPreview() {
     AssetPreviewState& a = m_asset;
     // Só imagens com mapas do motor ao lado (_mrahw / _normal) viram material.
     if (a.mrahwPath.empty() && a.normalPath.empty()) return;
-    if (!ImGui::CollapsingHeader("Material (PBR)", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    if (!ImGui::CollapsingHeader(tr("Material (PBR)"), ImGuiTreeNodeFlags_DefaultOpen)) return;
 
     if (!a.materialReady) {
         // Carrega uma vez: albedo, MRAH-W e normal, registrados para a esfera.
@@ -442,17 +443,17 @@ void Editor::drawMaterialPreview() {
         if (++col % 3 != 0) ImGui::SameLine();
     }
     if (a.mrahwPath.empty())
-        ImGui::TextDisabled("No _mrahw map next to this texture: the engine estimates PBR from the color.");
+        ImGui::TextDisabled("%s", tr("No _mrahw map next to this texture: the engine estimates PBR from the color."));
 
     // Esfera/cubo com luz própria (renderizada pelo motor a cada frame).
     ImGui::Spacing();
     SpherePreview& sp = m_engine->m_spherePreview;
-    if (ImGui::RadioButton("Sphere", !a.cube)) { a.cube = false; sp.setShape(SpherePreview::Shape::Sphere); }
+    if (ImGui::RadioButton(tr("Sphere"), !a.cube)) { a.cube = false; sp.setShape(SpherePreview::Shape::Sphere); }
     ImGui::SameLine();
-    if (ImGui::RadioButton("Cube", a.cube)) { a.cube = true; sp.setShape(SpherePreview::Shape::Cube); }
+    if (ImGui::RadioButton(tr("Cube"), a.cube)) { a.cube = true; sp.setShape(SpherePreview::Shape::Cube); }
     ImGui::SameLine();
     bool spin = sp.spin();
-    if (ImGui::Checkbox("Spin", &spin)) sp.setSpin(spin);
+    if (ImGui::Checkbox(tr("Spin"), &spin)) sp.setSpin(spin);
     if (void* id = sp.imguiTextureId()) {
         const float side = std::min(ImGui::GetContentRegionAvail().x, 300.0f);
         ImGui::Image(reinterpret_cast<ImTextureID>(id), ImVec2(side, side));
@@ -460,7 +461,7 @@ void Editor::drawMaterialPreview() {
             const ImGuiIO& io = ImGui::GetIO();
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) sp.orbitDrag(io.MouseDelta.x, io.MouseDelta.y);
             if (io.MouseWheel != 0.0f) sp.zoom(io.MouseWheel);
-            ImGui::SetTooltip("Drag to turn, wheel to zoom");
+            ImGui::SetTooltip("%s", tr("Drag to turn, wheel to zoom"));
         }
     }
 }
@@ -509,7 +510,7 @@ void Editor::drawModel3D() {
             }
             if (a.rasterTex.valid())
                 dl->AddImage(reinterpret_cast<ImTextureID>(a.rasterTex.set), p0, ImVec2(p0.x + side, p0.y + side));
-            ImGui::SetItemTooltip("Drag to turn the model.");
+            ImGui::SetItemTooltip("%s", tr("Drag to turn the model."));
         } else {
             const char* msg = a.rasterError.empty() ? "Loading..." : a.rasterError.c_str();
             const ImVec2 ts = ImGui::CalcTextSize(msg);
@@ -589,9 +590,9 @@ void Editor::drawModelPreview() {
 
     ImGui::TextUnformatted(a.modelInfo.c_str());
     if (a.instances > 0) {
-        ImGui::Text("Used %d time(s) in this map.", a.instances);
+        ImGui::Text(tr("Used %d time(s) in this map."), a.instances);
         ImGui::SameLine();
-        if (ImGui::SmallButton("Select in scene")) {
+        if (ImGui::SmallButton(tr("Select in scene"))) {
             const std::string rel = a.path.is_absolute() ? a.path.lexically_relative(m_projectRoot).generic_string()
                                                          : a.path.generic_string();
             const auto& insts = m_engine->modelRenderer().getInstances();
@@ -605,7 +606,7 @@ void Editor::drawModelPreview() {
         }
     }
     if (a.images.empty()) return;
-    if (!ImGui::CollapsingHeader("Embedded images", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    if (!ImGui::CollapsingHeader(tr("Embedded images"), ImGuiTreeNodeFlags_DefaultOpen)) return;
     ImGui::BeginChild("##imgs", ImVec2(0, std::min(160.0f, a.images.size() * ImGui::GetTextLineHeightWithSpacing() + 8)), ImGuiChildFlags_Border);
     for (int i = 0; i < static_cast<int>(a.images.size()); ++i) {
         const auto& im = a.images[static_cast<size_t>(i)];
@@ -646,10 +647,10 @@ void Editor::drawAssetPreview() {
     std::error_code ec;
     ImGui::TextColored(kAccent, "%s", a.path.filename().string().c_str());
     const fs::path shown = a.path.is_absolute() ? a.path.lexically_relative(m_projectRoot) : a.path;
-    ImGui::TextDisabled("%s  (%s)", shown.generic_string().c_str(), humanSize(fs::file_size(a.path, ec)).c_str());
-    if (ImGui::SmallButton("Open in VS Code")) openInExternalEditor(a.path);
+    ImGui::TextDisabled(tr("%s  (%s)"), shown.generic_string().c_str(), humanSize(fs::file_size(a.path, ec)).c_str());
+    if (ImGui::SmallButton(tr("Open in VS Code"))) openInExternalEditor(a.path);
     ImGui::SameLine();
-    if (ImGui::SmallButton("Copy path")) ImGui::SetClipboardText(a.path.generic_string().c_str());
+    if (ImGui::SmallButton(tr("Copy path"))) ImGui::SetClipboardText(a.path.generic_string().c_str());
     ImGui::Separator();
     switch (a.kind) {
         case AssetPreviewState::Kind::Image:
@@ -668,7 +669,7 @@ void Editor::drawAssetPreview() {
         case AssetPreviewState::Kind::Sound: {
             const bool playing = a.soundId && m_engine->audio().playing(a.soundId);
             if (!m_engine->audio().available()) {
-                ImGui::TextDisabled("No sound device.");
+                ImGui::TextDisabled("%s", tr("No sound device."));
             } else if (ImGui::Button(playing ? "Stop" : "Play", ImVec2(90, 0))) {
                 if (playing) {
                     m_engine->audio().stop(a.soundId);
@@ -677,11 +678,11 @@ void Editor::drawAssetPreview() {
                     a.soundId = m_engine->audio().play(a.path.generic_string());
                 }
             }
-            ImGui::TextWrapped("Use it in rules (Play sound) or scripts: audio.play(\"%s\")", a.path.generic_string().c_str());
+            ImGui::TextWrapped(tr("Use it in rules (Play sound) or scripts: audio.play(\"%s\")"), a.path.generic_string().c_str());
             break;
         }
         case AssetPreviewState::Kind::None:
-            ImGui::TextDisabled("No preview for this kind of file.");
+            ImGui::TextDisabled("%s", tr("No preview for this kind of file."));
             break;
     }
 }
