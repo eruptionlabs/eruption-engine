@@ -44,6 +44,7 @@ void Editor::onMapReady() {
         m_original.enabled.push_back(i.enabled);
     }
     m_original.lights = m_engine->deferredLighting().getPointLights();
+    m_engine->loadScatter(m_engine->currentMapName());
     applySceneFile();
 }
 
@@ -208,6 +209,7 @@ bool Editor::saveScene() {
     std::string terrainError;
     if (!m_engine->saveHeightDelta(terrainError)) log(LogLevel::Error, terrainError);
     if (!m_engine->saveSplat(terrainError)) log(LogLevel::Error, terrainError);
+    if (!m_engine->saveScatter(terrainError)) log(LogLevel::Error, terrainError);
     m_terrainDirty = false;
     m_savedScene = text;
     m_sceneFileTime = sceneFileTime();

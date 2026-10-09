@@ -36,16 +36,20 @@ void Editor::terrainBrushInput(float x, float y, float w, float h) {
         b.cursor = at;
         b.hasCursor = true;
     }
-    const bool canPaint = m_engine->terrainEditable() && (!b.paint || m_engine->splatEdit().active);
+    const bool canPaint = b.objects ? m_engine->currentMapName().size() > 0
+                                    : m_engine->terrainEditable() && (!b.paint || m_engine->splatEdit().active);
     if (!b.stroking && canPaint && b.hasCursor && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         b.stroking = true;
-        b.snapshot = b.paint ? m_engine->splatEdit().weights : m_engine->heightEdit().delta;
+        if (b.objects) m_scatterStroke = {{}, {}, m_scatterStroke.seed * 1664525u + 1013904223u};
+        else b.snapshot = b.paint ? m_engine->splatEdit().weights : m_engine->heightEdit().delta;
         b.rect[0] = b.rect[1] = INT32_MAX;
         b.rect[2] = b.rect[3] = INT32_MIN;
         b.flattenTo = at.y; // aplainar: altura onde o traço começou
     }
     if (b.stroking && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        if (b.hasCursor && b.paint) {
+        if (b.hasCursor && b.objects) {
+            scatterStep(std::min(io.DeltaTime, 0.05f), io.KeyCtrl);
+        } else if (b.hasCursor && b.paint) {
             int r[4];
             // Ctrl apaga a camada (volta a base).
             if (m_engine->paintSplat(b.layer, Vec2(b.cursor.x, b.cursor.z), b.size, b.strength * 0.1f, b.falloff,
@@ -78,6 +82,10 @@ void Editor::terrainBrushInput(float x, float y, float w, float h) {
 void Editor::endTerrainStroke() {
     TerrainBrush& b = m_brush;
     b.stroking = false;
+    if (b.objects) {
+        endScatterStroke();
+        return;
+    }
     if (b.rect[0] > b.rect[2]) return; // nada tocado
     const int x0 = b.rect[0], z0 = b.rect[1], x1 = b.rect[2], z1 = b.rect[3];
     Engine* engine = m_engine;
@@ -183,15 +191,17 @@ void Editor::drawSplatLayers() {
 void Editor::drawTerrainPanel() {
     TerrainBrush& b = m_brush;
     ImGui::SeparatorText("Terrain brush");
-    if (!m_engine->terrainEditable()) {
+    const bool editable = m_engine->terrainEditable();
+    auto notEditable = [] {
         ImGui::TextWrapped("This map has no editable ground. Maps made with File > New Map, or with a height "
-                           "grid (.ter) that matches the ground mesh, can be sculpted.");
-        return;
-    }
+                           "grid (.ter) that matches the ground mesh, can be sculpted and painted.");
+    };
     if (ImGui::BeginTabBar("##terraintabs")) {
         if (ImGui::BeginTabItem("Sculpt")) {
             b.paint = false;
-            for (int i = 0; i < IM_ARRAYSIZE(kModeNames); ++i) {
+            b.objects = false;
+            if (!editable) notEditable();
+            for (int i = 0; editable && i < IM_ARRAYSIZE(kModeNames); ++i) {
                 if (i) ImGui::SameLine();
                 if (ImGui::RadioButton(kModeNames[i], b.mode == i)) b.mode = i;
             }
@@ -199,7 +209,14 @@ void Editor::drawTerrainPanel() {
         }
         if (ImGui::BeginTabItem("Paint")) {
             b.paint = true;
-            drawSplatLayers();
+            b.objects = false;
+            if (editable) drawSplatLayers(); else notEditable();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Objects")) {
+            b.paint = false;
+            b.objects = true;
+            drawScatterPanel();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -210,7 +227,9 @@ void Editor::drawTerrainPanel() {
     ImGui::SliderFloat("Falloff", &b.falloff, 0.0f, 1.0f, "%.2f");
     ImGui::SetItemTooltip("0 = hard edge, 1 = fades from the center.");
     ImGui::Spacing();
-    if (b.paint) {
+    if (b.objects) {
+        ImGui::TextDisabled("Left drag: scatter.  Ctrl: erase what this brush placed.");
+    } else if (b.paint) {
         ImGui::TextDisabled("Left drag: paint the layer.  Ctrl: erase it.");
     } else {
         ImGui::TextDisabled("Left drag: paint.  Ctrl: lower.  Shift: smooth.");

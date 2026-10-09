@@ -142,6 +142,7 @@ bool Engine::loadMap(const std::string& name) {
     clearCharacters(); // os do mapa novo vêm do scene.luau dele
     clearPlayerStart();
     endSplatEditing();
+    clearScatter();
 
     // GERACAO DO CACHE DE ASSET. Ate 2026-09-05 so' o warp (performMapSwap)
     // avancava a geracao e expulsava textura/malha velha do GlobalAssetCache;
