@@ -19,6 +19,7 @@ Obtidas em tempo de configuracao (CMake FetchContent):
 - ONNX Runtime (https://github.com/microsoft/onnxruntime) — MIT License (opcional,
   ERUPTION_ONNX: binario oficial baixado pelo CMake e copiado ao lado do executavel)
 - bc7enc_rdo (https://github.com/richgel999/bc7enc_rdo) — MIT / Public Domain (usa third_party/bc7enc_rdo/ se existir, senao e' baixado pelo CMake)
+- miniaudio (https://github.com/mackron/miniaudio), com o stb_vorbis que vem junto — MIT-0 / Public Domain
 
 Vendorizadas em third_party/:
 - meshoptimizer (https://github.com/zeux/meshoptimizer) — MIT License

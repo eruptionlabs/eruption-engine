@@ -264,6 +264,7 @@ void Editor::closeAssetPreview() {
                           &a.pbrChannels[2], &a.pbrChannels[3]})
         releaseTexture(*t);
     if (a.materialReady) m_engine->m_spherePreview.setActive(false);
+    if (a.soundId) m_engine->audio().stop(a.soundId);
     a = AssetPreviewState{};
 }
 
@@ -285,6 +286,9 @@ void Editor::selectAsset(const fs::path& path) {
     } else if (isModelFile(path)) {
         a.kind = AssetPreviewState::Kind::Model;
         drawModelPreview(); // lê o cabeçalho na primeira chamada
+    } else if (path.extension() == ".wav" || path.extension() == ".ogg" || path.extension() == ".mp3" ||
+               path.extension() == ".flac") {
+        a.kind = AssetPreviewState::Kind::Sound;
     } else if (isTextFile(path)) {
         a.kind = AssetPreviewState::Kind::Text;
         std::ifstream f(path, std::ios::binary);
@@ -573,6 +577,21 @@ void Editor::drawAssetPreview() {
             ImGui::TextUnformatted(a.text.c_str());
             ImGui::EndChild();
             break;
+        case AssetPreviewState::Kind::Sound: {
+            const bool playing = a.soundId && m_engine->audio().playing(a.soundId);
+            if (!m_engine->audio().available()) {
+                ImGui::TextDisabled("No sound device.");
+            } else if (ImGui::Button(playing ? "Stop" : "Play", ImVec2(90, 0))) {
+                if (playing) {
+                    m_engine->audio().stop(a.soundId);
+                    a.soundId = 0;
+                } else {
+                    a.soundId = m_engine->audio().play(a.path.generic_string());
+                }
+            }
+            ImGui::TextWrapped("Use it in rules (Play sound) or scripts: audio.play(\"%s\")", a.path.generic_string().c_str());
+            break;
+        }
         case AssetPreviewState::Kind::None:
             ImGui::TextDisabled("No preview for this kind of file.");
             break;

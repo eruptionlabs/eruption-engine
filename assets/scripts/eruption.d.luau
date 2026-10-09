@@ -110,6 +110,23 @@ declare models: {
     set_solid: (model: Model, solid: boolean) -> (),
 }
 
+-- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a
+-- sound return a number for audio.stop / audio.playing.
+declare audio: {
+    play: (file: string, volume: number?) -> number,
+    -- At a point or model: quieter far away (`range` units, default 300), panned to its side.
+    play_at: (file: string, place: vector | Model, volume: number?, range: number?) -> number,
+    loop: (file: string, volume: number?) -> number,
+    loop_at: (file: string, place: vector | Model, volume: number?, range: number?) -> number,
+    stop: (sound: number, fade_seconds: number?) -> (),
+    playing: (sound: number) -> boolean,
+    -- One music at a time; a new one cross-fades (default 1 s).
+    music: (file: string, volume: number?, fade_seconds: number?) -> (),
+    stop_music: (fade_seconds: number?) -> (),
+    -- Master volume, 1 = normal.
+    set_volume: (volume: number) -> (),
+}
+
 -- Point lights of the map. Indices start at 1.
 declare lights: {
     count: () -> number,

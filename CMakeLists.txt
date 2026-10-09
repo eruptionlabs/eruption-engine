@@ -380,6 +380,21 @@ else()
     message(WARNING "Encoder BC em runtime: bc7enc_rdo AUSENTE - texturas embutidas sobem RGBA8 com downscale")
 endif()
 
+# miniaudio (David Reid, MIT-0 / dominio publico): som do jogo, um arquivo so'.
+# Mesmo backend em Linux, Windows, Android e iOS. A implementacao entra em
+# src/audio/MiniaudioImpl.cpp, compilada sem avisos (codigo de terceiros).
+FetchContent_Declare(
+    miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+    GIT_TAG 0.11.21
+    GIT_SHALLOW TRUE
+)
+FetchContent_GetProperties(miniaudio)
+if(NOT miniaudio_POPULATED)
+    FetchContent_Populate(miniaudio)
+endif()
+set_source_files_properties("${CMAKE_SOURCE_DIR}/src/audio/MiniaudioImpl.cpp" PROPERTIES COMPILE_OPTIONS "-w")
+
 # meshoptimizer (zeux, MIT): simplificacao de malha para LOD por distancia e
 # otimizacao de ordem de vertice/indice (cache pos-transform).
 #
@@ -527,6 +542,7 @@ if(ERUPTION_HAVE_ORT)
 endif()
 
 # Include directories
+target_include_directories(eruption-engine SYSTEM PRIVATE "${miniaudio_SOURCE_DIR}")
 target_include_directories(eruption-engine PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/plugins

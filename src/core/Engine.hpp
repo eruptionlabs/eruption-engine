@@ -60,6 +60,7 @@
 #include <memory>
 #include <future>
 #include "scene/SceneEdits.hpp"
+#include "audio/Audio.hpp"
 #include <deque>
 #include <functional>
 namespace eruption {
@@ -286,6 +287,7 @@ public:
     TextureStats getTextureStats() const;
     Camera& camera() { return m_camera; }
     DeferredLighting& deferredLighting() { return m_deferredLighting; }
+    AudioSystem& audio() { return m_audio; }
 
     // Editor (src/editor/). Com o editor ligado a cena e' desenhada num alvo
     // proprio, do tamanho do painel Cena, e o swapchain recebe so' a UI.
@@ -1312,6 +1314,7 @@ private:
     };
     std::vector<WorldRegion> m_regions;
     std::vector<TriggerArea> m_areas;
+    AudioSystem m_audio;
     std::vector<uint8_t> m_solid; // por instância
     static const char* worldStateName(WorldRegion::State s);
     std::vector<WorldNeighbor> m_worldNeighbors;

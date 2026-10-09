@@ -61,6 +61,14 @@ const std::vector<RuleDef>& ruleCatalog() {
          "Hide {1}", "Esconder {1}"},
         {"models.set_solid", RuleKind::Action, "models", {{T::Model, "\"\""}, {T::Value, "true"}},
          "Make {1} solid: {2}", "Deixar {1} sólido: {2}"},
+        {"audio.play", RuleKind::Action, "sound", {{T::Sound, "\"\""}, {T::Number, "1"}},
+         "Play sound {1} at volume {2}", "Tocar o som {1} no volume {2}"},
+        {"audio.play_at", RuleKind::Action, "sound", {{T::Sound, "\"\""}, {T::Model, "\"\""}, {T::Number, "1"}},
+         "Play sound {1} at {2}, volume {3}", "Tocar o som {1} em {2}, volume {3}"},
+        {"audio.music", RuleKind::Action, "sound", {{T::Sound, "\"\""}, {T::Number, "1"}},
+         "Play music {1} at volume {2}", "Tocar a música {1} no volume {2}"},
+        {"audio.stop_music", RuleKind::Action, "sound", {},
+         "Stop the music", "Parar a música"},
         {"lights.turn_on", RuleKind::Action, "lights", {{T::Light, "1"}},
          "Turn on light {1}", "Acender a luz {1}"},
         {"lights.turn_off", RuleKind::Action, "lights", {{T::Light, "1"}},
@@ -138,7 +146,7 @@ const char* categoryName(const char* category, UiLanguage lang) {
     static const struct { const char* key; const char* en; const char* pt; } kNames[] = {
         {"events", "Events", "Eventos"}, {"input", "Keyboard", "Teclado"}, {"player", "Player", "Jogador"},
         {"world", "World", "Mundo"}, {"models", "Objects", "Objetos"}, {"variables", "Variables", "Variáveis"},
-        {"screen", "Screen", "Tela"}, {"lights", "Lights", "Luzes"}, {"characters", "Characters", "Personagens"},
+        {"screen", "Screen", "Tela"}, {"lights", "Lights", "Luzes"}, {"characters", "Characters", "Personagens"}, {"sound", "Sound", "Som"},
     };
     for (const auto& n : kNames)
         if (std::strcmp(n.key, category) == 0) return lang == UiLanguage::Portuguese ? n.pt : n.en;

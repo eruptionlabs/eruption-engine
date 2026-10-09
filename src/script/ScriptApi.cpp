@@ -414,6 +414,57 @@ int models_solid(lua_State* L) {
     return 1;
 }
 
+// ---------------------------------------------------------------- audio
+
+// Ponto do som: um vector ou um modelo (o centro dele).
+Vec3 soundPlace(lua_State* L, int arg) {
+    if (lua_isvector(L, arg)) return checkVec3(L, arg);
+    const ModelInstance& inst = instances()[checkModel(L, arg)];
+    return (inst.worldAabbMin + inst.worldAabbMax) * 0.5f;
+}
+int audio_play(lua_State* L) {
+    const uint32_t id = eng().audio().play(luaL_checkstring(L, 1), float(luaL_optnumber(L, 2, 1.0)));
+    lua_pushinteger(L, static_cast<int>(id));
+    return 1;
+}
+int audio_play_at(lua_State* L) {
+    const uint32_t id = eng().audio().playAt(luaL_checkstring(L, 1), soundPlace(L, 2), float(luaL_optnumber(L, 3, 1.0)),
+                                             false, float(luaL_optnumber(L, 4, 300.0)));
+    lua_pushinteger(L, static_cast<int>(id));
+    return 1;
+}
+int audio_loop(lua_State* L) {
+    const uint32_t id = eng().audio().play(luaL_checkstring(L, 1), float(luaL_optnumber(L, 2, 1.0)), true);
+    lua_pushinteger(L, static_cast<int>(id));
+    return 1;
+}
+int audio_loop_at(lua_State* L) {
+    const uint32_t id = eng().audio().playAt(luaL_checkstring(L, 1), soundPlace(L, 2), float(luaL_optnumber(L, 3, 1.0)),
+                                             true, float(luaL_optnumber(L, 4, 300.0)));
+    lua_pushinteger(L, static_cast<int>(id));
+    return 1;
+}
+int audio_stop(lua_State* L) {
+    eng().audio().stop(static_cast<uint32_t>(luaL_checkinteger(L, 1)), float(luaL_optnumber(L, 2, 0.0)));
+    return 0;
+}
+int audio_playing(lua_State* L) {
+    lua_pushboolean(L, eng().audio().playing(static_cast<uint32_t>(luaL_checkinteger(L, 1))));
+    return 1;
+}
+int audio_music(lua_State* L) {
+    eng().audio().music(luaL_checkstring(L, 1), float(luaL_optnumber(L, 2, 1.0)), float(luaL_optnumber(L, 3, 1.0)));
+    return 0;
+}
+int audio_stop_music(lua_State* L) {
+    eng().audio().stopMusic(float(luaL_optnumber(L, 1, 1.0)));
+    return 0;
+}
+int audio_set_volume(lua_State* L) {
+    eng().audio().setMasterVolume(float(luaL_checknumber(L, 1)));
+    return 0;
+}
+
 // ---------------------------------------------------------------- lights
 
 int lights_count(lua_State* L) {
@@ -525,7 +576,12 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"set_intensity", lights_set_intensity}, {"enabled", lights_enabled},
         {"set_enabled", lights_set_enabled}, {"turn_on", lights_turn_on}, {"turn_off", lights_turn_off},
         {nullptr, nullptr}};
+    static const luaL_Reg audio[] = {
+        {"play", audio_play}, {"play_at", audio_play_at}, {"loop", audio_loop}, {"loop_at", audio_loop_at},
+        {"stop", audio_stop}, {"playing", audio_playing}, {"music", audio_music}, {"stop_music", audio_stop_music},
+        {"set_volume", audio_set_volume}, {nullptr, nullptr}};
     lib(L, "on", on);
+    lib(L, "audio", audio);
     lib(L, "vars", vars);
     lib(L, "ui", ui);
     lib(L, "world", world);
@@ -648,6 +704,23 @@ declare models: {
     -- Solid models block the player (the bottom of the model: trunk, wall base).
     solid: (model: Model) -> boolean,
     set_solid: (model: Model, solid: boolean) -> (),
+}
+
+-- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a
+-- sound return a number for audio.stop / audio.playing.
+declare audio: {
+    play: (file: string, volume: number?) -> number,
+    -- At a point or model: quieter far away (`range` units, default 300), panned to its side.
+    play_at: (file: string, place: vector | Model, volume: number?, range: number?) -> number,
+    loop: (file: string, volume: number?) -> number,
+    loop_at: (file: string, place: vector | Model, volume: number?, range: number?) -> number,
+    stop: (sound: number, fade_seconds: number?) -> (),
+    playing: (sound: number) -> boolean,
+    -- One music at a time; a new one cross-fades (default 1 s).
+    music: (file: string, volume: number?, fade_seconds: number?) -> (),
+    stop_music: (fade_seconds: number?) -> (),
+    -- Master volume, 1 = normal.
+    set_volume: (volume: number) -> (),
 }
 
 -- Point lights of the map. Indices start at 1.

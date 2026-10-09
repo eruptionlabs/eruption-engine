@@ -472,7 +472,8 @@ private:
 
     struct AssetPreviewState {
         std::filesystem::path path;
-        enum class Kind { None, Image, Model, Text } kind = Kind::None;
+        enum class Kind { None, Image, Model, Text, Sound } kind = Kind::None;
+        uint32_t soundId = 0; // prévia tocando
         // Imagem
         std::vector<uint8_t> rgba;     // já reduzida para no máximo 1024
         int width = 0, height = 0;     // tamanho original
