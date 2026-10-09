@@ -1076,6 +1076,21 @@ private:
             modelMeshes[key] = {mesh, currentWarpId};
         }
         // Tira do cache (quem chama libera os buffers).
+        // Tira do cache as texturas cujo nome começa com `prefix` (as embutidas
+        // de um mapa vizinho que saiu: "#<mapa>|..."); quem chama as destrói.
+        std::vector<ModelTextureGPU> takeModelTextures(const std::string& prefix) {
+            std::lock_guard<std::mutex> lock(mutex);
+            std::vector<ModelTextureGPU> out;
+            for (auto it = modelTextures.begin(); it != modelTextures.end();) {
+                if (it->first.rfind(prefix, 0) == 0) {
+                    out.push_back(it->second.tex);
+                    it = modelTextures.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            return out;
+        }
         bool takeModelMesh(const std::string& key, ModelMeshGPU& outMesh) {
             std::lock_guard<std::mutex> lock(mutex);
             auto it = modelMeshes.find(key);
