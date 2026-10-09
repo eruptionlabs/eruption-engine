@@ -89,6 +89,8 @@ private:
     void drawShortcutsWindow();
     void drawWelcome();
     void drawRules();
+    void drawTelemetry();
+    void recordFrameTime(float dt);
     void drawCode();
     void codeOpen(const std::filesystem::path& file);
     bool codeSave();
@@ -190,6 +192,12 @@ private:
 
     // Painéis
     bool m_resetLayout = false;
+    bool m_focusScene = false;
+    std::vector<const char*> m_pendingFocus; // abas a trazer para frente no próximo desenho
+    bool m_showTelemetry = true;
+    static constexpr int kFrameHistory = 240;
+    float m_frameTimes[kFrameHistory] = {};
+    int m_frameTimeHead = 0; // layout recém-montado: aba Cena na frente
     bool m_showHierarchy = true, m_showInspector = true, m_showProject = true, m_showConsole = true;
     bool m_showShortcuts = false;
     bool m_showLegacyTools = false;
@@ -207,6 +215,7 @@ private:
     std::string m_projectSelected;
     std::string m_pendingMap;
     std::string m_lastMap;
+    std::string m_hardware; // "GPU | CPU" na barra de status
     bool m_framedSpawn = false;
 
     // Folha de eventos
