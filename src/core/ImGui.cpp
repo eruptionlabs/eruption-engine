@@ -502,10 +502,10 @@ void Engine::renderImGui() {
     // darkens the ground like map geometry shadows (author feedback 2026-08-10).
     m_cloudLayerRenderer.setSceneAmbientIntensity(env.ambientIntensity);
 
-    if (m_editor) {
-        m_editor->drawUI();
-        if (!m_editor->showLegacyTools()) return;
-    }
+    // No editor, os painéis do motor (F2, F3 detalhado, F12...) abrem pelo
+    // menu Window > Engine Tools e encaixam como os outros; o HUD de jogo
+    // (atalhos, painel de controle, FPS, minimapa) fica de fora.
+    if (m_editor) m_editor->drawUI();
     if (!m_editor && m_gameOverlay) m_gameOverlay();
 
     float zoomPercent = 1.0f - (m_camera.orbitDistance() - 10.0f) / (1000.0f - 10.0f);
@@ -520,7 +520,7 @@ void Engine::renderImGui() {
 
     if (m_showDebugOverlay) {
         m_modelRenderer.setHighlightedInstance(-1);
-        {
+        if (!m_editor) {
             // Demo de video (m_demoHidePanels): painel fora da tela, sem mexer na estrutura.
             ImGui::SetNextWindowPos(m_demoHidePanels ? ImVec2(-10000.0f, -10000.0f) : ImVec2(10, 10), ImGuiCond_Always);
             ImGui::SetNextWindowBgAlpha(0.45f);
@@ -566,7 +566,7 @@ void Engine::renderImGui() {
             ImGui::PopStyleVar();
         }
 
-        if (m_showConsole) {
+        if (m_showConsole && !m_editor) {
             ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, 40), ImGuiCond_Always, ImVec2(0.5f, 0));
             ImGui::SetNextWindowSize(ImVec2(600, 0));
             if (ImGui::Begin("Console", &m_showConsole, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)) {
@@ -2302,6 +2302,7 @@ void Engine::renderImGui() {
             ImGui::PopStyleVar();
         }
 
+        if (!m_editor) {
         // Control Panel: sempre no canto superior direito
         ImGui::SetNextWindowPos(m_demoHidePanels ? ImVec2(-10000.0f, -10000.0f) : ImVec2(ImGui::GetIO().DisplaySize.x - 10, 10), ImGuiCond_Always, ImVec2(1, 0));
         if (ImGui::Begin("Control Panel", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -2523,6 +2524,7 @@ void Engine::renderImGui() {
                 dl->AddText(ImVec2(entry.screenPos.x - textSize.x * 0.5f, boxMin.y + pad), textCol, idText);
             }
         }
+        } // !m_editor
     }
 }
 

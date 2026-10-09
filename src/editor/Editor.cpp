@@ -283,10 +283,23 @@ void Editor::registerCommands() {
     }).checked = [this] { return m_lang == UiLanguage::Portuguese; };
     add("window.reset_layout", "Window", "Reset Layout", {}, [this] { m_resetLayout = true; },
         "Puts every panel back in its default place.");
-    add("window.legacy", "Window", "Engine Debug Tools", {ImGuiKey_F12}, [this] {
-        m_showLegacyTools = !m_showLegacyTools;
-    }, "Shows the engine's own debug panels (telemetry, effects, weather).")
-        .checked = [this] { return m_showLegacyTools; };
+    // Painéis do próprio motor, como janelas encaixáveis do editor.
+    auto engineTool = [&](const char* id, const char* label, Shortcut sc, bool* flag, const char* help) {
+        auto& c = add(id, "Engine Tools", label, sc, [flag] { *flag = !*flag; }, help);
+        c.checked = [flag] { return *flag; };
+    };
+    engineTool("engine.effects", "Effects, Lighting and Post", {ImGuiKey_F2}, &m_engine->m_showEffectsMenu,
+               "Sun, ambient, fog, bloom, tone mapping, shadows, weather and every post effect.");
+    engineTool("engine.telemetry", "Detailed Telemetry", {ImGuiKey_F3, false, true}, &m_engine->m_showStatsMenu,
+               "The full engine telemetry: GPU per pass, memory, LOD, caches.");
+    engineTool("engine.objects", "Object Manager", {}, &m_engine->m_showObjectMenu,
+               "Model, light and texture lists of the engine.");
+    engineTool("engine.player_light", "Player Light", {ImGuiKey_F10}, &m_engine->m_showPlayerLightMenu,
+               "The light that follows the player.");
+    engineTool("engine.ab", "A/B Test", {ImGuiKey_F9}, &m_engine->m_showABTestMenu,
+               "Compare two settings side by side.");
+    engineTool("engine.resources", "Resource Manager", {ImGuiKey_F12}, &m_engine->m_showResourceManager,
+               "Textures, meshes and video memory in use.");
 
     // Ajuda
     {
@@ -376,9 +389,16 @@ void Editor::buildDefaultLayout(unsigned int dockspaceId) {
     ImGui::DockBuilderDockWindow(kWinScene, center);
     ImGui::DockBuilderDockWindow(kWinHierarchy, left);
     ImGui::DockBuilderDockWindow(kWinInspector, right);
+    // Painéis do motor (abertos pelo menu Engine Tools) nascem encaixados.
+    ImGui::DockBuilderDockWindow("Iterative Effects (F2)", right);
+    ImGui::DockBuilderDockWindow("Luz do Jogador (F10)", right);
+    ImGui::DockBuilderDockWindow("Object Manager (F1)", right);
+    ImGui::DockBuilderDockWindow("A/B Test (F9)", right);
     ImGui::DockBuilderDockWindow(kWinProject, bottom);
     ImGui::DockBuilderDockWindow(kWinConsole, bottom);
     ImGui::DockBuilderDockWindow(kWinTelemetry, bottom);
+    ImGui::DockBuilderDockWindow("Telemetry (F3)", bottom);
+    ImGui::DockBuilderDockWindow("Resource Manager (F12)", bottom);
     ImGui::DockBuilderFinish(dockspaceId);
     m_showHierarchy = m_showInspector = m_showProject = m_showConsole = m_showRules = m_showCode = m_showTelemetry = true;
     m_focusScene = true;
@@ -432,6 +452,7 @@ void Editor::update(float dt) {
             else if (what == "telemetry") m_pendingFocus.push_back(kWinTelemetry);
             else if (what == "project") m_pendingFocus.push_back(kWinProject);
             else if (what == "play") play();
+            else if (what == "cmd") m_commands.run(arg);
             else if (what == "palette") {
                 m_paletteOpen = true;
                 m_paletteFocus = true;
@@ -628,7 +649,12 @@ void Editor::drawMenuBar() {
         }
         ImGui::Separator();
         m_commands.menuItem("window.reset_layout");
-        m_commands.menuItem("window.legacy");
+        if (ImGui::BeginMenu("Engine Tools")) {
+            for (const char* id : {"engine.effects", "engine.telemetry", "engine.objects", "engine.player_light",
+                                   "engine.ab", "engine.resources"})
+                m_commands.menuItem(id);
+            ImGui::EndMenu();
+        }
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Help")) {
