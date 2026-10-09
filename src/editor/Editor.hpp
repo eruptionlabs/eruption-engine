@@ -4,6 +4,7 @@
 #include "editor/RuleSheet.hpp"
 #include "scene/SceneEdits.hpp"
 #include "formats/SpriteSheet.hpp"
+#include "editor/RemoteServer.hpp"
 #include "editor/UndoStack.hpp"
 #include "core/Logger.hpp"
 #include "renderer/DeferredLighting.hpp"
@@ -263,6 +264,11 @@ private:
     std::string m_newMapError;
     bool m_prefabOpen = false;
     bool m_showSpriteImporter = false;
+    // Segunda tela pelo navegador (EditorRemote.cpp)
+    RemoteServer m_remote;
+    bool m_showRemote = false;
+    int m_remotePort = 7777;
+    void drawRemoteWindow();
     struct TerrainBrush {
         int mode = 0; // 0 subir/baixar, 1 suavizar, 2 aplainar
         bool paint = false; // aba Paint: pinta camadas em vez de esculpir
