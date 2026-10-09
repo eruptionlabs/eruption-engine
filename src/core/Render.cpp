@@ -450,6 +450,22 @@ void Engine::render() {
     // Sync render effects with systems every frame (was previously only done when F2 menu was open)
     m_postSettings.enableFog = m_renderEffects[0]->isEnabled();
     m_postSettings.enableDoF = m_renderEffects[3]->isEnabled();
+    // MESMO BUG DO COMENTARIO ACIMA, so' que no debug de tesselacao e de PBR:
+    // m_postSettings.pbrDebugActive so' era escrita dentro de
+    // drawLightingControls() (ImGui.cpp), que so' roda com o painel F2/F9
+    // ABERTO na aba Lighting. Rodando por env var (ERUPTION_TEST_TESS_AUDIT
+    // ou ERUPTION_TEST_PBR_DEBUG, --screenshot headless, sem UI nenhuma) a
+    // flag nunca virava true, entao o composite aplicava
+    // tonemap+exposicao+bloom+fog POR CIMA da cor de auditoria - um cinza
+    // neutro (0.5 linear) saia bem mais claro e com MENOS contraste na
+    // imagem final (medido: dump cru da textura mean=127 std=64, tela
+    // pos-tonemap mean=210 std=19.6 pro MESMO texel - confirmado que NAO e'
+    // o BC7 com um teste isolado, ver ERUPTION_TEST_BC7_ALPHA). O dado nao
+    // tava errado - a imagem que mostrava ele tava sendo processada como se
+    // fosse cena normal. Fonte unica de verdade, incondicional, todo frame -
+    // ImGui.cpp so' seta o modo (setPbrDebugMode), nao mexe mais nesta flag.
+    m_postSettings.pbrDebugActive = (m_deferredLighting.pbrDebugMode() & 95u) != 0u ||
+                                    m_tessDebugMode != 0;
     m_shadowRenderer.settings().enabled = m_renderEffects[5]->isEnabled();
     // [4] "Point Lights": a caixa do F2 e a chave "point_lights" do preset
     // eram escritas e nunca lidas - o `low` (930M) pagava o passe inteiro
@@ -529,13 +545,11 @@ void Engine::render() {
         }
     };
     const float distMax = std::max(m_normalDistMax, 1.0f);
-    // z = modo de auditoria do deslocamento (ERUPTION_TEST_TESS_AUDIT, ver
-    // model.frag): 1 = deslocamento x normal, 2 = luz x relevo, 3 = modulo.
-    static const float kTessAudit = [] {
-        const char* e = std::getenv("ERUPTION_TEST_TESS_AUDIT");
-        return e ? static_cast<float>(std::atoi(e)) : 0.0f;
-    }();
-    frameUbo.normalDistParams = Vec4(distMax, m_normalDistCurve ? 1.0f : 0.0f, kTessAudit, m_tessHeightGain);
+    // z = modo de auditoria do deslocamento (ver model.frag): 0 desliga, 1-5
+    // ver Engine::m_tessDebugMode. Combo ao vivo no F2 (ImGui::renderImGui);
+    // ERUPTION_TEST_TESS_AUDIT so' fixa o valor inicial (Engine::Engine()).
+    frameUbo.normalDistParams = Vec4(distMax, m_normalDistCurve ? 1.0f : 0.0f,
+                                      static_cast<float>(m_tessDebugMode), m_tessHeightGain);
     sampleLut(m_normalScaleCurve, frameUbo.normalScaleLut0, frameUbo.normalScaleLut1);
     sampleLut(m_normalSmoothCurve, frameUbo.normalSmoothLut0, frameUbo.normalSmoothLut1);
     // ERUPTION_TEST_SHADOW_OPACITY=0 devolve a sombra cheia (A/B de bancada).
@@ -566,6 +580,14 @@ void Engine::render() {
     }();
     const bool tessWanted = (kTessEnv < 0) ? m_tessEnabled : (kTessEnv != 0);
     const bool tessOn = tessWanted && m_vulkan.tessellationSupported() && tessMax > 1.001f;
+    if (std::getenv("ERUPTION_TEST_TESS_DIAG")) {
+        static bool kLogged = false;
+        if (!kLogged) {
+            kLogged = true;
+            ERUPTION_LOG_WARN("[TESSDIAG] tessWanted=%d supported=%d tessMax=%.2f tessCap=%.2f tessOn=%d amplitude=%.2f",
+                              tessWanted, m_vulkan.tessellationSupported() ? 1 : 0, tessMax, tessCap, tessOn ? 1 : 0, m_tessAmplitude);
+        }
+    }
     // ERUPTION_TEST_TESS_AMP=<u> (bancada): amplitude do deslocamento.
     static const float kTessAmpEnv = [] {
         const char* e = std::getenv("ERUPTION_TEST_TESS_AMP");
@@ -583,9 +605,10 @@ void Engine::render() {
         const char* e = std::getenv("ERUPTION_TESS_FOLIAGE_CAP");
         return e ? static_cast<float>(std::atof(e)) : 0.0f;
     }();
-    frameUbo.tessParams2 = Vec4(static_cast<float>(m_tessHeightSpace),
-                                std::max(m_tessWorldScale, 1e-4f),
-                                glm::radians(m_normalMaxSlopeDeg), kFoliageTessCap);
+    // x = reservado, y = espacamento alvo entre vertices (densityFactor(),
+    // model.tesc).
+    frameUbo.tessParams2 = Vec4(0.0f, m_tessVertexSpacing, glm::radians(m_normalMaxSlopeDeg), kFoliageTessCap);
+    frameUbo.tessHeightBlur = m_tessHeightBlur;
     m_modelRenderer.setTessellation(tessOn, m_tessCurve.evaluate(0.0f) > 1.001f ? distMax * 0.12f : 0.0f);
     Vec4 shOpLo(1.0f), shOpHi(1.0f);
     sampleLut(m_shadowOpacitySpline, shOpLo, shOpHi);
@@ -732,6 +755,51 @@ void Engine::render() {
     m_vulkan.writeTimestamp(cmd, 3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     Profiler::addGpuTime("GBuffer", m_vulkan.timestampDeltaMs(2, 3));
     cpuMark(4);
+
+    // Popup de preview de textura em esfera (F1 -> Object Manager ->
+    // Textures) - alvo offscreen PROPRIO, fora do G-buffer da cena
+    // principal, so' roda quando o popup esta' aberto.
+    // ERUPTION_TEST_SPHERE_PREVIEW=<pedaco do nome>: liga sozinho pra' teste
+    // headless/screenshot, sem precisar clicar em nada.
+    {
+        static const char* kForcePreview = std::getenv("ERUPTION_TEST_SPHERE_PREVIEW");
+        static bool kApplied = false;
+        if (kForcePreview && !kApplied) {
+            for (auto const& [path, slot] : m_modelRenderer.getTextureCache()) {
+                if (path.find(kForcePreview) != std::string::npos) {
+                    // pbrIndex do cache (so' leitura - upload no meio do frame
+                    // quebrava o preview), dispScale 1.0 fixo.
+                    {
+                        const PbrTextureSlots pbr = m_modelRenderer.pbrForTexSlot(slot);
+                        m_spherePreview.setMaterial(slot, pbr.mrahw.index, 1.0f, pbr.normal.index);
+                        ERUPTION_LOG_WARN("[SPHEREPREVIEW] pbr cache: mrahw=%u normal=%u", pbr.mrahw.index, pbr.normal.index);
+                    }
+                    m_spherePreview.setWorldUvPerUnit(m_modelRenderer.uvPerUnitForSlot(slot));
+                    m_spherePreview.setMaterialLabel(path);
+                    m_spherePreview.setActive(true);
+                    // ERUPTION_TEST_SPHERE_SHAPE=cube (bancada): testa a forma
+                    // nova sem precisar clicar no radio button do popup.
+                    if (const char* shapeEnv = std::getenv("ERUPTION_TEST_SPHERE_SHAPE")) {
+                        if (std::string(shapeEnv) == "cube")
+                            m_spherePreview.setShape(SpherePreview::Shape::Cube);
+                    }
+                    // ERUPTION_TEST_PREVIEW_ORBIT="yaw,pitch" (graus): camera do
+                    // popup fixa e sem giro automatico - captura repetivel.
+                    if (const char* orb = std::getenv("ERUPTION_TEST_PREVIEW_ORBIT")) {
+                        float yawDeg = 45.0f, pitchDeg = 45.0f, dist = 0.0f;
+                        std::sscanf(orb, "%f,%f,%f", &yawDeg, &pitchDeg, &dist);
+                        m_spherePreview.setOrbitDegrees(yawDeg, pitchDeg);
+                        if (dist > 0.0f) m_spherePreview.setOrbitDistance(dist);
+                        m_spherePreview.setSpin(false);
+                    }
+                    kApplied = true;
+                    ERUPTION_LOG_WARN("[SPHEREPREVIEW] ERUPTION_TEST_SPHERE_PREVIEW: '%s' -> slot %u", path.c_str(), slot);
+                    break;
+                }
+            }
+        }
+    }
+    m_spherePreview.render(cmd, m_timer.deltaTime(), m_camera.position());
 
     // Cloud shadow map placeholder: not implemented yet for Cloud Layers.
     m_vulkan.writeTimestamp(cmd, 20, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);

@@ -15,6 +15,8 @@ Obtidas em tempo de configuracao (CMake FetchContent):
 - nlohmann/json (https://github.com/nlohmann/json) — MIT License
 - tinygltf (https://github.com/syoyo/tinygltf) — MIT License
 - Draco (https://github.com/google/draco) — Apache License 2.0
+- ONNX Runtime (https://github.com/microsoft/onnxruntime) — MIT License (opcional,
+  ERUPTION_ONNX: binario oficial baixado pelo CMake e copiado ao lado do executavel)
 - bc7enc_rdo (https://github.com/richgel999/bc7enc_rdo) — MIT / Public Domain (usa third_party/bc7enc_rdo/ se existir, senao e' baixado pelo CMake)
 
 Vendorizadas em third_party/:

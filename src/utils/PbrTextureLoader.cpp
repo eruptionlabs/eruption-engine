@@ -1,4 +1,6 @@
 #include "utils/PbrTextureLoader.hpp"
+#include "utils/HeightFromAlbedo.hpp"
+#include "ml/NeuralPbr.hpp"
 #include "utils/BcCompressor.hpp"
 #include <chrono>
 #include <atomic>
@@ -197,9 +199,55 @@ bool synthesizePbrFromAlbedo(const std::string& albedoDiskPath,
                                    outMrahw, outNormal);
 }
 
+static uint8_t toUnorm8(float v) {
+    return static_cast<uint8_t>(std::clamp(v * 255.0f + 0.5f, 0.0f, 255.0f));
+}
+
+// Altura da rede (media zero, unidade dela) -> [0,1] centrado em 0.5, com o
+// percentil 98 de |h| em 0.45: a mesma faixa util da sintese classica, que
+// e' a que os controles de displacement esperam.
+static std::vector<float> neuralHeightToUnit(const std::vector<float>& h) {
+    if (h.empty()) return {};
+    std::vector<float> mag(h.size());
+    for (size_t i = 0; i < h.size(); ++i) mag[i] = std::fabs(h[i]);
+    const size_t k = h.size() * 98 / 100;
+    std::nth_element(mag.begin(), mag.begin() + static_cast<std::ptrdiff_t>(k), mag.end());
+    const float scale = 0.45f / std::max(mag[k], 1e-6f);
+    std::vector<float> out(h.size());
+    for (size_t i = 0; i < h.size(); ++i) out[i] = 0.5f + h[i] * scale;
+    return out;
+}
+
+// MRAH-W + normal a partir da saida da rede. Exige normal e altura (o que o
+// relevo usa); metal/rugosidade/AO que a rede nao der ficam no padrao.
+static bool fillPbrFromNeural(const NeuralPbrMaps& nn, PbrTextureData& outMrahw, PbrTextureData& outNormal) {
+    const size_t np = static_cast<size_t>(nn.width) * nn.height;
+    if (nn.normal.size() != np * 3 || nn.heightMap.size() != np) return false;
+    const std::vector<float> height = neuralHeightToUnit(nn.heightMap);
+    const bool hasMetal = nn.metallic.size() == np, hasRough = nn.roughness.size() == np, hasAo = nn.ao.size() == np;
+    outNormal.width = outMrahw.width = nn.width;
+    outNormal.height = outMrahw.height = nn.height;
+    outNormal.channels = outMrahw.channels = 4;
+    outNormal.pixels.resize(np * 4);
+    outMrahw.pixels.resize(np * 4);
+    for (size_t i = 0; i < np; ++i) {
+        // A rede entrega +Y pra cima (OpenGL), a convencao que o motor le'
+        // (_nor_dx e' convertido pra ela no carregamento).
+        for (int c = 0; c < 3; ++c) outNormal.pixels[i * 4 + c] = toUnorm8(nn.normal[i * 3 + c] * 0.5f + 0.5f);
+        outNormal.pixels[i * 4 + 3] = 1; // materialProps (none)
+        outMrahw.pixels[i * 4 + 0] = hasMetal ? toUnorm8(nn.metallic[i]) : 0;
+        outMrahw.pixels[i * 4 + 1] = hasRough ? toUnorm8(nn.roughness[i]) : 204; // ~0.8
+        outMrahw.pixels[i * 4 + 2] = hasAo ? toUnorm8(nn.ao[i]) : 255;
+        // Altura centrada em 0.5. 250 e' o teto (255 = flag "sem altura").
+        outMrahw.pixels[i * 4 + 3] = static_cast<uint8_t>(std::clamp(height[i] * 250.0f, 0.0f, 250.0f));
+    }
+    return true;
+}
+
 bool synthesizePbrFromPixels(const std::vector<uint8_t>& pixels, int width, int height,
                              int channels,
-                             PbrTextureData& outMrahw, PbrTextureData& outNormal) {
+                             PbrTextureData& outMrahw, PbrTextureData& outNormal,
+                             bool organicHint) {
     if (pixels.empty() || width < 4 || height < 4 || channels < 3) return false;
     ImageData src;
     src.pixels = pixels;
@@ -214,73 +262,35 @@ bool synthesizePbrFromPixels(const std::vector<uint8_t>& pixels, int width, int 
     const int w = src.width, h = src.height, ch = src.channels;
     if (w < 4 || h < 4) return false;
 
-    std::vector<float> luma(static_cast<size_t>(w) * h);
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            const uint8_t* p = &src.pixels[(static_cast<size_t>(y) * w + x) * ch];
-            luma[static_cast<size_t>(y) * w + x] =
-                (0.299f * p[0] + 0.587f * p[1] + 0.114f * p[2]) / 255.0f;
-        }
-    }
-    auto L = [&](int x, int y) -> float {
-        x = (x % w + w) % w; y = (y % h + h) % h; // wrap: textures tile
-        return luma[static_cast<size_t>(y) * w + x];
-    };
-    // Small box blur of luma for the cavity term.
-    std::vector<float> blur(luma.size());
-    const int BR = 3;
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            float s = 0.0f;
-            for (int dy = -BR; dy <= BR; ++dy)
-                for (int dx = -BR; dx <= BR; ++dx)
-                    s += L(x + dx, y + dy);
-            blur[static_cast<size_t>(y) * w + x] = s / float((2 * BR + 1) * (2 * BR + 1));
-        }
-    }
+    // RGBA8 contiguo pro modulo (a fonte pode vir com 3 canais).
+    std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4, 255);
+    for (size_t i = 0; i < static_cast<size_t>(w) * h; ++i)
+        for (int c = 0; c < 3; ++c) rgba[i * 4 + c] = src.pixels[i * ch + c];
 
+    // Rede neural configurada localmente (NeuralPbr.hpp), quando existe.
+    NeuralPbrMaps nn;
+    if (neuralPbrInfer(rgba.data(), w, h, nn) && fillPbrFromNeural(nn, outMrahw, outNormal)) return true;
+
+    // Altura, normal e cavidade vem do MESMO lugar que o cooker offline
+    // (HeightFromAlbedo.hpp) - antes cada um tinha a sua conta e nenhuma
+    // separava rejunte de tinta.
+    HeightFromAlbedoParams hp;
+    hp.forceOrganic = organicHint;
+    const HeightFromAlbedoResult hfa = heightFromAlbedo(rgba.data(), w, h, hp);
+    if (hfa.heightMap.empty()) return false;
+
+    const size_t np = static_cast<size_t>(w) * h;
     outNormal.width = w; outNormal.height = h; outNormal.channels = 4;
-    outNormal.pixels.assign(static_cast<size_t>(w) * h * 4, 0);
+    outNormal.pixels = hfa.normalRgba;
     outMrahw.width = w; outMrahw.height = h; outMrahw.channels = 4;
-    outMrahw.pixels.assign(static_cast<size_t>(w) * h * 4, 255);
-
-    const float NSTRENGTH = 3.5f;      // Sobel gain -> tangent slope (relevo mais legível)
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            // Sobel gradient of luminance.
-            float gx = (L(x + 1, y - 1) + 2.0f * L(x + 1, y) + L(x + 1, y + 1))
-                     - (L(x - 1, y - 1) + 2.0f * L(x - 1, y) + L(x - 1, y + 1));
-            float gy = (L(x - 1, y + 1) + 2.0f * L(x, y + 1) + L(x + 1, y + 1))
-                     - (L(x - 1, y - 1) + 2.0f * L(x, y - 1) + L(x + 1, y - 1));
-            float nx = -gx * NSTRENGTH;
-            float ny = -gy * NSTRENGTH;
-            float nz = 1.0f;
-            float inv = 1.0f / std::sqrt(nx * nx + ny * ny + nz * nz);
-            nx *= inv; ny *= inv; nz *= inv;
-            size_t o = (static_cast<size_t>(y) * w + x) * 4;
-            outNormal.pixels[o + 0] = static_cast<uint8_t>(std::clamp((nx * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
-            outNormal.pixels[o + 1] = static_cast<uint8_t>(std::clamp((ny * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
-            outNormal.pixels[o + 2] = static_cast<uint8_t>(std::clamp((nz * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
-            outNormal.pixels[o + 3] = 1; // materialProps (none)
-
-            // CONTRASTE LOCAL, não brilho absoluto. Luminância absoluta não é
-            // altura: uma tábua pintada escura viraria "buraco" e o veio da
-            // madeira viraria relevo falso (era a fonte do "raso e ruidoso").
-            // (luma - blur) isola o SULCO (borda de tábua, junta de pedra) e
-            // ignora a cor média da superfície.
-            const size_t li = static_cast<size_t>(y) * w + x;
-            const float detail = luma[li] - blur[li];   // >0 saliência, <0 sulco
-            // Ganho alto + tanh: aprofunda sem estourar em superfície ruidosa.
-            const float rel = std::tanh(detail * 6.0f); // [-1,1]
-            float cav = std::clamp(1.0f + std::min(rel, 0.0f) * 1.2f, 0.35f, 1.0f);
-            outMrahw.pixels[o + 0] = 0;                                   // metallic
-            outMrahw.pixels[o + 1] = 204;                                 // roughness ~0.8
-            outMrahw.pixels[o + 2] = static_cast<uint8_t>(cav * 255.0f);  // AO
-            // Altura centrada em 0.5: sulco abaixo, saliência acima. 250 é o
-            // teto (255 = flag "sem altura" no shader).
-            outMrahw.pixels[o + 3] = static_cast<uint8_t>(std::clamp(
-                (rel * 0.5f + 0.5f) * 250.0f, 0.0f, 250.0f));
-        }
+    outMrahw.pixels.assign(np * 4, 255);
+    for (size_t i = 0; i < np; ++i) {
+        outNormal.pixels[i * 4 + 3] = 1; // materialProps (none)
+        outMrahw.pixels[i * 4 + 0] = 0;   // metallic
+        outMrahw.pixels[i * 4 + 1] = 204; // roughness ~0.8
+        outMrahw.pixels[i * 4 + 2] = toUnorm8(hfa.cavity[i]);
+        // Altura centrada em 0.5. 250 e' o teto (255 = flag "sem altura").
+        outMrahw.pixels[i * 4 + 3] = static_cast<uint8_t>(std::clamp(hfa.heightMap[i] * 250.0f, 0.0f, 250.0f));
     }
     return true;
 }

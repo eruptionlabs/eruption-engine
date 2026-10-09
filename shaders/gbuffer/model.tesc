@@ -36,7 +36,7 @@ layout(location = 15) in flat uvec2 inSplatTex[];
 layout(location = 16) in flat uvec2 inSplatTex2[];
 layout(location = 17) in flat uint inBlendMaskIndex2[];
 layout(location = 18) in flat float inSway[];
-layout(location = 19) in vec3 inDispInfo[];
+layout(location = 19) in vec4 inDispInfo[];
 
 layout(location = 0) out vec3 outWorldPos[];
 layout(location = 1) out vec2 outTexCoord[];
@@ -116,8 +116,9 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_tessParams;
     vec4 u_tessLut0;
     vec4 u_tessLut1;
-    // x = 0 UV / 1 mundo, y = escala do mundo (ver model.tese),
-    // z = inclinacao maxima da normal, w = TETO DE FATOR PARA FOLHAGEM.
+    // x = reservado, y = ESPACAMENTO ALVO entre vertices (u, 0 = desliga -
+    // ver densityFactor()), z = inclinacao maxima da normal,
+    // w = TETO DE FATOR PARA FOLHAGEM.
     vec4 u_tessParams2;
 };
 
@@ -192,10 +193,34 @@ float foliageCap(int a, int b) {
     return (sway > 0.0) ? cap : 64.0;
 }
 
-// Fator da ARESTA: a curva manda, o piso em pixels corta. min() e nao mix()
-// porque o piso e' um limite fisico do rasterizador, nao uma preferencia.
+// FATOR POR DENSIDADE (u_tessParams2.y = espacamento alvo em u).
+//
+// So' a curva nao bastava: ela da' o MESMO fator (teto 8) pra qualquer
+// aresta, e chao de mapa legado e' feito de triangulo grande (tile ~10-12 u) - 8
+// segmentos = um vertice a cada ~1,3 u, e o paralelepipedo tem ~2 u, ou seja
+// ~2 vertices por pedra. Deslocamento por vertice nao desenha forma nenhuma
+// com isso: o chao saia liso mesmo com a altura certa (autor: "o chao ta
+// flat, nao parece os paralelepipedos"). O cubo do preview tinha ~0,05 u
+// entre vertices - por isso la' aparecia e no mundo nao.
+//
+// Aqui o fator vem do COMPRIMENTO da aresta em mundo / espacamento alvo,
+// atenuado pelo mesmo peso da curva (1 colado na camera, 0 no fim da banda) -
+// longe continua barato. Depende SO' das posicoes dos dois vertices, entao
+// patches vizinhos chegam ao mesmo numero e a aresta nao racha. O piso em
+// pixels (edgePixels) continua cortando por cima.
+float densityFactor(int a, int b) {
+    float spacing = u_tessParams2.y;
+    if (spacing <= 0.0) return 1.0;
+    float curveMax = max(u_tessParams.w, 1.0001);
+    float w = clamp((max(tessAt(a), tessAt(b)) - 1.0) / (curveMax - 1.0), 0.0, 1.0);
+    return 1.0 + max(distance(inWorldPos[a], inWorldPos[b]) / spacing - 1.0, 0.0) * w;
+}
+
+// Fator da ARESTA: a curva (ou a densidade, o que for maior) manda, o piso em
+// pixels corta. min() e nao mix() porque o piso e' um limite fisico do
+// rasterizador, nao uma preferencia.
 float edgeFactor(int a, int b) {
-    float fromCurve = max(tessAt(a), tessAt(b));
+    float fromCurve = max(max(tessAt(a), tessAt(b)), densityFactor(a, b));
     float fromPixels = max(edgePixels(a, b) / kTargetEdgePixels, 1.0);
     return max(min(min(fromCurve, fromPixels), foliageCap(a, b)), 1.0);
 }

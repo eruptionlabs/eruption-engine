@@ -1,6 +1,7 @@
 #include "utils/PbrMapGen.hpp"
 
 #include "utils/NormalMapGen.hpp"
+#include "utils/HeightFromAlbedo.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -80,52 +81,18 @@ PbrMapSet generatePbrMaps(const uint8_t* rgba, int width, int height,
     out.mrahw.resize(count * 4);
     out.normal.resize(count * 4);
 
-    // Stage 1: Luminance
+    // Stage 1/2: altura + normal + cavidade (HeightFromAlbedo.hpp - mesma
+    // conta do bake de load, synthesizePbrFromPixels). O que estava aqui era
+    // heightF = luma (claro = alto, pixel a pixel) e Sobel na luminancia.
+    HeightFromAlbedoParams hp;
+    hp.normalStrength = 3.0f * normalStrength;
+    const HeightFromAlbedoResult hfa = heightFromAlbedo(rgba, width, height, hp);
+    if (hfa.heightMap.empty()) return out;
+    out.normal = hfa.normalRgba;
+
     std::vector<float> luma(count);
     for (int i = 0; i < count; ++i) {
         luma[i] = rgbToLuma(rgba[i * 4 + 0], rgba[i * 4 + 1], rgba[i * 4 + 2]);
-    }
-
-    // Stage 2: Normal map (Sobel 3x3) + Height + Wetness
-    std::vector<float> heightF(count);
-
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            int idx = y * width + x;
-
-            // Height
-            heightF[idx] = luma[idx];
-
-            // Sobel
-            int xm1 = std::max(x - 1, 0);
-            int xp1 = std::min(x + 1, width - 1);
-            int ym1 = std::max(y - 1, 0);
-            int yp1 = std::min(y + 1, height - 1);
-
-            float tl = luma[ym1 * width + xm1];
-            float t  = luma[ym1 * width + x];
-            float tr = luma[ym1 * width + xp1];
-            float l  = luma[y * width + xm1];
-            float r  = luma[y * width + xp1];
-            float bl = luma[yp1 * width + xm1];
-            float b  = luma[yp1 * width + x];
-            float br = luma[yp1 * width + xp1];
-
-            float sobelX = (tr + 2.0f * r + br) - (tl + 2.0f * l + bl);
-            float sobelY = (bl + 2.0f * b + br) - (tl + 2.0f * t + tr);
-
-            Vec3 n(-sobelX * normalStrength, -sobelY * normalStrength, 1.0f);
-            n = glm::normalize(n);
-
-            // Tangent-space Y+ follows the increasing-V direction (image rows
-            // run top-down and textures are uploaded without a vertical flip),
-            // so the shader must not flip the green channel.
-            out.normal[idx * 4 + 0] = floatToByte(n.x * 0.5f + 0.5f);
-            out.normal[idx * 4 + 1] = floatToByte(n.y * 0.5f + 0.5f);
-            out.normal[idx * 4 + 2] = floatToByte(n.z * 0.5f + 0.5f);
-            out.normal[idx * 4 + 3] = 255;
-
-        }
     }
 
     // Stage 3: Roughness baked at 100% with a small variance-based detail
@@ -164,18 +131,10 @@ PbrMapSet generatePbrMaps(const uint8_t* rgba, int width, int height,
     // estourar em textura ruidosa; piso 0.35 pra nao virar preto. Mantido
     // IDENTICO em tools/migrate_mrahw_layout.py, que converteu os cozidos
     // existentes sem recozer (preserva R/G e os normais bit a bit).
-    float hMin = *std::min_element(heightF.begin(), heightF.end());
-    float hMax = *std::max_element(heightF.begin(), heightF.end());
-    float hRange = std::max(hMax - hMin, 1e-5f);
-    std::vector<float> heightN(count);
-    for (int i = 0; i < count; ++i) heightN[i] = (heightF[i] - hMin) / hRange;
-    std::vector<float> heightBlur = boxBlur(heightN, width, height, 3);
     for (int i = 0; i < count; ++i) {
-        float rel = std::tanh((heightN[i] - heightBlur[i]) * 4.0f); // <0 = sulco
-        float cav = std::clamp(1.0f + std::min(rel, 0.0f) * 1.2f, 0.35f, 1.0f);
-        out.mrahw[i * 4 + 2] = floatToByte(cav);
+        out.mrahw[i * 4 + 2] = floatToByte(hfa.cavity[i]);
         // 254 e' o teto: 255 = flag "sem altura" no shader.
-        out.mrahw[i * 4 + 3] = static_cast<uint8_t>(std::min(254.0f, heightN[i] * 255.0f + 0.5f));
+        out.mrahw[i * 4 + 3] = static_cast<uint8_t>(std::min(254.0f, hfa.heightMap[i] * 255.0f + 0.5f));
     }
 
     return out;

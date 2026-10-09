@@ -1,0 +1,129 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Convolucao 2D (NCHW, pesos [M, C/grupo, KH, KW]) como multiplicacao de
+// matrizes implicita: saida[canal, pixel] = W[canal, k] * X[k, pixel], com
+// k = (canal de entrada, ky, kx). Cada grupo de trabalho calcula um bloco de
+// (16 * THREAD_M) canais x 64 pixels; cada thread, THREAD_M canais x 4
+// pixels. THREAD_M vem por constante de especializacao (1, 2 ou 4): camada
+// com poucos canais de saida usa bloco menor em vez de calcular zeros.
+// W e X passam pela memoria compartilhada em fatias de 16 valores de k.
+//
+// Indices sem divisao no laco: cada thread carrega sempre o MESMO pixel de X
+// (decodificado uma vez) e anda em k de forma incremental; (ky, kx) de cada
+// posicao do nucleo vem de uma tabela compartilhada.
+// Despacho: x = blocos de pixels, y = blocos de canais, z = lote * grupos.
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "nn_common.glsl"
+
+layout(constant_id = 0) const int THREAD_M = 4;
+#define BLOCK_M (16 * THREAD_M)
+#define BLOCK_N 64
+#define BLOCK_K 16
+#define THREAD_N 4
+#define MAX_KERNEL_AREA 64
+
+layout(push_constant) uniform Params {
+    uint baseX;
+    uint baseW;
+    uint baseBias;
+    uint baseOut;
+    int batch, channels, height, width;
+    int outChannels, channelsPerGroup, kernelH, kernelW;
+    int outHeight, outWidth;
+    int padTop, padLeft, strideH, strideW, dilationH, dilationW;
+    int groups;
+    uint hasBias;
+    uint total;
+} p;
+
+shared float tileW[BLOCK_K][BLOCK_M];
+shared float tileX[BLOCK_K][BLOCK_N];
+shared int kernelDy[MAX_KERNEL_AREA];
+shared int kernelDx[MAX_KERNEL_AREA];
+
+void main() {
+    const int tx = int(gl_LocalInvocationID.x), ty = int(gl_LocalInvocationID.y);
+    const int tid = ty * 16 + tx;
+    const int outPerGroup = p.outChannels / p.groups;
+    const int n = int(gl_WorkGroupID.z) / p.groups;
+    const int group = int(gl_WorkGroupID.z) % p.groups;
+    const int firstOut = int(gl_WorkGroupID.y) * BLOCK_M;
+    const int firstPixel = int(gl_WorkGroupID.x) * BLOCK_N;
+    const int pixels = p.outHeight * p.outWidth;
+    const int kernelArea = p.kernelH * p.kernelW;
+    const int innerK = p.channelsPerGroup * kernelArea;
+    const int plane = p.height * p.width;
+    const uint weights = p.baseW + uint((group * outPerGroup) * innerK);
+    const uint image = p.baseX + uint((n * p.channels + group * p.channelsPerGroup) * plane);
+
+    if (tid < kernelArea && tid < MAX_KERNEL_AREA) {
+        kernelDy[tid] = (tid / p.kernelW) * p.dilationH;
+        kernelDx[tid] = (tid % p.kernelW) * p.dilationW;
+    }
+    barrier();
+
+    // Carga de X: coluna fixa (pixel) e 4 linhas de k (tid/64 + 4*i).
+    const int loadCol = tid % BLOCK_N;
+    const int loadPixel = firstPixel + loadCol;
+    const bool pixelValid = loadPixel < pixels;
+    const int baseY = pixelValid ? (loadPixel / p.outWidth) * p.strideH - p.padTop : 0;
+    const int baseX = pixelValid ? (loadPixel % p.outWidth) * p.strideW - p.padLeft : 0;
+    const int firstRow = tid / BLOCK_N;
+    int loadChannel[4], loadTap[4];
+    for (int i = 0; i < 4; ++i) {
+        const int k = firstRow + 4 * i;
+        loadChannel[i] = k / kernelArea;
+        loadTap[i] = k % kernelArea;
+    }
+    // Carga de W: k fixo (tid % 16) e THREAD_M canais (tid/16 + 16*i).
+    const int loadK = tid % BLOCK_K;
+    const int firstM = tid / BLOCK_K;
+
+    float acc[THREAD_M][THREAD_N];
+    for (int i = 0; i < THREAD_M; ++i)
+        for (int j = 0; j < THREAD_N; ++j) acc[i][j] = 0.0;
+
+    for (int k0 = 0; k0 < innerK; k0 += BLOCK_K) {
+        for (int i = 0; i < THREAD_M; ++i) {
+            const int oc = firstOut + firstM + 16 * i, kk = k0 + loadK;
+            tileW[loadK][firstM + 16 * i] = (oc < outPerGroup && kk < innerK) ? arena.data[weights + uint(oc * innerK + kk)] : 0.0;
+        }
+        for (int i = 0; i < 4; ++i) {
+            const int kk = k0 + firstRow + 4 * i;
+            float v = 0.0;
+            if (pixelValid && kk < innerK) {
+                const int iy = baseY + kernelDy[loadTap[i]], ix = baseX + kernelDx[loadTap[i]];
+                if (iy >= 0 && iy < p.height && ix >= 0 && ix < p.width)
+                    v = arena.data[image + uint(loadChannel[i] * plane + iy * p.width + ix)];
+            }
+            tileX[firstRow + 4 * i][loadCol] = v;
+            // Proxima fatia: k anda BLOCK_K.
+            loadTap[i] += BLOCK_K;
+            while (loadTap[i] >= kernelArea) {
+                loadTap[i] -= kernelArea;
+                ++loadChannel[i];
+            }
+        }
+        barrier();
+        for (int k = 0; k < BLOCK_K; ++k) {
+            float a[THREAD_M], b[THREAD_N];
+            for (int i = 0; i < THREAD_M; ++i) a[i] = tileW[k][ty + 16 * i];
+            for (int j = 0; j < THREAD_N; ++j) b[j] = tileX[k][tx + 16 * j];
+            for (int i = 0; i < THREAD_M; ++i)
+                for (int j = 0; j < THREAD_N; ++j) acc[i][j] += a[i] * b[j];
+        }
+        barrier();
+    }
+
+    for (int i = 0; i < THREAD_M; ++i) {
+        const int oc = firstOut + ty + 16 * i;
+        if (oc >= outPerGroup) continue;
+        const int channel = group * outPerGroup + oc;
+        const float bias = p.hasBias != 0u ? arena.data[p.baseBias + uint(channel)] : 0.0;
+        const uint row = p.baseOut + uint((n * p.outChannels + channel) * pixels);
+        for (int j = 0; j < THREAD_N; ++j) {
+            const int pixel = firstPixel + tx + 16 * j;
+            if (pixel < pixels) arena.data[row + uint(pixel)] = acc[i][j] + bias;
+        }
+    }
+}

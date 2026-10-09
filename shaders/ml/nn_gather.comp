@@ -1,0 +1,26 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Gather num eixo com indices constantes (guardados como float na arena).
+layout(local_size_x = 256) in;
+#include "nn_common.glsl"
+
+layout(push_constant) uniform Params {
+    uint baseSrc;
+    uint baseIdx;
+    uint baseOut;
+    uint outer;
+    uint count;  // K
+    uint inner;
+    uint axisSize;
+    uint total;
+} p;
+
+void main() {
+    const uint i = flatIndex();
+    if (i >= p.total) return;
+    const uint inner = i % p.inner;
+    const uint k = (i / p.inner) % p.count;
+    const uint o = i / (p.inner * p.count);
+    const uint idx = uint(arena.data[p.baseIdx + k]);
+    arena.data[p.baseOut + i] = arena.data[p.baseSrc + (o * p.axisSize + idx) * p.inner + inner];
+}

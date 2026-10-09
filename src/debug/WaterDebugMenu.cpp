@@ -383,7 +383,7 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
                 liquidShapeDirty = true;
             }
 
-            // Gizmo de viewport (setinhas tipo Unity/Blender/Unreal) - pedido
+            // Gizmo de viewport (setinhas de editor 3D) - pedido
             // explicito do autor, por cima do InputFloat acima (os dois
             // convivem, o gizmo so' e' mais rapido pra ajustes grandes).
             // So' translacao e rotacao fazem sentido pro disco de lava (nao

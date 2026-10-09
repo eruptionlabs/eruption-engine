@@ -1,0 +1,64 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Uma reducao por grupo de trabalho: cada grupo e' um elemento de saida, os
+// 256 threads percorrem os eixos reduzidos e somam em memoria compartilhada.
+layout(local_size_x = 256) in;
+#include "nn_common.glsl"
+
+layout(push_constant) uniform Params {
+    uint dims[6];
+    uint strides[6];
+    uint mask;     // bit d = eixo d reduzido
+    uint baseIn;
+    uint baseOut;
+    uint outCount;
+    uint reduceCount;
+    uint code;     // NnReduce
+} p;
+
+shared float partial[256];
+
+bool reduced(int d) { return (p.mask & (1u << uint(d))) != 0u; }
+
+float combine(float a, float b) {
+    if (p.code == 2u) return max(a, b);
+    if (p.code == 3u) return min(a, b);
+    return a + b;
+}
+
+void main() {
+    const uint o = gl_WorkGroupID.x + gl_WorkGroupID.y * gl_NumWorkGroups.x;
+    if (o >= p.outCount) return;
+    uint rest = o, base = 0u;
+    for (int d = 5; d >= 0; --d) {
+        if (reduced(d)) continue;
+        base += (rest % p.dims[d]) * p.strides[d];
+        rest /= p.dims[d];
+    }
+    const float init = p.code == 2u ? -3.4e38 : (p.code == 3u ? 3.4e38 : 0.0);
+    float acc = init;
+    for (uint r = gl_LocalInvocationID.x; r < p.reduceCount; r += 256u) {
+        uint rr = r, off = 0u;
+        for (int d = 5; d >= 0; --d) {
+            if (!reduced(d)) continue;
+            off += (rr % p.dims[d]) * p.strides[d];
+            rr /= p.dims[d];
+        }
+        float v = arena.data[p.baseIn + base + off];
+        if (p.code == 4u || p.code == 5u) v *= v;
+        acc = combine(acc, v);
+    }
+    partial[gl_LocalInvocationID.x] = acc;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1) {
+        if (gl_LocalInvocationID.x < s)
+            partial[gl_LocalInvocationID.x] = combine(partial[gl_LocalInvocationID.x], partial[gl_LocalInvocationID.x + s]);
+        barrier();
+    }
+    if (gl_LocalInvocationID.x == 0u) {
+        float v = partial[0];
+        if (p.code == 1u) v /= float(p.reduceCount);
+        if (p.code == 4u) v = sqrt(v);
+        arena.data[p.baseOut + o] = v;
+    }
+}

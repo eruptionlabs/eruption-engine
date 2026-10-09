@@ -1,0 +1,28 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Copia com passos: Slice, Concat, Split, Transpose, DepthToSpace, Expand.
+layout(local_size_x = 256) in;
+#include "nn_common.glsl"
+
+layout(push_constant) uniform Params {
+    uint dims[6];
+    int srcStrides[6];
+    int dstStrides[6];
+    uint srcBase;
+    uint dstBase;
+    uint total;
+} p;
+
+void main() {
+    const uint i = flatIndex();
+    if (i >= p.total) return;
+    uint rest = i;
+    int src = 0, dst = 0;
+    for (int d = 5; d >= 0; --d) {
+        const int c = int(rest % p.dims[d]);
+        rest /= p.dims[d];
+        src += c * p.srcStrides[d];
+        dst += c * p.dstStrides[d];
+    }
+    arena.data[int(p.dstBase) + dst] = arena.data[int(p.srcBase) + src];
+}

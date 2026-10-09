@@ -39,6 +39,7 @@
 #include "debug/MipmapDebugMenu.hpp"
 #include "debug/WaterDebugMenu.hpp"
 #include "debug/WaterBenchmark.hpp"
+#include "debug/SpherePreview.hpp"
 #include "utils/DayNightCycle.hpp"
 #include "utils/EmbeddedTextureBake.hpp"
 #include "utils/SystemMonitor.hpp"
@@ -305,6 +306,13 @@ public:
     bool& showObjectMenu() { return m_showObjectMenu; }
     bool& showEffectsMenu() { return m_showEffectsMenu; }
     bool& showABTestMenu() { return m_showABTestMenu; }
+    // Esfera de teste (F1 -> Object Manager -> Textures, clicar num item da
+    // lista - ver debug/SpherePreview.hpp). Popup INSTANTANEO: renderiza num
+    // alvo offscreen proprio, nunca entra no mapa/instancia nenhuma, nao
+    // recarrega nada (a 1a versao recarregava o mapa pra' injetar a esfera
+    // como objeto do mundo - autor: "a esfera tem que aparecer num pop do
+    // mapa" / "atualmente eu clico e ele muda a textura do chao (errado)").
+    SpherePreview& spherePreview() { return m_spherePreview; }
     bool& showPlayerLightMenu() { return m_showPlayerLightMenu; }
     // Luz de teste presa ao sprite principal (F10): pra' ver a interacao da
     // point light com o mundo (PBR, PCSS, molhado) sem depender de prop com
@@ -515,6 +523,7 @@ private:
     bool m_showSpritePicker = false; 
     bool m_showResourceManager = false; 
     bool m_showABTestMenu = false;
+    SpherePreview m_spherePreview;
     bool m_showPlayerLightMenu = false;
     PlayerLight m_playerLight;
     bool m_debugModelPivots = false;
@@ -597,7 +606,7 @@ private:
     char m_consoleInput[256] = {0};
     int m_selectedLightIndex = -1;
     // Selecionado na lista "Models" do Object Manager (F1) - pedido do autor
-    // pra ter setinhas de gizmo (Unity/Blender/Unreal-style) em cima de
+    // pra ter setinhas de gizmo (estilo editor 3D) em cima de
     // QUALQUER objeto da cena, nao so' a lava. -1 = nada selecionado.
     int m_selectedModelInstance = -1;
     PostProcessor::PostSettings m_postSettings;
@@ -969,21 +978,36 @@ private:
     // patch sai identico ao triangulo original e a malha atual continua
     // valendo. So' o CHAO entra na banda (ver ModelRenderer::render).
     bool  m_tessEnabled = true;
-    float m_tessAmplitude = 1.6f;   // unidades de mundo, pico do deslocamento
+    float m_tessAmplitude = 2.5f;   // unidades de mundo, pico do deslocamento (autor: default 2.5)
     // Ganho da altura em passa-alta. A altura cozida vem da LUMINANCIA do
     // albedo (PbrMapGen), entao a banda baixa dela e' a sombra pintada da
     // textura; o shader usa mip2-mip5 e este ganho devolve a faixa util. Alto
     // demais e o chao vira papel amassado.
-    float m_tessHeightGain = 3.5f;
-    // Fonte da altura do deslocamento. 0 = UV da malha, 1 = mundo (triplanar).
-    // A troca e' um TRADE, nao um bug: ver o comentario em model.tese.
-    int   m_tessHeightSpace = 0;
-    float m_tessWorldScale = 0.125f;
+    float m_tessHeightGain = 1.5f;   // autor: default 1.5
+    // Filtro passa-baixa (blur) sobre o height map - soma em mip no
+    // heightUv() (model.vert/model.tese). 0 = sem blur extra, so' os mips
+    // 2/5 originais. Slider pedido pelo autor pra' tirar ruido de alta
+    // frequencia do relevo sem mexer no ganho/contraste. Default 0.15 (autor).
+    float m_tessHeightBlur = 0.15f;
+    // Espacamento alvo entre vertices da tesselacao (u). A curva sozinha tem
+    // teto 8 por aresta, e o triangulo do chao tem ~10-12 u: ~1,3 u entre
+    // vertices, grosso demais pra desenhar paralelepipedo. 0 = so' a curva.
+    float m_tessVertexSpacing = 0.25f;
     // Teto de inclinacao da normal do normal map, em GRAUS (0 = sem teto).
     // Acima de ~65 graus a normal deita e a superficie le' como papel
     // amassado - ver o bloco em model.frag.
     float m_normalMaxSlopeDeg = 62.0f;
     SplineCurve m_tessCurve{{0.0f, 0.05f, 0.10f, 1.0f}, {8.0f, 4.0f, 1.0f, 1.0f}, InterpolationMode::Smoothstep};
+    // MODO DE AUDITORIA DO DESLOCAMENTO (model.frag, bloco "AUDITORIA DO
+    // DESLOCAMENTO"): 0 desliga, 1 deslocamento x normal, 2 luz x relevo,
+    // 4 origem da altura - so' alcancaveis por ERUPTION_TEST_TESS_AUDIT (env
+    // var, precisa reiniciar), sao ferramentas de bancada. O F2 (ImGui.cpp,
+    // checkbox "Debug: height map") so' mexe entre 0 e 3: 3 e' o height map
+    // em cinza por pixel (compara direto contra a textura, pedido do autor:
+    // "o tesselation nao ta batendo com a textura" / "isso tem que ser um
+    // checkbox"). Era ERUPTION_TEST_TESS_AUDIT so' de leitura no load; agora
+    // vive aqui pra trocar ao vivo, e o env var so' fixa o valor inicial.
+    int   m_tessDebugMode = 0;
 
     // Per-phase CPU frame breakdown, surfaced in the F3 debug overlay so a
     // bottleneck is attributable instead of just "the frame is slow".

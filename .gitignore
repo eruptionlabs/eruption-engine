@@ -13,6 +13,9 @@ src/generated/
 # Logs and test artifacts
 logs/
 
+# Dump visual de diagnostico (ERUPTION_TEST_DUMP_TEX_DIR) - BMP cru, nunca vai pro repo
+texture_dump/
+
 # Heavy data files and archives
 data/*
 !data/*.json
@@ -119,8 +122,6 @@ demo_out/
 # ---- Tudo que NAO vai para o git fica em not_commit/ (raiz e por pasta) ----
 not_commit/
 **/not_commit/
-robrowser
-.claude/
 
 # Fixtures de teste e configs de clima versionados apesar das regras acima.
 !tests/*.cpp
@@ -147,3 +148,7 @@ eruption-pbr-tests
 #   git clone git@github.com:eruptionlabs/eruption-tools.git tools/scripts
 perf/
 tools/scripts/
+
+# Coisas ainda nao publicaveis (ex.: pesos da rede de PBR) e runtime copiado pelo build.
+/future/
+libonnxruntime*.so*

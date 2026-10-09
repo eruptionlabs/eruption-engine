@@ -1,0 +1,59 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Resize 2D (NCHW): vizinho mais proximo ou bilinear, com os modos de
+// coordenada do ONNX (NnResizeCoord / NnResizeNearest).
+layout(local_size_x = 256) in;
+#include "nn_common.glsl"
+
+layout(push_constant) uniform Params {
+    uint baseIn;
+    uint baseOut;
+    int height, width, outHeight, outWidth;
+    uint linear;
+    uint coordMode;
+    uint nearestMode;
+    float scaleH;
+    float scaleW;
+    uint total;
+} p;
+
+float sourceCoord(int o, float scale, int inSize, int outSize) {
+    if (p.coordMode == 0u) return (float(o) + 0.5) / scale - 0.5;
+    if (p.coordMode == 1u) return outSize > 1 ? (float(o) + 0.5) / scale - 0.5 : 0.0;
+    if (p.coordMode == 2u) return outSize > 1 ? float(o) * float(inSize - 1) / float(outSize - 1) : 0.0;
+    return float(o) / scale;
+}
+
+int nearestIndex(float x) {
+    if (p.nearestMode == 0u) return int(fract(x) == 0.5 ? floor(x) : round(x));
+    if (p.nearestMode == 1u) return int(fract(x) == 0.5 ? ceil(x) : round(x));
+    if (p.nearestMode == 2u) return int(floor(x));
+    return int(ceil(x));
+}
+
+void main() {
+    const uint i = flatIndex();
+    if (i >= p.total) return;
+    const int ox = int(i % uint(p.outWidth));
+    const int oy = int((i / uint(p.outWidth)) % uint(p.outHeight));
+    const uint plane = i / uint(p.outWidth * p.outHeight);
+    const uint inPlane = p.baseIn + plane * uint(p.height * p.width);
+    float sy = sourceCoord(oy, p.scaleH, p.height, p.outHeight);
+    float sx = sourceCoord(ox, p.scaleW, p.width, p.outWidth);
+    float v;
+    if (p.linear == 0u) {
+        const int iy = clamp(nearestIndex(sy), 0, p.height - 1);
+        const int ix = clamp(nearestIndex(sx), 0, p.width - 1);
+        v = arena.data[inPlane + uint(iy * p.width + ix)];
+    } else {
+        sy = clamp(sy, 0.0, float(p.height - 1));
+        sx = clamp(sx, 0.0, float(p.width - 1));
+        const int y0 = int(floor(sy)), x0 = int(floor(sx));
+        const int y1 = min(y0 + 1, p.height - 1), x1 = min(x0 + 1, p.width - 1);
+        const float fy = sy - float(y0), fx = sx - float(x0);
+        const float top = mix(arena.data[inPlane + uint(y0 * p.width + x0)], arena.data[inPlane + uint(y0 * p.width + x1)], fx);
+        const float bot = mix(arena.data[inPlane + uint(y1 * p.width + x0)], arena.data[inPlane + uint(y1 * p.width + x1)], fx);
+        v = mix(top, bot, fy);
+    }
+    arena.data[p.baseOut + i] = v;
+}

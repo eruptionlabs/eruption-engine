@@ -1,0 +1,41 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// AveragePool / MaxPool 2D (NCHW).
+layout(local_size_x = 256) in;
+#include "nn_common.glsl"
+
+layout(push_constant) uniform Params {
+    uint baseIn;
+    uint baseOut;
+    uint planes;   // N*C
+    int height, width, outHeight, outWidth;
+    int kernelH, kernelW, strideH, strideW, padTop, padLeft;
+    uint countIncludePad;
+    uint isMax;
+    uint total;
+} p;
+
+void main() {
+    const uint i = flatIndex();
+    if (i >= p.total) return;
+    const int ox = int(i % uint(p.outWidth));
+    const int oy = int((i / uint(p.outWidth)) % uint(p.outHeight));
+    const uint plane = i / uint(p.outWidth * p.outHeight);
+    const uint inPlane = p.baseIn + plane * uint(p.height * p.width);
+    float acc = p.isMax != 0u ? -3.4e38 : 0.0;
+    int count = 0;
+    for (int ky = 0; ky < p.kernelH; ++ky) {
+        const int iy = oy * p.strideH - p.padTop + ky;
+        for (int kx = 0; kx < p.kernelW; ++kx) {
+            const int ix = ox * p.strideW - p.padLeft + kx;
+            if (iy < 0 || iy >= p.height || ix < 0 || ix >= p.width) {
+                if (p.countIncludePad != 0u) ++count;
+                continue;
+            }
+            const float v = arena.data[inPlane + uint(iy * p.width + ix)];
+            acc = p.isMax != 0u ? max(acc, v) : acc + v;
+            ++count;
+        }
+    }
+    arena.data[p.baseOut + i] = p.isMax != 0u ? acc : acc / float(max(count, 1));
+}

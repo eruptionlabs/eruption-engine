@@ -30,7 +30,7 @@ layout(location = 15) in flat uvec2 inSplatTex;
 layout(location = 16) in flat uvec2 inSplatTex2;
 layout(location = 17) in flat uint inBlendMaskIndex2;
 layout(location = 18) in flat float inSway;
-layout(location = 19) in vec3 inDispInfo; // x=alinhamento, y=modulo, z=origem // ver auditoria abaixo // G32: > 0 = vegetacao (flag de folhagem)
+layout(location = 19) in vec4 inDispInfo; // x=alinhamento, y=modulo, z=origem, w=altura crua (0..1) // ver auditoria abaixo // G32: > 0 = vegetacao (flag de folhagem)
 
 layout(location = 0) out vec4 outAlbedo;
 layout(location = 1) out vec4 outNormal;
@@ -101,8 +101,10 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_tessParams;
     vec4 u_tessLut0;
     vec4 u_tessLut1;
+    // x = reservado, y = espacamento alvo entre vertices da tesselacao (ver model.tesc).
     // z = teto de inclinacao da normal em radianos (0 desliga)
     vec4 u_tessParams2;
+    float u_tessHeightBlur;
     // Fim do FrameUBO (FSR): matrizes SEM jitter e o vento do frame anterior,
     // para a velocidade de objeto (vegetacao) - ver SpriteRenderer.hpp.
     mat4 u_viewProjNoJitter;
@@ -120,6 +122,60 @@ float lut8(vec4 a, vec4 b, float t) {
     int j = min(i + 1, 7);
     float v1 = j < 4 ? a[j] : b[j - 4];
     return mix(v0, v1, f);
+}
+
+// ===================== SO' PRO MODO DE AUDITORIA 3 (height map) ========
+// heightUv (model.tese/model.vert) le' no MIP 2 e aplica
+// GANHO - e' o que desloca a malha, e so' existe em umas dezenas de vertices
+// por patch tesselado (o rasterizador INTERPOLA reto entre eles pra pintar
+// os pixels no meio). Isso e' aliasing: um ruido de alta frequencia,
+// amostrado esparso e reconstruido por reta, sai mais irregular do que o
+// dado original parece quando se olha ele inteiro - e o pedido do autor foi
+// exatamente que o height map fosse igual a textura. Estas
+// funcoes leem no MIP 0 (arquivo inteiro, sem borrar), SEM ganho, POR
+// PIXEL de tela (nao por vertice) - o mesmo dado cru que
+// ERUPTION_TEST_DUMP_TEX_DIR grava em BMP. Cobrem os mesmos dois casos que
+// o deslocamento real: alfa do MRAH-W (useAlpha) e a mistura ponderada de
+// splat do chao sem PBR proprio (heightDebug*Splat*, mesmo criterio de
+// heightSplatUv em model.tese).
+float heightDebugUv(uint texIdx, vec2 uvIn, bool useAlpha) {
+    vec4 s = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, 0.0);
+    if (useAlpha) return s.a > 0.999 ? 0.5 : s.a;
+    const vec3 kL = vec3(0.2126, 0.7152, 0.0722);
+    return dot(s.rgb, kL);
+}
+
+float heightDebugSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 splat2,
+                         uint maskIdx, uint maskIdx2) {
+    float hBase = heightDebugUv(baseTex, uvIn, false);
+    if ((splat.x | splat.y) == 0u || maskIdx == 0u) return hBase;
+    vec4 w = textureLod(u_textures[nonuniformEXT(maskIdx)], maskUv, 0.0);
+    uint s0 =  splat.x        & 0xFFFFu;
+    uint s1 = (splat.x >> 16) & 0xFFFFu;
+    uint s2 =  splat.y        & 0xFFFFu;
+    uint s3 = (splat.y >> 16) & 0xFFFFu;
+    float wBaseSum = w.r + w.g + w.b + w.a;
+    float acc = 0.0, sum = 0.0;
+    if (s0 != 0u) { acc += heightDebugUv(s0, uvIn, false) * w.r; sum += w.r; }
+    if (s1 != 0u) { acc += heightDebugUv(s1, uvIn, false) * w.g; sum += w.g; }
+    if (s2 != 0u) { acc += heightDebugUv(s2, uvIn, false) * w.b; sum += w.b; }
+    if (s3 != 0u) { acc += heightDebugUv(s3, uvIn, false) * w.a; sum += w.a; }
+    if (maskIdx2 != 0u) {
+        vec4 w2 = textureLod(u_textures[nonuniformEXT(maskIdx2)], maskUv, 0.0);
+        uint s4 =  splat2.x        & 0xFFFFu;
+        uint s5 = (splat2.x >> 16) & 0xFFFFu;
+        uint s6 =  splat2.y        & 0xFFFFu;
+        uint s7 = (splat2.y >> 16) & 0xFFFFu;
+        wBaseSum += w2.r + w2.g + w2.b + w2.a;
+        if (s4 != 0u) { acc += heightDebugUv(s4, uvIn, false) * w2.r; sum += w2.r; }
+        if (s5 != 0u) { acc += heightDebugUv(s5, uvIn, false) * w2.g; sum += w2.g; }
+        if (s6 != 0u) { acc += heightDebugUv(s6, uvIn, false) * w2.b; sum += w2.b; }
+        if (s7 != 0u) { acc += heightDebugUv(s7, uvIn, false) * w2.a; sum += w2.a; }
+    }
+    float wBase = max(0.0, 1.0 - wBaseSum);
+    acc += hBase * wBase;
+    sum += wBase;
+    return sum > 1e-4 ? acc / sum : hBase;
 }
 
 
@@ -270,7 +326,14 @@ void main() {
     //       G-buffer e a normal da geometria deslocada (derivadas da posicao):
     //       verde = coincidem, vermelho = a superficie esta' sendo sombreada
     //       como se fosse lisa.
-    //   3 = QUANTO deslocou: preto = 0, branco = amplitude cheia.
+    //   3 = DISPLACEMENT MAGNITUDE = O HEIGHT MAP EM SI: cinza = h (0..1) lido
+    //       do MESMO texIdx/uv usado pra deslocar, POR PIXEL, mip 0, sem
+    //       ganho - compare com a textura normal (modo 0) na mesma pose: onde
+    //       a pedra/textura escurece, aqui tem que escurecer tambem (vale);
+    //       se nao escurecer, a altura nao esta' vindo do canal/UV que a
+    //       textura mostra (ex.: MRAH-W com alfa vazio). Painel F2: checkbox
+    //       "Debug: height map".
+    //   4 = DE ONDE vem a altura (MRAH-W vs. passa-alta do albedo).
     int auditMode = int(u_normalDistParams.z + 0.5);
     if (auditMode > 0) {
         vec3 gAud = cross(dFdx(inWorldPos), dFdy(inWorldPos));
@@ -295,8 +358,46 @@ void main() {
                               : vec3(1.0, 0.0, 0.0))
                 : vec3(0.0, 0.0, 1.0);
         } else if (auditMode == 3) {
-            float m = clamp(inDispInfo.y / max(u_tessParams.z, 1e-3), 0.0, 1.0);
-            col = vec3(m);
+            // DISPLACEMENT MAGNITUDE = O HEIGHT MAP EM SI, cinza, POR PIXEL -
+            // nao inDispInfo.y/w (esses sao por VERTICE da tesselacao,
+            // interpolados reto entre eles pelo rasterizador; um ruido de
+            // textura fica em degrau/faceta assim, nao em grao fino - foi o
+            // que o autor viu e reclamou: o height map tem que ser
+            // igual a textura). Amostra o mesmo texIdx/uv que o
+            // deslocamento usaria, mas em MIP 0 e sem ganho, um sample por
+            // FRAGMENTO - ver heightDebugUv acima. E' o
+            // mesmo dado que ERUPTION_TEST_DUMP_TEX_DIR grava em BMP, so' que
+            // ao vivo, na malha, na pose atual.
+            float hFrag = -1.0;
+            if (inPbrIndex != 0u) {
+                hFrag = heightDebugUv(inPbrIndex, inTexCoord, true);
+            } else if (inTexIndex != 0u) {
+                hFrag = heightDebugSplatUv(inTexCoord, inBlendMaskUV, inTexIndex, inSplatTex, inSplatTex2,
+                                         inBlendMaskIndex, inBlendMaskIndex2);
+            }
+            col = hFrag >= 0.0 ? vec3(hFrag) : vec3(0.0, 0.0, 1.0);
+        } else if (auditMode == 6) {
+            // SINAL do deslocamento (pedido do autor: "preto fica fixo, branco
+            // sobe - isso ta errado, tinha que afundar tambem"). Mesmo hFrag
+            // do modo 3 (por pixel, sem ganho) - o SINAL de (h-0.5) e' IGUAL
+            // com ou sem ganho (ganho > 0 nunca troca o sinal), entao serve
+            // pra confirmar se a formula real (que usa h-0.5) esta' mesmo
+            // deslocando os dois lados. VERDE = h>0.5 (deveria subir),
+            // VERMELHO = h<0.5 (deveria afundar), PRETO = h==0.5 exato
+            // (neutro/sem dado) - se as partes escuras da textura saem
+            // VERMELHAS aqui, o deslocamento ESTA' indo pro lado certo e o
+            // que falta ver e' so' visual (afundamento e' sempre mais dificil
+            // de perceber que elevacao, luz nao pega do mesmo jeito).
+            float hSign = -1.0;
+            if (inPbrIndex != 0u) {
+                hSign = heightDebugUv(inPbrIndex, inTexCoord, true);
+            } else if (inTexIndex != 0u) {
+                hSign = heightDebugSplatUv(inTexCoord, inBlendMaskUV, inTexIndex, inSplatTex, inSplatTex2,
+                                         inBlendMaskIndex, inBlendMaskIndex2);
+            }
+            float t = hSign >= 0.0 ? (hSign - 0.5) : 0.0;
+            col = t > 0.0 ? vec3(0.0, clamp(t * 2.0, 0.0, 1.0), 0.0)
+                          : vec3(clamp(-t * 2.0, 0.0, 1.0), 0.0, 0.0);
         } else {
             // Modo 4: DE ONDE vem a altura. Azul = alfa do MRAH-W (altura
             // cozida no load), laranja = passa-alta da luminancia do albedo
@@ -307,8 +408,26 @@ void main() {
                                      : vec3(0.0);
         }
         outAlbedo = vec4(col, 1.0);
-        outNormal = vec4(N * 0.5 + 0.5, 1.0);
-        outPBR = vec4(0.5, 1.0, 0.0, 0.0);
+        if (auditMode == 3 || auditMode == 6) {
+            // MODOS 3 e 6 PRECISAM FICAR CHATOS DE PROPOSITO: os outros
+            // modos (1,2,4) usam a normal REAL porque o alinhamento/relevo E'
+            // o dado. Aqui o dado e' so' a cor (col) - passar a normal REAL
+            // pro G-buffer
+            // deixa a luz direcional sombrear o cinza pelo N.L de cada pixel,
+            // e se a normal reconstruida estiver ruidosa (facetada), o N.L
+            // varia forte de pixel a pixel e a imagem lê como cristal
+            // facetado por cima do cinza - testado trocando o ganho de altura
+            // de 3.5 pra 0.3 e a imagem NAO mudou, confirmando que quem
+            // dominava a imagem nao era a altura, era o sombreamento da
+            // normal. Normal FIXA (mesma em toda a tela, igual o wireframe
+            // faz em outNormal) zera essa variacao de N.L: sobra so' o cinza,
+            // comparavel de olho com a textura (modo 0).
+            outNormal = vec4(0.5, 0.5, 1.0, 1.0);
+            outPBR = vec4(0.0, 1.0, 0.0, 0.0); // R=source(livre aqui) G=roughness(1=fosco) B=metallic(0) A=wetness
+        } else {
+            outNormal = vec4(N * 0.5 + 0.5, 1.0);
+            outPBR = vec4(0.5, 1.0, 0.0, 0.0);
+        }
         outMaterialID = 0u;
         outEmissive = vec4(col, 1.0);   // sai da iluminacao: a cor E' o dado
         return;
@@ -441,7 +560,7 @@ void main() {
         if (hasBlendMask) {
             blendT = texture(u_textures[nonuniformEXT(inBlendMaskIndex)], inBlendMaskUV).r;
         }
-        // Height-biased blend (Terrain3D / Unreal HeightLerp family): nudge the
+        // Height-biased blend (familia "height lerp"): nudge the
         // weight by the two textures' own luminance so the 50% contour follows
         // surface detail instead of the mesh triangles (or the mask's own
         // resolution). Kept gentle - a strong bias or added noise turns the
@@ -465,7 +584,7 @@ void main() {
         outAlbedo = vec4(dbg, 1.0);
         outNormal = vec4(0.5, 0.5, 1.0, 0.0);
         outPBR = vec4(0.0, 1.0, 0.0, 0.0);
-        outMaterialID = inMatId;
+        outMaterialID = inMatId & 0x7FFFu; // bit 15 = marca de costura do deslocamento
         outEmissive = vec4(dbg, 1.0);
         return;
     }
@@ -534,6 +653,20 @@ void main() {
             tangentNormal.y = -tangentNormal.y;
         }
         float strength = clamp(ndScale, 0.0, 3.0);
+        // RELEVO CONTADO UMA VEZ SO'. Na banda perto o vertice ja' chega
+        // DESLOCADO e com a normal do relevo (gradiente da altura, model.tese
+        // / derivada em model.vert) - e o normal map vem da MESMA altura. Com
+        // strength cheia aqui o sulco era iluminado duas vezes: uma pela
+        // geometria, outra pelo normal map, e a luz nao batia com a forma
+        // (autor: "a gente usava o normal antes, por algum motivo estava
+        // bugado"). Recua o normal map pela MESMA rampa com que o
+        // deslocamento entra na geometria: onde o relevo e' todo geometria
+        // sobra so' o detalhe fino (35%), na borda da banda volta inteiro.
+        if (u_tessParams.y > 0.5) {
+            float fN = lut8(u_tessLut0, u_tessLut1, distCam / max(u_tessParams.x, 1.0));
+            float inGeom = clamp((fN - 1.0) / max(u_tessParams.w - 1.0, 1e-3), 0.0, 1.0);
+            strength *= mix(1.0, 0.35, inGeom);
+        }
         vec3 flatNormal = vec3(0.0, 0.0, 1.0);
         tangentNormal = mix(flatNormal, tangentNormal, strength);
         // TETO DE INCLINACAO DA NORMAL (ver u_tessParams2.z; 0 desliga).

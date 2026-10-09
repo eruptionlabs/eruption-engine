@@ -1,0 +1,76 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// C[lote] = A[lote] (M x K) * B[lote] (K x N). Cada grupo de trabalho calcula
+// um bloco de 64 x 64; cada thread, 4 x 4 valores intercalados de 16 em 16
+// (sem conflito de banco). A e B passam pela memoria compartilhada em
+// fatias de 16. Lote em ate' 4 dimensoes, passo 0 onde ha' broadcast.
+// Despacho: x = blocos de colunas, y = blocos de linhas, z = lote.
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "nn_common.glsl"
+
+#define BLOCK 64
+#define BLOCK_K 16
+#define THREAD 4
+
+layout(push_constant) uniform Params {
+    uint baseA;
+    uint baseB;
+    uint baseOut;
+    uint rows;   // M
+    uint cols;   // N
+    uint inner;  // K
+    uint batchDims[4];
+    uint stridesA[4];
+    uint stridesB[4];
+} p;
+
+shared float tileA[BLOCK_K][BLOCK];
+shared float tileB[BLOCK_K][BLOCK];
+
+void main() {
+    uint rest = gl_WorkGroupID.z, offA = 0u, offB = 0u;
+    for (int d = 3; d >= 0; --d) {
+        const uint c = rest % p.batchDims[d];
+        rest /= p.batchDims[d];
+        offA += c * p.stridesA[d];
+        offB += c * p.stridesB[d];
+    }
+    const uint tx = gl_LocalInvocationID.x, ty = gl_LocalInvocationID.y;
+    const uint tid = ty * 16u + tx;
+    const uint firstRow = gl_WorkGroupID.y * BLOCK, firstCol = gl_WorkGroupID.x * BLOCK;
+    const uint baseA = p.baseA + offA, baseB = p.baseB + offB;
+    // Carga de A: k fixo (tid % 16), 4 linhas; de B: coluna fixa (tid % 64), 4 linhas de k.
+    const uint aK = tid % BLOCK_K, aRow = tid / BLOCK_K;
+    const uint bCol = tid % BLOCK, bK = tid / BLOCK;
+
+    float acc[THREAD][THREAD];
+    for (int i = 0; i < THREAD; ++i)
+        for (int j = 0; j < THREAD; ++j) acc[i][j] = 0.0;
+
+    for (uint k0 = 0u; k0 < p.inner; k0 += BLOCK_K) {
+        for (uint i = 0u; i < THREAD; ++i) {
+            const uint row = firstRow + aRow + 16u * i, k = k0 + aK;
+            tileA[aK][aRow + 16u * i] = (row < p.rows && k < p.inner) ? arena.data[baseA + row * p.inner + k] : 0.0;
+            const uint kb = k0 + bK + 4u * i, col = firstCol + bCol;
+            tileB[bK + 4u * i][bCol] = (kb < p.inner && col < p.cols) ? arena.data[baseB + kb * p.cols + col] : 0.0;
+        }
+        barrier();
+        for (uint k = 0u; k < BLOCK_K; ++k) {
+            float a[THREAD], b[THREAD];
+            for (uint i = 0u; i < THREAD; ++i) a[i] = tileA[k][ty + 16u * i];
+            for (uint j = 0u; j < THREAD; ++j) b[j] = tileB[k][tx + 16u * j];
+            for (int i = 0; i < THREAD; ++i)
+                for (int j = 0; j < THREAD; ++j) acc[i][j] += a[i] * b[j];
+        }
+        barrier();
+    }
+    const uint outBase = p.baseOut + gl_WorkGroupID.z * p.rows * p.cols;
+    for (uint i = 0u; i < THREAD; ++i) {
+        const uint row = firstRow + ty + 16u * i;
+        if (row >= p.rows) continue;
+        for (uint j = 0u; j < THREAD; ++j) {
+            const uint col = firstCol + tx + 16u * j;
+            if (col < p.cols) arena.data[outBase + row * p.cols + col] = acc[i][j];
+        }
+    }
+}

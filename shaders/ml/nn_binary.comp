@@ -1,0 +1,41 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// a (op) b com broadcast (passo 0 no eixo difundido); saida contigua.
+layout(local_size_x = 256) in;
+#include "nn_common.glsl"
+
+layout(push_constant) uniform Params {
+    uint dims[6];
+    uint stridesA[6];
+    uint stridesB[6];
+    uint baseA;
+    uint baseB;
+    uint baseOut;
+    uint total;
+    uint code; // NnBinary
+} p;
+
+float apply(float a, float b) {
+    switch (p.code) {
+    case 0u: return a + b;
+    case 1u: return a - b;
+    case 2u: return a * b;
+    case 3u: return a / b;
+    case 4u: return pow(a, b);
+    case 5u: return min(a, b);
+    default: return max(a, b);
+    }
+}
+
+void main() {
+    const uint i = flatIndex();
+    if (i >= p.total) return;
+    uint rest = i, ia = 0u, ib = 0u;
+    for (int d = 5; d >= 0; --d) {
+        const uint c = rest % p.dims[d];
+        rest /= p.dims[d];
+        ia += c * p.stridesA[d];
+        ib += c * p.stridesB[d];
+    }
+    arena.data[p.baseOut + i] = apply(arena.data[p.baseA + ia], arena.data[p.baseB + ib]);
+}
