@@ -649,8 +649,10 @@ void Editor::update(float dt) {
         mapGenLoad(spec.substr(0, bar));
         m_mapgen.blocks = std::getenv("ERUPTION_TEST_EDITOR_MAPGEN_BLOCKS") != nullptr;
         if (m_mapgen.blocks) m_mapgen.selected = 0;
-        std::snprintf(m_mapgen.mapName, sizeof(m_mapgen.mapName), "%s", spec.substr(bar + 1).c_str());
-        mapGenGenerate();
+        if (bar != std::string::npos && bar + 1 < spec.size()) { // sem nome de mapa: só a prévia
+            std::snprintf(m_mapgen.mapName, sizeof(m_mapgen.mapName), "%s", spec.substr(bar + 1).c_str());
+            mapGenGenerate();
+        }
     }
     // ERUPTION_TEST_EDITOR_EXPORT=<mapa>:<pasta>: exporta o mapa (síncrono).
     static const char* testExport = std::getenv("ERUPTION_TEST_EDITOR_EXPORT");

@@ -276,24 +276,36 @@ void Editor::drawMapGenWindow() {
 
     // Prévia e geração
     ImGui::BeginChild("##preview");
-    if (mg.previewDirty && !mg.previewRunning) {
+    // Duas passadas: uma rápida (160) a cada mudança e, quando a receita para
+    // de mudar, uma nítida (448) por cima.
+    std::unique_lock<std::mutex> launchLock(m_mapgenMutex); // gen e sharp também são da thread
+    const bool sharp = !mg.previewDirty && mg.previewSharpPending;
+    if ((mg.previewDirty || sharp) && !mg.previewRunning) {
+        if (mg.previewDirty) ++mg.previewGen;
         mg.previewDirty = false;
+        mg.previewSharpPending = false;
         mg.previewRunning = true;
         const mapgen::Recipe copy = r;
-        std::thread([this, copy] {
-            mapgen::Result res;
+        const int gen = mg.previewGen;
+        const int res = sharp ? 448 : 160;
+        std::thread([this, copy, gen, res, sharp] {
+            mapgen::Result out;
             std::string err;
-            const bool ok = mapgen::run(copy, 160, res, err);
+            const bool ok = mapgen::run(copy, res, out, err);
             std::lock_guard<std::mutex> lock(m_mapgenMutex);
-            m_mapgen.previewError = ok ? std::string() : err;
-            if (ok) {
-                m_mapgen.previewPixels = previewPixels(res);
-                m_mapgen.previewSize = res.w;
+            if (gen == m_mapgen.previewGen) {
+                m_mapgen.previewError = ok ? std::string() : err;
+                if (ok) {
+                    m_mapgen.previewPixels = previewPixels(out);
+                    m_mapgen.previewSize = out.w;
+                }
+                m_mapgen.previewReady = ok;
+                m_mapgen.previewSharpPending = ok && !sharp;
             }
-            m_mapgen.previewReady = ok;
             m_mapgen.previewRunning = false;
         }).detach();
     }
+    launchLock.unlock();
     {
         std::lock_guard<std::mutex> lock(m_mapgenMutex);
         if (mg.previewReady) {

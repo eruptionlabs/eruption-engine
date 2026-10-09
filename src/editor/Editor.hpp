@@ -331,6 +331,8 @@ private:
         char newName[64] = "my_map";
         char mapName[64] = {};
         bool previewDirty = false;
+        bool previewSharpPending = false; // a prévia rápida chegou; falta a nítida
+        int previewGen = 0;               // resultado de uma receita antiga é descartado
         std::atomic<bool> previewRunning{false}, generating{false};
         bool previewReady = false;
         std::vector<uint8_t> previewPixels;
