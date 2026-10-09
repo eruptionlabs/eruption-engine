@@ -103,7 +103,7 @@ ExportReport exportGame(const ExportOptions& o) {
     addDir("assets/scripts", [](const fs::path& p) { return p.extension() == ".luau" && p.filename() != "eruption.d.luau"; });
 
     // Caminhos entre aspas nos arquivos de texto: o resto do grafo.
-    static const std::regex quoted("\"([^\"\\n]{3,260}\\.(?:glb|png|spr|luau|ter|json))\"");
+    static const std::regex quoted("\"([^\"\\n]{3,260}\\.(?:glb|png|spr|luau|ter|json|wav|ogg|mp3|flac))\"");
     while (!scan.empty()) {
         const fs::path rel = scan.front();
         scan.pop_front();

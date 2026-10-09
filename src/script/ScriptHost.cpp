@@ -442,6 +442,7 @@ void ScriptHost::stop() {
     }
     m_running = false;
     m_tweens.clear();
+    m_engine->audio().stopAll(); // Stop do editor: o som do jogo para junto
     m_messages.clear();
     m_lastUpdateMs = 0.0f;
 }

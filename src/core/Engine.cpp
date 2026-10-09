@@ -733,6 +733,7 @@ bool Engine::init(int width, int height, const std::string& title) {
 
     m_backgroundLoader = std::make_unique<BackgroundMapLoader>(cacheInterface);
     initMinimap();
+    m_audio.init(); // sem dispositivo de som, o jogo segue mudo
 
     m_camera.setPerspective(60.0f, (float)width / (float)height, 0.1f, 50000.0f);
     // Default camera: 85% zoom, 50% pitch
@@ -980,6 +981,7 @@ void Engine::shutdown() {
 
     m_assetCache.shutdown(&m_vulkan, &m_bindless);
 
+    m_audio.shutdown();
     clearCharacters();
     endSplatEditing();
     for (auto& r : m_regions) {
@@ -1071,6 +1073,7 @@ float Engine::advanceFrame() {
 
     processBackgroundLoading();
     updateWorld(); // vizinhos do mundo contínuo entram e saem
+    m_audio.update(m_camera.position(), m_camera.forward(), m_camera.up()); // ouvinte na câmera
 
     m_timer.tick();
     m_window.pollEvents();

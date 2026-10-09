@@ -24,6 +24,7 @@ enum class ParamType {
     Seconds,
     Character, // nome do personagem da cena
     Area,      // nome da área de gatilho
+    Sound,     // arquivo de som do projeto
 };
 
 struct RuleParam {

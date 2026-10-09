@@ -11,6 +11,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -74,7 +75,8 @@ std::string sentence(const RuleCall& c, UiLanguage lang) {
         std::string value = ruleArgDisplay(c.def->params[i].type, c.args[i], lang);
         if (value.empty()) value = "?";
         if (c.def->params[i].type == ParamType::Text || c.def->params[i].type == ParamType::Model ||
-            c.def->params[i].type == ParamType::Character || c.def->params[i].type == ParamType::Area)
+            c.def->params[i].type == ParamType::Character || c.def->params[i].type == ParamType::Area ||
+            c.def->params[i].type == ParamType::Sound)
             value = "\"" + value + "\"";
         text.replace(at, key.size(), value);
     }
@@ -166,6 +168,29 @@ bool Editor::rulesParamEditor(RuleCall& call) {
                 }
                 if (m_engine->characters().empty())
                     ImGui::SetItemTooltip("Drag a PNG from the Project panel into the scene to add a character.");
+                break;
+            }
+            case ParamType::Sound: {
+                // Arquivos de som do projeto (assets/), o caminho que o jogo exportado também usa.
+                static std::vector<std::string> files;
+                static int listedFrame = -1000;
+                if (ImGui::GetFrameCount() - listedFrame > 120) {
+                    listedFrame = ImGui::GetFrameCount();
+                    files.clear();
+                    std::error_code ec;
+                    for (auto it = std::filesystem::recursive_directory_iterator("assets", ec);
+                         !ec && it != std::filesystem::recursive_directory_iterator() && files.size() < 500; ++it) {
+                        const std::string e = it->path().extension().string();
+                        if (e == ".wav" || e == ".ogg" || e == ".mp3" || e == ".flac") files.push_back(it->path().generic_string());
+                    }
+                }
+                const std::string cur = unquote(code);
+                if (ImGui::BeginCombo("##snd", cur.empty() ? "(choose)" : cur.c_str())) {
+                    for (const auto& f : files)
+                        if (ImGui::Selectable(f.c_str(), cur == f)) { code = quote(f); changed = true; }
+                    ImGui::EndCombo();
+                }
+                if (files.empty()) ImGui::SetItemTooltip("Put .wav, .ogg, .mp3 or .flac files in assets/ (e.g. assets/sounds).");
                 break;
             }
             case ParamType::Area: {
