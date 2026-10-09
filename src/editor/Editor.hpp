@@ -44,7 +44,6 @@ public:
     // Com o jogo parado (modo edição) a aplicação não roda a lógica de jogo.
     bool gameRunning() const { return m_play == PlayState::Playing || m_stepFrames > 0; }
     void consumeStep() { if (m_stepFrames > 0) --m_stepFrames; }
-    bool showLegacyTools() const { return m_showLegacyTools; }
     // Play ou pausa (o jogo existe, mesmo congelado).
     bool inPlayMode() const { return m_play != PlayState::Editing; }
     void setScriptHost(ScriptHost* host) { m_scripts = host; }
@@ -200,7 +199,6 @@ private:
     int m_frameTimeHead = 0; // layout recém-montado: aba Cena na frente
     bool m_showHierarchy = true, m_showInspector = true, m_showProject = true, m_showConsole = true;
     bool m_showShortcuts = false;
-    bool m_showLegacyTools = false;
     bool m_showWelcome = true;
     bool m_paletteOpen = false;
     bool m_paletteFocus = false;
