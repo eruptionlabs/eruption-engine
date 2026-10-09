@@ -35,6 +35,12 @@ bool icontains(const std::string& hay, const char* needle) {
     return false;
 }
 
+bool isPreviewableImage(const std::filesystem::path& p) {
+    std::string e = p.extension().string();
+    std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return std::tolower(c); });
+    return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".tga" || e == ".bmp";
+}
+
 void emptyState(const char* text) {
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", text);
@@ -64,6 +70,7 @@ bool resetButton(const char* id, bool changed) {
 // ---------------------------------------------------------------- seleção
 
 void Editor::select(const Selection& s) {
+    if (m_selection.kind == SelectionKind::Asset && s.kind != SelectionKind::Asset) closeAssetPreview();
     m_selection = s;
 }
 
@@ -79,6 +86,7 @@ std::string Editor::selectionName(const Selection& s) const {
         }
         case SelectionKind::Light: return "Point Light " + std::to_string(s.index);
         case SelectionKind::Environment: return "Environment";
+        case SelectionKind::Asset: return m_asset.path.filename().string();
         case SelectionKind::None: break;
     }
     return {};
@@ -233,6 +241,12 @@ void Editor::drawInspector() {
 
     if (m_selection.kind == SelectionKind::None) {
         emptyState("Select something in the Scene or the Hierarchy to see and edit its properties here.");
+        ImGui::End();
+        return;
+    }
+
+    if (m_selection.kind == SelectionKind::Asset) {
+        drawAssetPreview();
         ImGui::End();
         return;
     }
@@ -427,7 +441,7 @@ void Editor::drawProject() {
             }
 
             // Caminho clicável a partir da raiz do projeto.
-            const fs::path rel = fs::relative(m_projectDir, m_projectRoot);
+            const fs::path rel = m_projectDir.lexically_relative(m_projectRoot);
             if (ImGui::SmallButton("Project")) m_projectDir = m_projectRoot;
             fs::path acc = m_projectRoot;
             if (rel != ".") {
@@ -441,6 +455,8 @@ void Editor::drawProject() {
                 }
             }
             ImGui::SameLine();
+            if (ImGui::SmallButton(m_projectGrid ? "List" : "Grid")) m_projectGrid = !m_projectGrid;
+            ImGui::SameLine();
             if (ImGui::SmallButton("+ Script")) m_commands.run("game.new_script");
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 ImGui::SetTooltip("New Luau script in the scripts folder");
@@ -451,25 +467,87 @@ void Editor::drawProject() {
 
             ImGui::BeginChild("##files");
             if (items.empty()) emptyState("This folder is empty.");
-            for (const auto& it : items) {
-                const std::string n = it.path.filename().string();
-                if (!icontains(n, filter)) continue;
-                const std::string label = std::string(it.dir ? "[folder]  " : "") + n;
-                if (ImGui::Selectable(label.c_str(), m_projectSelected == it.path.string(),
-                                      ImGuiSelectableFlags_AllowDoubleClick)) {
-                    m_projectSelected = it.path.string();
-                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                        if (it.dir) m_projectDir = it.path;
-                        else if (it.path.extension() == ".luau") codeOpen(it.path);
-                        else openInExternalEditor(it.path);
-                    }
-                }
+            // Um clique: prévia no Inspetor. Dois cliques: abre (pasta,
+            // script no editor de código, resto no programa do sistema).
+            auto activate = [&](const Item& it, bool dbl) {
+                m_projectSelected = it.path.string();
+                if (!it.dir && !dbl) selectAsset(it.path);
+                if (!dbl) return;
+                if (it.dir) m_projectDir = it.path;
+                else if (it.path.extension() == ".luau") codeOpen(it.path);
+                else openInExternalEditor(it.path);
+            };
+            auto contextMenu = [&](const Item& it) {
                 if (ImGui::BeginPopupContextItem()) {
                     if (!it.dir && it.path.extension() == ".luau" && ImGui::MenuItem("Edit here")) codeOpen(it.path);
                     if (!it.dir && ImGui::MenuItem("Open in VS Code")) openInExternalEditor(it.path);
                     if (it.dir && ImGui::MenuItem("Open folder")) m_projectDir = it.path;
                     if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(it.path.string().c_str());
                     ImGui::EndPopup();
+                }
+            };
+            if (m_projectGrid) {
+                const float cell = 104.0f;
+                const int cols = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x / (cell + 8.0f)));
+                int col = 0;
+                for (const auto& it : items) {
+                    const std::string n = it.path.filename().string();
+                    if (!icontains(n, filter)) continue;
+                    ImGui::PushID(n.c_str());
+                    ImGui::BeginGroup();
+                    const bool selected = m_projectSelected == it.path.string();
+                    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+                    ImGui::InvisibleButton("##cell", ImVec2(cell, cell + ImGui::GetTextLineHeight() + 6));
+                    const bool hovered = ImGui::IsItemHovered();
+                    if (ImGui::IsItemClicked()) activate(it, false);
+                    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) activate(it, true);
+                    contextMenu(it);
+                    if (hovered) ImGui::SetTooltip("%s", n.c_str());
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    if (selected || hovered)
+                        dl->AddRectFilled(p0, ImVec2(p0.x + cell, p0.y + cell + ImGui::GetTextLineHeight() + 6),
+                                          selected ? IM_COL32(255, 60, 40, 70) : IM_COL32(255, 255, 255, 20), 4.0f);
+                    const ImVec2 box0(p0.x + 8, p0.y + 4), box1(p0.x + cell - 8, p0.y + cell - 12);
+                    const GuiTexture* thumb = (!it.dir && isPreviewableImage(it.path)) ? thumbnail(it.path.string()) : nullptr;
+                    if (thumb) {
+                        const float bw = box1.x - box0.x, bh = box1.y - box0.y;
+                        const float sc = std::min(bw / thumb->width, bh / thumb->height);
+                        const ImVec2 sz(thumb->width * sc, thumb->height * sc);
+                        const ImVec2 c((box0.x + box1.x) * 0.5f, (box0.y + box1.y) * 0.5f);
+                        dl->AddImage(reinterpret_cast<ImTextureID>(thumb->set), ImVec2(c.x - sz.x * 0.5f, c.y - sz.y * 0.5f),
+                                     ImVec2(c.x + sz.x * 0.5f, c.y + sz.y * 0.5f));
+                    } else {
+                        // Ícone desenhado: pasta ou etiqueta com a extensão.
+                        if (it.dir) {
+                            dl->AddRectFilled(ImVec2(box0.x + 6, box0.y + 14), ImVec2(box1.x - 6, box1.y - 6), IM_COL32(200, 150, 70, 255), 4.0f);
+                            dl->AddRectFilled(ImVec2(box0.x + 6, box0.y + 6), ImVec2(box0.x + 36, box0.y + 18), IM_COL32(200, 150, 70, 255), 3.0f);
+                        } else {
+                            dl->AddRectFilled(ImVec2(box0.x + 14, box0.y + 4), ImVec2(box1.x - 14, box1.y), IM_COL32(70, 72, 78, 255), 4.0f);
+                            std::string ext = it.path.extension().string();
+                            if (!ext.empty()) ext = ext.substr(1);
+                            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) { return std::toupper(ch); });
+                            const ImVec2 ts = ImGui::CalcTextSize(ext.c_str());
+                            dl->AddText(ImVec2((box0.x + box1.x - ts.x) * 0.5f, (box0.y + box1.y - ts.y) * 0.5f), IM_COL32(230, 230, 232, 255), ext.c_str());
+                        }
+                    }
+                    // Nome cortado com reticências.
+                    std::string label = n;
+                    while (label.size() > 3 && ImGui::CalcTextSize(label.c_str()).x > cell - 6) label = label.substr(0, label.size() - 4) + "...";
+                    const ImVec2 ls = ImGui::CalcTextSize(label.c_str());
+                    dl->AddText(ImVec2(p0.x + (cell - ls.x) * 0.5f, p0.y + cell - 6), ImGui::GetColorU32(ImGuiCol_Text), label.c_str());
+                    ImGui::EndGroup();
+                    ImGui::PopID();
+                    if (++col % cols != 0) ImGui::SameLine(0, 8);
+                }
+            } else {
+                for (const auto& it : items) {
+                    const std::string n = it.path.filename().string();
+                    if (!icontains(n, filter)) continue;
+                    const std::string label = std::string(it.dir ? "[folder]  " : "") + n;
+                    if (ImGui::Selectable(label.c_str(), m_projectSelected == it.path.string(),
+                                          ImGuiSelectableFlags_AllowDoubleClick))
+                        activate(it, ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left));
+                    contextMenu(it);
                 }
             }
             ImGui::EndChild();

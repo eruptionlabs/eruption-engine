@@ -86,6 +86,14 @@ bool Editor::init(Engine& engine) {
 }
 
 void Editor::shutdown() {
+    stopThumbnails();
+    if (m_engine) {
+        closeAssetPreview();
+        for (auto& [path, t] : m_thumbs) releaseTexture(t.tex);
+        m_thumbs.clear();
+        m_engine->vulkan().waitIdle();
+        collectTextures(true);
+    }
     Logger::setSink(nullptr, nullptr);
     if (m_engine) m_engine->setEditor(nullptr);
     m_engine = nullptr;
@@ -337,6 +345,12 @@ void Editor::buildDefaultLayout(unsigned int dockspaceId) {
 
 void Editor::update(float dt) {
     if (!m_engine) return;
+    ++m_frame;
+    // ERUPTION_TEST_EDITOR_ASSET=caminho (teste): abre a prévia desse asset.
+    static const char* testAsset = std::getenv("ERUPTION_TEST_EDITOR_ASSET");
+    if (testAsset && m_frame == 30) selectAsset(testAsset);
+    uploadThumbnails();
+    collectTextures(false);
 
     // Troca de mapa pedida pela UI: fora do frame de render.
     if (!m_pendingMap.empty()) {
