@@ -94,6 +94,8 @@ struct SceneEdits {
         bool hidden = false; // começa escondido (um script mostra depois)
     };
     std::vector<Character> characters;
+    bool hasWater = false; // environment.water: nível da água (lagos)
+    float waterLevel = 0.0f;
     bool hasSpawn = false;
     Vec3 spawn{0.0f};
     // Texturas das camadas pintadas no editor (mapas sem splat próprio); as
@@ -106,7 +108,7 @@ struct SceneEdits {
 
     bool empty() const {
         return added.empty() && objects.empty() && copies.empty() && lights.empty() && characters.empty() &&
-               !hasEnvironment && !hasSpawn && terrainLayers.empty();
+               !hasEnvironment && !hasSpawn && terrainLayers.empty() && !hasWater;
     }
 
     static std::filesystem::path pathFor(const std::string& map);

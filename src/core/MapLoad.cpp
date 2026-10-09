@@ -184,6 +184,7 @@ bool Engine::loadMap(const std::string& name) {
                                                   loadedMap->terrain.width, loadedMap->terrain.height,
                                                   wl, wh, m_waterMenu.config.forceWater, !fromTerrain);
         m_mapBaseWaterLevel = wl;
+        m_waterOn = !wmesh.vertices.empty();
         m_water.setWaterMesh(wmesh);
         cacheWaterBounds(wmesh);
         syncLiquidMenuFromMap(loadedMap.get());

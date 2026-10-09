@@ -292,6 +292,12 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
         time = readNum(L, t, "time", 12.0f);
         paused = readBool(L, t, "paused", false);
         weather = readStr(L, t, "weather");
+        lua_getfield(L, t, "water");
+        if (lua_isnumber(L, -1)) {
+            hasWater = true;
+            waterLevel = float(lua_tonumber(L, -1));
+        }
+        lua_pop(L, 1);
     }
     lua_pop(L, 1);
     lua_close(L);
@@ -367,6 +373,7 @@ std::string SceneEdits::serialize(const std::string& map) const {
     if (hasEnvironment) {
         o << "    environment = { time = " << num(time) << ", paused = " << (paused ? "true" : "false");
         if (!weather.empty()) o << ", weather = " << quoted(weather);
+        if (hasWater) o << ", water = " << num(waterLevel);
         o << " },\n";
     }
     o << "}\n";
@@ -445,6 +452,7 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         engine.dayNightCycle().setTimeOfDay(time / 24.0f);
         engine.dayNightCycle().setPaused(paused);
         if (!weather.empty()) engine.setInitialWeatherType(weather);
+        if (hasWater) engine.setWaterLevel(true, waterLevel);
         ++applied;
     }
     return applied;
