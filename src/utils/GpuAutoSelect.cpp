@@ -1,5 +1,6 @@
 #include "utils/GpuAutoSelect.hpp"
 #include "core/Logger.hpp"
+#include "core/Platform.hpp"
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -11,8 +12,6 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
-#include <unistd.h>
-#include <linux/limits.h>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -125,19 +124,12 @@ int GpuAutoSelect::pickBestGpuIndex(const std::vector<GpuInfo>& gpus) {
     return bestIdx;
 }
 
-std::string GpuAutoSelect::getExecutablePath() {
-    char path[PATH_MAX + 1]{};
-    ssize_t len = readlink("/proc/self/exe", path, PATH_MAX);
-    if (len <= 0) return {};
-    return std::string(path, static_cast<size_t>(len));
-}
+std::string GpuAutoSelect::getExecutablePath() { return platform::executablePath().string(); }
 
 std::string GpuAutoSelect::getConfigPath() {
-    std::string exe = getExecutablePath();
-    if (exe.empty()) return {};
-    size_t pos = exe.find_last_of('/');
-    if (pos == std::string::npos) return {};
-    return exe.substr(0, pos) + "/data/launcher_config.json";
+    const std::filesystem::path exe = platform::executablePath();
+    if (exe.empty()) return "data/launcher_config.json";
+    return (exe.parent_path() / "data" / "launcher_config.json").string();
 }
 
 bool GpuAutoSelect::readConfig(std::string& outVendor, std::string& outIndex) {
@@ -232,8 +224,8 @@ bool GpuAutoSelect::ensureBestGpu() {
             std::getenv("__NV_PRIME_RENDER_OFFLOAD") == nullptr &&
             std::getenv("__VK_LAYER_NV_optimus") == nullptr) {
             ERUPTION_LOG_WARN("[GpuAutoSelect] Hybrid NVIDIA+Intel detected; enabling PRIME render offload");
-            setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 1);
-            setenv("__VK_LAYER_NV_optimus", "NVIDIA_only", 1);
+            platform::setEnv("__NV_PRIME_RENDER_OFFLOAD", "1");
+            platform::setEnv("__VK_LAYER_NV_optimus", "NVIDIA_only");
             // Re-enumerate so the device order reflects the offload layer and
             // the auto-selected index points at the correct physical device.
             gpus = enumerateGpus();
@@ -272,7 +264,7 @@ bool GpuAutoSelect::ensureBestGpu() {
 
     // Make sure ERUPTION_GPU_INDEX is set so VulkanContext uses the right device.
     if (!cfgIndex.empty() && std::getenv("ERUPTION_GPU_INDEX") == nullptr) {
-        setenv("ERUPTION_GPU_INDEX", cfgIndex.c_str(), 1);
+        platform::setEnv("ERUPTION_GPU_INDEX", cfgIndex.c_str());
     }
 
     if (autoDetected) {

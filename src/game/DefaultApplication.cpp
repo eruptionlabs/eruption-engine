@@ -1,6 +1,7 @@
 #include "editor/Editor.hpp"
 #include "script/ScriptHost.hpp"
 #include "scene/SceneEdits.hpp"
+#include "core/Platform.hpp"
 #include "game/DefaultApplication.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -57,7 +58,7 @@ void DefaultApplication::parseArgs(int argc, char** argv) {
             m_autoExit = true;
         } else if (arg == "--telemetry" && i + 1 < argc) {
             // Same switch the perf/ harness uses via env var.
-            setenv("ERUPTION_TELEMETRY_OUT", argv[++i], 1);
+            platform::setEnv("ERUPTION_TELEMETRY_OUT", argv[++i]);
         } else if (arg == "--warp-on-load" && i + 1 < argc) {
             m_warpOnLoad = argv[++i];
         } else if (arg == "--dump-frames" && i + 2 < argc) {

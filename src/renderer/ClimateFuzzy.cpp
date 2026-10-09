@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
-#include <sys/stat.h>
+#include "core/Platform.hpp"
 
 namespace eruption {
 
@@ -119,11 +119,7 @@ FuzzyRange parseRange(const nlohmann::json& j, float lo, float hi) {
     return r;
 }
 
-long long fileMtime(const std::string& p) {
-    struct stat st{};
-    if (stat(p.c_str(), &st) != 0) return 0;
-    return static_cast<long long>(st.st_mtime);
-}
+long long fileMtime(const std::string& p) { return platform::fileTime(p); }
 
 } // namespace
 
