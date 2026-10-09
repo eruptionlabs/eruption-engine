@@ -540,6 +540,16 @@ void Editor::update(float dt) {
     static const char* testSprite = std::getenv("ERUPTION_TEST_EDITOR_SPRITE");
     if (testSprite && m_frame == 120) {
         openSpriteImporter(testSprite);
+        // ERUPTION_TEST_EDITOR_SPRITE_EXTRA=nome@linha: uma animação extra (uma vez).
+        if (const char* extra = std::getenv("ERUPTION_TEST_EDITOR_SPRITE_EXTRA")) {
+            const std::string spec = extra;
+            const size_t at = spec.find('@');
+            SpriteSheetSpec::NamedAnim e;
+            e.name = spec.substr(0, at);
+            e.anim = m_spriteImport.spec.walk;
+            if (at != std::string::npos) e.anim.firstRow = std::atoi(spec.c_str() + at + 1);
+            m_spriteImport.spec.extra.push_back(e);
+        }
         std::string error;
         SpriteSheetResult res;
         if (buildSpriteSheet(m_spriteImport.spec, res, error) &&

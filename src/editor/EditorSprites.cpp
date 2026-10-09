@@ -134,6 +134,40 @@ void Editor::drawSpriteImporter() {
     animUi("Standing", sp.idle, false);
     animUi("Walking", sp.walk, true);
 
+    // Animações extras: cada uma com nome, linhas da folha e se repete.
+    ImGui::SeparatorText("Extra animations");
+    ImGui::TextWrapped("Rules and scripts play them by name: characters.play(\"guard\", \"attack\").");
+    int removeAt = -1;
+    for (size_t i = 0; i < sp.extra.size(); ++i) {
+        auto& e = sp.extra[i];
+        ImGui::PushID(static_cast<int>(i));
+        char name[64];
+        std::snprintf(name, sizeof(name), "%s", e.name.c_str());
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::InputText("Name", name, sizeof(name))) {
+            e.name = name;
+            changed = true;
+        }
+        ImGui::SameLine();
+        changed |= ImGui::Checkbox("Repeat", &e.loop);
+        ImGui::SetItemTooltip("Off: plays once and goes back to standing.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("x")) removeAt = static_cast<int>(i);
+        animUi(("##extra" + std::to_string(i)).c_str(), e.anim, false);
+        ImGui::PopID();
+    }
+    if (removeAt >= 0) {
+        sp.extra.erase(sp.extra.begin() + removeAt);
+        changed = true;
+    }
+    if (ImGui::SmallButton("+ Animation")) {
+        SpriteSheetSpec::NamedAnim e;
+        e.name = "action" + std::to_string(sp.extra.size() + 1);
+        e.anim = sp.walk;
+        sp.extra.push_back(e);
+        changed = true;
+    }
+
     ImGui::SeparatorText("Size");
     changed |= ImGui::DragFloat("Height in world", &sp.worldHeight, 0.5f, 1.0f, 500.0f, "%.1f");
     ImGui::SetItemTooltip("How tall one frame stands in the scene. The default character is about 25.");
@@ -175,7 +209,17 @@ void Editor::drawSpriteImporter() {
     const float previewH = std::min(220.0f, avail.y * 0.45f);
     ImGui::SeparatorText("Preview");
     ImGui::SetNextItemWidth(160);
-    ImGui::Combo("##state", &si.previewWalk, "Standing\0Walking\0");
+    {
+        // Parado, andando e as extras pelo nome.
+        std::vector<std::string> states{"Standing", "Walking"};
+        for (const auto& n : si.result.named) states.push_back(n.name);
+        si.previewWalk = std::clamp(si.previewWalk, 0, static_cast<int>(states.size()) - 1);
+        if (ImGui::BeginCombo("##state", states[static_cast<size_t>(si.previewWalk)].c_str())) {
+            for (size_t i = 0; i < states.size(); ++i)
+                if (ImGui::Selectable(states[i].c_str(), si.previewWalk == static_cast<int>(i))) si.previewWalk = static_cast<int>(i);
+            ImGui::EndCombo();
+        }
+    }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160);
     ImGui::SliderInt("##dir", &si.previewDir, 0, 7, kDirNames[std::clamp(si.previewDir, 0, 7)]);
@@ -186,7 +230,9 @@ void Editor::drawSpriteImporter() {
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(p0, ImVec2(p0.x + avail.x, p0.y + previewH), IM_COL32(40, 42, 46, 255), 4.0f);
-    const size_t actionIdx = static_cast<size_t>(si.previewWalk * 8 + si.previewDir);
+    const size_t actionIdx = si.previewWalk < 2 ? static_cast<size_t>(si.previewWalk * 8 + si.previewDir)
+                                                 : si.result.named[static_cast<size_t>(si.previewWalk - 2)].firstAction +
+                                                       static_cast<size_t>(si.previewDir);
     if (actionIdx < res.actions.size() && !res.actions[actionIdx].frames.empty()) {
         const auto& act = res.actions[actionIdx];
         si.previewTime += ImGui::GetIO().DeltaTime * 1000.0f;

@@ -296,6 +296,24 @@ int player_say(lua_State* L) {
     eng().sayPlayer(luaL_checkstring(L, 1), static_cast<float>(luaL_optnumber(L, 2, 3.0)));
     return 0;
 }
+int characters_play(lua_State* L) {
+    checkCharacter(L, 1);
+    const int idx = eng().findCharacter(lua_tostring(L, 1));
+    lua_pushboolean(L, eng().playCharacterAction(idx, luaL_optstring(L, 2, ""), lua_toboolean(L, 3) != 0));
+    return 1;
+}
+int player_animation(lua_State* L) {
+    lua_pushstring(L, eng().playerAction().c_str());
+    return 1;
+}
+int characters_animation(lua_State* L) {
+    lua_pushstring(L, checkCharacter(L, 1)->action.c_str());
+    return 1;
+}
+int player_play(lua_State* L) {
+    lua_pushboolean(L, eng().playPlayerAction(luaL_optstring(L, 1, ""), lua_toboolean(L, 2) != 0));
+    return 1;
+}
 int characters_walking(lua_State* L) {
     lua_pushboolean(L, checkCharacter(L, 1)->walking);
     return 1;
@@ -617,7 +635,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"ground_height", world_ground_height}, {"map", world_map}, {"load_map", world_load_map}, {nullptr, nullptr}};
     static const luaL_Reg player[] = {
         {"position", player_position}, {"set_position", player_set_position}, {"set_sprite", player_set_sprite}, {"near", player_near},
-        {"inside", player_inside}, {"say", player_say}, {nullptr, nullptr}};
+        {"inside", player_inside}, {"say", player_say}, {"play", player_play}, {"animation", player_animation},
+        {nullptr, nullptr}};
     static const luaL_Reg camera[] = {
         {"target", camera_target}, {"set_target", camera_set_target},
         {"orbit", camera_orbit}, {"set_orbit", camera_set_orbit}, {nullptr, nullptr}};
@@ -633,7 +652,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg characters[] = {
         {"exists", characters_exists}, {"position", characters_position},
         {"set_position", characters_set_position}, {"walk_to", characters_walk_to},
-        {"walking", characters_walking}, {"face", characters_face}, {"show", characters_show}, {"say", characters_say},
+        {"walking", characters_walking}, {"face", characters_face}, {"show", characters_show}, {"say", characters_say}, {"play", characters_play}, {"animation", characters_animation},
         {"hide", characters_hide}, {"set_sprite", characters_set_sprite}, {nullptr, nullptr}};
     static const luaL_Reg lights[] = {
         {"count", lights_count}, {"position", lights_position}, {"set_position", lights_set_position},
@@ -741,6 +760,9 @@ declare player: {
     inside: (area: string) -> boolean,
     -- Speech bubble over the player's head for `seconds` (default 3).
     say: (text: string, seconds: number?) -> (),
+    -- Extra animation of the player's sprite; once unless `loop`.
+    play: (animation: string, loop: boolean?) -> boolean,
+    animation: () -> string,
 }
 
 declare characters: {
@@ -753,6 +775,11 @@ declare characters: {
     walk_to: (name: string, position: vector, seconds: number?) -> (),
     -- Speech bubble over the head for `seconds` (default 3).
     say: (name: string, text: string, seconds: number?) -> (),
+    -- Extra animation of the sprite (Sprite Importer > Extra animations), e.g.
+    -- "attack"; once unless `loop`. "" goes back to standing/walking.
+    play: (name: string, animation: string, loop: boolean?) -> boolean,
+    -- Extra animation playing now ("" when standing or walking).
+    animation: (name: string) -> string,
     walking: (name: string) -> boolean,
     face: (name: string, degrees: number) -> (),
     show: (name: string) -> (),

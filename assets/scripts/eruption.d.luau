@@ -77,6 +77,9 @@ declare player: {
     inside: (area: string) -> boolean,
     -- Speech bubble over the player's head for `seconds` (default 3).
     say: (text: string, seconds: number?) -> (),
+    -- Extra animation of the player's sprite; once unless `loop`.
+    play: (animation: string, loop: boolean?) -> boolean,
+    animation: () -> string,
 }
 
 declare characters: {
@@ -89,6 +92,11 @@ declare characters: {
     walk_to: (name: string, position: vector, seconds: number?) -> (),
     -- Speech bubble over the head for `seconds` (default 3).
     say: (name: string, text: string, seconds: number?) -> (),
+    -- Extra animation of the sprite (Sprite Importer > Extra animations), e.g.
+    -- "attack"; once unless `loop`. "" goes back to standing/walking.
+    play: (name: string, animation: string, loop: boolean?) -> boolean,
+    -- Extra animation playing now ("" when standing or walking).
+    animation: (name: string) -> string,
     walking: (name: string) -> boolean,
     face: (name: string, degrees: number) -> (),
     show: (name: string) -> (),

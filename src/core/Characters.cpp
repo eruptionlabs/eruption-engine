@@ -131,6 +131,10 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
     const int direction = static_cast<int>((rel + 22.5f) / 45.0f) % 8;
     const bool moving = c.walking;
     int actionIdx = direction + (moving ? 8 : 0);
+    // Animação extra (sprite v3) por cima do parado/andando.
+    const LoadedSprite::Named* named = c.action.empty() ? nullptr : ls.findNamed(c.action);
+    if (!c.action.empty() && !named) c.action.clear(); // o sprite não tem essa
+    if (named) actionIdx = static_cast<int>(named->first) + direction;
     if (actionIdx >= static_cast<int>(ls.act.actions.size())) actionIdx %= 8;
     if (actionIdx >= static_cast<int>(ls.act.actions.size())) actionIdx = 0;
     const auto& action = ls.act.actions[static_cast<size_t>(actionIdx)];
@@ -141,6 +145,11 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
     if (c.timer >= delay) {
         c.frame = (c.frame + 1) % static_cast<int>(action.frames.size());
         c.timer = 0.0f;
+        // Uma vez só: ao voltar ao primeiro quadro, termina (fica no último até lá).
+        if (named && c.frame == 0 && !c.actionLoop) {
+            c.action.clear();
+            c.frame = static_cast<int>(action.frames.size()) - 1;
+        }
     }
 
     const Vec3 toCam = m_camera.position() - m_camera.target();
@@ -209,6 +218,25 @@ void Engine::drawSpeechBubbles(float x, float y, float w, float h, float dt) {
             bubble(c.position + Vec3(0.0f, 30.0f, 0.0f), c.say, c.sayTime);
     if (m_playerSayTime > 0.0f && m_playerController)
         bubble(m_playerController->pos() + Vec3(0.0f, 30.0f, 0.0f), m_playerSay, m_playerSayTime);
+}
+
+bool Engine::playPlayerAction(const std::string& name, bool loop) {
+    if (!name.empty() && (!m_playerController || !m_playerController->bodySprite().findNamed(name))) return false;
+    m_playerAction = name;
+    m_playerActionLoop = loop;
+    m_playerActionStarted = true;
+    return true;
+}
+
+bool Engine::playCharacterAction(int index, const std::string& name, bool loop) {
+    if (index < 0 || index >= static_cast<int>(m_characters.size())) return false;
+    SceneCharacter& c = m_characters[static_cast<size_t>(index)];
+    if (!name.empty() && !c.look.findNamed(name)) return false;
+    c.action = name;
+    c.actionLoop = loop;
+    c.frame = 0;
+    c.timer = 0.0f;
+    return true;
 }
 
 } // namespace eruption

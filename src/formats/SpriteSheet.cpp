@@ -123,6 +123,12 @@ bool buildSpriteSheet(const SpriteSheetSpec& spec, SpriteSheetResult& out, std::
     };
     if (!buildState(spec.idle, out.actions)) return false;
     if (!buildState(spec.walk.enabled ? spec.walk : spec.idle, out.actions)) return false;
+    for (const auto& e : spec.extra) {
+        if (e.name.empty() || !e.anim.enabled) continue;
+        const uint32_t first = static_cast<uint32_t>(out.actions.size());
+        if (!buildState(e.anim, out.actions)) return false;
+        out.named.push_back({e.name, first, e.loop});
+    }
     return true;
 }
 
@@ -136,7 +142,7 @@ bool writeEruptSprV2(const SpriteSheetResult& sheet, const std::string& path, st
     auto i32 = [&](int32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
     auto f32 = [&](float v) { f.write(reinterpret_cast<const char*>(&v), 4); };
     f.write("ERUPTSPR", 8);
-    u32(2);
+    u32(sheet.named.empty() ? 2 : 3); // 3: com animações extras no fim
     u32(static_cast<uint32_t>(sheet.images.size()));
     for (const auto& px : sheet.images) {
         u32(static_cast<uint32_t>(sheet.cellW));
@@ -156,6 +162,16 @@ bool writeEruptSprV2(const SpriteSheetResult& sheet, const std::string& path, st
             f32(sheet.scale);
             f32(1.0f); f32(1.0f); f32(1.0f); f32(1.0f);
             u32(fr.mirror ? 1u : 0u);
+        }
+    }
+    if (!sheet.named.empty()) {
+        u32(static_cast<uint32_t>(sheet.named.size()));
+        for (const auto& n : sheet.named) {
+            const uint16_t len = static_cast<uint16_t>(std::min<size_t>(n.name.size(), 255));
+            f.write(reinterpret_cast<const char*>(&len), 2);
+            f.write(n.name.data(), len);
+            u32(n.firstAction);
+            u32(n.loop ? 1u : 0u);
         }
     }
     if (!f) {

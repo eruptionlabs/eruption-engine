@@ -259,6 +259,14 @@ public:
         // ERUPTSPR v2: o atraso de cada ação vem do arquivo (andar escala
         // com a velocidade a partir dele, não do valor fixo antigo).
         bool authoredTiming = false;
+        // ERUPTSPR v3: animações extras com nome (8 ações cada, uma por direção).
+        struct Named { std::string name; uint32_t first; bool loop; };
+        std::vector<Named> named;
+        const Named* findNamed(const std::string& n) const {
+            for (const auto& a : named)
+                if (a.name == n) return &a;
+            return nullptr;
+        }
     };
     // Personagem da cena (NPC): ver core/Characters.cpp.
     struct SceneCharacter {
@@ -280,6 +288,9 @@ public:
         // Balão de fala.
         std::string say;
         float sayTime = 0.0f;
+        // Animação extra tocando (do sprite v3); vazia = parado/andando.
+        std::string action;
+        bool actionLoop = false;
     };
     struct TextureStats {
         size_t totalTextures = 0;
@@ -432,7 +443,7 @@ public:
     RenderEffect* renderEffect(size_t i) { return m_renderEffects[i].get(); }
     void setMinimapBottomRight(bool bottomRight) { m_minimapBottomRight = bottomRight; }
     bool minimapBottomRight() const { return m_minimapBottomRight; }
-    bool loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out);
+    bool loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out, uint32_t version = 2);
     uint32_t createTextureFromSprImage(const SprImage& img, const uint8_t* palette, bool usePalette, std::vector<TextureResource>& outResources, bool swapRB = false, const std::string& sourcePath = "");
     bool loadSpriteFromPng(const std::string& path, LoadedSprite& out);
     bool loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out);
@@ -453,6 +464,10 @@ public:
     bool characterAt(const Vec3& p, float radius, int ignore = -1) const;
     // Balões de fala (personagens e jogador) sobre a área do jogo.
     void sayPlayer(const std::string& text, float seconds);
+    // Toca uma animação extra do sprite (v3, "attack", "jump"...); vazio para.
+    bool playPlayerAction(const std::string& name, bool loop);
+    bool playCharacterAction(int index, const std::string& name, bool loop);
+    const std::string& playerAction() const { return m_playerAction; }
     void drawSpeechBubbles(float x, float y, float w, float h, float dt);
     void clearCharacters(bool keepNeighbors = false);
     // Anda quem tem caminho (só com o jogo rodando) e envia os sprites.
@@ -1364,6 +1379,9 @@ private:
     AudioSystem m_audio;
     std::string m_playerSay;
     float m_playerSayTime = 0.0f;
+    std::string m_playerAction; // animação extra do jogador (sprite v3)
+    bool m_playerActionLoop = false;
+    bool m_playerActionStarted = false;
     MapRequest m_mapRequest;
     std::vector<uint8_t> m_solid; // por instância
     static const char* worldStateName(WorldRegion::State s);
