@@ -158,8 +158,14 @@ public:
     void enableBenchmarkHeavyRain(bool enable) { m_benchmarkHeavyRain = enable; }
     bool isRunning() const { return m_running; }
     bool loadMap(const std::string& name);
+    // Acrescenta um .glb ao mapa aberto, com o chao do modelo em `position`.
+    // Devolve o indice da primeira instancia (uma por no) ou -1.
+    // `nodeName` não vazio: só esse nó do arquivo.
+    int addModelFromFile(const std::string& glbPath, const Vec3& position, const std::string& nodeName = {});
     const std::string& currentMapName() const { return m_currentMapName; }
     float sampleTerrainHeight(float x, float z) const;
+    // Raio contra a grade de altura do mapa (.ter); falso se o mapa não tem uma.
+    bool raycastTerrain(const Vec3& origin, const Vec3& dir, float maxT, float& hitT) const;
     // CLI/test hooks: spawn independent clouds (altitudes) at the player after
     // map load, tint clouds by altitude for automated tests, debug auto-spawn.
     struct PendingCloudSpawn {
@@ -379,6 +385,7 @@ private:
     void generateMipmaps(VkCommandBuffer cmd, VkImage image, int w, int h, uint32_t mipLevels, VkFormat format, uint32_t alphaMode);
     float advanceFrame();
     void populateMaps();
+    void flushPendingUploads();
     void render();
     void renderImGui();
     void drawLightingControls();

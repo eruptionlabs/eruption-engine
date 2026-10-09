@@ -25,6 +25,8 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -84,6 +86,33 @@ static float sampleGlbOrTerrainHeight(const LoadedMap& map, float x, float z) {
 float Engine::sampleTerrainHeight(float x, float z) const {
     if (!m_currentMap) return 0.0f;
     return sampleGlbOrTerrainHeight(*m_currentMap, x, z);
+}
+
+bool Engine::raycastTerrain(const Vec3& origin, const Vec3& dir, float maxT, float& hitT) const {
+    if (!m_currentMap || m_currentMap->terrain.width == 0 || m_currentMap->terrain.height == 0) return false;
+    const TerrainFile& ter = m_currentMap->terrain;
+    // Passo de meia célula: não atravessa morro fino; bisseção refina o cruzamento.
+    const float step = std::max(0.5f, ter.scale * 0.5f);
+    auto above = [&](float t) {
+        const Vec3 p = origin + dir * t;
+        return p.y - TerrainParser::getTerrainHeightAt(ter, p.x, p.z);
+    };
+    float t0 = 0.0f, d0 = above(0.0f);
+    if (d0 < 0.0f) return false; // começa abaixo do chão
+    for (float t1 = step; t1 <= maxT; t1 += step) {
+        const float d1 = above(t1);
+        if (d1 <= 0.0f) {
+            for (int i = 0; i < 24; ++i) {
+                const float tm = 0.5f * (t0 + t1);
+                if (above(tm) > 0.0f) t0 = tm; else t1 = tm;
+            }
+            hitT = t1;
+            return true;
+        }
+        t0 = t1;
+        d0 = d1;
+    }
+    return false;
 }
 
 void Engine::setPlayerController(PlayerController* pc) {
@@ -365,69 +394,7 @@ bool Engine::loadMap(const std::string& name) {
     ERUPTION_LOG_WARN("Engine::loadMap: loadMapModels took %lld ms",
         (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - _tLMM).count());
 
-    // FLUSH remaining embedded texture uploads
-    if (!s_pendingUploads.empty()) {
-        m_vulkan.immediateSubmit([&](VkCommandBuffer cmd) {
-            for (auto& u : s_pendingUploads) {
-                m_vulkan.cmdImageBarrier(cmd, u.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
-                if (!u.mipSizes.empty()) {
-                    // Textura comprimida em bloco: mips vem prontos do bake.
-                    std::vector<VkBufferImageCopy> regions(u.mipSizes.size());
-                    VkDeviceSize off = 0;
-                    for (uint32_t m = 0; m < u.mipSizes.size(); ++m) {
-                        VkBufferImageCopy& r = regions[m];
-                        r = {};
-                        r.bufferOffset = off;
-                        r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                        r.imageSubresource.mipLevel = m;
-                        r.imageSubresource.layerCount = 1;
-                        r.imageExtent = { std::max(1u, u.width >> m), std::max(1u, u.height >> m), 1 };
-                        off += u.mipSizes[m];
-                    }
-                    vkCmdCopyBufferToImage(cmd, u.staging, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                           static_cast<uint32_t>(regions.size()), regions.data());
-                    m_vulkan.cmdImageBarrier(cmd, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-                    continue;
-                }
-                VkBufferImageCopy region{};
-                region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                region.imageSubresource.layerCount = 1;
-                region.imageExtent = { u.width, u.height, 1 };
-                vkCmdCopyBufferToImage(cmd, u.staging, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-                if (u.mipLevels > 1) {
-                    this->generateMipmaps(cmd, u.image, u.width, u.height, u.mipLevels, VK_FORMAT_R8G8B8A8_UNORM, 1);
-                } else {
-                    m_vulkan.cmdImageBarrier(cmd, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-                }
-            }
-        });
-        for (auto& u : s_pendingUploads) {
-            vmaDestroyBuffer(m_vulkan.allocator(), u.staging, u.stagingAlloc);
-        }
-        s_pendingUploads.clear();
-    }
-
-    flushPbrTextureUploads(&m_vulkan);
-    
-    if (!s_pendingMeshes.empty()) {
-        m_vulkan.immediateSubmit([&](VkCommandBuffer cmd) {
-            for (auto& pm : s_pendingMeshes) {
-                VkBufferCopy cv{0, 0, pm.vSize};
-                vkCmdCopyBuffer(cmd, pm.staging, pm.vb, 1, &cv);
-                VkBufferCopy ci{pm.vSize, 0, pm.iSize};
-                vkCmdCopyBuffer(cmd, pm.staging, pm.ib, 1, &ci);
-            }
-        });
-        for (auto& pm : s_pendingMeshes) {
-            vmaDestroyBuffer(m_vulkan.allocator(), pm.staging, pm.alloc);
-        }
-        s_pendingMeshes.clear();
-    }
+    flushPendingUploads();
 
 
     ERUPTION_LOG_WARN("Engine::loadMap: ModelRenderer has %zu meshes, %zu instances, "
@@ -595,6 +562,112 @@ bool Engine::loadMap(const std::string& name) {
                           m_bindless.usedSlots(), m_bindless.highWater(), MAX_BINDLESS_TEXTURES);
     }
     return true;
+}
+
+// Sobe para a GPU o que os resolvedores de textura/malha deixaram na fila.
+void Engine::flushPendingUploads() {
+    // Texturas embutidas pendentes
+    if (!s_pendingUploads.empty()) {
+        m_vulkan.immediateSubmit([&](VkCommandBuffer cmd) {
+            for (auto& u : s_pendingUploads) {
+                m_vulkan.cmdImageBarrier(cmd, u.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+                if (!u.mipSizes.empty()) {
+                    // Textura comprimida em bloco: mips vem prontos do bake.
+                    std::vector<VkBufferImageCopy> regions(u.mipSizes.size());
+                    VkDeviceSize off = 0;
+                    for (uint32_t m = 0; m < u.mipSizes.size(); ++m) {
+                        VkBufferImageCopy& r = regions[m];
+                        r = {};
+                        r.bufferOffset = off;
+                        r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                        r.imageSubresource.mipLevel = m;
+                        r.imageSubresource.layerCount = 1;
+                        r.imageExtent = { std::max(1u, u.width >> m), std::max(1u, u.height >> m), 1 };
+                        off += u.mipSizes[m];
+                    }
+                    vkCmdCopyBufferToImage(cmd, u.staging, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                           static_cast<uint32_t>(regions.size()), regions.data());
+                    m_vulkan.cmdImageBarrier(cmd, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+                    continue;
+                }
+                VkBufferImageCopy region{};
+                region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                region.imageSubresource.layerCount = 1;
+                region.imageExtent = { u.width, u.height, 1 };
+                vkCmdCopyBufferToImage(cmd, u.staging, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                if (u.mipLevels > 1) {
+                    this->generateMipmaps(cmd, u.image, u.width, u.height, u.mipLevels, VK_FORMAT_R8G8B8A8_UNORM, 1);
+                } else {
+                    m_vulkan.cmdImageBarrier(cmd, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+                }
+            }
+        });
+        for (auto& u : s_pendingUploads) {
+            vmaDestroyBuffer(m_vulkan.allocator(), u.staging, u.stagingAlloc);
+        }
+        s_pendingUploads.clear();
+    }
+
+    flushPbrTextureUploads(&m_vulkan);
+    
+    if (!s_pendingMeshes.empty()) {
+        m_vulkan.immediateSubmit([&](VkCommandBuffer cmd) {
+            for (auto& pm : s_pendingMeshes) {
+                VkBufferCopy cv{0, 0, pm.vSize};
+                vkCmdCopyBuffer(cmd, pm.staging, pm.vb, 1, &cv);
+                VkBufferCopy ci{pm.vSize, 0, pm.iSize};
+                vkCmdCopyBuffer(cmd, pm.staging, pm.ib, 1, &ci);
+            }
+        });
+        for (auto& pm : s_pendingMeshes) {
+            vmaDestroyBuffer(m_vulkan.allocator(), pm.staging, pm.alloc);
+        }
+        s_pendingMeshes.clear();
+    }
+}
+
+int Engine::addModelFromFile(const std::string& glbPath, const Vec3& position, const std::string& nodeName) {
+    if (!m_currentMap) return -1;
+    ModelInstanceDesc desc;
+    desc.modelPath = glbPath;
+    desc.position = position;
+    desc.rotation = Vec3(0.0f);
+    desc.scale = Vec3(1.0f);
+    uint32_t first = 0xFFFFFFFFu;
+    if (m_modelRenderer.hasAsset(glbPath)) {
+        // Já carregado (o próprio mapa, ou outro modelo já acrescentado).
+        first = m_modelRenderer.addInstanceOf(glbPath, desc, nodeName);
+    } else {
+        auto data = [&] {
+            std::ifstream f(glbPath, std::ios::binary);
+            return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        }();
+        if (data.size() < 12 || std::memcmp(data.data(), "glTF", 4) != 0) {
+            ERUPTION_LOG_ERROR("addModelFromFile: not a GLB file: %s", glbPath.c_str());
+            return -1;
+        }
+        ModelFile model = GltfParser::parse(data.data(), data.size(), std::filesystem::path(glbPath).parent_path().string());
+        if (model.nodes.empty()) {
+            ERUPTION_LOG_ERROR("addModelFromFile: no meshes in %s", glbPath.c_str());
+            return -1;
+        }
+        model.filePath = glbPath;
+        // As texturas embutidas são procuradas nos modelos do mapa aberto.
+        m_currentMap->models.push_back(model);
+        first = m_modelRenderer.addModel(convertModelToAsset(model), desc, nodeName);
+    }
+    flushPendingUploads();
+    if (first == 0xFFFFFFFFu) {
+        ERUPTION_LOG_ERROR("addModelFromFile: nothing to add from %s%s%s", glbPath.c_str(),
+                           nodeName.empty() ? "" : " node ", nodeName.c_str());
+        return -1;
+    }
+    return static_cast<int>(first);
 }
 
 } // namespace eruption

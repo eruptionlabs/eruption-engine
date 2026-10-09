@@ -76,6 +76,17 @@ void Editor::drawViewport() {
 
     if (m_scripts) m_scripts->drawMessages(pos.x, pos.y, avail.x, avail.y);
 
+    // .glb solto do painel Projeto: entra no chão sob o mouse.
+    if (m_play == PlayState::Editing && ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kModelPayload)) {
+            const ImVec2 m = ImGui::GetIO().MousePos;
+            Vec3 at;
+            if (groundPointAt((m.x - pos.x) / avail.x, (m.y - pos.y) / avail.y, at))
+                dropModel(static_cast<const char*>(p->Data), at);
+        }
+        ImGui::EndDragDropTarget();
+    }
+
     const ImGuiIO& io = ImGui::GetIO();
     const ImVec2 mouse = io.MousePos;
     const bool inside = mouse.x >= pos.x && mouse.y >= pos.y && mouse.x < pos.x + avail.x && mouse.y < pos.y + avail.y;
@@ -250,20 +261,68 @@ void Editor::frameSelection() {
     cam.setOrbit(cam.orbitYaw(), cam.orbitPitch(), std::max(2.0f, fitDist * 1.1f));
 }
 
-void Editor::pickAt(float u, float v) {
-    const Camera& cam = m_engine->camera();
-    const Mat4 inv = glm::inverse(cam.viewProjNoJitter());
+void Editor::viewportRay(float u, float v, Vec3& origin, Vec3& dir) const {
+    const Mat4 inv = glm::inverse(m_engine->camera().viewProjNoJitter());
     const Vec2 ndc(u * 2.0f - 1.0f, v * 2.0f - 1.0f);
-    Vec4 pn = inv * Vec4(ndc, 0.0f, 1.0f);
-    Vec4 pf = inv * Vec4(ndc, 1.0f, 1.0f);
-    const Vec3 origin = Vec3(pn) / pn.w;
-    const Vec3 dir = glm::normalize(Vec3(pf) / pf.w - origin);
+    const Vec4 pn = inv * Vec4(ndc, 0.0f, 1.0f);
+    const Vec4 pf = inv * Vec4(ndc, 1.0f, 1.0f);
+    origin = Vec3(pn) / pn.w;
+    dir = glm::normalize(Vec3(pf) / pf.w - origin);
+}
+
+int Editor::raycastModels(const Vec3& origin, const Vec3& dir, float& hitT) const {
     const Vec3 invDir(1.0f / (std::abs(dir.x) > 1e-8f ? dir.x : 1e-8f),
                       1.0f / (std::abs(dir.y) > 1e-8f ? dir.y : 1e-8f),
                       1.0f / (std::abs(dir.z) > 1e-8f ? dir.z : 1e-8f));
+    const ModelRenderer& mr = m_engine->modelRenderer();
+    const auto& insts = mr.getInstances();
+    // Caixas atingidas, da mais perto para a mais longe; os triângulos só são
+    // testados enquanto a caixa começa antes do melhor acerto.
+    std::vector<std::pair<float, uint32_t>> boxes;
+    for (size_t i = 0; i < insts.size(); ++i) {
+        if (!insts[i].enabled) continue;
+        const float t = rayAabb(origin, invDir, insts[i].worldAabbMin, insts[i].worldAabbMax);
+        if (t >= 0.0f) boxes.push_back({t, static_cast<uint32_t>(i)});
+    }
+    std::sort(boxes.begin(), boxes.end());
+    int best = -1;
+    hitT = FLT_MAX;
+    for (const auto& [boxT, i] : boxes) {
+        if (boxT > hitT) break;
+        const float t = mr.raycastInstance(i, origin, dir);
+        if (t >= 0.0f && t < hitT) {
+            hitT = t;
+            best = static_cast<int>(i);
+        }
+    }
+    return best;
+}
 
+bool Editor::groundPointAt(float u, float v, Vec3& out) const {
+    Vec3 origin, dir;
+    viewportRay(u, v, origin, dir);
+    float t = FLT_MAX, tt = 0.0f;
+    raycastModels(origin, dir, t);
+    if (m_engine->raycastTerrain(origin, dir, std::min(t, 50000.0f), tt)) t = std::min(t, tt);
+    if (t < FLT_MAX) {
+        out = origin + dir * t;
+        return true;
+    }
+    // Nada atingido: plano y = 0 à frente da câmera.
+    if (dir.y < -1e-4f) {
+        out = origin + dir * (-origin.y / dir.y);
+        return true;
+    }
+    return false;
+}
+
+void Editor::pickAt(float u, float v) {
+    Vec3 origin, dir;
+    viewportRay(u, v, origin, dir);
     Selection best;
     float bestT = FLT_MAX;
+    const int model = raycastModels(origin, dir, bestT);
+    if (model >= 0) best = {SelectionKind::Model, model};
     const auto& lights = m_engine->m_deferredLighting.getPointLights();
     for (size_t i = 0; i < lights.size(); ++i) {
         const Vec3 oc = lights[i].position - origin;
@@ -274,15 +333,6 @@ void Editor::pickAt(float u, float v) {
         if (d2 < pickR * pickR && t < bestT) {
             bestT = t;
             best = {SelectionKind::Light, static_cast<int>(i)};
-        }
-    }
-    const auto& insts = m_engine->modelRenderer().getInstances();
-    for (size_t i = 0; i < insts.size(); ++i) {
-        if (!insts[i].enabled) continue;
-        const float t = rayAabb(origin, invDir, insts[i].worldAabbMin, insts[i].worldAabbMax);
-        if (t >= 0.0f && t < bestT) {
-            bestT = t;
-            best = {SelectionKind::Model, static_cast<int>(i)};
         }
     }
     select(best);

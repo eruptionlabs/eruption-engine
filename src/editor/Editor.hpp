@@ -86,6 +86,8 @@ private:
     void drawProject();
     void drawConsole();
     void drawCommandPalette();
+    void drawNewMapDialog();
+    bool createFlatMap(const std::string& name, float size, std::string& error);
     void drawShortcutsWindow();
     void drawWelcome();
     void drawRules();
@@ -97,6 +99,10 @@ private:
     void duplicateSelection();
     void updateTitle(bool dirty);
     void checkSceneDirty();
+    void applySceneFile();
+    void reloadSceneFile();
+    void watchSceneFile();
+    std::filesystem::file_time_type sceneFileTime() const;
     void recordFrameTime(float dt);
     void drawCode();
     void codeOpen(const std::filesystem::path& file);
@@ -138,6 +144,13 @@ private:
     void updateCamera(float dt);
     void frameSelection();
     void pickAt(float u, float v);
+    void viewportRay(float u, float v, Vec3& origin, Vec3& dir) const;
+    // Instância atingida primeiro pelo raio (triângulos reais) ou -1.
+    int raycastModels(const Vec3& origin, const Vec3& dir, float& hitT) const;
+    bool groundPointAt(float u, float v, Vec3& out) const;
+    void dropModel(const std::string& path, const Vec3& position);
+    bool savePrefab(const std::string& path);
+    void drawPrefabDialog();
     void drawGizmo(float x, float y, float w, float h);
     void drawViewCube(float x, float y, float w, float h);
     void drawSelectionBounds(float x, float y, float w, float h);
@@ -151,6 +164,7 @@ private:
     void setSelectionTransform(const Mat4& m);
     void pushTransformEdit(const Selection& s, const Mat4& before, const Mat4& after);
     void deleteSelection();
+    void restoreSelection(const Selection& s);
 
     void play();
     void stop();
@@ -210,8 +224,10 @@ private:
     };
     MapOriginal m_original;
     std::unordered_map<std::string, std::string> m_copySources; // cópia -> origem
+    std::vector<SceneEdits::AddedInstance> m_added;              // modelos arrastados para a cena
     std::string m_savedScene;
     bool m_sceneDirty = false;
+    std::filesystem::file_time_type m_sceneFileTime{};
     bool m_envEdited = false;
     static constexpr int kFrameHistory = 240;
     float m_frameTimes[kFrameHistory] = {};
@@ -220,6 +236,12 @@ private:
     bool m_showShortcuts = false;
     bool m_showWelcome = true;
     bool m_paletteOpen = false;
+    bool m_newMapOpen = false;
+    char m_newMapName[64] = {};
+    int m_newMapSize = 1;
+    std::string m_newMapError;
+    bool m_prefabOpen = false;
+    char m_prefabName[64] = {};
     bool m_paletteFocus = false;
     char m_paletteQuery[128] = {};
     int m_paletteIndex = 0;

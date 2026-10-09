@@ -1,4 +1,6 @@
 #include "editor/Editor.hpp"
+
+#include <glm/gtc/matrix_transform.hpp>
 #include "editor/EditorTheme.hpp"
 
 #include "core/Engine.hpp"
@@ -166,6 +168,9 @@ void Editor::registerCommands() {
     auto isEditing = [this] { return m_play == PlayState::Editing; };
 
     // Arquivo
+    add("file.new_map", "File", "New Map...", {ImGuiKey_N, true}, [this] { m_newMapOpen = true; },
+        "Creates an empty map (flat ground) in assets/external and opens it.")
+        .enabled = isEditing;
     add("file.open_map", "File", "Open Map...", {ImGuiKey_O, true}, [this] {
         m_paletteOpen = true;
         m_paletteFocus = true;
@@ -173,6 +178,9 @@ void Editor::registerCommands() {
     }, "Search and load one of the available maps.");
     add("file.save", "File", "Save Scene", {ImGuiKey_S, true}, [this] { saveScene(); },
         "Writes what you changed in this map to assets/scenes/<map>.scene.luau. The game loads it too.")
+        .enabled = [this] { return !m_engine->currentMapName().empty() && m_play == PlayState::Editing; };
+    add("file.reload_scene", "File", "Reload Scene", {}, [this] { reloadSceneFile(); },
+        "Discards unsaved changes and loads assets/scenes/<map>.scene.luau again.")
         .enabled = [this] { return !m_engine->currentMapName().empty() && m_play == PlayState::Editing; };
     add("file.open_vscode", "File", "Open Project in VS Code", {}, [this] {
         openInExternalEditor(m_projectRoot);
@@ -194,6 +202,9 @@ void Editor::registerCommands() {
         c.altShortcut = {ImGuiKey_Z, true, true};
         c.enabled = [this] { return m_undo.canRedo(); };
     }
+    add("edit.save_prefab", "Edit", "Save as Prefab...", {}, [this] { m_prefabOpen = true; },
+        "Saves the selected object (model, rotation and scale) to assets/prefabs to place it again in any map.")
+        .enabled = [this] { return m_play == PlayState::Editing && m_selection.kind == SelectionKind::Model; };
     add("edit.duplicate", "Edit", "Duplicate", {ImGuiKey_D, true}, [this] { duplicateSelection(); },
         "Copies the selected object next to it.")
         .enabled = [this] { return m_play == PlayState::Editing && m_selection.kind == SelectionKind::Model; };
@@ -439,6 +450,49 @@ void Editor::update(float dt) {
             if (!keepCamera) frameSelection();
         }
     }
+    // ERUPTION_TEST_EDITOR_NEWMAP=<nome>: cria o mapa plano e o abre (teste
+    // do File > New Map sem digitar no diálogo).
+    static const char* testNewMap = std::getenv("ERUPTION_TEST_EDITOR_NEWMAP");
+    if (testNewMap && m_frame == 120) {
+        std::string error;
+        if (createFlatMap(testNewMap, 1000.0f, error)) m_pendingMap = testNewMap;
+        else log(LogLevel::Error, error);
+    }
+    // ERUPTION_TEST_EDITOR_DROP=<arquivo.glb>@u,v: solta o modelo no ponto
+    // (u,v em 0..1) da cena, como arrastar do painel Projeto.
+    static const char* testDrop = std::getenv("ERUPTION_TEST_EDITOR_DROP");
+    if (testDrop && m_frame == 200) {
+        const std::string spec = testDrop;
+        const size_t at = spec.rfind('@');
+        float u = 0.5f, v = 0.5f;
+        if (at != std::string::npos) std::sscanf(spec.c_str() + at + 1, "%f,%f", &u, &v);
+        Vec3 p;
+        if (groundPointAt(u, v, p)) dropModel(spec.substr(0, at), p);
+    }
+    // ERUPTION_TEST_EDITOR_PREFAB=<nome>: gira 30 graus e escala 1,5 o objeto
+    // selecionado, salva como prefab e solta uma cópia em (0.3, 0.6).
+    static const char* testPrefab = std::getenv("ERUPTION_TEST_EDITOR_PREFAB");
+    if (testPrefab && m_frame == 220 && m_selection.kind == SelectionKind::Model) {
+        const uint32_t idx = static_cast<uint32_t>(m_selection.index);
+        const Mat4 m = m_engine->modelRenderer().getInstances()[idx].transform;
+        const Mat4 rs = glm::scale(glm::rotate(Mat4(1.0f), glm::radians(30.0f), Vec3(0, 1, 0)), Vec3(1.5f));
+        m_engine->modelRenderer().setInstanceTransform(idx, glm::translate(Mat4(1.0f), Vec3(m[3])) * rs *
+                                                                glm::translate(Mat4(1.0f), -Vec3(m[3])) * m);
+        const std::string path = std::string("assets/prefabs/") + testPrefab + ".prefab.luau";
+        Vec3 p;
+        if (savePrefab(path) && groundPointAt(0.3f, 0.6f, p)) dropModel(path, p);
+    }
+    // ERUPTION_TEST_EDITOR_SAVE=1: Ctrl+S depois dos ganchos acima.
+    static const bool testSave = std::getenv("ERUPTION_TEST_EDITOR_SAVE") != nullptr;
+    if (testSave && m_frame == 240) saveScene();
+    // ERUPTION_TEST_EDITOR_EXTERNAL=<arquivo>: no frame 300 copia o arquivo por
+    // cima do scene.luau do mapa, como um editor externo faria.
+    static const char* testExternal = std::getenv("ERUPTION_TEST_EDITOR_EXTERNAL");
+    if (testExternal && m_frame == 300) {
+        std::error_code ec;
+        std::filesystem::copy_file(testExternal, SceneEdits::pathFor(m_engine->currentMapName()),
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+    }
     // ERUPTION_TEST_EDITOR_SHOW=aba[:arquivo] (prints): rules:<f>, code:<f>,
     // telemetry, palette:<texto>. ERUPTION_TEST_EDITOR_LANG=pt.
     static const char* testShow = std::getenv("ERUPTION_TEST_EDITOR_SHOW");
@@ -514,6 +568,7 @@ void Editor::update(float dt) {
     }
 
     checkSceneDirty();
+    watchSceneFile();
     if (m_play != PlayState::Playing) updateCamera(dt);
 }
 
@@ -573,6 +628,8 @@ void Editor::drawUI() {
     if (m_showConsole) drawConsole();
     if (m_showShortcuts) drawShortcutsWindow();
     if (m_paletteOpen) drawCommandPalette();
+    drawNewMapDialog();
+    drawPrefabDialog();
 
     if (m_focusScene) {
         m_pendingFocus.insert(m_pendingFocus.begin(), kWinScene);
@@ -593,8 +650,10 @@ void Editor::drawUI() {
 void Editor::drawMenuBar() {
     if (!ImGui::BeginMainMenuBar()) return;
     if (ImGui::BeginMenu("File")) {
+        m_commands.menuItem("file.new_map");
         m_commands.menuItem("file.open_map");
         m_commands.menuItem("file.save");
+        m_commands.menuItem("file.reload_scene");
         if (ImGui::BeginMenu("Recent Maps", !m_engine->availableMaps().empty())) {
             for (const auto& name : m_engine->availableMaps())
                 if (ImGui::MenuItem(name.c_str(), nullptr, name == m_engine->currentMapName()))
@@ -618,6 +677,7 @@ void Editor::drawMenuBar() {
             m_commands.run("edit.redo");
         ImGui::Separator();
         m_commands.menuItem("edit.duplicate");
+        m_commands.menuItem("edit.save_prefab");
         m_commands.menuItem("edit.delete");
         m_commands.menuItem("edit.deselect");
         m_commands.menuItem("edit.frame");

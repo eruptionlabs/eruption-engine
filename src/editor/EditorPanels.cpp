@@ -35,6 +35,18 @@ bool icontains(const std::string& hay, const char* needle) {
     return false;
 }
 
+// .glb e prefab arrastáveis do painel Projeto para a cena.
+void modelDragSource(const std::filesystem::path& p) {
+    std::string e = p.extension().string();
+    std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return std::tolower(c); });
+    if ((e != ".glb" && !Prefab::isPrefabPath(p)) || !ImGui::BeginDragDropSource()) return;
+    const std::string ps = p.string();
+    ImGui::SetDragDropPayload(kModelPayload, ps.c_str(), ps.size() + 1);
+    ImGui::Text("%s", p.filename().string().c_str());
+    ImGui::TextDisabled("Drop on the scene to place it");
+    ImGui::EndDragDropSource();
+}
+
 bool isPreviewableImage(const std::filesystem::path& p) {
     std::string e = p.extension().string();
     std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -142,7 +154,7 @@ void Editor::deleteSelection() {
             engine->modelRenderer().setInstanceEnabled(static_cast<uint32_t>(s.index), on);
         };
         setEnabled(false);
-        m_undo.push({"Hide " + selectionName(s), [setEnabled] { setEnabled(true); }, [setEnabled] { setEnabled(false); }});
+        m_undo.push({"Delete " + selectionName(s), [setEnabled] { setEnabled(true); }, [setEnabled] { setEnabled(false); }});
         select({});
     } else if (s.kind == SelectionKind::Light && selectionHasTransform()) {
         auto setEnabled = [engine, s](bool on) {
@@ -150,9 +162,26 @@ void Editor::deleteSelection() {
             if (s.index < static_cast<int>(lights.size())) lights[static_cast<size_t>(s.index)].enabled = on;
         };
         setEnabled(false);
-        m_undo.push({"Hide " + selectionName(s), [setEnabled] { setEnabled(true); }, [setEnabled] { setEnabled(false); }});
+        m_undo.push({"Delete " + selectionName(s), [setEnabled] { setEnabled(true); }, [setEnabled] { setEnabled(false); }});
         select({});
     }
+}
+
+void Editor::restoreSelection(const Selection& s) {
+    Engine* engine = m_engine;
+    std::function<void(bool)> setEnabled;
+    if (s.kind == SelectionKind::Model)
+        setEnabled = [engine, s](bool on) { engine->modelRenderer().setInstanceEnabled(static_cast<uint32_t>(s.index), on); };
+    else if (s.kind == SelectionKind::Light)
+        setEnabled = [engine, s](bool on) {
+            auto& lights = engine->m_deferredLighting.getPointLights();
+            if (s.index < static_cast<int>(lights.size())) lights[static_cast<size_t>(s.index)].enabled = on;
+        };
+    else
+        return;
+    setEnabled(true);
+    m_undo.push({"Restore " + selectionName(s), [setEnabled] { setEnabled(false); }, [setEnabled] { setEnabled(true); }});
+    select(s);
 }
 
 // ---------------------------------------------------------------- hierarquia
@@ -182,8 +211,18 @@ void Editor::drawHierarchy() {
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) frameSelection();
         if (ImGui::BeginPopupContextItem()) {
             if (ImGui::MenuItem("Frame", "F", false, s.kind != SelectionKind::Environment)) frameSelection();
-            if (ImGui::MenuItem("Hide", "Delete", false, enabled && s.kind != SelectionKind::Environment))
-                deleteSelection();
+            if (enabled) {
+                if (ImGui::MenuItem("Delete", "Delete", false, s.kind != SelectionKind::Environment)) deleteSelection();
+            } else if (ImGui::MenuItem("Restore")) {
+                restoreSelection(s);
+            }
+            if (s.kind == SelectionKind::Model && enabled) {
+                ImGui::Separator();
+                if (ImGui::MenuItem("Save as Prefab...")) {
+                    select(s);
+                    m_commands.run("edit.save_prefab");
+                }
+            }
             ImGui::EndPopup();
         }
     };
@@ -211,8 +250,12 @@ void Editor::drawHierarchy() {
     const auto& insts = m_engine->modelRenderer().getInstances();
     static std::vector<int> visible;
     visible.clear();
-    for (size_t i = 0; i < insts.size(); ++i)
+    for (size_t i = 0; i < insts.size(); ++i) {
+        // Cópias e modelos acrescentados que foram apagados não aparecem; um
+        // objeto do mapa apagado aparece apagado (Restore o traz de volta).
+        if (i >= m_original.count && !insts[i].enabled) continue;
         if (icontains(insts[i].name, m_hierarchyFilter)) visible.push_back(static_cast<int>(i));
+    }
     char hdr[64];
     std::snprintf(hdr, sizeof(hdr), "Models (%zu)###models", visible.size());
     ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
@@ -507,6 +550,7 @@ void Editor::drawProject() {
                     const bool selected = m_projectSelected == it.path.string();
                     const ImVec2 p0 = ImGui::GetCursorScreenPos();
                     ImGui::InvisibleButton("##cell", ImVec2(cell, cell + ImGui::GetTextLineHeight() + 6));
+                    if (!it.dir) modelDragSource(it.path);
                     const bool hovered = ImGui::IsItemHovered();
                     if (ImGui::IsItemClicked()) activate(it, false);
                     if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) activate(it, true);
@@ -556,6 +600,7 @@ void Editor::drawProject() {
                     if (ImGui::Selectable(label.c_str(), m_projectSelected == it.path.string(),
                                           ImGuiSelectableFlags_AllowDoubleClick))
                         activate(it, ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left));
+                    if (!it.dir) modelDragSource(it.path);
                     contextMenu(it);
                 }
             }
