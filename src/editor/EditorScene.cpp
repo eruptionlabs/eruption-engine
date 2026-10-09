@@ -1,6 +1,7 @@
 // Cena como dado: guarda o estado original do mapa ao carregar, aplica o
 // arquivo de edições (SceneEdits) e grava só o que mudou (Ctrl+S).
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 
 #include "core/Engine.hpp"
 
@@ -480,17 +481,17 @@ void Editor::drawPrefabDialog() {
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (!ImGui::BeginPopupModal("Save as Prefab", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-    const bool enter = ImGui::InputText("Name", m_prefabName, sizeof(m_prefabName), ImGuiInputTextFlags_EnterReturnsTrue);
+    const bool enter = ImGui::InputText(tr("Name"), m_prefabName, sizeof(m_prefabName), ImGuiInputTextFlags_EnterReturnsTrue);
     const std::string path = std::string("assets/prefabs/") + m_prefabName + ".prefab.luau";
     ImGui::TextDisabled("%s", path.c_str());
     std::error_code ec;
-    if (std::filesystem::exists(path, ec)) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Replaces the existing prefab.");
+    if (std::filesystem::exists(path, ec)) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", tr("Replaces the existing prefab."));
     ImGui::Separator();
     ImGui::BeginDisabled(m_prefabName[0] == '\0');
-    const bool save = ImGui::Button("Save", ImVec2(120, 0)) || (enter && m_prefabName[0]);
+    const bool save = ImGui::Button(tr("Save"), ImVec2(120, 0)) || (enter && m_prefabName[0]);
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+    if (ImGui::Button(tr("Cancel"), ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
     if (save && savePrefab(path)) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
 }

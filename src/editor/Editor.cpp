@@ -1,4 +1,5 @@
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 #include "editor/EditorTheme.hpp"
 #include "game/PlayerController.hpp"
 
@@ -484,6 +485,7 @@ void Editor::buildDefaultLayout(unsigned int dockspaceId) {
 void Editor::update(float dt) {
     if (!m_engine) return;
     ++m_frame;
+    setUiLanguage(m_lang); // a interface inteira segue o idioma escolhido
     recordFrameTime(dt);
     // Vizinho do mundo contínuo entrou ou saiu: camadas Mostrar/Travar valem para ele.
     if (m_engine->worldVersion() != m_worldVersionSeen) {
@@ -907,13 +909,13 @@ void Editor::drawUI() {
 
 void Editor::drawMenuBar() {
     if (!ImGui::BeginMainMenuBar()) return;
-    if (ImGui::BeginMenu("File")) {
+    if (ImGui::BeginMenu(tr("File"))) {
         m_commands.menuItem("file.new_map");
         m_commands.menuItem("file.generate_map");
         m_commands.menuItem("file.open_map");
         m_commands.menuItem("file.save");
         m_commands.menuItem("file.reload_scene");
-        if (ImGui::BeginMenu("Recent Maps", !m_engine->availableMaps().empty())) {
+        if (ImGui::BeginMenu(tr("Recent Maps"), !m_engine->availableMaps().empty())) {
             for (const auto& name : m_engine->availableMaps())
                 if (ImGui::MenuItem(name.c_str(), nullptr, name == m_engine->currentMapName()))
                     m_pendingMap = name;
@@ -926,7 +928,7 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("file.quit");
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Edit")) {
+    if (ImGui::BeginMenu(tr("Edit"))) {
         const EditorCommand* u = m_commands.find("edit.undo");
         const EditorCommand* r = m_commands.find("edit.redo");
         const std::string ul = m_undo.canUndo() ? "Undo " + m_undo.undoLabel() : "Undo";
@@ -945,14 +947,14 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("edit.frame");
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("View")) {
+    if (ImGui::BeginMenu(tr("View"))) {
         static const char* kNames[LayerCount] = {"Map objects", "Added objects", "Painted objects", "Characters",
                                                  "Lights and markers", "Neighbor maps"};
-        ImGui::TextDisabled("Show");
+        ImGui::TextDisabled("%s", tr("Show"));
         bool changed = false;
         for (int l = 0; l < LayerCount; ++l) changed |= ImGui::MenuItem(kNames[l], nullptr, &m_layerShow[l]);
         ImGui::Separator();
-        ImGui::TextDisabled("Lock (can't be clicked)");
+        ImGui::TextDisabled("%s", tr("Lock (can't be clicked)"));
         for (int l = 0; l < LayerCount; ++l) {
             ImGui::PushID(l);
             ImGui::MenuItem(kNames[l], nullptr, &m_layerLock[l]);
@@ -961,16 +963,16 @@ void Editor::drawMenuBar() {
         if (changed) applyLayerVisibility();
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Add")) {
+    if (ImGui::BeginMenu(tr("Add"))) {
         m_commands.menuItem("add.light");
         m_commands.menuItem("add.player_start");
         m_commands.menuItem("add.area");
         ImGui::Separator();
-        ImGui::TextDisabled("Models, prefabs and characters:");
-        ImGui::TextDisabled("drag them from the Project panel");
+        ImGui::TextDisabled("%s", tr("Models, prefabs and characters:"));
+        ImGui::TextDisabled("%s", tr("drag them from the Project panel"));
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Tools")) {
+    if (ImGui::BeginMenu(tr("Tools"))) {
         m_commands.menuItem("tool.select");
         m_commands.menuItem("tool.move");
         m_commands.menuItem("tool.rotate");
@@ -981,7 +983,7 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("tool.snap");
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Game")) {
+    if (ImGui::BeginMenu(tr("Game"))) {
         m_commands.menuItem("game.play");
         m_commands.menuItem("game.stop");
         m_commands.menuItem("game.pause");
@@ -994,7 +996,7 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("game.sprite_importer");
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Window")) {
+    if (ImGui::BeginMenu(tr("Window"))) {
         m_commands.menuItem("window.hierarchy");
         m_commands.menuItem("window.inspector");
         m_commands.menuItem("window.project");
@@ -1005,14 +1007,14 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("window.second_screen");
         m_commands.menuItem("window.ai");
         ImGui::Separator();
-        if (ImGui::BeginMenu("Language / Idioma")) {
+        if (ImGui::BeginMenu(tr("Language / Idioma"))) {
             m_commands.menuItem("window.lang_en");
             m_commands.menuItem("window.lang_pt");
             ImGui::EndMenu();
         }
         ImGui::Separator();
         m_commands.menuItem("window.reset_layout");
-        if (ImGui::BeginMenu("Engine Tools")) {
+        if (ImGui::BeginMenu(tr("Engine Tools"))) {
             for (const char* id : {"engine.effects", "engine.telemetry", "engine.objects", "engine.player_light",
                                    "engine.ab", "engine.resources"})
                 m_commands.menuItem(id);
@@ -1020,7 +1022,7 @@ void Editor::drawMenuBar() {
         }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Help")) {
+    if (ImGui::BeginMenu(tr("Help"))) {
         m_commands.menuItem("help.palette");
         m_commands.menuItem("help.shortcuts");
         m_commands.menuItem("help.welcome");
@@ -1047,10 +1049,10 @@ static bool toolButton(const char* label, bool active, const std::string& tip, b
 static std::string commandTip(const EditorCommands& cmds, const char* id) {
     const EditorCommand* c = cmds.find(id);
     if (!c) return {};
-    std::string tip = c->label;
+    std::string tip = tr(c->label.c_str());
     const std::string keys = cmds.shortcutText(*c);
     if (!keys.empty()) tip += "  (" + keys + ")";
-    if (!c->help.empty()) tip += "\n" + c->help;
+    if (!c->help.empty()) tip += std::string("\n") + tr(c->help.c_str());
     return tip;
 }
 
@@ -1064,24 +1066,24 @@ void Editor::drawToolbar() {
         {"Terrain", "tool.terrain", Tool::Terrain},
     };
     for (const auto& t : tools) {
-        if (toolButton(t.label, m_tool == t.tool, commandTip(m_commands, t.id), editing)) m_tool = t.tool;
+        if (toolButton(tr(t.label), m_tool == t.tool, commandTip(m_commands, t.id), editing)) m_tool = t.tool;
         ImGui::SameLine(0, 2);
     }
     ImGui::SameLine(0, 12);
-    if (toolButton(m_localSpace ? "Local" : "World", false, commandTip(m_commands, "tool.space"), editing))
+    if (toolButton(tr(m_localSpace ? "Local" : "World"), false, commandTip(m_commands, "tool.space"), editing))
         m_localSpace = !m_localSpace;
     ImGui::SameLine(0, 2);
-    if (toolButton("Snap", m_snap, commandTip(m_commands, "tool.snap"), editing)) m_snap = !m_snap;
+    if (toolButton(tr("Snap"), m_snap, commandTip(m_commands, "tool.snap"), editing)) m_snap = !m_snap;
     ImGui::SameLine(0, 2);
     ImGui::SetNextItemWidth(ImGui::GetFrameHeight() * 1.6f);
     if (ImGui::BeginCombo("##snapsteps", "", ImGuiComboFlags_NoPreview)) {
-        ImGui::TextDisabled("Snap steps");
+        ImGui::TextDisabled("%s", tr("Snap steps"));
         ImGui::SetNextItemWidth(120);
-        ImGui::DragFloat("Move", &m_snapMove, 0.05f, 0.01f, 100.0f, "%.2f");
+        ImGui::DragFloat(tr("Move"), &m_snapMove, 0.05f, 0.01f, 100.0f, "%.2f");
         ImGui::SetNextItemWidth(120);
-        ImGui::DragFloat("Rotate", &m_snapAngle, 0.5f, 1.0f, 90.0f, "%.0f deg");
+        ImGui::DragFloat(tr("Rotate"), &m_snapAngle, 0.5f, 1.0f, 90.0f, "%.0f deg");
         ImGui::SetNextItemWidth(120);
-        ImGui::DragFloat("Scale", &m_snapScale, 0.01f, 0.01f, 10.0f, "%.2f");
+        ImGui::DragFloat(tr("Scale"), &m_snapScale, 0.01f, 0.01f, 10.0f, "%.2f");
         ImGui::EndCombo();
     }
 
@@ -1128,31 +1130,31 @@ void Editor::drawToolbar() {
     const float speedW = 150.0f;
     ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 16.0f, ImGui::GetWindowWidth() - speedW - 12.0f));
     ImGui::SetNextItemWidth(speedW);
-    ImGui::DragFloat("##camspeed", &m_flySpeed, 0.5f, 1.0f, 2000.0f, "Fly speed %.0f", ImGuiSliderFlags_Logarithmic);
+    ImGui::DragFloat("##camspeed", &m_flySpeed, 0.5f, 1.0f, 2000.0f, tr("Fly speed %.0f"), ImGuiSliderFlags_Logarithmic);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("Fly speed. While flying (right mouse button held), the mouse wheel changes it.");
+        ImGui::SetTooltip("%s", tr("Fly speed. While flying (right mouse button held), the mouse wheel changes it."));
 }
 
 void Editor::drawStatusBar() {
     const char* hint = "";
     if (m_play == PlayState::Playing)
-        hint = "Playing. F5 or Shift+F5 stops and restores the scene.";
+        hint = tr("Playing. F5 or Shift+F5 stops and restores the scene.");
     else if (m_flying)
-        hint = "Flying: WASD move, Q/E down/up, Shift faster, wheel changes speed.";
+        hint = tr("Flying: WASD move, Q/E down/up, Shift faster, wheel changes speed.");
     else if (m_viewportHovered)
-        hint = "Right-drag: look/fly (WASD)   Middle-drag: pan   Alt+drag: orbit   Wheel: zoom   F: frame";
+        hint = tr("Right-drag: look/fly (WASD)   Middle-drag: pan   Alt+drag: orbit   Wheel: zoom   F: frame");
     else
-        hint = "Ctrl+Shift+P: search any command   Ctrl+/: shortcuts";
+        hint = tr("Ctrl+Shift+P: search any command   Ctrl+/: shortcuts");
     ImGui::TextDisabled("%s", hint);
 
     char scripts[96] = "";
     if (m_scripts) {
         if (m_scripts->failedCount() > 0)
-            std::snprintf(scripts, sizeof(scripts), "Scripts: %zu (%zu with errors)   ", m_scripts->scriptCount(), m_scripts->failedCount());
+            std::snprintf(scripts, sizeof(scripts), tr("Scripts: %zu (%zu with errors)   "), m_scripts->scriptCount(), m_scripts->failedCount());
         else if (m_scripts->running())
-            std::snprintf(scripts, sizeof(scripts), "Scripts: %zu, %.2f ms   ", m_scripts->scriptCount(), m_scripts->lastUpdateMs());
+            std::snprintf(scripts, sizeof(scripts), tr("Scripts: %zu, %.2f ms   "), m_scripts->scriptCount(), m_scripts->lastUpdateMs());
         else
-            std::snprintf(scripts, sizeof(scripts), "Scripts: %zu   ", m_scripts->scriptCount());
+            std::snprintf(scripts, sizeof(scripts), tr("Scripts: %zu   "), m_scripts->scriptCount());
     }
     char right[320];
     const std::string& map = m_engine->currentMapName();
@@ -1173,7 +1175,9 @@ void Editor::drawCommandPalette() {
     std::vector<Entry> entries;
     for (const auto& c : m_commands.all()) {
         if (!c.run) continue;
-        Entry e{c.category + ": " + c.label, m_commands.shortcutText(c), m_commands.isEnabled(c), nullptr};
+        // Procura nos dois idiomas (o traduzido aparece, o inglês também acha).
+        Entry e{std::string(tr(c.category.c_str())) + ": " + tr(c.label.c_str()), m_commands.shortcutText(c),
+                m_commands.isEnabled(c), nullptr};
         const std::string id = c.id;
         e.run = [this, id] { m_commands.run(id); };
         if (containsAllWords(e.text, m_paletteQuery)) entries.push_back(std::move(e));
@@ -1198,7 +1202,7 @@ void Editor::drawCommandPalette() {
         m_paletteIndex = 0;
     }
     ImGui::SetNextItemWidth(-1);
-    const bool changed = ImGui::InputTextWithHint("##query", "Type a command or a map name...", m_paletteQuery,
+    const bool changed = ImGui::InputTextWithHint("##query", tr("Type a command or a map name..."), m_paletteQuery,
                                                   sizeof(m_paletteQuery));
     if (changed) m_paletteIndex = 0;
     const int count = static_cast<int>(entries.size());
@@ -1209,7 +1213,7 @@ void Editor::drawCommandPalette() {
     if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) runIndex = m_paletteIndex;
 
     ImGui::BeginChild("##results", ImVec2(0, std::min(12, std::max(1, count)) * ImGui::GetTextLineHeightWithSpacing() + 8));
-    if (count == 0) ImGui::TextDisabled("Nothing found.");
+    if (count == 0) ImGui::TextDisabled("%s", tr("Nothing found."));
     for (int i = 0; i < count; ++i) {
         const Entry& e = entries[static_cast<size_t>(i)];
         ImGui::PushID(i);
@@ -1238,7 +1242,7 @@ void Editor::drawCommandPalette() {
 
 void Editor::drawShortcutsWindow() {
     ImGui::SetNextWindowSize(ImVec2(520, 520), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Keyboard Shortcuts", &m_showShortcuts, ImGuiWindowFlags_NoDocking)) { ImGui::End(); return; }
+    if (!ImGui::Begin(trw("Keyboard Shortcuts"), &m_showShortcuts, ImGuiWindowFlags_NoDocking)) { ImGui::End(); return; }
     std::string category;
     if (ImGui::BeginTable("##keys", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
         for (const auto& c : m_commands.all()) {
@@ -1252,7 +1256,7 @@ void Editor::drawShortcutsWindow() {
             }
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(c.label.c_str());
+            ImGui::TextUnformatted(tr(c.label.c_str()));
             ImGui::TableNextColumn();
             ImGui::TextDisabled("%s", keys.c_str());
         }
@@ -1268,7 +1272,7 @@ void Editor::drawShortcutsWindow() {
         };
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        ImGui::TextColored(kAccent, "Scene navigation");
+        ImGui::TextColored(kAccent, "%s", tr("Scene navigation"));
         for (const auto& n : nav) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();

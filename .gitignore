@@ -21,6 +21,8 @@ data/*
 !data/*.json
 !data/hud/
 !data/hud/**
+!data/lang/
+!data/lang/**
 resources.ini
 assets/hidden_alley.zip
 assets/external/

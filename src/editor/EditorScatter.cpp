@@ -2,6 +2,7 @@
 // densidade (e distância mínima), escala e giro aleatórios; Ctrl apaga o que
 // o pincel colocou. Um desfazer por traço.
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 
 #include "core/Engine.hpp"
 
@@ -136,24 +137,24 @@ void Editor::drawScatterPanel() {
             m_scatterPalette.push_back({g.file, g.node, g.prefab, label, false});
         }
     }
-    ImGui::TextUnformatted("Palette (checked models are scattered):");
+    ImGui::TextUnformatted(tr("Palette (checked models are scattered):"));
     for (size_t i = 0; i < m_scatterPalette.size(); ++i) {
         auto& e = m_scatterPalette[i];
         ImGui::PushID(int(i));
         ImGui::Checkbox(e.label.c_str(), &e.on);
         ImGui::SameLine();
-        if (ImGui::SmallButton("x")) {
+        if (ImGui::SmallButton(tr("x"))) {
             m_scatterPalette.erase(m_scatterPalette.begin() + long(i));
             ImGui::PopID();
             break;
         }
         ImGui::PopID();
     }
-    if (m_scatterPalette.empty()) ImGui::TextDisabled("Empty. Select a .glb or prefab in the Project panel and add it.");
+    if (m_scatterPalette.empty()) ImGui::TextDisabled("%s", tr("Empty. Select a .glb or prefab in the Project panel and add it."));
     const std::filesystem::path sel(m_projectSelected);
     const bool usable = sel.extension() == ".glb" || Prefab::isPrefabPath(sel);
     ImGui::BeginDisabled(!usable);
-    if (ImGui::Button("+ Add selected model")) {
+    if (ImGui::Button(tr("+ Add selected model"))) {
         std::error_code ec;
         const auto rel = std::filesystem::relative(sel, std::filesystem::current_path(), ec);
         const std::string path = (!ec && !rel.empty() && rel.native().rfind("..", 0) != 0) ? rel.generic_string()
@@ -164,17 +165,17 @@ void Editor::drawScatterPanel() {
         m_scatterPalette.push_back(e);
     }
     ImGui::EndDisabled();
-    ImGui::SeparatorText("Rules");
+    ImGui::SeparatorText(tr("Rules"));
     ScatterSettings& st = m_scatterSettings;
-    ImGui::DragFloat("Density", &st.density, 0.1f, 0.05f, 200.0f, "%.2f");
-    ImGui::SetItemTooltip("Objects per 100 x 100 units. Also sets the minimum distance between them.");
+    ImGui::DragFloat(tr("Density"), &st.density, 0.1f, 0.05f, 200.0f, "%.2f");
+    ImGui::SetItemTooltip("%s", tr("Objects per 100 x 100 units. Also sets the minimum distance between them."));
     ImGui::DragFloatRange2("Scale", &st.scaleMin, &st.scaleMax, 0.01f, 0.05f, 20.0f, "%.2f");
-    ImGui::Checkbox("Random turn", &st.randomYaw);
+    ImGui::Checkbox(tr("Random turn"), &st.randomYaw);
     ImGui::SameLine();
-    ImGui::Checkbox("Lean with the slope", &st.alignToGround);
+    ImGui::Checkbox(tr("Lean with the slope"), &st.alignToGround);
     TerrainBrush& b = m_brush;
-    ImGui::DragFloat("Size##sc", &b.size, 0.5f, 2.0f, 2000.0f, "%.0f");
-    ImGui::SetItemTooltip("Radius on the ground. [ and ] change it in the Scene.");
+    ImGui::DragFloat(tr("Size##sc"), &b.size, 0.5f, 2.0f, 2000.0f, "%.0f");
+    ImGui::SetItemTooltip("%s", tr("Radius on the ground. [ and ] change it in the Scene."));
 }
 
 } // namespace eruption

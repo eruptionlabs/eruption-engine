@@ -1,6 +1,7 @@
 // Folha de eventos: regras "quando / se / faça" lidas e gravadas como um
 // arquivo .luau comum na pasta de scripts.
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 #include "editor/EditorBlocks.hpp"
 #include "editor/EditorTheme.hpp"
 
@@ -131,7 +132,7 @@ bool Editor::rulesParamEditor(RuleCall& call) {
         const ParamType type = call.def->params[i].type;
         std::string& code = call.args[i];
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("{%zu}", i + 1);
+        ImGui::TextDisabled(tr("{%zu}"), i + 1);
         ImGui::SameLine(44);
         ImGui::SetNextItemWidth(260);
         switch (type) {
@@ -167,7 +168,7 @@ bool Editor::rulesParamEditor(RuleCall& call) {
                     ImGui::EndCombo();
                 }
                 if (m_engine->characters().empty())
-                    ImGui::SetItemTooltip("Drag a PNG from the Project panel into the scene to add a character.");
+                    ImGui::SetItemTooltip("%s", tr("Drag a PNG from the Project panel into the scene to add a character."));
                 break;
             }
             case ParamType::Sound: {
@@ -190,7 +191,7 @@ bool Editor::rulesParamEditor(RuleCall& call) {
                         if (ImGui::Selectable(f.c_str(), cur == f)) { code = quote(f); changed = true; }
                     ImGui::EndCombo();
                 }
-                if (files.empty()) ImGui::SetItemTooltip("Put .wav, .ogg, .mp3 or .flac files in assets/ (e.g. assets/sounds).");
+                if (files.empty()) ImGui::SetItemTooltip("%s", tr("Put .wav, .ogg, .mp3 or .flac files in assets/ (e.g. assets/sounds)."));
                 break;
             }
             case ParamType::Area: {
@@ -202,7 +203,7 @@ bool Editor::rulesParamEditor(RuleCall& call) {
                     }
                     ImGui::EndCombo();
                 }
-                if (m_engine->areas().empty()) ImGui::SetItemTooltip("Add > Trigger Area places one in the scene.");
+                if (m_engine->areas().empty()) ImGui::SetItemTooltip("%s", tr("Add > Trigger Area places one in the scene."));
                 break;
             }
             case ParamType::Key: {
@@ -378,7 +379,7 @@ void Editor::rulesAddPopup() {
 }
 
 void Editor::drawRules() {
-    if (!ImGui::Begin("Rules###Rules", &m_showRules)) { ImGui::End(); return; }
+    if (!ImGui::Begin(trw("Rules###Rules"), &m_showRules)) { ImGui::End(); return; }
     const UiLanguage lang = m_lang;
 
     // Folhas = arquivos .luau da pasta de scripts.
@@ -480,7 +481,7 @@ void Editor::drawRules() {
         dl->ChannelsSplit(2);
         dl->ChannelsSetCurrent(1);
         ImGui::BeginGroup();
-        ImGui::TextDisabled("%zu", ri + 1);
+        ImGui::TextDisabled(tr("%zu"), ri + 1);
         ImGui::SameLine(28);
         if (r.raw) {
             ImGui::BeginGroup();
@@ -574,7 +575,7 @@ void Editor::drawRules() {
     if (m_rules.showCode) {
         ImGui::SameLine();
         ImGui::BeginChild("##code", ImVec2(0, 0), ImGuiChildFlags_Border, ImGuiWindowFlags_HorizontalScrollbar);
-        ImGui::TextDisabled("%s  (%s)", ruleUi("code", lang), m_rules.file.filename().string().c_str());
+        ImGui::TextDisabled(tr("%s  (%s)"), ruleUi("code", lang), m_rules.file.filename().string().c_str());
         ImGui::Separator();
         ImGui::TextUnformatted(m_rules.savedText.c_str());
         ImGui::EndChild();

@@ -1,6 +1,7 @@
 // File > Export Game: escolhe os mapas, a pasta e o programa do jogo (o
 // enxuto, sem editor, compilado pelo próprio editor em segundo plano).
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 
 #include "core/Engine.hpp"
 #include "editor/EditorTheme.hpp"
@@ -74,7 +75,7 @@ void Editor::drawExportWindow() {
     if (!m_showExport) return;
     ExportState& ex = m_export;
     ImGui::SetNextWindowSize(ImVec2(560, 420), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Export Game###ExportGame", &m_showExport)) {
+    if (!ImGui::Begin(trw("Export Game###ExportGame"), &m_showExport)) {
         ImGui::End();
         return;
     }
@@ -85,23 +86,23 @@ void Editor::drawExportWindow() {
         std::snprintf(ex.outDir, sizeof(ex.outDir), "%s/EruptionGames/%s", home ? home : ".",
                       m_engine->currentMapName().empty() ? "game" : m_engine->currentMapName().c_str());
     }
-    ImGui::TextWrapped("Copies the chosen maps and only what they use (models, sprites, prefabs, scripts, terrain "
-                       "edits) into a folder that runs on its own. The first map is where the game starts.");
-    ImGui::SeparatorText("Maps");
+    ImGui::TextWrapped("%s", tr("Copies the chosen maps and only what they use (models, sprites, prefabs, scripts, terrain "
+                       "edits) into a folder that runs on its own. The first map is where the game starts."));
+    ImGui::SeparatorText(tr("Maps"));
     ImGui::BeginChild("##maps", ImVec2(0, 120), ImGuiChildFlags_Border);
     for (auto& [map, on] : ex.maps) ImGui::Checkbox(map.c_str(), &on);
     ImGui::EndChild();
-    ImGui::SeparatorText("Folder");
+    ImGui::SeparatorText(tr("Folder"));
     ImGui::SetNextItemWidth(-1);
     ImGui::InputText("##out", ex.outDir, sizeof(ex.outDir));
-    ImGui::SeparatorText("Game program");
+    ImGui::SeparatorText(tr("Game program"));
     std::error_code ec;
     const bool lean = std::filesystem::exists(leanBinary(m_projectRoot), ec);
     if (lean) {
-        ImGui::TextColored(ImVec4(0.5f, 0.85f, 0.5f, 1.0f), "Small game program (no editor): %.1f MB",
+        ImGui::TextColored(ImVec4(0.5f, 0.85f, 0.5f, 1.0f), tr("Small game program (no editor): %.1f MB"),
                            std::filesystem::file_size(leanBinary(m_projectRoot), ec) / (1024.0 * 1024.0));
     } else {
-        ImGui::TextWrapped("The small game program is not built yet; the export would carry the editor's program.");
+        ImGui::TextWrapped("%s", tr("The small game program is not built yet; the export would carry the editor's program."));
     }
     ImGui::BeginDisabled(ex.building);
     if (ImGui::Button(lean ? "Rebuild game program" : "Build game program")) buildLeanBinary();
@@ -112,7 +113,7 @@ void Editor::drawExportWindow() {
     }
     ImGui::Separator();
     ImGui::BeginDisabled(ex.running || ex.building);
-    if (ImGui::Button("Export", ImVec2(140, 0))) startExport();
+    if (ImGui::Button(tr("Export"), ImVec2(140, 0))) startExport();
     ImGui::EndDisabled();
     {
         std::lock_guard<std::mutex> lock(m_exportMutex);

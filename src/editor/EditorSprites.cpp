@@ -2,6 +2,7 @@
 // andando em 8 direções (com espelho para as que faltam), mostra a prévia
 // animada e grava o .spr (ERUPTSPR v2) ao lado do PNG.
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 
 #include "core/Engine.hpp"
 #include "editor/EditorTheme.hpp"
@@ -77,30 +78,30 @@ void Editor::drawSpriteImporter() {
     if (!m_showSpriteImporter) return;
     SpriteImport& si = m_spriteImport;
     ImGui::SetNextWindowSize(ImVec2(900, 620), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Sprite Importer###SpriteImporter", &m_showSpriteImporter)) {
+    if (!ImGui::Begin(trw("Sprite Importer###SpriteImporter"), &m_showSpriteImporter)) {
         ImGui::End();
         return;
     }
     if (!si.sheetTex.valid()) {
-        ImGui::TextDisabled("Right-click a PNG in the Project panel and choose Import as Sprite Sheet.");
+        ImGui::TextDisabled("%s", tr("Right-click a PNG in the Project panel and choose Import as Sprite Sheet."));
         ImGui::End();
         return;
     }
     SpriteSheetSpec& sp = si.spec;
     ImGui::TextUnformatted(std::filesystem::path(sp.image).filename().string().c_str());
     ImGui::SameLine();
-    ImGui::TextDisabled("(%d x %d)", si.sheetTex.width, si.sheetTex.height);
+    ImGui::TextDisabled(tr("(%d x %d)"), si.sheetTex.width, si.sheetTex.height);
 
     // Coluna de controles
     ImGui::BeginChild("##controls", ImVec2(330, 0), ImGuiChildFlags_Border);
     bool changed = false;
-    ImGui::SeparatorText("Grid");
-    changed |= ImGui::InputInt("Columns", &sp.columns);
-    changed |= ImGui::InputInt("Rows", &sp.rows);
+    ImGui::SeparatorText(tr("Grid"));
+    changed |= ImGui::InputInt(tr("Columns"), &sp.columns);
+    changed |= ImGui::InputInt(tr("Rows"), &sp.rows);
     sp.columns = std::clamp(sp.columns, 1, 64);
     sp.rows = std::clamp(sp.rows, 1, 64);
-    ImGui::SeparatorText("Directions");
-    if (ImGui::BeginCombo("Row order", kPresets[si.preset].label)) {
+    ImGui::SeparatorText(tr("Directions"));
+    if (ImGui::BeginCombo(tr("Row order"), kPresets[si.preset].label)) {
         for (int i = 0; i < IM_ARRAYSIZE(kPresets); ++i)
             if (ImGui::Selectable(kPresets[i].label, si.preset == i)) {
                 si.preset = i;
@@ -111,19 +112,19 @@ void Editor::drawSpriteImporter() {
     const RowPreset& pr = kPresets[si.preset];
     sp.directions = pr.directions;
     sp.rowDirection.assign(pr.rows, pr.rows + pr.directions);
-    changed |= ImGui::Checkbox("Mirror missing sides", &sp.mirrorMissing);
-    ImGui::SetItemTooltip("A side that has no row is drawn by flipping the opposite one.");
+    changed |= ImGui::Checkbox(tr("Mirror missing sides"), &sp.mirrorMissing);
+    ImGui::SetItemTooltip("%s", tr("A side that has no row is drawn by flipping the opposite one."));
 
     auto animUi = [&](const char* title, SpriteSheetSpec::Anim& a, bool optional) {
         ImGui::PushID(title);
         ImGui::SeparatorText(title);
-        if (optional) changed |= ImGui::Checkbox("Has this animation", &a.enabled);
+        if (optional) changed |= ImGui::Checkbox(tr("Has this animation"), &a.enabled);
         ImGui::BeginDisabled(optional && !a.enabled);
         int row = a.firstRow + 1, col = a.firstColumn + 1;
-        changed |= ImGui::InputInt("First row", &row);
-        changed |= ImGui::InputInt("First column", &col);
-        changed |= ImGui::InputInt("Frames", &a.frames);
-        changed |= ImGui::InputInt("Frame time (ms)", &a.delayMs, 10, 50);
+        changed |= ImGui::InputInt(tr("First row"), &row);
+        changed |= ImGui::InputInt(tr("First column"), &col);
+        changed |= ImGui::InputInt(tr("Frames"), &a.frames);
+        changed |= ImGui::InputInt(tr("Frame time (ms)"), &a.delayMs, 10, 50);
         a.firstRow = std::clamp(row, 1, sp.rows) - 1;
         a.firstColumn = std::clamp(col, 1, sp.columns) - 1;
         a.frames = std::clamp(a.frames, 1, 64);
@@ -135,8 +136,8 @@ void Editor::drawSpriteImporter() {
     animUi("Walking", sp.walk, true);
 
     // Animações extras: cada uma com nome, linhas da folha e se repete.
-    ImGui::SeparatorText("Extra animations");
-    ImGui::TextWrapped("Rules and scripts play them by name: characters.play(\"guard\", \"attack\").");
+    ImGui::SeparatorText(tr("Extra animations"));
+    ImGui::TextWrapped("%s", tr("Rules and scripts play them by name: characters.play(\"guard\", \"attack\")."));
     int removeAt = -1;
     for (size_t i = 0; i < sp.extra.size(); ++i) {
         auto& e = sp.extra[i];
@@ -144,15 +145,15 @@ void Editor::drawSpriteImporter() {
         char name[64];
         std::snprintf(name, sizeof(name), "%s", e.name.c_str());
         ImGui::SetNextItemWidth(150);
-        if (ImGui::InputText("Name", name, sizeof(name))) {
+        if (ImGui::InputText(tr("Name"), name, sizeof(name))) {
             e.name = name;
             changed = true;
         }
         ImGui::SameLine();
-        changed |= ImGui::Checkbox("Repeat", &e.loop);
-        ImGui::SetItemTooltip("Off: plays once and goes back to standing.");
+        changed |= ImGui::Checkbox(tr("Repeat"), &e.loop);
+        ImGui::SetItemTooltip("%s", tr("Off: plays once and goes back to standing."));
         ImGui::SameLine();
-        if (ImGui::SmallButton("x")) removeAt = static_cast<int>(i);
+        if (ImGui::SmallButton(tr("x"))) removeAt = static_cast<int>(i);
         animUi(("##extra" + std::to_string(i)).c_str(), e.anim, false);
         ImGui::PopID();
     }
@@ -160,7 +161,7 @@ void Editor::drawSpriteImporter() {
         sp.extra.erase(sp.extra.begin() + removeAt);
         changed = true;
     }
-    if (ImGui::SmallButton("+ Animation")) {
+    if (ImGui::SmallButton(tr("+ Animation"))) {
         SpriteSheetSpec::NamedAnim e;
         e.name = "action" + std::to_string(sp.extra.size() + 1);
         e.anim = sp.walk;
@@ -168,10 +169,10 @@ void Editor::drawSpriteImporter() {
         changed = true;
     }
 
-    ImGui::SeparatorText("Size");
-    changed |= ImGui::DragFloat("Height in world", &sp.worldHeight, 0.5f, 1.0f, 500.0f, "%.1f");
-    ImGui::SetItemTooltip("How tall one frame stands in the scene. The default character is about 25.");
-    changed |= ImGui::InputInt("Empty pixels below feet", &sp.footOffset);
+    ImGui::SeparatorText(tr("Size"));
+    changed |= ImGui::DragFloat(tr("Height in world"), &sp.worldHeight, 0.5f, 1.0f, 500.0f, "%.1f");
+    ImGui::SetItemTooltip("%s", tr("How tall one frame stands in the scene. The default character is about 25."));
+    changed |= ImGui::InputInt(tr("Empty pixels below feet"), &sp.footOffset);
     sp.footOffset = std::max(0, sp.footOffset);
 
     if (changed) si.dirty = true;
@@ -194,10 +195,10 @@ void Editor::drawSpriteImporter() {
         log(LogLevel::Info, "Saved " + out.generic_string() + " (" + std::to_string(si.result.images.size()) + " frames)");
         return true;
     };
-    if (ImGui::Button("Save")) save();
-    ImGui::SetItemTooltip("Writes %s", out.filename().string().c_str());
+    if (ImGui::Button(tr("Save"))) save();
+    ImGui::SetItemTooltip(tr("Writes %s"), out.filename().string().c_str());
     ImGui::SameLine();
-    if (ImGui::Button("Save and use for player") && save()) usePlayerSprite(sp.image, true);
+    if (ImGui::Button(tr("Save and use for player")) && save()) usePlayerSprite(sp.image, true);
     ImGui::EndDisabled();
     ImGui::EndChild();
 
@@ -207,7 +208,7 @@ void Editor::drawSpriteImporter() {
 
     // Prévia animada: direção e estado escolhidos, tocando no tempo do quadro.
     const float previewH = std::min(220.0f, avail.y * 0.45f);
-    ImGui::SeparatorText("Preview");
+    ImGui::SeparatorText(tr("Preview"));
     ImGui::SetNextItemWidth(160);
     {
         // Parado, andando e as extras pelo nome.
@@ -224,8 +225,8 @@ void Editor::drawSpriteImporter() {
     ImGui::SetNextItemWidth(160);
     ImGui::SliderInt("##dir", &si.previewDir, 0, 7, kDirNames[std::clamp(si.previewDir, 0, 7)]);
     ImGui::SameLine();
-    ImGui::Checkbox("Turn", &si.previewTurn);
-    ImGui::SetItemTooltip("Cycle through the 8 directions");
+    ImGui::Checkbox(tr("Turn"), &si.previewTurn);
+    ImGui::SetItemTooltip("%s", tr("Cycle through the 8 directions"));
     const auto& res = si.result;
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -257,7 +258,7 @@ void Editor::drawSpriteImporter() {
     ImGui::Dummy(ImVec2(avail.x, previewH));
 
     // A folha com a grade e as células usadas.
-    ImGui::SeparatorText("Sheet");
+    ImGui::SeparatorText(tr("Sheet"));
     const ImVec2 sheetAvail = ImGui::GetContentRegionAvail();
     const float scale = std::min(sheetAvail.x / si.sheetTex.width, sheetAvail.y / si.sheetTex.height);
     const ImVec2 s0 = ImGui::GetCursorScreenPos();

@@ -2,6 +2,7 @@
 // escreve em Luau passa pelo analisador antes de poder virar arquivo; nada
 // é aplicado sozinho. Sem geração de imagem.
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 
 #include "editor/EditorTheme.hpp"
 
@@ -62,19 +63,19 @@ std::string syntaxError(const std::string& code) {
 void Editor::drawAiWindow() {
     if (!m_showAi) return;
     ImGui::SetNextWindowSize(ImVec2(640, 620), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("AI Assistant###AIAssistant", &m_showAi)) {
+    if (!ImGui::Begin(trw("AI Assistant###AIAssistant"), &m_showAi)) {
         ImGui::End();
         return;
     }
     if (m_ai.key.empty()) m_ai.key = AiClient::loadKey();
     if (m_ai.key.empty()) {
-        ImGui::TextWrapped("The assistant uses your own Anthropic API key (console.anthropic.com). It is kept in "
+        ImGui::TextWrapped("%s", tr("The assistant uses your own Anthropic API key (console.anthropic.com). It is kept in "
                            "~/.config/eruption/anthropic_key, readable only by you, and never goes into the project. "
-                           "You can also set ANTHROPIC_API_KEY.");
+                           "You can also set ANTHROPIC_API_KEY."));
         ImGui::SetNextItemWidth(-90);
         ImGui::InputText("##key", m_ai.keyInput, sizeof(m_ai.keyInput), ImGuiInputTextFlags_Password);
         ImGui::SameLine();
-        if (ImGui::Button("Save key") && m_ai.keyInput[0]) {
+        if (ImGui::Button(tr("Save key")) && m_ai.keyInput[0]) {
             if (AiClient::saveKey(m_ai.keyInput)) m_ai.key = m_ai.keyInput;
             std::fill(std::begin(m_ai.keyInput), std::end(m_ai.keyInput), '\0');
         }
@@ -91,11 +92,11 @@ void Editor::drawAiWindow() {
     char model[64];
     std::snprintf(model, sizeof(model), "%s", m_ai.client.model.c_str());
     ImGui::SetNextItemWidth(200);
-    if (ImGui::InputText("Model", model, sizeof(model))) m_ai.client.model = model;
+    if (ImGui::InputText(tr("Model"), model, sizeof(model))) m_ai.client.model = model;
     ImGui::SameLine();
-    if (ImGui::SmallButton("New conversation")) m_ai.client.clear();
+    if (ImGui::SmallButton(tr("New conversation"))) m_ai.client.clear();
     ImGui::SameLine();
-    if (ImGui::SmallButton("Forget key")) {
+    if (ImGui::SmallButton(tr("Forget key"))) {
         AiClient::saveKey("");
         m_ai.key.clear();
     }
@@ -116,8 +117,8 @@ void Editor::drawAiWindow() {
                 ImGui::PushID(int(b));
                 const std::string err = syntaxError(blocks[b].code);
                 const std::string name = blocks[b].file.empty() ? "ai_script_" + std::to_string(t) + ".luau" : blocks[b].file;
-                if (err.empty()) ImGui::TextColored(ImVec4(0.5f, 0.85f, 0.5f, 1.0f), "%s: syntax OK", name.c_str());
-                else ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s: %s", name.c_str(), err.c_str());
+                if (err.empty()) ImGui::TextColored(ImVec4(0.5f, 0.85f, 0.5f, 1.0f), tr("%s: syntax OK"), name.c_str());
+                else ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), tr("%s: %s"), name.c_str(), err.c_str());
                 ImGui::BeginDisabled(!err.empty());
                 const auto path = m_projectRoot / "assets" / "scripts" / name;
                 auto write = [&] {
@@ -128,7 +129,7 @@ void Editor::drawAiWindow() {
                 };
                 if (ImGui::Button(std::filesystem::exists(path) ? "Replace script" : "Save as script")) write();
                 ImGui::SameLine();
-                if (ImGui::Button("Save and open in editor")) {
+                if (ImGui::Button(tr("Save and open in editor"))) {
                     write();
                     codeOpen(path);
                 }
@@ -139,7 +140,7 @@ void Editor::drawAiWindow() {
         ImGui::Spacing();
         ImGui::PopID();
     }
-    if (m_ai.client.busy()) ImGui::TextDisabled("Thinking...");
+    if (m_ai.client.busy()) ImGui::TextDisabled("%s", tr("Thinking..."));
     if (turns.size() != m_ai.lastCount) {
         ImGui::SetScrollHereY(1.0f);
         m_ai.lastCount = turns.size();
@@ -150,7 +151,7 @@ void Editor::drawAiWindow() {
     const bool ctrlEnter = ImGui::IsItemFocused() && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter);
     ImGui::SameLine();
     ImGui::BeginDisabled(m_ai.client.busy() || !m_ai.input[0]);
-    if ((ImGui::Button("Send", ImVec2(80, inputH - 10)) || ctrlEnter) && m_ai.input[0]) {
+    if ((ImGui::Button(tr("Send"), ImVec2(80, inputH - 10)) || ctrlEnter) && m_ai.input[0]) {
         if (m_ai.client.send(m_ai.key, m_ai.input)) m_ai.input[0] = '\0';
     }
     ImGui::EndDisabled();

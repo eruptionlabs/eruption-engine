@@ -2,6 +2,7 @@
 // anel de prévia no chão e um desfazer por traço. Os dados ficam no motor
 // (core/TerrainEditing.cpp); aqui é só o mouse, o painel e o desfazer.
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 
 #include "core/Engine.hpp"
 #include "editor/EditorTheme.hpp"
@@ -185,12 +186,12 @@ void Editor::drawTerrainBrush(float x, float y, float w, float h) {
 void Editor::drawSplatLayers() {
     TerrainBrush& b = m_brush;
     if (!m_engine->splatEdit().active && !m_engine->beginSplatEditing()) {
-        ImGui::TextWrapped("Painting needs an editable ground (see Sculpt).");
+        ImGui::TextWrapped("%s", tr("Painting needs an editable ground (see Sculpt)."));
         return;
     }
     const auto& sp = m_engine->splatEdit();
     const int count = m_engine->splatLayerCount();
-    if (ImGui::Selectable("Base (ground material)", b.layer == -1)) b.layer = -1;
+    if (ImGui::Selectable(tr("Base (ground material)"), b.layer == -1)) b.layer = -1;
     for (int l = 0; l < count; ++l) {
         std::string name = sp.layerNames[l].empty() ? "Layer " + std::to_string(l + 1) : sp.layerNames[l];
         name = std::filesystem::path(name).filename().string();
@@ -201,7 +202,7 @@ void Editor::drawSplatLayers() {
     if (b.layer >= count) b.layer = count > 0 ? count - 1 : -1;
     const bool pngSelected = std::filesystem::path(m_projectSelected).extension() == ".png";
     ImGui::BeginDisabled(!pngSelected || count >= 8 || sp.fromMap);
-    if (ImGui::Button("+ Add layer (PNG selected in Project)")) {
+    if (ImGui::Button(tr("+ Add layer (PNG selected in Project)"))) {
         std::error_code ec;
         const auto rel = std::filesystem::relative(m_projectSelected, std::filesystem::current_path(), ec);
         const std::string path = (!ec && !rel.empty() && rel.native().rfind("..", 0) != 0) ? rel.generic_string()
@@ -215,22 +216,22 @@ void Editor::drawSplatLayers() {
         }
     }
     ImGui::EndDisabled();
-    if (sp.fromMap) ImGui::TextDisabled("This map brings its own %d layers.", count);
-    else if (!pngSelected) ImGui::TextDisabled("Select a PNG in the Project panel to add a layer.");
+    if (sp.fromMap) ImGui::TextDisabled(tr("This map brings its own %d layers."), count);
+    else if (!pngSelected) ImGui::TextDisabled("%s", tr("Select a PNG in the Project panel to add a layer."));
 }
 
 void Editor::drawWalkPanel() {
     TerrainBrush& b = m_brush;
     if (!m_engine->navFollowsTerrain()) {
-        ImGui::TextWrapped("The walk grid can be painted on maps with a height grid (.ter), like the ones made with "
-                           "File > New Map.");
+        ImGui::TextWrapped("%s", tr("The walk grid can be painted on maps with a height grid (.ter), like the ones made with "
+                           "File > New Map."));
         return;
     }
-    if (ImGui::RadioButton("Block", b.walkBlock)) b.walkBlock = true;
+    if (ImGui::RadioButton(tr("Block"), b.walkBlock)) b.walkBlock = true;
     ImGui::SameLine();
-    if (ImGui::RadioButton("Allow walking", !b.walkBlock)) b.walkBlock = false;
-    ImGui::SliderFloat("Steepest walkable slope", &b.maxSlope, 5.0f, 85.0f, "%.0f deg");
-    if (ImGui::Button("Block steeper slopes")) {
+    if (ImGui::RadioButton(tr("Allow walking"), !b.walkBlock)) b.walkBlock = false;
+    ImGui::SliderFloat(tr("Steepest walkable slope"), &b.maxSlope, 5.0f, 85.0f, "%.0f deg");
+    if (ImGui::Button(tr("Block steeper slopes"))) {
         const auto& nav = m_engine->currentMap()->navGrid;
         const int x1 = int(nav.width) - 1, z1 = int(nav.height) - 1;
         const std::vector<uint8_t> before = m_engine->walkRegion(0, 0, x1, z1);
@@ -243,7 +244,7 @@ void Editor::drawWalkPanel() {
         updateTitle(true);
         log(LogLevel::Info, std::to_string(n) + " cells too steep to walk.");
     }
-    ImGui::TextDisabled("Blocked cells show in red around the brush.");
+    ImGui::TextDisabled("%s", tr("Blocked cells show in red around the brush."));
 }
 
 void Editor::drawWalkOverlay(float x, float y, float w, float h) {
@@ -276,14 +277,14 @@ void Editor::drawWalkOverlay(float x, float y, float w, float h) {
 
 void Editor::drawTerrainPanel() {
     TerrainBrush& b = m_brush;
-    ImGui::SeparatorText("Terrain brush");
+    ImGui::SeparatorText(tr("Terrain brush"));
     const bool editable = m_engine->terrainEditable();
     auto notEditable = [] {
-        ImGui::TextWrapped("This map has no editable ground. Maps made with File > New Map, or with a height "
-                           "grid (.ter) that matches the ground mesh, can be sculpted and painted.");
+        ImGui::TextWrapped("%s", tr("This map has no editable ground. Maps made with File > New Map, or with a height "
+                           "grid (.ter) that matches the ground mesh, can be sculpted and painted."));
     };
     if (ImGui::BeginTabBar("##terraintabs")) {
-        if (ImGui::BeginTabItem("Sculpt")) {
+        if (ImGui::BeginTabItem(trw("Sculpt"))) {
             b.paint = false;
             b.objects = false;
             b.walk = false;
@@ -294,21 +295,21 @@ void Editor::drawTerrainPanel() {
             }
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Paint")) {
+        if (ImGui::BeginTabItem(trw("Paint"))) {
             b.paint = true;
             b.objects = false;
             b.walk = false;
             if (editable) drawSplatLayers(); else notEditable();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Objects")) {
+        if (ImGui::BeginTabItem(trw("Objects"))) {
             b.paint = false;
             b.objects = true;
             b.walk = false;
             drawScatterPanel();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Walk")) {
+        if (ImGui::BeginTabItem(trw("Walk"))) {
             b.paint = b.objects = false;
             b.walk = true;
             drawWalkPanel();
@@ -316,23 +317,23 @@ void Editor::drawTerrainPanel() {
         }
         ImGui::EndTabBar();
     }
-    ImGui::DragFloat("Size", &b.size, 0.5f, 2.0f, 2000.0f, "%.0f");
-    ImGui::SetItemTooltip("Radius on the ground. [ and ] change it in the Scene.");
-    ImGui::SliderFloat("Strength", &b.strength, 1.0f, 200.0f, "%.0f");
-    ImGui::SliderFloat("Falloff", &b.falloff, 0.0f, 1.0f, "%.2f");
-    ImGui::SetItemTooltip("0 = hard edge, 1 = fades from the center.");
+    ImGui::DragFloat(tr("Size"), &b.size, 0.5f, 2.0f, 2000.0f, "%.0f");
+    ImGui::SetItemTooltip("%s", tr("Radius on the ground. [ and ] change it in the Scene."));
+    ImGui::SliderFloat(tr("Strength"), &b.strength, 1.0f, 200.0f, "%.0f");
+    ImGui::SliderFloat(tr("Falloff"), &b.falloff, 0.0f, 1.0f, "%.2f");
+    ImGui::SetItemTooltip("%s", tr("0 = hard edge, 1 = fades from the center."));
     ImGui::Spacing();
     if (b.walk) {
-        ImGui::TextDisabled("Left drag: paint.  Ctrl: the opposite.");
+        ImGui::TextDisabled("%s", tr("Left drag: paint.  Ctrl: the opposite."));
     } else if (b.objects) {
-        ImGui::TextDisabled("Left drag: scatter.  Ctrl: erase what this brush placed.");
+        ImGui::TextDisabled("%s", tr("Left drag: scatter.  Ctrl: erase what this brush placed."));
     } else if (b.paint) {
-        ImGui::TextDisabled("Left drag: paint the layer.  Ctrl: erase it.");
+        ImGui::TextDisabled("%s", tr("Left drag: paint the layer.  Ctrl: erase it."));
     } else {
-        ImGui::TextDisabled("Left drag: paint.  Ctrl: lower.  Shift: smooth.");
-        ImGui::TextDisabled("Flatten keeps the height where the stroke starts.");
+        ImGui::TextDisabled("%s", tr("Left drag: paint.  Ctrl: lower.  Shift: smooth."));
+        ImGui::TextDisabled("%s", tr("Flatten keeps the height where the stroke starts."));
     }
-    ImGui::TextDisabled("Ctrl+S saves the terrain with the scene.");
+    ImGui::TextDisabled("%s", tr("Ctrl+S saves the terrain with the scene."));
 }
 
 } // namespace eruption

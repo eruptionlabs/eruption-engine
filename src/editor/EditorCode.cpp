@@ -1,6 +1,7 @@
 // Painel de código: edição de scripts .luau dentro do editor, com cores de
 // sintaxe, verificação de erros enquanto se digita e Ctrl+S.
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 #include "editor/EditorTheme.hpp"
 
 #include <Luau/Parser.h>
@@ -111,7 +112,7 @@ bool Editor::codeSave() {
 void Editor::drawCode() {
     const bool dirty = m_code.editor && m_code.editor->GetText() != m_code.saved &&
                        m_code.editor->GetText() != m_code.saved + "\n";
-    const std::string title = std::string("Code") + (dirty ? " *" : "") + "###Code";
+    const std::string title = std::string(tr("Code")) + (dirty ? " *" : "") + "###Code";
     if (m_code.focus) {
         ImGui::SetNextWindowFocus();
         m_code.focus = false;
@@ -120,7 +121,7 @@ void Editor::drawCode() {
 
     if (!m_code.editor || m_code.file.empty()) {
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("Double-click a .luau file in the Project panel to edit it here.");
+        ImGui::TextDisabled("%s", tr("Double-click a .luau file in the Project panel to edit it here."));
         ImGui::PopTextWrapPos();
         ImGui::End();
         return;
@@ -130,10 +131,10 @@ void Editor::drawCode() {
     std::error_code ec;
     if (!dirty && fs::exists(m_code.file, ec) && fs::last_write_time(m_code.file, ec) != m_code.mtime) codeOpen(m_code.file);
 
-    if (ImGui::Button("Save")) codeSave();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Ctrl+S. The game reloads the script on its own.");
+    if (ImGui::Button(tr("Save"))) codeSave();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", tr("Ctrl+S. The game reloads the script on its own."));
     ImGui::SameLine();
-    if (ImGui::Button("Open in VS Code")) {
+    if (ImGui::Button(tr("Open in VS Code"))) {
         const auto pos = m_code.editor->GetCursorPosition();
         openInExternalEditor(m_code.file, pos.mLine + 1);
     }
@@ -162,7 +163,7 @@ void Editor::drawCode() {
         }
     }
     if (m_code.errors > 0) {
-        ImGui::TextColored(ImVec4(0.95f, 0.38f, 0.35f, 1.0f), "%d syntax error(s): hover the red line to read it.", m_code.errors);
+        ImGui::TextColored(ImVec4(0.95f, 0.38f, 0.35f, 1.0f), tr("%d syntax error(s): hover the red line to read it."), m_code.errors);
     }
 
     const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);

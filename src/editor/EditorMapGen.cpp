@@ -2,6 +2,7 @@
 // etapas, prévia rápida em baixa resolução e geração completa em segundo
 // plano, que grava o mapa no formato do motor e o abre.
 #include "editor/Editor.hpp"
+#include "editor/Translate.hpp"
 
 #include "core/Engine.hpp"
 #include "editor/EditorBlocks.hpp"
@@ -50,7 +51,7 @@ ImU32 stepColor(const std::string& type) {
 // "Morros: scale 320, height 70" (os parâmetros que a receita define).
 std::string stepSummary(const mapgen::Step& s) {
     const mapgen::StepInfo* info = mapgen::findStep(s.type);
-    std::string t = info ? info->label : s.type;
+    std::string t = info ? tr(info->label) : s.type;
     std::string params;
     for (const auto& [k, v] : s.str) params += (params.empty() ? "" : ", ") + std::filesystem::path(v).filename().string();
     char buf[48];
@@ -133,7 +134,7 @@ bool Editor::mapGenStepParams(mapgen::Step& s) {
             char buf[260];
             std::snprintf(buf, sizeof(buf), "%s", s.text(t).c_str());
             if (ImGui::InputText(t, buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue)) { s.str[t] = buf; changed = true; }
-            if (!m_projectSelected.empty() && ImGui::SmallButton("Use the file selected in Project")) {
+            if (!m_projectSelected.empty() && ImGui::SmallButton(tr("Use the file selected in Project"))) {
                 const fs::path rel = fs::relative(m_projectSelected, m_projectRoot, ec);
                 s.str[t] = rel.empty() ? m_projectSelected : rel.generic_string();
                 changed = true;
@@ -157,7 +158,7 @@ bool Editor::mapGenStepParams(mapgen::Step& s) {
                 s.num[p.name] = v;
             }
             if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
-            ImGui::SetItemTooltip("%s", p.help);
+            ImGui::SetItemTooltip("%s", tr(p.help));
             if (unbounded) ImGui::EndDisabled();
         }
     }
@@ -168,7 +169,7 @@ void Editor::drawMapGenWindow() {
     if (!m_showMapGen) return;
     MapGenState& mg = m_mapgen;
     ImGui::SetNextWindowSize(ImVec2(980, 640), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Map Generator###MapGenerator", &m_showMapGen)) {
+    if (!ImGui::Begin(trw("Map Generator###MapGenerator"), &m_showMapGen)) {
         ImGui::End();
         return;
     }
@@ -176,7 +177,7 @@ void Editor::drawMapGenWindow() {
     std::error_code ec;
     // Receitas
     ImGui::BeginChild("##recipes", ImVec2(190, 0), ImGuiChildFlags_Border | ImGuiChildFlags_ResizeX);
-    ImGui::TextDisabled("Recipes");
+    ImGui::TextDisabled("%s", tr("Recipes"));
     for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); ++it) {
         const std::string n = it->path().filename().string();
         if (n.size() < 13 || n.compare(n.size() - 12, 12, ".mapgen.luau") != 0) continue;
@@ -185,7 +186,7 @@ void Editor::drawMapGenWindow() {
     ImGui::Separator();
     ImGui::SetNextItemWidth(-1);
     ImGui::InputText("##newrecipe", mg.newName, sizeof(mg.newName));
-    if (ImGui::Button("+ New recipe", ImVec2(-1, 0)) && mg.newName[0]) {
+    if (ImGui::Button(tr("+ New recipe"), ImVec2(-1, 0)) && mg.newName[0]) {
         fs::create_directories(dir, ec);
         const fs::path f = dir / (std::string(mg.newName) + ".mapgen.luau");
         if (!fs::exists(f, ec)) std::ofstream(f) << kDefaultRecipe;
@@ -195,7 +196,7 @@ void Editor::drawMapGenWindow() {
     ImGui::SameLine();
 
     if (mg.file.empty()) {
-        ImGui::TextDisabled("Create or pick a recipe on the left.");
+        ImGui::TextDisabled("%s", tr("Create or pick a recipe on the left."));
         ImGui::End();
         return;
     }
@@ -207,27 +208,27 @@ void Editor::drawMapGenWindow() {
     mapgen::Recipe& r = mg.recipe;
     bool changed = false;
     if (!mg.error.empty()) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", mg.error.c_str());
-    ImGui::SeparatorText("Map");
-    changed |= ImGui::DragFloat("Size", &r.size, 10, 64, 8000, "%.0f");
-    changed |= ImGui::DragFloat("Grid step", &r.cell, 0.5f, 1, 64, "%.1f");
+    ImGui::SeparatorText(tr("Map"));
+    changed |= ImGui::DragFloat(tr("Size"), &r.size, 10, 64, 8000, "%.0f");
+    changed |= ImGui::DragFloat(tr("Grid step"), &r.cell, 0.5f, 1, 64, "%.1f");
     {
         float origin[2] = {r.originX, r.originZ};
-        if (ImGui::DragFloat2("World origin", origin, 10, -1e6f, 1e6f, "%.0f")) {
+        if (ImGui::DragFloat2(tr("World origin"), origin, 10, -1e6f, 1e6f, "%.0f")) {
             r.originX = origin[0];
             r.originZ = origin[1];
         }
         if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
-        ImGui::SetItemTooltip("Where this map sits in a bigger world. Two maps with the same recipe and seed, "
-                              "side by side (e.g. 0,0 and 1000,0), have matching hills at the border.");
+        ImGui::SetItemTooltip("%s", tr("Where this map sits in a bigger world. Two maps with the same recipe and seed, "
+                              "side by side (e.g. 0,0 and 1000,0), have matching hills at the border."));
     }
     int seed = int(r.seed);
-    if (ImGui::InputInt("Seed", &seed)) { r.seed = uint32_t(std::max(0, seed)); changed = true; }
+    if (ImGui::InputInt(tr("Seed"), &seed)) { r.seed = uint32_t(std::max(0, seed)); changed = true; }
     ImGui::SameLine();
-    if (ImGui::SmallButton("New")) { r.seed = uint32_t(std::rand()); changed = true; }
-    ImGui::SeparatorText("Steps (top to bottom)");
-    if (ImGui::RadioButton("Stack", !mg.blocks)) mg.blocks = false;
+    if (ImGui::SmallButton(tr("New"))) { r.seed = uint32_t(std::rand()); changed = true; }
+    ImGui::SeparatorText(tr("Steps (top to bottom)"));
+    if (ImGui::RadioButton(tr("Stack"), !mg.blocks)) mg.blocks = false;
     ImGui::SameLine();
-    if (ImGui::RadioButton("Blocks", mg.blocks)) mg.blocks = true;
+    if (ImGui::RadioButton(tr("Blocks"), mg.blocks)) mg.blocks = true;
     if (mg.blocks) {
         changed |= drawMapGenBlocks();
     } else {
@@ -239,14 +240,14 @@ void Editor::drawMapGenWindow() {
         const ImVec2 p0 = ImGui::GetCursorScreenPos();
         changed |= ImGui::Checkbox("##on", &s.enabled);
         ImGui::SameLine();
-        const bool open = ImGui::TreeNodeEx("##step", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", info ? info->label : s.type.c_str());
-        if (info) ImGui::SetItemTooltip("%s", info->help);
+        const bool open = ImGui::TreeNodeEx("##step", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", info ? tr(info->label) : s.type.c_str());
+        if (info) ImGui::SetItemTooltip("%s", tr(info->help));
         ImGui::SameLine(ImGui::GetContentRegionMax().x - 70);
         if (ImGui::SmallButton("^")) moveUp = int(i);
         ImGui::SameLine();
-        if (ImGui::SmallButton("v")) moveDown = int(i);
+        if (ImGui::SmallButton(tr("v"))) moveDown = int(i);
         ImGui::SameLine();
-        if (ImGui::SmallButton("x")) removeAt = int(i);
+        if (ImGui::SmallButton(tr("x"))) removeAt = int(i);
         ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(p0.x - 6, p0.y), ImVec2(p0.x - 2, p0.y + ImGui::GetFrameHeight()),
                                                   s.enabled ? ImGui::GetColorU32(kAccent) : IM_COL32(90, 90, 90, 255));
         if (open) {
@@ -258,9 +259,9 @@ void Editor::drawMapGenWindow() {
     if (removeAt >= 0) { r.steps.erase(r.steps.begin() + removeAt); changed = true; }
     if (moveUp > 0) { std::swap(r.steps[size_t(moveUp)], r.steps[size_t(moveUp - 1)]); changed = true; }
     if (moveDown >= 0 && moveDown + 1 < int(r.steps.size())) { std::swap(r.steps[size_t(moveDown)], r.steps[size_t(moveDown + 1)]); changed = true; }
-    if (ImGui::BeginCombo("##add", "+ Add step")) {
+    if (ImGui::BeginCombo("##add", tr("+ Add step"))) {
         for (const auto& info : mapgen::stepCatalog())
-            if (ImGui::Selectable(info.label)) {
+            if (ImGui::Selectable(tr(info.label))) {
                 mapgen::Step s;
                 s.type = info.type;
                 r.steps.push_back(s);
@@ -305,14 +306,14 @@ void Editor::drawMapGenWindow() {
     const float side = std::min(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y - 110);
     if (mg.previewTex.valid()) ImGui::Image(reinterpret_cast<ImTextureID>(mg.previewTex.set), ImVec2(side, side));
     else ImGui::Dummy(ImVec2(side, side));
-    if (mg.previewRunning) ImGui::TextDisabled("Updating preview...");
-    ImGui::SeparatorText("Generate");
+    if (mg.previewRunning) ImGui::TextDisabled("%s", tr("Updating preview..."));
+    ImGui::SeparatorText(tr("Generate"));
     ImGui::SetNextItemWidth(200);
-    ImGui::InputText("Map name", mg.mapName, sizeof(mg.mapName));
+    ImGui::InputText(tr("Map name"), mg.mapName, sizeof(mg.mapName));
     const bool exists = fs::exists(m_projectRoot / "assets" / "external" / mg.mapName, ec);
-    if (exists) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Replaces the map \"%s\" and its scene edits.", mg.mapName);
+    if (exists) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), tr("Replaces the map \"%s\" and its scene edits."), mg.mapName);
     ImGui::BeginDisabled(mg.generating || !mg.mapName[0]);
-    if (ImGui::Button("Generate map", ImVec2(160, 0))) mapGenGenerate();
+    if (ImGui::Button(tr("Generate map"), ImVec2(160, 0))) mapGenGenerate();
     ImGui::EndDisabled();
     if (mg.generating) {
         ImGui::SameLine();
@@ -354,12 +355,12 @@ bool Editor::drawMapGenBlocks() {
         ImGui::PushID(info.type);
         ImGui::InvisibleButton("##pal", size);
         blockShape(ImGui::GetWindowDrawList(), p0, ImVec2(p0.x + size.x, p0.y + size.y), stepColor(info.type), 1);
-        ImGui::GetWindowDrawList()->AddText(ImVec2(p0.x + 8, p0.y + 5), IM_COL32(255, 255, 255, 255), info.label);
-        ImGui::SetItemTooltip("%s", info.help);
+        ImGui::GetWindowDrawList()->AddText(ImVec2(p0.x + 8, p0.y + 5), IM_COL32(255, 255, 255, 255), tr(info.label));
+        ImGui::SetItemTooltip("%s", tr(info.help));
         if (ImGui::BeginDragDropSource()) {
             StepDrag d{&info, -1};
             ImGui::SetDragDropPayload(kStepPayload, &d, sizeof(d));
-            ImGui::TextUnformatted(info.label);
+            ImGui::TextUnformatted(tr(info.label));
             ImGui::EndDragDropSource();
         }
         ImGui::PopID();
@@ -416,7 +417,7 @@ bool Editor::drawMapGenBlocks() {
         ImGui::PopID();
     }
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::Button("+ drop a step here", ImVec2(200, 0));
+    ImGui::Button(tr("+ drop a step here"), ImVec2(200, 0));
     ImGui::PopStyleColor();
     if (ImGui::BeginDragDropTarget()) { accept(-1); ImGui::EndDragDropTarget(); }
     ImGui::EndChild();
@@ -424,11 +425,11 @@ bool Editor::drawMapGenBlocks() {
     if (mg.selected >= 0 && mg.selected < int(r.steps.size())) {
         mapgen::Step& st = r.steps[size_t(mg.selected)];
         const mapgen::StepInfo* info = mapgen::findStep(st.type);
-        ImGui::SeparatorText(info ? info->label : st.type.c_str());
-        changed |= ImGui::Checkbox("Enabled", &st.enabled);
+        ImGui::SeparatorText(info ? tr(info->label) : st.type.c_str());
+        changed |= ImGui::Checkbox(tr("Enabled"), &st.enabled);
         changed |= mapGenStepParams(st);
     } else {
-        ImGui::TextDisabled("Click a block to change it. Drag blocks to reorder; drop on the palette to remove.");
+        ImGui::TextDisabled("%s", tr("Click a block to change it. Drag blocks to reorder; drop on the palette to remove."));
     }
     return changed;
 }
