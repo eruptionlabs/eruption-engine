@@ -397,7 +397,21 @@ void ScriptHost::start() {
     m_messages.clear();
     m_tweens.clear();
     m_prevHour = m_engine->dayNightCycle().timeOfDay() * 24.0f;
-    for (auto& s : m_scripts) startScript(s);
+    const bool resume = m_resume;
+    m_resume = false;
+    if (resume && !m_resumeVars.empty()) importVars(m_resumeVars);
+    mapReady();
+    for (auto& s : m_scripts) {
+        if (!resume) {
+            startScript(s);
+            continue;
+        }
+        s.started = true; // continua: só os relógios dos eventos recomeçam
+        for (auto& h : s.handlers) {
+            h.timer = 0.0;
+            h.flag = false;
+        }
+    }
 }
 
 void ScriptHost::dispatch(Script& s, float dt, float prevHour, float hour) {
