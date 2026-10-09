@@ -272,8 +272,13 @@ public:
         int frame = 0;
         float timer = 0.0f;
         bool walking = false;
-        Vec3 walkFrom{0.0f}, walkTo{0.0f};
-        float walkTime = 0.0f, walkDuration = 0.0f;
+        // Caminho achado (desvia de objetos sólidos e do que não se anda).
+        std::vector<Vec3> path;
+        size_t pathIndex = 0;
+        float speed = 60.0f; // unidades por segundo
+        // Balão de fala.
+        std::string say;
+        float sayTime = 0.0f;
     };
     struct TextureStats {
         size_t totalTextures = 0;
@@ -425,7 +430,17 @@ public:
     int addCharacter(const std::string& name, const std::string& sprite, const Vec3& position, float facingDeg);
     bool setCharacterSprite(int index, const std::string& sprite);
     int findCharacter(const std::string& name) const;
+    // Anda até `target` pelo caminho achado; `seconds` > 0 acerta a velocidade
+    // para chegar nesse tempo (0: passo normal).
     void walkCharacter(int index, const Vec3& target, float seconds);
+    // Caminho no chão de `from` a `to` (grade de caminhada + objetos sólidos),
+    // já alisado; falso se não há caminho.
+    bool findPath(const Vec3& from, const Vec3& to, float radius, std::vector<Vec3>& out) const;
+    // Um personagem (fora `ignore`) ocupa (x, z)?
+    bool characterAt(const Vec3& p, float radius, int ignore = -1) const;
+    // Balões de fala (personagens e jogador) sobre a área do jogo.
+    void sayPlayer(const std::string& text, float seconds);
+    void drawSpeechBubbles(float x, float y, float w, float h, float dt);
     void clearCharacters(bool keepNeighbors = false);
     // Anda quem tem caminho (só com o jogo rodando) e envia os sprites.
     void updateCharacters(float dt, bool moveAlongPaths);
@@ -1331,6 +1346,8 @@ private:
     std::vector<WorldRegion> m_regions;
     std::vector<TriggerArea> m_areas;
     AudioSystem m_audio;
+    std::string m_playerSay;
+    float m_playerSayTime = 0.0f;
     MapRequest m_mapRequest;
     std::vector<uint8_t> m_solid; // por instância
     static const char* worldStateName(WorldRegion::State s);

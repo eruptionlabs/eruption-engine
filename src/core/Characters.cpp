@@ -6,6 +6,8 @@
 #include "core/Logger.hpp"
 #include "game/PlayerController.hpp"
 
+#include <imgui.h>
+
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -61,11 +63,16 @@ int Engine::findCharacter(const std::string& name) const {
 void Engine::walkCharacter(int index, const Vec3& target, float seconds) {
     if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
     SceneCharacter& c = m_characters[static_cast<size_t>(index)];
-    c.walkFrom = c.position;
-    c.walkTo = target;
-    c.walkTime = 0.0f;
-    c.walkDuration = std::max(0.01f, seconds);
-    c.walking = true;
+    if (!findPath(c.position, target, 4.0f, c.path)) {
+        // Sem caminho (alvo cercado, longe demais): vai em linha reta.
+        ERUPTION_LOG_WARN("Character %s: no path to (%.0f, %.0f); walking straight", c.name.c_str(), target.x, target.z);
+        c.path = {c.position, target};
+    }
+    float length = 0.0f;
+    for (size_t i = 1; i < c.path.size(); ++i) length += glm::length(Vec2(c.path[i].x - c.path[i - 1].x, c.path[i].z - c.path[i - 1].z));
+    c.speed = seconds > 0.0f ? std::max(1.0f, length / seconds) : 60.0f;
+    c.pathIndex = 1;
+    c.walking = c.path.size() >= 2;
 }
 
 void Engine::setPlayerStart(const Vec3& p) {
@@ -88,13 +95,26 @@ void Engine::updateCharacters(float dt, bool moveAlongPaths) {
     for (auto& c : m_characters) {
         if (c.parked) continue;
         if (moveAlongPaths && c.walking) {
-            c.walkTime += dt;
-            const float t = std::min(1.0f, c.walkTime / c.walkDuration);
-            const Vec3 d = c.walkTo - c.walkFrom;
-            if (std::abs(d.x) + std::abs(d.z) > 1e-3f) c.facing = glm::degrees(std::atan2(d.x, d.z));
-            c.position = c.walkFrom + d * t;
-            if (t >= 1.0f) c.walking = false;
+            // Segue o caminho na velocidade dele; a altura é a do chão.
+            float left = c.speed * dt;
+            while (left > 0.0f && c.pathIndex < c.path.size()) {
+                const Vec3 to = c.path[c.pathIndex];
+                const Vec2 d(to.x - c.position.x, to.z - c.position.z);
+                const float dist = glm::length(d);
+                if (dist > 1e-3f) c.facing = glm::degrees(std::atan2(d.x, d.y));
+                if (dist <= left) {
+                    c.position = to;
+                    left -= dist;
+                    ++c.pathIndex;
+                } else {
+                    c.position += Vec3(d.x, 0.0f, d.y) * (left / dist);
+                    left = 0.0f;
+                }
+            }
+            c.position.y = sampleTerrainHeight(c.position.x, c.position.z);
+            if (c.pathIndex >= c.path.size()) c.walking = false;
         }
+        if (c.sayTime > 0.0f) c.sayTime = std::max(0.0f, c.sayTime - dt);
         if (c.visible && !c.removed && !hideCharactersInView) drawCharacter(c, dt);
     }
 }
@@ -149,6 +169,46 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         s.sortOrder = 0.0f;
         m_spriteSystem.submitSprite(s);
     }
+}
+
+} // namespace eruption
+
+namespace eruption {
+
+void Engine::sayPlayer(const std::string& text, float seconds) {
+    m_playerSay = text;
+    m_playerSayTime = text.empty() ? 0.0f : std::max(0.1f, seconds);
+}
+
+void Engine::drawSpeechBubbles(float x, float y, float w, float h, float dt) {
+    if (m_playerSayTime > 0.0f) m_playerSayTime = std::max(0.0f, m_playerSayTime - dt);
+    const Mat4 vp = m_camera.viewProjNoJitter();
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    auto bubble = [&](const Vec3& head, const std::string& text, float remaining) {
+        const Vec4 c = vp * Vec4(head, 1.0f);
+        if (c.w <= 1e-3f) return;
+        const ImVec2 s(x + (c.x / c.w * 0.5f + 0.5f) * w, y + (c.y / c.w * 0.5f + 0.5f) * h);
+        if (s.x < x || s.y < y || s.x > x + w || s.y > y + h) return;
+        const float alpha = std::min(1.0f, remaining / 0.25f);
+        const float wrap = std::min(w * 0.4f, 280.0f);
+        const ImVec2 ts = ImGui::CalcTextSize(text.c_str(), nullptr, false, wrap);
+        const ImVec2 p0(s.x - ts.x * 0.5f - 10.0f, s.y - ts.y - 22.0f);
+        const ImVec2 p1(s.x + ts.x * 0.5f + 10.0f, s.y - 8.0f);
+        const ImU32 fill = IM_COL32(250, 248, 240, int(235 * alpha)), edge = IM_COL32(40, 40, 44, int(220 * alpha));
+        dl->AddRectFilled(p0, p1, fill, 8.0f);
+        dl->AddRect(p0, p1, edge, 8.0f, 0, 1.5f);
+        // Rabicho apontando para quem fala.
+        dl->AddTriangleFilled(ImVec2(s.x - 6, p1.y - 1), ImVec2(s.x + 6, p1.y - 1), ImVec2(s.x, s.y), fill);
+        dl->AddLine(ImVec2(s.x - 6, p1.y), ImVec2(s.x, s.y), edge, 1.5f);
+        dl->AddLine(ImVec2(s.x + 6, p1.y), ImVec2(s.x, s.y), edge, 1.5f);
+        dl->AddText(nullptr, 0.0f, ImVec2(p0.x + 10.0f, p0.y + 7.0f), IM_COL32(25, 25, 28, int(255 * alpha)), text.c_str(),
+                    nullptr, wrap);
+    };
+    for (const auto& c : m_characters)
+        if (c.sayTime > 0.0f && c.visible && !c.removed && !c.parked && !hideCharactersInView)
+            bubble(c.position + Vec3(0.0f, 30.0f, 0.0f), c.say, c.sayTime);
+    if (m_playerSayTime > 0.0f && m_playerController)
+        bubble(m_playerController->pos() + Vec3(0.0f, 30.0f, 0.0f), m_playerSay, m_playerSayTime);
 }
 
 } // namespace eruption

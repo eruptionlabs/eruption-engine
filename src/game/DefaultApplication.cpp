@@ -201,6 +201,7 @@ void DefaultApplication::onInit(Engine& engine) {
     else if (m_scripts)
         engine.setGameOverlay([this] {
             const ImVec2 ds = ImGui::GetIO().DisplaySize;
+            if (m_engine) m_engine->drawSpeechBubbles(0.0f, 0.0f, ds.x, ds.y, ImGui::GetIO().DeltaTime);
             if (m_scripts) m_scripts->drawMessages(0.0f, 0.0f, ds.x, ds.y);
         });
     if (!m_initialMap.empty()) {
