@@ -86,6 +86,8 @@ struct Result {
     bool hasSpawn = false;
     float spawn[3] = {0, 0, 0};
     float maxWalkSlope = -1.0f; // < 0: tudo caminhável
+    float originX = 0.0f, originZ = 0.0f; // mundo do ponto (0, 0) da grade
+    std::vector<uint8_t> reserved;        // leito de rio e estrada: objetos não caem ali
     float h(int x, int z) const { return height[size_t(z) * w + x]; }
     float slopeDeg(int x, int z) const;
 };

@@ -13,9 +13,12 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <queue>
 #include <sstream>
 
 namespace mapgen {
+
+using eruption::Vec2;
 
 namespace {
 
@@ -172,7 +175,67 @@ float ruleWeight(const Result& r, int x, int z, const Step& s) {
     const float soft = float(s.get("softness", 3.0));
     float w = smoothRange(r.slopeDeg(x, z), float(s.get("slope_min", -1e9)), float(s.get("slope_max", 1e9)), soft);
     w *= smoothRange(r.h(x, z), float(s.get("height_min", -1e9)), float(s.get("height_max", 1e9)), soft);
+    // Bioma: um ruído bem largo divide o mapa em regiões; a etapa vale entre
+    // region_min e region_max dele (mesmo region_seed = mesmo mapa de regiões).
+    if (s.num.count("region_scale")) {
+        const float scale = std::max(10.0f, float(s.get("region_scale", 600)));
+        const uint32_t seed = uint32_t(s.get("region_seed", 1)) * 7919u + 13u;
+        const float n = fbm((r.originX + x * r.cell) / scale, (r.originZ + z * r.cell) / scale, 3, 0.5f, 2.0f, seed) * 0.5f + 0.5f;
+        w *= smoothRange(n, float(s.get("region_min", 0)), float(s.get("region_max", 1)), 0.04f);
+    }
     return w;
+}
+
+// Pinta `tex` com peso m no ponto g (a camada nova cobre as anteriores).
+bool paintAt(Result& r, const std::string& tex, size_t g, float m, std::string& error) {
+    Layer* layer = nullptr;
+    for (auto& l : r.layers)
+        if (l.texture == tex) layer = &l;
+    if (!layer) {
+        if (r.layers.size() >= 8) {
+            error = "At most 8 different paint layers.";
+            return false;
+        }
+        r.layers.push_back({tex, std::vector<float>(r.height.size(), 0.0f)});
+        layer = &r.layers.back();
+    }
+    for (auto& other : r.layers)
+        if (&other != layer) other.weight[g] *= 1.0f - m;
+    layer->weight[g] = std::max(layer->weight[g], m);
+    return true;
+}
+
+// Cava/aplaina uma faixa ao longo de `path` (pontos da grade): dentro da
+// metade da largura o chão vai para `bedAt(i)` (+ perfil), na margem se mistura.
+template <typename Profile>
+bool carveStrip(Result& r, const std::vector<Vec2>& path, const std::vector<float>& bed, float halfWidth, Profile profile,
+                const std::string& tex, std::string& error) {
+    const int reach = int(std::ceil(halfWidth * 2.0f)) + 1;
+    std::vector<float> best(r.height.size(), FLT_MAX), target(r.height.size(), 0.0f);
+    for (size_t i = 0; i < path.size(); ++i) {
+        const int cx = int(std::lround(path[i].x)), cz = int(std::lround(path[i].y));
+        for (int dz = -reach; dz <= reach; ++dz)
+            for (int dx = -reach; dx <= reach; ++dx) {
+                const int x = cx + dx, z = cz + dz;
+                if (x < 0 || z < 0 || x >= r.w || z >= r.d) continue;
+                const float t = glm::length(Vec2(x, z) - path[i]) / std::max(0.5f, halfWidth);
+                const size_t g = size_t(z) * r.w + x;
+                if (t < best[g]) {
+                    best[g] = t;
+                    target[g] = bed[i] + profile(std::min(t, 1.0f));
+                }
+            }
+    }
+    if (r.reserved.size() != r.height.size()) r.reserved.assign(r.height.size(), 0);
+    for (size_t g = 0; g < r.height.size(); ++g) {
+        const float t = best[g];
+        if (t >= 2.0f) continue;
+        const float k = t <= 1.0f ? 1.0f : 1.0f - (t - 1.0f) * (t - 1.0f) * (3.0f - 2.0f * (t - 1.0f));
+        r.height[g] += (target[g] - r.height[g]) * k;
+        if (t <= 1.0f) r.reserved[g] = 1;
+        if (!tex.empty() && t < 1.3f && !paintAt(r, tex, g, std::clamp((1.3f - t) / 0.3f, 0.0f, 1.0f), error)) return false;
+    }
+    return true;
 }
 
 std::string quote(const std::string& s) {
@@ -234,7 +297,11 @@ const std::vector<StepInfo>& stepCatalog() {
           {"height_min", -1e9, -1000, 3000, "From this height"},
           {"height_max", 1e9, -1000, 3000, "Up to this height"},
           {"softness", 3, 0.1, 50, "Blend at the borders"},
-          {"coverage", 1, 0, 1, "Patchiness (1 = everywhere the rules match)"}},
+          {"coverage", 1, 0, 1, "Patchiness (1 = everywhere the rules match)"},
+          {"region_scale", 1e9, 50, 5000, "Biome: size of the regions (turn on to use)"},
+          {"region_min", 0, 0, 1, "Biome: from this part of the region noise"},
+          {"region_max", 1, 0, 1, "Biome: up to this part"},
+          {"region_seed", 1, 1, 100, "Biome: same number = same regions"}},
          {"layer"}},
         {"scatter", "Scatter objects", "Places a model (.glb or prefab) where the rules match.",
          {{"density", 1, 0.01, 200, "Objects per 100 x 100 units"},
@@ -243,8 +310,24 @@ const std::vector<StepInfo>& stepCatalog() {
           {"height_min", -1e9, -1000, 3000, "From this height"},
           {"height_max", 1e9, -1000, 3000, "Up to this height"},
           {"scale_min", 0.8, 0.05, 20, "Smallest size"},
-          {"scale_max", 1.2, 0.05, 20, "Largest size"}},
+          {"scale_max", 1.2, 0.05, 20, "Largest size"},
+          {"region_scale", 1e9, 50, 5000, "Biome: size of the regions (turn on to use)"},
+          {"region_min", 0, 0, 1, "Biome: from this part of the region noise"},
+          {"region_max", 1, 0, 1, "Biome: up to this part"},
+          {"region_seed", 1, 1, 100, "Biome: same number = same regions"}},
          {"model"}},
+        {"river", "River", "Carves a riverbed downhill from the highest point (or x, z) to the water or the border.",
+         {{"width", 24, 4, 200, "Width (world units)"},
+          {"depth", 6, 0.5, 60, "How deep the bed goes"},
+          {"meander", 0.6, 0, 3, "How much it winds"},
+          {"x", 0.5, 0, 1, "Start across (optional)"},
+          {"z", 0.5, 0, 1, "Start along (optional)"}},
+         {"layer"}},
+        {"road", "Road", "Flattest way between two points, levelled and painted.",
+         {{"from_x", 0, 0, 1, "Start across"}, {"from_z", 0.5, 0, 1, "Start along"},
+          {"to_x", 1, 0, 1, "End across"}, {"to_z", 0.5, 0, 1, "End along"},
+          {"width", 16, 2, 100, "Width (world units)"}, {"avoid_slopes", 4, 0, 50, "How much it goes around hills"}},
+         {"layer"}},
         {"spawn", "Player start", "Where the player begins (fractions of the map).",
          {{"x", 0.5, 0, 1, "Across"}, {"z", 0.5, 0, 1, "Along"}},
          {}},
@@ -371,6 +454,9 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
     r.height.assign(size_t(r.w) * r.d, 0.0f);
     const float scaleToWorld = r.cell;
     const float ox = recipe.originX - A * r.cell, oz = recipe.originZ - A * r.cell;
+    r.originX = ox;
+    r.originZ = oz;
+    r.reserved.assign(r.height.size(), 0);
     int stepIndex = 0;
     for (const Step& s : recipe.steps) {
         const float base = float(stepIndex++) / std::max<size_t>(1, recipe.steps.size());
@@ -426,19 +512,8 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             r.hasWater = true;
             r.waterLevel = float(s.get("level", 0));
         } else if (s.type == "paint") {
-            Layer* layer = nullptr;
             const std::string tex = s.text("layer");
             if (tex.empty()) continue;
-            for (auto& l : r.layers)
-                if (l.texture == tex) layer = &l;
-            if (!layer) {
-                if (r.layers.size() >= 8) {
-                    error = "At most 8 different paint layers.";
-                    return false;
-                }
-                r.layers.push_back({tex, std::vector<float>(r.height.size(), 0.0f)});
-                layer = &r.layers.back();
-            }
             const float coverage = float(s.get("coverage", 1));
             for (int z = 0; z < r.d; ++z)
                 for (int x = 0; x < r.w; ++x) {
@@ -449,11 +524,7 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                         m *= std::clamp((n - (1.0f - coverage)) * 6.0f, 0.0f, 1.0f);
                     }
                     if (m <= 0) continue;
-                    const size_t g = size_t(z) * r.w + x;
-                    // A camada nova cobre as anteriores na mesma medida.
-                    for (auto& other : r.layers)
-                        if (&other != layer) other.weight[g] *= 1.0f - m;
-                    layer->weight[g] = std::max(layer->weight[g], m);
+                    if (!paintAt(r, tex, size_t(z) * r.w + x, m, error)) return false;
                 }
         } else if (s.type == "scatter") {
             const std::string model = s.text("model");
@@ -477,6 +548,7 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                         continue;
                     }
                     if (r.hasWater && r.h(gx, gz) < r.waterLevel) continue;
+                    if (r.reserved[size_t(gz) * r.w + gx]) continue; // leito de rio, estrada
                     const float sc = float(s.get("scale_min", 0.8)) + (float(s.get("scale_max", 1.2)) - float(s.get("scale_min", 0.8))) * rng.next();
                     // Altura bilinear no ponto exato.
                     const float fx = std::clamp(px / r.cell, 0.0f, float(r.w - 1.001f)), fz = std::clamp(pz / r.cell, 0.0f, float(r.d - 1.001f));
@@ -487,6 +559,150 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                     g.items.push_back({px, y, pz, rng.next() * 360.0f, sc});
                 }
             r.scatter.push_back(std::move(g));
+        } else if (s.type == "river") {
+            // Do ponto pedido (ou do mais alto) pela descida mais forte, com curvas
+            // de ruído, até a água ou a borda; o leito só desce.
+            const float halfW = float(s.get("width", 24)) * 0.5f / r.cell;
+            const float depth = float(s.get("depth", 6));
+            const float meander = float(s.get("meander", 0.6));
+            int x = 0, z = 0;
+            if (s.num.count("x") && s.num.count("z")) {
+                x = A + std::clamp(int(float(s.get("x", 0.5)) * (n - 1)), 0, n - 1);
+                z = A + std::clamp(int(float(s.get("z", 0.5)) * (n - 1)), 0, n - 1);
+            } else {
+                // O mais alto do miolo (um quinto de margem): rio longo, não um fiapo na borda.
+                const int margin = std::max(2, n / 5);
+                float top = -FLT_MAX;
+                for (int zz = A + margin; zz < r.d - A - margin; ++zz)
+                    for (int xx = A + margin; xx < r.w - A - margin; ++xx)
+                        if (r.h(xx, zz) > top) { top = r.h(xx, zz); x = xx; z = zz; }
+            }
+            // Menor subida até a borda ou a água (A* com alvo em qualquer um deles):
+            // nunca prende num buraco. O ruído no custo faz as curvas.
+            const size_t N = r.height.size();
+            // Destino: a água, se o mapa tem lago; senão a borda.
+            bool anyWater = false;
+            if (r.hasWater)
+                for (float hh : r.height)
+                    if (hh < r.waterLevel - 1.0f) { anyWater = true; break; }
+            auto isGoal = [&](int xx, int zz) {
+                if (anyWater) return r.h(xx, zz) < r.waterLevel - 1.0f;
+                return xx <= A || zz <= A || xx >= r.w - 1 - A || zz >= r.d - 1 - A;
+            };
+            auto toBorder = [&](int xx, int zz) {
+                return anyWater ? 0.0f : float(std::min({xx - A, zz - A, r.w - 1 - A - xx, r.d - 1 - A - zz}));
+            };
+            std::vector<float> g(N, FLT_MAX);
+            std::vector<int> came(N, -1);
+            using QItem = std::pair<float, int>;
+            std::priority_queue<QItem, std::vector<QItem>, std::greater<QItem>> open;
+            g[size_t(z) * r.w + x] = 0.0f;
+            open.push({toBorder(x, z), z * r.w + x});
+            int goal = -1;
+            while (!open.empty()) {
+                const auto [f, cur] = open.top();
+                open.pop();
+                const int cx = cur % r.w, cz = cur / r.w;
+                if (f - toBorder(cx, cz) > g[size_t(cur)] + 1e-3f) continue;
+                if (isGoal(cx, cz)) {
+                    goal = cur;
+                    break;
+                }
+                for (int dz = -1; dz <= 1; ++dz)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (!dx && !dz) continue;
+                        const int nx = cx + dx, nz = cz + dz;
+                        if (nx < 0 || nz < 0 || nx >= r.w || nz >= r.d) continue;
+                        const float run = dx && dz ? 1.41421356f : 1.0f;
+                        const float rise = r.h(nx, nz) - r.h(cx, cz);
+                        const float wx = (ox + nx * scaleToWorld) / 140.0f, wz = (oz + nz * scaleToWorld) / 140.0f;
+                        const float wiggle = 1.0f + meander * (gradientNoise(wx, wz, seed) + 0.7f);
+                        const float cost = g[size_t(cur)] + run * wiggle + std::max(0.0f, rise) * 3.0f;
+                        const size_t ni = size_t(nz) * r.w + nx;
+                        if (cost >= g[ni]) continue;
+                        g[ni] = cost;
+                        came[ni] = cur;
+                        open.push({cost + toBorder(nx, nz), int(ni)});
+                    }
+            }
+            std::vector<Vec2> path;
+            for (int c = goal; c >= 0; c = came[size_t(c)]) path.push_back(Vec2(float(c % r.w), float(c / r.w)));
+            std::reverse(path.begin(), path.end());
+            // Curvas mais redondas.
+            for (int pass = 0; pass < 2; ++pass)
+                for (size_t i = 1; i + 1 < path.size(); ++i) path[i] = (path[i - 1] + path[i] * 2.0f + path[i + 1]) * 0.25f;
+            if (path.size() < 3) continue;
+            std::vector<float> bed(path.size());
+            for (size_t i = 0; i < path.size(); ++i) {
+                const float hh = r.h(int(std::lround(path[i].x)), int(std::lround(path[i].y))) - depth;
+                bed[i] = i ? std::min(hh, bed[i - 1]) : hh;
+            }
+            if (!carveStrip(r, path, bed, std::max(0.6f, halfW), [&](float t) { return depth * t * t; }, s.text("layer"), error))
+                return false;
+        } else if (s.type == "road") {
+            // Caminho mais plano entre dois pontos (A* pesando a subida), aplainado.
+            const float halfW = float(s.get("width", 16)) * 0.5f / r.cell;
+            const float climb = float(s.get("avoid_slopes", 4));
+            auto cellAt = [&](const char* kx, const char* kz, float dx, float dz) {
+                return glm::ivec2(A + std::clamp(int(float(s.get(kx, dx)) * (n - 1)), 0, n - 1),
+                                  A + std::clamp(int(float(s.get(kz, dz)) * (n - 1)), 0, n - 1));
+            };
+            const glm::ivec2 from = cellAt("from_x", "from_z", 0.0f, 0.5f), to = cellAt("to_x", "to_z", 1.0f, 0.5f);
+            const size_t N = r.height.size();
+            std::vector<float> g(N, FLT_MAX);
+            std::vector<int> came(N, -1);
+            using QItem = std::pair<float, int>;
+            std::priority_queue<QItem, std::vector<QItem>, std::greater<QItem>> open;
+            auto idx = [&](int xx, int zz) { return zz * r.w + xx; };
+            auto heur = [&](int xx, int zz) { return glm::length(Vec2(xx - to.x, zz - to.y)); };
+            g[idx(from.x, from.y)] = 0.0f;
+            open.push({heur(from.x, from.y), idx(from.x, from.y)});
+            while (!open.empty()) {
+                const auto [f, cur] = open.top();
+                open.pop();
+                const int cx = cur % r.w, cz = cur / r.w;
+                if (cx == to.x && cz == to.y) break;
+                if (f - heur(cx, cz) > g[size_t(cur)] + 1e-3f) continue;
+                for (int dz = -1; dz <= 1; ++dz)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (!dx && !dz) continue;
+                        const int nx = cx + dx, nz = cz + dz;
+                        if (nx < 0 || nz < 0 || nx >= r.w || nz >= r.d) continue;
+                        const float run = dx && dz ? 1.41421356f : 1.0f;
+                        const float rise = std::abs(r.h(nx, nz) - r.h(cx, cz)) / (run * r.cell);
+                        float cost = g[size_t(cur)] + run * (1.0f + climb * rise * rise * 4.0f);
+                        if (r.hasWater && r.h(nx, nz) < r.waterLevel) cost += 50.0f; // não atravessa lago à toa
+                        const size_t ni = size_t(idx(nx, nz));
+                        if (cost >= g[ni]) continue;
+                        g[ni] = cost;
+                        came[ni] = cur;
+                        open.push({cost + heur(nx, nz), int(ni)});
+                    }
+            }
+            std::vector<Vec2> path;
+            for (int c = idx(to.x, to.y); c >= 0; c = came[size_t(c)]) {
+                path.push_back(Vec2(float(c % r.w), float(c / r.w)));
+                if (c == idx(from.x, from.y)) break;
+            }
+            if (path.size() < 2) continue;
+            std::reverse(path.begin(), path.end());
+            // Curvas mais suaves e altura da estrada pela média do caminho.
+            for (int pass = 0; pass < 3; ++pass)
+                for (size_t i = 1; i + 1 < path.size(); ++i) path[i] = (path[i - 1] + path[i] * 2.0f + path[i + 1]) * 0.25f;
+            std::vector<float> raw(path.size()), bed(path.size());
+            for (size_t i = 0; i < path.size(); ++i) raw[i] = r.h(int(std::lround(path[i].x)), int(std::lround(path[i].y)));
+            for (size_t i = 0; i < path.size(); ++i) {
+                float sum = 0.0f;
+                int cnt = 0;
+                for (int k = -4; k <= 4; ++k) {
+                    const long j = long(i) + k;
+                    if (j < 0 || j >= long(path.size())) continue;
+                    sum += raw[size_t(j)];
+                    ++cnt;
+                }
+                bed[i] = sum / float(cnt);
+            }
+            if (!carveStrip(r, path, bed, std::max(0.6f, halfW), [](float) { return 0.0f; }, s.text("layer"), error)) return false;
         } else if (s.type == "spawn") {
             const int gx = A + std::clamp(int(float(s.get("x", 0.5)) * (n - 1)), 0, n - 1);
             const int gz = A + std::clamp(int(float(s.get("z", 0.5)) * (n - 1)), 0, n - 1);
