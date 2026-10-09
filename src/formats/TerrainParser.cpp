@@ -1,4 +1,6 @@
 #include "formats/TerrainParser.hpp"
+
+#include <fstream>
 #include "core/Logger.hpp"
 #include <algorithm>
 #include <cmath>
@@ -624,6 +626,53 @@ WaterMesh TerrainParser::generateWaterMesh(const TerrainFile& terrain,
     }
 
     return wmesh;
+}
+
+bool TerrainParser::writeEruptGndBin(const TerrainFile& t, const std::string& path) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+    auto u16 = [&](uint16_t v) { f.write(reinterpret_cast<const char*>(&v), 2); };
+    auto u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+    auto i32 = [&](int32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+    auto f32 = [&](float v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+    f.write("ERUPTGNDBIN", 11);
+    u32(2);
+    u32(t.width);
+    u32(t.height);
+    f32(t.scale);
+    f32(t.offsetX);
+    f32(t.offsetZ);
+    u32(static_cast<uint32_t>(t.textures.size()));
+    for (const auto& name : t.textures) {
+        u16(static_cast<uint16_t>(name.size()));
+        f.write(name.data(), static_cast<std::streamsize>(name.size()));
+    }
+    u32(static_cast<uint32_t>(t.surfaces.size()));
+    for (const auto& s : t.surfaces) {
+        for (float u : s.u) f32(u);
+        for (float v : s.v) f32(v);
+        u16(s.textureId);
+        u16(s.lightmapId);
+        u32(s.color);
+    }
+    u32(static_cast<uint32_t>(t.cubes.size()));
+    for (const auto& c : t.cubes) {
+        for (float h : c.height) f32(h);
+        i32(c.surfaceTop);
+        i32(c.surfaceNorth);
+        i32(c.surfaceEast);
+    }
+    u32(0); // lightmaps
+    u32(static_cast<uint32_t>(t.waterPlanes.size()));
+    for (const auto& w : t.waterPlanes) {
+        f32(w.level);
+        u32(w.type);
+        f32(w.waveHeight);
+        f32(w.waveSpeed);
+        f32(w.wavePitch);
+        u32(w.textureCycling);
+    }
+    return static_cast<bool>(f);
 }
 
 float TerrainParser::getTerrainHeightAt(const TerrainFile& terrain, float worldX, float worldZ) {

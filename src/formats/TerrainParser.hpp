@@ -177,6 +177,8 @@ public:
                                        bool skipIfPositive = true);
 
     static float getTerrainHeightAt(const TerrainFile& terrain, float worldX, float worldZ);
+    // Grava ERUPTGNDBIN versão 2 (o que parse lê; sem lightmaps).
+    static bool writeEruptGndBin(const TerrainFile& terrain, const std::string& path);
 
     static void computeSmoothNormals(TerrainFile& terrain);
     static void computeSmoothColors(TerrainFile& terrain);

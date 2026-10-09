@@ -407,6 +407,30 @@ public:
     // Anda quem tem caminho (só com o jogo rodando) e envia os sprites.
     void updateCharacters(float dt, bool moveAlongPaths);
     std::vector<SceneCharacter>& characters() { return m_characters; }
+    // Retoque de terreno (core/TerrainEditing.cpp): grade de altura do mapa
+    // (.ter) + delta salvo em assets/scenes/<mapa>.height.bin.
+    struct HeightEdit {
+        bool active = false;
+        uint32_t w = 0, d = 0;
+        float scale = 8.0f, offX = 0.0f, offZ = 0.0f;
+        std::vector<float> base, delta;
+        struct Ref { uint32_t a, b; }; // GPU: (malha, vértice); CPU: (nó, vértice)
+        std::vector<uint32_t> gpuStart, cpuStart;
+        std::vector<Ref> gpuRefs, cpuRefs;
+        std::string assetPath;
+        std::unordered_map<uint32_t, Mat4> meshTransform;
+        float height(uint32_t g) const { return base[g] + delta[g]; }
+    };
+    enum class SculptMode { Raise, Lower, Smooth, Flatten };
+    bool terrainEditable() const;
+    const HeightEdit& heightEdit() const { return m_heightEdit; }
+    // Um passo do pincel; `rect` recebe a região da grade tocada (x0, z0, x1, z1).
+    bool sculptTerrain(SculptMode mode, const Vec2& center, float radius, float strength, float falloff,
+                       float flattenTo, float dt, int rect[4]);
+    std::vector<float> heightDeltaRegion(int x0, int z0, int x1, int z1) const;
+    void setHeightDeltaRegion(int x0, int z0, int x1, int z1, const std::vector<float>& values);
+    bool saveHeightDelta(std::string& error) const;
+
     // Início do jogador vindo do scene.luau: leva o jogador (e a câmera) até lá.
     void setPlayerStart(const Vec3& p);
     bool hasPlayerStart() const { return m_hasPlayerStart; }
@@ -1115,6 +1139,12 @@ private:
     PlayerController* m_playerController = nullptr;
     std::vector<SceneCharacter> m_characters;
     bool m_hasPlayerStart = false;
+    HeightEdit m_heightEdit;
+    void prepareHeightEdits(LoadedMap& map, std::vector<ModelAsset>& models);
+    void bindHeightEditToMeshes();
+    void refreshHeightRegion(int x0, int z0, int x1, int z1);
+    float gridHeightAt(float wx, float wz, int x0, int z0, int x1, int z1, const std::vector<float>* old) const;
+    void reprojectOnTerrain(int x0, int z0, int x1, int z1, const std::vector<float>& oldHeights);
     Vec3 m_playerStart{0.0f};
     bool loadCharacterSprite(const std::string& png, LoadedSprite& out);
     void drawCharacter(SceneCharacter& c, float dt);

@@ -251,6 +251,8 @@ void Editor::registerCommands() {
     tool("tool.move", "Move", ImGuiKey_W, Tool::Move, "Drag the arrows to move. Hold Ctrl to snap.");
     tool("tool.rotate", "Rotate", ImGuiKey_E, Tool::Rotate, "Drag the rings to rotate. Hold Ctrl to snap.");
     tool("tool.scale", "Scale", ImGuiKey_R, Tool::Scale, "Drag the handles to scale. Hold Ctrl to snap.");
+    tool("tool.terrain", "Terrain", ImGuiKey_T, Tool::Terrain,
+         "Sculpt the ground: left drag raises, Ctrl lowers, Shift smooths. Settings in the Inspector.");
     {
         auto& c = add("tool.space", "Tools", "Toggle Local/World Space", {ImGuiKey_X},
                       [this] { m_localSpace = !m_localSpace; },
@@ -521,9 +523,46 @@ void Editor::update(float dt) {
         else
             log(LogLevel::Error, error);
     }
-    // ERUPTION_TEST_EDITOR_SAVE=1: Ctrl+S depois dos ganchos acima.
-    static const bool testSave = std::getenv("ERUPTION_TEST_EDITOR_SAVE") != nullptr;
-    if (testSave && m_frame == 240) saveScene();
+    // ERUPTION_TEST_EDITOR_SCULPT=u,v,modo (0 subir, 1 suavizar, 2 aplainar,
+    // 3 baixar): um traço de pincel de 60 frames no ponto (u,v) da cena, a
+    // partir do frame 200, com o mesmo desfazer do mouse.
+    static const char* testSculpt = std::getenv("ERUPTION_TEST_EDITOR_SCULPT");
+    if (testSculpt && m_frame >= 200 && m_frame <= 260) {
+        float u = 0.5f, v = 0.5f;
+        int mode = 0;
+        std::sscanf(testSculpt, "%f,%f,%d", &u, &v, &mode);
+        TerrainBrush& b = m_brush;
+        Vec3 at;
+        if (m_frame == 200 && groundPointAt(u, v, at)) {
+            b.stroking = true;
+            b.snapshot = m_engine->heightEdit().delta;
+            b.rect[0] = b.rect[1] = INT32_MAX;
+            b.rect[2] = b.rect[3] = INT32_MIN;
+            b.cursor = at;
+            b.flattenTo = at.y;
+        }
+        if (b.stroking && m_frame < 260) {
+            const Engine::SculptMode modes[] = {Engine::SculptMode::Raise, Engine::SculptMode::Smooth,
+                                                Engine::SculptMode::Flatten, Engine::SculptMode::Lower};
+            int r[4];
+            if (m_engine->sculptTerrain(modes[std::clamp(mode, 0, 3)], Vec2(b.cursor.x, b.cursor.z), b.size * 2.0f,
+                                        b.strength * 2.0f, b.falloff, b.flattenTo, 1.0f / 60.0f, r)) {
+                b.rect[0] = std::min(b.rect[0], r[0]);
+                b.rect[1] = std::min(b.rect[1], r[1]);
+                b.rect[2] = std::max(b.rect[2], r[2]);
+                b.rect[3] = std::max(b.rect[3], r[3]);
+            }
+        } else if (b.stroking) {
+            endTerrainStroke();
+        }
+    }
+    // ERUPTION_TEST_EDITOR_SAVE=<frame> (1 = frame 240): Ctrl+S depois dos ganchos acima.
+    static const char* testSaveEnv = std::getenv("ERUPTION_TEST_EDITOR_SAVE");
+    static const long testSaveFrame = testSaveEnv ? (std::atol(testSaveEnv) > 1 ? std::atol(testSaveEnv) : 240) : -1;
+    if (static_cast<long>(m_frame) == testSaveFrame) saveScene();
+    // ERUPTION_TEST_EDITOR_UNDO=<frame>: Ctrl+Z nesse frame.
+    static const char* testUndo = std::getenv("ERUPTION_TEST_EDITOR_UNDO");
+    if (testUndo && static_cast<long>(m_frame) == std::atol(testUndo)) m_undo.undo();
     // ERUPTION_TEST_EDITOR_EXTERNAL=<arquivo>: no frame 300 copia o arquivo por
     // cima do scene.luau do mapa, como um editor externo faria.
     static const char* testExternal = std::getenv("ERUPTION_TEST_EDITOR_EXTERNAL");
@@ -760,6 +799,7 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("tool.move");
         m_commands.menuItem("tool.rotate");
         m_commands.menuItem("tool.scale");
+        m_commands.menuItem("tool.terrain");
         ImGui::Separator();
         m_commands.menuItem("tool.space");
         m_commands.menuItem("tool.snap");
@@ -842,6 +882,7 @@ void Editor::drawToolbar() {
         {"Move", "tool.move", Tool::Move},
         {"Rotate", "tool.rotate", Tool::Rotate},
         {"Scale", "tool.scale", Tool::Scale},
+        {"Terrain", "tool.terrain", Tool::Terrain},
     };
     for (const auto& t : tools) {
         if (toolButton(t.label, m_tool == t.tool, commandTip(m_commands, t.id), editing)) m_tool = t.tool;
