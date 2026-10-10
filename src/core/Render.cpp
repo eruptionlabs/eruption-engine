@@ -752,9 +752,10 @@ void Engine::render() {
         // harness perf/test_lod_quality.py medir o quanto o LOD simplificado
         // se afasta da malha de referencia (RMS de silhueta na mesma pose).
         static const bool forceBaseLod = std::getenv("ERUPTION_TEST_FORCE_BASE_LOD") != nullptr;
-        if (forceBaseLod || m_demoForceBaseLod) m_modelRenderer.setForceBaseLod(true);
+        const bool fullDetail = forceBaseLod || m_demoForceBaseLod || m_fullDetailView;
+        if (fullDetail) m_modelRenderer.setForceBaseLod(true);
         m_modelRenderer.render(cmd, m_camera.viewProjJittered(), m_camera.frustum(), m_camera.position());
-        if (forceBaseLod || m_demoForceBaseLod) m_modelRenderer.setForceBaseLod(false);
+        if (fullDetail) m_modelRenderer.setForceBaseLod(false);
     }
 
     {
@@ -1375,7 +1376,7 @@ void Engine::render() {
         // .env não paga nada: o vetor está vazio e o passe inteiro some.
         // ERUPTION_TEST_NO_SMOKE=1 (debug): isola o custo do passe.
         static const bool kNoSmoke = std::getenv("ERUPTION_TEST_NO_SMOKE") != nullptr;
-        const bool drawSmoke = m_smokeEnabled && !kNoSmoke && m_currentMap &&
+        const bool drawSmoke = m_smokeEnabled && !kNoSmoke && !hideMapEffectsInView && m_currentMap &&
                                !m_currentMap->smokeEmitters.empty() &&
                                m_cloudLayerRenderer.hasSmokePipeline();
         if (drawSmoke) {

@@ -279,7 +279,7 @@ private:
     // Lens-drop SSBO (CPU upload or GPU compute target)
     static constexpr uint32_t LENS_DROP_MAX = 16384;
     // Bindings de buffer do overlay (4/6) escritos uma vez (VUID-03047).
-    bool m_weatherBufferDSWritten = false;
+    bool m_weatherBufferDSWritten[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
     // Ultima escrita por (set, binding): ver updateSets.
     struct WrittenDescriptor {
         VkImageView view; VkSampler sampler; VkImageLayout layout;
@@ -311,7 +311,9 @@ private:
 
     VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
-    std::vector<VkDescriptorSet> m_descriptorSets;
+    std::vector<VkDescriptorSet> m_descriptorSets; // kSetsPerFrame por frame em voo
+    static constexpr uint32_t kSetsPerFrame = 32;
+    VkDescriptorSet& dset(uint32_t i) { return m_descriptorSets[m_ctx->currentFrame() * kSetsPerFrame + i]; }
     VkSampler m_linearSampler = VK_NULL_HANDLE;
 
     void createImages();

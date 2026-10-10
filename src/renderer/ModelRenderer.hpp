@@ -222,6 +222,8 @@ public:
     // inteiro: la' a "camera" e' um ponto arbitrario acima do centro e a
     // distancia nao tem relacao com o tamanho na tela.
     void setForceBaseLod(bool on) { m_forceBaseLod = on; }
+    // Vista de detalhe total (editor): a sombra também usa a malha original.
+    void setShadowFullDetail(bool on) { m_shadowFullDetail = on; }
     bool forceBaseLod() const { return m_forceBaseLod; }
 
     size_t lastVisibleCount() const { return m_visibleInstanceIndices.size(); }
@@ -856,6 +858,7 @@ private:
     void registerResolvedTexture(const std::string& path, uint32_t slot);
 
     bool m_forceBaseLod = false;
+    bool m_shadowFullDetail = false;
     uint32_t m_lastDrawnTriangles = 0;
     uint32_t m_lastDrawCalls = 0;
 };

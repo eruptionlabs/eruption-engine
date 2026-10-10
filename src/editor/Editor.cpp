@@ -252,6 +252,17 @@ void Editor::registerCommands() {
         c.enabled = [this] { return m_selection.kind != SelectionKind::None; };
     }
     {
+        {
+            auto& iso = add("view.isolate", "View", "Isolate Selection", {ImGuiKey_Slash}, [this] { toggleIsolate(); },
+                            "Shows only the selected models (the rest is hidden from the view, not deleted). Again: show all.");
+            iso.scope = Scope::Viewport;
+            iso.checked = [this] { return !m_isolated.empty(); };
+            iso.enabled = [this] { return !m_isolated.empty() || m_selection.kind == SelectionKind::Model; };
+            auto& full = add("view.full_detail", "View", "Full Detail (no LOD)", {},
+                             [this] { m_engine->setFullDetailView(!m_engine->fullDetailView()); },
+                             "Every model in its original mesh, near or far, on screen and in the shadow - to compare with the LOD.");
+            full.checked = [this] { return m_engine->fullDetailView(); };
+        }
         auto& c = add("edit.frame", "Edit", "Frame Selection", {ImGuiKey_F}, [this] { frameSelection(); },
                       "Moves the camera to show the selected object.");
         c.scope = Scope::Viewport;
@@ -968,6 +979,9 @@ void Editor::drawMenuBar() {
             ImGui::PopID();
         }
         if (changed) applyLayerVisibility();
+        ImGui::Separator();
+        m_commands.menuItem("view.isolate");
+        m_commands.menuItem("view.full_detail");
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu(tr("Add"))) {

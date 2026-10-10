@@ -270,7 +270,10 @@ void PostProcessor::createDescriptors() {
     if (m_ctx->bindless()) layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
     vkCreateDescriptorSetLayout(m_ctx->device(), &layoutInfo, nullptr, &m_descriptorSetLayout);
 
-    uint32_t numSets = 32;
+    // Um jogo de kSetsPerFrame sets POR FRAME EM VOO: a entrada de um passe
+    // pode mudar de um frame para o outro (bloom, DoF, editor), e reescrever
+    // um set que o frame anterior ainda usa na GPU é proibido sem bindless.
+    const uint32_t numSets = kSetsPerFrame * VulkanContext::MAX_FRAMES_IN_FLIGHT;
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[0].descriptorCount = 7 * numSets;
@@ -298,7 +301,7 @@ void PostProcessor::createDescriptors() {
     vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, m_descriptorSets.data());
     // Conjuntos novos (init ou resize): os buffers de clima ainda nao foram
     // escritos neles.
-    m_weatherBufferDSWritten = false;
+    for (bool& w : m_weatherBufferDSWritten) w = false;
 
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -315,8 +318,8 @@ void PostProcessor::createDescriptors() {
 }
 
 void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, VkImageView view1, VkImageView view2, VkImageView view3) {
-    if (setIndex >= m_descriptorSets.size()) return;
-    VkDescriptorSet set = m_descriptorSets[setIndex];
+    if (setIndex >= kSetsPerFrame) return;
+    VkDescriptorSet set = dset(setIndex);
 
     VkDescriptorImageInfo infos[4] = {};
     VkWriteDescriptorSet writes[4] = {};
@@ -348,8 +351,8 @@ void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, Vk
 }
 
 void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, VkImageView view1, VkImageView view2, VkImageView view3, VkImageView view5, VkImageView view4) {
-    if (setIndex >= m_descriptorSets.size()) return;
-    VkDescriptorSet set = m_descriptorSets[setIndex];
+    if (setIndex >= kSetsPerFrame) return;
+    VkDescriptorSet set = dset(setIndex);
 
     VkDescriptorImageInfo infos[6] = {};
     VkWriteDescriptorSet writes[6] = {};
@@ -906,7 +909,7 @@ if (!m_ctx) return;
         // Update set 6: binding 3 receives the cloud coverage texture so the
         // overlay can mask rain/splash/lens effects by actual cloud coverage.
         {
-            VkDescriptorSet set = m_descriptorSets[6];
+            VkDescriptorSet set = dset(6);
             VkDescriptorImageInfo infos[5] = {};
             VkWriteDescriptorSet writes[8] = {};
             uint32_t count = 0;
@@ -969,7 +972,7 @@ if (!m_ctx) return;
             // vez so'. Reescrever por frame sem a feature de buffer
             // update-after-bind e' VUID-03047 (2 por frame). Os buffers de
             // dados mudam de CONTEUDO via memcpy mapeado, nao de handle.
-            if (!m_weatherBufferDSWritten) {
+            if (!m_weatherBufferDSWritten[m_ctx->currentFrame()]) {
                 if (m_lensDropBuffer != VK_NULL_HANDLE) {
                     bufferInfo.buffer = m_lensDropBuffer;
                     bufferInfo.offset = 0;
@@ -993,14 +996,14 @@ if (!m_ctx) return;
                 writes[count].descriptorCount = 1;
                 writes[count].pBufferInfo = &uboInfo;
                 count++;
-                m_weatherBufferDSWritten = true;
+                m_weatherBufferDSWritten[m_ctx->currentFrame()] = true;
             }
 
             if (count > 0) updateSets(writes, count);
         }
         beginFullscreenPass(cmd, m_weatherView, m_width, m_height);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_weatherPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_descriptorSets[6], 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(6), 0, nullptr);
 
         struct WeatherPush {
             Vec4 params;
@@ -1126,7 +1129,7 @@ if (!m_ctx) return;
         updateDescriptorSet(1, depthInput);
         beginFullscreenPass(cmd, m_cocView, m_width, m_height);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cocPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_descriptorSets[1], 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(1), 0, nullptr);
         struct CoCPush {
             float focal_distance;
             float aperture;
@@ -1153,7 +1156,7 @@ if (!m_ctx) return;
         updateDescriptorSet(2, hdrInput, m_cocView);
         beginFullscreenPass(cmd, m_blurHView, m_width, m_height);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_blurHPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_descriptorSets[2], 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(2), 0, nullptr);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_blurHImage);
@@ -1163,7 +1166,7 @@ if (!m_ctx) return;
         updateDescriptorSet(3, m_blurHView, m_cocView);
         beginFullscreenPass(cmd, m_blurVView, m_width, m_height);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_blurVPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_descriptorSets[3], 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(3), 0, nullptr);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_blurVImage);
@@ -1173,7 +1176,7 @@ if (!m_ctx) return;
         updateDescriptorSet(4, hdrInput, m_blurVView, m_cocView);
         beginFullscreenPass(cmd, m_dofView, m_width, m_height);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cocCompositePipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_descriptorSets[4], 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(4), 0, nullptr);
         
         struct CoCCompPush {
             float max_blur;
@@ -1214,7 +1217,7 @@ if (!m_ctx) return;
         updateDescriptorSet(10, hdrInput);
         beginFullscreenPass(cmd, m_bloomDownViews[0], m_width / 2, m_height / 2);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_brightPassPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_descriptorSets[10], 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(10), 0, nullptr);
         float threshold = settings.bloomThreshold;
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(float), &threshold);
         vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -1229,7 +1232,7 @@ if (!m_ctx) return;
             uint32_t bh = std::max(1u, (m_height / 2) >> i);
             beginFullscreenPass(cmd, m_bloomDownViews[i], bw, bh);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomDownPipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_descriptorSets[10 + i], 0, nullptr);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(10 + i), 0, nullptr);
             
             struct { Vec2 size; float lod; float pad; } push;
             push.size = Vec2((float)std::max(1u, (m_width / 2) >> (i - 1)), (float)std::max(1u, (m_height / 2) >> (i - 1)));
@@ -1257,7 +1260,7 @@ if (!m_ctx) return;
             uint32_t bh = std::max(1u, (m_height / 2) >> i);
             beginFullscreenPass(cmd, m_bloomUpViews[i], bw, bh);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomUpPipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_descriptorSets[20 + i], 0, nullptr);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(20 + i), 0, nullptr);
             
             struct { Vec2 size; float lod; float pad; } push;
             push.size = Vec2((float)std::max(1u, (m_width / 2) >> (i + 1)), (float)std::max(1u, (m_height / 2) >> (i + 1)));
@@ -1283,7 +1286,7 @@ if (!m_ctx) return;
     beginFullscreenPass(cmd, compositeTarget, m_width, m_height);
     lap(3);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_descriptorSets[5], 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(5), 0, nullptr);
 
     struct CompositePush {
         Vec4 exposureBloom; // x=exposure, y=fogOpacity, z=bloomIntensity, w=enableBloom
@@ -1396,7 +1399,7 @@ if (!m_ctx) return;
         updateDescriptorSet(7, gbufferWorldPos, cloudColorView);
         beginFullscreenPass(cmd, compositeTarget, m_width, m_height);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudCoverageDebugPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_descriptorSets[7], 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(7), 0, nullptr);
 
         struct {
             Vec2 worldMin;
@@ -1724,8 +1727,8 @@ void PostProcessor::destroyLensDropCompute() {
 }
 
 void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, VkImageView view1, VkBuffer storageBuffer, VkDeviceSize storageRange, VkImageView view2, VkImageView view3) {
-    if (setIndex >= m_descriptorSets.size()) return;
-    VkDescriptorSet set = m_descriptorSets[setIndex];
+    if (setIndex >= kSetsPerFrame) return;
+    VkDescriptorSet set = dset(setIndex);
 
     VkDescriptorImageInfo infos[4] = {};
     VkDescriptorBufferInfo bufferInfo{};
@@ -1771,8 +1774,8 @@ void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, Vk
 }
 
 void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, VkImageView view1, VkImageView view2, VkImageView view3, VkSampler view3Sampler, VkBuffer storageBuffer, VkDeviceSize storageRange) {
-    if (setIndex >= m_descriptorSets.size()) return;
-    VkDescriptorSet set = m_descriptorSets[setIndex];
+    if (setIndex >= kSetsPerFrame) return;
+    VkDescriptorSet set = dset(setIndex);
 
     VkDescriptorImageInfo infos[4] = {};
     VkDescriptorBufferInfo bufferInfo{};

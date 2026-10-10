@@ -3143,7 +3143,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
             VkBuffer useIb = mesh.indexBuffer;
             VkBuffer useVb = mesh.vertexBuffer;
             uint32_t useCount = mesh.indexCount;
-            if (!kFullDetailFb) {
+            if (!kFullDetailFb && !m_shadowFullDetail) {
                 if (mesh.shIndexCount > 0) { useIb = mesh.shIndexBuffer; useCount = mesh.shIndexCount; }
                 else if (mesh.loIndexCount > 0) {
                     useIb = mesh.loIndexBuffer; useCount = mesh.loIndexCount;
@@ -3269,7 +3269,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
             return e && std::atoi(e) != 0;
         }();
         if (kNoFoliageCaster && mesh.swayAmount > 0.0f) continue;
-        const bool casterFullDetail = kShadowFullDetail || mesh.isGround;
+        const bool casterFullDetail = kShadowFullDetail || mesh.isGround || m_shadowFullDetail;
         if (!casterFullDetail) {
             if (mesh.shIndexCount > 0) {          // LOD proprio da sombra
                 useIb = mesh.shIndexBuffer;
