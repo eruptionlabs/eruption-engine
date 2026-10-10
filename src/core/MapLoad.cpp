@@ -667,6 +667,27 @@ void Engine::flushPendingUploads() {
     }
 }
 
+bool Engine::loadModelForPreview(const std::string& glbPath) {
+    if (!m_currentMap) return false;
+    if (m_modelRenderer.hasAsset(glbPath)) return true;
+    std::ifstream f(glbPath, std::ios::binary);
+    const std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if (data.size() < 12 || std::memcmp(data.data(), "glTF", 4) != 0) {
+        ERUPTION_LOG_ERROR("Preview: not a GLB file: %s", glbPath.c_str());
+        return false;
+    }
+    ModelFile model = GltfParser::parse(data.data(), data.size(), std::filesystem::path(glbPath).parent_path().string());
+    if (model.nodes.empty()) {
+        ERUPTION_LOG_ERROR("Preview: no meshes in %s", glbPath.c_str());
+        return false;
+    }
+    model.filePath = glbPath;
+    m_currentMap->models.push_back(model); // as texturas embutidas são procuradas aqui
+    const bool ok = m_modelRenderer.loadAssetMeshes(convertModelToAsset(model));
+    flushPendingUploads();
+    return ok;
+}
+
 int Engine::addModelFromFile(const std::string& glbPath, const Vec3& position, const std::string& nodeName) {
     if (!m_currentMap) return -1;
     ModelInstanceDesc desc;

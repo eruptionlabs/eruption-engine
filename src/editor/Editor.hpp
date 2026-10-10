@@ -21,6 +21,7 @@ public:
 } // namespace eruption
 #else
 
+#include "editor/ModelPreview.hpp"
 #include "editor/EditorCommands.hpp"
 #include "editor/RuleSheet.hpp"
 #include "scene/SceneEdits.hpp"
@@ -358,6 +359,13 @@ private:
     // Exibir > Isolar seleção: só estes modelos aparecem na vista (nada é apagado).
     std::vector<uint32_t> m_isolated;
     void toggleIsolate();
+    // Janela > Visualizador de modelo (EditorModelViewer.cpp, ModelPreview).
+    ModelPreview m_modelPreview;
+    bool m_showModelViewer = false;
+    void initModelViewer();
+    void shutdownModelViewer();
+    bool openModelViewer(const std::string& path, int node);
+    void drawModelViewer();
     bool isSelected(const Selection& s) const;
     void toggleSelect(const Selection& s);
     std::vector<Selection> selectionList() const; // principal + extras válidas

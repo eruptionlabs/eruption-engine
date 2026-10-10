@@ -814,6 +814,7 @@ void Engine::render() {
         }
     }
     m_spherePreview.render(cmd, m_timer.deltaTime(), m_camera.position());
+    if (offscreenHook) offscreenHook(cmd); // visualizador de modelo do editor
 
     // Cloud shadow map placeholder: not implemented yet for Cloud Layers.
     m_vulkan.writeTimestamp(cmd, 20, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);

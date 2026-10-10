@@ -122,11 +122,13 @@ bool Editor::init(Engine& engine) {
     cam.setMaxOrbitDistance(20000.0f);
     cam.setDebugFreeCamera(true);
 
+    initModelViewer();
     log(LogLevel::Info, "Editor ready. Press Ctrl+Shift+P to search every command.");
     return true;
 }
 
 void Editor::shutdown() {
+    shutdownModelViewer();
     stopThumbnails();
     m_remote.stop();
     if (m_engine) {
@@ -355,6 +357,18 @@ void Editor::registerCommands() {
     panel("window.rules", "Rules (event sheet)", &m_showRules);
     panel("window.code", "Code", &m_showCode);
     {
+        {
+            auto& mv = add("window.model_viewer", "Window", "Model Viewer", {}, [this] {
+                const bool open = !m_showModelViewer;
+                // Abrindo com um modelo selecionado: ele já entra no visualizador.
+                if (open && m_selection.kind == SelectionKind::Model && m_selection.index >= 0) {
+                    const auto& inst = m_engine->modelRenderer().getInstances()[static_cast<size_t>(m_selection.index)];
+                    if (!inst.assetPath.empty()) openModelViewer(inst.assetPath, static_cast<int>(inst.nodeIndex));
+                }
+                m_showModelViewer = open;
+            }, "A model alone, with the engine's real rendering: LOD levels, wireframe, normals, UV and animations.");
+            mv.checked = [this] { return m_showModelViewer; };
+        }
         auto& ai = add("window.ai", "Window", "AI Assistant", {}, [this] { m_showAi = !m_showAi; },
                        "Chat that writes rules and scripts with your own API key. You review and save what it writes.");
         ai.checked = [this] { return m_showAi; };
@@ -782,6 +796,20 @@ void Editor::update(float dt) {
                 if (!arg.empty()) m_projectDir = m_projectRoot / arg; // pasta aberta no painel
             }
             else if (what == "play") play();
+            // Visualizador de modelo: viewer:<arquivo.glb>[#nó], viewer_sel (o selecionado),
+            // viewer_lod:<0..3>, viewer_mode:<0..3>, viewer_wire, viewer_anim:<n>.
+            else if (what == "viewer") {
+                const size_t hash = arg.rfind('#');
+                openModelViewer(arg.substr(0, hash), hash == std::string::npos ? -1 : std::atoi(arg.c_str() + hash + 1));
+            }
+            else if (what == "viewer_sel" && m_selection.kind == SelectionKind::Model && m_selection.index >= 0) {
+                const auto& inst = m_engine->modelRenderer().getInstances()[static_cast<size_t>(m_selection.index)];
+                openModelViewer(inst.assetPath, static_cast<int>(inst.nodeIndex));
+            }
+            else if (what == "viewer_lod") m_modelPreview.lod = static_cast<ModelPreview::Lod>(std::atoi(arg.c_str()) & 3);
+            else if (what == "viewer_mode") m_modelPreview.mode = static_cast<ModelPreview::Mode>(std::atoi(arg.c_str()) & 3);
+            else if (what == "viewer_wire") m_modelPreview.wireframe = true;
+            else if (what == "viewer_anim") m_modelPreview.animation = std::atoi(arg.c_str());
             else if (what == "cmd") m_commands.run(arg);
             else if (what == "palette") {
                 m_paletteOpen = true;
@@ -908,6 +936,7 @@ void Editor::drawUI() {
     drawAiWindow();
     drawExportWindow();
     drawMapGenWindow();
+    drawModelViewer();
 
     if (m_focusScene) {
         m_pendingFocus.insert(m_pendingFocus.begin(), kWinScene);
@@ -1028,6 +1057,7 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("window.telemetry");
         m_commands.menuItem("window.second_screen");
         m_commands.menuItem("window.ai");
+        m_commands.menuItem("window.model_viewer");
         ImGui::Separator();
         if (ImGui::BeginMenu(tr("Language / Idioma"))) {
             m_commands.menuItem("window.lang_en");

@@ -1,5 +1,6 @@
 #include "renderer/GBuffer.hpp"
 #include <cfloat>
+#include <limits>
 #include <cmath>
 #include "renderer/ModelRenderer.hpp"
 #include "core/JobSystem.hpp"
@@ -2188,6 +2189,39 @@ std::vector<std::string> ModelRenderer::releaseAsset(const std::string& filePath
         for (auto& m : dead) m.destroyLodBuffers(ctx);
     });
     return keys;
+}
+
+bool ModelRenderer::loadAssetMeshes(const ModelAsset& asset) {
+    if (asset.filePath.empty() || asset.nodes.empty()) return false;
+    if (!hasAsset(asset.filePath)) {
+        m_lastModels.push_back(asset);
+        g_animTopo.clear(); // a topologia é guardada pelo endereço do asset
+    }
+    uint32_t idx = 0;
+    while (idx < m_lastModels.size() && m_lastModels[idx].filePath != asset.filePath) ++idx;
+    if (idx == m_lastModels.size()) return false;
+    // Só as malhas: nenhum nó casa com INT32_MAX, então nenhuma instância nasce.
+    appendAssetInstances(idx, ModelInstanceDesc{}, 0.0f, 0.0f, std::numeric_limits<int>::max());
+    m_bindless->flushUpdates();
+    return m_modelMeshCache.count(asset.filePath) != 0;
+}
+
+const ModelAsset* ModelRenderer::asset(const std::string& path) const {
+    for (const auto& m : m_lastModels)
+        if (m.filePath == path) return &m;
+    return nullptr;
+}
+
+std::vector<ModelRenderer::AssetNode> ModelRenderer::assetNodes(const std::string& path) const {
+    std::vector<AssetNode> out;
+    const ModelAsset* a = asset(path);
+    const auto it = m_modelMeshCache.find(path);
+    if (!a || it == m_modelMeshCache.end()) return out;
+    for (size_t n = 0; n < it->second.size() && n < a->nodes.size(); ++n) {
+        if (it->second[n] == 0xFFFFFFFFu) continue;
+        out.push_back({static_cast<uint32_t>(n), it->second[n], a->nodes[n].renderMatrix, a->nodes[n].name});
+    }
+    return out;
 }
 
 bool ModelRenderer::hasAsset(const std::string& path) const {

@@ -529,6 +529,24 @@ public:
     std::string currentAnimation(uint32_t instance) const;
     size_t skinnedCount() const { return m_skinned.size(); }
 
+    // VISUALIZADOR DE MODELO (editor): malhas de um .glb sem instância na
+    // cena, os nós com malha e uma cópia animada própria para modelos com skin.
+    bool loadAssetMeshes(const ModelAsset& asset); // sobe as malhas, nenhuma instância
+    struct AssetNode {
+        uint32_t node = 0, mesh = 0;
+        Mat4 matrix{1.0f};
+        std::string name;
+    };
+    std::vector<AssetNode> assetNodes(const std::string& path) const;
+    const ModelAsset* asset(const std::string& path) const;
+    const ModelMeshGPU* meshAt(uint32_t index) const { return index < m_meshes.size() ? &m_meshes[index] : nullptr; }
+    bool isSkinBase(uint32_t mesh) const { return m_skinBases.count(mesh) != 0; }
+    int addPreviewSkin(uint32_t baseMesh);   // id (-1: a malha não tem skin)
+    uint32_t previewSkinMesh(int id);         // malha animada a desenhar
+    std::vector<std::string> previewSkinAnimations(int id);
+    void playPreviewSkin(int id, int anim, float speed); // anim < 0: pose de repouso
+    void removePreviewSkin(int id);
+
 private:
     struct SkinBase {
         std::shared_ptr<const SkinRig> rig;
@@ -547,7 +565,12 @@ private:
         int anim = -1;
         float time = 0.0f, speed = 1.0f;
         bool loop = true;
+        uint32_t previewId = 0; // cópia do visualizador (instance == kNoInstance)
     };
+    static constexpr uint32_t kNoInstance = 0xFFFFFFFFu;
+    uint32_t m_previewSkinSeq = 0;
+    bool createSkinned(uint32_t baseMesh, SkinnedInstance& out);
+    SkinnedInstance* previewSkin(int id);
     std::unordered_map<uint32_t, SkinBase> m_skinBases; // malha base -> skin
     std::vector<SkinnedInstance> m_skinned;
     std::unordered_map<uint32_t, size_t> m_skinnedByInstance;

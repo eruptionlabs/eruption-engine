@@ -746,6 +746,10 @@ void Editor::drawInspector() {
             }
             propertyLabel("Asset");
             ImGui::TextWrapped("%s", inst.assetPath.empty() ? "(embedded in the map)" : inst.assetPath.c_str());
+            if (!inst.assetPath.empty()) {
+                ImGui::Dummy(ImVec2(0, 0));
+                if (ImGui::Button(tr("Open in Model Viewer"))) openModelViewer(inst.assetPath, static_cast<int>(inst.nodeIndex));
+            }
             const Vec3 size = inst.worldAabbMax - inst.worldAabbMin;
             propertyLabel("Size");
             ImGui::Text(tr("%.2f x %.2f x %.2f"), size.x, size.y, size.z);
@@ -944,11 +948,14 @@ void Editor::drawProject() {
                 if (!dbl) return;
                 if (it.dir) m_projectDir = it.path;
                 else if (it.path.extension() == ".luau") codeOpen(it.path);
+                else if (it.path.extension() == ".glb") openModelViewer(it.path.string(), -1);
                 else openInExternalEditor(it.path);
             };
             auto contextMenu = [&](const Item& it) {
                 if (ImGui::BeginPopupContextItem()) {
                     if (!it.dir && it.path.extension() == ".luau" && ImGui::MenuItem(tr("Edit here"))) codeOpen(it.path);
+                    if (!it.dir && it.path.extension() == ".glb" && ImGui::MenuItem(tr("Open in Model Viewer")))
+                        openModelViewer(it.path.string(), -1);
                     if (!it.dir && it.path.extension() == ".png") {
                         if (ImGui::MenuItem(tr("Import as Sprite Sheet..."))) openSpriteImporter(it.path.string());
                         if (ImGui::MenuItem(tr("Use as Player Sprite"))) usePlayerSprite(it.path.string(), true);

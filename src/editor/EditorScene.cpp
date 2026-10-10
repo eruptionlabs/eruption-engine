@@ -37,6 +37,7 @@ bool sameLight(const PointLight& a, const PointLight& b) {
 
 void Editor::onMapReady() {
     m_isolated.clear(); // índices do mapa anterior
+    m_modelPreview.close(); // as malhas do mapa anterior saíram da GPU
     const auto& insts = m_engine->modelRenderer().getInstances();
     m_original = MapOriginal{};
     m_original.count = insts.size();
