@@ -831,7 +831,12 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_running = true;
 
     m_debugModelPivots = false;
-    m_devTools = ERUPTION_EDITOR || std::getenv("ERUPTION_DEV") != nullptr;
+    // FERRAMENTA DE BANCADA (atalhos, painel de controle, barras do heroi,
+    // minimapa). Vale no EDITOR; rodando como JOGO o motor se comporta como
+    // o jogo exportado, mesmo neste binario - senao nenhuma captura de demo
+    // sai limpa e o autor ve' a propria bancada por cima do jogo dele.
+    // ERUPTION_DEV=1 traz tudo de volta no modo jogo.
+    m_devTools = (ERUPTION_EDITOR && m_editorMode) || std::getenv("ERUPTION_DEV") != nullptr;
     m_showDebugOverlay = m_devTools;
     setHudBars(m_devTools);
     setMinimapHud(m_devTools);
