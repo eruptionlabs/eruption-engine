@@ -124,6 +124,7 @@ third_party/bc7enc_rdo/
 build-rel/
 build-dbg/
 build-export/
+build-compat/
 demo_out/
 
 # ---- Tudo que NAO vai para o git fica em not_commit/ (raiz e por pasta) ----
