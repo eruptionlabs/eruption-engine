@@ -986,7 +986,16 @@ bool VulkanContext::createSwapchain() {
     createInfo.imageColorSpace = surfaceFormat.colorSpace;
     createInfo.imageExtent = extent;
     createInfo.imageArrayLayers = 1;
+    // TRANSFER_SRC: a captura de tela copia a imagem do swapchain (e' o unico
+    // jeito de a foto sair com o que o ImGui desenhou por cima). A surface NAO
+    // e' obrigada a permitir isso, entao pedimos so' se ela declarar - sem a
+    // checagem, a camada de validacao acusa
+    // VUID-vkCmdCopyImageToBuffer-srcImage-00186 e a copia e' invalida.
+    // Quem nao tem cai no caminho antigo (foto da saida do post, sem UI).
+    m_swapSupportsCopy =
+        (swapchainSupport.capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (m_swapSupportsCopy) createInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     uint32_t queueFamilyIndices[] = {m_queueFamilies.graphicsFamily, m_queueFamilies.presentFamily};
     if (m_queueFamilies.graphicsFamily != m_queueFamilies.presentFamily) {

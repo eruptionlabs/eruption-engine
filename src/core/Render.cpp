@@ -1835,7 +1835,7 @@ void Engine::render() {
     // passe e' invalido em Vulkan, e na pratica a copia saia sem NADA do que
     // o ImGui desenhou - balao de fala, mensagem de script, HUD, interface
     // do jogo. Toda captura em modo jogo vinha so' com a cena 3D.
-    if (m_screenshotPending && m_screenshotStaging == VK_NULL_HANDLE) {
+    if (m_screenshotPending && m_screenshotStaging == VK_NULL_HANDLE && m_vulkan.swapSupportsCopy()) {
         uint32_t ssW = m_vulkan.swapExtent().width, ssH = m_vulkan.swapExtent().height;
         m_screenshotStagingW = ssW;
         m_screenshotStagingH = ssH;
@@ -2423,7 +2423,15 @@ void Engine::render() {
             // finishPendingScreenshot(), depois de gravar o PNG e destruir o
             // staging - o frame a mais evita tanto o PNG sem UI quanto o
             // vazamento que o caminho antigo temia.
-            scheduleScreenshotFromSwap(m_screenshotOnLoad);
+            if (m_vulkan.swapSupportsCopy()) {
+                scheduleScreenshotFromSwap(m_screenshotOnLoad);
+            } else {
+                // Surface sem TRANSFER_SRC: sobra a saida do post, que nao ve'
+                // a interface. Avisa, para ninguem achar que a UI sumiu.
+                ERUPTION_LOG_WARN("[TEST] swapchain nao permite copia: a captura sai SEM a interface");
+                takeScreenshot(m_screenshotOnLoad);
+                if (m_enableAutoExit) m_running = false;
+            }
         }
     }
 

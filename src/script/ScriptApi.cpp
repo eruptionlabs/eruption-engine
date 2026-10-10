@@ -223,6 +223,19 @@ int world_load_map(lua_State* L) {
     }
     return 0;
 }
+// Troca de mapa SEM espera: a leitura do mapa novo acontece numa thread, e
+// a troca entra sozinha quando termina (poucos ms na linha principal). O
+// jogo chama isso quando o jogador ENTRA na boca da passagem, e quando ele
+// chega do outro lado o mapa ja' trocou. Ver Engine::updateWarp.
+int world_warp_map(lua_State* L) {
+    eng().setPendingMapWarp(luaL_checkstring(L, 1));
+    return 0;
+}
+int world_warping(lua_State* L) {
+    lua_pushboolean(L, eng().warpLoading());
+    return 1;
+}
+
 int world_ground_height(lua_State* L) {
     lua_pushnumber(L, eng().sampleTerrainHeight(static_cast<float>(luaL_checknumber(L, 1)),
                                                 static_cast<float>(luaL_checknumber(L, 2))));
@@ -888,7 +901,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
         {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof},
-        {"ground_height", world_ground_height}, {"map", world_map}, {"load_map", world_load_map}, {nullptr, nullptr}};
+        {"ground_height", world_ground_height}, {"map", world_map}, {"load_map", world_load_map},
+        {"warp_map", world_warp_map}, {"warping", world_warping}, {nullptr, nullptr}};
     static const luaL_Reg player[] = {
         {"position", player_position}, {"set_position", player_set_position}, {"set_sprite", player_set_sprite}, {"near", player_near},
         {"inside", player_inside}, {"say", player_say}, {"play", player_play}, {"animation", player_animation},
@@ -1034,6 +1048,11 @@ declare world: {
     -- Goes to another map (a door, a cave); the player appears at `position`
     -- (default: the map's Player Start).
     load_map: (map: string, position: vector?) -> (),
+    -- Same, but WITHOUT the wait: the next map is read in a thread and slots
+    -- in by itself when ready (a few ms on the main thread). Call it when the
+    -- player walks into the mouth of the passage, not when they reach it.
+    warp_map: (map: string) -> (),
+    warping: () -> boolean,
 }
 
 -- Saved games: map, player position, vars, time, weather and music, kept in the

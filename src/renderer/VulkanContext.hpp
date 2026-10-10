@@ -92,6 +92,10 @@ public:
     // Swapchain
     VkExtent2D swapExtent() const { return m_swapExtent; }
     VkFormat swapFormat() const { return m_swapFormat; }
+    // A surface deixa COPIAR a imagem do swapchain? Falso em plataforma que
+    // nao declara TRANSFER_SRC: quem quiser screenshot tem que usar outro
+    // alvo (a saida do post), e sem a UI por cima.
+    bool swapSupportsCopy() const { return m_swapSupportsCopy; }
     uint32_t swapImageCount() const { return static_cast<uint32_t>(m_swapImages.size()); }
     VkSwapchainKHR swapchain() const { return m_swapchain; }
     VkImageView swapImageView(uint32_t index) const { return m_swapViews[index]; }
@@ -217,6 +221,7 @@ private:
 
     // Swapchain
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
+    bool m_swapSupportsCopy = false;
     VkFormat m_swapFormat = VK_FORMAT_UNDEFINED;
     VkExtent2D m_swapExtent = {};
     std::vector<VkImage> m_swapImages;
