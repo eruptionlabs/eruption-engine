@@ -138,17 +138,14 @@ not_commit/
 !data/climate/
 !data/climate/**
 
-# Mapas parana_field (modelos originais, de estresse) e parana_field_lite
-# (modelos reduzidos) vao para o repo; o bake .etexpack continua fora.
-!assets/external/
-assets/external/*
-!assets/external/parana_field/
-!assets/external/parana_field_lite/
-assets/external/parana_field*/*.etexpack
-assets/external/parana_field*/*.etexpack.tmp
-
-# Os .glb (409 MB e 213 MB; limite do GitHub e 100 MB) vem como asset de release, nao pelo git.
-assets/external/parana_field*/*.glb
+# Mapas do motor ficam fora do repo (assets/external). O projeto de exemplo
+# projects/parana_field vai inteiro, menos o pesado: os .glb (409 MB e 213 MB;
+# limite do GitHub e 100 MB) vem como asset de release e o bake .etexpack e'
+# gerado na primeira abertura.
+!projects/*/assets/external/
+projects/**/*.glb
+projects/**/*.etexpack
+projects/**/*.etexpack.tmp
 eruption-sprite-shadow-harness
 eruption-pbr-tests
 

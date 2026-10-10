@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Downloads the parana_field_lite demo map (.glb) from the GitHub release and
-# extracts it into assets/external/parana_field_lite/ (the asset predates the
+# extracts it into projects/parana_field/assets/external/parana_field_lite/ (the asset predates the
 # rename and still holds parana_field.glb). The CMake configure does the
 # same thing automatically when the file is missing; this is the manual path.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 URL="${ERUPTION_DEMO_MAP_URL:-https://github.com/eruptionlabs/eruption-engine/releases/download/demo-map/parana_field.zip}"
 SHA256="40396b6ac5f3d97fb6ad636d8d6d6284a7f8c750f5a54c74ddd9695533a214a3"
-GLB="$ROOT/assets/external/parana_field_lite/parana_field_lite.glb"
+GLB="$ROOT/projects/parana_field/assets/external/parana_field_lite/parana_field_lite.glb"
 
 if [ -f "$GLB" ] && [ "${1:-}" != "--force" ]; then
     echo "Demo map already present: $GLB (use --force to download again)"
