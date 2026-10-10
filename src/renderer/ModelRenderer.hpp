@@ -4,6 +4,7 @@
 #include "renderer/BindlessDescriptor.hpp"
 #include "renderer/MipmapGenerator.hpp"
 #include "renderer/ModelData.hpp"
+#include "utils/MeshLod.hpp"
 #include "utils/PbrTextureLoader.hpp"
 #include "utils/PbrMaterialProfile.hpp"
 #include "math/Frustum.hpp"
@@ -557,6 +558,23 @@ private:
     glm::mat4* m_jointMapped = nullptr;
     static constexpr uint32_t kJointsPerFrame = 16384;
     bool m_skinGpuFailed = false;
+    // LOD de uma malha: entrada copiada no laço de montagem, calculado em
+    // paralelo (computeLod) e subido junto (applyLods).
+    struct LodBuild {
+        uint32_t mesh = 0;
+        std::vector<struct TerrainVertex> vertices;
+        std::vector<uint32_t> indices;
+        bool sway = false, ground = false;
+        float extent = 0.0f;
+        std::string material;
+        std::vector<unsigned char> loVerts, farVerts; // cartões podados: vértices próprios
+        std::vector<uint32_t> lo, far, sh;
+        float loSwitch = 0.0f, farSwitch = 0.0f;
+        MeshLodResult loRes, farRes, shRes; // as três partes, antes de decidir
+    };
+    void computeLodPart(LodBuild& b, int part) const;
+    void finishLod(LodBuild& b) const;
+    void applyLods(std::vector<LodBuild>& builds);
     void registerSkinBase(uint32_t mesh, const ModelAsset& asset, const ModelNode& node,
                           const std::vector<struct TerrainVertex>& vertices);
     void makeSkinnedInstance(uint32_t instance);

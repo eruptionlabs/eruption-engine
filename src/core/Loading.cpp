@@ -74,26 +74,19 @@ void Engine::presentLoadingScreen(const std::string& mapName, const std::string&
 // ------------------------------------------------------------------
 
 void Engine::renderLoadingProgress() {
-    // Show progress while there is an active background load OR a staging map not yet swapped
-    bool hasActiveLoad = m_backgroundLoader && m_backgroundLoader->isLoading();
-    bool hasStagingMap = m_stagingMapContext && (!m_stagingMapContext->isGpuReady() || m_mapSwapPending);
+    // Barra enquanto um mapa é lido em segundo plano (troca pelo seletor).
+    const bool hasActiveLoad = m_warpJobActive;
     // A weather cloud field still draining its spawn queue counts as loading:
     // spawn warm-up belongs behind the loading overlay, not as an in-game hitch.
     const bool hasPendingClouds = !m_pendingCloudSpawns.empty();
-    if (!hasActiveLoad && !hasStagingMap && !hasPendingClouds) return;
+    if (!hasActiveLoad && !hasPendingClouds) return;
 
     float progress = 0.0f;
     std::string task = "Loading...";
-    std::string mapName = m_backgroundLoader ? m_backgroundLoader->currentMapName() : "";
+    std::string mapName = m_warpJobMap;
 
-    if (m_stagingMapContext) {
-        progress = m_stagingMapContext->totalProgress();
-        mapName = m_stagingMapContext->mapName;
-        if (!m_stagingMapContext->isCpuReady()) task = "Parsing map data";
-        else if (!m_stagingMapContext->isGpuReady()) task = "Uploading to GPU";
-        else task = "Finalizing";
-    } else if (hasActiveLoad) {
-        progress = m_backgroundLoader->progress() * 0.5f;
+    if (hasActiveLoad) {
+        progress = 0.4f;
         task = "Loading map data";
     } else {
         // Only cloud spawns pending: near-full bar until the field is up.
