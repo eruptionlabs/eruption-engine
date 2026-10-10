@@ -39,7 +39,14 @@ bool Editor::openModelViewer(const std::string& path, int node) {
 
 void Editor::drawModelViewer() {
     if (!m_showModelViewer) return;
-    ImGui::SetNextWindowSize(ImVec2(900, 560), ImGuiCond_FirstUseEver);
+    if (m_viewerFullscreen) {
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(vp->WorkPos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(vp->WorkSize, ImGuiCond_Always);
+        ImGui::SetNextWindowFocus();
+    } else {
+        ImGui::SetNextWindowSize(ImVec2(900, 560), ImGuiCond_FirstUseEver);
+    }
     if (!ImGui::Begin(trw("Model Viewer###ModelViewer"), &m_showModelViewer)) {
         ImGui::End();
         return;

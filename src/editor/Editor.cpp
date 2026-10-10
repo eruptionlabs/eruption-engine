@@ -811,6 +811,7 @@ void Editor::update(float dt) {
             else if (what == "viewer_lod") m_modelPreview.lod = static_cast<ModelPreview::Lod>(std::atoi(arg.c_str()) & 3);
             else if (what == "viewer_mode") m_modelPreview.mode = static_cast<ModelPreview::Mode>(std::atoi(arg.c_str()) & 3);
             else if (what == "viewer_wire") m_modelPreview.wireframe = true;
+            else if (what == "viewer_full") m_viewerFullscreen = true;
             else if (what == "viewer_anim") m_modelPreview.animation = std::atoi(arg.c_str());
             else if (what == "cmd") m_commands.run(arg);
             else if (what == "palette") {

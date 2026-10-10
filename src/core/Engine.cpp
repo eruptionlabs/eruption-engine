@@ -1983,6 +1983,8 @@ void Engine::applyGraphicsPreset() {
     // parte dos pixels do mapa; o teto é o botão mais direto de VRAM. Vale
     // para as texturas EMBUTIDAS do GLB (é onde estão os sheets grandes).
     m_textureMaxSize = std::clamp<int>(p.value("texture_max_size", 1024), 128, 4096);
+    // ERUPTION_TEST_TEXTURE_MAX_SIZE (capturas): teto de textura acima do preset.
+    if (const char* e = std::getenv("ERUPTION_TEST_TEXTURE_MAX_SIZE")) m_textureMaxSize = std::clamp(std::atoi(e), 128, 8192);
     setEmbeddedTextureMaxSize(static_cast<uint32_t>(m_textureMaxSize));
 
     // LOD geométrico (mipmap para malha). Orçamento em MB limita a memória

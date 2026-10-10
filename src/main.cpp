@@ -1,3 +1,4 @@
+#include <cstdio>
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
 #include "game/DefaultApplication.hpp"
@@ -53,7 +54,16 @@ int main(int argc, char** argv) {
     eruption::Engine engine;
     engine.setEditorMode(eruption::wantsEditor(argc, argv));
     ERUPTION_LOG_INFO("[MAIN] Engine init starting...");
-    if (!engine.init(1280, 720, engine.editorMode() ? "Eruption Editor" : "Eruption Engine")) {
+    // ERUPTION_WINDOW_SIZE=<L>x<A>: tamanho da janela (capturas em alta resolução).
+    int winW = 1280, winH = 720;
+    if (const char* ws = std::getenv("ERUPTION_WINDOW_SIZE")) {
+        int w = 0, h = 0;
+        if (std::sscanf(ws, "%dx%d", &w, &h) == 2 && w >= 320 && h >= 200) {
+            winW = w;
+            winH = h;
+        }
+    }
+    if (!engine.init(winW, winH, engine.editorMode() ? "Eruption Editor" : "Eruption Engine")) {
         ERUPTION_LOG_FATAL("Engine initialization failed");
         return 1;
     }
