@@ -242,7 +242,9 @@ void DefaultApplication::onUpdate(float deltaTime) {
     }
     if (m_scripts) m_scripts->poll();
     if (m_editor) {
-        m_editor->update(deltaTime);
+        // O editor (câmera, interface) anda no tempo real: na pausa o mundo para,
+        // mas dá para continuar voando e olhando.
+        m_editor->update(m_engine ? m_engine->timer().realDeltaTime() : deltaTime);
         // Scripts começam no Play e param no Stop; a pausa só congela.
         if (m_scripts && m_editor->inPlayMode() != m_scriptsPlaying) {
             m_scriptsPlaying = m_editor->inPlayMode();
