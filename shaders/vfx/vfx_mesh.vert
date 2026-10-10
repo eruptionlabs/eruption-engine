@@ -9,6 +9,7 @@
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUv;
+layout(location = 3) in vec2 inShade; // x oclusao do relevo, y face de fratura
 
 layout(location = 0) out vec3 v_normal;
 layout(location = 1) out vec2 v_uv;
@@ -18,6 +19,8 @@ layout(location = 4) out vec3 v_worldPos;
 layout(location = 5) out vec4 v_clip;
 layout(location = 6) out vec4 v_prevClip;
 layout(location = 7) flat out float v_emissive;
+layout(location = 8) out vec3 v_obj;   // posicao na malha (detalhe da superficie)
+layout(location = 9) out vec2 v_shade;
 
 // Matrizes sem jitter do frame atual e do anterior (velocidade no G-buffer):
 // a malha e' desenhada no passe de geometria, antes da simulacao deste frame.
@@ -37,13 +40,28 @@ mat3 axisAngle(vec3 a, float ang) {
 void main() {
     uint idx = renderList[pc.listOffset + gl_InstanceIndex];
     RenderRec r = recs[idx];
+    uint seed = r.sheet.w;
     mat3 R = axisAngle(unpackOct(r.look.w), unpackHalf2x16(r.look.z).x);
-    vec3 world = r.posSize.xyz + R * (inPos * r.posSize.w);
-    v_normal = R * inNormal;
+    // Cada particula com a sua forma e o seu tom: escala por eixo e brilho
+    // sorteados da semente (a mesma malha vira pedras diferentes).
+    vec3 sc = vec3(1.0, mix(0.55, 1.0, rand01(seed, 51u)), mix(0.7, 1.1, rand01(seed, 52u)));
+    // Fim da vida: a pedra encolhe ate' sumir (o alfa da cor manda). Mais
+    // limpo que pontilhado, que vira xadrez quando o TAA nao resolve.
+    float a = unpackHalf2x16(r.look.y).y;
+    // Encolhe pelo ponto de apoio (a casca de baixo), nao pelo centro: a
+    // pedra no chao afunda sumindo em vez de flutuar encolhendo.
+    float k = smoothstep(0.0, 1.0, a);
+    vec3 world = r.posSize.xyz - vec3(0.0, (1.0 - k) * r.posSize.w * 0.6, 0.0) + R * (inPos * sc * r.posSize.w * k);
+    v_normal = R * normalize(inNormal / sc);
     v_uv = inUv;
     v_color = vec4(unpackHalf2x16(r.look.x), unpackHalf2x16(r.look.y));
+    float tone = mix(0.7, 1.2, rand01(seed, 53u));
+    float warm = rand01(seed, 54u) * 2.0 - 1.0;
+    v_color.rgb *= tone * vec3(1.0 + 0.07 * warm, 1.0, 1.0 - 0.07 * warm);
     v_tex = r.sheet.x;
     v_worldPos = world;
+    v_obj = inPos * 2.5 + vec3(rand01(seed, 55u), rand01(seed, 56u), rand01(seed, 57u)) * 37.0;
+    v_shade = inShade;
     vec2 dz = unpackHalf2x16(r.sheet.y);
     vec3 disp = vec3(unpackHalf2x16(r.sheet.z), dz.x);
     v_emissive = dz.y;

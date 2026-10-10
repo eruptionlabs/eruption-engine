@@ -74,6 +74,8 @@ void main() {
         bool natural = alive && p.age >= p.life; // morreu de velhice (nao por remocao)
         alive = alive && p.age < p.life;
         bool collided = false;
+        float impact = 0.0; // velocidade contra a superficie na batida
+        uint meshE = (e.flags.x >> VFXF_MESH_SHIFT) & 0xFu;
         if (alive) {
             // Forcas
             // Efeito descrito em metros; a escala da instancia (rot0.w)
@@ -87,11 +89,16 @@ void main() {
             p.vel += acc * dt;
             p.vel *= 1.0 / (1.0 + e.gravityDrag.w * dt); // arrasto estavel com qualquer dt
             vec3 next = p.pos + p.vel * dt;
+            // Malha pousa pela casca, nao pelo centro (sprite: rente).
+            float rest = meshE != 0u
+                ? unpackHalf2x16(p.sizeRot).x * sampleSizeLut(e, clamp(p.age / p.life, 0.0, 1.0)) * 0.6
+                : 0.02;
 
             // Plano horizontal (chao simples, agua, mesa)
-            if ((e.flags.x & VFXF_COLLIDE_PLANE) != 0u && next.y < e.collide.x) {
-                next.y = e.collide.x;
+            if ((e.flags.x & VFXF_COLLIDE_PLANE) != 0u && next.y < e.collide.x + rest) {
+                next.y = e.collide.x + rest;
                 collided = true;
+                impact = max(-p.vel.y, 0.0);
                 p.vel.y = abs(p.vel.y) * e.noise.w;
                 p.vel.xz *= 1.0 - e.collide.y;
                 p.age += p.life * e.collide.z;
@@ -100,7 +107,12 @@ void main() {
             // malhas, personagens). Fora da tela ou atras da superficie mais
             // que a espessura, segue livre - limitacao conhecida da tecnica.
             if ((e.flags.x & VFXF_COLLIDE_DEPTH) != 0u && frame.depthInfo.w > 0.5) {
-                vec4 c = frame.viewProj * vec4(next, 1.0);
+                // Ponto de contato: a casca no rumo da gravidade (malha), o
+                // centro (sprite). Testar o centro deixava a pedra cair a
+                // casca inteira antes de bater - pulava parada no chao.
+                vec3 g = e.gravityDrag.xyz;
+                vec3 probe = next + (dot(g, g) > 1e-8 ? normalize(g) : vec3(0.0, -1.0, 0.0)) * (rest - 0.02);
+                vec4 c = frame.viewProj * vec4(probe, 1.0);
                 if (c.w > 0.0) {
                     vec3 ndc = c.xyz / c.w;
                     vec2 uv = ndc.xy * 0.5 + 0.5;
@@ -109,18 +121,19 @@ void main() {
                         if (d < 1.0 && ndc.z > d) {
                             vec3 surf = worldFromDepth(uv, d);
                             float thickness = max(0.5 * e.rot0.w, length(p.vel) * dt * 2.0);
-                            if (distance(surf, next) < thickness) {
+                            if (distance(surf, probe) < thickness) {
                                 vec2 px = 1.0 / frame.depthInfo.xy;
                                 vec3 sx = worldFromDepth(uv + vec2(px.x, 0.0), textureLod(sceneDepth, uv + vec2(px.x, 0.0), 0.0).r);
                                 vec3 sy = worldFromDepth(uv + vec2(0.0, px.y), textureLod(sceneDepth, uv + vec2(0.0, px.y), 0.0).r);
                                 vec3 n = normalize(cross(sx - surf, sy - surf));
                                 if (dot(n, frame.camPos.xyz - surf) < 0.0) n = -n;
                                 float vn = dot(p.vel, n);
+                                impact = max(impact, -vn);
                                 if (vn < 0.0) {
                                     vec3 vt = p.vel - vn * n;
                                     p.vel = vt * (1.0 - e.collide.y) - vn * n * e.noise.w;
                                 }
-                                next = surf + n * 0.02;
+                                next = surf + n * rest;
                                 collided = true;
                                 p.age += p.life * e.collide.z;
                             }
@@ -129,11 +142,23 @@ void main() {
                 }
             }
             p.pos = next;
+            if (meshE != 0u) {
+                // Giro acumulado (nao idade x velocidade): a batida rouba giro
+                // e a pedra parada no chao para de rodar.
+                vec2 sr0 = unpackHalf2x16(p.sizeRot);
+                vec2 av0 = unpackHalf2x16(p.angVel);
+                if (collided) av0.x *= 0.55;
+                sr0.y = mod(sr0.y + av0.x * dt, 6.2831853);
+                p.sizeRot = packHalf2x16(sr0);
+                p.angVel = packHalf2x16(av0);
+            }
             natural = natural || (p.age >= p.life);
             alive = p.age < p.life;
             particles[idx] = p;
-            // Sub-emissor na batida.
-            if (collided && e.events.y != 0u) {
+            // Sub-emissor na batida: so' impacto de verdade (a particula
+            // parada no chao "bate" todo frame e virava chuva de eventos).
+            float minImpact = max(length(e.gravityDrag.xyz) * e.rot0.w * dt * 3.0, 0.8 * e.rot0.w);
+            if (collided && impact > minImpact && e.events.y != 0u) {
                 float prob = float((e.events.w >> 8) & 0xFFu) / 255.0;
                 uint s = pcg(p.seed ^ floatBitsToUint(p.age));
                 if (rand01(s, 31u) < prob)
@@ -179,11 +204,15 @@ void main() {
                 vec3 disp = p.vel * dt;
                 RenderRec rec;
                 rec.posSize = vec4(p.pos, size);
-                rec.look = uvec4(packHalf2x16(col.rg), packHalf2x16(col.ba), packHalf2x16(vec2(sr.y + av.x * p.age, 0.0)),
-                                 packOct(axis));
-                rec.sheet = uvec4(e.flags.z, packHalf2x16(vec2(disp.z, e.render.x)), packHalf2x16(disp.xy), 0u);
+                rec.look = uvec4(packHalf2x16(col.rg), packHalf2x16(col.ba), packHalf2x16(vec2(sr.y, 0.0)), packOct(axis));
+                rec.sheet = uvec4(e.flags.z, packHalf2x16(vec2(disp.z, e.render.x)), packHalf2x16(disp.xy), p.seed);
                 rec.cutout = uvec4(0u);
                 recs[idx] = rec;
+                // LOD: pequena na tela (raio < 24 px) usa a versao de longe
+                // (80 triangulos ainda fecham a silhueta), que nao faz sombra.
+                uint lo = (e.flags.x >> VFXF_MESHLO_SHIFT) & 0xFu;
+                float rpx = size * frame.viewInfo.x / max(viewZ, 1e-3) * frame.depthInfo.y * 0.5;
+                if (lo != 0u && rpx < 24.0) meshId = lo;
                 uint m = meshId - 1u;
                 uint per = cap / VFX_MESH_TYPES;
                 uint ms = atomicAdd(counters[VFXC_MESH + m], 1u);

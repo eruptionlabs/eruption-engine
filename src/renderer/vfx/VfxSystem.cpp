@@ -165,6 +165,7 @@ bool VfxSystem::createBuffers() {
     destroyBuf(staging);
     m_cur = 0;
     m_setBuffersWritten.fill(false);
+    m_shadowSetWritten.fill(false);
     return true;
 }
 
@@ -204,8 +205,14 @@ bool VfxSystem::createDescriptors() {
     li.bindingCount = kBindings;
     li.pBindings = b;
     if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &m_setLayout) != VK_SUCCESS) return false;
+    VkDescriptorSetLayoutBinding sb[2]{};
+    sb[0] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+    sb[1] = {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+    li.bindingCount = 2;
+    li.pBindings = sb;
+    if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &m_shadowSetLayout) != VK_SUCCESS) return false;
 
-    const uint32_t n = VulkanContext::MAX_FRAMES_IN_FLIGHT * 2;
+    const uint32_t n = VulkanContext::MAX_FRAMES_IN_FLIGHT * 3;
     VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 13 * n},
                                      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, n},
                                      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * n}};
@@ -224,6 +231,8 @@ bool VfxSystem::createDescriptors() {
     ai.pSetLayouts = layouts.data();
     if (vkAllocateDescriptorSets(dev, &ai, m_sets.data()) != VK_SUCCESS) return false;
     if (vkAllocateDescriptorSets(dev, &ai, m_drawSets.data()) != VK_SUCCESS) return false;
+    layouts.fill(m_shadowSetLayout);
+    if (vkAllocateDescriptorSets(dev, &ai, m_shadowSets.data()) != VK_SUCCESS) return false;
 
     VkSamplerCreateInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -446,14 +455,15 @@ bool VfxSystem::createPipelines() {
             loadModule(dev, GBuffer::velocityEnabled() ? "vfx/vfx_mesh.frag.spv" : "vfx/vfx_mesh_novel.frag.spv");
         VkShaderModule mfwd = loadModule(dev, "vfx/vfx_mesh_fwd.frag.spv");
         const VkVertexInputBindingDescription vb{0, sizeof(VfxMeshVertex), VK_VERTEX_INPUT_RATE_VERTEX};
-        const VkVertexInputAttributeDescription va[3] = {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+        const VkVertexInputAttributeDescription va[4] = {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
                                                          {1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},
-                                                         {2, 0, VK_FORMAT_R32G32_SFLOAT, 24}};
+                                                         {2, 0, VK_FORMAT_R32G32_SFLOAT, 24},
+                                                         {3, 0, VK_FORMAT_R32G32_SFLOAT, 32}};
         VkPipelineVertexInputStateCreateInfo mvi{};
         mvi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         mvi.vertexBindingDescriptionCount = 1;
         mvi.pVertexBindingDescriptions = &vb;
-        mvi.vertexAttributeDescriptionCount = 3;
+        mvi.vertexAttributeDescriptionCount = 4;
         mvi.pVertexAttributeDescriptions = va;
         gi.pVertexInputState = &mvi;
         gi.layout = m_meshLayout;
@@ -485,7 +495,40 @@ bool VfxSystem::createPipelines() {
             ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
             r = vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_meshFwdPipe);
         }
-        for (VkShaderModule m : {mvs, mfs, mfwd})
+        // Sombra: so' vertice (profundidade no atlas da cascata). Opcional: sem
+        // ela as malhas so' nao fazem sombra.
+        VkShaderModule msh = r == VK_SUCCESS ? loadModule(dev, "vfx/vfx_mesh_shadow.vert.spv") : VK_NULL_HANDLE;
+        VkPipelineLayoutCreateInfo spl{};
+        spl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        spl.setLayoutCount = 1;
+        spl.pSetLayouts = &m_shadowSetLayout;
+        spl.pushConstantRangeCount = 1;
+        spl.pPushConstantRanges = &meshPush;
+        if (msh && vkCreatePipelineLayout(dev, &spl, nullptr, &m_meshShadowLayout) == VK_SUCCESS) {
+            VkPipelineShaderStageCreateInfo sst = st[0];
+            sst.module = msh;
+            VkPipelineColorBlendStateCreateInfo nocb{};
+            nocb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            mvi.vertexAttributeDescriptionCount = 1;
+            gi.stageCount = 1;
+            gi.pStages = &sst;
+            gi.layout = m_meshShadowLayout;
+            gi.pColorBlendState = &nocb;
+            ds.depthWriteEnable = VK_TRUE;
+            ds.depthCompareOp = VK_COMPARE_OP_LESS;
+            ri.colorAttachmentCount = 0;
+            ri.pColorAttachmentFormats = nullptr;
+            ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+            if (vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_meshShadowPipe) !=
+                VK_SUCCESS)
+                m_meshShadowPipe = VK_NULL_HANDLE;
+            gi.stageCount = 2;
+            gi.pStages = st;
+            ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+            ri.colorAttachmentCount = 2;
+            ri.pColorAttachmentFormats = colorFormats;
+        }
+        for (VkShaderModule m : {mvs, mfs, mfwd, msh})
             if (m) vkDestroyShaderModule(dev, m, nullptr);
         gi.pVertexInputState = &vi;
         gi.pColorBlendState = &cb;
@@ -555,7 +598,7 @@ void VfxSystem::shutdown() {
     destroyBuffers();
     for (VkPipeline* p : {&m_emitPipe, &m_argsPipe, &m_simPipe, &m_finishPipe, &m_drawPipe, &m_drawLowPipe,
                           &m_compositePipe, &m_sortHistPipe, &m_sortScanPipe, &m_sortScatterPipe, &m_eventPipe,
-                          &m_meshPipe, &m_meshFwdPipe})
+                          &m_meshPipe, &m_meshFwdPipe, &m_meshShadowPipe})
         if (*p) vkDestroyPipeline(dev, *p, nullptr), *p = VK_NULL_HANDLE;
     destroyReactive();
     destroyBuf(m_ringIndex);
@@ -579,6 +622,11 @@ void VfxSystem::shutdown() {
     if (m_drawLayout) vkDestroyPipelineLayout(dev, m_drawLayout, nullptr);
     if (m_pool) vkDestroyDescriptorPool(dev, m_pool, nullptr);
     if (m_setLayout) vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
+    if (m_shadowSetLayout) vkDestroyDescriptorSetLayout(dev, m_shadowSetLayout, nullptr);
+    if (m_meshShadowLayout) vkDestroyPipelineLayout(dev, m_meshShadowLayout, nullptr);
+    m_shadowSetLayout = VK_NULL_HANDLE;
+    m_meshShadowLayout = VK_NULL_HANDLE;
+    m_shadowSetWritten.fill(false);
     if (m_depthSampler) vkDestroySampler(dev, m_depthSampler, nullptr);
     m_computeLayout = m_drawLayout = VK_NULL_HANDLE;
     m_pool = VK_NULL_HANDLE;
@@ -840,6 +888,10 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
         const uint32_t id = meshId(e.mesh);
         flags |= (id & 0xFu) << 16;
         if (id) m_meshMask |= 1u << (id - 1);
+        // Versao de longe (so' as embutidas tem).
+        const uint32_t lo = id && e.mesh.rfind("builtin:", 0) == 0 ? meshId(e.mesh + "#lo") : 0u;
+        flags |= (lo & 0xFu) << 20;
+        if (lo) m_meshMask |= 1u << (lo - 1);
     }
     const VfxTextureInfo& tex = texture(e.texture, e.flipCols, e.flipRows);
     o.flags = glm::uvec4(flags, m_slotGen[slot], tex.slot, (e.flipCols & 0xFFu) | ((e.flipRows & 0xFFu) << 8));
@@ -1484,6 +1536,7 @@ uint32_t VfxSystem::meshId(const std::string& name) {
     if (m_meshes.size() >= kMeshTypes) return 0;
     GpuMesh gm;
     gm.name = name;
+    gm.lod = name.size() > 3 && name.compare(name.size() - 3, 3, "#lo") == 0;
     VfxMeshData data;
     if (!makeVfxBuiltinMesh(name, data)) {
         ERUPTION_LOG_WARN("[VFX] malha de particula desconhecida: %s (desenha como sprite)", name.c_str());
@@ -1534,6 +1587,41 @@ void VfxSystem::drawMeshes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2
     if (m_anyLowRes && !ensureLowResTarget(m_renderSize)) m_anyLowRes = false;
     writeDescriptors(m_ctx->currentFrame(), depthView);
     recordMeshes(cmd, m_meshPipe, extent, viewProjNoJitter, prevViewProjNoJitter);
+}
+
+void VfxSystem::drawMeshShadows(VkCommandBuffer cmd, const Mat4& lightViewProj) {
+    if (!meshesPending() || !m_meshShadowPipe) return;
+    const uint32_t frame = m_ctx->currentFrame();
+    if (!m_shadowSetWritten[frame]) {
+        const VkDescriptorBufferInfo bi[2] = {{m_render.buf, 0, VK_WHOLE_SIZE}, {m_recs.buf, 0, VK_WHOLE_SIZE}};
+        VkWriteDescriptorSet w[2]{};
+        for (uint32_t i = 0; i < 2; ++i) {
+            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet = m_shadowSets[frame];
+            w[i].dstBinding = i == 0 ? 4u : 14u;
+            w[i].descriptorCount = 1;
+            w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[i].pBufferInfo = &bi[i];
+        }
+        vkUpdateDescriptorSets(m_ctx->device(), 2, w, 0, nullptr);
+        m_shadowSetWritten[frame] = true;
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshShadowPipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshShadowLayout, 0, 1, &m_shadowSets[frame], 0,
+                            nullptr);
+    MeshPush push{};
+    push.viewProjNoJitter = lightViewProj;
+    const uint32_t per = m_capacity / kMeshTypes;
+    for (uint32_t m = 0; m < m_meshes.size(); ++m) {
+        // A versao de longe (pedra de poucos pixels) nao faz sombra.
+        if (!(m_meshMaskSimulated & (1u << m)) || !m_meshes[m].indexCount || m_meshes[m].lod) continue;
+        push.listOffset = 4u * m_capacity + m * per;
+        vkCmdPushConstants(cmd, m_meshShadowLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
+        const VkDeviceSize off = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &m_meshes[m].vb.buf, &off);
+        vkCmdBindIndexBuffer(cmd, m_meshes[m].ib.buf, 0, VK_INDEX_TYPE_UINT16);
+        vkCmdDrawIndexedIndirect(cmd, m_counters.buf, VkDeviceSize(kCMeshDraw + m * 5) * 4, 1, 20);
+    }
 }
 
 void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& out) const {

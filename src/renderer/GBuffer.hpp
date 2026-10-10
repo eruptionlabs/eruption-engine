@@ -26,10 +26,14 @@ public:
     void resize(uint32_t width, uint32_t height);
 
     void beginPass(VkCommandBuffer cmd);
+    // Reabre o G-buffer ja' preenchido (sem limpar) para desenhar por cima
+    // depois de um passe que o leu - as particulas de malha entram depois da
+    // simulacao, que colide com a profundidade so' da cena.
+    void resumePass(VkCommandBuffer cmd);
     void endPass(VkCommandBuffer cmd);
 
     void transitionToRead(VkCommandBuffer cmd);
-    void transitionToWrite(VkCommandBuffer cmd);
+    void transitionToWrite(VkCommandBuffer cmd, bool preserve = false);
 
     VkImageView albedoView() const { return m_albedoView; }
     VkImageView normalView() const { return m_normalView; }
@@ -102,6 +106,7 @@ public:
     VkImageView velocityView() const { return m_velocityView; }
 
 private:
+    void beginRendering(VkCommandBuffer cmd, VkAttachmentLoadOp loadOp);
     static inline bool s_velocityEnabled = false;
     VulkanContext* m_ctx = nullptr;
     VkImage m_velocityImage = VK_NULL_HANDLE;

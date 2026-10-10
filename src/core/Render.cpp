@@ -730,7 +730,7 @@ void Engine::render() {
     }
 
     // Particulas: pedidos/emissores deste frame (so' CPU); a simulacao vem
-    // depois do G-buffer, mas as malhas de particula desenham dentro dele.
+    // depois do G-buffer, e as malhas de particula depois dela.
     m_vfx.setLighting(frameUbo.sunDir, frameUbo.sunColor, frameUbo.ambientSky);
     m_vfx.update(m_timer.deltaTime(), m_camera, renderExtent());
     {
@@ -795,8 +795,6 @@ void Engine::render() {
             m_spriteRenderer.renderSprites(cmd, frameUbo, m_spriteSystem.instanceBuffer(), spriteCount);
         }
     }
-    // Particulas de malha (detritos, estilhacos): opacas, no G-buffer.
-    m_vfx.drawMeshes(cmd, m_gbuffer.depthView(), renderExtent(), m_camera.viewProjNoJitter(), m_prevViewProjNoJitter);
     m_vulkan.endPipelineStats(cmd);
     m_gbuffer.endPass(cmd);
     m_vulkan.writeTimestamp(cmd, 3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
@@ -870,6 +868,17 @@ void Engine::render() {
     if (m_vfx.active()) {
         m_vulkan.writeTimestamp(cmd, 12, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         m_vfx.simulate(cmd, m_gbuffer.depthView());
+        // Particulas de malha (detritos, estilhacos): opacas, no G-buffer,
+        // DEPOIS da simulacao. A colisao le' a profundidade so' da cena - com
+        // a pedra nela, a pedra batia na propria imagem e o chao embaixo
+        // dela ficava escondido. De quebra desenham o passo DESTE frame.
+        if (m_vfx.meshesPending()) {
+            m_gbuffer.resumePass(cmd);
+            m_vfx.drawMeshes(cmd, m_gbuffer.depthView(), renderExtent(), m_camera.viewProjNoJitter(),
+                             m_prevViewProjNoJitter);
+            m_gbuffer.endPass(cmd);
+            m_gbuffer.transitionToRead(cmd);
+        }
         m_vulkan.writeTimestamp(cmd, 13, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         Profiler::addGpuTime("VFX Sim", m_vulkan.timestampDeltaMs(12, 13));
     }
