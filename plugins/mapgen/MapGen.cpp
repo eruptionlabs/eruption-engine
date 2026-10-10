@@ -274,6 +274,16 @@ const std::vector<StepInfo>& stepCatalog() {
         {"ridges", "Mountains (ridges)", "Sharp mountain ridges.",
          {{"scale", 500, 10, 5000, "Size of the ridges"}, {"height", 150, 0, 3000, "How tall"}, {"octaves", 4, 1, 8, "Detail"}},
          {}},
+        {"crater", "Crater (volcano)", "A ring of rock around a pit, in steps: the inside of a volcano.",
+         {{"radius", 0.34, 0.05, 0.8, "Mouth radius (fraction of the map)"},
+          {"rim", 180, 0, 2000, "How tall the wall around it is"},
+          {"depth", 260, 0, 3000, "How deep the pit goes"},
+          {"floors", 3, 1, 12, "Steps down the inside wall (the floors)"},
+          {"floor_flat", 0.55, 0.0, 0.95, "How flat each step is (0 = ramp)"},
+          {"rough", 0.35, 0.0, 1.0, "Rock noise on the wall"},
+          {"center_x", 0.5, 0.0, 1.0, "Mouth centre, across"},
+          {"center_z", 0.5, 0.0, 1.0, "Mouth centre, along"}},
+         {}},
         {"island", "Island", "Lowers the edges so the land sits in the middle.",
          {{"radius", 0.42, 0.05, 0.7, "Land radius (fraction of the map)"}, {"depth", 60, 0, 1000, "How much the edges sink"}},
          {}},
@@ -478,6 +488,45 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                     const float wx = (ox + x * scaleToWorld) / scale, wz = (oz + z * scaleToWorld) / scale;
                     const float n = s.type == "noise" ? fbm(wx, wz, oct, pers, 2.0f, seed) * 0.5f + 0.5f : ridged(wx, wz, oct, seed);
                     r.height[size_t(z) * r.w + x] += n * height;
+                }
+        } else if (s.type == "crater") {
+            // CRATERA. De fora para dentro: encosta subindo ate' a borda,
+            // depois a parede caindo em DEGRAUS ate' o fundo chato. Cada
+            // degrau e' um andar da dungeon - e' o que faz um vulcao por
+            // dentro ser jogavel a pe' em vez de um funil liso.
+            const float radius = float(s.get("radius", 0.34));
+            const float rim = float(s.get("rim", 180));
+            const float depth = float(s.get("depth", 260));
+            const int floors = std::max(1, int(s.get("floors", 3)));
+            const float flat = float(s.get("floor_flat", 0.55));
+            const float rough = float(s.get("rough", 0.35));
+            const float cx = float(s.get("center_x", 0.5)), cz = float(s.get("center_z", 0.5));
+            for (int z = 0; z < r.d; ++z)
+                for (int x = 0; x < r.w; ++x) {
+                    const float dx = float(x - A) / (n - 1) - cx, dz = float(z - A) / (n - 1) - cz;
+                    float dist = std::sqrt(dx * dx + dz * dz);
+                    // Borda irregular: a boca nao e' um circulo de compasso.
+                    if (rough > 0.0f) {
+                        const float ang = std::atan2(dz, dx);
+                        dist *= 1.0f + rough * 0.12f * fbm(std::cos(ang) * 2.0f, std::sin(ang) * 2.0f, 3, 0.5f, 2.0f, seed);
+                    }
+                    float& h = r.height[size_t(z) * r.w + x];
+                    if (dist >= radius) {
+                        // Fora: encosta do cone, alta na boca e caindo para longe.
+                        const float t = std::clamp((dist - radius) / std::max(0.05f, 0.5f - radius), 0.0f, 1.0f);
+                        h += rim * (1.0f - t) * (1.0f - t);
+                        continue;
+                    }
+                    // Dentro: 0 na borda, 1 no centro.
+                    const float t = 1.0f - dist / std::max(1e-4f, radius);
+                    const float passo = t * float(floors);
+                    const float degrau = std::floor(passo);
+                    const float dentro = passo - degrau;
+                    // `flat` = quanto do degrau e' patamar; o resto e' rampa.
+                    const float rampa = flat >= 0.999f ? 0.0f
+                                      : std::clamp((dentro - flat) / (1.0f - flat), 0.0f, 1.0f);
+                    const float nivel = (degrau + rampa * rampa * (3.0f - 2.0f * rampa)) / float(floors);
+                    h += rim - (rim + depth) * nivel;
                 }
         } else if (s.type == "island") {
             const float radius = float(s.get("radius", 0.42)), depth = float(s.get("depth", 60));

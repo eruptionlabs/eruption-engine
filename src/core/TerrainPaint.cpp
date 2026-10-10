@@ -6,6 +6,7 @@
 #include "core/Engine.hpp"
 
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "scene/SceneEdits.hpp"
 #include "utils/ImageUtils.hpp"
 
@@ -419,7 +420,10 @@ bool Engine::buildRegionSplat(WorldRegion& r, const std::vector<std::string>& la
     }
     uint32_t layerSlot[8] = {};
     for (size_t l = 0; l < layers.size() && l < 8; ++l) {
-        ImageData img = loadRawPNG(layers[l]);
+        // A camada vem do arquivo de cena com caminho RELATIVO (o mesmo que
+        // o jogo exportado usa), entao ela mora no projeto - nao na pasta do
+        // motor. Sem resolver aqui, mapa nenhum de projeto pinta o chao.
+        ImageData img = loadRawPNG(project::gameRef(layers[l]));
         if (!img.isValid()) {
             ERUPTION_LOG_WARN("Terrain layer %s could not be loaded", layers[l].c_str());
             continue;

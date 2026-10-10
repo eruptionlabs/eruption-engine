@@ -3,10 +3,14 @@
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "formats/FlatMap.hpp"
+#if ERUPTION_EDITOR
+#include "../plugins/mapgen/MapGen.hpp"
+#endif
 #include "formats/SpriteSheet.hpp"
 #include "game/DefaultApplication.hpp"
 #include "utils/BcAlphaSelfTest.hpp"
 #include "utils/GpuAutoSelect.hpp"
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -66,6 +70,57 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
+
+#if ERUPTION_EDITOR
+    // --gen-map <receita.mapgen.luau> --map-name <nome>: roda o gerador
+    // procedural (o mesmo do editor) e grava o mapa no projeto, sem janela.
+    // E' assim que um mapa de relevo nasce por programa.
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string(argv[i]) != "--gen-map") continue;
+        const std::filesystem::path dir = eruption::Project::requested(argc, argv);
+        std::string err;
+        if (!dir.empty() && !eruption::Project::instance().open(dir, &err)) {
+            ERUPTION_LOG_FATAL("--gen-map: %s", err.c_str());
+            return 1;
+        }
+        std::string nome;
+        for (int k = 1; k + 1 < argc; ++k)
+            if (std::string(argv[k]) == "--map-name") nome = argv[k + 1];
+        const std::filesystem::path receita = eruption::project::gameRef(argv[i + 1]);
+        if (nome.empty()) nome = receita.stem().stem().string();
+
+        mapgen::Recipe r;
+        if (!r.load(receita.string(), err)) {
+            ERUPTION_LOG_FATAL("--gen-map: %s", err.c_str());
+            return 1;
+        }
+        mapgen::Result res;
+        const auto t0 = std::chrono::steady_clock::now();
+        int ultimo = -1;
+        auto andamento = [&](float t, const char* etapa) {
+            const int pct = int(t * 100.0f) / 10 * 10;
+            if (pct != ultimo) {
+                ultimo = pct;
+                ERUPTION_LOG_WARN("[MAPGEN] %3d%% %s", pct, etapa ? etapa : "");
+            }
+            return true;
+        };
+        if (!mapgen::run(r, 0, res, err, andamento)) {
+            ERUPTION_LOG_FATAL("--gen-map: %s", err.c_str());
+            return 1;
+        }
+        const std::string raiz = eruption::project::isOpen() ? eruption::project::root().string()
+                                                             : eruption::project::engineRoot().string();
+        if (!mapgen::writeMap(res, raiz, nome, err)) {
+            ERUPTION_LOG_FATAL("--gen-map: %s", err.c_str());
+            return 1;
+        }
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        ERUPTION_LOG_WARN("[MAPGEN] %s: grade %dx%d, %zu camada(s), %zu grupo(s) de objeto em %.0f ms", nome.c_str(),
+                          res.w, res.d, res.layers.size(), res.scatter.size(), ms);
+        return 0;
+    }
+#endif
 
     // --new-map <nome> [--map-size <lado>]: cria o mapa vazio (chao plano,
     // grade de altura e ambiente) dentro do projeto e sai. Mesmo codigo do
