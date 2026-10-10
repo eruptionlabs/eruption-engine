@@ -1819,7 +1819,8 @@ void Engine::render() {
     }
 
     if (!m_benchmarkThunderstorm && !(m_benchmarkHeavyRain && m_benchmarkHideHud)) {
-        ImGui::Render(); ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+        ImGui::Render();
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
     } else {
         // Benchmarks that skip the UI still call ImGui::NewFrame above: close
         // the frame so the frame bookkeeping stays balanced (a stray mid-frame
@@ -1828,7 +1829,12 @@ void Engine::render() {
         ImGui::EndFrame();
     }
 
-    // Capture screenshot including UI overlay.
+    m_vulkan.cmdEndRendering(cmd);
+    // CAPTURA DE TELA, com a interface junto. Fica DEPOIS do cmdEndRendering
+    // de proposito: copiar a imagem enquanto ela ainda e' alvo de cor do
+    // passe e' invalido em Vulkan, e na pratica a copia saia sem NADA do que
+    // o ImGui desenhou - balao de fala, mensagem de script, HUD, interface
+    // do jogo. Toda captura em modo jogo vinha so' com a cena 3D.
     if (m_screenshotPending && m_screenshotStaging == VK_NULL_HANDLE) {
         uint32_t ssW = m_vulkan.swapExtent().width, ssH = m_vulkan.swapExtent().height;
         m_screenshotStagingW = ssW;
@@ -1854,7 +1860,6 @@ void Engine::render() {
         }
     }
 
-    m_vulkan.cmdEndRendering(cmd);
     m_vulkan.cmdImageBarrier(cmd, m_vulkan.swapImage(imageIndex), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0);
     m_vulkan.endFrame();
     cpuMark(15);
@@ -2408,12 +2413,18 @@ void Engine::render() {
                     ERUPTION_LOG_WARN("[TEST] CPU %-24s %.2f ms", nm, m_benchmarkCpuFrameMs[i]);
                 }
             }
-            takeScreenshot(m_screenshotOnLoad); if (m_enableAutoExit) m_running = false;
+            // SEMPRE pelo swapchain: e' o unico caminho que enxerga o que o
+            // ImGui desenhou (HUD, balao de fala, interface do jogo). O
+            // takeScreenshot() le' a saida do post e e' cego pra UI - com
+            // --screenshot (que liga o auto-exit) toda captura saia so' com a
+            // cena 3D, e quem estava conferindo interface via tela limpa.
+            //
+            // O auto-exit nao fecha mais aqui: quem fecha e'
+            // finishPendingScreenshot(), depois de gravar o PNG e destruir o
+            // staging - o frame a mais evita tanto o PNG sem UI quanto o
+            // vazamento que o caminho antigo temia.
+            scheduleScreenshotFromSwap(m_screenshotOnLoad);
         }
-        // Only schedule the swapchain screenshot path when we are staying alive:
-        // in auto-exit mode the next frame never runs, so the pending staging
-        // buffer would leak and trigger the VMA "allocations not freed" assert.
-        if (shouldScreenshot && !m_enableAutoExit) scheduleScreenshotFromSwap(m_screenshotOnLoad);
     }
 
     // ERUPTION_TEST_RECORD="pasta,primeiro,quantos" (teste): grava um PNG por

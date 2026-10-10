@@ -88,35 +88,20 @@ CSSRect HudRenderer::getMinimapInfoRect(const ImVec2& displaySize) const {
     return resolveWidget("#minimap-info", displaySize, {}, &found);
 }
 
+// Os dois sao a mesma pintura do UiDocument: a implementacao mora em
+// CSSLayout (uma so'), e aqui ficam os valores de reserva da HUD do jogador.
+constexpr ImU32 kHudBg = IM_COL32(20, 22, 28, 220);
+constexpr ImU32 kHudBorder = IM_COL32(90, 100, 120, 255);
+
 void HudRenderer::drawStyleBox(ImDrawList* dl, const CSSRect& r, const std::string& selector) const {
     if (!m_layout.displayVisible(selector)) return;
-    const float radius = m_layout.borderRadius(selector, 4.0f);
-    const ImU32 bg = m_layout.backgroundColor(selector, IM_COL32(20, 22, 28, 220));
-    if ((bg >> IM_COL32_A_SHIFT) & 0xFF) dl->AddRectFilled(r.min(), r.max(), bg, radius);
-    const float bw = m_layout.borderWidth(selector, 1.0f);
-    const ImU32 bc = m_layout.borderColor(selector, IM_COL32(90, 100, 120, 255));
-    if (bw > 0.0f && ((bc >> IM_COL32_A_SHIFT) & 0xFF)) dl->AddRect(r.min(), r.max(), bc, radius, 0, bw);
+    m_layout.drawBox(dl, r, selector, 1.0f, kHudBg, kHudBorder, 1.0f, 4.0f);
 }
 
 void HudRenderer::drawBar(ImDrawList* dl, const CSSRect& r, float ratio, ImU32 fillLow, ImU32 fillHigh,
                           const std::string& selector, const char* valueText) const {
-    ratio = std::clamp(ratio, 0.0f, 1.0f);
-    drawStyleBox(dl, r, selector);
-    const float bw = m_layout.borderWidth(selector, 1.0f);
-    const float radius = m_layout.borderRadius(selector, 4.0f);
-    ImVec2 fillMin(r.x + bw, r.y + bw);
-    ImVec2 fillMax(r.x + bw + (r.w - 2.0f * bw) * ratio, r.y + r.h - bw);
-    if (fillMax.x > fillMin.x) {
-        dl->AddRectFilledMultiColor(fillMin, fillMax, fillLow, fillHigh, fillHigh, fillLow);
-        (void)radius;
-    }
-    if (valueText && *valueText) {
-        ImVec2 ts = ImGui::CalcTextSize(valueText);
-        ImVec2 p(r.x + (r.w - ts.x) * 0.5f, r.y + (r.h - ts.y) * 0.5f);
-        const ImU32 tc = m_layout.textColor(selector, IM_COL32(240, 240, 240, 255));
-        dl->AddText(ImVec2(p.x + 1, p.y + 1), IM_COL32(0, 0, 0, 200), valueText);
-        dl->AddText(p, tc, valueText);
-    }
+    if (!m_layout.displayVisible(selector)) return;
+    m_layout.drawBar(dl, r, selector, ratio, fillLow, fillHigh, valueText, 0.0f, 1.0f, kHudBg, kHudBorder, 1.0f, 4.0f);
 }
 
 void HudRenderer::draw() {

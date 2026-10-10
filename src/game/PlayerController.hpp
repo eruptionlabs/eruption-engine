@@ -51,6 +51,13 @@ public:
     // motor nao sabe qual dos tres e'.
     bool inputFrozen() const { return m_inputFrozen; }
     void setInputFrozen(bool on) { m_inputFrozen = on; }
+    // ESCONDIDO: o sprite do jogador nao e' desenhado (cutscene em que ele
+    // nao aparece, combate conduzido por outros personagens).
+    bool hidden() const { return m_hidden; }
+    void setHidden(bool on) { m_hidden = on; }
+    // Camera SOLTA: para de seguir o jogador (quem manda nela vira o script
+    // ou o mouse). E' a mesma chave do botao do meio do mouse.
+    void setFreeCamera(bool on) { m_freeCameraToggle = on; }
     float cameraSmoothFactor() const { return m_cameraSmoothFactor; }
     const Engine::LoadedSprite& bodySprite() const { return m_bodySprite; }
     const Engine::LoadedSprite& hairSprite() const { return m_hairSprite; }
@@ -91,6 +98,7 @@ private:
     bool m_tacticalView = false;
     bool m_snapToGat = true;
     bool m_inputFrozen = false;
+    bool m_hidden = false;
     float m_preTacticalYaw = 0.0f;
     float m_preTacticalPitch = glm::radians(50.0f);
     float m_preTacticalDist = 158.5f;

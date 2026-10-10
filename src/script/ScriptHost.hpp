@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <deque>
 #include <vector>
 
 struct lua_State;
@@ -67,6 +68,10 @@ public:
         bool flag = false;     // near: estava perto no frame anterior
     };
     static ScriptHost* current() { return s_current; }
+    // require("nome"): tabela devolvida por outro script da pasta, carregando
+    // -o agora se ainda nao entrou. Devolve o indice do ref (lua_getref) ou
+    // -1 com o motivo em `error`.
+    int moduleRef(const std::string& name, std::string& error);
     // Falso fora do carregamento de um arquivo (on.* só vale no topo).
     bool addHandler(Handler h);
     void showMessage(const std::string& text, float seconds);
@@ -144,7 +149,11 @@ private:
     Engine* m_engine = nullptr;
     lua_State* L = nullptr;
     std::filesystem::path m_dir;
-    std::vector<Script> m_scripts;
+    // DEQUE, nao vector: require() carrega um arquivo DENTRO da carga de
+    // outro e acrescenta um Script no meio do caminho. Num vector isso
+    // realoca e a referencia que `load` esta' segurando vira lixo (crash em
+    // lua_unref com ref podre). Deque nao mexe no que ja' existe.
+    std::deque<Script> m_scripts;
     std::vector<Handler>* m_loadingHandlers = nullptr;
     std::vector<Tween> m_tweens;
     std::vector<Message> m_messages;

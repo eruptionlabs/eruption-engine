@@ -342,8 +342,13 @@ void Engine::drawSpeechBubbles(float x, float y, float w, float h, float dt) {
 void Engine::drawGameFx2D(float x, float y, float w, float h, float dt) {
     // Desenho 2D do jogo por cima da cena. O canvas e' do jogo (o script
     // monta os nos); o motor so' atualiza os tempos e desenha.
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    // O documento em CSS vem primeiro (e' a interface); os numeros e o fade
+    // do UiCanvas vem por cima, porque sao efeito e tem que cobrir tudo.
+    m_uiDocument.reloadIfChanged();
+    m_uiDocument.draw(dl, x, y, w, h);
     m_uiCanvas.update(dt);
-    m_uiCanvas.draw(ImGui::GetForegroundDrawList(), x, y, w, h, m_camera.viewProjNoJitter());
+    m_uiCanvas.draw(dl, x, y, w, h, m_camera.viewProjNoJitter());
 }
 
 void Engine::followPlayer(int index, float distance) {

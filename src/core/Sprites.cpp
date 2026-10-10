@@ -685,6 +685,7 @@ void Engine::renderSpritePart(LoadedSprite& ls, uint32_t paletteSlot, int& frame
     // otherwise it appears in the void while the background loader is still
     // uploading GPU resources.
     if (!m_playerSpawnedOnActiveMap) return;
+    if (m_playerController->hidden()) return;
     if (!ls.loaded || ls.act.actions.empty()) {
         if (ls.loaded) ERUPTION_LOG_WARN("renderSpritePart: loaded but no actions");
         return;

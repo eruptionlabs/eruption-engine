@@ -2,6 +2,7 @@
 #include "utils/CSSParser.hpp"
 #include <imgui.h>
 #include <cstdint>
+#include <string>
 
 namespace eruption {
 
@@ -36,6 +37,27 @@ public:
     float borderRadius(const std::string& selector, float fallback = 0.0f) const;
     float opacity(const std::string& selector, float fallback = 1.0f) const;
     int zIndex(const std::string& selector, int fallback = 0) const;
+
+    // DESENHO dos widgets de um .css. Fica aqui, e nao em quem desenha, pra
+    // existir UMA implementacao: a HUD do jogador (game/HudRenderer) e a
+    // interface do jogo (renderer/UiDocument) pintam igual, e quem mexer na
+    // borda arredondada conserta nos dois.
+    //
+    // `fallback*` e' o que vale quando a regra nao diz nada; `alphaMul`
+    // multiplica a opacidade de tudo (fade de painel).
+    void drawBox(ImDrawList* dl, const CSSRect& r, const std::string& selector, float alphaMul = 1.0f,
+                 ImU32 fallbackBg = 0, ImU32 fallbackBorder = 0, float fallbackBorderWidth = 0.0f,
+                 float fallbackRadius = 0.0f, ImU32 bgOverride = 0, ImU32 borderOverride = 0) const;
+    // Barra: moldura + preenchimento proporcional (degrade de `fillLow` a
+    // `fillHigh`) + texto opcional no centro.
+    void drawBar(ImDrawList* dl, const CSSRect& r, const std::string& selector, float ratio, ImU32 fillLow,
+                 ImU32 fillHigh, const char* valueText = nullptr, float textSize = 0.0f, float alphaMul = 1.0f,
+                 ImU32 fallbackBg = 0, ImU32 fallbackBorder = 0, float fallbackBorderWidth = 0.0f,
+                 float fallbackRadius = 0.0f) const;
+    // Texto com sombra de 1 px. `align`: 0 esquerda, 1 centro, 2 direita.
+    // `size` em pixels; 0 usa a fonte atual do ImGui.
+    static void drawLabel(ImDrawList* dl, float x, float y, float size, ImU32 color, const char* text,
+                          uint8_t align = 0);
 
     // Leitura crua de propriedade customizada (ex: clip-path).
     std::string rawProperty(const std::string& selector, const std::string& property, const std::string& fallback = {}) const;
