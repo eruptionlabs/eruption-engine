@@ -1,0 +1,19 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Prepara a simulacao: dispatch indireto do tamanho da lista de vivas atual
+// (ja' com as que nasceram) e zera a lista seguinte e a de desenho.
+#define VFX_WRITABLE
+#include "vfx/vfx_common.glsl"
+
+layout(local_size_x = 1) in;
+
+void main() {
+    uint cur = frame.counts.x;
+    uint n = min(counters[cur], frame.counts.y);
+    counters[cur] = n;
+    counters[VFXC_DISPATCH + 0] = (n + 63u) / 64u;
+    counters[VFXC_DISPATCH + 1] = 1u;
+    counters[VFXC_DISPATCH + 2] = 1u;
+    counters[1u - cur] = 0u;
+    counters[VFXC_RENDER] = 0u;
+}

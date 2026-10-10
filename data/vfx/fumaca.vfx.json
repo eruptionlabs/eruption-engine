@@ -1,0 +1,93 @@
+{
+  "name": "fumaca",
+  "emitters": [
+    {
+      "name": "coluna",
+      "capacity": 1500,
+      "rate": 40,
+      "shape": "disc",
+      "shapeSize": [
+        2.0,
+        2.0,
+        2.0
+      ],
+      "lifetime": [
+        6.0,
+        10.0
+      ],
+      "speed": [
+        2.0,
+        4.0
+      ],
+      "spread": 0.08,
+      "size": [
+        2.0,
+        3.5
+      ],
+      "rotation": [
+        0,
+        360
+      ],
+      "angularVelocity": [
+        -15,
+        15
+      ],
+      "gravity": [
+        0.6,
+        0.5,
+        0.2
+      ],
+      "drag": 0.25,
+      "noiseStrength": 1.2,
+      "noiseFrequency": 0.08,
+      "noiseSpeed": 0.3,
+      "color": [
+        {
+          "t": 0.0,
+          "rgba": [
+            0.35,
+            0.33,
+            0.31,
+            0.0
+          ]
+        },
+        {
+          "t": 0.15,
+          "rgba": [
+            0.38,
+            0.36,
+            0.34,
+            0.5
+          ]
+        },
+        {
+          "t": 1.0,
+          "rgba": [
+            0.55,
+            0.55,
+            0.56,
+            0.0
+          ]
+        }
+      ],
+      "sizeOverLife": [
+        [
+          0,
+          0.8
+        ],
+        [
+          1,
+          4.0
+        ]
+      ],
+      "blend": "alpha",
+      "lit": 1.0,
+      "softDistance": 2.0,
+      "nearFade": 2.0,
+      "texture": "builtin:puff",
+      "flipCols": 4,
+      "flipRows": 4,
+      "flipMode": "random"
+    }
+  ]
+}

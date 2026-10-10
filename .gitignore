@@ -23,6 +23,9 @@ data/*
 !data/hud/**
 !data/lang/
 !data/lang/**
+# Modelos de efeito de particula que vem com o motor.
+!data/vfx/
+!data/vfx/**
 resources.ini
 assets/hidden_alley.zip
 assets/external/

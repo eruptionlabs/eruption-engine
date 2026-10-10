@@ -1,0 +1,67 @@
+{
+  "name": "magia",
+  "emitters": [
+    {
+      "name": "espiral",
+      "capacity": 3000,
+      "rate": 500,
+      "shape": "sphere",
+      "shapeSize": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "surfaceOnly": true,
+      "lifetime": [
+        1.0,
+        2.0
+      ],
+      "speed": [
+        0.2,
+        0.6
+      ],
+      "spread": 1.0,
+      "size": [
+        0.08,
+        0.16
+      ],
+      "noiseStrength": 6.0,
+      "noiseFrequency": 1.2,
+      "noiseSpeed": 1.0,
+      "drag": 1.5,
+      "color": [
+        {
+          "t": 0.0,
+          "rgba": [
+            0.4,
+            0.7,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "t": 0.2,
+          "rgba": [
+            0.5,
+            0.8,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "t": 1.0,
+          "rgba": [
+            0.7,
+            0.3,
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "blend": "additive",
+      "emissive": 3.0,
+      "softDistance": 0.2,
+      "texture": "builtin:star"
+    }
+  ]
+}

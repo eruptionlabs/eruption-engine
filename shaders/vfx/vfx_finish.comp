@@ -1,0 +1,15 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Fecha o frame: argumentos do draw indireto (6 vertices por particula).
+// firstInstance fica 0 - drawIndirectFirstInstance e' opcional no celular.
+#define VFX_WRITABLE
+#include "vfx/vfx_common.glsl"
+
+layout(local_size_x = 1) in;
+
+void main() {
+    counters[VFXC_DRAW + 0] = 6u;
+    counters[VFXC_DRAW + 1] = counters[VFXC_RENDER];
+    counters[VFXC_DRAW + 2] = 0u;
+    counters[VFXC_DRAW + 3] = 0u;
+}
