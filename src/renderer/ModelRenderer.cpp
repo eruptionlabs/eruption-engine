@@ -3026,6 +3026,12 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             }();
             float band = m_tessBandDistance;
             if (m_meshes[hot.meshIndex].swayAmount > 0.0f) band *= kFoliageBand;
+            // Malha gigante (tem cadeia intermediaria) ja' traz mais detalhe
+            // do que a tesselacao acrescenta: folha modelada de 30 triangulos
+            // nao precisa curvar a lamina. Medido no parana_field original:
+            // as arvores de 1,6 M na banda custavam 6,3 ms de G-buffer so' de
+            // patch, sem mudar a imagem.
+            if (m_meshes[hot.meshIndex].midCount > 0) band = 0.0f;
             instNear = band > 0.0f &&
                        (glm::distance(m_lastCameraPos, c) - r) < band;
         }
@@ -3150,9 +3156,10 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             for (size_t k = 0; k < 12 && k < top.size(); ++k) {
                 const auto& mm = m_meshes[top[k].second];
                 float red = mm.loIndexCount ? 100.0f * (1.0f - float(mm.loIndexCount) / float(mm.indexCount)) : -1.0f;
-                ERUPTION_LOG_WARN("   malha %u: %u tris desenhados / %u instancias | cheia=%u LOD=%u (reduz %.0f%%) troca=%.0f",
+                ERUPTION_LOG_WARN("   malha %u: %u tris desenhados / %u instancias | cheia=%u LOD=%u (reduz %.0f%%) troca=%.0f sombra=%u",
                                   top[k].second, top[k].first, dbgPerMesh[top[k].second].second,
-                                  mm.indexCount / 3, mm.loIndexCount / 3, red, mm.loSwitchDistance);
+                                  mm.indexCount / 3, mm.loIndexCount / 3, red, mm.loSwitchDistance,
+                                  mm.shIndexCount / 3);
                 for (uint32_t q = 0; q < mm.midCount; ++q)
                     ERUPTION_LOG_WARN("      mid %u: %u tris", q, mm.mid[q].indexCount / 3);
             }
