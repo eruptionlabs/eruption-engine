@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <numeric>
 
@@ -25,7 +26,7 @@ constexpr uint32_t kCDispatch = 8;
 constexpr uint32_t kCDraw = 12;
 constexpr uint32_t kCSortDispatch = 20;
 constexpr uint32_t kCounterCount = 28;
-constexpr uint32_t kBindings = 11;
+constexpr uint32_t kBindings = 13;
 
 struct DrawPush {
     uint32_t listOffset;
@@ -109,6 +110,12 @@ bool VfxSystem::createBuffers() {
                        VMA_MEMORY_USAGE_GPU_TO_CPU, true);
         m_readbackPending[f] = false;
     }
+    for (uint32_t f = 0; ok && f < VulkanContext::MAX_FRAMES_IN_FLIGHT; ++f)
+        ok = createBuf(m_graphStage[f], VkDeviceSize(kGraphCodeWords) * 4 + VkDeviceSize(kGraphConsts) * 16,
+                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, true);
+    ok = ok && createBuf(m_graphCode, VkDeviceSize(kGraphCodeWords) * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
+         createBuf(m_graphConst, VkDeviceSize(kGraphConsts) * 16, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false);
+    m_graphDirty = !m_graphCodeCpu.empty();
     ok = ok && createBuf(m_emitterDev, VkDeviceSize(kMaxSlots) * sizeof(VfxEmitterGpu), ssbo,
                          VMA_MEMORY_USAGE_GPU_ONLY, false) &&
          createBuf(m_spawnDev, VkDeviceSize(kMaxRequests) * sizeof(VfxSpawnRequestGpu), ssbo,
@@ -147,13 +154,14 @@ bool VfxSystem::createBuffers() {
 
 void VfxSystem::destroyBuffers() {
     for (Buf* b : {&m_particles, &m_dead, &m_alive, &m_render, &m_sort, &m_counters, &m_emitterDev, &m_spawnDev,
-                   &m_frameDev})
+                   &m_frameDev, &m_graphCode, &m_graphConst})
         destroyBuf(*b);
     for (uint32_t f = 0; f < VulkanContext::MAX_FRAMES_IN_FLIGHT; ++f) {
         destroyBuf(m_emitterBuf[f]);
         destroyBuf(m_spawnBuf[f]);
         destroyBuf(m_frameBuf[f]);
         destroyBuf(m_readback[f]);
+        destroyBuf(m_graphStage[f]);
     }
 }
 
@@ -180,7 +188,7 @@ bool VfxSystem::createDescriptors() {
     if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &m_setLayout) != VK_SUCCESS) return false;
 
     const uint32_t n = VulkanContext::MAX_FRAMES_IN_FLIGHT * 2;
-    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8 * n},
+    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10 * n},
                                      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, n},
                                      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * n}};
     VkDescriptorPoolCreateInfo pi{};
@@ -219,6 +227,8 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
         {m_counters.buf, 0, VK_WHOLE_SIZE},  {m_render.buf, 0, VK_WHOLE_SIZE},  {m_emitterDev.buf, 0, VK_WHOLE_SIZE},
         {m_spawnDev.buf, 0, VK_WHOLE_SIZE},  {m_frameDev.buf, 0, VK_WHOLE_SIZE}};
     const VkDescriptorBufferInfo sortInfo{m_sort.buf, 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo graphCodeInfo{m_graphCode.buf, 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo graphConstInfo{m_graphConst.buf, 0, VK_WHOLE_SIZE};
     VkDescriptorImageInfo ii[2] = {{m_depthSampler, depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                    {m_depthSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
     // Sem alvo de meia resolucao ainda: a profundidade ocupa o binding (nunca
@@ -242,6 +252,8 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
         w[s * kBindings + 9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[s * kBindings + 9].pImageInfo = &lowInfo;
         w[s * kBindings + 10].pBufferInfo = &sortInfo;
+        w[s * kBindings + 11].pBufferInfo = &graphCodeInfo;
+        w[s * kBindings + 12].pBufferInfo = &graphConstInfo;
     }
     vkUpdateDescriptorSets(m_ctx->device(), 2 * kBindings, w, 0, nullptr);
     m_setBuffersWritten[frame] = true;
@@ -610,6 +622,36 @@ void VfxSystem::clear() {
     m_instances.clear();
 }
 
+const VfxGraphCompiled& VfxSystem::graphFor(const VfxGraph& g) {
+    // Chave = o grafo em texto (o que muda o programa: nos, valores, ligacoes).
+    std::string key;
+    key.reserve(g.nodes.size() * 48 + g.links.size() * 16);
+    char buf[160];
+    for (const auto& n : g.nodes) {
+        std::snprintf(buf, sizeof(buf), "%d:%s:%.6g,%.6g,%.6g,%.6g;", n.id, n.op.c_str(), n.value.x, n.value.y,
+                      n.value.z, n.value.w);
+        key += buf;
+    }
+    for (const auto& l : g.links) {
+        std::snprintf(buf, sizeof(buf), "%d.%d>%d.%d;", l.fromNode, l.fromPin, l.toNode, l.toPin);
+        key += buf;
+    }
+    auto it = m_graphLib.find(key);
+    if (it != m_graphLib.end()) return it->second;
+    VfxGraphCompiled c = compileVfxGraph(g, uint32_t(m_graphCodeCpu.size()), uint32_t(m_graphConstCpu.size()));
+    if (!c.error.empty()) {
+        ERUPTION_LOG_WARN("[VFX] grafo com erro: %s", c.error.c_str());
+    } else if (m_graphCodeCpu.size() + c.code.size() <= kGraphCodeWords &&
+               m_graphConstCpu.size() + c.constants.size() <= kGraphConsts) {
+        m_graphCodeCpu.insert(m_graphCodeCpu.end(), c.code.begin(), c.code.end());
+        m_graphConstCpu.insert(m_graphConstCpu.end(), c.constants.begin(), c.constants.end());
+        m_graphDirty = true;
+    } else {
+        c = VfxGraphCompiled{}; // sem espaco neste frame: sem grafo ate' a biblioteca recomecar
+    }
+    return m_graphLib[key] = std::move(c);
+}
+
 const VfxTextureInfo& VfxSystem::texture(const std::string& path, uint32_t cols, uint32_t rows) {
     static const VfxTextureInfo kDisc{};
     if (path.empty() || !m_resolveTexture) return kDisc;
@@ -644,6 +686,12 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     o.flags = glm::uvec4(flags, m_slotGen[slot], tex.slot, (e.flipCols & 0xFFu) | ((e.flipRows & 0xFFu) << 8));
     for (int k = 0; k < 4; ++k)
         o.cutout[k] = glm::packHalf2x16(glm::vec2(tex.cutout[2 * k], tex.cutout[2 * k + 1]));
+    o.graphA = o.graphB = glm::uvec4(0u);
+    if (!e.graph.empty()) {
+        const VfxGraphCompiled& g = graphFor(e.graph);
+        o.graphA = glm::uvec4(g.spawnVelocity.offset, g.spawnVelocity.length, g.force.offset, g.force.length);
+        o.graphB = glm::uvec4(g.color.offset, g.color.length, g.size.offset, g.size.length);
+    }
     o.life = Vec4(e.lifetime.x, std::max(e.lifetime.x, e.lifetime.y), e.speed.x, e.speed.y);
     o.dirSpread = Vec4(dir, e.spread);
     o.sizeRot = Vec4(e.size.x, e.size.y, glm::radians(e.rotation.x), glm::radians(e.rotation.y));
@@ -681,6 +729,13 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
         m_readbackPending[frame] = false;
     }
 
+    // Biblioteca de grafos cheia (edicao ao vivo gera um grafo novo por
+    // gesto): recomeca; os ativos se recompilam neste mesmo update.
+    if (m_graphCodeCpu.size() > kGraphCodeWords * 3 / 4 || m_graphConstCpu.size() > kGraphConsts * 3 / 4) {
+        m_graphLib.clear();
+        m_graphCodeCpu.clear();
+        m_graphConstCpu.clear();
+    }
     m_requests.clear();
     m_spawnTotal = 0;
     m_anyLowRes = false;
@@ -857,6 +912,22 @@ void VfxSystem::simulate(VkCommandBuffer cmd, VkImageView depthView) {
     {
         const VkBufferCopy c{0, 0, sizeof(VfxFrameParamsGpu)};
         vkCmdCopyBuffer(cmd, m_frameBuf[frame].buf, m_frameDev.buf, 1, &c);
+    }
+    if (m_graphDirty && !m_graphCodeCpu.empty()) {
+        // Grafos novos/alterados: sobe o codigo e as constantes inteiros.
+        char* st = static_cast<char*>(m_graphStage[frame].mapped);
+        const VkDeviceSize codeBytes = VkDeviceSize(m_graphCodeCpu.size()) * 4;
+        const VkDeviceSize constBytes = VkDeviceSize(m_graphConstCpu.size()) * 16;
+        std::memcpy(st, m_graphCodeCpu.data(), size_t(codeBytes));
+        if (constBytes) std::memcpy(st + VkDeviceSize(kGraphCodeWords) * 4, m_graphConstCpu.data(), size_t(constBytes));
+        vmaFlushAllocation(m_ctx->allocator(), m_graphStage[frame].alloc, 0, VK_WHOLE_SIZE);
+        const VkBufferCopy cc{0, 0, codeBytes};
+        vkCmdCopyBuffer(cmd, m_graphStage[frame].buf, m_graphCode.buf, 1, &cc);
+        if (constBytes) {
+            const VkBufferCopy kc{VkDeviceSize(kGraphCodeWords) * 4, 0, constBytes};
+            vkCmdCopyBuffer(cmd, m_graphStage[frame].buf, m_graphConst.buf, 1, &kc);
+        }
+        m_graphDirty = false;
     }
     memBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT);

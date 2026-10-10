@@ -148,6 +148,27 @@ void readEmitter(const json& j, VfxEmitterDesc& e) {
     e.maxScreenSize = std::clamp(num(j, "maxScreenSize", e.maxScreenSize), 0.01f, 4.0f);
     e.nearFade = std::max(0.0f, num(j, "nearFade", e.nearFade));
     e.lowRes = num(j, "lowRes", e.lowRes);
+    if (j.contains("graph") && j["graph"].is_object()) {
+        const json& g = j["graph"];
+        e.graph = VfxGraph{};
+        if (g.contains("nodes") && g["nodes"].is_array())
+            for (const json& n : g["nodes"]) {
+                VfxGraphNode node;
+                node.id = n.value("id", 0);
+                node.op = n.value("op", std::string());
+                if (n.contains("value") && n["value"].is_array() && n["value"].size() >= 4)
+                    node.value = Vec4(n["value"][0].get<float>(), n["value"][1].get<float>(), n["value"][2].get<float>(),
+                                      n["value"][3].get<float>());
+                node.pos = v2(n, "pos", Vec2(0.0f));
+                if (vfxGraphType(node.op)) e.graph.nodes.push_back(node);
+                e.graph.nextId = std::max(e.graph.nextId, node.id + 1);
+            }
+        if (g.contains("links") && g["links"].is_array())
+            for (const json& l : g["links"]) {
+                if (!l.is_array() || l.size() < 4) continue;
+                e.graph.links.push_back({l[0].get<int>(), l[1].get<int>(), l[2].get<int>(), l[3].get<int>()});
+            }
+    }
 }
 
 json writeEmitter(const VfxEmitterDesc& e) {
@@ -207,6 +228,19 @@ json writeEmitter(const VfxEmitterDesc& e) {
     j["maxScreenSize"] = e.maxScreenSize;
     j["nearFade"] = e.nearFade;
     j["lowRes"] = e.lowRes;
+    if (!e.graph.empty()) {
+        json g;
+        json nodes = json::array();
+        for (const auto& n : e.graph.nodes)
+            nodes.push_back({{"id", n.id}, {"op", n.op},
+                             {"value", json::array({n.value.x, n.value.y, n.value.z, n.value.w})},
+                             {"pos", arr(n.pos)}});
+        json links = json::array();
+        for (const auto& l : e.graph.links) links.push_back(json::array({l.fromNode, l.fromPin, l.toNode, l.toPin}));
+        g["nodes"] = nodes;
+        g["links"] = links;
+        j["graph"] = g;
+    }
     return j;
 }
 

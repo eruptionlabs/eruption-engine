@@ -52,8 +52,10 @@ struct VfxEmitterGpu {
     uint32_t colorLut[16];
     uint32_t sizeLut[8];
     glm::uvec4 cutout; // 8 halfs: poligono justo da textura
+    glm::uvec4 graphA; // grafo: velocidade inicial (inicio, tamanho), forca
+    glm::uvec4 graphB; // grafo: cor, tamanho
 };
-static_assert(sizeof(VfxEmitterGpu) == 384, "VfxEmitterGpu precisa bater com o std430 do shader");
+static_assert(sizeof(VfxEmitterGpu) == 416, "VfxEmitterGpu precisa bater com o std430 do shader");
 
 // Textura de uma folha de quadros pronta para o desenho.
 struct VfxTextureInfo {
@@ -238,6 +240,18 @@ private:
     std::array<bool, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_readbackPending{};
     std::array<uint32_t, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_readbackList{};
     Buf m_emitterDev, m_spawnDev, m_frameDev; // copias na memoria da placa
+
+    // Grafos: programas compilados de todos os emissores com grafo, num
+    // codigo e num pool de constantes unicos (enderecos absolutos).
+    static constexpr uint32_t kGraphCodeWords = 65536;
+    static constexpr uint32_t kGraphConsts = 16384;
+    Buf m_graphCode, m_graphConst;
+    std::array<Buf, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_graphStage;
+    std::unordered_map<std::string, VfxGraphCompiled> m_graphLib; // chave: texto do grafo
+    std::vector<uint32_t> m_graphCodeCpu;
+    std::vector<Vec4> m_graphConstCpu;
+    bool m_graphDirty = false;
+    const VfxGraphCompiled& graphFor(const VfxGraph& g);
     bool createBuf(Buf& b, VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage mem, bool map);
     void destroyBuf(Buf& b);
 
