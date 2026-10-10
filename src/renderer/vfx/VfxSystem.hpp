@@ -115,6 +115,8 @@ public:
 
     // Efeitos sao descritos em METROS; o mundo pode ter outra unidade
     // (unidades por metro). Vale para todas as instancias novas.
+    void setLightBudget(uint32_t n) { m_lightBudget = n; }
+    uint32_t lightBudget() const { return m_lightBudget; }
     void setUnitsPerMeter(float u) { m_unitsPerMeter = std::max(u, 1e-4f); }
     float unitsPerMeter() const { return m_unitsPerMeter; }
 
@@ -157,8 +159,10 @@ public:
     // geometria vem antes da simulacao. Sem malha viva nao faz nada.
     void drawMeshes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent, const Mat4& viewProjNoJitter,
                     const Mat4& prevViewProjNoJitter);
-    // Luzes dos emissores com "light" (uma por emissor tocando), as `max`
-    // mais perto de `eye`, em unidades de mundo. CPU, sem leitura da GPU.
+    // Luzes dos emissores com "light" (uma por emissor tocando), em unidades
+    // de mundo. CPU, sem leitura da GPU. Luzes vizinhas (dentro de meio raio)
+    // viram uma so' (dez fogueiras juntas = uma luz forte, nao dez esferas
+    // sobrepostas no passe de luz); depois ficam as `max` mais perto de `eye`.
     struct Light {
         Vec3 position;
         float radius;
@@ -258,6 +262,7 @@ private:
     uint32_t m_meshMask = 0;          // malhas em uso neste frame (CPU)
     uint32_t m_meshMaskSimulated = 0; // malhas que a ultima simulacao listou
     bool m_forwardMeshes = false;
+    uint32_t m_lightBudget = 16;
     Mat4 m_viewProjNoJitter{1.0f};
     VkPipelineLayout m_compositeLayout = VK_NULL_HANDLE;
     VkSampler m_linearSampler = VK_NULL_HANDLE;

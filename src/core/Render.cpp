@@ -734,10 +734,11 @@ void Engine::render() {
     m_vfx.setLighting(frameUbo.sunDir, frameUbo.sunColor, frameUbo.ambientSky);
     m_vfx.update(m_timer.deltaTime(), m_camera, renderExtent());
     {
-        // Luz de particula: uma por emissor com "light", as 32 mais perto.
+        // Luz de particula: uma por emissor com "light" (vizinhas fundidas),
+        // ate' o orcamento do preset (vfx_max_lights).
         static std::vector<VfxSystem::Light> vfxLights;
         static std::vector<PointLight> pls;
-        m_vfx.collectLights(m_camera.position(), 32, vfxLights);
+        m_vfx.collectLights(m_camera.position(), m_vfx.lightBudget(), vfxLights);
         pls.clear();
         for (const auto& l : vfxLights) {
             PointLight p;
