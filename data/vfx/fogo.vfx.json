@@ -143,16 +143,25 @@
           "t": 0.0,
           "rgba": [
             1.0,
-            0.8,
-            0.4,
+            0.55,
+            0.15,
+            1.0
+          ]
+        },
+        {
+          "t": 0.5,
+          "rgba": [
+            1.0,
+            0.3,
+            0.05,
             1.0
           ]
         },
         {
           "t": 1.0,
           "rgba": [
-            1.0,
-            0.2,
+            0.6,
+            0.08,
             0.0,
             0.0
           ]
@@ -161,7 +170,7 @@
       "facing": "velocity",
       "stretch": 0.05,
       "blend": "additive",
-      "emissive": 5.0,
+      "emissive": 2.5,
       "softDistance": 0.0,
       "texture": "builtin:spark"
     },
