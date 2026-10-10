@@ -71,6 +71,11 @@ public:
     bool init(VulkanContext* ctx, uint32_t width, uint32_t height, const Config& cfg);
     void shutdown();
     void resize(uint32_t width, uint32_t height);
+    // Só os alvos do tamanho da tela (cor/profundidade das nuvens, god rays) e
+    // o tamanho que a fumaça e as nuvens usam para reconstruir o raio. As
+    // camadas e o resto do estado ficam. Chamado quando a imagem da cena muda
+    // de tamanho (janela, painel Cena do editor).
+    void resizeTargets(uint32_t width, uint32_t height);
 
     void setConfig(const Config& cfg);
     const Config& config() const { return m_cfg; }

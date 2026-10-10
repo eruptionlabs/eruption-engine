@@ -223,6 +223,9 @@ void Engine::render() {
         m_renderW = w; m_renderH = h;
         m_displayW = disp.width;
         m_gbuffer.resize(w, h); m_deferredLighting.resize(w, h); m_skybox.resize(w, h);
+        // Nuvens e fumaça reconstroem o raio pelo tamanho da imagem: no painel
+        // Cena do editor (menor que a janela) a pluma virava um bloco preso à tela.
+        m_cloudLayerRenderer.resizeTargets(w, h);
         // As views novas do G-buffer antes do resize: ele recria o alvo e
         // escreve o descritor, que nao pode apontar para as views antigas.
         m_cameraMotion.setInputs(m_gbuffer.depthView(), m_gbuffer.velocityView());
@@ -1968,7 +1971,13 @@ void Engine::render() {
         }
     }
     static const char* camPose = std::getenv("ERUPTION_TEST_CAM_POSE");
-    if (camPose) {
+    // ERUPTION_TEST_CAM_POSE_FRAMES=N (debug): a pose só vale nos N primeiros
+    // frames; depois a câmera fica livre (testar o arrasto real do editor).
+    static const int camPoseFrames = [] {
+        const char* e = std::getenv("ERUPTION_TEST_CAM_POSE_FRAMES");
+        return e ? std::atoi(e) : -1;
+    }();
+    if (camPose && (camPoseFrames < 0 || static_cast<int>(m_framesCount) < camPoseFrames)) {
         float pt[6] = {0};
         if (std::sscanf(camPose, "%f,%f,%f,%f,%f,%f",
                         &pt[0], &pt[1], &pt[2], &pt[3], &pt[4], &pt[5]) == 6) {
