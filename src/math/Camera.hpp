@@ -117,7 +117,19 @@ public:
     void setDebugFreeCamera(bool enabled) { m_debugFreeCamera = enabled; }
     bool debugFreeCamera() const { return m_debugFreeCamera; }
 
+    // TREMOR. Deslocamento que decai, somado em posicao E alvo (translacao
+    // pura: a direcao do olhar nao muda, so' a camera chacoalha). O impacto
+    // de um golpe pede isso; sem tremor o dano nao tem peso nenhum.
+    // `amplitude` em unidades de mundo; um tremor novo com amplitude maior
+    // substitui o que estava rodando, um menor nao atropela o maior.
+    void shake(float amplitude, float seconds);
+    void tickShake(float dt);
+    bool shaking() const { return m_shakeLeft > 0.0f; }
+
 private:
+    Vec3 m_shakeOffset = Vec3(0.0f);
+    float m_shakeAmp = 0.0f, m_shakeLeft = 0.0f, m_shakeTotal = 0.0f, m_shakeTime = 0.0f;
+
     Vec3 m_position = Vec3(0.0f, 0.0f, 10.0f);
     Vec3 m_target = Vec3(0.0f, 0.0f, 0.0f);
     Vec3 m_up = Vec3(0.0f, 1.0f, 0.0f);

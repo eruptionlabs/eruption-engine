@@ -1,9 +1,14 @@
 #include "formats/SpriteSheet.hpp"
 
+#include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "utils/ImageUtils.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <map>
 
@@ -178,6 +183,105 @@ bool writeEruptSprV2(const SpriteSheetResult& sheet, const std::string& path, st
         error = "Could not write " + path;
         return false;
     }
+    return true;
+}
+
+
+bool loadSpriteSheetRecipe(const std::string& jsonPath, SpriteSheetSpec& out, std::string& error) {
+    namespace fs = std::filesystem;
+    out = SpriteSheetSpec{};
+    std::ifstream f(jsonPath);
+    if (!f) {
+        error = "Could not read " + jsonPath;
+        return false;
+    }
+    nlohmann::json j;
+    try {
+        f >> j;
+    } catch (const std::exception& e) {
+        error = jsonPath + ": " + e.what();
+        return false;
+    }
+    if (!j.is_object()) {
+        error = jsonPath + ": the file must hold a JSON object";
+        return false;
+    }
+
+    auto readAnim = [](const nlohmann::json& src, SpriteSheetSpec::Anim& a) {
+        if (!src.is_object()) return;
+        a.firstRow = src.value("firstRow", a.firstRow);
+        a.firstColumn = src.value("firstColumn", a.firstColumn);
+        a.frames = src.value("frames", a.frames);
+        a.delayMs = src.value("delayMs", a.delayMs);
+        a.enabled = src.value("enabled", a.enabled);
+    };
+
+    // PNG: o caminho da receita vale a partir do projeto; se nao estiver la,
+    // procura ao lado do proprio .sheet.json (folha gerada numa pasta solta).
+    const std::string image = j.value("image", std::string());
+    if (image.empty()) {
+        error = jsonPath + ": \"image\" is missing (the sheet PNG)";
+        return false;
+    }
+    std::error_code ec;
+    const fs::path inProject = project::gameRef(image);
+    out.image = fs::exists(inProject, ec) ? inProject.string()
+                                          : (fs::path(jsonPath).parent_path() / fs::path(image).filename()).string();
+    if (!fs::exists(out.image, ec)) {
+        error = jsonPath + ": sheet image not found: " + image;
+        return false;
+    }
+
+    out.columns = j.value("columns", out.columns);
+    out.rows = j.value("rows", out.rows);
+    out.directions = j.value("directions", out.directions);
+    out.mirrorMissing = j.value("mirrorMissing", out.mirrorMissing);
+    out.worldHeight = j.value("worldHeight", out.worldHeight);
+    out.footOffset = j.value("footOffset", out.footOffset);
+    if (j.contains("rowDirection") && j["rowDirection"].is_array()) {
+        out.rowDirection.clear();
+        for (const auto& d : j["rowDirection"]) out.rowDirection.push_back(d.get<int>());
+    }
+    readAnim(j.value("idle", nlohmann::json::object()), out.idle);
+    readAnim(j.value("walk", nlohmann::json::object()), out.walk);
+    if (j.contains("extra") && j["extra"].is_array()) {
+        for (const auto& e : j["extra"]) {
+            if (!e.is_object()) continue;
+            SpriteSheetSpec::NamedAnim n;
+            n.name = e.value("name", std::string());
+            if (n.name.empty()) continue;
+            n.anim = out.idle; // herda o atraso/linha do parado e sobrescreve
+            readAnim(e, n.anim);
+            n.loop = e.value("loop", false);
+            out.extra.push_back(std::move(n));
+        }
+    }
+
+    if (out.columns < 1 || out.rows < 1) {
+        error = jsonPath + ": columns and rows must be 1 or more";
+        return false;
+    }
+    if (out.directions != 1 && out.directions != 4 && out.directions != 8) {
+        error = jsonPath + ": \"directions\" must be 1, 4 or 8";
+        return false;
+    }
+    if (static_cast<int>(out.rowDirection.size()) < out.directions) {
+        error = jsonPath + ": \"rowDirection\" needs one entry per direction";
+        return false;
+    }
+    return true;
+}
+
+bool importSpriteSheetRecipe(const std::string& jsonPath, std::string& error, std::string* writtenPath) {
+    SpriteSheetSpec spec;
+    if (!loadSpriteSheetRecipe(jsonPath, spec, error)) return false;
+    SpriteSheetResult sheet;
+    if (!buildSpriteSheet(spec, sheet, error)) return false;
+    const std::string out = std::filesystem::path(spec.image).replace_extension(".spr").string();
+    if (!writeEruptSprV2(sheet, out, error)) return false;
+    if (writtenPath) *writtenPath = out;
+    ERUPTION_LOG_WARN("[SPRITE] %s: %zu quadros, %zu acoes (%d x %d por quadro) -> %s", jsonPath.c_str(),
+                      sheet.images.size(), sheet.actions.size(), sheet.cellW, sheet.cellH, out.c_str());
     return true;
 }
 

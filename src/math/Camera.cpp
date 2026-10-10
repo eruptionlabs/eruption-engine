@@ -1,5 +1,8 @@
 #include "math/Camera.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 namespace eruption {
 
 Camera::Camera() {
@@ -221,7 +224,40 @@ Vec3 Camera::up() const {
 }
 
 void Camera::rebuildView() {
-    m_view = glm::lookAt(m_position, m_target, m_up);
+    m_view = glm::lookAt(m_position + m_shakeOffset, m_target + m_shakeOffset, m_up);
+}
+
+void Camera::shake(float amplitude, float seconds) {
+    amplitude = std::max(0.0f, amplitude);
+    seconds = std::max(0.0f, seconds);
+    // Tremor em andamento com mais forca continua; o novo so' entra se bater mais.
+    const float running = m_shakeLeft > 0.0f ? m_shakeAmp * (m_shakeLeft / std::max(1e-4f, m_shakeTotal)) : 0.0f;
+    if (amplitude <= running) return;
+    m_shakeAmp = amplitude;
+    m_shakeTotal = m_shakeLeft = seconds;
+    m_shakeTime = 0.0f;
+}
+
+void Camera::tickShake(float dt) {
+    if (m_shakeLeft <= 0.0f) {
+        if (m_shakeOffset != Vec3(0.0f)) {
+            m_shakeOffset = Vec3(0.0f);
+            rebuildView();
+        }
+        return;
+    }
+    m_shakeLeft = std::max(0.0f, m_shakeLeft - dt);
+    m_shakeTime += dt;
+    // Soma de senos em frequencias que nao batem (nao volta ao mesmo lugar) e
+    // decaimento linear ate' o fim: sem RNG, mesmo tremor em qualquer maquina.
+    const float decay = m_shakeLeft / std::max(1e-4f, m_shakeTotal);
+    const float a = m_shakeAmp * decay * decay;
+    const float t = m_shakeTime;
+    const Vec3 r = right(), u = up();
+    const float sx = std::sin(t * 57.3f) * 0.6f + std::sin(t * 31.1f + 1.7f) * 0.4f;
+    const float sy = std::sin(t * 43.7f + 0.9f) * 0.6f + std::sin(t * 71.3f + 2.3f) * 0.4f;
+    m_shakeOffset = r * (sx * a) + u * (sy * a);
+    rebuildView();
 }
 
 void Camera::rebuildProjection() {

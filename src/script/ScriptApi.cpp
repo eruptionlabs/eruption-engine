@@ -6,7 +6,12 @@
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
 #include "game/PlayerController.hpp"
+#include "renderer/UiCanvas.hpp"
 #include "renderer/WeatherTypes.hpp"
+
+#include <imgui.h>
+
+#include <nlohmann/json.hpp>
 
 #include <lua.h>
 #include <lualib.h>
@@ -617,6 +622,204 @@ int lights_set_enabled(lua_State* L) { light(L).enabled = lua_toboolean(L, 2) !=
 int lights_turn_on(lua_State* L) { light(L).enabled = true; return 0; }
 int lights_turn_off(lua_State* L) { light(L).enabled = false; return 0; }
 
+
+// ------------------------------------------------- suco de cena (fx, ui2d)
+//
+// Nada aqui sabe o que e' batalha ou turno: sao primitivas de apresentacao
+// (tremor, clarao, numero que sobe, retangulo, texto, barra). O jogo decide
+// o que elas significam.
+
+Vec4 optColor(lua_State* L, int arg, const Vec4& fallback) {
+    if (lua_isnoneornil(L, arg)) return fallback;
+    const float* v = luaL_checkvector(L, arg);
+    return Vec4(v[0], v[1], v[2], 1.0f);
+}
+
+int characters_flash(lua_State* L) {
+    const int idx = eng().findCharacter(luaL_checkstring(L, 1));
+    if (idx < 0) luaL_error(L, "no character named '%s' in this map", lua_tostring(L, 1));
+    eng().flashCharacter(idx, Vec3(optColor(L, 2, Vec4(1.0f))), static_cast<float>(luaL_optnumber(L, 3, 0.12)));
+    return 0;
+}
+int characters_shake(lua_State* L) {
+    const int idx = eng().findCharacter(luaL_checkstring(L, 1));
+    if (idx < 0) luaL_error(L, "no character named '%s' in this map", lua_tostring(L, 1));
+    eng().shakeCharacter(idx, static_cast<float>(luaL_optnumber(L, 2, 2.0)),
+                         static_cast<float>(luaL_optnumber(L, 3, 0.25)));
+    return 0;
+}
+int characters_lunge(lua_State* L) {
+    const int idx = eng().findCharacter(luaL_checkstring(L, 1));
+    if (idx < 0) luaL_error(L, "no character named '%s' in this map", lua_tostring(L, 1));
+    eng().lungeCharacter(idx, checkVec3(L, 2), static_cast<float>(luaL_optnumber(L, 3, 12.0)),
+                         static_cast<float>(luaL_optnumber(L, 4, 0.3)));
+    return 0;
+}
+int characters_pop(lua_State* L) {
+    const int idx = eng().findCharacter(luaL_checkstring(L, 1));
+    if (idx < 0) luaL_error(L, "no character named '%s' in this map", lua_tostring(L, 1));
+    eng().popCharacter(idx, static_cast<float>(luaL_optnumber(L, 2, 0.2)),
+                       static_cast<float>(luaL_optnumber(L, 3, 0.2)));
+    return 0;
+}
+int characters_fade(lua_State* L) {
+    const int idx = eng().findCharacter(luaL_checkstring(L, 1));
+    if (idx < 0) luaL_error(L, "no character named '%s' in this map", lua_tostring(L, 1));
+    eng().fadeCharacter(idx, static_cast<float>(luaL_checknumber(L, 2)),
+                        static_cast<float>(luaL_optnumber(L, 3, 0.0)));
+    return 0;
+}
+
+int fx_shake_camera(lua_State* L) {
+    eng().camera().shake(static_cast<float>(luaL_optnumber(L, 1, 1.5)), static_cast<float>(luaL_optnumber(L, 2, 0.3)));
+    return 0;
+}
+int fx_number(lua_State* L) {
+    eng().uiCanvas().popup(checkVec3(L, 1), luaL_checkstring(L, 2), optColor(L, 3, Vec4(1.0f)),
+                           static_cast<float>(luaL_optnumber(L, 4, 0.9)),
+                           static_cast<float>(luaL_optnumber(L, 5, 0.08)),
+                           static_cast<float>(luaL_optnumber(L, 6, 0.045)));
+    return 0;
+}
+int fx_fade(lua_State* L) {
+    eng().uiCanvas().screenFade(optColor(L, 1, Vec4(0.0f)), static_cast<float>(luaL_checknumber(L, 2)),
+                                static_cast<float>(luaL_checknumber(L, 3)),
+                                static_cast<float>(luaL_optnumber(L, 4, 0.25)));
+    return 0;
+}
+int fx_flash(lua_State* L) {
+    // Clarao: entra cheio e sai. Dois fades em sequencia ficariam a cargo do
+    // script; aqui e' um so', porque todo golpe usa isso.
+    eng().uiCanvas().screenFade(optColor(L, 1, Vec4(1.0f)), static_cast<float>(luaL_optnumber(L, 3, 0.6)), 0.0f,
+                                static_cast<float>(luaL_optnumber(L, 2, 0.18)));
+    return 0;
+}
+int fx_fading(lua_State* L) {
+    lua_pushboolean(L, eng().uiCanvas().fading());
+    return 1;
+}
+
+// ui2d: nos que o script cria e mexe. Coordenadas em fracao da area de jogo.
+UiCanvas::Node* checkNode(lua_State* L, int arg) {
+    const uint32_t id = static_cast<uint32_t>(luaL_checkinteger(L, arg));
+    UiCanvas::Node* n = eng().uiCanvas().get(id);
+    if (!n) luaL_error(L, "ui2d: node %d does not exist any more", static_cast<int>(id));
+    return n;
+}
+int ui2d_add(lua_State* L) {
+    const char* kind = luaL_optstring(L, 1, "rect");
+    UiCanvas::Kind k = UiCanvas::Kind::Rect;
+    if (equalsNoCase(kind, "text")) k = UiCanvas::Kind::Text;
+    else if (equalsNoCase(kind, "bar")) k = UiCanvas::Kind::Bar;
+    else if (!equalsNoCase(kind, "rect")) luaL_error(L, "ui2d.add: kind must be \"rect\", \"text\" or \"bar\"");
+    lua_pushinteger(L, static_cast<int>(eng().uiCanvas().add(k)));
+    return 1;
+}
+int ui2d_rect(lua_State* L) {
+    UiCanvas::Node* n = checkNode(L, 1);
+    n->x = static_cast<float>(luaL_checknumber(L, 2));
+    n->y = static_cast<float>(luaL_checknumber(L, 3));
+    n->w = static_cast<float>(luaL_optnumber(L, 4, n->w));
+    n->h = static_cast<float>(luaL_optnumber(L, 5, n->h));
+    return 0;
+}
+int ui2d_set(lua_State* L) {
+    UiCanvas::Node* n = checkNode(L, 1);
+    const char* what = luaL_checkstring(L, 2);
+    if (equalsNoCase(what, "text")) n->text = luaL_checkstring(L, 3);
+    else if (equalsNoCase(what, "value")) n->value = static_cast<float>(luaL_checknumber(L, 3));
+    else if (equalsNoCase(what, "z")) n->z = static_cast<float>(luaL_checknumber(L, 3));
+    else if (equalsNoCase(what, "visible")) n->visible = lua_toboolean(L, 3) != 0;
+    else if (equalsNoCase(what, "border")) n->border = static_cast<float>(luaL_checknumber(L, 3));
+    else if (equalsNoCase(what, "radius")) n->radius = static_cast<float>(luaL_checknumber(L, 3));
+    else if (equalsNoCase(what, "size")) n->textSize = static_cast<float>(luaL_checknumber(L, 3));
+    else if (equalsNoCase(what, "shadow")) n->shadow = lua_toboolean(L, 3) != 0;
+    else if (equalsNoCase(what, "align")) {
+        const char* a = luaL_checkstring(L, 3);
+        n->align = equalsNoCase(a, "left") ? 0 : (equalsNoCase(a, "right") ? 2 : 1);
+    } else if (equalsNoCase(what, "color") || equalsNoCase(what, "color2")) {
+        const float* v = luaL_checkvector(L, 3);
+        Vec4 c(v[0], v[1], v[2], static_cast<float>(luaL_optnumber(L, 4, 1.0)));
+        if (equalsNoCase(what, "color")) n->color = c; else n->color2 = c;
+    } else {
+        luaL_error(L, "ui2d.set: unknown property \"%s\"", what);
+    }
+    return 0;
+}
+int ui2d_remove(lua_State* L) {
+    eng().uiCanvas().remove(static_cast<uint32_t>(luaL_checkinteger(L, 1)));
+    return 0;
+}
+int ui2d_clear(lua_State* L) {
+    (void)L;
+    eng().uiCanvas().clear();
+    return 0;
+}
+int ui2d_screen(lua_State* L) {
+    // Proporcao da area de jogo (largura / altura): o script posiciona em
+    // fracao, e precisa disso pra fazer quadrado nao sair achatado.
+    const ImGuiIO& io = ImGui::GetIO();
+    lua_pushnumber(L, io.DisplaySize.y > 0.0f ? io.DisplaySize.x / io.DisplaySize.y : 1.777);
+    return 1;
+}
+
+int camera_basis(lua_State* L) {
+    // Direita e frente da camera no plano do chao: o jogo monta o palco
+    // (inimigo a esquerda, party a direita) a partir disso.
+    const Vec3 f = eng().camera().forward();
+    const Vec3 flat = glm::length(Vec2(f.x, f.z)) > 1e-4f ? glm::normalize(Vec3(f.x, 0.0f, f.z)) : Vec3(0, 0, 1);
+    pushVec3(L, glm::normalize(glm::cross(Vec3(0.0f, 1.0f, 0.0f), flat)));
+    pushVec3(L, flat);
+    return 2;
+}
+
+
+// LOOK da cena por script: os presets de data/diorama.json (grading, god
+// rays) e o desfoque de profundidade. Generico: vale pra RPG, pra maquete e
+// pra estudo de arquitetura - e' o "visual desta cena", nao uma regra de jogo.
+int world_set_look(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    const nlohmann::json& root = eng().dioramaConfig().root();
+    if (!root.contains("presets") || !root["presets"].contains(name)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    eng().lookConfig().loadFromJson(root["presets"][name]);
+    eng().lookConfig().name = name;
+    lua_pushboolean(L, 1);
+    return 1;
+}
+int world_look(lua_State* L) {
+    lua_pushstring(L, eng().lookConfig().name.c_str());
+    return 1;
+}
+int world_set_dof(lua_State* L) {
+    eng().postSettings().enableDoF = lua_toboolean(L, 1) != 0;
+    return 0;
+}
+
+// Personagem novo em tempo de execucao: o jogo monta o elenco que precisa
+// (NPC de cidade, fila de inimigos) sem passar pelo arquivo de cena. Devolve
+// falso se o sprite nao abriu.
+int player_freeze(lua_State* L) {
+    if (PlayerController* p = ScriptBridge::player()) p->setInputFrozen(lua_toboolean(L, 1) != 0);
+    return 0;
+}
+int player_frozen(lua_State* L) {
+    const PlayerController* p = ScriptBridge::player();
+    lua_pushboolean(L, p && p->inputFrozen());
+    return 1;
+}
+
+int characters_add(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    if (eng().findCharacter(name) >= 0) luaL_error(L, "there is already a character named '%s'", name);
+    const int idx = eng().addCharacter(name, luaL_checkstring(L, 2), checkVec3(L, 3),
+                                       static_cast<float>(luaL_optnumber(L, 4, 0.0)));
+    lua_pushboolean(L, idx >= 0);
+    return 1;
+}
+
 void lib(lua_State* L, const char* name, const luaL_Reg* fns) {
     lua_newtable(L);
     for (const luaL_Reg* f = fns; f->name; ++f) {
@@ -678,14 +881,21 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
+        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof},
         {"ground_height", world_ground_height}, {"map", world_map}, {"load_map", world_load_map}, {nullptr, nullptr}};
     static const luaL_Reg player[] = {
         {"position", player_position}, {"set_position", player_set_position}, {"set_sprite", player_set_sprite}, {"near", player_near},
         {"inside", player_inside}, {"say", player_say}, {"play", player_play}, {"animation", player_animation},
-        {nullptr, nullptr}};
+        {"freeze", player_freeze}, {"frozen", player_frozen}, {nullptr, nullptr}};
     static const luaL_Reg camera[] = {
         {"target", camera_target}, {"set_target", camera_set_target},
-        {"orbit", camera_orbit}, {"set_orbit", camera_set_orbit}, {nullptr, nullptr}};
+        {"orbit", camera_orbit}, {"set_orbit", camera_set_orbit}, {"basis", camera_basis}, {nullptr, nullptr}};
+    static const luaL_Reg fx[] = {
+        {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash},
+        {"fading", fx_fading}, {nullptr, nullptr}};
+    static const luaL_Reg ui2d[] = {
+        {"add", ui2d_add}, {"rect", ui2d_rect}, {"set", ui2d_set}, {"remove", ui2d_remove},
+        {"clear", ui2d_clear}, {"aspect", ui2d_screen}, {nullptr, nullptr}};
     static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {nullptr, nullptr}};
     static const luaL_Reg models[] = {
         {"count", models_count}, {"find", models_find}, {"name", models_name},
@@ -701,7 +911,10 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"set_position", characters_set_position}, {"walk_to", characters_walk_to},
         {"walking", characters_walking}, {"face", characters_face}, {"show", characters_show}, {"say", characters_say}, {"play", characters_play}, {"animation", characters_animation},
         {"follow", characters_follow}, {"patrol", characters_patrol}, {"stop", characters_stop},
-        {"hide", characters_hide}, {"set_sprite", characters_set_sprite}, {nullptr, nullptr}};
+        {"hide", characters_hide}, {"set_sprite", characters_set_sprite},
+        {"add", characters_add},
+        {"flash", characters_flash}, {"shake", characters_shake}, {"lunge", characters_lunge},
+        {"pop", characters_pop}, {"fade", characters_fade}, {nullptr, nullptr}};
     static const luaL_Reg lights[] = {
         {"count", lights_count}, {"position", lights_position}, {"set_position", lights_set_position},
         {"color", lights_color}, {"set_color", lights_set_color}, {"intensity", lights_intensity},
@@ -726,6 +939,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "models", models);
     lib(L, "lights", lights);
     lib(L, "characters", characters);
+    lib(L, "fx", fx);
+    lib(L, "ui2d", ui2d);
 }
 
 std::string scriptApiDefinitions() {
@@ -782,6 +997,11 @@ declare world: {
     set_weather: (name: string) -> (),
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
+    -- Scene look: a preset from data/diorama.json (color grading, god rays)
+    -- and the depth-of-field blur. False if there is no preset by that name.
+    look: () -> string,
+    set_look: (preset: string) -> boolean,
+    set_dof: (on: boolean) -> (),
     -- Name of the map being played.
     map: () -> string,
     -- Goes to another map (a door, a cave); the player appears at `position`
@@ -811,9 +1031,16 @@ declare player: {
     -- Extra animation of the player's sprite; once unless `loop`.
     play: (animation: string, loop: boolean?) -> boolean,
     animation: () -> string,
+    -- Frozen: the player stops answering keyboard and mouse (the world keeps
+    -- running). For dialogue, cutscenes and battle.
+    freeze: (on: boolean) -> (),
+    frozen: () -> boolean,
 }
 
 declare characters: {
+    -- Puts a new character in the scene (sprite PNG or .spr of the project).
+    -- False if the sprite could not be read.
+    add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,
     -- Characters placed in the scene (drag a PNG from the Project panel), by name.
     exists: (name: string) -> boolean,
     position: (name: string) -> vector,
@@ -839,6 +1066,14 @@ declare characters: {
     show: (name: string) -> (),
     hide: (name: string) -> (),
     set_sprite: (name: string, png: string) -> (),
+    -- Presentation (see `fx`): the sprite flashes a color, shakes in place,
+    -- steps toward a point and back (a blow, not a walk), squashes and
+    -- stretches, or changes opacity.
+    flash: (name: string, color: vector?, seconds: number?) -> (),
+    shake: (name: string, amplitude: number?, seconds: number?) -> (),
+    lunge: (name: string, towards: vector, distance: number?, seconds: number?) -> (),
+    pop: (name: string, amount: number?, seconds: number?) -> (),
+    fade: (name: string, to: number, seconds: number?) -> (),
 }
 
 declare camera: {
@@ -847,6 +1082,47 @@ declare camera: {
     -- Yaw and pitch in degrees, distance in world units.
     orbit: () -> (number, number, number),
     set_orbit: (yaw: number, pitch: number, distance: number) -> (),
+    -- Camera right and forward on the ground plane, to place things relative
+    -- to the view (a row of fighters on the left, another on the right).
+    basis: () -> (vector, vector),
+}
+
+-- Presentation of a hit: what makes a blow feel like it landed. The engine
+-- knows nothing about combat; these are camera shake, screen flash and
+-- numbers that float up. Colors are vectors, 0 to 1 per channel.
+declare fx: {
+    -- Camera shake: amplitude in world units, decaying over `seconds`. A new
+    -- shake only wins if it hits harder than the one still running.
+    shake_camera: (amplitude: number?, seconds: number?) -> (),
+    -- Number (or word: "MISS") floating up from a world position. `rise` is a
+    -- fraction of the screen height, `size` the text height as a fraction.
+    number: (position: vector, text: string, color: vector?, seconds: number?, rise: number?, size: number?) -> (),
+    -- Full-screen color going from one opacity to another: the battle wipe.
+    fade: (color: vector, from: number, to: number, seconds: number?) -> (),
+    -- Flash: full opacity (or `strength`) fading to nothing.
+    flash: (color: vector?, seconds: number?, strength: number?) -> (),
+    fading: () -> boolean,
+}
+
+-- Game interface in 2D, over the scene: rectangles, text and bars that the
+-- script creates, moves and paints. The engine draws them and nothing else:
+-- a menu, a turn queue or a party panel is the GAME's business.
+-- Positions and sizes are a FRACTION of the game area (0 to 1), so the
+-- layout holds at any resolution. Text size is a fraction of the height.
+-- There is no animation system here: move the nodes from on.update.
+declare ui2d: {
+    -- kind: "rect", "text" or "bar". Returns the node id.
+    add: (kind: string?) -> number,
+    rect: (node: number, x: number, y: number, width: number?, height: number?) -> (),
+    -- Properties: "text", "value" (bar, 0..1), "color", "color2" (rect border
+    -- / bar fill), "z", "visible", "border" (px), "radius" (px), "size"
+    -- (text), "align" ("left" | "center" | "right"), "shadow".
+    -- Colors take an optional opacity as the 4th argument.
+    set: (node: number, property: string, value: any, opacity: number?) -> (),
+    remove: (node: number) -> (),
+    clear: () -> (),
+    -- Width / height of the game area, to keep squares square.
+    aspect: () -> number,
 }
 
 declare input: {
