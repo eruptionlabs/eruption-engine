@@ -135,6 +135,15 @@ void CloudLayerRenderer::resize(uint32_t width, uint32_t height) {
     init(ctx, width, height, cfg);
 }
 
+void CloudLayerRenderer::resizeTargets(uint32_t width, uint32_t height) {
+    if (!m_ctx || width == 0 || height == 0 || (width == m_width && height == m_height)) return;
+    m_ctx->waitIdle(); // os alvos antigos podem estar em uso por frames em voo
+    destroyTargets();
+    m_width = width;
+    m_height = height;
+    if (!createTargets()) Logger::error("CloudLayerRenderer: failed to resize targets to %ux%u", width, height);
+}
+
 void CloudLayerRenderer::setConfig(const Config& cfg) {
     bool needsReinit = (cfg.layerCount != m_cfg.layerCount ||
                         cfg.coverageSize != m_cfg.coverageSize ||
@@ -522,10 +531,13 @@ bool CloudLayerRenderer::createDebugPlanePipeline() {
     // Scissor is set per draw: the global plane uses full-screen, independent
     // cloud layers scissor to their volume's screen projection (the ray-march
     // is expensive, so fragments outside the cloud must not be shaded).
-    VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_SCISSOR};
+    // Viewport também dinâmico: a imagem da cena muda de tamanho (janela,
+    // painel Cena do editor) e o viewport fixo da criação projetava a fumaça
+    // e as nuvens no retângulo errado.
+    VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_VIEWPORT};
     VkPipelineDynamicStateCreateInfo dyn{};
     dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dyn.dynamicStateCount = 1;
+    dyn.dynamicStateCount = 2;
     dyn.pDynamicStates = dynStates;
 
     VkGraphicsPipelineCreateInfo pipeInfo{};
@@ -703,10 +715,13 @@ bool CloudLayerRenderer::createBillboardPipeline() {
     ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
 
     // Scissor is set per draw: each cloud clips to its box projection.
-    VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_SCISSOR};
+    // Viewport também dinâmico: a imagem da cena muda de tamanho (janela,
+    // painel Cena do editor) e o viewport fixo da criação projetava a fumaça
+    // e as nuvens no retângulo errado.
+    VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_VIEWPORT};
     VkPipelineDynamicStateCreateInfo dyn{};
     dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dyn.dynamicStateCount = 1;
+    dyn.dynamicStateCount = 2;
     dyn.pDynamicStates = dynStates;
 
     // Set-3 layout + pool: per-layer local-cloud SSBO read by the puff
@@ -970,10 +985,13 @@ bool CloudLayerRenderer::createSmokePipeline() {
     ri.pColorAttachmentFormats = &colorFormat;
     ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
 
-    VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_SCISSOR};
+    // Viewport também dinâmico: a imagem da cena muda de tamanho (janela,
+    // painel Cena do editor) e o viewport fixo da criação projetava a fumaça
+    // e as nuvens no retângulo errado.
+    VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_VIEWPORT};
     VkPipelineDynamicStateCreateInfo dyn{};
     dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dyn.dynamicStateCount = 1;
+    dyn.dynamicStateCount = 2;
     dyn.pDynamicStates = dynStates;
 
     VkGraphicsPipelineCreateInfo pipeInfo{};
@@ -1066,6 +1084,10 @@ void CloudLayerRenderer::renderSmokePlume(VkCommandBuffer cmd, const SmokeEmitte
     updateDebugPlaneDepthDescriptor(depthView);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_smokePipeline);
+    {
+        const VkViewport vpFull{0, 0, (float)m_width, (float)m_height, 0, 1};
+        vkCmdSetViewport(cmd, 0, 1, &vpFull);
+    }
     // O shader só usa set 0 (UBOs globais) e set 2 (profundidade da cena);
     // sets 1 e 3 do layout não são acessados, então não precisam ser ligados.
     VkDescriptorSet set0 = m_descriptorSets[m_ctx->currentFrame()];
@@ -2734,6 +2756,8 @@ void CloudLayerRenderer::renderDebugPlane(VkCommandBuffer cmd,
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_debugPlanePipeline);
     // The plane pipeline uses dynamic scissor (independent layers set a tight
     // rect); the global plane always covers the whole frame.
+    const VkViewport planeVp{0, 0, (float)width, (float)height, 0, 1};
+    vkCmdSetViewport(cmd, 0, 1, &planeVp);
     VkRect2D fullScissor{{0, 0}, {width, height}};
     vkCmdSetScissor(cmd, 0, 1, &fullScissor);
     VkDescriptorSet sets[3] = {m_descriptorSets[m_ctx->currentFrame()], m_compositeDescriptorSet, m_debugPlaneDepthSet};
@@ -3244,6 +3268,10 @@ void CloudLayerRenderer::renderCloudLayerPlane(VkCommandBuffer cmd, uint32_t id,
     updateDebugPlaneDepthDescriptor(depthView);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_debugPlanePipeline);
+    {
+        const VkViewport vpFull{0, 0, (float)m_width, (float)m_height, 0, 1};
+        vkCmdSetViewport(cmd, 0, 1, &vpFull);
+    }
     VkDescriptorSet sets[3] = {slot.set0[m_ctx->currentFrame()], slot.set1, m_debugPlaneDepthSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_debugPlanePipelineLayout, 0, 3, sets, 0, nullptr);
 
@@ -3449,7 +3477,7 @@ void CloudLayerRenderer::renderCloudLayerBillboard(VkCommandBuffer cmd, uint32_t
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       m_volumeAccumMode ? m_billboardAccumPipeline : m_billboardPipeline);
-    if (m_volumeAccumMode) {
+    {
         VkViewport vp{0, 0, (float)targetW, (float)targetH, 0, 1};
         vkCmdSetViewport(cmd, 0, 1, &vp);
     }
