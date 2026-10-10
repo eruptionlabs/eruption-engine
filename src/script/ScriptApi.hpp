@@ -18,6 +18,11 @@ void registerScriptApi(lua_State* L, Engine& engine);
 // autocompletar e a checagem de tipos no editor de código.
 std::string scriptApiDefinitions();
 
+// Tabela `vfx` (ScriptApiVfx.cpp): efeitos de particula, e o bloco dela nas
+// declaracoes de tipo.
+void registerVfxApi(lua_State* L, Engine& engine);
+const char* vfxApiDefinitions();
+
 // Tecla pelo nome usado nos scripts ("A", "space", "left"...).
 Key scriptKeyFromName(const char* name);
 // Índice (base 0) do primeiro modelo com esse nome, ou -1.
