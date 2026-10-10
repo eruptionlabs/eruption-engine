@@ -66,6 +66,8 @@ void main() {
     // tem alfa). Teto 0,9: o FSR ainda usa um pouco do historico (menos ruido).
 #ifndef VFX_NO_REACTIVE
     float lum = dot(o_color.rgb, vec3(0.2126, 0.7152, 0.0722));
-    o_reactive = vec4(min(max(o_color.a, lum), 0.9));
+    // Aditiva (alfa 0) pesa a luminancia x4: faisca fraca e rapida e' a que
+    // mais deixa rastro quando o historico a arrasta.
+    o_reactive = vec4(min(max(o_color.a, lum * 4.0), 0.9));
 #endif
 }
