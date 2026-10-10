@@ -689,6 +689,19 @@ endif()
 # Assets, data and shaders are expected to be in the project root at runtime
 add_dependencies(eruption-engine shaders)
 
+# ---- Camada de compatibilidade de plugins (compat/) ------------------------
+# Hosts de plugins Godot (GDExtension), Unity (nativo) e Unreal (modulos).
+# Desligada por padrao ate' estabilizar. Mesmo ligada, nada roda sem
+# ERUPTION_COMPAT_PLUGINS. Ver compat/TESTED_PLUGINS.md.
+option(ERUPTION_MODULE_COMPAT "Camada de compatibilidade de plugins (compat/)" OFF)
+if(ERUPTION_MODULE_COMPAT)
+    add_subdirectory(compat)
+    target_sources(eruption-engine PRIVATE ${CMAKE_SOURCE_DIR}/compat/motor/HostMotor.cpp)
+    target_link_libraries(eruption-engine PRIVATE eruption-compat)
+    target_compile_definitions(eruption-engine PRIVATE ERUPTION_MODULE_COMPAT=1)
+endif()
+# ---- fim compat -------------------------------------------------------------
+
 # Tools
 if(ERUPTION_BUILD_TOOLS)
     add_executable(eruption-normalgen
