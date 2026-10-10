@@ -1,0 +1,148 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SIMULACAO. Uma thread por particula viva (dispatch indireto montado por
+// vfx_args). Integra forcas, colide, envelhece; a viva vai para a lista do
+// proximo frame e, se estiver no frustum, para a lista de desenho.
+//
+// Os tres contadores globais (vivas, mortas, desenho) recebem UM atomico por
+// workgroup: cada thread soma no contador do grupo (memoria compartilhada) e
+// so' a primeira reserva a faixa do grupo no global. Sao 64x menos atomicos
+// globais disputando a mesma posicao.
+#define VFX_WRITABLE
+#include "vfx/vfx_common.glsl"
+
+layout(local_size_x = 64) in;
+
+shared uint sAlive, sDead, sRender;
+shared uint sAliveBase, sDeadBase, sRenderBase;
+
+// Turbulencia sem divergencia: rotacional de um potencial feito de senos
+// (campo analitico; barato e sem textura 3D). Parecido com fumaca/poeira.
+vec3 curlNoise(vec3 p, float t) {
+    vec3 a = p + vec3(0.0, t, 0.0);
+    vec3 b = p * 1.7 + vec3(t * 0.7, 0.0, 3.1);
+    // Potencial: Px = sin(a.y)+sin(b.z), Py = sin(a.z)+sin(b.x),
+    // Pz = sin(a.x)+sin(b.y); curl = (dPz/dy-dPy/dz, dPx/dz-dPz/dx, dPy/dx-dPx/dy).
+    float dPz_dy = 1.7 * cos(b.y);
+    float dPy_dz = cos(a.z);
+    float dPx_dz = 1.7 * cos(b.z);
+    float dPz_dx = cos(a.x);
+    float dPy_dx = 1.7 * cos(b.x);
+    float dPx_dy = cos(a.y);
+    return vec3(dPz_dy - dPy_dz, dPx_dz - dPz_dx, dPy_dx - dPx_dy) * 0.5;
+}
+
+vec3 worldFromDepth(vec2 uv, float d) {
+    vec4 w = frame.invViewProj * vec4(uv * 2.0 - 1.0, d, 1.0);
+    return w.xyz / w.w;
+}
+
+void main() {
+    if (gl_LocalInvocationIndex == 0u) {
+        sAlive = 0u;
+        sDead = 0u;
+        sRender = 0u;
+    }
+    barrier();
+
+    uint cur = frame.counts.x;
+    uint cap = frame.counts.y;
+    uint i = gl_GlobalInvocationID.x;
+    bool valid = i < counters[cur];
+
+    uint idx = 0u;
+    bool alive = false;
+    bool visible = false;
+    if (valid) {
+        idx = aliveList[cur * cap + i];
+        Particle p = particles[idx];
+        uint slot = p.slotGen & 0xFFFFu;
+        Emitter e = emitters[slot];
+        float dt = frame.camPos.w;
+        alive = ((e.flags.y & 0xFFFFu) == (p.slotGen >> 16)) && (e.flags.x & VFXF_KILLED) == 0u;
+        p.age += dt;
+        alive = alive && p.age < p.life;
+        if (alive) {
+            // Forcas
+            // Efeito descrito em metros; a escala da instancia (rot0.w)
+            // leva para a unidade do mundo: forcas e turbulencia escalam junto.
+            float scale = e.rot0.w;
+            vec3 acc = e.gravityDrag.xyz * scale;
+            if (e.noise.x != 0.0)
+                acc += curlNoise(p.pos * (e.noise.y / scale), frame.timeInfo.x * e.noise.z) * e.noise.x * scale;
+            p.vel += acc * dt;
+            p.vel *= 1.0 / (1.0 + e.gravityDrag.w * dt); // arrasto estavel com qualquer dt
+            vec3 next = p.pos + p.vel * dt;
+
+            // Plano horizontal (chao simples, agua, mesa)
+            if ((e.flags.x & VFXF_COLLIDE_PLANE) != 0u && next.y < e.collide.x) {
+                next.y = e.collide.x;
+                p.vel.y = abs(p.vel.y) * e.noise.w;
+                p.vel.xz *= 1.0 - e.collide.y;
+                p.age += p.life * e.collide.z;
+            }
+            // Profundidade da tela: colide com o que a camera ve' (terreno,
+            // malhas, personagens). Fora da tela ou atras da superficie mais
+            // que a espessura, segue livre - limitacao conhecida da tecnica.
+            if ((e.flags.x & VFXF_COLLIDE_DEPTH) != 0u && frame.depthInfo.w > 0.5) {
+                vec4 c = frame.viewProj * vec4(next, 1.0);
+                if (c.w > 0.0) {
+                    vec3 ndc = c.xyz / c.w;
+                    vec2 uv = ndc.xy * 0.5 + 0.5;
+                    if (all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)))) {
+                        float d = textureLod(sceneDepth, uv, 0.0).r;
+                        if (d < 1.0 && ndc.z > d) {
+                            vec3 surf = worldFromDepth(uv, d);
+                            float thickness = max(0.5 * e.rot0.w, length(p.vel) * dt * 2.0);
+                            if (distance(surf, next) < thickness) {
+                                vec2 px = 1.0 / frame.depthInfo.xy;
+                                vec3 sx = worldFromDepth(uv + vec2(px.x, 0.0), textureLod(sceneDepth, uv + vec2(px.x, 0.0), 0.0).r);
+                                vec3 sy = worldFromDepth(uv + vec2(0.0, px.y), textureLod(sceneDepth, uv + vec2(0.0, px.y), 0.0).r);
+                                vec3 n = normalize(cross(sx - surf, sy - surf));
+                                if (dot(n, frame.camPos.xyz - surf) < 0.0) n = -n;
+                                float vn = dot(p.vel, n);
+                                if (vn < 0.0) {
+                                    vec3 vt = p.vel - vn * n;
+                                    p.vel = vt * (1.0 - e.collide.y) - vn * n * e.noise.w;
+                                }
+                                next = surf + n * 0.02;
+                                p.age += p.life * e.collide.z;
+                            }
+                        }
+                    }
+                }
+            }
+            p.pos = next;
+            alive = p.age < p.life;
+            particles[idx] = p;
+
+            // Frustum: esfera pelo maior tamanho possivel nesta idade.
+            vec2 sr = unpackHalf2x16(p.sizeRot);
+            float t = p.age / p.life;
+            float radius = sr.x * sampleSizeLut(e, t) * 0.75 + e.angVel.z * length(p.vel) * 0.5 + 0.01;
+            visible = alive;
+            for (int k = 0; k < 6 && visible; ++k)
+                visible = dot(frame.frustum[k].xyz, p.pos) + frame.frustum[k].w > -radius;
+        }
+    }
+
+    // Reserva por grupo
+    uint aliveSlot = 0u, deadSlot = 0u, renderSlot = 0u;
+    if (valid) {
+        if (alive) aliveSlot = atomicAdd(sAlive, 1u);
+        else deadSlot = atomicAdd(sDead, 1u);
+        if (visible) renderSlot = atomicAdd(sRender, 1u);
+    }
+    barrier();
+    if (gl_LocalInvocationIndex == 0u) {
+        sAliveBase = sAlive > 0u ? atomicAdd(counters[1u - cur], sAlive) : 0u;
+        sDeadBase = sDead > 0u ? atomicAdd(counters[VFXC_DEAD], sDead) : 0u;
+        sRenderBase = sRender > 0u ? atomicAdd(counters[VFXC_RENDER], sRender) : 0u;
+    }
+    barrier();
+    if (valid) {
+        if (alive) aliveList[(1u - cur) * cap + sAliveBase + aliveSlot] = idx;
+        else deadList[sDeadBase + deadSlot] = idx;
+        if (visible) renderList[sRenderBase + renderSlot] = idx;
+    }
+}

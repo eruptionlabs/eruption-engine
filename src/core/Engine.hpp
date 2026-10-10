@@ -26,6 +26,7 @@
 #include "renderer/skymap/SkySystem.hpp"
 #include "renderer/skymap/SkyConfig.hpp"
 #include "renderer/CloudLayerRenderer.hpp"
+#include "renderer/vfx/VfxSystem.hpp"
 #include "renderer/LocalCloud.hpp"
 #include "renderer/WaterRenderer.hpp"
 #include "renderer/DebugLineRenderer.hpp"
@@ -391,6 +392,7 @@ public:
     SkySystem& skyboxSystem() { return m_skybox; }
     VkSampler defaultSampler() const { return m_defaultSampler; }
     VulkanContext& vulkan() { return m_vulkan; }
+    VfxSystem& vfx() { return m_vfx; }
     ModelRenderer& modelRenderer() { return m_modelRenderer; }
     TerrainRenderer& terrainRenderer() { return m_terrainRenderer; }
     SpriteSystem& spriteSystem() { return m_spriteSystem; }
@@ -853,6 +855,10 @@ private:
     bool m_showResourceManager = false; 
     bool m_showABTestMenu = false;
     SpherePreview m_spherePreview;
+    // Particulas e efeitos (GPU). Texturas das folhas de quadros: do motor,
+    // liberadas no shutdown.
+    VfxSystem m_vfx;
+    std::vector<TextureResource> m_vfxTextures;
     bool m_showPlayerLightMenu = false;
     PlayerLight m_playerLight;
     bool m_debugModelPivots = false;

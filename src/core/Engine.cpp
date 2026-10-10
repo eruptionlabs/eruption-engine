@@ -51,6 +51,7 @@
 
 #include "utils/ImageUtils.hpp"
 #include "utils/TextureCache.hpp"
+#include "renderer/vfx/VfxBuiltins.hpp"
 #include <vk_mem_alloc.h>
 
 // Nomes das 12 fases de CPU marcadas dentro de Engine::render(). Eram locais do
@@ -499,6 +500,42 @@ bool Engine::init(int width, int height, const std::string& title) {
     // popup (nao model.frag, que escreve no G-buffer da cena principal).
     if (!m_spherePreview.init(&m_vulkan, &m_bindless, m_spriteRenderer.frameUboLayout(), m_spriteRenderer.frameUboSet())) {
         ERUPTION_LOG_WARN("[SPHEREPREVIEW] falhou ao inicializar - popup de preview ficara indisponivel.");
+    }
+    {
+        VfxSystem::InitInfo vi;
+        vi.ctx = &m_vulkan;
+        vi.bindless = &m_bindless;
+        vi.frameUboLayout = m_spriteRenderer.frameUboLayout();
+        vi.frameUboSet = m_spriteRenderer.frameUboSet();
+        // Folha de quadros: PNG do jogo (ou do motor) -> textura com mip -> slot.
+        vi.resolveTexture = [this](const std::string& path) -> uint32_t {
+            TextureResource tex;
+            VfxImage img;
+            if (makeVfxBuiltin(path, img)) {
+                // Textura embutida do motor, gerada na hora.
+                if (!createTextureFromPixels(img.rgba.data(), int(img.width), int(img.height), tex)) return 0xFFFFFFFFu;
+            } else {
+                std::filesystem::path p = project::gameRef(path);
+                if (!std::filesystem::exists(p)) p = project::engine(path);
+                if (!createTextureFromFile(p.string().c_str(), tex)) return 0xFFFFFFFFu;
+            }
+            tex.slot = m_bindless.allocateSlotSafe();
+            m_bindless.updateTextureSafe(tex.slot, tex.view, m_defaultSampler);
+            m_vfxTextures.push_back(tex);
+            return tex.slot;
+        };
+        // Nome -> arquivo: caminho com ".json" vale como esta' (relativo ao
+        // projeto); senao assets/effects/<nome>.vfx.json do jogo e, na falta,
+        // data/vfx/<nome>.vfx.json do motor.
+        vi.resolveEffectPath = [](const std::string& name) -> std::string {
+            if (name.size() > 5 && name.compare(name.size() - 5, 5, ".json") == 0)
+                return project::gameRef(name).string();
+            const std::filesystem::path g = project::game("assets/effects/" + name + ".vfx.json");
+            if (std::filesystem::exists(g)) return g.string();
+            const std::filesystem::path e = project::engine("data/vfx/" + name + ".vfx.json");
+            return std::filesystem::exists(e) ? e.string() : std::string();
+        };
+        if (!m_vfx.init(vi)) ERUPTION_LOG_WARN("[VFX] indisponivel: efeitos de particula desligados.");
     }
 
     presentLoadingScreen("", "Loading Configuration", 0.3f, true);
@@ -974,6 +1011,13 @@ void Engine::shutdown() {
         releaseRegionSplat(r, true);
     }
     m_regions.clear();
+    m_vfx.shutdown();
+    for (TextureResource& t : m_vfxTextures) {
+        if (t.slot) m_bindless.freeSlot(t.slot);
+        if (t.view) vkDestroyImageView(m_vulkan.device(), t.view, nullptr);
+        if (t.image) vmaDestroyImage(m_vulkan.allocator(), t.image, t.alloc);
+    }
+    m_vfxTextures.clear();
     m_spherePreview.shutdown();
     m_modelRenderer.shutdown(); m_terrainRenderer.shutdown(); m_spriteSystem.shutdown();
     m_spriteRenderer.shutdown(); m_shadowRenderer.shutdown(); m_deferredLighting.shutdown();
@@ -1991,6 +2035,9 @@ void Engine::applyGraphicsPreset() {
     // parte dos pixels do mapa; o teto é o botão mais direto de VRAM. Vale
     // para as texturas EMBUTIDAS do GLB (é onde estão os sheets grandes).
     m_textureMaxSize = std::clamp<int>(p.value("texture_max_size", 1024), 128, 4096);
+    // Particulas: pool total na GPU e escala de nascimento por preset.
+    m_vfx.setBudget(static_cast<uint32_t>(std::max(1024, p.value("vfx_max_particles", 131072))),
+                    p.value("vfx_spawn_scale", 1.0f));
     // ERUPTION_TEST_TEXTURE_MAX_SIZE (capturas): teto de textura acima do preset.
     if (const char* e = std::getenv("ERUPTION_TEST_TEXTURE_MAX_SIZE")) m_textureMaxSize = std::clamp(std::atoi(e), 128, 8192);
     setEmbeddedTextureMaxSize(static_cast<uint32_t>(m_textureMaxSize));

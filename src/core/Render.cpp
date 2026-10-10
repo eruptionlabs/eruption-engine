@@ -826,6 +826,24 @@ void Engine::render() {
     cpuMark(5);
 
     m_gbuffer.transitionToRead(cmd);
+    // Particulas: simula aqui, com a profundidade deste frame ja' legivel
+    // (colisao com o que a camera ve'). Sem efeito nenhum, nao grava nada.
+    m_vfx.update(m_timer.deltaTime(), m_camera, renderExtent());
+    // ERUPTION_DEBUG_VFX=1: contagem (lida da GPU com atraso) a cada 60 frames.
+    static const bool kDebugVfx = std::getenv("ERUPTION_DEBUG_VFX") != nullptr;
+    if (kDebugVfx && m_framesCount == 120) m_vfx.debugDump();
+    if (kDebugVfx && m_framesCount % 60 == 0 && m_vfx.active()) {
+        const auto& st = m_vfx.stats();
+        ERUPTION_LOG_WARN("[VFX] frame %llu: %u instancias, %u emissores, %u vivas, %u desenhadas, +%u", 
+                          (unsigned long long)m_framesCount, st.instances, st.emitters, st.alive, st.rendered,
+                          st.spawnedThisFrame);
+    }
+    if (m_vfx.active()) {
+        m_vulkan.writeTimestamp(cmd, 12, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        m_vfx.simulate(cmd, m_gbuffer.depthView());
+        m_vulkan.writeTimestamp(cmd, 13, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        Profiler::addGpuTime("VFX Sim", m_vulkan.timestampDeltaMs(12, 13));
+    }
     m_vulkan.writeTimestamp(cmd, 4, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     {
         Vec3 worldMin(-3000.0f, 0.0f, -3000.0f);
@@ -1436,6 +1454,16 @@ void Engine::render() {
             vkc::cmdEndRendering(cmd);
             m_vulkan.writeTimestamp(cmd, 39, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             Profiler::addGpuTime("Map Smoke", m_vulkan.timestampDeltaMs(38, 39));
+        }
+        // Particulas: depois da fumaca, no lit com a profundidade so' leitura
+        // (teste de profundidade por hardware + borda suave pela amostra).
+        if (m_vfx.active()) {
+            m_vulkan.writeTimestamp(cmd, 14, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            vkc::cmdBeginRendering(cmd, &planeInfo);
+            m_vfx.draw(cmd, m_gbuffer.depthView(), renderExtent());
+            vkc::cmdEndRendering(cmd);
+            m_vulkan.writeTimestamp(cmd, 15, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            Profiler::addGpuTime("VFX Draw", m_vulkan.timestampDeltaMs(14, 15));
         }
         cpuMark(10);
     }

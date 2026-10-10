@@ -195,6 +195,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     
     m_currentMap = loadedMap; 
     m_currentMapName = name;
+    m_vfx.clear(); // efeitos pertencem ao mapa que saiu
 
     // Configure water mesh from map data
     m_water.clearWaterMesh();
@@ -590,6 +591,26 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
         ERUPTION_LOG_WARN("[ASSETCACHE] gen=%u modelTex=%zu terrainTex=%zu meshes=%zu bindless_used=%u highWater=%u/%u",
                           m_assetCache.currentWarpId, cs.modelTextureCount, cs.terrainTextureCount, cs.meshCount,
                           m_bindless.usedSlots(), m_bindless.highWater(), MAX_BINDLESS_TEXTURES);
+    }
+    // ERUPTION_TEST_VFX="efeito@x,y,z;efeito2@x,y,z" (teste): toca efeitos
+    // ao abrir o mapa, para bancada de imagem e de desempenho.
+    if (const char* u = std::getenv("ERUPTION_TEST_VFX_UNITS")) m_vfx.setUnitsPerMeter(std::strtof(u, nullptr));
+    if (const char* tv = std::getenv("ERUPTION_TEST_VFX")) {
+        std::string all = tv;
+        size_t start = 0;
+        while (start < all.size()) {
+            size_t end = all.find(';', start);
+            if (end == std::string::npos) end = all.size();
+            const std::string item = all.substr(start, end - start);
+            const size_t at = item.find('@');
+            float x = 0, y = 0, z = 0;
+            if (at != std::string::npos && std::sscanf(item.c_str() + at + 1, "%f,%f,%f", &x, &y, &z) == 3) {
+                const uint32_t id = m_vfx.spawn(item.substr(0, at), glm::translate(Mat4(1.0f), Vec3(x, y, z)));
+                ERUPTION_LOG_WARN("[VFX] teste: '%s' em (%.0f, %.0f, %.0f) -> instancia %u", item.substr(0, at).c_str(),
+                                  x, y, z, id);
+            }
+            start = end + 1;
+        }
     }
     return true;
 }
