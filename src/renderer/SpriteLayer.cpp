@@ -23,16 +23,17 @@ bool SpriteLayer::init(VulkanContext* ctx, SpriteRenderer* sprites, uint32_t ren
 
     // Set da mescla: 0 = mascara atual, 1 = anterior, 2 = reativa (storage).
     {
-        VkDescriptorSetLayoutBinding b[3]{};
-        for (uint32_t i = 0; i < 3; ++i) {
+        // 0 atual, 1 anterior, 2 saida, 3 mascara extra (particulas).
+        VkDescriptorSetLayoutBinding b[4]{};
+        for (uint32_t i = 0; i < 4; ++i) {
             b[i].binding = i;
             b[i].descriptorCount = 1;
             b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            b[i].descriptorType = i < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            b[i].descriptorType = i == 2 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         }
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 3;
+        li.bindingCount = 4;
         li.pBindings = b;
         if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &m_reactiveSetLayout) != VK_SUCCESS) return false;
     }
@@ -51,7 +52,7 @@ bool SpriteLayer::init(VulkanContext* ctx, SpriteRenderer* sprites, uint32_t ren
         li.pBindings = b;
         if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &m_layerSetLayout) != VK_SUCCESS) return false;
     }
-    const VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * 2 + 3},
+    const VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * 3 + 3},
                                         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2}};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -185,18 +186,27 @@ void SpriteLayer::writeReactiveSets() {
         VkDescriptorImageInfo a{m_sampler, m_mask[cur].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo b{m_sampler, m_mask[cur ^ 1u].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo c{VK_NULL_HANDLE, m_reactive.view, VK_IMAGE_LAYOUT_GENERAL};
-        VkWriteDescriptorSet w[3]{};
-        const VkDescriptorImageInfo* infos[3] = {&a, &b, &c};
-        for (uint32_t i = 0; i < 3; ++i) {
+        // Sem mascara extra: a propria atual (max com ela mesma nao muda nada).
+        VkDescriptorImageInfo d{m_sampler, m_extra ? m_extra : m_mask[cur].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet w[4]{};
+        const VkDescriptorImageInfo* infos[4] = {&a, &b, &c, &d};
+        for (uint32_t i = 0; i < 4; ++i) {
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[i].dstSet = m_reactiveSets[cur];
             w[i].dstBinding = i;
             w[i].descriptorCount = 1;
-            w[i].descriptorType = i < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[i].descriptorType = i == 2 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[i].pImageInfo = infos[i];
         }
-        vkUpdateDescriptorSets(m_ctx->device(), 3, w, 0, nullptr);
+        vkUpdateDescriptorSets(m_ctx->device(), 4, w, 0, nullptr);
     }
+}
+
+void SpriteLayer::setExtraReactive(VkImageView view) {
+    if (!m_ctx || view == m_extra) return;
+    vkDeviceWaitIdle(m_ctx->device());
+    m_extra = view;
+    writeReactiveSets();
 }
 
 void SpriteLayer::bindLayerInputs(VkImageView depth, VkImageView lit, VkImageView albedo) {

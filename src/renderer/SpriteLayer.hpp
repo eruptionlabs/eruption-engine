@@ -36,6 +36,9 @@ public:
                      float nearZ, float farZ);
 
     VkImageView reactiveView() const { return m_reactive.view; }
+    // Mascara extra (R8, render, SHADER_READ_ONLY) que entra no max da
+    // reativa: a cobertura das particulas. VK_NULL_HANDLE = nenhuma.
+    void setExtraReactive(VkImageView view);
 
 private:
     struct Img {
@@ -53,6 +56,7 @@ private:
     uint32_t m_w = 0, m_h = 0;
     std::array<Img, 2> m_mask;
     Img m_reactive;
+    VkImageView m_extra = VK_NULL_HANDLE;
     uint32_t m_current = 0;   // qual mascara recebe o frame atual
 
     VkSampler m_sampler = VK_NULL_HANDLE;

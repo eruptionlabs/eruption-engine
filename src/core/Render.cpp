@@ -180,8 +180,10 @@ void Engine::bindFsrInputs(bool write) {
     const VkImageView color = m_upscalerMode == UpscalerMode::FsrBeforePost
                                   ? m_deferredLighting.litImageView()
                                   : m_postProcessor.outputView();
+    // Reativa: a da camada de sprites (que ja' junta a das particulas) ou,
+    // sem ela, direto a das particulas.
     m_fsr.bindInputs(color, m_gbuffer.depthView(), m_cameraMotion.view(),
-                     m_spriteLayerActive ? m_spriteLayer.reactiveView() : VK_NULL_HANDLE, write);
+                     m_spriteLayerActive ? m_spriteLayer.reactiveView() : m_vfx.reactiveView(), write);
     if (!write) return;
     if (m_spriteLayerActive) {
         m_spriteLayer.bindLayerInputs(m_gbuffer.depthView(), m_deferredLighting.litImageView(), m_gbuffer.albedoView());
@@ -236,6 +238,10 @@ void Engine::render() {
             m_postProcessor.resize(std::max(64u, static_cast<uint32_t>(w * m_postScale)),
                                    std::max(64u, static_cast<uint32_t>(h * m_postScale)));
         }
+        // Mascara reativa das particulas no tamanho novo, antes da camada de
+        // sprites reescrever os sets dela (que leem essa mascara).
+        m_vfx.resize(w, h);
+        if (m_spriteLayerActive) m_spriteLayer.setExtraReactive(m_vfx.reactiveView());
         if (m_spriteLayerActive) m_spriteLayer.resize(w, h);
         if (fsrActive()) {
             // Entradas novas antes do resize, que escreve os sets com elas.
@@ -1460,12 +1466,11 @@ void Engine::render() {
         if (m_vfx.active()) {
             m_vulkan.writeTimestamp(cmd, 14, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             m_vfx.drawLowRes(cmd, m_gbuffer.depthView(), renderExtent()); // fumaca em meia resolucao
-            vkc::cmdBeginRendering(cmd, &planeInfo);
-            m_vfx.draw(cmd, m_gbuffer.depthView(), renderExtent());
-            vkc::cmdEndRendering(cmd);
+            m_vfx.draw(cmd, m_deferredLighting.litImageView(), m_gbuffer.depthView(), renderExtent());
             m_vulkan.writeTimestamp(cmd, 15, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             Profiler::addGpuTime("VFX Draw", m_vulkan.timestampDeltaMs(14, 15));
         }
+        m_vfx.endFrame(cmd); // sem particula: zera a mascara reativa uma vez
         cpuMark(10);
     }
 

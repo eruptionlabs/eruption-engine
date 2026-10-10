@@ -318,6 +318,7 @@ void VfxPreview::render(VkCommandBuffer cmd, float dt) {
         m_ctx->waitIdle();
         destroyTargets();
         if (!createTargets()) return;
+        m_sys.resize(m_w, m_h); // mascara reativa no tamanho da previa
     }
     const uint32_t frame = m_ctx->currentFrame();
 
@@ -394,13 +395,8 @@ void VfxPreview::render(VkCommandBuffer cmd, float dt) {
                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
     m_sys.drawLowRes(cmd, m_depthView, ext);
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    depth.storeOp = VK_ATTACHMENT_STORE_OP_NONE;
-    vkc::cmdBeginRendering(cmd, &ri);
-    m_sys.draw(cmd, m_depthView, ext);
-    vkc::cmdEndRendering(cmd);
+    m_sys.draw(cmd, m_hdrView, m_depthView, ext);
+    m_sys.endFrame(cmd);
 
     // HDR -> LDR da interface
     imgBarrier(m_ctx, cmd, m_hdr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
