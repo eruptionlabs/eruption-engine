@@ -51,15 +51,25 @@ void Editor::drawModelViewer() {
 
     // Imagem (o tamanho vale já: os alvos são refeitos antes de a interface usá-los).
     pv.setSize(static_cast<uint32_t>(imgW), static_cast<uint32_t>(imgH));
-    ImGui::BeginChild("##view", ImVec2(imgW, imgH), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
+    ImGui::BeginChild("##view", ImVec2(imgW, imgH), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove);
+    const ImVec2 imgPos = ImGui::GetCursorPos();
     if (pv.texture()) ImGui::Image(reinterpret_cast<ImTextureID>(pv.texture()), ImVec2(imgW, imgH));
-    if (ImGui::IsItemHovered()) {
+    // Área que segura o mouse por cima da imagem: sem ela o arrasto ia para a
+    // janela (que se movia junto) em vez da câmera.
+    ImGui::SetCursorPos(imgPos);
+    ImGui::InvisibleButton("##viewinput", ImVec2(imgW, imgH),
+                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
+                               ImGuiButtonFlags_MouseButtonMiddle);
+    if (ImGui::IsItemActive() || ImGui::IsItemHovered()) {
         const ImGuiIO& io = ImGui::GetIO();
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) pv.orbit(io.MouseDelta.x, io.MouseDelta.y);
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Right) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
+        if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) pv.orbit(io.MouseDelta.x, io.MouseDelta.y);
+        if (ImGui::IsItemActive() && (ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsMouseDown(ImGuiMouseButton_Middle)))
             pv.pan(-io.MouseDelta.x, io.MouseDelta.y);
-        if (io.MouseWheel != 0.0f) pv.zoom(io.MouseWheel);
-        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_F)) pv.frame();
+        if (ImGui::IsItemHovered() && io.MouseWheel != 0.0f) pv.zoom(io.MouseWheel);
+        if (ImGui::IsItemHovered() &&
+            (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_F)))
+            pv.frame();
     }
     if (!pv.hasTarget()) {
         ImGui::SetCursorPos(ImVec2(16, 16));

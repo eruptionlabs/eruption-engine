@@ -369,8 +369,10 @@ void ModelPreview::frame() {
 }
 
 void ModelPreview::orbit(float dx, float dy) {
-    m_yaw += dx * 0.008f;
-    m_pitch = glm::clamp(m_pitch + dy * 0.008f, glm::radians(-85.0f), glm::radians(85.0f));
+    // Arrastar para a direita gira o modelo para a direita; para baixo, a
+    // câmera desce (o eixo que o autor pediu).
+    m_yaw -= dx * 0.008f;
+    m_pitch = glm::clamp(m_pitch - dy * 0.008f, glm::radians(-85.0f), glm::radians(85.0f));
 }
 
 void ModelPreview::pan(float dx, float dy) {
