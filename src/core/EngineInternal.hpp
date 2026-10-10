@@ -94,7 +94,7 @@ inline void appendArtificialTestLights(const std::string& mapName,
                                        std::vector<PointLight>& lights) {
     const char* env = std::getenv("ERUPTION_TEST_ARTIFICIAL_LIGHTS");
     if (!env || std::strcmp(env, "1") != 0) return;
-    if (mapName != "parana_field") return;
+    if (mapName != "parana_field" && mapName != "parana_field_lite") return;
 
     const auto add = [&](float x, float y, float z, float r, float g, float b,
                          float intensity, float radius) {

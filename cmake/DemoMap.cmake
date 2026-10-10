@@ -1,9 +1,11 @@
 # Demo map download.
 #
-# The parana_field map ships its .env and .ter in the repository, but its .glb
-# (about 210 MB) is larger than GitHub allows for a single file. It lives as a
-# release asset instead. If the .glb is missing, the first configure downloads
-# the zip, checks its SHA-256 and extracts it into the source tree.
+# The parana_field_lite map (reduced models) ships its .env and .ter in the
+# repository, but its .glb (about 210 MB) is larger than GitHub allows for a
+# single file. It lives as a release asset instead. If the .glb is missing, the
+# first configure downloads the zip, checks its SHA-256 and extracts it into the
+# source tree. The asset predates the rename and still holds parana_field.glb.
+# parana_field (original models, stress map, 409 MB) is not downloaded here.
 #
 # Turn it off with -DERUPTION_FETCH_DEMO_MAP=OFF. Offline configures only warn.
 # Manual alternative: tools/fetch_demo_map.sh
@@ -14,7 +16,7 @@ set(ERUPTION_DEMO_MAP_URL
     CACHE STRING "Release asset with the demo map")
 set(ERUPTION_DEMO_MAP_SHA256 "40396b6ac5f3d97fb6ad636d8d6d6284a7f8c750f5a54c74ddd9695533a214a3")
 
-set(_demo_glb "${CMAKE_SOURCE_DIR}/assets/external/parana_field/parana_field.glb")
+set(_demo_glb "${CMAKE_SOURCE_DIR}/assets/external/parana_field_lite/parana_field_lite.glb")
 if(ERUPTION_FETCH_DEMO_MAP AND NOT EXISTS "${_demo_glb}")
     set(_demo_zip "${CMAKE_BINARY_DIR}/parana_field.zip")
     message(STATUS "Demo map missing, downloading ${ERUPTION_DEMO_MAP_URL}")
@@ -24,13 +26,17 @@ if(ERUPTION_FETCH_DEMO_MAP AND NOT EXISTS "${_demo_glb}")
     if(NOT _demo_code EQUAL 0)
         list(GET _demo_status 1 _demo_msg)
         message(WARNING "Demo map download failed (${_demo_msg}). The engine builds, but "
-                        "parana_field will not load. Run tools/fetch_demo_map.sh later.")
+                        "parana_field_lite will not load. Run tools/fetch_demo_map.sh later.")
     else()
         file(SHA256 "${_demo_zip}" _demo_hash)
         if(NOT _demo_hash STREQUAL ERUPTION_DEMO_MAP_SHA256)
             message(WARNING "Demo map checksum mismatch (got ${_demo_hash}). Not extracting.")
         else()
-            file(ARCHIVE_EXTRACT INPUT "${_demo_zip}" DESTINATION "${CMAKE_SOURCE_DIR}")
+            set(_demo_tmp "${CMAKE_BINARY_DIR}/demo_map_extract")
+            file(REMOVE_RECURSE "${_demo_tmp}")
+            file(ARCHIVE_EXTRACT INPUT "${_demo_zip}" DESTINATION "${_demo_tmp}")
+            file(RENAME "${_demo_tmp}/assets/external/parana_field/parana_field.glb" "${_demo_glb}")
+            file(REMOVE_RECURSE "${_demo_tmp}")
             message(STATUS "Demo map installed: ${_demo_glb}")
         endif()
     endif()

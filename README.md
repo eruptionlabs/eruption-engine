@@ -58,10 +58,10 @@ cd eruption-engine
 To run a specific map:
 
 ```bash
-./launch.sh --map parana_field
+./launch.sh --map parana_field_lite
 ```
 
-The `parana_field` demo map uses CC0 textures only. Its `.glb` file is larger than GitHub allows, so it ships as a release asset: the first CMake configure downloads it automatically (about 170 MB) and verifies its checksum. To fetch it by hand, run `tools/fetch_demo_map.sh`; to skip it, pass `-DERUPTION_FETCH_DEMO_MAP=OFF`. On the first load the engine compresses the embedded textures and caches the result next to the map.
+The `parana_field_lite` demo map uses CC0 textures only. Its `.glb` file is larger than GitHub allows, so it ships as a release asset: the first CMake configure downloads it automatically (about 170 MB) and verifies its checksum. To fetch it by hand, run `tools/fetch_demo_map.sh`; to skip it, pass `-DERUPTION_FETCH_DEMO_MAP=OFF`. On the first load the engine compresses the embedded textures and caches the result next to the map. `parana_field` is the same map with the original, full-detail models (about 25 million unique triangles, 409 MB): a stress map, not downloaded by the build.
 
 ## Layout
 
