@@ -27,7 +27,7 @@ struct Particle {
     uint angVel;   // half2(velocidade angular rad/s, quadro inicial 0..1)
 };
 
-// Parametros de um emissor ativo (um por instancia x emissor), 368 bytes.
+// Parametros de um emissor ativo (um por instancia x emissor), 384 bytes.
 struct Emitter {
     vec4 posTime;     // xyz posicao no mundo, w tempo do efeito
     vec4 prevPos;     // xyz posicao no frame anterior (nascimento interpolado)
@@ -48,6 +48,7 @@ struct Emitter {
     vec4 flip;        // x quadros/s, y total de quadros, z modo (0 vida, 1 fps, 2 sorteado)
     uint colorLut[16];// RGBA8 (cor * emissivo vai no shader), 16 amostras da vida
     uint sizeLut[8];  // 16 halfs: tamanho ao longo da vida
+    uvec4 cutout;     // 8 halfs: poligono justo da textura (alcance em 8 direcoes)
 };
 
 // Bits de Emitter.flags.x
@@ -61,6 +62,7 @@ const uint VFXF_COLLIDE_PLANE= 1u << 10;
 const uint VFXF_COLLIDE_DEPTH= 1u << 11;
 const uint VFXF_KILLED       = 1u << 12; // emissor removido: particulas morrem ja'
 const uint VFXF_SPAWNING     = 1u << 13;
+const uint VFXF_LOWRES       = 1u << 14; // desenha em meia resolucao (fumaca)
 
 // Pedido de nascimento (CPU -> GPU): `count` particulas do emissor `slot`,
 // ocupando [first, first+count) da fila de nascimento deste frame.
@@ -79,18 +81,22 @@ struct FrameParams {
     vec4 camPos;        // xyz camera, w dt
     vec4 timeInfo;      // x tempo, y total de pedidos, z total a nascer, w perto
     vec4 depthInfo;     // x largura, y altura, z longe, w 1 = profundidade valida
-    uvec4 counts;       // x lista atual (0/1), y capacidade total
+    uvec4 counts;       // x lista atual (0/1), y capacidade total, z ordenar (0/1)
 };
 
-// Contadores na GPU (uint): ver VfxGpu.hpp.
+// Contadores na GPU (uint) - precisa bater com VfxSystem.cpp.
 #define VFXC_ALIVE0    0
 #define VFXC_ALIVE1    1
 #define VFXC_DEAD      2
-#define VFXC_RENDER    3
-#define VFXC_DISPATCH  4  // 4..6: argumentos do dispatch indireto da simulacao
-#define VFXC_DRAW      8  // 8..11: argumentos do draw indireto
-#define VFXC_SPAWNED   12 // nascidas neste frame (estatistica)
-#define VFXC_COUNT     16
+#define VFXC_RENDER    3  // 3: lista cheia, 4: lista de meia resolucao
+#define VFXC_DISPATCH  8  // 8..10: dispatch indireto da simulacao
+#define VFXC_DRAW      12 // 12..15: draw da lista cheia; 16..19: meia resolucao
+#define VFXC_SORTDISP  20 // 20..22: ordenar lista cheia; 24..26: meia resolucao
+#define VFXC_COUNT     28
+
+// Listas de desenho no mesmo buffer: [0,cap) cheia, [cap,2cap) meia
+// resolucao; ordenadas em [2cap,3cap) e [3cap,4cap).
+#define VFX_SORT_BUCKETS 256u
 
 layout(std430, set = VFX_SET, binding = 0) VFX_RW buffer ParticleBuf { Particle particles[]; };
 layout(std430, set = VFX_SET, binding = 1) VFX_RW buffer DeadBuf { uint deadList[]; };
@@ -101,6 +107,17 @@ layout(std430, set = VFX_SET, binding = 5) readonly buffer EmitterBuf { Emitter 
 layout(std430, set = VFX_SET, binding = 6) readonly buffer SpawnBuf { SpawnRequest spawns[]; };
 layout(std140, set = VFX_SET, binding = 7) uniform FrameBuf { FrameParams frame; };
 layout(set = VFX_SET, binding = 8) uniform sampler2D sceneDepth;
+layout(set = VFX_SET, binding = 9) uniform sampler2D lowResColor;
+// Ordenacao: por lista, 256 contagens + 256 posicoes de escrita.
+layout(std430, set = VFX_SET, binding = 10) VFX_RW buffer SortBuf { uint sortData[]; };
+
+// Balde de profundidade (0 = mais longe): log da distancia entre perto e
+// longe, de tras para frente (a mistura alfa precisa do fundo primeiro).
+uint depthBucket(vec3 pos) {
+    float w = max((frame.viewProj * vec4(pos, 1.0)).w, frame.timeInfo.w);
+    float t = log2(w / frame.timeInfo.w) / log2(max(frame.depthInfo.z / frame.timeInfo.w, 1.0001));
+    return VFX_SORT_BUCKETS - 1u - uint(clamp(t, 0.0, 1.0) * float(VFX_SORT_BUCKETS - 1u));
+}
 
 // Aleatorio sem estado (PCG hash): o mesmo resultado em qualquer ordem de
 // execucao das threads, entao o efeito e' deterministico dada a semente.

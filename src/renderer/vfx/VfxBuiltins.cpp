@@ -160,6 +160,34 @@ VfxImage makeStar() {
 
 } // namespace
 
+void computeVfxCutout(const uint8_t* rgba, uint32_t w, uint32_t h, uint32_t cols, uint32_t rows, float out[8]) {
+    const float s = 0.70710678f;
+    const float nx[8] = {1, s, 0, -s, -1, -s, 0, s};
+    const float ny[8] = {0, s, 1, s, 0, -s, -1, -s};
+    for (int k = 0; k < 8; ++k) out[k] = -1e9f;
+    cols = std::max(cols, 1u);
+    rows = std::max(rows, 1u);
+    const uint32_t cw = w / cols, ch = h / rows;
+    bool any = false;
+    if (cw > 0 && ch > 0) {
+        for (uint32_t y = 0; y < rows * ch; ++y)
+            for (uint32_t x = 0; x < cols * cw; ++x) {
+                if (rgba[(size_t(y) * w + x) * 4 + 3] < 8) continue; // ~3% de alfa
+                // Centro do texel no quadro, em [-1,1], com folga de meio texel.
+                const float px = ((float(x % cw) + 0.5f) / float(cw)) * 2.0f - 1.0f;
+                const float py = 1.0f - ((float(y % ch) + 0.5f) / float(ch)) * 2.0f;
+                const float pad = 1.0f / float(std::min(cw, ch));
+                for (int k = 0; k < 8; ++k) out[k] = std::max(out[k], px * nx[k] + py * ny[k] + pad);
+                any = true;
+            }
+    }
+    // Sem conteudo (ou quadro vazio): quad inteiro.
+    for (int k = 0; k < 8; ++k) {
+        const float full = (k & 1) ? 1.41421356f : 1.0f;
+        out[k] = any ? std::clamp(out[k], 0.05f, full) : full;
+    }
+}
+
 bool makeVfxBuiltin(const std::string& name, VfxImage& out) {
     if (name == "builtin:puff") out = makePuff();
     else if (name == "builtin:flame") out = makeFlame();

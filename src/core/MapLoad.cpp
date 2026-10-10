@@ -594,7 +594,23 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     }
     // ERUPTION_TEST_VFX="efeito@x,y,z;efeito2@x,y,z" (teste): toca efeitos
     // ao abrir o mapa, para bancada de imagem e de desempenho.
+    // Efeitos do mapa (.env "effects"). Os efeitos sao descritos em metros;
+    // o mapa diz quantas unidades do mundo tem um metro (padrao do motor:
+    // kVfxUnitsPerMeter, medido no tamanho dos personagens e das arvores).
+    m_vfx.setUnitsPerMeter(m_currentMap->vfxUnitsPerMeter > 0.0f ? m_currentMap->vfxUnitsPerMeter : kVfxUnitsPerMeter);
     if (const char* u = std::getenv("ERUPTION_TEST_VFX_UNITS")) m_vfx.setUnitsPerMeter(std::strtof(u, nullptr));
+    // ERUPTION_TEST_NO_VFX=1 (teste): mapa sem os efeitos do .env (imagens
+    // de referencia anteriores aos efeitos continuam comparaveis).
+    static const bool kNoMapVfx = std::getenv("ERUPTION_TEST_NO_VFX") != nullptr;
+    for (const auto& fx : m_currentMap->effects) {
+        if (!fx.enabled || kNoMapVfx) continue;
+        Mat4 t = glm::translate(Mat4(1.0f), fx.position);
+        t = glm::rotate(t, glm::radians(fx.rotationDeg.y), Vec3(0, 1, 0));
+        t = glm::rotate(t, glm::radians(fx.rotationDeg.x), Vec3(1, 0, 0));
+        t = glm::rotate(t, glm::radians(fx.rotationDeg.z), Vec3(0, 0, 1));
+        t = glm::scale(t, Vec3(fx.scale));
+        if (!m_vfx.spawn(fx.name, t)) ERUPTION_LOG_WARN("[VFX] efeito do mapa '%s' nao tocou", fx.name.c_str());
+    }
     if (const char* tv = std::getenv("ERUPTION_TEST_VFX")) {
         std::string all = tv;
         size_t start = 0;

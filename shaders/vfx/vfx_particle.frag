@@ -21,6 +21,11 @@ layout(location = 7) in vec2 v_corner;
 
 layout(location = 0) out vec4 o_color;
 
+layout(push_constant) uniform Push {
+    uint listOffset;
+    float depthScale;
+} pc;
+
 void main() {
     vec4 tex;
     if (v_texBlend.x == 0xFFFFFFFFu) {
@@ -35,12 +40,17 @@ void main() {
     }
     vec4 c = v_color * tex;
 
-    if (v_soft > 0.0) {
-        float d = texelFetch(sceneDepth, ivec2(gl_FragCoord.xy), 0).r;
+    // Meia resolucao nao tem teste de profundidade por hardware: o pixel
+    // compara com a profundidade cheia no centro dele (fumaca e' suave).
+    bool lowRes = pc.depthScale > 1.5;
+    if (v_soft > 0.0 || lowRes) {
+        float d = texelFetch(sceneDepth, ivec2(gl_FragCoord.xy * pc.depthScale), 0).r;
         if (d < 1.0) {
             float n = u_nearPlane, f = u_farPlane;
             float sceneZ = n * f / (f - d * (f - n));
-            c.a *= clamp((sceneZ - v_viewZ) / v_soft, 0.0, 1.0); // v_soft ja' em unidades do mundo
+            // v_soft ja' em unidades do mundo
+            if (v_soft > 0.0) c.a *= clamp((sceneZ - v_viewZ) / v_soft, 0.0, 1.0);
+            else if (sceneZ < v_viewZ) discard;
         }
     }
     if (c.a <= 0.002) discard;

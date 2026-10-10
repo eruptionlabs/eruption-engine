@@ -17,10 +17,32 @@ layout(location = 5) flat out uvec2 v_texBlend; // x textura (0xFFFFFFFF = disco
 layout(location = 6) out float v_soft;
 layout(location = 7) out vec2 v_corner;
 
-const vec2 kCorners[6] = vec2[](vec2(-1, -1), vec2(1, -1), vec2(1, 1), vec2(-1, -1), vec2(1, 1), vec2(-1, 1));
+layout(push_constant) uniform Push {
+    uint listOffset;  // inicio da lista no buffer de desenho
+    float depthScale; // 1 = resolucao cheia, 2 = meia resolucao
+} pc;
+
+// Poligono de 8 lados recortado pela textura: cada lado k tem normal a k*45
+// graus e fica no alcance do conteudo (alfa) naquela direcao, medido na
+// importacao. Disco/fumaca viram octogono (~17% a 35% menos pixels que o
+// quad); textura cheia ate' o canto continua quadrada. Leque de 6 triangulos.
+float cutDist(Emitter e, uint k) {
+    vec2 h = unpackHalf2x16(e.cutout[k >> 1]);
+    return (k & 1u) == 0u ? h.x : h.y;
+}
+vec2 ringPoint(Emitter e, uint k) {
+    const float s = 0.70710678;
+    vec2 n0 = vec2(cos(float(k) * 0.78539816), sin(float(k) * 0.78539816));
+    uint k1 = (k + 1u) & 7u;
+    vec2 n1 = vec2(cos(float(k1) * 0.78539816), sin(float(k1) * 0.78539816));
+    float d0 = cutDist(e, k), d1 = cutDist(e, k1);
+    // Intersecao das retas n0.p = d0 e n1.p = d1 (det = sin 45).
+    vec2 p = vec2(d0 * n1.y - d1 * n0.y, n0.x * d1 - n1.x * d0) / s;
+    return clamp(p, vec2(-1.0), vec2(1.0));
+}
 
 void main() {
-    uint idx = renderList[gl_InstanceIndex];
+    uint idx = renderList[pc.listOffset + gl_InstanceIndex];
     Particle p = particles[idx];
     Emitter e = emitters[p.slotGen & 0xFFFFu];
     float t = clamp(p.age / p.life, 0.0, 1.0);
@@ -41,7 +63,9 @@ void main() {
     float proj11 = abs(u_projection[1][1]);
     size = min(size, e.render.z * max(viewZ, 1e-3) / max(proj11, 1e-3));
 
-    vec2 c = kCorners[gl_VertexIndex];
+    uint tri = uint(gl_VertexIndex) / 3u, corner = uint(gl_VertexIndex) % 3u;
+    uint ring = corner == 0u ? 0u : tri + corner;
+    vec2 c = ringPoint(e, ring);
     float cs = cos(rot), sn = sin(rot);
     vec2 rc = vec2(c.x * cs - c.y * sn, c.x * sn + c.y * cs);
 

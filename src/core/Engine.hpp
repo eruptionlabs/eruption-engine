@@ -891,6 +891,7 @@ private:
     // personagem anda ~60 u/s e a arvore grande tem ~250 u: ~16 u por metro).
     static constexpr float kVfxUnitsPerMeter = 16.0f;
     std::vector<TextureResource> m_vfxTextures;
+    std::unordered_map<std::string, uint32_t> m_vfxTextureSlots;
     bool m_showPlayerLightMenu = false;
     PlayerLight m_playerLight;
     bool m_debugModelPivots = false;

@@ -1459,6 +1459,7 @@ void Engine::render() {
         // (teste de profundidade por hardware + borda suave pela amostra).
         if (m_vfx.active()) {
             m_vulkan.writeTimestamp(cmd, 14, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            m_vfx.drawLowRes(cmd, m_gbuffer.depthView(), renderExtent()); // fumaca em meia resolucao
             vkc::cmdBeginRendering(cmd, &planeInfo);
             m_vfx.draw(cmd, m_gbuffer.depthView(), renderExtent());
             vkc::cmdEndRendering(cmd);

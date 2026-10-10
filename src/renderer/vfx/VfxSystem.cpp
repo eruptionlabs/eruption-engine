@@ -20,9 +20,17 @@ namespace {
 
 // Contadores (uint) - precisa bater com VFXC_* em vfx_common.glsl.
 constexpr uint32_t kCDead = 2;
-constexpr uint32_t kCDispatch = 4;
-constexpr uint32_t kCDraw = 8;
-constexpr uint32_t kCounterCount = 16;
+constexpr uint32_t kCRender = 3;
+constexpr uint32_t kCDispatch = 8;
+constexpr uint32_t kCDraw = 12;
+constexpr uint32_t kCSortDispatch = 20;
+constexpr uint32_t kCounterCount = 28;
+constexpr uint32_t kBindings = 11;
+
+struct DrawPush {
+    uint32_t listOffset;
+    float depthScale;
+};
 constexpr uint32_t kParticleBytes = 48;
 
 uint32_t hash32(uint32_t v) {
@@ -76,11 +84,14 @@ void VfxSystem::destroyBuf(Buf& b) {
 
 bool VfxSystem::createBuffers() {
     const VkDeviceSize cap = m_capacity;
-    const VkBufferUsageFlags ssbo = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    // TRANSFER_SRC: o dump de depuracao (ERUPTION_DEBUG_VFX) le' daqui.
+    const VkBufferUsageFlags ssbo =
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     bool ok = createBuf(m_particles, cap * kParticleBytes, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_dead, cap * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_alive, cap * 8, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
-              createBuf(m_render, cap * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
+              createBuf(m_render, cap * 16, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
+              createBuf(m_sort, 2 * 512 * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_counters, kCounterCount * 4,
                         ssbo | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                         VMA_MEMORY_USAGE_GPU_ONLY, false);
@@ -135,7 +146,8 @@ bool VfxSystem::createBuffers() {
 }
 
 void VfxSystem::destroyBuffers() {
-    for (Buf* b : {&m_particles, &m_dead, &m_alive, &m_render, &m_counters, &m_emitterDev, &m_spawnDev, &m_frameDev})
+    for (Buf* b : {&m_particles, &m_dead, &m_alive, &m_render, &m_sort, &m_counters, &m_emitterDev, &m_spawnDev,
+                   &m_frameDev})
         destroyBuf(*b);
     for (uint32_t f = 0; f < VulkanContext::MAX_FRAMES_IN_FLIGHT; ++f) {
         destroyBuf(m_emitterBuf[f]);
@@ -151,8 +163,8 @@ void VfxSystem::destroyBuffers() {
 
 bool VfxSystem::createDescriptors() {
     VkDevice dev = m_ctx->device();
-    VkDescriptorSetLayoutBinding b[9]{};
-    for (uint32_t i = 0; i < 9; ++i) {
+    VkDescriptorSetLayoutBinding b[kBindings]{};
+    for (uint32_t i = 0; i < kBindings; ++i) {
         b[i].binding = i;
         b[i].descriptorCount = 1;
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -160,16 +172,17 @@ bool VfxSystem::createDescriptors() {
     }
     b[7].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     b[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = 9;
+    li.bindingCount = kBindings;
     li.pBindings = b;
     if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &m_setLayout) != VK_SUCCESS) return false;
 
     const uint32_t n = VulkanContext::MAX_FRAMES_IN_FLIGHT * 2;
-    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7 * n},
+    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8 * n},
                                      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, n},
-                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n}};
+                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * n}};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pi.maxSets = n;
@@ -193,21 +206,30 @@ bool VfxSystem::createDescriptors() {
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.maxLod = 0.0f;
-    return vkCreateSampler(dev, &si, nullptr, &m_depthSampler) == VK_SUCCESS;
+    if (vkCreateSampler(dev, &si, nullptr, &m_depthSampler) != VK_SUCCESS) return false;
+    si.magFilter = VK_FILTER_LINEAR;
+    si.minFilter = VK_FILTER_LINEAR;
+    return vkCreateSampler(dev, &si, nullptr, &m_linearSampler) == VK_SUCCESS;
 }
 
 void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
-    if (m_setBuffersWritten[frame] && m_setDepth[frame] == depthView) return;
+    if (m_setBuffersWritten[frame] && m_setDepth[frame] == depthView && m_setLow[frame] == m_lowView) return;
     VkDescriptorBufferInfo bi[8] = {
         {m_particles.buf, 0, VK_WHOLE_SIZE}, {m_dead.buf, 0, VK_WHOLE_SIZE},    {m_alive.buf, 0, VK_WHOLE_SIZE},
         {m_counters.buf, 0, VK_WHOLE_SIZE},  {m_render.buf, 0, VK_WHOLE_SIZE},  {m_emitterDev.buf, 0, VK_WHOLE_SIZE},
         {m_spawnDev.buf, 0, VK_WHOLE_SIZE},  {m_frameDev.buf, 0, VK_WHOLE_SIZE}};
+    const VkDescriptorBufferInfo sortInfo{m_sort.buf, 0, VK_WHOLE_SIZE};
     VkDescriptorImageInfo ii[2] = {{m_depthSampler, depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                    {m_depthSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
-    VkWriteDescriptorSet w[18]{};
+    // Sem alvo de meia resolucao ainda: a profundidade ocupa o binding (nunca
+    // e' lida enquanto nao houver emissor lowRes).
+    const VkDescriptorImageInfo lowInfo{m_linearSampler, m_lowView ? m_lowView : depthView,
+                                        m_lowView ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                                  : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet w[2 * kBindings]{};
     for (uint32_t s = 0; s < 2; ++s) {
-        for (uint32_t i = 0; i < 9; ++i) {
-            VkWriteDescriptorSet& x = w[s * 9 + i];
+        for (uint32_t i = 0; i < kBindings; ++i) {
+            VkWriteDescriptorSet& x = w[s * kBindings + i];
             x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             x.dstSet = s == 0 ? m_sets[frame] : m_drawSets[frame];
             x.dstBinding = i;
@@ -215,12 +237,16 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
             x.descriptorType = i == 7 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             if (i < 8) x.pBufferInfo = &bi[i];
         }
-        w[s * 9 + 8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w[s * 9 + 8].pImageInfo = &ii[s];
+        w[s * kBindings + 8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[s * kBindings + 8].pImageInfo = &ii[s];
+        w[s * kBindings + 9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[s * kBindings + 9].pImageInfo = &lowInfo;
+        w[s * kBindings + 10].pBufferInfo = &sortInfo;
     }
-    vkUpdateDescriptorSets(m_ctx->device(), 18, w, 0, nullptr);
+    vkUpdateDescriptorSets(m_ctx->device(), 2 * kBindings, w, 0, nullptr);
     m_setBuffersWritten[frame] = true;
     m_setDepth[frame] = depthView;
+    m_setLow[frame] = m_lowView;
 }
 
 bool VfxSystem::createPipelines() {
@@ -229,10 +255,16 @@ bool VfxSystem::createPipelines() {
     pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pl.setLayoutCount = 1;
     pl.pSetLayouts = &m_setLayout;
+    if (vkCreatePipelineLayout(dev, &pl, nullptr, &m_compositeLayout) != VK_SUCCESS) return false;
+    const VkPushConstantRange computePush{VK_SHADER_STAGE_COMPUTE_BIT, 0, 4};
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &computePush;
     if (vkCreatePipelineLayout(dev, &pl, nullptr, &m_computeLayout) != VK_SUCCESS) return false;
     VkDescriptorSetLayout drawSets[3] = {m_bindless->layout(), m_frameUboLayout, m_setLayout};
+    const VkPushConstantRange drawPush{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(DrawPush)};
     pl.setLayoutCount = 3;
     pl.pSetLayouts = drawSets;
+    pl.pPushConstantRanges = &drawPush;
     if (vkCreatePipelineLayout(dev, &pl, nullptr, &m_drawLayout) != VK_SUCCESS) return false;
 
     auto compute = [&](const char* path, VkPipeline& out) {
@@ -250,7 +282,10 @@ bool VfxSystem::createPipelines() {
         return r == VK_SUCCESS;
     };
     if (!compute("vfx/vfx_emit.comp.spv", m_emitPipe) || !compute("vfx/vfx_args.comp.spv", m_argsPipe) ||
-        !compute("vfx/vfx_sim.comp.spv", m_simPipe) || !compute("vfx/vfx_finish.comp.spv", m_finishPipe))
+        !compute("vfx/vfx_sim.comp.spv", m_simPipe) || !compute("vfx/vfx_finish.comp.spv", m_finishPipe) ||
+        !compute("vfx/vfx_sort_hist.comp.spv", m_sortHistPipe) ||
+        !compute("vfx/vfx_sort_scan.comp.spv", m_sortScanPipe) ||
+        !compute("vfx/vfx_sort_scatter.comp.spv", m_sortScatterPipe))
         return false;
 
     VkShaderModule vs = loadModule(dev, "vfx/vfx_particle.vert.spv");
@@ -332,7 +367,31 @@ bool VfxSystem::createPipelines() {
     gi.pColorBlendState = &cb;
     gi.pDynamicState = &dy;
     gi.layout = m_drawLayout;
-    const VkResult r = vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_drawPipe);
+    VkResult r = vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_drawPipe);
+    // Meia resolucao: mesmo shader, sem attachment de profundidade (o teste
+    // vira amostra da profundidade cheia no fragment).
+    if (r == VK_SUCCESS) {
+        ri.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+        ds.depthTestEnable = VK_FALSE;
+        r = vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_drawLowPipe);
+    }
+    vkDestroyShaderModule(dev, vs, nullptr);
+    vkDestroyShaderModule(dev, fs, nullptr);
+    if (r != VK_SUCCESS) return false;
+
+    // Composicao: triangulo de tela cheia, mesma mistura premultiplicada.
+    vs = loadModule(dev, "vfx/vfx_composite.vert.spv");
+    fs = loadModule(dev, "vfx/vfx_composite.frag.spv");
+    if (!vs || !fs) {
+        if (vs) vkDestroyShaderModule(dev, vs, nullptr);
+        if (fs) vkDestroyShaderModule(dev, fs, nullptr);
+        return false;
+    }
+    st[0].module = vs;
+    st[1].module = fs;
+    ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+    gi.layout = m_compositeLayout;
+    r = vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_compositePipe);
     vkDestroyShaderModule(dev, vs, nullptr);
     vkDestroyShaderModule(dev, fs, nullptr);
     return r == VK_SUCCESS;
@@ -367,8 +426,18 @@ void VfxSystem::shutdown() {
     if (!m_ctx) return;
     VkDevice dev = m_ctx->device();
     destroyBuffers();
-    for (VkPipeline* p : {&m_emitPipe, &m_argsPipe, &m_simPipe, &m_finishPipe, &m_drawPipe})
+    for (VkPipeline* p : {&m_emitPipe, &m_argsPipe, &m_simPipe, &m_finishPipe, &m_drawPipe, &m_drawLowPipe,
+                          &m_compositePipe, &m_sortHistPipe, &m_sortScanPipe, &m_sortScatterPipe})
         if (*p) vkDestroyPipeline(dev, *p, nullptr), *p = VK_NULL_HANDLE;
+    if (m_lowView) vkDestroyImageView(dev, m_lowView, nullptr);
+    if (m_lowImage) vmaDestroyImage(m_ctx->allocator(), m_lowImage, m_lowAlloc);
+    m_lowView = VK_NULL_HANDLE;
+    m_lowImage = VK_NULL_HANDLE;
+    m_lowExtent = {0, 0};
+    if (m_compositeLayout) vkDestroyPipelineLayout(dev, m_compositeLayout, nullptr);
+    if (m_linearSampler) vkDestroySampler(dev, m_linearSampler, nullptr);
+    m_compositeLayout = VK_NULL_HANDLE;
+    m_linearSampler = VK_NULL_HANDLE;
     if (m_computeLayout) vkDestroyPipelineLayout(dev, m_computeLayout, nullptr);
     if (m_drawLayout) vkDestroyPipelineLayout(dev, m_drawLayout, nullptr);
     if (m_pool) vkDestroyDescriptorPool(dev, m_pool, nullptr);
@@ -541,13 +610,13 @@ void VfxSystem::clear() {
     m_instances.clear();
 }
 
-uint32_t VfxSystem::textureSlot(const std::string& path) {
-    if (path.empty() || !m_resolveTexture) return 0xFFFFFFFFu;
-    auto it = m_textureSlots.find(path);
-    if (it != m_textureSlots.end()) return it->second;
-    const uint32_t slot = m_resolveTexture(path);
-    m_textureSlots[path] = slot;
-    return slot;
+const VfxTextureInfo& VfxSystem::texture(const std::string& path, uint32_t cols, uint32_t rows) {
+    static const VfxTextureInfo kDisc{};
+    if (path.empty() || !m_resolveTexture) return kDisc;
+    const std::string key = path + "#" + std::to_string(cols) + "x" + std::to_string(rows);
+    auto it = m_textures.find(key);
+    if (it != m_textures.end()) return it->second;
+    return m_textures[key] = m_resolveTexture(path, cols, rows);
 }
 
 void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, uint32_t slot, VfxEmitterGpu& o) {
@@ -570,7 +639,11 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
                      (e.flipRandomStart || e.flipMode == VfxFlipMode::Random ? 1u << 9 : 0u) | (e.collidePlane ? 1u << 10 : 0u) |
                      (e.collideDepth ? 1u << 11 : 0u);
     if (inst.killed) flags |= 1u << 12;
-    o.flags = glm::uvec4(flags, m_slotGen[slot], textureSlot(e.texture), (e.flipCols & 0xFFu) | ((e.flipRows & 0xFFu) << 8));
+    if (e.lowRes) flags |= 1u << 14;
+    const VfxTextureInfo& tex = texture(e.texture, e.flipCols, e.flipRows);
+    o.flags = glm::uvec4(flags, m_slotGen[slot], tex.slot, (e.flipCols & 0xFFu) | ((e.flipRows & 0xFFu) << 8));
+    for (int k = 0; k < 4; ++k)
+        o.cutout[k] = glm::packHalf2x16(glm::vec2(tex.cutout[2 * k], tex.cutout[2 * k + 1]));
     o.life = Vec4(e.lifetime.x, std::max(e.lifetime.x, e.lifetime.y), e.speed.x, e.speed.y);
     o.dirSpread = Vec4(dir, e.spread);
     o.sizeRot = Vec4(e.size.x, e.size.y, glm::radians(e.rotation.x), glm::radians(e.rotation.y));
@@ -596,6 +669,7 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
 void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     if (!m_ready) return;
     const uint32_t frame = m_ctx->currentFrame();
+    m_renderSize = renderSize;
 
     // Estatistica com atraso: os contadores que este slot de frame copiou da
     // ultima vez (a cerca dele ja' foi esperada).
@@ -603,12 +677,14 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
         vmaInvalidateAllocation(m_ctx->allocator(), m_readback[frame].alloc, 0, VK_WHOLE_SIZE);
         const uint32_t* c = static_cast<const uint32_t*>(m_readback[frame].mapped);
         m_stats.alive = c[1u - m_readbackList[frame]];
-        m_stats.rendered = c[kCDraw + 1];
+        m_stats.rendered = c[kCRender] + c[kCRender + 1];
         m_readbackPending[frame] = false;
     }
 
     m_requests.clear();
     m_spawnTotal = 0;
+    m_anyLowRes = false;
+    m_sortThisFrame = false;
     float maxLife = 0.0f;
     uint32_t emitterCount = 0;
     for (size_t ii = 0; ii < m_instances.size();) {
@@ -685,6 +761,10 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
             }
             fillEmitterGpu(inst, e, es.slot, m_slotData[es.slot]);
             if (emitting) m_slotData[es.slot].flags.x |= 1u << 13;
+            // Particulas deste emissor ainda podem estar vivas mesmo parado:
+            // a decisao de meia resolucao/ordenacao vale enquanto o efeito existe.
+            m_anyLowRes = m_anyLowRes || e.lowRes;
+            m_sortThisFrame = m_sortThisFrame || e.blend == VfxBlend::Alpha || e.blend == VfxBlend::Premultiplied;
             ++emitterCount;
         }
         inst.prevPos = pos;
@@ -741,7 +821,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     fp.camPos = Vec4(camera.position(), dt);
     fp.timeInfo = Vec4(m_time += dt, float(m_requests.size()), float(m_spawnTotal), camera.nearPlane());
     fp.depthInfo = Vec4(float(renderSize.width), float(renderSize.height), camera.farPlane(), 1.0f);
-    fp.counts = glm::uvec4(m_cur, m_capacity, 0u, 0u);
+    fp.counts = glm::uvec4(m_cur, m_capacity, m_sortThisFrame ? 1u : 0u, 0u);
 
     std::memcpy(m_emitterBuf[frame].mapped, m_slotData.data(), size_t(m_slotHighWater) * sizeof(VfxEmitterGpu));
     if (!m_requests.empty())
@@ -755,6 +835,9 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
 void VfxSystem::simulate(VkCommandBuffer cmd, VkImageView depthView) {
     if (!m_ready || !m_active) return;
     const uint32_t frame = m_ctx->currentFrame();
+    // O alvo de meia resolucao nasce/muda ANTES de qualquer set ser ligado
+    // neste command buffer (reescrever um set ja' ligado invalida a gravacao).
+    if (m_anyLowRes && !ensureLowResTarget(m_renderSize)) m_anyLowRes = false;
     writeDescriptors(frame, depthView);
 
     // O frame anterior ainda pode estar lendo emissores/pedidos/contadores.
@@ -806,6 +889,24 @@ void VfxSystem::simulate(VkCommandBuffer cmd, VkImageView depthView) {
     computeToCompute(0, 0);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_finishPipe);
     vkCmdDispatch(cmd, 1, 1, 1);
+    // Ordem de tras para frente so' quando ha mistura alfa tocando (aditiva
+    // nao precisa): contagem por balde, soma prefixada, espalhamento.
+    if (m_sortThisFrame) {
+        computeToCompute(VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
+        for (uint32_t list = 0; list < 2; ++list) {
+            if (list == 1 && !m_anyLowRes) break;
+            vkCmdPushConstants(cmd, m_computeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &list);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sortHistPipe);
+            vkCmdDispatchIndirect(cmd, m_counters.buf, (kCSortDispatch + list * 4) * 4);
+            computeToCompute(0, 0);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sortScanPipe);
+            vkCmdDispatch(cmd, 1, 1, 1);
+            computeToCompute(0, 0);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sortScatterPipe);
+            vkCmdDispatchIndirect(cmd, m_counters.buf, (kCSortDispatch + list * 4) * 4);
+            computeToCompute(0, 0);
+        }
+    }
     memBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -858,17 +959,100 @@ void VfxSystem::debugDump() {
     destroyBuf(rb);
 }
 
-void VfxSystem::draw(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent) {
-    if (!m_ready || !m_active) return;
+bool VfxSystem::ensureLowResTarget(VkExtent2D full) {
+    const VkExtent2D want{std::max(1u, (full.width + 1) / 2), std::max(1u, (full.height + 1) / 2)};
+    if (m_lowImage && want.width == m_lowExtent.width && want.height == m_lowExtent.height) return true;
+    // Tamanho mudou (janela, painel do editor): o antigo morre quando os
+    // frames em voo que o usam terminarem.
+    if (m_lowImage) {
+        VkImage img = m_lowImage;
+        VmaAllocation alloc = m_lowAlloc;
+        VkImageView view = m_lowView;
+        VulkanContext* ctx = m_ctx;
+        m_ctx->deferFrameCleanup([ctx, img, alloc, view]() {
+            vkDestroyImageView(ctx->device(), view, nullptr);
+            vmaDestroyImage(ctx->allocator(), img, alloc);
+        });
+        m_lowImage = VK_NULL_HANDLE;
+        m_lowView = VK_NULL_HANDLE;
+    }
+    if (!m_ctx->createImage(want.width, want.height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VMA_MEMORY_USAGE_GPU_ONLY,
+                            m_lowImage, m_lowAlloc))
+        return false;
+    VkImageViewCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = m_lowImage;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vkc::createImageView(m_ctx->device(), &vi, nullptr, &m_lowView) != VK_SUCCESS) return false;
+    m_lowExtent = want;
+    return true;
+}
+
+void VfxSystem::drawLowRes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent) {
+    if (!m_ready || !m_active || !m_anyLowRes || !m_lowView) return;
     const uint32_t frame = m_ctx->currentFrame();
     writeDescriptors(frame, depthView);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_drawPipe);
-    const VkViewport vp{0.0f, 0.0f, float(extent.width), float(extent.height), 0.0f, 1.0f};
-    const VkRect2D sc{{0, 0}, extent};
+    m_ctx->cmdImageBarrier(cmd, m_lowImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    VkRenderingAttachmentInfo color{};
+    color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    color.imageView = m_lowView;
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color.clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    VkRenderingInfo ri{};
+    ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    ri.renderArea = {{0, 0}, m_lowExtent};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments = &color;
+    vkc::cmdBeginRendering(cmd, &ri);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_drawLowPipe);
+    const VkViewport vp{0.0f, 0.0f, float(m_lowExtent.width), float(m_lowExtent.height), 0.0f, 1.0f};
+    const VkRect2D sc{{0, 0}, m_lowExtent};
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc);
     VkDescriptorSet sets[3] = {m_bindless->set(), m_frameUboSet, m_drawSets[frame]};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_drawLayout, 0, 3, sets, 0, nullptr);
+    const DrawPush push{(m_sortThisFrame ? 3u : 1u) * m_capacity, float(extent.width) / float(m_lowExtent.width)};
+    vkCmdPushConstants(cmd, m_drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
+                       &push);
+    vkCmdDrawIndirect(cmd, m_counters.buf, (kCDraw + 4) * 4, 1, 16);
+    vkc::cmdEndRendering(cmd);
+    m_ctx->cmdImageBarrier(cmd, m_lowImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                           VK_ACCESS_SHADER_READ_BIT);
+}
+
+void VfxSystem::draw(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent) {
+    if (!m_ready || !m_active) return;
+    const uint32_t frame = m_ctx->currentFrame();
+    writeDescriptors(frame, depthView);
+    const VkViewport vp{0.0f, 0.0f, float(extent.width), float(extent.height), 0.0f, 1.0f};
+    const VkRect2D sc{{0, 0}, extent};
+    // Meia resolucao primeiro (fumaca, atras), depois a resolucao cheia.
+    if (m_anyLowRes && m_lowView) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipe);
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositeLayout, 0, 1, &m_drawSets[frame], 0,
+                                nullptr);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_drawPipe);
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    VkDescriptorSet sets[3] = {m_bindless->set(), m_frameUboSet, m_drawSets[frame]};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_drawLayout, 0, 3, sets, 0, nullptr);
+    const DrawPush push{m_sortThisFrame ? 2u * m_capacity : 0u, 1.0f};
+    vkCmdPushConstants(cmd, m_drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
+                       &push);
     vkCmdDrawIndirect(cmd, m_counters.buf, kCDraw * 4, 1, 16);
 }
 
