@@ -142,18 +142,79 @@ bool ModelRenderer::ensureSkinGpu() {
 
 void ModelRenderer::makeSkinnedInstance(uint32_t instance) {
     if (instance >= m_instances.size()) return;
-    const uint32_t base = m_instances[instance].meshIndex;
-    const auto b = m_skinBases.find(base);
-    if (b == m_skinBases.end() || !ensureSkinGpu()) return;
     SkinnedInstance s;
+    if (!createSkinned(m_instances[instance].meshIndex, s)) return;
     s.instance = instance;
+    m_instances[instance].meshIndex = s.mesh;
+    m_skinnedByInstance[instance] = m_skinned.size();
+    m_skinned.push_back(s);
+}
+
+int ModelRenderer::addPreviewSkin(uint32_t baseMesh) {
+    SkinnedInstance s;
+    if (!createSkinned(baseMesh, s)) return -1;
+    s.instance = kNoInstance;
+    s.previewId = ++m_previewSkinSeq;
+    m_skinned.push_back(s);
+    return static_cast<int>(s.previewId);
+}
+
+ModelRenderer::SkinnedInstance* ModelRenderer::previewSkin(int id) {
+    for (auto& s : m_skinned)
+        if (s.instance == kNoInstance && static_cast<int>(s.previewId) == id) return &s;
+    return nullptr;
+}
+
+uint32_t ModelRenderer::previewSkinMesh(int id) {
+    const SkinnedInstance* s = previewSkin(id);
+    return s ? s->mesh : 0xFFFFFFFFu;
+}
+
+std::vector<std::string> ModelRenderer::previewSkinAnimations(int id) {
+    std::vector<std::string> out;
+    const SkinnedInstance* s = previewSkin(id);
+    if (!s) return out;
+    const auto b = m_skinBases.find(s->baseMesh);
+    if (b != m_skinBases.end())
+        for (const auto& a : b->second.rig->animations) out.push_back(a.name);
+    return out;
+}
+
+void ModelRenderer::playPreviewSkin(int id, int anim, float speed) {
+    SkinnedInstance* s = previewSkin(id);
+    if (!s) return;
+    if (s->anim != anim) s->time = 0.0f;
+    s->anim = anim;
+    s->speed = speed;
+    s->loop = true;
+}
+
+void ModelRenderer::removePreviewSkin(int id) {
+    for (size_t k = 0; k < m_skinned.size(); ++k) {
+        SkinnedInstance& s = m_skinned[k];
+        if (s.instance != kNoInstance || static_cast<int>(s.previewId) != id) continue;
+        ModelMeshGPU empty{};
+        empty.isExternal = true;
+        if (s.mesh < m_meshes.size()) m_meshes[s.mesh] = empty; // índice fica; desenha nada
+        releaseSkinned(s);
+        m_skinned.erase(m_skinned.begin() + static_cast<std::ptrdiff_t>(k));
+        m_skinnedByInstance.clear();
+        for (size_t j = 0; j < m_skinned.size(); ++j)
+            if (m_skinned[j].instance != kNoInstance) m_skinnedByInstance[m_skinned[j].instance] = j;
+        return;
+    }
+}
+
+bool ModelRenderer::createSkinned(uint32_t base, SkinnedInstance& s) {
+    const auto b = m_skinBases.find(base);
+    if (b == m_skinBases.end() || !ensureSkinGpu()) return false;
     s.baseMesh = base;
     const VkDeviceSize bytes = VkDeviceSize(b->second.vertexCount) * sizeof(TerrainVertex);
     if (!m_ctx->createBuffer(bytes,
                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                              VMA_MEMORY_USAGE_GPU_ONLY, s.out, s.outAlloc))
-        return;
+        return false;
     // Descriptor set (um por instância; pool novo quando o atual enche).
     VkDescriptorSetAllocateInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -174,13 +235,13 @@ void ModelRenderer::makeSkinnedInstance(uint32_t instance) {
         VkDescriptorPool pool = VK_NULL_HANDLE;
         if (vkCreateDescriptorPool(m_ctx->device(), &pi, nullptr, &pool) != VK_SUCCESS) {
             vmaDestroyBuffer(m_ctx->allocator(), s.out, s.outAlloc);
-            return;
+            return false;
         }
         m_skinPools.push_back(pool);
         ai.descriptorPool = pool;
         if (vkAllocateDescriptorSets(m_ctx->device(), &ai, &s.set) != VK_SUCCESS) {
             vmaDestroyBuffer(m_ctx->allocator(), s.out, s.outAlloc);
-            return;
+            return false;
         }
     }
     const VkDescriptorBufferInfo infos[4] = {{m_meshes[base].vertexBuffer, 0, VK_WHOLE_SIZE},
@@ -217,10 +278,8 @@ void ModelRenderer::makeSkinnedInstance(uint32_t instance) {
     clone.isExternal = true; // o buffer é do skinning (releaseSkinned)
     m_meshes.push_back(clone);
     s.mesh = static_cast<uint32_t>(m_meshes.size() - 1);
-    m_instances[instance].meshIndex = s.mesh;
     s.anim = -1; // pose de repouso até a cena ou um script pedir uma animação
-    m_skinnedByInstance[instance] = m_skinned.size();
-    m_skinned.push_back(s);
+    return true;
 }
 
 void ModelRenderer::releaseSkinned(SkinnedInstance& s) {
@@ -349,6 +408,8 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
             ModelMeshGPU& mesh = m_meshes[s.mesh];
             mesh.aabbMin = lo;
             mesh.aabbMax = hi;
+        }
+        if (lo.x <= hi.x && s.instance != kNoInstance && s.instance < m_instances.size()) {
             ModelInstance& inst = m_instances[s.instance];
             Vec3 wMin(FLT_MAX), wMax(-FLT_MAX);
             for (int c = 0; c < 8; ++c) {

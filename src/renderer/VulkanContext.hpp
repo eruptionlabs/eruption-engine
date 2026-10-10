@@ -248,6 +248,8 @@ private:
     uint32_t m_maxTessLevel = 1;
 public:
     bool tessellationSupported() const { return m_tessellationSupported; }
+    // Aramado (VK_POLYGON_MODE_LINE): pedido na criação quando o aparelho tem.
+    bool wireframeSupported() const { return m_supportedFeatures.fillModeNonSolid == VK_TRUE; }
     // FSR 3.1 utilizavel neste device (subgroup quad em compute, escrita de
     // storage image sem formato, grupo de 256 invocacoes).
     bool fsrSupported() const { return m_fsrSupported; }

@@ -495,6 +495,10 @@ public:
     void updateCharacters(float dt, bool moveAlongPaths);
     std::vector<SceneCharacter>& characters() { return m_characters; }
     bool hideCharactersInView = false; // vista do editor
+    // Visualizador de modelo do editor: malhas do .glb sem instância na cena.
+    bool loadModelForPreview(const std::string& glbPath);
+    // Desenho fora da tela do editor (visualizador), no frame, antes da interface.
+    std::function<void(VkCommandBuffer)> offscreenHook;
     bool hideMapEffectsInView = false; // vista do editor isolada: sem fumaça do mapa
     // Vista de detalhe total (editor, Exibir > Detalhe total): toda malha na
     // forma original, sem LOD, na tela e na sombra. Para conferir o LOD.

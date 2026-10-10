@@ -14,7 +14,15 @@
 Vários de uma vez: segure **Ctrl** e clique, ou arraste no vazio da cena para
 desenhar um retângulo. Mover, girar, apagar e duplicar (**Ctrl+D**) valem para o grupo.
 
-## Ver um modelo sozinho
+## Visualizador de modelo
+
+Duplo clique num `.glb` no Projeto (ou, com um modelo selecionado, **Abrir no
+visualizador** no Inspetor) abre o **Visualizador de modelo**: o modelo sozinho, com
+o desenho de verdade do motor e luz de estúdio. Dá para girar, ver só a cor, as
+normais, a UV, o aramado, cada nível de LOD (com os triângulos de cada um e a
+distância em que entra no jogo) e tocar as animações de modelos com esqueleto.
+
+## Ver um modelo sozinho na cena
 
 Selecione e aperte **/** (ou **Exibir > Isolar seleção**): só ele fica na vista, o
 resto some (nada é apagado). **/** de novo mostra tudo. **Exibir > Detalhe total
