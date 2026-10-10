@@ -42,7 +42,7 @@ float VfxEffectDesc::maxLifetime() const {
 namespace {
 
 const char* kShapes[] = {"point", "sphere", "box", "cone", "disc"};
-const char* kFacings[] = {"camera", "velocity", "horizontal"};
+const char* kFacings[] = {"camera", "velocity", "horizontal", "ribbon"};
 const char* kBlends[] = {"additive", "premultiplied", "alpha"};
 const char* kFlipModes[] = {"life", "fps", "random"};
 

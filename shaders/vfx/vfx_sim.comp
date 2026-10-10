@@ -162,8 +162,10 @@ void main() {
             size = min(size, e.render.z * max(viewZ, 1e-3) / max(frame.viewInfo.x, 1e-3));
             float stretchLen = e.angVel.z * length(p.vel);
             float radius = size + stretchLen * 0.5 + 0.01;
+            bool ribbon = e.ribbon.y > 0u;
             visible = true;
-            for (int k = 0; k < 6 && visible; ++k)
+            // Ponto de fita nao e' cortado: o vizinho le' o registro dele.
+            for (int k = 0; k < 6 && visible && !ribbon; ++k)
                 visible = dot(frame.frustum[k].xyz, p.pos) + frame.frustum[k].w > -radius;
             lowRes = (e.flags.x & VFXF_LOWRES) != 0u;
             if (visible) {
@@ -200,6 +202,17 @@ void main() {
                 rec.sheet = uvec4(e.flags.z, cols | (rows << 8) | (blend << 16) | (facing << 18),
                                   uint(f0) | (uint(fmix * 255.0 + 0.5) << 16), floatBitsToUint(e.angVel.w * e.rot0.w));
                 rec.cutout = e.cutout;
+                if (ribbon) {
+                    // Vizinho na fita: o ponto que nasceu logo depois (seq + 1),
+                    // se ainda for desta fita e estiver vivo.
+                    uint seq = p.angVel;
+                    uint n = ribbonRing[e.ribbon.x + (seq + 1u) % e.ribbon.y];
+                    Particle q = particles[n];
+                    bool ok = q.slotGen == p.slotGen && q.angVel == seq + 1u && q.age < q.life && n != idx;
+                    rec.look.w = ok ? n + 1u : 0u;
+                    rec.sheet.y = 1u | (1u << 8) | (blend << 16) | (3u << 18);
+                    rec.sheet.z = packHalf2x16(vec2(t, 0.0));
+                }
                 recs[idx] = rec;
             }
         }

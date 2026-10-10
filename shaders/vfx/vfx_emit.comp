@@ -36,6 +36,13 @@ void main() {
     float f = (float(k) + rand01(seed, 1u)) / float(max(req.count, 1u));
     vec3 origin = mix(e.prevPos.xyz, e.posTime.xyz, f);
     Particle p = vfxMakeParticle(e, req.slot, origin, e.velInherit.xyz * e.velInherit.w, seed, (1.0 - f) * dt);
+    if (e.ribbon.y > 0u) {
+        // Ponto de fita: guarda o numero de sequencia (no lugar do giro, que a
+        // fita nao usa) e se registra no anel do emissor.
+        uint seq = req.seqBase + k;
+        p.angVel = seq;
+        ribbonRing[e.ribbon.x + seq % e.ribbon.y] = idx;
+    }
     particles[idx] = p;
 
     uint cur = frame.counts.x;

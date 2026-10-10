@@ -54,9 +54,10 @@ struct VfxEmitterGpu {
     glm::uvec4 cutout; // 8 halfs: poligono justo da textura
     glm::uvec4 graphA; // grafo: velocidade inicial (inicio, tamanho), forca
     glm::uvec4 graphB; // grafo: cor, tamanho
+    glm::uvec4 ribbon; // fita: inicio e tamanho do anel
     glm::uvec4 events; // sub-emissores (ver vfx_common.glsl)
 };
-static_assert(sizeof(VfxEmitterGpu) == 432, "VfxEmitterGpu precisa bater com o std430 do shader");
+static_assert(sizeof(VfxEmitterGpu) == 448, "VfxEmitterGpu precisa bater com o std430 do shader");
 
 // Textura de uma folha de quadros pronta para o desenho.
 struct VfxTextureInfo {
@@ -66,6 +67,7 @@ struct VfxTextureInfo {
 
 struct VfxSpawnRequestGpu {
     uint32_t slot, count, first, seed;
+    uint32_t seqBase, pad0, pad1, pad2;
 };
 
 // Espelho de `FrameParams` (std140).
@@ -180,6 +182,9 @@ private:
         // Estimativa de vivas sem leitura da GPU: (morte prevista, quantidade).
         std::vector<std::pair<float, uint32_t>> liveChunks;
         uint32_t liveEstimate = 0;
+        // Fita: faixa no anel global e o proximo numero de sequencia.
+        uint32_t ringBase = 0, ringSize = 0;
+        uint32_t seq = 0;
     };
     struct Instance {
         uint32_t id = 0;
@@ -261,6 +266,13 @@ private:
     };
     Buf m_particles, m_dead, m_alive, m_counters, m_render, m_sort, m_events, m_recs;
     Buf m_ringIndex; // 18 indices do poligono de 8 lados (draw indexado)
+    // Aneis das fitas: um buffer, faixas de tamanho potencia de 2 por emissor.
+    static constexpr uint32_t kRibbonRingTotal = 262144;
+    Buf m_ribbonRing;
+    uint32_t m_ribbonBump = 0;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> m_ribbonFree; // tamanho -> inicios livres
+    uint32_t allocRibbon(uint32_t size);
+    void freeRibbon(EmitterState& es);
     Vec4 m_sunDir{0.0f, -1.0f, 0.0f, 1.0f}, m_sunColor{1.0f}, m_ambient{0.5f, 0.55f, 0.6f, 0.5f};
     bool m_anyEvents = false; // algum emissor com sub-emissor tocando
     // Por frame em voo: emissores, pedidos, parametros, leitura dos contadores.
