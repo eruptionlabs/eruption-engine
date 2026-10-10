@@ -2070,6 +2070,7 @@ void Engine::applyGraphicsPreset() {
     // Particulas: pool total na GPU e escala de nascimento por preset.
     m_vfx.setBudget(static_cast<uint32_t>(std::max(1024, p.value("vfx_max_particles", 131072))),
                     p.value("vfx_spawn_scale", 1.0f));
+    m_vfx.setLightBudget(static_cast<uint32_t>(std::clamp(p.value("vfx_max_lights", 16), 0, 64)));
     // ERUPTION_TEST_TEXTURE_MAX_SIZE (capturas): teto de textura acima do preset.
     if (const char* e = std::getenv("ERUPTION_TEST_TEXTURE_MAX_SIZE")) m_textureMaxSize = std::clamp(std::atoi(e), 128, 8192);
     setEmbeddedTextureMaxSize(static_cast<uint32_t>(m_textureMaxSize));

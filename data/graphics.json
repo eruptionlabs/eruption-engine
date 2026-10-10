@@ -103,6 +103,9 @@
   "present_mode": "auto",
   "presets": {
     "low": {
+      "vfx_max_particles": 32768,
+      "vfx_spawn_scale": 0.5,
+      "vfx_max_lights": 4,
       "weather_tier": "mobile",
       "shadow_atlas": 1024,
       "ssao": false,
@@ -149,6 +152,9 @@
       "mesh_lod_min_distance": 300.0
     },
     "medium": {
+      "vfx_max_particles": 65536,
+      "vfx_spawn_scale": 0.75,
+      "vfx_max_lights": 8,
       "weather_tier": "medium",
       "shadow_atlas": 1024,
       "ssao": false,

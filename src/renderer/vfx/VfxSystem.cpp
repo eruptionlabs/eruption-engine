@@ -1564,13 +1564,52 @@ void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& o
             all.emplace_back(glm::dot(d, d), l);
         }
     }
-    if (all.size() > max) {
-        std::nth_element(all.begin(), all.begin() + std::ptrdiff_t(max), all.end(),
-                         [](const auto& a, const auto& b) { return a.first < b.first; });
-        all.resize(max);
+    // Mais perto primeiro: o agrupamento comeca pelo que a camera ve' de perto.
+    std::sort(all.begin(), all.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    struct Cluster {
+        Vec3 pos{0.0f}, color{0.0f};
+        float weight = 0.0f, radius = 0.0f;
+        uint32_t count = 0;
+    };
+    std::vector<Cluster> clusters;
+    for (const auto& p : all) {
+        const Light& l = p.second;
+        Cluster* hit = nullptr;
+        for (Cluster& c : clusters) {
+            const Vec3 cp = c.pos / std::max(c.weight, 1e-6f);
+            if (glm::length(cp - l.position) < 0.5f * std::max(c.radius, l.radius)) {
+                hit = &c;
+                break;
+            }
+        }
+        if (!hit) {
+            if (clusters.size() >= max) continue; // longe e sem vaga: fica de fora
+            clusters.emplace_back();
+            hit = &clusters.back();
+        }
+        const float w = std::max(l.intensity, 1e-4f);
+        if (hit->weight > 0.0f) {
+            const Vec3 cp = hit->pos / hit->weight;
+            hit->radius = std::max(hit->radius, l.radius + 0.5f * glm::length(cp - l.position));
+        } else {
+            hit->radius = l.radius;
+        }
+        hit->pos += l.position * w;
+        hit->color += l.color * w;
+        hit->weight += w;
+        ++hit->count;
     }
-    out.reserve(all.size());
-    for (const auto& p : all) out.push_back(p.second);
+    out.reserve(clusters.size());
+    for (const Cluster& c : clusters) {
+        Light l;
+        l.position = c.pos / c.weight;
+        l.color = c.color / c.weight;
+        l.radius = c.radius;
+        // A soma cresce mais devagar que o numero de fontes: dez fogueiras
+        // juntas clareiam mais que uma, mas nao dez vezes (some saturando).
+        l.intensity = c.weight / std::sqrt(float(c.count));
+        out.push_back(l);
+    }
 }
 
 } // namespace eruption
