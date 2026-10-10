@@ -96,6 +96,24 @@ struct ModelMeshGPU {
     VkBuffer farVertexBuffer = VK_NULL_HANDLE;
     VmaAllocation farVertexAlloc = VK_NULL_HANDLE;
 
+    // CADEIA INTERMEDIARIA (niveis 4..6): malha gigante entre a cheia e o "lo",
+    // cada degrau com ~1/4 dos triangulos do anterior. Motivo medido no
+    // parana_field original: arvores de 1,6 M e 1,07 M de triangulos saltavam
+    // da cheia direto para o "lo" de 10 k; as ~40 mais perto desenhavam a
+    // malha cheia = 28 dos 29,5 M de triangulos do frame (G-buffer 50 ms na
+    // 4060). A escolha e' por triangulo por pixel projetado (o mesmo
+    // orcamento de lodSwitchFor): de perto continua a malha cheia.
+    struct MidLod {
+        VkBuffer vertexBuffer = VK_NULL_HANDLE; // cartoes podados; NULL = o da malha
+        VmaAllocation vertexAlloc = VK_NULL_HANDLE;
+        VkBuffer indexBuffer = VK_NULL_HANDLE;
+        VmaAllocation indexAlloc = VK_NULL_HANDLE;
+        uint32_t indexCount = 0;
+    };
+    static constexpr uint32_t kMaxMidLods = 3;
+    MidLod mid[kMaxMidLods];
+    uint32_t midCount = 0;
+
     // LOD EXCLUSIVO DA SOMBRA, bem mais agressivo que o da tela. Medido: trocar
     // a malha da sombra pelo LOD dá RMS 0,000 - a silhueta simplificada projeta
     // nos MESMOS texels do shadow map, que é bem mais grosseiro que a tela.
@@ -297,6 +315,13 @@ public:
     // Orcamento de triangulos por pixel PROJETADO para a escolha de nivel
     // (ver lodSwitchFor). 0 desliga (so' o criterio por erro/distancia).
     void setMeshLodTrisPerPx(float trisPerPx) { m_meshLodTrisPerPx = std::max(0.0f, trisPerPx); }
+    // TETO GLOBAL de triangulos por frame (passe principal). O orcamento por
+    // pixel acima e' por OBJETO: dez arvores de 1,6 M que cobrem a tela, cada
+    // uma, pedem a malha cheia e somam 16 M. Com o teto, a escala do orcamento
+    // por pixel cai (suave, alguns frames) ate' o total caber: o detalhe vai
+    // para quem ocupa mais tela por triangulo. 0 = sem teto.
+    void setMeshTriBudget(uint32_t tris) { m_meshTriBudget = tris; }
+    float lodBudgetScale() const { return m_lodBudgetScale; }
     // Filtro de CHAO para renderShadow (G38, bake das probes): 0 = tudo,
     // 1 = so' malhas isGround, 2 = tudo menos isGround. Sem mexer na
     // assinatura de renderShadow. Voltar a 0 depois.
@@ -329,7 +354,11 @@ public:
     // viewport / (2 tan(fov/2)) - pixels por unidade de mundo a distancia 1;
     // 0 desliga (minimapa, passes ortograficos).
     void setScreenCull(float minPixels) { m_screenCullMinPx = minPixels; }
-    void setScreenMetrics(float pixelsPerUnit) { m_pixelsPerUnit = pixelsPerUnit; }
+    void setScreenMetrics(float pixelsPerUnit, float screenW = 0.0f, float screenH = 0.0f) {
+        m_pixelsPerUnit = pixelsPerUnit;
+        m_screenW = screenW;
+        m_screenH = screenH;
+    }
     // Caster de sombra: descarta quem projeta menos de minPx pixels NA TELA
     // (raio * pixelsPerUnit / distancia da camera). Criterio fisico e continuo
     // no zoom - substitui a curva artistica por zoom, que descartava props de
@@ -596,9 +625,14 @@ private:
         std::vector<unsigned char> loVerts, farVerts; // cartões podados: vértices próprios
         std::vector<uint32_t> lo, far, sh;
         float loSwitch = 0.0f, farSwitch = 0.0f;
+        // Cadeia intermediaria (malha gigante), do mais detalhado ao menos.
+        std::vector<std::vector<uint32_t>> mid;
+        std::vector<std::vector<unsigned char>> midVerts; // vazio = vertex buffer da malha
         MeshLodResult loRes, farRes, shRes; // as três partes, antes de decidir
     };
     void computeLodPart(LodBuild& b, int part) const;
+    void computeMidChain(LodBuild& b) const;
+    static constexpr size_t kMidLodMinTris = 60000; // abaixo disso o salto cheia -> "lo" ja' e' curto
     void finishLod(LodBuild& b) const;
     void applyLods(std::vector<LodBuild>& builds);
     void registerSkinBase(uint32_t mesh, const ModelAsset& asset, const ModelNode& node,
@@ -657,7 +691,8 @@ private:
     // nao mexe em m_lastCacheHits/Misses (minimapa e cascatas sobrescreviam
     // o numero que a telemetria/F3 leem - achado do agente de cache 2026-09-02).
     void sortVisibleByMesh(std::vector<uint32_t>& list, bool useLod = true, bool recordStats = true);
-    static constexpr uint32_t kLodLevels = 4;   // 0 = hi, 1 = cheio, 2 = lo, 3 = far
+    // 0 = hi, 1 = cheio, 2 = lo, 3 = far, 4.. = cadeia intermediaria (ModelMeshGPU::mid)
+    static constexpr uint32_t kLodLevels = 4 + ModelMeshGPU::kMaxMidLods;
     // HISTERESE da troca cheio<->reduzido: sobe pra reduzido em
     // loSwitchDistance, so' volta pra cheio abaixo de loSwitchDistance*ESTE
     // fator. O intervalo [d*fator, d] e' onde os DOIS niveis sao possiveis
@@ -699,6 +734,8 @@ private:
     LodSwitch lodSwitchFor(const ModelInstanceHot& hot, const ModelMeshGPU& mesh) const;
     static LodFadePair lodFadePairFor(const ModelMeshGPU& mesh, const LodSwitch& sw, float dist);
     uint8_t lodLevelFor(uint32_t idx, const ModelMeshGPU& mesh) const;
+    // Degrau da cadeia intermediaria (1 = cheia, 4.. = mid) por triangulo/pixel.
+    uint8_t midLevelFor(uint32_t idx, const ModelInstanceHot& hot, const ModelMeshGPU& mesh, float dist) const;
     std::vector<uint8_t> m_lodOfInstance;   // preenchido pelo sort, lido no draw
     Vec3 m_lastCameraPos = Vec3(0.0f);
 
@@ -792,6 +829,10 @@ private:
     uint32_t m_meshLodFarMaxTris = 0;
     float m_meshLodFarDistanceMul = 3.0f;
     float m_meshLodTrisPerPx = 0.0f;   // ver setMeshLodTrisPerPx / lodSwitchFor
+    uint32_t m_meshTriBudget = 0;      // ver setMeshTriBudget
+    float m_lodBudgetScale = 1.0f;     // <= 1: aperta o orcamento por pixel
+    float trisPerPx() const { return m_meshLodTrisPerPx * m_lodBudgetScale; }
+    static uint32_t levelTris(const ModelMeshGPU& m, uint8_t level);
     int m_shadowGroundFilter = 0;      // ver setShadowGroundFilter
     float m_shadowGroundHugeXZ = 0.0f;
     float m_screenCullMinPx = 0.0f;
@@ -801,6 +842,8 @@ private:
     // movimento, e o pop e' bem visivel (relatado pelo autor 2026-09-03).
     std::vector<uint8_t> m_shadowCulledPrev;
     float m_pixelsPerUnit = 0.0f;
+    float m_screenW = 0.0f, m_screenH = 0.0f; // tela em px; 0 = desconhecida
+    Mat4 m_lastViewProj{1.0f};
     uint32_t m_lastScreenCulled = 0;
     std::vector<uint8_t> m_screenCulledPrev; // histerese do descarte por tela
     // Ordenacao frente-para-tras dos baldes (early-Z): um registro por balde

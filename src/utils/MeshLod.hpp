@@ -118,6 +118,19 @@ MeshLodResult simplifyMesh(const float* positions,
                            // encosta nela; borda que anda abre fresta).
                            bool lockBorder = false);
 
+// LOD DE FOLHA MODELADA: reduz os triangulos de CADA ilha (folha, galho
+// solto) sem apagar nenhuma. Arvore de alto detalhe (parana_field original:
+// 52 mil folhas de ~30 triangulos) nao e' cartao - o simplificador comum, com
+// alvo agressivo, apaga folhas inteiras e a copa fica rala; a poda de cartao
+// nao se aplica. Aqui cada ilha vira uma malha pequena simplificada sozinha
+// (alvo = n * ratio, piso minTris por ilha): 30 -> 8 -> 2 triangulos por
+// folha mantem a silhueta da copa. Ilha que colapsar fica com o maior
+// triangulo. Os indices saem no vertex buffer original (vertices soldados).
+std::vector<uint32_t> simplifyPerIsland(const float* positions, size_t vertexCount, size_t stride,
+                                        const std::vector<uint32_t>& indices, float ratio,
+                                        uint32_t minTrisPerIsland, size_t uvByteOffset = 0,
+                                        size_t texIdxByteOffset = 0);
+
 // PODA DE CARTOES COM COMPENSACAO DE AREA (Cook, Halstead, Planck, Ryu 2007,
 // "Stochastic Simplification of Aggregate Detail", Pixar).
 //
