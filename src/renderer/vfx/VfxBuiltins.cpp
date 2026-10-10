@@ -1,6 +1,8 @@
 #include "renderer/vfx/VfxBuiltins.hpp"
 
 #include <algorithm>
+#include <map>
+#include <array>
 #include <cmath>
 #include <cstdint>
 
@@ -206,6 +208,105 @@ bool makeVfxBuiltin(const std::string& name, VfxImage& out) {
 const std::vector<std::string>& vfxBuiltinNames() {
     static const std::vector<std::string> names = {"builtin:puff", "builtin:flame", "builtin:spark", "builtin:ring",
                                                    "builtin:star"};
+    return names;
+}
+
+namespace {
+
+// Faces planas (normal por face): bom para pedra e estilhaco lidos de longe.
+void addTri(VfxMeshData& m, const float a[3], const float b[3], const float c[3]) {
+    const float u[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    const float v[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+    float n[3] = {u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+    const float l = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) + 1e-12f;
+    for (float& x : n) x /= l;
+    const float* p[3] = {a, b, c};
+    const float uv[3][2] = {{0.0f, 0.0f}, {1.0f, 0.0f}, {0.5f, 1.0f}};
+    for (int k = 0; k < 3; ++k) {
+        VfxMeshVertex vx{};
+        for (int j = 0; j < 3; ++j) {
+            vx.pos[j] = p[k][j];
+            vx.normal[j] = n[j];
+        }
+        vx.uv[0] = uv[k][0];
+        vx.uv[1] = uv[k][1];
+        m.indices.push_back(uint16_t(m.vertices.size()));
+        m.vertices.push_back(vx);
+    }
+}
+
+void icosphere(int subdiv, float jitter, uint32_t seed, VfxMeshData& m) {
+    const float t = 1.6180339887f;
+    std::vector<std::array<float, 3>> v = {{-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0}, {0, -1, t}, {0, 1, t},
+                                           {0, -1, -t}, {0, 1, -t}, {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}};
+    std::vector<std::array<int, 3>> f = {{0, 11, 5}, {0, 5, 1},  {0, 1, 7},   {0, 7, 10}, {0, 10, 11},
+                                         {1, 5, 9},  {5, 11, 4}, {11, 10, 2}, {10, 7, 6}, {7, 1, 8},
+                                         {3, 9, 4},  {3, 4, 2},  {3, 2, 6},   {3, 6, 8},  {3, 8, 9},
+                                         {4, 9, 5},  {2, 4, 11}, {6, 2, 10},  {8, 6, 7},  {9, 8, 1}};
+    for (int s = 0; s < subdiv; ++s) {
+        std::vector<std::array<int, 3>> nf;
+        std::map<std::pair<int, int>, int> mid;
+        auto midpoint = [&](int a, int b) {
+            auto key = std::make_pair(std::min(a, b), std::max(a, b));
+            auto it = mid.find(key);
+            if (it != mid.end()) return it->second;
+            v.push_back({(v[a][0] + v[b][0]) * 0.5f, (v[a][1] + v[b][1]) * 0.5f, (v[a][2] + v[b][2]) * 0.5f});
+            return mid[key] = int(v.size()) - 1;
+        };
+        for (const auto& tri : f) {
+            const int ab = midpoint(tri[0], tri[1]), bc = midpoint(tri[1], tri[2]), ca = midpoint(tri[2], tri[0]);
+            nf.push_back({tri[0], ab, ca});
+            nf.push_back({tri[1], bc, ab});
+            nf.push_back({tri[2], ca, bc});
+            nf.push_back({ab, bc, ca});
+        }
+        f = nf;
+    }
+    for (size_t i = 0; i < v.size(); ++i) {
+        const float l = std::sqrt(v[i][0] * v[i][0] + v[i][1] * v[i][1] + v[i][2] * v[i][2]);
+        const float r = 1.0f + jitter * (hash2(int(i), int(seed), 3) - 0.5f) * 2.0f;
+        for (float& x : v[i]) x = x / l * r;
+    }
+    for (const auto& tri : f) addTri(m, v[tri[0]].data(), v[tri[1]].data(), v[tri[2]].data());
+}
+
+} // namespace
+
+bool makeVfxBuiltinMesh(const std::string& name, VfxMeshData& out) {
+    out = VfxMeshData{};
+    if (name == "builtin:cube") {
+        const float c[8][3] = {{-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1},
+                               {-1, -1, 1},  {1, -1, 1},  {1, 1, 1},  {-1, 1, 1}};
+        const int q[6][4] = {{0, 3, 2, 1}, {4, 5, 6, 7}, {0, 1, 5, 4}, {3, 7, 6, 2}, {0, 4, 7, 3}, {1, 2, 6, 5}};
+        for (const auto& f : q) {
+            float a[3], b[3], cc[3], d[3];
+            for (int j = 0; j < 3; ++j) {
+                a[j] = c[f[0]][j] * 0.7f;
+                b[j] = c[f[1]][j] * 0.7f;
+                cc[j] = c[f[2]][j] * 0.7f;
+                d[j] = c[f[3]][j] * 0.7f;
+            }
+            addTri(out, a, b, cc);
+            addTri(out, a, cc, d);
+        }
+    } else if (name == "builtin:shard") {
+        // Estilhaco: octaedro esticado e torto.
+        const float v[6][3] = {{0.0f, 1.3f, 0.1f}, {0.0f, -1.1f, -0.1f}, {0.55f, 0.1f, 0.0f},
+                               {-0.45f, 0.0f, 0.1f}, {0.05f, 0.2f, 0.35f}, {0.0f, -0.1f, -0.3f}};
+        const int t[8][3] = {{0, 2, 4}, {0, 4, 3}, {0, 3, 5}, {0, 5, 2}, {1, 4, 2}, {1, 3, 4}, {1, 5, 3}, {1, 2, 5}};
+        for (const auto& tri : t) addTri(out, v[tri[0]], v[tri[1]], v[tri[2]]);
+    } else if (name == "builtin:rock") {
+        icosphere(1, 0.35f, 7u, out);
+    } else if (name == "builtin:sphere") {
+        icosphere(2, 0.0f, 0u, out);
+    } else {
+        return false;
+    }
+    return true;
+}
+
+const std::vector<std::string>& vfxBuiltinMeshNames() {
+    static const std::vector<std::string> names = {"builtin:rock", "builtin:shard", "builtin:cube", "builtin:sphere"};
     return names;
 }
 

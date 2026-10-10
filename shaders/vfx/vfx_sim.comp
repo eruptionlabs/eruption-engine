@@ -168,6 +168,28 @@ void main() {
             for (int k = 0; k < 6 && visible && !ribbon; ++k)
                 visible = dot(frame.frustum[k].xyz, p.pos) + frame.frustum[k].w > -radius;
             lowRes = (e.flags.x & VFXF_LOWRES) != 0u;
+            uint meshId = (e.flags.x >> VFXF_MESH_SHIFT) & 0xFu;
+            if (visible && meshId != 0u) {
+                // MALHA: opaca no G-buffer (luz da cena de verdade). Registro
+                // com cor-base (albedo), eixo/angulo do giro, deslocamento do
+                // frame (velocidade no G-buffer) e brilho proprio.
+                vec4 col = unpackColorLut(e, t);
+                if (e.graphB.y > 0u) col *= max(vfxRunGraph(e.graphB.x, e.graphB.y, p, e), vec4(0.0));
+                vec3 axis = normalize(vec3(rand01(p.seed, 41u), rand01(p.seed, 42u), rand01(p.seed, 43u)) - 0.5 + 1e-4);
+                vec3 disp = p.vel * dt;
+                RenderRec rec;
+                rec.posSize = vec4(p.pos, size);
+                rec.look = uvec4(packHalf2x16(col.rg), packHalf2x16(col.ba), packHalf2x16(vec2(sr.y + av.x * p.age, 0.0)),
+                                 packOct(axis));
+                rec.sheet = uvec4(e.flags.z, packHalf2x16(vec2(disp.z, e.render.x)), packHalf2x16(disp.xy), 0u);
+                rec.cutout = uvec4(0u);
+                recs[idx] = rec;
+                uint m = meshId - 1u;
+                uint per = cap / VFX_MESH_TYPES;
+                uint ms = atomicAdd(counters[VFXC_MESH + m], 1u);
+                if (ms < per) renderList[4u * cap + m * per + ms] = idx;
+                visible = false; // nao entra nas listas de sprite
+            }
             if (visible) {
                 vec4 col = unpackColorLut(e, t);
                 col.rgb *= e.render.x;

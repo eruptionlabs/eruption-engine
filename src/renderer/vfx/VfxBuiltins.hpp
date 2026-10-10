@@ -26,4 +26,18 @@ bool makeVfxBuiltin(const std::string& name, VfxImage& out);
 void computeVfxCutout(const uint8_t* rgba, uint32_t w, uint32_t h, uint32_t cols, uint32_t rows, float out[8]);
 const std::vector<std::string>& vfxBuiltinNames();
 
+// Malhas de particula que vem com o motor (detritos, estilhacos): geradas na
+// hora, raio ~1 em volta da origem. Vertice: posicao, normal, uv (32 bytes).
+struct VfxMeshVertex {
+    float pos[3];
+    float normal[3];
+    float uv[2];
+};
+struct VfxMeshData {
+    std::vector<VfxMeshVertex> vertices;
+    std::vector<uint16_t> indices;
+};
+bool makeVfxBuiltinMesh(const std::string& name, VfxMeshData& out);
+const std::vector<std::string>& vfxBuiltinMeshNames();
+
 } // namespace eruption
