@@ -428,6 +428,19 @@ bool VfxEditor::drawEmitter(VfxEmitterDesc& e) {
         c = true;
     }
     c |= ImGui::Checkbox(tr("Half resolution (smoke, dust)"), &e.lowRes);
+    // Malha no lugar do sprite: opaca, iluminada pela cena (detritos, pedras).
+    if (ImGui::BeginCombo(tr("Mesh"), e.mesh.empty() ? tr("None (sprite)") : e.mesh.c_str())) {
+        if (ImGui::Selectable(tr("None (sprite)"), e.mesh.empty())) {
+            e.mesh.clear();
+            c = true;
+        }
+        for (const std::string& m : vfxBuiltinMeshNames())
+            if (ImGui::Selectable(m.c_str(), e.mesh == m)) {
+                e.mesh = m;
+                c = true;
+            }
+        ImGui::EndCombo();
+    }
 
     if (ImGui::CollapsingHeader(tr("Spawning"), ImGuiTreeNodeFlags_DefaultOpen)) {
         c |= ImGui::DragFloat(tr("Rate (per s)"), &e.rate, 0.5f, 0.0f, 100000.0f, "%.1f");

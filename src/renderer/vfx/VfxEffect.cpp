@@ -148,6 +148,7 @@ void readEmitter(const json& j, VfxEmitterDesc& e) {
     e.maxScreenSize = std::clamp(num(j, "maxScreenSize", e.maxScreenSize), 0.01f, 4.0f);
     e.nearFade = std::max(0.0f, num(j, "nearFade", e.nearFade));
     e.lowRes = num(j, "lowRes", e.lowRes);
+    if (j.contains("mesh") && j["mesh"].is_string()) e.mesh = j["mesh"].get<std::string>();
     auto readSub = [&](const char* key, VfxSubEmitter& s) {
         if (!j.contains(key) || !j[key].is_object()) return;
         const json& o = j[key];
@@ -238,6 +239,7 @@ json writeEmitter(const VfxEmitterDesc& e) {
     j["maxScreenSize"] = e.maxScreenSize;
     j["nearFade"] = e.nearFade;
     j["lowRes"] = e.lowRes;
+    if (!e.mesh.empty()) j["mesh"] = e.mesh;
     auto writeSub = [&](const char* key, const VfxSubEmitter& s) {
         if (s.emitter.empty()) return;
         j[key] = {{"emitter", s.emitter}, {"count", s.count}, {"probability", s.probability},

@@ -1,4 +1,6 @@
 #include "renderer/vfx/VfxSystem.hpp"
+#include "renderer/GBuffer.hpp"
+#include "renderer/vfx/VfxBuiltins.hpp"
 
 #include "core/Logger.hpp"
 #include "math/Camera.hpp"
@@ -25,7 +27,7 @@ constexpr uint32_t kCRender = 3;
 constexpr uint32_t kCDispatch = 8;
 constexpr uint32_t kCDraw = 12;        // 5 uints por lista (indexado)
 constexpr uint32_t kCSortDispatch = 24;
-constexpr uint32_t kCounterCount = 36;
+constexpr uint32_t kCounterCount = 84;
 constexpr uint32_t kCEventDispatch = 32;
 constexpr uint32_t kRecordBytes = 64;
 constexpr uint32_t kMaxEvents = 16384;
@@ -35,6 +37,14 @@ struct DrawPush {
     uint32_t listOffset;
     float depthScale;
 };
+struct MeshPush {
+    Mat4 viewProjNoJitter;
+    Mat4 prevViewProjNoJitter;
+    uint32_t listOffset;
+    uint32_t pad[3];
+};
+constexpr uint32_t kMeshTypes = 8;
+constexpr uint32_t kCMeshDraw = 44; // 5 uints por malha
 constexpr uint32_t kParticleBytes = 48;
 
 uint32_t hash32(uint32_t v) {
@@ -94,7 +104,7 @@ bool VfxSystem::createBuffers() {
     bool ok = createBuf(m_particles, cap * kParticleBytes, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_dead, cap * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_alive, cap * 8, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
-              createBuf(m_render, cap * 16, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
+              createBuf(m_render, cap * 20, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_sort, 2 * 512 * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_events, VkDeviceSize(kMaxEvents) * 32, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_recs, cap * kRecordBytes, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
@@ -423,6 +433,68 @@ bool VfxSystem::createPipelines() {
     vkDestroyShaderModule(dev, fs, nullptr);
     if (r != VK_SUCCESS) return false;
 
+    // PARTICULAS DE MALHA: vertice de 32 bytes, opacas, profundidade escrita.
+    {
+        const VkPushConstantRange meshPush{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPush)};
+        pl.setLayoutCount = 3;
+        pl.pSetLayouts = drawSets;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &meshPush;
+        if (vkCreatePipelineLayout(dev, &pl, nullptr, &m_meshLayout) != VK_SUCCESS) return false;
+        VkShaderModule mvs = loadModule(dev, "vfx/vfx_mesh.vert.spv");
+        VkShaderModule mfs =
+            loadModule(dev, GBuffer::velocityEnabled() ? "vfx/vfx_mesh.frag.spv" : "vfx/vfx_mesh_novel.frag.spv");
+        VkShaderModule mfwd = loadModule(dev, "vfx/vfx_mesh_fwd.frag.spv");
+        const VkVertexInputBindingDescription vb{0, sizeof(VfxMeshVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+        const VkVertexInputAttributeDescription va[3] = {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+                                                         {1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},
+                                                         {2, 0, VK_FORMAT_R32G32_SFLOAT, 24}};
+        VkPipelineVertexInputStateCreateInfo mvi{};
+        mvi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        mvi.vertexBindingDescriptionCount = 1;
+        mvi.pVertexBindingDescriptions = &vb;
+        mvi.vertexAttributeDescriptionCount = 3;
+        mvi.pVertexAttributeDescriptions = va;
+        gi.pVertexInputState = &mvi;
+        gi.layout = m_meshLayout;
+        st[0].module = mvs;
+        st[1].module = mfs;
+        ds.depthTestEnable = VK_TRUE;
+        ds.depthWriteEnable = VK_TRUE;
+        ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+        const std::vector<VkFormat> gbFormats = GBuffer::colorAttachmentFormats();
+        const std::vector<VkPipelineColorBlendAttachmentState> gbBlend = GBuffer::blendStates(true);
+        VkPipelineColorBlendStateCreateInfo gcb{};
+        gcb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        gcb.attachmentCount = uint32_t(gbBlend.size());
+        gcb.pAttachments = gbBlend.data();
+        gi.pColorBlendState = &gcb;
+        ri.colorAttachmentCount = uint32_t(gbFormats.size());
+        ri.pColorAttachmentFormats = gbFormats.data();
+        ri.depthAttachmentFormat = GBuffer::DepthFormat;
+        r = (mvs && mfs && mfwd) ? vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_meshPipe)
+                                 : VK_ERROR_INITIALIZATION_FAILED;
+        // Previa: os dois alvos do draw() (lit + mascara), profundidade so'
+        // leitura (o rendering do draw() nao escreve profundidade).
+        if (r == VK_SUCCESS) {
+            st[1].module = mfwd;
+            ds.depthWriteEnable = VK_FALSE;
+            gi.pColorBlendState = &cb;
+            ri.colorAttachmentCount = 2;
+            ri.pColorAttachmentFormats = colorFormats;
+            ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+            r = vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_meshFwdPipe);
+        }
+        for (VkShaderModule m : {mvs, mfs, mfwd})
+            if (m) vkDestroyShaderModule(dev, m, nullptr);
+        gi.pVertexInputState = &vi;
+        gi.pColorBlendState = &cb;
+        ds.depthTestEnable = VK_TRUE;
+        ds.depthWriteEnable = VK_FALSE;
+        st[0].module = VK_NULL_HANDLE;
+        if (r != VK_SUCCESS) return false;
+    }
+
     // Composicao: triangulo de tela cheia, mesma mistura premultiplicada.
     vs = loadModule(dev, "vfx/vfx_composite.vert.spv");
     fs = loadModule(dev, "vfx/vfx_composite.frag.spv");
@@ -482,10 +554,18 @@ void VfxSystem::shutdown() {
     VkDevice dev = m_ctx->device();
     destroyBuffers();
     for (VkPipeline* p : {&m_emitPipe, &m_argsPipe, &m_simPipe, &m_finishPipe, &m_drawPipe, &m_drawLowPipe,
-                          &m_compositePipe, &m_sortHistPipe, &m_sortScanPipe, &m_sortScatterPipe, &m_eventPipe})
+                          &m_compositePipe, &m_sortHistPipe, &m_sortScanPipe, &m_sortScatterPipe, &m_eventPipe,
+                          &m_meshPipe, &m_meshFwdPipe})
         if (*p) vkDestroyPipeline(dev, *p, nullptr), *p = VK_NULL_HANDLE;
     destroyReactive();
     destroyBuf(m_ringIndex);
+    for (GpuMesh& m : m_meshes) {
+        destroyBuf(m.vb);
+        destroyBuf(m.ib);
+    }
+    m_meshes.clear();
+    if (m_meshLayout) vkDestroyPipelineLayout(dev, m_meshLayout, nullptr);
+    m_meshLayout = VK_NULL_HANDLE;
     if (m_lowView) vkDestroyImageView(dev, m_lowView, nullptr);
     if (m_lowImage) vmaDestroyImage(m_ctx->allocator(), m_lowImage, m_lowAlloc);
     m_lowView = VK_NULL_HANDLE;
@@ -693,6 +773,7 @@ void VfxSystem::clear() {
                 freeRibbon(es);
             }
     m_instances.clear();
+    m_meshMaskSimulated = 0;
 }
 
 const VfxGraphCompiled& VfxSystem::graphFor(const VfxGraph& g) {
@@ -755,6 +836,11 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
                      (e.collideDepth ? 1u << 11 : 0u);
     if (inst.killed) flags |= 1u << 12;
     if (e.lowRes) flags |= 1u << 14;
+    if (!e.mesh.empty()) {
+        const uint32_t id = meshId(e.mesh);
+        flags |= (id & 0xFu) << 16;
+        if (id) m_meshMask |= 1u << (id - 1);
+    }
     const VfxTextureInfo& tex = texture(e.texture, e.flipCols, e.flipRows);
     o.flags = glm::uvec4(flags, m_slotGen[slot], tex.slot, (e.flipCols & 0xFFu) | ((e.flipRows & 0xFFu) << 8));
     for (int k = 0; k < 4; ++k)
@@ -831,6 +917,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
         const uint32_t* c = static_cast<const uint32_t*>(m_readback[frame].mapped);
         m_stats.alive = c[1u - m_readbackList[frame]];
         m_stats.rendered = c[kCRender] + c[kCRender + 1];
+        for (uint32_t m = 0; m < kMeshTypes; ++m) m_stats.rendered += c[kCMeshDraw + m * 5 + 1];
         m_readbackPending[frame] = false;
     }
 
@@ -844,6 +931,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     m_requests.clear();
     m_spawnTotal = 0;
     m_anyLowRes = false;
+    m_meshMask = 0;
     m_sortThisFrame = false;
     m_anyEvents = false;
     float maxLife = 0.0f;
@@ -981,6 +1069,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     // Parametros do frame
     VfxFrameParamsGpu& fp = m_frameParams;
     fp.viewProj = camera.viewProjNoJitter();
+    m_viewProjNoJitter = fp.viewProj;
     fp.invViewProj = glm::inverse(fp.viewProj);
     const Frustum& fr = camera.frustum();
     for (int i = 0; i < 6; ++i) {
@@ -991,6 +1080,8 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     fp.timeInfo = Vec4(m_time += dt, float(m_requests.size()), float(m_spawnTotal), camera.nearPlane());
     fp.depthInfo = Vec4(float(renderSize.width), float(renderSize.height), camera.farPlane(), 1.0f);
     fp.counts = glm::uvec4(m_cur, m_capacity, m_sortThisFrame ? 1u : 0u, 0u);
+    for (uint32_t m = 0; m < kMeshTypes; ++m)
+        fp.meshIndexCount[m >> 2][m & 3] = m < m_meshes.size() ? m_meshes[m].indexCount : 0u;
     fp.sunDir = m_sunDir;
     fp.sunColor = m_sunColor;
     fp.ambient = m_ambient;
@@ -1006,7 +1097,11 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
 }
 
 void VfxSystem::simulate(VkCommandBuffer cmd, VkImageView depthView) {
-    if (!m_ready || !m_active) return;
+    if (!m_ready || !m_active) {
+        m_meshMaskSimulated = 0;
+        return;
+    }
+    m_meshMaskSimulated = m_meshMask;
     const uint32_t frame = m_ctx->currentFrame();
     // O alvo de meia resolucao nasce/muda ANTES de qualquer set ser ligado
     // neste command buffer (reescrever um set ja' ligado invalida a gravacao).
@@ -1362,6 +1457,8 @@ void VfxSystem::draw(VkCommandBuffer cmd, VkImageView litView, VkImageView depth
                                 nullptr);
         vkCmdDraw(cmd, 3, 1, 0, 0);
     }
+    if (m_forwardMeshes && m_meshMaskSimulated)
+        recordMeshes(cmd, m_meshFwdPipe, extent, m_viewProjNoJitter, m_viewProjNoJitter);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_drawPipe);
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc);
@@ -1378,6 +1475,64 @@ void VfxSystem::draw(VkCommandBuffer cmd, VkImageView litView, VkImageView depth
                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
     m_reactiveWritten = true;
+}
+
+uint32_t VfxSystem::meshId(const std::string& name) {
+    for (size_t i = 0; i < m_meshes.size(); ++i)
+        if (m_meshes[i].name == name) return m_meshes[i].indexCount ? uint32_t(i) + 1 : 0u;
+    if (m_meshes.size() >= kMeshTypes) return 0;
+    GpuMesh gm;
+    gm.name = name;
+    VfxMeshData data;
+    if (!makeVfxBuiltinMesh(name, data)) {
+        ERUPTION_LOG_WARN("[VFX] malha de particula desconhecida: %s (desenha como sprite)", name.c_str());
+    } else if (createBuf(gm.vb, data.vertices.size() * sizeof(VfxMeshVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                         VMA_MEMORY_USAGE_CPU_TO_GPU, true) &&
+               createBuf(gm.ib, data.indices.size() * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                         VMA_MEMORY_USAGE_CPU_TO_GPU, true)) {
+        std::memcpy(gm.vb.mapped, data.vertices.data(), data.vertices.size() * sizeof(VfxMeshVertex));
+        std::memcpy(gm.ib.mapped, data.indices.data(), data.indices.size() * sizeof(uint16_t));
+        vmaFlushAllocation(m_ctx->allocator(), gm.vb.alloc, 0, VK_WHOLE_SIZE);
+        vmaFlushAllocation(m_ctx->allocator(), gm.ib.alloc, 0, VK_WHOLE_SIZE);
+        gm.indexCount = uint32_t(data.indices.size());
+    }
+    m_meshes.push_back(std::move(gm));
+    return m_meshes.back().indexCount ? uint32_t(m_meshes.size()) : 0u;
+}
+
+void VfxSystem::recordMeshes(VkCommandBuffer cmd, VkPipeline pipe, VkExtent2D extent, const Mat4& vp,
+                             const Mat4& prevVp) {
+    const uint32_t frame = m_ctx->currentFrame();
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    const VkViewport viewport{0.0f, 0.0f, float(extent.width), float(extent.height), 0.0f, 1.0f};
+    const VkRect2D sc{{0, 0}, extent};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    VkDescriptorSet sets[3] = {m_bindless->set(), m_frameUboSet, m_drawSets[frame]};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshLayout, 0, 3, sets, 0, nullptr);
+    MeshPush push{};
+    push.viewProjNoJitter = vp;
+    push.prevViewProjNoJitter = prevVp;
+    const uint32_t per = m_capacity / kMeshTypes;
+    for (uint32_t m = 0; m < m_meshes.size(); ++m) {
+        if (!(m_meshMaskSimulated & (1u << m)) || !m_meshes[m].indexCount) continue;
+        push.listOffset = 4u * m_capacity + m * per;
+        vkCmdPushConstants(cmd, m_meshLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
+        const VkDeviceSize off = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &m_meshes[m].vb.buf, &off);
+        vkCmdBindIndexBuffer(cmd, m_meshes[m].ib.buf, 0, VK_INDEX_TYPE_UINT16);
+        vkCmdDrawIndexedIndirect(cmd, m_counters.buf, VkDeviceSize(kCMeshDraw + m * 5) * 4, 1, 20);
+    }
+}
+
+void VfxSystem::drawMeshes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent, const Mat4& viewProjNoJitter,
+                           const Mat4& prevViewProjNoJitter) {
+    if (!m_ready || !m_active || !m_meshMaskSimulated || m_forwardMeshes) return;
+    // Os sets sao (re)escritos aqui, antes de ligar: a simulacao deste frame
+    // encontra tudo igual e nao reescreve um set ja' ligado.
+    if (m_anyLowRes && !ensureLowResTarget(m_renderSize)) m_anyLowRes = false;
+    writeDescriptors(m_ctx->currentFrame(), depthView);
+    recordMeshes(cmd, m_meshPipe, extent, viewProjNoJitter, prevViewProjNoJitter);
 }
 
 } // namespace eruption

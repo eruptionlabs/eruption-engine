@@ -69,6 +69,7 @@ const uint VFXF_COLLIDE_DEPTH= 1u << 11;
 const uint VFXF_KILLED       = 1u << 12; // emissor removido: particulas morrem ja'
 const uint VFXF_SPAWNING     = 1u << 13;
 const uint VFXF_LOWRES       = 1u << 14; // desenha em meia resolucao (fumaca)
+const uint VFXF_MESH_SHIFT   = 16u;     // 4 bits: malha da particula + 1 (0 = sprite)
 
 // Pedido de nascimento (CPU -> GPU): `count` particulas do emissor `slot`,
 // ocupando [first, first+count) da fila de nascimento deste frame.
@@ -94,6 +95,7 @@ struct FrameParams {
     vec4 sunColor;
     vec4 ambient;       // xyz cor do ceu, w intensidade
     vec4 viewInfo;      // x proj[1][1] (teto de tamanho na tela)
+    uvec4 meshIndexCount[2]; // indices de cada malha de particula (8)
 };
 
 // REGISTRO DE DESENHO (64 bytes, um por particula visivel, no indice dela):
@@ -119,7 +121,11 @@ struct RenderRec {
 #define VFXC_DRAW      12
 #define VFXC_SORTDISP  24 // 24..26: ordenar lista cheia; 28..30: meia resolucao
 #define VFXC_EVENTDISP 32 // 32..34: dispatch indireto das filhas (um grupo por evento)
-#define VFXC_COUNT     36
+#define VFXC_MESH      36 // 36..43: particulas de cada malha (8 malhas)
+#define VFXC_MESHDRAW  44 // 44..83: draw indexado de cada malha (5 uints cada)
+#define VFXC_COUNT     84
+#define VFX_MESH_TYPES 8u
+// Lista da malha m no buffer de desenho: cap/8 vagas a partir de 4*cap + m*cap/8.
 #define VFX_MAX_EVENTS 16384u
 
 // Evento de sub-emissor: onde e com que velocidade herdada nascem as filhas.

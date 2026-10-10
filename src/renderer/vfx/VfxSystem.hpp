@@ -83,6 +83,7 @@ struct VfxFrameParamsGpu {
     Vec4 sunColor;
     Vec4 ambient;
     Vec4 viewInfo;
+    glm::uvec4 meshIndexCount[2];
 };
 
 class VfxSystem {
@@ -151,6 +152,13 @@ public:
     // profundidade so' leitura: compoe a meia resolucao, desenha as particulas
     // e escreve a cobertura delas na mascara reativa (R8, para o FSR).
     void draw(VkCommandBuffer cmd, VkImageView litView, VkImageView depthView, VkExtent2D extent);
+    // Particulas de malha DENTRO do passe do G-buffer (opacas, luz da cena,
+    // velocidade para o FSR). Usa a simulacao do frame anterior: o passe de
+    // geometria vem antes da simulacao. Sem malha viva nao faz nada.
+    void drawMeshes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent, const Mat4& viewProjNoJitter,
+                    const Mat4& prevViewProjNoJitter);
+    // Previa sem G-buffer: as malhas saem em draw(), com luz simples.
+    void setForwardMeshes(bool on) { m_forwardMeshes = on; }
     // Fim do frame: sem particula, limpa a mascara uma vez (nao fica rastro).
     void endFrame(VkCommandBuffer cmd);
     // Tamanho de render (cria a mascara reativa). Chamar sem frame em voo
@@ -232,6 +240,15 @@ private:
     VkPipeline m_compositePipe = VK_NULL_HANDLE; // meia resolucao -> lit
     VkPipeline m_sortHistPipe = VK_NULL_HANDLE, m_sortScanPipe = VK_NULL_HANDLE, m_sortScatterPipe = VK_NULL_HANDLE;
     VkPipeline m_eventPipe = VK_NULL_HANDLE; // filhas dos sub-emissores
+    VkPipelineLayout m_meshLayout = VK_NULL_HANDLE;
+    VkPipeline m_meshPipe = VK_NULL_HANDLE;    // malha no G-buffer
+    VkPipeline m_meshFwdPipe = VK_NULL_HANDLE; // malha na previa (forward)
+    uint32_t meshId(const std::string& name);
+    void recordMeshes(VkCommandBuffer cmd, VkPipeline pipe, VkExtent2D extent, const Mat4& vp, const Mat4& prevVp);
+    uint32_t m_meshMask = 0;          // malhas em uso neste frame (CPU)
+    uint32_t m_meshMaskSimulated = 0; // malhas que a ultima simulacao listou
+    bool m_forwardMeshes = false;
+    Mat4 m_viewProjNoJitter{1.0f};
     VkPipelineLayout m_compositeLayout = VK_NULL_HANDLE;
     VkSampler m_linearSampler = VK_NULL_HANDLE;
     // Alvo de meia resolucao (RGBA16F, cor premultiplicada + cobertura).
@@ -266,6 +283,13 @@ private:
     };
     Buf m_particles, m_dead, m_alive, m_counters, m_render, m_sort, m_events, m_recs;
     Buf m_ringIndex; // 18 indices do poligono de 8 lados (draw indexado)
+    // Malhas de particula carregadas (ate' 8; id no emissor = indice + 1).
+    struct GpuMesh {
+        std::string name;
+        Buf vb, ib;
+        uint32_t indexCount = 0;
+    };
+    std::vector<GpuMesh> m_meshes;
     // Aneis das fitas: um buffer, faixas de tamanho potencia de 2 por emissor.
     static constexpr uint32_t kRibbonRingTotal = 262144;
     Buf m_ribbonRing;

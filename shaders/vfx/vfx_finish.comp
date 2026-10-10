@@ -12,6 +12,15 @@ void main() {
     counters[VFXC_EVENTDISP + 0] = min(counters[VFXC_EVENTS], VFX_MAX_EVENTS);
     counters[VFXC_EVENTDISP + 1] = 1u;
     counters[VFXC_EVENTDISP + 2] = 1u;
+    // Uma malha de particula por draw indexado (indices vindos da CPU).
+    for (uint m = 0u; m < VFX_MESH_TYPES; ++m) {
+        uint base = VFXC_MESHDRAW + m * 5u;
+        counters[base + 0u] = frame.meshIndexCount[m >> 2][m & 3u];
+        counters[base + 1u] = min(counters[VFXC_MESH + m], frame.counts.y / VFX_MESH_TYPES);
+        counters[base + 2u] = 0u;
+        counters[base + 3u] = 0u;
+        counters[base + 4u] = 0u;
+    }
     for (uint l = 0u; l < 2u; ++l) {
         uint n = counters[VFXC_RENDER + l];
         // Indexado: 18 indices sobre 8 vertices (poligono de 8 lados); o

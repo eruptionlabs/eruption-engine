@@ -729,6 +729,10 @@ void Engine::render() {
     cpuMark(3); // minimap fora do custo do G-buffer
     }
 
+    // Particulas: pedidos/emissores deste frame (so' CPU); a simulacao vem
+    // depois do G-buffer, mas as malhas de particula desenham dentro dele.
+    m_vfx.setLighting(frameUbo.sunDir, frameUbo.sunColor, frameUbo.ambientSky);
+    m_vfx.update(m_timer.deltaTime(), m_camera, renderExtent());
     m_vulkan.writeTimestamp(cmd, 2, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     m_gbuffer.beginPass(cmd);
     // PIPELINE STATISTICS em volta do passe de GEOMETRIA: e' aqui que se
@@ -773,6 +777,8 @@ void Engine::render() {
             m_spriteRenderer.renderSprites(cmd, frameUbo, m_spriteSystem.instanceBuffer(), spriteCount);
         }
     }
+    // Particulas de malha (detritos, estilhacos): opacas, no G-buffer.
+    m_vfx.drawMeshes(cmd, m_gbuffer.depthView(), renderExtent(), m_camera.viewProjNoJitter(), m_prevViewProjNoJitter);
     m_vulkan.endPipelineStats(cmd);
     m_gbuffer.endPass(cmd);
     m_vulkan.writeTimestamp(cmd, 3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
@@ -834,8 +840,6 @@ void Engine::render() {
     m_gbuffer.transitionToRead(cmd);
     // Particulas: simula aqui, com a profundidade deste frame ja' legivel
     // (colisao com o que a camera ve'). Sem efeito nenhum, nao grava nada.
-    m_vfx.setLighting(frameUbo.sunDir, frameUbo.sunColor, frameUbo.ambientSky);
-    m_vfx.update(m_timer.deltaTime(), m_camera, renderExtent());
     // ERUPTION_DEBUG_VFX=1: contagem (lida da GPU com atraso) a cada 60 frames.
     static const bool kDebugVfx = std::getenv("ERUPTION_DEBUG_VFX") != nullptr;
     if (kDebugVfx && m_framesCount == 120) m_vfx.debugDump();

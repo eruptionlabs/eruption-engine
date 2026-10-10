@@ -120,6 +120,8 @@ struct VfxEmitterDesc {
     float lit = 0.0f;          // 0 = luz propria, 1 = iluminada pelo sol/ceu
     float maxScreenSize = 0.6f;// teto de tamanho na tela (fracao da altura)
     float nearFade = 0.5f;     // some perto da camera (m)
+    std::string mesh;          // malha no lugar do sprite ("builtin:rock"...):
+                               // opaca, no G-buffer, com a luz da cena
     bool lowRes = false;       // desenha em meia resolucao (fumaca, poeira:
                                // 1/4 dos pixels; o ganho maior em GPU fraca)
 
