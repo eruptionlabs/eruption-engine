@@ -23,12 +23,13 @@ namespace {
 constexpr uint32_t kCDead = 2;
 constexpr uint32_t kCRender = 3;
 constexpr uint32_t kCDispatch = 8;
-constexpr uint32_t kCDraw = 12;
-constexpr uint32_t kCSortDispatch = 20;
-constexpr uint32_t kCounterCount = 32;
-constexpr uint32_t kCEventDispatch = 28;
+constexpr uint32_t kCDraw = 12;        // 5 uints por lista (indexado)
+constexpr uint32_t kCSortDispatch = 24;
+constexpr uint32_t kCounterCount = 36;
+constexpr uint32_t kCEventDispatch = 32;
+constexpr uint32_t kRecordBytes = 64;
 constexpr uint32_t kMaxEvents = 16384;
-constexpr uint32_t kBindings = 14;
+constexpr uint32_t kBindings = 15;
 
 struct DrawPush {
     uint32_t listOffset;
@@ -96,6 +97,7 @@ bool VfxSystem::createBuffers() {
               createBuf(m_render, cap * 16, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_sort, 2 * 512 * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_events, VkDeviceSize(kMaxEvents) * 32, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
+              createBuf(m_recs, cap * kRecordBytes, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_counters, kCounterCount * 4,
                         ssbo | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                         VMA_MEMORY_USAGE_GPU_ONLY, false);
@@ -156,7 +158,7 @@ bool VfxSystem::createBuffers() {
 }
 
 void VfxSystem::destroyBuffers() {
-    for (Buf* b : {&m_particles, &m_dead, &m_alive, &m_render, &m_sort, &m_events, &m_counters, &m_emitterDev,
+    for (Buf* b : {&m_particles, &m_dead, &m_alive, &m_render, &m_sort, &m_events, &m_recs, &m_counters, &m_emitterDev,
                    &m_spawnDev,
                    &m_frameDev, &m_graphCode, &m_graphConst})
         destroyBuf(*b);
@@ -192,7 +194,7 @@ bool VfxSystem::createDescriptors() {
     if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &m_setLayout) != VK_SUCCESS) return false;
 
     const uint32_t n = VulkanContext::MAX_FRAMES_IN_FLIGHT * 2;
-    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11 * n},
+    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12 * n},
                                      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, n},
                                      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * n}};
     VkDescriptorPoolCreateInfo pi{};
@@ -234,6 +236,7 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
     const VkDescriptorBufferInfo graphCodeInfo{m_graphCode.buf, 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo graphConstInfo{m_graphConst.buf, 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo eventInfo{m_events.buf, 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo recInfo{m_recs.buf, 0, VK_WHOLE_SIZE};
     VkDescriptorImageInfo ii[2] = {{m_depthSampler, depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                    {m_depthSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
     // Sem alvo de meia resolucao ainda: a profundidade ocupa o binding (nunca
@@ -260,6 +263,7 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
         w[s * kBindings + 11].pBufferInfo = &graphCodeInfo;
         w[s * kBindings + 12].pBufferInfo = &graphConstInfo;
         w[s * kBindings + 13].pBufferInfo = &eventInfo;
+        w[s * kBindings + 14].pBufferInfo = &recInfo;
     }
     vkUpdateDescriptorSets(m_ctx->device(), 2 * kBindings, w, 0, nullptr);
     m_setBuffersWritten[frame] = true;
@@ -447,6 +451,17 @@ bool VfxSystem::init(const InitInfo& info) {
     m_freeSlots.clear();
     for (uint32_t s = kMaxSlots; s-- > 0;) m_freeSlots.push_back(s);
     for (auto& d : m_slotData) d.flags = glm::uvec4(1u << 12, 0u, 0xFFFFFFFFu, 0u); // morto
+    // Leque de 6 triangulos sobre os 8 vertices do poligono recortado.
+    if (createBuf(m_ringIndex, 18 * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU,
+                  true)) {
+        uint16_t* ix = static_cast<uint16_t*>(m_ringIndex.mapped);
+        for (uint16_t t = 0; t < 6; ++t) {
+            ix[t * 3 + 0] = 0;
+            ix[t * 3 + 1] = uint16_t(t + 1);
+            ix[t * 3 + 2] = uint16_t(t + 2);
+        }
+        vmaFlushAllocation(m_ctx->allocator(), m_ringIndex.alloc, 0, VK_WHOLE_SIZE);
+    }
     if (!createDescriptors() || !createPipelines() || !createBuffers()) {
         ERUPTION_LOG_ERROR("VFX: inicializacao falhou; efeitos desligados");
         shutdown();
@@ -466,6 +481,7 @@ void VfxSystem::shutdown() {
                           &m_compositePipe, &m_sortHistPipe, &m_sortScanPipe, &m_sortScatterPipe, &m_eventPipe})
         if (*p) vkDestroyPipeline(dev, *p, nullptr), *p = VK_NULL_HANDLE;
     destroyReactive();
+    destroyBuf(m_ringIndex);
     if (m_lowView) vkDestroyImageView(dev, m_lowView, nullptr);
     if (m_lowImage) vmaDestroyImage(m_ctx->allocator(), m_lowImage, m_lowAlloc);
     m_lowView = VK_NULL_HANDLE;
@@ -918,6 +934,10 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     fp.timeInfo = Vec4(m_time += dt, float(m_requests.size()), float(m_spawnTotal), camera.nearPlane());
     fp.depthInfo = Vec4(float(renderSize.width), float(renderSize.height), camera.farPlane(), 1.0f);
     fp.counts = glm::uvec4(m_cur, m_capacity, m_sortThisFrame ? 1u : 0u, 0u);
+    fp.sunDir = m_sunDir;
+    fp.sunColor = m_sunColor;
+    fp.ambient = m_ambient;
+    fp.viewInfo = Vec4(std::abs(camera.projNoJitter()[1][1]), 0.0f, 0.0f, 0.0f);
 
     std::memcpy(m_emitterBuf[frame].mapped, m_slotData.data(), size_t(m_slotHighWater) * sizeof(VfxEmitterGpu));
     if (!m_requests.empty())
@@ -1052,7 +1072,7 @@ void VfxSystem::debugDump() {
     vmaInvalidateAllocation(m_ctx->allocator(), rb.alloc, 0, VK_WHOLE_SIZE);
     const uint32_t* c = static_cast<const uint32_t*>(rb.mapped);
     ERUPTION_LOG_WARN("[VFX] dump: alive0=%u alive1=%u dead=%u render=%u+%u dispatch=%u draw=(%u,%u) low=(%u,%u)", c[0],
-                      c[1], c[2], c[3], c[4], c[kCDispatch], c[kCDraw], c[kCDraw + 1], c[kCDraw + 4], c[kCDraw + 5]);
+                      c[1], c[2], c[3], c[4], c[kCDispatch], c[kCDraw], c[kCDraw + 1], c[kCDraw + 5], c[kCDraw + 6]);
     uint32_t idx[4];
     std::memcpy(idx, c + 32, sizeof(idx));
     m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
@@ -1171,7 +1191,8 @@ void VfxSystem::drawLowRes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2
     const DrawPush push{(m_sortThisFrame ? 3u : 1u) * m_capacity, float(extent.width) / float(m_lowExtent.width)};
     vkCmdPushConstants(cmd, m_drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
                        &push);
-    vkCmdDrawIndirect(cmd, m_counters.buf, (kCDraw + 4) * 4, 1, 16);
+    vkCmdBindIndexBuffer(cmd, m_ringIndex.buf, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexedIndirect(cmd, m_counters.buf, (kCDraw + 5) * 4, 1, 20);
     vkc::cmdEndRendering(cmd);
     m_ctx->cmdImageBarrier(cmd, m_lowImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -1292,7 +1313,8 @@ void VfxSystem::draw(VkCommandBuffer cmd, VkImageView litView, VkImageView depth
     const DrawPush push{m_sortThisFrame ? 2u * m_capacity : 0u, 1.0f};
     vkCmdPushConstants(cmd, m_drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
                        &push);
-    vkCmdDrawIndirect(cmd, m_counters.buf, kCDraw * 4, 1, 16);
+    vkCmdBindIndexBuffer(cmd, m_ringIndex.buf, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexedIndirect(cmd, m_counters.buf, kCDraw * 4, 1, 20);
     vkc::cmdEndRendering(cmd);
     m_ctx->cmdImageBarrier(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,

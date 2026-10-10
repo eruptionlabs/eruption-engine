@@ -834,6 +834,7 @@ void Engine::render() {
     m_gbuffer.transitionToRead(cmd);
     // Particulas: simula aqui, com a profundidade deste frame ja' legivel
     // (colisao com o que a camera ve'). Sem efeito nenhum, nao grava nada.
+    m_vfx.setLighting(frameUbo.sunDir, frameUbo.sunColor, frameUbo.ambientSky);
     m_vfx.update(m_timer.deltaTime(), m_camera, renderExtent());
     // ERUPTION_DEBUG_VFX=1: contagem (lida da GPU com atraso) a cada 60 frames.
     static const bool kDebugVfx = std::getenv("ERUPTION_DEBUG_VFX") != nullptr;

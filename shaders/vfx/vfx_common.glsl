@@ -87,6 +87,22 @@ struct FrameParams {
     vec4 timeInfo;      // x tempo, y total de pedidos, z total a nascer, w perto
     vec4 depthInfo;     // x largura, y altura, z longe, w 1 = profundidade valida
     uvec4 counts;       // x lista atual (0/1), y capacidade total, z ordenar (0/1)
+    vec4 sunDir;        // xyz direcao em que a luz viaja, w intensidade
+    vec4 sunColor;
+    vec4 ambient;       // xyz cor do ceu, w intensidade
+    vec4 viewInfo;      // x proj[1][1] (teto de tamanho na tela)
+};
+
+// REGISTRO DE DESENHO (64 bytes, um por particula visivel, no indice dela):
+// tudo o que o vertex shader precisa, calculado UMA vez na simulacao - cor
+// com curva, grafo, luz e fade; tamanho final; quadro da folha. O vertex
+// shader roda 8 vezes por particula e so' le' isto (nada de emissor, curva
+// ou grafo por vertice).
+struct RenderRec {
+    vec4 posSize;  // xyz posicao, w tamanho final (mundo)
+    uvec4 look;    // x,y cor half4 (rgb linear com luz, a); z half2(rotacao, comprimento esticado); w eixo (octaedro 2x16)
+    uvec4 sheet;   // x textura; y colunas | linhas<<8 | mistura<<16 | direcao<<18; z quadro | mistura do proximo (8 bits)<<16; w borda suave (float)
+    uvec4 cutout;  // 8 halfs: poligono justo da textura
 };
 
 // Contadores na GPU (uint) - precisa bater com VfxSystem.cpp.
@@ -95,11 +111,12 @@ struct FrameParams {
 #define VFXC_DEAD      2
 #define VFXC_RENDER    3  // 3: lista cheia, 4: lista de meia resolucao
 #define VFXC_EVENTS    5  // eventos de sub-emissor escritos neste frame
+// Desenho indexado (5 uints): 12..16 lista cheia, 17..21 meia resolucao.
 #define VFXC_DISPATCH  8  // 8..10: dispatch indireto da simulacao
-#define VFXC_DRAW      12 // 12..15: draw da lista cheia; 16..19: meia resolucao
-#define VFXC_SORTDISP  20 // 20..22: ordenar lista cheia; 24..26: meia resolucao
-#define VFXC_EVENTDISP 28 // 28..30: dispatch indireto das filhas (um grupo por evento)
-#define VFXC_COUNT     32
+#define VFXC_DRAW      12
+#define VFXC_SORTDISP  24 // 24..26: ordenar lista cheia; 28..30: meia resolucao
+#define VFXC_EVENTDISP 32 // 32..34: dispatch indireto das filhas (um grupo por evento)
+#define VFXC_COUNT     36
 #define VFX_MAX_EVENTS 16384u
 
 // Evento de sub-emissor: onde e com que velocidade herdada nascem as filhas.
@@ -125,6 +142,20 @@ layout(set = VFX_SET, binding = 9) uniform sampler2D lowResColor;
 // Ordenacao: por lista, 256 contagens + 256 posicoes de escrita.
 layout(std430, set = VFX_SET, binding = 10) VFX_RW buffer SortBuf { uint sortData[]; };
 layout(std430, set = VFX_SET, binding = 13) VFX_RW buffer EventBuf { VfxEvent events[]; };
+layout(std430, set = VFX_SET, binding = 14) VFX_RW buffer RenderRecBuf { RenderRec recs[]; };
+
+// Eixo unitario <-> 2 x unorm16 (octaedro): direcao da velocidade no registro.
+uint packOct(vec3 n) {
+    n /= (abs(n.x) + abs(n.y) + abs(n.z) + 1e-8);
+    vec2 o = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return packUnorm2x16(o * 0.5 + 0.5);
+}
+vec3 unpackOct(uint p) {
+    vec2 o = unpackUnorm2x16(p) * 2.0 - 1.0;
+    vec3 n = vec3(o, 1.0 - abs(o.x) - abs(o.y));
+    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return normalize(n);
+}
 
 // Balde de profundidade (0 = mais longe): log da distancia entre perto e
 // longe, de tras para frente (a mistura alfa precisa do fundo primeiro).
