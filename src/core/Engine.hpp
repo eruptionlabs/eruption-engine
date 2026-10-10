@@ -49,6 +49,7 @@
 #include "formats/PackManager.hpp"
 #include "formats/ResourceConfig.hpp"
 #include "renderer/UiCanvas.hpp"
+#include "renderer/UiDocument.hpp"
 #include "core/InputConfig.hpp"
 #include "formats/SpriteTypes.hpp"
 #include "core/ConfigManager.hpp"
@@ -409,6 +410,9 @@ public:
     VkSampler defaultSampler() const { return m_defaultSampler; }
     VulkanContext& vulkan() { return m_vulkan; }
     VfxSystem& vfx() { return m_vfx; }
+    // InitInfo do sistema de particulas da cena; frameUboSet != 0 troca o
+    // FrameUBO (outra camera, ex.: a previa de efeitos do editor).
+    VfxSystem::InitInfo vfxInitInfo(VkDescriptorSet frameUboSet = VK_NULL_HANDLE);
     ModelRenderer& modelRenderer() { return m_modelRenderer; }
     TerrainRenderer& terrainRenderer() { return m_terrainRenderer; }
     SpriteSystem& spriteSystem() { return m_spriteSystem; }
@@ -521,6 +525,8 @@ public:
     void drawGameFx2D(float x, float y, float w, float h, float dt);
     // Interface 2D montada pelo jogo (renderer/UiCanvas.hpp).
     UiCanvas& uiCanvas() { return m_uiCanvas; }
+    // Interface do jogo descrita em CSS (renderer/UiDocument.hpp).
+    UiDocument& uiDocument() { return m_uiDocument; }
     void clearCharacters(bool keepNeighbors = false);
     // Anda quem tem caminho (só com o jogo rodando) e envia os sprites.
     void updateCharacters(float dt, bool moveAlongPaths);
@@ -1416,6 +1422,7 @@ private:
     struct CharConfig m_charConfig;
     ResourceConfig m_resourceConfig;
     UiCanvas m_uiCanvas;
+    UiDocument m_uiDocument;
     InputConfig m_inputConfig;
     VkImage m_minimapImage = VK_NULL_HANDLE;
     VmaAllocation m_minimapAlloc = VK_NULL_HANDLE;

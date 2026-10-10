@@ -501,59 +501,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     if (!m_spherePreview.init(&m_vulkan, &m_bindless, m_spriteRenderer.frameUboLayout(), m_spriteRenderer.frameUboSet())) {
         ERUPTION_LOG_WARN("[SPHEREPREVIEW] falhou ao inicializar - popup de preview ficara indisponivel.");
     }
-    {
-        VfxSystem::InitInfo vi;
-        vi.ctx = &m_vulkan;
-        vi.bindless = &m_bindless;
-        vi.frameUboLayout = m_spriteRenderer.frameUboLayout();
-        vi.frameUboSet = m_spriteRenderer.frameUboSet();
-        // Folha de quadros: PNG do jogo (ou do motor) -> textura com mip -> slot.
-        vi.resolveTexture = [this](const std::string& path, uint32_t cols, uint32_t rows) -> VfxTextureInfo {
-            VfxTextureInfo info;
-            VfxImage img;
-            if (!makeVfxBuiltin(path, img)) {
-                std::filesystem::path p = project::gameRef(path);
-                if (!std::filesystem::exists(p)) p = project::engine(path);
-                int w = 0, h = 0, n = 0;
-                unsigned char* px = stbi_load(p.string().c_str(), &w, &h, &n, STBI_rgb_alpha);
-                if (!px) {
-                    ERUPTION_LOG_WARN("[VFX] textura nao carregou: %s", p.string().c_str());
-                    return info;
-                }
-                img.width = uint32_t(w);
-                img.height = uint32_t(h);
-                img.rgba.assign(px, px + size_t(w) * size_t(h) * 4);
-                stbi_image_free(px);
-            }
-            computeVfxCutout(img.rgba.data(), img.width, img.height, cols, rows, info.cutout);
-            // Uma textura por arquivo, mesmo usada com grades diferentes.
-            auto it = m_vfxTextureSlots.find(path);
-            if (it != m_vfxTextureSlots.end()) {
-                info.slot = it->second;
-                return info;
-            }
-            TextureResource tex;
-            if (!createTextureFromPixels(img.rgba.data(), int(img.width), int(img.height), tex)) return info;
-            tex.slot = m_bindless.allocateSlotSafe();
-            m_bindless.updateTextureSafe(tex.slot, tex.view, m_defaultSampler);
-            m_vfxTextures.push_back(tex);
-            m_vfxTextureSlots[path] = tex.slot;
-            info.slot = tex.slot;
-            return info;
-        };
-        // Nome -> arquivo: caminho com ".json" vale como esta' (relativo ao
-        // projeto); senao assets/effects/<nome>.vfx.json do jogo e, na falta,
-        // data/vfx/<nome>.vfx.json do motor.
-        vi.resolveEffectPath = [](const std::string& name) -> std::string {
-            if (name.size() > 5 && name.compare(name.size() - 5, 5, ".json") == 0)
-                return project::gameRef(name).string();
-            const std::filesystem::path g = project::game("assets/effects/" + name + ".vfx.json");
-            if (std::filesystem::exists(g)) return g.string();
-            const std::filesystem::path e = project::engine("data/vfx/" + name + ".vfx.json");
-            return std::filesystem::exists(e) ? e.string() : std::string();
-        };
-        if (!m_vfx.init(vi)) ERUPTION_LOG_WARN("[VFX] indisponivel: efeitos de particula desligados.");
-    }
+    if (!m_vfx.init(vfxInitInfo())) ERUPTION_LOG_WARN("[VFX] indisponivel: efeitos de particula desligados.");
 
     presentLoadingScreen("", "Loading Configuration", 0.3f, true);
     // Shadow settings load BEFORE ShadowRenderer::init so atlas_size from
@@ -924,6 +872,62 @@ void Engine::populateMaps() {
 
     std::sort(m_availableMaps.begin(), m_availableMaps.end());
     m_availableMaps.erase(std::unique(m_availableMaps.begin(), m_availableMaps.end()), m_availableMaps.end());
+}
+
+// Configuracao do sistema de particulas (texturas, efeitos): a mesma para o
+// da cena e para outros (prévia do editor), que trocam so' o FrameUBO.
+VfxSystem::InitInfo Engine::vfxInitInfo(VkDescriptorSet frameUboSet) {
+    VfxSystem::InitInfo vi;
+    vi.ctx = &m_vulkan;
+    vi.bindless = &m_bindless;
+    vi.frameUboLayout = m_spriteRenderer.frameUboLayout();
+    vi.frameUboSet = frameUboSet ? frameUboSet : m_spriteRenderer.frameUboSet();
+    // Folha de quadros: PNG do jogo (ou do motor) -> textura com mip -> slot.
+    vi.resolveTexture = [this](const std::string& path, uint32_t cols, uint32_t rows) -> VfxTextureInfo {
+        VfxTextureInfo info;
+        VfxImage img;
+        if (!makeVfxBuiltin(path, img)) {
+            std::filesystem::path p = project::gameRef(path);
+            if (!std::filesystem::exists(p)) p = project::engine(path);
+            int w = 0, h = 0, n = 0;
+            unsigned char* px = stbi_load(p.string().c_str(), &w, &h, &n, STBI_rgb_alpha);
+            if (!px) {
+                ERUPTION_LOG_WARN("[VFX] textura nao carregou: %s", p.string().c_str());
+                return info;
+            }
+            img.width = uint32_t(w);
+            img.height = uint32_t(h);
+            img.rgba.assign(px, px + size_t(w) * size_t(h) * 4);
+            stbi_image_free(px);
+        }
+        computeVfxCutout(img.rgba.data(), img.width, img.height, cols, rows, info.cutout);
+        // Uma textura por arquivo, mesmo usada com grades diferentes.
+        auto it = m_vfxTextureSlots.find(path);
+        if (it != m_vfxTextureSlots.end()) {
+            info.slot = it->second;
+            return info;
+        }
+        TextureResource tex;
+        if (!createTextureFromPixels(img.rgba.data(), int(img.width), int(img.height), tex)) return info;
+        tex.slot = m_bindless.allocateSlotSafe();
+        m_bindless.updateTextureSafe(tex.slot, tex.view, m_defaultSampler);
+        m_vfxTextures.push_back(tex);
+        m_vfxTextureSlots[path] = tex.slot;
+        info.slot = tex.slot;
+        return info;
+    };
+    // Nome -> arquivo: caminho com ".json" vale como esta' (relativo ao
+    // projeto); senao assets/effects/<nome>.vfx.json do jogo e, na falta,
+    // data/vfx/<nome>.vfx.json do motor.
+    vi.resolveEffectPath = [](const std::string& name) -> std::string {
+        if (name.size() > 5 && name.compare(name.size() - 5, 5, ".json") == 0)
+            return project::gameRef(name).string();
+        const std::filesystem::path g = project::game("assets/effects/" + name + ".vfx.json");
+        if (std::filesystem::exists(g)) return g.string();
+        const std::filesystem::path e = project::engine("data/vfx/" + name + ".vfx.json");
+        return std::filesystem::exists(e) ? e.string() : std::string();
+    };
+    return vi;
 }
 
 void Engine::shutdown() {

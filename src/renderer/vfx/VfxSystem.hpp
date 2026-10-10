@@ -143,6 +143,8 @@ public:
     void draw(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent);
     // Algo para simular/desenhar? (sem nenhum efeito, o sistema custa zero)
     bool active() const { return m_active; }
+    // Troca o FrameUBO do desenho (camera propria por frame, ex.: previa).
+    void setFrameUboSet(VkDescriptorSet set) { m_frameUboSet = set; }
 
     const Stats& stats() const { return m_stats; }
     // Depuracao: le' (com espera) as primeiras particulas da lista de desenho.

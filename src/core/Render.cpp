@@ -2416,6 +2416,33 @@ void Engine::render() {
         if (shouldScreenshot && !m_enableAutoExit) scheduleScreenshotFromSwap(m_screenshotOnLoad);
     }
 
+    // ERUPTION_TEST_RECORD="pasta,primeiro,quantos" (teste): grava um PNG por
+    // frame (sem a interface) para montar video offline. Com
+    // ERUPTION_TEST_FIXED_DT=0.0333 o video sai em tempo real a 30 quadros/s,
+    // qualquer que seja a velocidade da maquina.
+    {
+        static std::string recDir;
+        static int recFirst = -1, recCount = 0;
+        static const bool recParsed = [] {
+            if (const char* e = std::getenv("ERUPTION_TEST_RECORD")) {
+                char dir[512] = {0};
+                if (std::sscanf(e, "%511[^,],%d,%d", dir, &recFirst, &recCount) == 3) {
+                    recDir = dir;
+                    std::filesystem::create_directories(recDir);
+                }
+            }
+            return true;
+        }();
+        (void)recParsed;
+        const int f = static_cast<int>(m_framesCount);
+        if (!recDir.empty() && f >= recFirst && f < recFirst + recCount) {
+            char name[64];
+            std::snprintf(name, sizeof(name), "/f%05d.png", f - recFirst);
+            takeScreenshot(recDir + name);
+            if (f + 1 == recFirst + recCount && m_enableAutoExit) m_running = false;
+        }
+    }
+
     // A/B automated capture: take two screenshots a few frames apart, one with
     // PBR on and one with PBR off, so they can be diffed externally. The swap
     // screenshot captures the same frame it is scheduled in, so the state change

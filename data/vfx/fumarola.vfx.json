@@ -8,24 +8,65 @@
       "burstCount": 25,
       "burstInterval": 5.3,
       "shape": "disc",
-      "shapeSize": [0.35, 0.35, 0.35],
-      "lifetime": [0.8, 1.8],
-      "speed": [3.0, 7.0],
+      "shapeSize": [
+        0.35,
+        0.35,
+        0.35
+      ],
+      "lifetime": [
+        0.8,
+        1.8
+      ],
+      "speed": [
+        3.0,
+        7.0
+      ],
       "spread": 0.15,
-      "size": [0.04, 0.09],
-      "gravity": [0, -6.0, 0],
+      "size": [
+        0.03,
+        0.06
+      ],
+      "gravity": [
+        0,
+        -6.0,
+        0
+      ],
       "noiseStrength": 1.5,
       "noiseFrequency": 0.5,
       "color": [
-        {"t": 0.0, "rgba": [1.0, 0.85, 0.45, 1.0]},
-        {"t": 0.6, "rgba": [1.0, 0.4, 0.1, 1.0]},
-        {"t": 1.0, "rgba": [0.5, 0.08, 0.0, 0.0]}
+        {
+          "t": 0.0,
+          "rgba": [
+            1.0,
+            0.55,
+            0.15,
+            1.0
+          ]
+        },
+        {
+          "t": 0.5,
+          "rgba": [
+            1.0,
+            0.3,
+            0.05,
+            1.0
+          ]
+        },
+        {
+          "t": 1.0,
+          "rgba": [
+            0.6,
+            0.08,
+            0.0,
+            0.0
+          ]
+        }
       ],
       "texture": "builtin:spark",
       "facing": "velocity",
       "stretch": 0.05,
       "blend": "additive",
-      "emissive": 6.0,
+      "emissive": 2.5,
       "softDistance": 0.0
     },
     {
@@ -33,23 +74,79 @@
       "capacity": 120,
       "rate": 6,
       "shape": "disc",
-      "shapeSize": [0.3, 0.3, 0.3],
-      "lifetime": [1.5, 2.5],
-      "speed": [1.0, 2.0],
+      "shapeSize": [
+        0.3,
+        0.3,
+        0.3
+      ],
+      "lifetime": [
+        1.5,
+        2.5
+      ],
+      "speed": [
+        1.0,
+        2.0
+      ],
       "spread": 0.1,
-      "size": [0.35, 0.6],
-      "rotation": [0, 360],
-      "angularVelocity": [-30, 30],
-      "gravity": [0, 0.8, 0],
+      "size": [
+        0.35,
+        0.6
+      ],
+      "rotation": [
+        0,
+        360
+      ],
+      "angularVelocity": [
+        -30,
+        30
+      ],
+      "gravity": [
+        0,
+        0.8,
+        0
+      ],
       "drag": 0.5,
       "noiseStrength": 0.6,
       "noiseFrequency": 0.6,
       "color": [
-        {"t": 0.0, "rgba": [1.0, 0.55, 0.25, 0.0]},
-        {"t": 0.15, "rgba": [0.8, 0.5, 0.35, 0.5]},
-        {"t": 1.0, "rgba": [0.55, 0.52, 0.5, 0.0]}
+        {
+          "t": 0.0,
+          "rgba": [
+            1.0,
+            0.55,
+            0.25,
+            0.0
+          ]
+        },
+        {
+          "t": 0.15,
+          "rgba": [
+            0.8,
+            0.5,
+            0.35,
+            0.5
+          ]
+        },
+        {
+          "t": 1.0,
+          "rgba": [
+            0.55,
+            0.52,
+            0.5,
+            0.0
+          ]
+        }
       ],
-      "sizeOverLife": [[0, 0.6], [1, 2.2]],
+      "sizeOverLife": [
+        [
+          0,
+          0.6
+        ],
+        [
+          1,
+          2.2
+        ]
+      ],
       "texture": "builtin:puff",
       "flipCols": 4,
       "flipRows": 4,
