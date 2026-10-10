@@ -36,6 +36,7 @@ bool sameLight(const PointLight& a, const PointLight& b) {
 } // namespace
 
 void Editor::onMapReady() {
+    m_isolated.clear(); // índices do mapa anterior
     const auto& insts = m_engine->modelRenderer().getInstances();
     m_original = MapOriginal{};
     m_original.count = insts.size();

@@ -495,6 +495,15 @@ public:
     void updateCharacters(float dt, bool moveAlongPaths);
     std::vector<SceneCharacter>& characters() { return m_characters; }
     bool hideCharactersInView = false; // vista do editor
+    bool hideMapEffectsInView = false; // vista do editor isolada: sem fumaça do mapa
+    // Vista de detalhe total (editor, Exibir > Detalhe total): toda malha na
+    // forma original, sem LOD, na tela e na sombra. Para conferir o LOD.
+    void setFullDetailView(bool on) {
+        m_fullDetailView = on;
+        m_modelRenderer.setShadowFullDetail(on);
+    }
+    bool fullDetailView() const { return m_fullDetailView; }
+    bool m_fullDetailView = false;
     // Retoque de terreno (core/TerrainEditing.cpp): grade de altura do mapa
     // (.ter) + delta salvo em assets/scenes/<mapa>.height.bin.
     struct HeightEdit {

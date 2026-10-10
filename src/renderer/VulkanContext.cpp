@@ -1,4 +1,7 @@
 #include "renderer/VulkanContext.hpp"
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <execinfo.h>
+#endif
 #include <cstdio>
 #include <csignal>
 #include <chrono>
@@ -1377,6 +1380,18 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanContext::debugCallback(
         ERUPTION_LOG_ERROR("[Validation][BREAK] %s", pCallbackData->pMessage);
         raise(SIGTRAP);
     }
+    // ERUPTION_VK_TRACE=<substring>: imprime a pilha de chamadas e segue (o
+    // callback roda dentro da chamada Vulkan, então a pilha mostra quem a
+    // fez). Para erro que depende do ritmo dos frames e some sob o gdb.
+#if defined(__linux__) && !defined(__ANDROID__)
+    static const char* trace = std::getenv("ERUPTION_VK_TRACE");
+    if (trace && pCallbackData->pMessage && std::strstr(pCallbackData->pMessage, trace)) {
+        void* frames[32];
+        const int n = backtrace(frames, 32);
+        ERUPTION_LOG_ERROR("[Validation][TRACE] call stack (%d frames):", n);
+        backtrace_symbols_fd(frames, n, 2);
+    }
+#endif
     if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
         ERUPTION_LOG_ERROR("[Validation] %s", pCallbackData->pMessage);
     } else if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {

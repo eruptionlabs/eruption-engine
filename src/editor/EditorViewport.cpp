@@ -333,13 +333,40 @@ void Editor::applyLayerVisibility() {
     std::vector<uint32_t> show, hide;
     const auto& insts = m_engine->modelRenderer().getInstances();
     for (uint32_t i = 0; i < insts.size(); ++i) {
-        // O chão fica sempre (sem ele não há onde clicar nem pintar).
-        const bool visible = m_engine->modelRenderer().isGroundMesh(insts[i].meshIndex) || m_layerShow[layerOfInstance(i)];
+        // O chão fica sempre (sem ele não há onde clicar nem pintar), menos
+        // isolando: aí só o que foi isolado aparece.
+        const bool visible = !m_isolated.empty()
+                                 ? std::binary_search(m_isolated.begin(), m_isolated.end(), i)
+                                 : m_engine->modelRenderer().isGroundMesh(insts[i].meshIndex) || m_layerShow[layerOfInstance(i)];
         if (insts[i].viewHidden == visible) (visible ? show : hide).push_back(i);
     }
     if (!show.empty()) m_engine->modelRenderer().setViewHidden(show, false);
     if (!hide.empty()) m_engine->modelRenderer().setViewHidden(hide, true);
-    m_engine->hideCharactersInView = !m_layerShow[LayerCharacters];
+    m_engine->hideCharactersInView = !m_isolated.empty() || !m_layerShow[LayerCharacters];
+    m_engine->hideMapEffectsInView = !m_isolated.empty();
+}
+
+void Editor::toggleIsolate() {
+    if (!m_isolated.empty()) {
+        m_isolated.clear();
+        applyLayerVisibility();
+        return;
+    }
+    std::vector<Selection> sel = m_extraSelection;
+    sel.push_back(m_selection);
+    for (const Selection& s : sel)
+        if (s.kind == SelectionKind::Model && s.index >= 0) m_isolated.push_back(static_cast<uint32_t>(s.index));
+    if (m_isolated.empty()) return;
+    std::sort(m_isolated.begin(), m_isolated.end());
+    m_isolated.erase(std::unique(m_isolated.begin(), m_isolated.end()), m_isolated.end());
+    applyLayerVisibility();
+    const auto& insts = m_engine->modelRenderer().getInstances();
+    const Vec3 c = insts[m_isolated.front()].worldCenter;
+    char msg[160];
+    std::snprintf(msg, sizeof(msg), "Isolated %zu model(s) (%s at %.0f, %.0f, %.0f). Press / again to show everything.",
+                  m_isolated.size(), insts[m_isolated.front()].name.c_str(), c.x, c.y, c.z);
+    log(LogLevel::Info, msg);
+    frameSelection();
 }
 
 int Editor::raycastModels(const Vec3& origin, const Vec3& dir, float& hitT, int ignore, bool skipScatter) const {

@@ -14,6 +14,13 @@
 Vários de uma vez: segure **Ctrl** e clique, ou arraste no vazio da cena para
 desenhar um retângulo. Mover, girar, apagar e duplicar (**Ctrl+D**) valem para o grupo.
 
+## Ver um modelo sozinho
+
+Selecione e aperte **/** (ou **Exibir > Isolar seleção**): só ele fica na vista, o
+resto some (nada é apagado). **/** de novo mostra tudo. **Exibir > Detalhe total
+(sem LOD)** desenha todo modelo na malha original, perto ou longe, para comparar com
+a versão simplificada que o motor usa de longe.
+
 ## Sólido
 
 No **Inspetor > Modelo**, marque **Sólido**: o jogador não atravessa a base do modelo

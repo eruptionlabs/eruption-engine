@@ -355,6 +355,9 @@ private:
     void addSoundEmitter();
     // Seleção múltipla: m_selection é a principal (gizmo, Inspetor); estas vão junto.
     std::vector<Selection> m_extraSelection;
+    // Exibir > Isolar seleção: só estes modelos aparecem na vista (nada é apagado).
+    std::vector<uint32_t> m_isolated;
+    void toggleIsolate();
     bool isSelected(const Selection& s) const;
     void toggleSelect(const Selection& s);
     std::vector<Selection> selectionList() const; // principal + extras válidas
