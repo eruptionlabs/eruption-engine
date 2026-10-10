@@ -210,7 +210,8 @@ bool Engine::addSplatLayer(const std::string& png) {
     SplatEdit& sp = m_splatEdit;
     const int l = splatLayerCount();
     if (l >= 8 || (sp.fromMap && l >= 8)) return false;
-    ImageData img = loadRawPNG(png);
+    // Caminho RELATIVO vindo do arquivo de cena: a textura mora no projeto.
+    ImageData img = loadRawPNG(project::gameRef(png));
     if (!img.isValid()) return false;
     std::vector<uint8_t> rgba = img.channels == 4 ? img.pixels
                                                   : resampleRGBA(img.pixels.data(), img.width, img.height, img.channels,
@@ -423,9 +424,11 @@ bool Engine::buildRegionSplat(WorldRegion& r, const std::vector<std::string>& la
         // A camada vem do arquivo de cena com caminho RELATIVO (o mesmo que
         // o jogo exportado usa), entao ela mora no projeto - nao na pasta do
         // motor. Sem resolver aqui, mapa nenhum de projeto pinta o chao.
-        ImageData img = loadRawPNG(project::gameRef(layers[l]));
+        const std::filesystem::path camada = project::gameRef(layers[l]);
+        ImageData img = loadRawPNG(camada);
         if (!img.isValid()) {
-            ERUPTION_LOG_WARN("Terrain layer %s could not be loaded", layers[l].c_str());
+            ERUPTION_LOG_WARN("Terrain layer %s could not be loaded (%s)", layers[l].c_str(),
+                              camada.string().c_str());
             continue;
         }
         std::vector<uint8_t> rgba = img.channels == 4 ? img.pixels
