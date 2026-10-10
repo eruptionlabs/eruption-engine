@@ -16,4 +16,8 @@ void main() {
     counters[VFXC_DISPATCH + 2] = 1u;
     counters[1u - cur] = 0u;
     counters[VFXC_RENDER] = 0u;
+    counters[VFXC_RENDER + 1] = 0u;
+    // Contagens da ordenacao zeradas para este frame (2 listas x 256).
+    for (uint i = 0u; i < 2u * 512u; i += 512u)
+        for (uint b = 0u; b < VFX_SORT_BUCKETS; ++b) sortData[i + b] = 0u;
 }

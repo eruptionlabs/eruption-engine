@@ -8,8 +8,15 @@
 layout(local_size_x = 1) in;
 
 void main() {
-    counters[VFXC_DRAW + 0] = 6u;
-    counters[VFXC_DRAW + 1] = counters[VFXC_RENDER];
-    counters[VFXC_DRAW + 2] = 0u;
-    counters[VFXC_DRAW + 3] = 0u;
+    for (uint l = 0u; l < 2u; ++l) {
+        uint n = counters[VFXC_RENDER + l];
+        // 18 vertices: poligono de 8 lados (corta o canto vazio do quad).
+        counters[VFXC_DRAW + l * 4u + 0u] = 18u;
+        counters[VFXC_DRAW + l * 4u + 1u] = n;
+        counters[VFXC_DRAW + l * 4u + 2u] = 0u;
+        counters[VFXC_DRAW + l * 4u + 3u] = 0u;
+        counters[VFXC_SORTDISP + l * 4u + 0u] = (n + 63u) / 64u;
+        counters[VFXC_SORTDISP + l * 4u + 1u] = 1u;
+        counters[VFXC_SORTDISP + l * 4u + 2u] = 1u;
+    }
 }

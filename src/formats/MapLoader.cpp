@@ -300,6 +300,23 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
             }
         }
 
+        if (j.contains("effects") && j["effects"].is_array()) {
+            for (const auto& e : j["effects"]) {
+                if (!e.is_object() || !e.contains("name") || !e.contains("pos")) continue;
+                const nlohmann::json& pos = e["pos"];
+                if (!pos.is_array() || pos.size() < 3) continue;
+                LoadedMap::MapEffect fx;
+                fx.name = e["name"].get<std::string>();
+                fx.position = Vec3(pos[0].get<float>(), pos[1].get<float>(), pos[2].get<float>());
+                if (e.contains("rot") && e["rot"].is_array() && e["rot"].size() >= 3)
+                    fx.rotationDeg = Vec3(e["rot"][0].get<float>(), e["rot"][1].get<float>(), e["rot"][2].get<float>());
+                if (e.contains("scale")) fx.scale = std::max(e["scale"].get<float>(), 0.001f);
+                if (e.contains("enabled")) fx.enabled = e["enabled"].get<bool>();
+                map.effects.push_back(fx);
+            }
+        }
+        if (j.contains("vfxUnitsPerMeter")) map.vfxUnitsPerMeter = j["vfxUnitsPerMeter"].get<float>();
+
         if (j.contains("smoke") && j["smoke"].is_array()) {
             for (const auto& e : j["smoke"]) {
                 if (!e.is_object()) continue;

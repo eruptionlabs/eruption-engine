@@ -1,0 +1,26 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// ORDENACAO (2/3): soma prefixada das contagens (256 baldes, um workgroup)
+// -> posicao inicial de escrita de cada balde.
+#define VFX_WRITABLE
+#include "vfx/vfx_common.glsl"
+
+layout(local_size_x = 256) in;
+layout(push_constant) uniform Push { uint list; } pc;
+
+shared uint sums[256];
+
+void main() {
+    uint b = gl_LocalInvocationIndex;
+    uint base = pc.list * 512u;
+    sums[b] = sortData[base + b];
+    barrier();
+    // Hillis-Steele inclusiva em memoria compartilhada (256 = 8 passos).
+    for (uint off = 1u; off < 256u; off <<= 1) {
+        uint v = b >= off ? sums[b - off] : 0u;
+        barrier();
+        sums[b] += v;
+        barrier();
+    }
+    sortData[base + 256u + b] = sums[b] - sortData[base + b]; // exclusiva
+}

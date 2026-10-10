@@ -147,6 +147,7 @@ void readEmitter(const json& j, VfxEmitterDesc& e) {
     e.lit = std::clamp(num(j, "lit", e.lit), 0.0f, 1.0f);
     e.maxScreenSize = std::clamp(num(j, "maxScreenSize", e.maxScreenSize), 0.01f, 4.0f);
     e.nearFade = std::max(0.0f, num(j, "nearFade", e.nearFade));
+    e.lowRes = num(j, "lowRes", e.lowRes);
 }
 
 json writeEmitter(const VfxEmitterDesc& e) {
@@ -205,6 +206,7 @@ json writeEmitter(const VfxEmitterDesc& e) {
     j["lit"] = e.lit;
     j["maxScreenSize"] = e.maxScreenSize;
     j["nearFade"] = e.nearFade;
+    j["lowRes"] = e.lowRes;
     return j;
 }
 

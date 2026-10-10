@@ -51,8 +51,15 @@ struct VfxEmitterGpu {
     Vec4 flip;
     uint32_t colorLut[16];
     uint32_t sizeLut[8];
+    glm::uvec4 cutout; // 8 halfs: poligono justo da textura
 };
-static_assert(sizeof(VfxEmitterGpu) == 368, "VfxEmitterGpu precisa bater com o std430 do shader");
+static_assert(sizeof(VfxEmitterGpu) == 384, "VfxEmitterGpu precisa bater com o std430 do shader");
+
+// Textura de uma folha de quadros pronta para o desenho.
+struct VfxTextureInfo {
+    uint32_t slot = 0xFFFFFFFFu; // 0xFFFFFFFF = disco procedural
+    float cutout[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+};
 
 struct VfxSpawnRequestGpu {
     uint32_t slot, count, first, seed;
@@ -77,8 +84,9 @@ public:
         VkDescriptorSetLayout frameUboLayout = VK_NULL_HANDLE;
         VkDescriptorSet frameUboSet = VK_NULL_HANDLE;
         uint32_t capacity = 131072;   // particulas vivas no total (pool)
-        // PNG -> slot bindless (o motor cacheia e sobe a textura).
-        std::function<uint32_t(const std::string&)> resolveTexture;
+        // PNG (ou builtin:) -> slot bindless + poligono justo para a grade de
+        // quadros dada (o motor sobe a textura uma vez por arquivo).
+        std::function<VfxTextureInfo(const std::string&, uint32_t cols, uint32_t rows)> resolveTexture;
         // Nome do efeito -> arquivo .vfx.json (projeto primeiro, motor depois).
         std::function<std::string(const std::string&)> resolveEffectPath;
     };
@@ -127,7 +135,11 @@ public:
     // Compute (depois do G-buffer: a colisao usa a profundidade deste frame,
     // que precisa estar em SHADER_READ_ONLY_OPTIMAL).
     void simulate(VkCommandBuffer cmd, VkImageView depthView);
-    // Dentro de um rendering com o lit (RGBA16F) e a profundidade so' leitura.
+    // Camada de meia resolucao (fumaca): FORA de qualquer rendering, antes de
+    // draw(). Sem emissor lowRes ativo nao faz nada.
+    void drawLowRes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent);
+    // Dentro de um rendering com o lit (RGBA16F) e a profundidade so' leitura:
+    // compoe a meia resolucao e desenha as particulas de resolucao cheia.
     void draw(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent);
     // Algo para simular/desenhar? (sem nenhum efeito, o sistema custa zero)
     bool active() const { return m_active; }
@@ -168,15 +180,16 @@ private:
     uint32_t allocSlot();
     void freeSlot(uint32_t slot);
     void fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, uint32_t slot, VfxEmitterGpu& out);
-    uint32_t textureSlot(const std::string& path);
+    const VfxTextureInfo& texture(const std::string& path, uint32_t cols, uint32_t rows);
+    bool ensureLowResTarget(VkExtent2D full);
 
     VulkanContext* m_ctx = nullptr;
     BindlessDescriptor* m_bindless = nullptr;
     VkDescriptorSetLayout m_frameUboLayout = VK_NULL_HANDLE;
     VkDescriptorSet m_frameUboSet = VK_NULL_HANDLE;
-    std::function<uint32_t(const std::string&)> m_resolveTexture;
+    std::function<VfxTextureInfo(const std::string&, uint32_t, uint32_t)> m_resolveTexture;
     std::function<std::string(const std::string&)> m_resolveEffectPath;
-    std::unordered_map<std::string, uint32_t> m_textureSlots;
+    std::unordered_map<std::string, VfxTextureInfo> m_textures; // "caminho#colsxrows" 
 
     // Pipelines
     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
@@ -187,6 +200,18 @@ private:
     VkPipeline m_simPipe = VK_NULL_HANDLE;
     VkPipeline m_finishPipe = VK_NULL_HANDLE;
     VkPipeline m_drawPipe = VK_NULL_HANDLE;
+    VkPipeline m_drawLowPipe = VK_NULL_HANDLE;   // meia resolucao, sem attachment de profundidade
+    VkPipeline m_compositePipe = VK_NULL_HANDLE; // meia resolucao -> lit
+    VkPipeline m_sortHistPipe = VK_NULL_HANDLE, m_sortScanPipe = VK_NULL_HANDLE, m_sortScatterPipe = VK_NULL_HANDLE;
+    VkPipelineLayout m_compositeLayout = VK_NULL_HANDLE;
+    VkSampler m_linearSampler = VK_NULL_HANDLE;
+    // Alvo de meia resolucao (RGBA16F, cor premultiplicada + cobertura).
+    VkImage m_lowImage = VK_NULL_HANDLE;
+    VmaAllocation m_lowAlloc = VK_NULL_HANDLE;
+    VkImageView m_lowView = VK_NULL_HANDLE;
+    VkExtent2D m_lowExtent{0, 0};
+    VkExtent2D m_renderSize{0, 0};
+    std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setLow{};
     VkSampler m_depthSampler = VK_NULL_HANDLE;
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     // Dois sets por frame: a profundidade esta' em SHADER_READ_ONLY na
@@ -203,7 +228,7 @@ private:
         void* mapped = nullptr;
         VkDeviceSize size = 0;
     };
-    Buf m_particles, m_dead, m_alive, m_counters, m_render;
+    Buf m_particles, m_dead, m_alive, m_counters, m_render, m_sort;
     // Por frame em voo: emissores, pedidos, parametros, leitura dos contadores.
     static constexpr uint32_t kMaxSlots = 4096;
     static constexpr uint32_t kMaxRequests = 4096;
@@ -223,6 +248,8 @@ private:
     uint32_t m_cur = 0;          // lista de vivas atual (0/1)
     bool m_resetPool = true;     // reinicia a lista de mortas no proximo simulate
     bool m_active = false;
+    bool m_anyLowRes = false;   // algum emissor lowRes tocando (CPU sabe)
+    bool m_sortThisFrame = false; // algum emissor com mistura alfa tocando
     float m_idleTime = 1e9f;     // tempo sem instancia nenhuma
 
     // Estado do frame (montado em update, consumido em simulate)

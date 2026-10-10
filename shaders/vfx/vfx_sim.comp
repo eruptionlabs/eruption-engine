@@ -13,8 +13,8 @@
 
 layout(local_size_x = 64) in;
 
-shared uint sAlive, sDead, sRender;
-shared uint sAliveBase, sDeadBase, sRenderBase;
+shared uint sAlive, sDead, sRender, sLow;
+shared uint sAliveBase, sDeadBase, sRenderBase, sLowBase;
 
 // Turbulencia sem divergencia: rotacional de um potencial feito de senos
 // (campo analitico; barato e sem textura 3D). Parecido com fumaca/poeira.
@@ -42,6 +42,7 @@ void main() {
         sAlive = 0u;
         sDead = 0u;
         sRender = 0u;
+        sLow = 0u;
     }
     barrier();
 
@@ -53,6 +54,7 @@ void main() {
     uint idx = 0u;
     bool alive = false;
     bool visible = false;
+    bool lowRes = false;
     if (valid) {
         idx = aliveList[cur * cap + i];
         Particle p = particles[idx];
@@ -121,6 +123,7 @@ void main() {
             float t = p.age / p.life;
             float radius = sr.x * sampleSizeLut(e, t) * 0.75 + e.angVel.z * length(p.vel) * 0.5 + 0.01;
             visible = alive;
+            lowRes = (e.flags.x & VFXF_LOWRES) != 0u;
             for (int k = 0; k < 6 && visible; ++k)
                 visible = dot(frame.frustum[k].xyz, p.pos) + frame.frustum[k].w > -radius;
         }
@@ -131,18 +134,22 @@ void main() {
     if (valid) {
         if (alive) aliveSlot = atomicAdd(sAlive, 1u);
         else deadSlot = atomicAdd(sDead, 1u);
-        if (visible) renderSlot = atomicAdd(sRender, 1u);
+        if (visible) renderSlot = lowRes ? atomicAdd(sLow, 1u) : atomicAdd(sRender, 1u);
     }
     barrier();
     if (gl_LocalInvocationIndex == 0u) {
         sAliveBase = sAlive > 0u ? atomicAdd(counters[1u - cur], sAlive) : 0u;
         sDeadBase = sDead > 0u ? atomicAdd(counters[VFXC_DEAD], sDead) : 0u;
         sRenderBase = sRender > 0u ? atomicAdd(counters[VFXC_RENDER], sRender) : 0u;
+        sLowBase = sLow > 0u ? atomicAdd(counters[VFXC_RENDER + 1], sLow) : 0u;
     }
     barrier();
     if (valid) {
         if (alive) aliveList[(1u - cur) * cap + sAliveBase + aliveSlot] = idx;
         else deadList[sDeadBase + deadSlot] = idx;
-        if (visible) renderList[sRenderBase + renderSlot] = idx;
+        if (visible) {
+            if (lowRes) renderList[cap + sLowBase + renderSlot] = idx;
+            else renderList[sRenderBase + renderSlot] = idx;
+        }
     }
 }

@@ -250,7 +250,8 @@
       "texture": "builtin:puff",
       "flipCols": 4,
       "flipRows": 4,
-      "flipMode": "random"
+      "flipMode": "random",
+      "lowRes": true
     }
   ]
 }

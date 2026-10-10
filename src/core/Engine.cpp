@@ -508,21 +508,38 @@ bool Engine::init(int width, int height, const std::string& title) {
         vi.frameUboLayout = m_spriteRenderer.frameUboLayout();
         vi.frameUboSet = m_spriteRenderer.frameUboSet();
         // Folha de quadros: PNG do jogo (ou do motor) -> textura com mip -> slot.
-        vi.resolveTexture = [this](const std::string& path) -> uint32_t {
-            TextureResource tex;
+        vi.resolveTexture = [this](const std::string& path, uint32_t cols, uint32_t rows) -> VfxTextureInfo {
+            VfxTextureInfo info;
             VfxImage img;
-            if (makeVfxBuiltin(path, img)) {
-                // Textura embutida do motor, gerada na hora.
-                if (!createTextureFromPixels(img.rgba.data(), int(img.width), int(img.height), tex)) return 0xFFFFFFFFu;
-            } else {
+            if (!makeVfxBuiltin(path, img)) {
                 std::filesystem::path p = project::gameRef(path);
                 if (!std::filesystem::exists(p)) p = project::engine(path);
-                if (!createTextureFromFile(p.string().c_str(), tex)) return 0xFFFFFFFFu;
+                int w = 0, h = 0, n = 0;
+                unsigned char* px = stbi_load(p.string().c_str(), &w, &h, &n, STBI_rgb_alpha);
+                if (!px) {
+                    ERUPTION_LOG_WARN("[VFX] textura nao carregou: %s", p.string().c_str());
+                    return info;
+                }
+                img.width = uint32_t(w);
+                img.height = uint32_t(h);
+                img.rgba.assign(px, px + size_t(w) * size_t(h) * 4);
+                stbi_image_free(px);
             }
+            computeVfxCutout(img.rgba.data(), img.width, img.height, cols, rows, info.cutout);
+            // Uma textura por arquivo, mesmo usada com grades diferentes.
+            auto it = m_vfxTextureSlots.find(path);
+            if (it != m_vfxTextureSlots.end()) {
+                info.slot = it->second;
+                return info;
+            }
+            TextureResource tex;
+            if (!createTextureFromPixels(img.rgba.data(), int(img.width), int(img.height), tex)) return info;
             tex.slot = m_bindless.allocateSlotSafe();
             m_bindless.updateTextureSafe(tex.slot, tex.view, m_defaultSampler);
             m_vfxTextures.push_back(tex);
-            return tex.slot;
+            m_vfxTextureSlots[path] = tex.slot;
+            info.slot = tex.slot;
+            return info;
         };
         // Nome -> arquivo: caminho com ".json" vale como esta' (relativo ao
         // projeto); senao assets/effects/<nome>.vfx.json do jogo e, na falta,
@@ -1018,6 +1035,7 @@ void Engine::shutdown() {
         if (t.image) vmaDestroyImage(m_vulkan.allocator(), t.image, t.alloc);
     }
     m_vfxTextures.clear();
+    m_vfxTextureSlots.clear();
     m_spherePreview.shutdown();
     m_modelRenderer.shutdown(); m_terrainRenderer.shutdown(); m_spriteSystem.shutdown();
     m_spriteRenderer.shutdown(); m_shadowRenderer.shutdown(); m_deferredLighting.shutdown();

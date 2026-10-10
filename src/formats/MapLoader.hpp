@@ -71,6 +71,20 @@ struct LoadedMap {
     // Vazio = mapa sem fumaça (todo mapa antigo cai aqui).
     std::vector<SmokeEmitter> smokeEmitters;
 
+    // Efeitos de particula do mapa (chave opcional "effects" do .env): cada
+    // um toca o efeito `name` (assets/effects do jogo ou data/vfx do motor)
+    // no lugar dado, desde a abertura do mapa.
+    struct MapEffect {
+        std::string name;
+        Vec3 position{0.0f};
+        Vec3 rotationDeg{0.0f}; // graus, em torno de X, Y e Z
+        float scale = 1.0f;
+        bool enabled = true;
+    };
+    std::vector<MapEffect> effects;
+    // Unidades do mundo por metro para os efeitos (0 = padrao do motor).
+    float vfxUnitsPerMeter = 0.0f;
+
     // Environment/lighting values loaded from the map's .env companion file.
     struct {
         Vec3 sunDirection = Vec3(0.0f, -1.0f, 0.0f);

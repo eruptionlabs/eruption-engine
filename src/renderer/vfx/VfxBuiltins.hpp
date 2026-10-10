@@ -18,6 +18,12 @@ struct VfxImage {
 };
 
 bool makeVfxBuiltin(const std::string& name, VfxImage& out);
+
+// Poligono justo de uma folha de quadros: alcance do conteudo (alfa acima
+// do limiar) em 8 direcoes (k*45 graus), em coordenadas do quadro [-1,1],
+// juntando todos os quadros. O desenho usa o octogono resultante no lugar do
+// quad e nao rasteriza os cantos vazios.
+void computeVfxCutout(const uint8_t* rgba, uint32_t w, uint32_t h, uint32_t cols, uint32_t rows, float out[8]);
 const std::vector<std::string>& vfxBuiltinNames();
 
 } // namespace eruption
