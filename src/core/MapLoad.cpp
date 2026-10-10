@@ -241,10 +241,12 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
 
     std::vector<ModelAsset> genericModels;
     genericModels.reserve(loadedMap->models.size());
-    for (const auto& model : loadedMap->models) {
-        genericModels.push_back(convertModelToAsset(model));
+    // A malha lida do GLB sai daqui convertida e é liberada no caminho:
+    // depois da conversão o mapa só guarda as texturas embutidas e o caminho.
+    for (auto& model : loadedMap->models) {
+        genericModels.push_back(convertModelToAssetReleasing(model));
     }
-    
+
     std::vector<ModelInstanceDesc> genericInstances;
     for (const auto& m : loadedMap->models) {
         ModelInstanceDesc d;
@@ -256,15 +258,6 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
 
     if (name.find("medieval_village") != std::string::npos) {
         for (auto& mod : loadedMap->models) {
-            for (auto& node : mod.nodes) {
-                for (auto& v : node.vertices) {
-                    v *= 5.0f;
-                }
-                node.position *= 5.0f;
-                node.offsetMatrix[3][0] *= 5.0f;
-                node.offsetMatrix[3][1] *= 5.0f;
-                node.offsetMatrix[3][2] *= 5.0f;
-            }
             mod.box.min *= 5.0f;
             mod.box.max *= 5.0f;
         }
@@ -423,7 +416,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     m_modelRenderer.setKeepGroundVertices(m_editorMode || hasSavedSplat(name) ||
                                           SceneEdits::fileMentions(name, "terrain") ||
                                           SceneEdits::fileMentions(name, "neighbors")); // bordas costuradas
-    m_modelRenderer.loadMapModels(genericModels, genericInstances, modelCenterX, modelCenterZ);
+    m_modelRenderer.loadMapModels(std::move(genericModels), genericInstances, modelCenterX, modelCenterZ);
     eruption::clearPbrTextureDataPrewarm(); // free any pre-decoded PBR data not consumed
     ERUPTION_LOG_WARN("Engine::loadMap: loadMapModels took %lld ms",
         (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - _tLMM).count());

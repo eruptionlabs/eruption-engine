@@ -902,14 +902,14 @@ struct MeshUploadData {
     Vec3 aabbMax;
 };
 
-void ModelRenderer::loadMapModels(const std::vector<ModelAsset>& models,
+void ModelRenderer::loadMapModels(std::vector<ModelAsset>&& models,
                                    const std::vector<ModelInstanceDesc>& instances,
                                    float centerX, float centerZ) {
     clear();
 
     if (models.empty() || instances.empty()) return;
 
-    m_lastModels = models;
+    m_lastModels = std::move(models);
     m_lastInstances = instances;
 
     std::unordered_map<std::string, uint32_t> modelMap;
@@ -1708,7 +1708,10 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                 useIndices->size() >= size_t(m_meshLodMinTris) * 3 && !vertices.empty()) {
                 LodBuild b;
                 b.mesh = static_cast<uint32_t>(m_meshes.size());
-                b.vertices = vertices;
+                // A malha já subiu: o LOD fica com os vértices (sem cópia),
+                // salvo o chão que o editor ainda guarda logo abaixo.
+                if (m_keepGroundVertices && mesh.isGround) b.vertices = vertices;
+                else b.vertices = std::move(vertices);
                 b.indices = *useIndices;
                 b.sway = mesh.swayAmount > 0.0f;
                 b.ground = isGroundMesh;

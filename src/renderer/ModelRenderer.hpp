@@ -250,8 +250,9 @@ public:
         m_meshResolver = std::move(resolver);
     }
 
-    // Load models from generic map data
-    void loadMapModels(const std::vector<ModelAsset>& models,
+    // Load models from generic map data. Fica com `models` (movido, sem
+    // cópia): é a cópia que o editor usa depois para criar instâncias.
+    void loadMapModels(std::vector<ModelAsset>&& models,
                        const std::vector<ModelInstanceDesc>& instances,
                        float centerX, float centerZ);
 
