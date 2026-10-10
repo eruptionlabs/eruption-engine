@@ -54,8 +54,9 @@ struct VfxEmitterGpu {
     glm::uvec4 cutout; // 8 halfs: poligono justo da textura
     glm::uvec4 graphA; // grafo: velocidade inicial (inicio, tamanho), forca
     glm::uvec4 graphB; // grafo: cor, tamanho
+    glm::uvec4 events; // sub-emissores (ver vfx_common.glsl)
 };
-static_assert(sizeof(VfxEmitterGpu) == 416, "VfxEmitterGpu precisa bater com o std430 do shader");
+static_assert(sizeof(VfxEmitterGpu) == 432, "VfxEmitterGpu precisa bater com o std430 do shader");
 
 // Textura de uma folha de quadros pronta para o desenho.
 struct VfxTextureInfo {
@@ -214,6 +215,7 @@ private:
     VkPipeline m_drawLowPipe = VK_NULL_HANDLE;   // meia resolucao, sem attachment de profundidade
     VkPipeline m_compositePipe = VK_NULL_HANDLE; // meia resolucao -> lit
     VkPipeline m_sortHistPipe = VK_NULL_HANDLE, m_sortScanPipe = VK_NULL_HANDLE, m_sortScatterPipe = VK_NULL_HANDLE;
+    VkPipeline m_eventPipe = VK_NULL_HANDLE; // filhas dos sub-emissores
     VkPipelineLayout m_compositeLayout = VK_NULL_HANDLE;
     VkSampler m_linearSampler = VK_NULL_HANDLE;
     // Alvo de meia resolucao (RGBA16F, cor premultiplicada + cobertura).
@@ -246,7 +248,8 @@ private:
         void* mapped = nullptr;
         VkDeviceSize size = 0;
     };
-    Buf m_particles, m_dead, m_alive, m_counters, m_render, m_sort;
+    Buf m_particles, m_dead, m_alive, m_counters, m_render, m_sort, m_events;
+    bool m_anyEvents = false; // algum emissor com sub-emissor tocando
     // Por frame em voo: emissores, pedidos, parametros, leitura dos contadores.
     static constexpr uint32_t kMaxSlots = 4096;
     static constexpr uint32_t kMaxRequests = 4096;

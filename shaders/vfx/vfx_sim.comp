@@ -33,6 +33,13 @@ vec3 curlNoise(vec3 p, float t) {
     return vec3(dPz_dy - dPy_dz, dPx_dz - dPz_dx, dPy_dx - dPx_dy) * 0.5;
 }
 
+void vfxPushEvent(vec3 pos, vec3 vel, uint childSlot, uint count, uint seed) {
+    uint i = atomicAdd(counters[VFXC_EVENTS], 1u);
+    if (i >= VFX_MAX_EVENTS) return;
+    events[i].posSlot = vec4(pos, uintBitsToFloat(childSlot));
+    events[i].velSeed = vec4(vel, uintBitsToFloat((count & 0xFFu) | (seed << 8)));
+}
+
 vec3 worldFromDepth(vec2 uv, float d) {
     vec4 w = frame.invViewProj * vec4(uv * 2.0 - 1.0, d, 1.0);
     return w.xyz / w.w;
@@ -64,7 +71,9 @@ void main() {
         float dt = frame.camPos.w;
         alive = ((e.flags.y & 0xFFFFu) == (p.slotGen >> 16)) && (e.flags.x & VFXF_KILLED) == 0u;
         p.age += dt;
+        bool natural = alive && p.age >= p.life; // morreu de velhice (nao por remocao)
         alive = alive && p.age < p.life;
+        bool collided = false;
         if (alive) {
             // Forcas
             // Efeito descrito em metros; a escala da instancia (rot0.w)
@@ -82,6 +91,7 @@ void main() {
             // Plano horizontal (chao simples, agua, mesa)
             if ((e.flags.x & VFXF_COLLIDE_PLANE) != 0u && next.y < e.collide.x) {
                 next.y = e.collide.x;
+                collided = true;
                 p.vel.y = abs(p.vel.y) * e.noise.w;
                 p.vel.xz *= 1.0 - e.collide.y;
                 p.age += p.life * e.collide.z;
@@ -111,6 +121,7 @@ void main() {
                                     p.vel = vt * (1.0 - e.collide.y) - vn * n * e.noise.w;
                                 }
                                 next = surf + n * 0.02;
+                                collided = true;
                                 p.age += p.life * e.collide.z;
                             }
                         }
@@ -118,9 +129,27 @@ void main() {
                 }
             }
             p.pos = next;
+            natural = natural || (p.age >= p.life);
             alive = p.age < p.life;
             particles[idx] = p;
-
+            // Sub-emissor na batida.
+            if (collided && e.events.y != 0u) {
+                float prob = float((e.events.w >> 8) & 0xFFu) / 255.0;
+                uint s = pcg(p.seed ^ floatBitsToUint(p.age));
+                if (rand01(s, 31u) < prob)
+                    vfxPushEvent(p.pos, p.vel * (float(e.events.z >> 24) / 255.0), e.events.y - 1u,
+                                 (e.events.z >> 8) & 0xFFu, s);
+            }
+        }
+        // Sub-emissor na morte (de velhice).
+        if (natural && e.events.x != 0u) {
+            float prob = float(e.events.w & 0xFFu) / 255.0;
+            uint s = pcg(p.seed ^ 0x51ED270Bu);
+            if (rand01(s, 37u) < prob)
+                vfxPushEvent(p.pos, p.vel * (float((e.events.z >> 16) & 0xFFu) / 255.0), e.events.x - 1u,
+                             e.events.z & 0xFFu, s);
+        }
+        if (alive) {
             // Frustum: esfera pelo maior tamanho possivel nesta idade.
             vec2 sr = unpackHalf2x16(p.sizeRot);
             float t = p.age / p.life;

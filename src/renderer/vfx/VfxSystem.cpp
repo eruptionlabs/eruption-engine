@@ -25,8 +25,10 @@ constexpr uint32_t kCRender = 3;
 constexpr uint32_t kCDispatch = 8;
 constexpr uint32_t kCDraw = 12;
 constexpr uint32_t kCSortDispatch = 20;
-constexpr uint32_t kCounterCount = 28;
-constexpr uint32_t kBindings = 13;
+constexpr uint32_t kCounterCount = 32;
+constexpr uint32_t kCEventDispatch = 28;
+constexpr uint32_t kMaxEvents = 16384;
+constexpr uint32_t kBindings = 14;
 
 struct DrawPush {
     uint32_t listOffset;
@@ -93,6 +95,7 @@ bool VfxSystem::createBuffers() {
               createBuf(m_alive, cap * 8, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_render, cap * 16, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_sort, 2 * 512 * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
+              createBuf(m_events, VkDeviceSize(kMaxEvents) * 32, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_counters, kCounterCount * 4,
                         ssbo | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                         VMA_MEMORY_USAGE_GPU_ONLY, false);
@@ -153,7 +156,8 @@ bool VfxSystem::createBuffers() {
 }
 
 void VfxSystem::destroyBuffers() {
-    for (Buf* b : {&m_particles, &m_dead, &m_alive, &m_render, &m_sort, &m_counters, &m_emitterDev, &m_spawnDev,
+    for (Buf* b : {&m_particles, &m_dead, &m_alive, &m_render, &m_sort, &m_events, &m_counters, &m_emitterDev,
+                   &m_spawnDev,
                    &m_frameDev, &m_graphCode, &m_graphConst})
         destroyBuf(*b);
     for (uint32_t f = 0; f < VulkanContext::MAX_FRAMES_IN_FLIGHT; ++f) {
@@ -188,7 +192,7 @@ bool VfxSystem::createDescriptors() {
     if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &m_setLayout) != VK_SUCCESS) return false;
 
     const uint32_t n = VulkanContext::MAX_FRAMES_IN_FLIGHT * 2;
-    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10 * n},
+    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11 * n},
                                      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, n},
                                      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * n}};
     VkDescriptorPoolCreateInfo pi{};
@@ -229,6 +233,7 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
     const VkDescriptorBufferInfo sortInfo{m_sort.buf, 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo graphCodeInfo{m_graphCode.buf, 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo graphConstInfo{m_graphConst.buf, 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo eventInfo{m_events.buf, 0, VK_WHOLE_SIZE};
     VkDescriptorImageInfo ii[2] = {{m_depthSampler, depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                    {m_depthSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
     // Sem alvo de meia resolucao ainda: a profundidade ocupa o binding (nunca
@@ -254,6 +259,7 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
         w[s * kBindings + 10].pBufferInfo = &sortInfo;
         w[s * kBindings + 11].pBufferInfo = &graphCodeInfo;
         w[s * kBindings + 12].pBufferInfo = &graphConstInfo;
+        w[s * kBindings + 13].pBufferInfo = &eventInfo;
     }
     vkUpdateDescriptorSets(m_ctx->device(), 2 * kBindings, w, 0, nullptr);
     m_setBuffersWritten[frame] = true;
@@ -297,7 +303,8 @@ bool VfxSystem::createPipelines() {
         !compute("vfx/vfx_sim.comp.spv", m_simPipe) || !compute("vfx/vfx_finish.comp.spv", m_finishPipe) ||
         !compute("vfx/vfx_sort_hist.comp.spv", m_sortHistPipe) ||
         !compute("vfx/vfx_sort_scan.comp.spv", m_sortScanPipe) ||
-        !compute("vfx/vfx_sort_scatter.comp.spv", m_sortScatterPipe))
+        !compute("vfx/vfx_sort_scatter.comp.spv", m_sortScatterPipe) ||
+        !compute("vfx/vfx_event.comp.spv", m_eventPipe))
         return false;
 
     VkShaderModule vs = loadModule(dev, "vfx/vfx_particle.vert.spv");
@@ -456,7 +463,7 @@ void VfxSystem::shutdown() {
     VkDevice dev = m_ctx->device();
     destroyBuffers();
     for (VkPipeline* p : {&m_emitPipe, &m_argsPipe, &m_simPipe, &m_finishPipe, &m_drawPipe, &m_drawLowPipe,
-                          &m_compositePipe, &m_sortHistPipe, &m_sortScanPipe, &m_sortScatterPipe})
+                          &m_compositePipe, &m_sortHistPipe, &m_sortScanPipe, &m_sortScatterPipe, &m_eventPipe})
         if (*p) vkDestroyPipeline(dev, *p, nullptr), *p = VK_NULL_HANDLE;
     destroyReactive();
     if (m_lowView) vkDestroyImageView(dev, m_lowView, nullptr);
@@ -704,6 +711,20 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     o.flags = glm::uvec4(flags, m_slotGen[slot], tex.slot, (e.flipCols & 0xFFu) | ((e.flipRows & 0xFFu) << 8));
     for (int k = 0; k < 4; ++k)
         o.cutout[k] = glm::packHalf2x16(glm::vec2(tex.cutout[2 * k], tex.cutout[2 * k + 1]));
+    // Sub-emissores: o filho e' outro emissor desta mesma instancia (pelo nome).
+    o.events = glm::uvec4(0u);
+    auto childSlot = [&](const std::string& name) -> uint32_t {
+        if (name.empty() || !inst.desc) return 0u;
+        for (size_t i = 0; i < inst.desc->emitters.size() && i < inst.emitters.size(); ++i)
+            if (inst.desc->emitters[i].name == name) return inst.emitters[i].slot + 1u;
+        return 0u;
+    };
+    auto byte = [](float v) { return uint32_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+    o.events.x = childSlot(e.onDeath.emitter);
+    o.events.y = childSlot(e.onCollision.emitter);
+    o.events.z = (std::min(e.onDeath.count, 64u) & 0xFFu) | ((std::min(e.onCollision.count, 64u) & 0xFFu) << 8) |
+                 (byte(e.onDeath.inheritVelocity) << 16) | (byte(e.onCollision.inheritVelocity) << 24);
+    o.events.w = byte(e.onDeath.probability) | (byte(e.onCollision.probability) << 8);
     o.graphA = o.graphB = glm::uvec4(0u);
     if (!e.graph.empty()) {
         const VfxGraphCompiled& g = graphFor(e.graph);
@@ -758,6 +779,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     m_spawnTotal = 0;
     m_anyLowRes = false;
     m_sortThisFrame = false;
+    m_anyEvents = false;
     float maxLife = 0.0f;
     uint32_t emitterCount = 0;
     for (size_t ii = 0; ii < m_instances.size();) {
@@ -837,6 +859,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
             // Particulas deste emissor ainda podem estar vivas mesmo parado:
             // a decisao de meia resolucao/ordenacao vale enquanto o efeito existe.
             m_anyLowRes = m_anyLowRes || e.lowRes;
+            m_anyEvents = m_anyEvents || m_slotData[es.slot].events.x != 0u || m_slotData[es.slot].events.y != 0u;
             m_sortThisFrame = m_sortThisFrame || e.blend == VfxBlend::Alpha || e.blend == VfxBlend::Premultiplied;
             ++emitterCount;
         }
@@ -978,6 +1001,12 @@ void VfxSystem::simulate(VkCommandBuffer cmd, VkImageView depthView) {
     computeToCompute(0, 0);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_finishPipe);
     vkCmdDispatch(cmd, 1, 1, 1);
+    // Filhas dos sub-emissores (um grupo por evento escrito pela simulacao).
+    if (m_anyEvents) {
+        computeToCompute(VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_eventPipe);
+        vkCmdDispatchIndirect(cmd, m_counters.buf, kCEventDispatch * 4);
+    }
     // Ordem de tras para frente so' quando ha mistura alfa tocando (aditiva
     // nao precisa): contagem por balde, soma prefixada, espalhamento.
     if (m_sortThisFrame) {

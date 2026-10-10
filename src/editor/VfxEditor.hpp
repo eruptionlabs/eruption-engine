@@ -56,6 +56,7 @@ private:
     void drawPreviewPane();
     void drawStack();
     bool drawEmitter(VfxEmitterDesc& e);
+    bool subEmitterUi(const char* label, VfxSubEmitter& s, const std::string& self);
     bool gradientEditor(const char* id, VfxGradient& g);
     bool curveEditor(const char* id, VfxCurve& c);
 

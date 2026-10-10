@@ -482,6 +482,11 @@ bool VfxEditor::drawEmitter(VfxEmitterDesc& e) {
         ImGui::TextUnformatted(tr("Size multiplier"));
         c |= curveEditor("##size", e.sizeOverLife);
     }
+    if (ImGui::CollapsingHeader(tr("Sub-emitters"))) {
+        c |= subEmitterUi(tr("On death"), e.onDeath, e.name);
+        c |= subEmitterUi(tr("On collision"), e.onCollision, e.name);
+        ImGui::TextDisabled("%s", tr("The child is another emitter of this effect (usually with rate 0)."));
+    }
     if (ImGui::CollapsingHeader(tr("Graph"), ImGuiTreeNodeFlags_DefaultOpen)) {
         if (e.graph.empty()) ImGui::TextDisabled("%s", tr("No graph: only the modules above."));
         else ImGui::TextDisabled(tr("%zu nodes, %zu links"), e.graph.nodes.size(), e.graph.links.size());
@@ -565,6 +570,34 @@ bool VfxEditor::drawEmitter(VfxEmitterDesc& e) {
         c |= ImGui::DragFloat(tr("Fade near camera (m)"), &e.nearFade, 0.01f, 0.0f, 100.0f, "%.2f");
     }
     ImGui::PopItemWidth();
+    return c;
+}
+
+bool VfxEditor::subEmitterUi(const char* label, VfxSubEmitter& s, const std::string& self) {
+    bool c = false;
+    ImGui::PushID(label);
+    if (ImGui::BeginCombo(label, s.emitter.empty() ? tr("(none)") : s.emitter.c_str())) {
+        if (ImGui::Selectable(tr("(none)"), s.emitter.empty())) {
+            s.emitter.clear();
+            c = true;
+        }
+        for (const auto& other : m_fx.emitters)
+            if (other.name != self && ImGui::Selectable(other.name.c_str(), s.emitter == other.name)) {
+                s.emitter = other.name;
+                c = true;
+            }
+        ImGui::EndCombo();
+    }
+    if (!s.emitter.empty()) {
+        int n = int(s.count);
+        if (ImGui::SliderInt(tr("Children"), &n, 1, 64)) {
+            s.count = uint32_t(n);
+            c = true;
+        }
+        c |= ImGui::SliderFloat(tr("Chance"), &s.probability, 0.0f, 1.0f, "%.2f");
+        c |= ImGui::SliderFloat(tr("Inherit velocity##sub"), &s.inheritVelocity, 0.0f, 1.0f, "%.2f");
+    }
+    ImGui::PopID();
     return c;
 }
 

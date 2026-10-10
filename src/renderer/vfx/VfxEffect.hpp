@@ -46,6 +46,16 @@ enum class VfxBlend : uint32_t { Additive = 0, Premultiplied = 1, Alpha = 2 };
 // quadro fixo por particula (variacao sem animar: fumaca, pedrinhas).
 enum class VfxFlipMode : uint32_t { Life = 0, Fps = 1, Random = 2 };
 
+// Sub-emissor: quando uma particula morre (ou bate), nascem `count` filhas
+// do emissor `emitter` (pelo nome, no mesmo efeito) no lugar dela. Tudo na
+// GPU: o pai escreve um evento, um passe indireto faz as filhas.
+struct VfxSubEmitter {
+    std::string emitter;          // vazio = desligado
+    uint32_t count = 4;           // filhas por evento (ate' 64)
+    float probability = 1.0f;     // chance do evento acontecer
+    float inheritVelocity = 0.3f; // fracao da velocidade do pai
+};
+
 struct VfxEmitterDesc {
     std::string name = "emissor";
     bool enabled = true;
@@ -109,6 +119,10 @@ struct VfxEmitterDesc {
     float nearFade = 0.5f;     // some perto da camera (m)
     bool lowRes = false;       // desenha em meia resolucao (fumaca, poeira:
                                // 1/4 dos pixels; o ganho maior em GPU fraca)
+
+    // --- Sub-emissores ---
+    VfxSubEmitter onDeath;
+    VfxSubEmitter onCollision;
 
     // --- Grafo (expressoes por particula; vazio = so' os modulos acima) ---
     VfxGraph graph;

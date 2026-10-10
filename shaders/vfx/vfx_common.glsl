@@ -27,7 +27,7 @@ struct Particle {
     uint angVel;   // half2(velocidade angular rad/s, quadro inicial 0..1)
 };
 
-// Parametros de um emissor ativo (um por instancia x emissor), 416 bytes.
+// Parametros de um emissor ativo (um por instancia x emissor), 432 bytes.
 struct Emitter {
     vec4 posTime;     // xyz posicao no mundo, w tempo do efeito
     vec4 prevPos;     // xyz posicao no frame anterior (nascimento interpolado)
@@ -51,6 +51,9 @@ struct Emitter {
     uvec4 cutout;     // 8 halfs: poligono justo da textura (alcance em 8 direcoes)
     uvec4 graphA;     // grafo: x,y = velocidade inicial (inicio, tamanho); z,w = forca
     uvec4 graphB;     // grafo: x,y = cor; z,w = tamanho
+    uvec4 events;     // sub-emissores: x filho na morte (slot+1), y filho na batida,
+                      // z quantidades (8 bits cada) e herancas (8 bits, /255),
+                      // w probabilidades (8 bits cada, /255)
 };
 
 // Bits de Emitter.flags.x
@@ -91,10 +94,19 @@ struct FrameParams {
 #define VFXC_ALIVE1    1
 #define VFXC_DEAD      2
 #define VFXC_RENDER    3  // 3: lista cheia, 4: lista de meia resolucao
+#define VFXC_EVENTS    5  // eventos de sub-emissor escritos neste frame
 #define VFXC_DISPATCH  8  // 8..10: dispatch indireto da simulacao
 #define VFXC_DRAW      12 // 12..15: draw da lista cheia; 16..19: meia resolucao
 #define VFXC_SORTDISP  20 // 20..22: ordenar lista cheia; 24..26: meia resolucao
-#define VFXC_COUNT     28
+#define VFXC_EVENTDISP 28 // 28..30: dispatch indireto das filhas (um grupo por evento)
+#define VFXC_COUNT     32
+#define VFX_MAX_EVENTS 16384u
+
+// Evento de sub-emissor: onde e com que velocidade herdada nascem as filhas.
+struct VfxEvent {
+    vec4 posSlot;  // xyz posicao, w slot do emissor filho (bits)
+    vec4 velSeed;  // xyz velocidade herdada, w quantidade (8 bits) | semente << 8 (bits)
+};
 
 // Listas de desenho no mesmo buffer: [0,cap) cheia, [cap,2cap) meia
 // resolucao; ordenadas em [2cap,3cap) e [3cap,4cap).
@@ -112,6 +124,7 @@ layout(set = VFX_SET, binding = 8) uniform sampler2D sceneDepth;
 layout(set = VFX_SET, binding = 9) uniform sampler2D lowResColor;
 // Ordenacao: por lista, 256 contagens + 256 posicoes de escrita.
 layout(std430, set = VFX_SET, binding = 10) VFX_RW buffer SortBuf { uint sortData[]; };
+layout(std430, set = VFX_SET, binding = 13) VFX_RW buffer EventBuf { VfxEvent events[]; };
 
 // Balde de profundidade (0 = mais longe): log da distancia entre perto e
 // longe, de tras para frente (a mistura alfa precisa do fundo primeiro).
