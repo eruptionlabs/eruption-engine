@@ -123,5 +123,8 @@ struct VfxEffectDesc {
 // Leitura/escrita do arquivo .vfx.json. Erros vao em *err.
 bool loadVfxEffect(const std::string& path, VfxEffectDesc& out, std::string* err = nullptr);
 bool saveVfxEffect(const std::string& path, const VfxEffectDesc& fx, std::string* err = nullptr);
+// O mesmo formato em texto (desfazer do editor, copiar/colar).
+std::string vfxEffectToJson(const VfxEffectDesc& fx);
+bool vfxEffectFromJson(const std::string& text, VfxEffectDesc& out, std::string* err = nullptr);
 
 } // namespace eruption

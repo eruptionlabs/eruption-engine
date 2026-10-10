@@ -22,6 +22,7 @@ public:
 #else
 
 #include "editor/ModelPreview.hpp"
+#include "editor/VfxEditor.hpp"
 #include "editor/EditorCommands.hpp"
 #include "editor/RuleSheet.hpp"
 #include "scene/SceneEdits.hpp"
@@ -385,6 +386,9 @@ private:
     void shutdownModelViewer();
     bool openModelViewer(const std::string& path, int node);
     void drawModelViewer();
+    // Janela > Efeitos (VfxEditor.cpp): biblioteca, previa isolada e pilha.
+    VfxEditor m_vfxEditor;
+    bool m_showVfxEditor = false;
     bool isSelected(const Selection& s) const;
     void toggleSelect(const Selection& s);
     std::vector<Selection> selectionList() const; // principal + extras válidas
