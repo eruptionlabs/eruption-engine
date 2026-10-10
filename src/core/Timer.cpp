@@ -1,5 +1,7 @@
 #include "core/Timer.hpp"
 
+#include <algorithm>
+
 #include <cstdlib>
 
 namespace eruption {
@@ -27,13 +29,17 @@ void Timer::reset() {
 void Timer::tick() {
     TimePoint now = Clock::now();
     m_realDeltaTime = std::chrono::duration<float>(now - m_lastFrame).count();
-    if (m_fixedDt > 0.0f) {
+    if (m_paused) {
+        m_deltaTime = 0.0f; // o tempo do mundo fica parado
+    } else if (m_fixedDt > 0.0f) {
         // Passo fixo: frame N sempre corresponde ao mesmo instante de simulação.
         m_deltaTime = m_fixedDt;
         m_elapsed += m_fixedDt;
     } else {
-        m_deltaTime = std::chrono::duration<float>(now - m_lastFrame).count();
-        m_elapsed = std::chrono::duration<float>(now - m_startTime).count();
+        // Acumulado (não "agora - início"): voltando da pausa, o tempo segue de
+        // onde parou em vez de saltar.
+        m_deltaTime = std::min(std::chrono::duration<float>(now - m_lastFrame).count(), 0.25f);
+        m_elapsed += m_deltaTime;
     }
     m_lastFrame = now;
 

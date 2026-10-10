@@ -513,6 +513,8 @@ void Editor::buildDefaultLayout(unsigned int dockspaceId) {
 void Editor::update(float dt) {
     if (!m_engine) return;
     ++m_frame;
+    // Pausa (ou passo a passo): o tempo do mundo para; um passo libera um frame.
+    m_engine->timer().setPaused(m_play == PlayState::Paused && m_stepFrames < 2);
     setUiLanguage(m_lang); // a interface inteira segue o idioma escolhido
     recordFrameTime(dt);
     // Vizinho do mundo contínuo entrou ou saiu: camadas Mostrar/Travar valem para ele.
@@ -1459,7 +1461,7 @@ void Editor::togglePause() {
 }
 
 void Editor::step() {
-    if (m_play == PlayState::Paused) m_stepFrames = 1;
+    if (m_play == PlayState::Paused) m_stepFrames = 2; // ver gameRunning()
 }
 
 bool Editor::openSourceReference(const std::string& text) {

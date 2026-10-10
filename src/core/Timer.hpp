@@ -18,6 +18,10 @@ public:
     // (60,0 FPS) e esconde o numero real. Ja' aconteceu duas vezes nesta base.
     float realDeltaTime() const { return m_realDeltaTime; }
     float elapsed() const { return m_elapsed; }
+    // Pausa da simulação (Pause do editor): o passo e o tempo do mundo param
+    // (nuvens, clima, vento, água, animações); o relógio real e o FPS seguem.
+    void setPaused(bool paused) { m_paused = paused; }
+    bool paused() const { return m_paused; }
     float fps() const { return m_fps; }
     uint32_t frameCount() const { return m_frameCount; }
 
@@ -36,6 +40,7 @@ private:
     // 14x acima do limiar de regressão visual (3.0). O FPS medido continua
     // vindo do relógio real, então a telemetria de performance não é afetada.
     float m_fixedDt = 0.0f;
+    bool m_paused = false;
 
     float m_deltaTime = 0.0f;
     float m_realDeltaTime = 0.0f;

@@ -73,7 +73,8 @@ public:
     void drawUI();
 
     // Com o jogo parado (modo edição) a aplicação não roda a lógica de jogo.
-    bool gameRunning() const { return m_play == PlayState::Playing || m_stepFrames > 0; }
+    // Passo a passo: 2 = o próximo relógio anda; 1 = este frame roda o jogo.
+    bool gameRunning() const { return m_play == PlayState::Playing || m_stepFrames == 1; }
     void consumeStep() { if (m_stepFrames > 0) --m_stepFrames; }
     // Play ou pausa (o jogo existe, mesmo congelado).
     bool inPlayMode() const { return m_play != PlayState::Editing; }
