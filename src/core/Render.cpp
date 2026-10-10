@@ -256,18 +256,6 @@ void Engine::render() {
         recreateViewportTarget();
         m_resized = false;
     }
-    // Process deferred deletion of old map contexts
-    for (auto it = m_deferredDeletes.begin(); it != m_deferredDeletes.end(); ) {
-        it->framesRemaining--;
-        if (it->framesRemaining <= 0) {
-            if (it->context) {
-                it->context->clearGpu(&m_vulkan, &m_bindless);
-            }
-            it = m_deferredDeletes.erase(it);
-        } else {
-            ++it;
-        }
-    }
 
     // Split the pre-render cost into "everything since the last present"
     // (update/sim) vs "blocked in beginFrame" (fence wait + image acquire =
@@ -416,8 +404,6 @@ void Engine::render() {
     };
     cpuMark(0);
 
-    // Incremental upload of staging map GPU resources
-    uploadStagingMapGPU(cmd);
     // Fase propria: o streaming do mapa custava ate' 12ms e era atribuido a
     // "Shadow" (proxima fase) - gargalo fantasma na telemetria.
     cpuMark(1);

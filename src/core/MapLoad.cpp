@@ -149,7 +149,7 @@ void Engine::setPlayerController(PlayerController* pc) {
     }
 }
 
-bool Engine::loadMap(const std::string& name) {
+bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preloaded) {
     m_fsrReset = true; // historico temporal do FSR nao vale entre mapas
     m_isInitialBoot = false; // No longer the initial boot
     TelemetryExporter::recordLoadStart(name);
@@ -164,7 +164,7 @@ bool Engine::loadMap(const std::string& name) {
     clearSoundEmitters();
     m_solid.clear();
 
-    // GERACAO DO CACHE DE ASSET. Ate 2026-09-05 so' o warp (performMapSwap)
+    // GERACAO DO CACHE DE ASSET. Ate 2026-09-05 so' o warp (o antigo performMapSwap)
     // avancava a geracao e expulsava textura/malha velha do GlobalAssetCache;
     // a carga fria repetida nunca chamava nada disto, entao currentWarpId
     // ficava parado, a expiracao (Engine.cpp, lastSeenWarpId + maxAge) nunca
@@ -186,7 +186,7 @@ bool Engine::loadMap(const std::string& name) {
 
     // MapLoader accepts either a plain map name (resolved to assets/external/<name>/<name>.glb)
     // or an explicit file path ending in .glb/.map.
-    auto loadedMap = m_mapLoader->loadMap(name); 
+    auto loadedMap = preloaded ? std::move(preloaded) : m_mapLoader->loadMap(name);
     if (!loadedMap) {
         ERUPTION_LOG_ERROR("Failed to load map: %s", name.c_str());
         return false;
@@ -704,6 +704,44 @@ int Engine::addModelFromFile(const std::string& glbPath, const Vec3& position, c
         return -1;
     }
     return static_cast<int>(first);
+}
+
+void Engine::updateWarp() {
+    // Um pedido por vez: outro pedido durante a leitura espera ela acabar e
+    // o resultado velho é jogado fora.
+    if (!m_warpJobActive && !m_pendingMapWarp.empty()) {
+        m_warpJobMap = m_pendingMapWarp;
+        m_pendingMapWarp.clear();
+        m_warpJobActive = true;
+        const std::string map = m_warpJobMap;
+        m_warpJob = std::async(std::launch::async, [map] {
+            MapLoader loader;
+            return loader.loadMap(map);
+        });
+        ERUPTION_LOG_WARN("Warp: reading %s in the background", map.c_str());
+        return;
+    }
+    if (!m_warpJobActive || m_warpJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    std::shared_ptr<LoadedMap> map = m_warpJob.get();
+    m_warpJobActive = false;
+    const std::string name = m_warpJobMap;
+    if (!m_pendingMapWarp.empty()) return; // pediram outro mapa no meio: começa no próximo frame
+    if (!map) {
+        ERUPTION_LOG_ERROR("Warp: could not read map %s", name.c_str());
+        return;
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    if (!loadMap(name, std::move(map))) return;
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    TelemetryExporter::recordMapSwap(name, ms);
+    ERUPTION_LOG_WARN("Warp: %s in place (%.0f ms on the main thread)", name.c_str(), ms);
+    m_framesAfterSwap = 0;
+    // Gancho de teste: captura depois da primeira troca.
+    if (m_screenshotAfterWarpPending && !m_screenshotAfterWarpPath.empty()) {
+        m_screenshotOnLoad = m_screenshotAfterWarpPath;
+        m_screenshotAfterWarpPath.clear();
+        m_screenshotAfterWarpPending = false;
+    }
 }
 
 } // namespace eruption

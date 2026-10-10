@@ -720,18 +720,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_mapLoader = std::make_unique<MapLoader>();
     populateMaps();
 
-    // Init background loading subsystem
     JobSystem::instance().init();
-    
-    BackgroundMapLoader::AssetCacheInterface cacheInterface;
-    cacheInterface.hasModelTexture = [this](const std::string& path) {
-        return m_assetCache.hasModelTexture(path);
-    };
-    cacheInterface.hasTerrainTexture = [this](const std::string& path) {
-        return m_assetCache.hasTerrainTexture(path);
-    };
-
-    m_backgroundLoader = std::make_unique<BackgroundMapLoader>(cacheInterface);
     initMinimap();
     m_audio.init(); // sem dispositivo de som, o jogo segue mudo
 
@@ -833,9 +822,6 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_initialized = true;
     m_running = true;
 
-    // Active map context starts empty
-    m_activeMapContext = std::make_unique<MapContext>();
-
     m_debugModelPivots = false;
     m_devTools = ERUPTION_EDITOR || std::getenv("ERUPTION_DEV") != nullptr;
     m_showDebugOverlay = m_devTools;
@@ -922,9 +908,7 @@ void Engine::shutdown() {
         } catch (...) {}
     }
 
-    if (m_backgroundLoader) {
-        m_backgroundLoader->cancel();
-    }
+    if (m_warpJobActive) m_warpJob.wait(); // leitura de mapa em andamento termina antes
     JobSystem::instance().shutdown();
 
     m_vulkan.waitIdle();
@@ -971,16 +955,6 @@ void Engine::shutdown() {
         if (pu.image != VK_NULL_HANDLE) vmaDestroyImage(m_vulkan.allocator(), pu.image, pu.imageAlloc);
     }
     s_pendingUploads.clear();
-
-    // Clear all map contexts properly
-    if (m_activeMapContext) m_activeMapContext->clearGpu(&m_vulkan, &m_bindless);
-    if (m_stagingMapContext) m_stagingMapContext->clearGpu(&m_vulkan, &m_bindless);
-    for (auto& dd : m_deferredDeletes) {
-        if (dd.context) dd.context->clearGpu(&m_vulkan, &m_bindless);
-    }
-    m_activeMapContext.reset();
-    m_stagingMapContext.reset();
-    m_deferredDeletes.clear();
 
     m_assetCache.shutdown(&m_vulkan, &m_bindless);
 
@@ -1045,36 +1019,7 @@ float Engine::advanceFrame() {
     Profiler::resetGpuTimeByName();
     SystemMonitor::update();
 
-    if (!m_pendingMapWarp.empty()) {
-        if (m_backgroundLoader->isLoading()) {
-            if (m_backgroundLoader->currentMapName() != m_pendingMapWarp) {
-                m_backgroundLoader->cancel();
-                m_warpRestartTarget = m_pendingMapWarp;
-                m_warpRestartPending = true;
-            }
-            m_pendingMapWarp.clear();
-        } else if (m_warpRestartPending) {
-            if (m_warpRestartTarget != m_pendingMapWarp) {
-                m_warpRestartTarget = m_pendingMapWarp;
-            }
-            m_pendingMapWarp.clear();
-        } else {
-            TelemetryExporter::recordLoadStart(m_pendingMapWarp);
-            m_backgroundLoader->startLoad(m_pendingMapWarp);
-            m_mapSwapPending = true;
-            m_pendingMapWarp.clear();
-        }
-    }
-
-    if (m_warpRestartPending && !m_backgroundLoader->isLoading()) {
-        TelemetryExporter::recordLoadStart(m_warpRestartTarget);
-        m_backgroundLoader->startLoad(m_warpRestartTarget);
-        m_mapSwapPending = true;
-        m_warpRestartPending = false;
-        m_warpRestartTarget.clear();
-    }
-
-    processBackgroundLoading();
+    updateWarp(); // troca de mapa pelo seletor (leitura em thread, montagem pelo loadMap)
     updateWorld(); // vizinhos do mundo contínuo entram e saem
     updateSoundEmitters();
     m_audio.update(m_camera.position(), m_camera.forward(), m_camera.up()); // ouvinte na câmera
@@ -1131,8 +1076,7 @@ float Engine::advanceFrame() {
         // budget is larger while the loading overlay is up: spawn warm-up
         // belongs behind the loading screen, not as an in-game hitch.
         if (!m_pendingCloudSpawns.empty()) {
-            const bool loadingUp = (m_backgroundLoader && m_backgroundLoader->isLoading()) ||
-                                   (m_stagingMapContext && (!m_stagingMapContext->isGpuReady() || m_mapSwapPending));
+            const bool loadingUp = m_warpJobActive;
             const float budgetMs = loadingUp ? 8.0f : 2.0f;
             const auto spawnT0 = std::chrono::steady_clock::now();
             size_t n = 0;
@@ -2169,9 +2113,8 @@ void Engine::recordTelemetry() {
         st.cpuPhases.emplace_back(kCpuPhaseNames[i], static_cast<float>(m_cpuPhaseMs[i]));
     // "loading" covers the whole pipeline: BG thread parse + the per-frame
     // GPU upload window (staging context alive until the swap).
-    st.loading = (m_backgroundLoader && m_backgroundLoader->isLoading()) ||
-                 (m_stagingMapContext != nullptr);
-    st.loadProgress = m_backgroundLoader ? m_backgroundLoader->progress() : 1.0f;
+    st.loading = m_warpJobActive;
+    st.loadProgress = m_warpJobActive ? 0.4f : 1.0f;
     st.framesAfterSwap = m_framesAfterSwap;
     st.weatherType = weatherTypeName(m_weatherSystem.currentType());
     st.rainIntensity = m_weatherSystem.effectiveRainIntensity();

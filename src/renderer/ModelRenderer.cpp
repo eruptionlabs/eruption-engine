@@ -2,6 +2,7 @@
 #include <cfloat>
 #include <cmath>
 #include "renderer/ModelRenderer.hpp"
+#include "core/JobSystem.hpp"
 
 #include <cctype>
 
@@ -938,6 +939,169 @@ void ModelRenderer::loadMapModels(const std::vector<ModelAsset>& models,
 }
 
 // Sobe as malhas do modelo (uma vez por arquivo) e cria uma instancia por no.
+
+// LOD de uma malha (só CPU; roda em paralelo). Três partes independentes -
+// o "lo", o distante e o da sombra - cada uma numa tarefa (o chão de 500 mil
+// triângulos levava ~290 ms por nível, um depois do outro); finishLod junta
+// e decide como antes: cartões com área compensada (lo/far com vértices
+// próprios) ou index buffer simplificado.
+void ModelRenderer::computeLodPart(LodBuild& b, int part) const {
+    const std::vector<TerrainVertex>& vertices = b.vertices;
+    const std::vector<uint32_t>& indices = b.indices;
+    if (part == 0) {
+        b.loRes = simplifyMesh(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex), indices, m_meshLodRatio,
+                               m_meshLodError, m_meshLodMaxTris, offsetof(TerrainVertex, texCoord),
+                               offsetof(TerrainVertex, texIndex), b.sway, 0.6f, b.ground);
+    } else if (part == 1) {
+        // LOD DISTANTE: simplificacao "sloppy" - a esta distancia a silhueta
+        // grossa e' tudo que a tela resolve. Piso de area proprio em malha de
+        // cartao (kFarCardMinArea): com o 0,6 do "lo" o far nunca chegava ao teto.
+        if (m_meshLodFarMaxTris > 0)
+            b.farRes = simplifyMesh(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex), indices,
+                                    std::max(m_meshLodRatio * 0.25f, 0.02f), 1.0f /* erro livre: o TETO manda */,
+                                    m_meshLodFarMaxTris, offsetof(TerrainVertex, texCoord),
+                                    offsetof(TerrainVertex, texIndex), b.sway, kFarCardMinArea, b.ground);
+    } else if (m_shadowLodMaxTris > 0) {
+        // LOD exclusivo da sombra: mais agressivo, porque a silhueta no shadow
+        // map nao resolve o detalhe (RMS 0,000 medido). Piso de area de sombra
+        // proprio: a sombra e' filtrada, copa com 30% dos cartoes ainda projeta.
+        b.shRes = simplifyMesh(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex), indices, m_meshLodRatio,
+                               m_meshLodError * 4.0f, m_shadowLodMaxTris, offsetof(TerrainVertex, texCoord),
+                               offsetof(TerrainVertex, texIndex), b.sway, kShadowCardMinArea);
+    }
+}
+
+void ModelRenderer::finishLod(LodBuild& b) const {
+    const std::vector<TerrainVertex>& vertices = b.vertices;
+    const std::vector<uint32_t>& indices = b.indices;
+    MeshLodResult& lod = b.loRes;
+    // FOLHAGEM: poda de cartoes com COMPENSACAO DE AREA (Cook, Halstead,
+    // Planck, Ryu 2007 - ver MeshLod.hpp). O caminho de cartao do
+    // simplifyMesh so' remove e para no piso de 60% de area, entao o teto de
+    // triangulos nao era honrado; aqui os cartoes que ficam CRESCEM em torno
+    // do proprio centroide e a cobertura da copa se conserva. Como os
+    // vertices mudam, cada nivel tem vertex buffer proprio.
+    // ERUPTION_TEST_NO_CARD_PRUNE=1: volta ao caminho antigo (A/B).
+    static const bool kNoCardPrune = std::getenv("ERUPTION_TEST_NO_CARD_PRUNE") != nullptr;
+    bool cardLodDone = false;
+    if (lod.cardMesh && !kNoCardPrune && b.sway) {
+        const size_t triCount = indices.size() / 3;
+        size_t loTarget = static_cast<size_t>(double(triCount) * m_meshLodRatio);
+        if (m_meshLodMaxTris > 0) loTarget = std::min<size_t>(loTarget, m_meshLodMaxTris);
+        loTarget = std::max<size_t>(loTarget, 3);
+        CardPruneResult pr = pruneCardsAreaPreserving(vertices.data(), vertices.size(), sizeof(TerrainVertex),
+                                                      offsetof(TerrainVertex, position), indices,
+                                                      static_cast<uint32_t>(loTarget), offsetof(TerrainVertex, texCoord),
+                                                      offsetof(TerrainVertex, texIndex), kCardLodMaxScale);
+        if (pr.valid) {
+            b.loVerts = std::move(pr.vertices);
+            b.lo = std::move(pr.indices);
+            // Distancia de troca: mesma convencao do dropCards (area removida
+            // x 0,25 x extensao), mas o crescimento devolve a cobertura, entao
+            // so' a fracao que a escala NAO compensou conta como erro.
+            const float uncompensated = 1.0f - std::min(1.0f, pr.areaKeptRaw * pr.scale * pr.scale);
+            const float absErr = std::max(((1.0f - pr.areaKeptRaw) * 0.08f + uncompensated * 0.25f) * b.extent, 1e-3f);
+            b.loSwitch = std::max(absErr * m_meshLodDistanceFactor, m_meshLodMinDistance);
+            cardLodDone = true;
+            if (m_meshLodFarMaxTris > 0 && b.lo.size() / 3 > m_meshLodFarMaxTris * 2) {
+                CardPruneResult fr = pruneCardsAreaPreserving(vertices.data(), vertices.size(), sizeof(TerrainVertex),
+                                                              offsetof(TerrainVertex, position), indices, m_meshLodFarMaxTris,
+                                                              offsetof(TerrainVertex, texCoord),
+                                                              offsetof(TerrainVertex, texIndex), kCardLodMaxScale * 2.0f);
+                if (fr.valid && fr.indices.size() < b.lo.size()) {
+                    b.farVerts = std::move(fr.vertices);
+                    b.far = std::move(fr.indices);
+                    b.farSwitch = b.loSwitch * m_meshLodFarDistanceMul;
+                }
+            }
+            static const bool kCardPruneDbg = std::getenv("ERUPTION_DEBUG_LODCARDS") != nullptr;
+            if (kCardPruneDbg)
+                ERUPTION_LOG_WARN("[CARDPRUNE] %s: %zu -> lo %zu tris (escala %.2f, area bruta %.3f, ilhas %u/%u) far %zu | troca lo=%.0f far=%.0f",
+                                  b.material.c_str(), triCount, b.lo.size() / 3, pr.scale, pr.areaKeptRaw, pr.islandsKept,
+                                  pr.islandsTotal, b.far.size() / 3, b.loSwitch, b.farSwitch);
+        }
+    }
+    if (!cardLodDone && lod.valid) {
+        b.lo = std::move(lod.indices);
+        // Distância de troca vem do ERRO GEOMÉTRICO medido pela simplificação
+        // (relativo à extensão da malha no meshopt: convertido), não do raio:
+        // pelo raio as malhas maiores nunca trocavam. Piso de distância: nada
+        // troca perto da câmera, senão objeto fino (poste) pipoca.
+        const float absErr = std::max(lod.error * b.extent, 1e-3f);
+        b.loSwitch = std::max(absErr * m_meshLodDistanceFactor, m_meshLodMinDistance);
+        // O distante só vale se for bem menor que o "lo".
+        if (m_meshLodFarMaxTris > 0 && b.lo.size() / 3 > m_meshLodFarMaxTris * 2 && b.farRes.valid &&
+            b.farRes.indices.size() < b.lo.size()) {
+            b.far = std::move(b.farRes.indices);
+            b.farSwitch = b.loSwitch * m_meshLodFarDistanceMul;
+        }
+    }
+    // Sombra: só se for menor que o LOD de tela.
+    if (b.shRes.valid && (b.lo.empty() || b.shRes.indices.size() < b.lo.size())) b.sh = std::move(b.shRes.indices);
+    b.vertices.clear();
+    b.vertices.shrink_to_fit();
+    b.loRes = {};
+    b.farRes = {};
+    b.shRes = {};
+}
+
+// Sobe os níveis de LOD calculados (uma submissão só para todos).
+void ModelRenderer::applyLods(std::vector<LodBuild>& builds) {
+    struct Up { const void* data; VkDeviceSize size; VkBuffer dst; };
+    std::vector<Up> ups;
+    auto make = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VmaAllocation& alloc) {
+        if (size == 0) return;
+        m_ctx->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage, VMA_MEMORY_USAGE_GPU_ONLY, buf, alloc);
+        PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, size);
+        ups.push_back({data, size, buf});
+    };
+    for (LodBuild& b : builds) {
+        if (b.mesh >= m_meshes.size()) continue;
+        ModelMeshGPU& mesh = m_meshes[b.mesh];
+        if (!b.lo.empty()) {
+            if (!b.loVerts.empty())
+                make(b.loVerts.data(), b.loVerts.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, mesh.loVertexBuffer, mesh.loVertexAlloc);
+            make(b.lo.data(), b.lo.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.loIndexBuffer, mesh.loIndexAlloc);
+            mesh.loIndexCount = static_cast<uint32_t>(b.lo.size());
+            mesh.loSwitchDistance = b.loSwitch;
+        }
+        if (!b.far.empty()) {
+            if (!b.farVerts.empty())
+                make(b.farVerts.data(), b.farVerts.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, mesh.farVertexBuffer, mesh.farVertexAlloc);
+            make(b.far.data(), b.far.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.farIndexBuffer, mesh.farIndexAlloc);
+            mesh.farIndexCount = static_cast<uint32_t>(b.far.size());
+            mesh.farSwitchDistance = b.farSwitch;
+        }
+        if (!b.sh.empty()) {
+            make(b.sh.data(), b.sh.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.shIndexBuffer, mesh.shIndexAlloc);
+            mesh.shIndexCount = static_cast<uint32_t>(b.sh.size());
+        }
+    }
+    if (ups.empty()) return;
+    VkDeviceSize total = 0;
+    for (const Up& u : ups) total += (u.size + 15) & ~VkDeviceSize(15);
+    VkBuffer staging = VK_NULL_HANDLE;
+    VmaAllocation stagingAlloc = VK_NULL_HANDLE;
+    m_ctx->createBuffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
+    void* mapped = nullptr;
+    vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
+    std::vector<VkDeviceSize> offsets(ups.size());
+    VkDeviceSize off = 0;
+    for (size_t k = 0; k < ups.size(); ++k) {
+        offsets[k] = off;
+        std::memcpy(static_cast<uint8_t*>(mapped) + off, ups[k].data, static_cast<size_t>(ups[k].size));
+        off += (ups[k].size + 15) & ~VkDeviceSize(15);
+    }
+    vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
+    m_ctx->immediateSubmit([&](VkCommandBuffer c) {
+        for (size_t k = 0; k < ups.size(); ++k) {
+            const VkBufferCopy cp{offsets[k], 0, ups[k].size};
+            vkCmdCopyBuffer(c, staging, ups[k].dst, 1, &cp);
+        }
+    });
+    vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
+}
+
 void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanceDesc& ref,
                                          float centerX, float centerZ, int onlyNode) {
     const ModelAsset& asset = m_lastModels[assetIndex];
@@ -949,6 +1113,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
     if (m_modelMeshCache.find(asset.filePath) == m_modelMeshCache.end()) {
         std::vector<uint32_t> meshIndices(asset.nodes.size(), 0xFFFFFFFF);
         size_t dbgReidxOk = 0, dbgReidxFail = 0, dbgVertsBefore = 0, dbgVertsAfter = 0;
+        std::vector<LodBuild> lodBuilds;
 
         std::vector<uint32_t> assetTexIndexToBindlessSlot(asset.textures.size(), 0);
         for (size_t t = 0; t < asset.textures.size(); ++t) {
@@ -1532,234 +1697,23 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             // geometria entre instâncias resolveu memória, mas não reduz o
             // que é rasterizado - só LOD reduz, e é o que decide se o mapa
             // roda na 930M.
+            //
+            // Aqui só vira TAREFA: depois do laço as tarefas de todas as
+            // malhas rodam em paralelo (computeLod) e sobem numa submissão só
+            // (applyLods). Uma malha por vez, num núcleo, eram 1,2 s dos
+            // 1,7 s da montagem do parana_field.
             if (m_meshLodRatio > 0.0f && meshLodAvailable() && !skinnedNode &&
                 useIndices->size() >= kMeshLodMinIndices &&
                 useIndices->size() >= size_t(m_meshLodMinTris) * 3 && !vertices.empty()) {
-                MeshLodResult lod = simplifyMesh(&vertices[0].position.x,
-                                                 vertices.size(), sizeof(TerrainVertex),
-                                                 *useIndices, m_meshLodRatio, m_meshLodError,
-                                                 m_meshLodMaxTris,
-                                                 offsetof(TerrainVertex, texCoord),
-                                                 offsetof(TerrainVertex, texIndex),
-                                                 mesh.swayAmount > 0.0f, 0.6f, isGroundMesh);
-                // FOLHAGEM: poda de cartoes com COMPENSACAO DE AREA (Cook,
-                // Halstead, Planck, Ryu 2007 - ver MeshLod.hpp). O caminho
-                // de cartao do simplifyMesh so' remove e para no piso de
-                // 60% de area, entao o teto de triangulos nao era honrado:
-                // medido no parana_demo a pitch 30, as malhas 50/51 (107 k
-                // e 99 k tris) ficavam em 45 k/41 k no "lo" e, com 155+141
-                // instancias, eram 9,75 M dos 17,4 M tris do frame - para
-                // 2,7 M fragmentos (~5 triangulos por fragmento). Aqui os
-                // cartoes que ficam CRESCEM em torno do proprio centroide e a
-                // cobertura da copa se conserva, entao lo e far cabem no
-                // teto de verdade. Como os vertices mudam, cada nivel tem
-                // vertex buffer proprio (lo/farVertexBuffer).
-                // ERUPTION_TEST_NO_CARD_PRUNE=1: volta ao caminho antigo (A/B).
-                static const bool kNoCardPrune = std::getenv("ERUPTION_TEST_NO_CARD_PRUNE") != nullptr;
-                bool cardLodDone = false;
-                if (lod.cardMesh && !kNoCardPrune && mesh.swayAmount > 0.0f) {
-                    auto uploadBuf = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
-                                         VkBuffer& buf, VmaAllocation& alloc) {
-                        m_ctx->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
-                                            VMA_MEMORY_USAGE_GPU_ONLY, buf, alloc);
-                        PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, size);
-                        VkBuffer stg; VmaAllocation stgAlloc;
-                        m_ctx->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                            VMA_MEMORY_USAGE_CPU_ONLY, stg, stgAlloc);
-                        void* mp = nullptr;
-                        vmaMapMemory(m_ctx->allocator(), stgAlloc, &mp);
-                        std::memcpy(mp, data, static_cast<size_t>(size));
-                        vmaUnmapMemory(m_ctx->allocator(), stgAlloc);
-                        m_ctx->immediateSubmit([&](VkCommandBuffer c) {
-                            VkBufferCopy cp{0, 0, size};
-                            vkCmdCopyBuffer(c, stg, buf, 1, &cp);
-                        });
-                        vmaDestroyBuffer(m_ctx->allocator(), stg, stgAlloc);
-                    };
-                    const size_t triCount = useIndices->size() / 3;
-                    size_t loTarget = static_cast<size_t>(double(triCount) * m_meshLodRatio);
-                    if (m_meshLodMaxTris > 0) loTarget = std::min<size_t>(loTarget, m_meshLodMaxTris);
-                    loTarget = std::max<size_t>(loTarget, 3);
-                    CardPruneResult pr = pruneCardsAreaPreserving(
-                        vertices.data(), vertices.size(), sizeof(TerrainVertex),
-                        offsetof(TerrainVertex, position), *useIndices,
-                        static_cast<uint32_t>(loTarget),
-                        offsetof(TerrainVertex, texCoord), offsetof(TerrainVertex, texIndex),
-                        kCardLodMaxScale);
-                    if (pr.valid) {
-                        uploadBuf(pr.vertices.data(), pr.vertices.size(),
-                                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, mesh.loVertexBuffer, mesh.loVertexAlloc);
-                        uploadBuf(pr.indices.data(), pr.indices.size() * sizeof(uint32_t),
-                                  VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.loIndexBuffer, mesh.loIndexAlloc);
-                        mesh.loIndexCount = static_cast<uint32_t>(pr.indices.size());
-                        // Distancia de troca: mesma convencao do dropCards
-                        // (area removida x 0,25 x extensao), mas o crescimento
-                        // devolve a cobertura, entao so' a fracao que a escala
-                        // NAO compensou conta como erro.
-                        const float extent = glm::length(mesh.aabbMax - mesh.aabbMin);
-                        const float uncompensated = 1.0f - std::min(1.0f, pr.areaKeptRaw * pr.scale * pr.scale);
-                        const float absErr = std::max(((1.0f - pr.areaKeptRaw) * 0.08f + uncompensated * 0.25f) * extent, 1e-3f);
-                        mesh.loSwitchDistance = std::max(absErr * m_meshLodDistanceFactor, m_meshLodMinDistance);
-                        cardLodDone = true;
-                        if (m_meshLodFarMaxTris > 0 && mesh.loIndexCount / 3 > m_meshLodFarMaxTris * 2) {
-                            CardPruneResult fr = pruneCardsAreaPreserving(
-                                vertices.data(), vertices.size(), sizeof(TerrainVertex),
-                                offsetof(TerrainVertex, position), *useIndices,
-                                m_meshLodFarMaxTris,
-                                offsetof(TerrainVertex, texCoord), offsetof(TerrainVertex, texIndex),
-                                kCardLodMaxScale * 2.0f);
-                            if (fr.valid && fr.indices.size() < mesh.loIndexCount) {
-                                uploadBuf(fr.vertices.data(), fr.vertices.size(),
-                                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, mesh.farVertexBuffer, mesh.farVertexAlloc);
-                                uploadBuf(fr.indices.data(), fr.indices.size() * sizeof(uint32_t),
-                                          VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.farIndexBuffer, mesh.farIndexAlloc);
-                                mesh.farIndexCount = static_cast<uint32_t>(fr.indices.size());
-                                mesh.farSwitchDistance = mesh.loSwitchDistance * m_meshLodFarDistanceMul;
-                            }
-                        }
-                        static const bool kCardPruneDbg = std::getenv("ERUPTION_DEBUG_LODCARDS") != nullptr;
-                        if (kCardPruneDbg)
-                            ERUPTION_LOG_WARN("[CARDPRUNE] %s: %zu -> lo %u tris (escala %.2f, area bruta %.3f, ilhas %u/%u) far %u | troca lo=%.0f far=%.0f",
-                                              nomeMaterial.c_str(), triCount, mesh.loIndexCount / 3,
-                                              pr.scale, pr.areaKeptRaw, pr.islandsKept, pr.islandsTotal,
-                                              mesh.farIndexCount / 3, mesh.loSwitchDistance, mesh.farSwitchDistance);
-                    }
-                }
-                if (!cardLodDone && lod.valid) {
-                    const VkDeviceSize loSize = lod.indices.size() * sizeof(uint32_t);
-                    m_ctx->createBuffer(loSize,
-                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                                        VMA_MEMORY_USAGE_GPU_ONLY, mesh.loIndexBuffer, mesh.loIndexAlloc);
-                    PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, loSize);
-                    VkBuffer stg; VmaAllocation stgAlloc;
-                    m_ctx->createBuffer(loSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                        VMA_MEMORY_USAGE_CPU_ONLY, stg, stgAlloc);
-                    void* mp = nullptr;
-                    vmaMapMemory(m_ctx->allocator(), stgAlloc, &mp);
-                    std::memcpy(mp, lod.indices.data(), loSize);
-                    vmaUnmapMemory(m_ctx->allocator(), stgAlloc);
-                    m_ctx->immediateSubmit([&](VkCommandBuffer c) {
-                        VkBufferCopy cp{0, 0, loSize};
-                        vkCmdCopyBuffer(c, stg, mesh.loIndexBuffer, 1, &cp);
-                    });
-                    vmaDestroyBuffer(m_ctx->allocator(), stg, stgAlloc);
-                    mesh.loIndexCount = static_cast<uint32_t>(lod.indices.size());
-                    // Distância de troca vem do ERRO GEOMÉTRICO medido pela
-                    // simplificação, não do raio da malha. Escalar pelo raio
-                    // era exatamente o contrário do desejado: dava a maior
-                    // distância de troca justamente às malhas maiores - as
-                    // que carregam o triângulo todo - e elas nunca trocavam
-                    // (medido: troca variando de 10 a 998 unidades, com a
-                    // câmera a 400). Com o erro, uma malha cuja simplificação
-                    // desloca pouco troca cedo, e o erro já escala com o
-                    // tamanho da malha por construção.
-                    // meshopt reporta o erro RELATIVO à extensão da malha,
-                    // não em unidades de mundo: converter antes de usar.
-                    // Sem isso as distâncias de troca saíam entre 0,1 e 6,6
-                    // unidades, ou seja, o LOD entrava colado na câmera.
-                    const float extent = glm::length(mesh.aabbMax - mesh.aabbMin);
-                    const float absErr = std::max(lod.error * extent, 1e-3f);
-                    // Troca quando o erro projeta abaixo do limiar em pixels:
-                    // distância = erro_mundo * (altura_viewport / 2tan(fov/2))
-                    // / limiar_px. O fator do preset é essa constante.
-                    // Piso de distancia: nada troca de LOD perto da camera,
-                    // por menor que seja o erro geometrico da malha. Sem
-                    // isto, objeto fino (poste) troca a ~30 unidades
-                    // enquanto predio troca a ~180, e o poste pipoca.
-                    mesh.loSwitchDistance = std::max(absErr * m_meshLodDistanceFactor,
-                                                     m_meshLodMinDistance);
-
-                    // LOD DISTANTE: so' faz sentido se for bem menor que o
-                    // "lo". Simplificacao "sloppy" (sem preservar topologia)
-                    // - a esta distancia a silhueta grossa e' tudo que a
-                    // tela resolve. Entra a um multiplo da troca do "lo".
-                    if (m_meshLodFarMaxTris > 0 &&
-                        mesh.loIndexCount / 3 > m_meshLodFarMaxTris * 2) {
-                        MeshLodResult fl = simplifyMesh(&vertices[0].position.x,
-                                                        vertices.size(), sizeof(TerrainVertex),
-                                                        *useIndices,
-                                                        std::max(m_meshLodRatio * 0.25f, 0.02f),
-                                                        1.0f /* erro livre: o TETO manda */, m_meshLodFarMaxTris,
-                                                        offsetof(TerrainVertex, texCoord),
-                                                        offsetof(TerrainVertex, texIndex),
-                                                        mesh.swayAmount > 0.0f,
-                                                        // PISO DE AREA do LOD DISTANTE em malha de cartao. O
-                                                        // piso padrao (0,6: a copa so' afina) e' certo para o
-                                                        // nivel "lo", que ainda e' visto de perto - mas ele
-                                                        // tambem vetava o distante: com 60% da area obrigatoria
-                                                        // o dropCards nunca chega a 400 triangulos, o far sai
-                                                        // igual ao lo e NUNCA e' usado. Medido no parana_demo
-                                                        // (2026-09-05, pitch 15, zoom 1000): duas malhas de
-                                                        // ~100k tri x ~340 instancias ficavam em 45k CADA a
-                                                        // qualquer distancia = 30 M dos 42 M tri do frame.
-                                                        // Alem de 3x a troca do lo a copa e' pequena na tela;
-                                                        // afinar mais e' o que o olho nao ve e a GPU sente.
-                                                        kFarCardMinArea, isGroundMesh);
-                        if (fl.valid && fl.indices.size() < mesh.loIndexCount) {
-                            const VkDeviceSize faSize = fl.indices.size() * sizeof(uint32_t);
-                            m_ctx->createBuffer(faSize,
-                                                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                                                VMA_MEMORY_USAGE_GPU_ONLY, mesh.farIndexBuffer, mesh.farIndexAlloc);
-                    PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, faSize);
-                            VkBuffer st3; VmaAllocation st3a;
-                            m_ctx->createBuffer(faSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                VMA_MEMORY_USAGE_CPU_ONLY, st3, st3a);
-                            void* mp3 = nullptr;
-                            vmaMapMemory(m_ctx->allocator(), st3a, &mp3);
-                            std::memcpy(mp3, fl.indices.data(), faSize);
-                            vmaUnmapMemory(m_ctx->allocator(), st3a);
-                            m_ctx->immediateSubmit([&](VkCommandBuffer c) {
-                                VkBufferCopy cp{0, 0, faSize};
-                                vkCmdCopyBuffer(c, st3, mesh.farIndexBuffer, 1, &cp);
-                            });
-                            vmaDestroyBuffer(m_ctx->allocator(), st3, st3a);
-                            mesh.farIndexCount = static_cast<uint32_t>(fl.indices.size());
-                            mesh.farSwitchDistance = mesh.loSwitchDistance * m_meshLodFarDistanceMul;
-                        }
-                    }
-                }
-
-                // LOD exclusivo da sombra: mais agressivo, porque a
-                // silhueta no shadow map nao resolve o detalhe (RMS 0,000
-                // medido). So' vale a pena se for menor que o LOD de tela.
-                if (m_shadowLodMaxTris > 0) {
-                    MeshLodResult sh = simplifyMesh(&vertices[0].position.x,
-                                                    vertices.size(), sizeof(TerrainVertex),
-                                                    *useIndices, m_meshLodRatio,
-                                                    m_meshLodError * 4.0f, m_shadowLodMaxTris,
-                                                    offsetof(TerrainVertex, texCoord),
-                                                    offsetof(TerrainVertex, texIndex),
-                                                    mesh.swayAmount > 0.0f,
-                                                    // Mesmo problema do far (ver acima): com o piso
-                                                    // de 60% de area o LOD de SOMBRA de uma copa saia
-                                                    // igual ao "lo" (45k tri) e era rejeitado logo
-                                                    // abaixo - a sombra desenhava 45k tri por arvore,
-                                                    // 680 instancias, e o passe custava 5-8 ms no
-                                                    // parana_demo (2026-09-05). A sombra e' filtrada
-                                                    // (PCSS 16 taps): copa com 30% dos cartoes ainda
-                                                    // projeta sombra continua, so' mais clara.
-                                                    kShadowCardMinArea);
-                    if (sh.valid && (mesh.loIndexCount == 0 || sh.indices.size() < mesh.loIndexCount)) {
-                        const VkDeviceSize shSize = sh.indices.size() * sizeof(uint32_t);
-                        m_ctx->createBuffer(shSize,
-                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                                            VMA_MEMORY_USAGE_GPU_ONLY, mesh.shIndexBuffer, mesh.shIndexAlloc);
-                    PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, shSize);
-                        VkBuffer st2; VmaAllocation st2a;
-                        m_ctx->createBuffer(shSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                            VMA_MEMORY_USAGE_CPU_ONLY, st2, st2a);
-                        void* mp2 = nullptr;
-                        vmaMapMemory(m_ctx->allocator(), st2a, &mp2);
-                        std::memcpy(mp2, sh.indices.data(), shSize);
-                        vmaUnmapMemory(m_ctx->allocator(), st2a);
-                        m_ctx->immediateSubmit([&](VkCommandBuffer c) {
-                            VkBufferCopy cp{0, 0, shSize};
-                            vkCmdCopyBuffer(c, st2, mesh.shIndexBuffer, 1, &cp);
-                        });
-                        vmaDestroyBuffer(m_ctx->allocator(), st2, st2a);
-                        mesh.shIndexCount = static_cast<uint32_t>(sh.indices.size());
-                    }
-                }
+                LodBuild b;
+                b.mesh = static_cast<uint32_t>(m_meshes.size());
+                b.vertices = vertices;
+                b.indices = *useIndices;
+                b.sway = mesh.swayAmount > 0.0f;
+                b.ground = isGroundMesh;
+                b.extent = glm::length(mesh.aabbMax - mesh.aabbMin);
+                b.material = nomeMaterial;
+                lodBuilds.push_back(std::move(b));
             }
 
             m_meshes.push_back(mesh);
@@ -1767,6 +1721,24 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             if (skinnedNode) registerSkinBase(meshIndices[n], asset, node, vertices);
             // Editor: o chão fica com cópia na CPU para o pincel de terreno.
             if (m_keepGroundVertices && mesh.isGround) m_groundCpu[meshIndices[n]] = vertices;
+        }
+        if (!lodBuilds.empty()) {
+            // Maiores primeiro: com as threads pegando a próxima tarefa livre,
+            // a malha grande não fica para o fim sozinha.
+            std::sort(lodBuilds.begin(), lodBuilds.end(),
+                      [](const LodBuild& a, const LodBuild& b) { return a.indices.size() > b.indices.size(); });
+            const auto lt0 = std::chrono::steady_clock::now();
+            JobSystem::instance().parallelFor(static_cast<uint32_t>(lodBuilds.size() * 3), [&](uint32_t k) {
+                computeLodPart(lodBuilds[k / 3], static_cast<int>(k % 3));
+            });
+            JobSystem::instance().parallelFor(static_cast<uint32_t>(lodBuilds.size()),
+                                              [&](uint32_t k) { finishLod(lodBuilds[k]); });
+            const auto lt1 = std::chrono::steady_clock::now();
+            applyLods(lodBuilds);
+            const auto lt2 = std::chrono::steady_clock::now();
+            ERUPTION_LOG_WARN("[LOD] %s: %zu meshes, %.0f ms in parallel, upload %.0f ms", asset.filePath.c_str(),
+                              lodBuilds.size(), std::chrono::duration<double, std::milli>(lt1 - lt0).count(),
+                              std::chrono::duration<double, std::milli>(lt2 - lt1).count());
         }
         // Nós que compartilham geometria (geometryShareIndex >= 0) não
         // subiram malha nenhuma: apontam para o ModelMeshGPU do dono. Passe

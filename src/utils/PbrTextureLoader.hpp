@@ -162,8 +162,8 @@ size_t pendingPbrUploadCount();
 // Record up to maxItems queued PBR uploads into an already-recording frame
 // command buffer - no submit, no fence, so the render thread never stalls.
 // The staging buffers are appended to stagingOut, whose owner must keep them
-// alive until the GPU has executed the frame (MapContext::stagingBuffers is
-// freed via the deferred-delete path, which satisfies that).
+// alive until the GPU has executed the frame (e.g. hand them to
+// VulkanContext::deferFrameCleanup).
 void recordPendingPbrUploads(VulkanContext* ctx, VkCommandBuffer cmd, size_t maxItems,
                              std::vector<std::pair<VkBuffer, VmaAllocation>>& stagingOut);
 

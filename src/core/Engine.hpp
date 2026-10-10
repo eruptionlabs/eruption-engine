@@ -50,10 +50,17 @@
 #include "core/InputConfig.hpp"
 #include "formats/SpriteTypes.hpp"
 #include "core/ConfigManager.hpp"
-#include "core/BackgroundMapLoader.hpp"
 #include "core/Input.hpp"
 #include "utils/Profiler.hpp"
-#include "renderer/MapContext.hpp"
+#include "renderer/GpuTextures.hpp"
+#include "renderer/TerrainRenderer.hpp"
+#include "renderer/ModelRenderer.hpp"
+#include "utils/PbrTextureLoader.hpp"
+#include "utils/EtexLoader.hpp"
+#include "formats/MapLoader.hpp"
+#include "formats/TerrainParser.hpp"
+#include "formats/ModelFile.hpp"
+#include "formats/PackManager.hpp"
 #include <vector>
 #include <iosfwd>
 #include <string>
@@ -163,7 +170,10 @@ public:
     void enableBenchmarkThunderstorm(bool enable) { m_benchmarkThunderstorm = enable; }
     void enableBenchmarkHeavyRain(bool enable) { m_benchmarkHeavyRain = enable; }
     bool isRunning() const { return m_running; }
-    bool loadMap(const std::string& name);
+    // `preloaded`: mapa já lido do disco numa thread (troca pelo seletor de
+    // mapas); o resto é o mesmo carregamento do mapa aberto direto.
+    bool loadMap(const std::string& name, std::shared_ptr<LoadedMap> preloaded = nullptr);
+    bool warpLoading() const { return m_warpJobActive; }
     // Acrescenta um .glb ao mapa aberto, com o chao do modelo em `position`.
     // Devolve o indice da primeira instancia (uma por no) ou -1.
     // `nodeName` não vazio: só esse nó do arquivo.
@@ -696,9 +706,6 @@ private:
     bool findEmbeddedAlbedoPixels(const std::string& name, std::vector<uint8_t>& outPixels,
                                   int& outW, int& outH, int& outChannels);
     void recordTelemetry();
-    void processBackgroundLoading();
-    void uploadStagingMapGPU(VkCommandBuffer cmd);
-    void performMapSwap();
     void renderLoadingProgress();
     void takeScreenshot(const std::string& filename);
     void readPostOutput(std::vector<float>& rgb, uint32_t& w, uint32_t& h);
@@ -978,6 +985,13 @@ private:
     bool m_screenshotAfterWarpPending = false;
     int m_framesCount = 0;
     int m_framesAfterSwap = -1;
+    // Troca de mapa pelo seletor (warp): o .glb é lido numa thread e o mapa
+    // entra pelo mesmo loadMap do carregamento direto (antes era um segundo
+    // caminho de montagem, sem LOD, sem soldar vértices, sem GI nem chão).
+    std::future<std::shared_ptr<LoadedMap>> m_warpJob;
+    std::string m_warpJobMap;
+    bool m_warpJobActive = false;
+    void updateWarp();
     // UI-inclusive screenshot capture state.
     bool m_screenshotPending = false;
     uint32_t m_screenshotSubmitFrame = 0;
@@ -990,9 +1004,6 @@ private:
     // 3=settling PBR off, 4=capture PBR off.
     int m_abCaptureStep = 0;
     int m_abCaptureFrame = 0;
-    std::unique_ptr<BackgroundMapLoader> m_backgroundLoader;
-    std::unique_ptr<MapContext> m_activeMapContext;
-    std::unique_ptr<MapContext> m_stagingMapContext;
     struct GlobalAssetCache {
         mutable std::mutex mutex;
         struct CacheEntry {
@@ -1146,19 +1157,11 @@ private:
             if (tex.normalImage != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), tex.normalImage, tex.normalAlloc);
         }
     } m_assetCache;
-    struct DeferredMapDelete {
-        std::unique_ptr<MapContext> context;
-        int framesRemaining;
-    };
-    std::deque<DeferredMapDelete> m_deferredDeletes;
-    bool m_mapSwapPending = false;
     bool m_isInitialBoot = true;
     bool m_inFrame = false;
     bool m_playerSpawnedOnActiveMap = false;
     inline static const Vec3 kSafePreWarpPlayerPos = Vec3(0.0f, -1000.0f, 0.0f);
     std::string m_pendingMapWarp;
-    std::string m_warpRestartTarget;   
-    bool m_warpRestartPending = false;
     TextureResource m_splashLogo;
     VkDescriptorSet m_splashLogoDescriptorSet = VK_NULL_HANDLE;
     TextureResource m_splashSilhouette;

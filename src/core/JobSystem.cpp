@@ -48,16 +48,18 @@ void JobSystem::parallelFor(uint32_t count, std::function<void(uint32_t index)> 
         return;
     }
 
-    uint32_t numThreads = static_cast<uint32_t>(m_threads.size());
-    uint32_t chunkSize = (count + numThreads - 1) / numThreads;
+    // Cada thread pega o próximo índice livre (não um bloco fixo): com
+    // tarefas de tamanho muito diferente - o LOD do chão de 500 mil
+    // triângulos ao lado de um arbusto - blocos fixos deixavam uma thread com
+    // as maiores e as outras paradas.
+    const uint32_t numThreads = std::min(static_cast<uint32_t>(m_threads.size()), count);
+    std::atomic<uint32_t> next(0);
     std::atomic<uint32_t> remaining(0);
 
-    for (uint32_t t = 0; t < numThreads && t * chunkSize < count; t++) {
-        uint32_t start = t * chunkSize;
-        uint32_t end = std::min(start + chunkSize, count);
+    for (uint32_t t = 0; t < numThreads; t++) {
         remaining++;
-        submit([start, end, &func, &remaining, this]() {
-            for (uint32_t i = start; i < end; i++) {
+        submit([count, &next, &func, &remaining, this]() {
+            for (uint32_t i = next.fetch_add(1); i < count; i = next.fetch_add(1)) {
                 func(i);
             }
             remaining--;
