@@ -2,6 +2,7 @@
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
+#include "formats/FlatMap.hpp"
 #include "formats/SpriteSheet.hpp"
 #include "game/DefaultApplication.hpp"
 #include "utils/BcAlphaSelfTest.hpp"
@@ -63,6 +64,33 @@ int main(int argc, char** argv) {
             ERUPTION_LOG_FATAL("--new-project: %s", err.c_str());
             return 1;
         }
+        return 0;
+    }
+
+    // --new-map <nome> [--map-size <lado>]: cria o mapa vazio (chao plano,
+    // grade de altura e ambiente) dentro do projeto e sai. Mesmo codigo do
+    // File > New Map do editor. Ver formats/FlatMap.hpp.
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string(argv[i]) != "--new-map") continue;
+        const std::filesystem::path dir = eruption::Project::requested(argc, argv);
+        std::string err;
+        if (!dir.empty() && !eruption::Project::instance().open(dir, &err)) {
+            ERUPTION_LOG_FATAL("--new-map: %s", err.c_str());
+            return 1;
+        }
+        eruption::FlatMap::Options o;
+        for (int k = 1; k + 1 < argc; ++k) {
+            if (std::string(argv[k]) == "--map-size") o.size = static_cast<float>(std::atof(argv[k + 1]));
+            if (std::string(argv[k]) == "--map-overwrite") o.overwrite = true;
+        }
+        const std::string name = argv[i + 1];
+        const std::filesystem::path mapDir = eruption::project::game("assets/external") / name;
+        if (!eruption::FlatMap::create(mapDir, name, o, err)) {
+            ERUPTION_LOG_FATAL("--new-map: %s", err.c_str());
+            return 1;
+        }
+        ERUPTION_LOG_WARN("[MAPA] %s criado em %s (%.0f x %.0f unidades)", name.c_str(),
+                          mapDir.string().c_str(), double(o.size), double(o.size));
         return 0;
     }
 
