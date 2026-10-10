@@ -58,7 +58,7 @@ cd eruption-engine
 Para rodar um mapa específico:
 
 ```bash
-./launch.sh --map parana_field_lite
+./launch.sh --project projects/parana_field --map parana_field_lite
 ```
 
 ### Projetos de jogo
@@ -80,7 +80,7 @@ muda: a engine abre um mapa solto desta pasta, como antes. No editor,
 projeto reabre o editor). O último projeto aberto fica guardado em
 `data/launcher_config.json`.
 
-O mapa de demonstração `parana_field_lite` usa apenas texturas CC0. Seu arquivo `.glb` passa do limite do GitHub, então ele é distribuído como asset de release: a primeira configuração do CMake baixa o arquivo sozinha (cerca de 170 MB) e confere o checksum. Para baixar na mão, rode `tools/fetch_demo_map.sh`; para pular, passe `-DERUPTION_FETCH_DEMO_MAP=OFF`. No primeiro carregamento a engine comprime as texturas embutidas e guarda o resultado em cache ao lado do mapa. O `parana_field` é o mesmo mapa com os modelos originais, em detalhe total (cerca de 25 milhões de triângulos únicos, 409 MB): um mapa de estresse, que o build não baixa.
+A demonstração é um projeto de jogo, `projects/parana_field` (no mesmo formato descrito abaixo): os mapas `parana_field_lite` e `parana_field`, os efeitos de partícula do vulcão e o lugar das cenas e dos scripts. O mapa `parana_field_lite` usa apenas texturas CC0. Seu arquivo `.glb` passa do limite do GitHub, então ele é distribuído como asset de release: a primeira configuração do CMake baixa o arquivo sozinha (cerca de 170 MB) e confere o checksum. Para baixar na mão, rode `tools/fetch_demo_map.sh`; para pular, passe `-DERUPTION_FETCH_DEMO_MAP=OFF`. No primeiro carregamento a engine comprime as texturas embutidas e guarda o resultado em cache ao lado do mapa. O `parana_field` é o mesmo mapa com os modelos originais, em detalhe total (cerca de 25 milhões de triângulos únicos, 409 MB): um mapa de estresse, que o build não baixa.
 
 ## Estrutura
 

@@ -16,7 +16,7 @@ set(ERUPTION_DEMO_MAP_URL
     CACHE STRING "Release asset with the demo map")
 set(ERUPTION_DEMO_MAP_SHA256 "40396b6ac5f3d97fb6ad636d8d6d6284a7f8c750f5a54c74ddd9695533a214a3")
 
-set(_demo_glb "${CMAKE_SOURCE_DIR}/assets/external/parana_field_lite/parana_field_lite.glb")
+set(_demo_glb "${CMAKE_SOURCE_DIR}/projects/parana_field/assets/external/parana_field_lite/parana_field_lite.glb")
 if(ERUPTION_FETCH_DEMO_MAP AND NOT EXISTS "${_demo_glb}")
     set(_demo_zip "${CMAKE_BINARY_DIR}/parana_field.zip")
     message(STATUS "Demo map missing, downloading ${ERUPTION_DEMO_MAP_URL}")

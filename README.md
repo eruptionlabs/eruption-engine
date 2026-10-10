@@ -58,7 +58,7 @@ cd eruption-engine
 To run a specific map:
 
 ```bash
-./launch.sh --map parana_field_lite
+./launch.sh --project projects/parana_field --map parana_field_lite
 ```
 
 ### Game projects
@@ -80,7 +80,7 @@ In the editor, **File > Game Project...** creates, opens and configures one
 (changing projects reopens the editor). The last project opened is
 remembered in `data/launcher_config.json`.
 
-The `parana_field_lite` demo map uses CC0 textures only. Its `.glb` file is larger than GitHub allows, so it ships as a release asset: the first CMake configure downloads it automatically (about 170 MB) and verifies its checksum. To fetch it by hand, run `tools/fetch_demo_map.sh`; to skip it, pass `-DERUPTION_FETCH_DEMO_MAP=OFF`. On the first load the engine compresses the embedded textures and caches the result next to the map. `parana_field` is the same map with the original, full-detail models (about 25 million unique triangles, 409 MB): a stress map, not downloaded by the build.
+The demo is a game project, `projects/parana_field` (the same layout described below): the maps `parana_field_lite` and `parana_field`, the volcano's particle effects and room for scenes and scripts. The `parana_field_lite` map uses CC0 textures only. Its `.glb` file is larger than GitHub allows, so it ships as a release asset: the first CMake configure downloads it automatically (about 170 MB) and verifies its checksum. To fetch it by hand, run `tools/fetch_demo_map.sh`; to skip it, pass `-DERUPTION_FETCH_DEMO_MAP=OFF`. On the first load the engine compresses the embedded textures and caches the result next to the map. `parana_field` is the same map with the original, full-detail models (about 25 million unique triangles, 409 MB): a stress map, not downloaded by the build.
 
 ## Layout
 

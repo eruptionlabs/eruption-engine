@@ -58,7 +58,7 @@ cd eruption-engine
 特定のマップで起動するには：
 
 ```bash
-./launch.sh --map parana_field_lite
+./launch.sh --project projects/parana_field --map parana_field_lite
 ```
 
 ### ゲームプロジェクト
@@ -81,7 +81,7 @@ cd eruption-engine
 します）。最後に開いたプロジェクトは `data/launcher_config.json` に記録され
 ます。
 
-デモマップ `parana_field_lite` は CC0 テクスチャのみを使用しています。`.glb` ファイルは GitHub のファイルサイズ上限を超えるため、リリースアセットとして配布しています。初回の CMake 構成時に自動でダウンロード（約 170 MB）し、チェックサムを検証します。手動で取得する場合は `tools/fetch_demo_map.sh` を実行し、取得しない場合は `-DERUPTION_FETCH_DEMO_MAP=OFF` を指定してください。初回ロード時に、エンジンが埋め込みテクスチャを圧縮し、その結果をマップの隣にキャッシュします。`parana_field` は同じマップをオリジナルのフル詳細モデル（ユニーク三角形 約 2,500 万、409 MB）で構成した負荷テスト用マップで、ビルド時にはダウンロードされません。
+デモはゲームプロジェクト `projects/parana_field`（下で説明する形式と同じ）です。マップ `parana_field_lite` と `parana_field`、火山のパーティクルエフェクト、シーンとスクリプトの置き場所を含みます。マップ `parana_field_lite` は CC0 テクスチャのみを使用しています。`.glb` ファイルは GitHub のファイルサイズ上限を超えるため、リリースアセットとして配布しています。初回の CMake 構成時に自動でダウンロード（約 170 MB）し、チェックサムを検証します。手動で取得する場合は `tools/fetch_demo_map.sh` を実行し、取得しない場合は `-DERUPTION_FETCH_DEMO_MAP=OFF` を指定してください。初回ロード時に、エンジンが埋め込みテクスチャを圧縮し、その結果をマップの隣にキャッシュします。`parana_field` は同じマップをオリジナルのフル詳細モデル（ユニーク三角形 約 2,500 万、409 MB）で構成した負荷テスト用マップで、ビルド時にはダウンロードされません。
 
 ## ディレクトリ構成
 

@@ -997,17 +997,17 @@ void VfxSystem::debugDump() {
     if (!createBuf(rb, 256 + 4 * kParticleBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_TO_CPU, true))
         return;
     m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
-        const VkBufferCopy c0{0, 0, 64};
+        const VkBufferCopy c0{0, 0, kCounterCount * 4};
         vkCmdCopyBuffer(cmd, m_counters.buf, rb.buf, 1, &c0);
-        const VkBufferCopy c1{0, 64, 16};
+        const VkBufferCopy c1{0, 128, 16};
         vkCmdCopyBuffer(cmd, m_render.buf, rb.buf, 1, &c1);
     });
     vmaInvalidateAllocation(m_ctx->allocator(), rb.alloc, 0, VK_WHOLE_SIZE);
     const uint32_t* c = static_cast<const uint32_t*>(rb.mapped);
-    ERUPTION_LOG_WARN("[VFX] dump: alive0=%u alive1=%u dead=%u render=%u dispatch=%u draw=(%u,%u,%u,%u)", c[0], c[1],
-                      c[2], c[3], c[4], c[8], c[9], c[10], c[11]);
+    ERUPTION_LOG_WARN("[VFX] dump: alive0=%u alive1=%u dead=%u render=%u+%u dispatch=%u draw=(%u,%u) low=(%u,%u)", c[0],
+                      c[1], c[2], c[3], c[4], c[kCDispatch], c[kCDraw], c[kCDraw + 1], c[kCDraw + 4], c[kCDraw + 5]);
     uint32_t idx[4];
-    std::memcpy(idx, c + 16, sizeof(idx));
+    std::memcpy(idx, c + 32, sizeof(idx));
     m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
         for (int i = 0; i < 4; ++i) {
             if (idx[i] >= m_capacity) continue;
