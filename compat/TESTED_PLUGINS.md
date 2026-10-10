@@ -29,7 +29,18 @@ Os nomes Godot, Unity e Unreal são usados apenas para dizer com o que a camada
 |---|---|---|---|---|---|
 | NativeRenderingPlugin (exemplo oficial de plugin de renderização) | https://github.com/Unity-Technologies/NativeRenderingPlugin | MIT (os cabeçalhos da API de plugin dentro dele têm outra licença e **não** são usados pela camada) | `522254181faf188efa8b50c3e3bf6fce720b26e4` | `UnityPluginLoad`/`Unload`, `IUnityInterfaces`, `IUnityGraphics` (callback de dispositivo), pedido de `IUnityGraphicsVulkan`, `GetRenderEventFunc`, exportações chamadas por `DllImport` | **funciona**: com dispositivo nulo, ciclo de vida e eventos completos; com OpenGL fora de tela (EGL), o plugin desenha o triângulo (6144 pixels coloridos em 256×256) e escreve a textura "plasma" (249 tons) |
 
-Observação: o plugin chama `GetBackBufferWidth()` sem checar se há API gráfica
+## Unity (scripts C#)
+
+Os scripts são compilados contra o `UnityEngine.dll` **da camada compat**
+(`compat/unity/csharp/UnityEngine`, código próprio) e rodam no .NET (MIT)
+hospedado por hostfxr. O SDK do .NET é baixado por
+`compat/scripts/baixar_dotnet.sh` para `compat/testdata/dotnet/` (fora do git).
+
+| Plugin | Origem | Licença | Commit | O que exercita | Resultado |
+|---|---|---|---|---|---|
+| Klak (Motion, Math, Extension) | https://github.com/keijiro/Klak | MIT | `b38ec4dbc0c614fd6fba08c44ddef80783855c02` | `MonoBehaviour` (Start/Update), `[SerializeField]` privado, `Transform` local/mundo, `Quaternion.AngleAxis/Euler`, `Time.deltaTime`, `Random.onUnitSphere/Range`, `Mathf`, `Vector3/Vector4`; ruído Perlin e XXHash do próprio Klak | **funciona**: `ConstantMotion` com rotação Y a 90°/s e translação X a 2/s chega a pos (2, 0, 0) e rot (0, 90, 0) após 60 quadros de 1/60 s; `BrownianMotion` move o objeto pelo ruído |
+
+Observação: o plugin nativo chama `GetBackBufferWidth()` sem checar se há API gráfica
 ativa; com dispositivo nulo isso derruba o próprio plugin (bug dele, não da camada).
 
 ## Unreal Engine (plugins em código-fonte)
@@ -54,6 +65,7 @@ bash compat/scripts/baixar_testes.sh            # tudo (ou: godot | unity | unre
 cmake -S compat/tests/unity -B compat/build/unity-tests -DCMAKE_BUILD_TYPE=Release
 nice cmake --build compat/build/unity-tests -j4
 nice cmake --build compat/build/sozinho -j4 --target eruption-compat-unity-gl
+bash compat/scripts/baixar_dotnet.sh && bash compat/tests/unity/compilar_csharp.sh
 bash compat/tests/unreal/compilar.sh
 bash compat/scripts/testar_compat.sh            # bateria completa, sem o motor
 bash compat/scripts/testar_motor.sh             # dentro do motor (xvfb)

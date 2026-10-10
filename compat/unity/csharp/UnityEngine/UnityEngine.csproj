@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Assembly "UnityEngine" PROPRIO da camada de compatibilidade do Eruption:
+    subconjunto da API de script (MonoBehaviour, GameObject, Transform,
+    Vector3, Quaternion, Mathf, Time, Debug, Random...) escrito do zero a
+    partir da referencia publica de script, mais a ponte com o host nativo
+    (Eruption.Compat.Ponte). Hospedado pelo .NET via hostfxr.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>UnityEngine</AssemblyName>
+    <RootNamespace>UnityEngine</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>CS0660;CS0661</NoWarn>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+</Project>

@@ -1,3 +1,6 @@
 # Plugins de teste baixados (codigo de terceiros, nunca vai para o git) e builds.
 testdata/
 build/
+# Saidas intermediarias do dotnet build (projetos C# da camada Unity).
+unity/csharp/**/obj/
+unity/csharp/**/bin/

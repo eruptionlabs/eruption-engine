@@ -2,6 +2,7 @@
 
 #include "godot/GodotHost.hpp"
 #include "host/Host.hpp"
+#include "unity/CSharpHost.hpp"
 #include "unity/UnityHost.hpp"
 #include "unreal/UnrealHost.hpp"
 
@@ -56,12 +57,14 @@ bool carregarPlugin(const std::string& esp) {
         ok = unreal::carregarPlugin(esp.substr(7));
     } else if (caminho.extension() == ".uplugin") {
         ok = unreal::carregarPlugin(esp);
+    } else if (comecaCom(esp, "unity-cs:")) {
+        ok = unity::cs::carregarAssembly(esp.substr(9));
     } else if (comecaCom(esp, "unity:")) {
         ok = unity::carregarPlugin(esp.substr(6));
     } else if (caminho.extension() == ".so" && detectar(esp) == "unity") {
         ok = unity::carregarPlugin(esp);
     } else {
-        logf(Nivel::Erro, "compat", "plugin nao reconhecido: %s (use godot:, unity:, unreal:, .gdextension ou .uplugin)", esp.c_str());
+        logf(Nivel::Erro, "compat", "plugin nao reconhecido: %s (use godot:, unity:, unity-cs:, unreal:, .gdextension ou .uplugin)", esp.c_str());
     }
     return ok;
 }
@@ -82,9 +85,25 @@ int carregarDaVariavel(const char* variavel) {
 }
 
 int instanciarDaVariavel(const char* variavel) {
-    const char* v = std::getenv(variavel);
-    if (!v || !*v || !g_godot) return 0;
     int n = 0;
+    // Objetos C# (Unity): "Objeto:Componente:campo=valor:...;..."
+    if (const char* u = std::getenv("ERUPTION_COMPAT_UNITY_CENA"); u && *u && unity::cs::ativo()) {
+        for (const std::string& item : dividir(u, ';')) {
+            const std::vector<std::string> partes = dividir(item, ':');
+            if (partes.size() < 2) continue;
+            const uint32_t id = unity::cs::criarObjeto(partes[0]);
+            if (!id || !unity::cs::adicionarComponente(id, partes[1])) continue;
+            for (size_t k = 2; k < partes.size(); ++k) {
+                const auto eq = partes[k].find('=');
+                if (eq != std::string::npos)
+                    unity::cs::definirCampo(id, partes[1], partes[k].substr(0, eq), partes[k].substr(eq + 1));
+            }
+            logf(Nivel::Info, "compat", "na cena (C#): %s", unity::cs::descrever(id).c_str());
+            ++n;
+        }
+    }
+    const char* v = std::getenv(variavel);
+    if (!v || !*v || !g_godot) return n;
     for (const std::string& classe : dividir(v, ';')) {
         const uint64_t id = godot::instanciar(classe);
         if (id && godot::adicionarNaCena(id)) {
@@ -99,6 +118,7 @@ void quadro(double dt) {
     if (auto* h = dynamic_cast<HostPadrao*>(&host())) h->avancar(dt);
     if (g_godot) godot::quadro(dt);
     if (unity::algumCarregado()) unity::quadro(dt);
+    if (unity::cs::ativo()) unity::cs::quadro(dt);
 }
 
 void encerrar() {
@@ -110,11 +130,12 @@ void encerrar() {
     }
     g_godot = false;
     unity::encerrar();
+    unity::cs::encerrar();
     unreal::encerrar();
 }
 
 bool algumCarregado() {
-    return g_godot || unity::algumCarregado() || unreal::algumCarregado();
+    return g_godot || unity::algumCarregado() || unity::cs::ativo() || unreal::algumCarregado();
 }
 
 } // namespace eruption::compat

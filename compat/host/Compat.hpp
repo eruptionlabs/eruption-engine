@@ -7,6 +7,7 @@
 //   caminho/extensao.gdextension        GDExtension (Godot 4)
 //   godot:biblioteca.so:simbolo         GDExtension sem o arquivo .gdextension
 //   unity:biblioteca.so                 plugin nativo (UnityPluginLoad)
+//   unity-cs:Scripts.dll                scripts C# compilados contra o UnityEngine da compat
 //   caminho/Plugin.uplugin              plugin Unreal recompilado com compat/unreal/ferramentas
 //   unreal:caminho/Plugin.uplugin       idem
 //   biblioteca.so                       detecta pelos simbolos exportados
@@ -23,8 +24,9 @@ bool carregarPlugin(const std::string& especificacao);
 // Devolve quantos carregaram.
 int carregarDaVariavel(const char* variavel = "ERUPTION_COMPAT_PLUGINS");
 
-// Instancia classes pedidas em ERUPTION_COMPAT_GODOT_CENA ("Classe;Classe")
-// e as pendura na cena GDExtension. Devolve quantas.
+// Instancia o que for pedido em ERUPTION_COMPAT_GODOT_CENA ("Classe;Classe",
+// nos GDExtension) e em ERUPTION_COMPAT_UNITY_CENA
+// ("Objeto:Componente:campo=valor:...;...", GameObjects C#). Devolve quantos.
 int instanciarDaVariavel(const char* variavel = "ERUPTION_COMPAT_GODOT_CENA");
 
 // Um quadro do jogo: avanca o relogio do host e chama os callbacks.

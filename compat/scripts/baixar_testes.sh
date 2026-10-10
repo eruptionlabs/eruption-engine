@@ -50,6 +50,8 @@ if [ "$GRUPO" = tudo ] || [ "$GRUPO" = unity ]; then
     # Exemplo oficial de plugin nativo de renderizacao (MIT). Traz os proprios
     # cabecalhos da API de plugin; o host de compat NAO usa esses cabecalhos.
     clona https://github.com/Unity-Technologies/NativeRenderingPlugin.git "$U/NativeRenderingPlugin" 522254181faf188efa8b50c3e3bf6fce720b26e4
+    # Scripts C# de movimento/ruido (MIT): MonoBehaviour com Transform, Time, Random, Mathf.
+    clona https://github.com/keijiro/Klak.git "$U/Klak" b38ec4dbc0c614fd6fba08c44ddef80783855c02
 fi
 
 if [ "$GRUPO" = tudo ] || [ "$GRUPO" = unreal ]; then
