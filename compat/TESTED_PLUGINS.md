@@ -23,7 +23,27 @@ Os nomes Godot, Unity e Unreal são usados apenas para dizer com o que a camada
 | GDExample (tutorial oficial de GDExtension em C++) | https://github.com/godotengine/godot-docs (`tutorials/scripting/cpp/gdextension_cpp_example.rst`) | CC-BY 3.0 | `33e08e14c517541fac3d9069e82fb3ee2fc99a10` (branch 4.5) | `Sprite2D` herdado, `_process(delta)` virtual, `set_position` nativo | **funciona**: após 60 quadros de 1/60 s a posição é (19.093, 10.707), igual a `10 + 10·sin(2)`, `10 + 10·cos(1.5)` |
 | YParticles3D (partículas em CPU) | https://github.com/DanielSnd/YParticles3D | Unlicense | `22ee8109068d93591dc01dd7eb5d44ead8d136d0` | `Node3D`, `RenderingServer`, `RandomNumberGenerator`, curvas, gradientes | **parcial**: carrega, registra `YParticles3D`, entra na cena e roda quadros sem travar; a camada lista o que falta (`RenderingServer.mesh_create`, `Node3D.get_global_transform`, `RandomNumberGenerator.randf`...) |
 
-Como rodar:
+## Unity (plugins nativos)
+
+| Plugin | Origem | Licença | Commit | O que exercita | Resultado |
+|---|---|---|---|---|---|
+| NativeRenderingPlugin (exemplo oficial de plugin de renderização) | https://github.com/Unity-Technologies/NativeRenderingPlugin | MIT (os cabeçalhos da API de plugin dentro dele têm outra licença e **não** são usados pela camada) | `522254181faf188efa8b50c3e3bf6fce720b26e4` | `UnityPluginLoad`/`Unload`, `IUnityInterfaces`, `IUnityGraphics` (callback de dispositivo), pedido de `IUnityGraphicsVulkan`, `GetRenderEventFunc`, exportações chamadas por `DllImport` | **funciona**: com dispositivo nulo, ciclo de vida e eventos completos; com OpenGL fora de tela (EGL), o plugin desenha o triângulo (6144 pixels coloridos em 256×256) e escreve a textura "plasma" (249 tons) |
+
+Observação: o plugin chama `GetBackBufferWidth()` sem checar se há API gráfica
+ativa; com dispositivo nulo isso derruba o próprio plugin (bug dele, não da camada).
+
+## Como rodar
+
+```sh
+bash compat/scripts/baixar_testes.sh            # tudo (ou: godot | unity | unreal)
+cmake -S compat/tests/unity -B compat/build/unity-tests -DCMAKE_BUILD_TYPE=Release
+nice cmake --build compat/build/unity-tests -j4
+nice cmake --build compat/build/sozinho -j4 --target eruption-compat-unity-gl
+bash compat/scripts/testar_compat.sh            # bateria completa, sem o motor
+bash compat/scripts/testar_motor.sh             # dentro do motor (xvfb)
+```
+
+Passo a passo só do Godot:
 
 ```sh
 bash compat/scripts/baixar_testes.sh godot

@@ -13,6 +13,7 @@
 #include "godot/GodotHost.hpp"
 #include "host/Compat.hpp"
 #include "host/Host.hpp"
+#include "unity/UnityHost.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -52,6 +53,22 @@ int main(int argc, char** argv) {
             std::string r;
             if (godot::chamar(atual, metodo, args, &r)) std::printf("%s() -> %s\n", metodo.c_str(), r.c_str());
             else ++falhas;
+        } else if (op == "--unity") {
+            falhas += carregarPlugin("unity:" + proximo()) ? 0 : 1;
+        } else if (op == "--unity-chamar") {
+            // --unity-chamar Funcao "v(f)" 1.5
+            const std::string nome = proximo();
+            const std::string assinatura = proximo();
+            std::vector<std::string> vals;
+            while (i + 1 < a.size() && !opcao(a[i + 1])) vals.push_back(a[++i]);
+            std::string r;
+            if (unity::chamarFuncao(nome, assinatura, vals, &r)) std::printf("%s%s -> %s\n", nome.c_str(), assinatura.c_str() + 1, r.c_str());
+            else ++falhas;
+        } else if (op == "--unity-evento") {
+            const int id = std::atoi(proximo().c_str());
+            const int n = unity::emitirEventoRender(id);
+            std::printf("evento de render %d entregue a %d plugin(s)\n", id, n);
+            if (n == 0) ++falhas;
         } else if (op == "--dt") {
             dt = std::atof(proximo().c_str());
         } else if (op == "--quadros") {
