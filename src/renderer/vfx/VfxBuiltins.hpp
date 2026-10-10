@@ -27,16 +27,22 @@ void computeVfxCutout(const uint8_t* rgba, uint32_t w, uint32_t h, uint32_t cols
 const std::vector<std::string>& vfxBuiltinNames();
 
 // Malhas de particula que vem com o motor (detritos, estilhacos): geradas na
-// hora, raio ~1 em volta da origem. Vertice: posicao, normal, uv (32 bytes).
+// hora, raio ~1 em volta da origem. Vertice: posicao, normal, uv, oclusao
+// do proprio relevo (1 = aberto) e face de fratura (0..1, rocha recem
+// quebrada: mais clara) - 40 bytes.
 struct VfxMeshVertex {
     float pos[3];
     float normal[3];
     float uv[2];
+    float ao = 1.0f;
+    float fresh = 0.0f;
 };
 struct VfxMeshData {
     std::vector<VfxMeshVertex> vertices;
     std::vector<uint16_t> indices;
 };
+// Sufixo "#lo" = versao de longe (~1/4 dos triangulos, mesma forma): a
+// simulacao troca por ela quando a particula fica pequena na tela.
 bool makeVfxBuiltinMesh(const std::string& name, VfxMeshData& out);
 const std::vector<std::string>& vfxBuiltinMeshNames();
 

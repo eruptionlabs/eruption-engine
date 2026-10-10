@@ -154,11 +154,16 @@ public:
     // profundidade so' leitura: compoe a meia resolucao, desenha as particulas
     // e escreve a cobertura delas na mascara reativa (R8, para o FSR).
     void draw(VkCommandBuffer cmd, VkImageView litView, VkImageView depthView, VkExtent2D extent);
-    // Particulas de malha DENTRO do passe do G-buffer (opacas, luz da cena,
-    // velocidade para o FSR). Usa a simulacao do frame anterior: o passe de
-    // geometria vem antes da simulacao. Sem malha viva nao faz nada.
+    // Particulas de malha num passe do G-buffer reaberto DEPOIS da simulacao
+    // (opacas, luz da cena, velocidade para o FSR): a colisao le' a
+    // profundidade sem elas. Sem malha viva nao faz nada.
     void drawMeshes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent, const Mat4& viewProjNoJitter,
                     const Mat4& prevViewProjNoJitter);
+    // Ha' malha simulada para o G-buffer (o chamador so' reabre o passe se sim).
+    bool meshesPending() const { return m_ready && m_active && m_meshMaskSimulated != 0 && !m_forwardMeshes; }
+    // Sombra das malhas na cascata `lightViewProj` (dentro do passe de sombra,
+    // viewport ja' posto). Le' a simulacao do frame anterior.
+    void drawMeshShadows(VkCommandBuffer cmd, const Mat4& lightViewProj);
     // Luzes dos emissores com "light" (uma por emissor tocando), em unidades
     // de mundo. CPU, sem leitura da GPU. Luzes vizinhas (dentro de meio raio)
     // viram uma so' (dez fogueiras juntas = uma luz forte, nao dez esferas
@@ -257,6 +262,13 @@ private:
     VkPipelineLayout m_meshLayout = VK_NULL_HANDLE;
     VkPipeline m_meshPipe = VK_NULL_HANDLE;    // malha no G-buffer
     VkPipeline m_meshFwdPipe = VK_NULL_HANDLE; // malha na previa (forward)
+    // Sombra das malhas: set proprio so' com a lista e os registros (o set de
+    // desenho pode ser reescrito depois do passe de sombra, no mesmo frame).
+    VkDescriptorSetLayout m_shadowSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_meshShadowLayout = VK_NULL_HANDLE;
+    VkPipeline m_meshShadowPipe = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_shadowSets{};
+    std::array<bool, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_shadowSetWritten{};
     uint32_t meshId(const std::string& name);
     void recordMeshes(VkCommandBuffer cmd, VkPipeline pipe, VkExtent2D extent, const Mat4& vp, const Mat4& prevVp);
     uint32_t m_meshMask = 0;          // malhas em uso neste frame (CPU)
@@ -303,6 +315,7 @@ private:
         std::string name;
         Buf vb, ib;
         uint32_t indexCount = 0;
+        bool lod = false; // versao de longe ("#lo"): sem sombra
     };
     std::vector<GpuMesh> m_meshes;
     // Aneis das fitas: um buffer, faixas de tamanho potencia de 2 por emissor.

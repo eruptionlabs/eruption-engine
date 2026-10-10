@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include "renderer/VulkanContext.hpp"
 #include "renderer/BindlessDescriptor.hpp"
 #include "math/Types.hpp"
@@ -138,6 +140,11 @@ public:
     void setShadowSnaps(const float* yawSnaps, const float* timeSnaps, uint32_t count);
     void updateCascades(const DirectionalLight& light, const Camera& camera, float zoomPercent, float timeOfDay);
     void renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrain, ModelRenderer* models, SpriteRenderer* sprites, const FrameUBO& frameUbo, VkBuffer spriteInstanceBuffer, uint32_t spriteCount);
+    // Oclusores extras em cada cascata, depois dos sprites (particulas de
+    // malha). Recebe a matriz da cascata e o indice dela (0 = a mais perto).
+    void setExtraCasters(std::function<void(VkCommandBuffer, const Mat4&, uint32_t)> fn) {
+        m_extraCasters = std::move(fn);
+    }
 
     // Accessors
     VkImageView shadowAtlasView() const { return m_atlasView; }
@@ -181,6 +188,7 @@ public:
     float m_shadowTimeSnaps[MAX_SHADOW_SNAPS] = {0};
 
 private:
+    std::function<void(VkCommandBuffer, const Mat4&, uint32_t)> m_extraCasters;
     VulkanContext* m_ctx = nullptr;
     BindlessDescriptor* m_bindless = nullptr;
 

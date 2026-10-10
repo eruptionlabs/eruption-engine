@@ -514,6 +514,11 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_shadowConfig.load("data/shadows.json");
     m_shadowRenderer.settings().loadFromJson(m_shadowConfig.root());
     if (!m_shadowRenderer.init(&m_vulkan, &m_bindless)) return false;
+    // Particulas de malha fazem sombra nas duas cascatas de perto (nas de
+    // longe uma pedra de palmo nao chega a um texel).
+    m_shadowRenderer.setExtraCasters([this](VkCommandBuffer cmd, const Mat4& m, uint32_t cascade) {
+        if (cascade < 2) m_vfx.drawMeshShadows(cmd, m);
+    });
 
     m_postConfig.load("data/postprocess.json");
     m_postSettings.loadFromJson(m_postConfig.root());

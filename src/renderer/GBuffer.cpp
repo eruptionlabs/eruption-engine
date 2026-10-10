@@ -67,8 +67,17 @@ void GBuffer::resize(uint32_t width, uint32_t height) {
     init(m_ctx, width, height);
 }
 
+void GBuffer::resumePass(VkCommandBuffer cmd) {
+    transitionToWrite(cmd, true);
+    beginRendering(cmd, VK_ATTACHMENT_LOAD_OP_LOAD);
+}
+
 void GBuffer::beginPass(VkCommandBuffer cmd) {
     transitionToWrite(cmd);
+    beginRendering(cmd, VK_ATTACHMENT_LOAD_OP_CLEAR);
+}
+
+void GBuffer::beginRendering(VkCommandBuffer cmd, VkAttachmentLoadOp loadOp) {
 
     VkRenderingAttachmentInfo colorAttachments[6];
 
@@ -76,7 +85,7 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
     colorAttachments[0].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachments[0].imageView = m_albedoView;
     colorAttachments[0].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[0].loadOp = loadOp;
     colorAttachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachments[0].clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
 
@@ -84,7 +93,7 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
     colorAttachments[1].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachments[1].imageView = m_normalView;
     colorAttachments[1].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[1].loadOp = loadOp;
     colorAttachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachments[1].clearValue.color = {{0.5f, 0.5f, 1.0f, 0.5f}};
 
@@ -92,7 +101,7 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
     colorAttachments[2].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachments[2].imageView = m_pbrView;
     colorAttachments[2].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[2].loadOp = loadOp;
     colorAttachments[2].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachments[2].clearValue.color = {{0.0f, 0.5f, 0.0f, 1.0f}};
 
@@ -100,7 +109,7 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
     colorAttachments[3].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachments[3].imageView = m_materialView;
     colorAttachments[3].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachments[3].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[3].loadOp = loadOp;
     colorAttachments[3].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachments[3].clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
 
@@ -108,7 +117,7 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
     colorAttachments[4].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachments[4].imageView = m_emissiveView;
     colorAttachments[4].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachments[4].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[4].loadOp = loadOp;
     colorAttachments[4].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachments[4].clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
 
@@ -116,7 +125,7 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
     colorAttachments[5].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachments[5].imageView = m_velocityView;
     colorAttachments[5].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachments[5].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[5].loadOp = loadOp;
     colorAttachments[5].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachments[5].clearValue.color = {{kVelocitySentinel, kVelocitySentinel, 0.0f, 0.0f}};
 
@@ -125,7 +134,7 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
     depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     depthAttachment.imageView = m_depthView;
     depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.loadOp = loadOp;
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depthAttachment.clearValue.depthStencil = {1.0f, 0};
 
@@ -138,7 +147,7 @@ void GBuffer::beginPass(VkCommandBuffer cmd) {
     renderingInfo.pDepthAttachment = &depthAttachment;
 
     vkc::cmdBeginRendering(cmd, &renderingInfo);
-    ERUPTION_LOG_TRACE("GBuffer::beginPass() %ux%u", m_width, m_height);
+    ERUPTION_LOG_TRACE("GBuffer::beginRendering() %ux%u", m_width, m_height);
 
     VkViewport viewport{};
     viewport.width = static_cast<float>(m_width);
@@ -204,18 +213,22 @@ void GBuffer::transitionToRead(VkCommandBuffer cmd) {
     m_ctx->cmdImageBarriers(cmd, barriers);
 }
 
-void GBuffer::transitionToWrite(VkCommandBuffer cmd) {
+void GBuffer::transitionToWrite(VkCommandBuffer cmd, bool preserve) {
+    // preserve: vem de SHADER_READ (lido por fragment/compute) e mantem o
+    // conteudo; senao o conteudo e' descartado (o passe vai limpar).
+    const bool fromRead = preserve && m_inReadState;
     m_inReadState = false;
     std::vector<VkImageMemoryBarrier2> barriers;
     barriers.reserve(7);
     auto addColor = [&](VkImage image) {
         VkImageMemoryBarrier2 b{};
         b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        b.srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        b.srcStageMask = fromRead ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                  : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         b.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         b.srcAccessMask = 0;
-        b.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        b.oldLayout = fromRead ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
         b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -232,11 +245,12 @@ void GBuffer::transitionToWrite(VkCommandBuffer cmd) {
 
     VkImageMemoryBarrier2 depthB{};
     depthB.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    depthB.srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    depthB.srcStageMask = fromRead ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                   : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
     depthB.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     depthB.srcAccessMask = 0;
-    depthB.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    depthB.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthB.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    depthB.oldLayout = fromRead ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
     depthB.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthB.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     depthB.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;

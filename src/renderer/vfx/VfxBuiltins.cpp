@@ -213,36 +213,37 @@ const std::vector<std::string>& vfxBuiltinNames() {
 
 namespace {
 
-// Faces planas (normal por face): bom para pedra e estilhaco lidos de longe.
-void addTri(VfxMeshData& m, const float a[3], const float b[3], const float c[3]) {
-    const float u[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
-    const float v[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
-    float n[3] = {u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
-    const float l = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) + 1e-12f;
-    for (float& x : n) x /= l;
-    const float* p[3] = {a, b, c};
-    const float uv[3][2] = {{0.0f, 0.0f}, {1.0f, 0.0f}, {0.5f, 1.0f}};
-    for (int k = 0; k < 3; ++k) {
-        VfxMeshVertex vx{};
-        for (int j = 0; j < 3; ++j) {
-            vx.pos[j] = p[k][j];
-            vx.normal[j] = n[j];
-        }
-        vx.uv[0] = uv[k][0];
-        vx.uv[1] = uv[k][1];
-        m.indices.push_back(uint16_t(m.vertices.size()));
-        m.vertices.push_back(vx);
-    }
+// Malha de trabalho indexada (posicao compartilhada entre faces vizinhas).
+struct WorkMesh {
+    std::vector<std::array<float, 3>> v;
+    std::vector<std::array<int, 3>> f;
+};
+
+float dot3(const std::array<float, 3>& a, const std::array<float, 3>& b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-void icosphere(int subdiv, float jitter, uint32_t seed, VfxMeshData& m) {
+std::array<float, 3> normalized(std::array<float, 3> a) {
+    const float l = std::sqrt(dot3(a, a)) + 1e-12f;
+    return {a[0] / l, a[1] / l, a[2] / l};
+}
+
+// Direcao uniforme na esfera a partir de dois sorteios.
+std::array<float, 3> randomDir(uint32_t seed, int k) {
+    const float z = hash2(k, int(seed), 11) * 2.0f - 1.0f;
+    const float phi = hash2(k, int(seed), 12) * 6.2831853f;
+    const float r = std::sqrt(std::max(0.0f, 1.0f - z * z));
+    return {r * std::cos(phi), z, r * std::sin(phi)};
+}
+
+WorkMesh icosphere(int subdiv) {
     const float t = 1.6180339887f;
-    std::vector<std::array<float, 3>> v = {{-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0}, {0, -1, t}, {0, 1, t},
-                                           {0, -1, -t}, {0, 1, -t}, {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}};
-    std::vector<std::array<int, 3>> f = {{0, 11, 5}, {0, 5, 1},  {0, 1, 7},   {0, 7, 10}, {0, 10, 11},
-                                         {1, 5, 9},  {5, 11, 4}, {11, 10, 2}, {10, 7, 6}, {7, 1, 8},
-                                         {3, 9, 4},  {3, 4, 2},  {3, 2, 6},   {3, 6, 8},  {3, 8, 9},
-                                         {4, 9, 5},  {2, 4, 11}, {6, 2, 10},  {8, 6, 7},  {9, 8, 1}};
+    WorkMesh m;
+    m.v = {{-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0}, {0, -1, t}, {0, 1, t},
+           {0, -1, -t}, {0, 1, -t}, {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}};
+    m.f = {{0, 11, 5}, {0, 5, 1},  {0, 1, 7},   {0, 7, 10}, {0, 10, 11}, {1, 5, 9},  {5, 11, 4},
+           {11, 10, 2}, {10, 7, 6}, {7, 1, 8},  {3, 9, 4},  {3, 4, 2},   {3, 2, 6},  {3, 6, 8},
+           {3, 8, 9},  {4, 9, 5},  {2, 4, 11}, {6, 2, 10}, {8, 6, 7},   {9, 8, 1}};
     for (int s = 0; s < subdiv; ++s) {
         std::vector<std::array<int, 3>> nf;
         std::map<std::pair<int, int>, int> mid;
@@ -250,55 +251,155 @@ void icosphere(int subdiv, float jitter, uint32_t seed, VfxMeshData& m) {
             auto key = std::make_pair(std::min(a, b), std::max(a, b));
             auto it = mid.find(key);
             if (it != mid.end()) return it->second;
-            v.push_back({(v[a][0] + v[b][0]) * 0.5f, (v[a][1] + v[b][1]) * 0.5f, (v[a][2] + v[b][2]) * 0.5f});
-            return mid[key] = int(v.size()) - 1;
+            m.v.push_back({(m.v[a][0] + m.v[b][0]) * 0.5f, (m.v[a][1] + m.v[b][1]) * 0.5f,
+                           (m.v[a][2] + m.v[b][2]) * 0.5f});
+            return mid[key] = int(m.v.size()) - 1;
         };
-        for (const auto& tri : f) {
+        for (const auto& tri : m.f) {
             const int ab = midpoint(tri[0], tri[1]), bc = midpoint(tri[1], tri[2]), ca = midpoint(tri[2], tri[0]);
             nf.push_back({tri[0], ab, ca});
             nf.push_back({tri[1], bc, ab});
             nf.push_back({tri[2], ca, bc});
             nf.push_back({ab, bc, ca});
         }
-        f = nf;
+        m.f = nf;
     }
-    for (size_t i = 0; i < v.size(); ++i) {
-        const float l = std::sqrt(v[i][0] * v[i][0] + v[i][1] * v[i][1] + v[i][2] * v[i][2]);
-        const float r = 1.0f + jitter * (hash2(int(i), int(seed), 3) - 0.5f) * 2.0f;
-        for (float& x : v[i]) x = x / l * r;
+    for (auto& p : m.v) p = normalized(p);
+    return m;
+}
+
+// Gera os vertices finais. Normal suave dentro do angulo de vinco (faces
+// vizinhas quase planas somam), quina viva acima dele: e' o que faz a face
+// de fratura ler como corte e o resto como pedra gasta. A oclusao sai da
+// curvatura: vizinho a frente da normal = vertice num fundo (concavo).
+void emitMesh(const WorkMesh& m, float creaseDeg, const std::vector<float>& fresh, VfxMeshData& out) {
+    const size_t nv = m.v.size(), nf = m.f.size();
+    std::vector<std::array<float, 3>> fn(nf), fu(nf);
+    std::vector<std::vector<int>> adj(nv);
+    std::vector<std::vector<int>> nbr(nv);
+    for (size_t i = 0; i < nf; ++i) {
+        const auto& a = m.v[m.f[i][0]];
+        const auto& b = m.v[m.f[i][1]];
+        const auto& c = m.v[m.f[i][2]];
+        const std::array<float, 3> u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+        const std::array<float, 3> w{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+        fn[i] = {u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]};
+        fu[i] = normalized(fn[i]);
+        for (int k = 0; k < 3; ++k) {
+            adj[m.f[i][k]].push_back(int(i));
+            nbr[m.f[i][k]].push_back(m.f[i][(k + 1) % 3]);
+        }
     }
-    for (const auto& tri : f) addTri(m, v[tri[0]].data(), v[tri[1]].data(), v[tri[2]].data());
+    std::vector<float> ao(nv, 1.0f);
+    for (size_t i = 0; i < nv; ++i) {
+        std::array<float, 3> n{0, 0, 0};
+        for (int g : adj[i])
+            for (int k = 0; k < 3; ++k) n[k] += fn[g][k];
+        n = normalized(n);
+        float conc = 0.0f;
+        for (int j : nbr[i]) {
+            const std::array<float, 3> d{m.v[j][0] - m.v[i][0], m.v[j][1] - m.v[i][1], m.v[j][2] - m.v[i][2]};
+            conc += dot3(n, normalized(d));
+        }
+        conc /= float(std::max<size_t>(nbr[i].size(), 1));
+        ao[i] = std::clamp(1.0f - conc * 2.2f, 0.45f, 1.0f);
+    }
+    const float cosCrease = std::cos(creaseDeg * 3.14159265f / 180.0f);
+    std::map<std::pair<int, std::array<float, 3>>, uint16_t> weld;
+    for (size_t i = 0; i < nf; ++i) {
+        for (int k = 0; k < 3; ++k) {
+            const int vi = m.f[i][k];
+            std::array<float, 3> n{0, 0, 0};
+            for (int g : adj[vi])
+                if (dot3(fu[g], fu[i]) >= cosCrease)
+                    for (int c = 0; c < 3; ++c) n[c] += fn[g][c];
+            n = normalized(n);
+            const auto d = normalized(m.v[vi]);
+            VfxMeshVertex vx{};
+            for (int c = 0; c < 3; ++c) {
+                vx.pos[c] = m.v[vi][c];
+                vx.normal[c] = n[c];
+            }
+            vx.uv[0] = std::atan2(d[2], d[0]) * (0.5f / 3.14159265f) + 0.5f;
+            vx.uv[1] = std::acos(std::clamp(d[1], -1.0f, 1.0f)) / 3.14159265f;
+            vx.ao = ao[vi];
+            vx.fresh = fresh.empty() ? 0.0f : fresh[vi];
+            // Canto igual (mesma posicao e normal dentro do vinco) vira um
+            // vertice so': ~metade dos vertices, o vertex shader roda menos.
+            const auto key = std::make_pair(vi, std::array<float, 3>{n[0], n[1], n[2]});
+            auto it = weld.find(key);
+            if (it == weld.end()) {
+                it = weld.emplace(key, uint16_t(out.vertices.size())).first;
+                out.vertices.push_back(vx);
+            }
+            out.indices.push_back(it->second);
+        }
+    }
+}
+
+// Pedra: esfera com relevo de baixa frequencia, cortada por planos
+// sorteados (as faces de fratura) e achatada. Raio maximo 1.
+void makeRock(uint32_t seed, int subdiv, int cuts, float cutMin, const std::array<float, 3>& scale, float crease,
+              VfxMeshData& out) {
+    WorkMesh m = icosphere(subdiv);
+    std::vector<float> fresh(m.v.size(), 0.0f);
+    std::array<float, 3> waveDir[4];
+    for (int k = 0; k < 4; ++k) waveDir[k] = randomDir(seed, 40 + k);
+    for (auto& p : m.v) {
+        float r = 1.0f;
+        for (int k = 0; k < 4; ++k)
+            r += 0.07f * std::sin(dot3(p, waveDir[k]) * (2.0f + float(k)) + hash2(k, int(seed), 13) * 6.2831853f);
+        for (float& x : p) x *= r;
+    }
+    for (int c = 0; c < cuts; ++c) {
+        const auto n = randomDir(seed, c);
+        const float d = cutMin + (0.85f - cutMin) * hash2(c, int(seed), 14);
+        for (size_t i = 0; i < m.v.size(); ++i) {
+            const float s = dot3(m.v[i], n) - d;
+            if (s <= 0.0f) continue;
+            for (int k = 0; k < 3; ++k) m.v[i][k] -= s * n[k];
+            fresh[i] = 1.0f;
+        }
+    }
+    float rmax = 1e-6f;
+    for (auto& p : m.v) {
+        for (int k = 0; k < 3; ++k) p[k] *= scale[k];
+        rmax = std::max(rmax, std::sqrt(dot3(p, p)));
+    }
+    for (auto& p : m.v)
+        for (float& x : p) x /= rmax;
+    emitMesh(m, crease, fresh, out);
 }
 
 } // namespace
 
-bool makeVfxBuiltinMesh(const std::string& name, VfxMeshData& out) {
+bool makeVfxBuiltinMesh(const std::string& fullName, VfxMeshData& out) {
     out = VfxMeshData{};
+    const bool lo = fullName.size() > 3 && fullName.compare(fullName.size() - 3, 3, "#lo") == 0;
+    const std::string name = lo ? fullName.substr(0, fullName.size() - 3) : fullName;
+    const int sub = lo ? 1 : 2; // subdivisoes da esfera base (320 -> 80 triangulos)
     if (name == "builtin:cube") {
-        const float c[8][3] = {{-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1},
-                               {-1, -1, 1},  {1, -1, 1},  {1, 1, 1},  {-1, 1, 1}};
+        WorkMesh m;
+        const float c = 0.7f;
+        m.v = {{-c, -c, -c}, {c, -c, -c}, {c, c, -c}, {-c, c, -c}, {-c, -c, c}, {c, -c, c}, {c, c, c}, {-c, c, c}};
         const int q[6][4] = {{0, 3, 2, 1}, {4, 5, 6, 7}, {0, 1, 5, 4}, {3, 7, 6, 2}, {0, 4, 7, 3}, {1, 2, 6, 5}};
         for (const auto& f : q) {
-            float a[3], b[3], cc[3], d[3];
-            for (int j = 0; j < 3; ++j) {
-                a[j] = c[f[0]][j] * 0.7f;
-                b[j] = c[f[1]][j] * 0.7f;
-                cc[j] = c[f[2]][j] * 0.7f;
-                d[j] = c[f[3]][j] * 0.7f;
-            }
-            addTri(out, a, b, cc);
-            addTri(out, a, cc, d);
+            m.f.push_back({f[0], f[1], f[2]});
+            m.f.push_back({f[0], f[2], f[3]});
         }
+        emitMesh(m, 10.0f, {}, out);
+        for (auto& v : out.vertices) v.ao = 1.0f; // cubo nao tem fundo
     } else if (name == "builtin:shard") {
-        // Estilhaco: octaedro esticado e torto.
-        const float v[6][3] = {{0.0f, 1.3f, 0.1f}, {0.0f, -1.1f, -0.1f}, {0.55f, 0.1f, 0.0f},
-                               {-0.45f, 0.0f, 0.1f}, {0.05f, 0.2f, 0.35f}, {0.0f, -0.1f, -0.3f}};
-        const int t[8][3] = {{0, 2, 4}, {0, 4, 3}, {0, 3, 5}, {0, 5, 2}, {1, 4, 2}, {1, 3, 4}, {1, 5, 3}, {1, 2, 5}};
-        for (const auto& tri : t) addTri(out, v[tri[0]], v[tri[1]], v[tri[2]]);
+        // Estilhaco: lasca fina e comprida, quase so' face de corte.
+        makeRock(23u, sub - 1, 6, 0.45f, {1.0f, 0.3f, 0.55f}, 20.0f, out);
     } else if (name == "builtin:rock") {
-        icosphere(1, 0.35f, 7u, out);
+        // Bloco de fratura: muitos cortes fundos (faces planas grandes), o
+        // resto da esfera vira quina gasta. Vinco baixo: aresta viva.
+        makeRock(7u, sub, 11, 0.38f, {1.0f, 0.78f, 0.9f}, 22.0f, out);
     } else if (name == "builtin:sphere") {
-        icosphere(2, 0.0f, 0u, out);
+        WorkMesh m = icosphere(sub);
+        emitMesh(m, 90.0f, {}, out);
+        for (auto& v : out.vertices) v.ao = 1.0f;
     } else {
         return false;
     }

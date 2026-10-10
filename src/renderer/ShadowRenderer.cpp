@@ -1170,6 +1170,7 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
                 sprites->renderShadow(cmd, m_shadowLayout, renderMats[i], frameUbo, spriteInstanceBuffer, spriteCount);
             }
             lap("sprites");
+            if (m_extraCasters) m_extraCasters(cmd, renderMats[i], i);
 
             if (i == drawCount - 1) {
                 m_ctx->cmdEndRendering(cmd);
