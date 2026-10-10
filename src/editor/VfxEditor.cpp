@@ -68,12 +68,14 @@ void VfxEditor::init(Engine* engine) {
     m_engine = engine;
     m_previewReady = m_preview.init(*engine);
     if (m_previewReady) m_preview.frame();
+    m_graphEditor.init();
 }
 
 void VfxEditor::shutdown() {
     playInScene(false);
     if (m_previewReady) m_preview.shutdown();
     m_previewReady = false;
+    m_graphEditor.shutdown();
 }
 
 void VfxEditor::renderPreview(VkCommandBuffer cmd, float dt) {
@@ -182,8 +184,8 @@ void VfxEditor::applyLive() {
 
 void VfxEditor::trackUndo() {
     // Um passo de desfazer por gesto: so' fecha o retrato quando nenhum
-    // controle esta' sendo arrastado.
-    if (ImGui::IsAnyItemActive()) return;
+    // controle (nem no do grafo) esta' sendo arrastado.
+    if (ImGui::IsAnyItemActive() || ImGui::IsMouseDown(ImGuiMouseButton_Left)) return;
     std::string now = vfxEffectToJson(m_fx);
     if (now == m_snapshot) return;
     m_undo.push_back(std::move(m_snapshot));
@@ -291,6 +293,13 @@ void VfxEditor::draw(bool* open) {
     ImGui::TextDisabled("%s%s%s", m_path.empty() ? tr("(not saved)") : m_path.c_str(), m_dirty ? " *" : "",
                         m_status.empty() ? "" : ("   " + m_status).c_str());
     ImGui::End();
+
+    // Janela do grafo do emissor selecionado.
+    if (m_showGraph && m_sel >= 0 && m_sel < int(m_fx.emitters.size())) {
+        VfxEmitterDesc& e = m_fx.emitters[size_t(m_sel)];
+        const std::string key = m_name + "#" + std::to_string(m_sel);
+        if (m_graphEditor.draw(trw("Effect Graph"), key, e.graph, &m_showGraph)) applyLive();
+    }
 
     trackUndo();
 }
@@ -472,6 +481,33 @@ bool VfxEditor::drawEmitter(VfxEmitterDesc& e) {
         c |= gradientEditor("##grad", e.color);
         ImGui::TextUnformatted(tr("Size multiplier"));
         c |= curveEditor("##size", e.sizeOverLife);
+    }
+    if (ImGui::CollapsingHeader(tr("Graph"), ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (e.graph.empty()) ImGui::TextDisabled("%s", tr("No graph: only the modules above."));
+        else ImGui::TextDisabled(tr("%zu nodes, %zu links"), e.graph.nodes.size(), e.graph.links.size());
+        if (ImGui::Button(e.graph.empty() ? tr("Create graph") : tr("Open graph"))) {
+            if (e.graph.empty()) {
+                // Ponto de partida: forca = turbulencia(posicao, tempo) x 0.
+                VfxGraph& g = e.graph;
+                g = VfxGraph{};
+                g.nodes.push_back({1, "in_position", Vec4(0.0f), Vec2(0.0f, 0.0f)});
+                g.nodes.push_back({2, "in_time", Vec4(0.0f), Vec2(0.0f, 90.0f)});
+                g.nodes.push_back({3, "noise", Vec4(0.0f), Vec2(200.0f, 30.0f)});
+                g.nodes.push_back({4, "mul", Vec4(0.0f, 0.0f, 0.0f, 0.0f), Vec2(380.0f, 30.0f)});
+                g.nodes.push_back({5, "out_force", Vec4(0.0f), Vec2(560.0f, 30.0f)});
+                g.links = {{1, 0, 3, 0}, {2, 0, 3, 1}, {3, 0, 4, 0}, {4, 0, 5, 0}};
+                g.nextId = 6;
+                c = true;
+            }
+            m_showGraph = true;
+        }
+        if (!e.graph.empty()) {
+            ImGui::SameLine();
+            if (ImGui::Button(tr("Remove graph"))) {
+                e.graph = VfxGraph{};
+                c = true;
+            }
+        }
     }
     if (ImGui::CollapsingHeader(tr("Render"), ImGuiTreeNodeFlags_DefaultOpen)) {
         uint32_t b = uint32_t(e.blend);

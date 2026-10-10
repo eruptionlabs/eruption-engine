@@ -29,7 +29,7 @@ const std::vector<VfxGraphNodeType>& vfxGraphCatalog() {
         {"const_vec3", "Vector", "Constant", 0, 1, {}, {"xyz"}, Const},
         {"const_color", "Color", "Constant", 0, 1, {}, {"rgba"}, Const},
         // Matematica (componente a componente)
-        {"add", "Add", "Math", 2, 1, {"a", "b"}, {"a+b"}, Add},
+        {"add", "Sum", "Math", 2, 1, {"a", "b"}, {"a+b"}, Add},
         {"sub", "Subtract", "Math", 2, 1, {"a", "b"}, {"a-b"}, Sub},
         {"mul", "Multiply", "Math", 2, 1, {"a", "b"}, {"a*b"}, Mul},
         {"div", "Divide", "Math", 2, 1, {"a", "b"}, {"a/b"}, Div},

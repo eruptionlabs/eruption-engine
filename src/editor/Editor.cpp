@@ -840,6 +840,7 @@ void Editor::update(float dt) {
                 m_showVfxEditor = m_vfxEditor.openEffect(arg);
             }
             else if (what == "vfx_sel") m_vfxEditor.selectEmitter(std::atoi(arg.c_str()));
+            else if (what == "vfx_graph") m_vfxEditor.showGraph(true);
             else if (what == "viewer_full") m_viewerFullscreen = true;
             else if (what == "viewer_anim") m_modelPreview.animation = std::atoi(arg.c_str());
             else if (what == "cmd") m_commands.run(arg);

@@ -10,6 +10,7 @@
 // cena). Desfazer/refazer guarda o efeito inteiro em texto (mesmo formato do
 // arquivo .vfx.json).
 
+#include "editor/VfxGraphEditor.hpp"
 #include "editor/VfxPreview.hpp"
 #include "renderer/vfx/VfxEffect.hpp"
 
@@ -34,6 +35,7 @@ public:
     const std::string& currentName() const { return m_name; }
     int selectedEmitter() const { return m_sel; }
     void selectEmitter(int i) { m_sel = i; }
+    void showGraph(bool on) { m_showGraph = on; }
 
 private:
     struct LibraryItem {
@@ -59,6 +61,8 @@ private:
 
     Engine* m_engine = nullptr;
     VfxPreview m_preview;
+    VfxGraphEditor m_graphEditor;
+    bool m_showGraph = false;
     bool m_visible = false;
     bool m_previewReady = false;
 
