@@ -14,6 +14,7 @@
 #include "game/PlayerController.hpp"
 #include "game/HudRenderer.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "core/Input.hpp"
 #include "core/JobSystem.hpp"
 #include "utils/Profiler.hpp"
@@ -2135,7 +2136,7 @@ void Engine::renderImGui() {
                                         sources.erase(sources.begin() + srcIdx);
                                         if (srcIdx < i) i--;
                                         sources.insert(sources.begin() + i, moved);
-                                        m_resourceConfig.save("resources.ini");
+                                        m_resourceConfig.save(project::game("resources.ini").string());
                                         m_packManager.clear();
                                         for (const auto& entry : sources) { m_packManager.addDirectory(entry.path); }
                                         populateMaps();
@@ -2149,7 +2150,7 @@ void Engine::renderImGui() {
                             ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 60);
                             if (ImGui::Button("Remove", ImVec2(60, 0))) {
                                 sources.erase(sources.begin() + i);
-                                m_resourceConfig.save("resources.ini");
+                                m_resourceConfig.save(project::game("resources.ini").string());
                                 m_packManager.clear();
                                 for (const auto& entry : sources) { m_packManager.addDirectory(entry.path); }
                                 populateMaps(); i--;
@@ -2162,7 +2163,7 @@ void Engine::renderImGui() {
                         if (ImGui::Button("Add")) {
                             if (newPath[0] != '\0') {
                                 ResourceEntry entry; entry.path = newPath; entry.isDirectory = newIsDir;
-                                sources.push_back(entry); m_resourceConfig.save("resources.ini");
+                                sources.push_back(entry); m_resourceConfig.save(project::game("resources.ini").string());
                                 m_packManager.addDirectory(entry.path);
                                 populateMaps(); newPath[0] = '\0';
                             }

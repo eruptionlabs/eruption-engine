@@ -61,6 +61,25 @@ To run a specific map:
 ./launch.sh --map parana_field_lite
 ```
 
+### Game projects
+
+A game lives in its own folder, outside this repository: maps, scenes,
+prefabs, scripts, sprites, animations, effects and sounds, plus a
+`project.eruption` manifest with the game's name and startup map.
+
+```bash
+./eruption-engine --new-project ~/my-game --project-name "My Game"   # create it
+./launch.sh --project ~/my-game                                     # open it
+```
+
+With a project open, the engine reads the game's content only from the
+project folder; the repository keeps providing what belongs to the engine
+(shaders, window icon, UI languages, default settings). Without `--project`
+nothing changes: the engine opens a single map from this folder, as before.
+In the editor, **File > Game Project...** creates, opens and configures one
+(changing projects reopens the editor). The last project opened is
+remembered in `data/launcher_config.json`.
+
 The `parana_field_lite` demo map uses CC0 textures only. Its `.glb` file is larger than GitHub allows, so it ships as a release asset: the first CMake configure downloads it automatically (about 170 MB) and verifies its checksum. To fetch it by hand, run `tools/fetch_demo_map.sh`; to skip it, pass `-DERUPTION_FETCH_DEMO_MAP=OFF`. On the first load the engine compresses the embedded textures and caches the result next to the map. `parana_field` is the same map with the original, full-detail models (about 25 million unique triangles, 409 MB): a stress map, not downloaded by the build.
 
 ## Layout

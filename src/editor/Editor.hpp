@@ -125,6 +125,9 @@ private:
     bool createFlatMap(const std::string& name, float size, std::string& error);
     void drawShortcutsWindow();
     void drawWelcome();
+    // Projeto de jogo (EditorProject.cpp)
+    void drawGameProjectWindow();
+    void openGameProject(const std::filesystem::path& dir);
     void drawRules();
     void drawTelemetry();
     // Cena como dado (EditorScene.cpp)
@@ -288,6 +291,20 @@ private:
     bool m_showHierarchy = true, m_showInspector = true, m_showProject = true, m_showConsole = true;
     bool m_showShortcuts = false;
     bool m_showWelcome = true;
+    bool m_showGameProject = false;
+    // Janela do projeto de jogo: o que esta' escrito nos campos antes de
+    // gravar no project.eruption.
+    struct ProjectPanel {
+        bool loaded = false;
+        char name[96] = {};
+        char version[32] = {};
+        char author[96] = {};
+        char description[256] = {};
+        char newName[96] = {};
+        char newPath[512] = {};
+        char openPath[512] = {};
+        std::string error;
+    } m_projectPanel;
     bool m_paletteOpen = false;
     bool m_newMapOpen = false;
     char m_newMapName[64] = {};
@@ -459,7 +476,8 @@ private:
     char m_consoleFilter[128] = {};
     bool m_consoleShow[3] = {true, true, true}; // info, aviso, erro
     bool m_consoleAutoScroll = true;
-    std::filesystem::path m_projectRoot;
+    std::filesystem::path m_projectRoot; // pasta do jogo (projeto aberto)
+    std::filesystem::path m_engineRoot;  // pasta do motor (programa, shaders)
     std::filesystem::path m_projectDir;
     std::string m_projectSelected;
     std::string m_pendingMap;

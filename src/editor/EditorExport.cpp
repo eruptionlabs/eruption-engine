@@ -4,6 +4,7 @@
 #include "editor/Translate.hpp"
 
 #include "core/Engine.hpp"
+#include "core/Project.hpp"
 #include "editor/EditorTheme.hpp"
 #include "editor/GameExport.hpp"
 
@@ -25,14 +26,15 @@ void Editor::startExport() {
     if (ex.running) return;
     ExportOptions o;
     o.projectRoot = m_projectRoot;
+    o.engineRoot = m_engineRoot;
     for (const auto& [map, on] : ex.maps)
         if (on) o.maps.push_back(map);
     // O mapa aberto vem primeiro (é onde o jogo começa).
     std::stable_partition(o.maps.begin(), o.maps.end(), [&](const std::string& m) { return m == m_engine->currentMapName(); });
     o.outDir = ex.outDir;
     std::error_code ec;
-    o.binary = std::filesystem::exists(leanBinary(m_projectRoot), ec) ? leanBinary(m_projectRoot)
-                                                                      : m_projectRoot / "eruption-engine";
+    o.binary = std::filesystem::exists(leanBinary(m_engineRoot), ec) ? leanBinary(m_engineRoot)
+                                                                     : m_engineRoot / "eruption-engine";
     ex.running = true;
     ex.status = "Exporting...";
     std::thread([this, o] {
@@ -101,10 +103,10 @@ void Editor::drawExportWindow() {
     ImGui::InputText("##out", ex.outDir, sizeof(ex.outDir));
     ImGui::SeparatorText(tr("Game program"));
     std::error_code ec;
-    const bool lean = std::filesystem::exists(leanBinary(m_projectRoot), ec);
+    const bool lean = std::filesystem::exists(leanBinary(m_engineRoot), ec);
     if (lean) {
         ImGui::TextColored(ImVec4(0.5f, 0.85f, 0.5f, 1.0f), tr("Small game program (no editor): %.1f MB"),
-                           std::filesystem::file_size(leanBinary(m_projectRoot), ec) / (1024.0 * 1024.0));
+                           std::filesystem::file_size(leanBinary(m_engineRoot), ec) / (1024.0 * 1024.0));
     } else {
         ImGui::TextWrapped("%s", tr("The small game program is not built yet; the export would carry the editor's program."));
     }
@@ -118,7 +120,7 @@ void Editor::drawExportWindow() {
     ImGui::SameLine();
     ImGui::TextDisabled("%s", ex.usesSound ? tr("(the project plays sound)") : tr("(no sound found in the project)"));
     BuildProfile built;
-    const bool hasProfile = lean && builtProfile(m_projectRoot / "build-export", built);
+    const bool hasProfile = lean && builtProfile(m_engineRoot / "build-export", built);
     const bool stale = lean && (!hasProfile || built.audio != ex.audio);
     if (stale)
         ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", tr("The game program was built with other modules: rebuild it."));

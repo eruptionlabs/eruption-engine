@@ -5,6 +5,7 @@
 #include "editor/Translate.hpp"
 
 #include "core/Engine.hpp"
+#include "core/Project.hpp"
 #include "editor/EditorBlocks.hpp"
 #include "editor/EditorTheme.hpp"
 

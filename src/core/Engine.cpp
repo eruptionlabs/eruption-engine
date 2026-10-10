@@ -3,6 +3,7 @@
 #include "renderer/PostFormat.hpp"
 #include "game/PlayerController.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "core/Input.hpp"
 #include "core/JobSystem.hpp"
 #include "utils/Profiler.hpp"
@@ -699,8 +700,12 @@ bool Engine::init(int width, int height, const std::string& title) {
     if (!m_overlayLineRenderer.init(&m_vulkan)) return false;
 
     presentLoadingScreen("", "Scanning Game Assets", 0.8f, true);
-    // Load resource config (resources.ini) - try multiple locations
+    // Fontes de asset (resources.ini). Com um projeto aberto o arquivo e' o
+    // DO PROJETO, e os caminhos relativos dentro dele valem a partir da
+    // pasta do projeto - nao do repositorio do motor.
+    const std::string defaultIni = project::game("resources.ini").string();
     auto findDataIni = [&]() -> std::string {
+        if (project::isOpen()) return std::filesystem::exists(defaultIni) ? defaultIni : std::string();
         const char* candidates[] = {"resources.ini", "../resources.ini"};
         for (const char* path : candidates) {
             if (std::filesystem::exists(path)) return path;
@@ -709,12 +714,13 @@ bool Engine::init(int width, int height, const std::string& title) {
     };
     std::string iniPath = findDataIni();
     if (iniPath.empty()) {
-        m_resourceConfig.createDefault("resources.ini");
-        iniPath = "resources.ini";
+        m_resourceConfig.createDefault(defaultIni);
+        iniPath = defaultIni;
     }
     m_resourceConfig.load(iniPath);
     for (const auto& entry : m_resourceConfig.entries) {
-        m_packManager.addDirectory(entry.path);
+        const std::filesystem::path dir(entry.path);
+        m_packManager.addDirectory(dir.is_absolute() ? entry.path : project::game(entry.path).string());
     }
 
     m_mapLoader = std::make_unique<MapLoader>();
@@ -835,7 +841,9 @@ void Engine::populateMaps() {
     namespace fs = std::filesystem;
     m_availableMaps.clear();
 
-    auto scanDir = [&](const std::string& root) {
+    // Com um projeto aberto os mapas sao SO' os do projeto (project::game).
+    auto scanDir = [&](const std::string& rel) {
+        const fs::path root = project::game(rel);
         if (!fs::exists(root) || !fs::is_directory(root)) return;
         for (const auto& entry : fs::directory_iterator(root)) {
             if (entry.is_directory()) {

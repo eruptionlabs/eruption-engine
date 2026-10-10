@@ -83,7 +83,12 @@ void Editor::drawAiWindow() {
         return;
     }
     if (!m_ai.promptReady) {
-        std::ifstream f(m_projectRoot / "assets" / "scripts" / "eruption.d.luau");
+        // A declaracao de tipos vai copiada pro projeto; sem ela, a do motor.
+        std::error_code declEc;
+        const std::filesystem::path declInProject = m_projectRoot / "assets" / "scripts" / "eruption.d.luau";
+        std::ifstream f(std::filesystem::exists(declInProject, declEc)
+                            ? declInProject
+                            : m_engineRoot / "assets" / "scripts" / "eruption.d.luau");
         std::ostringstream ss;
         ss << f.rdbuf();
         m_ai.client.setSystemPrompt(std::string(kSystemIntro) + ss.str());

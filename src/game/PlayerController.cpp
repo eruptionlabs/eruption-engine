@@ -4,6 +4,9 @@
 #include "renderer/skymap/SkyConfig.hpp"
 #include "formats/TerrainParser.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
+
+#include <filesystem>
 #include "renderer/SpritePickerUI.hpp"
 #include "renderer/PostProcessor.hpp"
 #include "renderer/WeatherRenderer.hpp"
@@ -655,7 +658,15 @@ void PlayerController::loadBodySprite() {
         ERUPTION_LOG_WARN("Failed to load PNG body sprite: %s, falling back to default.png", configJob.c_str());
     }
 
-    if (m_engine->loadSpriteFromPng("assets/sprites/default.png", m_bodySprite)) {
+    // Sprite de reserva: o do projeto quando ele tem um (o create() copia),
+    // senao o do proprio motor - um projeto sem sprite nenhum ainda mostra
+    // um boneco em vez de nada.
+    std::error_code defEc;
+    const std::string defaultSprite =
+        std::filesystem::exists(project::game("assets/sprites/default.png"), defEc)
+            ? std::string("assets/sprites/default.png")
+            : project::engine("assets/sprites/default.png").string();
+    if (m_engine->loadSpriteFromPng(defaultSprite, m_bodySprite)) {
         m_bodyFrame = 0;
         m_bodyTimer = 0.0f;
         m_lastJob = configJob;

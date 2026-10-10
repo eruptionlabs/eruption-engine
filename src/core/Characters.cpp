@@ -4,6 +4,7 @@
 #include "core/Engine.hpp"
 
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "game/PlayerController.hpp"
 
 #include <imgui.h>
@@ -22,7 +23,7 @@ constexpr float kPixelToWorld = 0.15f; // mesma escala do sprite do jogador
 
 bool Engine::loadCharacterSprite(const std::string& png, LoadedSprite& out) {
     // O .spr do importador, quando existe ao lado do PNG, tem as animações.
-    std::filesystem::path spr(png);
+    std::filesystem::path spr = project::gameRef(png);
     spr.replace_extension(".spr");
     std::error_code ec;
     if (std::filesystem::exists(spr, ec) && loadSpriteFromEruptSpr(spr.string(), out)) return true;

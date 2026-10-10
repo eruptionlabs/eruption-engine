@@ -1,5 +1,6 @@
 #include "formats/MapLoader.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "core/JobSystem.hpp"
 #include "utils/Profiler.hpp"
 #include <nlohmann/json.hpp>
@@ -49,7 +50,7 @@ static std::vector<uint8_t> readFileBytes(const fs::path& path) {
 
 static std::string pickGroundTexture(const std::string& mapStem) {
     if (!mapStem.empty()) {
-        fs::path candidate = fs::path("assets") / "data" / "texture" / (mapStem + "_ground.png");
+        fs::path candidate = project::game("assets/data/texture") / (mapStem + "_ground.png");
         if (fs::exists(candidate)) {
             return candidate.filename().string();
         }
@@ -417,11 +418,13 @@ bool MapLoader::loadFromGlb() {
     }
 
     if (glbPath.size() < 4 || glbPath.substr(glbPath.size() - 4) != ".glb") {
+        // Caminhos de MAPA: saem do projeto aberto (project::game), ou da
+        // pasta do repositorio quando nao ha projeto.
         std::vector<std::string> candidates = {
-            "assets/data/" + mapStem + ".glb",
-            "assets/external/" + mapStem + "/" + mapStem + ".glb",
-            "assets/external/" + mapStem + "/models/" + mapStem + ".glb",
-            "assets/models/" + mapStem + ".glb",
+            project::game("assets/data/" + mapStem + ".glb").string(),
+            project::game("assets/external/" + mapStem + "/" + mapStem + ".glb").string(),
+            project::game("assets/external/" + mapStem + "/models/" + mapStem + ".glb").string(),
+            project::game("assets/models/" + mapStem + ".glb").string(),
             mapStem + ".glb",
             glbPath + ".glb"
         };

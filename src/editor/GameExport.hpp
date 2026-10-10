@@ -17,7 +17,11 @@ namespace eruption {
 // arquivos fixos do motor (configurações, shaders compilados, sprite padrão).
 // Limite: caminhos montados em tempo de execução não aparecem no texto.
 struct ExportOptions {
-    std::filesystem::path projectRoot;
+    std::filesystem::path projectRoot; // pasta do jogo (projeto aberto)
+    // Pasta do motor, quando o projeto esta' fora dela: o que e' do motor
+    // (shaders compilados, configuracoes padrao, icone, sprite de reserva)
+    // sai daqui. Vazia = tudo mora na mesma pasta (modo sem projeto).
+    std::filesystem::path engineRoot;
     std::vector<std::string> maps; // o primeiro é o mapa inicial
     std::filesystem::path outDir;
     std::filesystem::path binary;  // executável a levar (o enxuto, se existir)

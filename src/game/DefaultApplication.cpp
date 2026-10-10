@@ -9,6 +9,7 @@
 #include "game/PlayerController.hpp"
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "core/Input.hpp"
 #include "formats/TerrainParser.hpp"
 #include <imgui.h>
@@ -36,7 +37,23 @@ static std::string loadInitialMapFromConfig() {
 }
 
 DefaultApplication::DefaultApplication(int argc, char** argv) {
-    m_initialMap = loadInitialMapFromConfig();
+    // Com um projeto aberto quem manda e' o manifesto: o mapa de abertura
+    // dele, ou o primeiro mapa que o projeto tiver. Projeto novo e vazio
+    // comeca sem mapa nenhum (o editor abre so' com a interface).
+    if (project::isOpen()) {
+        const Project& p = Project::instance();
+        m_initialMap = p.manifest().startupMap;
+        if (m_initialMap.empty()) {
+            const std::vector<std::string> maps = p.maps();
+            if (!maps.empty()) m_initialMap = maps.front();
+        }
+        if (p.manifest().hasSpawn) {
+            m_initialPos = Vec3(p.manifest().spawn[0], p.manifest().spawn[1], p.manifest().spawn[2]);
+            m_hasInitialPos = true;
+        }
+    } else {
+        m_initialMap = loadInitialMapFromConfig();
+    }
     parseArgs(argc, argv);
 }
 DefaultApplication::~DefaultApplication() = default;
@@ -197,7 +214,7 @@ void DefaultApplication::onInit(Engine& engine) {
         engine.setEditor(m_editor.get());
     }
     m_scripts = std::make_unique<ScriptHost>();
-    if (!m_scripts->init(engine, "assets/scripts")) m_scripts.reset();
+    if (!m_scripts->init(engine, project::game("assets/scripts").string())) m_scripts.reset();
     if (m_editor) m_editor->setScriptHost(m_scripts.get());
     else if (m_scripts)
         engine.setGameOverlay([this] {
