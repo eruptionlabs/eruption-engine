@@ -252,3 +252,18 @@ declare lights: {
     turn_on: (index: number) -> (),
     turn_off: (index: number) -> (),
 }
+
+-- Particle effects (Window > Effects). `name` is an effect of the game
+-- (assets/effects/<name>.vfx.json) or an engine template (fogo, faiscas,
+-- fumaca, magia, lava, fumarola); a path ending in .json also works.
+declare vfx: {
+    -- Starts the effect at a world position; returns its id (0 = not found).
+    -- `scale` multiplies size, speed and forces; `yaw` turns it in degrees.
+    play: (name: string, position: vector, scale: number?, yaw: number?) -> number,
+    -- Stops spawning (the live particles finish); `immediate` clears them now.
+    stop: (id: number, immediate: boolean?) -> (),
+    -- Moves a playing effect (a trail follows the object this way).
+    move: (id: number, position: vector, scale: number?, yaw: number?) -> (),
+    -- False once the effect ended or was stopped.
+    playing: (id: number) -> boolean,
+}

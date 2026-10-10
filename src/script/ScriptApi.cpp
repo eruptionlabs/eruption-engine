@@ -947,6 +947,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lua_setglobal(L, "require");
     lib(L, "characters", characters);
     lib(L, "fx", fx);
+    registerVfxApi(L, engine);
 }
 
 std::string scriptApiDefinitions() {
@@ -1204,7 +1205,7 @@ declare lights: {
     turn_on: (index: number) -> (),
     turn_off: (index: number) -> (),
 }
-)";
+)" + std::string(vfxApiDefinitions());
 }
 
 } // namespace eruption
