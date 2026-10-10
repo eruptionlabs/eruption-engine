@@ -127,12 +127,23 @@ bool Editor::init(Engine& engine) {
     cam.setDebugFreeCamera(true);
 
     initModelViewer();
+    // Previa do editor de efeitos no mesmo gancho offscreen (depois do
+    // visualizador de modelo); tempo real, para tocar com o mundo pausado.
+    m_vfxEditor.init(m_engine);
+    {
+        auto prev = m_engine->offscreenHook;
+        m_engine->offscreenHook = [this, prev](VkCommandBuffer cmd) {
+            if (prev) prev(cmd);
+            m_vfxEditor.renderPreview(cmd, m_engine->timer().realDeltaTime());
+        };
+    }
     log(LogLevel::Info, "Editor ready. Press Ctrl+Shift+P to search every command.");
     return true;
 }
 
 void Editor::shutdown() {
     shutdownModelViewer();
+    m_vfxEditor.shutdown();
     stopThumbnails();
     m_remote.stop();
     if (m_engine) {
@@ -376,6 +387,10 @@ void Editor::registerCommands() {
                 m_showModelViewer = open;
             }, "A model alone, with the engine's real rendering: LOD levels, wireframe, normals, UV and animations.");
             mv.checked = [this] { return m_showModelViewer; };
+            auto& fx = add("window.effects", "Window", "Effects", {}, [this] { m_showVfxEditor = !m_showVfxEditor; },
+                           "Particle effects: library, isolated live preview and the emitter stack (spawn, shape, "
+                           "motion, collision, color and size over lifetime, rendering).");
+            fx.checked = [this] { return m_showVfxEditor; };
         }
         auto& ai = add("window.ai", "Window", "AI Assistant", {}, [this] { m_showAi = !m_showAi; },
                        "Chat that writes rules and scripts with your own API key. You review and save what it writes.");
@@ -820,6 +835,11 @@ void Editor::update(float dt) {
             else if (what == "viewer_lod") m_modelPreview.lod = static_cast<ModelPreview::Lod>(std::atoi(arg.c_str()) & 3);
             else if (what == "viewer_mode") m_modelPreview.mode = static_cast<ModelPreview::Mode>(std::atoi(arg.c_str()) & 3);
             else if (what == "viewer_wire") m_modelPreview.wireframe = true;
+            // Editor de efeitos: vfx:<nome ou arquivo>, vfx_sel:<emissor>.
+            else if (what == "vfx") {
+                m_showVfxEditor = m_vfxEditor.openEffect(arg);
+            }
+            else if (what == "vfx_sel") m_vfxEditor.selectEmitter(std::atoi(arg.c_str()));
             else if (what == "viewer_full") m_viewerFullscreen = true;
             else if (what == "viewer_anim") m_modelPreview.animation = std::atoi(arg.c_str());
             else if (what == "cmd") m_commands.run(arg);
@@ -949,6 +969,7 @@ void Editor::drawUI() {
     drawExportWindow();
     drawMapGenWindow();
     drawModelViewer();
+    m_vfxEditor.draw(&m_showVfxEditor); // fechada: so' para o efeito tocando na cena
     drawGameProjectWindow();
 
     if (m_focusScene) {
@@ -1072,6 +1093,7 @@ void Editor::drawMenuBar() {
         m_commands.menuItem("window.second_screen");
         m_commands.menuItem("window.ai");
         m_commands.menuItem("window.model_viewer");
+        m_commands.menuItem("window.effects");
         ImGui::Separator();
         if (ImGui::BeginMenu(tr("Language / Idioma"))) {
             m_commands.menuItem("window.lang_en");

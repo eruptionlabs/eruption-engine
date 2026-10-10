@@ -91,12 +91,17 @@ VfxImage makeFlame() {
                 const float u = (float(x) + 0.5f) / cell * 2.0f - 1.0f;   // -1..1
                 const float v = 1.0f - (float(y) + 0.5f) / cell;          // 0 embaixo, 1 em cima
                 const float n = fbm((u + 1.0f) * 2.0f, (v - phase) * 4.0f + 8.0f, 32, 7, 4);
-                // Silhueta: larga embaixo, afina em cima, deformada pelo ruido.
-                const float width = (1.0f - v) * 0.75f + 0.08f;
-                const float dx = std::abs(u + (n - 0.5f) * 0.6f * v) / width;
-                float a = std::clamp(1.0f - dx, 0.0f, 1.0f) * std::clamp((1.0f - v) * 1.6f, 0.0f, 1.0f);
-                a *= std::clamp(v * 6.0f, 0.0f, 1.0f) * (0.6f + 0.8f * n);
-                a = std::clamp(a * 1.4f, 0.0f, 1.0f);
+                const float n2 = fbm((u + 1.0f) * 5.0f, (v - phase * 2.0f) * 8.0f + 3.0f, 64, 19, 3);
+                // Silhueta de gota (base redonda, ponta fina), torta pelo
+                // ruido; a borda e' corroida por um segundo ruido mais fino,
+                // entao nao sobra contorno reto.
+                const float cx = u + (n - 0.5f) * 0.7f * v;
+                const float width = 0.62f * std::pow(std::max(1.0f - v, 0.0f), 0.65f) + 0.03f;
+                const float base = std::clamp((v - 0.02f) * 5.0f, 0.0f, 1.0f);
+                float body = 1.0f - std::abs(cx) / width;
+                body = std::clamp(body * 1.6f - (1.0f - n2) * 0.55f, 0.0f, 1.0f);
+                float a = body * base * std::clamp((1.0f - v) * 1.8f, 0.0f, 1.0f);
+                a = std::clamp(a * (0.75f + 0.5f * n), 0.0f, 1.0f);
                 if (x < 2 || y < 2 || x >= cell - 2 || y >= cell - 2) a = 0.0f;
                 // Mais quente no meio (branco-amarelo) e mais frio na borda.
                 const float heat = std::clamp(a * 1.2f, 0.0f, 1.0f);

@@ -212,15 +212,11 @@ json writeEmitter(const VfxEmitterDesc& e) {
 
 } // namespace
 
-bool loadVfxEffect(const std::string& path, VfxEffectDesc& out, std::string* err) {
-    std::ifstream f(path);
-    if (!f) {
-        if (err) *err = "nao abriu " + path;
-        return false;
-    }
-    json j = json::parse(f, nullptr, false);
+namespace {
+
+bool fromJson(const json& j, VfxEffectDesc& out, std::string* err, const std::string& where) {
     if (j.is_discarded() || !j.is_object()) {
-        if (err) *err = "JSON invalido em " + path;
+        if (err) *err = "JSON invalido em " + where;
         return false;
     }
     VfxEffectDesc fx;
@@ -236,14 +232,14 @@ bool loadVfxEffect(const std::string& path, VfxEffectDesc& out, std::string* err
         }
     }
     if (fx.emitters.empty()) {
-        if (err) *err = "efeito sem emissores: " + path;
+        if (err) *err = "efeito sem emissores: " + where;
         return false;
     }
     out = std::move(fx);
     return true;
 }
 
-bool saveVfxEffect(const std::string& path, const VfxEffectDesc& fx, std::string* err) {
+json toJson(const VfxEffectDesc& fx) {
     json j;
     j["name"] = fx.name;
     j["duration"] = fx.duration;
@@ -251,13 +247,34 @@ bool saveVfxEffect(const std::string& path, const VfxEffectDesc& fx, std::string
     json em = json::array();
     for (const auto& e : fx.emitters) em.push_back(writeEmitter(e));
     j["emitters"] = em;
+    return j;
+}
+
+} // namespace
+
+bool loadVfxEffect(const std::string& path, VfxEffectDesc& out, std::string* err) {
+    std::ifstream f(path);
+    if (!f) {
+        if (err) *err = "nao abriu " + path;
+        return false;
+    }
+    return fromJson(json::parse(f, nullptr, false), out, err, path);
+}
+
+bool saveVfxEffect(const std::string& path, const VfxEffectDesc& fx, std::string* err) {
     std::ofstream f(path);
     if (!f) {
         if (err) *err = "nao gravou " + path;
         return false;
     }
-    f << j.dump(2) << "\n";
+    f << toJson(fx).dump(2) << "\n";
     return static_cast<bool>(f);
+}
+
+std::string vfxEffectToJson(const VfxEffectDesc& fx) { return toJson(fx).dump(); }
+
+bool vfxEffectFromJson(const std::string& text, VfxEffectDesc& out, std::string* err) {
+    return fromJson(json::parse(text, nullptr, false), out, err, "texto");
 }
 
 } // namespace eruption
