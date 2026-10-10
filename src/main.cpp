@@ -15,6 +15,9 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#ifdef ERUPTION_MODULE_COMPAT
+#include "motor/AppComCompat.hpp"
+#endif
 
 #ifdef _WIN32
 #define ERUPTION_ENVIRON _environ
@@ -221,7 +224,13 @@ int main(int argc, char** argv) {
 
     eruption::DefaultApplication app(argc, argv);
     ERUPTION_LOG_INFO("[MAIN] Running app...");
+#ifdef ERUPTION_MODULE_COMPAT
+    // Plugins de outros motores (compat/): so' carrega algo com ERUPTION_COMPAT_PLUGINS.
+    eruption::compat::AppComCompat<eruption::DefaultApplication> appCompat(app);
+    engine.run(appCompat);
+#else
     engine.run(app);
+#endif
     ERUPTION_LOG_INFO("[MAIN] App finished, exiting");
     return 0;
 }
