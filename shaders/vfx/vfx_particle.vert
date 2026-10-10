@@ -7,6 +7,7 @@
 #define VFX_SET 2
 #include "vfx/vfx_common.glsl"
 #include "vfx/vfx_frame_ubo.glsl"
+#include "vfx/vfx_graph.glsl"
 
 layout(location = 0) out vec2 v_uv0;
 layout(location = 1) out vec2 v_uv1;
@@ -50,6 +51,8 @@ void main() {
     vec2 sr = unpackHalf2x16(p.sizeRot);
     vec2 av = unpackHalf2x16(p.angVel);
     float size = sr.x * sampleSizeLut(e, t);
+    // Grafo: multiplicador de tamanho.
+    if (e.graphB.w > 0u) size *= max(vfxRunGraph(e.graphB.z, e.graphB.w, p, e).x, 0.0);
     float rot = sr.y + av.x * p.age;
 
     vec3 camRight = vec3(u_view[0][0], u_view[1][0], u_view[2][0]);
@@ -104,6 +107,8 @@ void main() {
 
     // Cor ao longo da vida, emissivo e luz da cena por particula.
     vec4 col = unpackColorLut(e, t);
+    // Grafo: multiplicador de cor (rgba).
+    if (e.graphB.y > 0u) col *= max(vfxRunGraph(e.graphB.x, e.graphB.y, p, e), vec4(0.0));
     col.rgb *= e.render.x;
     if (e.render.y > 0.0) {
         vec3 L = -normalize(u_sunDir.xyz);

@@ -10,6 +10,7 @@
 // globais disputando a mesma posicao.
 #define VFX_WRITABLE
 #include "vfx/vfx_common.glsl"
+#include "vfx/vfx_graph.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -72,6 +73,8 @@ void main() {
             vec3 acc = e.gravityDrag.xyz * scale;
             if (e.noise.x != 0.0)
                 acc += curlNoise(p.pos * (e.noise.y / scale), frame.timeInfo.x * e.noise.z) * e.noise.x * scale;
+            // Grafo: forca extra (m/s2, escalada para o mundo).
+            if (e.graphA.w > 0u) acc += vfxRunGraph(e.graphA.z, e.graphA.w, p, e).xyz * scale;
             p.vel += acc * dt;
             p.vel *= 1.0 / (1.0 + e.gravityDrag.w * dt); // arrasto estavel com qualquer dt
             vec3 next = p.pos + p.vel * dt;

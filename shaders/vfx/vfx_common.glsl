@@ -27,7 +27,7 @@ struct Particle {
     uint angVel;   // half2(velocidade angular rad/s, quadro inicial 0..1)
 };
 
-// Parametros de um emissor ativo (um por instancia x emissor), 384 bytes.
+// Parametros de um emissor ativo (um por instancia x emissor), 416 bytes.
 struct Emitter {
     vec4 posTime;     // xyz posicao no mundo, w tempo do efeito
     vec4 prevPos;     // xyz posicao no frame anterior (nascimento interpolado)
@@ -49,6 +49,8 @@ struct Emitter {
     uint colorLut[16];// RGBA8 (cor * emissivo vai no shader), 16 amostras da vida
     uint sizeLut[8];  // 16 halfs: tamanho ao longo da vida
     uvec4 cutout;     // 8 halfs: poligono justo da textura (alcance em 8 direcoes)
+    uvec4 graphA;     // grafo: x,y = velocidade inicial (inicio, tamanho); z,w = forca
+    uvec4 graphB;     // grafo: x,y = cor; z,w = tamanho
 };
 
 // Bits de Emitter.flags.x

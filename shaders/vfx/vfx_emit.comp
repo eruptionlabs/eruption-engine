@@ -6,6 +6,7 @@
 // lista de vivas atual - a simulacao deste mesmo frame ja' a move e desenha.
 #define VFX_WRITABLE
 #include "vfx/vfx_common.glsl"
+#include "vfx/vfx_graph.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -98,14 +99,18 @@ void main() {
 
     Particle p;
     p.vel = R * dir * speed + e.velInherit.xyz * e.velInherit.w;
-    p.pos = origin + R * (local * scale) + p.vel * preAge;
-    p.age = preAge;
+    p.pos = origin + R * (local * scale);
+    p.age = 0.0;
     p.life = mix(e.life.x, e.life.y, rand01(seed, 3u));
     p.slotGen = req.slot | ((e.flags.y & 0xFFFFu) << 16);
     p.seed = seed;
     float size = mix(e.sizeRot.x, e.sizeRot.y, rand01(seed, 4u)) * scale;
     float rot = mix(e.sizeRot.z, e.sizeRot.w, rand01(seed, 5u));
     p.sizeRot = packHalf2x16(vec2(size, rot));
+    // Grafo: velocidade extra no nascimento (em m/s, escalada para o mundo).
+    if (e.graphA.y > 0u) p.vel += vfxRunGraph(e.graphA.x, e.graphA.y, p, e).xyz * scale;
+    p.pos += p.vel * preAge;
+    p.age = preAge;
     float av = mix(e.angVel.x, e.angVel.y, rand01(seed, 6u));
     float startFrame = (e.flags.x & VFXF_FLIP_RANDOM) != 0u ? rand01(seed, 7u) : 0.0;
     p.angVel = packHalf2x16(vec2(av, startFrame));

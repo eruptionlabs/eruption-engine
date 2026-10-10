@@ -13,6 +13,7 @@
 // Curvas e gradientes sao amostrados em 16 pontos ao subir para a GPU.
 
 #include "math/Types.hpp"
+#include "renderer/vfx/VfxGraph.hpp"
 
 #include <string>
 #include <vector>
@@ -108,6 +109,9 @@ struct VfxEmitterDesc {
     float nearFade = 0.5f;     // some perto da camera (m)
     bool lowRes = false;       // desenha em meia resolucao (fumaca, poeira:
                                // 1/4 dos pixels; o ganho maior em GPU fraca)
+
+    // --- Grafo (expressoes por particula; vazio = so' os modulos acima) ---
+    VfxGraph graph;
 };
 
 struct VfxEffectDesc {
