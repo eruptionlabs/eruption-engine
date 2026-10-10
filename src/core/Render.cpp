@@ -733,6 +733,22 @@ void Engine::render() {
     // depois do G-buffer, mas as malhas de particula desenham dentro dele.
     m_vfx.setLighting(frameUbo.sunDir, frameUbo.sunColor, frameUbo.ambientSky);
     m_vfx.update(m_timer.deltaTime(), m_camera, renderExtent());
+    {
+        // Luz de particula: uma por emissor com "light", as 32 mais perto.
+        static std::vector<VfxSystem::Light> vfxLights;
+        static std::vector<PointLight> pls;
+        m_vfx.collectLights(m_camera.position(), 32, vfxLights);
+        pls.clear();
+        for (const auto& l : vfxLights) {
+            PointLight p;
+            p.position = l.position;
+            p.radius = l.radius;
+            p.color = l.color;
+            p.intensity = l.intensity;
+            pls.push_back(p);
+        }
+        m_deferredLighting.setVfxPointLights(pls);
+    }
     m_vulkan.writeTimestamp(cmd, 2, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     m_gbuffer.beginPass(cmd);
     // PIPELINE STATISTICS em volta do passe de GEOMETRIA: e' aqui que se

@@ -105,7 +105,23 @@
       "flipCols": 4,
       "flipRows": 4,
       "flipMode": "life",
-      "flipRandomStart": true
+      "flipRandomStart": true,
+      "light": {
+        "enabled": true,
+        "color": [
+          1.0,
+          0.5,
+          0.18
+        ],
+        "intensity": 8.0,
+        "radius": 6.0,
+        "flicker": 0.35,
+        "offset": [
+          0.0,
+          0.6,
+          0.0
+        ]
+      }
     },
     {
       "name": "brasa",

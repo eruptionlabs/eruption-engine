@@ -195,9 +195,10 @@ void DeferredLighting::setEnvironment(const LightingEnvironment& env) {
 }
 
 const std::vector<PointLight>& DeferredLighting::allPointLights() {
-    if (m_extraPointLights.empty()) return m_pointLights;
+    if (m_extraPointLights.empty() && m_vfxPointLights.empty()) return m_pointLights;
     m_allPointLights = m_pointLights;
     m_allPointLights.insert(m_allPointLights.end(), m_extraPointLights.begin(), m_extraPointLights.end());
+    m_allPointLights.insert(m_allPointLights.end(), m_vfxPointLights.begin(), m_vfxPointLights.end());
     return m_allPointLights;
 }
 
@@ -1204,7 +1205,8 @@ void DeferredLighting::renderPointLights(VkCommandBuffer cmd, const Camera& came
     // preset intacto - e' o unico jeito de medir o custo/efeito das point
     // lights isolado (trocar de preset muda dez coisas ao mesmo tempo).
     static const bool kNoPointLights = std::getenv("ERUPTION_TEST_NO_POINT_LIGHTS") != nullptr;
-    if (!m_pointLightsEnabled || kNoPointLights || (m_pointLights.empty() && m_extraPointLights.empty())) return;
+    if (!m_pointLightsEnabled || kNoPointLights || (m_pointLights.empty() && m_extraPointLights.empty() && m_vfxPointLights.empty()))
+        return;
 
     uint32_t frameIndex = m_ctx->currentFrame();
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pointLightPipeline);

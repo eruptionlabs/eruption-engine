@@ -129,6 +129,16 @@ struct VfxEmitterDesc {
     VfxSubEmitter onDeath;
     VfxSubEmitter onCollision;
 
+    // --- Luz: UMA luz pontual por emissor (nao por particula), no centro do
+    // efeito, que acompanha o quanto ele esta' vivo e tremula. O fogo
+    // ilumina o chao e as paredes em volta pelo passe de luzes da cena.
+    bool light = false;
+    Vec3 lightColor{1.0f, 0.55f, 0.2f};
+    float lightIntensity = 2.0f;
+    float lightRadius = 6.0f;    // m
+    float lightFlicker = 0.3f;   // 0 = fixa, 1 = tremula forte
+    Vec3 lightOffset{0.0f, 0.5f, 0.0f}; // m, no espaco do efeito
+
     // --- Grafo (expressoes por particula; vazio = so' os modulos acima) ---
     VfxGraph graph;
 };

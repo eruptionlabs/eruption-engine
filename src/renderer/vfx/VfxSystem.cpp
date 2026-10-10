@@ -1005,6 +1005,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
                 es.seq += n;
                 m_spawnTotal += n;
                 es.liveEstimate += n;
+                es.livePeak = std::max(es.livePeak, es.liveEstimate);
                 if (!es.liveChunks.empty() && es.liveChunks.back().first == inst.time + e.lifetime.y)
                     es.liveChunks.back().second += n;
                 else
@@ -1533,6 +1534,43 @@ void VfxSystem::drawMeshes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2
     if (m_anyLowRes && !ensureLowResTarget(m_renderSize)) m_anyLowRes = false;
     writeDescriptors(m_ctx->currentFrame(), depthView);
     recordMeshes(cmd, m_meshPipe, extent, viewProjNoJitter, prevViewProjNoJitter);
+}
+
+void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& out) const {
+    out.clear();
+    if (!m_ready || max == 0) return;
+    std::vector<std::pair<float, Light>> all;
+    for (const Instance& inst : m_instances) {
+        if (inst.killed || !inst.desc) continue;
+        const Mat4& t = inst.transform;
+        const float scale = glm::length(Vec3(t[0]));
+        for (size_t k = 0; k < inst.emitters.size() && k < inst.desc->emitters.size(); ++k) {
+            const VfxEmitterDesc& e = inst.desc->emitters[k];
+            const EmitterState& es = inst.emitters[k];
+            if (!e.enabled || !e.light || es.livePeak == 0) continue;
+            // Fracao viva: a luz nasce com o efeito e some com a ultima particula.
+            const float alive = std::min(1.0f, float(es.liveEstimate) / float(std::max(es.livePeak, 1u)) * 1.5f);
+            if (alive <= 0.01f) continue;
+            // Tremor: duas senoides fora de fase por instancia (barato, sem textura).
+            const float ph = float(inst.id) * 1.37f + float(k) * 2.11f;
+            const float w = 0.5f * std::sin(inst.time * 13.0f + ph) + 0.3f * std::sin(inst.time * 29.0f + ph * 2.3f) +
+                            0.2f * std::sin(inst.time * 7.0f + ph * 0.7f);
+            Light l;
+            l.position = Vec3(t * Vec4(e.lightOffset, 1.0f));
+            l.radius = e.lightRadius * scale;
+            l.color = e.lightColor;
+            l.intensity = e.lightIntensity * alive * std::max(0.0f, 1.0f + e.lightFlicker * 0.5f * w);
+            const Vec3 d = l.position - eye;
+            all.emplace_back(glm::dot(d, d), l);
+        }
+    }
+    if (all.size() > max) {
+        std::nth_element(all.begin(), all.begin() + std::ptrdiff_t(max), all.end(),
+                         [](const auto& a, const auto& b) { return a.first < b.first; });
+        all.resize(max);
+    }
+    out.reserve(all.size());
+    for (const auto& p : all) out.push_back(p.second);
 }
 
 } // namespace eruption

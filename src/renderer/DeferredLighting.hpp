@@ -153,6 +153,8 @@ public:
     // Luzes dos mapas vizinhos (mundo contínuo): somadas às do mapa aberto,
     // fora da lista que a cena e o editor numeram.
     void setExtraPointLights(std::vector<PointLight> lights) { m_extraPointLights = std::move(lights); }
+    // Luzes dos efeitos de particula (trocadas todo frame, fora da cena).
+    void setVfxPointLights(const std::vector<PointLight>& lights) { m_vfxPointLights = lights; }
 
     void setUsePbr(bool use) { m_usePbr = use; }
     bool usePbr() const { return m_usePbr; }
@@ -262,6 +264,7 @@ private:
     LightingEnvironment m_env;
     std::vector<PointLight> m_pointLights;
     std::vector<PointLight> m_extraPointLights;
+    std::vector<PointLight> m_vfxPointLights;
     std::vector<PointLight> m_allPointLights; // m_pointLights + m_extraPointLights, montado no frame
     const std::vector<PointLight>& allPointLights();
     bool m_pointLightsEnabled = true;

@@ -61,7 +61,23 @@
       "blend": "additive",
       "emissive": 3.0,
       "softDistance": 0.2,
-      "texture": "builtin:star"
+      "texture": "builtin:star",
+      "light": {
+        "enabled": true,
+        "color": [
+          0.45,
+          0.55,
+          1.0
+        ],
+        "intensity": 5.0,
+        "radius": 4.0,
+        "flicker": 0.15,
+        "offset": [
+          0.0,
+          0.3,
+          0.0
+        ]
+      }
     }
   ]
 }
