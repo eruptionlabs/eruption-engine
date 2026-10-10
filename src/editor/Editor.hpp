@@ -363,6 +363,7 @@ private:
     // Janela > Visualizador de modelo (EditorModelViewer.cpp, ModelPreview).
     ModelPreview m_modelPreview;
     bool m_showModelViewer = false;
+    bool m_viewerFullscreen = false; // teste: visualizador ocupando a janela (capturas)
     void initModelViewer();
     void shutdownModelViewer();
     bool openModelViewer(const std::string& path, int node);

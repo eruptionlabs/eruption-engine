@@ -752,6 +752,9 @@ void Engine::render() {
         // harness perf/test_lod_quality.py medir o quanto o LOD simplificado
         // se afasta da malha de referencia (RMS de silhueta na mesma pose).
         static const bool forceBaseLod = std::getenv("ERUPTION_TEST_FORCE_BASE_LOD") != nullptr;
+        // ERUPTION_TEST_FULL_DETAIL=1 (capturas): malha original em tudo, inclusive na sombra.
+        static const bool fullDetailEnv = std::getenv("ERUPTION_TEST_FULL_DETAIL") != nullptr;
+        if (fullDetailEnv && !m_fullDetailView) setFullDetailView(true);
         const bool fullDetail = forceBaseLod || m_demoForceBaseLod || m_fullDetailView;
         if (fullDetail) m_modelRenderer.setForceBaseLod(true);
         m_modelRenderer.render(cmd, m_camera.viewProjJittered(), m_camera.frustum(), m_camera.position());
@@ -1983,6 +1986,8 @@ void Engine::render() {
         float pt[6] = {0};
         if (std::sscanf(camPose, "%f,%f,%f,%f,%f,%f",
                         &pt[0], &pt[1], &pt[2], &pt[3], &pt[4], &pt[5]) == 6) {
+            if (pt[5] > m_camera.maxOrbitDistance()) m_camera.setMaxOrbitDistance(pt[5]); // vista do alto
+            if (pt[5] * 2.0f > m_camera.farPlane()) m_camera.setFarPlane(pt[5] * 4.0f);
             m_camera.setOrbitTarget(Vec3(pt[0], pt[1], pt[2]));
             m_camera.setOrbit(glm::radians(pt[3]), glm::radians(pt[4]), pt[5]);
         }
