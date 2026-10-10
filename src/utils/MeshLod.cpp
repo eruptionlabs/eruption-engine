@@ -372,6 +372,34 @@ std::vector<uint32_t> simplifyPerIsland(const float* positions, size_t vertexCou
     return out;
 }
 
+std::vector<uint32_t> simplifyFoliageFar(const float* positions, size_t vertexCount, size_t stride,
+                                         const std::vector<uint32_t>& indices, uint32_t maxTriangles,
+                                         size_t uvByteOffset, size_t texIdxByteOffset) {
+    std::vector<uint32_t> out;
+#ifdef ERUPTION_HAVE_MESHOPT
+    if (!positions || vertexCount < 3 || indices.size() < 3 || maxTriangles < 1) return out;
+    const std::vector<uint32_t> canonical =
+        weldByPosition(positions, vertexCount, stride, uvByteOffset, texIdxByteOffset);
+    std::vector<uint32_t> welded(indices.size());
+    for (size_t i = 0; i < indices.size(); ++i)
+        welded[i] = indices[i] < canonical.size() ? canonical[indices[i]] : indices[i];
+    out.resize(welded.size());
+    float err = 0.0f;
+    const size_t n = meshopt_simplifySloppy(out.data(), welded.data(), welded.size(), positions, vertexCount, stride,
+                                            size_t(maxTriangles) * 3, 1.0f, &err);
+    if (n < 3 || n >= welded.size()) {
+        out.clear();
+        return out;
+    }
+    out.resize(n);
+    meshopt_optimizeVertexCache(out.data(), out.data(), n, vertexCount);
+#else
+    (void)positions; (void)vertexCount; (void)stride; (void)indices; (void)maxTriangles;
+    (void)uvByteOffset; (void)texIdxByteOffset;
+#endif
+    return out;
+}
+
 MeshLodResult simplifyMesh(const float* positions,
                            size_t vertexCount,
                            size_t stride,

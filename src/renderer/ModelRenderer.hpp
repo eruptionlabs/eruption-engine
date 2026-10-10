@@ -628,6 +628,8 @@ private:
         // Cadeia intermediaria (malha gigante), do mais detalhado ao menos.
         std::vector<std::vector<uint32_t>> mid;
         std::vector<std::vector<unsigned char>> midVerts; // vazio = vertex buffer da malha
+        MeshCardStats cs;     // topologia (so' folhagem): cartao x folha modelada
+        bool csValid = false;
         MeshLodResult loRes, farRes, shRes; // as três partes, antes de decidir
     };
     void computeLodPart(LodBuild& b, int part) const;

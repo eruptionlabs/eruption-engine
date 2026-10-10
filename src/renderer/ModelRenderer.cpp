@@ -968,8 +968,16 @@ void ModelRenderer::loadMapModels(std::vector<ModelAsset>&& models,
 // ficar a ~4x do "lo". Folhagem de cartao: poda com compensacao de area, como
 // o "lo" (vertices proprios por degrau).
 void ModelRenderer::computeMidChain(LodBuild& b) const {
+    if (b.ground || m_meshLodRatio <= 0.0f) return;
+    // Topologia da folhagem (cartao x folha modelada): serve a cadeia e o
+    // "lo"/"far" de folha modelada em finishLod.
+    if (b.sway) {
+        b.cs = analyzeCards(&b.vertices[0].position.x, b.vertices.size(), sizeof(TerrainVertex), b.indices,
+                            offsetof(TerrainVertex, texCoord), offsetof(TerrainVertex, texIndex));
+        b.csValid = true;
+    }
     static const bool kNoMid = std::getenv("ERUPTION_TEST_NO_MID_LOD") != nullptr;
-    if (kNoMid || b.ground || m_meshLodRatio <= 0.0f) return;
+    if (kNoMid) return;
     const size_t triCount = b.indices.size() / 3;
     size_t loTarget = static_cast<size_t>(double(triCount) * m_meshLodRatio);
     if (m_meshLodMaxTris > 0) loTarget = std::min<size_t>(loTarget, m_meshLodMaxTris);
@@ -977,9 +985,7 @@ void ModelRenderer::computeMidChain(LodBuild& b) const {
     if (triCount < kMidLodMinTris || triCount / 4 <= stopAt) return;
     // Poda de cartao so' em folhagem de CARTAO de verdade (folha modelada
     // passa pelo simplificador comum, como no "lo").
-    const MeshCardStats cs = analyzeCards(&b.vertices[0].position.x, b.vertices.size(), sizeof(TerrainVertex),
-                                          b.indices, offsetof(TerrainVertex, texCoord),
-                                          offsetof(TerrainVertex, texIndex));
+    const MeshCardStats& cs = b.cs;
     const bool cards = b.sway && cs.isCardMesh;
     static const bool kDbg = std::getenv("ERUPTION_DEBUG_MIDLOD") != nullptr;
     if (kDbg)
@@ -1144,6 +1150,88 @@ void ModelRenderer::finishLod(LodBuild& b) const {
             b.farSwitch = b.loSwitch * m_meshLodFarDistanceMul;
         }
     }
+    // FOLHA MODELADA (arbusto, planta, arvore de folhas com volume - nao
+    // cartao): o simplificador nao reduz (cada folha e' ilha de borda aberta)
+    // e o "lo"/"far" saiam com 50-100% da malha. Medido no parana_field
+    // original, vista aberta: plantas de 5-8 k triangulos com 100+ instancias
+    // no "lo" de 3-5 k e sem "far" = metade dos 9 M de triangulos. Aqui: cada
+    // folha vai a ~2 triangulos (simplifyPerIsland) e depois a poda com
+    // compensacao de area (como cartao) chega ao alvo do "lo" e do "far".
+    static const bool kNoLeafLod = std::getenv("ERUPTION_TEST_NO_LEAF_LOD") != nullptr;
+    if (!kNoLeafLod && b.sway && b.csValid && !b.cs.isCardMesh && b.cs.islands >= 16) {
+        const size_t triCount = indices.size() / 3;
+        const float tpi = float(triCount) / float(b.cs.islands);
+        size_t loTarget = static_cast<size_t>(double(triCount) * m_meshLodRatio);
+        if (m_meshLodMaxTris > 0) loTarget = std::min<size_t>(loTarget, m_meshLodMaxTris);
+        loTarget = std::max<size_t>(loTarget, 3);
+        const bool loPoor = b.lo.empty() || b.lo.size() / 3 > loTarget * 3 / 2;
+        const bool farPoor =
+            m_meshLodFarMaxTris > 0 && (b.far.empty() || b.far.size() / 3 > size_t(m_meshLodFarMaxTris) * 2);
+        if (tpi > 3.0f && (loPoor || farPoor)) {
+            // Base de ~2 triangulos por folha: o degrau da cadeia que ja' e'
+            // isso (indices sobre o vertex buffer da malha), ou um novo.
+            const std::vector<uint32_t>* leaf2 = nullptr;
+            std::vector<uint32_t> tmp;
+            for (size_t k = 0; k < b.mid.size(); ++k)
+                if ((k >= b.midVerts.size() || b.midVerts[k].empty()) &&
+                    float(b.mid[k].size() / 3) <= float(b.cs.islands) * 3.5f)
+                    leaf2 = &b.mid[k];
+            if (!leaf2) {
+                tmp = simplifyPerIsland(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex), indices,
+                                        std::min(1.0f, 2.0f / tpi), 2, offsetof(TerrainVertex, texCoord),
+                                        offsetof(TerrainVertex, texIndex));
+                leaf2 = &tmp;
+            }
+            if (loPoor) {
+                CardPruneResult pr = pruneCardsAreaPreserving(
+                    vertices.data(), vertices.size(), sizeof(TerrainVertex), offsetof(TerrainVertex, position), *leaf2,
+                    static_cast<uint32_t>(loTarget), offsetof(TerrainVertex, texCoord),
+                    offsetof(TerrainVertex, texIndex), kCardLodMaxScale);
+                if (pr.valid && (b.lo.empty() || pr.indices.size() < b.lo.size())) {
+                    b.loVerts = std::move(pr.vertices);
+                    b.lo = std::move(pr.indices);
+                    const float uncompensated = 1.0f - std::min(1.0f, pr.areaKeptRaw * pr.scale * pr.scale);
+                    const float absErr =
+                        std::max(((1.0f - pr.areaKeptRaw) * 0.08f + uncompensated * 0.25f) * b.extent, 1e-3f);
+                    b.loSwitch = std::max(absErr * m_meshLodDistanceFactor, m_meshLodMinDistance);
+                }
+            }
+            if (farPoor && !b.lo.empty()) {
+                CardPruneResult fr = pruneCardsAreaPreserving(
+                    vertices.data(), vertices.size(), sizeof(TerrainVertex), offsetof(TerrainVertex, position), *leaf2,
+                    m_meshLodFarMaxTris, offsetof(TerrainVertex, texCoord), offsetof(TerrainVertex, texIndex),
+                    kCardLodMaxScale * 2.0f);
+                if (fr.valid && fr.indices.size() < b.lo.size()) {
+                    b.farVerts = std::move(fr.vertices);
+                    b.far = std::move(fr.indices);
+                    b.farSwitch = b.loSwitch * m_meshLodFarDistanceMul;
+                }
+            }
+        }
+    }
+    // "far" de folhagem que nao e' cartao (folha larga presa ao caule: poucas
+    // ilhas de centenas de triangulos) - a poda trata a ilha como peca macica
+    // e o caminho de cartao do simplificador nao remove nada: o "far" saia
+    // vazio ou igual ao "lo" (urtiga 5,6 k -> lo 3,2 k, far nenhum, 125
+    // instancias). A essa distancia a planta tem dezenas de pixels: o
+    // silhueta basta: simplifyFoliageFar (sem a guarda de estrutura).
+    if (!kNoLeafLod && b.sway && b.csValid && !b.cs.isCardMesh && !b.lo.empty() && m_meshLodFarMaxTris > 0 &&
+        (b.far.empty() || b.far.size() / 3 > size_t(m_meshLodFarMaxTris) * 2)) {
+        std::vector<uint32_t> fr = simplifyFoliageFar(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex),
+                                                      indices, m_meshLodFarMaxTris, offsetof(TerrainVertex, texCoord),
+                                                      offsetof(TerrainVertex, texIndex));
+        if (!fr.empty() && fr.size() * 2 < b.lo.size()) {
+            b.farVerts.clear();
+            b.far = std::move(fr);
+            b.farSwitch = b.loSwitch * m_meshLodFarDistanceMul;
+        }
+    }
+    static const bool kDbgLod = std::getenv("ERUPTION_DEBUG_MIDLOD") != nullptr;
+    if (kDbgLod)
+        ERUPTION_LOG_WARN("[LEAFLOD] %s: %zu tris sway=%d ilhas=%u cartao=%d tris/ilha=%.1f -> lo %zu far %zu",
+                          b.material.c_str(), indices.size() / 3, b.sway ? 1 : 0, b.cs.islands,
+                          b.cs.isCardMesh ? 1 : 0, b.cs.islands ? float(indices.size() / 3) / float(b.cs.islands) : 0.0f,
+                          b.lo.size() / 3, b.far.size() / 3);
     // Sombra: só se for menor que o LOD de tela.
     if (b.shRes.valid && (b.lo.empty() || b.shRes.indices.size() < b.lo.size())) b.sh = std::move(b.shRes.indices);
     b.vertices.clear();
@@ -3156,10 +3244,10 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             for (size_t k = 0; k < 12 && k < top.size(); ++k) {
                 const auto& mm = m_meshes[top[k].second];
                 float red = mm.loIndexCount ? 100.0f * (1.0f - float(mm.loIndexCount) / float(mm.indexCount)) : -1.0f;
-                ERUPTION_LOG_WARN("   malha %u: %u tris desenhados / %u instancias | cheia=%u LOD=%u (reduz %.0f%%) troca=%.0f sombra=%u",
+                ERUPTION_LOG_WARN("   malha %u: %u tris desenhados / %u instancias | cheia=%u LOD=%u (reduz %.0f%%) troca=%.0f far=%u troca=%.0f sombra=%u",
                                   top[k].second, top[k].first, dbgPerMesh[top[k].second].second,
                                   mm.indexCount / 3, mm.loIndexCount / 3, red, mm.loSwitchDistance,
-                                  mm.shIndexCount / 3);
+                                  mm.farIndexCount / 3, mm.farSwitchDistance, mm.shIndexCount / 3);
                 for (uint32_t q = 0; q < mm.midCount; ++q)
                     ERUPTION_LOG_WARN("      mid %u: %u tris", q, mm.mid[q].indexCount / 3);
             }

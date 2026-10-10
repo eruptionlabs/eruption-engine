@@ -131,6 +131,15 @@ std::vector<uint32_t> simplifyPerIsland(const float* positions, size_t vertexCou
                                         uint32_t minTrisPerIsland, size_t uvByteOffset = 0,
                                         size_t texIdxByteOffset = 0);
 
+// "FAR" DE FOLHAGEM SEM TOPOLOGIA: simplifySloppy direto (solda por celula),
+// para planta que a dezenas de pixels so' precisa da silhueta. Sem a guarda de
+// ESTRUTURA do simplifyMesh - ela existe para casa (telhado derretendo a
+// media distancia) e pegava urtiga e capim de poucas folhas largas, que
+// ficavam sem "far". So' para o nivel distante de folhagem.
+std::vector<uint32_t> simplifyFoliageFar(const float* positions, size_t vertexCount, size_t stride,
+                                         const std::vector<uint32_t>& indices, uint32_t maxTriangles,
+                                         size_t uvByteOffset = 0, size_t texIdxByteOffset = 0);
+
 // PODA DE CARTOES COM COMPENSACAO DE AREA (Cook, Halstead, Planck, Ryu 2007,
 // "Stochastic Simplification of Aggregate Detail", Pixar).
 //
