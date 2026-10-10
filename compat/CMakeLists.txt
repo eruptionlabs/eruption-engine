@@ -34,3 +34,14 @@ set_target_properties(eruption-compat-run PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(eruption-compat-run PRIVATE -Wall -Wextra -Wpedantic -Wno-unused-parameter)
 endif()
+
+# Prova de render de plugin nativo Unity em OpenGL fora de tela (so' teste).
+find_package(OpenGL QUIET COMPONENTS OpenGL EGL)
+if(TARGET OpenGL::EGL AND TARGET OpenGL::GL)
+    add_executable(eruption-compat-unity-gl EXCLUDE_FROM_ALL "${CMAKE_CURRENT_SOURCE_DIR}/tools/unity_gl_prova.cpp")
+    target_link_libraries(eruption-compat-unity-gl PRIVATE eruption-compat OpenGL::EGL OpenGL::GL)
+    set_target_properties(eruption-compat-unity-gl PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-compat-unity-gl PRIVATE -Wall -Wextra -Wpedantic -Wno-unused-parameter)
+    endif()
+endif()
