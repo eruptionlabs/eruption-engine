@@ -502,6 +502,11 @@ bool Engine::init(int width, int height, const std::string& title) {
         ERUPTION_LOG_WARN("[SPHEREPREVIEW] falhou ao inicializar - popup de preview ficara indisponivel.");
     }
     if (!m_vfx.init(vfxInitInfo())) ERUPTION_LOG_WARN("[VFX] indisponivel: efeitos de particula desligados.");
+    else {
+        m_vfx.resize(renderExtent().width, renderExtent().height);
+        if (m_spriteLayerActive) m_spriteLayer.setExtraReactive(m_vfx.reactiveView());
+        bindFsrInputs();
+    }
 
     presentLoadingScreen("", "Loading Configuration", 0.3f, true);
     // Shadow settings load BEFORE ShadowRenderer::init so atlas_size from

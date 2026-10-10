@@ -140,9 +140,16 @@ public:
     // Camada de meia resolucao (fumaca): FORA de qualquer rendering, antes de
     // draw(). Sem emissor lowRes ativo nao faz nada.
     void drawLowRes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent);
-    // Dentro de um rendering com o lit (RGBA16F) e a profundidade so' leitura:
-    // compoe a meia resolucao e desenha as particulas de resolucao cheia.
-    void draw(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent);
+    // Rendering proprio sobre `litView` (RGBA16F em COLOR_ATTACHMENT) com a
+    // profundidade so' leitura: compoe a meia resolucao, desenha as particulas
+    // e escreve a cobertura delas na mascara reativa (R8, para o FSR).
+    void draw(VkCommandBuffer cmd, VkImageView litView, VkImageView depthView, VkExtent2D extent);
+    // Fim do frame: sem particula, limpa a mascara uma vez (nao fica rastro).
+    void endFrame(VkCommandBuffer cmd);
+    // Tamanho de render (cria a mascara reativa). Chamar sem frame em voo
+    // usando a imagem antiga (o motor chama no bloco de resize).
+    bool resize(uint32_t w, uint32_t h);
+    VkImageView reactiveView() const { return m_reactiveView; }
     // Algo para simular/desenhar? (sem nenhum efeito, o sistema custa zero)
     bool active() const { return m_active; }
     // Troca o FrameUBO do desenho (camera propria por frame, ex.: previa).
@@ -215,6 +222,13 @@ private:
     VkImageView m_lowView = VK_NULL_HANDLE;
     VkExtent2D m_lowExtent{0, 0};
     VkExtent2D m_renderSize{0, 0};
+    // Mascara reativa do FSR (cobertura das particulas), na resolucao de render.
+    VkImage m_reactiveImage = VK_NULL_HANDLE;
+    VmaAllocation m_reactiveAlloc = VK_NULL_HANDLE;
+    VkImageView m_reactiveView = VK_NULL_HANDLE;
+    VkExtent2D m_reactiveExtent{0, 0};
+    bool m_reactiveWritten = false;
+    void destroyReactive();
     std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setLow{};
     VkSampler m_depthSampler = VK_NULL_HANDLE;
     VkDescriptorPool m_pool = VK_NULL_HANDLE;

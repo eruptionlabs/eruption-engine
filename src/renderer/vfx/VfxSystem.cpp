@@ -359,11 +359,20 @@ bool VfxSystem::createPipelines() {
     dy.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
     dy.dynamicStateCount = 2;
     dy.pDynamicStates = dyn;
-    const VkFormat colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    // Dois alvos: o lit e a mascara reativa (R8, MAX: a particula mais
+    // presente no pixel manda).
+    const VkFormat colorFormats[2] = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8_UNORM};
+    VkPipelineColorBlendAttachmentState blends[2] = {blend, blend};
+    blends[1].srcColorBlendFactor = blends[1].dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    blends[1].srcAlphaBlendFactor = blends[1].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blends[1].colorBlendOp = blends[1].alphaBlendOp = VK_BLEND_OP_MAX;
+    blends[1].colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+    cb.attachmentCount = 2;
+    cb.pAttachments = blends;
     VkPipelineRenderingCreateInfo ri{};
     ri.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    ri.colorAttachmentCount = 1;
-    ri.pColorAttachmentFormats = &colorFormat;
+    ri.colorAttachmentCount = 2;
+    ri.pColorAttachmentFormats = colorFormats;
     ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
     VkGraphicsPipelineCreateInfo gi{};
     gi.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -382,11 +391,19 @@ bool VfxSystem::createPipelines() {
     VkResult r = vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_drawPipe);
     // Meia resolucao: mesmo shader, sem attachment de profundidade (o teste
     // vira amostra da profundidade cheia no fragment).
-    if (r == VK_SUCCESS) {
+    VkShaderModule fsLow = loadModule(dev, "vfx/vfx_particle_low.frag.spv");
+    if (r == VK_SUCCESS && fsLow) {
+        st[1].module = fsLow;
         ri.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+        ri.colorAttachmentCount = 1; // so' a cor: a cobertura entra pela composicao
+        cb.attachmentCount = 1;
         ds.depthTestEnable = VK_FALSE;
         r = vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_drawLowPipe);
+        ri.colorAttachmentCount = 2;
+        cb.attachmentCount = 2;
     }
+    if (fsLow) vkDestroyShaderModule(dev, fsLow, nullptr);
+    else r = VK_ERROR_INITIALIZATION_FAILED;
     vkDestroyShaderModule(dev, vs, nullptr);
     vkDestroyShaderModule(dev, fs, nullptr);
     if (r != VK_SUCCESS) return false;
@@ -441,6 +458,7 @@ void VfxSystem::shutdown() {
     for (VkPipeline* p : {&m_emitPipe, &m_argsPipe, &m_simPipe, &m_finishPipe, &m_drawPipe, &m_drawLowPipe,
                           &m_compositePipe, &m_sortHistPipe, &m_sortScanPipe, &m_sortScatterPipe})
         if (*p) vkDestroyPipeline(dev, *p, nullptr), *p = VK_NULL_HANDLE;
+    destroyReactive();
     if (m_lowView) vkDestroyImageView(dev, m_lowView, nullptr);
     if (m_lowImage) vmaDestroyImage(m_ctx->allocator(), m_lowImage, m_lowAlloc);
     m_lowView = VK_NULL_HANDLE;
@@ -1028,6 +1046,37 @@ void VfxSystem::debugDump() {
                           idx[i], p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], sg & 0xFFFFu, sg >> 16, szr.x);
     }
     destroyBuf(rb);
+    // Mascara reativa: quantos pixels as particulas marcaram.
+    if (m_reactiveImage) {
+        const VkDeviceSize n = VkDeviceSize(m_reactiveExtent.width) * m_reactiveExtent.height;
+        Buf mb;
+        if (createBuf(mb, n, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_TO_CPU, true)) {
+            m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+                m_ctx->cmdImageBarrier(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                                       VK_ACCESS_TRANSFER_READ_BIT);
+                VkBufferImageCopy r{};
+                r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                r.imageExtent = {m_reactiveExtent.width, m_reactiveExtent.height, 1};
+                vkCmdCopyImageToBuffer(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, mb.buf, 1, &r);
+                m_ctx->cmdImageBarrier(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                                       VK_ACCESS_SHADER_READ_BIT);
+            });
+            vmaInvalidateAllocation(m_ctx->allocator(), mb.alloc, 0, VK_WHOLE_SIZE);
+            const uint8_t* px = static_cast<const uint8_t*>(mb.mapped);
+            size_t marked = 0, sum = 0;
+            for (VkDeviceSize i = 0; i < n; ++i) {
+                marked += px[i] > 0;
+                sum += px[i];
+            }
+            ERUPTION_LOG_WARN("[VFX] dump reativa: %.2f%% dos pixels marcados, media %.1f/255", 100.0 * double(marked) / double(n),
+                              double(sum) / double(n));
+            destroyBuf(mb);
+        }
+    }
 }
 
 bool VfxSystem::ensureLowResTarget(VkExtent2D full) {
@@ -1101,10 +1150,100 @@ void VfxSystem::drawLowRes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2
                            VK_ACCESS_SHADER_READ_BIT);
 }
 
-void VfxSystem::draw(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent) {
-    if (!m_ready || !m_active) return;
+bool VfxSystem::resize(uint32_t w, uint32_t h) {
+    if (!m_ctx || w == 0 || h == 0) return false;
+    if (m_reactiveImage && w == m_reactiveExtent.width && h == m_reactiveExtent.height) return true;
+    m_ctx->waitIdle();
+    destroyReactive();
+    if (!m_ctx->createImage(w, h, VK_FORMAT_R8_UNORM,
+                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                            VMA_MEMORY_USAGE_GPU_ONLY, m_reactiveImage, m_reactiveAlloc))
+        return false;
+    VkImageViewCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = m_reactiveImage;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = VK_FORMAT_R8_UNORM;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vkc::createImageView(m_ctx->device(), &vi, nullptr, &m_reactiveView) != VK_SUCCESS) return false;
+    m_reactiveExtent = {w, h};
+    // Comeca zerada e legivel (o FSR/sprites leem mesmo sem particula).
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        m_ctx->cmdImageBarrier(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                               VK_ACCESS_TRANSFER_WRITE_BIT);
+        const VkClearColorValue zero{{0.0f, 0.0f, 0.0f, 0.0f}};
+        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+        m_ctx->cmdImageBarrier(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    });
+    m_reactiveWritten = false;
+    return true;
+}
+
+void VfxSystem::destroyReactive() {
+    if (!m_ctx) return;
+    if (m_reactiveView) vkDestroyImageView(m_ctx->device(), m_reactiveView, nullptr);
+    if (m_reactiveImage) vmaDestroyImage(m_ctx->allocator(), m_reactiveImage, m_reactiveAlloc);
+    m_reactiveView = VK_NULL_HANDLE;
+    m_reactiveImage = VK_NULL_HANDLE;
+    m_reactiveExtent = {0, 0};
+}
+
+void VfxSystem::endFrame(VkCommandBuffer cmd) {
+    if (!m_ready || m_active || !m_reactiveWritten || !m_reactiveImage) return;
+    m_ctx->cmdImageBarrier(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    const VkClearColorValue zero{{0.0f, 0.0f, 0.0f, 0.0f}};
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+    m_ctx->cmdImageBarrier(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    m_reactiveWritten = false;
+}
+
+void VfxSystem::draw(VkCommandBuffer cmd, VkImageView litView, VkImageView depthView, VkExtent2D extent) {
+    if (!m_ready || !m_active || !m_reactiveImage) return;
     const uint32_t frame = m_ctx->currentFrame();
     writeDescriptors(frame, depthView);
+    m_ctx->cmdImageBarrier(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_SHADER_READ_BIT,
+                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT);
+    VkRenderingAttachmentInfo colors[2]{};
+    colors[0].sType = colors[1].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colors[0].imageView = litView;
+    colors[0].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colors[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    colors[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colors[1].imageView = m_reactiveView;
+    colors[1].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colors[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colors[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colors[1].clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    VkRenderingAttachmentInfo depth{};
+    depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth.imageView = depthView;
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_NONE;
+    VkRenderingInfo ri{};
+    ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    ri.renderArea = {{0, 0}, extent};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 2;
+    ri.pColorAttachments = colors;
+    ri.pDepthAttachment = &depth;
+    vkc::cmdBeginRendering(cmd, &ri);
     const VkViewport vp{0.0f, 0.0f, float(extent.width), float(extent.height), 0.0f, 1.0f};
     const VkRect2D sc{{0, 0}, extent};
     // Meia resolucao primeiro (fumaca, atras), depois a resolucao cheia.
@@ -1125,6 +1264,12 @@ void VfxSystem::draw(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D exte
     vkCmdPushConstants(cmd, m_drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
                        &push);
     vkCmdDrawIndirect(cmd, m_counters.buf, kCDraw * 4, 1, 16);
+    vkc::cmdEndRendering(cmd);
+    m_ctx->cmdImageBarrier(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    m_reactiveWritten = true;
 }
 
 } // namespace eruption
