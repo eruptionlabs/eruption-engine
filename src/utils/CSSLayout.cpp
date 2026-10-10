@@ -228,4 +228,62 @@ std::string CSSLayout::rawProperty(const std::string& selector, const std::strin
     return it->second;
 }
 
+namespace {
+
+ImU32 fadeAlpha(ImU32 c, float mul) {
+    if (mul >= 0.999f) return c;
+    const int a = int(((c >> IM_COL32_A_SHIFT) & 0xFF) * (mul < 0.0f ? 0.0f : mul));
+    return (c & ~IM_COL32_A_MASK) | (ImU32(a) << IM_COL32_A_SHIFT);
+}
+
+bool opaque(ImU32 c) { return ((c >> IM_COL32_A_SHIFT) & 0xFF) != 0; }
+
+} // namespace
+
+void CSSLayout::drawBox(ImDrawList* dl, const CSSRect& r, const std::string& selector, float alphaMul,
+                        ImU32 fallbackBg, ImU32 fallbackBorder, float fallbackBorderWidth, float fallbackRadius,
+                        ImU32 bgOverride, ImU32 borderOverride) const {
+    if (!dl) return;
+    const float radius = borderRadius(selector, fallbackRadius);
+    const ImU32 bg = bgOverride ? bgOverride : backgroundColor(selector, fallbackBg);
+    if (opaque(bg)) dl->AddRectFilled(r.min(), r.max(), fadeAlpha(bg, alphaMul), radius);
+    const float bw = borderWidth(selector, fallbackBorderWidth);
+    const ImU32 bc = borderOverride ? borderOverride : borderColor(selector, fallbackBorder);
+    if (bw > 0.0f && opaque(bc)) dl->AddRect(r.min(), r.max(), fadeAlpha(bc, alphaMul), radius, 0, bw);
+}
+
+void CSSLayout::drawBar(ImDrawList* dl, const CSSRect& r, const std::string& selector, float ratio, ImU32 fillLow,
+                        ImU32 fillHigh, const char* valueText, float textSize, float alphaMul, ImU32 fallbackBg,
+                        ImU32 fallbackBorder, float fallbackBorderWidth, float fallbackRadius) const {
+    if (!dl) return;
+    ratio = ratio < 0.0f ? 0.0f : (ratio > 1.0f ? 1.0f : ratio);
+    drawBox(dl, r, selector, alphaMul, fallbackBg, fallbackBorder, fallbackBorderWidth, fallbackRadius);
+    const float bw = borderWidth(selector, fallbackBorderWidth);
+    const ImVec2 fillMin(r.x + bw, r.y + bw);
+    const ImVec2 fillMax(r.x + bw + (r.w - 2.0f * bw) * ratio, r.y + r.h - bw);
+    if (fillMax.x > fillMin.x)
+        dl->AddRectFilledMultiColor(fillMin, fillMax, fadeAlpha(fillLow, alphaMul), fadeAlpha(fillHigh, alphaMul),
+                                    fadeAlpha(fillHigh, alphaMul), fadeAlpha(fillLow, alphaMul));
+    if (valueText && *valueText) {
+        const ImU32 tc = fadeAlpha(textColor(selector, IM_COL32(240, 240, 240, 255)), alphaMul);
+        if (textSize > 0.0f) {
+            drawLabel(dl, r.center().x, r.y + (r.h - textSize) * 0.5f, textSize, tc, valueText, 1);
+        } else {
+            const ImVec2 ts = ImGui::CalcTextSize(valueText);
+            drawLabel(dl, r.x + (r.w - ts.x) * 0.5f, r.y + (r.h - ts.y) * 0.5f, 0.0f, tc, valueText, 0);
+        }
+    }
+}
+
+void CSSLayout::drawLabel(ImDrawList* dl, float x, float y, float size, ImU32 color, const char* text,
+                          uint8_t align) {
+    if (!dl || !text || !*text) return;
+    ImFont* font = ImGui::GetFont();
+    const float px = size > 0.0f ? size : ImGui::GetFontSize();
+    const float w = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text).x;
+    const float left = align == 0 ? x : (align == 1 ? x - w * 0.5f : x - w);
+    dl->AddText(font, px, ImVec2(left + 1.0f, y + 1.0f), IM_COL32(0, 0, 0, 200), text);
+    dl->AddText(font, px, ImVec2(left, y), color, text);
+}
+
 } // namespace eruption

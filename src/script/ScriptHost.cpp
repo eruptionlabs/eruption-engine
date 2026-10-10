@@ -214,6 +214,10 @@ bool ScriptHost::load(Script& s, bool keepState) {
     if (m_debugger) m_debugger->applyBreakpoints(T, -1, s.path);
 
     std::vector<Handler> handlers;
+    // EMPILHA. Um require() no topo de um arquivo carrega OUTRO arquivo no
+    // meio desta carga; sem guardar o anterior, o on.* que vier depois do
+    // require cairia no vazio ("must be called at the top level").
+    std::vector<Handler>* const outerHandlers = m_loadingHandlers;
     m_loadingHandlers = &handlers;
     lua_pushcfunction(T, errorHandler, "errorHandler");
     lua_insert(T, -2);
@@ -221,7 +225,7 @@ bool ScriptHost::load(Script& s, bool keepState) {
     g_inCall = true;
     const int status = lua_pcall(T, 0, 1, -2);
     g_inCall = false;
-    m_loadingHandlers = nullptr;
+    m_loadingHandlers = outerHandlers;
     if (status != 0) {
         Logger::error("%s", lua_tostring(T, -1));
         releaseHandlers(handlers);
@@ -255,6 +259,54 @@ bool ScriptHost::load(Script& s, bool keepState) {
     s.handlers = std::move(handlers);
     s.failed = false;
     return true;
+}
+
+// MODULOS. Todo script ja' devolve uma tabela (o `moduleRef`); require so'
+// da' acesso a ela por nome. Sem isso dois arquivos nao trocam nada: cada um
+// roda num ambiente isolado, e dado grande (tabela de classe, de inimigo)
+// teria que caber tudo dentro de um arquivo so'.
+//
+// Nome e' o caminho sem extensao, relativo a' pasta de scripts:
+// require("dados") ou require("combate/tabelas"). Ciclo e' erro, nao travada.
+int ScriptHost::moduleRef(const std::string& name, std::string& error) {
+    namespace fs = std::filesystem;
+    std::string want = name;
+    for (char& c : want)
+        if (c == '\\') c = '/';
+    while (!want.empty() && want.front() == '/') want.erase(want.begin());
+    if (want.size() > 5 && want.compare(want.size() - 5, 5, ".luau") == 0) want.resize(want.size() - 5);
+    if (want.empty() || want.find("..") != std::string::npos) {
+        error = "require: invalid module name \"" + name + "\"";
+        return -1;
+    }
+
+    const fs::path target = (m_dir / (want + ".luau")).lexically_normal();
+    auto it = std::find_if(m_scripts.begin(), m_scripts.end(), [&](const Script& s) {
+        return s.path.lexically_normal() == target;
+    });
+    if (it == m_scripts.end()) {
+        std::error_code ec;
+        if (!fs::is_regular_file(target, ec)) {
+            error = "require: there is no script " + want + ".luau in " + m_dir.generic_string();
+            return -1;
+        }
+        // Existe no disco mas o scan ainda nao pegou: entra agora.
+        m_scripts.emplace_back();
+        Script& s = m_scripts.back();
+        s.path = target;
+        s.mtime = fs::last_write_time(target, ec);
+        if (!load(s, false)) {
+            error = "require: " + want + ".luau failed to load";
+            return -1;
+        }
+        if (m_running) startScript(s);
+        return s.moduleRef;
+    }
+    if (it->failed || it->moduleRef < 0) {
+        error = "require: " + want + ".luau is not loaded (it has an error)";
+        return -1;
+    }
+    return it->moduleRef;
 }
 
 bool ScriptHost::callRef(Script& s, int fnRef, int nargs) {

@@ -5,6 +5,7 @@
 #include "script/ScriptHost.hpp"
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "game/PlayerController.hpp"
 #include "renderer/UiCanvas.hpp"
 #include "renderer/WeatherTypes.hpp"
@@ -20,6 +21,7 @@
 #include <glm/gtx/euler_angles.hpp>
 
 #include <cctype>
+#include <filesystem>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -623,7 +625,7 @@ int lights_turn_on(lua_State* L) { light(L).enabled = true; return 0; }
 int lights_turn_off(lua_State* L) { light(L).enabled = false; return 0; }
 
 
-// ------------------------------------------------- suco de cena (fx, ui2d)
+// ------------------------------------------------------- suco de cena (fx)
 //
 // Nada aqui sabe o que e' batalha ou turno: sao primitivas de apresentacao
 // (tremor, clarao, numero que sobe, retangulo, texto, barra). O jogo decide
@@ -699,68 +701,48 @@ int fx_fading(lua_State* L) {
     return 1;
 }
 
-// ui2d: nos que o script cria e mexe. Coordenadas em fracao da area de jogo.
-UiCanvas::Node* checkNode(lua_State* L, int arg) {
-    const uint32_t id = static_cast<uint32_t>(luaL_checkinteger(L, arg));
-    UiCanvas::Node* n = eng().uiCanvas().get(id);
-    if (!n) luaL_error(L, "ui2d: node %d does not exist any more", static_cast<int>(id));
-    return n;
-}
-int ui2d_add(lua_State* L) {
-    const char* kind = luaL_optstring(L, 1, "rect");
-    UiCanvas::Kind k = UiCanvas::Kind::Rect;
-    if (equalsNoCase(kind, "text")) k = UiCanvas::Kind::Text;
-    else if (equalsNoCase(kind, "bar")) k = UiCanvas::Kind::Bar;
-    else if (!equalsNoCase(kind, "rect")) luaL_error(L, "ui2d.add: kind must be \"rect\", \"text\" or \"bar\"");
-    lua_pushinteger(L, static_cast<int>(eng().uiCanvas().add(k)));
-    return 1;
-}
-int ui2d_rect(lua_State* L) {
-    UiCanvas::Node* n = checkNode(L, 1);
-    n->x = static_cast<float>(luaL_checknumber(L, 2));
-    n->y = static_cast<float>(luaL_checknumber(L, 3));
-    n->w = static_cast<float>(luaL_optnumber(L, 4, n->w));
-    n->h = static_cast<float>(luaL_optnumber(L, 5, n->h));
-    return 0;
-}
-int ui2d_set(lua_State* L) {
-    UiCanvas::Node* n = checkNode(L, 1);
-    const char* what = luaL_checkstring(L, 2);
-    if (equalsNoCase(what, "text")) n->text = luaL_checkstring(L, 3);
-    else if (equalsNoCase(what, "value")) n->value = static_cast<float>(luaL_checknumber(L, 3));
-    else if (equalsNoCase(what, "z")) n->z = static_cast<float>(luaL_checknumber(L, 3));
-    else if (equalsNoCase(what, "visible")) n->visible = lua_toboolean(L, 3) != 0;
-    else if (equalsNoCase(what, "border")) n->border = static_cast<float>(luaL_checknumber(L, 3));
-    else if (equalsNoCase(what, "radius")) n->radius = static_cast<float>(luaL_checknumber(L, 3));
-    else if (equalsNoCase(what, "size")) n->textSize = static_cast<float>(luaL_checknumber(L, 3));
-    else if (equalsNoCase(what, "shadow")) n->shadow = lua_toboolean(L, 3) != 0;
-    else if (equalsNoCase(what, "align")) {
-        const char* a = luaL_checkstring(L, 3);
-        n->align = equalsNoCase(a, "left") ? 0 : (equalsNoCase(a, "right") ? 2 : 1);
-    } else if (equalsNoCase(what, "color") || equalsNoCase(what, "color2")) {
-        const float* v = luaL_checkvector(L, 3);
-        Vec4 c(v[0], v[1], v[2], static_cast<float>(luaL_optnumber(L, 4, 1.0)));
-        if (equalsNoCase(what, "color")) n->color = c; else n->color2 = c;
-    } else {
-        luaL_error(L, "ui2d.set: unknown property \"%s\"", what);
+// ui: documento de interface em CSS. O script so' preenche valor; o layout
+// e' do arquivo (e do Caldera). Ver renderer/UiDocument.hpp.
+int ui_load(lua_State* L) {
+    const std::string rel = luaL_checkstring(L, 1);
+    std::string err;
+    std::filesystem::path p = project::gameRef(rel);
+    std::error_code ec;
+    if (!std::filesystem::exists(p, ec)) p = project::engine(rel);
+    if (!eng().uiDocument().load(p, &err)) {
+        ERUPTION_LOG_WARN("ui.load: %s", err.c_str());
+        lua_pushboolean(L, 0);
+        return 1;
     }
-    return 0;
-}
-int ui2d_remove(lua_State* L) {
-    eng().uiCanvas().remove(static_cast<uint32_t>(luaL_checkinteger(L, 1)));
-    return 0;
-}
-int ui2d_clear(lua_State* L) {
-    (void)L;
-    eng().uiCanvas().clear();
-    return 0;
-}
-int ui2d_screen(lua_State* L) {
-    // Proporcao da area de jogo (largura / altura): o script posiciona em
-    // fracao, e precisa disso pra fazer quadrado nao sair achatado.
-    const ImGuiIO& io = ImGui::GetIO();
-    lua_pushnumber(L, io.DisplaySize.y > 0.0f ? io.DisplaySize.x / io.DisplaySize.y : 1.777);
+    lua_pushboolean(L, 1);
     return 1;
+}
+int ui_text(lua_State* L) {
+    eng().uiDocument().setText(luaL_checkstring(L, 1), luaL_checkstring(L, 2));
+    return 0;
+}
+int ui_value(lua_State* L) {
+    eng().uiDocument().setValue(luaL_checkstring(L, 1), static_cast<float>(luaL_checknumber(L, 2)));
+    return 0;
+}
+int ui_visible(lua_State* L) {
+    eng().uiDocument().setVisible(luaL_checkstring(L, 1), lua_toboolean(L, 2) != 0);
+    return 0;
+}
+int ui_color(lua_State* L) {
+    const float* v = luaL_checkvector(L, 2);
+    const Vec4 c(v[0], v[1], v[2], static_cast<float>(luaL_optnumber(L, 4, 1.0)));
+    eng().uiDocument().setColor(luaL_checkstring(L, 1), static_cast<int>(luaL_optinteger(L, 3, 0)), c);
+    return 0;
+}
+int ui_has(lua_State* L) {
+    lua_pushboolean(L, eng().uiDocument().has(luaL_checkstring(L, 1)));
+    return 1;
+}
+int ui_reset(lua_State* L) {
+    (void)L;
+    eng().uiDocument().resetOverrides();
+    return 0;
 }
 
 int camera_basis(lua_State* L) {
@@ -801,10 +783,32 @@ int world_set_dof(lua_State* L) {
 // Personagem novo em tempo de execucao: o jogo monta o elenco que precisa
 // (NPC de cidade, fila de inimigos) sem passar pelo arquivo de cena. Devolve
 // falso se o sprite nao abriu.
+// require("nome"): a tabela que o outro script devolveu. Carrega na hora se
+// ele ainda nao entrou. Ver ScriptHost::moduleRef.
+int api_require(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    ScriptHost* host = ScriptHost::current();
+    if (!host) luaL_errorL(L, "require is only available while the game is running");
+    std::string err;
+    const int ref = host->moduleRef(name, err);
+    if (ref < 0) luaL_errorL(L, "%s", err.c_str());
+    lua_getref(L, ref);
+    return 1;
+}
+
 int player_freeze(lua_State* L) {
     if (PlayerController* p = ScriptBridge::player()) p->setInputFrozen(lua_toboolean(L, 1) != 0);
     return 0;
 }
+int player_hide(lua_State* L) {
+    if (PlayerController* p = ScriptBridge::player()) p->setHidden(lua_toboolean(L, 1) != 0);
+    return 0;
+}
+int camera_free(lua_State* L) {
+    if (PlayerController* p = ScriptBridge::player()) p->setFreeCamera(lua_toboolean(L, 1) != 0);
+    return 0;
+}
+
 int player_frozen(lua_State* L) {
     const PlayerController* p = ScriptBridge::player();
     lua_pushboolean(L, p && p->inputFrozen());
@@ -877,7 +881,9 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"near", on_near}, {"hour", on_hour}, {"enter", on_enter}, {"leave", on_leave}, {nullptr, nullptr}};
     static const luaL_Reg vars[] = {{"get", vars_get}, {"set", vars_set}, {"add", vars_add}, {nullptr, nullptr}};
     static const luaL_Reg ui[] = {{"message", ui_message}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
-                                  {nullptr, nullptr}};
+                                  {"load", ui_load}, {"text", ui_text}, {"value", ui_value},
+                                  {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has},
+                                  {"reset", ui_reset}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
@@ -886,16 +892,15 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg player[] = {
         {"position", player_position}, {"set_position", player_set_position}, {"set_sprite", player_set_sprite}, {"near", player_near},
         {"inside", player_inside}, {"say", player_say}, {"play", player_play}, {"animation", player_animation},
-        {"freeze", player_freeze}, {"frozen", player_frozen}, {nullptr, nullptr}};
+        {"freeze", player_freeze}, {"frozen", player_frozen}, {"hide", player_hide},
+        {nullptr, nullptr}};
     static const luaL_Reg camera[] = {
         {"target", camera_target}, {"set_target", camera_set_target},
-        {"orbit", camera_orbit}, {"set_orbit", camera_set_orbit}, {"basis", camera_basis}, {nullptr, nullptr}};
+        {"orbit", camera_orbit}, {"set_orbit", camera_set_orbit}, {"basis", camera_basis},
+        {"free", camera_free}, {nullptr, nullptr}};
     static const luaL_Reg fx[] = {
         {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash},
         {"fading", fx_fading}, {nullptr, nullptr}};
-    static const luaL_Reg ui2d[] = {
-        {"add", ui2d_add}, {"rect", ui2d_rect}, {"set", ui2d_set}, {"remove", ui2d_remove},
-        {"clear", ui2d_clear}, {"aspect", ui2d_screen}, {nullptr, nullptr}};
     static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {nullptr, nullptr}};
     static const luaL_Reg models[] = {
         {"count", models_count}, {"find", models_find}, {"name", models_name},
@@ -938,9 +943,10 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "input", input);
     lib(L, "models", models);
     lib(L, "lights", lights);
+    lua_pushcfunction(L, api_require, "require");
+    lua_setglobal(L, "require");
     lib(L, "characters", characters);
     lib(L, "fx", fx);
-    lib(L, "ui2d", ui2d);
 }
 
 std::string scriptApiDefinitions() {
@@ -948,6 +954,12 @@ std::string scriptApiDefinitions() {
 
 -- Prints to the editor console.
 declare function log(...: any): ()
+
+-- The table another script of this project returned, loading it now if it has
+-- not run yet. The name is the path without the extension, from the scripts
+-- folder: require("data") or require("battle/tables"). Scripts that only hold
+-- data (tables of classes, enemies, items) live in their own file this way.
+declare function require(module: string): any
 
 -- A model is referenced by its name (string) or its index (number, from 1).
 type Model = string | number
@@ -983,6 +995,20 @@ declare ui: {
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),
     show_minimap: (on: boolean) -> (),
+    -- The game's own interface, described in a CSS file of the project and
+    -- edited in Caldera: every rule with an id (#menu, #hp-1) is an element,
+    -- and `--widget` says whether it is a rect, text, a bar or an image.
+    -- The script only fills VALUES in; where each thing sits, in what color
+    -- and what size, is the file's business, reloaded when it changes.
+    load: (css: string) -> boolean,
+    text: (selector: string, text: string) -> (),
+    value: (selector: string, value: number) -> (),   -- bar, 0 to 1
+    visible: (selector: string, on: boolean) -> (),
+    -- which: 0 = background / rail / text, 1 = bar fill or border.
+    color: (selector: string, color: vector, which: number?, opacity: number?) -> (),
+    has: (selector: string) -> boolean,
+    -- Drops everything the script set; the file decides again.
+    reset: () -> (),
 }
 
 declare world: {
@@ -1035,6 +1061,8 @@ declare player: {
     -- running). For dialogue, cutscenes and battle.
     freeze: (on: boolean) -> (),
     frozen: () -> boolean,
+    -- Hidden: the player's sprite is not drawn (a scene he is not in).
+    hide: (on: boolean) -> (),
 }
 
 declare characters: {
@@ -1085,6 +1113,9 @@ declare camera: {
     -- Camera right and forward on the ground plane, to place things relative
     -- to the view (a row of fighters on the left, another on the right).
     basis: () -> (vector, vector),
+    -- Free camera: stops following the player, so the script (or the mouse)
+    -- decides where it looks. Same switch as the middle mouse button.
+    free: (on: boolean) -> (),
 }
 
 -- Presentation of a hit: what makes a blow feel like it landed. The engine
@@ -1104,26 +1135,6 @@ declare fx: {
     fading: () -> boolean,
 }
 
--- Game interface in 2D, over the scene: rectangles, text and bars that the
--- script creates, moves and paints. The engine draws them and nothing else:
--- a menu, a turn queue or a party panel is the GAME's business.
--- Positions and sizes are a FRACTION of the game area (0 to 1), so the
--- layout holds at any resolution. Text size is a fraction of the height.
--- There is no animation system here: move the nodes from on.update.
-declare ui2d: {
-    -- kind: "rect", "text" or "bar". Returns the node id.
-    add: (kind: string?) -> number,
-    rect: (node: number, x: number, y: number, width: number?, height: number?) -> (),
-    -- Properties: "text", "value" (bar, 0..1), "color", "color2" (rect border
-    -- / bar fill), "z", "visible", "border" (px), "radius" (px), "size"
-    -- (text), "align" ("left" | "center" | "right"), "shadow".
-    -- Colors take an optional opacity as the 4th argument.
-    set: (node: number, property: string, value: any, opacity: number?) -> (),
-    remove: (node: number) -> (),
-    clear: () -> (),
-    -- Width / height of the game area, to keep squares square.
-    aspect: () -> number,
-}
 
 declare input: {
     down: (key: string) -> boolean,

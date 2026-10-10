@@ -3,6 +3,12 @@
 -- Prints to the editor console.
 declare function log(...: any): ()
 
+-- The table another script of this project returned, loading it now if it has
+-- not run yet. The name is the path without the extension, from the scripts
+-- folder: require("data") or require("battle/tables"). Scripts that only hold
+-- data (tables of classes, enemies, items) live in their own file this way.
+declare function require(module: string): any
+
 -- A model is referenced by its name (string) or its index (number, from 1).
 type Model = string | number
 
@@ -37,6 +43,20 @@ declare ui: {
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),
     show_minimap: (on: boolean) -> (),
+    -- The game's own interface, described in a CSS file of the project and
+    -- edited in Caldera: every rule with an id (#menu, #hp-1) is an element,
+    -- and `--widget` says whether it is a rect, text, a bar or an image.
+    -- The script only fills VALUES in; where each thing sits, in what color
+    -- and what size, is the file's business, reloaded when it changes.
+    load: (css: string) -> boolean,
+    text: (selector: string, text: string) -> (),
+    value: (selector: string, value: number) -> (),   -- bar, 0 to 1
+    visible: (selector: string, on: boolean) -> (),
+    -- which: 0 = background / rail / text, 1 = bar fill or border.
+    color: (selector: string, color: vector, which: number?, opacity: number?) -> (),
+    has: (selector: string) -> boolean,
+    -- Drops everything the script set; the file decides again.
+    reset: () -> (),
 }
 
 declare world: {
@@ -89,6 +109,8 @@ declare player: {
     -- running). For dialogue, cutscenes and battle.
     freeze: (on: boolean) -> (),
     frozen: () -> boolean,
+    -- Hidden: the player's sprite is not drawn (a scene he is not in).
+    hide: (on: boolean) -> (),
 }
 
 declare characters: {
@@ -139,6 +161,9 @@ declare camera: {
     -- Camera right and forward on the ground plane, to place things relative
     -- to the view (a row of fighters on the left, another on the right).
     basis: () -> (vector, vector),
+    -- Free camera: stops following the player, so the script (or the mouse)
+    -- decides where it looks. Same switch as the middle mouse button.
+    free: (on: boolean) -> (),
 }
 
 -- Presentation of a hit: what makes a blow feel like it landed. The engine
@@ -158,26 +183,6 @@ declare fx: {
     fading: () -> boolean,
 }
 
--- Game interface in 2D, over the scene: rectangles, text and bars that the
--- script creates, moves and paints. The engine draws them and nothing else:
--- a menu, a turn queue or a party panel is the GAME's business.
--- Positions and sizes are a FRACTION of the game area (0 to 1), so the
--- layout holds at any resolution. Text size is a fraction of the height.
--- There is no animation system here: move the nodes from on.update.
-declare ui2d: {
-    -- kind: "rect", "text" or "bar". Returns the node id.
-    add: (kind: string?) -> number,
-    rect: (node: number, x: number, y: number, width: number?, height: number?) -> (),
-    -- Properties: "text", "value" (bar, 0..1), "color", "color2" (rect border
-    -- / bar fill), "z", "visible", "border" (px), "radius" (px), "size"
-    -- (text), "align" ("left" | "center" | "right"), "shadow".
-    -- Colors take an optional opacity as the 4th argument.
-    set: (node: number, property: string, value: any, opacity: number?) -> (),
-    remove: (node: number) -> (),
-    clear: () -> (),
-    -- Width / height of the game area, to keep squares square.
-    aspect: () -> number,
-}
 
 declare input: {
     down: (key: string) -> boolean,

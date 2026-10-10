@@ -26,34 +26,6 @@ void text(ImDrawList* dl, float px, float py, float size, ImU32 color, const cha
 
 } // namespace
 
-uint32_t UiCanvas::add(Kind kind) {
-    Node n;
-    n.id = m_nextId++;
-    n.kind = kind;
-    m_nodes.push_back(std::move(n));
-    return m_nodes.back().id;
-}
-
-UiCanvas::Node* UiCanvas::get(uint32_t id) {
-    for (Node& n : m_nodes)
-        if (n.id == id && n.alive) return &n;
-    return nullptr;
-}
-
-void UiCanvas::remove(uint32_t id) {
-    for (size_t i = 0; i < m_nodes.size(); ++i) {
-        if (m_nodes[i].id != id) continue;
-        m_nodes.erase(m_nodes.begin() + static_cast<long>(i));
-        return;
-    }
-}
-
-void UiCanvas::clear() {
-    m_nodes.clear();
-    m_popups.clear();
-    m_fade = Fade{};
-}
-
 void UiCanvas::popup(const Vec3& world, const std::string& text, const Vec4& color, float seconds, float rise,
                      float size) {
     Popup p;
@@ -89,45 +61,6 @@ void UiCanvas::update(float dt) {
 
 void UiCanvas::draw(ImDrawList* dl, float x, float y, float w, float h, const Mat4& viewProj) const {
     if (!dl || w <= 0.0f || h <= 0.0f) return;
-
-    // Nós por z (ordem estável: empate mantém a ordem de criação).
-    m_sorted.clear();
-    m_sorted.reserve(m_nodes.size());
-    for (const Node& n : m_nodes)
-        if (n.visible) m_sorted.push_back(&n);
-    std::stable_sort(m_sorted.begin(), m_sorted.end(), [](const Node* a, const Node* b) { return a->z < b->z; });
-
-    for (const Node* n : m_sorted) {
-        const ImVec2 p0(x + n->x * w, y + n->y * h);
-        const ImVec2 p1(p0.x + n->w * w, p0.y + n->h * h);
-        switch (n->kind) {
-        case Kind::Rect:
-            if (n->color.a > 0.0f) dl->AddRectFilled(p0, p1, col(n->color), n->radius);
-            if (n->border > 0.0f && n->color2.a > 0.0f) dl->AddRect(p0, p1, col(n->color2), n->radius, 0, n->border);
-            break;
-        case Kind::Bar: {
-            if (n->color.a > 0.0f) dl->AddRectFilled(p0, p1, col(n->color), n->radius);
-            const float v = std::clamp(n->value, 0.0f, 1.0f);
-            if (v > 0.0f && n->color2.a > 0.0f) {
-                const float pad = n->border;
-                dl->AddRectFilled(ImVec2(p0.x + pad, p0.y + pad),
-                                  ImVec2(p0.x + pad + (p1.x - p0.x - pad * 2.0f) * v, p1.y - pad), col(n->color2),
-                                  n->radius);
-            }
-            if (n->border > 0.0f) dl->AddRect(p0, p1, col(Vec4(0.0f, 0.0f, 0.0f, 0.6f)), n->radius, 0, n->border);
-            if (!n->text.empty())
-                text(dl, (p0.x + p1.x) * 0.5f, p0.y + ((p1.y - p0.y) - n->textSize * h) * 0.5f, n->textSize * h,
-                     IM_COL32_WHITE, n->text.c_str(), 1, n->shadow);
-            break;
-        }
-        case Kind::Text: {
-            const float size = n->textSize * h;
-            const float px = n->align == 0 ? p0.x : (n->align == 1 ? (p0.x + p1.x) * 0.5f : p1.x);
-            text(dl, px, p0.y, size, col(n->color), n->text.c_str(), n->align, n->shadow);
-            break;
-        }
-        }
-    }
 
     // Números: sobem e apagam no fim. Fora da tela não desenha.
     for (const Popup& p : m_popups) {
