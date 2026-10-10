@@ -14,6 +14,7 @@
 #include "host/Compat.hpp"
 #include "host/Host.hpp"
 #include "unity/UnityHost.hpp"
+#include "unreal/UnrealHost.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -69,6 +70,18 @@ int main(int argc, char** argv) {
             const int n = unity::emitirEventoRender(id);
             std::printf("evento de render %d entregue a %d plugin(s)\n", id, n);
             if (n == 0) ++falhas;
+        } else if (op == "--unreal") {
+            falhas += carregarPlugin("unreal:" + proximo()) ? 0 : 1;
+        } else if (op == "--unreal-funcoes") {
+            for (const std::string& f : unreal::funcoes()) std::printf("funcao: %s\n", f.c_str());
+        } else if (op == "--unreal-chamar") {
+            // --unreal-chamar Classe.Funcao arg1 arg2 ...
+            const std::string nome = proximo();
+            std::vector<std::string> vals;
+            while (i + 1 < a.size() && !opcao(a[i + 1])) vals.push_back(a[++i]);
+            std::string r;
+            if (unreal::chamarFuncao(nome, vals, &r)) std::printf("%s() -> %s\n", nome.c_str(), r.c_str());
+            else ++falhas;
         } else if (op == "--dt") {
             dt = std::atof(proximo().c_str());
         } else if (op == "--quadros") {

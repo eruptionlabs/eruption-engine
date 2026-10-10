@@ -3,6 +3,7 @@
 #include "godot/GodotHost.hpp"
 #include "host/Host.hpp"
 #include "unity/UnityHost.hpp"
+#include "unreal/UnrealHost.hpp"
 
 #include <cstdlib>
 #include <dlfcn.h>
@@ -51,12 +52,16 @@ bool carregarPlugin(const std::string& esp) {
     } else if (caminho.extension() == ".gdextension") {
         ok = godot::carregarExtensao(esp);
         g_godot = g_godot || ok;
+    } else if (comecaCom(esp, "unreal:")) {
+        ok = unreal::carregarPlugin(esp.substr(7));
+    } else if (caminho.extension() == ".uplugin") {
+        ok = unreal::carregarPlugin(esp);
     } else if (comecaCom(esp, "unity:")) {
         ok = unity::carregarPlugin(esp.substr(6));
     } else if (caminho.extension() == ".so" && detectar(esp) == "unity") {
         ok = unity::carregarPlugin(esp);
     } else {
-        logf(Nivel::Erro, "compat", "plugin nao reconhecido: %s (use godot:, unity: ou um .gdextension)", esp.c_str());
+        logf(Nivel::Erro, "compat", "plugin nao reconhecido: %s (use godot:, unity:, unreal:, .gdextension ou .uplugin)", esp.c_str());
     }
     return ok;
 }
@@ -105,10 +110,11 @@ void encerrar() {
     }
     g_godot = false;
     unity::encerrar();
+    unreal::encerrar();
 }
 
 bool algumCarregado() {
-    return g_godot || unity::algumCarregado();
+    return g_godot || unity::algumCarregado() || unreal::algumCarregado();
 }
 
 } // namespace eruption::compat

@@ -32,6 +32,21 @@ Os nomes Godot, Unity e Unreal são usados apenas para dizer com o que a camada
 Observação: o plugin chama `GetBackBufferWidth()` sem checar se há API gráfica
 ativa; com dispositivo nulo isso derruba o próprio plugin (bug dele, não da camada).
 
+## Unreal Engine (plugins em código-fonte)
+
+Compatibilidade de **fonte**: o plugin é recompilado por
+`compat/unreal/ferramentas/compilar_plugin.py` contra cabeçalhos próprios
+(`compat/unreal/include`, subconjunto de CoreMinimal escrito do zero). A
+ferramenta faz o papel mínimo do gerador de reflexão: escreve os
+`*.generated.h` (Super/ThisClass por arquivo e linha) e "thunks" para as
+`UFUNCTION` estáticas. Arquivos gerados pela ferramenta oficial que venham no
+repositório do plugin (`Intermediate/`) são ignorados.
+
+| Plugin | Origem | Licença | Commit | O que exercita | Resultado |
+|---|---|---|---|---|---|
+| AdvancedEases | https://github.com/DKesserich/AdvancedEasesPlugin | MIT | `4fe1c6d00d0eb3b2b9a4dfdd65075f80d7348855` | `.uplugin` (LoadingPhase), `IModuleInterface`/`IMPLEMENT_MODULE`, `UBlueprintFunctionLibrary`, `UENUM`/`UMETA`, `UFUNCTION` estática com argumento padrão, `FVector`, `PI` | **funciona**: `StartupModule`/`ShutdownModule`; `AdvancedEase_Float(AE_OUTBOUNCE, 0.5, 0, 10)` → 7.65625; `AdvancedEase_Vector(AE_LERP, 0, (10,20,30), 0.5)` → (5, 10, 15) |
+| Serial COM | https://github.com/videofeedback/Unreal_Engine_SerialCOM_Plugin | MIT | `bd3b2ee44cec7016fe64975c2d03ffd7fda20a2d` | `DECLARE_LOG_CATEGORY_CLASS`, `UE_LOG` com `TEXT()`, módulo com `LoadingPhase` PreDefault | **parcial**: o plugin é só Win64 (porta serial via Win32), a ferramenta respeita `PlatformAllowList`; compilando só o arquivo do módulo (`--forcar-plataforma --so-fontes SERIALCOMModule.cpp`), o `UE_LOG` dele aparece no log do host |
+
 ## Como rodar
 
 ```sh
@@ -39,6 +54,7 @@ bash compat/scripts/baixar_testes.sh            # tudo (ou: godot | unity | unre
 cmake -S compat/tests/unity -B compat/build/unity-tests -DCMAKE_BUILD_TYPE=Release
 nice cmake --build compat/build/unity-tests -j4
 nice cmake --build compat/build/sozinho -j4 --target eruption-compat-unity-gl
+bash compat/tests/unreal/compilar.sh
 bash compat/scripts/testar_compat.sh            # bateria completa, sem o motor
 bash compat/scripts/testar_motor.sh             # dentro do motor (xvfb)
 ```
