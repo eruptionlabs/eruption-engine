@@ -13,6 +13,7 @@
 #include "godot/GodotHost.hpp"
 #include "host/Compat.hpp"
 #include "host/Host.hpp"
+#include "unity/CSharpHost.hpp"
 #include "unity/UnityHost.hpp"
 #include "unreal/UnrealHost.hpp"
 
@@ -27,6 +28,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> a(argv + 1, argv + argc);
     double dt = 1.0 / 60.0;
     uint64_t atual = 0;
+    uint32_t atualCs = 0;
     int falhas = 0;
     auto opcao = [](const std::string& s) { return s.rfind("--", 0) == 0; };
 
@@ -70,6 +72,22 @@ int main(int argc, char** argv) {
             const int n = unity::emitirEventoRender(id);
             std::printf("evento de render %d entregue a %d plugin(s)\n", id, n);
             if (n == 0) ++falhas;
+        } else if (op == "--unity-cs") {
+            falhas += carregarPlugin("unity-cs:" + proximo()) ? 0 : 1;
+        } else if (op == "--unity-cs-objeto") {
+            atualCs = unity::cs::criarObjeto(proximo());
+            if (!atualCs) ++falhas;
+        } else if (op == "--unity-cs-componente") {
+            // --unity-cs-componente Tipo [campo=valor ...]
+            const std::string tipo = proximo();
+            if (!unity::cs::adicionarComponente(atualCs, tipo)) ++falhas;
+            while (i + 1 < a.size() && !opcao(a[i + 1])) {
+                const std::string kv = a[++i];
+                const auto eq = kv.find('=');
+                if (eq == std::string::npos || !unity::cs::definirCampo(atualCs, tipo, kv.substr(0, eq), kv.substr(eq + 1))) ++falhas;
+            }
+        } else if (op == "--unity-cs-descrever") {
+            std::printf("gameobject: %s\n", unity::cs::descrever(atualCs).c_str());
         } else if (op == "--unreal") {
             falhas += carregarPlugin("unreal:" + proximo()) ? 0 : 1;
         } else if (op == "--unreal-funcoes") {

@@ -38,8 +38,12 @@ Vendorizadas em compat/ (camada de compatibilidade de plugins, opcional,
 - compat/godot/GdApiGerado.inc: tabela de classes e hashes gerada a partir do
   extension_api.json do mesmo godot-cpp — MIT License
 A camada nao inclui codigo, cabecalhos nem binarios do Unity ou do Unreal
-Engine; as declaracoes de compatibilidade sao proprias. Os plugins de teste
-nao sao distribuidos (ver compat/TESTED_PLUGINS.md).
+Engine; as declaracoes de compatibilidade sao proprias (inclusive o assembly
+C# UnityEngine em compat/unity/csharp). Os plugins de teste nao sao
+distribuidos (ver compat/TESTED_PLUGINS.md).
+Dependencia opcional em tempo de execucao da camada: runtime .NET
+(https://github.com/dotnet/runtime) — MIT License, para scripts C#; nao vem
+com o motor (o usuario aponta ERUPTION_DOTNET_ROOT ou DOTNET_ROOT).
 
 Dependencias de sistema em tempo de execucao:
 - Vulkan SDK (https://www.vulkan.org/) — termos da Vulkan SDK License

@@ -60,6 +60,28 @@ else
     echo "  (plugin Unity nao compilado)"
 fi
 
+echo "Unity (scripts C#)"
+CS="$RAIZ/compat/build/unity-cs"
+if [ -f "$CS/Klak.dll" ]; then
+    export ERUPTION_DOTNET_ROOT="${ERUPTION_DOTNET_ROOT:-$RAIZ/compat/testdata/dotnet}"
+    s=$(timeout 60 "$RUN" --unity-cs "$CS/Klak.dll" \
+        --unity-cs-objeto Girador --unity-cs-componente ConstantMotion _rotationMode=YAxis _rotationSpeed=90 \
+            _translationMode=XAxis _translationSpeed=2 \
+        --unity-cs-objeto Errante --unity-cs-componente BrownianMotion \
+        --quadros 60 --unity-cs-objeto Vazio --unity-cs-descrever 2>&1)
+    confere "runtime .NET + UnityEngine da compat" "$s" "runtime .NET ativo"
+    confere "assembly de scripts (3 MonoBehaviour)" "$s" "assembly carregado: Klak (3 MonoBehaviour)"
+    s=$(timeout 60 "$RUN" --unity-cs "$CS/Klak.dll" \
+        --unity-cs-objeto Girador --unity-cs-componente ConstantMotion _rotationMode=YAxis _rotationSpeed=90 \
+            _translationMode=XAxis _translationSpeed=2 --quadros 60 --unity-cs-descrever 2>&1)
+    confere "ConstantMotion Update/Time.deltaTime (1 s)" "$s" "pos=(2.00, 0.00, 0.00) rot=(0.00, 90.00, 0.00)"
+    s=$(timeout 60 "$RUN" --unity-cs "$CS/Klak.dll" --unity-cs-objeto Errante \
+        --unity-cs-componente BrownianMotion --quadros 30 --unity-cs-descrever 2>&1)
+    confere "BrownianMotion Start/Update (ruido)" "$s" "gameobject: Errante pos="
+else
+    echo "  (scripts C# nao compilados: compat/tests/unity/compilar_csharp.sh)"
+fi
+
 echo "Unreal (modulos)"
 if [ -d "$UE" ]; then
     for up in "$UE"/*/*.uplugin; do
