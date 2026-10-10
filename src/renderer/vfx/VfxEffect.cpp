@@ -148,6 +148,16 @@ void readEmitter(const json& j, VfxEmitterDesc& e) {
     e.maxScreenSize = std::clamp(num(j, "maxScreenSize", e.maxScreenSize), 0.01f, 4.0f);
     e.nearFade = std::max(0.0f, num(j, "nearFade", e.nearFade));
     e.lowRes = num(j, "lowRes", e.lowRes);
+    auto readSub = [&](const char* key, VfxSubEmitter& s) {
+        if (!j.contains(key) || !j[key].is_object()) return;
+        const json& o = j[key];
+        s.emitter = o.value("emitter", std::string());
+        s.count = std::clamp<uint32_t>(o.value("count", s.count), 1u, 64u);
+        s.probability = std::clamp(o.value("probability", s.probability), 0.0f, 1.0f);
+        s.inheritVelocity = std::clamp(o.value("inheritVelocity", s.inheritVelocity), 0.0f, 1.0f);
+    };
+    readSub("onDeath", e.onDeath);
+    readSub("onCollision", e.onCollision);
     if (j.contains("graph") && j["graph"].is_object()) {
         const json& g = j["graph"];
         e.graph = VfxGraph{};
@@ -228,6 +238,13 @@ json writeEmitter(const VfxEmitterDesc& e) {
     j["maxScreenSize"] = e.maxScreenSize;
     j["nearFade"] = e.nearFade;
     j["lowRes"] = e.lowRes;
+    auto writeSub = [&](const char* key, const VfxSubEmitter& s) {
+        if (s.emitter.empty()) return;
+        j[key] = {{"emitter", s.emitter}, {"count", s.count}, {"probability", s.probability},
+                  {"inheritVelocity", s.inheritVelocity}};
+    };
+    writeSub("onDeath", e.onDeath);
+    writeSub("onCollision", e.onCollision);
     if (!e.graph.empty()) {
         json g;
         json nodes = json::array();

@@ -8,6 +8,10 @@
 layout(local_size_x = 1) in;
 
 void main() {
+    // Filhas dos sub-emissores: um workgroup por evento.
+    counters[VFXC_EVENTDISP + 0] = min(counters[VFXC_EVENTS], VFX_MAX_EVENTS);
+    counters[VFXC_EVENTDISP + 1] = 1u;
+    counters[VFXC_EVENTDISP + 2] = 1u;
     for (uint l = 0u; l < 2u; ++l) {
         uint n = counters[VFXC_RENDER + l];
         // 18 vertices: poligono de 8 lados (corta o canto vazio do quad).

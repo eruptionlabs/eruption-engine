@@ -1,0 +1,31 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// SUB-EMISSORES: um workgroup por evento escrito pela simulacao (morte ou
+// batida de uma particula-pai); cada thread faz uma filha do emissor filho
+// no lugar do pai, com a velocidade herdada. As filhas entram na lista de
+// vivas do proximo frame (a simulacao deste ja' passou).
+#define VFX_WRITABLE
+#include "vfx/vfx_common.glsl"
+#include "vfx/vfx_graph.glsl"
+#include "vfx/vfx_spawn.glsl"
+
+layout(local_size_x = 64) in;
+
+void main() {
+    VfxEvent ev = events[gl_WorkGroupID.x];
+    uint packed = floatBitsToUint(ev.velSeed.w);
+    uint count = packed & 0xFFu;
+    uint k = gl_LocalInvocationIndex;
+    if (k >= count) return;
+    uint childSlot = floatBitsToUint(ev.posSlot.w);
+    Emitter c = emitters[childSlot];
+    if ((c.flags.x & VFXF_KILLED) != 0u) return;
+    uint idx;
+    if (!vfxPopDead(idx)) return;
+    uint seed = pcg((packed >> 8) ^ pcg(k * 0x9E3779B9u + 0x1234567u));
+    Particle p = vfxMakeParticle(c, childSlot, ev.posSlot.xyz, ev.velSeed.xyz, seed, 0.0);
+    particles[idx] = p;
+    uint next = 1u - frame.counts.x;
+    uint slot = atomicAdd(counters[next], 1u);
+    aliveList[next * frame.counts.y + slot] = idx;
+}
