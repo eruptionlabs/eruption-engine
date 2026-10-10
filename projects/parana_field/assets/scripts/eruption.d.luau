@@ -81,6 +81,11 @@ declare world: {
     -- Goes to another map (a door, a cave); the player appears at `position`
     -- (default: the map's Player Start).
     load_map: (map: string, position: vector?) -> (),
+    -- Same, but WITHOUT the wait: the next map is read in a thread and slots
+    -- in by itself when ready (a few ms on the main thread). Call it when the
+    -- player walks into the mouth of the passage, not when they reach it.
+    warp_map: (map: string) -> (),
+    warping: () -> boolean,
 }
 
 -- Saved games: map, player position, vars, time, weather and music, kept in the

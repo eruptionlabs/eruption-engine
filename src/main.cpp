@@ -125,7 +125,8 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    // --new-map <nome> [--map-size <lado>]: cria o mapa vazio (chao plano,
+    // --new-map <nome> [--map-size <lado>] [--map-color r,g,b]: cria o mapa
+    // vazio (chao plano,
     // grade de altura e ambiente) dentro do projeto e sai. Mesmo codigo do
     // File > New Map do editor. Ver formats/FlatMap.hpp.
     for (int i = 1; i + 1 < argc; ++i) {
@@ -137,9 +138,17 @@ int main(int argc, char** argv) {
             return 1;
         }
         eruption::FlatMap::Options o;
-        for (int k = 1; k + 1 < argc; ++k) {
-            if (std::string(argv[k]) == "--map-size") o.size = static_cast<float>(std::atof(argv[k + 1]));
-            if (std::string(argv[k]) == "--map-overwrite") o.overwrite = true;
+        // A flag sem valor tem que ser lida ate o ultimo argumento: parando em
+        // argc - 1 ela e' ignorada quando vem no fim da linha de comando.
+        for (int k = 1; k < argc; ++k) {
+            const std::string flag = argv[k];
+            if (flag == "--map-size" && k + 1 < argc) o.size = static_cast<float>(std::atof(argv[k + 1]));
+            // --map-color r,g,b (0..1): a mesma cor de chao do File > New Map.
+            if (flag == "--map-color" && k + 1 < argc) {
+                float r = 0.0f, g = 0.0f, b = 0.0f;
+                if (std::sscanf(argv[k + 1], "%f,%f,%f", &r, &g, &b) == 3) o.groundColor = eruption::Vec3(r, g, b);
+            }
+            if (flag == "--map-overwrite") o.overwrite = true;
         }
         const std::string name = argv[i + 1];
         const std::filesystem::path mapDir = eruption::project::game("assets/external") / name;

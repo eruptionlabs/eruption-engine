@@ -274,6 +274,18 @@ const std::vector<StepInfo>& stepCatalog() {
         {"ridges", "Mountains (ridges)", "Sharp mountain ridges.",
          {{"scale", 500, 10, 5000, "Size of the ridges"}, {"height", 150, 0, 3000, "How tall"}, {"octaves", 4, 1, 8, "Detail"}},
          {}},
+        {"tube", "Lava tube (canyon)", "Carves a winding corridor into the rock: a lava tube seen from above.",
+         {{"axis", 0, 0, 1, "0 = runs west-east, 1 = north-south"},
+          {"center", 0.5, 0.0, 1.0, "Where it crosses the map (fraction)"},
+          {"width", 110, 20, 1200, "Floor width (world units)"},
+          {"depth", 90, 0, 1000, "How deep it cuts"},
+          {"wall", 0.55, 0.0, 1.0, "0 = open trench, 1 = steep walls"},
+          {"wander", 150, 0, 2000, "How much it snakes sideways"},
+          {"wander_scale", 600, 50, 5000, "Length of each bend"},
+          {"flat", 0.7, 0.0, 1.0, "How flat the floor is"},
+          {"from", 0.0, 0.0, 1.0, "Starts at this fraction of the map"},
+          {"to", 1.0, 0.0, 1.0, "Ends here"}},
+         {}},
         {"crater", "Crater (volcano)", "A ring of rock around a pit, in steps: the inside of a volcano.",
          {{"radius", 0.34, 0.05, 0.8, "Mouth radius (fraction of the map)"},
           {"rim", 180, 0, 2000, "How tall the wall around it is"},
@@ -488,6 +500,48 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                     const float wx = (ox + x * scaleToWorld) / scale, wz = (oz + z * scaleToWorld) / scale;
                     const float n = s.type == "noise" ? fbm(wx, wz, oct, pers, 2.0f, seed) * 0.5f + 0.5f : ridged(wx, wz, oct, seed);
                     r.height[size_t(z) * r.w + x] += n * height;
+                }
+        } else if (s.type == "tube") {
+            // TUBO DE LAVA. Um corredor que serpenteia e e' cavado na rocha,
+            // com piso quase plano e parede subindo dos dois lados. E' a
+            // forma real de um tubo de lava visto de cima, e o unico jeito de
+            // ter CORREDOR num gerador que so' sabe mexer em altura.
+            const bool eixoZ = s.get("axis", 0) >= 0.5;
+            const float centro = float(s.get("center", 0.5));
+            const float largura = float(s.get("width", 110));
+            const float fundo = float(s.get("depth", 90));
+            const float parede = float(s.get("wall", 0.55));
+            const float serpente = float(s.get("wander", 150));
+            const float escalaSerp = float(s.get("wander_scale", 600));
+            const float plano = float(s.get("flat", 0.7));
+            const float de = float(s.get("from", 0.0)), ate = float(s.get("to", 1.0));
+            const float lado = recipe.size;
+            for (int z = 0; z < r.d; ++z)
+                for (int x = 0; x < r.w; ++x) {
+                    // u = ao longo do tubo, v = atravessado nele (0..1).
+                    const float fx = float(x - A) / (n - 1), fz = float(z - A) / (n - 1);
+                    const float u = eixoZ ? fz : fx;
+                    const float v = eixoZ ? fx : fz;
+                    if (u < de || u > ate) continue;
+                    // A linha do meio serpenteia com ruido ao longo do tubo.
+                    const float desvio = serpente * fbm(u * lado / escalaSerp, 7.3f, 3, 0.5f, 2.0f, seed) / lado;
+                    const float dist = std::abs(v - centro - desvio) * lado;  // unidades de mundo
+                    const float meia = largura * 0.5f;
+                    if (dist > meia * (1.0f + parede * 2.0f)) continue;
+                    // Piso plano no miolo; parede subindo ate' a borda.
+                    float t;
+                    if (dist <= meia * plano) {
+                        t = 1.0f;                                  // chao do tubo
+                    } else {
+                        const float k = std::clamp((dist - meia * plano) / std::max(1.0f, meia * (1.0f + parede * 2.0f) - meia * plano), 0.0f, 1.0f);
+                        t = 1.0f - k * k * (3.0f - 2.0f * k);      // sobe suave ate' a rocha
+                    }
+                    // Ponta do tubo: fecha nas extremidades em vez de cortar reto.
+                    const float borda = std::min(u - de, ate - u);
+                    const float fecha = std::clamp(borda / 0.06f, 0.0f, 1.0f);
+                    float& h = r.height[size_t(z) * r.w + x];
+                    const float alvo = h - fundo;
+                    h = h + (alvo - h) * t * fecha;
                 }
         } else if (s.type == "crater") {
             // CRATERA. De fora para dentro: encosta subindo ate' a borda,
