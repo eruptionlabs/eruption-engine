@@ -68,10 +68,18 @@ if [ -d "$UE" ]; then
         s=$(timeout 60 "$RUN" --unreal "$up" 2>&1)
         confere "$nome StartupModule" "$s" "StartupModule"
     done
+    if [ -f "$UE/SERIALCOM/SERIALCOM.uplugin" ]; then
+        s=$(timeout 60 "$RUN" --unreal "$UE/SERIALCOM/SERIALCOM.uplugin" 2>&1)
+        confere "SERIALCOM UE_LOG no StartupModule" "$s" "SERIALCOMLog: SERIALCOM: Log Started"
+        confere "SERIALCOM UE_LOG no ShutdownModule" "$s" "SERIALCOMLog: SERIALCOM: Log Ended"
+    fi
     if [ -f "$UE/AdvancedEases/AdvancedEases.uplugin" ]; then
         s=$(timeout 60 "$RUN" --unreal "$UE/AdvancedEases/AdvancedEases.uplugin" \
             --unreal-chamar UAdvancedEasesBPLibrary.AdvancedEase_Float 7 0.5 0 10 2>&1)
         confere "AdvancedEase_Float(OutBounce, 0.5, 0, 10)" "$s" "-> 7.65625"
+        s=$(timeout 60 "$RUN" --unreal "$UE/AdvancedEases/AdvancedEases.uplugin" \
+            --unreal-chamar UAdvancedEasesBPLibrary.AdvancedEase_Vector AE_LERP 0,0,0 10,20,30 0.5 2>&1)
+        confere "AdvancedEase_Vector (FVector, enum por nome)" "$s" "-> (5, 10, 15)"
     fi
 else
     echo "  (plugins Unreal nao compilados)"

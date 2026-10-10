@@ -51,3 +51,11 @@ if [ "$GRUPO" = tudo ] || [ "$GRUPO" = unity ]; then
     # cabecalhos da API de plugin; o host de compat NAO usa esses cabecalhos.
     clona https://github.com/Unity-Technologies/NativeRenderingPlugin.git "$U/NativeRenderingPlugin" 522254181faf188efa8b50c3e3bf6fce720b26e4
 fi
+
+if [ "$GRUPO" = tudo ] || [ "$GRUPO" = unreal ]; then
+    R="$DADOS/unreal"
+    # Biblioteca de funcoes estaticas (UBlueprintFunctionLibrary) de easing (MIT).
+    clona https://github.com/DKesserich/AdvancedEasesPlugin.git "$R/AdvancedEasesPlugin" 4fe1c6d00d0eb3b2b9a4dfdd65075f80d7348855
+    # Porta serial (MIT); so' Win64, entao so' o arquivo do modulo e' usado no teste.
+    clona https://github.com/videofeedback/Unreal_Engine_SerialCOM_Plugin.git "$R/SerialCOM" bd3b2ee44cec7016fe64975c2d03ffd7fda20a2d
+fi

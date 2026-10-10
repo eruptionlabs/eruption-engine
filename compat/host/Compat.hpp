@@ -7,7 +7,8 @@
 //   caminho/extensao.gdextension        GDExtension (Godot 4)
 //   godot:biblioteca.so:simbolo         GDExtension sem o arquivo .gdextension
 //   unity:biblioteca.so                 plugin nativo (UnityPluginLoad)
-//   unreal:modulo.so                    modulo compilado com os cabecalhos de compat
+//   caminho/Plugin.uplugin              plugin Unreal recompilado com compat/unreal/ferramentas
+//   unreal:caminho/Plugin.uplugin       idem
 //   biblioteca.so                       detecta pelos simbolos exportados
 //
 // Nada roda por padrao: sem a variavel, a camada nao carrega nada.
