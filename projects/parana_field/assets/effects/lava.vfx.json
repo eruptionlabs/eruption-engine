@@ -138,7 +138,23 @@
       "stretch": 0.05,
       "blend": "additive",
       "emissive": 3.0,
-      "softDistance": 0.0
+      "softDistance": 0.0,
+      "light": {
+        "enabled": true,
+        "color": [
+          1.0,
+          0.42,
+          0.12
+        ],
+        "intensity": 6.0,
+        "radius": 30.0,
+        "flicker": 0.25,
+        "offset": [
+          0.0,
+          3.0,
+          0.0
+        ]
+      }
     },
     {
       "name": "vapor",

@@ -157,6 +157,15 @@ public:
     // geometria vem antes da simulacao. Sem malha viva nao faz nada.
     void drawMeshes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent, const Mat4& viewProjNoJitter,
                     const Mat4& prevViewProjNoJitter);
+    // Luzes dos emissores com "light" (uma por emissor tocando), as `max`
+    // mais perto de `eye`, em unidades de mundo. CPU, sem leitura da GPU.
+    struct Light {
+        Vec3 position;
+        float radius;
+        Vec3 color;
+        float intensity;
+    };
+    void collectLights(const Vec3& eye, size_t max, std::vector<Light>& out) const;
     // Previa sem G-buffer: as malhas saem em draw(), com luz simples.
     void setForwardMeshes(bool on) { m_forwardMeshes = on; }
     // Fim do frame: sem particula, limpa a mascara uma vez (nao fica rastro).
@@ -190,6 +199,7 @@ private:
         // Estimativa de vivas sem leitura da GPU: (morte prevista, quantidade).
         std::vector<std::pair<float, uint32_t>> liveChunks;
         uint32_t liveEstimate = 0;
+        uint32_t livePeak = 0; // maior estimativa ja' vista (luz acompanha a fracao)
         // Fita: faixa no anel global e o proximo numero de sequencia.
         uint32_t ringBase = 0, ringSize = 0;
         uint32_t seq = 0;

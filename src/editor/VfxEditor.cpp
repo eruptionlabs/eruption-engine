@@ -495,6 +495,16 @@ bool VfxEditor::drawEmitter(VfxEmitterDesc& e) {
         ImGui::TextUnformatted(tr("Size multiplier"));
         c |= curveEditor("##size", e.sizeOverLife);
     }
+    if (ImGui::CollapsingHeader(tr("Light"))) {
+        c |= ImGui::Checkbox(tr("Lights the scene (one light per emitter)"), &e.light);
+        if (e.light) {
+            c |= ImGui::ColorEdit3(tr("Light color"), &e.lightColor.x);
+            c |= ImGui::DragFloat(tr("Light intensity"), &e.lightIntensity, 0.05f, 0.0f, 50.0f);
+            c |= ImGui::DragFloat(tr("Light radius (m)"), &e.lightRadius, 0.05f, 0.1f, 100.0f);
+            c |= ImGui::SliderFloat(tr("Flicker"), &e.lightFlicker, 0.0f, 1.0f);
+            c |= ImGui::DragFloat3(tr("Light offset (m)"), &e.lightOffset.x, 0.02f);
+        }
+    }
     if (ImGui::CollapsingHeader(tr("Sub-emitters"))) {
         c |= subEmitterUi(tr("On death"), e.onDeath, e.name);
         c |= subEmitterUi(tr("On collision"), e.onCollision, e.name);
