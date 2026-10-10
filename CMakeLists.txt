@@ -442,6 +442,8 @@ endif()
 # Editor de texto com cor de sintaxe para o painel de codigo do editor.
 if(ERUPTION_EDITOR)
     list(APPEND SOURCES "${CMAKE_SOURCE_DIR}/third_party/ImGuiColorTextEdit/TextEditor.cpp")
+    # Editor de nos (grafo de efeitos). So' no editor.
+    list(APPEND SOURCES "${CMAKE_SOURCE_DIR}/third_party/imnodes/imnodes.cpp")
     # Plugins do editor (nao vao no jogo exportado): gerador procedural de mapas.
     file(GLOB ERUPTION_PLUGIN_SOURCES "${CMAKE_SOURCE_DIR}/plugins/mapgen/*.cpp")
     list(APPEND SOURCES ${ERUPTION_PLUGIN_SOURCES})
@@ -575,6 +577,7 @@ target_include_directories(eruption-engine PRIVATE
     ${ERUPTION_BC7ENC_DIR}
     ${CMAKE_SOURCE_DIR}/third_party/meshoptimizer
     ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo
+    ${CMAKE_SOURCE_DIR}/third_party/imnodes
     ${CMAKE_SOURCE_DIR}/third_party/ImGuiColorTextEdit
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
@@ -597,6 +600,7 @@ target_include_directories(eruption-engine SYSTEM PRIVATE
     ${tinygltf_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/third_party/stb
     ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo
+    ${CMAKE_SOURCE_DIR}/third_party/imnodes
     ${CMAKE_SOURCE_DIR}/third_party/ImGuiColorTextEdit
 )
 
