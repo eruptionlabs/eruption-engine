@@ -21,7 +21,7 @@ namespace fs = std::filesystem;
 namespace {
 
 const char* kShapeNames[] = {"Point", "Sphere", "Box", "Cone", "Disc"};
-const char* kFacingNames[] = {"Camera", "Velocity", "Horizontal"};
+const char* kFacingNames[] = {"Camera", "Velocity", "Horizontal", "Ribbon (trail)"};
 const char* kBlendNames[] = {"Additive", "Premultiplied", "Alpha"};
 const char* kFlipNames[] = {"Over lifetime", "Frames per second", "Random fixed frame"};
 

@@ -29,7 +29,7 @@ constexpr uint32_t kCounterCount = 36;
 constexpr uint32_t kCEventDispatch = 32;
 constexpr uint32_t kRecordBytes = 64;
 constexpr uint32_t kMaxEvents = 16384;
-constexpr uint32_t kBindings = 15;
+constexpr uint32_t kBindings = 16;
 
 struct DrawPush {
     uint32_t listOffset;
@@ -98,6 +98,7 @@ bool VfxSystem::createBuffers() {
               createBuf(m_sort, 2 * 512 * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_events, VkDeviceSize(kMaxEvents) * 32, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_recs, cap * kRecordBytes, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
+              createBuf(m_ribbonRing, VkDeviceSize(kRibbonRingTotal) * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_counters, kCounterCount * 4,
                         ssbo | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                         VMA_MEMORY_USAGE_GPU_ONLY, false);
@@ -158,7 +159,8 @@ bool VfxSystem::createBuffers() {
 }
 
 void VfxSystem::destroyBuffers() {
-    for (Buf* b : {&m_particles, &m_dead, &m_alive, &m_render, &m_sort, &m_events, &m_recs, &m_counters, &m_emitterDev,
+    for (Buf* b : {&m_particles, &m_dead, &m_alive, &m_render, &m_sort, &m_events, &m_recs, &m_ribbonRing, &m_counters,
+                   &m_emitterDev,
                    &m_spawnDev,
                    &m_frameDev, &m_graphCode, &m_graphConst})
         destroyBuf(*b);
@@ -194,7 +196,7 @@ bool VfxSystem::createDescriptors() {
     if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &m_setLayout) != VK_SUCCESS) return false;
 
     const uint32_t n = VulkanContext::MAX_FRAMES_IN_FLIGHT * 2;
-    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12 * n},
+    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 13 * n},
                                      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, n},
                                      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * n}};
     VkDescriptorPoolCreateInfo pi{};
@@ -237,6 +239,7 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
     const VkDescriptorBufferInfo graphConstInfo{m_graphConst.buf, 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo eventInfo{m_events.buf, 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo recInfo{m_recs.buf, 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo ribbonInfo{m_ribbonRing.buf, 0, VK_WHOLE_SIZE};
     VkDescriptorImageInfo ii[2] = {{m_depthSampler, depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                    {m_depthSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
     // Sem alvo de meia resolucao ainda: a profundidade ocupa o binding (nunca
@@ -264,6 +267,7 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
         w[s * kBindings + 12].pBufferInfo = &graphConstInfo;
         w[s * kBindings + 13].pBufferInfo = &eventInfo;
         w[s * kBindings + 14].pBufferInfo = &recInfo;
+        w[s * kBindings + 15].pBufferInfo = &ribbonInfo;
     }
     vkUpdateDescriptorSets(m_ctx->device(), 2 * kBindings, w, 0, nullptr);
     m_setBuffersWritten[frame] = true;
@@ -556,6 +560,7 @@ void VfxSystem::setEffect(const std::string& name, const VfxEffectDesc& desc) {
         // Emissores a mais ou a menos: ajusta os slots sem reiniciar o efeito.
         while (inst.emitters.size() > fx->emitters.size()) {
             freeSlot(inst.emitters.back().slot);
+            freeRibbon(inst.emitters.back());
             inst.emitters.pop_back();
         }
         while (inst.emitters.size() < fx->emitters.size()) {
@@ -570,6 +575,27 @@ void VfxSystem::setEffect(const std::string& name, const VfxEffectDesc& desc) {
 }
 
 void VfxSystem::forgetEffect(const std::string& name) { m_effects.erase(name); }
+
+uint32_t VfxSystem::allocRibbon(uint32_t size) {
+    auto& freeList = m_ribbonFree[size];
+    if (!freeList.empty()) {
+        const uint32_t b = freeList.back();
+        freeList.pop_back();
+        return b;
+    }
+    if (m_ribbonBump + size > kRibbonRingTotal) {
+        ERUPTION_LOG_WARN("[VFX] aneis de fita cheios (%u pontos): fita desligada", kRibbonRingTotal);
+        return UINT32_MAX;
+    }
+    const uint32_t b = m_ribbonBump;
+    m_ribbonBump += size;
+    return b;
+}
+
+void VfxSystem::freeRibbon(EmitterState& es) {
+    if (es.ringSize) m_ribbonFree[es.ringSize].push_back(es.ringBase);
+    es.ringBase = es.ringSize = 0;
+}
 
 uint32_t VfxSystem::allocSlot() {
     if (m_freeSlots.empty()) return UINT32_MAX;
@@ -604,7 +630,10 @@ uint32_t VfxSystem::spawn(const std::string& effectName, const Mat4& transform) 
     for (size_t i = 0; i < d->emitters.size(); ++i) {
         const uint32_t s = allocSlot();
         if (s == UINT32_MAX) {
-            for (EmitterState& es : inst.emitters) freeSlot(es.slot);
+            for (EmitterState& es : inst.emitters) {
+                freeSlot(es.slot);
+                freeRibbon(es);
+            }
             ERUPTION_LOG_WARN("VFX: sem slot de emissor para '%s' (limite %u)", effectName.c_str(), kMaxSlots);
             return 0;
         }
@@ -659,7 +688,10 @@ float VfxSystem::instanceTime(uint32_t id) const {
 
 void VfxSystem::clear() {
     for (Instance& inst : m_instances)
-        for (EmitterState& es : inst.emitters) freeSlot(es.slot);
+        for (EmitterState& es : inst.emitters) {
+                freeSlot(es.slot);
+                freeRibbon(es);
+            }
     m_instances.clear();
 }
 
@@ -741,6 +773,24 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     o.events.z = (std::min(e.onDeath.count, 64u) & 0xFFu) | ((std::min(e.onCollision.count, 64u) & 0xFFu) << 8) |
                  (byte(e.onDeath.inheritVelocity) << 16) | (byte(e.onCollision.inheritVelocity) << 24);
     o.events.w = byte(e.onDeath.probability) | (byte(e.onCollision.probability) << 8);
+    o.ribbon = glm::uvec4(0u);
+    if (e.facing == VfxFacing::Ribbon) {
+        // Anel do tamanho da capacidade (potencia de 2): cabem todos os pontos vivos.
+        EmitterState* es = nullptr;
+        for (const EmitterState& s : inst.emitters)
+            if (s.slot == slot) es = const_cast<EmitterState*>(&s);
+        if (es) {
+            uint32_t want = 64;
+            while (want < std::min<uint32_t>(e.capacity, 4096u)) want <<= 1;
+            if (es->ringSize != want) {
+                freeRibbon(*es);
+                es->ringBase = allocRibbon(want);
+                es->ringSize = es->ringBase == UINT32_MAX ? 0u : want;
+                if (!es->ringSize) es->ringBase = 0;
+            }
+            o.ribbon = glm::uvec4(es->ringBase, es->ringSize, 0u, 0u);
+        }
+    }
     o.graphA = o.graphB = glm::uvec4(0u);
     if (!e.graph.empty()) {
         const VfxGraphCompiled& g = graphFor(e.graph);
@@ -862,7 +912,9 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
             }
             n = std::min(n, e.capacity > es.liveEstimate ? e.capacity - es.liveEstimate : 0u);
             if (n > 0 && m_requests.size() < kMaxRequests) {
-                m_requests.push_back({es.slot, n, m_spawnTotal, hash32(m_frameSeed * 7919u + es.slot * 104729u)});
+                m_requests.push_back({es.slot, n, m_spawnTotal, hash32(m_frameSeed * 7919u + es.slot * 104729u),
+                                      es.seq, 0u, 0u, 0u});
+                es.seq += n;
                 m_spawnTotal += n;
                 es.liveEstimate += n;
                 if (!es.liveChunks.empty() && es.liveChunks.back().first == inst.time + e.lifetime.y)
@@ -893,7 +945,10 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
                                                    inst.time > e.startDelay + life);
                                        }));
         if (done) {
-            for (EmitterState& es : inst.emitters) freeSlot(es.slot);
+            for (EmitterState& es : inst.emitters) {
+                freeSlot(es.slot);
+                freeRibbon(es);
+            }
             m_instances.erase(m_instances.begin() + long(ii));
             continue;
         }
@@ -910,6 +965,8 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     if (!m_active) {
         m_slotHighWater = 0;
         m_maxLifeSeen = 0.0f;
+        m_ribbonBump = 0;
+        m_ribbonFree.clear();
     }
     m_stats.instances = static_cast<uint32_t>(m_instances.size());
     m_stats.emitters = emitterCount;

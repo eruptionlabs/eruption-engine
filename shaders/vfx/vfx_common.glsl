@@ -27,7 +27,7 @@ struct Particle {
     uint angVel;   // half2(velocidade angular rad/s, quadro inicial 0..1)
 };
 
-// Parametros de um emissor ativo (um por instancia x emissor), 432 bytes.
+// Parametros de um emissor ativo (um por instancia x emissor), 448 bytes.
 struct Emitter {
     vec4 posTime;     // xyz posicao no mundo, w tempo do efeito
     vec4 prevPos;     // xyz posicao no frame anterior (nascimento interpolado)
@@ -51,6 +51,7 @@ struct Emitter {
     uvec4 cutout;     // 8 halfs: poligono justo da textura (alcance em 8 direcoes)
     uvec4 graphA;     // grafo: x,y = velocidade inicial (inicio, tamanho); z,w = forca
     uvec4 graphB;     // grafo: x,y = cor; z,w = tamanho
+    uvec4 ribbon;     // fita: x inicio do anel, y tamanho do anel (0 = nao e' fita)
     uvec4 events;     // sub-emissores: x filho na morte (slot+1), y filho na batida,
                       // z quantidades (8 bits cada) e herancas (8 bits, /255),
                       // w probabilidades (8 bits cada, /255)
@@ -76,6 +77,8 @@ struct SpawnRequest {
     uint count;
     uint first;
     uint seed;
+    uint seqBase; // fita: numero de sequencia da primeira particula do pedido
+    uint pad0, pad1, pad2;
 };
 
 // Parametros do frame (CPU -> GPU, um buffer por frame em voo).
@@ -143,6 +146,8 @@ layout(set = VFX_SET, binding = 9) uniform sampler2D lowResColor;
 layout(std430, set = VFX_SET, binding = 10) VFX_RW buffer SortBuf { uint sortData[]; };
 layout(std430, set = VFX_SET, binding = 13) VFX_RW buffer EventBuf { VfxEvent events[]; };
 layout(std430, set = VFX_SET, binding = 14) VFX_RW buffer RenderRecBuf { RenderRec recs[]; };
+// Aneis das fitas: [inicio + seq % tamanho] = indice da particula com aquele seq.
+layout(std430, set = VFX_SET, binding = 15) VFX_RW buffer RibbonBuf { uint ribbonRing[]; };
 
 // Eixo unitario <-> 2 x unorm16 (octaedro): direcao da velocidade no registro.
 uint packOct(vec3 n) {

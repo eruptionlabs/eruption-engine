@@ -1,0 +1,48 @@
+{
+  "name": "rastro",
+  "emitters": [
+    {
+      "name": "fita",
+      "capacity": 512,
+      "rate": 40,
+      "ratePerMeter": 6,
+      "shape": "point",
+      "lifetime": [0.6, 0.6],
+      "speed": [0.0, 0.0],
+      "spread": 0.0,
+      "size": [0.35, 0.35],
+      "rotation": [0, 0],
+      "color": [
+        {"t": 0.0, "rgba": [0.6, 0.85, 1.0, 1.0]},
+        {"t": 0.5, "rgba": [0.4, 0.5, 1.0, 0.6]},
+        {"t": 1.0, "rgba": [0.3, 0.2, 0.8, 0.0]}
+      ],
+      "sizeOverLife": [[0, 1.0], [1, 0.1]],
+      "facing": "ribbon",
+      "blend": "additive",
+      "emissive": 2.5,
+      "softDistance": 0.0
+    },
+    {
+      "name": "brilho",
+      "capacity": 600,
+      "rate": 60,
+      "ratePerMeter": 4,
+      "shape": "sphere",
+      "shapeSize": [0.15, 0.15, 0.15],
+      "lifetime": [0.4, 0.9],
+      "speed": [0.2, 0.8],
+      "spread": 1.0,
+      "size": [0.05, 0.1],
+      "drag": 1.0,
+      "color": [
+        {"t": 0.0, "rgba": [0.8, 0.9, 1.0, 1.0]},
+        {"t": 1.0, "rgba": [0.4, 0.3, 1.0, 0.0]}
+      ],
+      "texture": "builtin:star",
+      "blend": "additive",
+      "emissive": 3.0,
+      "softDistance": 0.0
+    }
+  ]
+}

@@ -38,7 +38,10 @@ struct VfxGradient {
 };
 
 enum class VfxShape : uint32_t { Point = 0, Sphere = 1, Box = 2, Cone = 3, Disc = 4 };
-enum class VfxFacing : uint32_t { Camera = 0, Velocity = 1, Horizontal = 2 };
+// Ribbon: as particulas do emissor sao os pontos de uma fita continua (na
+// ordem em que nasceram), virada para a camera - trilha de espada, rastro de
+// magia, cauda de cometa. Combine com ratePerMeter para a fita seguir o efeito.
+enum class VfxFacing : uint32_t { Camera = 0, Velocity = 1, Horizontal = 2, Ribbon = 3 };
 // Todas viram UMA mistura na GPU (cor premultiplicada): aditiva = alfa 0 na
 // saida. Por isso o sistema inteiro desenha num unico draw.
 enum class VfxBlend : uint32_t { Additive = 0, Premultiplied = 1, Alpha = 2 };

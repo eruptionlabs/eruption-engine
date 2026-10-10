@@ -56,6 +56,35 @@ void main() {
     vec2 rc = vec2(c.x * cs - c.y * sn, c.x * sn + c.y * cs);
 
     uint facing = (r.sheet.y >> 18) & 3u;
+    if (facing == 3u) {
+        // FITA: segmento do ponto A (esta particula) ao vizinho B. So' os
+        // vertices 0..3 contam; 4..7 colapsam no 3 (triangulos vazios).
+        uint v = min(uint(gl_VertexIndex) & 7u, 3u);
+        bool hasB = r.look.w != 0u;
+        RenderRec rb = r;
+        if (hasB) rb = recs[r.look.w - 1u];
+        bool atB = v >= 2u;
+        vec3 A = pos, B = rb.posSize.xyz;
+        vec3 dir = B - A;
+        vec3 side = cross(dot(dir, dir) > 1e-10 ? dir : camUp, toCam);
+        side = dot(side, side) > 1e-10 ? normalize(side) : camRight;
+        float sgn = (v == 1u || v == 2u) ? 1.0 : -1.0;
+        // Sem vizinho o segmento vira um ponto (some).
+        float w = hasB ? (atB ? rb.posSize.w : size) : 0.0;
+        vec3 P = atB ? B : A;
+        gl_Position = u_viewProjection * vec4(P + side * sgn * w, 1.0);
+        float tA = unpackHalf2x16(r.sheet.z).x, tB = unpackHalf2x16(rb.sheet.z).x;
+        v_uv0 = vec2(atB ? tB : tA, sgn * 0.5 + 0.5);
+        v_uv1 = v_uv0;
+        v_frameMix = 0.0;
+        uvec2 lc = atB ? rb.look.xy : r.look.xy;
+        v_color = vec4(unpackHalf2x16(lc.x), unpackHalf2x16(lc.y));
+        v_viewZ = (u_viewProjection * vec4(P, 1.0)).w;
+        v_texBlend = uvec2(r.sheet.x, (r.sheet.y >> 16) & 3u);
+        v_soft = uintBitsToFloat(r.sheet.w);
+        v_corner = vec2(0.0, sgn * 0.6); // disco procedural: borda suave nas laterais
+        return;
+    }
     vec3 world;
     if (facing == 1u) {
         // Alinhada a velocidade e esticada: faisca, chuva, rastro.
