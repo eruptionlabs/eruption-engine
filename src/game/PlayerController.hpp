@@ -46,6 +46,11 @@ public:
     bool tacticalView() const { return m_tacticalView; }
     void setTacticalView(bool v) { m_tacticalView = v; }
     bool snapToGat() const { return m_snapToGat; }
+    // CONGELADO: o jogador para de responder a teclado/mouse (o resto do
+    // mundo continua). Serve pra cena de dialogo, cutscene e combate - o
+    // motor nao sabe qual dos tres e'.
+    bool inputFrozen() const { return m_inputFrozen; }
+    void setInputFrozen(bool on) { m_inputFrozen = on; }
     float cameraSmoothFactor() const { return m_cameraSmoothFactor; }
     const Engine::LoadedSprite& bodySprite() const { return m_bodySprite; }
     const Engine::LoadedSprite& hairSprite() const { return m_hairSprite; }
@@ -85,6 +90,7 @@ private:
     bool m_freeCameraHeld = false;
     bool m_tacticalView = false;
     bool m_snapToGat = true;
+    bool m_inputFrozen = false;
     float m_preTacticalYaw = 0.0f;
     float m_preTacticalPitch = glm::radians(50.0f);
     float m_preTacticalDist = 158.5f;

@@ -145,8 +145,68 @@ void Engine::updateCharacters(float dt, bool moveAlongPaths) {
             if (c.pathIndex >= c.path.size()) c.walking = false;
         }
         if (c.sayTime > 0.0f) c.sayTime = std::max(0.0f, c.sayTime - dt);
+        tickCharacterFx(c, dt);
         if (c.visible && !c.removed && !hideCharactersInView) drawCharacter(c, dt);
     }
+}
+
+// Cada efeito e' um temporizador que desce; o desenho le' o estado. Nada de
+// alocar, nada de RNG: o mesmo golpe sacode igual em qualquer maquina.
+void Engine::tickCharacterFx(SceneCharacter& c, float dt) {
+    SceneCharacter::Fx& f = c.fx;
+    if (f.flashLeft > 0.0f) f.flashLeft = std::max(0.0f, f.flashLeft - dt);
+    if (f.shakeLeft > 0.0f) {
+        f.shakeLeft = std::max(0.0f, f.shakeLeft - dt);
+        f.shakeTime += dt;
+    }
+    if (f.lungeLeft > 0.0f) f.lungeLeft = std::max(0.0f, f.lungeLeft - dt);
+    if (f.popLeft > 0.0f) f.popLeft = std::max(0.0f, f.popLeft - dt);
+    if (f.fadeLeft > 0.0f) {
+        f.fadeLeft = std::max(0.0f, f.fadeLeft - dt);
+        const float t = 1.0f - f.fadeLeft / std::max(1e-4f, f.fadeTotal);
+        f.fade = f.fadeFrom + (f.fadeTo - f.fadeFrom) * t;
+    }
+}
+
+void Engine::flashCharacter(int index, const Vec3& color, float seconds) {
+    if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
+    SceneCharacter::Fx& f = m_characters[static_cast<size_t>(index)].fx;
+    f.flashColor = color;
+    f.flashTotal = f.flashLeft = std::max(0.0f, seconds);
+}
+
+void Engine::shakeCharacter(int index, float amplitude, float seconds) {
+    if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
+    SceneCharacter::Fx& f = m_characters[static_cast<size_t>(index)].fx;
+    f.shakeAmp = std::max(0.0f, amplitude);
+    f.shakeTotal = f.shakeLeft = std::max(0.0f, seconds);
+    f.shakeTime = 0.0f;
+}
+
+void Engine::lungeCharacter(int index, const Vec3& towards, float distance, float seconds) {
+    if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
+    SceneCharacter& c = m_characters[static_cast<size_t>(index)];
+    const Vec3 d = towards - c.position;
+    const float len = glm::length(Vec2(d.x, d.z));
+    c.fx.lungeDir = len > 1e-3f ? Vec3(d.x / len, 0.0f, d.z / len) : Vec3(0.0f);
+    c.fx.lungeDist = distance;
+    c.fx.lungeTotal = c.fx.lungeLeft = std::max(1e-3f, seconds);
+}
+
+void Engine::popCharacter(int index, float amount, float seconds) {
+    if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
+    SceneCharacter::Fx& f = m_characters[static_cast<size_t>(index)].fx;
+    f.popScale = amount;
+    f.popTotal = f.popLeft = std::max(1e-3f, seconds);
+}
+
+void Engine::fadeCharacter(int index, float to, float seconds) {
+    if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
+    SceneCharacter::Fx& f = m_characters[static_cast<size_t>(index)].fx;
+    f.fadeFrom = f.fade;
+    f.fadeTo = glm::clamp(to, 0.0f, 1.0f);
+    f.fadeTotal = f.fadeLeft = std::max(0.0f, seconds);
+    if (f.fadeTotal <= 0.0f) f.fade = f.fadeTo;
 }
 
 void Engine::drawCharacter(SceneCharacter& c, float dt) {
@@ -184,17 +244,40 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
 
     const Vec3 toCam = m_camera.position() - m_camera.target();
     const float spriteYaw = std::atan2(toCam.x, toCam.z);
+
+    // SUCO: deslocamento, clarao, estica e opacidade deste quadro.
+    const SceneCharacter::Fx& f = c.fx;
+    Vec3 fxOffset(0.0f);
+    if (f.shakeLeft > 0.0f) {
+        const float decay = f.shakeLeft / std::max(1e-4f, f.shakeTotal);
+        const float a = f.shakeAmp * decay * decay;
+        fxOffset.x += std::sin(f.shakeTime * 61.0f) * a;
+        fxOffset.y += std::sin(f.shakeTime * 83.0f + 1.3f) * a * 0.5f;
+    }
+    if (f.lungeLeft > 0.0f) {
+        // Vai no primeiro terco e volta no resto (golpe, nao passo).
+        const float t = 1.0f - f.lungeLeft / std::max(1e-4f, f.lungeTotal);
+        const float k = t < 0.34f ? t / 0.34f : 1.0f - (t - 0.34f) / 0.66f;
+        fxOffset += f.lungeDir * (f.lungeDist * k);
+    }
+    float fxScale = 1.0f;
+    if (f.popLeft > 0.0f) {
+        const float t = 1.0f - f.popLeft / std::max(1e-4f, f.popTotal);
+        fxScale += f.popScale * std::sin(t * 3.14159265f);
+    }
+    const float flash = f.flashLeft > 0.0f ? f.flashLeft / std::max(1e-4f, f.flashTotal) : 0.0f;
+
     for (const auto& spr : action.frames[static_cast<size_t>(c.frame)].sprites) {
         int texIdx = spr.index + (spr.type == 1 ? static_cast<int>(ls.indexedTextureCount) : 0);
         if (texIdx < 0 || texIdx >= static_cast<int>(ls.textures.size())) continue;
         const auto& tex = ls.textures[static_cast<size_t>(texIdx)];
         const bool mirror = (spr.flags & 1) != 0;
         Sprite s;
-        s.position = c.position;
+        s.position = c.position + fxOffset;
         s.position.y += 2.0f;
-        s.anchorPoint = c.position;
-        const float w = static_cast<float>(tex.width) * kPixelToWorld * spr.scaleX;
-        const float h = static_cast<float>(tex.height) * kPixelToWorld * spr.scaleY;
+        s.anchorPoint = c.position + fxOffset;
+        const float w = static_cast<float>(tex.width) * kPixelToWorld * spr.scaleX * fxScale;
+        const float h = static_cast<float>(tex.height) * kPixelToWorld * spr.scaleY * fxScale;
         float xOff = static_cast<float>(spr.offsetX);
         if (mirror) xOff = -xOff;
         // Base do quadro no chão (mesma regra dos sprites PNG do jogador).
@@ -205,6 +288,12 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         s.flags = SpriteFlags::Billboard | SpriteFlags::CastShadow | SpriteFlags::PngSprite;
         if (mirror) s.flags = s.flags | SpriteFlags::FlipX;
         s.tintColor = spr.color;
+        // Clarao: puxa a cor na direcao da cor do efeito (branco no dano,
+        // verde na cura) sem estourar o alfa; opacidade entra no alfa.
+        if (flash > 0.0f) {
+            s.tintColor = Vec4(glm::mix(Vec3(s.tintColor), f.flashColor, flash), s.tintColor.a);
+        }
+        s.tintColor.a *= f.fade;
         s.sortOrder = 0.0f;
         m_spriteSystem.submitSprite(s);
     }
@@ -248,6 +337,13 @@ void Engine::drawSpeechBubbles(float x, float y, float w, float h, float dt) {
             bubble(c.position + Vec3(0.0f, 30.0f, 0.0f), c.say, c.sayTime);
     if (m_playerSayTime > 0.0f && m_playerController)
         bubble(m_playerController->pos() + Vec3(0.0f, 30.0f, 0.0f), m_playerSay, m_playerSayTime);
+}
+
+void Engine::drawGameFx2D(float x, float y, float w, float h, float dt) {
+    // Desenho 2D do jogo por cima da cena. O canvas e' do jogo (o script
+    // monta os nos); o motor so' atualiza os tempos e desenha.
+    m_uiCanvas.update(dt);
+    m_uiCanvas.draw(ImGui::GetForegroundDrawList(), x, y, w, h, m_camera.viewProjNoJitter());
 }
 
 void Engine::followPlayer(int index, float distance) {

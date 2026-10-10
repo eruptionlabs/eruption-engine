@@ -51,6 +51,11 @@ declare world: {
     set_weather: (name: string) -> (),
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
+    -- Scene look: a preset from data/diorama.json (color grading, god rays)
+    -- and the depth-of-field blur. False if there is no preset by that name.
+    look: () -> string,
+    set_look: (preset: string) -> boolean,
+    set_dof: (on: boolean) -> (),
     -- Name of the map being played.
     map: () -> string,
     -- Goes to another map (a door, a cave); the player appears at `position`
@@ -80,9 +85,16 @@ declare player: {
     -- Extra animation of the player's sprite; once unless `loop`.
     play: (animation: string, loop: boolean?) -> boolean,
     animation: () -> string,
+    -- Frozen: the player stops answering keyboard and mouse (the world keeps
+    -- running). For dialogue, cutscenes and battle.
+    freeze: (on: boolean) -> (),
+    frozen: () -> boolean,
 }
 
 declare characters: {
+    -- Puts a new character in the scene (sprite PNG or .spr of the project).
+    -- False if the sprite could not be read.
+    add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,
     -- Characters placed in the scene (drag a PNG from the Project panel), by name.
     exists: (name: string) -> boolean,
     position: (name: string) -> vector,
@@ -108,6 +120,14 @@ declare characters: {
     show: (name: string) -> (),
     hide: (name: string) -> (),
     set_sprite: (name: string, png: string) -> (),
+    -- Presentation (see `fx`): the sprite flashes a color, shakes in place,
+    -- steps toward a point and back (a blow, not a walk), squashes and
+    -- stretches, or changes opacity.
+    flash: (name: string, color: vector?, seconds: number?) -> (),
+    shake: (name: string, amplitude: number?, seconds: number?) -> (),
+    lunge: (name: string, towards: vector, distance: number?, seconds: number?) -> (),
+    pop: (name: string, amount: number?, seconds: number?) -> (),
+    fade: (name: string, to: number, seconds: number?) -> (),
 }
 
 declare camera: {
@@ -116,6 +136,47 @@ declare camera: {
     -- Yaw and pitch in degrees, distance in world units.
     orbit: () -> (number, number, number),
     set_orbit: (yaw: number, pitch: number, distance: number) -> (),
+    -- Camera right and forward on the ground plane, to place things relative
+    -- to the view (a row of fighters on the left, another on the right).
+    basis: () -> (vector, vector),
+}
+
+-- Presentation of a hit: what makes a blow feel like it landed. The engine
+-- knows nothing about combat; these are camera shake, screen flash and
+-- numbers that float up. Colors are vectors, 0 to 1 per channel.
+declare fx: {
+    -- Camera shake: amplitude in world units, decaying over `seconds`. A new
+    -- shake only wins if it hits harder than the one still running.
+    shake_camera: (amplitude: number?, seconds: number?) -> (),
+    -- Number (or word: "MISS") floating up from a world position. `rise` is a
+    -- fraction of the screen height, `size` the text height as a fraction.
+    number: (position: vector, text: string, color: vector?, seconds: number?, rise: number?, size: number?) -> (),
+    -- Full-screen color going from one opacity to another: the battle wipe.
+    fade: (color: vector, from: number, to: number, seconds: number?) -> (),
+    -- Flash: full opacity (or `strength`) fading to nothing.
+    flash: (color: vector?, seconds: number?, strength: number?) -> (),
+    fading: () -> boolean,
+}
+
+-- Game interface in 2D, over the scene: rectangles, text and bars that the
+-- script creates, moves and paints. The engine draws them and nothing else:
+-- a menu, a turn queue or a party panel is the GAME's business.
+-- Positions and sizes are a FRACTION of the game area (0 to 1), so the
+-- layout holds at any resolution. Text size is a fraction of the height.
+-- There is no animation system here: move the nodes from on.update.
+declare ui2d: {
+    -- kind: "rect", "text" or "bar". Returns the node id.
+    add: (kind: string?) -> number,
+    rect: (node: number, x: number, y: number, width: number?, height: number?) -> (),
+    -- Properties: "text", "value" (bar, 0..1), "color", "color2" (rect border
+    -- / bar fill), "z", "visible", "border" (px), "radius" (px), "size"
+    -- (text), "align" ("left" | "center" | "right"), "shadow".
+    -- Colors take an optional opacity as the 4th argument.
+    set: (node: number, property: string, value: any, opacity: number?) -> (),
+    remove: (node: number) -> (),
+    clear: () -> (),
+    -- Width / height of the game area, to keep squares square.
+    aspect: () -> number,
 }
 
 declare input: {

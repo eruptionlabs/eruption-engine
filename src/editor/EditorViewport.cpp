@@ -77,6 +77,7 @@ void Editor::drawViewport() {
 
     if (m_play != PlayState::Editing) m_engine->drawGameHudIn(ImGui::GetWindowDrawList(), pos, avail);
     m_engine->drawSpeechBubbles(pos.x, pos.y, avail.x, avail.y, ImGui::GetIO().DeltaTime);
+    m_engine->drawGameFx2D(pos.x, pos.y, avail.x, avail.y, ImGui::GetIO().DeltaTime);
     if (m_scripts) m_scripts->drawMessages(pos.x, pos.y, avail.x, avail.y);
 
     // .glb solto do painel Projeto: entra no chão sob o mouse.

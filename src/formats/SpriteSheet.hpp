@@ -72,4 +72,25 @@ struct SpriteSheetResult {
 bool buildSpriteSheet(const SpriteSheetSpec& spec, SpriteSheetResult& out, std::string& error);
 bool writeEruptSprV2(const SpriteSheetResult& sheet, const std::string& path, std::string& error);
 
+// Receita de folha em JSON, ao lado do PNG (<nome>.sheet.json). E' o mesmo
+// que o importador do editor monta na mao, escrito num arquivo: serve pra
+// quem GERA sprite por programa (pixel art de placeholder, lote de NPC) e
+// pra refazer o .spr sem abrir o editor.
+//
+//   { "image": "assets/sprites/heroi.png",
+//     "columns": 14, "rows": 4, "directions": 4,
+//     "rowDirection": [0, 6, 2, 4], "mirrorMissing": true,
+//     "worldHeight": 28.0, "footOffset": 2,
+//     "idle": { "firstRow": 0, "firstColumn": 0, "frames": 2, "delayMs": 450 },
+//     "walk": { "firstRow": 0, "firstColumn": 2, "frames": 4, "delayMs": 140 },
+//     "extra": [ { "name": "attack", "firstColumn": 6, "frames": 3,
+//                  "delayMs": 90, "loop": false } ] }
+//
+// Campo ausente = padrao do SpriteSheetSpec. O caminho de "image" vale a
+// partir da pasta do projeto (ou do proprio .sheet.json, se nao achar).
+bool loadSpriteSheetRecipe(const std::string& jsonPath, SpriteSheetSpec& out, std::string& error);
+// Le a receita, corta a folha e grava o .spr ao lado do PNG. Caminho do .spr
+// gravado vai em *writtenPath.
+bool importSpriteSheetRecipe(const std::string& jsonPath, std::string& error, std::string* writtenPath = nullptr);
+
 } // namespace eruption

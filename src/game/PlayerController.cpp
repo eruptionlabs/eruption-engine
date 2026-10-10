@@ -209,6 +209,10 @@ void PlayerController::updateUI(float dt) {
     // Contar quadro e' trabalho do laco, nao da logica de jogo.
 }
 void PlayerController::updateMovement(float dt) {
+    if (m_inputFrozen) {
+        m_isMoving = false;
+        return;
+    }
     ImGuiIO& io = ImGui::GetIO();
     float currentMoveSpeed = m_engine->charConfig().moveSpeed;
     if (!m_engine->showConsole() && !io.WantTextInput && Input::isKeyDown(Key::LeftShift))

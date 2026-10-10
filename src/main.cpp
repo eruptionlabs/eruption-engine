@@ -2,12 +2,14 @@
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
+#include "formats/SpriteSheet.hpp"
 #include "game/DefaultApplication.hpp"
 #include "utils/BcAlphaSelfTest.hpp"
 #include "utils/GpuAutoSelect.hpp"
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #define ERUPTION_ENVIRON _environ
@@ -62,6 +64,31 @@ int main(int argc, char** argv) {
             return 1;
         }
         return 0;
+    }
+
+    // --import-sprite <folha.sheet.json> [...]: corta a folha e grava o .spr
+    // ao lado do PNG, sem abrir janela. E' o importador do editor em linha de
+    // comando, pra folha gerada por programa. Ver formats/SpriteSheet.hpp.
+    {
+        std::vector<std::string> recipes;
+        for (int i = 1; i + 1 < argc; ++i)
+            if (std::string(argv[i]) == "--import-sprite") recipes.push_back(argv[i + 1]);
+        if (!recipes.empty()) {
+            // O projeto resolve o caminho do PNG citado na receita.
+            const std::filesystem::path dir = eruption::Project::requested(argc, argv);
+            std::string err;
+            if (!dir.empty() && !eruption::Project::instance().open(dir, &err))
+                ERUPTION_LOG_WARN("[SPRITE] %s", err.c_str());
+            int failed = 0;
+            for (const std::string& r : recipes) {
+                std::string sprErr;
+                if (!eruption::importSpriteSheetRecipe(r, sprErr)) {
+                    ERUPTION_LOG_ERROR("--import-sprite: %s", sprErr.c_str());
+                    ++failed;
+                }
+            }
+            return failed == 0 ? 0 : 1;
+        }
     }
 
     // PROJETO DE JOGO. Antes de qualquer carga de asset: com um projeto
