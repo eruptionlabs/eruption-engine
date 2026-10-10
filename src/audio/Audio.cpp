@@ -1,6 +1,7 @@
 #include "audio/Audio.hpp"
 
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 
 #include <miniaudio.h>
 
@@ -89,15 +90,17 @@ uint32_t AudioSystem::start(const std::string& file, float volume, bool loop, bo
                             bool stream) {
     if (!m->ready || file.empty()) return 0;
     std::error_code ec;
-    if (!std::filesystem::exists(file, ec)) {
-        ERUPTION_LOG_WARN("Audio: file not found: %s", file.c_str());
+    // Som citado por cena/script: relativo sai da pasta do projeto.
+    const std::string path = project::gameRef(file).string();
+    if (!std::filesystem::exists(path, ec)) {
+        ERUPTION_LOG_WARN("Audio: file not found: %s", path.c_str());
         return 0;
     }
     auto* sound = new ma_sound;
     // Efeito: decodificado uma vez e guardado (o cache da miniaudio reaproveita);
     // música: lida aos poucos. Os dois carregam em segundo plano.
     const ma_uint32 flags = (stream ? MA_SOUND_FLAG_STREAM : MA_SOUND_FLAG_DECODE) | MA_SOUND_FLAG_ASYNC;
-    if (ma_sound_init_from_file(&m->engine, file.c_str(), flags, nullptr, nullptr, sound) != MA_SUCCESS) {
+    if (ma_sound_init_from_file(&m->engine, path.c_str(), flags, nullptr, nullptr, sound) != MA_SUCCESS) {
         ERUPTION_LOG_WARN("Audio: can't play %s (wav, ogg, mp3 or flac)", file.c_str());
         delete sound;
         return 0;

@@ -42,18 +42,28 @@ ExportReport exportGame(const ExportOptions& o) {
         return report;
     }
     const fs::path& root = o.projectRoot;
+    // Com o projeto fora do motor, cada caminho relativo e' procurado
+    // primeiro no projeto e depois no motor; o jogo exportado junta os dois
+    // numa pasta so'.
+    const fs::path engineRoot = o.engineRoot.empty() ? o.projectRoot : o.engineRoot;
     std::set<fs::path> files; // relativos à raiz do projeto
     std::deque<fs::path> scan; // arquivos de texto ainda não lidos
     std::error_code ec;
+    auto srcOf = [&](const fs::path& rel) -> fs::path {
+        if (fs::is_regular_file(root / rel, ec)) return root / rel;
+        if (fs::is_regular_file(engineRoot / rel, ec)) return engineRoot / rel;
+        return {};
+    };
     auto add = [&](const fs::path& rel) {
         const fs::path norm = rel.lexically_normal();
-        if (norm.empty() || norm.native().rfind("..", 0) == 0 || !fs::is_regular_file(root / norm, ec)) return false;
+        if (norm.empty() || norm.native().rfind("..", 0) == 0 || srcOf(norm).empty()) return false;
         if (files.insert(norm).second && followsReferences(norm)) scan.push_back(norm);
         return true;
     };
     auto addDir = [&](const fs::path& rel, auto&& keep) {
-        for (auto it = fs::recursive_directory_iterator(root / rel, ec); !ec && it != fs::recursive_directory_iterator(); ++it)
-            if (it->is_regular_file() && keep(it->path())) add(fs::relative(it->path(), root, ec));
+        for (const fs::path& base : {root, engineRoot})
+            for (auto it = fs::recursive_directory_iterator(base / rel, ec); !ec && it != fs::recursive_directory_iterator(); ++it)
+                if (it->is_regular_file() && keep(it->path())) add(fs::relative(it->path(), base, ec));
     };
     auto all = [](const fs::path&) { return true; };
 
@@ -91,8 +101,10 @@ ExportReport exportGame(const ExportOptions& o) {
     }
     // Motor: configurações (sem o clima de outros mapas), shaders compilados,
     // materiais, ícones e sprite padrão do jogador.
-    for (auto it = fs::directory_iterator(root / "data", ec); !ec && it != fs::directory_iterator(); ++it)
-        if (it->is_regular_file() && it->path().filename() != "launcher_config.json") add(fs::relative(it->path(), root, ec));
+    for (const fs::path& base : {root, engineRoot})
+        for (auto it = fs::directory_iterator(base / "data", ec); !ec && it != fs::directory_iterator(); ++it)
+            if (it->is_regular_file() && it->path().filename() != "launcher_config.json")
+                add(fs::relative(it->path(), base, ec));
     addDir("data/hud", all);
     addDir("assets/data", all);
     addDir("shaders", [](const fs::path& p) { return p.extension() == ".spv"; });
@@ -107,7 +119,7 @@ ExportReport exportGame(const ExportOptions& o) {
     while (!scan.empty()) {
         const fs::path rel = scan.front();
         scan.pop_front();
-        const std::string text = readText(root / rel);
+        const std::string text = readText(srcOf(rel));
         for (std::sregex_iterator it(text.begin(), text.end(), quoted), end; it != end; ++it) {
             const fs::path ref = (*it)[1].str();
             if (ref.is_absolute()) {
@@ -136,7 +148,7 @@ ExportReport exportGame(const ExportOptions& o) {
         if (rel.extension() == ".luau") {
             // Scripts e arquivos de cena vão compilados: o jogo não leva o compilador.
             std::string err;
-            const std::string bc = compileLuauForExport(readText(root / rel), err);
+            const std::string bc = compileLuauForExport(readText(srcOf(rel)), err);
             if (bc.empty()) {
                 report.error = rel.generic_string() + ": " + err;
                 return report;
@@ -144,7 +156,7 @@ ExportReport exportGame(const ExportOptions& o) {
             std::ofstream(dst, std::ios::binary | std::ios::trunc).write(bc.data(), std::streamsize(bc.size()));
             ++report.compiled;
         } else {
-            fs::copy_file(root / rel, dst, fs::copy_options::overwrite_existing, ec);
+            fs::copy_file(srcOf(rel), dst, fs::copy_options::overwrite_existing, ec);
         }
         if (ec) {
             report.error = "Could not copy " + rel.generic_string() + ": " + ec.message();

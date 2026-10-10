@@ -4,6 +4,7 @@
 #include "game/PlayerController.hpp"
 
 #include "core/Engine.hpp"
+#include "core/Project.hpp"
 #include "script/ScriptHost.hpp"
 #include "renderer/WeatherTypes.hpp"
 
@@ -88,7 +89,10 @@ bool Editor::init(Engine& engine) {
     }
     const std::string cpu = cpuName();
     if (!cpu.empty()) m_hardware += "  |  " + cpu;
-    m_projectRoot = std::filesystem::current_path();
+    // Pasta do JOGO (projeto aberto) e pasta do MOTOR. Sem projeto as duas
+    // sao a mesma coisa, como sempre foi.
+    m_engineRoot = project::engineRoot();
+    m_projectRoot = project::isOpen() ? project::root() : m_engineRoot;
     m_projectDir = m_projectRoot;
 
     m_showWelcome = !std::filesystem::exists(ImGui::GetIO().IniFilename ? ImGui::GetIO().IniFilename : "");
@@ -195,6 +199,10 @@ void Editor::registerCommands() {
     add("file.reload_scene", "File", "Reload Scene", {}, [this] { reloadSceneFile(); },
         "Discards unsaved changes and loads assets/scenes/<map>.scene.luau again.")
         .enabled = [this] { return !m_engine->currentMapName().empty() && m_play == PlayState::Editing; };
+    add("file.game_project", "File", "Game Project...", {}, [this] {
+        m_showGameProject = true;
+        m_projectPanel.loaded = false;
+    }, "Creates, opens and configures the game project: the folder with every map, sprite, scene and script of one game.");
     add("file.export", "File", "Export Game...", {}, [this] { m_showExport = true; m_export.profileDetected = false; },
         "Copies the maps and only what they use into a folder that runs on its own.");
     add("file.open_vscode", "File", "Open Project in VS Code", {}, [this] {
@@ -329,7 +337,7 @@ void Editor::registerCommands() {
         // A extensão (tools/vscode-eruption) vai para as extensões do VS Code do usuário.
         namespace fs = std::filesystem;
         const char* home = std::getenv("HOME");
-        const fs::path src = m_projectRoot / "tools" / "vscode-eruption";
+        const fs::path src = m_engineRoot / "tools" / "vscode-eruption";
         if (!home || !fs::exists(src / "package.json")) {
             log(LogLevel::Error, "The debugger extension (tools/vscode-eruption) was not found.");
             return;
@@ -579,7 +587,7 @@ void Editor::update(float dt) {
         const Mat4 rs = glm::scale(glm::rotate(Mat4(1.0f), glm::radians(30.0f), Vec3(0, 1, 0)), Vec3(1.5f));
         m_engine->modelRenderer().setInstanceTransform(idx, glm::translate(Mat4(1.0f), Vec3(m[3])) * rs *
                                                                 glm::translate(Mat4(1.0f), -Vec3(m[3])) * m);
-        const std::string path = std::string("assets/prefabs/") + testPrefab + ".prefab.luau";
+        const std::string path = project::game(std::string("assets/prefabs/") + testPrefab + ".prefab.luau").string();
         Vec3 p;
         if (savePrefab(path) && groundPointAt(0.3f, 0.6f, p)) dropModel(path, p);
     }
@@ -687,12 +695,13 @@ void Editor::update(float dt) {
         const std::string spec = testExport;
         ExportOptions o;
         o.projectRoot = m_projectRoot;
+        o.engineRoot = m_engineRoot;
         o.maps = {spec.substr(0, spec.find(':'))};
         o.outDir = spec.substr(spec.find(':') + 1);
         std::error_code ec;
-        o.binary = std::filesystem::exists(m_projectRoot / "build-export" / "eruption-engine", ec)
-                       ? m_projectRoot / "build-export" / "eruption-engine"
-                       : m_projectRoot / "eruption-engine";
+        o.binary = std::filesystem::exists(m_engineRoot / "build-export" / "eruption-engine", ec)
+                       ? m_engineRoot / "build-export" / "eruption-engine"
+                       : m_engineRoot / "eruption-engine";
         const ExportReport r = exportGame(o);
         ERUPTION_LOG_WARN("[EXPORT] files=%zu compiled=%zu neighbors=%zu bytes=%llu missing=%zu error=%s", r.files, r.compiled, r.neighbors,
                           static_cast<unsigned long long>(r.bytes), r.missing.size(), r.error.c_str());
@@ -940,6 +949,7 @@ void Editor::drawUI() {
     drawExportWindow();
     drawMapGenWindow();
     drawModelViewer();
+    drawGameProjectWindow();
 
     if (m_focusScene) {
         m_pendingFocus.insert(m_pendingFocus.begin(), kWinScene);
@@ -972,6 +982,7 @@ void Editor::drawMenuBar() {
             ImGui::EndMenu();
         }
         ImGui::Separator();
+        m_commands.menuItem("file.game_project");
         m_commands.menuItem("file.export");
         m_commands.menuItem("file.open_vscode");
         ImGui::Separator();

@@ -1,5 +1,6 @@
 #include "formats/GltfParser.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "utils/ImageUtils.hpp"
 #include <glm/gtx/matrix_decompose.hpp>
 
@@ -78,7 +79,8 @@ static const std::unordered_map<std::string, std::string>& albedoTexturePathCach
     if (!initialized) {
         initialized = true;
         static const std::vector<std::string> exts = {".png", ".jpg", ".jpeg", ".bmp", ".tga"};
-        static const std::vector<std::string> roots = {"assets/data/texture", "assets/pbr/base"};
+        const std::vector<std::string> roots = {project::game("assets/data/texture").string(),
+                                                project::game("assets/pbr/base").string()};
         for (const auto& root : roots) {
             if (!fs::exists(root) || !fs::is_directory(root)) continue;
             for (const auto& entry : fs::recursive_directory_iterator(root)) {

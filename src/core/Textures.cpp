@@ -10,6 +10,7 @@
 #include "core/Engine.hpp"
 #include "core/EngineInternal.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "core/JobSystem.hpp"
 #include "utils/Profiler.hpp"
 #include "utils/EtexLoader.hpp"
@@ -349,14 +350,18 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
         fsSearchPaths.push_back(base + ".jpg");
         fsSearchPaths.push_back(base + ".jpeg");
     };
-    addWithExtensions("assets/data/texture/" + fsPath);
-    addWithExtensions("assets/pbr/base/" + fsPath);
-    addWithExtensions("assets/data/texture/" + filename);
-    addWithExtensions("assets/pbr/base/" + filename);
-
+    // Texturas sao conteudo do jogo (project::game): com projeto aberto o
+    // motor nao olha mais a pasta do repositorio.
     namespace fs = std::filesystem;
-    if (fs::exists("assets/data/texture") && fs::is_directory("assets/data/texture")) {
-        for (const auto& entry : fs::directory_iterator("assets/data/texture")) {
+    const fs::path texRoot = project::game("assets/data/texture");
+    const fs::path pbrRoot = project::game("assets/pbr/base");
+    addWithExtensions((texRoot / fsPath).string());
+    addWithExtensions((pbrRoot / fsPath).string());
+    addWithExtensions((texRoot / filename).string());
+    addWithExtensions((pbrRoot / filename).string());
+
+    if (fs::exists(texRoot) && fs::is_directory(texRoot)) {
+        for (const auto& entry : fs::directory_iterator(texRoot)) {
             if (entry.is_directory()) {
                 addWithExtensions(entry.path().string() + "/" + filename);
             }

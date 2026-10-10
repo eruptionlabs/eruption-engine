@@ -1,4 +1,6 @@
 #include "utils/PbrTextureLoader.hpp"
+
+#include "core/Project.hpp"
 #include "utils/HeightFromAlbedo.hpp"
 #include "ml/NeuralPbr.hpp"
 #include "utils/BcCompressor.hpp"
@@ -176,7 +178,11 @@ static std::string findAlbedoOnDisk(const std::string& name) {
     std::string stem = n;
     size_t dot = stem.find_last_of('.');
     if (dot != std::string::npos && dot > stem.find_last_of('/') + 1) stem = stem.substr(0, dot);
-    const char* roots[] = { "assets/data/texture/", "assets/pbr/base/", "assets/data/" };
+    // Texturas sao conteudo do jogo: com projeto aberto saem da pasta dele.
+    const std::string rootStrings[] = { project::game("assets/data/texture").string() + "/",
+                                        project::game("assets/pbr/base").string() + "/",
+                                        project::game("assets/data").string() + "/" };
+    const char* roots[] = { rootStrings[0].c_str(), rootStrings[1].c_str(), rootStrings[2].c_str() };
     const char* exts[]  = { ".png", ".jpg", ".jpeg", ".bmp", ".tga" };
     for (const char* r : roots) {
         for (const char* e : exts) {
@@ -338,11 +344,18 @@ static const std::pair<std::string, std::string>* findPbrPairByStem(const std::s
         std::unordered_map<std::string, std::pair<std::string, std::string>> exact;
         std::unordered_map<std::string, std::pair<std::string, std::string>> normalized;
     };
+    // A varredura e' guardada por RAIZ: trocar de projeto no editor troca a
+    // pasta de texturas cozidas, e um cache de uma raiz anterior apontaria
+    // pra arquivos de outro jogo.
     static Cache cache;
-    static std::once_flag once;
-    std::call_once(once, [&]() {
-        const fs::path root = "assets/data/texture";
-        if (!fs::exists(root) || !fs::is_directory(root)) return;
+    static std::string cachedRoot;
+    static std::mutex cacheMutex;
+    const fs::path root = project::game("assets/data/texture");
+    std::lock_guard<std::mutex> cacheLock(cacheMutex);
+    if (cachedRoot != root.string()) {
+        cachedRoot = root.string();
+        cache = Cache{};
+        if (!fs::exists(root) || !fs::is_directory(root)) return nullptr;
         try {
             // Collect + SORT before populating: first-wins on ambiguous
             // (normalized) stems must be deterministic. The raw directory
@@ -380,9 +393,9 @@ static const std::pair<std::string, std::string>* findPbrPairByStem(const std::s
                 }
             }
         } catch (const std::exception& e) {
-            ERUPTION_LOG_WARN("PbrTextureLoader: failed to scan assets/data/texture: %s", e.what());
+            ERUPTION_LOG_WARN("PbrTextureLoader: failed to scan %s: %s", cachedRoot.c_str(), e.what());
         }
-    });
+    }
 
     auto it = cache.exact.find(toLower(stem));
     if (it != cache.exact.end()) return &it->second;
@@ -826,14 +839,14 @@ PbrTexturePathPair resolvePbrTexturePathsImpl(const std::string& albedoPath) {
 
         fs::path mrahwPath, normalPath;
         for (const auto& attempt : pathAttempts) {
-            std::tie(mrahwPath, normalPath) = makePaths("assets/data/texture", attempt.first, attempt.second);
+            std::tie(mrahwPath, normalPath) = makePaths(project::game("assets/data/texture"), attempt.first, attempt.second);
             if (fs::exists(mrahwPath) && fs::exists(normalPath)) {
                 out.mrahw = mrahwPath.string();
                 out.normal = normalPath.string();
                 out.valid = true;
                 return out;
             }
-            std::tie(mrahwPath, normalPath) = makePaths("assets/data", attempt.first, attempt.second);
+            std::tie(mrahwPath, normalPath) = makePaths(project::game("assets/data"), attempt.first, attempt.second);
             if (fs::exists(mrahwPath) && fs::exists(normalPath)) {
                 out.mrahw = mrahwPath.string();
                 out.normal = normalPath.string();

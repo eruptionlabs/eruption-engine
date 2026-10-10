@@ -4,6 +4,7 @@
 #include "editor/Translate.hpp"
 
 #include "core/Engine.hpp"
+#include "core/Project.hpp"
 #include "formats/TerrainParser.hpp"
 
 #include <imgui.h>
@@ -128,7 +129,7 @@ bool validMapName(const char* s) {
 } // namespace
 
 bool Editor::createFlatMap(const std::string& name, float size, std::string& error) {
-    const fs::path dir = fs::path("assets/external") / name;
+    const fs::path dir = project::game("assets/external") / name;
     std::error_code ec;
     if (fs::exists(dir / (name + ".glb"), ec)) {
         error = "A map named \"" + name + "\" already exists.";

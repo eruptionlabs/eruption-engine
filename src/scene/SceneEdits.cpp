@@ -3,6 +3,7 @@
 
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "script/ScriptApi.hpp"
 
 #include <lua.h>
@@ -139,7 +140,7 @@ bool SceneEdits::addModel(Engine& engine, const std::string& file, const std::st
 }
 
 fs::path SceneEdits::pathFor(const std::string& map) {
-    return fs::path("assets/scenes") / (map + ".scene.luau");
+    return project::game("assets/scenes") / (map + ".scene.luau");
 }
 
 bool SceneEdits::fileMentions(const std::string& map, const char* word) {
@@ -579,7 +580,7 @@ bool Prefab::isPrefabPath(const fs::path& p) {
 
 bool Prefab::load(const fs::path& path, std::string& error) {
     *this = Prefab{};
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(project::gameRef(path.string()), std::ios::binary);
     if (!f) {
         error = "Prefab not found: " + path.generic_string();
         return false;

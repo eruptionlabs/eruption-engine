@@ -15,6 +15,7 @@
 #include "core/Engine.hpp"
 
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "formats/MapLoader.hpp"
 #include "formats/ModelDataConverter.hpp"
 #include "formats/TerrainParser.hpp"
@@ -80,8 +81,9 @@ struct Engine::WorldRegionLoad {
 
 bool Engine::mapGroundArea(const std::string& map, Vec2& lo, Vec2& hi) {
     // Só o cabeçalho do .ter (o mesmo lugar onde o MapLoader procura).
-    for (const fs::path& p : {fs::path("assets/external") / map / (map + ".ter"), fs::path("assets/data") / (map + ".ter"),
-                             fs::path("assets/models") / (map + ".ter")}) {
+    for (const fs::path& p : {project::game("assets/external") / map / (map + ".ter"),
+                              project::game("assets/data") / (map + ".ter"),
+                              project::game("assets/models") / (map + ".ter")}) {
         std::ifstream f(p, std::ios::binary);
         if (!f) continue;
         char magic[11] = {};

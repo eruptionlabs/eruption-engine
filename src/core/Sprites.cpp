@@ -9,6 +9,7 @@
 #include "core/Engine.hpp"
 #include "game/PlayerController.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "utils/ImageUtils.hpp"
 #include "utils/Profiler.hpp"
 #include "formats/SpriteTypes.hpp"
@@ -247,8 +248,10 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
 bool Engine::loadSpriteFromPng(const std::string& path, LoadedSprite& out) {
     cleanupSpriteTextures(out);
 
+    // Caminho relativo citado por cena/script: sai da pasta do projeto.
+    const std::string disk = project::gameRef(path).string();
     int w = 0, h = 0, channels = 0;
-    unsigned char* data = stbi_load(path.c_str(), &w, &h, &channels, 4);
+    unsigned char* data = stbi_load(disk.c_str(), &w, &h, &channels, 4);
     if (!data) {
         ERUPTION_LOG_WARN("loadSpriteFromPng: failed to load %s", path.c_str());
         return false;
@@ -320,7 +323,7 @@ bool Engine::loadSpriteFromPng(const std::string& path, LoadedSprite& out) {
 bool Engine::loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out) {
     cleanupSpriteTextures(out);
 
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(project::gameRef(path), std::ios::binary);
     if (!f) {
         ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: failed to open %s", path.c_str());
         return false;

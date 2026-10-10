@@ -10,6 +10,7 @@
 #include "core/EngineInternal.hpp"
 #include "game/PlayerController.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "core/JobSystem.hpp"
 #include "utils/Profiler.hpp"
 #include "utils/TelemetryExporter.hpp"
@@ -663,13 +664,16 @@ void Engine::flushPendingUploads() {
 bool Engine::loadModelForPreview(const std::string& glbPath) {
     if (!m_currentMap) return false;
     if (m_modelRenderer.hasAsset(glbPath)) return true;
-    std::ifstream f(glbPath, std::ios::binary);
+    // O caminho do asset continua relativo (e' chave e vai pro arquivo de
+    // cena); quem abre o arquivo e' o caminho resolvido no projeto.
+    const std::string diskPath = project::gameRef(glbPath).string();
+    std::ifstream f(diskPath, std::ios::binary);
     const std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     if (data.size() < 12 || std::memcmp(data.data(), "glTF", 4) != 0) {
         ERUPTION_LOG_ERROR("Preview: not a GLB file: %s", glbPath.c_str());
         return false;
     }
-    ModelFile model = GltfParser::parse(data.data(), data.size(), std::filesystem::path(glbPath).parent_path().string());
+    ModelFile model = GltfParser::parse(data.data(), data.size(), std::filesystem::path(diskPath).parent_path().string());
     if (model.nodes.empty()) {
         ERUPTION_LOG_ERROR("Preview: no meshes in %s", glbPath.c_str());
         return false;
@@ -693,15 +697,16 @@ int Engine::addModelFromFile(const std::string& glbPath, const Vec3& position, c
         // Já carregado (o próprio mapa, ou outro modelo já acrescentado).
         first = m_modelRenderer.addInstanceOf(glbPath, desc, nodeName);
     } else {
+        const std::string diskPath = project::gameRef(glbPath).string();
         auto data = [&] {
-            std::ifstream f(glbPath, std::ios::binary);
+            std::ifstream f(diskPath, std::ios::binary);
             return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         }();
         if (data.size() < 12 || std::memcmp(data.data(), "glTF", 4) != 0) {
             ERUPTION_LOG_ERROR("addModelFromFile: not a GLB file: %s", glbPath.c_str());
             return -1;
         }
-        ModelFile model = GltfParser::parse(data.data(), data.size(), std::filesystem::path(glbPath).parent_path().string());
+        ModelFile model = GltfParser::parse(data.data(), data.size(), std::filesystem::path(diskPath).parent_path().string());
         if (model.nodes.empty()) {
             ERUPTION_LOG_ERROR("addModelFromFile: no meshes in %s", glbPath.c_str());
             return -1;

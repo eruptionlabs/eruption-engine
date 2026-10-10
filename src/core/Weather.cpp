@@ -8,6 +8,7 @@
 
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "renderer/WeatherTypes.hpp"
 #include "formats/MapLoader.hpp"
 #include <glm/gtc/matrix_transform.hpp>
@@ -428,7 +429,7 @@ void Engine::spawnWeatherCloudField(WeatherType type) {
 // this can be adopted one map at a time.
 void Engine::loadMapClimate(const std::string& mapName) {
     m_weatherSystem.climate().clear();
-    const std::string path = "data/climate/" + mapName + ".json";
+    const std::string path = project::game("data/climate/" + mapName + ".json").string();
     if (!m_weatherSystem.climate().loadFromFile(path)) {
         ERUPTION_LOG_INFO("[CLIMATE] %s sem descricao de clima regional; usando clima global",
                           mapName.c_str());

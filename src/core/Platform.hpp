@@ -2,9 +2,11 @@
 
 // O pouco que muda de sistema para sistema (Linux, Windows, macOS, Android),
 // num lugar só.
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -20,6 +22,9 @@
 #elif defined(__linux__)
 #include <climits>
 #include <unistd.h>
+#endif
+#if defined(_WIN32)
+#include <process.h>
 #endif
 
 namespace eruption::platform {
@@ -49,6 +54,28 @@ inline void setEnv(const char* name, const char* value) {
 #else
     setenv(name, value, 1);
 #endif
+}
+
+// Reabre o próprio programa com outros argumentos e NÃO volta (o processo é
+// substituído). Usado para trocar de projeto de jogo: o motor resolve as
+// pastas de asset uma vez, na abertura, então um projeto novo precisa de um
+// começo limpo. Só retorna (false) se não deu para trocar.
+inline bool relaunch(const std::vector<std::string>& args) {
+    const std::filesystem::path exe = executablePath();
+    if (exe.empty()) return false;
+    std::vector<std::string> store;
+    store.push_back(exe.string());
+    for (const std::string& a : args) store.push_back(a);
+    std::vector<char*> argv;
+    for (std::string& a : store) argv.push_back(a.data());
+    argv.push_back(nullptr);
+    std::fflush(nullptr);
+#if defined(_WIN32)
+    _execv(store[0].c_str(), argv.data());
+#else
+    execv(store[0].c_str(), argv.data());
+#endif
+    return false; // execv só volta em caso de erro
 }
 
 // Data da última mudança do arquivo (0 se não existe), para recarregar quando muda.

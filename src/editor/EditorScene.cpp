@@ -4,6 +4,7 @@
 #include "editor/Translate.hpp"
 
 #include "core/Engine.hpp"
+#include "core/Project.hpp"
 
 #include <imgui.h>
 #include "renderer/WeatherTypes.hpp"
@@ -324,7 +325,7 @@ namespace {
 std::string projectPath(const std::string& path) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    const fs::path rel = fs::relative(path, fs::current_path(), ec);
+    const fs::path rel = fs::relative(path, project::isOpen() ? project::root() : fs::current_path(), ec);
     if (!ec && !rel.empty() && rel.native().rfind("..", 0) != 0) return rel.generic_string();
     return path;
 }
@@ -524,7 +525,7 @@ void Editor::drawPrefabDialog() {
     if (!ImGui::BeginPopupModal("Save as Prefab", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
     const bool enter = ImGui::InputText(tr("Name"), m_prefabName, sizeof(m_prefabName), ImGuiInputTextFlags_EnterReturnsTrue);
-    const std::string path = std::string("assets/prefabs/") + m_prefabName + ".prefab.luau";
+    const std::string path = project::game(std::string("assets/prefabs/") + m_prefabName + ".prefab.luau").string();
     ImGui::TextDisabled("%s", path.c_str());
     std::error_code ec;
     if (std::filesystem::exists(path, ec)) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", tr("Replaces the existing prefab."));

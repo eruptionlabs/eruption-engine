@@ -6,6 +6,7 @@
 #include "editor/EditorTheme.hpp"
 
 #include "core/Engine.hpp"
+#include "core/Project.hpp"
 #include "renderer/WeatherTypes.hpp"
 #include "script/ScriptHost.hpp"
 
@@ -179,10 +180,14 @@ bool Editor::rulesParamEditor(RuleCall& call) {
                     listedFrame = ImGui::GetFrameCount();
                     files.clear();
                     std::error_code ec;
-                    for (auto it = std::filesystem::recursive_directory_iterator("assets", ec);
+                    // Guardados RELATIVOS a' pasta do jogo: e' o caminho que
+                    // a regra escreve e que o jogo exportado tambem usa.
+                    const std::filesystem::path base = project::game("");
+                    for (auto it = std::filesystem::recursive_directory_iterator(base / "assets", ec);
                          !ec && it != std::filesystem::recursive_directory_iterator() && files.size() < 500; ++it) {
                         const std::string e = it->path().extension().string();
-                        if (e == ".wav" || e == ".ogg" || e == ".mp3" || e == ".flac") files.push_back(it->path().generic_string());
+                        if (e == ".wav" || e == ".ogg" || e == ".mp3" || e == ".flac")
+                            files.push_back(std::filesystem::relative(it->path(), base, ec).generic_string());
                     }
                 }
                 const std::string cur = unquote(code);

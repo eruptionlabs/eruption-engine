@@ -1,10 +1,12 @@
 #include <cstdio>
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "game/DefaultApplication.hpp"
 #include "utils/BcAlphaSelfTest.hpp"
 #include "utils/GpuAutoSelect.hpp"
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 
 #ifdef _WIN32
@@ -47,6 +49,39 @@ int main(int argc, char** argv) {
     // antes de tocar GPU/janela/mapa nenhum. Ver BcAlphaSelfTest.hpp.
     if (eruption::runBcAlphaSelfTestIfRequested()) return 0;
 
+    // --new-project <pasta> [--project-name <nome>]: cria a pasta do jogo
+    // (manifesto + subpastas de conteudo) e sai. Nao abre janela nenhuma.
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) != "--new-project" || i + 1 >= argc) continue;
+        std::string name;
+        for (int k = 1; k + 1 < argc; ++k)
+            if (std::string(argv[k]) == "--project-name") name = argv[k + 1];
+        std::string err;
+        if (!eruption::Project::instance().create(argv[i + 1], name, &err)) {
+            ERUPTION_LOG_FATAL("--new-project: %s", err.c_str());
+            return 1;
+        }
+        return 0;
+    }
+
+    // PROJETO DE JOGO. Antes de qualquer carga de asset: com um projeto
+    // aberto, o conteudo do jogo vem da pasta dele e nao mais do
+    // repositorio. Sem pedido nenhum o motor segue abrindo mapa solto.
+    {
+        bool explicitProject = false;
+        const std::filesystem::path dir = eruption::Project::requested(argc, argv, &explicitProject);
+        if (!dir.empty()) {
+            std::string err;
+            if (!eruption::Project::instance().open(dir, &err)) {
+                if (explicitProject) {
+                    ERUPTION_LOG_FATAL("--project: %s", err.c_str());
+                    return 1;
+                }
+                ERUPTION_LOG_WARN("[PROJECT] %s; abrindo sem projeto", err.c_str());
+            }
+        }
+    }
+
     // Detect the best Vulkan driver/GPU before any window/Vulkan initialization.
     // This may restart the process with VK_ICD_FILENAMES set, then return true.
     eruption::GpuAutoSelect::ensureBestGpu();
@@ -63,7 +98,12 @@ int main(int argc, char** argv) {
             winH = h;
         }
     }
-    if (!engine.init(winW, winH, engine.editorMode() ? "Eruption Editor" : "Eruption Engine")) {
+    std::string title = engine.editorMode() ? "Eruption Editor" : "Eruption Engine";
+    if (eruption::Project::instance().isOpen()) {
+        const std::string& game = eruption::Project::instance().manifest().name;
+        title = engine.editorMode() ? game + " - Eruption Editor" : game;
+    }
+    if (!engine.init(winW, winH, title.c_str())) {
         ERUPTION_LOG_FATAL("Engine initialization failed");
         return 1;
     }
