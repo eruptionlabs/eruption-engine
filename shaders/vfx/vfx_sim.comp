@@ -150,14 +150,58 @@ void main() {
                              e.events.z & 0xFFu, s);
         }
         if (alive) {
-            // Frustum: esfera pelo maior tamanho possivel nesta idade.
+            // Aparencia nesta idade, calculada UMA vez (o desenho so' le').
+            float t = clamp(p.age / p.life, 0.0, 1.0);
             vec2 sr = unpackHalf2x16(p.sizeRot);
-            float t = p.age / p.life;
-            float radius = sr.x * sampleSizeLut(e, t) * 0.75 + e.angVel.z * length(p.vel) * 0.5 + 0.01;
-            visible = alive;
-            lowRes = (e.flags.x & VFXF_LOWRES) != 0u;
+            vec2 av = unpackHalf2x16(p.angVel);
+            float size = sr.x * sampleSizeLut(e, t);
+            if (e.graphB.w > 0u) size *= max(vfxRunGraph(e.graphB.z, e.graphB.w, p, e).x, 0.0);
+            float viewZ = (frame.viewProj * vec4(p.pos, 1.0)).w;
+            // Teto de tamanho na tela: a particula que encosta na camera nao
+            // vira uma parede de overdraw (o custo de fumaca e' de fill-rate).
+            size = min(size, e.render.z * max(viewZ, 1e-3) / max(frame.viewInfo.x, 1e-3));
+            float stretchLen = e.angVel.z * length(p.vel);
+            float radius = size + stretchLen * 0.5 + 0.01;
+            visible = true;
             for (int k = 0; k < 6 && visible; ++k)
                 visible = dot(frame.frustum[k].xyz, p.pos) + frame.frustum[k].w > -radius;
+            lowRes = (e.flags.x & VFXF_LOWRES) != 0u;
+            if (visible) {
+                vec4 col = unpackColorLut(e, t);
+                col.rgb *= e.render.x;
+                if (e.graphB.y > 0u) col *= max(vfxRunGraph(e.graphB.x, e.graphB.y, p, e), vec4(0.0));
+                vec3 toCam = normalize(frame.camPos.xyz - p.pos + vec3(0.0, 1e-5, 0.0));
+                if (e.render.y > 0.0) {
+                    // Normal falsa entre "para a camera" e "para cima": a nuvem de
+                    // particulas recebe sol por cima, como fumaca de verdade.
+                    vec3 L = -normalize(frame.sunDir.xyz);
+                    vec3 n = normalize(toCam + vec3(0.0, 1.0, 0.0));
+                    float wrap = clamp(dot(n, L) * 0.5 + 0.5, 0.0, 1.0);
+                    vec3 light = frame.ambient.rgb * frame.ambient.w + frame.sunColor.rgb * frame.sunDir.w * wrap;
+                    col.rgb *= mix(vec3(1.0), light, e.render.y);
+                }
+                // Some perto da camera em vez de cobrir a tela.
+                col.a *= smoothstep(frame.timeInfo.w, frame.timeInfo.w + max(e.render.w * e.rot0.w, 1e-3), viewZ);
+                // Folha de quadros: ao longo da vida, em quadros/s ou sorteado fixo.
+                uint cols = max(e.flags.w & 0xFFu, 1u);
+                uint rows = max((e.flags.w >> 8) & 0xFFu, 1u);
+                float frames = float(cols * rows);
+                float fpos = e.flip.z > 1.5 ? floor(av.y * frames)
+                           : (e.flip.z > 0.5 ? p.age * e.flip.x : t * (frames - 0.001)) + av.y * frames;
+                float f0 = mod(floor(fpos), frames);
+                float fmix = ((e.flags.x & VFXF_FLIP_BLEND) != 0u && e.flip.z < 1.5) ? fract(fpos) : 0.0;
+                vec3 axis = dot(p.vel, p.vel) > 1e-10 ? normalize(p.vel) : vec3(0.0, 1.0, 0.0);
+                RenderRec rec;
+                rec.posSize = vec4(p.pos, size);
+                rec.look = uvec4(packHalf2x16(col.rg), packHalf2x16(col.ba),
+                                 packHalf2x16(vec2(sr.y + av.x * p.age, stretchLen)), packOct(axis));
+                uint facing = (e.flags.x >> VFXF_FACING_SHIFT) & 3u;
+                uint blend = (e.flags.x >> VFXF_BLEND_SHIFT) & 3u;
+                rec.sheet = uvec4(e.flags.z, cols | (rows << 8) | (blend << 16) | (facing << 18),
+                                  uint(f0) | (uint(fmix * 255.0 + 0.5) << 16), floatBitsToUint(e.angVel.w * e.rot0.w));
+                rec.cutout = e.cutout;
+                recs[idx] = rec;
+            }
         }
     }
 

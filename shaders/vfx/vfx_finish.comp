@@ -14,11 +14,13 @@ void main() {
     counters[VFXC_EVENTDISP + 2] = 1u;
     for (uint l = 0u; l < 2u; ++l) {
         uint n = counters[VFXC_RENDER + l];
-        // 18 vertices: poligono de 8 lados (corta o canto vazio do quad).
-        counters[VFXC_DRAW + l * 4u + 0u] = 18u;
-        counters[VFXC_DRAW + l * 4u + 1u] = n;
-        counters[VFXC_DRAW + l * 4u + 2u] = 0u;
-        counters[VFXC_DRAW + l * 4u + 3u] = 0u;
+        // Indexado: 18 indices sobre 8 vertices (poligono de 8 lados); o
+        // cache de vertices roda o vertex shader 8 vezes, nao 18.
+        counters[VFXC_DRAW + l * 5u + 0u] = 18u;
+        counters[VFXC_DRAW + l * 5u + 1u] = n;
+        counters[VFXC_DRAW + l * 5u + 2u] = 0u;
+        counters[VFXC_DRAW + l * 5u + 3u] = 0u;
+        counters[VFXC_DRAW + l * 5u + 4u] = 0u;
         counters[VFXC_SORTDISP + l * 4u + 0u] = (n + 63u) / 64u;
         counters[VFXC_SORTDISP + l * 4u + 1u] = 1u;
         counters[VFXC_SORTDISP + l * 4u + 2u] = 1u;

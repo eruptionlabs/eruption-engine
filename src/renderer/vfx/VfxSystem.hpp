@@ -77,6 +77,10 @@ struct VfxFrameParamsGpu {
     Vec4 timeInfo;
     Vec4 depthInfo;
     glm::uvec4 counts;
+    Vec4 sunDir;
+    Vec4 sunColor;
+    Vec4 ambient;
+    Vec4 viewInfo;
 };
 
 class VfxSystem {
@@ -153,6 +157,13 @@ public:
     VkImageView reactiveView() const { return m_reactiveView; }
     // Algo para simular/desenhar? (sem nenhum efeito, o sistema custa zero)
     bool active() const { return m_active; }
+    // Luz da cena para a luz por particula (a mesma do FrameUBO): sol (xyz
+    // direcao em que viaja, w intensidade), cor do sol, ceu (xyz cor, w intensidade).
+    void setLighting(const Vec4& sunDir, const Vec4& sunColor, const Vec4& ambient) {
+        m_sunDir = sunDir;
+        m_sunColor = sunColor;
+        m_ambient = ambient;
+    }
     // Troca o FrameUBO do desenho (camera propria por frame, ex.: previa).
     void setFrameUboSet(VkDescriptorSet set) { m_frameUboSet = set; }
 
@@ -248,7 +259,9 @@ private:
         void* mapped = nullptr;
         VkDeviceSize size = 0;
     };
-    Buf m_particles, m_dead, m_alive, m_counters, m_render, m_sort, m_events;
+    Buf m_particles, m_dead, m_alive, m_counters, m_render, m_sort, m_events, m_recs;
+    Buf m_ringIndex; // 18 indices do poligono de 8 lados (draw indexado)
+    Vec4 m_sunDir{0.0f, -1.0f, 0.0f, 1.0f}, m_sunColor{1.0f}, m_ambient{0.5f, 0.55f, 0.6f, 0.5f};
     bool m_anyEvents = false; // algum emissor com sub-emissor tocando
     // Por frame em voo: emissores, pedidos, parametros, leitura dos contadores.
     static constexpr uint32_t kMaxSlots = 4096;

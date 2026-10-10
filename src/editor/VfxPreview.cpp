@@ -348,6 +348,7 @@ void VfxPreview::render(VkCommandBuffer cmd, float dt) {
     std::memcpy(m_uboMapped[frame], &u, sizeof(u));
     vmaFlushAllocation(m_ctx->allocator(), m_uboAlloc[frame], 0, VK_WHOLE_SIZE);
     m_sys.setFrameUboSet(m_uboSets[frame]);
+    m_sys.setLighting(u.sunDir, u.sunColor, u.ambientSky);
 
     const VkExtent2D ext{m_w, m_h};
     m_sys.update(playing ? dt * speed : 0.0f, m_cam, ext);
