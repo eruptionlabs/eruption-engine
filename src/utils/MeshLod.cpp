@@ -450,7 +450,20 @@ MeshLodResult simplifyMesh(const float* positions,
     // montado reduz menos (so' o que o conservador entrega). Isto permite
     // um A/B honesto sem recompilar a receita do mapa.
     static const bool kNoStructGuard = std::getenv("ERUPTION_LOD_NO_STRUCTURE_GUARD") != nullptr;
-    const bool structurePath = cardStats.isStructure && !kNoStructGuard;
+    bool structurePath = cardStats.isStructure && !kNoStructGuard;
+    // PECA e' peca fisica, nao ilha de UV: a solda acima separa nas costuras
+    // de UV, e um pedregulho fotoescaneado (uma peca so', centenas de ilhas de
+    // UV) passava por "objeto montado" e ficava sem LOD de verdade (109 k ->
+    // lo 55 k, far 55 k, no parana_field original). Confirma pela solda so'
+    // de posicao: menos de duas pecas macicas = nao e' estrutura.
+    if (structurePath && uvByteOffset > 0) {
+        const std::vector<uint32_t> canonPos = weldByPosition(positions, vertexCount, stride, 0, 0);
+        std::vector<uint32_t> weldedPos(indices.size());
+        for (size_t i = 0; i < indices.size(); ++i)
+            weldedPos[i] = indices[i] < canonPos.size() ? canonPos[indices[i]] : indices[i];
+        const MeshCardStats physical = statsFromIslands(buildIslands(positions, stride, weldedPos, vertexCount));
+        if (physical.chunkyIslands < 2) structurePath = false;
+    }
     out.cardMesh = cardPath;
     out.islandsTotal = static_cast<uint32_t>(islands.triCount.size());
     out.islandsKept = out.islandsTotal;
