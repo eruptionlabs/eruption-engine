@@ -2127,6 +2127,12 @@ void Engine::applyGraphicsPreset() {
     }
     if (meshLodRatio <= 0.0f) lodTrisPerPx = 0.0f;
     m_modelRenderer.setMeshLodTrisPerPx(lodTrisPerPx);
+    // Teto global de triangulos por frame (ModelRenderer::setMeshTriBudget).
+    // ERUPTION_TEST_MESH_TRI_BUDGET=<n> sobrepoe o preset (0 desliga).
+    int triBudget = std::max(0, p.value("mesh_tri_budget", 0));
+    if (const char* tb = std::getenv("ERUPTION_TEST_MESH_TRI_BUDGET")) triBudget = std::max(0, std::atoi(tb));
+    if (meshLodRatio <= 0.0f) triBudget = 0;
+    m_modelRenderer.setMeshTriBudget(static_cast<uint32_t>(triBudget));
     m_modelRenderer.setScreenCull(std::clamp<float>(p.value("small_object_cull_px", 0.0f), 0.0f, 16.0f));
     // Escala do balanco da vegetacao ao vento (0 desliga). Chega ao vertex
     // shader em windParams.y.

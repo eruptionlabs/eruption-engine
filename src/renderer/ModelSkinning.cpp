@@ -274,6 +274,8 @@ bool ModelRenderer::createSkinned(uint32_t base, SkinnedInstance& s) {
     clone.farVertexBuffer = VK_NULL_HANDLE; clone.farVertexAlloc = VK_NULL_HANDLE;
     clone.shIndexBuffer = VK_NULL_HANDLE; clone.shIndexAlloc = VK_NULL_HANDLE;
     clone.shIndexCount = 0;
+    for (auto& md : clone.mid) md = ModelMeshGPU::MidLod{};
+    clone.midCount = 0;
     clone.groundCells.clear();
     clone.isExternal = true; // o buffer é do skinning (releaseSkinned)
     m_meshes.push_back(clone);

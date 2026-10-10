@@ -369,6 +369,22 @@ VkDeviceSize ModelMeshGPU::destroyBaseBuffers(VulkanContext* ctx) {
 
 VkDeviceSize ModelMeshGPU::destroyLodBuffers(VulkanContext* ctx) {
     VkDeviceSize freed = 0;
+    for (uint32_t k = 0; k < kMaxMidLods; ++k) {
+        MidLod& m = mid[k];
+        for (auto [buf, alloc] : {std::pair<VkBuffer*, VmaAllocation*>{&m.vertexBuffer, &m.vertexAlloc},
+                                  std::pair<VkBuffer*, VmaAllocation*>{&m.indexBuffer, &m.indexAlloc}}) {
+            if (*buf == VK_NULL_HANDLE) continue;
+            VmaAllocationInfo info;
+            vmaGetAllocationInfo(ctx->allocator(), *alloc, &info);
+            PROFILE_VRAM_FREE(ProfilerCategory::Meshes, info.size);
+            freed += info.size;
+            vmaDestroyBuffer(ctx->allocator(), *buf, *alloc);
+            *buf = VK_NULL_HANDLE;
+            *alloc = VK_NULL_HANDLE;
+        }
+        m.indexCount = 0;
+    }
+    midCount = 0;
     if (loIndexBuffer != VK_NULL_HANDLE) {
         VmaAllocationInfo lo;
         vmaGetAllocationInfo(ctx->allocator(), loIndexAlloc, &lo);
@@ -946,6 +962,95 @@ void ModelRenderer::loadMapModels(std::vector<ModelAsset>&& models,
 // triângulos levava ~290 ms por nível, um depois do outro); finishLod junta
 // e decide como antes: cartões com área compensada (lo/far com vértices
 // próprios) ou index buffer simplificado.
+// Cadeia intermediaria: so' malha gigante (o salto cheia -> "lo" passaria de
+// 16x). Cada degrau ~1/4 do anterior, encadeado (simplifica o degrau anterior,
+// nao a malha cheia: 1,6 M de triangulos levaria segundos por nivel), ate'
+// ficar a ~4x do "lo". Folhagem de cartao: poda com compensacao de area, como
+// o "lo" (vertices proprios por degrau).
+void ModelRenderer::computeMidChain(LodBuild& b) const {
+    static const bool kNoMid = std::getenv("ERUPTION_TEST_NO_MID_LOD") != nullptr;
+    if (kNoMid || b.ground || m_meshLodRatio <= 0.0f) return;
+    const size_t triCount = b.indices.size() / 3;
+    size_t loTarget = static_cast<size_t>(double(triCount) * m_meshLodRatio);
+    if (m_meshLodMaxTris > 0) loTarget = std::min<size_t>(loTarget, m_meshLodMaxTris);
+    const size_t stopAt = std::max<size_t>(loTarget * 4, kMidLodMinTris / 4);
+    if (triCount < kMidLodMinTris || triCount / 4 <= stopAt) return;
+    // Poda de cartao so' em folhagem de CARTAO de verdade (folha modelada
+    // passa pelo simplificador comum, como no "lo").
+    const MeshCardStats cs = analyzeCards(&b.vertices[0].position.x, b.vertices.size(), sizeof(TerrainVertex),
+                                          b.indices, offsetof(TerrainVertex, texCoord),
+                                          offsetof(TerrainVertex, texIndex));
+    const bool cards = b.sway && cs.isCardMesh;
+    static const bool kDbg = std::getenv("ERUPTION_DEBUG_MIDLOD") != nullptr;
+    if (kDbg)
+        ERUPTION_LOG_WARN("[MIDLOD] %s: %zu tris, ilhas %u (cartao %u, pecas %u) tris/ilha %.1f cartao %.2f sway %d",
+                          b.material.c_str(), triCount, cs.islands, cs.cardIslands, cs.chunkyIslands,
+                          cs.islands ? float(triCount) / float(cs.islands) : 0.0f, cs.cardTriFraction, b.sway ? 1 : 0);
+    const std::vector<uint32_t>* src = &b.indices;
+    for (uint32_t k = 0; k < ModelMeshGPU::kMaxMidLods; ++k) {
+        // Alvo: 1/4 do degrau anterior. Abaixo do piso so' a poda final de
+        // folhas ainda vale (ate' o piso), o resto para.
+        const size_t prevTris = b.mid.empty() ? triCount : b.mid.back().size() / 3;
+        const bool leafyNow = b.sway && cs.islands > 1000 && src != &b.indices &&
+                              float(src->size() / 3) / float(cs.islands) <= 3.5f;
+        size_t target = prevTris / 4;
+        if (target <= stopAt) {
+            if (!leafyNow || prevTris <= stopAt * 2) break;
+            target = stopAt;
+        }
+        if (cards) {
+            CardPruneResult pr = pruneCardsAreaPreserving(b.vertices.data(), b.vertices.size(), sizeof(TerrainVertex),
+                                                          offsetof(TerrainVertex, position), b.indices,
+                                                          static_cast<uint32_t>(target), offsetof(TerrainVertex, texCoord),
+                                                          offsetof(TerrainVertex, texIndex), kCardLodMaxScale);
+            if (pr.valid && pr.indices.size() / 3 < (b.mid.empty() ? triCount : b.mid.back().size() / 3) * 7 / 10) {
+                b.midVerts.push_back(std::move(pr.vertices));
+                b.mid.push_back(std::move(pr.indices));
+                continue;
+            }
+        }
+        // FOLHA MODELADA (muitas ilhas pequenas, nao cartao): reduz cada folha
+        // sem apagar nenhuma. Ate' ~2 triangulos por folha; dali em diante
+        // fica o simplificador comum (o "lo" ja' e' o borrão da copa).
+        const size_t srcTris = src->size() / 3;
+        const float trisPerIsland = cs.islands ? float(srcTris) / float(cs.islands) : 0.0f;
+        if (b.sway && cs.islands > 1000 && trisPerIsland <= 3.5f && src != &b.indices) {
+            // Folhas ja' com ~2 triangulos: a copa virou cartoes. Proximo
+            // degrau = poda de folhas com compensacao de area (as que ficam
+            // crescem), vertices proprios. Ultimo degrau da cadeia.
+            CardPruneResult pr = pruneCardsAreaPreserving(b.vertices.data(), b.vertices.size(), sizeof(TerrainVertex),
+                                                          offsetof(TerrainVertex, position), *src,
+                                                          static_cast<uint32_t>(target), offsetof(TerrainVertex, texCoord),
+                                                          offsetof(TerrainVertex, texIndex), kCardLodMaxScale);
+            if (pr.valid && pr.indices.size() / 3 < srcTris * 7 / 10) {
+                b.midVerts.push_back(std::move(pr.vertices));
+                b.mid.push_back(std::move(pr.indices));
+            }
+            break;
+        }
+        if (b.sway && cs.islands > 1000 && trisPerIsland > 3.0f) {
+            std::vector<uint32_t> r = simplifyPerIsland(&b.vertices[0].position.x, b.vertices.size(),
+                                                        sizeof(TerrainVertex), *src, 0.25f, 2,
+                                                        offsetof(TerrainVertex, texCoord),
+                                                        offsetof(TerrainVertex, texIndex));
+            if (r.size() / 3 > srcTris * 7 / 10) break;
+            b.midVerts.emplace_back();
+            b.mid.push_back(std::move(r));
+            src = &b.mid.back();
+            continue;
+        }
+        MeshLodResult r = simplifyMesh(&b.vertices[0].position.x, b.vertices.size(), sizeof(TerrainVertex), *src,
+                                       float(double(target) / double(srcTris)), 1.0f /* erro livre: o alvo manda */,
+                                       static_cast<uint32_t>(target), offsetof(TerrainVertex, texCoord),
+                                       offsetof(TerrainVertex, texIndex), false, 0.6f, b.ground);
+        // Degrau que nao encolheu de verdade nao vale um nivel.
+        if (!r.valid || r.indices.size() / 3 > srcTris * 7 / 10) break;
+        b.midVerts.emplace_back();
+        b.mid.push_back(std::move(r.indices));
+        src = &b.mid.back();
+    }
+}
+
 void ModelRenderer::computeLodPart(LodBuild& b, int part) const {
     const std::vector<TerrainVertex>& vertices = b.vertices;
     const std::vector<uint32_t>& indices = b.indices;
@@ -962,6 +1067,8 @@ void ModelRenderer::computeLodPart(LodBuild& b, int part) const {
                                     std::max(m_meshLodRatio * 0.25f, 0.02f), 1.0f /* erro livre: o TETO manda */,
                                     m_meshLodFarMaxTris, offsetof(TerrainVertex, texCoord),
                                     offsetof(TerrainVertex, texIndex), b.sway, kFarCardMinArea, b.ground);
+    } else if (part == 3) {
+        computeMidChain(b);
     } else if (m_shadowLodMaxTris > 0) {
         // LOD exclusivo da sombra: mais agressivo, porque a silhueta no shadow
         // map nao resolve o detalhe (RMS 0,000 medido). Piso de area de sombra
@@ -1072,6 +1179,19 @@ void ModelRenderer::applyLods(std::vector<LodBuild>& builds) {
             make(b.far.data(), b.far.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.farIndexBuffer, mesh.farIndexAlloc);
             mesh.farIndexCount = static_cast<uint32_t>(b.far.size());
             mesh.farSwitchDistance = b.farSwitch;
+        }
+        // Cadeia intermediaria so' vale com o "lo" existindo (e' o degrau entre os dois).
+        if (!b.lo.empty()) {
+            for (size_t k = 0; k < b.mid.size() && k < ModelMeshGPU::kMaxMidLods; ++k) {
+                ModelMeshGPU::MidLod& md = mesh.mid[k];
+                if (k < b.midVerts.size() && !b.midVerts[k].empty())
+                    make(b.midVerts[k].data(), b.midVerts[k].size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, md.vertexBuffer,
+                         md.vertexAlloc);
+                make(b.mid[k].data(), b.mid[k].size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                     md.indexBuffer, md.indexAlloc);
+                md.indexCount = static_cast<uint32_t>(b.mid[k].size());
+                mesh.midCount = static_cast<uint32_t>(k + 1);
+            }
         }
         if (!b.sh.empty()) {
             make(b.sh.data(), b.sh.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.shIndexBuffer, mesh.shIndexAlloc);
@@ -1732,8 +1852,8 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             std::sort(lodBuilds.begin(), lodBuilds.end(),
                       [](const LodBuild& a, const LodBuild& b) { return a.indices.size() > b.indices.size(); });
             const auto lt0 = std::chrono::steady_clock::now();
-            JobSystem::instance().parallelFor(static_cast<uint32_t>(lodBuilds.size() * 3), [&](uint32_t k) {
-                computeLodPart(lodBuilds[k / 3], static_cast<int>(k % 3));
+            JobSystem::instance().parallelFor(static_cast<uint32_t>(lodBuilds.size() * 4), [&](uint32_t k) {
+                computeLodPart(lodBuilds[k / 4], static_cast<int>(k % 4));
             });
             JobSystem::instance().parallelFor(static_cast<uint32_t>(lodBuilds.size()),
                                               [&](uint32_t k) { finishLod(lodBuilds[k]); });
@@ -2431,6 +2551,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
 
     // SIMD/SoA frustum cull; fills m_visibleInstanceIndices.
     m_lastCameraPos = cameraPos; // ANTES do cull: o descarte por tela usa a camera deste frame
+    m_lastViewProj = viewProj;
     cullInstances(frustum);
 
     // ---- INSTANCING (SIMT) ----
@@ -2717,6 +2838,10 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         } else if (level == 3 && m.farIndexCount > 0) {
             if (m.farVertexBuffer != VK_NULL_HANDLE) vb = m.farVertexBuffer;
             ib = m.farIndexBuffer; count = m.farIndexCount;
+        } else if (level >= 4 && uint32_t(level - 4) < m.midCount) {
+            const ModelMeshGPU::MidLod& md = m.mid[level - 4];
+            if (md.vertexBuffer != VK_NULL_HANDLE) vb = md.vertexBuffer;
+            ib = md.indexBuffer; count = md.indexCount;
         }
     };
 
@@ -3010,11 +3135,11 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     if (kDrawStats) {
         static int f = 0;
         if (++f % 120 == 0) {
-            ERUPTION_LOG_WARN("[DRAWSTATS] instancias=%zu visiveis=%zu draws=%u triangulos=%u malhas=%zu descartados_tela=%u pxUnit=%.0f minPx=%.2f lodFadeJobs=%u",
+            ERUPTION_LOG_WARN("[DRAWSTATS] instancias=%zu visiveis=%zu draws=%u triangulos=%u malhas=%zu descartados_tela=%u pxUnit=%.0f minPx=%.2f lodFadeJobs=%u escalaOrcamento=%.3f",
                               m_instances.size(), m_visibleInstanceIndices.size(),
                               dbgDraws, dbgIdx / 3, m_meshes.size(),
                               m_lastScreenCulled, m_pixelsPerUnit, m_screenCullMinPx,
-                              actualCompanions);
+                              actualCompanions, m_lodBudgetScale);
             // Quem PAGA o passe, ponderado por instancia. Medido no render:
             // um log no build das malhas reporta zero instancias, porque elas
             // ainda nem existem la'.
@@ -3028,6 +3153,8 @@ void ModelRenderer::render(VkCommandBuffer cmd,
                 ERUPTION_LOG_WARN("   malha %u: %u tris desenhados / %u instancias | cheia=%u LOD=%u (reduz %.0f%%) troca=%.0f",
                                   top[k].second, top[k].first, dbgPerMesh[top[k].second].second,
                                   mm.indexCount / 3, mm.loIndexCount / 3, red, mm.loSwitchDistance);
+                for (uint32_t q = 0; q < mm.midCount; ++q)
+                    ERUPTION_LOG_WARN("      mid %u: %u tris", q, mm.mid[q].indexCount / 3);
             }
         }
     }
@@ -3701,7 +3828,7 @@ ModelRenderer::LodFadePair ModelRenderer::lodFadePairFor(const ModelMeshGPU& mes
         const float hi = sw.lo;
         if (dist > lo && dist < hi) {
             r.active = true; r.t = (dist - lo) / (hi - lo);
-            r.nearLevel = 1; r.farLevel = 2;
+            r.nearLevel = mesh.midCount ? uint8_t(4 + mesh.midCount - 1) : uint8_t(1); r.farLevel = 2;
             return r;
         }
     }
@@ -3722,15 +3849,17 @@ ModelRenderer::LodSwitch ModelRenderer::lodSwitchFor(const ModelInstanceHot& hot
     LodSwitch s;
     s.lo = mesh.loSwitchDistance;
     s.far = mesh.farSwitchDistance;
-    if (m_meshLodTrisPerPx <= 0.0f || m_pixelsPerUnit <= 0.0f) return s;
+    if (trisPerPx() <= 0.0f || m_pixelsPerUnit <= 0.0f) return s;
     const float R = glm::length(hot.worldAabbMax - hot.worldAabbMin) * 0.5f;
     if (R <= 0.0f) return s;
     // d_L = R * pxUnit * sqrt(pi * orcamento / T_L): distancia ate' a qual o
     // nivel L ainda gasta <= orcamento triangulos por pixel projetado.
-    const float k = R * m_pixelsPerUnit * std::sqrt(3.14159265f * m_meshLodTrisPerPx);
+    const float k = R * m_pixelsPerUnit * std::sqrt(3.14159265f * trisPerPx());
     const float floorD = std::max(m_meshLodMinDistance, 1.0f);
     if (mesh.loIndexCount > 0 && mesh.indexCount >= 3) {
-        const float dBase = k / std::sqrt(float(mesh.indexCount / 3));
+        // Com cadeia intermediaria, o degrau antes do "lo" e' o ultimo mid.
+        const uint32_t nearTris = (mesh.midCount ? mesh.mid[mesh.midCount - 1].indexCount : mesh.indexCount) / 3;
+        const float dBase = k / std::sqrt(float(std::max(nearTris, 1u)));
         const float cur = (s.lo > 0.0f) ? s.lo : 1e9f;
         s.lo = std::max(std::min(cur, dBase), floorD);
     }
@@ -3853,7 +3982,57 @@ uint8_t ModelRenderer::lodLevelFor(uint32_t idx, const ModelMeshGPU& mesh) const
         const float th = wasLo ? sw.lo * kLoLodHysteresis : sw.lo;
         if (dist > th) return 2;
     }
-    return 1;
+    return midLevelFor(idx, hot, mesh, dist);
+}
+
+uint32_t ModelRenderer::levelTris(const ModelMeshGPU& m, uint8_t level) {
+    if (level == 0 && m.hiIndexCount) return m.hiIndexCount / 3;
+    if (level == 2 && m.loIndexCount) return m.loIndexCount / 3;
+    if (level == 3 && m.farIndexCount) return m.farIndexCount / 3;
+    if (level >= 4 && uint32_t(level - 4) < m.midCount) return m.mid[level - 4].indexCount / 3;
+    return m.indexCount / 3;
+}
+
+uint8_t ModelRenderer::midLevelFor(uint32_t idx, const ModelInstanceHot& hot, const ModelMeshGPU& mesh,
+                                   float /*dist*/) const {
+    if (mesh.midCount == 0 || trisPerPx() <= 0.0f || m_pixelsPerUnit <= 0.0f) return 1;
+    const float R = glm::length(hot.worldAabbMax - hot.worldAabbMin) * 0.5f;
+    if (R <= 0.0f) return 1;
+    // Area projetada VISIVEL: o disco da esfera (distancia ao centro)
+    // recortado pelo retangulo da tela. Arvore em volta da camera, quase toda
+    // fora do quadro, nao conta como tela cheia; camera dentro da esfera =
+    // tela inteira. Triangulos permitidos = orcamento por pixel x essa area.
+    const Vec3 c = (hot.worldAabbMin + hot.worldAabbMax) * 0.5f;
+    const float dC = std::max(glm::distance(m_lastCameraPos, c), 1e-3f);
+    const float rPx = R * m_pixelsPerUnit / dC;
+    float area = 3.14159265f * rPx * rPx;
+    if (m_screenW > 0.0f && m_screenH > 0.0f) {
+        const Vec4 clip = m_lastViewProj * Vec4(c, 1.0f);
+        if (dC <= R) {
+            area = m_screenW * m_screenH;
+        } else if (clip.w > 1e-3f) {
+            // Quadrado de mesma area do disco, recortado pela tela.
+            const float sx = (clip.x / clip.w * 0.5f + 0.5f) * m_screenW;
+            const float sy = (clip.y / clip.w * 0.5f + 0.5f) * m_screenH;
+            const float h = rPx * 0.8862f;
+            const float ox = std::max(0.0f, std::min(sx + h, m_screenW) - std::max(sx - h, 0.0f));
+            const float oy = std::max(0.0f, std::min(sy + h, m_screenH) - std::max(sy - h, 0.0f));
+            area = ox * oy;
+        } else {
+            area = std::min(area, m_screenW * m_screenH * 0.25f);
+        }
+    }
+    const float allowed = trisPerPx() * area;
+    const uint8_t prev = idx < m_lodOfInstance.size() ? m_lodOfInstance[idx] : 1;
+    auto rank = [](uint8_t l) { return l == 1 ? 0 : (l >= 4 ? l - 3 : 99); };
+    const int prevRank = rank(prev);
+    for (uint32_t r = 0; r < mesh.midCount; ++r) {
+        const uint32_t tris = (r == 0 ? mesh.indexCount : mesh.mid[r - 1].indexCount) / 3;
+        // Histerese: voltar a um degrau MAIS detalhado pede 30% de folga.
+        const float need = float(tris) * (int(r) < prevRank ? 1.3f : 1.0f);
+        if (need <= allowed) return r == 0 ? uint8_t(1) : uint8_t(4 + r - 1);
+    }
+    return uint8_t(4 + mesh.midCount - 1);
 }
 
 void ModelRenderer::sortVisibleByMesh(std::vector<uint32_t>& list, bool useLod, bool recordStats) {
@@ -3885,6 +4064,7 @@ void ModelRenderer::sortVisibleByMesh(std::vector<uint32_t>& list, bool useLod, 
     const size_t buckets = size_t(meshCount + 1) * kLodLevels;
     m_meshHistogram.assign(buckets + 1, 0);
     if (m_lodOfInstance.size() != m_instances.size()) m_lodOfInstance.assign(m_instances.size(), 1);
+    uint64_t frameTris = 0;
 
     for (uint32_t idx : list) {
         uint32_t m = m_instanceHot[idx].meshIndex;
@@ -3892,7 +4072,24 @@ void ModelRenderer::sortVisibleByMesh(std::vector<uint32_t>& list, bool useLod, 
         if (useLod && m < meshCount) advanceLodDistance(idx, m_instanceHot[idx], m_meshes[m]);
         const uint8_t lod = (useLod && m < meshCount) ? lodLevelFor(idx, m_meshes[m]) : 1;
         if (useLod && idx < m_lodOfInstance.size()) m_lodOfInstance[idx] = lod;
+        if (useLod && m < meshCount) frameTris += levelTris(m_meshes[m], lod);
         ++m_meshHistogram[size_t(m) * kLodLevels + lod + 1];
+    }
+    // Teto global: ajusta a escala do orcamento por pixel para o PROXIMO
+    // frame (o nivel deste ja' foi escolhido). Desce rapido quando estoura,
+    // sobe devagar quando sobra - sem oscilar entre dois degraus.
+    if (useLod && recordStats && m_meshTriBudget > 0 && m_meshLodTrisPerPx > 0.0f) {
+        const double budget = double(m_meshTriBudget);
+        if (frameTris > budget) {
+            m_lodBudgetScale *= float(std::clamp(budget / double(frameTris), 0.5, 0.95));
+        } else if (frameTris < budget * 0.6) {
+            m_lodBudgetScale = std::min(1.0f, m_lodBudgetScale * 1.05f);
+        }
+        // Piso: teto inalcancavel (malha que nao tem degrau menor perto da
+        // camera) nao pode esmagar o LOD do resto do mapa.
+        m_lodBudgetScale = std::max(m_lodBudgetScale, 0.05f);
+    } else if (m_meshTriBudget == 0) {
+        m_lodBudgetScale = 1.0f;
     }
     for (size_t i = 1; i <= buckets; ++i) m_meshHistogram[i] += m_meshHistogram[i - 1];
 

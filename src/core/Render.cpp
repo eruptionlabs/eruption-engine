@@ -773,7 +773,8 @@ void Engine::render() {
         // Pixels por unidade de mundo a distancia 1 (descarte por tamanho na tela).
         m_modelRenderer.setScreenMetrics(
             static_cast<float>(displayExtent().height) /
-            (2.0f * std::tan(glm::radians(m_camera.fov()) * 0.5f)));
+                (2.0f * std::tan(glm::radians(m_camera.fov()) * 0.5f)),
+            static_cast<float>(displayExtent().width), static_cast<float>(displayExtent().height));
         // ERUPTION_TEST_FORCE_BASE_LOD=1 (debug): forca a malha CHEIA em toda
         // instancia visivel, mesmo longe - A/B contra o LOD normal para o
         // harness perf/test_lod_quality.py medir o quanto o LOD simplificado

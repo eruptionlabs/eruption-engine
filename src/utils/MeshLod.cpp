@@ -259,6 +259,119 @@ MeshCardStats analyzeCards(const float* positions,
     return st;
 }
 
+std::vector<uint32_t> simplifyPerIsland(const float* positions, size_t vertexCount, size_t stride,
+                                        const std::vector<uint32_t>& indices, float ratio,
+                                        uint32_t minTrisPerIsland, size_t uvByteOffset,
+                                        size_t texIdxByteOffset) {
+    std::vector<uint32_t> out;
+#ifdef ERUPTION_HAVE_MESHOPT
+    if (!positions || vertexCount < 3 || indices.size() < 3) return indices;
+    const std::vector<uint32_t> canonical =
+        weldByPosition(positions, vertexCount, stride, uvByteOffset, texIdxByteOffset);
+    std::vector<uint32_t> welded(indices.size());
+    for (size_t i = 0; i < indices.size(); ++i)
+        welded[i] = indices[i] < canonical.size() ? canonical[indices[i]] : indices[i];
+    Islands is = buildIslands(positions, stride, welded, vertexCount);
+    // Triangulos agrupados por ilha (ordenacao por contagem: raiz -> faixa).
+    const size_t triCount = welded.size() / 3;
+    std::unordered_map<uint32_t, uint32_t> slotOf;
+    slotOf.reserve(is.triCount.size());
+    std::vector<uint32_t> start;
+    start.reserve(is.triCount.size() + 1);
+    for (const auto& kv : is.triCount) {
+        slotOf[kv.first] = static_cast<uint32_t>(start.size());
+        start.push_back(kv.second);
+    }
+    uint32_t acc = 0;
+    for (uint32_t& v : start) {
+        const uint32_t n = v;
+        v = acc;
+        acc += n;
+    }
+    start.push_back(acc);
+    std::vector<uint32_t> order(acc);
+    std::vector<uint32_t> fill(start.begin(), start.end() - 1);
+    for (size_t t = 0; t < triCount; ++t) {
+        if (is.triIsland[t] == 0xFFFFFFFFu) continue;
+        order[fill[slotOf[is.triIsland[t]]]++] = static_cast<uint32_t>(t);
+    }
+    out.reserve(size_t(double(welded.size()) * std::max(ratio, 0.05f)) + 64);
+    const uint32_t avgTris = is.triCount.empty() ? 0u : static_cast<uint32_t>(triCount / is.triCount.size());
+    const uint8_t* base = reinterpret_cast<const uint8_t*>(positions);
+    std::vector<uint32_t> localIdx, simp, globalOf;
+    std::vector<float> localPos, localUv;
+    std::unordered_map<uint32_t, uint32_t> localOf;
+    const float weights[2] = {0.5f, 0.5f};
+    for (size_t isl = 0; isl + 1 < start.size(); ++isl) {
+        const uint32_t b = start[isl], e = start[isl + 1];
+        const uint32_t n = e - b;
+        // Ilha bem maior que a media (galho, tronco) reduz menos por degrau:
+        // galho fino simplificado forte vira linha e some.
+        const double r = n > 2 * avgTris ? std::sqrt(double(ratio)) : double(ratio);
+        const uint32_t target = std::max<uint32_t>(minTrisPerIsland, uint32_t(std::ceil(double(n) * r)));
+        if (n <= target) {
+            for (uint32_t k = b; k < e; ++k)
+                for (int c = 0; c < 3; ++c) out.push_back(welded[size_t(order[k]) * 3 + c]);
+            continue;
+        }
+        // Malha local compacta (o simplificador aloca por vertice: com o
+        // vertex buffer inteiro, 50 mil chamadas custariam minutos).
+        localIdx.clear();
+        localPos.clear();
+        localUv.clear();
+        globalOf.clear();
+        localOf.clear();
+        for (uint32_t k = b; k < e; ++k)
+            for (int c = 0; c < 3; ++c) {
+                const uint32_t g = welded[size_t(order[k]) * 3 + c];
+                auto it = localOf.find(g);
+                if (it == localOf.end()) {
+                    it = localOf.emplace(g, static_cast<uint32_t>(globalOf.size())).first;
+                    globalOf.push_back(g);
+                    const float* p = reinterpret_cast<const float*>(base + size_t(g) * stride);
+                    localPos.insert(localPos.end(), {p[0], p[1], p[2]});
+                    if (uvByteOffset > 0) {
+                        const float* uv = reinterpret_cast<const float*>(base + size_t(g) * stride + uvByteOffset);
+                        localUv.insert(localUv.end(), {uv[0], uv[1]});
+                    }
+                }
+                localIdx.push_back(it->second);
+            }
+        simp.resize(localIdx.size());
+        float err = 0.0f;
+        size_t m = 0;
+        if (uvByteOffset > 0)
+            m = meshopt_simplifyWithAttributes(simp.data(), localIdx.data(), localIdx.size(), localPos.data(),
+                                               globalOf.size(), sizeof(float) * 3, localUv.data(), sizeof(float) * 2,
+                                               weights, 2, nullptr, size_t(target) * 3, 1.0f, 0, &err);
+        else
+            m = meshopt_simplify(simp.data(), localIdx.data(), localIdx.size(), localPos.data(), globalOf.size(),
+                                 sizeof(float) * 3, size_t(target) * 3, 1.0f, 0, &err);
+        if (m >= 3) {
+            for (size_t k = 0; k < m; ++k) out.push_back(globalOf[simp[k]]);
+        } else {
+            // Colapsou: fica o maior triangulo (a folha nao some).
+            uint32_t best = order[b];
+            float bestA = -1.0f;
+            for (uint32_t k = b; k < e; ++k) {
+                const size_t t = order[k];
+                const float ar = triArea(positions, stride, welded[t * 3], welded[t * 3 + 1], welded[t * 3 + 2]);
+                if (ar > bestA) {
+                    bestA = ar;
+                    best = order[k];
+                }
+            }
+            for (int c = 0; c < 3; ++c) out.push_back(welded[size_t(best) * 3 + c]);
+        }
+    }
+#else
+    (void)positions; (void)vertexCount; (void)stride; (void)ratio; (void)minTrisPerIsland;
+    (void)uvByteOffset; (void)texIdxByteOffset;
+    out = indices;
+#endif
+    return out;
+}
+
 MeshLodResult simplifyMesh(const float* positions,
                            size_t vertexCount,
                            size_t stride,
