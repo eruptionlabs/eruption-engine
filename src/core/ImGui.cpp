@@ -312,8 +312,10 @@ void Engine::drawWeatherTab() {
 // F2 (Iterative Effects > Lighting) and F9 (A/B Test > Lighting) tabs so the
 // same sliders appear and edit the same members wherever the user looks.
 void Engine::updateNightLights() {
-    float hour = m_dayNightCycle.timeOfDay() * 24.0f;
-    bool isNight = (hour >= 18.0f) || (hour < 5.0f);
+    // Noite pela luz do sol, nao pelo relogio: e' o mesmo criterio do vidro
+    // emissivo (model_frag: smoothstep 0,2..0,8 da intensidade do sol), entao
+    // janela, poste e efeito acendem juntos - inclusive em tempestade escura.
+    const bool isNight = m_deferredLighting.environment().sun.intensity < 0.5f;
     for (auto& pl : m_deferredLighting.getPointLights()) {
         if (pl.nightOnly) pl.enabled = isNight;
     }
