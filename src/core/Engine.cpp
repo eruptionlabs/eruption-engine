@@ -572,6 +572,16 @@ bool Engine::init(int width, int height, const std::string& title) {
         if (const char* e = std::getenv("ERUPTION_NO_TEXTURE_BC")) {
             if (e[0] == '1') sup = BcFormatSupport{};
         }
+        // ERUPTION_TEXTURE_BC=bc1,bc3: so' estes formatos, mesmo que a GPU tenha
+        // mais. Assa no PC o pacote de texturas de uma GPU de celular (Xclipse:
+        // BC1/BC3) com o PBR da rede, que o celular nao roda.
+        if (const char* e = std::getenv("ERUPTION_TEXTURE_BC")) {
+            const std::string only = e;
+            sup.bc1 = sup.bc1 && only.find("bc1") != std::string::npos;
+            sup.bc3 = sup.bc3 && only.find("bc3") != std::string::npos;
+            sup.bc5 = sup.bc5 && only.find("bc5") != std::string::npos;
+            sup.bc7 = sup.bc7 && only.find("bc7") != std::string::npos;
+        }
         setBcFormatSupport(sup);
         ERUPTION_LOG_WARN("[GRAPHICS] compressao de bloco: BC1=%d BC3=%d BC5=%d BC7=%d",
                           sup.bc1, sup.bc3, sup.bc5, sup.bc7);
@@ -776,7 +786,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     initMinimap();
     m_audio.init(); // sem dispositivo de som, o jogo segue mudo
 
-    m_camera.setPerspective(60.0f, (float)width / (float)height, 0.1f, 50000.0f);
+    m_camera.setPerspective(60.0f, (float)width / (float)height, cameraNear(), 50000.0f);
     // Default camera: 85% zoom, 50% pitch
     // zoomPercent=0.85 => distance = 10 + (1-0.85)*990 = 158.5
     // pitchPercent=0.50 => 10 + 0.50*(90-10) = 50 degrees
@@ -2166,7 +2176,7 @@ void Engine::applyGraphicsPreset() {
 
     // Síntese de PBR (relevo derivado onde não há PBR autoral): custa ~1,9 ms
     // de GPU por cobrir todos os materiais. Preset low abre mão.
-    setPbrSynthesisEnabled(p.value("pbr_synthesis", true));
+    setPbrSynthesisEnabled(p.value("pbr_synthesis", true) && !std::getenv("ERUPTION_TEST_NO_PBR_SYNTH"));
 
     // Teto de resolução de textura. Os 20 sheets 2048² do parana são a maior
     // parte dos pixels do mapa; o teto é o botão mais direto de VRAM. Vale

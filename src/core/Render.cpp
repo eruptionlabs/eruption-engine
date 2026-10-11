@@ -260,7 +260,7 @@ void Engine::render() {
         bindFsrInputs();
         m_water.resizeRefraction(w, h);
         m_water.setSkyTexture(m_skybox.outputView(), m_skybox.outputSampler());
-        m_camera.setPerspective(60.0f, (float)w / (float)h, 0.1f, 50000.0f);
+        m_camera.setPerspective(60.0f, (float)w / (float)h, cameraNear(), 50000.0f);
         recreateViewportTarget();
         m_resized = false;
     }

@@ -42,9 +42,19 @@ cd "$ROOT"
     find assets/data assets/scripts assets/sprites assets/icon -type f 2>/dev/null
     for m in ${MAPS//,/ }; do
         find -L "assets/external/$m" -maxdepth 1 -type f \( -name '*.glb' -o -name '*.ter' -o -name '*.nav' -o -name '*.env' \)
+        # Pacote de texturas assado para o celular (tools/android/bake_mobile_pack.sh):
+        # PBR da rede neural, que o celular nao roda. So' vale com o .glb original.
+        if [ "${ERUPTION_APK_JPEG:-1}" = "0" ] && [ -f "assets/external/$m/$m.glb.1024s.mobile.etexpack" ]; then
+            echo "assets/external/$m/$m.glb.1024s.mobile.etexpack"
+        fi
     done
 } | grep -v '/\.' | sort > "$STAGE/assets/android/manifest.txt"
 while read -r f; do mkdir -p "$STAGE/assets/$(dirname "$f")"; cp -L "$f" "$STAGE/assets/$f"; done < "$STAGE/assets/android/manifest.txt"
+# O pacote movel vai com o nome que o motor procura no celular.
+for f in "$STAGE"/assets/assets/external/*/*.mobile.etexpack; do
+    [ -f "$f" ] && mv "$f" "${f%.mobile.etexpack}.etexpack"
+done
+sed -i 's/\.mobile\.etexpack$/.etexpack/' "$STAGE/assets/android/manifest.txt"
 # Texturas opacas do mapa em JPEG (ERUPTION_APK_JPEG=0 desliga): o .glb de
 # cidade de 68 MB encolhe o bastante para o APK caber em envio de 30 MB.
 if [ "${ERUPTION_APK_JPEG:-1}" != "0" ]; then

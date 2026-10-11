@@ -784,6 +784,14 @@ private:
     bool findEmbeddedAlbedoPixels(const std::string& name, std::vector<uint8_t>& outPixels,
                                   int& outW, int& outH, int& outChannels);
     void recordTelemetry();
+    // Plano proximo da camera (ERUPTION_TEST_NEAR para bancada).
+    static float cameraNear() {
+        static const float n = [] {
+            const char* e = std::getenv("ERUPTION_TEST_NEAR");
+            return e ? std::max(0.01f, static_cast<float>(std::atof(e))) : 0.1f;
+        }();
+        return n;
+    }
     // ERUPTION_TEST_TOUR=<s por mapa> (teste): percorre ERUPTION_TOUCH_MAPS,
     // girando a camera uma volta e indo de longe a perto em cada mapa, e loga
     // o FPS por mapa e por fase. Bancada de troca de mapa e de queda de FPS.
