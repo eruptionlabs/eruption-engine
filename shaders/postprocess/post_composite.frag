@@ -57,10 +57,15 @@ vec3 applyGrading(vec3 c, float saturation, float contrast) {
     // Contraste em torno do cinza medio 0.18 em espaco linear-ish. Pivotar em
     // 0.5 escureceria a imagem inteira ao aumentar o contraste, porque 0.5 nao
     // e' o meio perceptual de uma cena.
+    // Em POTENCIA (espaco log), nao linear: (c - 0,18) * 1,22 + 0,18 zerava
+    // tudo abaixo de 0,032 e a noite virava preto chapado (sombra "clipada").
+    // pivo * (c / pivo)^contraste mantem o pivo, abre os claros e escurece os
+    // escuros sem nunca cortar.
     const float kPivot = 0.18;
-    c = (c - kPivot) * contrast + kPivot;
+    c = max(c, vec3(0.0));
+    c = kPivot * pow(c / kPivot, vec3(contrast));
 
-    return max(c, vec3(0.0));
+    return c;
 }
 
 float fogHeightFactor(float y) {
