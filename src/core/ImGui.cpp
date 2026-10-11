@@ -311,14 +311,57 @@ void Engine::drawWeatherTab() {
 // Single source of truth for the Lighting controls. Drawn in BOTH the
 // F2 (Iterative Effects > Lighting) and F9 (A/B Test > Lighting) tabs so the
 // same sliders appear and edit the same members wherever the user looks.
-// Painel de toque: hora do dia, relogio parado/andando e clima. Fica no
-// canto de baixo; o resto da tela continua sendo da camera.
+// Painel de toque: analogico de mover a camera no canto de baixo a' esquerda,
+// hora do dia, relogio parado/andando e clima no da direita. O resto da tela
+// continua sendo da camera (um dedo gira, pinca aproxima).
 void Engine::drawTouchHud() {
     ImGui::PushFont(m_touchHudFont);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const float pad = m_touchHudFont->FontSize * 0.5f;
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + pad, vp->WorkPos.y + vp->WorkSize.y - pad), ImGuiCond_Always,
-                            ImVec2(0.0f, 1.0f));
+
+    // Analogico: base fixa, o pino segue o dedo ate' a borda. Inclinacao vira
+    // velocidade do alvo da camera no plano do chao, relativa a' direcao da
+    // camera e proporcional a' distancia (perto anda devagar, longe cobre o mapa).
+    {
+        const float r = m_touchHudFont->FontSize * 2.6f;
+        const ImVec2 size(r * 2.6f, r * 2.6f);
+        const ImVec2 corner(vp->WorkPos.x + pad, vp->WorkPos.y + vp->WorkSize.y - pad - size.y);
+        const ImVec2 c(corner.x + size.x * 0.5f, corner.y + size.y * 0.5f);
+        ImGui::SetNextWindowPos(corner, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+        ImGui::Begin("##analogico", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove);
+        ImGui::SetCursorScreenPos(corner);
+        ImGui::InvisibleButton("##pino", size);
+        ImVec2 tilt(0.0f, 0.0f);
+        if (ImGui::IsItemActive()) {
+            const ImVec2 m = ImGui::GetIO().MousePos;
+            tilt = ImVec2((m.x - c.x) / r, (m.y - c.y) / r);
+            const float len = std::sqrt(tilt.x * tilt.x + tilt.y * tilt.y);
+            if (len > 1.0f) tilt = ImVec2(tilt.x / len, tilt.y / len);
+        }
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddCircleFilled(c, r, IM_COL32(20, 20, 30, 90), 48);
+        dl->AddCircle(c, r, IM_COL32(255, 255, 255, 110), 48, 3.0f);
+        dl->AddCircleFilled(ImVec2(c.x + tilt.x * r, c.y + tilt.y * r), r * 0.42f, IM_COL32(255, 255, 255, 150), 32);
+        ImGui::End();
+        if (tilt.x != 0.0f || tilt.y != 0.0f) {
+            if (m_playerController) m_playerController->setFreeCamera(true); // o alvo para de seguir o jogador
+            Vec3 fwd = m_camera.forward();
+            Vec3 rgt = m_camera.right();
+            fwd.y = 0.0f;
+            rgt.y = 0.0f;
+            if (glm::dot(fwd, fwd) > 1e-6f) fwd = glm::normalize(fwd);
+            if (glm::dot(rgt, rgt) > 1e-6f) rgt = glm::normalize(rgt);
+            const float speed = std::max(m_camera.orbitDistance(), 60.0f) * 0.9f; // u/s
+            const float dt = std::min(ImGui::GetIO().DeltaTime, 0.1f);
+            m_camera.moveTarget((rgt * tilt.x - fwd * tilt.y) * speed * dt);
+        }
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - pad, vp->WorkPos.y + vp->WorkSize.y - pad),
+                            ImGuiCond_Always, ImVec2(1.0f, 1.0f));
     ImGui::SetNextWindowBgAlpha(0.35f);
     ImGui::Begin("##toque", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
