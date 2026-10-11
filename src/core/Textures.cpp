@@ -15,6 +15,7 @@
 #include "utils/Profiler.hpp"
 #include "utils/EtexLoader.hpp"
 #include "utils/ImageUtils.hpp"
+#include <backends/imgui_impl_vulkan.h>
 #include "utils/TextureCache.hpp"
 #include "utils/PbrTextureLoader.hpp"
 #include "utils/PbrMaterialProfile.hpp"
@@ -665,4 +666,26 @@ ModelMeshGPU Engine::resolveModelMesh(const std::string& legacyModelPath, uint32
     return mesh;
 }
 
+
+// Textura de imagem da UI em CSS (retrato na fila de turno, icone de item).
+// O caminho vem do .css ou do script e e' relativo ao PROJETO.
+void* Engine::uiImageTexture(const std::string& png) {
+    auto it = m_uiImages.find(png);
+    if (it != m_uiImages.end()) return it->second.set;
+
+    UiImage novo;
+    // Falha tambem entra no cache, com set nulo: sem isso um caminho errado
+    // tentaria abrir o arquivo de novo a cada quadro.
+    if (createTextureFromFile(project::gameRef(png).string().c_str(), novo.tex)) {
+        novo.set = ImGui_ImplVulkan_AddTexture(m_defaultSampler, novo.tex.view,
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    } else {
+        ERUPTION_LOG_WARN("UI: imagem %s nao abriu (%s)", png.c_str(),
+                          project::gameRef(png).string().c_str());
+    }
+    auto [pos, _] = m_uiImages.emplace(png, novo);
+    return pos->second.set;
+}
+
 } // namespace eruption
+

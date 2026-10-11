@@ -145,7 +145,11 @@ void Engine::finishPendingScreenshot() {
     // No dump de TODOS os frames (ERUPTION_TEST_DUMP_FRAMES) a espera e'
     // bloqueante: diferir aqui faria o frame seguinte nem ser agendado, e a
     // sequencia sairia com buracos - justamente onde se procura o "jump".
-    static const bool kDumpAll = std::getenv("ERUPTION_TEST_DUMP_FRAMES") != nullptr;
+    // A gravacao de video entra na mesma regra do dump: espera a cerca de
+    // verdade. Com timeout 0 a leitura e' adiada e a sequencia sai com
+    // buracos - num video isso vira engasgo.
+    static const bool kDumpAll = std::getenv("ERUPTION_TEST_DUMP_FRAMES") != nullptr
+                              || std::getenv("ERUPTION_TEST_RECORD") != nullptr;
     VkFence fence = m_vulkan.frameFence(m_screenshotSubmitFrame);
     VkResult ready = vkWaitForFences(m_vulkan.device(), 1, &fence, VK_TRUE,
                                      kDumpAll ? UINT64_MAX : 0);

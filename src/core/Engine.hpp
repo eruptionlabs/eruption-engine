@@ -73,6 +73,7 @@
 #include "scene/SceneEdits.hpp"
 #include "audio/Audio.hpp"
 #include <deque>
+#include <unordered_map>
 #include <functional>
 namespace eruption {
 struct LoadedMap;
@@ -267,6 +268,10 @@ public:
     struct LoadedSprite {
         AnimFile act;
         std::vector<TextureResource> textures;
+        // Varias personagens podem usar o mesmo arquivo de sprite. Quando isso
+        // acontece elas DIVIDEM as texturas; esta ficha conta quantas ainda
+        // usam, e so a ultima a soltar devolve os slots a GPU.
+        std::shared_ptr<char> texturesShared;
         uint32_t indexedTextureCount = 0;
         bool loaded = false;
         bool isPngSprite = false;
@@ -527,6 +532,9 @@ public:
     UiCanvas& uiCanvas() { return m_uiCanvas; }
     // Interface do jogo descrita em CSS (renderer/UiDocument.hpp).
     UiDocument& uiDocument() { return m_uiDocument; }
+    // Textura de um PNG para a UI em CSS, carregada na primeira vez e
+    // guardada por caminho. Devolve o handle do ImGui, ou nullptr.
+    void* uiImageTexture(const std::string& png);
     void clearCharacters(bool keepNeighbors = false);
     // Anda quem tem caminho (só com o jogo rodando) e envia os sprites.
     void updateCharacters(float dt, bool moveAlongPaths);
@@ -1335,6 +1343,21 @@ private:
     // indirect light carries this map's real palette (green for vila-A grass,
     // red laterite for parana) instead of a hardcoded brown.
     Vec3  m_mapGroundAlbedo = Vec3(0.08f, 0.06f, 0.04f);
+    // Preenchimento ambiente escrito pelo .env do mapa (bloco light.ambient).
+    // Vazio = o ciclo dia/noite manda, que e' o certo a ceu aberto. Um mapa de
+    // interior escreve o seu e passa a mandar: la' dentro nao ha hora do dia.
+    Vec3  m_mapAmbientColor = Vec3(0.0f);
+    bool  m_mapAmbientAuthored = false;
+    bool  m_mapLightAuthored = false;
+    // "sky": false no .env — interior fechado, sem cupula de ceu no fundo.
+    bool  m_mapHasSky = true;
+    float m_mapAmbientIntensity = 0.95f;
+    // Sol escrito pelo .env do mapa. Um INTERIOR precisa poder desligar o sol
+    // (opacity 0): nao existe sol dentro de uma caverna fechada, e o ciclo
+    // dia/noite insistia em por um, com reflexo em agua e tudo.
+    Vec3  m_mapSunDirection = Vec3(0.0f, -1.0f, 0.0f);
+    Vec3  m_mapSunColor = Vec3(1.0f);
+    float m_mapSunIntensity = 1.0f;
     // Texturas embutidas do GLB já comprimidas em bloco (BC1/BC3 albedo, BC7
     // normal/mrahw) com mips prontos, indexadas pelo nome da imagem. Vazio
     // quando a GPU não suporta BC ou o bake falhou: o caminho RGBA8 continua
@@ -1423,6 +1446,11 @@ private:
     ResourceConfig m_resourceConfig;
     UiCanvas m_uiCanvas;
     UiDocument m_uiDocument;
+    // Retrato, icone, moldura: um PNG por caminho, carregado sob demanda.
+    // Guardado para sempre porque sao poucos e pequenos, e recarregar a cada
+    // quadro custaria um upload por quadro.
+    struct UiImage { TextureResource tex; VkDescriptorSet set = VK_NULL_HANDLE; };
+    std::unordered_map<std::string, UiImage> m_uiImages;
     InputConfig m_inputConfig;
     VkImage m_minimapImage = VK_NULL_HANDLE;
     VmaAllocation m_minimapAlloc = VK_NULL_HANDLE;
@@ -1444,6 +1472,9 @@ private:
     static constexpr uint32_t MINIMAP_RES = 256;
     PlayerController* m_playerController = nullptr;
     std::vector<SceneCharacter> m_characters;
+    // Sprite de personagem ja lido, por caminho de arquivo. Sem isto, cada
+    // personagem relia e reenviava a folha inteira para a GPU.
+    std::unordered_map<std::string, LoadedSprite> m_characterSpriteCache;
     bool m_hasPlayerStart = false;
     HeightEdit m_heightEdit;
     std::vector<ScatterGroup> m_scatter;

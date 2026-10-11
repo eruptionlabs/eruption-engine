@@ -494,6 +494,19 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     env.sun.intensity = loadedMap->env.sunIntensity;
     env.ambientColor = loadedMap->env.ambientColor;
     env.ambientIntensity = loadedMap->env.ambientIntensity;
+    m_mapAmbientAuthored = loadedMap->env.ambientAuthored;
+    m_mapAmbientColor = loadedMap->env.ambientColor;
+    m_mapAmbientIntensity = loadedMap->env.ambientIntensity;
+    m_mapLightAuthored = loadedMap->env.lightAuthored;
+    m_mapHasSky = loadedMap->env.hasSky;
+    if (!m_mapHasSky) ERUPTION_LOG_WARN("MapLoad: mapa de interior, ceu desligado pelo .env");
+    m_mapSunDirection = loadedMap->env.sunDirection;
+    m_mapSunColor = loadedMap->env.sunColor;
+    m_mapSunIntensity = loadedMap->env.sunIntensity;
+    if (m_mapAmbientAuthored) {
+        ERUPTION_LOG_WARN("MapLoad: ambiente do .env = (%.3f, %.3f, %.3f), vence o ciclo dia/noite",
+                          m_mapAmbientColor.r, m_mapAmbientColor.g, m_mapAmbientColor.b);
+    }
     m_deferredLighting.setEnvironment(env);
 
     if (m_hasInitialPos) {

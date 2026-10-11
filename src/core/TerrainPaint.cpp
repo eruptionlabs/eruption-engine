@@ -224,6 +224,7 @@ bool Engine::addSplatLayer(const std::string& png) {
     sp.layerSlot[l] = tex.slot;
     sp.layerNames[l] = png;
     sp.layerFiles[l] = png;
+    ERUPTION_LOG_WARN("Terrain layer %d: %s (%ux%u) no slot %u", l, png.c_str(), img.width, img.height, tex.slot);
     // Os vértices do chão passam a ler as máscaras e as camadas.
     const uint32_t packed[4] = {sp.layerSlot[0] | (sp.layerSlot[1] << 16), sp.layerSlot[2] | (sp.layerSlot[3] << 16),
                                 sp.layerSlot[4] | (sp.layerSlot[5] << 16), sp.layerSlot[6] | (sp.layerSlot[7] << 16)};

@@ -148,6 +148,10 @@ void UiDocument::setText(const std::string& selector, const std::string& text) {
     }
 }
 
+void UiDocument::setImage(const std::string& selector, const std::string& png) {
+    if (Element* e = find(selector)) e->image = png;
+}
+
 void UiDocument::setValue(const std::string& selector, float value01) {
     if (Element* e = find(selector)) {
         e->hasValue = true;
@@ -254,15 +258,24 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
             break;
         }
 
-        case Widget::Image:
-            // Imagem ainda não sobe textura por aqui (precisa do Vulkan do
-            // Engine). Até lá, moldura com o nome do arquivo: quem edita no
-            // Caldera vê o lugar certo, e o jogo não finge que desenhou.
+        case Widget::Image: {
+            // Com resolvedor, desenha a imagem de verdade. Sem ele (ou se o
+            // arquivo nao abrir), volta a moldura com o nome do arquivo: quem
+            // edita no Caldera ve' o lugar certo e o jogo nao finge que
+            // desenhou.
+            void* tex = (m_imageResolver && !e.image.empty()) ? m_imageResolver(e.image) : nullptr;
+            if (tex) {
+                const ImU32 tint = withAlpha(IM_COL32_WHITE, alpha);
+                dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(r.x, r.y),
+                             ImVec2(r.x + r.w, r.y + r.h), ImVec2(0, 0), ImVec2(1, 1), tint);
+                break;
+            }
             m_layout.drawBox(dl, r, e.selector, alpha, 0, IM_COL32(150, 150, 150, 200), 1.0f, 0.0f, bg, edge);
             if (!e.image.empty() && r.h > 12.0f)
                 CSSLayout::drawLabel(dl, r.center().x, r.center().y - 6.0f, 11.0f, IM_COL32(200, 200, 200, 180),
                                      e.image.c_str(), 1);
             break;
+        }
         }
     }
 

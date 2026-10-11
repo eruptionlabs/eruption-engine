@@ -22,12 +22,28 @@ constexpr float kPixelToWorld = 0.15f; // mesma escala do sprite do jogador
 } // namespace
 
 bool Engine::loadCharacterSprite(const std::string& png, LoadedSprite& out) {
+    // Mesmo arquivo, mesma folha: devolve a que já está na GPU. Um elenco de
+    // 15 personagens com dois sprites fazia 15 leituras e 15 envios, e um
+    // mapa que criasse o elenco de uma vez estourava o relógio do script.
+    auto cached = m_characterSpriteCache.find(png);
+    if (cached != m_characterSpriteCache.end() && cached->second.loaded) {
+        out = cached->second;
+        return true;
+    }
+
     // O .spr do importador, quando existe ao lado do PNG, tem as animações.
+    LoadedSprite lido;
     std::filesystem::path spr = project::gameRef(png);
     spr.replace_extension(".spr");
     std::error_code ec;
-    if (std::filesystem::exists(spr, ec) && loadSpriteFromEruptSpr(spr.string(), out)) return true;
-    return loadSpriteFromPng(png, out);
+    bool ok = std::filesystem::exists(spr, ec) && loadSpriteFromEruptSpr(spr.string(), lido);
+    if (!ok) ok = loadSpriteFromPng(png, lido);
+    if (!ok) return false;
+
+    lido.texturesShared = std::make_shared<char>(0);
+    m_characterSpriteCache[png] = lido;
+    out = std::move(lido);
+    return true;
 }
 
 int Engine::addCharacter(const std::string& name, const std::string& sprite, const Vec3& position, float facingDeg) {
@@ -90,6 +106,14 @@ void Engine::clearCharacters(bool keepNeighbors) {
         else cleanupSpriteTextures(c.look);
     }
     m_characters = std::move(kept);
+    // O cache guarda uma referência a mais: solta depois das personagens, para
+    // que a última a sair seja quem devolve os slots. Quem ficou (vizinho)
+    // segue dono da folha dele.
+    for (auto& [caminho, folha] : m_characterSpriteCache) {
+        (void)caminho;
+        cleanupSpriteTextures(folha);
+    }
+    m_characterSpriteCache.clear();
 }
 
 void Engine::updateCharacters(float dt, bool moveAlongPaths) {
@@ -345,6 +369,13 @@ void Engine::drawGameFx2D(float x, float y, float w, float h, float dt) {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     // O documento em CSS vem primeiro (e' a interface); os numeros e o fade
     // do UiCanvas vem por cima, porque sao efeito e tem que cobrir tudo.
+    // Liga o carregador de imagem uma vez. Fica aqui, e nao na construcao,
+    // porque so' depois do Vulkan de pe' faz sentido subir textura.
+    static bool resolvedorLigado = false;
+    if (!resolvedorLigado) {
+        resolvedorLigado = true;
+        m_uiDocument.setImageResolver([this](const std::string& png) { return uiImageTexture(png); });
+    }
     m_uiDocument.reloadIfChanged();
     m_uiDocument.draw(dl, x, y, w, h);
     m_uiCanvas.update(dt);
