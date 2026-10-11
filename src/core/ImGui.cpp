@@ -639,6 +639,11 @@ void Engine::renderImGui() {
         acc += ImGui::GetIO().DeltaTime;
         ++frames;
         if (acc >= 0.5f) { shown = static_cast<float>(frames) / acc; acc = 0.0f; frames = 0; }
+        // O mesmo numero no log a cada 5 s: no celular da' para medir pelo
+        // logcat sem capturar a tela.
+        static float logAcc = 0.0f;
+        logAcc += ImGui::GetIO().DeltaTime;
+        if (logAcc >= 5.0f) { logAcc = 0.0f; ERUPTION_LOG_WARN("[FPS] %.0f", shown); }
         char txt[32];
         std::snprintf(txt, sizeof(txt), "%.0f FPS", shown);
         ImDrawList* dl = ImGui::GetForegroundDrawList();

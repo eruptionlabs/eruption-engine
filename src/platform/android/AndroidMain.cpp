@@ -5,6 +5,14 @@
 //     (include/GLFW/glfw3.h, include/imgui_impl_glfw.h) sobre a ANativeWindow
 //     e a fila de eventos, com o toque fazendo papel de mouse.
 //  3. Manda stdout/stderr para o logcat e chama o eruptionMain() (o mesmo main() do PC).
+//
+// DUAS THREADS. A do android_main so' atende o sistema (ciclo de vida e
+// toque): se ela ficar ocupada, o Android mostra "nao esta respondendo" - e
+// o carregamento do mapa leva dezenas de segundos no celular. O motor roda
+// numa thread propria; o toque vira uma fila que o motor esvazia em
+// glfwPollEvents. Quando o sistema tira a janela, a thread do Android espera
+// o motor terminar antes de devolve-la (destruir a swapchain de uma janela
+// ja' devolvida derrubava o driver).
 #define VK_USE_PLATFORM_ANDROID_KHR
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
@@ -14,6 +22,7 @@
 #include <android/asset_manager.h>
 #include <android/log.h>
 #include <android/native_window.h>
+#include <android/window.h>
 #include <android_native_app_glue.h>
 
 #include <algorithm>
@@ -27,6 +36,9 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <atomic>
+#include <mutex>
+#include <condition_variable>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -52,6 +64,25 @@ namespace {
 const char* kTag = "Eruption";
 android_app* g_app = nullptr;
 GLFWwindow g_window;
+std::atomic<bool> g_closeRequested{false}; // sistema pediu para fechar (thread do Android)
+std::atomic<bool> g_windowReady{false};    // janela em paisagem, o motor pode criar a superficie
+std::atomic<bool> g_engineDone{false};
+std::mutex g_doneMutex;
+std::condition_variable g_doneCv;
+
+// Fila de entrada: preenchida pela thread do Android, esvaziada pelo motor.
+struct InputEvent {
+    enum Kind { Cursor, Button, Scroll } kind;
+    double x = 0.0, y = 0.0;
+    int button = 0, action = 0;
+};
+std::mutex g_inputMutex;
+std::vector<InputEvent> g_inputQueue;
+int g_buttonState[3] = {GLFW_RELEASE, GLFW_RELEASE, GLFW_RELEASE}; // visao da thread do Android
+void pushInput(const InputEvent& e) {
+    std::lock_guard<std::mutex> lock(g_inputMutex);
+    g_inputQueue.push_back(e);
+}
 GLFWvidmode g_mode{};
 
 // ---- log -------------------------------------------------------------------
@@ -141,16 +172,12 @@ struct Touch {
     float pinch = 0.0f;
 } g_touch;
 
-void setCursor(double x, double y) {
-    g_window.cursorX = x;
-    g_window.cursorY = y;
-    if (g_window.cursorCb) g_window.cursorCb(&g_window, x, y);
-}
+void setCursor(double x, double y) { pushInput({InputEvent::Cursor, x, y}); }
 
 void setButton(int b, int action) {
-    if (g_window.buttons[b] == action) return;
-    g_window.buttons[b] = action;
-    if (g_window.mouseCb) g_window.mouseCb(&g_window, b, action, 0);
+    if (g_buttonState[b] == action) return;
+    g_buttonState[b] = action;
+    pushInput({InputEvent::Button, 0.0, 0.0, b, action});
 }
 
 int32_t onInput(android_app*, AInputEvent* ev) {
@@ -183,8 +210,8 @@ int32_t onInput(android_app*, AInputEvent* ev) {
             if (g_touch.fingers >= 2 && n >= 2) {
                 const float x1 = AMotionEvent_getX(ev, 1), y1 = AMotionEvent_getY(ev, 1);
                 const float d = std::hypot(x1 - x0, y1 - y0);
-                if (g_touch.pinch > 0.0f && g_window.scrollCb)
-                    g_window.scrollCb(&g_window, 0.0, static_cast<double>((d - g_touch.pinch) / 40.0f));
+                if (g_touch.pinch > 0.0f)
+                    pushInput({InputEvent::Scroll, 0.0, static_cast<double>((d - g_touch.pinch) / 40.0f)});
                 g_touch.pinch = d;
                 setCursor((x0 + x1) * 0.5f, (y0 + y1) * 0.5f);
             } else if (g_touch.fingers == 1) {
@@ -215,10 +242,16 @@ int32_t onInput(android_app*, AInputEvent* ev) {
 }
 
 void onCmd(android_app* app, int32_t cmd) {
-    if (cmd == APP_CMD_TERM_WINDOW || cmd == APP_CMD_DESTROY) {
-        __android_log_print(ANDROID_LOG_WARN, "Eruption", "janela fechada pelo sistema (cmd %d)", cmd);
-        g_window.shouldClose = true;
-    }
+    if (cmd != APP_CMD_TERM_WINDOW && cmd != APP_CMD_DESTROY) return;
+    __android_log_print(ANDROID_LOG_WARN, "Eruption", "janela fechada pelo sistema (cmd %d)", cmd);
+    // Antes do motor comecar (janela em retrato trocada pela de paisagem) nao
+    // ha' nada a fechar.
+    if (!g_windowReady) return;
+    g_closeRequested = true;
+    // A janela so' pode voltar ao sistema depois que o motor soltar a
+    // superficie. Teto de 4 s: o sistema da' ~5 s antes do "nao responde".
+    std::unique_lock<std::mutex> lock(g_doneMutex);
+    g_doneCv.wait_for(lock, std::chrono::seconds(4), [] { return g_engineDone.load(); });
     (void)app;
 }
 
@@ -228,7 +261,7 @@ void pumpEvents(int timeoutMs) {
     while (ALooper_pollOnce(timeoutMs, nullptr, &events, reinterpret_cast<void**>(&source)) >= 0) {
         if (source) source->process(g_app, source);
         if (g_app->destroyRequested) {
-            g_window.shouldClose = true;
+            g_closeRequested = true;
             break;
         }
         timeoutMs = 0;
@@ -260,10 +293,31 @@ void glfwSetWindowSize(GLFWwindow*, int, int) {}
 void glfwSetWindowTitle(GLFWwindow*, const char*) {}
 void glfwSetWindowIcon(GLFWwindow*, int, const GLFWimage*) {}
 void glfwMaximizeWindow(GLFWwindow*) {}
-int glfwWindowShouldClose(GLFWwindow* w) { return w && w->shouldClose ? GLFW_TRUE : GLFW_FALSE; }
+int glfwWindowShouldClose(GLFWwindow* w) { return (w && w->shouldClose) || g_closeRequested ? GLFW_TRUE : GLFW_FALSE; }
 void glfwSetWindowShouldClose(GLFWwindow* w, int v) { if (w) w->shouldClose = v != 0; }
 void glfwPollEvents() {
-    pumpEvents(0);
+    // Roda na thread do motor: aplica o toque que a thread do Android enfileirou.
+    std::vector<InputEvent> events;
+    {
+        std::lock_guard<std::mutex> lock(g_inputMutex);
+        events.swap(g_inputQueue);
+    }
+    for (const InputEvent& e : events) {
+        switch (e.kind) {
+            case InputEvent::Cursor:
+                g_window.cursorX = e.x;
+                g_window.cursorY = e.y;
+                if (g_window.cursorCb) g_window.cursorCb(&g_window, e.x, e.y);
+                break;
+            case InputEvent::Button:
+                g_window.buttons[e.button] = e.action;
+                if (g_window.mouseCb) g_window.mouseCb(&g_window, e.button, e.action, 0);
+                break;
+            case InputEvent::Scroll:
+                if (g_window.scrollCb) g_window.scrollCb(&g_window, e.x, e.y);
+                break;
+        }
+    }
     const int w = windowW(), h = windowH();
     if ((w != g_window.lastW || h != g_window.lastH) && w > 0 && h > 0) {
         g_window.lastW = w;
@@ -349,58 +403,83 @@ void ImGui_ImplGlfw_CharCallback(GLFWwindow*, unsigned int c) { ImGui::GetIO().A
 // ---- entrada ----------------------------------------------------------------
 void android_main(android_app* app) {
     // Globais sobrevivem entre activities no mesmo processo: a recriada (o
-    // sistema destroi a primeira, p.ex. ao girar) herdava shouldClose = true
-    // e saia logo depois de carregar o mapa.
+    // sistema destroi a primeira, p.ex. ao girar) nao pode herdar nada.
     g_window = GLFWwindow{};
     g_touch = Touch{};
+    g_closeRequested = false;
+    g_windowReady = false;
+    g_engineDone = false;
+    std::fill(std::begin(g_buttonState), std::end(g_buttonState), GLFW_RELEASE);
+    {
+        std::lock_guard<std::mutex> lock(g_inputMutex);
+        g_inputQueue.clear();
+    }
     g_app = app;
     app->onAppCmd = onCmd;
     app->onInputEvent = onInput;
     startLogPump();
+    // Jogo nao deixa a tela apagar: o carregamento leva dezenas de segundos sem
+    // toque, a tela dormia e o sistema tirava a janela no meio da carga.
+    ANativeActivity_setWindowFlags(app->activity, AWINDOW_FLAG_KEEP_SCREEN_ON, 0);
 
-    const std::string root = app->activity->internalDataPath;
-    extractAssets(app->activity->assetManager, root);
-    if (chdir(root.c_str()) != 0) __android_log_print(ANDROID_LOG_ERROR, kTag, "chdir falhou: %s", root.c_str());
+    // Thread do motor: extracao dos arquivos, variaveis, espera da janela e o
+    // jogo. Tudo que demora fica fora da thread que responde ao sistema.
+    std::thread engine([app] {
+        const std::string root = app->activity->internalDataPath;
+        extractAssets(app->activity->assetManager, root);
+        if (chdir(root.c_str()) != 0) __android_log_print(ANDROID_LOG_ERROR, kTag, "chdir falhou: %s", root.c_str());
 
-    // android/env.txt: VAR=valor por linha (ex.: preset grafico). Lidos direto
-    // do APK, como o args.txt (argumentos do main(), um por linha).
-    AAssetManager* am = app->activity->assetManager;
-    {
-        std::istringstream env(readAsset(am, "android/env.txt"));
-        std::string line;
-        while (std::getline(env, line)) {
-            const size_t eq = line.find('=');
-            if (line.empty() || line[0] == '#' || eq == std::string::npos) continue;
-            setenv(line.substr(0, eq).c_str(), line.substr(eq + 1).c_str(), 1);
+        // android/env.txt: VAR=valor por linha (ex.: preset grafico). Lidos direto
+        // do APK, como o args.txt (argumentos do main(), um por linha).
+        AAssetManager* am = app->activity->assetManager;
+        {
+            std::istringstream env(readAsset(am, "android/env.txt"));
+            std::string line;
+            while (std::getline(env, line)) {
+                const size_t eq = line.find('=');
+                if (line.empty() || line[0] == '#' || eq == std::string::npos) continue;
+                setenv(line.substr(0, eq).c_str(), line.substr(eq + 1).c_str(), 1);
+            }
         }
-    }
-    std::vector<std::string> args{"eruption-engine"};
-    {
-        std::istringstream in(readAsset(am, "android/args.txt"));
-        std::string line;
-        while (std::getline(in, line))
-            if (!line.empty()) args.push_back(line);
-    }
+        std::vector<std::string> args{"eruption-engine"};
+        {
+            std::istringstream in(readAsset(am, "android/args.txt"));
+            std::string line;
+            while (std::getline(in, line))
+                if (!line.empty()) args.push_back(line);
+        }
+
+        while (!g_windowReady && !g_closeRequested) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        int rc = 0;
+        if (!g_closeRequested) {
+            std::vector<char*> argv;
+            for (std::string& a : args) argv.push_back(a.data());
+            argv.push_back(nullptr);
+            rc = eruptionMain(static_cast<int>(args.size()), argv.data());
+        }
+        __android_log_print(ANDROID_LOG_INFO, kTag, "main() terminou com %d", rc);
+        {
+            std::lock_guard<std::mutex> lock(g_doneMutex);
+            g_engineDone = true;
+        }
+        g_doneCv.notify_all();
+    });
 
     // A janela nativa chega depois do primeiro ciclo de eventos. O manifesto
     // pede paisagem, mas o app pode abrir em retrato e o sistema gira logo
     // depois, destruindo a primeira janela: iniciar o Vulkan nela travava o
-    // motor (S24). Espera a janela em paisagem, ou 3 s para quem nao gira.
-    const auto waitStart = std::chrono::steady_clock::now();
-    while (!app->destroyRequested) {
-        pumpEvents(50);
-        if (!app->window) continue;
-        if (windowW() >= windowH()) break;
-        if (std::chrono::steady_clock::now() - waitStart > std::chrono::seconds(3)) break;
+    // motor (S24). Libera o motor com a janela em paisagem, ou 3 s depois de
+    // ela existir para aparelho que nao gira.
+    std::chrono::steady_clock::time_point windowSince{};
+    while (!g_engineDone) {
+        pumpEvents(16);
+        if (!g_windowReady && app->window) {
+            if (windowSince == std::chrono::steady_clock::time_point{}) windowSince = std::chrono::steady_clock::now();
+            if (windowW() >= windowH() || std::chrono::steady_clock::now() - windowSince > std::chrono::seconds(3))
+                g_windowReady = true;
+        }
     }
-    if (app->destroyRequested) return;
-    g_window.shouldClose = false; // o TERM_WINDOW da janela em retrato nao fecha o jogo
-
-    std::vector<char*> argv;
-    for (std::string& a : args) argv.push_back(a.data());
-    argv.push_back(nullptr);
-    const int rc = eruptionMain(static_cast<int>(args.size()), argv.data());
-    __android_log_print(ANDROID_LOG_INFO, kTag, "main() terminou com %d", rc);
+    engine.join();
     ANativeActivity_finish(app->activity);
     while (!app->destroyRequested) pumpEvents(100);
 }

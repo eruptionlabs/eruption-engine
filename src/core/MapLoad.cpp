@@ -418,7 +418,13 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     m_modelRenderer.setKeepGroundVertices(m_editorMode || hasSavedSplat(name) ||
                                           SceneEdits::fileMentions(name, "terrain") ||
                                           SceneEdits::fileMentions(name, "neighbors")); // bordas costuradas
+    m_modelRenderer.resetResolveStats();
     m_modelRenderer.loadMapModels(std::move(genericModels), genericInstances, modelCenterX, modelCenterZ);
+    {
+        const auto& rs = m_modelRenderer.resolveStats();
+        ERUPTION_LOG_WARN("Engine::loadMap: texturas novas %u em %.0f ms, PBR %u em %.0f ms", rs.tex, rs.texMs, rs.pbr,
+                          rs.pbrMs);
+    }
     eruption::clearPbrTextureDataPrewarm(); // free any pre-decoded PBR data not consumed
     ERUPTION_LOG_WARN("Engine::loadMap: loadMapModels took %lld ms",
         (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - _tLMM).count());

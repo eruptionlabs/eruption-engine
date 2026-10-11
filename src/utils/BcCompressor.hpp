@@ -55,6 +55,11 @@ const BcFormatSupport& bcFormatSupport();
 // contagem/dimensao que os niveis que este chamado vai gerar (mip0 primeiro).
 // Sem isso (nullptr, o padrao), roughness so' e' reduzido/aumentado pelo
 // autor - nunca pela microestrutura da propria normal map.
+// RGBA8 sem compressao, com a cadeia de mips (media 2x2). Para quando a GPU
+// nao amostra o formato de bloco do tipo (normal sem BC7: Exynos/Xclipse):
+// guardar assim no cache evita sintetizar o mapa de novo a cada carga.
+EtexData rgbaToEtexRaw(const uint8_t* rgba, int width, int height);
+
 EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind kind,
                             bool hasAlpha = false,
                             const std::vector<std::vector<float>>* roughnessBroadenR = nullptr);

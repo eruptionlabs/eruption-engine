@@ -198,6 +198,41 @@ void bcCompressorInit() {
 void setBcFormatSupport(const BcFormatSupport& s) { g_support = s; }
 const BcFormatSupport& bcFormatSupport() { return g_support; }
 
+EtexData rgbaToEtexRaw(const uint8_t* rgba, int width, int height) {
+    EtexData out;
+    if (!rgba || width < 1 || height < 1) return out;
+    out.vkFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    out.width = static_cast<uint32_t>(width);
+    out.height = static_cast<uint32_t>(height);
+    std::vector<uint8_t> level(rgba, rgba + static_cast<size_t>(width) * height * 4);
+    int w = width, h = height;
+    for (;;) {
+        out.payload.insert(out.payload.end(), level.begin(), level.end());
+        out.mipSizes.push_back(static_cast<uint32_t>(level.size()));
+        ++out.mipCount;
+        if (w == 1 && h == 1) break;
+        const int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
+        std::vector<uint8_t> next(static_cast<size_t>(nw) * nh * 4);
+        for (int y = 0; y < nh; ++y) {
+            for (int x = 0; x < nw; ++x) {
+                const int x0 = std::min(x * 2, w - 1), x1 = std::min(x * 2 + 1, w - 1);
+                const int y0 = std::min(y * 2, h - 1), y1 = std::min(y * 2 + 1, h - 1);
+                for (int c = 0; c < 4; ++c) {
+                    const int s = level[(static_cast<size_t>(y0) * w + x0) * 4 + c] +
+                                  level[(static_cast<size_t>(y0) * w + x1) * 4 + c] +
+                                  level[(static_cast<size_t>(y1) * w + x0) * 4 + c] +
+                                  level[(static_cast<size_t>(y1) * w + x1) * 4 + c];
+                    next[(static_cast<size_t>(y) * nw + x) * 4 + c] = static_cast<uint8_t>((s + 2) / 4);
+                }
+            }
+        }
+        level.swap(next);
+        w = nw;
+        h = nh;
+    }
+    return out;
+}
+
 EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind kind,
                             bool hasAlpha, const std::vector<std::vector<float>>* roughnessBroadenR) {
     EtexData out;

@@ -530,6 +530,11 @@ public:
     // cair no chute por luminancia (era o bug: preview chamava setMaterial
     // com pbrIndex fixo em 0).
     PbrTextureSlots resolvePbrTextures(const std::string& path);
+    // Tempo gasto resolvendo texturas novas (cor e PBR) desde o ultimo zero:
+    // a carga do mapa loga isso para separar textura de malha.
+    struct ResolveStats { double texMs = 0.0, pbrMs = 0.0; uint32_t tex = 0, pbr = 0; };
+    const ResolveStats& resolveStats() const { return m_resolveStats; }
+    void resetResolveStats() { m_resolveStats = {}; }
     // SO' LEITURA do cache (sem carregar/subir textura): seguro de chamar no
     // meio do frame (clique do F1). Toda textura usada por malha ja' foi
     // resolvida no load, entao pro popup de preview isto acha o MESMO MRAH-W
@@ -922,6 +927,7 @@ private:
                     const std::vector<uint32_t>& indices,
                     ModelMeshGPU& mesh);
     uint32_t resolveTexture(const std::string& path);
+    ResolveStats m_resolveStats;
     // So' registra (nome ja' sanitizado -> slot) em m_textureCache, sem
     // chamar o resolver - pros dois ramos de loadMapModels que ACHAM o slot
     // de outro jeito (mapa de indice global do formato v1.x-2.2, ou fallback
