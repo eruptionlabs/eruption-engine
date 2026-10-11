@@ -2564,7 +2564,7 @@ void CloudLayerRenderer::updateUBOs(const Camera& camera, const Vec3& sunDir, fl
     c.phaseG2 = -0.25f;
     c.phaseAlpha = 0.8f;
     c.powderStrength = 0.4f;
-    c.ambientIntensity = 0.08f;
+    c.ambientIntensity = cloudAmbient();
     c.godRayMode = static_cast<uint32_t>(m_cfg.godRayMode);
     c.debugMode = m_cfg.debugMode;
     c.weatherCoverage = m_weatherCoverage;
@@ -3061,7 +3061,7 @@ void CloudLayerRenderer::updateCloudLayerUBO(uint32_t id) {
     c.phaseG2 = -0.25f;
     c.phaseAlpha = 0.8f;
     c.powderStrength = 0.4f;
-    c.ambientIntensity = 0.08f;
+    c.ambientIntensity = cloudAmbient();
     c.godRayMode = static_cast<uint32_t>(m_cfg.godRayMode);
     c.debugMode = m_cfg.debugMode;
     c.weatherCoverage = m_weatherCoverage;

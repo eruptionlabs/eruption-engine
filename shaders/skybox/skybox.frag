@@ -325,7 +325,10 @@ void main() {
 
         // Clouds darken the sky, with bright illuminated tops
         float cloudSun = smoothstep(-0.2, 0.5, sunHeight);
-        vec3 cloudBright = mix(vec3(0.75, 0.78, 0.85), vec3(1.0, 1.0, 1.0), cloudSun);
+        // Topo da nuvem: de noite segue o ceu (um pouco mais claro, luz de
+        // lua), nao um cinza fixo de 0,75 que brilhava contra o ceu escuro.
+        vec3 nightTop = skyColor * 1.8 + vec3(0.025, 0.03, 0.045);
+        vec3 cloudBright = mix(nightTop, vec3(1.0, 1.0, 1.0), cloudSun);
         vec3 cloudBase = skyColor * mix(0.55, 0.75, cloudSun);
         vec3 cloudColor = mix(cloudBase, cloudBright, cloudShadeVal);
         cloudColor = mix(cloudColor, cloudBase, cloudShade * 0.5);

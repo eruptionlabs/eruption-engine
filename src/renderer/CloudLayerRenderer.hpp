@@ -449,6 +449,13 @@ private:
     // Scene light levels for the cloud-shadow base strength (see
     // setSceneAmbientIntensity); sun comes from updateUBOs every frame.
     float m_sceneSunIntensity = 1.0f;
+    // Ambiente das nuvens: cai a 25% de noite (mesma curva das luzes, 0,2..0,8
+    // da intensidade do sol). Fixo em 0,08, a exposicao automatica da noite
+    // deixava a nuvem cinza-clara contra o ceu escuro.
+    float cloudAmbient() const {
+        const float day = glm::smoothstep(0.2f, 0.8f, m_sceneSunIntensity);
+        return 0.08f * glm::mix(0.25f, 1.0f, day);
+    }
     float m_sceneAmbientIntensity = 0.5f;
     float cloudShadowBaseStrength() const {
         float total = m_sceneSunIntensity + m_sceneAmbientIntensity;
