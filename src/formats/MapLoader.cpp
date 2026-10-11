@@ -205,6 +205,11 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
                 if (e.contains("intensity")) ml.intensity = e["intensity"].get<float>();
                 if (e.contains("range")) ml.range = e["range"].get<float>();
                 if (e.contains("nightOnly")) ml.nightOnly = e["nightOnly"].get<bool>();
+                if (e.contains("spotDir") && e["spotDir"].is_array() && e["spotDir"].size() >= 3) {
+                    const Vec3 d(e["spotDir"][0].get<float>(), e["spotDir"][1].get<float>(), e["spotDir"][2].get<float>());
+                    if (glm::dot(d, d) > 1e-8f) ml.spotDir = glm::normalize(d);
+                    ml.spotAngle = e.value("spotAngle", 60.0f);
+                }
                 if (e.contains("animType") && e["animType"].is_string()) {
                     auto it = kAnimTypes.find(e["animType"].get<std::string>());
                     if (it != kAnimTypes.end()) ml.animType = it->second;

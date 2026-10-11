@@ -391,6 +391,8 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
         pl.animType = ml.animType;
         pl.nightOnly = ml.nightOnly;
         pl.enabled = !ml.nightOnly;
+        pl.spotDir = ml.spotDir;
+        pl.spotCos = std::cos(glm::radians(glm::clamp(ml.spotAngle, 1.0f, 179.0f) * 0.5f));
         r.lights.push_back(pl);
     }
     for (const auto& l : e.lights) {

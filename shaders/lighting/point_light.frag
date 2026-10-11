@@ -51,6 +51,7 @@ layout(push_constant) uniform PushConstants {
     mat4 invViewProj;
     mat4 viewProj;
     mat4 modelMatrix;
+    vec4 spot; // xyz = direcao do spot (zero = pontual), w = cos da meia abertura
 };
 
 vec3 reconstructPosition(vec2 uv, float depth) {
@@ -119,6 +120,11 @@ void main() {
     float s = dist / radius;
     float s2 = s * s;
     float att = pow(1.0 - s2, 2.0) / (1.0 + 1.0 * s2);
+    // Spot: borda suave de ~10 graus para dentro da abertura.
+    if (dot(spot.xyz, spot.xyz) > 0.5) {
+        float cd = dot(-L, spot.xyz);
+        att *= smoothstep(spot.w, mix(spot.w, 1.0, 0.35), cd);
+    }
 
     float roughness = pbr.g;
     float metallic = pbr.b;

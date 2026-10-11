@@ -40,6 +40,8 @@ struct LoadedMap {
         LightAnimType animType = LightAnimType::Static;
         // Lamp/lantern props detected by material name: lit only at night.
         bool nightOnly = false;
+        Vec3 spotDir = Vec3(0.0f); // .env "spotDir": [x,y,z]; zero = pontual
+        float spotAngle = 0.0f;    // .env "spotAngle": abertura total em graus
     };
     std::vector<MapLight> lights;
 

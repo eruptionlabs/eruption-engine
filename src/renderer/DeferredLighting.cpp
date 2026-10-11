@@ -1254,7 +1254,9 @@ void DeferredLighting::renderPointLights(VkCommandBuffer cmd, const Camera& came
             Mat4 invViewProj;
             Mat4 viewProj;
             Mat4 modelMatrix;
+            Vec4 spot; // xyz = direcao (zero = pontual), w = cos da meia abertura
         } push;
+        static_assert(sizeof(PointPush) <= 256, "push da point light passou de 256 bytes");
         push.lightPos = light.position;
         push.radius = light.radius;
         push.lightColor = light.color;
@@ -1264,6 +1266,7 @@ void DeferredLighting::renderPointLights(VkCommandBuffer cmd, const Camera& came
         push.invViewProj = invViewProj;
         push.viewProj = viewProj;
         push.modelMatrix = model;
+        push.spot = Vec4(light.spotDir, light.spotCos);
 
         vkCmdPushConstants(cmd, m_pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
