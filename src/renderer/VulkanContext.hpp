@@ -192,6 +192,10 @@ public:
     // Swapchain control (public for manual resize)
     void cleanupSwapchain();
     bool recreateSwapchain();
+    // Solta a superficie e o swapchain (janela tirada pelo sistema) e recria
+    // depois na janela nova. Usado so' no Android.
+    void releaseSurface();
+    bool restoreSurface();
 
 private:
     // Window handle

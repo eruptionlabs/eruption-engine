@@ -68,6 +68,14 @@ GLFWwindow g_window;
 std::atomic<bool> g_closeRequested{false}; // sistema pediu para fechar (thread do Android)
 std::atomic<bool> g_windowReady{false};    // janela em paisagem, o motor pode criar a superficie
 std::atomic<bool> g_engineDone{false};
+// Pausa: janela tirada pelo sistema (apps recentes/home). O motor solta a
+// superficie e espera a janela nova em vez de fechar.
+std::atomic<bool> g_surfaceLost{false};     // thread do Android pediu para soltar
+std::atomic<bool> g_surfaceReleased{false}; // motor soltou
+std::atomic<bool> g_windowBack{false};      // janela nova chegou
+void (*g_releaseHook)(void*) = nullptr;
+int (*g_restoreHook)(void*) = nullptr;
+void* g_hookUser = nullptr;
 std::mutex g_doneMutex;
 std::condition_variable g_doneCv;
 
@@ -241,11 +249,24 @@ int32_t onInput(android_app*, AInputEvent* ev) {
 }
 
 void onCmd(android_app* app, int32_t cmd) {
+    if (cmd == APP_CMD_INIT_WINDOW && g_surfaceReleased) {
+        g_windowBack = true;
+        return;
+    }
     if (cmd != APP_CMD_TERM_WINDOW && cmd != APP_CMD_DESTROY) return;
     __android_log_print(ANDROID_LOG_WARN, "Eruption", "janela fechada pelo sistema (cmd %d)", cmd);
     // Antes do motor comecar (janela em retrato trocada pela de paisagem) nao
     // ha' nada a fechar.
     if (!g_windowReady) return;
+    if (cmd == APP_CMD_TERM_WINDOW && g_releaseHook && !g_engineDone) {
+        // Pausa: o motor solta a superficie antes de a janela voltar ao sistema.
+        g_windowBack = false;
+        g_surfaceLost = true;
+        std::unique_lock<std::mutex> lock(g_doneMutex);
+        g_doneCv.wait_for(lock, std::chrono::seconds(4),
+                          [] { return g_surfaceReleased.load() || g_engineDone.load(); });
+        return;
+    }
     g_closeRequested = true;
     // A janela so' pode voltar ao sistema depois que o motor soltar a
     // superficie. Teto de 4 s: o sistema da' ~5 s antes do "nao responde".
@@ -294,7 +315,38 @@ void glfwSetWindowIcon(GLFWwindow*, int, const GLFWimage*) {}
 void glfwMaximizeWindow(GLFWwindow*) {}
 int glfwWindowShouldClose(GLFWwindow* w) { return (w && w->shouldClose) || g_closeRequested ? GLFW_TRUE : GLFW_FALSE; }
 void glfwSetWindowShouldClose(GLFWwindow* w, int v) { if (w) w->shouldClose = v != 0; }
+void eruptionAndroidSetSurfaceHooks(void (*release)(void*), int (*restore)(void*), void* user) {
+    g_releaseHook = release;
+    g_restoreHook = restore;
+    g_hookUser = user;
+}
+
 void glfwPollEvents() {
+    // Pausa (thread do motor): solta a superficie, avisa a thread do Android e
+    // espera a janela nova; ao voltar recria e segue no mesmo ponto do jogo.
+    if (g_surfaceLost && !g_surfaceReleased) {
+        g_releaseHook(g_hookUser);
+        {
+            std::lock_guard<std::mutex> lock(g_doneMutex);
+            g_surfaceReleased = true;
+        }
+        g_doneCv.notify_all();
+        __android_log_print(ANDROID_LOG_WARN, "Eruption", "pausado: superficie solta");
+        while (!g_windowBack && !g_closeRequested) std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        if (!g_closeRequested && g_app->window) {
+            const int ok = g_restoreHook(g_hookUser);
+            __android_log_print(ANDROID_LOG_WARN, "Eruption", "retomado (%d)", ok);
+            if (!ok) g_closeRequested = true;
+        }
+        g_surfaceLost = false;
+        g_surfaceReleased = false;
+        g_windowBack = false;
+        g_window.lastW = g_window.lastH = 0; // forca o callback de tamanho abaixo
+        {
+            std::lock_guard<std::mutex> lock(g_inputMutex);
+            g_inputQueue.clear();
+        }
+    }
     // Roda na thread do motor: aplica o toque que a thread do Android enfileirou.
     // Aperto que vem depois de o cursor pular para o dedo fica para o quadro
     // seguinte: no mesmo quadro o motor via o salto com o botao apertado e
@@ -440,6 +492,9 @@ void android_main(android_app* app) {
     g_closeRequested = false;
     g_windowReady = false;
     g_engineDone = false;
+    g_surfaceLost = false;
+    g_surfaceReleased = false;
+    g_windowBack = false;
     std::fill(std::begin(g_buttonState), std::end(g_buttonState), GLFW_RELEASE);
     {
         std::lock_guard<std::mutex> lock(g_inputMutex);

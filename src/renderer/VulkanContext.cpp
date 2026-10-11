@@ -27,6 +27,11 @@ bool VulkanContext::init(GLFWwindow* window) {
     if (!createInstance()) return false;
     if (!setupDebugMessenger()) return false;
     if (!createSurface(window)) return false;
+#ifdef __ANDROID__
+    eruptionAndroidSetSurfaceHooks(
+        [](void* u) { static_cast<VulkanContext*>(u)->releaseSurface(); },
+        [](void* u) { return static_cast<VulkanContext*>(u)->restoreSurface() ? 1 : 0; }, this);
+#endif
     if (!pickPhysicalDevice()) return false;
     if (!createLogicalDevice()) return false;
     if (!createSwapchain()) return false;
@@ -1171,6 +1176,18 @@ void VulkanContext::cleanupSwapchain() {
         vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
         m_swapchain = VK_NULL_HANDLE;
     }
+}
+
+void VulkanContext::releaseSurface() {
+    waitIdle();
+    cleanupSwapchain();
+    if (m_surface != VK_NULL_HANDLE) vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+    m_surface = VK_NULL_HANDLE;
+}
+
+bool VulkanContext::restoreSurface() {
+    if (!createSurface(m_window)) return false;
+    return createSwapchain() && createImageViews();
 }
 
 bool VulkanContext::recreateSwapchain() {

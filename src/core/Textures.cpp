@@ -589,7 +589,20 @@ uint32_t Engine::resolveTerrainTexture(const std::string& path) {
 ModelMeshGPU Engine::resolveModelMesh(const std::string& legacyModelPath, uint32_t nodeIndex,
                                         const std::vector<TerrainVertex>& vertices,
                                         const std::vector<uint32_t>& indices) {
-    std::string key = legacyModelPath + "#" + std::to_string(nodeIndex);
+    // A chave leva uma impressao dos slots de textura gravados nos vertices
+    // (cor, PBR, normal, emissiva, mistura). Ao trocar de mapa os slots de PBR
+    // sao soltos e reaproveitados pelo mapa seguinte; na volta a malha em cache
+    // ainda apontava para os slots velhos - casa com textura de chao. Slots
+    // diferentes = malha nova; a velha sai do cache pela idade.
+    uint64_t slotHash = 1469598103934665603ull;
+    for (const TerrainVertex& v : vertices) {
+        const uint64_t f = (uint64_t(v.texIndex) | uint64_t(v.pbrIndex) << 16 | uint64_t(v.normalIndex) << 32 |
+                            uint64_t(v.emissiveIndex) << 48) ^
+                           (uint64_t(v.blendTexIndex) << 7 | uint64_t(v.blendPbrIndex) << 23 |
+                            uint64_t(v.blendNormalIndex) << 39 | uint64_t(v.blendMaskIndex) << 55);
+        slotHash = (slotHash ^ f) * 1099511628211ull;
+    }
+    std::string key = legacyModelPath + "#" + std::to_string(nodeIndex) + "#" + std::to_string(slotHash);
 
     ModelMeshGPU cached;
     if (m_assetCache.getModelMesh(key, cached)) {
