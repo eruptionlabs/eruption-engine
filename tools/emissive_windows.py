@@ -10,6 +10,7 @@ as janelas e quais texturas sao vidro claro de lampiao:
 
     {
       "janelas": {"casa_frente": [[u, v, meia_largura, meia_altura], ...]},
+      (um quinto valor "papel" inverte o peso: janela de papel claro em treliça)
       "vidros":  ["lampiao"],
       "cor_janela": [1.0, 0.72, 0.36],
       "cor_vidro":  [1.0, 0.82, 0.5]
@@ -48,11 +49,16 @@ def window_mask(rgba, boxes):
     lum = luminance(rgba)
     yy, xx = np.mgrid[0:h, 0:w]
     m = np.zeros((h, w), np.float32)
-    for u, v, hw, hh in boxes:
+    for box in boxes:
+        u, v, hw, hh = box[:4]
+        paper = len(box) > 4 and box[4] == 'papel'
         dx = np.abs((xx + 0.5) / w - u) / hw
         dy = np.abs((yy + 0.5) / h - v) / hh
         edge = np.clip((1.0 - np.maximum(dx, dy)) / 0.15, 0.0, 1.0)
-        m = np.maximum(m, edge * np.clip(1.1 - lum, 0.15, 1.0))
+        # Papel (janela de treliça clara): o papel brilha e a madeira escura
+        # da treliça fica apagada - o contrario do vidro.
+        weight = np.clip((lum - 0.25) / 0.45, 0.1, 1.0) if paper else np.clip(1.1 - lum, 0.15, 1.0)
+        m = np.maximum(m, edge * weight)
     return m
 
 
