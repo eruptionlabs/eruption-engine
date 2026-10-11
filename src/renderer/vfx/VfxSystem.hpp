@@ -356,7 +356,6 @@ private:
     float m_unitsPerMeter = 1.0f;
     float m_maxLifeSeen = 0.0f;
     uint32_t m_cur = 0;          // lista de vivas atual (0/1)
-    bool m_resetPool = true;     // reinicia a lista de mortas no proximo simulate
     bool m_active = false;
     bool m_anyLowRes = false;   // algum emissor lowRes tocando (CPU sabe)
     bool m_sortThisFrame = false; // algum emissor com mistura alfa tocando

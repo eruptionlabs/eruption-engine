@@ -52,7 +52,8 @@ static bool wantsEditor(int argc, char** argv) {
 }
 } // namespace eruption
 
-int main(int argc, char** argv) {
+// No Android quem chama e' a NativeActivity (src/platform/android/AndroidMain.cpp).
+int eruptionMain(int argc, char** argv) {
     eruption::Logger::init();
 
     // ERUPTION_TEST_BC7_ALPHA=1: teste isolado do compressor de altura, sai
@@ -243,3 +244,7 @@ int main(int argc, char** argv) {
     ERUPTION_LOG_INFO("[MAIN] App finished, exiting");
     return 0;
 }
+
+#ifndef __ANDROID__
+int main(int argc, char** argv) { return eruptionMain(argc, argv); }
+#endif

@@ -239,8 +239,8 @@ void TerrainRenderer::buildChunks(const TerrainFile& terrain, PackManager* asset
     uint32_t numChunksZ = (terrain.height + chunkSize - 1) / chunkSize;
     m_chunks.reserve(numChunksX * numChunksZ);
 
-    size_t totalVerts = 0;
-    size_t totalIndices = 0;
+    [[maybe_unused]] size_t totalVerts = 0;   // so' o log de INFO le
+    [[maybe_unused]] size_t totalIndices = 0;
     for (uint32_t cz = 0; cz < numChunksZ; cz++) {
         for (uint32_t cx = 0; cx < numChunksX; cx++) {
             uint32_t startX = cx * chunkSize;

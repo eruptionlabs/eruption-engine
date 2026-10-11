@@ -178,7 +178,6 @@ private:
     };
     std::vector<LensDropCPU> m_lensDropState;
     std::vector<LensDropGPU> m_lensDrops;
-    float m_lensDropSpawnTimer = 0.0f;
     std::mt19937 m_rng{std::random_device{}()};
 
     static float easeInOutCubic(float t);

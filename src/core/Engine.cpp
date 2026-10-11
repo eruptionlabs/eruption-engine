@@ -85,7 +85,7 @@ void Engine::GlobalAssetCache::cleanupOldTextures(VulkanContext* ctx, BindlessDe
     size_t initialModelSize = modelTextures.size();
     size_t initialTerrainSize = terrainTextures.size();
     size_t initialMeshSize = modelMeshes.size();
-    size_t bytesFreed = 0;
+    [[maybe_unused]] size_t bytesFreed = 0; // so' o log (compilado fora sem INFO) le
     
     for (auto it = modelTextures.begin(); it != modelTextures.end(); ) {
         if (currentWarpId >= it->second.lastSeenWarpId + maxAge) {

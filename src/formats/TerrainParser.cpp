@@ -8,13 +8,6 @@
 
 namespace eruption {
 
-// Sanity limits to prevent memory exhaustion on encrypted/corrupted data
-static constexpr int32_t MAX_TERRAIN_TEXTURES = 4096;
-static constexpr int32_t MAX_TERRAIN_SURFACES = 500000;
-static constexpr int32_t MAX_TERRAIN_CUBES = 1048576; // 1024x1024
-static constexpr int32_t MAX_TERRAIN_LIGHTMAPS = 500000;
-static constexpr int32_t MAX_TERRAIN_WATER_PLANES = 10000;
-
 static TerrainFile parseEruptGndBin(const uint8_t* data, size_t size) {
     BinaryReader reader(data, size);
     TerrainFile terrain;

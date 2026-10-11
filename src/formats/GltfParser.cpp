@@ -42,8 +42,6 @@ namespace {
 
 // Sanity limits
 static constexpr uint32_t MAX_GLTF_NODES = 200000;
-static constexpr uint32_t MAX_GLTF_VERTICES = 10000000;
-static constexpr uint32_t MAX_GLTF_INDICES = 10000000;
 
 // Some converters write 2-byte (EUC-KR) texture filenames into the GLB material
 // name but mark the JSON as UTF-8. Re-decode the bytes so those legacy folder

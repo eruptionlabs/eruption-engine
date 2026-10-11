@@ -379,10 +379,19 @@ bool VulkanContext::endFrame() {
     if (result == VK_ERROR_DEVICE_LOST) {
         m_deviceLost = true;
         return false;
-    } else if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || m_framebufferResized) {
+    }
+#ifdef __ANDROID__
+    // Com preTransform identidade (sem pre-rotacao) o Android responde
+    // SUBOPTIMAL a cada present em paisagem; recriar nao muda nada e o indice
+    // do frame nunca avancava (cursores por frame estouravam).
+    const bool suboptimal = false;
+#else
+    const bool suboptimal = result == VK_SUBOPTIMAL_KHR;
+#endif
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || suboptimal || m_framebufferResized) {
         m_framebufferResized = false;
         return recreateSwapchain();
-    } else if (result != VK_SUCCESS) {
+    } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         ERUPTION_LOG_ERROR("Failed to present swap chain image");
         return false;
     }
@@ -1007,7 +1016,18 @@ bool VulkanContext::createSwapchain() {
     }
 
     createInfo.preTransform = swapchainSupport.capabilities.currentTransform;
+#ifdef __ANDROID__
+    // Sem pre-rotacao: o compositor gira a imagem (custa um pouco, mas a cena
+    // sai certa em paisagem sem mexer nas matrizes).
+    if (swapchainSupport.capabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+        createInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+#endif
+    // Celulares costumam aceitar so' INHERIT; desktop, OPAQUE.
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    for (VkCompositeAlphaFlagBitsKHR a : {VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+                                          VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR}) {
+        if (swapchainSupport.capabilities.supportedCompositeAlpha & a) { createInfo.compositeAlpha = a; break; }
+    }
     createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;
     createInfo.oldSwapchain = VK_NULL_HANDLE;
@@ -1346,9 +1366,13 @@ VkPresentModeKHR VulkanContext::chooseSwapPresentMode(const std::vector<VkPresen
 }
 
 VkExtent2D VulkanContext::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& cap) {
+#ifndef __ANDROID__
+    // No Android o currentExtent vem na orientacao natural do aparelho (retrato);
+    // com preTransform identidade a imagem tem o tamanho da janela (paisagem).
     if (cap.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
         return cap.currentExtent;
     }
+#endif
 
     int width, height;
     glfwGetFramebufferSize(m_window, &width, &height);

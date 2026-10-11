@@ -90,7 +90,11 @@ set(DRACO_STANDARD_EDGEBREAKER ON CACHE BOOL "" FORCE)
 set(DRACO_TRANSCODER_SUPPORTED OFF CACHE BOOL "" FORCE)
 set(DRACO_BACKWARDS_COMPATIBILITY OFF CACHE BOOL "" FORCE)
 
-FetchContent_MakeAvailable(glfw glm vma imgui nlohmann_json tinygltf draco)
+FetchContent_MakeAvailable(glm vma imgui nlohmann_json tinygltf draco)
+# Android: janela e entrada vem da NativeActivity (src/platform/android), sem GLFW.
+if(NOT ANDROID)
+    FetchContent_MakeAvailable(glfw)
+endif()
 
 # Luau: linguagem de script do jogo (MIT). VM + compilador; o gerador de
 # codigo nativo entra so' onde a plataforma permite (desktop e Android; no
@@ -110,6 +114,12 @@ foreach(luau_target Luau.Ast Luau.Compiler Luau.Config Luau.Analysis Luau.EqSat 
         get_target_property(_luau_type ${luau_target} TYPE)
         if(NOT _luau_type STREQUAL "INTERFACE_LIBRARY")
             target_compile_options(${luau_target} PRIVATE -w)
+        endif()
+        # Cabecalhos do Luau como de sistema: o clang do Android avisa do
+        # ", ##__VA_ARGS__" do lualib.h em todo arquivo nosso que o inclui.
+        get_target_property(_luau_inc ${luau_target} INTERFACE_INCLUDE_DIRECTORIES)
+        if(_luau_inc)
+            set_target_properties(${luau_target} PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_luau_inc}")
         endif()
     endif()
 endforeach()
@@ -331,6 +341,9 @@ endif()
 
 # Source files
 file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.hpp")
+if(NOT ANDROID)
+    list(FILTER SOURCES EXCLUDE REGEX "/src/platform/android/")
+endif()
 
 # Modulos opcionais: o editor liga o que o projeto usa ao exportar (perfil de
 # build). Desligado, o modulo vira uma implementacao muda com a mesma
@@ -517,13 +530,28 @@ set(IMGUI_SOURCES
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
 )
+if(ANDROID)
+    # O backend de ImGui do Android vem de src/platform/android (mesma interface).
+    list(REMOVE_ITEM IMGUI_SOURCES ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp)
+endif()
 # O backend GLFW declara tipos Vulkan proprios quando o header do Vulkan nao
 # veio antes; com LTO isso e' violacao de ODR. Com o header, usa os de verdade.
 set_source_files_properties(${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp PROPERTIES COMPILE_DEFINITIONS GLFW_INCLUDE_VULKAN)
 
 
-# Main executable
+# Main executable (no Android, biblioteca carregada pela NativeActivity)
+if(ANDROID)
+    set(ERUPTION_APP_GLUE ${ANDROID_NDK}/sources/android/native_app_glue)
+    add_library(native_app_glue STATIC ${ERUPTION_APP_GLUE}/android_native_app_glue.c)
+    target_include_directories(native_app_glue PUBLIC ${ERUPTION_APP_GLUE})
+    add_library(eruption-engine SHARED ${SOURCES} ${IMGUI_SOURCES} ${ICONS_HEADER})
+    target_include_directories(eruption-engine BEFORE PRIVATE ${CMAKE_SOURCE_DIR}/src/platform/android/include)
+    target_link_libraries(eruption-engine PRIVATE native_app_glue android log)
+    target_link_options(eruption-engine PRIVATE -u ANativeActivity_onCreate)
+    set_target_properties(eruption-engine PROPERTIES OUTPUT_NAME eruption LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+else()
 add_executable(eruption-engine ${SOURCES} ${IMGUI_SOURCES} ${ICONS_HEADER})
+endif()
 add_dependencies(eruption-engine generate_icons)
 target_compile_definitions(eruption-engine PRIVATE ERUPTION_FALLBACK_TEX_SLOTS=${ERUPTION_FALLBACK_TEX_SLOTS})
 if(ERUPTION_EDITOR)
@@ -571,7 +599,7 @@ target_include_directories(eruption-engine PRIVATE
     ${CMAKE_SOURCE_DIR}/plugins
     ${CMAKE_SOURCE_DIR}/src/generated
     ${Vulkan_INCLUDE_DIRS}
-    ${glfw_SOURCE_DIR}/include
+    $<$<NOT:$<BOOL:${ANDROID}>>:${glfw_SOURCE_DIR}/include>
     ${glm_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/third_party/stb
     ${ERUPTION_BC7ENC_DIR}
@@ -609,7 +637,7 @@ find_package(Iconv REQUIRED)
 
 target_link_libraries(eruption-engine PRIVATE
     Vulkan::Vulkan
-    glfw
+    $<$<NOT:$<BOOL:${ANDROID}>>:glfw>
     glm
     GPUOpen::VulkanMemoryAllocator
     nlohmann_json::nlohmann_json
@@ -638,7 +666,7 @@ target_compile_definitions(eruption-engine PRIVATE
     $<$<CONFIG:Debug>:ERUPTION_DEBUG>
     GLM_FORCE_DEPTH_ZERO_TO_ONE
     GLM_FORCE_LEFT_HANDED
-    GLM_FORCE_INTRINSICS
+    $<$<NOT:$<BOOL:${ANDROID}>>:GLM_FORCE_INTRINSICS>
     VMA_STATIC_VULKAN_FUNCTIONS=0
     VMA_DYNAMIC_VULKAN_FUNCTIONS=1
     TINYGLTF_NO_STB_IMAGE
@@ -655,7 +683,7 @@ else()
 endif()
 set(ERUPTION_CPU_LEVEL "${ERUPTION_CPU_LEVEL_DEFAULT}" CACHE STRING "dev, native, x86-64-v3 or portable")
 set(ERUPTION_CPU_FLAGS "")
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i.86")
+if(NOT ANDROID AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i.86")
     if(ERUPTION_CPU_LEVEL STREQUAL "native")
         set(ERUPTION_CPU_FLAGS -march=native)
     elseif(ERUPTION_CPU_LEVEL STREQUAL "portable")
