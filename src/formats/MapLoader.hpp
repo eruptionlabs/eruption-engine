@@ -109,9 +109,9 @@ struct LoadedMap {
         //
         // Tem que ser pedido explicito, nao a simples presenca do bloco
         // `light`: os ~1040 mapas convertidos em assets/external todos tem
-        // esse bloco gravado pelo conversor (prontera.env traz ambient,
+        // esse bloco gravado pelo conversor (o .env de cada um traz ambient,
         // diffuse, sunDirection e opacity). Ligar pela presenca congelava o
-        // sol de todos eles e matava o ciclo dia/noite - prontera ficava de
+        // sol de todos eles e matava o ciclo dia/noite - um mapa ficava de
         // noite com o chao aceso de dia.
         //
         // Quem precisa disto e' mapa de INTERIOR, onde nao existe hora do
