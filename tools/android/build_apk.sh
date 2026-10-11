@@ -2,6 +2,7 @@
 # Monta o APK do jogo para Android (NativeActivity, sem Java nem Gradle).
 #   tools/android/build_apk.sh <mapa> [saida.apk]
 #   ERUPTION_APK_ENV=extra.txt tools/android/build_apk.sh <mapa>   (variaveis do motor no APK)
+#   ERUPTION_APK_JPEG=0   mantem as texturas do mapa como vieram (padrao: opacas em JPEG)
 # Precisa do SDK/NDK do Android (ANDROID_HOME, padrao ~/Android/Sdk) e de um
 # JDK 17 (JAVA_HOME, padrao ~/Android/jdk17). Compila build-android/ se faltar.
 set -euo pipefail
@@ -40,6 +41,14 @@ cd "$ROOT"
     find -L "assets/external/$MAP" -maxdepth 1 -type f \( -name '*.glb' -o -name '*.ter' -o -name '*.nav' -o -name '*.env' \)
 } | grep -v '/\.' | sort > "$STAGE/assets/android/manifest.txt"
 while read -r f; do mkdir -p "$STAGE/assets/$(dirname "$f")"; cp -L "$f" "$STAGE/assets/$f"; done < "$STAGE/assets/android/manifest.txt"
+# Texturas opacas do mapa em JPEG (ERUPTION_APK_JPEG=0 desliga): o .glb de
+# cidade de 68 MB encolhe o bastante para o APK caber em envio de 30 MB.
+if [ "${ERUPTION_APK_JPEG:-1}" != "0" ]; then
+    for g in "$STAGE"/assets/assets/external/"$MAP"/*.glb; do
+        python3 "$ROOT/tools/android/shrink_glb.py" "$g" "$g.tmp"
+        mv "$g.tmp" "$g"
+    done
+fi
 date +%s > "$STAGE/assets/android/stamp.txt"
 printf -- '--game\n--map\n%s\n' "$MAP" > "$STAGE/assets/android/args.txt"
 cat > "$STAGE/assets/android/env.txt" <<ENV

@@ -3,22 +3,23 @@
   "emitters": [
     {
       "name": "halo",
-      "capacity": 16,
-      "rate": 8,
+      "capacity": 8,
+      "rate": 1.5,
       "shape": "point",
-      "lifetime": [1.2, 1.6],
+      "lifetime": [3.0, 3.0],
       "speed": [0.0, 0.0],
       "spread": 0.0,
-      "size": [0.35, 0.45],
+      "size": [0.6, 1.4],
+      "rotation": [0.0, 360.0],
       "color": [
-        {"t": 0.0, "rgba": [1.0, 0.75, 0.45, 0.0]},
-        {"t": 0.3, "rgba": [1.0, 0.72, 0.42, 0.22]},
-        {"t": 1.0, "rgba": [1.0, 0.65, 0.35, 0.0]}
+        {"t": 0.0, "rgba": [1.0, 0.72, 0.42, 0.0]},
+        {"t": 0.3, "rgba": [1.0, 0.7, 0.4, 0.05]},
+        {"t": 0.7, "rgba": [1.0, 0.68, 0.38, 0.05]},
+        {"t": 1.0, "rgba": [1.0, 0.66, 0.36, 0.0]}
       ],
-      "texture": "builtin:spark",
       "blend": "additive",
-      "emissive": 1.6,
-      "softDistance": 0.0
+      "emissive": 1.5,
+      "softDistance": 0.6
     }
   ]
 }
