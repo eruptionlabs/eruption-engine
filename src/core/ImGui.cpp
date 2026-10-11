@@ -508,11 +508,26 @@ void Engine::updateNightLights() {
     // Noite pela luz do sol, nao pelo relogio: e' o mesmo criterio do vidro
     // emissivo (model_frag: smoothstep 0,2..0,8 da intensidade do sol), entao
     // janela, poste e efeito acendem juntos - inclusive em tempestade escura.
-    const bool isNight = m_deferredLighting.environment().sun.intensity < 0.5f;
+    //
+    // Cada luz tem o seu limiar, sorteado pela posicao (semente fixa: a mesma
+    // luz acende sempre na mesma ordem) entre kLightsOutLo e kLightsOutHi da
+    // intensidade do sol. Ao amanhecer elas vao apagando uma a uma ate' a
+    // ultima, em vez de todas de uma vez; ao anoitecer acendem do mesmo jeito.
+    // model_frag.glsl usa a mesma faixa e o mesmo hash para as janelas.
+    const float sun = m_deferredLighting.environment().sun.intensity;
+    auto threshold = [](const Vec3& p) {
+        const glm::ivec3 c = glm::ivec3(glm::floor(p / 8.0f));
+        uint32_t h = static_cast<uint32_t>(c.x) * 73856093u ^ static_cast<uint32_t>(c.y) * 19349663u ^
+                     static_cast<uint32_t>(c.z) * 83492791u;
+        h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+        const float r = static_cast<float>(h & 0xFFFFu) / 65535.0f;
+        return 0.3f + 0.35f * r; // kLightsOutLo = 0,30 / kLightsOutHi = 0,65
+    };
     for (auto& pl : m_deferredLighting.getPointLights()) {
-        if (pl.nightOnly) pl.enabled = isNight;
+        if (pl.nightOnly) pl.enabled = sun < threshold(pl.position);
     }
     for (auto& ne : m_nightEffects) {
+        const bool isNight = sun < threshold(Vec3(ne.transform[3]));
         if (isNight && ne.id == 0 && !ne.failed) {
             ne.id = m_vfx.spawn(ne.name, ne.transform);
             ne.failed = ne.id == 0;

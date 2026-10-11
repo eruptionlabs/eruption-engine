@@ -922,9 +922,16 @@ void main() {
     // some de dia. A cor e o formato vem da textura.
     const uint emissiveIdx = inMatId >> 16u;
     if (emissiveIdx != 0u) {
-        const float night = 1.0 - smoothstep(0.2, 0.8, u_sunDir.w);
-        if (night > 0.001)
-            emissiveRgb += texture(u_textures[nonuniformEXT(emissiveIdx)], uv).rgb * night * 2.5;
+        // Acesa ou apagada, por janela: limiar por celula de 8 u sorteado pelo
+        // mesmo hash das luzes (Engine::updateNightLights), na mesma faixa
+        // 0,30..0,65 do sol. Ao amanhecer as janelas apagam uma a uma junto com
+        // os postes e voltam a' cor da textura.
+        ivec3 cell = ivec3(floor(inWorldPos / 8.0));
+        uint h = uint(cell.x) * 73856093u ^ uint(cell.y) * 19349663u ^ uint(cell.z) * 83492791u;
+        h ^= h >> 13u; h *= 0x5bd1e995u; h ^= h >> 15u;
+        const float thr = 0.3 + 0.35 * float(h & 0xFFFFu) / 65535.0;
+        if (u_sunDir.w < thr)
+            emissiveRgb += texture(u_textures[nonuniformEXT(emissiveIdx)], uv).rgb * 2.5;
     }
     outEmissive = vec4(emissiveRgb, sunSelfShadow);
 }
