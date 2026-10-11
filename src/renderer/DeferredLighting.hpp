@@ -130,6 +130,7 @@ public:
     void resize(uint32_t width, uint32_t height);
 
     void setEnvironment(const LightingEnvironment& env);
+    const LightingEnvironment& environment() const { return m_env; }
     void setGlobalIllumination(float intensity, float floor) { m_giIntensity = intensity; m_giAmbientFloor = floor; }
     void setSunAngularRadius(float radians) { m_sunAngularRadius = radians; }
     void setPointLights(const std::vector<PointLight>& lights);
