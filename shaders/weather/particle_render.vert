@@ -19,7 +19,7 @@ layout(set = 0, binding = 4) uniform sampler2D cloudAltitudeMap;
 // scale proportionally from these so the sliders move all precip together).
 layout(set = 0, binding = 7) uniform RainTuning {
     vec4 shape; // x=widthScale, y=lengthScale, z=edgeSharp, w=tipFade
-    vec4 look;  // x=alphaGain, y=brightness, z=pixelFade (px, 0=off), w=unused
+    vec4 look;  // x=alphaGain, y=brightness, z=pixelFade (px, 0=off), w=largura minima na tela em px de 1080p (0 = padrao)
 } tune;
 
 layout(push_constant) uniform Push {
@@ -322,6 +322,7 @@ void main() {
     // fill com 393 mil gotas (medido: passe de particula 0,22 -> 1,6 ms).
     // 2,5x pega quase toda a leitura por ~6x de fill.
     const float kFarSizeCap = 2.5;
+    float widthMul = 1.0, lengthMul = 1.0;
     if ((isPrecip || isSnow) && !debugRainRegions) {
         // TAMANHO APARENTE TRAVADO A PARTIR DE 150 u, nao de 604. A gota tem
         // tamanho de MUNDO afinado para a camera de jogo (orbita 60-150 u);
@@ -335,6 +336,22 @@ void main() {
         // intacto. Medido a 420 u: pixels de gota 0,49% -> 1,4% do quadro.
         float camDist = length(pos - push.cameraPos.xyz);
         size *= clamp(camDist / 150.0, 1.0, kFarSizeCap);
+        // Piso em PIXELS: a gota (0,08 u) e o floco (0,15 u) tem tamanho de
+        // mundo, e na camera de diorama (300-1000 u) davam 1 px ou menos -
+        // a neve e a chuva existiam e ninguem via. A linha 1 da viewProj tem
+        // comprimento f (projecao), entao px por unidade = altura * f / 2w.
+        vec4 cc = push.viewProj * vec4(pos, 1.0);
+        float f = length(vec3(push.viewProj[0][1], push.viewProj[1][1], push.viewProj[2][1]));
+        float pxPerUnit = push.screenSize.y * 0.5 * f / max(cc.w, 1.0e-3);
+        float widthPx = 2.0 * size * tune.shape.x * pxPerUnit;
+        // Piso medido em pixels de 1080p: mesma leitura em 720p e em 4K.
+        float minPx = (tune.look.w > 0.0 ? tune.look.w : (isSnow ? 7.0 : 2.0)) * push.screenSize.y / 1080.0;
+        float grow = clamp(minPx / max(widthPx, 1.0e-4), 1.0, 16.0);
+        // Engrossa na largura; o comprimento ja' e' varias larguras (preset)
+        // e crescer tudo custava 7x de preenchimento na chuva (0,7 -> 5,2 ms).
+        // Neve nao alonga (virava risco de chuva); chuva alonga N^0,75.
+        widthMul = grow;
+        lengthMul = isSnow ? 1.0 : pow(grow, 0.75);
     }
     // Sand/dust apparent-size lock (author feedback 2026-08-11): below zoom
     // ~86% (dist < 150 m) grains keep their true (small) size — no more
@@ -359,8 +376,9 @@ void main() {
         vec3 right = normalize(cross(velN, vec3(0.0, 1.0, 0.0)));
         float lengthScale = tune.shape.y;
         float widthScale = tune.shape.x;
-        vec3 up = velN * size * lengthScale;
-        right *= size * widthScale;
+        right *= size * widthScale * widthMul;
+        // Comprimento nunca menor que a largura (floco engrossado vira bola).
+        vec3 up = velN * max(size * lengthScale * lengthMul, 2.0 * size * widthScale * widthMul);
 
         // Pixel-coverage fade (anti-shimmer): when the projected streak width
         // drops below pixelFade pixels, dim the drop instead of letting the

@@ -70,6 +70,11 @@ public:
         // mudar com a hora do dia - ver post_composite.frag.
         bool pbrDebugActive = false;
 
+        // Gotas e flocos por cima do DoF (antes do bloom). Antes do DoF eles
+        // herdavam o desfoque do que esta' ATRAS (nao gravam profundidade):
+        // com ceu ou fundo atras, neve de 4 px sumia.
+        bool weatherAfterDoF = true;
+
         // Weather debug: color rain particles by occlusion fate (DoF-style view).
         bool debugRainOcclusion = false;
         bool debugRainRegions = false;
