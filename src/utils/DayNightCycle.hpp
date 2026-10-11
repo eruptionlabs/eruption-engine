@@ -55,6 +55,7 @@ public:
     float currentDay() const { return m_currentDay; }
     bool isPaused() const { return m_paused; }
     float timeScale() const { return m_timeScale; }
+    float dayDuration() const { return m_dayDuration; }
 
     DayNightKeyFrame* getKeyframes() { return m_keyframes; }
     uint32_t getKeyframeCount() const { return KEYFRAME_COUNT; }

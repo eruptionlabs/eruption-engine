@@ -523,6 +523,28 @@ void Engine::renderImGui() {
     // HUD do jogo e minimapa: à parte dos painéis de depuração (F4 só tira estes).
     if (!m_editor && m_showGameHud) drawGameHud();
 
+    // ERUPTION_FPS_OVERLAY=<altura em px> (demonstracao): FPS grande no
+    // canto, media de meio segundo. Para mostrar o jogo rodando ao vivo.
+    static const float s_fpsOverlay = [] {
+        const char* e = std::getenv("ERUPTION_FPS_OVERLAY");
+        return e ? std::max(16.0f, static_cast<float>(std::atof(e))) : 0.0f;
+    }();
+    if (s_fpsOverlay > 0.0f) {
+        static float acc = 0.0f, shown = 0.0f;
+        static int frames = 0;
+        acc += ImGui::GetIO().DeltaTime;
+        ++frames;
+        if (acc >= 0.5f) { shown = static_cast<float>(frames) / acc; acc = 0.0f; frames = 0; }
+        char txt[32];
+        std::snprintf(txt, sizeof(txt), "%.0f FPS", shown);
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        const ImVec2 at(s_fpsOverlay * 0.5f, s_fpsOverlay * 0.4f);
+        ImFont* big = ImGui::GetIO().Fonts->Fonts.back(); // criada em initImGui com o mesmo env
+        dl->AddText(big, s_fpsOverlay, ImVec2(at.x + 3, at.y + 3), IM_COL32(0, 0, 0, 200), txt);
+        dl->AddText(big, s_fpsOverlay, at, IM_COL32(120, 255, 140, 255), txt);
+    }
+
+
     if (m_showDebugOverlay) {
         m_modelRenderer.setHighlightedInstance(-1);
         if (!m_editor) {
