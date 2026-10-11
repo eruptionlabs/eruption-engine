@@ -738,6 +738,11 @@ int ui_value(lua_State* L) {
     eng().uiDocument().setValue(luaL_checkstring(L, 1), static_cast<float>(luaL_checknumber(L, 2)));
     return 0;
 }
+int ui_image(lua_State* L) {
+    eng().uiDocument().setImage(luaL_checkstring(L, 1), luaL_checkstring(L, 2));
+    return 0;
+}
+
 int ui_visible(lua_State* L) {
     eng().uiDocument().setVisible(luaL_checkstring(L, 1), lua_toboolean(L, 2) != 0);
     return 0;
@@ -894,7 +899,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"near", on_near}, {"hour", on_hour}, {"enter", on_enter}, {"leave", on_leave}, {nullptr, nullptr}};
     static const luaL_Reg vars[] = {{"get", vars_get}, {"set", vars_set}, {"add", vars_add}, {nullptr, nullptr}};
     static const luaL_Reg ui[] = {{"message", ui_message}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
-                                  {"load", ui_load}, {"text", ui_text}, {"value", ui_value},
+                                  {"load", ui_load}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
                                   {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has},
                                   {"reset", ui_reset}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
@@ -1018,6 +1023,8 @@ declare ui: {
     load: (css: string) -> boolean,
     text: (selector: string, text: string) -> (),
     value: (selector: string, value: number) -> (),   -- bar, 0 to 1
+    -- Troca o arquivo de um widget de imagem (--widget: image).
+    image: (selector: string, png: string) -> (),
     visible: (selector: string, on: boolean) -> (),
     -- which: 0 = background / rail / text, 1 = bar fill or border.
     color: (selector: string, color: vector, which: number?, opacity: number?) -> (),

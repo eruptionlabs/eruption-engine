@@ -560,6 +560,17 @@ bool Engine::loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSpr
 }
 
 void Engine::cleanupSpriteTextures(LoadedSprite& ls) {
+    // Folha dividida com outra personagem: só desencosta. Quem soltar por
+    // último é que devolve os slots (ver Engine::loadCharacterSprite).
+    if (ls.texturesShared && ls.texturesShared.use_count() > 1) {
+        ls.texturesShared.reset();
+        ls.textures.clear();
+        ls.indexedTextureCount = 0;
+        ls.loaded = false;
+        ls.authoredTiming = false;
+        return;
+    }
+    ls.texturesShared.reset();
     // Frames em voo ainda podem amostrar as texturas: destruir depois deles.
     for (auto& tex : ls.textures) {
         VkDevice dev = m_vulkan.device();

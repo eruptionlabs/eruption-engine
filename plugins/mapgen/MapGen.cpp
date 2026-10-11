@@ -283,6 +283,8 @@ const std::vector<StepInfo>& stepCatalog() {
           {"wander", 150, 0, 2000, "How much it snakes sideways"},
           {"wander_scale", 600, 50, 5000, "Length of each bend"},
           {"flat", 0.7, 0.0, 1.0, "How flat the floor is"},
+          {"width_var", 0.0, 0.0, 1.0, "Width varies along it (0 = constant)"},
+          {"pinch", 0.0, 0.0, 1.0, "Floor rises where it narrows"},
           {"from", 0.0, 0.0, 1.0, "Starts at this fraction of the map"},
           {"to", 1.0, 0.0, 1.0, "Ends here"}},
          {}},
@@ -514,6 +516,15 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             const float serpente = float(s.get("wander", 150));
             const float escalaSerp = float(s.get("wander_scale", 600));
             const float plano = float(s.get("flat", 0.7));
+            // LARGURA VARIAVEL. Sem isto o tubo e' uma vala de largura
+            // constante: por construcao ele so' pode sair retangulo, e visto
+            // de cima o mapa inteiro parece uma caixa cavada. Um tubo de lava
+            // real aperta e alarga ao longo do curso, e e' esse estrangulamento
+            // que da' ritmo ao corredor - sala, gargalo, sala.
+            const float varia = float(s.get("width_var", 0.0));
+            // Onde aperta, o chao tambem SOBE um pouco: gargalo de tubo nao e'
+            // so' mais estreito, e' mais raso, porque a lava deixou mais crosta.
+            const float aperta = float(s.get("pinch", 0.0));
             const float de = float(s.get("from", 0.0)), ate = float(s.get("to", 1.0));
             const float lado = recipe.size;
             for (int z = 0; z < r.d; ++z)
@@ -526,7 +537,11 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                     // A linha do meio serpenteia com ruido ao longo do tubo.
                     const float desvio = serpente * fbm(u * lado / escalaSerp, 7.3f, 3, 0.5f, 2.0f, seed) / lado;
                     const float dist = std::abs(v - centro - desvio) * lado;  // unidades de mundo
-                    const float meia = largura * 0.5f;
+                    // Ruido proprio (semente e frequencia diferentes do
+                    // serpenteio) para o tubo nao afinar sempre na curva.
+                    const float sopro = fbm(u * lado / std::max(60.0f, escalaSerp * 0.55f), 31.7f, 3, 0.5f, 2.0f, seed + 911u);
+                    const float fator = 1.0f - varia * 0.5f * (1.0f - sopro);
+                    const float meia = largura * 0.5f * std::max(0.25f, fator);
                     if (dist > meia * (1.0f + parede * 2.0f)) continue;
                     // Piso plano no miolo; parede subindo ate' a borda.
                     float t;
@@ -540,7 +555,7 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                     const float borda = std::min(u - de, ate - u);
                     const float fecha = std::clamp(borda / 0.06f, 0.0f, 1.0f);
                     float& h = r.height[size_t(z) * r.w + x];
-                    const float alvo = h - fundo;
+                    const float alvo = h - fundo * (1.0f - aperta * (1.0f - std::max(0.25f, fator)));
                     h = h + (alvo - h) * t * fecha;
                 }
         } else if (s.type == "crater") {

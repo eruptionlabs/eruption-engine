@@ -457,6 +457,19 @@ void Engine::render() {
         }
     }
 
+    // Ambiente do mapa, se o .env escreveu um. Entra DEPOIS do preenchimento
+    // noturno de proposito: a ordem contraria deixava o ciclo apagar o valor
+    // do autor no mesmo quadro em que ele era lido.
+    if (m_mapAmbientAuthored) {
+        env.ambientColor = m_mapAmbientColor;
+        env.ambientIntensity = m_mapAmbientIntensity;
+    }
+    if (m_mapLightAuthored) {
+        env.sun.direction = m_mapSunDirection;
+        env.sun.color = m_mapSunColor;
+        env.sun.intensity = m_mapSunIntensity;
+    }
+
     // Cloud shadows: base strength = sun/(sun+ambient), so a dense cloud
     // darkens the ground like map geometry shadows (author feedback 2026-08-10).
     m_cloudLayerRenderer.setSceneAmbientIntensity(env.ambientIntensity);
@@ -1124,7 +1137,8 @@ void Engine::render() {
         // ERUPTION_TEST_NO_SKY=1 (captura): fundo sem ceu, como nos mapas
         // classicos de visao isometrica.
         static const bool kNoSky = std::getenv("ERUPTION_TEST_NO_SKY") != nullptr;
-        if (!wireframeMode() && !kNoSky) m_skybox.render(cmd, m_dayNightCycle, m_camera.skyboxViewProjJittered());
+        if (!wireframeMode() && !kNoSky && m_mapHasSky)
+            m_skybox.render(cmd, m_dayNightCycle, m_camera.skyboxViewProjJittered());
     }
     m_vulkan.writeTimestamp(cmd, 7, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     Profiler::addGpuTime("Skybox IBL", m_vulkan.timestampDeltaMs(6, 7));
@@ -2538,33 +2552,6 @@ void Engine::render() {
         }
     }
 
-    // ERUPTION_TEST_RECORD="pasta,primeiro,quantos" (teste): grava um PNG por
-    // frame (sem a interface) para montar video offline. Com
-    // ERUPTION_TEST_FIXED_DT=0.0333 o video sai em tempo real a 30 quadros/s,
-    // qualquer que seja a velocidade da maquina.
-    {
-        static std::string recDir;
-        static int recFirst = -1, recCount = 0;
-        static const bool recParsed = [] {
-            if (const char* e = std::getenv("ERUPTION_TEST_RECORD")) {
-                char dir[512] = {0};
-                if (std::sscanf(e, "%511[^,],%d,%d", dir, &recFirst, &recCount) == 3) {
-                    recDir = dir;
-                    std::filesystem::create_directories(recDir);
-                }
-            }
-            return true;
-        }();
-        (void)recParsed;
-        const int f = static_cast<int>(m_framesCount);
-        if (!recDir.empty() && f >= recFirst && f < recFirst + recCount) {
-            char name[64];
-            std::snprintf(name, sizeof(name), "/f%05d.png", f - recFirst);
-            takeScreenshot(recDir + name);
-            if (f + 1 == recFirst + recCount && m_enableAutoExit) m_running = false;
-        }
-    }
-
     // A/B automated capture: take two screenshots a few frames apart, one with
     // PBR on and one with PBR off, so they can be diffed externally. The swap
     // screenshot captures the same frame it is scheduled in, so the state change
@@ -2600,6 +2587,50 @@ void Engine::render() {
     }
 
     if (m_screenshotPending) finishPendingScreenshot();
+
+    // ERUPTION_TEST_RECORD="pasta,primeiro,quantos" (teste): grava um PNG por
+    // frame para montar video offline. Com ERUPTION_TEST_FIXED_DT=0.0333 o
+    // video sai em tempo real a 30 quadros/s, qualquer que seja a velocidade
+    // da maquina.
+    //
+    // PELO SWAPCHAIN, como --screenshot ja' fazia. Este caminho usava
+    // takeScreenshot(), que le' a saida do post e e' CEGO pra interface: todo
+    // video gravado saia so' com a cena 3D, sem HUD, sem menu, sem balao de
+    // fala. Quem conferia o jogo por video via tela vazia e concluia que a
+    // interface nao funcionava - exatamente o engano que --screenshot ja'
+    // tinha corrigido e que ninguem levou pra ca'.
+    {
+        static std::string recDir;
+        static int recFirst = -1, recCount = 0;
+        static const bool recParsed = [] {
+            if (const char* e = std::getenv("ERUPTION_TEST_RECORD")) {
+                char dir[512] = {0};
+                if (std::sscanf(e, "%511[^,],%d,%d", dir, &recFirst, &recCount) == 3) {
+                    recDir = dir;
+                    std::filesystem::create_directories(recDir);
+                }
+            }
+            return true;
+        }();
+        (void)recParsed;
+        const int f = static_cast<int>(m_framesCount);
+        if (!recDir.empty() && f >= recFirst && f < recFirst + recCount) {
+            char name[64];
+            std::snprintf(name, sizeof(name), "/f%05d.png", f - recFirst);
+            if (m_vulkan.swapSupportsCopy()) {
+                // So' pede o proximo quando o anterior terminou: a leitura do
+                // swapchain atravessa dois quadros (um para submeter a copia,
+                // outro para ler a cerca ja' sinalizada), e pedir a cada
+                // quadro empilhava pedidos ate' o motor parar.
+                if (!m_screenshotPending) scheduleScreenshotFromSwap(recDir + name);
+            } else {
+                ERUPTION_LOG_WARN("[TEST] swapchain nao permite copia: o video sai SEM a interface");
+                takeScreenshot(recDir + name);
+            }
+            if (f + 1 == recFirst + recCount && m_enableAutoExit) m_running = false;
+        }
+    }
+
 
     // ERUPTION_TEST_DUMP_FRAMES=<dir> (debug): grava TODO frame como PNG.
     // O caminho normal de screenshot difere a leitura (fence com timeout 0) e

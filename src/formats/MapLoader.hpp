@@ -98,6 +98,34 @@ struct LoadedMap {
         // Negativo = nao definido (usa a media automatica).
         Vec3 groundAlbedoOverride = Vec3(-1.0f);
         float ambientIntensity = 1.0f;
+        // AMBIENTE AUTORAL. Sem esta marca o `ambient` do .env era lido,
+        // guardado aqui e perdido no quadro seguinte: Render.cpp reescreve o
+        // ambiente inteiro a partir do ciclo dia/noite. Num mapa de INTERIOR
+        // (caverna, tubo de lava) nao existe hora do dia que preste, e o autor
+        // ficava sem nenhum controle de preenchimento - girando um botao
+        // desligado. Marcado, o valor do mapa vence o ciclo.
+        bool ambientAuthored = false;
+        // O .env PEDIU para mandar na luz: "light": { "authoritative": true }.
+        //
+        // Tem que ser pedido explicito, nao a simples presenca do bloco
+        // `light`: os ~1040 mapas convertidos em assets/external todos tem
+        // esse bloco gravado pelo conversor (prontera.env traz ambient,
+        // diffuse, sunDirection e opacity). Ligar pela presenca congelava o
+        // sol de todos eles e matava o ciclo dia/noite - prontera ficava de
+        // noite com o chao aceso de dia.
+        //
+        // Quem precisa disto e' mapa de INTERIOR, onde nao existe hora do
+        // dia: ali o autor liga a chave e passa a mandar no sol e no
+        // ambiente. A ceu aberto o ciclo continua no comando, como sempre.
+        bool lightAuthored = false;
+        // INTERIOR FECHADO: "sky": false no .env tira o ceu do fundo.
+        //
+        // Um tubo de lava nao tem ceu, mas o motor desenhava a cupula do
+        // mesmo jeito: bastava a camera subir um pouco para aparecer uma
+        // faixa roxa de ceu noturno atras da rocha, e a caverna virava um
+        // vale a ceu aberto. Desligado, o fundo fica na cor de limpeza e o
+        // que nao tem geometria le' como escuro.
+        bool hasSky = true;
     } env;
 
     // Approximate CPU RAM used by this map's raw parsed data

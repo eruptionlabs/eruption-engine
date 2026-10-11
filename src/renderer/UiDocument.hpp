@@ -19,6 +19,7 @@
 // O documento NÃO desenha mundo nenhum: é 2D puro sobre a área de jogo.
 // Efeito que precisa de projeção (número de dano subindo) é do UiCanvas.
 
+#include <functional>
 #include "math/Types.hpp"
 #include "utils/CSSLayout.hpp"
 #include "utils/CSSParser.hpp"
@@ -50,6 +51,12 @@ public:
 
     // Valores que o jogo preenche. Selector com ou sem "#" - os dois servem.
     void setText(const std::string& selector, const std::string& text);
+    // Troca o arquivo de um widget de imagem em tempo de execucao. O CSS ja'
+    // sabia desenhar imagem (--widget: image, --image: "..."), mas o arquivo
+    // era fixo no arquivo de estilo: uma ficha de personagem ou um retrato na
+    // fila de turno, que mudam conforme quem esta' em cena, nao tinham como
+    // ser escritos pelo script.
+    void setImage(const std::string& selector, const std::string& png);
     void setValue(const std::string& selector, float value01);
     void setVisible(const std::string& selector, bool visible);
     // Cor viva por cima da do arquivo. `which`: 0 = fundo/trilho/texto,
@@ -63,6 +70,13 @@ public:
     bool rectOf(const std::string& selector, float x, float y, float w, float h, CSSRect& out) const;
 
     void draw(ImDrawList* dl, float x, float y, float w, float h) const;
+
+    // Resolvedor de imagem: recebe o caminho do PNG e devolve o handle de
+    // textura do ImGui (nullptr se nao der). O documento de UI nao fala com
+    // o Vulkan - quem sobe a textura e' o Engine, que injeta esta funcao.
+    // Sem ela o widget de imagem continua sendo so' a moldura com o nome do
+    // arquivo, que era o unico comportamento que existia.
+    void setImageResolver(std::function<void*(const std::string&)> fn) { m_imageResolver = std::move(fn); }
 
 private:
     struct Element {
@@ -98,6 +112,8 @@ private:
     bool m_loaded = false;
     std::vector<Element> m_elements;               // já em ordem de desenho (z)
     std::unordered_map<std::string, size_t> m_byId; // "#id" -> índice
+
+    std::function<void*(const std::string&)> m_imageResolver;
 };
 
 } // namespace eruption

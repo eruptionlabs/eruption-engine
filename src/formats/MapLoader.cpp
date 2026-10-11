@@ -111,7 +111,10 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
         nlohmann::json j;
         f >> j;
 
+        if (j.contains("sky") && j["sky"].is_boolean()) map.env.hasSky = j["sky"].get<bool>();
+
         if (j.contains("light") && j["light"].is_object()) {
+            map.env.lightAuthored = j["light"].value("authoritative", false);
             const auto& light = j["light"];
             // Direcao da LUZ (do sol para o chao; y < 0 = dia). O gerador
             // procedural grava "direction"; mapas antigos, "sunDirection".
@@ -152,6 +155,17 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
                     light["ambient"][1].get<float>(),
                     light["ambient"][2].get<float>());
             }
+            // A COR do ambiente sozinha nao acende nada: ela e' multiplicada
+            // por uma intensidade que so' existia no slider do editor. Sem
+            // esta chave o autor de um interior mexia na cor e via a mesma
+            // tela preta. 0.95 e' o valor de fabrica do slider.
+            if (light.contains("ambientIntensity")) {
+                map.env.ambientIntensity = light["ambientIntensity"].get<float>();
+            }
+            // Ambiente so' vence o ciclo sob a mesma chave: os .env
+            // convertidos tambem trazem `ambient`, e ligar por ele deixaria
+            // os 1040 mapas com o preenchimento preso no valor do conversor.
+            map.env.ambientAuthored = map.env.lightAuthored;
         }
 
         if (j.contains("water") && j["water"].is_object()) {
@@ -586,11 +600,15 @@ bool MapLoader::loadPhaseModels() {
 
         // Brighter directional + ambient light for GLB maps so authored PBR
         // textures are visible without relying on the daynight cycle.
-        m_loadingMap->env.sunDirection = Vec3(0.577f, -0.707f, 0.408f);
-        m_loadingMap->env.sunColor = Vec3(0.25f, 0.24f, 0.22f);
-        m_loadingMap->env.sunIntensity = 2.0f;
-        m_loadingMap->env.ambientColor = Vec3(0.18f, 0.18f, 0.20f);
-        m_loadingMap->env.ambientIntensity = 1.5f;
+        // So' quando o mapa NAO trouxe .env com bloco `light`: senao esta
+        // reserva apagava o que o autor acabara de escrever.
+        if (!m_loadingMap->env.lightAuthored) {
+            m_loadingMap->env.sunDirection = Vec3(0.577f, -0.707f, 0.408f);
+            m_loadingMap->env.sunColor = Vec3(0.25f, 0.24f, 0.22f);
+            m_loadingMap->env.sunIntensity = 2.0f;
+            m_loadingMap->env.ambientColor = Vec3(0.18f, 0.18f, 0.20f);
+            m_loadingMap->env.ambientIntensity = 1.5f;
+        }
     }
 
     // Extract terrain point lights/heuristics (mostly empty for generated flat terrain).

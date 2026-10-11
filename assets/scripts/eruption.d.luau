@@ -51,6 +51,8 @@ declare ui: {
     load: (css: string) -> boolean,
     text: (selector: string, text: string) -> (),
     value: (selector: string, value: number) -> (),   -- bar, 0 to 1
+    -- Troca o arquivo de um widget de imagem (--widget: image).
+    image: (selector: string, png: string) -> (),
     visible: (selector: string, on: boolean) -> (),
     -- which: 0 = background / rail / text, 1 = bar fill or border.
     color: (selector: string, color: vector, which: number?, opacity: number?) -> (),

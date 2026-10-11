@@ -500,6 +500,19 @@ void Engine::renderImGui() {
     env.ambientIntensity = m_ambientIntensity; env.ambientSkyColor = m_dayNightCycle.getSkyTopColor();
     env.ambientGroundColor = m_mapGroundAlbedo;
     env.skyHorizonColor = m_dayNightCycle.getSkyHorizonColor();
+    // Ambiente do mapa, se o .env escreveu um. Entra DEPOIS do preenchimento
+    // noturno de proposito: a ordem contraria deixava o ciclo apagar o valor
+    // do autor no mesmo quadro em que ele era lido.
+    if (m_mapAmbientAuthored) {
+        env.ambientColor = m_mapAmbientColor;
+        env.ambientIntensity = m_mapAmbientIntensity;
+    }
+    if (m_mapLightAuthored) {
+        env.sun.direction = m_mapSunDirection;
+        env.sun.color = m_mapSunColor;
+        env.sun.intensity = m_mapSunIntensity;
+    }
+
     // Cloud shadows: base strength = sun/(sun+ambient), so a dense cloud
     // darkens the ground like map geometry shadows (author feedback 2026-08-10).
     m_cloudLayerRenderer.setSceneAmbientIntensity(env.ambientIntensity);
