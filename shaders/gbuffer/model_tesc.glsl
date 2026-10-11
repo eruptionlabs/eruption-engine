@@ -67,14 +67,14 @@ layout(location = 20) out vec3 outPrevWorldPos[];
 // isolado e nao pega; quem reclama e' o driver, e driver velho e' justamente o
 // alvo (930M). Tefra 2026-09-06, G1.
 
+// 96 B (sem a matriz model e o uvTranslateRot, que nenhum shader lia): cabe
+// nos 128 B de push constant garantidos (GPU de celular).
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
-    mat4 model;
     float alpha;
     float metallicScale;
     float roughnessScale;
     float _pad;           // ERUPTION_TEST_MAGENTA_DEBUG - nao e' padding
-    vec4 uvTranslateRot;
     vec4 uvScale;
 } push;
 

@@ -84,7 +84,8 @@ vec3 shIrradiance(vec3 n) {
          + 2.0 * c2 * (L11 * x + L1m1 * y + L10 * z);
 }
 
-layout(push_constant) uniform PushConstants {
+// Bloco por draw no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
+layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec3 ambientColor;
     float ambientIntensity;
     vec3 emissiveColor;

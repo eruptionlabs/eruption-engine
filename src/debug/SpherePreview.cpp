@@ -332,7 +332,7 @@ bool SpherePreview::createPipeline() {
     pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
                          VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
     pcRange.offset = 0;
-    pcRange.size = sizeof(Mat4) * 2 + sizeof(Vec4) * 2 + sizeof(Vec4);
+    pcRange.size = sizeof(Mat4) + sizeof(Vec4) * 2; // mesmo bloco de model_vert.glsl (96 B)
 
     VkDescriptorSetLayout layouts[3] = {m_bindless->layout(), m_frameUboLayout, m_instLayout};
     VkPipelineLayoutCreateInfo layoutInfo{};
@@ -523,9 +523,8 @@ void SpherePreview::render(VkCommandBuffer cmd, float dt, const Vec3& cameraPos)
     VkDescriptorSet sets[3] = {m_bindless->set(), m_frameUboSet, m_instSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 3, sets, 0, nullptr);
 
-    struct { Mat4 vp; Mat4 model; float alpha; float metallicScale; float roughnessScale; float pad; Vec4 uvTranslateRot; Vec4 uvScale; } push{};
-    push.vp = vp; push.model = inst.model; push.alpha = 1.0f; push.metallicScale = 0.0f; push.roughnessScale = 1.0f;
-    push.uvTranslateRot = Vec4(0.0f);
+    struct { Mat4 vp; float alpha; float metallicScale; float roughnessScale; float pad; Vec4 uvScale; } push{};
+    push.vp = vp; push.alpha = 1.0f; push.metallicScale = 0.0f; push.roughnessScale = 1.0f;
     // .w = fator de deslocamento (push.uvScale.w, mesmo campo que
     // ModelMeshGPU::dispScale) - m_dispScale, setado em setMaterial() com o
     // MESMO valor por categoria que o chao real usa (dispScaleForCategory(),

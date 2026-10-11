@@ -75,13 +75,13 @@ bool CameraMotion::init(VulkanContext* ctx, uint32_t width, uint32_t height) {
     ai.pSetLayouts = &m_setLayout;
     if (vkAllocateDescriptorSets(dev, &ai, &m_set) != VK_SUCCESS) return false;
 
-    VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push)};
+    // 192 B passa dos 128 de push constant garantidos: vai no set 1 (PushRing).
+    if (!m_pushRing.init(m_ctx, VK_SHADER_STAGE_COMPUTE_BIT, sizeof(Push), 4 * 1024)) return false;
+    const VkDescriptorSetLayout setLayouts[2] = {m_setLayout, m_pushRing.layout()};
     VkPipelineLayoutCreateInfo pli{};
     pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pli.setLayoutCount = 1;
-    pli.pSetLayouts = &m_setLayout;
-    pli.pushConstantRangeCount = 1;
-    pli.pPushConstantRanges = &pr;
+    pli.setLayoutCount = 2;
+    pli.pSetLayouts = setLayouts;
     if (vkCreatePipelineLayout(dev, &pli, nullptr, &m_pipelineLayout) != VK_SUCCESS) return false;
 
     const auto code = ShaderCompiler::loadSPIRV("compute/camera_motion.comp.spv");
@@ -118,6 +118,7 @@ void CameraMotion::shutdown() {
     destroyTarget();
     if (m_pipeline) vkDestroyPipeline(dev, m_pipeline, nullptr);
     if (m_pipelineLayout) vkDestroyPipelineLayout(dev, m_pipelineLayout, nullptr);
+    m_pushRing.shutdown();
     if (m_pool) vkDestroyDescriptorPool(dev, m_pool, nullptr);
     if (m_setLayout) vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
     if (m_sampler) vkDestroySampler(dev, m_sampler, nullptr);
@@ -232,7 +233,7 @@ void CameraMotion::dispatch(VkCommandBuffer cmd, const Camera& camera, const Mat
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
-    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push), &push);
+    m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 1, &push, sizeof(Push));
     vkCmdDispatch(cmd, (m_width + 7) / 8, (m_height + 7) / 8, 1);
 
     m_ctx->cmdImageBarrier(cmd, m_image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,

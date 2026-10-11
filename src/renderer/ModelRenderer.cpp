@@ -738,9 +738,9 @@ void ModelRenderer::createPipeline() {
         m_pushStages |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
     pcRange.stageFlags = m_pushStages;
     pcRange.offset = 0;
-    // Push struct: viewProj (mat4) + model (mat4) + alpha + metallicScale + roughnessScale + pad (vec2)
-    //              + uvTranslateRot (vec4) + uvScale (vec4)
-    pcRange.size = sizeof(Mat4) * 2 + sizeof(Vec4) * 2 + sizeof(Vec4);
+    // Push: viewProj (mat4) + alpha, metallic, roughness, pad + uvScale (vec4) = 96 B,
+    // dentro dos 128 B garantidos (GPU de celular para ai').
+    pcRange.size = sizeof(Mat4) + sizeof(Vec4) * 2;
 
     VkDescriptorSetLayout bindlessLayout = m_bindless->layout();
 
@@ -2773,18 +2773,15 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     // layout nao mudar, mas o vertex shader nao os le mais.
     struct {
         Mat4 vp;
-        Mat4 model;
         float alpha;
         float metallicScale;
         float roughnessScale;
         float __pad;
-        Vec4 uvTranslateRot;
         Vec4 uvScale;
     } push;
+    static_assert(sizeof(push) == 96, "push do modelo: layout de model_vert.glsl");
     push.vp = viewProj;
-    push.model = Mat4(1.0f);
     push.__pad = magentaDebug ? 1.0f : 0.0f;
-    push.uvTranslateRot = Vec4(0.0f);
     push.uvScale = Vec4(1.0f, 1.0f, 0.0f, 0.0f);
 
     auto* dst = static_cast<GpuModelInstance*>(m_instMapped[instFrame]) + instBase;

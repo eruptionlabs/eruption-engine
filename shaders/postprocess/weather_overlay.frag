@@ -28,7 +28,8 @@ layout(set = 0, binding = 6) uniform WeatherUBO {
 // below the cloud plane).
 layout(set = 0, binding = 7) uniform sampler2D cloudVolumeOccTex;
 
-layout(push_constant) uniform Push {
+// Bloco no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
+layout(std140, set = 1, binding = 0) uniform Push {
     vec4 params;      // x=heatShimmer, y=heatSpeed, z=heatScale, w=dropLensAmount
     vec4 params2;     // x=heatWorldHeight, y=stormTint, z=lightningFlash, w=time
     vec4 params3;     // x=lensDropMode, y=lensDropCount, z=weatherTier, w=lensDropRadius

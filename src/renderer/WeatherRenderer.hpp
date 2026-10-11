@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/VulkanContext.hpp"
+#include "renderer/PushRing.hpp"
 #include <array>
 #include "renderer/WeatherTypes.hpp"
 #include "utils/FastArena.hpp"
@@ -277,6 +278,9 @@ private:
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_descLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_descPool = VK_NULL_HANDLE;
+    // Bloco por draw das particulas e coroas (256 B, alem dos 128 de push
+    // constant garantidos): set 1 de m_pipelineLayout.
+    PushRing m_pushRing;
     std::vector<VkDescriptorSet> m_descSets;
 
     // Cross-cloud rain occlusion: UBO (binding 5) with every rainy cloud's

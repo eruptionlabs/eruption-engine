@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/PushRing.hpp"
 
 // SISTEMA DE PARTICULAS (VFX) NA GPU.
 //
@@ -260,6 +261,7 @@ private:
     VkPipeline m_sortHistPipe = VK_NULL_HANDLE, m_sortScanPipe = VK_NULL_HANDLE, m_sortScatterPipe = VK_NULL_HANDLE;
     VkPipeline m_eventPipe = VK_NULL_HANDLE; // filhas dos sub-emissores
     VkPipelineLayout m_meshLayout = VK_NULL_HANDLE;
+    PushRing m_meshPushRing; // bloco de 144 B das malhas: set 3 (passa dos 128 de push constant)
     VkPipeline m_meshPipe = VK_NULL_HANDLE;    // malha no G-buffer
     VkPipeline m_meshFwdPipe = VK_NULL_HANDLE; // malha na previa (forward)
     // Sombra das malhas: set proprio so' com a lista e os registros (o set de

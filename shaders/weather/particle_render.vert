@@ -22,7 +22,8 @@ layout(set = 0, binding = 7) uniform RainTuning {
     vec4 look;  // x=alphaGain, y=brightness, z=pixelFade (px, 0=off), w=largura minima na tela em px de 1080p (0 = padrao)
 } tune;
 
-layout(push_constant) uniform Push {
+// Bloco por draw no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
+layout(std140, set = 1, binding = 0) uniform Push {
     mat4 viewProj;
     vec4 cameraPos;
     vec4 params;  // x=time, y=rainIntensity, z=snowIntensity, w=screenAspect

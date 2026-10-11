@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/PushRing.hpp"
 #include <map>
 
 #include "renderer/VulkanContext.hpp"
@@ -308,6 +309,9 @@ private:
     VkDescriptorSet m_lensDropComputeSet = VK_NULL_HANDLE;
 
     VkPipelineLayout m_layout = VK_NULL_HANDLE;
+    // Blocos grandes (composicao final e overlay do clima, 256 B): set 1 via
+    // PushRing. O resto dos passes segue em push constant de ate' 128 B.
+    PushRing m_pushRing;
 
     // Temporal smoothing for heat shimmer time to reduce sub-pixel flicker.
     float m_heatTimeSmooth = 0.0f;

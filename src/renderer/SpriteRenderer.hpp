@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/PushRing.hpp"
 
 #include "renderer/VulkanContext.hpp"
 #include "renderer/GBuffer.hpp"
@@ -193,6 +194,7 @@ private:
     VkPipeline m_maskPipeline = VK_NULL_HANDLE;
     VkPipeline m_layerPipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_layerPipelineLayout = VK_NULL_HANDLE;
+    PushRing m_layerPushRing; // LayerPush (160 B) no set 3: passa dos 128 de push constant
     VkPipeline m_shadowPipeline = VK_NULL_HANDLE;
     VkPipeline m_planarShadowPipeline = VK_NULL_HANDLE;
     VkPipeline m_circleShadowPipeline = VK_NULL_HANDLE;

@@ -145,6 +145,7 @@ void DeferredLighting::shutdown() {
         vkDestroyPipeline(m_ctx->device(), m_ambientPipeline, nullptr);
         m_ambientPipeline = VK_NULL_HANDLE;
     }
+    m_pushRing.shutdown();
     if (m_pipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(m_ctx->device(), m_pipelineLayout, nullptr);
         m_pipelineLayout = VK_NULL_HANDLE;
@@ -423,11 +424,16 @@ void DeferredLighting::createPipelines() {
     // invisible with no validation error (layers were off).
     pcRange.size = 256;
 
+    // O bloco vai no set 1 (PushRing): 256 B passa dos 128 garantidos de
+    // push constant. Uma luz por draw, ~500 no mapa de cidade: 512 KB por quadro.
+    if (!m_pushRing.init(m_ctx, pcRange.stageFlags, pcRange.size, 512 * 1024)) {
+        ERUPTION_LOG_ERROR("DeferredLighting: PushRing falhou");
+        return;
+    }
+    const VkDescriptorSetLayout setLayouts[2] = {m_descLayout, m_pushRing.layout()};
     VkPipelineLayoutCreateInfo layoutInfo{}; layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &m_descLayout;
-    layoutInfo.pushConstantRangeCount = 1;
-    layoutInfo.pPushConstantRanges = &pcRange;
+    layoutInfo.setLayoutCount = 2;
+    layoutInfo.pSetLayouts = setLayouts;
     vkCreatePipelineLayout(m_ctx->device(), &layoutInfo, nullptr, &m_pipelineLayout);
 
     // --- Directional light pipeline (fullscreen quad) ---
@@ -1089,9 +1095,7 @@ void DeferredLighting::renderAmbientPass(VkCommandBuffer cmd) {
     push.emissiveColor = Vec3(1.0f);
     push.emissiveIntensity = 1.0f;
 
-    vkCmdPushConstants(cmd, m_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, // range do layout e' VERT|FRAG (VUID 01796)
-                       0, sizeof(push), &push);
+    m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, &push, sizeof(push));
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
 
@@ -1192,9 +1196,7 @@ void DeferredLighting::renderDirectionalPass(VkCommandBuffer cmd, const Camera& 
     Mat4 lightProj = glm::ortho(0.0f, cloudSize.x, 0.0f, cloudSize.z, 0.0f, cloudSize.y * 2.0f);
     push.cloudShadowMatrix = lightProj * lightView;
 
-    vkCmdPushConstants(cmd, m_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, // range do layout e' VERT|FRAG (VUID 01796)
-                       0, sizeof(push), &push);
+    m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, &push, sizeof(push));
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
 
@@ -1268,9 +1270,7 @@ void DeferredLighting::renderPointLights(VkCommandBuffer cmd, const Camera& came
         push.modelMatrix = model;
         push.spot = Vec4(light.spotDir, light.spotCos);
 
-        vkCmdPushConstants(cmd, m_pipelineLayout,
-                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(push), &push);
+        m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, &push, sizeof(push));
 
         vkCmdDrawIndexed(cmd, m_sphereIndexCount, 1, 0, 0, 0);
     }

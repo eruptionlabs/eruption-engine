@@ -4,7 +4,8 @@ layout(location = 0) in vec3 inPosition;
 
 layout(location = 0) out vec3 outWorldPos;
 
-layout(push_constant) uniform PushConstants {
+// Bloco por draw no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
+layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec3 lightPos;
     float radius;
     vec3 lightColor;

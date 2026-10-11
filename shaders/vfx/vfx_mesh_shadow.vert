@@ -11,8 +11,7 @@ layout(location = 0) in vec3 inPos;
 
 layout(push_constant) uniform Push {
     mat4 viewProjNoJitter;
-    mat4 prevViewProjNoJitter;
-    uint listOffset;
+    uint listOffset; // sem a matriz do quadro anterior: 80 B, cabe em push constant
 } pc;
 
 mat3 axisAngle(vec3 a, float ang) {
