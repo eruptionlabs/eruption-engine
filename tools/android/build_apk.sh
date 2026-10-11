@@ -66,7 +66,7 @@ cat > "$STAGE/AndroidManifest.xml" <<XML
     <application android:label="Eruption Engine" android:hasCode="false" android:extractNativeLibs="true"
         android:appCategory="game" android:isGame="true">
         <activity android:name="android.app.NativeActivity" android:exported="true"
-            android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"
+            android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|layoutDirection|colorMode|touchscreen"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
             <meta-data android:name="android.app.lib_name" android:value="eruption"/>
             <intent-filter>
