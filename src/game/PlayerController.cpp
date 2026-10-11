@@ -640,7 +640,13 @@ void PlayerController::loadBodySprite() {
     if (configJob.size() > 4 &&
         (configJob.compare(configJob.size() - 4, 4, ".png") == 0 ||
          configJob.compare(configJob.size() - 4, 4, ".PNG") == 0)) {
-        std::string sprPath = configJob.substr(0, configJob.size() - 4) + ".spr";
+        // project::gameRef resolves the path against the open project, the same
+        // way characters.add does. Opening it relative to the process CWD only
+        // worked when the game ran from its own folder: started from anywhere
+        // else the .spr was never found, the PNG sheet loaded as one flat image
+        // and the player showed up as the whole sheet stretched over the screen.
+        const std::string sprPath =
+            project::gameRef(configJob.substr(0, configJob.size() - 4) + ".spr").string();
         if (std::ifstream(sprPath, std::ios::binary)) {
             ERUPTION_LOG_WARN("Loading body sprite from ERUPTSPR: %s", sprPath.c_str());
             if (m_engine->loadSpriteFromEruptSpr(sprPath, m_bodySprite)) {
@@ -651,8 +657,9 @@ void PlayerController::loadBodySprite() {
                 return;
             }
         }
-        ERUPTION_LOG_WARN("Loading body sprite from PNG: %s", configJob.c_str());
-        if (m_engine->loadSpriteFromPng(configJob, m_bodySprite)) {
+        const std::string pngPath = project::gameRef(configJob).string();
+        ERUPTION_LOG_WARN("Loading body sprite from PNG: %s", pngPath.c_str());
+        if (m_engine->loadSpriteFromPng(pngPath, m_bodySprite)) {
             m_bodyFrame = 0;
             m_bodyTimer = 0.0f;
             m_lastJob = configJob;
