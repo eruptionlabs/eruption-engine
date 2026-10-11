@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/VulkanContext.hpp"
+#include <array>
 #include "renderer/WeatherTypes.hpp"
 #include "utils/FastArena.hpp"
 #include "renderer/CloudCoverageNoise.hpp"
@@ -323,10 +324,12 @@ private:
     float m_followerRainIntensity = 0.5f;
     bool m_suppressGlobalPrecip = false;
 
-    // One descriptor set per follower: same as m_descSets[0] but binding 3
+    // One descriptor set per follower: same as the frame's base set but binding 3
     // points at the follower's own coverage array. Allocated on demand from
-    // m_descPool and rewritten every frame inside render().
-    std::vector<VkDescriptorSet> m_followerDescSets;
+    // m_descPool and rewritten every frame inside render() - POR QUADRO EM VOO:
+    // reescrever um set que o quadro anterior ainda usa na GPU e' proibido no
+    // Vulkan; a NVIDIA tolerava, o driver do Exynos (S24) caia com SIGSEGV.
+    std::array<std::vector<VkDescriptorSet>, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_followerDescSets;
 
     // Fullscreen rain-occlusion debug map (DoF-visualizeCoC style): dims the
     // scene and tints it by the per-follower occlusion field. Uses the same

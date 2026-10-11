@@ -566,23 +566,26 @@ bool WeatherRenderer::createDescriptors() {
     // array entries. (maxSets previously capped at 16, so followers past the
     // 12th silently failed allocation and drew with the wrong cloud's
     // coverage bound.)
-    poolSizes[0].descriptorCount = (4 + MAX_RAIN_OCCLUDERS) * (5 + MAX_RAIN_OCCLUDERS);
+    // Tudo vezes os quadros em voo: cada quadro tem o seu set base e os seus
+    // sets de seguidor (ver m_followerDescSets).
+    constexpr uint32_t kSets = VulkanContext::MAX_FRAMES_IN_FLIGHT * (1 + MAX_RAIN_OCCLUDERS);
+    poolSizes[0].descriptorCount = kSets * (5 + MAX_RAIN_OCCLUDERS);
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[1].descriptorCount = 2 * (4 + MAX_RAIN_OCCLUDERS); // occluders + tuning UBO per set
+    poolSizes[1].descriptorCount = 2 * kSets; // occluders + tuning UBO per set
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 4 + MAX_RAIN_OCCLUDERS;
+    poolInfo.maxSets = kSets;
     poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes = poolSizes;
     vkCreateDescriptorPool(m_ctx->device(), &poolInfo, nullptr, &m_descPool);
 
-    m_descSets.resize(4);
-    std::vector<VkDescriptorSetLayout> layouts(4, m_descLayout);
+    m_descSets.resize(VulkanContext::MAX_FRAMES_IN_FLIGHT); // um set base por quadro em voo
+    std::vector<VkDescriptorSetLayout> layouts(VulkanContext::MAX_FRAMES_IN_FLIGHT, m_descLayout);
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_descPool;
-    allocInfo.descriptorSetCount = 4;
+    allocInfo.descriptorSetCount = VulkanContext::MAX_FRAMES_IN_FLIGHT;
     allocInfo.pSetLayouts = layouts.data();
     vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, m_descSets.data());
 
@@ -1735,6 +1738,11 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     // Assumes outputColor is already in COLOR_ATTACHMENT_OPTIMAL layout
     // and will be transitioned to SHADER_READ by the caller.
 
+    // Sets DESTE quadro em voo: os dos quadros anteriores ainda podem estar na GPU.
+    const uint32_t frameSlot = m_ctx->currentFrame() % VulkanContext::MAX_FRAMES_IN_FLIGHT;
+    const VkDescriptorSet baseSet = m_descSets[frameSlot];
+    std::vector<VkDescriptorSet>& followerSets = m_followerDescSets[frameSlot];
+
     // Update descriptor set (bindings 0/1 used by fragment, binding 2/3/4 by vertex)
     VkDescriptorImageInfo imgInfos[5] = {};
     VkWriteDescriptorSet writes[8] = {};
@@ -1743,7 +1751,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     imgInfos[0].imageView = inputColor;
     imgInfos[0].sampler = m_linearSampler;
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = m_descSets[0];
+    writes[0].dstSet = baseSet;
     writes[0].dstBinding = 0;
     writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[0].descriptorCount = 1;
@@ -1755,7 +1763,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     imgInfos[1].imageView = (params.sceneDepthView != VK_NULL_HANDLE) ? params.sceneDepthView : params.depthView;
     imgInfos[1].sampler = m_linearSampler;
     writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = m_descSets[0];
+    writes[1].dstSet = baseSet;
     writes[1].dstBinding = 1;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[1].descriptorCount = 1;
@@ -1765,7 +1773,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     imgInfos[2].imageView = heightmapView();
     imgInfos[2].sampler = m_heightmapSampler;
     writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = m_descSets[0];
+    writes[2].dstSet = baseSet;
     writes[2].dstBinding = 2;
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[2].descriptorCount = 1;
@@ -1775,7 +1783,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     imgInfos[3].imageView = m_cloudCoverageView;
     imgInfos[3].sampler = m_cloudCoverageSampler;
     writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet = m_descSets[0];
+    writes[3].dstSet = baseSet;
     writes[3].dstBinding = 3;
     writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[3].descriptorCount = 1;
@@ -1785,7 +1793,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     imgInfos[4].imageView = m_cloudAltitudeView;
     imgInfos[4].sampler = m_cloudAltitudeSampler;
     writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[4].dstSet = m_descSets[0];
+    writes[4].dstSet = baseSet;
     writes[4].dstBinding = 4;
     writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[4].descriptorCount = 1;
@@ -1796,7 +1804,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     occBufInfo.offset = 0;
     occBufInfo.range = 3 * MAX_RAIN_OCCLUDERS * sizeof(Vec4);
     writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[5].dstSet = m_descSets[0];
+    writes[5].dstSet = baseSet;
     writes[5].dstBinding = 5;
     writes[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[5].descriptorCount = 1;
@@ -1814,7 +1822,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
         }
     }
     writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[6].dstSet = m_descSets[0];
+    writes[6].dstSet = baseSet;
     writes[6].dstBinding = 6;
     writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[6].descriptorCount = MAX_RAIN_OCCLUDERS;
@@ -1855,7 +1863,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     tuneBufInfo.offset = 0;
     tuneBufInfo.range = 2 * sizeof(Vec4);
     writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[7].dstSet = m_descSets[0];
+    writes[7].dstSet = baseSet;
     writes[7].dstBinding = 7;
     writes[7].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[7].descriptorCount = 1;
@@ -1869,8 +1877,8 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     // occlusion against the exact rendered silhouette of each cloud.
     wLap(2);
     if (!m_rainFollowers.empty()) {
-        if (m_followerDescSets.size() < m_rainFollowers.size()) {
-            const uint32_t add = static_cast<uint32_t>(m_rainFollowers.size() - m_followerDescSets.size());
+        if (followerSets.size() < m_rainFollowers.size()) {
+            const uint32_t add = static_cast<uint32_t>(m_rainFollowers.size() - followerSets.size());
             std::vector<VkDescriptorSetLayout> layouts(add, m_descLayout);
             std::vector<VkDescriptorSet> sets(add);
             VkDescriptorSetAllocateInfo ai{};
@@ -1879,16 +1887,16 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
             ai.descriptorSetCount = add;
             ai.pSetLayouts = layouts.data();
             if (vkAllocateDescriptorSets(m_ctx->device(), &ai, sets.data()) == VK_SUCCESS)
-                m_followerDescSets.insert(m_followerDescSets.end(), sets.begin(), sets.end());
+                followerSets.insert(followerSets.end(), sets.begin(), sets.end());
         }
-        for (size_t fi = 0; fi < m_rainFollowers.size() && fi < m_followerDescSets.size(); ++fi) {
+        for (size_t fi = 0; fi < m_rainFollowers.size() && fi < followerSets.size(); ++fi) {
             const RainFollower& f = m_rainFollowers[fi];
             VkWriteDescriptorSet fw[8] = {writes[0], writes[1], writes[2], writes[3], writes[4], writes[5], writes[6], writes[7]};
             VkDescriptorImageInfo cov{};
             cov.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             cov.imageView = (f.coverageView != VK_NULL_HANDLE) ? f.coverageView : m_cloudCoverageView;
             cov.sampler = (f.coverageSampler != VK_NULL_HANDLE) ? f.coverageSampler : m_cloudCoverageSampler;
-            for (auto& w : fw) w.dstSet = m_followerDescSets[fi];
+            for (auto& w : fw) w.dstSet = followerSets[fi];
             fw[3].pImageInfo = &cov;
             vkUpdateDescriptorSets(m_ctx->device(), 8, fw, 0, nullptr);
         }
@@ -1919,7 +1927,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
 
     wLap(4);  // fim dos descritores POR SEGUIDOR
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_particlePipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descSets[0], 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &baseSet, 0, nullptr);
 
     struct Push {
         Mat4 viewProj;
@@ -2095,9 +2103,9 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
             // small but dark/heavy cloud pours harder than a big light one.
             push.params.y = std::max(weather.rainIntensity, m_followerRainIntensity * f.rainRate);
             push.cloudParams.y = static_cast<float>(fi); // own index in the occluder UBO
-            if (fi < m_followerDescSets.size()) {
+            if (fi < followerSets.size()) {
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1,
-                                        &m_followerDescSets[fi], 0, nullptr);
+                                        &followerSets[fi], 0, nullptr);
             }
             vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(push), &push);
@@ -2150,7 +2158,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
             push.cloudParams = Vec4(m_cloudLayer, m_cloudThreshold, m_cloudCoverage, 1.0f);
             push.cloudRange = Vec4(m_cloudBottom, m_cloudTop, m_cloudTop - m_cloudBottom, m_cloudScale);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1,
-                                    &m_descSets[0], 0, nullptr);
+                                    &baseSet, 0, nullptr);
             vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(push), &push);
             vkCmdDraw(cmd, 4, m_splashGlobalCount, 0, 0);
@@ -2175,8 +2183,8 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
             push.rainBoxCenter = Vec4(f.boxCenter.x, 0.0f, f.boxCenter.z, 1.0f);
             push.occluder = Vec4(f.occluder.x, f.occluder.y, f.occluder.z,
                                  static_cast<float>(m_splashGroups[fi].first));
-            VkDescriptorSet dset = (fi < m_followerDescSets.size()) ? m_followerDescSets[fi]
-                                                                  : m_descSets[0];
+            VkDescriptorSet dset = (fi < followerSets.size()) ? followerSets[fi]
+                                                                  : baseSet;
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1,
                                     &dset, 0, nullptr);
             vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
