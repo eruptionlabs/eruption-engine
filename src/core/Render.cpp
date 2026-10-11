@@ -1122,7 +1122,10 @@ void Engine::render() {
 
     m_vulkan.writeTimestamp(cmd, 6, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     if (!m_benchmarkThunderstormStarted) {
-        if (!wireframeMode()) m_skybox.render(cmd, m_dayNightCycle, m_camera.skyboxViewProjJittered());
+        // ERUPTION_TEST_NO_SKY=1 (captura): fundo sem ceu, como nos mapas
+        // classicos de visao isometrica.
+        static const bool kNoSky = std::getenv("ERUPTION_TEST_NO_SKY") != nullptr;
+        if (!wireframeMode() && !kNoSky) m_skybox.render(cmd, m_dayNightCycle, m_camera.skyboxViewProjJittered());
     }
     m_vulkan.writeTimestamp(cmd, 7, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     Profiler::addGpuTime("Skybox IBL", m_vulkan.timestampDeltaMs(6, 7));
@@ -1606,10 +1609,17 @@ void Engine::render() {
         skyCfg.stormTint = w.stormTint;
         skyCfg.cloudCoverage = w.cloudCoverage;
         skyCfg.cloudSpeed = w.cloudSpeed;
-        postSettings.enableFog = w.fogDensity > 0.001f;
+        // ERUPTION_TEST_WEATHER_FOG=<escala> (captura): neblina do clima mais
+        // fraca/forte sem mexer em data/weather_types.json (neve num mapa de
+        // cidade vista de cima vira parede branca com a neblina de fabrica).
+        static const float kWeatherFog = [] {
+            const char* e = std::getenv("ERUPTION_TEST_WEATHER_FOG");
+            return e ? std::max(0.0f, static_cast<float>(std::atof(e))) : 1.0f;
+        }();
+        postSettings.enableFog = w.fogDensity * kWeatherFog > 0.001f;
         postSettings.fogStart = w.fogStart;
         postSettings.fogEnd = w.fogEnd;
-        postSettings.fogOpacity = w.fogDensity;
+        postSettings.fogOpacity = w.fogDensity * kWeatherFog;
         postSettings.fogHeight = w.fogHeight;
         postSettings.fogHeightFalloff = w.fogHeightFalloff;
 
@@ -2028,7 +2038,8 @@ void Engine::render() {
     static const bool kCamHookActive =
         std::getenv("ERUPTION_TEST_CAM_POSE") || std::getenv("ERUPTION_TEST_CAM_DOLLY") ||
         std::getenv("ERUPTION_TEST_CAM_PITCH") || std::getenv("ERUPTION_TEST_CAM_OSC") ||
-        std::getenv("ERUPTION_TEST_CAM_DRAG") || std::getenv("ERUPTION_TEST_POSE_LIST");
+        std::getenv("ERUPTION_TEST_CAM_DRAG") || std::getenv("ERUPTION_TEST_POSE_LIST") ||
+        std::getenv("ERUPTION_TEST_CAM_PATH");
     // ERUPTION_TEST_KEEP_PITCH_LIMITS=1: NAO alarga - serve pra testar o
     // comportamento de jogo (limites 10..70) pelo caminho de entrada real.
     static const bool kKeepLimits = std::getenv("ERUPTION_TEST_KEEP_PITCH_LIMITS") != nullptr;
@@ -2084,6 +2095,57 @@ void Engine::render() {
             m_camera.setOrbitTarget(Vec3(pt[0], pt[1], pt[2]));
             m_camera.setOrbit(glm::radians(pt[3]), glm::radians(pt[4]), dist);
         }
+    }
+    // ERUPTION_TEST_CAM_PATH=<arquivo> (captura de video): trajetoria por
+    // keyframes, uma linha "segundos tx ty tz yawGraus pitchGraus dist" (# e'
+    // comentario). Catmull-Rom em cada componente, entao a camera passa pelos
+    // pontos sem quina. O tempo e' quadro / ERUPTION_TEST_CAM_PATH_FPS (30
+    // por padrao): com ERUPTION_TEST_FIXED_DT o quadro N e' sempre a mesma
+    // pose, e duas execucoes (com e sem um efeito) saem alinhadas quadro a quadro.
+    static const std::vector<std::array<float, 7>> camPath = [] {
+        std::vector<std::array<float, 7>> keys;
+        const char* e = std::getenv("ERUPTION_TEST_CAM_PATH");
+        if (!e) return keys;
+        std::ifstream in(e);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            std::array<float, 7> k{};
+            if (std::sscanf(line.c_str(), "%f %f %f %f %f %f %f", &k[0], &k[1], &k[2], &k[3], &k[4], &k[5], &k[6]) == 7)
+                keys.push_back(k);
+        }
+        if (keys.empty()) ERUPTION_LOG_WARN("[TEST] CAM_PATH '%s' sem keyframes", e);
+        return keys;
+    }();
+    if (!camPath.empty()) {
+        static const float pathFps = [] {
+            const char* e = std::getenv("ERUPTION_TEST_CAM_PATH_FPS");
+            return (e && std::atof(e) > 0.0) ? static_cast<float>(std::atof(e)) : 30.0f;
+        }();
+        // ERUPTION_TEST_CAM_PATH_START=<quadro>: o quadro em que t = 0 (o
+        // mesmo primeiro quadro de ERUPTION_TEST_RECORD, depois do aquecimento).
+        static const float pathStart = [] {
+            const char* e = std::getenv("ERUPTION_TEST_CAM_PATH_START");
+            return e ? static_cast<float>(std::atof(e)) : 0.0f;
+        }();
+        const float t = std::max(0.0f, static_cast<float>(m_framesCount) - pathStart) / pathFps;
+        size_t i = 0;
+        while (i + 2 < camPath.size() && camPath[i + 1][0] <= t) ++i;
+        const auto& k1 = camPath[i];
+        const auto& k2 = camPath[std::min(i + 1, camPath.size() - 1)];
+        const auto& k0 = camPath[i > 0 ? i - 1 : i];
+        const auto& k3 = camPath[std::min(i + 2, camPath.size() - 1)];
+        const float span = k2[0] - k1[0];
+        const float u = span > 0.0f ? glm::clamp((t - k1[0]) / span, 0.0f, 1.0f) : 0.0f;
+        float v[7];
+        for (int c = 1; c < 7; ++c) {
+            const float p0 = k0[c], p1 = k1[c], p2 = k2[c], p3 = k3[c];
+            v[c] = 0.5f * ((2.0f * p1) + (-p0 + p2) * u + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * u * u +
+                           (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * u * u * u);
+        }
+        if (v[6] > m_camera.maxOrbitDistance()) m_camera.setMaxOrbitDistance(v[6]);
+        m_camera.setOrbitTarget(Vec3(v[1], v[2], v[3]));
+        m_camera.setOrbit(glm::radians(v[4]), glm::radians(v[5]), std::max(v[6], 1.0f));
     }
     // ERUPTION_TEST_CAM_PITCH="tx,ty,tz,yawDeg,pitchStart,pitchEnd,dist,frames"
     // (debug): igual ao DOLLY, mas quem interpola e' o PITCH (alvo/yaw/

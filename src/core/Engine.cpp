@@ -588,6 +588,12 @@ bool Engine::init(int width, int height, const std::string& title) {
         m_dayNightCycle.setTimeOfDay(std::stof(e));
         m_dayNightCycle.setTimeScale(0.0f);
     }
+    // ERUPTION_TEST_DAY_SECONDS=<s> (captura): o dia inteiro em s segundos de
+    // jogo, a partir da hora de ERUPTION_TEST_TIME (timelapse de 24 h).
+    if (const char* e = std::getenv("ERUPTION_TEST_DAY_SECONDS")) {
+        const float secs = std::max(std::stof(e), 1.0f);
+        m_dayNightCycle.setTimeScale(m_dayNightCycle.dayDuration() / secs);
+    }
 
     m_skyboxConfig.load("data/skybox_config.json");
     SkyConfig skyConfig;
@@ -617,6 +623,8 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_weatherSystem.loadTypeOverrides("data/weather_types.json");
     if (m_dioramaConfig.root().contains("default_preset") && m_dioramaConfig.root().contains("presets")) {
         std::string presetName = m_dioramaConfig.root()["default_preset"];
+        // ERUPTION_TEST_LOOK=<preset> (captura): escolhe o visual sem editar o JSON.
+        if (const char* e = std::getenv("ERUPTION_TEST_LOOK")) presetName = e;
         const auto& presets = m_dioramaConfig.root()["presets"];
         if (presets.contains(presetName)) {
             m_lookConfig.loadFromJson(presets[presetName]);
@@ -2298,6 +2306,15 @@ void Engine::initImGui() {
         static const ImWchar koreanRanges[] = { 0xAC00, 0xD7A3, 0x3131, 0x318E, 0x4E00, 0x9FFF, 0xFF00, 0xFFEF, 0 };
         ImFontConfig cjkCfg; cjkCfg.MergeMode = true; cjkCfg.SizePixels = 14.0f; cjkCfg.OversampleH = 1; cjkCfg.OversampleV = 1;
         io.Fonts->AddFontFromFileTTF("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 14.0f, &cjkCfg, koreanRanges);
+    }
+    // Contador de FPS grande (ERUPTION_FPS_OVERLAY): fonte propria no tamanho
+    // pedido, a ULTIMA do atlas. Esticar a de 14 px apagava os tracos.
+    if (const char* e = std::getenv("ERUPTION_FPS_OVERLAY")) {
+        static const ImWchar kDigits[] = {0x0020, 0x0020, 0x0030, 0x0039, 0x0046, 0x0046, 0x0050, 0x0050, 0x0053, 0x0053, 0};
+        ImFontConfig bigCfg;
+        bigCfg.SizePixels = std::max(16.0f, static_cast<float>(std::atof(e)));
+        bigCfg.GlyphRanges = kDigits;
+        io.Fonts->AddFontDefault(&bigCfg);
     }
     io.Fonts->Build();
     ImGui_ImplGlfw_InitForVulkan(m_window.handle(), false);
