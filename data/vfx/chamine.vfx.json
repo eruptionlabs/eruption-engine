@@ -3,8 +3,8 @@
   "emitters": [
     {
       "name": "coluna",
-      "capacity": 90,
-      "rate": 7,
+      "capacity": 40,
+      "rate": 3,
       "shape": "disc",
       "shapeSize": [
         0.5,
@@ -12,8 +12,8 @@
         0.5
       ],
       "lifetime": [
-        5.0,
-        7.0
+        4.0,
+        5.5
       ],
       "speed": [
         1.2,
@@ -21,8 +21,8 @@
       ],
       "spread": 0.08,
       "size": [
-        0.8,
-        1.4
+        0.5,
+        0.9
       ],
       "rotation": [
         0,
@@ -57,7 +57,7 @@
             0.38,
             0.36,
             0.34,
-            0.5
+            0.275
           ]
         },
         {
