@@ -26,6 +26,10 @@ struct PointLight {
     // When true, Engine toggles `enabled` off/on by time of day instead of
     // leaving it always on (lamp/lantern props: lit only at night).
     bool nightOnly = false;
+    // Spot: direcao (normalizada) e cosseno da metade da abertura. Direcao
+    // zero = luz pontual (o padrao). Luz de janela cai para fora e para baixo.
+    Vec3 spotDir = Vec3(0.0f);
+    float spotCos = 0.0f;
 };
 
 struct ShadowUBO {

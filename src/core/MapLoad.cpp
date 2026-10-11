@@ -456,6 +456,8 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
             pl.animType = ml.animType;
             pl.nightOnly = ml.nightOnly;
             pl.enabled = !ml.nightOnly;
+            pl.spotDir = ml.spotDir;
+            pl.spotCos = std::cos(glm::radians(glm::clamp(ml.spotAngle, 1.0f, 179.0f) * 0.5f));
             if (std::getenv("ERUPTION_DEBUG_LAVA_LIGHT"))
                 ERUPTION_LOG_WARN("[PLIGHT] fonte (%.0f,%.0f,%.0f) -> mundo (%.0f,%.0f,%.0f) centro (%.0f,%.0f) r=%.0f i=%.2f",
                                   ml.position.x, ml.position.y, ml.position.z,
