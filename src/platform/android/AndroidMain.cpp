@@ -211,7 +211,10 @@ int32_t onInput(android_app*, AInputEvent* ev) {
 }
 
 void onCmd(android_app* app, int32_t cmd) {
-    if (cmd == APP_CMD_TERM_WINDOW || cmd == APP_CMD_DESTROY) g_window.shouldClose = true;
+    if (cmd == APP_CMD_TERM_WINDOW || cmd == APP_CMD_DESTROY) {
+        __android_log_print(ANDROID_LOG_WARN, "Eruption", "janela fechada pelo sistema (cmd %d)", cmd);
+        g_window.shouldClose = true;
+    }
     (void)app;
 }
 
