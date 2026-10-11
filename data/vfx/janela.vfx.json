@@ -2,24 +2,25 @@
   "name": "janela",
   "emitters": [
     {
-      "name": "brilho",
-      "capacity": 4,
-      "rate": 1.5,
+      "name": "cone",
+      "capacity": 24,
+      "rate": 5,
       "shape": "point",
-      "lifetime": [2.0, 2.4],
-      "speed": [0.0, 0.0],
-      "spread": 0.0,
-      "size": [0.42, 0.48],
+      "lifetime": [4.0, 4.0],
+      "speed": [0.45, 0.45],
+      "direction": [0.0, -0.75, 0.66],
+      "spread": 0.04,
+      "size": [0.35, 0.35],
+      "sizeOverLife": [[0.0, 1.0], [1.0, 4.0]],
       "color": [
-        {"t": 0.0, "rgba": [1.0, 0.7, 0.38, 0.0]},
-        {"t": 0.25, "rgba": [1.0, 0.68, 0.36, 0.3]},
-        {"t": 0.75, "rgba": [1.0, 0.66, 0.34, 0.3]},
-        {"t": 1.0, "rgba": [1.0, 0.64, 0.32, 0.0]}
+        {"t": 0.0, "rgba": [1.0, 0.7, 0.4, 0.0]},
+        {"t": 0.1, "rgba": [1.0, 0.68, 0.38, 0.11]},
+        {"t": 0.6, "rgba": [1.0, 0.66, 0.36, 0.06]},
+        {"t": 1.0, "rgba": [1.0, 0.64, 0.34, 0.0]}
       ],
-      "texture": "builtin:spark",
       "blend": "additive",
-      "emissive": 1.8,
-      "softDistance": 0.0
+      "emissive": 1.4,
+      "softDistance": 0.6
     }
   ]
 }
