@@ -266,6 +266,8 @@ private:
     std::vector<PointLight> m_extraPointLights;
     std::vector<PointLight> m_vfxPointLights;
     std::vector<PointLight> m_allPointLights; // m_pointLights + m_extraPointLights, montado no frame
+    // Mais de 128 luzes: indices das que entram no UBO (ver render()).
+    std::vector<std::pair<float, uint32_t>> m_lightPick;
     const std::vector<PointLight>& allPointLights();
     bool m_pointLightsEnabled = true;
     bool m_skyProbeEnabled = false;
