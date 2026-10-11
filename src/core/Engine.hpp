@@ -489,6 +489,7 @@ public:
     float m_touchHudDayScale = 1.0f; // velocidade do dia antes de pausar
     void drawTouchHud();
     bool m_touchHudTelemetry = false; // painel de numeros ligado pelo botao
+    bool m_touchHudMaps = false;      // lista de mapas aberta (ERUPTION_TOUCH_MAPS)
     // Modo classico: luz fixa do jeito antigo (Blinn-Phong, sem relevo, sem
     // sombra, GI, bloom, DoF, luzes de ponto nem SSAO), dia parado ao meio-dia
     // e ceu limpo - para comparar com tudo ligado. Desligar restaura o estado
@@ -783,6 +784,10 @@ private:
     bool findEmbeddedAlbedoPixels(const std::string& name, std::vector<uint8_t>& outPixels,
                                   int& outW, int& outH, int& outChannels);
     void recordTelemetry();
+    // ERUPTION_TEST_TOUR=<s por mapa> (teste): percorre ERUPTION_TOUCH_MAPS,
+    // girando a camera uma volta e indo de longe a perto em cada mapa, e loga
+    // o FPS por mapa e por fase. Bancada de troca de mapa e de queda de FPS.
+    void updateTestTour(float dt);
     // VRAM do processo: alocacoes VMA nas heaps locais da placa (MB).
     double deviceMemoryMb() const;
     void renderLoadingProgress();

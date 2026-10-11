@@ -456,6 +456,35 @@ void Engine::drawTouchHud() {
     ImGui::PopStyleColor(3);
     if (ImGui::Button(m_touchHudTelemetry ? "Telemetria -" : "Telemetria +", ImVec2(bw, 0.0f)))
         m_touchHudTelemetry = !m_touchHudTelemetry;
+    // ERUPTION_TOUCH_MAPS="a,b,c": mapas que o pacote leva; um toque troca
+    // (carga em segundo plano, a mesma do comando warp).
+    static const std::vector<std::string> s_maps = [] {
+        std::vector<std::string> out;
+        if (const char* e = std::getenv("ERUPTION_TOUCH_MAPS")) {
+            std::string all = e;
+            size_t start = 0;
+            while (start <= all.size()) {
+                const size_t end = std::min(all.find(',', start), all.size());
+                if (end > start) out.push_back(all.substr(start, end - start));
+                start = end + 1;
+            }
+        }
+        return out;
+    }();
+    if (s_maps.size() > 1) {
+        if (ImGui::Button(m_touchHudMaps ? "Mapas -" : "Mapas +", ImVec2(bw, 0.0f))) m_touchHudMaps = !m_touchHudMaps;
+        if (m_touchHudMaps) {
+            for (const std::string& m : s_maps) {
+                const bool here = m == m_currentMapName;
+                ImGui::BeginDisabled(here);
+                if (ImGui::Button(m.c_str(), ImVec2(bw, 0.0f))) {
+                    setPendingMapWarp(m);
+                    m_touchHudMaps = false;
+                }
+                ImGui::EndDisabled();
+            }
+        }
+    }
     if (m_touchHudTelemetry) {
         // Mesmas contas do painel F3: GPU = soma dos passes cronometrados sem
         // os agregados (Post Total e Lens Drops contem outros passes).

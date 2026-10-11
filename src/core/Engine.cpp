@@ -1136,6 +1136,63 @@ void Engine::shutdown() {
     m_initialized = false;
 }
 
+void Engine::updateTestTour(float dt) {
+    static const float kSecs = [] {
+        const char* e = std::getenv("ERUPTION_TEST_TOUR");
+        return e ? std::max(4.0f, static_cast<float>(std::atof(e))) : 0.0f;
+    }();
+    if (kSecs <= 0.0f) return;
+    static std::vector<std::string> maps;
+    static size_t index = 0;
+    static float t = 0.0f, baseYaw = 0.0f, basePitch = 0.0f;
+    static std::string tourMap;
+    static double fpsSum[3] = {0, 0, 0};
+    static int fpsN[3] = {0, 0, 0};
+    static float fpsMin = 1e9f;
+    if (maps.empty()) {
+        if (const char* e = std::getenv("ERUPTION_TOUCH_MAPS")) {
+            std::string all = e;
+            size_t start = 0;
+            while (start <= all.size()) {
+                const size_t end = std::min(all.find(',', start), all.size());
+                if (end > start) maps.push_back(all.substr(start, end - start));
+                start = end + 1;
+            }
+        }
+        if (maps.empty()) maps.push_back(m_currentMapName);
+    }
+    if (m_warpJobActive || !m_pendingMapWarp.empty()) return; // carregando
+    if (tourMap != m_currentMapName) { // chegou num mapa (o primeiro ou um warp)
+        tourMap = m_currentMapName;
+        t = 0.0f;
+        baseYaw = m_camera.orbitYaw();
+        basePitch = m_camera.orbitPitch();
+        for (int k = 0; k < 3; ++k) { fpsSum[k] = 0; fpsN[k] = 0; }
+        fpsMin = 1e9f;
+        ERUPTION_LOG_WARN("[TOUR] mapa %s", tourMap.c_str());
+        return;
+    }
+    if (dt <= 0.0f || dt > 1.0f) return;
+    t += dt;
+    // Tres fases: longe girando, meio girando, perto girando (uma volta no total).
+    const float u = std::min(t / kSecs, 1.0f);
+    const int phase = std::min(2, static_cast<int>(u * 3.0f));
+    const float dist = phase == 0 ? 600.0f : phase == 1 ? 250.0f : 70.0f;
+    m_camera.setOrbit(baseYaw + u * 6.2831853f, basePitch, dist);
+    const float fps = 1.0f / dt;
+    fpsSum[phase] += fps;
+    ++fpsN[phase];
+    fpsMin = std::min(fpsMin, fps);
+    if (t < kSecs) return;
+    ERUPTION_LOG_WARN("[TOUR] %s: FPS longe %.0f, meio %.0f, perto %.0f, pior quadro %.0f", tourMap.c_str(),
+                      fpsN[0] ? fpsSum[0] / fpsN[0] : 0.0, fpsN[1] ? fpsSum[1] / fpsN[1] : 0.0,
+                      fpsN[2] ? fpsSum[2] / fpsN[2] : 0.0, fpsMin);
+    index = (index + 1) % maps.size();
+    if (index == 0) ERUPTION_LOG_WARN("[TOUR] volta completa");
+    if (maps[index] != m_currentMapName) setPendingMapWarp(maps[index]);
+    else tourMap.clear();
+}
+
 float Engine::advanceFrame() {
     Profiler::resetCpuTime();
     Profiler::resetGpuTime();
@@ -1143,6 +1200,7 @@ float Engine::advanceFrame() {
     SystemMonitor::update();
 
     updateWarp(); // troca de mapa pelo seletor (leitura em thread, montagem pelo loadMap)
+    updateTestTour(m_frameDt);
     updateWorld(); // vizinhos do mundo contínuo entram e saem
     updateSoundEmitters();
     m_audio.update(m_camera.position(), m_camera.forward(), m_camera.up()); // ouvinte na câmera
