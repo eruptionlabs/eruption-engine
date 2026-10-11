@@ -125,6 +125,7 @@ build-rel/
 build-dbg/
 build-export/
 build-compat/
+build-android*/
 demo_out/
 
 # ---- Tudo que NAO vai para o git fica em not_commit/ (raiz e por pasta) ----

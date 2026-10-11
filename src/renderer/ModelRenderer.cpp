@@ -3673,7 +3673,6 @@ void ModelRenderer::updateAnimations(float totalElapsedMs) {
             // Most legacy lava models only animate the first texture slot (textureId 0).
             // If multiple slots are animated we average/merge their states.
             TextureAnimState merged;
-            int activeCount = 0;
             int32_t lastTextureId = -1;
             for (const auto& anim : node.animTextures) {
                 if (anim.textureId == lastTextureId) continue; // already merged above
@@ -3684,7 +3683,6 @@ void ModelRenderer::updateAnimations(float totalElapsedMs) {
                     merged.scale = state.scale; // override, usually 1
                     merged.rotation += state.rotation;
                     merged.active = true;
-                    activeCount++;
                 }
             }
 

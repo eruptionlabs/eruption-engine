@@ -43,25 +43,16 @@ inline const char* const kCpuPhaseNames[] = {
 //
 // Compartilhado entre Engine.cpp e Render.cpp desde a quebra do arquivo.
 inline bool getMapWaterParams(const LoadedMap& map, float& outLevel, float& outWaveHeight, bool force = false) {
+    // Sem plano d'agua (com ou sem "Force Water"): nivel 0 e onda 0,2.
+    (void)force;
     if (!map.waterPlanes.empty()) {
         outLevel = map.waterPlanes[0].level;
         outWaveHeight = map.waterPlanes[0].waveHeight;
         return true;
-    } else if (map.waterPlanes.empty() ? 0.0f : map.waterPlanes[0].level != 0.0f || map.waterPlanes.empty() ? 0.2f : map.waterPlanes[0].waveHeight != 0.2f) {
-        // Legacy world water info present
-        outLevel = map.waterPlanes.empty() ? 0.0f : map.waterPlanes[0].level;
-        outWaveHeight = map.waterPlanes.empty() ? 0.2f : map.waterPlanes[0].waveHeight;
-        return false;
-    } else if (force) {
-        // No water info but Force Water is on: use default level 0
-        outLevel = 0.0f;
-        outWaveHeight = 0.2f;
-        return false;
-    } else {
-        outLevel = 0.0f;
-        outWaveHeight = 0.2f;
-        return false;
     }
+    outLevel = 0.0f;
+    outWaveHeight = 0.2f;
+    return false;
 }
 
 // Filas de upload adiadas para o command buffer do frame. Ficam aqui porque

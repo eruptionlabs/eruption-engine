@@ -472,8 +472,6 @@ static void recordOnePbrUpload(VulkanContext* ctx, VkCommandBuffer cmd,
 }
 
 static std::vector<PendingPbrUpload> g_pendingPbrUploads;
-static constexpr size_t PBR_UPLOAD_BATCH_SIZE = 64;
-
 void flushPbrTextureUploads(VulkanContext* ctx) {
     if (!ctx || g_pendingPbrUploads.empty()) return;
 

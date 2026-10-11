@@ -192,7 +192,6 @@ void Engine::bindFsrInputs(bool write) {
 }
 
 void Engine::render() {
-    static int frameCount = 0; frameCount++;
 
     // ERUPTION_TEST_DEMO (bancada de VIDEO): roteiro por tempo, uma execucao,
     // um take - ver Engine::runDemoTimeline abaixo de toggleWireframe.

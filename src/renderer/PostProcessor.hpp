@@ -301,8 +301,6 @@ private:
     VkDescriptorSetLayout m_lensDropComputeLayoutDesc = VK_NULL_HANDLE;
     VkDescriptorPool m_lensDropComputePool = VK_NULL_HANDLE;
     VkDescriptorSet m_lensDropComputeSet = VK_NULL_HANDLE;
-    VkBuffer m_lensDropParamBuffer = VK_NULL_HANDLE;
-    VmaAllocation m_lensDropParamAlloc = VK_NULL_HANDLE;
 
     VkPipelineLayout m_layout = VK_NULL_HANDLE;
 

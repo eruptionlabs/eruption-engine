@@ -216,7 +216,6 @@ private:
     VkDescriptorSetLayout m_shadowLayoutSet = VK_NULL_HANDLE;
     VkDescriptorSet m_shadowSet = VK_NULL_HANDLE;
 
-    VkSampler m_sampler = VK_NULL_HANDLE;
     VkSampler m_paletteSampler = VK_NULL_HANDLE;
 
     struct PaletteTexture {

@@ -112,10 +112,8 @@ private:
     uint32_t m_bodyPaletteSlot = 0;
     uint32_t m_hairPaletteSlot = 0;
     bool m_palettesInitialized = false;
-    int m_bodyAction = 0;
     int m_bodyFrame = 0;
     float m_bodyTimer = 0.0f;
-    int m_hairAction = 0;
     int m_hairFrame = 0;
     float m_hairTimer = 0.0f;
     Vec2 m_bodyAttachPoint = Vec2(0.0f);

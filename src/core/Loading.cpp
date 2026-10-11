@@ -53,7 +53,7 @@ void Engine::presentLoadingScreen(const std::string& mapName, const std::string&
 
     if (clear) {
         colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        colorAttachment.clearValue.color = {0.0f, 0.0f, 0.0f, 1.0f};
+        colorAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
     } else {
         colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     }
