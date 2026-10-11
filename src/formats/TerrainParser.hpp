@@ -130,6 +130,9 @@ struct TerrainVertex {
     uint16_t blendNormalIndex = 0;
     uint16_t blendMaskIndex = 0;
     uint16_t blendMaskIndex2 = 0;
+    // Textura emissiva do material (glTF emissiveTexture), acesa de noite.
+    // Ocupa os 2 bytes que eram padding: o vertice continua com 88.
+    uint16_t emissiveIndex = 0;
 };
 static_assert(sizeof(TerrainVertex) == 88, "TerrainVertex: layout empacotado e' 88 bytes - se mudou, revise os VkVertexInputAttributeDescription");
 

@@ -702,7 +702,7 @@ void ModelRenderer::createPipeline() {
     bindingDesc.stride = sizeof(TerrainVertex);
     bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::vector<VkVertexInputAttributeDescription> attribs(18);
+    std::vector<VkVertexInputAttributeDescription> attribs(19);
     attribs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TerrainVertex, position)};
     attribs[1] = {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(TerrainVertex, texCoord)};
     attribs[2] = {2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TerrainVertex, normal)};
@@ -721,6 +721,7 @@ void ModelRenderer::createPipeline() {
     attribs[15] = {15, 0, VK_FORMAT_R32G32_UINT, offsetof(TerrainVertex, splatTex01)};
     attribs[16] = {16, 0, VK_FORMAT_R32G32_UINT, offsetof(TerrainVertex, splatTex45)};
     attribs[17] = {17, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, blendMaskIndex2)};
+    attribs[18] = {18, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, emissiveIndex)};
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -1371,7 +1372,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             // cache the result per faceTexIdx and the vertex body becomes a
             // vector index.
             struct FaceResolved {
-                uint32_t texSlot = 0, pbrIdx = 0, normalIdx = 0;
+                uint32_t texSlot = 0, pbrIdx = 0, normalIdx = 0, emissiveSlot = 0;
                 std::string name;
                 bool done = false;
             };
@@ -1430,6 +1431,10 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                         pbrSlots = resolvePbrTextures(texName);
                     }
                     fr.texSlot = texSlot;
+                    if (!node.emissiveTextureNames.empty()) {
+                        const std::string& en = node.emissiveTextureNames[faceTexIdx % node.emissiveTextureNames.size()];
+                        if (!en.empty()) fr.emissiveSlot = resolveTexture(en);
+                    }
                     fr.pbrIdx = pbrSlots.mrahw.index;
                     fr.normalIdx = pbrSlots.normal.index;
                     // PBR por SLOT de textura: o cache por nome e' chaveado
@@ -1439,6 +1444,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                     fr.name = std::move(texName);
                 }
                 uint32_t texSlot = fr.texSlot;
+                const uint32_t emissiveSlot = fr.emissiveSlot;
                 PbrTextureSlots pbrSlots;
                 pbrSlots.mrahw.index = fr.pbrIdx;
                 pbrSlots.normal.index = fr.normalIdx;
@@ -1527,6 +1533,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                 v.blendMaskUV = maskUV;
                 v.blendMaskIndex2 = maskTexSlot2;
                 v.emissiveStrength = (i < node.perVertexEmissive.size()) ? node.perVertexEmissive[i] : 0.0f;
+                v.emissiveIndex = static_cast<uint16_t>(emissiveSlot);
                 // Splat: ate' 8 slots de 16 bits empacotados em 4 uint32. O
                 // slot local vira slot GLOBAL de bindless do mesmo jeito
                 // que o texSlot da camada base logo acima.

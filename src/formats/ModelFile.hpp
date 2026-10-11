@@ -116,6 +116,7 @@ struct ModelFileNode {
     std::vector<uint32_t> textureIds;     // v1.x-v2.2: indices to global texture list
     std::vector<std::string> textureNames; // v2.3+: per-node texture names (runtime albedo slot)
     std::vector<std::string> pbrTextureNames; // v2.3+: original material names for PBR lookup
+    std::vector<std::string> emissiveTextureNames; // paralelo a textureNames; "" = sem emissiva
 
     Vec3 position;
     Vec3 rotationAxis;

@@ -916,5 +916,14 @@ void main() {
         hot = pow(clamp(hot, 0.0, 1.0), 1.6);
         emissiveRgb = vec3(1.0, 0.42, 0.12) * hot * inEmissiveStrength * 0.85;
     }
+    // Textura emissiva do material (janela, vidro de lampiao): acende com a
+    // mesma curva das luzes artificiais (DeferredLighting::artificialMod) e
+    // some de dia. A cor e o formato vem da textura.
+    const uint emissiveIdx = inMatId >> 16u;
+    if (emissiveIdx != 0u) {
+        const float night = 1.0 - smoothstep(0.2, 0.8, u_sunDir.w);
+        if (night > 0.001)
+            emissiveRgb += texture(u_textures[nonuniformEXT(emissiveIdx)], uv).rgb * night * 2.5;
+    }
     outEmissive = vec4(emissiveRgb, sunSelfShadow);
 }

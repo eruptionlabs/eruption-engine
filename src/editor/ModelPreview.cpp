@@ -196,6 +196,7 @@ bool ModelPreview::createPipelines() {
         {15, 0, VK_FORMAT_R32G32_UINT, offsetof(TerrainVertex, splatTex01)},
         {16, 0, VK_FORMAT_R32G32_UINT, offsetof(TerrainVertex, splatTex45)},
         {17, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, blendMaskIndex2)},
+        {18, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, emissiveIndex)},
     };
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
