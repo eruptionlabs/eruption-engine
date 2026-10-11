@@ -143,18 +143,25 @@ void main() {
     alpha *= exposure;
 
     // Wind direction is along world X (rainWind parameter).
-    vec2 windDir = vec2(push.params2.x, 0.0);
-
-    // Billboard facing up (rain splash on ground/object top), leaned by wind.
-    vec3 right = normalize(vec3(push.viewProj[0][0], push.viewProj[1][0], push.viewProj[2][0]));
-    vec3 up = vec3(0.0, 1.0, 0.0);
-    vec3 pos = vec3(worldXZ.x, surfaceY + 0.02, worldXZ.y)
-               + right * quadUV.x * currentSize
-               + up * quadUV.y * currentSize * 0.3
-               + vec3(windDir * currentSize * 0.3, 0.0);
-
-    // Slight UV shear so the ripple looks angled in the wind.
-    oUV.x += quadUV.y * windDir.x * 0.25;
+    // Deitada na superficie: a coroa era um quadro em pe' virado para a
+    // camera e nao acompanhava telhado nem chao inclinado. A normal sai do
+    // proprio heightmap (diferenca central de um texel); o anel fica no plano
+    // da superficie, levemente acima dela.
+    vec2 texel = 1.0 / vec2(textureSize(heightmap, 0));
+    float hx0 = uintBitsToFloat(texture(heightmap, hmUV - vec2(texel.x, 0.0)).r) - 10000.0;
+    float hx1 = uintBitsToFloat(texture(heightmap, hmUV + vec2(texel.x, 0.0)).r) - 10000.0;
+    float hz0 = uintBitsToFloat(texture(heightmap, hmUV - vec2(0.0, texel.y)).r) - 10000.0;
+    float hz1 = uintBitsToFloat(texture(heightmap, hmUV + vec2(0.0, texel.y)).r) - 10000.0;
+    vec2 cell = push.worldBounds.zw * texel * 2.0;
+    vec3 N = vec3(0.0, 1.0, 0.0);
+    // Degrau grande = borda de telhado/parede: ali fica plano (sem rasgar).
+    if (max(abs(hx1 - hx0), abs(hz1 - hz0)) < cell.x * 1.5)
+        N = normalize(vec3(-(hx1 - hx0) / cell.x, 1.0, -(hz1 - hz0) / cell.y));
+    vec3 T = normalize(cross(N, vec3(0.0, 0.0, 1.0)));
+    vec3 Bv = cross(T, N);
+    vec3 pos = vec3(worldXZ.x, surfaceY, worldXZ.y) + N * 0.05
+               + T * quadUV.x * currentSize * 0.8
+               + Bv * quadUV.y * currentSize * 0.8;
 
     gl_Position = push.viewProj * vec4(pos, 1.0);
     oAlpha = viz ? 1.0 : alpha; // debug: binary — passed every gate = visible
