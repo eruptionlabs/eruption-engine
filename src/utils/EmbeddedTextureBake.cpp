@@ -35,7 +35,8 @@ constexpr uint32_t kPackMagic = 0x504b5445; // 'ETKP'
 // 9: escala comum de polaridade + evidencia por densidade de linha.
 // 10: histerese na mascara de rejunte.
 // 11: raio do chanfro medido so' na regiao estrutural.
-constexpr uint32_t kPackVersion = 13;
+// 14: normal cru (RGBA8) no pacote quando a GPU nao tem BC7.
+constexpr uint32_t kPackVersion = 14;
 
 void put32(std::vector<uint8_t>& v, uint32_t x) {
     const size_t o = v.size();
@@ -577,6 +578,11 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
                 if (bcMask() & 2u) {
                     baked[i].normal = compressRgbaToEtex(normal.pixels.data(), normal.width,
                                                          normal.height, BcKind::Normal);
+                    // GPU sem BC7 (Exynos/Xclipse): sem isto o normal ficava fora
+                    // do pacote e a carga sintetizava todos de novo na CPU, um a
+                    // um (17 s no S24). Cru e' 4x maior, mas carrega na hora.
+                    if (!baked[i].normal.valid())
+                        baked[i].normal = rgbaToEtexRaw(normal.pixels.data(), normal.width, normal.height);
                 }
                 if (bcMask() & 4u) {
                     // Variancia da normal por mip (Toksvig) - broadening de

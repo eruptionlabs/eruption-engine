@@ -63,7 +63,7 @@ cat > "$STAGE/AndroidManifest.xml" <<XML
     package="com.eruptionlabs.engine" android:versionCode="1" android:versionName="0.1">
     <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="34"/>
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true"/>
-    <application android:label="Eruption Engine" android:hasCode="false" android:extractNativeLibs="true"
+    <application android:label="Eruption Engine" android:icon="@mipmap/ic_launcher" android:hasCode="false" android:extractNativeLibs="true"
         android:appCategory="game" android:isGame="true">
         <activity android:name="android.app.NativeActivity" android:exported="true"
             android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|layoutDirection|colorMode|touchscreen"
@@ -78,8 +78,13 @@ cat > "$STAGE/AndroidManifest.xml" <<XML
 </manifest>
 XML
 
+# Icone do lancador: o vulcao do motor, como recurso compilado.
+mkdir -p "$STAGE/res/mipmap-xxxhdpi"
+cp "$ROOT/assets/icon/eruption_v3_256.png" "$STAGE/res/mipmap-xxxhdpi/ic_launcher.png"
+"$BT/aapt2" compile -o "$STAGE/res.zip" --dir "$STAGE/res"
+
 cd "$STAGE"
-"$BT/aapt2" link -o base.apk --manifest AndroidManifest.xml -I "$PLAT/android.jar" -A assets
+"$BT/aapt2" link -o base.apk --manifest AndroidManifest.xml -I "$PLAT/android.jar" -A assets -R res.zip --auto-add-overlay
 zip -qr base.apk lib
 "$BT/zipalign" -f -p 4 base.apk aligned.apk
 KS=$HOME/.android/eruption-debug.keystore
@@ -89,5 +94,5 @@ if [ ! -f "$KS" ]; then
         -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Eruption Debug" >/dev/null
 fi
 "$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --key-pass pass:android --out "$OUT" aligned.apk
-rm -f base.apk aligned.apk
+rm -f base.apk aligned.apk res.zip
 ls -la "$OUT"

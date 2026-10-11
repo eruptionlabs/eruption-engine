@@ -857,8 +857,11 @@ uint32_t ModelRenderer::resolveTexture(const std::string& path) {
     }
 
     uint32_t slot = 0;
+    const auto t0 = std::chrono::steady_clock::now();
     if (m_textureResolver) {
         slot = m_textureResolver(sanitizedPath);
+        m_resolveStats.texMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        ++m_resolveStats.tex;
     } else {
         ERUPTION_LOG_WARN("ModelRenderer: no texture resolver set, cannot load '%s'", sanitizedPath.c_str());
     }
@@ -900,7 +903,10 @@ PbrTextureSlots ModelRenderer::resolvePbrTextures(const std::string& path) {
         return it->second;
     }
 
+    const auto t0 = std::chrono::steady_clock::now();
     PbrTextureSlots slots = loadPbrTexturesForAlbedo(m_ctx, m_bindless, m_sampler, sanitizedPath);
+    m_resolveStats.pbrMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    ++m_resolveStats.pbr;
     static const bool kTrace = std::getenv("ERUPTION_TEST_PBR_TRACE") != nullptr;
     if (kTrace) {
         ERUPTION_LOG_WARN("[PBRSLOT] '%s' -> valid=%d mrahw=%u normal=%u",
