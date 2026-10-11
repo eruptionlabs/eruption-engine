@@ -56,6 +56,10 @@ GLFWvidmode g_mode{};
 
 // ---- log -------------------------------------------------------------------
 void startLogPump() {
+    // O processo sobrevive a' activity: na recriada o stdout ja' vai para o pipe.
+    static bool started = false;
+    if (started) return;
+    started = true;
     static int fds[2];
     if (pipe(fds) != 0) return;
     setvbuf(stdout, nullptr, _IOLBF, 0);
@@ -340,6 +344,11 @@ void ImGui_ImplGlfw_CharCallback(GLFWwindow*, unsigned int c) { ImGui::GetIO().A
 
 // ---- entrada ----------------------------------------------------------------
 void android_main(android_app* app) {
+    // Globais sobrevivem entre activities no mesmo processo: a recriada (o
+    // sistema destroi a primeira, p.ex. ao girar) herdava shouldClose = true
+    // e saia logo depois de carregar o mapa.
+    g_window = GLFWwindow{};
+    g_touch = Touch{};
     g_app = app;
     app->onAppCmd = onCmd;
     app->onInputEvent = onInput;
