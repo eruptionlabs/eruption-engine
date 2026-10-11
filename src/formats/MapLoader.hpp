@@ -80,6 +80,7 @@ struct LoadedMap {
         Vec3 rotationDeg{0.0f}; // graus, em torno de X, Y e Z
         float scale = 1.0f;
         bool enabled = true;
+        bool nightOnly = false; // como as luzes: so' toca de noite
     };
     std::vector<MapEffect> effects;
     // Unidades do mundo por metro para os efeitos (0 = padrao do motor).
