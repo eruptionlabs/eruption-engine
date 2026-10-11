@@ -40,8 +40,7 @@ layout(push_constant) uniform Push {
     vec4 sunColor;      // rgb = sun colour, a = ambient intensity
     vec4 params;        // x = water level (world Y), y = shadow strength,
                         // z = water opacity, w = shadow ray length (world units)
-    vec4 waterColor;    // rgb = deep water tint, a = shoreline fade depth (world units)
-    vec4 uvScale;       // xy = minimap sub-rect / G-buffer size, zw = unused
+    vec4 uvScale;       // xy = minimap sub-rect / G-buffer size, z = shoreline fade depth (world units)
 } push;
 
 // The minimap is drawn into the TOP-LEFT MINIMAP_RES x MINIMAP_RES corner of the
@@ -51,6 +50,9 @@ layout(push_constant) uniform Push {
 //   inUV          0..1 across the minimap OUTPUT image, and the ortho viewport,
 //                 so this is what NDC / world reconstruction must use;
 //   inUV*uvScale  where that same point actually lives in the G-buffer.
+// Tinta da agua funda: constante (cabia no bloco so' a 144 B, alem dos 128
+// de push constant que GPU de celular aceita).
+const vec3 kDeepWater = vec3(0.09, 0.24, 0.38);
 vec2 gbufUV(vec2 uv) { return uv * push.uvScale.xy; }
 
 // uv here is minimap-space (0..1 over the ortho viewport), NOT G-buffer space.
@@ -195,12 +197,12 @@ void main() {
     if (waterDepth > 0.0 && push.params.z > 0.001) {
         // Shallow edges stay readable so the shoreline shape survives; deep
         // water saturates toward the tint.
-        float fade = clamp(waterDepth / max(push.waterColor.a, 0.1), 0.0, 1.0);
+        float fade = clamp(waterDepth / max(push.uvScale.z, 0.1), 0.0, 1.0);
         float blend = push.params.z * mix(0.35, 1.0, fade);
-        color = mix(color, push.waterColor.rgb, blend);
+        color = mix(color, kDeepWater, blend);
         // A touch of the sky on the surface keeps deep water from reading as a
         // flat dead hole.
-        color += push.waterColor.rgb * 0.12 * (1.0 - fade);
+        color += kDeepWater * 0.12 * (1.0 - fade);
     }
 
     outColor = vec4(color, 1.0);

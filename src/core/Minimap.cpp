@@ -72,7 +72,7 @@ void Engine::initMinimapComposite() {
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset = 0;
-    pcRange.size = sizeof(Mat4) + 5 * sizeof(Vec4);
+    pcRange.size = sizeof(Mat4) + 4 * sizeof(Vec4);
 
     VkPipelineLayoutCreateInfo plInfo{};
     plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -424,9 +424,9 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
             Vec4 sunDir;
             Vec4 sunColor;
             Vec4 params;
-            Vec4 waterColor;
-            Vec4 uvScale;
+            Vec4 uvScale; // xy sub-retangulo, z profundidade de esmaecer a margem
         } mpush;
+        static_assert(sizeof(mpush) == 128, "push do minimapa: 128 B garantidos");
         mpush.invViewProj = glm::inverse(vp);
         // getSunDirection() is the direction the light TRAVELS; the shader wants
         // the direction toward the sun.
@@ -439,14 +439,12 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
         const float shadowReach = glm::clamp(zoom * 0.05f, 20.0f, 400.0f);
         mpush.params = Vec4(m_mapBaseWaterLevel + m_waterMenu.config.waterLevel,
                             0.65f, 0.75f, shadowReach);
-        // Deep-water tint and the depth over which the shoreline fades into it.
-        mpush.waterColor = Vec4(0.09f, 0.24f, 0.38f, 40.0f);
         // The minimap occupies only the top-left MINIMAP_RES square of the
         // full-size scene G-buffer, so the composite has to sample that
         // sub-rect instead of the whole attachment.
         mpush.uvScale = Vec4(float(miniRender) / float(m_gbuffer.extent().width),
                              float(miniRender) / float(m_gbuffer.extent().height),
-                             0.0f, 0.0f);
+                             40.0f, 0.0f); // z: profundidade em que a margem esmaece na agua funda
         vkCmdPushConstants(cmd, m_minimapCompositeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(mpush), &mpush);
         vkCmdDraw(cmd, 3, 1, 0, 0);

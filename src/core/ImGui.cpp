@@ -729,7 +729,26 @@ void Engine::renderImGui() {
         // logcat sem capturar a tela.
         static float logAcc = 0.0f;
         logAcc += ImGui::GetIO().DeltaTime;
-        if (logAcc >= 5.0f) { logAcc = 0.0f; ERUPTION_LOG_WARN("[FPS] %.0f", shown); }
+        if (logAcc >= 5.0f) {
+            logAcc = 0.0f;
+            // Os passes mais caros junto: no celular e' o unico jeito de ver
+            // onde vai o quadro sem abrir o painel.
+            std::vector<std::pair<float, std::string>> passes;
+            float gpuSum = 0.0f;
+            for (const auto& [n, ms] : Profiler::getAllGpuTimes()) {
+                if (n == "Post Total" || n.rfind("Lens Drops", 0) == 0) continue;
+                gpuSum += ms;
+                passes.emplace_back(ms, n);
+            }
+            std::sort(passes.begin(), passes.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+            std::string top;
+            for (size_t i = 0; i < passes.size() && i < 6; ++i) {
+                char b[64];
+                std::snprintf(b, sizeof(b), " %s=%.1f", passes[i].second.c_str(), passes[i].first);
+                top += b;
+            }
+            ERUPTION_LOG_WARN("[FPS] %.0f | GPU %.1f ms:%s", shown, gpuSum, top.c_str());
+        }
         char txt[32];
         std::snprintf(txt, sizeof(txt), "%.0f FPS", shown);
         ImDrawList* dl = ImGui::GetForegroundDrawList();

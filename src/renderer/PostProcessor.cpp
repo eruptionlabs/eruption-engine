@@ -111,6 +111,7 @@ void PostProcessor::shutdown() {
     destroyWeatherUbo();
 
     vkDestroyPipelineLayout(device, m_layout, nullptr);
+    m_pushRing.shutdown();
 
     vkDestroyDescriptorSetLayout(device, m_descriptorSetLayout, nullptr);
     vkDestroyDescriptorPool(device, m_descriptorPool, nullptr);
@@ -303,15 +304,19 @@ void PostProcessor::createDescriptors() {
     // escritos neles.
     for (bool& w : m_weatherBufferDSWritten) w = false;
 
+    // 128 B e' o minimo garantido de push constant (GPU de celular para ai').
+    // Os dois blocos maiores vao no set 1 pelo PushRing.
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset = 0;
-    pcRange.size = 256;
+    pcRange.size = 128;
+    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 256, 16 * 1024);
+    const VkDescriptorSetLayout setLayouts[2] = {m_descriptorSetLayout, m_pushRing.layout()};
 
     VkPipelineLayoutCreateInfo plInfo{};
     plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plInfo.setLayoutCount = 1;
-    plInfo.pSetLayouts = &m_descriptorSetLayout;
+    plInfo.setLayoutCount = 2;
+    plInfo.pSetLayouts = setLayouts;
     plInfo.pushConstantRangeCount = 1;
     plInfo.pPushConstantRanges = &pcRange;
     vkCreatePipelineLayout(m_ctx->device(), &plInfo, nullptr, &m_layout);
@@ -1081,7 +1086,8 @@ if (!m_ctx) return;
         }
         wp.rainBoxCenter = Vec4(rainBoxC, splashHalf); // w = horizontal half-extent of the rain box
         wp.params.w = dropLensAmount;
-        vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(wp), &wp);
+        static_assert(sizeof(wp) <= 256, "bloco do overlay passou de 256 B");
+        m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, &wp, sizeof(wp));
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_weatherImage);
@@ -1367,7 +1373,8 @@ if (!m_ctx) return;
         return e && (std::atoi(e) & 31) != 0;
     }();
     if (settings.pbrDebugActive || kPbrDebugEnv) push.gradingParams.z = 1.0f;
-    vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+    static_assert(sizeof(push) <= 256, "bloco da composicao passou de 256 B");
+    m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, &push, sizeof(push));
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkc::cmdEndRendering(cmd);
     // O composite e' UM draw fullscreen que faz tonemap + color grading +

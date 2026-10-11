@@ -14,7 +14,8 @@ layout(set = 0, binding = 5) uniform sampler2D cloudDepthTexture;
 // its alpha here lets the fog block know a cloud already owns this pixel.
 layout(set = 0, binding = 8) uniform sampler2D cloudVolumeCoverageTexture;
 
-layout(push_constant) uniform PushConstants {
+// Bloco no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
+layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec4 exposureBloom; // x=exposure, y=fogOpacity, z=bloomIntensity, w=enableBloom
     vec4 fogParams; // xyz=color, w=fogEnd
     // Era `vec4 screenSize`: declarado aqui e NUNCA lido pelo shader - 16 B de

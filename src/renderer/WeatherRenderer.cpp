@@ -432,6 +432,7 @@ void WeatherRenderer::shutdown() {
     vkDestroyPipelineLayout(device, m_debugMapLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, m_descLayout, nullptr);
     vkDestroyDescriptorPool(device, m_descPool, nullptr);
+    m_pushRing.shutdown();
     vkDestroySampler(device, m_linearSampler, nullptr);
 
     if (m_particleBuffer) vmaDestroyBuffer(m_ctx->allocator(), m_particleBuffer, m_particleAlloc);
@@ -532,7 +533,14 @@ bool WeatherRenderer::createDescriptors() {
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = 8;
     layoutInfo.pBindings = allBindings;
-    vkCreateDescriptorSetLayout(m_ctx->device(), &layoutInfo, nullptr, &m_descLayout);
+    const VkResult layoutRes = vkCreateDescriptorSetLayout(m_ctx->device(), &layoutInfo, nullptr, &m_descLayout);
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(m_ctx->physicalDevice(), &props);
+        ERUPTION_LOG_WARN("[CLIMA] layout %d | push max %u, samplers por estagio %u, por set %u",
+                          static_cast<int>(layoutRes), props.limits.maxPushConstantsSize,
+                          props.limits.maxPerStageDescriptorSamplers, props.limits.maxDescriptorSetSamplers);
+    }
 
     // Cross-cloud rain occluders UBO (geom + coverage bounds + wind per cloud).
     m_ctx->createBuffer(3 * MAX_RAIN_OCCLUDERS * sizeof(Vec4), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -546,17 +554,17 @@ bool WeatherRenderer::createDescriptors() {
     if (m_tuneBuffer != VK_NULL_HANDLE)
         vmaMapMemory(m_ctx->allocator(), m_tuneAlloc, &m_tuneMapped);
 
-    VkPushConstantRange pcRange{};
-    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pcRange.offset = 0;
-    pcRange.size = sizeof(Mat4) + sizeof(Vec4) * 12; // 256 bytes (added occluder)
+    // Bloco por draw (256 B) no set 1 via PushRing, nao em push constant:
+    // GPU de celular so' aceita 128 B.
+    constexpr uint32_t kDrawBlock = sizeof(Mat4) + sizeof(Vec4) * 12;
+    if (!m_pushRing.init(m_ctx, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, kDrawBlock, 256 * 1024))
+        return false;
+    const VkDescriptorSetLayout setLayouts[2] = {m_descLayout, m_pushRing.layout()};
 
     VkPipelineLayoutCreateInfo plInfo{};
     plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plInfo.setLayoutCount = 1;
-    plInfo.pSetLayouts = &m_descLayout;
-    plInfo.pushConstantRangeCount = 1;
-    plInfo.pPushConstantRanges = &pcRange;
+    plInfo.setLayoutCount = 2;
+    plInfo.pSetLayouts = setLayouts;
     vkCreatePipelineLayout(m_ctx->device(), &plInfo, nullptr, &m_pipelineLayout);
 
     VkDescriptorPoolSize poolSizes[2] = {};
@@ -578,7 +586,7 @@ bool WeatherRenderer::createDescriptors() {
     poolInfo.maxSets = kSets;
     poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes = poolSizes;
-    vkCreateDescriptorPool(m_ctx->device(), &poolInfo, nullptr, &m_descPool);
+    const VkResult poolRes = vkCreateDescriptorPool(m_ctx->device(), &poolInfo, nullptr, &m_descPool);
 
     m_descSets.resize(VulkanContext::MAX_FRAMES_IN_FLIGHT); // um set base por quadro em voo
     std::vector<VkDescriptorSetLayout> layouts(VulkanContext::MAX_FRAMES_IN_FLIGHT, m_descLayout);
@@ -587,7 +595,8 @@ bool WeatherRenderer::createDescriptors() {
     allocInfo.descriptorPool = m_descPool;
     allocInfo.descriptorSetCount = VulkanContext::MAX_FRAMES_IN_FLIGHT;
     allocInfo.pSetLayouts = layouts.data();
-    vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, m_descSets.data());
+    const VkResult setRes = vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, m_descSets.data());
+    ERUPTION_LOG_WARN("[CLIMA] pool %d, sets base %d", static_cast<int>(poolRes), static_cast<int>(setRes));
 
     return true;
 }
@@ -1886,8 +1895,9 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
             ai.descriptorPool = m_descPool;
             ai.descriptorSetCount = add;
             ai.pSetLayouts = layouts.data();
-            if (vkAllocateDescriptorSets(m_ctx->device(), &ai, sets.data()) == VK_SUCCESS)
-                followerSets.insert(followerSets.end(), sets.begin(), sets.end());
+            const VkResult r = vkAllocateDescriptorSets(m_ctx->device(), &ai, sets.data());
+            if (r == VK_SUCCESS) followerSets.insert(followerSets.end(), sets.begin(), sets.end());
+            else ERUPTION_LOG_WARN("[CLIMA] %u sets de nuvem falharam (%d)", add, static_cast<int>(r));
         }
         for (size_t fi = 0; fi < m_rainFollowers.size() && fi < followerSets.size(); ++fi) {
             const RainFollower& f = m_rainFollowers[fi];
@@ -2002,8 +2012,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     // Global draw: no blob bound (infinite cloud plane) + debug flag for both stages.
     push.occluder = Vec4(0.0f, 0.0f, 0.0f, params.debugRainOcclusion + (params.debugRainRegions ? 10.0f : 0.0f));
 
-    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(push), &push);
+    m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, &push, sizeof(push));
 
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &m_particleBuffer, &offset);
@@ -2033,8 +2042,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
         push.rainBoxCenter = Vec4(params.cameraPos.x, 0.0f, params.cameraPos.z, 1.0f);
         push.cloudRange.y = 80.0f;
         push.cloudRange.w = 80.0f;
-        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(push), &push);
+        m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, &push, sizeof(push));
         if (m_snowCount > 0 && m_rainFollowers.empty()) {
             vkCmdDraw(cmd, 4, m_snowCount, 0, m_snowStart);
         }
@@ -2107,8 +2115,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1,
                                         &followerSets[fi], 0, nullptr);
             }
-            vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(push), &push);
+            m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, &push, sizeof(push));
             const uint32_t instCount = (fi == m_rainFollowers.size() - 1 || fi >= wN)
                                            ? (m_particleCount - firstInst)
                                            : static_cast<uint32_t>(static_cast<float>(m_particleCount) * weights[fi] / wSum);
@@ -2159,8 +2166,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
             push.cloudRange = Vec4(m_cloudBottom, m_cloudTop, m_cloudTop - m_cloudBottom, m_cloudScale);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1,
                                     &baseSet, 0, nullptr);
-            vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(push), &push);
+            m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, &push, sizeof(push));
             vkCmdDraw(cmd, 4, m_splashGlobalCount, 0, 0);
         }
 
@@ -2187,8 +2193,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
                                                                   : baseSet;
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1,
                                     &dset, 0, nullptr);
-            vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(push), &push);
+            m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, &push, sizeof(push));
             vkCmdDraw(cmd, 4, m_splashGroups[fi].second, 0, m_splashGroups[fi].first);
         }
     }

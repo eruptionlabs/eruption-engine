@@ -43,6 +43,12 @@ struct MeshPush {
     uint32_t listOffset;
     uint32_t pad[3];
 };
+// Sombra: sem a matriz do quadro anterior, cabe em push constant.
+struct MeshShadowPush {
+    Mat4 viewProjNoJitter;
+    uint32_t listOffset;
+    uint32_t pad[3];
+};
 constexpr uint32_t kMeshTypes = 8;
 constexpr uint32_t kCMeshDraw = 44; // 5 uints por malha
 constexpr uint32_t kParticleBytes = 48;
@@ -444,11 +450,14 @@ bool VfxSystem::createPipelines() {
 
     // PARTICULAS DE MALHA: vertice de 32 bytes, opacas, profundidade escrita.
     {
-        const VkPushConstantRange meshPush{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPush)};
-        pl.setLayoutCount = 3;
-        pl.pSetLayouts = drawSets;
-        pl.pushConstantRangeCount = 1;
-        pl.pPushConstantRanges = &meshPush;
+        // 144 B passa dos 128 de push constant garantidos: set 3 pelo PushRing.
+        if (!m_meshPushRing.init(m_ctx, VK_SHADER_STAGE_VERTEX_BIT, sizeof(MeshPush), 8 * 1024)) return false;
+        const VkDescriptorSetLayout meshSets[4] = {drawSets[0], drawSets[1], drawSets[2], m_meshPushRing.layout()};
+        const VkPushConstantRange meshPush{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshShadowPush)};
+        pl.setLayoutCount = 4;
+        pl.pSetLayouts = meshSets;
+        pl.pushConstantRangeCount = 0;
+        pl.pPushConstantRanges = nullptr;
         if (vkCreatePipelineLayout(dev, &pl, nullptr, &m_meshLayout) != VK_SUCCESS) return false;
         VkShaderModule mvs = loadModule(dev, "vfx/vfx_mesh.vert.spv");
         VkShaderModule mfs =
@@ -608,6 +617,7 @@ void VfxSystem::shutdown() {
     }
     m_meshes.clear();
     if (m_meshLayout) vkDestroyPipelineLayout(dev, m_meshLayout, nullptr);
+    m_meshPushRing.shutdown();
     m_meshLayout = VK_NULL_HANDLE;
     if (m_lowView) vkDestroyImageView(dev, m_lowView, nullptr);
     if (m_lowImage) vmaDestroyImage(m_ctx->allocator(), m_lowImage, m_lowAlloc);
@@ -1571,7 +1581,7 @@ void VfxSystem::recordMeshes(VkCommandBuffer cmd, VkPipeline pipe, VkExtent2D ex
     for (uint32_t m = 0; m < m_meshes.size(); ++m) {
         if (!(m_meshMaskSimulated & (1u << m)) || !m_meshes[m].indexCount) continue;
         push.listOffset = 4u * m_capacity + m * per;
-        vkCmdPushConstants(cmd, m_meshLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
+        m_meshPushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshLayout, 3, &push, sizeof(push));
         const VkDeviceSize off = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &m_meshes[m].vb.buf, &off);
         vkCmdBindIndexBuffer(cmd, m_meshes[m].ib.buf, 0, VK_INDEX_TYPE_UINT16);
@@ -1609,7 +1619,7 @@ void VfxSystem::drawMeshShadows(VkCommandBuffer cmd, const Mat4& lightViewProj) 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshShadowPipe);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshShadowLayout, 0, 1, &m_shadowSets[frame], 0,
                             nullptr);
-    MeshPush push{};
+    MeshShadowPush push{};
     push.viewProjNoJitter = lightViewProj;
     const uint32_t per = m_capacity / kMeshTypes;
     for (uint32_t m = 0; m < m_meshes.size(); ++m) {

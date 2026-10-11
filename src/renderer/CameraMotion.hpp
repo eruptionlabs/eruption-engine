@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/PushRing.hpp"
 
 #include "renderer/VulkanContext.hpp"
 #include "math/Types.hpp"
@@ -63,6 +64,7 @@ private:
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     VkDescriptorSet m_set = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+    PushRing m_pushRing; // bloco de 192 B no set 1 (passa dos 128 de push constant)
     VkPipeline m_pipeline = VK_NULL_HANDLE;
 };
 

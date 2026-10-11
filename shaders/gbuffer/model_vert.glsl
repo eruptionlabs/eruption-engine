@@ -205,14 +205,14 @@ layout(set = 2, binding = 0, std430) readonly buffer InstanceBuf {
     EngInstance u_inst[];
 };
 
+// 96 B (sem a matriz model e o uvTranslateRot, que nenhum shader lia): cabe
+// nos 128 B de push constant garantidos (GPU de celular).
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
-    mat4 model;
     float alpha;
     float metallicScale;  // profile metallic factor, scales the MRAH-W red channel
     float roughnessScale; // profile roughness factor, scales the MRAH-W green channel
     float _pad;           // ERUPTION_TEST_MAGENTA_DEBUG (nao e' padding!)
-    vec4 uvTranslateRot;  // xy = translate, z = rotation (radians), w = unused
     // uvScale.w = FATOR DE DESLOCAMENTO POR MATERIAL (chao 1,0, pedra 0,45,
     // telhado/metal/agua 0) - ver o bloco de categoria em ModelRenderer.
     vec4 uvScale;         // xy = nao usado, z = UV por unidade de mundo da

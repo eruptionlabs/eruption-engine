@@ -5,7 +5,8 @@ layout(location = 1) in float iAlpha;
 
 layout(location = 0) out vec4 outColor;
 
-layout(push_constant) uniform Push {
+// Bloco por draw no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
+layout(std140, set = 1, binding = 0) uniform Push {
     mat4 viewProj;
     vec4 cameraPos;
     vec4 params;

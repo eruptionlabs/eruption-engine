@@ -23,7 +23,8 @@ layout(binding = 1, rg16f) uniform writeonly image2D u_motion;
 // movimento de camera. So' lida com p.useObject = 1.
 layout(binding = 2) uniform sampler2D u_objectVelocity;
 
-layout(push_constant) uniform Params {
+// Bloco no set 1 (PushRing, UBO de offset dinamico): 192 B passa dos 128 de push constant.
+layout(std140, set = 1, binding = 0) uniform Params {
     mat4 viewToPrevClip;  // prevViewProjNoJitter * inverse(view)
     mat4 projNoJitter;    // vista -> clip deste frame, sem jitter
     vec4 projJ;           // projecao COM jitter: P00, P11, deslocamento x, y

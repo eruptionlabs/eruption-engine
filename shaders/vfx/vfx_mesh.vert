@@ -24,7 +24,8 @@ layout(location = 9) out vec2 v_shade;
 
 // Matrizes sem jitter do frame atual e do anterior (velocidade no G-buffer):
 // a malha e' desenhada no passe de geometria, antes da simulacao deste frame.
-layout(push_constant) uniform Push {
+// Bloco no set 3 (PushRing, UBO de offset dinamico): 144 B passa dos 128 de push constant.
+layout(std140, set = 3, binding = 0) uniform Push {
     mat4 viewProjNoJitter;
     mat4 prevViewProjNoJitter;
     uint listOffset;

@@ -23,17 +23,16 @@ namespace {
 constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
-// Push do model_novel.vert (176 B) + o que o fragment do visualizador lê a mais.
+// Push do model_novel.vert (96 B) + o que o fragment do visualizador lê a mais.
 struct PreviewPush {
     Mat4 viewProjection;
-    Mat4 model;
     float alpha, metallicScale, roughnessScale, pad;
-    Vec4 eye;        // uvTranslateRot: o vértice não lê; o fragment usa como olho
     Vec4 uvScale;    // z: UV por unidade, w: deslocamento (0 = desligado)
+    Vec4 eye;        // o vértice não lê; o fragment usa como olho
     Vec4 lightMode;  // xyz: direção da luz, w: modo
     Vec4 wireCut;    // rgb: cor do aramado, a: corte de alfa
 };
-static_assert(sizeof(PreviewPush) == 208, "push do visualizador");
+static_assert(sizeof(PreviewPush) == 144, "push do visualizador");
 
 VkShaderModule loadModule(VkDevice dev, const char* path) {
     const std::vector<uint32_t> code = ShaderCompiler::loadSPIRV(path);
@@ -522,7 +521,6 @@ void ModelPreview::render(VkCommandBuffer cmd, float dt) {
                 inst[i].uvScaleDisp = Vec4(1.0f, 1.0f, 0.0f, 0.0f); // sem vento nem deslocamento
                 PreviewPush push{};
                 push.viewProjection = viewProj;
-                push.model = n.matrix;
                 push.alpha = 1.0f;
                 push.metallicScale = m->metallicScale;
                 push.roughnessScale = m->roughnessScale;

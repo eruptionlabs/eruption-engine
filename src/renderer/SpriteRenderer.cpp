@@ -66,6 +66,7 @@ void SpriteRenderer::shutdown() {
     if (m_maskPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), m_maskPipeline, nullptr);
     if (m_layerPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), m_layerPipeline, nullptr);
     if (m_layerPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_ctx->device(), m_layerPipelineLayout, nullptr);
+    m_layerPushRing.shutdown();
     m_maskPipeline = m_layerPipeline = VK_NULL_HANDLE;
     m_layerPipelineLayout = VK_NULL_HANDLE;
     if (m_pipeline != VK_NULL_HANDLE) {
@@ -1179,14 +1180,16 @@ bool SpriteRenderer::createLayerPipelines(VkDescriptorSetLayout layerInputs) {
     if (fMask) vkDestroyShaderModule(dev, fMask, nullptr);
 
     // 2) Camada: set 0 bindless, set 1 FrameUBO, set 2 entradas da camada.
-    const VkDescriptorSetLayout layouts[3] = {m_bindless->layout(), m_frameUboLayout, layerInputs};
-    VkPushConstantRange pr{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(LayerPush)};
+    // LayerPush (160 B) vai no set 3 pelo PushRing: passa dos 128 de push constant.
+    if (!m_layerPushRing.init(m_ctx, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(LayerPush),
+                              8 * 1024))
+        return false;
+    const VkDescriptorSetLayout layouts[4] = {m_bindless->layout(), m_frameUboLayout, layerInputs,
+                                              m_layerPushRing.layout()};
     VkPipelineLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    li.setLayoutCount = 3;
+    li.setLayoutCount = 4;
     li.pSetLayouts = layouts;
-    li.pushConstantRangeCount = 1;
-    li.pPushConstantRanges = &pr;
     if (vkCreatePipelineLayout(dev, &li, nullptr, &m_layerPipelineLayout) != VK_SUCCESS) return false;
     VkShaderModule vLayer = loadModule("gbuffer/sprite_layer.vert.spv");
     VkShaderModule fLayer = loadModule("gbuffer/sprite_layer.frag.spv");
@@ -1238,8 +1241,7 @@ void SpriteRenderer::drawLayer(VkCommandBuffer cmd, VkBuffer instances, uint32_t
     VkRect2D sc{{0, 0}, extent};
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc);
-    vkCmdPushConstants(cmd, m_layerPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(LayerPush), &push);
+    m_layerPushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layerPipelineLayout, 3, &push, sizeof(LayerPush));
     VkBuffer vbs[2] = {m_quadVertexBuffer, instances};
     VkDeviceSize offs[2] = {0, 0};
     vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);

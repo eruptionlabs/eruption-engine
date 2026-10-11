@@ -34,13 +34,12 @@ layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
-    mat4 model;
     float alpha;
     float metallicScale;
     float roughnessScale;
     float _pad;
-    vec4 uvTranslateRot; // o vértice não lê: aqui leva a posição do olho (xyz)
     vec4 uvScale;
+    vec4 eye;        // posição do olho (xyz); o vértice não lê
     vec4 lightMode;  // xyz: direção da luz (para onde ela vai), w: modo
     vec4 wireCut;    // rgb: cor do aramado, a: corte de alfa (0 = sem corte)
 } push;
@@ -107,7 +106,7 @@ void main() {
     }
     const vec3 L = normalize(-push.lightMode.xyz);
     const vec3 Lf = normalize(vec3(-L.x, 0.35, -L.z)); // preenchimento do lado oposto
-    const vec3 V = normalize(push.uvTranslateRot.xyz - inWorldPos);
+    const vec3 V = normalize(push.eye.xyz - inWorldPos);
     const float ndl = max(dot(N, L), 0.0);
     const float ndf = max(dot(N, Lf), 0.0);
     const vec3 H = normalize(L + V);

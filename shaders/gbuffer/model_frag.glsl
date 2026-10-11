@@ -45,9 +45,10 @@ layout(location = 20) in vec3 inPrevWorldPos;
 
 layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
+// 96 B (sem a matriz model e o uvTranslateRot, que nenhum shader lia): cabe
+// nos 128 B de push constant garantidos (GPU de celular).
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
-    mat4 model;
     float alpha;
     float metallicScale;  // absolute metallic value from the material profile
     float roughnessScale; // absolute roughness value from the material profile

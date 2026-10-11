@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/PushRing.hpp"
 
 #include "renderer/VulkanContext.hpp"
 #include "renderer/GBuffer.hpp"
@@ -268,6 +269,9 @@ private:
 
     LightingEnvironment m_env;
     std::vector<PointLight> m_pointLights;
+    // Blocos por draw da luz (ate' 256 B): set 1 do layout via PushRing,
+    // nao push constant (GPU de celular so' aceita 128 B).
+    PushRing m_pushRing;
     std::vector<PointLight> m_extraPointLights;
     std::vector<PointLight> m_vfxPointLights;
     std::vector<PointLight> m_allPointLights; // m_pointLights + m_extraPointLights, montado no frame

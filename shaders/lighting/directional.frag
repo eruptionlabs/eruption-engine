@@ -80,7 +80,8 @@ layout(set = 0, binding = 7) uniform LightingUBO {
 // especular ambiental pre-filtrado (roughness -> lod).
 layout(set = 0, binding = 15) uniform samplerCube skyProbe;
 
-layout(push_constant) uniform PushConstants {
+// Bloco por draw no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
+layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec3 lightDir;
     float intensity;
     vec3 lightColor;

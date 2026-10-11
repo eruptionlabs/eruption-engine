@@ -53,7 +53,8 @@ layout(set = 1, binding = 0) uniform FrameUBO {
 // projecao vem por push constant, SEM jitter - o sprite e' desenhado depois do
 // FSR, direto na resolucao de display, e nao pode tremer com o jitter. O resto
 // do FrameUBO (tilt, mistura de normal) e' o mesmo do G-buffer.
-layout(push_constant) uniform LayerPush {
+// Bloco no set 3 (PushRing, UBO de offset dinamico): 160 B passa dos 128 de push constant.
+layout(std140, set = 3, binding = 0) uniform LayerPush {
     mat4 p_view;
     mat4 p_proj;
     vec4 p_sizes;   // xy = resolucao de render, zw = resolucao de display

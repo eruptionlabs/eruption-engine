@@ -35,14 +35,14 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
+// 96 B (sem a matriz model e o uvTranslateRot, que nenhum shader lia): cabe
+// nos 128 B de push constant garantidos (GPU de celular).
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
-    mat4 model;
     float alpha;
     float metallicScale;
     float roughnessScale;
     float _pad;
-    vec4 uvTranslateRot;
     vec4 uvScale;
 } push;
 

@@ -25,7 +25,8 @@ layout(set = 2, binding = 0) uniform sampler2D u_depth;   // depth do G-buffer (
 layout(set = 2, binding = 1) uniform sampler2D u_lit;     // imagem iluminada (render, HDR linear)
 layout(set = 2, binding = 2) uniform sampler2D u_albedo;  // albedo do G-buffer (render)
 
-layout(push_constant) uniform LayerPush {
+// Bloco no set 3 (PushRing, UBO de offset dinamico): 160 B passa dos 128 de push constant.
+layout(std140, set = 3, binding = 0) uniform LayerPush {
     mat4 p_view;
     mat4 p_proj;
     vec4 p_sizes;   // xy = resolucao de render, zw = resolucao de display

@@ -32,7 +32,8 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     vec4 ambientGround;
 } lights;
 
-layout(push_constant) uniform PushConstants {
+// Bloco por draw no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
+layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec3 lightPos;
     float radius;
     vec3 lightColor;
