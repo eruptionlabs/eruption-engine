@@ -125,6 +125,7 @@ struct ModelNode {
     // Texture references (resolved by the adapter)
     std::vector<std::string> textureNames;    // per-node names (e.g. v2.3+)
     std::vector<std::string> pbrTextureNames; // original material names for PBR map lookup
+    std::vector<std::string> emissiveTextureNames; // paralelo a textureNames; "" = sem emissiva
     std::vector<uint32_t> textureIds;         // indices into ModelAsset::textures
 };
 

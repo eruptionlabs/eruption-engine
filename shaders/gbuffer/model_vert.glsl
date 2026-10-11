@@ -19,6 +19,7 @@ layout(location = 14) in float inEmissiveStrength;
 layout(location = 15) in uvec2 inSplatTex;
 layout(location = 16) in uvec2 inSplatTex2;
 layout(location = 17) in uint inBlendMaskIndex2;
+layout(location = 18) in uint inEmissiveIndex;
 
 layout(location = 0) out vec3 outWorldPos;
 layout(location = 1) out vec2 outTexCoord;
@@ -482,7 +483,9 @@ void main() {
     outNormal = worldNormal;
     
     outTexIndex = inTexIndex;
-    outMatId = inMatId;
+    // matId usa 16 bits (bit 15 = costura); os 16 de cima levam o slot da
+    // textura emissiva ate' o fragment sem gastar mais uma varying.
+    outMatId = inMatId | (inEmissiveIndex << 16u);
     outPbrIndex = inPbrIndex;
     outNormalIndex = inNormalIndex;
     outBlendTexIndex = inBlendTexIndex;

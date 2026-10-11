@@ -300,7 +300,7 @@ bool SpherePreview::createPipeline() {
     VkVertexInputBindingDescription bindingDesc{};
     bindingDesc.binding = 0; bindingDesc.stride = sizeof(TerrainVertex);
     bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    std::vector<VkVertexInputAttributeDescription> attribs(18);
+    std::vector<VkVertexInputAttributeDescription> attribs(19);
     attribs[0]  = {0,  0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TerrainVertex, position)};
     attribs[1]  = {1,  0, VK_FORMAT_R32G32_SFLOAT,    offsetof(TerrainVertex, texCoord)};
     attribs[2]  = {2,  0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TerrainVertex, normal)};
@@ -319,6 +319,7 @@ bool SpherePreview::createPipeline() {
     attribs[15] = {15, 0, VK_FORMAT_R32G32_UINT,      offsetof(TerrainVertex, splatTex01)};
     attribs[16] = {16, 0, VK_FORMAT_R32G32_UINT,      offsetof(TerrainVertex, splatTex45)};
     attribs[17] = {17, 0, VK_FORMAT_R16_UINT,         offsetof(TerrainVertex, blendMaskIndex2)};
+    attribs[18] = {18, 0, VK_FORMAT_R16_UINT,         offsetof(TerrainVertex, emissiveIndex)};
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertexInput.vertexBindingDescriptionCount = 1; vertexInput.pVertexBindingDescriptions = &bindingDesc;

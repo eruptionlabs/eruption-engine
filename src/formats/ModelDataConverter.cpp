@@ -73,6 +73,7 @@ ModelNode convertNode(const ModelFileNode& node) {
 
     n.textureNames = node.textureNames;
     n.pbrTextureNames = node.pbrTextureNames;
+    n.emissiveTextureNames = node.emissiveTextureNames;
     n.textureIds = node.textureIds;
 
     return n;

@@ -827,6 +827,16 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
         imageNames.push_back(name);
     }
 
+    // Textura emissiva de cada material (glTF emissiveTexture), pelo mesmo
+    // nome de imagem da cor base. "" = sem emissiva.
+    std::vector<std::string> materialEmissiveName(gltf.materials.size());
+    for (size_t mi = 0; mi < gltf.materials.size(); ++mi) {
+        const int texIdx = gltf.materials[mi].emissiveTexture.index;
+        if (texIdx < 0 || texIdx >= static_cast<int>(gltf.textures.size())) continue;
+        const int imgIdx = gltf.textures[texIdx].source;
+        if (imgIdx >= 0 && imgIdx < static_cast<int>(imageNames.size())) materialEmissiveName[mi] = imageNames[imgIdx];
+    }
+
     // Map each glTF material to its base-color embedded texture name.
     // Materials without a base-color texture get a 1x1 solid-color texture so
     // the renderer never has to fall back to an invalid/missing texture slot.
@@ -993,6 +1003,7 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
                 node.geometryShareIndex = ownerIt->second;
                 node.textureNames = owner.textureNames;
                 node.pbrTextureNames = owner.pbrTextureNames;
+                node.emissiveTextureNames = owner.emissiveTextureNames;
                 node.box = owner.box; // AABB local; a matriz do nó é aplicada depois
                 continue;
             }
@@ -1024,6 +1035,9 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
                 texNameToLocal[texName] = idx;
                 node.textureNames.push_back(texName);
                 node.pbrTextureNames.push_back(pbrName);
+                node.emissiveTextureNames.push_back(
+                    prim.material >= 0 && prim.material < static_cast<int>(materialEmissiveName.size())
+                        ? materialEmissiveName[prim.material] : std::string());
             } else {
                 // If the runtime albedo name already exists, keep the first PBR
                 // name we recorded; it should match the same material.
@@ -1047,6 +1061,7 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
             node.textureNames.push_back(texName);
             std::string pbrName = materialName(gltf, static_cast<int>(matIdx));
             node.pbrTextureNames.push_back(pbrName.empty() ? texName : pbrName);
+            node.emissiveTextureNames.push_back(std::string());
             return idx;
         };
 
@@ -1363,6 +1378,7 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
                 if (cand.perVertexTexIds.size() != node.perVertexTexIds.size()) continue;
                 if (cand.normals.size() != node.normals.size()) continue;
                 if (cand.textureNames != node.textureNames) continue; // material conta
+                if (cand.emissiveTextureNames != node.emissiveTextureNames) continue;
                 if (std::memcmp(cand.vertices.data(), node.vertices.data(),
                                 node.vertices.size() * sizeof(Vec3)) != 0) continue;
                 if (!node.indices.empty() &&
