@@ -1409,7 +1409,9 @@ private:
     bool  m_autoExposureEnabled = true;
     float m_autoExposureKey = 1.55f;  // ~= noon light budget -> x1.0 at noon
     float m_autoExposureSpeed = 2.0f; // adaptation rate (1/s)
-    float m_autoExposureMin = 0.75f;
+    // Piso 1,0: a exposicao nao escurece abaixo do neutro. Em cena clara
+    // (neve, ceu) ela descia a 0,75 e afundava as sombras (autor 2026-10-11).
+    float m_autoExposureMin = 1.0f;
     float m_autoExposureMax = 2.0f;
     float m_autoExposureCurrent = 1.0f;
     float m_normalSmoothing = 0.0f;   // mip bias on normal-map reads; 0 keeps normal aligned 1:1 with albedo
