@@ -382,9 +382,19 @@ void android_main(android_app* app) {
             if (!line.empty()) args.push_back(line);
     }
 
-    // A janela nativa chega depois do primeiro ciclo de eventos.
-    while (!app->window && !app->destroyRequested) pumpEvents(100);
+    // A janela nativa chega depois do primeiro ciclo de eventos. O manifesto
+    // pede paisagem, mas o app pode abrir em retrato e o sistema gira logo
+    // depois, destruindo a primeira janela: iniciar o Vulkan nela travava o
+    // motor (S24). Espera a janela em paisagem, ou 3 s para quem nao gira.
+    const auto waitStart = std::chrono::steady_clock::now();
+    while (!app->destroyRequested) {
+        pumpEvents(50);
+        if (!app->window) continue;
+        if (windowW() >= windowH()) break;
+        if (std::chrono::steady_clock::now() - waitStart > std::chrono::seconds(3)) break;
+    }
     if (app->destroyRequested) return;
+    g_window.shouldClose = false; // o TERM_WINDOW da janela em retrato nao fecha o jogo
 
     std::vector<char*> argv;
     for (std::string& a : args) argv.push_back(a.data());
