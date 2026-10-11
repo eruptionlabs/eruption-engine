@@ -240,7 +240,6 @@ void main() {
     float farPlane      = ubo.waterLevelAndPlanes.z;
     float waterLevel    = ubo.waterLevelAndPlanes.x;
     vec2  viewport      = ubo.screenSize.xy;
-    float cameraPitch   = ubo.screenSize.z;
 
     vec3  baseDeep      = ubo.baseColorDeep.rgb;
     vec3  baseShallow   = ubo.baseColorShallow.rgb;
@@ -321,9 +320,12 @@ void main() {
     float cosTheta = clamp(dot(viewDir, perturbedNormal), 0.0, 1.0);
     float fresnel = F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 
-    // Pitch-based reflectivity: low pitch (looking down) = less reflection
-    float pitchBlend = clamp(abs(cameraPitch) / 1.57, 0.0, 1.0); // 0=top, 1=horizontal
-    float reflAmount = fresnel * reflectivity * (0.3 + 0.7 * pitchBlend);
+    // Fresnel com F0 artistico: o fisico (0,02) some na camera de diorama, que
+    // olha a agua de cima, e a agua parecia sem reflexo nenhum. reflectivity
+    // leva o F0 de 0,02 (fisico) a 0,25; o raso-rasante continua indo a 1.
+    float F0art = mix(F0, 0.25, reflectivity);
+    float reflAmount = F0art + (1.0 - F0art) * pow(1.0 - cosTheta, 5.0);
+    reflAmount *= step(0.001, reflectivity);
     // Rain flattens and dims reflections; storm nearly kills specular mirror
     reflAmount *= (1.0 - rainIntensity * 0.5) * (1.0 - stormDarken * 0.7);
 
@@ -382,8 +384,15 @@ void main() {
             vec2 uv = ndc.xy * 0.5 + 0.5;
             if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
 
+            // Acerto pela DISTANCIA a' camera em unidades de mundo (a
+            // profundidade do buffer nao e' linear: a folga fixa de 0,05 nela
+            // nao acertava nada perto e acertava errado longe).
             float sceneDepth = texture(u_textures[nonuniformEXT(depthTexSlot)], uv).r;
-            if (ndc.z > sceneDepth && ndc.z - sceneDepth < 0.05) {
+            if (sceneDepth >= 1.0) continue; // ceu: segue o raio
+            vec3 scenePos = reconstructWorldPos(uv, sceneDepth);
+            float rayDist = length(rayPos - ubo.cameraPos.xyz);
+            float sceneDist = length(scenePos - ubo.cameraPos.xyz);
+            if (rayDist > sceneDist && rayDist - sceneDist < stepSize * 1.5) {
                 ssrColor = texture(u_textures[nonuniformEXT(screenTexSlot)], uv).rgb;
                 ssrHit = 1.0 - float(i) / float(ssrSteps); // fade with distance
                 break;
@@ -472,7 +481,7 @@ void main() {
 
     // ---- Composition ----
     vec3 color = mix(litWater, background, transparency);
-    color += reflectionColor * reflAmount;
+    color = mix(color, reflectionColor, clamp(reflAmount, 0.0, 1.0));
     color += sunSpecular;
     color += causticsColor;
     color = mix(color, foamColor, totalFoam);

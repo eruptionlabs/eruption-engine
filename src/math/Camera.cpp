@@ -62,6 +62,9 @@ void Camera::pan(float dx, float dy) {
 }
 
 void Camera::zoom(float factor) {
+    // Fator <= 0 (rolagem grande demais num quadro, p.ex. pinca rapida no
+    // celular) invertia ou zerava a distancia e a camera pulava longe.
+    factor = std::clamp(factor, 0.5f, 2.0f);
     m_zoomLevel *= factor;
     if (m_zoomLevel < 0.1f) m_zoomLevel = 0.1f;
     if (m_zoomLevel > 10.0f) m_zoomLevel = 10.0f;

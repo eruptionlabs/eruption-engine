@@ -72,7 +72,7 @@
       }
     ],
     "tessellation_enabled": true,
-    "tessellation_amplitude": 2.5,
+    "tessellation_amplitude": 1.25,
     "tessellation_curve": [
       {
         "x": 0.0,
