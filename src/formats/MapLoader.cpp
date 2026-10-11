@@ -326,6 +326,7 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
                     fx.rotationDeg = Vec3(e["rot"][0].get<float>(), e["rot"][1].get<float>(), e["rot"][2].get<float>());
                 if (e.contains("scale")) fx.scale = std::max(e["scale"].get<float>(), 0.001f);
                 if (e.contains("enabled")) fx.enabled = e["enabled"].get<bool>();
+                if (e.contains("nightOnly")) fx.nightOnly = e["nightOnly"].get<bool>();
                 map.effects.push_back(fx);
             }
         }

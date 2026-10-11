@@ -901,6 +901,15 @@ private:
     // Particulas e efeitos (GPU). Texturas das folhas de quadros: do motor,
     // liberadas no shutdown.
     VfxSystem m_vfx;
+    // Efeitos do mapa com "nightOnly": nascem ao anoitecer e param de manha
+    // junto com as luzes (updateNightLights). id 0 = apagado.
+    struct NightEffect {
+        std::string name;
+        Mat4 transform;
+        uint32_t id = 0;
+        bool failed = false;
+    };
+    std::vector<NightEffect> m_nightEffects;
     // Metro -> unidade do mundo para os efeitos quando o mapa nao diz (o
     // personagem anda ~60 u/s e a arvore grande tem ~250 u: ~16 u por metro).
     static constexpr float kVfxUnitsPerMeter = 16.0f;

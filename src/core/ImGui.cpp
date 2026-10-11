@@ -317,6 +317,16 @@ void Engine::updateNightLights() {
     for (auto& pl : m_deferredLighting.getPointLights()) {
         if (pl.nightOnly) pl.enabled = isNight;
     }
+    for (auto& ne : m_nightEffects) {
+        if (isNight && ne.id == 0 && !ne.failed) {
+            ne.id = m_vfx.spawn(ne.name, ne.transform);
+            ne.failed = ne.id == 0;
+            if (ne.failed) ERUPTION_LOG_WARN("[VFX] efeito noturno '%s' nao tocou", ne.name.c_str());
+        } else if (!isNight && ne.id != 0) {
+            m_vfx.stop(ne.id);
+            ne.id = 0;
+        }
+    }
 }
 
 void Engine::drawLightingControls() {

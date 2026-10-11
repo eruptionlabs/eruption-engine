@@ -615,6 +615,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     // ERUPTION_TEST_NO_VFX=1 (teste): mapa sem os efeitos do .env (imagens
     // de referencia anteriores aos efeitos continuam comparaveis).
     static const bool kNoMapVfx = std::getenv("ERUPTION_TEST_NO_VFX") != nullptr;
+    m_nightEffects.clear();
     for (const auto& fx : m_currentMap->effects) {
         if (!fx.enabled || kNoMapVfx) continue;
         Mat4 t = glm::translate(Mat4(1.0f), fx.position);
@@ -622,6 +623,10 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
         t = glm::rotate(t, glm::radians(fx.rotationDeg.x), Vec3(1, 0, 0));
         t = glm::rotate(t, glm::radians(fx.rotationDeg.z), Vec3(0, 0, 1));
         t = glm::scale(t, Vec3(fx.scale));
+        if (fx.nightOnly) {
+            m_nightEffects.push_back({fx.name, t});
+            continue;
+        }
         if (!m_vfx.spawn(fx.name, t)) ERUPTION_LOG_WARN("[VFX] efeito do mapa '%s' nao tocou", fx.name.c_str());
     }
     if (const char* tv = std::getenv("ERUPTION_TEST_VFX")) {
