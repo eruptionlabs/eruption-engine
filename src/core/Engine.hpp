@@ -483,6 +483,11 @@ public:
     float m_demoStartTime = -1.0f;
     bool m_demoPinStats = false;   // painel F3 fixo no canto direito (video)
     bool m_demoHidePanels = false; // esconde Shortcuts/Control Panel/minimapa (video)
+    // Painel de toque (ERUPTION_TOUCH_HUD=<px>): hora e clima sem teclado, para
+    // celular. Fonte propria no tamanho pedido; nullptr = desligado.
+    ImFont* m_touchHudFont = nullptr;
+    float m_touchHudDayScale = 1.0f; // velocidade do dia antes de pausar
+    void drawTouchHud();
     std::string m_demoLabel;       // rotulo grande no rodape (ver runDemoTimeline: label=)
     float m_demoLabelUntil = -1.0f;// segundos do roteiro ate' quando o rotulo fica
     RenderEffect* renderEffect(size_t i) { return m_renderEffects[i].get(); }

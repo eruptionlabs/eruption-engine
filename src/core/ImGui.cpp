@@ -311,6 +311,41 @@ void Engine::drawWeatherTab() {
 // Single source of truth for the Lighting controls. Drawn in BOTH the
 // F2 (Iterative Effects > Lighting) and F9 (A/B Test > Lighting) tabs so the
 // same sliders appear and edit the same members wherever the user looks.
+// Painel de toque: hora do dia, relogio parado/andando e clima. Fica no
+// canto de baixo; o resto da tela continua sendo da camera.
+void Engine::drawTouchHud() {
+    ImGui::PushFont(m_touchHudFont);
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float pad = m_touchHudFont->FontSize * 0.5f;
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + pad, vp->WorkPos.y + vp->WorkSize.y - pad), ImGuiCond_Always,
+                            ImVec2(0.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.35f);
+    ImGui::Begin("##toque", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    float hour = m_dayNightCycle.timeOfDay() * 24.0f;
+    ImGui::SetNextItemWidth(m_touchHudFont->FontSize * 12.0f);
+    if (ImGui::SliderFloat("##hora", &hour, 0.0f, 24.0f, "%.1f h")) m_dayNightCycle.setTimeOfDay(hour / 24.0f);
+    ImGui::SameLine();
+    const bool paused = m_dayNightCycle.timeScale() == 0.0f;
+    if (ImGui::Button(paused ? "Andar" : "Parar")) {
+        if (paused) {
+            m_dayNightCycle.setTimeScale(m_touchHudDayScale);
+        } else {
+            m_touchHudDayScale = m_dayNightCycle.timeScale();
+            m_dayNightCycle.setTimeScale(0.0f);
+        }
+    }
+    static const char* const kWeathers[][2] = {{"Limpo", "clear"}, {"Neve", "snowy"}, {"Chuva", "rainy"}};
+    for (const auto& w : kWeathers) {
+        if (ImGui::Button(w[0])) applyWeatherTypeFull(weatherTypeFromName(w[1]), 1.0f);
+        ImGui::SameLine();
+    }
+    ImGui::NewLine();
+    ImGui::End();
+    ImGui::PopFont();
+}
+
 void Engine::updateNightLights() {
     // Noite pela luz do sol, nao pelo relogio: e' o mesmo criterio do vidro
     // emissivo (model_frag: smoothstep 0,2..0,8 da intensidade do sol), entao
@@ -547,6 +582,7 @@ void Engine::renderImGui() {
 
     // HUD do jogo e minimapa: à parte dos painéis de depuração (F4 só tira estes).
     if (!m_editor && m_showGameHud) drawGameHud();
+    if (m_touchHudFont && !m_editor) drawTouchHud();
 
     // ERUPTION_FPS_OVERLAY=<altura em px> (demonstracao): FPS grande no
     // canto, media de meio segundo. Para mostrar o jogo rodando ao vivo.

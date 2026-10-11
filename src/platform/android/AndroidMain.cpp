@@ -332,7 +332,11 @@ void ImGui_ImplGlfw_NewFrame() {
 }
 void ImGui_ImplGlfw_KeyCallback(GLFWwindow*, int, int, int, int) {}
 void ImGui_ImplGlfw_MouseButtonCallback(GLFWwindow*, int button, int action, int) {
-    if (button >= 0 && button < 3) ImGui::GetIO().AddMouseButtonEvent(button, action == GLFW_PRESS);
+    // Para o motor, um dedo e' o botao direito (gira a camera); para o ImGui,
+    // qualquer toque de um dedo e' o esquerdo, senao nenhum controle da tela
+    // responde. Dois dedos (botao do meio) ficam so' com a camera.
+    if (button == GLFW_MOUSE_BUTTON_RIGHT || button == GLFW_MOUSE_BUTTON_LEFT)
+        ImGui::GetIO().AddMouseButtonEvent(0, action == GLFW_PRESS);
 }
 void ImGui_ImplGlfw_CursorPosCallback(GLFWwindow*, double x, double y) {
     ImGui::GetIO().AddMousePosEvent(static_cast<float>(x), static_cast<float>(y));

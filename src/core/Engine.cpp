@@ -2318,6 +2318,11 @@ void Engine::initImGui() {
         ImFontConfig cjkCfg; cjkCfg.MergeMode = true; cjkCfg.SizePixels = 14.0f; cjkCfg.OversampleH = 1; cjkCfg.OversampleV = 1;
         io.Fonts->AddFontFromFileTTF("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 14.0f, &cjkCfg, koreanRanges);
     }
+    if (const char* e = std::getenv("ERUPTION_TOUCH_HUD")) {
+        ImFontConfig hudCfg;
+        hudCfg.SizePixels = std::max(14.0f, static_cast<float>(std::atof(e)));
+        m_touchHudFont = io.Fonts->AddFontDefault(&hudCfg);
+    }
     // Contador de FPS grande (ERUPTION_FPS_OVERLAY): fonte propria no tamanho
     // pedido, a ULTIMA do atlas. Esticar a de 14 px apagava os tracos.
     if (const char* e = std::getenv("ERUPTION_FPS_OVERLAY")) {
