@@ -1091,21 +1091,27 @@ if (!m_ctx) return;
         compositeSource = m_weatherView;
     }
 
-    // Weather particle pass (Medium/High tier) rendered over the overlay copy
-    if (weatherActive && settings.weatherTier != WeatherTier::Mobile) {
+    // Weather particle pass (Medium/High tier) rendered over the overlay copy,
+    // or over the DoF result (weatherAfterDoF) - same pass, other target.
+    const bool particlesAfterDof = settings.enableDoF && settings.weatherAfterDoF;
+    auto drawWeatherParticles = [&](VkImage target, VkImageView targetView, VkImageView sceneInput) {
         m_weatherRenderer.setTier(settings.weatherTier);
         m_weatherRenderer.setCloudAltitudeTexture(cloudAltitudeView, cloudAltitudeSampler);
         m_weatherRenderer.setCloudAltitudeRange(cloudBottom, cloudTop);
         m_weatherRenderer.setCloudScale(cloudScale);
 
-        barrierToColorAttach(cmd, m_ctx, m_weatherImage);
+        barrierToColorAttach(cmd, m_ctx, target);
         m_ctx->writeTimestamp(cmd, 34, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-        m_weatherRenderer.render(cmd, compositeSource, m_weatherView, m_width, m_height, *weather, wrParams);
+        m_weatherRenderer.render(cmd, sceneInput, targetView, m_width, m_height, *weather, wrParams);
         m_ctx->writeTimestamp(cmd, 35, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         msParticles = m_ctx->timestampDeltaMs(34, 35);
         Profiler::addGpuTime("Weather Particles", msParticles);
         lap(1);
-        barrierToShaderRead(cmd, m_ctx, m_weatherImage);
+        barrierToShaderRead(cmd, m_ctx, target);
+    };
+    const bool drawParticles = weatherActive && settings.weatherTier != WeatherTier::Mobile;
+    if (drawParticles && !particlesAfterDof) {
+        drawWeatherParticles(m_weatherImage, m_weatherView, compositeSource);
         compositeSource = m_weatherView;
     }
 
@@ -1192,6 +1198,9 @@ if (!m_ctx) return;
         compositeSource = m_dofView;
     }
     m_ctx->writeTimestamp(cmd, 41, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    // Gotas nitidas por cima do desfoque. A cena de entrada (refracao) e' a
+    // de antes do DoF: ler e escrever m_dofImage no mesmo passe nao pode.
+    if (drawParticles && particlesAfterDof) drawWeatherParticles(m_dofImage, m_dofView, hdrInput);
     msDof = m_ctx->timestampDeltaMs(40, 41);
     // O rotulo do passe segue "DoF / Tilt-Shift" DE PROPOSITO, mesmo depois
     // de o tilt-shift ter sido apagado: perf/breakdown_lib.py,
@@ -1494,6 +1503,7 @@ void PostProcessor::PostSettings::loadFromJson(const nlohmann::json& j) {
     cocZoomFactor = j.value("coc_zoom_factor", cocZoomFactor);
     cocEnableForeground = j.value("coc_enable_foreground", cocEnableForeground);
     visualizeCoC = j.value("visualize_coc", visualizeCoC);
+    weatherAfterDoF = j.value("weather_after_dof", weatherAfterDoF);
     debugRainOcclusion = j.value("debug_rain_occlusion", debugRainOcclusion);
     debugRainRegions = j.value("debug_rain_regions", debugRainRegions);
     debugSplashArea = j.value("debug_splash_area", debugSplashArea);

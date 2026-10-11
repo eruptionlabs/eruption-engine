@@ -545,6 +545,9 @@ bool Engine::init(int width, int height, const std::string& title) {
 
     m_postConfig.load("data/postprocess.json");
     m_postSettings.loadFromJson(m_postConfig.root());
+    // ERUPTION_TEST_RAIN_OCCLUSION=1: mapa de oclusao das particulas de clima
+    // (cor = motivo do descarte), o mesmo do checkbox do painel.
+    if (std::getenv("ERUPTION_TEST_RAIN_OCCLUSION")) m_postSettings.debugRainOcclusion = true;
 
     m_graphicsConfig.load("data/graphics.json");
     // Quais formatos de bloco esta GPU sabe AMOSTRAR. Maxwell (930M, o alvo)
@@ -2011,6 +2014,14 @@ void Engine::applyGraphicsPreset() {
 
     if (p.contains("weather_tier")) {
         const std::string tier = p["weather_tier"];
+        m_postSettings.weatherTier = (tier == "mobile") ? WeatherTier::Mobile
+                                   : (tier == "medium") ? WeatherTier::Medium
+                                                        : WeatherTier::High;
+    }
+    // ERUPTION_TEST_WEATHER_TIER=mobile|medium|high: o preset low desliga as
+    // particulas de clima (mobile); a demo no celular liga sem trocar o resto.
+    if (const char* e = std::getenv("ERUPTION_TEST_WEATHER_TIER")) {
+        const std::string tier = e;
         m_postSettings.weatherTier = (tier == "mobile") ? WeatherTier::Mobile
                                    : (tier == "medium") ? WeatherTier::Medium
                                                         : WeatherTier::High;

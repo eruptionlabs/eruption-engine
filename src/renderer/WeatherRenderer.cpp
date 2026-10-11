@@ -1844,7 +1844,11 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
             sa = ov[4]; sb = ov[5]; spf = ov[6];
         }
         tune[0] = Vec4(sw, sl, se, st);
-        tune[1] = Vec4(sa, sb, spf, 0.0f);
+        static const float kMinPx = [] {
+            const char* e = getenv("ERUPTION_TEST_PRECIP_MIN_PX");
+            return e ? static_cast<float>(std::atof(e)) : 0.0f;
+        }();
+        tune[1] = Vec4(sa, sb, spf, kMinPx); // w: piso em px (ERUPTION_TEST_PRECIP_MIN_PX)
     }
     VkDescriptorBufferInfo tuneBufInfo{};
     tuneBufInfo.buffer = m_tuneBuffer;
