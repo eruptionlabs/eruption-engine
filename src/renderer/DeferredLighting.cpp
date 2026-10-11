@@ -917,41 +917,9 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
 
     uint32_t activeLights = 0;
     const std::vector<PointLight>& lightList = allPointLights();
-    // O UBO leva 128 luzes. Antes entravam as 128 PRIMEIRAS da lista e o resto
-    // nunca acendia (mapa com 270 lampioes: metade apagada, inclusive a que a
-    // camera estava olhando). Com mais de 128: so' as que tocam o frustum, as
-    // mais perto da camera primeiro (distancia menos o raio).
-    constexpr uint32_t kMaxUboLights = 128;
-    m_lightPick.clear();
-    {
-        const Mat4 vp = camera.viewProjNoJitter();
-        Vec4 planes[6];
-        for (int k = 0; k < 3; ++k) {
-            const Vec4 rk(vp[0][k], vp[1][k], vp[2][k], vp[3][k]);
-            const Vec4 r3(vp[0][3], vp[1][3], vp[2][3], vp[3][3]);
-            planes[k * 2] = r3 + rk;
-            planes[k * 2 + 1] = r3 - rk;
-        }
-        planes[4] = Vec4(vp[0][2], vp[1][2], vp[2][2], vp[3][2]); // perto: z >= 0 (Vulkan)
-        const Vec3 eye = camera.position();
-        for (uint32_t i = 0; i < (uint32_t)lightList.size(); ++i) {
-            const auto& pl = lightList[i];
-            if (!pl.enabled) continue;
-            bool inside = true;
-            for (const Vec4& pn : planes) {
-                const float len = glm::length(Vec3(pn));
-                if (glm::dot(Vec3(pn), pl.position) + pn.w < -pl.radius * len) { inside = false; break; }
-            }
-            if (!inside) continue;
-            m_lightPick.emplace_back(glm::length(pl.position - eye) - pl.radius, i);
-        }
-        if (m_lightPick.size() > kMaxUboLights) {
-            std::nth_element(m_lightPick.begin(), m_lightPick.begin() + kMaxUboLights, m_lightPick.end());
-            m_lightPick.resize(kMaxUboLights);
-        }
-    }
-    for (const auto& pick : m_lightPick) {
-        const auto& pl = lightList[pick.second];
+    for (uint32_t i = 0; i < (uint32_t)lightList.size() && activeLights < 128; i++) {
+        const auto& pl = lightList[i];
+        if (!pl.enabled) continue;
 
         ubo.pointLights[activeLights] = Vec4(pl.position, pl.radius);
         
