@@ -210,8 +210,10 @@ int32_t onInput(android_app*, AInputEvent* ev) {
             if (g_touch.fingers >= 2 && n >= 2) {
                 const float x1 = AMotionEvent_getX(ev, 1), y1 = AMotionEvent_getY(ev, 1);
                 const float d = std::hypot(x1 - x0, y1 - y0);
-                if (g_touch.pinch > 0.0f)
-                    pushInput({InputEvent::Scroll, 0.0, static_cast<double>((d - g_touch.pinch) / 40.0f)});
+                // Rolagem que da' zoom igual a' razao da pinca (o motor faz
+                // zoom(1 + rolagem * 0,1)): proporcional, nunca negativo.
+                if (g_touch.pinch > 1.0f && d > 1.0f)
+                    pushInput({InputEvent::Scroll, 0.0, static_cast<double>((d / g_touch.pinch - 1.0f) / 0.1f)});
                 g_touch.pinch = d;
             } else if (g_touch.fingers == 1) {
                 if (std::hypot(x0 - g_touch.downX, y0 - g_touch.downY) > 12.0f) g_touch.moved = true;
@@ -294,10 +296,21 @@ int glfwWindowShouldClose(GLFWwindow* w) { return (w && w->shouldClose) || g_clo
 void glfwSetWindowShouldClose(GLFWwindow* w, int v) { if (w) w->shouldClose = v != 0; }
 void glfwPollEvents() {
     // Roda na thread do motor: aplica o toque que a thread do Android enfileirou.
+    // Aperto que vem depois de o cursor pular para o dedo fica para o quadro
+    // seguinte: no mesmo quadro o motor via o salto com o botao apertado e
+    // girava a camera para o outro lado.
     std::vector<InputEvent> events;
     {
         std::lock_guard<std::mutex> lock(g_inputMutex);
-        events.swap(g_inputQueue);
+        size_t n = 0;
+        bool moved = false;
+        for (; n < g_inputQueue.size(); ++n) {
+            const InputEvent& e = g_inputQueue[n];
+            if (e.kind == InputEvent::Button && e.action == GLFW_PRESS && moved) break;
+            if (e.kind == InputEvent::Cursor) moved = true;
+        }
+        events.assign(g_inputQueue.begin(), g_inputQueue.begin() + static_cast<std::ptrdiff_t>(n));
+        g_inputQueue.erase(g_inputQueue.begin(), g_inputQueue.begin() + static_cast<std::ptrdiff_t>(n));
     }
     for (const InputEvent& e : events) {
         switch (e.kind) {

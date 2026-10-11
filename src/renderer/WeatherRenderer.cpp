@@ -1547,7 +1547,11 @@ void WeatherRenderer::updateSplashesForWeather(const WeatherParams& weather, con
     // paths 2026-09-02.) Main thread only.
     static std::vector<uint32_t> cloudCounts;
     cloudCounts.assign(followerCount, 0);
-    if (followerCount > 0) {
+    // Neve nao respinga: as nuvens de neve sao seguidores com chuva (para o
+    // floco cair so' debaixo de cada nuvem) e herdavam as coroas de gota.
+    const bool snowOnly = weather.snowIntensity > 0.001f && weather.rainIntensity <= 0.001f;
+    if (snowOnly) globalCount = 0;
+    if (followerCount > 0 && !snowOnly) {
         // Pool scales with the weather's own rain amount (STATIC preset knob —
         // anything animated would rebuild the buffer every frame): drizzle
         // (0.10) splashes a little, thunderstorm (0.40) a lot — heavier rain,
@@ -2139,6 +2143,9 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     // weather_overlay.frag (cloudWindOffset.z).
     static const bool kSplashViz = std::getenv("ERUPTION_TEST_SPLASH_VIZ") != nullptr;
     const bool splashViz = kSplashViz || params.debugSplashArea > 0.5f;
+    // Opacidade da coroa do preset do clima (rain_splash_opacity, 0,25 nos
+    // tipos de chuva). O valor existia e nao era usado: a coroa saia a 100%.
+    const float splashOpacity = glm::clamp(weather.rainSplashOpacity * 2.0f, 0.0f, 1.0f);
     if (m_tier == WeatherTier::High && m_splashCount > 0) {
         // Splash placement anchors to the character (orbit target), not the
         // camera: the suppress-mode global group's origins are relative
@@ -2162,7 +2169,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
                 Vec3 cmax = m_cloudCoverageMap->worldMax();
                 push.cloudWorldBounds = Vec4(cmin.x, cmin.z, cmax.x - cmin.x, cmax.z - cmin.z);
             }
-            push.cloudParams = Vec4(m_cloudLayer, m_cloudThreshold, m_cloudCoverage, 1.0f);
+            push.cloudParams = Vec4(m_cloudLayer, m_cloudThreshold, m_cloudCoverage, splashOpacity);
             push.cloudRange = Vec4(m_cloudBottom, m_cloudTop, m_cloudTop - m_cloudBottom, m_cloudScale);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1,
                                     &baseSet, 0, nullptr);
@@ -2179,7 +2186,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
             push.params.z = 2.0f; // follower-relative origins (drift with the cloud)
             push.params5 = Vec4(weather.rainShadowSoftness, 1.0e9f, f.covWind.x, f.covWind.y);
             push.cloudWorldBounds = f.covBounds;
-            push.cloudParams = Vec4(0.0f, m_cloudThreshold, 1.0f, 1.0f);
+            push.cloudParams = Vec4(0.0f, m_cloudThreshold, 1.0f, splashOpacity);
             push.cloudRange = Vec4(f.boxCenter.y, m_cloudTop, m_cloudTop - m_cloudBottom, m_cloudScale);
             // Debug splash area (params2.z = -1) reads these two to place/size
             // this cloud's spawn-region overlay; they otherwise hold stale
