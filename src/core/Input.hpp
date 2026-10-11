@@ -36,6 +36,12 @@ enum class MouseButton : uint8_t {
 class Input {
 public:
     static void init(GLFWwindow* window);
+    // Areas da tela que sao de interface (painel de toque): o toque que
+    // comeca dentro delas vai so' para o ImGui, nao gira a camera. Quem
+    // desenha a interface republica as areas a cada quadro.
+    static void clearUiTouchRects();
+    static void addUiTouchRect(float x0, float y0, float x1, float y1);
+    static bool inUiTouchRect(float x, float y);
     static void shutdown();
     static void update();
 

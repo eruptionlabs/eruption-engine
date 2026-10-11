@@ -311,11 +311,57 @@ void Engine::drawWeatherTab() {
 // Single source of truth for the Lighting controls. Drawn in BOTH the
 // F2 (Iterative Effects > Lighting) and F9 (A/B Test > Lighting) tabs so the
 // same sliders appear and edit the same members wherever the user looks.
+void Engine::setClassicMode(bool on) {
+    if (on == m_classic.on) return;
+    // Efeitos que o modo classico apaga: 1 GI, 2 bloom, 3 DoF, 4 luzes de
+    // ponto, 5 sombras (ver m_renderEffects).
+    static constexpr size_t kEffects[] = {1, 2, 3, 4, 5};
+    if (on) {
+        m_classic.usePbr = m_deferredLighting.usePbr();
+        m_classic.ssao = m_ssaoEnabled;
+        m_classic.normalMapScale = m_normalMapScale;
+        m_classic.timeOfDay = m_dayNightCycle.timeOfDay();
+        m_classic.timeScale = m_dayNightCycle.timeScale();
+        m_classic.weatherType = static_cast<int>(m_weatherSystem.currentType());
+        for (size_t k = 0; k < std::size(kEffects); ++k)
+            m_classic.effects[k] = kEffects[k] < m_renderEffects.size() && m_renderEffects[kEffects[k]]->isEnabled();
+        m_deferredLighting.setUsePbr(false);
+        m_ssaoEnabled = false;
+        m_normalMapScale = 0.0f;
+        m_dayNightCycle.setTimeOfDay(0.5f);
+        m_dayNightCycle.setTimeScale(0.0f);
+        applyWeatherTypeFull(WeatherType::Clear, 1.0f);
+        for (size_t idx : kEffects)
+            if (idx < m_renderEffects.size()) m_renderEffects[idx]->setEnabled(false);
+    } else {
+        m_deferredLighting.setUsePbr(m_classic.usePbr);
+        m_ssaoEnabled = m_classic.ssao;
+        m_normalMapScale = m_classic.normalMapScale;
+        m_dayNightCycle.setTimeOfDay(m_classic.timeOfDay);
+        m_dayNightCycle.setTimeScale(m_classic.timeScale);
+        applyWeatherTypeFull(static_cast<WeatherType>(m_classic.weatherType), 1.0f);
+        for (size_t k = 0; k < std::size(kEffects); ++k)
+            if (kEffects[k] < m_renderEffects.size()) m_renderEffects[kEffects[k]]->setEnabled(m_classic.effects[k]);
+    }
+    m_classic.on = on;
+}
+
 // Painel de toque: analogico de mover a camera no canto de baixo a' esquerda,
 // hora do dia, relogio parado/andando e clima no da direita. O resto da tela
 // continua sendo da camera (um dedo gira, pinca aproxima).
 void Engine::drawTouchHud() {
+    // ERUPTION_TEST_CLASSIC=1 (teste): abre ja' no modo classico (ERUPT OFF).
+    static bool s_classicHook = std::getenv("ERUPTION_TEST_CLASSIC") != nullptr;
+    if (s_classicHook) {
+        s_classicHook = false;
+        setClassicMode(true);
+    }
     ImGui::PushFont(m_touchHudFont);
+    Input::clearUiTouchRects();
+    const auto publishRect = [] {
+        const ImVec2 p = ImGui::GetWindowPos(), s = ImGui::GetWindowSize();
+        Input::addUiTouchRect(p.x, p.y, p.x + s.x, p.y + s.y);
+    };
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const float pad = m_touchHudFont->FontSize * 0.5f;
 
@@ -332,6 +378,7 @@ void Engine::drawTouchHud() {
         ImGui::Begin("##analogico", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
                          ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove);
+        publishRect();
         ImGui::SetCursorScreenPos(corner);
         ImGui::InvisibleButton("##pino", size);
         ImVec2 tilt(0.0f, 0.0f);
@@ -366,6 +413,8 @@ void Engine::drawTouchHud() {
     ImGui::Begin("##toque", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    publishRect();
+    ImGui::BeginDisabled(m_classic.on); // classico: dia e hora travados
     float hour = m_dayNightCycle.timeOfDay() * 24.0f;
     ImGui::SetNextItemWidth(m_touchHudFont->FontSize * 12.0f);
     if (ImGui::SliderFloat("##hora", &hour, 0.0f, 24.0f, "%.1f h")) m_dayNightCycle.setTimeOfDay(hour / 24.0f);
@@ -379,12 +428,49 @@ void Engine::drawTouchHud() {
             m_dayNightCycle.setTimeScale(0.0f);
         }
     }
+    ImGui::EndDisabled();
+    ImGui::BeginDisabled(m_classic.on);
     static const char* const kWeathers[][2] = {{"Limpo", "clear"}, {"Neve", "snowy"}, {"Chuva", "rainy"}};
     for (const auto& w : kWeathers) {
         if (ImGui::Button(w[0])) applyWeatherTypeFull(weatherTypeFromName(w[1]), 1.0f);
         ImGui::SameLine();
     }
     ImGui::NewLine();
+    ImGui::EndDisabled();
+    ImGui::End();
+
+    // Canto de cima a' direita: o liga/desliga de tudo e a telemetria.
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - pad, vp->WorkPos.y + pad), ImGuiCond_Always,
+                            ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.35f);
+    ImGui::Begin("##erupt", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    publishRect();
+    const bool on = !m_classic.on;
+    ImGui::PushStyleColor(ImGuiCol_Button, on ? ImVec4(0.10f, 0.55f, 0.20f, 0.90f) : ImVec4(0.65f, 0.12f, 0.10f, 0.90f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, on ? ImVec4(0.15f, 0.65f, 0.25f, 1.0f) : ImVec4(0.75f, 0.18f, 0.14f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, on ? ImVec4(0.08f, 0.45f, 0.16f, 1.0f) : ImVec4(0.55f, 0.10f, 0.08f, 1.0f));
+    const float bw = m_touchHudFont->FontSize * 7.5f;
+    if (ImGui::Button(on ? "ERUPT ON" : "ERUPT OFF", ImVec2(bw, m_touchHudFont->FontSize * 1.8f))) setClassicMode(on);
+    ImGui::PopStyleColor(3);
+    if (ImGui::Button(m_touchHudTelemetry ? "Telemetria -" : "Telemetria +", ImVec2(bw, 0.0f)))
+        m_touchHudTelemetry = !m_touchHudTelemetry;
+    if (m_touchHudTelemetry) {
+        // Mesmas contas do painel F3: GPU = soma dos passes cronometrados sem
+        // os agregados (Post Total e Lens Drops contem outros passes).
+        float gpuMs = 0.0f;
+        for (const auto& [n, ms] : Profiler::getAllGpuTimes())
+            if (n != "Post Total" && n.rfind("Lens Drops", 0) != 0) gpuMs += ms;
+        const float cpuMs = m_cpuAdvanceMs + m_cpuAppUpdateMs + m_cpuRenderMs + m_cpuTailMs;
+        const float frameMs = m_cpuFrameWallMs > 0.001f ? m_cpuFrameWallMs : m_frameTime;
+        ImGui::Text("%.0f FPS  %.1f ms", frameMs > 0.0f ? 1000.0f / frameMs : 0.0f, frameMs);
+        ImGui::Text("GPU %.1f ms", gpuMs);
+        ImGui::Text("CPU %.1f ms", cpuMs);
+        ImGui::Text("VRAM %.0f MB", deviceMemoryMb());
+        ImGui::Text("Render %ux%u", m_renderW, m_renderH);
+        ImGui::Text("Luzes %zu", m_deferredLighting.getPointLights().size());
+    }
     ImGui::End();
     ImGui::PopFont();
 }

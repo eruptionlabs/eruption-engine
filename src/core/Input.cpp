@@ -1,4 +1,5 @@
 #include "core/Input.hpp"
+#include <vector>
 #include <GLFW/glfw3.h>
 #include <imgui_impl_glfw.h>
 #include <cstring>
@@ -202,6 +203,20 @@ void Input::keyCallback(GLFWwindow* window, int key, int scancode, int action, i
         if (action == GLFW_PRESS) s_keys[key] = true;
         else if (action == GLFW_RELEASE) s_keys[key] = false;
     }
+}
+
+namespace {
+std::vector<glm::vec4> s_uiTouchRects; // x0, y0, x1, y1 em pixels da janela
+}
+
+void Input::clearUiTouchRects() { s_uiTouchRects.clear(); }
+
+void Input::addUiTouchRect(float x0, float y0, float x1, float y1) { s_uiTouchRects.emplace_back(x0, y0, x1, y1); }
+
+bool Input::inUiTouchRect(float x, float y) {
+    for (const glm::vec4& r : s_uiTouchRects)
+        if (x >= r.x && y >= r.y && x <= r.z && y <= r.w) return true;
+    return false;
 }
 
 void Input::mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {

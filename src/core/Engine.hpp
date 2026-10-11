@@ -488,6 +488,20 @@ public:
     ImFont* m_touchHudFont = nullptr;
     float m_touchHudDayScale = 1.0f; // velocidade do dia antes de pausar
     void drawTouchHud();
+    bool m_touchHudTelemetry = false; // painel de numeros ligado pelo botao
+    // Modo classico: luz fixa do jeito antigo (Blinn-Phong, sem relevo, sem
+    // sombra, GI, bloom, DoF, luzes de ponto nem SSAO), dia parado ao meio-dia
+    // e ceu limpo - para comparar com tudo ligado. Desligar restaura o estado
+    // de antes.
+    void setClassicMode(bool on);
+    bool classicMode() const { return m_classic.on; }
+    struct ClassicSaved {
+        bool on = false;
+        bool usePbr = true, ssao = true;
+        float normalMapScale = 1.0f, timeOfDay = 0.5f, timeScale = 1.0f;
+        int weatherType = 0;
+        bool effects[6] = {};
+    } m_classic;
     std::string m_demoLabel;       // rotulo grande no rodape (ver runDemoTimeline: label=)
     float m_demoLabelUntil = -1.0f;// segundos do roteiro ate' quando o rotulo fica
     RenderEffect* renderEffect(size_t i) { return m_renderEffects[i].get(); }
@@ -769,6 +783,8 @@ private:
     bool findEmbeddedAlbedoPixels(const std::string& name, std::vector<uint8_t>& outPixels,
                                   int& outW, int& outH, int& outChannels);
     void recordTelemetry();
+    // VRAM do processo: alocacoes VMA nas heaps locais da placa (MB).
+    double deviceMemoryMb() const;
     void renderLoadingProgress();
     void takeScreenshot(const std::string& filename);
     void readPostOutput(std::vector<float>& rgb, uint32_t& w, uint32_t& h);
