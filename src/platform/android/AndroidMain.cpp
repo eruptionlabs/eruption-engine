@@ -18,6 +18,7 @@
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
+#include "core/Input.hpp"
 
 #include <android/asset_manager.h>
 #include <android/log.h>
@@ -197,13 +198,12 @@ int32_t onInput(android_app*, AInputEvent* ev) {
             break;
         case AMOTION_EVENT_ACTION_POINTER_DOWN:
             if (n >= 2) {
+                // Dois dedos: so' pinca (zoom). Mover a camera e' pelo analogico.
                 g_touch.fingers = 2;
                 g_touch.moved = true;
                 setButton(GLFW_MOUSE_BUTTON_RIGHT, GLFW_RELEASE);
                 const float x1 = AMotionEvent_getX(ev, 1), y1 = AMotionEvent_getY(ev, 1);
                 g_touch.pinch = std::hypot(x1 - x0, y1 - y0);
-                setCursor((x0 + x1) * 0.5f, (y0 + y1) * 0.5f);
-                setButton(GLFW_MOUSE_BUTTON_MIDDLE, GLFW_PRESS);
             }
             break;
         case AMOTION_EVENT_ACTION_MOVE:
@@ -213,20 +213,17 @@ int32_t onInput(android_app*, AInputEvent* ev) {
                 if (g_touch.pinch > 0.0f)
                     pushInput({InputEvent::Scroll, 0.0, static_cast<double>((d - g_touch.pinch) / 40.0f)});
                 g_touch.pinch = d;
-                setCursor((x0 + x1) * 0.5f, (y0 + y1) * 0.5f);
             } else if (g_touch.fingers == 1) {
                 if (std::hypot(x0 - g_touch.downX, y0 - g_touch.downY) > 12.0f) g_touch.moved = true;
                 setCursor(x0, y0);
             }
             break;
         case AMOTION_EVENT_ACTION_POINTER_UP:
-            setButton(GLFW_MOUSE_BUTTON_MIDDLE, GLFW_RELEASE);
             g_touch.fingers = 1;
             break;
         case AMOTION_EVENT_ACTION_UP:
         case AMOTION_EVENT_ACTION_CANCEL: {
             setButton(GLFW_MOUSE_BUTTON_RIGHT, GLFW_RELEASE);
-            setButton(GLFW_MOUSE_BUTTON_MIDDLE, GLFW_RELEASE);
             const auto held = std::chrono::steady_clock::now() - g_touch.downT;
             if (action == AMOTION_EVENT_ACTION_UP && !g_touch.moved && held < std::chrono::milliseconds(300)) {
                 setButton(GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS);
@@ -309,10 +306,31 @@ void glfwPollEvents() {
                 g_window.cursorY = e.y;
                 if (g_window.cursorCb) g_window.cursorCb(&g_window, e.x, e.y);
                 break;
-            case InputEvent::Button:
+            case InputEvent::Button: {
+                // Toque que comeca sobre a interface (painel, analogico) e' so'
+                // dela: vai para o ImGui e nao chega ao motor, que giraria a
+                // camera. O clique de toque curto que vem depois tambem e' dela.
+                static bool uiTouch = false, uiTap = false;
+                if (e.button == GLFW_MOUSE_BUTTON_RIGHT && e.action == GLFW_PRESS)
+                    uiTouch = eruption::Input::inUiTouchRect(static_cast<float>(g_window.cursorX),
+                                                             static_cast<float>(g_window.cursorY));
+                if (uiTouch && e.button == GLFW_MOUSE_BUTTON_RIGHT) {
+                    ImGui_ImplGlfw_MouseButtonCallback(&g_window, e.button, e.action, 0);
+                    if (e.action == GLFW_RELEASE) {
+                        uiTouch = false;
+                        uiTap = true;
+                    }
+                    break;
+                }
+                if (e.button == GLFW_MOUSE_BUTTON_LEFT && uiTap) {
+                    if (e.action == GLFW_RELEASE) uiTap = false;
+                    break;
+                }
+                if (e.button == GLFW_MOUSE_BUTTON_RIGHT && e.action == GLFW_PRESS) uiTap = false;
                 g_window.buttons[e.button] = e.action;
                 if (g_window.mouseCb) g_window.mouseCb(&g_window, e.button, e.action, 0);
                 break;
+            }
             case InputEvent::Scroll:
                 if (g_window.scrollCb) g_window.scrollCb(&g_window, e.x, e.y);
                 break;

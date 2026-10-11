@@ -2266,19 +2266,22 @@ void Engine::recordTelemetry() {
     // (sys.vram_mb) mede o dispositivo inteiro e não isola a engine.
     // allocationBytes e nao blockBytes: o bloco do VMA e' de 256 MB, entao
     // blockBytes so' se move de 256 em 256 MB e esconde a economia real.
-    if (m_vulkan.allocator()) {
-        VkPhysicalDeviceMemoryProperties memProps{};
-        vkGetPhysicalDeviceMemoryProperties(m_vulkan.physicalDevice(), &memProps);
-        std::vector<VmaBudget> budgets(VK_MAX_MEMORY_HEAPS);
-        vmaGetHeapBudgets(m_vulkan.allocator(), budgets.data());
-        uint64_t deviceBytes = 0;
-        for (uint32_t h = 0; h < memProps.memoryHeapCount; ++h) {
-            if (memProps.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
-                deviceBytes += budgets[h].statistics.allocationBytes;
-        }
-        st.vmaDeviceMb = static_cast<double>(deviceBytes) / (1024.0 * 1024.0);
-    }
+    if (m_vulkan.allocator()) st.vmaDeviceMb = deviceMemoryMb();
     TelemetryExporter::recordFrame(st);
+}
+
+double Engine::deviceMemoryMb() const {
+    if (!m_vulkan.allocator()) return 0.0;
+    VkPhysicalDeviceMemoryProperties memProps{};
+    vkGetPhysicalDeviceMemoryProperties(m_vulkan.physicalDevice(), &memProps);
+    std::vector<VmaBudget> budgets(VK_MAX_MEMORY_HEAPS);
+    vmaGetHeapBudgets(m_vulkan.allocator(), budgets.data());
+    uint64_t deviceBytes = 0;
+    for (uint32_t h = 0; h < memProps.memoryHeapCount; ++h) {
+        if (memProps.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+            deviceBytes += budgets[h].statistics.allocationBytes;
+    }
+    return static_cast<double>(deviceBytes) / (1024.0 * 1024.0);
 }
 
 void Engine::initImGui() {
