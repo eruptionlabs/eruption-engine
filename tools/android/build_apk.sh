@@ -1,12 +1,14 @@
 #!/bin/bash
 # Monta o APK do jogo para Android (NativeActivity, sem Java nem Gradle).
-#   tools/android/build_apk.sh <mapa> [saida.apk]
+#   tools/android/build_apk.sh <mapa>[,mapa2,...] [saida.apk]
+#   (varios mapas: o primeiro abre; o painel de toque lista todos)
 #   ERUPTION_APK_ENV=extra.txt tools/android/build_apk.sh <mapa>   (variaveis do motor no APK)
 #   ERUPTION_APK_JPEG=0   mantem as texturas do mapa como vieram (padrao: opacas em JPEG)
 # Precisa do SDK/NDK do Android (ANDROID_HOME, padrao ~/Android/Sdk) e de um
 # JDK 17 (JAVA_HOME, padrao ~/Android/jdk17). Compila build-android/ se faltar.
 set -euo pipefail
-MAP=${1:?uso: build_apk.sh <mapa> [saida.apk]}
+MAPS=${1:?uso: build_apk.sh <mapa>[,mapa2,...] [saida.apk]}
+MAP=${MAPS%%,*}
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=${2:-}
 SDK=${ANDROID_HOME:-$HOME/Android/Sdk}
@@ -38,13 +40,15 @@ cd "$ROOT"
     find data -type f
     find shaders -type f -name '*.spv'
     find assets/data assets/scripts assets/sprites assets/icon -type f 2>/dev/null
-    find -L "assets/external/$MAP" -maxdepth 1 -type f \( -name '*.glb' -o -name '*.ter' -o -name '*.nav' -o -name '*.env' \)
+    for m in ${MAPS//,/ }; do
+        find -L "assets/external/$m" -maxdepth 1 -type f \( -name '*.glb' -o -name '*.ter' -o -name '*.nav' -o -name '*.env' \)
+    done
 } | grep -v '/\.' | sort > "$STAGE/assets/android/manifest.txt"
 while read -r f; do mkdir -p "$STAGE/assets/$(dirname "$f")"; cp -L "$f" "$STAGE/assets/$f"; done < "$STAGE/assets/android/manifest.txt"
 # Texturas opacas do mapa em JPEG (ERUPTION_APK_JPEG=0 desliga): o .glb de
 # cidade de 68 MB encolhe o bastante para o APK caber em envio de 30 MB.
 if [ "${ERUPTION_APK_JPEG:-1}" != "0" ]; then
-    for g in "$STAGE"/assets/assets/external/"$MAP"/*.glb; do
+    for g in "$STAGE"/assets/assets/external/*/*.glb; do
         python3 "$ROOT/tools/android/shrink_glb.py" "$g" "$g.tmp"
         mv "$g.tmp" "$g"
     done
@@ -53,6 +57,7 @@ date +%s > "$STAGE/assets/android/stamp.txt"
 printf -- '--game\n--map\n%s\n' "$MAP" > "$STAGE/assets/android/args.txt"
 cat > "$STAGE/assets/android/env.txt" <<ENV
 ERUPTION_TEST_GRAPHICS_PRESET=low
+ERUPTION_TOUCH_MAPS=$MAPS
 ENV
 # ERUPTION_APK_ENV=<arquivo>: variaveis extras (VAR=valor por linha) gravadas no APK.
 if [ -n "${ERUPTION_APK_ENV:-}" ]; then cat "$ERUPTION_APK_ENV" >> "$STAGE/assets/android/env.txt"; fi
