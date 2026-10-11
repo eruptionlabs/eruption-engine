@@ -1,5 +1,6 @@
 #!/bin/bash
-# Monta o APK do jogo para Android (NativeActivity, sem Java nem Gradle).
+# Monta o APK do jogo para Android (NativeActivity, sem Gradle; o unico Java e' a
+# activity de tela cheia em src/platform/android/java).
 #   tools/android/build_apk.sh <mapa>[,mapa2,...] [saida.apk]
 #   (varios mapas: o primeiro abre; o painel de toque lista todos)
 #   ERUPTION_APK_ENV=extra.txt tools/android/build_apk.sh <mapa>   (variaveis do motor no APK)
@@ -78,9 +79,9 @@ cat > "$STAGE/AndroidManifest.xml" <<XML
     package="com.eruptionlabs.engine" android:versionCode="1" android:versionName="0.1">
     <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="34"/>
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true"/>
-    <application android:label="Eruption Engine" android:icon="@mipmap/ic_launcher" android:hasCode="false" android:extractNativeLibs="true"
+    <application android:label="Eruption Engine" android:icon="@mipmap/ic_launcher" android:hasCode="true" android:extractNativeLibs="true"
         android:appCategory="game" android:isGame="true">
-        <activity android:name="android.app.NativeActivity" android:exported="true"
+        <activity android:name="com.eruptionlabs.engine.EruptionActivity" android:exported="true"
             android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|layoutDirection|colorMode|touchscreen"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
             <meta-data android:name="android.app.lib_name" android:value="eruption"/>
@@ -100,6 +101,12 @@ cp "$ROOT/assets/icon/eruption_v3_256.png" "$STAGE/res/mipmap-xxxhdpi/ic_launche
 
 cd "$STAGE"
 "$BT/aapt2" link -o base.apk --manifest AndroidManifest.xml -I "$PLAT/android.jar" -A assets -R res.zip --auto-add-overlay
+# Activity de tela cheia (Java minimo): javac + d8 -> classes.dex.
+mkdir -p "$STAGE/javac"
+javac -source 8 -target 8 -nowarn -classpath "$PLAT/android.jar" -d "$STAGE/javac" \
+    "$ROOT"/src/platform/android/java/com/eruptionlabs/engine/*.java 2>&1 | grep -v "warning: \[options\]" || true
+"$BT/d8" --min-api 28 --lib "$PLAT/android.jar" --output "$STAGE" $(find "$STAGE/javac" -name '*.class')
+zip -qj base.apk "$STAGE/classes.dex"
 zip -qr base.apk lib
 "$BT/zipalign" -f -p 4 base.apk aligned.apk
 KS=$HOME/.android/eruption-debug.keystore

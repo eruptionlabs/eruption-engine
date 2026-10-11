@@ -71,6 +71,10 @@ int glfwGetGamepadState(int jid, GLFWgamepadstate* state);
 const float* glfwGetJoystickAxes(int jid, int* count);
 const unsigned char* glfwGetJoystickButtons(int jid, int* count);
 const char** glfwGetRequiredInstanceExtensions(uint32_t* count);
+// Android: o sistema tira a janela ao ir para os apps recentes/home. O dono
+// da superficie Vulkan registra como solta-la e recria-la; o shim chama na
+// thread do motor (glfwPollEvents) e o jogo continua quando a janela volta.
+void eruptionAndroidSetSurfaceHooks(void (*release)(void*), int (*restore)(void*), void* user);
 #ifdef VK_VERSION_1_0
 VkResult glfwCreateWindowSurface(VkInstance instance, GLFWwindow* window, const VkAllocationCallbacks* allocator,
                                  VkSurfaceKHR* surface);
