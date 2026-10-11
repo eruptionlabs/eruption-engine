@@ -775,6 +775,11 @@ void Engine::render() {
             static_cast<float>(displayExtent().height) /
                 (2.0f * std::tan(glm::radians(m_camera.fov()) * 0.5f)),
             static_cast<float>(displayExtent().width), static_cast<float>(displayExtent().height));
+        {
+            const VkExtent2D re = renderExtent(), de = displayExtent();
+            m_modelRenderer.setLodPixelScale(float(re.width) * float(re.height) /
+                                             std::max(1.0f, float(de.width) * float(de.height)));
+        }
         // ERUPTION_TEST_FORCE_BASE_LOD=1 (debug): forca a malha CHEIA em toda
         // instancia visivel, mesmo longe - A/B contra o LOD normal para o
         // harness perf/test_lod_quality.py medir o quanto o LOD simplificado

@@ -11,6 +11,7 @@
 #include "math/CullingSIMD.hpp"
 #include "utils/AlignedAllocator.hpp"
 
+#include <algorithm>
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -315,6 +316,11 @@ public:
     // Orcamento de triangulos por pixel PROJETADO para a escolha de nivel
     // (ver lodSwitchFor). 0 desliga (so' o criterio por erro/distancia).
     void setMeshLodTrisPerPx(float trisPerPx) { m_meshLodTrisPerPx = std::max(0.0f, trisPerPx); }
+    // Pixels RENDERIZADOS / pixels da tela (render scale, FSR). As metricas de
+    // tela ficam na resolucao final (descarte por tamanho), mas o orcamento de
+    // triangulos segue o que o rasterizador de fato desenha: com o FSR em
+    // qualidade sao 44% dos pixels, e o mesmo triangulo por pixel de antes.
+    void setLodPixelScale(float s) { m_lodPixelScale = std::clamp(s, 0.05f, 1.0f); }
     // TETO GLOBAL de triangulos por frame (passe principal). O orcamento por
     // pixel acima e' por OBJETO: dez arvores de 1,6 M que cobrem a tela, cada
     // uma, pedem a malha cheia e somam 16 M. Com o teto, a escala do orcamento
@@ -833,7 +839,8 @@ private:
     float m_meshLodTrisPerPx = 0.0f;   // ver setMeshLodTrisPerPx / lodSwitchFor
     uint32_t m_meshTriBudget = 0;      // ver setMeshTriBudget
     float m_lodBudgetScale = 1.0f;     // <= 1: aperta o orcamento por pixel
-    float trisPerPx() const { return m_meshLodTrisPerPx * m_lodBudgetScale; }
+    float m_lodPixelScale = 1.0f;      // ver setLodPixelScale
+    float trisPerPx() const { return m_meshLodTrisPerPx * m_lodBudgetScale * m_lodPixelScale; }
     static uint32_t levelTris(const ModelMeshGPU& m, uint8_t level);
     int m_shadowGroundFilter = 0;      // ver setShadowGroundFilter
     float m_shadowGroundHugeXZ = 0.0f;

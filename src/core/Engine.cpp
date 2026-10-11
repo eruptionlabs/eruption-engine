@@ -230,8 +230,36 @@ bool Engine::init(int width, int height, const std::string& title) {
         // inclusive Deferred Lighting e Cloud Shadows, que o post_scale nao
         // pegava. Custa nitidez, entao so' o preset low (alvo 930M) usa.
         float rs = 1.0f;
+        // Com FSR a escala vem do modo dele (qualidade = 1/1.5 por eixo), nao
+        // do render_scale do preset: FSR em escala 1.0 so' somava o custo do
+        // upscaler (1.9 ms em 1080p) a um quadro que nao ficava mais barato.
+        std::string upscaler = "fxaa", fsrMode = "quality";
+        try {
+            std::ifstream uf("data/graphics.json");
+            if (uf) {
+                nlohmann::json gj; uf >> gj;
+                std::string pr = gj.value("preset", "high");
+                if (const char* pe = std::getenv("ERUPTION_TEST_GRAPHICS_PRESET")) pr = pe;
+                if (gj.contains("presets") && gj["presets"].contains(pr)) {
+                    upscaler = gj["presets"][pr].value("upscaler", upscaler);
+                    fsrMode = gj["presets"][pr].value("fsr_mode", fsrMode);
+                    // Formato dos alvos de post: "packed" = B10G11R11 (metade
+                    // da banda, ver PostFormat.hpp). Lido aqui porque tem que
+                    // valer ANTES de PostProcessor::init.
+                    postPackedPreference() =
+                        (gj["presets"][pr].value("post_format", std::string("rgba16f")) == "packed");
+                }
+            }
+        } catch (...) {}
+        if (const char* e = std::getenv("ERUPTION_UPSCALER")) upscaler = e;
+        if (const char* e = std::getenv("ERUPTION_FSR_MODE")) fsrMode = e;
+        const bool fsrWanted = upscaler == "fsr" || upscaler == "fsr_post";
         if (const char* e = std::getenv("ERUPTION_RENDER_SCALE")) {
             rs = std::clamp(std::strtof(e, nullptr), 0.25f, 1.0f);
+        } else if (fsrWanted) {
+            const float ratio = fsrMode == "native" ? 1.0f : fsrMode == "balanced" ? 1.7f
+                              : fsrMode == "performance" ? 2.0f : fsrMode == "ultra" ? 3.0f : 1.5f;
+            rs = 1.0f / ratio;
         } else {
             try {
                 std::ifstream rf("data/graphics.json");
@@ -241,11 +269,6 @@ bool Engine::init(int width, int height, const std::string& title) {
                     if (const char* pe = std::getenv("ERUPTION_TEST_GRAPHICS_PRESET")) pr = pe;
                     if (gj.contains("presets") && gj["presets"].contains(pr)) {
                         rs = std::clamp<float>(gj["presets"][pr].value("render_scale", 1.0f), 0.25f, 1.0f);
-                        // Formato dos alvos de post: "packed" = B10G11R11 (metade
-                        // da banda, ver PostFormat.hpp). Lido aqui porque tem que
-                        // valer ANTES de PostProcessor::init.
-                        postPackedPreference() =
-                            (gj["presets"][pr].value("post_format", std::string("rgba16f")) == "packed");
                     }
                 }
             } catch (...) { rs = 1.0f; }
