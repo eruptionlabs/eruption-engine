@@ -366,37 +366,55 @@ void main() {
     // ---- Reflection (screen-space objects + sky texture + gradient fallback) ----
     vec3 reflectDir = reflect(-viewDir, perturbedNormal);
 
-    // Simple screen-space reflection for scene objects above/beside the water.
+    // Reflexo de tela dos objetos sobre a agua. O raio sai de uma normal
+    // suavizada (a das ondas, ruidosa, espalhava os acertos em pontinhos),
+    // anda com passo que cresce com a distancia (fino perto do casco, largo
+    // longe) e, ao cruzar a cena, refina por busca binaria. O acerto compara
+    // distancias a' camera em unidades de mundo.
+    vec3 ssrNormal = normalize(mix(vNormal, perturbedNormal, 0.25));
+    vec3 ssrDir = reflect(-viewDir, ssrNormal);
     vec3 ssrColor = vec3(0.0);
     float ssrHit = 0.0;
-    {
-        const int ssrSteps = 32;
-        const float ssrMaxDist = 400.0;
-        float stepSize = ssrMaxDist / float(ssrSteps);
-        float rayBias = 0.5; // start slightly off the surface to avoid self-intersection
-
-        for (int i = 1; i <= ssrSteps; i++) {
-            vec3 rayPos = vWorldPos + reflectDir * (rayBias + stepSize * float(i));
+    if (ssrDir.y > 0.0) {
+        const int ssrSteps = 40;
+        float t = 0.6, dt = 0.8, tPrev = 0.0;
+        for (int i = 0; i < ssrSteps; i++) {
+            vec3 rayPos = vWorldPos + ssrDir * t;
             vec4 clip = pc.viewProj * vec4(rayPos, 1.0);
             if (clip.w <= 0.0) break;
-
-            vec3 ndc = clip.xyz / clip.w;
-            vec2 uv = ndc.xy * 0.5 + 0.5;
+            vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
             if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
-
-            // Acerto pela DISTANCIA a' camera em unidades de mundo (a
-            // profundidade do buffer nao e' linear: a folga fixa de 0,05 nela
-            // nao acertava nada perto e acertava errado longe).
-            float sceneDepth = texture(u_textures[nonuniformEXT(depthTexSlot)], uv).r;
-            if (sceneDepth >= 1.0) continue; // ceu: segue o raio
-            vec3 scenePos = reconstructWorldPos(uv, sceneDepth);
-            float rayDist = length(rayPos - ubo.cameraPos.xyz);
-            float sceneDist = length(scenePos - ubo.cameraPos.xyz);
-            if (rayDist > sceneDist && rayDist - sceneDist < stepSize * 1.5) {
-                ssrColor = texture(u_textures[nonuniformEXT(screenTexSlot)], uv).rgb;
-                ssrHit = 1.0 - float(i) / float(ssrSteps); // fade with distance
-                break;
+            float sd = texture(u_textures[nonuniformEXT(depthTexSlot)], uv).r;
+            if (sd < 1.0) {
+                float rayDist = length(rayPos - ubo.cameraPos.xyz);
+                float sceneDist = length(reconstructWorldPos(uv, sd) - ubo.cameraPos.xyz);
+                if (rayDist > sceneDist) {
+                    float lo = tPrev, hi = t;
+                    for (int k = 0; k < 6; k++) {
+                        float mid = 0.5 * (lo + hi);
+                        vec3 mp = vWorldPos + ssrDir * mid;
+                        vec4 mc = pc.viewProj * vec4(mp, 1.0);
+                        vec2 muv = mc.xy / mc.w * 0.5 + 0.5;
+                        float md = texture(u_textures[nonuniformEXT(depthTexSlot)], muv).r;
+                        float sdist = length(reconstructWorldPos(muv, md) - ubo.cameraPos.xyz);
+                        if (length(mp - ubo.cameraPos.xyz) > sdist) hi = mid; else lo = mid;
+                    }
+                    vec3 hp = vWorldPos + ssrDir * hi;
+                    vec4 hc = pc.viewProj * vec4(hp, 1.0);
+                    vec2 huv = hc.xy / hc.w * 0.5 + 0.5;
+                    float hd = texture(u_textures[nonuniformEXT(depthTexSlot)], huv).r;
+                    float gap = length(hp - ubo.cameraPos.xyz) - length(reconstructWorldPos(huv, hd) - ubo.cameraPos.xyz);
+                    if (gap < max(dt * 2.0, 3.0)) {
+                        ssrColor = texture(u_textures[nonuniformEXT(screenTexSlot)], huv).rgb;
+                        vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv) * smoothstep(vec2(0.0), vec2(0.08), 1.0 - huv);
+                        ssrHit = edge.x * edge.y * (1.0 - smoothstep(0.6, 1.0, float(i) / float(ssrSteps)));
+                    }
+                    break;
+                }
             }
+            tPrev = t;
+            t += dt;
+            dt *= 1.12;
         }
     }
 
