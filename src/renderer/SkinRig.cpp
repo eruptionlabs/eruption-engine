@@ -26,6 +26,30 @@ Vec4 sample(const SkinRig::Channel& c, float t) {
     return glm::mix(c.values[lo], c.values[hi], f);
 }
 
+// Posição, rotação e escala locais de cada nó (a de repouso onde a animação
+// não tem canal).
+void localPose(const SkinRig& rig, int anim, float time, std::vector<Vec3>& t, std::vector<glm::quat>& r,
+               std::vector<Vec3>& s) {
+    const size_t n = rig.nodes.size();
+    t.resize(n);
+    r.resize(n);
+    s.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        t[i] = rig.nodes[i].t;
+        r[i] = rig.nodes[i].r;
+        s[i] = rig.nodes[i].s;
+    }
+    if (anim < 0 || anim >= static_cast<int>(rig.animations.size())) return;
+    for (const SkinRig::Channel& c : rig.animations[static_cast<size_t>(anim)].channels) {
+        if (c.node < 0 || c.node >= static_cast<int>(n)) continue;
+        const Vec4 v = sample(c, time);
+        const size_t k = static_cast<size_t>(c.node);
+        if (c.path == 0) t[k] = Vec3(v);
+        else if (c.path == 1) r[k] = glm::normalize(glm::quat(v.w, v.x, v.y, v.z));
+        else s[k] = Vec3(v);
+    }
+}
+
 } // namespace
 
 int SkinRig::findAnimation(const std::string& name) const {
@@ -35,21 +59,22 @@ int SkinRig::findAnimation(const std::string& name) const {
 }
 
 void SkinRig::pose(int anim, float time, std::vector<glm::mat4>& globals) const {
-    std::vector<Vec3> t(nodes.size()), s(nodes.size());
-    std::vector<glm::quat> r(nodes.size());
-    for (size_t i = 0; i < nodes.size(); ++i) {
-        t[i] = nodes[i].t;
-        r[i] = nodes[i].r;
-        s[i] = nodes[i].s;
-    }
-    if (anim >= 0 && anim < static_cast<int>(animations.size())) {
-        for (const Channel& c : animations[static_cast<size_t>(anim)].channels) {
-            if (c.node < 0 || c.node >= static_cast<int>(nodes.size())) continue;
-            const Vec4 v = sample(c, time);
-            const size_t k = static_cast<size_t>(c.node);
-            if (c.path == 0) t[k] = Vec3(v);
-            else if (c.path == 1) r[k] = glm::normalize(glm::quat(v.w, v.x, v.y, v.z));
-            else s[k] = Vec3(v);
+    blendPose(anim, time, anim, time, 1.0f, globals);
+}
+
+void SkinRig::blendPose(int from, float fromTime, int anim, float time, float w, std::vector<glm::mat4>& globals) const {
+    std::vector<Vec3> t, s;
+    std::vector<glm::quat> r;
+    localPose(*this, anim, time, t, r, s);
+    if (w < 1.0f) {
+        std::vector<Vec3> t0, s0;
+        std::vector<glm::quat> r0;
+        localPose(*this, from, fromTime, t0, r0, s0);
+        const float k = std::clamp(w, 0.0f, 1.0f);
+        for (size_t i = 0; i < nodes.size(); ++i) {
+            t[i] = glm::mix(t0[i], t[i], k);
+            s[i] = glm::mix(s0[i], s[i], k);
+            r[i] = glm::slerp(r0[i], r[i], k); // o caminho curto (sinal do quaternion)
         }
     }
     globals.resize(nodes.size());

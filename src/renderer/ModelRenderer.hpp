@@ -603,7 +603,10 @@ public:
     bool isSkinned(uint32_t instance) const { return m_skinnedByInstance.count(instance) != 0; }
     std::vector<std::string> animationsOf(uint32_t instance) const;
     // Toca a animação pelo nome (vazio = pose de repouso). Falso se não existe.
-    bool playAnimation(uint32_t instance, const std::string& name, bool loop = true, float speed = 1.0f);
+    // `fadeSeconds`: transição a partir da pose atual (0 = troca seca).
+    static constexpr float kAnimationFade = 0.2f;
+    bool playAnimation(uint32_t instance, const std::string& name, bool loop = true, float speed = 1.0f,
+                       float fadeSeconds = kAnimationFade);
     std::string currentAnimation(uint32_t instance) const;
     size_t skinnedCount() const { return m_skinned.size(); }
 
@@ -645,6 +648,11 @@ private:
         int anim = -1;
         float time = 0.0f, speed = 1.0f;
         bool loop = true;
+        // Transição: a animação que sai continua andando e perde peso.
+        int fromAnim = -1;
+        float fromTime = 0.0f, fromSpeed = 1.0f;
+        bool fromLoop = true;
+        float fade = 0.0f, fadeSeconds = 0.0f; // fadeSeconds 0 = sem transição
         uint32_t previewId = 0; // cópia do visualizador (instance == kNoInstance)
     };
     static constexpr uint32_t kNoInstance = 0xFFFFFFFFu;

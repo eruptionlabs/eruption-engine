@@ -45,6 +45,10 @@ struct SkinRig {
     // Matrizes de mundo (espaço do modelo) de todos os nós na pose da animação
     // `anim` no tempo `time` (anim < 0: pose de repouso).
     void pose(int anim, float time, std::vector<glm::mat4>& globals) const;
+    // Transição entre duas animações: `from` no tempo `fromTime` com peso
+    // 1 - w e `anim` no tempo `time` com peso w (por nó: posição e escala
+    // interpoladas, rotação por slerp).
+    void blendPose(int from, float fromTime, int anim, float time, float w, std::vector<glm::mat4>& globals) const;
     // Matrizes dos ossos da skin para o shader: global do osso * bind inversa.
     void jointMatrices(int skin, const std::vector<glm::mat4>& globals, glm::mat4* out) const;
 };
