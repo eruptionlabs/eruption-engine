@@ -51,6 +51,8 @@ declare ui: {
     load: (css: string) -> boolean,
     text: (selector: string, text: string) -> (),
     value: (selector: string, value: number) -> (),   -- bar, 0 to 1
+    -- Troca o arquivo de um widget de imagem (--widget: image).
+    image: (selector: string, png: string) -> (),
     visible: (selector: string, on: boolean) -> (),
     -- which: 0 = background / rail / text, 1 = bar fill or border.
     color: (selector: string, color: vector, which: number?, opacity: number?) -> (),
@@ -217,8 +219,10 @@ declare models: {
     solid: (model: Model) -> boolean,
     set_solid: (model: Model, solid: boolean) -> (),
     -- Models with a skeleton (.glb with skin): plays the animation by name
-    -- ("" = rest pose). loop defaults to true, speed to 1. False if it doesn't exist.
-    play: (model: Model, animation: string, loop: boolean?, speed: number?) -> boolean,
+    -- ("" = rest pose). loop defaults to true, speed to 1. The pose on screen
+    -- blends into the new one over `fade` seconds (default 0.2; 0 = cut).
+    -- False if it doesn't exist.
+    play: (model: Model, animation: string, loop: boolean?, speed: number?, fade: number?) -> boolean,
     -- Animation playing now ("" = rest pose).
     animation: (model: Model) -> string,
     -- Names of the animations in the model file.
