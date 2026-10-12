@@ -744,6 +744,8 @@ void Engine::renderSpritePart(LoadedSprite& ls, uint32_t paletteSlot, int& frame
         actionIdx += 8; // Switch to Walk action
     }
     if (actionIdx >= (int)ls.act.actions.size()) actionIdx %= 8; // Fallback to Idle
+    // PNG avulso tem uma ação só: qualquer direção cai nela.
+    if (actionIdx >= (int)ls.act.actions.size()) actionIdx = 0;
 
     const auto& action = ls.act.actions[actionIdx];
     if (action.frames.empty()) {
