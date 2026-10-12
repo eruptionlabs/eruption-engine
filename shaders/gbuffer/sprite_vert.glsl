@@ -63,6 +63,12 @@ layout(location = 6) out flat uint v_paletteIndex;
 #ifndef ERUPTION_SPRITE_MASK
 layout(location = 7) out flat uint v_normalTexIndex;
 layout(location = 8) out flat uint v_mrahwTexIndex;
+// Base do billboard em MUNDO + posicao dentro do quadrado (-0.5..0.5). O
+// fragment precisa dos tres para curvar a normal (ver sprite.frag): sem eles
+// o sprite inteiro tem UMA normal e nao existe "lado iluminado".
+layout(location = 9) out vec3 v_billRight;
+layout(location = 10) out vec3 v_billUp;
+layout(location = 11) out vec2 v_quad;
 #endif
 
 void main() {
@@ -73,6 +79,8 @@ void main() {
 
     vec3 finalPos;
     vec3 normal;
+    vec3 billRight = vec3(1.0, 0.0, 0.0);
+    vec3 billUp = vec3(0.0, 1.0, 0.0);
 
     // bit 2: Billboard (value 4)
     if ((i_flags & 4u) != 0) {
@@ -98,6 +106,8 @@ void main() {
         vec3 camNormal = normalize((u_inverseView * vec4(0.0, 0.0, 1.0, 0.0)).xyz);
         vec3 skyNormal = vec3(0.0, 1.0, 0.0);
         normal = normalize(mix(camNormal, skyNormal, u_spriteNormalYMix));
+        billRight = normalize((u_inverseView * vec4(viewRight, 0.0)).xyz);
+        billUp    = normalize((u_inverseView * vec4(tiltedUp, 0.0)).xyz);
 
         gl_Position = u_projection * viewPos;
         gl_Position.z -= 0.0004 + i_anchorPoint.w * 0.0001;
@@ -107,11 +117,16 @@ void main() {
         vec3 up = normalize(model[1].xyz);
         finalPos = worldPos + (a_position.x * right * scaleX + a_position.y * up * scaleY);
         normal = normalize(cross(right, up));
+        billRight = right;
+        billUp = up;
     }
 
 #ifndef ERUPTION_SPRITE_MASK
     v_normal = normal;
     v_worldPos = finalPos;
+    v_billRight = billRight;
+    v_billUp = billUp;
+    v_quad = a_position.xy;
 #endif
 
     if ((i_flags & 4u) == 0u) {
