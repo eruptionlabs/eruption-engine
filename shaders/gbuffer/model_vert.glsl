@@ -20,6 +20,11 @@ layout(location = 15) in uvec2 inSplatTex;
 layout(location = 16) in uvec2 inSplatTex2;
 layout(location = 17) in uint inBlendMaskIndex2;
 layout(location = 18) in uint inEmissiveIndex;
+#ifndef ERUPTION_NO_VELOCITY
+// Posicao no frame anterior: a pose passada da malha com esqueleto, ou a
+// propria posicao (o buffer da malha ligado de novo na entrada 1).
+layout(location = 19) in vec3 inPrevPosition;
+#endif
 
 layout(location = 0) out vec3 outWorldPos;
 layout(location = 1) out vec2 outTexCoord;
@@ -199,7 +204,8 @@ vec3 applyWindSway(vec3 worldPos, float localHeight, float sway) {
 struct EngInstance {
     mat4 model;
     vec4 uvTranslateRot; // xy = translate, z = rotation (rad), w = geoDispDistance
-    vec4 uvScaleDisp;    // xy = scale, z = geoDispAmplitude, w = livre
+    vec4 uvScaleDisp;    // xy = scale, z = geoDispAmplitude, w = balanco ao vento
+    mat4 prevModel;      // a do frame anterior (so' com o alvo de velocidade)
 };
 layout(set = 2, binding = 0, std430) readonly buffer InstanceBuf {
     EngInstance u_inst[];
@@ -368,10 +374,12 @@ void main() {
     // mesmo com o vento chegando ao shader. A altura acima da ORIGEM da
     // instancia e' o que interessa - a base do objeto e' o engaste.
     float instBaseY = (u_inst[gl_InstanceIndex].model * vec4(0.0, 0.0, 0.0, 1.0)).y;
-    // A mesma conta com o vento do frame anterior: a instancia nao se move,
-    // so' o balanco muda, entao isto e' onde o vertice estava.
+    // Onde o vertice estava: a matriz e o vento do frame anterior (objeto
+    // movido por script ou animacao de no' e o balanco das folhas).
 #ifndef ERUPTION_NO_VELOCITY
-    const vec3 prevSway = applyWindSwayWith(u_prevWindParams, worldPos.xyz, worldPos.y - instBaseY,
+    const mat4 prevModel = u_inst[gl_InstanceIndex].prevModel;
+    const vec4 prevPos = prevModel * vec4(inPrevPosition, 1.0);
+    const vec3 prevSway = applyWindSwayWith(u_prevWindParams, prevPos.xyz, prevPos.y - prevModel[3].y,
                                             u_inst[gl_InstanceIndex].uvScaleDisp.w);
 #endif
     worldPos.xyz = applyWindSway(worldPos.xyz, worldPos.y - instBaseY,

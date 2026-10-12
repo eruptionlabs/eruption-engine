@@ -3,6 +3,7 @@
 // malha; cada instância animada tem o seu buffer, reescrito por
 // shaders/compute/skin.comp a cada frame.
 #include "renderer/ModelRenderer.hpp"
+#include "renderer/GBuffer.hpp"
 
 #include "core/Logger.hpp"
 #include "formats/TerrainParser.hpp"
@@ -24,7 +25,7 @@ struct SkinVertexGpu {
 static_assert(sizeof(SkinVertexGpu) == 24, "layout do SkinVertex em skin.comp");
 
 struct SkinPush {
-    uint32_t vertexCount, jointBase, strideWords, posWord, nrmWord;
+    uint32_t vertexCount, jointBase, strideWords, posWord, nrmWord, keepPrev;
 };
 
 } // namespace
@@ -87,8 +88,8 @@ bool ModelRenderer::ensureSkinGpu() {
     if (m_skinGpuFailed) return false;
     m_skinGpuFailed = true; // até dar certo
     VkDevice dev = m_ctx->device();
-    VkDescriptorSetLayoutBinding binds[4]{};
-    for (uint32_t i = 0; i < 4; ++i) {
+    VkDescriptorSetLayoutBinding binds[5]{};
+    for (uint32_t i = 0; i < 5; ++i) {
         binds[i].binding = i;
         binds[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         binds[i].descriptorCount = 1;
@@ -96,7 +97,7 @@ bool ModelRenderer::ensureSkinGpu() {
     }
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = 4;
+    li.bindingCount = 5;
     li.pBindings = binds;
     if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &m_skinSetLayout) != VK_SUCCESS) return false;
     VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(SkinPush)};
@@ -215,6 +216,21 @@ bool ModelRenderer::createSkinned(uint32_t base, SkinnedInstance& s) {
                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                              VMA_MEMORY_USAGE_GPU_ONLY, s.out, s.outAlloc))
         return false;
+    // Com o alvo de velocidade: a pose do frame anterior, no mesmo formato
+    // (o vertex shader lê só a posição dela).
+    if (GBuffer::velocityEnabled() &&
+        !m_ctx->createBuffer(bytes,
+                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                             VMA_MEMORY_USAGE_GPU_ONLY, s.prevOut, s.prevOutAlloc)) {
+        vmaDestroyBuffer(m_ctx->allocator(), s.out, s.outAlloc);
+        return false;
+    }
+    auto destroyOut = [&] {
+        vmaDestroyBuffer(m_ctx->allocator(), s.out, s.outAlloc);
+        if (s.prevOut) vmaDestroyBuffer(m_ctx->allocator(), s.prevOut, s.prevOutAlloc);
+        s.out = s.prevOut = VK_NULL_HANDLE;
+    };
     // Descriptor set (um por instância; pool novo quando o atual enche).
     VkDescriptorSetAllocateInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -226,7 +242,7 @@ bool ModelRenderer::createSkinned(uint32_t base, SkinnedInstance& s) {
         r = vkAllocateDescriptorSets(m_ctx->device(), &ai, &s.set);
     }
     if (r != VK_SUCCESS) {
-        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * 256};
+        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5 * 256};
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pi.maxSets = 256;
@@ -234,22 +250,23 @@ bool ModelRenderer::createSkinned(uint32_t base, SkinnedInstance& s) {
         pi.pPoolSizes = &ps;
         VkDescriptorPool pool = VK_NULL_HANDLE;
         if (vkCreateDescriptorPool(m_ctx->device(), &pi, nullptr, &pool) != VK_SUCCESS) {
-            vmaDestroyBuffer(m_ctx->allocator(), s.out, s.outAlloc);
+            destroyOut();
             return false;
         }
         m_skinPools.push_back(pool);
         ai.descriptorPool = pool;
         if (vkAllocateDescriptorSets(m_ctx->device(), &ai, &s.set) != VK_SUCCESS) {
-            vmaDestroyBuffer(m_ctx->allocator(), s.out, s.outAlloc);
+            destroyOut();
             return false;
         }
     }
-    const VkDescriptorBufferInfo infos[4] = {{m_meshes[base].vertexBuffer, 0, VK_WHOLE_SIZE},
+    const VkDescriptorBufferInfo infos[5] = {{m_meshes[base].vertexBuffer, 0, VK_WHOLE_SIZE},
                                              {b->second.skinBuffer, 0, VK_WHOLE_SIZE},
                                              {m_jointRing, 0, VK_WHOLE_SIZE},
-                                             {s.out, 0, VK_WHOLE_SIZE}};
-    VkWriteDescriptorSet w[4]{};
-    for (uint32_t i = 0; i < 4; ++i) {
+                                             {s.out, 0, VK_WHOLE_SIZE},
+                                             {s.prevOut ? s.prevOut : s.out, 0, VK_WHOLE_SIZE}};
+    VkWriteDescriptorSet w[5]{};
+    for (uint32_t i = 0; i < 5; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].dstSet = s.set;
         w[i].dstBinding = i;
@@ -257,11 +274,12 @@ bool ModelRenderer::createSkinned(uint32_t base, SkinnedInstance& s) {
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[i].pBufferInfo = &infos[i];
     }
-    vkUpdateDescriptorSets(m_ctx->device(), 4, w, 0, nullptr);
+    vkUpdateDescriptorSets(m_ctx->device(), 5, w, 0, nullptr);
     // A malha da instância: igual à base, com o buffer de vértices dela e sem
     // os níveis de LOD (que apontariam para a pose de bind).
     ModelMeshGPU clone = m_meshes[base];
     clone.vertexBuffer = s.out;
+    clone.prevVertexBuffer = s.prevOut;
     clone.vertexAlloc = VK_NULL_HANDLE;
     clone.hiVertexBuffer = VK_NULL_HANDLE; clone.hiVertexAlloc = VK_NULL_HANDLE;
     clone.hiIndexBuffer = VK_NULL_HANDLE; clone.hiIndexAlloc = VK_NULL_HANDLE;
@@ -287,11 +305,14 @@ bool ModelRenderer::createSkinned(uint32_t base, SkinnedInstance& s) {
 void ModelRenderer::releaseSkinned(SkinnedInstance& s) {
     if (!s.out) return;
     VmaAllocator allocator = m_ctx->allocator();
-    VkBuffer buf = s.out;
-    VmaAllocation alloc = s.outAlloc;
-    m_ctx->deferFrameCleanup([allocator, buf, alloc] { vmaDestroyBuffer(allocator, buf, alloc); });
-    s.out = VK_NULL_HANDLE;
-    s.outAlloc = VK_NULL_HANDLE;
+    VkBuffer buf = s.out, prev = s.prevOut;
+    VmaAllocation alloc = s.outAlloc, prevAlloc = s.prevOutAlloc;
+    m_ctx->deferFrameCleanup([allocator, buf, alloc, prev, prevAlloc] {
+        vmaDestroyBuffer(allocator, buf, alloc);
+        if (prev) vmaDestroyBuffer(allocator, prev, prevAlloc);
+    });
+    s.out = s.prevOut = VK_NULL_HANDLE;
+    s.outAlloc = s.prevOutAlloc = VK_NULL_HANDLE;
 }
 
 void ModelRenderer::clearSkinning(bool destroyPipeline) {
@@ -299,8 +320,10 @@ void ModelRenderer::clearSkinning(bool destroyPipeline) {
     if (!dev) return;
     VmaAllocator allocator = m_ctx->allocator();
     std::vector<std::pair<VkBuffer, VmaAllocation>> buffers;
-    for (auto& s : m_skinned)
+    for (auto& s : m_skinned) {
         if (s.out) buffers.push_back({s.out, s.outAlloc});
+        if (s.prevOut) buffers.push_back({s.prevOut, s.prevOutAlloc});
+    }
     for (auto& [mesh, b] : m_skinBases)
         if (b.skinBuffer) buffers.push_back({b.skinBuffer, b.skinAlloc});
     std::vector<VkDescriptorPool> pools = std::move(m_skinPools);
@@ -433,11 +456,14 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
                        VkDeviceSize(cursor) * sizeof(glm::mat4));
     if (boundsChanged) rebuildHotData();
 
-    // Frames anteriores ainda podem estar lendo os vértices (barreira cobre a fila toda).
-    VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT,
-                           VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT};
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         0, 1, &before, 0, nullptr, 0, nullptr);
+    // Frames anteriores ainda podem estar lendo os vértices (barreira cobre a
+    // fila toda); a pose escrita no frame anterior é lida aqui (vira a "prev").
+    VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
+                           VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                           VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &before, 0, nullptr, 0,
+                         nullptr);
     // Primeira vez: o vértice inteiro (UV, cor, materiais) vem da base.
     bool copied = false;
     for (const Job& j : jobs) {
@@ -445,6 +471,7 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
         if (!s.needsInit) continue;
         const VkBufferCopy c{0, 0, VkDeviceSize(j.vertexCount) * sizeof(TerrainVertex)};
         vkCmdCopyBuffer(cmd, m_meshes[s.baseMesh].vertexBuffer, s.out, 1, &c);
+        if (s.prevOut) vkCmdCopyBuffer(cmd, m_meshes[s.baseMesh].vertexBuffer, s.prevOut, 1, &c);
         s.needsInit = false;
         copied = true;
     }
@@ -459,7 +486,7 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skinPipeLayout, 0, 1, &j.s->set, 0, nullptr);
         const SkinPush p{j.vertexCount, j.jointBase, static_cast<uint32_t>(sizeof(TerrainVertex) / 4),
                          static_cast<uint32_t>(offsetof(TerrainVertex, position) / 4),
-                         static_cast<uint32_t>(offsetof(TerrainVertex, normal) / 4)};
+                         static_cast<uint32_t>(offsetof(TerrainVertex, normal) / 4), j.s->prevOut ? 1u : 0u};
         vkCmdPushConstants(cmd, m_skinPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         vkCmdDispatch(cmd, (j.vertexCount + 63) / 64, 1, 1);
     }

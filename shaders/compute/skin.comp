@@ -11,7 +11,9 @@ struct SkinVertex { uint j01; uint j23; float w0; float w1; float w2; float w3; 
 layout(std430, binding = 0) readonly buffer Src { uint src[]; };
 layout(std430, binding = 1) readonly buffer Skin { SkinVertex skin[]; };
 layout(std430, binding = 2) readonly buffer Joints { mat4 joints[]; };
-layout(std430, binding = 3) writeonly buffer Dst { uint dst[]; };
+layout(std430, binding = 3) buffer Dst { uint dst[]; };
+// Posicao do frame anterior (vetor de movimento): o que estava em Dst.
+layout(std430, binding = 4) writeonly buffer Prev { uint prevDst[]; };
 
 layout(push_constant) uniform Params {
     uint vertexCount;
@@ -19,6 +21,7 @@ layout(push_constant) uniform Params {
     uint strideWords;  // tamanho do vértice em palavras
     uint posWord;      // offset da posição (vec3)
     uint nrmWord;      // offset da normal (vec3)
+    uint keepPrev;     // 1: copia a posicao atual para Prev antes de escrever
 } p;
 
 void main() {
@@ -38,6 +41,11 @@ void main() {
     vec3 sn = mat3(m) * nrm;
     const float len = length(sn);
     sn = len > 1e-8 ? sn / len : nrm;
+    if (p.keepPrev != 0u) {
+        prevDst[b + p.posWord] = dst[b + p.posWord];
+        prevDst[b + p.posWord + 1u] = dst[b + p.posWord + 1u];
+        prevDst[b + p.posWord + 2u] = dst[b + p.posWord + 2u];
+    }
     dst[b + p.posWord] = floatBitsToUint(sp.x);
     dst[b + p.posWord + 1u] = floatBitsToUint(sp.y);
     dst[b + p.posWord + 2u] = floatBitsToUint(sp.z);

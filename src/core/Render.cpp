@@ -385,6 +385,7 @@ void Engine::render() {
     uint32_t imageIndex = m_vulkan.currentImageIndex();
     // Paletas novas de sprite (cópia + transição) antes de qualquer passe.
     m_spriteRenderer.flushUploads(cmd);
+    m_modelRenderer.beginFrame();
     // Vértices do chão mudados pelo pincel de terreno (editor).
     m_modelRenderer.flushVertexPatches(cmd);
     // Animação por esqueleto: matrizes dos ossos e vértices animados (compute).
