@@ -26,6 +26,7 @@ layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
     float metallicScale;  // absolute metallic value from the material profile
     float roughnessScale; // absolute roughness value from the material profile
+    float stochasticTiling; // 0 = amostra direta; >0 = quebra a repeticao (ver amostraSemGrade)
 };
 
 layout(set = 1, binding = 0) uniform FrameUBO {
@@ -60,6 +61,72 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     // POM: x=heightScale, y=maxSteps, z=minSteps, w=wetness global.
     vec4 u_pomParams;
 };
+
+// --------------------------------------------------- repeticao do ladrilho
+//
+// Uma volta da textura do chao vale ~32 unidades de mundo (medido: xadrez de
+// referencia fotografado no enquadramento de campo, 104 px de tela por volta
+// contra ~140 px de personagem). Num mapa de 1600 a mesma imagem aparece 50
+// vezes na largura. Por melhor que ela seja, o olho acha a GRADE antes de
+// achar a rocha — e grade e' a assinatura de "isto e' um ladrilho", nao de
+// "isto e' chao". Nenhuma melhora na textura resolve isso, porque o problema
+// nao esta' na textura: esta' no fato de ela ser a mesma.
+//
+// Deliot & Heitz 2019, "Procedural Stochastic Texturing by Tiling and
+// Blending": a UV cai numa grade TRIANGULAR; cada vertice do triangulo que a
+// contem sorteia um deslocamento proprio da textura, e os tres sao misturados
+// pelas coordenadas baricentricas. O deslocamento muda de triangulo para
+// triangulo, entao a repeticao some; a mistura e' baricentrica, entao nao ha
+// costura.
+//
+// O preco da mistura e' CONTRASTE: somar tres amostras independentes com
+// pesos que somam 1 divide a variancia por sum(w^2), e no centro do triangulo
+// isso e' um terco — a textura lava e vira papel. O trabalho original corrige
+// por histograma, que exige pre-processar o acervo inteiro. Aqui a correcao
+// e' direta: o desvio em relacao a MEDIA da textura (o topo da piramide de
+// mipmap ja' e' essa media, e sai de graca do cache) e' dividido por
+// sqrt(sum(w^2)). No vertice do triangulo sum(w^2) = 1 e nada muda; no centro
+// vale 1/3 e o desvio volta multiplicado por sqrt(3). A variancia sai igual a
+// da textura original em qualquer ponto.
+void gradeTriangular(vec2 uv, out vec3 w, out vec2 v1, out vec2 v2, out vec2 v3) {
+    const mat2 paraObliquo = mat2(1.0, 0.0, -0.57735027, 1.15470054);
+    vec2 obl = paraObliquo * (uv * 3.4641016);   // 2*sqrt(3): triangulo de lado 1
+    vec2 base = floor(obl);
+    vec3 t = vec3(fract(obl), 0.0);
+    t.z = 1.0 - t.x - t.y;
+    if (t.z > 0.0) {
+        w  = vec3(t.z, t.y, t.x);
+        v1 = base; v2 = base + vec2(0.0, 1.0); v3 = base + vec2(1.0, 0.0);
+    } else {
+        w  = vec3(-t.z, 1.0 - t.y, 1.0 - t.x);
+        v1 = base + vec2(1.0, 1.0); v2 = base + vec2(1.0, 0.0); v3 = base + vec2(0.0, 1.0);
+    }
+}
+
+vec2 sorteioDoVertice(vec2 p) {
+    return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453);
+}
+
+// `restauraVariancia`: ligado para cor e para o MRAH-W (grandezas escalares,
+// onde lavar o contraste e' o dano). Desligado para a normal, porque ali
+// multiplicar o desvio inclina o relevo alem do que foi assado.
+vec4 amostraSemGrade(uint idx, vec2 uv, vec2 ddxUV, vec2 ddyUV, bool restauraVariancia) {
+    vec3 w; vec2 v1, v2, v3;
+    gradeTriangular(uv, w, v1, v2, v3);
+    vec4 c = w.x * textureGrad(u_textures[idx], uv + sorteioDoVertice(v1), ddxUV, ddyUV)
+           + w.y * textureGrad(u_textures[idx], uv + sorteioDoVertice(v2), ddxUV, ddyUV)
+           + w.z * textureGrad(u_textures[idx], uv + sorteioDoVertice(v3), ddxUV, ddyUV);
+    if (!restauraVariancia) return c;
+    vec4 media = textureLod(u_textures[idx], uv, 14.0);  // topo da piramide = media da imagem
+    return (c - media) * inversesqrt(max(dot(w, w), 1e-4)) + media;
+}
+
+// Uma porta so': com o interruptor em zero volta a ser uma amostra direta, e
+// o custo de tres amostras por textura some. E' por aqui que se mede.
+vec4 amostraChao(uint idx, vec2 uv, vec2 ddxUV, vec2 ddyUV, bool restauraVariancia) {
+    if (stochasticTiling < 0.5) return texture(u_textures[idx], uv);
+    return amostraSemGrade(idx, uv, ddxUV, ddyUV, restauraVariancia);
+}
 
 float srgbToLinear(float c) {
     return (c <= 0.04045) ? (c / 12.92) : pow((c + 0.055) / 1.055, 2.4);
@@ -140,8 +207,13 @@ void main() {
         TBN = computeTBN(N, inWorldPos, inTexCoord);
     }
 
+    // Derivadas da UV BASE: as tres amostras deslocadas tem de escolher o
+    // mesmo nivel de mipmap que a amostra original escolheria, senao cada
+    // deslocamento puxa um nivel diferente e aparece costura de nitidez.
+    vec2 ddxUV = dFdx(uv), ddyUV = dFdy(uv);
+
     uint texIdx = nonuniformEXT(inTexIndex);
-    vec4 texColor = texture(u_textures[texIdx], uv);
+    vec4 texColor = amostraChao(texIdx, uv, ddxUV, ddyUV, true);
     // Ground crossfade. `inBlendWeight` is a per-vertex weight (0 when the mesh
     // carries no _BLEND_* attributes, so untagged maps are untouched). A plain
     // mix() of that weight interpolates linearly across each mesh triangle, so
@@ -153,7 +225,7 @@ void main() {
     float blendT = inBlendWeight;
     if (inBlendWeight > 0.0) {
         uint bTexIdx = nonuniformEXT(inBlendTexIndex);
-        vec4 bColor = texture(u_textures[bTexIdx], uv);
+        vec4 bColor = amostraChao(bTexIdx, uv, ddxUV, ddyUV, true);
         // Height-biased blend (familia "height lerp"): nudge the
         // linear per-vertex weight by the two textures' own luminance so the
         // 50% contour follows surface detail instead of the mesh triangles.
@@ -195,10 +267,10 @@ void main() {
     float fillSelfShadow = 1.0;
     if (hasNormal) {
         uint nIdx = nonuniformEXT(inNormalIndex);
-        vec4 sampledNormal = texture(u_textures[nIdx], uv, u_normalSmoothing);
+        vec4 sampledNormal = amostraChao(nIdx, uv, ddxUV, ddyUV, false);
         if (inBlendWeight > 0.0 && inBlendNormalIndex != 0u) {
             uint bnIdx = nonuniformEXT(inBlendNormalIndex);
-            vec4 bNormal = texture(u_textures[bnIdx], uv, u_normalSmoothing);
+            vec4 bNormal = amostraChao(bnIdx, uv, ddxUV, ddyUV, false);
             sampledNormal = mix(sampledNormal, bNormal, blendT);
         }
         materialProps = sampledNormal.a;
@@ -320,10 +392,10 @@ void main() {
     float sourceFlag = 0.5; // fallback heuristic
     if (hasPbr) {
         uint pIdx = nonuniformEXT(inPbrIndex);
-        vec4 mrahw = texture(u_textures[pIdx], uv);
+        vec4 mrahw = amostraChao(pIdx, uv, ddxUV, ddyUV, true);
         if (inBlendWeight > 0.0 && inBlendPbrIndex != 0u) {
             uint bpIdx = nonuniformEXT(inBlendPbrIndex);
-            vec4 bMrahw = texture(u_textures[bpIdx], uv);
+            vec4 bMrahw = amostraChao(bpIdx, uv, ddxUV, ddyUV, true);
             mrahw = mix(mrahw, bMrahw, blendT);
         }
         roughness = roughnessScale * mrahw.g;

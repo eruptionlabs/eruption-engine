@@ -2782,7 +2782,14 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     static_assert(sizeof(push) == 96, "push do modelo: layout de model_vert.glsl");
     push.vp = viewProj;
     push.__pad = magentaDebug ? 1.0f : 0.0f;
-    push.uvScale = Vec4(1.0f, 1.0f, 0.0f, 0.0f);
+    // uvScale.x = ladrilhamento estocastico do CHAO (model_frag.glsl). Entra
+    // aqui, e nao num campo novo, porque o bloco de push tem 96 bytes fixos e
+    // .x estava livre (o vertex le' so' .z e .w). Ligado por padrao: a
+    // repeticao e' o defeito mais visivel de um chao tilado, e o custo de
+    // tres amostras so' e' pago onde ha splat. ERUPTION_NO_STOCHASTIC_TILING=1
+    // volta a uma amostra, que e' como se mede a conta.
+    static const bool kSemEstocastico = std::getenv("ERUPTION_NO_STOCHASTIC_TILING") != nullptr;
+    push.uvScale = Vec4(kSemEstocastico ? 0.0f : 1.0f, 1.0f, 0.0f, 0.0f);
 
     auto* dst = static_cast<GpuModelInstance*>(m_instMapped[instFrame]) + instBase;
 
