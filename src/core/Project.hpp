@@ -15,6 +15,7 @@
 // executavel/repositorio), e nada muda pra quem abre um mapa direto.
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,11 @@ public:
         std::string startupMap;       // mapa que abre com o projeto
         bool hasSpawn = false;        // posicao inicial do jogador
         float spawn[3] = {0.0f, 0.0f, 0.0f};
+        // ENQUADRAMENTO DA CAMERA do jogo (bloco "camera" do manifesto, todas
+        // as chaves opcionais): fov, yaw, pitch, distance. Quem nao vem fica
+        // com o padrao do motor (math/Camera.hpp). E' aqui que um jogo diz
+        // como se ve', em vez de corrigir a camera por script a cada mapa.
+        std::optional<float> cameraFov, cameraYaw, cameraPitch, cameraDistance;
     };
 
     static Project& instance();

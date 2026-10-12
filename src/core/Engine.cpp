@@ -786,12 +786,17 @@ bool Engine::init(int width, int height, const std::string& title) {
     initMinimap();
     m_audio.init(); // sem dispositivo de som, o jogo segue mudo
 
-    m_camera.setPerspective(60.0f, (float)width / (float)height, cameraNear(), 50000.0f);
-    // Default camera: 85% zoom, 50% pitch
-    // zoomPercent=0.85 => distance = 10 + (1-0.85)*990 = 158.5
-    // pitchPercent=0.50 => 10 + 0.50*(90-10) = 50 degrees
-    m_camera.setOrbit(glm::radians(-90.0f), glm::radians(50.0f), 158.5f);
-    m_camera.setDefaultOrbit(glm::radians(-90.0f), glm::radians(50.0f), 158.5f);
+    m_camera.setPerspective(camera_default::kFovDeg, (float)width / (float)height, cameraNear(), 50000.0f);
+    // Enquadramento isometrico padrao (math/Camera.hpp). A distancia grande
+    // que a abertura estreita pede passa dos limites de orbita e do plano
+    // distante que a camera nasce com; setInitialCamera ja' sobe os dois, e
+    // aqui no boot vale a mesma conta.
+    // O padrao PRIMEIRO: setDefaultOrbit levanta o teto de afastamento, e
+    // setOrbit clampa por ele - na ordem inversa a distancia saia cortada.
+    m_camera.setDefaultOrbit(glm::radians(camera_default::kYawDeg), glm::radians(camera_default::kPitchDeg),
+                             camera_default::kDistance);
+    m_camera.setOrbit(glm::radians(camera_default::kYawDeg), glm::radians(camera_default::kPitchDeg),
+                      camera_default::kDistance);
 
     {
         auto fog = std::make_unique<RenderEffect>("Fog", m_postSettings.enableFog);

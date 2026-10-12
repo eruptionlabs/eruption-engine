@@ -536,14 +536,14 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     }
 
     if (m_hasInitialCamera) {
-        m_camera.setOrbit(m_initialYaw, m_initialPitch, m_initialDist);
         m_camera.setDefaultOrbit(m_initialYaw, m_initialPitch, m_initialDist);
+        m_camera.setOrbit(m_initialYaw, m_initialPitch, m_initialDist);
     } else {
-        // Default spawn orientation: look toward the south, 50° pitch, 85% zoom.
-        // Zoom 0.85 maps to orbit distance = 10 + (1 - 0.85) * (1000 - 10) = 158.5.
-        float defaultDist = 10.0f + (1.0f - 0.85f) * (1000.0f - 10.0f);
-        m_camera.setOrbit(glm::radians(-90.0f), glm::radians(50.0f), defaultDist);
-        m_camera.setDefaultOrbit(glm::radians(-90.0f), glm::radians(50.0f), defaultDist);
+        // Enquadramento isometrico padrao (math/Camera.hpp).
+        m_camera.setDefaultOrbit(glm::radians(camera_default::kYawDeg), glm::radians(camera_default::kPitchDeg),
+                                 camera_default::kDistance);
+        m_camera.setOrbit(glm::radians(camera_default::kYawDeg), glm::radians(camera_default::kPitchDeg),
+                          camera_default::kDistance);
     }
     m_playerController->setYaw(glm::pi<float>());
     m_playerSpawnedOnActiveMap = true;

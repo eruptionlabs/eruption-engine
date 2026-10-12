@@ -350,22 +350,24 @@ void PlayerController::updateCamera(float dt, bool captureMouse, bool captureKey
     float scroll = Input::mouseScrollDelta();
     if (!captureMouse && scroll != 0.0f) {
         if (m_tacticalView) {
+            // Tres degraus de afastamento, em MULTIPLOS do enquadramento
+            // padrao do mapa - nao em unidades cravadas. Os 400/700/1000 de
+            // antes valiam a abertura de 60 graus; com uma abertura estreita
+            // (a camera padrao fica muito mais longe pra enquadrar o mesmo)
+            // os tres degraus caiam DENTRO do enquadramento normal e o F7
+            // deixava de afastar. As proporcoes sao as mesmas de antes.
+            const float d0 = m_engine->camera().defaultOrbitDistance();
+            const float degrau[3] = {d0 * 2.52f, d0 * 4.42f, d0 * 6.31f};
             float dist = m_engine->camera().orbitDistance();
             int level = 0;
-            if (dist > 550.0f) level = 1;
-            if (dist > 850.0f) level = 2;
-            if (scroll > 0) {
-                if (level > 0) {
-                    level--;
-                    float newDist = (level == 0) ? 400.0f : 700.0f;
-                    m_engine->camera().setOrbit(m_engine->camera().orbitYaw(), m_engine->camera().orbitPitch(), newDist);
-                }
-            } else if (scroll < 0) {
-                if (level < 2) {
-                    level++;
-                    float newDist = (level == 2) ? 1000.0f : 700.0f;
-                    m_engine->camera().setOrbit(m_engine->camera().orbitYaw(), m_engine->camera().orbitPitch(), newDist);
-                }
+            if (dist > (degrau[0] + degrau[1]) * 0.5f) level = 1;
+            if (dist > (degrau[1] + degrau[2]) * 0.5f) level = 2;
+            if (scroll > 0 && level > 0) {
+                level--;
+                m_engine->camera().setOrbit(m_engine->camera().orbitYaw(), m_engine->camera().orbitPitch(), degrau[level]);
+            } else if (scroll < 0 && level < 2) {
+                level++;
+                m_engine->camera().setOrbit(m_engine->camera().orbitYaw(), m_engine->camera().orbitPitch(), degrau[level]);
             }
         } else {
             m_engine->camera().zoom(1.0f + scroll * m_engine->inputConfig().kbMouse.scrollSensitivity);
@@ -386,7 +388,8 @@ void PlayerController::updateCamera(float dt, bool captureMouse, bool captureKey
                 // (o "jump" reproduzido no parana_demo, 2026-09-04). Com o teto
                 // levantado, arrastar o pitch de 10 a 89 aqui e' continuo.
                 m_engine->camera().setPitchLimits(glm::radians(10.0f), glm::radians(89.0f));
-                m_engine->camera().setOrbit(m_engine->camera().orbitYaw(), glm::radians(89.0f), 1000.0f);
+                m_engine->camera().setOrbit(m_engine->camera().orbitYaw(), glm::radians(89.0f),
+                                            m_engine->camera().defaultOrbitDistance() * 6.31f);
             } else {
                 // Volta a faixa do jogo ANTES de restaurar a pose: setOrbit
                 // clampa, entao a pose pre-tatica (que ja' estava na faixa)
@@ -505,7 +508,7 @@ void PlayerController::updateWorld(float dt) {
     }
     if (m_engine->postSettings().cocEnableAdaptiveFocal && m_engine->postSettings().cocEnableZoomMapping) {
         float obstruction = m_engine->computeObstruction();
-        float zoomPercent = 1.0f - (m_engine->camera().orbitDistance() - 10.0f) / (1000.0f - 10.0f);
+        float zoomPercent = m_engine->camera().zoomPercent();
         float baseFocal = m_engine->postSettings().cocFocalCurve.evaluate(zoomPercent);
         float targetOffset = -baseFocal * obstruction;
         float speed = glm::clamp(m_engine->postSettings().cocAdaptiveFocalDamping * dt * 60.0f, 0.0f, 1.0f);

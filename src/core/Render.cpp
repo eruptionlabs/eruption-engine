@@ -260,7 +260,9 @@ void Engine::render() {
         bindFsrInputs();
         m_water.resizeRefraction(w, h);
         m_water.setSkyTexture(m_skybox.outputView(), m_skybox.outputSampler());
-        m_camera.setPerspective(60.0f, (float)w / (float)h, cameraNear(), 50000.0f);
+        // Mantem a abertura em vigor: redimensionar a janela nao e' motivo pra
+        // voltar pro padrao de fabrica (o jogo pode ter pedido outra).
+        m_camera.setPerspective(m_camera.fov(), (float)w / (float)h, cameraNear(), m_camera.farPlane());
         recreateViewportTarget();
         m_resized = false;
     }
@@ -519,7 +521,7 @@ void Engine::render() {
         m_contactShadowEnabled,
         contactLenEnv > 0.0f ? contactLenEnv : m_contactShadowLength);
 
-    float zoomPercent = 1.0f - (m_camera.orbitDistance() - 10.0f) / (1000.0f - 10.0f);
+    float zoomPercent = m_camera.zoomPercent();
 
     // Jitter ANTES de qualquer matriz Jittered ser lida neste frame.
     updateTemporalJitter();
