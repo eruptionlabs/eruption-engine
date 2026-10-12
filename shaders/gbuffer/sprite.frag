@@ -12,6 +12,9 @@ layout(location = 5) in vec3 v_normal;
 layout(location = 6) in flat uint v_paletteIndex;
 layout(location = 7) in flat uint v_normalTexIndex;
 layout(location = 8) in flat uint v_mrahwTexIndex;
+layout(location = 9) in vec3 v_billRight;
+layout(location = 10) in vec3 v_billUp;
+layout(location = 11) in vec2 v_quad;
 
 layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
@@ -92,7 +95,32 @@ void main() {
 
     uint matId = (v_flags >> 3) & 0x1F;
 
+    // NORMAL ABAULADA.
+    //
+    // O vertex entrega UMA normal para o sprite inteiro (a do billboard,
+    // misturada com +Y por u_spriteNormalYMix). Com ela, a iluminacao do
+    // personagem e' CONSTANTE na area toda: tocha a esquerda e tocha a
+    // direita dao exatamente o mesmo resultado, e dentro de uma caverna
+    // iluminada so' por tocha o boneco fica chapado, colado por cima da cena
+    // em vez de dentro dela. (O caminho forward, que nem somava luz pontual,
+    // e' codigo morto: renderSpritesForward nao tem chamador.)
+    //
+    // O sprite nao e' um plano: ele representa um corpo. Entao a normal e'
+    // curvada como a de um CILINDRO em pe' — na borda esquerda aponta para a
+    // esquerda, na direita para a direita — e um pouco no eixo vertical, que
+    // e' o que faz a cabeca pegar a luz de cima e o pe' ficar na sombra.
+    // Nao custa textura nenhuma e vale para todo sprite do acervo.
+    //
+    // 0.62 e 0.22: com 1.0 a borda fica perpendicular a vista e escurece ate'
+    // sumir, que le' como recorte preto em volta do personagem. Nestes dois a
+    // silhueta continua inteira e o lado da tocha acende.
+    const float kAbaulaH = 0.62, kAbaulaV = 0.22;
     vec3 N = normalize(v_normal);
+    {
+        float s = clamp(v_quad.x * 2.0, -1.0, 1.0);
+        float t = clamp(v_quad.y * 2.0, -1.0, 1.0);
+        N = normalize(N + v_billRight * (s * kAbaulaH) + v_billUp * (t * kAbaulaV));
+    }
     if (v_normalTexIndex != 0u) {
         // Generated normal maps are kept out of sprite lighting to preserve the
         // original look; alpha is still sampled by the deferred pass elsewhere.
