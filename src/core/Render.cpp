@@ -681,7 +681,8 @@ void Engine::render() {
     // ERUPTION_TEST_NO_WIND=1 (debug): vegetacao parada. Isola o que a camera
     // faz na imagem (cintilacao) do que o vento move de verdade.
     static const bool kNoWind = std::getenv("ERUPTION_TEST_NO_WIND") != nullptr;
-    if (kNoWind) frameUbo.windParams = Vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    // Modo classico (ERUPT OFF): o original nao tem vento, arvore parada.
+    if (kNoWind || m_classic.on) frameUbo.windParams = Vec4(0.0f, 0.0f, 0.0f, 0.0f);
     // Vento do frame anterior (velocidade de objeto da vegetacao). No primeiro
     // frame e depois de uma troca de mapa nao ha' anterior: repete o atual.
     if (!m_hasPrevWindParams || m_fsrReset) m_prevWindParams = frameUbo.windParams;
