@@ -276,3 +276,8 @@ declare vfx: {
     -- False once the effect ended or was stopped.
     playing: (id: number) -> boolean,
 }
+
+-- C++ functions of this project (native/*.cpp, include/eruption/native_module.h):
+-- native.<name>(...) with numbers in and one number out. Saving a .cpp file
+-- rebuilds and reloads them while the game runs.
+declare native: { [string]: (...number) -> number }

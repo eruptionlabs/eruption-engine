@@ -113,6 +113,8 @@ ExportReport exportGame(const ExportOptions& o) {
     add("assets/sprites/default.spr");
     // Scripts do jogo (o arquivo de tipos é só do editor).
     addDir("assets/scripts", [](const fs::path& p) { return p.extension() == ".luau" && p.filename() != "eruption.d.luau"; });
+    // Módulo C++ (native/): vai a última versão compilada, não os fontes.
+    if (fs::is_regular_file(root / ".eruption" / "native" / "game.so", ec)) add(fs::path(".eruption") / "native" / "game.so");
 
     // Caminhos entre aspas nos arquivos de texto: o resto do grafo.
     static const std::regex quoted("\"([^\"\\n]{3,260}\\.(?:glb|png|spr|luau|ter|json|wav|ogg|mp3|flac))\"");

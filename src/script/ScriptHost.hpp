@@ -109,6 +109,7 @@ public:
     void reloadForDebugging();
 
 private:
+    std::chrono::steady_clock::time_point m_lastNativePoll{};
     friend class ScriptDebugger;
     std::unique_ptr<ScriptDebugger> m_debugger;
     struct Script {

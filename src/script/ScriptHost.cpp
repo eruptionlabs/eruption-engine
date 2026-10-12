@@ -8,6 +8,9 @@
 #include "core/Logger.hpp"
 #include "game/PlayerController.hpp"
 
+#include "script/NativeModule.hpp"
+#include "core/Project.hpp"
+
 #include <lua.h>
 #include <lualib.h>
 #include <luacodegen.h>
@@ -119,6 +122,10 @@ bool ScriptHost::init(Engine& engine, const fs::path& dir) {
     scan();
     Logger::warning("Scripts: %zu file(s) in %s, %s", m_scripts.size(), m_dir.string().c_str(),
                     m_native ? "native code" : "interpreter");
+    // Módulo C++ do projeto (native/): compila e carrega em segundo plano.
+    NativeModule::instance().init(engine, project::isOpen() ? project::root() : project::engineRoot(),
+                                  project::engineRoot());
+    m_lastNativePoll = std::chrono::steady_clock::now();
     return true;
 }
 
@@ -126,6 +133,7 @@ void ScriptHost::shutdown() {
     if (m_debugger) m_debugger->shutdown();
     m_debugger.reset();
     if (m_running) stop();
+    NativeModule::instance().shutdown();
     for (auto& s : m_scripts) unload(s);
     m_scripts.clear();
     if (L) lua_close(L);
@@ -437,6 +445,8 @@ void ScriptHost::poll() {
     if (!L) return;
     if (m_debugger) m_debugger->poll();
     const auto now = std::chrono::steady_clock::now();
+    NativeModule::instance().poll(std::chrono::duration<float>(now - m_lastNativePoll).count());
+    m_lastNativePoll = now;
     if (now - m_lastScan < std::chrono::milliseconds(500)) return;
     m_lastScan = now;
     scan();
@@ -453,6 +463,7 @@ void ScriptHost::start() {
     m_resume = false;
     if (resume && !m_resumeVars.empty()) importVars(m_resumeVars);
     mapReady();
+    NativeModule::instance().start();
     for (auto& s : m_scripts) {
         if (!resume) {
             startScript(s);
@@ -522,6 +533,7 @@ void ScriptHost::update(float dt) {
         else ++it;
     }
     const float hour = m_engine->dayNightCycle().timeOfDay() * 24.0f;
+    NativeModule::instance().update(dt);
     for (auto& s : m_scripts) {
         lua_pushnumber(L, dt);
         call(s, "on_update", 1);
@@ -538,6 +550,7 @@ void ScriptHost::stop() {
         s.started = false;
         s.failed = false;
     }
+    NativeModule::instance().stop();
     m_running = false;
     m_tweens.clear();
     m_engine->audio().stopAll(); // Stop do editor: o som do jogo para junto
