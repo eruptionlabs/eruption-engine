@@ -994,6 +994,7 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
 
     computeMatrices(currentLightDir, m_cascadeRenderMatrices, m_cascadeLookupMatrices);
     computeMatrices(nextLightDir, m_nextCascadeRenderMatrices, m_nextCascadeLookupMatrices);
+    holdFarCascade(camera, currentLightDir);
 
     if (kShadowDebug) {
         static int frame = 0;
@@ -1011,6 +1012,36 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
                             glm::degrees(camPitch), m_zoomPercent, rawHalf, texel, boost,
                             dbgOrthoL, dbgOrthoR, dbgOrthoB, dbgOrthoT);
         }
+    }
+}
+
+// Decide se a cascata distante e' redesenhada neste frame. Se nao, a busca da
+// iluminacao fica com a matriz do frame em que ela foi desenhada (o atlas
+// guarda aquela imagem), entao a sombra continua no lugar certo; so' a
+// folhagem ao vento la' longe anda a meio passo. Salto de camera, luz que
+// virou ou atlas novo redesenham na hora.
+void ShadowRenderer::holdFarCascade(const Camera& camera, const Vec3& lightDir) {
+    const uint32_t interval = m_settings.csmFarInterval;
+    const bool canHold = interval > 1 && !m_settings.singleMap && !m_settings.enableTemporalBlend;
+    const Vec3 cam = camera.position();
+    const Vec3 light = glm::normalize(lightDir);
+    // Meia largura da cascata pela escala da projecao ortografica (2 / largura).
+    const float half = 1.0f / std::max(std::abs(m_cascadeRenderMatrices[1][0][0]), 1e-6f);
+    bool draw = !canHold || !m_farHeldValid || m_farHeldAtlas != m_currentAtlasSize ||
+                glm::distance(cam, m_farHeldCam) > 0.03f * half || glm::dot(light, m_farHeldLight) < 0.99996f;
+    if (!draw && ++m_farAge >= interval) draw = true;
+    m_drawFar = draw;
+    if (draw) {
+        m_farAge = 0;
+        m_farHeldValid = canHold;
+        m_farHeldAtlas = m_currentAtlasSize;
+        m_farHeldCam = cam;
+        m_farHeldLight = light;
+        m_farRenderHeld = m_cascadeRenderMatrices[1];
+        m_farLookupHeld = m_cascadeLookupMatrices[1];
+    } else {
+        m_cascadeRenderMatrices[1] = m_farRenderHeld;
+        m_cascadeLookupMatrices[1] = m_farLookupHeld;
     }
 }
 
@@ -1036,11 +1067,24 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
 
     // Helper to render one atlas
     auto renderAtlas = [&](VkImage atlasImage, VkImageView atlasView, const Mat4* renderMats) {
-        m_ctx->cmdImageBarrier(cmd, atlasImage,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-            0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-            VK_IMAGE_ASPECT_DEPTH_BIT);
+        // Cascata distante guardada (holdFarCascade): o atlas mantem a imagem
+        // dela e so' a regiao da c0 e' limpa.
+        const bool keepFar = renderMats == m_cascadeRenderMatrices && !m_drawFar;
+        if (keepFar) {
+            m_ctx->cmdImageBarrier(cmd, atlasImage,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_SHADER_READ_BIT,
+                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_IMAGE_ASPECT_DEPTH_BIT);
+        } else {
+            m_ctx->cmdImageBarrier(cmd, atlasImage,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_IMAGE_ASPECT_DEPTH_BIT);
+        }
 
         // Modo single: so' o slot 0 e' desenhado (o clear do beginRendering ja'
         // deixa o slot 1 em 1.0 = sem oclusor, e o lookup morto nunca amostra).
@@ -1053,7 +1097,7 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
             depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             depthAttachment.imageView = atlasView;
             depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            depthAttachment.loadOp = (i == 0) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            depthAttachment.loadOp = (i == 0 && !keepFar) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
             depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             depthAttachment.clearValue.depthStencil = {1.0f, 0};
 
@@ -1073,6 +1117,17 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
                 uint32_t renderW = m_currentAtlasSize * CASCADE_COUNT;
                 uint32_t renderH = m_currentAtlasSize;
                 m_ctx->cmdBeginRendering(cmd, {}, &depthAttachment, nullptr, {renderW, renderH});
+                if (keepFar) {
+                    VkClearAttachment clear{};
+                    clear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                    clear.clearValue.depthStencil = {1.0f, 0};
+                    const VkClearRect rect{scissor, 0, 1};
+                    vkCmdClearAttachments(cmd, 1, &clear, 1, &rect);
+                }
+            }
+            if (keepFar && i == 1) {
+                if (i == drawCount - 1) m_ctx->cmdEndRendering(cmd);
+                continue;
             }
 
             vkCmdSetViewport(cmd, 0, 1, &viewport);
@@ -1228,6 +1283,9 @@ void ShadowSettings::loadFromJson(const json& j) {
     if (const char* e = std::getenv("ERUPTION_SHADOW_FAR_TAU")) csmFarSmoothTau = std::strtof(e, nullptr);
     csmLambda = std::clamp(j.value("csm_lambda", csmLambda), 0.0f, 1.0f);
     csmFarTexelBias = std::max(j.value("csm_far_texel_bias", csmFarTexelBias), 1.0f);
+    csmFarInterval = std::clamp(j.value("csm_far_interval", csmFarInterval), 1u, 8u);
+    if (const char* e = std::getenv("ERUPTION_SHADOW_FAR_INTERVAL"))
+        csmFarInterval = std::clamp(static_cast<uint32_t>(std::max(std::atoi(e), 1)), 1u, 8u);
     {
         std::string mode = j.value("mode", std::string("csm"));
         if (const char* env = std::getenv("ERUPTION_SHADOW_MODE")) mode = env;
