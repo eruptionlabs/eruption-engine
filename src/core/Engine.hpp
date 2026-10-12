@@ -1195,7 +1195,6 @@ private:
             std::lock_guard<std::mutex> lock(mutex);
             modelMeshes[key] = {mesh, currentWarpId};
         }
-        // Tira do cache (quem chama libera os buffers).
         // Tira do cache as texturas cujo nome começa com `prefix` (as embutidas
         // de um mapa vizinho que saiu: "#<mapa>|..."); quem chama as destrói.
         std::vector<ModelTextureGPU> takeModelTextures(const std::string& prefix) {
@@ -1211,13 +1210,22 @@ private:
             }
             return out;
         }
-        bool takeModelMesh(const std::string& key, ModelMeshGPU& outMesh) {
+        // Tira do cache as malhas de um nó ("arquivo#nó"; quem chama libera os
+        // buffers). A chave guardada leva ainda "#<impressão dos slots>", uma
+        // por versão de texturas.
+        std::vector<ModelMeshGPU> takeModelMeshes(const std::string& nodeKey) {
             std::lock_guard<std::mutex> lock(mutex);
-            auto it = modelMeshes.find(key);
-            if (it == modelMeshes.end()) return false;
-            outMesh = it->second.mesh;
-            modelMeshes.erase(it);
-            return true;
+            std::vector<ModelMeshGPU> out;
+            const std::string prefix = nodeKey + "#";
+            for (auto it = modelMeshes.begin(); it != modelMeshes.end();) {
+                if (it->first.rfind(prefix, 0) == 0) {
+                    out.push_back(it->second.mesh);
+                    it = modelMeshes.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            return out;
         }
         struct Stats {
             size_t modelTextureCount = 0;
@@ -1541,6 +1549,7 @@ private:
         Vec2 boundsMin{0.0f}, boundsMax{0.0f};
         enum class State { Idle, Loading, Shown, Hidden, Failed } state = State::Idle;
         std::future<std::shared_ptr<WorldRegionLoad>> job;
+        bool slotsResolved = false; // Loading: lido e com texturas resolvidas; a malha está sendo montada
         std::shared_ptr<LoadedMap> data; // grade e caminhada já no lugar do mundo
         uint32_t firstInstance = 0, endInstance = 0;
         std::vector<uint8_t> enabled; // instâncias ligadas quando o vizinho saiu de cena
@@ -1576,6 +1585,7 @@ private:
     void resetWorld();
     void buildWorldGraph();
     void updateWorld();
+    void resolveRegionSlots(WorldRegionLoad& load);
     void attachRegion(WorldRegion& r, WorldRegionLoad& load);
     void showRegion(WorldRegion& r, bool show);
     void rebuildWorldWater();

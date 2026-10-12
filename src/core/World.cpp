@@ -75,6 +75,11 @@ bool groundArea(const TerrainFile& t, Vec2& lo, Vec2& hi) {
 struct Engine::WorldRegionLoad {
     std::shared_ptr<LoadedMap> map;
     std::vector<ModelAsset> models;
+    // Montagem das malhas fora da thread principal: quais texturas cada nó
+    // usa (thread de leitura), os slots delas (principal) e a malha pronta.
+    std::vector<std::vector<ModelRenderer::NodeSlotUse>> slotUse;
+    std::vector<std::vector<ModelRenderer::NodeSlots>> slots;
+    std::vector<ModelRenderer::PreparedAsset> prepared;
     SceneEdits edits;
     std::string error;
 };
@@ -252,6 +257,7 @@ void Engine::updateWorld() {
                     for (auto& m : out->map->models) {
                         namespaceEmbedded(m, map);
                         out->models.push_back(convertModelToAsset(m));
+                        out->slotUse.push_back(ModelRenderer::scanSlotUse(out->models.back()));
                     }
                     HeightEdit h;
                     applyHeightDelta(*out->map, out->models, h);
@@ -268,6 +274,7 @@ void Engine::updateWorld() {
                     return out;
                 });
                 r.state = WorldRegion::State::Loading;
+                r.slotsResolved = false;
                 ++jobs;
             }
             break;
@@ -280,8 +287,22 @@ void Engine::updateWorld() {
                     r.state = WorldRegion::State::Failed;
                     break;
                 }
+                attachedThisFrame = true; // um passo pesado por frame
+                if (!r.slotsResolved) {
+                    // Lido: texturas viram slots aqui e a malha (vértices,
+                    // solda, células, costuras, LOD) é montada em outra thread.
+                    resolveRegionSlots(*load);
+                    const ModelRenderer::LodParams lod = m_modelRenderer.lodParams();
+                    r.job = std::async(std::launch::async, [load, lod] {
+                        for (size_t i = 0; i < load->models.size() && i < load->slots.size(); ++i)
+                            load->prepared.push_back(
+                                ModelRenderer::prepareAsset(load->models[i], std::move(load->slots[i]), lod));
+                        return load;
+                    });
+                    r.slotsResolved = true;
+                    break;
+                }
                 attachRegion(r, *load);
-                attachedThisFrame = true; // um por frame
                 if (far) showRegion(r, false);
             }
             break;
@@ -301,6 +322,20 @@ void Engine::updateWorld() {
     }
 }
 
+void Engine::resolveRegionSlots(WorldRegionLoad& load) {
+    // Texturas embutidas: procuradas nos modelos do mapa aberto (só as
+    // imagens; a malha não precisa ficar).
+    for (auto& m : load.map->models) {
+        ModelFile images;
+        images.filePath = m.filePath;
+        images.embeddedTextures = std::move(m.embeddedTextures);
+        m.nodes.clear();
+        if (!images.embeddedTextures.empty() && m_currentMap) m_currentMap->models.push_back(std::move(images));
+    }
+    for (size_t i = 0; i < load.models.size() && i < load.slotUse.size(); ++i)
+        load.slots.push_back(m_modelRenderer.resolveSlots(load.models[i], load.slotUse[i]));
+}
+
 void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
     const auto t0 = std::chrono::steady_clock::now();
     r.data = load.map;
@@ -310,24 +345,20 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
     const std::string prefix = r.map + ":";
     r.firstInstance = static_cast<uint32_t>(mr.instanceCount());
 
-    // Modelos do mapa, deslocados. Texturas embutidas: procuradas nos modelos
-    // do mapa aberto (só as imagens; a malha não precisa ficar).
+    // Modelos do mapa, deslocados; a malha chega montada (resolveRegionSlots).
     const bool keep = mr.keepGroundVertices();
     mr.setKeepGroundVertices(true); // camadas e bordas costuradas mexem nos vértices
-    mr.setMeshLodSuspended(true);   // simplificar o chão aqui travava o frame (~40 ms)
-    for (size_t i = 0; i < load.models.size() && i < r.data->models.size(); ++i) {
-        ModelFile images;
-        images.filePath = r.data->models[i].filePath;
-        images.embeddedTextures = std::move(r.data->models[i].embeddedTextures);
-        r.data->models[i].nodes.clear();
-        if (!images.embeddedTextures.empty() && m_currentMap) m_currentMap->models.push_back(std::move(images));
+    mr.setMeshLodSuspended(true);   // o LOD veio da thread; simplificar aqui travava o frame
+    for (size_t i = 0; i < load.models.size(); ++i) {
+        const std::string file = load.models[i].filePath;
+        if (i < load.prepared.size()) mr.providePrepared(file, std::move(load.prepared[i]));
         ModelInstanceDesc desc;
-        desc.modelPath = load.models[i].filePath;
+        desc.modelPath = file;
         desc.position = r.offset;
         desc.rotation = Vec3(0.0f);
         desc.scale = Vec3(1.0f);
-        mr.addModel(load.models[i], desc);
-        r.modelFiles.push_back(load.models[i].filePath);
+        mr.addModel(std::move(load.models[i]), desc);
+        r.modelFiles.push_back(file);
     }
     flushPendingUploads();
     mr.setMeshLodSuspended(false);
@@ -584,10 +615,10 @@ void Engine::releaseRegion(WorldRegion& r) {
     size_t meshes = 0;
     for (const auto& path : r.modelFiles) {
         for (const auto& key : mr.releaseAsset(path)) {
-            ModelMeshGPU base;
-            if (!m_assetCache.takeModelMesh(key, base)) continue;
-            ++meshes;
-            m_vulkan.deferFrameCleanup([this, base]() mutable { base.destroyBuffers(&m_vulkan); });
+            for (ModelMeshGPU base : m_assetCache.takeModelMeshes(key)) {
+                ++meshes;
+                m_vulkan.deferFrameCleanup([this, base]() mutable { base.destroyBuffers(&m_vulkan); });
+            }
         }
         if (m_currentMap) {
             auto& models = m_currentMap->models;
