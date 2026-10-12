@@ -436,8 +436,33 @@ const std::vector<StepInfo>& stepCatalog() {
         {"smooth", "Smooth", "Softens sharp edges.",
          {{"radius", 1, 1, 6, "Neighbourhood"}, {"iterations", 1, 1, 20, "Passes"}, {"amount", 0.6, 0, 1, "Strength"}},
          {}},
-        {"terrace", "Terraces", "Steps like rice fields or mesas.",
-         {{"steps", 8, 2, 64, "Number of steps"}, {"sharpness", 0.6, 0, 1, "0 = soft ramps, 1 = flat steps"}},
+        {"terrace", "Terraces", "Steps like rice fields or mesas. With the filters, only where the rules match.",
+         {{"steps", 8, 2, 64, "Number of steps"}, {"sharpness", 0.6, 0, 1, "0 = soft ramps, 1 = flat steps"},
+          {"slope_min", -1e9, 0, 90, "From this slope (degrees)"},
+          {"slope_max", 1e9, 0, 90, "Up to this slope"},
+          {"height_min", -1e9, -1000, 3000, "From this height"},
+          {"height_max", 1e9, -1000, 3000, "Up to this height"},
+          {"softness", 3, 0.1, 50, "Blend at the borders"},
+          {"region_scale", 1e9, 50, 5000, "Biome: size of the regions (turn on to use)"},
+          {"region_min", 0, 0, 1, "Biome: from this part of the region noise"},
+          {"region_max", 1, 0, 1, "Biome: up to this part"},
+          {"region_seed", 1, 1, 100, "Biome: same number = same regions"}},
+         {}},
+        {"talus", "Scree (angle of repose)",
+         "Anything steeper than the angle of repose collapses, and the material piles up at the "
+         "foot. This is what turns a carved wall into a rock slope. Put it after the shapes are cut.",
+         {{"repose", 45, 10, 85, "Angle of repose (degrees). 55 = hard rock; 34 = sand/scree"},
+          {"passes", 60, 1, 400, "How far the collapse travels"},
+          {"rate", 0.5, 0.05, 1.0, "How much moves per pass"},
+          {"slope_min", -1e9, 0, 90, "From this slope (degrees)"},
+          {"slope_max", 1e9, 0, 90, "Up to this slope"},
+          {"height_min", -1e9, -1000, 3000, "From this height"},
+          {"height_max", 1e9, -1000, 3000, "Up to this height"},
+          {"softness", 3, 0.1, 50, "Blend at the borders"},
+          {"region_scale", 1e9, 50, 5000, "Biome: size of the regions (turn on to use)"},
+          {"region_min", 0, 0, 1, "Biome: from this part of the region noise"},
+          {"region_max", 1, 0, 1, "Biome: up to this part"},
+          {"region_seed", 1, 1, 100, "Biome: same number = same regions"}},
          {}},
         {"raise", "Raise / lower", "Adds a height to the whole map.", {{"amount", 0, -2000, 2000, "Units"}}, {}},
         {"water", "Water level", "Water surface; ground below it becomes lakes and sea.", {{"level", 0, -1000, 3000, "Height"}}, {}},
@@ -848,12 +873,43 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             const float steps = float(s.get("steps", 8)), sharp = float(s.get("sharpness", 0.6));
             const auto [lo, hi] = std::minmax_element(r.height.begin(), r.height.end());
             const float h0 = *lo, range = std::max(1e-3f, *hi - *lo);
-            for (float& h : r.height) {
+            // FILTROS, como em `paint` e `realistic`. Sem eles o degrau e'
+            // sempre o mapa inteiro, e quem quer cornija na PAREDE (parede de
+            // bacia, de canion, de poco) tinha de aceitar degrau tambem no
+            // chao por onde se anda — que e' justamente onde degrau estorva.
+            // O peso sai da superficie ANTES do passo, senao o primeiro
+            // degrau muda a inclinacao que decide o segundo.
+            std::vector<float> peso(r.height.size(), 1.0f);
+            const bool filtrado = s.has("slope_min") || s.has("slope_max") || s.has("height_min") ||
+                                  s.has("height_max") || s.num.count("region_scale");
+            if (filtrado)
+                for (int z = 0; z < r.d; ++z)
+                    for (int x = 0; x < r.w; ++x) peso[size_t(z) * r.w + x] = ruleWeight(r, x, z, s);
+            for (size_t i = 0; i < r.height.size(); ++i) {
+                if (peso[i] <= 0.0f) continue;
+                const float h = r.height[i];
                 const float t = (h - h0) / range * steps;
                 const float fl = std::floor(t), f = t - fl;
                 const float k = std::pow(f, 1.0f + sharp * 8.0f); // plano e subida curta
-                h = h0 + (fl + k) / steps * range;
+                const float degrau = h0 + (fl + k) / steps * range;
+                r.height[i] = h + (degrau - h) * peso[i];
             }
+        } else if (s.type == "talus") {
+            // TALUDE SOZINHO. A erosao termica ja' existia dentro de
+            // "realistic", mas la' ela e' multiplicada pela REGULARIDADE da
+            // superficie: onde ja' ha detalhe (depois de um `terrace`, por
+            // exemplo) o filtro entende "isso ja' e' rocha" e nao derruba
+            // nada. So' que ser detalhada nao impede uma parede de estar em
+            // 80 graus, que e' o que o olho acusa como escavacao e nao como
+            // rocha. Aqui o unico criterio e' o ANGULO.
+            std::vector<float> um(r.height.size(), 1.0f), peso(r.height.size(), 1.0f);
+            const bool filtrado = s.has("slope_min") || s.has("slope_max") || s.has("height_min") ||
+                                  s.has("height_max") || s.num.count("region_scale");
+            if (filtrado)
+                for (int z = 0; z < r.d; ++z)
+                    for (int x = 0; x < r.w; ++x) peso[size_t(z) * r.w + x] = ruleWeight(r, x, z, s);
+            talude(r, um, peso, float(s.get("repose", 45)), int(s.get("passes", 60)),
+                   float(s.get("rate", 0.5)));
         } else if (s.type == "raise") {
             for (float& h : r.height) h += float(s.get("amount", 0));
         } else if (s.type == "water") {
