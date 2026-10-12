@@ -748,6 +748,10 @@ void Engine::render() {
     // Particulas: pedidos/emissores deste frame (so' CPU); a simulacao vem
     // depois do G-buffer, e as malhas de particula depois dela.
     m_vfx.setLighting(frameUbo.sunDir, frameUbo.sunColor, frameUbo.ambientSky);
+    if (m_vfxGroundDirty && m_framesCount % 30 == 0) {
+        uploadVfxGround();
+        m_vfxGroundDirty = false;
+    }
     m_vfx.update(m_timer.deltaTime(), m_camera, renderExtent());
     {
         // Luz de particula: uma por emissor com "light" (vizinhas fundidas),

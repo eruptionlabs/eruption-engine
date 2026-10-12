@@ -237,6 +237,7 @@ void Engine::refreshHeightRegion(int x0, int z0, int x1, int z1) {
         }
     for (auto& [mesh, list] : patches) mr.patchGroundVertices(mesh, list);
     for (auto& [mesh, b] : bounds) mr.growMeshBounds(mesh, b.first, b.second);
+    m_vfxGroundDirty = true;
 }
 
 // Altura da grade (bilinear) usando `old` dentro da região salva.

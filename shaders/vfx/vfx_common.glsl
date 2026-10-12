@@ -97,6 +97,8 @@ struct FrameParams {
     vec4 ambient;       // xyz cor do ceu, w intensidade
     vec4 viewInfo;      // x proj[1][1] (teto de tamanho na tela)
     uvec4 meshIndexCount[2]; // indices de cada malha de particula (8)
+    vec4 groundInfo;    // xy origem da grade de altura, z 1/celula, w 1 = ha grade
+    vec4 groundSize;    // xy texels (vertices da grade)
 };
 
 // REGISTRO DE DESENHO (64 bytes, um por particula visivel, no indice dela):
@@ -149,6 +151,7 @@ layout(std430, set = VFX_SET, binding = 6) readonly buffer SpawnBuf { SpawnReque
 layout(std140, set = VFX_SET, binding = 7) uniform FrameBuf { FrameParams frame; };
 layout(set = VFX_SET, binding = 8) uniform sampler2D sceneDepth;
 layout(set = VFX_SET, binding = 9) uniform sampler2D lowResColor;
+layout(set = VFX_SET, binding = 16) uniform sampler2D groundHeight; // grade de altura do chao (mundo)
 // Ordenacao: por lista, 256 contagens + 256 posicoes de escrita.
 layout(std430, set = VFX_SET, binding = 10) VFX_RW buffer SortBuf { uint sortData[]; };
 layout(std430, set = VFX_SET, binding = 13) VFX_RW buffer EventBuf { VfxEvent events[]; };
