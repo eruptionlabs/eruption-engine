@@ -621,6 +621,7 @@ void ModelRenderer::clear() {
     m_lastModels.clear();
     m_lastInstances.clear();
     m_prepared.clear();
+    m_motion.clear();
 
     // Release per-map PBR texture bindings so we don't leak images/slots across
     // map changes. They will be reloaded on demand via the texture resolver.
@@ -725,10 +726,17 @@ void ModelRenderer::createPipeline() {
     attribs[17] = {17, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, blendMaskIndex2)};
     attribs[18] = {18, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, emissiveIndex)};
 
+    // Com velocidade: a posição do frame anterior chega pela entrada 1 (a malha
+    // com esqueleto liga o buffer da pose anterior; as outras, o próprio).
+    VkVertexInputBindingDescription bindings[2] = {bindingDesc, bindingDesc};
+    bindings[1].binding = 1;
+    if (GBuffer::velocityEnabled())
+        attribs.push_back({19, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TerrainVertex, position)});
+
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInput.vertexBindingDescriptionCount = 1;
-    vertexInput.pVertexBindingDescriptions = &bindingDesc;
+    vertexInput.vertexBindingDescriptionCount = GBuffer::velocityEnabled() ? 2 : 1;
+    vertexInput.pVertexBindingDescriptions = bindings;
     vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attribs.size());
     vertexInput.pVertexAttributeDescriptions = attribs.data();
 
@@ -2742,6 +2750,18 @@ VkDescriptorSet ModelRenderer::useStorageSet(VkDescriptorSet set, bool& stale, V
     return set;
 }
 
+const Mat4& ModelRenderer::prevTransformFor(uint32_t index, const Mat4& current) {
+    if (m_motion.size() <= index) m_motion.resize(std::max<size_t>(m_instances.size(), index + 1));
+    MotionRecord& r = m_motion[index];
+    if (r.frame != m_motionFrame) {
+        // Fora de cena no frame anterior: sem histórico, conta como parada.
+        r.prev = r.frame + 1 == m_motionFrame ? r.last : current;
+        r.last = current;
+        r.frame = m_motionFrame;
+    }
+    return r.prev;
+}
+
 bool ModelRenderer::ensureInstanceCapacity(uint32_t count) {
     if (m_instBuffers[0] != VK_NULL_HANDLE && count <= m_instCapacity) return true;
     // Margem 4x: varias chamadas de render() por frame (cena + minimapa)
@@ -2927,6 +2947,14 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     push.uvScale = Vec4(kSemEstocastico ? 0.0f : 1.0f, 1.0f, 0.0f, 0.0f);
 
     auto* dst = static_cast<GpuModelInstance*>(m_instMapped[instFrame]) + instBase;
+    // Sem o alvo de velocidade o shader nem lê a matriz anterior.
+    const bool velocity = GBuffer::velocityEnabled();
+    auto bindVertices = [&](VkBuffer vb, const ModelMeshGPU& mesh) {
+        const VkDeviceSize offsets[2] = {0, 0};
+        const VkBuffer prev = vb == mesh.vertexBuffer && mesh.prevVertexBuffer ? mesh.prevVertexBuffer : vb;
+        const VkBuffer bufs[2] = {vb, prev};
+        vkCmdBindVertexBuffers(cmd, 0, velocity ? 2 : 1, bufs, offsets);
+    };
 
     VkBuffer boundVb = VK_NULL_HANDLE;
     VkBuffer boundIb = VK_NULL_HANDLE;
@@ -2976,8 +3004,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         push.uvScale.w = mesh.dispScale;
         vkCmdPushConstants(cmd, m_pipelineLayout, m_pushStages, 0, sizeof(push), &push);
         if (runVb != boundVb || runIb != boundIb) {
-            VkDeviceSize offset = 0;
-            vkCmdBindVertexBuffers(cmd, 0, 1, &runVb, &offset);
+            bindVertices(runVb, mesh);
             vkCmdBindIndexBuffer(cmd, runIb, 0, VK_INDEX_TYPE_UINT32);
             boundVb = runVb;
             boundIb = runIb;
@@ -3109,6 +3136,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         // Dados por instancia -> SSBO (na ordem da lista visivel).
         GpuModelInstance& d = dst[slot];
         d.model = hot.transform;
+        if (velocity) d.prevModel = prevTransformFor(idx, hot.transform);
         d.uvTranslateRot = m_instUvTranslateRot[idx];
         d.uvScaleDisp = Vec4(m_instUvScale[idx], 0.0f, mesh.swayAmount);
         // Banda perto do displacement (fade POR VÉRTICE no shader; a CPU só
@@ -3177,6 +3205,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
                     LodFadeJob job;
                     job.meshIndex = hot.meshIndex;
                     job.data.model = hot.transform;
+                    if (velocity) job.data.prevModel = prevTransformFor(idx, hot.transform);
                     job.data.uvTranslateRot = m_instUvTranslateRot[idx];
                     job.data.uvScaleDisp = Vec4(m_instUvScale[idx], 0.0f, mesh.swayAmount);
                     job.lod = pair.nearLevel; job.alpha = threshold;
@@ -3318,8 +3347,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             push.roughnessScale = mesh.roughnessScale;
             vkCmdPushConstants(cmd, m_pipelineLayout, m_pushStages, 0, sizeof(push), &push);
             if (runVb2 != boundVb || runIb2 != boundIb) {
-                VkDeviceSize offset = 0;
-                vkCmdBindVertexBuffers(cmd, 0, 1, &runVb2, &offset);
+                bindVertices(runVb2, mesh);
                 vkCmdBindIndexBuffer(cmd, runIb2, 0, VK_INDEX_TYPE_UINT32);
                 boundVb = runVb2;
                 boundIb = runIb2;

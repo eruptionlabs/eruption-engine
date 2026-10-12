@@ -122,7 +122,8 @@ private:
     VkBuffer m_indexBuffer = VK_NULL_HANDLE;
     VmaAllocation m_indexAlloc = VK_NULL_HANDLE;
 
-    struct GpuInstance { Mat4 model; Vec4 uvTranslateRot; Vec4 uvScaleDisp; };
+    // Layout do EngInstance de model_vert.glsl (prevModel só é lido com velocidade).
+    struct GpuInstance { Mat4 model; Vec4 uvTranslateRot; Vec4 uvScaleDisp; Mat4 prevModel; };
     VkBuffer m_instBuffer = VK_NULL_HANDLE;
     VmaAllocation m_instAlloc = VK_NULL_HANDLE;
     void* m_instMapped = nullptr;

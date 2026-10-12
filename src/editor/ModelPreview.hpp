@@ -70,7 +70,8 @@ public:
 
 private:
     struct Node { uint32_t mesh; Mat4 matrix; int skin = -1; };
-    struct GpuInstance { Mat4 model; Vec4 uvTranslateRot; Vec4 uvScaleDisp; };
+    // Layout do EngInstance de model_vert.glsl (prevModel só é lido com velocidade).
+    struct GpuInstance { Mat4 model; Vec4 uvTranslateRot; Vec4 uvScaleDisp; Mat4 prevModel; };
     static constexpr uint32_t kMaxNodes = 512;
 
     bool createPipelines();

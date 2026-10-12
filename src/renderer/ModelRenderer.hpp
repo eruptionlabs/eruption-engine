@@ -22,6 +22,9 @@ namespace eruption {
 
 struct ModelMeshGPU {
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
+    // Malha com esqueleto: posições do frame anterior (vetor de movimento);
+    // NULL = a própria malha (vértice parado). Dono: o skinning.
+    VkBuffer prevVertexBuffer = VK_NULL_HANDLE;
     VmaAllocation vertexAlloc = VK_NULL_HANDLE;
     VkBuffer indexBuffer = VK_NULL_HANDLE;
     VmaAllocation indexAlloc = VK_NULL_HANDLE;
@@ -588,6 +591,9 @@ public:
     // posição e normal animadas nele. Sombra, G-buffer e o resto desenham essa
     // cópia como uma malha qualquer.
     void updateSkinning(VkCommandBuffer cmd, float dt);
+    // Uma vez por frame, antes dos passes: avança o relógio dos vetores de
+    // movimento (a matriz do frame anterior de cada instância).
+    void beginFrame() { ++m_motionFrame; }
     // Esquece os slots de textura guardados por nome com esse prefixo (as
     // texturas foram soltas; se o nome voltar, é resolvido de novo).
     void forgetTextures(const std::string& prefix) {
@@ -632,6 +638,8 @@ private:
         uint32_t instance = 0, baseMesh = 0, mesh = 0;
         VkBuffer out = VK_NULL_HANDLE;
         VmaAllocation outAlloc = VK_NULL_HANDLE;
+        VkBuffer prevOut = VK_NULL_HANDLE; // posições do frame anterior (só com o alvo de velocidade)
+        VmaAllocation prevOutAlloc = VK_NULL_HANDLE;
         VkDescriptorSet set = VK_NULL_HANDLE;
         bool needsInit = true;
         int anim = -1;
@@ -820,7 +828,16 @@ private:
         Mat4 model;
         Vec4 uvTranslateRot;
         Vec4 uvScaleDisp;
+        Mat4 prevModel; // frame anterior: vetor de movimento de objeto que se move
     };
+    // Matriz de cada instância no último frame em que foi desenhada.
+    struct MotionRecord {
+        Mat4 last{1.0f}, prev{1.0f};
+        uint32_t frame = 0;
+    };
+    std::vector<MotionRecord> m_motion;
+    uint32_t m_motionFrame = 1;
+    const Mat4& prevTransformFor(uint32_t index, const Mat4& current);
     // Um buffer por frame-em-voo: o frame N-2 ainda LE o dele enquanto este
     // escreve (o padrao de buffer unico do SpriteRenderer tem corrida).
     static constexpr uint32_t kInstFrames = 3; // = VulkanContext::MAX_FRAMES_IN_FLIGHT
