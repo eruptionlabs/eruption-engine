@@ -35,7 +35,7 @@ layout(set = 1, binding = 0) uniform WaterUBO {
     mat4 invViewProj;
     vec4 extraParams;         // x=absorptionCoeff, y=maxPxScale, z=enableCaustics, w=unused
     vec4 foamSurfaceParams;   // x=foamScale, y=foamSpeed, z=foamRoughness, w=enableSurfaceFoam
-    vec4 normalAdvanced;      // x=normalOctaves, yzw=unused
+    vec4 normalAdvanced;      // x=normalOctaves, y=lavaEmissive, zw=unused
     vec4 causticsParams;      // x=intensity, y=depthAttenuation, zw=unused
     vec4 weatherParams;       // x=sunOcclusion, y=moonOcclusion, z=stormDarken, w=rainIntensity
 } ubo;
@@ -510,13 +510,24 @@ void main() {
         vec2 fw = vWorldPos.xz * 0.010;
         float crust = snoise(fw + vec2(t * 0.013, t * 0.021)) * 0.5 + 0.5;
         float veins = snoise(fw * 2.7 - vec2(t * 0.027, t * 0.017)) * 0.5 + 0.5;
-        float heat = clamp(pow(1.0 - crust, 2.2) * 0.75 + pow(veins, 5.0) * 0.85, 0.0, 1.0);
+        // `emissive` do mapa: 3.0 reproduz o valor fixo que estava aqui, e
+        // abaixo disso sobra mais CROSTA. A lava do motor sem isto era quente
+        // em quase toda a superficie — um lago inteiro no amarelo do nucleo,
+        // sem placa escura, e na tela aquilo le como creme estourado em vez
+        // de lava. O que faz lava parecer lava e' a crosta preta com a fenda
+        // acesa no meio; o valor manda nessa proporcao.
+        float calor = ubo.normalAdvanced.y > 0.0 ? ubo.normalAdvanced.y / 3.0 : 1.0;
+        float heat = clamp((pow(1.0 - crust, 2.2) * 0.75 + pow(veins, 5.0) * 0.85) * calor, 0.0, 1.0);
         vec3 crustCol = vec3(0.055, 0.030, 0.028);
         vec3 hotCol = vec3(1.0, 0.30, 0.055);
         vec3 coreCol = vec3(1.0, 0.80, 0.32);
         vec3 lava = mix(crustCol, hotCol, heat);
         lava = mix(lava, coreCol, pow(heat, 4.0));
-        color = lava + hotCol * heat * 1.9 + sunSpecular * 0.15;
+        // SEM especular do sol. Rocha derretida nao e' espelho: o brilho
+        // dela e' proprio. O reflexo direcional punha uma faixa branca de
+        // escama atravessando o lago, que e' o aspecto de agua clara, nao de
+        // lava, e era o que mais estragava a leitura da sala.
+        color = lava + hotCol * heat * 1.9;
     }
 
     // NaN/Inf final guard

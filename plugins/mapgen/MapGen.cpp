@@ -286,13 +286,15 @@ const std::vector<StepInfo>& stepCatalog() {
           {"width_var", 0.0, 0.0, 1.0, "Width varies along it (0 = constant)"},
           {"pinch", 0.0, 0.0, 1.0, "Floor rises where it narrows"},
           {"from", 0.0, 0.0, 1.0, "Starts at this fraction of the map"},
-          {"to", 1.0, 0.0, 1.0, "Ends here"}},
+          {"to", 1.0, 0.0, 1.0, "Ends here"},
+          {"level", 0, -3000, 3000, "Carve DOWN TO this height instead of by `depth` (0 = off)"}},
          {}},
         {"crater", "Crater (volcano)", "A ring of rock around a pit, in steps: the inside of a volcano.",
          {{"radius", 0.34, 0.05, 0.8, "Mouth radius (fraction of the map)"},
           {"rim", 180, 0, 2000, "How tall the wall around it is"},
           {"depth", 260, 0, 3000, "How deep the pit goes"},
           {"floors", 3, 1, 12, "Steps down the inside wall (the floors)"},
+          {"level", 0, -3000, 3000, "Pit floor AT this height, flat (0 = off, follows the rock)"},
           {"floor_flat", 0.55, 0.0, 0.95, "How flat each step is (0 = ramp)"},
           {"rough", 0.35, 0.0, 1.0, "Rock noise on the wall"},
           {"center_x", 0.5, 0.0, 1.0, "Mouth centre, across"},
@@ -526,6 +528,14 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             // so' mais estreito, e' mais raso, porque a lava deixou mais crosta.
             const float aperta = float(s.get("pinch", 0.0));
             const float de = float(s.get("from", 0.0)), ate = float(s.get("to", 1.0));
+            // COTA ABSOLUTA. Por `depth` o tubo cava um tanto a partir do que
+            // ja' esta ali, entao dois tubos que se cruzam cavam duas vezes e
+            // o cruzamento vira poco. Com `level` o piso de todos eles para
+            // na mesma altura e a planta pode ser uma REDE de corredores, que
+            // e' o que uma caverna de dungeon e'. 0 mantem o comportamento
+            // antigo (ninguem cava ate' a cota zero de proposito).
+            const bool porCota = s.has("level");
+            const float cota = float(s.get("level", 0.0));
             const float lado = recipe.size;
             for (int z = 0; z < r.d; ++z)
                 for (int x = 0; x < r.w; ++x) {
@@ -555,7 +565,10 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                     const float borda = std::min(u - de, ate - u);
                     const float fecha = std::clamp(borda / 0.06f, 0.0f, 1.0f);
                     float& h = r.height[size_t(z) * r.w + x];
-                    const float alvo = h - fundo * (1.0f - aperta * (1.0f - std::max(0.25f, fator)));
+                    // Pelo gargalo o piso sobe um pouco tambem na cota fixa.
+                    const float sobe = fundo * aperta * (1.0f - std::max(0.25f, fator));
+                    const float alvo = porCota ? std::min(h, cota + sobe)
+                                               : h - fundo * (1.0f - aperta * (1.0f - std::max(0.25f, fator)));
                     h = h + (alvo - h) * t * fecha;
                 }
         } else if (s.type == "crater") {
@@ -570,6 +583,14 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             const float flat = float(s.get("floor_flat", 0.55));
             const float rough = float(s.get("rough", 0.35));
             const float cx = float(s.get("center_x", 0.5)), cz = float(s.get("center_z", 0.5));
+            // COTA ABSOLUTA do fundo, como no tubo. Sem ela o degrau de baixo
+            // herda toda a ondulacao da rocha de base: num poco de 280 com
+            // ruido de 180 o "fundo" varia mais que a profundidade, e um lago
+            // posto na cota media aparece so' no meio, com o resto do leito
+            // acima da agua. Com `level` o fundo e' chato de verdade e cada
+            // degrau acima dele sobe depth/floors.
+            const bool porCota = s.has("level");
+            const float cota = float(s.get("level", 0.0));
             for (int z = 0; z < r.d; ++z)
                 for (int x = 0; x < r.w; ++x) {
                     const float dx = float(x - A) / (n - 1) - cx, dz = float(z - A) / (n - 1) - cz;
@@ -595,6 +616,22 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                     const float rampa = flat >= 0.999f ? 0.0f
                                       : std::clamp((dentro - flat) / (1.0f - flat), 0.0f, 1.0f);
                     const float nivel = (degrau + rampa * rampa * (3.0f - 2.0f * rampa)) / float(floors);
+                    if (porCota) {
+                        // `nivel` chega a 1 so' NO PONTO central: usado como
+                        // esta', o fundo pedido virava um cone com a cota so'
+                        // no miolo, e um lago posto nela aparecia do tamanho
+                        // de uma poca. Aqui o que conta e' o DEGRAU: o de
+                        // dentro inteiro fica na cota, o de fora na boca.
+                        const float plano = std::min(
+                            1.0f, (degrau + rampa * rampa * (3.0f - 2.0f * rampa)) /
+                                      std::max(1.0f, float(floors - 1)));
+                        // Junto da boca mistura com a rocha que ja' estava
+                        // ali, senao o degrau de cima vira um corte reto.
+                        const float alvo = cota + (1.0f - plano) * depth;
+                        const float k = std::clamp(t / 0.18f, 0.0f, 1.0f);
+                        h += (alvo - h) * k * k * (3.0f - 2.0f * k);
+                        continue;
+                    }
                     h += rim - (rim + depth) * nivel;
                 }
         } else if (s.type == "island") {
