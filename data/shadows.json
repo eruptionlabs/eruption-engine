@@ -3,6 +3,7 @@
     "mode": "csm",
     "csm_far": 1200.0,
     "csm_lambda": 0.6,
+    "csm_far_interval": 2,
     "single_max_texel": 0.5,
     "use_poisson": true,
     "pcf_kernel_size": 5,

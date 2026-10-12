@@ -60,6 +60,10 @@ struct ShadowSettings {
     // desenha sombra reconhecivel, mas paga submissao de caster - o item
     // mais caro do csm. 2.5 = precisa cobrir ~2.5 texels pra entrar.
     float csmFarTexelBias = 2.5f;
+    // A cascata DISTANTE e' redesenhada a cada N frames (1 = todo frame); nos
+    // outros a iluminacao usa a matriz do frame em que ela foi desenhada.
+    // Folhagem com recorte por alfa e' ~45% do passe nela. ERUPTION_SHADOW_FAR_INTERVAL.
+    uint32_t csmFarInterval = 2;
     // Orcamento de texel do mapa unico (unidades de mundo por texel). Define o
     // alcance da sombra: qh_max = texel * atlas/2 (0.5 * 4096/2 = 1024u).
     // Perto = denso e estavel; alem do alcance = sem sombra (fade no shader).
@@ -213,6 +217,14 @@ private:
     float m_zoomPercent = 1.0f;
     float m_currentWorldTexelSize = 0.01f;
     float m_c1WorldTexelSize = 0.01f;
+    // Cascata distante guardada (csmFarInterval): matrizes, camera e luz do
+    // frame em que foi desenhada; m_drawFar diz se este frame a redesenha.
+    bool m_drawFar = true;
+    bool m_farHeldValid = false;
+    uint32_t m_farAge = 0, m_farHeldAtlas = 0;
+    Mat4 m_farRenderHeld{1.0f}, m_farLookupHeld{1.0f};
+    Vec3 m_farHeldCam{0.0f}, m_farHeldLight{0.0f, -1.0f, 0.0f};
+    void holdFarCascade(const Camera& camera, const Vec3& lightDir);
     // ESTADO DO MODO CASCADE LEGADO (m_settings.singleMap == false) - o modo
     // default (single) nao usa nenhum destes: o ray-grid-fit por angulo que
     // exigia essa historia de congelamento foi removido do caminho single,
