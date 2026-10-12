@@ -234,19 +234,18 @@ void Engine::spawnIndependentCloud(float altitude, float density, Vec2 jitterXZ,
                      global.worldMin(), global.worldMax(),
                      0, 0.0f, seed,
                      boxBottom, boxThickness,
-                     VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER)) {
+                     VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, false)) {
         ERUPTION_LOG_ERROR("Failed to create independent cloud layer");
         return;
     }
     msInit = phaseMs();
     for (const LocalCloud& b : blobs) array->addLocalCloud(b);
     msAdd = phaseMs() - msInit;
-    // init() generated an empty texture (the cloud was added after); regenerate
-    // now so the cloud is baked in immediately.
+    // Sem immediateSubmit: a geracao entra no comando do proximo quadro
+    // (Render.cpp, antes de qualquer passe de nuvem). As duas esperas pela GPU
+    // custavam ~17 ms de CPU por nuvem no celular - quedas para 13 FPS quando
+    // o clima semeia dezenas de nuvens seguidas.
     CloudCoverageArray* raw = array.get();
-    m_cloudLayerRenderer.context()->immediateSubmit([&](VkCommandBuffer cmd) {
-        raw->recordComputeGeneration(cmd);
-    });
     msBake = phaseMs() - msInit - msAdd;
 
     uint32_t id = m_cloudLayerRenderer.registerCloudLayer(raw);

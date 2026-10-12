@@ -786,7 +786,7 @@ void Engine::renderImGui() {
             }
             std::sort(passes.begin(), passes.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
             std::string top;
-            for (size_t i = 0; i < passes.size() && i < 6; ++i) {
+            for (size_t i = 0; i < passes.size() && i < 12 && passes[i].first >= 0.2f; ++i) {
                 char b[64];
                 std::snprintf(b, sizeof(b), " %s=%.1f", passes[i].second.c_str(), passes[i].first);
                 top += b;

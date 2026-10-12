@@ -36,7 +36,8 @@ public:
               uint32_t seed,
               float cloudBottom = 500.0f,
               float layerSpacing = 200.0f,
-              VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT);
+              VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+              bool generateNow = true);
 
     void shutdown();
 

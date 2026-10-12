@@ -2029,8 +2029,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
                                   weather.windDebrisIntensity > 0.001f);
     if (hasGlobalPrecip) {
         vkCmdDraw(cmd, 4, m_particleCount, 0, 0);
-    } else if (m_suppressGlobalPrecip &&
-               ((m_snowCount > 0 && m_rainFollowers.empty()) || m_dustCount > 0)) {
+    } else if (m_suppressGlobalPrecip && (m_snowCount > 0 || m_dustCount > 0)) {
         // Procedural cloud field mode: snow normally renders through the
         // per-cloud followers (Snow-category clouds spawn rainy now, so their
         // flakes are masked by each cloud's exact coverage silhouette). This
@@ -2047,8 +2046,21 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
         push.cloudRange.y = 80.0f;
         push.cloudRange.w = 80.0f;
         m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, &push, sizeof(push));
-        if (m_snowCount > 0 && m_rainFollowers.empty()) {
+        if (m_snowCount > 0) {
+            // Neve tambem numa caixa que segue a VISTA (do alvo da camera ate'
+            // a camera, do chao ate' acima dela). So' com as caixas das nuvens
+            // o buraco entre duas nuvens caia bem na frente da camera e a neve
+            // nunca passava perto da lente ("guarda-chuva" ao girar).
+            const Vec2 mid = (Vec2(params.cameraPos.x, params.cameraPos.z) + Vec2(rainAnchor.x, rainAnchor.z)) * 0.5f;
+            const float reach = glm::distance(Vec2(params.cameraPos.x, params.cameraPos.z), Vec2(rainAnchor.x, rainAnchor.z));
+            const float side = glm::clamp(reach * 1.3f + 160.0f, 160.0f, 900.0f);
+            const float height = glm::clamp(params.cameraPos.y - rainAnchor.y + 40.0f, 60.0f, 900.0f);
+            auto view = push;
+            view.rainBoxCenter = Vec4(mid.x, rainAnchor.y, mid.y, 1.0f);
+            view.cloudRange = Vec4(height / 0.95f, side, push.cloudRange.z, side);
+            m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, &view, sizeof(view));
             vkCmdDraw(cmd, 4, m_snowCount, 0, m_snowStart);
+            m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, &push, sizeof(push));
         }
         if (m_dustCount > 0) {
             vkCmdDraw(cmd, 4, m_dustCount, 0, m_dustStart);

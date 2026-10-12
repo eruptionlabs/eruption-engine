@@ -291,6 +291,18 @@ void pumpEvents(int timeoutMs) {
 int windowW() { return g_app && g_app->window ? ANativeWindow_getWidth(g_app->window) : 0; }
 int windowH() { return g_app && g_app->window ? ANativeWindow_getHeight(g_app->window) : 0; }
 
+// ERUPTION_DISPLAY_SCALE=0.5..1: o swapchain sai menor que a tela e o
+// compositor do Android estica de graca no hardware de video. Tudo que roda
+// na resolucao de saida (FSR, pos, UI) fica proporcionalmente mais barato.
+// Toque e ImGui seguem em coordenadas da janela; so' o framebuffer encolhe.
+float displayScale() {
+    static const float s = [] {
+        const char* e = std::getenv("ERUPTION_DISPLAY_SCALE");
+        return e ? std::clamp(static_cast<float>(std::atof(e)), 0.5f, 1.0f) : 1.0f;
+    }();
+    return s;
+}
+
 } // namespace
 
 // ---- GLFW -------------------------------------------------------------------
@@ -405,12 +417,16 @@ void glfwPollEvents() {
     if ((w != g_window.lastW || h != g_window.lastH) && w > 0 && h > 0) {
         g_window.lastW = w;
         g_window.lastH = h;
-        if (g_window.sizeCb) g_window.sizeCb(&g_window, w, h);
+        if (g_window.sizeCb) {
+            int fw = 0, fh = 0;
+            glfwGetFramebufferSize(&g_window, &fw, &fh);
+            g_window.sizeCb(&g_window, fw, fh);
+        }
     }
 }
 void glfwGetFramebufferSize(GLFWwindow*, int* w, int* h) {
-    if (w) *w = windowW();
-    if (h) *h = windowH();
+    if (w) *w = static_cast<int>(std::lround(windowW() * displayScale()));
+    if (h) *h = static_cast<int>(std::lround(windowH() * displayScale()));
 }
 void glfwSetWindowUserPointer(GLFWwindow* w, void* p) { if (w) w->user = p; }
 void* glfwGetWindowUserPointer(GLFWwindow* w) { return w ? w->user : nullptr; }
@@ -462,7 +478,7 @@ void ImGui_ImplGlfw_Shutdown() {}
 void ImGui_ImplGlfw_NewFrame() {
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(static_cast<float>(windowW()), static_cast<float>(windowH()));
-    io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+    io.DisplayFramebufferScale = ImVec2(displayScale(), displayScale());
     const auto now = std::chrono::steady_clock::now();
     io.DeltaTime = std::max(std::chrono::duration<float>(now - g_lastFrame).count(), 1e-4f);
     g_lastFrame = now;
@@ -518,13 +534,25 @@ void android_main(android_app* app) {
         // android/env.txt: VAR=valor por linha (ex.: preset grafico). Lidos direto
         // do APK, como o args.txt (argumentos do main(), um por linha).
         AAssetManager* am = app->activity->assetManager;
-        {
-            std::istringstream env(readAsset(am, "android/env.txt"));
+        auto applyEnv = [](const std::string& text) {
+            std::istringstream env(text);
             std::string line;
             while (std::getline(env, line)) {
                 const size_t eq = line.find('=');
                 if (line.empty() || line[0] == '#' || eq == std::string::npos) continue;
                 setenv(line.substr(0, eq).c_str(), line.substr(eq + 1).c_str(), 1);
+            }
+        };
+        applyEnv(readAsset(am, "android/env.txt"));
+        // Ajuste sem reinstalar: env.txt na pasta externa do app (gravavel pelo
+        // adb em /sdcard/Android/data/<pacote>/files) sobrepoe o do APK.
+        if (app->activity->externalDataPath) {
+            std::ifstream extra(std::string(app->activity->externalDataPath) + "/env.txt");
+            if (extra) {
+                std::stringstream ss;
+                ss << extra.rdbuf();
+                applyEnv(ss.str());
+                __android_log_print(ANDROID_LOG_INFO, kTag, "env.txt externo aplicado");
             }
         }
         std::vector<std::string> args{"eruption-engine"};

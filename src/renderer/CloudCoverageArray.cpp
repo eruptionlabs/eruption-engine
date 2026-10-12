@@ -21,7 +21,8 @@ bool CloudCoverageArray::init(VulkanContext* ctx,
                               uint32_t seed,
                               float cloudBottom,
                               float layerSpacing,
-                              VkSamplerAddressMode addressMode) {
+                              VkSamplerAddressMode addressMode,
+                              bool generateNow) {
     shutdown();
 
     m_ctx = ctx;
@@ -58,9 +59,13 @@ bool CloudCoverageArray::init(VulkanContext* ctx,
     // Initial generation is done synchronously via immediateSubmit because the
     // engine needs a valid texture before the first frame. Subsequent changes
     // are recorded into the frame command buffer and do not stall.
-    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
-        recordComputeGeneration(cmd);
-    });
+    // generateNow=false: the caller guarantees the frame records the generation
+    // before any pass reads the texture (layers created mid-game).
+    if (generateNow) {
+        m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+            recordComputeGeneration(cmd);
+        });
+    }
 
     return true;
 }

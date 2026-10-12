@@ -231,7 +231,13 @@ void main() {
     // sol - aqui ele vale mesmo na sombra, e como a direcao e' constante nao
     // "anda" com o ciclo do dia.
     float fillShadow = texture(gbufferNormal, inUV).a;
-    dirMod *= mix(1.0, fillShadow, clamp(fillK, 0.0, 1.0));
+    // A auto-sombra so' pesa na face que olha para o preenchimento: na face
+    // de costas ela somava ao escurecimento do gradiente e a ambiente caia a
+    // ~20% - de noite, sem sol, parede virada para o outro lado ficava preta
+    // chapada (o mostrador de tras do relogio "virava sombra" ao girar a
+    // camera). Piso de 55% no gradiente pelo mesmo motivo.
+    dirMod *= mix(1.0, fillShadow, clamp(fillK, 0.0, 1.0) * fillN);
+    dirMod = max(dirMod, 0.55);
 
     vec3 ambientLinear = max(baseAmbient, ambientFloor) * aoShaped * ssao;
     ambientLinear *= dirMod;

@@ -2143,6 +2143,10 @@ void Engine::applyGraphicsPreset() {
         p.value("max_rain_followers", m_maxRainFollowers), 1,
         static_cast<int>(WeatherRenderer::MAX_RAIN_OCCLUDERS));
     m_maxFieldClouds = std::clamp<int>(p.value("max_field_clouds", m_maxFieldClouds), 4, 100);
+    // ERUPTION_MAX_FIELD_CLOUDS: teto do campo de nuvens sem trocar o preset
+    // (celular: cada nuvem e' um raymarch; 40 delas custavam 7-9 ms na tela).
+    if (const char* e = std::getenv("ERUPTION_MAX_FIELD_CLOUDS"))
+        m_maxFieldClouds = std::clamp(std::atoi(e), 4, 100);
 
     // Fumaça de mapa (emissores do .env). No preset low ela pode ser
     // desligada por completo ("smoke": false) ou só barateada: menos passos
