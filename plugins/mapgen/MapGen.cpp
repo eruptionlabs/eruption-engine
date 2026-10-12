@@ -419,6 +419,8 @@ const std::vector<StepInfo>& stepCatalog() {
           {"level", 0, -3000, 3000, "Pit floor AT this height, flat (0 = off, follows the rock)"},
           {"floor_flat", 0.55, 0.0, 0.95, "How flat each step is (0 = ramp)"},
           {"rough", 0.35, 0.0, 1.0, "Rock noise on the wall"},
+          {"warp", 0.0, 0.0, 1.0, "Bends the WHOLE pit out of round (fraction of the radius)"},
+          {"warp_scale", 400, 80, 4000, "Size of each bulge (world units)"},
           {"center_x", 0.5, 0.0, 1.0, "Mouth centre, across"},
           {"center_z", 0.5, 0.0, 1.0, "Mouth centre, along"}},
          {}},
@@ -739,6 +741,23 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             const int floors = std::max(1, int(s.get("floors", 3)));
             const float flat = float(s.get("floor_flat", 0.55));
             const float rough = float(s.get("rough", 0.35));
+            // DEFORMACAO DE DOMINIO, que e' outra coisa que `rough`.
+            //
+            // `rough` multiplica a distancia por ruido do ANGULO, com teto de
+            // 12% do raio: a boca sai um oval amassado e, pior, a deformacao
+            // e' a mesma em toda distancia — os degraus continuam curvas de
+            // nivel CONCENTRICAS, que e' o que o olho le como compasso. Com
+            // 0.62 de rough o lago de lava da dungeon continuou redondo na
+            // foto.
+            //
+            // Aqui o PONTO DE CONSULTA anda antes de medir a distancia, como
+            // na etapa `realistic`. O deslocamento depende da posicao (nao do
+            // angulo), entao cada degrau entorta por conta propria: aparecem
+            // baia, peninsula e istmo, e a linha d'agua deixa de ter raio
+            // unico. A escala do bojo e' em unidades de MUNDO, porque o que
+            // importa e' o tamanho do bojo contra o tamanho do boneco.
+            const float warp = float(s.get("warp", 0.0));
+            const float warpScale = std::max(1.0f, float(s.get("warp_scale", 400.0)));
             const float cx = float(s.get("center_x", 0.5)), cz = float(s.get("center_z", 0.5));
             // COTA ABSOLUTA do fundo, como no tubo. Sem ela o degrau de baixo
             // herda toda a ondulacao da rocha de base: num poco de 280 com
@@ -750,7 +769,24 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             const float cota = float(s.get("level", 0.0));
             for (int z = 0; z < r.d; ++z)
                 for (int x = 0; x < r.w; ++x) {
-                    const float dx = float(x - A) / (n - 1) - cx, dz = float(z - A) / (n - 1) - cz;
+                    float dx = float(x - A) / (n - 1) - cx, dz = float(z - A) / (n - 1) - cz;
+                    if (warp > 0.0f) {
+                        // O deslocamento MORRE PERTO DO CENTRO. Sem isso ele
+                        // puxa o ponto de distancia zero para fora de baixo
+                        // do centro, o fundo pedido nunca e' alcancado e a
+                        // cratera perde o patamar de baixo: medido num poco
+                        // de 120 de raio, o fundo subiu de -180 para -149 e
+                        // virou um V de 59 graus. `warp` tem de entortar a
+                        // BOCA, nao roubar a profundidade.
+                        const float d0 = std::sqrt(dx * dx + dz * dz) / std::max(1e-4f, radius);
+                        const float k = std::clamp(d0 / 0.45f, 0.0f, 1.0f);
+                        // Em FRACAO do mapa, como dx/dz: warp e' fracao do raio.
+                        const float wx = (r.originX + x * r.cell) / warpScale;
+                        const float wz = (r.originZ + z * r.cell) / warpScale;
+                        const float a = warp * radius * k * k * (3.0f - 2.0f * k);
+                        dx += a * fbm(wx, wz, 3, 0.5f, 2.0f, seed + 7u);
+                        dz += a * fbm(wx + 19.3f, wz - 7.1f, 3, 0.5f, 2.0f, seed + 71u);
+                    }
                     float dist = std::sqrt(dx * dx + dz * dz);
                     // Borda irregular: a boca nao e' um circulo de compasso.
                     if (rough > 0.0f) {
