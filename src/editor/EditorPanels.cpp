@@ -59,6 +59,61 @@ bool isPreviewableImage(const std::filesystem::path& p) {
     return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".tga" || e == ".bmp";
 }
 
+// Nome do clima para a interface: o identificador ("partly_cloudy") e' o dos
+// scripts e do .env; aqui vira texto legivel, traduzido por tr().
+const char* weatherLabel(WeatherType type) {
+    static const std::unordered_map<std::string, const char*> kLabels = {
+        {"clear", "Clear"},
+        {"partly_cloudy", "Partly cloudy"},
+        {"light_wind", "Light wind"},
+        {"pollen", "Pollen"},
+        {"sun_halo", "Sun halo"},
+        {"god_rays", "God rays"},
+        {"light_pillars", "Light pillars"},
+        {"sun_dogs", "Sun dogs"},
+        {"green_flash", "Green flash"},
+        {"rainbow_cloud", "Rainbow cloud"},
+        {"cloudy", "Cloudy"},
+        {"overcast", "Overcast"},
+        {"smog", "Smog"},
+        {"haze", "Haze"},
+        {"drizzle", "Drizzle"},
+        {"rainy", "Rain"},
+        {"stormy", "Storm"},
+        {"thunderstorm", "Thunderstorm"},
+        {"hail", "Hail"},
+        {"rainbow", "Rainbow"},
+        {"freezing_rain", "Freezing rain"},
+        {"light_snow", "Light snow"},
+        {"snowy", "Snow"},
+        {"blizzard", "Blizzard"},
+        {"frost", "Frost"},
+        {"heatwave", "Heat wave"},
+        {"sandstorm", "Sandstorm"},
+        {"dust_storm", "Dust storm"},
+        {"dust_devil", "Dust devil"},
+        {"mirage", "Mirage"},
+        {"heat_haze", "Heat haze"},
+        {"foggy", "Fog"},
+        {"mist", "Mist"},
+        {"ground_fog", "Ground fog"},
+        {"aurora_borealis", "Northern lights"},
+        {"aurora_australis", "Southern lights"},
+        {"shooting_stars", "Shooting stars"},
+        {"meteor_shower", "Meteor shower"},
+        {"milky_way", "Milky Way"},
+        {"starry_night", "Starry night"},
+        {"volcanic_ash", "Volcanic ash"},
+        {"fire_smoke", "Wildfire smoke"},
+        {"tornado", "Tornado"},
+        {"waterspout", "Waterspout"},
+        {"downburst", "Downburst"},
+    };
+    const char* id = weatherTypeName(type);
+    const auto it = kLabels.find(id);
+    return tr(it != kLabels.end() ? it->second : id);
+}
+
 void emptyState(const char* text) {
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", tr(text));
@@ -602,10 +657,13 @@ void Editor::drawInspector() {
         if (ImGui::CollapsingHeader(tr("Weather"), ImGuiTreeNodeFlags_DefaultOpen)) {
             const WeatherType cur = m_engine->weatherSystem().currentType();
             propertyLabel("Type");
-            if (ImGui::BeginCombo("##weather", weatherTypeName(cur))) {
+            if (ImGui::BeginCombo("##weather", weatherLabel(cur))) {
                 for (uint32_t t = 0; t < WeatherTypeCount; ++t) {
                     const WeatherType wt = static_cast<WeatherType>(t);
-                    if (ImGui::Selectable(weatherTypeName(wt), wt == cur)) {
+                    ImGui::PushID(static_cast<int>(t));
+                    const bool picked = ImGui::Selectable(weatherLabel(wt), wt == cur);
+                    ImGui::PopID();
+                    if (picked) {
                         m_engine->applyWeatherTypeFull(wt, 1.0f);
                         m_envEdited = true;
                     }
