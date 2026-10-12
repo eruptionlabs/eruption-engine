@@ -53,6 +53,12 @@ layout(push_constant) uniform PushConstants {
     float metallicScale;  // absolute metallic value from the material profile
     float roughnessScale; // absolute roughness value from the material profile
     float _pad;           // ERUPTION_TEST_MAGENTA_DEBUG (nao e' padding!)
+    // O fragment so' precisava ate' aqui, mas o bloco de push tem 96 bytes
+    // (static_assert em ModelRenderer.cpp) e `uvScale` fecha a conta. Declarar
+    // o campo inteiro e' o que permite usar `uvScale.x`, que esta' livre
+    // (o vertex le' so' .z e .w), como interruptor do ladrilhamento — sem
+    // crescer o bloco, que mudaria o layout que o vertex espera.
+    vec4 uvScale;         // x = ladrilhamento estocastico (0/1), y livre, z/w = vertex
 } push;
 
 layout(set = 1, binding = 0) uniform FrameUBO {
@@ -195,6 +201,75 @@ float srgbToLinear(float c) {
 
 vec3 srgbToLinear(vec3 c) {
     return vec3(srgbToLinear(c.r), srgbToLinear(c.g), srgbToLinear(c.b));
+}
+
+// --------------------------------------------------- repeticao do ladrilho
+//
+// Uma volta da textura do chao vale ~32 unidades de mundo (medido: xadrez de
+// referencia fotografado no enquadramento de campo, 104 px de tela por volta
+// contra ~140 px de personagem). Num mapa de 1600 a mesma imagem aparece 50
+// vezes na largura. Por melhor que ela seja, o olho acha a GRADE antes de
+// achar a rocha — e grade e' a assinatura de "isto e' um ladrilho", nao de
+// "isto e' chao". Nenhuma melhora na textura resolve isso, porque o problema
+// nao esta' na textura: esta' no fato de ela ser a mesma.
+//
+// Deliot & Heitz 2019, "Procedural Stochastic Texturing by Tiling and
+// Blending": a UV cai numa grade TRIANGULAR; cada vertice do triangulo que a
+// contem sorteia um deslocamento proprio da textura, e os tres sao misturados
+// pelas coordenadas baricentricas. O deslocamento muda de triangulo para
+// triangulo, entao a repeticao some; a mistura e' baricentrica, entao nao ha
+// costura.
+//
+// O preco da mistura e' CONTRASTE: somar tres amostras independentes com
+// pesos que somam 1 divide a variancia por sum(w^2), e no centro do triangulo
+// isso e' um terco — a textura lava e vira papel. O trabalho original corrige
+// por histograma, que exige pre-processar o acervo inteiro. Aqui a correcao
+// e' direta: o desvio em relacao a MEDIA da textura (o topo da piramide de
+// mipmap ja' e' essa media, e sai de graca do cache) e' dividido por
+// sqrt(sum(w^2)). No vertice do triangulo sum(w^2) = 1 e nada muda; no centro
+// vale 1/3 e o desvio volta multiplicado por sqrt(3). A variancia sai igual a
+// da textura original em qualquer ponto.
+void gradeTriangular(vec2 uv, out vec3 w, out vec2 v1, out vec2 v2, out vec2 v3) {
+    const mat2 paraObliquo = mat2(1.0, 0.0, -0.57735027, 1.15470054);
+    vec2 obl = paraObliquo * (uv * 3.4641016);   // 2*sqrt(3): triangulo de lado 1
+    vec2 base = floor(obl);
+    vec3 t = vec3(fract(obl), 0.0);
+    t.z = 1.0 - t.x - t.y;
+    if (t.z > 0.0) {
+        w  = vec3(t.z, t.y, t.x);
+        v1 = base; v2 = base + vec2(0.0, 1.0); v3 = base + vec2(1.0, 0.0);
+    } else {
+        w  = vec3(-t.z, 1.0 - t.y, 1.0 - t.x);
+        v1 = base + vec2(1.0, 1.0); v2 = base + vec2(1.0, 0.0); v3 = base + vec2(0.0, 1.0);
+    }
+}
+
+vec2 sorteioDoVertice(vec2 p) {
+    return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453);
+}
+
+// `restauraVariancia`: ligado para cor e para o MRAH-W (grandezas escalares,
+// onde lavar o contraste e' o dano). Desligado para a normal, porque ali
+// multiplicar o desvio inclina o relevo alem do que foi assado.
+vec4 amostraSemGrade(uint idx, vec2 uv, vec2 ddxUV, vec2 ddyUV, bool restauraVariancia) {
+    vec3 w; vec2 v1, v2, v3;
+    gradeTriangular(uv, w, v1, v2, v3);
+    vec4 c = w.x * textureGrad(u_textures[idx], uv + sorteioDoVertice(v1), ddxUV, ddyUV)
+           + w.y * textureGrad(u_textures[idx], uv + sorteioDoVertice(v2), ddxUV, ddyUV)
+           + w.z * textureGrad(u_textures[idx], uv + sorteioDoVertice(v3), ddxUV, ddyUV);
+    if (!restauraVariancia) return c;
+    vec4 media = textureLod(u_textures[idx], uv, 14.0);  // topo da piramide = media da imagem
+    return (c - media) * inversesqrt(max(dot(w, w), 1e-4)) + media;
+}
+
+// SO' O CHAO. O custo de tres amostras por textura so' se justifica onde a
+// UV realmente repete, e isso aqui e' o chao com splat: a peca do kit tem UV
+// propria e desenhada, e espalhar ladrilho nela nao quebra repeticao
+// nenhuma — so' borra o que o artista colocou no lugar certo. `quebrar` vem
+// de `hasSplat`, e ERUPTION_NO_STOCHASTIC_TILING desliga pelo motor.
+vec4 amostraChao(uint idx, vec2 uv, vec2 ddxUV, vec2 ddyUV, bool quebrar, bool restauraVariancia) {
+    if (!quebrar) return texture(u_textures[idx], uv);
+    return amostraSemGrade(idx, uv, ddxUV, ddyUV, restauraVariancia);
 }
 
 // Tangent frame from the ACTUAL UV gradient (Schüler 2013, "Normal Mapping
@@ -451,8 +526,14 @@ void main() {
     // Relevo vem de: geometria real perto + sombra própria (horizon map,
     // dependente do SOL, não da vista) + normal map.
 
+    // Quebrar a repeticao vale SO' no chao com splat (ver amostraChao).
+    // Calculado aqui em cima porque a amostra base ja' precisa dele.
+    bool quebraLadrilho = (inSplatTex.x | inSplatTex.y) != 0u && inBlendMaskIndex != 0u
+                          && push.uvScale.x > 0.5;
+    vec2 ddxUV = dFdx(uv), ddyUV = dFdy(uv);
+
     uint texIdx = nonuniformEXT(inTexIndex);
-    vec4 texColor = texture(u_textures[texIdx], uv);
+    vec4 texColor = amostraChao(texIdx, uv, ddxUV, ddyUV, quebraLadrilho, true);
 
     // DESCARTE ANTECIPADO POR ALFA. O teste de alfa ficava DEPOIS do splat
     // (ate' 4 texturas + mascara) e do blend (mais 2 buscas), entao um
@@ -511,10 +592,10 @@ void main() {
         float wBaseSum = w.r + w.g + w.b + w.a;
         vec3 acc = vec3(0.0);
         float sum = 0.0;
-        if (s0 != 0u) { acc += texture(u_textures[nonuniformEXT(s0)], uv).rgb * w.r; sum += w.r; }
-        if (s1 != 0u) { acc += texture(u_textures[nonuniformEXT(s1)], uv).rgb * w.g; sum += w.g; }
-        if (s2 != 0u) { acc += texture(u_textures[nonuniformEXT(s2)], uv).rgb * w.b; sum += w.b; }
-        if (s3 != 0u) { acc += texture(u_textures[nonuniformEXT(s3)], uv).rgb * w.a; sum += w.a; }
+        if (s0 != 0u) { acc += amostraChao(nonuniformEXT(s0), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.r; sum += w.r; }
+        if (s1 != 0u) { acc += amostraChao(nonuniformEXT(s1), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.g; sum += w.g; }
+        if (s2 != 0u) { acc += amostraChao(nonuniformEXT(s2), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.b; sum += w.b; }
+        if (s3 != 0u) { acc += amostraChao(nonuniformEXT(s3), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.a; sum += w.a; }
 
         // Segunda mascara (camadas 4..7 - dobra o splat pra 9 no total com a
         // base). Mesma UV da primeira, indice de material proprio. Inerte
@@ -527,10 +608,10 @@ void main() {
             uint s6 =  inSplatTex2.y        & 0xFFFFu;
             uint s7 = (inSplatTex2.y >> 16) & 0xFFFFu;
             wBaseSum += w2.r + w2.g + w2.b + w2.a;
-            if (s4 != 0u) { acc += texture(u_textures[nonuniformEXT(s4)], uv).rgb * w2.r; sum += w2.r; }
-            if (s5 != 0u) { acc += texture(u_textures[nonuniformEXT(s5)], uv).rgb * w2.g; sum += w2.g; }
-            if (s6 != 0u) { acc += texture(u_textures[nonuniformEXT(s6)], uv).rgb * w2.b; sum += w2.b; }
-            if (s7 != 0u) { acc += texture(u_textures[nonuniformEXT(s7)], uv).rgb * w2.a; sum += w2.a; }
+            if (s4 != 0u) { acc += amostraChao(nonuniformEXT(s4), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.r; sum += w2.r; }
+            if (s5 != 0u) { acc += amostraChao(nonuniformEXT(s5), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.g; sum += w2.g; }
+            if (s6 != 0u) { acc += amostraChao(nonuniformEXT(s6), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.b; sum += w2.b; }
+            if (s7 != 0u) { acc += amostraChao(nonuniformEXT(s7), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.a; sum += w2.a; }
         }
 
         float wBase = max(0.0, 1.0 - wBaseSum);
@@ -640,7 +721,8 @@ void main() {
     }
     if (hasNormal) {
         uint nIdx = nonuniformEXT(inNormalIndex);
-        vec4 sampledNormal = texture(u_textures[nIdx], uv, ndSmooth);
+        vec4 sampledNormal = quebraLadrilho ? amostraSemGrade(nIdx, uv, ddxUV, ddyUV, false)
+                                            : texture(u_textures[nIdx], uv, ndSmooth);
         if (!hasSplat && inBlendWeight > 0.0 && inBlendNormalIndex != 0u) {
             uint bnIdx = nonuniformEXT(inBlendNormalIndex);
             vec4 bNormal = texture(u_textures[bnIdx], uv, ndSmooth);
@@ -832,7 +914,7 @@ void main() {
     float sourceFlag = 0.5; // fallback heuristic
     if (hasPbr) {
         uint pIdx = nonuniformEXT(inPbrIndex);
-        vec4 mrahw = texture(u_textures[pIdx], uv);
+        vec4 mrahw = amostraChao(pIdx, uv, ddxUV, ddyUV, quebraLadrilho, true);
         if (!hasSplat && inBlendWeight > 0.0 && inBlendPbrIndex != 0u) {
             uint bpIdx = nonuniformEXT(inBlendPbrIndex);
             vec4 bMrahw = texture(u_textures[bpIdx], uv);

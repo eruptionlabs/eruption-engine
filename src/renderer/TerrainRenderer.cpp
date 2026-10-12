@@ -1,5 +1,7 @@
 #include "renderer/GBuffer.hpp"
 #include "renderer/TerrainRenderer.hpp"
+
+#include <cstdlib>
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "core/Logger.hpp"
@@ -562,11 +564,19 @@ void TerrainRenderer::render(VkCommandBuffer cmd, const Mat4& viewProj, const Fr
             Mat4 vp;
             float metallicScale;
             float roughnessScale;
-            float __pad[2];
+            float stochasticTiling;
+            float __pad;
         } push;
         push.vp = viewProj;
         push.metallicScale = chunk.metallicScale;
         push.roughnessScale = chunk.roughnessScale;
+        // Ladrilhamento estocastico (ver terrain.frag). Ligado por padrao
+        // porque a repeticao e' o defeito mais visivel de um chao tilado;
+        // ERUPTION_NO_STOCHASTIC_TILING=1 volta a uma amostra por textura,
+        // que e' como se mede o custo das tres.
+        static const bool kSemEstocastico = std::getenv("ERUPTION_NO_STOCHASTIC_TILING") != nullptr;
+        push.stochasticTiling = kSemEstocastico ? 0.0f : 1.0f;
+        push.__pad = 0.0f;
 
         vkCmdPushConstants(cmd, m_pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
