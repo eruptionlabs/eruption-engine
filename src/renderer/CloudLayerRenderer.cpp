@@ -165,11 +165,22 @@ void CloudLayerRenderer::update(float dt) {
     m_coverageArray.update(dt, m_cfg.windDirection, m_cfg.windSpeed);
 }
 
+// Divisor da resolucao do raymarch das camadas (2 = meia resolucao).
+// ERUPTION_CLOUD_RES_DIV=4 no celular: o passe chegava a 12 ms com o ceu
+// coberto; nuvem e' volume macio e o composite ja' sobe com filtro bilinear.
+static uint32_t cloudResDiv() {
+    static const uint32_t d = [] {
+        const char* e = std::getenv("ERUPTION_CLOUD_RES_DIV");
+        return e ? static_cast<uint32_t>(std::clamp(std::atoi(e), 1, 8)) : 2u;
+    }();
+    return d;
+}
+
 bool CloudLayerRenderer::createTargets() {
     // Half-resolution ray-marching balances quality and cost. The composite pass
     // upsamples with bilinear filtering and depth-aware blending.
-    uint32_t w = m_width / 2;
-    uint32_t h = m_height / 2;
+    uint32_t w = m_width / cloudResDiv();
+    uint32_t h = m_height / cloudResDiv();
 
     auto createColorImage = [&](VkImage& img, VmaAllocation& alloc, VkImageView& view, VkFormat format, VkImageUsageFlags usage) {
         VkImageCreateInfo imageInfo{};
@@ -2430,8 +2441,8 @@ bool CloudLayerRenderer::createPipelines() {
     inputAsm.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     inputAsm.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-    VkViewport vp{0, 0, (float)m_width / 2.0f, (float)m_height / 2.0f, 0, 1};
-    VkRect2D scissor{{0, 0}, {m_width / 2, m_height / 2}};
+    VkViewport vp{0, 0, (float)(m_width / cloudResDiv()), (float)(m_height / cloudResDiv()), 0, 1};
+    VkRect2D scissor{{0, 0}, {m_width / cloudResDiv(), m_height / cloudResDiv()}};
     VkPipelineViewportStateCreateInfo viewport{};
     viewport.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewport.viewportCount = 1;
@@ -2614,15 +2625,15 @@ void CloudLayerRenderer::render(VkCommandBuffer cmd,
 
     VkRenderingInfo info{};
     info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    info.renderArea = {{0, 0}, {m_width / 2, m_height / 2}};
+    info.renderArea = {{0, 0}, {m_width / cloudResDiv(), m_height / cloudResDiv()}};
     info.layerCount = 1;
     info.colorAttachmentCount = 2;
     info.pColorAttachments = colorAttach;
 
     vkc::cmdBeginRendering(cmd, &info);
 
-    VkViewport viewport{0, 0, (float)m_width / 2.0f, (float)m_height / 2.0f, 0, 1};
-    VkRect2D scissor{{0, 0}, {m_width / 2, m_height / 2}};
+    VkViewport viewport{0, 0, (float)(m_width / cloudResDiv()), (float)(m_height / cloudResDiv()), 0, 1};
+    VkRect2D scissor{{0, 0}, {m_width / cloudResDiv(), m_height / cloudResDiv()}};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
