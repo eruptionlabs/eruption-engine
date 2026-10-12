@@ -41,7 +41,7 @@ void localPose(const SkinRig& rig, int anim, float time, std::vector<Vec3>& t, s
     }
     if (anim < 0 || anim >= static_cast<int>(rig.animations.size())) return;
     for (const SkinRig::Channel& c : rig.animations[static_cast<size_t>(anim)].channels) {
-        if (c.node < 0 || c.node >= static_cast<int>(n)) continue;
+        if (c.node < 0 || c.node >= static_cast<int>(n) || c.path > 2) continue; // pesos de morph: morphWeights
         const Vec4 v = sample(c, time);
         const size_t k = static_cast<size_t>(c.node);
         if (c.path == 0) t[k] = Vec3(v);
@@ -83,6 +83,33 @@ void SkinRig::blendPose(int from, float fromTime, int anim, float time, float w,
         const glm::mat4 local = glm::translate(glm::mat4(1.0f), t[k]) * glm::mat4_cast(r[k]) * glm::scale(glm::mat4(1.0f), s[k]);
         globals[k] = nodes[k].parent >= 0 ? globals[static_cast<size_t>(nodes[k].parent)] * local : local;
     }
+}
+
+bool SkinRig::morphWeights(int anim, float time, int node, float* out, uint32_t count) const {
+    if (anim < 0 || anim >= static_cast<int>(animations.size()) || node < 0) return false;
+    for (const Channel& c : animations[static_cast<size_t>(anim)].channels) {
+        if (c.path != 3 || c.node != node || c.weightCount == 0 || c.times.empty()) continue;
+        const size_t keys = std::min(c.times.size(), c.weights.size() / c.weightCount);
+        if (keys == 0) return false;
+        size_t lo = 0, hi = 0;
+        float f = 0.0f;
+        if (time >= c.times[keys - 1]) {
+            lo = hi = keys - 1;
+        } else if (time > c.times.front()) {
+            hi = static_cast<size_t>(std::upper_bound(c.times.begin(), c.times.begin() + std::ptrdiff_t(keys), time) -
+                                     c.times.begin());
+            lo = hi - 1;
+            const float span = c.times[hi] - c.times[lo];
+            f = c.step || span <= 0.0f ? 0.0f : (time - c.times[lo]) / span;
+        }
+        for (uint32_t t = 0; t < count; ++t) {
+            const float a = t < c.weightCount ? c.weights[lo * c.weightCount + t] : 0.0f;
+            const float b = t < c.weightCount ? c.weights[hi * c.weightCount + t] : 0.0f;
+            out[t] = a + (b - a) * f;
+        }
+        return true;
+    }
+    return false;
 }
 
 void SkinRig::jointMatrices(int skin, const std::vector<glm::mat4>& globals, glm::mat4* out) const {

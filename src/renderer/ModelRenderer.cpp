@@ -1496,10 +1496,13 @@ ModelRenderer::LodParams ModelRenderer::lodParams() const {
 }
 
 bool ModelRenderer::skinnedNode(const ModelAsset& asset, const ModelNode& node) {
-    // Skin: ossos e pesos seguem a ordem dos vértices do parser; malha
-    // com skin não é soldada nem ganha LOD (os pesos não iriam junto).
-    return node.skin >= 0 && asset.rig && node.skinJoints.size() == node.vertices.size() * 2 &&
-           node.skinWeights.size() == node.vertices.size();
+    // Skin e morph: ossos, pesos e deslocamentos seguem a ordem dos vértices
+    // do parser; a malha não é soldada nem ganha LOD (eles não iriam junto).
+    const bool skin = node.skin >= 0 && node.skinJoints.size() == node.vertices.size() * 2 &&
+                      node.skinWeights.size() == node.vertices.size();
+    const bool morph = node.morphTargets > 0 &&
+                       node.morphPositions.size() == node.vertices.size() * size_t(node.morphTargets);
+    return asset.rig && (skin || morph);
 }
 
 bool ModelRenderer::wantsLod(const LodParams& lod, bool skinned, size_t indexCount, size_t vertexCount) {
@@ -2536,9 +2539,9 @@ std::vector<std::string> ModelRenderer::releaseAsset(const std::string& filePath
         auto b = m_skinBases.find(mi);
         if (b == m_skinBases.end()) continue;
         VmaAllocator allocator = m_ctx->allocator();
-        VkBuffer buf = b->second.skinBuffer;
-        VmaAllocation alloc = b->second.skinAlloc;
-        if (buf) m_ctx->deferFrameCleanup([allocator, buf, alloc] { vmaDestroyBuffer(allocator, buf, alloc); });
+        for (auto [buf, alloc] : {std::pair{b->second.skinBuffer, b->second.skinAlloc},
+                                  std::pair{b->second.morphBuffer, b->second.morphAlloc}})
+            if (buf) m_ctx->deferFrameCleanup([allocator, buf, alloc] { vmaDestroyBuffer(allocator, buf, alloc); });
         m_skinBases.erase(b);
     }
     for (auto it2 = m_footprintCache.begin(); it2 != m_footprintCache.end();)
