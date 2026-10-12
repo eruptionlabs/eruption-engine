@@ -111,6 +111,12 @@ struct ModelNode {
     int32_t skin = -1;
     std::vector<uint32_t> skinJoints;
     std::vector<Vec4> skinWeights;
+    // Alvos de morph (ver ModelFileNode).
+    uint32_t morphTargets = 0;
+    std::vector<Vec3> morphPositions, morphNormals;
+    std::vector<float> morphWeights;
+    std::vector<std::string> morphNames;
+    int32_t rigNode = -1;
 
     // Animation tracks
     std::vector<ScaleKeyframe> scaleKeyframes;

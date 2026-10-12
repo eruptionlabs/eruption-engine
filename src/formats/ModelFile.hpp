@@ -81,6 +81,15 @@ struct ModelFileNode {
     int32_t skin = -1;
     std::vector<uint32_t> skinJoints; // 2 por vértice
     std::vector<Vec4> skinWeights;
+    // Alvos de morph (blend shapes): por vértice expandido, o deslocamento de
+    // cada alvo (vértice 0 alvo 0, vértice 0 alvo 1, ...), posição e normal;
+    // pesos padrão e nomes dos alvos; rigNode = nó do arquivo (os canais
+    // "weights" das animações apontam para ele).
+    uint32_t morphTargets = 0;
+    std::vector<Vec3> morphPositions, morphNormals;
+    std::vector<float> morphWeights;
+    std::vector<std::string> morphNames;
+    int32_t rigNode = -1;
 
     // Optional per-vertex texture crossfade, authored in the GLB via the
     // _BLEND_TEX_INDEX / _BLEND_WEIGHT vertex attributes. perVertexBlendTexIds is

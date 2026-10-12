@@ -608,6 +608,10 @@ public:
     bool playAnimation(uint32_t instance, const std::string& name, bool loop = true, float speed = 1.0f,
                        float fadeSeconds = kAnimationFade);
     std::string currentAnimation(uint32_t instance) const;
+    // Alvos de morph da instância (nomes) e peso fixado por script (NaN solta
+    // de volta para a animação). Falso se a instância não tem esse alvo.
+    std::vector<std::string> morphTargetsOf(uint32_t instance) const;
+    bool setMorphWeight(uint32_t instance, const std::string& target, float weight);
     size_t skinnedCount() const { return m_skinned.size(); }
 
     // VISUALIZADOR DE MODELO (editor): malhas de um .glb sem instância na
@@ -636,6 +640,14 @@ private:
         VkBuffer skinBuffer = VK_NULL_HANDLE; // ossos e pesos por vértice
         VmaAllocation skinAlloc = VK_NULL_HANDLE;
         std::vector<float> jointRadius;       // alcance dos vértices de cada osso (limites)
+        // Alvos de morph: deslocamentos (vértice x alvo: posição, normal), pesos
+        // padrão, nomes e o nó do arquivo dos canais "weights".
+        uint32_t morphTargets = 0;
+        VkBuffer morphBuffer = VK_NULL_HANDLE;
+        VmaAllocation morphAlloc = VK_NULL_HANDLE;
+        std::vector<float> morphDefault;
+        std::vector<std::string> morphNames;
+        int rigNode = -1;
     };
     struct SkinnedInstance {
         uint32_t instance = 0, baseMesh = 0, mesh = 0;
@@ -653,6 +665,7 @@ private:
         float fromTime = 0.0f, fromSpeed = 1.0f;
         bool fromLoop = true;
         float fade = 0.0f, fadeSeconds = 0.0f; // fadeSeconds 0 = sem transição
+        std::vector<float> morphOverride; // peso pedido pelo script (NaN = o da animação)
         uint32_t previewId = 0; // cópia do visualizador (instance == kNoInstance)
     };
     static constexpr uint32_t kNoInstance = 0xFFFFFFFFu;

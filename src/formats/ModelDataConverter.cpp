@@ -45,6 +45,12 @@ ModelNode convertNode(const ModelFileNode& node) {
     n.skin = node.skin;
     n.skinJoints = node.skinJoints;
     n.skinWeights = node.skinWeights;
+    n.morphTargets = node.morphTargets;
+    n.morphPositions = node.morphPositions;
+    n.morphNormals = node.morphNormals;
+    n.morphWeights = node.morphWeights;
+    n.morphNames = node.morphNames;
+    n.rigNode = node.rigNode;
 
     n.scaleKeyframes.reserve(node.scaleKeyframes.size());
     for (const auto& k : node.scaleKeyframes) {

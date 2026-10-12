@@ -24,6 +24,7 @@
 #include <cctype>
 #include <filesystem>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <unordered_map>
 
@@ -522,6 +523,26 @@ int models_animation(lua_State* L) {
     lua_pushstring(L, eng().modelRenderer().currentAnimation(static_cast<uint32_t>(checkModel(L, 1))).c_str());
     return 1;
 }
+int models_morphs(lua_State* L) {
+    const auto names = eng().modelRenderer().morphTargetsOf(static_cast<uint32_t>(checkModel(L, 1)));
+    lua_createtable(L, static_cast<int>(names.size()), 0);
+    for (size_t k = 0; k < names.size(); ++k) {
+        lua_pushstring(L, names[k].c_str());
+        lua_rawseti(L, -2, static_cast<int>(k + 1));
+    }
+    return 1;
+}
+int models_set_morph(lua_State* L) {
+    const auto i = static_cast<uint32_t>(checkModel(L, 1));
+    const std::string target = lua_type(L, 2) == LUA_TNUMBER ? std::to_string(luaL_checkinteger(L, 2)) : luaL_checkstring(L, 2);
+    // Sem peso (nil): volta ao que a animação manda.
+    const float w = lua_isnoneornil(L, 3) ? std::numeric_limits<float>::quiet_NaN()
+                                          : static_cast<float>(luaL_checknumber(L, 3));
+    const bool ok = eng().modelRenderer().setMorphWeight(i, target, w);
+    if (!ok) Logger::warning("models.set_morph: %s has no morph target \"%s\"", instances()[i].name.c_str(), target.c_str());
+    lua_pushboolean(L, ok);
+    return 1;
+}
 int models_animations(lua_State* L) {
     const auto names = eng().modelRenderer().animationsOf(static_cast<uint32_t>(checkModel(L, 1)));
     lua_createtable(L, static_cast<int>(names.size()), 0);
@@ -936,6 +957,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"visible", models_visible}, {"set_visible", models_set_visible},
         {"show", models_show}, {"hide", models_hide}, {"solid", models_solid}, {"set_solid", models_set_solid},
         {"play", models_play}, {"animation", models_animation}, {"animations", models_animations},
+        {"morphs", models_morphs}, {"set_morph", models_set_morph},
         {nullptr, nullptr}};
     static const luaL_Reg characters[] = {
         {"exists", characters_exists}, {"position", characters_position},
@@ -1207,6 +1229,11 @@ declare models: {
     animation: (model: Model) -> string,
     -- Names of the animations in the model file.
     animations: (model: Model) -> {string},
+    -- Morph targets (blend shapes) of the model, by name.
+    morphs: (model: Model) -> {string},
+    -- Holds a morph target (name or number from 1) at `weight` (0 to 1, more
+    -- exaggerates); nil gives it back to the animation. False if it doesn't exist.
+    set_morph: (model: Model, target: string | number, weight: number?) -> boolean,
 }
 
 -- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a

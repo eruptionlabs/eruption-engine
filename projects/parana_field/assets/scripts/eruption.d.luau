@@ -227,6 +227,11 @@ declare models: {
     animation: (model: Model) -> string,
     -- Names of the animations in the model file.
     animations: (model: Model) -> {string},
+    -- Morph targets (blend shapes) of the model, by name.
+    morphs: (model: Model) -> {string},
+    -- Holds a morph target (name or number from 1) at `weight` (0 to 1, more
+    -- exaggerates); nil gives it back to the animation. False if it doesn't exist.
+    set_morph: (model: Model, target: string | number, weight: number?) -> boolean,
 }
 
 -- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a

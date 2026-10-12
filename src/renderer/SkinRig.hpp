@@ -25,10 +25,12 @@ struct SkinRig {
     };
     struct Channel {
         int node = -1;
-        int path = 0;       // 0 posição, 1 rotação, 2 escala
+        int path = 0;       // 0 posição, 1 rotação, 2 escala, 3 pesos de morph
         bool step = false;  // STEP (senão LINEAR; CUBICSPLINE vira LINEAR nos valores)
         std::vector<float> times;
         std::vector<Vec4> values; // rotação xyzw; posição/escala xyz
+        std::vector<float> weights; // pesos de morph: weightCount por chave
+        uint32_t weightCount = 0;
     };
     struct Animation {
         std::string name;
@@ -49,6 +51,9 @@ struct SkinRig {
     // 1 - w e `anim` no tempo `time` com peso w (por nó: posição e escala
     // interpoladas, rotação por slerp).
     void blendPose(int from, float fromTime, int anim, float time, float w, std::vector<glm::mat4>& globals) const;
+    // Pesos de morph do nó `node` na animação `anim` no tempo `time` (só os
+    // canais "weights"; falso se a animação não mexe neles).
+    bool morphWeights(int anim, float time, int node, float* out, uint32_t count) const;
     // Matrizes dos ossos da skin para o shader: global do osso * bind inversa.
     void jointMatrices(int skin, const std::vector<glm::mat4>& globals, glm::mat4* out) const;
 };

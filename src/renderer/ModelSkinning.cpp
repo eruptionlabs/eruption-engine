@@ -10,6 +10,8 @@
 #include "renderer/ShaderCompiler.hpp"
 
 #include <algorithm>
+#include <limits>
+#include <cmath>
 #include <cfloat>
 #include <cstddef>
 #include <cstring>
@@ -26,60 +28,104 @@ static_assert(sizeof(SkinVertexGpu) == 24, "layout do SkinVertex em skin.comp");
 
 struct SkinPush {
     uint32_t vertexCount, jointBase, strideWords, posWord, nrmWord, keepPrev;
+    uint32_t jointCount, morphCount, morphBase; // morphBase em floats no anel
 };
+constexpr uint32_t kSkinBindings = 7;
 
 } // namespace
 
 void ModelRenderer::registerSkinBase(uint32_t mesh, const ModelAsset& asset, const ModelNode& node,
                                      const std::vector<TerrainVertex>& vertices) {
     const SkinRig& rig = *asset.rig;
-    if (node.skin < 0 || node.skin >= static_cast<int>(rig.skins.size()) || vertices.empty()) return;
-    const SkinRig::Skin& sk = rig.skins[static_cast<size_t>(node.skin)];
+    const bool hasSkin = node.skin >= 0 && node.skin < static_cast<int>(rig.skins.size()) &&
+                         node.skinJoints.size() == vertices.size() * 2 && node.skinWeights.size() == vertices.size();
+    const bool hasMorph = node.morphTargets > 0 &&
+                          node.morphPositions.size() == vertices.size() * size_t(node.morphTargets) &&
+                          node.morphNormals.size() == node.morphPositions.size();
+    if ((!hasSkin && !hasMorph) || vertices.empty()) return;
     SkinBase b;
     b.rig = asset.rig;
-    b.skin = node.skin;
+    b.skin = hasSkin ? node.skin : -1;
     b.vertexCount = static_cast<uint32_t>(vertices.size());
-    std::vector<SkinVertexGpu> data(vertices.size());
-    b.jointRadius.assign(sk.joints.size(), 0.0f);
-    std::vector<Vec3> bindPos(sk.joints.size());
-    for (size_t j = 0; j < sk.joints.size(); ++j) bindPos[j] = Vec3(glm::inverse(sk.inverseBind[j])[3]);
-    const uint32_t jointCount = static_cast<uint32_t>(sk.joints.size());
-    for (size_t i = 0; i < vertices.size(); ++i) {
-        SkinVertexGpu& d = data[i];
-        d.j01 = node.skinJoints[i * 2];
-        d.j23 = node.skinJoints[i * 2 + 1];
-        const Vec4 w = node.skinWeights[i];
-        const uint32_t js[4] = {d.j01 & 0xFFFFu, d.j01 >> 16, d.j23 & 0xFFFFu, d.j23 >> 16};
-        for (int k = 0; k < 4; ++k) {
-            d.w[k] = js[k] < jointCount ? w[k] : 0.0f; // osso fora da skin não conta
-            if (js[k] >= jointCount) {
-                if (k < 2) d.j01 &= k == 0 ? 0xFFFF0000u : 0x0000FFFFu;
-                else d.j23 &= k == 2 ? 0xFFFF0000u : 0x0000FFFFu;
-                continue;
-            }
-            if (w[k] > 0.001f)
-                b.jointRadius[js[k]] = std::max(b.jointRadius[js[k]], glm::length(vertices[i].position - bindPos[js[k]]));
+    auto upload = [&](const void* src, VkDeviceSize bytes, VkBuffer& buf, VmaAllocation& alloc) {
+        if (!m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                 VMA_MEMORY_USAGE_GPU_ONLY, buf, alloc))
+            return false;
+        VkBuffer staging = VK_NULL_HANDLE;
+        VmaAllocation stagingAlloc = VK_NULL_HANDLE;
+        m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
+        void* mapped = nullptr;
+        vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
+        std::memcpy(mapped, src, bytes);
+        vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
+        const VkBuffer dst = buf;
+        m_ctx->immediateSubmit([staging, dst, bytes](VkCommandBuffer cmd) {
+            const VkBufferCopy c{0, 0, bytes};
+            vkCmdCopyBuffer(cmd, staging, dst, 1, &c);
+        });
+        vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
+        return true;
+    };
+    // Morph: o maior deslocamento alarga os limites (peso até 1 por alvo).
+    float maxDelta = 0.0f;
+    if (hasMorph) {
+        const size_t n = node.morphPositions.size();
+        std::vector<Vec4> data(n * 2);
+        for (size_t k = 0; k < n; ++k) {
+            data[k * 2] = Vec4(node.morphPositions[k], 0.0f);
+            data[k * 2 + 1] = Vec4(node.morphNormals[k], 0.0f);
+        }
+        for (size_t v = 0; v < vertices.size(); ++v) {
+            float sum = 0.0f;
+            for (uint32_t t = 0; t < node.morphTargets; ++t) sum += glm::length(node.morphPositions[v * node.morphTargets + t]);
+            maxDelta = std::max(maxDelta, sum);
+        }
+        if (!upload(data.data(), VkDeviceSize(data.size() * sizeof(Vec4)), b.morphBuffer, b.morphAlloc)) return;
+        b.morphTargets = node.morphTargets;
+        b.morphDefault = node.morphWeights;
+        b.morphDefault.resize(node.morphTargets, 0.0f);
+        b.morphNames = node.morphNames;
+        b.rigNode = node.rigNode;
+        if (mesh < m_meshes.size()) {
+            m_meshes[mesh].aabbMin -= Vec3(maxDelta);
+            m_meshes[mesh].aabbMax += Vec3(maxDelta);
         }
     }
-    const VkDeviceSize bytes = data.size() * sizeof(SkinVertexGpu);
-    if (!m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                             VMA_MEMORY_USAGE_GPU_ONLY, b.skinBuffer, b.skinAlloc))
-        return;
-    VkBuffer staging = VK_NULL_HANDLE;
-    VmaAllocation stagingAlloc = VK_NULL_HANDLE;
-    m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
-    void* mapped = nullptr;
-    vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
-    std::memcpy(mapped, data.data(), bytes);
-    vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
-    const VkBuffer dst = b.skinBuffer;
-    m_ctx->immediateSubmit([staging, dst, bytes](VkCommandBuffer cmd) {
-        const VkBufferCopy c{0, 0, bytes};
-        vkCmdCopyBuffer(cmd, staging, dst, 1, &c);
-    });
-    vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
-    ERUPTION_LOG_WARN("Skin: %s node %s, %u vertices, %zu joints, %zu animations", asset.filePath.c_str(),
-                      node.name.c_str(), b.vertexCount, sk.joints.size(), rig.animations.size());
+    size_t jointCountLog = 0;
+    if (hasSkin) {
+        const SkinRig::Skin& sk = rig.skins[static_cast<size_t>(node.skin)];
+        jointCountLog = sk.joints.size();
+        std::vector<SkinVertexGpu> data(vertices.size());
+        b.jointRadius.assign(sk.joints.size(), 0.0f);
+        std::vector<Vec3> bindPos(sk.joints.size());
+        for (size_t j = 0; j < sk.joints.size(); ++j) bindPos[j] = Vec3(glm::inverse(sk.inverseBind[j])[3]);
+        const uint32_t jointCount = static_cast<uint32_t>(sk.joints.size());
+        for (size_t i = 0; i < vertices.size(); ++i) {
+            SkinVertexGpu& d = data[i];
+            d.j01 = node.skinJoints[i * 2];
+            d.j23 = node.skinJoints[i * 2 + 1];
+            const Vec4 w = node.skinWeights[i];
+            const uint32_t js[4] = {d.j01 & 0xFFFFu, d.j01 >> 16, d.j23 & 0xFFFFu, d.j23 >> 16};
+            for (int k = 0; k < 4; ++k) {
+                d.w[k] = js[k] < jointCount ? w[k] : 0.0f; // osso fora da skin não conta
+                if (js[k] >= jointCount) {
+                    if (k < 2) d.j01 &= k == 0 ? 0xFFFF0000u : 0x0000FFFFu;
+                    else d.j23 &= k == 2 ? 0xFFFF0000u : 0x0000FFFFu;
+                    continue;
+                }
+                if (w[k] > 0.001f)
+                    b.jointRadius[js[k]] =
+                        std::max(b.jointRadius[js[k]], glm::length(vertices[i].position - bindPos[js[k]]) + maxDelta);
+            }
+        }
+        if (!upload(data.data(), VkDeviceSize(data.size() * sizeof(SkinVertexGpu)), b.skinBuffer, b.skinAlloc)) {
+            if (b.morphBuffer) vmaDestroyBuffer(m_ctx->allocator(), b.morphBuffer, b.morphAlloc);
+            return;
+        }
+    }
+    ERUPTION_LOG_WARN("Skin: %s node %s, %u vertices, %zu joints, %u morph targets, %zu animations",
+                      asset.filePath.c_str(), node.name.c_str(), b.vertexCount, jointCountLog, b.morphTargets,
+                      rig.animations.size());
     m_skinBases[mesh] = std::move(b);
 }
 
@@ -88,8 +134,8 @@ bool ModelRenderer::ensureSkinGpu() {
     if (m_skinGpuFailed) return false;
     m_skinGpuFailed = true; // até dar certo
     VkDevice dev = m_ctx->device();
-    VkDescriptorSetLayoutBinding binds[5]{};
-    for (uint32_t i = 0; i < 5; ++i) {
+    VkDescriptorSetLayoutBinding binds[kSkinBindings]{};
+    for (uint32_t i = 0; i < kSkinBindings; ++i) {
         binds[i].binding = i;
         binds[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         binds[i].descriptorCount = 1;
@@ -97,7 +143,7 @@ bool ModelRenderer::ensureSkinGpu() {
     }
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = 5;
+    li.bindingCount = kSkinBindings;
     li.pBindings = binds;
     if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &m_skinSetLayout) != VK_SUCCESS) return false;
     VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(SkinPush)};
@@ -242,7 +288,7 @@ bool ModelRenderer::createSkinned(uint32_t base, SkinnedInstance& s) {
         r = vkAllocateDescriptorSets(m_ctx->device(), &ai, &s.set);
     }
     if (r != VK_SUCCESS) {
-        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5 * 256};
+        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSkinBindings * 256};
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pi.maxSets = 256;
@@ -260,13 +306,18 @@ bool ModelRenderer::createSkinned(uint32_t base, SkinnedInstance& s) {
             return false;
         }
     }
-    const VkDescriptorBufferInfo infos[5] = {{m_meshes[base].vertexBuffer, 0, VK_WHOLE_SIZE},
-                                             {b->second.skinBuffer, 0, VK_WHOLE_SIZE},
-                                             {m_jointRing, 0, VK_WHOLE_SIZE},
-                                             {s.out, 0, VK_WHOLE_SIZE},
-                                             {s.prevOut ? s.prevOut : s.out, 0, VK_WHOLE_SIZE}};
-    VkWriteDescriptorSet w[5]{};
-    for (uint32_t i = 0; i < 5; ++i) {
+    // Sem ossos ou sem morph, o binding que sobra aponta um buffer qualquer
+    // válido (o shader não o lê: jointCount / morphCount = 0).
+    const VkBuffer src = m_meshes[base].vertexBuffer;
+    const VkDescriptorBufferInfo infos[kSkinBindings] = {{src, 0, VK_WHOLE_SIZE},
+                                                         {b->second.skinBuffer ? b->second.skinBuffer : src, 0, VK_WHOLE_SIZE},
+                                                         {m_jointRing, 0, VK_WHOLE_SIZE},
+                                                         {s.out, 0, VK_WHOLE_SIZE},
+                                                         {s.prevOut ? s.prevOut : s.out, 0, VK_WHOLE_SIZE},
+                                                         {b->second.morphBuffer ? b->second.morphBuffer : src, 0, VK_WHOLE_SIZE},
+                                                         {m_jointRing, 0, VK_WHOLE_SIZE}};
+    VkWriteDescriptorSet w[kSkinBindings]{};
+    for (uint32_t i = 0; i < kSkinBindings; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].dstSet = s.set;
         w[i].dstBinding = i;
@@ -274,7 +325,7 @@ bool ModelRenderer::createSkinned(uint32_t base, SkinnedInstance& s) {
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[i].pBufferInfo = &infos[i];
     }
-    vkUpdateDescriptorSets(m_ctx->device(), 5, w, 0, nullptr);
+    vkUpdateDescriptorSets(m_ctx->device(), kSkinBindings, w, 0, nullptr);
     // A malha da instância: igual à base, com o buffer de vértices dela e sem
     // os níveis de LOD (que apontariam para a pose de bind).
     ModelMeshGPU clone = m_meshes[base];
@@ -324,8 +375,10 @@ void ModelRenderer::clearSkinning(bool destroyPipeline) {
         if (s.out) buffers.push_back({s.out, s.outAlloc});
         if (s.prevOut) buffers.push_back({s.prevOut, s.prevOutAlloc});
     }
-    for (auto& [mesh, b] : m_skinBases)
+    for (auto& [mesh, b] : m_skinBases) {
         if (b.skinBuffer) buffers.push_back({b.skinBuffer, b.skinAlloc});
+        if (b.morphBuffer) buffers.push_back({b.morphBuffer, b.morphAlloc});
+    }
     std::vector<VkDescriptorPool> pools = std::move(m_skinPools);
     m_skinPools.clear();
     m_skinned.clear();
@@ -390,6 +443,33 @@ bool ModelRenderer::playAnimation(uint32_t instance, const std::string& name, bo
     return true;
 }
 
+std::vector<std::string> ModelRenderer::morphTargetsOf(uint32_t instance) const {
+    const auto it = m_skinnedByInstance.find(instance);
+    if (it == m_skinnedByInstance.end()) return {};
+    const auto b = m_skinBases.find(m_skinned[it->second].baseMesh);
+    return b == m_skinBases.end() ? std::vector<std::string>{} : b->second.morphNames;
+}
+
+bool ModelRenderer::setMorphWeight(uint32_t instance, const std::string& target, float weight) {
+    const auto it = m_skinnedByInstance.find(instance);
+    if (it == m_skinnedByInstance.end()) return false;
+    SkinnedInstance& s = m_skinned[it->second];
+    const auto b = m_skinBases.find(s.baseMesh);
+    if (b == m_skinBases.end() || b->second.morphTargets == 0) return false;
+    // Pelo nome ou pelo número (base 1, como no resto dos scripts).
+    size_t t = 0;
+    const auto& names = b->second.morphNames;
+    const auto n = std::find(names.begin(), names.end(), target);
+    if (n != names.end()) t = static_cast<size_t>(n - names.begin());
+    else if (!target.empty() && std::all_of(target.begin(), target.end(), ::isdigit) && std::stoul(target) >= 1)
+        t = std::stoul(target) - 1;
+    else return false;
+    if (t >= b->second.morphTargets) return false;
+    s.morphOverride.resize(b->second.morphTargets, std::numeric_limits<float>::quiet_NaN());
+    s.morphOverride[t] = weight;
+    return true;
+}
+
 std::string ModelRenderer::currentAnimation(uint32_t instance) const {
     const auto it = m_skinnedByInstance.find(instance);
     if (it == m_skinnedByInstance.end()) return {};
@@ -405,7 +485,7 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
     glm::mat4* ring = m_jointMapped + size_t(frame) * kJointsPerFrame;
     uint32_t cursor = 0;
     std::vector<glm::mat4> globals;
-    struct Job { const SkinnedInstance* s; uint32_t jointBase, vertexCount; };
+    struct Job { const SkinnedInstance* s; uint32_t jointBase, vertexCount, joints, morphs, morphBase; };
     std::vector<Job> jobs;
     bool boundsChanged = false;
     for (SkinnedInstance& s : m_skinned) {
@@ -413,9 +493,12 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
         if (b == m_skinBases.end() || !s.out) continue;
         const SkinBase& base = b->second;
         const SkinRig& rig = *base.rig;
-        const SkinRig::Skin& sk = rig.skins[static_cast<size_t>(base.skin)];
-        const uint32_t joints = static_cast<uint32_t>(sk.joints.size());
-        if (joints == 0 || cursor + joints > kJointsPerFrame) continue; // anel cheio: fica parado neste frame
+        const bool hasSkin = base.skin >= 0 && base.skin < static_cast<int>(rig.skins.size());
+        const uint32_t joints = hasSkin ? static_cast<uint32_t>(rig.skins[static_cast<size_t>(base.skin)].joints.size()) : 0u;
+        const uint32_t morphs = base.morphTargets;
+        const uint32_t morphSlots = (morphs + 15) / 16; // 16 pesos por mat4 do anel
+        if ((joints == 0 && morphs == 0) || cursor + joints + morphSlots > kJointsPerFrame)
+            continue; // anel cheio: fica parado neste frame
         // Tempo da animação (e da que sai, durante a transição).
         auto advance = [&](int anim, float& time, float speed, bool loop) {
             if (anim < 0 || anim >= static_cast<int>(rig.animations.size())) return;
@@ -427,15 +510,36 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
             }
         };
         advance(s.anim, s.time, s.speed, s.loop);
-        if (s.fade < s.fadeSeconds) {
+        const bool fading = s.fade < s.fadeSeconds;
+        float blend = 1.0f;
+        if (fading) {
             advance(s.fromAnim, s.fromTime, s.fromSpeed, s.fromLoop);
             s.fade = std::min(s.fade + dt, s.fadeSeconds);
             const float w = s.fade / s.fadeSeconds;
-            // Suave nas pontas: a velocidade dos ossos não dá degrau.
-            rig.blendPose(s.fromAnim, s.fromTime, s.anim, s.time, w * w * (3.0f - 2.0f * w), globals);
-        } else {
-            rig.pose(s.anim, s.time, globals);
+            blend = w * w * (3.0f - 2.0f * w); // suave nas pontas: a velocidade dos ossos não dá degrau
         }
+        // Pesos de morph: o padrão do arquivo, o da animação (com a transição)
+        // e, por cima, o que o script fixou.
+        if (morphs > 0) {
+            float* out = reinterpret_cast<float*>(ring + cursor + joints);
+            float cur[64], from[64];
+            const uint32_t n = std::min(morphs, 64u);
+            for (uint32_t t = 0; t < n; ++t) cur[t] = from[t] = base.morphDefault[t];
+            rig.morphWeights(s.anim, s.time, base.rigNode, cur, n);
+            if (fading) rig.morphWeights(s.fromAnim, s.fromTime, base.rigNode, from, n);
+            for (uint32_t t = 0; t < n; ++t) {
+                out[t] = fading ? from[t] + (cur[t] - from[t]) * blend : cur[t];
+                if (t < s.morphOverride.size() && !std::isnan(s.morphOverride[t])) out[t] = s.morphOverride[t];
+            }
+        }
+        if (joints == 0) {
+            jobs.push_back({&s, 0u, base.vertexCount, 0u, morphs, (frame * kJointsPerFrame + cursor) * 16u});
+            cursor += morphSlots;
+            continue;
+        }
+        const SkinRig::Skin& sk = rig.skins[static_cast<size_t>(base.skin)];
+        if (fading) rig.blendPose(s.fromAnim, s.fromTime, s.anim, s.time, blend, globals);
+        else rig.pose(s.anim, s.time, globals);
         rig.jointMatrices(base.skin, globals, ring + cursor);
         // Limites: cada osso com o alcance dos seus vértices.
         Vec3 lo(FLT_MAX), hi(-FLT_MAX);
@@ -465,8 +569,9 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
             inst.boundingRadius = glm::length(wMax - wMin) * 0.5f;
             boundsChanged = true;
         }
-        jobs.push_back({&s, frame * kJointsPerFrame + cursor, base.vertexCount});
-        cursor += joints;
+        jobs.push_back({&s, frame * kJointsPerFrame + cursor, base.vertexCount, joints, morphs,
+                        (frame * kJointsPerFrame + cursor + joints) * 16u});
+        cursor += joints + morphSlots;
     }
     if (jobs.empty()) return;
     vmaFlushAllocation(m_ctx->allocator(), m_jointRingAlloc, VkDeviceSize(frame) * kJointsPerFrame * sizeof(glm::mat4),
@@ -503,7 +608,8 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skinPipeLayout, 0, 1, &j.s->set, 0, nullptr);
         const SkinPush p{j.vertexCount, j.jointBase, static_cast<uint32_t>(sizeof(TerrainVertex) / 4),
                          static_cast<uint32_t>(offsetof(TerrainVertex, position) / 4),
-                         static_cast<uint32_t>(offsetof(TerrainVertex, normal) / 4), j.s->prevOut ? 1u : 0u};
+                         static_cast<uint32_t>(offsetof(TerrainVertex, normal) / 4), j.s->prevOut ? 1u : 0u,
+                         j.joints, j.morphs, j.morphBase};
         vkCmdPushConstants(cmd, m_skinPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         vkCmdDispatch(cmd, (j.vertexCount + 63) / 64, 1, 1);
     }

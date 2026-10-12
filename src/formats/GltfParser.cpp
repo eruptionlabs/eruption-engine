@@ -1065,9 +1065,23 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
             return idx;
         };
 
+        // Alvos de morph: o glTF exige o mesmo número em toda primitiva da malha.
+        size_t meshTargets = 0;
+        for (const auto& pr : mesh.primitives) meshTargets = std::max(meshTargets, pr.targets.size());
+        node.morphTargets = static_cast<uint32_t>(std::min<size_t>(meshTargets, 64));
+        node.rigNode = m.gltfNodeIndex;
+
         // Merge all primitives into one vertex/index stream, expanding per-corner data.
         for (size_t p = 0; p < mesh.primitives.size(); ++p) {
             const tinygltf::Primitive& prim = mesh.primitives[p];
+            // Deslocamentos de cada alvo (posição e normal; ausente = zero).
+            std::vector<std::vector<Vec3>> morphPos(node.morphTargets), morphNrm(node.morphTargets);
+            for (size_t t = 0; t < node.morphTargets && t < prim.targets.size(); ++t) {
+                const auto ip = prim.targets[t].find("POSITION");
+                const auto in = prim.targets[t].find("NORMAL");
+                if (ip != prim.targets[t].end()) morphPos[t] = readVec3Accessor(gltf, ip->second);
+                if (in != prim.targets[t].end()) morphNrm[t] = readVec3Accessor(gltf, in->second);
+            }
 
             auto itPos = prim.attributes.find("POSITION");
             auto itNrm = prim.attributes.find("NORMAL");
@@ -1226,6 +1240,10 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
                 node.colors.push_back(vec4ToBgra(colors[srcIdx]));
                 node.indices.push_back(static_cast<uint32_t>(node.indices.size()));
                 node.perVertexTexIds.push_back(texLocal);
+                for (uint32_t t = 0; t < node.morphTargets; ++t) {
+                    node.morphPositions.push_back(srcIdx < morphPos[t].size() ? morphPos[t][srcIdx] : Vec3(0.0f));
+                    node.morphNormals.push_back(srcIdx < morphNrm[t].size() ? morphNrm[t][srcIdx] : Vec3(0.0f));
+                }
                 if (primSkinned) {
                     Vec4 j(0.0f), w(1.0f, 0.0f, 0.0f, 0.0f); // sem dados: preso ao primeiro osso
                     if (srcIdx < skinJ.size() && srcIdx < skinW.size()) {
@@ -1322,6 +1340,27 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
                 node.skinWeights.clear();
             }
         }
+        // Morph: pesos padrão (do nó ou da malha) e nomes (extras.targetNames).
+        if (node.morphTargets > 0) {
+            const size_t want = node.vertices.size() * node.morphTargets;
+            if (node.morphPositions.size() != want || node.morphNormals.size() != want) {
+                node.morphTargets = 0;
+                node.morphPositions.clear();
+                node.morphNormals.clear();
+            } else {
+                const std::vector<double>& w = !gltfNode.weights.empty() ? gltfNode.weights : mesh.weights;
+                node.morphWeights.assign(node.morphTargets, 0.0f);
+                for (size_t t = 0; t < node.morphTargets && t < w.size(); ++t) node.morphWeights[t] = float(w[t]);
+                node.morphNames.resize(node.morphTargets);
+                if (mesh.extras.IsObject() && mesh.extras.Has("targetNames")) {
+                    const tinygltf::Value& names = mesh.extras.Get("targetNames");
+                    for (size_t t = 0; t < node.morphTargets && names.IsArray() && t < names.ArrayLen(); ++t)
+                        if (names.Get(int(t)).IsString()) node.morphNames[t] = names.Get(int(t)).Get<std::string>();
+                }
+                for (size_t t = 0; t < node.morphTargets; ++t)
+                    if (node.morphNames[t].empty()) node.morphNames[t] = "target_" + std::to_string(t);
+            }
+        }
         // Same for emissive, only some primitives may carry _EMISSIVE_STRENGTH.
         if (!node.perVertexEmissive.empty() &&
             node.perVertexEmissive.size() != node.vertices.size()) {
@@ -1334,7 +1373,7 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
 
         // Soften razor silhouettes with a load-time chamfer on boundary edges.
         // Malha com skin fica de fora: o chanfro acrescenta vértices sem ossos.
-        if (node.skin < 0) addSilhouetteBevels(node);
+        if (node.skin < 0 && node.morphTargets == 0) addSilhouetteBevels(node);
 
         // Compute local bounding box.
         node.box = BoundingBox();
@@ -1396,7 +1435,7 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
                 // Atributos opcionais: so' funde quando AMBOS nao os tem, para
                 // nao perder blend/splat por vertice numa fusao silenciosa.
                 if (!node.perVertexBlendTexIds.empty() || !cand.perVertexBlendTexIds.empty()) continue;
-                if (node.skin >= 0 || cand.skin >= 0) continue; // ossos e pesos não entram na comparação
+                if (node.skin >= 0 || cand.skin >= 0 || node.morphTargets || cand.morphTargets) continue; // ossos, pesos e morph não entram na comparação
                 if (!node.faces.empty() || !cand.faces.empty()) continue;
                 // Identico: vira instancia do dono e devolve a memoria.
                 node.geometryShareIndex = it->second;
@@ -1462,8 +1501,10 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
         model.animation->duration = maxTime * 30.0f;
     }
 
-    // Esqueleto e animações com nome (skin).
-    if (!gltf.skins.empty()) {
+    // Esqueleto e animações com nome (skin, e alvos de morph animados).
+    bool anyMorph = false;
+    for (const auto& n : model.nodes) anyMorph = anyMorph || n.morphTargets > 0;
+    if (!gltf.skins.empty() || anyMorph) {
         auto rig = std::make_shared<SkinRig>();
         rig->nodes.resize(gltf.nodes.size());
         for (size_t i = 0; i < gltf.nodes.size(); ++i) {
@@ -1510,9 +1551,29 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
                 if (ch.target_path == "translation") c.path = 0;
                 else if (ch.target_path == "rotation") c.path = 1;
                 else if (ch.target_path == "scale") c.path = 2;
-                else continue; // pesos de morph: fora
+                else if (ch.target_path == "weights") c.path = 3;
+                else continue;
                 c.step = smp.interpolation == "STEP";
                 c.times = readFloatAccessor(gltf, smp.input);
+                if (c.path == 3) {
+                    // Pesos de morph: N floats por chave (N = alvos da malha do nó).
+                    std::vector<float> w = readFloatAccessor(gltf, smp.output);
+                    const size_t keys = c.times.size();
+                    const size_t per = keys ? w.size() / (smp.interpolation == "CUBICSPLINE" ? keys * 3 : keys) : 0;
+                    if (per == 0) continue;
+                    if (smp.interpolation == "CUBICSPLINE") { // (tangente, valor, tangente): só o valor
+                        std::vector<float> mid;
+                        for (size_t k = 0; k < keys; ++k)
+                            mid.insert(mid.end(), w.begin() + std::ptrdiff_t((k * 3 + 1) * per),
+                                       w.begin() + std::ptrdiff_t((k * 3 + 2) * per));
+                        w.swap(mid);
+                    }
+                    c.weightCount = static_cast<uint32_t>(per);
+                    c.weights = std::move(w);
+                    a.duration = std::max(a.duration, c.times.back());
+                    a.channels.push_back(std::move(c));
+                    continue;
+                }
                 std::vector<Vec4> vals = readAnyVec4Accessor(gltf, smp.output);
                 if (smp.interpolation == "CUBICSPLINE") { // (tangente, valor, tangente): só o valor
                     std::vector<Vec4> mid;
