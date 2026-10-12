@@ -101,7 +101,7 @@ private:
     bool m_hidden = false;
     float m_preTacticalYaw = 0.0f;
     float m_preTacticalPitch = glm::radians(50.0f);
-    float m_preTacticalDist = 158.5f;
+    float m_preTacticalDist = camera_default::kDistance;
     float m_cameraSmoothFactor = 10.0f;
     float m_autoTestTimer = 0.0f;
     size_t m_autoTestMapIndex = 0;

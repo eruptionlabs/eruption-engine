@@ -1088,7 +1088,7 @@ private:
     bool m_hasInitialCamera = false;
     float m_initialYaw = 0.0f;
     float m_initialPitch = 0.0f;
-    float m_initialDist = 158.5f;
+    float m_initialDist = camera_default::kDistance;
     std::string m_screenshotOnLoad;
     std::string m_screenshotAfterWarpPath;
     bool m_screenshotAfterWarpPending = false;

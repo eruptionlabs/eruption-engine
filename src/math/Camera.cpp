@@ -33,6 +33,22 @@ void Camera::setPerspective(float fov, float aspect, float nearZ, float farZ) {
     updateFrustum();
 }
 
+float Camera::zoomPercent() const {
+    constexpr float kFovDeRefDeg = 60.0f;
+    const float ref = std::tan(glm::radians(kFovDeRefDeg) * 0.5f);
+    const float atual = std::tan(glm::radians(m_fov) * 0.5f);
+    // Distancia que daria ESTE mesmo quadro na abertura de referencia.
+    const float equivalente = m_orbitDistance * (atual / ref);
+    return std::clamp(1.0f - (equivalente - 10.0f) / (1000.0f - 10.0f), 0.0f, 1.0f);
+}
+
+void Camera::setFov(float fovDeg) {
+    m_orthographic = false;
+    m_fov = std::clamp(fovDeg, 1.0f, 170.0f);
+    rebuildProjection();
+    updateFrustum();
+}
+
 void Camera::setPosition(const Vec3& pos) {
     m_position = pos;
     rebuildView();
@@ -141,6 +157,10 @@ void Camera::setDefaultOrbit(float yaw, float pitch, float distance) {
     m_defaultYaw = yaw;
     m_defaultPitch = pitch;
     m_defaultDistance = distance;
+    // O teto de afastamento acompanha o padrao: com abertura estreita a
+    // distancia padrao ja' bate no antigo teto fixo de 1000 e a roda do
+    // mouse nao afastava mais nada.
+    m_maxOrbitDistance = std::max(1000.0f, distance * 7.0f);
 }
 
 void Camera::orbitYaw(float delta) {

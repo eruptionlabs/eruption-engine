@@ -51,6 +51,13 @@ DefaultApplication::DefaultApplication(int argc, char** argv) {
             m_initialPos = Vec3(p.manifest().spawn[0], p.manifest().spawn[1], p.manifest().spawn[2]);
             m_hasInitialPos = true;
         }
+        // Enquadramento do jogo (bloco "camera" do manifesto). Chave que o
+        // jogo nao escreve fica com o padrao do motor.
+        const Project::Manifest& mf = p.manifest();
+        if (mf.cameraFov) m_fovDeg = *mf.cameraFov;
+        if (mf.cameraYaw) { m_initialYaw = *mf.cameraYaw; m_hasInitialCamera = true; }
+        if (mf.cameraPitch) { m_initialPitch = *mf.cameraPitch; m_hasInitialCamera = true; }
+        if (mf.cameraDistance) { m_initialDist = *mf.cameraDistance; m_hasInitialCamera = true; }
     } else {
         m_initialMap = loadInitialMapFromConfig();
     }
@@ -119,6 +126,8 @@ void DefaultApplication::parseArgs(int argc, char** argv) {
         } else if (arg == "--cam-dist" && i + 1 < argc) {
             m_initialDist = std::stof(argv[++i]);
             m_hasInitialCamera = true;
+        } else if (arg == "--fov" && i + 1 < argc) {
+            m_fovDeg = std::stof(argv[++i]);
         } else if (arg == "--zoom" && i + 1 < argc) {
             float zoomPercent = std::stof(argv[++i]) / 100.0f;
             m_initialDist = 10.0f + (1.0f - glm::clamp(zoomPercent, 0.0f, 1.0f)) * 990.0f;
@@ -195,6 +204,7 @@ void DefaultApplication::onInit(Engine& engine) {
     }
     if (m_hasInitialPos) engine.setInitialPosition(m_initialPos);
     if (m_needFreeCamera) engine.camera().setDebugFreeCamera(true);
+    engine.camera().setFov(m_fovDeg);
     if (m_hasInitialCamera) engine.setInitialCamera(m_initialYaw, m_initialPitch, m_initialDist);
     if (!m_spawnCloudAlts.empty()) engine.setPendingCloudSpawns(m_spawnCloudAlts, m_spawnCloudRain);
     if (!m_weatherTypeName.empty()) engine.setInitialWeatherType(m_weatherTypeName);

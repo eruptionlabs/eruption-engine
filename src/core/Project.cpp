@@ -76,6 +76,17 @@ bool Project::open(const fs::path& dir, std::string* err) {
             for (int i = 0; i < 3; ++i) m.spawn[i] = j["spawn"][i].get<float>();
             m.hasSpawn = true;
         }
+        if (j.contains("camera") && j["camera"].is_object()) {
+            const json& c = j["camera"];
+            auto numero = [&c](const char* chave) -> std::optional<float> {
+                if (c.contains(chave) && c[chave].is_number()) return c[chave].get<float>();
+                return std::nullopt;
+            };
+            m.cameraFov = numero("fov");
+            m.cameraYaw = numero("yaw");
+            m.cameraPitch = numero("pitch");
+            m.cameraDistance = numero("distance");
+        }
     } catch (const std::exception& e) {
         if (err) *err = std::string("project.eruption is not valid JSON: ") + e.what();
         return false;
@@ -142,6 +153,17 @@ bool Project::saveManifest(std::string* err) {
         j["description"] = m_manifest.description;
         j["startup_map"] = m_manifest.startupMap;
         if (m_manifest.hasSpawn) j["spawn"] = {m_manifest.spawn[0], m_manifest.spawn[1], m_manifest.spawn[2]};
+        // Salvar o manifesto nao pode APAGAR o enquadramento: o editor grava
+        // este arquivo ao mexer no projeto, e o bloco da camera precisa
+        // sobreviver a isso.
+        {
+            json c = json::object();
+            if (m_manifest.cameraFov) c["fov"] = *m_manifest.cameraFov;
+            if (m_manifest.cameraYaw) c["yaw"] = *m_manifest.cameraYaw;
+            if (m_manifest.cameraPitch) c["pitch"] = *m_manifest.cameraPitch;
+            if (m_manifest.cameraDistance) c["distance"] = *m_manifest.cameraDistance;
+            if (!c.empty()) j["camera"] = c;
+        }
         std::ofstream f(m_root / kManifestName);
         if (!f) {
             if (err) *err = "could not write " + (m_root / kManifestName).string();

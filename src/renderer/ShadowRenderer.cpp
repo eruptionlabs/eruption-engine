@@ -519,7 +519,7 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
         dynamicFarRange = 30000.0f * (1.0f / std::max(std::sin(camPitch), 0.2f));
     }
 
-    float zoomFactor = glm::clamp((orbitDist - 10.0f) / (1000.0f - 10.0f), 0.0f, 1.0f);
+    float zoomFactor = glm::clamp(1.0f - m_zoomPercent, 0.0f, 1.0f);
     float dynamicRange = glm::mix(5000.0f, dynamicFarRange, zoomFactor);
     float farPlane = glm::min(camera.farPlane(), dynamicRange);
     // m_cascadeSplits/m_cascadeSplitsVec are set inside computeMatrices below

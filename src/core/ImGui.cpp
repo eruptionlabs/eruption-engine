@@ -743,7 +743,7 @@ void Engine::renderImGui() {
     if (m_editor) m_editor->drawUI();
     if (!m_editor && m_gameOverlay) m_gameOverlay();
 
-    float zoomPercent = 1.0f - (m_camera.orbitDistance() - 10.0f) / (1000.0f - 10.0f);
+    float zoomPercent = m_camera.zoomPercent();
 
     auto drawStrokeText = [](ImDrawList* dl, ImVec2 pos, const char* text, ImU32 color) {
         dl->AddText(ImVec2(pos.x - 1, pos.y - 1), IM_COL32(0, 0, 0, 255), text);
@@ -2594,7 +2594,7 @@ void Engine::renderImGui() {
             if (m_playerController) m_playerController->renderImGui();
             ImGui::Text("Cam Target: %.1f, %.1f, %.1f", m_camera.target().x, m_camera.target().y, m_camera.target().z);
             ImGui::Text("Yaw: %.1f, Pitch: %.1f", glm::degrees(m_camera.orbitYaw()), glm::degrees(m_camera.orbitPitch()));
-            float zpOverlay = 1.0f - (m_camera.orbitDistance() - 10.0f) / (1000.0f - 10.0f);
+            float zpOverlay = m_camera.zoomPercent();
             ImGui::Text("Zoom: %.1f%%", zpOverlay * 100.0f);
             ImGui::Text("Visible Chunks: %d", m_visibleChunks);
             ImGui::Text("Time Control");

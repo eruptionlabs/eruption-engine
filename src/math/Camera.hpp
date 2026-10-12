@@ -7,6 +7,36 @@
 
 namespace eruption {
 
+// ENQUADRAMENTO PADRAO. Fonte unica: o boot (Engine), a troca de mapa
+// (MapLoad) e a linha de comando leem daqui, nunca repetem o numero. Antes
+// os mesmos 50 graus / 158,5 apareciam escritos em quatro lugares e mudar a
+// camera exigia achar todos.
+//
+// Visao isometrica: a abertura ESTREITA e' o que faz a imagem ser legivel de
+// cima. Com 60 graus de abertura a perspectiva abre as paredes pra fora, o
+// chao foge pro fundo e um corredor de caverna nao da' pra ler. Fechando a
+// abertura e afastando a camera na mesma proporcao o enquadramento cobre a
+// mesma area do mundo com quase nenhuma fuga - as paredes paralelas ficam
+// paralelas na tela, que e' a leitura que o genero usa.
+namespace camera_default {
+// Abertura vertical, em graus.
+inline constexpr float kFovDeg = 20.0f;
+// Guinada: -90 graus olha pro sul.
+inline constexpr float kYawDeg = -90.0f;
+// Inclinacao, em graus abaixo da horizontal. MEDIDA, nao chutada: num
+// corredor de caverna de 70 unidades de parede, a 45 graus a linha de visao
+// entra na parede de tras e a tela fica tapada de rocha (foi o que apareceu
+// na captura). A 60 a parede proxima deixa de atrapalhar, o chao do corredor
+// aparece inteiro e o personagem fica recortado - que e' a leitura do
+// genero. O limite de arrasto do jogo e' 70, entao sobra folga dos dois
+// lados pro jogador inclinar.
+inline constexpr float kPitchDeg = 60.0f;
+// Distancia ao alvo. Vale junto com kFovDeg: a area enquadrada e'
+// 2 * distancia * tan(fov/2), e e' ELA que decide o tamanho do personagem
+// na tela. Mexer na abertura sem mexer aqui muda o zoom.
+inline constexpr float kDistance = 1000.0f;
+} // namespace camera_default
+
 class Camera {
 public:
     Camera();
@@ -14,6 +44,8 @@ public:
     // Isometric setup
     void setOrthographic(float left, float right, float bottom, float top, float nearZ, float farZ);
     void setPerspective(float fov, float aspect, float nearZ, float farZ);
+    // Troca so' a abertura, mantendo alvo, orbita e planos.
+    void setFov(float fovDeg);
 
     // Position / target
     void setPosition(const Vec3& pos);
@@ -40,6 +72,17 @@ public:
     float orbitPitch() const { return m_orbitPitch; }
     float orbitDistance() const { return m_orbitDistance; }
     float defaultOrbitDistance() const { return m_defaultDistance; }
+    // ZOOM EM PORCENTAGEM, do jeito que as curvas de ajuste esperam
+    // (tamanho da cascata de sombra, foco do desfoque, opacidade): 100% =
+    // camera encostada no alvo, 0% = no limite de afastamento.
+    //
+    // A conta e' pela AREA ENQUADRADA, nao pela distancia crua. Com abertura
+    // estreita a camera fica LONGE e enquadra o mesmo tanto de mundo; uma
+    // conta so' de distancia leria isso como "zoom no minimo" e jogaria as
+    // curvas pro extremo errado - cascata larga e foco no infinito - sem
+    // nada ter mudado na tela. A referencia e' a abertura de 60 graus em que
+    // as curvas foram ajustadas a mao.
+    float zoomPercent() const;
     void setMaxOrbitDistance(float maxDist) { m_maxOrbitDistance = maxDist; }
     float maxOrbitDistance() const { return m_maxOrbitDistance; }
 

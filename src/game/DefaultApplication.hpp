@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include "game/HudRenderer.hpp"
+#include "math/Camera.hpp"
 namespace eruption {
 class Engine;
 class DefaultApplication {
@@ -46,9 +47,10 @@ private:
     bool m_hasInitialPos = false;
     Vec3 m_initialPos = Vec3(0.0f);
     bool m_hasInitialCamera = false;
-    float m_initialYaw = -90.0f;
-    float m_initialPitch = 50.0f;
-    float m_initialDist = 158.5f;
+    float m_initialYaw = camera_default::kYawDeg;
+    float m_initialPitch = camera_default::kPitchDeg;
+    float m_initialDist = camera_default::kDistance;
+    float m_fovDeg = camera_default::kFovDeg;
     bool m_needFreeCamera = false;
     std::vector<float> m_spawnCloudAlts;
     bool m_spawnCloudRain = false;
