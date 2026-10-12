@@ -170,6 +170,128 @@ void smooth(Result& r, int radius, int iterations, float amount) {
     }
 }
 
+// ------------------------------------------------------- "parece desenhado"
+//
+// O gerador produz forma EXATA: o `tube` abre corredor de largura constante
+// com parede lisa, a `crater` abre circunferência, o `smooth` deixa rampa de
+// derivada contínua. Nada disso existe em rocha. O olho reconhece a regra
+// antes de reconhecer o lugar, e o mapa lê como desenho técnico.
+//
+// A correção NÃO é sujar tudo por igual — isso só troca "liso demais" por
+// "barulhento demais" e apaga a forma que foi desenhada de propósito. A
+// correção é MEDIR onde a superfície está regular demais e gastar a
+// deformação ali.
+//
+// Regularidade = quanto a superfície se parece com o próprio borrão dela.
+// Rocha de verdade tem detalhe em toda escala: tirar a média não muda quase
+// nada, porque o que sobra é tão grande quanto o que saiu. Já uma rampa
+// lisa, uma parede de tubo ou um piso aplanado SÃO a média deles mesmos — o
+// resíduo é zero. Duas escalas de resíduo, normalizadas pelo relevo do
+// próprio mapa, dão um número por ponto: 1 = desenhado, 0 = já é rocha.
+std::vector<float> regularidade(const Result& r) {
+    const size_t n = r.height.size();
+    std::vector<float> b1(n), b2(n), reg(n);
+
+    auto borrar = [&](const std::vector<float>& src, std::vector<float>& dst, int raio) {
+        std::vector<float> tmp(src.size());
+        const float inv = 1.0f / float(2 * raio + 1);
+        for (int z = 0; z < r.d; ++z)                       // separável: horizontal
+            for (int x = 0; x < r.w; ++x) {
+                float soma = 0;
+                for (int d = -raio; d <= raio; ++d)
+                    soma += src[size_t(z) * r.w + std::clamp(x + d, 0, r.w - 1)];
+                tmp[size_t(z) * r.w + x] = soma * inv;
+            }
+        for (int z = 0; z < r.d; ++z)                       // ... e vertical
+            for (int x = 0; x < r.w; ++x) {
+                float soma = 0;
+                for (int d = -raio; d <= raio; ++d)
+                    soma += tmp[size_t(std::clamp(z + d, 0, r.d - 1)) * r.w + x];
+                dst[size_t(z) * r.w + x] = soma * inv;
+            }
+    };
+    borrar(r.height, b1, 2);
+    borrar(b1, b2, 6);
+
+    // Referência: o desvio padrão do relevo do mapa. Sem normalizar, o mesmo
+    // limiar valeria para uma montanha e para uma mesa.
+    double soma = 0, soma2 = 0;
+    for (float h : r.height) { soma += h; soma2 += double(h) * h; }
+    const double media = soma / double(n);
+    const float ref = std::max(1e-3f, float(std::sqrt(std::max(0.0, soma2 / double(n) - media * media))));
+
+    for (size_t i = 0; i < n; ++i) {
+        const float fino = std::abs(r.height[i] - b1[i]);
+        const float medio = std::abs(b1[i] - b2[i]);
+        // 0.045 e 0.085 do desvio do mapa: abaixo disso a superfície não tem
+        // detalhe próprio naquela escala. Os dois pesos somam 1.
+        const float t = 0.62f * std::clamp(fino / (ref * 0.045f), 0.0f, 1.0f)
+                      + 0.38f * std::clamp(medio / (ref * 0.085f), 0.0f, 1.0f);
+        reg[i] = 1.0f - t;
+    }
+    return reg;
+}
+
+// Deforma o DOMÍNIO: em vez de somar ruído na altura (que só encrespa a
+// superfície e mantém a planta), lê a altura de um ponto deslocado. Corredor
+// reto vira corredor que serpenteia, circunferência vira mancha, parede
+// paralela deixa de ser paralela — a PLANTA deixa de ser desenhada, que é o
+// que o olho estava reconhecendo. O deslocamento é proporcional à
+// regularidade, então o que já era rocha não se mexe.
+void deformarDominio(Result& r, const std::vector<float>& reg, const std::vector<float>& porta,
+                     float amplitudeCelulas, float escalaMundo, uint32_t seed) {
+    const std::vector<float> fonte = r.height;
+    const float ox = r.originX, oz = r.originZ, c = r.cell;
+    for (int z = 0; z < r.d; ++z)
+        for (int x = 0; x < r.w; ++x) {
+            const size_t i = size_t(z) * r.w + x;
+            const float a = amplitudeCelulas * reg[i] * porta[i];
+            if (a < 1e-3f) continue;
+            const float wx = (ox + x * c) / escalaMundo, wz = (oz + z * c) / escalaMundo;
+            const float dx = fbm(wx, wz, 3, 0.5f, 2.0f, seed) * a;
+            const float dz = fbm(wx + 31.7f, wz - 17.3f, 3, 0.5f, 2.0f, seed + 101u) * a;
+            const float fx = std::clamp(x + dx, 0.0f, float(r.w - 1.001f));
+            const float fz = std::clamp(z + dz, 0.0f, float(r.d - 1.001f));
+            const int ix = int(fx), iz = int(fz);
+            const float u = fx - ix, v = fz - iz;
+            r.height[i] = fonte[size_t(iz) * r.w + ix] * (1 - u) * (1 - v) +
+                          fonte[size_t(iz) * r.w + ix + 1] * u * (1 - v) +
+                          fonte[size_t(iz + 1) * r.w + ix] * (1 - u) * v +
+                          fonte[size_t(iz + 1) * r.w + ix + 1] * u * v;
+        }
+}
+
+// Erosão TÉRMICA (talude): onde o degrau entre vizinhos passa do ângulo de
+// repouso, material desce. É o que transforma rampa lisa de derivada
+// contínua em encosta facetada com pé de entulho — a diferença entre uma
+// superfície calculada e uma superfície que desabou. A erosão por gotas que
+// já existe aqui faz vale e canal; esta faz TALUDE, que é outro fenômeno.
+void talude(Result& r, const std::vector<float>& reg, const std::vector<float>& porta,
+            float anguloGraus, int passes, float taxa) {
+    const float limite = std::tan(anguloGraus * kPi / 180.0f) * r.cell;
+    std::vector<float> delta(r.height.size());
+    const int viz[8][2] = {{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
+    for (int p = 0; p < passes; ++p) {
+        std::fill(delta.begin(), delta.end(), 0.0f);
+        for (int z = 1; z < r.d - 1; ++z)
+            for (int x = 1; x < r.w - 1; ++x) {
+                const size_t i = size_t(z) * r.w + x;
+                const float peso = reg[i] * porta[i];
+                if (peso < 1e-3f) continue;
+                for (const auto& v : viz) {
+                    const size_t j = size_t(z + v[1]) * r.w + (x + v[0]);
+                    const float diag = (v[0] && v[1]) ? 1.41421356f : 1.0f;
+                    const float d = r.height[i] - r.height[j] - limite * diag;
+                    if (d <= 0) continue;
+                    const float mover = d * taxa * 0.125f * peso;
+                    delta[i] -= mover;
+                    delta[j] += mover;
+                }
+            }
+        for (size_t i = 0; i < r.height.size(); ++i) r.height[i] += delta[i];
+    }
+}
+
 // Pontos (fração 0..1) que valem para as regras de inclinação/altura de uma etapa.
 float ruleWeight(const Result& r, int x, int z, const Step& s) {
     const float soft = float(s.get("softness", 3.0));
@@ -329,6 +451,31 @@ const std::vector<StepInfo>& stepCatalog() {
           {"region_max", 1, 0, 1, "Biome: up to this part"},
           {"region_seed", 1, 1, 100, "Biome: same number = same regions"}},
          {"layer"}},
+        {"realistic", "Realistic (break the geometry)",
+         "Finds where the ground still looks DRAWN (smooth ramps, constant-width corridors, "
+         "round craters) and spends the deformation there. Also makes every LATER scatter step "
+         "behave like nature: clustered, power-law sizes, bedded into the slope. Put it after "
+         "the shapes are carved and before the scatter steps. Man-made pieces opt out with "
+         "natural = 0 on their own scatter step.",
+         {{"strength", 1, 0, 3, "Overall amount"},
+          {"scale", 110, 10, 2000, "Size of the meander (world units)"},
+          {"detail", 1, 0, 3, "Micro relief added to the smooth parts"},
+          {"talus", 1, 0, 6, "Scree: slopes collapse to the angle of repose"},
+          {"repose", 55, 10, 85, "Angle of repose (degrees). 55 = rock; 34 = sand/scree"},
+          {"tilt", 14, 0, 60, "Later scatter: how far a piece may lean (degrees)"},
+          {"clump", 1, 0, 3, "Later scatter: how much it clusters"},
+          {"sink", 0.25, 0, 3, "Later scatter: how deep it beds in (model units)"},
+          {"size_power", 2.2, 1, 6, "Later scatter: 1 = uniform sizes, higher = many small few big"},
+          {"slope_min", -1e9, 0, 90, "From this slope (degrees)"},
+          {"slope_max", 1e9, 0, 90, "Up to this slope"},
+          {"height_min", -1e9, -1000, 3000, "From this height"},
+          {"height_max", 1e9, -1000, 3000, "Up to this height"},
+          {"softness", 3, 0.1, 50, "Blend at the borders"},
+          {"region_scale", 1e9, 50, 5000, "Biome: size of the regions (turn on to use)"},
+          {"region_min", 0, 0, 1, "Biome: from this part of the region noise"},
+          {"region_max", 1, 0, 1, "Biome: up to this part"},
+          {"region_seed", 1, 1, 100, "Biome: same number = same regions"}},
+         {}},
         {"scatter", "Scatter objects", "Places a model (.glb or prefab) where the rules match.",
          {{"density", 1, 0.01, 200, "Objects per 100 x 100 units"},
           {"slope_min", -1e9, 0, 90, "From this slope"},
@@ -337,6 +484,7 @@ const std::vector<StepInfo>& stepCatalog() {
           {"height_max", 1e9, -1000, 3000, "Up to this height"},
           {"scale_min", 0.8, 0.05, 20, "Smallest size"},
           {"scale_max", 1.2, 0.05, 20, "Largest size"},
+          {"natural", 1, 0, 1, "0 = man-made: a previous 'realistic' step does NOT touch it"},
           {"region_scale", 1e9, 50, 5000, "Biome: size of the regions (turn on to use)"},
           {"region_min", 0, 0, 1, "Biome: from this part of the region noise"},
           {"region_max", 1, 0, 1, "Biome: up to this part"},
@@ -483,6 +631,15 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
     r.originX = ox;
     r.originZ = oz;
     r.reserved.assign(r.height.size(), 0);
+    // Ligado pela etapa "realistic" e lido pelas etapas de scatter que vierem
+    // DEPOIS dela. É por ordem, e não por bandeira global, porque num mesmo
+    // mapa convivem a encosta (natural) e a mina escorada por gente
+    // (construída): a construída é escrita antes, ou pede natural = 0.
+    struct Natureza {
+        bool ligado = false;
+        float tilt = 0.0f, clump = 0.0f, sink = 0.0f, sizePower = 1.0f;
+        uint32_t seed = 0;
+    } nat;
     int stepIndex = 0;
     for (const Step& s : recipe.steps) {
         const float base = float(stepIndex++) / std::max<size_t>(1, recipe.steps.size());
@@ -681,22 +838,134 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                     if (m <= 0) continue;
                     if (!paintAt(r, tex, size_t(z) * r.w + x, m, error)) return false;
                 }
+        } else if (s.type == "realistic") {
+            const float forca = float(s.get("strength", 1));
+            // Porta: as mesmas regras de inclinação/altura/região das outras
+            // etapas. É assim que isto vira "aplica nesta região" — e é assim
+            // que o que foi CONSTRUÍDO fica de fora, porque quem constrói
+            // escolhe onde.
+            std::vector<float> porta(r.height.size(), 1.0f);
+            for (int z = 0; z < r.d; ++z)
+                for (int x = 0; x < r.w; ++x) {
+                    const size_t i = size_t(z) * r.w + x;
+                    // Leito de rio e estrada são traçado, não acidente: ficam.
+                    porta[i] = r.reserved[i] ? 0.0f : ruleWeight(r, x, z, s);
+                }
+            if (forca > 1e-3f) {
+                const std::vector<float> reg = regularidade(r);
+                double quanto = 0;
+                for (size_t i = 0; i < reg.size(); ++i) quanto += double(reg[i] * porta[i]);
+                const float parte = float(quanto / double(reg.size()));
+
+                const float escala = float(s.get("scale", 110));
+                // Amplitude em CÉLULAS. Um quarto da onda: desloca o bastante
+                // para a planta deixar de ser reconhecível e pouco o bastante
+                // para não fechar corredor (o mais estreito aqui tem 140
+                // unidades contra ~27 de deslocamento máximo).
+                deformarDominio(r, reg, porta, forca * escala * 0.25f / r.cell, escala, seed);
+
+                const int passes = int(s.get("talus", 1) * 12);
+                if (passes > 0)
+                    talude(r, reg, porta, float(s.get("repose", 55)), passes, std::min(1.0f, forca));
+
+                // Relevo SÓ no que estava liso.
+                //
+                // AMPLITUDE EM UNIDADES DE MUNDO, não em células da grade. A
+                // primeira volta disto amarrou a amplitude à célula e saiu
+                // com ~1 unidade de relevo num personagem de 42 — 2% dele,
+                // ou seja, nada. O relevo tem de ser medido contra o que
+                // anda em cima dele: a maior onda vale 6,5% da ondulação
+                // pedida (130 -> 8,5 unidades, um quinto de personagem), e
+                // cada oitava seguinte vale metade, que é a proporção de uma
+                // superfície fraturada de verdade.
+                //
+                // O piso da onda continua amarrado à célula: onda de menos
+                // de 2,5 células vira serra de um triângulo e o mapa de
+                // sombra responde com mancha preta de borda reta.
+                const float det = float(s.get("detail", 1)) * forca;
+                if (det > 1e-3f) {
+                    const std::vector<float> reg2 = regularidade(r);
+                    for (int z = 0; z < r.d; ++z)
+                        for (int x = 0; x < r.w; ++x) {
+                            const size_t i = size_t(z) * r.w + x;
+                            const float peso = reg2[i] * porta[i];
+                            if (peso < 1e-3f) continue;
+                            const float wx = ox + x * scaleToWorld, wz = oz + z * scaleToWorld;
+                            float soma = 0.0f, amp = escala * 0.065f, onda = escala * 0.45f;
+                            for (int o = 0; o < 4 && onda > r.cell * 2.5f; ++o) {
+                                soma += amp * fbm(wx / onda, wz / onda, 2, 0.5f, 2.0f, seed + 7u * uint32_t(o));
+                                amp *= 0.5f;
+                                onda *= 0.45f;
+                            }
+                            r.height[i] += soma * det * peso;
+                        }
+                }
+                char msg[160];
+                std::snprintf(msg, sizeof(msg), "realistic: %.0f%% do mapa estava geometrico", parte * 100.0f);
+                if (progress) progress(base, msg);
+            }
+            nat.ligado = true;
+            nat.tilt = float(s.get("tilt", 14));
+            nat.clump = float(s.get("clump", 1));
+            nat.sink = float(s.get("sink", 0.25));
+            nat.sizePower = std::max(1.0f, float(s.get("size_power", 2.2)));
+            nat.seed = seed;
         } else if (s.type == "scatter") {
             const std::string model = s.text("model");
             if (model.empty()) continue;
             ScatterGroup g;
             g.model = model;
             const float density = float(s.get("density", 1));
-            const float spacing = 100.0f / std::sqrt(std::max(density, 1e-3f));
             Rng rng{uint64_t(seed) * 977u + 5};
             const float worldSize = (r.w - 1) * r.cell;
-            // Grade com sorteio dentro de cada célula: distância mínima natural.
+            const float escMin = float(s.get("scale_min", 0.8)), escMax = float(s.get("scale_max", 1.2));
+            // A etapa "realistic" anterior vale aqui, a menos que esta peça
+            // seja construída (natural = 0): poste escorado por gente fica de
+            // pé, alinhado e do tamanho que foi cortado.
+            const bool natural = nat.ligado && s.get("natural", 1) > 0.5;
+            const float ondaClump = 170.0f;
+            const float expClump = natural ? 1.0f + 2.0f * nat.clump : 1.0f;
+
+            // Agrupamento muda a densidade média, então ela é medida numa
+            // amostra grossa e devolvida na ACEITAÇÃO (não no espaçamento:
+            // compensar nos dois lugares multiplicou a contagem por 1/média
+            // e o primeiro mapa saiu com 3614 peças em vez de 725).
+            float medioClump = 1.0f;
+            if (natural && nat.clump > 1e-3f) {
+                double soma = 0;
+                for (int i = 0; i < 48; ++i)
+                    for (int j = 0; j < 48; ++j) {
+                        const float cx = ox + worldSize * (i + 0.5f) / 48.0f;
+                        const float cz = oz + worldSize * (j + 0.5f) / 48.0f;
+                        const float c = std::clamp(fbm(cx / ondaClump, cz / ondaClump, 3, 0.5f, 2.0f, nat.seed + 303u) * 0.5f + 0.5f, 0.0f, 1.0f);
+                        soma += std::pow(double(c), double(expClump));
+                    }
+                medioClump = std::max(0.05f, float(soma / (48.0 * 48.0)));
+            }
+            const float spacing = 100.0f / std::sqrt(std::max(density, 1e-3f));
+
             for (float cz = 0; cz < worldSize; cz += spacing)
                 for (float cx = 0; cx < worldSize; cx += spacing) {
-                    const float px = cx + rng.next() * spacing, pz = cz + rng.next() * spacing;
-                    if (px > worldSize || pz > worldSize) continue; // sorteio passou da borda
+                    // SORTEIO QUE PASSA DA CÉLULA. O código antigo sorteava um
+                    // ponto DENTRO de cada célula de uma grade regular: isso é
+                    // um reticulado com tremor, e em densidade alta o olho lê a
+                    // fileira. Espalhando por 1,8 célula a partir de -0,4 as
+                    // células se sobrepõem e a fileira some. Em peça construída
+                    // o reticulado FICA, porque quem assenta trilho assenta em
+                    // linha.
+                    const float j0 = natural ? -0.4f : 0.0f, j1 = natural ? 1.8f : 1.0f;
+                    const float px = cx + (j0 + rng.next() * j1) * spacing;
+                    const float pz = cz + (j0 + rng.next() * j1) * spacing;
+                    if (px < 0 || pz < 0 || px > worldSize || pz > worldSize) continue;
                     const int gx = std::clamp(int(px / r.cell + 0.5f), 0, r.w - 1), gz = std::clamp(int(pz / r.cell + 0.5f), 0, r.d - 1);
-                    const float keep = ruleWeight(r, gx, gz, s);
+                    float keep = ruleWeight(r, gx, gz, s);
+                    if (natural && nat.clump > 1e-3f) {
+                        // Natureza não espalha por igual: ela ajunta. Pedra
+                        // vem em campo de pedra, e entre dois campos o chão
+                        // fica limpo.
+                        const float c = std::clamp(fbm((ox + px) / ondaClump, (oz + pz) / ondaClump, 3, 0.5f, 2.0f, nat.seed + 303u) * 0.5f + 0.5f, 0.0f, 1.0f);
+                        keep *= std::pow(c, expClump) / medioClump;
+                    }
                     if (keep <= 0 || rng.next() > keep) {
                         rng.next();
                         rng.next();
@@ -704,14 +973,33 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                     }
                     if (r.hasWater && r.h(gx, gz) < r.waterLevel) continue;
                     if (r.reserved[size_t(gz) * r.w + gx]) continue; // leito de rio, estrada
-                    const float sc = float(s.get("scale_min", 0.8)) + (float(s.get("scale_max", 1.2)) - float(s.get("scale_min", 0.8))) * rng.next();
+                    // TAMANHO POR LEI DE POTÊNCIA. Sorteio uniforme dá tantas
+                    // pedras grandes quanto pequenas, e é por isso que campo
+                    // de entulho gerado lê como "bolinhas do mesmo tamanho".
+                    // Fragmentação real dá muitas pequenas e poucas grandes.
+                    const float t = natural ? std::pow(rng.next(), nat.sizePower) : rng.next();
+                    const float sc = escMin + (escMax - escMin) * t;
                     // Altura bilinear no ponto exato.
                     const float fx = std::clamp(px / r.cell, 0.0f, float(r.w - 1.001f)), fz = std::clamp(pz / r.cell, 0.0f, float(r.d - 1.001f));
                     const int ix = int(fx), iz = int(fz);
                     const float u = fx - ix, v = fz - iz;
-                    const float y = r.h(ix, iz) * (1 - u) * (1 - v) + r.h(ix + 1, iz) * u * (1 - v) + r.h(ix, iz + 1) * (1 - u) * v +
-                                    r.h(ix + 1, iz + 1) * u * v;
-                    g.items.push_back({px, y, pz, rng.next() * 360.0f, sc});
+                    float y = r.h(ix, iz) * (1 - u) * (1 - v) + r.h(ix + 1, iz) * u * (1 - v) + r.h(ix, iz + 1) * (1 - u) * v +
+                              r.h(ix + 1, iz + 1) * u * v;
+                    float pitch = 0.0f, roll = 0.0f;
+                    if (natural) {
+                        // ASSENTA NO TALUDE. A peça de pé em chão inclinado é
+                        // o sinal mais rápido de "isto foi colocado por um
+                        // programa". O eixo de cima acompanha a normal do
+                        // terreno (0,6 dela: pedra acomoda, não cola), e por
+                        // cima vai um desvio sorteado.
+                        const float dhx = (r.h(std::min(gx + 1, r.w - 1), gz) - r.h(std::max(gx - 1, 0), gz)) / (2.0f * r.cell);
+                        const float dhz = (r.h(gx, std::min(gz + 1, r.d - 1)) - r.h(gx, std::max(gz - 1, 0))) / (2.0f * r.cell);
+                        const float g180 = 180.0f / kPi;
+                        roll = std::atan(dhx) * g180 * 0.6f + (rng.next() * 2.0f - 1.0f) * nat.tilt;
+                        pitch = -std::atan(dhz) * g180 * 0.6f + (rng.next() * 2.0f - 1.0f) * nat.tilt;
+                        y -= nat.sink * sc;   // enterra: rocha solta no chão está meio coberta
+                    }
+                    g.items.push_back({px, y, pz, rng.next() * 360.0f, sc, pitch, roll});
                 }
             r.scatter.push_back(std::move(g));
         } else if (s.type == "river") {
@@ -1035,8 +1323,8 @@ bool writeMap(const Result& r, const std::string& projectRoot, const std::string
             const bool prefab = g.model.size() > 12 && g.model.compare(g.model.size() - 12, 12, ".prefab.luau") == 0;
             o << "    { " << (prefab ? "prefab = " : "file = ") << quote(g.model) << ", items = {\n";
             for (const auto& it : g.items)
-                o << "        {" << num(it.x) << ", " << num(it.y) << ", " << num(it.z) << ", 0, " << num(it.yaw) << ", 0, "
-                  << num(it.scale) << "},\n";
+                o << "        {" << num(it.x) << ", " << num(it.y) << ", " << num(it.z) << ", " << num(it.pitch) << ", "
+                  << num(it.yaw) << ", " << num(it.roll) << ", " << num(it.scale) << "},\n";
             o << "    } },\n";
         }
         o << "}\n";

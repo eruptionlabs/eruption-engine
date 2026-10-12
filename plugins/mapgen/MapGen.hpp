@@ -72,7 +72,10 @@ struct Layer {
 };
 struct ScatterGroup {
     std::string model; // .glb ou prefab
-    struct Item { float x, y, z, yaw, scale; };
+    // pitch/roll: inclinação em graus. Zero = peça de pé, que é o certo para
+    // o que foi construído; a etapa "realistic" é quem inclina o que é
+    // natural (pedra assenta no talude, não fica em pé como poste).
+    struct Item { float x, y, z, yaw, scale; float pitch = 0.0f, roll = 0.0f; };
     std::vector<Item> items;
 };
 
