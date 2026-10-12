@@ -1063,7 +1063,12 @@ void WaterRenderer::updateUBO(uint32_t frameIndex, uint32_t uboSlot, const Water
     ubo.extraParams = Vec4(0.15f, 10.0f, settings.enableCaustics ? 1.0f : 0.0f,
                            static_cast<float>(settings.liquidKind));
     ubo.foamSurfaceParams = Vec4(settings.foamScale, settings.foamSpeed, settings.foamRoughness, settings.enableSurfaceFoam ? 1.0f : 0.0f);
-    ubo.normalAdvanced = Vec4(static_cast<float>(settings.normalOctaves), 0.0f, 0.0f, 0.0f);
+    // y = brilho da lava. `emissiveStrength` vinha do .env, chegava ate' aqui
+    // e parava: a superficie era uma constante no shader, entao um lago
+    // posto com emissivo baixo saia tao claro quanto um com emissivo alto —
+    // e com o valor fixo ele estourava para creme em vez de ficar laranja.
+    ubo.normalAdvanced = Vec4(static_cast<float>(settings.normalOctaves),
+                              settings.emissiveStrength, 0.0f, 0.0f);
     ubo.causticsParams = Vec4(settings.causticsIntensity, settings.causticsDepthAttenuation, 0.0f, 0.0f);
     ubo.weatherParams = Vec4(sunOcclusion, moonOcclusion, stormDarken, rainIntensity);
     std::memcpy(m_uboMappeds[uboSlot], &ubo, sizeof(ubo));

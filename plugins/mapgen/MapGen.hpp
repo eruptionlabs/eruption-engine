@@ -34,6 +34,7 @@ struct Step {
         auto it = num.find(k);
         return it == num.end() ? def : it->second;
     }
+    bool has(const std::string& k) const { return num.find(k) != num.end(); }
     std::string text(const std::string& k) const {
         auto it = str.find(k);
         return it == str.end() ? std::string() : it->second;
