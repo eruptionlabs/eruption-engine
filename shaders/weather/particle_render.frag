@@ -450,4 +450,9 @@ void main() {
         vec3 rgb = clamp(abs(mod(hue * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
         outColor.rgb = rgb * max(outColor.a, 0.15) * 6.0;
     }
+
+    // Mistura aditiva: valor negativo ou NaN ESCURECE o fundo. No celular
+    // (precisao menor) alguns flocos saiam como pontos pretos/coloridos.
+    if (any(isnan(outColor)) || any(isinf(outColor))) discard;
+    outColor = clamp(outColor, vec4(0.0), vec4(64.0));
 }
