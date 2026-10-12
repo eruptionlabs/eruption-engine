@@ -490,6 +490,7 @@ public:
     // 0xFFFFFFFF se o modelo nao tinha malha.
     // `nodeName` vazio = todos os nós; senão só o nó com esse nome.
     uint32_t addModel(const ModelAsset& asset, const ModelInstanceDesc& ref, const std::string& nodeName = {});
+    uint32_t addModel(ModelAsset&& asset, const ModelInstanceDesc& ref, const std::string& nodeName = {});
     // Libera as malhas de um arquivo (mapa vizinho que saiu do mundo): as instâncias
     // delas param de desenhar. Devolve as chaves ("arquivo#nó") das malhas base,
     // que pertencem ao cache de assets do motor.
@@ -500,6 +501,36 @@ public:
     // Mesmo que addModel para um arquivo já carregado (sem reler o .glb).
     bool hasAsset(const std::string& path) const;
     uint32_t addInstanceOf(const std::string& path, const ModelInstanceDesc& ref, const std::string& nodeName = {});
+
+    // Montagem de malha fora da thread principal (mapa vizinho do mundo
+    // contínuo). scanSlotUse e prepareAsset rodam em qualquer thread;
+    // resolveSlots, lodParams, providePrepared e o addModel seguinte, na
+    // principal. Sem providePrepared o addModel monta tudo ali mesmo.
+    struct NodeSlotUse {
+        std::vector<int32_t> faceFirst;   // por entrada: o índice de textura que a resolve (-1 = sem uso)
+        std::vector<uint32_t> faceOrder;  // entradas na ordem em que aparecem nos vértices
+        std::vector<uint8_t> blend, mask, splat;
+    };
+    struct NodeSlots {
+        struct Face { uint32_t texSlot = 0, pbrIdx = 0, normalIdx = 0, emissiveSlot = 0; };
+        struct Blend { uint32_t tex = 0, pbrIdx = 0, normalIdx = 0; };
+        std::vector<Face> face;
+        std::vector<Blend> blend;
+        std::vector<uint32_t> mask, splat;
+        std::string firstTexName, firstPbrName, material;
+        PbrMaterialProfile profile;
+    };
+    // Parâmetros do LOD copiados quando a tarefa nasce: o cálculo não lê membros.
+    struct LodParams {
+        float ratio = 0.0f, error = 0.05f, distanceFactor = 8.0f, minDistance = 0.0f, farDistanceMul = 3.0f;
+        uint32_t maxTris = 0, farMaxTris = 0, shadowMaxTris = 0, minTris = 800;
+    };
+    struct PreparedAsset;
+    static std::vector<NodeSlotUse> scanSlotUse(const ModelAsset& asset);
+    std::vector<NodeSlots> resolveSlots(const ModelAsset& asset, const std::vector<NodeSlotUse>& use);
+    LodParams lodParams() const;
+    static PreparedAsset prepareAsset(const ModelAsset& asset, std::vector<NodeSlots> slots, const LodParams& lod);
+    void providePrepared(const std::string& filePath, PreparedAsset&& prepared);
     // Distancia ao longo do raio (mundo, dir normalizada) ate' o triangulo
     // mais proximo da instancia, ou -1. Usa a malha da CPU do modelo.
     float raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const;
@@ -642,11 +673,42 @@ private:
         MeshCardStats cs;     // topologia (so' folhagem): cartao x folha modelada
         bool csValid = false;
         MeshLodResult loRes, farRes, shRes; // as três partes, antes de decidir
+        LodParams p;
+        bool done = false; // já calculado (montagem fora da thread principal)
     };
-    void computeLodPart(LodBuild& b, int part) const;
-    void computeMidChain(LodBuild& b) const;
+    // Malha de um nó pronta para subir: tudo o que não depende da GPU.
+    struct PreparedNode {
+        bool valid = false, skinned = false, reindexed = false, isGround = false, splatGround = false;
+        std::vector<struct TerrainVertex> vertices;
+        std::vector<uint32_t> indices;
+        std::vector<ModelMeshGPU::GroundCell> groundCells;
+        Vec3 aabbMin{0.0f}, aabbMax{0.0f};
+        size_t verticesBefore = 0;
+        float uvPerUnit = 0.0f;
+        std::vector<std::pair<uint32_t, float>> texUvPerUnit;
+        bool hasLod = false;
+        LodBuild lod;
+    };
+    static bool skinnedNode(const ModelAsset& asset, const ModelNode& node);
+    static NodeSlotUse scanNodeSlotUse(const ModelAsset& asset, const ModelNode& node);
+    NodeSlots resolveNodeSlots(const ModelAsset& asset, const ModelNode& node, const NodeSlotUse& use,
+                               const std::vector<uint32_t>& assetTexSlots);
+    static PreparedNode prepareNode(const ModelAsset& asset, size_t n, const NodeSlots& slots, const LodParams& lod,
+                                    bool computeLod);
+    static bool wantsLod(const LodParams& lod, bool skinned, size_t indexCount, size_t vertexCount);
+
+public:
+    struct PreparedAsset {
+        std::vector<NodeSlots> slots;
+        std::vector<PreparedNode> nodes;
+    };
+
+private:
+    std::unordered_map<std::string, PreparedAsset> m_prepared; // providePrepared -> próximo addModel do arquivo
+    static void computeLodPart(LodBuild& b, int part);
+    static void computeMidChain(LodBuild& b);
     static constexpr size_t kMidLodMinTris = 60000; // abaixo disso o salto cheia -> "lo" ja' e' curto
-    void finishLod(LodBuild& b) const;
+    static void finishLod(LodBuild& b);
     void applyLods(std::vector<LodBuild>& builds);
     void registerSkinBase(uint32_t mesh, const ModelAsset& asset, const ModelNode& node,
                           const std::vector<struct TerrainVertex>& vertices);

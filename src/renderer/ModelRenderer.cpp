@@ -22,6 +22,7 @@
 
 #include <cstring>
 #include <algorithm>
+#include <future>
 #include <fstream>
 #include <mutex>
 
@@ -619,6 +620,7 @@ void ModelRenderer::clear() {
     m_pbrByTexSlot.clear();
     m_lastModels.clear();
     m_lastInstances.clear();
+    m_prepared.clear();
 
     // Release per-map PBR texture bindings so we don't leak images/slots across
     // map changes. They will be reloaded on demand via the texture resolver.
@@ -974,8 +976,8 @@ void ModelRenderer::loadMapModels(std::vector<ModelAsset>&& models,
 // nao a malha cheia: 1,6 M de triangulos levaria segundos por nivel), ate'
 // ficar a ~4x do "lo". Folhagem de cartao: poda com compensacao de area, como
 // o "lo" (vertices proprios por degrau).
-void ModelRenderer::computeMidChain(LodBuild& b) const {
-    if (b.ground || m_meshLodRatio <= 0.0f) return;
+void ModelRenderer::computeMidChain(LodBuild& b) {
+    if (b.ground || b.p.ratio <= 0.0f) return;
     // Topologia da folhagem (cartao x folha modelada): serve a cadeia e o
     // "lo"/"far" de folha modelada em finishLod.
     if (b.sway) {
@@ -986,8 +988,8 @@ void ModelRenderer::computeMidChain(LodBuild& b) const {
     static const bool kNoMid = std::getenv("ERUPTION_TEST_NO_MID_LOD") != nullptr;
     if (kNoMid) return;
     const size_t triCount = b.indices.size() / 3;
-    size_t loTarget = static_cast<size_t>(double(triCount) * m_meshLodRatio);
-    if (m_meshLodMaxTris > 0) loTarget = std::min<size_t>(loTarget, m_meshLodMaxTris);
+    size_t loTarget = static_cast<size_t>(double(triCount) * b.p.ratio);
+    if (b.p.maxTris > 0) loTarget = std::min<size_t>(loTarget, b.p.maxTris);
     const size_t stopAt = std::max<size_t>(loTarget * 4, kMidLodMinTris / 4);
     if (triCount < kMidLodMinTris || triCount / 4 <= stopAt) return;
     // Poda de cartao so' em folhagem de CARTAO de verdade (folha modelada
@@ -1064,35 +1066,35 @@ void ModelRenderer::computeMidChain(LodBuild& b) const {
     }
 }
 
-void ModelRenderer::computeLodPart(LodBuild& b, int part) const {
+void ModelRenderer::computeLodPart(LodBuild& b, int part) {
     const std::vector<TerrainVertex>& vertices = b.vertices;
     const std::vector<uint32_t>& indices = b.indices;
     if (part == 0) {
-        b.loRes = simplifyMesh(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex), indices, m_meshLodRatio,
-                               m_meshLodError, m_meshLodMaxTris, offsetof(TerrainVertex, texCoord),
+        b.loRes = simplifyMesh(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex), indices, b.p.ratio,
+                               b.p.error, b.p.maxTris, offsetof(TerrainVertex, texCoord),
                                offsetof(TerrainVertex, texIndex), b.sway, 0.6f, b.ground);
     } else if (part == 1) {
         // LOD DISTANTE: simplificacao "sloppy" - a esta distancia a silhueta
         // grossa e' tudo que a tela resolve. Piso de area proprio em malha de
         // cartao (kFarCardMinArea): com o 0,6 do "lo" o far nunca chegava ao teto.
-        if (m_meshLodFarMaxTris > 0)
+        if (b.p.farMaxTris > 0)
             b.farRes = simplifyMesh(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex), indices,
-                                    std::max(m_meshLodRatio * 0.25f, 0.02f), 1.0f /* erro livre: o TETO manda */,
-                                    m_meshLodFarMaxTris, offsetof(TerrainVertex, texCoord),
+                                    std::max(b.p.ratio * 0.25f, 0.02f), 1.0f /* erro livre: o TETO manda */,
+                                    b.p.farMaxTris, offsetof(TerrainVertex, texCoord),
                                     offsetof(TerrainVertex, texIndex), b.sway, kFarCardMinArea, b.ground);
     } else if (part == 3) {
         computeMidChain(b);
-    } else if (m_shadowLodMaxTris > 0) {
+    } else if (b.p.shadowMaxTris > 0) {
         // LOD exclusivo da sombra: mais agressivo, porque a silhueta no shadow
         // map nao resolve o detalhe (RMS 0,000 medido). Piso de area de sombra
         // proprio: a sombra e' filtrada, copa com 30% dos cartoes ainda projeta.
-        b.shRes = simplifyMesh(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex), indices, m_meshLodRatio,
-                               m_meshLodError * 4.0f, m_shadowLodMaxTris, offsetof(TerrainVertex, texCoord),
+        b.shRes = simplifyMesh(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex), indices, b.p.ratio,
+                               b.p.error * 4.0f, b.p.shadowMaxTris, offsetof(TerrainVertex, texCoord),
                                offsetof(TerrainVertex, texIndex), b.sway, kShadowCardMinArea);
     }
 }
 
-void ModelRenderer::finishLod(LodBuild& b) const {
+void ModelRenderer::finishLod(LodBuild& b) {
     const std::vector<TerrainVertex>& vertices = b.vertices;
     const std::vector<uint32_t>& indices = b.indices;
     MeshLodResult& lod = b.loRes;
@@ -1107,8 +1109,8 @@ void ModelRenderer::finishLod(LodBuild& b) const {
     bool cardLodDone = false;
     if (lod.cardMesh && !kNoCardPrune && b.sway) {
         const size_t triCount = indices.size() / 3;
-        size_t loTarget = static_cast<size_t>(double(triCount) * m_meshLodRatio);
-        if (m_meshLodMaxTris > 0) loTarget = std::min<size_t>(loTarget, m_meshLodMaxTris);
+        size_t loTarget = static_cast<size_t>(double(triCount) * b.p.ratio);
+        if (b.p.maxTris > 0) loTarget = std::min<size_t>(loTarget, b.p.maxTris);
         loTarget = std::max<size_t>(loTarget, 3);
         CardPruneResult pr = pruneCardsAreaPreserving(vertices.data(), vertices.size(), sizeof(TerrainVertex),
                                                       offsetof(TerrainVertex, position), indices,
@@ -1122,17 +1124,17 @@ void ModelRenderer::finishLod(LodBuild& b) const {
             // so' a fracao que a escala NAO compensou conta como erro.
             const float uncompensated = 1.0f - std::min(1.0f, pr.areaKeptRaw * pr.scale * pr.scale);
             const float absErr = std::max(((1.0f - pr.areaKeptRaw) * 0.08f + uncompensated * 0.25f) * b.extent, 1e-3f);
-            b.loSwitch = std::max(absErr * m_meshLodDistanceFactor, m_meshLodMinDistance);
+            b.loSwitch = std::max(absErr * b.p.distanceFactor, b.p.minDistance);
             cardLodDone = true;
-            if (m_meshLodFarMaxTris > 0 && b.lo.size() / 3 > m_meshLodFarMaxTris * 2) {
+            if (b.p.farMaxTris > 0 && b.lo.size() / 3 > b.p.farMaxTris * 2) {
                 CardPruneResult fr = pruneCardsAreaPreserving(vertices.data(), vertices.size(), sizeof(TerrainVertex),
-                                                              offsetof(TerrainVertex, position), indices, m_meshLodFarMaxTris,
+                                                              offsetof(TerrainVertex, position), indices, b.p.farMaxTris,
                                                               offsetof(TerrainVertex, texCoord),
                                                               offsetof(TerrainVertex, texIndex), kCardLodMaxScale * 2.0f);
                 if (fr.valid && fr.indices.size() < b.lo.size()) {
                     b.farVerts = std::move(fr.vertices);
                     b.far = std::move(fr.indices);
-                    b.farSwitch = b.loSwitch * m_meshLodFarDistanceMul;
+                    b.farSwitch = b.loSwitch * b.p.farDistanceMul;
                 }
             }
             static const bool kCardPruneDbg = std::getenv("ERUPTION_DEBUG_LODCARDS") != nullptr;
@@ -1149,12 +1151,12 @@ void ModelRenderer::finishLod(LodBuild& b) const {
         // pelo raio as malhas maiores nunca trocavam. Piso de distância: nada
         // troca perto da câmera, senão objeto fino (poste) pipoca.
         const float absErr = std::max(lod.error * b.extent, 1e-3f);
-        b.loSwitch = std::max(absErr * m_meshLodDistanceFactor, m_meshLodMinDistance);
+        b.loSwitch = std::max(absErr * b.p.distanceFactor, b.p.minDistance);
         // O distante só vale se for bem menor que o "lo".
-        if (m_meshLodFarMaxTris > 0 && b.lo.size() / 3 > m_meshLodFarMaxTris * 2 && b.farRes.valid &&
+        if (b.p.farMaxTris > 0 && b.lo.size() / 3 > b.p.farMaxTris * 2 && b.farRes.valid &&
             b.farRes.indices.size() < b.lo.size()) {
             b.far = std::move(b.farRes.indices);
-            b.farSwitch = b.loSwitch * m_meshLodFarDistanceMul;
+            b.farSwitch = b.loSwitch * b.p.farDistanceMul;
         }
     }
     // FOLHA MODELADA (arbusto, planta, arvore de folhas com volume - nao
@@ -1168,12 +1170,12 @@ void ModelRenderer::finishLod(LodBuild& b) const {
     if (!kNoLeafLod && b.sway && b.csValid && !b.cs.isCardMesh && b.cs.islands >= 16) {
         const size_t triCount = indices.size() / 3;
         const float tpi = float(triCount) / float(b.cs.islands);
-        size_t loTarget = static_cast<size_t>(double(triCount) * m_meshLodRatio);
-        if (m_meshLodMaxTris > 0) loTarget = std::min<size_t>(loTarget, m_meshLodMaxTris);
+        size_t loTarget = static_cast<size_t>(double(triCount) * b.p.ratio);
+        if (b.p.maxTris > 0) loTarget = std::min<size_t>(loTarget, b.p.maxTris);
         loTarget = std::max<size_t>(loTarget, 3);
         const bool loPoor = b.lo.empty() || b.lo.size() / 3 > loTarget * 3 / 2;
         const bool farPoor =
-            m_meshLodFarMaxTris > 0 && (b.far.empty() || b.far.size() / 3 > size_t(m_meshLodFarMaxTris) * 2);
+            b.p.farMaxTris > 0 && (b.far.empty() || b.far.size() / 3 > size_t(b.p.farMaxTris) * 2);
         if (tpi > 3.0f && (loPoor || farPoor)) {
             // Base de ~2 triangulos por folha: o degrau da cadeia que ja' e'
             // isso (indices sobre o vertex buffer da malha), ou um novo.
@@ -1200,18 +1202,18 @@ void ModelRenderer::finishLod(LodBuild& b) const {
                     const float uncompensated = 1.0f - std::min(1.0f, pr.areaKeptRaw * pr.scale * pr.scale);
                     const float absErr =
                         std::max(((1.0f - pr.areaKeptRaw) * 0.08f + uncompensated * 0.25f) * b.extent, 1e-3f);
-                    b.loSwitch = std::max(absErr * m_meshLodDistanceFactor, m_meshLodMinDistance);
+                    b.loSwitch = std::max(absErr * b.p.distanceFactor, b.p.minDistance);
                 }
             }
             if (farPoor && !b.lo.empty()) {
                 CardPruneResult fr = pruneCardsAreaPreserving(
                     vertices.data(), vertices.size(), sizeof(TerrainVertex), offsetof(TerrainVertex, position), *leaf2,
-                    m_meshLodFarMaxTris, offsetof(TerrainVertex, texCoord), offsetof(TerrainVertex, texIndex),
+                    b.p.farMaxTris, offsetof(TerrainVertex, texCoord), offsetof(TerrainVertex, texIndex),
                     kCardLodMaxScale * 2.0f);
                 if (fr.valid && fr.indices.size() < b.lo.size()) {
                     b.farVerts = std::move(fr.vertices);
                     b.far = std::move(fr.indices);
-                    b.farSwitch = b.loSwitch * m_meshLodFarDistanceMul;
+                    b.farSwitch = b.loSwitch * b.p.farDistanceMul;
                 }
             }
         }
@@ -1222,15 +1224,15 @@ void ModelRenderer::finishLod(LodBuild& b) const {
     // vazio ou igual ao "lo" (urtiga 5,6 k -> lo 3,2 k, far nenhum, 125
     // instancias). A essa distancia a planta tem dezenas de pixels: o
     // silhueta basta: simplifyFoliageFar (sem a guarda de estrutura).
-    if (!kNoLeafLod && b.sway && b.csValid && !b.cs.isCardMesh && !b.lo.empty() && m_meshLodFarMaxTris > 0 &&
-        (b.far.empty() || b.far.size() / 3 > size_t(m_meshLodFarMaxTris) * 2)) {
+    if (!kNoLeafLod && b.sway && b.csValid && !b.cs.isCardMesh && !b.lo.empty() && b.p.farMaxTris > 0 &&
+        (b.far.empty() || b.far.size() / 3 > size_t(b.p.farMaxTris) * 2)) {
         std::vector<uint32_t> fr = simplifyFoliageFar(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex),
-                                                      indices, m_meshLodFarMaxTris, offsetof(TerrainVertex, texCoord),
+                                                      indices, b.p.farMaxTris, offsetof(TerrainVertex, texCoord),
                                                       offsetof(TerrainVertex, texIndex));
         if (!fr.empty() && fr.size() * 2 < b.lo.size()) {
             b.farVerts.clear();
             b.far = std::move(fr);
-            b.farSwitch = b.loSwitch * m_meshLodFarDistanceMul;
+            b.farSwitch = b.loSwitch * b.p.farDistanceMul;
         }
     }
     static const bool kDbgLod = std::getenv("ERUPTION_DEBUG_MIDLOD") != nullptr;
@@ -1318,6 +1320,540 @@ void ModelRenderer::applyLods(std::vector<LodBuild>& builds) {
     vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
 }
 
+ModelRenderer::NodeSlotUse ModelRenderer::scanNodeSlotUse(const ModelAsset& asset, const ModelNode& node) {
+    NodeSlotUse u;
+    size_t faceCacheSize = node.textureNames.size();
+    if (!node.textureIds.empty()) faceCacheSize = std::max(faceCacheSize, node.textureIds.size());
+    faceCacheSize = std::max(faceCacheSize, asset.textures.size());
+    if (faceCacheSize == 0) faceCacheSize = 1;
+    u.faceFirst.assign(faceCacheSize, -1);
+    const size_t nt = node.textureNames.size();
+    u.blend.assign(nt, 0);
+    u.mask.assign(nt, 0);
+    u.splat.assign(nt, 0);
+    for (size_t i = 0; i < node.vertices.size(); ++i) {
+        const uint16_t faceTexIdx = (i < node.perVertexTexIds.size()) ? node.perVertexTexIds[i] : 0;
+        int32_t& first = u.faceFirst[faceTexIdx % faceCacheSize];
+        if (first < 0) {
+            first = faceTexIdx;
+            u.faceOrder.push_back(static_cast<uint32_t>(faceTexIdx % faceCacheSize));
+        }
+        if (nt == 0) continue;
+        const float blendWeight = (i < node.perVertexBlendWeights.size()) ? node.perVertexBlendWeights[i] : 0.0f;
+        if (blendWeight > 0.0f && i < node.perVertexBlendTexIds.size()) u.blend[node.perVertexBlendTexIds[i] % nt] = 1;
+        if (i < node.perVertexBlendMaskTexIds.size() && i < node.perVertexBlendMaskUV.size() &&
+            node.perVertexBlendMaskTexIds[i] != 0)
+            u.mask[node.perVertexBlendMaskTexIds[i] % nt] = 1;
+        if (i < node.perVertexBlendMaskTexIds2.size() && node.perVertexBlendMaskTexIds2[i] != 0)
+            u.mask[node.perVertexBlendMaskTexIds2[i] % nt] = 1;
+        for (int sIdx = 0; sIdx < 8; ++sIdx) {
+            const auto& arr = node.perVertexSplatTexIds[sIdx];
+            if (i < arr.size() && arr[i] != 0) u.splat[arr[i] % nt] = 1;
+        }
+    }
+    return u;
+}
+
+std::vector<ModelRenderer::NodeSlotUse> ModelRenderer::scanSlotUse(const ModelAsset& asset) {
+    std::vector<NodeSlotUse> use(asset.nodes.size());
+    for (size_t n = 0; n < asset.nodes.size(); ++n)
+        if (!asset.nodes[n].vertices.empty() && !asset.nodes[n].indices.empty())
+            use[n] = scanNodeSlotUse(asset, asset.nodes[n]);
+    return use;
+}
+
+// Texturas do nó em slots de bindless, uma vez por índice local usado.
+            // Primary texture / PBR resolve is identical for every vertex
+            // sharing a faceTexIdx. Doing the string sanitize + hash lookups
+            // per vertex (millions on a baked map GLB) was ~15s of the load;
+            // cache the result per faceTexIdx and the vertex body becomes a
+            // vector index.
+ModelRenderer::NodeSlots ModelRenderer::resolveNodeSlots(const ModelAsset& asset, const ModelNode& node,
+                                                        const NodeSlotUse& use,
+                                                        const std::vector<uint32_t>& assetTexIndexToBindlessSlot) {
+    NodeSlots out;
+    out.face.resize(use.faceFirst.size());
+    for (uint32_t entry : use.faceOrder) {
+        const uint16_t faceTexIdx = static_cast<uint16_t>(use.faceFirst[entry]);
+        NodeSlots::Face& fr = out.face[entry];
+        uint32_t texSlot = 0;
+        std::string texName;
+        std::string pbrName;
+        if (!node.textureNames.empty()) {
+            // v2.3+: per-node names
+            texName = node.textureNames[faceTexIdx % node.textureNames.size()];
+            texSlot = resolveTexture(texName);
+            if (!node.pbrTextureNames.empty()) {
+                pbrName = node.pbrTextureNames[faceTexIdx % node.pbrTextureNames.size()];
+            }
+        } else if (!node.textureIds.empty()) {
+            // v1.x-2.2: map local ID to global list
+            uint32_t globalIdx = node.textureIds[faceTexIdx % node.textureIds.size()];
+            texSlot = (globalIdx < assetTexIndexToBindlessSlot.size()) ? assetTexIndexToBindlessSlot[globalIdx] : 0;
+            if (globalIdx < asset.textures.size()) texName = asset.textures[globalIdx];
+            // Esse ramo (mapa mais antigo) nunca passava por
+            // resolveTexture() - a textura ficava sem entrada
+            // em m_textureCache, entao nunca aparecia na lista
+            // do F1/popup de preview (autor: "o chao continua
+            // diferente do preview" - literalmente nao dava
+            // pra' clicar no chao de verdade).
+            registerResolvedTexture(texName, texSlot);
+        } else {
+            // Fallback: use global index directly
+            texSlot = (faceTexIdx < assetTexIndexToBindlessSlot.size()) ? assetTexIndexToBindlessSlot[faceTexIdx] : 0;
+            if (faceTexIdx < asset.textures.size()) texName = asset.textures[faceTexIdx];
+            registerResolvedTexture(texName, texSlot);
+        }
+        PbrTextureSlots pbrSlots;
+        if (!pbrName.empty()) {
+            pbrSlots = resolvePbrTextures(pbrName);
+        }
+        // Fallback para o nome da TEXTURA: o nome do material
+        // acha o PBR cozido em disco, mas quando ele nao existe
+        // a sintese precisa dos pixels, e textura embutida no
+        // GLB so e' encontravel pelo nome da imagem (mangled
+        // "#___"). Sem este fallback a ponte do cidade-D (e todo
+        // material sem PBR cozido em mapa com textura embutida)
+        // ficava sem normal map nenhum - ou seja, ZERO relevo.
+        if (!pbrSlots.valid() && !texName.empty() && texName != pbrName) {
+            pbrSlots = resolvePbrTextures(texName);
+        }
+        fr.texSlot = texSlot;
+        if (!node.emissiveTextureNames.empty()) {
+            const std::string& en = node.emissiveTextureNames[faceTexIdx % node.emissiveTextureNames.size()];
+            if (!en.empty()) fr.emissiveSlot = resolveTexture(en);
+        }
+        fr.pbrIdx = pbrSlots.mrahw.index;
+        fr.normalIdx = pbrSlots.normal.index;
+        // PBR por SLOT de textura: o cache por nome e' chaveado
+        // pelo nome do MATERIAL, e a lista do F1 so' tem o nome
+        // sintetico da imagem embutida - o preview nunca achava.
+        if (texSlot != 0 && pbrSlots.valid()) m_pbrByTexSlot.emplace(texSlot, pbrSlots);
+        if (out.firstTexName.empty() && !texName.empty()) out.firstTexName = texName;
+    }
+    const size_t nt = node.textureNames.size();
+    // Crossfade targets resolve to the same handful of slots for the whole node.
+    out.blend.resize(nt);
+    for (size_t bLocal = 0; bLocal < nt && bLocal < use.blend.size(); ++bLocal) {
+        if (!use.blend[bLocal]) continue;
+        NodeSlots::Blend& br = out.blend[bLocal];
+        br.tex = resolveTexture(node.textureNames[bLocal]);
+        std::string bPbrName = (bLocal < node.pbrTextureNames.size()) ? node.pbrTextureNames[bLocal] : node.textureNames[bLocal];
+        if (bPbrName.empty()) bPbrName = node.textureNames[bLocal];
+        if (!bPbrName.empty()) {
+            PbrTextureSlots s = resolvePbrTextures(bPbrName);
+            br.pbrIdx = s.mrahw.index;
+            br.normalIdx = s.normal.index;
+        }
+    }
+    // Máscaras de splat (as duas usam a mesma tabela) e camadas de splat.
+    out.mask.assign(nt, 0);
+    out.splat.assign(nt, 0);
+    for (size_t k = 0; k < nt; ++k) {
+        if (k < use.mask.size() && use.mask[k]) out.mask[k] = resolveTexture(node.textureNames[k]);
+        if (k < use.splat.size() && use.splat[k]) out.splat[k] = resolveTexture(node.textureNames[k]);
+    }
+    // NOME DO MATERIAL, nao o da imagem embutida: o GLB traz imagens com nome
+    // sintetico ("#-00_0000.png") e o parser guarda o do material em
+    // node.pbrTextureNames. O perfil PBR e o balanco ao vento saem dele.
+    if (!node.pbrTextureNames.empty()) out.firstPbrName = node.pbrTextureNames[0];
+    out.material = !out.firstPbrName.empty() ? out.firstPbrName : out.firstTexName;
+    out.profile = getPbrProfile(out.material);
+    return out;
+}
+
+std::vector<ModelRenderer::NodeSlots> ModelRenderer::resolveSlots(const ModelAsset& asset,
+                                                                 const std::vector<NodeSlotUse>& use) {
+    std::vector<uint32_t> assetTexIndexToBindlessSlot(asset.textures.size(), 0);
+    for (size_t t = 0; t < asset.textures.size(); ++t) assetTexIndexToBindlessSlot[t] = resolveTexture(asset.textures[t]);
+    std::vector<NodeSlots> slots(asset.nodes.size());
+    for (size_t n = 0; n < asset.nodes.size() && n < use.size(); ++n)
+        if (!use[n].faceFirst.empty()) slots[n] = resolveNodeSlots(asset, asset.nodes[n], use[n], assetTexIndexToBindlessSlot);
+    m_bindless->flushUpdates();
+    return slots;
+}
+
+ModelRenderer::LodParams ModelRenderer::lodParams() const {
+    LodParams p;
+    p.ratio = m_meshLodRatio;
+    p.error = m_meshLodError;
+    p.distanceFactor = m_meshLodDistanceFactor;
+    p.minDistance = m_meshLodMinDistance;
+    p.farDistanceMul = m_meshLodFarDistanceMul;
+    p.maxTris = m_meshLodMaxTris;
+    p.farMaxTris = m_meshLodFarMaxTris;
+    p.shadowMaxTris = m_shadowLodMaxTris;
+    p.minTris = m_meshLodMinTris;
+    return p;
+}
+
+bool ModelRenderer::skinnedNode(const ModelAsset& asset, const ModelNode& node) {
+    // Skin: ossos e pesos seguem a ordem dos vértices do parser; malha
+    // com skin não é soldada nem ganha LOD (os pesos não iriam junto).
+    return node.skin >= 0 && asset.rig && node.skinJoints.size() == node.vertices.size() * 2 &&
+           node.skinWeights.size() == node.vertices.size();
+}
+
+bool ModelRenderer::wantsLod(const LodParams& lod, bool skinned, size_t indexCount, size_t vertexCount) {
+    return lod.ratio > 0.0f && meshLodAvailable() && !skinned && indexCount >= kMeshLodMinIndices &&
+           indexCount >= size_t(lod.minTris) * 3 && vertexCount > 0;
+}
+
+// Monta a malha de um nó na CPU (vértices, solda, células do chão, costuras,
+// densidade de UV e, se pedido, o LOD). Não toca GPU nem estado do
+// renderizador: roda em qualquer thread com as texturas já resolvidas.
+ModelRenderer::PreparedNode ModelRenderer::prepareNode(const ModelAsset& asset, size_t n, const NodeSlots& slots,
+                                                       const LodParams& lod, bool computeLod) {
+    PreparedNode out;
+    const auto& node = asset.nodes[n];
+    if (node.vertices.empty() || node.indices.empty() || slots.face.empty()) return out;
+    std::vector<TerrainVertex> vertices;
+    vertices.reserve(node.vertices.size());
+    Vec3 aabbMin(FLT_MAX);
+    Vec3 aabbMax(-FLT_MAX);
+    const size_t faceCacheSize = slots.face.size();
+    const size_t nt = node.textureNames.size();
+    for (size_t i = 0; i < node.vertices.size(); ++i) {
+        const uint16_t faceTexIdx = (i < node.perVertexTexIds.size()) ? node.perVertexTexIds[i] : 0;
+        const NodeSlots::Face& fr = slots.face[faceTexIdx % faceCacheSize];
+
+        // GLB-authored texture crossfade. Inert when the node carries no
+        // _BLEND_WEIGHT data.
+        uint32_t blendTexSlot = 0, blendPbrIdx = 0, blendNormalIdx = 0;
+        const float blendWeight = (i < node.perVertexBlendWeights.size()) ? node.perVertexBlendWeights[i] : 0.0f;
+        if (blendWeight > 0.0f && i < node.perVertexBlendTexIds.size() && nt != 0) {
+            const NodeSlots::Blend& br = slots.blend[node.perVertexBlendTexIds[i] % nt];
+            blendTexSlot = br.tex;
+            blendPbrIdx = br.pbrIdx;
+            blendNormalIdx = br.normalIdx;
+        }
+
+        // World-space splat mask. Inert when the node carries no
+        // _BLEND_MASK_UV data.
+        uint32_t maskTexSlot = 0;
+        Vec2 maskUV(0.0f);
+        if (i < node.perVertexBlendMaskTexIds.size() && i < node.perVertexBlendMaskUV.size() &&
+            node.perVertexBlendMaskTexIds[i] != 0 && nt != 0) {
+            maskTexSlot = slots.mask[node.perVertexBlendMaskTexIds[i] % nt];
+            maskUV = node.perVertexBlendMaskUV[i];
+        }
+        // Segunda mascara de splat: mesma UV da primeira (e' so' posicao de mundo).
+        uint32_t maskTexSlot2 = 0;
+        if (i < node.perVertexBlendMaskTexIds2.size() && node.perVertexBlendMaskTexIds2[i] != 0 && nt != 0)
+            maskTexSlot2 = slots.mask[node.perVertexBlendMaskTexIds2[i] % nt];
+
+        TerrainVertex v{};
+        v.position = node.vertices[i].position;
+        v.texCoord = node.vertices[i].texCoord;
+        v.normal = node.vertices[i].normal;
+        v.texIndex = fr.texSlot;
+        v.matId = node.vertices[i].matId;
+        v.color = node.vertices[i].color;
+        v.pbrIndex = fr.pbrIdx;
+        v.normalIndex = fr.normalIdx;
+        v.blendTexIndex = blendTexSlot;
+        v.blendPbrIndex = blendPbrIdx;
+        v.blendNormalIndex = blendNormalIdx;
+        v.blendWeight = (blendTexSlot != 0) ? blendWeight : 0.0f;
+        v.blendMaskIndex = maskTexSlot;
+        v.blendMaskUV = maskUV;
+        v.blendMaskIndex2 = maskTexSlot2;
+        v.emissiveStrength = (i < node.perVertexEmissive.size()) ? node.perVertexEmissive[i] : 0.0f;
+        v.emissiveIndex = static_cast<uint16_t>(fr.emissiveSlot);
+        // Splat: ate' 8 slots de 16 bits empacotados em 4 uint32.
+        if (nt != 0) {
+            uint32_t sg[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+            for (int sIdx = 0; sIdx < 8; ++sIdx) {
+                const auto& arr = node.perVertexSplatTexIds[sIdx];
+                if (i >= arr.size() || arr[i] == 0) continue;
+                sg[sIdx] = slots.splat[arr[i] % nt];
+            }
+            v.splatTex01 = (sg[0] & 0xFFFFu) | ((sg[1] & 0xFFFFu) << 16);
+            v.splatTex23 = (sg[2] & 0xFFFFu) | ((sg[3] & 0xFFFFu) << 16);
+            v.splatTex45 = (sg[4] & 0xFFFFu) | ((sg[5] & 0xFFFFu) << 16);
+            v.splatTex67 = (sg[6] & 0xFFFFu) | ((sg[7] & 0xFFFFu) << 16);
+        }
+        vertices.push_back(v);
+
+        aabbMin = glm::min(aabbMin, v.position);
+        aabbMax = glm::max(aabbMax, v.position);
+    }
+
+    // Reindexa: a malha vem DESINDEXADA do parser (um vértice por
+    // canto de triângulo), o que faz o vertex shader rodar ~2,3x
+    // mais que o necessário e zera o reuso do cache pós-transform.
+    // Medido: o passe GBuffer custa o mesmo (3,41 / 3,44 / 3,55 ms)
+    // para 0,31 / 1,31 / 2,30 Mpx - não escala com resolução, logo
+    // é vértice, não fragmento. A solda é por igualdade de BYTES do
+    // vértice inteiro, então a imagem não muda.
+    // ERUPTION_NO_REINDEX=1 volta ao comportamento antigo (A/B).
+    static const bool kNoReindex = std::getenv("ERUPTION_NO_REINDEX") != nullptr;
+    const bool skinned = skinnedNode(asset, node);
+    out.skinned = skinned;
+    out.verticesBefore = vertices.size();
+    const std::vector<uint32_t>* useIndices = &node.indices;
+    std::vector<uint32_t> reIdx;
+    std::vector<unsigned char> reVtx;
+    if (!kNoReindex && !skinned && !vertices.empty() &&
+        reindexMesh(vertices.data(), vertices.size(), sizeof(TerrainVertex),
+                    node.indices, reVtx, reIdx)) {
+        vertices.assign(
+            reinterpret_cast<const TerrainVertex*>(reVtx.data()),
+            reinterpret_cast<const TerrainVertex*>(reVtx.data()) +
+                reVtx.size() / sizeof(TerrainVertex));
+        useIndices = &reIdx;
+        out.reindexed = true;
+    }
+
+    // Prefere o nome do MATERIAL; cai no da imagem se nao houver.
+    const std::string& nomeMaterial = slots.material;
+    const auto& profile = slots.profile;
+    // ERUPTION_TEST_AABB_STATS="x0,x1,y0,y1,z0,z1": imprime malha
+    // por posicao em vez de heuristica de nome/categoria - serve
+    // pra achar o material exato debaixo de uma pose de camera
+    // conhecida, sem depender de isGroundMesh/isGround (ja'
+    // unificados no mesmo criterio - ver isGroundMesh abaixo).
+    if (const char* aabbEnv = std::getenv("ERUPTION_TEST_AABB_STATS")) {
+        float bx0, bx1, by0, by1, bz0, bz1;
+        if (std::sscanf(aabbEnv, "%f,%f,%f,%f,%f,%f", &bx0, &bx1, &by0, &by1, &bz0, &bz1) == 6) {
+            const bool overlap = aabbMax.x >= bx0 && aabbMin.x <= bx1 &&
+                                aabbMax.y >= by0 && aabbMin.y <= by1 &&
+                                aabbMax.z >= bz0 && aabbMin.z <= bz1;
+            if (overlap) {
+                ERUPTION_LOG_WARN("[AABBSTATS] mat='%s' pbrName='%s' texName='%s' cat='%s' "
+                                  "aabb=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)",
+                                  nomeMaterial.c_str(), slots.firstPbrName.c_str(), slots.firstTexName.c_str(),
+                                  profile.category.c_str(), aabbMin.x, aabbMin.y, aabbMin.z,
+                                  aabbMax.x, aabbMax.y, aabbMax.z);
+            }
+        }
+    }
+    // REORDENACAO ESPACIAL DO CHAO. Ordena os triangulos por celula
+    // de kGroundCellSize e guarda o intervalo de indices de cada
+    // uma: e' o que permite desenhar SO' o pedaco perto da camera
+    // com tesselacao. Custa uma ordenacao no load e zero por frame.
+    std::vector<uint32_t> groundIdx;
+    std::vector<ModelMeshGPU::GroundCell> groundCells;
+    // MESMO criterio do mesh.isGround (ver mais abaixo): categoria,
+    // nome coreano de "chao" OU vertices com splat - no
+    // parana_field, gerado por ferramenta, e' o splat que marca.
+    bool splatGround = false;
+    for (const auto& v : vertices) {
+        if (v.splatTex01 != 0u || v.splatTex23 != 0u) { splatGround = true; break; }
+    }
+    // "eruption_ground": chão dos mapas criados no editor (File > New Map).
+    const bool isGroundMesh = splatGround || profile.category == "ground" ||
+                              nomeMaterial.find("\xEB\xB0\x94\xEB\x8B\xA5") != std::string::npos ||
+                              nomeMaterial == "eruption_ground";
+    if (isGroundMesh && useIndices->size() >= 3 * 64) {
+        constexpr float kGroundCellSize = 96.0f;
+        struct Cell { std::vector<uint32_t> idx; float minX, minZ, maxX, maxZ; };
+        std::unordered_map<uint64_t, Cell> cells;
+        for (size_t t = 0; t + 2 < useIndices->size(); t += 3) {
+            const Vec3& p0 = vertices[(*useIndices)[t]].position;
+            const Vec3& p1 = vertices[(*useIndices)[t + 1]].position;
+            const Vec3& p2 = vertices[(*useIndices)[t + 2]].position;
+            const float cx = (p0.x + p1.x + p2.x) / 3.0f;
+            const float cz = (p0.z + p1.z + p2.z) / 3.0f;
+            const int64_t gx = static_cast<int64_t>(std::floor(cx / kGroundCellSize));
+            const int64_t gz = static_cast<int64_t>(std::floor(cz / kGroundCellSize));
+            const uint64_t key = (static_cast<uint64_t>(gx + 32768) << 20) ^
+                                  static_cast<uint64_t>(gz + 32768);
+            Cell& c = cells[key];
+            if (c.idx.empty()) {
+                c.minX = c.maxX = p0.x; c.minZ = c.maxZ = p0.z;
+            }
+            for (int k = 0; k < 3; ++k) {
+                const Vec3& pp = vertices[(*useIndices)[t + k]].position;
+                c.minX = std::min(c.minX, pp.x); c.maxX = std::max(c.maxX, pp.x);
+                c.minZ = std::min(c.minZ, pp.z); c.maxZ = std::max(c.maxZ, pp.z);
+                c.idx.push_back((*useIndices)[t + k]);
+            }
+        }
+        groundIdx.reserve(useIndices->size());
+        groundCells.reserve(cells.size());
+        for (auto& kv : cells) {
+            ModelMeshGPU::GroundCell gc{kv.second.minX, kv.second.minZ,
+                                        kv.second.maxX, kv.second.maxZ,
+                                        static_cast<uint32_t>(groundIdx.size()),
+                                        static_cast<uint32_t>(kv.second.idx.size())};
+            groundIdx.insert(groundIdx.end(), kv.second.idx.begin(), kv.second.idx.end());
+            groundCells.push_back(gc);
+        }
+        // Em ORDEM DE BUFFER: o desenho funde intervalos vizinhos
+        // com o mesmo veredito, e so' isso derruba 1.764 draws para
+        // algumas dezenas.
+        std::sort(groundCells.begin(), groundCells.end(),
+                  [](const ModelMeshGPU::GroundCell& a, const ModelMeshGPU::GroundCell& b) {
+                      return a.first < b.first;
+                  });
+        if (groundIdx.size() == useIndices->size()) {
+            useIndices = &groundIdx;
+            ERUPTION_LOG_WARN("[TESS] chao particionado em %zu celulas de %.0f u (%zu indices)",
+                              groundCells.size(), kGroundCellSize, groundIdx.size());
+        } else {
+            groundCells.clear();
+        }
+    }
+    // COSTURAS DO DESLOCAMENTO (autor: "fenda" - linhas finas e
+    // retas no chao, uma por borda de tile). Dois vertices na
+    // MESMA posicao mas com textura/UV/normal diferentes (borda de
+    // tile do chao legado, troca de textura) leem alturas
+    // diferentes e deslocam pra lugares diferentes - abre vao e o
+    // fundo aparece. Marca esses vertices (bit 15 do matId, que
+    // so' o debug magenta lia) e o shader zera o deslocamento
+    // neles: os dois lados da junta ficam presos no mesmo ponto.
+    // UV que difere so' por inteiro (wrap do ladrilho) nao e'
+    // costura - amostra o mesmo texel.
+    {
+        struct PosKey { int64_t x, y, z; bool operator==(const PosKey& o) const { return x == o.x && y == o.y && z == o.z; } };
+        struct PosHash { size_t operator()(const PosKey& k) const {
+            return std::hash<int64_t>()(k.x * 73856093LL ^ k.y * 19349663LL ^ k.z * 83492791LL); } };
+        std::unordered_map<PosKey, uint32_t, PosHash> first;
+        first.reserve(vertices.size());
+        auto fracDiff = [](float a, float b) {
+            float d = std::fabs((a - std::floor(a)) - (b - std::floor(b)));
+            return std::min(d, 1.0f - d);
+        };
+        size_t seams = 0;
+        for (uint32_t vi = 0; vi < vertices.size(); ++vi) {
+            const TerrainVertex& v = vertices[vi];
+            PosKey k{static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
+                     static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
+                     static_cast<int64_t>(std::llround(v.position.z * 1000.0f))};
+            auto [it, inserted] = first.try_emplace(k, vi);
+            if (inserted) continue;
+            TerrainVertex& o = vertices[it->second];
+            const bool differs = o.texIndex != v.texIndex || o.pbrIndex != v.pbrIndex ||
+                                 o.splatTex01 != v.splatTex01 || o.splatTex23 != v.splatTex23 ||
+                                 fracDiff(o.texCoord.x, v.texCoord.x) > 1e-3f ||
+                                 fracDiff(o.texCoord.y, v.texCoord.y) > 1e-3f ||
+                                 glm::dot(o.normal, v.normal) < 0.999f;
+            if (differs) {
+                if (!(o.matId & 0x8000u)) ++seams;
+                o.matId = static_cast<uint16_t>(o.matId | 0x8000u);
+                vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
+            }
+        }
+        // Segunda passada: todo vertice cuja posicao ja' foi marcada
+        // (o primeiro do grupo pode ter sido marcado depois dos
+        // outros iguais a ele).
+        for (auto& v : vertices) {
+            PosKey k{static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
+                     static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
+                     static_cast<int64_t>(std::llround(v.position.z * 1000.0f))};
+            if (vertices[first[k]].matId & 0x8000u) v.matId = static_cast<uint16_t>(v.matId | 0x8000u);
+        }
+        // BORDA DA MALHA (aresta usada por UM triangulo so'): e' onde
+        // esta malha encosta em OUTRA - no chao legado cada textura e'
+        // uma malha separada, entao a troca de textura entre tiles e'
+        // borda de malha, e a comparacao por posicao acima (que so'
+        // enxerga DENTRO da malha) nao pegava. Era a fenda que sobrou.
+        std::unordered_map<uint64_t, uint32_t> edgeUse;
+        edgeUse.reserve(useIndices->size());
+        auto edgeKey = [](uint32_t a, uint32_t b) {
+            return (static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b);
+        };
+        for (size_t t = 0; t + 2 < useIndices->size(); t += 3)
+            for (int e = 0; e < 3; ++e)
+                ++edgeUse[edgeKey((*useIndices)[t + e], (*useIndices)[t + (e + 1) % 3])];
+        size_t borderVerts = 0;
+        for (const auto& [k, cnt] : edgeUse) {
+            if (cnt != 1) continue;
+            for (uint32_t vi : {static_cast<uint32_t>(k >> 32), static_cast<uint32_t>(k & 0xFFFFFFFFu)}) {
+                if (!(vertices[vi].matId & 0x8000u)) ++borderVerts;
+                vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
+            }
+        }
+        if (isGroundMesh && std::getenv("ERUPTION_TEST_SEAM_STATS"))
+            ERUPTION_LOG_WARN("[SEAM] chao malha %u: %zu posicoes de costura, %zu vertices de borda novos (%zu vertices)",
+                              n, seams, borderVerts, vertices.size());
+    }
+    // DENSIDADE DE UV (mediana de |dUV|/|dPos| por aresta) - o
+    // shader usa pra amostrar a altura num mip que a grade de
+    // vertices consegue representar (Nyquist), senao a borda seca
+    // da pedra vira serrote ("borda serrilhada").
+    float meshUvPerUnit = 0.0f;
+    {
+        std::vector<float> dens;
+        dens.reserve(useIndices->size() / 3);
+        // Tambem POR TEXTURA (popup de preview): mediana da malha
+        // inteira nao serve pra' predio, que mistura tijolo,
+        // madeira e janela em escalas diferentes.
+        std::unordered_map<uint16_t, std::vector<float>> densByTex;
+        for (size_t t = 0; t + 2 < useIndices->size(); t += 3) {
+            const TerrainVertex& a = vertices[(*useIndices)[t]];
+            const TerrainVertex& b = vertices[(*useIndices)[t + 1]];
+            const float dp = glm::length(b.position - a.position);
+            if (dp <= 1e-4f) continue;
+            const float d = glm::length(b.texCoord - a.texCoord) / dp;
+            dens.push_back(d);
+            if (a.texIndex != 0 && a.texIndex == b.texIndex) densByTex[a.texIndex].push_back(d);
+        }
+        if (!dens.empty()) {
+            std::nth_element(dens.begin(), dens.begin() + dens.size() / 2, dens.end());
+            meshUvPerUnit = dens[dens.size() / 2];
+        }
+        for (auto& [slot, v] : densByTex) {
+            std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+            if (v[v.size() / 2] > 0.0f) out.texUvPerUnit.emplace_back(slot, v[v.size() / 2]);
+        }
+    }
+    if (isGroundMesh && std::getenv("ERUPTION_TEST_SEAM_STATS"))
+        ERUPTION_LOG_WARN("[SEAM] chao malha %u: uvPerUnit=%.4f", n, meshUvPerUnit);
+
+    out.isGround = isGroundMesh;
+    out.splatGround = splatGround;
+    out.groundCells = std::move(groundCells);
+    out.aabbMin = aabbMin;
+    out.aabbMax = aabbMax;
+    out.uvPerUnit = meshUvPerUnit;
+    if (useIndices == &node.indices) out.indices = node.indices;
+    else out.indices = std::move(useIndices == &groundIdx ? groundIdx : reIdx);
+    out.vertices = std::move(vertices);
+    out.valid = true;
+    if (computeLod && wantsLod(lod, skinned, out.indices.size(), out.vertices.size())) {
+        static const float kSwayAll = [] {
+            const char* e = std::getenv("ERUPTION_TEST_SWAY_ALL");
+            return e ? static_cast<float>(std::atof(e)) : 0.0f;
+        }();
+        LodBuild& b = out.lod;
+        b.p = lod;
+        b.vertices = out.vertices;
+        b.indices = out.indices;
+        b.sway = kSwayAll > 0.0f || resolveSwayAmount(nomeMaterial, profile.category) > 0.0f;
+        b.ground = isGroundMesh;
+        b.extent = glm::length(aabbMax - aabbMin);
+        b.material = nomeMaterial;
+        // As quatro partes são independentes (como no parallelFor da montagem).
+        auto p1 = std::async(std::launch::async, [&b] { computeLodPart(b, 1); });
+        auto p2 = std::async(std::launch::async, [&b] { computeLodPart(b, 2); });
+        auto p3 = std::async(std::launch::async, [&b] { computeLodPart(b, 3); });
+        computeLodPart(b, 0);
+        p1.get();
+        p2.get();
+        p3.get();
+        finishLod(b);
+        b.done = true;
+        out.hasLod = true;
+    }
+    return out;
+}
+
+ModelRenderer::PreparedAsset ModelRenderer::prepareAsset(const ModelAsset& asset, std::vector<NodeSlots> slots,
+                                                         const LodParams& lod) {
+    PreparedAsset out;
+    out.nodes.resize(asset.nodes.size());
+    for (size_t n = 0; n < asset.nodes.size() && n < slots.size(); ++n)
+        out.nodes[n] = prepareNode(asset, n, slots[n], lod, true);
+    out.slots = std::move(slots);
+    return out;
+}
+
+void ModelRenderer::providePrepared(const std::string& filePath, PreparedAsset&& prepared) {
+    m_prepared[filePath] = std::move(prepared);
+}
+
 void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanceDesc& ref,
                                          float centerX, float centerZ, int onlyNode) {
     const ModelAsset& asset = m_lastModels[assetIndex];
@@ -1336,465 +1872,50 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             assetTexIndexToBindlessSlot[t] = resolveTexture(asset.textures[t]);
         }
 
+        // Montado fora da thread principal (providePrepared) ou aqui mesmo.
+        PreparedAsset pre;
+        if (auto it = m_prepared.find(asset.filePath); it != m_prepared.end()) {
+            if (it->second.nodes.size() == asset.nodes.size()) pre = std::move(it->second);
+            m_prepared.erase(it);
+        }
+        const LodParams lod = lodParams();
+        std::vector<LodBuild> readyLods;
         for (size_t n = 0; n < asset.nodes.size(); ++n) {
             const auto& node = asset.nodes[n];
             if (node.vertices.empty() || node.indices.empty()) continue;
-
-            std::vector<TerrainVertex> vertices;
-            vertices.reserve(node.vertices.size());
-            
-            Vec3 aabbMin(FLT_MAX);
-            Vec3 aabbMax(-FLT_MAX);
-            std::string firstTexName; // used for the PBR material profile lookup
-            // NOME DO MATERIAL, nao o da imagem embutida. O GLB traz imagens
-            // com nome sintetico ("#-00_0000.png") - o proprio parser
-            // guarda o nome do MATERIAL em node.pbrTextureNames justamente
-            // por isso. O perfil PBR e o balanco ao vento eram resolvidos
-            // pelo nome sintetico, entao NENHUM dos dois casava: no
-            // parana_field 135 das 164 malhas ficavam com sway 0 e a
-            // vegetacao nao balancava, por mais forte que fosse o vento
-            // (medido: no tornado a forca chega a 1,14 no shader e nada se
-            // mexia). As texturas de verdade do mapa chamam
-            // "pine_sapling_medium_twig", que a heuristica reconhece.
-            std::string firstPbrName;
-            if (!node.pbrTextureNames.empty()) firstPbrName = node.pbrTextureNames[0];
-
-            // Crossfade targets resolve to the same handful of slots for the
-            // whole node; cache per local texture index so the per-vertex
-            // path is a plain lookup instead of a string hash every vertex.
-            struct BlendResolved { uint32_t tex = 0, pbrIdx = 0, normalIdx = 0; bool done = false; };
-            std::vector<BlendResolved> blendCache(node.textureNames.size());
-
-            // World-space splat-mask texture resolve cache (new, optional).
-            struct MaskResolved { uint32_t tex = 0; bool done = false; };
-            std::vector<MaskResolved> maskCache(node.textureNames.size());
-            // Mesmo cache pras 4 camadas de splat: resolver por nome a
-            // cada vertice seria caro e o conjunto e' minusculo.
-            std::vector<MaskResolved> splatCache(node.textureNames.size());
-
-            // Primary texture / PBR resolve is identical for every vertex
-            // sharing a faceTexIdx. Doing the string sanitize + hash lookups
-            // per vertex (millions on a baked map GLB) was ~15s of the load;
-            // cache the result per faceTexIdx and the vertex body becomes a
-            // vector index.
-            struct FaceResolved {
-                uint32_t texSlot = 0, pbrIdx = 0, normalIdx = 0, emissiveSlot = 0;
-                std::string name;
-                bool done = false;
-            };
-            size_t faceCacheSize = node.textureNames.size();
-            if (!node.textureIds.empty()) faceCacheSize = std::max(faceCacheSize, node.textureIds.size());
-            faceCacheSize = std::max(faceCacheSize, asset.textures.size());
-            if (faceCacheSize == 0) faceCacheSize = 1;
-            std::vector<FaceResolved> faceCache(faceCacheSize);
-
-            for (size_t i = 0; i < node.vertices.size(); ++i) {
-                uint16_t faceTexIdx = (i < node.perVertexTexIds.size()) ? node.perVertexTexIds[i] : 0;
-
-                FaceResolved& fr = faceCache[faceTexIdx % faceCacheSize];
-                if (!fr.done) {
-                    fr.done = true;
-                    uint32_t texSlot = 0;
-                    std::string texName;
-                    std::string pbrName;
-                    if (!node.textureNames.empty()) {
-                        // v2.3+: per-node names
-                        texName = node.textureNames[faceTexIdx % node.textureNames.size()];
-                        texSlot = resolveTexture(texName);
-                        if (!node.pbrTextureNames.empty()) {
-                            pbrName = node.pbrTextureNames[faceTexIdx % node.pbrTextureNames.size()];
-                        }
-                    } else if (!node.textureIds.empty()) {
-                        // v1.x-2.2: map local ID to global list
-                        uint32_t globalIdx = node.textureIds[faceTexIdx % node.textureIds.size()];
-                        texSlot = (globalIdx < assetTexIndexToBindlessSlot.size()) ? assetTexIndexToBindlessSlot[globalIdx] : 0;
-                        if (globalIdx < asset.textures.size()) texName = asset.textures[globalIdx];
-                        // Esse ramo (mapa mais antigo) nunca passava por
-                        // resolveTexture() - a textura ficava sem entrada
-                        // em m_textureCache, entao nunca aparecia na lista
-                        // do F1/popup de preview (autor: "o chao continua
-                        // diferente do preview" - literalmente nao dava
-                        // pra' clicar no chao de verdade).
-                        registerResolvedTexture(texName, texSlot);
-                    } else {
-                        // Fallback: use global index directly
-                        texSlot = (faceTexIdx < assetTexIndexToBindlessSlot.size()) ? assetTexIndexToBindlessSlot[faceTexIdx] : 0;
-                        if (faceTexIdx < asset.textures.size()) texName = asset.textures[faceTexIdx];
-                        registerResolvedTexture(texName, texSlot);
-                    }
-                    PbrTextureSlots pbrSlots;
-                    if (!pbrName.empty()) {
-                        pbrSlots = resolvePbrTextures(pbrName);
-                    }
-                    // Fallback para o nome da TEXTURA: o nome do material
-                    // acha o PBR cozido em disco, mas quando ele nao existe
-                    // a sintese precisa dos pixels, e textura embutida no
-                    // GLB so e' encontravel pelo nome da imagem (mangled
-                    // "#___"). Sem este fallback a ponte do cidade-D (e todo
-                    // material sem PBR cozido em mapa com textura embutida)
-                    // ficava sem normal map nenhum - ou seja, ZERO relevo.
-                    if (!pbrSlots.valid() && !texName.empty() && texName != pbrName) {
-                        pbrSlots = resolvePbrTextures(texName);
-                    }
-                    fr.texSlot = texSlot;
-                    if (!node.emissiveTextureNames.empty()) {
-                        const std::string& en = node.emissiveTextureNames[faceTexIdx % node.emissiveTextureNames.size()];
-                        if (!en.empty()) fr.emissiveSlot = resolveTexture(en);
-                    }
-                    fr.pbrIdx = pbrSlots.mrahw.index;
-                    fr.normalIdx = pbrSlots.normal.index;
-                    // PBR por SLOT de textura: o cache por nome e' chaveado
-                    // pelo nome do MATERIAL, e a lista do F1 so' tem o nome
-                    // sintetico da imagem embutida - o preview nunca achava.
-                    if (texSlot != 0 && pbrSlots.valid()) m_pbrByTexSlot.emplace(texSlot, pbrSlots);
-                    fr.name = std::move(texName);
-                }
-                uint32_t texSlot = fr.texSlot;
-                const uint32_t emissiveSlot = fr.emissiveSlot;
-                PbrTextureSlots pbrSlots;
-                pbrSlots.mrahw.index = fr.pbrIdx;
-                pbrSlots.normal.index = fr.normalIdx;
-
-                if (firstTexName.empty() && !fr.name.empty()) {
-                    firstTexName = fr.name;
-                }
-
-                // GLB-authored texture crossfade: resolve the blend-toward
-                // texture the same way as the primary. Inert when the node
-                // carries no _BLEND_WEIGHT data.
-                uint32_t blendTexSlot = 0, blendPbrIdx = 0, blendNormalIdx = 0;
-                float blendWeight = (i < node.perVertexBlendWeights.size())
-                                        ? node.perVertexBlendWeights[i] : 0.0f;
-                if (blendWeight > 0.0f && i < node.perVertexBlendTexIds.size() &&
-                    !node.textureNames.empty()) {
-                    uint16_t bLocal = static_cast<uint16_t>(
-                        node.perVertexBlendTexIds[i] % node.textureNames.size());
-                    BlendResolved& br = blendCache[bLocal];
-                    if (!br.done) {
-                        br.done = true;
-                        br.tex = resolveTexture(node.textureNames[bLocal]);
-                        std::string bPbrName = (bLocal < node.pbrTextureNames.size())
-                            ? node.pbrTextureNames[bLocal] : node.textureNames[bLocal];
-                        if (bPbrName.empty()) bPbrName = node.textureNames[bLocal];
-                        if (!bPbrName.empty()) {
-                            PbrTextureSlots s = resolvePbrTextures(bPbrName);
-                            br.pbrIdx = s.mrahw.index;
-                            br.normalIdx = s.normal.index;
-                        }
-                    }
-                    blendTexSlot = br.tex;
-                    blendPbrIdx = br.pbrIdx;
-                    blendNormalIdx = br.normalIdx;
-                }
-
-                // World-space splat mask: resolve the same way as the primary
-                // texture. Inert when the node carries no _BLEND_MASK_UV data.
-                uint32_t maskTexSlot = 0;
-                Vec2 maskUV(0.0f);
-                if (i < node.perVertexBlendMaskTexIds.size() &&
-                    i < node.perVertexBlendMaskUV.size() &&
-                    node.perVertexBlendMaskTexIds[i] != 0 &&
-                    !node.textureNames.empty()) {
-                    uint16_t mLocal = static_cast<uint16_t>(
-                        node.perVertexBlendMaskTexIds[i] % node.textureNames.size());
-                    MaskResolved& mr = maskCache[mLocal];
-                    if (!mr.done) {
-                        mr.done = true;
-                        mr.tex = resolveTexture(node.textureNames[mLocal]);
-                    }
-                    maskTexSlot = mr.tex;
-                    maskUV = node.perVertexBlendMaskUV[i];
-                }
-
-                // Segunda mascara de splat: mesma UV da primeira (e' so'
-                // posicao de mundo), resolve por nome do mesmo jeito.
-                uint32_t maskTexSlot2 = 0;
-                if (i < node.perVertexBlendMaskTexIds2.size() &&
-                    node.perVertexBlendMaskTexIds2[i] != 0 &&
-                    !node.textureNames.empty()) {
-                    uint16_t mLocal2 = static_cast<uint16_t>(
-                        node.perVertexBlendMaskTexIds2[i] % node.textureNames.size());
-                    MaskResolved& mr2 = maskCache[mLocal2];
-                    if (!mr2.done) {
-                        mr2.done = true;
-                        mr2.tex = resolveTexture(node.textureNames[mLocal2]);
-                    }
-                    maskTexSlot2 = mr2.tex;
-                }
-
-                TerrainVertex v{};
-                v.position = node.vertices[i].position;
-                v.texCoord = node.vertices[i].texCoord;
-                v.normal = node.vertices[i].normal;
-                v.texIndex = texSlot;
-                v.matId = node.vertices[i].matId;
-                v.color = node.vertices[i].color;
-                v.pbrIndex = pbrSlots.mrahw.index;
-                v.normalIndex = pbrSlots.normal.index;
-                v.blendTexIndex = blendTexSlot;
-                v.blendPbrIndex = blendPbrIdx;
-                v.blendNormalIndex = blendNormalIdx;
-                v.blendWeight = (blendTexSlot != 0) ? blendWeight : 0.0f;
-                v.blendMaskIndex = maskTexSlot;
-                v.blendMaskUV = maskUV;
-                v.blendMaskIndex2 = maskTexSlot2;
-                v.emissiveStrength = (i < node.perVertexEmissive.size()) ? node.perVertexEmissive[i] : 0.0f;
-                v.emissiveIndex = static_cast<uint16_t>(emissiveSlot);
-                // Splat: ate' 8 slots de 16 bits empacotados em 4 uint32. O
-                // slot local vira slot GLOBAL de bindless do mesmo jeito
-                // que o texSlot da camada base logo acima.
-                if (!node.textureNames.empty()) {
-                    uint32_t sg[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-                    for (int sIdx = 0; sIdx < 8; ++sIdx) {
-                        const auto& arr = node.perVertexSplatTexIds[sIdx];
-                        if (i >= arr.size() || arr[i] == 0) continue;
-                        uint16_t sLocal = static_cast<uint16_t>(
-                            arr[i] % node.textureNames.size());
-                        MaskResolved& sr = splatCache[sLocal];
-                        if (!sr.done) {
-                            sr.done = true;
-                            sr.tex = resolveTexture(node.textureNames[sLocal]);
-                        }
-                        sg[sIdx] = sr.tex;
-                    }
-                    v.splatTex01 = (sg[0] & 0xFFFFu) | ((sg[1] & 0xFFFFu) << 16);
-                    v.splatTex23 = (sg[2] & 0xFFFFu) | ((sg[3] & 0xFFFFu) << 16);
-                    v.splatTex45 = (sg[4] & 0xFFFFu) | ((sg[5] & 0xFFFFu) << 16);
-                    v.splatTex67 = (sg[6] & 0xFFFFu) | ((sg[7] & 0xFFFFu) << 16);
-                }
-                vertices.push_back(v);
-
-                aabbMin = glm::min(aabbMin, v.position);
-                aabbMax = glm::max(aabbMax, v.position);
+            NodeSlots ownSlots;
+            PreparedNode ownNode;
+            const NodeSlots* slots = &ownSlots;
+            PreparedNode* pn = &ownNode;
+            if (!pre.nodes.empty()) {
+                slots = &pre.slots[n];
+                pn = &pre.nodes[n];
+            } else {
+                ownSlots = resolveNodeSlots(asset, node, scanNodeSlotUse(asset, node), assetTexIndexToBindlessSlot);
+                ownNode = prepareNode(asset, n, ownSlots, lod, false);
             }
-
-            // Reindexa: a malha vem DESINDEXADA do parser (um vértice por
-            // canto de triângulo), o que faz o vertex shader rodar ~2,3x
-            // mais que o necessário e zera o reuso do cache pós-transform.
-            // Medido: o passe GBuffer custa o mesmo (3,41 / 3,44 / 3,55 ms)
-            // para 0,31 / 1,31 / 2,30 Mpx - não escala com resolução, logo
-            // é vértice, não fragmento. A solda é por igualdade de BYTES do
-            // vértice inteiro, então a imagem não muda.
-            // ERUPTION_NO_REINDEX=1 volta ao comportamento antigo (A/B).
-            static const bool kNoReindex = std::getenv("ERUPTION_NO_REINDEX") != nullptr;
-            // Skin: ossos e pesos seguem a ordem dos vértices do parser; malha
-            // com skin não é soldada nem ganha LOD (os pesos não iriam junto).
-            const bool skinnedNode = node.skin >= 0 && asset.rig && node.skinJoints.size() == node.vertices.size() * 2 &&
-                                     node.skinWeights.size() == node.vertices.size();
-            const size_t reVtxCountBefore = vertices.size();
-            const std::vector<uint32_t>* useIndices = &node.indices;
-            std::vector<uint32_t> reIdx;
-            std::vector<unsigned char> reVtx;
-            if (!kNoReindex && !skinnedNode && !vertices.empty() &&
-                reindexMesh(vertices.data(), vertices.size(), sizeof(TerrainVertex),
-                            node.indices, reVtx, reIdx)) {
-                vertices.assign(
-                    reinterpret_cast<const TerrainVertex*>(reVtx.data()),
-                    reinterpret_cast<const TerrainVertex*>(reVtx.data()) +
-                        reVtx.size() / sizeof(TerrainVertex));
-                useIndices = &reIdx;
-                ++dbgReidxOk; dbgVertsBefore += reVtxCountBefore; dbgVertsAfter += vertices.size();
-            } else if (!kNoReindex) {
-                ++dbgReidxFail; dbgVertsBefore += vertices.size(); dbgVertsAfter += vertices.size();
+            if (!pn->valid) continue;
+            std::vector<TerrainVertex>& vertices = pn->vertices;
+            const std::vector<uint32_t>* useIndices = &pn->indices;
+            const bool skinned = pn->skinned;
+            const bool isGroundMesh = pn->isGround;
+            const bool splatGround = pn->splatGround;
+            const std::string& nomeMaterial = slots->material;
+            const auto& profile = slots->profile;
+            const Vec3 aabbMin = pn->aabbMin, aabbMax = pn->aabbMax;
+            const float meshUvPerUnit = pn->uvPerUnit;
+            if (pn->reindexed) {
+                ++dbgReidxOk;
+                dbgVertsBefore += pn->verticesBefore;
+            } else {
+                ++dbgReidxFail;
+                dbgVertsBefore += vertices.size();
             }
+            dbgVertsAfter += vertices.size();
+            for (const auto& [slot, d] : pn->texUvPerUnit) m_texUvPerUnit.emplace(slot, d);
+            std::vector<ModelMeshGPU::GroundCell> groundCells = std::move(pn->groundCells);
 
             ModelMeshGPU mesh;
-            // Prefere o nome do MATERIAL; cai no da imagem se nao houver.
-            const std::string& nomeMaterial = !firstPbrName.empty() ? firstPbrName : firstTexName;
-            const auto& profile = getPbrProfile(nomeMaterial);
-            // ERUPTION_TEST_AABB_STATS="x0,x1,y0,y1,z0,z1": imprime malha
-            // por posicao em vez de heuristica de nome/categoria - serve
-            // pra achar o material exato debaixo de uma pose de camera
-            // conhecida, sem depender de isGroundMesh/isGround (ja'
-            // unificados no mesmo criterio - ver isGroundMesh abaixo).
-            if (const char* aabbEnv = std::getenv("ERUPTION_TEST_AABB_STATS")) {
-                float bx0, bx1, by0, by1, bz0, bz1;
-                if (std::sscanf(aabbEnv, "%f,%f,%f,%f,%f,%f", &bx0, &bx1, &by0, &by1, &bz0, &bz1) == 6) {
-                    const bool overlap = aabbMax.x >= bx0 && aabbMin.x <= bx1 &&
-                                        aabbMax.y >= by0 && aabbMin.y <= by1 &&
-                                        aabbMax.z >= bz0 && aabbMin.z <= bz1;
-                    if (overlap) {
-                        ERUPTION_LOG_WARN("[AABBSTATS] mat='%s' pbrName='%s' texName='%s' cat='%s' "
-                                          "aabb=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)",
-                                          nomeMaterial.c_str(), firstPbrName.c_str(), firstTexName.c_str(),
-                                          profile.category.c_str(), aabbMin.x, aabbMin.y, aabbMin.z,
-                                          aabbMax.x, aabbMax.y, aabbMax.z);
-                    }
-                }
-            }
-            // REORDENACAO ESPACIAL DO CHAO. Ordena os triangulos por celula
-            // de kGroundCellSize e guarda o intervalo de indices de cada
-            // uma: e' o que permite desenhar SO' o pedaco perto da camera
-            // com tesselacao. Custa uma ordenacao no load e zero por frame.
-            std::vector<uint32_t> groundIdx;
-            std::vector<ModelMeshGPU::GroundCell> groundCells;
-            // MESMO criterio do mesh.isGround (ver mais abaixo): categoria,
-            // nome coreano de "chao" OU vertices com splat - no
-            // parana_field, gerado por ferramenta, e' o splat que marca.
-            bool splatGround = false;
-            for (const auto& v : vertices) {
-                if (v.splatTex01 != 0u || v.splatTex23 != 0u) { splatGround = true; break; }
-            }
-            // "eruption_ground": chão dos mapas criados no editor (File > New Map).
-            const bool isGroundMesh = splatGround || profile.category == "ground" ||
-                                      nomeMaterial.find("\xEB\xB0\x94\xEB\x8B\xA5") != std::string::npos ||
-                                      nomeMaterial == "eruption_ground";
-            if (isGroundMesh && useIndices->size() >= 3 * 64) {
-                constexpr float kGroundCellSize = 96.0f;
-                struct Cell { std::vector<uint32_t> idx; float minX, minZ, maxX, maxZ; };
-                std::unordered_map<uint64_t, Cell> cells;
-                for (size_t t = 0; t + 2 < useIndices->size(); t += 3) {
-                    const Vec3& p0 = vertices[(*useIndices)[t]].position;
-                    const Vec3& p1 = vertices[(*useIndices)[t + 1]].position;
-                    const Vec3& p2 = vertices[(*useIndices)[t + 2]].position;
-                    const float cx = (p0.x + p1.x + p2.x) / 3.0f;
-                    const float cz = (p0.z + p1.z + p2.z) / 3.0f;
-                    const int64_t gx = static_cast<int64_t>(std::floor(cx / kGroundCellSize));
-                    const int64_t gz = static_cast<int64_t>(std::floor(cz / kGroundCellSize));
-                    const uint64_t key = (static_cast<uint64_t>(gx + 32768) << 20) ^
-                                          static_cast<uint64_t>(gz + 32768);
-                    Cell& c = cells[key];
-                    if (c.idx.empty()) {
-                        c.minX = c.maxX = p0.x; c.minZ = c.maxZ = p0.z;
-                    }
-                    for (int k = 0; k < 3; ++k) {
-                        const Vec3& pp = vertices[(*useIndices)[t + k]].position;
-                        c.minX = std::min(c.minX, pp.x); c.maxX = std::max(c.maxX, pp.x);
-                        c.minZ = std::min(c.minZ, pp.z); c.maxZ = std::max(c.maxZ, pp.z);
-                        c.idx.push_back((*useIndices)[t + k]);
-                    }
-                }
-                groundIdx.reserve(useIndices->size());
-                groundCells.reserve(cells.size());
-                for (auto& kv : cells) {
-                    ModelMeshGPU::GroundCell gc{kv.second.minX, kv.second.minZ,
-                                                kv.second.maxX, kv.second.maxZ,
-                                                static_cast<uint32_t>(groundIdx.size()),
-                                                static_cast<uint32_t>(kv.second.idx.size())};
-                    groundIdx.insert(groundIdx.end(), kv.second.idx.begin(), kv.second.idx.end());
-                    groundCells.push_back(gc);
-                }
-                // Em ORDEM DE BUFFER: o desenho funde intervalos vizinhos
-                // com o mesmo veredito, e so' isso derruba 1.764 draws para
-                // algumas dezenas.
-                std::sort(groundCells.begin(), groundCells.end(),
-                          [](const ModelMeshGPU::GroundCell& a, const ModelMeshGPU::GroundCell& b) {
-                              return a.first < b.first;
-                          });
-                if (groundIdx.size() == useIndices->size()) {
-                    useIndices = &groundIdx;
-                    ERUPTION_LOG_WARN("[TESS] chao particionado em %zu celulas de %.0f u (%zu indices)",
-                                      groundCells.size(), kGroundCellSize, groundIdx.size());
-                } else {
-                    groundCells.clear();
-                }
-            }
-            // COSTURAS DO DESLOCAMENTO (autor: "fenda" - linhas finas e
-            // retas no chao, uma por borda de tile). Dois vertices na
-            // MESMA posicao mas com textura/UV/normal diferentes (borda de
-            // tile do chao legado, troca de textura) leem alturas
-            // diferentes e deslocam pra lugares diferentes - abre vao e o
-            // fundo aparece. Marca esses vertices (bit 15 do matId, que
-            // so' o debug magenta lia) e o shader zera o deslocamento
-            // neles: os dois lados da junta ficam presos no mesmo ponto.
-            // UV que difere so' por inteiro (wrap do ladrilho) nao e'
-            // costura - amostra o mesmo texel.
-            {
-                struct PosKey { int64_t x, y, z; bool operator==(const PosKey& o) const { return x == o.x && y == o.y && z == o.z; } };
-                struct PosHash { size_t operator()(const PosKey& k) const {
-                    return std::hash<int64_t>()(k.x * 73856093LL ^ k.y * 19349663LL ^ k.z * 83492791LL); } };
-                std::unordered_map<PosKey, uint32_t, PosHash> first;
-                first.reserve(vertices.size());
-                auto fracDiff = [](float a, float b) {
-                    float d = std::fabs((a - std::floor(a)) - (b - std::floor(b)));
-                    return std::min(d, 1.0f - d);
-                };
-                size_t seams = 0;
-                for (uint32_t vi = 0; vi < vertices.size(); ++vi) {
-                    const TerrainVertex& v = vertices[vi];
-                    PosKey k{static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
-                             static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
-                             static_cast<int64_t>(std::llround(v.position.z * 1000.0f))};
-                    auto [it, inserted] = first.try_emplace(k, vi);
-                    if (inserted) continue;
-                    TerrainVertex& o = vertices[it->second];
-                    const bool differs = o.texIndex != v.texIndex || o.pbrIndex != v.pbrIndex ||
-                                         o.splatTex01 != v.splatTex01 || o.splatTex23 != v.splatTex23 ||
-                                         fracDiff(o.texCoord.x, v.texCoord.x) > 1e-3f ||
-                                         fracDiff(o.texCoord.y, v.texCoord.y) > 1e-3f ||
-                                         glm::dot(o.normal, v.normal) < 0.999f;
-                    if (differs) {
-                        if (!(o.matId & 0x8000u)) ++seams;
-                        o.matId = static_cast<uint16_t>(o.matId | 0x8000u);
-                        vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
-                    }
-                }
-                // Segunda passada: todo vertice cuja posicao ja' foi marcada
-                // (o primeiro do grupo pode ter sido marcado depois dos
-                // outros iguais a ele).
-                for (auto& v : vertices) {
-                    PosKey k{static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
-                             static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
-                             static_cast<int64_t>(std::llround(v.position.z * 1000.0f))};
-                    if (vertices[first[k]].matId & 0x8000u) v.matId = static_cast<uint16_t>(v.matId | 0x8000u);
-                }
-                // BORDA DA MALHA (aresta usada por UM triangulo so'): e' onde
-                // esta malha encosta em OUTRA - no chao legado cada textura e'
-                // uma malha separada, entao a troca de textura entre tiles e'
-                // borda de malha, e a comparacao por posicao acima (que so'
-                // enxerga DENTRO da malha) nao pegava. Era a fenda que sobrou.
-                std::unordered_map<uint64_t, uint32_t> edgeUse;
-                edgeUse.reserve(useIndices->size());
-                auto edgeKey = [](uint32_t a, uint32_t b) {
-                    return (static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b);
-                };
-                for (size_t t = 0; t + 2 < useIndices->size(); t += 3)
-                    for (int e = 0; e < 3; ++e)
-                        ++edgeUse[edgeKey((*useIndices)[t + e], (*useIndices)[t + (e + 1) % 3])];
-                size_t borderVerts = 0;
-                for (const auto& [k, cnt] : edgeUse) {
-                    if (cnt != 1) continue;
-                    for (uint32_t vi : {static_cast<uint32_t>(k >> 32), static_cast<uint32_t>(k & 0xFFFFFFFFu)}) {
-                        if (!(vertices[vi].matId & 0x8000u)) ++borderVerts;
-                        vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
-                    }
-                }
-                if (isGroundMesh && std::getenv("ERUPTION_TEST_SEAM_STATS"))
-                    ERUPTION_LOG_WARN("[SEAM] chao malha %u: %zu posicoes de costura, %zu vertices de borda novos (%zu vertices)",
-                                      n, seams, borderVerts, vertices.size());
-            }
-            // DENSIDADE DE UV (mediana de |dUV|/|dPos| por aresta) - o
-            // shader usa pra amostrar a altura num mip que a grade de
-            // vertices consegue representar (Nyquist), senao a borda seca
-            // da pedra vira serrote ("borda serrilhada").
-            float meshUvPerUnit = 0.0f;
-            {
-                std::vector<float> dens;
-                dens.reserve(useIndices->size() / 3);
-                // Tambem POR TEXTURA (popup de preview): mediana da malha
-                // inteira nao serve pra' predio, que mistura tijolo,
-                // madeira e janela em escalas diferentes.
-                std::unordered_map<uint16_t, std::vector<float>> densByTex;
-                for (size_t t = 0; t + 2 < useIndices->size(); t += 3) {
-                    const TerrainVertex& a = vertices[(*useIndices)[t]];
-                    const TerrainVertex& b = vertices[(*useIndices)[t + 1]];
-                    const float dp = glm::length(b.position - a.position);
-                    if (dp <= 1e-4f) continue;
-                    const float d = glm::length(b.texCoord - a.texCoord) / dp;
-                    dens.push_back(d);
-                    if (a.texIndex != 0 && a.texIndex == b.texIndex) densByTex[a.texIndex].push_back(d);
-                }
-                if (!dens.empty()) {
-                    std::nth_element(dens.begin(), dens.begin() + dens.size() / 2, dens.end());
-                    meshUvPerUnit = dens[dens.size() / 2];
-                }
-                for (auto& [slot, v] : densByTex) {
-                    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
-                    if (v[v.size() / 2] > 0.0f) m_texUvPerUnit.emplace(slot, v[v.size() / 2]);
-                }
-            }
-            if (isGroundMesh && std::getenv("ERUPTION_TEST_SEAM_STATS"))
-                ERUPTION_LOG_WARN("[SEAM] chao malha %u: uvPerUnit=%.4f", n, meshUvPerUnit);
             std::string meshKey = asset.filePath + "#" + std::to_string(n);
             if (m_meshResolver) {
                 mesh = m_meshResolver(meshKey, vertices, *useIndices);
@@ -1924,10 +2045,14 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             // malhas rodam em paralelo (computeLod) e sobem numa submissão só
             // (applyLods). Uma malha por vez, num núcleo, eram 1,2 s dos
             // 1,7 s da montagem do parana_field.
-            if (m_meshLodRatio > 0.0f && meshLodAvailable() && !skinnedNode &&
-                useIndices->size() >= kMeshLodMinIndices &&
-                useIndices->size() >= size_t(m_meshLodMinTris) * 3 && !vertices.empty()) {
+            if (pn->hasLod) {
+                // Calculado junto com a malha (fora da thread principal).
+                LodBuild b = std::move(pn->lod);
+                b.mesh = static_cast<uint32_t>(m_meshes.size());
+                readyLods.push_back(std::move(b));
+            } else if (wantsLod(lod, skinned, useIndices->size(), vertices.size())) {
                 LodBuild b;
+                b.p = lod;
                 b.mesh = static_cast<uint32_t>(m_meshes.size());
                 // A malha já subiu: o LOD fica com os vértices (sem cópia),
                 // salvo o chão que o editor ainda guarda logo abaixo.
@@ -1943,11 +2068,11 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
 
             m_meshes.push_back(mesh);
             meshIndices[n] = static_cast<uint32_t>(m_meshes.size() - 1);
-            if (skinnedNode) registerSkinBase(meshIndices[n], asset, node, vertices);
+            if (skinned) registerSkinBase(meshIndices[n], asset, node, vertices);
             // Editor: o chão fica com cópia na CPU para o pincel de terreno.
             if (m_keepGroundVertices && mesh.isGround) m_groundCpu[meshIndices[n]] = vertices;
         }
-        if (!lodBuilds.empty()) {
+        if (!lodBuilds.empty() || !readyLods.empty()) {
             // Maiores primeiro: com as threads pegando a próxima tarefa livre,
             // a malha grande não fica para o fim sozinha.
             std::sort(lodBuilds.begin(), lodBuilds.end(),
@@ -1959,6 +2084,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             JobSystem::instance().parallelFor(static_cast<uint32_t>(lodBuilds.size()),
                                               [&](uint32_t k) { finishLod(lodBuilds[k]); });
             const auto lt1 = std::chrono::steady_clock::now();
+            for (auto& b : readyLods) lodBuilds.push_back(std::move(b));
             applyLods(lodBuilds);
             const auto lt2 = std::chrono::steady_clock::now();
             ERUPTION_LOG_WARN("[LOD] %s: %zu meshes, %.0f ms in parallel, upload %.0f ms", asset.filePath.c_str(),
@@ -2354,6 +2480,15 @@ uint32_t ModelRenderer::addModel(const ModelAsset& asset, const ModelInstanceDes
         g_animTopo.clear(); // a topologia é guardada pelo endereço do asset, que pode ter mudado
     }
     return addInstanceOf(asset.filePath, ref, nodeName);
+}
+
+uint32_t ModelRenderer::addModel(ModelAsset&& asset, const ModelInstanceDesc& ref, const std::string& nodeName) {
+    const std::string path = asset.filePath;
+    if (!hasAsset(path)) {
+        m_lastModels.push_back(std::move(asset));
+        g_animTopo.clear();
+    }
+    return addInstanceOf(path, ref, nodeName);
 }
 
 std::vector<std::string> ModelRenderer::releaseAsset(const std::string& filePath) {
