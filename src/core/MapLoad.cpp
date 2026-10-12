@@ -476,7 +476,26 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     } else {
         m_deferredLighting.setPointLights({});
     }
+    // ONDE O JOGADOR NASCE.
+    //
+    // O centro do mapa e' um PALPITE, nao um lugar: ele so' esta' certo quando
+    // o mapa por acaso tem chao no meio. O gerador ja' grava `spawn = {x,y,z}`
+    // na cena (etapa "spawn" da receita) e o SceneEdits ja' le' esse campo
+    // para uma struct — mas ninguem o consumia na carga do mapa, entao o
+    // palpite valia sempre. Num mapa cujo miolo e' um lago de lava o
+    // personagem nascia TRINTA UNIDADES ABAIXO da superficie da lava.
+    //
+    // A cena manda; o centro fica como reserva para mapa que nao diz nada.
     Vec3 spawnPos = Vec3(m_centerX, 0.0f, m_centerZ);
+    bool spawnDaCena = false;
+    {
+        SceneEdits cena;
+        std::string erroCena;
+        if (cena.load(SceneEdits::pathFor(m_currentMapName), erroCena) && cena.hasSpawn) {
+            spawnPos = cena.spawn;
+            spawnDaCena = true;
+        }
+    }
     if (loadedMap) {
         if (loadedMap->isGlbMap) {
             // GLB maps are authored in world space. Spawn at the map center and
@@ -490,6 +509,9 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
             spawnPos.y = clampSpawnYToWater(*loadedMap,
                                             TerrainParser::getTerrainHeightAt(loadedMap->terrain, spawnPos.x, spawnPos.z));
         }
+    }
+    if (spawnDaCena) {
+        ERUPTION_LOG_WARN("Spawn from scene file: (%.1f, %.1f, %.1f)", spawnPos.x, spawnPos.y, spawnPos.z);
     }
     // Default orbit target sits slightly above the ground so the camera looks
     // toward the horizon rather than through the floor.
