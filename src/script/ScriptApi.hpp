@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Input.hpp"
+#include "math/Types.hpp"
 
 #include <string>
 
@@ -27,5 +28,7 @@ const char* vfxApiDefinitions();
 Key scriptKeyFromName(const char* name);
 // Índice (base 0) do primeiro modelo com esse nome, ou -1.
 int scriptFindModel(const std::string& name);
+// Posição do jogador (zero sem jogador).
+Vec3 scriptPlayerPosition();
 
 } // namespace eruption

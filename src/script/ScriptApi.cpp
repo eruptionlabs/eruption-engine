@@ -3,6 +3,7 @@
 #include "script/ScriptApi.hpp"
 
 #include "script/ScriptHost.hpp"
+#include "script/NativeModule.hpp"
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
@@ -871,6 +872,11 @@ Key scriptKeyFromName(const char* name) {
     return Key::Unknown;
 }
 
+Vec3 scriptPlayerPosition() {
+    PlayerController* p = ScriptBridge::engine ? ScriptBridge::player() : nullptr;
+    return p ? p->pos() : Vec3(0.0f);
+}
+
 int scriptFindModel(const std::string& name) {
     // Mapa nome -> índice, refeito quando a lista de instâncias muda (troca
     // de mapa). A busca linear em milhares de modelos por chamada pesaria.
@@ -968,6 +974,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "characters", characters);
     lib(L, "fx", fx);
     registerVfxApi(L, engine);
+    NativeModule::registerApi(L);
 }
 
 std::string scriptApiDefinitions() {
@@ -1234,7 +1241,7 @@ declare lights: {
     turn_on: (index: number) -> (),
     turn_off: (index: number) -> (),
 }
-)" + std::string(vfxApiDefinitions());
+)" + std::string(vfxApiDefinitions()) + NativeModule::apiDefinitions();
 }
 
 } // namespace eruption

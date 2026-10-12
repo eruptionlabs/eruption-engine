@@ -18,6 +18,7 @@ Para a interface em português: **Janela > Idioma: Português**.
 | [7. Mundo contínuo](07-mundo-continuo.md) | Mapas emendados, sem tela de carregamento |
 | [8. Das regras para o código](08-das-regras-para-o-codigo.md) | Ver o código das regras, scripts Luau, depurador no VS Code |
 | [9. Exportar o jogo](09-exportar.md) | Uma pasta que roda sozinha, sem o editor |
+| [10. Código em C++](10-codigo-em-cpp.md) | Módulo C++ que recompila e recarrega com o jogo rodando |
 
 Atalhos que valem para todas as aulas:
 

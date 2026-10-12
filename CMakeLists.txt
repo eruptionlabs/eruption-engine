@@ -596,6 +596,7 @@ if(ERUPTION_MODULE_AUDIO)
 endif()
 target_include_directories(eruption-engine PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/plugins
     ${CMAKE_SOURCE_DIR}/src/generated
     ${Vulkan_INCLUDE_DIRS}
