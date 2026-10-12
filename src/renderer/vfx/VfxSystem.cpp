@@ -31,7 +31,7 @@ constexpr uint32_t kCounterCount = 84;
 constexpr uint32_t kCEventDispatch = 32;
 constexpr uint32_t kRecordBytes = 64;
 constexpr uint32_t kMaxEvents = 16384;
-constexpr uint32_t kBindings = 16;
+constexpr uint32_t kBindings = 17;
 
 struct DrawPush {
     uint32_t listOffset;
@@ -206,6 +206,7 @@ bool VfxSystem::createDescriptors() {
     b[7].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     b[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     b[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[16].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = kBindings;
@@ -221,7 +222,7 @@ bool VfxSystem::createDescriptors() {
     const uint32_t n = VulkanContext::MAX_FRAMES_IN_FLIGHT * 3;
     VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 13 * n},
                                      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, n},
-                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * n}};
+                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * n}};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pi.maxSets = n;
@@ -254,7 +255,9 @@ bool VfxSystem::createDescriptors() {
 }
 
 void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
-    if (m_setBuffersWritten[frame] && m_setDepth[frame] == depthView && m_setLow[frame] == m_lowView) return;
+    if (m_setBuffersWritten[frame] && m_setDepth[frame] == depthView && m_setLow[frame] == m_lowView &&
+        m_setGround[frame] == m_groundView)
+        return;
     VkDescriptorBufferInfo bi[8] = {
         {m_particles.buf, 0, VK_WHOLE_SIZE}, {m_dead.buf, 0, VK_WHOLE_SIZE},    {m_alive.buf, 0, VK_WHOLE_SIZE},
         {m_counters.buf, 0, VK_WHOLE_SIZE},  {m_render.buf, 0, VK_WHOLE_SIZE},  {m_emitterDev.buf, 0, VK_WHOLE_SIZE},
@@ -272,6 +275,9 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
     const VkDescriptorImageInfo lowInfo{m_linearSampler, m_lowView ? m_lowView : depthView,
                                         m_lowView ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                                                   : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    // Sem grade de altura: a profundidade ocupa o binding (groundInfo.w = 0, nunca lida).
+    const VkDescriptorImageInfo groundInfo{m_linearSampler, m_groundView ? m_groundView : depthView,
+                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet w[2 * kBindings]{};
     for (uint32_t s = 0; s < 2; ++s) {
         for (uint32_t i = 0; i < kBindings; ++i) {
@@ -293,11 +299,14 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
         w[s * kBindings + 13].pBufferInfo = &eventInfo;
         w[s * kBindings + 14].pBufferInfo = &recInfo;
         w[s * kBindings + 15].pBufferInfo = &ribbonInfo;
+        w[s * kBindings + 16].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[s * kBindings + 16].pImageInfo = &groundInfo;
     }
     vkUpdateDescriptorSets(m_ctx->device(), 2 * kBindings, w, 0, nullptr);
     m_setBuffersWritten[frame] = true;
     m_setDepth[frame] = depthView;
     m_setLow[frame] = m_lowView;
+    m_setGround[frame] = m_groundView;
 }
 
 bool VfxSystem::createPipelines() {
@@ -601,10 +610,87 @@ bool VfxSystem::init(const InitInfo& info) {
     return true;
 }
 
+void VfxSystem::destroyGround(bool deferred) {
+    if (!m_groundImage) return;
+    VkDevice dev = m_ctx->device();
+    VmaAllocator allocator = m_ctx->allocator();
+    VkImage image = m_groundImage;
+    VmaAllocation alloc = m_groundAlloc;
+    VkImageView view = m_groundView;
+    auto destroy = [dev, allocator, image, alloc, view] {
+        vkDestroyImageView(dev, view, nullptr);
+        vmaDestroyImage(allocator, image, alloc);
+    };
+    if (deferred) m_ctx->deferFrameCleanup(destroy);
+    else destroy();
+    m_groundImage = VK_NULL_HANDLE;
+    m_groundAlloc = VK_NULL_HANDLE;
+    m_groundView = VK_NULL_HANDLE;
+}
+
+void VfxSystem::setGroundHeights(const std::vector<float>& heights, uint32_t width, uint32_t depth, Vec2 origin,
+                                 float cell) {
+    if (!m_ctx) return;
+    destroyGround(true);
+    if (heights.empty() || width < 2 || depth < 2 || heights.size() < size_t(width) * depth || cell <= 0.0f) return;
+    if (!m_ctx->createImage(width, depth, VK_FORMAT_R32_SFLOAT,
+                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY,
+                            m_groundImage, m_groundAlloc))
+        return;
+    VkImageViewCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = m_groundImage;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = VK_FORMAT_R32_SFLOAT;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(m_ctx->device(), &vi, nullptr, &m_groundView) != VK_SUCCESS) {
+        vmaDestroyImage(m_ctx->allocator(), m_groundImage, m_groundAlloc);
+        m_groundImage = VK_NULL_HANDLE;
+        m_groundView = VK_NULL_HANDLE;
+        return;
+    }
+    const VkDeviceSize bytes = VkDeviceSize(width) * depth * sizeof(float);
+    VkBuffer staging = VK_NULL_HANDLE;
+    VmaAllocation stagingAlloc = VK_NULL_HANDLE;
+    m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
+    void* mapped = nullptr;
+    vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
+    std::memcpy(mapped, heights.data(), bytes);
+    vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
+    const VkImage image = m_groundImage;
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.srcAccessMask = 0;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = image;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &b);
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {width, depth, 1};
+        vkCmdCopyBufferToImage(cmd, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &b);
+    });
+    vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
+    m_groundInfo = Vec4(origin.x, origin.y, 1.0f / cell, 1.0f);
+    m_groundSize = Vec4(float(width), float(depth), cell, 0.0f);
+}
+
 void VfxSystem::shutdown() {
     if (!m_ctx) return;
     VkDevice dev = m_ctx->device();
     destroyBuffers();
+    destroyGround(false);
     for (VkPipeline* p : {&m_emitPipe, &m_argsPipe, &m_simPipe, &m_finishPipe, &m_drawPipe, &m_drawLowPipe,
                           &m_compositePipe, &m_sortHistPipe, &m_sortScanPipe, &m_sortScatterPipe, &m_eventPipe,
                           &m_meshPipe, &m_meshFwdPipe, &m_meshShadowPipe})
@@ -1149,6 +1235,8 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     fp.sunColor = m_sunColor;
     fp.ambient = m_ambient;
     fp.viewInfo = Vec4(std::abs(camera.projNoJitter()[1][1]), 0.0f, 0.0f, 0.0f);
+    fp.groundInfo = m_groundView ? m_groundInfo : Vec4(0.0f);
+    fp.groundSize = m_groundSize;
 
     std::memcpy(m_emitterBuf[frame].mapped, m_slotData.data(), size_t(m_slotHighWater) * sizeof(VfxEmitterGpu));
     if (!m_requests.empty())

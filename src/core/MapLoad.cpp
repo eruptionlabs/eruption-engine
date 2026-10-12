@@ -85,6 +85,27 @@ static float sampleGlbOrTerrainHeight(const LoadedMap& map, float x, float z) {
 }
 
 
+void Engine::uploadVfxGround() {
+    // Grade de altura do mapa aberto para a colisao das particulas (um valor
+    // por vertice, a mesma interpolacao de getTerrainHeightAt).
+    if (!m_currentMap || !m_currentMap->terrainFromFile) {
+        m_vfx.setGroundHeights({}, 0, 0, Vec2(0.0f), 0.0f);
+        return;
+    }
+    const TerrainFile& t = m_currentMap->terrain;
+    const uint32_t w = t.width, d = t.height;
+    if (w == 0 || d == 0 || t.cubes.size() < size_t(w) * d) return;
+    const uint32_t vw = w + 1, vd = d + 1;
+    std::vector<float> h(size_t(vw) * vd);
+    for (uint32_t z = 0; z < vd; ++z)
+        for (uint32_t x = 0; x < vw; ++x) {
+            const uint32_t cx = std::min(x, w - 1), cz = std::min(z, d - 1);
+            const int corner = (x == w ? 1 : 0) + (z == d ? 2 : 0); // SW, SE, NW, NE
+            h[size_t(z) * vw + x] = -t.cubes[size_t(cz) * w + cx].height[corner];
+        }
+    m_vfx.setGroundHeights(h, vw, vd, Vec2(t.offsetX, t.offsetZ), t.scale > 0.0f ? t.scale : 10.0f);
+}
+
 float Engine::sampleTerrainHeight(float x, float z) const {
     const LoadedMap* map = mapAt(x, z); // o aberto ou um vizinho em cena
     if (!map) return 0.0f;
@@ -641,6 +662,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     // o mapa diz quantas unidades do mundo tem um metro (padrao do motor:
     // kVfxUnitsPerMeter, medido no tamanho dos personagens e das arvores).
     m_vfx.setUnitsPerMeter(m_currentMap->vfxUnitsPerMeter > 0.0f ? m_currentMap->vfxUnitsPerMeter : kVfxUnitsPerMeter);
+    uploadVfxGround();
     if (const char* u = std::getenv("ERUPTION_TEST_VFX_UNITS")) m_vfx.setUnitsPerMeter(std::strtof(u, nullptr));
     // ERUPTION_TEST_NO_VFX=1 (teste): mapa sem os efeitos do .env (imagens
     // de referencia anteriores aos efeitos continuam comparaveis).

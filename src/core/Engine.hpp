@@ -1586,6 +1586,8 @@ private:
     void buildWorldGraph();
     void updateWorld();
     void resolveRegionSlots(WorldRegionLoad& load);
+    void uploadVfxGround(); // grade de altura do mapa aberto para as particulas
+    bool m_vfxGroundDirty = false; // pincel de relevo mexeu: reenviar (no maximo a cada 30 frames)
     void attachRegion(WorldRegion& r, WorldRegionLoad& load);
     void showRegion(WorldRegion& r, bool show);
     void rebuildWorldWater();

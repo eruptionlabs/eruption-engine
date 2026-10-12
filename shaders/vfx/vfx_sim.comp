@@ -141,6 +141,32 @@ void main() {
                     }
                 }
             }
+            // Grade de altura do chao: segura a particula fora da tela e atras
+            // do que cobre o chao (a profundidade so' ve' o que a camera ve').
+            if ((e.flags.x & VFXF_COLLIDE_DEPTH) != 0u && frame.groundInfo.w > 0.5) {
+                vec2 g = (next.xz - frame.groundInfo.xy) * frame.groundInfo.z; // em celulas
+                if (all(greaterThanEqual(g, vec2(0.0))) && all(lessThanEqual(g, frame.groundSize.xy - 1.0))) {
+                    vec2 inv = 1.0 / frame.groundSize.xy;
+                    vec2 uv = (g + 0.5) * inv; // texel = vertice da grade
+                    float h = textureLod(groundHeight, uv, 0.0).r;
+                    if (next.y < h + rest) {
+                        float hx = textureLod(groundHeight, uv + vec2(inv.x, 0.0), 0.0).r -
+                                   textureLod(groundHeight, uv - vec2(inv.x, 0.0), 0.0).r;
+                        float hz = textureLod(groundHeight, uv + vec2(0.0, inv.y), 0.0).r -
+                                   textureLod(groundHeight, uv - vec2(0.0, inv.y), 0.0).r;
+                        vec3 n = normalize(vec3(-hx * 0.5 * frame.groundInfo.z, 1.0, -hz * 0.5 * frame.groundInfo.z));
+                        float vn = dot(p.vel, n);
+                        impact = max(impact, -vn);
+                        if (vn < 0.0) {
+                            vec3 vt = p.vel - vn * n;
+                            p.vel = vt * (1.0 - e.collide.y) - vn * n * e.noise.w;
+                        }
+                        next.y = h + rest;
+                        if (!collided) p.age += p.life * e.collide.z;
+                        collided = true;
+                    }
+                }
+            }
             p.pos = next;
             if (meshE != 0u) {
                 // Giro acumulado (nao idade x velocidade): a batida rouba giro

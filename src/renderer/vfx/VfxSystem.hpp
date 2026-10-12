@@ -85,6 +85,8 @@ struct VfxFrameParamsGpu {
     Vec4 ambient;
     Vec4 viewInfo;
     glm::uvec4 meshIndexCount[2];
+    Vec4 groundInfo; // xy origem da grade de altura, z 1/celula, w 1 = ha grade
+    Vec4 groundSize; // xy texels (vertices da grade)
 };
 
 class VfxSystem {
@@ -141,6 +143,9 @@ public:
     bool isPlaying(uint32_t id) const;
     float instanceTime(uint32_t id) const;
     void clear(); // mata tudo (troca de mapa)
+    // Grade de altura do chao (vertices, linha a linha em Z) para a colisao
+    // fora da tela: a profundidade so' ve' o que a camera ve'. Vazia = sem.
+    void setGroundHeights(const std::vector<float>& heights, uint32_t width, uint32_t depth, Vec2 origin, float cell);
 
     // --- Frame ---
     // CPU: tempo, pedidos de nascimento e parametros. Chamar antes de simulate().
@@ -294,6 +299,12 @@ private:
     bool m_reactiveWritten = false;
     void destroyReactive();
     std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setLow{};
+    std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setGround{};
+    VkImage m_groundImage = VK_NULL_HANDLE;
+    VmaAllocation m_groundAlloc = VK_NULL_HANDLE;
+    VkImageView m_groundView = VK_NULL_HANDLE;
+    Vec4 m_groundInfo{0.0f}, m_groundSize{0.0f};
+    void destroyGround(bool deferred);
     VkSampler m_depthSampler = VK_NULL_HANDLE;
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     // Dois sets por frame: a profundidade esta' em SHADER_READ_ONLY na
