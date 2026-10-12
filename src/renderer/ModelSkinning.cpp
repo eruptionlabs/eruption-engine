@@ -366,7 +366,8 @@ std::vector<std::string> ModelRenderer::animationsOf(uint32_t instance) const {
     return out;
 }
 
-bool ModelRenderer::playAnimation(uint32_t instance, const std::string& name, bool loop, float speed) {
+bool ModelRenderer::playAnimation(uint32_t instance, const std::string& name, bool loop, float speed,
+                                  float fadeSeconds) {
     const auto it = m_skinnedByInstance.find(instance);
     if (it == m_skinnedByInstance.end()) return false;
     SkinnedInstance& s = m_skinned[it->second];
@@ -374,6 +375,14 @@ bool ModelRenderer::playAnimation(uint32_t instance, const std::string& name, bo
     if (b == m_skinBases.end()) return false;
     const int a = name.empty() ? -1 : b->second.rig->findAnimation(name);
     if (!name.empty() && a < 0) return false;
+    // A pose que está na tela sai aos poucos (se já havia transição, a que
+    // chegava vira a que sai: o salto é pequeno com 0,2 s).
+    s.fadeSeconds = std::max(fadeSeconds, 0.0f);
+    s.fade = 0.0f;
+    s.fromAnim = s.anim;
+    s.fromTime = s.time;
+    s.fromSpeed = s.speed;
+    s.fromLoop = s.loop;
     s.anim = a;
     s.time = 0.0f;
     s.loop = loop;
@@ -407,18 +416,26 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
         const SkinRig::Skin& sk = rig.skins[static_cast<size_t>(base.skin)];
         const uint32_t joints = static_cast<uint32_t>(sk.joints.size());
         if (joints == 0 || cursor + joints > kJointsPerFrame) continue; // anel cheio: fica parado neste frame
-        // Tempo da animação.
-        if (s.anim >= 0 && s.anim < static_cast<int>(rig.animations.size())) {
-            const float dur = rig.animations[static_cast<size_t>(s.anim)].duration;
-            s.time += dt * s.speed;
+        // Tempo da animação (e da que sai, durante a transição).
+        auto advance = [&](int anim, float& time, float speed, bool loop) {
+            if (anim < 0 || anim >= static_cast<int>(rig.animations.size())) return;
+            const float dur = rig.animations[static_cast<size_t>(anim)].duration;
+            time += dt * speed;
             if (dur > 0.0f) {
-                if (s.loop) s.time = std::fmod(std::max(s.time, 0.0f), dur);
-                else if (s.time >= dur) {
-                    s.time = dur;
-                }
+                if (loop) time = std::fmod(std::max(time, 0.0f), dur);
+                else if (time >= dur) time = dur;
             }
+        };
+        advance(s.anim, s.time, s.speed, s.loop);
+        if (s.fade < s.fadeSeconds) {
+            advance(s.fromAnim, s.fromTime, s.fromSpeed, s.fromLoop);
+            s.fade = std::min(s.fade + dt, s.fadeSeconds);
+            const float w = s.fade / s.fadeSeconds;
+            // Suave nas pontas: a velocidade dos ossos não dá degrau.
+            rig.blendPose(s.fromAnim, s.fromTime, s.anim, s.time, w * w * (3.0f - 2.0f * w), globals);
+        } else {
+            rig.pose(s.anim, s.time, globals);
         }
-        rig.pose(s.anim, s.time, globals);
         rig.jointMatrices(base.skin, globals, ring + cursor);
         // Limites: cada osso com o alcance dos seus vértices.
         Vec3 lo(FLT_MAX), hi(-FLT_MAX);
