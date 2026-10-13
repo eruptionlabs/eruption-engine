@@ -1751,12 +1751,27 @@ ModelRenderer::PreparedNode ModelRenderer::prepareNode(const ModelAsset& asset, 
         }
         groundIdx.reserve(useIndices->size());
         groundCells.reserve(cells.size());
-        for (auto& kv : cells) {
-            ModelMeshGPU::GroundCell gc{kv.second.minX, kv.second.minZ,
-                                        kv.second.maxX, kv.second.maxZ,
+        // Celulas em ordem de Morton no buffer: vizinhas no chao ficam
+        // vizinhas nos indices, entao o pedaco que a camera ve' (ou que a
+        // banda de tesselacao pega) sai em poucos intervalos contiguos.
+        auto morton = [](uint64_t key) {
+            uint32_t gx = uint32_t(key >> 20) & 0xFFFFu, gz = uint32_t(key) & 0xFFFFu;
+            uint64_t m = 0;
+            for (int b = 0; b < 16; ++b)
+                m |= (uint64_t((gx >> b) & 1u) << (2 * b)) | (uint64_t((gz >> b) & 1u) << (2 * b + 1));
+            return m;
+        };
+        std::vector<std::pair<uint64_t, Cell*>> order;
+        order.reserve(cells.size());
+        for (auto& kv : cells) order.push_back({morton(kv.first), &kv.second});
+        std::sort(order.begin(), order.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (auto& [code, cell] : order) {
+            (void)code;
+            ModelMeshGPU::GroundCell gc{cell->minX, cell->minZ, cell->maxX, cell->maxZ,
                                         static_cast<uint32_t>(groundIdx.size()),
-                                        static_cast<uint32_t>(kv.second.idx.size())};
-            groundIdx.insert(groundIdx.end(), kv.second.idx.begin(), kv.second.idx.end());
+                                        static_cast<uint32_t>(cell->idx.size())};
+            groundIdx.insert(groundIdx.end(), cell->idx.begin(), cell->idx.end());
             groundCells.push_back(gc);
         }
         // Em ORDEM DE BUFFER: o desenho funde intervalos vizinhos
@@ -2883,6 +2898,24 @@ bool ModelRenderer::ensureInstanceCapacity(uint32_t count) {
     return true;
 }
 
+// Caixa de mundo de uma celula do chao desenhada pela instancia `model`. A
+// altura vem da malha inteira, com folga para o deslocamento (tesselacao e
+// relevo do vertex shader: ate' 10 u cada).
+static void groundCellBox(const ModelMeshGPU& mesh, const ModelMeshGPU::GroundCell& c, const Mat4& model,
+                          Vec3& mn, Vec3& mx) {
+    constexpr float kPadY = 32.0f, kPadXZ = 2.0f;
+    const Vec3 lo(c.minX - kPadXZ, mesh.aabbMin.y - kPadY, c.minZ - kPadXZ);
+    const Vec3 hi(c.maxX + kPadXZ, mesh.aabbMax.y + kPadY, c.maxZ + kPadXZ);
+    const Vec3 center = (lo + hi) * 0.5f, ext = (hi - lo) * 0.5f;
+    const Vec3 wc = Vec3(model * Vec4(center, 1.0f));
+    const Mat3 m3(model);
+    const Vec3 we(std::abs(m3[0][0]) * ext.x + std::abs(m3[1][0]) * ext.y + std::abs(m3[2][0]) * ext.z,
+                  std::abs(m3[0][1]) * ext.x + std::abs(m3[1][1]) * ext.y + std::abs(m3[2][1]) * ext.z,
+                  std::abs(m3[0][2]) * ext.x + std::abs(m3[1][2]) * ext.y + std::abs(m3[2][2]) * ext.z);
+    mn = wc - we;
+    mx = wc + we;
+}
+
 void ModelRenderer::render(VkCommandBuffer cmd,
                            const Mat4& viewProj, const Frustum& frustum, const Vec3& cameraPos) {
     PROFILE_CPU_SCOPE(ProfilerCategory::Culling);
@@ -3082,7 +3115,11 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         // reduzido (outro buffer de índices), vai inteiro (mapa vizinho).
         const bool tessCells = tessellationActive() && mesh.isGround && runIb == mesh.indexBuffer &&
                                m_tessBandDistance > 0.0f && !mesh.groundCells.empty();
-        const bool wantTess = tessCells;
+        // Chao de uma instancia so': as celulas fora da tela nem sao
+        // desenhadas (a malha inteira passava pelo vertex shader).
+        const bool cullCells = mesh.isGround && runIb == mesh.indexBuffer && !mesh.groundCells.empty() &&
+                               runLen == 1;
+        const bool wantTess = tessCells || cullCells;
         if (!tessCells) bindPipelineFor(tessellationActive() && runNear);
         push.alpha = runAlpha;
         push.metallicScale = mesh.metallicScale;
@@ -3100,17 +3137,26 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             bool segNear = false, segOpen = false;
             auto flushSeg = [&]() {
                 if (!segOpen || segCount == 0) return;
-                bindPipelineFor(segNear);
+                if (tessCells) bindPipelineFor(segNear);
                 record(runVb, runIb, runMesh, segCount, runLen, segFirst, instBase + runFirst);
                 dbgDraws++;
                 dbgIdx += segCount * runLen;
                 segCount = 0;
                 segOpen = false;
             };
+            const Mat4 cellModel = dst[runFirst].model;
             for (const auto& c : mesh.groundCells) {
+                if (cullCells) {
+                    Vec3 cmn, cmx;
+                    groundCellBox(mesh, c, cellModel, cmn, cmx);
+                    if (!frustum.intersectsAABB(cmn, cmx)) {
+                        flushSeg();
+                        continue;
+                    }
+                }
                 const float dx = std::max({c.minX - camXZ.x, 0.0f, camXZ.x - c.maxX});
                 const float dz = std::max({c.minZ - camXZ.z, 0.0f, camXZ.z - c.maxZ});
-                const bool nearCell = (dx * dx + dz * dz) < band * band;
+                const bool nearCell = tessCells && (dx * dx + dz * dz) < band * band;
                 // Funde com o intervalo aberto quando o veredito e' o mesmo E os
                 // indices sao contiguos (as celulas estao em ordem de buffer).
                 if (segOpen && segNear == nearCell && segFirst + segCount == c.first) {
@@ -3812,7 +3858,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
     VkBuffer boundVb = VK_NULL_HANDLE;
     VkBuffer boundIb = VK_NULL_HANDLE;
     VkBuffer runVb = VK_NULL_HANDLE, runIb = VK_NULL_HANDLE;
-    uint32_t runCount = 0, runFirst = 0, runLen = 0;
+    uint32_t runCount = 0, runFirst = 0, runLen = 0, runMesh = 0;
     // Pipeline corrente do passe. O run ja' e' por malha, entao a opacidade e'
     // constante dentro dele e a troca acontece no maximo uma vez por run.
     bool runOpaque = false;
@@ -3832,6 +3878,33 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
             vkCmdBindIndexBuffer(cmd, runIb, 0, VK_INDEX_TYPE_UINT32);
             boundVb = runVb;
             boundIb = runIb;
+        }
+        // Chao de uma instancia so': so' as celulas dentro da cascata e cuja
+        // sombra pode cair na tela (o mesmo teste dos casters, ver acima).
+        const ModelMeshGPU& rm = m_meshes[runMesh];
+        if (rm.isGround && runIb == rm.indexBuffer && runLen == 1 && !rm.groundCells.empty()) {
+            const Mat4 model = dst[runFirst];
+            uint32_t segFirst = 0, segCount = 0;
+            auto flushSeg = [&]() {
+                if (segCount == 0) return;
+                vkCmdDrawIndexed(cmd, segCount, 1, segFirst, 0, m_shadowCursor + runFirst);
+                ++m_shadowDrawCallsDbg;
+                segCount = 0;
+            };
+            for (const auto& c : rm.groundCells) {
+                Vec3 cmn, cmx;
+                groundCellBox(rm, c, model, cmn, cmx);
+                const bool keep = (!frustumMask || shadowFrustum.intersectsAABB(cmn, cmx)) &&
+                                  !(receivers && shadowMissesReceivers(*receivers, lightTravel, receiverMargin, cmn, cmx));
+                if (!keep) { flushSeg(); continue; }
+                if (segCount > 0 && segFirst + segCount == c.first) { segCount += c.count; continue; }
+                flushSeg();
+                segFirst = c.first;
+                segCount = c.count;
+            }
+            flushSeg();
+            runLen = 0;
+            return;
         }
         vkCmdDrawIndexed(cmd, runCount, runLen, 0, 0, m_shadowCursor + runFirst);
         ++m_shadowDrawCallsDbg;
@@ -3906,6 +3979,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
             runIb = useIb;
             runCount = useCount;
             runFirst = slot;
+            runMesh = hot.meshIndex;
             runOpaque = mesh.shadowOpaque;
             // swayAmount e' POR MALHA (mesh.swayAmount), e um run instanciado
             // e' sempre da MESMA malha (agrupado por vertex/index buffer
