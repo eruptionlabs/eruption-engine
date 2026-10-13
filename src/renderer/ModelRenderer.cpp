@@ -3796,14 +3796,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
 // (n.d > 0) nunca separa: o arrasto acaba entrando nele.
 bool ModelRenderer::shadowMissesReceivers(const Frustum& receivers, const Vec3& lightTravel, float margin,
                                           const Vec3& mn, const Vec3& mx) {
-    for (int p = 0; p < 6; ++p) {
-        const Plane& pl = receivers.getPlane(static_cast<Frustum::PlaneIndex>(p));
-        if (glm::dot(pl.normal, lightTravel) > 0.0f) continue;
-        const Vec3 v(pl.normal.x > 0.0f ? mx.x : mn.x, pl.normal.y > 0.0f ? mx.y : mn.y,
-                     pl.normal.z > 0.0f ? mx.z : mn.z);
-        if (glm::dot(pl.normal, v) + pl.distance + margin < 0.0f) return true;
-    }
-    return false;
+    return receivers.sweptBoxOutside(mn, mx, lightTravel, margin);
 }
 
 void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline, VkPipelineLayout shadowLayout,
