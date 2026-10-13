@@ -107,12 +107,17 @@ struct ModelMeshGPU {
     // malha cheia = 28 dos 29,5 M de triangulos do frame (G-buffer 50 ms na
     // 4060). A escolha e' por triangulo por pixel projetado (o mesmo
     // orcamento de lodSwitchFor): de perto continua a malha cheia.
+    // PEDACOS de um nivel pesado: os indices vao em ordem de grade 3D local
+    // (Morton) e cada pedaco guarda a caixa dos proprios triangulos. Instancia
+    // cortada pela borda da tela desenha so' os pedacos que tocam a visao.
+    struct Cluster { Vec3 mn, mx; uint32_t first, count; };
     struct MidLod {
         VkBuffer vertexBuffer = VK_NULL_HANDLE; // cartoes podados; NULL = o da malha
         VmaAllocation vertexAlloc = VK_NULL_HANDLE;
         VkBuffer indexBuffer = VK_NULL_HANDLE;
         VmaAllocation indexAlloc = VK_NULL_HANDLE;
         uint32_t indexCount = 0;
+        std::vector<Cluster> clusters;
     };
     static constexpr uint32_t kMaxMidLods = 3;
     MidLod mid[kMaxMidLods];
@@ -705,6 +710,7 @@ private:
         // Cadeia intermediaria (malha gigante), do mais detalhado ao menos.
         std::vector<std::vector<uint32_t>> mid;
         std::vector<std::vector<unsigned char>> midVerts; // vazio = vertex buffer da malha
+        std::vector<std::vector<ModelMeshGPU::Cluster>> midClusters;
         MeshCardStats cs;     // topologia (so' folhagem): cartao x folha modelada
         bool csValid = false;
         MeshLodResult loRes, farRes, shRes; // as três partes, antes de decidir
@@ -743,6 +749,7 @@ private:
     static void computeLodPart(LodBuild& b, int part);
     static void computeMidChain(LodBuild& b);
     static constexpr size_t kMidLodMinTris = 60000; // abaixo disso o salto cheia -> "lo" ja' e' curto
+    static constexpr size_t kClusterMinTris = 20000; // degrau com pedacos (descarte pela borda da tela)
     static void finishLod(LodBuild& b);
     void applyLods(std::vector<LodBuild>& builds);
     void registerSkinBase(uint32_t mesh, const ModelAsset& asset, const ModelNode& node,
@@ -1025,10 +1032,17 @@ private:
     struct DrawRec {
         VkBuffer vb, ib;
         uint32_t mesh, count, instances, firstIndex, firstInstance;
+        uint32_t levelCount; // indices do degrau inteiro (o desenho pode ser so' um trecho)
         bool tess;
         uint8_t push[96];
     };
     std::vector<DrawRec> m_drawRecs;
+    // Escala do balanco ao vento (windParams.y do quadro): folga das caixas
+    // dos pedacos. Vem do passe de sombra e de setWindSwayScale.
+    float m_windSwayScale = 0.15f;
+public:
+    void setWindSwayScale(float s) { m_windSwayScale = s; }
+private:
     float m_geoDispAmplitude = 0.0f;
     float m_geoDispDistance = 0.0f;
 

@@ -1170,6 +1170,51 @@ void ModelRenderer::computeLodPart(LodBuild& b, int part) {
     }
 }
 
+// Reordena `idx` (triangulos sobre `pos`, passo `stride`) por celula de uma
+// grade 3D sobre a caixa da malha, em ordem de Morton, e devolve a caixa e o
+// intervalo de cada celula. ~3 mil triangulos por pedaco: o bastante para o
+// descarte valer, pouco o bastante para nao virar desenho demais.
+static std::vector<ModelMeshGPU::Cluster> buildClusters(const unsigned char* pos, size_t stride,
+                                                        std::vector<uint32_t>& idx) {
+    std::vector<ModelMeshGPU::Cluster> out;
+    const size_t tris = idx.size() / 3;
+    if (tris < 3) return out;
+    auto P = [&](uint32_t v) { return *reinterpret_cast<const Vec3*>(pos + size_t(v) * stride); };
+    Vec3 lo(1e30f), hi(-1e30f);
+    for (uint32_t v : idx) { lo = glm::min(lo, P(v)); hi = glm::max(hi, P(v)); }
+    const Vec3 ext = glm::max(hi - lo, Vec3(1e-3f));
+    const float cells = std::clamp(float(tris) / 3000.0f, 8.0f, 512.0f);
+    const float cell = std::cbrt(std::max(ext.x, 1e-3f) * std::max(ext.y, 1e-3f) * std::max(ext.z, 1e-3f) / cells);
+    const glm::uvec3 n = glm::clamp(glm::uvec3(glm::ceil(ext / std::max(cell, 1e-3f))), glm::uvec3(1u), glm::uvec3(64u));
+    auto spread = [](uint32_t x) {
+        x &= 0x3FFu;
+        x = (x | (x << 16)) & 0x030000FFu;
+        x = (x | (x << 8)) & 0x0300F00Fu;
+        x = (x | (x << 4)) & 0x030C30C3u;
+        x = (x | (x << 2)) & 0x09249249u;
+        return x;
+    };
+    std::vector<std::pair<uint32_t, uint32_t>> key(tris); // (Morton, triangulo)
+    for (size_t t = 0; t < tris; ++t) {
+        const Vec3 c = (P(idx[t * 3]) + P(idx[t * 3 + 1]) + P(idx[t * 3 + 2])) / 3.0f;
+        const glm::uvec3 g = glm::min(glm::uvec3(glm::max((c - lo) / ext * Vec3(n), Vec3(0.0f))), n - 1u);
+        key[t] = {spread(g.x) | (spread(g.y) << 1) | (spread(g.z) << 2), uint32_t(t)};
+    }
+    std::stable_sort(key.begin(), key.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::vector<uint32_t> sorted(idx.size());
+    for (size_t i = 0; i < tris; ++i) {
+        const uint32_t t = key[i].second;
+        for (int k = 0; k < 3; ++k) sorted[i * 3 + k] = idx[t * 3 + k];
+        if (i == 0 || key[i].first != key[i - 1].first)
+            out.push_back({Vec3(1e30f), Vec3(-1e30f), uint32_t(i * 3), 0u});
+        ModelMeshGPU::Cluster& c = out.back();
+        c.count += 3;
+        for (int k = 0; k < 3; ++k) { c.mn = glm::min(c.mn, P(sorted[i * 3 + k])); c.mx = glm::max(c.mx, P(sorted[i * 3 + k])); }
+    }
+    idx.swap(sorted);
+    return out;
+}
+
 void ModelRenderer::finishLod(LodBuild& b) {
     const std::vector<TerrainVertex>& vertices = b.vertices;
     const std::vector<uint32_t>& indices = b.indices;
@@ -1319,6 +1364,16 @@ void ModelRenderer::finishLod(LodBuild& b) {
                           b.lo.size() / 3, b.far.size() / 3);
     // Sombra: só se for menor que o LOD de tela.
     if (b.shRes.valid && (b.lo.empty() || b.shRes.indices.size() < b.lo.size())) b.sh = std::move(b.shRes.indices);
+    // Pedacos dos degraus pesados da cadeia (no fim: a cadeia e a folha ja'
+    // leram os indices na ordem em que foram simplificados).
+    b.midClusters.assign(b.mid.size(), {});
+    for (size_t k = 0; k < b.mid.size() && !b.vertices.empty(); ++k) {
+        if (b.mid[k].size() / 3 < kClusterMinTris) continue;
+        const bool own = k < b.midVerts.size() && !b.midVerts[k].empty();
+        const unsigned char* base = own ? b.midVerts[k].data()
+                                        : reinterpret_cast<const unsigned char*>(b.vertices.data());
+        b.midClusters[k] = buildClusters(base + offsetof(TerrainVertex, position), sizeof(TerrainVertex), b.mid[k]);
+    }
     b.vertices.clear();
     b.vertices.shrink_to_fit();
     b.loRes = {};
@@ -1363,6 +1418,7 @@ void ModelRenderer::applyLods(std::vector<LodBuild>& builds) {
                 make(b.mid[k].data(), b.mid[k].size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                      md.indexBuffer, md.indexAlloc);
                 md.indexCount = static_cast<uint32_t>(b.mid[k].size());
+                if (k < b.midClusters.size()) md.clusters = std::move(b.midClusters[k]);
                 mesh.midCount = static_cast<uint32_t>(k + 1);
             }
         }
@@ -2957,6 +3013,9 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     // malha) e o nivel ja' e' fixo no mais grosseiro.
     static const bool kLodFadeOff =
         std::getenv("ERUPTION_NO_LOD_FADE") != nullptr || wireframeMode();
+    // ERUPTION_TEST_NO_CLUSTER_CULL=1: instancia cortada pela borda desenha
+    // o degrau inteiro, como antes dos pedacos (A/B).
+    static const bool kNoClusterCull = std::getenv("ERUPTION_TEST_NO_CLUSTER_CULL") != nullptr;
     // A BANDA E' EXATAMENTE O INTERVALO DE HISTERESE [d*kLoLodHysteresis, d].
     // Nao pode ser uma janela arbitraria em torno de d: a primeira versao usava
     // +-6% e isso deixava um DEGRAU DURO na borda de baixo - uma instancia que
@@ -3085,6 +3144,14 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     uint32_t runCount = 0, runFirst = 0, runLen = 0, runMesh = 0;
     float runAlpha = 1.0f;
     bool runNear = false;   // instancias deste run estao na banda de tesselacao
+    // Run de UMA instancia cortada pela borda da tela, desenhada por pedacos
+    // (so' os que tocam a visao). Nivel de LOD com pedacos: runClusters.
+    const std::vector<ModelMeshGPU::Cluster>* runClusters = nullptr;
+    auto clustersFor = [&](const ModelMeshGPU& m, uint8_t level) -> const std::vector<ModelMeshGPU::Cluster>* {
+        if (level >= 4 && uint32_t(level - 4) < m.midCount && !m.mid[level - 4].clusters.empty())
+            return &m.mid[level - 4].clusters;
+        return nullptr;
+    };
 
     // TESSELACAO NA BANDA PERTO. Troca de pipeline por RUN, e so' para malha de
     // CHAO com a camera dentro da banda (m_tessBandDistance > 0): o chao e' o
@@ -3099,8 +3166,8 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     auto bindPipelineFor = [&](bool wantTess) { tessBound = wantTess; };
     m_drawRecs.clear();
     auto record = [&](VkBuffer vb, VkBuffer ib, uint32_t mesh, uint32_t count, uint32_t instances,
-                      uint32_t firstIndex, uint32_t firstInstance) {
-        DrawRec r{vb, ib, mesh, count, instances, firstIndex, firstInstance, tessBound, {}};
+                      uint32_t firstIndex, uint32_t firstInstance, uint32_t levelCount) {
+        DrawRec r{vb, ib, mesh, count, instances, firstIndex, firstInstance, levelCount, tessBound, {}};
         std::memcpy(r.push, &push, sizeof(push));
         m_drawRecs.push_back(r);
     };
@@ -3126,6 +3193,42 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         push.roughnessScale = mesh.roughnessScale;
         push.uvScale.z = mesh.uvPerUnit;
         push.uvScale.w = mesh.dispScale;
+        if (runClusters) {
+            // Caixa de cada pedaco no mundo, crescida do que o vertex shader
+            // pode mover: o vento (altura da instancia x sway x escala x 0,65,
+            // ver applyWindSway) e o relevo perto da camera (10 u).
+            const Mat4 model = dst[runFirst].model;
+            const Mat3 m3(model);
+            const float height = (mesh.aabbMax.y - mesh.aabbMin.y) * glm::length(m3[1]);
+            const float bend = height * mesh.swayAmount * std::max(m_windSwayScale, 0.0f) * 0.65f + 10.0f;
+            uint32_t segFirst = 0, segCount = 0;
+            auto flushSeg = [&]() {
+                if (segCount == 0) return;
+                record(runVb, runIb, runMesh, segCount, 1, segFirst, instBase + runFirst, runCount);
+                dbgDraws++;
+                dbgIdx += segCount;
+                segCount = 0;
+            };
+            for (const auto& c : *runClusters) {
+                const Vec3 center = (c.mn + c.mx) * 0.5f, ext = (c.mx - c.mn) * 0.5f;
+                const Vec3 wc = Vec3(model * Vec4(center, 1.0f));
+                const Vec3 we(std::abs(m3[0][0]) * ext.x + std::abs(m3[1][0]) * ext.y + std::abs(m3[2][0]) * ext.z,
+                              std::abs(m3[0][1]) * ext.x + std::abs(m3[1][1]) * ext.y + std::abs(m3[2][1]) * ext.z,
+                              std::abs(m3[0][2]) * ext.x + std::abs(m3[1][2]) * ext.y + std::abs(m3[2][2]) * ext.z);
+                if (!frustum.intersectsAABB(wc - we - Vec3(bend), wc + we + Vec3(bend))) { flushSeg(); continue; }
+                if (segCount > 0 && segFirst + segCount == c.first) { segCount += c.count; continue; }
+                flushSeg();
+                segFirst = c.first;
+                segCount = c.count;
+            }
+            flushSeg();
+            if (dbgPerMesh.size() > runMesh) {
+                dbgPerMesh[runMesh].first += runCount / 3;
+                dbgPerMesh[runMesh].second += 1;
+            }
+            runLen = 0;
+            return;
+        }
         if (wantTess) {
             // CHAO NA BANDA: um desenho por celula. As celulas dentro da banda
             // vao pelo pipeline de PATCH (tesselacao + deslocamento); as de
@@ -3138,7 +3241,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             auto flushSeg = [&]() {
                 if (!segOpen || segCount == 0) return;
                 if (tessCells) bindPipelineFor(segNear);
-                record(runVb, runIb, runMesh, segCount, runLen, segFirst, instBase + runFirst);
+                record(runVb, runIb, runMesh, segCount, runLen, segFirst, instBase + runFirst, runCount);
                 dbgDraws++;
                 dbgIdx += segCount * runLen;
                 segCount = 0;
@@ -3177,7 +3280,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             runLen = 0;
             return;
         }
-        record(runVb, runIb, runMesh, runCount, runLen, 0, instBase + runFirst);
+        record(runVb, runIb, runMesh, runCount, runLen, 0, instBase + runFirst, runCount);
         dbgDraws++;
         dbgIdx += runCount * runLen;
         if (dbgPerMesh.size() > runMesh) {
@@ -3430,9 +3533,22 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             instNear = band > 0.0f &&
                        (glm::distance(m_lastCameraPos, c) - r) < band;
         }
+        // Cortada pela borda da tela, num degrau com pedacos: run proprio.
+        const std::vector<ModelMeshGPU::Cluster>* clusters = nullptr;
+        if (!instNear && !kNoClusterCull) {
+            clusters = clustersFor(mesh, lod);
+            if (clusters) {
+                bool inside = true;
+                for (int k = 0; k < 8 && inside; ++k)
+                    inside = frustum.containsPoint(Vec3((k & 1) ? hot.worldAabbMax.x : hot.worldAabbMin.x,
+                                                        (k & 2) ? hot.worldAabbMax.y : hot.worldAabbMin.y,
+                                                        (k & 4) ? hot.worldAabbMax.z : hot.worldAabbMin.z));
+                if (inside) clusters = nullptr;
+            }
+        }
         const bool sameRun = runLen > 0 && vb == runVb && ib == runIb &&
                              drawCount == runCount && hot.meshIndex == runMesh &&
-                             alpha == runAlpha && instNear == runNear;
+                             alpha == runAlpha && instNear == runNear && !clusters && !runClusters;
         if (!sameRun) {
             flushRun();
             runVb = vb;
@@ -3442,6 +3558,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             runFirst = slot;
             runAlpha = alpha;
             runNear = instNear;
+            runClusters = clusters;
         }
         ++runLen;
         ++slot;
@@ -3471,7 +3588,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             push.alpha = runAlpha2;
             push.metallicScale = mesh.metallicScale;
             push.roughnessScale = mesh.roughnessScale;
-            record(runVb2, runIb2, runMesh2, runCount2, runLen2, 0, instBase + slot + runFirst2);
+            record(runVb2, runIb2, runMesh2, runCount2, runLen2, 0, instBase + slot + runFirst2, runCount2);
             dbgDraws++;
             dbgIdx += runCount2 * runLen2;
             runLen2 = 0;
@@ -3552,7 +3669,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         return e ? static_cast<uint32_t>(std::max(0, std::atoi(e))) : 20000u;
     }();
     auto pre = [&](const DrawRec& r) {
-        return prepass && !r.tess && m_meshes[r.mesh].depthPrepass && r.count / 3 <= kMaxTris;
+        return prepass && !r.tess && m_meshes[r.mesh].depthPrepass && r.levelCount / 3 <= kMaxTris;
     };
     if (prepass) {
         for (const DrawRec& r : m_drawRecs)
@@ -3680,6 +3797,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
     // NEAR do Frustum nao serve: com a faixa de profundidade longa da
     // ortografica ele fica curto demais para o normalize() e vem quase zero.)
     const Vec3 lightTravel = glm::normalize(Vec3(cascadeMatrix[0][2], cascadeMatrix[1][2], cascadeMatrix[2][2]));
+    m_windSwayScale = windParams.y;
     m_lastShadowReceiverCulled = 0;
     for (uint32_t i = 0; i < instCount; ++i) {
         if (frustumMask && !((frustumMask[i / 8] & (1u << (i & 7))) != 0)) continue;

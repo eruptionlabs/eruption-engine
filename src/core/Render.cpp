@@ -811,6 +811,7 @@ void Engine::render() {
         if (fullDetailEnv && !m_fullDetailView) setFullDetailView(true);
         const bool fullDetail = forceBaseLod || m_demoForceBaseLod || m_fullDetailView;
         if (fullDetail) m_modelRenderer.setForceBaseLod(true);
+        m_modelRenderer.setWindSwayScale(frameUbo.windParams.y);
         m_modelRenderer.render(cmd, m_camera.viewProjJittered(), m_camera.frustum(), m_camera.position());
         if (fullDetail) m_modelRenderer.setForceBaseLod(false);
     }
