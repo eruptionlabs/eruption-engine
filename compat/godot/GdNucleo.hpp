@@ -272,6 +272,8 @@ void versaoApi(uint32_t& major, uint32_t& minor, uint32_t& patch);
 
 // Singletons (Engine, OS...): objeto nativo criado sob demanda.
 Objeto* singleton(const NomeInterno* nome);
+// O que o RenderingServer de registro tem para desenhar (uma linha por multimesh).
+std::vector<std::string> descreverDesenho();
 
 // ---- Tabela de interface ----------------------------------------------------
 

@@ -41,6 +41,7 @@ if [ -f "$GD/libgd_summator.so" ]; then
     s=$(timeout 60 "$RUN" --godot "$GD/libgd_yparticles3d.so:yparticles3d_init" --novo YParticles3D --cena \
         --quadros 30 2>&1)
     confere "YParticles3D carrega e roda" "$s" "falhas: 0"
+    confere "YParticles3D emite (MultiMesh no RenderingServer)" "$s" "de 400 instancias, malha de 4 vertices"
 else
     echo "  (extensoes Godot nao compiladas)"
 fi

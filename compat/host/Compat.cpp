@@ -126,6 +126,7 @@ void encerrar() {
         logf(Nivel::Info, "compat", "quadros GDExtension: %llu (t=%.2fs)", static_cast<unsigned long long>(host().quadro()),
              host().tempo());
         for (const std::string& linha : godot::descreverCena()) logf(Nivel::Info, "compat", "cena: %s", linha.c_str());
+        for (const std::string& linha : godot::descreverDesenho()) logf(Nivel::Info, "compat", "desenho: %s", linha.c_str());
         godot::encerrar();
     }
     g_godot = false;

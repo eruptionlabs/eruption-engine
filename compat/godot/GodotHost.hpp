@@ -46,6 +46,8 @@ std::string descrever(uint64_t objeto);
 
 // Uma linha por no' da cena GDExtension (descrever() de cada um).
 std::vector<std::string> descreverCena();
+// Multimeshes visiveis pedidas ao RenderingServer (partículas, por exemplo).
+std::vector<std::string> descreverDesenho();
 
 // Desliga as extensoes (niveis em ordem reversa) e descarrega.
 void encerrar();
