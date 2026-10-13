@@ -58,6 +58,18 @@ repositório do plugin (`Intermediate/`) são ignorados.
 | AdvancedEases | https://github.com/DKesserich/AdvancedEasesPlugin | MIT | `4fe1c6d00d0eb3b2b9a4dfdd65075f80d7348855` | `.uplugin` (LoadingPhase), `IModuleInterface`/`IMPLEMENT_MODULE`, `UBlueprintFunctionLibrary`, `UENUM`/`UMETA`, `UFUNCTION` estática com argumento padrão, `FVector`, `PI` | **funciona**: `StartupModule`/`ShutdownModule`; `AdvancedEase_Float(AE_OUTBOUNCE, 0.5, 0, 10)` → 7.65625; `AdvancedEase_Vector(AE_LERP, 0, (10,20,30), 0.5)` → (5, 10, 15) |
 | Serial COM | https://github.com/videofeedback/Unreal_Engine_SerialCOM_Plugin | MIT | `bd3b2ee44cec7016fe64975c2d03ffd7fda20a2d` | `DECLARE_LOG_CATEGORY_CLASS`, `UE_LOG` com `TEXT()`, módulo com `LoadingPhase` PreDefault | **parcial**: o plugin é só Win64 (porta serial via Win32), a ferramenta respeita `PlatformAllowList`; compilando só o arquivo do módulo (`--forcar-plataforma --so-fontes SERIALCOMModule.cpp`), o `UE_LOG` dele aparece no log do host |
 
+## Cenas .unity (Unity, YAML)
+
+`eruption-compat-run --unity-cs scripts.dll --unity-cs-cena cena.unity` cria os
+GameObjects da cena com o Transform (posição, rotação, escala e pai, mantendo a
+transformação local) e os MonoBehaviour cujo script está no assembly carregado,
+achado pelo `guid` do `.meta` do `.cs` na pasta `Assets` da cena; os campos
+salvos simples (número, bool, texto, vetor, quaternion) são aplicados. Prefab,
+referência a outro objeto e componente nativo (câmera, luz, UI) ficam de fora.
+A bateria abre `Samples/ConstantMotion.unity` do Klak: 10 GameObjects, a câmera
+filha do pivô na posição de mundo certa e o bule girando com os valores salvos
+na cena (30°/s no eixo (0.2, 1, 0)).
+
 ## Cenas .tscn (Godot 4)
 
 `eruption-compat-run --godot ext.so:init --tscn cena.tscn` monta a cena (nós de

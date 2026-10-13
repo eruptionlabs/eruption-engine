@@ -91,6 +91,18 @@ namespace Eruption.Compat
             return 1;
         }
 
+        // Pai na hierarquia (0 = raiz), mantendo a transformacao LOCAL: e' como
+        // a cena salva guarda os filhos.
+        [UnmanagedCallersOnly]
+        public static int DefinirPai(uint objeto, uint pai)
+        {
+            GameObject go = Objeto(objeto);
+            if (go == null) return 0;
+            GameObject p = pai != 0 ? Objeto(pai) : null;
+            go.transform.SetParent(p != null ? p.transform : null, false);
+            return 1;
+        }
+
         [UnmanagedCallersOnly]
         public static int DefinirCampo(uint objeto, byte* tipo, byte* campo, byte* valor)
         {
@@ -336,7 +348,9 @@ namespace Eruption.Compat
             if (t == typeof(Vector3)) return new Vector3(F(0), F(1), F(2));
             if (t == typeof(Vector2)) return new Vector2(F(0), F(1));
             if (t == typeof(Vector4)) return new Vector4(F(0), F(1), F(2), F(3));
-            if (t == typeof(Quaternion)) return Quaternion.Euler(F(0), F(1), F(2));
+            // Tres numeros: angulos de Euler; quatro: o quaternion cru (x, y, z, w).
+            if (t == typeof(Quaternion))
+                return p.Length >= 4 ? new Quaternion(F(0), F(1), F(2), F(3)) : Quaternion.Euler(F(0), F(1), F(2));
             if (t == typeof(Color)) return new Color(F(0), F(1), F(2), p.Length > 3 ? F(3) : 1f);
             return Convert.ChangeType(v, t, ci);
         }
