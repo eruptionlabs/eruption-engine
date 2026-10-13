@@ -1028,7 +1028,7 @@ void WaterRenderer::updateUBO(uint32_t frameIndex, uint32_t uboSlot, const Water
     ubo.baseColorShallow = Vec4(settings.baseColorShallow, 1.0f);
     ubo.waterParams      = Vec4(settings.transparency, settings.refractionStrength, settings.reflectivity, settings.roughness);
     ubo.normalParams     = Vec4(settings.normalScale, settings.waveSpeed, settings.normalStrength, 0.0f);
-    ubo.waveParams       = Vec4(settings.waveAmplitude, settings.waveFrequency, settings.waveSpeed, 0.0f);
+    ubo.waveParams       = Vec4(settings.waveAmplitude, settings.waveFrequency, settings.waveSpeed, settings.levelOffset);
     ubo.foamParams       = Vec4(settings.foamEdgeDepth, settings.contactFoamStrength,
                                 settings.enableFoam ? 1.0f : 0.0f, rainSplashIntensity);
     Vec3 skyTop = cycle.getSkyTopColor();

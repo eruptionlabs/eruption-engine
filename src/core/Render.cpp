@@ -964,13 +964,12 @@ void Engine::render() {
     // A agua nao entra no shadow map, entao cortar pelo frustum da CAMERA
     // aqui nao apaga sombra de nada - a regra de "sombra e' pelo frustum da
     // LUZ" segue intocada no ShadowRenderer.
-    const float waterYNow = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
     const bool waterInView = m_renderEffects[7]->isEnabled() && m_water.hasWater() &&
         !m_waterFullyBuried &&
         (!m_waterBoundsValid ||
          m_camera.frustum().intersectsAABB(
-             Vec3(m_waterAabbMin.x, waterYNow - 2.0f, m_waterAabbMin.z),
-             Vec3(m_waterAabbMax.x, waterYNow + 2.0f, m_waterAabbMax.z)));
+             Vec3(m_waterAabbMin.x, m_waterAabbMin.y + m_waterMenu.config.waterLevel - 2.0f, m_waterAabbMin.z),
+             Vec3(m_waterAabbMax.x, m_waterAabbMax.y + m_waterMenu.config.waterLevel + 2.0f, m_waterAabbMax.z)));
 
     // Prepare water refraction copies before entering the forward rendering pass,
     // because we cannot transition the active color attachment inside dynamic rendering.
@@ -1032,6 +1031,7 @@ void Engine::render() {
     if (m_renderEffects[7]->isEnabled()) {
         WaterRenderer::WaterSettings adjustedSettings = m_waterMenu.config;
         adjustedSettings.waterLevel = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
+        adjustedSettings.levelOffset = m_waterMenu.config.waterLevel;
         // O plano d'agua do mapa e' SEMPRE agua. Sem esta linha ele herdava
         // config.liquidKind, que WaterDebugMenu::applySelectedLiquid escreve
         // a partir do liquido SELECIONADO na lista - e a selecao comeca em 0,
@@ -1105,6 +1105,7 @@ void Engine::render() {
             WaterRenderer::WaterSettings lavaSettings = adjustedSettings;
             lavaSettings.liquidKind = 1;
             lavaSettings.waterLevel = m_lavaLiquid.level;
+            lavaSettings.levelOffset = 0.0f;
             lavaSettings.emissiveStrength = m_lavaLiquid.emissive;
             lavaSettings.flowSpeed = m_lavaLiquid.flowSpeed;
             lavaSettings.enableCaustics = false;

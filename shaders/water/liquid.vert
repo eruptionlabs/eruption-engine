@@ -8,13 +8,15 @@ layout(location = 1) out vec2 vTexCoord;
 layout(location = 2) out vec3 vNormal;
 layout(location = 3) out vec3 vTangent;
 layout(location = 4) out vec3 vBitangent;
+// Nivel desta agua (o aberto e cada mapa vizinho tem o seu), para a espessura.
+layout(location = 5) flat out float vLevel;
 
 layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 baseColorDeep;
     vec4 baseColorShallow;
     vec4 waterParams;         // x=transparency, y=refractionStrength, z=reflectivity, w=roughness
     vec4 normalParams;        // x=scale, y=speed, z=strength, w=unused
-    vec4 waveParams;          // x=amplitude, y=frequency, z=speed, w=unused
+    vec4 waveParams;          // x=amplitude, y=frequency, z=speed, w=ajuste do nivel (menu)
     vec4 foamParams;          // x=edgeDepth, y=contactStrength, z=enable, w=unused
     vec4 skyTop;
     vec4 skyHorizon;
@@ -75,8 +77,13 @@ void main() {
     float globalFreq   = ubo.waveParams.y;
     float globalSpeed  = ubo.waveParams.z;
 
+    // A malha ja' traz o nivel de cada mapa na altura do vertice; o uniforme
+    // so' soma o ajuste do menu. (Antes a altura era trocada pelo nivel do
+    // mapa aberto, e a agua de um vizinho com lago em outra altura subia ou
+    // descia para ele.)
     vec3 pos = aPos;
-    pos.y = waterLevel;
+    pos.y = aPos.y + ubo.waveParams.w;
+    vLevel = pos.y;
     vec2 baseXZ = aPos.xz;
 
     vec3 tangentX = vec3(1.0, 0.0, 0.0);

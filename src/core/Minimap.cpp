@@ -178,7 +178,11 @@ void Engine::cacheWaterBounds(const WaterMesh& mesh) {
                                     c.height[2], c.height[3]});
         }
         const float waterY = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
-        if (terrainMinY < FLT_MAX && waterY < terrainMinY - 0.5f) {
+        // Agua de mapa vizinho em cena tem nivel e chao proprios: a do aberto
+        // soterrada nao apaga a deles.
+        bool regionWater = false;
+        for (const auto& r : m_regions) regionWater |= r.state == WorldRegion::State::Shown && r.hasWater;
+        if (!regionWater && terrainMinY < FLT_MAX && waterY < terrainMinY - 0.5f) {
             m_waterFullyBuried = true;
             ERUPTION_LOG_WARN("Agua SOTERRADA (nivel %.1f abaixo do terreno mais baixo %.1f): "
                               "passe de agua, ceu-para-textura e refracao desligados neste mapa",
@@ -186,9 +190,9 @@ void Engine::cacheWaterBounds(const WaterMesh& mesh) {
         }
     }
 
-    // AABB horizontal da malha de agua, calculado UMA vez por (re)geracao.
-    // O Y e' ignorado aqui: a altura vem do waterLevel no momento do teste,
-    // porque o nivel e' ajustavel em runtime pelo menu.
+    // AABB da malha de agua, calculado UMA vez por (re)geracao. O Y e' o dos
+    // niveis dos mapas (aberto e vizinhos); o ajuste do menu e' somado no
+    // momento do teste, porque muda em runtime.
     m_waterBoundsValid = false;
     if (mesh.vertices.empty()) return;
     Vec3 mn(FLT_MAX), mx(-FLT_MAX);
