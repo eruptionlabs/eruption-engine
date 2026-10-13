@@ -30,6 +30,7 @@ int main(int argc, char** argv) {
     double dt = 1.0 / 60.0;
     uint64_t atual = 0;
     uint32_t atualCs = 0;
+    std::vector<uint32_t> cenaCs;
     int falhas = 0;
     auto opcao = [](const std::string& s) { return s.rfind("--", 0) == 0; };
 
@@ -80,6 +81,12 @@ int main(int argc, char** argv) {
             if (n == 0) ++falhas;
         } else if (op == "--unity-cs") {
             falhas += carregarPlugin("unity-cs:" + proximo()) ? 0 : 1;
+        } else if (op == "--unity-cs-cena") {
+            // Cena .unity: GameObjects, Transforms e MonoBehaviours do assembly carregado.
+            cenaCs = unity::cs::carregarCena(proximo());
+            if (cenaCs.empty()) ++falhas;
+        } else if (op == "--unity-cs-descrever-cena") {
+            for (uint32_t o : cenaCs) std::printf("gameobject: %s\n", unity::cs::descrever(o).c_str());
         } else if (op == "--unity-cs-objeto") {
             atualCs = unity::cs::criarObjeto(proximo());
             if (!atualCs) ++falhas;

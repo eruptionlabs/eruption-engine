@@ -86,6 +86,13 @@ if [ -f "$CS/Klak.dll" ]; then
     s=$(timeout 60 "$RUN" --unity-cs "$CS/Klak.dll" --unity-cs-objeto Errante \
         --unity-cs-componente BrownianMotion --quadros 30 --unity-cs-descrever 2>&1)
     confere "BrownianMotion Start/Update (ruido)" "$s" "gameobject: Errante pos="
+    CENA="$RAIZ/compat/testdata/unity/Klak/Assets/Samples/ConstantMotion.unity"
+    if [ -f "$CENA" ]; then
+        s=$(timeout 60 "$RUN" --unity-cs "$CS/Klak.dll" --unity-cs-cena "$CENA" --quadros 60 --unity-cs-descrever-cena 2>&1)
+        confere "cena .unity: 10 GameObjects" "$s" "cena ConstantMotion.unity: 10 GameObject(s)"
+        confere "cena .unity: filho no pai (camera no pivo)" "$s" "Main Camera pos=(0.00, 3.66, -7.99) rot=(20.00, 0.00, 0.00)"
+        confere "cena .unity: campos salvos do ConstantMotion" "$s" "Teapot 2 pos=(1.50, 0.00, 0.00) rot=(5.63, 29.52, 1.48)"
+    fi
 else
     echo "  (scripts C# nao compilados: compat/tests/unity/compilar_csharp.sh)"
 fi
