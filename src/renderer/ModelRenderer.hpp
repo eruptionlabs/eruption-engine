@@ -374,6 +374,8 @@ public:
     // ate 10 u no zoom 0 (6 px de sombra sumindo de repente em cidade-A).
     void setShadowMinPx(float px) { m_shadowMinPx = px; }
     uint32_t lastScreenCulled() const { return m_lastScreenCulled; }
+    // Casters da ultima cascata cuja sombra cai toda fora da camera.
+    uint32_t lastShadowReceiverCulled() const { return m_lastShadowReceiverCulled; }
 
     // TESSELACAO DE HARDWARE NA BANDA PERTO. `bandDistance` > 0 liga o
     // caminho: malhas de CHAO cujo pedaco visivel cai dentro da banda sao
@@ -413,7 +415,8 @@ public:
                       const Mat4& cascadeMatrix, const Frustum& shadowFrustum,
                       float minSizeThreshold, bool enableCulling,
                       bool instanced = false, const Vec4& windParams = Vec4(0.0f),
-                      VkPipeline opaquePipeline = VK_NULL_HANDLE);
+                      VkPipeline opaquePipeline = VK_NULL_HANDLE,
+                      const Frustum* receivers = nullptr, float receiverMargin = 0.0f);
 
     bool isInitialized() const { return m_initialized; }
     void setMipmapsEnabled(bool enabled) { m_mipmapsEnabled = enabled; }
@@ -959,6 +962,7 @@ private:
     float m_screenW = 0.0f, m_screenH = 0.0f; // tela em px; 0 = desconhecida
     Mat4 m_lastViewProj{1.0f};
     uint32_t m_lastScreenCulled = 0;
+    uint32_t m_lastShadowReceiverCulled = 0;
     std::vector<uint8_t> m_screenCulledPrev; // histerese do descarte por tela
     // Ordenacao frente-para-tras dos baldes (early-Z): um registro por balde
     // nao-vazio, reusado entre frames para nao alocar no caminho quente.
@@ -1023,6 +1027,8 @@ private:
     void appendAssetInstances(uint32_t assetIndex, const ModelInstanceDesc& ref, float centerX, float centerZ,
                               int onlyNode = -1);
     void cullInstances(const Frustum& frustum);
+    static bool shadowMissesReceivers(const Frustum& receivers, const Vec3& lightTravel, float margin,
+                                      const Vec3& mn, const Vec3& mx);
     void uploadMesh(const std::vector<struct TerrainVertex>& vertices,
                     const std::vector<uint32_t>& indices,
                     ModelMeshGPU& mesh);

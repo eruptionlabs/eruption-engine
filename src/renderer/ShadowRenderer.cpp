@@ -995,6 +995,31 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
     computeMatrices(currentLightDir, m_cascadeRenderMatrices, m_cascadeLookupMatrices);
     computeMatrices(nextLightDir, m_nextCascadeRenderMatrices, m_nextCascadeLookupMatrices);
     holdFarCascade(camera, currentLightDir);
+    {
+        // Receptores: a visao da camera sem jitter, 2% mais larga (o jitter
+        // e o filtro da sombra leem um pouco alem da borda). A cascata
+        // guardada vale por mais frames com a camera andando ate' 3% da meia
+        // largura dela e girando ate' ~1,8 graus: a folga cobre os dois.
+        Mat4 widen(1.0f);
+        widen[0][0] = widen[1][1] = 0.98f;
+        m_receivers.extractFromMatrix(widen * camera.viewProjNoJitter());
+        // Alcance do filtro (directional.frag), em mundo: a busca de
+        // bloqueador do PCSS anda tan(raio do sol) * 6 em UV do atlas (a
+        // cascata ocupa meia largura, entao 1 UV em x = 4 meias larguras) e o
+        // PCF depois anda kernel x 4 (teto da penumbra) texels. Um caster a
+        // essa distancia da visao ainda escurece pixel visivel.
+        const float size = static_cast<float>(std::max(m_currentAtlasSize, 1u));
+        const float searchUv = std::max(std::tan(m_sunAngularRadius) * 6.0f, 1.0f / size);
+        const float pcfTexels = static_cast<float>(m_settings.pcfKernelSize < 3 ? 7 : m_settings.pcfKernelSize) * 4.0f + 2.0f;
+        for (uint32_t c = 0; c < CASCADE_COUNT; ++c) {
+            const float half = 1.0f / std::max(std::abs(m_cascadeRenderMatrices[c][0][0]), 1e-6f);
+            m_receiverMargin[c] = half * (4.0f * searchUv + pcfTexels * 2.0f / size);
+        }
+        if (m_settings.csmFarInterval > 1) {
+            const float half = 1.0f / std::max(std::abs(m_cascadeRenderMatrices[1][0][0]), 1e-6f);
+            m_receiverMargin[1] += 0.12f * half;
+        }
+    }
 
     if (kShadowDebug) {
         static int frame = 0;
@@ -1027,8 +1052,13 @@ void ShadowRenderer::holdFarCascade(const Camera& camera, const Vec3& lightDir) 
     const Vec3 light = glm::normalize(lightDir);
     // Meia largura da cascata pela escala da projecao ortografica (2 / largura).
     const float half = 1.0f / std::max(std::abs(m_cascadeRenderMatrices[1][0][0]), 1e-6f);
+    // Giro da camera tambem redesenha: a sombra guardada so' traz os casters
+    // da visao daquele frame (receiverCull), e a ponta distante do quadro
+    // anda muito mais que a posicao num giro.
+    const Vec3 fwd = camera.forward();
     bool draw = !canHold || !m_farHeldValid || m_farHeldAtlas != m_currentAtlasSize ||
-                glm::distance(cam, m_farHeldCam) > 0.03f * half || glm::dot(light, m_farHeldLight) < 0.99996f;
+                glm::distance(cam, m_farHeldCam) > 0.03f * half || glm::dot(light, m_farHeldLight) < 0.99996f ||
+                glm::dot(fwd, m_farHeldFwd) < 0.9995f;
     if (!draw && ++m_farAge >= interval) draw = true;
     m_drawFar = draw;
     if (draw) {
@@ -1037,6 +1067,7 @@ void ShadowRenderer::holdFarCascade(const Camera& camera, const Vec3& lightDir) 
         m_farHeldAtlas = m_currentAtlasSize;
         m_farHeldCam = cam;
         m_farHeldLight = light;
+        m_farHeldFwd = fwd;
         m_farRenderHeld = m_cascadeRenderMatrices[1];
         m_farLookupHeld = m_cascadeLookupMatrices[1];
     } else {
@@ -1070,6 +1101,10 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
         // Cascata distante guardada (holdFarCascade): o atlas mantem a imagem
         // dela e so' a regiao da c0 e' limpa.
         const bool keepFar = renderMats == m_cascadeRenderMatrices && !m_drawFar;
+        // O atlas da mistura temporal pinta com a luz do proximo passo: fica
+        // sem o recorte por receptor.
+        const Frustum* receivers = (m_settings.receiverCull && renderMats == m_cascadeRenderMatrices)
+                                       ? &m_receivers : nullptr;
         if (keepFar) {
             m_ctx->cmdImageBarrier(cmd, atlasImage,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -1215,7 +1250,8 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
                                      renderMats[i], shadowFrustum, minSize, m_settings.enableShadowCulling,
                                      m_shadowInstPipeline != VK_NULL_HANDLE, frameUbo.windParams,
                                      kOpaqueShadowPipe && m_shadowInstPipeline != VK_NULL_HANDLE
-                                         ? m_shadowInstOpaquePipeline : VK_NULL_HANDLE);
+                                         ? m_shadowInstOpaquePipeline : VK_NULL_HANDLE,
+                                     receivers, m_receiverMargin[i]);
             }
 
             lap("models");
@@ -1286,6 +1322,8 @@ void ShadowSettings::loadFromJson(const json& j) {
     csmFarInterval = std::clamp(j.value("csm_far_interval", csmFarInterval), 1u, 8u);
     if (const char* e = std::getenv("ERUPTION_SHADOW_FAR_INTERVAL"))
         csmFarInterval = std::clamp(static_cast<uint32_t>(std::max(std::atoi(e), 1)), 1u, 8u);
+    receiverCull = j.value("receiver_cull", receiverCull);
+    if (const char* e = std::getenv("ERUPTION_SHADOW_RECEIVER_CULL")) receiverCull = std::atoi(e) != 0;
     {
         std::string mode = j.value("mode", std::string("csm"));
         if (const char* env = std::getenv("ERUPTION_SHADOW_MODE")) mode = env;

@@ -134,6 +134,9 @@ public:
     const LightingEnvironment& environment() const { return m_env; }
     void setGlobalIllumination(float intensity, float floor) { m_giIntensity = intensity; m_giAmbientFloor = floor; }
     void setSunAngularRadius(float radians) { m_sunAngularRadius = radians; }
+    // O raio em uso (com o override de teste): a busca de bloqueador do PCSS
+    // depende dele, e o recorte de casters da sombra precisa do mesmo alcance.
+    float sunAngularRadius() const;
     void setPointLights(const std::vector<PointLight>& lights);
     // Gate do passe inteiro. Antes NADA lia o RenderEffect "Point Lights" nem
     // a chave "point_lights" do preset (o `low` dizia false e as luzes

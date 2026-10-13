@@ -1342,7 +1342,10 @@ if (!m_ctx) return;
     push.invViewProj = invViewProj;
     push.prevViewProj = prevViewProj;
     // z carrega o modo de tone mapping (ver applyToneMapping no composite).
-    push.motionBlurParams = Vec4(settings.enableMotionBlur ? 1.0f : 0.0f, settings.motionBlurAmount,
+    // ERUPTION_TEST_NO_MOTION_BLUR=1 (debug): comparar quadros de camera em
+    // movimento sem o borrao, que esconde diferenca entre duas execucoes.
+    static const bool kNoMotionBlur = std::getenv("ERUPTION_TEST_NO_MOTION_BLUR") != nullptr;
+    push.motionBlurParams = Vec4(settings.enableMotionBlur && !kNoMotionBlur ? 1.0f : 0.0f, settings.motionBlurAmount,
                                  static_cast<float>(settings.toneMapMode), 0.0f);
     bool caEnabled = settings.enableChromaticAberration;
     if (std::getenv("ERUPTION_TEST_NO_CA") != nullptr) caEnabled = false;

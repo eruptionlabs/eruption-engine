@@ -64,6 +64,9 @@ struct ShadowSettings {
     // outros a iluminacao usa a matriz do frame em que ela foi desenhada.
     // Folhagem com recorte por alfa e' ~45% do passe nela. ERUPTION_SHADOW_FAR_INTERVAL.
     uint32_t csmFarInterval = 2;
+    // Caster cuja sombra (caixa arrastada na direcao da luz) cai toda fora da
+    // visao da camera nao entra no atlas. ERUPTION_SHADOW_RECEIVER_CULL=0 = A/B.
+    bool receiverCull = true;
     // Orcamento de texel do mapa unico (unidades de mundo por texel). Define o
     // alcance da sombra: qh_max = texel * atlas/2 (0.5 * 4096/2 = 1024u).
     // Perto = denso e estavel; alem do alcance = sem sombra (fade no shader).
@@ -223,8 +226,20 @@ private:
     bool m_farHeldValid = false;
     uint32_t m_farAge = 0, m_farHeldAtlas = 0;
     Mat4 m_farRenderHeld{1.0f}, m_farLookupHeld{1.0f};
-    Vec3 m_farHeldCam{0.0f}, m_farHeldLight{0.0f, -1.0f, 0.0f};
+    Vec3 m_farHeldCam{0.0f}, m_farHeldLight{0.0f, -1.0f, 0.0f}, m_farHeldFwd{0.0f};
+    // Visao da camera (um pouco alargada) contra a qual a sombra de cada
+    // caster e' testada; a cascata guardada usa a do frame em que foi
+    // desenhada, com folga para a camera andar ate' o proximo redesenho.
+    Frustum m_receivers;
+    float m_receiverMargin[CASCADE_COUNT] = {};
+    float m_sunAngularRadius = 0.0046f;
     void holdFarCascade(const Camera& camera, const Vec3& lightDir);
+public:
+    // Raio angular do sol usado pelo PCSS (DeferredLighting::sunAngularRadius):
+    // a busca de bloqueador le o atlas em volta do ponto, e o recorte de
+    // casters por receptor guarda esse alcance de folga.
+    void setSunAngularRadius(float radians) { m_sunAngularRadius = radians; }
+private:
     // ESTADO DO MODO CASCADE LEGADO (m_settings.singleMap == false) - o modo
     // default (single) nao usa nenhum destes: o ray-grid-fit por angulo que
     // exigia essa historia de congelamento foi removido do caminho single,
