@@ -2,6 +2,13 @@
 // e por model_novel.frag (ERUPTION_NO_VELOCITY: sem o alvo de velocidade).
 #include "common/noise.glsl"
 
+// Variante do G-buffer depois do pre-passe de profundidade (folhagem): o
+// teste de profundidade antes do shader, ja' que esta pipeline nao escreve
+// profundidade e o descarte daqui repete o do pre-passe.
+#ifdef ERUPTION_EARLY_Z
+layout(early_fragment_tests) in;
+#endif
+
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in vec3 inNormal;
