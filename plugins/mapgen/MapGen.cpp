@@ -512,6 +512,8 @@ const std::vector<StepInfo>& stepCatalog() {
           {"scale_min", 0.8, 0.05, 20, "Smallest size"},
           {"scale_max", 1.2, 0.05, 20, "Largest size"},
           {"natural", 1, 0, 1, "0 = man-made: a previous 'realistic' step does NOT touch it"},
+          {"sink", -1, -1, 4, "How deep it beds into the ground (model units); -1 = use the 'realistic' value"},
+          {"tilt", -1, -1, 60, "How far it may lean (degrees); -1 = use the 'realistic' value"},
           {"region_scale", 1e9, 50, 5000, "Biome: size of the regions (turn on to use)"},
           {"region_min", 0, 0, 1, "Biome: from this part of the region noise"},
           {"region_max", 1, 0, 1, "Biome: up to this part"},
@@ -1015,6 +1017,13 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             // seja construída (natural = 0): poste escorado por gente fica de
             // pé, alinhado e do tamanho que foi cortado.
             const bool natural = nat.ligado && s.get("natural", 1) > 0.5;
+            // SINK E TILT POR ETAPA. O `realistic` acerta a dose para a pedra
+            // solta do chao, mas a LASCA DE PAREDE e' uma placa fina e larga:
+            // com o mesmo enterro ela fica meio dentro meio fora da encosta e
+            // na tela vira estilhaco preto boiando no ar (fotografado duas
+            // vezes). Quem conhece a peca e' quem escreve a etapa.
+            const float sinkLocal = s.get("sink", -1) >= 0.0 ? float(s.get("sink", -1)) : nat.sink;
+            const float tiltLocal = s.get("tilt", -1) >= 0.0 ? float(s.get("tilt", -1)) : nat.tilt;
             const float ondaClump = 170.0f;
             const float expClump = natural ? 1.0f + 2.0f * nat.clump : 1.0f;
 
@@ -1087,9 +1096,9 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
                         const float dhx = (r.h(std::min(gx + 1, r.w - 1), gz) - r.h(std::max(gx - 1, 0), gz)) / (2.0f * r.cell);
                         const float dhz = (r.h(gx, std::min(gz + 1, r.d - 1)) - r.h(gx, std::max(gz - 1, 0))) / (2.0f * r.cell);
                         const float g180 = 180.0f / kPi;
-                        roll = std::atan(dhx) * g180 * 0.6f + (rng.next() * 2.0f - 1.0f) * nat.tilt;
-                        pitch = -std::atan(dhz) * g180 * 0.6f + (rng.next() * 2.0f - 1.0f) * nat.tilt;
-                        y -= nat.sink * sc;   // enterra: rocha solta no chão está meio coberta
+                        roll = std::atan(dhx) * g180 * 0.6f + (rng.next() * 2.0f - 1.0f) * tiltLocal;
+                        pitch = -std::atan(dhz) * g180 * 0.6f + (rng.next() * 2.0f - 1.0f) * tiltLocal;
+                        y -= sinkLocal * sc;   // enterra: rocha solta no chão está meio coberta
                     }
                     g.items.push_back({px, y, pz, rng.next() * 360.0f, sc, pitch, roll});
                 }
