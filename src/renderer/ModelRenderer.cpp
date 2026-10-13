@@ -3183,6 +3183,9 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     // Run de UMA instancia cortada pela borda da tela, desenhada por pedacos
     // (so' os que tocam a visao). Nivel de LOD com pedacos: runClusters.
     const std::vector<ModelMeshGPU::Cluster>* runClusters = nullptr;
+    // Matriz da primeira instancia do run (o SSBO mapeado e' so' de escrita
+    // para a CPU: ler de volta dele e' lento).
+    Mat4 runModel(1.0f);
     auto clustersFor = [&](const ModelMeshGPU& m, uint8_t level) -> const std::vector<ModelMeshGPU::Cluster>* {
         if (level >= 4 && uint32_t(level - 4) < m.midCount && !m.mid[level - 4].clusters.empty())
             return &m.mid[level - 4].clusters;
@@ -3233,7 +3236,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             // Caixa de cada pedaco no mundo, crescida do que o vertex shader
             // pode mover: o vento (altura da instancia x sway x escala x 0,65,
             // ver applyWindSway) e o relevo perto da camera (10 u).
-            const Mat4 model = dst[runFirst].model;
+            const Mat4 model = runModel;
             const Mat3 m3(model);
             const float height = (mesh.aabbMax.y - mesh.aabbMin.y) * glm::length(m3[1]);
             const float bend = height * mesh.swayAmount * std::max(m_windSwayScale, 0.0f) * 0.65f + 10.0f;
@@ -3283,7 +3286,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
                 segCount = 0;
                 segOpen = false;
             };
-            const Mat4 cellModel = dst[runFirst].model;
+            const Mat4 cellModel = runModel;
             for (const auto& c : mesh.groundCells) {
                 if (cullCells) {
                     Vec3 cmn, cmx;
@@ -3595,6 +3598,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             runAlpha = alpha;
             runNear = instNear;
             runClusters = clusters;
+            runModel = hot.transform;
         }
         ++runLen;
         ++slot;
@@ -4027,6 +4031,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
     VkBuffer boundIb = VK_NULL_HANDLE;
     VkBuffer runVb = VK_NULL_HANDLE, runIb = VK_NULL_HANDLE;
     uint32_t runCount = 0, runFirst = 0, runLen = 0, runMesh = 0;
+    Mat4 runModel(1.0f); // ver o run do G-buffer: nao le' de volta o SSBO mapeado
     // Pipeline corrente do passe. O run ja' e' por malha, entao a opacidade e'
     // constante dentro dele e a troca acontece no maximo uma vez por run.
     bool runOpaque = false;
@@ -4051,7 +4056,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
         // sombra pode cair na tela (o mesmo teste dos casters, ver acima).
         const ModelMeshGPU& rm = m_meshes[runMesh];
         if (rm.isGround && runIb == rm.indexBuffer && runLen == 1 && !rm.groundCells.empty()) {
-            const Mat4 model = dst[runFirst];
+            const Mat4 model = runModel;
             uint32_t segFirst = 0, segCount = 0;
             auto flushSeg = [&]() {
                 if (segCount == 0) return;
@@ -4148,6 +4153,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
             runCount = useCount;
             runFirst = slot;
             runMesh = hot.meshIndex;
+            runModel = hot.transform;
             runOpaque = mesh.shadowOpaque;
             // swayAmount e' POR MALHA (mesh.swayAmount), e um run instanciado
             // e' sempre da MESMA malha (agrupado por vertex/index buffer
