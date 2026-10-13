@@ -37,6 +37,10 @@ public:
 
         // Water level
         float waterLevel = 0.0f;
+        // Quanto somar a' altura de cada vertice da malha (que ja' traz o
+        // nivel do proprio mapa: o aberto e cada vizinho tem o seu). Agua:
+        // o ajuste do menu; lava: 0.
+        float levelOffset = 0.0f;
 
         // Colors (deep = profundo, shallow = raso) — sky-matched grey-blue
         Vec3 baseColorDeep    = Vec3(0.05f, 0.08f, 0.12f);

@@ -8,6 +8,7 @@ layout(location = 1) in vec2 vTexCoord;
 layout(location = 2) in vec3 vNormal;
 layout(location = 3) in vec3 vTangent;
 layout(location = 4) in vec3 vBitangent;
+layout(location = 5) flat in float vLevel;
 
 layout(location = 0) out vec4 fragColor;
 
@@ -238,7 +239,7 @@ void main() {
     float time          = ubo.waterLevelAndPlanes.w;
     float nearPlane     = ubo.waterLevelAndPlanes.y;
     float farPlane      = ubo.waterLevelAndPlanes.z;
-    float waterLevel    = ubo.waterLevelAndPlanes.x;
+    float waterLevel    = vLevel; // o desta agua (ubo.waterLevelAndPlanes.x e' o do mapa aberto)
     vec2  viewport      = ubo.screenSize.xy;
 
     vec3  baseDeep      = ubo.baseColorDeep.rgb;
