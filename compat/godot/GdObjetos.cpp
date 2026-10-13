@@ -417,6 +417,11 @@ constexpr int T_V3 = GDEXTENSION_VARIANT_TYPE_VECTOR3;
 constexpr int T_SN = GDEXTENSION_VARIANT_TYPE_STRING_NAME;
 constexpr int T_OBJ = GDEXTENSION_VARIANT_TYPE_OBJECT;
 constexpr int T_T3D = GDEXTENSION_VARIANT_TYPE_TRANSFORM3D;
+constexpr int T_RID = GDEXTENSION_VARIANT_TYPE_RID;
+constexpr int T_ARRAY = GDEXTENSION_VARIANT_TYPE_ARRAY;
+constexpr int T_DICT = GDEXTENSION_VARIANT_TYPE_DICTIONARY;
+constexpr int T_PF32 = GDEXTENSION_VARIANT_TYPE_PACKED_FLOAT32_ARRAY;
+constexpr int T_AABB = GDEXTENSION_VARIANT_TYPE_AABB;
 
 // Transform3D do motor: Basis em 3 linhas (Vector3 cada) e a origem.
 struct Transf3D {
@@ -467,6 +472,72 @@ Transf3D transfGlobal(const Objeto* o) {
     for (const Objeto* p = o->pai; p && node3d && p->classe && p->classe->herdaDe(node3d); p = p->pai)
         t = compor(transfLocal(p), t);
     return t;
+}
+
+// RENDERINGSERVER DE REGISTRO. A camada ainda nao desenha no motor: guarda o
+// que o plugin pede (malhas, multimeshes, instancias) para a cena poder ser
+// descrita e conferida, e devolve RIDs validos para o plugin seguir em frente.
+struct RsMalha {
+    size_t vertices = 0;
+    int superficies = 0;
+};
+struct RsMultimesh {
+    uint64_t malha = 0;
+    int64_t instancias = 0;
+    int64_t visiveis = -1;   // -1 = todas
+    int formato = 1;         // 0 = 2D (8 floats), 1 = 3D (12 floats)
+    bool cor = false, extra = false;
+    std::vector<float> buffer;
+};
+struct RsInstancia {
+    uint64_t base = 0, cenario = 0;
+    Transf3D xf{};
+    bool visivel = true;
+};
+struct RsEstado {
+    std::mutex mtx;
+    uint64_t proximo = 1;
+    std::unordered_map<uint64_t, RsMalha> malhas;
+    std::unordered_map<uint64_t, RsMultimesh> multimeshes;
+    std::unordered_map<uint64_t, RsInstancia> instancias;
+    uint64_t cenario = 0;
+};
+RsEstado& rs() {
+    static RsEstado e;
+    return e;
+}
+uint64_t argRid(const void* const* a, int i) {
+    return *static_cast<const uint64_t*>(a[i]);
+}
+void rRid(void* r, uint64_t v) {
+    if (r) *static_cast<uint64_t*>(r) = v;
+}
+uint64_t ridNovo() {
+    std::lock_guard<std::mutex> lk(rs().mtx);
+    return rs().proximo++;
+}
+// Vertices da superficie: o primeiro item do Array (ARRAY_VERTEX), um Packed*Array.
+size_t verticesDe(const void* arrays) {
+    const GArray* arr = static_cast<const GArray*>(arrays);
+    if (!arr->d || arr->d->itens.empty()) return 0;
+    const GVariant& v = arr->d->itens[0];
+    if (!ehPacked(static_cast<int>(v.tipo))) return 0;
+    const GPacked* p = static_cast<const GPacked*>(valorDe(&v));
+    return p->d ? p->d->tamanho() : 0;
+}
+// Mundo 3D unico (Node3D.get_world_3d): so' o cenario. E' RefCounted: a
+// camada fica com a referencia inicial, e cada entrega soma uma (como o
+// motor ao devolver Ref<T> por ptrcall), que o Ref do plugin desconta ao
+// soltar. Sem isso o mundo era apagado e a chamada seguinte devolvia um
+// ponteiro solto.
+Objeto* mundo3D() {
+    static Objeto* o = [] {
+        Classe* c = classePorNome("World3D");
+        Objeto* w = c ? criarObjetoNativo(c) : nullptr;
+        if (w) w->refInicial = false;
+        return w;
+    }();
+    return o;
 }
 
 // RandomNumberGenerator: estado PCG32 por objeto (o motor usa PCG32 tambem;
@@ -611,6 +682,50 @@ std::vector<MetodoMotor>& metodosMotor() {
         mm("Node3D", "get_transform", T_T3D, {}, L(const Transf3D t = transfLocal(self); std::memcpy(r, &t, sizeof(t)))),
         mm("Node3D", "get_global_transform", T_T3D, {}, L(const Transf3D t = transfGlobal(self); std::memcpy(r, &t, sizeof(t)))),
         mm("Node3D", "get_global_position", T_V3, {}, L(const Transf3D t = transfGlobal(self); std::memcpy(r, t.o, 12))),
+        // A camada nao tem visibilidade por no: tudo na arvore e' visivel.
+        mm("Node3D", "is_visible_in_tree", T_BOOL, {}, L(rB(r, self->naArvore))),
+        mm("Node3D", "get_world_3d", T_OBJ, {}, L(Objeto* w = mundo3D(); if (w) refIncrementar(w); rO(r, w))),
+        mm("World3D", "get_scenario", T_RID, {}, L(std::lock_guard<std::mutex> lk(rs().mtx);
+            if (!rs().cenario) rs().cenario = rs().proximo++;
+            rRid(r, rs().cenario))),
+        // RenderingServer (registro, ver RsEstado)
+        mm("RenderingServer", "mesh_create", T_RID, {}, L(const uint64_t id = ridNovo();
+            std::lock_guard<std::mutex> lk(rs().mtx); rs().malhas[id] = {}; rRid(r, id))),
+        mm("RenderingServer", "mesh_clear", T_NIL, {T_RID}, L(std::lock_guard<std::mutex> lk(rs().mtx);
+            auto it = rs().malhas.find(argRid(a, 0)); if (it != rs().malhas.end()) it->second = {})),
+        mm("RenderingServer", "mesh_add_surface_from_arrays", T_NIL, {T_RID, T_INT, T_ARRAY, T_ARRAY, T_DICT, T_INT},
+           L(const size_t n = verticesDe(a[2]); std::lock_guard<std::mutex> lk(rs().mtx);
+             RsMalha& m = rs().malhas[argRid(a, 0)]; m.vertices += n; ++m.superficies)),
+        mm("RenderingServer", "mesh_surface_set_material", T_NIL, {T_RID, T_INT, T_RID}, L((void)0)),
+        mm("RenderingServer", "multimesh_create", T_RID, {}, L(const uint64_t id = ridNovo();
+            std::lock_guard<std::mutex> lk(rs().mtx); rs().multimeshes[id] = {}; rRid(r, id))),
+        mm("RenderingServer", "multimesh_allocate_data", T_NIL, {T_RID, T_INT, T_INT, T_BOOL, T_BOOL, T_BOOL},
+           L(std::lock_guard<std::mutex> lk(rs().mtx); RsMultimesh& m = rs().multimeshes[argRid(a, 0)];
+             m.instancias = argI(a, 1); m.formato = static_cast<int>(argI(a, 2));
+             m.cor = argB(a, 3); m.extra = argB(a, 4); m.visiveis = -1; m.buffer.clear())),
+        mm("RenderingServer", "multimesh_set_mesh", T_NIL, {T_RID, T_RID}, L(std::lock_guard<std::mutex> lk(rs().mtx);
+            rs().multimeshes[argRid(a, 0)].malha = argRid(a, 1))),
+        mm("RenderingServer", "multimesh_set_buffer", T_NIL, {T_RID, T_PF32},
+           L(const GPacked* p = static_cast<const GPacked*>(a[1]); std::lock_guard<std::mutex> lk(rs().mtx);
+             RsMultimesh& m = rs().multimeshes[argRid(a, 0)];
+             if (p->d) m.buffer.assign(reinterpret_cast<const float*>(p->d->bytes.data()),
+                                       reinterpret_cast<const float*>(p->d->bytes.data()) + p->d->bytes.size() / sizeof(float));
+             else m.buffer.clear())),
+        mm("RenderingServer", "multimesh_set_visible_instances", T_NIL, {T_RID, T_INT}, L(std::lock_guard<std::mutex> lk(rs().mtx);
+            rs().multimeshes[argRid(a, 0)].visiveis = argI(a, 1))),
+        mm("RenderingServer", "multimesh_set_custom_aabb", T_NIL, {T_RID, T_AABB}, L((void)0)),
+        mm("RenderingServer", "instance_create2", T_RID, {T_RID, T_RID}, L(const uint64_t id = ridNovo();
+            std::lock_guard<std::mutex> lk(rs().mtx); RsInstancia& i = rs().instancias[id];
+            i.base = argRid(a, 0); i.cenario = argRid(a, 1); rRid(r, id))),
+        mm("RenderingServer", "instance_set_transform", T_NIL, {T_RID, T_T3D}, L(std::lock_guard<std::mutex> lk(rs().mtx);
+            std::memcpy(&rs().instancias[argRid(a, 0)].xf, a[1], sizeof(Transf3D)))),
+        mm("RenderingServer", "instance_set_visible", T_NIL, {T_RID, T_BOOL}, L(std::lock_guard<std::mutex> lk(rs().mtx);
+            rs().instancias[argRid(a, 0)].visivel = argB(a, 1))),
+        mm("RenderingServer", "instance_set_layer_mask", T_NIL, {T_RID, T_INT}, L((void)0)),
+        mm("RenderingServer", "instance_geometry_set_material_override", T_NIL, {T_RID, T_RID}, L((void)0)),
+        mm("RenderingServer", "instance_geometry_set_shader_parameter", T_NIL, {T_RID, T_SN, T_NIL}, L((void)0)),
+        mm("RenderingServer", "free_rid", T_NIL, {T_RID}, L(std::lock_guard<std::mutex> lk(rs().mtx); const uint64_t id = argRid(a, 0);
+            rs().malhas.erase(id); rs().multimeshes.erase(id); rs().instancias.erase(id))),
         // RandomNumberGenerator
         mm("RandomNumberGenerator", "randf", T_FLOAT, {}, L(rD(r, rngF(rngDe(self))))),
         mm("RandomNumberGenerator", "randf_range", T_FLOAT, {T_FLOAT, T_FLOAT}, L(const double lo = argD(a, 0), hi = argD(a, 1);
@@ -716,6 +831,34 @@ void chamarMotorVariant(MetodoMotor* m, Objeto* o, const GVariant* const* args, 
     }
     for (size_t i = 0; i < n; ++i) destruirValor(m->tiposArgs[i], buf[i].data());
     erro->error = GDEXTENSION_CALL_OK;
+}
+
+// Uma linha por multimesh com instancia visivel no cenario: o que o motor
+// desenharia (quantas copias, de qual malha, e onde fica a primeira).
+std::vector<std::string> descreverDesenho() {
+    std::vector<std::string> out;
+    std::lock_guard<std::mutex> lk(rs().mtx);
+    for (const auto& [id, inst] : rs().instancias) {
+        auto mm = rs().multimeshes.find(inst.base);
+        if (mm == rs().multimeshes.end() || !inst.visivel) continue;
+        const RsMultimesh& m = mm->second;
+        const size_t passo = (m.formato == 0 ? 8u : 12u) + (m.cor ? 4u : 0u) + (m.extra ? 4u : 0u);
+        const int64_t total = m.visiveis >= 0 ? std::min(m.visiveis, m.instancias) : m.instancias;
+        auto malha = rs().malhas.find(m.malha);
+        char linha[256];
+        if (total > 0 && m.buffer.size() >= passo) {
+            // Linha de Transform3D no buffer: [x.x x.y x.z o.x  y.x y.y y.z o.y  z.x z.y z.z o.z].
+            std::snprintf(linha, sizeof(linha), "multimesh %llu: %lld de %lld instancias, malha de %zu vertices, primeira em (%.3f, %.3f, %.3f)",
+                          static_cast<unsigned long long>(mm->first), static_cast<long long>(total), static_cast<long long>(m.instancias),
+                          malha != rs().malhas.end() ? malha->second.vertices : 0, m.buffer[3], m.buffer[7], m.buffer[11]);
+        } else {
+            std::snprintf(linha, sizeof(linha), "multimesh %llu: %lld de %lld instancias", static_cast<unsigned long long>(mm->first),
+                          static_cast<long long>(total), static_cast<long long>(m.instancias));
+        }
+        (void)id;
+        out.emplace_back(linha);
+    }
+    return out;
 }
 
 Objeto* singleton(const NomeInterno* nome) {

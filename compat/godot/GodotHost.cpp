@@ -283,6 +283,10 @@ std::vector<std::string> descreverCena() {
     return out;
 }
 
+std::vector<std::string> descreverDesenho() {
+    return gd::descreverDesenho();
+}
+
 void encerrar() {
     for (uint64_t id : std::vector<uint64_t>(segurados())) liberar(id);
     for (auto it = bibliotecas().rbegin(); it != bibliotecas().rend(); ++it) {
