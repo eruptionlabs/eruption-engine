@@ -1026,6 +1026,7 @@ private:
     // de profundidade, para a mesma folhagem no G-buffer logo depois.
     VkPipeline m_depthPipeline = VK_NULL_HANDLE;
     VkPipeline m_pipelineNoDepthWrite = VK_NULL_HANDLE;
+    VkPipeline m_pipelineGroundLast = VK_NULL_HANDLE; // m_pipeline com teste <, ver render()
     // Desenhos do passe principal, gravados para tocar duas vezes (pre-passe
     // e G-buffer). Push inteiro por desenho: a segunda passada do crossfade
     // herda campos do push anterior, e a copia preserva isso.
