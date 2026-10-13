@@ -2468,7 +2468,13 @@ void Engine::recreateViewportTarget() {
 }
 
 void Engine::shutdownImGui() {
-    ImGui_ImplVulkan_Shutdown(); ImGui_ImplGlfw_Shutdown(); ImGui::DestroyContext();
+    // Init que falhou antes (sem janela, sem GPU) nao criou o contexto ou os
+    // backends: desligar o que nao existe derrubava o processo na saida.
+    if (ImGui::GetCurrentContext()) {
+        if (ImGui::GetIO().BackendRendererUserData) ImGui_ImplVulkan_Shutdown();
+        if (ImGui::GetIO().BackendPlatformUserData) ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+    }
     if (m_imguiPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_vulkan.device(), m_imguiPool, nullptr);
 }
 
