@@ -35,10 +35,12 @@ namespace fs = std::filesystem;
 // Relógio da chamada em andamento, lido pelo interrupt do Luau.
 std::chrono::steady_clock::time_point g_callStart;
 bool g_inCall = false;
+// Tempo que o MOTOR gastou dentro da chamada (ver ScriptHost::NativeWork).
+std::chrono::steady_clock::duration g_nativeTime{};
 
 void interruptCallback(lua_State* L, int gc) {
     if (gc >= 0 || !g_inCall) return;
-    const auto elapsed = std::chrono::steady_clock::now() - g_callStart;
+    const auto elapsed = std::chrono::steady_clock::now() - g_callStart - g_nativeTime;
     if (elapsed > std::chrono::milliseconds(ScriptHost::kWatchdogMs)) {
         g_inCall = false;
         luaL_errorL(L, "script took more than %d ms in one call (infinite loop?)", ScriptHost::kWatchdogMs);
@@ -81,7 +83,13 @@ bool crossedHour(float from, float to, float target) {
 ScriptHost::ScriptHost() = default;
 ScriptHost::~ScriptHost() = default;
 
-void ScriptHost::resetWatchdog() { g_callStart = std::chrono::steady_clock::now(); }
+void ScriptHost::resetWatchdog() {
+    g_callStart = std::chrono::steady_clock::now();
+    g_nativeTime = {};
+}
+
+ScriptHost::NativeWork::NativeWork() : m_t0(std::chrono::steady_clock::now()) {}
+ScriptHost::NativeWork::~NativeWork() { g_nativeTime += std::chrono::steady_clock::now() - m_t0; }
 
 void ScriptHost::reloadForDebugging() {
     if (!L) return;
@@ -230,6 +238,7 @@ bool ScriptHost::load(Script& s, bool keepState) {
     lua_pushcfunction(T, errorHandler, "errorHandler");
     lua_insert(T, -2);
     g_callStart = std::chrono::steady_clock::now();
+    g_nativeTime = {};
     g_inCall = true;
     const int status = lua_pcall(T, 0, 1, -2);
     g_inCall = false;
@@ -333,6 +342,7 @@ bool ScriptHost::callRef(Script& s, int fnRef, int nargs) {
     lua_insert(L, -(nargs + 2));
     const int errIdx = lua_gettop(L) - nargs - 1;
     g_callStart = std::chrono::steady_clock::now();
+    g_nativeTime = {};
     g_inCall = true;
     const int status = lua_pcall(L, nargs, 0, errIdx);
     g_inCall = false;
