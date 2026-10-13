@@ -599,10 +599,14 @@ void main() {
         float wBaseSum = w.r + w.g + w.b + w.a;
         vec3 acc = vec3(0.0);
         float sum = 0.0;
-        if (s0 != 0u) { acc += amostraChao(nonuniformEXT(s0), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.r; sum += w.r; }
-        if (s1 != 0u) { acc += amostraChao(nonuniformEXT(s1), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.g; sum += w.g; }
-        if (s2 != 0u) { acc += amostraChao(nonuniformEXT(s2), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.b; sum += w.b; }
-        if (s3 != 0u) { acc += amostraChao(nonuniformEXT(s3), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.a; sum += w.a; }
+        // Camada com peso zero neste pixel nao soma nada (c * 0 = 0): pula as
+        // 4 buscas dela. So' no ladrilhamento estocastico, que amostra com
+        // gradiente explicito; o caminho simples usa texture() e nao pode
+        // ficar dentro de um if por pixel.
+        if (s0 != 0u && (!quebraLadrilho || w.r > 0.0)) { acc += amostraChao(nonuniformEXT(s0), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.r; sum += w.r; }
+        if (s1 != 0u && (!quebraLadrilho || w.g > 0.0)) { acc += amostraChao(nonuniformEXT(s1), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.g; sum += w.g; }
+        if (s2 != 0u && (!quebraLadrilho || w.b > 0.0)) { acc += amostraChao(nonuniformEXT(s2), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.b; sum += w.b; }
+        if (s3 != 0u && (!quebraLadrilho || w.a > 0.0)) { acc += amostraChao(nonuniformEXT(s3), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.a; sum += w.a; }
 
         // Segunda mascara (camadas 4..7 - dobra o splat pra 9 no total com a
         // base). Mesma UV da primeira, indice de material proprio. Inerte
@@ -615,10 +619,10 @@ void main() {
             uint s6 =  inSplatTex2.y        & 0xFFFFu;
             uint s7 = (inSplatTex2.y >> 16) & 0xFFFFu;
             wBaseSum += w2.r + w2.g + w2.b + w2.a;
-            if (s4 != 0u) { acc += amostraChao(nonuniformEXT(s4), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.r; sum += w2.r; }
-            if (s5 != 0u) { acc += amostraChao(nonuniformEXT(s5), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.g; sum += w2.g; }
-            if (s6 != 0u) { acc += amostraChao(nonuniformEXT(s6), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.b; sum += w2.b; }
-            if (s7 != 0u) { acc += amostraChao(nonuniformEXT(s7), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.a; sum += w2.a; }
+            if (s4 != 0u && (!quebraLadrilho || w2.r > 0.0)) { acc += amostraChao(nonuniformEXT(s4), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.r; sum += w2.r; }
+            if (s5 != 0u && (!quebraLadrilho || w2.g > 0.0)) { acc += amostraChao(nonuniformEXT(s5), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.g; sum += w2.g; }
+            if (s6 != 0u && (!quebraLadrilho || w2.b > 0.0)) { acc += amostraChao(nonuniformEXT(s6), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.b; sum += w2.b; }
+            if (s7 != 0u && (!quebraLadrilho || w2.a > 0.0)) { acc += amostraChao(nonuniformEXT(s7), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.a; sum += w2.a; }
         }
 
         float wBase = max(0.0, 1.0 - wBaseSum);
