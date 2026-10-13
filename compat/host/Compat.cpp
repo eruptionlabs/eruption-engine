@@ -7,6 +7,7 @@
 #include "unreal/UnrealHost.hpp"
 
 #include <cstdlib>
+#include <cstring>
 #include <dlfcn.h>
 #include <filesystem>
 
@@ -86,9 +87,18 @@ int carregarDaVariavel(const char* variavel) {
 
 int instanciarDaVariavel(const char* variavel) {
     int n = 0;
-    // Objetos C# (Unity): "Objeto:Componente:campo=valor:...;..."
+    auto termina = [](const std::string& s, const char* fim) {
+        const size_t n = std::strlen(fim);
+        return s.size() >= n && s.compare(s.size() - n, n, fim) == 0;
+    };
+    // Objetos C# (Unity): "Objeto:Componente:campo=valor:...;..." ou o caminho
+    // de uma cena .unity.
     if (const char* u = std::getenv("ERUPTION_COMPAT_UNITY_CENA"); u && *u && unity::cs::ativo()) {
         for (const std::string& item : dividir(u, ';')) {
+            if (termina(item, ".unity")) {
+                n += static_cast<int>(unity::cs::carregarCena(item).size());
+                continue;
+            }
             const std::vector<std::string> partes = dividir(item, ':');
             if (partes.size() < 2) continue;
             const uint32_t id = unity::cs::criarObjeto(partes[0]);
@@ -105,7 +115,15 @@ int instanciarDaVariavel(const char* variavel) {
     const char* v = std::getenv(variavel);
     if (!v || !*v || !g_godot) return n;
     for (const std::string& classe : dividir(v, ';')) {
-        const uint64_t id = godot::instanciar(classe);
+        // Caminho de uma cena .tscn, ou o nome de uma classe.
+        const uint64_t id = termina(classe, ".tscn") ? godot::carregarCena(classe) : godot::instanciar(classe);
+        if (termina(classe, ".tscn")) {
+            if (id) {
+                logf(Nivel::Info, "compat", "na cena: %s (de %s)", godot::descrever(id).c_str(), classe.c_str());
+                ++n;
+            }
+            continue;
+        }
         if (id && godot::adicionarNaCena(id)) {
             logf(Nivel::Info, "compat", "na cena: %s", godot::descrever(id).c_str());
             ++n;
