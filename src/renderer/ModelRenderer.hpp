@@ -9,6 +9,7 @@
 #include "utils/PbrMaterialProfile.hpp"
 #include "math/Frustum.hpp"
 #include "math/CullingSIMD.hpp"
+#include "utils/MeshClusters.hpp"
 #include "utils/AlignedAllocator.hpp"
 
 #include <algorithm>
@@ -110,7 +111,7 @@ struct ModelMeshGPU {
     // PEDACOS de um nivel pesado: os indices vao em ordem de grade 3D local
     // (Morton) e cada pedaco guarda a caixa dos proprios triangulos. Instancia
     // cortada pela borda da tela desenha so' os pedacos que tocam a visao.
-    struct Cluster { Vec3 mn, mx; uint32_t first, count; };
+    using Cluster = MeshCluster;
     struct MidLod {
         VkBuffer vertexBuffer = VK_NULL_HANDLE; // cartoes podados; NULL = o da malha
         VmaAllocation vertexAlloc = VK_NULL_HANDLE;
