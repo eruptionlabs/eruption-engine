@@ -53,6 +53,13 @@ public:
     // Test sphere intersection
     bool intersectsSphere(const Vec3& center, float radius) const;
 
+    // A caixa [mn, mx] arrastada na direcao `dir` ate' o infinito fica toda
+    // do lado de fora de algum plano (afastado `margin` para fora)? Plano que
+    // o arrasto atravessa de fora para dentro nunca separa. Conservador: so'
+    // responde sim quando nenhum ponto do volume pode estar dentro (e' o
+    // teste da sombra de um caster contra a visao da camera).
+    bool sweptBoxOutside(const Vec3& mn, const Vec3& mx, const Vec3& dir, float margin) const;
+
     const Plane& getPlane(PlaneIndex index) const { return m_planes[index]; }
 
     // Ray-AABB intersection (slab method). Returns tMin (>0) if hit, else -1.0f.

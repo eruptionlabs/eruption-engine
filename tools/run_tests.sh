@@ -24,9 +24,21 @@ run() {
     "$TMP/$name" || FAIL=1
 }
 
+# Teste so' de geometria: compila o fonte junto (sem os objetos da engine).
+run_src() {
+    local name="$1"; shift
+    printf '\n=== %s ===\n' "$name"
+    if ! g++ -std=c++17 -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DGLM_FORCE_LEFT_HANDED -I src -I build/_deps/glm-src \
+        "tests/$name.cpp" "$@" -o "$TMP/$name" 2>&1 | head -20; then
+        echo "  ERRO DE COMPILACAO"; FAIL=1; return
+    fi
+    "$TMP/$name" || FAIL=1
+}
+
 run test_surface_wetness
 run test_climate_fuzzy
 run test_weather_overrides
+run_src test_shadow_receivers src/math/Frustum.cpp
 
 printf '\n========================================\n'
 [ $FAIL -eq 0 ] && echo "TODOS OS TESTES PASSARAM" || echo "HOUVE FALHA"
