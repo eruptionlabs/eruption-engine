@@ -3438,10 +3438,29 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     }
 }
 
+// A sombra de um caster mora no volume da caixa dele arrastada na direcao da
+// luz. Se esse volume inteiro fica do lado de fora de UM plano da visao da
+// camera, nenhum pixel visivel (nem raio de neblina) pode cair nessa sombra:
+// o caster nao entra no atlas. Arrastar ate' o infinito e' conservador (a
+// sombra real acaba no chao). Plano que a luz atravessa de fora para dentro
+// (n.d > 0) nunca separa: o arrasto acaba entrando nele.
+bool ModelRenderer::shadowMissesReceivers(const Frustum& receivers, const Vec3& lightTravel, float margin,
+                                          const Vec3& mn, const Vec3& mx) {
+    for (int p = 0; p < 6; ++p) {
+        const Plane& pl = receivers.getPlane(static_cast<Frustum::PlaneIndex>(p));
+        if (glm::dot(pl.normal, lightTravel) > 0.0f) continue;
+        const Vec3 v(pl.normal.x > 0.0f ? mx.x : mn.x, pl.normal.y > 0.0f ? mx.y : mn.y,
+                     pl.normal.z > 0.0f ? mx.z : mn.z);
+        if (glm::dot(pl.normal, v) + pl.distance + margin < 0.0f) return true;
+    }
+    return false;
+}
+
 void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline, VkPipelineLayout shadowLayout,
                                  const Mat4& cascadeMatrix, const Frustum& shadowFrustum,
                                  float minSizeThreshold, bool enableCulling, bool instanced,
-                                 const Vec4& windParams, VkPipeline opaquePipeline) {
+                                 const Vec4& windParams, VkPipeline opaquePipeline,
+                                 const Frustum* receivers, float receiverMargin) {
     if (!m_initialized || m_instances.empty()) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
@@ -3480,6 +3499,12 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
         frustumMask = m_shadowMaskScratch.data();
     }
 
+    // Direcao em que a luz viaja: a profundidade do mapa de sombra cresce
+    // para longe do sol, ao longo da linha z da matriz da cascata. (O plano
+    // NEAR do Frustum nao serve: com a faixa de profundidade longa da
+    // ortografica ele fica curto demais para o normalize() e vem quase zero.)
+    const Vec3 lightTravel = glm::normalize(Vec3(cascadeMatrix[0][2], cascadeMatrix[1][2], cascadeMatrix[2][2]));
+    m_lastShadowReceiverCulled = 0;
     for (uint32_t i = 0; i < instCount; ++i) {
         if (frustumMask && !((frustumMask[i / 8] & (1u << (i & 7))) != 0)) continue;
         const ModelInstanceHot& hot = m_instanceHot[i];
@@ -3514,13 +3539,29 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
             m_shadowCulledPrev[i] = cortar ? 1 : 0;
             if (cortar) continue;
         }
+        // Depois da histerese acima: o estado dela evolui igual com ou sem
+        // este recorte (senao a historia de cada caster mudava a imagem).
+        if (receivers && hot.meshIndex < m_meshes.size()) {
+            // O vento entorta a folhagem para fora da caixa (applyWindSway no
+            // shadow_inst.vert): o maior desvio horizontal e' altura x sway x
+            // escala x 0,65. A caixa testada cresce isso nos lados.
+            const Vec3 ext = hot.worldAabbMax - hot.worldAabbMin;
+            const float bend = ext.y * m_meshes[hot.meshIndex].swayAmount * std::max(windParams.y, 0.0f) * 0.65f;
+            const Vec3 pad(bend, 0.0f, bend);
+            if (shadowMissesReceivers(*receivers, lightTravel, receiverMargin,
+                                      hot.worldAabbMin - pad, hot.worldAabbMax + pad)) {
+                ++m_lastShadowReceiverCulled;
+                continue;
+            }
+        }
         m_shadowVisibleScratch.push_back(i);
     }
     // ERUPTION_DEBUG_SHADOWCASTERS=1: casters por chamada (uma por cascata) -
     // um salto no numero entre frames vizinhos e' o "pop" de culling.
     static const bool kCastersDbg = std::getenv("ERUPTION_DEBUG_SHADOWCASTERS") != nullptr;
-    if (kCastersDbg) ERUPTION_LOG_WARN("[CASTERS] %zu de %u (minSize %.2f, minPx %.2f)",
-                                       m_shadowVisibleScratch.size(), instCount, minSizeThreshold, m_shadowMinPx);
+    if (kCastersDbg) ERUPTION_LOG_WARN("[CASTERS] %zu de %u (minSize %.2f, minPx %.2f, sombra fora da camera %u)",
+                                       m_shadowVisibleScratch.size(), instCount, minSizeThreshold, m_shadowMinPx,
+                                       m_lastShadowReceiverCulled);
     auto t1 = std::chrono::steady_clock::now();
     // Agrupado por malha os draws instanciados saem longos; a sombra paga por
     // cascata, entao o ganho e' multiplicado.

@@ -717,6 +717,7 @@ void Engine::render() {
     frameUbo.giAmbientFloor = 0.0f;
 
     if (m_shadowRenderer.settings().enabled) {
+        m_shadowRenderer.setSunAngularRadius(m_deferredLighting.sunAngularRadius());
         m_shadowRenderer.updateCascades(env.sun, m_camera, zoomPercent, m_dayNightCycle.timeOfDay());
         m_vulkan.writeTimestamp(cmd, 0, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         m_shadowRenderer.renderCascades(cmd, &m_terrainRenderer, &m_modelRenderer, &m_spriteRenderer, frameUbo, m_spriteSystem.instanceBuffer(), m_spriteSystem.visibleCount());
@@ -2071,6 +2072,8 @@ void Engine::render() {
             const auto& pose = pl.poses[pl.idx];
             if (pl.applied != pl.idx) {
                 pl.applied = pl.idx;
+                // Quadro em que a pose entra: separa a telemetria por pose.
+                ERUPTION_LOG_WARN("[POSES] pose %zu no quadro %d", pl.idx, m_framesCount);
                 if (pose.hora >= 0.0f) {
                     m_dayNightCycle.setTimeOfDay(pose.hora);
                     m_dayNightCycle.setTimeScale(0.0f);
@@ -2079,7 +2082,11 @@ void Engine::render() {
             }
             const auto& v = pose.cam;
             const Vec3 sp = m_playerController->pos();
-            m_camera.setOrbitTarget(Vec3(sp.x + v[0], sp.y, sp.z + v[1]));
+            // ERUPTION_TEST_POSE_GROUND=1: alvo no chao do ponto, nao na altura
+            // do spawn (longe dele o relevo muda e a camera entrava no morro).
+            static const bool kOnGround = std::getenv("ERUPTION_TEST_POSE_GROUND") != nullptr;
+            const float tx = sp.x + v[0], tz = sp.z + v[1];
+            m_camera.setOrbitTarget(Vec3(tx, kOnGround ? sampleTerrainHeight(tx, tz) : sp.y, tz));
             m_camera.setOrbit(glm::radians(v[2]), glm::radians(v[3]), v[4]);
         }
     }

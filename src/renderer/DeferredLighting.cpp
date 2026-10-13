@@ -882,6 +882,16 @@ void DeferredLighting::setIrradianceProbes(VkImageView view, VkSampler sampler,
     m_probesEnabled = enabled;
 }
 
+// ERUPTION_TEST_SUN_ANGULAR=<graus> (debug): varre o tamanho da fonte sem
+// recompilar. 0.53 = disco solar; 37 = softbox de 60cm a 40cm da maquete.
+float DeferredLighting::sunAngularRadius() const {
+    static const float kSunAngEnv = [] {
+        const char* e = std::getenv("ERUPTION_TEST_SUN_ANGULAR");
+        return (e && *e) ? glm::radians(std::stof(e)) : -1.0f;
+    }();
+    return kSunAngEnv > 0.0f ? kSunAngEnv : m_sunAngularRadius;
+}
+
 void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const ShadowRenderer* shadows,
                               VkImageView cloudShadowView, VkSampler cloudShadowSampler,
                               const Vec3& cloudWorldMin, const Vec3& cloudWorldMax,
@@ -907,13 +917,7 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     // Valores maiores fingem uma fonte grande e proxima (softbox de estudio
     // sobre uma maquete), que e' o que endurece a sombra no contato e a
     // alarga longe do contato.
-    // ERUPTION_TEST_SUN_ANGULAR=<graus> (debug): varre o tamanho da fonte sem
-    // recompilar. 0.53 = disco solar; 37 = softbox de 60cm a 40cm da maquete.
-    static const float kSunAngEnv = [] {
-        const char* e = std::getenv("ERUPTION_TEST_SUN_ANGULAR");
-        return (e && *e) ? glm::radians(std::stof(e)) : -1.0f;
-    }();
-    ubo.sunAngularRadius = kSunAngEnv > 0.0f ? kSunAngEnv : m_sunAngularRadius;
+    ubo.sunAngularRadius = sunAngularRadius();
     ubo.pad1 = 0;
     ubo.dirLightDir = Vec4(m_env.sun.direction, m_env.sun.intensity);
     ubo.dirLightColor = Vec4(m_env.sun.color, m_env.ambientIntensity);
