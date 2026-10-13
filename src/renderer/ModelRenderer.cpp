@@ -574,7 +574,7 @@ void ModelRenderer::shutdown() {
         vkDestroyPipeline(m_ctx->device(), m_tessPipeline, nullptr);
         m_tessPipeline = VK_NULL_HANDLE;
     }
-    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineGroundLast}) {
+    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineGroundLast, &m_tessPipelineGroundLast}) {
         if (*p != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -921,6 +921,23 @@ void ModelRenderer::createPipeline() {
                     .setPolygonMode(wireframeMode() ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL)
                     .setCullMode(gbufferCullMode(), VK_FRONT_FACE_COUNTER_CLOCKWISE)
                     .setDepthState(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+                    .setBlendState(blends)
+                    .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
+                    .setLayout(m_pipelineLayout)
+                    .setColorAttachmentFormats(GBuffer::colorAttachmentFormats())
+                    .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
+                    .build(m_ctx->device());
+                // O chao da banda tambem vai por ultimo (ver m_pipelineGroundLast).
+                m_tessPipelineGroundLast = PipelineBuilder()
+                    .setShaderStages(tessStages)
+                    .setVertexInput(vertexInput)
+                    .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_PATCH_LIST)
+                    .setPatchControlPoints(3)
+                    .setViewport(0, 0, 1280, 720)
+                    .setScissor(0, 0, 1280, 720)
+                    .setPolygonMode(wireframeMode() ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL)
+                    .setCullMode(gbufferCullMode(), VK_FRONT_FACE_COUNTER_CLOCKWISE)
+                    .setDepthState(true, true, VK_COMPARE_OP_LESS)
                     .setBlendState(blends)
                     .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
                     .setLayout(m_pipelineLayout)
@@ -2791,7 +2808,7 @@ void ModelRenderer::recreatePipeline() {
         vkDestroyPipeline(m_ctx->device(), m_tessPipeline, nullptr);
         m_tessPipeline = VK_NULL_HANDLE;
     }
-    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineGroundLast}) {
+    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineGroundLast, &m_tessPipelineGroundLast}) {
         if (*p != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -3702,11 +3719,14 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     // (m_pipelineGroundLast) para perder os empates como perdia antes, quando
     // vinha primeiro e o resto passava com <=. Medido no parana_field (10
     // poses): G-buffer -9%; imagem igual salvo pixels soltos onde o chao
-    // cruza pedra quase na mesma profundidade. A faixa de tesselacao fica na
-    // ordem de sempre. ERUPTION_TEST_GROUND_FIRST=1 volta ao antigo (A/B).
+    // cruza pedra quase na mesma profundidade. A faixa de tesselacao vai junto
+    // (pipeline de patch com o mesmo teste <). ERUPTION_TEST_GROUND_FIRST=1
+    // volta ao antigo (A/B).
     static const bool kGroundFirst = std::getenv("ERUPTION_TEST_GROUND_FIRST") != nullptr;
     const bool groundLast = !kGroundFirst && m_pipelineGroundLast != VK_NULL_HANDLE && !wireframeMode();
-    auto last = [&](const DrawRec& r) { return groundLast && !r.tess && m_meshes[r.mesh].isGround; };
+    auto last = [&](const DrawRec& r) {
+        return groundLast && m_meshes[r.mesh].isGround && (!r.tess || m_tessPipelineGroundLast != VK_NULL_HANDLE);
+    };
     for (const DrawRec& r : m_drawRecs) {
         if (last(r)) continue;
         VkPipeline pipe = r.tess ? m_tessPipeline : m_pipeline;
@@ -3714,7 +3734,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         play(r, pipe);
     }
     for (const DrawRec& r : m_drawRecs)
-        if (last(r)) play(r, m_pipelineGroundLast);
+        if (last(r)) play(r, r.tess ? m_tessPipelineGroundLast : m_pipelineGroundLast);
     // ERUPTION_DEBUG_LODFADE=1: um log por frame com jobs>0 - diagnostico
     // pontual pra confirmar que a banda de transicao esta' sendo cruzada
     // (o log periodico do ERUPTION_DEBUG_DRAWSTATS so' imprime a cada 120
