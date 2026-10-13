@@ -4,6 +4,7 @@
 
 #include "core/Engine.hpp"
 #include "renderer/vfx/VfxSystem.hpp"
+#include "script/ScriptHost.hpp"
 
 #include <lua.h>
 #include <lualib.h>
@@ -33,6 +34,7 @@ Mat4 placement(const Vec3& pos, float scale, float yawDeg) {
 }
 
 int vfx_play(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
     const char* name = luaL_checkstring(L, 1);
     const Vec3 pos = vec3Arg(L, 2);
     const float scale = static_cast<float>(luaL_optnumber(L, 3, 1.0));

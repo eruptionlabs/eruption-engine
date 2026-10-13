@@ -376,6 +376,7 @@ int characters_hide(lua_State* L) {
     return 0;
 }
 int characters_set_sprite(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
     checkCharacter(L, 1);
     const char* png = luaL_checkstring(L, 2);
     if (!eng().setCharacterSprite(eng().findCharacter(lua_tostring(L, 1)), png))
@@ -399,6 +400,16 @@ int camera_orbit(lua_State* L) {
     lua_pushnumber(L, glm::degrees(c.orbitPitch()));
     lua_pushnumber(L, c.orbitDistance());
     return 3;
+}
+// Abertura vertical em graus e proporcao da tela: quem precisa ENQUADRAR um
+// grupo (as duas fileiras de um combate, um diorama) resolve a distancia por
+// conta propria, em vez de deixar um numero fixo escrito no script que quebra
+// quando a janela muda de proporcao ou o projeto muda a abertura.
+int camera_view(lua_State* L) {
+    const Camera& c = eng().camera();
+    lua_pushnumber(L, c.fov());
+    lua_pushnumber(L, c.aspect());
+    return 2;
 }
 int camera_set_orbit(lua_State* L) {
     eng().camera().setOrbit(glm::radians(static_cast<float>(luaL_checknumber(L, 1))),
@@ -740,6 +751,7 @@ int fx_fading(lua_State* L) {
 // ui: documento de interface em CSS. O script so' preenche valor; o layout
 // e' do arquivo (e do Caldera). Ver renderer/UiDocument.hpp.
 int ui_load(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
     const std::string rel = luaL_checkstring(L, 1);
     std::string err;
     std::filesystem::path p = project::gameRef(rel);
@@ -859,6 +871,9 @@ int player_frozen(lua_State* L) {
 int characters_add(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     if (eng().findCharacter(name) >= 0) luaL_error(L, "there is already a character named '%s'", name);
+    // Carregar o sprite (e, no primeiro do mapa, a rede de PBR junto) e'
+    // trabalho do motor: nao conta no cao de guarda do script.
+    ScriptHost::NativeWork trabalho;
     const int idx = eng().addCharacter(name, luaL_checkstring(L, 2), checkVec3(L, 3),
                                        static_cast<float>(luaL_optnumber(L, 4, 0.0)));
     lua_pushboolean(L, idx >= 0);
@@ -944,6 +959,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg camera[] = {
         {"target", camera_target}, {"set_target", camera_set_target},
         {"orbit", camera_orbit}, {"set_orbit", camera_set_orbit}, {"basis", camera_basis},
+        {"view", camera_view},
         {"free", camera_free}, {nullptr, nullptr}};
     static const luaL_Reg fx[] = {
         {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash},

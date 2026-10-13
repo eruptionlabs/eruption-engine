@@ -105,6 +105,23 @@ public:
     ScriptDebugger* debugger() { return m_debugger.get(); }
     // Ao voltar de uma pausa do depurador: o vigia de laço infinito recomeça.
     static void resetWatchdog();
+
+    // TRABALHO DO MOTOR DENTRO DE UMA CHAMADA DE SCRIPT nao conta no relogio
+    // do cao de guarda. Ele existe para pegar laco infinito no script, e nao
+    // para medir I/O: `characters.add` do primeiro sprite do mapa carrega a
+    // rede de PBR e assa as texturas dele, passa de 250 ms sozinho, e o
+    // script inteiro era derrubado com "infinite loop?" — o jogo ficava sem
+    // combate e sem interface por causa de UMA carga de asset. Objeto de
+    // escopo: o tempo entre construir e destruir e' creditado de volta.
+    struct NativeWork {
+        NativeWork();
+        ~NativeWork();
+        NativeWork(const NativeWork&) = delete;
+        NativeWork& operator=(const NativeWork&) = delete;
+
+    private:
+        std::chrono::steady_clock::time_point m_t0;
+    };
     // Recompila tudo sem otimizar e sem código nativo (pontos de parada, locais).
     void reloadForDebugging();
 
