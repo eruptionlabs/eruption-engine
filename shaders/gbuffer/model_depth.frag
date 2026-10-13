@@ -8,12 +8,29 @@
 // inteiro uma vez so', em vez de uma vez por folha empilhada.
 // Malha com splat (chao) nao passa por aqui: a CPU a deixa de fora.
 
+// A interface inteira do model.vert, mesmo o que nao e' lido aqui: com ela
+// igual a do G-buffer o driver monta o vertex shader das duas pipelines do
+// mesmo jeito (e a validacao nao reclama de saida sem consumidor).
+layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec2 inTexCoord;
+layout(location = 2) in vec3 inNormal;
 layout(location = 3) in flat uint inTexIndex;
+layout(location = 4) in flat uint inMatId;
+layout(location = 5) in vec4 inColor;
+layout(location = 6) in flat uint inPbrIndex;
+layout(location = 7) in flat uint inNormalIndex;
 layout(location = 8) in flat uint inBlendTexIndex;
+layout(location = 9) in flat uint inBlendPbrIndex;
+layout(location = 10) in flat uint inBlendNormalIndex;
 layout(location = 11) in float inBlendWeight;
 layout(location = 12) in flat uint inBlendMaskIndex;
 layout(location = 13) in vec2 inBlendMaskUV;
+layout(location = 14) in float inEmissiveStrength;
+layout(location = 15) in flat uvec2 inSplatTex;
+layout(location = 16) in flat uvec2 inSplatTex2;
+layout(location = 17) in flat uint inBlendMaskIndex2;
+layout(location = 18) in flat float inSway;
+layout(location = 19) in vec4 inDispInfo;
 
 layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
