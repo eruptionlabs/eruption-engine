@@ -1,0 +1,11 @@
+[gd_scene format=3]
+
+[node name="Raiz" type="Node3D"]
+
+[node name="Filho" type="Node3D" parent="."]
+transform = Transform3D(0, 0, -2, 0, 2, 0, 2, 0, 0, 1, 2, 3)
+
+[node name="Neto" type="Node3D" parent="Filho"]
+position = Vector3(0, 0, 5)
+
+[node name="Instanciado" parent="." instance=ExtResource("1_abc")]

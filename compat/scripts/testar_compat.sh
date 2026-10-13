@@ -42,6 +42,13 @@ if [ -f "$GD/libgd_summator.so" ]; then
         --quadros 30 2>&1)
     confere "YParticles3D carrega e roda" "$s" "falhas: 0"
     confere "YParticles3D emite (MultiMesh no RenderingServer)" "$s" "de 400 instancias, malha de 4 vertices"
+    s=$(timeout 60 "$RUN" --godot "$GD/libgd_yparticles3d.so:yparticles3d_init" \
+        --tscn "$RAIZ/compat/testdata/godot/YParticles3D/test_project/main.tscn" --quadros 60 2>&1)
+    confere "cena .tscn do YParticles3D" "$s" "de 400 instancias"
+    s=$(timeout 60 "$RUN" --godot "$GD/libgd_summator.so:summator_library_init" \
+        --tscn "$RAIZ/compat/tests/godot/cenas/hierarquia.tscn" --quadros 2 2>&1)
+    confere "cena .tscn: Transform3D" "$s" "'Filho' pos=(1, 2, 3) rot=(0, 90, 0) escala=(2, 2, 2)"
+    confere "cena .tscn: pai por caminho" "$s" "    Node3D#3 'Neto' pos=(0, 0, 5)"
 else
     echo "  (extensoes Godot nao compiladas)"
 fi

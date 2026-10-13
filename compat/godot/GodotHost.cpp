@@ -7,7 +7,10 @@
 #include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
+#include <cmath>
+#include <map>
 #include <memory>
+#include <regex>
 #include <sstream>
 
 namespace eruption::compat::godot {
@@ -201,6 +204,154 @@ bool adicionarNaCena(uint64_t id, uint64_t paiId) {
     return true;
 }
 
+namespace {
+
+// Numeros de um construtor do .tscn: "Vector3(1, 2, 3)" -> {1, 2, 3}.
+std::vector<double> numerosDe(const std::string& v) {
+    std::vector<double> out;
+    const size_t a = v.find('('), b = v.rfind(')');
+    if (a == std::string::npos || b == std::string::npos || b <= a) return out;
+    std::stringstream ss(v.substr(a + 1, b - a - 1));
+    std::string item;
+    while (std::getline(ss, item, ',')) out.push_back(std::atof(item.c_str()));
+    return out;
+}
+
+// Transform3D(x.x, x.y, x.z, y.x, ..., origem) do .tscn: os nove primeiros
+// numeros sao as COLUNAS da base. Vira posicao, escala (comprimento das
+// colunas) e Euler YXZ (a mesma conta de Basis::get_euler do motor).
+void aplicarTransform(Objeto* o, const std::vector<double>& n) {
+    if (n.size() < 12) return;
+    double c[3][3];   // c[coluna][linha]
+    for (int col = 0; col < 3; ++col)
+        for (int lin = 0; lin < 3; ++lin) c[col][lin] = n[size_t(col * 3 + lin)];
+    for (int col = 0; col < 3; ++col) {
+        const double len = std::sqrt(c[col][0] * c[col][0] + c[col][1] * c[col][1] + c[col][2] * c[col][2]);
+        o->escala[col] = static_cast<float>(len);
+        if (len > 1e-12)
+            for (int lin = 0; lin < 3; ++lin) c[col][lin] /= len;
+    }
+    auto m = [&](int lin, int col) { return c[col][lin]; };
+    const double m12 = m(1, 2);
+    if (m12 < 1.0 - 1e-6 && m12 > -(1.0 - 1e-6)) {
+        o->rot[0] = static_cast<float>(std::asin(-m12));
+        o->rot[1] = static_cast<float>(std::atan2(m(0, 2), m(2, 2)));
+        o->rot[2] = static_cast<float>(std::atan2(m(1, 0), m(1, 1)));
+    } else {
+        o->rot[0] = static_cast<float>(m12 < 0.0 ? M_PI * 0.5 : -M_PI * 0.5);
+        o->rot[1] = static_cast<float>(m12 < 0.0 ? std::atan2(m(0, 1), m(0, 0)) : -std::atan2(m(0, 1), m(0, 0)));
+        o->rot[2] = 0.0f;
+    }
+    for (int i = 0; i < 3; ++i) o->pos[i] = static_cast<float>(n[size_t(9 + i)]);
+}
+
+} // namespace
+
+uint64_t carregarCena(const std::string& caminho) {
+    std::ifstream f(caminho);
+    if (!f) {
+        logf(Nivel::Erro, "godot", "cena nao encontrada: %s", caminho.c_str());
+        return 0;
+    }
+    struct NoTscn {
+        std::map<std::string, std::string> attr;
+        std::vector<std::pair<std::string, std::string>> props;
+    };
+    std::vector<NoTscn> nos;
+    const std::regex reAttr(R"re((\w+)=("([^"]*)"|[^ \]]+))re");
+    std::string linha;
+    bool emNo = false;
+    while (std::getline(f, linha)) {
+        if (linha.empty()) continue;
+        if (linha[0] == '[') {
+            emNo = linha.rfind("[node ", 0) == 0;
+            if (emNo) {
+                NoTscn n;
+                for (std::sregex_iterator it(linha.begin(), linha.end(), reAttr), fim; it != fim; ++it)
+                    n.attr[(*it)[1]] = (*it)[3].matched ? (*it)[3].str() : (*it)[2].str();
+                nos.push_back(std::move(n));
+            }
+            continue;
+        }
+        const size_t eq = linha.find(" = ");
+        if (!emNo || nos.empty() || eq == std::string::npos) continue;
+        const std::string chave = linha.substr(0, eq);
+        std::string valor = linha.substr(eq + 3);
+        // Valor em varias linhas (array, dicionario): junta ate' fechar.
+        int abertos = 0;
+        auto conta = [&abertos](const std::string& t) {
+            for (char ch : t) abertos += (ch == '[' || ch == '{' || ch == '(') ? 1 : (ch == ']' || ch == '}' || ch == ')') ? -1 : 0;
+        };
+        conta(valor);
+        while (abertos > 0 && std::getline(f, linha)) {
+            valor += "\n" + linha;
+            conta(linha);
+        }
+        nos.back().props.emplace_back(chave, valor);
+    }
+
+    // Caminho do no' relativo a' raiz da cena ("." = a raiz) -> id.
+    std::map<std::string, uint64_t> porCaminho;
+    uint64_t raizCena = 0;
+    for (const NoTscn& n : nos) {
+        const auto nome = n.attr.find("name"), tipo = n.attr.find("type"), pai = n.attr.find("parent");
+        if (nome == n.attr.end()) continue;
+        if (tipo == n.attr.end()) {
+            logf(Nivel::Aviso, "godot", "%s: no' '%s' sem tipo (cena instanciada?) ficou de fora", caminho.c_str(), nome->second.c_str());
+            continue;
+        }
+        const uint64_t id = instanciar(tipo->second);
+        Objeto* o = porId(id);
+        if (!o) continue;
+        o->nome = nome->second;
+        for (const auto& [chave, valor] : n.props) {
+            if (chave == "position" || chave == "rotation" || chave == "scale") {
+                const std::vector<double> v = numerosDe(valor);
+                float* dst = chave == "position" ? o->pos : chave == "rotation" ? o->rot : o->escala;
+                if (v.size() == 2 && chave == "rotation") dst[2] = static_cast<float>(v[0]);
+                for (size_t i = 0; i < v.size() && i < 3; ++i)
+                    if (!(v.size() == 2 && chave == "rotation")) dst[i] = static_cast<float>(v[i]);
+            } else if (chave == "transform") {
+                aplicarTransform(o, numerosDe(valor));
+            } else if (chave == "script") {
+                avisarUmaVez("tscn-script", "%s: script GDScript nao roda na camada; o no' fica sem ele", caminho.c_str());
+            } else {
+                // Propriedade registrada pela extensao: valor simples pelo setter.
+                const PropriedadeExtensao* prop = nullptr;
+                for (const Classe* c = o->classe; c && !prop; c = c->pai)
+                    for (const auto& pe : c->propriedades)
+                        if (pe.nome == chave) { prop = &pe; break; }
+                const Valor v = Valor::deTexto(valor.size() >= 2 && valor.front() == '"' ? valor.substr(1, valor.size() - 2) : valor);
+                if (prop && prop->setter && valor.find('(') == std::string::npos) chamar(id, prop->setter->utf8, {v}, nullptr);
+                else avisarUmaVez("tscn-prop:" + chave, "%s: propriedade %s nao aplicada", caminho.c_str(), chave.c_str());
+            }
+        }
+        if (pai == n.attr.end()) {
+            if (raizCena) {
+                logf(Nivel::Erro, "godot", "%s: mais de uma raiz", caminho.c_str());
+                continue;
+            }
+            raizCena = id;
+            porCaminho["."] = id;
+            continue;
+        }
+        const auto it = porCaminho.find(pai->second);
+        if (it == porCaminho.end()) {
+            logf(Nivel::Erro, "godot", "%s: pai '%s' de '%s' nao existe", caminho.c_str(), pai->second.c_str(), nome->second.c_str());
+            continue;
+        }
+        adicionarFilho(porId(it->second), o);
+        porCaminho[pai->second == "." ? nome->second : pai->second + "/" + nome->second] = id;
+    }
+    if (!raizCena) {
+        logf(Nivel::Erro, "godot", "%s: nenhum no' raiz", caminho.c_str());
+        return 0;
+    }
+    // A raiz entra na arvore por ultimo: os filhos ja' estao pendurados, e o
+    // _ready sai de baixo para cima, como no motor.
+    return adicionarNaCena(raizCena) ? raizCena : 0;
+}
+
 bool chamar(uint64_t id, const std::string& metodo, const std::vector<Valor>& valores, std::string* resultado) {
     Objeto* o = porId(id);
     if (!o) return false;
@@ -266,6 +417,13 @@ std::string descrever(uint64_t id) {
     if (ehNo(o)) {
         s << " '" << o->nome << "'";
         s << " pos=(" << o->pos[0] << ", " << o->pos[1] << ", " << o->pos[2] << ")";
+        // Rotacao (graus) e escala so' quando fogem do padrao.
+        if (o->rot[0] != 0.0f || o->rot[1] != 0.0f || o->rot[2] != 0.0f)
+            s << " rot=(" << std::round(o->rot[0] * 57.29578f * 100.0f) / 100.0f + 0.0f << ", "
+              << std::round(o->rot[1] * 57.29578f * 100.0f) / 100.0f + 0.0f << ", "
+              << std::round(o->rot[2] * 57.29578f * 100.0f) / 100.0f + 0.0f << ")";
+        if (o->escala[0] != 1.0f || o->escala[1] != 1.0f || o->escala[2] != 1.0f)
+            s << " escala=(" << o->escala[0] << ", " << o->escala[1] << ", " << o->escala[2] << ")";
     }
     return s.str();
 }

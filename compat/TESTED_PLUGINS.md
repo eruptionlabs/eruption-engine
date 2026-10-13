@@ -58,6 +58,16 @@ repositório do plugin (`Intermediate/`) são ignorados.
 | AdvancedEases | https://github.com/DKesserich/AdvancedEasesPlugin | MIT | `4fe1c6d00d0eb3b2b9a4dfdd65075f80d7348855` | `.uplugin` (LoadingPhase), `IModuleInterface`/`IMPLEMENT_MODULE`, `UBlueprintFunctionLibrary`, `UENUM`/`UMETA`, `UFUNCTION` estática com argumento padrão, `FVector`, `PI` | **funciona**: `StartupModule`/`ShutdownModule`; `AdvancedEase_Float(AE_OUTBOUNCE, 0.5, 0, 10)` → 7.65625; `AdvancedEase_Vector(AE_LERP, 0, (10,20,30), 0.5)` → (5, 10, 15) |
 | Serial COM | https://github.com/videofeedback/Unreal_Engine_SerialCOM_Plugin | MIT | `bd3b2ee44cec7016fe64975c2d03ffd7fda20a2d` | `DECLARE_LOG_CATEGORY_CLASS`, `UE_LOG` com `TEXT()`, módulo com `LoadingPhase` PreDefault | **parcial**: o plugin é só Win64 (porta serial via Win32), a ferramenta respeita `PlatformAllowList`; compilando só o arquivo do módulo (`--forcar-plataforma --so-fontes SERIALCOMModule.cpp`), o `UE_LOG` dele aparece no log do host |
 
+## Cenas .tscn (Godot 4)
+
+`eruption-compat-run --godot ext.so:init --tscn cena.tscn` monta a cena (nós de
+classes nativas e de extensão, `position`/`rotation`/`scale`/`transform` e
+propriedades simples das extensões, pai pelo caminho) e pendura a raiz na cena.
+Script GDScript e cena instanciada dentro de cena ficam de fora, com aviso. A
+bateria abre a cena de teste do YParticles3D (as partículas saem) e
+`compat/tests/godot/cenas/hierarquia.tscn` (Transform3D decomposta em posição,
+Euler YXZ e escala; neto pendurado por caminho).
+
 ## Como rodar
 
 ```sh
