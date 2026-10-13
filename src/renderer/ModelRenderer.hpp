@@ -137,6 +137,9 @@ struct ModelMeshGPU {
     // nunca descartaria nada). Ver BindlessDescriptor::slotOpaque e
     // ShadowRenderer::shadowInstOpaquePipeline.
     bool shadowOpaque = false;
+    // Recorte por alfa SEM splat nem chao: entra no pre-passe de profundidade
+    // do G-buffer (ver ModelRenderer::render e model_depth.frag).
+    bool depthPrepass = false;
 
     void shutdown(VulkanContext* ctx);
     // Libera TODOS os buffers da malha (vertex, index, hi/lo/far x2, sh),
@@ -1011,6 +1014,21 @@ private:
     VkShaderStageFlags m_pushStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     float m_tessBandDistance = 0.0f;
     VkPipeline m_tessPipeline = VK_NULL_HANDLE;
+    // PRE-PASSE DE PROFUNDIDADE da folhagem: m_depthPipeline so' descarta e
+    // escreve profundidade; m_pipelineNoDepthWrite e' o m_pipeline sem escrita
+    // de profundidade, para a mesma folhagem no G-buffer logo depois.
+    VkPipeline m_depthPipeline = VK_NULL_HANDLE;
+    VkPipeline m_pipelineNoDepthWrite = VK_NULL_HANDLE;
+    // Desenhos do passe principal, gravados para tocar duas vezes (pre-passe
+    // e G-buffer). Push inteiro por desenho: a segunda passada do crossfade
+    // herda campos do push anterior, e a copia preserva isso.
+    struct DrawRec {
+        VkBuffer vb, ib;
+        uint32_t mesh, count, instances, firstIndex, firstInstance;
+        bool tess;
+        uint8_t push[96];
+    };
+    std::vector<DrawRec> m_drawRecs;
     float m_geoDispAmplitude = 0.0f;
     float m_geoDispDistance = 0.0f;
 

@@ -574,6 +574,10 @@ void ModelRenderer::shutdown() {
         vkDestroyPipeline(m_ctx->device(), m_tessPipeline, nullptr);
         m_tessPipeline = VK_NULL_HANDLE;
     }
+    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite}) {
+        if (*p != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), *p, nullptr);
+        *p = VK_NULL_HANDLE;
+    }
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_pipeline, nullptr);
         m_pipeline = VK_NULL_HANDLE;
@@ -795,6 +799,70 @@ void ModelRenderer::createPipeline() {
         .setColorAttachmentFormats(GBuffer::colorAttachmentFormats())
         .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
         .build(m_ctx->device());
+
+    // PRE-PASSE DE PROFUNDIDADE (folhagem). Mesmo vertex shader (posicao
+    // invariante), fragment que so' descarta; e o par do G-buffer sem
+    // escrita de profundidade. Sem o SPIR-V do pre-passe, nada muda.
+    if (!wireframeMode()) {
+        auto depthCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/model_depth.frag.spv");
+        VkShaderModule depthModule = VK_NULL_HANDLE;
+        if (!depthCode.empty()) {
+            VkShaderModuleCreateInfo dsm{};
+            dsm.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            dsm.codeSize = depthCode.size() * sizeof(uint32_t);
+            dsm.pCode = depthCode.data();
+            vkCreateShaderModule(m_ctx->device(), &dsm, nullptr, &depthModule);
+        }
+        if (depthModule != VK_NULL_HANDLE) {
+            std::vector<VkPipelineShaderStageCreateInfo> depthStages = stages;
+            depthStages[1].module = depthModule;
+            std::vector<VkPipelineColorBlendAttachmentState> noColor = blends;
+            for (auto& b : noColor) b.colorWriteMask = 0;
+            m_depthPipeline = PipelineBuilder()
+                .setShaderStages(depthStages)
+                .setVertexInput(vertexInput)
+                .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+                .setViewport(0, 0, 1280, 720)
+                .setScissor(0, 0, 1280, 720)
+                .setPolygonMode(VK_POLYGON_MODE_FILL)
+                .setCullMode(gbufferCullMode(), VK_FRONT_FACE_COUNTER_CLOCKWISE)
+                .setDepthState(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+                .setBlendState(noColor)
+                .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
+                .setLayout(m_pipelineLayout)
+                .setColorAttachmentFormats(GBuffer::colorAttachmentFormats())
+                .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
+                .build(m_ctx->device());
+            vkDestroyShaderModule(m_ctx->device(), depthModule, nullptr);
+            auto earlyCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/" + variant + "_early.frag.spv");
+            VkShaderModule earlyModule = VK_NULL_HANDLE;
+            if (!earlyCode.empty()) {
+                VkShaderModuleCreateInfo esm{};
+                esm.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                esm.codeSize = earlyCode.size() * sizeof(uint32_t);
+                esm.pCode = earlyCode.data();
+                vkCreateShaderModule(m_ctx->device(), &esm, nullptr, &earlyModule);
+            }
+            std::vector<VkPipelineShaderStageCreateInfo> earlyStages = stages;
+            if (earlyModule != VK_NULL_HANDLE) earlyStages[1].module = earlyModule;
+            m_pipelineNoDepthWrite = PipelineBuilder()
+                .setShaderStages(earlyStages)
+                .setVertexInput(vertexInput)
+                .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+                .setViewport(0, 0, 1280, 720)
+                .setScissor(0, 0, 1280, 720)
+                .setPolygonMode(VK_POLYGON_MODE_FILL)
+                .setCullMode(gbufferCullMode(), VK_FRONT_FACE_COUNTER_CLOCKWISE)
+                .setDepthState(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+                .setBlendState(blends)
+                .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
+                .setLayout(m_pipelineLayout)
+                .setColorAttachmentFormats(GBuffer::colorAttachmentFormats())
+                .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
+                .build(m_ctx->device());
+            if (earlyModule != VK_NULL_HANDLE) vkDestroyShaderModule(m_ctx->device(), earlyModule, nullptr);
+        }
+    }
 
     // PIPELINE DE TESSELACAO (banda perto). Mesmo layout, mesmos buffers,
     // mesma malha - so' muda a topologia (patch de 3 pontos) e os dois
@@ -2034,6 +2102,12 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                     }
                 }
                 mesh.shadowOpaque = allOpaque;
+                // Pre-passe de profundidade: so' quem descarta por alfa e nao
+                // e' chao (o descarte do splat e' outro, ver model_depth.frag).
+                bool splat = false;
+                for (const auto& v : vertices)
+                    if (v.splatTex01 != 0u || v.splatTex23 != 0u) { splat = true; break; }
+                mesh.depthPrepass = !allOpaque && !mesh.isGround && !splat && m_bindless != nullptr;
                 if (std::getenv("ERUPTION_TEST_SHADOW_OPAQUE_CENSUS")) {
                     static int nTot = 0, nOpaque = 0;
                     ++nTot;
@@ -2539,9 +2613,12 @@ std::vector<std::string> ModelRenderer::releaseAsset(const std::string& filePath
         auto b = m_skinBases.find(mi);
         if (b == m_skinBases.end()) continue;
         VmaAllocator allocator = m_ctx->allocator();
-        for (auto [buf, alloc] : {std::pair{b->second.skinBuffer, b->second.skinAlloc},
-                                  std::pair{b->second.morphBuffer, b->second.morphAlloc}})
+        for (const auto& ba : {std::pair{b->second.skinBuffer, b->second.skinAlloc},
+                               std::pair{b->second.morphBuffer, b->second.morphAlloc}}) {
+            VkBuffer buf = ba.first;
+            VmaAllocation alloc = ba.second;
             if (buf) m_ctx->deferFrameCleanup([allocator, buf, alloc] { vmaDestroyBuffer(allocator, buf, alloc); });
+        }
         m_skinBases.erase(b);
     }
     for (auto it2 = m_footprintCache.begin(); it2 != m_footprintCache.end();)
@@ -2623,6 +2700,10 @@ void ModelRenderer::recreatePipeline() {
     if (m_tessPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_tessPipeline, nullptr);
         m_tessPipeline = VK_NULL_HANDLE;
+    }
+    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite}) {
+        if (*p != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), *p, nullptr);
+        *p = VK_NULL_HANDLE;
     }
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_pipeline, nullptr);
@@ -2959,8 +3040,6 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         vkCmdBindVertexBuffers(cmd, 0, velocity ? 2 : 1, bufs, offsets);
     };
 
-    VkBuffer boundVb = VK_NULL_HANDLE;
-    VkBuffer boundIb = VK_NULL_HANDLE;
     uint32_t dbgDraws = 0, dbgIdx = 0;
     // Gateado: era malloc+memset de m_meshes.size() pares POR PASSE (cena +
     // minimapa = 2x/frame) so' para debug DESLIGADO. (Varredura 2026-09-02.)
@@ -2980,12 +3059,17 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     // frame tem UMA instancia visivel e ela e' o terreno. Prop e folhagem
     // continuam no pipeline normal: cartao com recorte por alfa nao tem relevo
     // para deslocar e so' pagaria os dois estagios a mais.
+    // Os desenhos sao GRAVADOS (m_drawRecs) e tocados no fim: duas vezes
+    // quando ha' pre-passe de profundidade. tessBound e' a pipeline que o
+    // desenho gravado usa (a segunda passada do crossfade herda a ultima).
     bool tessBound = false;
-    auto bindPipelineFor = [&](bool wantTess) {
-        if (wantTess == tessBound) return;
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          wantTess ? m_tessPipeline : m_pipeline);
-        tessBound = wantTess;
+    auto bindPipelineFor = [&](bool wantTess) { tessBound = wantTess; };
+    m_drawRecs.clear();
+    auto record = [&](VkBuffer vb, VkBuffer ib, uint32_t mesh, uint32_t count, uint32_t instances,
+                      uint32_t firstIndex, uint32_t firstInstance) {
+        DrawRec r{vb, ib, mesh, count, instances, firstIndex, firstInstance, tessBound, {}};
+        std::memcpy(r.push, &push, sizeof(push));
+        m_drawRecs.push_back(r);
     };
 
     auto flushRun = [&]() {
@@ -3005,13 +3089,6 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         push.roughnessScale = mesh.roughnessScale;
         push.uvScale.z = mesh.uvPerUnit;
         push.uvScale.w = mesh.dispScale;
-        vkCmdPushConstants(cmd, m_pipelineLayout, m_pushStages, 0, sizeof(push), &push);
-        if (runVb != boundVb || runIb != boundIb) {
-            bindVertices(runVb, mesh);
-            vkCmdBindIndexBuffer(cmd, runIb, 0, VK_INDEX_TYPE_UINT32);
-            boundVb = runVb;
-            boundIb = runIb;
-        }
         if (wantTess) {
             // CHAO NA BANDA: um desenho por celula. As celulas dentro da banda
             // vao pelo pipeline de PATCH (tesselacao + deslocamento); as de
@@ -3024,7 +3101,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             auto flushSeg = [&]() {
                 if (!segOpen || segCount == 0) return;
                 bindPipelineFor(segNear);
-                vkCmdDrawIndexed(cmd, segCount, runLen, segFirst, 0, instBase + runFirst);
+                record(runVb, runIb, runMesh, segCount, runLen, segFirst, instBase + runFirst);
                 dbgDraws++;
                 dbgIdx += segCount * runLen;
                 segCount = 0;
@@ -3054,7 +3131,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             runLen = 0;
             return;
         }
-        vkCmdDrawIndexed(cmd, runCount, runLen, 0, 0, instBase + runFirst);
+        record(runVb, runIb, runMesh, runCount, runLen, 0, instBase + runFirst);
         dbgDraws++;
         dbgIdx += runCount * runLen;
         if (dbgPerMesh.size() > runMesh) {
@@ -3348,14 +3425,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             push.alpha = runAlpha2;
             push.metallicScale = mesh.metallicScale;
             push.roughnessScale = mesh.roughnessScale;
-            vkCmdPushConstants(cmd, m_pipelineLayout, m_pushStages, 0, sizeof(push), &push);
-            if (runVb2 != boundVb || runIb2 != boundIb) {
-                bindVertices(runVb2, mesh);
-                vkCmdBindIndexBuffer(cmd, runIb2, 0, VK_INDEX_TYPE_UINT32);
-                boundVb = runVb2;
-                boundIb = runIb2;
-            }
-            vkCmdDrawIndexed(cmd, runCount2, runLen2, 0, 0, instBase + slot + runFirst2);
+            record(runVb2, runIb2, runMesh2, runCount2, runLen2, 0, instBase + slot + runFirst2);
             dbgDraws++;
             dbgIdx += runCount2 * runLen2;
             runLen2 = 0;
@@ -3387,6 +3457,66 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         flushRun2();
     }
     m_instCursor += slot + actualCompanions; // = visN + (instancias em fade)
+
+    // PRE-PASSE DE PROFUNDIDADE DA FOLHAGEM. Folha recortada por alfa
+    // (`discard`) nao deixa a GPU rejeitar o que esta' atras antes do shader:
+    // medido no parana_field a 1080p, 17,5 M de fragmentos para 2 M de pixels,
+    // e o sombreamento depois do teste de alfa era metade do G-buffer. Aqui a
+    // folhagem desenha antes so' a profundidade, com o mesmo descarte
+    // (model_depth.frag), e no G-buffer passa com o teste <= sem escrever
+    // profundidade: o shader caro roda uma vez por pixel visivel. A imagem nao
+    // muda (mesma posicao, invariant gl_Position; mesmo descarte).
+    // As duas pipelines usam o mesmo vertex shader, mas o Vulkan so' garante
+    // a mesma profundidade bit a bit com `invariant gl_Position` - que aqui
+    // mudava a imagem inteira (PSNR 31 contra o antes), e uma folga de
+    // profundidade deixa passar folha de tras (a precisao do depth com near
+    // 0,1 e far 50000 e' ~2 unidades a 900). Sem garantia, liga por padrao
+    // so' onde foi conferido pixel a pixel: NVIDIA (4060, 10 poses e camera
+    // andando, imagem identica). ERUPTION_DEPTH_PREPASS=0/1 forca (A/B, ou
+    // para conferir outra GPU).
+    static const bool kPrepassEnv = [this] {
+        if (const char* e = std::getenv("ERUPTION_DEPTH_PREPASS")) return std::atoi(e) != 0;
+        return m_ctx->deviceProperties().vendorID == 0x10DEu;
+    }();
+    const bool prepass = kPrepassEnv && m_depthPipeline != VK_NULL_HANDLE &&
+                         m_pipelineNoDepthWrite != VK_NULL_HANDLE && !wireframeMode();
+    VkPipeline boundPipe = m_pipeline;
+    VkBuffer boundVb = VK_NULL_HANDLE, boundIb = VK_NULL_HANDLE;
+    auto play = [&](const DrawRec& r, VkPipeline pipe) {
+        if (pipe != boundPipe) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+            boundPipe = pipe;
+        }
+        vkCmdPushConstants(cmd, m_pipelineLayout, m_pushStages, 0, sizeof(r.push), r.push);
+        if (r.vb != boundVb || r.ib != boundIb) {
+            bindVertices(r.vb, m_meshes[r.mesh]);
+            vkCmdBindIndexBuffer(cmd, r.ib, 0, VK_INDEX_TYPE_UINT32);
+            boundVb = r.vb;
+            boundIb = r.ib;
+        }
+        vkCmdDrawIndexed(cmd, r.count, r.instances, r.firstIndex, 0, r.firstInstance);
+    };
+    // So' desenho leve (ate' 20 mil triangulos por instancia): o pre-passe
+    // paga a geometria de novo, e folha de malha pesada cobre pouco pixel por
+    // triangulo. Medido no parana_field (10 poses): sem teto o G-buffer caia
+    // 4%; com 20 mil, 6-10% na media e 21-23% nas vistas baixas dentro da
+    // mata, onde as folhas mais se empilham. ERUPTION_DEPTH_PREPASS_MAX_TRIS.
+    static const uint32_t kMaxTris = [] {
+        const char* e = std::getenv("ERUPTION_DEPTH_PREPASS_MAX_TRIS");
+        return e ? static_cast<uint32_t>(std::max(0, std::atoi(e))) : 20000u;
+    }();
+    auto pre = [&](const DrawRec& r) {
+        return prepass && !r.tess && m_meshes[r.mesh].depthPrepass && r.count / 3 <= kMaxTris;
+    };
+    if (prepass) {
+        for (const DrawRec& r : m_drawRecs)
+            if (pre(r)) play(r, m_depthPipeline);
+    }
+    for (const DrawRec& r : m_drawRecs) {
+        VkPipeline pipe = r.tess ? m_tessPipeline : m_pipeline;
+        if (pre(r)) pipe = m_pipelineNoDepthWrite;
+        play(r, pipe);
+    }
     // ERUPTION_DEBUG_LODFADE=1: um log por frame com jobs>0 - diagnostico
     // pontual pra confirmar que a banda de transicao esta' sendo cruzada
     // (o log periodico do ERUPTION_DEBUG_DRAWSTATS so' imprime a cada 120
