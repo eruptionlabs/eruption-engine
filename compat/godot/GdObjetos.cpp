@@ -416,6 +416,90 @@ constexpr int T_V2 = GDEXTENSION_VARIANT_TYPE_VECTOR2;
 constexpr int T_V3 = GDEXTENSION_VARIANT_TYPE_VECTOR3;
 constexpr int T_SN = GDEXTENSION_VARIANT_TYPE_STRING_NAME;
 constexpr int T_OBJ = GDEXTENSION_VARIANT_TYPE_OBJECT;
+constexpr int T_T3D = GDEXTENSION_VARIANT_TYPE_TRANSFORM3D;
+
+// Transform3D do motor: Basis em 3 linhas (Vector3 cada) e a origem.
+struct Transf3D {
+    float b[3][3];
+    float o[3];
+};
+static_assert(sizeof(Transf3D) == 48, "Transform3D tem 48 bytes na ABI");
+
+// Transformacao LOCAL de um Node3D como o motor monta: rotacao de Euler na
+// ordem YXZ (Ry * Rx * Rz) e a escala aplicada antes (colunas escaladas).
+Transf3D transfLocal(const Objeto* o) {
+    const float cx = std::cos(o->rot[0]), sx = std::sin(o->rot[0]);
+    const float cy = std::cos(o->rot[1]), sy = std::sin(o->rot[1]);
+    const float cz = std::cos(o->rot[2]), sz = std::sin(o->rot[2]);
+    const float rx[3][3] = {{1, 0, 0}, {0, cx, -sx}, {0, sx, cx}};
+    const float ry[3][3] = {{cy, 0, sy}, {0, 1, 0}, {-sy, 0, cy}};
+    const float rz[3][3] = {{cz, -sz, 0}, {sz, cz, 0}, {0, 0, 1}};
+    float yx[3][3] = {}, r[3][3] = {};
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            for (int k = 0; k < 3; ++k) yx[i][j] += ry[i][k] * rx[k][j];
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            for (int k = 0; k < 3; ++k) r[i][j] += yx[i][k] * rz[k][j];
+    Transf3D t;
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) t.b[i][j] = r[i][j] * o->escala[j];
+        t.o[i] = o->pos[i];
+    }
+    return t;
+}
+
+Transf3D compor(const Transf3D& pai, const Transf3D& f) {
+    Transf3D t;
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j)
+            t.b[i][j] = pai.b[i][0] * f.b[0][j] + pai.b[i][1] * f.b[1][j] + pai.b[i][2] * f.b[2][j];
+        t.o[i] = pai.b[i][0] * f.o[0] + pai.b[i][1] * f.o[1] + pai.b[i][2] * f.o[2] + pai.o[i];
+    }
+    return t;
+}
+
+// Global: a local composta com a dos pais Node3D. Como no motor, a cadeia
+// para no primeiro pai que nao e' Node3D (abaixo dele o no e' raiz).
+Transf3D transfGlobal(const Objeto* o) {
+    Transf3D t = transfLocal(o);
+    static Classe* node3d = classePorNome("Node3D");
+    for (const Objeto* p = o->pai; p && node3d && p->classe && p->classe->herdaDe(node3d); p = p->pai)
+        t = compor(transfLocal(p), t);
+    return t;
+}
+
+// RandomNumberGenerator: estado PCG32 por objeto (o motor usa PCG32 tambem;
+// a sequencia nao precisa bater com a dele, so' ser uniforme).
+struct EstadoRng {
+    uint64_t estado = 0x853c49e6748fea9bull, inc = 0xda3e39cb94b95bdbull, semente = 0;
+};
+std::unordered_map<uint64_t, EstadoRng>& estadosRng() {
+    static std::unordered_map<uint64_t, EstadoRng> m;
+    return m;
+}
+EstadoRng& rngDe(const Objeto* o) {
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lk(mtx);
+    return estadosRng()[o->id];
+}
+uint32_t rngProximo(EstadoRng& g) {
+    const uint64_t velho = g.estado;
+    g.estado = velho * 6364136223846793005ull + (g.inc | 1u);
+    const uint32_t xs = static_cast<uint32_t>(((velho >> 18u) ^ velho) >> 27u);
+    const uint32_t rot = static_cast<uint32_t>(velho >> 59u);
+    return (xs >> rot) | (xs << ((32u - rot) & 31u));
+}
+void rngSemear(EstadoRng& g, uint64_t s) {
+    g.semente = s;
+    g.estado = 0;
+    rngProximo(g);
+    g.estado += s;
+    rngProximo(g);
+}
+double rngF(EstadoRng& g) {
+    return static_cast<double>(rngProximo(g)) / 4294967296.0;   // [0, 1)
+}
 
 void retTexto(void* r, const std::string& utf8) {
     GString* s = static_cast<GString*>(r);
@@ -520,6 +604,25 @@ std::vector<MetodoMotor>& metodosMotor() {
         mm("Node3D", "rotate_z", T_NIL, {T_FLOAT}, L(self->rot[2] += static_cast<float>(argD(a, 0)))),
         mm("Node3D", "translate", T_NIL, {T_V3}, L(const float* v = static_cast<const float*>(a[0]);
             for (int i = 0; i < 3; ++i) self->pos[i] += v[i];)),
+        // Aviso de transformacao (NOTIFICATION_TRANSFORM_CHANGED): a camada
+        // nao entrega essa notificacao, entao ligar/desligar nao muda nada.
+        mm("Node3D", "set_notify_transform", T_NIL, {T_BOOL}, L((void)0)),
+        mm("Node3D", "is_transform_notification_enabled", T_BOOL, {}, L(rB(r, false))),
+        mm("Node3D", "get_transform", T_T3D, {}, L(const Transf3D t = transfLocal(self); std::memcpy(r, &t, sizeof(t)))),
+        mm("Node3D", "get_global_transform", T_T3D, {}, L(const Transf3D t = transfGlobal(self); std::memcpy(r, &t, sizeof(t)))),
+        mm("Node3D", "get_global_position", T_V3, {}, L(const Transf3D t = transfGlobal(self); std::memcpy(r, t.o, 12))),
+        // RandomNumberGenerator
+        mm("RandomNumberGenerator", "randf", T_FLOAT, {}, L(rD(r, rngF(rngDe(self))))),
+        mm("RandomNumberGenerator", "randf_range", T_FLOAT, {T_FLOAT, T_FLOAT}, L(const double lo = argD(a, 0), hi = argD(a, 1);
+            rD(r, lo + (hi - lo) * rngF(rngDe(self))))),
+        mm("RandomNumberGenerator", "randi", T_INT, {}, L(rI(r, static_cast<int64_t>(rngProximo(rngDe(self)))))),
+        mm("RandomNumberGenerator", "randi_range", T_INT, {T_INT, T_INT}, L(int64_t lo = argI(a, 0), hi = argI(a, 1);
+            if (lo > hi) std::swap(lo, hi);
+            const uint64_t span = static_cast<uint64_t>(hi - lo) + 1u;
+            rI(r, lo + static_cast<int64_t>(rngProximo(rngDe(self)) % span)))),
+        mm("RandomNumberGenerator", "randomize", T_NIL, {}, L(rngSemear(rngDe(self), static_cast<uint64_t>(host().tempo() * 1e9) ^ self->id))),
+        mm("RandomNumberGenerator", "set_seed", T_NIL, {T_INT}, L(rngSemear(rngDe(self), static_cast<uint64_t>(argI(a, 0))))),
+        mm("RandomNumberGenerator", "get_seed", T_INT, {}, L(rI(r, static_cast<int64_t>(rngDe(self).semente)))),
         // Engine (singleton)
         mm("Engine", "is_editor_hint", T_BOOL, {}, L(rB(r, false))),
         mm("Engine", "get_frames_drawn", T_INT, {}, L(rI(r, static_cast<int64_t>(host().quadro())))),

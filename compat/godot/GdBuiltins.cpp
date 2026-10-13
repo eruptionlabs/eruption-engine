@@ -811,6 +811,20 @@ const std::unordered_map<std::string, FnBuiltin>& tabelaBuiltins() {
         // String
         {"String.length", [](void* b, const void* const*, void* r, int) { retInt(r, static_cast<int64_t>(txt(b).size())); }},
         {"String.is_empty", [](void* b, const void* const*, void* r, int) { retBool(r, txt(b).empty()); }},
+        // separador.join(PackedStringArray)
+        {"String.join", [](void* b, const void* const* a, void* r, int) {
+             std::u32string out;
+             const GPacked* p = static_cast<const GPacked*>(a[0]);
+             if (p->d)
+                 for (size_t i = 0; i < p->d->tamanho(); ++i) {
+                     if (i) out += txt(b);
+                     out += txt(p->d->bytes.data() + i * p->d->tamElemento);
+                 }
+             atribuirTexto(r, std::move(out));
+         }},
+        // RID: 0 e' invalido (como no motor).
+        {"RID.is_valid", [](void* b, const void* const*, void* r, int) { retBool(r, *static_cast<const uint64_t*>(b) != 0); }},
+        {"RID.get_id", [](void* b, const void* const*, void* r, int) { retInt(r, static_cast<int64_t>(*static_cast<const uint64_t*>(b))); }},
         {"String.hash", [](void* b, const void* const*, void* r, int) { retInt(r, hashU32(txt(b))); }},
         {"String.to_upper", [](void* b, const void* const*, void* r, int) { atribuirTexto(r, maiusc(txt(b))); }},
         {"String.to_lower", [](void* b, const void* const*, void* r, int) { atribuirTexto(r, minusc(txt(b))); }},
