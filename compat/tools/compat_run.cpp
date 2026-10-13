@@ -5,6 +5,7 @@
 //   eruption-compat-run --godot ext.gdextension --classes
 //       --novo Summator --chamar add 10 --chamar add 20 --chamar get_total
 //       --novo GDExample --cena --quadros 60 --descrever
+//   eruption-compat-run --godot ext.gdextension --tscn cena.tscn --quadros 60
 //
 // Cada --novo cria um objeto e o torna o "atual" para --cena, --chamar e
 // --descrever. --quadros N roda N quadros de --dt segundos (padrao 1/60).
@@ -49,6 +50,11 @@ int main(int argc, char** argv) {
             else std::printf("novo: %s\n", godot::descrever(atual).c_str());
         } else if (op == "--cena") {
             falhas += godot::adicionarNaCena(atual) ? 0 : 1;
+        } else if (op == "--tscn") {
+            // Monta a cena .tscn e pendura a raiz dela (vira o objeto atual).
+            atual = godot::carregarCena(proximo());
+            if (!atual) ++falhas;
+            else std::printf("cena: %s\n", godot::descrever(atual).c_str());
         } else if (op == "--chamar") {
             const std::string metodo = proximo();
             std::vector<godot::Valor> args;

@@ -34,6 +34,12 @@ std::vector<std::string> classesRegistradas();
 uint64_t instanciar(const std::string& classe);
 // Pendura um no' na cena (pai 0 = raiz); dispara _enter_tree/_ready.
 bool adicionarNaCena(uint64_t no, uint64_t pai = 0);
+// Monta uma cena .tscn (formato de texto do Godot 4) e pendura a raiz dela na
+// cena; devolve a raiz (0 = falhou). Cobre nos de classes nativas e de
+// extensao, posicao/rotacao/escala/transform e propriedades simples (numero,
+// bool, texto) das extensoes; script GDScript e cena instanciada dentro de
+// cena ficam de fora, com aviso.
+uint64_t carregarCena(const std::string& caminhoTscn);
 // Chama um metodo pelo nome; o resultado vem como texto (como print()).
 bool chamar(uint64_t objeto, const std::string& metodo, const std::vector<Valor>& args, std::string* resultado);
 void liberar(uint64_t objeto);
