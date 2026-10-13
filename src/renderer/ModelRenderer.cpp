@@ -3671,11 +3671,13 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     // profundidade deixa passar folha de tras (a precisao do depth com near
     // 0,1 e far 50000 e' ~2 unidades a 900). Sem garantia, liga por padrao
     // so' onde foi conferido pixel a pixel: NVIDIA (4060, 10 poses e camera
-    // andando, imagem identica). ERUPTION_DEPTH_PREPASS=0/1 forca (A/B, ou
-    // para conferir outra GPU).
+    // andando) e Intel (Raptor Lake, Mesa: 4 poses, G-buffer -8%), as duas
+    // com imagem identica. ERUPTION_DEPTH_PREPASS=0/1 forca (A/B, ou para
+    // conferir outra GPU).
     static const bool kPrepassEnv = [this] {
         if (const char* e = std::getenv("ERUPTION_DEPTH_PREPASS")) return std::atoi(e) != 0;
-        return m_ctx->deviceProperties().vendorID == 0x10DEu;
+        const uint32_t vendor = m_ctx->deviceProperties().vendorID;
+        return vendor == 0x10DEu || vendor == 0x8086u;
     }();
     const bool prepass = kPrepassEnv && m_depthPipeline != VK_NULL_HANDLE &&
                          m_pipelineNoDepthWrite != VK_NULL_HANDLE && !wireframeMode();
