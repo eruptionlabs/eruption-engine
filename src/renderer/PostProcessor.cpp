@@ -1151,7 +1151,22 @@ if (!m_ctx) return;
             float far_plane;
             int enable_foreground;
         } cocPush;
-        cocPush.focal_distance = settings.cocFocalDistance;
+        // Da autoria por zoom (lente de referencia de 60 graus) para o espaco
+        // do shader (profundidade real) - ver a nota em PostProcessor.hpp. O
+        // fator e' 1 nos 60 graus, entao cena nenhuma de abertura padrao muda.
+        // O override de bancada fica de fora: quem passa ERUPTION_TEST_COC_FOCAL
+        // esta' varrendo um valor absoluto e quer exatamente aquele.
+        float cocFocal = settings.cocFocalDistance;
+        if (settings.cocEnableZoomMapping) {
+            static const bool kFocalDeBancada = std::getenv("ERUPTION_TEST_COC_FOCAL") != nullptr;
+            constexpr float kTanMetadeRef = 0.57735027f;   // tan(60/2)
+            // proj[1][1] e' NEGATIVO (Vulkan inverte o Y do clip): sem o
+            // abs, um clamp em zero zera a lente e manda o CoC pro teto.
+            const float tanMetadeFov = 1.0f / glm::max(std::abs(proj[1][1]), 1e-4f);
+            const float lente = kTanMetadeRef / glm::max(tanMetadeFov, 1e-4f);
+            if (!kFocalDeBancada) cocFocal *= lente;
+        }
+        cocPush.focal_distance = cocFocal;
         cocPush.aperture = settings.cocAperture * 0.05f;
         cocPush.max_blur = settings.cocMaxBlur;
         cocPush.zoom_factor = settings.cocZoomFactor;

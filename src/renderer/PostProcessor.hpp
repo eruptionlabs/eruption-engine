@@ -83,6 +83,20 @@ public:
         // visualize the splash spawn area/density around the character.
         bool debugSplashArea = false;
 
+        // A autoria por zoom (curvas abaixo) vive no espaco da abertura de
+        // REFERENCIA de 60 graus: Camera::zoomPercent() converte distancia +
+        // abertura numa distancia equivalente nessa lente, de proposito, para
+        // que o mesmo enquadramento de' o mesmo numero. O shader de CoC, ao
+        // contrario, compara com a profundidade REAL da cena. Com lente longa
+        // (20 graus a 1000 unidades = 305 equivalentes) a curva pede foco a
+        // 298 e a cena inteira fica 700 unidades atras do plano focal.
+        // A conversao de volta e' feita no PostProcessor::render, por lente:
+        // focal x tan(30)/tan(fov/2). Nos 60 graus do padrao o fator e' 1 e
+        // nada muda. A ABERTURA nao e' convertida: medido na caverna, a lente
+        // longa mostra so' ~200 unidades de profundidade de uma ponta a outra
+        // do quadro, entao dividir a abertura pelo mesmo fator apaga o
+        // gradiente (CoC abaixo de meio pixel). A forca do borrao e' autoria,
+        // nao conversao - fica em coc_aperture_curve.
         bool cocEnableZoomMapping = true;
         SplineCurve cocFocalCurve = SplineCurve({0.0f, 0.25f, 0.5f, 0.75f, 1.0f}, {1000.0f, 750.0f, 500.0f, 250.0f, 1.0f});
         SplineCurve cocApertureCurve = SplineCurve({0.0f, 0.25f, 0.5f, 0.75f, 1.0f}, {0.05f, 0.162f, 0.275f, 0.388f, 0.5f});
