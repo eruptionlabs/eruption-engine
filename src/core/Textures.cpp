@@ -680,7 +680,7 @@ ModelMeshGPU Engine::resolveModelMesh(const std::string& legacyModelPath, uint32
 }
 
 
-// Textura de imagem da UI em CSS (retrato na fila de turno, icone de item).
+// Textura de imagem da UI em CSS (retrato numa lista, icone de um item).
 // O caminho vem do .css ou do script e e' relativo ao PROJETO.
 void* Engine::uiImageTexture(const std::string& png) {
     auto it = m_uiImages.find(png);

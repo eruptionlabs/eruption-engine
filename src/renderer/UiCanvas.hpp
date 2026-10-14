@@ -3,13 +3,14 @@
 // EFEITOS 2D DE JOGO — o que tem que ser exato no frame e sobreviver ao
 // script que pediu.
 //
-// A INTERFACE do jogo (menu, fila, ficha) mora em renderer/UiDocument: vem
+// A INTERFACE do jogo (menu, listas, fichas) mora em renderer/UiDocument: vem
 // de um arquivo CSS, editável no Caldera. Aqui ficam só as duas coisas que
 // não cabem num arquivo de layout:
 //
-//   * o NÚMERO que sobe de um ponto do MUNDO (dano, cura, "ERROU") — precisa
+//   * o NÚMERO que sobe de um ponto do MUNDO (um valor, uma palavra curta) —
+//     precisa
 //     da projeção da câmera, e vive sozinho depois de pedido;
-//   * o CLARÃO / FADE de tela cheia — a transição de batalha depende de ele
+//   * o CLARÃO / FADE de tela cheia — uma transição de cena depende de ele
 //     ser exato no frame.
 //
 // Coordenadas em fração da área de jogo (0..1), para valer igual em qualquer
@@ -28,8 +29,8 @@ namespace eruption {
 
 class UiCanvas {
 public:
-    // Número que sobe e desaparece, ancorado numa posição de MUNDO (dano,
-    // cura, "MISS"). O motor projeta e segura o tempo de vida.
+    // Número que sobe e desaparece, ancorado numa posição de MUNDO (um
+    // valor, uma palavra curta). O motor projeta e segura o tempo de vida.
     void popup(const Vec3& world, const std::string& text, const Vec4& color, float seconds, float rise, float size);
     // Clarão/fade de tela cheia: a cor vai de `from` a `to` de opacidade.
     void screenFade(const Vec4& color, float from, float to, float seconds);

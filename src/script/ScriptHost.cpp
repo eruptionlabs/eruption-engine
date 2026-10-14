@@ -284,7 +284,7 @@ bool ScriptHost::load(Script& s, bool keepState) {
 // teria que caber tudo dentro de um arquivo so'.
 //
 // Nome e' o caminho sem extensao, relativo a' pasta de scripts:
-// require("dados") ou require("combate/tabelas"). Ciclo e' erro, nao travada.
+// require("dados") ou require("tabelas/itens"). Ciclo e' erro, nao travada.
 int ScriptHost::moduleRef(const std::string& name, std::string& error) {
     namespace fs = std::filesystem;
     std::string want = name;

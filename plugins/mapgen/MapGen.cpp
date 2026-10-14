@@ -718,7 +718,7 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             // ja' esta ali, entao dois tubos que se cruzam cavam duas vezes e
             // o cruzamento vira poco. Com `level` o piso de todos eles para
             // na mesma altura e a planta pode ser uma REDE de corredores, que
-            // e' o que uma caverna de dungeon e'. 0 mantem o comportamento
+            // e' o que uma caverna ramificada e'. 0 mantem o comportamento
             // antigo (ninguem cava ate' a cota zero de proposito).
             const bool porCota = s.has("level");
             const float cota = float(s.get("level", 0.0));
@@ -760,7 +760,7 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
         } else if (s.type == "crater") {
             // CRATERA. De fora para dentro: encosta subindo ate' a borda,
             // depois a parede caindo em DEGRAUS ate' o fundo chato. Cada
-            // degrau e' um andar da dungeon - e' o que faz um vulcao por
+            // degrau e' um patamar inteiro - e' o que faz um vulcao por
             // dentro ser jogavel a pe' em vez de um funil liso.
             const float radius = float(s.get("radius", 0.34));
             const float rim = float(s.get("rim", 180));
@@ -774,7 +774,7 @@ bool run(const Recipe& recipe, int resolution, Result& r, std::string& error,
             // 12% do raio: a boca sai um oval amassado e, pior, a deformacao
             // e' a mesma em toda distancia — os degraus continuam curvas de
             // nivel CONCENTRICAS, que e' o que o olho le como compasso. Com
-            // 0.62 de rough o lago de lava da dungeon continuou redondo na
+            // 0.62 de rough o lago de lava do fundo continuou redondo na
             // foto.
             //
             // Aqui o PONTO DE CONSULTA anda antes de medir a distancia, como

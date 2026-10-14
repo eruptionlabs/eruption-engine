@@ -47,12 +47,12 @@ public:
     void setTacticalView(bool v) { m_tacticalView = v; }
     bool snapToGat() const { return m_snapToGat; }
     // CONGELADO: o jogador para de responder a teclado/mouse (o resto do
-    // mundo continua). Serve pra cena de dialogo, cutscene e combate - o
-    // motor nao sabe qual dos tres e'.
+    // mundo continua). Serve pra cena de dialogo, cutscene e cena conduzida
+    // por script - o motor nao sabe qual dos tres e'.
     bool inputFrozen() const { return m_inputFrozen; }
     void setInputFrozen(bool on) { m_inputFrozen = on; }
     // ESCONDIDO: o sprite do jogador nao e' desenhado (cutscene em que ele
-    // nao aparece, combate conduzido por outros personagens).
+    // nao aparece, cena conduzida por outros personagens).
     bool hidden() const { return m_hidden; }
     void setHidden(bool on) { m_hidden = on; }
     // Camera SOLTA: para de seguir o jogador (quem manda nela vira o script

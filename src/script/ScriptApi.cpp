@@ -402,7 +402,7 @@ int camera_orbit(lua_State* L) {
     return 3;
 }
 // Abertura vertical em graus e proporcao da tela: quem precisa ENQUADRAR um
-// grupo (as duas fileiras de um combate, um diorama) resolve a distancia por
+// grupo (duas fileiras de personagens, um diorama) resolve a distancia por
 // conta propria, em vez de deixar um numero fixo escrito no script que quebra
 // quando a janela muda de proporcao ou o projeto muda a abertura.
 int camera_view(lua_State* L) {
@@ -799,8 +799,8 @@ int ui_reset(lua_State* L) {
 }
 
 int camera_basis(lua_State* L) {
-    // Direita e frente da camera no plano do chao: o jogo monta o palco
-    // (inimigo a esquerda, party a direita) a partir disso.
+    // Direita e frente da camera no plano do chao: o jogo posiciona o que
+    // precisa em relacao a TELA (a esquerda, a direita, a frente) com isso.
     const Vec3 f = eng().camera().forward();
     const Vec3 flat = glm::length(Vec2(f.x, f.z)) > 1e-4f ? glm::normalize(Vec3(f.x, 0.0f, f.z)) : Vec3(0, 0, 1);
     pushVec3(L, glm::normalize(glm::cross(Vec3(0.0f, 1.0f, 0.0f), flat)));
@@ -834,7 +834,7 @@ int world_set_dof(lua_State* L) {
 }
 
 // Personagem novo em tempo de execucao: o jogo monta o elenco que precisa
-// (NPC de cidade, fila de inimigos) sem passar pelo arquivo de cena. Devolve
+// (NPC de cidade, figurantes de uma cena) sem passar pelo arquivo de cena. Devolve
 // falso se o sprite nao abriu.
 // require("nome"): a tabela que o outro script devolveu. Carrega na hora se
 // ele ainda nao entrou. Ver ScriptHost::moduleRef.

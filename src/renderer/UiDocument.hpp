@@ -4,7 +4,7 @@
 //
 // O motor já falava CSS, mas só para a HUD do jogador: game/HudRenderer
 // desenha uma lista FECHADA de widgets (#hero-panel, #hero-hp-bar, #minimap)
-// e nada mais. Um jogo precisa de menu, fila de turno, ficha de equipe, caixa
+// e nada mais. Um jogo precisa de menu, listas, ficha de personagem, caixa
 // de diálogo, tela de título — e nenhuma lista fechada cobre isso.
 //
 // Aqui a lista é o PRÓPRIO ARQUIVO: cada regra de id vira um elemento, e o
@@ -17,7 +17,7 @@
 // texto muda a cara do jogo.
 //
 // O documento NÃO desenha mundo nenhum: é 2D puro sobre a área de jogo.
-// Efeito que precisa de projeção (número de dano subindo) é do UiCanvas.
+// Efeito que precisa de projeção (número subindo do mundo) é do UiCanvas.
 
 #include <functional>
 #include "math/Types.hpp"
@@ -53,8 +53,8 @@ public:
     void setText(const std::string& selector, const std::string& text);
     // Troca o arquivo de um widget de imagem em tempo de execucao. O CSS ja'
     // sabia desenhar imagem (--widget: image, --image: "..."), mas o arquivo
-    // era fixo no arquivo de estilo: uma ficha de personagem ou um retrato na
-    // fila de turno, que mudam conforme quem esta' em cena, nao tinham como
+    // era fixo no arquivo de estilo: uma ficha de personagem ou um retrato
+    // numa lista, que mudam conforme quem esta' em cena, nao tinham como
     // ser escritos pelo script.
     void setImage(const std::string& selector, const std::string& png);
     void setValue(const std::string& selector, float value01);
