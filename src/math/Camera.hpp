@@ -161,8 +161,8 @@ public:
     bool debugFreeCamera() const { return m_debugFreeCamera; }
 
     // TREMOR. Deslocamento que decai, somado em posicao E alvo (translacao
-    // pura: a direcao do olhar nao muda, so' a camera chacoalha). O impacto
-    // de um golpe pede isso; sem tremor o dano nao tem peso nenhum.
+    // pura: a direcao do olhar nao muda, so' a camera chacoalha). Um impacto
+    // pede isso; sem tremor ele nao tem peso nenhum.
     // `amplitude` em unidades de mundo; um tremor novo com amplitude maior
     // substitui o que estava rodando, um menor nao atropela o maior.
     void shake(float amplitude, float seconds);

@@ -175,7 +175,7 @@ void Engine::updateCharacters(float dt, bool moveAlongPaths) {
 }
 
 // Cada efeito e' um temporizador que desce; o desenho le' o estado. Nada de
-// alocar, nada de RNG: o mesmo golpe sacode igual em qualquer maquina.
+// alocar, nada de RNG: o mesmo impacto sacode igual em qualquer maquina.
 void Engine::tickCharacterFx(SceneCharacter& c, float dt) {
     SceneCharacter::Fx& f = c.fx;
     if (f.flashLeft > 0.0f) f.flashLeft = std::max(0.0f, f.flashLeft - dt);
@@ -279,7 +279,7 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         fxOffset.y += std::sin(f.shakeTime * 83.0f + 1.3f) * a * 0.5f;
     }
     if (f.lungeLeft > 0.0f) {
-        // Vai no primeiro terco e volta no resto (golpe, nao passo).
+        // Vai no primeiro terco e volta no resto (investida, nao passo).
         const float t = 1.0f - f.lungeLeft / std::max(1e-4f, f.lungeTotal);
         const float k = t < 0.34f ? t / 0.34f : 1.0f - (t - 0.34f) / 0.66f;
         fxOffset += f.lungeDir * (f.lungeDist * k);
@@ -312,8 +312,8 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         s.flags = SpriteFlags::Billboard | SpriteFlags::CastShadow | SpriteFlags::PngSprite;
         if (mirror) s.flags = s.flags | SpriteFlags::FlipX;
         s.tintColor = spr.color;
-        // Clarao: puxa a cor na direcao da cor do efeito (branco no dano,
-        // verde na cura) sem estourar o alfa; opacidade entra no alfa.
+        // Clarao: puxa a cor na direcao da cor que o script pediu, sem
+        // estourar o alfa; opacidade entra no alfa.
         if (flash > 0.0f) {
             s.tintColor = Vec4(glm::mix(Vec3(s.tintColor), f.flashColor, flash), s.tintColor.a);
         }

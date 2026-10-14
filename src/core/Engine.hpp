@@ -311,8 +311,8 @@ public:
         std::string action;
         bool actionLoop = false;
         // Comportamento: seguir o jogador ou patrulhar pontos (só com o jogo rodando).
-        // SUCO (juice) de combate. Sem isso um golpe de turno nao tem peso:
-        // o boneco bate, o numero aparece e nada na tela reage. Todos decaem
+        // SUCO (juice) de apresentacao. Sem isso uma acao nao tem peso: o
+        // boneco se mexe, o numero aparece e nada na tela reage. Todos decaem
         // sozinhos em updateCharacters e sao aplicados em drawCharacter.
         struct Fx {
             Vec3 flashColor{1.0f};      // cor somada no sprite (branco = clarao)
@@ -537,15 +537,15 @@ public:
     void patrolCharacter(int index, const std::vector<Vec3>& points, float waitSeconds);
     void stopCharacter(int index);
     void drawSpeechBubbles(float x, float y, float w, float h, float dt);
-    // SUCO de combate por personagem (SceneCharacter::Fx). Cada um decai
+    // SUCO de apresentacao por personagem (SceneCharacter::Fx). Cada um decai
     // sozinho; chamar de novo reinicia. `index` do findCharacter.
     void flashCharacter(int index, const Vec3& color, float seconds);
     void shakeCharacter(int index, float amplitude, float seconds);
-    // Avanco do golpe: anda `distance` na direcao de `towards` e volta.
+    // Investida: anda `distance` na direcao de `towards` e volta.
     void lungeCharacter(int index, const Vec3& towards, float distance, float seconds);
     void popCharacter(int index, float amount, float seconds);
     void fadeCharacter(int index, float to, float seconds);
-    // Desenho 2D do combate por cima da cena: numeros que sobem, clarao de
+    // Desenho 2D por cima da cena: numeros que sobem, clarao de
     // tela e a interface montada pelo script (ui2d). Vem DEPOIS dos baloes.
     void drawGameFx2D(float x, float y, float w, float h, float dt);
     // Interface 2D montada pelo jogo (renderer/UiCanvas.hpp).
