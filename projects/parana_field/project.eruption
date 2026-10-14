@@ -2,6 +2,7 @@
   "author": "Eruption Labs",
   "description": "Mapa de demonstração: ilha vulcânica com floresta, lava, fumarolas e lago na cratera. parana_field tem os modelos originais (estresse); parana_field_lite, os reduzidos.",
   "name": "Paraná Field",
+  "dev_tools": true,
   "startup_map": "parana_field",
   "version": "0.1.0"
 }
