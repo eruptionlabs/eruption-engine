@@ -37,6 +37,11 @@ public:
         // com o padrao do motor (math/Camera.hpp). E' aqui que um jogo diz
         // como se ve', em vez de corrigir a camera por script a cada mapa.
         std::optional<float> cameraFov, cameraYaw, cameraPitch, cameraDistance;
+        // "dev_tools": true - o projeto e' uma BANCADA (demo/benchmark do
+        // motor): no modo jogo continua com os menus F1..F12, o painel de
+        // controle, o overlay F3, as barras e o minimapa. Jogo de verdade
+        // deixa de fora e sai limpo, como o exportado.
+        bool devTools = false;
     };
 
     static Project& instance();

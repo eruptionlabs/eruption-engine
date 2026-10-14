@@ -894,8 +894,10 @@ bool Engine::init(int width, int height, const std::string& title) {
     // minimapa). Vale no EDITOR; rodando como JOGO o motor se comporta como
     // o jogo exportado, mesmo neste binario - senao nenhuma captura de demo
     // sai limpa e o autor ve' a propria bancada por cima do jogo dele.
-    // ERUPTION_DEV=1 traz tudo de volta no modo jogo.
-    m_devTools = (ERUPTION_EDITOR && m_editorMode) || std::getenv("ERUPTION_DEV") != nullptr;
+    // ERUPTION_DEV=1 traz tudo de volta no modo jogo, e o projeto que e'
+    // bancada (demo/benchmark, "dev_tools" no project.eruption) tambem.
+    m_devTools = (ERUPTION_EDITOR && m_editorMode) || std::getenv("ERUPTION_DEV") != nullptr ||
+                 (Project::instance().isOpen() && Project::instance().manifest().devTools);
     m_showDebugOverlay = m_devTools;
     setHudBars(m_devTools);
     setMinimapHud(m_devTools);
