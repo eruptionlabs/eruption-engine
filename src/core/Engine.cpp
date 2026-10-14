@@ -2259,11 +2259,16 @@ void Engine::applyGraphicsPreset() {
     if (const char* tb = std::getenv("ERUPTION_TEST_MESH_TRI_BUDGET")) triBudget = std::max(0, std::atoi(tb));
     if (meshLodRatio <= 0.0f) triBudget = 0;
     m_modelRenderer.setMeshTriBudget(static_cast<uint32_t>(triBudget));
-    m_modelRenderer.setScreenCull(std::clamp<float>(p.value("small_object_cull_px", 0.0f), 0.0f, 16.0f));
+    // ERUPTION_TEST_NO_SIZE_CULL=1 (referencia "sem LOD" da bancada): nada
+    // some por ser pequeno na tela - nem objeto, nem caster de sombra.
+    static const bool kNoSizeCull = std::getenv("ERUPTION_TEST_NO_SIZE_CULL") != nullptr;
+    m_modelRenderer.setScreenCull(kNoSizeCull ? 0.0f
+                                              : std::clamp<float>(p.value("small_object_cull_px", 0.0f), 0.0f, 16.0f));
     // Escala do balanco da vegetacao ao vento (0 desliga). Chega ao vertex
     // shader em windParams.y.
     m_windSwayScale = std::clamp<float>(p.value("wind_sway_scale", 0.15f), 0.0f, 2.0f);
-    m_modelRenderer.setShadowMinPx(std::clamp<float>(p.value("shadow_caster_min_px", 0.0f), 0.0f, 16.0f));
+    m_modelRenderer.setShadowMinPx(kNoSizeCull ? 0.0f
+                                               : std::clamp<float>(p.value("shadow_caster_min_px", 0.0f), 0.0f, 16.0f));
     // Pisos do LOD: malha pequena nao gera LOD e nada troca perto da camera.
     // ERUPTION_TEST_LOD_MIN_DIST="lo[,far]" (bancada de video): pisos em
     // unidades de mundo a partir do OLHO. A camera de diorama fica a 400-800 u

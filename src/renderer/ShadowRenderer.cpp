@@ -1244,6 +1244,10 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
                         if (m_settings.csmStable) minSize = texelFloor;
                     }
                 }
+                // ERUPTION_TEST_NO_SIZE_CULL=1 (referencia da bancada): caster
+                // menor que o texel da cascata tambem entra.
+                static const bool kNoSizeCull = std::getenv("ERUPTION_TEST_NO_SIZE_CULL") != nullptr;
+                if (kNoSizeCull) minSize = 0.0f;
                 models->renderShadow(cmd,
                                      m_shadowInstPipeline != VK_NULL_HANDLE ? m_shadowInstPipeline : m_shadowPipeline,
                                      m_shadowInstLayout != VK_NULL_HANDLE ? m_shadowInstLayout : m_shadowLayout,
