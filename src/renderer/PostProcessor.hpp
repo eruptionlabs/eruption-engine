@@ -66,6 +66,25 @@ public:
         float cocZoomFactor = 1.0f;
         bool cocEnableForeground = true;
         bool visualizeCoC = false;
+
+        // FOCO POR ASSUNTO: a lente aponta para ALGUMA COISA da cena, e nao
+        // para o lugar onde a curva de zoom acha que ela deveria apontar.
+        //
+        // O mapeamento por zoom acima responde "o jogador aproximou quanto?".
+        // E' a resposta certa para quem anda pelo mapa e nao tem assunto: a
+        // maquete fica em foco por inteiro e o resto desmancha. Mas quando a
+        // cena TEM um assunto — dois times de combatentes num palco, uma
+        // mesa de dialogo, uma peca que o editor esta' inspecionando — quem
+        // sabe onde esta' o assunto e' quem montou a cena, nao a curva.
+        //
+        // `focusDistance` e' profundidade de verdade (unidades de mundo ao
+        // longo do eixo da camera), entao NAO passa pelo fator de lente: o
+        // mapeamento existe para converter autoria feita numa abertura de
+        // referencia, e aqui nao ha' autoria nenhuma para converter.
+        bool focusOverride = false;
+        float focusDistance = 0.0f;
+        float focusAperture = -1.0f;   // < 0: mantem a abertura do mapeamento
+        bool focusForeground = true;   // borra tambem o que esta' na FRENTE
         // Visualizacao crua do G-buffer ligada (checkbox "Show Normal (RGB)" e
         // irmaos). Faz o composite pular fog/tonemap/bloom para a leitura nao
         // mudar com a hora do dia - ver post_composite.frag.

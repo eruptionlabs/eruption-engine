@@ -833,6 +833,36 @@ int world_set_dof(lua_State* L) {
     return 0;
 }
 
+// ONDE A LENTE FOCA. Sem isto o desfoque de profundidade so' sabe responder
+// "o jogador aproximou quanto?" — a curva de zoom —, que e' a resposta certa
+// para quem anda pelo mapa e errada para toda cena que tem um ASSUNTO: um
+// palco de combate, uma mesa de dialogo, uma peca em exame. Dando o ponto,
+// quem montou a cena diz onde esta' o assunto, e o borrao vira moldura em
+// vez de enfeite. `nil` devolve a lente a' curva.
+//
+// A abertura aqui e' "borrao por unidade de profundidade": com o assunto a
+// 450 unidades e o fundo 200 atras dele, 0.15 deixa o fundo com cerca de um
+// pixel e meio e o assunto inteiro cravado.
+int world_set_focus(lua_State* L) {
+    auto& s = eng().postSettings();
+    if (lua_isnoneornil(L, 1)) {
+        s.focusOverride = false;
+        return 0;
+    }
+    const Vec3 p = checkVec3(L, 1);
+    const Camera& c = eng().camera();
+    // PROFUNDIDADE AO LONGO DO EIXO DA CAMERA, nao distancia em linha reta:
+    // e' o que o mapa de profundidade guarda, e e' contra ele que o shader
+    // de CoC compara. Com a distancia reta, um assunto fora do centro da
+    // tela ficaria desfocado por estar "longe" quando esta' no mesmo plano.
+    const Vec3 frente = glm::normalize(c.forward());
+    s.focusDistance = glm::max(glm::dot(p - c.position(), frente), 0.01f);
+    s.focusAperture = lua_isnoneornil(L, 2) ? -1.0f : static_cast<float>(luaL_checknumber(L, 2));
+    s.focusForeground = lua_isnoneornil(L, 3) ? true : lua_toboolean(L, 3) != 0;
+    s.focusOverride = true;
+    return 0;
+}
+
 // Personagem novo em tempo de execucao: o jogo monta o elenco que precisa
 // (NPC de cidade, figurantes de uma cena) sem passar pelo arquivo de cena. Devolve
 // falso se o sprite nao abriu.
@@ -949,6 +979,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
         {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof},
+        {"set_focus", world_set_focus},
         {"ground_height", world_ground_height}, {"map", world_map}, {"load_map", world_load_map},
         {"warp_map", world_warp_map}, {"warping", world_warping}, {nullptr, nullptr}};
     static const luaL_Reg player[] = {
@@ -1012,6 +1043,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "characters", characters);
     lib(L, "fx", fx);
     registerVfxApi(L, engine);
+    registerObjectsApi(L, engine);
     NativeModule::registerApi(L);
 }
 
@@ -1096,6 +1128,12 @@ declare world: {
     look: () -> string,
     set_look: (preset: string) -> boolean,
     set_dof: (on: boolean) -> (),
+    -- Where the lens focuses: a point of the scene, instead of the automatic
+    -- \"how far did the player zoom in\" curve. `aperture` is blur per unit of
+    -- depth (0.15 keeps a stage sharp and softens the background);
+    -- `foreground` also blurs what sits IN FRONT of that point. No point at
+    -- all gives the lens back to the automatic focus.
+    set_focus: (point: vector?, aperture: number?, foreground: boolean?) -> (),
     -- Name of the map being played.
     map: () -> string,
     -- Goes to another map (a door, a cave); the player appears at `position`
@@ -1284,7 +1322,7 @@ declare lights: {
     turn_on: (index: number) -> (),
     turn_off: (index: number) -> (),
 }
-)" + std::string(vfxApiDefinitions()) + NativeModule::apiDefinitions();
+)" + std::string(vfxApiDefinitions()) + objectsApiDefinitions() + NativeModule::apiDefinitions();
 }
 
 } // namespace eruption
