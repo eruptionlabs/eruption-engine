@@ -1,4 +1,5 @@
 #include "renderer/UiDocument.hpp"
+#include <unordered_set>
 
 #include "core/Logger.hpp"
 
@@ -81,9 +82,15 @@ void UiDocument::clear() {
 void UiDocument::build() {
     m_elements.clear();
     m_byId.clear();
+    // `m_byId` só é preenchido no fim (depois da ordenação por z), então ele
+    // não serve para saber quem já saiu daqui: o id repetido tem de ser
+    // marcado AGORA. Duas regras com o mesmo id são cascata, não dois
+    // elementos — e desde que `--class` existe o id repetido é a regra, não a
+    // exceção, porque a classe entra como mais uma regra do mesmo id.
+    std::unordered_set<std::string> criados;
     for (const CSSRule& r : m_parser.rules()) {
         if (r.selector.empty() || r.selector[0] != '#') continue;
-        if (m_byId.count(r.selector)) continue; // a cascata já foi resolvida na leitura
+        if (!criados.insert(r.selector).second) continue; // a cascata já foi resolvida na leitura
         const CSSRule merged = m_parser.mergedRule(r.selector);
         auto prop = [&](const char* name) -> const std::string* {
             auto it = merged.properties.find(name);

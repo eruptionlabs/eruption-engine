@@ -16,6 +16,19 @@
 // É o que torna a interface modificável sem compilar: trocar um arquivo de
 // texto muda a cara do jogo.
 //
+// INTERFACE COM LISTA. Uma ficha por personagem, um slot por turno na fila:
+// os elementos saem repetidos, e escrever cada um inteiro levou uma interface
+// de quatro fichas a 760 linhas em que quase tudo era
+// cópia — mudar a cor da barra de vida eram quatro edições que tinham de
+// combinar. `--class` resolve isso no parser (ver utils/CSSParser.cpp):
+//
+//     .barra-hp { --widget: bar; width: 60%; --fill-color: #d84040; ... }
+//     #hp-1 { --class: barra-hp; --parent: #ficha-1; }
+//     #hp-2 { --class: barra-hp; --parent: #ficha-2; }
+//
+// O id continua vencendo a classe, como em CSS. O mesmo arquivo depois da
+// conversão: 417 linhas, os mesmos 81 elementos.
+//
 // O documento NÃO desenha mundo nenhum: é 2D puro sobre a área de jogo.
 // Efeito que precisa de projeção (número subindo do mundo) é do UiCanvas.
 

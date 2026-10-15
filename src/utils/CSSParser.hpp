@@ -30,6 +30,9 @@ public:
 
 private:
     void parse(const std::string& content);
+
+    // Expande `--class` depois da leitura: ver o comentario da definicao.
+    void expandClasses();
     std::vector<CSSRule> m_rules;
 };
 

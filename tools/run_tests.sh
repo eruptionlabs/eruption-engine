@@ -40,6 +40,7 @@ run test_climate_fuzzy
 run test_weather_overrides
 run_src test_shadow_receivers src/math/Frustum.cpp
 run_src test_mesh_clusters src/utils/MeshClusters.cpp
+run_src test_css_classes src/utils/CSSParser.cpp
 
 printf '\n========================================\n'
 [ $FAIL -eq 0 ] && echo "TODOS OS TESTES PASSARAM" || echo "HOUVE FALHA"
