@@ -1157,7 +1157,12 @@ if (!m_ctx) return;
         // O override de bancada fica de fora: quem passa ERUPTION_TEST_COC_FOCAL
         // esta' varrendo um valor absoluto e quer exatamente aquele.
         float cocFocal = settings.cocFocalDistance;
-        if (settings.cocEnableZoomMapping) {
+        // O foco por assunto vence o mapeamento por zoom (ver PostSettings):
+        // quem passou um ponto da cena ja' deu a profundidade real, e o fator
+        // de lente so' converteria de novo o que ja' esta' convertido.
+        if (settings.focusOverride) {
+            cocFocal = settings.focusDistance;
+        } else if (settings.cocEnableZoomMapping) {
             static const bool kFocalDeBancada = std::getenv("ERUPTION_TEST_COC_FOCAL") != nullptr;
             constexpr float kTanMetadeRef = 0.57735027f;   // tan(60/2)
             // proj[1][1] e' NEGATIVO (Vulkan inverte o Y do clip): sem o
@@ -1167,12 +1172,16 @@ if (!m_ctx) return;
             if (!kFocalDeBancada) cocFocal *= lente;
         }
         cocPush.focal_distance = cocFocal;
-        cocPush.aperture = settings.cocAperture * 0.05f;
+        const float abertura = (settings.focusOverride && settings.focusAperture >= 0.0f)
+                                   ? settings.focusAperture
+                                   : settings.cocAperture;
+        cocPush.aperture = abertura * 0.05f;
         cocPush.max_blur = settings.cocMaxBlur;
         cocPush.zoom_factor = settings.cocZoomFactor;
         cocPush.near_plane = nearPlane;
         cocPush.far_plane = farPlane;
-        cocPush.enable_foreground = settings.cocEnableForeground ? 1 : 0;
+        cocPush.enable_foreground = (settings.focusOverride ? settings.focusForeground
+                                                            : settings.cocEnableForeground) ? 1 : 0;
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(cocPush), &cocPush);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkc::cmdEndRendering(cmd);
