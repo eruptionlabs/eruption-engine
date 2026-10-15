@@ -1106,6 +1106,20 @@ void Engine::shutdown() {
     }
     m_vfxTextures.clear();
     m_vfxTextureSlots.clear();
+    // Imagens citadas pelo .css da interface (`--image`, ui.image). O cache
+    // existe para nao reabrir o arquivo a cada quadro, mas ninguem o soltava:
+    // ao sair, o VMA acusava uma alocacao viva por imagem distinta que a
+    // interface tivesse mostrado — cinco retratos de 23 KB numa partida com
+    // uma batalha, e a conta so' cresce com o elenco. Em build de debug a
+    // asserçao do VMA derruba o processo no shutdown por causa disto.
+    for (auto& kv : m_uiImages) {
+        UiImage& u = kv.second;
+        if (u.set) ImGui_ImplVulkan_RemoveTexture(u.set);
+        if (u.tex.slot) m_bindless.freeSlot(u.tex.slot);
+        if (u.tex.view) vkDestroyImageView(m_vulkan.device(), u.tex.view, nullptr);
+        if (u.tex.image) vmaDestroyImage(m_vulkan.allocator(), u.tex.image, u.tex.alloc);
+    }
+    m_uiImages.clear();
     m_spherePreview.shutdown();
     m_modelRenderer.shutdown(); m_terrainRenderer.shutdown(); m_spriteSystem.shutdown();
     m_spriteRenderer.shutdown(); m_shadowRenderer.shutdown(); m_deferredLighting.shutdown();
