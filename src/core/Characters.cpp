@@ -82,7 +82,13 @@ void Engine::walkCharacter(int index, const Vec3& target, float seconds) {
     SceneCharacter& c = m_characters[static_cast<size_t>(index)];
     if (!findPath(c.position, target, 4.0f, c.path)) {
         // Sem caminho (alvo cercado, longe demais): vai em linha reta.
-        ERUPTION_LOG_WARN("Character %s: no path to (%.0f, %.0f); walking straight", c.name.c_str(), target.x, target.z);
+        // Quando nem a origem nem o destino tem chao andavel (um palco montado
+        // por script fora do mapa, por exemplo) nao existe caminho a procurar,
+        // e a linha reta e' o unico comportamento que faz sentido. Ali nao e'
+        // aviso: avisar a cada personagem que entra em cena so' afoga o log.
+        const bool semChao = !navWalkable(c.position.x, c.position.z) && !navWalkable(target.x, target.z);
+        if (!semChao)
+            ERUPTION_LOG_WARN("Character %s: no path to (%.0f, %.0f); walking straight", c.name.c_str(), target.x, target.z);
         c.path = {c.position, target};
     }
     float length = 0.0f;
