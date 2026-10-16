@@ -57,6 +57,11 @@ public:
     struct AreaMark { int vtx = 0, cmd = 0; };
     static AreaMark beginArea(ImDrawList* dl, const ImVec2& size);
     static void endArea(ImDrawList* dl, const AreaMark& mark, const ImVec2& origin);
+    // A área aberta agora (entre beginArea e endArea), ou nullptr. Quem
+    // desenha por cima do HUD sem receber o draw list - os marcadores do
+    // minimapa - desenha nela, e o endArea leva o desenho junto até a origem.
+    static ImDrawList* areaAtual();
+    static ImVec2 tamanhoAreaAtual();
 
     CSSRect getMinimapRect(const ImVec2& displaySize) const;
     CSSRect getMinimapInfoRect(const ImVec2& displaySize) const;
