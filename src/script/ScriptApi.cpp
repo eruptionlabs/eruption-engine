@@ -891,6 +891,10 @@ int camera_free(lua_State* L) {
     if (PlayerController* p = ScriptBridge::player()) p->setFreeCamera(lua_toboolean(L, 1) != 0);
     return 0;
 }
+int camera_keep_inside_map(lua_State* L) {
+    if (PlayerController* p = ScriptBridge::player()) p->setKeepViewInsideMap(lua_toboolean(L, 1) != 0);
+    return 0;
+}
 
 int player_frozen(lua_State* L) {
     const PlayerController* p = ScriptBridge::player();
@@ -1006,7 +1010,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"target", camera_target}, {"set_target", camera_set_target},
         {"orbit", camera_orbit}, {"set_orbit", camera_set_orbit}, {"basis", camera_basis},
         {"view", camera_view},
-        {"free", camera_free}, {nullptr, nullptr}};
+        {"free", camera_free}, {"keep_inside_map", camera_keep_inside_map}, {nullptr, nullptr}};
     static const luaL_Reg fx[] = {
         {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash},
         {"fading", fx_fading}, {nullptr, nullptr}};

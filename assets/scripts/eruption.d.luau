@@ -171,6 +171,10 @@ declare camera: {
     -- Free camera: stops following the player, so the script (or the mouse)
     -- decides where it looks. Same switch as the middle mouse button.
     free: (on: boolean) -> (),
+    -- The following camera stops before the FRAME passes the map edge (the
+    -- player leaves the center near the border, as in a 2D RPG). Same as
+    -- "keep_inside_map" in the project's camera block.
+    keep_inside_map: (on: boolean) -> (),
 }
 
 -- Presentation of a hit: what makes a blow feel like it landed. The engine
