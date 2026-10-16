@@ -1,5 +1,6 @@
 #include <chrono>
 #include "renderer/PostProcessor.hpp"
+#include "renderer/CameraMotion.hpp"
 #include <cstdlib>
 #include "renderer/PostFormat.hpp"
 #include "renderer/ShaderCompiler.hpp"
@@ -1369,7 +1370,10 @@ if (!m_ctx) return;
     // ERUPTION_TEST_NO_MOTION_BLUR=1 (debug): comparar quadros de camera em
     // movimento sem o borrao, que esconde diferenca entre duas execucoes.
     static const bool kNoMotionBlur = std::getenv("ERUPTION_TEST_NO_MOTION_BLUR") != nullptr;
-    push.motionBlurParams = Vec4(settings.enableMotionBlur && !kNoMotionBlur ? 1.0f : 0.0f, settings.motionBlurAmount,
+    // Sem borrao no quadro de um CORTE de camera: o prevViewProj e' o do
+    // plano anterior, e a "velocidade" entre dois planos lavava a tela.
+    const bool borrao = settings.enableMotionBlur && !kNoMotionBlur && !CameraMotion::corteNesteQuadro();
+    push.motionBlurParams = Vec4(borrao ? 1.0f : 0.0f, settings.motionBlurAmount,
                                  static_cast<float>(settings.toneMapMode), 0.0f);
     bool caEnabled = settings.enableChromaticAberration;
     if (std::getenv("ERUPTION_TEST_NO_CA") != nullptr) caEnabled = false;

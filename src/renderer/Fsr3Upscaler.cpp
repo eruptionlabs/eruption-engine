@@ -1,4 +1,5 @@
 #include "renderer/Fsr3Upscaler.hpp"
+#include "renderer/CameraMotion.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "core/Logger.hpp"
 
@@ -592,7 +593,8 @@ void Fsr3Upscaler::dispatch(VkCommandBuffer cmd, const FrameParams& params) {
     const uint32_t rw = m_renderW, rh = m_renderH, dw = m_displayW, dh = m_displayH;
 
     // ---- constantes (cpp:943-1031) ----
-    const bool reset = params.reset || m_firstExecution;
+    // Corte de camera: o historico e' do plano anterior e so' faria fantasma.
+    const bool reset = params.reset || m_firstExecution || CameraMotion::corteNesteQuadro();
     const bool first = m_firstExecution;
     m_firstExecution = false;
     Constants& C = m_c;

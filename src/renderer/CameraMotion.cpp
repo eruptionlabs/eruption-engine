@@ -6,6 +6,8 @@
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/packing.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -209,6 +211,30 @@ void CameraMotion::writeSet() {
 }
 
 void CameraMotion::dispatch(VkCommandBuffer cmd, const Camera& camera, const Mat4& prevViewProjNoJitter) {
+    // CORTE NAO E' MOVIMENTO. Uma camera que troca de plano de um quadro
+    // para o outro (o corte seco de uma cena, um teleporte) "anda" centenas
+    // de unidades num quadro, e o vetor de movimento le' isso como velocidade
+    // altissima: o borrao de movimento lavava a tela inteira justo no quadro
+    // do corte (fotografado nas trocas de plano da camera de batalha de um
+    // jogo). Salto de mais de 30% da distancia ate' o alvo, ou giro de mais
+    // de 25 graus, NUM quadro, e' corte: aquele quadro sai com movimento de
+    // camera zero (e o pos e o FSR leem `corteNesteQuadro`). Movimento
+    // continuo fica muito abaixo disso mesmo rapido
+    // (uma aproximacao suave de 800 para 300 unidades a 20 fps anda ~17% da
+    // distancia no primeiro quadro).
+    const Vec3 pos = camera.position();
+    const Vec3 fwd = glm::normalize(camera.forward());
+    bool corte = false;
+    if (m_hasPrev) {
+        const float dist = std::max(glm::length(camera.target() - pos), 1.0f);
+        const float salto = glm::length(pos - m_prevPos) / dist;
+        const float giro = glm::degrees(std::acos(glm::clamp(glm::dot(fwd, m_prevFwd), -1.0f, 1.0f)));
+        corte = salto > 0.30f || giro > 25.0f;
+    }
+    m_prevPos = pos;
+    m_prevFwd = fwd;
+    m_hasPrev = true;
+    s_corte = corte;
     if (m_pipeline == VK_NULL_HANDLE || m_depthView == VK_NULL_HANDLE) return;
 
     m_ctx->cmdImageBarrier(cmd, m_image, m_layout, VK_IMAGE_LAYOUT_GENERAL,
@@ -216,12 +242,14 @@ void CameraMotion::dispatch(VkCommandBuffer cmd, const Camera& camera, const Mat
                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                            VK_ACCESS_2_SHADER_READ_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
+
     // A unica matriz que toca coordenadas de mundo (grandes) e' montada em
     // double; o resto do caminho fica em espaco de vista, ver o shader.
     const Mat4 pj = camera.projJittered();
     const bool ortho = camera.isOrthographic();
     Push push{};
-    push.viewToPrevClip = Mat4(glm::dmat4(prevViewProjNoJitter) * glm::inverse(glm::dmat4(camera.viewMatrix())));
+    const Mat4& prev = corte ? camera.viewProjNoJitter() : prevViewProjNoJitter;
+    push.viewToPrevClip = Mat4(glm::dmat4(prev) * glm::inverse(glm::dmat4(camera.viewMatrix())));
     push.projNoJitter = camera.projNoJitter();
     push.projJ = ortho ? Vec4(pj[0][0], pj[1][1], pj[3][0], pj[3][1])
                        : Vec4(pj[0][0], pj[1][1], pj[2][0], pj[2][1]);
