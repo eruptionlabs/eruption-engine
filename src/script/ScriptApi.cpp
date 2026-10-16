@@ -832,6 +832,18 @@ int world_set_dof(lua_State* L) {
     eng().postSettings().enableDoF = lua_toboolean(L, 1) != 0;
     return 0;
 }
+// Borrao de movimento e aberracao cromatica vem do preset de QUALIDADE, mas
+// sao escolha de direcao de arte: num jogo de sprite o borrao arrasta o
+// billboard (ele gira com a camera, e o vetor de movimento da tela e' o de
+// geometria parada) e a franja colorida come o contorno do pixel.
+int world_set_motion_blur(lua_State* L) {
+    eng().postSettings().enableMotionBlur = lua_toboolean(L, 1) != 0;
+    return 0;
+}
+int world_set_chromatic_aberration(lua_State* L) {
+    eng().postSettings().enableChromaticAberration = lua_toboolean(L, 1) != 0;
+    return 0;
+}
 
 // ONDE A LENTE FOCA. Sem isto o desfoque de profundidade so' sabe responder
 // "o jogador aproximou quanto?" — a curva de zoom —, que e' a resposta certa
@@ -997,7 +1009,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
-        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof},
+        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_motion_blur", world_set_motion_blur},
+        {"set_chromatic_aberration", world_set_chromatic_aberration},
         {"set_focus", world_set_focus},
         {"ground_height", world_ground_height}, {"map", world_map}, {"load_map", world_load_map},
         {"warp_map", world_warp_map}, {"warping", world_warping}, {nullptr, nullptr}};

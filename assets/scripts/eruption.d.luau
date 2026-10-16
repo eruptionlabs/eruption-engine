@@ -78,6 +78,17 @@ declare world: {
     look: () -> string,
     set_look: (preset: string) -> boolean,
     set_dof: (on: boolean) -> (),
+    -- Motion blur and chromatic aberration come from the quality preset; a
+    -- game can turn them off as art direction (sprite games usually do: the
+    -- blur smears billboards, the color fringe eats pixel outlines).
+    set_motion_blur: (on: boolean) -> (),
+    set_chromatic_aberration: (on: boolean) -> (),
+    -- Where the lens focuses: a point of the scene, instead of the automatic
+    -- \"how far did the player zoom in\" curve. `aperture` is blur per unit of
+    -- depth (0.15 keeps a stage sharp and softens the background);
+    -- `foreground` also blurs what sits IN FRONT of that point. No point at
+    -- all gives the lens back to the automatic focus.
+    set_focus: (point: vector?, aperture: number?, foreground: boolean?) -> (),
     -- Name of the map being played.
     map: () -> string,
     -- Goes to another map (a door, a cave); the player appears at `position`
