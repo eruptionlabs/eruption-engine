@@ -21,7 +21,9 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/euler_angles.hpp>
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <cstring>
 #include <limits>
@@ -244,6 +246,78 @@ int world_ground_height(lua_State* L) {
     return 1;
 }
 
+// Caminho de arquivo como o conteudo do jogo o cita: relativo a' pasta do
+// projeto quando esta' dentro dela.
+std::string gamePath(const std::string& path) {
+    if (path.empty() || !project::isOpen()) return path;
+    std::error_code ec;
+    const std::filesystem::path rel = std::filesystem::relative(path, project::root(), ec);
+    if (ec || rel.empty() || *rel.begin() == "..") return path;
+    return rel.generic_string();
+}
+
+// Mistura das camadas pintadas do chao em volta de (x, z): media dos pesos
+// num disco de raio `radius` (0 = o ponto da grade mais perto). Tabela
+// arquivo da camada -> peso; vazia num mapa sem camadas.
+int world_ground_layers(lua_State* L) {
+    const float x = static_cast<float>(luaL_checknumber(L, 1));
+    const float z = static_cast<float>(luaL_checknumber(L, 2));
+    const float radius = static_cast<float>(luaL_optnumber(L, 3, 0.0));
+    const Engine::SplatEdit& sp = eng().splatEdit();
+    const Engine::HeightEdit& h = eng().heightEdit();
+    lua_newtable(L);
+    if (!sp.active || sp.w == 0 || sp.d == 0 || sp.weights.size() < size_t(sp.w) * sp.d * 8 || h.scale <= 0.0f)
+        return 1;
+    const float gx = (x - h.offX) / h.scale, gz = (z - h.offZ) / h.scale;
+    const float gr = std::max(radius / h.scale, 0.0f);
+    const int x0 = std::max(0, int(std::floor(gx - gr))), x1 = std::min(int(sp.w) - 1, int(std::ceil(gx + gr)));
+    const int z0 = std::max(0, int(std::floor(gz - gr))), z1 = std::min(int(sp.d) - 1, int(std::ceil(gz + gr)));
+    float sum[8] = {};
+    int n = 0;
+    for (int iz = z0; iz <= z1; ++iz)
+        for (int ix = x0; ix <= x1; ++ix) {
+            const float dx = float(ix) - gx, dz = float(iz) - gz;
+            if (gr > 0.0f && dx * dx + dz * dz > gr * gr) continue;
+            const float* w = &sp.weights[(size_t(iz) * sp.w + ix) * 8];
+            for (int l = 0; l < 8; ++l) sum[l] += w[l];
+            ++n;
+        }
+    if (n == 0) return 1;
+    for (int l = 0; l < 8; ++l) {
+        const std::string& name = sp.layerFiles[l].empty() ? sp.layerNames[l] : sp.layerFiles[l];
+        if (name.empty()) continue;
+        lua_pushnumber(L, sum[l] / float(n));
+        lua_setfield(L, -2, gamePath(name).c_str());
+    }
+    return 1;
+}
+
+// Os liquidos que o mapa declara: { name, kind ("water" | "lava"), level,
+// center (vector na cota do liquido), radius (o maior raio da margem) }.
+int world_liquids(lua_State* L) {
+    lua_newtable(L);
+    const auto* map = eng().currentMap();
+    if (!map) return 1;
+    int i = 0;
+    for (const auto& lq : map->liquids) {
+        float r = lq.radius;
+        for (float s : lq.shoreRadius) r = std::max(r, s);
+        lua_newtable(L);
+        lua_pushstring(L, lq.name.c_str());
+        lua_setfield(L, -2, "name");
+        lua_pushstring(L, lq.kind == 1 ? "lava" : "water");
+        lua_setfield(L, -2, "kind");
+        lua_pushnumber(L, lq.level);
+        lua_setfield(L, -2, "level");
+        pushVec3(L, Vec3(lq.centerX, lq.level, lq.centerZ));
+        lua_setfield(L, -2, "center");
+        lua_pushnumber(L, r);
+        lua_setfield(L, -2, "radius");
+        lua_rawseti(L, -2, ++i);
+    }
+    return 1;
+}
+
 // ---------------------------------------------------------------- player
 
 int player_position(lua_State* L) {
@@ -449,6 +523,36 @@ int models_name(lua_State* L) {
 }
 int models_position(lua_State* L) {
     pushVec3(L, Vec3(instances()[checkModel(L, 1)].transform[3]));
+    return 1;
+}
+// Modelos ligados cuja posicao fica a ate' `radius` de `position` no plano
+// do chao (a altura nao conta), do mais perto ao mais longe.
+int models_near(lua_State* L) {
+    const Vec3 c = checkVec3(L, 1);
+    const float r = static_cast<float>(luaL_checknumber(L, 2));
+    const auto& all = instances();
+    std::vector<std::pair<float, int>> found;
+    for (size_t i = 0; i < all.size(); ++i) {
+        if (!all[i].enabled) continue;
+        const Vec3 p = Vec3(all[i].transform[3]);
+        const float d2 = (p.x - c.x) * (p.x - c.x) + (p.z - c.z) * (p.z - c.z);
+        if (d2 <= r * r) found.emplace_back(d2, int(i));
+    }
+    std::sort(found.begin(), found.end());
+    lua_createtable(L, int(found.size()), 0);
+    for (size_t k = 0; k < found.size(); ++k) {
+        lua_pushinteger(L, found[k].second + 1);
+        lua_rawseti(L, -2, int(k + 1));
+    }
+    return 1;
+}
+int models_file(lua_State* L) {
+    lua_pushstring(L, gamePath(instances()[checkModel(L, 1)].assetPath).c_str());
+    return 1;
+}
+int models_scale(lua_State* L) {
+    const Mat4& m = instances()[checkModel(L, 1)].transform;
+    pushVec3(L, Vec3(glm::length(Vec3(m[0])), glm::length(Vec3(m[1])), glm::length(Vec3(m[2]))));
     return 1;
 }
 int models_set_position(lua_State* L) {
@@ -1047,7 +1151,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_motion_blur", world_set_motion_blur},
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
         {"set_focus", world_set_focus},
-        {"ground_height", world_ground_height}, {"map", world_map}, {"load_map", world_load_map},
+        {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids},
+        {"map", world_map}, {"load_map", world_load_map},
         {"warp_map", world_warp_map}, {"warping", world_warping}, {nullptr, nullptr}};
     static const luaL_Reg player[] = {
         {"position", player_position}, {"set_position", player_set_position}, {"set_sprite", player_set_sprite}, {"near", player_near},
@@ -1065,7 +1170,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {nullptr, nullptr}};
     static const luaL_Reg models[] = {
         {"count", models_count}, {"find", models_find}, {"name", models_name},
-        {"position", models_position}, {"set_position", models_set_position},
+        {"position", models_position}, {"set_position", models_set_position}, {"near", models_near},
+        {"file", models_file}, {"scale", models_scale},
         {"set_rotation", models_set_rotation}, {"set_scale", models_set_scale},
         {"move_by", models_move_by}, {"rotate_by", models_rotate_by},
         {"visible", models_visible}, {"set_visible", models_set_visible},
@@ -1190,6 +1296,13 @@ declare world: {
     set_weather: (name: string) -> (),
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
+    -- Painted ground layers around (x, z): average weight of each layer in
+    -- a disc of `radius` (0 or nil: the nearest grid point), keyed by the
+    -- layer's texture file. Empty if the map has no painted layers.
+    ground_layers: (x: number, z: number, radius: number?) -> { [string]: number },
+    -- Liquids the map declares (lakes): kind is "water" or "lava", center is
+    -- at the liquid's level, radius is the farthest shore.
+    liquids: () -> { { name: string, kind: string, level: number, center: vector, radius: number } },
     -- Scene look: a preset from data/diorama.json (color grading, god rays)
     -- and the depth-of-field blur. False if there is no preset by that name.
     look: () -> string,
@@ -1344,6 +1457,13 @@ declare models: {
     name: (model: Model) -> string,
     position: (model: Model) -> vector,
     set_position: (model: Model, position: vector) -> (),
+    -- Enabled models within `radius` of `position` on the ground plane
+    -- (height ignored), nearest first.
+    near: (position: vector, radius: number) -> {Model},
+    -- The file the model came from (relative to the game folder).
+    file: (model: Model) -> string,
+    -- Scale along X, Y and Z.
+    scale: (model: Model) -> vector,
     -- Rotation in degrees around X, Y and Z.
     set_rotation: (model: Model, degrees: vector) -> (),
     set_scale: (model: Model, scale: number | vector) -> (),

@@ -73,6 +73,13 @@ declare world: {
     set_weather: (name: string) -> (),
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
+    -- Painted ground layers around (x, z): average weight of each layer in
+    -- a disc of `radius` (0 or nil: the nearest grid point), keyed by the
+    -- layer's texture file. Empty if the map has no painted layers.
+    ground_layers: (x: number, z: number, radius: number?) -> { [string]: number },
+    -- Liquids the map declares (lakes): kind is "water" or "lava", center is
+    -- at the liquid's level, radius is the farthest shore.
+    liquids: () -> { { name: string, kind: string, level: number, center: vector, radius: number } },
     -- Scene look: a preset from data/diorama.json (color grading, god rays)
     -- and the depth-of-field blur. False if there is no preset by that name.
     look: () -> string,
@@ -227,6 +234,13 @@ declare models: {
     name: (model: Model) -> string,
     position: (model: Model) -> vector,
     set_position: (model: Model, position: vector) -> (),
+    -- Enabled models within `radius` of `position` on the ground plane
+    -- (height ignored), nearest first.
+    near: (position: vector, radius: number) -> {Model},
+    -- The file the model came from (relative to the game folder).
+    file: (model: Model) -> string,
+    -- Scale along X, Y and Z.
+    scale: (model: Model) -> vector,
     -- Rotation in degrees around X, Y and Z.
     set_rotation: (model: Model, degrees: vector) -> (),
     set_scale: (model: Model, scale: number | vector) -> (),
