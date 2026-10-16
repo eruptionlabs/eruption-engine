@@ -77,6 +77,10 @@ int Engine::findCharacter(const std::string& name) const {
     return -1;
 }
 
+// Velocidade em que a animacao de andar de uma folha e' tocada no ritmo dela
+// (a mesma que walkCharacter usa quando ninguem pede um tempo).
+static constexpr float kPassoNormal = 60.0f;
+
 void Engine::walkCharacter(int index, const Vec3& target, float seconds) {
     if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
     SceneCharacter& c = m_characters[static_cast<size_t>(index)];
@@ -93,7 +97,7 @@ void Engine::walkCharacter(int index, const Vec3& target, float seconds) {
     }
     float length = 0.0f;
     for (size_t i = 1; i < c.path.size(); ++i) length += glm::length(Vec2(c.path[i].x - c.path[i - 1].x, c.path[i].z - c.path[i - 1].z));
-    c.speed = seconds > 0.0f ? std::max(1.0f, length / seconds) : 60.0f;
+    c.speed = seconds > 0.0f ? std::max(1.0f, length / seconds) : kPassoNormal;
     c.pathIndex = 1;
     c.walking = c.path.size() >= 2;
 }
@@ -260,7 +264,16 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
     const auto& action = ls.act.actions[static_cast<size_t>(actionIdx)];
     if (action.frames.empty()) return;
     if (c.frame >= static_cast<int>(action.frames.size())) c.frame = 0;
-    const float delay = action.delay > 0 ? action.delay : 150.0f;
+    float delay = action.delay > 0 ? action.delay : 150.0f;
+    // O CICLO DE PASSOS ACOMPANHA A VELOCIDADE. A folha diz o ritmo da
+    // caminhada no passo normal (o mesmo de walkCharacter sem tempo pedido);
+    // quem anda mais rapido que isso - um script que manda atravessar um
+    // palco em meio segundo - tocava os mesmos 75 ms por quadro e PATINAVA:
+    // o corpo andava cinco larguras com dois passos. Correndo, os passos
+    // ficam mais curtos no tempo; devagar, mais longos (com teto, para um
+    // passo lento nao virar camera lenta).
+    if (moving && !named && c.speed > 0.0f)
+        delay *= std::clamp(kPassoNormal / c.speed, 0.25f, 2.0f);
     c.timer += dt * 1000.0f;
     if (c.timer >= delay) {
         c.frame = (c.frame + 1) % static_cast<int>(action.frames.size());
