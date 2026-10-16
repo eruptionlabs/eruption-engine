@@ -906,6 +906,21 @@ int characters_add(lua_State* L) {
     ScriptHost::NativeWork trabalho;
     const int idx = eng().addCharacter(name, luaL_checkstring(L, 2), checkVec3(L, 3),
                                        static_cast<float>(luaL_optnumber(L, 4, 0.0)));
+    // SPRITE QUE NAO ABRIU = FALSO, como a declaracao promete. O motor guarda
+    // o personagem mesmo sem sprite (o editor precisa: a cena nao pode perder
+    // um personagem porque o arquivo dele sumiu), mas para o script isso
+    // devolvia verdadeiro e nenhum jogo conseguia notar arte faltando - nem
+    // tentar outra. O personagem sem sprite sai, para o nome ficar livre para
+    // a segunda tentativa.
+    if (idx >= 0) {
+        auto& c = eng().characters()[static_cast<size_t>(idx)];
+        if (!c.look.loaded) {
+            c.removed = true;
+            c.name.clear();
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+    }
     lua_pushboolean(L, idx >= 0);
     return 1;
 }
