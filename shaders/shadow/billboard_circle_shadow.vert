@@ -86,10 +86,18 @@ void main() {
     float dilation = max(circleParams.x, 0.01);
     vec3 projectedPos = feetWorldPos;
 
+    // A PEGADA SEGUE A ALTURA, NAO A CELULA. A largura do quadro inclui o
+    // que o boneco faz com os bracos - a estocada de uma lanca, a asa de um
+    // dragao, a folga do recorte -, e uma sombra da largura da celula saia
+    // duas, tres vezes mais larga que o corpo (medido: um cavaleiro de celula
+    // 312 px para um corpo de ~120). Um corpo em pe' tem uns 55% da altura de
+    // largura; a sombra fica no menor dos dois. Sprite alto e fino nao muda.
+    float pegada = min(scaleX, scaleY * 0.55);
+
     // Build a flat circle on the XZ ground plane.  Z is compressed (0.6) to
     // match the isometric angle used by the visible sprite.
-    projectedPos.x += a_position.x * scaleX * dilation;
-    projectedPos.z += a_position.y * scaleX * dilation * 0.6;
+    projectedPos.x += a_position.x * pegada * dilation;
+    projectedPos.z += a_position.y * pegada * dilation * 0.6;
     // Lift the shadow above the ground so it passes the depth test against
     // the terrain instead of fighting with it.  The value is tuned to give
     // the shadow the same depth priority as the sprite that casts it.
