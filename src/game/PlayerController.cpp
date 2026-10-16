@@ -643,14 +643,15 @@ void PlayerController::renderMinimapMarkers() const {
     const float zoom = glm::max(bmax.x - bmin.x, bmax.z - bmin.z) * 0.5f * 1.02f;
 
     // Mundo -> textura do minimapa (orto de cima, eixo X = leste) e textura ->
-    // tela: a imagem e' desenhada com os UV invertidos nos dois eixos.
+    // tela: a imagem e' desenhada com o V invertido (norte para cima, leste
+    // para a direita, como a camera do jogo).
     const float u = ((m_pos.x - cx) / zoom + 1.0f) * 0.5f;
     const float v = ((m_pos.z - cz) / zoom + 1.0f) * 0.5f;
     if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) return;
-    const ImVec2 p(ini.x + lado * (1.0f - u), ini.y + lado * (1.0f - v));
+    const ImVec2 p(ini.x + lado * u, ini.y + lado * (1.0f - v));
 
-    // Seta na direcao em que ele olha (as mesmas inversoes valem para ela).
-    const ImVec2 d(-std::sin(m_yaw), -std::cos(m_yaw));
+    // Seta na direcao em que ele olha (a mesma inversao vale para ela).
+    const ImVec2 d(std::sin(m_yaw), -std::cos(m_yaw));
     const ImVec2 n(-d.y, d.x);
     const float t = std::max(5.0f, lado * 0.035f);
     const ImVec2 a(p.x + d.x * t * 1.4f, p.y + d.y * t * 1.4f);
