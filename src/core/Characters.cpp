@@ -77,9 +77,12 @@ int Engine::findCharacter(const std::string& name) const {
     return -1;
 }
 
-// Velocidade em que a animacao de andar de uma folha e' tocada no ritmo dela
-// (a mesma que walkCharacter usa quando ninguem pede um tempo).
+// Velocidade padrao de walkCharacter quando ninguem pede um tempo.
 static constexpr float kPassoNormal = 60.0f;
+// Ritmo em que a animacao de andar de uma folha casa com o chao: ~1,1 altura
+// de corpo por segundo (o passo normal de 60 num boneco de celula ~55, a
+// escala em que o elenco foi desenhado).
+static constexpr float kAlturasPorSegundo = 1.1f;
 
 void Engine::walkCharacter(int index, const Vec3& target, float seconds) {
     if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
@@ -266,14 +269,27 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
     if (c.frame >= static_cast<int>(action.frames.size())) c.frame = 0;
     float delay = action.delay > 0 ? action.delay : 150.0f;
     // O CICLO DE PASSOS ACOMPANHA A VELOCIDADE. A folha diz o ritmo da
-    // caminhada no passo normal (o mesmo de walkCharacter sem tempo pedido);
-    // quem anda mais rapido que isso - um script que manda atravessar um
+    // caminhada no passo natural do boneco; quem anda mais rapido que isso - um script que manda atravessar um
     // palco em meio segundo - tocava os mesmos 75 ms por quadro e PATINAVA:
     // o corpo andava cinco larguras com dois passos. Correndo, os passos
     // ficam mais curtos no tempo; devagar, mais longos (com teto, para um
     // passo lento nao virar camera lenta).
-    if (moving && !named && c.speed > 0.0f)
-        delay *= std::clamp(kPassoNormal / c.speed, 0.25f, 2.0f);
+    // A referencia e' em ALTURAS DE CORPO por segundo, nao em unidades: o
+    // passo de um boneco de 20 unidades e' menos da metade do de um de 45, e
+    // com uma referencia fixa a caminhada natural do menor saia em camera
+    // lenta. A altura e' a da celula do quadro atual, como ela vai a tela.
+    if (moving && !named && c.speed > 0.0f) {
+        float altura = 0.0f;
+        const auto& camadas = action.frames[static_cast<size_t>(c.frame)].sprites;
+        if (!camadas.empty()) {
+            const auto& spr = camadas.front();
+            const int idx = spr.index + (spr.type == 1 ? static_cast<int>(ls.indexedTextureCount) : 0);
+            if (idx >= 0 && idx < static_cast<int>(ls.textures.size()))
+                altura = static_cast<float>(ls.textures[static_cast<size_t>(idx)].height) * kPixelToWorld * spr.scaleY;
+        }
+        const float passo = altura > 1.0f ? kAlturasPorSegundo * altura : kPassoNormal;
+        delay *= std::clamp(passo / c.speed, 0.25f, 2.0f);
+    }
     c.timer += dt * 1000.0f;
     if (c.timer >= delay) {
         c.frame = (c.frame + 1) % static_cast<int>(action.frames.size());
