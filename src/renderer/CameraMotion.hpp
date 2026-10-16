@@ -15,6 +15,11 @@ namespace eruption {
 // SEM jitter. Objetos com movimento proprio nao aparecem aqui.
 class CameraMotion {
 public:
+    // A camera deste quadro CORTOU (trocou de plano ou teleportou) em vez de
+    // se mover - decidido em dispatch, que roda antes do pos e do FSR no
+    // mesmo quadro. Quem integra movimento no tempo (borrao de movimento,
+    // historico temporal) nao deve integrar atraves de um corte.
+    static bool corteNesteQuadro() { return s_corte; }
     bool init(VulkanContext* ctx, uint32_t width, uint32_t height);
     void shutdown();
     // Recria o alvo no tamanho novo. `depthView` = depth do G-buffer
@@ -58,6 +63,11 @@ private:
     VmaAllocation m_alloc = VK_NULL_HANDLE;
     VkImageView m_view = VK_NULL_HANDLE;
     VkImageLayout m_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    // Camera do quadro anterior, para reconhecer CORTE (ver dispatch).
+    Vec3 m_prevPos{0.0f};
+    Vec3 m_prevFwd{0.0f, 0.0f, 1.0f};
+    bool m_hasPrev = false;
+    static inline bool s_corte = false;
 
     VkSampler m_sampler = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
