@@ -813,6 +813,26 @@ int camera_basis(lua_State* L) {
 // rays) e o desfoque de profundidade. Generico: vale pra RPG, pra maquete e
 // pra estudo de arquitetura - e' o "visual desta cena", nao uma regra de jogo.
 int world_set_look(lua_State* L) {
+    // TABELA em vez de nome: o look do proprio jogo, com os mesmos campos dos
+    // presets de data/diorama.json (so' os que vierem mudam; o resto fica).
+    // Um jogo tem a sua direcao de arte sem precisar pôr preset no motor.
+    if (lua_istable(L, 1)) {
+        nlohmann::json j = nlohmann::json::object();
+        lua_pushnil(L);
+        while (lua_next(L, 1) != 0) {
+            if (lua_type(L, -2) == LUA_TSTRING) {
+                const char* k = lua_tostring(L, -2);
+                if (lua_type(L, -1) == LUA_TNUMBER) j[k] = lua_tonumber(L, -1);
+                else if (lua_type(L, -1) == LUA_TBOOLEAN) j[k] = lua_toboolean(L, -1) != 0;
+                else if (lua_type(L, -1) == LUA_TSTRING) j[k] = lua_tostring(L, -1);
+            }
+            lua_pop(L, 1);
+        }
+        eng().lookConfig().loadFromJson(j);
+        eng().lookConfig().name = j.value("name", std::string("custom"));
+        lua_pushboolean(L, 1);
+        return 1;
+    }
     const char* name = luaL_checkstring(L, 1);
     const nlohmann::json& root = eng().dioramaConfig().root();
     if (!root.contains("presets") || !root["presets"].contains(name)) {
@@ -1173,8 +1193,20 @@ declare world: {
     -- Scene look: a preset from data/diorama.json (color grading, god rays)
     -- and the depth-of-field blur. False if there is no preset by that name.
     look: () -> string,
-    set_look: (preset: string) -> boolean,
+    -- `preset` may also be a TABLE with the same fields as a preset (only
+    -- the given ones change): a game's own look without a preset in the engine.
+    set_look: (preset: string | { [string]: any }) -> boolean,
     set_dof: (on: boolean) -> (),
+    -- Motion blur and chromatic aberration come from the quality preset; a
+    -- game can tune them as art direction. `amount`: strength (engine default
+    -- 1 for the blur, 0.5 for the fringe).
+    set_motion_blur: (on: boolean, amount: number?) -> (),
+    set_chromatic_aberration: (on: boolean, amount: number?) -> (),
+    -- Clear radius: inside a circle around the screen center (where the camera
+    -- puts the subject) there is no motion blur or chromatic aberration; they
+    -- grow smoothly outside it. Fractions of the screen HEIGHT; radius 0 puts
+    -- the effects back on the whole screen.
+    set_effect_radius: (radius: number, feather: number?) -> (),
     -- Where the lens focuses: a point of the scene, instead of the automatic
     -- \"how far did the player zoom in\" curve. `aperture` is blur per unit of
     -- depth (0.15 keeps a stage sharp and softens the background);
@@ -1274,6 +1306,10 @@ declare camera: {
     -- Free camera: stops following the player, so the script (or the mouse)
     -- decides where it looks. Same switch as the middle mouse button.
     free: (on: boolean) -> (),
+    -- The following camera stops before the FRAME passes the map edge (the
+    -- player leaves the center near the border, as in a 2D RPG). Same as
+    -- "keep_inside_map" in the project's camera block.
+    keep_inside_map: (on: boolean) -> (),
 }
 
 -- Presentation of a hit: what makes a blow feel like it landed. The engine

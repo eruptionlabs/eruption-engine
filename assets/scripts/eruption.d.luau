@@ -76,12 +76,13 @@ declare world: {
     -- Scene look: a preset from data/diorama.json (color grading, god rays)
     -- and the depth-of-field blur. False if there is no preset by that name.
     look: () -> string,
-    set_look: (preset: string) -> boolean,
+    -- `preset` may also be a TABLE with the same fields as a preset (only
+    -- the given ones change): a game's own look without a preset in the engine.
+    set_look: (preset: string | { [string]: any }) -> boolean,
     set_dof: (on: boolean) -> (),
     -- Motion blur and chromatic aberration come from the quality preset; a
-    -- game can turn them off as art direction (sprite games usually do: the
-    -- blur smears billboards, the color fringe eats pixel outlines).
-    -- `amount`: strength (engine default 1 for the blur, 0.5 for the fringe).
+    -- game can tune them as art direction. `amount`: strength (engine default
+    -- 1 for the blur, 0.5 for the fringe).
     set_motion_blur: (on: boolean, amount: number?) -> (),
     set_chromatic_aberration: (on: boolean, amount: number?) -> (),
     -- Clear radius: inside a circle around the screen center (where the camera
@@ -301,6 +302,73 @@ declare vfx: {
     move: (id: number, position: vector, scale: number?, yaw: number?) -> (),
     -- False once the effect ended or was stopped.
     playing: (id: number) -> boolean,
+}
+
+-- An object of the scene: every model and character of the map is one, and
+-- scripts make more. The handle stays valid until the object is destroyed;
+-- after that alive() is false and reading a field is an error. game.load
+-- builds the objects again: look them up by name after loading (handles kept
+-- in vars and in obj.data come back on their own).
+-- Positions are in the world; local_position, rotation and scale are relative
+-- to the parent. Rotation is in degrees around X, Y and Z.
+declare class Object
+    name: string
+    position: vector
+    local_position: vector
+    rotation: vector
+    scale: vector
+    parent: Object?
+    -- Off hides the object and everything under it.
+    active: boolean
+    -- The game's own table for this object (life, owner, state).
+    data: {[any]: any}
+    -- Index of its model for models.* (from 1), or nil.
+    model: number?
+    -- Name of its character for characters.*, or nil.
+    character: string?
+    -- Index of its light for lights.* (from 1), or nil. Lights are objects
+    -- named "light_1", "light_2"...: put one inside a model and it follows;
+    -- turning the object off puts the light out.
+    light: number?
+    -- Name of its trigger area / sound emitter, or nil.
+    area: string?
+    sound: string?
+    -- A number unique to this object while the game runs (a table key).
+    -- It changes after game.load; to keep a reference, store the Object.
+    id: number
+    function destroy(self): ()
+    function alive(self): boolean
+    function children(self): {Object}
+    -- A child by name; "door/handle" goes down the hierarchy.
+    function find(self, name: string): Object?
+    -- keep_world (default true): stays where it is on screen.
+    function set_parent(self, parent: Object?, keep_world: boolean?): ()
+    function move_by(self, offset: vector): ()
+    -- Gives the object a script: assets/scripts/<module>.luau returns
+    -- { start = function(self) end, update = function(self, dt) end,
+    --   stop = function(self) end } (all optional). Keep the object's own
+    -- state in self.data: saving the file swaps the code, not the state.
+    function attach(self, module: string): ()
+    function add_tag(self, tag: string): ()
+    function remove_tag(self, tag: string): ()
+    function has_tag(self, tag: string): boolean
+    function tags(self): {string}
+end
+
+declare objects: {
+    -- By name; "house/door" goes down the hierarchy.
+    find: (name: string) -> Object?,
+    find_all: (name: string) -> {Object},
+    with_tag: (tag: string) -> {Object},
+    -- An empty object (a group, a point to aim at).
+    create: (name: string, position: vector?, parent: Object?) -> Object,
+    -- An object with a model: a .glb ("file.glb#Node" takes one node) or a
+    -- .prefab.luau. Destroyed objects give their models back for the next
+    -- spawn of the same file. Objects made by scripts go away on Stop.
+    spawn: (file: string, position: vector?, parent: Object?, name: string?) -> Object?,
+    -- The object of a models.* index.
+    of_model: (model: number) -> Object?,
+    count: () -> number,
 }
 
 -- C++ functions of this project (native/*.cpp, include/eruption/native_module.h):
