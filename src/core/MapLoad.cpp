@@ -230,6 +230,14 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
         m_waterOn = !wmesh.vertices.empty();
         m_water.setWaterMesh(wmesh);
         cacheWaterBounds(wmesh);
+        // MAPA SEM AGUA NAO TEM NIVEL DE AGUA. getMapWaterParams devolve 0
+        // quando nao ha plano (e' a sentinela de "desligado" da geracao da
+        // malha), e esse 0 seguia como nivel do mapa: o minimapa pintava de
+        // agua azul tudo o que ficava abaixo de y=0 - numa caverna que desce
+        // a -60, metade do mapa virava lago. Sem plano e sem malha, o nivel
+        // fica bem abaixo de qualquer chao. Depois do cacheWaterBounds de
+        // proposito: la' ele marcaria a agua (que nao existe) como soterrada.
+        if (!fromTerrain && wmesh.vertices.empty()) m_mapBaseWaterLevel = -1.0e6f;
         syncLiquidMenuFromMap(loadedMap.get());
         setupLavaLiquid(loadedMap.get());
         ERUPTION_LOG_INFO("Water mesh: %u tiles (baseLevel=%.2f, offset=%.2f, src=%s)",

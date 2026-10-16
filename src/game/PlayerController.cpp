@@ -9,11 +9,14 @@
 #include <filesystem>
 #include "renderer/SpritePickerUI.hpp"
 #include "renderer/PostProcessor.hpp"
+#include "renderer/ModelRenderer.hpp"
+#include "renderer/TerrainRenderer.hpp"
 #include "renderer/WeatherRenderer.hpp"
 #include "renderer/WeatherSystem.hpp"
 #include <imgui.h>
 #include <glm/glm.hpp>
 #include <algorithm>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
@@ -590,6 +593,71 @@ void PlayerController::renderApplicationHUDIn(ImDrawList* dl, const ImVec2& orig
 }
 
 void PlayerController::renderMinimapMarkers() const {
+    // O CURSOR DO JOGADOR NO MINIMAPA. Esta funcao estava vazia: o minimapa
+    // mostrava o mapa e nao dizia onde o jogador estava.
+    //
+    // Ela e' chamada dentro da area do HUD, logo depois de o minimapa ser
+    // desenhado (Engine::drawMinimap), mas sem receber nem o retangulo nem o
+    // recorte do mundo que a imagem cobre. Os dois sao refeitos aqui com as
+    // MESMAS regras de la': o retangulo (CSS #minimap quando o minimapa e'
+    // de canto, senao 200 px a 10 px da borda) e o recorte (o AABB do
+    // terreno, ou o das instancias com malha na GPU num mapa so' de GLB, o
+    // eixo maior com 2% de folga) - ver Engine::renderMinimap.
+    ImDrawList* dl = HudRenderer::areaAtual();
+    if (!dl || !m_engine) return;
+    const ImVec2 area = HudRenderer::tamanhoAreaAtual();
+
+    float lado = 200.0f;
+    ImVec2 ini(area.x - 10.0f - lado, area.y - 10.0f - lado);
+    if (m_engine->minimapBottomRight()) {
+        const eruption::CSSRect r = getMinimapRect(area);
+        if (r.w > 0.0f && r.h > 0.0f) {
+            lado = std::max(50.0f, std::min(r.w, r.h));
+            ini = ImVec2(r.x, r.y);
+        }
+    }
+
+    Vec3 bmin(std::numeric_limits<float>::max());
+    Vec3 bmax(-std::numeric_limits<float>::max());
+    bool algum = false;
+    for (const auto& c : m_engine->terrainRenderer().chunks()) {
+        if (c.indexCount == 0) continue;
+        bmin = glm::min(bmin, c.aabbMin);
+        bmax = glm::max(bmax, c.aabbMax);
+        algum = true;
+    }
+    if (!algum) {
+        const auto& malhas = m_engine->modelRenderer().getMeshes();
+        for (const auto& inst : m_engine->modelRenderer().getInstances()) {
+            if (!inst.enabled || inst.meshIndex >= malhas.size()) continue;
+            const auto& m = malhas[inst.meshIndex];
+            if (m.vertexBuffer == VK_NULL_HANDLE || m.indexCount == 0) continue;
+            bmin = glm::min(bmin, inst.worldAabbMin);
+            bmax = glm::max(bmax, inst.worldAabbMax);
+            algum = true;
+        }
+    }
+    if (!algum || bmax.x <= bmin.x || bmax.z <= bmin.z) return;
+    const float cx = (bmin.x + bmax.x) * 0.5f;
+    const float cz = (bmin.z + bmax.z) * 0.5f;
+    const float zoom = glm::max(bmax.x - bmin.x, bmax.z - bmin.z) * 0.5f * 1.02f;
+
+    // Mundo -> textura do minimapa (orto de cima, eixo X = leste) e textura ->
+    // tela: a imagem e' desenhada com os UV invertidos nos dois eixos.
+    const float u = ((m_pos.x - cx) / zoom + 1.0f) * 0.5f;
+    const float v = ((m_pos.z - cz) / zoom + 1.0f) * 0.5f;
+    if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) return;
+    const ImVec2 p(ini.x + lado * (1.0f - u), ini.y + lado * (1.0f - v));
+
+    // Seta na direcao em que ele olha (as mesmas inversoes valem para ela).
+    const ImVec2 d(-std::sin(m_yaw), -std::cos(m_yaw));
+    const ImVec2 n(-d.y, d.x);
+    const float t = std::max(5.0f, lado * 0.035f);
+    const ImVec2 a(p.x + d.x * t * 1.4f, p.y + d.y * t * 1.4f);
+    const ImVec2 b(p.x - d.x * t * 0.8f + n.x * t * 0.9f, p.y - d.y * t * 0.8f + n.y * t * 0.9f);
+    const ImVec2 c(p.x - d.x * t * 0.8f - n.x * t * 0.9f, p.y - d.y * t * 0.8f - n.y * t * 0.9f);
+    dl->AddTriangleFilled(a, b, c, IM_COL32(255, 220, 80, 255));
+    dl->AddTriangle(a, b, c, IM_COL32(20, 14, 8, 255), 1.5f);
 }
 
 eruption::CSSRect PlayerController::getMinimapRect(const ImVec2& displaySize) const {

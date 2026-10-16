@@ -225,7 +225,17 @@ void HudRenderer::drawIn(ImDrawList* dl, const ImVec2& origin, const ImVec2& siz
     endArea(dl, mark, origin);
 }
 
+namespace {
+ImDrawList* s_areaAtual = nullptr;
+ImVec2 s_tamanhoArea(0.0f, 0.0f);
+} // namespace
+
+ImDrawList* HudRenderer::areaAtual() { return s_areaAtual; }
+ImVec2 HudRenderer::tamanhoAreaAtual() { return s_tamanhoArea; }
+
 HudRenderer::AreaMark HudRenderer::beginArea(ImDrawList* dl, const ImVec2& size) {
+    s_areaAtual = dl;
+    s_tamanhoArea = size;
     dl->PushClipRect(ImVec2(0.0f, 0.0f), size, false);
     return {dl->VtxBuffer.Size, dl->CmdBuffer.Size - 1};
 }
@@ -246,6 +256,7 @@ void HudRenderer::endArea(ImDrawList* dl, const AreaMark& mark, const ImVec2& or
             r.w += origin.y;
         }
     }
+    s_areaAtual = nullptr;
     dl->PopClipRect();
 }
 
