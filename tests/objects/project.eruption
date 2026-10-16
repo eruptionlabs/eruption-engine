@@ -1,0 +1,6 @@
+{
+  "name": "Objetos (teste)",
+  "description": "Teste da camada de objetos (tools/test_objects.sh). Usa o mapa de demonstração parana_field_lite.",
+  "startup_map": "parana_field_lite",
+  "version": "0.1.0"
+}

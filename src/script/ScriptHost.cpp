@@ -144,6 +144,7 @@ void ScriptHost::shutdown() {
     NativeModule::instance().shutdown();
     for (auto& s : m_scripts) unload(s);
     m_scripts.clear();
+    m_behaviors.clear();
     if (L) lua_close(L);
     L = nullptr;
     if (s_current == this) s_current = nullptr;
@@ -193,6 +194,102 @@ void ScriptHost::updateTweens(float dt) {
         m_engine->modelRenderer().setInstanceTransform(it->model, m);
         if (it->t >= it->duration) it = m_tweens.erase(it);
         else ++it;
+    }
+}
+
+ScriptHost::Script* ScriptHost::scriptByPath(const std::filesystem::path& path) {
+    for (auto& s : m_scripts)
+        if (s.path == path) return &s;
+    return nullptr;
+}
+
+bool ScriptHost::attachBehavior(ObjectId object, const std::string& module, std::string& error) {
+    // Módulo com erro (pausado até salvar de novo) também aceita objetos: eles
+    // esperam, como os outros do módulo, em vez de o erro passar para quem chamou.
+    const Script* script = nullptr;
+    std::string want = module;
+    for (char& c : want)
+        if (c == '\\') c = '/';
+    if (want.size() > 5 && want.compare(want.size() - 5, 5, ".luau") == 0) want.resize(want.size() - 5);
+    if (!want.empty() && want.find("..") == std::string::npos)
+        script = scriptByPath((m_dir / (want + ".luau")).lexically_normal());
+    if (!script) {
+        const int ref = moduleRef(module, error);
+        if (ref < 0) return false;
+        for (const auto& s : m_scripts)
+            if (s.moduleRef == ref) script = &s;
+    }
+    if (!script) {
+        error = "attach: " + module + " is not loaded";
+        return false;
+    }
+    for (const Behavior& b : m_behaviors)
+        if (b.object == object && b.script == script->path) return true; // já tem
+    m_behaviors.push_back({object, script->path, module, false});
+    return true;
+}
+
+// Cada objeto com script: start na primeira vez, update todo quadro. Objeto
+// destruído sai da lista; script com erro fica parado até salvar de novo
+// (como os outros scripts), e os objetos dele esperam.
+void ScriptHost::updateBehaviors(float dt) {
+    ObjectWorld& objects = m_engine->sceneObjects().world();
+    for (size_t k = 0; k < m_behaviors.size();) {
+        Behavior& b = m_behaviors[k];
+        Script* s = scriptByPath(b.script);
+        if (!objects.alive(b.object) || !s) {
+            m_behaviors.erase(m_behaviors.begin() + static_cast<std::ptrdiff_t>(k));
+            continue;
+        }
+        if (!b.started) {
+            // Módulo com erro: start fica para quando o arquivo for salvo de novo.
+            scriptPushObject(L, b.object);
+            const bool started = call(*s, "start", 1);
+            if (k < m_behaviors.size()) m_behaviors[k].started = started;
+        }
+        // start pode ter destruído o objeto ou acrescentado scripts (a lista
+        // pode ter mudado de lugar): relê antes de seguir.
+        if (k < m_behaviors.size() && m_behaviors[k].started && objects.alive(m_behaviors[k].object)) {
+            if (Script* again = scriptByPath(m_behaviors[k].script)) {
+                scriptPushObject(L, m_behaviors[k].object);
+                lua_pushnumber(L, dt);
+                call(*again, "update", 2);
+            }
+        }
+        ++k;
+    }
+}
+
+// Scripts de objeto que a cena declara (SceneEdits "scripts"): ligados a
+// cada começo de jogo; o Stop os solta junto com os outros.
+void ScriptHost::attachSceneScripts() {
+    for (const auto& [object, module] : m_engine->sceneObjects().sceneScripts()) {
+        std::string error;
+        if (!attachBehavior(object, module, error)) Logger::error("%s", error.c_str());
+    }
+}
+
+std::vector<std::string> ScriptHost::behaviorsOf(ObjectId object) const {
+    std::vector<std::string> out;
+    for (const Behavior& b : m_behaviors)
+        if (b.object == object) out.push_back(b.module);
+    return out;
+}
+
+std::vector<ObjectId> ScriptHost::behaviorObjects() const {
+    std::vector<ObjectId> out;
+    for (const Behavior& b : m_behaviors) out.push_back(b.object);
+    return out;
+}
+
+void ScriptHost::stopBehaviors() {
+    std::vector<Behavior> running;
+    running.swap(m_behaviors);
+    for (const Behavior& b : running) {
+        Script* s = scriptByPath(b.script);
+        if (!s || !b.started || !m_engine->sceneObjects().world().alive(b.object)) continue;
+        scriptPushObject(L, b.object);
+        call(*s, "stop", 1);
     }
 }
 
@@ -471,7 +568,10 @@ void ScriptHost::start() {
     m_prevHour = m_engine->dayNightCycle().timeOfDay() * 24.0f;
     const bool resume = m_resume;
     m_resume = false;
+    resetScriptObjectData(L); // obj.data de um jogo anterior não vale
     if (resume && !m_resumeVars.empty()) importVars(m_resumeVars);
+    // Depois das variáveis: as de um jogo carregado que guardam objeto são
+    // refeitas aqui, já com os objetos do mapa.
     mapReady();
     NativeModule::instance().start();
     for (auto& s : m_scripts) {
@@ -549,12 +649,23 @@ void ScriptHost::update(float dt) {
         call(s, "on_update", 1);
         dispatch(s, dt, m_prevHour, hour);
     }
+    m_inBehaviors = true;
+    updateBehaviors(dt);
+    m_inBehaviors = false;
+    // game.load pedido por um script de objeto: agora, com a lista parada.
+    if (!m_deferredLoad.empty()) {
+        const std::string slot = std::move(m_deferredLoad);
+        m_deferredLoad.clear();
+        std::string error;
+        if (!loadGame(slot, error)) Logger::error("game.load: %s", error.c_str());
+    }
     m_prevHour = hour;
     m_lastUpdateMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
 void ScriptHost::stop() {
     if (!L || !m_running) return;
+    stopBehaviors();
     for (auto& s : m_scripts) {
         if (s.started) call(s, "on_stop", 0);
         s.started = false;
@@ -563,6 +674,10 @@ void ScriptHost::stop() {
     NativeModule::instance().stop();
     m_running = false;
     m_tweens.clear();
+    releaseScriptObjects(); // o que os scripts criaram some com o Stop
+    m_pendingVars.clear();  // jogo carregado que não chegou ao mapa novo não vale no próximo Play
+    // Etiquetas, pais e ligado/desligado voltam ao que a cena declara.
+    m_engine->sceneObjects().restoreAuthored(*m_engine);
     m_engine->audio().stopAll(); // Stop do editor: o som do jogo para junto
     m_messages.clear();
     m_lastUpdateMs = 0.0f;

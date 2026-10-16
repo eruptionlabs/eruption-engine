@@ -606,6 +606,10 @@ void ModelRenderer::clear() {
     }
     m_meshes.clear();
     m_instances.clear();
+    // Lista refeita: os objetos da cena que apontavam para ela se desfazem.
+    ++m_instanceEpoch;
+    m_touched.clear();
+    m_touchedMark.clear();
     m_footprintCache.clear();
     m_textureSlots.clear();
     m_groundCpu.clear();
@@ -4259,8 +4263,50 @@ void ModelRenderer::updateAnimations(float totalElapsedMs) {
     rebuildHotData();
 }
 
-void ModelRenderer::setInstanceTransform(uint32_t index, const Mat4& transform) {
+void ModelRenderer::touchInstance(uint32_t index) {
+    if (m_touchedMark.size() < m_instances.size()) m_touchedMark.resize(m_instances.size(), 0);
+    if (m_touchedMark[index]) return;
+    m_touchedMark[index] = 1;
+    m_touched.push_back(index);
+}
+
+Mat4 ModelRenderer::instancePlacement(uint32_t index) {
+    if (index >= m_instances.size()) return Mat4(1.0f);
+    const int a = animIndexOf(index);
+    return a >= 0 ? m_animatedNodes[static_cast<size_t>(a)].instanceMatrix : m_instances[index].transform;
+}
+
+void ModelRenderer::setInstancePlacement(uint32_t index, const Mat4& placement, bool fromOwner) {
     if (index >= m_instances.size()) return;
+    const int a = animIndexOf(index);
+    if (a < 0) {
+        setInstanceTransform(index, placement, fromOwner);
+        return;
+    }
+    // Nó animado: a matriz mostrada é o lugar com a pose atual por cima, e o
+    // lugar fica EXATAMENTE o pedido (sem ida e volta pela inversa da pose,
+    // que em float não volta igual e com escala zero vira NaN).
+    AnimatedNodeData& anim = m_animatedNodes[static_cast<size_t>(a)];
+    setInstanceTransform(index, placement * anim.lastLocal, fromOwner);
+    anim.instanceMatrix = placement;
+}
+
+void ModelRenderer::forgetTouch(uint32_t index) {
+    if (index >= m_touchedMark.size() || !m_touchedMark[index]) return;
+    m_touchedMark[index] = 0;
+    m_touched.erase(std::remove(m_touched.begin(), m_touched.end(), index), m_touched.end());
+}
+
+void ModelRenderer::takeTouchedInstances(std::vector<uint32_t>& out) {
+    out.clear();
+    out.swap(m_touched);
+    for (uint32_t i : out)
+        if (i < m_touchedMark.size()) m_touchedMark[i] = 0;
+}
+
+void ModelRenderer::setInstanceTransform(uint32_t index, const Mat4& transform, bool fromOwner) {
+    if (index >= m_instances.size()) return;
+    if (!fromOwner) touchInstance(index);
     ModelInstance& inst = m_instances[index];
     inst.transform = transform;
     // Nó animado: a animação continua a partir do novo lugar.
@@ -4309,8 +4355,9 @@ uint32_t ModelRenderer::duplicateInstance(uint32_t source, const std::string& na
     return idx;
 }
 
-void ModelRenderer::setInstanceEnabled(uint32_t index, bool enabled) {
+void ModelRenderer::setInstanceEnabled(uint32_t index, bool enabled, bool fromOwner) {
     if (index >= m_instances.size()) return;
+    if (!fromOwner) touchInstance(index);
     m_instances[index].enabled = enabled;
     rebuildHotData();
 }

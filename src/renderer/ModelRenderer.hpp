@@ -492,8 +492,22 @@ public:
     const std::vector<ModelInstance>& getInstances() const { return m_instances; }
     // Edicao (editor): troca a matriz ou a visibilidade de uma instancia e
     // refaz a AABB de mundo e o espelho quente usados pelo culling.
-    void setInstanceTransform(uint32_t index, const Mat4& transform);
-    void setInstanceEnabled(uint32_t index, bool enabled);
+    // `fromOwner`: quem escreve e' o objeto da cena dono da instancia (nao
+    // entra na lista de mexidas por fora, senao o objeto puxaria de volta).
+    void setInstanceTransform(uint32_t index, const Mat4& transform, bool fromOwner = false);
+    void setInstanceEnabled(uint32_t index, bool enabled, bool fromOwner = false);
+    // Instancias mexidas por fora desde a ultima chamada (script, editor, jogo
+    // salvo, terreno): os objetos da cena puxam dai' o que mudou.
+    void takeTouchedInstances(std::vector<uint32_t>& out);
+    // Lugar da instância sem a animação rígida do nó (a que anda sozinha a
+    // cada quadro fica por cima). Para instância sem animação é a matriz dela.
+    // Os objetos da cena guardam e mexem este lugar: a pose não entra na conta.
+    Mat4 instancePlacement(uint32_t index);
+    void setInstancePlacement(uint32_t index, const Mat4& placement, bool fromOwner = false);
+    // Tira a instância da lista de mexidas (quem mexeu já é o dono dela).
+    void forgetTouch(uint32_t index);
+    // Muda quando a lista de instancias e' refeita do zero (mapa novo).
+    uint32_t instanceEpoch() const { return m_instanceEpoch; }
     void setInstanceName(uint32_t index, const std::string& name) {
         if (index < m_instances.size()) m_instances[index].name = name;
     }
@@ -1058,6 +1072,10 @@ private:
 
     void createPipeline();
     void rebuildHotData();
+    void touchInstance(uint32_t index);
+    std::vector<uint32_t> m_touched;
+    std::vector<uint8_t> m_touchedMark;
+    uint32_t m_instanceEpoch = 0;
     void rebuildInstanceSoA();
     void appendAssetInstances(uint32_t assetIndex, const ModelInstanceDesc& ref, float centerX, float centerZ,
                               int onlyNode = -1);

@@ -225,16 +225,19 @@ void Editor::registerCommands() {
 
     // Editar
     add("edit.undo", "Edit", "Undo", {ImGuiKey_Z, true}, [this] {
+        // No Play o Stop já devolve a cena; desfazer ali gastaria o histórico à toa.
+        if (m_play != PlayState::Editing) return;
         const std::string label = m_undo.undoLabel();
         if (m_undo.undo()) log(LogLevel::Info, "Undo: " + label);
-    }).enabled = [this] { return m_undo.canUndo(); };
+    }).enabled = [this] { return m_undo.canUndo() && m_play == PlayState::Editing; }; // no Play o Stop desfaz tudo
     {
         auto& c = add("edit.redo", "Edit", "Redo", {ImGuiKey_Y, true}, [this] {
+            if (m_play != PlayState::Editing) return;
             const std::string label = m_undo.redoLabel();
             if (m_undo.redo()) log(LogLevel::Info, "Redo: " + label);
         });
         c.altShortcut = {ImGuiKey_Z, true, true};
-        c.enabled = [this] { return m_undo.canRedo(); };
+        c.enabled = [this] { return m_undo.canRedo() && m_play == PlayState::Editing; };
     }
     add("edit.save_prefab", "Edit", "Save as Prefab...", {}, [this] { m_prefabOpen = true; },
         "Saves the selected object (model, rotation and scale) to assets/prefabs to place it again in any map.")
@@ -763,9 +766,21 @@ void Editor::update(float dt) {
     static const char* testSaveEnv = std::getenv("ERUPTION_TEST_EDITOR_SAVE");
     static const long testSaveFrame = testSaveEnv ? (std::atol(testSaveEnv) > 1 ? std::atol(testSaveEnv) : 240) : -1;
     if (static_cast<long>(m_frame) == testSaveFrame) saveScene();
+    // ERUPTION_TEST_EDITOR_PLAY=<inicio>,<fim>[;<inicio>,<fim>...]: Play e Stop
+    // nesses frames (o Stop tem que devolver a cena como estava; um segundo
+    // Play confere que o jogo começa igual).
+    static const char* testPlay = std::getenv("ERUPTION_TEST_EDITOR_PLAY");
+    for (const char* at = testPlay; at && *at;) {
+        long from = 0, to = 0;
+        if (std::sscanf(at, "%ld,%ld", &from, &to) != 2) break;
+        if (static_cast<long>(m_frame) == from) play();
+        if (static_cast<long>(m_frame) == to) stop();
+        at = std::strchr(at, ';');
+        if (at) ++at;
+    }
     // ERUPTION_TEST_EDITOR_UNDO=<frame>: Ctrl+Z nesse frame.
     static const char* testUndo = std::getenv("ERUPTION_TEST_EDITOR_UNDO");
-    if (testUndo && static_cast<long>(m_frame) == std::atol(testUndo)) m_undo.undo();
+    if (testUndo && static_cast<long>(m_frame) == std::atol(testUndo)) m_commands.run("edit.undo");
     // ERUPTION_TEST_EDITOR_EXTERNAL=<arquivo>: no frame 300 copia o arquivo por
     // cima do scene.luau do mapa, como um editor externo faria.
     static const char* testExternal = std::getenv("ERUPTION_TEST_EDITOR_EXTERNAL");
@@ -1016,9 +1031,10 @@ void Editor::drawMenuBar() {
         const EditorCommand* r = m_commands.find("edit.redo");
         const std::string ul = m_undo.canUndo() ? "Undo " + m_undo.undoLabel() : "Undo";
         const std::string rl = m_undo.canRedo() ? "Redo " + m_undo.redoLabel() : "Redo";
-        if (ImGui::MenuItem(ul.c_str(), EditorCommands::shortcutText(u->shortcut).c_str(), false, m_undo.canUndo()))
+        const bool editing = m_play == PlayState::Editing; // no Play o Stop desfaz tudo
+        if (ImGui::MenuItem(ul.c_str(), EditorCommands::shortcutText(u->shortcut).c_str(), false, editing && m_undo.canUndo()))
             m_commands.run("edit.undo");
-        if (ImGui::MenuItem(rl.c_str(), EditorCommands::shortcutText(r->shortcut).c_str(), false, m_undo.canRedo()))
+        if (ImGui::MenuItem(rl.c_str(), EditorCommands::shortcutText(r->shortcut).c_str(), false, editing && m_undo.canRedo()))
             m_commands.run("edit.redo");
         ImGui::Separator();
         m_commands.menuItem("edit.duplicate");
@@ -1446,21 +1462,34 @@ void Editor::play() {
 
 void Editor::stop() {
     if (m_play == PlayState::Editing) return;
+    // Scripts param ANTES da cena voltar: o on_stop deles (e o que o jogo
+    // criou) não pode mexer na cena já devolvida - iria para o próximo Ctrl+S.
+    if (m_scripts) m_scripts->stop();
     m_engine->setSoundEmittersActive(false);
     if (m_scripts && !m_playResume.active) m_scripts->clearMapStates(); // Stop de verdade: próximo Play do zero
     m_engine->setHudBars(false); // o que o jogo ligou vale só no Play
     m_engine->setMinimapHud(false);
     ModelRenderer& mr = m_engine->modelRenderer();
     const auto& insts = mr.getInstances();
-    if (insts.size() == m_snapshot.transforms.size()) {
-        for (size_t i = 0; i < insts.size(); ++i) {
+    // As instâncias que existiam no Play voltam; as que o jogo criou depois
+    // (objects.spawn) são soltas pelos scripts no Stop. Antes a volta só
+    // acontecia com a lista do mesmo tamanho: um spawn deixava a cena mexida.
+    if (insts.size() >= m_snapshot.transforms.size()) {
+        for (size_t i = 0; i < m_snapshot.transforms.size(); ++i) {
             const uint32_t idx = static_cast<uint32_t>(i);
             if (insts[i].transform != m_snapshot.transforms[i]) mr.setInstanceTransform(idx, m_snapshot.transforms[i]);
             if (insts[i].enabled != m_snapshot.enabled[i]) mr.setInstanceEnabled(idx, m_snapshot.enabled[i]);
         }
     }
+    // Luzes voltam como eram; a do jogador (F10) não conta (o Render a repõe)
+    // - ligá-la no Play mudava o tamanho da lista e a volta não acontecia.
     auto& lights = m_engine->m_deferredLighting.getPointLights();
-    if (lights.size() == m_snapshot.lights.size()) lights = m_snapshot.lights;
+    std::vector<PointLight> mapLights, snapLights;
+    for (const PointLight& l : lights)
+        if (l.shadowCubemapIndex != kPlayerLightTag) mapLights.push_back(l);
+    for (const PointLight& l : m_snapshot.lights)
+        if (l.shadowCubemapIndex != kPlayerLightTag) snapLights.push_back(l);
+    if (mapLights.size() == snapLights.size()) lights = snapLights;
     for (const auto& [i, anim] : m_snapshot.animations)
         if (m_engine->modelRenderer().currentAnimation(i) != anim) m_engine->modelRenderer().playAnimation(i, anim);
     m_engine->dayNightCycle().setTimeOfDay(m_snapshot.timeOfDay);
@@ -1474,6 +1503,13 @@ void Editor::stop() {
         chars[i].behavior = Engine::SceneCharacter::Behavior::None; // seguir/patrulhar vale só no Play
         chars[i].patrol.clear();
         if (chars[i].sprite != snap.sprite) m_engine->setCharacterSprite(static_cast<int>(i), snap.sprite);
+    }
+    // Personagem que o jogo criou (characters.add) sai com o Stop, como se
+    // apagado no editor: não fica na cena nem vai para o arquivo.
+    for (size_t i = m_snapshot.characters.size(); i < chars.size(); ++i) {
+        if (chars[i].fromNeighbor) continue; // do mapa vizinho que entrou no Play: é dele
+        chars[i].removed = true;
+        chars[i].visible = false;
     }
     if (m_engine->m_charConfig.job != m_snapshot.playerSprite) {
         m_engine->m_charConfig.job = m_snapshot.playerSprite;
