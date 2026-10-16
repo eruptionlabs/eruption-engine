@@ -292,6 +292,14 @@ int world_ground_layers(lua_State* L) {
     return 1;
 }
 
+// Bloqueia na grade de caminhada todo ponto do chao mais inclinado que
+// `degrees` (so' nesta partida; o arquivo salvo nao muda). Devolve quantos
+// pontos ficaram bloqueados. 0 num mapa sem grade que siga o terreno.
+int world_block_slopes(lua_State* L) {
+    lua_pushinteger(L, eng().blockSteepSlopes(static_cast<float>(luaL_checknumber(L, 1))));
+    return 1;
+}
+
 // Os liquidos que o mapa declara: { name, kind ("water" | "lava"), level,
 // center (vector na cota do liquido), radius (o maior raio da margem) }.
 int world_liquids(lua_State* L) {
@@ -1152,6 +1160,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
         {"set_focus", world_set_focus},
         {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids},
+        {"block_slopes", world_block_slopes},
         {"map", world_map}, {"load_map", world_load_map},
         {"warp_map", world_warp_map}, {"warping", world_warping}, {nullptr, nullptr}};
     static const luaL_Reg player[] = {
@@ -1303,6 +1312,9 @@ declare world: {
     -- Liquids the map declares (lakes): kind is "water" or "lava", center is
     -- at the liquid's level, radius is the farthest shore.
     liquids: () -> { { name: string, kind: string, level: number, center: vector, radius: number } },
+    -- Blocks walking on every ground point steeper than `degrees` (this run
+    -- only; the saved walk grid is untouched). Returns how many were blocked.
+    block_slopes: (degrees: number) -> number,
     -- Scene look: a preset from data/diorama.json (color grading, god rays)
     -- and the depth-of-field blur. False if there is no preset by that name.
     look: () -> string,

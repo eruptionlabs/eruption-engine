@@ -80,6 +80,9 @@ declare world: {
     -- Liquids the map declares (lakes): kind is "water" or "lava", center is
     -- at the liquid's level, radius is the farthest shore.
     liquids: () -> { { name: string, kind: string, level: number, center: vector, radius: number } },
+    -- Blocks walking on every ground point steeper than `degrees` (this run
+    -- only; the saved walk grid is untouched). Returns how many were blocked.
+    block_slopes: (degrees: number) -> number,
     -- Scene look: a preset from data/diorama.json (color grading, god rays)
     -- and the depth-of-field blur. False if there is no preset by that name.
     look: () -> string,
