@@ -58,6 +58,10 @@ public:
     // Camera SOLTA: para de seguir o jogador (quem manda nela vira o script
     // ou o mouse). E' a mesma chave do botao do meio do mouse.
     void setFreeCamera(bool on) { m_freeCameraToggle = on; }
+    // A camera que segue para antes de o quadro passar da borda do mapa
+    // (bloco "camera" do manifesto, "keep_inside_map").
+    void setKeepViewInsideMap(bool on) { m_keepViewInsideMap = on; }
+    void viewInsideBounds(Vec2& lo, Vec2& hi) const;
     float cameraSmoothFactor() const { return m_cameraSmoothFactor; }
     const Engine::LoadedSprite& bodySprite() const { return m_bodySprite; }
     const Engine::LoadedSprite& hairSprite() const { return m_hairSprite; }
@@ -103,6 +107,7 @@ private:
     float m_preTacticalPitch = glm::radians(50.0f);
     float m_preTacticalDist = camera_default::kDistance;
     float m_cameraSmoothFactor = 10.0f;
+    bool m_keepViewInsideMap = false;
     float m_autoTestTimer = 0.0f;
     size_t m_autoTestMapIndex = 0;
     float m_warpClickDebounceTimer = 0.0f;

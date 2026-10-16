@@ -324,6 +324,34 @@ void PlayerController::updateMovement(float dt) {
         }
     }
 }
+// Encolhe [lo, hi] pelo QUADRO: onde os quatro cantos da tela tocam o chao
+// (o plano na altura do alvo), medidos a partir do alvo. Com o alvo dentro do
+// retangulo encolhido, nenhum canto passa da borda. Canto acima do horizonte
+// nao toca o chao: conta como longe (o quadro inteiro vai ao centro do mapa).
+void PlayerController::viewInsideBounds(Vec2& lo, Vec2& hi) const {
+    const Camera& cam = m_engine->camera();
+    const Vec3 eye = cam.position(), tgt = cam.target();
+    const Vec3 f = cam.forward(), r = cam.right(), u = cam.up();
+    const float ty = std::tan(glm::radians(cam.fov()) * 0.5f), tx = ty * cam.aspect();
+    const float longe = cam.orbitDistance() * 8.0f;
+    Vec2 menos(0.0f), mais(0.0f);
+    for (int i = 0; i < 4; ++i) {
+        const Vec3 d = f + r * (i & 1 ? tx : -tx) + u * (i & 2 ? ty : -ty);
+        Vec3 p;
+        if (d.y < -1e-4f) {
+            p = eye + d * ((tgt.y - eye.y) / d.y);
+        } else {
+            p = tgt + glm::normalize(Vec3(d.x, 0.0f, d.z) + Vec3(1e-6f, 0.0f, 0.0f)) * longe;
+        }
+        Vec2 o(p.x - tgt.x, p.z - tgt.z);
+        if (glm::length(o) > longe) o = glm::normalize(o) * longe;
+        menos = glm::min(menos, o);
+        mais = glm::max(mais, o);
+    }
+    lo -= menos;
+    hi -= mais;
+}
+
 void PlayerController::updateCamera(float dt, bool captureMouse, bool captureKeyboard) {
     bool middleHeld = Input::isMouseDown(MouseButton::Middle);
     if (middleHeld && !m_freeCameraHeld) {
@@ -345,8 +373,10 @@ void PlayerController::updateCamera(float dt, bool captureMouse, bool captureKey
         target += (targetPos - target) * glm::clamp(m_cameraSmoothFactor * dt, 0.0f, 1.0f);
         Vec2 lo, hi; // mapa aberto + vizinhos em cena
         if (m_engine->worldBounds(lo, hi)) {
-            target.x = glm::clamp(target.x, lo.x, hi.x);
-            target.z = glm::clamp(target.z, lo.y, hi.y);
+            if (m_keepViewInsideMap) viewInsideBounds(lo, hi);
+            // Mapa menor que o quadro naquele eixo: centro do mapa.
+            target.x = lo.x <= hi.x ? glm::clamp(target.x, lo.x, hi.x) : 0.5f * (lo.x + hi.x);
+            target.z = lo.y <= hi.y ? glm::clamp(target.z, lo.y, hi.y) : 0.5f * (lo.y + hi.y);
         }
         m_engine->camera().setOrbitTarget(target);
     }

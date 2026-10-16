@@ -87,6 +87,8 @@ bool Project::open(const fs::path& dir, std::string* err) {
             m.cameraYaw = numero("yaw");
             m.cameraPitch = numero("pitch");
             m.cameraDistance = numero("distance");
+            if (c.contains("keep_inside_map") && c["keep_inside_map"].is_boolean())
+                m.cameraKeepInsideMap = c["keep_inside_map"].get<bool>();
         }
     } catch (const std::exception& e) {
         if (err) *err = std::string("project.eruption is not valid JSON: ") + e.what();
@@ -164,6 +166,7 @@ bool Project::saveManifest(std::string* err) {
             if (m_manifest.cameraYaw) c["yaw"] = *m_manifest.cameraYaw;
             if (m_manifest.cameraPitch) c["pitch"] = *m_manifest.cameraPitch;
             if (m_manifest.cameraDistance) c["distance"] = *m_manifest.cameraDistance;
+            if (m_manifest.cameraKeepInsideMap) c["keep_inside_map"] = true;
             if (!c.empty()) j["camera"] = c;
         }
         std::ofstream f(m_root / kManifestName);

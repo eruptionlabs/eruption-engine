@@ -37,6 +37,11 @@ public:
         // com o padrao do motor (math/Camera.hpp). E' aqui que um jogo diz
         // como se ve', em vez de corrigir a camera por script a cada mapa.
         std::optional<float> cameraFov, cameraYaw, cameraPitch, cameraDistance;
+        // "keep_inside_map": true - a camera que segue o jogador para antes de
+        // o QUADRO passar da borda do mapa (o jogador sai do centro perto da
+        // borda, como num RPG 2D). Sem isso so' o alvo fica dentro do mapa, e
+        // meia tela mostra o vazio alem da borda.
+        bool cameraKeepInsideMap = false;
         // "dev_tools": true - o projeto e' uma BANCADA (demo/benchmark do
         // motor): no modo jogo continua com os menus F1..F12, o painel de
         // controle, o overlay F3, as barras e o minimapa. Jogo de verdade

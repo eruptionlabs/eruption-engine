@@ -182,6 +182,7 @@ void DefaultApplication::onInit(Engine& engine) {
     m_player = std::make_unique<PlayerController>(&engine);
     engine.setPlayerController(m_player.get());
     m_player->setHudRenderer(&m_hud);
+    if (project::isOpen()) m_player->setKeepViewInsideMap(Project::instance().manifest().cameraKeepInsideMap);
     m_player->init();
     m_player->m_autoTest = m_autoTest;
     if (m_autoExit) engine.enableAutoExit(true);
