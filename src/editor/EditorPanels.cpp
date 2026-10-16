@@ -418,6 +418,12 @@ void Editor::drawHierarchy() {
         if (!enabled) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TreeNodeEx(label.c_str(), f);
         if (!enabled) ImGui::PopStyleColor();
+        // Modelo e personagem são objetos: arrastar um sobre outro troca o pai.
+        if (s.kind != SelectionKind::Environment && s.kind != SelectionKind::Spawn) {
+            const ObjectId obj = objectOfSelection(s);
+            objectDragSource(obj);
+            if (obj.valid()) objectDropTarget(obj); // sem objeto ainda: não é alvo (soltar ali tiraria o pai)
+        }
         // Ctrl/Shift soma ou tira; botão direito num já selecionado mantém o grupo (menu vale para todos).
         const bool add = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift;
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
@@ -456,6 +462,7 @@ void Editor::drawHierarchy() {
         std::snprintf(hdr, sizeof(hdr), "%s (%zu)###lights", tr("Lights"), lights.size());
         if (ImGui::TreeNodeEx(hdr, ImGuiTreeNodeFlags_SpanAvailWidth)) {
             for (size_t i = 0; i < lights.size(); ++i) {
+                if (lights[i].shadowCubemapIndex == kPlayerLightTag) continue; // a do jogador (F10)
                 const Selection s{SelectionKind::Light, static_cast<int>(i)};
                 const std::string name = selectionName(s);
                 if (!icontains(name, m_hierarchyFilter)) continue;
@@ -502,6 +509,8 @@ void Editor::drawHierarchy() {
             ImGui::TreePop();
         }
     }
+
+    drawObjectTree();
 
     const auto& chars = m_engine->characters();
     size_t liveChars = 0;
@@ -605,6 +614,7 @@ void Editor::drawHierarchy() {
         ImGui::TreePop();
     }
     ImGui::EndChild();
+    applyPendingDrop();
     ImGui::End();
 }
 
@@ -938,6 +948,7 @@ void Editor::drawInspector() {
             ImGui::SetItemTooltip("%s", tr("Hidden characters can be shown later by a rule or script."));
         }
     }
+    drawObjectInspector();
     ImGui::End();
 }
 

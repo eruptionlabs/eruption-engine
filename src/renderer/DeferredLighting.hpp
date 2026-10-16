@@ -16,6 +16,12 @@ namespace eruption {
 class ShadowRenderer;
 class Camera;
 
+// Luz presa ao sprite principal (F10): vive na lista das luzes do mapa e é
+// reposta no fim dela a cada quadro (Render.cpp). Marcada por este valor em
+// shadowCubemapIndex (o shader não lê o campo). Não é luz do mapa: os
+// objetos da cena e o editor a deixam de fora.
+constexpr uint32_t kPlayerLightTag = 0xFFFFFFFEu;
+
 struct PointLight {
     Vec3 position = Vec3(0.0f);
     float radius = 10.0f;

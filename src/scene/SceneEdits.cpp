@@ -44,6 +44,12 @@ std::string quoted(const std::string& s) {
     return out + "\"";
 }
 
+std::string quotedList(const std::vector<std::string>& items) {
+    std::string out = "{";
+    for (size_t k = 0; k < items.size(); ++k) out += (k ? ", " : "") + quoted(items[k]);
+    return out + "}";
+}
+
 // Leitura da tabela devolvida pelo arquivo (pilha do Luau).
 bool readVec(lua_State* L, int idx, const char* field, Vec3& out) {
     lua_getfield(L, idx, field);
@@ -79,6 +85,23 @@ std::string readStr(lua_State* L, int idx, const char* field) {
     std::string v = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
     lua_pop(L, 1);
     return v;
+}
+
+// Lista de textos: { "a", "b" } (um texto solto também vale).
+std::vector<std::string> readStrList(lua_State* L, int idx, const char* field) {
+    std::vector<std::string> out;
+    lua_getfield(L, idx, field);
+    if (lua_isstring(L, -1)) out.push_back(lua_tostring(L, -1));
+    else if (lua_istable(L, -1)) {
+        const int n = lua_objlen(L, -1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_isstring(L, -1)) out.push_back(lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    return out;
 }
 
 SceneEdits::Transform readTransform(lua_State* L, int idx, bool& any) {
@@ -182,6 +205,9 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
                 o.hidden = readBool(L, lua_gettop(L), "hidden", false);
                 o.solid = readBool(L, lua_gettop(L), "solid", false);
                 o.animation = readStr(L, lua_gettop(L), "animation");
+                o.parent = readStr(L, lua_gettop(L), "parent");
+                o.tags = readStrList(L, lua_gettop(L), "tags");
+                o.scripts = readStrList(L, lua_gettop(L), "scripts");
                 objects.push_back(std::move(o));
             }
             lua_pop(L, 1);
@@ -386,6 +412,9 @@ std::string SceneEdits::serialize(const std::string& map) const {
             if (ob.hidden) parts.push_back("hidden = true");
             if (ob.solid) parts.push_back("solid = true");
             if (!ob.animation.empty()) parts.push_back("animation = " + quoted(ob.animation));
+            if (!ob.parent.empty()) parts.push_back("parent = " + quoted(ob.parent));
+            if (!ob.tags.empty()) parts.push_back("tags = " + quotedList(ob.tags));
+            if (!ob.scripts.empty()) parts.push_back("scripts = " + quotedList(ob.scripts));
             if (ob.hasTransform)
                 parts.push_back("position = " + vec(ob.transform.position) + ", rotation = " + vec(ob.transform.rotation) +
                                 ", scale = " + vec(ob.transform.scale));
@@ -460,6 +489,12 @@ std::string SceneEdits::serialize(const std::string& map) const {
 int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) const {
     ModelRenderer& mr = engine.modelRenderer();
     int applied = 0;
+    struct PrefabRoot {
+        uint32_t first, count;
+        std::string name, prefab;
+        Mat4 placement;
+    };
+    std::vector<PrefabRoot> prefabRoots;
     for (const auto& a : added) {
         if (scriptFindModel(a.name) >= 0) continue;
         std::string file = a.file, node = a.node;
@@ -474,13 +509,30 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
             file = p.file;
             node = p.node;
             inner = p.matrix();
+            // Prefab sem modelo próprio (raiz só grupo) não se põe na cena: o
+            // editor guarda o que foi posto pelas instâncias da raiz.
+            if (file.empty()) {
+                ERUPTION_LOG_WARN("%s: a prefab without its own model is placed by scripts (objects.spawn)",
+                                  a.prefab.c_str());
+                continue;
+            }
         }
         AddedInstance inst;
         if (!addModel(engine, file, node, a.name, a.transform.matrix(), inner, inst)) continue;
         inst.node = node;
         inst.prefab = a.prefab;
+        if (!a.prefab.empty()) prefabRoots.push_back({inst.first, inst.count, a.name, a.prefab, a.transform.matrix()});
         if (addedOut) addedOut->push_back(std::move(inst));
         ++applied;
+    }
+    // Prefab composto: filhos, etiquetas e scripts sob o objeto da raiz.
+    if (!prefabRoots.empty()) {
+        SceneObjects& so = engine.sceneObjects();
+        so.refresh(engine);
+        for (const PrefabRoot& r : prefabRoots) {
+            const ObjectId root = r.count == 1 ? so.objectOfInstance(r.first) : so.findSceneName(r.name);
+            so.buildPrefabExtras(engine, root, r.placement, r.prefab);
+        }
     }
     for (const auto& ob : objects) {
         const int idx = scriptFindModel(ob.name);
@@ -562,6 +614,13 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         if (hasWater) engine.setWaterLevel(true, waterLevel);
         ++applied;
     }
+    // Objetos da cena: etiquetas, pai e scripts. Por último, quando tudo que
+    // a cena cria já existe (e já tem objeto).
+    for (const auto& ob : objects) {
+        if (!ob.decorated()) continue;
+        engine.sceneObjects().author(engine, {ob.name, ob.parent, ob.tags, ob.scripts});
+        ++applied;
+    }
     return applied;
 }
 
@@ -602,9 +661,32 @@ bool Prefab::load(const fs::path& path, std::string& error) {
     node = readStr(L, t, "node");
     readVec(L, t, "rotation", rotation);
     readVec(L, t, "scale", scale);
+    tags = readStrList(L, t, "tags");
+    scripts = readStrList(L, t, "scripts");
+    lua_getfield(L, t, "children");
+    if (lua_istable(L, -1)) {
+        const int n = lua_objlen(L, -1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            const int c = lua_gettop(L);
+            if (lua_istable(L, c)) {
+                Child ch;
+                ch.prefab = readStr(L, c, "prefab");
+                ch.file = readStr(L, c, "file");
+                ch.node = readStr(L, c, "node");
+                ch.name = readStr(L, c, "name");
+                readVec(L, c, "position", ch.position);
+                readVec(L, c, "rotation", ch.rotation);
+                readVec(L, c, "scale", ch.scale);
+                if (!ch.prefab.empty() || !ch.file.empty()) children.push_back(std::move(ch));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
     lua_close(L);
-    if (file.empty()) {
-        error = path.generic_string() + ": missing 'file'";
+    if (file.empty() && children.empty()) {
+        error = path.generic_string() + ": missing 'file' (or 'children')";
         return false;
     }
     return true;
@@ -614,9 +696,25 @@ std::string Prefab::serialize() const {
     std::ostringstream o;
     o << "-- Prefab written by the editor. Drop it on the scene from the Project panel;\n"
          "-- changing it changes every copy placed in the maps.\n"
-         "return {\n    file = " << quoted(file) << ",\n";
+         "return {\n";
+    if (!file.empty()) o << "    file = " << quoted(file) << ",\n";
     if (!node.empty()) o << "    node = " << quoted(node) << ",\n";
-    o << "    rotation = " << vec(rotation) << ",\n    scale = " << vec(scale) << ",\n}\n";
+    o << "    rotation = " << vec(rotation) << ",\n    scale = " << vec(scale) << ",\n";
+    if (!tags.empty()) o << "    tags = " << quotedList(tags) << ",\n";
+    if (!scripts.empty()) o << "    scripts = " << quotedList(scripts) << ",\n";
+    if (!children.empty()) {
+        o << "    children = {\n";
+        for (const Child& c : children) {
+            o << "        { ";
+            if (!c.prefab.empty()) o << "prefab = " << quoted(c.prefab);
+            else o << "file = " << quoted(c.file) << (c.node.empty() ? "" : ", node = " + quoted(c.node));
+            if (!c.name.empty()) o << ", name = " << quoted(c.name);
+            o << ", position = " << vec(c.position) << ", rotation = " << vec(c.rotation) << ", scale = " << vec(c.scale)
+              << " },\n";
+        }
+        o << "    },\n";
+    }
+    o << "}\n";
     return o.str();
 }
 

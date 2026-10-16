@@ -68,6 +68,9 @@ tests/*
 !tests/main.cpp
 !tests/maps/
 !tests/maps/**
+!tests/objects/
+!tests/objects/**
+!tests/test_object_world.cpp
 
 # Ignore asset icons
 assets/icon/alt
@@ -96,6 +99,7 @@ eruption-normalgen
 pbr_cooker
 pbr_extractor
 eruption-pbr-tests
+eruption-object-tests
 !tools/pbr_cooker/
 !tools/pbr_extractor/
 tools/venv

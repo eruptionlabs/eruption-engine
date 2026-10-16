@@ -820,6 +820,17 @@ if(ERUPTION_BUILD_TESTS)
 
     add_test(NAME PBRMapGenTests
              COMMAND eruption-pbr-tests)
+
+    # Tabela de objetos da cena (identidade, hierarquia, transforms): logica
+    # pura, sem GPU nem motor.
+    add_executable(eruption-object-tests tests/test_object_world.cpp src/scene/ObjectWorld.cpp)
+    target_include_directories(eruption-object-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(eruption-object-tests SYSTEM PRIVATE ${glm_SOURCE_DIR})
+    target_compile_definitions(eruption-object-tests PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_LEFT_HANDED)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-object-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME ObjectWorldTests COMMAND eruption-object-tests)
 endif()
 
 # Generate Linux .desktop shortcut

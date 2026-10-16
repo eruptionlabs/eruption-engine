@@ -19,6 +19,7 @@ class Engine;
 //           ["outro_objeto"] = { hidden = true },
 //           ["casa_1"] = { solid = true },  -- o jogador não atravessa
 //           ["boneco"] = { animation = "acenar" },  -- modelo com esqueleto
+//           ["porta"] = { parent = "casa", tags = {"interativo"}, scripts = {"portas/abrir"} },
 //       },
 //       added = {
 //           { file = "assets/props/barril.glb", name = "barril_1", position = {...}, rotation = {...}, scale = {...} },
@@ -56,6 +57,11 @@ struct SceneEdits {
         bool hidden = false;
         bool solid = false; // bloqueia o jogador
         std::string animation; // modelo com esqueleto: animação que toca ao abrir
+        // Objeto da cena: pai (nome ou caminho "a/b"), etiquetas e scripts de
+        // objeto (módulos de assets/scripts, ligados quando o jogo começa).
+        std::string parent;
+        std::vector<std::string> tags, scripts;
+        bool decorated() const { return !parent.empty() || !tags.empty() || !scripts.empty(); }
     };
     struct Copy {
         std::string from, name;
@@ -156,9 +162,26 @@ struct SceneEdits {
 // quantas vezes quiser. assets/prefabs/<nome>.prefab.luau:
 //
 //   return { file = "assets/props/barril.glb", node = "Barril", rotation = {0, 30, 0}, scale = {2, 2, 2} }
+//
+// Composto (objects.spawn monta tudo; na cena só o modelo da raiz):
+//
+//   return {
+//       file = "assets/props/carroca.glb",          -- opcional: raiz sem modelo é um grupo
+//       tags = {"veiculo"}, scripts = {"carroca"},   -- da raiz
+//       children = {
+//           { prefab = "assets/prefabs/roda.prefab.luau", name = "roda_e", position = {-8, 3, 0} },
+//           { file = "assets/props/carga.glb", node = "Caixa", position = {0, 6, 0}, rotation = {0, 15, 0} },
+//       },
+//   }
 struct Prefab {
+    struct Child {
+        std::string prefab, file, node, name;
+        Vec3 position{0.0f}, rotation{0.0f}, scale{1.0f};
+    };
     std::string file, node;
     Vec3 rotation{0.0f}, scale{1.0f};
+    std::vector<Child> children;
+    std::vector<std::string> tags, scripts;
     Mat4 matrix() const;
     bool load(const std::filesystem::path& path, std::string& error);
     std::string serialize() const;

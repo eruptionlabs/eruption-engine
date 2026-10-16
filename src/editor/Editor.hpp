@@ -26,6 +26,7 @@ public:
 #include "editor/EditorCommands.hpp"
 #include "editor/RuleSheet.hpp"
 #include "scene/SceneEdits.hpp"
+#include "scene/SceneObjects.hpp"
 #include "formats/SpriteSheet.hpp"
 #include "editor/RemoteServer.hpp"
 #include "editor/AiClient.hpp"
@@ -119,6 +120,20 @@ private:
     void drawViewport();
     void drawHierarchy();
     void drawInspector();
+    void drawObjectInspector();
+    void drawObjectTree();
+    void drawObjectNode(ObjectId id);
+    void emptyHint();
+    ObjectId objectOfSelection(const Selection& s);
+    Selection selectionOfObject(ObjectId id);
+    void objectDragSource(ObjectId id);
+    void objectDropTarget(ObjectId parent);
+    void reparentObject(ObjectId child, ObjectId parent);
+    void applyPendingDrop();
+    ObjectId m_dropChild, m_dropParent; // objeto solto na hierarquia (aplicado depois do desenho)
+    bool m_dropPending = false;
+    void authorObject(const SceneObjects::Authored& before, const SceneObjects::Authored& after);
+    void declareObject(const SceneObjects::Authored& a);
     void drawProject();
     void drawConsole();
     void drawCommandPalette();

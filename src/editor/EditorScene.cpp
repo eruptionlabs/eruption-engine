@@ -113,6 +113,9 @@ void Editor::reloadSceneFile() {
         if (!m_engine->isRegionInstance(i)) m_engine->setSolid(i, false);
     m_engine->clearPlayerStart();
     select({});
+    // A tabela de objetos recomeça: modelos, pais, etiquetas, scripts e
+    // filhos de prefab vêm do arquivo de novo (sem sobrar raiz velha).
+    m_engine->sceneObjects().resetObjects();
     applySceneFile();
     log(LogLevel::Info, "Scene file reloaded.");
 }
@@ -212,6 +215,20 @@ SceneEdits Editor::currentEdits() const {
             e.objects.push_back(std::move(o));
         }
     }
+    // Objetos da cena: o que o autor declarou (pai, etiquetas, scripts),
+    // nunca o que um script mudou durante o jogo.
+    for (const auto& a : m_engine->sceneObjects().authored()) {
+        auto it = std::find_if(e.objects.begin(), e.objects.end(), [&](const SceneEdits::Object& o) { return o.name == a.name; });
+        if (it == e.objects.end()) {
+            SceneEdits::Object o;
+            o.name = a.name;
+            e.objects.push_back(std::move(o));
+            it = e.objects.end() - 1;
+        }
+        it->parent = a.parent;
+        it->tags = a.tags;
+        it->scripts = a.scripts;
+    }
     for (const auto& a : m_engine->areas())
         if (!a.removed && !a.fromNeighbor) e.areas.push_back({a.name, a.center, a.size, a.yaw});
     for (const auto& snd : m_engine->soundEmitters())
@@ -224,6 +241,7 @@ SceneEdits Editor::currentEdits() const {
     }
     const auto& ls = m_engine->m_deferredLighting.getPointLights();
     for (size_t i = 0; i < ls.size(); ++i) {
+        if (ls[i].shadowCubemapIndex == kPlayerLightTag) continue; // luz do jogador (F10) não é da cena
         const bool fromMap = i < m_original.lights.size();
         if (fromMap ? sameLight(ls[i], m_original.lights[i]) : !ls[i].enabled) continue; // luz nova apagada = removida
         SceneEdits::Light l;

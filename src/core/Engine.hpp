@@ -71,6 +71,7 @@
 #include <memory>
 #include <future>
 #include "scene/SceneEdits.hpp"
+#include "scene/SceneObjects.hpp"
 #include "audio/Audio.hpp"
 #include <deque>
 #include <unordered_map>
@@ -106,6 +107,9 @@ public:
             m_frameDt = dt;
             auto _t1 = std::chrono::steady_clock::now();
             app.onUpdate(dt);
+            // Objetos da cena: puxa o que mexeram nas tabelas, propaga pai ->
+            // filho e empurra o que mudou, antes de desenhar.
+            m_sceneObjects.sync(*this);
             auto _t2 = std::chrono::steady_clock::now();
             render();
             auto _t3 = std::chrono::steady_clock::now();
@@ -559,6 +563,8 @@ public:
     // Anda quem tem caminho (só com o jogo rodando) e envia os sprites.
     void updateCharacters(float dt, bool moveAlongPaths);
     std::vector<SceneCharacter>& characters() { return m_characters; }
+    // Objetos da cena (hierarquia e componentes sobre modelos e personagens).
+    SceneObjects& sceneObjects() { return m_sceneObjects; }
     bool hideCharactersInView = false; // vista do editor
     // Visualizador de modelo do editor: malhas do .glb sem instância na cena.
     bool loadModelForPreview(const std::string& glbPath);
@@ -1525,6 +1531,7 @@ private:
     static constexpr uint32_t MINIMAP_RES = 256;
     PlayerController* m_playerController = nullptr;
     std::vector<SceneCharacter> m_characters;
+    SceneObjects m_sceneObjects;
     // Sprite de personagem ja lido, por caminho de arquivo. Sem isto, cada
     // personagem relia e reenviava a folha inteira para a GPU.
     std::unordered_map<std::string, LoadedSprite> m_characterSpriteCache;

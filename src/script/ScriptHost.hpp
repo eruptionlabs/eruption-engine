@@ -1,6 +1,7 @@
 #pragma once
 
 #include "math/Types.hpp"
+#include "scene/ObjectWorld.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -76,6 +77,14 @@ public:
     bool addHandler(Handler h);
     void showMessage(const std::string& text, float seconds);
     void addTween(uint32_t model, const Vec3& move, float yawDegrees, float seconds);
+    // Script de objeto: o módulo (assets/scripts/<nome>.luau) devolve uma
+    // tabela com start(self), update(self, dt) e stop(self), todas opcionais;
+    // self é o Object. O estado de cada objeto mora em self.data, então
+    // salvar o arquivo troca o comportamento sem zerar quem já está andando.
+    bool attachBehavior(ObjectId object, const std::string& module, std::string& error);
+    // Módulos ligados ao objeto (o jogo salvo leva e religa).
+    std::vector<std::string> behaviorsOf(ObjectId object) const;
+    std::vector<ObjectId> behaviorObjects() const;
     int varsRef() const { return m_varsRef; }
 
     // Progresso do jogo (script/SaveGame.cpp): mapa, jogador, variáveis, hora,
@@ -150,6 +159,12 @@ private:
         std::string text;
         float remaining = 0.0f;
     };
+    struct Behavior {
+        ObjectId object;
+        std::filesystem::path script;
+        std::string module; // como foi pedido em attach (o jogo salvo usa este)
+        bool started = false;
+    };
 
     bool load(Script& s, bool keepState);
     bool call(Script& s, const char* fn, int nargs);
@@ -159,6 +174,10 @@ private:
     void unload(Script& s);
     void scan();
     void updateTweens(float dt);
+    void updateBehaviors(float dt);
+    void attachSceneScripts();
+    void stopBehaviors();
+    Script* scriptByPath(const std::filesystem::path& path);
     void dispatch(Script& s, float dt, float prevHour, float hour);
     void resetVars();
     void writeTypeDefinitions();
@@ -174,6 +193,10 @@ private:
     std::deque<Script> m_scripts;
     std::vector<Handler>* m_loadingHandlers = nullptr;
     std::vector<Tween> m_tweens;
+    std::vector<Behavior> m_behaviors;
+    std::string m_pendingVars; // jogo carregado em outro mapa: variáveis de novo quando ele ficar pronto
+    bool m_inBehaviors = false;  // rodando scripts de objeto (game.load espera o fim)
+    std::string m_deferredLoad;  // game.load pedido no meio deles
     std::vector<Message> m_messages;
     struct BaseModel {
         Mat4 transform{1.0f};
@@ -192,6 +215,9 @@ private:
     std::string m_resumeVars;
     std::string captureMapState() const;
     void applyMapState(const std::string& json);
+    void applyMapStateUnchecked(const std::string& json);
+    void mergeObjectVars(const std::string& text);
+    bool loadGameUnchecked(const std::string& slot, std::string& error);
     int m_varsRef = -1;
     float m_prevHour = 0.0f;
     bool m_running = false;
