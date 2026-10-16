@@ -762,10 +762,30 @@ void Engine::renderSpritePart(LoadedSprite& ls, uint32_t paletteSlot, int& frame
     // Proportional Animation Scaling: 100 speed = 65ms delay.
     // As speed increases (including Shift), delay decreases (animation faster).
     if (m_playerController->isMoving() && !m_playerController->tacticalView()) {
-        float baseSpeed = 100.0f;
-        // Sprite importado traz o atraso do andar; os antigos usam 65 ms.
-        float baseDelay = ls.authoredTiming ? delay : 65.0f;
-        delay = baseDelay * (baseSpeed / std::max(1.0f, m_playerController->actualMoveSpeed()));
+        if (ls.authoredTiming) {
+            // SPRITE IMPORTADO: o atraso da folha e' o do passo natural do
+            // boneco, ~1,1 altura de corpo por segundo (a mesma regra dos
+            // personagens em Characters.cpp). A referencia antiga era uma
+            // velocidade fixa (100), que so' casava com um boneco do tamanho
+            // em que o elenco foi desenhado: um jogo que encolhe o personagem
+            // via as pernas andarem devagar demais para o chao que passava.
+            // A velocidade e' a do CHAO (o passo do controle sai pela metade
+            // fora da camera livre, ver PlayerController::updateMovement).
+            float altura = 0.0f;
+            const auto& camadas = action.frames[static_cast<size_t>(frameIdx)].sprites;
+            if (!camadas.empty()) {
+                const auto& spr = camadas.front();
+                const int idx = spr.index + (spr.type == 1 ? static_cast<int>(ls.indexedTextureCount) : 0);
+                if (idx >= 0 && idx < static_cast<int>(ls.textures.size()))
+                    altura = static_cast<float>(ls.textures[static_cast<size_t>(idx)].height) * 0.15f * spr.scaleY;
+            }
+            const float chao = m_playerController->actualMoveSpeed() * (m_playerController->freeCamera() ? 1.0f : 0.5f);
+            if (altura > 1.0f && chao > 1.0f)
+                delay *= std::clamp(1.1f * altura / chao, 0.25f, 2.0f);
+        } else {
+            // Sprites antigos (sem atraso proprio): 65 ms a 100 de velocidade.
+            delay = 65.0f * (100.0f / std::max(1.0f, m_playerController->actualMoveSpeed()));
+        }
     }
     
     timer += dt * 1000.0f;
