@@ -81,8 +81,14 @@ declare world: {
     -- Motion blur and chromatic aberration come from the quality preset; a
     -- game can turn them off as art direction (sprite games usually do: the
     -- blur smears billboards, the color fringe eats pixel outlines).
-    set_motion_blur: (on: boolean) -> (),
-    set_chromatic_aberration: (on: boolean) -> (),
+    -- `amount`: strength (engine default 1 for the blur, 0.5 for the fringe).
+    set_motion_blur: (on: boolean, amount: number?) -> (),
+    set_chromatic_aberration: (on: boolean, amount: number?) -> (),
+    -- Clear radius: inside a circle around the screen center (where the camera
+    -- puts the subject) there is no motion blur or chromatic aberration; they
+    -- grow smoothly outside it. Fractions of the screen HEIGHT; radius 0 puts
+    -- the effects back on the whole screen.
+    set_effect_radius: (radius: number, feather: number?) -> (),
     -- Where the lens focuses: a point of the scene, instead of the automatic
     -- \"how far did the player zoom in\" curve. `aperture` is blur per unit of
     -- depth (0.15 keeps a stage sharp and softens the background);

@@ -27,8 +27,8 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec4 cameraPos; // xyz=pos, w=fogStart
     mat4 invViewProj;
     mat4 prevViewProj;
-    vec4 motionBlurParams; // x=enable, y=amount, z=unused, w=unused
-    vec4 chromaticAberrationParams; // x=enable, y=amount, z=unused, w=unused
+    vec4 motionBlurParams; // x=enable, y=amount, z=tonemap, w=raio limpo (0 = sem)
+    vec4 chromaticAberrationParams; // x=enable, y=amount, z=transicao do raio limpo, w=debug
     vec4 fogHeightParams; // x=fogHeight, y=fogHeightFalloff, z=enableHeightFog, w=unused
     vec4 gradingParams;   // x=saturacao, y=contraste, zw=livre
 } push;
@@ -177,12 +177,26 @@ void main() {
         return;
     }
 
+    // RAIO LIMPO: borrao de movimento e aberracao so' FORA de um circulo em
+    // volta do centro da tela, onde a camera poe o assunto. Dentro dele a
+    // imagem fica nitida; da borda para fora o efeito cresce suave. Raio e
+    // transicao em fracao da altura da tela (o circulo e' redondo em
+    // qualquer proporcao de tela). Raio 0 = mascara desligada.
+    float efeito = 1.0;
+    if (push.motionBlurParams.w > 0.0) {
+        vec2 tam = vec2(textureSize(hdrTexture, 0));
+        vec2 d = (fragUV - 0.5) * vec2(tam.x / tam.y, 1.0);
+        efeito = smoothstep(push.motionBlurParams.w,
+                            push.motionBlurParams.w + max(push.chromaticAberrationParams.z, 1e-3),
+                            length(d));
+    }
+
     // Adaptive Chromatic Aberration
-    if (push.chromaticAberrationParams.x > 0.5) {
+    if (push.chromaticAberrationParams.x > 0.5 && efeito > 0.0) {
         vec2 centerDist = fragUV - 0.5;
         float distSq = dot(centerDist, centerDist); // Mais forte nas bordas
         
-        float amount = push.chromaticAberrationParams.y * distSq * 0.1;
+        float amount = push.chromaticAberrationParams.y * distSq * 0.1 * efeito;
         
         float r = texture(hdrTexture, fragUV + centerDist * amount).r;
         float g = texture(hdrTexture, fragUV).g;
@@ -193,12 +207,12 @@ void main() {
     }
 
     // Camera Motion Blur
-    if (push.motionBlurParams.x > 0.5 && depth < 1.0) {
+    if (push.motionBlurParams.x > 0.5 && depth < 1.0 && efeito > 0.0) {
         vec4 prevNdc = push.prevViewProj * vec4(worldPos, 1.0);
         prevNdc /= prevNdc.w;
         
         vec2 prevUV = prevNdc.xy * 0.5 + 0.5;
-        vec2 velocity = (fragUV - prevUV) * push.motionBlurParams.y;
+        vec2 velocity = (fragUV - prevUV) * push.motionBlurParams.y * efeito;
         
         // Limit velocity to prevent huge streaks
         float maxVel = 0.05;
