@@ -1374,11 +1374,12 @@ if (!m_ctx) return;
     // plano anterior, e a "velocidade" entre dois planos lavava a tela.
     const bool borrao = settings.enableMotionBlur && !kNoMotionBlur && !CameraMotion::corteNesteQuadro();
     push.motionBlurParams = Vec4(borrao ? 1.0f : 0.0f, settings.motionBlurAmount,
-                                 static_cast<float>(settings.toneMapMode), 0.0f);
+                                 static_cast<float>(settings.toneMapMode), settings.effectClearRadius);
     bool caEnabled = settings.enableChromaticAberration;
     if (std::getenv("ERUPTION_TEST_NO_CA") != nullptr) caEnabled = false;
     static const bool cloudOccDebug = std::getenv("ERUPTION_TEST_CLOUD_OCC_DEBUG") != nullptr;
-    push.chromaticAberrationParams = Vec4(caEnabled ? 1.0f : 0.0f, settings.chromaticAberrationAmount, 0.0f, cloudOccDebug ? 1.0f : 0.0f);
+    push.chromaticAberrationParams = Vec4(caEnabled ? 1.0f : 0.0f, settings.chromaticAberrationAmount,
+                                          settings.effectClearFeather, cloudOccDebug ? 1.0f : 0.0f);
     // ERUPTION_TEST_FOG_DEBUG=1: paint the sky-haze fogFactor as pure magenta
     // (w=1) so a headless screenshot can be analysed for hard edges / abrupt
     // cuts vs a smooth fade, instead of eyeballing it.

@@ -836,12 +836,27 @@ int world_set_dof(lua_State* L) {
 // sao escolha de direcao de arte: num jogo de sprite o borrao arrasta o
 // billboard (ele gira com a camera, e o vetor de movimento da tela e' o de
 // geometria parada) e a franja colorida come o contorno do pixel.
+// O segundo argumento (opcional) e' a forca: 1 = a do motor para o borrao,
+// 0,5 para a aberracao.
 int world_set_motion_blur(lua_State* L) {
-    eng().postSettings().enableMotionBlur = lua_toboolean(L, 1) != 0;
+    auto& s = eng().postSettings();
+    s.enableMotionBlur = lua_toboolean(L, 1) != 0;
+    if (lua_isnumber(L, 2)) s.motionBlurAmount = std::clamp(static_cast<float>(lua_tonumber(L, 2)), 0.0f, 4.0f);
     return 0;
 }
 int world_set_chromatic_aberration(lua_State* L) {
-    eng().postSettings().enableChromaticAberration = lua_toboolean(L, 1) != 0;
+    auto& s = eng().postSettings();
+    s.enableChromaticAberration = lua_toboolean(L, 1) != 0;
+    if (lua_isnumber(L, 2)) s.chromaticAberrationAmount = std::clamp(static_cast<float>(lua_tonumber(L, 2)), 0.0f, 5.0f);
+    return 0;
+}
+// RAIO LIMPO: dentro do circulo em volta do centro da tela, sem borrao nem
+// aberracao; fora, os dois crescem suaves. Fracoes da altura da tela; raio 0
+// devolve o efeito a tela inteira.
+int world_set_effect_radius(lua_State* L) {
+    auto& s = eng().postSettings();
+    s.effectClearRadius = std::clamp(static_cast<float>(luaL_checknumber(L, 1)), 0.0f, 2.0f);
+    if (lua_isnumber(L, 2)) s.effectClearFeather = std::clamp(static_cast<float>(lua_tonumber(L, 2)), 0.0f, 2.0f);
     return 0;
 }
 
@@ -1010,7 +1025,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
         {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_motion_blur", world_set_motion_blur},
-        {"set_chromatic_aberration", world_set_chromatic_aberration},
+        {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
         {"set_focus", world_set_focus},
         {"ground_height", world_ground_height}, {"map", world_map}, {"load_map", world_load_map},
         {"warp_map", world_warp_map}, {"warping", world_warping}, {nullptr, nullptr}};

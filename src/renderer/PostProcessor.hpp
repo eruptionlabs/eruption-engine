@@ -141,6 +141,14 @@ public:
         bool enableChromaticAberration = true;
         float chromaticAberrationAmount = 0.5f;
 
+        // RAIO LIMPO do borrao de movimento e da aberracao cromatica: um
+        // circulo em volta do centro da tela (onde a camera poe o assunto)
+        // fica sem os dois efeitos, e eles crescem suaves da borda dele para
+        // fora. Raio e largura da transicao em fracao da ALTURA da tela;
+        // raio 0 = sem mascara (o efeito vale na tela inteira, como antes).
+        float effectClearRadius = 0.0f;
+        float effectClearFeather = 0.25f;
+
         // Weather rendering tier
         WeatherTier weatherTier = WeatherTier::Medium;
 
