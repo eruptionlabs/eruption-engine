@@ -73,23 +73,7 @@ bool Project::open(const fs::path& dir, std::string* err) {
         m.description = j.value("description", std::string());
         m.startupMap = j.value("startup_map", std::string());
         m.devTools = j.value("dev_tools", false);
-        if (j.contains("spawn") && j["spawn"].is_array() && j["spawn"].size() == 3) {
-            for (int i = 0; i < 3; ++i) m.spawn[i] = j["spawn"][i].get<float>();
-            m.hasSpawn = true;
-        }
-        if (j.contains("camera") && j["camera"].is_object()) {
-            const json& c = j["camera"];
-            auto numero = [&c](const char* chave) -> std::optional<float> {
-                if (c.contains(chave) && c[chave].is_number()) return c[chave].get<float>();
-                return std::nullopt;
-            };
-            m.cameraFov = numero("fov");
-            m.cameraYaw = numero("yaw");
-            m.cameraPitch = numero("pitch");
-            m.cameraDistance = numero("distance");
-            if (c.contains("keep_inside_map") && c["keep_inside_map"].is_boolean())
-                m.cameraKeepInsideMap = c["keep_inside_map"].get<bool>();
-        }
+        readFraming(j, m);
     } catch (const std::exception& e) {
         if (err) *err = std::string("project.eruption is not valid JSON: ") + e.what();
         return false;
@@ -200,6 +184,26 @@ std::vector<std::string> Project::maps() const {
     }
     std::sort(out.begin(), out.end());
     return out;
+}
+
+void Project::readFraming(const json& j, Manifest& m) {
+    if (j.contains("spawn") && j["spawn"].is_array() && j["spawn"].size() == 3) {
+        for (int i = 0; i < 3; ++i) m.spawn[i] = j["spawn"][i].get<float>();
+        m.hasSpawn = true;
+    }
+    if (j.contains("camera") && j["camera"].is_object()) {
+        const json& c = j["camera"];
+        auto numero = [&c](const char* chave) -> std::optional<float> {
+            if (c.contains(chave) && c[chave].is_number()) return c[chave].get<float>();
+            return std::nullopt;
+        };
+        m.cameraFov = numero("fov");
+        m.cameraYaw = numero("yaw");
+        m.cameraPitch = numero("pitch");
+        m.cameraDistance = numero("distance");
+        if (c.contains("keep_inside_map") && c["keep_inside_map"].is_boolean())
+            m.cameraKeepInsideMap = c["keep_inside_map"].get<bool>();
+    }
 }
 
 fs::path Project::requested(int argc, char** argv, bool* explicitlyAsked) {

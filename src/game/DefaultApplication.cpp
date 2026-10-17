@@ -47,23 +47,39 @@ DefaultApplication::DefaultApplication(int argc, char** argv) {
             const std::vector<std::string> maps = p.maps();
             if (!maps.empty()) m_initialMap = maps.front();
         }
-        if (p.manifest().hasSpawn) {
-            m_initialPos = Vec3(p.manifest().spawn[0], p.manifest().spawn[1], p.manifest().spawn[2]);
-            m_hasInitialPos = true;
-        }
-        // Enquadramento do jogo (bloco "camera" do manifesto). Chave que o
-        // jogo nao escreve fica com o padrao do motor.
-        const Project::Manifest& mf = p.manifest();
-        if (mf.cameraFov) m_fovDeg = *mf.cameraFov;
-        if (mf.cameraYaw) { m_initialYaw = *mf.cameraYaw; m_hasInitialCamera = true; }
-        if (mf.cameraPitch) { m_initialPitch = *mf.cameraPitch; m_hasInitialCamera = true; }
-        if (mf.cameraDistance) { m_initialDist = *mf.cameraDistance; m_hasInitialCamera = true; }
+        applyFraming(p.manifest());
     } else {
         m_initialMap = loadInitialMapFromConfig();
+        // Jogo exportado: o enquadramento vem copiado no launcher_config.
+        try {
+            std::ifstream f("data/launcher_config.json");
+            const nlohmann::json cfg = f ? nlohmann::json::parse(f, nullptr, false) : nlohmann::json();
+            if (cfg.is_object()) {
+                Project::Manifest framing;
+                Project::readFraming(cfg, framing);
+                applyFraming(framing);
+            }
+        } catch (const std::exception& e) {
+            ERUPTION_LOG_WARN("DefaultApplication: camera do launcher_config.json invalida: %s", e.what());
+        }
     }
     parseArgs(argc, argv);
 }
 DefaultApplication::~DefaultApplication() = default;
+
+// Enquadramento do jogo (blocos "spawn" e "camera"): chave que o jogo nao
+// escreve fica com o padrao do motor.
+void DefaultApplication::applyFraming(const Project::Manifest& mf) {
+    if (mf.hasSpawn) {
+        m_initialPos = Vec3(mf.spawn[0], mf.spawn[1], mf.spawn[2]);
+        m_hasInitialPos = true;
+    }
+    if (mf.cameraFov) m_fovDeg = *mf.cameraFov;
+    if (mf.cameraYaw) { m_initialYaw = *mf.cameraYaw; m_hasInitialCamera = true; }
+    if (mf.cameraPitch) { m_initialPitch = *mf.cameraPitch; m_hasInitialCamera = true; }
+    if (mf.cameraDistance) { m_initialDist = *mf.cameraDistance; m_hasInitialCamera = true; }
+    m_keepViewInsideMap = mf.cameraKeepInsideMap;
+}
 void DefaultApplication::parseArgs(int argc, char** argv) {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -182,7 +198,7 @@ void DefaultApplication::onInit(Engine& engine) {
     m_player = std::make_unique<PlayerController>(&engine);
     engine.setPlayerController(m_player.get());
     m_player->setHudRenderer(&m_hud);
-    if (project::isOpen()) m_player->setKeepViewInsideMap(Project::instance().manifest().cameraKeepInsideMap);
+    m_player->setKeepViewInsideMap(m_keepViewInsideMap);
     m_player->init();
     m_player->m_autoTest = m_autoTest;
     if (m_autoExit) engine.enableAutoExit(true);

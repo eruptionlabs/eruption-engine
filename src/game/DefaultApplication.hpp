@@ -5,6 +5,7 @@
 #include <vector>
 #include "game/HudRenderer.hpp"
 #include "math/Camera.hpp"
+#include "core/Project.hpp"
 namespace eruption {
 class Engine;
 class DefaultApplication {
@@ -17,6 +18,7 @@ public:
     ~DefaultApplication();
 private:
     void parseArgs(int argc, char** argv);
+    void applyFraming(const Project::Manifest& mf);
     Engine* m_engine = nullptr;
     std::unique_ptr<class PlayerController> m_player;
     std::unique_ptr<class Editor> m_editor;
@@ -47,6 +49,7 @@ private:
     bool m_hasInitialPos = false;
     Vec3 m_initialPos = Vec3(0.0f);
     bool m_hasInitialCamera = false;
+    bool m_keepViewInsideMap = false; // "keep_inside_map" do bloco camera
     float m_initialYaw = camera_default::kYawDeg;
     float m_initialPitch = camera_default::kPitchDeg;
     float m_initialDist = camera_default::kDistance;
