@@ -15,6 +15,7 @@
 // executavel/repositorio), e nada muda pra quem abre um mapa direto.
 
 #include <filesystem>
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <string>
 #include <vector>
@@ -74,6 +75,9 @@ public:
     static std::filesystem::path requested(int argc, char** argv, bool* explicitlyAsked = nullptr);
     // Guarda o projeto aberto em data/launcher_config.json pra proxima vez.
     static void rememberLastOpened(const std::filesystem::path& dir);
+    // Blocos "spawn" e "camera" de um JSON (o manifesto, ou o
+    // data/launcher_config.json do jogo exportado, que os leva copiados).
+    static void readFraming(const nlohmann::json& j, Manifest& m);
 
     static constexpr const char* kManifestName = "project.eruption";
     // Subpastas de conteudo criadas por create() (e esperadas pelo editor).
