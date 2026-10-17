@@ -2050,6 +2050,13 @@ static void envOverrideBool(const char* name, bool& out) {
     if (const char* e = std::getenv(name)) out = std::stof(e) != 0.0f;
 }
 
+// DoF ligado por script ou pela linha do tempo da demo: o efeito 3 e' quem
+// manda (o render recopia enableDoF dele a cada quadro).
+void Engine::setDofEnabled(bool on) {
+    m_postSettings.enableDoF = on;
+    if (m_renderEffects.size() > 3) m_renderEffects[3]->setEnabled(on);
+}
+
 void Engine::applyGraphicsPreset() {
     const json& root = m_graphicsConfig.root();
     if (!root.is_object()) return;

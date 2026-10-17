@@ -961,7 +961,7 @@ int world_look(lua_State* L) {
     return 1;
 }
 int world_set_dof(lua_State* L) {
-    eng().postSettings().enableDoF = lua_toboolean(L, 1) != 0;
+    eng().setDofEnabled(lua_toboolean(L, 1) != 0);
     return 0;
 }
 // Borrao de movimento e aberracao cromatica vem do preset de QUALIDADE, mas

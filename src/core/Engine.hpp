@@ -510,6 +510,9 @@ public:
     std::string m_demoLabel;       // rotulo grande no rodape (ver runDemoTimeline: label=)
     float m_demoLabelUntil = -1.0f;// segundos do roteiro ate' quando o rotulo fica
     RenderEffect* renderEffect(size_t i) { return m_renderEffects[i].get(); }
+    // Liga/desliga o DoF de vez: o render recopia enableDoF do efeito 3 a cada
+    // quadro, entao escrever so' em postSettings() durava um quadro.
+    void setDofEnabled(bool on);
     void setMinimapBottomRight(bool bottomRight) { m_minimapBottomRight = bottomRight; }
     bool minimapBottomRight() const { return m_minimapBottomRight; }
     bool loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out, uint32_t version = 2);

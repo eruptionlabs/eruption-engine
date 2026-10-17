@@ -2743,7 +2743,7 @@ void Engine::runDemoTimeline(const char* spec) {
         else if (ev.key == "probes") { m_irradianceProbesEnabled = on; m_skyProbeEnabled = on; }
         else if (ev.key == "stats") { m_showStatsMenu = on; m_demoPinStats = on; }
         else if (ev.key == "overlay") { m_demoHidePanels = !on; m_showDebugOverlay = true; } // 0 = so' F3 + FPS
-        else if (ev.key == "dof") m_postSettings.enableDoF = on;
+        else if (ev.key == "dof") setDofEnabled(on);
         else if (ev.key == "time") m_dayNightCycle.setTimeOfDay(std::strtof(ev.val.c_str(), nullptr));
         else if (ev.key == "timescale") m_dayNightCycle.setTimeScale(std::strtof(ev.val.c_str(), nullptr));
         else if (ev.key == "weather") setInitialWeatherType(ev.val);
