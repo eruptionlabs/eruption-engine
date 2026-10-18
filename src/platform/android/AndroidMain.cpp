@@ -562,6 +562,12 @@ void android_main(android_app* app) {
             while (std::getline(in, line))
                 if (!line.empty()) args.push_back(line);
         }
+        // ERUPTION_TEST_MAP=<mapa> (teste, pelo env.txt): abre outro mapa do APK
+        // no lugar do primeiro, sem remontar o pacote por mapa.
+        if (const char* e = std::getenv("ERUPTION_TEST_MAP"); e && *e) {
+            for (size_t i = 1; i + 1 < args.size(); ++i)
+                if (args[i] == "--map") args[i + 1] = e;
+        }
 
         while (!g_windowReady && !g_closeRequested) std::this_thread::sleep_for(std::chrono::milliseconds(20));
         int rc = 0;
