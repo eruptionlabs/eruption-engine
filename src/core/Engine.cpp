@@ -1092,6 +1092,7 @@ void Engine::shutdown() {
 
     m_audio.shutdown();
     clearCharacters();
+    releaseCharacterSpriteCache(0); // no fim, as folhas guardadas entre mapas tambem saem
     endSplatEditing();
     for (auto& r : m_regions) {
         if (r.job.valid()) r.job.wait();

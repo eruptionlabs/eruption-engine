@@ -27,6 +27,7 @@ bool Engine::loadCharacterSprite(const std::string& png, LoadedSprite& out) {
     // mapa que criasse o elenco de uma vez estourava o relógio do script.
     auto cached = m_characterSpriteCache.find(png);
     if (cached != m_characterSpriteCache.end() && cached->second.loaded) {
+        m_characterSpriteUse[png] = m_characterSpriteGen;
         out = cached->second;
         return true;
     }
@@ -42,6 +43,7 @@ bool Engine::loadCharacterSprite(const std::string& png, LoadedSprite& out) {
 
     lido.texturesShared = std::make_shared<char>(0);
     m_characterSpriteCache[png] = lido;
+    m_characterSpriteUse[png] = m_characterSpriteGen;
     out = std::move(lido);
     return true;
 }
@@ -119,14 +121,28 @@ void Engine::clearCharacters(bool keepNeighbors) {
         else cleanupSpriteTextures(c.look);
     }
     m_characters = std::move(kept);
+    // A FOLHA FICA entre mapas: o elenco que volta (o mesmo grupo em dois
+    // andares) nao relê o PNG nem reenvia a textura - eram 150 a 290 ms por
+    // folha na chegada ao mapa seguinte, ~1,5 s com 9 folhas. So' sai a folha
+    // sem uso ha' duas trocas (como a expiracao do cache de assets).
+    ++m_characterSpriteGen;
+    releaseCharacterSpriteCache(2);
+}
+
+void Engine::releaseCharacterSpriteCache(uint32_t keepGenerations) {
     // O cache guarda uma referência a mais: solta depois das personagens, para
     // que a última a sair seja quem devolve os slots. Quem ficou (vizinho)
     // segue dono da folha dele.
-    for (auto& [caminho, folha] : m_characterSpriteCache) {
-        (void)caminho;
-        cleanupSpriteTextures(folha);
+    for (auto it = m_characterSpriteCache.begin(); it != m_characterSpriteCache.end();) {
+        const uint32_t used = m_characterSpriteUse[it->first];
+        if (keepGenerations > 0 && m_characterSpriteGen - used < keepGenerations) {
+            ++it;
+            continue;
+        }
+        cleanupSpriteTextures(it->second);
+        m_characterSpriteUse.erase(it->first);
+        it = m_characterSpriteCache.erase(it);
     }
-    m_characterSpriteCache.clear();
 }
 
 void Engine::updateCharacters(float dt, bool moveAlongPaths) {
