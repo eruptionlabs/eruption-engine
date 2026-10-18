@@ -180,10 +180,31 @@ void UiDocument::setColor(const std::string& selector, int which, const Vec4& co
     e->color[which] = color;
 }
 
+void UiDocument::setPlace(const std::string& selector, float leftPct, float topPct, float widthPct, float heightPct) {
+    if (Element* e = find(selector)) {
+        e->hasPlace = true;
+        e->place = Vec4(leftPct, topPct, widthPct, heightPct) * 0.01f;
+    }
+}
+
+void UiDocument::clearPlace(const std::string& selector) {
+    if (Element* e = find(selector)) e->hasPlace = false;
+}
+
+void UiDocument::setImageRect(const std::string& selector, float u0, float v0, float u1, float v1) {
+    if (Element* e = find(selector)) e->uv = Vec4(u0, v0, u1, v1);
+}
+
+void UiDocument::clearImageRect(const std::string& selector) {
+    if (Element* e = find(selector)) e->uv = Vec4(0.0f, 0.0f, 1.0f, 1.0f);
+}
+
 void UiDocument::resetOverrides() {
     for (Element& e : m_elements) {
         e.hasText = e.hasValue = e.hasVisible = false;
         e.hasColor[0] = e.hasColor[1] = false;
+        e.hasPlace = false;
+        e.uv = Vec4(0.0f, 0.0f, 1.0f, 1.0f);
         e.text = e.textCss;
         e.value = e.valueCss;
         e.visible = e.visibleCss;
@@ -204,9 +225,21 @@ CSSRect UiDocument::resolveRect(const Element& e, const Vec2& area) const {
             if (p->parent.empty() || p->parent == p->selector) break;
             p = find(p->parent);
         }
-        for (int i = n - 1; i >= 0; --i) parent = m_layout.resolve(chain[i]->selector, display, parent);
+        for (int i = n - 1; i >= 0; --i) parent = ownRect(*chain[i], display, parent);
     }
-    return m_layout.resolve(e.selector, display, parent);
+    return ownRect(e, display, parent);
+}
+
+CSSRect UiDocument::ownRect(const Element& e, const ImVec2& display, const CSSRect& parent) const {
+    CSSRect r = m_layout.resolve(e.selector, display, parent);
+    if (!e.hasPlace) return r;
+    CSSRect base = parent;
+    if (base.w <= 0.0f || base.h <= 0.0f) base = CSSRect{0.0f, 0.0f, display.x, display.y};
+    r.x = base.x + e.place.x * base.w;
+    r.y = base.y + e.place.y * base.h;
+    if (e.place.z >= 0.0f) r.w = e.place.z * base.w;
+    if (e.place.w >= 0.0f) r.h = e.place.w * base.h;
+    return r;
 }
 
 bool UiDocument::rectOf(const std::string& selector, float x, float y, float w, float h, CSSRect& out) const {
@@ -273,8 +306,8 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
             void* tex = (m_imageResolver && !e.image.empty()) ? m_imageResolver(e.image) : nullptr;
             if (tex) {
                 const ImU32 tint = withAlpha(IM_COL32_WHITE, alpha);
-                dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(r.x, r.y),
-                             ImVec2(r.x + r.w, r.y + r.h), ImVec2(0, 0), ImVec2(1, 1), tint);
+                dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(r.x, r.y), ImVec2(r.x + r.w, r.y + r.h),
+                             ImVec2(e.uv.x, e.uv.y), ImVec2(e.uv.z, e.uv.w), tint);
                 break;
             }
             m_layout.drawBox(dl, r, e.selector, alpha, 0, IM_COL32(150, 150, 150, 200), 1.0f, 0.0f, bg, edge);

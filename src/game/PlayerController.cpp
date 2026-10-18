@@ -681,7 +681,7 @@ void PlayerController::renderMinimapMarkers() const {
 
     float lado = 200.0f;
     ImVec2 ini(area.x - 10.0f - lado, area.y - 10.0f - lado);
-    if (m_engine->minimapBottomRight()) {
+    if (m_engine->minimapFollowsCss()) { // a mesma regra do Engine::drawGameHud
         const eruption::CSSRect r = getMinimapRect(area);
         if (r.w > 0.0f && r.h > 0.0f) {
             lado = std::max(50.0f, std::min(r.w, r.h));

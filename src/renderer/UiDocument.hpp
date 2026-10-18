@@ -75,6 +75,15 @@ public:
     // Cor viva por cima da do arquivo. `which`: 0 = fundo/trilho/texto,
     // 1 = preenchimento da barra ou borda. Alfa negativo mantém o do CSS.
     void setColor(const std::string& selector, int which, const Vec4& color);
+    // Posicao e tamanho por script, em % do pai (ou da tela, sem pai), como
+    // left/top/width/height do CSS; tamanho negativo mantem o do arquivo.
+    // clearPlace devolve o elemento ao CSS.
+    void setPlace(const std::string& selector, float leftPct, float topPct, float widthPct, float heightPct);
+    void clearPlace(const std::string& selector);
+    // Recorte da imagem em coordenadas de textura (0..1): uma janela de uma
+    // imagem maior (minimapa, creditos rolando). clearImageRect volta ao todo.
+    void setImageRect(const std::string& selector, float u0, float v0, float u1, float v1);
+    void clearImageRect(const std::string& selector);
     // Volta tudo o que o script mexeu para o que o arquivo diz.
     void resetOverrides();
 
@@ -110,6 +119,9 @@ private:
         bool visible = true;
         bool hasColor[2] = {false, false};
         Vec4 color[2] = {Vec4(1.0f), Vec4(1.0f)};
+        bool hasPlace = false;
+        Vec4 place{0.0f};             // left, top, width, height em fracao do pai
+        Vec4 uv{0.0f, 0.0f, 1.0f, 1.0f}; // recorte da imagem (u0, v0, u1, v1)
     };
 
     void build();
@@ -117,6 +129,9 @@ private:
     const Element* find(const std::string& selector) const;
     // Retângulo do elemento, resolvendo o pai (uma cadeia curta; ciclo para).
     CSSRect resolveRect(const Element& e, const Vec2& area) const;
+    // O retangulo do proprio elemento dentro do pai: o do CSS, ou o posto por
+    // setPlace. A cadeia de pais passa por aqui, entao os filhos acompanham.
+    CSSRect ownRect(const Element& e, const ImVec2& display, const CSSRect& parent) const;
 
     CSSParser m_parser;
     CSSLayout m_layout{&m_parser};

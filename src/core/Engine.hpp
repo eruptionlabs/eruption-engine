@@ -525,6 +525,12 @@ public:
     void setScriptFog(const MapFog& fog) { m_scriptFog = fog; }
     void setMinimapBottomRight(bool bottomRight) { m_minimapBottomRight = bottomRight; }
     bool minimapBottomRight() const { return m_minimapBottomRight; }
+    // O minimapa (e o cursor do jogador nele) segue o #minimap/#minimap-info do
+    // CSS: ligado por setMinimapBottomRight ou pela folha da HUD do projeto.
+    bool minimapFollowsCss() const;
+    // ui.minimap_label: um texto so' no #minimap-info, no lugar de
+    // "mapa [x, z]" + relogio; vazio volta ao padrao.
+    void setMinimapLabel(const std::string& text) { m_minimapLabel = text; }
     bool loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out, uint32_t version = 2);
     // `preCleaned`: os pixels ja' vem com corte de alfa e dilatacao (preload
     // de folha, characters.preload) - so' sobem.
@@ -1585,6 +1591,7 @@ private:
     VkImageView m_minimapCompositeDSAlbedoView = VK_NULL_HANDLE;
     VkDescriptorSet m_minimapDescriptorSet = VK_NULL_HANDLE;
     bool m_minimapBottomRight = false;
+    std::string m_minimapLabel;
     // Minimap composite pass (IGNIS G10/G11): relights the minimap G-buffer and
     // paints water from terrain height, instead of blitting raw albedo. See
     // renderMinimap() and shaders/postprocess/minimap_composite.frag.
