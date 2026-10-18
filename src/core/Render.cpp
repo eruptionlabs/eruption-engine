@@ -2638,10 +2638,11 @@ void Engine::render() {
 
     if (m_screenshotPending) finishPendingScreenshot();
 
-    // ERUPTION_TEST_RECORD="pasta,primeiro,quantos" (teste): grava um PNG por
-    // frame para montar video offline. Com ERUPTION_TEST_FIXED_DT=0.0333 o
-    // video sai em tempo real a 30 quadros/s, qualquer que seja a velocidade
-    // da maquina.
+    // ERUPTION_TEST_RECORD="pasta,primeiro,quantos[,passo]" (teste): grava
+    // `quantos` PNGs a partir do quadro `primeiro`, um a cada `passo` quadros
+    // (padrao 1), para montar video offline. Com ERUPTION_TEST_FIXED_DT=0.0333
+    // e passo 1 o video sai em tempo real a 30 quadros/s, qualquer que seja a
+    // velocidade da maquina; passo 2 com FIXED_DT=0.0166 tambem.
     //
     // PELO SWAPCHAIN, como --screenshot ja' fazia. Este caminho usava
     // takeScreenshot(), que le' a saida do post e e' CEGO pra interface: todo
@@ -2651,11 +2652,12 @@ void Engine::render() {
     // tinha corrigido e que ninguem levou pra ca'.
     {
         static std::string recDir;
-        static int recFirst = -1, recCount = 0;
+        static int recFirst = -1, recCount = 0, recStep = 1;
         static const bool recParsed = [] {
             if (const char* e = std::getenv("ERUPTION_TEST_RECORD")) {
                 char dir[512] = {0};
-                if (std::sscanf(e, "%511[^,],%d,%d", dir, &recFirst, &recCount) == 3) {
+                if (std::sscanf(e, "%511[^,],%d,%d,%d", dir, &recFirst, &recCount, &recStep) >= 3) {
+                    recStep = std::max(recStep, 1);
                     recDir = dir;
                     std::filesystem::create_directories(recDir);
                 }
@@ -2664,9 +2666,10 @@ void Engine::render() {
         }();
         (void)recParsed;
         const int f = static_cast<int>(m_framesCount);
-        if (!recDir.empty() && f >= recFirst && f < recFirst + recCount) {
+        const int recLast = recFirst + (recCount - 1) * recStep;
+        if (!recDir.empty() && f >= recFirst && f <= recLast && (f - recFirst) % recStep == 0) {
             char name[64];
-            std::snprintf(name, sizeof(name), "/f%05d.png", f - recFirst);
+            std::snprintf(name, sizeof(name), "/f%05d.png", (f - recFirst) / recStep);
             if (m_vulkan.swapSupportsCopy()) {
                 // So' pede o proximo quando o anterior terminou: a leitura do
                 // swapchain atravessa dois quadros (um para submeter a copia,
@@ -2677,7 +2680,7 @@ void Engine::render() {
                 ERUPTION_LOG_WARN("[TEST] swapchain nao permite copia: o video sai SEM a interface");
                 takeScreenshot(recDir + name);
             }
-            if (f + 1 == recFirst + recCount && m_enableAutoExit) m_running = false;
+            if (f == recLast && m_enableAutoExit) m_running = false;
         }
     }
 
