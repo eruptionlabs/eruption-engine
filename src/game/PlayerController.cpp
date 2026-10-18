@@ -211,6 +211,39 @@ void PlayerController::updateUI(float dt) {
     // desenhado e NAO contado, e o FPS reportado ficava abaixo do real.
     // Contar quadro e' trabalho do laco, nao da logica de jogo.
 }
+// DESLIZAR NA PAREDE. O passo testado eixo a eixo so' anda quando a parede e'
+// paralela a um eixo: numa quina diagonal da grade (declive, solido) com o
+// controle reto contra ela, o eixo de lado nunca muda e o jogador parava com a
+// animacao rodando no lugar. Recusado o passo inteiro, a mesma distancia
+// girada +-30 e +-60 graus (a primeira valida vence: desliza pela quina). De
+// frente para uma ilha de 1 ou 2 casas bloqueadas no meio do chao livre,
+// nenhum desses passa; ai vai de lado (+-90) para o lado em que, uma ou duas
+// casas adiante, o caminho esta' livre. Parede comprida nao tem esse lado
+// livre, e o jogador para, como antes.
+template <class Walk>
+Vec3 PlayerController::slideAround(const Vec3& move, float cellSize, const Walk& walkable) const {
+    auto turned = [&](float deg) {
+        const float c = std::cos(glm::radians(deg)), s = std::sin(glm::radians(deg));
+        return Vec3(move.x * c - move.z * s, 0.0f, move.x * s + move.z * c);
+    };
+    for (float deg : {30.0f, -30.0f, 60.0f, -60.0f}) {
+        const Vec3 p = m_pos + turned(deg);
+        if (walkable(Vec3(p.x, m_pos.y, p.z))) return Vec3(p.x, m_pos.y, p.z);
+    }
+    const float len = glm::length(Vec2(move.x, move.z));
+    if (len < 1e-5f) return m_pos;
+    const Vec3 fwd = Vec3(move.x, 0.0f, move.z) / len;
+    for (int casas = 1; casas <= 2; ++casas)
+        for (float lado : {1.0f, -1.0f}) {
+            const Vec3 side = turned(90.0f * lado) / len;
+            const Vec3 adiante = m_pos + side * (cellSize * float(casas)) + fwd * cellSize;
+            if (!walkable(Vec3(adiante.x, m_pos.y, adiante.z))) continue;
+            const Vec3 p = m_pos + side * len;
+            if (walkable(Vec3(p.x, m_pos.y, p.z))) return Vec3(p.x, m_pos.y, p.z);
+        }
+    return m_pos;
+}
+
 void PlayerController::updateMovement(float dt) {
     if (m_inputFrozen) {
         m_isMoving = false;
@@ -306,6 +339,11 @@ void PlayerController::updateMovement(float dt) {
                     Vec3 finalPos = m_pos;
                     if (isWalkable(Vec3(nextPos.x, m_pos.y, m_pos.z))) finalPos.x = nextPos.x;
                     if (isWalkable(Vec3(finalPos.x, m_pos.y, nextPos.z))) finalPos.z = nextPos.z;
+                    if (finalPos.x == m_pos.x && finalPos.z == m_pos.z) {
+                        finalPos = slideAround(move, gatCellSize, isWalkable);
+                        // Parado de verdade: sem andar no lugar.
+                        if (finalPos.x == m_pos.x && finalPos.z == m_pos.z) m_isMoving = false;
+                    }
                     if (m_engine->currentMap()->isGlbMap) {
                         finalPos.y = m_engine->sampleTerrainHeight(finalPos.x, finalPos.z);
                     } else {
