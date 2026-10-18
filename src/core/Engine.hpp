@@ -526,7 +526,30 @@ public:
     void setMinimapBottomRight(bool bottomRight) { m_minimapBottomRight = bottomRight; }
     bool minimapBottomRight() const { return m_minimapBottomRight; }
     bool loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out, uint32_t version = 2);
-    uint32_t createTextureFromSprImage(const SprImage& img, const uint8_t* palette, bool usePalette, std::vector<TextureResource>& outResources, bool swapRB = false, const std::string& sourcePath = "");
+    // `preCleaned`: os pixels ja' vem com corte de alfa e dilatacao (preload
+    // de folha, characters.preload) - so' sobem.
+    uint32_t createTextureFromSprImage(const SprImage& img, const uint8_t* palette, bool usePalette, std::vector<TextureResource>& outResources, bool swapRB = false, const std::string& sourcePath = "", bool preCleaned = false);
+    // Envio em lote de uma folha de sprite: com m_spriteUploads posto, o
+    // createTextureFromSprImage so' anota a copia, e flushSpriteUploads faz um
+    // envio (uma espera da GPU) para a folha toda em vez de um por quadro.
+    struct SpriteUpload {
+        VkBuffer staging;
+        VmaAllocation stagingAlloc;
+        VkImage image;
+        uint32_t width, height, mipLevels;
+        VkFormat format;
+    };
+    std::vector<SpriteUpload>* m_spriteUploads = nullptr;
+    void flushSpriteUploads(std::vector<SpriteUpload>& uploads);
+    // characters.preload: le a folha .spr e prepara os quadros (corte de alfa
+    // e dilatacao) num job; a carga seguinte dessa folha so' cria e envia.
+    // Chave: o caminho do .spr resolvido no projeto. So' o fio principal mexe.
+    struct PreparedSheet {
+        std::vector<uint32_t> sizes;                // largura, altura por quadro
+        std::vector<std::vector<uint8_t>> pixels;   // RGBA pronto por quadro
+    };
+    std::unordered_map<std::string, std::shared_future<std::shared_ptr<PreparedSheet>>> m_spritePreloads;
+    void preloadCharacterSprite(const std::string& png);
     bool loadSpriteFromPng(const std::string& path, LoadedSprite& out);
     bool loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out);
     void cleanupSpriteTextures(LoadedSprite& ls);
@@ -1583,6 +1606,10 @@ private:
     // Sprite de personagem ja lido, por caminho de arquivo. Sem isto, cada
     // personagem relia e reenviava a folha inteira para a GPU.
     std::unordered_map<std::string, LoadedSprite> m_characterSpriteCache;
+    std::unordered_map<std::string, uint32_t> m_characterSpriteUse; // folha -> troca de mapa em que foi usada
+    uint32_t m_characterSpriteGen = 0;
+    // Solta as folhas sem uso ha' `keepGenerations` trocas de mapa (0 = todas).
+    void releaseCharacterSpriteCache(uint32_t keepGenerations);
     bool m_hasPlayerStart = false;
     HeightEdit m_heightEdit;
     std::vector<ScatterGroup> m_scatter;

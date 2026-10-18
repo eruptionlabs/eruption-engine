@@ -13,13 +13,17 @@
 #include "utils/ImageUtils.hpp"
 #include "utils/Profiler.hpp"
 #include "formats/SpriteTypes.hpp"
+#include "core/JobSystem.hpp"
 #include <stb_image.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <future>
 #include <string>
 #include <vector>
 
@@ -100,7 +104,7 @@ namespace {
     }
 }
 
-uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* palette, bool usePalette, std::vector<TextureResource>& outResources, bool swapRB, const std::string& sourcePath) {
+uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* palette, bool usePalette, std::vector<TextureResource>& outResources, bool swapRB, const std::string& sourcePath, bool preCleaned) {
     TextureResource res;
     res.width = img.width; res.height = img.height;
     
@@ -145,7 +149,9 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
     const uint8_t* srcPixels = (usePalette && palette) ? convertedPixels.data() : img.pixels.data();
     // Build an RGBA CPU copy for content-bound analysis.
     std::vector<uint8_t> rgbaPixels;
-    if (img.isIndexed && palette && usePalette) {
+    if (preCleaned) {
+        // folha preparada pelo preload: nada a analisar nem copiar
+    } else if (img.isIndexed && palette && usePalette) {
         rgbaPixels.resize((size_t)img.width * img.height * 4);
         for (size_t i = 0; i < (size_t)img.width * img.height; ++i) {
             uint8_t idx = img.pixels[i];
@@ -166,7 +172,7 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
 
     // Class sprites may have fake ghost pixels to force dimensions; run a
     // morphological opening to discover the real silhouette bounds.
-    if (!sourcePath.empty() && isClassSpritePath(sourcePath)) {
+    if (!preCleaned && !sourcePath.empty() && isClassSpritePath(sourcePath)) {
         ERUPTION_LOG_WARN("TODO: deprecated future - applying erosion+dilation to class sprite %s", sourcePath.c_str());
         std::vector<uint8_t> mask((size_t)img.width * img.height);
         for (size_t i = 0; i < mask.size(); ++i) mask[i] = rgbaPixels[i * 4 + 3] > 10 ? 1 : 0;
@@ -194,7 +200,7 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
     VkBuffer staging; VmaAllocation stagingAlloc;
     m_vulkan.createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
     void* data; vmaMapMemory(m_vulkan.allocator(), stagingAlloc, &data);
-    if (!isActuallyIndexed) {
+    if (!isActuallyIndexed && !preCleaned) {
         // CPU pre-pass to remove transparent magenta (FF00FF) bleeding
         std::vector<uint8_t> cleanPixels(img.width * img.height * 4);
         std::memcpy(cleanPixels.data(), srcPixels, (size_t)imageSize);
@@ -221,18 +227,10 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
     VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     if (mipLevels > 1) usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     m_vulkan.createImage(img.width, img.height, format, usage, VMA_MEMORY_USAGE_GPU_ONLY, res.image, res.alloc, mipLevels);
-    m_vulkan.immediateSubmit([&](VkCommandBuffer cmd) {
-        m_vulkan.cmdImageBarrier(cmd, res.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
-        VkBufferImageCopy region{}; region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; region.imageSubresource.layerCount = 1; region.imageExtent = { img.width, img.height, 1 };
-        vkCmdCopyBufferToImage(cmd, staging, res.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-        if (mipLevels > 1) {
-            generateMipmaps(cmd, res.image, img.width, img.height, mipLevels, format, 2);
-        } else {
-            m_vulkan.cmdImageBarrier(cmd, res.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-        }
-    });
-    vmaDestroyBuffer(m_vulkan.allocator(), staging, stagingAlloc);
+    std::vector<SpriteUpload> single;
+    std::vector<SpriteUpload>& uploads = m_spriteUploads ? *m_spriteUploads : single;
+    uploads.push_back({staging, stagingAlloc, res.image, img.width, img.height, mipLevels, format});
+    if (!m_spriteUploads) flushSpriteUploads(single);
 
     VkImageViewCreateInfo viewInfo{}; viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO; viewInfo.image = res.image; viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; viewInfo.format = format; viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; viewInfo.subresourceRange.levelCount = mipLevels; viewInfo.subresourceRange.layerCount = 1;
     vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &res.view);
@@ -243,6 +241,84 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
     outResources.push_back(res);
     ERUPTION_LOG_INFO("Created sprite texture: %dx%d %s -> slot %u (mips=%u)", img.width, img.height, isActuallyIndexed ? "indexed" : "rgba", res.slot, mipLevels);
     return res.slot;
+}
+
+namespace {
+
+// Os quadros de uma folha .spr v2/v3 com o mesmo preparo da carga no quadro
+// (corte de alfa do loadEruptSprV2 + dilatacao do createTextureFromSprImage),
+// sem tocar na GPU: roda num job. Nulo se o arquivo nao e' desse formato.
+std::shared_ptr<Engine::PreparedSheet> prepareSpriteSheet(const std::string& sprPath) {
+    std::ifstream f(sprPath, std::ios::binary);
+    char magic[8] = {};
+    f.read(magic, 8);
+    if (!f || std::memcmp(magic, "ERUPTSPR", 8) != 0) return nullptr;
+    auto u32 = [&f]() { uint32_t v = 0; f.read(reinterpret_cast<char*>(&v), 4); return v; };
+    const uint32_t version = u32();
+    if (version != 2 && version != 3) return nullptr;
+    const uint32_t count = u32();
+    if (count == 0 || count > 4096) return nullptr;
+    auto sheet = std::make_shared<Engine::PreparedSheet>();
+    sheet->sizes.reserve(size_t(count) * 2);
+    sheet->pixels.resize(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        int w = static_cast<int>(u32()), h = static_cast<int>(u32());
+        if (!f || w <= 0 || h <= 0 || w > 4096 || h > 4096) return nullptr;
+        std::vector<uint8_t>& px = sheet->pixels[i];
+        px.resize(size_t(w) * h * 4);
+        f.read(reinterpret_cast<char*>(px.data()), static_cast<std::streamsize>(px.size()));
+        if (!f) return nullptr;
+        for (size_t p = 0; p < size_t(w) * h; ++p) {
+            uint8_t* c = &px[p * 4];
+            if (c[3] < 128) c[0] = c[1] = c[2] = c[3] = 0; else c[3] = 255;
+        }
+        ImageUtils::dilate(w, h, px);
+        sheet->sizes.push_back(static_cast<uint32_t>(w));
+        sheet->sizes.push_back(static_cast<uint32_t>(h));
+    }
+    return sheet;
+}
+
+} // namespace
+
+void Engine::preloadCharacterSprite(const std::string& png) {
+    std::filesystem::path spr = project::gameRef(png);
+    spr.replace_extension(".spr");
+    const std::string key = spr.string();
+    if (m_characterSpriteCache.count(png) || m_spritePreloads.count(key)) return; // ja' na GPU ou a caminho
+    std::error_code ec;
+    if (!std::filesystem::exists(spr, ec)) return; // so' PNG: carga simples, sem preparo caro
+    m_spritePreloads.emplace(key, JobSystem::instance().submit([key] { return prepareSpriteSheet(key); }).share());
+}
+
+namespace {
+
+// ERUPTION_TEST_NO_UPLOAD_BATCH=1 (teste): um envio por quadro de folha, como
+// antes do lote - so' para medir o lote contra a carga antiga no mesmo
+// binario (18:14: 455-462 ms sem lote, 89-92 com, 3 folhas do elenco).
+bool uploadBatchEnabled() {
+    static const bool kOn = std::getenv("ERUPTION_TEST_NO_UPLOAD_BATCH") == nullptr;
+    return kOn;
+}
+
+} // namespace
+
+void Engine::flushSpriteUploads(std::vector<SpriteUpload>& uploads) {
+    if (uploads.empty()) return;
+    m_vulkan.immediateSubmit([&](VkCommandBuffer cmd) {
+        for (const SpriteUpload& u : uploads) {
+            m_vulkan.cmdImageBarrier(cmd, u.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+            VkBufferImageCopy region{}; region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; region.imageSubresource.layerCount = 1; region.imageExtent = { u.width, u.height, 1 };
+            vkCmdCopyBufferToImage(cmd, u.staging, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            if (u.mipLevels > 1) {
+                generateMipmaps(cmd, u.image, u.width, u.height, u.mipLevels, u.format, 2);
+            } else {
+                m_vulkan.cmdImageBarrier(cmd, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+            }
+        }
+    });
+    for (const SpriteUpload& u : uploads) vmaDestroyBuffer(m_vulkan.allocator(), u.staging, u.stagingAlloc);
+    uploads.clear();
 }
 
 bool Engine::loadSpriteFromPng(const std::string& path, LoadedSprite& out) {
@@ -449,6 +525,35 @@ bool Engine::loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out) 
 }
 
 bool Engine::loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out, uint32_t version) {
+    // Todos os quadros da folha num envio so': um immediateSubmit por quadro
+    // (dezenas a centenas por folha) era o grosso do custo de criar um elenco
+    // na chegada a um mapa. O envio sai ao fim desta funcao, por qualquer
+    // retorno - as imagens de uma folha recusada so' morrem depois dos
+    // quadros em voo (cleanupSpriteTextures), entao a copia ainda vale.
+    // ERUPTION_TEST_LOAD_PHASES=1: [SPRITEPHASE] por folha - leitura e
+    // preparo na CPU (corte de alfa, dilatacao) contra o envio a' GPU.
+    static const bool kPhases = std::getenv("ERUPTION_TEST_LOAD_PHASES") != nullptr;
+    struct BatchScope {
+        Engine& e;
+        const std::string& path;
+        std::vector<SpriteUpload> uploads;
+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        BatchScope(Engine& en, const std::string& p) : e(en), path(p) {
+            if (uploadBatchEnabled()) e.m_spriteUploads = &uploads;
+        }
+        ~BatchScope() {
+            e.m_spriteUploads = nullptr;
+            const size_t n = uploads.size();
+            const auto t1 = std::chrono::steady_clock::now();
+            e.flushSpriteUploads(uploads);
+            if (kPhases) {
+                const auto t2 = std::chrono::steady_clock::now();
+                const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+                ERUPTION_LOG_WARN("[SPRITEPHASE] %s: %zu quadros, cpu %.1f, envio %.1f ms", path.c_str(), n, ms(t0, t1),
+                                  ms(t1, t2));
+            }
+        }
+    } batch(*this, path);
     auto u32 = [&]() { uint32_t v = 0; f.read(reinterpret_cast<char*>(&v), 4); return v; };
     auto i32 = [&]() { int32_t v = 0; f.read(reinterpret_cast<char*>(&v), 4); return v; };
     auto f32 = [&]() { float v = 0; f.read(reinterpret_cast<char*>(&v), 4); return v; };
@@ -456,6 +561,16 @@ bool Engine::loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSpr
     if (imageCount == 0 || imageCount > 4096) {
         ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: invalid image count %u in %s", imageCount, path.c_str());
         return false;
+    }
+    // Folha preparada por characters.preload: so' a pronta (nunca espera o
+    // job) e so' se bate com o arquivo; os pixels do arquivo sao pulados.
+    std::shared_ptr<PreparedSheet> ready;
+    if (auto it = m_spritePreloads.find(path); it != m_spritePreloads.end()) {
+        if (it->second.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            ready = it->second.get();
+            m_spritePreloads.erase(it); // na GPU, a folha fica no cache de personagens
+            if (ready && ready->pixels.size() != imageCount) ready.reset();
+        }
     }
     std::vector<std::pair<uint32_t, uint32_t>> sizes;
     for (uint32_t i = 0; i < imageCount; ++i) {
@@ -469,7 +584,15 @@ bool Engine::loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSpr
         img.width = static_cast<uint16_t>(w);
         img.height = static_cast<uint16_t>(h);
         img.isIndexed = false;
-        img.pixels.resize(size_t(w) * h * 4);
+        const size_t bytes = size_t(w) * h * 4;
+        if (ready && ready->pixels[i].size() == bytes && ready->sizes[i * 2] == w && ready->sizes[i * 2 + 1] == h) {
+            f.seekg(static_cast<std::streamoff>(bytes), std::ios::cur);
+            img.pixels = std::move(ready->pixels[i]);
+            createTextureFromSprImage(img, nullptr, false, out.textures, false, path, true);
+            sizes.push_back({w, h});
+            continue;
+        }
+        img.pixels.resize(bytes);
         f.read(reinterpret_cast<char*>(img.pixels.data()), static_cast<std::streamsize>(img.pixels.size()));
         if (!f) {
             ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: truncated image data in %s", path.c_str());
