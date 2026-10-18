@@ -114,6 +114,17 @@ struct FrameUBO {
     alignas(16) Vec4 jitterNdc;
     // windParams do frame ANTERIOR: a vegetacao reconstroi onde estava (velocidade de objeto).
     alignas(16) Vec4 prevWindParams;
+    // VER ATRAVES (camera.see_through): o que fica entre a camera e o jogador,
+    // dentro de uma elipse em volta dele na tela, sai em dither no G-buffer
+    // das malhas (gbuffer/see_through.glsl). seeThrough: xy = centro do
+    // jogador em NDC, zw = raios da elipse em NDC (z <= 0 desliga).
+    // seeThrough2: x = distancia camera-jogador, y = altura dos pes,
+    // z = altura do sprite, w = opacidade minima no centro.
+    alignas(16) Vec4 seeThrough;
+    alignas(16) Vec4 seeThrough2;
+    // xy = pixel (do alvo do G-buffer) de um ponto FIXO do mundo perto do
+    // jogador: o padrao do dither anda com o mundo, nao com a tela.
+    alignas(16) Vec4 seeThrough3;
 };
 
 class SpriteRenderer {
