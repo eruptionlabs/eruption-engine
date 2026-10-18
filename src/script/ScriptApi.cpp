@@ -108,6 +108,12 @@ int ui_show_minimap(lua_State* L) {
     eng().setMinimapHud(lua_toboolean(L, 1) != 0);
     return 0;
 }
+// Texto do quadro abaixo do minimapa (#minimap-info): o nome do lugar no
+// lugar do nome interno do mapa, coordenada e relogio. nil volta ao padrao.
+int ui_minimap_label(lua_State* L) {
+    eng().setMinimapLabel(luaL_optstring(L, 1, ""));
+    return 0;
+}
 int ui_message(lua_State* L) {
     size_t len = 0;
     const char* text = luaL_tolstring(L, 1, &len);
@@ -371,6 +377,21 @@ Engine::SceneCharacter* checkCharacter(lua_State* L, int arg) {
     if (i < 0) luaL_error(L, "no character named '%s' in this map", name);
     return &eng().characters()[static_cast<size_t>(i)];
 }
+// Prepara folhas de sprite (.spr) fora do quadro: o characters.add seguinte
+// so' cria e envia. Um arquivo ou uma lista; vale no mapa seguinte.
+int characters_preload(lua_State* L) {
+    if (lua_istable(L, 1)) {
+        const int n = lua_objlen(L, 1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, 1, i);
+            if (lua_isstring(L, -1)) eng().preloadCharacterSprite(lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
+    } else {
+        eng().preloadCharacterSprite(luaL_checkstring(L, 1));
+    }
+    return 0;
+}
 int characters_exists(lua_State* L) {
     lua_pushboolean(L, eng().findCharacter(luaL_checkstring(L, 1)) >= 0);
     return 1;
@@ -494,9 +515,30 @@ int camera_view(lua_State* L) {
     return 2;
 }
 int camera_set_orbit(lua_State* L) {
-    eng().camera().setOrbit(glm::radians(static_cast<float>(luaL_checknumber(L, 1))),
-                            glm::radians(static_cast<float>(luaL_checknumber(L, 2))),
-                            static_cast<float>(luaL_checknumber(L, 3)));
+    const float pitchDeg = static_cast<float>(luaL_checknumber(L, 2));
+    const float distance = static_cast<float>(luaL_checknumber(L, 3));
+    Camera& cam = eng().camera();
+    cam.setOrbit(glm::radians(static_cast<float>(luaL_checknumber(L, 1))), glm::radians(pitchDeg), distance);
+    // A camera corta inclinacao e distancia aos limites do jogo: sem aviso, o
+    // script acha que a pose pedida valeu. Avisa uma vez por corte (de novo
+    // so' depois de um pedido que caiba), nao a cada quadro.
+    static bool pitchWarned = false, distWarned = false;
+    const float gotPitch = glm::degrees(cam.orbitPitch());
+    if (std::abs(gotPitch - pitchDeg) > 0.01f) {
+        if (!pitchWarned)
+            ERUPTION_LOG_WARN("camera.set_orbit: pitch %.2f clamped to %.2f (camera pitch limits)", pitchDeg, gotPitch);
+        pitchWarned = true;
+    } else {
+        pitchWarned = false;
+    }
+    if (std::abs(cam.orbitDistance() - distance) > 0.01f) {
+        if (!distWarned)
+            ERUPTION_LOG_WARN("camera.set_orbit: distance %.1f clamped to %.1f (max_orbit_distance)", distance,
+                              cam.orbitDistance());
+        distWarned = true;
+    } else {
+        distWarned = false;
+    }
     return 0;
 }
 
@@ -515,6 +557,22 @@ int input_pressed(lua_State* L) {
 
 // ---------------------------------------------------------------- models
 
+// Le e decodifica .glb fora do quadro (texturas embutidas incluidas): o
+// modelo posto depois por esse arquivo so' sobe para a GPU. Aceita um
+// arquivo ou uma lista; vale para o mapa seguinte (world.preload_map).
+int models_preload(lua_State* L) {
+    if (lua_istable(L, 1)) {
+        const int n = lua_objlen(L, 1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, 1, i);
+            if (lua_isstring(L, -1)) eng().preloadModel(lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
+    } else {
+        eng().preloadModel(luaL_checkstring(L, 1));
+    }
+    return 0;
+}
 int models_count(lua_State* L) {
     lua_pushinteger(L, static_cast<int>(instances().size()));
     return 1;
@@ -683,7 +741,10 @@ std::string slotArg(lua_State* L, int arg) {
     if (lua_type(L, arg) == LUA_TNUMBER) return std::to_string(static_cast<int>(lua_tonumber(L, arg)));
     return luaL_checkstring(L, arg);
 }
+// Salvar/carregar e' trabalho do motor (gravar/refazer os objetos do mapa),
+// nao do script: fica fora do limite de 250 ms por chamada (NativeWork).
 int game_save(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
     ScriptHost* host = ScriptHost::current();
     std::string error;
     const bool ok = host && host->saveGame(slotArg(L, 1), error);
@@ -692,11 +753,29 @@ int game_save(lua_State* L) {
     return 1;
 }
 int game_load(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
     ScriptHost* host = ScriptHost::current();
     std::string error;
     const bool ok = host && host->loadGame(slotArg(L, 1), error);
     if (!ok) Logger::error("game.load: %s", error.c_str());
     lua_pushboolean(L, ok);
+    return 1;
+}
+// Recomeca o jogo: scripts do zero (variaveis limpas, objetos criados por
+// script somem) no mapa inicial do projeto. Atendido depois do quadro.
+int game_restart(lua_State*) {
+    if (ScriptHost* host = ScriptHost::current()) host->requestRestart();
+    return 0;
+}
+int game_save_settings(lua_State* L) {
+    std::string error;
+    const bool ok = ScriptHost::saveSettings(L, 1, error);
+    if (!ok) Logger::error("game.save_settings: %s", error.c_str());
+    lua_pushboolean(L, ok);
+    return 1;
+}
+int game_settings(lua_State* L) {
+    ScriptHost::pushSettings(L);
     return 1;
 }
 int game_has_save(lua_State* L) {
@@ -716,27 +795,56 @@ Vec3 soundPlace(lua_State* L, int arg) {
     const ModelInstance& inst = instances()[checkModel(L, arg)];
     return (inst.worldAabbMin + inst.worldAabbMax) * 0.5f;
 }
-int audio_play(lua_State* L) {
-    const uint32_t id = eng().audio().play(luaL_checkstring(L, 1), float(luaL_optnumber(L, 2, 1.0)));
+// Opcoes de um toque: tabela {volume, pitch, range, min, falloff, group, loop}
+// no lugar do volume, ou os numeros soltos de antes (volume, alcance, tom).
+AudioSystem::PlayOptions soundOptions(lua_State* L, int arg, bool loop, int rangeArg, int pitchArg) {
+    AudioSystem::PlayOptions o;
+    o.loop = loop;
+    if (lua_istable(L, arg)) {
+        auto num = [&](const char* k, float& out) {
+            lua_getfield(L, arg, k);
+            if (lua_isnumber(L, -1)) out = float(lua_tonumber(L, -1));
+            lua_pop(L, 1);
+        };
+        num("volume", o.volume);
+        num("pitch", o.pitch);
+        num("range", o.range);
+        num("min", o.minDistance);
+        lua_getfield(L, arg, "loop");
+        if (lua_isboolean(L, -1)) o.loop = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        lua_getfield(L, arg, "group");
+        if (lua_isstring(L, -1)) o.group = lua_tostring(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, arg, "falloff");
+        if (lua_isstring(L, -1)) {
+            const std::string f = lua_tostring(L, -1);
+            o.falloff = f == "inverse" ? AudioSystem::Falloff::Inverse
+                      : f == "exponential" ? AudioSystem::Falloff::Exponential : AudioSystem::Falloff::Linear;
+        }
+        lua_pop(L, 1);
+        return o;
+    }
+    o.volume = float(luaL_optnumber(L, arg, 1.0));
+    if (rangeArg) o.range = float(luaL_optnumber(L, rangeArg, 300.0));
+    if (pitchArg) o.pitch = float(luaL_optnumber(L, pitchArg, 1.0));
+    return o;
+}
+int pushSound(lua_State* L, uint32_t id) {
     lua_pushinteger(L, static_cast<int>(id));
     return 1;
+}
+int audio_play(lua_State* L) {
+    return pushSound(L, eng().audio().play(luaL_checkstring(L, 1), soundOptions(L, 2, false, 0, 3)));
 }
 int audio_play_at(lua_State* L) {
-    const uint32_t id = eng().audio().playAt(luaL_checkstring(L, 1), soundPlace(L, 2), float(luaL_optnumber(L, 3, 1.0)),
-                                             false, float(luaL_optnumber(L, 4, 300.0)));
-    lua_pushinteger(L, static_cast<int>(id));
-    return 1;
+    return pushSound(L, eng().audio().playAt(luaL_checkstring(L, 1), soundPlace(L, 2), soundOptions(L, 3, false, 4, 5)));
 }
 int audio_loop(lua_State* L) {
-    const uint32_t id = eng().audio().play(luaL_checkstring(L, 1), float(luaL_optnumber(L, 2, 1.0)), true);
-    lua_pushinteger(L, static_cast<int>(id));
-    return 1;
+    return pushSound(L, eng().audio().play(luaL_checkstring(L, 1), soundOptions(L, 2, true, 0, 3)));
 }
 int audio_loop_at(lua_State* L) {
-    const uint32_t id = eng().audio().playAt(luaL_checkstring(L, 1), soundPlace(L, 2), float(luaL_optnumber(L, 3, 1.0)),
-                                             true, float(luaL_optnumber(L, 4, 300.0)));
-    lua_pushinteger(L, static_cast<int>(id));
-    return 1;
+    return pushSound(L, eng().audio().playAt(luaL_checkstring(L, 1), soundPlace(L, 2), soundOptions(L, 3, true, 4, 5)));
 }
 int audio_stop(lua_State* L) {
     eng().audio().stop(static_cast<uint32_t>(luaL_checkinteger(L, 1)), float(luaL_optnumber(L, 2, 0.0)));
@@ -746,17 +854,56 @@ int audio_playing(lua_State* L) {
     lua_pushboolean(L, eng().audio().playing(static_cast<uint32_t>(luaL_checkinteger(L, 1))));
     return 1;
 }
+// music(arquivo, volume?, fade?) | music(introducao, laco, volume?, fade?) |
+// music(arquivo, {volume, fade, loop = laco, resume}).
 int audio_music(lua_State* L) {
-    eng().audio().music(luaL_checkstring(L, 1), float(luaL_optnumber(L, 2, 1.0)), float(luaL_optnumber(L, 3, 1.0)));
+    const char* file = luaL_checkstring(L, 1);
+    float volume = 1.0f, fade = 1.0f;
+    std::string loopFile;
+    bool resume = false;
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "volume"); if (lua_isnumber(L, -1)) volume = float(lua_tonumber(L, -1)); lua_pop(L, 1);
+        lua_getfield(L, 2, "fade"); if (lua_isnumber(L, -1)) fade = float(lua_tonumber(L, -1)); lua_pop(L, 1);
+        lua_getfield(L, 2, "loop"); if (lua_isstring(L, -1)) loopFile = lua_tostring(L, -1); lua_pop(L, 1);
+        lua_getfield(L, 2, "resume"); resume = lua_toboolean(L, -1) != 0; lua_pop(L, 1);
+    } else if (lua_type(L, 2) == LUA_TSTRING) {
+        loopFile = lua_tostring(L, 2);
+        volume = float(luaL_optnumber(L, 3, 1.0));
+        fade = float(luaL_optnumber(L, 4, 1.0));
+    } else {
+        volume = float(luaL_optnumber(L, 2, 1.0));
+        fade = float(luaL_optnumber(L, 3, 1.0));
+    }
+    eng().audio().music(file, volume, fade, loopFile, resume);
     return 0;
 }
 int audio_stop_music(lua_State* L) {
     eng().audio().stopMusic(float(luaL_optnumber(L, 1, 1.0)));
     return 0;
 }
+// set_volume(volume): volume geral. set_volume(som, volume, fade?): um som que
+// ja' toca, sem recomecar.
 int audio_set_volume(lua_State* L) {
-    eng().audio().setMasterVolume(float(luaL_checknumber(L, 1)));
+    if (lua_gettop(L) <= 1) eng().audio().setMasterVolume(float(luaL_checknumber(L, 1)));
+    else eng().audio().setVolume(static_cast<uint32_t>(luaL_checkinteger(L, 1)), float(luaL_checknumber(L, 2)),
+                                 float(luaL_optnumber(L, 3, 0.0)));
     return 0;
+}
+int audio_set_pitch(lua_State* L) {
+    eng().audio().setPitch(static_cast<uint32_t>(luaL_checkinteger(L, 1)), float(luaL_checknumber(L, 2)));
+    return 0;
+}
+int audio_music_volume(lua_State* L) {
+    eng().audio().setMusicVolume(float(luaL_checknumber(L, 1)), float(luaL_optnumber(L, 2, 0.0)));
+    return 0;
+}
+int audio_group_volume(lua_State* L) {
+    eng().audio().setGroupVolume(luaL_checkstring(L, 1), float(luaL_checknumber(L, 2)), float(luaL_optnumber(L, 3, 0.0)));
+    return 0;
+}
+int audio_preload(lua_State* L) {
+    lua_pushboolean(L, eng().audio().preload(luaL_checkstring(L, 1)));
+    return 1;
 }
 
 // ---------------------------------------------------------------- lights
@@ -861,8 +1008,15 @@ int fx_fade(lua_State* L) {
 int fx_flash(lua_State* L) {
     // Clarao: entra cheio e sai. Dois fades em sequencia ficariam a cargo do
     // script; aqui e' um so', porque todo golpe usa isso.
-    eng().uiCanvas().screenFade(optColor(L, 1, Vec4(1.0f)), static_cast<float>(luaL_optnumber(L, 3, 0.6)), 0.0f,
-                                static_cast<float>(luaL_optnumber(L, 2, 0.18)));
+    eng().uiCanvas().screenFlash(optColor(L, 1, Vec4(1.0f)), static_cast<float>(luaL_optnumber(L, 3, 0.6)),
+                                 static_cast<float>(luaL_optnumber(L, 2, 0.18)));
+    return 0;
+}
+// So' o cenario escurece (a interface fica por cima, intacta); anima da forca
+// atual ate' `strength` em `seconds`. dim(nil, 0, t) volta.
+int fx_dim(lua_State* L) {
+    eng().uiCanvas().sceneDim(optColor(L, 1, Vec4(0.0f, 0.0f, 0.0f, 1.0f)), static_cast<float>(luaL_checknumber(L, 2)),
+                              static_cast<float>(luaL_optnumber(L, 3, 0.25)));
     return 0;
 }
 int fx_fading(lua_State* L) {
@@ -886,6 +1040,33 @@ int ui_load(lua_State* L) {
     }
     lua_pushboolean(L, 1);
     return 1;
+}
+// Posicao/tamanho de um elemento em % do pai (ou da tela), como no CSS; sem
+// largura/altura fica a do arquivo. Sem esquerda (nil) volta ao CSS.
+int ui_place(lua_State* L) {
+    const char* sel = luaL_checkstring(L, 1);
+    if (lua_isnoneornil(L, 2)) {
+        eng().uiDocument().clearPlace(sel);
+        return 0;
+    }
+    eng().uiDocument().setPlace(sel, static_cast<float>(luaL_checknumber(L, 2)),
+                                static_cast<float>(luaL_checknumber(L, 3)),
+                                static_cast<float>(luaL_optnumber(L, 4, -1.0)),
+                                static_cast<float>(luaL_optnumber(L, 5, -1.0)));
+    return 0;
+}
+// Recorte da imagem de um elemento (u0, v0, u1, v1 em 0..1); nil volta ao todo.
+int ui_image_rect(lua_State* L) {
+    const char* sel = luaL_checkstring(L, 1);
+    if (lua_isnoneornil(L, 2)) {
+        eng().uiDocument().clearImageRect(sel);
+        return 0;
+    }
+    eng().uiDocument().setImageRect(sel, static_cast<float>(luaL_checknumber(L, 2)),
+                                    static_cast<float>(luaL_checknumber(L, 3)),
+                                    static_cast<float>(luaL_checknumber(L, 4)),
+                                    static_cast<float>(luaL_checknumber(L, 5)));
+    return 0;
 }
 int ui_text(lua_State* L) {
     eng().uiDocument().setText(luaL_checkstring(L, 1), luaL_checkstring(L, 2));
@@ -947,6 +1128,18 @@ int world_set_look(lua_State* L) {
                 if (lua_type(L, -1) == LUA_TNUMBER) j[k] = lua_tonumber(L, -1);
                 else if (lua_type(L, -1) == LUA_TBOOLEAN) j[k] = lua_toboolean(L, -1) != 0;
                 else if (lua_type(L, -1) == LUA_TSTRING) j[k] = lua_tostring(L, -1);
+                else if (lua_type(L, -1) == LUA_TVECTOR) { // cor como vector(r, g, b)
+                    const float* v = lua_tovector(L, -1);
+                    j[k] = {v[0], v[1], v[2]};
+                } else if (lua_type(L, -1) == LUA_TTABLE) { // cor como {r, g, b}
+                    nlohmann::json arr = nlohmann::json::array();
+                    for (int i = 1; i <= 4; ++i) {
+                        lua_rawgeti(L, -1, i);
+                        if (lua_type(L, -1) == LUA_TNUMBER) arr.push_back(lua_tonumber(L, -1));
+                        lua_pop(L, 1);
+                    }
+                    if (!arr.empty()) j[k] = arr;
+                }
             }
             lua_pop(L, 1);
         }
@@ -968,6 +1161,79 @@ int world_set_look(lua_State* L) {
 }
 int world_look(lua_State* L) {
     lua_pushstring(L, eng().lookConfig().name.c_str());
+    return 1;
+}
+// Nevoa do jogo: tabela {color = vector|{r,g,b}, start, end, opacity, height,
+// falloff} (os campos do bloco "fog" do .env) vence a do mapa e a do clima;
+// nil devolve o comando para eles. Vale ate' a proxima troca de mapa.
+int world_set_fog(lua_State* L) {
+    if (lua_isnoneornil(L, 1)) {
+        eng().setScriptFog(MapFog{});
+        return 0;
+    }
+    luaL_checktype(L, 1, LUA_TTABLE);
+    nlohmann::json j = nlohmann::json::object();
+    for (const char* k : {"start", "end", "opacity", "height", "falloff"}) {
+        lua_getfield(L, 1, k);
+        if (lua_type(L, -1) == LUA_TNUMBER) j[k] = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+    }
+    lua_getfield(L, 1, "color");
+    if (lua_type(L, -1) == LUA_TVECTOR) {
+        const float* v = lua_tovector(L, -1);
+        j["color"] = {v[0], v[1], v[2]};
+    } else if (lua_type(L, -1) == LUA_TTABLE) {
+        nlohmann::json c = nlohmann::json::array();
+        for (int i = 1; i <= 3; ++i) {
+            lua_rawgeti(L, -1, i);
+            c.push_back(lua_type(L, -1) == LUA_TNUMBER ? lua_tonumber(L, -1) : 0.0);
+            lua_pop(L, 1);
+        }
+        j["color"] = c;
+    }
+    lua_pop(L, 1);
+    eng().setScriptFog(parseMapFog(j));
+    return 0;
+}
+// Escala de tempo do mundo (hit-stop, camera lenta): animacao de sprite, VFX,
+// clima e o dt dos scripts andam escalados; `seconds` conta em tempo cheio e
+// devolve a 1 sozinho (0 ou nada = ate' a proxima chamada). O som e o
+// clarao/fade de tela seguem.
+int world_set_time_scale(lua_State* L) {
+    eng().timer().setTimeScale(float(luaL_checknumber(L, 1)), float(luaL_optnumber(L, 2, 0.0)));
+    return 0;
+}
+int world_time_scale(lua_State* L) {
+    lua_pushnumber(L, eng().timer().timeScale());
+    return 1;
+}
+// Grade de caminhada do motor exposta ao jogo (alcance de pontos, saidas):
+// a mesma conta do andar dos personagens - grade do mapa (com block_slopes)
+// mais os objetos solidos no raio.
+int world_walkable(lua_State* L) {
+    const float x = float(luaL_checknumber(L, 1)), z = float(luaL_checknumber(L, 2));
+    const float radius = float(luaL_optnumber(L, 3, 0.0));
+    const Vec3 p(x, eng().sampleTerrainHeight(x, z), z);
+    lua_pushboolean(L, eng().navWalkable(x, z) && !eng().blockedAt(p, radius));
+    return 1;
+}
+// Caminho no chao (ja' alisado) de `de` a `para`, ou nil se nao ha'.
+int world_path(lua_State* L) {
+    // Busca longa num mapa grande e' trabalho do motor, nao laco do script:
+    // fora do orcamento de tempo da chamada (como game.load).
+    ScriptHost::NativeWork trabalho;
+    const Vec3 from = checkVec3(L, 1), to = checkVec3(L, 2);
+    const float radius = float(luaL_optnumber(L, 3, 0.0));
+    std::vector<Vec3> path;
+    if (!eng().findPath(from, to, radius, path)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_createtable(L, static_cast<int>(path.size()), 0);
+    for (size_t i = 0; i < path.size(); ++i) {
+        pushVec3(L, path[i]);
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
     return 1;
 }
 int world_set_dof(lua_State* L) {
@@ -1167,14 +1433,14 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"start", on_start}, {"update", on_update}, {"every", on_every}, {"key", on_key},
         {"near", on_near}, {"hour", on_hour}, {"enter", on_enter}, {"leave", on_leave}, {nullptr, nullptr}};
     static const luaL_Reg vars[] = {{"get", vars_get}, {"set", vars_set}, {"add", vars_add}, {nullptr, nullptr}};
-    static const luaL_Reg ui[] = {{"message", ui_message}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
-                                  {"load", ui_load}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
+    static const luaL_Reg ui[] = {{"message", ui_message}, {"minimap_label", ui_minimap_label}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
+                                  {"load", ui_load}, {"place", ui_place}, {"image_rect", ui_image_rect}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
                                   {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has},
                                   {"reset", ui_reset}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
-        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_motion_blur", world_set_motion_blur},
+        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"path", world_path}, {"set_motion_blur", world_set_motion_blur},
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
         {"set_focus", world_set_focus},
         {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids},
@@ -1193,11 +1459,11 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"free", camera_free}, {"keep_inside_map", camera_keep_inside_map},
         {"see_through", camera_see_through}, {nullptr, nullptr}};
     static const luaL_Reg fx[] = {
-        {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash},
+        {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash}, {"dim", fx_dim},
         {"fading", fx_fading}, {nullptr, nullptr}};
     static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {nullptr, nullptr}};
     static const luaL_Reg models[] = {
-        {"count", models_count}, {"find", models_find}, {"name", models_name},
+        {"count", models_count}, {"preload", models_preload}, {"find", models_find}, {"name", models_name},
         {"position", models_position}, {"set_position", models_set_position}, {"near", models_near},
         {"file", models_file}, {"scale", models_scale},
         {"set_rotation", models_set_rotation}, {"set_scale", models_set_scale},
@@ -1208,7 +1474,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"morphs", models_morphs}, {"set_morph", models_set_morph},
         {nullptr, nullptr}};
     static const luaL_Reg characters[] = {
-        {"exists", characters_exists}, {"position", characters_position},
+        {"exists", characters_exists}, {"preload", characters_preload}, {"position", characters_position},
         {"set_position", characters_set_position}, {"walk_to", characters_walk_to},
         {"walking", characters_walking}, {"face", characters_face}, {"show", characters_show}, {"say", characters_say}, {"play", characters_play}, {"animation", characters_animation},
         {"follow", characters_follow}, {"patrol", characters_patrol}, {"stop", characters_stop},
@@ -1226,10 +1492,11 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg audio[] = {
         {"play", audio_play}, {"play_at", audio_play_at}, {"loop", audio_loop}, {"loop_at", audio_loop_at},
         {"stop", audio_stop}, {"playing", audio_playing}, {"music", audio_music}, {"stop_music", audio_stop_music},
-        {"set_volume", audio_set_volume}, {nullptr, nullptr}};
+        {"set_volume", audio_set_volume}, {"set_pitch", audio_set_pitch}, {"music_volume", audio_music_volume},
+        {"group_volume", audio_group_volume}, {"preload", audio_preload}, {nullptr, nullptr}};
     lib(L, "on", on);
     lib(L, "audio", audio);
-    static const luaL_Reg game[] = {{"save", game_save}, {"load", game_load}, {"has_save", game_has_save},
+    static const luaL_Reg game[] = {{"save", game_save}, {"load", game_load}, {"restart", game_restart}, {"save_settings", game_save_settings}, {"settings", game_settings}, {"has_save", game_has_save},
                                     {"delete_save", game_delete_save}, {nullptr, nullptr}};
     lib(L, "game", game);
     lib(L, "vars", vars);
@@ -1291,6 +1558,16 @@ declare vars: {
 declare ui: {
     -- Shows a message on screen for some seconds (default 3).
     message: (text: string, seconds: number?) -> (),
+    -- Text of the box under the minimap instead of map name, cell and time;
+    -- nil goes back to the default.
+    minimap_label: (text: string?) -> (),
+    -- Position and size of an element of the loaded UI file, in percent of
+    -- its parent (or of the screen), like CSS left/top/width/height. Without
+    -- width/height the file's size stays; left = nil gives it back to the CSS.
+    place: (selector: string, left: number?, top: number?, width: number?, height: number?) -> (),
+    -- Crop of an image element in texture coordinates (0..1): a window into a
+    -- bigger image. u0 = nil shows the whole image again.
+    image_rect: (selector: string, u0: number?, v0: number?, u1: number?, v1: number?) -> (),
     -- Character bars (life, mana) and the minimap with the map name and time.
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),
@@ -1340,8 +1617,26 @@ declare world: {
     look: () -> string,
     -- `preset` may also be a TABLE with the same fields as a preset (only
     -- the given ones change): a game's own look without a preset in the engine.
+    -- Fields include saturation, contrast, god_ray_*, vignette (strength,
+    -- 0 = off), vignette_softness, shadow_tint / highlight_tint (a color as
+    -- vector or {r, g, b}) with shadow_tint_strength / highlight_tint_strength.
     set_look: (preset: string | { [string]: any }) -> boolean,
     set_dof: (on: boolean) -> (),
+    -- World time scale (hit-stop, slow motion): sprite animation, effects,
+    -- weather and the scripts' dt run scaled (0 = frozen). `seconds` counts in
+    -- full time and goes back to 1 by itself (0 or none = until the next call).
+    -- Sound and the screen fade/flash keep going.
+    set_time_scale: (scale: number, seconds: number?) -> (),
+    time_scale: () -> number,
+    -- Walk grid of the engine (block_slopes and solid objects included):
+    -- whether a character of `radius` can stand at (x, z).
+    walkable: (x: number, z: number, radius: number?) -> boolean,
+    -- Path on the ground from `from` to `to` (smoothed), or nil if none.
+    path: (from: vector, to: vector, radius: number?) -> { vector }?,
+    -- The game's own fog: {color = vector or {r, g, b}, start, end, opacity,
+    -- height, falloff} (the map .env "fog" block fields). Wins over the map's
+    -- and the weather's fog until the next map change; nil gives control back.
+    set_fog: (fog: { [string]: any }?) -> (),
     -- Motion blur and chromatic aberration come from the quality preset; a
     -- game can tune them as art direction. `amount`: strength (engine default
     -- 1 for the blur, 0.5 for the fringe).
@@ -1380,6 +1675,14 @@ declare game: {
     load: (slot: (string | number)?) -> boolean,
     has_save: (slot: (string | number)?) -> boolean,
     delete_save: (slot: (string | number)?) -> boolean,
+    -- Starts the game over: scripts from scratch (variables cleared, objects
+    -- made by scripts removed) on the project's first map. Happens after the
+    -- current frame.
+    restart: () -> (),
+    -- Player settings (volumes, speed...), kept apart from saved games.
+    save_settings: (settings: { [string]: any }) -> boolean,
+    -- The table last saved with save_settings, or an empty table.
+    settings: () -> { [string]: any },
 }
 
 declare player: {
@@ -1404,6 +1707,10 @@ declare player: {
 }
 
 declare characters: {
+    -- Reads and prepares sprite sheets off the frame, so a character added
+    -- later with one of them only uploads it. One file or a list; still valid
+    -- on the next map (call it with world.preload_map).
+    preload: (sprites: string | { string }) -> (),
     -- Shadow of every character: "planar" (cast by the sun), "circle" (a
     -- contact disc) or "lights" (the disc plus a shadow cast by each of the
     -- two strongest nearby lights). No argument goes back to the engine default.
@@ -1480,8 +1787,12 @@ declare fx: {
     number: (position: vector, text: string, color: vector?, seconds: number?, rise: number?, size: number?) -> (),
     -- Full-screen color going from one opacity to another: the battle wipe.
     fade: (color: vector, from: number, to: number, seconds: number?) -> (),
-    -- Flash: full opacity (or `strength`) fading to nothing.
+    -- Flash: full opacity (or `strength`) fading to nothing. Its own layer:
+    -- it does not cancel a fade or a dim in progress.
     flash: (color: vector?, seconds: number?, strength: number?) -> (),
+    -- Darkens only the SCENE (the interface stays on top, untouched): blends
+    -- toward `color` by `strength` (0..1), animating from the current value.
+    dim: (color: vector?, strength: number, seconds: number?) -> (),
     fading: () -> boolean,
 }
 
@@ -1495,6 +1806,10 @@ declare input: {
 -- Models placed in the map.
 declare models: {
     count: () -> number,
+    -- Reads .glb files off the frame (embedded textures decoded), so placing
+    -- them later only uploads to the GPU. One file or a list; still valid on
+    -- the next map (call it with world.preload_map).
+    preload: (files: string | { string }) -> (),
     -- Index of the first model with this name, or nil.
     find: (name: string) -> number?,
     name: (model: Model) -> string,
@@ -1539,18 +1854,32 @@ declare models: {
 -- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a
 -- sound return a number for audio.stop / audio.playing.
 declare audio: {
-    play: (file: string, volume: number?) -> number,
+    -- `options`: a volume number, or {volume, pitch, range, min, falloff, group, loop}.
+    -- pitch: 1 = as recorded, 2 = an octave up. group: a bus with its own volume.
+    play: (file: string, options: (number | { [string]: any })?, pitch: number?) -> number,
     -- At a point or model: quieter far away (`range` units, default 300), panned to its side.
-    play_at: (file: string, place: vector | Model, volume: number?, range: number?) -> number,
-    loop: (file: string, volume: number?) -> number,
-    loop_at: (file: string, place: vector | Model, volume: number?, range: number?) -> number,
+    -- `min`: full volume up to this distance; `falloff`: "linear", "inverse" or "exponential".
+    play_at: (file: string, place: vector | Model, options: (number | { [string]: any })?, range: number?, pitch: number?) -> number,
+    loop: (file: string, options: (number | { [string]: any })?, pitch: number?) -> number,
+    loop_at: (file: string, place: vector | Model, options: (number | { [string]: any })?, range: number?, pitch: number?) -> number,
     stop: (sound: number, fade_seconds: number?) -> (),
     playing: (sound: number) -> boolean,
-    -- One music at a time; a new one cross-fades (default 1 s).
-    music: (file: string, volume: number?, fade_seconds: number?) -> (),
+    -- Decodes a file in the background so its first play starts at once.
+    preload: (file: string) -> boolean,
+    -- One music at a time; a new one cross-fades (default 1 s). With a second
+    -- file, the first is an intro and the second loops after it with no gap.
+    -- As a table: {volume, fade, loop = file, resume = true} (resume: from where
+    -- this track last stopped).
+    music: (file: string, options: (number | string | { [string]: any })?, fade_seconds: number?) -> (),
     stop_music: (fade_seconds: number?) -> (),
-    -- Master volume, 1 = normal.
-    set_volume: (volume: number) -> (),
+    -- Volume of the music that is playing, without restarting it.
+    music_volume: (volume: number, fade_seconds: number?) -> (),
+    -- set_volume(volume): master volume, 1 = normal. set_volume(sound, volume,
+    -- fade_seconds?): a sound that is already playing.
+    set_volume: (sound_or_volume: number, volume: number?, fade_seconds: number?) -> (),
+    set_pitch: (sound: number, pitch: number) -> (),
+    -- Volume of a group (bus); "music" is the group of the music.
+    group_volume: (group: string, volume: number, fade_seconds: number?) -> (),
 }
 
 -- Point lights of the map. Indices start at 1.
