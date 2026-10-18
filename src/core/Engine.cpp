@@ -2383,6 +2383,11 @@ void Engine::recordTelemetry() {
     st.drawCalls = m_modelRenderer.lastDrawCalls();
     st.batchReuse = m_modelRenderer.lastCacheHits();
     st.batchRuns  = m_modelRenderer.lastCacheMisses();
+    st.lodSwaps = m_modelRenderer.lastPopStats().lodSwaps;
+    st.popIn = m_modelRenderer.lastPopStats().popIn;
+    st.popOut = m_modelRenderer.lastPopStats().popOut;
+    for (int k = 0; k < 4; ++k) st.popInWhy[k] = m_modelRenderer.lastPopStats().popInWhy[k];
+    st.popInNew = m_modelRenderer.lastPopStats().popInNew;
     for (size_t i = 1; i < m_cpuPhaseMs.size(); ++i)
         st.cpuPhases.emplace_back(kCpuPhaseNames[i], static_cast<float>(m_cpuPhaseMs[i]));
     // "loading" covers the whole pipeline: BG thread parse + the per-frame

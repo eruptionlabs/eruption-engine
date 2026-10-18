@@ -84,6 +84,10 @@ public:
         // cacheHits/cacheMisses; ja' nao escreve, entao os nomes ficaram limpos.
         uint32_t batchReuse = 0;   // instancias que reusaram o bucket do vizinho
         uint32_t batchRuns  = 0;   // buckets distintos = binds + draw calls
+        // POP na tela (ModelRenderer::lastPopStats): troca de LOD, aparece, some.
+        uint32_t lodSwaps = 0, popIn = 0, popOut = 0;
+        uint32_t popInWhy[4] = {}; // frustum, desligada, pequena, raleamento
+        uint32_t popInNew = 0;     // instancia criada neste quadro
         // ms por fase dentro de render(), deste frame
         std::vector<std::pair<const char*, float>> cpuPhases;
         bool loading = false;

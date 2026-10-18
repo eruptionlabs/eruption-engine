@@ -264,6 +264,29 @@ public:
     // ver o comentario la'. Reflete o ultimo passe que chamou o sort (cena,
     // sombra ou minimapa - o que rodou por ultimo nesse frame).
     uint32_t lastCacheHits() const { return m_lastCacheHits; }
+    // POP na tela, do ultimo passe principal (sortVisibleByMesh): instancias a
+    // 90% do centro da tela que trocaram de nivel de LOD, que apareceram e que
+    // sumiram desde o quadro anterior. A borda fica de fora: la' a peca entra
+    // e sai pelo enquadramento, o que nao e' pop.
+    // popInWhy: por que a peca que apareceu estava fora no quadro anterior
+    // (0 frustum, 1 desligada, 2 pequena na tela, 3 raleamento).
+    struct PopStats { uint32_t lodSwaps = 0, popIn = 0, popOut = 0; uint32_t popInWhy[4] = {}; uint32_t popInNew = 0; };
+    const PopStats& lastPopStats() const { return m_popStats; }
+    // ENTRADA SEM POP: instancia que surge depois do primeiro quadro do mapa
+    // (spawn por script, scatter, modelo carregado no meio do jogo) ou que
+    // estava desligada e volta, entra em dither de 0 a 100% em
+    // ERUPTION_SPAWN_FADE segundos (padrao 0,3; 0 desliga), no relogio de
+    // setSpawnFadeClock (o do jogo: passo fixo nos testes). skipSpawnFade: a
+    // proxima entrada desta instancia aparece inteira.
+    // Tela coberta (cortina de fx.fade): o que nasce por baixo dela entra
+    // inteiro - a cortina ja' e' a transicao, e dissolver depois dela abrir
+    // mostraria o palco se montando.
+    void setSpawnFadeSuspended(bool on) { m_spawnFadeSuspended = on; }
+    void setSpawnFadeClock(float seconds) { m_spawnClock = seconds; }
+    void skipSpawnFade(uint32_t index) {
+        if (index >= m_spawnNoFade.size()) m_spawnNoFade.resize(index + 1, 0);
+        m_spawnNoFade[index] = 1;
+    }
     uint32_t lastCacheMisses() const { return m_lastCacheMisses; }
 
     bool init(VulkanContext* ctx, BindlessDescriptor* bindless);
@@ -979,6 +1002,22 @@ private:
     // quase colado na camera e pipoca quando ela se move. Malha pequena nao
     // paga o passe: simplifica-la e' perda pura.
     uint32_t m_meshLodMinTris = 800;
+    PopStats m_popStats;
+    std::vector<uint32_t> m_popShownFrame; // ultimo quadro (m_popFrame) em que a instancia apareceu
+    std::vector<uint8_t> m_popShownLod;
+    std::vector<uint32_t> m_popPrev;       // visiveis no quadro anterior
+    uint32_t m_popFrame = 0;
+    uint32_t m_popNewFrom = 0; // indices daqui para cima nasceram neste quadro
+    bool popInside(uint32_t idx) const;
+    std::vector<float> m_spawnFadeStart;    // segundo (m_spawnClock) em que a entrada comecou; < 0 = nenhuma
+    float m_spawnClock = 0.0f;
+    std::vector<uint8_t> m_spawnNoFade;     // skipSpawnFade
+    uint32_t m_spawnKnown = 0;              // instancias que ja' existiam no ultimo passe principal
+    bool m_mapDrawn = false;                // o mapa ja' teve um passe principal
+    bool m_spawnFadeSuspended = false;
+    float spawnFadeT(uint32_t idx) const;   // 1 = inteira
+    void startSpawnFade(uint32_t idx);
+    std::vector<uint8_t> m_cullWhy, m_cullWhyPrev; // motivo do corte por instancia (ver PopStats)
     float m_meshLodMinDistance = 0.0f;
     // Piso da troca pro nivel "far" (cartoes 8x): o orcamento tri/px puxa o
     // far pra ~2x o lo, e com camera de diorama (700+ u) isso poe lencois em

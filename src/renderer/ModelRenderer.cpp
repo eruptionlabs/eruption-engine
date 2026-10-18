@@ -606,6 +606,10 @@ void ModelRenderer::clear() {
     }
     m_meshes.clear();
     m_instances.clear();
+    m_mapDrawn = false;
+    m_spawnKnown = 0;
+    m_spawnFadeStart.clear();
+    m_spawnNoFade.clear();
     m_groundBlend = GroundBlendInfo{};
     m_groundBlendPending = 0xFFFFFFFFu;
     // Lista refeita: os objetos da cena que apontavam para ela se desfazem.
@@ -3480,7 +3484,21 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         float effectiveLevel = static_cast<float>(lod);
         bool skipPrimary = false;
 
-        if (!highlight && !kLodFadeOff && !m_forceBaseLod) {
+        // Entrada sem pop (spawnFadeT): um desenho so', com a cobertura do
+        // dither subindo de 0 a 1; vai para a segunda passada como os pares.
+        const float entrada = (!highlight && !m_forceBaseLod) ? spawnFadeT(idx) : 1.0f;
+        if (entrada < 1.0f) {
+            LodFadeJob job;
+            job.meshIndex = hot.meshIndex;
+            job.lod = lod;
+            job.alpha = std::max(1.0f / kLodFadeSteps, std::round(entrada * kLodFadeSteps) / kLodFadeSteps);
+            job.data = d;
+            if (job.alpha < 1.0f) {
+                fadeJobs.push_back(job);
+                skipPrimary = true;
+            }
+        }
+        if (!skipPrimary && !highlight && !kLodFadeOff && !m_forceBaseLod) {
             const LodFadePair pair = lodFadePairFor(mesh, lodSwitchFor(hot, mesh),
                                                     lodDistanceFor(idx, hot));
             // So' entra se o nivel que o sort escolheu e' um dos dois do par:
@@ -4686,8 +4704,16 @@ void ModelRenderer::cullInstances(const Frustum& frustum) {
     m_lastScreenCulled = 0;
 
     m_visibleInstanceIndices.reserve(count);
+    if (m_pixelsPerUnit > 0.0f) {
+        std::swap(m_cullWhy, m_cullWhyPrev);
+        m_cullWhy.assign(count, 0);
+    }
+    const bool why = m_pixelsPerUnit > 0.0f;
     for (uint32_t i = 0; i < count; ++i) {
         const uint8_t byte = visibleMask[i / 8];
+        // Desligada conta mesmo fora do frustum: objeto destruido devolve a
+        // instancia, e o proximo spawn a religa ja' em outro lugar.
+        if (why && !(m_instanceHot[i].flags & 1u)) m_cullWhy[i] = 1;
         if ((byte & (1u << (i & 7))) != 0) {
             // Respect the enabled flag separately.
             if (m_instanceHot[i].flags & 1u) {
@@ -4700,7 +4726,7 @@ void ModelRenderer::cullInstances(const Frustum& frustum) {
                     const bool wasCulled = m_screenCulledPrev[i] != 0;
                     const bool cull = wasCulled ? (px < pxIn) : (px < pxOut);
                     m_screenCulledPrev[i] = cull ? 1 : 0;
-                    if (cull) { ++m_lastScreenCulled; continue; }
+                    if (cull) { ++m_lastScreenCulled; if (why) m_cullWhy[i] = 2; continue; }
                 }
                 m_visibleInstanceIndices.push_back(i);
             }
@@ -4947,6 +4973,35 @@ uint8_t ModelRenderer::midLevelFor(uint32_t idx, const ModelInstanceHot& hot, co
     return uint8_t(4 + mesh.midCount - 1);
 }
 
+static float spawnFadeSeconds() {
+    static const float s = [] { const char* e = std::getenv("ERUPTION_SPAWN_FADE"); return e ? std::max(0.0f, float(std::atof(e))) : 0.3f; }();
+    return s;
+}
+
+void ModelRenderer::startSpawnFade(uint32_t idx) {
+    if (idx >= m_spawnFadeStart.size() || spawnFadeSeconds() <= 0.0f) return;
+    if (m_spawnFadeSuspended || (idx < m_spawnNoFade.size() && m_spawnNoFade[idx])) {
+        if (idx < m_spawnNoFade.size()) m_spawnNoFade[idx] = 0; // vale para esta entrada so'
+        return;
+    }
+    m_spawnFadeStart[idx] = m_spawnClock;
+}
+
+float ModelRenderer::spawnFadeT(uint32_t idx) const {
+    if (idx >= m_spawnFadeStart.size() || m_spawnFadeStart[idx] < 0.0f) return 1.0f;
+    // O primeiro quadro ja' mostra um degrau (nunca 0: a peca ja' existe).
+    const float t = (m_spawnClock - m_spawnFadeStart[idx]) / spawnFadeSeconds();
+    return t >= 1.0f ? 1.0f : std::max(t, 0.0f);
+}
+
+bool ModelRenderer::popInside(uint32_t idx) const {
+    if (idx >= m_instanceHot.size()) return false;
+    const ModelInstanceHot& hot = m_instanceHot[idx];
+    const Vec4 c = m_lastViewProj * Vec4((hot.worldAabbMin + hot.worldAabbMax) * 0.5f, 1.0f);
+    if (c.w <= 1e-3f) return false;
+    return std::abs(c.x / c.w) < 0.9f && std::abs(c.y / c.w) < 0.9f;
+}
+
 void ModelRenderer::sortVisibleByMesh(std::vector<uint32_t>& list, bool useLod, bool recordStats) {
     // Agrupa por (MALHA, NIVEL DE LOD). Duas razoes:
     //
@@ -4978,11 +5033,63 @@ void ModelRenderer::sortVisibleByMesh(std::vector<uint32_t>& list, bool useLod, 
     if (m_lodOfInstance.size() != m_instances.size()) m_lodOfInstance.assign(m_instances.size(), 1);
     uint64_t frameTris = 0;
 
+    const bool countPops = useLod && recordStats;
+    if (countPops) {
+        ++m_popFrame;
+        m_popStats = {};
+        // So' cresce: instancia nova (spawn, scatter) entra com "nunca vista";
+        // a lista que encolheu (troca de mapa) recomeca.
+        if (m_popShownFrame.size() > m_instances.size()) {
+            m_popShownFrame.assign(m_instances.size(), 0);
+            m_popShownLod.assign(m_instances.size(), 1);
+            m_popPrev.clear();
+        }
+        m_popNewFrom = static_cast<uint32_t>(m_popShownFrame.size());
+        m_popShownFrame.resize(m_instances.size(), 0);
+        m_popShownLod.resize(m_instances.size(), 1);
+        // Entrada sem pop: o que nasceu depois do primeiro quadro do mapa.
+        if (m_spawnKnown > m_instances.size()) m_spawnKnown = 0;
+        m_spawnFadeStart.resize(m_instances.size(), -1.0f);
+        if (m_mapDrawn)
+            for (uint32_t i = m_spawnKnown; i < m_instances.size(); ++i) startSpawnFade(i);
+        m_spawnKnown = static_cast<uint32_t>(m_instances.size());
+        m_mapDrawn = true;
+    }
+
     for (uint32_t idx : list) {
         uint32_t m = m_instanceHot[idx].meshIndex;
         if (m >= meshCount) m = meshCount;
         if (useLod && m < meshCount) advanceLodDistance(idx, m_instanceHot[idx], m_meshes[m]);
         const uint8_t lod = (useLod && m < meshCount) ? lodLevelFor(idx, m_meshes[m]) : 1;
+        if (countPops && idx < m_popShownFrame.size()) {
+            const bool viaAntes = m_popShownFrame[idx] + 1 == m_popFrame;
+            if (viaAntes ? m_popShownLod[idx] != lod : m_popFrame > 1) {
+                if (popInside(idx)) {
+                    ++(viaAntes ? m_popStats.lodSwaps : m_popStats.popIn);
+                    // Estava desligada no quadro anterior e voltou (peca de puzzle, porta).
+                    if (!viaAntes && idx < m_popNewFrom && idx < m_cullWhyPrev.size() && m_cullWhyPrev[idx] == 1)
+                        startSpawnFade(idx);
+                    if (!viaAntes) {
+                        // ERUPTION_DEBUG_POP=1: as primeiras 40 aparicoes (malha, tela, quadro).
+                        static const bool kDbgPop = std::getenv("ERUPTION_DEBUG_POP") != nullptr;
+                        static int dbgPop = 0;
+                        if (kDbgPop && dbgPop < 40) {
+                            ++dbgPop;
+                            const ModelInstanceHot& hh = m_instanceHot[idx];
+                            const Vec4 cc = m_lastViewProj * Vec4((hh.worldAabbMin + hh.worldAabbMax) * 0.5f, 1.0f);
+                            ERUPTION_LOG_WARN("[POP] q%u idx %u malha %u '%s' tela (%.2f, %.2f) w %.0f visto q%u why %d tam %.1f",
+                                              m_popFrame, idx, hh.meshIndex, m_instances[idx].name.c_str(), cc.x / cc.w, cc.y / cc.w, cc.w,
+                                              m_popShownFrame[idx], idx < m_cullWhyPrev.size() ? int(m_cullWhyPrev[idx]) : -1,
+                                              glm::length(hh.worldAabbMax - hh.worldAabbMin));
+                        }
+                        if (idx >= m_popNewFrom) ++m_popStats.popInNew;
+                        else if (idx < m_cullWhyPrev.size()) ++m_popStats.popInWhy[m_cullWhyPrev[idx] & 3];
+                    }
+                }
+            }
+            m_popShownFrame[idx] = m_popFrame;
+            m_popShownLod[idx] = lod;
+        }
         if (useLod && idx < m_lodOfInstance.size()) m_lodOfInstance[idx] = lod;
         if (useLod && m < meshCount) frameTris += levelTris(m_meshes[m], lod);
         ++m_meshHistogram[size_t(m) * kLodLevels + lod + 1];
@@ -5009,6 +5116,11 @@ void ModelRenderer::sortVisibleByMesh(std::vector<uint32_t>& list, bool useLod, 
     // vira UM draw/bind (o custo de uma troca de estado - a analogia com
     // cache-miss e' literal: e' a mesma nocao de "vizinho reusa o que ja' foi
     // buscado" que motivou a investigacao de SoA vs AoS). "Hit" = instancia
+    if (countPops) {
+        for (uint32_t idx : m_popPrev)
+            if (idx < m_popShownFrame.size() && m_popShownFrame[idx] != m_popFrame && popInside(idx)) ++m_popStats.popOut;
+        m_popPrev = list;
+    }
     // que caiu no MESMO bucket do run anterior, ou seja, nao paga bind novo.
     uint32_t runs = 0;
     for (size_t i = 1; i <= buckets; ++i) {
