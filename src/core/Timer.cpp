@@ -42,6 +42,19 @@ void Timer::tick() {
         m_elapsed += m_deltaTime;
     }
     m_lastFrame = now;
+    // Escala de tempo: o mundo anda escalado; a duracao corre no passo cheio.
+    m_unscaledDeltaTime = m_deltaTime;
+    if (m_timeScale != 1.0f) {
+        m_elapsed -= m_deltaTime * (1.0f - m_timeScale);
+        m_deltaTime *= m_timeScale;
+        if (m_timeScaleLeft > 0.0f) {
+            m_timeScaleLeft -= m_unscaledDeltaTime;
+            if (m_timeScaleLeft <= 0.0f) {
+                m_timeScale = 1.0f;
+                m_timeScaleLeft = 0.0f;
+            }
+        }
+    }
 
     ++m_frameCount;
     ++m_framesSinceLastUpdate;
