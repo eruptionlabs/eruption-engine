@@ -332,8 +332,12 @@ void PlayerController::updateMovement(float dt) {
                     // Grade de caminhada + objetos sólidos (o pé deles, com o raio do corpo).
                     // Já dentro de um (nasceu ali, objeto movido por script): deixa sair.
                     const bool stuck = m_engine->blockedAt(m_pos, 3.0f) || m_engine->characterAt(m_pos, 3.0f);
+                    // O mesmo para a grade (declive, casa pintada): quem nasceu ou foi
+                    // posto numa casa bloqueada (teleporte, jogo salvo, script) anda ate'
+                    // sair dela; sem isto ficava preso para sempre.
+                    const bool stuckGrid = !m_engine->navWalkable(m_pos.x, m_pos.z);
                     auto isWalkable = [&](const Vec3& p) {
-                        return m_engine->navWalkable(p.x, p.z) &&
+                        return (stuckGrid || m_engine->navWalkable(p.x, p.z)) &&
                                (stuck || (!m_engine->blockedAt(p, 3.0f) && !m_engine->characterAt(p, 3.0f)));
                     };
                     Vec3 finalPos = m_pos;
