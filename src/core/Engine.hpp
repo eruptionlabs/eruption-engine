@@ -541,6 +541,10 @@ public:
     bool playCharacterAction(int index, const std::string& name, bool loop);
     const std::string& playerAction() const { return m_playerAction; }
     void followPlayer(int index, float distance);
+    // Ver atraves (camera.see_through): o que fica entre a camera e o jogador,
+    // num raio de `radius` unidades de mundo em volta dele na tela, sai em
+    // dither ate' `opacity` no centro. radius 0 desliga.
+    void setSeeThrough(float radius, float opacity);
     void patrolCharacter(int index, const std::vector<Vec3>& points, float waitSeconds);
     void stopCharacter(int index);
     void drawSpeechBubbles(float x, float y, float w, float h, float dt);
@@ -1533,6 +1537,9 @@ private:
     VkDescriptorSet m_minimapCompositeDS = VK_NULL_HANDLE;
     static constexpr uint32_t MINIMAP_RES = 256;
     PlayerController* m_playerController = nullptr;
+    float m_seeThroughRadius = 0.0f;
+    float m_seeThroughOpacity = 0.25f;
+    void fillSeeThrough(FrameUBO& ubo) const;
     std::vector<SceneCharacter> m_characters;
     SceneObjects m_sceneObjects;
     // Sprite de personagem ja lido, por caminho de arquivo. Sem isto, cada

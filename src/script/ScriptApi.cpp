@@ -1054,6 +1054,11 @@ int camera_keep_inside_map(lua_State* L) {
     if (PlayerController* p = ScriptBridge::player()) p->setKeepViewInsideMap(lua_toboolean(L, 1) != 0);
     return 0;
 }
+// Parede entre a camera e o jogador sai em dither (Engine::setSeeThrough).
+int camera_see_through(lua_State* L) {
+    eng().setSeeThrough(static_cast<float>(luaL_optnumber(L, 1, 0.0)), static_cast<float>(luaL_optnumber(L, 2, 0.25)));
+    return 0;
+}
 
 int player_frozen(lua_State* L) {
     const PlayerController* p = ScriptBridge::player();
@@ -1172,7 +1177,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"target", camera_target}, {"set_target", camera_set_target},
         {"orbit", camera_orbit}, {"set_orbit", camera_set_orbit}, {"basis", camera_basis},
         {"view", camera_view},
-        {"free", camera_free}, {"keep_inside_map", camera_keep_inside_map}, {nullptr, nullptr}};
+        {"free", camera_free}, {"keep_inside_map", camera_keep_inside_map},
+        {"see_through", camera_see_through}, {nullptr, nullptr}};
     static const luaL_Reg fx[] = {
         {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash},
         {"fading", fx_fading}, {nullptr, nullptr}};
@@ -1435,6 +1441,10 @@ declare camera: {
     -- player leaves the center near the border, as in a 2D RPG). Same as
     -- "keep_inside_map" in the project's camera block.
     keep_inside_map: (on: boolean) -> (),
+    -- What stands between the camera and the player (a wall, a cliff) is
+    -- drawn as a dither pattern within `radius` world units of the player on
+    -- screen, down to `opacity` (default 0.25) at the center. 0 turns it off.
+    see_through: (radius: number, opacity: number?) -> (),
 }
 
 -- Presentation of a hit: what makes a blow feel like it landed. The engine

@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 // Pre-passe de profundidade das malhas com recorte por alfa (folhagem; ver
 // ModelRenderer::render). So' descarta, nas MESMAS condicoes de
@@ -43,6 +44,9 @@ layout(push_constant) uniform PushConstants {
     vec4 uvScale;
 } push;
 
+#include "gbuffer/model_frame_ubo.glsl"
+#include "gbuffer/see_through.glsl"
+
 const float dither[16] = float[](
     0.0, 0.5, 0.125, 0.625,
     0.75, 0.25, 0.875, 0.375,
@@ -59,6 +63,7 @@ void main() {
         bool keep = invert ? (dither[x + y * 4] > thr) : (dither[x + y * 4] <= thr);
         if (!keep) discard;
     }
+    if (seeThroughDiscard(inWorldPos)) discard;
     vec4 texColor = texture(u_textures[nonuniformEXT(inTexIndex)], inTexCoord);
     if (texColor.a < 0.1) discard;
     if (inBlendWeight > 0.0) {

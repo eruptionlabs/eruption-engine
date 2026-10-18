@@ -692,6 +692,7 @@ void Engine::render() {
     frameUbo.prevWindParams = m_prevWindParams;
     m_prevWindParams = frameUbo.windParams;
     m_hasPrevWindParams = true;
+    fillSeeThrough(frameUbo);
     // ERUPTION_TEST_WIND_DEBUG=1: o vetor que de fato chega ao vertex shader.
     static const bool kWindDbg = std::getenv("ERUPTION_TEST_WIND_DEBUG") != nullptr;
     if (kWindDbg) {
@@ -2779,6 +2780,58 @@ void Engine::toggleWireframe() {
     m_modelRenderer.recreatePipeline();
     m_terrainRenderer.recreatePipeline();
     ERUPTION_LOG_INFO("Wireframe %s (F8)", wireframeMode() ? "ligado" : "desligado");
+}
+
+void Engine::setSeeThrough(float radius, float opacity) {
+    m_seeThroughRadius = std::max(0.0f, radius);
+    m_seeThroughOpacity = glm::clamp(opacity, 0.0f, 1.0f);
+}
+
+// VER ATRAVES. A elipse vai em NDC: o shader projeta o proprio fragmento com
+// viewProjNoJitter, e o aspecto da tela ja' vem da projecao. Centro no meio do
+// corpo; raio horizontal `r`, vertical r + meio sprite (o boneco e' mais alto
+// que largo). Os raios saem de projetar pontos deslocados pelos eixos da
+// camera, sem depender de qual projecao (perspectiva ou ortografica) esta' ativa.
+// ERUPTION_TEST_SEE_THROUGH=<raio>[,<opacidade>] liga sem script (teste).
+void Engine::fillSeeThrough(FrameUBO& ubo) const {
+    ubo.seeThrough = Vec4(0.0f);
+    ubo.seeThrough2 = Vec4(0.0f);
+    ubo.seeThrough3 = Vec4(0.0f);
+    static const Vec2 kEnv = [] {
+        Vec2 v(-1.0f, 0.25f);
+        if (const char* e = std::getenv("ERUPTION_TEST_SEE_THROUGH")) std::sscanf(e, "%f,%f", &v.x, &v.y);
+        return v;
+    }();
+    const float r = kEnv.x >= 0.0f ? kEnv.x : m_seeThroughRadius;
+    const float opacity = kEnv.x >= 0.0f ? kEnv.y : m_seeThroughOpacity;
+    if (r <= 0.0f || m_playerController == nullptr) return;
+    const float h = m_playerController->spriteHeight();
+    const Vec3 feet = m_playerController->pos();
+    const Vec3 mid = feet + Vec3(0.0f, 0.5f * h, 0.0f);
+    const Mat4& view = m_camera.viewMatrix();
+    const Vec3 right(view[0][0], view[1][0], view[2][0]);
+    const Vec3 up(view[0][1], view[1][1], view[2][1]);
+    auto ndc = [&](const Vec3& p, Vec2& out) {
+        const Vec4 c = ubo.viewProjNoJitter * Vec4(p, 1.0f);
+        if (c.w <= 1e-4f) return false;
+        out = Vec2(c.x, c.y) / c.w;
+        return true;
+    };
+    Vec2 c, cx, cy;
+    if (!ndc(mid, c) || !ndc(mid + right * r, cx) || !ndc(mid + up * (r + 0.5f * h), cy)) return;
+    const Vec2 radii(glm::length(cx - c), glm::length(cy - c));
+    if (radii.x <= 1e-5f || radii.y <= 1e-5f) return;
+    ubo.seeThrough = Vec4(c.x, c.y, radii.x, radii.y);
+    ubo.seeThrough2 = Vec4(glm::distance(mid, m_camera.position()), feet.y, h, opacity);
+    // Ancora do padrao: um ponto do mundo preso numa grade de 512 u perto do
+    // jogador (troca so' ao cruzar a grade), em pixels do alvo do G-buffer.
+    const Vec3 ancora(std::round(feet.x / 512.0f) * 512.0f, std::round(feet.y / 64.0f) * 64.0f,
+                      std::round(feet.z / 512.0f) * 512.0f);
+    Vec2 an;
+    if (ndc(ancora, an)) {
+        const VkExtent2D re = renderExtent();
+        ubo.seeThrough3 = Vec4((an.x * 0.5f + 0.5f) * float(re.width), (an.y * 0.5f + 0.5f) * float(re.height), 0.0f, 0.0f);
+    }
 }
 
 } // namespace eruption
