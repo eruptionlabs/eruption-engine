@@ -63,4 +63,13 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_seeThrough;
     vec4 u_seeThrough2;
     vec4 u_seeThrough3;
+    // Juncao malha x terreno (FrameUBO::gb*, gbuffer/ground_blend.glsl).
+    vec4 u_gbMaskU;
+    vec4 u_gbMaskV;
+    vec4 u_gbUvU;
+    vec4 u_gbUvV;
+    vec4 u_gbHeight;
+    uvec4 u_gbSplat;
+    uvec4 u_gbSlots;
+    uvec4 u_gbSlots2;
 };

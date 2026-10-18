@@ -693,6 +693,7 @@ void Engine::render() {
     m_prevWindParams = frameUbo.windParams;
     m_hasPrevWindParams = true;
     fillSeeThrough(frameUbo);
+    fillGroundBlend(frameUbo);
     // ERUPTION_TEST_WIND_DEBUG=1: o vetor que de fato chega ao vertex shader.
     static const bool kWindDbg = std::getenv("ERUPTION_TEST_WIND_DEBUG") != nullptr;
     if (kWindDbg) {

@@ -125,6 +125,21 @@ struct FrameUBO {
     // xy = pixel (do alvo do G-buffer) de um ponto FIXO do mundo perto do
     // jogador: o padrao do dither anda com o mundo, nao com a tela.
     alignas(16) Vec4 seeThrough3;
+    // JUNCAO MALHA x TERRENO (Engine::fillGroundBlend, gbuffer/ground_blend.glsl).
+    // gbMaskU/V: UV da mascara do splat = (a*x + b*z + c); .w = faixa (0 desliga)
+    // e o lado da celula da grade de altura. gbUvU/V: UV do chao, idem; .w =
+    // altura minima e faixa de altura da textura. gbHeight: UV da textura de
+    // altura = (x * .x + .y, z * .z + .w). gbSplat: slots das 8 camadas (2 por
+    // uint, com as flags). gbSlots: mascara, mascara 2, textura de altura, cor
+    // base do chao. gbSlots2: normal e MRAH-W base do chao.
+    alignas(16) Vec4 gbMaskU;
+    alignas(16) Vec4 gbMaskV;
+    alignas(16) Vec4 gbUvU;
+    alignas(16) Vec4 gbUvV;
+    alignas(16) Vec4 gbHeight;
+    alignas(16) uint32_t gbSplat[4];
+    alignas(16) uint32_t gbSlots[4];
+    alignas(16) uint32_t gbSlots2[4];
 };
 
 // Luz pontual dominante de um sprite (Engine::spriteDominantLights), por

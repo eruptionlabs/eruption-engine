@@ -606,6 +606,8 @@ void ModelRenderer::clear() {
     }
     m_meshes.clear();
     m_instances.clear();
+    m_groundBlend = GroundBlendInfo{};
+    m_groundBlendPending = 0xFFFFFFFFu;
     // Lista refeita: os objetos da cena que apontavam para ela se desfazem.
     ++m_instanceEpoch;
     m_touched.clear();
@@ -2423,6 +2425,40 @@ void ModelRenderer::patchGroundVertices(uint32_t mesh, const std::vector<uint32_
     if (it == m_groundCpu.end() || mesh >= m_meshes.size()) return;
     auto& pending = m_vertexPatches[mesh];
     pending.insert(pending.end(), vertexIndices.begin(), vertexIndices.end());
+    // O splat do editor (TerrainPaint) chega por aqui, depois da carga: e' a
+    // primeira vez que o chao tem as camadas e a mascara nos vertices.
+    if (std::getenv("ERUPTION_TEST_GROUND_BLEND_DEBUG")) {
+        const auto& v = it->second;
+        size_t k = 0;
+        while (k < v.size() && v[k].blendMaskIndex == 0) ++k;
+        if (k < v.size())
+            ERUPTION_LOG_WARN("[JUNCAO] patch malha %u: %zu vertices, mascara %u/%u, camadas %08x %08x", mesh,
+                              vertexIndices.size(), v[k].blendMaskIndex, v[k].blendMaskIndex2, v[k].splatTex01, v[k].splatTex23);
+    }
+    // Nada de ajuste aqui: o splat chega em ate' 8 etapas (uma por camada) na
+    // chegada ao mapa, e o ajuste sobre os ~2 milhoes de vertices do chao
+    // custava 60-150 ms nessa hora mesmo com a juncao desligada (medido na
+    // fase de camadas da chegada). So' marca; groundBlend() captura quando
+    // for preciso.
+    m_groundBlendPending = mesh;
+}
+
+const ModelRenderer::GroundBlendInfo& ModelRenderer::groundBlend(bool wantHeights) {
+    if (m_groundBlendPending == 0xFFFFFFFFu) return m_groundBlend;
+    const uint32_t mesh = m_groundBlendPending;
+    m_groundBlendPending = 0xFFFFFFFFu;
+    auto it = m_groundCpu.find(mesh);
+    if (it == m_groundCpu.end() || mesh >= m_meshes.size()) return m_groundBlend;
+    // A mascara e' calculada no MUNDO (transform da instancia x posicao): o
+    // ajuste tambem, pela primeira instancia deste chao.
+    for (const ModelInstance& inst : m_instances)
+        if (inst.meshIndex == mesh) {
+            m_groundBlend = GroundBlendInfo{};
+            captureGroundBlend(it->second, m_meshes[mesh].indexCount / 3, inst.transform, wantHeights);
+            m_groundBlend.mesh = mesh;
+            break;
+        }
+    return m_groundBlend;
 }
 
 void ModelRenderer::growMeshBounds(uint32_t mesh, const Vec3& lo, const Vec3& hi) {
@@ -3210,6 +3246,9 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     auto record = [&](VkBuffer vb, VkBuffer ib, uint32_t mesh, uint32_t count, uint32_t instances,
                       uint32_t firstIndex, uint32_t firstInstance, uint32_t levelCount) {
         DrawRec r{vb, ib, mesh, count, instances, firstIndex, firstInstance, levelCount, tessBound, {}};
+        // uvScale.y = altura da malha (caixa local): a juncao com o chao
+        // limita a faixa a uma fracao dela, para pedra baixa nao sumir inteira.
+        push.uvScale.y = mesh < m_meshes.size() ? m_meshes[mesh].aabbMax.y - m_meshes[mesh].aabbMin.y : 0.0f;
         std::memcpy(r.push, &push, sizeof(push));
         m_drawRecs.push_back(r);
     };
@@ -4422,6 +4461,117 @@ void ModelRenderer::rebuildHotData() {
 // entra no FIM da lista: so' ela precisa de espelho. rebuildHotData() refazia
 // as ~5,5 mil do andar a cada peca - 3 a 15 ms por spawn, e os scripts poem
 // centenas ao entrar no mapa. O mesmo para as copias do duplicateBatch.
+// JUNCAO MALHA x TERRENO: o chao com splat guarda a UV e a mascara por
+// vertice, mas as duas sao afins no XZ do mundo (uv = xz * k; a mascara cobre a
+// grade do terreno). Ajusta a funcao por tres vertices bem espalhados e confere
+// em outros 64; se nao fecha (UV desenrolada a mao), o chao fica fora da juncao.
+void ModelRenderer::captureGroundBlend(const std::vector<TerrainVertex>& vertices, size_t triangles, const Mat4& toWorld,
+                                       bool wantHeights) {
+    if (vertices.size() < 3 || triangles <= m_groundBlend.triangles) return;
+    auto temSplat = [](const TerrainVertex& v) { return (v.splatTex01 | v.splatTex23) != 0 && v.blendMaskIndex != 0; };
+    size_t primeiro = 0;
+    while (primeiro < vertices.size() && !temSplat(vertices[primeiro])) ++primeiro;
+    if (primeiro == vertices.size()) return;
+    // Funcao afim f(x, z) = a*x + b*z + c pelos vertices que passam no filtro:
+    // tres bem espalhados para o ajuste, outros 64 para conferir.
+    auto ajusta = [&](auto filtro, auto get, Vec3& out, float tolerancia) {
+        // Amostra de ~20 mil vertices: a funcao e' afim, e varrer os ~2 milhoes
+        // do chao 4 vezes era a maior parte do custo da captura.
+        std::vector<size_t> idx;
+        const size_t passoAmostra = std::max<size_t>(1, vertices.size() / 20000);
+        for (size_t i = 0; i < vertices.size(); i += passoAmostra)
+            if (filtro(vertices[i])) idx.push_back(i);
+        if (idx.size() < 3) return false;
+        auto xz = [&](size_t i) {
+            const Vec3 w = Vec3(toWorld * Vec4(vertices[i].position, 1.0f));
+            return Vec2(w.x, w.z);
+        };
+        const size_t a = idx[0];
+        size_t b = a, c = a;
+        float best = 0.0f;
+        for (size_t i : idx) {
+            const float d = glm::length(xz(i) - xz(a));
+            if (d > best) { best = d; b = i; }
+        }
+        best = 0.0f;
+        for (size_t i : idx) {
+            const Vec2 e1 = xz(b) - xz(a), e2 = xz(i) - xz(a);
+            const float area = std::abs(e1.x * e2.y - e1.y * e2.x);
+            if (area > best) { best = area; c = i; }
+        }
+        if (best < 1e-3f) return false;
+        const glm::mat3 m(Vec3(xz(a).x, xz(b).x, xz(c).x), Vec3(xz(a).y, xz(b).y, xz(c).y), Vec3(1.0f));
+        out = glm::inverse(m) * Vec3(get(vertices[a]), get(vertices[b]), get(vertices[c]));
+        const size_t passo = std::max<size_t>(1, idx.size() / 64);
+        for (size_t k = 0; k < idx.size(); k += passo) {
+            const size_t i = idx[k];
+            if (std::abs(glm::dot(out, Vec3(xz(i), 1.0f)) - get(vertices[i])) > tolerancia) return false;
+        }
+        return true;
+    };
+    auto todos = [](const TerrainVertex&) { return true; };
+    GroundBlendInfo g;
+    // Tolerancia: 1% de uma volta da UV; na mascara, ~0,1 celula de uma grade de 400.
+    const bool ok = ajusta(todos, [](const TerrainVertex& v) { return v.texCoord.x; }, g.uvU, 0.01f) &&
+                    ajusta(todos, [](const TerrainVertex& v) { return v.texCoord.y; }, g.uvV, 0.01f) &&
+                    ajusta(temSplat, [](const TerrainVertex& v) { return v.blendMaskUV.x; }, g.maskU, 2.5e-4f) &&
+                    ajusta(temSplat, [](const TerrainVertex& v) { return v.blendMaskUV.y; }, g.maskV, 2.5e-4f);
+    if (!ok) {
+        ERUPTION_LOG_WARN("[JUNCAO] chao com UV ou mascara que nao e' afim no XZ: sem juncao");
+        return;
+    }
+    // Grade regular? (o chao exportado do terreno e' uma: (w+1) x (d+1) vertices)
+    // So' quando pedida: com .ter a altura vem dele, sem ordenar milhoes de XZ.
+    if (wantHeights) {
+        std::vector<float> xs, zs;
+        xs.reserve(vertices.size());
+        zs.reserve(vertices.size());
+        std::vector<Vec3> w(vertices.size());
+        for (size_t i = 0; i < vertices.size(); ++i) {
+            w[i] = Vec3(toWorld * Vec4(vertices[i].position, 1.0f));
+            xs.push_back(w[i].x);
+            zs.push_back(w[i].z);
+        }
+        auto unicos = [](std::vector<float>& v) {
+            std::sort(v.begin(), v.end());
+            std::vector<float> u;
+            for (float f : v)
+                if (u.empty() || f - u.back() > 1e-3f) u.push_back(f);
+            return u;
+        };
+        const std::vector<float> ux = unicos(xs), uz = unicos(zs);
+        if (ux.size() >= 2 && uz.size() >= 2 && ux.size() * uz.size() == vertices.size()) {
+            const float dx = (ux.back() - ux.front()) / float(ux.size() - 1);
+            const float dz = (uz.back() - uz.front()) / float(uz.size() - 1);
+            g.heights.assign(ux.size() * uz.size(), 0.0f);
+            bool regular = dx > 1e-4f && dz > 1e-4f;
+            for (size_t i = 0; i < w.size() && regular; ++i) {
+                const float fi = (w[i].x - ux.front()) / dx, fj = (w[i].z - uz.front()) / dz;
+                const long ii = std::lround(fi), jj = std::lround(fj);
+                if (std::abs(fi - float(ii)) > 0.01f || std::abs(fj - float(jj)) > 0.01f) regular = false;
+                else g.heights[size_t(jj) * ux.size() + size_t(ii)] = w[i].y;
+            }
+            if (regular) {
+                g.nx = uint32_t(ux.size()); g.nz = uint32_t(uz.size());
+                g.x0 = ux.front(); g.z0 = uz.front(); g.dx = dx; g.dz = dz;
+            } else {
+                g.heights.clear();
+            }
+        }
+    }
+    const TerrainVertex& v0 = vertices[primeiro];
+    g.splat[0] = v0.splatTex01; g.splat[1] = v0.splatTex23; g.splat[2] = v0.splatTex45; g.splat[3] = v0.splatTex67;
+    g.mask = v0.blendMaskIndex; g.mask2 = v0.blendMaskIndex2;
+    g.color = v0.texIndex; g.normal = v0.normalIndex; g.pbr = v0.pbrIndex;
+    g.triangles = triangles;
+    g.valid = true;
+    m_groundBlend = g;
+    ERUPTION_LOG_WARN("[JUNCAO] chao com splat: %zu triangulos, uv = (%.4f x + %.4f z + %.3f, %.4f x + %.4f z + %.3f), "
+                      "mascara (%.6f x + %.6f z + %.4f, %.6f x + %.6f z + %.4f) slot %u",
+                      triangles, g.uvU.x, g.uvU.y, g.uvU.z, g.uvV.x, g.uvV.y, g.uvV.z,
+                      g.maskU.x, g.maskU.y, g.maskU.z, g.maskV.x, g.maskV.y, g.maskV.z, g.mask);
+}
+
 void ModelRenderer::syncNewHotEntries() {
     const uint32_t count = static_cast<uint32_t>(m_instances.size());
     const uint32_t known = static_cast<uint32_t>(m_instanceHot.size());

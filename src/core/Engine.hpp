@@ -1619,6 +1619,16 @@ private:
     float m_seeThroughOpacity = 0.25f;
     void fillSeeThrough(FrameUBO& ubo) const;
     int m_spriteShadowKind = -1;
+    float m_groundBlendBand = 0.0f;
+    float m_groundBlendFraction = 0.3f;
+    struct GroundHeightTexture {
+        uint32_t slot = 0;
+        Vec4 map{0.0f};      // uv = (x * map.x + map.y, z * map.z + map.w)
+        float minY = 0.0f, range = 1.0f, cell = 10.0f;
+    } m_groundHeight;
+    uint32_t m_groundHeightEpoch = 0;
+    bool buildGroundHeightTexture();
+    void fillGroundBlend(FrameUBO& ubo);
     // [0] = luz dominante, [1] = a segunda (a sombra por luz usa as duas).
     std::vector<SpriteLight> m_spriteLights[2];
     void updateSpriteDominantLights();

@@ -137,6 +137,12 @@ declare world: {
     -- full resolution (default 3; above it a cheap wide blur takes over). No
     -- point at all gives the lens back to the automatic focus.
     set_focus: (point: vector?, aperture: number?, foreground: boolean?, band: number?, max_blur: number?) -> (),
+    -- Models touching the ground take on the ground's own material (splat
+    -- layers, color, normal) within `band` world units above it, so the
+    -- contact line stops reading as a hard seam. Each model's band is at most
+    -- `fraction` (default 0.3) of its own height, so a low stone keeps its
+    -- look. 0 turns it off.
+    set_ground_blend: (band: number, fraction: number?) -> (),
     -- Name of the map being played.
     map: () -> string,
     -- Goes to another map (a door, a cave); the player appears at `position`

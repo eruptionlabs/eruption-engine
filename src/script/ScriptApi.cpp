@@ -1301,6 +1301,12 @@ int world_set_focus(lua_State* L) {
     return 0;
 }
 
+// Juncao malha x terreno (Engine::setGroundBlend).
+int world_set_ground_blend(lua_State* L) {
+    eng().setGroundBlend(static_cast<float>(luaL_optnumber(L, 1, 0.0)), static_cast<float>(luaL_optnumber(L, 2, 0.3)));
+    return 0;
+}
+
 // Personagem novo em tempo de execucao: o jogo monta o elenco que precisa
 // (NPC de cidade, figurantes de uma cena) sem passar pelo arquivo de cena. Devolve
 // falso se o sprite nao abriu.
@@ -1442,7 +1448,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
         {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"path", world_path}, {"set_motion_blur", world_set_motion_blur},
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
-        {"set_focus", world_set_focus},
+        {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend},
         {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids},
         {"block_slopes", world_block_slopes},
         {"map", world_map}, {"load_map", world_load_map},
@@ -1656,6 +1662,12 @@ declare world: {
     -- full resolution (default 3; above it a cheap wide blur takes over). No
     -- point at all gives the lens back to the automatic focus.
     set_focus: (point: vector?, aperture: number?, foreground: boolean?, band: number?, max_blur: number?) -> (),
+    -- Models touching the ground take on the ground's own material (splat
+    -- layers, color, normal) within `band` world units above it, so the
+    -- contact line stops reading as a hard seam. Each model's band is at most
+    -- `fraction` (default 0.3) of its own height, so a low stone keeps its
+    -- look. 0 turns it off.
+    set_ground_blend: (band: number, fraction: number?) -> (),
     -- Name of the map being played.
     map: () -> string,
     -- Goes to another map (a door, a cave); the player appears at `position`
