@@ -1664,6 +1664,19 @@ void Engine::render() {
         postSettings.fogOpacity = w.fogDensity * kWeatherFog;
         postSettings.fogHeight = w.fogHeight;
         postSettings.fogHeightFalloff = w.fogHeightFalloff;
+        // Nevoa autoral (world.set_fog, senao o bloco "fog" do .env) vence a
+        // do clima e a cor do ceu do ciclo: um interior tem a propria bruma.
+        const MapFog* fog = m_scriptFog.set ? &m_scriptFog
+                          : (m_currentMap && m_currentMap->env.fog.set) ? &m_currentMap->env.fog : nullptr;
+        if (fog) {
+            postSettings.enableFog = fog->opacity > 0.001f;
+            postSettings.fogColor = fog->color;
+            postSettings.fogStart = fog->start;
+            postSettings.fogEnd = fog->end;
+            postSettings.fogOpacity = fog->opacity;
+            postSettings.fogHeight = fog->height;
+            postSettings.fogHeightFalloff = fog->heightFalloff;
+        }
 
         // Coerência atmosférica: ajustar sol/lua conforme oclusão de nuvens
         auto& skyParams = m_skybox.editableConfig().procedural;
