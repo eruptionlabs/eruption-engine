@@ -16,6 +16,7 @@
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "core/Input.hpp"
+#include "script/ScriptApi.hpp"
 #include "core/JobSystem.hpp"
 #include "utils/Profiler.hpp"
 #include "utils/TelemetryExporter.hpp"
@@ -349,7 +350,105 @@ void Engine::setClassicMode(bool on) {
 // Painel de toque: analogico de mover a camera no canto de baixo a' esquerda,
 // hora do dia, relogio parado/andando e clima no da direita. O resto da tela
 // continua sendo da camera (um dedo gira, pinca aproxima).
+// CONTROLE DE TOQUE DO JOGO (ERUPTION_TOUCH_PAD="Z,X:Voltar,escape:Menu"):
+// analogico no canto de baixo a' esquerda, que anda com o jogador e, inclinado
+// alem da metade, segura as setas (menus); botoes no canto da direita, cada um
+// segurando a tecla do nome (os mesmos nomes de input.down), com o rotulo
+// depois dos dois pontos. O resto da tela continua sendo da camera.
+void Engine::drawTouchPad() {
+    struct Botao { Key key; std::string label; };
+    static const std::vector<Botao> botoes = [] {
+        std::vector<Botao> v;
+        std::string lista = std::getenv("ERUPTION_TOUCH_PAD");
+        size_t ini = 0;
+        while (ini <= lista.size()) {
+            const size_t fim = std::min(lista.find(',', ini), lista.size());
+            const std::string item = lista.substr(ini, fim - ini);
+            ini = fim + 1;
+            if (item.empty()) continue;
+            const size_t dois = item.find(':');
+            const std::string nome = item.substr(0, dois);
+            const Key k = scriptKeyFromName(nome.c_str());
+            if (k == Key::Unknown) {
+                ERUPTION_LOG_WARN("ERUPTION_TOUCH_PAD: tecla desconhecida '%s'", nome.c_str());
+                continue;
+            }
+            v.push_back({k, dois == std::string::npos ? nome : item.substr(dois + 1)});
+        }
+        return v;
+    }();
+    ImGui::PushFont(m_touchHudFont);
+    Input::clearUiTouchRects();
+    const auto publishRect = [] {
+        const ImVec2 p = ImGui::GetWindowPos(), s = ImGui::GetWindowSize();
+        Input::addUiTouchRect(p.x, p.y, p.x + s.x, p.y + s.y);
+    };
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float pad = m_touchHudFont->FontSize * 0.6f;
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground |
+                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                   ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+
+    // Analogico: base fixa, o pino segue o dedo ate' a borda.
+    const float r = m_touchHudFont->FontSize * 2.6f;
+    const ImVec2 size(r * 2.6f, r * 2.6f);
+    const ImVec2 corner(vp->WorkPos.x + pad, vp->WorkPos.y + vp->WorkSize.y - pad - size.y);
+    const ImVec2 c(corner.x + size.x * 0.5f, corner.y + size.y * 0.5f);
+    ImGui::SetNextWindowPos(corner, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    ImGui::Begin("##pad_analogico", nullptr, flags);
+    publishRect();
+    ImGui::SetCursorScreenPos(corner);
+    ImGui::InvisibleButton("##pad_pino", size);
+    ImVec2 tilt(0.0f, 0.0f);
+    if (ImGui::IsItemActive()) {
+        const ImVec2 m = ImGui::GetIO().MousePos;
+        tilt = ImVec2((m.x - c.x) / r, (m.y - c.y) / r);
+        const float len = std::sqrt(tilt.x * tilt.x + tilt.y * tilt.y);
+        if (len > 1.0f) tilt = ImVec2(tilt.x / len, tilt.y / len);
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddCircleFilled(c, r, IM_COL32(20, 20, 30, 90), 48);
+    dl->AddCircle(c, r, IM_COL32(255, 255, 255, 110), 48, 3.0f);
+    dl->AddCircleFilled(ImVec2(c.x + tilt.x * r, c.y + tilt.y * r), r * 0.42f, IM_COL32(255, 255, 255, 150), 32);
+    ImGui::End();
+    Input::setVirtualStick(glm::vec2(tilt.x, tilt.y));
+    constexpr float kSeta = 0.5f;
+    Input::setVirtualKey(Key::Left, tilt.x < -kSeta);
+    Input::setVirtualKey(Key::Right, tilt.x > kSeta);
+    Input::setVirtualKey(Key::Up, tilt.y < -kSeta);
+    Input::setVirtualKey(Key::Down, tilt.y > kSeta);
+
+    // Botoes: duas colunas, do canto de baixo a' direita.
+    if (!botoes.empty()) {
+        const float lado = m_touchHudFont->FontSize * 3.4f;
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - pad, vp->WorkPos.y + vp->WorkSize.y - pad),
+                                ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+        ImGui::Begin("##pad_botoes", nullptr, flags | ImGuiWindowFlags_AlwaysAutoResize);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, lado * 0.5f);
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(20, 20, 30, 110));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(20, 20, 30, 110));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(255, 255, 255, 120));
+        for (size_t i = 0; i < botoes.size(); ++i) {
+            if (i % 2) ImGui::SameLine();
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::Button(botoes[i].label.c_str(), ImVec2(lado, lado));
+            Input::setVirtualKey(botoes[i].key, ImGui::IsItemActive());
+            ImGui::PopID();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar();
+        publishRect();
+        ImGui::End();
+    }
+    ImGui::PopFont();
+}
+
 void Engine::drawTouchHud() {
+    if (std::getenv("ERUPTION_TOUCH_PAD")) {
+        drawTouchPad();
+        return;
+    }
     // ERUPTION_TEST_CLASSIC=1 (teste): abre ja' no modo classico (ERUPT OFF).
     static bool s_classicHook = std::getenv("ERUPTION_TEST_CLASSIC") != nullptr;
     if (s_classicHook) {
@@ -2801,6 +2900,10 @@ void Engine::drawGameHud(ImDrawList* target, ImVec2 origin, ImVec2 size) {
     // Fantasy stone/bronze frame around minimap map only
     ImVec2 bgMin(startPos.x - 6, startPos.y - 6);
     ImVec2 bgMax(startPos.x + uiSize + 6, startPos.y + uiSize + 6);
+    if (!m_demoHidePanels) {
+        m_minimapScreen = Vec4(bgMin.x, bgMin.y, bgMax.x, bgMax.y);
+        m_minimapScreenFrame = m_framesCount;
+    }
     if (!m_demoHidePanels) dl->AddRectFilled(bgMin, bgMax, IM_COL32(20, 18, 16, 235), 4.0f);
     if (!m_demoHidePanels) dl->AddRect(bgMin, bgMax, IM_COL32(139, 90, 43, 255), 4.0f, 0, 3.0f);
     if (!m_demoHidePanels) dl->AddRect(ImVec2(bgMin.x + 2, bgMin.y + 2), ImVec2(bgMax.x - 2, bgMax.y - 2), IM_COL32(240, 230, 210, 50), 3.0f, 0, 1.0f);

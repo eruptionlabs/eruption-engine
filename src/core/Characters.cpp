@@ -7,7 +7,9 @@
 #include "core/Project.hpp"
 #include "game/PlayerController.hpp"
 
+#include <GLFW/glfw3.h>
 #include <imgui.h>
+#include "core/Input.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -428,9 +430,31 @@ void Engine::drawGameFx2D(float x, float y, float w, float h, float dt) {
         m_uiDocument.setImageResolver([this](const std::string& png) { return uiImageTexture(png); });
     }
     m_uiDocument.reloadIfChanged();
+    m_uiArea = Vec4(x, y, w, h);
     m_uiDocument.draw(dl, x, y, w, h);
     m_uiCanvas.update(dt);
     m_uiCanvas.draw(dl, x, y, w, h, m_camera.viewProjNoJitter());
+}
+
+bool Engine::uiClicked(const std::string& selector) {
+    if (!Input::isMousePressed(MouseButton::Left)) return false;
+    // O cursor vem da janela; a interface desenha em coordenadas do ImGui (no
+    // Android o swapchain pode ser menor que a tela).
+    int winW = 0, winH = 0;
+    glfwGetWindowSize(m_window.handle(), &winW, &winH);
+    const ImGuiIO& io = ImGui::GetIO();
+    const glm::vec2 m = Input::mousePosition();
+    const float px = winW > 0 ? m.x * io.DisplaySize.x / float(winW) : m.x;
+    const float py = winH > 0 ? m.y * io.DisplaySize.y / float(winH) : m.y;
+    if (Input::inUiTouchRect(m.x, m.y)) return false; // analogico do controle de toque
+    if (selector == "minimap") {
+        return m_minimapScreenFrame + 2 >= m_framesCount && px >= m_minimapScreen.x && px <= m_minimapScreen.z &&
+               py >= m_minimapScreen.y && py <= m_minimapScreen.w;
+    }
+    if (!m_uiDocument.shown(selector) || m_uiArea.z <= 0.0f) return false;
+    CSSRect r;
+    if (!m_uiDocument.rectOf(selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w, r)) return false;
+    return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
 }
 
 void Engine::followPlayer(int index, float distance) {

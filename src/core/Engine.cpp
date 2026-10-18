@@ -1240,6 +1240,59 @@ float Engine::advanceFrame() {
 
     m_timer.tick();
     m_window.pollEvents();
+    // ERUPTION_TEST_CLICK="quadro,x,y;quadro,#seletor;..." (teste): clique do
+    // mouse no comeco desses quadros, antes dos scripts, em (x, y) pixels da
+    // janela ou no centro de um elemento da interface do jogo (ou "minimap").
+    // Prova de ui.clicked e da interface de toque sem ninguem na maquina.
+    struct TestClick { int frame; float x, y; std::string selector; };
+    static const std::vector<TestClick> kTestClicks = [] {
+        std::vector<TestClick> v;
+        if (const char* e = std::getenv("ERUPTION_TEST_CLICK")) {
+            std::string s = e;
+            size_t i = 0;
+            while (i < s.size()) {
+                const size_t j = std::min(s.find(';', i), s.size());
+                const std::string item = s.substr(i, j - i);
+                i = j + 1;
+                const size_t c = item.find(',');
+                if (c == std::string::npos) continue;
+                TestClick t{std::atoi(item.c_str()), 0.0f, 0.0f, {}};
+                const std::string resto = item.substr(c + 1);
+                if (std::sscanf(resto.c_str(), "%f,%f", &t.x, &t.y) != 2) t.selector = resto;
+                v.push_back(t);
+            }
+        }
+        return v;
+    }();
+    for (const TestClick& c : kTestClicks) {
+        if (c.frame != m_framesCount) continue;
+        float x = c.x, y = c.y;
+        if (!c.selector.empty()) {
+            // Centro do elemento (coordenadas do ImGui) de volta para a janela.
+            float ux = -1.0f, uy = -1.0f;
+            if (c.selector == "minimap") {
+                ux = 0.5f * (m_minimapScreen.x + m_minimapScreen.z);
+                uy = 0.5f * (m_minimapScreen.y + m_minimapScreen.w);
+            } else {
+                CSSRect r;
+                if (m_uiDocument.rectOf(c.selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w, r)) {
+                    ux = r.x + 0.5f * r.w;
+                    uy = r.y + 0.5f * r.h;
+                }
+            }
+            if (ux < 0.0f) {
+                ERUPTION_LOG_WARN("ERUPTION_TEST_CLICK: '%s' nao esta' na interface", c.selector.c_str());
+                continue;
+            }
+            int winW = 0, winH = 0;
+            glfwGetWindowSize(m_window.handle(), &winW, &winH);
+            const ImGuiIO& io = ImGui::GetIO();
+            x = io.DisplaySize.x > 0.0f ? ux * float(winW) / io.DisplaySize.x : ux;
+            y = io.DisplaySize.y > 0.0f ? uy * float(winH) / io.DisplaySize.y : uy;
+        }
+        ERUPTION_LOG_WARN("ERUPTION_TEST_CLICK: quadro %d em (%.0f, %.0f) %s", c.frame, x, y, c.selector.c_str());
+        Input::injectClick(x, y);
+    }
 
     // Auto heat-shimmer ground height from terrain under the player.
     if (m_currentMap) {

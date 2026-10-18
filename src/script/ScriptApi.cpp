@@ -549,6 +549,17 @@ int input_down(lua_State* L) {
     lua_pushboolean(L, k != Key::Unknown && Input::isKeyDown(k));
     return 1;
 }
+// Tela de toque (o Android; ERUPTION_TEST_TOUCH=1 finge no PC, para testar a
+// interface do celular): o jogo esconde o desenho das teclas.
+int input_touch(lua_State* L) {
+#ifdef __ANDROID__
+    lua_pushboolean(L, 1);
+#else
+    static const bool kFinge = std::getenv("ERUPTION_TEST_TOUCH") != nullptr;
+    lua_pushboolean(L, kFinge);
+#endif
+    return 1;
+}
 int input_pressed(lua_State* L) {
     const Key k = scriptKeyFromName(luaL_checkstring(L, 1));
     lua_pushboolean(L, k != Key::Unknown && Input::isKeyPressed(k));
@@ -1091,6 +1102,10 @@ int ui_color(lua_State* L) {
     eng().uiDocument().setColor(luaL_checkstring(L, 1), static_cast<int>(luaL_optinteger(L, 3, 0)), c);
     return 0;
 }
+int ui_clicked(lua_State* L) {
+    lua_pushboolean(L, eng().uiClicked(luaL_checkstring(L, 1)));
+    return 1;
+}
 int ui_has(lua_State* L) {
     lua_pushboolean(L, eng().uiDocument().has(luaL_checkstring(L, 1)));
     return 1;
@@ -1441,7 +1456,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg vars[] = {{"get", vars_get}, {"set", vars_set}, {"add", vars_add}, {nullptr, nullptr}};
     static const luaL_Reg ui[] = {{"message", ui_message}, {"minimap_label", ui_minimap_label}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
                                   {"load", ui_load}, {"place", ui_place}, {"image_rect", ui_image_rect}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
-                                  {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has},
+                                  {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked},
                                   {"reset", ui_reset}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
@@ -1467,7 +1482,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg fx[] = {
         {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash}, {"dim", fx_dim},
         {"fading", fx_fading}, {nullptr, nullptr}};
-    static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {nullptr, nullptr}};
+    static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {"touch", input_touch}, {nullptr, nullptr}};
     static const luaL_Reg models[] = {
         {"count", models_count}, {"preload", models_preload}, {"find", models_find}, {"name", models_name},
         {"position", models_position}, {"set_position", models_set_position}, {"near", models_near},
@@ -1592,6 +1607,9 @@ declare ui: {
     -- which: 0 = background / rail / text, 1 = bar fill or border.
     color: (selector: string, color: vector, which: number?, opacity: number?) -> (),
     has: (selector: string) -> boolean,
+    -- Tapped (phone) or clicked (mouse) this frame: an element of the file
+    -- that is on screen, or "minimap". Makes any element a button.
+    clicked: (selector: string) -> boolean,
     -- Drops everything the script set; the file decides again.
     reset: () -> (),
 }
@@ -1813,6 +1831,8 @@ declare input: {
     down: (key: string) -> boolean,
     -- True only on the frame the key went down.
     pressed: (key: string) -> boolean,
+    -- The screen is a touch screen (phone): hide drawn key hints.
+    touch: () -> boolean,
 }
 
 -- Models placed in the map.

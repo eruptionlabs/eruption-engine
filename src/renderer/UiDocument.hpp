@@ -61,6 +61,11 @@ public:
     const std::filesystem::path& path() const { return m_path; }
     size_t elementCount() const { return m_elements.size(); }
     bool has(const std::string& selector) const { return find(selector) != nullptr; }
+    // Desenhado agora (o script ou o CSS o mostra), como em draw().
+    bool shown(const std::string& selector) const {
+        const Element* e = find(selector);
+        return e && m_loaded && (e->hasVisible ? e->visible : e->visibleCss);
+    }
 
     // Valores que o jogo preenche. Selector com ou sem "#" - os dois servem.
     void setText(const std::string& selector, const std::string& text);
