@@ -412,6 +412,8 @@ public:
     // atlas, SSAO, post toggles, cloud/rain budgets). Only keys present in
     // the preset are applied; safe to call at init and on F5 hot-reload.
     void applyGraphicsPreset();
+    float m_tessLevelCap = 64.0f;    // chave "tessellation_max_level"
+    float m_tessBandScale = 1.0f;    // chave "tessellation_band_scale"
     uint32_t m_godRayLights = 4;     // chave "god_ray_lights"
     DioramaLookConfig& lookConfig() { return m_lookConfig; }
     ConfigManager& dioramaConfig() { return m_dioramaConfig; }

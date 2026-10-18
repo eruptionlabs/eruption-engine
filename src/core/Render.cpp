@@ -600,7 +600,7 @@ void Engine::render() {
     // VulkanContext checa feature bit e limite, este era o unico lugar que
     // confiava. Num alvo onde o tessellator e' o estagio pior suportado
     // (930M, driver velho) confiar sai caro. Tefra 2026-09-06, G2.
-    const float tessCap = static_cast<float>(std::max(m_vulkan.maxTessellationLevel(), 1u));
+    const float tessCap = std::min(static_cast<float>(std::max(m_vulkan.maxTessellationLevel(), 1u)), m_tessLevelCap);
     for (int i = 0; i < 4; ++i) {
         tessLo[i] = glm::clamp(tessLo[i], 1.0f, tessCap);
         tessHi[i] = glm::clamp(tessHi[i], 1.0f, tessCap);

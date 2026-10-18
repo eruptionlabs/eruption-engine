@@ -2214,6 +2214,11 @@ void Engine::applyGraphicsPreset() {
     // parte dos pixels do mapa; o teto é o botão mais direto de VRAM. Vale
     // para as texturas EMBUTIDAS do GLB (é onde estão os sheets grandes).
     m_textureMaxSize = std::clamp<int>(p.value("texture_max_size", 1024), 128, 4096);
+    // Teto do nivel de subdivisao e escala da banda perto, por preset: na GPU
+    // de celular o estagio de patch custa caro mesmo em nivel baixo, entao o
+    // celular troca alcance e densidade por quadro (Engine::render).
+    m_tessLevelCap = std::clamp(p.value("tessellation_max_level", 64.0f), 1.0f, 64.0f);
+    m_tessBandScale = std::clamp(p.value("tessellation_band_scale", 1.0f), 0.0f, 1.0f);
     // Raios de luz das luzes pontuais (passe de pos, meia resolucao): quantas
     // luzes no maximo. 0 desliga (degraus baixo e medio do celular).
     m_godRayLights = static_cast<uint32_t>(std::clamp(p.value("god_ray_lights", 4), 0, 4));
