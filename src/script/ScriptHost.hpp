@@ -1,4 +1,5 @@
 #pragma once
+#include <unordered_map>
 
 #include "math/Types.hpp"
 #include "scene/ObjectWorld.hpp"
@@ -160,6 +161,9 @@ public:
 
 private:
     std::chrono::steady_clock::time_point m_lastNativePoll{};
+    // ERUPTION_TEST_SCRIPT_PROFILE: arquivo -> (ms somados, chamada mais longa).
+    std::unordered_map<std::string, std::pair<double, double>> m_profile;
+    std::chrono::steady_clock::time_point m_profileSince{};
     friend class ScriptDebugger;
     std::unique_ptr<ScriptDebugger> m_debugger;
     struct Script {
@@ -192,6 +196,8 @@ private:
 
     bool load(Script& s, bool keepState);
     bool call(Script& s, const char* fn, int nargs);
+    void profileCall(const Script& s, double ms);
+    void flushProfile();
     bool callRef(Script& s, int fnRef, int nargs);
     void startScript(Script& s);
     void releaseHandlers(std::vector<Handler>& hs);

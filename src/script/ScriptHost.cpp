@@ -1,4 +1,6 @@
 #include "script/ScriptHost.hpp"
+#include <unordered_map>
+#include <cstdio>
 
 #include "script/ScriptApi.hpp"
 #include "script/LuauChunk.hpp"
@@ -470,6 +472,7 @@ bool ScriptHost::callRef(Script& s, int fnRef, int nargs) {
     g_inCall = true;
     const int status = lua_pcall(L, nargs, 0, errIdx);
     g_inCall = false;
+    profileCall(s, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - g_callStart).count());
     if (status != 0) {
         Logger::error("%s", lua_tostring(L, -1));
         Logger::error("%s: script paused after this error; save the file to run it again",
@@ -660,8 +663,41 @@ void ScriptHost::dispatch(Script& s, float dt, float prevHour, float hour) {
     }
 }
 
+// ERUPTION_TEST_SCRIPT_PROFILE=1 (bancada): tempo de CPU dos handlers por
+// arquivo de script; a cada segundo o log lista os mais caros (soma e a
+// chamada mais longa). Separa o custo do jogo (scripts) do custo do motor.
+static const bool kScriptProfile = std::getenv("ERUPTION_TEST_SCRIPT_PROFILE") != nullptr;
+
+void ScriptHost::profileCall(const Script& s, double ms) {
+    if (!kScriptProfile) return;
+    auto& p = m_profile[s.path.filename().string()];
+    p.first += ms;
+    p.second = std::max(p.second, ms);
+}
+
+void ScriptHost::flushProfile() {
+    if (!kScriptProfile || m_profile.empty()) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - m_profileSince < std::chrono::seconds(1)) return;
+    std::vector<std::pair<std::string, std::pair<double, double>>> rows(m_profile.begin(), m_profile.end());
+    std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.second.first > b.second.first; });
+    std::string line;
+    double total = 0.0;
+    for (const auto& r : rows) total += r.second.first;
+    for (size_t i = 0; i < rows.size() && i < 6; ++i) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "%s%s %.1f ms (max %.1f)", i ? " | " : "", rows[i].first.c_str(),
+                      rows[i].second.first, rows[i].second.second);
+        line += buf;
+    }
+    ERUPTION_LOG_WARN("[SCRIPTPROF] 1 s: total %.1f ms | %s", total, line.c_str());
+    m_profile.clear();
+    m_profileSince = now;
+}
+
 void ScriptHost::update(float dt) {
     if (!L || !m_running) return;
+    flushProfile();
     const auto t0 = std::chrono::steady_clock::now();
     updateTweens(dt);
     for (auto it = m_messages.begin(); it != m_messages.end();) {
