@@ -20,6 +20,11 @@ public:
     void freeSlot(uint32_t slot);
 
     void updateTexture(uint32_t slot, VkImageView view, VkSampler sampler);
+    // N slots livres SEGUIDOS: a camada do splat guarda cor, normal e MRAH-W
+    // em s, s+1 e s+2 e o shader acha os dois ultimos pelo primeiro.
+    // 0 = sem sequencia livre. Cada slot volta sozinho por freeSlot().
+    uint32_t allocateRange(uint32_t count);
+
     void flushUpdates();
 
     // Thread-safe wrappers

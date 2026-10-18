@@ -156,6 +156,27 @@ uint32_t BindlessDescriptor::allocateSlot() {
     return 0; // slot 0 = default/null
 }
 
+uint32_t BindlessDescriptor::allocateRange(uint32_t count) {
+    // A lista de livres comeca com TODOS os slots (init) e allocateSlot so'
+    // tira dela: a sequencia tem de sair da propria lista, o menor inicio que
+    // tenha `count` slots livres seguidos.
+    if (count == 0) return 0;
+    std::vector<bool> livre(m_slotCount, false);
+    for (uint32_t s : m_freeSlots) livre[s] = true;
+    uint32_t first = 0;
+    for (uint32_t s = 1, run = 0; s < m_slotCount; ++s) {
+        run = livre[s] ? run + 1 : 0;
+        if (run == count) { first = s + 1 - count; break; }
+    }
+    if (first == 0) return 0;
+    m_freeSlots.erase(std::remove_if(m_freeSlots.begin(), m_freeSlots.end(),
+                                     [&](uint32_t s) { return s >= first && s < first + count; }),
+                      m_freeSlots.end());
+    m_allocated += count;
+    m_highWater = std::max(m_highWater, m_allocated);
+    return first;
+}
+
 void BindlessDescriptor::freeSlot(uint32_t slot) {
     if (slot == 0 || slot >= m_slotCount) return;
     if (m_allocated > 0) --m_allocated;
