@@ -99,8 +99,16 @@ void VulkanContext::destroyPipelineCache() {
         if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, blob.data()) == VK_SUCCESS) {
             std::error_code ec;
             std::filesystem::create_directories(".cache/eruption", ec);
-            std::ofstream out(kPipelineCachePath, std::ios::binary | std::ios::trunc);
-            if (out.is_open()) out.write(blob.data(), static_cast<std::streamsize>(size));
+            // Ao lado e troca com rename: a pasta do motor copiada por hardlink
+            // divide o inode, e reescrever no lugar mudava o cache de todas.
+            const std::string tmp = std::string(kPipelineCachePath) + ".tmp";
+            bool ok = false;
+            {
+                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+                if (out.is_open()) ok = static_cast<bool>(out.write(blob.data(), static_cast<std::streamsize>(size)));
+            }
+            if (ok) std::filesystem::rename(tmp, kPipelineCachePath, ec);
+            if (!ok || ec) std::filesystem::remove(tmp, ec);
         }
     }
     vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
