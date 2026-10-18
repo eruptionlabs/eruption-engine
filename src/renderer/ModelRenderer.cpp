@@ -2471,11 +2471,16 @@ void ModelRenderer::offsetInstancesY(const std::vector<std::pair<uint32_t, float
 
 int ModelRenderer::animIndexOf(uint32_t instance) {
     if (m_animatedNodes.empty()) return -1;
-    if (m_animByInstanceCount != m_animatedNodes.size()) {
+    // A lista so' cresce no fim (copyAnimatedNode): o indice acompanha so' o que
+    // entrou. Refazer tudo a cada copia era quadratico no scatter de um modelo
+    // animado (milhares de copias num grupo); encolheu = refaz inteiro.
+    if (m_animByInstanceCount > m_animatedNodes.size()) {
         m_animByInstance.clear();
-        for (size_t k = 0; k < m_animatedNodes.size(); ++k) m_animByInstance[m_animatedNodes[k].instanceIndex] = k;
-        m_animByInstanceCount = m_animatedNodes.size();
+        m_animByInstanceCount = 0;
     }
+    for (size_t k = m_animByInstanceCount; k < m_animatedNodes.size(); ++k)
+        m_animByInstance[m_animatedNodes[k].instanceIndex] = k;
+    m_animByInstanceCount = m_animatedNodes.size();
     const auto it = m_animByInstance.find(instance);
     return it == m_animByInstance.end() ? -1 : static_cast<int>(it->second);
 }
