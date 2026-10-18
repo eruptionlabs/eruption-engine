@@ -69,6 +69,8 @@ layout(location = 8) out flat uint v_mrahwTexIndex;
 layout(location = 9) out vec3 v_billRight;
 layout(location = 10) out vec3 v_billUp;
 layout(location = 11) out vec2 v_quad;
+// Instancia = indice em getSortedSprites: a luz principal dela (contraluz).
+layout(location = 12) out flat uint v_instance;
 #endif
 
 void main() {
@@ -127,6 +129,7 @@ void main() {
     v_billRight = billRight;
     v_billUp = billUp;
     v_quad = a_position.xy;
+    v_instance = uint(gl_InstanceIndex);
 #endif
 
     if ((i_flags & 4u) == 0u) {

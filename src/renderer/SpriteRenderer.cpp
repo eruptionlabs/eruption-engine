@@ -88,6 +88,13 @@ void SpriteRenderer::shutdown() {
         m_instanceBuffer = VK_NULL_HANDLE;
         m_instanceAlloc = VK_NULL_HANDLE;
     }
+    if (m_spriteLightBuffer != VK_NULL_HANDLE) {
+        vmaUnmapMemory(m_ctx->allocator(), m_spriteLightAlloc);
+        vmaDestroyBuffer(m_ctx->allocator(), m_spriteLightBuffer, m_spriteLightAlloc);
+        m_spriteLightBuffer = VK_NULL_HANDLE;
+        m_spriteLightAlloc = VK_NULL_HANDLE;
+        m_mappedSpriteLights = nullptr;
+    }
     if (m_frameUboBuffer != VK_NULL_HANDLE) {
         vmaUnmapMemory(m_ctx->allocator(), m_frameUboAlloc);
         vmaDestroyBuffer(m_ctx->allocator(), m_frameUboBuffer, m_frameUboAlloc);
@@ -180,7 +187,24 @@ bool SpriteRenderer::createBuffers() {
     }
     vmaMapMemory(m_ctx->allocator(), m_frameUboAlloc, &m_mappedFrameUbo);
 
+    if (!m_ctx->createBuffer(VkDeviceSize(m_maxInstances) * sizeof(SpriteLight), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                             VMA_MEMORY_USAGE_CPU_TO_GPU, m_spriteLightBuffer, m_spriteLightAlloc)) {
+        return false;
+    }
+    vmaMapMemory(m_ctx->allocator(), m_spriteLightAlloc, &m_mappedSpriteLights);
+    std::memset(m_mappedSpriteLights, 0, size_t(m_maxInstances) * sizeof(SpriteLight));
     return true;
+}
+
+void SpriteRenderer::uploadSpriteLights(const std::vector<SpriteLight>& lights) {
+    if (!m_mappedSpriteLights) return;
+    const size_t n = std::min<size_t>(lights.size(), m_maxInstances);
+    if (n) std::memcpy(m_mappedSpriteLights, lights.data(), n * sizeof(SpriteLight));
+    // O resto zera: um sprite que saiu da lista nao herda a luz de outro.
+    if (n < m_spriteLightsUsed)
+        std::memset(static_cast<char*>(m_mappedSpriteLights) + n * sizeof(SpriteLight), 0,
+                    (m_spriteLightsUsed - n) * sizeof(SpriteLight));
+    m_spriteLightsUsed = n;
 }
 
 bool SpriteRenderer::createDescriptors() {
@@ -196,22 +220,32 @@ bool SpriteRenderer::createDescriptors() {
                             VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT |
                             VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
 
+    // Binding 1: luz principal por sprite (contraluz no sprite.frag).
+    VkDescriptorSetLayoutBinding lightBinding{};
+    lightBinding.binding = 1;
+    lightBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    lightBinding.descriptorCount = 1;
+    lightBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    const VkDescriptorSetLayoutBinding frameBindings[2] = {uboBinding, lightBinding};
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &uboBinding;
+    layoutInfo.bindingCount = 2;
+    layoutInfo.pBindings = frameBindings;
     VK_CHECK(vkCreateDescriptorSetLayout(m_ctx->device(), &layoutInfo, nullptr, &m_frameUboLayout));
 
-    VkDescriptorPoolSize poolSizes[2] = {};
+    VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = 10;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[1].descriptorCount = 10;
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSizes[2].descriptorCount = 2;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.maxSets = 10;
-    poolInfo.poolSizeCount = 2;
+    poolInfo.poolSizeCount = 3;
     poolInfo.pPoolSizes = poolSizes;
     VK_CHECK(vkCreateDescriptorPool(m_ctx->device(), &poolInfo, nullptr, &m_descriptorPool));
 
@@ -236,7 +270,15 @@ bool SpriteRenderer::createDescriptors() {
     write.descriptorCount = 1;
     write.pBufferInfo = &bufferInfo;
 
-    vkUpdateDescriptorSets(m_ctx->device(), 1, &write, 0, nullptr);
+    VkDescriptorBufferInfo lightInfo{};
+    lightInfo.buffer = m_spriteLightBuffer;
+    lightInfo.offset = 0;
+    lightInfo.range = VK_WHOLE_SIZE;
+    VkWriteDescriptorSet writes[2] = {write, write};
+    writes[1].dstBinding = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[1].pBufferInfo = &lightInfo;
+    vkUpdateDescriptorSets(m_ctx->device(), 2, writes, 0, nullptr);
 
     // Shadow Descriptor Set (binding 0: shadowAtlas, binding 1: nextShadowAtlas)
     VkDescriptorSetLayoutBinding shadowBindings[2]{};
