@@ -15,6 +15,7 @@ layout(location = 8) in flat uint v_mrahwTexIndex;
 layout(location = 9) in vec3 v_billRight;
 layout(location = 10) in vec3 v_billUp;
 layout(location = 11) in vec2 v_quad;
+layout(location = 12) in flat uint v_instance;
 
 layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
@@ -48,7 +49,26 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     float u_normalSmoothing;
     float u_defaultRoughness;
     float u_defaultMetallic;
+    vec4 u_sunDir;        // xyz = direcao de viagem da luz do sol, w = intensidade
+    vec4 u_sunColor;
 };
+
+// Luz pontual principal de cada sprite (Engine::spriteDominantLights; a
+// mesma escolha da sombra planar das luzes). strength 0 = nenhuma perto.
+struct SpriteLight {
+    vec4 posStrength; // xyz = posicao, w = forca (intensidade x atenuacao no corpo)
+    vec4 color;
+};
+layout(std430, set = 1, binding = 1) readonly buffer SpriteLights { SpriteLight u_spriteLights[]; };
+
+// CONTRALUZ (rim light): a luz que vem de TRAS do boneco acende a borda da
+// silhueta e o recorta de um fundo escuro - a terceira luz do trio classico
+// de iluminacao (key/fill/back). Sprite nao tem geometria de borda: a borda
+// sai do alfa da propria arte, comparando o texel com os vizinhos a ~2,5 px
+// de tela. Forca = luz vindo de tras do billboard em direcao a' camera.
+float contraluz(vec3 toLight, vec3 toCam) {
+    return smoothstep(-0.15, 0.75, -dot(normalize(toLight), toCam));
+}
 
 float srgbToLinear(float c) {
     return (c <= 0.04045) ? (c / 12.92) : pow((c + 0.055) / 1.055, 2.4);
@@ -75,6 +95,8 @@ mat3 computeTBN(vec3 N, vec3 worldPos, vec2 uv) {
 
 void main() {
     vec4 albedo = texture(nonuniformEXT(u_textures[v_texIndex]), v_uv);
+    // Derivadas antes de qualquer discard (depois dele o quad fica incompleto).
+    const vec2 rimDx = dFdx(v_uv) * 2.5, rimDy = dFdy(v_uv) * 2.5;
 
     // bit 8: usePalette
     if ((v_flags & 256u) != 0) {
@@ -148,5 +170,23 @@ void main() {
     // pipeline unless a real MRAH-W map is bound.
     o_pbr = vec4(0.5, roughness, metallic, 0.0);
     o_materialId = matId;
-    o_emissive = vec4(0.0, 0.0, 0.0, 1.0);
+    // Borda da silhueta: algum vizinho transparente. Paleta (bit 256) le' o
+    // indice, nao o alfa: indice 0 = transparente.
+    vec3 rim = vec3(0.0);
+    if ((v_flags & 256u) == 0u) {
+        float minA = min(min(texture(nonuniformEXT(u_textures[v_texIndex]), v_uv + rimDx).a, texture(nonuniformEXT(u_textures[v_texIndex]), v_uv - rimDx).a),
+                         min(texture(nonuniformEXT(u_textures[v_texIndex]), v_uv + rimDy).a, texture(nonuniformEXT(u_textures[v_texIndex]), v_uv - rimDy).a));
+        float edge = 1.0 - smoothstep(0.05, 0.6, minA);
+        if (edge > 0.0) {
+            const vec3 toCam = normalize(u_cameraPos - v_worldPos);
+            SpriteLight l = u_spriteLights[v_instance];
+            if (l.posStrength.w > 0.0)
+                rim += l.color.rgb * l.posStrength.w * contraluz(l.posStrength.xyz - v_worldPos, toCam) * 0.35;
+            // Sol (fica fora da lista): mais fraco, so' de dia.
+            if (u_sunDir.w > 0.0)
+                rim += u_sunColor.rgb * u_sunDir.w * contraluz(-u_sunDir.xyz, toCam) * 0.12;
+            rim *= edge * albedo.rgb * 2.0;
+        }
+    }
+    o_emissive = vec4(rim, 1.0);
 }

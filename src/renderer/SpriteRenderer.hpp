@@ -190,6 +190,10 @@ public:
     // Expose the shared FrameUBO descriptor so other G-Buffer pipelines
     // (model, terrain) can bind the same set 1 and access camera/time/POM data.
     VkDescriptorSetLayout frameUboLayout() const { return m_frameUboLayout; }
+    // Luz principal de cada sprite (Engine::spriteDominantLights, indice =
+    // instancia): o sprite.frag le' para a contraluz da borda (binding 1 do
+    // set do FrameUBO). Sprites alem da capacidade ficam sem luz.
+    void uploadSpriteLights(const std::vector<SpriteLight>& lights);
     VkDescriptorSet frameUboSet() const { return m_frameUboSet; }
 
     // CAMADA DE SPRITES do FSR (ver SpriteLayer). createLayerPipelines recebe
@@ -243,6 +247,10 @@ private:
     VkBuffer m_frameUboBuffer = VK_NULL_HANDLE;
     VmaAllocation m_frameUboAlloc = VK_NULL_HANDLE;
     void* m_mappedFrameUbo = nullptr;
+    VkBuffer m_spriteLightBuffer = VK_NULL_HANDLE; // SpriteLight por instancia (m_maxInstances)
+    VmaAllocation m_spriteLightAlloc = VK_NULL_HANDLE;
+    void* m_mappedSpriteLights = nullptr;
+    size_t m_spriteLightsUsed = 0;
 
     VkDescriptorSetLayout m_frameUboLayout = VK_NULL_HANDLE;
     VkDescriptorSet m_frameUboSet = VK_NULL_HANDLE;

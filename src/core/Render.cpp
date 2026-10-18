@@ -775,6 +775,7 @@ void Engine::render() {
     }
     // Depois das luzes de efeito deste quadro: elas tambem projetam sombra de sprite.
     updateSpriteDominantLights();
+    m_spriteRenderer.uploadSpriteLights(spriteDominantLights()); // contraluz no sprite.frag (M9)
     m_vulkan.writeTimestamp(cmd, 2, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     m_gbuffer.beginPass(cmd);
     // PIPELINE STATISTICS em volta do passe de GEOMETRIA: e' aqui que se
