@@ -1018,6 +1018,9 @@ int world_set_focus(lua_State* L) {
     s.focusDistance = glm::max(glm::dot(p - c.position(), frente), 0.01f);
     s.focusAperture = lua_isnoneornil(L, 2) ? -1.0f : static_cast<float>(luaL_checknumber(L, 2));
     s.focusForeground = lua_isnoneornil(L, 3) ? true : lua_toboolean(L, 3) != 0;
+    // Faixa nitida e teto do borrao (PostSettings::focusBand/focusMaxBlur).
+    s.focusBand = lua_isnoneornil(L, 4) ? -1.0f : std::max(0.0f, static_cast<float>(luaL_checknumber(L, 4)));
+    s.focusMaxBlur = lua_isnoneornil(L, 5) ? -1.0f : std::max(0.0f, static_cast<float>(luaL_checknumber(L, 5)));
     s.focusOverride = true;
     return 0;
 }
@@ -1341,9 +1344,12 @@ declare world: {
     -- Where the lens focuses: a point of the scene, instead of the automatic
     -- \"how far did the player zoom in\" curve. `aperture` is blur per unit of
     -- depth (0.15 keeps a stage sharp and softens the background);
-    -- `foreground` also blurs what sits IN FRONT of that point. No point at
-    -- all gives the lens back to the automatic focus.
-    set_focus: (point: vector?, aperture: number?, foreground: boolean?) -> (),
+    -- `foreground` also blurs what sits IN FRONT of that point. `band` keeps
+    -- that many world units on each side of the point fully sharp (a whole
+    -- group, not a single plane); `max_blur` is the blur limit in pixels at
+    -- full resolution (default 3; above it a cheap wide blur takes over). No
+    -- point at all gives the lens back to the automatic focus.
+    set_focus: (point: vector?, aperture: number?, foreground: boolean?, band: number?, max_blur: number?) -> (),
     -- Name of the map being played.
     map: () -> string,
     -- Goes to another map (a door, a cave); the player appears at `position`

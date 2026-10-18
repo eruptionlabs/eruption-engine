@@ -13,7 +13,10 @@ const float weights[TAPS] = float[](0.00874, 0.01799, 0.03316, 0.05467, 0.08065,
 void main() {
     vec2 texel = 1.0 / vec2(textureSize(scene_tex, 0));
     vec4 coc_center = texture(coc_tex, in_uv);
-    float coc_max = coc_center.a;
+    // O passo entre amostras para em 3 px mesmo com teto maior: acima disso
+    // as 15 amostras se espalhavam em vez de borrar (pente). O borrao maior
+    // vem da cadeia em 1/4 da resolucao (dof_far_*.frag).
+    float coc_max = min(coc_center.a, 3.0);
     
     if (coc_max < 0.1) {
         out_blur = texture(scene_tex, in_uv);

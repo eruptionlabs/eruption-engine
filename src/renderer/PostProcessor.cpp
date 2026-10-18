@@ -96,6 +96,8 @@ void PostProcessor::shutdown() {
     vkDestroyPipeline(device, m_blurHPipeline, nullptr);
     vkDestroyPipeline(device, m_blurVPipeline, nullptr);
     vkDestroyPipeline(device, m_cocCompositePipeline, nullptr);
+    vkDestroyPipeline(device, m_dofFarDownPipeline, nullptr);
+    vkDestroyPipeline(device, m_dofFarBlurPipeline, nullptr);
     vkDestroyPipeline(device, m_compositePipeline, nullptr);
     vkDestroyPipeline(device, m_copyPipeline, nullptr);
     
@@ -135,6 +137,7 @@ void PostProcessor::shutdown() {
     destroyImg(m_blurVImage, m_blurVAlloc, m_blurVView);
     destroyImg(m_outputImage, m_outputAlloc, m_outputView);
     destroyImg(m_weatherImage, m_weatherAlloc, m_weatherView);
+    for (uint32_t i = 0; i < kDofFarImages; i++) destroyImg(m_dofFarImages[i], m_dofFarAllocs[i], m_dofFarViews[i]);
 
     for (uint32_t i = 0; i < BLOOM_MIPS; i++) {
         destroyImg(m_bloomDownImages[i], m_bloomDownAllocs[i], m_bloomDownViews[i]);
@@ -204,6 +207,22 @@ void PostProcessor::createImages() {
         bw = std::max(1u, bw / 2);
         bh = std::max(1u, bh / 2);
     }
+
+    // Borrao grande do DoF: RGBA16F mesmo onde a cadeia e' B10G11R11 (o peso
+    // do CoC vai no alfa). 1/4 da resolucao: 3 imagens somam 3/16 de uma.
+    imageInfo.extent = {std::max(1u, m_width / 4), std::max(1u, m_height / 4), 1};
+    imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    for (uint32_t i = 0; i < kDofFarImages; i++) {
+        vmaCreateImage(m_ctx->allocator(), &imageInfo, &allocInfo, &m_dofFarImages[i], &m_dofFarAllocs[i], nullptr);
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_dofFarImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = imageInfo.format;
+        viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_dofFarViews[i]);
+    }
+    imageInfo.format = postFmt;
 }
 
 void PostProcessor::createDescriptors() {
@@ -519,6 +538,14 @@ void PostProcessor::createPipelines() {
     m_blurHPipeline = createFullscreenPipeline(blurHFrag, m_width, m_height);
     m_blurVPipeline = createFullscreenPipeline(blurVFrag, m_width, m_height);
     m_cocCompositePipeline = createFullscreenPipeline(cocCompFrag, m_width, m_height);
+    // Sem o SPIR-V do borrao grande, o DoF fica so' com o pequeno (teto 3 px).
+    auto farDownFrag = ShaderCompiler::loadSPIRV("postprocess/dof_far_down.frag.spv");
+    auto farBlurFrag = ShaderCompiler::loadSPIRV("postprocess/dof_far_blur.frag.spv");
+    if (!farDownFrag.empty() && !farBlurFrag.empty()) {
+        const uint32_t qw = std::max(1u, m_width / 4), qh = std::max(1u, m_height / 4);
+        m_dofFarDownPipeline = createFullscreenPipeline(farDownFrag, qw, qh, false, VK_FORMAT_R16G16B16A16_SFLOAT);
+        m_dofFarBlurPipeline = createFullscreenPipeline(farBlurFrag, qw, qh, false, VK_FORMAT_R16G16B16A16_SFLOAT);
+    }
     m_compositePipeline = createFullscreenPipeline(compositeFrag, m_width, m_height);
     m_copyPipeline = createFullscreenPipeline(copyFrag, m_width, m_height, false, m_ctx->swapFormat());
 
@@ -1151,6 +1178,7 @@ if (!m_ctx) return;
             float near_plane;
             float far_plane;
             int enable_foreground;
+            float focus_band;
         } cocPush;
         // Da autoria por zoom (lente de referencia de 60 graus) para o espaco
         // do shader (profundidade real) - ver a nota em PostProcessor.hpp. O
@@ -1177,7 +1205,11 @@ if (!m_ctx) return;
                                    ? settings.focusAperture
                                    : settings.cocAperture;
         cocPush.aperture = abertura * 0.05f;
-        cocPush.max_blur = settings.cocMaxBlur;
+        const float teto = (settings.focusOverride && settings.focusMaxBlur >= 0.0f) ? settings.focusMaxBlur
+                                                                                      : settings.cocMaxBlur;
+        cocPush.max_blur = teto;
+        cocPush.focus_band = (settings.focusOverride && settings.focusBand >= 0.0f) ? settings.focusBand
+                                                                                   : settings.cocFocusBand;
         cocPush.zoom_factor = settings.cocZoomFactor;
         cocPush.near_plane = nearPlane;
         cocPush.far_plane = farPlane;
@@ -1208,9 +1240,42 @@ if (!m_ctx) return;
         vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_blurVImage);
 
+        // Pass 2c: borrao grande em 1/4 da resolucao, so' com teto acima de
+        // 3 px (abaixo disso o composite nem le' a imagem). Conjuntos 27-29.
+        const bool farBlur = teto > 3.0f && m_dofFarDownPipeline != VK_NULL_HANDLE &&
+                             m_dofFarBlurPipeline != VK_NULL_HANDLE;
+        if (farBlur) {
+            const uint32_t qw = std::max(1u, m_width / 4), qh = std::max(1u, m_height / 4);
+            barrierToColorAttach(cmd, m_ctx, m_dofFarImages[0]);
+            updateDescriptorSet(27, hdrInput, m_cocView);
+            beginFullscreenPass(cmd, m_dofFarViews[0], qw, qh);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_dofFarDownPipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(27), 0, nullptr);
+            const float downPush[2] = {teto, 3.0f};
+            vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(downPush), downPush);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkc::cmdEndRendering(cmd);
+            barrierToShaderRead(cmd, m_ctx, m_dofFarImages[0]);
+            for (uint32_t pass = 0; pass < 2; pass++) {
+                const uint32_t src = pass == 0 ? 0u : 1u, dst = pass == 0 ? 1u : 2u;
+                barrierToColorAttach(cmd, m_ctx, m_dofFarImages[dst]);
+                updateDescriptorSet(28 + pass, m_dofFarViews[src]);
+                beginFullscreenPass(cmd, m_dofFarViews[dst], qw, qh);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_dofFarBlurPipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(28 + pass), 0, nullptr);
+                const float dir[2] = {pass == 0 ? 1.0f : 0.0f, pass == 0 ? 0.0f : 1.0f};
+                vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(dir), dir);
+                vkCmdDraw(cmd, 3, 1, 0, 0);
+                vkc::cmdEndRendering(cmd);
+                barrierToShaderRead(cmd, m_ctx, m_dofFarImages[dst]);
+            }
+        }
+
         // Pass 3: Composite
         barrierToColorAttach(cmd, m_ctx, m_dofImage);
-        updateDescriptorSet(4, hdrInput, m_blurVView, m_cocView);
+        // Binding 3 sempre escrito: sem o borrao grande, a imagem do borrao
+        // pequeno no lugar (o shader nao a le').
+        updateDescriptorSet(4, hdrInput, m_blurVView, m_cocView, farBlur ? m_dofFarViews[2] : m_blurVView);
         beginFullscreenPass(cmd, m_dofView, m_width, m_height);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cocCompositePipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(4), 0, nullptr);
@@ -1219,7 +1284,7 @@ if (!m_ctx) return;
             float max_blur;
             float visualize_coc;
         } compPush;
-        compPush.max_blur = settings.cocMaxBlur;
+        compPush.max_blur = farBlur ? teto : std::min(teto, 3.0f);
         compPush.visualize_coc = settings.visualizeCoC ? 1.0f : 0.0f;
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(compPush), &compPush);
         
@@ -1534,6 +1599,7 @@ void PostProcessor::PostSettings::loadFromJson(const nlohmann::json& j) {
     cocFocalDistance = j.value("coc_focal_distance", cocFocalDistance);
     cocAperture = j.value("coc_aperture", cocAperture);
     cocMaxBlur = j.value("coc_max_blur", cocMaxBlur);
+    cocFocusBand = j.value("coc_focus_band", cocFocusBand);
     // Overrides de bancada (varredura de valores de DoF sem editar o json,
     // que e' compartilhado): ERUPTION_TEST_COC_FOCAL / _APERTURE / _MAXBLUR.
     if (const char* e = std::getenv("ERUPTION_TEST_COC_FOCAL")) cocFocalDistance = std::strtof(e, nullptr);
