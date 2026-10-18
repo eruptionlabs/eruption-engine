@@ -13,7 +13,16 @@ layout(push_constant) uniform PushConstants {
     float near_plane;
     float far_plane;
     int enable_foreground;
+    // FAIXA EM FOCO (world.set_focus): ate' `focus_band` unidades de cada
+    // lado do plano de foco o CoC e' zero, e o borrao so' comeca depois. Sem
+    // ela o corpo de um grupo inteiro nunca fica cravado: a frente e as
+    // costas dele ja' estao fora do plano. 0 = o CoC de antes.
+    float focus_band;
 } push;
+
+float bandDist(float z, float f) {
+    return max(abs(z - f) - push.focus_band, 0.0);
+}
 
 float linearize_depth(float d) {
     // Vulkan [0, 1] depth linearization
@@ -29,13 +38,13 @@ void main() {
     
     // Artistic CoC: Direct scale by distance from focal plane
     // We scale by apt which now represents a "blur per unit of distance"
-    float coc = abs(z - fd) * apt;
+    float coc = bandDist(z, fd) * apt;
     
     // Chromatic aberration: each channel has a slightly different focal plane or scale
     // Red focuses slightly further, Blue slightly closer
-    float coc_r = abs(z - (fd * 1.02)) * apt;
+    float coc_r = bandDist(z, fd * 1.02) * apt;
     float coc_g = coc;
-    float coc_b = abs(z - (fd * 0.98)) * apt;
+    float coc_b = bandDist(z, fd * 0.98) * apt;
     
     if (push.enable_foreground == 0) {
         if (z < fd) {

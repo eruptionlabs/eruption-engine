@@ -63,6 +63,10 @@ public:
         float cocFocalDistance = 230.0f;
         float cocAperture = 0.05f;
         float cocMaxBlur = 3.0f;
+        // Faixa em foco (unidades de mundo de cada lado do plano de foco, CoC
+        // zero dentro dela) - coc_map.frag. Teto acima de 3 px liga o borrao
+        // grande em 1/4 da resolucao (dof_far_*.frag).
+        float cocFocusBand = 0.0f;
         float cocZoomFactor = 1.0f;
         bool cocEnableForeground = true;
         bool visualizeCoC = false;
@@ -85,6 +89,8 @@ public:
         float focusDistance = 0.0f;
         float focusAperture = -1.0f;   // < 0: mantem a abertura do mapeamento
         bool focusForeground = true;   // borra tambem o que esta' na FRENTE
+        float focusBand = -1.0f;       // < 0: mantem cocFocusBand
+        float focusMaxBlur = -1.0f;    // < 0: mantem cocMaxBlur
         // Visualizacao crua do G-buffer ligada (checkbox "Show Normal (RGB)" e
         // irmaos). Faz o composite pular fog/tonemap/bloom para a leitura nao
         // mudar com a hora do dia - ver post_composite.frag.
@@ -279,6 +285,14 @@ private:
     VkImageView m_weatherView = VK_NULL_HANDLE;
 
     VkPipeline m_cocPipeline = VK_NULL_HANDLE;
+    // Borrao grande do DoF em 1/4 da resolucao: [0] cena pesada pelo CoC,
+    // [1] horizontal, [2] vertical (dof_far_*.frag).
+    static constexpr uint32_t kDofFarImages = 3;
+    VkImage m_dofFarImages[kDofFarImages] = {};
+    VmaAllocation m_dofFarAllocs[kDofFarImages] = {};
+    VkImageView m_dofFarViews[kDofFarImages] = {};
+    VkPipeline m_dofFarDownPipeline = VK_NULL_HANDLE;
+    VkPipeline m_dofFarBlurPipeline = VK_NULL_HANDLE;
     VkPipeline m_blurHPipeline = VK_NULL_HANDLE;
     VkPipeline m_blurVPipeline = VK_NULL_HANDLE;
     VkPipeline m_cocCompositePipeline = VK_NULL_HANDLE;
