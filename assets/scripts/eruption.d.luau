@@ -39,6 +39,16 @@ declare vars: {
 declare ui: {
     -- Shows a message on screen for some seconds (default 3).
     message: (text: string, seconds: number?) -> (),
+    -- Text of the box under the minimap instead of map name, cell and time;
+    -- nil goes back to the default.
+    minimap_label: (text: string?) -> (),
+    -- Position and size of an element of the loaded UI file, in percent of
+    -- its parent (or of the screen), like CSS left/top/width/height. Without
+    -- width/height the file's size stays; left = nil gives it back to the CSS.
+    place: (selector: string, left: number?, top: number?, width: number?, height: number?) -> (),
+    -- Crop of an image element in texture coordinates (0..1): a window into a
+    -- bigger image. u0 = nil shows the whole image again.
+    image_rect: (selector: string, u0: number?, v0: number?, u1: number?, v1: number?) -> (),
     -- Character bars (life, mana) and the minimap with the map name and time.
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),
@@ -88,8 +98,26 @@ declare world: {
     look: () -> string,
     -- `preset` may also be a TABLE with the same fields as a preset (only
     -- the given ones change): a game's own look without a preset in the engine.
+    -- Fields include saturation, contrast, god_ray_*, vignette (strength,
+    -- 0 = off), vignette_softness, shadow_tint / highlight_tint (a color as
+    -- vector or {r, g, b}) with shadow_tint_strength / highlight_tint_strength.
     set_look: (preset: string | { [string]: any }) -> boolean,
     set_dof: (on: boolean) -> (),
+    -- World time scale (hit-stop, slow motion): sprite animation, effects,
+    -- weather and the scripts' dt run scaled (0 = frozen). `seconds` counts in
+    -- full time and goes back to 1 by itself (0 or none = until the next call).
+    -- Sound and the screen fade/flash keep going.
+    set_time_scale: (scale: number, seconds: number?) -> (),
+    time_scale: () -> number,
+    -- Walk grid of the engine (block_slopes and solid objects included):
+    -- whether a character of `radius` can stand at (x, z).
+    walkable: (x: number, z: number, radius: number?) -> boolean,
+    -- Path on the ground from `from` to `to` (smoothed), or nil if none.
+    path: (from: vector, to: vector, radius: number?) -> { vector }?,
+    -- The game's own fog: {color = vector or {r, g, b}, start, end, opacity,
+    -- height, falloff} (the map .env "fog" block fields). Wins over the map's
+    -- and the weather's fog until the next map change; nil gives control back.
+    set_fog: (fog: { [string]: any }?) -> (),
     -- Motion blur and chromatic aberration come from the quality preset; a
     -- game can tune them as art direction. `amount`: strength (engine default
     -- 1 for the blur, 0.5 for the fringe).
@@ -103,9 +131,12 @@ declare world: {
     -- Where the lens focuses: a point of the scene, instead of the automatic
     -- \"how far did the player zoom in\" curve. `aperture` is blur per unit of
     -- depth (0.15 keeps a stage sharp and softens the background);
-    -- `foreground` also blurs what sits IN FRONT of that point. No point at
-    -- all gives the lens back to the automatic focus.
-    set_focus: (point: vector?, aperture: number?, foreground: boolean?) -> (),
+    -- `foreground` also blurs what sits IN FRONT of that point. `band` keeps
+    -- that many world units on each side of the point fully sharp (a whole
+    -- group, not a single plane); `max_blur` is the blur limit in pixels at
+    -- full resolution (default 3; above it a cheap wide blur takes over). No
+    -- point at all gives the lens back to the automatic focus.
+    set_focus: (point: vector?, aperture: number?, foreground: boolean?, band: number?, max_blur: number?) -> (),
     -- Name of the map being played.
     map: () -> string,
     -- Goes to another map (a door, a cave); the player appears at `position`
@@ -125,6 +156,14 @@ declare game: {
     load: (slot: (string | number)?) -> boolean,
     has_save: (slot: (string | number)?) -> boolean,
     delete_save: (slot: (string | number)?) -> boolean,
+    -- Starts the game over: scripts from scratch (variables cleared, objects
+    -- made by scripts removed) on the project's first map. Happens after the
+    -- current frame.
+    restart: () -> (),
+    -- Player settings (volumes, speed...), kept apart from saved games.
+    save_settings: (settings: { [string]: any }) -> boolean,
+    -- The table last saved with save_settings, or an empty table.
+    settings: () -> { [string]: any },
 }
 
 declare player: {
@@ -149,6 +188,14 @@ declare player: {
 }
 
 declare characters: {
+    -- Reads and prepares sprite sheets off the frame, so a character added
+    -- later with one of them only uploads it. One file or a list; still valid
+    -- on the next map (call it with world.preload_map).
+    preload: (sprites: string | { string }) -> (),
+    -- Shadow of every character: "planar" (cast by the sun), "circle" (a
+    -- contact disc) or "lights" (the disc plus a shadow cast by each of the
+    -- two strongest nearby lights). No argument goes back to the engine default.
+    set_shadow: (kind: string?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,
@@ -203,6 +250,10 @@ declare camera: {
     -- player leaves the center near the border, as in a 2D RPG). Same as
     -- "keep_inside_map" in the project's camera block.
     keep_inside_map: (on: boolean) -> (),
+    -- What stands between the camera and the player (a wall, a cliff) is
+    -- drawn as a dither pattern within `radius` world units of the player on
+    -- screen, down to `opacity` (default 0.25) at the center. 0 turns it off.
+    see_through: (radius: number, opacity: number?) -> (),
 }
 
 -- Presentation of a hit: what makes a blow feel like it landed. The engine
@@ -217,8 +268,12 @@ declare fx: {
     number: (position: vector, text: string, color: vector?, seconds: number?, rise: number?, size: number?) -> (),
     -- Full-screen color going from one opacity to another: the battle wipe.
     fade: (color: vector, from: number, to: number, seconds: number?) -> (),
-    -- Flash: full opacity (or `strength`) fading to nothing.
+    -- Flash: full opacity (or `strength`) fading to nothing. Its own layer:
+    -- it does not cancel a fade or a dim in progress.
     flash: (color: vector?, seconds: number?, strength: number?) -> (),
+    -- Darkens only the SCENE (the interface stays on top, untouched): blends
+    -- toward `color` by `strength` (0..1), animating from the current value.
+    dim: (color: vector?, strength: number, seconds: number?) -> (),
     fading: () -> boolean,
 }
 
@@ -232,6 +287,10 @@ declare input: {
 -- Models placed in the map.
 declare models: {
     count: () -> number,
+    -- Reads .glb files off the frame (embedded textures decoded), so placing
+    -- them later only uploads to the GPU. One file or a list; still valid on
+    -- the next map (call it with world.preload_map).
+    preload: (files: string | { string }) -> (),
     -- Index of the first model with this name, or nil.
     find: (name: string) -> number?,
     name: (model: Model) -> string,
@@ -276,18 +335,32 @@ declare models: {
 -- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a
 -- sound return a number for audio.stop / audio.playing.
 declare audio: {
-    play: (file: string, volume: number?) -> number,
+    -- `options`: a volume number, or {volume, pitch, range, min, falloff, group, loop}.
+    -- pitch: 1 = as recorded, 2 = an octave up. group: a bus with its own volume.
+    play: (file: string, options: (number | { [string]: any })?, pitch: number?) -> number,
     -- At a point or model: quieter far away (`range` units, default 300), panned to its side.
-    play_at: (file: string, place: vector | Model, volume: number?, range: number?) -> number,
-    loop: (file: string, volume: number?) -> number,
-    loop_at: (file: string, place: vector | Model, volume: number?, range: number?) -> number,
+    -- `min`: full volume up to this distance; `falloff`: "linear", "inverse" or "exponential".
+    play_at: (file: string, place: vector | Model, options: (number | { [string]: any })?, range: number?, pitch: number?) -> number,
+    loop: (file: string, options: (number | { [string]: any })?, pitch: number?) -> number,
+    loop_at: (file: string, place: vector | Model, options: (number | { [string]: any })?, range: number?, pitch: number?) -> number,
     stop: (sound: number, fade_seconds: number?) -> (),
     playing: (sound: number) -> boolean,
-    -- One music at a time; a new one cross-fades (default 1 s).
-    music: (file: string, volume: number?, fade_seconds: number?) -> (),
+    -- Decodes a file in the background so its first play starts at once.
+    preload: (file: string) -> boolean,
+    -- One music at a time; a new one cross-fades (default 1 s). With a second
+    -- file, the first is an intro and the second loops after it with no gap.
+    -- As a table: {volume, fade, loop = file, resume = true} (resume: from where
+    -- this track last stopped).
+    music: (file: string, options: (number | string | { [string]: any })?, fade_seconds: number?) -> (),
     stop_music: (fade_seconds: number?) -> (),
-    -- Master volume, 1 = normal.
-    set_volume: (volume: number) -> (),
+    -- Volume of the music that is playing, without restarting it.
+    music_volume: (volume: number, fade_seconds: number?) -> (),
+    -- set_volume(volume): master volume, 1 = normal. set_volume(sound, volume,
+    -- fade_seconds?): a sound that is already playing.
+    set_volume: (sound_or_volume: number, volume: number?, fade_seconds: number?) -> (),
+    set_pitch: (sound: number, pitch: number) -> (),
+    -- Volume of a group (bus); "music" is the group of the music.
+    group_volume: (group: string, volume: number, fade_seconds: number?) -> (),
 }
 
 -- Point lights of the map. Indices start at 1.
@@ -304,6 +377,9 @@ declare lights: {
     set_enabled: (index: number, enabled: boolean) -> (),
     turn_on: (index: number) -> (),
     turn_off: (index: number) -> (),
+    -- Whether this light casts sprite shadows (characters.set_shadow("lights")).
+    -- Turn it off on a light the game moves along with the party.
+    set_sprite_shadow: (index: number, on: boolean) -> (),
 }
 
 -- Particle effects (Window > Effects). `name` is an effect of the game
@@ -312,7 +388,10 @@ declare lights: {
 declare vfx: {
     -- Starts the effect at a world position; returns its id (0 = not found).
     -- `scale` multiplies size, speed and forces; `yaw` turns it in degrees.
-    play: (name: string, position: vector, scale: number?, yaw: number?) -> number,
+    -- As a table: {scale, yaw, color = vector (recolors, keeping each key's
+    -- brightness), tint = vector (multiplies), offsets = {emitter = vector}
+    -- (meters, effect space)} - color variants without one file per color.
+    play: (name: string, position: vector, options: (number | { [string]: any })?, yaw: number?) -> number,
     -- Stops spawning (the live particles finish); `immediate` clears them now.
     stop: (id: number, immediate: boolean?) -> (),
     -- Moves a playing effect (a trail follows the object this way).
