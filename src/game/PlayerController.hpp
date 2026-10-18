@@ -89,6 +89,9 @@ private:
     void loadHairSprite();
     void updatePalettes();
     Engine* m_engine = nullptr;
+    // Passo recusado: tenta girado (deslizar na parede) - ver PlayerController.cpp.
+    template <class Walk>
+    Vec3 slideAround(const Vec3& move, float cellSize, const Walk& walkable) const;
     Vec3 m_pos = Vec3(0.0f);
     bool m_isMoving = false;
     float m_yaw = 0.0f;
