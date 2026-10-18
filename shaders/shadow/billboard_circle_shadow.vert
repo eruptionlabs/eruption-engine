@@ -54,17 +54,25 @@ layout(push_constant) uniform PushConstants {
     vec2 circleParams; // x = dilation/radius, y = softness
 };
 
-layout(location = 0) out vec2 v_uv;
-layout(location = 1) out flat uint v_flags;
-layout(location = 2) out float v_softness;
+// DECAL NO CHAO (nao mais um quadro deitado no pe'). O quadro plano a +0,12 do
+// pe' brigava com o chao (z-fight em listras) e sumia aos pedacos onde o chao
+// sob a pegada nao e' plano: declive, degrau, laje mais alta que a grade. Agora
+// o vertice so' cobre, na tela, a caixa da pegada com folga em altura, e o
+// fragmento le' a profundidade da cena, reconstroi o ponto visivel e avalia a
+// pegada NELE (decal em espaco de tela, Kim, "Screen Space Decals in Warhammer
+// 40,000: Space Marine", SIGGRAPH 2012). Sem plano, nao ha' o que brigar, e a
+// sombra acompanha o relevo.
+layout(location = 0) out flat vec4 v_feet;   // xyz = pe', w = raio em X
+layout(location = 1) out flat vec4 v_shape;  // x = raio em Z, y = maciez, z = folga acima, w = folga abaixo
+layout(location = 2) out flat vec4 v_plane;  // plano do proprio billboard: normal (xyz), dot(normal, ancora)
 
 void main() {
     // Only billboards that cast shadows should render a drop shadow.
     if ((i_flags & 4u) == 0u || (i_flags & 512u) == 0u) {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
-        v_uv = vec2(0.0);
-        v_flags = i_flags;
-        v_softness = 0.0;
+        v_feet = vec4(0.0);
+        v_shape = vec4(0.0);
+        v_plane = vec4(0.0);
         return;
     }
 
@@ -84,7 +92,6 @@ void main() {
     }
 
     float dilation = max(circleParams.x, 0.01);
-    vec3 projectedPos = feetWorldPos;
 
     // A PEGADA SEGUE A ALTURA, NAO A CELULA. A largura do quadro inclui o
     // que o boneco faz com os bracos - a estocada de uma lanca, a asa de um
@@ -94,18 +101,37 @@ void main() {
     // largura; a sombra fica no menor dos dois. Sprite alto e fino nao muda.
     float pegada = min(scaleX, scaleY * 0.55);
 
-    // Build a flat circle on the XZ ground plane.  Z is compressed (0.6) to
-    // match the isometric angle used by the visible sprite.
-    projectedPos.x += a_position.x * pegada * dilation;
-    projectedPos.z += a_position.y * pegada * dilation * 0.6;
-    // Lift the shadow above the ground so it passes the depth test against
-    // the terrain instead of fighting with it.  The value is tuned to give
-    // the shadow the same depth priority as the sprite that casts it.
-    projectedPos.y += 0.12;
+    // Elipse no plano XZ: Z comprimido (0,6) como o sprite visto de cima.
+    float rx = 0.5 * pegada * dilation;
+    float rz = rx * 0.6;
+    // Folga em altura: o chao sob a pegada pode subir meio raio (pedra, borda
+    // de laje) e descer um raio (degrau abaixo do pe').
+    float acima = rx * 0.5;
+    float abaixo = rx;
 
-    gl_Position = viewProjection * vec4(projectedPos, 1.0);
+    // Retangulo da tela que cobre os 8 cantos da caixa.
+    vec2 mn = vec2(1e9), mx = vec2(-1e9);
+    bool atras = false;
+    for (int k = 0; k < 8; ++k) {
+        vec3 c = feetWorldPos + vec3((k & 1) != 0 ? rx : -rx, (k & 2) != 0 ? acima : -abaixo, (k & 4) != 0 ? rz : -rz);
+        vec4 clip = viewProjection * vec4(c, 1.0);
+        if (clip.w <= 1e-3) { atras = true; break; }
+        vec2 ndc = clip.xy / clip.w;
+        mn = min(mn, ndc);
+        mx = max(mx, ndc);
+    }
+    if (atras) { mn = vec2(-1.0); mx = vec2(1.0); }
+    gl_Position = vec4(mix(mn, mx, a_position + vec2(0.5)), 0.0, 1.0);
 
-    v_uv = a_position + vec2(0.5); // Map to [0, 1] range
-    v_flags = i_flags;
-    v_softness = clamp(circleParams.y, 0.0, 1.0);
+    // Plano do billboard (os mesmos eixos do sprite.vert): o pixel que cai nele
+    // e' o proprio sprite, que nao recebe a propria sombra.
+    float tiltRad = radians(u_spriteTilt);
+    vec3 tiltedUp = vec3(0.0, cos(tiltRad), -sin(tiltRad));
+    vec3 rightW = (u_inverseView * vec4(-1.0, 0.0, 0.0, 0.0)).xyz;
+    vec3 upW = (u_inverseView * vec4(tiltedUp, 0.0)).xyz;
+    vec3 n = normalize(cross(rightW, upW));
+
+    v_feet = vec4(feetWorldPos, rx);
+    v_shape = vec4(rz, clamp(circleParams.y, 0.0, 1.0), acima, abaixo);
+    v_plane = vec4(n, dot(n, i_anchorPoint.xyz));
 }

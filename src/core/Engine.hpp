@@ -1619,6 +1619,7 @@ private:
     float m_seeThroughOpacity = 0.25f;
     void fillSeeThrough(FrameUBO& ubo) const;
     int m_spriteShadowKind = -1;
+    int spriteShadowKind() const;
     float m_groundBlendBand = 0.0f;
     float m_groundBlendFraction = 0.3f;
     struct GroundHeightTexture {

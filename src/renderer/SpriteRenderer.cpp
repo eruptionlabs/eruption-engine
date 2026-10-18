@@ -51,6 +51,22 @@ void SpriteRenderer::shutdown() {
         vkDestroyPipeline(m_ctx->device(), m_circleShadowPipeline, nullptr);
         m_circleShadowPipeline = VK_NULL_HANDLE;
     }
+    if (m_decalPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(m_ctx->device(), m_decalPipelineLayout, nullptr);
+        m_decalPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (m_decalDepthPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_ctx->device(), m_decalDepthPool, nullptr);
+        m_decalDepthPool = VK_NULL_HANDLE;
+    }
+    if (m_decalDepthLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_ctx->device(), m_decalDepthLayout, nullptr);
+        m_decalDepthLayout = VK_NULL_HANDLE;
+    }
+    if (m_decalDepthSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(m_ctx->device(), m_decalDepthSampler, nullptr);
+        m_decalDepthSampler = VK_NULL_HANDLE;
+    }
     if (m_planarShadowPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_planarShadowPipeline, nullptr);
         m_planarShadowPipeline = VK_NULL_HANDLE;
@@ -997,8 +1013,23 @@ bool SpriteRenderer::createPlanarShadowPipeline() {
 }
 
 void SpriteRenderer::renderBillboardCircleShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo,
-                                                  const Vec2& circleParams, VkBuffer instanceBuffer, uint32_t count) {
-    if (count == 0) return;
+                                                  const Vec2& circleParams, VkBuffer instanceBuffer, uint32_t count,
+                                                  VkImageView sceneDepth) {
+    if (count == 0 || sceneDepth == VK_NULL_HANDLE || m_circleShadowPipeline == VK_NULL_HANDLE) return;
+
+    VkDescriptorSet depthSet = m_decalDepthSets[m_ctx->currentFrame() % kDecalFrames];
+    VkDescriptorImageInfo depthInfo{};
+    depthInfo.sampler = m_decalDepthSampler;
+    depthInfo.imageView = sceneDepth;
+    depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = depthSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &depthInfo;
+    vkUpdateDescriptorSets(m_ctx->device(), 1, &write, 0, nullptr);
 
     if (instanceBuffer == m_instanceBuffer) {
         vmaFlushAllocation(m_ctx->allocator(), m_instanceAlloc, 0,
@@ -1032,21 +1063,71 @@ void SpriteRenderer::renderBillboardCircleShadows(VkCommandBuffer cmd, const Fra
     push.shadowLightDir = Vec4(0.0f);
     push.circleParams = circleParams;
 
-    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+    vkCmdPushConstants(cmd, m_decalPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
                        0, sizeof(push), &push);
 
     VkBuffer vertexBuffers[2] = {m_quadVertexBuffer, instanceBuffer};
     VkDeviceSize offsets[2] = {0, 0};
     vkCmdBindVertexBuffers(cmd, 0, 2, vertexBuffers, offsets);
 
-    VkDescriptorSet sets[2] = {m_bindless->set(), m_frameUboSet};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
-                            0, 2, sets, 0, nullptr);
+    VkDescriptorSet sets[3] = {m_bindless->set(), m_frameUboSet, depthSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_decalPipelineLayout,
+                            0, 3, sets, 0, nullptr);
 
     vkCmdDraw(cmd, 6, count, 0, 0);
 }
 
 bool SpriteRenderer::createCircleShadowPipeline() {
+    // Set 2 do decal: a profundidade da cena. Sem filtro (D32 nao filtra
+    // linear em GPU de celular; o shader usa texelFetch).
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = samplerInfo.addressModeV = samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.maxLod = 0.0f;
+    VK_CHECK(vkCreateSampler(m_ctx->device(), &samplerInfo, nullptr, &m_decalDepthSampler));
+
+    VkDescriptorSetLayoutBinding depthBinding{};
+    depthBinding.binding = 0;
+    depthBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    depthBinding.descriptorCount = 1;
+    depthBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo setLayoutInfo{};
+    setLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    setLayoutInfo.bindingCount = 1;
+    setLayoutInfo.pBindings = &depthBinding;
+    VK_CHECK(vkCreateDescriptorSetLayout(m_ctx->device(), &setLayoutInfo, nullptr, &m_decalDepthLayout));
+
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kDecalFrames};
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = kDecalFrames;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    VK_CHECK(vkCreateDescriptorPool(m_ctx->device(), &poolInfo, nullptr, &m_decalDepthPool));
+    VkDescriptorSetLayout depthLayouts[kDecalFrames] = {m_decalDepthLayout, m_decalDepthLayout, m_decalDepthLayout};
+    VkDescriptorSetAllocateInfo setAlloc{};
+    setAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    setAlloc.descriptorPool = m_decalDepthPool;
+    setAlloc.descriptorSetCount = kDecalFrames;
+    setAlloc.pSetLayouts = depthLayouts;
+    VK_CHECK(vkAllocateDescriptorSets(m_ctx->device(), &setAlloc, m_decalDepthSets));
+
+    // Sets 0-1 e push constant iguais ao layout dos sprites (compativel ao
+    // ligar os sets), mais o set 2.
+    const VkDescriptorSetLayout decalSets[3] = {m_bindless->layout(), m_frameUboLayout, m_decalDepthLayout};
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushRange.size = sizeof(Mat4) + sizeof(Vec4) + sizeof(Vec2);
+    VkPipelineLayoutCreateInfo decalLayoutInfo{};
+    decalLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    decalLayoutInfo.setLayoutCount = 3;
+    decalLayoutInfo.pSetLayouts = decalSets;
+    decalLayoutInfo.pushConstantRangeCount = 1;
+    decalLayoutInfo.pPushConstantRanges = &pushRange;
+    VK_CHECK(vkCreatePipelineLayout(m_ctx->device(), &decalLayoutInfo, nullptr, &m_decalPipelineLayout));
+
     auto vertCode = ShaderCompiler::loadSPIRV("shaders/shadow/billboard_circle_shadow.vert.spv");
     auto fragCode = ShaderCompiler::loadSPIRV("shaders/shadow/billboard_circle_shadow.frag.spv");
     if (vertCode.empty() || fragCode.empty()) {
@@ -1130,13 +1211,11 @@ bool SpriteRenderer::createCircleShadowPipeline() {
         .setScissor(0, 0, m_gbuffer->extent().width, m_gbuffer->extent().height)
         .setPolygonMode(VK_POLYGON_MODE_FILL)
         .setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE)
-        .setDepthState(false, false, VK_COMPARE_OP_ALWAYS) // shadow is a screen-space darken; no depth test
+        .setDepthState(false, false, VK_COMPARE_OP_ALWAYS) // decal: o teste e' a profundidade lida no shader
         .setBlendState({blend})
         .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
-        .setLayout(m_pipelineLayout)
-        .setDepthState(true, false, VK_COMPARE_OP_LESS_OR_EQUAL) // same depth priority as the casting sprite
+        .setLayout(m_decalPipelineLayout)
         .setColorAttachmentFormats({VK_FORMAT_R16G16B16A16_SFLOAT})
-        .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
         .build(m_ctx->device());
 
     vkDestroyShaderModule(m_ctx->device(), vertModule, nullptr);
