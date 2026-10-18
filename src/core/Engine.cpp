@@ -543,7 +543,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         if (cascade < 2) m_vfx.drawMeshShadows(cmd, m);
     });
 
-    m_postConfig.load("data/postprocess.json");
+    m_postConfig.load(project::config("data/postprocess.json"));
     m_postSettings.loadFromJson(m_postConfig.root());
     // ERUPTION_TEST_RAIN_OCCLUSION=1: mapa de oclusao das particulas de clima
     // (cor = motivo do descarte), o mesmo do checkbox do painel.
@@ -621,7 +621,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         m_shadowRenderer.setShadowSnaps(yawSnaps, timeSnaps, m_dayNightCycle.getKeyframeCount());
     }
 
-    m_dioramaConfig.load("data/diorama.json");
+    m_dioramaConfig.load(project::config("data/diorama.json"));
 
     // CLIMA. Dois arquivos com responsabilidades separadas:
     //   climate_types.json  ONDE cada clima vive no espaco atmosferico
@@ -649,7 +649,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         m_lookConfig = DioramaLookConfig::fieldLook();
     }
 
-    m_charConfig.load("data/char_config.json");
+    m_charConfig.load(project::config("data/char_config.json"));
     m_inputConfig.load("data/input_config.json");
 
     presentLoadingScreen("", "Initializing Additional Effects", 0.6f, true);

@@ -100,6 +100,12 @@ std::filesystem::path engine(const std::string& rel);
 // Caminho CITADO por conteudo do jogo (cena, prefab, script, manifesto):
 // relativo vale a partir da pasta do projeto; absoluto passa como esta'.
 std::filesystem::path gameRef(const std::string& path);
+// Configuracao do motor que o jogo pode SOBREPOR (data/postprocess.json,
+// data/char_config.json, data/diorama.json): o arquivo de mesmo caminho no
+// projeto vence; sem ele, o caminho volta como veio (o padrao do motor). A
+// exportacao ja' resolve assim (projeto primeiro), entao o jogo exportado leva
+// o mesmo visual.
+std::string config(const std::string& rel);
 
 inline bool isOpen() { return Project::instance().isOpen(); }
 inline const std::filesystem::path& root() { return Project::instance().root(); }

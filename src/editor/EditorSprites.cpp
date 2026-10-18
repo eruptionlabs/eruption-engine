@@ -5,6 +5,7 @@
 #include "editor/Translate.hpp"
 
 #include "core/Engine.hpp"
+#include "core/Project.hpp"
 #include "editor/EditorTheme.hpp"
 #include "game/PlayerController.hpp"
 #include "utils/ImageUtils.hpp"
@@ -295,7 +296,7 @@ void Editor::usePlayerSprite(const std::string& png, bool persist) {
     const std::string path = (!ec && !rel.empty() && rel.native().rfind("..", 0) != 0) ? rel.generic_string() : png;
     m_engine->m_charConfig.job = path;
     if (m_engine->m_playerController) m_engine->m_playerController->reloadSprite();
-    if (persist) m_engine->m_charConfig.save("data/char_config.json");
+    if (persist) m_engine->m_charConfig.save(project::config("data/char_config.json"));
     log(LogLevel::Info, "Player sprite: " + path);
 }
 
