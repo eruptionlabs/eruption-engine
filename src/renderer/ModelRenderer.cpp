@@ -3053,17 +3053,29 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         }
     }
 
-    if (!ensureInstanceCapacity(visN + companionCount)) {
-        m_lastDrawnTriangles = 0;
-        m_lastDrawCalls = 0;
-        return;
-    }
     // Cursor de append: cena e minimapa escrevem trechos distintos do mesmo
     // buffer no mesmo frame. Reseta quando o frame vira.
     const uint32_t curFrame = m_ctx->currentFrame();
     if (curFrame != m_instLastFrame) {
         m_instLastFrame = curFrame;
+        m_instPrevTotal = m_instAsked;
+        m_instAsked = 0;
         m_instCursor = 0;
+    }
+    m_instAsked += visN + companionCount;
+    // CAPACIDADE PARA O QUADRO INTEIRO, reservada no primeiro passe. Antes
+    // cada passe so' garantia o PROPRIO tamanho: a cena cabia e o passe
+    // seguinte (minimapa) estourava o cursor e sumia - medido na chegada a um
+    // andar de 5,8 mil instancias visiveis (5757+119+49 > 5892). Crescer no
+    // meio do quadro tambem nao serve: o passe anterior ja' gravou comandos com
+    // o descritor do buffer velho. No primeiro passe: este + tudo o que o
+    // quadro anterior pediu, e no minimo o dobro deste (o primeiro quadro de um
+    // mapa novo, maior que o anterior).
+    if (m_instCursor == 0 &&
+        !ensureInstanceCapacity(visN + companionCount + std::max(m_instPrevTotal, visN + companionCount))) {
+        m_lastDrawnTriangles = 0;
+        m_lastDrawCalls = 0;
+        return;
     }
     if (m_instCursor + visN + companionCount > m_instCapacity) {
         // Nao truncar silenciosamente: melhor pular este passe e avisar do que

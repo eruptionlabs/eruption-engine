@@ -914,6 +914,8 @@ private:
     std::unordered_map<uint32_t, std::vector<uint32_t>> m_animQueriedNodes;
     uint32_t m_instCursor = 0;
     uint32_t m_instLastFrame = 0xFFFFFFFFu;
+    uint32_t m_instPrevTotal = 0; // instancias que o quadro anterior inteiro pediu (todos os passes)
+    uint32_t m_instAsked = 0;     // o mesmo, do quadro corrente (inclusive passe pulado)
     bool ensureInstanceCapacity(uint32_t count);
     void destroyInstanceBuffers(bool deferred);
     // Sombra instanciada: um cursor de append por frame (cada cascata escreve
