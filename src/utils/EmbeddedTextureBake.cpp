@@ -379,6 +379,13 @@ std::unordered_map<std::string, double> computeUpFacingArea(const ModelFile& mod
 
 } // namespace
 
+bool readEmbeddedBakeCache(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr,
+                           EmbeddedBakeResult& out) {
+    if (model.embeddedTextures.empty() || model.filePath.empty() || !bcFormatSupport().any()) return false;
+    if (std::getenv("ERUPTION_TEST_DUMP_TEX_DIR")) return false; // o dump quer bake fresco
+    return readCache(model.filePath, maxTextureSize, synthesizePbr, out);
+}
+
 EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxTextureSize,
                                         bool synthesizePbr) {
     EmbeddedBakeResult res;
