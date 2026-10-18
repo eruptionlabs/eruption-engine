@@ -415,6 +415,7 @@ public:
     float m_tessLevelCap = 64.0f;    // chave "tessellation_max_level"
     float m_tessBandScale = 1.0f;    // chave "tessellation_band_scale"
     uint32_t m_godRayLights = 4;     // chave "god_ray_lights"
+    MapFog m_scriptFog;              // world.set_fog (set=false: nenhuma)
     DioramaLookConfig& lookConfig() { return m_lookConfig; }
     ConfigManager& dioramaConfig() { return m_dioramaConfig; }
     ConfigManager& skyboxConfig() { return m_skyboxConfig; }
@@ -516,6 +517,9 @@ public:
     // Liga/desliga o DoF de vez: o render recopia enableDoF do efeito 3 a cada
     // quadro, entao escrever so' em postSettings() durava um quadro.
     void setDofEnabled(bool on);
+    // Nevoa por script (world.set_fog): vence a do mapa (.env) e a do clima;
+    // set=false devolve o comando para eles.
+    void setScriptFog(const MapFog& fog) { m_scriptFog = fog; }
     void setMinimapBottomRight(bool bottomRight) { m_minimapBottomRight = bottomRight; }
     bool minimapBottomRight() const { return m_minimapBottomRight; }
     bool loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out, uint32_t version = 2);

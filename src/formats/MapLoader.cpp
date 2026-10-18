@@ -98,6 +98,19 @@ static TerrainFile buildFlatTerrain(uint32_t width, uint32_t height, float scale
     return terrain;
 }
 
+MapFog parseMapFog(const nlohmann::json& f) {
+    MapFog fog;
+    fog.set = true;
+    if (f.contains("color") && f["color"].is_array() && f["color"].size() >= 3)
+        fog.color = Vec3(f["color"][0].get<float>(), f["color"][1].get<float>(), f["color"][2].get<float>());
+    fog.start = f.value("start", fog.start);
+    fog.end = std::max(f.value("end", fog.end), fog.start + 1.0f);
+    fog.opacity = std::clamp(f.value("opacity", fog.opacity), 0.0f, 1.0f);
+    fog.height = f.value("height", fog.height);
+    fog.heightFalloff = std::max(f.value("falloff", fog.heightFalloff), 0.0f);
+    return fog;
+}
+
 static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
     if (!fs::exists(envPath)) return;
 
@@ -112,6 +125,12 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
         f >> j;
 
         if (j.contains("sky") && j["sky"].is_boolean()) map.env.hasSky = j["sky"].get<bool>();
+        if (j.contains("fog") && j["fog"].is_object()) {
+            map.env.fog = parseMapFog(j["fog"]);
+            ERUPTION_LOG_WARN("MapLoader: nevoa do .env (cor %.2f %.2f %.2f, %.0f..%.0f, opacidade %.2f)",
+                              map.env.fog.color.r, map.env.fog.color.g, map.env.fog.color.b,
+                              map.env.fog.start, map.env.fog.end, map.env.fog.opacity);
+        }
 
         if (j.contains("light") && j["light"].is_object()) {
             map.env.lightAuthored = j["light"].value("authoritative", false);

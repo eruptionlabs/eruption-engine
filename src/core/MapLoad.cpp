@@ -178,6 +178,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     loadMapClimate(name);
     m_vulkan.waitIdle();
     clearCharacters(); // os do mapa novo vêm do scene.luau dele
+    m_scriptFog = MapFog{}; // world.set_fog e' do mapa que o pediu
     clearPlayerStart();
     endSplatEditing();
     clearScatter();

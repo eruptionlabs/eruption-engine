@@ -5,6 +5,7 @@
 #include "formats/NavGridTypes.hpp"
 #include "formats/SmokeEmitter.hpp"
 #include <memory>
+#include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,17 @@ namespace eruption {
 // Forward declarations (GPU types not yet implemented)
 class VulkanContext;
 class BindlessDescriptor;
+
+// Nevoa autoral (bloco "fog" do .env, ou world.set_fog). `set` falso = nao ha'.
+struct MapFog {
+    bool set = false;
+    Vec3 color = Vec3(0.5f);
+    float start = 50.0f, end = 1000.0f, opacity = 0.5f; // distancia em unidades do mundo
+    float height = 0.0f, heightFalloff = 0.0f;          // nevoa de altura (0 = sem queda)
+};
+// Bloco "fog" ({color, start, end, opacity, height, falloff}); o mesmo formato
+// serve ao world.set_fog.
+MapFog parseMapFog(const nlohmann::json& f);
 
 struct LoadedMap {
     std::string mapName;
@@ -93,6 +105,10 @@ struct LoadedMap {
 
     // Environment/lighting values loaded from the map's .env companion file.
     struct {
+        // NEVOA DO MAPA ("fog" no .env): quando presente, vence a do clima e a
+        // cor do ceu do ciclo dia/noite - um interior (caverna, sala) tem a
+        // propria bruma, que nao muda com chuva la' fora nem com a hora.
+        MapFog fog;
         Vec3 sunDirection = Vec3(0.0f, -1.0f, 0.0f);
         Vec3 sunColor = Vec3(2.5f, 2.4f, 2.2f);
         float sunIntensity = 1.0f;
