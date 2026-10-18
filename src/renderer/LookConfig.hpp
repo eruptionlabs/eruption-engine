@@ -27,8 +27,11 @@ namespace eruption {
 //   grading (saturacao/contraste)  -> NAO IMPLEMENTADO. post_composite.frag so'
 //                                     tem o operador de tonemap (AgX); nao ha'
 //                                     grading artistico exposto.
-//   god rays                       -> shader EXISTE (postprocess/god_rays.frag);
-//                                     falta amarrar estes parametros nele.
+//   god rays                       -> LIGADO: raios das luzes pontuais fortes
+//                                     na tela (PostProcessor::renderGodRays,
+//                                     postprocess/god_rays.frag), com estes
+//                                     parametros; quantas luzes vem do preset
+//                                     (god_ray_lights).
 //   tratamento de camada distante  -> NAO IMPLEMENTADO.
 //   grade de pixel / dither        -> dither existe fixo em model.frag; a grade
 //                                     nao existe.
@@ -43,7 +46,20 @@ struct LookConfig {
     float saturation = 1.10f;
     float contrast = 1.05f;
 
-    // --- God rays (shader existe, parametros soltos) ---
+    // --- Vinheta e split-toning (post_composite, depois do tonemap/grading) ---
+    // vignette = forca (0 desliga); softness = largura da queda, a partir da
+    // borda para dentro (fracao da meia-diagonal). Tons: cor e forca; a cor e'
+    // normalizada pela luminancia (so' o matiz entra, o brilho fica).
+    float vignette = 0.0f;
+    float vignetteSoftness = 0.45f;
+    Vec3  shadowTint = Vec3(1.0f);
+    float shadowTintStrength = 0.0f;
+    Vec3  highlightTint = Vec3(1.0f);
+    float highlightTintStrength = 0.0f;
+
+    // --- God rays das luzes pontuais (PostProcessor::renderGodRays) ---
+    // intensity x exposure = forca; scattering x 2 = alcance na tela (fracao da
+    // altura); samples e decay = marcha no nucleo da luz; weight = peso final.
     float godRayIntensity = 0.30f;
     float godRayScattering = 0.20f;
     int   godRaySamples = 32;

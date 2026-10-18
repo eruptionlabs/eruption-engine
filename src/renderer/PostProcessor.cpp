@@ -340,7 +340,7 @@ void PostProcessor::createDescriptors() {
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset = 0;
     pcRange.size = 128;
-    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 256, 16 * 1024);
+    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 320, 16 * 1024);
     const VkDescriptorSetLayout setLayouts[2] = {m_descriptorSetLayout, m_pushRing.layout()};
 
     VkPipelineLayoutCreateInfo plInfo{};
@@ -1489,6 +1489,10 @@ if (!m_ctx) return;
         Vec4 chromaticAberrationParams; // x=enable, y=amount
         Vec4 fogHeightParams; // x=fogHeight, y=fogHeightFalloff, z=enableHeightFog
         Vec4 gradingParams;   // x=saturacao, y=contraste, zw=livre
+        Vec4 vignetteParams;  // x=forca, y=suavidade (LookConfig)
+        Vec4 shadowTint;      // rgb=matiz, a=forca
+        Vec4 highlightTint;
+        Vec4 sceneDim;        // rgb=cor, a=forca (fx.dim)
     } push;
     // Debug/test overrides for fog parameters (useful for headless screenshots).
     float fogStart = settings.fogStart;
@@ -1551,7 +1555,11 @@ if (!m_ctx) return;
         return e && (std::atoi(e) & 31) != 0;
     }();
     if (settings.pbrDebugActive || kPbrDebugEnv) push.gradingParams.z = 1.0f;
-    static_assert(sizeof(push) <= 256, "bloco da composicao passou de 256 B");
+    push.vignetteParams = lookConfig ? Vec4(lookConfig->vignette, lookConfig->vignetteSoftness, 0.0f, 0.0f) : Vec4(0.0f);
+    push.shadowTint = lookConfig ? Vec4(lookConfig->shadowTint, lookConfig->shadowTintStrength) : Vec4(1.0f, 1.0f, 1.0f, 0.0f);
+    push.highlightTint = lookConfig ? Vec4(lookConfig->highlightTint, lookConfig->highlightTintStrength) : Vec4(1.0f, 1.0f, 1.0f, 0.0f);
+    push.sceneDim = settings.sceneDim;
+    static_assert(sizeof(push) <= 320, "bloco da composicao passou do maxBlock do PushRing (320 B)");
     m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, &push, sizeof(push));
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkc::cmdEndRendering(cmd);

@@ -36,6 +36,8 @@ public:
         Vec3 fogColor = Vec3(0.6f, 0.7f, 0.9f);
         float fogHeight = 0.0f;
         float fogHeightFalloff = 0.01f;
+        // Escurecer so' o cenario (fx.dim): rgb = cor, a = forca. A UI vem depois.
+        Vec4 sceneDim = Vec4(0.0f);
         // INTERRUPTOR MESTRE DO DESFOQUE. Chamava-se `enableTiltShift`, o que
         // fez dois relatorios diferentes concluirem que "o tilt-shift esta'
         // desligado, por isso falta a pista de maquete" - errado nos dois: o

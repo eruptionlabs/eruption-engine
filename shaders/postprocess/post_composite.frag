@@ -31,6 +31,11 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec4 chromaticAberrationParams; // x=enable, y=amount, z=transicao do raio limpo, w=debug
     vec4 fogHeightParams; // x=fogHeight, y=fogHeightFalloff, z=enableHeightFog, w=unused
     vec4 gradingParams;   // x=saturacao, y=contraste, zw=livre
+    // Do look (LookConfig): vinheta e split-toning. Bloco do PushRing de 320 B.
+    vec4 vignetteParams;  // x=forca (0 desliga), y=suavidade
+    vec4 shadowTint;      // rgb=matiz (normalizado pela luminancia), a=forca
+    vec4 highlightTint;   // idem, nas luzes
+    vec4 sceneDim;        // rgb=cor, a=forca: escurece so' o cenario (fx.dim), antes da UI
 } push;
 
 // ---------------------------------------------------------------------------
@@ -47,6 +52,33 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
 // filme: o tonemap ja' resolveu o alcance, o grading ajusta o gosto sobre o
 // resultado, e o gamma so' codifica para o monitor. Fazer antes do tonemap
 // deixaria o operador desfazer parte do ajuste.
+// SPLIT-TONING: sombra puxada para um matiz e luz para outro ("sombra
+// azulada, luz ambar"), a mistura de tons dos coloristas de cinema (Selan,
+// "Cinematic Color: From Your Monitor to the Big Screen", SIGGRAPH 2012,
+// cap. de grading). O matiz entra normalizado pela luminancia e o resultado
+// volta para a luminancia de entrada: o tom muda a cor, nunca o brilho.
+vec3 applySplitToning(vec3 c, vec4 shadowTint, vec4 highlightTint) {
+    if (shadowTint.a <= 0.0 && highlightTint.a <= 0.0) return c;
+    const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
+    const float l = dot(c, kLuma);
+    const float t = smoothstep(0.0, 1.0, clamp(l, 0.0, 1.0));
+    const vec3 sh = shadowTint.rgb / max(dot(shadowTint.rgb, kLuma), 1e-3);
+    const vec3 hi = highlightTint.rgb / max(dot(highlightTint.rgb, kLuma), 1e-3);
+    vec3 r = c * mix(vec3(1.0), sh, clamp(shadowTint.a, 0.0, 1.0) * (1.0 - t));
+    r *= mix(vec3(1.0), hi, clamp(highlightTint.a, 0.0, 1.0) * t);
+    return r * (l / max(dot(r, kLuma), 1e-5));
+}
+
+// VINHETA: escurece para a borda, com distancia corrigida pelo aspecto (o
+// circulo nao vira elipse em 16:9) e normalizada pela meia-diagonal. A queda
+// comeca em (1 - suavidade) e chega a `forca` no canto.
+float vignetteFactor(vec2 uv, vec2 size, vec4 p) {
+    if (p.x <= 0.0) return 1.0;
+    const vec2 a = vec2(size.x / max(size.y, 1.0), 1.0);
+    const float d = length((uv - 0.5) * a) / length(0.5 * a);
+    return 1.0 - clamp(p.x, 0.0, 1.0) * smoothstep(1.0 - clamp(p.y, 0.01, 1.0), 1.0, d);
+}
+
 vec3 applyGrading(vec3 c, float saturation, float contrast) {
     // Luminancia Rec.709: satura em torno do CINZA PERCEPTUAL, nao da media dos
     // canais. Usar a media faz cor saturada escurecer ao dessaturar.
@@ -378,8 +410,13 @@ void main() {
 
     // Grading do LookConfig (saturacao/contraste do preset ativo).
     color = applyGrading(color, push.gradingParams.x, push.gradingParams.y);
+    color = applySplitToning(color, push.shadowTint, push.highlightTint);
+    color *= vignetteFactor(fragUV, vec2(textureSize(hdrTexture, 0)), push.vignetteParams);
 
     // Gamma 2.2
     color = pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
+    // fx.dim depois do gamma: a forca e' a que se ve' (0,7 = 70% mais escuro);
+    // antes do gamma 0,7 escurecia so' ~42% na tela.
+    color = mix(color, pow(max(push.sceneDim.rgb, vec3(0.0)), vec3(1.0 / 2.2)), clamp(push.sceneDim.a, 0.0, 1.0));
     outColor = vec4(color, 1.0);
 }
