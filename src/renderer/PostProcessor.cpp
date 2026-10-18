@@ -3,6 +3,7 @@
 #include "renderer/CameraMotion.hpp"
 #include <cstdlib>
 #include "renderer/PostFormat.hpp"
+#include "renderer/DeferredLighting.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "core/Logger.hpp"
 #include <cmath>
@@ -54,6 +55,11 @@ constexpr uint32_t kQCompositeBegin  = 50;
 constexpr uint32_t kQCompositeEnd    = 51;
 constexpr uint32_t kQCloudDbgBegin   = 52;
 constexpr uint32_t kQCloudDbgEnd     = 53;
+constexpr uint32_t kQGodRaysBegin    = 56;
+constexpr uint32_t kQGodRaysEnd      = 57;
+// Ganho global dos raios, escolhido olhando a tocha de noite contra o halo do
+// bloom (com 1 o raio sumia dentro do halo).
+constexpr float kGodRayGain = 4.0f;
 } // namespace
 
 bool PostProcessor::init(VulkanContext* ctx, uint32_t width, uint32_t height) {
@@ -102,6 +108,7 @@ void PostProcessor::shutdown() {
     vkDestroyPipeline(device, m_copyPipeline, nullptr);
     
     vkDestroyPipeline(device, m_brightPassPipeline, nullptr);
+    vkDestroyPipeline(device, m_godRayPipeline, nullptr);
     vkDestroyPipeline(device, m_bloomDownPipeline, nullptr);
     vkDestroyPipeline(device, m_bloomUpPipeline, nullptr);
     vkDestroyPipeline(device, m_weatherPipeline, nullptr);
@@ -137,6 +144,7 @@ void PostProcessor::shutdown() {
     destroyImg(m_blurVImage, m_blurVAlloc, m_blurVView);
     destroyImg(m_outputImage, m_outputAlloc, m_outputView);
     destroyImg(m_weatherImage, m_weatherAlloc, m_weatherView);
+    destroyImg(m_godRayImage, m_godRayAlloc, m_godRayView);
     for (uint32_t i = 0; i < kDofFarImages; i++) destroyImg(m_dofFarImages[i], m_dofFarAllocs[i], m_dofFarViews[i]);
 
     for (uint32_t i = 0; i < BLOOM_MIPS; i++) {
@@ -207,6 +215,8 @@ void PostProcessor::createImages() {
         bw = std::max(1u, bw / 2);
         bh = std::max(1u, bh / 2);
     }
+    imageInfo.extent = {std::max(1u, m_width / 2), std::max(1u, m_height / 2), 1};
+    createImg(m_godRayImage, m_godRayAlloc, m_godRayView);
 
     // Borrao grande do DoF: RGBA16F mesmo onde a cadeia e' B10G11R11 (o peso
     // do CoC vai no alfa). 1/4 da resolucao: 3 imagens somam 3/16 de uma.
@@ -552,6 +562,8 @@ void PostProcessor::createPipelines() {
     m_brightPassPipeline = createFullscreenPipeline(brightPassFrag, m_width / 2, m_height / 2);
     m_bloomDownPipeline = createFullscreenPipeline(bloomDownFrag, m_width / 2, m_height / 2);
     m_bloomUpPipeline = createFullscreenPipeline(bloomUpFrag, m_width / 2, m_height / 2);
+    m_godRayPipeline = createFullscreenPipeline(ShaderCompiler::loadSPIRV("postprocess/god_rays.frag.spv"),
+                                                m_width / 2, m_height / 2);
     m_weatherPipeline = createFullscreenPipeline(weatherFrag, m_width, m_height);
     m_cloudCoverageDebugPipeline = createFullscreenPipeline(cloudCoverageDebugFrag, m_width, m_height, false, VK_FORMAT_UNDEFINED, true);
 }
@@ -615,6 +627,69 @@ static void beginFullscreenPass(VkCommandBuffer cmd, VkImageView view, uint32_t 
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 }
+VkImageView PostProcessor::renderGodRays(VkCommandBuffer cmd, const Mat4& viewProj, const Mat4& proj,
+                                         const PostSettings& settings, const DioramaLookConfig& look) {
+    if (!m_godRaySource || m_godRayMaxLights == 0 || look.godRayIntensity <= 0.0f || m_godRayPipeline == VK_NULL_HANDLE)
+        return VK_NULL_HANDLE;
+    // As luzes que mais pesam na tela: forca x alcance / distancia, so' as
+    // que caem na frente da camera e perto do quadro (a chama de uma tocha
+    // logo fora da borda ainda solta raio para dentro).
+    struct Pick { Vec4 light; float score; };
+    Pick picks[4];
+    uint32_t count = 0;
+    const float aspect = float(m_width) / float(std::max(1u, m_height));
+    for (const PointLight& l : *m_godRaySource) {
+        if (!l.enabled || l.intensity <= 0.0f || l.shadowCubemapIndex == kPlayerLightTag) continue;
+        const Vec4 clip = viewProj * Vec4(l.position, 1.0f);
+        if (clip.w <= 1.0f) continue;
+        const Vec2 uv = Vec2(clip.x, clip.y) / clip.w * 0.5f + 0.5f;
+        if (uv.x < -0.2f || uv.x > 1.2f || uv.y < -0.2f || uv.y > 1.2f) continue;
+        // Nucleo: a regiao da tela em volta da luz cujo brilho vira raio. Um
+        // pedaco do alcance da luz projetado (a chama nao tem tamanho no motor),
+        // com teto para a luz colada na camera nao cobrir a tela toda.
+        const float coreWorld = std::clamp(l.radius * 0.08f, 2.0f, 40.0f);
+        const float core = std::clamp(coreWorld * proj[1][1] * 0.5f / clip.w, 0.008f, 0.12f);
+        const float score = l.intensity * l.radius / clip.w;
+        const Pick p{Vec4(uv.x, uv.y, core, 1.0f), score};
+        if (count < m_godRayMaxLights) {
+            picks[count++] = p;
+        } else {
+            uint32_t weakest = 0;
+            for (uint32_t i = 1; i < count; ++i) if (picks[i].score < picks[weakest].score) weakest = i;
+            if (score > picks[weakest].score) picks[weakest] = p;
+        }
+    }
+    if (count == 0) return VK_NULL_HANDLE;
+
+    m_ctx->writeTimestamp(cmd, kQGodRaysBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    const uint32_t w = std::max(1u, m_width / 2), h = std::max(1u, m_height / 2);
+    barrierToColorAttach(cmd, m_ctx, m_godRayImage);
+    updateDescriptorSet(24, m_bloomUpViews[0], m_bloomDownViews[0]);
+    beginFullscreenPass(cmd, m_godRayView, w, h);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_godRayPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(24), 0, nullptr);
+    struct { Vec4 lights[4]; Vec4 params; Vec4 params2; } push{};
+    for (uint32_t i = 0; i < count; ++i) push.lights[i] = picks[i].light;
+    const int samples = std::clamp(look.godRaySamples, 4, 64);
+    // Decaimento do look e' por amostra de 32: o mesmo rastro com outra
+    // contagem de amostras. O composite multiplica o bloom pela intensidade
+    // dele, entao a forca dos raios vai dividida por ela.
+    const float decay = std::pow(std::clamp(look.godRayDecay, 0.5f, 1.0f), 32.0f / float(samples));
+    const float strength = look.godRayIntensity * look.godRayExposure * kGodRayGain /
+                           std::max(settings.bloomIntensity, 1e-3f);
+    push.params = Vec4(float(samples), decay, look.godRayWeight * strength,
+                       std::clamp(look.godRayScattering * 2.0f, 0.05f, 1.0f));
+    push.params2 = Vec4(aspect, float(count), 0.0f, 0.0f);
+    static_assert(sizeof(push) <= 128, "push constant do passe de raios passa de 128 B");
+    vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkc::cmdEndRendering(cmd);
+    barrierToShaderRead(cmd, m_ctx, m_godRayImage);
+    m_ctx->writeTimestamp(cmd, kQGodRaysEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    Profiler::addGpuTime("God Rays", m_ctx->timestampDeltaMs(kQGodRaysBegin, kQGodRaysEnd));
+    return m_godRayView;
+}
+
 void PostProcessor::render(VkCommandBuffer cmd, VkImageView hdrInput, VkImageView depthInput,
             VkImageView gbufferWorldPos, VkImageView gbufferNormal, VkImageView shadowInput,
             const Mat4& view, const Mat4& proj, const Mat4& invViewProj,
@@ -1379,14 +1454,20 @@ if (!m_ctx) return;
         msBloomUp = m_ctx->timestampDeltaMs(kQBloomUpBegin, kQBloomUpEnd);
         Profiler::addGpuTime("Bloom Up", msBloomUp);
         bloomResult = m_bloomUpViews[0];
+        if (lookConfig) {
+            if (VkImageView rays = renderGodRays(cmd, proj * view, proj, settings, *lookConfig)) bloomResult = rays;
+        }
     }
 
     // Binding 8 must always get a write before the very first composite draw
     // (an unwritten combined-image-sampler is a validation error, unlike a
     // stale one) - fall back to the flat cloud coverage texture, same as
     // binding 7's fallback below, until the volumetric field is ready.
+    // Binding 2 idem com o bloom desligado: a propria cena no lugar (o shader
+    // nao a soma com exposureBloom.w == 0).
     m_ctx->writeTimestamp(cmd, kQCompositeBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    updateDescriptorSet(5, compositeSource, depthInput, bloomResult, cloudColorView, cloudDepthView,
+    updateDescriptorSet(5, compositeSource, depthInput,
+                        bloomResult != VK_NULL_HANDLE ? bloomResult : compositeSource, cloudColorView, cloudDepthView,
                         cloudVolumeOccView != VK_NULL_HANDLE ? cloudVolumeOccView : cloudColorView);
     beginFullscreenPass(cmd, compositeTarget, m_width, m_height);
     lap(3);

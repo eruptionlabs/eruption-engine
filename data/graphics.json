@@ -103,6 +103,7 @@
   "present_mode": "auto",
   "presets": {
     "low": {
+      "god_ray_lights": 2,
       "mesh_tri_budget": 1500000,
       "vfx_max_particles": 32768,
       "vfx_spawn_scale": 0.5,
