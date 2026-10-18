@@ -110,17 +110,26 @@ bool TextureCache::save(const std::string& name,
     std::string key = computeKey(name, encodedData.data(), encodedData.size());
     fs::path path = fs::path(getCacheDir()) / key;
 
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    if (!file.is_open()) {
-        return false;
+    // Grava ao lado e troca com rename: nunca reescreve um arquivo que uma
+    // copia por hardlink divida, nem deixa entrada pela metade.
+    const fs::path tmp = path.string() + ".tmp";
+    bool ok = false;
+    {
+        std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
+        if (!file.is_open()) {
+            return false;
+        }
+        int32_t w = width, h = height, c = channels;
+        file.write(reinterpret_cast<const char*>(&w), sizeof(w));
+        file.write(reinterpret_cast<const char*>(&h), sizeof(h));
+        file.write(reinterpret_cast<const char*>(&c), sizeof(c));
+        file.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
+        ok = file.good();
     }
-
-    int32_t w = width, h = height, c = channels;
-    file.write(reinterpret_cast<const char*>(&w), sizeof(w));
-    file.write(reinterpret_cast<const char*>(&h), sizeof(h));
-    file.write(reinterpret_cast<const char*>(&c), sizeof(c));
-    file.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
-    return file.good();
+    std::error_code ec;
+    if (ok) fs::rename(tmp, path, ec);
+    if (!ok || ec) fs::remove(tmp, ec);
+    return ok && !ec;
 }
 
 } // namespace eruption
