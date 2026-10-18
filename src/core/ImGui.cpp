@@ -2745,6 +2745,14 @@ void Engine::renderImGui() {
 // HUD da aplicação (barras do personagem, minimapa com nome do mapa e hora).
 // Ligado por padrão só nas ferramentas de desenvolvimento; o jogo exportado
 // mostra se o projeto pedir (ui.show_hud / ui.show_minimap).
+bool Engine::minimapFollowsCss() const {
+    // O #minimap/#minimap-info do CSS mandam quando o projeto traz a propria
+    // folha da HUD (data/hud/default.css): o layout e' do jogo. Sem ela fica o
+    // quadrado fixo de sempre no canto (o CSS do motor o poria em outro lugar).
+    static const bool kProjectHud = project::config("data/hud/default.css") != "data/hud/default.css";
+    return m_minimapBottomRight || kProjectHud;
+}
+
 void Engine::drawGameHud(ImDrawList* target, ImVec2 origin, ImVec2 size) {
     if (!target) {
         target = ImGui::GetBackgroundDrawList();
@@ -2778,7 +2786,8 @@ void Engine::drawGameHud(ImDrawList* target, ImVec2 origin, ImVec2 size) {
 
     float uiSize = 200.0f;
     ImVec2 startPos(displaySize.x - 10.0f - uiSize, displaySize.y - 10.0f - uiSize);
-    if (!m_demoHidePanels && m_minimapBottomRight && m_playerController) {
+    const bool useCss = minimapFollowsCss();
+    if (!m_demoHidePanels && useCss && m_playerController) {
         eruption::CSSRect cssRect = m_playerController->getMinimapRect(displaySize);
         if (cssRect.w > 0.0f && cssRect.h > 0.0f) {
             // CSS rect now defines the minimap image size/position directly.
@@ -2798,22 +2807,30 @@ void Engine::drawGameHud(ImDrawList* target, ImVec2 origin, ImVec2 size) {
     if (!m_demoHidePanels) dl->AddRect(ImVec2(startPos.x - 2, startPos.y - 2), ImVec2(startPos.x + uiSize + 2, startPos.y + uiSize + 2), IM_COL32(107, 143, 94, 255), 0.0f, 0, 2.0f);
 
     if (!m_demoHidePanels && m_minimapDescriptorSet != VK_NULL_HANDLE) {
-        // Flip UVs both horizontally and vertically to match source map orientation
+        // U e V invertidos: +Z do mapa para cima e +X para a direita, como a
+        // câmera de campo (yaw -90) e o PlayerController::renderMinimapMarkers.
+        // O motor e' mao esquerda (GLM_FORCE_LEFT_HANDED): o lookAt do
+        // Minimap.cpp com up (0,0,-1) poe o +X do mundo a' ESQUERDA da textura,
+        // e so' o V invertido deixava a imagem espelhada leste-oeste sob o
+        // cursor (marcador a -X do jogador aparecia a' direita dele).
         dl->AddImage((ImTextureID)m_minimapDescriptorSet, startPos, ImVec2(startPos.x + uiSize, startPos.y + uiSize), ImVec2(1, 1), ImVec2(0, 0));
     }
 
     // Minimap info panel: nome do mapa + coordenadas + horario (widget separado #minimap-info)
-    if (!m_demoHidePanels && m_minimapBottomRight && m_playerController) {
+    if (!m_demoHidePanels && useCss && m_playerController) {
         eruption::CSSRect infoRect = m_playerController->getMinimapInfoRect(displaySize);
         if (infoRect.w > 0.0f && infoRect.h > 0.0f) {
             // Horario do jogo (sem segundos)
             int curT = (int)(m_dayNightCycle.timeOfDay() * 1440.0f);
             char timeBuf[16]; sprintf(timeBuf, "%02d:%02d", curT / 60, curT % 60);
 
-            ImVec2 mapSize = ImGui::CalcTextSize(mapBuf);
-            ImVec2 timeSize = ImGui::CalcTextSize(timeBuf);
+            // Texto do jogo (ui.minimap_label): uma linha so', sem relogio.
+            const bool custom = !m_minimapLabel.empty();
+            const char* line1 = custom ? m_minimapLabel.c_str() : mapBuf;
+            ImVec2 mapSize = ImGui::CalcTextSize(line1);
+            ImVec2 timeSize = custom ? ImVec2(0.0f, 0.0f) : ImGui::CalcTextSize(timeBuf);
             float boxW = std::max(mapSize.x, timeSize.x) + 12.0f;
-            float boxH = mapSize.y + timeSize.y + 12.0f;
+            float boxH = mapSize.y + timeSize.y + (custom ? 8.0f : 12.0f);
 
             // Centraliza a caixa de texto horizontalmente com base no minimapa real e verticalmente no retangulo CSS
             float textX = startPos.x + (uiSize - boxW) * 0.5f;
@@ -2823,8 +2840,10 @@ void Engine::drawGameHud(ImDrawList* target, ImVec2 origin, ImVec2 size) {
             dl->AddRectFilled(p, ImVec2(p.x + boxW, p.y + boxH), IM_COL32(16, 14, 12, 235), 3.0f);
             dl->AddRect(p, ImVec2(p.x + boxW, p.y + boxH), IM_COL32(139, 90, 43, 255), 3.0f, 0, 1.0f);
             // Centraliza cada linha horizontalmente dentro da caixa
-            drawStrokeText(dl, ImVec2(p.x + (boxW - mapSize.x) * 0.5f, p.y + 4.0f), mapBuf, IM_COL32(255, 235, 150, 255));
-            drawStrokeText(dl, ImVec2(p.x + (boxW - timeSize.x) * 0.5f, p.y + mapSize.y + 6.0f), timeBuf, IM_COL32(200, 230, 255, 255));
+            drawStrokeText(dl, ImVec2(p.x + (boxW - mapSize.x) * 0.5f, p.y + 4.0f), line1, IM_COL32(255, 235, 150, 255));
+            if (!custom)
+                drawStrokeText(dl, ImVec2(p.x + (boxW - timeSize.x) * 0.5f, p.y + mapSize.y + 6.0f), timeBuf,
+                               IM_COL32(200, 230, 255, 255));
         }
     }
 
