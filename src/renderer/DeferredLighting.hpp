@@ -172,6 +172,11 @@ public:
     void setIrradianceProbeStrength(float strength) { m_probeStrength = std::clamp(strength, 0.0f, 1.0f); }
     std::vector<PointLight>& getPointLights() { return m_pointLights; }
     const std::vector<PointLight>& getPointLights() const { return m_pointLights; }
+    // Lista do quadro (mapa + extras + VFX) montada pelo passe de luz; o pos
+    // le' depois dele (raios de luz das luzes pontuais).
+    const std::vector<PointLight>& frameLights() const {
+        return (m_extraPointLights.empty() && m_vfxPointLights.empty()) ? m_pointLights : m_allPointLights;
+    }
     // Luzes dos mapas vizinhos (mundo contínuo): somadas às do mapa aberto,
     // fora da lista que a cena e o editor numeram.
     void setExtraPointLights(std::vector<PointLight> lights) { m_extraPointLights = std::move(lights); }

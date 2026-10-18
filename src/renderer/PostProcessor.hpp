@@ -9,8 +9,12 @@
 #include "math/Types.hpp"
 #include "utils/SplineCurve.hpp"
 #include <nlohmann/json.hpp>
+#include <algorithm>
+#include <vector>
 
 namespace eruption {
+
+struct PointLight;
 
 class PostProcessor {
 public:
@@ -172,6 +176,13 @@ public:
     // World point the rain heightmap + camera-relative splash group anchor
     // to (the orbit target / character). Sentinel y < -1e8 = use cameraPos.
     void setRainAnchor(const Vec3& p) { m_rainAnchor = p; }
+    // Raios de luz das luzes pontuais (god_rays.frag): a lista do quadro e
+    // quantas luzes no maximo (chave "god_ray_lights" do preset; 0 desliga).
+    // A forca e o alcance vem do look (god_ray_*). Precisa do bloom ligado.
+    void setGodRayLights(const std::vector<PointLight>* lights, uint32_t maxLights) {
+        m_godRaySource = lights;
+        m_godRayMaxLights = std::min(maxLights, 4u);
+    }
     void resize(uint32_t width, uint32_t height);
     uint32_t width() const { return m_width; }
     uint32_t height() const { return m_height; }
@@ -227,6 +238,10 @@ public:
     // valid=false until the first adaptation dispatch has completed.
     float gpuAutoExposure(bool& valid) const { valid = m_gpuExposureValid; return m_gpuExposure; }
 private:
+    // Passe dos raios de luz (depois do upsample do bloom): devolve a imagem
+    // bloom + raios, ou VK_NULL_HANDLE quando nao ha' luz para desenhar.
+    VkImageView renderGodRays(VkCommandBuffer cmd, const Mat4& viewProj, const Mat4& proj,
+                              const PostSettings& settings, const DioramaLookConfig& look);
     static constexpr uint32_t AE_FRAMES = 3;
     VkPipeline m_lumHistPipeline = VK_NULL_HANDLE;
     VkPipeline m_lumAdaptPipeline = VK_NULL_HANDLE;
@@ -300,6 +315,12 @@ private:
     VkPipeline m_copyPipeline = VK_NULL_HANDLE;
 
     VkPipeline m_brightPassPipeline = VK_NULL_HANDLE;
+    VkPipeline m_godRayPipeline = VK_NULL_HANDLE;
+    VkImage m_godRayImage = VK_NULL_HANDLE; // bloom + raios, meia resolucao
+    VmaAllocation m_godRayAlloc = VK_NULL_HANDLE;
+    VkImageView m_godRayView = VK_NULL_HANDLE;
+    const std::vector<PointLight>* m_godRaySource = nullptr;
+    uint32_t m_godRayMaxLights = 0;
     VkPipeline m_bloomDownPipeline = VK_NULL_HANDLE;
     VkPipeline m_bloomUpPipeline = VK_NULL_HANDLE;
     VkPipeline m_weatherPipeline = VK_NULL_HANDLE;

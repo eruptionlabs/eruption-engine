@@ -412,6 +412,7 @@ public:
     // atlas, SSAO, post toggles, cloud/rain budgets). Only keys present in
     // the preset are applied; safe to call at init and on F5 hot-reload.
     void applyGraphicsPreset();
+    uint32_t m_godRayLights = 4;     // chave "god_ray_lights"
     DioramaLookConfig& lookConfig() { return m_lookConfig; }
     ConfigManager& dioramaConfig() { return m_dioramaConfig; }
     ConfigManager& skyboxConfig() { return m_skyboxConfig; }
