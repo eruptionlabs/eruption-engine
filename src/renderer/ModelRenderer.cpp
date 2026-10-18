@@ -2439,7 +2439,7 @@ uint32_t ModelRenderer::duplicateBatch(const std::vector<std::pair<uint32_t, Mat
         }
         copyAnimatedNode(src, static_cast<uint32_t>(m_instances.size() - 1));
     }
-    rebuildHotData();
+    syncNewHotEntries(); // so' as copias novas, no fim da lista
     return first;
 }
 
@@ -2758,7 +2758,7 @@ uint32_t ModelRenderer::addInstanceOf(const std::string& path, const ModelInstan
     const uint32_t first = static_cast<uint32_t>(m_instances.size());
     appendAssetInstances(assetIndex, ref, 0.0f, 0.0f, onlyNode);
     m_bindless->flushUpdates();
-    rebuildHotData();
+    syncNewHotEntries();
     return m_instances.size() > first ? first : 0xFFFFFFFFu;
 }
 
@@ -4367,27 +4367,48 @@ void ModelRenderer::rebuildHotData() {
     m_instanceHot.resize(count);
     m_instUvTranslateRot.resize(count);
     m_instUvScale.resize(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        const ModelInstance& inst = m_instances[i];
-        ModelInstanceHot& hot = m_instanceHot[i];
-        // Espelha a UV aqui (ponto unico de sincronia, roda tambem depois da
-        // animacao de textura) para o laco de desenho nao tocar no struct frio.
-        m_instUvTranslateRot[i] = inst.hasTextureAnimation
-            ? Vec4(inst.uvTranslate, inst.uvRotation, 0.0f) : Vec4(0.0f);
-        m_instUvScale[i] = inst.hasTextureAnimation ? inst.uvScale : Vec2(1.0f);
-        hot.transform = inst.transform;
-        hot.worldAabbMin = inst.worldAabbMin;
-        hot.worldAabbMax = inst.worldAabbMax;
-        hot.meshIndex = inst.meshIndex;
-        // Malha liberada (mapa vizinho que saiu do mundo): a instância não desenha mais.
-        const bool hasMesh = inst.meshIndex < m_meshes.size() && m_meshes[inst.meshIndex].indexCount > 0;
-        hot.flags = (inst.enabled && !inst.viewHidden && hasMesh) ? 1u : 0u;
-        hot.boundingRadius = inst.boundingRadius;
-    }
+    for (uint32_t i = 0; i < count; ++i) syncHotEntry(i);
     // Hot mudou (chamado 1x/frame apos animacao) - o SoA derivado dele precisa
     // ser refeito antes do proximo cull, seja o da camera ou o da sombra,
     // qualquer um que rode primeiro neste frame.
     m_instanceSoADirty = true;
+}
+
+// Instancia nova de modelo ja' carregado (objects.spawn, peca posta por script)
+// entra no FIM da lista: so' ela precisa de espelho. rebuildHotData() refazia
+// as ~5,5 mil do andar a cada peca - 3 a 15 ms por spawn, e os scripts poem
+// centenas ao entrar no mapa. O mesmo para as copias do duplicateBatch.
+void ModelRenderer::syncNewHotEntries() {
+    const uint32_t count = static_cast<uint32_t>(m_instances.size());
+    const uint32_t known = static_cast<uint32_t>(m_instanceHot.size());
+    if (known > count) {
+        rebuildHotData();
+        return;
+    }
+    if (known == count) return;
+    m_instanceHot.resize(count);
+    m_instUvTranslateRot.resize(count);
+    m_instUvScale.resize(count);
+    for (uint32_t i = known; i < count; ++i) syncHotEntry(i);
+    m_instanceSoADirty = true;
+}
+
+void ModelRenderer::syncHotEntry(uint32_t i) {
+    const ModelInstance& inst = m_instances[i];
+    ModelInstanceHot& hot = m_instanceHot[i];
+    // Espelha a UV aqui (ponto unico de sincronia, roda tambem depois da
+    // animacao de textura) para o laco de desenho nao tocar no struct frio.
+    m_instUvTranslateRot[i] = inst.hasTextureAnimation
+        ? Vec4(inst.uvTranslate, inst.uvRotation, 0.0f) : Vec4(0.0f);
+    m_instUvScale[i] = inst.hasTextureAnimation ? inst.uvScale : Vec2(1.0f);
+    hot.transform = inst.transform;
+    hot.worldAabbMin = inst.worldAabbMin;
+    hot.worldAabbMax = inst.worldAabbMax;
+    hot.meshIndex = inst.meshIndex;
+    // Malha liberada (mapa vizinho que saiu do mundo): a instância não desenha mais.
+    const bool hasMesh = inst.meshIndex < m_meshes.size() && m_meshes[inst.meshIndex].indexCount > 0;
+    hot.flags = (inst.enabled && !inst.viewHidden && hasMesh) ? 1u : 0u;
+    hot.boundingRadius = inst.boundingRadius;
 }
 
 // Garante que ModelInstanceSoA reflete o ModelInstanceHot atual, refazendo o

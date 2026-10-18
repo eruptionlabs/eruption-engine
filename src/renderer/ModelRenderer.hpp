@@ -1072,6 +1072,9 @@ private:
 
     void createPipeline();
     void rebuildHotData();
+    // So' as instancias acrescentadas no fim desde o ultimo espelho (addInstanceOf).
+    void syncNewHotEntries();
+    void syncHotEntry(uint32_t i);
     void touchInstance(uint32_t index);
     std::vector<uint32_t> m_touched;
     std::vector<uint8_t> m_touchedMark;
