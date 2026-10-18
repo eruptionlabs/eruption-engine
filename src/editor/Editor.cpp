@@ -1391,6 +1391,16 @@ void Editor::drawShortcutsWindow() {
 }
 
 void Editor::handleGameMapRequest() {
+    // game.restart() no Play do editor: Stop (a cena volta ao que o arquivo
+    // declara) e Play de novo, com os scripts do zero.
+    if (m_scripts && m_scripts->takeRestartRequest() && m_play != PlayState::Editing) {
+        stop();
+        m_scripts->reboot();
+        m_engine->timer().setTimeScale(1.0f);
+        m_engine->uiCanvas().clearEffects();
+        play();
+        return;
+    }
     Engine::MapRequest request;
     if (m_engine->takeMapRequest(request)) {
         if (m_play == PlayState::Editing) return; // só o jogo troca de mapa

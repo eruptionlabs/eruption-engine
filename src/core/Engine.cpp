@@ -2053,6 +2053,22 @@ static void envOverrideBool(const char* name, bool& out) {
 
 // DoF ligado por script ou pela linha do tempo da demo: o efeito 3 e' quem
 // manda (o render recopia enableDoF dele a cada quadro).
+void Engine::captureScriptDefaults() {
+    m_bootLook = m_lookConfig;
+    m_bootDof = m_postSettings.enableDoF;
+}
+
+void Engine::restoreScriptDefaults() {
+    m_lookConfig = m_bootLook;     // world.set_look
+    setDofEnabled(m_bootDof);      // world.set_dof
+    m_postSettings.focusOverride = false; // world.set_focus
+    setScriptFog(MapFog{});        // world.set_fog: volta a do clima/mapa
+    setSeeThrough(0.0f, 0.25f);    // camera.see_through
+    setSpriteShadow(-1);           // characters.set_shadow
+    m_audio.resetMix();            // volumes geral, da musica e dos grupos
+    setMinimapLabel({});           // ui.minimap_label
+}
+
 void Engine::setDofEnabled(bool on) {
     m_postSettings.enableDoF = on;
     if (m_renderEffects.size() > 3) m_renderEffects[3]->setEnabled(on);

@@ -293,6 +293,48 @@ fs::path ScriptHost::saveDir() {
     return fs::path("saves");
 }
 
+namespace {
+
+// Configuracao do jogador (volumes, velocidade...): fora dos jogos salvos, que
+// a apagam ou trocam. O ponto no nome nao sai de um nome de slot (slotPath
+// troca '.' por '_'), entao nunca colide com um jogo salvo.
+fs::path settingsPath() { return ScriptHost::saveDir() / "settings.prefs.json"; }
+
+} // namespace
+
+bool ScriptHost::saveSettings(lua_State* L, int idx, std::string& error) {
+    if (!lua_istable(L, idx)) {
+        error = "settings must be a table";
+        return false;
+    }
+    const json j = toJson(L, idx, 0);
+    std::error_code ec;
+    fs::create_directories(saveDir(), ec);
+    // Grava ao lado e troca: um desligamento no meio nao deixa o arquivo pela metade.
+    const fs::path path = settingsPath(), tmp = path.string() + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) {
+            error = "cannot write " + tmp.string();
+            return false;
+        }
+        f << j.dump(1, ' ', false, json::error_handler_t::replace);
+    }
+    fs::rename(tmp, path, ec);
+    if (ec) {
+        error = "cannot write " + path.string() + ": " + ec.message();
+        return false;
+    }
+    return true;
+}
+
+void ScriptHost::pushSettings(lua_State* L) {
+    std::ifstream f(settingsPath(), std::ios::binary);
+    const json j = f ? json::parse(f, nullptr, false) : json();
+    if (j.is_object()) pushJson(L, j, 0);
+    else lua_newtable(L); // sem arquivo (ou estragado): tabela vazia, o jogo usa os padroes dele
+}
+
 bool ScriptHost::hasSave(const std::string& slot) {
     std::error_code ec;
     return fs::exists(slotPath(slot), ec);
