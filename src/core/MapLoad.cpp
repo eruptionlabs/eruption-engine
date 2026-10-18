@@ -208,12 +208,25 @@ void Engine::setPlayerController(PlayerController* pc) {
     }
 }
 
+// ERUPTION_TEST_LOAD_PHASES=1 (bancada): duracao de cada fase do loadMap no
+// log ("[LOADPHASE] fase ms"), para achar o que trava a troca de mapa.
+static void loadPhase(const char* fase) {
+    static const bool kOn = std::getenv("ERUPTION_TEST_LOAD_PHASES") != nullptr;
+    if (!kOn) return;
+    static auto last = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    ERUPTION_LOG_WARN("[LOADPHASE] %-20s %7.1f ms", fase, std::chrono::duration<double, std::milli>(now - last).count());
+    last = now;
+}
+
 bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preloaded) {
+    loadPhase("inicio");
     m_fsrReset = true; // historico temporal do FSR nao vale entre mapas
     m_isInitialBoot = false; // No longer the initial boot
     TelemetryExporter::recordLoadStart(name);
     loadMapClimate(name);
     m_vulkan.waitIdle();
+    loadPhase("clima+waitIdle");
     clearCharacters(); // os do mapa novo vêm do scene.luau dele
     m_scriptFog = MapFog{}; // world.set_fog e' do mapa que o pediu
     clearPlayerStart();
@@ -223,6 +236,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     clearAreas();
     clearSoundEmitters();
     m_solid.clear();
+    loadPhase("limpeza");
 
     // GERACAO DO CACHE DE ASSET. Ate 2026-09-05 so' o warp (o antigo performMapSwap)
     // avancava a geracao e expulsava textura/malha velha do GlobalAssetCache;
@@ -270,6 +284,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     m_weatherFieldType = -1;
 
     presentLoadingScreen(name, "Loading map data", 0.1f);
+    loadPhase("cache+nuvens");
 
     // MapLoader accepts either a plain map name (resolved to assets/external/<name>/<name>.glb)
     // or an explicit file path ending in .glb/.map.
@@ -310,6 +325,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     }
 
     presentLoadingScreen(name, "Building terrain", 0.4f);
+    loadPhase("leitura+agua");
     if (!loadedMap->isGlbMap) {
         m_terrainRenderer.buildChunks(loadedMap->terrain, &m_packManager);
     } else {
@@ -318,6 +334,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     }
 
     presentLoadingScreen(name, "Placing models", 0.7f);
+    loadPhase("terreno");
     if (loadedMap->isGlbMap) {
         // Modern GLB maps use the companion terrain file only for spawn/height reference.
         // Center the player on the authored terrain bounds, honoring offset + scale.
@@ -375,6 +392,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     }
     // Retoque de terreno salvo pelo editor: entra nos vértices antes de subir.
     prepareHeightEdits(*loadedMap, genericModels);
+    loadPhase("conversao modelos");
     applySavedWalk(*loadedMap);
     ERUPTION_LOG_WARN("Engine::loadMap: loading %zu models, %zu instances", genericModels.size(), genericInstances.size());
     // GLB maps are authored in world space; do not add a center offset.
@@ -394,6 +412,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     // BC, m_embeddedBaked fica vazio e o caminho RGBA8 abaixo roda igual.
     // ------------------------------------------------------------------
     m_embeddedBaked.clear();
+    loadPhase("geometria/costuras");
     if (m_currentMap) {
         for (auto& model : m_currentMap->models) {
             if (model.embeddedTextures.empty()) continue;
@@ -506,6 +525,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
             (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - _t).count());
     }
 
+    loadPhase("texturas embutidas");
     auto _tLMM = std::chrono::steady_clock::now();
     // Cópia do chão na CPU: pincel do editor, ou pintura salva que o jogo
     // aplica nos vértices (mapas sem splat próprio).
@@ -525,6 +545,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
 
     flushPendingUploads();
     if (!m_modelRenderer.groundMeshes().empty()) bindHeightEditToMeshes();
+    loadPhase("loadMapModels");
     if (hasSavedSplat(name)) beginSplatEditing(); // máscaras pintadas no editor
 
 
@@ -534,6 +555,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
                       static_cast<unsigned long long>(m_modelRenderer.loadedTriangles()));
     
     presentLoadingScreen(name, "Finalizing", 0.95f);
+    loadPhase("uploads+splat");
     if (loadedMap) {
         // OFFSET DO CENTRO SO' EM MAPA LEGADO. As luzes de um mapa legado vem em
         // coordenada RELATIVA ao centro do mapa; as de um GLB (o .env ao lado)
@@ -665,6 +687,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     m_playerSpawnedOnActiveMap = true;
 
     m_vulkan.waitIdle();
+    loadPhase("spawn+ambiente+waitIdle");
 
     ERUPTION_LOG_WARN("Player spawned at (%.2f, %.2f, %.2f)",
                     m_playerController->pos().x,
@@ -680,6 +703,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
         m_cloudLayerRenderer.coverageArray().setLayerCount(cfg.layerCount);
     }
 
+    loadPhase("nuvens");
     // PROBES DE IRRADIANCIA (G38): bake 2.5D da visibilidade do ceu sobre o
     // (NO FIM do loadMap, depois de TODOS os uploads e do waitIdle: os buffers
     // base das malhas ainda nao estavam na GPU no ponto anterior - so' as
@@ -701,6 +725,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
             mx = glm::max(mx, imx);
         }
         const bool haveBounds = mx.x > mn.x && mx.z > mn.z;
+        loadPhase("probes: chave");
         if (haveBounds && m_irradianceProbesEnabled) {
             mx.y += 40.0f;
             mn.y -= 20.0f;
@@ -718,6 +743,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
         }
     }
 
+    loadPhase("probes: bake");
     TelemetryExporter::recordLoadEnd(name);
     // Estado do cache cross-mapa depois desta carga. E' o detector do
     // vazamento que existia ate 2026-09-05 (carga fria nunca expulsava nada):
@@ -771,6 +797,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
             start = end + 1;
         }
     }
+    loadPhase("vfx+fim");
     return true;
 }
 

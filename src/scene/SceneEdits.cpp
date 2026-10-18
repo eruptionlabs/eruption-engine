@@ -1,5 +1,6 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "scene/SceneEdits.hpp"
+#include <chrono>
 
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
@@ -489,6 +490,16 @@ std::string SceneEdits::serialize(const std::string& map) const {
 int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) const {
     ModelRenderer& mr = engine.modelRenderer();
     int applied = 0;
+    // ERUPTION_TEST_LOAD_PHASES=1: tempo de cada parte da cena (entrada no mapa).
+    static const bool kPhases = std::getenv("ERUPTION_TEST_LOAD_PHASES") != nullptr;
+    auto mark = std::chrono::steady_clock::now();
+    auto phase = [&mark](const char* name, size_t n) {
+        if (!kPhases) return;
+        const auto now = std::chrono::steady_clock::now();
+        ERUPTION_LOG_WARN("[SCENEPHASE] %-12s %4zu itens %7.1f ms", name, n,
+                          std::chrono::duration<double, std::milli>(now - mark).count());
+        mark = now;
+    };
     struct PrefabRoot {
         uint32_t first, count;
         std::string name, prefab;
@@ -532,6 +543,7 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         ++applied;
     }
     // Prefab composto: filhos, etiquetas e scripts sob o objeto da raiz.
+    phase("modelos", added.size());
     if (!prefabRoots.empty()) {
         SceneObjects& so = engine.sceneObjects();
         so.refresh(engine);
@@ -540,6 +552,7 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
             so.buildPrefabExtras(engine, root, r.placement, r.prefab);
         }
     }
+    phase("prefabs", prefabRoots.size());
     for (const auto& ob : objects) {
         const int idx = scriptFindModel(ob.name);
         if (idx < 0) continue;
@@ -547,6 +560,7 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         if (ob.hidden) mr.setInstanceEnabled(static_cast<uint32_t>(idx), false);
         ++applied;
     }
+    phase("objetos", objects.size());
     for (const auto& a : areas) {
         if (engine.findArea(a.name) >= 0) continue;
         engine.addArea(a.name, a.position, a.size, a.rotation);
@@ -557,6 +571,7 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         engine.addSoundEmitter(snd.name, snd.file, snd.position, snd.volume, snd.range);
         ++applied;
     }
+    phase("areas+sons", areas.size() + sounds.size());
     for (const auto& c : copies) {
         const int src = scriptFindModel(c.from);
         if (src < 0 || scriptFindModel(c.name) >= 0) continue;
@@ -584,6 +599,7 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
             if (insts[i].name == ob.name || insts[i].name.rfind(ob.name + "/", 0) == 0) mr.playAnimation(i, ob.animation);
     }
     auto& ls = engine.deferredLighting().getPointLights();
+    phase("copias+obj", copies.size());
     for (const auto& l : lights) {
         if (l.index < 1 || l.index > 1024) continue;
         // Índice além das luzes do mapa: luz criada no editor.
@@ -596,6 +612,7 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         p.enabled = l.enabled;
         ++applied;
     }
+    phase("luzes", lights.size());
     for (const auto& c : characters) {
         if (engine.findCharacter(c.name) >= 0) continue;
         const int idx = engine.addCharacter(c.name, c.sprite, c.position, c.facing);
@@ -606,6 +623,7 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         engine.setPlayerStart(spawn);
         ++applied;
     }
+    phase("personagens", characters.size());
     const auto present = engine.splatLayerFiles();
     {
         std::vector<std::string> missing;
@@ -619,6 +637,7 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         if (engine.addSplatLayer(layer)) ++applied;
         else ERUPTION_LOG_WARN("Terrain layer %s could not be loaded", layer.c_str());
     }
+    phase("camadas", terrainLayers.size());
     if (hasEnvironment) {
         engine.dayNightCycle().setTimeOfDay(time / 24.0f);
         engine.dayNightCycle().setPaused(paused);

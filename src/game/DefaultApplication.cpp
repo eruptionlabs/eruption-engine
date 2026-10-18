@@ -3,6 +3,7 @@
 #include "scene/SceneEdits.hpp"
 #include "core/Platform.hpp"
 #include "game/DefaultApplication.hpp"
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
@@ -328,13 +329,26 @@ void DefaultApplication::onUpdate(float deltaTime) {
         // jogo: aplicadas uma vez, depois que o jogador nasce no mapa.
         if (m_engine && m_engine->isPlayerSpawnedOnActiveMap() && m_engine->currentMapName() != m_sceneEditsMap) {
             m_sceneEditsMap = m_engine->currentMapName();
+            // ERUPTION_TEST_LOAD_PHASES=1: tempo de cada passo da entrada no
+            // mapa (o quadro depois da troca e' onde a cena pesa).
+            static const bool kPhases = std::getenv("ERUPTION_TEST_LOAD_PHASES") != nullptr;
+            auto mark = std::chrono::steady_clock::now();
+            auto phase = [&mark](const char* name) {
+                if (!kPhases) return;
+                const auto now = std::chrono::steady_clock::now();
+                ERUPTION_LOG_WARN("[MAPPHASE] %-14s %7.1f ms", name, std::chrono::duration<double, std::milli>(now - mark).count());
+                mark = now;
+            };
             SceneEdits edits;
             std::string error;
             if (!edits.load(SceneEdits::pathFor(m_sceneEditsMap), error)) ERUPTION_LOG_ERROR("%s", error.c_str());
             else if (!edits.empty())
                 ERUPTION_LOG_WARN("Scene edits: %d change(s) applied to %s", edits.apply(*m_engine), m_sceneEditsMap.c_str());
+            phase("cena");
             m_engine->loadScatter(m_sceneEditsMap); // objetos espalhados pelo pincel
+            phase("scatter");
             m_engine->startWorld();                 // mapas vizinhos (mundo contínuo)
+            phase("mundo");
             m_engine->setSoundEmittersActive(true); // sons da cena tocam com o jogo
             if (m_hasMapSpawn && m_player) {
                 m_hasMapSpawn = false;
@@ -348,6 +362,7 @@ void DefaultApplication::onUpdate(float deltaTime) {
             } else if (m_scripts) {
                 m_scripts->mapReady(); // mapa novo: foto e o estado de quando se saiu dele
             }
+            phase("scripts");
         }
         if (m_engine) m_engine->updateCharacters(deltaTime, true);
         if (m_engine && m_player) m_player->update(deltaTime);
