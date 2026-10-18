@@ -4,6 +4,9 @@
 // num mapa sem splat (New Map) os vértices do chão passam a apontar para elas
 // quando a primeira camada é escolhida. Salvas como PNG ao lado da cena.
 #include "core/Engine.hpp"
+#include <mutex>
+#include <chrono>
+#include "core/JobSystem.hpp"
 
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
@@ -19,6 +22,13 @@
 #include <iterator>
 
 namespace eruption {
+
+// Bits altos do slot de 16 bits de cada camada (o slot cabe em 12): a camada
+// tem normal em slot+1 e/ou MRAH-W em slot+2. O vertice do chao nao ganha
+// atributo novo (o celular tem teto de 16).
+constexpr uint32_t kSplatHasNormal = 0x8000u;
+constexpr uint32_t kSplatHasMrahw = 0x4000u;
+constexpr uint32_t kSplatSlotMask = 0x3FFFu;
 
 namespace {
 
@@ -126,7 +136,7 @@ bool Engine::beginSplatEditing() {
     }
     sp.fromMap = oldSlot[0] != 0;
     for (int l = 0; l < 8; ++l)
-        if (sp.layerSlot[l]) sp.layerNames[l] = textureNameForSlot(sp.layerSlot[l]);
+        if (sp.layerSlot[l]) sp.layerNames[l] = textureNameForSlot(sp.layerSlot[l] & kSplatSlotMask);
 
     // Pixels de partida: as máscaras originais (texturas embutidas no GLB).
     for (int i = 0; i < 2 && sp.fromMap; ++i) {
@@ -188,14 +198,136 @@ void Engine::endSplatEditing() {
         if (sp.gpu[i].view) vkDestroyImageView(m_vulkan.device(), sp.gpu[i].view, nullptr);
         if (sp.gpu[i].image) vmaDestroyImage(m_vulkan.allocator(), sp.gpu[i].image, sp.gpu[i].alloc);
     }
-    for (auto& l : sp.layerTex)
-        if (l.image) {
+    for (auto* set : {sp.layerTex, sp.layerNormal, sp.layerMrahw})
+        for (int i = 0; i < 8; ++i) {
+            TextureResource& l = set[i];
+            if (!l.image) continue;
             m_bindless.freeSlot(l.slot);
             vkDestroyImageView(m_vulkan.device(), l.view, nullptr);
             vmaDestroyImage(m_vulkan.allocator(), l.image, l.alloc);
         }
     if (sp.sampler) vkDestroySampler(m_vulkan.device(), sp.sampler, nullptr);
     sp = SplatEdit{};
+}
+
+
+static std::vector<uint8_t> splatRgba(const ImageData& img) {
+    return img.channels == 4 ? img.pixels
+                             : resampleRGBA(img.pixels.data(), img.width, img.height, img.channels,
+                                            uint32_t(img.width), uint32_t(img.height));
+}
+
+// Imagem de camada: a ja' decodificada por prefetchSplatLayers, senao do disco.
+ImageData Engine::splatLayerImage(const std::filesystem::path& path) {
+    const std::string key = path.string();
+    {
+        std::lock_guard<std::mutex> lock(m_splatDecodeMutex);
+        auto it = m_splatDecoded.find(key);
+        if (it != m_splatDecoded.end()) {
+            ImageData img = std::move(it->second);
+            m_splatDecoded.erase(it);
+            return img;
+        }
+    }
+    return loadRawPNG(path);
+}
+
+// As camadas da cena chegam juntas depois de uma troca de mapa: decodificar
+// cor, normal e MRAH-W de cada uma, uma depois da outra, na thread principal
+// (24 PNG de 2048 com as 8 camadas) congelava o quadro seguinte por ~4 s no
+// andar de caverna. Aqui todas decodificam em paralelo; o envio continua em
+// sequencia (addSplatLayer pega daqui).
+namespace {
+
+// Cor, _normal e _mrahw de cada camada que existem em disco.
+std::vector<std::filesystem::path> splatLayerPaths(const std::vector<std::string>& layers) {
+    std::vector<std::filesystem::path> paths;
+    for (const auto& layer : layers) {
+        const std::filesystem::path color = project::gameRef(layer);
+        const std::filesystem::path base = color.parent_path() / color.stem();
+        const std::string ext = color.extension().string();
+        for (const std::filesystem::path& p : {color, std::filesystem::path(base.string() + "_normal" + ext),
+                                               std::filesystem::path(base.string() + "_mrahw" + ext)}) {
+            std::error_code ec;
+            if (std::filesystem::exists(p, ec)) paths.push_back(p);
+        }
+    }
+    return paths;
+}
+
+} // namespace
+
+void Engine::preloadSplatLayers(const std::vector<std::string>& layers) {
+    for (const std::filesystem::path& p : splatLayerPaths(layers)) {
+        const std::string key = p.string();
+        {
+            std::lock_guard<std::mutex> lock(m_splatDecodeMutex);
+            if (m_splatDecoded.count(key)) continue;
+        }
+        JobSystem::instance().submit([this, p, key] {
+            ImageData img = loadRawPNG(p);
+            if (!img.isValid()) return;
+            std::lock_guard<std::mutex> lock(m_splatDecodeMutex);
+            m_splatDecoded[key] = std::move(img);
+        });
+    }
+}
+
+void Engine::prefetchSplatLayers(const std::vector<std::string>& layers) {
+    std::vector<std::filesystem::path> paths = splatLayerPaths(layers);
+    {
+        // Ja' decodificadas pelo preload do mapa: so' o envio fica aqui.
+        std::lock_guard<std::mutex> lock(m_splatDecodeMutex);
+        paths.erase(std::remove_if(paths.begin(), paths.end(),
+                                   [this](const std::filesystem::path& p) { return m_splatDecoded.count(p.string()) > 0; }),
+                    paths.end());
+    }
+    if (paths.empty()) return;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<ImageData> imgs(paths.size());
+    JobSystem::instance().parallelFor(static_cast<uint32_t>(paths.size()),
+                                      [&](uint32_t i) { imgs[i] = loadRawPNG(paths[i]); });
+    std::lock_guard<std::mutex> lock(m_splatDecodeMutex);
+    for (size_t i = 0; i < paths.size(); ++i)
+        if (imgs[i].isValid()) m_splatDecoded[paths[i].string()] = std::move(imgs[i]);
+    ERUPTION_LOG_WARN("Terrain layers: %zu imagens decodificadas em paralelo em %.0f ms", paths.size(),
+                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+}
+
+// Sobe a cor da camada e, se existirem ao lado dela, <nome>_normal e
+// <nome>_mrahw (o mesmo par das pecas). Devolve o slot da cor ja' com os bits
+// de quais mapas vieram; 0 se nem a cor subiu.
+uint32_t Engine::uploadSplatLayer(TextureResource& colorTex, TextureResource& normalTex, TextureResource& mrahwTex,
+                                  const std::filesystem::path& colorPath, const ImageData& color) {
+    const std::filesystem::path base = colorPath.parent_path() / colorPath.stem();
+    const std::string ext = colorPath.extension().string();
+    ImageData nrm = splatLayerImage(base.string() + "_normal" + ext);
+    ImageData mrh = splatLayerImage(base.string() + "_mrahw" + ext);
+    const bool hasN = nrm.isValid(), hasM = mrh.isValid();
+    uint32_t first = (hasN || hasM) ? m_bindless.allocateRange(3) : 0;
+    const bool range = first != 0;
+    if (!range) first = m_bindless.allocateSlot();
+    if (first == 0) return 0;
+    auto upload = [&](const ImageData& img, TextureResource& tex, uint32_t slot) {
+        const std::vector<uint8_t> rgba = splatRgba(img);
+        if (!createTextureFromPixels(rgba.data(), img.width, img.height, tex)) return false;
+        tex.slot = slot;
+        m_bindless.updateTexture(slot, tex.view, m_defaultSampler);
+        return true;
+    };
+    if (!upload(color, colorTex, first)) {
+        m_bindless.freeSlot(first);
+        if (range) { m_bindless.freeSlot(first + 1); m_bindless.freeSlot(first + 2); }
+        return 0;
+    }
+    uint32_t packed = first;
+    if (range) {
+        if (hasN && upload(nrm, normalTex, first + 1)) packed |= kSplatHasNormal;
+        else m_bindless.freeSlot(first + 1);
+        if (hasM && upload(mrh, mrahwTex, first + 2)) packed |= kSplatHasMrahw;
+        else m_bindless.freeSlot(first + 2);
+    }
+    return packed;
 }
 
 int Engine::splatLayerCount() const {
@@ -211,20 +343,18 @@ bool Engine::addSplatLayer(const std::string& png) {
     const int l = splatLayerCount();
     if (l >= 8 || (sp.fromMap && l >= 8)) return false;
     // Caminho RELATIVO vindo do arquivo de cena: a textura mora no projeto.
-    ImageData img = loadRawPNG(project::gameRef(png));
+    const std::filesystem::path path = project::gameRef(png);
+    ImageData img = splatLayerImage(path);
     if (!img.isValid()) return false;
-    std::vector<uint8_t> rgba = img.channels == 4 ? img.pixels
-                                                  : resampleRGBA(img.pixels.data(), img.width, img.height, img.channels,
-                                                                 uint32_t(img.width), uint32_t(img.height));
-    TextureResource& tex = sp.layerTex[l];
-    if (!createTextureFromPixels(rgba.data(), img.width, img.height, tex)) return false;
-    tex.slot = m_bindless.allocateSlot();
-    m_bindless.updateTexture(tex.slot, tex.view, m_defaultSampler);
+    const uint32_t packedSlot = uploadSplatLayer(sp.layerTex[l], sp.layerNormal[l], sp.layerMrahw[l], path, img);
+    if (packedSlot == 0) return false;
     m_bindless.flushUpdates();
-    sp.layerSlot[l] = tex.slot;
+    const TextureResource& tex = sp.layerTex[l];
+    sp.layerSlot[l] = packedSlot;
     sp.layerNames[l] = png;
     sp.layerFiles[l] = png;
-    ERUPTION_LOG_WARN("Terrain layer %d: %s (%ux%u) no slot %u", l, png.c_str(), img.width, img.height, tex.slot);
+    ERUPTION_LOG_WARN("Terrain layer %d: %s (%ux%u) no slot %u%s%s", l, png.c_str(), img.width, img.height, tex.slot,
+                      (packedSlot & kSplatHasNormal) ? " +normal" : "", (packedSlot & kSplatHasMrahw) ? " +mrahw" : "");
     // Os vértices do chão passam a ler as máscaras e as camadas.
     const uint32_t packed[4] = {sp.layerSlot[0] | (sp.layerSlot[1] << 16), sp.layerSlot[2] | (sp.layerSlot[3] << 16),
                                 sp.layerSlot[4] | (sp.layerSlot[5] << 16), sp.layerSlot[6] | (sp.layerSlot[7] << 16)};
@@ -432,14 +562,7 @@ bool Engine::buildRegionSplat(WorldRegion& r, const std::vector<std::string>& la
                               camada.string().c_str());
             continue;
         }
-        std::vector<uint8_t> rgba = img.channels == 4 ? img.pixels
-                                                      : resampleRGBA(img.pixels.data(), img.width, img.height, img.channels,
-                                                                     uint32_t(img.width), uint32_t(img.height));
-        TextureResource& tex = r.splatLayer[l];
-        if (!createTextureFromPixels(rgba.data(), img.width, img.height, tex)) continue;
-        tex.slot = m_bindless.allocateSlot();
-        m_bindless.updateTexture(tex.slot, tex.view, m_defaultSampler);
-        layerSlot[l] = tex.slot;
+        layerSlot[l] = uploadSplatLayer(r.splatLayer[l], r.splatLayerNormal[l], r.splatLayerMrahw[l], camada, img);
     }
     m_bindless.flushUpdates();
     const uint32_t packed[4] = {layerSlot[0] | (layerSlot[1] << 16), layerSlot[2] | (layerSlot[3] << 16),
@@ -473,9 +596,9 @@ bool Engine::buildRegionSplat(WorldRegion& r, const std::vector<std::string>& la
 void Engine::releaseRegionSplat(WorldRegion& r, bool now) {
     std::vector<TextureResource> texs;
     for (auto& m : r.splatMask) texs.push_back(m);
-    for (auto& l : r.splatLayer) texs.push_back(l);
+    for (auto* set : {r.splatLayer, r.splatLayerNormal, r.splatLayerMrahw})
+        for (int l = 0; l < 8; ++l) { texs.push_back(set[l]); set[l] = TextureResource{}; }
     for (auto& m : r.splatMask) m = TextureResource{};
-    for (auto& l : r.splatLayer) l = TextureResource{};
     const VkSampler sampler = r.splatSampler;
     r.splatSampler = VK_NULL_HANDLE;
     // O slot volta para a textura padrão já; a imagem só morre depois dos

@@ -108,10 +108,10 @@ float heightDebugSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec
     float hBase = heightDebugUv(baseTex, uvIn, false);
     if ((splat.x | splat.y) == 0u || maskIdx == 0u) return hBase;
     vec4 w = textureLod(u_textures[nonuniformEXT(maskIdx)], maskUv, 0.0);
-    uint s0 =  splat.x        & 0xFFFFu;
-    uint s1 = (splat.x >> 16) & 0xFFFFu;
-    uint s2 =  splat.y        & 0xFFFFu;
-    uint s3 = (splat.y >> 16) & 0xFFFFu;
+    uint s0 =  splat.x        & 0x3FFFu;
+    uint s1 = (splat.x >> 16) & 0x3FFFu;
+    uint s2 =  splat.y        & 0x3FFFu;
+    uint s3 = (splat.y >> 16) & 0x3FFFu;
     float wBaseSum = w.r + w.g + w.b + w.a;
     float acc = 0.0, sum = 0.0;
     if (s0 != 0u) { acc += heightDebugUv(s0, uvIn, false) * w.r; sum += w.r; }
@@ -120,10 +120,10 @@ float heightDebugSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec
     if (s3 != 0u) { acc += heightDebugUv(s3, uvIn, false) * w.a; sum += w.a; }
     if (maskIdx2 != 0u) {
         vec4 w2 = textureLod(u_textures[nonuniformEXT(maskIdx2)], maskUv, 0.0);
-        uint s4 =  splat2.x        & 0xFFFFu;
-        uint s5 = (splat2.x >> 16) & 0xFFFFu;
-        uint s6 =  splat2.y        & 0xFFFFu;
-        uint s7 = (splat2.y >> 16) & 0xFFFFu;
+        uint s4 =  splat2.x        & 0x3FFFu;
+        uint s5 = (splat2.x >> 16) & 0x3FFFu;
+        uint s6 =  splat2.y        & 0x3FFFu;
+        uint s7 = (splat2.y >> 16) & 0x3FFFu;
         wBaseSum += w2.r + w2.g + w2.b + w2.a;
         if (s4 != 0u) { acc += heightDebugUv(s4, uvIn, false) * w2.r; sum += w2.r; }
         if (s5 != 0u) { acc += heightDebugUv(s5, uvIn, false) * w2.g; sum += w2.g; }
@@ -267,6 +267,73 @@ mat3 computeTBN(vec3 N, vec3 worldPos, vec2 uv) {
     return mat3(T, B, N);
 }
 
+// GPU fraca (VulkanContext::shaderLite): sem micro-sombra e sem a quebra de
+// ladrilho (3 amostras por textura de chão). Constante de especialização: o
+// driver tira o código e o shader cabe em menos registradores.
+layout(constant_id = 0) const bool LITE = false;
+
+// Bits altos do slot de 16 bits da camada do splat (o slot cabe em 12): a
+// camada traz normal em slot+1 e/ou MRAH-W em slot+2 (TerrainPaint.cpp).
+const uint kSplatHasNormal = 0x8000u;
+const uint kSplatHasMrahw = 0x4000u;
+
+// PAREDE INGREME (T2). A UV do chao com splat e' planar em XZ (uv = xz * k),
+// entao na encosta a textura estica na vertical. Ali as camadas tambem leem
+// pelas projecoes laterais X e Z (mapeamento triplanar, pesos |N|^4), e a
+// normal lida de lado vai para o mundo pelos eixos da projecao e volta para o
+// espaco tangente do chao (Golus, "Normal Mapping for a Triplanar Shader",
+// 2017). As derivadas de cada projecao saem no main, fora de qualquer if.
+struct ProjLado {
+    vec2 uv, ddx, ddy;
+    float w;        // peso desta projecao neste pixel (0 = nem amostra)
+    vec3 T, B, Nax; // eixos da projecao no mundo
+};
+
+// Normal lida numa projecao lateral, devolvida como texel do espaco tangente
+// do chao (o resto do shader decodifica e aplica o TBN como sempre).
+vec4 normalDoLado(vec4 texel, ProjLado p, mat3 TBN) {
+    vec3 t = texel.xyz * 2.0 - 1.0;
+    vec3 w = normalize(p.T * t.x + p.B * t.y + p.Nax * t.z);
+    vec3 ts = transpose(TBN) * w;
+    return vec4(ts * 0.5 + 0.5, texel.a);
+}
+
+// Uma camada do splat: cor (sempre) e, quando vierem, normal e MRAH-W, todos
+// com o MESMO ladrilhamento estocastico da cor (deslocamento diferente entre
+// cor e relevo le como textura deslocada). Camada com peso zero neste pixel
+// nao soma nada: pula as buscas (so' no estocastico, que usa gradiente
+// explicito; o caminho simples nao pode ficar dentro de um if por pixel).
+// `topo` e' o peso da projecao de cima (1 no plano; menor na encosta, onde
+// `lx`/`lz` levam o resto).
+void camadaSplat(uint s, float w, vec2 uv, vec2 ddxUV, vec2 ddyUV, bool quebrar,
+                 float topo, ProjLado lx, ProjLado lz, mat3 TBN,
+                 inout vec3 acc, inout float sum, inout vec4 accN, inout float sumN,
+                 inout vec4 accM, inout float sumM) {
+    const uint slot = s & 0x3FFFu;
+    if (slot == 0u || (quebrar && w <= 0.0)) return;
+    const bool nrm = (s & kSplatHasNormal) != 0u, mrh = (s & kSplatHasMrahw) != 0u;
+    const uint ns = slot + 1u, ms = slot + 2u;
+    vec4 c = vec4(0.0), n = vec4(0.0), m = vec4(0.0);
+    if (topo > 0.0) {
+        c = amostraChao(nonuniformEXT(slot), uv, ddxUV, ddyUV, quebrar, true) * topo;
+        if (nrm) n = amostraChao(nonuniformEXT(ns), uv, ddxUV, ddyUV, quebrar, false) * topo;
+        if (mrh) m = amostraChao(nonuniformEXT(ms), uv, ddxUV, ddyUV, quebrar, true) * topo;
+    }
+    if (lx.w > 0.0) {
+        c += amostraChao(nonuniformEXT(slot), lx.uv, lx.ddx, lx.ddy, quebrar, true) * lx.w;
+        if (nrm) n += normalDoLado(amostraChao(nonuniformEXT(ns), lx.uv, lx.ddx, lx.ddy, quebrar, false), lx, TBN) * lx.w;
+        if (mrh) m += amostraChao(nonuniformEXT(ms), lx.uv, lx.ddx, lx.ddy, quebrar, true) * lx.w;
+    }
+    if (lz.w > 0.0) {
+        c += amostraChao(nonuniformEXT(slot), lz.uv, lz.ddx, lz.ddy, quebrar, true) * lz.w;
+        if (nrm) n += normalDoLado(amostraChao(nonuniformEXT(ns), lz.uv, lz.ddx, lz.ddy, quebrar, false), lz, TBN) * lz.w;
+        if (mrh) m += amostraChao(nonuniformEXT(ms), lz.uv, lz.ddx, lz.ddy, quebrar, true) * lz.w;
+    }
+    acc += c.rgb * w;
+    sum += w;
+    if (nrm) { accN += n * w; sumN += w; }
+    if (mrh) { accM += m * w; sumM += w; }
+}
 void main() {
 #ifndef ERUPTION_NO_VELOCITY
     {
@@ -468,7 +535,15 @@ void main() {
     mat3 TBN;
     bool hasPbr = inPbrIndex != 0u;
     bool hasNormal = inNormalIndex != 0u;
-    if (hasNormal || hasPbr) {
+    // Camadas do splat com normal/MRAH-W proprios (bits 15/14 do slot de cada
+    // camada, ver TerrainPaint.cpp): o chao entra no caminho de normal mesmo
+    // sem normal map na malha.
+    const uint splatBits = inBlendMaskIndex != 0u ? (inSplatTex.x | inSplatTex.y | inSplatTex2.x | inSplatTex2.y) : 0u;
+    const bool splatNrm = !LITE && (splatBits & (kSplatHasNormal | (kSplatHasNormal << 16))) != 0u;
+    const bool splatMrh = !LITE && (splatBits & (kSplatHasMrahw | (kSplatHasMrahw << 16))) != 0u;
+    vec4 splatNormal = vec4(0.0), splatMrahw = vec4(0.0);
+    float splatNormalW = 0.0, splatMrahwW = 0.0; // fracao do pixel coberta por camada com o mapa
+    if (hasNormal || hasPbr || splatNrm) {
         TBN = computeTBN(N, inWorldPos, inTexCoord);
     }
     // POM REMOVIDO (decisão de projeto, docs/displacement_design.md): a
@@ -534,45 +609,83 @@ void main() {
     // normalizado - assim a mascara nunca escurece nem estoura a superficie
     // por soma errada.
     bool hasSplat = (inSplatTex.x | inSplatTex.y) != 0u && inBlendMaskIndex != 0u;
+    // Projecoes laterais das camadas (T2), so' no chao com splat e fora do
+    // LITE. Escala da UV por unidade de mundo pela derivada: com uv = xz * k
+    // a razao |dUV| / |dXZ| e' exatamente k em qualquer inclinacao (usa o eixo
+    // de tela em que o XZ mais anda, para nao dividir por quase zero).
+    float topo = 1.0;
+    ProjLado ladoX = ProjLado(vec2(0.0), vec2(0.0), vec2(0.0), 0.0, vec3(0.0), vec3(0.0), vec3(0.0));
+    ProjLado ladoZ = ladoX;
+    {
+        const vec2 dxz = dFdx(inWorldPos.xz), dyz = dFdy(inWorldPos.xz);
+        const bool porX = dot(dxz, dxz) > dot(dyz, dyz);
+        const float k = porX ? length(ddxUV) / max(length(dxz), 1e-6) : length(ddyUV) / max(length(dyz), 1e-6);
+        const float sx = N.x >= 0.0 ? 1.0 : -1.0, sz = N.z >= 0.0 ? 1.0 : -1.0;
+        const vec2 uvX = vec2(-inWorldPos.z * sx, -inWorldPos.y) * k;
+        const vec2 uvZ = vec2(inWorldPos.x * sz, -inWorldPos.y) * k;
+        const vec2 dxX = dFdx(uvX), dyX = dFdy(uvX), dxZ = dFdx(uvZ), dyZ = dFdy(uvZ);
+        // Encosta: |N.y| abaixo de 0,8 comeca a ler de lado; abaixo de 0,55
+        // ja' e' parede (so' lado).
+        const float lado = (hasSplat && !LITE) ? smoothstep(0.80, 0.55, abs(N.y)) : 0.0;
+        const float ax = pow(abs(N.x), 4.0), az = pow(abs(N.z), 4.0);
+        const float soma = max(ax + az, 1e-6);
+        topo = 1.0 - lado;
+        ladoX = ProjLado(uvX, dxX, dyX, lado * ax / soma, vec3(0.0, 0.0, -sx), vec3(0.0, -1.0, 0.0), vec3(sx, 0.0, 0.0));
+        ladoZ = ProjLado(uvZ, dxZ, dyZ, lado * az / soma, vec3(sz, 0.0, 0.0), vec3(0.0, -1.0, 0.0), vec3(0.0, 0.0, sz));
+        if (ladoX.w < 0.02) { topo += ladoX.w; ladoX.w = 0.0; }
+        if (ladoZ.w < 0.02) { topo += ladoZ.w; ladoZ.w = 0.0; }
+        // Parede: o plano de cima quase nao pesa e custaria as mesmas buscas.
+        if (topo < 0.02 && ladoX.w + ladoZ.w > 0.0) {
+            const float k2 = 1.0 / (ladoX.w + ladoZ.w);
+            ladoX.w *= k2; ladoZ.w *= k2; topo = 0.0;
+        }
+    }
     if (hasSplat) {
         vec4 w = texture(u_textures[nonuniformEXT(inBlendMaskIndex)], inBlendMaskUV);
-        uint s0 =  inSplatTex.x        & 0xFFFFu;
-        uint s1 = (inSplatTex.x >> 16) & 0xFFFFu;
-        uint s2 =  inSplatTex.y        & 0xFFFFu;
-        uint s3 = (inSplatTex.y >> 16) & 0xFFFFu;
+        // AS DUAS CAMADAS QUE MAIS PESAM. Cada camada custa ate' 3 mapas (cor,
+        // normal, MRAH-W) x 3 projecoes na encosta x 3 amostras do
+        // ladrilhamento estocastico; ler as 8 levava o G-buffer do andar de
+        // caverna de 6,2 para 17 ms na 4060. Na pintura quase todo pixel tem
+        // ate' duas camadas acesas; as outras entram so' no peso que fecha a
+        // base (que nao muda) e saem da media, renormalizada. Mesma ideia do
+        // splat por "top-k" de terrenos grandes (Andersson, "Terrain Rendering
+        // in Frostbite Using Procedural Shader Splatting", SIGGRAPH 2007).
+        uint slots[8];
+        float pesos[8];
+        slots[0] =  inSplatTex.x        & 0xFFFFu; pesos[0] = w.r;
+        slots[1] = (inSplatTex.x >> 16) & 0xFFFFu; pesos[1] = w.g;
+        slots[2] =  inSplatTex.y        & 0xFFFFu; pesos[2] = w.b;
+        slots[3] = (inSplatTex.y >> 16) & 0xFFFFu; pesos[3] = w.a;
         float wBaseSum = w.r + w.g + w.b + w.a;
-        vec3 acc = vec3(0.0);
-        float sum = 0.0;
-        // Camada com peso zero neste pixel nao soma nada (c * 0 = 0): pula as
-        // 4 buscas dela. So' no ladrilhamento estocastico, que amostra com
-        // gradiente explicito; o caminho simples usa texture() e nao pode
-        // ficar dentro de um if por pixel.
-        if (s0 != 0u && (!quebraLadrilho || w.r > 0.0)) { acc += amostraChao(nonuniformEXT(s0), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.r; sum += w.r; }
-        if (s1 != 0u && (!quebraLadrilho || w.g > 0.0)) { acc += amostraChao(nonuniformEXT(s1), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.g; sum += w.g; }
-        if (s2 != 0u && (!quebraLadrilho || w.b > 0.0)) { acc += amostraChao(nonuniformEXT(s2), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.b; sum += w.b; }
-        if (s3 != 0u && (!quebraLadrilho || w.a > 0.0)) { acc += amostraChao(nonuniformEXT(s3), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w.a; sum += w.a; }
-
         // Segunda mascara (camadas 4..7 - dobra o splat pra 9 no total com a
         // base). Mesma UV da primeira, indice de material proprio. Inerte
-        // (peso 0) em qualquer GLB que so' tenha o splat de 4 - inBlendMaskIndex2
-        // vem zero e a soma de pesos cai exatamente no caminho de antes.
-        if (inBlendMaskIndex2 != 0u) {
-            vec4 w2 = texture(u_textures[nonuniformEXT(inBlendMaskIndex2)], inBlendMaskUV);
-            uint s4 =  inSplatTex2.x        & 0xFFFFu;
-            uint s5 = (inSplatTex2.x >> 16) & 0xFFFFu;
-            uint s6 =  inSplatTex2.y        & 0xFFFFu;
-            uint s7 = (inSplatTex2.y >> 16) & 0xFFFFu;
-            wBaseSum += w2.r + w2.g + w2.b + w2.a;
-            if (s4 != 0u && (!quebraLadrilho || w2.r > 0.0)) { acc += amostraChao(nonuniformEXT(s4), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.r; sum += w2.r; }
-            if (s5 != 0u && (!quebraLadrilho || w2.g > 0.0)) { acc += amostraChao(nonuniformEXT(s5), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.g; sum += w2.g; }
-            if (s6 != 0u && (!quebraLadrilho || w2.b > 0.0)) { acc += amostraChao(nonuniformEXT(s6), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.b; sum += w2.b; }
-            if (s7 != 0u && (!quebraLadrilho || w2.a > 0.0)) { acc += amostraChao(nonuniformEXT(s7), uv, ddxUV, ddyUV, quebraLadrilho, true).rgb * w2.a; sum += w2.a; }
+        // (peso 0) em qualquer GLB que so' tenha o splat de 4.
+        vec4 w2 = inBlendMaskIndex2 != 0u ? texture(u_textures[nonuniformEXT(inBlendMaskIndex2)], inBlendMaskUV) : vec4(0.0);
+        slots[4] =  inSplatTex2.x        & 0xFFFFu; pesos[4] = w2.r;
+        slots[5] = (inSplatTex2.x >> 16) & 0xFFFFu; pesos[5] = w2.g;
+        slots[6] =  inSplatTex2.y        & 0xFFFFu; pesos[6] = w2.b;
+        slots[7] = (inSplatTex2.y >> 16) & 0xFFFFu; pesos[7] = w2.a;
+        wBaseSum += w2.r + w2.g + w2.b + w2.a;
+        int i0 = -1, i1 = -1;
+        float p0 = 0.0, p1 = 0.0;
+        for (int k = 0; k < 8; ++k) {
+            if ((slots[k] & 0x3FFFu) == 0u || pesos[k] <= 0.0) continue;
+            if (pesos[k] > p0) { i1 = i0; p1 = p0; i0 = k; p0 = pesos[k]; }
+            else if (pesos[k] > p1) { i1 = k; p1 = pesos[k]; }
         }
+        vec3 acc = vec3(0.0);
+        float sum = 0.0;
+        if (i0 >= 0) camadaSplat(slots[i0], p0, uv, ddxUV, ddyUV, quebraLadrilho, topo, ladoX, ladoZ, TBN, acc, sum, splatNormal, splatNormalW, splatMrahw, splatMrahwW);
+        if (i1 >= 0) camadaSplat(slots[i1], p1, uv, ddxUV, ddyUV, quebraLadrilho, topo, ladoX, ladoZ, TBN, acc, sum, splatNormal, splatNormalW, splatMrahw, splatMrahwW);
 
         float wBase = max(0.0, 1.0 - wBaseSum);
         acc += texColor.rgb * wBase;
         sum += wBase;
         texColor.rgb = acc / max(sum, 1e-4);
+        // Normal e MRAH-W das camadas: media pelo peso de quem tem o mapa; a
+        // fracao (peso delas / peso total) decide quanto vence o da malha.
+        if (splatNormalW > 0.0) { splatNormal /= splatNormalW; splatNormalW /= max(sum, 1e-4); }
+        if (splatMrahwW > 0.0) { splatMrahw /= splatMrahwW; splatMrahwW /= max(sum, 1e-4); }
 
         // VARIACAO MACRO por PIXEL, independente da malha. O COLOR_0 por
         // vertice (Step 6 do pipeline Python) so' varia na resolucao do
@@ -674,15 +787,24 @@ void main() {
         ndScale  *= lut8(u_normalScaleLut0,  u_normalScaleLut1,  t);
         ndSmooth += lut8(u_normalSmoothLut0, u_normalSmoothLut1, t);
     }
-    if (hasNormal) {
+    if (hasNormal || splatNrm) {
         uint nIdx = nonuniformEXT(inNormalIndex);
-        vec4 sampledNormal = quebraLadrilho ? amostraSemGrade(nIdx, uv, ddxUV, ddyUV, false)
+        // Malha sem normal map (so' as camadas trazem): parte da normal plana.
+        vec4 sampledNormal = !hasNormal ? vec4(0.5, 0.5, 1.0, 0.0)
+                           : quebraLadrilho ? amostraSemGrade(nIdx, uv, ddxUV, ddyUV, false)
                                             : texture(u_textures[nIdx], uv, ndSmooth);
         if (!hasSplat && inBlendWeight > 0.0 && inBlendNormalIndex != 0u) {
             uint bnIdx = nonuniformEXT(inBlendNormalIndex);
             vec4 bNormal = texture(u_textures[bnIdx], uv, ndSmooth);
             sampledNormal = mix(sampledNormal, bNormal, blendT);
         }
+        // Normal das camadas do splat pelo mesmo peso da cor. Mistura linear
+        // do texel antes de decodificar, como a malha ja' faz com o blend
+        // de duas texturas: com pesos que somam 1 e o normalize depois, e' a
+        // media de normais (o "linear blend" de Barre-Brisebois e Hill,
+        // "Blending in Detail", 2012) - suficiente para camadas lado a lado,
+        // que nao se sobrepoem como detalhe sobre base.
+        if (splatNormalW > 0.0) sampledNormal = mix(sampledNormal, splatNormal, splatNormalW);
         materialProps = sampledNormal.a;
 
         // NOTA: nada de reconstruir z de xy aqui - os normal maps do acervo
@@ -875,6 +997,7 @@ void main() {
             vec4 bMrahw = texture(u_textures[bpIdx], uv);
             mrahw = mix(mrahw, bMrahw, blendT);
         }
+        if (splatMrahwW > 0.0) mrahw = mix(mrahw, splatMrahw, splatMrahwW);
         roughness = push.roughnessScale * mrahw.g;
         metallic  = push.metallicScale * mrahw.r;
         // MRAH-W alpha IS the cavity/pooling mask baked by PbrMapGen stage 5
@@ -887,6 +1010,14 @@ void main() {
         sourceFlag = 1.0; // real PBR map
         // Light touch of the cooked MRAH-W AO on top of the normal-map cavity.
         aoCavityBaked = mix(1.0, mrahw.b, 0.5); // cavidade ESTAVEL no ambiente (nao depende do sol)
+    } else if (splatMrahwW > 0.0) {
+        // Chao sem MRAH-W proprio: o das camadas entra pela fracao delas e o
+        // resto fica no padrao de antes (a base sem camada nao muda).
+        roughness  = mix(roughness, push.roughnessScale * splatMrahw.g, splatMrahwW);
+        metallic   = mix(metallic, push.metallicScale * splatMrahw.r, splatMrahwW);
+        wetness    = splatMrahw.a * splatMrahwW;
+        aoCavityBaked = mix(1.0, mix(1.0, splatMrahw.b, 0.5), splatMrahwW);
+        sourceFlag = splatMrahwW > 0.5 ? 1.0 : 0.5;
     }
     // COMBINACAO DOS DOIS TERMOS DE CAVIDADE: min(), nao produto.
     //

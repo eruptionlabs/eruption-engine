@@ -12,6 +12,7 @@
 #include "renderer/BindlessDescriptor.hpp"
 #include "renderer/SpriteRenderer.hpp"
 #include "renderer/ModelRenderer.hpp"
+#include "utils/ImageUtils.hpp"
 #include "renderer/TerrainRenderer.hpp"
 #include "renderer/DeferredLighting.hpp"
 #include "renderer/ShadowRenderer.hpp"
@@ -74,10 +75,12 @@
 #include "scene/SceneObjects.hpp"
 #include "audio/Audio.hpp"
 #include <deque>
+#include <mutex>
 #include <unordered_map>
 #include <functional>
 namespace eruption {
 struct LoadedMap;
+struct ImageData;
 class MapLoader;
 class PlayerController;
 class Editor;
@@ -645,12 +648,20 @@ public:
         std::string layerNames[8];
         std::string layerFiles[8]; // camadas escolhidas no editor (mapas sem splat próprio)
         TextureResource layerTex[8];
+        TextureResource layerNormal[8]; // <camada>_normal (slot da cor + 1)
+        TextureResource layerMrahw[8];  // <camada>_mrahw (slot da cor + 2)
         int dirty[2][4] = {{INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN}, {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN}};
     };
     const SplatEdit& splatEdit() const { return m_splatEdit; }
     bool beginSplatEditing();
     int splatLayerCount() const;
     bool addSplatLayer(const std::string& png);
+    // Decodifica em paralelo as imagens das camadas (cor, _normal, _mrahw) que
+    // o addSplatLayer vai pedir em seguida (as da cena chegam juntas).
+    void prefetchSplatLayers(const std::vector<std::string>& layers);
+    // O mesmo preparo, sem esperar: um job por imagem (world.preload_map, com
+    // as camadas da cena do mapa seguinte). A chegada pula o que ja' veio.
+    void preloadSplatLayers(const std::vector<std::string>& layers);
     // layer -1 = base do material; `erase` tira a camada.
     bool paintSplat(int layer, const Vec2& center, float radius, float strength, float falloff, float dt, bool erase,
                     int rect[4]);
@@ -1605,10 +1616,18 @@ private:
         float waterLevel = 0.0f;
         TextureResource splatMask[2];
         TextureResource splatLayer[8];
+        TextureResource splatLayerNormal[8]; // <camada>_normal (slot = cor + 1)
+        TextureResource splatLayerMrahw[8];  // <camada>_mrahw (slot = cor + 2)
         VkSampler splatSampler = VK_NULL_HANDLE;
         std::chrono::steady_clock::time_point hiddenAt{};
         std::vector<std::string> modelFiles; // .glb do próprio mapa (malhas só dele)
     };
+    ImageData splatLayerImage(const std::filesystem::path& path);
+    std::mutex m_splatDecodeMutex;
+    std::unordered_map<std::string, ImageData> m_splatDecoded; // prefetchSplatLayers -> addSplatLayer
+    // Camada do splat com os mapas ao lado (normal, MRAH-W): TerrainPaint.cpp.
+    uint32_t uploadSplatLayer(TextureResource& colorTex, TextureResource& normalTex, TextureResource& mrahwTex,
+                              const std::filesystem::path& colorPath, const ImageData& color);
     std::vector<WorldRegion> m_regions;
     std::vector<TriggerArea> m_areas;
     std::vector<SoundEmitter> m_soundEmitters;

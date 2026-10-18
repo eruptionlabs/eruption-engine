@@ -601,6 +601,12 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         ++applied;
     }
     const auto present = engine.splatLayerFiles();
+    {
+        std::vector<std::string> missing;
+        for (const auto& layer : terrainLayers)
+            if (std::find(present.begin(), present.end(), layer) == present.end()) missing.push_back(layer);
+        engine.prefetchSplatLayers(missing);
+    }
     for (const auto& layer : terrainLayers) {
         if (std::find(present.begin(), present.end(), layer) != present.end()) continue; // recarga da cena
         if (engine.splatLayerCount() >= 8) break;

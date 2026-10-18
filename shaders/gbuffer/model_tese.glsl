@@ -241,10 +241,10 @@ float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 spl
     float hBase = heightUv(baseTex, uvIn, gain, false);
     if ((splat.x | splat.y) == 0u || maskIdx == 0u) return hBase;
     vec4 w = textureLod(u_textures[nonuniformEXT(maskIdx)], maskUv, 0.0);
-    uint s0 =  splat.x        & 0xFFFFu;
-    uint s1 = (splat.x >> 16) & 0xFFFFu;
-    uint s2 =  splat.y        & 0xFFFFu;
-    uint s3 = (splat.y >> 16) & 0xFFFFu;
+    uint s0 =  splat.x        & 0x3FFFu;
+    uint s1 = (splat.x >> 16) & 0x3FFFu;
+    uint s2 =  splat.y        & 0x3FFFu;
+    uint s3 = (splat.y >> 16) & 0x3FFFu;
     float wBaseSum = w.r + w.g + w.b + w.a;
     float acc = 0.0, sum = 0.0;
     if (s0 != 0u) { acc += heightUv(s0, uvIn, gain, false) * w.r; sum += w.r; }
@@ -253,10 +253,10 @@ float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 spl
     if (s3 != 0u) { acc += heightUv(s3, uvIn, gain, false) * w.a; sum += w.a; }
     if (maskIdx2 != 0u) {
         vec4 w2 = textureLod(u_textures[nonuniformEXT(maskIdx2)], maskUv, 0.0);
-        uint s4 =  splat2.x        & 0xFFFFu;
-        uint s5 = (splat2.x >> 16) & 0xFFFFu;
-        uint s6 =  splat2.y        & 0xFFFFu;
-        uint s7 = (splat2.y >> 16) & 0xFFFFu;
+        uint s4 =  splat2.x        & 0x3FFFu;
+        uint s5 = (splat2.x >> 16) & 0x3FFFu;
+        uint s6 =  splat2.y        & 0x3FFFu;
+        uint s7 = (splat2.y >> 16) & 0x3FFFu;
         wBaseSum += w2.r + w2.g + w2.b + w2.a;
         if (s4 != 0u) { acc += heightUv(s4, uvIn, gain, false) * w2.r; sum += w2.r; }
         if (s5 != 0u) { acc += heightUv(s5, uvIn, gain, false) * w2.g; sum += w2.g; }
