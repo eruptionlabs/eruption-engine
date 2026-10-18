@@ -1851,64 +1851,91 @@ ModelRenderer::PreparedNode ModelRenderer::prepareNode(const ModelAsset& asset, 
     // UV que difere so' por inteiro (wrap do ladrilho) nao e'
     // costura - amostra o mesmo texel.
     {
-        struct PosKey { int64_t x, y, z; bool operator==(const PosKey& o) const { return x == o.x && y == o.y && z == o.z; } };
-        struct PosHash { size_t operator()(const PosKey& k) const {
-            return std::hash<int64_t>()(k.x * 73856093LL ^ k.y * 19349663LL ^ k.z * 83492791LL); } };
-        std::unordered_map<PosKey, uint32_t, PosHash> first;
-        first.reserve(vertices.size());
+        // Por ORDENACAO, nao por unordered_map: no chao de 4,3 milhoes de
+        // indices de um mapa grande os dois mapas (posicao e uso de aresta)
+        // levavam ~1 s na thread do preload. Mesmo resultado: o primeiro de
+        // cada grupo de posicao e' o de menor indice, como no try_emplace.
+        struct PosRef { int64_t x, y, z; uint32_t vi; };
+        std::vector<PosRef> pos(vertices.size());
+        for (uint32_t vi = 0; vi < vertices.size(); ++vi) {
+            const TerrainVertex& v = vertices[vi];
+            pos[vi] = {static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
+                       static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
+                       static_cast<int64_t>(std::llround(v.position.z * 1000.0f)), vi};
+        }
+        std::sort(pos.begin(), pos.end(), [](const PosRef& a, const PosRef& b) {
+            if (a.x != b.x) return a.x < b.x;
+            if (a.y != b.y) return a.y < b.y;
+            if (a.z != b.z) return a.z < b.z;
+            return a.vi < b.vi;
+        });
         auto fracDiff = [](float a, float b) {
             float d = std::fabs((a - std::floor(a)) - (b - std::floor(b)));
             return std::min(d, 1.0f - d);
         };
         size_t seams = 0;
-        for (uint32_t vi = 0; vi < vertices.size(); ++vi) {
-            const TerrainVertex& v = vertices[vi];
-            PosKey k{static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
-                     static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
-                     static_cast<int64_t>(std::llround(v.position.z * 1000.0f))};
-            auto [it, inserted] = first.try_emplace(k, vi);
-            if (inserted) continue;
-            TerrainVertex& o = vertices[it->second];
-            const bool differs = o.texIndex != v.texIndex || o.pbrIndex != v.pbrIndex ||
-                                 o.splatTex01 != v.splatTex01 || o.splatTex23 != v.splatTex23 ||
-                                 fracDiff(o.texCoord.x, v.texCoord.x) > 1e-3f ||
-                                 fracDiff(o.texCoord.y, v.texCoord.y) > 1e-3f ||
-                                 glm::dot(o.normal, v.normal) < 0.999f;
-            if (differs) {
-                if (!(o.matId & 0x8000u)) ++seams;
-                o.matId = static_cast<uint16_t>(o.matId | 0x8000u);
-                vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
+        for (size_t g0 = 0; g0 < pos.size();) {
+            size_t g1 = g0 + 1;
+            while (g1 < pos.size() && pos[g1].x == pos[g0].x && pos[g1].y == pos[g0].y && pos[g1].z == pos[g0].z) ++g1;
+            TerrainVertex& o = vertices[pos[g0].vi];
+            for (size_t k = g0 + 1; k < g1; ++k) {
+                TerrainVertex& v = vertices[pos[k].vi];
+                const bool differs = o.texIndex != v.texIndex || o.pbrIndex != v.pbrIndex ||
+                                     o.splatTex01 != v.splatTex01 || o.splatTex23 != v.splatTex23 ||
+                                     fracDiff(o.texCoord.x, v.texCoord.x) > 1e-3f ||
+                                     fracDiff(o.texCoord.y, v.texCoord.y) > 1e-3f ||
+                                     glm::dot(o.normal, v.normal) < 0.999f;
+                if (differs) {
+                    if (!(o.matId & 0x8000u)) ++seams;
+                    o.matId = static_cast<uint16_t>(o.matId | 0x8000u);
+                    v.matId = static_cast<uint16_t>(v.matId | 0x8000u);
+                }
             }
-        }
-        // Segunda passada: todo vertice cuja posicao ja' foi marcada
-        // (o primeiro do grupo pode ter sido marcado depois dos
-        // outros iguais a ele).
-        for (auto& v : vertices) {
-            PosKey k{static_cast<int64_t>(std::llround(v.position.x * 1000.0f)),
-                     static_cast<int64_t>(std::llround(v.position.y * 1000.0f)),
-                     static_cast<int64_t>(std::llround(v.position.z * 1000.0f))};
-            if (vertices[first[k]].matId & 0x8000u) v.matId = static_cast<uint16_t>(v.matId | 0x8000u);
+            // Todo vertice cuja posicao ficou marcada (o primeiro do grupo).
+            if (o.matId & 0x8000u)
+                for (size_t k = g0 + 1; k < g1; ++k)
+                    vertices[pos[k].vi].matId = static_cast<uint16_t>(vertices[pos[k].vi].matId | 0x8000u);
+            g0 = g1;
         }
         // BORDA DA MALHA (aresta usada por UM triangulo so'): e' onde
         // esta malha encosta em OUTRA - no chao legado cada textura e'
         // uma malha separada, entao a troca de textura entre tiles e'
         // borda de malha, e a comparacao por posicao acima (que so'
         // enxerga DENTRO da malha) nao pegava. Era a fenda que sobrou.
-        std::unordered_map<uint64_t, uint32_t> edgeUse;
-        edgeUse.reserve(useIndices->size());
-        auto edgeKey = [](uint32_t a, uint32_t b) {
-            return (static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b);
-        };
+        // Chaves das arestas ordenadas por radix (4 passadas de 16 bits);
+        // aresta que aparece uma vez so' e' borda.
+        std::vector<uint64_t> edges;
+        edges.reserve(useIndices->size());
         for (size_t t = 0; t + 2 < useIndices->size(); t += 3)
-            for (int e = 0; e < 3; ++e)
-                ++edgeUse[edgeKey((*useIndices)[t + e], (*useIndices)[t + (e + 1) % 3])];
-        size_t borderVerts = 0;
-        for (const auto& [k, cnt] : edgeUse) {
-            if (cnt != 1) continue;
-            for (uint32_t vi : {static_cast<uint32_t>(k >> 32), static_cast<uint32_t>(k & 0xFFFFFFFFu)}) {
-                if (!(vertices[vi].matId & 0x8000u)) ++borderVerts;
-                vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
+            for (int e = 0; e < 3; ++e) {
+                const uint32_t a = (*useIndices)[t + e], b = (*useIndices)[t + (e + 1) % 3];
+                edges.push_back((static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b));
             }
+        {
+            std::vector<uint64_t> tmp(edges.size());
+            std::vector<uint32_t> cnt(65536);
+            for (int pass = 0; pass < 4; ++pass) {
+                const int sh = pass * 16;
+                std::fill(cnt.begin(), cnt.end(), 0u);
+                for (uint64_t k : edges) ++cnt[(k >> sh) & 0xFFFFu];
+                uint32_t acc = 0;
+                for (uint32_t& c : cnt) { const uint32_t n = c; c = acc; acc += n; }
+                for (uint64_t k : edges) tmp[cnt[(k >> sh) & 0xFFFFu]++] = k;
+                edges.swap(tmp);
+            }
+        }
+        size_t borderVerts = 0;
+        for (size_t e0 = 0; e0 < edges.size();) {
+            size_t e1 = e0 + 1;
+            while (e1 < edges.size() && edges[e1] == edges[e0]) ++e1;
+            if (e1 - e0 == 1) {
+                const uint64_t k = edges[e0];
+                for (uint32_t vi : {static_cast<uint32_t>(k >> 32), static_cast<uint32_t>(k & 0xFFFFFFFFu)}) {
+                    if (!(vertices[vi].matId & 0x8000u)) ++borderVerts;
+                    vertices[vi].matId = static_cast<uint16_t>(vertices[vi].matId | 0x8000u);
+                }
+            }
+            e0 = e1;
         }
         if (isGroundMesh && std::getenv("ERUPTION_TEST_SEAM_STATS"))
             ERUPTION_LOG_WARN("[SEAM] chao malha %u: %zu posicoes de costura, %zu vertices de borda novos (%zu vertices)",
