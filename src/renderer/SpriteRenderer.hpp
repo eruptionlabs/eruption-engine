@@ -193,9 +193,12 @@ public:
     void renderBillboardPlanarShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo, const Vec3& shadowLightDir,
                                       const Vec2& planarParams, VkBuffer instanceBuffer, uint32_t count);
 
-    // Projected Circle/Blob Shadow for billboards — renders a soft procedural circle flat on the ground.
+    // Sombra de disco no pe' como DECAL: avalia a pegada no ponto visivel lido
+    // de `sceneDepth` (shader read-only). Fora do passe forward, num trecho so'
+    // com a imagem lit (sem anexo de profundidade).
     void renderBillboardCircleShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo,
-                                      const Vec2& circleParams, VkBuffer instanceBuffer, uint32_t count);
+                                      const Vec2& circleParams, VkBuffer instanceBuffer, uint32_t count,
+                                      VkImageView sceneDepth);
 
     uint32_t spriteCount() const { return m_spriteCount; }
 
@@ -250,6 +253,14 @@ private:
     VkPipeline m_shadowPipeline = VK_NULL_HANDLE;
     VkPipeline m_planarShadowPipeline = VK_NULL_HANDLE;
     VkPipeline m_circleShadowPipeline = VK_NULL_HANDLE;
+    // Decal do disco: sets 0-1 iguais aos do sprite + set 2 com a profundidade,
+    // um por quadro em voo (escrito antes do desenho, a imagem muda com a escala).
+    static constexpr uint32_t kDecalFrames = 3;
+    VkDescriptorSetLayout m_decalDepthLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_decalDepthPool = VK_NULL_HANDLE;
+    VkDescriptorSet m_decalDepthSets[kDecalFrames] = {};
+    VkSampler m_decalDepthSampler = VK_NULL_HANDLE;
+    VkPipelineLayout m_decalPipelineLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
 
     VkBuffer m_quadVertexBuffer = VK_NULL_HANDLE;

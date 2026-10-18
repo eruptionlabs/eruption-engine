@@ -1,9 +1,9 @@
 #version 450
 #extension GL_EXT_nonuniform_qualifier : enable
 
-layout(location = 0) in vec2 v_uv;
-layout(location = 1) in flat uint v_flags;
-layout(location = 2) in float v_softness;
+layout(location = 0) in flat vec4 v_feet;   // xyz = pe', w = raio em X
+layout(location = 1) in flat vec4 v_shape;  // x = raio em Z, y = maciez, z = folga acima, w = folga abaixo
+layout(location = 2) in flat vec4 v_plane;  // plano do proprio billboard
 
 layout(location = 0) out vec4 outShadow;
 
@@ -40,19 +40,37 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_ambientGround;
 };
 
-void main() {
-    // Distance from the center of the quad (0.5, 0.5)
-    float dist = length(v_uv - vec2(0.5));
+// Profundidade da cena (so' leitura, depois do passe forward). D32 sem filtro.
+layout(set = 2, binding = 0) uniform sampler2D u_sceneDepth;
 
-    // Max radius of the circle is 0.5
-    if (dist > 0.5) {
-        discard;
-    }
+void main() {
+    // Ponto visivel neste pixel (decal: ver billboard_circle_shadow.vert).
+    ivec2 px = ivec2(gl_FragCoord.xy);
+    float depth = texelFetch(u_sceneDepth, px, 0).r;
+    if (depth >= 1.0) discard; // ceu
+    vec2 uv = (vec2(px) + 0.5) / vec2(textureSize(u_sceneDepth, 0));
+    vec4 viewPos = u_inverseProjection * vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec3 P = (u_inverseView * vec4(viewPos.xyz / viewPos.w, 1.0)).xyz;
+    vec3 local = P - v_feet.xyz;
+
+    // Distancia na elipse da pegada, na escala do quadro antigo (raio 0,5).
+    float dist = 0.5 * length(vec2(local.x / v_feet.w, local.z / v_shape.x));
+    if (dist > 0.5) discard;
+
+    // O proprio sprite: o pixel no plano dele, acima do pe' (a beira do pe'
+    // fica, senao abria uma fresta entre o pe' e a sombra).
+    float folgaPlano = 0.04 * v_feet.w;
+    if (abs(dot(v_plane.xyz, P) - v_plane.w) < folgaPlano && local.y > folgaPlano) discard;
+
+    // Fora da faixa de altura: chao muito acima (parede) ou muito abaixo.
+    float altura = smoothstep(-v_shape.w, -0.5 * v_shape.w, local.y) *
+                   (1.0 - smoothstep(0.5 * v_shape.z, v_shape.z, local.y));
+    if (altura <= 0.0) discard;
 
     // Soft transition control
     float edge = 0.5;
-    float innerRadius = 0.5 * (1.0 - v_softness);
-    float fade = 1.0 - smoothstep(innerRadius, edge, dist);
+    float innerRadius = 0.5 * (1.0 - v_shape.y);
+    float fade = (1.0 - smoothstep(innerRadius, edge, dist)) * altura;
 
     // Keep shadow intensity strong enough to be visible after tone mapping.
     float intensity = 1.0;

@@ -1139,15 +1139,10 @@ void Engine::render() {
     if (!m_benchmarkThunderstormStarted) {
         uint32_t spriteCount = m_spriteSystem.visibleCount();
         if (spriteCount > 0) {
-            static const int kKindEnv = [] {
-                const char* e = std::getenv("ERUPTION_TEST_SPRITE_SHADOW");
-                return e ? std::atoi(e) : -1;
-            }();
-            const int kind = kKindEnv >= 0 ? kKindEnv : m_spriteShadowKind >= 0 ? m_spriteShadowKind : m_charConfig.shadowType;
+            const int kind = spriteShadowKind();
             if (kind >= 1) {
-                Vec2 circleParams(m_charConfig.circleShadowDilation, m_charConfig.circleShadowSoftness);
-                m_spriteRenderer.renderBillboardCircleShadows(cmd, frameUbo, circleParams,
-                                                              m_spriteSystem.instanceBuffer(), spriteCount);
+                // O disco do pe' vai depois deste passe, como decal (precisa
+                // ler a profundidade): ver o trecho apos o cmdEndRendering.
                 if (kind == 2) {
                     static std::vector<SpritePointShadow> pointShadows;
                     collectSpritePointShadows(pointShadows);
@@ -1186,6 +1181,28 @@ void Engine::render() {
 
     // Make depth readable so the cloud-shadow fullscreen pass can reconstruct world positions.
     m_vulkan.cmdImageBarrier(cmd, m_gbuffer.depthImage(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    // Disco do pe' dos sprites como DECAL: le' a profundidade (agora so'
+    // leitura) e avalia a pegada no ponto visivel. O quadro deitado a +0,12 do
+    // pe' brigava com o chao em listras e sumia sob laje e degrau.
+    if (!m_benchmarkThunderstormStarted && m_spriteSystem.visibleCount() > 0) {
+        if (spriteShadowKind() >= 1) {
+            VkRenderingAttachmentInfo decalColor{};
+            decalColor.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            decalColor.imageView = m_deferredLighting.litImageView();
+            decalColor.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            decalColor.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            decalColor.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            m_vulkan.writeTimestamp(cmd, 60, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            m_vulkan.cmdBeginRendering(cmd, {decalColor}, nullptr, nullptr, renderExtent());
+            Vec2 circleParams(m_charConfig.circleShadowDilation, m_charConfig.circleShadowSoftness);
+            m_spriteRenderer.renderBillboardCircleShadows(cmd, frameUbo, circleParams, m_spriteSystem.instanceBuffer(),
+                                                          m_spriteSystem.visibleCount(), m_gbuffer.depthView());
+            m_vulkan.cmdEndRendering(cmd);
+            m_vulkan.writeTimestamp(cmd, 61, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            Profiler::addGpuTime("Sprite Shadow Decal", m_vulkan.timestampDeltaMs(60, 61));
+        }
+    }
 
     // Cloud shadows: project cloud coverage onto the lit scene using the depth buffer.
     if (m_cloudLayersEnabled) {
@@ -2944,6 +2961,16 @@ void Engine::collectSpritePointShadows(std::vector<SpritePointShadow>& out) cons
         for (uint32_t i = 0; i < static_cast<uint32_t>(v.size()); ++i)
             if (v[i].strength >= 0.02f) out.push_back({i, v[i].position, v[i].strength});
     }
+}
+
+// Tipo de sombra dos sprites neste quadro: characters.set_shadow, senao o
+// data/char_config.json. ERUPTION_TEST_SPRITE_SHADOW=0|1|2 (teste) fixa o tipo.
+int Engine::spriteShadowKind() const {
+    static const int kKindEnv = [] {
+        const char* e = std::getenv("ERUPTION_TEST_SPRITE_SHADOW");
+        return e ? std::atoi(e) : -1;
+    }();
+    return kKindEnv >= 0 ? kKindEnv : m_spriteShadowKind >= 0 ? m_spriteShadowKind : m_charConfig.shadowType;
 }
 
 } // namespace eruption
