@@ -768,6 +768,7 @@ void Engine::render() {
             p.radius = l.radius;
             p.color = l.color;
             p.intensity = l.intensity;
+            p.steadyIntensity = l.steadyIntensity;
             pls.push_back(p);
         }
         m_deferredLighting.setVfxPointLights(pls);

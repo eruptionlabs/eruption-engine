@@ -871,6 +871,34 @@ uint32_t VfxSystem::spawn(const std::string& effectName, const Mat4& transform) 
     return m_instances.back().id;
 }
 
+void VfxSystem::setColor(uint32_t id, const Vec3& color, bool recolor) {
+    for (Instance& inst : m_instances)
+        if (inst.id == id) inst.color = Vec4(color, recolor ? 1.0f : 2.0f);
+}
+
+void VfxSystem::setEmitterOffset(uint32_t id, const std::string& emitter, const Vec3& offset) {
+    for (Instance& inst : m_instances) {
+        if (inst.id != id || !inst.desc) continue;
+        for (size_t i = 0; i < inst.desc->emitters.size(); ++i) {
+            if (inst.desc->emitters[i].name != emitter) continue;
+            if (inst.offsets.size() < inst.desc->emitters.size()) inst.offsets.resize(inst.desc->emitters.size(), Vec3(0.0f));
+            inst.offsets[i] = offset;
+        }
+    }
+}
+
+// Cor da instancia sobre a cor do gradiente: recolorir mantem a luminancia da
+// chave (o desenho de brilho do efeito fica, so' o matiz muda).
+static Vec4 instanceColor(const Vec4& c, const Vec4& tint) {
+    if (tint.a < 0.5f) return c;
+    if (tint.a < 1.5f) {
+        const Vec3 luma(0.2126f, 0.7152f, 0.0722f);
+        const float lt = std::max(glm::dot(Vec3(tint), luma), 1e-3f);
+        return Vec4(Vec3(tint) * (glm::dot(Vec3(c), luma) / lt), c.a);
+    }
+    return Vec4(Vec3(c) * Vec3(tint), c.a);
+}
+
 void VfxSystem::setTransform(uint32_t id, const Mat4& transform) {
     for (Instance& inst : m_instances)
         if (inst.id == id) inst.transform = transform * glm::scale(Mat4(1.0f), Vec3(m_unitsPerMeter));
@@ -965,7 +993,10 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     const Vec3 c0 = Vec3(t[0]) / scale;
     const Vec3 c1 = Vec3(t[1]) / std::max(glm::length(Vec3(t[1])), 1e-4f);
     const Vec3 c2 = Vec3(t[2]) / std::max(glm::length(Vec3(t[2])), 1e-4f);
-    const Vec3 pos = Vec3(t[3]);
+    // Deslocamento do emissor (do arquivo + da chamada), no espaco do efeito.
+    const size_t k = size_t(&e - inst.desc->emitters.data());
+    const Vec3 off = e.offset + (k < inst.offsets.size() ? inst.offsets[k] : Vec3(0.0f));
+    const Vec3 pos = Vec3(t * Vec4(off, 1.0f));
     o.posTime = Vec4(pos, inst.time);
     o.prevPos = Vec4(inst.firstFrame ? pos : inst.prevPos, 0.0f);
     o.rot0 = Vec4(c0, scale);
@@ -1041,7 +1072,7 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     o.render = Vec4(e.emissive, e.lit, e.maxScreenSize, e.nearFade);
     o.flip = Vec4(e.flipFps, float(e.flipCols * e.flipRows), float(uint32_t(e.flipMode)), 0.0f);
     for (int i = 0; i < 16; ++i) {
-        const Vec4 c = glm::clamp(e.color.sample(float(i) / 15.0f), Vec4(0.0f), Vec4(1.0f));
+        const Vec4 c = glm::clamp(instanceColor(e.color.sample(float(i) / 15.0f), inst.color), Vec4(0.0f), Vec4(1.0f));
         o.colorLut[i] = glm::packUnorm4x8(c);
     }
     for (int i = 0; i < 8; ++i)
@@ -1725,7 +1756,14 @@ void VfxSystem::drawMeshShadows(VkCommandBuffer cmd, const Mat4& lightViewProj) 
 void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& out) const {
     out.clear();
     if (!m_ready || max == 0) return;
-    std::vector<std::pair<float, Light>> all;
+    // (distancia^2, luz, peso estavel): o peso sem o tremor e' o que posiciona
+    // o grupo; o tremor so' entra no brilho.
+    struct Gathered {
+        float dist2;
+        Light light;
+        float steady;
+    };
+    std::vector<Gathered> all;
     for (const Instance& inst : m_instances) {
         if (inst.killed || !inst.desc) continue;
         const Mat4& t = inst.transform;
@@ -1742,24 +1780,31 @@ void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& o
             const float w = 0.5f * std::sin(inst.time * 13.0f + ph) + 0.3f * std::sin(inst.time * 29.0f + ph * 2.3f) +
                             0.2f * std::sin(inst.time * 7.0f + ph * 0.7f);
             Light l;
-            l.position = Vec3(t * Vec4(e.lightOffset, 1.0f));
+            const Vec3 off = e.offset + (k < inst.offsets.size() ? inst.offsets[k] : Vec3(0.0f));
+            l.position = Vec3(t * Vec4(e.lightOffset + off, 1.0f));
             l.radius = e.lightRadius * scale;
-            l.color = e.lightColor;
-            l.intensity = e.lightIntensity * alive * std::max(0.0f, 1.0f + e.lightFlicker * 0.5f * w);
+            l.color = Vec3(instanceColor(Vec4(e.lightColor, 1.0f), inst.color));
+            const float steady = e.lightIntensity * alive;
+            l.intensity = steady * std::max(0.0f, 1.0f + e.lightFlicker * 0.5f * w);
+            l.steadyIntensity = steady;
             const Vec3 d = l.position - eye;
-            all.emplace_back(glm::dot(d, d), l);
+            all.push_back({glm::dot(d, d), l, steady});
         }
     }
     // Mais perto primeiro: o agrupamento comeca pelo que a camera ve' de perto.
-    std::sort(all.begin(), all.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::sort(all.begin(), all.end(), [](const Gathered& a, const Gathered& b) { return a.dist2 < b.dist2; });
+    // Posicao e cor do grupo pela media com o peso ESTAVEL: com o peso que
+    // inclui o tremor (13-29 Hz), o centro de duas tochas juntas balancava
+    // entre elas a cada quadro e a sombra por luz pontual tremia junto
+    // (bancada de cintilacao, andar entre tochas, 720p a 60 quadros/s).
     struct Cluster {
         Vec3 pos{0.0f}, color{0.0f};
-        float weight = 0.0f, radius = 0.0f;
+        float weight = 0.0f, radius = 0.0f, intensity = 0.0f;
         uint32_t count = 0;
     };
     std::vector<Cluster> clusters;
-    for (const auto& p : all) {
-        const Light& l = p.second;
+    for (const Gathered& g : all) {
+        const Light& l = g.light;
         Cluster* hit = nullptr;
         for (Cluster& c : clusters) {
             const Vec3 cp = c.pos / std::max(c.weight, 1e-6f);
@@ -1773,7 +1818,7 @@ void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& o
             clusters.emplace_back();
             hit = &clusters.back();
         }
-        const float w = std::max(l.intensity, 1e-4f);
+        const float w = std::max(g.steady, 1e-4f);
         if (hit->weight > 0.0f) {
             const Vec3 cp = hit->pos / hit->weight;
             hit->radius = std::max(hit->radius, l.radius + 0.5f * glm::length(cp - l.position));
@@ -1783,6 +1828,7 @@ void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& o
         hit->pos += l.position * w;
         hit->color += l.color * w;
         hit->weight += w;
+        hit->intensity += l.intensity;
         ++hit->count;
     }
     out.reserve(clusters.size());
@@ -1793,7 +1839,8 @@ void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& o
         l.radius = c.radius;
         // A soma cresce mais devagar que o numero de fontes: dez fogueiras
         // juntas clareiam mais que uma, mas nao dez vezes (some saturando).
-        l.intensity = c.weight / std::sqrt(float(c.count));
+        l.intensity = c.intensity / std::sqrt(float(c.count));
+        l.steadyIntensity = c.weight / std::sqrt(float(c.count));
         out.push_back(l);
     }
 }

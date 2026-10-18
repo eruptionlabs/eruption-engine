@@ -37,9 +37,35 @@ int vfx_play(lua_State* L) {
     ScriptHost::NativeWork trabalho;
     const char* name = luaL_checkstring(L, 1);
     const Vec3 pos = vec3Arg(L, 2);
-    const float scale = static_cast<float>(luaL_optnumber(L, 3, 1.0));
-    const float yaw = static_cast<float>(luaL_optnumber(L, 4, 0.0));
+    // play(nome, pos, escala?, giro?) ou play(nome, pos, {scale, yaw, color,
+    // tint, offsets = {emissor = vector}}): color recolore (mantem o brilho),
+    // tint multiplica - variantes de cor sem um arquivo por cor.
+    float scale = 1.0f, yaw = 0.0f;
+    if (lua_istable(L, 3)) {
+        lua_getfield(L, 3, "scale"); if (lua_isnumber(L, -1)) scale = float(lua_tonumber(L, -1)); lua_pop(L, 1);
+        lua_getfield(L, 3, "yaw"); if (lua_isnumber(L, -1)) yaw = float(lua_tonumber(L, -1)); lua_pop(L, 1);
+    } else {
+        scale = static_cast<float>(luaL_optnumber(L, 3, 1.0));
+        yaw = static_cast<float>(luaL_optnumber(L, 4, 0.0));
+    }
     const uint32_t id = g_engine->vfx().spawn(name, placement(pos, scale, yaw));
+    if (id && lua_istable(L, 3)) {
+        for (const char* k : {"color", "tint"}) {
+            lua_getfield(L, 3, k);
+            if (lua_isvector(L, -1)) g_engine->vfx().setColor(id, vec3Arg(L, -1), k[0] == 'c');
+            lua_pop(L, 1);
+        }
+        lua_getfield(L, 3, "offsets");
+        if (lua_istable(L, -1)) {
+            lua_pushnil(L);
+            while (lua_next(L, -2) != 0) {
+                if (lua_type(L, -2) == LUA_TSTRING && lua_isvector(L, -1))
+                    g_engine->vfx().setEmitterOffset(id, lua_tostring(L, -2), vec3Arg(L, -1));
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+    }
     if (id) g_owned.push_back(id);
     lua_pushnumber(L, id);
     return 1;
@@ -92,7 +118,10 @@ const char* vfxApiDefinitions() {
 declare vfx: {
     -- Starts the effect at a world position; returns its id (0 = not found).
     -- `scale` multiplies size, speed and forces; `yaw` turns it in degrees.
-    play: (name: string, position: vector, scale: number?, yaw: number?) -> number,
+    -- As a table: {scale, yaw, color = vector (recolors, keeping each key's
+    -- brightness), tint = vector (multiplies), offsets = {emitter = vector}
+    -- (meters, effect space)} - color variants without one file per color.
+    play: (name: string, position: vector, options: (number | { [string]: any })?, yaw: number?) -> number,
     -- Stops spawning (the live particles finish); `immediate` clears them now.
     stop: (id: number, immediate: boolean?) -> (),
     -- Moves a playing effect (a trail follows the object this way).

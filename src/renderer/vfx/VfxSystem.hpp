@@ -137,6 +137,11 @@ public:
 
     // --- Instancias ---
     uint32_t spawn(const std::string& effectName, const Mat4& transform); // 0 = falhou
+    // Cor por chamada: `recolor` troca o matiz mantendo o brilho de cada chave
+    // do gradiente (variantes de cor sem um arquivo por cor); sem ele, multiplica.
+    void setColor(uint32_t id, const Vec3& color, bool recolor);
+    // Deslocamento (m, espaco do efeito) de um emissor desta instancia, pelo nome.
+    void setEmitterOffset(uint32_t id, const std::string& emitter, const Vec3& offset);
     void setTransform(uint32_t id, const Mat4& transform);
     void stop(uint32_t id, bool immediate = false); // sem immediate: para de nascer, as vivas terminam
     void restart(uint32_t id);
@@ -179,6 +184,7 @@ public:
         float radius;
         Vec3 color;
         float intensity;
+        float steadyIntensity; // sem o tremor: para a forca de sombra, que nao deve piscar
     };
     void collectLights(const Vec3& eye, size_t max, std::vector<Light>& out) const;
     // Previa sem G-buffer: as malhas saem em draw(), com luz simples.
@@ -231,6 +237,10 @@ private:
         bool killed = false;
         bool firstFrame = true;
         std::vector<EmitterState> emitters;
+        // Por chamada (vfx.play): cor e deslocamento por emissor, sem copiar o
+        // efeito (a recarga a quente troca o `desc` e isto continua valendo).
+        Vec4 color{1.0f, 1.0f, 1.0f, 0.0f}; // rgb; a: 0 = sem cor (padrao), 1 = recolore, 2 = multiplica
+        std::vector<Vec3> offsets;   // m, somado ao `offset` de cada emissor (indice = emissor)
     };
 
     bool createPipelines();
