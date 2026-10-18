@@ -1384,7 +1384,7 @@ void Engine::renderImGui() {
                         ImGui::Separator();
                         
                         ImGui::TextColored(ImVec4(1, 1, 0, 1), "diorama Character Tuning");
-                        if (ImGui::SliderFloat("Movement Speed", &m_charConfig.moveSpeed, 10.0f, 500.0f)) m_charConfig.save("data/char_config.json");
+                        if (ImGui::SliderFloat("Movement Speed", &m_charConfig.moveSpeed, 10.0f, 500.0f)) m_charConfig.save(project::config("data/char_config.json"));
                         ImGui::TextDisabled("Animation synced: Proportional (100 spd = 65ms).");
                         ImGui::Separator();
 
@@ -1397,7 +1397,7 @@ void Engine::renderImGui() {
                         SplineEditorUI::draw("Tilt by Pitch", m_charConfig.billboardTiltSpline,
                                              kTiltPitchMin, kTiltPitchMax, -90.0f, 90.0f,
                                              pitchDeg, currentTilt, false, "Pitch");
-                        m_charConfig.save("data/char_config.json");
+                        m_charConfig.save(project::config("data/char_config.json"));
                         ImGui::Separator();
 
                         float exposure = m_spriteRenderer.spriteExposure();
@@ -1409,22 +1409,22 @@ void Engine::renderImGui() {
                         ImGui::Separator();
                         const char* shadowTypes[] = { "Planar (Mirror)", "Circle (Blob)" };
                         if (ImGui::Combo("Shadow Type", &m_charConfig.shadowType, shadowTypes, 2)) {
-                            m_charConfig.save("data/char_config.json");
+                            m_charConfig.save(project::config("data/char_config.json"));
                         }
 
                         if (m_charConfig.shadowType == 0) {
                             if (ImGui::SliderFloat("Planar Softness", &m_charConfig.planarShadowSoftness, 0.0f, 1.0f, "%.2f")) {
-                                m_charConfig.save("data/char_config.json");
+                                m_charConfig.save(project::config("data/char_config.json"));
                             }
                             if (ImGui::SliderFloat("Planar Dilation", &m_charConfig.planarShadowDilation, 0.1f, 3.0f, "%.2f")) {
-                                m_charConfig.save("data/char_config.json");
+                                m_charConfig.save(project::config("data/char_config.json"));
                             }
                         } else {
                             if (ImGui::SliderFloat("Circle Softness", &m_charConfig.circleShadowSoftness, 0.0f, 1.0f, "%.2f")) {
-                                m_charConfig.save("data/char_config.json");
+                                m_charConfig.save(project::config("data/char_config.json"));
                             }
                             if (ImGui::SliderFloat("Circle Dilation", &m_charConfig.circleShadowDilation, 0.1f, 3.0f, "%.2f")) {
-                                m_charConfig.save("data/char_config.json");
+                                m_charConfig.save(project::config("data/char_config.json"));
                             }
                         }
                         ImGui::EndTabItem();

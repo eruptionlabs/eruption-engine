@@ -2,6 +2,7 @@
 #include "game/PlayerController.hpp"
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -11,7 +12,7 @@ namespace eruption {
 void HudRenderer::init(Engine* engine, PlayerController* player, const std::string& cssPath) {
     m_engine = engine;
     m_player = player;
-    m_cssPath = cssPath;
+    m_cssPath = project::config(cssPath); // o do projeto, se houver; senao o do motor
     m_layout.setParser(&m_parser);
     m_loaded = false;
     reloadIfChanged();

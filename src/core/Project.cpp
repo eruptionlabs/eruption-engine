@@ -264,5 +264,12 @@ fs::path gameRef(const std::string& path) {
     return p.is_absolute() ? p : game(path);
 }
 
+std::string config(const std::string& rel) {
+    const Project& p = Project::instance();
+    std::error_code ec;
+    if (p.isOpen() && fs::is_regular_file(p.root() / rel, ec)) return (p.root() / rel).string();
+    return rel;
+}
+
 } // namespace project
 } // namespace eruption
