@@ -75,6 +75,7 @@ struct VfxEmitterDesc {
     // --- Forma ---
     VfxShape shape = VfxShape::Point;
     Vec3 shapeSize{1.0f};        // raio (esfera/cone/disco) ou meia-caixa
+    Vec3 offset{0.0f};           // m, no espaco do efeito: onde a forma fica
     bool surfaceOnly = false;    // so' na casca da forma
     float coneAngle = 25.0f;     // graus (cone: abertura do jato)
 

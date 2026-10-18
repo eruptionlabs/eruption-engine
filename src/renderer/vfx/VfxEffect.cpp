@@ -91,6 +91,7 @@ void readEmitter(const json& j, VfxEmitterDesc& e) {
     e.duration = std::max(0.0f, num(j, "duration", e.duration));
     e.shape = static_cast<VfxShape>(enumFrom(j, "shape", kShapes, uint32_t(e.shape)));
     e.shapeSize = v3(j, "shapeSize", e.shapeSize);
+    e.offset = v3(j, "offset", e.offset);
     e.surfaceOnly = num(j, "surfaceOnly", e.surfaceOnly);
     e.coneAngle = num(j, "coneAngle", e.coneAngle);
     e.lifetime = glm::max(v2(j, "lifetime", e.lifetime), Vec2(0.01f));
@@ -204,6 +205,7 @@ json writeEmitter(const VfxEmitterDesc& e) {
     j["duration"] = e.duration;
     j["shape"] = kShapes[uint32_t(e.shape)];
     j["shapeSize"] = arr(e.shapeSize);
+    if (e.offset != Vec3(0.0f)) j["offset"] = arr(e.offset);
     j["surfaceOnly"] = e.surfaceOnly;
     j["coneAngle"] = e.coneAngle;
     j["lifetime"] = arr(e.lifetime);
