@@ -508,6 +508,29 @@ public:
     void forgetTouch(uint32_t index);
     // Muda quando a lista de instancias e' refeita do zero (mapa novo).
     uint32_t instanceEpoch() const { return m_instanceEpoch; }
+    // Chao com splat do mapa aberto (a maior malha de chao com mascara), para a
+    // juncao malha x terreno (Engine::fillGroundBlend): slots das camadas, das
+    // mascaras e do material base, e a UV e a mascara como funcao afim do XZ do
+    // mundo (u = a*x + b*z + c). valid = false sem chao com splat.
+    struct GroundBlendInfo {
+        bool valid = false;
+        uint32_t splat[4] = {};               // splatTex01, 23, 45, 67
+        uint32_t mask = 0, mask2 = 0;         // mascaras das camadas 0-3 e 4-7
+        uint32_t color = 0, normal = 0, pbr = 0; // material base do chao
+        Vec3 uvU{0.0f}, uvV{0.0f}, maskU{0.0f}, maskV{0.0f};
+        size_t triangles = 0;
+        uint32_t mesh = 0xFFFFFFFFu;          // a malha de chao de onde veio
+        // Altura da PROPRIA malha quando ela e' uma grade regular (nx x nz
+        // vertices em x0 + i*dx, z0 + j*dz, no mundo): a referencia certa da
+        // juncao. Vazia = sem grade (a juncao usa a do .ter).
+        std::vector<float> heights;
+        uint32_t nx = 0, nz = 0;
+        float x0 = 0.0f, z0 = 0.0f, dx = 1.0f, dz = 1.0f;
+    };
+    // Captura PREGUICOSA: o splat so' marca o chao (patchGroundVertices); o
+    // ajuste roda aqui, no primeiro quadro com a juncao ligada. `wantHeights`:
+    // monta tambem a grade de altura da malha (so' sem .ter).
+    const GroundBlendInfo& groundBlend(bool wantHeights);
     void setInstanceName(uint32_t index, const std::string& name) {
         if (index < m_instances.size()) m_instances[index].name = name;
     }
@@ -1074,6 +1097,10 @@ private:
 
     void createPipeline();
     void rebuildHotData();
+    void captureGroundBlend(const std::vector<TerrainVertex>& vertices, size_t triangles, const Mat4& toWorld,
+                            bool wantHeights);
+    GroundBlendInfo m_groundBlend;
+    uint32_t m_groundBlendPending = 0xFFFFFFFFu; // chao com splat novo, ainda nao capturado
     // So' as instancias acrescentadas no fim desde o ultimo espelho (addInstanceOf).
     void syncNewHotEntries();
     void syncHotEntry(uint32_t i);

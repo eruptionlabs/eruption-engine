@@ -334,6 +334,9 @@ void camadaSplat(uint s, float w, vec2 uv, vec2 ddxUV, vec2 ddyUV, bool quebrar,
     if (nrm) { accN += n * w; sumN += w; }
     if (mrh) { accM += m * w; sumM += w; }
 }
+
+#include "gbuffer/ground_blend.glsl"
+
 void main() {
 #ifndef ERUPTION_NO_VELOCITY
     {
@@ -377,6 +380,9 @@ void main() {
         }
     }
     if (seeThroughDiscard(inWorldPos)) discard;
+    // Juncao com o chao (ground_blend.glsl): derivadas do XZ no fluxo uniforme.
+    const vec3 gbDpdx = dFdx(inWorldPos), gbDpdy = dFdy(inWorldPos);
+    const vec3 gbNg = length(inNormal) > 1e-8 ? normalize(inNormal) : vec3(0.0, 1.0, 0.0);
 
     vec3 N = (length(inNormal) > 1e-8) ? normalize(inNormal) : vec3(0.0, 1.0, 0.0);
 
@@ -742,6 +748,18 @@ void main() {
         return;
     }
 
+    // Juncao malha x terreno: peca perto do chao puxa o material dele.
+    GroundSample gb;
+    gb.w = 0.0;
+    if (!LITE && u_gbMaskU.w > 0.0 && !hasSplat) {
+        // Faixa da peca: a pedida, limitada a uma fracao (u_gbSlots2.w, 0,3 por
+        // padrao) da altura da malha (push.uvScale.y).
+        const float fracao = uintBitsToFloat(u_gbSlots2.w);
+        const float faixaPeca = push.uvScale.y > 0.0 ? min(u_gbMaskU.w, push.uvScale.y * fracao) : u_gbMaskU.w;
+        gb = gbAmostra(inWorldPos, gbNg, gbDpdx, gbDpdy, dot(texColor.rgb, vec3(0.299, 0.587, 0.114)), faixaPeca);
+        if (gb.w > 0.0) texColor.rgb = mix(texColor.rgb, gb.color, gb.w);
+    }
+
     // Keep albedo in sRGB so the legacy path matches the pre-PBR branch.
     // The PBR lighting pass converts to linear itself.
     vec3 albedo = texColor.rgb;
@@ -964,6 +982,7 @@ void main() {
 
         N = normalize(TBN * normalize(tangentNormal));
     }
+    if (gb.w > 0.0) N = normalize(mix(N, gb.normal, gb.w * gb.nPeso));
     outNormal = vec4(N * 0.5 + 0.5, fillSelfShadow); // .a = auto-sombra constante (ambiente)
     // ERUPTION_TEST_MICRO_SHADOW bit 8 (diagnostico): compara o TBN de eixo de
     // mundo com o tangente REAL da UV (derivadas de tela). Ver com
@@ -1051,6 +1070,12 @@ void main() {
     // sprite (Blinn-Phong legado).
     if (inSway > 1e-4) sourceFlag = (sourceFlag > 0.75) ? 0.875 : 0.625;
     // Layout: R=source flag (ver acima), G=roughness, B=metallic, A=wetness.
+    if (gb.w > 0.0 && gb.mrahwW > 0.0) {
+        const float f = gb.w * gb.mrahwW;
+        roughness = mix(roughness, gb.mrahw.g, f);
+        metallic = mix(metallic, gb.mrahw.r, f);
+        wetness = mix(wetness, gb.mrahw.a, f);
+    }
     outPBR = vec4(sourceFlag, roughness, metallic, wetness);
 
     // ALTURA DE MUNDO, quantizada em 8 bits sobre [-500, 1500].
