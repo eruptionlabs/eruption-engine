@@ -44,6 +44,18 @@ public:
     static bool inUiTouchRect(float x, float y);
     static void shutdown();
     static void update();
+    // CONTROLE DE TOQUE (Engine::drawTouchPad): tecla virtual segurada pela
+    // interface, somada a' do teclado no proximo update() - o script ve' o
+    // "pressed" no quadro seguinte, como uma tecla de verdade. O analogico
+    // virtual (-1..1, y para baixo) vai direto ao movimento do jogador.
+    static void setVirtualKey(Key key, bool down);
+    static void setVirtualStick(const glm::vec2& v) { s_virtStick = v; }
+    static glm::vec2 virtualStick() { return s_virtStick; }
+    // Clique sintetico (teste): cursor em (x, y) da janela e um aperto neste quadro.
+    static void injectClick(float x, float y) {
+        s_mousePos = glm::vec2(x, y);
+        s_mouseClicked[0] = true;
+    }
 
     static bool isKeyDown(Key key);
     static bool isKeyPressed(Key key);
@@ -81,8 +93,14 @@ private:
     static GLFWwindow* s_window;
     static std::array<bool, 512> s_keys;
     static std::array<bool, 512> s_keysPrev;
+    static std::array<bool, 512> s_keysPhys; // so' o teclado
+    static std::array<bool, 512> s_keysVirt; // so' o controle de toque
+    static glm::vec2 s_virtStick;
     static std::array<bool, 8> s_mouse;
     static std::array<bool, 8> s_mousePrev;
+    // Apertou neste quadro, mesmo que ja' tenha soltado (toque curto do
+    // Android e clique rapido chegam com o aperto e a soltura juntos).
+    static std::array<bool, 8> s_mouseClicked;
     static glm::vec2 s_mousePos;
     static glm::vec2 s_mousePosPrev;
     static float s_scroll;

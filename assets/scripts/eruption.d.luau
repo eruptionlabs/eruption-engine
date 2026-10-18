@@ -67,6 +67,9 @@ declare ui: {
     -- which: 0 = background / rail / text, 1 = bar fill or border.
     color: (selector: string, color: vector, which: number?, opacity: number?) -> (),
     has: (selector: string) -> boolean,
+    -- Tapped (phone) or clicked (mouse) this frame: an element of the file
+    -- that is on screen, or "minimap". Makes any element a button.
+    clicked: (selector: string) -> boolean,
     -- Drops everything the script set; the file decides again.
     reset: () -> (),
 }
@@ -288,6 +291,8 @@ declare input: {
     down: (key: string) -> boolean,
     -- True only on the frame the key went down.
     pressed: (key: string) -> boolean,
+    -- The screen is a touch screen (phone): hide drawn key hints.
+    touch: () -> boolean,
 }
 
 -- Models placed in the map.

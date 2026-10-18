@@ -506,6 +506,7 @@ public:
     ImFont* m_touchHudFont = nullptr;
     float m_touchHudDayScale = 1.0f; // velocidade do dia antes de pausar
     void drawTouchHud();
+    void drawTouchPad();
     bool m_touchHudTelemetry = false; // painel de numeros ligado pelo botao
     bool m_touchHudMaps = false;      // lista de mapas aberta (ERUPTION_TOUCH_MAPS)
     // Modo classico: luz fixa do jeito antigo (Blinn-Phong, sem relevo, sem
@@ -626,6 +627,12 @@ public:
     UiCanvas& uiCanvas() { return m_uiCanvas; }
     // Interface do jogo descrita em CSS (renderer/UiDocument.hpp).
     UiDocument& uiDocument() { return m_uiDocument; }
+    // Tocado/clicado neste quadro (ui.clicked): um elemento do CSS que esta' na
+    // tela, ou "minimap". Toque que comeca no controle de toque nao conta.
+    bool uiClicked(const std::string& selector);
+    Vec4 m_uiArea{0.0f};        // x, y, w, h da ultima interface desenhada (drawGameFx2D)
+    Vec4 m_minimapScreen{0.0f}; // x0, y0, x1, y1 do minimapa no ultimo quadro em que apareceu
+    int m_minimapScreenFrame = -100;
     // Textura de um PNG para a UI em CSS, carregada na primeira vez e
     // guardada por caminho. Devolve o handle do ImGui, ou nullptr.
     void* uiImageTexture(const std::string& png);

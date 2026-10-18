@@ -311,6 +311,9 @@ void PlayerController::updateMovement(float dt) {
             if (Input::isGamepadButtonPressed(m_engine->inputConfig().gamepad.cameraResetButton, activeGpad))
                 m_engine->camera().resetOrbit();
         }
+        // Analogico do controle de toque (Engine::drawTouchPad), relativo a' camera.
+        const glm::vec2 toque = Input::virtualStick();
+        if (toque.x != 0.0f || toque.y != 0.0f) move += camRight * toque.x - camForward * toque.y;
         // ERUPTION_TEST_PLAYER_MOVE=dx,dz (teste): segura o controle nessa direção
         // do mundo, passando pela colisão como um jogador de verdade.
         static const char* testMove = std::getenv("ERUPTION_TEST_PLAYER_MOVE");

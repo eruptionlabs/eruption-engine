@@ -9,8 +9,12 @@ namespace eruption {
 GLFWwindow* Input::s_window = nullptr;
 std::array<bool, 512> Input::s_keys{};
 std::array<bool, 512> Input::s_keysPrev{};
+std::array<bool, 512> Input::s_keysPhys{};
+std::array<bool, 512> Input::s_keysVirt{};
+glm::vec2 Input::s_virtStick{0.0f};
 std::array<bool, 8> Input::s_mouse{};
 std::array<bool, 8> Input::s_mousePrev{};
+std::array<bool, 8> Input::s_mouseClicked{};
 glm::vec2 Input::s_mousePos{0.0f};
 glm::vec2 Input::s_mousePosPrev{0.0f};
 float Input::s_scroll = 0.0f;
@@ -50,6 +54,8 @@ void Input::shutdown() {
 
 void Input::update() {
     s_keysPrev = s_keys;
+    for (size_t k = 0; k < s_keys.size(); ++k) s_keys[k] = s_keysPhys[k] || s_keysVirt[k];
+    s_mouseClicked.fill(false);
     s_mousePrev = s_mouse;
     s_mousePosPrev = s_mousePos;
     s_scrollDelta = 0.0f;
@@ -96,6 +102,11 @@ void Input::resetDeltas() {
     s_mousePosPrev = s_mousePos;
 }
 
+void Input::setVirtualKey(Key key, bool down) {
+    const int k = static_cast<int>(key);
+    if (k >= 0 && k < 512) s_keysVirt[k] = down;
+}
+
 bool Input::isKeyDown(Key key) {
     int k = static_cast<int>(key);
     return k >= 0 && k < 512 && s_keys[k];
@@ -118,7 +129,7 @@ bool Input::isMouseDown(MouseButton btn) {
 
 bool Input::isMousePressed(MouseButton btn) {
     int b = static_cast<int>(btn);
-    return b >= 0 && b < 8 && s_mouse[b] && !s_mousePrev[b];
+    return b >= 0 && b < 8 && ((s_mouse[b] && !s_mousePrev[b]) || s_mouseClicked[b]);
 }
 
 bool Input::isMouseReleased(MouseButton btn) {
@@ -200,8 +211,9 @@ void Input::setCursorLocked(bool locked) {
 void Input::keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mods);
     if (key >= 0 && key < 512) {
-        if (action == GLFW_PRESS) s_keys[key] = true;
-        else if (action == GLFW_RELEASE) s_keys[key] = false;
+        if (action == GLFW_PRESS) s_keysPhys[key] = true;
+        else if (action == GLFW_RELEASE) s_keysPhys[key] = false;
+        s_keys[key] = s_keysPhys[key] || s_keysVirt[key];
     }
 }
 
@@ -222,7 +234,7 @@ bool Input::inUiTouchRect(float x, float y) {
 void Input::mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
     if (button >= 0 && button < 8) {
-        if (action == GLFW_PRESS) s_mouse[button] = true;
+        if (action == GLFW_PRESS) s_mouse[button] = s_mouseClicked[button] = true;
         else if (action == GLFW_RELEASE) s_mouse[button] = false;
     }
 }
