@@ -20,6 +20,11 @@
 
 namespace eruption {
 
+struct PbrTextureData;
+// PBR que o preload de modelos (Engine::preloadModel) ja' sintetizou para este
+// albedo embutido; falso se nao ha'. MapLoad.cpp.
+bool takePreloadedPbr(const std::string& albedoKey, PbrTextureData& mrahw, PbrTextureData& normal);
+
 // Nomes das fases de CPU marcadas dentro de Engine::render(). Eram locais do
 // relatorio de benchmark; viraram constante porque a telemetria por frame passou
 // a exportar a mesma quebra - sem ela, render_ms e' um numero cego, e foi

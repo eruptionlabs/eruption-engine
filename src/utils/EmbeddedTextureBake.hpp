@@ -43,6 +43,12 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model,
                                         uint32_t maxTextureSize,
                                         bool synthesizePbr);
 
+// So' o cache (<glb>.etexpack): sem bake, sem GPU, seguro fora da thread
+// principal - a leitura de mapa em segundo plano (preload/warp) adianta o
+// arquivo, e uma falta de cache volta ao bakeEmbeddedTextures na troca.
+bool readEmbeddedBakeCache(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr,
+                           EmbeddedBakeResult& out);
+
 // Teto de resolucao ativo (preset de data/graphics.json). O loader de fundo
 // (warp) nao le' o preset, entao o Engine publica o valor aqui.
 void setEmbeddedTextureMaxSize(uint32_t maxSize);

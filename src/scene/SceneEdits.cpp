@@ -495,6 +495,11 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         Mat4 placement;
     };
     std::vector<PrefabRoot> prefabRoots;
+    // Os GLB da cena lidos e preparados (texturas e PBR) em paralelo; cada
+    // addModel abaixo espera so' o seu. Antes iam um por vez no fio principal:
+    // 110 modelos novos levavam 6,6-9,3 s na abertura de um mapa grande.
+    for (const auto& a : added)
+        if (a.prefab.empty() && !a.file.empty() && scriptFindModel(a.name) < 0) engine.preloadModel(a.file);
     for (const auto& a : added) {
         if (scriptFindModel(a.name) >= 0) continue;
         std::string file = a.file, node = a.node;
@@ -518,6 +523,7 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
             }
         }
         AddedInstance inst;
+        engine.waitModelPreload(file);
         if (!addModel(engine, file, node, a.name, a.transform.matrix(), inner, inst)) continue;
         inst.node = node;
         inst.prefab = a.prefab;

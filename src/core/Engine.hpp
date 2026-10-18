@@ -189,6 +189,13 @@ public:
     // Devolve o indice da primeira instancia (uma por no) ou -1.
     // `nodeName` não vazio: só esse nó do arquivo.
     int addModelFromFile(const std::string& glbPath, const Vec3& position, const std::string& nodeName = {});
+    // Le, interpreta e decodifica as texturas embutidas de um .glb num job,
+    // fora do quadro; o addModelFromFile seguinte so' envia para a GPU.
+    void preloadModel(const std::string& glbPath);
+    // Espera o preload deste arquivo terminar (se houver um). Para quem vai
+    // usar o modelo agora no mesmo mapa e disparou varios preloads antes
+    // (cena aplicada): todos se preparam em paralelo, cada um espera so' o seu.
+    void waitModelPreload(const std::string& glbPath);
     const std::string& currentMapName() const { return m_currentMapName; }
     float sampleTerrainHeight(float x, float z) const;
     // Raio contra a grade de altura do mapa (.ter); falso se o mapa não tem uma.
@@ -1625,6 +1632,14 @@ private:
     uint32_t m_characterSpriteGen = 0;
     // Solta as folhas sem uso ha' `keepGenerations` trocas de mapa (0 = todas).
     void releaseCharacterSpriteCache(uint32_t keepGenerations);
+    // Modelos pedidos por preloadModel: arquivo -> modelo pronto (ou a
+    // caminho) e a troca de mapa em que foi pedido. So' o fio principal mexe.
+    struct ModelPreload {
+        std::shared_future<std::shared_ptr<ModelFile>> model;
+        uint32_t gen = 0;
+    };
+    std::unordered_map<std::string, ModelPreload> m_modelPreloads;
+    uint32_t m_modelPreloadGen = 0;
     bool m_hasPlayerStart = false;
     HeightEdit m_heightEdit;
     std::vector<ScatterGroup> m_scatter;

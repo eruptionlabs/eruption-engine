@@ -470,6 +470,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     // PBR cozido em disco - para não substituir mapa autoral por derivado.
     setBakedPbrProvider([this](const std::string& key, PbrTextureData& mrahw,
                                PbrTextureData& normal) {
+        if (takePreloadedPbr(key, mrahw, normal)) return true; // models.preload
         if (m_embeddedBaked.empty()) return false;
         auto it = m_embeddedBaked.find(key);
         if (it == m_embeddedBaked.end()) {
