@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace eruption {
@@ -113,6 +114,17 @@ void forgetData(lua_State* L, ObjectId id) {
 
 bool isDead(const ObjectId& id) { return !world().alive(id); }
 
+// Handle de objeto ja' destruido onde a API nao da' erro (destroy, has_tag):
+// o script segue achando que fez algo. Comum com um handle guardado de antes
+// de um game.load. Avisa uma vez por objeto, para nao inundar o log.
+void warnDead(const ObjectId& id, const char* what) {
+    static std::unordered_set<uint64_t> warned;
+    const uint64_t key = (uint64_t(id.index) << 32) | id.generation;
+    if (!warned.insert(key).second) return;
+    ERUPTION_LOG_WARN("Script: %s on a destroyed object (#%u gen %u) was ignored; a handle kept from before "
+                      "game.load or destroy?", what, id.index, id.generation);
+}
+
 // O objeto e os descendentes perdem a tabela de dados junto.
 void forgetSubtree(lua_State* L, ObjectId id) {
     forgetData(L, id);
@@ -121,7 +133,10 @@ void forgetSubtree(lua_State* L, ObjectId id) {
 
 int object_destroy(lua_State* L) {
     const ObjectId id = toObject(L, 1);
-    if (!world().alive(id)) return 0;
+    if (!world().alive(id)) {
+        if (id.valid()) warnDead(id, "destroy()");
+        return 0;
+    }
     forgetSubtree(L, id);
     scene().destroy(*g_engine, id);
     // A lista dos criados por script não cresce com o que já morreu.
@@ -172,7 +187,9 @@ int object_remove_tag(lua_State* L) {
 }
 
 int object_has_tag(lua_State* L) {
-    lua_pushboolean(L, world().hasTag(toObject(L, 1), luaL_checkstring(L, 2)));
+    const ObjectId id = toObject(L, 1);
+    if (id.valid() && !world().alive(id)) warnDead(id, "has_tag()");
+    lua_pushboolean(L, world().hasTag(id, luaL_checkstring(L, 2)));
     return 1;
 }
 

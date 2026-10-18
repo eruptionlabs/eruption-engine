@@ -94,6 +94,10 @@ public:
     static bool hasSave(const std::string& slot);
     static bool deleteSave(const std::string& slot);
     static std::filesystem::path saveDir();
+    // game.save_settings / game.settings: tabela do jogador guardada fora dos
+    // jogos salvos.
+    static bool saveSettings(lua_State* L, int idx, std::string& error);
+    static void pushSettings(lua_State* L);
     // Variáveis como JSON (o editor guarda e devolve ao trocar de mapa no Play).
     std::string exportVars();
     bool importVars(const std::string& json);
@@ -103,6 +107,26 @@ public:
     void mapReady();
     void rememberMapState();
     void clearMapStates() { m_mapStates.clear(); }
+    // game.restart(): o pedido fica aqui e quem roda o jogo (aplicacao ou
+    // editor) atende fora do quadro - um script nao pode parar os scripts
+    // por dentro da propria chamada.
+    void requestRestart() { m_restartRequested = true; }
+    bool takeRestartRequest() {
+        const bool r = m_restartRequested;
+        m_restartRequested = false;
+        return r;
+    }
+    // Boot dos scripts: para, fecha a VM e roda todos os arquivos de novo numa
+    // VM nova (estado de modulo zerado), sem nada da sessao anterior.
+    void reboot();
+    // Esquece o que a sessao lembrava entre mapas (fotos dos mapas, jogo
+    // carregado a caminho): o proximo start() e' um jogo novo.
+    void clearSession() {
+        m_mapStates.clear();
+        m_pendingVars.clear();
+        m_resume = false;
+        m_resumeVars.clear();
+    }
     // O próximo start() continua o jogo (troca de mapa no Play do editor): as
     // variáveis voltam e on.start não roda de novo, como no jogo exportado.
     void resumeOnNextStart(const std::string& varsJson) {
@@ -180,6 +204,7 @@ private:
     Script* scriptByPath(const std::filesystem::path& path);
     void dispatch(Script& s, float dt, float prevHour, float hour);
     void resetVars();
+    bool createState(); // VM nova com a API registrada (init e reboot)
     void writeTypeDefinitions();
 
     static ScriptHost* s_current;
@@ -212,6 +237,7 @@ private:
     std::vector<BaseCharacter> m_baseCharacters;
     std::map<std::string, std::string> m_mapStates; // mapa -> JSON do que mudou
     bool m_resume = false;
+    bool m_restartRequested = false;
     std::string m_resumeVars;
     std::string captureMapState() const;
     void applyMapState(const std::string& json);

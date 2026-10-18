@@ -307,6 +307,15 @@ void DefaultApplication::onUpdate(float deltaTime) {
         }
         m_editor->consumeStep();
     } else {
+        // game.restart(): para os scripts, esquece a sessao e reabre o mapa
+        // inicial; a entrada no mapa (abaixo) liga os scripts do zero.
+        if (m_scripts && m_engine && m_scripts->takeRestartRequest()) {
+            m_scripts->reboot();
+            m_scriptsPlaying = false;
+            m_engine->timer().setTimeScale(1.0f);
+            m_engine->uiCanvas().clearEffects();
+            m_engine->requestMap(m_initialMap, m_hasInitialPos ? &m_initialPos : nullptr);
+        }
         // Porta, jogo salvo: troca de mapa pedida pelo jogo, aqui fora do frame.
         Engine::MapRequest request;
         if (m_engine && m_engine->takeMapRequest(request)) {

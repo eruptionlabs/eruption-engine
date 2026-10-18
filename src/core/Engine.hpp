@@ -520,6 +520,11 @@ public:
     // Liga/desliga o DoF de vez: o render recopia enableDoF do efeito 3 a cada
     // quadro, entao escrever so' em postSettings() durava um quadro.
     void setDofEnabled(bool on);
+    // game.restart() e' um boot: o que os scripts mudam fora da VM (visual,
+    // foco, neblina, ver atraves, sombra dos sprites, mixagem) volta ao que
+    // era quando os scripts nasceram. Captura no ScriptHost::init.
+    void captureScriptDefaults();
+    void restoreScriptDefaults();
     // Nevoa por script (world.set_fog): vence a do mapa (.env) e a do clima;
     // set=false devolve o comando para eles.
     void setScriptFog(const MapFog& fog) { m_scriptFog = fog; }
@@ -952,6 +957,8 @@ private:
     ParallaxSystem m_parallaxSystem;
     DayNightCycle m_dayNightCycle;
     DioramaLookConfig m_lookConfig;
+    DioramaLookConfig m_bootLook; // captureScriptDefaults
+    bool m_bootDof = false;
     SpritePickerUI m_spritePickerUI;
     Camera m_camera;
     Mat4 m_prevViewProjNoJitter = Mat4(1.0f);

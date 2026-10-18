@@ -46,6 +46,13 @@ public:
     bool fading() const { return m_fade.left > 0.0f; }
 
     // Uma vez por frame, antes de desenhar.
+    // Sem fade, clarão, escurecimento nem números flutuando (game.restart).
+    void clearEffects() {
+        m_popups.clear();
+        m_fade = {};
+        m_flash = {};
+        m_dim = {};
+    }
     void update(float dt);
     // Desenha na área (x, y, w, h) em pixels de tela. `viewProj` projeta os
     // números de mundo; passar a matriz sem jitter.

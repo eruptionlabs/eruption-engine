@@ -99,25 +99,52 @@ void ScriptHost::reloadForDebugging() {
     scan();
 }
 
+bool ScriptHost::createState() {
+    L = luaL_newstate();
+    if (!L) return false;
+    s_current = this;
+    luaL_openlibs(L);
+    registerScriptApi(L, *m_engine);
+    lua_callbacks(L)->interrupt = interruptCallback;
+    // Globais e bibliotecas ficam somente leitura; cada script ganha um
+    // ambiente próprio por cima delas.
+    luaL_sandbox(L);
+    m_varsRef = -1;
+    resetVars();
+
+    m_native = luau_codegen_supported() != 0;
+    if (m_native) luau_codegen_create(L);
+    return true;
+}
+
+void ScriptHost::reboot() {
+    if (!L) return;
+    if (m_running) stop();
+    // Estado de módulo (locais do topo de cada .luau, tabelas de require)
+    // vive na VM: só uma VM nova volta ao que era no boot. O depurador e o
+    // módulo C++ ficam; eles não guardam nada da VM entre chamadas.
+    for (auto& s : m_scripts) unload(s);
+    m_scripts.clear();
+    m_behaviors.clear();
+    lua_close(L);
+    L = nullptr;
+    clearSession();
+    m_engine->restoreScriptDefaults();
+    if (!createState()) {
+        Logger::error("Scripts: could not create a new Luau state for game.restart");
+        return;
+    }
+    scan(); // todos os arquivos rodam de novo, do zero
+}
+
 bool ScriptHost::init(Engine& engine, const fs::path& dir) {
     m_engine = &engine;
     m_dir = dir;
     std::error_code ec;
     fs::create_directories(m_dir, ec);
 
-    L = luaL_newstate();
-    if (!L) return false;
-    s_current = this;
-    luaL_openlibs(L);
-    registerScriptApi(L, engine);
-    lua_callbacks(L)->interrupt = interruptCallback;
-    // Globais e bibliotecas ficam somente leitura; cada script ganha um
-    // ambiente próprio por cima delas.
-    luaL_sandbox(L);
-    resetVars();
-
-    m_native = luau_codegen_supported() != 0;
-    if (m_native) luau_codegen_create(L);
+    if (!createState()) return false;
+    engine.captureScriptDefaults(); // o que game.restart devolve
 
 #if ERUPTION_EDITOR
     // Porta do depurador (VS Code): ERUPTION_DEBUG_PORT, 0 desliga.
