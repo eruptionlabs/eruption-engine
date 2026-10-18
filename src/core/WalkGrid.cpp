@@ -5,6 +5,8 @@
 #include "core/Engine.hpp"
 
 #include "core/Logger.hpp"
+#include "core/JobSystem.hpp"
+#include "formats/TerrainParser.hpp"
 #include "formats/MapLoader.hpp"
 #include "scene/SceneEdits.hpp"
 #include "utils/ImageUtils.hpp"
@@ -14,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <vector>
 
 namespace eruption {
 
@@ -128,17 +131,33 @@ int Engine::blockSteepSlopes(float maxDegrees) {
     const TerrainFile& t = m_currentMap->terrain;
     NavGridFile& nav = m_currentMap->navGrid;
     const float limit = std::tan(glm::radians(std::clamp(maxDegrees, 1.0f, 89.0f)));
-    int n = 0;
-    for (uint32_t z = 0; z < nav.height; ++z)
-        for (uint32_t x = 0; x < nav.width; ++x) {
+    // Por linha, em paralelo, lendo a grade do .ter direto: e' o que o
+    // sampleTerrainHeight devolve dentro do mapa (mapa com grade que segue o
+    // terreno). So' a borda, onde a amostra vizinha pode cair num mapa ao
+    // lado, passa pelo sampleTerrainHeight. Num mapa de 851x851 o laco de
+    // 2,9 milhoes de amostras pelo caminho geral custava ~450 ms.
+    const uint32_t w = nav.width, d = nav.height;
+    std::vector<int> perRow(d, 0);
+    JobSystem::instance().parallelFor(d, [&](uint32_t z) {
+        const bool edgeRow = z == 0 || z + 1 >= d;
+        int count = 0;
+        for (uint32_t x = 0; x < w; ++x) {
             const float px = t.offsetX + x * t.scale, pz = t.offsetZ + z * t.scale;
-            const float dx = (sampleTerrainHeight(px + t.scale, pz) - sampleTerrainHeight(px - t.scale, pz)) / (2 * t.scale);
-            const float dz = (sampleTerrainHeight(px, pz + t.scale) - sampleTerrainHeight(px, pz - t.scale)) / (2 * t.scale);
+            const bool edge = edgeRow || x == 0 || x + 1 >= w;
+            auto height = [&](float hx, float hz) {
+                return edge ? sampleTerrainHeight(hx, hz) : TerrainParser::getTerrainHeightAt(t, hx, hz);
+            };
+            const float dx = (height(px + t.scale, pz) - height(px - t.scale, pz)) / (2 * t.scale);
+            const float dz = (height(px, pz + t.scale) - height(px, pz - t.scale)) / (2 * t.scale);
             if (std::sqrt(dx * dx + dz * dz) > limit) {
-                nav.cells[size_t(z) * nav.width + x].type = TerrainType::NonWalkable;
-                ++n;
+                nav.cells[size_t(z) * w + x].type = TerrainType::NonWalkable;
+                ++count;
             }
         }
+        perRow[z] = count;
+    });
+    int n = 0;
+    for (int c : perRow) n += c;
     return n;
 }
 
