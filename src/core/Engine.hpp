@@ -644,6 +644,7 @@ public:
         std::string assetPath;
         std::string mapName; // mapa dono da grade (os arquivos de retoque vêm dele)
         std::unordered_map<uint32_t, Mat4> meshTransform;
+        bool refsBuilt = false; // gpu/cpuRefs montados (ensureHeightEditRefs)
         float height(uint32_t g) const { return base[g] + delta[g]; }
     };
     enum class SculptMode { Raise, Lower, Smooth, Flatten };
@@ -1622,6 +1623,9 @@ private:
     // também roda fora da thread principal, para os mapas vizinhos).
     static void applyHeightDelta(LoadedMap& map, std::vector<ModelAsset>& models, HeightEdit& h);
     void bindHeightEditToMeshes();
+    // Monta o indice ponto da grade -> vertices do chao no primeiro uso do
+    // pincel de relevo (ou de uma edicao de relevo), nao na carga.
+    void ensureHeightEditRefs();
     static void applySavedWalk(LoadedMap& map);
     // Mundo contínuo
     struct WorldRegionLoad;

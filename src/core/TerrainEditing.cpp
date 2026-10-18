@@ -141,7 +141,22 @@ void Engine::bindHeightEditToMeshes() {
     h.cpuStart.clear();
     h.cpuRefs.clear();
     h.meshTransform.clear();
+    h.refsBuilt = false;
     if (!h.active) return;
+    ModelRenderer& mr = m_modelRenderer;
+    for (uint32_t mesh : mr.groundMeshes())
+        for (const auto& inst : mr.getInstances())
+            if (inst.meshIndex == mesh) { h.meshTransform[mesh] = inst.transform; break; }
+    // O indice dos vertices fica para o primeiro uso: monta-lo aqui varria os
+    // vertices do chao da GPU e da CPU duas vezes cada (724 mil + 4,3 milhoes
+    // num mapa de 3400 u), ~700-880 ms em toda chegada, mesmo num jogo que
+    // nunca edita o relevo.
+}
+
+void Engine::ensureHeightEditRefs() {
+    HeightEdit& h = m_heightEdit;
+    if (!h.active || h.refsBuilt) return;
+    h.refsBuilt = true;
     const size_t n = h.base.size();
     // CSR: primeiro conta por ponto, depois preenche.
     auto build = [&](auto&& forEach, std::vector<uint32_t>& start, std::vector<HeightEdit::Ref>& refs) {
@@ -154,9 +169,6 @@ void Engine::bindHeightEditToMeshes() {
         forEach([&](uint32_t g, uint32_t a, uint32_t b) { refs[fill[g]++] = {a, b}; });
     };
     ModelRenderer& mr = m_modelRenderer;
-    for (uint32_t mesh : mr.groundMeshes())
-        for (const auto& inst : mr.getInstances())
-            if (inst.meshIndex == mesh) { h.meshTransform[mesh] = inst.transform; break; }
     build([&](auto&& emit) {
               for (const auto& [mesh, t] : h.meshTransform) {
                   const auto* verts = mr.groundVertices(mesh);
@@ -185,11 +197,15 @@ void Engine::bindHeightEditToMeshes() {
                       h.gpuRefs.size(), h.cpuRefs.size());
 }
 
-bool Engine::terrainEditable() const { return m_heightEdit.active && !m_heightEdit.gpuRefs.empty(); }
+// Ha' chao com grade para editar (o indice dos vertices so' e' montado no
+// primeiro toque do pincel).
+bool Engine::terrainEditable() const { return m_heightEdit.active && !m_heightEdit.meshTransform.empty(); }
 
 void Engine::refreshHeightRegion(int x0, int z0, int x1, int z1) {
     HeightEdit& h = m_heightEdit;
     if (!h.active || !m_currentMap) return;
+    ensureHeightEditRefs();
+    if (h.gpuStart.empty()) return; // nenhum vertice do chao casou com a grade
     // A normal de um ponto depende dos vizinhos: atualiza uma borda a mais.
     x0 = std::max(0, x0 - 1);
     z0 = std::max(0, z0 - 1);

@@ -113,7 +113,7 @@ bool Engine::beginSplatEditing() {
     SplatEdit& sp = m_splatEdit;
     if (sp.active) return true;
     const HeightEdit& h = m_heightEdit;
-    if (!h.active || h.gpuRefs.empty()) return false;
+    if (!h.active || h.meshTransform.empty()) return false; // chao com grade (o indice do pincel nao entra aqui)
     sp = SplatEdit{};
     sp.w = h.w;
     sp.d = h.d;
