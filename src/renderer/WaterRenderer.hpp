@@ -33,6 +33,7 @@ public:
         int liquidKind = 0;
         Vec3 emissiveColor = Vec3(1.0f, 0.32f, 0.07f);
         float emissiveStrength = 0.0f;
+        float shoreHeat = 0.0f, centerHeat = 0.0f; // lava (ver LoadedMap::Liquid)
         float flowSpeed = 1.0f;
 
         // Water level
