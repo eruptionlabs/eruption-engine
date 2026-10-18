@@ -44,6 +44,7 @@ public:
     // rgb = cor, a = forca atual (0 = nada).
     Vec4 sceneDimNow() const { return Vec4(Vec3(m_dim.color), m_dim.now); }
     bool fading() const { return m_fade.left > 0.0f; }
+    float fadeAlpha() const { return m_fade.now; }
 
     // Uma vez por frame, antes de desenhar.
     // Sem fade, clarão, escurecimento nem números flutuando (game.restart).

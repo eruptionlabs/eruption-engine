@@ -902,6 +902,13 @@ void Engine::render() {
         m_vulkan.writeTimestamp(cmd, 12, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         m_vfx.simulate(cmd, m_gbuffer.depthView());
         // Particulas de malha (detritos, estilhacos): opacas, no G-buffer,
+        // Cortina de tela cheia (fx.fade): o que nasce sob ela, e nos 6 quadros
+        // depois de ela abrir (o script costuma montar a cena no mesmo quadro
+        // em que tira a cortina), entra inteiro.
+        static int s_coverHold = 0;
+        s_coverHold = m_uiCanvas.fadeAlpha() >= 0.9f ? 6 : std::max(0, s_coverHold - 1);
+        m_modelRenderer.setSpawnFadeSuspended(s_coverHold > 0);
+        m_modelRenderer.setSpawnFadeClock(m_timer.elapsed());
         // DEPOIS da simulacao. A colisao le' a profundidade so' da cena - com
         // a pedra nela, a pedra batia na propria imagem e o chao embaixo
         // dela ficava escondido. De quebra desenham o passo DESTE frame.

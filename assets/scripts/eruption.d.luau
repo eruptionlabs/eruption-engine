@@ -466,8 +466,10 @@ declare objects: {
     create: (name: string, position: vector?, parent: Object?) -> Object,
     -- An object with a model: a .glb ("file.glb#Node" takes one node) or a
     -- .prefab.luau. Destroyed objects give their models back for the next
-    -- spawn of the same file. Objects made by scripts go away on Stop.
-    spawn: (file: string, position: vector?, parent: Object?, name: string?) -> Object?,
+    -- spawn of the same file. Objects made by scripts go away on Stop. After
+    -- the map's first frame a new object fades in over ~0.3 s instead of
+    -- popping; `fade` false makes it appear at once.
+    spawn: (file: string, position: vector?, parent: Object?, name: string?, fade: boolean?) -> Object?,
     -- The object of a models.* index.
     of_model: (model: number) -> Object?,
     count: () -> number,

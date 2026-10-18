@@ -371,11 +371,19 @@ int objects_spawn(lua_State* L) {
     if (name.empty()) name = SceneObjects::defaultName(source);
     std::string error;
     std::vector<SceneObjects::ObjectScript> scripts;
+    ModelRenderer& models = g_engine->modelRenderer();
+    const size_t antes = models.instanceCount();
     const ObjectId id = scene().spawn(*g_engine, source, name, parent, placeAt(L, 2, parent), &error, &scripts);
     if (!id.valid()) {
         Logger::warning("objects.spawn: %s", error.c_str());
         lua_pushnil(L);
         return 1;
+    }
+    // fade = false: aparece inteiro, sem a entrada em dither do motor (as
+    // instancias novas e as reaproveitadas deste objeto).
+    if (!lua_isnoneornil(L, 5) && !lua_toboolean(L, 5)) {
+        for (size_t i = antes; i < models.instanceCount(); ++i) models.skipSpawnFade(static_cast<uint32_t>(i));
+        for (uint32_t i : scene().instancesOf(id)) models.skipSpawnFade(i);
     }
     g_spawned.push_back(id);
     // Scripts que o prefab pede (na raiz e nos filhos).
@@ -570,8 +578,10 @@ declare objects: {
     create: (name: string, position: vector?, parent: Object?) -> Object,
     -- An object with a model: a .glb ("file.glb#Node" takes one node) or a
     -- .prefab.luau. Destroyed objects give their models back for the next
-    -- spawn of the same file. Objects made by scripts go away on Stop.
-    spawn: (file: string, position: vector?, parent: Object?, name: string?) -> Object?,
+    -- spawn of the same file. Objects made by scripts go away on Stop. After
+    -- the map's first frame a new object fades in over ~0.3 s instead of
+    -- popping; `fade` false makes it appear at once.
+    spawn: (file: string, position: vector?, parent: Object?, name: string?, fade: boolean?) -> Object?,
     -- The object of a models.* index.
     of_model: (model: number) -> Object?,
     count: () -> number,

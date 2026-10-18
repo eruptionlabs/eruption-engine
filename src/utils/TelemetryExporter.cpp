@@ -277,6 +277,8 @@ void TelemetryExporter::recordFrame(const FrameStats& st) {
         // instancias absorvidas por um balde ja' aberto.
         {"batch_runs", st.batchRuns},
         {"batch_reuse", st.batchReuse},
+        {"lod_swaps", st.lodSwaps}, {"pop_in", st.popIn}, {"pop_out", st.popOut},
+        {"pop_in_frustum", st.popInWhy[0]}, {"pop_in_off", st.popInWhy[1]}, {"pop_in_small", st.popInWhy[2]}, {"pop_in_thin", st.popInWhy[3]}, {"pop_in_new", st.popInNew},
         {"batch_reuse_pct", (st.batchReuse + st.batchRuns) > 0
             ? 100.0 * static_cast<double>(st.batchReuse) / (st.batchReuse + st.batchRuns)
             : 0.0},
