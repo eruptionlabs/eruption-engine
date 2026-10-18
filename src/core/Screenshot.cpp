@@ -14,6 +14,10 @@
 #include "core/Logger.hpp"
 #include "utils/ImageUtils.hpp"
 #include <utility>
+#include <algorithm>
+#include <deque>
+#include <future>
+#include <thread>
 #include <glm/glm.hpp>
 #include <vk_mem_alloc.h>
 #include <vector>
@@ -170,7 +174,25 @@ void Engine::finishPendingScreenshot() {
     m_screenshotStaging = VK_NULL_HANDLE;
     m_screenshotStagingAlloc = VK_NULL_HANDLE;
 
-    ImageUtils::writePNG(m_screenshotPendingPath, m_screenshotStagingW, m_screenshotStagingH, 4, pixels.data());
+    if (kDumpAll) {
+        // Gravacao de video: o PNG de 1080p levava ~250 ms no fio principal
+        // (compressao do stb) e o video saia a 2-4 quadros/s de relogio. Vai
+        // para uma thread; no maximo kInFlight de uma vez. O destrutor de um
+        // future de std::async espera a escrita, entao a saida do processo
+        // nao corta o ultimo arquivo.
+        static std::deque<std::future<void>> writes;
+        const size_t kInFlight = std::max(2u, std::thread::hardware_concurrency() / 2);
+        while (writes.size() >= kInFlight) {
+            writes.front().wait();
+            writes.pop_front();
+        }
+        writes.push_back(std::async(std::launch::async, [path = m_screenshotPendingPath, w = m_screenshotStagingW,
+                                                         h = m_screenshotStagingH, px = std::move(pixels)] {
+            ImageUtils::writePNG(path, w, h, 4, px.data());
+        }));
+    } else {
+        ImageUtils::writePNG(m_screenshotPendingPath, m_screenshotStagingW, m_screenshotStagingH, 4, pixels.data());
+    }
     m_screenshotPending = false;
     m_screenshotPendingPath.clear();
 
