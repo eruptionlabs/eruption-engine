@@ -127,6 +127,24 @@ struct FrameUBO {
     alignas(16) Vec4 seeThrough3;
 };
 
+// Luz pontual dominante de um sprite (Engine::spriteDominantLights), por
+// instancia do buffer de sprites. 32 B, o mesmo layout std430 do lado da GPU.
+struct SpriteLight {
+    Vec3 position = Vec3(0.0f);
+    float strength = 0.0f; // 0 = nenhuma luz pontual perto
+    Vec3 color = Vec3(0.0f);
+    float pad = 0.0f;
+};
+static_assert(sizeof(SpriteLight) == 32, "SpriteLight: layout std430 de 32 B");
+
+// Sombra de um sprite a partir de uma luz pontual (renderBillboardPointShadows):
+// instancia no buffer de sprites, posicao da luz e opacidade.
+struct SpritePointShadow {
+    uint32_t instance = 0;
+    Vec3 light = Vec3(0.0f);
+    float strength = 0.0f;
+};
+
 class SpriteRenderer {
 public:
     bool init(VulkanContext* ctx, GBuffer* gbuffer, BindlessDescriptor* bindless);
@@ -153,6 +171,10 @@ public:
     void renderShadow(VkCommandBuffer cmd, VkPipelineLayout shadowLayout, const Mat4& lightSpaceMatrix, const FrameUBO& frameUbo, VkBuffer instanceBuffer, uint32_t count);
     
     // Projected Planar Shadow for billboards — renders a flattened sprite silhouette on the ground.
+    // Uma sombra planar por (sprite, luz pontual): mesmo pipeline da planar do
+    // sol, com a luz no push constant (shadowLightDir.w < 0).
+    void renderBillboardPointShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo, const Vec2& planarParams,
+                                     VkBuffer instanceBuffer, const std::vector<SpritePointShadow>& shadows);
     void renderBillboardPlanarShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo, const Vec3& shadowLightDir,
                                       const Vec2& planarParams, VkBuffer instanceBuffer, uint32_t count);
 

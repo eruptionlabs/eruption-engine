@@ -772,6 +772,8 @@ void Engine::render() {
         }
         m_deferredLighting.setVfxPointLights(pls);
     }
+    // Depois das luzes de efeito deste quadro: elas tambem projetam sombra de sprite.
+    updateSpriteDominantLights();
     m_vulkan.writeTimestamp(cmd, 2, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     m_gbuffer.beginPass(cmd);
     // PIPELINE STATISTICS em volta do passe de GEOMETRIA: e' aqui que se
@@ -1132,10 +1134,22 @@ void Engine::render() {
     if (!m_benchmarkThunderstormStarted) {
         uint32_t spriteCount = m_spriteSystem.visibleCount();
         if (spriteCount > 0) {
-            if (m_charConfig.shadowType == 1) {
+            static const int kKindEnv = [] {
+                const char* e = std::getenv("ERUPTION_TEST_SPRITE_SHADOW");
+                return e ? std::atoi(e) : -1;
+            }();
+            const int kind = kKindEnv >= 0 ? kKindEnv : m_spriteShadowKind >= 0 ? m_spriteShadowKind : m_charConfig.shadowType;
+            if (kind >= 1) {
                 Vec2 circleParams(m_charConfig.circleShadowDilation, m_charConfig.circleShadowSoftness);
                 m_spriteRenderer.renderBillboardCircleShadows(cmd, frameUbo, circleParams,
                                                               m_spriteSystem.instanceBuffer(), spriteCount);
+                if (kind == 2) {
+                    static std::vector<SpritePointShadow> pointShadows;
+                    collectSpritePointShadows(pointShadows);
+                    Vec2 planarParams(m_charConfig.planarShadowDilation, m_charConfig.planarShadowSoftness);
+                    m_spriteRenderer.renderBillboardPointShadows(cmd, frameUbo, planarParams,
+                                                                 m_spriteSystem.instanceBuffer(), pointShadows);
+                }
             } else {
                 Vec2 planarParams(m_charConfig.planarShadowDilation, m_charConfig.planarShadowSoftness);
                 m_spriteRenderer.renderBillboardPlanarShadows(cmd, frameUbo, m_shadowRenderer.currentLightDir(),
@@ -2831,6 +2845,81 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
     if (ndc(ancora, an)) {
         const VkExtent2D re = renderExtent();
         ubo.seeThrough3 = Vec4((an.x * 0.5f + 0.5f) * float(re.width), (an.y * 0.5f + 0.5f) * float(re.height), 0.0f, 0.0f);
+    }
+}
+
+// LUZ DOMINANTE DOS SPRITES. Para cada sprite que projeta sombra, as ate' 2
+// luzes que mais iluminam o meio do corpo (intensidade x luminancia x
+// atenuacao); a forca de cada uma e' a fracao dela sobre a soma de todas,
+// apagando onde a luz mal chega. Fica de fora a luz presa ao jogador, a
+// desligada por script (PointLight::spriteShadow) e a que esta' quase em cima
+// do boneco (menos de meia altura de distancia no chao): dali a sombra sai
+// degenerada, comprida ou invertida. As de fora tambem nao entram na soma.
+// Roda uma vez por quadro, sempre.
+void Engine::updateSpriteDominantLights() {
+    const auto& sprites = m_spriteSystem.getSortedSprites();
+    // Luzes do mapa e as dos efeitos de particula (uma magia que explode
+    // projeta a sombra do grupo como uma tocha).
+    const auto& mapLights = m_deferredLighting.getPointLights();
+    const auto& vfxLights = m_deferredLighting.vfxPointLights();
+    const uint32_t n = std::min<uint32_t>(m_spriteSystem.visibleCount(), static_cast<uint32_t>(sprites.size()));
+    m_spriteLights[0].assign(n, SpriteLight{});
+    m_spriteLights[1].assign(n, SpriteLight{});
+    if (mapLights.empty() && vfxLights.empty()) return;
+    for (uint32_t i = 0; i < n; ++i) {
+        const Sprite& s = sprites[i];
+        if (!hasFlag(s.flags, SpriteFlags::CastShadow) || !hasFlag(s.flags, SpriteFlags::Billboard)) continue;
+        Vec3 feet = s.anchorPoint;
+        if (!hasFlag(s.flags, SpriteFlags::PngSprite)) feet.y -= s.texRect.w;
+        const float h = std::max(s.size.y, 1.0f);
+        const Vec3 mid = feet + Vec3(0.0f, 0.5f * h, 0.0f);
+        float sum = 0.0f;
+        float best[2] = {0.0f, 0.0f};
+        float bestAtt[2] = {0.0f, 0.0f};
+        const PointLight* top[2] = {nullptr, nullptr};
+        for (size_t li = 0; li < mapLights.size() + vfxLights.size(); ++li) {
+            const PointLight& l = li < mapLights.size() ? mapLights[li] : vfxLights[li - mapLights.size()];
+            if (!l.enabled || !l.spriteShadow || l.shadowCubemapIndex == kPlayerLightTag) continue;
+            // Intensidade sem a tremulacao da chama (steadyIntensity, luz de
+            // efeito): com o tremor de 7-29 Hz a forca da sombra piscava junto.
+            const float intensidade = l.steadyIntensity >= 0.0f ? l.steadyIntensity : l.intensity;
+            if (intensidade <= 0.0f || l.radius <= 0.0f) continue;
+            const float d = glm::distance(l.position, mid);
+            if (d >= l.radius) continue;
+            const float q = 1.0f - (d / l.radius) * (d / l.radius);
+            const float att = q * q;
+            const float score = intensidade * glm::dot(l.color, Vec3(0.2126f, 0.7152f, 0.0722f)) * att;
+            if (score <= 0.0f) continue;
+            // A luz quase em cima do boneco nao projeta sombra e tambem nao entra
+            // na soma: uma lanterna no grupo diluia a sombra da tocha ao lado.
+            if (glm::length(Vec2(l.position.x - feet.x, l.position.z - feet.z)) < 0.5f * h) continue;
+            sum += score;
+            if (score > best[0]) {
+                best[1] = best[0]; bestAtt[1] = bestAtt[0]; top[1] = top[0];
+                best[0] = score; bestAtt[0] = att; top[0] = &l;
+            } else if (score > best[1]) {
+                best[1] = score; bestAtt[1] = att; top[1] = &l;
+            }
+        }
+        for (int k = 0; k < 2; ++k) {
+            if (top[k] == nullptr) continue;
+            SpriteLight& o = m_spriteLights[k][i];
+            o.position = top[k]->position;
+            o.color = top[k]->color;
+            o.strength = (best[k] / sum) * glm::smoothstep(0.0f, 0.2f, bestAtt[k]);
+        }
+    }
+}
+
+// SOMBRA DE SPRITE POR LUZ PONTUAL: uma sombra por luz dominante
+// (updateSpriteDominantLights), as fracas demais de fora.
+// ERUPTION_TEST_SPRITE_SHADOW=0|1|2 forca o tipo (teste).
+void Engine::collectSpritePointShadows(std::vector<SpritePointShadow>& out) const {
+    out.clear();
+    for (int k = 0; k < 2; ++k) {
+        const auto& v = m_spriteLights[k];
+        for (uint32_t i = 0; i < static_cast<uint32_t>(v.size()); ++i)
+            if (v[i].strength >= 0.02f) out.push_back({i, v[i].position, v[i].strength});
     }
 }
 

@@ -6,6 +6,7 @@ layout(location = 1) in flat uint v_texIndex;
 layout(location = 2) in flat uint v_flags;
 layout(location = 3) in flat uint v_paletteIndex;
 layout(location = 4) in float v_softness;
+layout(location = 5) in float v_strength;
 
 layout(location = 0) out vec4 outShadow;
 
@@ -56,7 +57,7 @@ void main() {
     if (albedo.a < 0.01) discard;
 
     // Keep shadow intensity strong enough to be visible after tone mapping.
-    float intensity = 1.0;
+    float intensity = v_strength;
 
     // Dark multiplicative shadow without touching the lit-image alpha,
     // because the post-processor uses alpha for transparency blending.

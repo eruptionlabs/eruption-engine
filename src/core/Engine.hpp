@@ -545,6 +545,18 @@ public:
     // num raio de `radius` unidades de mundo em volta dele na tela, sai em
     // dither ate' `opacity` no centro. radius 0 desliga.
     void setSeeThrough(float radius, float opacity);
+    // Sombra dos sprites (characters.set_shadow): 0 = planar do sol, 1 =
+    // disco, 2 = disco + planar das ate' 2 luzes pontuais dominantes; -1 = a
+    // do data/char_config.json.
+    void setSpriteShadow(int kind) { m_spriteShadowKind = kind; }
+    // Juncao malha x terreno (world.set_ground_blend): faixa de altura acima do
+    // chao em que a peca mistura com o material dele; 0 desliga. GroundBlend.cpp.
+    // `fraction`: a faixa de cada peca e' no maximo essa fracao da altura dela.
+    void setGroundBlend(float band, float fraction = 0.3f);
+    // Luz pontual dominante de cada sprite visivel neste quadro, indice =
+    // instancia de SpriteSystem::getSortedSprites() (a sombra por luz e a
+    // contraluz leem daqui). So' luzes pontuais: o sol fica com quem o le' do FrameUBO.
+    const std::vector<SpriteLight>& spriteDominantLights() const { return m_spriteLights[0]; }
     void patrolCharacter(int index, const std::vector<Vec3>& points, float waitSeconds);
     void stopCharacter(int index);
     void drawSpeechBubbles(float x, float y, float w, float h, float dt);
@@ -1540,6 +1552,11 @@ private:
     float m_seeThroughRadius = 0.0f;
     float m_seeThroughOpacity = 0.25f;
     void fillSeeThrough(FrameUBO& ubo) const;
+    int m_spriteShadowKind = -1;
+    // [0] = luz dominante, [1] = a segunda (a sombra por luz usa as duas).
+    std::vector<SpriteLight> m_spriteLights[2];
+    void updateSpriteDominantLights();
+    void collectSpritePointShadows(std::vector<SpritePointShadow>& out) const;
     std::vector<SceneCharacter> m_characters;
     SceneObjects m_sceneObjects;
     // Sprite de personagem ja lido, por caminho de arquivo. Sem isto, cada

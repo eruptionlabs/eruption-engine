@@ -60,6 +60,8 @@ layout(location = 1) out flat uint v_texIndex;
 layout(location = 2) out flat uint v_flags;
 layout(location = 3) out flat uint v_paletteIndex;
 layout(location = 4) out float v_softness;
+// Opacidade desta sombra (1 com o sol; a fracao da luz com luz pontual).
+layout(location = 5) out float v_strength;
 
 void main() {
     // Only billboards that cast shadows should render a drop shadow.
@@ -70,6 +72,7 @@ void main() {
         v_flags = i_flags;
         v_paletteIndex = i_paletteIndex;
         v_softness = 0.0;
+        v_strength = 0.0;
         return;
     }
 
@@ -117,6 +120,34 @@ void main() {
     projectedPos.y = groundY + 0.05; // Slightly above ground to avoid z-fighting
     projectedPos.xz -= lightDir.xz * (worldPos.y - groundY) / denom;
 
+    v_strength = 1.0;
+
+    // SOMBRA DE LUZ PONTUAL (shadowLightDir.w < 0: xyz = posicao da luz,
+    // -w = opacidade). A sombra planar de Blinn ("Me and My (Fake) Shadow",
+    // IEEE CG&A, 1988) com projecao central em vez de paralela: cada vertice
+    // vai para onde o raio luz->vertice corta o plano do pe. O quadro do
+    // sprite e' remontado de frente para a LUZ (e nao para a camera): de
+    // lado para ela a silhueta projetada virava um risco.
+    if (shadowLightDir.w < 0.0) {
+        vec3 L = shadowLightDir.xyz;
+        vec2 away = feetWorldPos.xz - L.xz;
+        vec3 rightW = length(away) > 1e-3 ? normalize(vec3(-away.y, 0.0, away.x))
+                                          : normalize((u_inverseView * vec4(viewRight, 0.0)).xyz);
+        vec3 w = i_anchorPoint.xyz + rightW * (xOff + localUV.x * scaleX) +
+                 vec3(0.0, 1.0, 0.0) * (-yOff + localUV.y * scaleY - centerY);
+        float above = max(L.y - groundY, 1.0);
+        float h = max(w.y - groundY, 0.0);
+        // Luz abaixo do topo do sprite (tocha na altura do peito): a sombra
+        // iria ao infinito. O teto de 2x a distancia luz-vertice segura o
+        // comprimento: com 5x ela virava um risco fino atravessando a sala, e
+        // com 3x a silhueta animada e comprida tremulava no chao (bancada do
+        // jogo: +32% de pixel trocando de sinal contra so' o disco).
+        float t = above / max(above - h, above / 2.0);
+        projectedPos = vec3(L.x + (w.x - L.x) * t, groundY + 0.05, L.z + (w.z - L.z) * t);
+        // Clareia do pe' para a ponta (80% mais clara no topo do sprite): a
+        // sombra de luz proxima se espalha com a distancia ao objeto.
+        v_strength = clamp(-shadowLightDir.w, 0.0, 1.0) * (h > 1.0 ? 0.2 : 1.0);
+    }
     v_softness = clamp(planarParams.y, 0.0, 1.0);
 
     gl_Position = viewProjection * vec4(projectedPos, 1.0);

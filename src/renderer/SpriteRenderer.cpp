@@ -822,6 +822,37 @@ void SpriteRenderer::renderBillboardPlanarShadows(VkCommandBuffer cmd, const Fra
     vkCmdDraw(cmd, 6, count, 0, 0);
 }
 
+void SpriteRenderer::renderBillboardPointShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo, const Vec2& planarParams,
+                                                 VkBuffer instanceBuffer, const std::vector<SpritePointShadow>& shadows) {
+    if (shadows.empty() || m_planarShadowPipeline == VK_NULL_HANDLE) return;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_planarShadowPipeline);
+    VkViewport viewport{};
+    viewport.width = static_cast<float>(m_gbuffer->extent().width);
+    viewport.height = static_cast<float>(m_gbuffer->extent().height);
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    VkRect2D scissor{};
+    scissor.extent = m_gbuffer->extent();
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    VkBuffer vertexBuffers[2] = {m_quadVertexBuffer, instanceBuffer};
+    VkDeviceSize offsets[2] = {0, 0};
+    vkCmdBindVertexBuffers(cmd, 0, 2, vertexBuffers, offsets);
+    VkDescriptorSet sets[2] = {m_bindless->set(), m_frameUboSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 2, sets, 0, nullptr);
+    struct PlanarPushConstants {
+        Mat4 viewProjection;
+        Vec4 shadowLightDir;
+        Vec2 planarParams;
+    } push;
+    push.viewProjection = frameUbo.viewProjection;
+    push.planarParams = planarParams;
+    for (const SpritePointShadow& s : shadows) {
+        push.shadowLightDir = Vec4(s.light, -s.strength);
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
+        vkCmdDraw(cmd, 6, 1, 0, s.instance);
+    }
+}
+
 bool SpriteRenderer::createPlanarShadowPipeline() {
     auto vertCode = ShaderCompiler::loadSPIRV("shaders/shadow/billboard_planar_shadow.vert.spv");
     auto fragCode = ShaderCompiler::loadSPIRV("shaders/shadow/billboard_planar_shadow.frag.spv");

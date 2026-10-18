@@ -27,6 +27,9 @@ struct PointLight {
     float radius = 10.0f;
     Vec3 color = Vec3(1.0f);
     float intensity = 1.0f;
+    // Intensidade sem tremulacao (luz de efeito): a forca da sombra de sprite
+    // usa esta quando >= 0, para a sombra nao piscar com a tocha.
+    float steadyIntensity = -1.0f;
     LightAnimType animType = LightAnimType::Static;
     uint32_t shadowCubemapIndex = 0xFFFFFFFF;
     bool enabled = true;
@@ -37,6 +40,9 @@ struct PointLight {
     // zero = luz pontual (o padrao). Luz de janela cai para fora e para baixo.
     Vec3 spotDir = Vec3(0.0f);
     float spotCos = 0.0f;
+    // Projeta sombra de sprite (Engine::collectSpritePointShadows). O jogo
+    // desliga na luz que ele move junto com o grupo (lights.set_sprite_shadow).
+    bool spriteShadow = true;
 };
 
 struct ShadowUBO {
@@ -165,11 +171,13 @@ public:
                              const Vec3& gridMin, const Vec3& gridInvExtent, bool enabled);
     void setIrradianceProbeStrength(float strength) { m_probeStrength = std::clamp(strength, 0.0f, 1.0f); }
     std::vector<PointLight>& getPointLights() { return m_pointLights; }
+    const std::vector<PointLight>& getPointLights() const { return m_pointLights; }
     // Luzes dos mapas vizinhos (mundo contínuo): somadas às do mapa aberto,
     // fora da lista que a cena e o editor numeram.
     void setExtraPointLights(std::vector<PointLight> lights) { m_extraPointLights = std::move(lights); }
     // Luzes dos efeitos de particula (trocadas todo frame, fora da cena).
     void setVfxPointLights(const std::vector<PointLight>& lights) { m_vfxPointLights = lights; }
+    const std::vector<PointLight>& vfxPointLights() const { return m_vfxPointLights; }
 
     void setUsePbr(bool use) { m_usePbr = use; }
     bool usePbr() const { return m_usePbr; }

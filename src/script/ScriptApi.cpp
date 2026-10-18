@@ -782,6 +782,16 @@ int lights_enabled(lua_State* L) { lua_pushboolean(L, light(L).enabled); return 
 int lights_set_enabled(lua_State* L) { light(L).enabled = lua_toboolean(L, 2) != 0; return 0; }
 int lights_turn_on(lua_State* L) { light(L).enabled = true; return 0; }
 int lights_turn_off(lua_State* L) { light(L).enabled = false; return 0; }
+// A luz projeta sombra de sprite (PointLight::spriteShadow).
+int lights_set_sprite_shadow(lua_State* L) { light(L).spriteShadow = lua_toboolean(L, 2) != 0; return 0; }
+// Tipo de sombra dos sprites do projeto (Engine::setSpriteShadow).
+int characters_set_shadow(lua_State* L) {
+    const char* k = luaL_optstring(L, 1, "");
+    const int kind = std::strcmp(k, "planar") == 0 ? 0 : std::strcmp(k, "circle") == 0 ? 1
+                   : std::strcmp(k, "lights") == 0 ? 2 : -1;
+    eng().setSpriteShadow(kind);
+    return 0;
+}
 
 
 // ------------------------------------------------------- suco de cena (fx)
@@ -1202,6 +1212,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"set_position", characters_set_position}, {"walk_to", characters_walk_to},
         {"walking", characters_walking}, {"face", characters_face}, {"show", characters_show}, {"say", characters_say}, {"play", characters_play}, {"animation", characters_animation},
         {"follow", characters_follow}, {"patrol", characters_patrol}, {"stop", characters_stop},
+        {"set_shadow", characters_set_shadow},
         {"hide", characters_hide}, {"set_sprite", characters_set_sprite},
         {"add", characters_add},
         {"flash", characters_flash}, {"shake", characters_shake}, {"lunge", characters_lunge},
@@ -1211,7 +1222,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"color", lights_color}, {"set_color", lights_set_color}, {"intensity", lights_intensity},
         {"set_intensity", lights_set_intensity}, {"enabled", lights_enabled},
         {"set_enabled", lights_set_enabled}, {"turn_on", lights_turn_on}, {"turn_off", lights_turn_off},
-        {nullptr, nullptr}};
+        {"set_sprite_shadow", lights_set_sprite_shadow}, {nullptr, nullptr}};
     static const luaL_Reg audio[] = {
         {"play", audio_play}, {"play_at", audio_play_at}, {"loop", audio_loop}, {"loop_at", audio_loop_at},
         {"stop", audio_stop}, {"playing", audio_playing}, {"music", audio_music}, {"stop_music", audio_stop_music},
@@ -1393,6 +1404,10 @@ declare player: {
 }
 
 declare characters: {
+    -- Shadow of every character: "planar" (cast by the sun), "circle" (a
+    -- contact disc) or "lights" (the disc plus a shadow cast by each of the
+    -- two strongest nearby lights). No argument goes back to the engine default.
+    set_shadow: (kind: string?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,
@@ -1552,6 +1567,9 @@ declare lights: {
     set_enabled: (index: number, enabled: boolean) -> (),
     turn_on: (index: number) -> (),
     turn_off: (index: number) -> (),
+    -- Whether this light casts sprite shadows (characters.set_shadow("lights")).
+    -- Turn it off on a light the game moves along with the party.
+    set_sprite_shadow: (index: number, on: boolean) -> (),
 }
 )" + std::string(vfxApiDefinitions()) + objectsApiDefinitions() + NativeModule::apiDefinitions();
 }
