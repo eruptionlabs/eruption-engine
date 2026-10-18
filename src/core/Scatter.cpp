@@ -13,6 +13,7 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -184,6 +185,38 @@ int Engine::loadScatter(const std::string& map, const Mat4& place) {
     ERUPTION_LOG_WARN("Scatter: %d painted objects in %zu groups (%s)", total, m_scatter.size(),
                       scatterPathFor(map).string().c_str());
     return total;
+}
+
+std::vector<std::string> Engine::scatterFiles(const std::string& map) const {
+    std::vector<std::string> out;
+    std::ifstream f(scatterPathFor(map), std::ios::binary);
+    if (!f) return out;
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    luaL_sandbox(L);
+    if (loadLuauChunk(L, "@" + scatterPathFor(map).generic_string(), ss.str()) && lua_pcall(L, 0, 1, 0) == 0 &&
+        lua_istable(L, -1)) {
+        const int groups = lua_objlen(L, -1);
+        for (int gi = 1; gi <= groups; ++gi) {
+            lua_rawgeti(L, -1, gi);
+            if (lua_istable(L, -1)) {
+                lua_getfield(L, -1, "prefab");
+                const bool prefab = lua_isstring(L, -1) && lua_objlen(L, -1) > 0;
+                lua_pop(L, 1);
+                lua_getfield(L, -1, "file");
+                if (!prefab && lua_isstring(L, -1)) {
+                    std::string file = lua_tostring(L, -1);
+                    if (!file.empty() && std::find(out.begin(), out.end(), file) == out.end()) out.push_back(std::move(file));
+                }
+                lua_pop(L, 1);
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_close(L);
+    return out;
 }
 
 bool Engine::saveScatter(std::string& error) const {

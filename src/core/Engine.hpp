@@ -755,6 +755,9 @@ public:
     bool isScatterInstance(uint32_t index) const;
     // `place`: deslocamento do mapa no mundo (vizinhos do mundo contínuo).
     int loadScatter(const std::string& map, const Mat4& place = Mat4(1.0f));
+    // Arquivos .glb (sem repetir, sem prefab) que o scatter do mapa espalha: o
+    // preload do destino os prepara fora do fio principal. Nao cria instancia.
+    std::vector<std::string> scatterFiles(const std::string& map) const;
     bool saveScatter(std::string& error) const;
     void clearScatter();
 
