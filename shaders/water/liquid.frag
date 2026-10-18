@@ -126,6 +126,24 @@ vec2 hash22(vec2 p) {
     return fract((p3.xx + p3.yz) * p3.zy);
 }
 
+// Celulas da crosta da lava: (F1, F2) do Voronoi com os pontos de cada celula
+// orbitando devagar em volta do proprio centro (placas que derivam).
+vec2 lavaCells(vec2 p, float t) {
+    vec2 ip = floor(p), fp = fract(p);
+    float f1 = 8.0, f2 = 8.0;
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            vec2 g = vec2(float(x), float(y));
+            vec2 h = hash22(ip + g);
+            vec2 o = 0.5 + 0.38 * sin(t * 0.06 + 6.2831 * h);
+            vec2 r = g + o - fp;
+            float d = dot(r, r);
+            if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) { f2 = d; }
+        }
+    }
+    return sqrt(vec2(f1, f2));
+}
+
 float worley(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
@@ -235,7 +253,77 @@ float ggxSpecular(vec3 N, vec3 H, float roughness) {
 // ============================================================================
 // Main
 // ============================================================================
+// GPU fraca (VulkanContext::shaderLite): sem o reflexo em espaço de tela
+// (40 passos + busca binária por pixel), com normal procedural de uma oitava
+// e sem espuma de superfície (Worley), respingo de chuva e cáusticas.
+layout(constant_id = 0) const bool LITE = false;
+
+// Cor da LAVA (liquidKind 1): toda propria, nao le' nada da agua (reflexo,
+// refracao, espuma, causticas). Por isso o main sai logo depois dela.
+vec3 lavaColor(vec3 worldPos, float radial) {
+    float t = ubo.waterLevelAndPlanes.w;
+    // PLACAS E FENDAS. Lava real le' como placas de crosta escura
+    // separadas por fendas finas acesas, nao como manchas de ruido
+    // suave (o padrao anterior, ruido de baixa frequencia, lia como
+    // "bolhas"). Voronoi F1/F2 (Worley, "A Cellular Texture Basis
+    // Function", SIGGRAPH 1996): perto da fronteira entre duas celulas
+    // F2 - F1 tende a zero, e e' ali que a fenda acende. As celulas
+    // derivam devagar e o dominio e' torcido por ruido, para a placa nao
+    // sair hexagonal. Uma segunda escala, mais fina e mais fraca, racha
+    // a placa por dentro.
+    //
+    // `emissive` do mapa: 3.0 e' o valor de referencia; abaixo disso a
+    // fenda afina e sobra mais crosta, acima ela alarga.
+    float calor = ubo.normalAdvanced.y > 0.0 ? ubo.normalAdvanced.y / 3.0 : 1.0;
+    vec2 fw = worldPos.xz * 0.010;
+    vec2 warp = vec2(snoise(fw + vec2(t * 0.004, 0.0)), snoise(fw.yx - vec2(0.0, t * 0.003)));
+    vec2 platesUv = worldPos.xz * 0.028 + warp * 0.45;
+    vec2 f = lavaCells(platesUv, t);
+    // Largura da fenda varia ao longo dela: fenda de largura constante le'
+    // como rejunte de piso.
+    float width = 0.07 * calor * (0.55 + 0.9 * (snoise(fw * 3.1 + 5.0) * 0.5 + 0.5));
+    // CALOR DE BORDA (shoreHeat / centerHeat do .env, 0 = como antes). Num
+    // lago de lava a crosta afunda e respinga junto da margem, e o centro
+    // pode ser a fonte; no meio-termo ela esfria em placas maiores.
+    // `radial`: 0 no centro, 1 na margem (UV x da malha do disco).
+    float borda = ubo.normalAdvanced.z * smoothstep(0.65, 1.0, radial)
+                + ubo.normalAdvanced.w * (1.0 - smoothstep(0.0, 0.35, radial));
+    float meio = (ubo.normalAdvanced.z + ubo.normalAdvanced.w) > 0.0
+               ? smoothstep(0.25, 0.45, radial) * (1.0 - smoothstep(0.55, 0.75, radial)) : 0.0;
+    width *= (1.0 + 1.5 * borda) * (1.0 - 0.35 * meio);
+    float crack = 1.0 - smoothstep(0.0, width, f.y - f.x);
+    // Rachadura fina: mais 9 celulas por pixel, so' fora do caminho enxuto
+    // (lago enchendo a tela: +0,11 a 0,18 ms na 4060 com as duas escalas).
+    float crackFine = 0.0;
+    if (!LITE) {
+        vec2 fFine = lavaCells(platesUv * 2.6 + 17.0, t * 1.3);
+        crackFine = (1.0 - smoothstep(0.0, width * 0.45, fFine.y - fFine.x)) * 0.55;
+    }
+    // A borda da placa esfria por ultimo: brilho baixo perto da fenda.
+    float rim = exp(-(f.y - f.x) * 9.0) * 0.22;
+    float heat = clamp(max(max(crack, crackFine), rim) * min(calor, 1.6) + 0.18 * borda, 0.0, 1.0);
+    vec3 crustCol = vec3(0.010, 0.005, 0.005);
+    vec3 hotCol = vec3(1.0, 0.24, 0.03);
+    vec3 coreCol = vec3(1.0, 0.80, 0.32);
+    vec3 lava = mix(crustCol, hotCol, heat);
+    lava = mix(lava, coreCol, pow(heat, 4.0));
+    // SEM especular do sol. Rocha derretida nao e' espelho: o brilho
+    // dela e' proprio. O reflexo direcional punha uma faixa branca de
+    // escama atravessando o lago, que e' o aspecto de agua clara, nao de
+    // lava, e era o que mais estragava a leitura da sala.
+    return lava + hotCol * heat * 0.8;
+}
+
 void main() {
+    // LAVA SAI CEDO. A cor dela sobrescrevia tudo no fim, mas antes o pixel
+    // pagava o shader de agua inteiro (ondas, reflexo em espaco de tela de 40
+    // passos, refracao, espuma, causticas): o passe Water custava 3,1 ms no
+    // lago de lava de um andar de caverna (4060, 1080p) para uma imagem que
+    // nao usava nada daquilo.
+    if (int(ubo.extraParams.w + 0.5) == 1) {
+        fragColor = vec4(pc.debugMask.y != 0 ? vec3(0.0, 1.0, 0.0) : lavaColor(vWorldPos, vTexCoord.x), 1.0);
+        return;
+    }
     float time          = ubo.waterLevelAndPlanes.w;
     float nearPlane     = ubo.waterLevelAndPlanes.y;
     float farPlane      = ubo.waterLevelAndPlanes.z;
@@ -504,32 +592,6 @@ void main() {
     color += sunSpecular;
     color += causticsColor;
     color = mix(color, foamColor, totalFoam);
-
-    int liquidKind = int(ubo.extraParams.w + 0.5);
-    if (liquidKind == 1) {
-        float t = ubo.waterLevelAndPlanes.w;
-        vec2 fw = vWorldPos.xz * 0.010;
-        float crust = snoise(fw + vec2(t * 0.013, t * 0.021)) * 0.5 + 0.5;
-        float veins = snoise(fw * 2.7 - vec2(t * 0.027, t * 0.017)) * 0.5 + 0.5;
-        // `emissive` do mapa: 3.0 reproduz o valor fixo que estava aqui, e
-        // abaixo disso sobra mais CROSTA. A lava do motor sem isto era quente
-        // em quase toda a superficie — um lago inteiro no amarelo do nucleo,
-        // sem placa escura, e na tela aquilo le como creme estourado em vez
-        // de lava. O que faz lava parecer lava e' a crosta preta com a fenda
-        // acesa no meio; o valor manda nessa proporcao.
-        float calor = ubo.normalAdvanced.y > 0.0 ? ubo.normalAdvanced.y / 3.0 : 1.0;
-        float heat = clamp((pow(1.0 - crust, 2.2) * 0.75 + pow(veins, 5.0) * 0.85) * calor, 0.0, 1.0);
-        vec3 crustCol = vec3(0.055, 0.030, 0.028);
-        vec3 hotCol = vec3(1.0, 0.30, 0.055);
-        vec3 coreCol = vec3(1.0, 0.80, 0.32);
-        vec3 lava = mix(crustCol, hotCol, heat);
-        lava = mix(lava, coreCol, pow(heat, 4.0));
-        // SEM especular do sol. Rocha derretida nao e' espelho: o brilho
-        // dela e' proprio. O reflexo direcional punha uma faixa branca de
-        // escama atravessando o lago, que e' o aspecto de agua clara, nao de
-        // lava, e era o que mais estragava a leitura da sala.
-        color = lava + hotCol * heat * 1.9;
-    }
 
     // NaN/Inf final guard
     if (any(isnan(color)) || any(isinf(color))) {

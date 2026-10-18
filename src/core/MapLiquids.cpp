@@ -70,7 +70,7 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
             // Margem LOBADA: se o mapa autorou shoreRadius, o raio MAXIMO
             // pra cada segmento angular vem de la' (interpolado, wraparound
             // incluido) em vez do escalar `radius` constante. Um circulo nao
-            // acompanha uma caldeira lobada - sobra vazio nos lobos largos ou
+            // acompanha uma bacia de margem lobada - sobra vazio nos lobos largos ou
             // vaza pra fora nos estreitos, nao tem raio unico que resolva os
             // dois ao mesmo tempo. shoreRadius vazio (todo mapa anterior a
             // essa feature) cai exatamente no caminho de antes.
@@ -85,7 +85,10 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
             };
             WaterVertex wv{};
             wv.position = Vec3(centerX, level, centerZ);
-            wv.texCoord = Vec2(0.5f, 0.5f);
+            // A lava nao usa UV (a cor e' de mundo): o x leva a FRACAO RADIAL
+            // (0 no centro, 1 na margem) para o calor de borda (shoreHeat /
+            // centerHeat do .env).
+            wv.texCoord = Vec2(0.0f, 0.0f);
             lmesh.vertices.push_back(wv);
             for (int r = 1; r <= rings; ++r) {
                 for (int a = 0; a < segs; ++a) {
@@ -99,7 +102,7 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
                     const float pz = centerZ + rr * std::sin(th);
                     WaterVertex rv{};
                     rv.position = Vec3(px, level, pz);
-                    rv.texCoord = Vec2(px / 90.0f, pz / 90.0f);
+                    rv.texCoord = Vec2(float(r) / float(rings), 0.0f);
                     lmesh.vertices.push_back(rv);
                 }
             }

@@ -1110,6 +1110,8 @@ void Engine::render() {
             lavaSettings.waterLevel = m_lavaLiquid.level;
             lavaSettings.levelOffset = 0.0f;
             lavaSettings.emissiveStrength = m_lavaLiquid.emissive;
+            lavaSettings.shoreHeat = m_lavaLiquid.shoreHeat;
+            lavaSettings.centerHeat = m_lavaLiquid.centerHeat;
             lavaSettings.flowSpeed = m_lavaLiquid.flowSpeed;
             lavaSettings.enableCaustics = false;
             lavaSettings.enableFoam = false;

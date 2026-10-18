@@ -1068,7 +1068,7 @@ void WaterRenderer::updateUBO(uint32_t frameIndex, uint32_t uboSlot, const Water
     // posto com emissivo baixo saia tao claro quanto um com emissivo alto —
     // e com o valor fixo ele estourava para creme em vez de ficar laranja.
     ubo.normalAdvanced = Vec4(static_cast<float>(settings.normalOctaves),
-                              settings.emissiveStrength, 0.0f, 0.0f);
+                              settings.emissiveStrength, settings.shoreHeat, settings.centerHeat);
     ubo.causticsParams = Vec4(settings.causticsIntensity, settings.causticsDepthAttenuation, 0.0f, 0.0f);
     ubo.weatherParams = Vec4(sunOcclusion, moonOcclusion, stormDarken, rainIntensity);
     std::memcpy(m_uboMappeds[uboSlot], &ubo, sizeof(ubo));

@@ -56,6 +56,9 @@ struct LoadedMap {
         float centerZ = 0.0f;
         float radius = 0.0f;      // raio circular; usado quando shoreRadius esta' vazio
         float emissive = 0.0f;
+        // Lava: calor extra perto da margem e no centro (0 = uniforme). Fenda
+        // mais larga e quente nessas bordas; o meio-termo fica mais placa fria.
+        float shoreHeat = 0.0f, centerHeat = 0.0f;
         float flowSpeed = 1.0f;
         // Margem LOBADA (opcional, nova feature): amostras de raio por
         // angulo, indice 0 = angulo 0, ultimo indice = quase 2*PI (o
