@@ -98,6 +98,14 @@ LookConfig LookConfig::dioramaLook() {
     return cfg;
 }
 
+// Cor [r, g, b] (0..1) de um campo do preset; ausente ou torta fica a atual.
+static void readColor(const nlohmann::json& j, const char* key, Vec3& out) {
+    if (!j.contains(key) || !j[key].is_array() || j[key].size() < 3) return;
+    for (int i = 0; i < 3; ++i)
+        if (!j[key][i].is_number()) return;
+    out = Vec3(j[key][0].get<float>(), j[key][1].get<float>(), j[key][2].get<float>());
+}
+
 void LookConfig::loadFromJson(const nlohmann::json& j) {
     if (!j.is_object()) return;
     // Chaves em snake_case, como no data/diorama.json existente: preset antigo
@@ -114,6 +122,13 @@ void LookConfig::loadFromJson(const nlohmann::json& j) {
     godRayDecay      = j.value("god_ray_decay", godRayDecay);
     godRayWeight     = j.value("god_ray_weight", godRayWeight);
     godRayExposure   = j.value("god_ray_exposure", godRayExposure);
+
+    vignette         = j.value("vignette", vignette);
+    vignetteSoftness = j.value("vignette_softness", vignetteSoftness);
+    readColor(j, "shadow_tint", shadowTint);
+    readColor(j, "highlight_tint", highlightTint);
+    shadowTintStrength    = j.value("shadow_tint_strength", shadowTintStrength);
+    highlightTintStrength = j.value("highlight_tint_strength", highlightTintStrength);
 
     farLayerSaturation = j.value("far_layer_saturation", farLayerSaturation);
     farLayerFog        = j.value("far_layer_fog", farLayerFog);

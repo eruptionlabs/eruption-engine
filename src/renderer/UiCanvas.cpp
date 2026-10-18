@@ -47,15 +47,32 @@ void UiCanvas::screenFade(const Vec4& color, float from, float to, float seconds
     if (m_fade.total <= 0.0f) m_fade.now = to;
 }
 
+void UiCanvas::screenFlash(const Vec4& color, float strength, float seconds) {
+    m_flash.color = color;
+    m_flash.from = m_flash.now = strength;
+    m_flash.to = 0.0f;
+    m_flash.total = m_flash.left = std::max(0.0f, seconds);
+    if (m_flash.total <= 0.0f) m_flash.now = 0.0f;
+}
+
+void UiCanvas::sceneDim(const Vec4& color, float strength, float seconds) {
+    m_dim.color = color;
+    m_dim.from = m_dim.now;
+    m_dim.to = std::clamp(strength, 0.0f, 1.0f);
+    m_dim.total = m_dim.left = std::max(0.0f, seconds);
+    if (m_dim.total <= 0.0f) m_dim.now = m_dim.to;
+}
+
 void UiCanvas::update(float dt) {
     for (size_t i = m_popups.size(); i-- > 0;) {
         m_popups[i].left -= dt;
         if (m_popups[i].left <= 0.0f) m_popups.erase(m_popups.begin() + static_cast<long>(i));
     }
-    if (m_fade.left > 0.0f) {
-        m_fade.left = std::max(0.0f, m_fade.left - dt);
-        const float t = 1.0f - m_fade.left / std::max(1e-4f, m_fade.total);
-        m_fade.now = m_fade.from + (m_fade.to - m_fade.from) * t;
+    for (Fade* f : {&m_fade, &m_flash, &m_dim}) {
+        if (f->left <= 0.0f) continue;
+        f->left = std::max(0.0f, f->left - dt);
+        const float t = 1.0f - f->left / std::max(1e-4f, f->total);
+        f->now = f->from + (f->to - f->from) * t;
     }
 }
 
@@ -76,9 +93,10 @@ void UiCanvas::draw(ImDrawList* dl, float x, float y, float w, float h, const Ma
         text(dl, sx, sy, p.size * h * pop, col(p.color, alpha), p.text.c_str(), 1, true);
     }
 
-    if (m_fade.now > 0.001f) {
-        Vec4 c = m_fade.color;
-        c.a = m_fade.now;
+    for (const Fade* f : {&m_fade, &m_flash}) {
+        if (f->now <= 0.001f) continue;
+        Vec4 c = f->color;
+        c.a = f->now;
         dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), col(c));
     }
 }

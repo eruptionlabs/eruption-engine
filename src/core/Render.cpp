@@ -1611,6 +1611,7 @@ void Engine::render() {
 
     PostProcessor::PostSettings postSettings = m_postSettings;
     postSettings.fogColor = m_dayNightCycle.getFogColor();
+    postSettings.sceneDim = m_uiCanvas.sceneDimNow();
 
     // Auto-exposure (eye adaptation). Primary source: HISTOGRAM measured from
     // the rendered HDR frame on the GPU (luminance_histogram/adaptation compute

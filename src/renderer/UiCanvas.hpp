@@ -34,6 +34,15 @@ public:
     void popup(const Vec3& world, const std::string& text, const Vec4& color, float seconds, float rise, float size);
     // Clarão/fade de tela cheia: a cor vai de `from` a `to` de opacidade.
     void screenFade(const Vec4& color, float from, float to, float seconds);
+    // Clarão numa camada propria, por cima do fade: um golpe nao apaga o
+    // escuro que estava descendo (antes os dois dividiam uma cor so').
+    void screenFlash(const Vec4& color, float strength, float seconds);
+    // ESCURECER SO' O CENARIO (a interface fica): cor e forca de mistura,
+    // aplicados no fim do pos (PostProcessor), antes da UI. Anima da forca
+    // atual ate' `strength`.
+    void sceneDim(const Vec4& color, float strength, float seconds);
+    // rgb = cor, a = forca atual (0 = nada).
+    Vec4 sceneDimNow() const { return Vec4(Vec3(m_dim.color), m_dim.now); }
     bool fading() const { return m_fade.left > 0.0f; }
 
     // Uma vez por frame, antes de desenhar.
@@ -56,6 +65,8 @@ private:
 
     std::vector<Popup> m_popups;
     Fade m_fade;
+    Fade m_flash;
+    Fade m_dim;
 };
 
 } // namespace eruption

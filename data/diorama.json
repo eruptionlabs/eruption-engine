@@ -29,7 +29,13 @@
       "z_scaling": true,
       "z_scale_reference": 20.0,
       "fade_far_distance": 40.0,
-      "fade_max_distance": 60.0
+      "fade_max_distance": 60.0,
+      "vignette": 0.0,
+      "vignette_softness": 0.45,
+      "shadow_tint": [1.0, 1.0, 1.0],
+      "shadow_tint_strength": 0.0,
+      "highlight_tint": [1.0, 1.0, 1.0],
+      "highlight_tint_strength": 0.0
     },
     "dungeon": {
       "god_ray_intensity": 0.5,
@@ -47,7 +53,13 @@
       "z_scaling": false,
       "z_scale_reference": 20.0,
       "fade_far_distance": 40.0,
-      "fade_max_distance": 60.0
+      "fade_max_distance": 60.0,
+      "vignette": 0.0,
+      "vignette_softness": 0.45,
+      "shadow_tint": [1.0, 1.0, 1.0],
+      "shadow_tint_strength": 0.0,
+      "highlight_tint": [1.0, 1.0, 1.0],
+      "highlight_tint_strength": 0.0
     },
     "field": {
       "god_ray_intensity": 0.35,
@@ -65,7 +77,13 @@
       "z_scaling": true,
       "z_scale_reference": 20.0,
       "fade_far_distance": 40.0,
-      "fade_max_distance": 60.0
+      "fade_max_distance": 60.0,
+      "vignette": 0.0,
+      "vignette_softness": 0.45,
+      "shadow_tint": [1.0, 1.0, 1.0],
+      "shadow_tint_strength": 0.0,
+      "highlight_tint": [1.0, 1.0, 1.0],
+      "highlight_tint_strength": 0.0
     },
     "forest": {
       "god_ray_intensity": 0.4,
@@ -83,7 +101,13 @@
       "z_scaling": true,
       "z_scale_reference": 20.0,
       "fade_far_distance": 40.0,
-      "fade_max_distance": 60.0
+      "fade_max_distance": 60.0,
+      "vignette": 0.0,
+      "vignette_softness": 0.45,
+      "shadow_tint": [1.0, 1.0, 1.0],
+      "shadow_tint_strength": 0.0,
+      "highlight_tint": [1.0, 1.0, 1.0],
+      "highlight_tint_strength": 0.0
     },
     "diorama": {
       "name": "diorama",
@@ -97,7 +121,13 @@
       "z_scaling": true,
       "z_scale_reference": 14.0,
       "fade_far_distance": 55.0,
-      "fade_max_distance": 80.0
+      "fade_max_distance": 80.0,
+      "vignette": 0.35,
+      "vignette_softness": 0.5,
+      "shadow_tint": [0.55, 0.65, 1.0],
+      "shadow_tint_strength": 0.25,
+      "highlight_tint": [1.0, 0.85, 0.6],
+      "highlight_tint_strength": 0.2
     }
   }
 }
