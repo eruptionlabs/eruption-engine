@@ -70,6 +70,10 @@ declare ui: {
     -- Tapped (phone) or clicked (mouse) this frame: an element of the file
     -- that is on screen, or "minimap". Makes any element a button.
     clicked: (selector: string) -> boolean,
+    -- Finger or mouse movement this frame, in screen pixels, for a drag that
+    -- started on the element (0, 0 until it moves past a small slop): scroll
+    -- a list by it.
+    dragged: (selector: string) -> (number, number),
     -- Drops everything the script set; the file decides again.
     reset: () -> (),
 }
@@ -192,6 +196,8 @@ declare player: {
     -- running). For dialogue, cutscenes and battle.
     freeze: (on: boolean) -> (),
     frozen: () -> boolean,
+    -- Keeps running on without holding the run key (a phone's run button).
+    set_run: (on: boolean) -> (),
     -- Hidden: the player's sprite is not drawn (a scene he is not in).
     hide: (on: boolean) -> (),
 }

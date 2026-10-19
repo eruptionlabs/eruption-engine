@@ -436,17 +436,23 @@ void Engine::drawGameFx2D(float x, float y, float w, float h, float dt) {
     m_uiCanvas.draw(dl, x, y, w, h, m_camera.viewProjNoJitter());
 }
 
-bool Engine::uiClicked(const std::string& selector) {
-    if (!Input::isMousePressed(MouseButton::Left)) return false;
-    // O cursor vem da janela; a interface desenha em coordenadas do ImGui (no
-    // Android o swapchain pode ser menor que a tela).
+// O cursor vem da janela; a interface desenha em coordenadas do ImGui (no
+// Android o swapchain pode ser menor que a tela).
+glm::vec2 Engine::uiCursor() const {
     int winW = 0, winH = 0;
     glfwGetWindowSize(m_window.handle(), &winW, &winH);
     const ImGuiIO& io = ImGui::GetIO();
     const glm::vec2 m = Input::mousePosition();
-    const float px = winW > 0 ? m.x * io.DisplaySize.x / float(winW) : m.x;
-    const float py = winH > 0 ? m.y * io.DisplaySize.y / float(winH) : m.y;
+    return {winW > 0 ? m.x * io.DisplaySize.x / float(winW) : m.x,
+            winH > 0 ? m.y * io.DisplaySize.y / float(winH) : m.y};
+}
+
+bool Engine::uiClicked(const std::string& selector) {
+    if (!Input::isMousePressed(MouseButton::Left)) return false;
+    const glm::vec2 m = Input::mousePosition();
     if (Input::inUiTouchRect(m.x, m.y)) return false; // analogico do controle de toque
+    const glm::vec2 c = uiCursor();
+    const float px = c.x, py = c.y;
     if (selector == "minimap") {
         return m_minimapScreenFrame + 2 >= m_framesCount && px >= m_minimapScreen.x && px <= m_minimapScreen.z &&
                py >= m_minimapScreen.y && py <= m_minimapScreen.w;
@@ -455,6 +461,37 @@ bool Engine::uiClicked(const std::string& selector) {
     CSSRect r;
     if (!m_uiDocument.rectOf(selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w, r)) return false;
     return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+}
+
+glm::vec2 Engine::uiDragged(const std::string& selector) {
+    UiDrag& d = m_uiDrag;
+    if (d.frame != m_framesCount) { // uma vez por quadro, por mais chamadas que haja
+        d.frame = m_framesCount;
+        const glm::vec2 c = uiCursor();
+        const glm::vec2 m = Input::mousePosition();
+        d.delta = glm::vec2(0.0f);
+        // No celular o dedo que arrasta chega como botao direito (o esquerdo e'
+        // so' o toque curto, ao soltar); no PC arrasta-se com o esquerdo.
+        const bool pressed = Input::isMousePressed(MouseButton::Left) || Input::isMousePressed(MouseButton::Right);
+        const bool down = Input::isMouseDown(MouseButton::Left) || Input::isMouseDown(MouseButton::Right);
+        if (pressed && !Input::inUiTouchRect(m.x, m.y)) {
+            d = UiDrag{c, c, glm::vec2(0.0f), true, false, m_framesCount};
+        } else if (d.active && down) {
+            // Folga de ~1,5% da altura da tela: o dedo treme num toque parado.
+            const float slop = ImGui::GetIO().DisplaySize.y * 0.015f;
+            if (!d.moving && glm::length(c - d.start) > slop) { d.moving = true; d.last = d.start; }
+            if (d.moving) d.delta = c - d.last;
+            d.last = c;
+        } else {
+            d.active = false;
+        }
+    }
+    if (!d.moving || (d.delta.x == 0.0f && d.delta.y == 0.0f)) return glm::vec2(0.0f);
+    if (!m_uiDocument.shown(selector) || m_uiArea.z <= 0.0f) return glm::vec2(0.0f);
+    CSSRect r;
+    if (!m_uiDocument.rectOf(selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w, r)) return glm::vec2(0.0f);
+    const bool inside = d.start.x >= r.x && d.start.x <= r.x + r.w && d.start.y >= r.y && d.start.y <= r.y + r.h;
+    return inside ? d.delta : glm::vec2(0.0f);
 }
 
 void Engine::followPlayer(int index, float distance) {

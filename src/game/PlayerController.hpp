@@ -51,6 +51,9 @@ public:
     // por script - o motor nao sabe qual dos tres e'.
     bool inputFrozen() const { return m_inputFrozen; }
     void setInputFrozen(bool on) { m_inputFrozen = on; }
+    // Corrida travada (player.set_run): o botao de correr do celular, que nao
+    // tem Shift para segurar.
+    void setRunLatched(bool on) { m_runLatched = on; }
     // ESCONDIDO: o sprite do jogador nao e' desenhado (cutscene em que ele
     // nao aparece, cena conduzida por outros personagens).
     bool hidden() const { return m_hidden; }
@@ -105,6 +108,7 @@ private:
     bool m_tacticalView = false;
     bool m_snapToGat = true;
     bool m_inputFrozen = false;
+    bool m_runLatched = false;
     bool m_hidden = false;
     float m_preTacticalYaw = 0.0f;
     float m_preTacticalPitch = glm::radians(50.0f);

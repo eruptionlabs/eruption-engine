@@ -251,7 +251,7 @@ void PlayerController::updateMovement(float dt) {
     }
     ImGuiIO& io = ImGui::GetIO();
     float currentMoveSpeed = m_engine->charConfig().moveSpeed;
-    if (!m_engine->showConsole() && !io.WantTextInput && Input::isKeyDown(Key::LeftShift))
+    if (m_runLatched || (!m_engine->showConsole() && !io.WantTextInput && Input::isKeyDown(Key::LeftShift)))
         currentMoveSpeed *= m_engine->inputConfig().kbMouse.sprintMultiplier;
     float panSpeed = currentMoveSpeed * dt;
     if (!m_freeCamera) panSpeed *= 0.5f;
