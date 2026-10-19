@@ -76,6 +76,8 @@ std::atomic<bool> g_windowBack{false};      // janela nova chegou
 void (*g_releaseHook)(void*) = nullptr;
 int (*g_restoreHook)(void*) = nullptr;
 void* g_hookUser = nullptr;
+void (*g_pauseHook)(void*, int) = nullptr;
+void* g_pauseUser = nullptr;
 std::mutex g_doneMutex;
 std::condition_variable g_doneCv;
 
@@ -333,6 +335,11 @@ void eruptionAndroidSetSurfaceHooks(void (*release)(void*), int (*restore)(void*
     g_hookUser = user;
 }
 
+void eruptionAndroidSetPauseHook(void (*pause)(void*, int), void* user) {
+    g_pauseHook = pause;
+    g_pauseUser = user;
+}
+
 void glfwPollEvents() {
     // Pausa (thread do motor): solta a superficie, avisa a thread do Android e
     // espera a janela nova; ao voltar recria e segue no mesmo ponto do jogo.
@@ -344,7 +351,9 @@ void glfwPollEvents() {
         }
         g_doneCv.notify_all();
         __android_log_print(ANDROID_LOG_WARN, "Eruption", "pausado: superficie solta");
+        if (g_pauseHook) g_pauseHook(g_pauseUser, 1);
         while (!g_windowBack && !g_closeRequested) std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        if (g_pauseHook) g_pauseHook(g_pauseUser, 0);
         if (!g_closeRequested && g_app->window) {
             const int ok = g_restoreHook(g_hookUser);
             __android_log_print(ANDROID_LOG_WARN, "Eruption", "retomado (%d)", ok);

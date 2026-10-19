@@ -786,6 +786,12 @@ bool Engine::init(int width, int height, const std::string& title) {
     JobSystem::instance().init();
     initMinimap();
     m_audio.init(); // sem dispositivo de som, o jogo segue mudo
+#ifdef __ANDROID__
+    // Em segundo plano o desenho ja' para (a superficie e' solta); o som para junto.
+    eruptionAndroidSetPauseHook([](void* self, int paused) {
+        static_cast<Engine*>(self)->audio().setSuspended(paused != 0);
+    }, this);
+#endif
 
     m_camera.setPerspective(camera_default::kFovDeg, (float)width / (float)height, cameraNear(), 50000.0f);
     // Enquadramento isometrico padrao (math/Camera.hpp). A distancia grande

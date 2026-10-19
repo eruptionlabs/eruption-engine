@@ -11,6 +11,7 @@ AudioSystem::~AudioSystem() = default;
 bool AudioSystem::init() { return false; }
 void AudioSystem::shutdown() {}
 bool AudioSystem::available() const { return false; }
+void AudioSystem::setSuspended(bool) {}
 uint32_t AudioSystem::play(const std::string&, const PlayOptions&) { return 0; }
 uint32_t AudioSystem::playAt(const std::string&, const Vec3&, const PlayOptions&) { return 0; }
 uint32_t AudioSystem::play(const std::string&, float, bool) { return 0; }

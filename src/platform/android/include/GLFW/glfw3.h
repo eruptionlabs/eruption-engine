@@ -75,6 +75,9 @@ const char** glfwGetRequiredInstanceExtensions(uint32_t* count);
 // da superficie Vulkan registra como solta-la e recria-la; o shim chama na
 // thread do motor (glfwPollEvents) e o jogo continua quando a janela volta.
 void eruptionAndroidSetSurfaceHooks(void (*release)(void*), int (*restore)(void*), void* user);
+// Fundo: chamado com 1 ao sair da tela e 0 ao voltar, na thread do motor (o
+// som para junto com o desenho).
+void eruptionAndroidSetPauseHook(void (*pause)(void*, int), void* user);
 #ifdef VK_VERSION_1_0
 VkResult glfwCreateWindowSurface(VkInstance instance, GLFWwindow* window, const VkAllocationCallbacks* allocator,
                                  VkSurfaceKHR* surface);
