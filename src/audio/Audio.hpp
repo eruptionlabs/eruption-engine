@@ -34,6 +34,8 @@ public:
     bool init();
     void shutdown();
     bool available() const;
+    // Para a saida de som inteira (app em segundo plano) e retoma do mesmo ponto.
+    void setSuspended(bool on);
 
     // Devolve um número para mudar ou parar depois (0 = não tocou).
     uint32_t play(const std::string& file, const PlayOptions& options);

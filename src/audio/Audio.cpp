@@ -249,6 +249,12 @@ void AudioSystem::stop(uint32_t id, float fadeSeconds) {
     }
 }
 
+void AudioSystem::setSuspended(bool on) {
+    if (!m->ready) return;
+    if (on) ma_engine_stop(&m->engine);
+    else ma_engine_start(&m->engine);
+}
+
 void AudioSystem::stopAll() {
     for (auto& v : m->voices) {
         ma_sound_stop(v.sound);
