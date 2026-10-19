@@ -377,6 +377,13 @@ void Engine::drawTouchPad() {
         }
         return v;
     }();
+    if (!m_touchPadVisible) {
+        Input::clearUiTouchRects();
+        Input::setVirtualStick(glm::vec2(0.0f));
+        for (Key k : {Key::Left, Key::Right, Key::Up, Key::Down}) Input::setVirtualKey(k, false);
+        for (const Botao& b : botoes) Input::setVirtualKey(b.key, false);
+        return;
+    }
     ImGui::PushFont(m_touchHudFont);
     Input::clearUiTouchRects();
     const auto publishRect = [] {

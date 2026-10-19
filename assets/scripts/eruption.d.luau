@@ -293,6 +293,9 @@ declare input: {
     pressed: (key: string) -> boolean,
     -- The screen is a touch screen (phone): hide drawn key hints.
     touch: () -> boolean,
+    -- Shows or hides the on-screen touch stick (phone builds with a touch
+    -- pad); show it only where it is used, such as free exploration.
+    touch_pad: (on: boolean) -> (),
 }
 
 -- Models placed in the map.

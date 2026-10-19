@@ -507,6 +507,10 @@ public:
     float m_touchHudDayScale = 1.0f; // velocidade do dia antes de pausar
     void drawTouchHud();
     void drawTouchPad();
+    // input.touch_pad: o jogo mostra o controle de toque so' onde ele serve (a
+    // exploracao); escondido, solta o analogico e as teclas virtuais.
+    void setTouchPadVisible(bool on) { m_touchPadVisible = on; }
+    bool m_touchPadVisible = true;
     bool m_touchHudTelemetry = false; // painel de numeros ligado pelo botao
     bool m_touchHudMaps = false;      // lista de mapas aberta (ERUPTION_TOUCH_MAPS)
     // Modo classico: luz fixa do jeito antigo (Blinn-Phong, sem relevo, sem

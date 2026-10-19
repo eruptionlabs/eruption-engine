@@ -551,6 +551,11 @@ int input_down(lua_State* L) {
 }
 // Tela de toque (o Android; ERUPTION_TEST_TOUCH=1 finge no PC, para testar a
 // interface do celular): o jogo esconde o desenho das teclas.
+// Mostra/esconde o controle de toque (ERUPTION_TOUCH_PAD; sem ele, nada muda).
+int input_touch_pad(lua_State* L) {
+    eng().setTouchPadVisible(lua_toboolean(L, 1) != 0);
+    return 0;
+}
 int input_touch(lua_State* L) {
 #ifdef __ANDROID__
     lua_pushboolean(L, 1);
@@ -1482,7 +1487,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg fx[] = {
         {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash}, {"dim", fx_dim},
         {"fading", fx_fading}, {nullptr, nullptr}};
-    static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {"touch", input_touch}, {nullptr, nullptr}};
+    static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {"touch", input_touch}, {"touch_pad", input_touch_pad}, {nullptr, nullptr}};
     static const luaL_Reg models[] = {
         {"count", models_count}, {"preload", models_preload}, {"find", models_find}, {"name", models_name},
         {"position", models_position}, {"set_position", models_set_position}, {"near", models_near},
@@ -1833,6 +1838,9 @@ declare input: {
     pressed: (key: string) -> boolean,
     -- The screen is a touch screen (phone): hide drawn key hints.
     touch: () -> boolean,
+    -- Shows or hides the on-screen touch stick (phone builds with a touch
+    -- pad); show it only where it is used, such as free exploration.
+    touch_pad: (on: boolean) -> (),
 }
 
 -- Models placed in the map.
