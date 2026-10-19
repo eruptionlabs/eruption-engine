@@ -74,6 +74,9 @@ declare ui: {
     -- started on the element (0, 0 until it moves past a small slop): scroll
     -- a list by it.
     dragged: (selector: string) -> (number, number),
+    -- Size of the interface in pixels (the unit of ui.dragged): scale a drag
+    -- by it so scrolling feels the same on any screen.
+    size: () -> (number, number),
     -- Drops everything the script set; the file decides again.
     reset: () -> (),
 }

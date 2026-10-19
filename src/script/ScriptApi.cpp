@@ -1107,6 +1107,12 @@ int ui_color(lua_State* L) {
     eng().uiDocument().setColor(luaL_checkstring(L, 1), static_cast<int>(luaL_optinteger(L, 3, 0)), c);
     return 0;
 }
+int ui_size(lua_State* L) {
+    const ImVec2 s = ImGui::GetIO().DisplaySize;
+    lua_pushnumber(L, s.x);
+    lua_pushnumber(L, s.y);
+    return 2;
+}
 int ui_dragged(lua_State* L) {
     const glm::vec2 d = eng().uiDragged(luaL_checkstring(L, 1));
     lua_pushnumber(L, d.x);
@@ -1471,7 +1477,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg vars[] = {{"get", vars_get}, {"set", vars_set}, {"add", vars_add}, {nullptr, nullptr}};
     static const luaL_Reg ui[] = {{"message", ui_message}, {"minimap_label", ui_minimap_label}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
                                   {"load", ui_load}, {"place", ui_place}, {"image_rect", ui_image_rect}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
-                                  {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked}, {"dragged", ui_dragged},
+                                  {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked}, {"dragged", ui_dragged}, {"size", ui_size},
                                   {"reset", ui_reset}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
@@ -1629,6 +1635,9 @@ declare ui: {
     -- started on the element (0, 0 until it moves past a small slop): scroll
     -- a list by it.
     dragged: (selector: string) -> (number, number),
+    -- Size of the interface in pixels (the unit of ui.dragged): scale a drag
+    -- by it so scrolling feels the same on any screen.
+    size: () -> (number, number),
     -- Drops everything the script set; the file decides again.
     reset: () -> (),
 }
