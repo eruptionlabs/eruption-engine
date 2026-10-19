@@ -1107,6 +1107,12 @@ int ui_color(lua_State* L) {
     eng().uiDocument().setColor(luaL_checkstring(L, 1), static_cast<int>(luaL_optinteger(L, 3, 0)), c);
     return 0;
 }
+int ui_dragged(lua_State* L) {
+    const glm::vec2 d = eng().uiDragged(luaL_checkstring(L, 1));
+    lua_pushnumber(L, d.x);
+    lua_pushnumber(L, d.y);
+    return 2;
+}
 int ui_clicked(lua_State* L) {
     lua_pushboolean(L, eng().uiClicked(luaL_checkstring(L, 1)));
     return 1;
@@ -1347,6 +1353,10 @@ int player_freeze(lua_State* L) {
     if (PlayerController* p = ScriptBridge::player()) p->setInputFrozen(lua_toboolean(L, 1) != 0);
     return 0;
 }
+int player_set_run(lua_State* L) {
+    if (PlayerController* p = ScriptBridge::player()) p->setRunLatched(lua_toboolean(L, 1) != 0);
+    return 0;
+}
 int player_hide(lua_State* L) {
     if (PlayerController* p = ScriptBridge::player()) p->setHidden(lua_toboolean(L, 1) != 0);
     return 0;
@@ -1461,7 +1471,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg vars[] = {{"get", vars_get}, {"set", vars_set}, {"add", vars_add}, {nullptr, nullptr}};
     static const luaL_Reg ui[] = {{"message", ui_message}, {"minimap_label", ui_minimap_label}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
                                   {"load", ui_load}, {"place", ui_place}, {"image_rect", ui_image_rect}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
-                                  {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked},
+                                  {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked}, {"dragged", ui_dragged},
                                   {"reset", ui_reset}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
@@ -1476,7 +1486,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg player[] = {
         {"position", player_position}, {"set_position", player_set_position}, {"set_sprite", player_set_sprite}, {"near", player_near},
         {"inside", player_inside}, {"say", player_say}, {"play", player_play}, {"animation", player_animation},
-        {"freeze", player_freeze}, {"frozen", player_frozen}, {"hide", player_hide},
+        {"freeze", player_freeze}, {"frozen", player_frozen}, {"hide", player_hide}, {"set_run", player_set_run},
         {nullptr, nullptr}};
     static const luaL_Reg camera[] = {
         {"target", camera_target}, {"set_target", camera_set_target},
@@ -1615,6 +1625,10 @@ declare ui: {
     -- Tapped (phone) or clicked (mouse) this frame: an element of the file
     -- that is on screen, or "minimap". Makes any element a button.
     clicked: (selector: string) -> boolean,
+    -- Finger or mouse movement this frame, in screen pixels, for a drag that
+    -- started on the element (0, 0 until it moves past a small slop): scroll
+    -- a list by it.
+    dragged: (selector: string) -> (number, number),
     -- Drops everything the script set; the file decides again.
     reset: () -> (),
 }
@@ -1737,6 +1751,8 @@ declare player: {
     -- running). For dialogue, cutscenes and battle.
     freeze: (on: boolean) -> (),
     frozen: () -> boolean,
+    -- Keeps running on without holding the run key (a phone's run button).
+    set_run: (on: boolean) -> (),
     -- Hidden: the player's sprite is not drawn (a scene he is not in).
     hide: (on: boolean) -> (),
 }

@@ -634,6 +634,13 @@ public:
     // Tocado/clicado neste quadro (ui.clicked): um elemento do CSS que esta' na
     // tela, ou "minimap". Toque que comeca no controle de toque nao conta.
     bool uiClicked(const std::string& selector);
+    // Arrasto (ui.dragged): deslocamento do dedo/mouse neste quadro, em pixels
+    // da interface, se o toque comecou dentro do elemento; 0,0 ate' passar da
+    // folga, para um toque parado nao rolar nada.
+    glm::vec2 uiDragged(const std::string& selector);
+    glm::vec2 uiCursor() const;
+    struct UiDrag { glm::vec2 start{0.0f}, last{0.0f}, delta{0.0f}; bool active = false, moving = false; int frame = -1; };
+    UiDrag m_uiDrag;
     Vec4 m_uiArea{0.0f};        // x, y, w, h da ultima interface desenhada (drawGameFx2D)
     Vec4 m_minimapScreen{0.0f}; // x0, y0, x1, y1 do minimapa no ultimo quadro em que apareceu
     int m_minimapScreenFrame = -100;
