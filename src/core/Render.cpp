@@ -2897,12 +2897,15 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
 
 // LUZ DOMINANTE DOS SPRITES. Para cada sprite que projeta sombra, as ate' 2
 // luzes que mais iluminam o meio do corpo (intensidade x luminancia x
-// atenuacao); a forca de cada uma e' a fracao dela sobre a soma de todas,
-// apagando onde a luz mal chega. Fica de fora a luz presa ao jogador, a
-// desligada por script (PointLight::spriteShadow) e a que esta' quase em cima
-// do boneco (menos de meia altura de distancia no chao): dali a sombra sai
-// degenerada, comprida ou invertida. As de fora tambem nao entram na soma.
-// Roda uma vez por quadro, sempre.
+// atenuacao); a forca de cada uma e' a fracao, sobre a soma de todas, do que
+// ela tem a mais que a 3a, apagando onde a luz mal chega. Fica de fora a luz
+// presa ao jogador e a desligada por script (PointLight::spriteShadow). A que
+// esta' quase em cima do boneco perde peso ate' zero a meia altura de
+// distancia no chao (dali a sombra sai degenerada, comprida ou invertida).
+// Tudo continuo, sem estado entre quadros: com o corte seco e as 2 maiores
+// inteiras, passar sob uma tocha ou a 3a luz passar a 2a fazia a sombra sumir
+// e voltar num quadro (saltos de forca de 0,56-0,75 em 5 quadros de uma
+// caminhada de 100 u sob uma tocha). Roda uma vez por quadro, sempre.
 void Engine::updateSpriteDominantLights() {
     const auto& sprites = m_spriteSystem.getSortedSprites();
     // Luzes do mapa e as dos efeitos de particula (uma magia que explode
@@ -2921,7 +2924,7 @@ void Engine::updateSpriteDominantLights() {
         const float h = std::max(s.size.y, 1.0f);
         const Vec3 mid = feet + Vec3(0.0f, 0.5f * h, 0.0f);
         float sum = 0.0f;
-        float best[2] = {0.0f, 0.0f};
+        float best[3] = {0.0f, 0.0f, 0.0f};
         float bestAtt[2] = {0.0f, 0.0f};
         const PointLight* top[2] = {nullptr, nullptr};
         for (size_t li = 0; li < mapLights.size() + vfxLights.size(); ++li) {
@@ -2935,17 +2938,22 @@ void Engine::updateSpriteDominantLights() {
             if (d >= l.radius) continue;
             const float q = 1.0f - (d / l.radius) * (d / l.radius);
             const float att = q * q;
-            const float score = intensidade * glm::dot(l.color, Vec3(0.2126f, 0.7152f, 0.0722f)) * att;
+            // A luz quase em cima do boneco perde peso, na sombra e na soma: uma
+            // lanterna no grupo diluia a sombra da tocha ao lado.
+            const float chao = glm::length(Vec2(l.position.x - feet.x, l.position.z - feet.z));
+            const float score = intensidade * glm::dot(l.color, Vec3(0.2126f, 0.7152f, 0.0722f)) * att *
+                                glm::smoothstep(0.5f * h, h, chao);
             if (score <= 0.0f) continue;
-            // A luz quase em cima do boneco nao projeta sombra e tambem nao entra
-            // na soma: uma lanterna no grupo diluia a sombra da tocha ao lado.
-            if (glm::length(Vec2(l.position.x - feet.x, l.position.z - feet.z)) < 0.5f * h) continue;
             sum += score;
             if (score > best[0]) {
+                best[2] = best[1];
                 best[1] = best[0]; bestAtt[1] = bestAtt[0]; top[1] = top[0];
                 best[0] = score; bestAtt[0] = att; top[0] = &l;
             } else if (score > best[1]) {
+                best[2] = best[1];
                 best[1] = score; bestAtt[1] = att; top[1] = &l;
+            } else if (score > best[2]) {
+                best[2] = score;
             }
         }
         for (int k = 0; k < 2; ++k) {
@@ -2953,7 +2961,8 @@ void Engine::updateSpriteDominantLights() {
             SpriteLight& o = m_spriteLights[k][i];
             o.position = top[k]->position;
             o.color = top[k]->color;
-            o.strength = (best[k] / sum) * glm::smoothstep(0.0f, 0.2f, bestAtt[k]);
+            // Acima da 3a: quando ela alcanca a 2a, a sombra da 2a ja' sumiu.
+            o.strength = ((best[k] - best[2]) / sum) * glm::smoothstep(0.0f, 0.2f, bestAtt[k]);
         }
     }
 }
