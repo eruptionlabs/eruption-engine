@@ -10,6 +10,8 @@
 #include "game/PlayerController.hpp"
 #include "renderer/UiCanvas.hpp"
 #include "renderer/WeatherTypes.hpp"
+#include "utils/Profiler.hpp"
+#include "utils/SystemMonitor.hpp"
 
 #include <imgui.h>
 
@@ -23,12 +25,19 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <cstring>
 #include <limits>
 #include <string>
 #include <unordered_map>
+
+#if defined(__linux__)
+#include <dlfcn.h>
+#endif
 
 namespace eruption {
 
@@ -44,6 +53,20 @@ struct ScriptBridge {
         engine->m_charConfig.job = path;
         if (engine->m_playerController) engine->m_playerController->reloadSprite();
     }
+    // perf.*: o que o laco principal e o F3 ja' medem, sem medir de novo.
+    static int& fpsCap() { return engine->m_fpsCap; }
+    static VkExtent2D renderExtent() { return engine->renderExtent(); }
+    static float cpuWorkMs() {
+        const Engine& e = *engine;
+        // Fases do laco do quadro anterior menos as esperas: a fence/aquisicao
+        // do beginFrame e o present (com vsync os dois bloqueiam pela GPU ou
+        // pela tela, nao pela CPU). O sono do limitador ja' fica de fora.
+        const float soma = e.m_cpuAdvanceMs + e.m_cpuAppUpdateMs + e.m_cpuRenderMs + e.m_cpuTailMs;
+        return std::max(0.0f, soma - e.m_cpuBeginFrameMs - e.m_vulkan.lastPresentMs());
+    }
+    // Mesmo total do F3 (sem os agregados, que repetem os passes filhos).
+    static float gpuMs() { return std::max(0.0f, Profiler::lastGpuTotalMs()); }
+    static double vramMb() { return engine->deviceMemoryMb(); }
 };
 Engine* ScriptBridge::engine = nullptr;
 
@@ -1476,6 +1499,250 @@ int characters_add(lua_State* L) {
     return 1;
 }
 
+// ---------------------------------------------------------------- perf
+// Contador de desempenho para o jogo desenhar (o F3 e' do editor). Os numeros
+// do quadro sao os que o laco principal ja' mede para o F3 e a telemetria; o
+// que vem da maquina (temperatura, bateria) e' lido de /sys no maximo uma vez
+// por segundo, so' quando um script pede.
+
+int perf_fps(lua_State* L) {
+    lua_pushnumber(L, eng().fps());
+    return 1;
+}
+int perf_frame(lua_State* L) {
+    lua_pushnumber(L, eng().timer().realDeltaTime() * 1000.0f);
+    lua_pushnumber(L, ScriptBridge::cpuWorkMs());
+    const float gpu = ScriptBridge::gpuMs();
+    if (gpu > 0.0f) lua_pushnumber(L, gpu);
+    else lua_pushnil(L);
+    return 3;
+}
+int perf_resolution(lua_State* L) {
+    const VkExtent2D cena = ScriptBridge::renderExtent();
+    const VkExtent2D tela = eng().displayExtent();
+    lua_pushinteger(L, static_cast<int>(cena.width));
+    lua_pushinteger(L, static_cast<int>(cena.height));
+    lua_pushnumber(L, tela.width ? static_cast<double>(cena.width) / tela.width : 1.0);
+    lua_pushinteger(L, static_cast<int>(tela.width));
+    lua_pushinteger(L, static_cast<int>(tela.height));
+    return 5;
+}
+int perf_fps_cap(lua_State* L) {
+    lua_pushinteger(L, ScriptBridge::fpsCap());
+    return 1;
+}
+int perf_set_fps_cap(lua_State* L) {
+    ScriptBridge::fpsCap() = std::clamp(static_cast<int>(luaL_checknumber(L, 1)), 0, 1000);
+    return 0;
+}
+
+// Leitura da maquina. NaN = a maquina nao informa (vira nil no script).
+struct SysReadings {
+    double cpuTemp = NAN, gpuTemp = NAN, gpuWatts = NAN;
+    double battery = NAN, batteryTemp = NAN, batteryWatts = NAN;
+    int charging = -1;          // -1 sem bateria
+    int thermal = -1;           // AThermalStatus (Android), -1 sem
+    double thermalHeadroom = NAN;
+};
+
+#if defined(__linux__)
+bool readSysNumber(const std::string& path, double& out) {
+    FILE* f = std::fopen(path.c_str(), "r");
+    if (!f) return false;
+    char buf[64] = {};
+    const bool ok = std::fgets(buf, sizeof(buf), f) != nullptr;
+    std::fclose(f);
+    if (!ok) return false;
+    char* fim = nullptr;
+    const double v = std::strtod(buf, &fim);
+    if (fim == buf) return false;
+    out = v;
+    return true;
+}
+std::string readSysLine(const std::string& path) {
+    FILE* f = std::fopen(path.c_str(), "r");
+    if (!f) return {};
+    char buf[64] = {};
+    if (!std::fgets(buf, sizeof(buf), f)) buf[0] = '\0';
+    std::fclose(f);
+    std::string s(buf);
+    while (!s.empty() && (s.back() == '\n' || s.back() == ' ')) s.pop_back();
+    return s;
+}
+
+// Onde ler, achado uma vez: a lista de /sys nao muda com o jogo aberto.
+struct SysPaths {
+    std::string cpuTemp, gpuTemp, battery;
+};
+const SysPaths& sysPaths() {
+    static const SysPaths p = [] {
+        SysPaths r;
+        std::error_code ec;
+        // hwmon: sensor de pacote da CPU (Intel, AMD) e o da GPU com driver
+        // aberto (AMD, nouveau). NVIDIA proprietaria vai pelo NVML abaixo.
+        for (const auto& e : std::filesystem::directory_iterator("/sys/class/hwmon", ec)) {
+            const std::string d = e.path().string();
+            const std::string nome = readSysLine(d + "/name");
+            if (r.cpuTemp.empty() && (nome == "coretemp" || nome == "k10temp" || nome == "zenpower" ||
+                                      nome == "cpu_thermal"))
+                r.cpuTemp = d + "/temp1_input";
+            else if (r.gpuTemp.empty() && (nome == "amdgpu" || nome == "nouveau" || nome == "radeon"))
+                r.gpuTemp = d + "/temp1_input";
+        }
+        // Bateria: o nome do Android primeiro (listar a pasta costuma ser
+        // negado ao app, abrir o arquivo nao); no PC, a primeira do tipo Battery.
+        if (readSysLine("/sys/class/power_supply/battery/type") == "Battery")
+            r.battery = "/sys/class/power_supply/battery";
+        else {
+            for (const auto& e : std::filesystem::directory_iterator("/sys/class/power_supply", ec)) {
+                const std::string d = e.path().string();
+                if (readSysLine(d + "/type") == "Battery" && readSysLine(d + "/scope") != "Device") {
+                    r.battery = d;
+                    break;
+                }
+            }
+        }
+        return r;
+    }();
+    return p;
+}
+
+// NVML (GPU NVIDIA com driver proprietario): temperatura e consumo. O
+// SystemMonitor ja' carrega a biblioteca para uso e VRAM; nvmlInit conta
+// referencias, entao abrir de novo aqui nao reinicia nada.
+struct Nvml {
+    using InitFn = int (*)();
+    using HandleFn = int (*)(unsigned int, void**);
+    using TempFn = int (*)(void*, int, unsigned int*);
+    using PowerFn = int (*)(void*, unsigned int*);
+    TempFn temp = nullptr;
+    PowerFn power = nullptr;
+    void* device = nullptr;
+};
+const Nvml& nvml() {
+    static const Nvml n = [] {
+        Nvml r;
+#if !defined(__ANDROID__)
+        void* lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
+        if (!lib) return r;
+        auto init = reinterpret_cast<Nvml::InitFn>(dlsym(lib, "nvmlInit_v2"));
+        auto handle = reinterpret_cast<Nvml::HandleFn>(dlsym(lib, "nvmlDeviceGetHandleByIndex_v2"));
+        if (!init || !handle || init() != 0 || handle(0, &r.device) != 0) return r;
+        r.temp = reinterpret_cast<Nvml::TempFn>(dlsym(lib, "nvmlDeviceGetTemperature"));
+        r.power = reinterpret_cast<Nvml::PowerFn>(dlsym(lib, "nvmlDeviceGetPowerUsage"));
+#endif
+        return r;
+    }();
+    return n;
+}
+
+#if defined(__ANDROID__)
+// Estado termico do sistema (AThermal, API 30; folga, API 31). Por dlsym: o
+// pacote declara API 28, e nos aparelhos antigos os simbolos nao existem.
+struct Thermal {
+    using StatusFn = int (*)(void*);
+    using HeadroomFn = float (*)(void*, int);
+    void* manager = nullptr;
+    StatusFn status = nullptr;
+    HeadroomFn headroom = nullptr;
+};
+const Thermal& thermal() {
+    static const Thermal t = [] {
+        Thermal r;
+        void* lib = dlopen("libandroid.so", RTLD_NOW);
+        if (!lib) return r;
+        using AcquireFn = void* (*)();
+        auto acquire = reinterpret_cast<AcquireFn>(dlsym(lib, "AThermal_acquireManager"));
+        r.status = reinterpret_cast<Thermal::StatusFn>(dlsym(lib, "AThermal_getCurrentThermalStatus"));
+        r.headroom = reinterpret_cast<Thermal::HeadroomFn>(dlsym(lib, "AThermal_getThermalHeadroom"));
+        if (acquire) r.manager = acquire();
+        return r;
+    }();
+    return t;
+}
+#endif
+
+void readSystem(SysReadings& r) {
+    const SysPaths& p = sysPaths();
+    double v = 0.0;
+    // hwmon e o temp da bateria: milesimos de grau e decimos de grau.
+    if (!p.cpuTemp.empty() && readSysNumber(p.cpuTemp, v)) r.cpuTemp = v / 1000.0;
+    if (!p.gpuTemp.empty() && readSysNumber(p.gpuTemp, v)) r.gpuTemp = v / 1000.0;
+    const Nvml& n = nvml();
+    unsigned int u = 0;
+    if (n.temp && n.temp(n.device, 0 /* NVML_TEMPERATURE_GPU */, &u) == 0) r.gpuTemp = u;
+    if (n.power && n.power(n.device, &u) == 0) r.gpuWatts = u / 1000.0;
+    if (!p.battery.empty()) {
+        const std::string& b = p.battery;
+        if (readSysNumber(b + "/capacity", v)) r.battery = v;
+        if (readSysNumber(b + "/temp", v)) r.batteryTemp = v / 10.0;
+        // Consumo: power_now (uW) ou corrente (uA) x tensao (uV). O sinal da
+        // corrente muda de fabricante para fabricante: vale o modulo.
+        double i = 0.0, volts = 0.0;
+        if (readSysNumber(b + "/power_now", v)) r.batteryWatts = std::fabs(v) / 1e6;
+        else if (readSysNumber(b + "/current_now", i) && readSysNumber(b + "/voltage_now", volts))
+            r.batteryWatts = std::fabs(i * volts) / 1e12;
+        const std::string st = readSysLine(b + "/status");
+        if (!st.empty()) r.charging = (st == "Charging" || st == "Full") ? 1 : 0;
+    }
+#if defined(__ANDROID__)
+    const Thermal& t = thermal();
+    if (t.manager && t.status) r.thermal = t.status(t.manager);
+    // Chamar mais de uma vez por segundo devolve NaN: o cache abaixo cuida.
+    if (t.manager && t.headroom) r.thermalHeadroom = static_cast<double>(t.headroom(t.manager, 0));
+#endif
+}
+#else
+void readSystem(SysReadings&) {}
+#endif
+
+void setNumberField(lua_State* L, const char* k, double v) {
+    if (std::isnan(v)) return;
+    lua_pushnumber(L, v);
+    lua_setfield(L, -2, k);
+}
+
+int perf_system(lua_State* L) {
+    ScriptHost::NativeWork trabalho; // leitura de arquivos, nao laco do script
+    static SysReadings s_cache;
+    static std::chrono::steady_clock::time_point s_last{};
+    const auto agora = std::chrono::steady_clock::now();
+    if (s_last.time_since_epoch().count() == 0 || agora - s_last >= std::chrono::seconds(1)) {
+        SysReadings r;
+        readSystem(r);
+        // A folga termica vem NaN quando o sistema acha cedo demais: fica a anterior.
+        if (std::isnan(r.thermalHeadroom)) r.thermalHeadroom = s_cache.thermalHeadroom;
+        s_cache = r;
+        s_last = agora;
+    }
+    const SysReadings& r = s_cache;
+    lua_createtable(L, 0, 12);
+    // RAM, uso de CPU e de GPU: os do SystemMonitor (o motor ja' le uma vez
+    // por segundo). 0 = nao medido aqui.
+    if (const size_t ram = SystemMonitor::processRamBytes()) setNumberField(L, "ram_mb", ram / (1024.0 * 1024.0));
+    const double vram = ScriptBridge::vramMb();
+    if (vram > 0.0) setNumberField(L, "vram_mb", vram);
+    if (const float c = SystemMonitor::processCpuPercent(); c > 0.0f) setNumberField(L, "cpu_percent", c);
+    if (const float g = SystemMonitor::gpuCorePercent(); g > 0.0f) setNumberField(L, "gpu_percent", g);
+    setNumberField(L, "cpu_temp", r.cpuTemp);
+    setNumberField(L, "gpu_temp", r.gpuTemp);
+    setNumberField(L, "gpu_watts", r.gpuWatts);
+    setNumberField(L, "battery", r.battery);
+    setNumberField(L, "battery_temp", r.batteryTemp);
+    setNumberField(L, "battery_watts", r.batteryWatts);
+    if (r.charging >= 0) {
+        lua_pushboolean(L, r.charging);
+        lua_setfield(L, -2, "charging");
+    }
+    static const char* const kThermal[] = {"none", "light", "moderate", "severe", "critical", "emergency", "shutdown"};
+    if (r.thermal >= 0 && r.thermal <= 6) {
+        lua_pushstring(L, kThermal[r.thermal]);
+        lua_setfield(L, -2, "thermal");
+    }
+    setNumberField(L, "thermal_headroom", r.thermalHeadroom);
+    return 1;
+}
+
 void lib(lua_State* L, const char* name, const luaL_Reg* fns) {
     lua_newtable(L);
     for (const luaL_Reg* f = fns; f->name; ++f) {
@@ -1614,8 +1881,13 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "lights", lights);
     lua_pushcfunction(L, api_require, "require");
     lua_setglobal(L, "require");
+    static const luaL_Reg perf[] = {
+        {"fps", perf_fps}, {"frame", perf_frame}, {"resolution", perf_resolution},
+        {"fps_cap", perf_fps_cap}, {"set_fps_cap", perf_set_fps_cap}, {"system", perf_system},
+        {nullptr, nullptr}};
     lib(L, "characters", characters);
     lib(L, "fx", fx);
+    lib(L, "perf", perf);
     registerVfxApi(L, engine);
     registerObjectsApi(L, engine);
     NativeModule::registerApi(L);
@@ -2045,6 +2317,47 @@ declare lights: {
     -- Whether this light casts sprite shadows (characters.set_shadow("lights")).
     -- Turn it off on a light the game moves along with the party.
     set_sprite_shadow: (index: number, on: boolean) -> (),
+}
+
+-- Machine readings for a performance meter. A field is nil where this
+-- machine does not report it. Temperatures in degrees Celsius.
+type PerfSystem = {
+    ram_mb: number?,            -- memory of this process
+    vram_mb: number?,           -- GPU memory allocated by the engine
+    cpu_percent: number?,       -- this process, of the whole machine
+    gpu_percent: number?,       -- the whole GPU
+    cpu_temp: number?,
+    gpu_temp: number?,
+    gpu_watts: number?,
+    battery: number?,           -- charge, 0 to 100
+    battery_temp: number?,
+    battery_watts: number?,     -- power drawn from (or into) the battery
+    charging: boolean?,
+    -- Phones: "none", "light", "moderate", "severe", "critical",
+    -- "emergency", "shutdown" (the system throttles from "moderate" on).
+    thermal: string?,
+    -- Phones: 1.0 = the point where the system starts to throttle.
+    thermal_headroom: number?,
+}
+
+-- Performance counters for an on-screen meter: the numbers the engine already
+-- measures for its debug panel and telemetry.
+declare perf: {
+    -- Frames per second over the last half second.
+    fps: () -> number,
+    -- The last frame, in ms: wall time (for graphs and the 1% low), CPU work
+    -- (simulation, scripts, recording; no waiting for the GPU, vsync or the
+    -- FPS cap) and GPU time, nil where the GPU has no timers.
+    frame: () -> (number, number, number?),
+    -- Scene width and height, scale (scene / screen), then screen width and
+    -- height, in pixels.
+    resolution: () -> (number, number, number, number, number),
+    -- Frame limiter in frames per second, 0 = none. The graphics preset sets
+    -- it (30 on phones); a change lasts until the preset is applied again.
+    fps_cap: () -> number,
+    set_fps_cap: (fps: number) -> (),
+    -- Temperatures, battery and memory, read at most once a second.
+    system: () -> PerfSystem,
 }
 )" + std::string(vfxApiDefinitions()) + objectsApiDefinitions() + NativeModule::apiDefinitions();
 }
