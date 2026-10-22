@@ -53,6 +53,7 @@ int glfwWindowShouldClose(GLFWwindow* window);
 void glfwSetWindowShouldClose(GLFWwindow* window, int value);
 void glfwPollEvents();
 void glfwGetFramebufferSize(GLFWwindow* window, int* width, int* height);
+void glfwGetWindowSize(GLFWwindow* window, int* width, int* height);
 void glfwSetWindowUserPointer(GLFWwindow* window, void* pointer);
 void* glfwGetWindowUserPointer(GLFWwindow* window);
 void glfwSetInputMode(GLFWwindow* window, int mode, int value);

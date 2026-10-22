@@ -556,6 +556,10 @@ int input_touch_pad(lua_State* L) {
     eng().setTouchPadVisible(lua_toboolean(L, 1) != 0);
     return 0;
 }
+int input_double_tapped(lua_State* L) {
+    lua_pushboolean(L, Input::isDoubleTapped());
+    return 1;
+}
 int input_touch(lua_State* L) {
 #ifdef __ANDROID__
     lua_pushboolean(L, 1);
@@ -1113,6 +1117,14 @@ int ui_color(lua_State* L) {
     eng().uiDocument().setColor(luaL_checkstring(L, 1), static_cast<int>(luaL_optinteger(L, 3, 0)), c);
     return 0;
 }
+int ui_held(lua_State* L) {
+    lua_pushnumber(L, eng().uiHeld(luaL_checkstring(L, 1)));
+    return 1;
+}
+int ui_released(lua_State* L) {
+    lua_pushboolean(L, eng().uiReleased(luaL_checkstring(L, 1)));
+    return 1;
+}
 int ui_size(lua_State* L) {
     const ImVec2 s = ImGui::GetIO().DisplaySize;
     lua_pushnumber(L, s.x);
@@ -1483,7 +1495,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg vars[] = {{"get", vars_get}, {"set", vars_set}, {"add", vars_add}, {nullptr, nullptr}};
     static const luaL_Reg ui[] = {{"message", ui_message}, {"minimap_label", ui_minimap_label}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
                                   {"load", ui_load}, {"place", ui_place}, {"image_rect", ui_image_rect}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
-                                  {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked}, {"dragged", ui_dragged}, {"size", ui_size},
+                                  {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked}, {"dragged", ui_dragged}, {"size", ui_size}, {"held", ui_held}, {"released", ui_released},
                                   {"reset", ui_reset}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
@@ -1509,7 +1521,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg fx[] = {
         {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash}, {"dim", fx_dim},
         {"fading", fx_fading}, {nullptr, nullptr}};
-    static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {"touch", input_touch}, {"touch_pad", input_touch_pad}, {nullptr, nullptr}};
+    static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {"touch", input_touch}, {"touch_pad", input_touch_pad}, {"double_tapped", input_double_tapped}, {nullptr, nullptr}};
     static const luaL_Reg models[] = {
         {"count", models_count}, {"preload", models_preload}, {"find", models_find}, {"name", models_name},
         {"position", models_position}, {"set_position", models_set_position}, {"near", models_near},
@@ -1645,6 +1657,12 @@ declare ui: {
     -- Size of the interface in pixels (the unit of ui.dragged): scale a drag
     -- by it so scrolling feels the same on any screen.
     size: () -> (number, number),
+    -- Seconds the finger (mouse button) has been held on a press that started
+    -- on the element; 0 when not. With ui.released: hold to preview, let go
+    -- to confirm.
+    held: (selector: string) -> number,
+    -- The press that started on the element was let go over it this frame.
+    released: (selector: string) -> boolean,
     -- Drops everything the script set; the file decides again.
     reset: () -> (),
 }
@@ -1875,6 +1893,9 @@ declare input: {
     -- Shows or hides the on-screen touch stick (phone builds with a touch
     -- pad); show it only where it is used, such as free exploration.
     touch_pad: (on: boolean) -> (),
+    -- Double tap on the camera area (phone) or double right click (PC), true
+    -- for one frame. The engine does nothing with it; the game decides.
+    double_tapped: () -> boolean,
 }
 
 -- Models placed in the map.

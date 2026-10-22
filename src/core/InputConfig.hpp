@@ -27,6 +27,11 @@ struct KeyboardMouseConfig {
     float mouseSensitivity = 0.005f;
     float scrollSensitivity = 0.1f;
     bool invertMouseY = false;
+    // Celular: graus de giro da camera por um arrasto da altura inteira da
+    // tela, igual em qualquer densidade. Em pixel cru (mouseSensitivity) um
+    // arrasto de 17% da largura de um aparelho 2400x1080 dava 115 graus; a
+    // faixa usual dos jogos de toque e' 180-360 graus por largura.
+    float touchTurnPerScreen = 120.0f;
 };
 
 class InputConfig {
@@ -68,6 +73,7 @@ public:
                 kbMouse.mouseSensitivity = k.value("mouseSensitivity", kbMouse.mouseSensitivity);
                 kbMouse.scrollSensitivity = k.value("scrollSensitivity", kbMouse.scrollSensitivity);
                 kbMouse.invertMouseY = k.value("invertMouseY", kbMouse.invertMouseY);
+                kbMouse.touchTurnPerScreen = k.value("touchTurnPerScreen", kbMouse.touchTurnPerScreen);
             }
         } catch (...) {}
     }
@@ -95,6 +101,7 @@ public:
             j["kbMouse"]["mouseSensitivity"] = kbMouse.mouseSensitivity;
             j["kbMouse"]["scrollSensitivity"] = kbMouse.scrollSensitivity;
             j["kbMouse"]["invertMouseY"] = kbMouse.invertMouseY;
+            j["kbMouse"]["touchTurnPerScreen"] = kbMouse.touchTurnPerScreen;
 
             std::ofstream file(path);
             file << j.dump(4);

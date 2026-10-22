@@ -6,12 +6,18 @@
 
 namespace eruption {
 
+void swapCssTouchRects();
+
 GLFWwindow* Input::s_window = nullptr;
 std::array<bool, 512> Input::s_keys{};
 std::array<bool, 512> Input::s_keysPrev{};
 std::array<bool, 512> Input::s_keysPhys{};
 std::array<bool, 512> Input::s_keysVirt{};
 glm::vec2 Input::s_virtStick{0.0f};
+glm::vec4 Input::s_stickZone{0.0f};
+Input::TouchStick Input::s_touchStick;
+bool Input::s_doubleTapPending = false;
+bool Input::s_doubleTap = false;
 std::array<bool, 8> Input::s_mouse{};
 std::array<bool, 8> Input::s_mousePrev{};
 std::array<bool, 8> Input::s_mouseClicked{};
@@ -56,6 +62,9 @@ void Input::update() {
     s_keysPrev = s_keys;
     for (size_t k = 0; k < s_keys.size(); ++k) s_keys[k] = s_keysPhys[k] || s_keysVirt[k];
     s_mouseClicked.fill(false);
+    s_doubleTap = s_doubleTapPending;
+    s_doubleTapPending = false;
+    swapCssTouchRects();
     s_mousePrev = s_mouse;
     s_mousePosPrev = s_mousePos;
     s_scrollDelta = 0.0f;
@@ -219,22 +228,66 @@ void Input::keyCallback(GLFWwindow* window, int key, int scancode, int action, i
 
 namespace {
 std::vector<glm::vec4> s_uiTouchRects; // x0, y0, x1, y1 em pixels da janela
+std::vector<glm::vec4> s_cssTouchRects[2]; // [0] deste quadro, [1] do anterior
+bool inRects(const std::vector<glm::vec4>& rects, float x, float y) {
+    for (const glm::vec4& r : rects)
+        if (x >= r.x && y >= r.y && x <= r.z && y <= r.w) return true;
+    return false;
+}
+}
+void swapCssTouchRects() {
+    s_cssTouchRects[1].swap(s_cssTouchRects[0]);
+    s_cssTouchRects[0].clear();
+}
+void Input::addCssTouchRect(float x0, float y0, float x1, float y1) {
+    s_cssTouchRects[0].emplace_back(x0, y0, x1, y1);
+}
+bool Input::inCssTouchRect(float x, float y) {
+    return inRects(s_cssTouchRects[0], x, y) || inRects(s_cssTouchRects[1], x, y);
+}
+bool Input::inStickZone(float x, float y) {
+    const glm::vec4& z = s_stickZone;
+    return z.z > z.x && x >= z.x && y >= z.y && x <= z.z && y <= z.w;
+}
+void Input::stickTouch(bool down, float x, float y) {
+    s_touchStick.active = down;
+    if (down) s_touchStick.base = s_touchStick.pos = glm::vec2(x, y);
 }
 
 void Input::clearUiTouchRects() { s_uiTouchRects.clear(); }
 
 void Input::addUiTouchRect(float x0, float y0, float x1, float y1) { s_uiTouchRects.emplace_back(x0, y0, x1, y1); }
 
-bool Input::inUiTouchRect(float x, float y) {
-    for (const glm::vec4& r : s_uiTouchRects)
-        if (x >= r.x && y >= r.y && x <= r.z && y <= r.w) return true;
-    return false;
-}
+bool Input::inUiTouchRect(float x, float y) { return inRects(s_uiTouchRects, x, y); }
 
 void Input::mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
+#ifndef __ANDROID__
+    // Duplo clique direito = o duplo toque do celular (no Android o botao
+    // direito e' o dedo pousando; o shim detecta o duplo toque por la').
+    if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
+        static double s_last = -1.0;
+        static glm::vec2 s_lastPos{0.0f};
+        int w = 0, h = 0;
+        glfwGetWindowSize(window, &w, &h);
+        const double now = glfwGetTime();
+        if (s_last >= 0.0 && now - s_last < 0.3 && glm::length(s_mousePos - s_lastPos) < 0.05f * float(h)) {
+            s_doubleTapPending = true;
+            s_last = -1.0;
+        } else {
+            s_last = now;
+            s_lastPos = s_mousePos;
+        }
+    }
+#endif
     if (button >= 0 && button < 8) {
-        if (action == GLFW_PRESS) s_mouse[button] = s_mouseClicked[button] = true;
+        if (action == GLFW_PRESS) {
+            s_mouse[button] = s_mouseClicked[button] = true;
+            // O salto do cursor ate' onde o botao apertou nao e' arrasto: no
+            // celular o dedo pousa longe de onde o anterior saiu, e o salto
+            // girava a camera (um toque parado virava um tranco de 50 graus).
+            s_mousePosPrev = s_mousePos;
+        }
         else if (action == GLFW_RELEASE) s_mouse[button] = false;
     }
 }

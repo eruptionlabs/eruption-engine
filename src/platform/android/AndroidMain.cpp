@@ -37,6 +37,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <array>
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
@@ -83,9 +84,10 @@ std::condition_variable g_doneCv;
 
 // Fila de entrada: preenchida pela thread do Android, esvaziada pelo motor.
 struct InputEvent {
-    enum Kind { Cursor, Button, Scroll } kind;
+    enum Kind { Cursor, Button, Scroll, Touch } kind;
     double x = 0.0, y = 0.0;
     int button = 0, action = 0;
+    int64_t t = 0; // toque: hora do evento no Android (ns), nao a do quadro
 };
 std::mutex g_inputMutex;
 std::vector<InputEvent> g_inputQueue;
@@ -171,79 +173,38 @@ bool extractAssets(AAssetManager* am, const std::string& root) {
     return true;
 }
 
-// ---- toque -> mouse ---------------------------------------------------------
-// Um dedo arrastando = botao direito (gira a camera); toque curto = clique
-// esquerdo; dois dedos = pinca vira rolagem (zoom) e o ponto medio arrasta com
-// o botao do meio.
-struct Touch {
-    int fingers = 0;
-    float downX = 0, downY = 0;
-    std::chrono::steady_clock::time_point downT;
-    bool moved = false;
-    float pinch = 0.0f;
-} g_touch;
-
-void setCursor(double x, double y) { pushInput({InputEvent::Cursor, x, y}); }
-
-void setButton(int b, int action) {
-    if (g_buttonState[b] == action) return;
-    g_buttonState[b] = action;
-    pushInput({InputEvent::Button, 0.0, 0.0, b, action});
-}
+// ---- toque ------------------------------------------------------------------
+// A thread do Android so' enfileira cada dedo pelo id (pousou, moveu, saiu); quem
+// decide o papel de cada um e' a thread do motor (rotearToque), que conhece as
+// areas da interface do quadro.
+enum TouchKind { kTouchDown, kTouchMove, kTouchUp, kTouchCancel };
 
 int32_t onInput(android_app*, AInputEvent* ev) {
     if (AInputEvent_getType(ev) != AINPUT_EVENT_TYPE_MOTION) return 0;
-    const int32_t action = AMotionEvent_getAction(ev) & AMOTION_EVENT_ACTION_MASK;
+    const int32_t raw = AMotionEvent_getAction(ev);
+    const int32_t action = raw & AMOTION_EVENT_ACTION_MASK;
+    const size_t idx = static_cast<size_t>((raw & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
+                                           AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
     const size_t n = AMotionEvent_getPointerCount(ev);
-    const float x0 = AMotionEvent_getX(ev, 0), y0 = AMotionEvent_getY(ev, 0);
+    const auto touch = [ev](size_t i, int kind) {
+        pushInput({InputEvent::Touch, AMotionEvent_getX(ev, i), AMotionEvent_getY(ev, i),
+                   AMotionEvent_getPointerId(ev, i), kind, AMotionEvent_getEventTime(ev)});
+    };
     switch (action) {
         case AMOTION_EVENT_ACTION_DOWN:
-            g_touch = Touch{};
-            g_touch.fingers = 1;
-            g_touch.downX = x0;
-            g_touch.downY = y0;
-            g_touch.downT = std::chrono::steady_clock::now();
-            setCursor(x0, y0);
-            setButton(GLFW_MOUSE_BUTTON_RIGHT, GLFW_PRESS);
-            break;
         case AMOTION_EVENT_ACTION_POINTER_DOWN:
-            if (n >= 2) {
-                // Dois dedos: so' pinca (zoom). Mover a camera e' pelo analogico.
-                g_touch.fingers = 2;
-                g_touch.moved = true;
-                setButton(GLFW_MOUSE_BUTTON_RIGHT, GLFW_RELEASE);
-                const float x1 = AMotionEvent_getX(ev, 1), y1 = AMotionEvent_getY(ev, 1);
-                g_touch.pinch = std::hypot(x1 - x0, y1 - y0);
-            }
+            if (idx < n) touch(idx, kTouchDown);
             break;
         case AMOTION_EVENT_ACTION_MOVE:
-            if (g_touch.fingers >= 2 && n >= 2) {
-                const float x1 = AMotionEvent_getX(ev, 1), y1 = AMotionEvent_getY(ev, 1);
-                const float d = std::hypot(x1 - x0, y1 - y0);
-                // Rolagem que da' zoom igual a' razao da pinca (o motor faz
-                // zoom(1 + rolagem * 0,1)): proporcional, nunca negativo.
-                if (g_touch.pinch > 1.0f && d > 1.0f)
-                    pushInput({InputEvent::Scroll, 0.0, static_cast<double>((d / g_touch.pinch - 1.0f) / 0.1f)});
-                g_touch.pinch = d;
-            } else if (g_touch.fingers == 1) {
-                if (std::hypot(x0 - g_touch.downX, y0 - g_touch.downY) > 12.0f) g_touch.moved = true;
-                setCursor(x0, y0);
-            }
-            break;
-        case AMOTION_EVENT_ACTION_POINTER_UP:
-            g_touch.fingers = 1;
+            for (size_t i = 0; i < n; ++i) touch(i, kTouchMove);
             break;
         case AMOTION_EVENT_ACTION_UP:
-        case AMOTION_EVENT_ACTION_CANCEL: {
-            setButton(GLFW_MOUSE_BUTTON_RIGHT, GLFW_RELEASE);
-            const auto held = std::chrono::steady_clock::now() - g_touch.downT;
-            if (action == AMOTION_EVENT_ACTION_UP && !g_touch.moved && held < std::chrono::milliseconds(300)) {
-                setButton(GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS);
-                setButton(GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE);
-            }
-            g_touch.fingers = 0;
+        case AMOTION_EVENT_ACTION_POINTER_UP:
+            if (idx < n) touch(idx, kTouchUp);
             break;
-        }
+        case AMOTION_EVENT_ACTION_CANCEL:
+            for (size_t i = 0; i < n; ++i) touch(i, kTouchCancel);
+            break;
         default:
             break;
     }
@@ -340,6 +301,178 @@ void eruptionAndroidSetPauseHook(void (*pause)(void*, int), void* user) {
     g_pauseUser = user;
 }
 
+namespace {
+// ---- roteador de toque (thread do motor) -------------------------------------
+// Cada dedo fica com o papel da area onde pousou, ate' sair:
+// - INTERFACE: painel do ImGui (controle de toque) -> so' o ImGui;
+// - ANALOGICO: zona do analogico flutuante (Input::inStickZone), fora de
+//   elemento CSS tocavel -> a base nasce ali e o pino segue o dedo;
+// - CAMERA: o resto. O primeiro dedo da camera e' o "mouse" (botao direito
+//   arrasta e gira; toque curto vira clique esquerdo); o segundo faz a pinca.
+// Um dedo nunca interfere no outro: o analogico anda enquanto o outro gira.
+enum class Papel { Livre, Interface, Analogico, Camera, Ignorado };
+struct Dedo {
+    int id = -1;
+    Papel papel = Papel::Livre;
+    float sx = 0.0f, sy = 0.0f, x = 0.0f, y = 0.0f;
+    int64_t t0 = 0; // ns, hora do evento
+    bool moved = false;
+};
+std::array<Dedo, 10> g_dedos;
+int g_dedoCamera = -1, g_dedoPinca = -1;
+float g_pinca = 0.0f;
+int64_t g_ultimoToque = 0;
+// Tempos pela hora do evento: num quadro lento, aperto e soltura chegam no
+// mesmo lote e a hora do quadro diria que o toque durou zero e que o
+// intervalo entre dois toques foi um quadro inteiro.
+constexpr int64_t kToqueCurtoNs = 300'000'000;
+float g_ultimoToqueX = -1e9f, g_ultimoToqueY = -1e9f;
+
+void cursorMotor(double x, double y) {
+    g_window.cursorX = x;
+    g_window.cursorY = y;
+    if (g_window.cursorCb) g_window.cursorCb(&g_window, x, y);
+}
+void botaoMotor(int b, int action) {
+    if (g_window.buttons[b] == action) return;
+    g_window.buttons[b] = action;
+    if (g_window.mouseCb) g_window.mouseCb(&g_window, b, action, 0);
+}
+void soltarDedos() {
+    for (Dedo& d : g_dedos) d = Dedo{};
+    g_dedoCamera = g_dedoPinca = -1;
+    eruption::Input::stickTouch(false, 0.0f, 0.0f);
+}
+int achaDedo(int id) {
+    for (size_t i = 0; i < g_dedos.size(); ++i)
+        if (g_dedos[i].papel != Papel::Livre && g_dedos[i].id == id) return static_cast<int>(i);
+    return -1;
+}
+bool temPapel(Papel p) {
+    for (const Dedo& d : g_dedos)
+        if (d.papel == p) return true;
+    return false;
+}
+void pousou(int id, float x, float y, int64_t t) {
+    int slot = -1;
+    for (size_t i = 0; i < g_dedos.size(); ++i)
+        if (g_dedos[i].papel == Papel::Livre) { slot = static_cast<int>(i); break; }
+    if (slot < 0) return;
+    Dedo& d = g_dedos[static_cast<size_t>(slot)];
+    d = Dedo{id, Papel::Ignorado, x, y, x, y, t, false};
+    if (eruption::Input::inUiTouchRect(x, y) && !temPapel(Papel::Interface)) {
+        d.papel = Papel::Interface;
+        ImGui_ImplGlfw_CursorPosCallback(&g_window, x, y);
+        ImGui_ImplGlfw_MouseButtonCallback(&g_window, GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0);
+    } else if (eruption::Input::inStickZone(x, y) && !eruption::Input::inCssTouchRect(x, y) &&
+               !temPapel(Papel::Analogico)) {
+        d.papel = Papel::Analogico;
+        eruption::Input::stickTouch(true, x, y);
+    } else if (g_dedoCamera < 0) {
+        d.papel = Papel::Camera;
+        g_dedoCamera = slot;
+        cursorMotor(x, y);
+        botaoMotor(GLFW_MOUSE_BUTTON_RIGHT, GLFW_PRESS);
+    } else if (g_dedoPinca < 0) {
+        // Segundo dedo na camera: so' pinca (zoom). Para de girar e o primeiro
+        // dedo nao vira mais toque curto.
+        d.papel = Papel::Camera;
+        g_dedoPinca = slot;
+        Dedo& c = g_dedos[static_cast<size_t>(g_dedoCamera)];
+        c.moved = true;
+        botaoMotor(GLFW_MOUSE_BUTTON_RIGHT, GLFW_RELEASE);
+        g_pinca = std::hypot(x - c.x, y - c.y);
+    }
+}
+void moveu(int id, float x, float y) {
+    const int slot = achaDedo(id);
+    if (slot < 0) return;
+    Dedo& d = g_dedos[static_cast<size_t>(slot)];
+    d.x = x;
+    d.y = y;
+    switch (d.papel) {
+        case Papel::Interface:
+            ImGui_ImplGlfw_CursorPosCallback(&g_window, x, y);
+            break;
+        case Papel::Analogico:
+            eruption::Input::stickMove(x, y);
+            break;
+        case Papel::Camera:
+            if (g_dedoCamera >= 0 && g_dedoPinca >= 0) {
+                const Dedo& a = g_dedos[static_cast<size_t>(g_dedoCamera)];
+                const Dedo& b = g_dedos[static_cast<size_t>(g_dedoPinca)];
+                const float dist = std::hypot(b.x - a.x, b.y - a.y);
+                // Rolagem que da' zoom igual a' razao da pinca (o motor faz
+                // zoom(1 + rolagem * 0,1)): proporcional, nunca negativo.
+                if (g_pinca > 1.0f && dist > 1.0f && g_window.scrollCb)
+                    g_window.scrollCb(&g_window, 0.0, static_cast<double>((dist / g_pinca - 1.0f) / 0.1f));
+                g_pinca = dist;
+            } else if (slot == g_dedoCamera) {
+                if (std::hypot(x - d.sx, y - d.sy) > 12.0f) d.moved = true;
+                cursorMotor(x, y);
+            }
+            break;
+        default:
+            break;
+    }
+}
+void saiu(int id, float x, float y, int64_t t, bool cancelado) {
+    const int slot = achaDedo(id);
+    if (slot < 0) return;
+    Dedo& d = g_dedos[static_cast<size_t>(slot)];
+    if (d.papel == Papel::Interface) {
+        ImGui_ImplGlfw_CursorPosCallback(&g_window, x, y);
+        ImGui_ImplGlfw_MouseButtonCallback(&g_window, GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0);
+    } else if (d.papel == Papel::Analogico) {
+        eruption::Input::stickTouch(false, x, y);
+    } else if (slot == g_dedoPinca || (slot == g_dedoCamera && g_dedoPinca >= 0)) {
+        // Fim da pinca: o dedo que fica nao volta a girar ate' sair e pousar de novo.
+        const int outro = slot == g_dedoPinca ? g_dedoCamera : g_dedoPinca;
+        if (outro >= 0) g_dedos[static_cast<size_t>(outro)].papel = Papel::Ignorado;
+        g_dedoCamera = g_dedoPinca = -1;
+    } else if (slot == g_dedoCamera) {
+        botaoMotor(GLFW_MOUSE_BUTTON_RIGHT, GLFW_RELEASE);
+        const int64_t agora = t;
+        if (!cancelado && !d.moved && agora - d.t0 < kToqueCurtoNs) {
+            cursorMotor(x, y);
+            botaoMotor(GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS);
+            botaoMotor(GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE);
+            // Duplo toque: dois toques curtos, o segundo pousando menos de
+            // 300 ms depois de o primeiro sair (a conta do GestureDetector do
+            // Android), a menos de 5% da altura da tela um do outro.
+            const float perto = 0.05f * static_cast<float>(std::max(1, windowH()));
+            if (d.t0 - g_ultimoToque < kToqueCurtoNs &&
+                std::hypot(x - g_ultimoToqueX, y - g_ultimoToqueY) < perto) {
+                eruption::Input::signalDoubleTap();
+                g_ultimoToqueX = g_ultimoToqueY = -1e9f;
+            } else {
+                g_ultimoToque = agora;
+                g_ultimoToqueX = x;
+                g_ultimoToqueY = y;
+            }
+        }
+        g_dedoCamera = -1;
+    }
+    d = Dedo{};
+}
+void rotearToque(const InputEvent& e) {
+    const float x = static_cast<float>(e.x), y = static_cast<float>(e.y);
+    // ERUPTION_TEST_TOUCH_LOG=1 (teste): cada dedo no logcat, com a hora do
+    // evento, para conferir gestos injetados (sendevent) contra os limites.
+    static const bool kLog = std::getenv("ERUPTION_TEST_TOUCH_LOG") != nullptr;
+    if (kLog)
+        __android_log_print(ANDROID_LOG_INFO, "Eruption", "[TOQUE] id=%d acao=%d x=%.0f y=%.0f t=%.1f ms", e.button,
+                            e.action, static_cast<double>(x), static_cast<double>(y), static_cast<double>(e.t) * 1e-6);
+    switch (e.action) {
+        case kTouchDown: pousou(e.button, x, y, e.t); break;
+        case kTouchMove: moveu(e.button, x, y); break;
+        case kTouchUp: saiu(e.button, x, y, e.t, false); break;
+        default: saiu(e.button, x, y, e.t, true); break;
+    }
+}
+
+} // namespace
+
 void glfwPollEvents() {
     // Pausa (thread do motor): solta a superficie, avisa a thread do Android e
     // espera a janela nova; ao voltar recria e segue no mesmo ponto do jogo.
@@ -367,6 +500,8 @@ void glfwPollEvents() {
             std::lock_guard<std::mutex> lock(g_inputMutex);
             g_inputQueue.clear();
         }
+        soltarDedos();
+        botaoMotor(GLFW_MOUSE_BUTTON_RIGHT, GLFW_RELEASE);
     }
     // Roda na thread do motor: aplica o toque que a thread do Android enfileirou.
     // Aperto que vem depois de o cursor pular para o dedo fica para o quadro
@@ -380,7 +515,8 @@ void glfwPollEvents() {
         for (; n < g_inputQueue.size(); ++n) {
             const InputEvent& e = g_inputQueue[n];
             if (e.kind == InputEvent::Button && e.action == GLFW_PRESS && moved) break;
-            if (e.kind == InputEvent::Cursor) moved = true;
+            if (e.kind == InputEvent::Touch && e.action == kTouchDown && moved) break;
+            if (e.kind == InputEvent::Cursor || (e.kind == InputEvent::Touch && e.action != kTouchDown)) moved = true;
         }
         events.assign(g_inputQueue.begin(), g_inputQueue.begin() + static_cast<std::ptrdiff_t>(n));
         g_inputQueue.erase(g_inputQueue.begin(), g_inputQueue.begin() + static_cast<std::ptrdiff_t>(n));
@@ -420,6 +556,9 @@ void glfwPollEvents() {
             case InputEvent::Scroll:
                 if (g_window.scrollCb) g_window.scrollCb(&g_window, e.x, e.y);
                 break;
+            case InputEvent::Touch:
+                rotearToque(e);
+                break;
         }
     }
     const int w = windowW(), h = windowH();
@@ -436,6 +575,10 @@ void glfwPollEvents() {
 void glfwGetFramebufferSize(GLFWwindow*, int* w, int* h) {
     if (w) *w = static_cast<int>(std::lround(windowW() * displayScale()));
     if (h) *h = static_cast<int>(std::lround(windowH() * displayScale()));
+}
+void glfwGetWindowSize(GLFWwindow*, int* w, int* h) {
+    if (w) *w = windowW();
+    if (h) *h = windowH();
 }
 void glfwSetWindowUserPointer(GLFWwindow* w, void* p) { if (w) w->user = p; }
 void* glfwGetWindowUserPointer(GLFWwindow* w) { return w ? w->user : nullptr; }
@@ -513,7 +656,7 @@ void android_main(android_app* app) {
     // Globais sobrevivem entre activities no mesmo processo: a recriada (o
     // sistema destroi a primeira, p.ex. ao girar) nao pode herdar nada.
     g_window = GLFWwindow{};
-    g_touch = Touch{};
+    soltarDedos();
     g_closeRequested = false;
     g_windowReady = false;
     g_engineDone = false;

@@ -77,6 +77,12 @@ declare ui: {
     -- Size of the interface in pixels (the unit of ui.dragged): scale a drag
     -- by it so scrolling feels the same on any screen.
     size: () -> (number, number),
+    -- Seconds the finger (mouse button) has been held on a press that started
+    -- on the element; 0 when not. With ui.released: hold to preview, let go
+    -- to confirm.
+    held: (selector: string) -> number,
+    -- The press that started on the element was let go over it this frame.
+    released: (selector: string) -> boolean,
     -- Drops everything the script set; the file decides again.
     reset: () -> (),
 }
@@ -305,6 +311,9 @@ declare input: {
     -- Shows or hides the on-screen touch stick (phone builds with a touch
     -- pad); show it only where it is used, such as free exploration.
     touch_pad: (on: boolean) -> (),
+    -- Double tap on the camera area (phone) or double right click (PC), true
+    -- for one frame. The engine does nothing with it; the game decides.
+    double_tapped: () -> boolean,
 }
 
 -- Models placed in the map.
