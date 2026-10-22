@@ -42,6 +42,26 @@ public:
     static void clearUiTouchRects();
     static void addUiTouchRect(float x0, float y0, float x1, float y1);
     static bool inUiTouchRect(float x, float y);
+    // Elementos CSS que o script consulta (ui.clicked, ui.held...): o dedo que
+    // pousa num deles e' da interface, nunca do analogico. Valem o quadro em
+    // que foram publicados e o seguinte (o toque chega antes do script rodar).
+    static void addCssTouchRect(float x0, float y0, float x1, float y1);
+    static bool inCssTouchRect(float x, float y);
+    // ANALOGICO FLUTUANTE (celular): a interface publica a cada quadro a zona
+    // em que um dedo vira analogico (largura 0 = sem analogico); o dedo que
+    // pousa nela leva a base consigo e o pino segue o dedo. Os outros dedos
+    // seguem livres (camera, interface).
+    struct TouchStick { bool active = false; glm::vec2 base{0.0f}, pos{0.0f}; };
+    static void setStickZone(const glm::vec4& zone) { s_stickZone = zone; }
+    static bool inStickZone(float x, float y);
+    static void stickTouch(bool down, float x, float y);
+    static void stickMove(float x, float y) { s_touchStick.pos = glm::vec2(x, y); }
+    static TouchStick& touchStick() { return s_touchStick; }
+    // Duplo toque na area da camera (celular) ou duplo clique direito (PC):
+    // verdadeiro no quadro seguinte ao gesto, por um quadro. O motor nao faz
+    // nada com ele; o jogo decide (reenquadrar a camera, por exemplo).
+    static void signalDoubleTap() { s_doubleTapPending = true; }
+    static bool isDoubleTapped() { return s_doubleTap; }
     static void shutdown();
     static void update();
     // CONTROLE DE TOQUE (Engine::drawTouchPad): tecla virtual segurada pela
@@ -96,6 +116,9 @@ private:
     static std::array<bool, 512> s_keysPhys; // so' o teclado
     static std::array<bool, 512> s_keysVirt; // so' o controle de toque
     static glm::vec2 s_virtStick;
+    static glm::vec4 s_stickZone;
+    static TouchStick s_touchStick;
+    static bool s_doubleTapPending, s_doubleTap;
     static std::array<bool, 8> s_mouse;
     static std::array<bool, 8> s_mousePrev;
     // Apertou neste quadro, mesmo que ja' tenha soltado (toque curto do

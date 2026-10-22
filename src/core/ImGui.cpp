@@ -379,6 +379,7 @@ void Engine::drawTouchPad() {
     }();
     if (!m_touchPadVisible) {
         Input::clearUiTouchRects();
+        Input::setStickZone(glm::vec4(0.0f));
         Input::setVirtualStick(glm::vec2(0.0f));
         for (Key k : {Key::Left, Key::Right, Key::Up, Key::Down}) Input::setVirtualKey(k, false);
         for (const Botao& b : botoes) Input::setVirtualKey(b.key, false);
@@ -396,29 +397,50 @@ void Engine::drawTouchPad() {
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                                    ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
 
-    // Analogico: base fixa, o pino segue o dedo ate' a borda.
+    // Analogico. No celular e' FLUTUANTE: qualquer dedo que pousa na zona da
+    // esquerda (40% da largura, abaixo do quarto de cima) leva a base para
+    // onde pousou e o pino segue o dedo, sem disputar com o dedo da camera
+    // (roteador de toque do shim). Solto, volta ao canto, meio transparente.
+    // No PC o mouse e' um so': base fixa no canto, arrastada pelo ImGui.
     const float r = m_touchHudFont->FontSize * 2.6f;
     const ImVec2 size(r * 2.6f, r * 2.6f);
     const ImVec2 corner(vp->WorkPos.x + pad, vp->WorkPos.y + vp->WorkSize.y - pad - size.y);
-    const ImVec2 c(corner.x + size.x * 0.5f, corner.y + size.y * 0.5f);
+    ImVec2 c(corner.x + size.x * 0.5f, corner.y + size.y * 0.5f);
+    ImVec2 tilt(0.0f, 0.0f);
+    bool held = false;
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+#ifdef __ANDROID__
+    const glm::vec4 zone(vp->WorkPos.x, vp->WorkPos.y + vp->WorkSize.y * 0.25f, vp->WorkPos.x + vp->WorkSize.x * 0.4f,
+                         vp->WorkPos.y + vp->WorkSize.y);
+    Input::setStickZone(zone);
+    Input::TouchStick& stick = Input::touchStick();
+    if (stick.active) {
+        // A base nao sai da zona (o anel inteiro fica na tela).
+        stick.base = glm::clamp(stick.base, glm::vec2(zone.x + r, zone.y + r), glm::vec2(zone.z - r, zone.w - r));
+        c = ImVec2(stick.base.x, stick.base.y);
+        tilt = ImVec2((stick.pos.x - c.x) / r, (stick.pos.y - c.y) / r);
+        held = true;
+    }
+#else
     ImGui::SetNextWindowPos(corner, ImGuiCond_Always);
     ImGui::SetNextWindowSize(size, ImGuiCond_Always);
     ImGui::Begin("##pad_analogico", nullptr, flags);
     publishRect();
     ImGui::SetCursorScreenPos(corner);
     ImGui::InvisibleButton("##pad_pino", size);
-    ImVec2 tilt(0.0f, 0.0f);
     if (ImGui::IsItemActive()) {
         const ImVec2 m = ImGui::GetIO().MousePos;
         tilt = ImVec2((m.x - c.x) / r, (m.y - c.y) / r);
-        const float len = std::sqrt(tilt.x * tilt.x + tilt.y * tilt.y);
-        if (len > 1.0f) tilt = ImVec2(tilt.x / len, tilt.y / len);
+        held = true;
     }
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddCircleFilled(c, r, IM_COL32(20, 20, 30, 90), 48);
-    dl->AddCircle(c, r, IM_COL32(255, 255, 255, 110), 48, 3.0f);
-    dl->AddCircleFilled(ImVec2(c.x + tilt.x * r, c.y + tilt.y * r), r * 0.42f, IM_COL32(255, 255, 255, 150), 32);
     ImGui::End();
+#endif
+    const float len = std::sqrt(tilt.x * tilt.x + tilt.y * tilt.y);
+    if (len > 1.0f) tilt = ImVec2(tilt.x / len, tilt.y / len);
+    const float a = held ? 1.0f : 0.5f;
+    dl->AddCircleFilled(c, r, IM_COL32(20, 20, 30, int(90 * a)), 48);
+    dl->AddCircle(c, r, IM_COL32(255, 255, 255, int(110 * a)), 48, 3.0f);
+    dl->AddCircleFilled(ImVec2(c.x + tilt.x * r, c.y + tilt.y * r), r * 0.42f, IM_COL32(255, 255, 255, int(150 * a)), 32);
     Input::setVirtualStick(glm::vec2(tilt.x, tilt.y));
     constexpr float kSeta = 0.5f;
     Input::setVirtualKey(Key::Left, tilt.x < -kSeta);

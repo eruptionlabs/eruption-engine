@@ -1,6 +1,7 @@
 // Personagens da cena (NPC): sprite de 8 direções (PNG ou .spr do importador),
 // posição e direção. Ficam parados ou andam até um ponto quando um script
 // manda; o desenho segue as mesmas regras do sprite do jogador.
+#include <chrono>
 #include "core/Engine.hpp"
 
 #include "core/Logger.hpp"
@@ -452,20 +453,72 @@ glm::vec2 Engine::uiCursor() const {
             winH > 0 ? m.y * io.DisplaySize.y / float(winH) : m.y};
 }
 
+bool Engine::uiTouchRect(const std::string& selector, CSSRect& r) {
+    if (selector == "minimap") {
+        if (m_minimapScreenFrame + 2 < m_framesCount) return false;
+        r = CSSRect{m_minimapScreen.x, m_minimapScreen.y, m_minimapScreen.z - m_minimapScreen.x,
+                    m_minimapScreen.w - m_minimapScreen.y};
+    } else {
+        if (!m_uiDocument.shown(selector) || m_uiArea.z <= 0.0f) return false;
+        if (!m_uiDocument.rectOf(selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w, r)) return false;
+    }
+    Input::addCssTouchRect(r.x, r.y, r.x + r.w, r.y + r.h);
+    return true;
+}
+
+static bool dentro(const CSSRect& r, const glm::vec2& p) {
+    return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+}
+
 bool Engine::uiClicked(const std::string& selector) {
+    // O retangulo sai antes do teste do clique: publica a area tocavel a cada
+    // quadro, com ou sem toque.
+    CSSRect r;
+    if (!uiTouchRect(selector, r)) return false;
     if (!Input::isMousePressed(MouseButton::Left)) return false;
     const glm::vec2 m = Input::mousePosition();
     if (Input::inUiTouchRect(m.x, m.y)) return false; // analogico do controle de toque
-    const glm::vec2 c = uiCursor();
-    const float px = c.x, py = c.y;
-    if (selector == "minimap") {
-        return m_minimapScreenFrame + 2 >= m_framesCount && px >= m_minimapScreen.x && px <= m_minimapScreen.z &&
-               py >= m_minimapScreen.y && py <= m_minimapScreen.w;
+    return dentro(r, uiCursor());
+}
+
+void Engine::updateUiHold() {
+    UiHold& h = m_uiHold;
+    if (h.frame == m_framesCount) return; // uma vez por quadro, por mais chamadas que haja
+    h.frame = m_framesCount;
+#ifdef __ANDROID__
+    constexpr MouseButton kDedo = MouseButton::Right;
+#else
+    constexpr MouseButton kDedo = MouseButton::Left;
+#endif
+    const double agora = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    h.released = false;
+    if (Input::isMousePressed(kDedo)) {
+        const glm::vec2 m = Input::mousePosition();
+        h.active = !Input::inUiTouchRect(m.x, m.y);
+        h.start = h.end = uiCursor();
+        h.t0 = h.t1 = agora;
+    } else if (h.active) {
+        h.end = uiCursor();
+        h.t1 = agora;
+        if (!Input::isMouseDown(kDedo)) {
+            h.active = false;
+            h.released = true;
+        }
     }
-    if (!m_uiDocument.shown(selector) || m_uiArea.z <= 0.0f) return false;
+}
+
+float Engine::uiHeld(const std::string& selector) {
+    updateUiHold();
     CSSRect r;
-    if (!m_uiDocument.rectOf(selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w, r)) return false;
-    return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+    if (!uiTouchRect(selector, r) || !m_uiHold.active || !dentro(r, m_uiHold.start)) return 0.0f;
+    return static_cast<float>(m_uiHold.t1 - m_uiHold.t0);
+}
+
+bool Engine::uiReleased(const std::string& selector) {
+    updateUiHold();
+    CSSRect r;
+    if (!uiTouchRect(selector, r) || !m_uiHold.released) return false;
+    return dentro(r, m_uiHold.start) && dentro(r, m_uiHold.end);
 }
 
 glm::vec2 Engine::uiDragged(const std::string& selector) {
@@ -491,10 +544,9 @@ glm::vec2 Engine::uiDragged(const std::string& selector) {
             d.active = false;
         }
     }
-    if (!d.moving || (d.delta.x == 0.0f && d.delta.y == 0.0f)) return glm::vec2(0.0f);
-    if (!m_uiDocument.shown(selector) || m_uiArea.z <= 0.0f) return glm::vec2(0.0f);
     CSSRect r;
-    if (!m_uiDocument.rectOf(selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w, r)) return glm::vec2(0.0f);
+    if (!uiTouchRect(selector, r)) return glm::vec2(0.0f);
+    if (!d.moving || (d.delta.x == 0.0f && d.delta.y == 0.0f)) return glm::vec2(0.0f);
     const bool inside = d.start.x >= r.x && d.start.x <= r.x + r.w && d.start.y >= r.y && d.start.y <= r.y + r.h;
     return inside ? d.delta : glm::vec2(0.0f);
 }

@@ -640,6 +640,18 @@ public:
     // da interface, se o toque comecou dentro do elemento; 0,0 ate' passar da
     // folga, para um toque parado nao rolar nada.
     glm::vec2 uiDragged(const std::string& selector);
+    // Segurar e soltar (ui.held / ui.released): segundos com o dedo (o mouse)
+    // apertado num toque que comecou no elemento, e se soltou em cima dele
+    // neste quadro. O "dedo" e' o botao que pousa: direito no celular (o
+    // esquerdo de la' e' o toque curto sintetico), esquerdo no PC.
+    float uiHeld(const std::string& selector);
+    bool uiReleased(const std::string& selector);
+    // Retangulo do elemento na tela, publicado como area tocavel (um dedo que
+    // pousa nele e' da interface, nao do analogico). Falso se nao esta' na tela.
+    bool uiTouchRect(const std::string& selector, CSSRect& r);
+    struct UiHold { glm::vec2 start{0.0f}, end{0.0f}; double t0 = 0.0, t1 = 0.0; bool active = false, released = false; int frame = -1; };
+    UiHold m_uiHold;
+    void updateUiHold();
     glm::vec2 uiCursor() const;
     struct UiDrag { glm::vec2 start{0.0f}, last{0.0f}, delta{0.0f}; bool active = false, moving = false; int frame = -1; };
     UiDrag m_uiDrag;
