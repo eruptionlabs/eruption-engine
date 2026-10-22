@@ -1797,39 +1797,69 @@ void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& o
     // inclui o tremor (13-29 Hz), o centro de duas tochas juntas balancava
     // entre elas a cada quadro e a sombra por luz pontual tremia junto
     // (bancada de cintilacao, andar entre tochas, 720p a 60 quadros/s).
+    // FUSAO CONTINUA: a luz a menos de 0,3 raio do centro de um grupo entra
+    // inteira nele; a mais de 0,5 raio fica sozinha; entre os dois, parte vai
+    // ao grupo e o resto forma outro, na mesma proporcao. Com o entra/sai
+    // seco, um grupo de duas luzes se partia num quadro quando elas se
+    // afastavam: o centro saltava ~22 u e a sombra de sprite que vinha dele
+    // pulava 0,51 de forca (lanterna andando para longe da chama de uma tocha).
     struct Cluster {
         Vec3 pos{0.0f}, color{0.0f};
         float weight = 0.0f, radius = 0.0f, intensity = 0.0f;
-        uint32_t count = 0;
+        float count = 0.0f; // fontes somadas, fracionario (parte de uma luz conta parte)
     };
     std::vector<Cluster> clusters;
+    auto add = [](Cluster& c, const Light& l, float steady, float part) {
+        const float w = std::max(steady, 1e-4f) * part;
+        if (c.weight > 0.0f) {
+            const Vec3 cp = c.pos / c.weight;
+            const float grown = std::max(c.radius, l.radius + 0.5f * glm::length(cp - l.position));
+            c.radius += (grown - c.radius) * part; // cresce com a parte que entra
+        } else {
+            c.radius = l.radius;
+        }
+        c.pos += l.position * w;
+        c.color += l.color * w;
+        c.weight += w;
+        c.intensity += l.intensity * part;
+        c.count += part;
+    };
     for (const Gathered& g : all) {
         const Light& l = g.light;
+        // Grupo que a alcanca (o primeiro, como antes) e a parte que entra.
         Cluster* hit = nullptr;
+        float part = 0.0f;
         for (Cluster& c : clusters) {
-            const Vec3 cp = c.pos / std::max(c.weight, 1e-6f);
-            if (glm::length(cp - l.position) < 0.5f * std::max(c.radius, l.radius)) {
+            const float r = std::max(c.radius, l.radius);
+            const float in = 1.0f - glm::smoothstep(0.3f * r, 0.5f * r, glm::length(c.pos / c.weight - l.position));
+            if (in > 0.0f) {
                 hit = &c;
+                part = in;
                 break;
             }
         }
-        if (!hit) {
-            if (clusters.size() >= max) continue; // longe e sem vaga: fica de fora
+        if (hit) add(*hit, l, g.steady, part);
+        const float rest = 1.0f - part;
+        if (rest <= 1e-3f) continue;
+        if (clusters.size() < max) {
             clusters.emplace_back();
-            hit = &clusters.back();
+            add(clusters.back(), l, g.steady, rest);
+            continue;
         }
-        const float w = std::max(g.steady, 1e-4f);
-        if (hit->weight > 0.0f) {
-            const Vec3 cp = hit->pos / hit->weight;
-            hit->radius = std::max(hit->radius, l.radius + 0.5f * glm::length(cp - l.position));
-        } else {
-            hit->radius = l.radius;
+        // Sem vaga: o resto vai ao grupo mais perto, sumindo entre 0,5 e 1
+        // raio (antes caia fora inteiro: com o orcamento cheio, partir um
+        // grupo apagava a luz que saia dele).
+        Cluster* closest = nullptr;
+        float closestIn = 0.0f;
+        for (Cluster& c : clusters) {
+            const float r = std::max(c.radius, l.radius);
+            const float in = 1.0f - glm::smoothstep(0.5f * r, r, glm::length(c.pos / c.weight - l.position));
+            if (in > closestIn) {
+                closest = &c;
+                closestIn = in;
+            }
         }
-        hit->pos += l.position * w;
-        hit->color += l.color * w;
-        hit->weight += w;
-        hit->intensity += l.intensity;
-        ++hit->count;
+        if (closest) add(*closest, l, g.steady, rest * closestIn);
     }
     out.reserve(clusters.size());
     for (const Cluster& c : clusters) {
@@ -1839,8 +1869,10 @@ void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& o
         l.radius = c.radius;
         // A soma cresce mais devagar que o numero de fontes: dez fogueiras
         // juntas clareiam mais que uma, mas nao dez vezes (some saturando).
-        l.intensity = c.intensity / std::sqrt(float(c.count));
-        l.steadyIntensity = c.weight / std::sqrt(float(c.count));
+        // Ate' uma fonte nao divide: as duas partes de uma luz em transicao
+        // somam a luz inteira.
+        l.intensity = c.intensity / std::sqrt(std::max(c.count, 1.0f));
+        l.steadyIntensity = c.weight / std::sqrt(std::max(c.count, 1.0f));
         out.push_back(l);
     }
 }
