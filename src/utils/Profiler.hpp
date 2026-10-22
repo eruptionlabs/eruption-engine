@@ -51,6 +51,8 @@ public:
     static float getGpuTime(const std::string& name);
     static const std::unordered_map<std::string, float>& getAllGpuTimes();
     static void resetGpuTimeByName();
+    // Soma da GPU do ultimo quadro completo (todos os passes lidos); 0 antes do primeiro.
+    static float lastGpuTotalMs();
 
     static void setSmoothFrames(int frames);
     static int getSmoothFrames();
@@ -67,6 +69,7 @@ private:
     static float s_gpuTimeMs[static_cast<int>(ProfilerCategory::Count)];
 
     static std::unordered_map<std::string, float> s_gpuTimeByName;
+    static inline float s_lastGpuTotalMs = 0.0f;
 
     // Rolling history for CPU/GPU times
     static int s_smoothFrames;
