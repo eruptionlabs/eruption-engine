@@ -90,8 +90,12 @@ void main() {
     float yOff = i_texRect.y;
     float centerY = i_texRect.w;
 
+    // Encolhe/estica em torno do PE' (base do quadro), nao do centro: com o
+    // centro, 0,94 levantava a base ~3% da altura do sprite, e a luz pontual
+    // baixa e distante esticava essa folga no chao - a sombra comecava 4-5 u
+    // longe do pe', com um vao entre os dois.
     float dilation = max(planarParams.x, 0.01);
-    vec2 localUV = a_position * dilation;
+    vec2 localUV = vec2(a_position.x * dilation, (a_position.y + 0.5) * dilation - 0.5);
 
     // Build local offset in VIEW space using the SAME math as sprite.vert
     vec3 localPos = viewRight * (xOff + localUV.x * scaleX) +
