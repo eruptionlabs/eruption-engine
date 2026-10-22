@@ -109,6 +109,7 @@ ExportReport exportGame(const ExportOptions& o) {
     addDir("assets/data", all);
     addDir("shaders", [](const fs::path& p) { return p.extension() == ".spv"; });
     addDir("assets/icon", all); // ícone da janela e logo da abertura
+    addDir("assets/fonts", all); // fonte da interface do jogo (Engine::initImGui)
     add("assets/sprites/default.png");
     add("assets/sprites/default.spr");
     // Scripts do jogo (o arquivo de tipos é só do editor).

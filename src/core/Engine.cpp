@@ -2479,6 +2479,60 @@ double Engine::deviceMemoryMb() const {
     return static_cast<double>(deviceBytes) / (1024.0 * 1024.0);
 }
 
+// FONTE DA INTERFACE DO JOGO: assets/fonts/ui.ttf (ou .otf) do projeto troca
+// a fonte embutida do ImGui (so' Latin-1) com as faixas de idiomas europeus,
+// cirilico e japones (kana e os kanji comuns). assets/fonts/ui_extra.* entra
+// mesclada nas mesmas faixas, para o glifo que a primeira nao tem, e
+// assets/fonts/ui.json {"size": px} muda o tamanho base (14 px). Sem fonte no
+// projeto nada muda.
+static std::filesystem::path projectFont(const std::string& stem) {
+    for (const char* ext : {".ttf", ".otf"}) {
+        std::filesystem::path p = project::game("assets/fonts/" + stem + ext);
+        if (std::filesystem::exists(p)) return p;
+    }
+    return {};
+}
+
+static bool addProjectUiFont(ImGuiIO& io) {
+    const std::filesystem::path main = projectFont("ui");
+    if (main.empty()) return false;
+    float size = 14.0f;
+    if (std::ifstream f(project::game("assets/fonts/ui.json")); f) {
+        try {
+            size = std::clamp(json::parse(f).value("size", size), 8.0f, 64.0f);
+        } catch (const std::exception& e) {
+            ERUPTION_LOG_WARN("[UI] assets/fonts/ui.json: %s", e.what());
+        }
+    }
+    static ImVector<ImWchar> s_ranges; // o atlas le' as faixas ate' o Build
+    if (s_ranges.empty()) {
+        static const ImWchar kExtra[] = {0x0100, 0x017F, 0x0400, 0x04FF, 0x2010, 0x206F,
+                                         0x2122, 0x2122, 0x2190, 0x21FF, 0};
+        ImFontGlyphRangesBuilder b;
+        b.AddRanges(io.Fonts->GetGlyphRangesJapanese()); // ja' traz 0x20-0xFF
+        b.AddRanges(kExtra);
+        b.BuildRanges(&s_ranges);
+    }
+    // Sem sobreamostragem: com ~3 mil kanji ela dobra o atlas, e a fonte do
+    // jogo costuma ser desenhada para o tamanho em que roda.
+    ImFontConfig cfg;
+    cfg.OversampleH = cfg.OversampleV = 1;
+    cfg.PixelSnapH = true;
+    if (!io.Fonts->AddFontFromFileTTF(main.string().c_str(), size, &cfg, s_ranges.Data)) {
+        ERUPTION_LOG_WARN("[UI] fonte ilegivel: %s", main.string().c_str());
+        return false;
+    }
+    const std::filesystem::path extra = projectFont("ui_extra");
+    if (!extra.empty()) {
+        cfg.MergeMode = true;
+        if (!io.Fonts->AddFontFromFileTTF(extra.string().c_str(), size, &cfg, s_ranges.Data))
+            ERUPTION_LOG_WARN("[UI] fonte ilegivel: %s", extra.string().c_str());
+    }
+    ERUPTION_LOG_INFO("[UI] fonte do projeto: %s%s, %.0f px", main.filename().string().c_str(),
+                      extra.empty() ? "" : (" + " + extra.filename().string()).c_str(), static_cast<double>(size));
+    return true;
+}
+
 void Engine::initImGui() {
     VkDescriptorPoolSize poolSizes[] = { {VK_DESCRIPTOR_TYPE_SAMPLER, 1000}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000}, {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000}, {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000}, {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000}, {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000} };
     VkDescriptorPoolCreateInfo poolInfo{}; poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -2509,9 +2563,10 @@ void Engine::initImGui() {
             if (uiFont) break;
         }
     }
+    const bool gameFont = !uiFont && !m_editorMode && addProjectUiFont(io);
     ImFontConfig fontCfg; fontCfg.SizePixels = 14.0f;
-    if (!uiFont) io.Fonts->AddFontDefault(&fontCfg);
-    if (std::filesystem::exists("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")) {
+    if (!uiFont && !gameFont) io.Fonts->AddFontDefault(&fontCfg);
+    if (!gameFont && std::filesystem::exists("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")) {
         static const ImWchar koreanRanges[] = { 0xAC00, 0xD7A3, 0x3131, 0x318E, 0x4E00, 0x9FFF, 0xFF00, 0xFFEF, 0 };
         ImFontConfig cjkCfg; cjkCfg.MergeMode = true; cjkCfg.SizePixels = 14.0f; cjkCfg.OversampleH = 1; cjkCfg.OversampleV = 1;
         io.Fonts->AddFontFromFileTTF("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 14.0f, &cjkCfg, koreanRanges);
@@ -2530,7 +2585,13 @@ void Engine::initImGui() {
         bigCfg.GlyphRanges = kDigits;
         io.Fonts->AddFontDefault(&bigCfg);
     }
+    const auto buildStart = std::chrono::steady_clock::now();
     io.Fonts->Build();
+    // Atlas da fonte do projeto: com o japones e' o que pesa no inicio e na
+    // memoria do celular, entao sai no log de toda partida.
+    if (gameFont)
+        ERUPTION_LOG_WARN("[UI] atlas de fontes %dx%d em %.1f ms", io.Fonts->TexWidth, io.Fonts->TexHeight,
+                          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart).count());
     ImGui_ImplGlfw_InitForVulkan(m_window.handle(), false);
     ImGui_ImplVulkan_InitInfo initInfo{};
     initInfo.Instance = m_vulkan.instance(); initInfo.PhysicalDevice = m_vulkan.physicalDevice(); initInfo.Device = m_vulkan.device();
