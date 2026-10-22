@@ -1,5 +1,6 @@
 #include "editor/GameExport.hpp"
 
+#include "formats/GroundPack.hpp"
 #include "scene/SceneEdits.hpp"
 #include "script/LuauChunk.hpp"
 
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -31,6 +33,34 @@ bool followsReferences(const fs::path& rel) {
     const std::string e = rel.extension().string();
     const std::string top = rel.begin() != rel.end() ? rel.begin()->string() : std::string();
     return e == ".luau" || e == ".env" || (e == ".json" && top != "data");
+}
+
+// CHAO EMPACOTADO: o <mapa>.glb + <mapa>.ter de um mapa gerado vao como um
+// <mapa>.relevo (formats/GroundPack: 30 MB -> 1,45 MB num mapa de 601x601),
+// que a carga desempacota. So' quando a volta reproduz os dois; senao o par
+// vai como esta' e o relatorio diz por que.
+std::set<fs::path> packGrounds(const fs::path& outDir, const std::set<fs::path>& files,
+                               const std::function<fs::path(const fs::path&)>& sourceOf, ExportReport& report) {
+    std::set<fs::path> packed;
+    for (const auto& rel : files) {
+        if (rel.extension() != ".glb") continue;
+        const fs::path ter = fs::path(rel).replace_extension(".ter");
+        if (!files.count(ter)) continue;
+        std::error_code ec;
+        const fs::path dst = outDir / fs::path(rel).replace_extension(".relevo");
+        fs::create_directories(dst.parent_path(), ec);
+        std::string error;
+        if (!packGround(sourceOf(rel), sourceOf(ter), dst, error)) {
+            report.groundKept.push_back(rel.generic_string() + ": " + error);
+            continue;
+        }
+        packed.insert(rel);
+        packed.insert(ter);
+        ++report.groundPacked;
+        ++report.files;
+        report.bytes += fs::file_size(dst, ec);
+    }
+    return packed;
 }
 
 } // namespace
@@ -145,7 +175,9 @@ ExportReport exportGame(const ExportOptions& o) {
         report.error = "Could not create " + o.outDir.string() + ": " + ec.message();
         return report;
     }
+    const std::set<fs::path> packed = packGrounds(o.outDir, files, srcOf, report);
     for (const auto& rel : files) {
+        if (packed.count(rel)) continue;
         const fs::path dst = o.outDir / rel;
         fs::create_directories(dst.parent_path(), ec);
         if (rel.extension() == ".luau") {
