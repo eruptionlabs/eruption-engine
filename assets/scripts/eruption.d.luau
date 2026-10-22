@@ -255,6 +255,8 @@ declare characters: {
     shake: (name: string, amplitude: number?, seconds: number?) -> (),
     lunge: (name: string, towards: vector, distance: number?, seconds: number?) -> (),
     pop: (name: string, amount: number?, seconds: number?) -> (),
+    -- Size that stays (1 = the sheet's size); pop, shake and the rest act on top.
+    set_scale: (name: string, scale: number) -> (),
     fade: (name: string, to: number, seconds: number?) -> (),
 }
 
@@ -303,6 +305,10 @@ declare fx: {
 
 
 declare input: {
+    -- Key names as in on.key, or a controller button (any connected
+    -- controller, Xbox layout): "pad_a", "pad_b", "pad_x", "pad_y",
+    -- "pad_lb", "pad_rb", "pad_back", "pad_start", "pad_guide", "pad_ls",
+    -- "pad_rs", "pad_up", "pad_right", "pad_down", "pad_left".
     down: (key: string) -> boolean,
     -- True only on the frame the key went down.
     pressed: (key: string) -> boolean,
@@ -314,6 +320,9 @@ declare input: {
     -- Double tap on the camera area (phone) or double right click (PC), true
     -- for one frame. The engine does nothing with it; the game decides.
     double_tapped: () -> boolean,
+    -- Name of the first connected controller, or nil: show button prompts
+    -- instead of key prompts while it is there.
+    gamepad: () -> string?,
 }
 
 -- Models placed in the map.
@@ -412,6 +421,47 @@ declare lights: {
     -- Whether this light casts sprite shadows (characters.set_shadow("lights")).
     -- Turn it off on a light the game moves along with the party.
     set_sprite_shadow: (index: number, on: boolean) -> (),
+}
+
+-- Machine readings for a performance meter. A field is nil where this
+-- machine does not report it. Temperatures in degrees Celsius.
+type PerfSystem = {
+    ram_mb: number?,            -- memory of this process
+    vram_mb: number?,           -- GPU memory allocated by the engine
+    cpu_percent: number?,       -- this process, of the whole machine
+    gpu_percent: number?,       -- the whole GPU
+    cpu_temp: number?,
+    gpu_temp: number?,
+    gpu_watts: number?,
+    battery: number?,           -- charge, 0 to 100
+    battery_temp: number?,
+    battery_watts: number?,     -- power drawn from (or into) the battery
+    charging: boolean?,
+    -- Phones: "none", "light", "moderate", "severe", "critical",
+    -- "emergency", "shutdown" (the system throttles from "moderate" on).
+    thermal: string?,
+    -- Phones: 1.0 = the point where the system starts to throttle.
+    thermal_headroom: number?,
+}
+
+-- Performance counters for an on-screen meter: the numbers the engine already
+-- measures for its debug panel and telemetry.
+declare perf: {
+    -- Frames per second over the last half second.
+    fps: () -> number,
+    -- The last frame, in ms: wall time (for graphs and the 1% low), CPU work
+    -- (simulation, scripts, recording; no waiting for the GPU, vsync or the
+    -- FPS cap) and GPU time, nil where the GPU has no timers.
+    frame: () -> (number, number, number?),
+    -- Scene width and height, scale (scene / screen), then screen width and
+    -- height, in pixels.
+    resolution: () -> (number, number, number, number, number),
+    -- Frame limiter in frames per second, 0 = none. The graphics preset sets
+    -- it (30 on phones); a change lasts until the preset is applied again.
+    fps_cap: () -> number,
+    set_fps_cap: (fps: number) -> (),
+    -- Temperatures, battery and memory, read at most once a second.
+    system: () -> PerfSystem,
 }
 
 -- Particle effects (Window > Effects). `name` is an effect of the game
