@@ -996,6 +996,12 @@ int characters_pop(lua_State* L) {
                        static_cast<float>(luaL_optnumber(L, 3, 0.2)));
     return 0;
 }
+int characters_set_scale(lua_State* L) {
+    const int idx = eng().findCharacter(luaL_checkstring(L, 1));
+    if (idx < 0) luaL_error(L, "no character named '%s' in this map", lua_tostring(L, 1));
+    eng().scaleCharacter(idx, static_cast<float>(luaL_checknumber(L, 2)));
+    return 0;
+}
 int characters_fade(lua_State* L) {
     const int idx = eng().findCharacter(luaL_checkstring(L, 1));
     if (idx < 0) luaL_error(L, "no character named '%s' in this map", lua_tostring(L, 1));
@@ -1524,7 +1530,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"hide", characters_hide}, {"set_sprite", characters_set_sprite},
         {"add", characters_add},
         {"flash", characters_flash}, {"shake", characters_shake}, {"lunge", characters_lunge},
-        {"pop", characters_pop}, {"fade", characters_fade}, {nullptr, nullptr}};
+        {"pop", characters_pop}, {"fade", characters_fade}, {"set_scale", characters_set_scale},
+        {nullptr, nullptr}};
     static const luaL_Reg lights[] = {
         {"count", lights_count}, {"position", lights_position}, {"set_position", lights_set_position},
         {"color", lights_color}, {"set_color", lights_set_color}, {"intensity", lights_intensity},
@@ -1810,6 +1817,8 @@ declare characters: {
     shake: (name: string, amplitude: number?, seconds: number?) -> (),
     lunge: (name: string, towards: vector, distance: number?, seconds: number?) -> (),
     pop: (name: string, amount: number?, seconds: number?) -> (),
+    -- Size that stays (1 = the sheet's size); pop, shake and the rest act on top.
+    set_scale: (name: string, scale: number) -> (),
     fade: (name: string, to: number, seconds: number?) -> (),
 }
 

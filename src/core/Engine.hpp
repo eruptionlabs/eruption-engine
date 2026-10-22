@@ -336,6 +336,7 @@ public:
             Vec3 lungeDir{0.0f};        // avanco do golpe: vai e volta
             float lungeDist = 0.0f, lungeLeft = 0.0f, lungeTotal = 0.0f;
             float popScale = 0.0f;      // estica/amassa (0 = nada)
+            float scale = 1.0f;         // tamanho que fica (characters.set_scale)
             float popLeft = 0.0f, popTotal = 0.0f;
             float fade = 1.0f;          // opacidade (morte, entrada em cena)
             float fadeTo = 1.0f, fadeLeft = 0.0f, fadeTotal = 0.0f, fadeFrom = 1.0f;
@@ -623,6 +624,7 @@ public:
     // Investida: anda `distance` na direcao de `towards` e volta.
     void lungeCharacter(int index, const Vec3& towards, float distance, float seconds);
     void popCharacter(int index, float amount, float seconds);
+    void scaleCharacter(int index, float scale);
     void fadeCharacter(int index, float to, float seconds);
     // Desenho 2D por cima da cena: numeros que sobem, clarao de
     // tela e a interface montada pelo script (ui2d). Vem DEPOIS dos baloes.

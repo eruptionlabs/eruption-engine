@@ -255,6 +255,11 @@ void Engine::popCharacter(int index, float amount, float seconds) {
     f.popTotal = f.popLeft = std::max(1e-3f, seconds);
 }
 
+void Engine::scaleCharacter(int index, float scale) {
+    if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
+    m_characters[static_cast<size_t>(index)].fx.scale = std::max(0.05f, scale);
+}
+
 void Engine::fadeCharacter(int index, float to, float seconds) {
     if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
     SceneCharacter::Fx& f = m_characters[static_cast<size_t>(index)].fx;
@@ -337,7 +342,7 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         const float k = t < 0.34f ? t / 0.34f : 1.0f - (t - 0.34f) / 0.66f;
         fxOffset += f.lungeDir * (f.lungeDist * k);
     }
-    float fxScale = 1.0f;
+    float fxScale = f.scale;
     if (f.popLeft > 0.0f) {
         const float t = 1.0f - f.popLeft / std::max(1e-4f, f.popTotal);
         fxScale += f.popScale * std::sin(t * 3.14159265f);
