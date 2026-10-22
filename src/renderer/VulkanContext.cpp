@@ -242,7 +242,11 @@ void VulkanContext::transitionNow(VkImage image, VkImageLayout layout, VkImageAs
 }
 
 bool VulkanContext::beginFrame() {
-    if (m_deviceLost) return false;
+    // Sem swapchain: a superficie foi solta (Android, janela devolvida ao
+    // sistema) e nao voltou - o app fechou durante a pausa. A carga ainda
+    // desenha a barra dos shaders; o acquire com swapchain nulo derrubava o app
+    // (SIGSEGV em 0 dentro do libvulkan) quando a tela apagava na carga.
+    if (m_deviceLost || m_swapchain == VK_NULL_HANDLE) return false;
 
     // ERUPTION_DEBUG_PRESENT=1: mede onde o frame realmente para. Existe um
     // custo fixo de ~6,5 ms por frame que NAO depende de cena, clima, preset
@@ -1199,6 +1203,7 @@ bool VulkanContext::restoreSurface() {
 }
 
 bool VulkanContext::recreateSwapchain() {
+    if (m_surface == VK_NULL_HANDLE) return false; // superficie solta (ver beginFrame)
     waitIdle();
 
     cleanupSwapchain();
