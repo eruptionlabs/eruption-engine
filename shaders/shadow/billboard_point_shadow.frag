@@ -46,6 +46,13 @@ layout(set = 1, binding = 0) uniform FrameUBO {
 // Profundidade da cena (so' leitura, depois do passe forward). D32 sem filtro.
 layout(set = 2, binding = 0) uniform sampler2D u_sceneDepth;
 
+// Cobertura do sprite neste UV (paleta: indice 0 e' transparente).
+float silhouette(vec2 uv) {
+    vec4 albedo = texture(u_textures[nonuniformEXT(v_texIndex)], uv);
+    if ((v_flags & 256u) != 0u) return albedo.r * 255.0 < 0.5 ? 0.0 : 1.0;
+    return albedo.a;
+}
+
 void main() {
     ivec2 px = ivec2(gl_FragCoord.xy);
     float depth = texelFetch(u_sceneDepth, px, 0).r;
@@ -89,13 +96,14 @@ void main() {
     if (flipU) uv.x = 1.0 - uv.x;
     if ((v_flags & 2u) != 0u) uv.y = 1.0 - uv.y;
 
-    vec4 albedo = texture(u_textures[nonuniformEXT(v_texIndex)], uv);
-    if ((v_flags & 256u) != 0u) albedo.a = albedo.r * 255.0 < 0.5 ? 0.0 : 1.0;
-    if (albedo.a < 0.01) discard;
+    float alpha = silhouette(uv);
+    // Luz de lado: uniao com o espelho (ver o vertice).
+    if (v_offs.w > 0.0) alpha = max(alpha, v_offs.w * silhouette(vec2(1.0 - uv.x, uv.y)));
+    if (alpha < 0.01) discard;
 
     // Clareia do pe' para a ponta (80% mais clara no topo) e some perto do
     // teto de 2x: a sombra de luz proxima se espalha com a distancia.
     float strength = v_light.w * mix(1.0, 0.2, qy + 0.5) * (1.0 - smoothstep(1.7, 2.0, 1.0 / s));
-    float darken = 1.0 - albedo.a * strength * 0.75;
+    float darken = 1.0 - alpha * strength * 0.75;
     outShadow = vec4(darken, darken, darken, 1.0);
 }
