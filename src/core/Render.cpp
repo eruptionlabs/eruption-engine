@@ -1148,15 +1148,9 @@ void Engine::render() {
         if (spriteCount > 0) {
             const int kind = spriteShadowKind();
             if (kind >= 1) {
-                // O disco do pe' vai depois deste passe, como decal (precisa
-                // ler a profundidade): ver o trecho apos o cmdEndRendering.
-                if (kind == 2) {
-                    static std::vector<SpritePointShadow> pointShadows;
-                    collectSpritePointShadows(pointShadows);
-                    Vec2 planarParams(m_charConfig.planarShadowDilation, m_charConfig.planarShadowSoftness);
-                    m_spriteRenderer.renderBillboardPointShadows(cmd, frameUbo, planarParams,
-                                                                 m_spriteSystem.instanceBuffer(), pointShadows);
-                }
+                // O disco do pe' e a sombra de luz pontual vao depois deste
+                // passe, como decal (precisam ler a profundidade): ver o
+                // trecho apos o cmdEndRendering.
             } else {
                 Vec2 planarParams(m_charConfig.planarShadowDilation, m_charConfig.planarShadowSoftness);
                 m_spriteRenderer.renderBillboardPlanarShadows(cmd, frameUbo, m_shadowRenderer.currentLightDir(),
@@ -1202,9 +1196,14 @@ void Engine::render() {
             decalColor.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             m_vulkan.writeTimestamp(cmd, 60, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             m_vulkan.cmdBeginRendering(cmd, {decalColor}, nullptr, nullptr, renderExtent());
+            static std::vector<SpritePointShadow> pointShadows;
+            pointShadows.clear();
+            if (spriteShadowKind() == 2) collectSpritePointShadows(pointShadows);
             Vec2 circleParams(m_charConfig.circleShadowDilation, m_charConfig.circleShadowSoftness);
+            Vec2 planarParams(m_charConfig.planarShadowDilation, m_charConfig.planarShadowSoftness);
             m_spriteRenderer.renderBillboardCircleShadows(cmd, frameUbo, circleParams, m_spriteSystem.instanceBuffer(),
-                                                          m_spriteSystem.visibleCount(), m_gbuffer.depthView());
+                                                          m_spriteSystem.visibleCount(), m_gbuffer.depthView(),
+                                                          planarParams, pointShadows);
             m_vulkan.cmdEndRendering(cmd);
             m_vulkan.writeTimestamp(cmd, 61, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             Profiler::addGpuTime("Sprite Shadow Decal", m_vulkan.timestampDeltaMs(60, 61));
