@@ -104,8 +104,17 @@ const std::unordered_map<std::string, float>& Profiler::getAllGpuTimes() {
 }
 
 void Profiler::resetGpuTimeByName() {
+    // Antes de zerar: o total do quadro que acabou (o mapa so' fica completo aqui).
+    float total = 0.0f;
+    // "Post Total" envolve os passes do pos e "Lens Drops*" se repete dentro
+    // dele: somar os dois contaria o pos duas vezes (o F3 tambem os pula).
+    for (const auto& [name, ms] : s_gpuTimeByName)
+        if (name != "Post Total" && name.rfind("Lens Drops", 0) != 0) total += ms;
+    if (total > 0.0f) s_lastGpuTotalMs = total;
     s_gpuTimeByName.clear();
 }
+
+float Profiler::lastGpuTotalMs() { return s_lastGpuTotalMs; }
 
 void Profiler::setSmoothFrames(int frames) {
     if (frames < 1) frames = 1;
