@@ -544,9 +544,47 @@ int camera_set_orbit(lua_State* L) {
 
 // ---------------------------------------------------------------- input
 
+// Botões de controle pelo nome "pad_*", na ordem do GLFW (layout Xbox: A
+// embaixo, B à direita). Qualquer controle ligado vale: menu de jogo não
+// pergunta qual. -1 = não é nome de botão.
+int padButtonFromName(const char* name) {
+    static const char* const kPad[] = {"pad_a", "pad_b", "pad_x", "pad_y", "pad_lb", "pad_rb",
+                                       "pad_back", "pad_start", "pad_guide", "pad_ls", "pad_rs",
+                                       "pad_up", "pad_right", "pad_down", "pad_left"};
+    for (int b = 0; b < 15; ++b)
+        if (equalsNoCase(name, kPad[b])) return b;
+    return -1;
+}
+bool padButton(int button, bool pressed) {
+    for (int jid = 0; jid < 4; ++jid) {
+        if (!Input::isGamepadPresent(jid)) continue;
+        if (pressed ? Input::isGamepadButtonPressed(button, jid) : Input::isGamepadButtonDown(button, jid))
+            return true;
+    }
+    return false;
+}
+
 int input_down(lua_State* L) {
-    const Key k = scriptKeyFromName(luaL_checkstring(L, 1));
+    const char* name = luaL_checkstring(L, 1);
+    const int b = padButtonFromName(name);
+    if (b >= 0) {
+        lua_pushboolean(L, padButton(b, false));
+        return 1;
+    }
+    const Key k = scriptKeyFromName(name);
     lua_pushboolean(L, k != Key::Unknown && Input::isKeyDown(k));
+    return 1;
+}
+// Nome do primeiro controle ligado, ou nil: o jogo troca o desenho das
+// teclas pelo dos botões.
+int input_gamepad(lua_State* L) {
+    for (int jid = 0; jid < 4; ++jid) {
+        if (!Input::isGamepadPresent(jid)) continue;
+        const char* n = Input::getGamepadName(jid);
+        lua_pushstring(L, n && n[0] ? n : "gamepad");
+        return 1;
+    }
+    lua_pushnil(L);
     return 1;
 }
 // Tela de toque (o Android; ERUPTION_TEST_TOUCH=1 finge no PC, para testar a
@@ -570,7 +608,13 @@ int input_touch(lua_State* L) {
     return 1;
 }
 int input_pressed(lua_State* L) {
-    const Key k = scriptKeyFromName(luaL_checkstring(L, 1));
+    const char* name = luaL_checkstring(L, 1);
+    const int b = padButtonFromName(name);
+    if (b >= 0) {
+        lua_pushboolean(L, padButton(b, true));
+        return 1;
+    }
+    const Key k = scriptKeyFromName(name);
     lua_pushboolean(L, k != Key::Unknown && Input::isKeyPressed(k));
     return 1;
 }
@@ -1521,7 +1565,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg fx[] = {
         {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash}, {"dim", fx_dim},
         {"fading", fx_fading}, {nullptr, nullptr}};
-    static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {"touch", input_touch}, {"touch_pad", input_touch_pad}, {"double_tapped", input_double_tapped}, {nullptr, nullptr}};
+    static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {"touch", input_touch}, {"touch_pad", input_touch_pad}, {"double_tapped", input_double_tapped}, {"gamepad", input_gamepad}, {nullptr, nullptr}};
     static const luaL_Reg models[] = {
         {"count", models_count}, {"preload", models_preload}, {"find", models_find}, {"name", models_name},
         {"position", models_position}, {"set_position", models_set_position}, {"near", models_near},
@@ -1885,6 +1929,10 @@ declare fx: {
 
 
 declare input: {
+    -- Key names as in on.key, or a controller button (any connected
+    -- controller, Xbox layout): "pad_a", "pad_b", "pad_x", "pad_y",
+    -- "pad_lb", "pad_rb", "pad_back", "pad_start", "pad_guide", "pad_ls",
+    -- "pad_rs", "pad_up", "pad_right", "pad_down", "pad_left".
     down: (key: string) -> boolean,
     -- True only on the frame the key went down.
     pressed: (key: string) -> boolean,
@@ -1896,6 +1944,9 @@ declare input: {
     -- Double tap on the camera area (phone) or double right click (PC), true
     -- for one frame. The engine does nothing with it; the game decides.
     double_tapped: () -> boolean,
+    -- Name of the first connected controller, or nil: show button prompts
+    -- instead of key prompts while it is there.
+    gamepad: () -> string?,
 }
 
 -- Models placed in the map.
