@@ -724,6 +724,7 @@ void Editor::update(float dt) {
         ERUPTION_LOG_WARN("[EXPORT] files=%zu compiled=%zu neighbors=%zu bytes=%llu missing=%zu error=%s", r.files, r.compiled, r.neighbors,
                           static_cast<unsigned long long>(r.bytes), r.missing.size(), r.error.c_str());
         for (const auto& m : r.missing) ERUPTION_LOG_WARN("[EXPORT] missing %s", m.c_str());
+        for (const auto& g : r.groundKept) ERUPTION_LOG_WARN("[EXPORT] ground kept as .glb + .ter: %s", g.c_str());
     }
     // ERUPTION_TEST_EDITOR_AI=<chave>|<mensagem>: abre o assistente e envia
     // (teste do caminho do pedido; com chave falsa a API só recusa, sem custo).

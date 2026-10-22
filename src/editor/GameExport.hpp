@@ -33,6 +33,8 @@ struct ExportReport {
     std::vector<std::string> missing; // citado em algum arquivo mas não existe
     size_t compiled = 0;               // .luau que foram como bytecode
     size_t neighbors = 0;              // mapas vizinhos (mundo contínuo) que foram junto
+    size_t groundPacked = 0;           // chao de mapa (.glb + .ter) que foi como .relevo
+    std::vector<std::string> groundKept; // chao que nao empacotou: "<arquivo>: motivo"
     std::string error;
 };
 
