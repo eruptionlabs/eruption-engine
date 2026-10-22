@@ -298,6 +298,14 @@ vec4 normalDoLado(vec4 texel, ProjLado p, mat3 TBN) {
     return vec4(ts * 0.5 + 0.5, texel.a);
 }
 
+// Mantem as duas camadas de maior peso (slot e peso). Slot vazio ou peso
+// zero nao entra; empate fica com a que chegou antes (como o laco antigo).
+void topDuas(uint s, float p, inout uint s0, inout float p0, inout uint s1, inout float p1) {
+    if ((s & 0x3FFFu) == 0u || p <= 0.0) return;
+    if (p > p0) { s1 = s0; p1 = p0; s0 = s; p0 = p; }
+    else if (p > p1) { s1 = s; p1 = p; }
+}
+
 // Uma camada do splat: cor (sempre) e, quando vierem, normal e MRAH-W, todos
 // com o MESMO ladrilhamento estocastico da cor (deslocamento diferente entre
 // cor e relevo le como textura deslocada). Camada com peso zero neste pixel
@@ -656,33 +664,32 @@ void main() {
         // base (que nao muda) e saem da media, renormalizada. Mesma ideia do
         // splat por "top-k" de terrenos grandes (Andersson, "Terrain Rendering
         // in Frostbite Using Procedural Shader Splatting", SIGGRAPH 2007).
-        uint slots[8];
-        float pesos[8];
-        slots[0] =  inSplatTex.x        & 0xFFFFu; pesos[0] = w.r;
-        slots[1] = (inSplatTex.x >> 16) & 0xFFFFu; pesos[1] = w.g;
-        slots[2] =  inSplatTex.y        & 0xFFFFu; pesos[2] = w.b;
-        slots[3] = (inSplatTex.y >> 16) & 0xFFFFu; pesos[3] = w.a;
+        //
+        // Sem array local indexado por variavel (slots[i0]): o compilador pode
+        // guardar esse array na memoria de rascunho, e num celular as mascaras
+        // com o top-2 levavam o G-buffer de 18 para 70 ms. Cada camada passa
+        // por topDuas com o slot e o peso em registrador (4060: G-buffer de
+        // 6,28 para 5,60 ms no andar de caverna, imagem igual dentro do ruido).
+        uint s0 = 0u, s1 = 0u;
+        float p0 = 0.0, p1 = 0.0;
+        topDuas( inSplatTex.x        & 0xFFFFu, w.r, s0, p0, s1, p1);
+        topDuas((inSplatTex.x >> 16) & 0xFFFFu, w.g, s0, p0, s1, p1);
+        topDuas( inSplatTex.y        & 0xFFFFu, w.b, s0, p0, s1, p1);
+        topDuas((inSplatTex.y >> 16) & 0xFFFFu, w.a, s0, p0, s1, p1);
         float wBaseSum = w.r + w.g + w.b + w.a;
         // Segunda mascara (camadas 4..7 - dobra o splat pra 9 no total com a
         // base). Mesma UV da primeira, indice de material proprio. Inerte
         // (peso 0) em qualquer GLB que so' tenha o splat de 4.
         vec4 w2 = inBlendMaskIndex2 != 0u ? texture(u_textures[nonuniformEXT(inBlendMaskIndex2)], inBlendMaskUV) : vec4(0.0);
-        slots[4] =  inSplatTex2.x        & 0xFFFFu; pesos[4] = w2.r;
-        slots[5] = (inSplatTex2.x >> 16) & 0xFFFFu; pesos[5] = w2.g;
-        slots[6] =  inSplatTex2.y        & 0xFFFFu; pesos[6] = w2.b;
-        slots[7] = (inSplatTex2.y >> 16) & 0xFFFFu; pesos[7] = w2.a;
+        topDuas( inSplatTex2.x        & 0xFFFFu, w2.r, s0, p0, s1, p1);
+        topDuas((inSplatTex2.x >> 16) & 0xFFFFu, w2.g, s0, p0, s1, p1);
+        topDuas( inSplatTex2.y        & 0xFFFFu, w2.b, s0, p0, s1, p1);
+        topDuas((inSplatTex2.y >> 16) & 0xFFFFu, w2.a, s0, p0, s1, p1);
         wBaseSum += w2.r + w2.g + w2.b + w2.a;
-        int i0 = -1, i1 = -1;
-        float p0 = 0.0, p1 = 0.0;
-        for (int k = 0; k < 8; ++k) {
-            if ((slots[k] & 0x3FFFu) == 0u || pesos[k] <= 0.0) continue;
-            if (pesos[k] > p0) { i1 = i0; p1 = p0; i0 = k; p0 = pesos[k]; }
-            else if (pesos[k] > p1) { i1 = k; p1 = pesos[k]; }
-        }
         vec3 acc = vec3(0.0);
         float sum = 0.0;
-        if (i0 >= 0) camadaSplat(slots[i0], p0, uv, ddxUV, ddyUV, quebraLadrilho, topo, ladoX, ladoZ, TBN, acc, sum, splatNormal, splatNormalW, splatMrahw, splatMrahwW);
-        if (i1 >= 0) camadaSplat(slots[i1], p1, uv, ddxUV, ddyUV, quebraLadrilho, topo, ladoX, ladoZ, TBN, acc, sum, splatNormal, splatNormalW, splatMrahw, splatMrahwW);
+        if (s0 != 0u) camadaSplat(s0, p0, uv, ddxUV, ddyUV, quebraLadrilho, topo, ladoX, ladoZ, TBN, acc, sum, splatNormal, splatNormalW, splatMrahw, splatMrahwW);
+        if (s1 != 0u) camadaSplat(s1, p1, uv, ddxUV, ddyUV, quebraLadrilho, topo, ladoX, ladoZ, TBN, acc, sum, splatNormal, splatNormalW, splatMrahw, splatMrahwW);
 
         float wBase = max(0.0, 1.0 - wBaseSum);
         acc += texColor.rgb * wBase;
