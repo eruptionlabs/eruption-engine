@@ -186,19 +186,18 @@ public:
     void renderShadow(VkCommandBuffer cmd, VkPipelineLayout shadowLayout, const Mat4& lightSpaceMatrix, const FrameUBO& frameUbo, VkBuffer instanceBuffer, uint32_t count);
     
     // Projected Planar Shadow for billboards — renders a flattened sprite silhouette on the ground.
-    // Uma sombra planar por (sprite, luz pontual): mesmo pipeline da planar do
-    // sol, com a luz no push constant (shadowLightDir.w < 0).
-    void renderBillboardPointShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo, const Vec2& planarParams,
-                                     VkBuffer instanceBuffer, const std::vector<SpritePointShadow>& shadows);
     void renderBillboardPlanarShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo, const Vec3& shadowLightDir,
                                       const Vec2& planarParams, VkBuffer instanceBuffer, uint32_t count);
 
     // Sombra de disco no pe' como DECAL: avalia a pegada no ponto visivel lido
     // de `sceneDepth` (shader read-only). Fora do passe forward, num trecho so'
     // com a imagem lit (sem anexo de profundidade).
+    // `pointShadows` (sombra por luz pontual, characters.set_shadow("lights"))
+    // sai no mesmo trecho, tambem como decal: billboard_point_shadow.vert.
     void renderBillboardCircleShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo,
                                       const Vec2& circleParams, VkBuffer instanceBuffer, uint32_t count,
-                                      VkImageView sceneDepth);
+                                      VkImageView sceneDepth, const Vec2& planarParams,
+                                      const std::vector<SpritePointShadow>& pointShadows);
 
     uint32_t spriteCount() const { return m_spriteCount; }
 
@@ -253,6 +252,7 @@ private:
     VkPipeline m_shadowPipeline = VK_NULL_HANDLE;
     VkPipeline m_planarShadowPipeline = VK_NULL_HANDLE;
     VkPipeline m_circleShadowPipeline = VK_NULL_HANDLE;
+    VkPipeline m_pointShadowPipeline = VK_NULL_HANDLE; // decal da sombra de luz pontual
     // Decal do disco: sets 0-1 iguais aos do sprite + set 2 com a profundidade,
     // um por quadro em voo (escrito antes do desenho, a imagem muda com a escala).
     static constexpr uint32_t kDecalFrames = 3;
@@ -307,6 +307,7 @@ private:
     bool createShadowPipeline();
     bool createPlanarShadowPipeline();
     bool createCircleShadowPipeline();
+    VkPipeline createDecalPipeline(const std::string& shaderBase);
 };
 
 } // namespace eruption

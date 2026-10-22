@@ -51,6 +51,10 @@ void SpriteRenderer::shutdown() {
         vkDestroyPipeline(m_ctx->device(), m_circleShadowPipeline, nullptr);
         m_circleShadowPipeline = VK_NULL_HANDLE;
     }
+    if (m_pointShadowPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_ctx->device(), m_pointShadowPipeline, nullptr);
+        m_pointShadowPipeline = VK_NULL_HANDLE;
+    }
     if (m_decalPipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(m_ctx->device(), m_decalPipelineLayout, nullptr);
         m_decalPipelineLayout = VK_NULL_HANDLE;
@@ -880,37 +884,6 @@ void SpriteRenderer::renderBillboardPlanarShadows(VkCommandBuffer cmd, const Fra
     vkCmdDraw(cmd, 6, count, 0, 0);
 }
 
-void SpriteRenderer::renderBillboardPointShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo, const Vec2& planarParams,
-                                                 VkBuffer instanceBuffer, const std::vector<SpritePointShadow>& shadows) {
-    if (shadows.empty() || m_planarShadowPipeline == VK_NULL_HANDLE) return;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_planarShadowPipeline);
-    VkViewport viewport{};
-    viewport.width = static_cast<float>(m_gbuffer->extent().width);
-    viewport.height = static_cast<float>(m_gbuffer->extent().height);
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-    VkRect2D scissor{};
-    scissor.extent = m_gbuffer->extent();
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
-    VkBuffer vertexBuffers[2] = {m_quadVertexBuffer, instanceBuffer};
-    VkDeviceSize offsets[2] = {0, 0};
-    vkCmdBindVertexBuffers(cmd, 0, 2, vertexBuffers, offsets);
-    VkDescriptorSet sets[2] = {m_bindless->set(), m_frameUboSet};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 2, sets, 0, nullptr);
-    struct PlanarPushConstants {
-        Mat4 viewProjection;
-        Vec4 shadowLightDir;
-        Vec2 planarParams;
-    } push;
-    push.viewProjection = frameUbo.viewProjection;
-    push.planarParams = planarParams;
-    for (const SpritePointShadow& s : shadows) {
-        push.shadowLightDir = Vec4(s.light, -s.strength);
-        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
-        vkCmdDraw(cmd, 6, 1, 0, s.instance);
-    }
-}
-
 bool SpriteRenderer::createPlanarShadowPipeline() {
     auto vertCode = ShaderCompiler::loadSPIRV("shaders/shadow/billboard_planar_shadow.vert.spv");
     auto fragCode = ShaderCompiler::loadSPIRV("shaders/shadow/billboard_planar_shadow.frag.spv");
@@ -1014,7 +987,8 @@ bool SpriteRenderer::createPlanarShadowPipeline() {
 
 void SpriteRenderer::renderBillboardCircleShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo,
                                                   const Vec2& circleParams, VkBuffer instanceBuffer, uint32_t count,
-                                                  VkImageView sceneDepth) {
+                                                  VkImageView sceneDepth, const Vec2& planarParams,
+                                                  const std::vector<SpritePointShadow>& pointShadows) {
     if (count == 0 || sceneDepth == VK_NULL_HANDLE || m_circleShadowPipeline == VK_NULL_HANDLE) return;
 
     VkDescriptorSet depthSet = m_decalDepthSets[m_ctx->currentFrame() % kDecalFrames];
@@ -1075,6 +1049,17 @@ void SpriteRenderer::renderBillboardCircleShadows(VkCommandBuffer cmd, const Fra
                             0, 3, sets, 0, nullptr);
 
     vkCmdDraw(cmd, 6, count, 0, 0);
+
+    // Uma sombra por (sprite, luz pontual), no mesmo set de profundidade: o
+    // descritor e' escrito uma vez por quadro, antes de qualquer desenho.
+    if (pointShadows.empty() || m_pointShadowPipeline == VK_NULL_HANDLE) return;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pointShadowPipeline);
+    push.circleParams = planarParams;
+    for (const SpritePointShadow& s : pointShadows) {
+        push.shadowLightDir = Vec4(s.light, s.strength);
+        vkCmdPushConstants(cmd, m_decalPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
+        vkCmdDraw(cmd, 6, 1, 0, s.instance);
+    }
 }
 
 bool SpriteRenderer::createCircleShadowPipeline() {
@@ -1128,11 +1113,20 @@ bool SpriteRenderer::createCircleShadowPipeline() {
     decalLayoutInfo.pPushConstantRanges = &pushRange;
     VK_CHECK(vkCreatePipelineLayout(m_ctx->device(), &decalLayoutInfo, nullptr, &m_decalPipelineLayout));
 
-    auto vertCode = ShaderCompiler::loadSPIRV("shaders/shadow/billboard_circle_shadow.vert.spv");
-    auto fragCode = ShaderCompiler::loadSPIRV("shaders/shadow/billboard_circle_shadow.frag.spv");
+    m_circleShadowPipeline = createDecalPipeline("shaders/shadow/billboard_circle_shadow");
+    m_pointShadowPipeline = createDecalPipeline("shaders/shadow/billboard_point_shadow");
+    return m_circleShadowPipeline != VK_NULL_HANDLE && m_pointShadowPipeline != VK_NULL_HANDLE;
+}
+
+// Pipeline de decal de sombra (disco do pe', sombra de luz pontual): mesma
+// entrada de vertice dos sprites, layout com a profundidade no set 2 e mistura
+// multiplicativa.
+VkPipeline SpriteRenderer::createDecalPipeline(const std::string& shaderBase) {
+    auto vertCode = ShaderCompiler::loadSPIRV(shaderBase + ".vert.spv");
+    auto fragCode = ShaderCompiler::loadSPIRV(shaderBase + ".frag.spv");
     if (vertCode.empty() || fragCode.empty()) {
-        ERUPTION_LOG_ERROR("Failed to load billboard circle shadow shaders");
-        return false;
+        ERUPTION_LOG_ERROR("Failed to load decal shadow shaders %s", shaderBase.c_str());
+        return VK_NULL_HANDLE;
     }
 
     VkShaderModule vertModule;
@@ -1220,10 +1214,7 @@ bool SpriteRenderer::createCircleShadowPipeline() {
 
     vkDestroyShaderModule(m_ctx->device(), vertModule, nullptr);
     vkDestroyShaderModule(m_ctx->device(), fragModule, nullptr);
-
-    if (pipeline == VK_NULL_HANDLE) return false;
-    m_circleShadowPipeline = pipeline;
-    return true;
+    return pipeline;
 }
 
 void SpriteRenderer::renderShadow(VkCommandBuffer cmd, VkPipelineLayout shadowLayout, const Mat4& lightSpaceMatrix, const FrameUBO& frameUbo, VkBuffer instanceBuffer, uint32_t count) {
