@@ -211,10 +211,29 @@ void Engine::endSplatEditing() {
 }
 
 
-static std::vector<uint8_t> splatRgba(const ImageData& img) {
-    return img.channels == 4 ? img.pixels
-                             : resampleRGBA(img.pixels.data(), img.width, img.height, img.channels,
-                                            uint32_t(img.width), uint32_t(img.height));
+// RGBA da camada, reduzida pela metade (media 2x2, como um nivel de mip) ate'
+// caber em maxSize. As camadas subiam no tamanho do arquivo (2048) mesmo com
+// texture_max_size 256 no preset: 8 camadas x cor, normal e MRAH-W passavam de
+// 400 MB com mips e o celular fraco fechava o jogo por falta de memoria.
+static std::vector<uint8_t> splatRgba(const ImageData& img, uint32_t maxSize, uint32_t& w, uint32_t& h) {
+    w = uint32_t(img.width);
+    h = uint32_t(img.height);
+    std::vector<uint8_t> rgba = img.channels == 4 ? img.pixels : resampleRGBA(img.pixels.data(), img.width, img.height, img.channels, w, h);
+    while (std::max(w, h) > maxSize && w > 1 && h > 1) {
+        const uint32_t hw = w / 2, hh = h / 2;
+        std::vector<uint8_t> half(size_t(hw) * hh * 4);
+        for (uint32_t y = 0; y < hh; ++y)
+            for (uint32_t x = 0; x < hw; ++x)
+                for (int c = 0; c < 4; ++c) {
+                    const uint8_t* p = rgba.data() + (size_t(2 * y) * w + 2 * x) * 4 + c;
+                    const uint32_t sum = p[0] + p[4] + p[size_t(w) * 4] + p[size_t(w) * 4 + 4];
+                    half[(size_t(y) * hw + x) * 4 + c] = uint8_t((sum + 2) / 4);
+                }
+        rgba = std::move(half);
+        w = hw;
+        h = hh;
+    }
+    return rgba;
 }
 
 // Imagem de camada: a ja' decodificada por prefetchSplatLayers, senao do disco.
@@ -309,8 +328,9 @@ uint32_t Engine::uploadSplatLayer(TextureResource& colorTex, TextureResource& no
     if (!range) first = m_bindless.allocateSlot();
     if (first == 0) return 0;
     auto upload = [&](const ImageData& img, TextureResource& tex, uint32_t slot) {
-        const std::vector<uint8_t> rgba = splatRgba(img);
-        if (!createTextureFromPixels(rgba.data(), img.width, img.height, tex)) return false;
+        uint32_t w = 0, h = 0;
+        const std::vector<uint8_t> rgba = splatRgba(img, uint32_t(m_textureMaxSize), w, h);
+        if (!createTextureFromPixels(rgba.data(), int(w), int(h), tex)) return false;
         tex.slot = slot;
         m_bindless.updateTexture(slot, tex.view, m_defaultSampler);
         return true;
@@ -353,7 +373,7 @@ bool Engine::addSplatLayer(const std::string& png) {
     sp.layerSlot[l] = packedSlot;
     sp.layerNames[l] = png;
     sp.layerFiles[l] = png;
-    ERUPTION_LOG_WARN("Terrain layer %d: %s (%ux%u) no slot %u%s%s", l, png.c_str(), img.width, img.height, tex.slot,
+    ERUPTION_LOG_WARN("Terrain layer %d: %s (%ux%u) no slot %u%s%s", l, png.c_str(), tex.width, tex.height, tex.slot,
                       (packedSlot & kSplatHasNormal) ? " +normal" : "", (packedSlot & kSplatHasMrahw) ? " +mrahw" : "");
     // Os vértices do chão passam a ler as máscaras e as camadas.
     const uint32_t packed[4] = {sp.layerSlot[0] | (sp.layerSlot[1] << 16), sp.layerSlot[2] | (sp.layerSlot[3] << 16),
