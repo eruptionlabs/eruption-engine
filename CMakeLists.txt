@@ -831,6 +831,14 @@ if(ERUPTION_BUILD_TESTS)
         target_compile_options(eruption-object-tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME ObjectWorldTests COMMAND eruption-object-tests)
+
+    add_executable(eruption-ground-pack-tests tests/test_ground_pack.cpp src/formats/GroundPack.cpp)
+    target_include_directories(eruption-ground-pack-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(eruption-ground-pack-tests PRIVATE nlohmann_json::nlohmann_json)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-ground-pack-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME GroundPackTests COMMAND eruption-ground-pack-tests)
 endif()
 
 # Generate Linux .desktop shortcut
