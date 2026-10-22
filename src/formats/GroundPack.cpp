@@ -390,6 +390,20 @@ std::string groundSourceFor(const std::string& glbPath) {
     return fs::exists(relevo, ec) ? relevo.string() : std::string();
 }
 
+// Versoes antigas do mesmo mapa no cache (<mapa>_<outra chave>) saem: cada
+// atualizacao do .relevo deixaria mais 30-60 MB no aparelho para sempre.
+static void removeOtherVersions(const fs::path& keep, const std::string& stem) {
+    const std::string prefix = stem + "_";
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(keep.parent_path(), ec)) {
+        const std::string name = e.path().filename().string();
+        if (e.path() == keep || name.size() != prefix.size() + 16 || name.compare(0, prefix.size(), prefix) != 0) continue;
+        if (name.find_first_not_of("0123456789abcdef", prefix.size()) != std::string::npos) continue;
+        std::error_code rmEc;
+        fs::remove_all(e.path(), rmEc);
+    }
+}
+
 bool unpackGroundCached(const fs::path& relevo, fs::path& glbOut, fs::path& terOut, std::string& error) {
     const uint64_t key = fileFnv64(relevo);
     if (key == 0) {
@@ -403,7 +417,10 @@ bool unpackGroundCached(const fs::path& relevo, fs::path& glbOut, fs::path& terO
     glbOut = dir / (stem + ".glb");
     terOut = dir / (stem + ".ter");
     std::error_code ec;
-    if (fs::exists(glbOut, ec) && fs::exists(terOut, ec)) return true;
+    if (fs::exists(glbOut, ec) && fs::exists(terOut, ec)) {
+        removeOtherVersions(dir, stem);
+        return true;
+    }
     fs::create_directories(dir, ec);
     // Grava com outro nome e renomeia: uma carga interrompida no meio nao
     // deixa um .glb pela metade que a proxima aceitaria.
@@ -415,6 +432,7 @@ bool unpackGroundCached(const fs::path& relevo, fs::path& glbOut, fs::path& terO
         error = "could not write " + dir.string() + ": " + ec.message();
         return false;
     }
+    removeOtherVersions(dir, stem);
     return true;
 }
 
