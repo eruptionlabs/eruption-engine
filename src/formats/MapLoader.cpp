@@ -1,4 +1,5 @@
 #include "formats/MapLoader.hpp"
+#include "formats/GroundPack.hpp"
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "core/JobSystem.hpp"
@@ -488,7 +489,7 @@ bool MapLoader::loadFromGlb() {
         };
         glbPath.clear();
         for (const auto& c : candidates) {
-            if (fs::exists(c)) {
+            if (fs::exists(c) || fs::exists(fs::path(c).replace_extension(".relevo"))) {
                 glbPath = c;
                 break;
             }
@@ -497,13 +498,31 @@ bool MapLoader::loadFromGlb() {
             ERUPTION_LOG_WARN("MapLoader: no GLB candidate found for '%s'", m_loadingMap->mapName.c_str());
             return false;
         }
-    } else if (!fs::exists(glbPath)) {
+    } else if (!fs::exists(glbPath) && !fs::exists(fs::path(glbPath).replace_extension(".relevo"))) {
         ERUPTION_LOG_WARN("MapLoader: explicit GLB path not found: '%s'", glbPath.c_str());
         return false;
     }
 
+    // Mapa exportado com o chao empacotado: so' o .relevo existe. O .glb e o
+    // .ter saem do cache (GroundPack); glbPath continua sendo onde o .glb
+    // estaria, que e' a chave de tudo o que mora ao lado dele (.probes,
+    // pacotes assados, .nav, .env).
+    std::string readPath = glbPath;
+    fs::path relevoTer;
+    if (!fs::exists(glbPath)) {
+        const fs::path relevo = fs::path(glbPath).replace_extension(".relevo");
+        fs::path cachedGlb;
+        std::string error;
+        if (!unpackGroundCached(relevo, cachedGlb, relevoTer, error)) {
+            ERUPTION_LOG_ERROR("MapLoader: %s: %s", relevo.string().c_str(), error.c_str());
+            return false;
+        }
+        readPath = cachedGlb.string();
+        ERUPTION_LOG_WARN("MapLoader: ground from '%s' (cache %s)", relevo.string().c_str(), readPath.c_str());
+    }
+
     ERUPTION_LOG_WARN("MapLoader: loading GLB map '%s'", glbPath.c_str());
-    auto glbData = readFileBytes(glbPath);
+    auto glbData = readFileBytes(readPath);
     if (glbData.size() < 12 || std::memcmp(glbData.data(), "glTF", 4) != 0) {
         ERUPTION_LOG_ERROR("MapLoader: invalid GLB: %s", glbPath.c_str());
         return false;
@@ -529,7 +548,7 @@ bool MapLoader::loadFromGlb() {
     // .env carries the authored light/water settings so shadows keep the
     // authored direction instead of the hard-coded GLB fallback.
     fs::path glbFsPath(glbPath);
-    fs::path terPath = glbFsPath.parent_path() / (mapStem + ".ter");
+    fs::path terPath = relevoTer.empty() ? glbFsPath.parent_path() / (mapStem + ".ter") : relevoTer;
     fs::path navPath = glbFsPath.parent_path() / (mapStem + ".nav");
     fs::path envPath = glbFsPath.parent_path() / (mapStem + ".env");
 
