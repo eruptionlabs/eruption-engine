@@ -65,11 +65,12 @@ layout(push_constant) uniform PushConstants {
 // espaco de tela, como o disco: billboard_circle_shadow.vert).
 layout(location = 0) out flat vec4 v_light;  // xyz = luz, w = opacidade
 layout(location = 1) out flat vec4 v_anchor; // xyz = ancora do quadro, w = xOff
-layout(location = 2) out flat vec4 v_axis;   // xz = eixo horizontal do quadro, y = escala X, w = escala Y
+layout(location = 2) out flat vec4 v_axis;   // xz = eixo horizontal na base do quadro, y = escala X, w = escala Y
 layout(location = 3) out flat vec4 v_offs;   // x = -yOff - centerY, y = dilatacao, z = altura do pe' (relativa a ancora), w = espelho
 layout(location = 4) out flat vec4 v_plane;  // plano do billboard desenhado: normal, dot(normal, ancora)
 layout(location = 5) out flat uint v_texIndex;
 layout(location = 6) out flat uint v_flags;
+layout(location = 7) out flat vec2 v_axisTop; // eixo horizontal no alto do quadro (o da base e' v_axis.xz)
 
 void main() {
     if ((i_flags & 4u) == 0u || (i_flags & 512u) == 0u) {
@@ -78,6 +79,7 @@ void main() {
         v_anchor = vec4(0.0);
         v_axis = vec4(0.0);
         v_offs = vec4(0.0);
+        v_axisTop = vec2(0.0);
         v_plane = vec4(0.0);
         v_texIndex = i_texIndex;
         v_flags = i_flags;
@@ -97,7 +99,10 @@ void main() {
     // Eixo horizontal do quadro de sombra. O do sprite (de frente para a
     // camera) poe a base nos dois pes; com a luz de lado ele fica de quina
     // para ela e a sombra vira um risco, entao gira para ficar de frente para
-    // a luz - so' nesse caso, para a base nao sair torta do pe'. O sentido do
+    // a luz - so' nesse caso. O quadro e' torcido: a base fica sempre no eixo
+    // do sprite desenhado e so' o alto gira (rTop). Com o quadro inteiro
+    // girado, cada bota caia numa linha girada e nao sob a bota desenhada: a
+    // sombra comecava 4-7 px longe da sola com a luz alta e perto. O sentido do
     // giro (perp do lado de camR) troca quando a luz cruza o lado: ali a
     // silhueta espelharia num quadro. Perto do lado (espelho > 0) a sombra
     // vira a uniao da silhueta com o espelho dela, igual nos dois sentidos, e
@@ -106,14 +111,14 @@ void main() {
     vec3 camR = (u_inverseView * vec4(-1.0, 0.0, 0.0, 0.0)).xyz;
     camR = length(camR.xz) > 1e-3 ? normalize(vec3(camR.x, 0.0, camR.z)) : vec3(1.0, 0.0, 0.0);
     vec2 away = A.xz - L.xz;
-    vec3 r = camR;
+    vec3 rTop = camR;
     float espelho = 0.0;
     if (length(away) > 1e-3) {
         vec2 a = normalize(away);
         vec3 perp = vec3(-a.y, 0.0, a.x);
         if (dot(perp, camR) < 0.0) perp = -perp;
         float lado = abs(dot(camR.xz, a));
-        r = normalize(mix(camR, perp, smoothstep(0.5, 0.9, lado)));
+        rTop = normalize(mix(camR, perp, smoothstep(0.5, 0.9, lado)));
         espelho = smoothstep(0.8, 0.98, lado);
     }
 
@@ -124,6 +129,7 @@ void main() {
     for (int k = 0; k < 8; ++k) {
         float cx = ((k & 1) != 0 ? 0.5 : -0.5) * dilation;
         float cy = ((k & 2) != 0 ? 1.0 : 0.0) * dilation - 0.5;
+        vec3 r = (k & 2) != 0 ? rTop : camR;
         vec3 W = A + r * (xOff + cx * scaleX) + vec3(0.0, -yOff + cy * scaleY - centerY, 0.0);
         vec3 c = L + (W - L) * ((k & 4) != 0 ? 2.0 : 1.0);
         vec4 clip = viewProjection * vec4(c, 1.0);
@@ -144,7 +150,8 @@ void main() {
 
     v_light = vec4(L, clamp(shadowLightDir.w, 0.0, 1.0));
     v_anchor = vec4(A, xOff);
-    v_axis = vec4(r.x, scaleX, r.z, scaleY);
+    v_axis = vec4(camR.x, scaleX, camR.z, scaleY);
+    v_axisTop = rTop.xz;
     v_offs = vec4(-yOff - centerY, dilation, pe, espelho);
     v_plane = vec4(n, dot(n, A));
     v_texIndex = i_texIndex;

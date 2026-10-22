@@ -9,6 +9,7 @@ layout(location = 3) in flat vec4 v_offs;
 layout(location = 4) in flat vec4 v_plane;
 layout(location = 5) in flat uint v_texIndex;
 layout(location = 6) in flat uint v_flags;
+layout(location = 7) in flat vec2 v_axisTop;
 
 layout(location = 0) out vec4 outShadow;
 
@@ -63,8 +64,10 @@ void main() {
 
     vec3 L = v_light.xyz;
     vec3 A = v_anchor.xyz;
-    vec3 r = vec3(v_axis.x, 0.0, v_axis.z);
-    vec3 n = vec3(-r.z, 0.0, r.x); // normal do quadro (vertical)
+    vec3 rBase = vec3(v_axis.x, 0.0, v_axis.z);
+    vec3 rTop = vec3(v_axisTop.x, 0.0, v_axisTop.y);
+    float dil = v_offs.y;
+    float baseY = A.y + v_offs.x - 0.5 * v_axis.w; // base do quadro
 
     // Onde o raio luz -> P corta o quadro: W = L + s (P - L). So' faz sombra
     // com o quadro entre a luz e P (s < 1) e P a no maximo 2x a distancia
@@ -73,9 +76,19 @@ void main() {
     // fino atravessando a sala, e com 3x a silhueta animada e comprida
     // tremulava no chao (bancada do jogo: +32% de pixel trocando de sinal
     // contra so' o disco).
-    float den = dot(n, P - L);
-    if (abs(den) < 1e-4) discard;
-    float s = dot(n, A - L) / den;
+    // Quadro torcido (ver o vertice): o eixo horizontal vai do da base ao do
+    // alto com a altura. O corte do raio com ele converge em 3 passos (a
+    // torcao e' suave): corta no eixo atual, le' a altura, refaz o eixo.
+    vec3 r = rBase;
+    float s = 0.0;
+    for (int i = 0; i < 3; ++i) {
+        vec3 n = vec3(-r.z, 0.0, r.x); // normal do quadro (vertical)
+        float den = dot(n, P - L);
+        if (abs(den) < 1e-4) discard;
+        s = dot(n, A - L) / den;
+        float h = clamp((L.y + s * (P.y - L.y) - baseY) / (v_axis.w * dil), 0.0, 1.0);
+        r = normalize(mix(rBase, rTop, h));
+    }
     if (s < 0.5 || s >= 1.0) discard;
 
     // O proprio sprite (pixel no plano dele, acima do pe') nao se sombreia.
@@ -84,9 +97,14 @@ void main() {
 
     // Posicao no quadro (-0,5..0,5), desfazendo a dilatacao em torno da base.
     vec3 W = L + s * (P - L);
-    float dil = v_offs.y;
     float qx = (dot(W - A, r) - v_anchor.w) / v_axis.y / dil;
     float qy = ((W.y - A.y - v_offs.x) / v_axis.w + 0.5) / dil - 0.5;
+    // A sola continua um pouco abaixo da base (ate' 1/4 da altura): o chao
+    // desenhado oscila ~0,5 u em volta da altura do pe' (relevo deslocado x
+    // grade de colisao), e com a luz rasante o raio que passa abaixo da base
+    // abria um vao claro entre o pe' e a sombra (1 u de diferenca vira ~4 u
+    // com a tocha a 100 u). Abaixo da base vale a linha da sola.
+    if (qy < -0.5 && qy > -0.75) qy = -0.4999;
     if (abs(qx) > 0.5 || abs(qy) > 0.5) discard;
 
     vec2 uv = vec2(qx + 0.5, 0.5 - qy);
