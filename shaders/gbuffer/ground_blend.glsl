@@ -85,30 +85,23 @@ GroundSample gbAmostra(vec3 wp, vec3 ng, vec3 dpdx, vec3 dpdy, float lumPeca, fl
     // As duas camadas que mais pesam (mesma regra do splat do chao).
     const vec4 w1 = texture(u_textures[nonuniformEXT(u_gbSlots.x)], muv);
     const vec4 w2 = u_gbSlots.y != 0u ? texture(u_textures[nonuniformEXT(u_gbSlots.y)], muv) : vec4(0.0);
-    uint slots[8];
-    float pesos[8];
-    slots[0] =  u_gbSplat.x        & 0xFFFFu; pesos[0] = w1.r;
-    slots[1] = (u_gbSplat.x >> 16) & 0xFFFFu; pesos[1] = w1.g;
-    slots[2] =  u_gbSplat.y        & 0xFFFFu; pesos[2] = w1.b;
-    slots[3] = (u_gbSplat.y >> 16) & 0xFFFFu; pesos[3] = w1.a;
-    slots[4] =  u_gbSplat.z        & 0xFFFFu; pesos[4] = w2.r;
-    slots[5] = (u_gbSplat.z >> 16) & 0xFFFFu; pesos[5] = w2.g;
-    slots[6] =  u_gbSplat.w        & 0xFFFFu; pesos[6] = w2.b;
-    slots[7] = (u_gbSplat.w >> 16) & 0xFFFFu; pesos[7] = w2.a;
-    const float wSoma = w1.r + w1.g + w1.b + w1.a + w2.r + w2.g + w2.b + w2.a;
-    int i0 = -1, i1 = -1;
+    uint s0 = 0u, s1 = 0u; // sem array indexado por variavel (ver topDuas)
     float p0 = 0.0, p1 = 0.0;
-    for (int k = 0; k < 8; ++k) {
-        if ((slots[k] & 0x3FFFu) == 0u || pesos[k] <= 0.0) continue;
-        if (pesos[k] > p0) { i1 = i0; p1 = p0; i0 = k; p0 = pesos[k]; }
-        else if (pesos[k] > p1) { i1 = k; p1 = pesos[k]; }
-    }
+    topDuas( u_gbSplat.x        & 0xFFFFu, w1.r, s0, p0, s1, p1);
+    topDuas((u_gbSplat.x >> 16) & 0xFFFFu, w1.g, s0, p0, s1, p1);
+    topDuas( u_gbSplat.y        & 0xFFFFu, w1.b, s0, p0, s1, p1);
+    topDuas((u_gbSplat.y >> 16) & 0xFFFFu, w1.a, s0, p0, s1, p1);
+    topDuas( u_gbSplat.z        & 0xFFFFu, w2.r, s0, p0, s1, p1);
+    topDuas((u_gbSplat.z >> 16) & 0xFFFFu, w2.g, s0, p0, s1, p1);
+    topDuas( u_gbSplat.w        & 0xFFFFu, w2.b, s0, p0, s1, p1);
+    topDuas((u_gbSplat.w >> 16) & 0xFFFFu, w2.a, s0, p0, s1, p1);
+    const float wSoma = w1.r + w1.g + w1.b + w1.a + w2.r + w2.g + w2.b + w2.a;
     vec3 acc = vec3(0.0);
     float sum = 0.0;
     vec4 accN = vec4(0.0), accM = vec4(0.0);
     float sumN = 0.0, sumM = 0.0;
-    if (i0 >= 0) camadaSplat(slots[i0], p0, uv, ddx, ddy, quebrar, topo, lx, lz, tbn, acc, sum, accN, sumN, accM, sumM);
-    if (i1 >= 0) camadaSplat(slots[i1], p1, uv, ddx, ddy, quebrar, topo, lx, lz, tbn, acc, sum, accN, sumN, accM, sumM);
+    if (s0 != 0u) camadaSplat(s0, p0, uv, ddx, ddy, quebrar, topo, lx, lz, tbn, acc, sum, accN, sumN, accM, sumM);
+    if (s1 != 0u) camadaSplat(s1, p1, uv, ddx, ddy, quebrar, topo, lx, lz, tbn, acc, sum, accN, sumN, accM, sumM);
     const float wBase = max(0.0, 1.0 - wSoma);
     if (wBase > 0.0) {
         vec3 base = topo > 0.0 ? amostraChao(u_gbSlots.w, uv, ddx, ddy, quebrar, true).rgb * topo : vec3(0.0);
