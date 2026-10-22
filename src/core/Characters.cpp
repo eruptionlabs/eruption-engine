@@ -3,6 +3,7 @@
 // manda; o desenho segue as mesmas regras do sprite do jogador.
 #include <chrono>
 #include "core/Engine.hpp"
+#include "core/EngineInternal.hpp"
 
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
@@ -110,7 +111,13 @@ void Engine::walkCharacter(int index, const Vec3& target, float seconds) {
     c.walking = c.path.size() >= 2;
 }
 
-void Engine::setPlayerStart(const Vec3& p) {
+void Engine::setPlayerStart(const Vec3& start) {
+    // No chao, como o spawn da carga (MapLoad): o Y da cena e' o do relevo de
+    // quando o ponto foi marcado. Com o relevo regravado depois, o jogador
+    // nascia 4 u acima do chao e so' descia no primeiro passo - a sombra dele
+    // comecava longe do pe'.
+    Vec3 p = start;
+    if (m_currentMap && m_currentMap->isGlbMap) p.y = clampSpawnYToWater(*m_currentMap, sampleTerrainHeight(p.x, p.z));
     m_hasPlayerStart = true;
     m_playerStart = p;
     if (m_playerController) m_playerController->setPos(p);
