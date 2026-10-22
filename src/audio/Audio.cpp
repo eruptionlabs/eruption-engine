@@ -180,6 +180,26 @@ static std::string soundPath(const std::string& file) {
     return std::string();
 }
 
+// Comprimento (na taxa do arquivo) de um som aberto em stream. O stream da
+// miniaudio le pelo VFS, e o Ogg Vorbis por ali fica no modo "push", que nao
+// sabe o comprimento (devolve 0): toda introdução .ogg caia no "sem laço" e
+// repetia do começo. Um decodificador aberto direto no arquivo usa o modo
+// "pull", que acha o fim pela ultima pagina sem decodificar o resto.
+static void streamLength(const std::string& path, ma_uint64& len, ma_uint32& rate) {
+    if (path.empty()) return;
+    ma_decoder decoder;
+    if (ma_decoder_init_file(path.c_str(), nullptr, &decoder) != MA_SUCCESS) return;
+    ma_uint64 frames = 0;
+    ma_uint32 fileRate = 0;
+    if (ma_decoder_get_length_in_pcm_frames(&decoder, &frames) == MA_SUCCESS &&
+        ma_decoder_get_data_format(&decoder, nullptr, nullptr, &fileRate, nullptr, 0) == MA_SUCCESS && frames > 0 &&
+        fileRate > 0) {
+        len = frames;
+        rate = fileRate;
+    }
+    ma_decoder_uninit(&decoder);
+}
+
 uint32_t AudioSystem::start(const std::string& file, const PlayOptions& o, bool spatial, const Vec3& pos, bool stream,
                             uint64_t startFrame) {
     if (!m->ready || file.empty()) return 0;
@@ -343,6 +363,7 @@ void AudioSystem::music(const std::string& file, float volume, float fadeSeconds
         ma_uint32 rate = 0;
         ma_sound_get_length_in_pcm_frames(v->sound, &len);
         ma_sound_get_data_format(v->sound, nullptr, nullptr, &rate, nullptr, 0);
+        if (len == 0) streamLength(soundPath(file), len, rate);
         const std::string loopPath = soundPath(loopFile);
         auto* next = new ma_sound;
         if (len > introPos && rate > 0 && !loopPath.empty() &&
@@ -358,7 +379,12 @@ void AudioSystem::music(const std::string& file, float volume, float fadeSeconds
             v->next = next;
         } else {
             delete next;
-            ma_sound_set_looping(v->sound, MA_TRUE); // sem o laço, a introdução repete
+            // Sem o laço (arquivo nao achado ou comprimento da introdução
+            // desconhecido no stream), a introdução repete - avisar, senao a
+            // emenda errada passa por "o laço voltou para o começo".
+            ERUPTION_LOG_WARN("Audio: laco %s nao emendado em %s (comprimento %llu, taxa %u); a introducao repete",
+                              loopFile.c_str(), file.c_str(), static_cast<unsigned long long>(len), rate);
+            ma_sound_set_looping(v->sound, MA_TRUE);
         }
     }
     if (resume && !chained) {
