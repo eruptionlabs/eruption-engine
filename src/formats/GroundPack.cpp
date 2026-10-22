@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -362,6 +363,56 @@ bool unpackGround(const fs::path& relevo, const fs::path& glbOut, const fs::path
         if (!writeFile(terOut, ter)) throw std::runtime_error("could not write " + terOut.string());
     } catch (const std::exception& e) {
         error = relevo.string() + ": " + e.what();
+        return false;
+    }
+    return true;
+}
+
+uint64_t fileFnv64(const fs::path& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return 0;
+    uint64_t h = 1469598103934665603ull;
+    std::vector<char> chunk(1 << 20);
+    while (f) {
+        f.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+        for (std::streamsize i = 0; i < f.gcount(); ++i) {
+            h ^= static_cast<uint8_t>(chunk[static_cast<size_t>(i)]);
+            h *= 1099511628211ull;
+        }
+    }
+    return h;
+}
+
+std::string groundSourceFor(const std::string& glbPath) {
+    std::error_code ec;
+    if (glbPath.empty() || fs::exists(glbPath, ec)) return {};
+    const fs::path relevo = fs::path(glbPath).replace_extension(".relevo");
+    return fs::exists(relevo, ec) ? relevo.string() : std::string();
+}
+
+bool unpackGroundCached(const fs::path& relevo, fs::path& glbOut, fs::path& terOut, std::string& error) {
+    const uint64_t key = fileFnv64(relevo);
+    if (key == 0) {
+        error = "could not read " + relevo.string();
+        return false;
+    }
+    char hex[17];
+    std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(key));
+    const std::string stem = relevo.stem().string();
+    const fs::path dir = fs::path(".cache/eruption/relevo") / (stem + "_" + hex);
+    glbOut = dir / (stem + ".glb");
+    terOut = dir / (stem + ".ter");
+    std::error_code ec;
+    if (fs::exists(glbOut, ec) && fs::exists(terOut, ec)) return true;
+    fs::create_directories(dir, ec);
+    // Grava com outro nome e renomeia: uma carga interrompida no meio nao
+    // deixa um .glb pela metade que a proxima aceitaria.
+    const fs::path glbTmp = dir / (stem + ".glb.tmp"), terTmp = dir / (stem + ".ter.tmp");
+    if (!unpackGround(relevo, glbTmp, terTmp, error)) return false;
+    fs::rename(terTmp, terOut, ec);
+    if (!ec) fs::rename(glbTmp, glbOut, ec);
+    if (ec) {
+        error = "could not write " + dir.string() + ": " + ec.message();
         return false;
     }
     return true;

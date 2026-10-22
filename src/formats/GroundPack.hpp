@@ -14,6 +14,7 @@
 // byte a byte e a normal a menos de 1e-5 (ela e' recalculada; o .glb original
 // pode ter vindo de outra ferramenta, com outra ordem de soma). Se nao
 // reproduzir, o erro diz por que e o mapa continua indo como .glb+.ter.
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -23,5 +24,19 @@ bool packGround(const std::filesystem::path& glb, const std::filesystem::path& t
                 const std::filesystem::path& out, std::string& error);
 bool unpackGround(const std::filesystem::path& relevo, const std::filesystem::path& glbOut,
                   const std::filesystem::path& terOut, std::string& error);
+
+// CARGA A PARTIR DO .relevo. O mapa exportado leva so' o .relevo; a carga o
+// desempacota em .cache/eruption/relevo/<mapa>_<chave>/ (uma vez por
+// conteudo) e devolve ali o .glb e o .ter. O .glb desempacotado tem a normal
+// recalculada, que muda entre maquinas (contracao FMA no ARM): quem tira
+// chave dos BYTES do .glb (pacote de textura assada, probes) pergunta aqui se
+// o .glb veio de um .relevo e usa os bytes dele, iguais em toda maquina.
+bool unpackGroundCached(const std::filesystem::path& relevo, std::filesystem::path& glbOut,
+                        std::filesystem::path& terOut, std::string& error);
+// O .relevo de que vem o .glb em glbPath (onde o .glb estaria): existe so' o
+// .relevo ao lado. Vazio se o .glb existe ou nao ha .relevo.
+std::string groundSourceFor(const std::string& glbPath);
+// FNV-1a 64 do arquivo inteiro (0 se nao abrir).
+uint64_t fileFnv64(const std::filesystem::path& path);
 
 } // namespace eruption

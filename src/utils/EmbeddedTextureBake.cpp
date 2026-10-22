@@ -1,4 +1,5 @@
 #include "utils/EmbeddedTextureBake.hpp"
+#include "formats/GroundPack.hpp"
 
 #include "core/JobSystem.hpp"
 #include "core/Logger.hpp"
@@ -155,6 +156,14 @@ uint64_t sourceFingerprint(const std::string& path, uint64_t size) {
     return h ^ size;
 }
 
+// Arquivo de onde o conteudo do .glb vem: ele mesmo, ou o .relevo de que a
+// carga o desempacotou (o .glb desempacotado muda entre maquinas; o .relevo
+// nao - ver GroundPack).
+std::string fingerprintPath(const std::string& glbPath) {
+    const std::string relevo = groundSourceFor(glbPath);
+    return relevo.empty() ? glbPath : relevo;
+}
+
 bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
                EmbeddedBakeResult& out) {
     std::error_code ec;
@@ -182,9 +191,10 @@ bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
     // Invalida se: o .glb mudou (conteudo, nao data - o pack vale em outra
     // maquina), o teto de resolucao mudou (preset), o conjunto de formatos da
     // GPU mudou, ou a sintese de PBR nao e' aceitavel aqui.
-    const uint64_t realSize = static_cast<uint64_t>(fs::file_size(glbPath, ec));
+    const std::string source = fingerprintPath(glbPath);
+    const uint64_t realSize = static_cast<uint64_t>(fs::file_size(source, ec));
     if (ec || realSize != srcSize) return false;
-    if (sourceFingerprint(glbPath, realSize) != srcFingerprint) return false;
+    if (sourceFingerprint(source, realSize) != srcFingerprint) return false;
     if (cachedMax != maxSize || cachedFmt != formatKey() || !synthKeyAccepted(cachedSynth, synthPbr))
         return false;
 
@@ -214,14 +224,15 @@ bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
 void writeCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
                 const EmbeddedBakeResult& res) {
     std::error_code ec;
-    const uint64_t srcSize = static_cast<uint64_t>(fs::file_size(glbPath, ec));
+    const std::string source = fingerprintPath(glbPath);
+    const uint64_t srcSize = static_cast<uint64_t>(fs::file_size(source, ec));
     if (ec) return;
     std::vector<uint8_t> buf;
     buf.reserve(res.bytes + 4096);
     put32(buf, kPackMagic);
     put32(buf, kPackVersion);
     put64(buf, srcSize);
-    put64(buf, sourceFingerprint(glbPath, srcSize));
+    put64(buf, sourceFingerprint(source, srcSize));
     put32(buf, maxSize);
     put32(buf, formatKey());
     put32(buf, synthKey(synthPbr));
