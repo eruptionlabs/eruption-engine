@@ -60,6 +60,7 @@ sed -i 's/\.mobile\.etexpack$/.etexpack/' "$STAGE/assets/android/manifest.txt"
 # cidade de 68 MB encolhe o bastante para o APK caber em envio de 30 MB.
 if [ "${ERUPTION_APK_JPEG:-1}" != "0" ]; then
     for g in "$STAGE"/assets/assets/external/*/*.glb; do
+        [ -f "$g" ] || continue   # mapa so' com .relevo: nenhum .glb no glob
         python3 "$ROOT/tools/android/shrink_glb.py" "$g" "$g.tmp"
         mv "$g.tmp" "$g"
     done
