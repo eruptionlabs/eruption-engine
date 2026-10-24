@@ -922,15 +922,19 @@ int pushSound(lua_State* L, uint32_t id) {
     return 1;
 }
 int audio_play(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
     return pushSound(L, eng().audio().play(luaL_checkstring(L, 1), soundOptions(L, 2, false, 0, 3)));
 }
 int audio_play_at(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
     return pushSound(L, eng().audio().playAt(luaL_checkstring(L, 1), soundPlace(L, 2), soundOptions(L, 3, false, 4, 5)));
 }
 int audio_loop(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
     return pushSound(L, eng().audio().play(luaL_checkstring(L, 1), soundOptions(L, 2, true, 0, 3)));
 }
 int audio_loop_at(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
     return pushSound(L, eng().audio().playAt(luaL_checkstring(L, 1), soundPlace(L, 2), soundOptions(L, 3, true, 4, 5)));
 }
 int audio_stop(lua_State* L) {
@@ -941,9 +945,13 @@ int audio_playing(lua_State* L) {
     lua_pushboolean(L, eng().audio().playing(static_cast<uint32_t>(luaL_checkinteger(L, 1))));
     return 1;
 }
+// Abrir o arquivo (Ogg: cabecalho e tabela do stb_vorbis) e' trabalho do
+// motor: num celular de flash lenta passava dos 250 ms por chamada e o
+// vigia matava o jogo na troca de musica (NativeWork, como o game.save).
 // music(arquivo, volume?, fade?) | music(introducao, laco, volume?, fade?) |
 // music(arquivo, {volume, fade, loop = laco, resume}).
 int audio_music(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
     const char* file = luaL_checkstring(L, 1);
     float volume = 1.0f, fade = 1.0f;
     std::string loopFile;
