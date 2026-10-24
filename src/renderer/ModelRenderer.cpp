@@ -2032,6 +2032,35 @@ void ModelRenderer::providePrepared(const std::string& filePath, PreparedAsset&&
     m_prepared[filePath] = std::move(prepared);
 }
 
+// Depois do envio, a copia na CPU de um no' estatico so' responde a consultas
+// de posicao (pegada, raio, pincel de terreno), que leem vertices e indices; os
+// atributos por vertice (texturas, splat, mistura, emissiva) so' serviam para
+// montar a malha. O parser a entrega desindexada, um vertice por canto: o chao
+// de 601 x 601 ficava com 2,16 M vertices e os arrays ao lado, 306 MB de heap
+// ate' a troca de mapa (massif no celular de 3 GB, que fechava por memoria).
+// Soldada (mesmos bytes, mesmas posicoes e triangulos) cai para ~1/6. So' acima
+// de 65536 indices: abaixo, a solda custa mais tempo de carga do que poupa.
+static void compactUploadedNode(ModelNode& node) {
+    constexpr size_t kMinIndices = 65536;
+    if (node.indices.size() < kMinIndices || node.skin >= 0 || !node.skinJoints.empty() || node.morphTargets > 0)
+        return;
+    std::vector<unsigned char> bytes;
+    std::vector<uint32_t> indices;
+    if (reindexMesh(node.vertices.data(), node.vertices.size(), sizeof(ModelVertex), node.indices, bytes, indices)) {
+        const auto* first = reinterpret_cast<const ModelVertex*>(bytes.data());
+        std::vector<ModelVertex>(first, first + bytes.size() / sizeof(ModelVertex)).swap(node.vertices);
+        node.indices.swap(indices);
+    }
+    std::vector<uint32_t>().swap(node.perVertexTexIds);
+    std::vector<uint16_t>().swap(node.perVertexBlendTexIds);
+    std::vector<float>().swap(node.perVertexBlendWeights);
+    std::vector<uint16_t>().swap(node.perVertexBlendMaskTexIds);
+    std::vector<uint16_t>().swap(node.perVertexBlendMaskTexIds2);
+    for (auto& ids : node.perVertexSplatTexIds) std::vector<uint16_t>().swap(ids);
+    std::vector<Vec2>().swap(node.perVertexBlendMaskUV);
+    std::vector<float>().swap(node.perVertexEmissive);
+}
+
 void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanceDesc& ref,
                                          float centerX, float centerZ, int onlyNode) {
     const ModelAsset& asset = m_lastModels[assetIndex];
@@ -2313,6 +2342,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                               withLod ? minSw : 0.0f, maxSw);
         }
         m_modelMeshCache[asset.filePath] = meshIndices;
+        for (ModelNode& node : m_lastModels[assetIndex].nodes) compactUploadedNode(node);
     }
 
     // Create instances for each node
