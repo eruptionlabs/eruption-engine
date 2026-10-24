@@ -33,10 +33,41 @@ static bool EruptionLoadImageData(Image* image, const int image_idx, std::string
 #include <filesystem>
 #include <functional>
 #include <iconv.h>
+#include <mutex>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
 namespace eruption {
+
+namespace {
+
+// Bytes de textura iguais aos de outro modelo ja' lido viram o mesmo buffer
+// (EncodedBytes). Pelo conteudo, e nao pelo caminho: pega tambem a mesma
+// imagem embutida em varios .glb. So' guarda referencia fraca: o buffer vai
+// embora com o ultimo modelo que o usa.
+EncodedBytes shareEncoded(std::vector<uint8_t>&& bytes) {
+    static std::mutex s_mutex;
+    static std::unordered_multimap<size_t, std::weak_ptr<const std::vector<uint8_t>>> s_known;
+    const size_t key = std::hash<std::string_view>{}(
+        std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+    std::lock_guard<std::mutex> lock(s_mutex);
+    auto [first, last] = s_known.equal_range(key);
+    for (auto it = first; it != last;) {
+        std::shared_ptr<const std::vector<uint8_t>> known = it->second.lock();
+        if (!known) {
+            it = s_known.erase(it);
+            continue;
+        }
+        if (*known == bytes) return EncodedBytes(std::move(known));
+        ++it;
+    }
+    auto owned = std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
+    s_known.emplace(key, owned);
+    return EncodedBytes(std::move(owned));
+}
+
+} // namespace
 
 namespace {
 
@@ -819,7 +850,7 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
         // aqui duplicava ~290 MB de PNG no parana_field - dois memcpy enormes
         // por carga. `gltf` e' local a parse() e img.image nao e' lido depois
         // deste ponto, entao mover e' seguro.
-        et.encodedData = std::move(img.image); // lazy decode
+        et.encodedData = shareEncoded(std::move(img.image)); // lazy decode
         model.embeddedTextures.push_back(std::move(et));
 
         // Global texture list used by the source loader paths.
