@@ -1898,6 +1898,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "perf", perf);
     registerVfxApi(L, engine);
     registerObjectsApi(L, engine);
+    registerRibbonApi(L, engine);
     NativeModule::registerApi(L);
 }
 
@@ -2073,7 +2074,7 @@ declare world: {
     -- player walks into the mouth of the passage, not when they reach it.
     warp_map: (map: string) -> (),
     warping: () -> boolean,
-}
+)" + ribbonApiDefinitions() + R"(}
 
 -- Saved games: map, player position, vars, time, weather and music, kept in the
 -- player's data folder. Slots are names or numbers (default 1).

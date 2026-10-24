@@ -108,6 +108,7 @@ void Editor::reloadSceneFile() {
     m_engine->m_deferredLighting.getPointLights() = m_original.lights;
     m_engine->clearCharacters(true); // vêm todos do arquivo (os dos vizinhos ficam)
     m_engine->clearAreas(true);
+    m_engine->clearRibbons();
     m_engine->clearSoundEmitters(true);
     for (uint32_t i = 0; i < insts.size(); ++i)
         if (!m_engine->isRegionInstance(i)) m_engine->setSolid(i, false);
@@ -231,6 +232,10 @@ SceneEdits Editor::currentEdits() const {
     }
     for (const auto& a : m_engine->areas())
         if (!a.removed && !a.fromNeighbor) e.areas.push_back({a.name, a.center, a.size, a.yaw});
+    for (const auto& r : m_engine->ribbons())
+        if (!r.fromScript)
+            e.ribbons.push_back({r.def.name, r.def.pointsXZ, r.def.widths, r.def.closed, r.def.step, r.def.uvLength,
+                                 r.def.lift});
     for (const auto& snd : m_engine->soundEmitters())
         if (!snd.removed && !snd.fromNeighbor) e.sounds.push_back({snd.name, snd.file, snd.position, snd.volume, snd.range});
     e.terrainLayers = m_engine->splatLayerFiles();

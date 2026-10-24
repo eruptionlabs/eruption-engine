@@ -234,6 +234,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     clearScatter();
     resetWorld(); // vizinhos do mapa anterior
     clearAreas();
+    clearRibbons();
     clearSoundEmitters();
     m_solid.clear();
     loadPhase("limpeza");

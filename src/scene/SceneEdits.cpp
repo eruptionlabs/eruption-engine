@@ -36,6 +36,14 @@ std::string num(float v) {
 
 std::string vec(const Vec3& v) { return "{" + num(v.x) + ", " + num(v.y) + ", " + num(v.z) + "}"; }
 
+// Sem perder bits (9 algarismos voltam o mesmo float): a faixa e' montada de
+// novo a partir dos pontos, e o hash dela tem de bater entre aparelhos.
+std::string exact(float v) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.9g", v);
+    return buf;
+}
+
 std::string quoted(const std::string& s) {
     std::string out = "\"";
     for (char c : s) {
@@ -330,6 +338,51 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
     }
     lua_pop(L, 1);
 
+    lua_getfield(L, root, "ribbons");
+    if (lua_istable(L, -1)) {
+        const int n = lua_objlen(L, -1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            const int t = lua_gettop(L);
+            if (lua_istable(L, t)) {
+                RibbonEdit r;
+                r.name = readStr(L, t, "name");
+                r.closed = readBool(L, t, "closed", false);
+                r.step = readNum(L, t, "step", 4.0f);
+                r.uvLength = readNum(L, t, "uv_length", 32.0f);
+                r.lift = readNum(L, t, "lift", 0.1f);
+                lua_getfield(L, t, "points");
+                if (lua_istable(L, -1)) {
+                    const int np = lua_objlen(L, -1);
+                    for (int k = 1; k <= np; ++k) {
+                        lua_rawgeti(L, -1, k);
+                        for (int c = 1; c <= 2 && lua_istable(L, -1); ++c) {
+                            lua_rawgeti(L, -1, c);
+                            r.pointsXZ.push_back(static_cast<float>(lua_tonumber(L, -1)));
+                            lua_pop(L, 1);
+                        }
+                        lua_pop(L, 1);
+                    }
+                }
+                lua_pop(L, 1);
+                lua_getfield(L, t, "widths");
+                if (lua_istable(L, -1)) {
+                    const int nw = lua_objlen(L, -1);
+                    for (int k = 1; k <= nw; ++k) {
+                        lua_rawgeti(L, -1, k);
+                        r.widths.push_back(static_cast<float>(lua_tonumber(L, -1)));
+                        lua_pop(L, 1);
+                    }
+                }
+                lua_pop(L, 1);
+                if (r.widths.empty()) r.widths.push_back(readNum(L, t, "width", 8.0f));
+                if (!r.name.empty()) ribbons.push_back(std::move(r));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+
     lua_getfield(L, root, "sounds");
     if (lua_istable(L, -1)) {
         const int n = lua_objlen(L, -1);
@@ -464,6 +517,24 @@ std::string SceneEdits::serialize(const std::string& map) const {
               << ", rotation = " << num(a.rotation) << " },\n";
         o << "    },\n";
     }
+    if (!ribbons.empty()) {
+        o << "    ribbons = {\n";
+        for (const auto& r : ribbons) {
+            o << "        { name = " << quoted(r.name) << ", closed = " << (r.closed ? "true" : "false")
+              << ", step = " << exact(r.step) << ", uv_length = " << exact(r.uvLength) << ", lift = " << exact(r.lift);
+            if (r.widths.size() == 1) o << ", width = " << exact(r.widths[0]);
+            else {
+                o << ", widths = {";
+                for (size_t k = 0; k < r.widths.size(); ++k) o << (k ? ", " : " ") << exact(r.widths[k]);
+                o << " }";
+            }
+            o << ",\n          points = {";
+            for (size_t k = 0; k + 1 < r.pointsXZ.size(); k += 2)
+                o << (k ? ", " : " ") << "{" << exact(r.pointsXZ[k]) << ", " << exact(r.pointsXZ[k + 1]) << "}";
+            o << " } },\n";
+        }
+        o << "    },\n";
+    }
     if (!sounds.empty()) {
         o << "    sounds = {\n";
         for (const auto& snd : sounds)
@@ -570,6 +641,12 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         if (engine.findSoundEmitter(snd.name) >= 0) continue;
         engine.addSoundEmitter(snd.name, snd.file, snd.position, snd.volume, snd.range);
         ++applied;
+    }
+    for (const auto& r : ribbons) {
+        Engine::RibbonDef def{r.name, r.pointsXZ, r.widths, r.closed, r.step, r.uvLength, r.lift};
+        std::string error;
+        if (engine.addRibbon(def, false, error)) ++applied;
+        else ERUPTION_LOG_WARN("[SCENE] faixa recusada: %s", error.c_str());
     }
     phase("areas+sons", areas.size() + sounds.size());
     for (const auto& c : copies) {
