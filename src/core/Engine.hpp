@@ -820,6 +820,37 @@ public:
     bool isSolid(uint32_t instance) const;
     // Algum objeto sólido ocupa (x, z) na altura de p (raio do corpo em volta)?
     bool blockedAt(const Vec3& p, float radius) const;
+    // (x, z) dentro do pé do objeto (core/Areas.cpp), crescido pelo raio.
+    bool footprintContains(uint32_t instance, const Vec2& p, float radius) const;
+
+    // Consultas do chão para o jogo (core/GroundQuery.cpp). O piso é o
+    // terreno ou o topo de um objeto sólido (passarela, ponte, laje de kit):
+    // floorHeight devolve o mais alto abaixo de `fromY`.
+    float floorHeight(float x, float z, float fromY, bool* onModel = nullptr) const;
+    // Dá para ficar de pé em (x, z) sobre o piso: grade de caminhada (só no
+    // terreno; sobre um objeto sólido vale a peça), nenhum outro sólido
+    // ocupando o corpo acima do piso, no raio, e no máximo um degrau de
+    // líquido por cima. Só conta objeto marcado sólido (scene.luau `solid`,
+    // models.set_solid): peça do .env sem a marca não é piso.
+    bool floorWalkable(float x, float z, float radius, float fromY) const;
+    struct LiquidAt {
+        int index = -1;  // em currentMap()->liquids (-1 = o plano de água global)
+        int kind = 0;    // 0 água, 1 lava
+        float level = 0.0f;
+    };
+    // Líquido aparente em (x, z): dentro da margem e acima do piso.
+    bool liquidAt(float x, float z, LiquidAt& out) const;
+    enum GroundFlag : uint8_t { kGroundWalkable = 1, kGroundWater = 2, kGroundLava = 4, kGroundOnModel = 8 };
+    // Grade nx x nz a partir de (x0, z0) com passo `step`, linha a linha (x
+    // varia mais rápido): altura do piso e GroundFlag por ponto. Uma chamada
+    // no lugar de milhares de floorHeight/floorWalkable/liquidAt.
+    void sampleGround(float x0, float z0, float step, int nx, int nz, float radius,
+                      float* heights, uint8_t* flags) const;
+    bool bodyBlocked(const std::vector<uint32_t>& cand, int floorInstance, float floorY, float x, float z,
+                     float radius) const;
+    bool liquidOver(float x, float z, float floorY, LiquidAt& out) const;
+    bool walkableOver(const std::vector<uint32_t>& cand, int floorInstance, float floorY, float x, float z,
+                      float radius) const;
 
     // Mundo contínuo (core/World.cpp): mapas emendados ao aberto, declarados no
     // scene.luau (neighbors = {{map = "b", offset = {x, y, z}}}), entram em
