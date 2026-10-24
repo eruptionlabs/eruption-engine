@@ -158,10 +158,27 @@ struct ModelAnimation {
     std::vector<std::vector<Mat4>> frameMatrices;
 };
 
+// Bytes codificados (PNG/JPEG) de uma textura, compartilhados. O mesmo
+// arquivo de textura referenciado por varios .glb ficava uma vez por modelo, e
+// de novo em cada copia de ModelFile: 120 modelos de um kit somavam 810 MB de
+// heap para 93 MB de arquivos distintos (massif, carga de um mapa com
+// texture_max_size 256). Copiar aqui so' divide o mesmo buffer.
+class EncodedBytes {
+public:
+    EncodedBytes() = default;
+    explicit EncodedBytes(std::shared_ptr<const std::vector<uint8_t>> bytes) : m_bytes(std::move(bytes)) {}
+    const uint8_t* data() const { return m_bytes ? m_bytes->data() : nullptr; }
+    size_t size() const { return m_bytes ? m_bytes->size() : 0; }
+    bool empty() const { return size() == 0; }
+
+private:
+    std::shared_ptr<const std::vector<uint8_t>> m_bytes;
+};
+
 struct EmbeddedTexture {
     std::string name;
     std::vector<uint8_t> pixels; // RGBA8 (decoded on demand)
-    std::vector<uint8_t> encodedData; // raw encoded bytes from the source file (e.g. PNG/JPEG inside GLB)
+    EncodedBytes encodedData; // raw encoded bytes from the source file (e.g. PNG/JPEG inside GLB)
     int width = 0;
     int height = 0;
     int channels = 0;
