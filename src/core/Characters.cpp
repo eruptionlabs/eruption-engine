@@ -408,10 +408,17 @@ void Engine::drawSpeechBubbles(float x, float y, float w, float h, float dt) {
         const ImVec2 s(x + (c.x / c.w * 0.5f + 0.5f) * w, y + (c.y / c.w * 0.5f + 0.5f) * h);
         if (s.x < x || s.y < y || s.x > x + w || s.y > y + h) return;
         const float alpha = std::min(1.0f, remaining / 0.25f);
-        const float wrap = std::min(w * 0.4f, 280.0f);
-        const ImVec2 ts = ImGui::CalcTextSize(text.c_str(), nullptr, false, wrap);
-        const ImVec2 p0(s.x - ts.x * 0.5f - 10.0f, s.y - ts.y - 22.0f);
-        const ImVec2 p1(s.x + ts.x * 0.5f + 10.0f, s.y - 8.0f);
+        // Letra pela altura da tela (3,2%), nunca menor que a do ImGui: em
+        // pixels fixos o balao saia ilegivel na tela de celular (1080 linhas
+        // a ~400 ppp). Margens e largura crescem na mesma proporcao.
+        ImFont* font = ImGui::GetFont();
+        const float size = std::max(ImGui::GetFontSize(), h * 0.032f);
+        const float k = size / std::max(1.0f, ImGui::GetFontSize());
+        const float wrap = std::min(w * 0.4f, 280.0f * k);
+        const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, wrap, text.c_str());
+        const float pad = 10.0f * k;
+        const ImVec2 p0(s.x - ts.x * 0.5f - pad, s.y - ts.y - 14.0f * k - 8.0f);
+        const ImVec2 p1(s.x + ts.x * 0.5f + pad, s.y - 8.0f);
         const ImU32 fill = IM_COL32(250, 248, 240, int(235 * alpha)), edge = IM_COL32(40, 40, 44, int(220 * alpha));
         dl->AddRectFilled(p0, p1, fill, 8.0f);
         dl->AddRect(p0, p1, edge, 8.0f, 0, 1.5f);
@@ -419,7 +426,7 @@ void Engine::drawSpeechBubbles(float x, float y, float w, float h, float dt) {
         dl->AddTriangleFilled(ImVec2(s.x - 6, p1.y - 1), ImVec2(s.x + 6, p1.y - 1), ImVec2(s.x, s.y), fill);
         dl->AddLine(ImVec2(s.x - 6, p1.y), ImVec2(s.x, s.y), edge, 1.5f);
         dl->AddLine(ImVec2(s.x + 6, p1.y), ImVec2(s.x, s.y), edge, 1.5f);
-        dl->AddText(nullptr, 0.0f, ImVec2(p0.x + 10.0f, p0.y + 7.0f), IM_COL32(25, 25, 28, int(255 * alpha)), text.c_str(),
+        dl->AddText(font, size, ImVec2(p0.x + pad, p0.y + 7.0f * k), IM_COL32(25, 25, 28, int(255 * alpha)), text.c_str(),
                     nullptr, wrap);
     };
     for (const auto& c : m_characters)
