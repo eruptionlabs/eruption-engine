@@ -72,7 +72,6 @@ bool Engine::isSolid(uint32_t instance) const { return instance < m_solid.size()
 
 bool Engine::blockedAt(const Vec3& p, float radius) const {
     const auto& insts = m_modelRenderer.getInstances();
-    Vec2 c[4];
     for (uint32_t i = 0; i < m_solid.size() && i < insts.size(); ++i) {
         if (!m_solid[i] || !insts[i].enabled) continue;
         const ModelInstance& inst = insts[i];
@@ -81,20 +80,24 @@ bool Engine::blockedAt(const Vec3& p, float radius) const {
         if (p.x < inst.worldAabbMin.x - radius || p.x > inst.worldAabbMax.x + radius ||
             p.z < inst.worldAabbMin.z - radius || p.z > inst.worldAabbMax.z + radius)
             continue;
-        if (!m_modelRenderer.footprint(i, c)) continue;
-        // Ponto dentro do quadrilátero (convexo) crescido pelo raio.
-        bool inside = true;
-        for (int e = 0; e < 4 && inside; ++e) {
-            const Vec2 a = c[e], b = c[(e + 1) % 4];
-            const Vec2 edge = b - a;
-            const float len = glm::length(edge);
-            if (len < 1e-4f) continue;
-            const Vec2 n(edge.y / len, -edge.x / len); // normal para fora (cantos no sentido certo)
-            if (glm::dot(Vec2(p.x, p.z) - a, n) > radius) inside = false;
-        }
-        if (inside) return true;
+        if (footprintContains(i, Vec2(p.x, p.z), radius)) return true;
     }
     return false;
+}
+
+bool Engine::footprintContains(uint32_t instance, const Vec2& p, float radius) const {
+    Vec2 c[4];
+    if (!m_modelRenderer.footprint(instance, c)) return false;
+    // Ponto dentro do quadrilátero (convexo) crescido pelo raio.
+    for (int e = 0; e < 4; ++e) {
+        const Vec2 a = c[e], b = c[(e + 1) % 4];
+        const Vec2 edge = b - a;
+        const float len = glm::length(edge);
+        if (len < 1e-4f) continue;
+        const Vec2 n(edge.y / len, -edge.x / len); // normal para fora (cantos no sentido certo)
+        if (glm::dot(p - a, n) > radius) return false;
+    }
+    return true;
 }
 
 int Engine::addSoundEmitter(const std::string& name, const std::string& file, const Vec3& position, float volume,
