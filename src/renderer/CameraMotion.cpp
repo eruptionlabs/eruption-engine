@@ -156,7 +156,13 @@ void CameraMotion::destroyTarget() {
 }
 
 void CameraMotion::resize(uint32_t width, uint32_t height) {
-    if (width == m_width && height == m_height) return;
+    // Mesmo tamanho: o G-buffer foi recriado do mesmo jeito (GBuffer::resize
+    // sempre recria), e o set ainda apontava para a profundidade destruída
+    // (erro de validação no primeiro dispatch e queda com a camada ligada).
+    if (width == m_width && height == m_height) {
+        writeSet();
+        return;
+    }
     vkDeviceWaitIdle(m_ctx->device());
     destroyTarget();
     m_width = width;
