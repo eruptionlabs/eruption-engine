@@ -236,6 +236,24 @@ static std::vector<uint8_t> splatRgba(const ImageData& img, uint32_t maxSize, ui
     return rgba;
 }
 
+// Camada lida do disco ja' no tamanho de envio. O cache das decodificadas
+// guardava o arquivo inteiro ate' o envio: 21 PNG de 2048 (cor, normal e
+// MRAH-W de 7 camadas) somavam +860 MB de pico na carga com texture_max_size
+// 256, e o celular de 3 GB fechava o jogo. Reduzir no proprio job deixa so'
+// as que estao decodificando ao mesmo tempo; a reducao e' a mesma do envio
+// (splatRgba ja' abaixo do teto nao muda nada), entao a imagem e' identica.
+static ImageData loadSplatLayer(const std::filesystem::path& path, uint32_t maxSize) {
+    ImageData img = loadRawPNG(path);
+    if (!img.isValid() || (std::max(img.width, img.height) <= int(maxSize) && img.channels == 4)) return img;
+    uint32_t w = 0, h = 0;
+    std::vector<uint8_t> rgba = splatRgba(img, maxSize, w, h);
+    img.pixels = std::move(rgba);
+    img.width = int(w);
+    img.height = int(h);
+    img.channels = 4;
+    return img;
+}
+
 // Imagem de camada: a ja' decodificada por prefetchSplatLayers, senao do disco.
 ImageData Engine::splatLayerImage(const std::filesystem::path& path) {
     const std::string key = path.string();
@@ -248,7 +266,7 @@ ImageData Engine::splatLayerImage(const std::filesystem::path& path) {
             return img;
         }
     }
-    return loadRawPNG(path);
+    return loadSplatLayer(path, uint32_t(m_textureMaxSize));
 }
 
 // As camadas da cena chegam juntas depois de uma troca de mapa: decodificar
@@ -283,8 +301,8 @@ void Engine::preloadSplatLayers(const std::vector<std::string>& layers) {
             std::lock_guard<std::mutex> lock(m_splatDecodeMutex);
             if (m_splatDecoded.count(key)) continue;
         }
-        JobSystem::instance().submit([this, p, key] {
-            ImageData img = loadRawPNG(p);
+        JobSystem::instance().submit([this, p, key, maxSize = uint32_t(m_textureMaxSize)] {
+            ImageData img = loadSplatLayer(p, maxSize);
             if (!img.isValid()) return;
             std::lock_guard<std::mutex> lock(m_splatDecodeMutex);
             m_splatDecoded[key] = std::move(img);
@@ -304,8 +322,9 @@ void Engine::prefetchSplatLayers(const std::vector<std::string>& layers) {
     if (paths.empty()) return;
     const auto t0 = std::chrono::steady_clock::now();
     std::vector<ImageData> imgs(paths.size());
+    const uint32_t maxSize = uint32_t(m_textureMaxSize);
     JobSystem::instance().parallelFor(static_cast<uint32_t>(paths.size()),
-                                      [&](uint32_t i) { imgs[i] = loadRawPNG(paths[i]); });
+                                      [&](uint32_t i) { imgs[i] = loadSplatLayer(paths[i], maxSize); });
     std::lock_guard<std::mutex> lock(m_splatDecodeMutex);
     for (size_t i = 0; i < paths.size(); ++i)
         if (imgs[i].isValid()) m_splatDecoded[paths[i].string()] = std::move(imgs[i]);
