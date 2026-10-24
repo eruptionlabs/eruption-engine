@@ -344,6 +344,9 @@ file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.hpp")
 if(NOT ANDROID)
     list(FILTER SOURCES EXCLUDE REGEX "/src/platform/android/")
 endif()
+# Faixa por spline: sem contracao em FMA, para a malha e a consulta darem os
+# mesmos bits no PC e no ARM (o pragma do arquivo vale so' no clang).
+set_source_files_properties(src/formats/Ribbon.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 
 # Modulos opcionais: o editor liga o que o projeto usa ao exportar (perfil de
 # build). Desligado, o modulo vira uma implementacao muda com a mesma
@@ -839,6 +842,13 @@ if(ERUPTION_BUILD_TESTS)
         target_compile_options(eruption-ground-pack-tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME GroundPackTests COMMAND eruption-ground-pack-tests)
+
+    add_executable(eruption-ribbon-tests tests/test_ribbon.cpp src/formats/Ribbon.cpp)
+    target_include_directories(eruption-ribbon-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-ribbon-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME RibbonTests COMMAND eruption-ribbon-tests)
 endif()
 
 # Generate Linux .desktop shortcut

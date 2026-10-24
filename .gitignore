@@ -100,6 +100,8 @@ pbr_cooker
 pbr_extractor
 eruption-pbr-tests
 eruption-object-tests
+eruption-ground-pack-tests
+eruption-ribbon-tests
 !tools/pbr_cooker/
 !tools/pbr_extractor/
 tools/venv
