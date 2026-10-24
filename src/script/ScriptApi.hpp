@@ -28,6 +28,10 @@ const char* vfxApiDefinitions();
 // cena. releaseScriptObjects destrói os que os scripts criaram (Stop, recarga).
 void registerObjectsApi(lua_State* L, Engine& engine);
 const char* objectsApiDefinitions();
+// Faixas por spline em `world` (ScriptApiRibbon.cpp): world.ribbon e as
+// consultas; as declaracoes sao linhas do bloco `declare world`.
+void registerRibbonApi(lua_State* L, Engine& engine);
+std::string ribbonApiDefinitions();
 void releaseScriptObjects();
 // Empilha o Object (nil se o id não vale).
 struct ObjectId;

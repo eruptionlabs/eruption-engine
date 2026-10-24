@@ -28,6 +28,7 @@
 #include "renderer/skymap/SkyConfig.hpp"
 #include "renderer/CloudLayerRenderer.hpp"
 #include "renderer/vfx/VfxSystem.hpp"
+#include "formats/Ribbon.hpp"
 #include "renderer/LocalCloud.hpp"
 #include "renderer/WaterRenderer.hpp"
 #include "renderer/DebugLineRenderer.hpp"
@@ -777,6 +778,25 @@ public:
         bool contains(const Vec3& p) const;
     };
     std::vector<TriggerArea>& areas() { return m_areas; }
+    // Faixas por spline (core/Ribbons.cpp): estrada, trilha, rio raso. As da
+    // cena vêm do .scene.luau (ribbons = {...}); as do script, de world.ribbon.
+    // Assentadas no chão quando entram; a consulta (Ribbon::query) é pura.
+    struct RibbonDef {
+        std::string name;
+        std::vector<float> pointsXZ; // pares (x, z)
+        std::vector<float> widths;   // um por ponto, ou um só
+        bool closed = false;
+        float step = 4.0f, uvLength = 32.0f, lift = 0.1f;
+    };
+    struct SceneRibbon {
+        RibbonDef def;
+        Ribbon ribbon;
+        bool fromScript = false; // world.ribbon: não vai para a cena salva
+    };
+    bool addRibbon(const RibbonDef& def, bool fromScript, std::string& error);
+    const Ribbon* findRibbon(const std::string& name) const;
+    void clearRibbons();
+    const std::vector<SceneRibbon>& ribbons() const { return m_ribbons; }
     // Emissor de som: um som em laço num ponto (cachoeira, fogueira, taverna).
     // Toca com o jogo rodando, só perto do ouvinte (alcance).
     struct SoundEmitter {
@@ -1733,6 +1753,7 @@ private:
                               const std::filesystem::path& colorPath, const ImageData& color);
     std::vector<WorldRegion> m_regions;
     std::vector<TriggerArea> m_areas;
+    std::vector<SceneRibbon> m_ribbons;
     std::vector<SoundEmitter> m_soundEmitters;
     bool m_soundEmittersActive = false;
     void updateSoundEmitters();

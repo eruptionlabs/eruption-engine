@@ -37,6 +37,8 @@ class Engine;
 //       terrain = { layers = { "assets/textures/grama.png", ... } },  -- camadas pintáveis
 //       neighbors = { { map = "floresta", offset = {1000, 0, 0} } },  -- mundo contínuo
 //       areas = { { name = "porta", position = {x, y, z}, size = {40, 30, 40}, rotation = 0 } },  -- gatilhos
+//       ribbons = { { name = "estrada", closed = true, points = { {x, z}, ... }, width = 40,  -- faixas
+//                     step = 4, uv_length = 32, lift = 0.1 } },  -- (ou widths = {...}, uma por ponto)
 //       sounds = { { name = "cachoeira", file = "assets/sounds/agua.ogg", position = {...}, volume = 1, range = 200 } },
 //
 // Luzes com índice além das do mapa são luzes novas, criadas no editor.
@@ -128,6 +130,14 @@ struct SceneEdits {
         float rotation = 0.0f;
     };
     std::vector<Area> areas;
+    // Faixa por spline (Engine::RibbonDef): pontos (x, z), largura por ponto ou uma só.
+    struct RibbonEdit {
+        std::string name;
+        std::vector<float> pointsXZ, widths;
+        bool closed = false;
+        float step = 4.0f, uvLength = 32.0f, lift = 0.1f;
+    };
+    std::vector<RibbonEdit> ribbons;
     // Emissor de som em laço num ponto.
     struct Sound {
         std::string name, file;
@@ -142,7 +152,8 @@ struct SceneEdits {
 
     bool empty() const {
         return added.empty() && objects.empty() && copies.empty() && lights.empty() && characters.empty() &&
-               !hasEnvironment && !hasSpawn && terrainLayers.empty() && !hasWater && neighbors.empty() && areas.empty() && sounds.empty();
+               !hasEnvironment && !hasSpawn && terrainLayers.empty() && !hasWater && neighbors.empty() && areas.empty() && sounds.empty() &&
+               ribbons.empty();
     }
 
     static std::filesystem::path pathFor(const std::string& map);

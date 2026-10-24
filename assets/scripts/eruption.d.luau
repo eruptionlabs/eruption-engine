@@ -169,6 +169,21 @@ declare world: {
     -- player walks into the mouth of the passage, not when they reach it.
     warp_map: (map: string) -> (),
     warping: () -> boolean,
+    -- Ribbon (road, trail, shallow river) along a centripetal Catmull-Rom
+    -- through `points` (vectors; y is ignored, the ground gives it). opts:
+    -- closed, width (or widths, one per point), step (meters between
+    -- samples), uv_length, lift (gap above the ground). Same name replaces it.
+    -- Ribbons in the scene file (ribbons = {...}) exist from the map load.
+    ribbon: (name: string, points: { vector }, opts: { [string]: any }?) -> boolean,
+    -- Where `position` is relative to the ribbon (pure: same input, same
+    -- result): t (0..1 along), s (meters), lateral (+ = right of the way),
+    -- edge (distance to the nearest edge, < 0 = outside), normal (from that
+    -- edge inward), tangent, width, height (ribbon surface), position (the
+    -- nearest point of the center line).
+    ribbon_query: (name: string, position: vector) -> { t: number, s: number, lateral: number, edge: number, width: number, height: number, normal: vector, tangent: vector, position: vector, segment: number },
+    -- The center line at t (closed ribbons wrap, open ones clamp).
+    ribbon_point: (name: string, t: number) -> { t: number, s: number, lateral: number, edge: number, width: number, height: number, normal: vector, tangent: vector, position: vector, segment: number },
+    ribbon_length: (name: string) -> number,
 }
 
 -- Saved games: map, player position, vars, time, weather and music, kept in the
