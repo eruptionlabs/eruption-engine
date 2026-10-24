@@ -1,5 +1,6 @@
 // eulerAngleYXZ vem das extensoes "gtx" do GLM.
 #define GLM_ENABLE_EXPERIMENTAL
+#include <cfloat>
 #include "script/ScriptApi.hpp"
 
 #include "script/ScriptHost.hpp"
@@ -1361,6 +1362,54 @@ int world_path(lua_State* L) {
     }
     return 1;
 }
+// Consultas do chao com os objetos solidos (pontes, passarelas, lajes de kit):
+// world.walkable/ground_height so' conhecem o terreno.
+float fromYArg(lua_State* L, int idx) {
+    return lua_isnoneornil(L, idx) ? FLT_MAX : static_cast<float>(luaL_checknumber(L, idx));
+}
+int world_floor_height(lua_State* L) {
+    bool onModel = false;
+    lua_pushnumber(L, eng().floorHeight(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2)),
+                                        fromYArg(L, 3), &onModel));
+    lua_pushboolean(L, onModel);
+    return 2;
+}
+int world_floor_walkable(lua_State* L) {
+    lua_pushboolean(L, eng().floorWalkable(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2)),
+                                           float(luaL_optnumber(L, 3, 0.0)), fromYArg(L, 4)));
+    return 1;
+}
+int world_liquid_at(lua_State* L) {
+    Engine::LiquidAt at;
+    if (!eng().liquidAt(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2)), at)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_createtable(L, 0, 3);
+    lua_pushstring(L, at.kind == 1 ? "lava" : "water");
+    lua_setfield(L, -2, "kind");
+    lua_pushnumber(L, at.level);
+    lua_setfield(L, -2, "level");
+    lua_pushinteger(L, at.index + 1); // 0 = o plano de agua global
+    lua_setfield(L, -2, "index");
+    return 1;
+}
+// Grade inteira numa chamada: dois buffers (alturas f32, flags u8), x mais
+// rapido. Amostrar ponto a ponto passava dos 250 ms com ~80 mil pontos.
+int world_ground_grid(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
+    const float x0 = float(luaL_checknumber(L, 1)), z0 = float(luaL_checknumber(L, 2));
+    const float step = float(luaL_checknumber(L, 3));
+    const int nx = int(luaL_checkinteger(L, 4)), nz = int(luaL_checkinteger(L, 5));
+    const float radius = float(luaL_optnumber(L, 6, 0.0));
+    luaL_argcheck(L, step > 0.0f, 3, "step must be > 0");
+    luaL_argcheck(L, nx > 0 && nz > 0 && size_t(nx) * size_t(nz) <= (size_t(1) << 22), 4, "1..4M points");
+    const size_t n = size_t(nx) * size_t(nz);
+    auto* heights = static_cast<float*>(lua_newbuffer(L, n * sizeof(float)));
+    auto* flags = static_cast<uint8_t*>(lua_newbuffer(L, n));
+    eng().sampleGround(x0, z0, step, nx, nz, radius, heights, flags);
+    return 2;
+}
 int world_set_dof(lua_State* L) {
     eng().setDofEnabled(lua_toboolean(L, 1) != 0);
     return 0;
@@ -1819,7 +1868,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
-        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"path", world_path}, {"set_motion_blur", world_set_motion_blur},
+        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
         {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend},
         {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids},
@@ -2035,6 +2084,21 @@ declare world: {
     walkable: (x: number, z: number, radius: number?) -> boolean,
     -- Path on the ground from `from` to `to` (smoothed), or nil if none.
     path: (from: vector, to: vector, radius: number?) -> { vector }?,
+    -- Floor under (x, z) counting solid objects (bridges, walkways, kit
+    -- slabs): the highest top below `fromY` (default: anywhere). Second value:
+    -- true when it is an object, not the terrain.
+    floor_height: (x: number, z: number, fromY: number?) -> (number, boolean),
+    -- Whether a character of `radius` can stand on that floor: the walk grid
+    -- on the terrain, the piece itself on an object, no other solid in the body.
+    floor_walkable: (x: number, z: number, radius: number?, fromY: number?) -> boolean,
+    -- Liquid showing at (x, z) (inside its shore and above the floor: a bridge
+    -- over lava has none): {kind = "water" | "lava", level, index} or nil.
+    -- index is the map's liquid (1-based), 0 for the global water plane.
+    liquid_at: (x: number, z: number) -> { kind: string, level: number, index: number }?,
+    -- A whole nx * nz grid from (x0, z0) with spacing `step`, x varying
+    -- fastest: heights (f32 per point) and flags (u8 per point: 1 walkable,
+    -- 2 water, 4 lava, 8 on an object). Read with buffer.readf32(h, i * 4).
+    ground_grid: (x0: number, z0: number, step: number, nx: number, nz: number, radius: number?) -> (buffer, buffer),
     -- The game's own fog: {color = vector or {r, g, b}, start, end, opacity,
     -- height, falloff} (the map .env "fog" block fields). Wins over the map's
     -- and the weather's fog until the next map change; nil gives control back.
