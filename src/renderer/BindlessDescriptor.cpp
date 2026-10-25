@@ -148,11 +148,14 @@ uint32_t BindlessDescriptor::allocateSlot() {
         ++m_allocated; m_highWater = std::max(m_highWater, m_allocated);
         return slot;
     }
-    if (m_nextSlot < m_slotCount) {
-        ++m_allocated; m_highWater = std::max(m_highWater, m_allocated);
-        return m_nextSlot++;
-    }
-    ERUPTION_LOG_ERROR("Bindless texture array full! (max=%u)", m_slotCount);
+    // A lista de livres nasce com todos os slots (init), entao vazia = cheio.
+    // Aqui havia um m_nextSlot++ que devolvia 1, 2, 3... ainda em uso: a
+    // textura nova tomava o lugar de outra sem erro nenhum (chao e modelos
+    // amostrando quadros de sprite, medido com 4096 slots esgotados por
+    // 3552 quadros de personagem + as texturas de um vizinho).
+    static uint32_t s_fullCount = 0;
+    if (s_fullCount++ % 256 == 0)
+        ERUPTION_LOG_ERROR("Bindless texture array full! (max=%u, %u requests refused)", m_slotCount, s_fullCount);
     return 0; // slot 0 = default/null
 }
 
@@ -187,6 +190,9 @@ void BindlessDescriptor::freeSlot(uint32_t slot) {
 
 void BindlessDescriptor::updateTexture(uint32_t slot, VkImageView view, VkSampler sampler) {
     if (slot >= m_slotCount) return;
+    // Slot 0 e' a textura padrao, devolvida quando o array enche: quem nao
+    // confere o slot nao pode trocar a padrao de todo mundo.
+    if (slot == 0 && view != m_defaultView) return;
     m_pendingUpdates.push_back({slot, view, sampler});
 }
 
