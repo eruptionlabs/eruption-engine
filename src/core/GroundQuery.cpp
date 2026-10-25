@@ -20,6 +20,8 @@ constexpr float kBody = 20.0f; // altura do corpo, a mesma de Engine::blockedAt
 // Sólido que não passa disto acima do piso não bloqueia: é a peça vizinha da
 // mesma laje ou uma borda baixa, não parede.
 constexpr float kStep = 4.0f;
+// De cima de tudo: entre mapas empilhados, o chão mais alto.
+constexpr float kTop = std::numeric_limits<float>::max();
 
 struct Floor {
     float y = 0.0f;
@@ -107,7 +109,7 @@ bool Engine::bodyBlocked(const std::vector<uint32_t>& cand, int floorInstance, f
 float Engine::floorHeight(float x, float z, float fromY, bool* onModel) const {
     std::vector<uint32_t> cand;
     solidsIn(m_solid, m_modelRenderer.getInstances(), x, z, x, z, cand);
-    const Floor f = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z), x, z, fromY);
+    const Floor f = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z, fromY), x, z, fromY);
     if (onModel) *onModel = f.instance >= 0;
     return f.y;
 }
@@ -132,7 +134,7 @@ bool Engine::liquidOver(float x, float z, float floorY, LiquidAt& out) const {
 // (no teste do jogo, piso a -133 com lava a -117 saía andável).
 bool Engine::walkableOver(const std::vector<uint32_t>& cand, int floorInstance, float floorY, float x, float z,
                           float radius) const {
-    if (floorInstance < 0 && !navWalkable(x, z)) return false;
+    if (floorInstance < 0 && !navWalkable(x, z, floorY)) return false;
     LiquidAt lq;
     if (liquidOver(x, z, floorY, lq) && lq.level - floorY > kStep) return false;
     return !bodyBlocked(cand, floorInstance, floorY, x, z, radius);
@@ -141,14 +143,14 @@ bool Engine::walkableOver(const std::vector<uint32_t>& cand, int floorInstance, 
 bool Engine::floorWalkable(float x, float z, float radius, float fromY) const {
     std::vector<uint32_t> cand;
     solidsIn(m_solid, m_modelRenderer.getInstances(), x - radius, z - radius, x + radius, z + radius, cand);
-    const Floor f = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z), x, z, fromY);
+    const Floor f = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z, fromY), x, z, fromY);
     return walkableOver(cand, f.instance, f.y, x, z, radius);
 }
 
 bool Engine::liquidAt(float x, float z, LiquidAt& out) const {
     std::vector<uint32_t> cand;
     solidsIn(m_solid, m_modelRenderer.getInstances(), x, z, x, z, cand);
-    const float y = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z), x, z,
+    const float y = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z, kTop), x, z,
                               std::numeric_limits<float>::max()).y;
     return liquidOver(x, z, y, out);
 }
@@ -168,7 +170,7 @@ void Engine::sampleGround(float x0, float z0, float step, int nx, int nz, float 
             cand.clear();
             for (uint32_t i : row)
                 if (insideXZ(insts[i], x, z, radius)) cand.push_back(i);
-            const Floor f = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z), x, z,
+            const Floor f = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z, kTop), x, z,
                                       std::numeric_limits<float>::max());
             uint8_t fl = f.instance >= 0 ? kGroundOnModel : 0;
             if (walkableOver(cand, f.instance, f.y, x, z, radius)) fl |= kGroundWalkable;
