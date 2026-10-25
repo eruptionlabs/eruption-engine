@@ -1,5 +1,6 @@
 // Caminho dos personagens: A* na grade do chão (a mesma da caminhada), contornando
-// objetos sólidos, e depois alisado (pula os pontos que se vê em linha reta).
+// objetos sólidos e pesando o custo por célula do jogo, e depois alisado (pula
+// os pontos que se vê em linha reta).
 #include "core/Engine.hpp"
 
 #include <algorithm>
@@ -120,6 +121,14 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
         }
         return v > 0;
     };
+    // Custo da celula escrito pelo jogo (setWalkCost; >= 1, entao a
+    // heuristica octil continua admissivel). 0 = ainda nao lido.
+    std::vector<float> cellCost(cells, 0.0f);
+    auto costAt = [&](int x, int z) {
+        float& c = cellCost[idxOf(x, z)];
+        if (c == 0.0f) c = walkCost(x * step, z * step);
+        return c;
+    };
     // Ponto livre perto do pedido (o alvo pode estar dentro de uma parede).
     int tx = gx, tz = gz;
     if (!walkable(tx, tz)) {
@@ -165,7 +174,7 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
                 if (!walkable(nx + dx, nz + dz)) continue;
                 // Diagonal nao corta quina.
                 if (dx && dz && (!walkable(nx + dx, nz) || !walkable(nx, nz + dz))) continue;
-                const float cost = gn + (dx && dz ? 1.41421356f : 1.0f);
+                const float cost = gn + (dx && dz ? 1.41421356f : 1.0f) * costAt(nx + dx, nz + dz);
                 const size_t m = idxOf(nx + dx, nz + dz);
                 if (g[m] <= cost) continue;
                 g[m] = cost;
@@ -185,7 +194,9 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
         const int n = std::max(1, int(len / (step * 0.5f)));
         for (int i = 1; i < n; ++i) {
             const Vec3 p = glm::mix(a, b, float(i) / n);
-            if (!walkable(cellX(p.x), cellX(p.z))) return false;
+            // Atalho nao corta celula cara (o A* contornou ou pagou por ela).
+            const int cx = cellX(p.x), cz = cellX(p.z);
+            if (!walkable(cx, cz) || costAt(cx, cz) > 1.0f) return false;
         }
         return true;
     };

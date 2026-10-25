@@ -782,6 +782,12 @@ public:
     void setWalkRegion(int x0, int z0, int x1, int z1, const std::vector<uint8_t>& blocked);
     int blockSteepSlopes(float maxDegrees);
     bool saveWalk(std::string& error) const;
+    // Custo de andar nas células a até `radius` de (x, z) (0 = só a célula do
+    // ponto), só nesta partida: 1 = normal, infinito = bloqueada. Vale no
+    // mesmo quadro para o andar, navWalkable e findPath. Devolve quantas
+    // células mudaram.
+    int setWalkCost(float x, float z, float radius, float cost);
+    float walkCost(float x, float z) const;
 
     // Áreas de gatilho e objetos sólidos (core/Areas.cpp).
     // Área: caixa nomeada (girada em Y) que os scripts e as regras observam

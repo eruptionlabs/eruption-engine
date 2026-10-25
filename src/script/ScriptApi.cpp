@@ -356,6 +356,22 @@ int world_liquids(lua_State* L) {
     return 1;
 }
 
+// Custo de andar nas celulas a ate' `radius` de (x, z), so' nesta partida:
+// 1 = normal, math.huge bloqueia. world.walkable, world.path e o andar veem
+// no mesmo quadro. Devolve quantas celulas mudaram.
+int world_set_walk_cost(lua_State* L) {
+    const float x = float(luaL_checknumber(L, 1)), z = float(luaL_checknumber(L, 2));
+    const float radius = float(luaL_checknumber(L, 3));
+    const double cost = luaL_checknumber(L, 4);
+    if (std::isnan(cost)) luaL_argerror(L, 4, "cost is NaN");
+    lua_pushinteger(L, eng().setWalkCost(x, z, radius, float(cost)));
+    return 1;
+}
+int world_walk_cost(lua_State* L) {
+    lua_pushnumber(L, eng().walkCost(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2))));
+    return 1;
+}
+
 // ---------------------------------------------------------------- player
 
 int player_position(lua_State* L) {
@@ -1869,7 +1885,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
         {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend},
         {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids},
-        {"block_slopes", world_block_slopes},
+        {"block_slopes", world_block_slopes}, {"set_walk_cost", world_set_walk_cost}, {"walk_cost", world_walk_cost},
         {"map", world_map}, {"load_map", world_load_map},
         {"warp_map", world_warp_map}, {"warping", world_warping}, {nullptr, nullptr}};
     static const luaL_Reg player[] = {
@@ -2079,6 +2095,13 @@ declare world: {
     -- Walk grid of the engine (block_slopes and solid objects included):
     -- whether a character of `radius` can stand at (x, z).
     walkable: (x: number, z: number, radius: number?) -> boolean,
+    -- Cost of walking the grid cells within `radius` of (x, z) (0: only the
+    -- cell of the point), this run only: 1 is normal, math.huge blocks.
+    -- walkable, path and walking see it in the same frame; path goes around
+    -- costly cells when that is cheaper. Returns how many cells changed.
+    set_walk_cost: (x: number, z: number, radius: number, cost: number) -> number,
+    -- Cost of the cell at (x, z) (1 when the game set none).
+    walk_cost: (x: number, z: number) -> number,
     -- Path on the ground from `from` to `to` (smoothed), or nil if none.
     path: (from: vector, to: vector, radius: number?) -> { vector }?,
     -- Floor under (x, z) counting solid objects (bridges, walkways, kit

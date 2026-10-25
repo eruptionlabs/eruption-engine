@@ -42,6 +42,9 @@ struct LoadedMap {
     // gerada (abaixo da geometria), que não serve para altura do chão.
     bool terrainFromFile = false;
     NavGridFile navGrid;
+    // Custo de andar por célula de navGrid escrito pelo jogo, só nesta partida
+    // (Engine::setWalkCost): vazio = 1 em todas; infinito = bloqueada.
+    std::vector<float> walkCost;
 
     // Lights extracted from the GLB (if any) or defaults.
     struct MapLight {
