@@ -295,6 +295,7 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
                 readVec(L, t, "position", c.position);
                 c.facing = readNum(L, t, "facing", 0.0f);
                 c.hidden = readBool(L, t, "hidden", false);
+                c.ground = readBool(L, t, "ground", false);
                 if (!c.name.empty() && !c.sprite.empty()) characters.push_back(std::move(c));
             }
             lua_pop(L, 1);
@@ -500,6 +501,7 @@ std::string SceneEdits::serialize(const std::string& map) const {
             o << "        { name = " << quoted(c.name) << ", sprite = " << quoted(c.sprite) << ", position = "
               << vec(c.position) << ", facing = " << num(c.facing);
             if (c.hidden) o << ", hidden = true";
+            if (c.ground) o << ", ground = true";
             o << " },\n";
         }
         o << "    },\n";
@@ -693,7 +695,10 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
     for (const auto& c : characters) {
         if (engine.findCharacter(c.name) >= 0) continue;
         const int idx = engine.addCharacter(c.name, c.sprite, c.position, c.facing);
-        engine.characters()[static_cast<size_t>(idx)].visible = !c.hidden;
+        Engine::SceneCharacter& ch = engine.characters()[static_cast<size_t>(idx)];
+        ch.visible = !c.hidden;
+        ch.ground = ch.groundPending = c.ground;
+        ch.groundFromY = c.position.y;
         ++applied;
     }
     if (hasSpawn) {

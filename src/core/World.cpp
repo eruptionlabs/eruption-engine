@@ -444,6 +444,8 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
         const int idx = addCharacter(name, c.sprite, c.position + r.offset, c.facing);
         m_characters[static_cast<size_t>(idx)].visible = !c.hidden;
         m_characters[static_cast<size_t>(idx)].fromNeighbor = true;
+        m_characters[static_cast<size_t>(idx)].ground = m_characters[static_cast<size_t>(idx)].groundPending = c.ground;
+        m_characters[static_cast<size_t>(idx)].groundFromY = c.position.y + r.offset.y;
         r.characters.push_back(name);
     }
     r.areas.clear();

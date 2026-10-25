@@ -107,6 +107,9 @@ struct SceneEdits {
         Vec3 position{0.0f};
         float facing = 0.0f;
         bool hidden = false; // começa escondido (um script mostra depois)
+        // Assenta no chão ao carregar (terreno ou topo de peça sólida): o Y
+        // do arquivo só diz de onde procurar o piso.
+        bool ground = false;
     };
     std::vector<Character> characters;
     bool hasWater = false; // environment.water: nível da água (lagos)
