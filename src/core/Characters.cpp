@@ -89,6 +89,44 @@ static constexpr float kPassoNormal = 60.0f;
 // de corpo por segundo (o passo normal de 60 num boneco de celula ~55, a
 // escala em que o elenco foi desenhado).
 static constexpr float kAlturasPorSegundo = 1.1f;
+// `ground = true` procura o piso a partir de um degrau acima do Y da cena
+// (o mesmo kStep de GroundQuery.cpp: o que se sobe andando).
+static constexpr float kDegrauAoAssentar = 4.0f;
+// set_position com andar: o andar segura por esta folga depois da última
+// mudança de posição (um script que move a 30 Hz num quadro de 60 Hz não pisca
+// entre parado e andando).
+static constexpr float kFolgaDoAndar = 0.15f;
+// Salto maior que isto, em alturas de corpo, num quadro é teleporte.
+static constexpr float kTeleporteEmAlturas = 2.0f;
+
+// Altura do corpo pela célula do primeiro quadro parado (de frente), na
+// escala em que vai à tela; sem folha carregada, a de um boneco comum.
+static float alturaDoCorpo(const Engine::LoadedSprite& ls) {
+    if (ls.loaded && !ls.act.actions.empty() && !ls.act.actions.front().frames.empty()) {
+        const auto& camadas = ls.act.actions.front().frames.front().sprites;
+        if (!camadas.empty()) {
+            const auto& spr = camadas.front();
+            const int idx = spr.index + (spr.type == 1 ? static_cast<int>(ls.indexedTextureCount) : 0);
+            if (idx >= 0 && idx < static_cast<int>(ls.textures.size()))
+                return static_cast<float>(ls.textures[static_cast<size_t>(idx)].height) * kPixelToWorld * spr.scaleY;
+        }
+    }
+    return kPassoNormal / kAlturasPorSegundo;
+}
+
+void Engine::placeCharacter(int index, const Vec3& position, bool walk) {
+    if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
+    SceneCharacter& c = m_characters[static_cast<size_t>(index)];
+    const float passo = glm::length(Vec2(position.x - c.position.x, position.z - c.position.z));
+    c.position = position;
+    c.walking = false;
+    if (!walk || passo > kTeleporteEmAlturas * alturaDoCorpo(c.look)) {
+        c.scriptStep = 0.0f;
+        c.scriptWalkLeft = 0.0f;
+        return;
+    }
+    c.scriptStep += passo;
+}
 
 void Engine::walkCharacter(int index, const Vec3& target, float seconds) {
     if (index < 0 || index >= static_cast<int>(m_characters.size())) return;
@@ -187,6 +225,23 @@ void Engine::updateCharacters(float dt, bool moveAlongPaths) {
     }
     for (auto& c : m_characters) {
         if (c.parked) continue;
+        if (c.groundPending) {
+            // Procura o piso a partir de um degrau acima do Y escrito: o
+            // terreno ou o topo de uma peça sólida, o mesmo chão de quem
+            // anda. Um Y 0 debaixo de uma montanha cai no relevo.
+            c.position.y = floorHeight(c.position.x, c.position.z, c.position.y + kDegrauAoAssentar);
+            c.groundPending = false;
+        }
+        if (c.scriptStep > 1e-3f && dt > 0.0f) {
+            // O script moveu com andar desde o último tick: a velocidade é a
+            // medida, suavizada para um quadro torto não sacudir o ritmo.
+            const float medida = c.scriptStep / dt;
+            c.scriptSpeed = c.scriptWalkLeft > 0.0f ? glm::mix(c.scriptSpeed, medida, 0.3f) : medida;
+            c.scriptWalkLeft = kFolgaDoAndar;
+        } else if (c.scriptWalkLeft > 0.0f) {
+            c.scriptWalkLeft = std::max(0.0f, c.scriptWalkLeft - dt);
+        }
+        c.scriptStep = 0.0f;
         if (moveAlongPaths && c.walking) {
             // Segue o caminho na velocidade dele; a altura é a do chão.
             float left = c.speed * dt;
@@ -287,7 +342,9 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
     float rel = glm::degrees(std::atan2(camForward.x, camForward.z)) - c.facing + 180.0f;
     rel = std::fmod(std::fmod(rel, 360.0f) + 360.0f, 360.0f);
     const int direction = static_cast<int>((rel + 22.5f) / 45.0f) % 8;
-    const bool moving = c.walking;
+    const bool scripted = !c.walking && c.scriptWalkLeft > 0.0f;
+    const bool moving = c.walking || scripted;
+    const float speed = scripted ? c.scriptSpeed : c.speed;
     int actionIdx = direction + (moving ? 8 : 0);
     // Animação extra (sprite v3) por cima do parado/andando.
     const LoadedSprite::Named* named = c.action.empty() ? nullptr : ls.findNamed(c.action);
@@ -309,7 +366,7 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
     // passo de um boneco de 20 unidades e' menos da metade do de um de 45, e
     // com uma referencia fixa a caminhada natural do menor saia em camera
     // lenta. A altura e' a da celula do quadro atual, como ela vai a tela.
-    if (moving && !named && c.speed > 0.0f) {
+    if (moving && !named && speed > 0.0f) {
         float altura = 0.0f;
         const auto& camadas = action.frames[static_cast<size_t>(c.frame)].sprites;
         if (!camadas.empty()) {
@@ -319,7 +376,7 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
                 altura = static_cast<float>(ls.textures[static_cast<size_t>(idx)].height) * kPixelToWorld * spr.scaleY;
         }
         const float passo = altura > 1.0f ? kAlturasPorSegundo * altura : kPassoNormal;
-        delay *= std::clamp(passo / c.speed, 0.25f, 2.0f);
+        delay *= std::clamp(passo / speed, 0.25f, 2.0f);
     }
     c.timer += dt * 1000.0f;
     if (c.timer >= delay) {

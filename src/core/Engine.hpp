@@ -332,6 +332,20 @@ public:
         bool removed = false; // apagado no editor (desfazer traz de volta)
         bool fromNeighbor = false; // de um mapa vizinho (não se edita nem se salva aqui)
         bool parked = false;       // o mapa vizinho dele saiu de cena
+        // `ground = true` da cena: assenta no chão ao carregar (o editor
+        // salva). O assentar espera o primeiro updateCharacters: o vizinho só
+        // vira Shown (e entra em mapAt) depois de criar os personagens dele.
+        bool ground = false;
+        bool groundPending = false;
+        // Y escrito na cena: o editor salva este, não o assentado, para abrir
+        // e salvar uma cena não mudar o arquivo.
+        float groundFromY = 0.0f;
+        // Andar conduzido por set_position(..., true): distância horizontal
+        // acumulada desde o último tick, folga que segura o andar entre
+        // chamadas e a velocidade medida (ritmo dos passos).
+        float scriptStep = 0.0f;
+        float scriptWalkLeft = 0.0f;
+        float scriptSpeed = 0.0f;
         LoadedSprite look;
         int frame = 0;
         float timer = 0.0f;
@@ -608,6 +622,10 @@ public:
     // Anda até `target` pelo caminho achado; `seconds` > 0 acerta a velocidade
     // para chegar nesse tempo (0: passo normal).
     void walkCharacter(int index, const Vec3& target, float seconds);
+    // Põe o personagem em `position`. Com `walk`, o script move o boneco quadro
+    // a quadro e o motor anima: o deslocamento liga o andar e dá o ritmo dos
+    // passos; um salto de mais de 2 alturas de corpo é teleporte (não anima).
+    void placeCharacter(int index, const Vec3& position, bool walk);
     // Caminho no chão de `from` a `to` (grade de caminhada + objetos sólidos),
     // já alisado; falso se não há caminho.
     bool findPath(const Vec3& from, const Vec3& to, float radius, std::vector<Vec3>& out) const;

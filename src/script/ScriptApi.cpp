@@ -440,10 +440,11 @@ int characters_position(lua_State* L) {
     pushVec3(L, checkCharacter(L, 1)->position);
     return 1;
 }
+// Com o 3º argumento verdadeiro o motor anima o andar pelo deslocamento
+// (Engine::placeCharacter); sem ele, só move (recuo, entrada em cena).
 int characters_set_position(lua_State* L) {
-    Engine::SceneCharacter* c = checkCharacter(L, 1);
-    c->position = checkVec3(L, 2);
-    c->walking = false;
+    checkCharacter(L, 1);
+    eng().placeCharacter(eng().findCharacter(lua_tostring(L, 1)), checkVec3(L, 2), lua_toboolean(L, 3) != 0);
     return 0;
 }
 int characters_walk_to(lua_State* L) {
@@ -503,7 +504,8 @@ int characters_stop(lua_State* L) {
     return 0;
 }
 int characters_walking(lua_State* L) {
-    lua_pushboolean(L, checkCharacter(L, 1)->walking);
+    const Engine::SceneCharacter* c = checkCharacter(L, 1);
+    lua_pushboolean(L, c->walking || c->scriptWalkLeft > 0.0f);
     return 1;
 }
 int characters_face(lua_State* L) {
@@ -2215,7 +2217,10 @@ declare characters: {
     -- Characters placed in the scene (drag a PNG from the Project panel), by name.
     exists: (name: string) -> boolean,
     position: (name: string) -> vector,
-    set_position: (name: string, position: vector) -> (),
+    -- With `walk` true the engine animates walking from the displacement
+    -- since the last frame (step rhythm from the measured speed); a jump of
+    -- more than 2 body heights is a teleport. Facing is left to the script.
+    set_position: (name: string, position: vector, walk: boolean?) -> (),
     -- Walks there around solid models and blocked ground, playing the walking
     -- animation; `seconds` sets the pace (default: normal walking speed).
     walk_to: (name: string, position: vector, seconds: number?) -> (),
@@ -2232,6 +2237,8 @@ declare characters: {
     patrol: (name: string, points: {vector}, wait: number?) -> (),
     -- Stops walking, following and patrolling.
     stop: (name: string) -> (),
+    -- True while the walk animation plays: on a path (walk_to, follow,
+    -- patrol) or moved by set_position(..., true).
     walking: (name: string) -> boolean,
     face: (name: string, degrees: number) -> (),
     show: (name: string) -> (),

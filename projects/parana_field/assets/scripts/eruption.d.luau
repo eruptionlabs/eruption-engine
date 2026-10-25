@@ -127,7 +127,10 @@ declare characters: {
     -- Characters placed in the scene (drag a PNG from the Project panel), by name.
     exists: (name: string) -> boolean,
     position: (name: string) -> vector,
-    set_position: (name: string, position: vector) -> (),
+    -- With `walk` true the engine animates walking from the displacement
+    -- since the last frame (step rhythm from the measured speed); a jump of
+    -- more than 2 body heights is a teleport. Facing is left to the script.
+    set_position: (name: string, position: vector, walk: boolean?) -> (),
     -- Walks there around solid models and blocked ground, playing the walking
     -- animation; `seconds` sets the pace (default: normal walking speed).
     walk_to: (name: string, position: vector, seconds: number?) -> (),
@@ -144,6 +147,8 @@ declare characters: {
     patrol: (name: string, points: {vector}, wait: number?) -> (),
     -- Stops walking, following and patrolling.
     stop: (name: string) -> (),
+    -- True while the walk animation plays: on a path (walk_to, follow,
+    -- patrol) or moved by set_position(..., true).
     walking: (name: string) -> boolean,
     face: (name: string, degrees: number) -> (),
     show: (name: string) -> (),

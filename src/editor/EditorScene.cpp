@@ -185,7 +185,9 @@ SceneEdits Editor::currentEdits() const {
     }
     for (const auto& c : m_engine->characters()) {
         if (c.removed || c.fromNeighbor) continue;
-        e.characters.push_back({c.name, c.sprite, c.position, c.facing, !c.visible});
+        Vec3 pos = c.position;
+        if (c.ground) pos.y = c.groundFromY; // o assentado sai do Y escrito
+        e.characters.push_back({c.name, c.sprite, pos, c.facing, !c.visible, c.ground});
     }
     // Sólidos: marca no objeto (o do mapa, o acrescentado ou a cópia), pelo nome.
     for (uint32_t i = 0; i < insts.size(); ++i) {
