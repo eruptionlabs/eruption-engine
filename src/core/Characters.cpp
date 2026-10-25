@@ -137,7 +137,8 @@ void Engine::walkCharacter(int index, const Vec3& target, float seconds) {
         // por script fora do mapa, por exemplo) nao existe caminho a procurar,
         // e a linha reta e' o unico comportamento que faz sentido. Ali nao e'
         // aviso: avisar a cada personagem que entra em cena so' afoga o log.
-        const bool semChao = !navWalkable(c.position.x, c.position.z) && !navWalkable(target.x, target.z);
+        const bool semChao = !navWalkable(c.position.x, c.position.z, c.position.y) &&
+                             !navWalkable(target.x, target.z, target.y);
         if (!semChao)
             ERUPTION_LOG_WARN("Character %s: no path to (%.0f, %.0f); walking straight", c.name.c_str(), target.x, target.z);
         c.path = {c.position, target};

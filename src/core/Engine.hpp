@@ -4,6 +4,7 @@
 #include "core/Window.hpp"
 #include "core/Timer.hpp"
 #include <chrono>
+#include <limits>
 #include <thread>
 #if defined(__EMSCRIPTEN__)
 #include <emscripten.h>
@@ -95,6 +96,9 @@ class Engine {
     friend struct ScriptBridge;
     friend class ScriptHost;
 public:
+    // Altura "qualquer" nas consultas de chão (mapAt e quem chama): o primeiro
+    // mapa que cobre x/z, como antes de existir mapa empilhado.
+    static constexpr float kAnyHeight = std::numeric_limits<float>::quiet_NaN();
     Engine();
     ~Engine();
     bool init(int width, int height, const std::string& title);
@@ -219,7 +223,9 @@ public:
     // (cena aplicada): todos se preparam em paralelo, cada um espera so' o seu.
     void waitModelPreload(const std::string& glbPath);
     const std::string& currentMapName() const { return m_currentMapName; }
-    float sampleTerrainHeight(float x, float z) const;
+    // `y` (opcional): altura de quem pergunta, para escolher entre mapas
+    // empilhados (ver mapAt).
+    float sampleTerrainHeight(float x, float z, float y = kAnyHeight) const;
     // Raio contra a grade de altura do mapa (.ter); falso se o mapa não tem uma.
     bool raycastTerrain(const Vec3& origin, const Vec3& dir, float maxT, float& hitT) const;
     static bool raycastGrid(const TerrainFile& ter, const Vec3& origin, const Vec3& dir, float maxT, float& hitT);
@@ -794,7 +800,7 @@ public:
     // Grade de caminhada (core/WalkGrid.cpp).
     bool navFollowsTerrain() const;
     bool navCell(float x, float z, int& gx, int& gz) const;
-    bool navWalkable(float x, float z) const;
+    bool navWalkable(float x, float z, float y = kAnyHeight) const;
     bool paintWalk(const Vec2& center, float radius, bool block, int rect[4]);
     std::vector<uint8_t> walkRegion(int x0, int z0, int x1, int z1) const;
     void setWalkRegion(int x0, int z0, int x1, int z1, const std::vector<uint8_t>& blocked);
@@ -917,8 +923,11 @@ public:
     };
     std::vector<WorldRegionInfo> worldRegions() const;
     bool isRegionInstance(uint32_t index) const;
-    // Mapa (aberto ou vizinho em cena) que tem chão em (x, z).
-    const LoadedMap* mapAt(float x, float z) const;
+    // Mapa (aberto ou vizinho em cena) que tem chão em (x, z). Com `y`, entre
+    // mapas empilhados (um andar embaixo de outro mapa) vale o chão mais alto
+    // até um degrau acima de y; sem chão abaixo, o mais perto acima. Sem `y`,
+    // o mapa aberto primeiro.
+    const LoadedMap* mapAt(float x, float z, float y = kAnyHeight) const;
     // Área com chão de todos os mapas em cena (limite da câmera).
     bool worldBounds(Vec2& outMin, Vec2& outMax) const;
     // Lado e área de um mapa pela grade de altura (.ter); falso se não tem.

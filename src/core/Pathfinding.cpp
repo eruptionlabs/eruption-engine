@@ -38,7 +38,8 @@ constexpr int64_t kMaxWindow = 1600 * 1600;
 // vetor denso, e o teto e' o tamanho da janela.
 bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vector<Vec3>& out) const {
     out.clear();
-    const LoadedMap* map = mapAt(from.x, from.z);
+    // Mapas empilhados: a busca fica no andar de quem sai (a altura da origem).
+    const LoadedMap* map = mapAt(from.x, from.z, from.y);
     const float step = map && map->terrainFromFile && map->terrain.scale > 0.0f ? map->terrain.scale : 5.0f;
     auto cellX = [&](float x) { return int(std::lround(x / step)); };
     const int sx = cellX(from.x), sz = cellX(from.z), gx = cellX(to.x), gz = cellX(to.z);
@@ -116,8 +117,8 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
         int8_t& v = walk[idxOf(x, z)];
         if (v == 0) {
             Vec3 p(x * step, 0.0f, z * step);
-            p.y = sampleTerrainHeight(p.x, p.z);
-            v = navWalkable(p.x, p.z) && !blocked(x, z, p) ? 1 : -1;
+            p.y = sampleTerrainHeight(p.x, p.z, from.y);
+            v = navWalkable(p.x, p.z, from.y) && !blocked(x, z, p) ? 1 : -1;
         }
         return v > 0;
     };

@@ -144,8 +144,8 @@ void Engine::uploadVfxGround() {
     m_vfx.setGroundHeights(h, vw, vd, Vec2(t.offsetX, t.offsetZ), t.scale > 0.0f ? t.scale : 10.0f);
 }
 
-float Engine::sampleTerrainHeight(float x, float z) const {
-    const LoadedMap* map = mapAt(x, z); // o aberto ou um vizinho em cena
+float Engine::sampleTerrainHeight(float x, float z, float y) const {
+    const LoadedMap* map = mapAt(x, z, y); // o aberto ou um vizinho em cena
     if (!map) return 0.0f;
     return sampleGlbOrTerrainHeight(*map, x, z);
 }

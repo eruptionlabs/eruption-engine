@@ -73,8 +73,8 @@ bool Engine::navCell(float x, float z, int& gx, int& gz) const {
     return m_currentMap && cellOf(*m_currentMap, x, z, gx, gz);
 }
 
-bool Engine::navWalkable(float x, float z) const {
-    const LoadedMap* map = mapAt(x, z);
+bool Engine::navWalkable(float x, float z, float y) const {
+    const LoadedMap* map = mapAt(x, z, y);
     int gx = 0, gz = 0;
     if (map && map != m_currentMap.get()) {
         // Vizinho do mundo contínuo: só mapas com grade (a caminhada segue o terreno).

@@ -844,14 +844,39 @@ bool Engine::isRegionInstance(uint32_t index) const {
     return false;
 }
 
-const LoadedMap* Engine::mapAt(float x, float z) const {
+namespace {
+// Entre dois chãos sob (x, z), o que fica sob quem está na altura y: o mais
+// alto até um degrau acima dele; sem nenhum abaixo, o mais baixo.
+bool floorCloser(float h, float current, float y) {
+    constexpr float kStep = 4.0f; // o mesmo degrau da caminhada (GroundQuery)
+    const bool below = h <= y + kStep, currentBelow = current <= y + kStep;
+    if (below != currentBelow) return below;
+    return below ? h > current : h < current;
+}
+} // namespace
+
+const LoadedMap* Engine::mapAt(float x, float z, float y) const {
     if (!m_currentMap) return nullptr;
     Vec2 lo, hi;
-    if (!m_currentMap->terrainFromFile || !groundArea(m_currentMap->terrain, lo, hi) || inside(lo, hi, x, z))
-        return m_currentMap.get();
-    for (const auto& r : m_regions)
-        if (r.state == WorldRegion::State::Shown && r.data && inside(r.boundsMin, r.boundsMax, x, z)) return r.data.get();
-    return m_currentMap.get();
+    if (!m_currentMap->terrainFromFile || !groundArea(m_currentMap->terrain, lo, hi)) return m_currentMap.get();
+    const bool anyHeight = std::isnan(y);
+    const LoadedMap* best = nullptr;
+    float bestH = 0.0f;
+    if (inside(lo, hi, x, z)) {
+        if (anyHeight) return m_currentMap.get();
+        best = m_currentMap.get();
+        bestH = TerrainParser::getTerrainHeightAt(best->terrain, x, z);
+    }
+    for (const auto& r : m_regions) {
+        if (r.state != WorldRegion::State::Shown || !r.data || !inside(r.boundsMin, r.boundsMax, x, z)) continue;
+        if (anyHeight) return r.data.get();
+        const float h = TerrainParser::getTerrainHeightAt(r.data->terrain, x, z);
+        if (!best || floorCloser(h, bestH, y)) {
+            best = r.data.get();
+            bestH = h;
+        }
+    }
+    return best ? best : m_currentMap.get();
 }
 
 bool Engine::worldBounds(Vec2& outMin, Vec2& outMax) const {
