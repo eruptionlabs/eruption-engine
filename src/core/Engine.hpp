@@ -1803,6 +1803,21 @@ private:
     static void applySavedWalk(LoadedMap& map);
     // Mundo contínuo
     struct WorldRegionLoad;
+    // Modelo que a cena de um vizinho acrescenta, lido, convertido e montado
+    // fora da thread principal (World.cpp); o addModelFromFile seguinte do
+    // arquivo usa o pronto. Montar ali custava 2,3 s de quadro para 900
+    // instâncias de 24 arquivos (converter e simplificar, não ler).
+    struct ReadyModel {
+        std::string file;
+        std::shared_ptr<ModelFile> model; // imagens embutidas (vão para o mapa aberto)
+        EmbeddedBakeResult bake;
+        ModelAsset asset;
+        std::vector<ModelRenderer::NodeSlotUse> slotUse;
+        std::vector<ModelRenderer::NodeSlots> slots;
+        ModelRenderer::PreparedAsset prepared;
+    };
+    static std::shared_ptr<ReadyModel> readModelForWorld(const std::string& glbPath); // qualquer thread
+    std::unordered_map<std::string, std::shared_ptr<ReadyModel>> m_readyModels;
     struct WorldRegion {
         std::string map;
         Vec3 offset{0.0f};
@@ -1810,6 +1825,12 @@ private:
         enum class State { Idle, Loading, Shown, Hidden, Failed } state = State::Idle;
         std::future<std::shared_ptr<WorldRegionLoad>> job;
         bool slotsResolved = false; // Loading: lido e com texturas resolvidas; a malha está sendo montada
+        // Loading: modelos do mapa no lugar; a lista added entra aos poucos
+        // (attachRegionAdded) e só depois o vizinho vira chão (mapAt).
+        std::shared_ptr<WorldRegionLoad> attaching;
+        size_t addedNext = 0;
+        int attachFrames = 0;
+        double slotsMs = 0.0, attachMs = 0.0, attachMaxMs = 0.0;
         std::shared_ptr<LoadedMap> data; // grade e caminhada já no lugar do mundo
         uint32_t firstInstance = 0, endInstance = 0;
         std::vector<uint8_t> enabled; // instâncias ligadas quando o vizinho saiu de cena
@@ -1858,6 +1879,8 @@ private:
     void uploadVfxGround(); // grade de altura do mapa aberto para as particulas
     bool m_vfxGroundDirty = false; // pincel de relevo mexeu: reenviar (no maximo a cada 30 frames)
     void attachRegion(WorldRegion& r, WorldRegionLoad& load);
+    bool attachRegionAdded(WorldRegion& r, double budgetMs);
+    void finishRegion(WorldRegion& r);
     void showRegion(WorldRegion& r, bool show);
     void rebuildWorldWater();
     void stitchGroundEdges();

@@ -991,6 +991,28 @@ void Engine::preloadModel(const std::string& glbPath) {
     m_modelPreloads.emplace(glbPath, std::move(p));
 }
 
+// O pacote fica ao lado do .glb no disco; o caminho do modelo é relativo ao
+// projeto e, lido de outra pasta de trabalho, nunca achava o pacote.
+static bool readModelBakeCache(ModelFile& model, uint32_t maxSize, EmbeddedBakeResult& out) {
+    const std::string rel = model.filePath;
+    model.filePath = project::gameRef(rel).string();
+    const bool ok = readEmbeddedBakeCache(model, maxSize, pbrSynthesisEnabled(), out);
+    model.filePath = rel;
+    return ok;
+}
+
+std::shared_ptr<Engine::ReadyModel> Engine::readModelForWorld(const std::string& glbPath) {
+    auto out = std::make_shared<ReadyModel>();
+    out->file = glbPath;
+    out->model = prepareModelFile(glbPath, false, [](const std::string&) { return false; });
+    if (!out->model) return nullptr;
+    if (!out->model->embeddedTextures.empty()) readModelBakeCache(*out->model, embeddedTextureMaxSize(), out->bake);
+    out->asset = convertModelToAsset(*out->model);
+    out->model->nodes.clear(); // a malha segue no asset; ficam as imagens
+    out->slotUse = ModelRenderer::scanSlotUse(out->asset);
+    return out;
+}
+
 int Engine::addModelFromFile(const std::string& glbPath, const Vec3& position, const std::string& nodeName) {
     if (!m_currentMap) return -1;
     // ERUPTION_TEST_LOAD_PHASES=1: onde vai o tempo de um modelo posto por
@@ -1005,9 +1027,22 @@ int Engine::addModelFromFile(const std::string& glbPath, const Vec3& position, c
     desc.rotation = Vec3(0.0f);
     desc.scale = Vec3(1.0f);
     uint32_t first = 0xFFFFFFFFu;
+    const auto ready = m_readyModels.find(glbPath);
     if (m_modelRenderer.hasAsset(glbPath)) {
         // Já carregado (o próprio mapa, ou outro modelo já acrescentado).
         first = m_modelRenderer.addInstanceOf(glbPath, desc, nodeName);
+    } else if (ready != m_readyModels.end()) {
+        // Montado na thread do mundo contínuo: texturas já resolvidas, malha e LOD prontos.
+        std::shared_ptr<ReadyModel> rm = ready->second;
+        m_readyModels.erase(ready);
+        m_modelRenderer.providePrepared(glbPath, std::move(rm->prepared));
+        m_modelRenderer.setMeshLodSuspended(true);
+        first = m_modelRenderer.addModel(std::move(rm->asset), desc, nodeName);
+        m_modelRenderer.setMeshLodSuspended(false);
+        for (ModelFile& m : m_currentMap->models)
+            if (m.filePath == glbPath)
+                for (EmbeddedTexture& et : m.embeddedTextures)
+                    if (et.hasEncodedData()) std::vector<uint8_t>().swap(et.pixels);
     } else {
         auto onGpu = [this](const std::string& name) {
             std::string key = name;
@@ -1076,8 +1111,7 @@ int Engine::addModelFromFile(const std::string& glbPath, const Vec3& position, c
             // Sem preload: so' o cache, se ja' existir. O bake no quadro custava
             // ~2,8 s por textura na primeira vez (BC + sintese), muito mais
             // que a sintese direta abaixo dele (medido no warp de 17:03).
-            if (!have && missing)
-                readEmbeddedBakeCache(model, static_cast<uint32_t>(m_textureMaxSize), pbrSynthesisEnabled(), bake);
+            if (!have && missing) readModelBakeCache(model, static_cast<uint32_t>(m_textureMaxSize), bake);
             for (auto& [name, tex] : bake.textures) m_embeddedBaked.emplace(name, std::move(tex));
         }
         first = m_modelRenderer.addModel(convertModelToAsset(model), desc, nodeName);
