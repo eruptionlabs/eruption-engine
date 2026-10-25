@@ -1221,6 +1221,10 @@ void Editor::drawNeighborMaps() {
         }
         finished |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SetItemTooltip("%s", tr("Where the neighbor sits relative to this map (world units)."));
+        propertyLabel("Rotation");
+        if (ImGui::DragFloat("##yaw", &list[i].yaw, 1.0f, -360.0f, 360.0f, "%.0f")) m_neighborEditing = true;
+        finished |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SetItemTooltip("%s", tr("Turn of the neighbor around its own origin (degrees, Y axis)."));
         ImGui::PopID();
     }
     if (removeAt >= 0) {

@@ -70,12 +70,44 @@ float distanceToArea(const Vec2& lo, const Vec2& hi, float x, float z) {
     return std::sqrt(dx * dx + dz * dz);
 }
 
-bool groundArea(const TerrainFile& t, Vec2& lo, Vec2& hi) {
+// Área da grade em coordenada do próprio mapa (sem o giro do vizinho).
+bool gridArea(const TerrainFile& t, Vec2& lo, Vec2& hi) {
     if (t.width < 2 || t.height < 2) return false;
     const float s = t.scale > 0.0f ? t.scale : 10.0f;
     lo = Vec2(t.offsetX, t.offsetZ);
     hi = lo + Vec2(float(t.width - 1) * s, float(t.height - 1) * s);
     return true;
+}
+
+// Caixa no mundo que contém a área [lo, hi] do mapa girado de yaw graus e
+// deslocada de off.
+void placeArea(Vec2& lo, Vec2& hi, const Vec3& off, float yaw) {
+    const float c = std::cos(glm::radians(yaw)), sn = std::sin(glm::radians(yaw));
+    Vec2 a(1e30f), b(-1e30f);
+    for (const Vec2 p : {lo, hi, Vec2(lo.x, hi.y), Vec2(hi.x, lo.y)}) {
+        const Vec2 w(off.x + c * p.x + sn * p.y, off.z - sn * p.x + c * p.y);
+        a = glm::min(a, w);
+        b = glm::max(b, w);
+    }
+    lo = a;
+    hi = b;
+}
+
+bool groundArea(const TerrainFile& t, Vec2& lo, Vec2& hi) {
+    if (!gridArea(t, lo, hi)) return false;
+    if (t.rotated()) {
+        // A grade já está no lugar: place + giro (yaw de cos/sen).
+        placeArea(lo, hi, Vec3(t.placeX, 0.0f, t.placeZ), glm::degrees(std::atan2(t.yawSin, t.yawCos)));
+    }
+    return true;
+}
+
+// O ponto cai na grade (girada ou não), não só na caixa que a contém.
+bool groundHas(const TerrainFile& t, float x, float z) {
+    Vec2 lo, hi;
+    if (!gridArea(t, lo, hi)) return false;
+    const Vec2 p = t.toMap(x, z);
+    return inside(lo, hi, p.x, p.y);
 }
 
 } // namespace
@@ -158,7 +190,7 @@ void Engine::restartWorld() {
     buildWorldGraph();
     for (auto& r : m_regions)
         for (auto& o : old)
-            if (!o.map.empty() && o.map == r.map && o.offset == r.offset && o.state == WorldRegion::State::Hidden) {
+            if (!o.map.empty() && o.map == r.map && o.offset == r.offset && o.yaw == r.yaw && o.state == WorldRegion::State::Hidden) {
                 r = std::move(o);
                 o.map.clear();
             }
@@ -188,12 +220,18 @@ void Engine::buildWorldGraph() {
     if (m_currentMapName.empty()) return;
     // Vizinhos de cada mapa: os do próprio arquivo e os que apontam para ele.
     std::map<std::string, std::vector<WorldNeighbor>> links;
-    auto addLink = [&](const std::string& a, const std::string& b, const Vec3& off) {
+    auto addLink = [&](const std::string& a, const std::string& b, const Vec3& off, float yaw) {
         if (a == b) return;
         auto& v = links[a];
         for (const auto& n : v)
             if (n.map == b) return;
-        v.push_back({b, off});
+        v.push_back({b, off, yaw});
+    };
+    // O mesmo vizinho visto do outro lado: deslocamento e giro desfeitos.
+    auto back = [](const WorldNeighbor& n) {
+        const Mat4 inv = glm::inverse(glm::rotate(glm::translate(Mat4(1.0f), n.offset), glm::radians(n.yaw),
+                                                  Vec3(0.0f, 1.0f, 0.0f)));
+        return Vec3(inv[3]);
     };
     std::error_code ec;
     const fs::path dir = SceneEdits::pathFor("x").parent_path();
@@ -207,34 +245,39 @@ void Engine::buildWorldGraph() {
         std::string error;
         if (!SceneEdits::fileMentions(map, "neighbors") || !e.load(it->path(), error)) continue;
         for (const auto& n : e.neighbors) {
-            addLink(map, n.map, n.offset);
-            addLink(n.map, map, -n.offset);
+            addLink(map, n.map, n.offset, n.yaw);
+            addLink(n.map, map, back(n), -n.yaw);
         }
     }
     for (const auto& n : m_worldNeighbors) {
-        addLink(m_currentMapName, n.map, n.offset);
-        addLink(n.map, m_currentMapName, -n.offset);
+        addLink(m_currentMapName, n.map, n.offset, n.yaw);
+        addLink(n.map, m_currentMapName, back(n), -n.yaw);
     }
-    // Do aberto para fora, somando os deslocamentos.
-    std::map<std::string, Vec3> placed{{m_currentMapName, Vec3(0.0f)}};
+    // Do aberto para fora, compondo deslocamento e giro (o do vizinho vale no
+    // espaço do mapa de onde ele sai).
+    std::map<std::string, std::pair<Vec3, float>> placed{{m_currentMapName, {Vec3(0.0f), 0.0f}}};
     std::deque<std::string> queue{m_currentMapName};
     while (!queue.empty() && m_regions.size() < kMaxRegions) {
         const std::string at = queue.front();
         queue.pop_front();
         for (const auto& n : links[at]) {
             if (placed.count(n.map)) continue;
-            const Vec3 off = placed[at] + n.offset;
-            placed[n.map] = off;
+            const auto [from, fromYaw] = placed[at];
+            const Vec3 off = from + Vec3(glm::rotate(Mat4(1.0f), glm::radians(fromYaw), Vec3(0.0f, 1.0f, 0.0f)) *
+                                         Vec4(n.offset, 0.0f));
+            float yaw = std::fmod(fromYaw + n.yaw, 360.0f);
+            if (std::abs(yaw) < 1e-3f) yaw = 0.0f;
+            placed[n.map] = {off, yaw};
             queue.push_back(n.map);
             WorldRegion r;
             r.map = n.map;
             r.offset = off;
+            r.yaw = yaw;
             if (!mapGroundArea(n.map, r.boundsMin, r.boundsMax)) {
                 ERUPTION_LOG_WARN("World: neighbor map %s has no height grid (.ter); left out", n.map.c_str());
                 continue;
             }
-            r.boundsMin += Vec2(off.x, off.z);
-            r.boundsMax += Vec2(off.x, off.z);
+            placeArea(r.boundsMin, r.boundsMax, off, yaw);
             m_regions.push_back(std::move(r));
         }
     }
@@ -265,7 +308,8 @@ void Engine::updateWorld() {
             if (near && jobs < kMaxJobs) {
                 const std::string map = r.map;
                 const Vec3 off = r.offset;
-                r.job = platform::runAsync([map, off] {
+                const float yaw = r.yaw;
+                r.job = platform::runAsync([map, off, yaw] {
                     auto out = std::make_shared<WorldRegionLoad>();
                     MapLoader loader;
                     out->map = loader.loadMap(map);
@@ -291,8 +335,15 @@ void Engine::updateWorld() {
                     applySavedWalk(*out->map);
                     // Grade no lugar do mundo (a altura guardada é negativa).
                     TerrainFile& t = out->map->terrain;
-                    t.offsetX += off.x;
-                    t.offsetZ += off.z;
+                    if (yaw != 0.0f) {
+                        t.placeX = off.x;
+                        t.placeZ = off.z;
+                        t.yawCos = std::cos(glm::radians(yaw));
+                        t.yawSin = std::sin(glm::radians(yaw));
+                    } else {
+                        t.offsetX += off.x;
+                        t.offsetZ += off.z;
+                    }
                     if (off.y != 0.0f)
                         for (auto& c : t.cubes)
                             for (float& hh : c.height) hh -= off.y;
@@ -376,6 +427,10 @@ void Engine::updateWorld() {
     }
 }
 
+Mat4 Engine::WorldRegion::place() const {
+    return glm::rotate(glm::translate(Mat4(1.0f), offset), glm::radians(yaw), Vec3(0.0f, 1.0f, 0.0f));
+}
+
 void Engine::resolveRegionSlots(WorldRegionLoad& load) {
     for (auto& [name, tex] : load.baked) m_embeddedBaked.emplace(name, std::move(tex));
     load.baked.clear();
@@ -421,7 +476,7 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
         ModelInstanceDesc desc;
         desc.modelPath = file;
         desc.position = r.offset;
-        desc.rotation = Vec3(0.0f);
+        desc.rotation = Vec3(0.0f, r.yaw, 0.0f);
         desc.scale = Vec3(1.0f);
         mr.addModel(std::move(load.models[i]), desc);
         r.modelFiles.push_back(file);
@@ -450,7 +505,7 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
 bool Engine::attachRegionAdded(WorldRegion& r, double budgetMs) {
     const auto t0 = std::chrono::steady_clock::now();
     const SceneEdits& e = r.attaching->edits;
-    const Mat4 place = glm::translate(Mat4(1.0f), r.offset);
+    const Mat4 place = r.place();
     const std::string prefix = r.map + ":";
     while (r.addedNext < e.added.size()) {
         const auto& a = e.added[r.addedNext++];
@@ -482,7 +537,7 @@ void Engine::finishRegion(WorldRegion& r) {
     std::shared_ptr<WorldRegionLoad> load = std::move(r.attaching);
     ModelRenderer& mr = m_modelRenderer;
     const SceneEdits& e = load->edits;
-    const Mat4 place = glm::translate(Mat4(1.0f), r.offset);
+    const Mat4 place = r.place();
     const std::string prefix = r.map + ":";
     for (const auto& file : load->readyFiles) m_readyModels.erase(file); // os que nenhuma entrada usou
     auto findInRegion = [&](const std::string& name) -> int {
@@ -518,14 +573,14 @@ void Engine::finishRegion(WorldRegion& r) {
     r.lights.clear();
     for (const auto& ml : r.data->lights) {
         PointLight pl;
-        pl.position = ml.position + r.offset;
+        pl.position = Vec3(place * Vec4(ml.position, 1.0f));
         pl.color = ml.color;
         pl.intensity = ml.intensity;
         pl.radius = ml.range;
         pl.animType = ml.animType;
         pl.nightOnly = ml.nightOnly;
         pl.enabled = !ml.nightOnly;
-        pl.spotDir = ml.spotDir;
+        pl.spotDir = Vec3(place * Vec4(ml.spotDir, 0.0f));
         pl.spotCos = std::cos(glm::radians(glm::clamp(ml.spotAngle, 1.0f, 179.0f) * 0.5f));
         r.lights.push_back(pl);
     }
@@ -533,7 +588,7 @@ void Engine::finishRegion(WorldRegion& r) {
         if (l.index < 1 || l.index > 1024) continue;
         if (l.index > static_cast<int>(r.lights.size())) r.lights.resize(static_cast<size_t>(l.index));
         PointLight& p = r.lights[static_cast<size_t>(l.index - 1)];
-        p.position = l.position + r.offset;
+        p.position = Vec3(place * Vec4(l.position, 1.0f));
         p.color = l.color;
         p.intensity = l.intensity;
         p.radius = l.range;
@@ -543,7 +598,7 @@ void Engine::finishRegion(WorldRegion& r) {
     for (const auto& c : e.characters) {
         const std::string name = prefix + c.name;
         if (findCharacter(name) >= 0) continue;
-        const int idx = addCharacter(name, c.sprite, c.position + r.offset, c.facing);
+        const int idx = addCharacter(name, c.sprite, Vec3(place * Vec4(c.position, 1.0f)), c.facing + r.yaw);
         m_characters[static_cast<size_t>(idx)].visible = !c.hidden;
         m_characters[static_cast<size_t>(idx)].fromNeighbor = true;
         m_characters[static_cast<size_t>(idx)].ground = m_characters[static_cast<size_t>(idx)].groundPending = c.ground;
@@ -554,7 +609,7 @@ void Engine::finishRegion(WorldRegion& r) {
     for (const auto& a : e.areas) {
         const std::string name = prefix + a.name;
         if (findArea(name) >= 0) continue;
-        const int idx = addArea(name, a.position + r.offset, a.size, a.rotation);
+        const int idx = addArea(name, Vec3(place * Vec4(a.position, 1.0f)), a.size, a.rotation + r.yaw);
         m_areas[static_cast<size_t>(idx)].fromNeighbor = true;
         r.areas.push_back(name);
     }
@@ -566,7 +621,7 @@ void Engine::finishRegion(WorldRegion& r) {
     for (const auto& snd : e.sounds) {
         const std::string name = prefix + snd.name;
         if (findSoundEmitter(name) >= 0) continue;
-        const int idx = addSoundEmitter(name, snd.file, snd.position + r.offset, snd.volume, snd.range);
+        const int idx = addSoundEmitter(name, snd.file, Vec3(place * Vec4(snd.position, 1.0f)), snd.volume, snd.range);
         m_soundEmitters[static_cast<size_t>(idx)].fromNeighbor = true;
         r.sounds.push_back(name);
     }
@@ -631,8 +686,7 @@ struct WorldGround {
 // Qual chão tem o ponto (e a altura dele); -1 = fora de todos.
 int groundAt(const std::vector<WorldGround>& grounds, float x, float z, float& h) {
     for (size_t i = 0; i < grounds.size(); ++i) {
-        Vec2 lo, hi;
-        if (groundArea(*grounds[i].ter, lo, hi) && inside(lo, hi, x, z)) {
+        if (groundHas(*grounds[i].ter, x, z)) {
             h = TerrainParser::getTerrainHeightAt(*grounds[i].ter, x, z);
             return static_cast<int>(i);
         }
@@ -655,7 +709,7 @@ void Engine::stitchGroundEdges() {
     size_t patched = 0;
     for (const auto& g : grounds) {
         Vec2 lo, hi;
-        if (!groundArea(*g.ter, lo, hi)) continue;
+        if (!gridArea(*g.ter, lo, hi)) continue;
         const float s = g.ter->scale > 0.0f ? g.ter->scale : 10.0f;
         for (uint32_t i = g.first; i < g.end && i < insts.size(); ++i) {
             if (isRegionInstance(i) && g.first == 0) continue; // do mapa aberto, só as dele
@@ -670,8 +724,9 @@ void Engine::stitchGroundEdges() {
             for (uint32_t k = 0; k < verts->size(); ++k) {
                 TerrainVertex& v = (*verts)[k];
                 const Vec3 wp = Vec3(m * Vec4(v.position, 1.0f));
-                const bool edge = wp.x < lo.x + s * 0.5f || wp.x > hi.x - s * 0.5f || wp.z < lo.y + s * 0.5f ||
-                                  wp.z > hi.y - s * 0.5f;
+                const Vec2 mp = g.ter->toMap(wp.x, wp.z); // borda na grade do mapa (vizinho girado)
+                const bool edge = mp.x < lo.x + s * 0.5f || mp.x > hi.x - s * 0.5f || mp.y < lo.y + s * 0.5f ||
+                                  mp.y > hi.y - s * 0.5f;
                 if (!edge) continue;
                 // Diferença pelo mundo: do outro lado da borda vale a grade do vizinho.
                 bool crossed = false;
@@ -793,8 +848,9 @@ void Engine::rebuildWorldWater() {
         WaterMesh m = TerrainParser::generateWaterMesh(t, 0, 0, t.width, t.height, level, 0.0f, true, false);
         const uint32_t base = static_cast<uint32_t>(all.vertices.size());
         for (auto& v : m.vertices) {
-            v.position.x += dx;
-            v.position.z += dz;
+            const Vec2 p = t.toWorld(v.position.x + dx, v.position.z + dz); // vizinho girado: gira a malha
+            v.position.x = p.x;
+            v.position.z = p.y;
             all.vertices.push_back(v);
         }
         for (uint32_t i : m.indices) all.indices.push_back(base + i);
@@ -869,6 +925,7 @@ const LoadedMap* Engine::mapAt(float x, float z, float y) const {
     }
     for (const auto& r : m_regions) {
         if (r.state != WorldRegion::State::Shown || !r.data || !inside(r.boundsMin, r.boundsMax, x, z)) continue;
+        if (r.yaw != 0.0f && !groundHas(r.data->terrain, x, z)) continue; // na caixa, fora da grade girada
         if (anyHeight) return r.data.get();
         const float h = TerrainParser::getTerrainHeightAt(r.data->terrain, x, z);
         if (!best || floorCloser(h, bestH, y)) {

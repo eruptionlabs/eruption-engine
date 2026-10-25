@@ -670,8 +670,9 @@ bool TerrainParser::writeEruptGndBin(const TerrainFile& t, const std::string& pa
 
 float TerrainParser::getTerrainHeightAt(const TerrainFile& terrain, float worldX, float worldZ) {
     float tileSize = terrain.scale > 0.0f ? terrain.scale : 10.0f;
-    float localX = worldX - terrain.offsetX;
-    float localZ = worldZ - terrain.offsetZ;
+    const Vec2 m = terrain.toMap(worldX, worldZ);
+    float localX = m.x - terrain.offsetX;
+    float localZ = m.y - terrain.offsetZ;
     int x = static_cast<int>(localX / tileSize);
     int z = static_cast<int>(localZ / tileSize);
     if (x < 0 || z < 0 || x >= static_cast<int>(terrain.width) || z >= static_cast<int>(terrain.height)) return 0.0f;

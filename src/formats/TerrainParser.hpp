@@ -44,6 +44,20 @@ struct TerrainFile {
     float scale = 10.0f;
     float offsetX = 0.0f;
     float offsetZ = 0.0f;
+    // Vizinho girado do mundo contínuo: mundo = place + giro(yaw) * coordenada
+    // do mapa (a de offsetX/Z), o mesmo giro em Y do glm::rotate. Sem giro fica
+    // em 0 e o deslocamento vai direto em offsetX/Z, como antes.
+    float placeX = 0.0f, placeZ = 0.0f, yawCos = 1.0f, yawSin = 0.0f;
+    bool rotated() const { return yawSin != 0.0f || yawCos != 1.0f; }
+    Vec2 toMap(float x, float z) const {
+        if (!rotated()) return Vec2(x, z);
+        const float dx = x - placeX, dz = z - placeZ;
+        return Vec2(yawCos * dx - yawSin * dz, yawSin * dx + yawCos * dz);
+    }
+    Vec2 toWorld(float x, float z) const {
+        if (!rotated()) return Vec2(x, z);
+        return Vec2(placeX + yawCos * x + yawSin * z, placeZ - yawSin * x + yawCos * z);
+    }
 
     std::vector<std::string> textures;
     std::vector<TerrainSurface> surfaces;

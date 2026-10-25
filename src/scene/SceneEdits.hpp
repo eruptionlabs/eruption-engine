@@ -35,7 +35,7 @@ class Engine;
 //       environment = { time = 18.5, paused = true, weather = "rainy" },
 //       spawn = {x, y, z},   -- onde o jogador começa
 //       terrain = { layers = { "assets/textures/grama.png", ... } },  -- camadas pintáveis
-//       neighbors = { { map = "floresta", offset = {1000, 0, 0} } },  -- mundo contínuo
+//       neighbors = { { map = "floresta", offset = {1000, 0, 0}, yaw = 90 } },  -- mundo contínuo
 //       areas = { { name = "porta", position = {x, y, z}, size = {40, 30, 40}, rotation = 0 } },  -- gatilhos
 //       ribbons = { { name = "estrada", closed = true, points = { {x, z}, ... }, width = 40,  -- faixas
 //                     step = 4, uv_length = 32, lift = 0.1 } },  -- (ou widths = {...}, uma por ponto)
@@ -120,10 +120,12 @@ struct SceneEdits {
     // máscaras ficam em <mapa>.splat0/1.png ao lado do arquivo.
     std::vector<std::string> terrainLayers;
     // Mapas emendados a este (mundo contínuo): o vizinho fica deslocado de
-    // `offset` em relação a este mapa. Vale nos dois sentidos.
+    // `offset` em relação a este mapa e girado de `yaw` graus em Y em volta da
+    // origem dele (0 = sem giro). Vale nos dois sentidos.
     struct Neighbor {
         std::string map;
         Vec3 offset{0.0f};
+        float yaw = 0.0f;
     };
     std::vector<Neighbor> neighbors;
     // Área de gatilho: caixa nomeada (giro em Y, graus) observada por scripts e regras.

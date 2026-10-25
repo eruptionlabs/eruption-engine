@@ -685,6 +685,7 @@
  "West": "Oeste",
  "What the camera sees (depth)": "O que a câmera vê (profundidade)",
  "Where the neighbor sits relative to this map (world units).": "Onde o vizinho fica em relação a este mapa (unidades do mundo).",
+ "Turn of the neighbor around its own origin (degrees, Y axis).": "Giro do vizinho em volta da própria origem (graus, eixo Y).",
  "Where the player begins (fractions of the map).": "Onde o jogador começa (frações do mapa).",
  "Where this map sits in a bigger world. Two maps with the same recipe and seed, side by side (e.g. 0,0 and 1000,0), have matching hills at the border.": "Onde este mapa fica num mundo maior. Dois mapas com a mesma receita e semente, lado a lado (ex.: 0,0 e 1000,0), têm os morros iguais na emenda.",
  "Width (world units)": "Largura (unidades do mundo)",
