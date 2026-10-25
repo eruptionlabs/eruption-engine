@@ -499,11 +499,8 @@ void Engine::updateUiHold() {
     UiHold& h = m_uiHold;
     if (h.frame == m_framesCount) return; // uma vez por quadro, por mais chamadas que haja
     h.frame = m_framesCount;
-#ifdef __ANDROID__
-    constexpr MouseButton kDedo = MouseButton::Right;
-#else
-    constexpr MouseButton kDedo = MouseButton::Left;
-#endif
+    // O dedo da camera aperta o botao direito (core/TouchRouter); o mouse, o esquerdo.
+    const MouseButton kDedo = Input::touchScreen() ? MouseButton::Right : MouseButton::Left;
     const double agora = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     h.released = false;
     if (Input::isMousePressed(kDedo)) {

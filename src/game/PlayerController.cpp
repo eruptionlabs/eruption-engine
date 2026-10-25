@@ -489,11 +489,10 @@ void PlayerController::updateCamera(float dt, bool captureMouse, bool captureKey
     if (!captureMouse) {
         Vec2 md = Input::mouseDelta();
         float sens = m_engine->inputConfig().kbMouse.mouseSensitivity;
-#ifdef __ANDROID__
         // Dedo: giro pela fracao da altura da tela, nao por pixel.
         const float screenH = ImGui::GetIO().DisplaySize.y;
-        if (screenH > 0.0f) sens = glm::radians(m_engine->inputConfig().kbMouse.touchTurnPerScreen) / screenH;
-#endif
+        if (Input::touchScreen() && screenH > 0.0f)
+            sens = glm::radians(m_engine->inputConfig().kbMouse.touchTurnPerScreen) / screenH;
         if (Input::isMouseDown(MouseButton::Left)) {
             if (Input::isKeyDown(Key::LeftAlt)) m_engine->camera().orbitPitch(md.y * sens);
             else m_engine->camera().orbitYaw(md.x * sens);

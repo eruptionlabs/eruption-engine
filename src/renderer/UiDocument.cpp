@@ -6,6 +6,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cstdlib>
 #include <cmath>
 
@@ -246,6 +247,18 @@ bool UiDocument::rectOf(const std::string& selector, float x, float y, float w, 
     const Element* e = find(selector);
     if (!e) return false;
     out = resolveRect(*e, Vec2(w, h));
+    // Texto sem caixa (so' posicao, como uma seta "»"): o retangulo vira o do
+    // texto desenhado, senao ui.clicked so' acerta o ponto da ancora e o
+    // toque no celular nunca pega.
+    if (e->widget == Widget::Text && out.w <= 0.0f && out.h <= 0.0f && ImGui::GetCurrentContext()) {
+        const std::string& txt = e->hasText ? e->text : e->textCss;
+        float size = h * 0.03f;
+        CSSLayout::parseLength(m_layout.rawProperty(e->selector, "font-size"), h, size);
+        const float tw = ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.0f, txt.c_str()).x;
+        out.x -= e->align == 0 ? 0.0f : (e->align == 1 ? tw * 0.5f : tw);
+        out.w = tw;
+        out.h = size;
+    }
     out.x += x;
     out.y += y;
     return true;

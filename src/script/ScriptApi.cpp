@@ -623,12 +623,9 @@ int input_double_tapped(lua_State* L) {
     return 1;
 }
 int input_touch(lua_State* L) {
-#ifdef __ANDROID__
-    lua_pushboolean(L, 1);
-#else
+    // ERUPTION_TEST_TOUCH (teste): finge tela de toque no PC.
     static const bool kFinge = std::getenv("ERUPTION_TEST_TOUCH") != nullptr;
-    lua_pushboolean(L, kFinge);
-#endif
+    lua_pushboolean(L, kFinge || Input::touchScreen());
     return 1;
 }
 int input_pressed(lua_State* L) {

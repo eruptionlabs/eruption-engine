@@ -62,6 +62,10 @@ public:
     // nada com ele; o jogo decide (reenquadrar a camera, por exemplo).
     static void signalDoubleTap() { s_doubleTapPending = true; }
     static bool isDoubleTapped() { return s_doubleTap; }
+    // Tela de toque: sempre no celular; no navegador, depois do primeiro dedo
+    // (o mesmo build roda no PC e no telefone).
+    static void markTouchScreen() { s_touchScreen = true; }
+    static bool touchScreen() { return s_touchScreen; }
     static void shutdown();
     static void update();
     // CONTROLE DE TOQUE (Engine::drawTouchPad): tecla virtual segurada pela
@@ -119,6 +123,7 @@ private:
     static glm::vec4 s_stickZone;
     static TouchStick s_touchStick;
     static bool s_doubleTapPending, s_doubleTap;
+    static bool s_touchScreen;
     static std::array<bool, 8> s_mouse;
     static std::array<bool, 8> s_mousePrev;
     // Apertou neste quadro, mesmo que ja' tenha soltado (toque curto do

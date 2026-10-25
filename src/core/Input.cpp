@@ -1,4 +1,5 @@
 #include "core/Input.hpp"
+#include <chrono>
 #include <vector>
 #include <GLFW/glfw3.h>
 #include <imgui_impl_glfw.h>
@@ -17,6 +18,11 @@ glm::vec2 Input::s_virtStick{0.0f};
 glm::vec4 Input::s_stickZone{0.0f};
 Input::TouchStick Input::s_touchStick;
 bool Input::s_doubleTapPending = false;
+#ifdef __ANDROID__
+bool Input::s_touchScreen = true;
+#else
+bool Input::s_touchScreen = false;
+#endif
 bool Input::s_doubleTap = false;
 std::array<bool, 8> Input::s_mouse{};
 std::array<bool, 8> Input::s_mousePrev{};
@@ -267,15 +273,14 @@ bool Input::inUiTouchRect(float x, float y) { return inRects(s_uiTouchRects, x, 
 
 void Input::mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
-#ifndef __ANDROID__
-    // Duplo clique direito = o duplo toque do celular (no Android o botao
-    // direito e' o dedo pousando; o shim detecta o duplo toque por la').
-    if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
+    // Duplo clique direito = o duplo toque do celular (com toque o botao
+    // direito e' o dedo pousando; o core/TouchRouter detecta o duplo toque).
+    if (!s_touchScreen && button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
         static double s_last = -1.0;
         static glm::vec2 s_lastPos{0.0f};
         int w = 0, h = 0;
         glfwGetWindowSize(window, &w, &h);
-        const double now = glfwGetTime();
+        const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
         if (s_last >= 0.0 && now - s_last < 0.3 && glm::length(s_mousePos - s_lastPos) < 0.05f * float(h)) {
             s_doubleTapPending = true;
             s_last = -1.0;
@@ -284,7 +289,6 @@ void Input::mouseButtonCallback(GLFWwindow* window, int button, int action, int 
             s_lastPos = s_mousePos;
         }
     }
-#endif
     if (button >= 0 && button < 8) {
         if (action == GLFW_PRESS) {
             s_mouse[button] = s_mouseClicked[button] = true;
