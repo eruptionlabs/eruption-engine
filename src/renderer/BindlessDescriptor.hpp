@@ -59,7 +59,7 @@ public:
     // Se highWater encosta em MAX_BINDLESS_TEXTURES e usedSlots nao cai entre
     // cargas de mapa, alguem esta' vazando slot (ver MapLoad.cpp).
     // A free list nasce cheia (init empurra 1..MAX-1), entao "usado" e' o que
-    // saiu dela e nao voltou - nao depende de m_nextSlot.
+    // saiu dela e nao voltou.
     uint32_t usedSlots() const { return m_allocated; }
     uint32_t highWater() const { return m_highWater; }
 
@@ -83,7 +83,6 @@ private:
     VkSampler m_defaultSampler = VK_NULL_HANDLE;
 
     std::vector<uint32_t> m_freeSlots;
-    uint32_t m_nextSlot = 1; // slot 0 reserved for default/null
     uint32_t m_allocated = 0;  // slots entregues e ainda nao devolvidos
     uint32_t m_highWater = 0;  // maximo simultaneo de m_allocated
 
