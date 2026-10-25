@@ -400,7 +400,8 @@ void Engine::drawTouchPad() {
     // Analogico. No celular e' FLUTUANTE: qualquer dedo que pousa na zona da
     // esquerda (40% da largura, abaixo do quarto de cima) leva a base para
     // onde pousou e o pino segue o dedo, sem disputar com o dedo da camera
-    // (roteador de toque do shim). Solto, volta ao canto, meio transparente.
+    // (core/TouchRouter). Solto, volta ao canto, meio transparente. No
+    // navegador vale o mesmo depois do primeiro dedo (Input::touchScreen).
     // No PC o mouse e' um so': base fixa no canto, arrastada pelo ImGui.
     const float r = m_touchHudFont->FontSize * 2.6f;
     const ImVec2 size(r * 2.6f, r * 2.6f);
@@ -409,32 +410,32 @@ void Engine::drawTouchPad() {
     ImVec2 tilt(0.0f, 0.0f);
     bool held = false;
     ImDrawList* dl = ImGui::GetForegroundDrawList();
-#ifdef __ANDROID__
-    const glm::vec4 zone(vp->WorkPos.x, vp->WorkPos.y + vp->WorkSize.y * 0.25f, vp->WorkPos.x + vp->WorkSize.x * 0.4f,
-                         vp->WorkPos.y + vp->WorkSize.y);
-    Input::setStickZone(zone);
-    Input::TouchStick& stick = Input::touchStick();
-    if (stick.active) {
-        // A base nao sai da zona (o anel inteiro fica na tela).
-        stick.base = glm::clamp(stick.base, glm::vec2(zone.x + r, zone.y + r), glm::vec2(zone.z - r, zone.w - r));
-        c = ImVec2(stick.base.x, stick.base.y);
-        tilt = ImVec2((stick.pos.x - c.x) / r, (stick.pos.y - c.y) / r);
-        held = true;
+    if (Input::touchScreen()) {
+        const glm::vec4 zone(vp->WorkPos.x, vp->WorkPos.y + vp->WorkSize.y * 0.25f, vp->WorkPos.x + vp->WorkSize.x * 0.4f,
+                             vp->WorkPos.y + vp->WorkSize.y);
+        Input::setStickZone(zone);
+        Input::TouchStick& stick = Input::touchStick();
+        if (stick.active) {
+            // A base nao sai da zona (o anel inteiro fica na tela).
+            stick.base = glm::clamp(stick.base, glm::vec2(zone.x + r, zone.y + r), glm::vec2(zone.z - r, zone.w - r));
+            c = ImVec2(stick.base.x, stick.base.y);
+            tilt = ImVec2((stick.pos.x - c.x) / r, (stick.pos.y - c.y) / r);
+            held = true;
+        }
+    } else {
+        ImGui::SetNextWindowPos(corner, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+        ImGui::Begin("##pad_analogico", nullptr, flags);
+        publishRect();
+        ImGui::SetCursorScreenPos(corner);
+        ImGui::InvisibleButton("##pad_pino", size);
+        if (ImGui::IsItemActive()) {
+            const ImVec2 m = ImGui::GetIO().MousePos;
+            tilt = ImVec2((m.x - c.x) / r, (m.y - c.y) / r);
+            held = true;
+        }
+        ImGui::End();
     }
-#else
-    ImGui::SetNextWindowPos(corner, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
-    ImGui::Begin("##pad_analogico", nullptr, flags);
-    publishRect();
-    ImGui::SetCursorScreenPos(corner);
-    ImGui::InvisibleButton("##pad_pino", size);
-    if (ImGui::IsItemActive()) {
-        const ImVec2 m = ImGui::GetIO().MousePos;
-        tilt = ImVec2((m.x - c.x) / r, (m.y - c.y) / r);
-        held = true;
-    }
-    ImGui::End();
-#endif
     const float len = std::sqrt(tilt.x * tilt.x + tilt.y * tilt.y);
     if (len > 1.0f) tilt = ImVec2(tilt.x / len, tilt.y / len);
     const float a = held ? 1.0f : 0.5f;
