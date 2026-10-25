@@ -47,6 +47,10 @@ public:
     // que foram publicados e o seguinte (o toque chega antes do script rodar).
     static void addCssTouchRect(float x0, float y0, float x1, float y1);
     static bool inCssTouchRect(float x, float y);
+    // O aperto em curso comecou num desses elementos: o arrasto e' dele (um
+    // botao segurado, um controle arrastado), nao gira a camera. Vale ate'
+    // soltar todos os botoes.
+    static bool pressOnCss() { return s_pressOnCss; }
     // ANALOGICO FLUTUANTE (celular): a interface publica a cada quadro a zona
     // em que um dedo vira analogico (largura 0 = sem analogico); o dedo que
     // pousa nela leva a base consigo e o pino segue o dedo. Os outros dedos
@@ -124,6 +128,7 @@ private:
     static TouchStick s_touchStick;
     static bool s_doubleTapPending, s_doubleTap;
     static bool s_touchScreen;
+    static bool s_pressOnCss;
     static std::array<bool, 8> s_mouse;
     static std::array<bool, 8> s_mousePrev;
     // Apertou neste quadro, mesmo que ja' tenha soltado (toque curto do
