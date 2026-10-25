@@ -89,10 +89,14 @@ set(DRACO_POINT_CLOUD_COMPRESSION OFF CACHE BOOL "" FORCE)
 set(DRACO_STANDARD_EDGEBREAKER ON CACHE BOOL "" FORCE)
 set(DRACO_TRANSCODER_SUPPORTED OFF CACHE BOOL "" FORCE)
 set(DRACO_BACKWARDS_COMPATIBILITY OFF CACHE BOOL "" FORCE)
+# No Emscripten o draco vira o decodificador em JS por padrao; o motor quer a
+# biblioteca C++ comum (draco::draco), como nos outros alvos.
+set(DRACO_JS_GLUE OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(glm vma imgui nlohmann_json tinygltf draco)
 # Android: janela e entrada vem da NativeActivity (src/platform/android), sem GLFW.
-if(NOT ANDROID)
+# Web: o GLFW vem do proprio Emscripten (-sUSE_GLFW=3, sobre o canvas).
+if(NOT ANDROID AND NOT EMSCRIPTEN)
     FetchContent_MakeAvailable(glfw)
 endif()
 
@@ -137,7 +141,16 @@ target_include_directories(tinygltf PRIVATE
 )
 
 # Find Vulkan
-find_package(Vulkan REQUIRED)
+if(EMSCRIPTEN)
+    # Web (spec 10, base WebGL2): sem Vulkan no navegador. Os renderers ainda
+    # nao migrados para a RHI compilam contra os cabecalhos e nao inicializam.
+    set(ERUPTION_WEB_VULKAN_HEADERS "" CACHE PATH "Pasta include com vulkan/vulkan.h (cabecalhos Vulkan-Headers)")
+    add_library(Vulkan::Vulkan INTERFACE IMPORTED)
+    set_target_properties(Vulkan::Vulkan PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${ERUPTION_WEB_VULKAN_HEADERS}")
+    set(Vulkan_INCLUDE_DIRS "${ERUPTION_WEB_VULKAN_HEADERS}")
+else()
+    find_package(Vulkan REQUIRED)
+endif()
 
 # Find Python3 for tools
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -603,7 +616,7 @@ target_include_directories(eruption-engine PRIVATE
     ${CMAKE_SOURCE_DIR}/plugins
     ${CMAKE_SOURCE_DIR}/src/generated
     ${Vulkan_INCLUDE_DIRS}
-    $<$<NOT:$<BOOL:${ANDROID}>>:${glfw_SOURCE_DIR}/include>
+    $<$<NOT:$<OR:$<BOOL:${ANDROID}>,$<BOOL:${EMSCRIPTEN}>>>:${glfw_SOURCE_DIR}/include>
     ${glm_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/third_party/stb
     ${ERUPTION_BC7ENC_DIR}
@@ -611,8 +624,6 @@ target_include_directories(eruption-engine PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo
     ${CMAKE_SOURCE_DIR}/third_party/imnodes
     ${CMAKE_SOURCE_DIR}/third_party/ImGuiColorTextEdit
-    ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends
     ${nlohmann_json_SOURCE_DIR}/include
     ${tinygltf_SOURCE_DIR}
 )
@@ -623,9 +634,16 @@ file(GLOB_RECURSE THIRD_PARTY_SRC ${CMAKE_SOURCE_DIR}/third_party/*.cpp ${CMAKE_
 if(THIRD_PARTY_SRC)
     set_source_files_properties(${THIRD_PARTY_SRC} PROPERTIES COMPILE_OPTIONS "-w")
 endif()
+# O ImGui tambem: o clang do Emscripten avisa -Wnontrivial-memcall nos
+# memset/memcpy dele (no .cpp e no cabecalho, que vai como de sistema).
+set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 
 # Third-party headers are included as system headers so their warnings don't
 # pollute our build output.
+target_include_directories(eruption-engine SYSTEM BEFORE PRIVATE
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
 target_include_directories(eruption-engine SYSTEM PRIVATE
     ${vma_SOURCE_DIR}/include
     ${glm_SOURCE_DIR}
@@ -641,7 +659,7 @@ find_package(Iconv REQUIRED)
 
 target_link_libraries(eruption-engine PRIVATE
     Vulkan::Vulkan
-    $<$<NOT:$<BOOL:${ANDROID}>>:glfw>
+    $<$<NOT:$<OR:$<BOOL:${ANDROID}>,$<BOOL:${EMSCRIPTEN}>>>:glfw>
     glm
     GPUOpen::VulkanMemoryAllocator
     nlohmann_json::nlohmann_json
@@ -655,7 +673,10 @@ target_link_libraries(eruption-engine PRIVATE
 )
 # Compilador e analisador de Luau: só no editor (o jogo exportado recebe os
 # scripts já compilados e leva só a máquina virtual).
-if(ERUPTION_EDITOR)
+# Web, 1o marco: a pagina entrega os scripts do projeto em texto, entao o
+# compilador vai junto (medir o custo no wasm; a saida e' pre-compilar no
+# empacotador).
+if(ERUPTION_EDITOR OR EMSCRIPTEN)
     target_link_libraries(eruption-engine PRIVATE Luau.Ast Luau.Compiler)
     target_compile_definitions(eruption-engine PRIVATE ERUPTION_LUAU_COMPILER=1)
 else()
@@ -687,7 +708,7 @@ else()
 endif()
 set(ERUPTION_CPU_LEVEL "${ERUPTION_CPU_LEVEL_DEFAULT}" CACHE STRING "dev, native, x86-64-v3 or portable")
 set(ERUPTION_CPU_FLAGS "")
-if(NOT ANDROID AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i.86")
+if(NOT ANDROID AND NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i.86")
     if(ERUPTION_CPU_LEVEL STREQUAL "native")
         set(ERUPTION_CPU_FLAGS -march=native)
     elseif(ERUPTION_CPU_LEVEL STREQUAL "portable")
@@ -702,6 +723,34 @@ if(NOT ANDROID AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i.86")
     endif()
 endif()
 message(STATUS "CPU: ${ERUPTION_CPU_LEVEL} (${ERUPTION_CPU_FLAGS})")
+
+# Web: contrato com a casca da pagina (pagina hospedeira):
+# createEruption() modular, FS exportado (a casca grava os assets no preRun),
+# memoria que cresce e SIMD128. Sem threads na v1 (pediria COOP/COEP).
+if(EMSCRIPTEN)
+    target_compile_options(eruption-engine PRIVATE -sUSE_ZLIB=1 -msimd128)
+    # No wasm32 todo handle Vulkan viraria uint64_t e as sobrecargas por tipo
+    # de handle colidiriam. Como nada chama o Vulkan de verdade no navegador,
+    # os handles ficam ponteiros tipados, como no desktop.
+    target_compile_definitions(eruption-engine PRIVATE VK_USE_64_BIT_PTR_DEFINES=1)
+    target_link_options(eruption-engine PRIVATE -sUSE_GLFW=3 -sUSE_ZLIB=1
+        -sMODULARIZE=1 -sEXPORT_NAME=createEruption -sEXPORTED_RUNTIME_METHODS=FS
+        -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB -sMAX_WEBGL_VERSION=2 -sMIN_WEBGL_VERSION=2
+        -sENVIRONMENT=web -sFORCE_FILESYSTEM=1)
+    # Stub do Vulkan (tools/web/vulkan_stub.py): os renderers ainda nao
+    # migrados para a RHI ligam, e o VulkanContext so' falha ao iniciar.
+    set(ERUPTION_VK_STUB ${CMAKE_BINARY_DIR}/web_gen/VulkanStub.cpp)
+    add_custom_command(OUTPUT ${ERUPTION_VK_STUB}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/web_gen
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/web/vulkan_stub.py
+                ${ERUPTION_WEB_VULKAN_HEADERS}/vulkan/vulkan_core.h ${ERUPTION_VK_STUB}
+        DEPENDS ${CMAKE_SOURCE_DIR}/tools/web/vulkan_stub.py
+        COMMENT "Stub do Vulkan para o build web")
+    target_sources(eruption-engine PRIVATE ${ERUPTION_VK_STUB})
+    set_source_files_properties(${ERUPTION_VK_STUB} PROPERTIES COMPILE_OPTIONS "-w")
+    set_target_properties(eruption-engine PROPERTIES SUFFIX ".js" OUTPUT_NAME "eruption"
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/web)
+endif()
 
 # Compiler flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

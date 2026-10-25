@@ -5,6 +5,9 @@
 #include "core/Timer.hpp"
 #include <chrono>
 #include <thread>
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>
+#endif
 #include "renderer/VulkanContext.hpp"
 #include "renderer/SpritePickerUI.hpp"
 #include "renderer/GBuffer.hpp"
@@ -99,80 +102,98 @@ public:
     template<typename App>
     void run(App& app) {
         if (!m_initialized) return;
+#if defined(__EMSCRIPTEN__)
+        s_browserEngine = this;
+#endif
         app.onInit(*this);
         ERUPTION_LOG_INFO("[ENGINE] Entering main loop (running={}, shouldClose={})", m_running, m_window.shouldClose());
-        while (m_running && !m_window.shouldClose()) {
-            // Coarse per-phase CPU timing for the debug overlay (F3). The frame
-            // marks inside render() only cover command recording, so without
-            // these the overlay cannot tell "the sim is slow" from "the GPU is
-            // slow" — the two look identical as a high frame time.
-            auto _t0 = std::chrono::steady_clock::now();
-            float dt = advanceFrame();
-            m_frameDt = dt;
-            auto _t1 = std::chrono::steady_clock::now();
-            app.onUpdate(dt);
-            // Objetos da cena: puxa o que mexeram nas tabelas, propaga pai ->
-            // filho e empurra o que mudou, antes de desenhar.
-            m_sceneObjects.sync(*this);
-            auto _t2 = std::chrono::steady_clock::now();
-            render();
-            auto _t3 = std::chrono::steady_clock::now();
-            app.onRender(*this);
-            Input::update();
-            Profiler::commitFrame();
-            auto _t4 = std::chrono::steady_clock::now();
-            using _ms = std::chrono::duration<float, std::milli>;
-            m_cpuAdvanceMs  = _ms(_t1 - _t0).count();
-            m_cpuAppUpdateMs = _ms(_t2 - _t1).count();
-            m_cpuRenderMs   = _ms(_t3 - _t2).count();
-            m_cpuTailMs     = _ms(_t4 - _t3).count();
-            recordTelemetry();
-            // PERIODO REAL DESTE LACO, medido no mesmo frame que as fases acima.
-            // Antes o painel dividia as fases por m_frameTime, que e' uma MEDIA
-            // de janela escrita la' no PlayerController (fpsElapsed/fpsFrames).
-            // Numerador instantaneo sobre denominador medio dava porcentagem
-            // acima de 100% quando um frame estourava a media - o autor viu
-            // "render 110%" em 2026-09-03. Aqui as fases somam exatamente
-            // _t4 - _t0, entao dividir por (fim do laco - _t0) nunca passa de
-            // 100% e a conta fecha. O valor e' fechado depois do limitador de
-            // FPS, senao o sono do limitador sumiria da conta.
-            if (m_fpsCap > 0) {
-                // Battery frame limiter: sleep to the cap period; when a frame
-                // overruns, resync instead of bursting to catch up.
-                using _clk = std::chrono::steady_clock;
-                static _clk::time_point _next = _clk::now();
-                _next += std::chrono::duration_cast<_clk::duration>(
-                    std::chrono::duration<double>(1.0 / m_fpsCap));
-                const auto _now = _clk::now();
-                if (_next < _now) _next = _now;
-                else std::this_thread::sleep_until(_next);
-            }
-            m_cpuFrameWallMs = _ms(std::chrono::steady_clock::now() - _t0).count();
-
-            // CONTADOR DE FPS. Ficava dentro de PlayerController::updateUI, que
-            // e' chamado por update(), que comeca com `if (dt <= 0.0f) return;`.
-            // Resultado: todo frame com dt zero - pausa, carregamento, passo
-            // travado - era DESENHADO mas nao CONTADO, enquanto o relogio de
-            // parede seguia correndo. O FPS saia baixo na proporcao dos quadros
-            // perdidos (o autor viu 22 FPS que nao batiam com a sensacao nem
-            // com o tempo de GPU medido). Contar frame renderizado e' trabalho
-            // do laco, nao da logica de jogo: aqui roda SEMPRE, uma vez por
-            // iteracao, sem depender de nada a montante.
-            {
-                ++m_fpsFrames;
-                const auto agora = std::chrono::steady_clock::now();
-                const float decorrido = std::chrono::duration<float>(agora - m_fpsWindowStart).count();
-                if (decorrido >= 0.5f) {
-                    m_fps = static_cast<float>(m_fpsFrames) / decorrido;
-                    m_frameTime = (decorrido / static_cast<float>(m_fpsFrames)) * 1000.0f;
-                    m_fpsWindowStart = agora;
-                    m_fpsFrames = 0;
-                }
-            }
-        }
+#if defined(__EMSCRIPTEN__)
+        // O navegador e' dono do laco: um quadro por requestAnimationFrame. O
+        // simulate_infinite_loop=1 nao volta daqui (main nunca termina), como
+        // o while dos outros alvos.
+        emscripten_set_main_loop_arg(&Engine::browserFrame<App>, &app, 0, 1);
+#else
+        while (m_running && !m_window.shouldClose()) runFrame(app);
+#endif
         app.onShutdown();
         m_vulkan.waitIdle();
     }
+    // Um quadro do laco principal (run). Separado para o navegador chamar.
+    template<typename App>
+    void runFrame(App& app) {
+        // Coarse per-phase CPU timing for the debug overlay (F3). The frame
+        // marks inside render() only cover command recording, so without
+        // these the overlay cannot tell "the sim is slow" from "the GPU is
+        // slow" — the two look identical as a high frame time.
+        auto _t0 = std::chrono::steady_clock::now();
+        float dt = advanceFrame();
+        m_frameDt = dt;
+        auto _t1 = std::chrono::steady_clock::now();
+        app.onUpdate(dt);
+        // Objetos da cena: puxa o que mexeram nas tabelas, propaga pai ->
+        // filho e empurra o que mudou, antes de desenhar.
+        m_sceneObjects.sync(*this);
+        auto _t2 = std::chrono::steady_clock::now();
+        render();
+        auto _t3 = std::chrono::steady_clock::now();
+        app.onRender(*this);
+        Input::update();
+        Profiler::commitFrame();
+        auto _t4 = std::chrono::steady_clock::now();
+        using _ms = std::chrono::duration<float, std::milli>;
+        m_cpuAdvanceMs  = _ms(_t1 - _t0).count();
+        m_cpuAppUpdateMs = _ms(_t2 - _t1).count();
+        m_cpuRenderMs   = _ms(_t3 - _t2).count();
+        m_cpuTailMs     = _ms(_t4 - _t3).count();
+        recordTelemetry();
+        // PERIODO REAL DESTE LACO, medido no mesmo frame que as fases acima.
+        // Antes o painel dividia as fases por m_frameTime, que e' uma MEDIA
+        // de janela escrita la' no PlayerController (fpsElapsed/fpsFrames).
+        // Numerador instantaneo sobre denominador medio dava porcentagem
+        // acima de 100% quando um frame estourava a media - o autor viu
+        // "render 110%" em 2026-09-03. Aqui as fases somam exatamente
+        // _t4 - _t0, entao dividir por (fim do laco - _t0) nunca passa de
+        // 100% e a conta fecha. O valor e' fechado depois do limitador de
+        // FPS, senao o sono do limitador sumiria da conta.
+        if (m_fpsCap > 0) {
+            // Battery frame limiter: sleep to the cap period; when a frame
+            // overruns, resync instead of bursting to catch up.
+            using _clk = std::chrono::steady_clock;
+            static _clk::time_point _next = _clk::now();
+            _next += std::chrono::duration_cast<_clk::duration>(
+                std::chrono::duration<double>(1.0 / m_fpsCap));
+            const auto _now = _clk::now();
+            if (_next < _now) _next = _now;
+            else std::this_thread::sleep_until(_next);
+        }
+        m_cpuFrameWallMs = _ms(std::chrono::steady_clock::now() - _t0).count();
+
+        // CONTADOR DE FPS. Ficava dentro de PlayerController::updateUI, que
+        // e' chamado por update(), que comeca com `if (dt <= 0.0f) return;`.
+        // Resultado: todo frame com dt zero - pausa, carregamento, passo
+        // travado - era DESENHADO mas nao CONTADO, enquanto o relogio de
+        // parede seguia correndo. O FPS saia baixo na proporcao dos quadros
+        // perdidos (o autor viu 22 FPS que nao batiam com a sensacao nem
+        // com o tempo de GPU medido). Contar frame renderizado e' trabalho
+        // do laco, nao da logica de jogo: aqui roda SEMPRE, uma vez por
+        // iteracao, sem depender de nada a montante.
+        {
+            ++m_fpsFrames;
+            const auto agora = std::chrono::steady_clock::now();
+            const float decorrido = std::chrono::duration<float>(agora - m_fpsWindowStart).count();
+            if (decorrido >= 0.5f) {
+                m_fps = static_cast<float>(m_fpsFrames) / decorrido;
+                m_frameTime = (decorrido / static_cast<float>(m_fpsFrames)) * 1000.0f;
+                m_fpsWindowStart = agora;
+                m_fpsFrames = 0;
+            }
+        }
+    }
+#if defined(__EMSCRIPTEN__)
+    template<typename App>
+    static void browserFrame(void* app) { s_browserEngine->runFrame(*static_cast<App*>(app)); }
+    static inline Engine* s_browserEngine = nullptr;
+#endif
     void enableAutoExit(bool enable) { m_enableAutoExit = enable; }
     bool autoExitEnabled() const { return m_enableAutoExit; }
     void enableWaterBenchmark(bool enable) { m_enableWaterBenchmark = enable; }

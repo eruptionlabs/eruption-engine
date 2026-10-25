@@ -43,9 +43,11 @@ std::vector<uint32_t> weldByPosition(const float* positions, size_t vertexCount,
                                      size_t uvByteOffset, size_t texIdxByteOffset) {
     std::vector<uint32_t> canonical(vertexCount);
     struct KeyHash { size_t operator()(const std::array<int64_t,4>& k) const {
-        size_t h = 1469598103934665603ull;
-        for (int64_t v : k) { h ^= static_cast<size_t>(v); h *= 1099511628211ull; }
-        return h; } };
+        // Conta em 64 bits mesmo onde size_t tem 32 (wasm32): mesma chave,
+        // mesmo hash nos dois.
+        uint64_t h = 1469598103934665603ull;
+        for (int64_t v : k) { h ^= static_cast<uint64_t>(v); h *= 1099511628211ull; }
+        return static_cast<size_t>(h); } };
     std::unordered_map<std::array<int64_t,4>, uint32_t, KeyHash> seen;
     seen.reserve(vertexCount * 2);
     const uint8_t* base = reinterpret_cast<const uint8_t*>(positions);
