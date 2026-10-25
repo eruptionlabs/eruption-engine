@@ -432,22 +432,25 @@ declare audio: {
 }
 
 -- Point lights of the map. Indices start at 1.
+-- The optional last argument `map` names a neighbor map in the scene
+-- (scene `neighbors`): its lights, numbered as in its own scene. count(map)
+-- is 0 while that neighbor is not in the scene.
 declare lights: {
-    count: () -> number,
-    position: (index: number) -> vector,
-    set_position: (index: number, position: vector) -> (),
+    count: (map: string?) -> number,
+    position: (index: number, map: string?) -> vector,
+    set_position: (index: number, position: vector, map: string?) -> (),
     -- Linear RGB, 0 to 1 per channel.
-    color: (index: number) -> vector,
-    set_color: (index: number, color: vector) -> (),
-    intensity: (index: number) -> number,
-    set_intensity: (index: number, intensity: number) -> (),
-    enabled: (index: number) -> boolean,
-    set_enabled: (index: number, enabled: boolean) -> (),
-    turn_on: (index: number) -> (),
-    turn_off: (index: number) -> (),
+    color: (index: number, map: string?) -> vector,
+    set_color: (index: number, color: vector, map: string?) -> (),
+    intensity: (index: number, map: string?) -> number,
+    set_intensity: (index: number, intensity: number, map: string?) -> (),
+    enabled: (index: number, map: string?) -> boolean,
+    set_enabled: (index: number, enabled: boolean, map: string?) -> (),
+    turn_on: (index: number, map: string?) -> (),
+    turn_off: (index: number, map: string?) -> (),
     -- Whether this light casts sprite shadows (characters.set_shadow("lights")).
     -- Turn it off on a light the game moves along with the party.
-    set_sprite_shadow: (index: number, on: boolean) -> (),
+    set_sprite_shadow: (index: number, on: boolean, map: string?) -> (),
 }
 
 -- Machine readings for a performance meter. A field is nil where this

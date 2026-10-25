@@ -655,6 +655,19 @@ void Engine::updateNightLights() {
     for (auto& pl : m_deferredLighting.getPointLights()) {
         if (pl.nightOnly) pl.enabled = sun < threshold(pl.position);
     }
+    // Luzes dos vizinhos (mundo contínuo): a mesma regra. A lista do quadro
+    // copia as deles, então só é refeita quando alguma muda.
+    bool regionChanged = false;
+    for (auto& r : m_regions) {
+        if (r.state != WorldRegion::State::Shown) continue;
+        for (auto& pl : r.lights) {
+            if (!pl.nightOnly) continue;
+            const bool on = sun < threshold(pl.position);
+            regionChanged |= on != pl.enabled;
+            pl.enabled = on;
+        }
+    }
+    if (regionChanged) rebuildWorldLights();
     for (auto& ne : m_nightEffects) {
         const bool isNight = sun < threshold(Vec3(ne.transform[3]));
         if (isNight && ne.id == 0 && !ne.failed) {
