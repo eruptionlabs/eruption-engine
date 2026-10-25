@@ -717,8 +717,13 @@ bool VulkanContext::setupDebugMessenger() {
 }
 
 bool VulkanContext::createSurface(GLFWwindow* window) {
+#if defined(__EMSCRIPTEN__)
+    (void)window; // sem Vulkan no navegador: o caminho WebGL2 desenha
+    return false;
+#else
     VK_CHECK(glfwCreateWindowSurface(m_instance, window, nullptr, &m_surface));
     return true;
+#endif
 }
 
 static int deviceScore(VkPhysicalDevice device) {

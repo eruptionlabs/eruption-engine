@@ -74,6 +74,9 @@ void Input::update() {
             s_gamepads[i].present = true;
             std::memcpy(s_gamepads[i].buttonsPrev, s_gamepads[i].buttons, sizeof(s_gamepads[i].buttons));
             
+            // O GLFW do Emscripten (API 3.2) nao tem o mapeamento de gamepad:
+            // la' o controle sempre vai pelos eixos e botoes crus.
+#if !defined(__EMSCRIPTEN__)
             if (glfwJoystickIsGamepad(GLFW_JOYSTICK_1 + i)) {
                 GLFWgamepadstate state;
                 if (glfwGetGamepadState(GLFW_JOYSTICK_1 + i, &state)) {
@@ -84,7 +87,9 @@ void Input::update() {
                         s_gamepads[i].axes[a] = state.axes[a];
                     }
                 }
-            } else {
+            } else
+#endif
+            {
                 // Fallback to raw joystick axes/buttons for generic controllers like Lukton
                 int axesCount, buttonCount;
                 const float* rawAxes = glfwGetJoystickAxes(GLFW_JOYSTICK_1 + i, &axesCount);

@@ -61,6 +61,10 @@ inline void setEnv(const char* name, const char* value) {
 // pastas de asset uma vez, na abertura, então um projeto novo precisa de um
 // começo limpo. Só retorna (false) se não deu para trocar.
 inline bool relaunch(const std::vector<std::string>& args) {
+#if defined(__EMSCRIPTEN__)
+    (void)args; // o navegador nao reabre processo: o projeto vem da pagina
+    return false;
+#else
     const std::filesystem::path exe = executablePath();
     if (exe.empty()) return false;
     std::vector<std::string> store;
@@ -76,6 +80,7 @@ inline bool relaunch(const std::vector<std::string>& args) {
     execv(store[0].c_str(), argv.data());
 #endif
     return false; // execv só volta em caso de erro
+#endif
 }
 
 // Data da última mudança do arquivo (0 se não existe), para recarregar quando muda.
