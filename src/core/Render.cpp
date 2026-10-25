@@ -2851,6 +2851,11 @@ void Engine::setSeeThrough(float radius, float opacity) {
     m_seeThroughOpacity = glm::clamp(opacity, 0.0f, 1.0f);
 }
 
+void Engine::setNearFade(float start, float end) {
+    m_nearFadeStart = std::max(0.0f, start);
+    m_nearFadeEnd = end > m_nearFadeStart ? end : (m_nearFadeStart > 0.0f ? m_nearFadeStart * 1.5f : 0.0f);
+}
+
 // VER ATRAVES. A elipse vai em NDC: o shader projeta o proprio fragmento com
 // viewProjNoJitter, e o aspecto da tela ja' vem da projecao. Centro no meio do
 // corpo; raio horizontal `r`, vertical r + meio sprite (o boneco e' mais alto
@@ -2866,6 +2871,9 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
         if (const char* e = std::getenv("ERUPTION_TEST_SEE_THROUGH")) std::sscanf(e, "%f,%f", &v.x, &v.y);
         return v;
     }();
+    // Perto da camera (camera.near_fade): vale com ou sem jogador.
+    ubo.seeThrough3.z = m_nearFadeStart;
+    ubo.seeThrough3.w = m_nearFadeEnd;
     const float r = kEnv.x >= 0.0f ? kEnv.x : m_seeThroughRadius;
     const float opacity = kEnv.x >= 0.0f ? kEnv.y : m_seeThroughOpacity;
     if (r <= 0.0f || m_playerController == nullptr) return;
@@ -2894,7 +2902,8 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
     Vec2 an;
     if (ndc(ancora, an)) {
         const VkExtent2D re = renderExtent();
-        ubo.seeThrough3 = Vec4((an.x * 0.5f + 0.5f) * float(re.width), (an.y * 0.5f + 0.5f) * float(re.height), 0.0f, 0.0f);
+        ubo.seeThrough3.x = (an.x * 0.5f + 0.5f) * float(re.width);
+        ubo.seeThrough3.y = (an.y * 0.5f + 0.5f) * float(re.height);
     }
 }
 

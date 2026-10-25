@@ -1569,6 +1569,11 @@ int camera_see_through(lua_State* L) {
     eng().setSeeThrough(static_cast<float>(luaL_optnumber(L, 1, 0.0)), static_cast<float>(luaL_optnumber(L, 2, 0.25)));
     return 0;
 }
+// Geometria colada na camera sai em dither (Engine::setNearFade).
+int camera_near_fade(lua_State* L) {
+    eng().setNearFade(static_cast<float>(luaL_optnumber(L, 1, 0.0)), static_cast<float>(luaL_optnumber(L, 2, 0.0)));
+    return 0;
+}
 
 int player_frozen(lua_State* L) {
     const PlayerController* p = ScriptBridge::player();
@@ -1932,7 +1937,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"orbit", camera_orbit}, {"set_orbit", camera_set_orbit}, {"basis", camera_basis},
         {"view", camera_view},
         {"free", camera_free}, {"keep_inside_map", camera_keep_inside_map},
-        {"see_through", camera_see_through}, {nullptr, nullptr}};
+        {"see_through", camera_see_through}, {"near_fade", camera_near_fade}, {nullptr, nullptr}};
     static const luaL_Reg fx[] = {
         {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash}, {"dim", fx_dim},
         {"fading", fx_fading}, {nullptr, nullptr}};
@@ -2308,6 +2313,11 @@ declare camera: {
     -- drawn as a dither pattern within `radius` world units of the player on
     -- screen, down to `opacity` (default 0.25) at the center. 0 turns it off.
     see_through: (radius: number, opacity: number?) -> (),
+    -- Map and model geometry closer than `start` world units to the camera
+    -- disappears as a dither pattern and comes back fully by `end` (default
+    -- 1.5 x start), so a fence brushing the lens no longer covers the screen.
+    -- Shadows are unaffected. 0 turns it off.
+    near_fade: (start: number, end_: number?) -> (),
 }
 
 -- Presentation of a hit: what makes a blow feel like it landed. The engine

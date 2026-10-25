@@ -648,6 +648,9 @@ public:
     // num raio de `radius` unidades de mundo em volta dele na tela, sai em
     // dither ate' `opacity` no centro. radius 0 desliga.
     void setSeeThrough(float radius, float opacity);
+    // Perto da camera (camera.near_fade): o que fica a menos de `start` da
+    // camera some em dither e volta ate' `end` (padrao 1,5x start). 0 desliga.
+    void setNearFade(float start, float end);
     // Sombra dos sprites (characters.set_shadow): 0 = planar do sol, 1 =
     // disco, 2 = disco + planar das ate' 2 luzes pontuais dominantes; -1 = a
     // do data/char_config.json.
@@ -1760,6 +1763,7 @@ private:
     PlayerController* m_playerController = nullptr;
     float m_seeThroughRadius = 0.0f;
     float m_seeThroughOpacity = 0.25f;
+    float m_nearFadeStart = 0.0f, m_nearFadeEnd = 0.0f;
     void fillSeeThrough(FrameUBO& ubo) const;
     int m_spriteShadowKind = -1;
     int spriteShadowKind() const;
