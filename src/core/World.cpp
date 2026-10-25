@@ -13,6 +13,7 @@
 // O mapa aberto continua sendo o que o editor edita e salva; os vizinhos
 // aparecem travados, para dar contexto.
 #include "core/Engine.hpp"
+#include "core/Platform.hpp"
 
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
@@ -245,7 +246,7 @@ void Engine::updateWorld() {
             if (near && jobs < kMaxJobs) {
                 const std::string map = r.map;
                 const Vec3 off = r.offset;
-                r.job = std::async(std::launch::async, [map, off] {
+                r.job = platform::runAsync([map, off] {
                     auto out = std::make_shared<WorldRegionLoad>();
                     MapLoader loader;
                     out->map = loader.loadMap(map);
@@ -293,7 +294,7 @@ void Engine::updateWorld() {
                     // solda, células, costuras, LOD) é montada em outra thread.
                     resolveRegionSlots(*load);
                     const ModelRenderer::LodParams lod = m_modelRenderer.lodParams();
-                    r.job = std::async(std::launch::async, [load, lod] {
+                    r.job = platform::runAsync([load, lod] {
                         for (size_t i = 0; i < load->models.size() && i < load->slots.size(); ++i)
                             load->prepared.push_back(
                                 ModelRenderer::prepareAsset(load->models[i], std::move(load->slots[i]), lod));

@@ -18,6 +18,13 @@ option(ERUPTION_LEAN "Size-optimized game build: LTO, dead code removal, no symb
 # Demo map (release asset, downloaded on first configure if missing)
 include(${CMAKE_SOURCE_DIR}/cmake/DemoMap.cmake)
 
+# Web: excecoes nativas do wasm em tudo (o Luau sinaliza erro de script com
+# excecao C++; sem isto o Emscripten aborta em vez de capturar).
+if(EMSCRIPTEN)
+    add_compile_options(-fwasm-exceptions)
+    add_link_options(-fwasm-exceptions)
+endif()
+
 # FetchContent for dependencies
 include(FetchContent)
 
@@ -139,6 +146,16 @@ target_include_directories(tinygltf PRIVATE
     ${draco_SOURCE_DIR}/src
     ${CMAKE_BINARY_DIR}
 )
+# Codigo de terceiros sem aviso: o clang do Emscripten avisa no draco
+# (-Wimplicit-const-int-float-conversion) e no json.hpp do tinygltf
+# (-Wdeprecated-literal-operator), onde o GCC fica quieto.
+get_property(_draco_targets DIRECTORY ${draco_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_dep_target tinygltf ${_draco_targets})
+    get_target_property(_dep_type ${_dep_target} TYPE)
+    if(_dep_type MATCHES "LIBRARY$" AND NOT _dep_type STREQUAL "INTERFACE_LIBRARY")
+        target_compile_options(${_dep_target} PRIVATE -w)
+    endif()
+endforeach()
 
 # Find Vulkan
 if(EMSCRIPTEN)
@@ -357,6 +374,9 @@ file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.hpp")
 if(NOT ANDROID)
     list(FILTER SOURCES EXCLUDE REGEX "/src/platform/android/")
 endif()
+if(NOT EMSCRIPTEN)
+    list(FILTER SOURCES EXCLUDE REGEX "/src/platform/web/")
+endif()
 # Faixa por spline: sem contracao em FMA, para a malha e a consulta darem os
 # mesmos bits no PC e no ARM (o pragma do arquivo vale so' no clang).
 set_source_files_properties(src/formats/Ribbon.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
@@ -552,7 +572,14 @@ if(ANDROID)
 endif()
 # O backend GLFW declara tipos Vulkan proprios quando o header do Vulkan nao
 # veio antes; com LTO isso e' violacao de ODR. Com o header, usa os de verdade.
-set_source_files_properties(${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp PROPERTIES COMPILE_DEFINITIONS GLFW_INCLUDE_VULKAN)
+if(EMSCRIPTEN)
+    # Navegador: a interface desenha por WebGL2 (GLES 3.0), sem Vulkan; o
+    # backend Vulkan vira o nulo de src/platform/web/ImGuiVulkanNull.cpp.
+    list(REMOVE_ITEM IMGUI_SOURCES ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+    list(APPEND IMGUI_SOURCES ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
+else()
+    set_source_files_properties(${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp PROPERTIES COMPILE_DEFINITIONS GLFW_INCLUDE_VULKAN)
+endif()
 
 
 # Main executable (no Android, biblioteca carregada pela NativeActivity)
@@ -625,8 +652,10 @@ target_include_directories(eruption-engine PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/imnodes
     ${CMAKE_SOURCE_DIR}/third_party/ImGuiColorTextEdit
     ${nlohmann_json_SOURCE_DIR}/include
-    ${tinygltf_SOURCE_DIR}
 )
+# Cabecalhos do tinygltf como de sistema: o json.hpp dele tem operador
+# literal que o clang do Emscripten avisa (-Wdeprecated-literal-operator).
+target_include_directories(eruption-engine SYSTEM PRIVATE ${tinygltf_SOURCE_DIR})
 
 # Third-party SOURCES tambem: bc7enc_rdo dispara dezenas de -Wextra que nao
 # sao nossos para consertar.
@@ -736,15 +765,19 @@ if(EMSCRIPTEN)
     target_link_options(eruption-engine PRIVATE -sUSE_GLFW=3 -sUSE_ZLIB=1
         -sMODULARIZE=1 -sEXPORT_NAME=createEruption -sEXPORTED_RUNTIME_METHODS=FS
         -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB -sMAX_WEBGL_VERSION=2 -sMIN_WEBGL_VERSION=2
-        -sENVIRONMENT=web -sFORCE_FILESYSTEM=1)
+        -sENVIRONMENT=web -sFORCE_FILESYSTEM=1
+        # Pilha do desktop (8 MB): o motor tem buffers grandes na pilha; os
+        # 64 KB padrao do Emscripten estouram na carga do mapa.
+        -sSTACK_SIZE=8MB)
     # Stub do Vulkan (tools/web/vulkan_stub.py): os renderers ainda nao
     # migrados para a RHI ligam, e o VulkanContext so' falha ao iniciar.
     set(ERUPTION_VK_STUB ${CMAKE_BINARY_DIR}/web_gen/VulkanStub.cpp)
     add_custom_command(OUTPUT ${ERUPTION_VK_STUB}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/web_gen
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/web/vulkan_stub.py
-                ${ERUPTION_WEB_VULKAN_HEADERS}/vulkan/vulkan_core.h ${ERUPTION_VK_STUB}
-        DEPENDS ${CMAKE_SOURCE_DIR}/tools/web/vulkan_stub.py
+                ${ERUPTION_WEB_VULKAN_HEADERS}/vulkan/vulkan_core.h
+                ${CMAKE_SOURCE_DIR}/src/platform/web/VulkanNull.cpp ${ERUPTION_VK_STUB}
+        DEPENDS ${CMAKE_SOURCE_DIR}/tools/web/vulkan_stub.py ${CMAKE_SOURCE_DIR}/src/platform/web/VulkanNull.cpp
         COMMENT "Stub do Vulkan para o build web")
     target_sources(eruption-engine PRIVATE ${ERUPTION_VK_STUB})
     set_source_files_properties(${ERUPTION_VK_STUB} PROPERTIES COMPILE_OPTIONS "-w")

@@ -207,9 +207,17 @@ int eruptionMain(int argc, char** argv) {
 
     // Detect the best Vulkan driver/GPU before any window/Vulkan initialization.
     // This may restart the process with VK_ICD_FILENAMES set, then return true.
+#if !defined(__EMSCRIPTEN__) // no navegador nao ha' driver para escolher
     eruption::GpuAutoSelect::ensureBestGpu();
+#endif
 
+#if defined(__EMSCRIPTEN__)
+    // O laco do navegador sai de main desenrolando a pilha (emscripten_set_main_loop):
+    // motor e aplicacao vivem fora dela, senao os destrutores rodam no meio do jogo.
+    static eruption::Engine engine;
+#else
     eruption::Engine engine;
+#endif
     engine.setEditorMode(eruption::wantsEditor(argc, argv));
     ERUPTION_LOG_INFO("[MAIN] Engine init starting...");
     // ERUPTION_WINDOW_SIZE=<L>x<A>: tamanho da janela (capturas em alta resolução).
@@ -232,7 +240,11 @@ int eruptionMain(int argc, char** argv) {
     }
     ERUPTION_LOG_INFO("[MAIN] Engine init succeeded");
 
+#if defined(__EMSCRIPTEN__)
+    static eruption::DefaultApplication app(argc, argv);
+#else
     eruption::DefaultApplication app(argc, argv);
+#endif
     ERUPTION_LOG_INFO("[MAIN] Running app...");
 #ifdef ERUPTION_MODULE_COMPAT
     // Plugins de outros motores (compat/): so' carrega algo com ERUPTION_COMPAT_PLUGINS.

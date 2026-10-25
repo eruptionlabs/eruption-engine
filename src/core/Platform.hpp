@@ -5,7 +5,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #if defined(_WIN32)
@@ -88,6 +90,30 @@ inline long long fileTime(const std::string& path) {
     std::error_code ec;
     const auto t = std::filesystem::last_write_time(path, ec);
     return ec ? 0 : static_cast<long long>(t.time_since_epoch().count());
+}
+
+// Roda `fn` em outra thread e devolve o futuro (std::async). No navegador a v1
+// nao tem threads (pediria COOP/COEP do servidor): roda aqui e o futuro sai
+// pronto, entao quem consulta com wait_for(0) recebe `ready` na hora.
+template <class F>
+std::future<std::invoke_result_t<std::decay_t<F>>> runAsync(F&& fn) {
+#if defined(__EMSCRIPTEN__)
+    using R = std::invoke_result_t<std::decay_t<F>>;
+    std::promise<R> done;
+    try {
+        if constexpr (std::is_void_v<R>) {
+            fn();
+            done.set_value();
+        } else {
+            done.set_value(fn());
+        }
+    } catch (...) {
+        done.set_exception(std::current_exception());
+    }
+    return done.get_future();
+#else
+    return std::async(std::launch::async, std::forward<F>(fn));
+#endif
 }
 
 } // namespace eruption::platform

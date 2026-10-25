@@ -2544,11 +2544,13 @@ static bool addProjectUiFont(ImGuiIO& io) {
 }
 
 void Engine::initImGui() {
+#if !defined(__EMSCRIPTEN__)
     VkDescriptorPoolSize poolSizes[] = { {VK_DESCRIPTOR_TYPE_SAMPLER, 1000}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000}, {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000}, {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000}, {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000}, {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000} };
     VkDescriptorPoolCreateInfo poolInfo{}; poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT; poolInfo.maxSets = 1000;
     poolInfo.poolSizeCount = static_cast<uint32_t>(std::size(poolSizes)); poolInfo.pPoolSizes = poolSizes;
     vkCreateDescriptorPool(m_vulkan.device(), &poolInfo, nullptr, &m_imguiPool);
+#endif
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -2602,6 +2604,9 @@ void Engine::initImGui() {
     if (gameFont)
         ERUPTION_LOG_WARN("[UI] atlas de fontes %dx%d em %.1f ms", io.Fonts->TexWidth, io.Fonts->TexHeight,
                           std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart).count());
+#if defined(__EMSCRIPTEN__)
+    initImGuiWebBackend();
+#else
     ImGui_ImplGlfw_InitForVulkan(m_window.handle(), false);
     ImGui_ImplVulkan_InitInfo initInfo{};
     initInfo.Instance = m_vulkan.instance(); initInfo.PhysicalDevice = m_vulkan.physicalDevice(); initInfo.Device = m_vulkan.device();
@@ -2612,6 +2617,7 @@ void Engine::initImGui() {
     initInfo.RenderPass = vkc::compatibleRenderPass({m_vulkan.swapFormat()}, VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED);
     initInfo.Subpass = 0;
     ImGui_ImplVulkan_Init(&initInfo);
+#endif
 }
 
 void Engine::setViewportSize(uint32_t w, uint32_t h) {

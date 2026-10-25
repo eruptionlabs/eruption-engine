@@ -192,6 +192,10 @@ void Engine::bindFsrInputs(bool write) {
 }
 
 void Engine::render() {
+#if defined(__EMSCRIPTEN__)
+    renderWeb(); // WebGL2 (EngineWeb.cpp)
+    return;
+#endif
 
     // ERUPTION_TEST_DEMO (bancada de VIDEO): roteiro por tempo, uma execucao,
     // um take - ver Engine::runDemoTimeline abaixo de toggleWireframe.

@@ -5,6 +5,9 @@
 #include "core/Logger.hpp"
 #include <GLFW/glfw3.h>
 #include <stb_image.h>
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>
+#endif
 #include "Icons.hpp"
 
 namespace eruption {
@@ -19,6 +22,27 @@ bool Window::init(int width, int height, const std::string& title) {
         return false;
     }
 
+#if defined(__EMSCRIPTEN__)
+    // Navegador: contexto WebGL2 (GLES 3.0) no canvas que a pagina passou em
+    // Module.canvas, no tamanho em que a pagina o mostra.
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    const int cssW = EM_ASM_INT({ return Module.canvas ? Module.canvas.clientWidth : 0; }, 0);
+    const int cssH = EM_ASM_INT({ return Module.canvas ? Module.canvas.clientHeight : 0; }, 0);
+    m_window = glfwCreateWindow(cssW > 0 ? cssW : width, cssH > 0 ? cssH : height, title.c_str(), nullptr, nullptr);
+    if (!m_window) {
+        ERUPTION_LOG_FATAL("Failed to create WebGL2 context");
+        glfwTerminate();
+        return false;
+    }
+    glfwMakeContextCurrent(m_window);
+    glfwSetWindowUserPointer(m_window, this);
+    glfwSetFramebufferSizeCallback(m_window, framebufferResizeCallback);
+    glfwSetScrollCallback(m_window, scrollCallback);
+    glfwGetFramebufferSize(m_window, &m_width, &m_height);
+    return true;
+#endif
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 

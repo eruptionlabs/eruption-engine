@@ -3,6 +3,7 @@
 #include <limits>
 #include <cmath>
 #include "renderer/ModelRenderer.hpp"
+#include "core/Platform.hpp"
 #include "core/JobSystem.hpp"
 
 #include <cctype>
@@ -2004,9 +2005,9 @@ ModelRenderer::PreparedNode ModelRenderer::prepareNode(const ModelAsset& asset, 
         b.extent = glm::length(aabbMax - aabbMin);
         b.material = nomeMaterial;
         // As quatro partes são independentes (como no parallelFor da montagem).
-        auto p1 = std::async(std::launch::async, [&b] { computeLodPart(b, 1); });
-        auto p2 = std::async(std::launch::async, [&b] { computeLodPart(b, 2); });
-        auto p3 = std::async(std::launch::async, [&b] { computeLodPart(b, 3); });
+        auto p1 = platform::runAsync([&b] { computeLodPart(b, 1); });
+        auto p2 = platform::runAsync([&b] { computeLodPart(b, 2); });
+        auto p3 = platform::runAsync([&b] { computeLodPart(b, 3); });
         computeLodPart(b, 0);
         p1.get();
         p2.get();
