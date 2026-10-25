@@ -2130,6 +2130,7 @@ void Engine::restoreScriptDefaults() {
     m_postSettings.focusOverride = false; // world.set_focus
     setScriptFog(MapFog{});        // world.set_fog: volta a do clima/mapa
     setSeeThrough(0.0f, 0.25f);    // camera.see_through
+    setNearFade(0.0f, 0.0f);       // camera.near_fade
     setSpriteShadow(-1);           // characters.set_shadow
     m_audio.resetMix();            // volumes geral, da musica e dos grupos
     setMinimapLabel({});           // ui.minimap_label

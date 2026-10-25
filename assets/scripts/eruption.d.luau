@@ -307,6 +307,11 @@ declare camera: {
     -- drawn as a dither pattern within `radius` world units of the player on
     -- screen, down to `opacity` (default 0.25) at the center. 0 turns it off.
     see_through: (radius: number, opacity: number?) -> (),
+    -- Map and model geometry closer than `start` world units to the camera
+    -- disappears as a dither pattern and comes back fully by `end` (default
+    -- 1.5 x start), so a fence brushing the lens no longer covers the screen.
+    -- Shadows are unaffected. 0 turns it off.
+    near_fade: (start: number, end_: number?) -> (),
 }
 
 -- Presentation of a hit: what makes a blow feel like it landed. The engine

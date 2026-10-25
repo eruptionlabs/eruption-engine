@@ -10,7 +10,7 @@
 // Wijk, "Pixel Masks for Screen-Door Transparency", IEEE Visualization 1998):
 // cabe no G-buffer, que nao mistura, sem ordenar nada; o limiar ordenado e' o
 // de Bayer (1973), o mesmo do crossfade de LOD.
-// Precisa de u_seeThrough/u_seeThrough2, u_viewProjNoJitter e u_cameraPos.
+// Precisa de u_seeThrough/u_seeThrough2/u_seeThrough3, u_viewProjNoJitter e u_cameraPos.
 
 const float kSeeThroughBayer[16] = float[](
     0.0, 0.5, 0.125, 0.625,
@@ -19,17 +19,31 @@ const float kSeeThroughBayer[16] = float[](
     0.9375, 0.4375, 0.8125, 0.3125
 );
 
-bool seeThroughDiscard(vec3 worldPos) {
-    if (u_seeThrough.z <= 0.0) return false;
+// PERTO DA CAMERA (camera.near_fade): o que fica a menos de u_seeThrough3.z
+// da camera some, e ate' u_seeThrough3.w volta aos poucos, no mesmo padrao.
+// A cerca colada na lente deixa de cobrir a tela inteira, borrada pelo DoF.
+// Pela distancia, nao por tempo: a camera chegando perto ja' e' a transicao.
+float nearFadeKeep(vec3 worldPos) {
+    if (u_seeThrough3.w <= 0.0) return 1.0;
+    return smoothstep(u_seeThrough3.z, u_seeThrough3.w, distance(worldPos, u_cameraPos));
+}
+
+float seeThroughKeep(vec3 worldPos) {
+    if (u_seeThrough.z <= 0.0) return 1.0;
     vec4 c = u_viewProjNoJitter * vec4(worldPos, 1.0);
-    if (c.w <= 0.0) return false;
+    if (c.w <= 0.0) return 1.0;
     float e = length((c.xy / c.w - u_seeThrough.xy) / u_seeThrough.zw);
-    if (e >= 1.0) return false;
+    if (e >= 1.0) return 1.0;
     float h = u_seeThrough2.z;
     float front = 1.0 - smoothstep(u_seeThrough2.x - 0.5 * h, u_seeThrough2.x - 0.25 * h, distance(worldPos, u_cameraPos));
     float above = smoothstep(u_seeThrough2.y + 0.05 * h, u_seeThrough2.y + 0.25 * h, worldPos.y);
     float cut = (1.0 - smoothstep(0.6, 1.0, e)) * front * above;
-    float keep = mix(1.0, u_seeThrough2.w, cut);
+    return mix(1.0, u_seeThrough2.w, cut);
+}
+
+bool seeThroughDiscard(vec3 worldPos) {
+    float keep = min(seeThroughKeep(worldPos), nearFadeKeep(worldPos));
+    if (keep >= 1.0) return false;
     // Indice do Bayer relativo a um ponto fixo do mundo (u_seeThrough3.xy):
     // preso a gl_FragCoord, o pontilhado ficava parado na tela e o chao e a
     // parede escorregavam por baixo quando a camera andava ("rasteja" -
