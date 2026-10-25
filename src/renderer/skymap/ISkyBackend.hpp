@@ -33,6 +33,12 @@ public:
                                  VkImageView /*faceView*/, VkImageView /*depthView*/,
                                  uint32_t /*size*/, uint32_t /*face*/) { return false; }
 
+    // Bloco de parametros do shader do ceu (SkyParamsUBO de skybox.frag) para
+    // `invViewProj`, gravado em `out` (ate' 256 bytes); devolve o tamanho, 0
+    // se o backend nao desenha com esse shader. A cena WebGL2 roda o mesmo
+    // skybox.frag (convertido do SPIR-V) com estes bytes.
+    virtual size_t skyParams(const DayNightCycle&, const Mat4& /*invViewProj*/, void* /*out*/) const { return 0; }
+
     // Approximate sky color for a world-space direction (fallback for non-sampled code).
     virtual Vec3 getSkyColor(const Vec3& direction, const DayNightCycle& cycle) const = 0;
 

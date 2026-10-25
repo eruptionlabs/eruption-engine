@@ -23,6 +23,7 @@ public:
                          uint32_t size, uint32_t face) override;
 
     Vec3 getSkyColor(const Vec3& direction, const DayNightCycle& cycle) const override;
+    size_t skyParams(const DayNightCycle& cycle, const Mat4& invViewProj, void* out) const override;
 
     VkImageView outputView() const override { return m_outputView; }
     VkSampler outputSampler() const override { return m_outputSampler; }

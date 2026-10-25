@@ -3,6 +3,7 @@
 #include "renderer/skymap/SkySystem.hpp"
 #include "core/Logger.hpp"
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -20,15 +21,6 @@ namespace {
 const Vec3 kA[6] = {Vec3( 1, 0, 0), Vec3(-1, 0, 0), Vec3(0, 1, 0), Vec3(0,-1, 0), Vec3(0, 0, 1), Vec3( 0, 0,-1)};
 const Vec3 kB[6] = {Vec3( 0, 0,-1), Vec3( 0, 0, 1), Vec3(1, 0, 0), Vec3(1, 0, 0), Vec3(1, 0, 0), Vec3(-1, 0, 0)};
 const Vec3 kC[6] = {Vec3( 0,-1, 0), Vec3( 0,-1, 0), Vec3(0, 0, 1), Vec3(0, 0,-1), Vec3(0,-1, 0), Vec3( 0,-1, 0)};
-
-Mat4 faceInvViewProj(uint32_t f) {
-    Mat4 m(0.0f);
-    m[0] = Vec4(kB[f], 0.0f);   // * ndc.x
-    m[1] = Vec4(kC[f], 0.0f);   // * ndc.y
-    m[2] = Vec4(kA[f], 0.0f);   // * clip.z (=1)
-    m[3] = Vec4(0.0f, 0.0f, 0.0f, 1.0f); // * clip.w (=1) -> w de saida = 1
-    return m;
-}
 
 VkImageMemoryBarrier2 imgBarrier(VkImage image, VkImageLayout oldL, VkImageLayout newL,
                                  VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
@@ -59,6 +51,42 @@ void submitBarriers(VkCommandBuffer cmd, const std::vector<VkImageMemoryBarrier2
 }
 
 } // namespace
+
+Mat4 SkyProbe::faceInvViewProj(uint32_t f) {
+    Mat4 m(0.0f);
+    m[0] = Vec4(kB[f], 0.0f);   // * ndc.x
+    m[1] = Vec4(kC[f], 0.0f);   // * ndc.y
+    m[2] = Vec4(kA[f], 0.0f);   // * clip.z (=1)
+    m[3] = Vec4(0.0f, 0.0f, 0.0f, 1.0f); // * clip.w (=1) -> w de saida = 1
+    return m;
+}
+
+void SkyProbe::projectSH(const float* faces, uint32_t faceSize, float maxRadiance, Vec3 sh[9]) {
+    // Mesma conta do sky_sh.comp: direcao do texel pela tabela, peso pelo
+    // angulo solido (4/N^2 / (u^2+v^2+1)^1.5), radiancia limitada.
+    for (int i = 0; i < 9; ++i) sh[i] = Vec3(0.0f);
+    const uint32_t n = faceSize < 1 ? 1 : faceSize;
+    const float invN2 = 1.0f / float(n * n);
+    for (uint32_t f = 0; f < 6; ++f)
+        for (uint32_t y = 0; y < n; ++y)
+            for (uint32_t x = 0; x < n; ++x) {
+                const float u = (float(x) + 0.5f) / float(n) * 2.0f - 1.0f;
+                const float v = (float(y) + 0.5f) / float(n) * 2.0f - 1.0f;
+                const Vec3 d = glm::normalize(kA[f] + u * kB[f] + v * kC[f]);
+                const float w = 4.0f * invN2 / std::pow(u * u + v * v + 1.0f, 1.5f);
+                const float* p = faces + (size_t(f) * n * n + size_t(y) * n + x) * 4;
+                const Vec3 l = glm::min(Vec3(p[0], p[1], p[2]), Vec3(maxRadiance)) * w;
+                sh[0] += l * 0.282095f;
+                sh[1] += l * 0.488603f * d.y;
+                sh[2] += l * 0.488603f * d.z;
+                sh[3] += l * 0.488603f * d.x;
+                sh[4] += l * 1.092548f * d.x * d.y;
+                sh[5] += l * 1.092548f * d.y * d.z;
+                sh[6] += l * 0.315392f * (3.0f * d.z * d.z - 1.0f);
+                sh[7] += l * 1.092548f * d.x * d.z;
+                sh[8] += l * 0.546274f * (d.x * d.x - d.y * d.y);
+            }
+}
 
 bool SkyProbe::init(VulkanContext* ctx, uint32_t faceSize) {
     m_ctx = ctx;
@@ -266,7 +294,7 @@ void SkyProbe::update(VkCommandBuffer cmd, SkySystem& sky, const DayNightCycle& 
     // 2) As 6 faces (mip 0).
     bool drew = true;
     for (uint32_t f = 0; f < 6 && drew; ++f) {
-        drew = sky.renderProbeFace(cmd, cycle, faceInvViewProj(f), m_faceViews[f], m_depthView, m_faceSize, f);
+        drew = sky.renderProbeFace(cmd, cycle, SkyProbe::faceInvViewProj(f), m_faceViews[f], m_depthView, m_faceSize, f);
     }
     if (!drew) {
         // Backend sem sonda: deixa o cubo legivel (preto) e sai.
@@ -323,7 +351,7 @@ void SkyProbe::update(VkCommandBuffer cmd, SkySystem& sky, const DayNightCycle& 
                                     VK_IMAGE_ASPECT_COLOR_BIT, 0, m_mipCount, 0, 6)}, &toCompute);
 
     // 5) SH9.
-    struct { uint32_t faceSize; float maxRadiance; } pc{m_faceSize, 64.0f};
+    struct { uint32_t faceSize; float maxRadiance; } pc{m_faceSize, kMaxRadiance};
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeLayout, 0, 1, &m_descSet, 0, nullptr);
     vkCmdPushConstants(cmd, m_pipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);

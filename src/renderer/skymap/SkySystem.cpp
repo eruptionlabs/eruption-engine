@@ -99,6 +99,10 @@ bool SkySystem::renderProbeFace(VkCommandBuffer cmd, const DayNightCycle& cycle,
     return m_backend->renderProbeFace(cmd, cycle, invViewProj, faceView, depthView, size, face);
 }
 
+size_t SkySystem::skyParams(const DayNightCycle& cycle, const Mat4& invViewProj, void* out) const {
+    return m_backend ? m_backend->skyParams(cycle, invViewProj, out) : 0;
+}
+
 Vec3 SkySystem::getSkyColor(const Vec3& direction, const DayNightCycle& cycle) const {
     if (m_backend) {
         return m_backend->getSkyColor(direction, cycle);
