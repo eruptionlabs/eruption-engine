@@ -1834,7 +1834,8 @@ private:
     struct WorldRegion {
         std::string map;
         Vec3 offset{0.0f};
-        Vec2 boundsMin{0.0f}, boundsMax{0.0f};
+        float yaw = 0.0f; // graus em Y, em volta de offset
+        Vec2 boundsMin{0.0f}, boundsMax{0.0f}; // caixa no mundo (com giro, a que contém o mapa girado)
         enum class State { Idle, Loading, Shown, Hidden, Failed } state = State::Idle;
         std::future<std::shared_ptr<WorldRegionLoad>> job;
         bool slotsResolved = false; // Loading: lido e com texturas resolvidas; a malha está sendo montada
@@ -1846,6 +1847,7 @@ private:
         double slotsMs = 0.0, attachMs = 0.0, attachMaxMs = 0.0;
         std::shared_ptr<LoadedMap> data; // grade e caminhada já no lugar do mundo
         uint32_t firstInstance = 0, endInstance = 0;
+        Mat4 place() const; // mapa -> mundo (deslocamento e giro)
         std::vector<uint8_t> enabled; // instâncias ligadas quando o vizinho saiu de cena
         std::vector<PointLight> lights;
         std::vector<std::string> characters;

@@ -414,6 +414,7 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
                 Neighbor nb;
                 nb.map = readStr(L, t, "map");
                 readVec(L, t, "offset", nb.offset);
+                nb.yaw = readNum(L, t, "yaw", 0.0f);
                 if (!nb.map.empty()) neighbors.push_back(std::move(nb));
             }
             lua_pop(L, 1);
@@ -547,7 +548,8 @@ std::string SceneEdits::serialize(const std::string& map) const {
     if (!neighbors.empty()) {
         o << "    neighbors = {\n";
         for (const auto& nb : neighbors)
-            o << "        { map = " << quoted(nb.map) << ", offset = " << vec(nb.offset) << " },\n";
+            o << "        { map = " << quoted(nb.map) << ", offset = " << vec(nb.offset)
+              << (nb.yaw != 0.0f ? ", yaw = " + num(nb.yaw) : std::string()) << " },\n";
         o << "    },\n";
     }
     if (hasEnvironment) {

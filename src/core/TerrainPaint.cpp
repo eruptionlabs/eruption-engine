@@ -624,7 +624,8 @@ bool Engine::buildRegionSplat(WorldRegion& r, const std::vector<std::string>& la
             v.splatTex67 = packed[3];
             v.blendMaskIndex = static_cast<uint16_t>(r.splatMask[0].slot);
             v.blendMaskIndex2 = static_cast<uint16_t>(r.splatMask[1].slot);
-            v.blendMaskUV = Vec2(((wp.x - t.offsetX) / scale + 0.5f) / w, ((wp.z - t.offsetZ) / scale + 0.5f) / d);
+            const Vec2 mp = t.toMap(wp.x, wp.z);
+            v.blendMaskUV = Vec2(((mp.x - t.offsetX) / scale + 0.5f) / w, ((mp.y - t.offsetZ) / scale + 0.5f) / d);
             all[k] = k;
         }
         m_modelRenderer.patchGroundVertices(mesh, all);

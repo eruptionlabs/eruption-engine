@@ -39,8 +39,9 @@ bool followsTerrain(const LoadedMap& m) {
 bool cellOf(const LoadedMap& m, float x, float z, int& gx, int& gz) {
     if (followsTerrain(m)) {
         const TerrainFile& t = m.terrain;
-        gx = int(std::floor((x - t.offsetX) / t.scale + 0.5f));
-        gz = int(std::floor((z - t.offsetZ) / t.scale + 0.5f));
+        const Vec2 p = t.toMap(x, z); // vizinho girado: a grade é a do mapa
+        gx = int(std::floor((p.x - t.offsetX) / t.scale + 0.5f));
+        gz = int(std::floor((p.y - t.offsetZ) / t.scale + 0.5f));
     } else {
         gx = int(x / 5.0f); // grade antiga: célula de 5 unidades a partir da origem
         gz = int(z / 5.0f);
@@ -52,7 +53,7 @@ bool cellOf(const LoadedMap& m, float x, float z, int& gx, int& gz) {
 Vec2 cellCenter(const LoadedMap& m, int gx, int gz) {
     if (followsTerrain(m)) {
         const TerrainFile& t = m.terrain;
-        return Vec2(t.offsetX + gx * t.scale, t.offsetZ + gz * t.scale);
+        return t.toWorld(t.offsetX + gx * t.scale, t.offsetZ + gz * t.scale);
     }
     return Vec2((gx + 0.5f) * 5.0f, (gz + 0.5f) * 5.0f);
 }
