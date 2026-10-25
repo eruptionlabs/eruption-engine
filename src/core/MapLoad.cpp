@@ -7,6 +7,7 @@
 // swap e drena a fila de upload e' o MapUpload.cpp.
 
 #include "core/Engine.hpp"
+#include "core/Platform.hpp"
 #include "core/EngineInternal.hpp"
 #include "game/PlayerController.hpp"
 #include "core/Logger.hpp"
@@ -1109,7 +1110,7 @@ void Engine::updateWarp() {
         m_pendingMapWarp.clear();
         m_warpJobActive = true;
         const std::string map = m_warpJobMap;
-        m_warpJob = std::async(std::launch::async, [map] {
+        m_warpJob = platform::runAsync([map] {
             MapLoader loader;
             return loader.loadMap(map);
         });

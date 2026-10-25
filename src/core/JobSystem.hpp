@@ -28,6 +28,11 @@ public:
             std::bind(std::forward<F>(f), std::forward<Args>(args)...)
         );
         std::future<ReturnType> result = task->get_future();
+#if defined(__EMSCRIPTEN__)
+        // Navegador sem threads (v1): o trabalho roda aqui e o futuro ja' sai pronto.
+        (*task)();
+        return result;
+#endif
         {
             std::unique_lock<std::mutex> lock(m_queueMutex);
             if (m_stop) return result;

@@ -13,6 +13,10 @@ JobSystem& JobSystem::instance() {
 }
 
 void JobSystem::init(uint32_t numThreads) {
+#if defined(__EMSCRIPTEN__)
+    (void)numThreads; // navegador sem threads (v1): submit e parallelFor rodam aqui
+    return;
+#endif
     if (!m_threads.empty()) return; // Already initialized
     if (numThreads == 0) {
         numThreads = std::max(1u, std::thread::hardware_concurrency() - 1);
@@ -37,6 +41,10 @@ void JobSystem::shutdown() {
 }
 
 void JobSystem::submit(JobFunc job) {
+#if defined(__EMSCRIPTEN__)
+    job(); // navegador sem threads (v1), ver o submit com futuro
+    return;
+#endif
     {
         std::unique_lock<std::mutex> lock(m_queueMutex);
         if (m_stop) return;

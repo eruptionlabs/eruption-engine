@@ -718,8 +718,9 @@ bool VulkanContext::setupDebugMessenger() {
 
 bool VulkanContext::createSurface(GLFWwindow* window) {
 #if defined(__EMSCRIPTEN__)
-    (void)window; // sem Vulkan no navegador: o caminho WebGL2 desenha
-    return false;
+    (void)window; // dispositivo nulo (platform/web/VulkanNull.cpp): superficie de mentira
+    m_surface = reinterpret_cast<VkSurfaceKHR>(window);
+    return true;
 #else
     VK_CHECK(glfwCreateWindowSurface(m_instance, window, nullptr, &m_surface));
     return true;
@@ -1236,7 +1237,11 @@ bool VulkanContext::checkValidationLayerSupport() {
 
 std::vector<const char*> VulkanContext::getRequiredExtensions() {
     uint32_t glfwExtensionCount = 0;
+#if defined(__EMSCRIPTEN__)
+    const char** glfwExtensions = nullptr; // o GLFW do navegador nao fala Vulkan
+#else
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+#endif
     std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
 
     if (validationWanted()) extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);

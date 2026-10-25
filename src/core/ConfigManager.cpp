@@ -6,6 +6,9 @@ namespace eruption {
 
 bool ConfigManager::load(const std::string& path) {
     m_path = path;
+    // Sem arquivo (ou com erro), a raiz fica um objeto vazio: quem le usa
+    // value()/contains() e cai nos padroes; com json nulo, value() lanca.
+    m_data = json::object();
     std::ifstream file(path);
     if (!file.is_open()) {
         ERUPTION_LOG_WARN("Config file not found: %s", path.c_str());
@@ -19,6 +22,7 @@ bool ConfigManager::load(const std::string& path) {
         return true;
     } catch (const std::exception& e) {
         ERUPTION_LOG_ERROR("Failed to parse config %s: %s", path.c_str(), e.what());
+        m_data = json::object();
         return false;
     }
 }

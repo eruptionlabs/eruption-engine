@@ -24,7 +24,14 @@ std::vector<uint32_t> ShaderCompiler::loadSPIRV(const std::string& filepath) {
         auto nb = loadSPIRVExact(filepath.substr(0, filepath.size() - kExt.size()) + ".nb.spv", true);
         if (!nb.empty()) return nb;
     }
+#if defined(__EMSCRIPTEN__)
+    // Navegador: o Vulkan e' o dispositivo nulo (platform/web/VulkanNull.cpp)
+    // e os .spv nem vao no pacote. Um cabecalho SPIR-V basta para o renderer
+    // seguir; o shader de verdade e' o GLSL ES do caminho WebGL2.
+    return {0x07230203u, 0x00010000u, 0u, 1u, 0u};
+#else
     return loadSPIRVExact(filepath, false);
+#endif
 }
 
 std::vector<uint32_t> ShaderCompiler::loadSPIRVExact(const std::string& filepath, bool quiet) {

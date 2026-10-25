@@ -948,6 +948,12 @@ private:
                                   const std::vector<TerrainVertex>& vertices,
                                   const std::vector<uint32_t>& indices);
     void initImGui();
+#if defined(__EMSCRIPTEN__)
+    // Caminho WebGL2 (EngineWeb.cpp): sem Vulkan no navegador.
+    void renderWeb();
+    void initImGuiWebBackend();
+    bool m_webReady = false; // Module.onReady() ja foi chamado (1o quadro desenhado)
+#endif
     void shutdownImGui();
     void onWindowResize(int width, int height);
     void renderMinimap(VkCommandBuffer cmd);
