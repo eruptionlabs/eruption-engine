@@ -368,6 +368,14 @@ static void fillSkyParams(SkyParamsUBO& ubo, const SkyConfig& cfg, const DayNigh
                                  skyGradientDebug ? 1.0f : 0.0f, 0.0f, 0.0f);
 }
 
+size_t ProceduralSkyBackend::skyParams(const DayNightCycle& cycle, const Mat4& invViewProj, void* out) const {
+    SkyParamsUBO ubo;
+    fillSkyParams(ubo, m_config, cycle);
+    ubo.invViewProj = invViewProj;
+    std::memcpy(out, &ubo, sizeof(ubo));
+    return sizeof(ubo);
+}
+
 void ProceduralSkyBackend::updateUBO(const DayNightCycle& cycle, const Mat4& viewProj) {
     SkyParamsUBO ubo;
     fillSkyParams(ubo, m_config, cycle);

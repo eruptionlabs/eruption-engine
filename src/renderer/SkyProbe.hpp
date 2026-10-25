@@ -41,6 +41,15 @@ public:
     uint32_t updates() const { return m_updates; }
 
     static constexpr VkDeviceSize kShBytes = 9 * 4 * sizeof(float);
+    static constexpr float kMaxRadiance = 64.0f; // teto por texel na projecao (um texel estourado nao domina)
+
+    // Matriz que o skybox.frag usa para desenhar a face `face` do cubo (ver
+    // SkyProbe.cpp). Publica para quem desenha as faces sem o Vulkan (web).
+    static Mat4 faceInvViewProj(uint32_t face);
+    // A projecao do sky_sh.comp na CPU, para quem nao tem compute: `faces` sao
+    // 6 faces RGBA float de faceSize x faceSize, na ordem e na orientacao de
+    // faceInvViewProj. Sai em `sh` (9 coeficientes RGB de radiancia).
+    static void projectSH(const float* faces, uint32_t faceSize, float maxRadiance, Vec3 sh[9]);
 
 private:
     bool createCube();

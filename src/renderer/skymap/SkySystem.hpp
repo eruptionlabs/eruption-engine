@@ -32,6 +32,7 @@ public:
                          VkImageView faceView, VkImageView depthView, uint32_t size, uint32_t face);
 
     Vec3 getSkyColor(const Vec3& direction, const DayNightCycle& cycle) const;
+    size_t skyParams(const DayNightCycle& cycle, const Mat4& invViewProj, void* out) const;
 
     VkImageView outputView() const;
     VkSampler outputSampler() const;
