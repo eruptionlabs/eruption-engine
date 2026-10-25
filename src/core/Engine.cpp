@@ -1048,6 +1048,12 @@ void Engine::shutdown() {
     }
 
     if (m_warpJobActive) m_warpJob.wait(); // leitura de mapa em andamento termina antes
+    // Mapa vizinho a meio caminho (leitura ou malha em outra thread): termina
+    // antes de parar o JobSystem e o cache de assets que ele usa. Sem isso,
+    // sair com um vizinho carregando derrubava o shutdown (SIGSEGV em 2 de 3
+    // saidas nos quadros 40-90 de uma cena com 3 vizinhos).
+    for (auto& r : m_regions)
+        if (r.job.valid()) r.job.wait();
     JobSystem::instance().shutdown();
 
     m_vulkan.waitIdle();
