@@ -128,6 +128,13 @@ declare world: {
     -- Walk grid of the engine (block_slopes and solid objects included):
     -- whether a character of `radius` can stand at (x, z).
     walkable: (x: number, z: number, radius: number?) -> boolean,
+    -- Cost of walking the grid cells within `radius` of (x, z) (0: only the
+    -- cell of the point), this run only: 1 is normal, math.huge blocks.
+    -- walkable, path and walking see it in the same frame; path goes around
+    -- costly cells when that is cheaper. Returns how many cells changed.
+    set_walk_cost: (x: number, z: number, radius: number, cost: number) -> number,
+    -- Cost of the cell at (x, z) (1 when the game set none).
+    walk_cost: (x: number, z: number) -> number,
     -- Path on the ground from `from` to `to` (smoothed), or nil if none.
     path: (from: vector, to: vector, radius: number?) -> { vector }?,
     -- The game's own fog: {color = vector or {r, g, b}, start, end, opacity,

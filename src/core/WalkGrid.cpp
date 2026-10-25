@@ -35,37 +35,85 @@ bool followsTerrain(const LoadedMap& m) {
     return m.isGlbMap && m.terrainFromFile && m.navGrid.width == m.terrain.width && m.navGrid.height == m.terrain.height;
 }
 
-} // namespace
-
-bool Engine::navFollowsTerrain() const { return m_currentMap && followsTerrain(*m_currentMap); }
-
-bool Engine::navCell(float x, float z, int& gx, int& gz) const {
-    if (!m_currentMap) return false;
-    const NavGridFile& nav = m_currentMap->navGrid;
-    if (followsTerrain(*m_currentMap)) {
-        const TerrainFile& t = m_currentMap->terrain;
+// Célula da grade de caminhada sob (x, z) e o passo dela.
+bool cellOf(const LoadedMap& m, float x, float z, int& gx, int& gz) {
+    if (followsTerrain(m)) {
+        const TerrainFile& t = m.terrain;
         gx = int(std::floor((x - t.offsetX) / t.scale + 0.5f));
         gz = int(std::floor((z - t.offsetZ) / t.scale + 0.5f));
     } else {
         gx = int(x / 5.0f); // grade antiga: célula de 5 unidades a partir da origem
         gz = int(z / 5.0f);
     }
-    return gx >= 0 && gz >= 0 && gx < int(nav.width) && gz < int(nav.height);
+    return gx >= 0 && gz >= 0 && gx < int(m.navGrid.width) && gz < int(m.navGrid.height);
+}
+
+// Centro da célula em mundo (o inverso de cellOf).
+Vec2 cellCenter(const LoadedMap& m, int gx, int gz) {
+    if (followsTerrain(m)) {
+        const TerrainFile& t = m.terrain;
+        return Vec2(t.offsetX + gx * t.scale, t.offsetZ + gz * t.scale);
+    }
+    return Vec2((gx + 0.5f) * 5.0f, (gz + 0.5f) * 5.0f);
+}
+
+float cellCost(const LoadedMap& m, int gx, int gz) {
+    return m.walkCost.empty() ? 1.0f : m.walkCost[size_t(gz) * m.navGrid.width + size_t(gx)];
+}
+
+bool cellWalkable(const LoadedMap& m, int gx, int gz) {
+    return m.navGrid.at(uint32_t(gx), uint32_t(gz)).isWalkable() && std::isfinite(cellCost(m, gx, gz));
+}
+
+} // namespace
+
+bool Engine::navFollowsTerrain() const { return m_currentMap && followsTerrain(*m_currentMap); }
+
+bool Engine::navCell(float x, float z, int& gx, int& gz) const {
+    return m_currentMap && cellOf(*m_currentMap, x, z, gx, gz);
 }
 
 bool Engine::navWalkable(float x, float z) const {
     const LoadedMap* map = mapAt(x, z);
+    int gx = 0, gz = 0;
     if (map && map != m_currentMap.get()) {
         // Vizinho do mundo contínuo: só mapas com grade (a caminhada segue o terreno).
         if (!followsTerrain(*map)) return true;
-        const TerrainFile& t = map->terrain;
-        const int gx = int(std::floor((x - t.offsetX) / t.scale + 0.5f));
-        const int gz = int(std::floor((z - t.offsetZ) / t.scale + 0.5f));
-        return gx >= 0 && gz >= 0 && gx < int(map->navGrid.width) && gz < int(map->navGrid.height) &&
-               map->navGrid.at(uint32_t(gx), uint32_t(gz)).isWalkable();
+        return cellOf(*map, x, z, gx, gz) && cellWalkable(*map, gx, gz);
     }
+    return navCell(x, z, gx, gz) && cellWalkable(*m_currentMap, gx, gz);
+}
+
+int Engine::setWalkCost(float x, float z, float radius, float cost) {
+    // O mapa sob o ponto (o atual ou um vizinho em cena); mapAt devolve const
+    // só para as consultas.
+    auto* map = const_cast<LoadedMap*>(mapAt(x, z));
+    int cx = 0, cz = 0;
+    if (!map || !cellOf(*map, x, z, cx, cz)) return 0;
+    cost = std::max(cost, 1.0f);
+    NavGridFile& nav = map->navGrid;
+    if (map->walkCost.empty()) {
+        if (cost == 1.0f) return 0;
+        map->walkCost.assign(nav.cells.size(), 1.0f);
+    }
+    const float step = followsTerrain(*map) ? map->terrain.scale : 5.0f;
+    const int r = radius > 0.0f ? int(std::ceil(radius / step)) : 0;
+    int changed = 0;
+    for (int gz = std::max(0, cz - r); gz <= std::min(int(nav.height) - 1, cz + r); ++gz)
+        for (int gx = std::max(0, cx - r); gx <= std::min(int(nav.width) - 1, cx + r); ++gx) {
+            if (r > 0 && glm::length(cellCenter(*map, gx, gz) - Vec2(x, z)) > radius) continue;
+            float& c = map->walkCost[size_t(gz) * nav.width + size_t(gx)];
+            changed += c != cost;
+            c = cost;
+        }
+    return changed;
+}
+
+float Engine::walkCost(float x, float z) const {
+    const LoadedMap* map = mapAt(x, z);
     int gx = 0, gz = 0;
-    return navCell(x, z, gx, gz) && m_currentMap->navGrid.at(uint32_t(gx), uint32_t(gz)).isWalkable();
+    if (!map || !cellOf(*map, x, z, gx, gz)) return 1.0f;
+    return cellCost(*map, gx, gz);
 }
 
 void Engine::applySavedWalk(LoadedMap& map) {
