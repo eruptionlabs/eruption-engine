@@ -1,4 +1,5 @@
 #include "core/Input.hpp"
+#include <algorithm>
 #include <chrono>
 #include <vector>
 #include <GLFW/glfw3.h>
@@ -24,6 +25,7 @@ bool Input::s_touchScreen = true;
 bool Input::s_touchScreen = false;
 #endif
 bool Input::s_doubleTap = false;
+bool Input::s_pressOnCss = false;
 std::array<bool, 8> Input::s_mouse{};
 std::array<bool, 8> Input::s_mousePrev{};
 std::array<bool, 8> Input::s_mouseClicked{};
@@ -291,13 +293,18 @@ void Input::mouseButtonCallback(GLFWwindow* window, int button, int action, int 
     }
     if (button >= 0 && button < 8) {
         if (action == GLFW_PRESS) {
+            if (std::none_of(s_mouse.begin(), s_mouse.end(), [](bool b) { return b; }))
+                s_pressOnCss = inCssTouchRect(s_mousePos.x, s_mousePos.y);
             s_mouse[button] = s_mouseClicked[button] = true;
             // O salto do cursor ate' onde o botao apertou nao e' arrasto: no
             // celular o dedo pousa longe de onde o anterior saiu, e o salto
             // girava a camera (um toque parado virava um tranco de 50 graus).
             s_mousePosPrev = s_mousePos;
         }
-        else if (action == GLFW_RELEASE) s_mouse[button] = false;
+        else if (action == GLFW_RELEASE) {
+            s_mouse[button] = false;
+            if (std::none_of(s_mouse.begin(), s_mouse.end(), [](bool b) { return b; })) s_pressOnCss = false;
+        }
     }
 }
 

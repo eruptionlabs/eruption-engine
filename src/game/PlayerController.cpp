@@ -493,6 +493,9 @@ void PlayerController::updateCamera(float dt, bool captureMouse, bool captureKey
         const float screenH = ImGui::GetIO().DisplaySize.y;
         if (Input::touchScreen() && screenH > 0.0f)
             sens = glm::radians(m_engine->inputConfig().kbMouse.touchTurnPerScreen) / screenH;
+        // Aperto que comecou num elemento CSS (ui.held, ui.dragged): o dedo e'
+        // do botao, a camera fica parada.
+        if (Input::pressOnCss()) md = Vec2(0.0f);
         if (Input::isMouseDown(MouseButton::Left)) {
             if (Input::isKeyDown(Key::LeftAlt)) m_engine->camera().orbitPitch(md.y * sens);
             else m_engine->camera().orbitYaw(md.x * sens);
