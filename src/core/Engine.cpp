@@ -2483,8 +2483,11 @@ double Engine::deviceMemoryMb() const {
 // a fonte embutida do ImGui (so' Latin-1) com as faixas de idiomas europeus,
 // cirilico e japones (kana e os kanji comuns). assets/fonts/ui_extra.* entra
 // mesclada nas mesmas faixas, para o glifo que a primeira nao tem, e
-// assets/fonts/ui.json {"size": px} muda o tamanho base (14 px). Sem fonte no
-// projeto nada muda.
+// assets/fonts/ui.json {"size": px} muda o tamanho base (14 px). "raster": px
+// (padrao = size) rasteriza o atlas maior que o tamanho base: o texto com
+// tamanho explicito (documento de UI) sai nitido em letra grande, e o texto
+// sem tamanho (tela de carga, AddText sem fonte) continua no tamanho base.
+// Sem fonte no projeto nada muda.
 static std::filesystem::path projectFont(const std::string& stem) {
     for (const char* ext : {".ttf", ".otf"}) {
         std::filesystem::path p = project::game("assets/fonts/" + stem + ext);
@@ -2497,13 +2500,17 @@ static bool addProjectUiFont(ImGuiIO& io) {
     const std::filesystem::path main = projectFont("ui");
     if (main.empty()) return false;
     float size = 14.0f;
+    float raster = 0.0f;
     if (std::ifstream f(project::game("assets/fonts/ui.json")); f) {
         try {
-            size = std::clamp(json::parse(f).value("size", size), 8.0f, 64.0f);
+            const json j = json::parse(f);
+            size = std::clamp(j.value("size", size), 8.0f, 64.0f);
+            raster = j.value("raster", 0.0f);
         } catch (const std::exception& e) {
             ERUPTION_LOG_WARN("[UI] assets/fonts/ui.json: %s", e.what());
         }
     }
+    raster = raster > 0.0f ? std::clamp(raster, size, 128.0f) : size;
     static ImVector<ImWchar> s_ranges; // o atlas le' as faixas ate' o Build
     if (s_ranges.empty()) {
         static const ImWchar kExtra[] = {0x0100, 0x017F, 0x0400, 0x04FF, 0x2010, 0x206F,
@@ -2518,18 +2525,21 @@ static bool addProjectUiFont(ImGuiIO& io) {
     ImFontConfig cfg;
     cfg.OversampleH = cfg.OversampleV = 1;
     cfg.PixelSnapH = true;
-    if (!io.Fonts->AddFontFromFileTTF(main.string().c_str(), size, &cfg, s_ranges.Data)) {
+    ImFont* font = io.Fonts->AddFontFromFileTTF(main.string().c_str(), raster, &cfg, s_ranges.Data);
+    if (!font) {
         ERUPTION_LOG_WARN("[UI] fonte ilegivel: %s", main.string().c_str());
         return false;
     }
+    font->Scale = size / raster;
     const std::filesystem::path extra = projectFont("ui_extra");
     if (!extra.empty()) {
         cfg.MergeMode = true;
-        if (!io.Fonts->AddFontFromFileTTF(extra.string().c_str(), size, &cfg, s_ranges.Data))
+        if (!io.Fonts->AddFontFromFileTTF(extra.string().c_str(), raster, &cfg, s_ranges.Data))
             ERUPTION_LOG_WARN("[UI] fonte ilegivel: %s", extra.string().c_str());
     }
-    ERUPTION_LOG_INFO("[UI] fonte do projeto: %s%s, %.0f px", main.filename().string().c_str(),
-                      extra.empty() ? "" : (" + " + extra.filename().string()).c_str(), static_cast<double>(size));
+    ERUPTION_LOG_INFO("[UI] fonte do projeto: %s%s, %.0f px (atlas %.0f px)", main.filename().string().c_str(),
+                      extra.empty() ? "" : (" + " + extra.filename().string()).c_str(), static_cast<double>(size),
+                      static_cast<double>(raster));
     return true;
 }
 
