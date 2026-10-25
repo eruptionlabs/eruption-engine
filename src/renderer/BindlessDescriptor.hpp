@@ -10,6 +10,9 @@
 namespace eruption {
 
 static constexpr uint32_t MAX_BINDLESS_TEXTURES = 4096;
+// Teto com descriptor indexing, se a GPU deixar: o splat guarda o slot em 14
+// bits (model_frag.glsl, & 0x3FFF), entao nao passa de 16384.
+static constexpr uint32_t MAX_BINDLESS_TEXTURES_INDEXED = 16384;
 
 class BindlessDescriptor {
 public:

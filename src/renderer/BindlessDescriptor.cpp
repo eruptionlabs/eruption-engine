@@ -6,11 +6,29 @@
 
 namespace eruption {
 
+// Quantos slots o array sem tamanho fixo pode ter nesta GPU. 4096 enchia com
+// quatro folhas de personagem (um slot por quadro de sprite, ~3550) mais um
+// mapa vizinho. O limite da GPU vale para o estagio inteiro, entao sobra
+// folga para as outras imagens dos pipelines (G-buffer, sombra, pos).
+static uint32_t indexedSlotCount(VulkanContext* ctx) {
+    VkPhysicalDeviceDescriptorIndexingProperties idx{};
+    idx.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+    VkPhysicalDeviceProperties2 p2{};
+    p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    p2.pNext = &idx;
+    vkGetPhysicalDeviceProperties2(ctx->physicalDevice(), &p2);
+    constexpr uint32_t kFolga = 64;
+    const uint32_t lim = std::min(idx.maxPerStageDescriptorUpdateAfterBindSampledImages,
+                                  idx.maxDescriptorSetUpdateAfterBindSampledImages);
+    const uint32_t cabe = lim > kFolga ? lim - kFolga : 0;
+    return std::clamp(cabe, MAX_BINDLESS_TEXTURES, MAX_BINDLESS_TEXTURES_INDEXED);
+}
+
 bool BindlessDescriptor::init(VulkanContext* ctx) {
     m_ctx = ctx;
     m_fixed = !ctx->bindless();
     m_slotCount = m_fixed ? std::min<uint32_t>(ERUPTION_FALLBACK_TEX_SLOTS, MAX_BINDLESS_TEXTURES)
-                          : MAX_BINDLESS_TEXTURES;
+                          : indexedSlotCount(ctx);
     ShaderCompiler::setNoBindless(m_fixed);
     if (m_fixed) {
         const auto& lim = ctx->deviceProperties().limits;
@@ -102,12 +120,12 @@ bool BindlessDescriptor::init(VulkanContext* ctx) {
     }
 
     // Pre-allocate free list backwards for better cache locality
-    m_freeSlots.reserve(MAX_BINDLESS_TEXTURES);
+    m_freeSlots.reserve(m_slotCount);
     for (uint32_t i = m_slotCount - 1; i >= 1; --i) {
         m_freeSlots.push_back(i);
     }
 
-    ERUPTION_LOG_INFO("Bindless descriptor system initialized (%u slots, default at slot 0)", m_slotCount);
+    ERUPTION_LOG_WARN("Bindless descriptor system initialized (%u slots, default at slot 0)", m_slotCount);
     return true;
 }
 
