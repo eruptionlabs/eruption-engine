@@ -22,6 +22,8 @@
 #include "formats/TerrainParser.hpp"
 #include "game/PlayerController.hpp"
 #include "scene/SceneEdits.hpp"
+#include "utils/EmbeddedTextureBake.hpp"
+#include "utils/PbrTextureLoader.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -40,13 +42,18 @@ namespace fs = std::filesystem;
 
 constexpr size_t kMaxRegions = 64;
 constexpr int kMaxJobs = 2;
+// Tempo de quadro gasto com a lista added de um vizinho (o resto entra no
+// quadro seguinte). 900 instâncias de uma vez davam um quadro de 143 ms.
+constexpr double kAttachBudgetMs = 6.0;
 
 // Textura embutida "#imagem" passa a "#<mapa>|imagem": GLBs diferentes usam os
 // mesmos nomes e o cache de texturas é por nome.
+std::string embeddedName(const std::string& n, const std::string& map) {
+    return !n.empty() && n[0] == '#' ? "#" + map + "|" + n.substr(1) : n;
+}
+
 void namespaceEmbedded(ModelFile& model, const std::string& map) {
-    auto rename = [&](std::string& n) {
-        if (!n.empty() && n[0] == '#') n = "#" + map + "|" + n.substr(1);
-    };
+    auto rename = [&](std::string& n) { n = embeddedName(n, map); };
     for (auto& et : model.embeddedTextures) rename(et.name);
     for (auto& t : model.textures) rename(t);
     for (auto& node : model.nodes)
@@ -81,6 +88,9 @@ struct Engine::WorldRegionLoad {
     std::vector<std::vector<ModelRenderer::NodeSlotUse>> slotUse;
     std::vector<std::vector<ModelRenderer::NodeSlots>> slots;
     std::vector<ModelRenderer::PreparedAsset> prepared;
+    std::vector<std::shared_ptr<Engine::ReadyModel>> added; // arquivos da lista added da cena
+    std::vector<std::string> readyFiles;                    // os que foram para m_readyModels
+    std::unordered_map<std::string, BakedEmbeddedTexture> baked; // pacote do .glb, nomes do vizinho
     SceneEdits edits;
     std::string error;
 };
@@ -128,14 +138,20 @@ void Engine::resetWorld() {
         releaseRegionSplat(r);
     }
     m_regions.clear();
+    m_readyModels.clear();
     m_worldNeighbors.clear();
     m_worldStarted = false;
     m_deferredLighting.setExtraPointLights({});
 }
 
 void Engine::restartWorld() {
-    for (auto& r : m_regions)
+    for (auto& r : m_regions) {
+        if (r.attaching) { // no meio da entrada: termina, para sair como os outros
+            attachRegionAdded(r, 1e9);
+            finishRegion(r);
+        }
         if (r.state == WorldRegion::State::Shown) showRegion(r, false);
+    }
     // Os que já estão no mundo continuam valendo se o vizinho é o mesmo.
     std::vector<WorldRegion> old = std::move(m_regions);
     m_regions.clear();
@@ -237,6 +253,9 @@ void Engine::updateWorld() {
     static const char* testRelease = std::getenv("ERUPTION_TEST_WORLD_RELEASE_SECONDS");
     const float releaseAfter = testRelease ? float(std::atof(testRelease)) : worldReleaseSeconds;
     bool attachedThisFrame = false;
+    // Um vizinho entra por vez: as instâncias dele são um intervalo contíguo.
+    bool attaching = false;
+    for (const auto& r : m_regions) attaching |= r.attaching != nullptr;
     for (auto& r : m_regions) {
         const float dist = distanceToArea(r.boundsMin, r.boundsMax, focus.x, focus.z);
         const bool near = dist < worldLoadDistance;
@@ -256,6 +275,13 @@ void Engine::updateWorld() {
                         return out;
                     }
                     for (auto& m : out->map->models) {
+                        // Texturas já comprimidas do pacote ao lado do .glb: sem
+                        // ele cada uma era decodificada no quadro (3,8 s num mapa
+                        // de 12 MB).
+                        EmbeddedBakeResult bake;
+                        if (readEmbeddedBakeCache(m, embeddedTextureMaxSize(), pbrSynthesisEnabled(), bake))
+                            for (auto& [name, tex] : bake.textures)
+                                out->baked.emplace(embeddedName(name, map), std::move(tex));
                         namespaceEmbedded(m, map);
                         out->models.push_back(convertModelToAsset(m));
                         out->slotUse.push_back(ModelRenderer::scanSlotUse(out->models.back()));
@@ -272,6 +298,19 @@ void Engine::updateWorld() {
                             for (float& hh : c.height) hh -= off.y;
                     std::string error;
                     if (!out->edits.load(SceneEdits::pathFor(map), error)) ERUPTION_LOG_ERROR("%s", error.c_str());
+                    std::vector<std::string> files;
+                    for (const auto& a : out->edits.added) {
+                        std::string file = a.file;
+                        if (!a.prefab.empty()) {
+                            Prefab p;
+                            std::string perr;
+                            file = p.load(a.prefab, perr) ? p.file : std::string();
+                        }
+                        if (!file.empty() && std::find(files.begin(), files.end(), file) == files.end())
+                            files.push_back(file);
+                    }
+                    for (const auto& file : files)
+                        if (auto rm = readModelForWorld(file)) out->added.push_back(std::move(rm));
                     return out;
                 });
                 r.state = WorldRegion::State::Loading;
@@ -280,7 +319,17 @@ void Engine::updateWorld() {
             }
             break;
         case WorldRegion::State::Loading:
-            if (!attachedThisFrame && r.job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            if (r.attaching) {
+                // Fatias da lista added; dentro da área o jogador não espera.
+                const bool inside = dist <= 0.0f;
+                if ((attachedThisFrame && !inside) || !attachRegionAdded(r, inside ? 1e9 : kAttachBudgetMs)) break;
+                attachedThisFrame = true;
+                finishRegion(r);
+                if (far) showRegion(r, false);
+                break;
+            }
+            if (!attachedThisFrame && !(attaching && r.slotsResolved) &&
+                r.job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 std::shared_ptr<WorldRegionLoad> load = r.job.get();
                 if (!load || !load->map) {
                     ERUPTION_LOG_ERROR("World: neighbor map %s: %s", r.map.c_str(),
@@ -292,19 +341,23 @@ void Engine::updateWorld() {
                 if (!r.slotsResolved) {
                     // Lido: texturas viram slots aqui e a malha (vértices,
                     // solda, células, costuras, LOD) é montada em outra thread.
+                    const auto tSlots = std::chrono::steady_clock::now();
                     resolveRegionSlots(*load);
+                    r.slotsMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tSlots).count();
                     const ModelRenderer::LodParams lod = m_modelRenderer.lodParams();
                     r.job = platform::runAsync([load, lod] {
                         for (size_t i = 0; i < load->models.size() && i < load->slots.size(); ++i)
                             load->prepared.push_back(
                                 ModelRenderer::prepareAsset(load->models[i], std::move(load->slots[i]), lod));
+                        for (auto& rm : load->added)
+                            rm->prepared = ModelRenderer::prepareAsset(rm->asset, std::move(rm->slots), lod);
                         return load;
                     });
                     r.slotsResolved = true;
                     break;
                 }
+                r.attaching = load;
                 attachRegion(r, *load);
-                if (far) showRegion(r, false);
             }
             break;
         case WorldRegion::State::Shown:
@@ -324,6 +377,8 @@ void Engine::updateWorld() {
 }
 
 void Engine::resolveRegionSlots(WorldRegionLoad& load) {
+    for (auto& [name, tex] : load.baked) m_embeddedBaked.emplace(name, std::move(tex));
+    load.baked.clear();
     // Texturas embutidas: procuradas nos modelos do mapa aberto (só as
     // imagens; a malha não precisa ficar).
     for (auto& m : load.map->models) {
@@ -335,14 +390,24 @@ void Engine::resolveRegionSlots(WorldRegionLoad& load) {
     }
     for (size_t i = 0; i < load.models.size() && i < load.slotUse.size(); ++i)
         load.slots.push_back(m_modelRenderer.resolveSlots(load.models[i], load.slotUse[i]));
+    // Modelos da cena: os que o mapa aberto ainda não tem (o mesmo caminho do
+    // addModelFromFile: imagens no mapa aberto, texturas do cache, slots).
+    std::vector<std::shared_ptr<ReadyModel>> fresh;
+    for (auto& rm : load.added) {
+        if (m_modelRenderer.hasAsset(rm->file) || !m_currentMap) continue;
+        m_currentMap->models.push_back(std::move(*rm->model));
+        for (auto& [name, tex] : rm->bake.textures) m_embeddedBaked.emplace(name, std::move(tex));
+        rm->slots = m_modelRenderer.resolveSlots(rm->asset, rm->slotUse);
+        fresh.push_back(std::move(rm));
+    }
+    load.added = std::move(fresh);
 }
 
+// Começo da entrada: os modelos do próprio mapa (um quadro); a lista added vem em fatias.
 void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
     const auto t0 = std::chrono::steady_clock::now();
     r.data = load.map;
     ModelRenderer& mr = m_modelRenderer;
-    const SceneEdits& e = load.edits;
-    const Mat4 place = glm::translate(Mat4(1.0f), r.offset);
     const std::string prefix = r.map + ":";
     r.firstInstance = static_cast<uint32_t>(mr.instanceCount());
 
@@ -367,15 +432,28 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
     const auto tModels = std::chrono::steady_clock::now();
     const uint32_t mapEnd = static_cast<uint32_t>(mr.instanceCount());
     for (uint32_t i = r.firstInstance; i < mapEnd; ++i) mr.setInstanceName(i, prefix + mr.getInstances()[i].name);
-    auto findInRegion = [&](const std::string& name) -> int {
-        const auto& insts = mr.getInstances();
-        for (uint32_t i = r.firstInstance; i < insts.size(); ++i)
-            if (insts[i].name == prefix + name) return static_cast<int>(i);
-        return -1;
-    };
+    // Os arquivos novos da lista added chegam montados (addModelFromFile).
+    for (auto& rm : load.added)
+        if (!mr.hasAsset(rm->file)) {
+            load.readyFiles.push_back(rm->file);
+            m_readyModels[rm->file] = std::move(rm);
+        }
+    load.added.clear();
+    r.addedNext = 0;
+    r.attachFrames = 2;
+    const double modelsMs = std::chrono::duration<double, std::milli>(tModels - t0).count();
+    r.attachMs = r.slotsMs + modelsMs;
+    r.attachMaxMs = std::max(r.slotsMs, modelsMs);
+}
 
-    // Edições da cena do vizinho, deslocadas.
-    for (const auto& a : e.added) {
+// Uma fatia da lista added; true quando acabou.
+bool Engine::attachRegionAdded(WorldRegion& r, double budgetMs) {
+    const auto t0 = std::chrono::steady_clock::now();
+    const SceneEdits& e = r.attaching->edits;
+    const Mat4 place = glm::translate(Mat4(1.0f), r.offset);
+    const std::string prefix = r.map + ":";
+    while (r.addedNext < e.added.size()) {
+        const auto& a = e.added[r.addedNext++];
         std::string file = a.file, node = a.node;
         Mat4 inner(1.0f);
         if (!a.prefab.empty()) {
@@ -388,7 +466,31 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
         }
         SceneEdits::AddedInstance out;
         SceneEdits::addModel(*this, file, node, prefix + a.name, place * a.transform.matrix(), inner, out);
+        if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() > budgetMs) break;
     }
+    flushPendingUploads();
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    ++r.attachFrames;
+    r.attachMs += ms;
+    r.attachMaxMs = std::max(r.attachMaxMs, ms);
+    return r.addedNext >= e.added.size();
+}
+
+// Fim da entrada: cópias, espalhados, camadas, luzes, personagens; o vizinho vira chão.
+void Engine::finishRegion(WorldRegion& r) {
+    const auto t0 = std::chrono::steady_clock::now();
+    std::shared_ptr<WorldRegionLoad> load = std::move(r.attaching);
+    ModelRenderer& mr = m_modelRenderer;
+    const SceneEdits& e = load->edits;
+    const Mat4 place = glm::translate(Mat4(1.0f), r.offset);
+    const std::string prefix = r.map + ":";
+    for (const auto& file : load->readyFiles) m_readyModels.erase(file); // os que nenhuma entrada usou
+    auto findInRegion = [&](const std::string& name) -> int {
+        const auto& insts = mr.getInstances();
+        for (uint32_t i = r.firstInstance; i < insts.size(); ++i)
+            if (insts[i].name == prefix + name) return static_cast<int>(i);
+        return -1;
+    };
     for (const auto& ob : e.objects) {
         const int idx = findInRegion(ob.name);
         if (idx < 0) continue;
@@ -479,11 +581,14 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
     if (r.hasWater) rebuildWorldWater();
     const auto tEnd = std::chrono::steady_clock::now();
     auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
-    ERUPTION_LOG_WARN("World: %s in place at (%.0f, %.0f, %.0f): %u instances, %zu characters, %.0f ms "
-                      "(models %.1f, scene %.1f, scatter %.1f, splat %.1f, rest %.1f, seams %.1f, lights/water %.1f)",
+    const double last = ms(t0, tEnd);
+    ERUPTION_LOG_WARN("World: %s in place at (%.0f, %.0f, %.0f): %u instances, %zu characters, %.0f ms in %d frames, "
+                      "slowest %.1f (textures + models + scene %.1f, last frame %.1f: scene %.1f, scatter %.1f, splat %.1f, rest %.1f, "
+                      "seams %.1f, lights/water %.1f)",
                       r.map.c_str(), r.offset.x, r.offset.y, r.offset.z, r.endInstance - r.firstInstance,
-                      r.characters.size(), ms(t0, tEnd), ms(t0, tModels), ms(tModels, tScene), ms(tScene, tScatter),
-                      ms(tScatter, tSplat), ms(tSplat, tMisc), ms(tMisc, tStitch), ms(tStitch, tEnd));
+                      r.characters.size(), r.attachMs + last, r.attachFrames + 1, std::max(r.attachMaxMs, last),
+                      r.attachMs, last, ms(t0, tScene), ms(tScene, tScatter), ms(tScatter, tSplat), ms(tSplat, tMisc),
+                      ms(tMisc, tStitch), ms(tStitch, tEnd));
 }
 
 void Engine::showRegion(WorldRegion& r, bool show) {
