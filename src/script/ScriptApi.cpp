@@ -47,6 +47,14 @@ namespace eruption {
 struct ScriptBridge {
     static Engine* engine;
     static std::vector<PointLight>& lights() { return engine->m_deferredLighting.getPointLights(); }
+    // Luzes de um mapa vizinho em cena (mundo contínuo); nulo fora de cena.
+    static std::vector<PointLight>* regionLights(const char* map) {
+        for (auto& r : engine->m_regions)
+            if (r.map == map && r.state == Engine::WorldRegion::State::Shown) return &r.lights;
+        return nullptr;
+    }
+    // A lista do quadro copia as dos vizinhos: refazer depois de mexer nelas.
+    static void regionLightsChanged() { engine->rebuildWorldLights(); }
     static PlayerController* player() { return engine->m_playerController; }
     static void setWeather(WeatherType t) { engine->applyWeatherTypeFull(t, 1.0f); }
     // Só nesta execução (não grava data/char_config.json).
@@ -1019,29 +1027,53 @@ int audio_preload(lua_State* L) {
 
 // ---------------------------------------------------------------- lights
 
-int lights_count(lua_State* L) {
-    lua_pushinteger(L, static_cast<int>(ScriptBridge::lights().size()));
-    return 1;
+// O último argumento, opcional, é o nome de um mapa vizinho em cena (mundo
+// contínuo): sem ele, as luzes do mapa aberto; com ele, as daquele vizinho,
+// numeradas como na cena dele.
+std::vector<PointLight>& lightList(lua_State* L, int mapArg) {
+    if (lua_isnoneornil(L, mapArg)) return ScriptBridge::lights();
+    const char* map = luaL_checkstring(L, mapArg);
+    std::vector<PointLight>* ls = ScriptBridge::regionLights(map);
+    if (!ls) luaL_errorL(L, "map '%s' is not in the scene", map);
+    return *ls;
 }
-PointLight& light(lua_State* L) {
-    auto& ls = ScriptBridge::lights();
+PointLight& light(lua_State* L, int mapArg) {
+    auto& ls = lightList(L, mapArg);
     return ls[checkIndex(L, 1, ls.size(), "light")];
 }
-int lights_position(lua_State* L) { pushVec3(L, light(L).position); return 1; }
-int lights_set_position(lua_State* L) { light(L).position = checkVec3(L, 2); return 0; }
-int lights_color(lua_State* L) { pushVec3(L, light(L).color); return 1; }
-int lights_set_color(lua_State* L) { light(L).color = checkVec3(L, 2); return 0; }
-int lights_intensity(lua_State* L) { lua_pushnumber(L, light(L).intensity); return 1; }
+// Depois de mudar uma luz: a de um vizinho só vale com a lista refeita.
+void lightEdited(lua_State* L, int mapArg) {
+    if (!lua_isnoneornil(L, mapArg)) ScriptBridge::regionLightsChanged();
+}
+int lights_count(lua_State* L) {
+    if (lua_isnoneornil(L, 1)) {
+        lua_pushinteger(L, static_cast<int>(ScriptBridge::lights().size()));
+    } else {
+        const std::vector<PointLight>* ls = ScriptBridge::regionLights(luaL_checkstring(L, 1));
+        lua_pushinteger(L, ls ? static_cast<int>(ls->size()) : 0);
+    }
+    return 1;
+}
+int lights_position(lua_State* L) { pushVec3(L, light(L, 2).position); return 1; }
+int lights_set_position(lua_State* L) { light(L, 3).position = checkVec3(L, 2); lightEdited(L, 3); return 0; }
+int lights_color(lua_State* L) { pushVec3(L, light(L, 2).color); return 1; }
+int lights_set_color(lua_State* L) { light(L, 3).color = checkVec3(L, 2); lightEdited(L, 3); return 0; }
+int lights_intensity(lua_State* L) { lua_pushnumber(L, light(L, 2).intensity); return 1; }
 int lights_set_intensity(lua_State* L) {
-    light(L).intensity = static_cast<float>(luaL_checknumber(L, 2));
+    light(L, 3).intensity = static_cast<float>(luaL_checknumber(L, 2));
+    lightEdited(L, 3);
     return 0;
 }
-int lights_enabled(lua_State* L) { lua_pushboolean(L, light(L).enabled); return 1; }
-int lights_set_enabled(lua_State* L) { light(L).enabled = lua_toboolean(L, 2) != 0; return 0; }
-int lights_turn_on(lua_State* L) { light(L).enabled = true; return 0; }
-int lights_turn_off(lua_State* L) { light(L).enabled = false; return 0; }
+int lights_enabled(lua_State* L) { lua_pushboolean(L, light(L, 2).enabled); return 1; }
+int lights_set_enabled(lua_State* L) { light(L, 3).enabled = lua_toboolean(L, 2) != 0; lightEdited(L, 3); return 0; }
+int lights_turn_on(lua_State* L) { light(L, 2).enabled = true; lightEdited(L, 2); return 0; }
+int lights_turn_off(lua_State* L) { light(L, 2).enabled = false; lightEdited(L, 2); return 0; }
 // A luz projeta sombra de sprite (PointLight::spriteShadow).
-int lights_set_sprite_shadow(lua_State* L) { light(L).spriteShadow = lua_toboolean(L, 2) != 0; return 0; }
+int lights_set_sprite_shadow(lua_State* L) {
+    light(L, 3).spriteShadow = lua_toboolean(L, 2) != 0;
+    lightEdited(L, 3);
+    return 0;
+}
 // Tipo de sombra dos sprites do projeto (Engine::setSpriteShadow).
 int characters_set_shadow(lua_State* L) {
     const char* k = luaL_optstring(L, 1, "");
@@ -2401,22 +2433,25 @@ declare audio: {
 }
 
 -- Point lights of the map. Indices start at 1.
+-- The optional last argument `map` names a neighbor map in the scene
+-- (scene `neighbors`): its lights, numbered as in its own scene. count(map)
+-- is 0 while that neighbor is not in the scene.
 declare lights: {
-    count: () -> number,
-    position: (index: number) -> vector,
-    set_position: (index: number, position: vector) -> (),
+    count: (map: string?) -> number,
+    position: (index: number, map: string?) -> vector,
+    set_position: (index: number, position: vector, map: string?) -> (),
     -- Linear RGB, 0 to 1 per channel.
-    color: (index: number) -> vector,
-    set_color: (index: number, color: vector) -> (),
-    intensity: (index: number) -> number,
-    set_intensity: (index: number, intensity: number) -> (),
-    enabled: (index: number) -> boolean,
-    set_enabled: (index: number, enabled: boolean) -> (),
-    turn_on: (index: number) -> (),
-    turn_off: (index: number) -> (),
+    color: (index: number, map: string?) -> vector,
+    set_color: (index: number, color: vector, map: string?) -> (),
+    intensity: (index: number, map: string?) -> number,
+    set_intensity: (index: number, intensity: number, map: string?) -> (),
+    enabled: (index: number, map: string?) -> boolean,
+    set_enabled: (index: number, enabled: boolean, map: string?) -> (),
+    turn_on: (index: number, map: string?) -> (),
+    turn_off: (index: number, map: string?) -> (),
     -- Whether this light casts sprite shadows (characters.set_shadow("lights")).
     -- Turn it off on a light the game moves along with the party.
-    set_sprite_shadow: (index: number, on: boolean) -> (),
+    set_sprite_shadow: (index: number, on: boolean, map: string?) -> (),
 }
 
 -- Machine readings for a performance meter. A field is nil where this
