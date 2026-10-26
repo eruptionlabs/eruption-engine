@@ -127,6 +127,7 @@ private:
         bool hasPlace = false;
         Vec4 place{0.0f};             // left, top, width, height em fracao do pai
         Vec4 uv{0.0f, 0.0f, 1.0f, 1.0f}; // recorte da imagem (u0, v0, u1, v1)
+        uint32_t tintCss = 0xFFFFFFFFu;  // --image-tint (ImU32); ui.color(sel, cor, 0) troca
     };
 
     void build();

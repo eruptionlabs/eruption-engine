@@ -2182,7 +2182,8 @@ declare ui: {
     -- Troca o arquivo de um widget de imagem (--widget: image).
     image: (selector: string, png: string) -> (),
     visible: (selector: string, on: boolean) -> (),
-    -- which: 0 = background / rail / text, 1 = bar fill or border.
+    -- which: 0 = background / rail / text / image tint (multiplies the
+    -- image; --image-tint in the file), 1 = bar fill or border.
     color: (selector: string, color: vector, which: number?, opacity: number?) -> (),
     has: (selector: string) -> boolean,
     -- Tapped (phone) or clicked (mouse) this frame: an element of the file
