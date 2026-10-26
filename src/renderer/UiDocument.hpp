@@ -64,7 +64,7 @@ public:
     // Desenhado agora (o script ou o CSS o mostra), como em draw().
     bool shown(const std::string& selector) const {
         const Element* e = find(selector);
-        return e && m_loaded && (e->hasVisible ? e->visible : e->visibleCss);
+        return e && m_loaded && (e->hasVisible ? e->visible : e->visibleCss) && !anchorHidden(*e);
     }
 
     // Valores que o jogo preenche. Selector com ou sem "#" - os dois servem.
@@ -85,6 +85,11 @@ public:
     // clearPlace devolve o elemento ao CSS.
     void setPlace(const std::string& selector, float leftPct, float topPct, float widthPct, float heightPct);
     void clearPlace(const std::string& selector);
+    // Centro do elemento num ponto da area (pixels), posto a cada quadro por
+    // quem segue algo no mundo (ui.anchor). `onScreen` falso esconde o
+    // elemento e os filhos; os filhos seguem o pai pela cadeia de --parent.
+    void setAnchor(const std::string& selector, float x, float y, bool onScreen);
+    void clearAnchor(const std::string& selector);
     // Recorte da imagem em coordenadas de textura (0..1): uma janela de uma
     // imagem maior (minimapa, creditos rolando). clearImageRect volta ao todo.
     void setImageRect(const std::string& selector, float u0, float v0, float u1, float v1);
@@ -132,7 +137,11 @@ private:
         // espessura em fracao do menor lado do retangulo.
         bool arc = false;
         float arcStart = -70.0f, arcEnd = 70.0f, arcThickness = 0.15f;
+        bool hasAnchor = false, anchorOn = false;
+        Vec2 anchor{0.0f};            // centro em pixels da area
     };
+    // O elemento ou um pai ancorado esta' fora da tela.
+    bool anchorHidden(const Element& e) const;
 
     void build();
     static void drawArcBar(ImDrawList* dl, const CSSRect& r, const Element& e, float value, uint32_t rail, uint32_t fill);

@@ -49,6 +49,11 @@ declare ui: {
     -- Crop of an image element in texture coordinates (0..1): a window into a
     -- bigger image. u0 = nil shows the whole image again.
     image_rect: (selector: string, u0: number?, v0: number?, u1: number?, v1: number?) -> (),
+    -- Keeps the element's center on the top of a character's sprite (the
+    -- current frame, scale included), `dy` pixels above it, every frame with
+    -- the camera of that frame. Its children (--parent) follow it, and it
+    -- hides while the character is off screen. character = nil lets go.
+    anchor: (selector: string, character: string?, dy: number?) -> (),
     -- Character bars (life, mana) and the minimap with the map name and time.
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),
@@ -302,6 +307,9 @@ declare characters: {
     -- Size that stays (1 = the sheet's size); pop, shake and the rest act on top.
     set_scale: (name: string, scale: number) -> (),
     fade: (name: string, to: number, seconds: number?) -> (),
+    -- Top of the character's sprite on screen, in UI pixels (those of
+    -- ui.size), and whether it is on screen this frame.
+    head_screen: (name: string) -> (number, number, boolean),
 }
 
 declare camera: {
