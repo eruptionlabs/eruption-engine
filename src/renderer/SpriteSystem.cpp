@@ -44,7 +44,7 @@ void SpriteSystem::submitSprites(const std::vector<Sprite>& sprites) {
 }
 
 void SpriteSystem::processSprites(const Frustum& frustum, const Vec3& cameraPos,
-                                  const Vec3& cameraForward) {
+                                  const Vec3& /*cameraForward*/) {
     PROFILE_CPU_SCOPE(ProfilerCategory::Culling);
     m_submittedCount = static_cast<uint32_t>(m_submittedSprites.size());
     frustumCull(frustum);
@@ -71,7 +71,7 @@ void SpriteSystem::frustumCull(const Frustum& frustum) {
     m_visibleCount = static_cast<uint32_t>(m_visibleSprites.size());
 }
 
-void SpriteSystem::topologicalSort(const Vec3& cameraPos) {
+void SpriteSystem::topologicalSort(const Vec3& /*cameraPos*/) {
     if (!m_depthSortEnabled || m_visibleSprites.size() < 2) {
         m_sortedSprites = m_visibleSprites;
         return;
@@ -283,6 +283,22 @@ void SpriteSystem::uploadInstances() {
     
     // Flush to ensure GPU visibility (especially on discrete GPUs)
     vmaFlushAllocation(m_ctx->allocator(), m_instanceAlloc, 0, count * sizeof(SpriteInstanceData));
+}
+
+void SpriteSystem::applyVisionTest() {
+    if (!m_visionTest || !m_mappedInstances || m_sortedSprites.empty()) return;
+    const uint32_t count = std::min(static_cast<uint32_t>(m_sortedSprites.size()), m_maxSprites);
+    SpriteInstanceData* instances = reinterpret_cast<SpriteInstanceData*>(m_mappedInstances);
+    uint32_t last = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const Sprite& s = m_sortedSprites[i];
+        if (!hasFlag(s.flags, SpriteFlags::TeamVision) || m_visionTest(s.anchorPoint)) continue;
+        // Quad degenerado: nem cor, nem sombra, nem disco no chao.
+        instances[i].modelMatrix = Mat4(0.0f);
+        instances[i].tintColor.a = 0.0f;
+        last = i + 1;
+    }
+    if (last > 0) vmaFlushAllocation(m_ctx->allocator(), m_instanceAlloc, 0, last * sizeof(SpriteInstanceData));
 }
 
 void SpriteSystem::render(VkCommandBuffer cmd) {

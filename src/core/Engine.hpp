@@ -32,6 +32,8 @@
 #include "renderer/skymap/SkyConfig.hpp"
 #include "renderer/CloudLayerRenderer.hpp"
 #include "renderer/vfx/VfxSystem.hpp"
+#include "renderer/VisionMap.hpp"
+#include "core/Vision.hpp"
 #include "formats/Ribbon.hpp"
 #include "renderer/LocalCloud.hpp"
 #include "renderer/WaterRenderer.hpp"
@@ -589,6 +591,8 @@ public:
     // era quando os scripts nasceram. Captura no ScriptHost::init.
     void captureScriptDefaults();
     void restoreScriptDefaults();
+    // Visao de equipe (API vision.*): fontes, zonas e a regra visible().
+    Vision& vision() { return m_vision; }
     // Nevoa por script (world.set_fog): vence a do mapa (.env) e a do clima;
     // set=false devolve o comando para eles.
     void setScriptFog(const MapFog& fog) { m_scriptFog = fog; }
@@ -1058,6 +1062,8 @@ private:
     void shutdownImGui();
     void onWindowResize(int width, int height);
     void renderMinimap(VkCommandBuffer cmd);
+    // Raster da visao na janela da camera e upload; fora de passe de render.
+    void updateVision(VkCommandBuffer cmd);
     void setupLavaLiquid(const LoadedMap* map);
     // Preenche m_waterMenu.liquids com o que o mapa de fato autorou (nome,
     // tipo) - so' roda em MAP LOAD, nao em toda rebuild de malha, senao
@@ -1121,6 +1127,16 @@ private:
     ShadowRenderer m_shadowRenderer;
     DeferredLighting m_deferredLighting;
     PostProcessor m_postProcessor;
+    Vision m_vision;
+    VisionMap m_visionMap;
+    // Minimapa: escuro da visao no mapa inteiro, camada preta por cima da
+    // imagem (ImGui). Quadro do minimapa: x, z do centro e meio lado; e o
+    // retangulo do mapa (xmin, zmin, xmax, zmax), fora dele a imagem e' vazia.
+    VisionMap m_visionMinimap;
+    VkDescriptorSet m_visionMinimapSet = VK_NULL_HANDLE;
+    std::vector<uint8_t> m_visionShade;
+    Vec3 m_minimapFrame = Vec3(0.0f);
+    Vec4 m_minimapKeep = Vec4(0.0f);
     // FXAA + upscale bicubico/nitidez, no lugar do blit bilinear cru que
     // levava a imagem de RENDER pro swapchain de DISPLAY. Ver UpscaleAA.hpp.
     UpscaleAA m_upscaleAA;

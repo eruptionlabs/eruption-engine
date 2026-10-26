@@ -605,6 +605,27 @@ declare vfx: {
     playing: (id: number) -> boolean,
 }
 
+-- Team vision. The map is never closed: outside the vision of the sources it
+-- only dims (the sky does not), and characters, effects and minimap markers
+-- there are hidden. Off by default; off, nothing changes on screen.
+declare vision: {
+    -- opts: dim (fraction of brightness left outside, 0.05..1, default 0.35),
+    -- fade (half-life in seconds of the edge, default 0.15), team (whose
+    -- sources count, default 1). enable(false) turns it off.
+    enable: (on: boolean?, opts: { dim: number?, fade: number?, team: number? }?) -> (),
+    enabled: () -> boolean,
+    -- A disc of vision on the ground (y is ignored). The same id moves it.
+    add_source: (id: string | number, position: vector, radius: number, team: number?) -> (),
+    remove_source: (id: string | number) -> boolean,
+    -- mode "block" (default): inside, only a source that is also inside sees
+    -- (a pit, a tall grass patch). "reveal": always visible, no source needed.
+    zone: (id: string | number, position: vector, radius: number, opts: { mode: string? }?) -> (),
+    remove_zone: (id: string | number) -> boolean,
+    -- The exact rule, anywhere on the map (no edge, no fade): the radius of a
+    -- source is the line. Always true while vision is off.
+    visible: (position: vector) -> boolean,
+}
+
 -- An object of the scene: every model and character of the map is one, and
 -- scripts make more. The handle stays valid until the object is destroyed;
 -- after that alive() is false and reading a field is an error. game.load

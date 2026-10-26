@@ -13,6 +13,9 @@ layout(set = 0, binding = 5) uniform sampler2D cloudDepthTexture;
 // still reads whatever is behind the cloud (usually the ground) - sampling
 // its alpha here lets the fog block know a cloud already owns this pixel.
 layout(set = 0, binding = 8) uniform sampler2D cloudVolumeCoverageTexture;
+// Visao de equipe: R8 da janela no plano XZ (1 = visivel). So' amostrada com
+// push.vision.w >= 0.
+layout(set = 0, binding = 9) uniform sampler2D visionTexture;
 
 // Bloco no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
 layout(std140, set = 1, binding = 0) uniform PushConstants {
@@ -37,6 +40,7 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec4 highlightTint;   // idem, nas luzes
     vec4 sceneDim;        // rgb=cor, a=forca: escurece so' o cenario (fx.dim), antes da UI
     vec4 belowHorizon;    // rgb=fundo abaixo do horizonte (antes da exposicao), a=liga
+    vec4 vision;          // xy=canto xz da janela, z=1/lado, w=dim (< 0 = desligada)
 } push;
 
 // ---------------------------------------------------------------------------
@@ -424,6 +428,14 @@ void main() {
 
     // Gamma 2.2
     color = pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
+    // Visao de equipe depois do gamma, como o fx.dim: dim 0,35 e' 35% do
+    // brilho que se ve'. O ceu nao escurece; fora da janela e' sem visao.
+    if (push.vision.w >= 0.0 && depth < 0.99999) {
+        vec2 vuv = (worldPos.xz - push.vision.xy) * push.vision.z;
+        float vis = all(greaterThanEqual(vuv, vec2(0.0))) && all(lessThanEqual(vuv, vec2(1.0)))
+                    ? texture(visionTexture, vuv).r : 0.0;
+        color *= mix(push.vision.w, 1.0, vis);
+    }
     // fx.dim depois do gamma: a forca e' a que se ve' (0,7 = 70% mais escuro);
     // antes do gamma 0,7 escurecia so' ~42% na tela.
     color = mix(color, pow(max(push.sceneDim.rgb, vec3(0.0)), vec3(1.0 / 2.2)), clamp(push.sceneDim.a, 0.0, 1.0));

@@ -412,6 +412,10 @@ bool Engine::init(int width, int height, const std::string& title) {
     if (m_upscalerMode == UpscalerMode::FsrBeforePost) { postW = displayExt.width; postH = displayExt.height; }
     if (!m_postProcessor.init(&m_vulkan, postW, postH)) return false;
     m_postProcessor.setWeatherSystem(&m_weatherSystem);
+    // Sem o mapa a visao so' nao escurece a tela (o composite recebe a cena).
+    if (!m_visionMap.init(&m_vulkan, m_vision.texels())) ERUPTION_LOG_WARN("Visao: sem textura, a tela nao escurece");
+    m_vfx.setHideTest([this](const Vec3& p) { return !m_vision.visible(Vec2(p.x, p.z)); });
+    m_spriteSystem.setVisionTest([this](const Vec3& p) { return m_vision.visible(Vec2(p.x, p.z)); });
     if (fsrActive()) {
         if (!m_fsr.init(&m_vulkan, m_upscalerMode == UpscalerMode::FsrBeforePost,
                         static_cast<uint32_t>(width), static_cast<uint32_t>(height),
@@ -1154,6 +1158,8 @@ void Engine::shutdown() {
     m_cameraMotion.shutdown();
     m_spriteLayer.shutdown();
     m_fsr.shutdown();
+    m_visionMap.shutdown();
+    m_visionMinimap.shutdown();
     m_postProcessor.shutdown(); shutdownShimmerMetric(); MipmapGenerator::shutdownCompute(&m_vulkan);
     // Independent cloud layers must be released while the Vulkan context and
     // the cloud renderer are still alive (they own VMA allocations and hold
@@ -2238,6 +2244,7 @@ void Engine::restoreScriptDefaults() {
     setSpriteShadow(-1);           // characters.set_shadow
     m_audio.resetMix();            // volumes geral, da musica e dos grupos
     setMinimapLabel({});           // ui.minimap_label
+    m_vision.reset();              // vision.*
 }
 
 void Engine::setDofEnabled(bool on) {
@@ -2422,6 +2429,10 @@ void Engine::applyGraphicsPreset() {
     m_vfx.setBudget(static_cast<uint32_t>(std::max(1024, p.value("vfx_max_particles", 131072))),
                     p.value("vfx_spawn_scale", 1.0f));
     m_vfx.setLightBudget(static_cast<uint32_t>(std::clamp(p.value("vfx_max_lights", 16), 0, 64)));
+    // Visao de equipe: lado da janela (u) e texels. 1024 u cobre a pegada da
+    // camera de fov 20 a 650 u e pitch 25 em 21:9 (820 x 633 u, medido).
+    m_vision.setWindow(p.value("vision_window", 1024.0f),
+                       static_cast<uint32_t>(std::clamp(p.value("vision_texels", 256), 16, 1024)));
     // ERUPTION_TEST_TEXTURE_MAX_SIZE (capturas): teto de textura acima do preset.
     if (const char* e = std::getenv("ERUPTION_TEST_TEXTURE_MAX_SIZE")) m_textureMaxSize = std::clamp(std::atoi(e), 128, 8192);
     setEmbeddedTextureMaxSize(static_cast<uint32_t>(m_textureMaxSize));

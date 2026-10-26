@@ -421,6 +421,7 @@ void Engine::render() {
         }
     };
     cpuMark(0);
+    m_spriteSystem.applyVisionTest();
 
     // Fase propria: o streaming do mapa custava ate' 12ms e era atribuido a
     // "Shadow" (proxima fase) - gargalo fantasma na telemetria.
@@ -1655,6 +1656,7 @@ void Engine::render() {
                                       m_camera.nearPlane(), m_camera.farPlane());
         }
     }
+    updateVision(cmd);
     const VkImageView postHdrInput = m_upscalerMode == UpscalerMode::FsrBeforePost
                                          ? m_fsr.outputView()
                                          : m_deferredLighting.litImageView();
@@ -3069,6 +3071,55 @@ int Engine::spriteShadowKind() const {
         return e ? std::atoi(e) : -1;
     }();
     return kKindEnv >= 0 ? kKindEnv : m_spriteShadowKind >= 0 ? m_spriteShadowKind : m_charConfig.shadowType;
+}
+
+// Centro da janela da visao: o meio da pegada da camera no chao (os 4 cantos
+// da tela no plano do alvo), nao o alvo, que fica perto da borda de baixo com
+// a camera inclinada. O alvo fica sempre dentro da janela.
+static Vec2 visionWindowCenter(const Camera& camera, float window) {
+    const Mat4 inv = glm::inverse(camera.viewProjNoJitter());
+    const Vec3 eye = camera.position();
+    const Vec3 target = camera.target();
+    Vec2 lo(1e30f), hi(-1e30f);
+    for (int c = 0; c < 4; ++c) {
+        const Vec4 farH = inv * Vec4(c & 1 ? 1.0f : -1.0f, c & 2 ? 1.0f : -1.0f, 1.0f, 1.0f);
+        const Vec3 dir = glm::normalize(Vec3(farH) / farH.w - eye);
+        // Raio que nao desce ate' o chao (acima do horizonte): vai a uma janela de distancia.
+        float t = dir.y < -1e-4f ? (target.y - eye.y) / dir.y : window;
+        t = std::min(t, window);
+        const Vec3 hit = eye + dir * t;
+        lo = glm::min(lo, Vec2(hit.x, hit.z));
+        hi = glm::max(hi, Vec2(hit.x, hit.z));
+    }
+    const Vec2 t2(target.x, target.z);
+    const float keep = 0.4f * window;
+    return glm::clamp(0.5f * (lo + hi), t2 - Vec2(keep), t2 + Vec2(keep));
+}
+
+void Engine::updateVision(VkCommandBuffer cmd) {
+    if (!m_vision.enabled() || m_visionMap.view() == VK_NULL_HANDLE) {
+        m_postProcessor.setVisionMap(VK_NULL_HANDLE, Vec4(0.0f, 0.0f, 0.0f, -1.0f));
+        return;
+    }
+    if (!m_visionMap.ensureSize(m_vision.texels())) return;
+    m_vision.raster(visionWindowCenter(m_camera, m_vision.windowSize()), m_timer.unscaledDeltaTime());
+    m_visionMap.upload(cmd, m_vision.image().data(), m_vision.texels());
+    const Vec2 o = m_vision.origin();
+    m_postProcessor.setVisionMap(m_visionMap.view(), Vec4(o.x, o.y, 1.0f / m_vision.windowSize(), m_vision.dim()));
+
+    // Minimapa: o mapa inteiro pela regra exata (o jogo ve' la' o que o
+    // visible() responde). 128 texels: num mapa de 4000 u, 31 u por texel.
+    constexpr uint32_t kMinimapTexels = 128;
+    if (!m_showMinimapHud || m_minimapFrame.z <= 0.0f) return;
+    if (m_visionMinimap.view() == VK_NULL_HANDLE) {
+        if (!m_visionMinimap.init(&m_vulkan, kMinimapTexels, true)) return;
+        m_visionMinimapSet = ImGui_ImplVulkan_AddTexture(m_defaultSampler, m_visionMinimap.view(),
+                                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    const float half = m_minimapFrame.z;
+    m_vision.rasterShade(Vec2(m_minimapFrame.x - half, m_minimapFrame.y - half), 2.0f * half, kMinimapTexels,
+                         m_minimapKeep, m_visionShade);
+    m_visionMinimap.upload(cmd, m_visionShade.data(), kMinimapTexels);
 }
 
 } // namespace eruption

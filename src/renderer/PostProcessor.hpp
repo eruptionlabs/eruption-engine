@@ -200,6 +200,9 @@ public:
     }
     // Raios do sol no mesmo passe (chave "god_ray_sun" do preset: forca, 0 desliga).
     void setGodRaySun(float strength) { m_godRaySun = std::max(strength, 0.0f); }
+    // Visao de equipe (core/Vision): textura R8 da janela e x=canto x, y=canto
+    // z, z=1/lado, w=dim (< 0 = desligada, o composite nem amostra).
+    void setVisionMap(VkImageView view, const Vec4& params) { m_visionView = view; m_visionParams = params; }
     void resize(uint32_t width, uint32_t height);
     uint32_t width() const { return m_width; }
     uint32_t height() const { return m_height; }
@@ -343,6 +346,8 @@ private:
     const std::vector<PointLight>* m_godRaySource = nullptr;
     uint32_t m_godRayMaxLights = 0;
     float m_godRaySun = 0.0f;
+    VkImageView m_visionView = VK_NULL_HANDLE;
+    Vec4 m_visionParams = Vec4(0.0f, 0.0f, 0.0f, -1.0f);
     VkPipeline m_bloomDownPipeline = VK_NULL_HANDLE;
     VkPipeline m_bloomUpPipeline = VK_NULL_HANDLE;
     VkPipeline m_weatherPipeline = VK_NULL_HANDLE;

@@ -2960,6 +2960,10 @@ void Engine::drawGameHud(ImDrawList* target, ImVec2 origin, ImVec2 size) {
         // e so' o V invertido deixava a imagem espelhada leste-oeste sob o
         // cursor (marcador a -X do jogador aparecia a' direita dele).
         dl->AddImage((ImTextureID)m_minimapDescriptorSet, startPos, ImVec2(startPos.x + uiSize, startPos.y + uiSize), ImVec2(1, 1), ImVec2(0, 0));
+        // Visao de equipe: camada preta com o escuro no alfa, linha 0 = z
+        // minimo (embaixo), coluna 0 = x minimo (a' esquerda).
+        if (m_vision.enabled() && m_visionMinimapSet != VK_NULL_HANDLE)
+            dl->AddImage((ImTextureID)m_visionMinimapSet, startPos, ImVec2(startPos.x + uiSize, startPos.y + uiSize), ImVec2(0, 1), ImVec2(1, 0));
     }
 
     // Minimap info panel: nome do mapa + coordenadas + horario (widget separado #minimap-info)

@@ -742,6 +742,7 @@ void ScriptHost::stop() {
     // Etiquetas, pais e ligado/desligado voltam ao que a cena declara.
     m_engine->sceneObjects().restoreAuthored(*m_engine);
     m_engine->audio().stopAll(); // Stop do editor: o som do jogo para junto
+    m_engine->vision().reset();  // e a visao de equipe (fontes do jogo) desliga
     m_messages.clear();
     m_lastUpdateMs = 0.0f;
 }

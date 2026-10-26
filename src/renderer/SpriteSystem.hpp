@@ -4,6 +4,7 @@
 #include "renderer/SpriteRenderer.hpp"
 #include "math/Frustum.hpp"
 #include "math/Types.hpp"
+#include <functional>
 #include <vector>
 #include <queue>
 #include <unordered_map>
@@ -24,6 +25,8 @@ enum class SpriteFlags : uint32_t {
     // Billboard que projeta a silhueta no mapa de sombra do sol (posto pelo
     // SpriteSystem com characters.set_shadow("map"), nao pelo autor do sprite).
     ShadowMap   = 1 << 12,
+    // So' CPU: some se o teste da visao de equipe esconder o pe' (personagens).
+    TeamVision  = 1 << 13,
 };
 
 inline SpriteFlags operator|(SpriteFlags a, SpriteFlags b) {
@@ -86,6 +89,12 @@ public:
     void submitSprites(const std::vector<Sprite>& sprites);
     void clearSprites() { m_submittedSprites.clear(); }
 
+    void setVisionTest(std::function<bool(const Vec3&)> fn) { m_visionTest = std::move(fn); }
+    // Encolhe a zero as instancias TeamVision que o teste esconde. Chamado no
+    // render, DEPOIS dos scripts do quadro (o processSprites roda antes, no
+    // update do jogador): assim o personagem aparece no mesmo quadro em que
+    // vision.visible() vira verdadeiro e a tela clareia em volta dele.
+    void applyVisionTest();
     void processSprites(const Frustum& frustum, const Vec3& cameraPos,
                         const Vec3& cameraForward);
 
@@ -112,6 +121,7 @@ private:
 
     uint32_t m_maxSprites;
     std::vector<Sprite> m_submittedSprites;
+    std::function<bool(const Vec3&)> m_visionTest;
     std::vector<Sprite> m_visibleSprites;
     std::vector<Sprite> m_sortedSprites;
 

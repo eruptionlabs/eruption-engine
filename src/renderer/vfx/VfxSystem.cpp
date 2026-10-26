@@ -1119,6 +1119,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
         Instance& inst = m_instances[ii];
         const VfxEffectDesc& fx = *inst.desc;
         const Vec3 pos = Vec3(inst.transform[3]);
+        inst.hidden = m_hideTest && m_hideTest(pos);
         if (inst.firstFrame) inst.prevPos = pos;
         inst.velocity = dt > 1e-6f ? (pos - inst.prevPos) / dt : Vec3(0.0f);
         const float moved = glm::length(pos - inst.prevPos);
@@ -1192,6 +1193,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
             }
             fillEmitterGpu(inst, e, es.slot, m_slotData[es.slot]);
             if (emitting) m_slotData[es.slot].flags.x |= 1u << 13;
+            if (inst.hidden) m_slotData[es.slot].flags.x |= 1u << 15; // VFXF_HIDDEN
             // Particulas deste emissor ainda podem estar vivas mesmo parado:
             // a decisao de meia resolucao/ordenacao vale enquanto o efeito existe.
             m_anyLowRes = m_anyLowRes || e.lowRes;
@@ -1765,7 +1767,7 @@ void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& o
     };
     std::vector<Gathered> all;
     for (const Instance& inst : m_instances) {
-        if (inst.killed || !inst.desc) continue;
+        if (inst.killed || inst.hidden || !inst.desc) continue;
         const Mat4& t = inst.transform;
         const float scale = glm::length(Vec3(t[0]));
         for (size_t k = 0; k < inst.emitters.size() && k < inst.desc->emitters.size(); ++k) {

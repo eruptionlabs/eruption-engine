@@ -2253,6 +2253,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     registerVfxApi(L, engine);
     registerObjectsApi(L, engine);
     registerRibbonApi(L, engine);
+    registerVisionApi(L, engine);
     NativeModule::registerApi(L);
 }
 
@@ -2846,7 +2847,7 @@ declare perf: {
     -- Temperatures, battery and memory, read at most once a second.
     system: () -> PerfSystem,
 }
-)" + std::string(vfxApiDefinitions()) + objectsApiDefinitions() + NativeModule::apiDefinitions();
+)" + std::string(vfxApiDefinitions()) + visionApiDefinitions() + objectsApiDefinitions() + NativeModule::apiDefinitions();
 }
 
 } // namespace eruption

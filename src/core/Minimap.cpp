@@ -259,6 +259,7 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
     // GLB-only maps, which have no .ter dimensions to derive anything from.
     float zoom = 600.0f;
     Vec3 mapCenter = m_playerController->pos();
+    m_minimapKeep = Vec4(0.0f);
     {
         Vec3 bmin( std::numeric_limits<float>::max());
         Vec3 bmax(-std::numeric_limits<float>::max());
@@ -301,6 +302,7 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
             // which is what the framed minimap widget expects.
             zoom = glm::max(bmax.x - bmin.x, bmax.z - bmin.z) * 0.5f;
             zoom *= 1.02f; // hairline margin so the border texel is not clipped
+            m_minimapKeep = Vec4(bmin.x, bmin.z, bmax.x, bmax.z);
         } else if (m_currentMap) {
             // Last resort, only when nothing has loaded yet.
             const auto& terr = m_currentMap->terrain;
@@ -311,6 +313,8 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
             mapCenter.z = terr.offsetZ + mapHeight * 0.5f;
         }
     }
+    m_minimapFrame = Vec3(mapCenter.x, mapCenter.z, zoom); // visao de equipe no minimapa
+    if (m_minimapKeep == Vec4(0.0f)) m_minimapKeep = Vec4(mapCenter.x - zoom, mapCenter.z - zoom, mapCenter.x + zoom, mapCenter.z + zoom);
     Mat4 proj = glm::ortho(-zoom, zoom, zoom, -zoom, -5000.0f, 5000.0f);
     // Up=(0,0,-1) makes East=Right, but South=Up. Ortho(z,-z) then makes North=Bottom
     Mat4 view = glm::lookAt(mapCenter + Vec3(0, 1000, 0), mapCenter, Vec3(0, 0, -1));

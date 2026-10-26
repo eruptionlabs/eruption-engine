@@ -442,7 +442,7 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         }
         s.texIndex = tex.slot;
         s.paletteIndex = 0;
-        s.flags = SpriteFlags::Billboard | SpriteFlags::CastShadow | SpriteFlags::PngSprite;
+        s.flags = SpriteFlags::Billboard | SpriteFlags::CastShadow | SpriteFlags::PngSprite | SpriteFlags::TeamVision;
         if (mirror) s.flags = s.flags | SpriteFlags::FlipX;
         s.tintColor = spr.color;
         // Clarao: puxa a cor na direcao da cor que o script pediu, sem
@@ -502,7 +502,8 @@ void Engine::drawSpeechBubbles(float x, float y, float w, float h, float dt) {
                     nullptr, wrap);
     };
     for (const auto& c : m_characters)
-        if (c.sayTime > 0.0f && c.visible && !c.removed && !c.parked && !hideCharactersInView)
+        if (c.sayTime > 0.0f && c.visible && !c.removed && !c.parked && !hideCharactersInView &&
+            m_vision.visible(Vec2(c.position.x, c.position.z)))
             bubble(c.position + Vec3(0.0f, 30.0f, 0.0f), c.say, c.sayTime);
     if (m_playerSayTime > 0.0f && m_playerController)
         bubble(m_playerController->pos() + Vec3(0.0f, 30.0f, 0.0f), m_playerSay, m_playerSayTime);
