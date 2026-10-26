@@ -290,6 +290,7 @@ bool fromJson(const json& j, VfxEffectDesc& out, std::string* err, const std::st
     fx.name = j.value("name", std::string());
     fx.duration = std::max(0.0f, num(j, "duration", 0.0f));
     fx.loop = num(j, "loop", true);
+    fx.vision = num(j, "vision", true);
     if (j.contains("emitters") && j["emitters"].is_array()) {
         for (const json& je : j["emitters"]) {
             VfxEmitterDesc e;
@@ -311,6 +312,7 @@ json toJson(const VfxEffectDesc& fx) {
     j["name"] = fx.name;
     j["duration"] = fx.duration;
     j["loop"] = fx.loop;
+    if (!fx.vision) j["vision"] = false; // so' quando muda: os arquivos de antes ficam iguais
     json em = json::array();
     for (const auto& e : fx.emitters) em.push_back(writeEmitter(e));
     j["emitters"] = em;
