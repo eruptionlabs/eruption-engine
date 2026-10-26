@@ -627,6 +627,19 @@ bool Engine::uiClicked(const std::string& selector) {
     return uiHit(selector, r, uiCursor());
 }
 
+std::string Engine::uiGraphClicked(const std::string& selector) {
+    CSSRect r;
+    if (!uiTouchRect(selector, r)) return {};
+    if (!Input::isMousePressed(MouseButton::Left)) return {};
+    const glm::vec2 m = Input::mousePosition();
+    if (Input::inUiTouchRect(m.x, m.y)) return {};
+    const glm::vec2 c = uiCursor();
+    std::string id;
+    m_uiDocument.graphNodeAt(selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w,
+                             48.0f * platform::pixelsPerDp(), Vec2(c.x, c.y), id);
+    return id;
+}
+
 void Engine::updateUiHold() {
     UiHold& h = m_uiHold;
     if (h.frame == m_framesCount) return; // uma vez por quadro, por mais chamadas que haja

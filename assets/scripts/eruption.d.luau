@@ -60,6 +60,18 @@ declare ui: {
     -- tap on it is not a tap on the element. --badge-color and --badge-size
     -- in the element's CSS change the look.
     badge: (selector: string, content: string?) -> (),
+    -- A graph of nodes drawn on the element (a skill tree, a map of stages):
+    -- each node { id, x?, y?, icon?, text?, color?, links? }. x and y are
+    -- 0..1 in the element's box; without them the nodes go in layers by
+    -- depth from the roots (nodes no link reaches), top to bottom, or left
+    -- to right with --graph-direction: right. links lists the ids a node
+    -- points to. icon is a PNG of the project; with it, text goes under the
+    -- node. --node-size, --node-color and --link-color in the element's CSS
+    -- change the look. nil removes the graph.
+    graph: (selector: string, nodes: { { id: string, x: number?, y: number?, icon: string?, text: string?, color: vector?, links: { string }? } }?) -> (),
+    -- Id of the graph node tapped this frame, or nil. Each node takes taps
+    -- within its radius or 24 dp, whichever is larger.
+    graph_clicked: (selector: string) -> string?,
     -- Character bars (life, mana) and the minimap with the map name and time.
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),

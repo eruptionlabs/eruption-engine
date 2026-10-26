@@ -1364,6 +1364,65 @@ int ui_badge(lua_State* L) {
     eng().uiDocument().setBadge(sel, png ? std::string() : v, png ? v : std::string());
     return 0;
 }
+// Grafo de nos: lista de { id, x?, y?, icon?, text?, color?, links? }; nil tira.
+static std::string fieldString(lua_State* L, int t, const char* k) {
+    lua_getfield(L, t, k);
+    std::string s = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
+    return s;
+}
+static UiDocument::GraphNode readGraphNode(lua_State* L, int t) {
+    UiDocument::GraphNode g;
+    g.id = fieldString(L, t, "id");
+    g.text = fieldString(L, t, "text");
+    g.image = fieldString(L, t, "icon");
+    lua_getfield(L, t, "x");
+    lua_getfield(L, t, "y");
+    if (lua_isnumber(L, -2) && lua_isnumber(L, -1))
+        g.pos = Vec2(static_cast<float>(lua_tonumber(L, -2)), static_cast<float>(lua_tonumber(L, -1)));
+    lua_pop(L, 2);
+    lua_getfield(L, t, "color");
+    if (const float* v = lua_tovector(L, -1)) {
+        g.hasColor = true;
+        g.color = Vec4(v[0], v[1], v[2], 1.0f);
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, t, "links");
+    if (lua_istable(L, -1)) {
+        const int n = lua_objlen(L, -1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_isstring(L, -1)) g.links.emplace_back(lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    return g;
+}
+int ui_graph(lua_State* L) {
+    const char* sel = luaL_checkstring(L, 1);
+    if (lua_isnoneornil(L, 2)) {
+        eng().uiDocument().clearGraph(sel);
+        return 0;
+    }
+    luaL_checktype(L, 2, LUA_TTABLE);
+    std::vector<UiDocument::GraphNode> nodes;
+    const int n = lua_objlen(L, 2);
+    nodes.reserve(static_cast<size_t>(n));
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 2, i);
+        if (lua_istable(L, -1)) nodes.push_back(readGraphNode(L, lua_gettop(L)));
+        lua_pop(L, 1);
+    }
+    eng().uiDocument().setGraph(sel, std::move(nodes));
+    return 0;
+}
+int ui_graph_clicked(lua_State* L) {
+    const std::string id = eng().uiGraphClicked(luaL_checkstring(L, 1));
+    if (id.empty()) lua_pushnil(L);
+    else lua_pushlstring(L, id.data(), id.size());
+    return 1;
+}
 int ui_reset(lua_State* L) {
     (void)L;
     eng().uiDocument().resetOverrides();
@@ -2075,7 +2134,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg ui[] = {{"message", ui_message}, {"minimap_label", ui_minimap_label}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
                                   {"load", ui_load}, {"place", ui_place}, {"image_rect", ui_image_rect}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
                                   {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked}, {"dragged", ui_dragged}, {"size", ui_size}, {"held", ui_held}, {"released", ui_released},
-                                  {"reset", ui_reset}, {"anchor", ui_anchor}, {"badge", ui_badge}, {nullptr, nullptr}};
+                                  {"reset", ui_reset}, {"anchor", ui_anchor}, {"badge", ui_badge},
+                                  {"graph", ui_graph}, {"graph_clicked", ui_graph_clicked}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
@@ -2225,6 +2285,18 @@ declare ui: {
     -- tap on it is not a tap on the element. --badge-color and --badge-size
     -- in the element's CSS change the look.
     badge: (selector: string, content: string?) -> (),
+    -- A graph of nodes drawn on the element (a skill tree, a map of stages):
+    -- each node { id, x?, y?, icon?, text?, color?, links? }. x and y are
+    -- 0..1 in the element's box; without them the nodes go in layers by
+    -- depth from the roots (nodes no link reaches), top to bottom, or left
+    -- to right with --graph-direction: right. links lists the ids a node
+    -- points to. icon is a PNG of the project; with it, text goes under the
+    -- node. --node-size, --node-color and --link-color in the element's CSS
+    -- change the look. nil removes the graph.
+    graph: (selector: string, nodes: { { id: string, x: number?, y: number?, icon: string?, text: string?, color: vector?, links: { string }? } }?) -> (),
+    -- Id of the graph node tapped this frame, or nil. Each node takes taps
+    -- within its radius or 24 dp, whichever is larger.
+    graph_clicked: (selector: string) -> string?,
     -- Character bars (life, mana) and the minimap with the map name and time.
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),

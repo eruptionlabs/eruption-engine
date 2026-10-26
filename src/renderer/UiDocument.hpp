@@ -104,6 +104,27 @@ public:
     // mesmo centro), em pixels da tela. Falso sem selo.
     bool badgeRects(const std::string& selector, float x, float y, float w, float h, float minTouch,
                     CSSRect& visual, CSSRect& touch) const;
+    // Grafo de nos sobre o elemento (ui.graph): cada no com icone (PNG) ou
+    // texto, e ligacoes para outros nos por id. `pos` em fracao do retangulo
+    // do elemento; sem ela (< 0), camadas pela profundidade a partir das
+    // raizes (nos onde nenhuma ligacao chega), de cima para baixo, ou da
+    // esquerda para a direita com --graph-direction: right.
+    struct GraphNode {
+        std::string id, text, image;
+        Vec2 pos{-1.0f};
+        bool hasColor = false;
+        Vec4 color{1.0f};
+        std::vector<std::string> links;
+    };
+    void setGraph(const std::string& selector, std::vector<GraphNode> nodes);
+    void clearGraph(const std::string& selector);
+    // No sob o ponto p (pixels da tela): o de centro mais perto, a ate' o
+    // maior entre o raio desenhado e minTouch/2. Falso se nenhum.
+    bool graphNodeAt(const std::string& selector, float x, float y, float w, float h, float minTouch, const Vec2& p,
+                     std::string& id) const;
+    // Centro de um no em pixels da tela (teste de toque).
+    bool graphNodeCenter(const std::string& selector, const std::string& id, float x, float y, float w, float h,
+                         Vec2& center) const;
     // Recorte da imagem em coordenadas de textura (0..1): uma janela de uma
     // imagem maior (minimapa, creditos rolando). clearImageRect volta ao todo.
     void setImageRect(const std::string& selector, float u0, float v0, float u1, float v1);
@@ -155,11 +176,21 @@ private:
         Vec2 anchor{0.0f};            // centro em pixels da area
         bool hasBadge = false;
         std::string badgeText, badgeImage;
+        // Grafo: nos, posicao de cada um (0..1; auto = da camada) e as
+        // ligacoes ja' em indices, resolvidos uma vez em setGraph.
+        std::vector<GraphNode> graph;
+        std::vector<Vec2> graphAt;
+        std::vector<uint8_t> graphAuto;
+        std::vector<std::pair<uint16_t, uint16_t>> graphEdges;
     };
     // O elemento ou um pai esta' escondido (ui.visible ou CSS), ou ancorado
     // fora da tela. Esconder o pai esconde o grupo inteiro.
     bool chainHidden(const Element& e) const;
     CSSRect badgeVisual(const Element& e, const Vec2& area) const;
+    float graphRadius(const Element& e, const Vec2& area) const;
+    bool graphSideways(const Element& e) const;
+    static Vec2 graphPoint(const Element& e, size_t i, const CSSRect& r, bool sideways);
+    void drawGraph(ImDrawList* dl, const Element& e, const CSSRect& r, const Vec2& area, float alpha) const;
     void drawBadge(ImDrawList* dl, const Element& e, const CSSRect& c) const;
 
     void build();
