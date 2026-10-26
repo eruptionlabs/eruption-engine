@@ -97,6 +97,8 @@ void main() {
     vec4 albedo = texture(nonuniformEXT(u_textures[v_texIndex]), v_uv);
     // Derivadas antes de qualquer discard (depois dele o quad fica incompleto).
     const vec2 rimDx = dFdx(v_uv) * 2.5, rimDy = dFdy(v_uv) * 2.5;
+    const vec3 hwPosX = dFdx(v_worldPos), hwPosY = dFdy(v_worldPos);
+    const vec2 hwQuad = vec2(dFdx(v_quad.x), dFdy(v_quad.x));
 
     // bit 8: usePalette
     if ((v_flags & 256u) != 0) {
@@ -171,7 +173,18 @@ void main() {
     // R = origem do material: 0,75 marca SPRITE (0,5 reserva, 1 mapa real,
     // 0,625/0,875 folhagem). Para a iluminacao e' igual a 0,5 (>= 0,5, fora
     // da folhagem); a sombra de contato usa a marca para pular o quad.
-    o_pbr = vec4(0.75, roughness, metallic, 0.0);
+    // pbr.a: no sprite que projeta sombra no mapa (SpriteFlags::ShadowMap), a
+    // meia largura do quadro em u/255 (directional.frag tira a auto-sombra com
+    // ela); nos outros, 0. A largura vem da razao entre as derivadas da
+    // posicao (ao longo da direita do billboard) e as do canto do quad.
+    float halfWidth = 0.0;
+    if ((v_flags & 4096u) != 0u) {
+        const vec2 dq = hwQuad;
+        const float dp = abs(dq.x) > abs(dq.y) ? dot(hwPosX, v_billRight) : dot(hwPosY, v_billRight);
+        const float dqm = abs(dq.x) > abs(dq.y) ? dq.x : dq.y;
+        halfWidth = abs(dqm) > 1e-6 ? clamp(0.5 * abs(dp / dqm) / 255.0, 1.0 / 255.0, 1.0) : 1.0;
+    }
+    o_pbr = vec4(0.75, roughness, metallic, halfWidth);
     o_materialId = matId;
     // Borda da silhueta: algum vizinho transparente. Paleta (bit 256) le' o
     // indice, nao o alfa: indice 0 = transparente.

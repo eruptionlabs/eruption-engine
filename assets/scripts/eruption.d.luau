@@ -255,7 +255,9 @@ declare characters: {
     preload: (sprites: string | { string }) -> (),
     -- Shadow of every character: "planar" (cast by the sun), "circle" (a
     -- contact disc) or "lights" (the disc plus a shadow cast by each of the
-    -- two strongest nearby lights). No argument goes back to the engine default.
+    -- two strongest nearby lights) or "map" (the sprite's silhouette in the sun's
+    -- shadow map: it follows the relief, breaks on steps and climbs walls). No
+    -- argument goes back to the engine default.
     set_shadow: (kind: string?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.

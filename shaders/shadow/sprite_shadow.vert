@@ -67,7 +67,28 @@ void main() {
     
     vec3 finalPos;
     
-    if ((i_flags & 4u) != 0) {
+    if ((i_flags & 4096u) != 0u) {
+        // SpriteFlags::ShadowMap (characters.set_shadow("map")): o quadro do
+        // billboard vira um cartao em pe' no pe' do sprite, girado para o sol
+        // (normal = direcao horizontal da luz), com o mesmo recorte e o mesmo
+        // deslocamento do quadro. Virado para a camera, com o sol de lado o
+        // cartao ficava de perfil e a sombra virava um traco. A direita do
+        // cartao segue a da camera, para a silhueta nao sair espelhada. O
+        // proprio sprite nao se sombreia: directional.frag desloca o pixel dele
+        // para o sol pela meia largura que o sprite.frag guarda em pbr.a.
+        vec3 camRight = (u_inverseView * vec4(-1.0, 0.0, 0.0, 0.0)).xyz;
+        vec3 right = length(camRight.xz) > 1e-4 ? normalize(vec3(camRight.x, 0.0, camRight.z)) : vec3(1.0, 0.0, 0.0);
+        // Linha 2 da matriz ortografica da luz = gradiente da profundidade =
+        // direcao do raio de sol no mundo.
+        vec3 rayDir = vec3(lightSpaceMatrix[0][2], lightSpaceMatrix[1][2], lightSpaceMatrix[2][2]);
+        if (dot(rayDir.xz, rayDir.xz) > 1e-6 * dot(rayDir, rayDir)) {
+            vec2 h = normalize(rayDir.xz);
+            vec3 r = vec3(-h.y, 0.0, h.x);
+            right = dot(r, camRight) < 0.0 ? -r : r;
+        }
+        finalPos = i_anchorPoint.xyz + right * (i_texRect.x + a_position.x * scaleX)
+                 + vec3(0.0, 1.0, 0.0) * (-i_texRect.y + a_position.y * scaleY - i_texRect.w);
+    } else if ((i_flags & 4u) != 0) {
         // BILLBOARDS DO NOT CAST SHADOWS INTO THE DIRECTIONAL SHADOW MAP.
         // They use a separate Projected Planar Shadow pass instead.
         // We emit a degenerate triangle so nothing is drawn.
@@ -77,12 +98,12 @@ void main() {
         v_flags = i_flags;
         v_paletteIndex = i_paletteIndex;
         return;
+    } else {
+        vec3 right = normalize(model[0].xyz);
+        vec3 up = normalize(model[1].xyz);
+        finalPos = worldPos + (a_position.x * right * scaleX + a_position.y * up * scaleY);
     }
-    
-    vec3 right = normalize(model[0].xyz);
-    vec3 up = normalize(model[1].xyz);
-    finalPos = worldPos + (a_position.x * right * scaleX + a_position.y * up * scaleY);
-    
+
     gl_Position = lightSpaceMatrix * vec4(finalPos, 1.0);
 
     v_uv = a_texCoord;

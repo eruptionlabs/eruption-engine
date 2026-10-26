@@ -21,6 +21,9 @@ enum class SpriteFlags : uint32_t {
     CastShadow  = 1 << 9,
     NoDepthSort = 1 << 10,
     PngSprite   = 1 << 11,
+    // Billboard que projeta a silhueta no mapa de sombra do sol (posto pelo
+    // SpriteSystem com characters.set_shadow("map"), nao pelo autor do sprite).
+    ShadowMap   = 1 << 12,
 };
 
 inline SpriteFlags operator|(SpriteFlags a, SpriteFlags b) {
@@ -100,6 +103,8 @@ public:
     const std::vector<Sprite>& getSortedSprites() const { return m_sortedSprites; }
 
     void setDepthSortingEnabled(bool enabled) { m_depthSortEnabled = enabled; }
+    // Billboards com CastShadow entram no mapa de sombra (SpriteFlags::ShadowMap).
+    void setShadowMapCasters(bool on) { m_shadowMapCasters = on; }
 
 private:
     VulkanContext* m_ctx = nullptr;
@@ -120,6 +125,7 @@ private:
     };
     std::vector<SortKey> m_sortKeys;
     bool m_depthSortEnabled = true;
+    bool m_shadowMapCasters = false;
 
     // Scratch de topologicalSort. Vetores membros (nao locais) para nao
     // realocar por frame - mesmo padrao ja' usado por m_sortKeys.

@@ -534,6 +534,21 @@ MaterialProps decodeMaterialProps(float a) {
 // The red channel encodes the material source: 1.0 = real map, 0.5 = fallback
 // heuristic, 0.0 = sprite. Fallbacks should still use the PBR BRDF with the
 // global default roughness/metallic; only sprites stay on legacy Blinn-Phong.
+// Sprite com sombra no mapa (characters.set_shadow("map")): o cartao dele no
+// mapa de sombra fica de frente para o sol, e o billboard de frente para a
+// camera; os dois se cruzam no pe' e, longe do eixo, metade do billboard fica
+// atras do proprio cartao. pbr.a guarda a meia largura do quadro (u/255,
+// sprite.frag): o pixel compara a sombra deslocado para o sol pela distancia
+// maxima ate' o cartao ao longo do raio (meia largura / cos da elevacao, com
+// folga). Telhado acima continua sombreando; sprite encostado (mais perto que
+// isso) nao sombreia o vizinho.
+vec3 spriteSelfShadowShift(vec3 worldPos, vec4 pbr) {
+    if (abs(pbr.r - 0.75) >= 0.06 || pbr.a <= 0.0) return worldPos;
+    vec3 toSun = normalize(-lights.dirLightDir.xyz);
+    float reach = pbr.a * 255.0 * 1.25 / max(length(toSun.xz), 0.25) + 2.0;
+    return worldPos + toSun * reach;
+}
+
 bool isPbrFallback(vec4 pbr) {
     return pbr.r < 0.5;
 }
@@ -584,7 +599,7 @@ void main() {
     vec3 albedoLinear = srgbToLinear(albedo.rgb);
     float wetDrive = lights.rainIntensity * smoothstep(-1.0, 2.0, lights.temperatureC);
     PbrWetness wet = pbrWetSurface(albedoLinear, roughness, metallic,
-                                   pbr.a, N.y, wetDrive);
+                                   abs(pbr.r - 0.75) < 0.06 ? 0.0 : pbr.a, N.y, wetDrive);
     albedoLinear = wet.albedo;
     roughness    = wet.roughness;
 
@@ -602,7 +617,7 @@ void main() {
         lit = max(radiance, vec3(0.0));
     }
 
-    float shadow = calcShadow(worldPos, normal);
+    float shadow = calcShadow(spriteSelfShadowShift(worldPos, pbr), normal);
     float cloudShadow = calcCloudShadow(worldPos);
 
     // Fade sun shadows out as the sun approaches / drops below the horizon.
