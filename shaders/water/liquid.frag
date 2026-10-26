@@ -300,7 +300,11 @@ vec2 lavaCrust(vec2 p, vec2 warpBig, vec2 warpMid, float wn, float open, float c
     vec2 pm = pw + warpMid;
     float wBig = (0.03 + 0.20 * wn * wn) * calor * (1.0 + 4.0 * open);
     vec2 big = lavaCrack(pw * 0.018, wBig);
-    vec2 mid = lavaCrack(pm * 0.055 + 9.1, (0.015 + 0.05 * wn) * (1.0 + 2.0 * open));
+    // A fenda media afina ate' sumir ao longo dela (wn2 < 0,35): fenda de
+    // largura constante e continua le' como curva de nivel.
+    float wn2 = snoise(p * 0.045 + 1.3) * 0.5 + 0.5;
+    float wMid = 0.06 * smoothstep(0.35, 0.9, wn2) * (1.0 + 2.0 * open);
+    vec2 mid = lavaCrack(pm * 0.055 + 9.1, wMid);
     float heat = max(big.x, mid.x * 0.6);
     float h = smoothstep(0.0, 0.35, big.y) * 0.7 + smoothstep(0.0, 0.25, mid.y) * 0.3;
     if (fineW > 0.0) {
@@ -324,12 +328,16 @@ vec3 lavaColor(vec3 worldPos, float radial) {
 
     // CALOR DE BORDA (shoreHeat / centerHeat do .env). `radial`: 0 no
     // centro, 1 na margem.
-    float borda = ubo.normalAdvanced.z * smoothstep(0.65, 1.0, radial)
+    // A borda quente quebra mais a crosta numa faixa estreita, sem acender
+    // por igual; rente a' margem a lava esfria e vira crosta (a margem real
+    // e' mais fria que o meio).
+    float borda = ubo.normalAdvanced.z * smoothstep(0.8, 0.95, radial) * (1.0 - smoothstep(0.95, 1.0, radial))
                 + ubo.normalAdvanced.w * (1.0 - smoothstep(0.0, 0.35, radial));
+    float margemFria = smoothstep(0.93, 1.0, radial);
 
     // Onde a crosta se abre: manchas grandes e lentas, mais a borda quente.
     float open = smoothstep(0.7, 0.95, snoise(xz * 0.0045 + vec2(t * 0.002, 0.0)) * 0.5 + 0.5);
-    open = clamp(open + 0.12 * borda, 0.0, 1.0);
+    open = clamp(open + 0.12 * borda, 0.0, 1.0) * (1.0 - margemFria);
 
     // FLUXO: a crosta anda num campo sem divergencia (rotacional de um ruido
     // largo), por duas fases cruzadas: cada fase advecta a crosta por meio
@@ -347,34 +355,47 @@ vec3 lavaColor(vec3 worldPos, float radial) {
     // Torcao e largura calculadas uma vez, no ponto parado: a placa se
     // deforma um pouco enquanto anda, o que a lava tambem faz.
     vec2 warpBig = 16.0 * vec2(snoise(xz * 0.017), snoise(xz * 0.017 + 7.3));
-    vec2 warpMid = 4.5 * vec2(snoise(xz * 0.07 + 2.1), snoise(xz * 0.07 + 5.9));
+    // Torcao media pequena: a fenda da placa media fica poligonal, com quina
+    // (rachadura de crosta real), em vez de ondular paralela as vizinhas.
+    vec2 warpMid = 1.2 * vec2(snoise(xz * 0.07 + 2.1), snoise(xz * 0.07 + 5.9));
     float wn = snoise(xz * 0.011 + 3.7) * 0.5 + 0.5;
     // Rachadura fina so' perto: longe ela vira menos de um pixel.
     float fineW = LITE ? 0.0 : 1.0 - smoothstep(70.0, 140.0, length(ubo.cameraPos.xyz - worldPos));
     vec2 c0 = lavaCrust(xz - vel * (ph0 - 0.5) * period, warpBig, warpMid, wn, open, calor, fineW);
     vec2 c1 = lavaCrust(xz - vel * (ph1 - 0.5) * period + vec2(37.3, 11.9), warpBig, warpMid, wn, open, calor, fineW);
     vec2 c = mix(c1, c0, w0);
-    float heat = clamp(c.x * min(calor, 1.6) + 0.06 * borda, 0.0, 1.0);
+    float heat = clamp(c.x * min(calor, 1.6), 0.0, 1.0) * (1.0 - 0.6 * margemFria);
     // Liquido exposto: quente, com conveccao lenta por baixo.
     // Liquido exposto: conveccao lenta (manchas mais e menos quentes) e as
     // dobras de pele que esfriam por cima (cordas da pahoehoe), arrastadas
     // pelo fluxo.
     vec2 m = xz - vel * t * 0.5;
-    float molten = 0.72 + 0.28 * snoise(m * 0.02 + vec2(0.0, t * 0.03));
-    float ropes = 1.0 - smoothstep(0.0, 0.14, abs(snoise(m * vec2(0.045, 0.09) + 4.4)));
-    molten *= 1.0 - 0.45 * ropes;
-    heat = max(heat, open * open * molten * smoothstep(0.15, 0.6, heat + 0.3));
+    // Teto 0,92: numa caverna escura a exposicao automatica sobe, e um
+    // nucleo mais quente estourava num bloco branco chapado. A pele que
+    // esfria por cima (filamentos e placas finas) cobre boa parte dele.
+    float molten = 0.7 + 0.22 * snoise(m * 0.02 + vec2(0.0, t * 0.03));
+    float ropes = 1.0 - smoothstep(0.0, 0.22, abs(snoise(m * vec2(0.045, 0.09) + 4.4)));
+    float skin = smoothstep(0.42, 0.7, snoise(m * 0.06 + 8.8) * 0.5 + 0.5);
+    molten *= 1.0 - 0.6 * max(ropes, skin);
+    // Na regiao aberta as fendas largas viram o proprio liquido: o calor
+    // delas passa a ser o do liquido, com a pele por cima (sem isso a
+    // regiao inteira era fenda a calor 1, um bloco chapado).
+    heat = mix(heat, min(heat, molten), open);
 
     // Brilho de corpo negro: cresce como uma potencia alta da temperatura,
     // para so' o que esta' quente passar do limiar do bloom.
     float kelvin = mix(850.0, 1480.0, heat);
-    vec3 glow = blackbody(kelvin) * (3.0 * pow(heat, 3.5) * max(calor, 0.3));
+    // Potencia 6: a exposicao automatica de uma caverna escura multiplica a
+    // cena ~10x, e com uma curva mais baixa todo calor acima do medio
+    // saturava no mesmo creme. Assim a pele (calor ~0,3) quase apaga, o
+    // liquido exposto fica forte e so' o nucleo e as fendas largas estouram.
+    vec3 glow = blackbody(kelvin) * (4.0 * pow(heat, 6.0) * max(calor, 0.3));
 
     // CROSTA: basalto escuro e rugoso, iluminado pelo sol e pelo ambiente.
     // Normal pelas derivadas de tela da altura (Mikkelsen, "Bump Mapping
     // Unparametrized Surfaces on the GPU", 2010), sobre o plano da lava.
     float rough = snoise(xz * 0.5) * 0.1;
-    float h = c.y * 1.4 + rough;
+    float h = c.y * 2.6 + rough * 1.6;
     vec2 dpx = dFdx(xz), dpy = dFdy(xz);
     float hx = dFdx(h), hy = dFdy(h);
     float det = dpx.x * dpy.y - dpx.y * dpy.x;
@@ -387,12 +408,15 @@ vec3 lavaColor(vec3 worldPos, float radial) {
     // Basalto: cinza quente, mais claro no topo da placa, com granulacao
     // fina (vesiculas) que quebra a superficie lisa de ardosia.
     float grain = snoise(xz * 2.3) * 0.5 + 0.5;
-    float tone = (0.022 + 0.04 * smoothstep(-0.4, 0.8, snoise(xz * 0.03 + 5.0) + c.y * 0.6)) * (0.65 + 0.7 * grain);
-    vec3 albedo = tone * vec3(1.0, 0.9, 0.82);
+    float tone = (0.03 + 0.06 * smoothstep(-0.4, 0.8, snoise(xz * 0.03 + 5.0) + c.y * 0.6)) * (0.6 + 0.8 * grain);
+    // Pedra fria: cinza levemente azulado; perto do calor, mais quente.
+    vec3 albedo = tone * mix(vec3(0.88, 0.92, 1.0), vec3(1.0, 0.88, 0.8), smoothstep(0.1, 0.5, heat));
     // Ambiente sem a cor dele: a caverna roxa pintava a rocha preta de lilas.
     float amb = dot(ubo.ambientColor.rgb, vec3(0.2126, 0.7152, 0.0722)) * ubo.ambientColor.w;
     vec3 lit = ubo.sunColor.rgb * sunI * max(dot(n, l), 0.0) + vec3(amb);
-    float spec = ggxSpecular(n, normalize(l + v), 0.55) * 0.04 * max(dot(n, l), 0.0);
+    // Vidro vulcanico: pontos lisos (o grao mais claro) dao brilhos pequenos.
+    float glint = smoothstep(0.7, 0.95, grain);
+    float spec = ggxSpecular(n, normalize(l + v), mix(0.55, 0.22, glint)) * 0.05 * max(dot(n, l), 0.0);
     vec3 crust = albedo * lit + ubo.sunColor.rgb * sunI * spec;
     // A crosta perto da fenda e' iluminada por ela (luz vermelha de baixo).
     crust += blackbody(1100.0) * albedo * 3.0 * smoothstep(0.1, 0.6, heat);
