@@ -2087,6 +2087,13 @@ Key scriptKeyFromName(const char* name) {
         const char c = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
         if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return static_cast<Key>(c);
     }
+    // "f1".."f12": no jogo exportado as teclas F sao do jogo (no PC de
+    // desenvolvimento F1-F4 tambem abrem os menus do motor).
+    if ((name[0] == 'f' || name[0] == 'F') && name[1] >= '1' && name[1] <= '9') {
+        const bool two = name[2] >= '0' && name[2] <= '9' && !name[3];
+        const int n = !name[2] ? name[1] - '0' : (two ? (name[1] - '0') * 10 + (name[2] - '0') : 0);
+        if (n >= 1 && n <= 12) return static_cast<Key>(static_cast<int>(Key::F1) + n - 1);
+    }
     static const struct { const char* name; Key key; } kNamed[] = {
         {"space", Key::Space}, {"enter", Key::Enter}, {"escape", Key::Escape}, {"tab", Key::Tab},
         {"backspace", Key::Backspace}, {"left", Key::Left}, {"right", Key::Right}, {"up", Key::Up},
@@ -2243,7 +2250,7 @@ declare on: {
     update: (fn: (dt: number) -> ()) -> (),
     every: (seconds: number, fn: () -> ()) -> (),
     -- Key names: "A".."Z", "0".."9", "space", "enter", "escape", "tab",
-    -- "left", "right", "up", "down", "shift", "ctrl", "alt".
+    -- "left", "right", "up", "down", "shift", "ctrl", "alt", "f1".."f12".
     key: (key: string, fn: () -> ()) -> (),
     -- Fires when the player gets within `distance` of the model.
     near: (model: string, distance: number, fn: () -> ()) -> (),
