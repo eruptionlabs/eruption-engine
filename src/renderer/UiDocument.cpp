@@ -209,10 +209,11 @@ void UiDocument::clearAnchor(const std::string& selector) {
     if (Element* e = find(selector)) e->hasAnchor = false;
 }
 
-bool UiDocument::anchorHidden(const Element& e) const {
+bool UiDocument::chainHidden(const Element& e) const {
     // A mesma cadeia curta de resolveRect.
     const Element* p = &e;
     for (int n = 0; p && n < 5; ++n) {
+        if (!(p->hasVisible ? p->visible : p->visibleCss)) return true;
         if (p->hasAnchor && !p->anchorOn) return true;
         if (p->parent.empty() || p->parent == p->selector) break;
         p = find(p->parent);
@@ -330,8 +331,7 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
     const Vec2 area(w, h);
 
     for (const Element& e : m_elements) {
-        const bool visible = e.hasVisible ? e.visible : e.visibleCss;
-        if (!visible || anchorHidden(e)) continue;
+        if (chainHidden(e)) continue;
 
         CSSRect r = resolveRect(e, area);
         r.x += x;

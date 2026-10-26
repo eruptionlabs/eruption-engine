@@ -2221,6 +2221,7 @@ declare ui: {
     value: (selector: string, value: number) -> (),   -- bar, 0 to 1
     -- Troca o arquivo de um widget de imagem (--widget: image).
     image: (selector: string, png: string) -> (),
+    -- Hiding an element hides its children (--parent) with it.
     visible: (selector: string, on: boolean) -> (),
     -- which: 0 = background / rail / text / image tint (multiplies the
     -- image; --image-tint in the file), 1 = bar fill or border.
