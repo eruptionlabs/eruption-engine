@@ -72,8 +72,15 @@ public:
     // FORMAS ALEM DO RETANGULO. Lidas uma vez (UiDocument::build), pintadas
     // por quadro sem consultar o parser.
     //
-    // clip-path: polygon(x y, ...): cada coordenada em % do retangulo e/ou px.
-    struct PolyPoint { float fx = 0.0f, px = 0.0f, fy = 0.0f, py = 0.0f; };
+    // clip-path: polygon(x y, ...): cada coordenada em % do retangulo, px, ou
+    // uma soma deles ("100% - 20px", calc(50% + 8px)), tambem em vw, vh, vmin
+    // e vmax da area: vx/vy guardam o peso de cada uma (fracao), na ordem.
+    struct PolyPoint {
+        float fx = 0.0f, px = 0.0f, fy = 0.0f, py = 0.0f;
+        float vx[4] = {0.0f, 0.0f, 0.0f, 0.0f}, vy[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        // Ponto na tela para o retangulo `r` numa area de `vw` x `vh` px.
+        ImVec2 at(const CSSRect& r, float vw, float vh) const;
+    };
     static bool parsePolygon(const std::string& value, std::vector<PolyPoint>& out);
     // border-radius com 1 a 4 valores, na ordem do CSS (sup-esq, sup-dir,
     // inf-dir, inf-esq); `pctMask` marca os que sao % do menor lado.

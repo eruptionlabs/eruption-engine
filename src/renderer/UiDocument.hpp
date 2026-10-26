@@ -193,8 +193,12 @@ private:
         float radii[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         uint8_t radiiPct = 0;
         uint32_t glowColor = 0;
-        float glowRadius = 0.0f;
-        Vec2 glowOffset{0.0f};
+        // Numeros do --glow (raio) ou do box-shadow (dx dy desfoque espalhar)
+        // com a unidade de cada um (0 px, 1 vw, 2 vh, 3 vmin, 4 vmax): o
+        // tamanho de tela so' se sabe no desenho.
+        bool glowShadow = false;
+        float glowNum[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        uint8_t glowUnit[4] = {0, 0, 0, 0};
     };
     // O elemento ou um pai esta' escondido (ui.visible ou CSS), ou ancorado
     // fora da tela. Esconder o pai esconde o grupo inteiro.

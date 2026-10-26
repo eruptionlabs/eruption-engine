@@ -42,8 +42,8 @@ float parseRotate(const std::string& v) {
 }
 
 // --glow: <cor> <raio>  |  box-shadow: dx dy [desfoque [espalhar]] <cor>.
-void parseGlow(const std::string& v, bool shadow, uint32_t& color, float& radius, Vec2& offset) {
-    float nums[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+// Cada numero em px (ou sem unidade), vw, vh, vmin ou vmax.
+void parseGlow(const std::string& v, uint32_t& color, float nums[4], uint8_t units[4]) {
     int n = 0;
     color = 0;
     size_t i = 0;
@@ -54,16 +54,29 @@ void parseGlow(const std::string& v, bool shadow, uint32_t& color, float& radius
         if (j > i) {
             const std::string t = v.substr(i, j - i);
             if (t[0] == '#') color = CSSLayout::parseColor(t, 0);
-            else if (n < 4) nums[n++] = CSSLayout::parseFloat(t, 0.0f);
+            else if (n < 4) {
+                static const char* kUnits[4] = {"vmin", "vmax", "vw", "vh"};
+                static const uint8_t kCode[4] = {3, 4, 1, 2};
+                units[n] = 0;
+                for (int u = 0; u < 4; ++u) {
+                    const size_t len = std::char_traits<char>::length(kUnits[u]);
+                    if (t.size() > len && t.compare(t.size() - len, len, kUnits[u]) == 0) units[n] = kCode[u];
+                }
+                nums[n++] = CSSLayout::parseFloat(t, 0.0f);
+            }
         }
         i = j;
     }
-    if (shadow) {
-        offset = Vec2(nums[0], nums[1]);
-        radius = std::max(nums[2] + nums[3], 0.0f);
-    } else {
-        offset = Vec2(0.0f);
-        radius = std::max(nums[0], 0.0f);
+}
+
+// Um numero do --glow/box-shadow em px, pela unidade guardada.
+float glowPx(float num, uint8_t unit, const Vec2& area) {
+    switch (unit) {
+    case 1: return num * area.x * 0.01f;
+    case 2: return num * area.y * 0.01f;
+    case 3: return num * std::min(area.x, area.y) * 0.01f;
+    case 4: return num * std::max(area.x, area.y) * 0.01f;
+    default: return num;
     }
 }
 
@@ -176,8 +189,12 @@ void UiDocument::build() {
             e.corners = e.radiiPct != 0 || e.radii[1] != e.radii[0] || e.radii[2] != e.radii[0] ||
                         e.radii[3] != e.radii[0];
         }
-        if (auto v = prop("--glow")) parseGlow(*v, false, e.glowColor, e.glowRadius, e.glowOffset);
-        else if (auto s = prop("box-shadow")) parseGlow(*s, true, e.glowColor, e.glowRadius, e.glowOffset);
+        if (auto v = prop("--glow")) {
+            parseGlow(*v, e.glowColor, e.glowNum, e.glowUnit);
+        } else if (auto s = prop("box-shadow")) {
+            parseGlow(*s, e.glowColor, e.glowNum, e.glowUnit);
+            e.glowShadow = true;
+        }
         e.z = m_layout.zIndex(r.selector, 0);
         e.visibleCss = m_layout.displayVisible(r.selector);
         e.text = e.textCss;
@@ -275,7 +292,8 @@ void UiDocument::clearBadge(const std::string& selector) {
 CSSRect UiDocument::badgeVisual(const Element& e, const Vec2& area) const {
     const CSSRect r = resolveRect(e, area);
     float d = std::max(18.0f, area.y * 0.04f);
-    CSSLayout::parseLength(m_layout.rawProperty(e.selector, "--badge-size"), area.y, d);
+    const ImVec2 vp(area.x, area.y);
+    CSSLayout::parseLength(m_layout.rawProperty(e.selector, "--badge-size"), area.y, d, &vp);
     const float cx = std::clamp(r.x + r.w, d * 0.5f, area.x - d * 0.5f);
     const float cy = std::clamp(r.y, d * 0.5f, area.y - d * 0.5f);
     return CSSRect{cx - d * 0.5f, cy - d * 0.5f, d, d};
@@ -418,7 +436,8 @@ void UiDocument::clearGraph(const std::string& selector) {
 // (65 px a 1080), nunca menos de 16 px.
 float UiDocument::graphRadius(const Element& e, const Vec2& area) const {
     float d = std::max(16.0f, area.y * 0.06f);
-    CSSLayout::parseLength(m_layout.rawProperty(e.selector, "--node-size"), area.y, d);
+    const ImVec2 vp(area.x, area.y);
+    CSSLayout::parseLength(m_layout.rawProperty(e.selector, "--node-size"), area.y, d, &vp);
     return d * 0.5f;
 }
 
@@ -632,8 +651,7 @@ void UiDocument::drawShaped(ImDrawList* dl, const Element& e, const CSSRect& r, 
     std::vector<ImVec2> pts;
     if (!e.clip.empty()) {
         pts.reserve(e.clip.size());
-        for (const CSSLayout::PolyPoint& p : e.clip)
-            pts.push_back(ImVec2(r.x + p.fx * r.w + p.px, r.y + p.fy * r.h + p.py));
+        for (const CSSLayout::PolyPoint& p : e.clip) pts.push_back(p.at(r, area.x, area.y));
     } else {
         float radii[4];
         for (int k = 0; k < 4; ++k)
@@ -688,12 +706,17 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
 
         const int vtx0 = dl->VtxBuffer.Size;
         if (e.glowColor) {
+            float g4[4];
+            for (int k = 0; k < 4; ++k) g4[k] = glowPx(e.glowNum[k], e.glowUnit[k], area);
             CSSRect g = r;
-            g.x += e.glowOffset.x;
-            g.y += e.glowOffset.y;
+            if (e.glowShadow) {
+                g.x += g4[0];
+                g.y += g4[1];
+            }
+            const float radius = std::max(e.glowShadow ? g4[2] + g4[3] : g4[0], 0.0f);
             const float round = e.corners ? std::max(std::max(e.radii[0], e.radii[1]), std::max(e.radii[2], e.radii[3]))
                                           : m_layout.borderRadius(e.selector, 0.0f);
-            CSSLayout::drawGlow(dl, g, round, withAlpha(e.glowColor, alpha), e.glowRadius);
+            CSSLayout::drawGlow(dl, g, round, withAlpha(e.glowColor, alpha), radius);
         }
 
         // A pintura e' a mesma da HUD do jogador: CSSLayout::drawBox/drawBar.
