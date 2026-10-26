@@ -18,7 +18,7 @@ declare on: {
     update: (fn: (dt: number) -> ()) -> (),
     every: (seconds: number, fn: () -> ()) -> (),
     -- Key names: "A".."Z", "0".."9", "space", "enter", "escape", "tab",
-    -- "left", "right", "up", "down", "shift", "ctrl", "alt".
+    -- "left", "right", "up", "down", "shift", "ctrl", "alt", "f1".."f12".
     key: (key: string, fn: () -> ()) -> (),
     -- Fires when the player gets within `distance` of the model.
     near: (model: string, distance: number, fn: () -> ()) -> (),
