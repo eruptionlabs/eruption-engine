@@ -115,6 +115,25 @@ void main() {
         billUp    = normalize((u_inverseView * vec4(tiltedUp, 0.0)).xyz);
 
         gl_Position = u_projection * viewPos;
+        // Quadro com pixels abaixo da ancora (corpo deitado: o pe' fica acima
+        // da borda de baixo). Na tela esse trecho cobre chao MAIS PERTO da
+        // camera que a ancora; com a profundidade do plano do quadro o relevo
+        // o escondia. O vertice abaixo da ancora toma a profundidade do chao
+        // que ele cobre: o raio da camera por ele corta o plano do chao (pela
+        // ancora, normal = cima do mundo). So' a profundidade muda (x, y e w
+        // ficam), e so' abaixo da ancora: quadro em pe' tem a borda de baixo
+        // nela e sai igual. So' sprite ERUPTSPR/PNG (bit 11): o deslocamento
+        // de camada de outros formatos fica como estava.
+        float upBelow = -yOff + a_position.y * scaleY - centerY;
+        if (upBelow < 0.0 && (i_flags & 2048u) != 0u) {
+            vec3 groundN = (u_view * vec4(0.0, 1.0, 0.0, 0.0)).xyz;
+            float across = dot(groundN, viewPos.xyz);
+            float hit = abs(across) > 1e-5 ? dot(groundN, anchorView.xyz) / across : 0.0;
+            if (hit > 0.0 && hit < 1.0) {
+                vec4 pc = u_projection * vec4(viewPos.xyz * (hit * 0.999), 1.0);
+                gl_Position.z = pc.z / pc.w * gl_Position.w;
+            }
+        }
         gl_Position.z -= 0.0004 + i_anchorPoint.w * 0.0001;
     } else {
         vec3 worldPos = vec3(model[3]);
