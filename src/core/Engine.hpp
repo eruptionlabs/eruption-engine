@@ -895,10 +895,11 @@ public:
     };
     // Líquido aparente em (x, z): dentro da margem e acima do piso.
     bool liquidAt(float x, float z, LiquidAt& out) const;
-    // Nível de uma lava do mapa (índice em currentMap()->liquids) durante o
-    // jogo: a superfície sobe no shader (a malha fica) e liquidAt/sampleGround
-    // usam o nível novo no mesmo quadro. Falso para água ou índice inválido.
-    bool setLiquidLevel(int index, float level);
+    // Nível de uma lava do mapa (índice em currentMap()->liquids, ou nos de
+    // `map`, um vizinho em cena, com o nível no mundo) durante o jogo: a
+    // superfície sobe no shader (a malha fica) e liquidAt/sampleGround usam o
+    // nível novo no mesmo quadro. Falso para água ou índice inválido.
+    bool setLiquidLevel(int index, float level, LoadedMap* map = nullptr);
     enum GroundFlag : uint8_t { kGroundWalkable = 1, kGroundWater = 2, kGroundLava = 4, kGroundOnModel = 8 };
     // Grade nx x nz a partir de (x0, z0) com passo `step`, linha a linha (x
     // varia mais rápido): altura do piso e GroundFlag por ponto. Uma chamada
