@@ -16,6 +16,7 @@ layout(location = 9) in vec3 v_billRight;
 layout(location = 10) in vec3 v_billUp;
 layout(location = 11) in vec2 v_quad;
 layout(location = 12) in flat uint v_instance;
+layout(location = 13) in flat float v_halfWidth;
 
 layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
@@ -97,8 +98,6 @@ void main() {
     vec4 albedo = texture(nonuniformEXT(u_textures[v_texIndex]), v_uv);
     // Derivadas antes de qualquer discard (depois dele o quad fica incompleto).
     const vec2 rimDx = dFdx(v_uv) * 2.5, rimDy = dFdy(v_uv) * 2.5;
-    const vec3 hwPosX = dFdx(v_worldPos), hwPosY = dFdy(v_worldPos);
-    const vec2 hwQuad = vec2(dFdx(v_quad.x), dFdy(v_quad.x));
 
     // bit 8: usePalette
     if ((v_flags & 256u) != 0) {
@@ -177,15 +176,10 @@ void main() {
     // da folhagem); a sombra de contato usa a marca para pular o quad.
     // pbr.a: no sprite que projeta sombra no mapa (SpriteFlags::ShadowMap), a
     // meia largura do quadro em u/255 (directional.frag tira a auto-sombra com
-    // ela); nos outros, 0. A largura vem da razao entre as derivadas da
-    // posicao (ao longo da direita do billboard) e as do canto do quad.
-    float halfWidth = 0.0;
-    if ((v_flags & 4096u) != 0u) {
-        const vec2 dq = hwQuad;
-        const float dp = abs(dq.x) > abs(dq.y) ? dot(hwPosX, v_billRight) : dot(hwPosY, v_billRight);
-        const float dqm = abs(dq.x) > abs(dq.y) ? dq.x : dq.y;
-        halfWidth = abs(dqm) > 1e-6 ? clamp(0.5 * abs(dp / dqm) / 255.0, 1.0 / 255.0, 1.0) : 1.0;
-    }
+    // ela); nos outros, 0. A largura vem do vertice (constante no quad):
+    // estimada pelas derivadas, variava de pixel a pixel no recorte da arte e
+    // a sombra de um sprite sobre outro saia em chuvisco.
+    float halfWidth = (v_flags & 4096u) != 0u ? clamp(v_halfWidth / 255.0, 1.0 / 255.0, 1.0) : 0.0;
     o_pbr = vec4(0.75, roughness, metallic, halfWidth);
     o_materialId = matId;
     // Borda da silhueta: algum vizinho transparente. Paleta (bit 256) le' o

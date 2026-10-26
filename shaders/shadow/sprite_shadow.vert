@@ -88,6 +88,14 @@ void main() {
         }
         finalPos = i_anchorPoint.xyz + right * (i_texRect.x + a_position.x * scaleX)
                  + vec3(0.0, 1.0, 0.0) * (-i_texRect.y + a_position.y * scaleY - i_texRect.w);
+        // Cartao recuado para o sol so' em profundidade (ao longo do raio: a
+        // silhueta no mapa nao se move). Perto do pe' o chao fica a poucas
+        // unidades do cartao ao longo do raio, e o deslocamento pela normal e
+        // o vies de inclinacao do relevo deixavam pixels dali acesos: a
+        // sombra das pernas saia pontilhada. directional.frag soma o mesmo
+        // recuo ao deslocamento do proprio sprite.
+        const float kCardLift = 24.0;
+        finalPos -= normalize(rayDir) * kCardLift;
     } else if ((i_flags & 4u) != 0) {
         // BILLBOARDS DO NOT CAST SHADOWS INTO THE DIRECTIONAL SHADOW MAP.
         // They use a separate Projected Planar Shadow pass instead.
