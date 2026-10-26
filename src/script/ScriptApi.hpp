@@ -32,6 +32,9 @@ const char* objectsApiDefinitions();
 // consultas; as declaracoes sao linhas do bloco `declare world`.
 void registerRibbonApi(lua_State* L, Engine& engine);
 std::string ribbonApiDefinitions();
+// Tabela `vision` (ScriptApiVision.cpp): visao de equipe.
+void registerVisionApi(lua_State* L, Engine& engine);
+const char* visionApiDefinitions();
 void releaseScriptObjects();
 // Empilha o Object (nil se o id não vale).
 struct ObjectId;

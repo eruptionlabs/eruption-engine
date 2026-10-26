@@ -218,6 +218,9 @@ void main() {
             // Ponto de fita nao e' cortado: o vizinho le' o registro dele.
             for (int k = 0; k < 6 && visible && !ribbon; ++k)
                 visible = dot(frame.frustum[k].xyz, p.pos) + frame.frustum[k].w > -radius;
+            // Emissor fora da visao de equipe: a fita some inteira (o vizinho
+            // que um ponto le' e' do mesmo emissor, tambem escondido).
+            if ((e.flags.x & VFXF_HIDDEN) != 0u) visible = false;
             lowRes = (e.flags.x & VFXF_LOWRES) != 0u;
             uint meshId = (e.flags.x >> VFXF_MESH_SHIFT) & 0xFu;
             if (visible && meshId != 0u) {

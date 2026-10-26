@@ -933,6 +933,14 @@ if(ERUPTION_BUILD_TESTS)
         target_compile_options(eruption-ribbon-tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME RibbonTests COMMAND eruption-ribbon-tests)
+
+    add_executable(eruption-vision-tests tests/test_vision.cpp src/core/Vision.cpp)
+    target_include_directories(eruption-vision-tests PRIVATE ${CMAKE_SOURCE_DIR}/src ${glm_SOURCE_DIR})
+    target_compile_definitions(eruption-vision-tests PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_LEFT_HANDED)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-vision-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME VisionTests COMMAND eruption-vision-tests)
 endif()
 
 # Generate Linux .desktop shortcut

@@ -69,6 +69,7 @@ const uint VFXF_COLLIDE_DEPTH= 1u << 11;
 const uint VFXF_KILLED       = 1u << 12; // emissor removido: particulas morrem ja'
 const uint VFXF_SPAWNING     = 1u << 13;
 const uint VFXF_LOWRES       = 1u << 14; // desenha em meia resolucao (fumaca)
+const uint VFXF_HIDDEN       = 1u << 15; // fora da visao de equipe: simula, nao desenha
 const uint VFXF_MESH_SHIFT   = 16u;     // 4 bits: malha da particula + 1 (0 = sprite)
 const uint VFXF_MESHLO_SHIFT = 20u;     // 4 bits: versao de longe da malha + 1 (0 = nao tem)
 

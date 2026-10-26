@@ -119,6 +119,9 @@ public:
     // Efeitos sao descritos em METROS; o mundo pode ter outra unidade
     // (unidades por metro). Vale para todas as instancias novas.
     void setLightBudget(uint32_t n) { m_lightBudget = n; }
+    // Visao de equipe: instancia cuja posicao o teste esconde continua
+    // simulando, mas nao desenha nem acende luz (sem teste, nada se esconde).
+    void setHideTest(std::function<bool(const Vec3&)> fn) { m_hideTest = std::move(fn); }
     uint32_t lightBudget() const { return m_lightBudget; }
     void setUnitsPerMeter(float u) { m_unitsPerMeter = std::max(u, 1e-4f); }
     float unitsPerMeter() const { return m_unitsPerMeter; }
@@ -236,6 +239,7 @@ private:
         float stopTime = -1.0f; // >= 0: parou de nascer neste tempo
         bool killed = false;
         bool firstFrame = true;
+        bool hidden = false; // fora da visao de equipe neste quadro
         std::vector<EmitterState> emitters;
         // Por chamada (vfx.play): cor e deslocamento por emissor, sem copiar o
         // efeito (a recarga a quente troca o `desc` e isto continua valendo).
@@ -397,6 +401,7 @@ private:
 
     std::unordered_map<std::string, std::shared_ptr<VfxEffectDesc>> m_effects;
     std::vector<Instance> m_instances;
+    std::function<bool(const Vec3&)> m_hideTest;
     uint32_t m_nextId = 1;
     Stats m_stats;
 };

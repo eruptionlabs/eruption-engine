@@ -237,7 +237,7 @@ void PostProcessor::createImages() {
 }
 
 void PostProcessor::createDescriptors() {
-    VkDescriptorSetLayoutBinding bindings[9] = {};
+    VkDescriptorSetLayoutBinding bindings[10] = {};
     // Bindings 0..3: image samplers used by postprocess passes.
     // Binding 3 is also reused as the cloud color input by post_composite.frag.
     for (int i = 0; i < 4; i++) {
@@ -277,6 +277,11 @@ void PostProcessor::createDescriptors() {
     bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[8].descriptorCount = 1;
     bindings[8].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Binding 9: mapa da visao de equipe (R8 da janela), lido pelo composite.
+    bindings[9].binding = 9;
+    bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[9].descriptorCount = 1;
+    bindings[9].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     // UPDATE_AFTER_BIND: estes sets sao reescritos por frame com as MESMAS
     // views enquanto o CB do frame anterior ainda esta' pendente - sem a flag
@@ -285,17 +290,17 @@ void PostProcessor::createDescriptors() {
     // corrida real de dados.
     // Flag SO' nos combined-image-samplers: UAB de UBO/SSBO exige features
     // proprias (descriptorBinding*BufferUpdateAfterBind) que nao habilitamos.
-    std::vector<VkDescriptorBindingFlags> uabFlags(9, 0);
-    for (uint32_t b = 0; b < 9; ++b)
+    std::vector<VkDescriptorBindingFlags> uabFlags(10, 0);
+    for (uint32_t b = 0; b < 10; ++b)
         if (m_ctx->bindless() && bindings[b].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
             uabFlags[b] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo uabInfo{};
     uabInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-    uabInfo.bindingCount = 9;
+    uabInfo.bindingCount = 10;
     uabInfo.pBindingFlags = uabFlags.data();
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 9;
+    layoutInfo.bindingCount = 10;
     layoutInfo.pBindings = bindings;
     layoutInfo.pNext = m_ctx->bindless() ? &uabInfo : nullptr;
     // Sem descriptor indexing nao ha' UPDATE_AFTER_BIND (caminho .nb).
@@ -308,7 +313,7 @@ void PostProcessor::createDescriptors() {
     const uint32_t numSets = kSetsPerFrame * VulkanContext::MAX_FRAMES_IN_FLIGHT;
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 7 * numSets;
+    poolSizes[0].descriptorCount = 8 * numSets;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[1].descriptorCount = numSets;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -341,7 +346,7 @@ void PostProcessor::createDescriptors() {
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset = 0;
     pcRange.size = 128;
-    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 336, 16 * 1024);
+    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 352, 16 * 1024);
     const VkDescriptorSetLayout setLayouts[2] = {m_descriptorSetLayout, m_pushRing.layout()};
 
     VkPipelineLayoutCreateInfo plInfo{};
@@ -569,7 +574,7 @@ void PostProcessor::createPipelines() {
     m_cloudCoverageDebugPipeline = createFullscreenPipeline(cloudCoverageDebugFrag, m_width, m_height, false, VK_FORMAT_UNDEFINED, true);
 }
 
-static void barrierToColorAttach(VkCommandBuffer cmd, VulkanContext* ctx, VkImage image) {
+static void barrierToColorAttach(VkCommandBuffer cmd, VulkanContext* /*ctx*/, VkImage image) {
     VkImageMemoryBarrier2 barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     barrier.srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -588,7 +593,7 @@ static void barrierToColorAttach(VkCommandBuffer cmd, VulkanContext* ctx, VkImag
     vkc::cmdPipelineBarrier2(cmd, &dep);
 }
 
-static void barrierToShaderRead(VkCommandBuffer cmd, VulkanContext* ctx, VkImage image) {
+static void barrierToShaderRead(VkCommandBuffer cmd, VulkanContext* /*ctx*/, VkImage image) {
     VkImageMemoryBarrier2 barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     barrier.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -711,7 +716,7 @@ VkImageView PostProcessor::renderGodRays(VkCommandBuffer cmd, const Mat4& viewPr
 }
 
 void PostProcessor::render(VkCommandBuffer cmd, VkImageView hdrInput, VkImageView depthInput,
-            VkImageView gbufferWorldPos, VkImageView gbufferNormal, VkImageView shadowInput,
+            VkImageView gbufferWorldPos, VkImageView /*gbufferNormal*/, VkImageView /*shadowInput*/,
             const Mat4& view, const Mat4& proj, const Mat4& invViewProj,
             const Mat4& prevViewProj,
             const Vec3& cameraPos, float nearPlane, float farPlane,
@@ -720,8 +725,8 @@ void PostProcessor::render(VkCommandBuffer cmd, VkImageView hdrInput, VkImageVie
             VkImageView targetOutput,
             float time,
             const WeatherParams* weather,
-            float sunOcclusion,
-            float moonOcclusion,
+            float /*sunOcclusion*/,
+            float /*moonOcclusion*/,
             VkImageView topDownDepthView,
             const Vec3& sunVisualDir,
             const Vec3& cameraDir,
@@ -1501,6 +1506,20 @@ if (!m_ctx) return;
     updateDescriptorSet(5, compositeSource, depthInput,
                         bloomResult != VK_NULL_HANDLE ? bloomResult : compositeSource, cloudColorView, cloudDepthView,
                         cloudVolumeOccView != VK_NULL_HANDLE ? cloudVolumeOccView : cloudColorView);
+    {
+        // Binding 9 (visao) e' estatico no shader: sem o mapa vai a propria
+        // cena, que o ramo desligado nem amostra.
+        const VkImageView visionView = m_visionView != VK_NULL_HANDLE ? m_visionView : compositeSource;
+        VkDescriptorImageInfo info{m_linearSampler, visionView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = dset(5);
+        w.dstBinding = 9;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.descriptorCount = 1;
+        w.pImageInfo = &info;
+        updateSets(&w, 1);
+    }
     beginFullscreenPass(cmd, compositeTarget, m_width, m_height);
     lap(3);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipeline);
@@ -1526,6 +1545,7 @@ if (!m_ctx) return;
         Vec4 highlightTint;
         Vec4 sceneDim;        // rgb=cor, a=forca (fx.dim)
         Vec4 belowHorizon;    // rgb=cor do fundo, a=liga
+        Vec4 vision;          // visao de equipe: canto xz, 1/lado, dim (< 0 = desligada)
     } push;
     // Debug/test overrides for fog parameters (useful for headless screenshots).
     float fogStart = settings.fogStart;
@@ -1597,7 +1617,8 @@ if (!m_ctx) return;
     push.highlightTint = lookConfig ? Vec4(lookConfig->highlightTint, lookConfig->highlightTintStrength) : Vec4(1.0f, 1.0f, 1.0f, 0.0f);
     push.sceneDim = settings.sceneDim;
     push.belowHorizon = settings.belowHorizon;
-    static_assert(sizeof(push) <= 336, "bloco da composicao passou do maxBlock do PushRing (336 B)");
+    push.vision = m_visionParams;
+    static_assert(sizeof(push) <= 352, "bloco da composicao passou do maxBlock do PushRing (352 B)");
     m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, &push, sizeof(push));
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkc::cmdEndRendering(cmd);
