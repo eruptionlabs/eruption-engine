@@ -75,6 +75,9 @@ void SkyProbe::projectSH(const float* faces, uint32_t faceSize, float maxRadianc
                 const Vec3 d = glm::normalize(kA[f] + u * kB[f] + v * kC[f]);
                 const float w = 4.0f * invN2 / std::pow(u * u + v * v + 1.0f, 1.5f);
                 const float* p = faces + (size_t(f) * n * n + size_t(y) * n + x) * 4;
+                // Texel nao finito fica de fora: glm::min deixa o NaN passar, e
+                // um so' escurecia a luz ambiente inteira.
+                if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) continue;
                 const Vec3 l = glm::min(Vec3(p[0], p[1], p[2]), Vec3(maxRadiance)) * w;
                 sh[0] += l * 0.282095f;
                 sh[1] += l * 0.488603f * d.y;
