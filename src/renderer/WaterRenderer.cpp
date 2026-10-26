@@ -1077,7 +1077,8 @@ void WaterRenderer::updateUBO(uint32_t frameIndex, uint32_t uboSlot, const Water
     // e com o valor fixo ele estourava para creme em vez de ficar laranja.
     ubo.normalAdvanced = Vec4(static_cast<float>(settings.normalOctaves),
                               settings.emissiveStrength, settings.shoreHeat, settings.centerHeat);
-    ubo.causticsParams = Vec4(settings.causticsIntensity, settings.causticsDepthAttenuation, 0.0f, 0.0f);
+    // z = velocidade da crosta da lava (flowSpeed do .env); a lava nao usa causticas.
+    ubo.causticsParams = Vec4(settings.causticsIntensity, settings.causticsDepthAttenuation, settings.flowSpeed, 0.0f);
     ubo.weatherParams = Vec4(sunOcclusion, moonOcclusion, stormDarken, rainIntensity);
     std::memcpy(m_uboMappeds[uboSlot], &ubo, sizeof(ubo));
 }

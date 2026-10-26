@@ -37,7 +37,7 @@ layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 extraParams;         // x=absorptionCoeff, y=maxPxScale, z=enableCaustics, w=unused
     vec4 foamSurfaceParams;   // x=foamScale, y=foamSpeed, z=foamRoughness, w=enableSurfaceFoam
     vec4 normalAdvanced;      // x=normalOctaves, y=lavaEmissive, zw=unused
-    vec4 causticsParams;      // x=intensity, y=depthAttenuation, zw=unused
+    vec4 causticsParams;      // x=intensity, y=depthAttenuation, z=lava flowSpeed, w=unused
     vec4 weatherParams;       // x=sunOcclusion, y=moonOcclusion, z=stormDarken, w=rainIntensity
 } ubo;
 
@@ -126,17 +126,17 @@ vec2 hash22(vec2 p) {
     return fract((p3.xx + p3.yz) * p3.zy);
 }
 
-// Celulas da crosta da lava: (F1, F2) do Voronoi com os pontos de cada celula
-// orbitando devagar em volta do proprio centro (placas que derivam).
-vec2 lavaCells(vec2 p, float t) {
+// Celulas da crosta da lava: (F1, F2) do Voronoi. Quem move a crosta e' o
+// fluxo (lavaColor); os pontos ficam parados na celula (sem dois senos por
+// vizinho, que eram metade do custo do Voronoi).
+vec2 lavaCells(vec2 p) {
     vec2 ip = floor(p), fp = fract(p);
     float f1 = 8.0, f2 = 8.0;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
             vec2 g = vec2(float(x), float(y));
             vec2 h = hash22(ip + g);
-            vec2 o = 0.5 + 0.38 * sin(t * 0.06 + 6.2831 * h);
-            vec2 r = g + o - fp;
+            vec2 r = g + 0.12 + 0.76 * h - fp;
             float d = dot(r, r);
             if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) { f2 = d; }
         }
@@ -260,58 +260,144 @@ layout(constant_id = 0) const bool LITE = false;
 
 // Cor da LAVA (liquidKind 1): toda propria, nao le' nada da agua (reflexo,
 // refracao, espuma, causticas). Por isso o main sai logo depois dela.
+//
+// O que a lava real mostra (filmagens de pahoehoe e aa): crosta preta e
+// cinza em placas de tamanhos diferentes, rugosa, que a luz do sol revela;
+// a incandescencia aparece nas fendas largas, onde a crosta se abre e nas
+// regioes em que ela se quebra em jangadas sobre o liquido, nunca numa rede
+// uniforme. A cor vem da temperatura (corpo negro), e a crosta anda.
+
+// Cromaticidade de corpo negro pela lei de Planck em tres comprimentos de
+// onda (610, 550 e 465 nm), normalizada pelo vermelho: ~1000 K da' vermelho
+// escuro, ~1450 K laranja. O brilho fica com quem chama (HDR), e o tone
+// mapping leva o mais quente para o amarelo.
+vec3 blackbody(float kelvin) {
+    const vec3 lam = vec3(610e-9, 550e-9, 465e-9);
+    vec3 e = exp(min(1.4388e-2 / (lam * kelvin), vec3(80.0))) - 1.0;
+    vec3 r = 1.0 / (pow(lam / lam.x, vec3(5.0)) * e);
+    return r / r.x;
+}
+
+// Fenda de uma escala: F2 - F1 do Voronoi (Worley 1996) com largura em
+// unidades de F2 - F1 e borda alargada pelo tamanho do pixel (sem serrilhar
+// a fenda fina ao longe). x = fenda, y = distancia a' fenda (relevo).
+vec2 lavaCrack(vec2 p, float width) {
+    vec2 f = lavaCells(p);
+    float d = f.y - f.x;
+    float aa = fwidth(d);
+    return vec2(1.0 - smoothstep(width - aa, width + aa, d), d);
+}
+
+// Uma fase da crosta: calor (x) e altura (y) no ponto p (unidades do mundo,
+// ja' advectado). `warpBig`/`warpMid`: torcao do dominio em duas escalas
+// (sem ela a placa sai poligono de borda reta, o Voronoi cru le' como
+// ladrilho); vem pronta e vale para as duas fases. `wn`: largura de cada
+// fenda, que varia ao longo dela, de fio a canal (uma largura so' le' como
+// rejunte de piso). `open`: 0 crosta inteira, 1 quebrada em jangadas.
+// `fineW`: peso da rachadura fina (0 longe da camera).
+vec2 lavaCrust(vec2 p, vec2 warpBig, vec2 warpMid, float wn, float open, float calor, float fineW) {
+    vec2 pw = p + warpBig;
+    vec2 pm = pw + warpMid;
+    float wBig = (0.03 + 0.20 * wn * wn) * calor * (1.0 + 4.0 * open);
+    vec2 big = lavaCrack(pw * 0.018, wBig);
+    vec2 mid = lavaCrack(pm * 0.055 + 9.1, (0.015 + 0.05 * wn) * (1.0 + 2.0 * open));
+    float heat = max(big.x, mid.x * 0.6);
+    float h = smoothstep(0.0, 0.35, big.y) * 0.7 + smoothstep(0.0, 0.25, mid.y) * 0.3;
+    if (fineW > 0.0) {
+        // Rachaduras finas dentro da placa: mais frias, quase so' relevo.
+        vec2 fine = lavaCrack(pm * 0.16 + 21.3, 0.04 + 0.08 * open);
+        heat = max(heat, fine.x * 0.38 * fineW);
+        h -= fine.x * 0.25 * fineW;
+    }
+    // A placa esfria de dentro para fora: a borda dela ainda brilha fraco.
+    heat = max(heat, exp(-big.y / max(wBig * 2.5, 1e-3)) * 0.42);
+    return vec2(heat, h);
+}
+
 vec3 lavaColor(vec3 worldPos, float radial) {
     float t = ubo.waterLevelAndPlanes.w;
-    // PLACAS E FENDAS. Lava real le' como placas de crosta escura
-    // separadas por fendas finas acesas, nao como manchas de ruido
-    // suave (o padrao anterior, ruido de baixa frequencia, lia como
-    // "bolhas"). Voronoi F1/F2 (Worley, "A Cellular Texture Basis
-    // Function", SIGGRAPH 1996): perto da fronteira entre duas celulas
-    // F2 - F1 tende a zero, e e' ali que a fenda acende. As celulas
-    // derivam devagar e o dominio e' torcido por ruido, para a placa nao
-    // sair hexagonal. Uma segunda escala, mais fina e mais fraca, racha
-    // a placa por dentro.
-    //
     // `emissive` do mapa: 3.0 e' o valor de referencia; abaixo disso a
-    // fenda afina e sobra mais crosta, acima ela alarga.
+    // fenda afina e esfria, acima ela alarga e esquenta.
     float calor = ubo.normalAdvanced.y > 0.0 ? ubo.normalAdvanced.y / 3.0 : 1.0;
-    vec2 fw = worldPos.xz * 0.010;
-    vec2 warp = vec2(snoise(fw + vec2(t * 0.004, 0.0)), snoise(fw.yx - vec2(0.0, t * 0.003)));
-    vec2 platesUv = worldPos.xz * 0.028 + warp * 0.45;
-    vec2 f = lavaCells(platesUv, t);
-    // Largura da fenda varia ao longo dela: fenda de largura constante le'
-    // como rejunte de piso.
-    float width = 0.07 * calor * (0.55 + 0.9 * (snoise(fw * 3.1 + 5.0) * 0.5 + 0.5));
-    // CALOR DE BORDA (shoreHeat / centerHeat do .env, 0 = como antes). Num
-    // lago de lava a crosta afunda e respinga junto da margem, e o centro
-    // pode ser a fonte; no meio-termo ela esfria em placas maiores.
-    // `radial`: 0 no centro, 1 na margem (UV x da malha do disco).
+    float flow = ubo.causticsParams.z;
+    vec2 xz = worldPos.xz;
+
+    // CALOR DE BORDA (shoreHeat / centerHeat do .env). `radial`: 0 no
+    // centro, 1 na margem.
     float borda = ubo.normalAdvanced.z * smoothstep(0.65, 1.0, radial)
                 + ubo.normalAdvanced.w * (1.0 - smoothstep(0.0, 0.35, radial));
-    float meio = (ubo.normalAdvanced.z + ubo.normalAdvanced.w) > 0.0
-               ? smoothstep(0.25, 0.45, radial) * (1.0 - smoothstep(0.55, 0.75, radial)) : 0.0;
-    width *= (1.0 + 1.5 * borda) * (1.0 - 0.35 * meio);
-    float crack = 1.0 - smoothstep(0.0, width, f.y - f.x);
-    // Rachadura fina: mais 9 celulas por pixel, so' fora do caminho enxuto
-    // (lago enchendo a tela: +0,11 a 0,18 ms na 4060 com as duas escalas).
-    float crackFine = 0.0;
-    if (!LITE) {
-        vec2 fFine = lavaCells(platesUv * 2.6 + 17.0, t * 1.3);
-        crackFine = (1.0 - smoothstep(0.0, width * 0.45, fFine.y - fFine.x)) * 0.55;
-    }
-    // A borda da placa esfria por ultimo: brilho baixo perto da fenda.
-    float rim = exp(-(f.y - f.x) * 9.0) * 0.22;
-    float heat = clamp(max(max(crack, crackFine), rim) * min(calor, 1.6) + 0.18 * borda, 0.0, 1.0);
-    vec3 crustCol = vec3(0.010, 0.005, 0.005);
-    vec3 hotCol = vec3(1.0, 0.24, 0.03);
-    vec3 coreCol = vec3(1.0, 0.80, 0.32);
-    vec3 lava = mix(crustCol, hotCol, heat);
-    lava = mix(lava, coreCol, pow(heat, 4.0));
-    // SEM especular do sol. Rocha derretida nao e' espelho: o brilho
-    // dela e' proprio. O reflexo direcional punha uma faixa branca de
-    // escama atravessando o lago, que e' o aspecto de agua clara, nao de
-    // lava, e era o que mais estragava a leitura da sala.
-    return lava + hotCol * heat * 0.8;
+
+    // Onde a crosta se abre: manchas grandes e lentas, mais a borda quente.
+    float open = smoothstep(0.7, 0.95, snoise(xz * 0.0045 + vec2(t * 0.002, 0.0)) * 0.5 + 0.5);
+    open = clamp(open + 0.12 * borda, 0.0, 1.0);
+
+    // FLUXO: a crosta anda num campo sem divergencia (rotacional de um ruido
+    // largo), por duas fases cruzadas: cada fase advecta a crosta por meio
+    // periodo e reinicia quando o peso dela e' zero (Vlachos, "Water Flow in
+    // Portal 2", SIGGRAPH 2010). Periodo longo: no cruzamento a crosta parece
+    // rachar e soldar de novo, como acontece.
+    vec2 q = xz * 0.0035;
+    float e = 0.35;
+    float n0 = snoise(q);
+    vec2 vel = vec2(snoise(q + vec2(0.0, e)) - n0, -(snoise(q + vec2(e, 0.0)) - n0)) / e;
+    vel *= 2.2 * flow;
+    const float period = 16.0;
+    float ph0 = fract(t / period), ph1 = fract(t / period + 0.5);
+    float w0 = 1.0 - abs(2.0 * ph0 - 1.0);
+    // Torcao e largura calculadas uma vez, no ponto parado: a placa se
+    // deforma um pouco enquanto anda, o que a lava tambem faz.
+    vec2 warpBig = 16.0 * vec2(snoise(xz * 0.017), snoise(xz * 0.017 + 7.3));
+    vec2 warpMid = 4.5 * vec2(snoise(xz * 0.07 + 2.1), snoise(xz * 0.07 + 5.9));
+    float wn = snoise(xz * 0.011 + 3.7) * 0.5 + 0.5;
+    // Rachadura fina so' perto: longe ela vira menos de um pixel.
+    float fineW = LITE ? 0.0 : 1.0 - smoothstep(70.0, 140.0, length(ubo.cameraPos.xyz - worldPos));
+    vec2 c0 = lavaCrust(xz - vel * (ph0 - 0.5) * period, warpBig, warpMid, wn, open, calor, fineW);
+    vec2 c1 = lavaCrust(xz - vel * (ph1 - 0.5) * period + vec2(37.3, 11.9), warpBig, warpMid, wn, open, calor, fineW);
+    vec2 c = mix(c1, c0, w0);
+    float heat = clamp(c.x * min(calor, 1.6) + 0.06 * borda, 0.0, 1.0);
+    // Liquido exposto: quente, com conveccao lenta por baixo.
+    // Liquido exposto: conveccao lenta (manchas mais e menos quentes) e as
+    // dobras de pele que esfriam por cima (cordas da pahoehoe), arrastadas
+    // pelo fluxo.
+    vec2 m = xz - vel * t * 0.5;
+    float molten = 0.72 + 0.28 * snoise(m * 0.02 + vec2(0.0, t * 0.03));
+    float ropes = 1.0 - smoothstep(0.0, 0.14, abs(snoise(m * vec2(0.045, 0.09) + 4.4)));
+    molten *= 1.0 - 0.45 * ropes;
+    heat = max(heat, open * open * molten * smoothstep(0.15, 0.6, heat + 0.3));
+
+    // Brilho de corpo negro: cresce como uma potencia alta da temperatura,
+    // para so' o que esta' quente passar do limiar do bloom.
+    float kelvin = mix(850.0, 1480.0, heat);
+    vec3 glow = blackbody(kelvin) * (3.0 * pow(heat, 3.5) * max(calor, 0.3));
+
+    // CROSTA: basalto escuro e rugoso, iluminado pelo sol e pelo ambiente.
+    // Normal pelas derivadas de tela da altura (Mikkelsen, "Bump Mapping
+    // Unparametrized Surfaces on the GPU", 2010), sobre o plano da lava.
+    float rough = snoise(xz * 0.5) * 0.1;
+    float h = c.y * 1.4 + rough;
+    vec2 dpx = dFdx(xz), dpy = dFdy(xz);
+    float hx = dFdx(h), hy = dFdy(h);
+    float det = dpx.x * dpy.y - dpx.y * dpy.x;
+    vec2 grad = abs(det) > 1e-8 ? vec2(hx * dpy.y - hy * dpx.y, hy * dpx.x - hx * dpy.x) / det : vec2(0.0);
+    grad = clamp(grad, vec2(-3.0), vec2(3.0));
+    vec3 n = normalize(vec3(-grad.x, 1.0, -grad.y));
+    vec3 l = normalize(-ubo.sunDirIntensity.xyz);
+    vec3 v = normalize(ubo.cameraPos.xyz - worldPos);
+    float sunI = ubo.sunDirIntensity.w * ubo.weatherParams.x;
+    // Basalto: cinza quente, mais claro no topo da placa, com granulacao
+    // fina (vesiculas) que quebra a superficie lisa de ardosia.
+    float grain = snoise(xz * 2.3) * 0.5 + 0.5;
+    float tone = (0.022 + 0.04 * smoothstep(-0.4, 0.8, snoise(xz * 0.03 + 5.0) + c.y * 0.6)) * (0.65 + 0.7 * grain);
+    vec3 albedo = tone * vec3(1.0, 0.9, 0.82);
+    // Ambiente sem a cor dele: a caverna roxa pintava a rocha preta de lilas.
+    float amb = dot(ubo.ambientColor.rgb, vec3(0.2126, 0.7152, 0.0722)) * ubo.ambientColor.w;
+    vec3 lit = ubo.sunColor.rgb * sunI * max(dot(n, l), 0.0) + vec3(amb);
+    float spec = ggxSpecular(n, normalize(l + v), 0.55) * 0.04 * max(dot(n, l), 0.0);
+    vec3 crust = albedo * lit + ubo.sunColor.rgb * sunI * spec;
+    // A crosta perto da fenda e' iluminada por ela (luz vermelha de baixo).
+    crust += blackbody(1100.0) * albedo * 3.0 * smoothstep(0.1, 0.6, heat);
+    float molt = smoothstep(0.35, 0.75, heat);
+    return mix(crust, vec3(0.0), molt * 0.85) + glow;
 }
 
 void main() {
