@@ -2211,6 +2211,7 @@ void Engine::restoreScriptDefaults() {
     setDofEnabled(m_bootDof);      // world.set_dof
     m_postSettings.focusOverride = false; // world.set_focus
     setScriptFog(MapFog{});        // world.set_fog: volta a do clima/mapa
+    setScriptExposure(-1.0f);      // world.set_exposure: volta a do mapa/automatica
     setSeeThrough(0.0f, 0.25f);    // camera.see_through
     setNearFade(0.0f, 0.0f);       // camera.near_fade
     m_orbitInput = true;           // camera.set_orbit_input

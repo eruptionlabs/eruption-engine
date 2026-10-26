@@ -177,6 +177,11 @@ declare world: {
     -- height, falloff} (the map .env "fog" block fields). Wins over the map's
     -- and the weather's fog until the next map change; nil gives control back.
     set_fog: (fog: { [string]: any }?) -> (),
+    -- Locks the exposure at `value` (1 = the light as authored) instead of
+    -- adapting to the frame, as the map .env "exposure": {"auto": false,
+    -- "value": 1.0} does. nil gives control back (the map's lock or auto).
+    -- Until the next map change.
+    set_exposure: (value: number?) -> (),
     -- Motion blur and chromatic aberration come from the quality preset; a
     -- game can tune them as art direction. `amount`: strength (engine default
     -- 1 for the blur, 0.5 for the fringe).
