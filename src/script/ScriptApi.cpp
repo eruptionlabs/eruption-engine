@@ -1569,9 +1569,11 @@ int world_set_focus(lua_State* L) {
     auto& s = eng().postSettings();
     if (lua_isnoneornil(L, 1)) {
         s.focusOverride = false;
+        eng().setFocusPoint(nullptr);
         return 0;
     }
     const Vec3 p = checkVec3(L, 1);
+    eng().setFocusPoint(&p); // camera.see_through(.., "focus")
     const Camera& c = eng().camera();
     // PROFUNDIDADE AO LONGO DO EIXO DA CAMERA, nao distancia em linha reta:
     // e' o que o mapa de profundidade guarda, e e' contra ele que o shader
@@ -1672,7 +1674,10 @@ int camera_keep_inside_map(lua_State* L) {
 }
 // Parede entre a camera e o jogador sai em dither (Engine::setSeeThrough).
 int camera_see_through(lua_State* L) {
-    eng().setSeeThrough(static_cast<float>(luaL_optnumber(L, 1, 0.0)), static_cast<float>(luaL_optnumber(L, 2, 0.25)));
+    static const char* const kCenters[] = {"player", "focus", nullptr};
+    const bool atFocus = luaL_checkoption(L, 3, "player", kCenters) == 1;
+    eng().setSeeThrough(static_cast<float>(luaL_optnumber(L, 1, 0.0)), static_cast<float>(luaL_optnumber(L, 2, 0.25)),
+                        atFocus);
     return 0;
 }
 // Geometria colada na camera sai em dither (Engine::setNearFade).
@@ -2439,7 +2444,10 @@ declare camera: {
     -- What stands between the camera and the player (a wall, a cliff) is
     -- drawn as a dither pattern within `radius` world units of the player on
     -- screen, down to `opacity` (default 0.25) at the center. 0 turns it off.
-    see_through: (radius: number, opacity: number?) -> (),
+    -- center "focus": around the point given to world.set_focus instead (a
+    -- group under a bridge, with the leader off to the side); the player
+    -- while no focus point is set.
+    see_through: (radius: number, opacity: number?, center: ("player" | "focus")?) -> (),
     -- Map and model geometry closer than `start` world units to the camera
     -- disappears as a dither pattern and comes back fully by `end` (default
     -- 1.5 x start), so a fence brushing the lens no longer covers the screen.
