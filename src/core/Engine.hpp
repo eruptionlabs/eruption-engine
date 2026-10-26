@@ -646,8 +646,11 @@ public:
     void followPlayer(int index, float distance);
     // Ver atraves (camera.see_through): o que fica entre a camera e o jogador,
     // num raio de `radius` unidades de mundo em volta dele na tela, sai em
-    // dither ate' `opacity` no centro. radius 0 desliga.
-    void setSeeThrough(float radius, float opacity);
+    // dither ate' `opacity` no centro. radius 0 desliga. `atFocus`: o centro e'
+    // o ponto de world.set_focus (o grupo), nao o jogador.
+    void setSeeThrough(float radius, float opacity, bool atFocus = false);
+    // Ponto de world.set_focus (nullptr: foco automatico de novo).
+    void setFocusPoint(const Vec3* point);
     // Perto da camera (camera.near_fade): o que fica a menos de `start` da
     // camera some em dither e volta ate' `end` (padrao 1,5x start). 0 desliga.
     void setNearFade(float start, float end);
@@ -1799,6 +1802,9 @@ private:
     PlayerController* m_playerController = nullptr;
     float m_seeThroughRadius = 0.0f;
     float m_seeThroughOpacity = 0.25f;
+    bool m_seeThroughAtFocus = false;
+    bool m_focusPointSet = false;
+    Vec3 m_focusPoint{0.0f};
     float m_nearFadeStart = 0.0f, m_nearFadeEnd = 0.0f;
     bool m_orbitInput = true;
     std::array<Vec4, 3 * FrameUBO::kCutaways> m_cutaway{};

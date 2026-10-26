@@ -321,7 +321,10 @@ declare camera: {
     -- What stands between the camera and the player (a wall, a cliff) is
     -- drawn as a dither pattern within `radius` world units of the player on
     -- screen, down to `opacity` (default 0.25) at the center. 0 turns it off.
-    see_through: (radius: number, opacity: number?) -> (),
+    -- center "focus": around the point given to world.set_focus instead (a
+    -- group under a bridge, with the leader off to the side); the player
+    -- while no focus point is set.
+    see_through: (radius: number, opacity: number?, center: ("player" | "focus")?) -> (),
     -- Map and model geometry closer than `start` world units to the camera
     -- disappears as a dither pattern and comes back fully by `end` (default
     -- 1.5 x start), so a fence brushing the lens no longer covers the screen.

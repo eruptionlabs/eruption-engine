@@ -2852,9 +2852,15 @@ void Engine::toggleWireframe() {
     ERUPTION_LOG_INFO("Wireframe %s (F8)", wireframeMode() ? "ligado" : "desligado");
 }
 
-void Engine::setSeeThrough(float radius, float opacity) {
+void Engine::setSeeThrough(float radius, float opacity, bool atFocus) {
     m_seeThroughRadius = std::max(0.0f, radius);
     m_seeThroughOpacity = glm::clamp(opacity, 0.0f, 1.0f);
+    m_seeThroughAtFocus = atFocus;
+}
+
+void Engine::setFocusPoint(const Vec3* point) {
+    m_focusPointSet = point != nullptr;
+    if (point) m_focusPoint = *point;
 }
 
 void Engine::setCutaway(int slot, int shape, const Vec3& center, const Vec3& halfSize, float yawDeg, float soft,
@@ -2877,6 +2883,9 @@ void Engine::setNearFade(float start, float end) {
 // corpo; raio horizontal `r`, vertical r + meio sprite (o boneco e' mais alto
 // que largo). Os raios saem de projetar pontos deslocados pelos eixos da
 // camera, sem depender de qual projecao (perspectiva ou ortografica) esta' ativa.
+// Com o centro no foco (camera.see_through(.., "focus")) a elipse fica no
+// ponto de world.set_focus: num grupo debaixo de uma ponte o heroi pode estar
+// longe dela na tela, e o raio que a alcancava pegava o primeiro plano junto.
 // ERUPTION_TEST_SEE_THROUGH=<raio>[,<opacidade>] liga sem script (teste).
 void Engine::fillSeeThrough(FrameUBO& ubo) const {
     ubo.seeThrough = Vec4(0.0f);
@@ -2893,9 +2902,10 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
     ubo.seeThrough3.w = m_nearFadeEnd;
     const float r = kEnv.x >= 0.0f ? kEnv.x : m_seeThroughRadius;
     const float opacity = kEnv.x >= 0.0f ? kEnv.y : m_seeThroughOpacity;
-    if (r <= 0.0f || m_playerController == nullptr) return;
-    const float h = m_playerController->spriteHeight();
-    const Vec3 feet = m_playerController->pos();
+    const bool atFocus = m_seeThroughAtFocus && m_focusPointSet;
+    if (r <= 0.0f || (m_playerController == nullptr && !atFocus)) return;
+    const float h = m_playerController ? m_playerController->spriteHeight() : 0.0f;
+    const Vec3 feet = atFocus ? m_focusPoint : m_playerController->pos();
     const Vec3 mid = feet + Vec3(0.0f, 0.5f * h, 0.0f);
     const Mat4& view = m_camera.viewMatrix();
     const Vec3 right(view[0][0], view[1][0], view[2][0]);
