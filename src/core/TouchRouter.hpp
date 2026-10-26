@@ -49,6 +49,7 @@ private:
 
     int find(int id) const;
     bool hasRole(Role r) const;
+    void publish() const; // dedos no mundo para o Input (input.touches)
     void button(int b, int action);
 
     Sink m_sink;

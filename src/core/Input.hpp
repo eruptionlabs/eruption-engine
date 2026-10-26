@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <array>
+#include <vector>
 #include <glm/glm.hpp>
 
 struct GLFWwindow;
@@ -79,6 +80,20 @@ public:
     static void setVirtualKey(Key key, bool down);
     static void setVirtualStick(const glm::vec2& v) { s_virtStick = v; }
     static glm::vec2 virtualStick() { return s_virtStick; }
+    // DEDOS NO MUNDO (input.touches): os que o core/TouchRouter nao deu a'
+    // interface nem ao controle de toque, em pixels da janela. Atualizado a
+    // cada dedo que pousa, anda ou sai.
+    struct TouchPoint {
+        int id = 0;
+        float x = 0.0f, y = 0.0f;
+    };
+    static void setTouches(std::vector<TouchPoint> touches) { s_touches = std::move(touches); }
+    static const std::vector<TouchPoint>& touches() { return s_touches; }
+    // Entrada sintetica (teste, ERUPTION_TEST_INPUT): passa pelos mesmos
+    // callbacks da janela que o mouse e o toque usam.
+    static void injectCursor(float x, float y) { cursorPosCallback(s_window, x, y); }
+    static void injectButton(int button, int action) { mouseButtonCallback(s_window, button, action, 0); }
+    static void injectScroll(float dy) { scrollCallback(s_window, 0.0, dy); }
     // Clique sintetico (teste): cursor em (x, y) da janela e um aperto neste quadro.
     static void injectClick(float x, float y) {
         s_mousePos = glm::vec2(x, y);
@@ -128,6 +143,7 @@ private:
     static TouchStick s_touchStick;
     static bool s_doubleTapPending, s_doubleTap;
     static bool s_touchScreen;
+    static std::vector<TouchPoint> s_touches;
     static bool s_pressOnCss;
     static std::array<bool, 8> s_mouse;
     static std::array<bool, 8> s_mousePrev;

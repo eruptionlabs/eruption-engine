@@ -5,6 +5,7 @@
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "core/Input.hpp"
+#include "core/TouchRouter.hpp"
 #include "core/JobSystem.hpp"
 #include "utils/Profiler.hpp"
 #include "utils/TelemetryExporter.hpp"
@@ -1181,6 +1182,55 @@ void Engine::shutdown() {
     m_initialized = false;
 }
 
+
+// ERUPTION_TEST_INPUT="quadro,acao,...;..." (teste): mouse e toque no comeco
+// desses quadros, antes dos scripts, em pixels da janela. Acoes: cursor,x,y
+// (o mouse anda, sem botao); scroll,dy (a roda); down,id,x,y / move,id,x,y /
+// up,id,x,y (um dedo, pelo mesmo core/TouchRouter do celular e do navegador).
+// Prova de input.mouse_position, input.scroll e input.touches sem tela.
+void Engine::injectTestInput() {
+    struct Ev { int frame; std::string act; float a = 0.0f, b = 0.0f, c = 0.0f; };
+    static const std::vector<Ev> kEvents = [] {
+        std::vector<Ev> v;
+        const char* e = std::getenv("ERUPTION_TEST_INPUT");
+        if (!e) return v;
+        const std::string s = e;
+        size_t i = 0;
+        while (i < s.size()) {
+            const size_t j = std::min(s.find(';', i), s.size());
+            const std::string item = s.substr(i, j - i);
+            i = j + 1;
+            char act[16] = {};
+            Ev ev{0, {}};
+            if (std::sscanf(item.c_str(), "%d,%15[a-z],%f,%f,%f", &ev.frame, act, &ev.a, &ev.b, &ev.c) >= 2) {
+                ev.act = act;
+                v.push_back(ev);
+            }
+        }
+        return v;
+    }();
+    if (kEvents.empty()) return;
+    static TouchRouter router({
+        [](double x, double y) { Input::injectCursor(float(x), float(y)); },
+        [](int b, int action) { Input::injectButton(b, action); },
+        [](double dy) { Input::injectScroll(float(dy)); },
+        nullptr,
+        nullptr,
+        [] { return 720; },
+    });
+    const auto t = static_cast<int64_t>(m_framesCount) * 16'666'667;
+    for (const Ev& ev : kEvents) {
+        if (ev.frame != m_framesCount) continue;
+        if (ev.act == "cursor") Input::injectCursor(ev.a, ev.b);
+        else if (ev.act == "scroll") Input::injectScroll(ev.a);
+        else if (ev.act == "down") router.down(int(ev.a), ev.b, ev.c, t);
+        else if (ev.act == "move") router.move(int(ev.a), ev.b, ev.c);
+        else if (ev.act == "up") router.up(int(ev.a), ev.b, ev.c, t, false);
+        else continue;
+        ERUPTION_LOG_WARN("ERUPTION_TEST_INPUT: quadro %d %s %.0f %.0f %.0f", ev.frame, ev.act.c_str(), ev.a, ev.b, ev.c);
+    }
+}
+
 void Engine::updateTestTour(float dt) {
     static const float kSecs = [] {
         const char* e = std::getenv("ERUPTION_TEST_TOUR");
@@ -1305,6 +1355,7 @@ float Engine::advanceFrame() {
         ERUPTION_LOG_WARN("ERUPTION_TEST_CLICK: quadro %d em (%.0f, %.0f) %s", c.frame, x, y, c.selector.c_str());
         Input::injectClick(x, y);
     }
+    injectTestInput();
 
     // Auto heat-shimmer ground height from terrain under the player.
     if (m_currentMap) {
