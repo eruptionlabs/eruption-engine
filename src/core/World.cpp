@@ -141,6 +141,9 @@ void placeLiquids(std::vector<LoadedMap::MapLiquid>& liquids, const Vec3& off, f
         for (auto& poly : lq.polygons)
             for (Vec3& p : poly) put(p);
         for (Vec3& p : lq.triangles) put(p);
+        // O molde da malha foi montado na coordenada do mapa: remonta no lugar
+        // do mundo (aqui, na thread de leitura; 8 ms num contorno de 1135 pontos).
+        if (lq.contourMesh) LoadedMap::buildLiquidContourMesh(lq);
         const size_t n = lq.shoreRadius.size();
         if (n == 0 || yaw == 0.0f) continue;
         std::vector<float> turned(n);
