@@ -18,10 +18,27 @@ layout(push_constant) uniform PushConstants {
     // ela o corpo de um grupo inteiro nunca fica cravado: a frente e as
     // costas dele ja' estao fora do plano. 0 = o CoC de antes.
     float focus_band;
+    // coc_model "thin_lens" (PostSettings::cocThinLens): K*|z-zf|/z, com
+    // teto separado perto e longe e rampa suave de `edge` u depois da faixa.
+    int thin_lens;
+    float lens_blur;
+    float max_near;
+    float max_far;
+    float edge;
 } push;
 
 float bandDist(float z, float f) {
     return max(abs(z - f) - push.focus_band, 0.0);
+}
+
+// Lente fina: CoC = A*f*|z-zf| / (z*(zf-f)) = K*|z-zf|/z com f e zf fixos.
+// Depende da distancia real, nao da altura na tela: um chao inclinado sai
+// em degrade que satura no horizonte, nao numa faixa.
+float thinLensCoc(float z, float f) {
+    float d = bandDist(z, f);
+    float c = push.lens_blur * d / max(z, 1e-3);
+    if (push.edge > 0.0) c *= smoothstep(0.0, push.edge, d);
+    return min(c, z < f ? push.max_near : push.max_far);
 }
 
 float linearize_depth(float d) {
@@ -45,6 +62,11 @@ void main() {
     float coc_r = bandDist(z, fd * 1.02) * apt;
     float coc_g = coc;
     float coc_b = bandDist(z, fd * 0.98) * apt;
+    if (push.thin_lens != 0) {
+        coc_r = thinLensCoc(z, fd * 1.02);
+        coc_g = thinLensCoc(z, fd);
+        coc_b = thinLensCoc(z, fd * 0.98);
+    }
     
     if (push.enable_foreground == 0) {
         if (z < fd) {
