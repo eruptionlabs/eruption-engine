@@ -728,6 +728,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
         }
         const bool haveBounds = mx.x > mn.x && mx.z > mn.z;
         loadPhase("probes: chave");
+        m_probeBakedInstances = SIZE_MAX;
         if (haveBounds && m_irradianceProbesEnabled) {
             mx.y += 40.0f;
             mn.y -= 20.0f;
@@ -735,6 +736,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
                                         m_shadowRenderer.shadowPipeline(), m_shadowRenderer.shadowLayout(),
                                         m_shadowRenderer.shadowInstPipeline(), m_shadowRenderer.shadowInstLayout(),
                                         &m_bindless, mn, mx)) {
+                m_probeBakedInstances = m_modelRenderer.instanceCount();
                 m_deferredLighting.setIrradianceProbes(m_irradianceProbes.view(), m_irradianceProbes.sampler(),
                                                        m_irradianceProbes.gridMin(), m_irradianceProbes.gridInvExtent(), true);
             }
