@@ -1184,6 +1184,17 @@ int characters_pop(lua_State* L) {
                        static_cast<float>(luaL_optnumber(L, 3, 0.2)));
     return 0;
 }
+// Topo do sprite na tela: x, y em pixels da interface e se esta' visivel.
+int characters_head_screen(lua_State* L) {
+    const int idx = eng().findCharacter(luaL_checkstring(L, 1));
+    if (idx < 0) luaL_error(L, "no character named '%s' in this map", lua_tostring(L, 1));
+    Vec2 p(0.0f);
+    const bool on = eng().characterHeadScreen(idx, p);
+    lua_pushnumber(L, p.x);
+    lua_pushnumber(L, p.y);
+    lua_pushboolean(L, on);
+    return 3;
+}
 int characters_set_scale(lua_State* L) {
     const int idx = eng().findCharacter(luaL_checkstring(L, 1));
     if (idx < 0) luaL_error(L, "no character named '%s' in this map", lua_tostring(L, 1));
@@ -1328,6 +1339,17 @@ int ui_clicked(lua_State* L) {
 int ui_has(lua_State* L) {
     lua_pushboolean(L, eng().uiDocument().has(luaL_checkstring(L, 1)));
     return 1;
+}
+// Prende o centro do elemento ao topo do sprite de um personagem, `dy` pixels
+// acima; nil solta (volta ao CSS).
+int ui_anchor(lua_State* L) {
+    const char* sel = luaL_checkstring(L, 1);
+    if (lua_isnoneornil(L, 2)) {
+        eng().clearUiAnchor(sel);
+        return 0;
+    }
+    eng().setUiAnchor(sel, luaL_checkstring(L, 2), static_cast<float>(luaL_optnumber(L, 3, 0.0)));
+    return 0;
 }
 int ui_reset(lua_State* L) {
     (void)L;
@@ -2040,7 +2062,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg ui[] = {{"message", ui_message}, {"minimap_label", ui_minimap_label}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
                                   {"load", ui_load}, {"place", ui_place}, {"image_rect", ui_image_rect}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
                                   {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked}, {"dragged", ui_dragged}, {"size", ui_size}, {"held", ui_held}, {"released", ui_released},
-                                  {"reset", ui_reset}, {nullptr, nullptr}};
+                                  {"reset", ui_reset}, {"anchor", ui_anchor}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
@@ -2086,7 +2108,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"hide", characters_hide}, {"set_sprite", characters_set_sprite},
         {"add", characters_add},
         {"flash", characters_flash}, {"shake", characters_shake}, {"lunge", characters_lunge},
-        {"pop", characters_pop}, {"fade", characters_fade}, {"set_scale", characters_set_scale},
+        {"pop", characters_pop}, {"fade", characters_fade}, {"set_scale", characters_set_scale}, {"head_screen", characters_head_screen},
         {nullptr, nullptr}};
     static const luaL_Reg lights[] = {
         {"count", lights_count}, {"position", lights_position}, {"set_position", lights_set_position},
@@ -2179,6 +2201,11 @@ declare ui: {
     -- Crop of an image element in texture coordinates (0..1): a window into a
     -- bigger image. u0 = nil shows the whole image again.
     image_rect: (selector: string, u0: number?, v0: number?, u1: number?, v1: number?) -> (),
+    -- Keeps the element's center on the top of a character's sprite (the
+    -- current frame, scale included), `dy` pixels above it, every frame with
+    -- the camera of that frame. Its children (--parent) follow it, and it
+    -- hides while the character is off screen. character = nil lets go.
+    anchor: (selector: string, character: string?, dy: number?) -> (),
     -- Character bars (life, mana) and the minimap with the map name and time.
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),
@@ -2432,6 +2459,9 @@ declare characters: {
     -- Size that stays (1 = the sheet's size); pop, shake and the rest act on top.
     set_scale: (name: string, scale: number) -> (),
     fade: (name: string, to: number, seconds: number?) -> (),
+    -- Top of the character's sprite on screen, in UI pixels (those of
+    -- ui.size), and whether it is on screen this frame.
+    head_screen: (name: string) -> (number, number, boolean),
 }
 
 declare camera: {

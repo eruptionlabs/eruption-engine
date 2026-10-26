@@ -414,6 +414,10 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         fxScale += f.popScale * std::sin(t * 3.14159265f);
     }
     const float flash = f.flashLeft > 0.0f ? f.flashLeft / std::max(1e-4f, f.flashTotal) : 0.0f;
+    // Topo do quadro (ui.anchor, characters.head_screen): a parte mais alta.
+    // No sprite_vert.glsl o topo da parte e' -yOff + 0,5 h - centerY, com
+    // centerY = -h/2.
+    float headTop = -1e9f, headSide = 0.0f;
 
     for (const auto& spr : action.frames[static_cast<size_t>(c.frame)].sprites) {
         int texIdx = spr.index + (spr.type == 1 ? static_cast<int>(ls.indexedTextureCount) : 0);
@@ -431,6 +435,10 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         // Base do quadro no chão (mesma regra dos sprites PNG do jogador).
         s.texRect = Vec4(xOff * kPixelToWorld, spr.offsetY * kPixelToWorld, spriteYaw, -h * 0.5f);
         s.size = Vec2(w, h);
+        if (-s.texRect.y + h > headTop) {
+            headTop = -s.texRect.y + h;
+            headSide = s.texRect.x;
+        }
         s.texIndex = tex.slot;
         s.paletteIndex = 0;
         s.flags = SpriteFlags::Billboard | SpriteFlags::CastShadow | SpriteFlags::PngSprite;
@@ -444,6 +452,11 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         s.tintColor.a *= f.fade;
         s.sortOrder = 0.0f;
         m_spriteSystem.submitSprite(s);
+    }
+    if (headTop > -1e8f) {
+        c.head = Vec2(headSide, headTop);
+        c.headAnchor = c.position + fxOffset;
+        c.headFrame = m_framesCount;
     }
 }
 
@@ -494,6 +507,43 @@ void Engine::drawSpeechBubbles(float x, float y, float w, float h, float dt) {
         bubble(m_playerController->pos() + Vec3(0.0f, 30.0f, 0.0f), m_playerSay, m_playerSayTime);
 }
 
+bool Engine::characterHeadScreen(int index, Vec2& out) const {
+    if (index < 0 || index >= static_cast<int>(m_characters.size())) return false;
+    const SceneCharacter& c = m_characters[static_cast<size_t>(index)];
+    if (c.headFrame + 1 < m_framesCount || m_uiArea.z <= 0.0f) return false;
+    // A mesma conta do sprite_vert.glsl: no espaco de visao, direita = -x e
+    // o "cima" inclinado pela spline do billboard (frameUbo.spriteTilt).
+    const float pitchNorm = glm::degrees(m_camera.orbitPitch()) / 89.0f;
+    const float tilt = glm::radians(m_charConfig.billboardTiltSpline.evaluate(pitchNorm));
+    Vec4 v = m_camera.viewMatrix() * Vec4(c.headAnchor, 1.0f);
+    v += Vec4(-c.head.x, c.head.y * std::cos(tilt), -c.head.y * std::sin(tilt), 0.0f);
+    const Vec4 clip = m_camera.projNoJitter() * v;
+    if (clip.w <= 1e-3f) return false;
+    out = Vec2(m_uiArea.x + (clip.x / clip.w * 0.5f + 0.5f) * m_uiArea.z,
+               m_uiArea.y + (clip.y / clip.w * 0.5f + 0.5f) * m_uiArea.w);
+    return out.x >= m_uiArea.x && out.x <= m_uiArea.x + m_uiArea.z &&
+           out.y >= m_uiArea.y && out.y <= m_uiArea.y + m_uiArea.w;
+}
+
+void Engine::setUiAnchor(const std::string& selector, const std::string& character, float dyPx) {
+    for (UiAnchor& a : m_uiAnchors) {
+        if (a.selector != selector) continue;
+        a.character = character;
+        a.dyPx = dyPx;
+        return;
+    }
+    m_uiAnchors.push_back({selector, character, dyPx});
+}
+
+void Engine::clearUiAnchor(const std::string& selector) {
+    for (size_t i = 0; i < m_uiAnchors.size(); ++i) {
+        if (m_uiAnchors[i].selector != selector) continue;
+        m_uiAnchors.erase(m_uiAnchors.begin() + static_cast<std::ptrdiff_t>(i));
+        break;
+    }
+    m_uiDocument.clearAnchor(selector);
+}
+
 void Engine::drawGameFx2D(float x, float y, float w, float h, float dt) {
     // Desenho 2D do jogo por cima da cena. O canvas e' do jogo (o script
     // monta os nos); o motor so' atualiza os tempos e desenha.
@@ -509,6 +559,13 @@ void Engine::drawGameFx2D(float x, float y, float w, float h, float dt) {
     }
     m_uiDocument.reloadIfChanged();
     m_uiArea = Vec4(x, y, w, h);
+    // Ancoras: o ponto sai da camera deste quadro, entao a barra nao fica um
+    // quadro atras do boneco ao girar a camera.
+    for (const UiAnchor& a : m_uiAnchors) {
+        Vec2 p(0.0f);
+        const bool on = characterHeadScreen(findCharacter(a.character), p);
+        m_uiDocument.setAnchor(a.selector, p.x - x, p.y - y - a.dyPx, on);
+    }
     m_uiDocument.draw(dl, x, y, w, h);
     m_uiCanvas.update(dt);
     m_uiCanvas.draw(dl, x, y, w, h, m_camera.viewProjNoJitter());

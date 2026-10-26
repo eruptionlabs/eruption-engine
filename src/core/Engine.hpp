@@ -388,6 +388,13 @@ public:
         std::vector<Vec3> patrol;
         size_t patrolNext = 0;
         float patrolWait = 0.0f, waitLeft = 0.0f, repath = 0.0f;
+        // Topo do quadro desenhado agora (drawCharacter), no espaco do
+        // billboard: x = deslocamento lateral, y = altura acima do pe' ao
+        // longo do "cima" inclinado; headAnchor = o pe' com o suco. headFrame
+        // = quadro em que foi desenhado (velho = fora de cena).
+        Vec2 head{0.0f};
+        Vec3 headAnchor{0.0f};
+        int headFrame = -10;
         Vec3 followTarget{0.0f};
     };
     struct TextureStats {
@@ -626,6 +633,14 @@ public:
     int addCharacter(const std::string& name, const std::string& sprite, const Vec3& position, float facingDeg);
     bool setCharacterSprite(int index, const std::string& sprite);
     int findCharacter(const std::string& name) const;
+    // Topo do sprite do personagem na tela, em pixels da interface (os de
+    // ui.size), projetado com a camera e a inclinacao do billboard deste
+    // quadro. Falso quando o personagem nao foi desenhado ou cai fora da tela.
+    bool characterHeadScreen(int index, Vec2& out) const;
+    // Elemento de UI preso ao topo de um personagem (ui.anchor); `dyPx` sobe.
+    // Recalculado em drawGameFx2D, no mesmo quadro do render.
+    void setUiAnchor(const std::string& selector, const std::string& character, float dyPx);
+    void clearUiAnchor(const std::string& selector);
     // Anda até `target` pelo caminho achado; `seconds` > 0 acerta a velocidade
     // para chegar nesse tempo (0: passo normal).
     void walkCharacter(int index, const Vec3& target, float seconds);
@@ -722,6 +737,8 @@ public:
     struct UiDrag { glm::vec2 start{0.0f}, last{0.0f}, delta{0.0f}; bool active = false, moving = false; int frame = -1; };
     UiDrag m_uiDrag;
     Vec4 m_uiArea{0.0f};        // x, y, w, h da ultima interface desenhada (drawGameFx2D)
+    struct UiAnchor { std::string selector, character; float dyPx = 0.0f; };
+    std::vector<UiAnchor> m_uiAnchors;
     Vec4 m_minimapScreen{0.0f}; // x0, y0, x1, y1 do minimapa no ultimo quadro em que apareceu
     int m_minimapScreenFrame = -100;
     // Textura de um PNG para a UI em CSS, carregada na primeira vez e

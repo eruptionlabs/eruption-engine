@@ -197,6 +197,29 @@ void UiDocument::clearPlace(const std::string& selector) {
     if (Element* e = find(selector)) e->hasPlace = false;
 }
 
+void UiDocument::setAnchor(const std::string& selector, float x, float y, bool onScreen) {
+    if (Element* e = find(selector)) {
+        e->hasAnchor = true;
+        e->anchorOn = onScreen;
+        e->anchor = Vec2(x, y);
+    }
+}
+
+void UiDocument::clearAnchor(const std::string& selector) {
+    if (Element* e = find(selector)) e->hasAnchor = false;
+}
+
+bool UiDocument::anchorHidden(const Element& e) const {
+    // A mesma cadeia curta de resolveRect.
+    const Element* p = &e;
+    for (int n = 0; p && n < 5; ++n) {
+        if (p->hasAnchor && !p->anchorOn) return true;
+        if (p->parent.empty() || p->parent == p->selector) break;
+        p = find(p->parent);
+    }
+    return false;
+}
+
 void UiDocument::setImageRect(const std::string& selector, float u0, float v0, float u1, float v1) {
     if (Element* e = find(selector)) e->uv = Vec4(u0, v0, u1, v1);
 }
@@ -210,6 +233,7 @@ void UiDocument::resetOverrides() {
         e.hasText = e.hasValue = e.hasVisible = false;
         e.hasColor[0] = e.hasColor[1] = false;
         e.hasPlace = false;
+        e.hasAnchor = false;
         e.uv = Vec4(0.0f, 0.0f, 1.0f, 1.0f);
         e.text = e.textCss;
         e.value = e.valueCss;
@@ -238,6 +262,16 @@ CSSRect UiDocument::resolveRect(const Element& e, const Vec2& area) const {
 
 CSSRect UiDocument::ownRect(const Element& e, const ImVec2& display, const CSSRect& parent) const {
     CSSRect r = m_layout.resolve(e.selector, display, parent);
+    if (e.hasAnchor) {
+        // Ancora vence o resto: o tamanho fica o do CSS (ou o de ui.place).
+        if (e.hasPlace) {
+            if (e.place.z >= 0.0f) r.w = e.place.z * display.x;
+            if (e.place.w >= 0.0f) r.h = e.place.w * display.y;
+        }
+        r.x = e.anchor.x - r.w * 0.5f;
+        r.y = e.anchor.y - r.h * 0.5f;
+        return r;
+    }
     if (!e.hasPlace) return r;
     CSSRect base = parent;
     if (base.w <= 0.0f || base.h <= 0.0f) base = CSSRect{0.0f, 0.0f, display.x, display.y};
@@ -297,7 +331,7 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
 
     for (const Element& e : m_elements) {
         const bool visible = e.hasVisible ? e.visible : e.visibleCss;
-        if (!visible) continue;
+        if (!visible || anchorHidden(e)) continue;
 
         CSSRect r = resolveRect(e, area);
         r.x += x;
