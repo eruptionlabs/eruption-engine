@@ -143,6 +143,8 @@ public:
     // Cor por chamada: `recolor` troca o matiz mantendo o brilho de cada chave
     // do gradiente (variantes de cor sem um arquivo por cor); sem ele, multiplica.
     void setColor(uint32_t id, const Vec3& color, bool recolor);
+    // false: a visao de equipe nao esconde esta instancia (cenario), vence o .vfx.json.
+    void setVision(uint32_t id, bool followsVision);
     // Deslocamento (m, espaco do efeito) de um emissor desta instancia, pelo nome.
     void setEmitterOffset(uint32_t id, const std::string& emitter, const Vec3& offset);
     void setTransform(uint32_t id, const Mat4& transform);
@@ -240,6 +242,7 @@ private:
         bool killed = false;
         bool firstFrame = true;
         bool hidden = false; // fora da visao de equipe neste quadro
+        int8_t vision = -1;  // -1: o do efeito (desc->vision); 0/1: vfx.play pediu
         std::vector<EmitterState> emitters;
         // Por chamada (vfx.play): cor e deslocamento por emissor, sem copiar o
         // efeito (a recarga a quente troca o `desc` e isto continua valendo).

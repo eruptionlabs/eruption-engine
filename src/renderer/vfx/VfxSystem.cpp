@@ -876,6 +876,11 @@ void VfxSystem::setColor(uint32_t id, const Vec3& color, bool recolor) {
         if (inst.id == id) inst.color = Vec4(color, recolor ? 1.0f : 2.0f);
 }
 
+void VfxSystem::setVision(uint32_t id, bool followsVision) {
+    for (Instance& inst : m_instances)
+        if (inst.id == id) inst.vision = followsVision ? 1 : 0;
+}
+
 void VfxSystem::setEmitterOffset(uint32_t id, const std::string& emitter, const Vec3& offset) {
     for (Instance& inst : m_instances) {
         if (inst.id != id || !inst.desc) continue;
@@ -1119,7 +1124,8 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
         Instance& inst = m_instances[ii];
         const VfxEffectDesc& fx = *inst.desc;
         const Vec3 pos = Vec3(inst.transform[3]);
-        inst.hidden = m_hideTest && m_hideTest(pos);
+        const bool segueVisao = inst.vision < 0 ? fx.vision : inst.vision != 0;
+        inst.hidden = segueVisao && m_hideTest && m_hideTest(pos);
         if (inst.firstFrame) inst.prevPos = pos;
         inst.velocity = dt > 1e-6f ? (pos - inst.prevPos) / dt : Vec3(0.0f);
         const float moved = glm::length(pos - inst.prevPos);

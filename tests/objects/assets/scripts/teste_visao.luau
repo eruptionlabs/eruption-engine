@@ -29,5 +29,12 @@ on.update(function()
     if not vision.visible(v(310, 300)) then falha("reveal sem fonte") return end
     if not vision.remove_zone("praca") or vision.visible(v(310, 300)) then falha("remove_zone") return end
     if pcall(vision.zone, "x", v(0, 0), 5, { mode = "nevoa" }) then falha("modo invalido aceito") return end
+    -- Efeito de cenario: a visao so' escurece; as duas formas de passar a opcao.
+    local ok, id = pcall(vfx.play, "magma_vapor", v(900, 900), 1, { vision = false })
+    if not ok or id == 0 then falha("vfx.play com {vision = false} depois da escala: " .. tostring(id)) return end
+    vfx.stop(id, true)
+    id = vfx.play("magma_vapor", v(900, 900), { scale = 1, vision = false })
+    if id == 0 then falha("vfx.play com vision na tabela") return end
+    vfx.stop(id, true)
     log("OBJ-OK visao")
 end)

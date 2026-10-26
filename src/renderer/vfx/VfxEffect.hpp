@@ -148,6 +148,7 @@ struct VfxEffectDesc {
     std::string name;
     float duration = 0.0f; // 0 = sem fim (ate' parar)
     bool loop = true;      // com duration > 0: recomeca
+    bool vision = true;    // false: cenario; a visao de equipe so' escurece, nao esconde
     std::vector<VfxEmitterDesc> emitters;
 
     // Maior vida possivel (para saber quando a ultima particula morreu).

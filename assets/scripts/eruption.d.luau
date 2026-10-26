@@ -599,7 +599,10 @@ declare vfx: {
     -- As a table: {scale, yaw, color = vector (recolors, keeping each key's
     -- brightness), tint = vector (multiplies), offsets = {emitter = vector}
     -- (meters, effect space)} - color variants without one file per color.
-    play: (name: string, position: vector, options: (number | { [string]: any })?, yaw: number?) -> number,
+    -- vision = false (also "vision": false in the .vfx.json): scenery that
+    -- team vision only dims, never hides. The table may also come after a
+    -- number scale: play(name, pos, 2, {vision = false}).
+    play: (name: string, position: vector, options: (number | { [string]: any })?, yaw: (number | { [string]: any })?) -> number,
     -- Stops spawning (the live particles finish); `immediate` clears them now.
     stop: (id: number, immediate: boolean?) -> (),
     -- Moves a playing effect (a trail follows the object this way).

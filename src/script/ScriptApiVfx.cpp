@@ -46,10 +46,19 @@ int vfx_play(lua_State* L) {
         lua_getfield(L, 3, "yaw"); if (lua_isnumber(L, -1)) yaw = float(lua_tonumber(L, -1)); lua_pop(L, 1);
     } else {
         scale = static_cast<float>(luaL_optnumber(L, 3, 1.0));
-        yaw = static_cast<float>(luaL_optnumber(L, 4, 0.0));
+        if (!lua_istable(L, 4)) yaw = static_cast<float>(luaL_optnumber(L, 4, 0.0));
     }
     const uint32_t id = g_engine->vfx().spawn(name, placement(pos, scale, yaw));
+    // play(nome, pos, escala, {vision = false}): as opcoes tambem depois da escala.
+    if (id && !lua_istable(L, 3) && lua_istable(L, 4)) {
+        lua_getfield(L, 4, "vision");
+        if (lua_isboolean(L, -1)) g_engine->vfx().setVision(id, lua_toboolean(L, -1) != 0);
+        lua_pop(L, 1);
+    }
     if (id && lua_istable(L, 3)) {
+        lua_getfield(L, 3, "vision");
+        if (lua_isboolean(L, -1)) g_engine->vfx().setVision(id, lua_toboolean(L, -1) != 0);
+        lua_pop(L, 1);
         for (const char* k : {"color", "tint"}) {
             lua_getfield(L, 3, k);
             if (lua_isvector(L, -1)) g_engine->vfx().setColor(id, vec3Arg(L, -1), k[0] == 'c');
@@ -124,7 +133,10 @@ declare vfx: {
     -- As a table: {scale, yaw, color = vector (recolors, keeping each key's
     -- brightness), tint = vector (multiplies), offsets = {emitter = vector}
     -- (meters, effect space)} - color variants without one file per color.
-    play: (name: string, position: vector, options: (number | { [string]: any })?, yaw: number?) -> number,
+    -- vision = false (also "vision": false in the .vfx.json): scenery that
+    -- team vision only dims, never hides. The table may also come after a
+    -- number scale: play(name, pos, 2, {vision = false}).
+    play: (name: string, position: vector, options: (number | { [string]: any })?, yaw: (number | { [string]: any })?) -> number,
     -- Stops spawning (the live particles finish); `immediate` clears them now.
     stop: (id: number, immediate: boolean?) -> (),
     -- Moves a playing effect (a trail follows the object this way).
