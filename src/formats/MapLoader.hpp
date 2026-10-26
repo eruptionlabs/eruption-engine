@@ -137,6 +137,12 @@ struct LoadedMap {
         // cor do ceu do ciclo dia/noite - um interior (caverna, sala) tem a
         // propria bruma, que nao muda com chuva la' fora nem com a hora.
         MapFog fog;
+        // FUNDO ("background" no .env): o que aparece onde nenhuma geometria
+        // cobre o pixel e o raio aponta para baixo do horizonte (borda do
+        // mundo). 0 = o ceu de sempre, 1 = a cor da nevoa, 2 = backgroundColor.
+        // Fora do 0, esses pixels tambem saem da autoexposicao.
+        int backgroundMode = 0;
+        Vec3 backgroundColor = Vec3(0.0f);
         Vec3 sunDirection = Vec3(0.0f, -1.0f, 0.0f);
         Vec3 sunColor = Vec3(2.5f, 2.4f, 2.2f);
         float sunIntensity = 1.0f;

@@ -1723,6 +1723,11 @@ void Engine::render() {
             postSettings.fogHeight = fog->height;
             postSettings.fogHeightFalloff = fog->heightFalloff;
         }
+        // Fundo abaixo do horizonte ("background" do .env), na cor da nevoa
+        // deste quadro ou na cor do mapa.
+        if (m_currentMap && m_currentMap->env.backgroundMode != 0)
+            postSettings.belowHorizon = Vec4(m_currentMap->env.backgroundMode == 1 ? postSettings.fogColor
+                                                                                   : m_currentMap->env.backgroundColor, 1.0f);
 
         // Coerência atmosférica: ajustar sol/lua conforme oclusão de nuvens
         auto& skyParams = m_skybox.editableConfig().procedural;
