@@ -121,6 +121,10 @@ void UiDocument::build() {
             e.image = t;
         }
         if (auto v = prop("--image-tint")) e.tintCss = CSSLayout::parseColor(*v, IM_COL32_WHITE);
+        if (auto v = prop("--bar-shape")) e.arc = CSSParser::trim(*v) == "arc";
+        if (auto v = prop("--arc-start")) e.arcStart = CSSLayout::parseFloat(*v, e.arcStart);
+        if (auto v = prop("--arc-end")) e.arcEnd = CSSLayout::parseFloat(*v, e.arcEnd);
+        if (auto v = prop("--arc-thickness")) e.arcThickness = CSSLayout::parseFloat(*v, 15.0f) / 100.0f;
         if (auto v = prop("--value")) e.valueCss = CSSLayout::parseFloat(*v, 1.0f);
         if (auto v = prop("text-align")) {
             const std::string a = CSSParser::trim(*v);
@@ -265,6 +269,28 @@ bool UiDocument::rectOf(const std::string& selector, float x, float y, float w, 
     return true;
 }
 
+// Barra em arco (--bar-shape: arc): o trilho e' o arco inteiro na cor de
+// fundo, o preenchimento vai de --arc-start ate' a fracao do valor. Um traco
+// grosso no raio do meio da faixa, com um segmento a cada ~2 px de arco: a
+// area pintada segue a fracao do angulo (o arco de 140 graus a 50% mede 50%).
+void UiDocument::drawArcBar(ImDrawList* dl, const CSSRect& r, const Element& e, float value, uint32_t rail, uint32_t fill) {
+    const float side = std::min(r.w, r.h);
+    const float thick = std::max(1.0f, side * std::clamp(e.arcThickness, 0.01f, 0.5f));
+    const float radius = side * 0.5f - thick * 0.5f;
+    if (radius <= 0.0f) return;
+    const ImVec2 c(r.x + r.w * 0.5f, r.y + r.h * 0.5f);
+    // CSS: 0 grau em cima, sentido horario. ImGui: 0 rad a' direita, y para baixo.
+    const float a0 = (e.arcStart - 90.0f) * 0.01745329f, a1 = (e.arcEnd - 90.0f) * 0.01745329f;
+    auto stroke = [&](float from, float to, ImU32 col) {
+        if (!(col >> IM_COL32_A_SHIFT) || std::abs(to - from) < 1e-4f) return;
+        const int segs = std::max(8, static_cast<int>(std::abs(to - from) * radius / 2.0f));
+        dl->PathArcTo(c, radius, from, to, segs);
+        dl->PathStroke(col, ImDrawFlags_None, thick);
+    };
+    stroke(a0, a1, rail);
+    stroke(a0, a0 + (a1 - a0) * std::clamp(value, 0.0f, 1.0f), fill);
+}
+
 void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const {
     if (!dl || !m_loaded || w <= 0.0f || h <= 0.0f) return;
     const Vec2 area(w, h);
@@ -293,6 +319,10 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
             ImU32 fill = e.hasColor[1] ? toImU32(e.color[1])
                                        : CSSLayout::parseColor(m_layout.rawProperty(e.selector, "--fill-color"), 0);
             if (!fill) fill = m_layout.textColor(e.selector, IM_COL32(220, 220, 220, 255));
+            if (e.arc) {
+                drawArcBar(dl, r, e, e.hasValue ? e.value : e.valueCss, withAlpha(bg, alpha), withAlpha(fill, alpha));
+                break;
+            }
             const std::string& txt = e.hasText ? e.text : e.textCss;
             float size = r.h * 0.8f;
             CSSLayout::parseLength(m_layout.rawProperty(e.selector, "font-size"), h, size);
