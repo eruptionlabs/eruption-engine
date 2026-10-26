@@ -1118,15 +1118,20 @@ void Engine::render() {
                        m_weatherSystem.current().rainIntensity,
                        m_weatherSystem.current().rainSplashIntensity);
 
-        if (m_hasLavaLiquid && m_water.hasLava()) {
+        for (uint32_t li = 0; li < m_lavaLiquids.size() && li < m_water.lavaSurfaceCount(); ++li) {
+            const LoadedMap::MapLiquid& lava = m_lavaLiquids[li];
             WaterRenderer::WaterSettings lavaSettings = adjustedSettings;
             lavaSettings.liquidKind = 1;
-            lavaSettings.waterLevel = m_lavaLiquid.level;
-            lavaSettings.levelOffset = 0.0f;
-            lavaSettings.emissiveStrength = m_lavaLiquid.emissive;
-            lavaSettings.shoreHeat = m_lavaLiquid.shoreHeat;
-            lavaSettings.centerHeat = m_lavaLiquid.centerHeat;
-            lavaSettings.flowSpeed = m_lavaLiquid.flowSpeed;
+            // Nível vivo (setLiquidLevel) menos o da malha: a superfície sobe no shader.
+            float lift = 0.0f;
+            if (m_currentMap && li < m_lavaSources.size() && m_lavaSources[li].index < m_currentMap->liquids.size())
+                lift = m_currentMap->liquids[m_lavaSources[li].index].level - m_lavaSources[li].builtLevel;
+            lavaSettings.waterLevel = lava.level + lift;
+            lavaSettings.levelOffset = lift;
+            lavaSettings.emissiveStrength = lava.emissive;
+            lavaSettings.shoreHeat = lava.shoreHeat;
+            lavaSettings.centerHeat = lava.centerHeat;
+            lavaSettings.flowSpeed = lava.flowSpeed;
             lavaSettings.enableCaustics = false;
             lavaSettings.enableFoam = false;
             lavaSettings.enableSurfaceFoam = false;
@@ -1139,7 +1144,7 @@ void Engine::render() {
                            m_camera.orbitPitch(),
                            m_weatherSystem.sunOcclusion(),
                            m_weatherSystem.moonOcclusion(),
-                           0.0f, 0.0f, 0.0f, true);
+                           0.0f, 0.0f, 0.0f, true, li);
         }
     }
     m_vulkan.writeTimestamp(cmd, 11, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);

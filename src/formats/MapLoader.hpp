@@ -84,8 +84,22 @@ struct LoadedMap {
         // sobrar vazio de um lado ou vazar pra fora de outro. Vazio = usa
         // `radius` pra todo angulo (mapas anteriores a essa feature).
         std::vector<float> shoreRadius;
+        // Contorno LIVRE (opcional, chave "polygon"/"polygons" do .env):
+        // poligonos no plano XZ, cada ponto com a propria altura (x, y, z) -
+        // um rio que desce e' um poligono so', mais alto numa ponta. Quando ha'
+        // contorno ele manda: centro, raio e shoreRadius ficam so' como
+        // resumo (luz, world.liquids). `triangles` e' a triangulacao dele,
+        // 3 pontos por triangulo, feita na carga (malha e consultas de chao).
+        // `contourLevel` e' o `level` com que o contorno foi autorado: o nivel
+        // vivo (setLiquidLevel) sobe ou desce o contorno inteiro pela diferenca.
+        std::vector<std::vector<Vec3>> polygons;
+        std::vector<Vec3> triangles;
+        float contourLevel = 0.0f;
     };
     std::vector<MapLiquid> liquids;
+    // Triangula os poligonos de um liquido (orelhas no plano XZ) e resume
+    // centro, raio e nivel a partir deles. Sem poligono nao faz nada.
+    static void buildLiquidContour(MapLiquid& lq);
 
     // Emissores de fumaça declarados no .env (chave opcional "smoke").
     // Vazio = mapa sem fumaça (todo mapa antigo cai aqui).

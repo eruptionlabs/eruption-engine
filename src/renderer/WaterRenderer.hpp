@@ -100,9 +100,14 @@ public:
     void setWaterMesh(const WaterMesh& mesh);
     void clearWaterMesh();
 
-    void setLavaMesh(const WaterMesh& mesh);
+    // Várias superfícies de lava numa malha só: `surfaceIndexCounts` diz
+    // quantos índices de cada uma, em ordem (vazio = uma só, a malha toda).
+    // Cada uma desenha com o próprio UBO (nível, calor, emissivo).
+    static constexpr uint32_t kMaxLavaSurfaces = 32;
+    void setLavaMesh(const WaterMesh& mesh, const std::vector<uint32_t>& surfaceIndexCounts = {});
     void clearLavaMesh();
     bool hasLava() const { return m_lavaIndexCount > 0; }
+    uint32_t lavaSurfaceCount() const { return uint32_t(m_lavaSurfaces.size()); }
 
     // Call BEFORE the forward rendering pass begins.
     // Recria as texturas de refracao no tamanho novo. Chamar no resize do
@@ -126,7 +131,8 @@ public:
                 float stormDarken = 0.0f,
                 float rainIntensity = 0.0f,
                 float rainSplashIntensity = 0.0f,
-                bool drawLavaSurface = false);
+                bool drawLavaSurface = false,
+                uint32_t lavaSurface = 0);
 
     void setViewport(float width, float height);
 
@@ -149,6 +155,10 @@ public:
     VkBuffer m_lavaIndexBuffer = VK_NULL_HANDLE;
     VmaAllocation m_lavaIndexAlloc = nullptr;
     uint32_t m_lavaIndexCount = 0;
+    struct LavaSurface {
+        uint32_t firstIndex = 0, indexCount = 0;
+    };
+    std::vector<LavaSurface> m_lavaSurfaces;
 
     // Shader hot-reload
     void reloadShaders();
@@ -176,7 +186,8 @@ private:
     // agua inteira do mapa passava a ser desenhada com o waterLevel e o
     // emissivo da lava - era isso que inundava a tela (brilho medio do frame
     // 53 -> 160, medido isolando so' esta chamada).
-    static constexpr uint32_t UBO_BANKS = 2;   // 0 = agua, 1 = lava
+    // Um banco por superficie de lava, pelo mesmo motivo.
+    static constexpr uint32_t UBO_BANKS = 1 + kMaxLavaSurfaces; // 0 = agua, 1.. = lavas
     VkDescriptorSetLayout m_uboLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_uboPool = VK_NULL_HANDLE;
     VkDescriptorSet m_uboSets[MAX_FRAMES * UBO_BANKS] = {};

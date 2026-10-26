@@ -364,6 +364,23 @@ int world_liquids(lua_State* L) {
     return 1;
 }
 
+// Nivel de uma lava do mapa (indice 1-based de world.liquids ou o nome):
+// a superficie, world.liquid_at e o piso andavel seguem no mesmo quadro.
+// Falso para agua, nome/indice que nao existe ou nivel invalido.
+int world_set_liquid_level(lua_State* L) {
+    const auto* map = eng().currentMap();
+    int index = -1;
+    if (map && lua_type(L, 1) == LUA_TSTRING) {
+        const char* name = lua_tostring(L, 1);
+        for (size_t i = 0; i < map->liquids.size() && index < 0; ++i)
+            if (map->liquids[i].name == name) index = int(i);
+    } else {
+        index = int(luaL_checkinteger(L, 1)) - 1;
+    }
+    lua_pushboolean(L, eng().setLiquidLevel(index, float(luaL_checknumber(L, 2))));
+    return 1;
+}
+
 // Custo de andar nas celulas a ate' `radius` de (x, z), so' nesta partida:
 // 1 = normal, math.huge bloqueia. world.walkable, world.path e o andar veem
 // no mesmo quadro. Devolve quantas celulas mudaram.
@@ -1923,7 +1940,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
         {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend},
-        {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids},
+        {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids}, {"set_liquid_level", world_set_liquid_level},
         {"block_slopes", world_block_slopes}, {"set_walk_cost", world_set_walk_cost}, {"walk_cost", world_walk_cost},
         {"map", world_map}, {"load_map", world_load_map},
         {"warp_map", world_warp_map}, {"warping", world_warping}, {nullptr, nullptr}};
@@ -2112,6 +2129,10 @@ declare world: {
     -- Liquids the map declares (lakes): kind is "water" or "lava", center is
     -- at the liquid's level, radius is the farthest shore.
     liquids: () -> { { name: string, kind: string, level: number, center: vector, radius: number } },
+    -- Moves a lava of the map (1-based index in liquids(), or its name) to
+    -- `level` during play: the surface, liquid_at and walkable follow in the
+    -- same frame. False for water or an unknown liquid.
+    set_liquid_level: (liquid: number | string, level: number) -> boolean,
     -- Blocks walking on every ground point steeper than `degrees` (this run
     -- only; the saved walk grid is untouched). Returns how many were blocked.
     block_slopes: (degrees: number) -> number,
