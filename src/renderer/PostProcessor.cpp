@@ -1503,7 +1503,11 @@ if (!m_ctx) return;
     if (const char* e = std::getenv("ERUPTION_TEST_FOG_END")) fogEnd = std::stof(e);
     if (const char* e = std::getenv("ERUPTION_TEST_FOG_OPACITY")) fogOpacity = std::stof(e);
 
-    push.exposureBloom = Vec4(settings.exposure, fogOpacity, settings.bloomIntensity, settings.enableBloom ? 1.0f : 0.0f);
+    // ERUPTION_TEST_NO_BLOOM pula os passes la' em cima; o composite tambem
+    // tem de parar de somar a textura, que ficava com o bloom de antes.
+    static const bool kNoBloomComposite = std::getenv("ERUPTION_TEST_NO_BLOOM") != nullptr;
+    push.exposureBloom = Vec4(settings.exposure, fogOpacity, settings.bloomIntensity,
+                              settings.enableBloom && !kNoBloomComposite ? 1.0f : 0.0f);
     push.fogParams = Vec4(fogColor, settings.enableFog ? fogEnd : 0.0f);
     // Nevoa com dependencia angular: aerossol espalha para FRENTE, entao a
     // nevoa contra o sol e' muito mais clara que a nevoa de costas pra ele.
