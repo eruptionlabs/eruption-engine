@@ -730,6 +730,9 @@ public:
     // Retangulo do elemento na tela, publicado como area tocavel (um dedo que
     // pousa nele e' da interface, nao do analogico). Falso se nao esta' na tela.
     bool uiTouchRect(const std::string& selector, CSSRect& r);
+    // Ponto `p` toca o elemento: dentro de `r` e fora do selo dele, que tem
+    // toque proprio ("#id:badge").
+    bool uiHit(const std::string& selector, const CSSRect& r, const glm::vec2& p) const;
     struct UiHold { glm::vec2 start{0.0f}, end{0.0f}; double t0 = 0.0, t1 = 0.0; bool active = false, released = false; int frame = -1; };
     UiHold m_uiHold;
     void updateUiHold();

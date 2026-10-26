@@ -3,6 +3,7 @@
 // O pouco que muda de sistema para sistema (Linux, Windows, macOS, Android),
 // num lugar só.
 #include <cstdio>
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <future>
@@ -91,6 +92,21 @@ inline long long fileTime(const std::string& path) {
     const auto t = std::filesystem::last_write_time(path, ec);
     return ec ? 0 : static_cast<long long>(t.time_since_epoch().count());
 }
+
+// Pixels de interface por dp (a unidade de toque do Android: 160 dp por
+// polegada). Area de toque minima e' 48 dp. No desktop, 1;
+// ERUPTION_TEST_DP_SCALE=<n> (teste) imita a tela de um celular.
+#if defined(__ANDROID__)
+float pixelsPerDp(); // src/platform/android/AndroidMain.cpp
+#else
+inline float pixelsPerDp() {
+    static const float s = [] {
+        const char* e = std::getenv("ERUPTION_TEST_DP_SCALE");
+        return e ? std::max(0.5f, static_cast<float>(std::atof(e))) : 1.0f;
+    }();
+    return s;
+}
+#endif
 
 // Roda `fn` em outra thread e devolve o futuro (std::async). No navegador a v1
 // nao tem threads (pediria COOP/COEP do servidor): roda aqui e o futuro sai
