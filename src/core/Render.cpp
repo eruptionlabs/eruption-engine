@@ -2924,6 +2924,7 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
     ubo.seeThrough2 = Vec4(0.0f);
     ubo.seeThrough3 = Vec4(0.0f);
     ubo.seeThroughBand = Vec4(0.0f);
+    std::fill(std::begin(ubo.seeThroughExtra), std::end(ubo.seeThroughExtra), Vec4(0.0f));
     static const Vec2 kEnv = [] {
         Vec2 v(-1.0f, 0.25f);
         if (const char* e = std::getenv("ERUPTION_TEST_SEE_THROUGH")) std::sscanf(e, "%f,%f", &v.x, &v.y);
@@ -2964,6 +2965,34 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
         Vec2 cd;
         if (glm::length(toCam) > 1e-3f && ndc(feet + glm::normalize(toCam) * r, cd) && std::abs(cd.y - c.y) > 1e-5f)
             ubo.seeThroughBand = Vec4(dist - m_seeThroughBand, cd.y > c.y ? 1.0f : -1.0f, 1.2f * radii.x, 0.0f);
+    }
+    // Centro no foco (o grupo): cada personagem a ate' `r` dele tambem abre a
+    // propria elipse, e o que esta' na frente DELE sai, nao so' o que esta' na
+    // frente do foco. A pedra no meio do grupo fica na distancia do foco e
+    // cobria a montaria logo atras dela (17% do grupo coberto a 25 graus).
+    if (atFocus) {
+        std::vector<std::pair<float, const SceneCharacter*>> near;
+        for (const SceneCharacter& sc : m_characters) {
+            if (!sc.visible || sc.removed || sc.parked) continue;
+            const float dxz = glm::length(Vec2(sc.position.x - feet.x, sc.position.z - feet.z));
+            if (dxz <= r) near.emplace_back(dxz, &sc);
+        }
+        std::sort(near.begin(), near.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        uint32_t k = 0;
+        for (const auto& [dxz, sc] : near) {
+            if (k >= FrameUBO::kSeeThroughExtra) break;
+            const float hc = sc->head.y > 0.0f ? sc->head.y : h;
+            const Vec3 m = sc->position + Vec3(0.0f, 0.5f * hc, 0.0f);
+            Vec2 cc, ccx, ccy;
+            if (!ndc(m, cc) || !ndc(m + right * (0.9f * hc), ccx) || !ndc(m + up * (0.7f * hc), ccy)) continue;
+            const Vec2 rc(glm::length(ccx - cc), glm::length(ccy - cc));
+            if (rc.x <= 1e-5f || rc.y <= 1e-5f) continue;
+            ubo.seeThroughExtra[2 * k] = Vec4(cc.x, cc.y, rc.x, rc.y);
+            const Vec3 cam = m_camera.position();
+            ubo.seeThroughExtra[2 * k + 1] =
+                Vec4(glm::length(Vec2(sc->position.x - cam.x, sc->position.z - cam.z)), sc->position.y, hc, opacity);
+            ++k;
+        }
     }
     // Ancora do padrao: um ponto do mundo preso numa grade de 512 u perto do
     // jogador (troca so' ao cruzar a grade), em pixels do alvo do G-buffer.

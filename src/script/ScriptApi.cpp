@@ -2628,7 +2628,10 @@ declare camera: {
     -- screen, down to `opacity` (default 0.25) at the center. 0 turns it off.
     -- center "focus": around the point given to world.set_focus instead (a
     -- group under a bridge, with the leader off to the side); the player
-    -- while no focus point is set. options.band: also the strip of the
+    -- while no focus point is set. With "focus", each character within
+    -- `radius` of it also gets its own patch, cutting what stands more than
+    -- 4 units in front of that character (a rock right in front of a big
+    -- mount). options.band: also the strip of the
     -- screen below the center, down to the edge, cutting what is more than
     -- `band` world units in front of it (a low camera looking past rocks);
     -- painted ground meshes and floors at foot height stay.

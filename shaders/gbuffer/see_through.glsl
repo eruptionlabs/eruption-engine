@@ -10,8 +10,8 @@
 // Wijk, "Pixel Masks for Screen-Door Transparency", IEEE Visualization 1998):
 // cabe no G-buffer, que nao mistura, sem ordenar nada; o limiar ordenado e' o
 // de Bayer (1973), o mesmo do crossfade de LOD.
-// Precisa de u_seeThrough/u_seeThrough2/u_seeThrough3, u_seeThroughBand, u_cutaway, u_viewProjNoJitter
-// e u_cameraPos.
+// Precisa de u_seeThrough/u_seeThrough2/u_seeThrough3, u_seeThroughBand,
+// u_seeThroughExtra, u_cutaway, u_viewProjNoJitter e u_cameraPos.
 
 const float kSeeThroughBayer[16] = float[](
     0.0, 0.5, 0.125, 0.625,
@@ -29,16 +29,51 @@ float nearFadeKeep(vec3 worldPos) {
     return smoothstep(u_seeThrough3.z, u_seeThrough3.w, distance(worldPos, u_cameraPos));
 }
 
-float seeThroughKeep(vec3 worldPos) {
+// FACE INGREME (normal.y < 0,6, fora do chao): a beirada de pedra na frente
+// do grupo. Ela fica abaixo de meio sprite e perto do foco, onde o resto e'
+// preservado (chao na altura dos pes, parede em que o boneco encosta), e
+// cobria as pernas da montaria do lider (17% do grupo coberto a 25 graus).
+// Face ingreme sai a partir de kSteepFront u na frente do foco e logo acima
+// dos pes. Abaixo dos pes nao: com a camera acima do grupo, a linha ate' ele
+// desce, e o que a cruza esta' acima dos pes; cortar ali so' abriria buraco.
+const float kSteepFront = 4.0;
+bool seeThroughSteep(vec3 n, bool ground) {
+    return !ground && length(n) > 1e-6 && normalize(n).y < 0.6;
+}
+
+// Quanto corta uma elipse: ell = centro e raios em NDC, par = distancia
+// camera-meio do boneco, altura dos pes, altura do sprite.
+float seeThroughEllipse(vec2 p, float d, float y, bool steep, vec4 ell, vec4 par) {
+    float e = length((p - ell.xy) / ell.zw);
+    if (e >= 1.0) return 0.0;
+    float h = par.z;
+    float front = steep ? 1.0 - smoothstep(par.x - kSteepFront - 2.0, par.x - kSteepFront, d)
+                        : 1.0 - smoothstep(par.x - 0.5 * h, par.x - 0.25 * h, d);
+    float above = steep ? smoothstep(par.y + 0.02 * h, par.y + 0.08 * h, y)
+                        : smoothstep(par.y + 0.05 * h, par.y + 0.25 * h, y);
+    return (1.0 - smoothstep(0.6, 1.0, e)) * front * above;
+}
+
+float seeThroughKeep(vec3 worldPos, bool steep, bool ground) {
     if (u_seeThrough.z <= 0.0) return 1.0;
     vec4 c = u_viewProjNoJitter * vec4(worldPos, 1.0);
     if (c.w <= 0.0) return 1.0;
-    float e = length((c.xy / c.w - u_seeThrough.xy) / u_seeThrough.zw);
-    if (e >= 1.0) return 1.0;
-    float h = u_seeThrough2.z;
-    float front = 1.0 - smoothstep(u_seeThrough2.x - 0.5 * h, u_seeThrough2.x - 0.25 * h, distance(worldPos, u_cameraPos));
-    float above = smoothstep(u_seeThrough2.y + 0.05 * h, u_seeThrough2.y + 0.25 * h, worldPos.y);
-    float cut = (1.0 - smoothstep(0.6, 1.0, e)) * front * above;
+    vec2 p = c.xy / c.w;
+    float d = distance(worldPos, u_cameraPos);
+    float cut = seeThroughEllipse(p, d, worldPos.y, steep, u_seeThrough, u_seeThrough2);
+    // Personagens perto do foco (centro no foco): cada um com a sua elipse,
+    // e nelas toda face fora do chao a mais de kSteepFront u na frente dele
+    // sai (a beirada e o topo da pedra logo na frente da montaria; o "1/4 de
+    // sprite" da elipse do foco, num boneco grande, guardava 10 u de pedra).
+    // "Na frente" no plano do chao (distancia XZ ate' a camera, contra a dos
+    // pes): com a camera no alto, a pedra baixa na frente fica tao longe da
+    // lente quanto o meio do boneco, e a distancia reta a guardava.
+    float dxz = distance(worldPos.xz, u_cameraPos.xz);
+    for (int k = 0; k < 6 && !ground; ++k) {
+        vec4 ell = u_seeThroughExtra[2 * k];
+        if (ell.z <= 0.0) break;
+        cut = max(cut, seeThroughEllipse(p, dxz, worldPos.y, true, ell, u_seeThroughExtra[2 * k + 1]));
+    }
     return mix(1.0, u_seeThrough2.w, cut);
 }
 
@@ -53,11 +88,11 @@ float seeThroughKeep(vec3 worldPos) {
 // Bordas em rampa (sem estalo).
 // u_seeThroughBand: x = distancia de corte (0 desliga), y = sinal do "para
 // baixo" em NDC, z = meia largura em NDC.
-float seeThroughBandKeep(vec3 worldPos, vec3 n, bool ground) {
+float seeThroughBandKeep(vec3 worldPos, vec3 n, bool ground, bool steep) {
     if (u_seeThroughBand.x <= 0.0 || u_seeThrough.z <= 0.0) return 1.0;
     float h = u_seeThrough2.z;
     if (ground) return 1.0;
-    if (worldPos.y < u_seeThrough2.y + 0.5 * h) return 1.0;
+    if (worldPos.y < u_seeThrough2.y + (steep ? 0.02 : 0.5) * h) return 1.0;
     if (length(n) > 1e-6 && normalize(n).y > 0.6 && worldPos.y < u_seeThrough2.y + h) return 1.0;
     vec4 c = u_viewProjNoJitter * vec4(worldPos, 1.0);
     if (c.w <= 0.0) return 1.0;
@@ -67,7 +102,11 @@ float seeThroughBandKeep(vec3 worldPos, vec3 n, bool ground) {
     float across = 1.0 - smoothstep(0.8 * hw, hw, abs(p.x - u_seeThrough.x));
     float below = smoothstep(0.0, 0.25 * u_seeThrough.w, down);
     float d = distance(worldPos, u_cameraPos);
+    // Face ingreme baixa: a partir de kSteepFront u na frente do foco (a
+    // margem da faixa vale para o resto).
     float near = 1.0 - smoothstep(0.9 * u_seeThroughBand.x, u_seeThroughBand.x, d);
+    if (steep && worldPos.y < u_seeThrough2.y + 0.5 * h)
+        near = max(near, 1.0 - smoothstep(u_seeThrough2.x - kSteepFront - 2.0, u_seeThrough2.x - kSteepFront, d));
     return mix(1.0, u_seeThrough2.w, across * below * near);
 }
 
@@ -100,8 +139,9 @@ float cutawayKeep(vec3 worldPos) {
 // n = normal da malha, ground = malha de chao pintada (splat): a faixa nao
 // corta chao.
 bool seeThroughDiscard(vec3 worldPos, vec3 n, bool ground) {
-    float keep = min(min(seeThroughKeep(worldPos), nearFadeKeep(worldPos)), cutawayKeep(worldPos));
-    keep = min(keep, seeThroughBandKeep(worldPos, n, ground));
+    bool steep = seeThroughSteep(n, ground);
+    float keep = min(min(seeThroughKeep(worldPos, steep, ground), nearFadeKeep(worldPos)), cutawayKeep(worldPos));
+    keep = min(keep, seeThroughBandKeep(worldPos, n, ground, steep));
     if (keep >= 1.0) return false;
     // Indice do Bayer relativo a um ponto fixo do mundo (u_seeThrough3.xy):
     // preso a gl_FragCoord, o pontilhado ficava parado na tela e o chao e a
