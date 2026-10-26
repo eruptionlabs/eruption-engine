@@ -1,4 +1,5 @@
 #include "utils/CSSLayout.hpp"
+#include <imgui_internal.h> // TexUvWhitePixel, para os triangulos do poligono concavo
 #include <cctype>
 #include <cmath>
 #include <algorithm>
@@ -62,7 +63,7 @@ float CSSLayout::parseFloat(const std::string& value, float fallback) {
     }
 }
 
-bool CSSLayout::parseLength(const std::string& value, float base, float& out) {
+bool CSSLayout::parseLength(const std::string& value, float base, float& out, const ImVec2* viewport) {
     if (value.empty()) return false;
     if (value == "auto") { out = -1.0f; return true; }
 
@@ -77,6 +78,13 @@ bool CSSLayout::parseLength(const std::string& value, float base, float& out) {
 
     if (unit == "%") {
         out = num * base / 100.0f;
+    } else if (viewport && unit.size() >= 2 && unit[0] == 'v') {
+        const float vw = viewport->x / 100.0f, vh = viewport->y / 100.0f;
+        if (unit == "vw") out = num * vw;
+        else if (unit == "vh") out = num * vh;
+        else if (unit == "vmin") out = num * std::min(vw, vh);
+        else if (unit == "vmax") out = num * std::max(vw, vh);
+        else out = num;
     } else {
         // px, ou sem unidade -> pixels
         out = num;
@@ -100,21 +108,22 @@ CSSRect CSSLayout::resolve(const std::string& selector, const ImVec2& displaySiz
     float baseH = (parent.h > 0.0f) ? parent.h : displaySize.y;
 
     // Width
+    const ImVec2* vp = &displaySize;
     if (auto v = get("width")) {
         if (*v == "auto") out.w = -1.0f;
-        else parseLength(*v, baseW, out.w);
+        else parseLength(*v, baseW, out.w, vp);
     }
     // Height
     if (auto v = get("height")) {
         if (*v == "auto") out.h = -1.0f;
-        else parseLength(*v, baseH, out.h);
+        else parseLength(*v, baseH, out.h, vp);
     }
 
     // Posicionamento horizontal
     bool hasLeft = false, hasRight = false;
     float left = 0.0f, right = 0.0f;
-    if (auto v = get("left")) { hasLeft = parseLength(*v, baseW, left); }
-    if (auto v = get("right")) { hasRight = parseLength(*v, baseW, right); }
+    if (auto v = get("left")) { hasLeft = parseLength(*v, baseW, left, vp); }
+    if (auto v = get("right")) { hasRight = parseLength(*v, baseW, right, vp); }
 
     if (hasLeft && hasRight && out.w >= 0.0f) {
         out.x = left;
@@ -136,8 +145,8 @@ CSSRect CSSLayout::resolve(const std::string& selector, const ImVec2& displaySiz
     // Posicionamento vertical
     bool hasTop = false, hasBottom = false;
     float top = 0.0f, bottom = 0.0f;
-    if (auto v = get("top")) { hasTop = parseLength(*v, baseH, top); }
-    if (auto v = get("bottom")) { hasBottom = parseLength(*v, baseH, bottom); }
+    if (auto v = get("top")) { hasTop = parseLength(*v, baseH, top, vp); }
+    if (auto v = get("bottom")) { hasBottom = parseLength(*v, baseH, bottom, vp); }
 
     if (hasTop && hasBottom && out.h >= 0.0f) {
         out.y = top;
@@ -272,6 +281,167 @@ void CSSLayout::drawBar(ImDrawList* dl, const CSSRect& r, const std::string& sel
             const ImVec2 ts = ImGui::CalcTextSize(valueText);
             drawLabel(dl, r.x + (r.w - ts.x) * 0.5f, r.y + (r.h - ts.y) * 0.5f, 0.0f, tc, valueText, 0);
         }
+    }
+}
+
+bool CSSLayout::parsePolygon(const std::string& value, std::vector<PolyPoint>& out) {
+    out.clear();
+    const size_t open = value.find("polygon(");
+    const size_t close = value.rfind(')');
+    if (open == std::string::npos || close == std::string::npos || close < open) return false;
+    // Uma coordenada: soma de termos "N%" e "Npx" (0 sem unidade e' 0).
+    auto coord = [](const std::string& t, float& frac, float& px) {
+        frac = px = 0.0f;
+        float v = 0.0f;
+        if (!t.empty() && t.back() == '%') frac = parseFloat(t.substr(0, t.size() - 1)) / 100.0f;
+        else if (t.size() > 2 && t.compare(t.size() - 2, 2, "px") == 0) px = parseFloat(t.substr(0, t.size() - 2));
+        else if ((v = parseFloat(t, 0.0f)) != 0.0f) px = v;
+    };
+    const std::string body = value.substr(open + 8, close - open - 8);
+    size_t start = 0;
+    while (start <= body.size()) {
+        size_t comma = body.find(',', start);
+        if (comma == std::string::npos) comma = body.size();
+        const std::string pair = CSSParser::trim(body.substr(start, comma - start));
+        const size_t sp = pair.find_first_of(" \t");
+        if (sp != std::string::npos) {
+            PolyPoint p;
+            coord(CSSParser::trim(pair.substr(0, sp)), p.fx, p.px);
+            coord(CSSParser::trim(pair.substr(sp + 1)), p.fy, p.py);
+            out.push_back(p);
+        }
+        start = comma + 1;
+    }
+    if (out.size() < 3) out.clear();
+    return !out.empty();
+}
+
+void CSSLayout::parseCornerRadii(const std::string& value, float radii[4], uint8_t& pctMask) {
+    float v[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    bool pct[4] = {false, false, false, false};
+    int n = 0;
+    size_t i = 0;
+    while (n < 4 && i < value.size()) {
+        while (i < value.size() && std::isspace(static_cast<unsigned char>(value[i]))) ++i;
+        size_t j = i;
+        while (j < value.size() && !std::isspace(static_cast<unsigned char>(value[j]))) ++j;
+        if (j > i) {
+            const std::string t = value.substr(i, j - i);
+            pct[n] = t.back() == '%';
+            v[n++] = parseFloat(t, 0.0f);
+        }
+        i = j;
+    }
+    // Atalhos do CSS: 1 valor = todos; 2 = (sup-esq/inf-dir, sup-dir/inf-esq);
+    // 3 = (sup-esq, sup-dir/inf-esq, inf-dir).
+    static const int kMap[5][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 1, 0, 1}, {0, 1, 2, 1}, {0, 1, 2, 3}};
+    pctMask = 0;
+    for (int k = 0; k < 4; ++k) {
+        radii[k] = v[kMap[n][k]];
+        if (pct[kMap[n][k]]) pctMask |= uint8_t(1u << k);
+    }
+}
+
+void CSSLayout::roundedRectPoints(const CSSRect& r, const float radii[4], std::vector<ImVec2>& out) {
+    out.clear();
+    const float maxR = 0.5f * std::min(r.w, r.h);
+    // Cantos em sentido horario a partir do sup-esq; angulo inicial de cada arco.
+    const ImVec2 corner[4] = {{r.x, r.y}, {r.x + r.w, r.y}, {r.x + r.w, r.y + r.h}, {r.x, r.y + r.h}};
+    const ImVec2 inward[4] = {{1, 1}, {-1, 1}, {-1, -1}, {1, -1}};
+    const float a0[4] = {3.14159265f, 4.71238898f, 0.0f, 1.57079633f};
+    for (int k = 0; k < 4; ++k) {
+        const float rad = std::clamp(radii[k], 0.0f, maxR);
+        if (rad < 0.5f) { out.push_back(corner[k]); continue; }
+        const ImVec2 c(corner[k].x + inward[k].x * rad, corner[k].y + inward[k].y * rad);
+        const int segs = std::clamp(static_cast<int>(rad * 0.5f), 3, 16);
+        for (int s = 0; s <= segs; ++s) {
+            const float a = a0[k] + 1.57079633f * float(s) / float(segs);
+            out.push_back(ImVec2(c.x + std::cos(a) * rad, c.y + std::sin(a) * rad));
+        }
+    }
+}
+
+namespace {
+
+float cross2(const ImVec2& o, const ImVec2& a, const ImVec2& b) {
+    return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+}
+
+} // namespace
+
+void CSSLayout::fillPolygon(ImDrawList* dl, const ImVec2* pts, int count, ImU32 color) {
+    if (!dl || count < 3 || !opaque(color)) return;
+    float area = 0.0f;
+    bool pos = false, neg = false;
+    for (int i = 0; i < count; ++i) {
+        const ImVec2& a = pts[i];
+        const ImVec2& b = pts[(i + 1) % count];
+        area += a.x * b.y - b.x * a.y;
+        const float c = cross2(a, b, pts[(i + 2) % count]);
+        pos |= c > 1e-4f;
+        neg |= c < -1e-4f;
+    }
+    if (!(pos && neg)) { dl->AddConvexPolyFilled(pts, count, color); return; }
+    // Concavo: recorte de orelhas, O(n^2) nos poucos vertices de um clip-path.
+    const float sign = area > 0.0f ? 1.0f : -1.0f;
+    std::vector<int> idx(count);
+    for (int i = 0; i < count; ++i) idx[i] = i;
+    const ImVec2 uv = dl->_Data->TexUvWhitePixel;
+    int guard = count * count;
+    while (idx.size() > 2 && guard-- > 0) {
+        const int n = static_cast<int>(idx.size());
+        bool cut = false;
+        for (int i = 0; i < n && !cut; ++i) {
+            const ImVec2& a = pts[idx[(i + n - 1) % n]];
+            const ImVec2& b = pts[idx[i]];
+            const ImVec2& c = pts[idx[(i + 1) % n]];
+            if (cross2(a, b, c) * sign <= 0.0f) continue; // vertice reflexo
+            bool inside = false;
+            for (int k = 0; k < n && !inside; ++k) {
+                const int q = idx[k];
+                if (q == idx[(i + n - 1) % n] || q == idx[i] || q == idx[(i + 1) % n]) continue;
+                const ImVec2& p = pts[q];
+                inside = cross2(a, b, p) * sign >= 0.0f && cross2(b, c, p) * sign >= 0.0f &&
+                         cross2(c, a, p) * sign >= 0.0f;
+            }
+            if (inside) continue;
+            dl->PrimReserve(3, 3);
+            dl->PrimVtx(a, uv, color);
+            dl->PrimVtx(b, uv, color);
+            dl->PrimVtx(c, uv, color);
+            idx.erase(idx.begin() + i);
+            cut = true;
+        }
+        if (!cut) break; // poligono que se cruza: o que sobrou fica sem pintar
+    }
+}
+
+void CSSLayout::drawGlow(ImDrawList* dl, const CSSRect& r, float rounding, ImU32 color, float radius) {
+    if (!dl || radius <= 0.0f || !opaque(color)) return;
+    // Camadas de 2 px, cada uma com uma fatia da opacidade que cai com o
+    // quadrado da distancia: as de dentro somam, a borda some suave.
+    const int layers = std::clamp(static_cast<int>(radius * 0.5f), 2, 10);
+    const float a = float((color >> IM_COL32_A_SHIFT) & 0xFF);
+    for (int i = layers; i >= 1; --i) {
+        const float t = float(i) / float(layers);
+        const float grow = radius * t;
+        const float fall = (1.0f - t) + 1.0f / float(layers);
+        const int la = static_cast<int>(a * fall * fall * 2.0f / float(layers));
+        if (la <= 0) continue;
+        const ImU32 c = (color & ~IM_COL32_A_MASK) | (ImU32(std::min(la, 255)) << IM_COL32_A_SHIFT);
+        dl->AddRectFilled(ImVec2(r.x - grow, r.y - grow), ImVec2(r.x + r.w + grow, r.y + r.h + grow), c,
+                          rounding + grow);
+    }
+}
+
+void CSSLayout::rotateVertices(ImDrawList* dl, int vtxStart, const ImVec2& center, float degrees) {
+    if (!dl || degrees == 0.0f) return;
+    const float a = degrees * 0.01745329f, cs = std::cos(a), sn = std::sin(a);
+    for (int i = vtxStart; i < dl->VtxBuffer.Size; ++i) {
+        ImVec2& p = dl->VtxBuffer[i].pos;
+        const float dx = p.x - center.x, dy = p.y - center.y;
+        // y para baixo: angulo positivo gira no sentido horario, como no CSS.
+        p = ImVec2(center.x + dx * cs - dy * sn, center.y + dx * sn + dy * cs);
     }
 }
 

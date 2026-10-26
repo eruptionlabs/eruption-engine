@@ -2313,6 +2313,11 @@ declare ui: {
     -- and `--widget` says whether it is a rect, text, a bar or an image.
     -- The script only fills VALUES in; where each thing sits, in what color
     -- and what size, is the file's business, reloaded when it changes.
+    -- Lengths take px, % of the parent, or vw/vh/vmin/vmax of the screen.
+    -- Shapes: clip-path: polygon(x y, ...) and border-radius with one value
+    -- per corner, on rects and bars; transform: rotate(30deg) on any element
+    -- (taps keep the unrotated box); --glow: <color> <radius>, or
+    -- box-shadow: dx dy blur <color>, lights up the area around it.
     load: (css: string) -> boolean,
     text: (selector: string, text: string) -> (),
     value: (selector: string, value: number) -> (),   -- bar, 0 to 1
