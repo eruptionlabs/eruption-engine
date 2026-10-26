@@ -38,6 +38,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -135,8 +136,38 @@ std::string readAsset(AAssetManager* am, const char* path) {
     return s;
 }
 
+// Arquivo que o APK anterior extraiu e este nao traz mais: apaga, e as pastas
+// que ficarem vazias. So' o que esta' na lista velha (.manifest), entao o que
+// o jogo grava (saves, configuracao, preset_override.txt) nunca e' tocado.
+// Sem isso, um mapa ou script tirado do jogo seguia no aparelho depois do
+// install -r e continuava sendo lido.
+size_t removeStale(const std::string& root, const std::string& oldList, const std::string& newList) {
+    namespace fs = std::filesystem;
+    std::unordered_set<std::string> keep;
+    {
+        std::istringstream in(newList);
+        std::string rel;
+        while (std::getline(in, rel))
+            if (!rel.empty()) keep.insert(rel);
+    }
+    std::istringstream in(oldList);
+    std::string rel;
+    size_t count = 0;
+    while (std::getline(in, rel)) {
+        if (rel.empty() || keep.count(rel) || rel.find("..") != std::string::npos || rel[0] == '/') continue;
+        std::error_code ec;
+        fs::path f = fs::path(root) / rel;
+        if (!fs::remove(f, ec)) continue;
+        ++count;
+        for (f = f.parent_path(); f != fs::path(root) && fs::is_empty(f, ec) && !ec; f = f.parent_path())
+            fs::remove(f, ec);
+    }
+    return count;
+}
+
 // android/manifest.txt lista os arquivos; android/stamp.txt muda a cada APK.
-// So' copia de novo quando o carimbo muda.
+// So' copia de novo quando o carimbo muda; a lista copiada fica em .manifest
+// para a proxima versao saber o que apagar.
 bool extractAssets(AAssetManager* am, const std::string& root) {
     namespace fs = std::filesystem;
     const std::string stamp = readAsset(am, "android/stamp.txt");
@@ -146,7 +177,14 @@ bool extractAssets(AAssetManager* am, const std::string& root) {
         std::getline(in, have, '\0');
     }
     if (!stamp.empty() && have == stamp) return true;
-    std::istringstream list(readAsset(am, "android/manifest.txt"));
+    const std::string manifest = readAsset(am, "android/manifest.txt");
+    {
+        std::ifstream old(root + "/.manifest");
+        const std::string oldList((std::istreambuf_iterator<char>(old)), std::istreambuf_iterator<char>());
+        if (const size_t gone = removeStale(root, oldList, manifest))
+            __android_log_print(ANDROID_LOG_INFO, kTag, "%zu arquivos da versao anterior apagados", gone);
+    }
+    std::istringstream list(manifest);
     std::string rel;
     size_t count = 0;
     while (std::getline(list, rel)) {
@@ -169,6 +207,7 @@ bool extractAssets(AAssetManager* am, const std::string& root) {
         AAsset_close(a);
         ++count;
     }
+    std::ofstream(root + "/.manifest") << manifest;
     std::ofstream(root + "/.stamp") << stamp;
     __android_log_print(ANDROID_LOG_INFO, kTag, "%zu arquivos extraidos para %s", count, root.c_str());
     return true;
