@@ -1449,13 +1449,18 @@ int world_liquid_at(lua_State* L) {
         lua_pushnil(L);
         return 1;
     }
-    lua_createtable(L, 0, 3);
+    lua_createtable(L, 0, 4);
     lua_pushstring(L, at.kind == 1 ? "lava" : "water");
     lua_setfield(L, -2, "kind");
     lua_pushnumber(L, at.level);
     lua_setfield(L, -2, "level");
     lua_pushinteger(L, at.index + 1); // 0 = o plano de agua global
     lua_setfield(L, -2, "index");
+    // Lava de um vizinho em cena: index conta nos liquidos dele.
+    if (at.map && at.map != eng().currentMap()) {
+        lua_pushstring(L, at.map->mapName.c_str());
+        lua_setfield(L, -2, "map");
+    }
     return 1;
 }
 // Grade inteira numa chamada: dois buffers (alturas f32, flags u8), x mais
@@ -2174,7 +2179,7 @@ declare world: {
     -- Liquid showing at (x, z) (inside its shore and above the floor: a bridge
     -- over lava has none): {kind = "water" | "lava", level, index} or nil.
     -- index is the map's liquid (1-based), 0 for the global water plane.
-    liquid_at: (x: number, z: number) -> { kind: string, level: number, index: number }?,
+    liquid_at: (x: number, z: number) -> { kind: string, level: number, index: number, map: string? }?,
     -- A whole nx * nz grid from (x0, z0) with spacing `step`, x varying
     -- fastest: heights (f32 per point) and flags (u8 per point: 1 walkable,
     -- 2 water, 4 lava, 8 on an object). Read with buffer.readf32(h, i * 4).
