@@ -26,6 +26,7 @@ bool Input::s_touchScreen = false;
 #endif
 bool Input::s_doubleTap = false;
 bool Input::s_pressOnCss = false;
+glm::vec2 Input::s_touchOrbit{0.0f};
 std::array<bool, 8> Input::s_mouse{};
 std::array<bool, 8> Input::s_mousePrev{};
 std::array<bool, 8> Input::s_mouseClicked{};
@@ -77,6 +78,7 @@ void Input::update() {
     s_mousePrev = s_mouse;
     s_mousePosPrev = s_mousePos;
     s_scrollDelta = 0.0f;
+    s_touchOrbit = glm::vec2(0.0f);
 
     for (int i = 0; i < 4; ++i) {
         if (glfwJoystickPresent(GLFW_JOYSTICK_1 + i)) {
@@ -122,6 +124,7 @@ void Input::update() {
 
 void Input::resetDeltas() {
     s_scrollDelta = 0.0f;
+    s_touchOrbit = glm::vec2(0.0f);
     s_mousePosPrev = s_mousePos;
 }
 

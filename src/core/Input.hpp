@@ -88,6 +88,11 @@ public:
         float x = 0.0f, y = 0.0f;
     };
     static void setTouches(std::vector<TouchPoint> touches) { s_touches = std::move(touches); }
+    // GIRO POR TOQUE: arrasto do dedo da camera (core/TouchRouter), em pixels
+    // da janela, somado no quadro. Nao vem pelo botao direito porque o
+    // "mouse" pode estar com outro dedo, segurando um botao do CSS.
+    static void addTouchOrbit(float dx, float dy) { s_touchOrbit += glm::vec2(dx, dy); }
+    static glm::vec2 touchOrbitDelta() { return s_touchOrbit; }
     static const std::vector<TouchPoint>& touches() { return s_touches; }
     // Entrada sintetica (teste, ERUPTION_TEST_INPUT): passa pelos mesmos
     // callbacks da janela que o mouse e o toque usam.
@@ -145,6 +150,7 @@ private:
     static bool s_touchScreen;
     static std::vector<TouchPoint> s_touches;
     static bool s_pressOnCss;
+    static glm::vec2 s_touchOrbit;
     static std::array<bool, 8> s_mouse;
     static std::array<bool, 8> s_mousePrev;
     // Apertou neste quadro, mesmo que ja' tenha soltado (toque curto do
