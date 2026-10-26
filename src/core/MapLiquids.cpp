@@ -143,8 +143,14 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
     WaterMesh lmesh;
     std::vector<uint32_t> surfaceIndexCounts;
 
-        for (size_t idx = 0; idx < map->liquids.size(); ++idx) {
-            const auto& lq = map->liquids[idx];
+    // As do mapa aberto e as dos vizinhos em cena (já no lugar do mundo).
+    std::vector<WorldLiquid> all;
+    for (uint32_t i = 0; i < map->liquids.size(); ++i) all.push_back({map, i});
+    for (const WorldLiquid& w : worldLiquids()) all.push_back(w);
+
+        for (const WorldLiquid& src : all) {
+            const size_t idx = src.index;
+            const auto& lq = src.map->liquids[idx];
             if (lq.kind != 1 || lq.radius <= 0.0f) continue;
             if (m_lavaLiquids.size() == WaterRenderer::kMaxLavaSurfaces) {
                 ERUPTION_LOG_WARN("Lava surface '%s' skipped: at most %u per map", lq.name.c_str(),
@@ -159,7 +165,7 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
             // map load, nao em toda rebuild - senao um nudge em andamento
             // seria zerado no frame seguinte).
             float offX = 0.0f, offZ = 0.0f, offY = 0.0f, rotDeg = 0.0f;
-            if (idx < m_waterMenu.liquids.size()) {
+            if (src.map == map && idx < m_waterMenu.liquids.size()) {
                 const auto& ui = m_waterMenu.liquids[idx];
                 offX = ui.offsetX; offZ = ui.offsetZ; offY = ui.offsetY; rotDeg = ui.rotationDeg;
             }
@@ -177,7 +183,7 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
                 drawn.centerZ = centerZ;
                 drawn.level = level;
                 m_lavaLiquids.push_back(drawn);
-                m_lavaSources.push_back({uint32_t(idx), lq.level});
+                m_lavaSources.push_back({src.map, uint32_t(idx), lq.level});
                 ERUPTION_LOG_INFO("Lava surface '%s': outline with %zu triangle(s)", lq.name.c_str(),
                                   lq.triangles.size() / 3);
                 continue;
@@ -249,7 +255,7 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
             drawn.centerZ = centerZ;
             drawn.level = level;
             m_lavaLiquids.push_back(drawn);
-            m_lavaSources.push_back({uint32_t(idx), lq.level});
+            m_lavaSources.push_back({src.map, uint32_t(idx), lq.level});
             ERUPTION_LOG_WARN("Lava surface: level=%.1f center=(%.0f,%.0f) r=%.0f",
                               level, centerX, centerZ, lq.radius);
         }

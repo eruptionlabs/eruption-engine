@@ -110,6 +110,37 @@ bool groundHas(const TerrainFile& t, float x, float z) {
     return inside(lo, hi, p.x, p.y);
 }
 
+// Líquidos do vizinho no lugar do mundo: centro, nível e contorno livre
+// deslocados (e girados) e a margem lobada girada. A amostra k da margem fica no ângulo 2πk/n do mundo; o giro
+// em Y leva o ângulo θ do mapa para θ - yaw, então ela vem do ângulo
+// 2πk/n + yaw do mapa.
+void placeLiquids(std::vector<LoadedMap::MapLiquid>& liquids, const Vec3& off, float yaw) {
+    const float a = glm::radians(yaw), c = std::cos(a), sn = std::sin(a);
+    auto put = [&](Vec3& p) { p = Vec3(off.x + c * p.x + sn * p.z, p.y + off.y, off.z - sn * p.x + c * p.z); };
+    for (auto& lq : liquids) {
+        const float x = lq.centerX, z = lq.centerZ;
+        lq.centerX = off.x + c * x + sn * z;
+        lq.centerZ = off.z - sn * x + c * z;
+        lq.level += off.y;
+        lq.contourLevel += off.y;
+        // Contorno livre: cada ponto pelo place; a triangulação não muda.
+        for (auto& poly : lq.polygons)
+            for (Vec3& p : poly) put(p);
+        for (Vec3& p : lq.triangles) put(p);
+        const size_t n = lq.shoreRadius.size();
+        if (n == 0 || yaw == 0.0f) continue;
+        std::vector<float> turned(n);
+        for (size_t k = 0; k < n; ++k) {
+            float f = (float(k) / float(n) + a / 6.2831853f) * float(n);
+            f -= std::floor(f / float(n)) * float(n);
+            const size_t i0 = size_t(f) % n, i1 = (i0 + 1) % n;
+            const float t = f - std::floor(f);
+            turned[k] = lq.shoreRadius[i0] * (1.0f - t) + lq.shoreRadius[i1] * t;
+        }
+        lq.shoreRadius = std::move(turned);
+    }
+}
+
 } // namespace
 
 struct Engine::WorldRegionLoad {
@@ -347,6 +378,7 @@ void Engine::updateWorld() {
                     if (off.y != 0.0f)
                         for (auto& c : t.cubes)
                             for (float& hh : c.height) hh -= off.y;
+                    placeLiquids(out->map->liquids, off, yaw);
                     std::string error;
                     if (!out->edits.load(SceneEdits::pathFor(map), error)) ERUPTION_LOG_ERROR("%s", error.c_str());
                     std::vector<std::string> files;
@@ -634,6 +666,7 @@ void Engine::finishRegion(WorldRegion& r) {
     const auto tStitch = std::chrono::steady_clock::now();
     rebuildWorldLights();
     if (r.hasWater) rebuildWorldWater();
+    if (r.data && !r.data->liquids.empty()) setupLavaLiquid(m_currentMap.get()); // lava do vizinho entra ou sai
     const auto tEnd = std::chrono::steady_clock::now();
     auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
     const double last = ms(t0, tEnd);
@@ -675,6 +708,7 @@ void Engine::showRegion(WorldRegion& r, bool show) {
     ++m_worldVersion;
     rebuildWorldLights();
     if (r.hasWater) rebuildWorldWater();
+    if (r.data && !r.data->liquids.empty()) setupLavaLiquid(m_currentMap.get()); // lava do vizinho entra ou sai
     ERUPTION_LOG_WARN("World: %s %s", r.map.c_str(), show ? "back in place" : "out of range");
 }
 
@@ -891,6 +925,14 @@ const char* Engine::worldStateName(WorldRegion::State s) {
 std::vector<Engine::WorldRegionInfo> Engine::worldRegions() const {
     std::vector<WorldRegionInfo> out;
     for (const auto& r : m_regions) out.push_back({r.map, r.offset, r.boundsMin, r.boundsMax, worldStateName(r.state)});
+    return out;
+}
+
+std::vector<Engine::WorldLiquid> Engine::worldLiquids() const {
+    std::vector<WorldLiquid> out;
+    for (const auto& r : m_regions)
+        if (r.state == WorldRegion::State::Shown && r.data)
+            for (uint32_t i = 0; i < r.data->liquids.size(); ++i) out.push_back({r.data.get(), i});
     return out;
 }
 

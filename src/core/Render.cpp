@@ -1124,8 +1124,9 @@ void Engine::render() {
             lavaSettings.liquidKind = 1;
             // Nível vivo (setLiquidLevel) menos o da malha: a superfície sobe no shader.
             float lift = 0.0f;
-            if (m_currentMap && li < m_lavaSources.size() && m_lavaSources[li].index < m_currentMap->liquids.size())
-                lift = m_currentMap->liquids[m_lavaSources[li].index].level - m_lavaSources[li].builtLevel;
+            if (li < m_lavaSources.size() && m_lavaSources[li].map &&
+                m_lavaSources[li].index < m_lavaSources[li].map->liquids.size())
+                lift = m_lavaSources[li].map->liquids[m_lavaSources[li].index].level - m_lavaSources[li].builtLevel;
             lavaSettings.waterLevel = lava.level + lift;
             lavaSettings.levelOffset = lift;
             lavaSettings.emissiveStrength = lava.emissive;

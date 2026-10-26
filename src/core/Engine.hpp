@@ -888,9 +888,10 @@ public:
     // models.set_solid): peça do .env sem a marca não é piso.
     bool floorWalkable(float x, float z, float radius, float fromY) const;
     struct LiquidAt {
-        int index = -1;  // em currentMap()->liquids (-1 = o plano de água global)
+        int index = -1;  // em map->liquids (-1 = o plano de água global)
         int kind = 0;    // 0 água, 1 lava
         float level = 0.0f;
+        const LoadedMap* map = nullptr; // o mapa aberto ou o vizinho dono da lava
     };
     // Líquido aparente em (x, z): dentro da margem e acima do piso.
     bool liquidAt(float x, float z, LiquidAt& out) const;
@@ -930,6 +931,10 @@ public:
     };
     std::vector<WorldRegionInfo> worldRegions() const;
     bool isRegionInstance(uint32_t index) const;
+    // Líquidos dos vizinhos em cena, já no lugar do mundo (centro, nível e
+    // margem girada): map->liquids[index].
+    struct WorldLiquid { const LoadedMap* map; uint32_t index; };
+    std::vector<WorldLiquid> worldLiquids() const;
     // Mapa (aberto ou vizinho em cena) que tem chão em (x, z). Com `y`, entre
     // mapas empilhados (um andar embaixo de outro mapa) vale o chão mais alto
     // até um degrau acima de y; sem chão abaixo, o mais perto acima. Sem `y`,
@@ -1547,6 +1552,7 @@ private:
     // Por lava desenhada: o líquido do mapa de origem e o nível com que a
     // malha foi montada (o nível vivo vira deslocamento no shader).
     struct LavaSource {
+        const LoadedMap* map = nullptr; // o aberto ou um vizinho em cena
         uint32_t index = 0;
         float builtLevel = 0.0f;
     };

@@ -147,10 +147,19 @@ float Engine::floorHeight(float x, float z, float fromY, bool* onModel) const {
 // plano de água é global e a lava fica numa bacia.
 bool Engine::liquidOver(float x, float z, float floorY, LiquidAt& out) const {
     float surface = 0.0f;
-    const int lava = lavaAt(m_currentMap.get(), x, z, floorY, surface);
+    int lava = lavaAt(m_currentMap.get(), x, z, floorY, surface);
     if (lava >= 0) {
-        out = {lava, 1, surface};
+        out = {lava, 1, surface, m_currentMap.get()};
         return true;
+    }
+    // Lava dos vizinhos em cena: os líquidos deles já estão no lugar do mundo.
+    for (const auto& r : m_regions) {
+        if (r.state != WorldRegion::State::Shown || !r.data) continue;
+        lava = lavaAt(r.data.get(), x, z, floorY, surface);
+        if (lava >= 0) {
+            out = {lava, 1, surface, r.data.get()};
+            return true;
+        }
     }
     if (m_waterOn && floorY < m_mapBaseWaterLevel) {
         out = {-1, 0, m_mapBaseWaterLevel};
