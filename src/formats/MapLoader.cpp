@@ -264,6 +264,31 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
                     lq.shoreRadius.reserve(e["shoreRadius"].size());
                     for (const auto& v : e["shoreRadius"]) lq.shoreRadius.push_back(v.get<float>());
                 }
+                // Contorno livre: "polygon": [[x, y, z], ...] ou "polygons": [[...], ...].
+                // Ponto [x, z] fica na altura `level`.
+                auto readPolygon = [&lq](const nlohmann::json& pts) {
+                    std::vector<Vec3> poly;
+                    for (const auto& p : pts) {
+                        if (!p.is_array() || p.size() < 2) continue;
+                        poly.push_back(p.size() >= 3 ? Vec3(p[0].get<float>(), p[1].get<float>(), p[2].get<float>())
+                                                     : Vec3(p[0].get<float>(), lq.level, p[1].get<float>()));
+                    }
+                    if (poly.size() >= 3) lq.polygons.push_back(std::move(poly));
+                };
+                if (e.contains("polygon") && e["polygon"].is_array()) readPolygon(e["polygon"]);
+                if (e.contains("polygons") && e["polygons"].is_array())
+                    for (const auto& pg : e["polygons"])
+                        if (pg.is_array()) readPolygon(pg);
+                // Sem "level", o nivel do contorno e' a media das alturas (luz da
+                // lava, world.liquids; a superficie segue cada ponto).
+                if (!e.contains("level") && !lq.polygons.empty()) {
+                    double sum = 0.0;
+                    size_t cnt = 0;
+                    for (const auto& pg : lq.polygons)
+                        for (const Vec3& q : pg) sum += q.y, ++cnt;
+                    lq.level = float(sum / double(cnt));
+                }
+                LoadedMap::buildLiquidContour(lq);
                 map.liquids.push_back(lq);
             }
             ERUPTION_LOG_WARN("MapLoader: loaded %zu liquid surface(s) from '%s'",
@@ -404,6 +429,85 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
     } catch (const std::exception& e) {
         ERUPTION_LOG_WARN("MapLoader: failed to parse env '%s': %s", envPath.string().c_str(), e.what());
     }
+}
+
+// Area com sinal no plano XZ (positiva = anti-horario visto de cima, com X
+// para a direita e Z para baixo na tela).
+static float signedAreaXZ(const std::vector<Vec3>& p) {
+    float a = 0.0f;
+    for (size_t i = 0, j = p.size() - 1; i < p.size(); j = i++) a += p[j].x * p[i].z - p[i].x * p[j].z;
+    return 0.5f * a;
+}
+
+static bool pointInTriXZ(const Vec3& p, const Vec3& a, const Vec3& b, const Vec3& c) {
+    auto side = [](const Vec3& u, const Vec3& v, const Vec3& w) {
+        return (v.x - u.x) * (w.z - u.z) - (v.z - u.z) * (w.x - u.x);
+    };
+    const float d1 = side(a, b, p), d2 = side(b, c, p), d3 = side(c, a, p);
+    const bool neg = d1 < 0.0f || d2 < 0.0f || d3 < 0.0f, pos = d1 > 0.0f || d2 > 0.0f || d3 > 0.0f;
+    return !(neg && pos);
+}
+
+// Orelhas (O(n^2)): contorno simples, sem buraco. Um contorno que se cruza
+// sai com o que der para cortar e um aviso.
+static void earClipXZ(std::vector<Vec3> poly, std::vector<Vec3>& out, const std::string& name) {
+    if (poly.size() < 3) return;
+    if (signedAreaXZ(poly) < 0.0f) std::reverse(poly.begin(), poly.end());
+    std::vector<size_t> idx(poly.size());
+    for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
+    size_t guard = 0;
+    while (idx.size() > 3 && guard++ < poly.size() * poly.size()) {
+        bool cut = false;
+        for (size_t k = 0; k < idx.size(); ++k) {
+            const Vec3& a = poly[idx[(k + idx.size() - 1) % idx.size()]];
+            const Vec3& b = poly[idx[k]];
+            const Vec3& c = poly[idx[(k + 1) % idx.size()]];
+            const float cross = (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
+            if (cross <= 0.0f) continue; // reflexo (ou colinear)
+            bool inside = false;
+            for (size_t m = 0; m < idx.size() && !inside; ++m) {
+                const Vec3& p = poly[idx[m]];
+                if (&p == &a || &p == &b || &p == &c) continue;
+                inside = pointInTriXZ(p, a, b, c);
+            }
+            if (inside) continue;
+            out.push_back(a);
+            out.push_back(b);
+            out.push_back(c);
+            idx.erase(idx.begin() + std::ptrdiff_t(k));
+            cut = true;
+            break;
+        }
+        if (!cut) {
+            ERUPTION_LOG_WARN("MapLoader: liquid '%s' outline crosses itself; %zu point(s) left out", name.c_str(),
+                              idx.size());
+            return;
+        }
+    }
+    if (idx.size() == 3) {
+        out.push_back(poly[idx[0]]);
+        out.push_back(poly[idx[1]]);
+        out.push_back(poly[idx[2]]);
+    }
+}
+
+void LoadedMap::buildLiquidContour(MapLiquid& lq) {
+    lq.triangles.clear();
+    if (lq.polygons.empty()) return;
+    for (const auto& poly : lq.polygons) earClipXZ(poly, lq.triangles, lq.name);
+    Vec3 mn(1e30f), mx(-1e30f);
+    for (const auto& poly : lq.polygons)
+        for (const Vec3& p : poly) {
+            mn = glm::min(mn, p);
+            mx = glm::max(mx, p);
+        }
+    lq.centerX = 0.5f * (mn.x + mx.x);
+    lq.centerZ = 0.5f * (mn.z + mx.z);
+    lq.radius = 0.0f;
+    for (const auto& poly : lq.polygons)
+        for (const Vec3& p : poly) lq.radius = std::max(lq.radius, std::hypot(p.x - lq.centerX, p.z - lq.centerZ));
+    lq.shoreRadius.clear();
+    lq.contourLevel = lq.level;
 }
 
 static NavGridFile buildEmptyNavGrid(uint32_t width, uint32_t height) {

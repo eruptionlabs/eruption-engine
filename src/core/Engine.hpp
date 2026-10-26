@@ -894,6 +894,10 @@ public:
     };
     // Líquido aparente em (x, z): dentro da margem e acima do piso.
     bool liquidAt(float x, float z, LiquidAt& out) const;
+    // Nível de uma lava do mapa (índice em currentMap()->liquids) durante o
+    // jogo: a superfície sobe no shader (a malha fica) e liquidAt/sampleGround
+    // usam o nível novo no mesmo quadro. Falso para água ou índice inválido.
+    bool setLiquidLevel(int index, float level);
     enum GroundFlag : uint8_t { kGroundWalkable = 1, kGroundWater = 2, kGroundLava = 4, kGroundOnModel = 8 };
     // Grade nx x nz a partir de (x0, z0) com passo `step`, linha a linha (x
     // varia mais rápido): altura do piso e GroundFlag por ponto. Uma chamada
@@ -1537,8 +1541,16 @@ private:
     std::vector<std::unique_ptr<RenderEffect>> m_renderEffects;
     MipmapDebugMenu m_mipmapMenu;
     WaterDebugMenu m_waterMenu;
-    LoadedMap::MapLiquid m_lavaLiquid{};
-    bool m_hasLavaLiquid = false;
+    // Lavas desenhadas (até WaterRenderer::kMaxLavaSurfaces), com o ajuste
+    // do menu aplicado; a ordem é a das faixas da malha de lava.
+    std::vector<LoadedMap::MapLiquid> m_lavaLiquids;
+    // Por lava desenhada: o líquido do mapa de origem e o nível com que a
+    // malha foi montada (o nível vivo vira deslocamento no shader).
+    struct LavaSource {
+        uint32_t index = 0;
+        float builtLevel = 0.0f;
+    };
+    std::vector<LavaSource> m_lavaSources;
     WaterBenchmark m_waterBenchmark;
     bool m_waterForceWaterPrev = false;
     float m_mapBaseWaterLevel = 0.0f;

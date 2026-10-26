@@ -78,15 +78,44 @@ float shoreAt(const LoadedMap::MapLiquid& lq, float dx, float dz) {
     return lq.shoreRadius[i0] * (1.0f - t) + lq.shoreRadius[i1] * t;
 }
 
-// Índice do líquido de lava aparente em (x, z) com o piso na altura y, ou -1.
-int lavaAt(const LoadedMap* map, float x, float z, float y) {
+// Superfície de um líquido de contorno livre em (x, z): a altura do
+// triângulo que contém o ponto (mais o quanto o nível vivo andou desde a
+// carga), ou false fora do contorno.
+bool contourSurfaceAt(const LoadedMap::MapLiquid& lq, float x, float z, float& y) {
+    const float dx = x - lq.centerX, dz = z - lq.centerZ;
+    if (dx * dx + dz * dz > lq.radius * lq.radius) return false;
+    for (size_t t = 0; t + 2 < lq.triangles.size(); t += 3) {
+        const Vec3 &a = lq.triangles[t], &b = lq.triangles[t + 1], &c = lq.triangles[t + 2];
+        const float den = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+        if (std::fabs(den) < 1e-12f) continue;
+        const float wa = ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / den;
+        const float wb = ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / den;
+        const float wc = 1.0f - wa - wb;
+        if (wa < -1e-5f || wb < -1e-5f || wc < -1e-5f) continue;
+        y = wa * a.y + wb * b.y + wc * c.y + (lq.level - lq.contourLevel);
+        return true;
+    }
+    return false;
+}
+
+// Índice do líquido de lava aparente em (x, z) com o piso na altura y, ou -1;
+// `surface` recebe a altura da lava ali.
+int lavaAt(const LoadedMap* map, float x, float z, float y, float& surface) {
     if (!map) return -1;
     for (size_t i = 0; i < map->liquids.size(); ++i) {
         const auto& lq = map->liquids[i];
-        if (lq.kind != 1 || y >= lq.level) continue;
+        if (lq.kind != 1) continue;
+        if (!lq.triangles.empty()) {
+            if (contourSurfaceAt(lq, x, z, surface) && y < surface) return int(i);
+            continue;
+        }
+        if (y >= lq.level) continue;
         const float dx = x - lq.centerX, dz = z - lq.centerZ;
         const float r = shoreAt(lq, dx, dz);
-        if (r > 0.0f && dx * dx + dz * dz <= r * r) return int(i);
+        if (r > 0.0f && dx * dx + dz * dz <= r * r) {
+            surface = lq.level;
+            return int(i);
+        }
     }
     return -1;
 }
@@ -117,9 +146,10 @@ float Engine::floorHeight(float x, float z, float fromY, bool* onModel) const {
 // Líquido sobre o piso na altura floorY em (x, z). Lava antes da água: o
 // plano de água é global e a lava fica numa bacia.
 bool Engine::liquidOver(float x, float z, float floorY, LiquidAt& out) const {
-    const int lava = lavaAt(m_currentMap.get(), x, z, floorY);
+    float surface = 0.0f;
+    const int lava = lavaAt(m_currentMap.get(), x, z, floorY, surface);
     if (lava >= 0) {
-        out = {lava, 1, m_currentMap->liquids[size_t(lava)].level};
+        out = {lava, 1, surface};
         return true;
     }
     if (m_waterOn && floorY < m_mapBaseWaterLevel) {

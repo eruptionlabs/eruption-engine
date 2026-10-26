@@ -70,15 +70,23 @@ void WaterRenderer::clearLavaMesh() {
         m_lavaIndexAlloc = VK_NULL_HANDLE;
     }
     m_lavaIndexCount = 0;
+    m_lavaSurfaces.clear();
 }
 
-void WaterRenderer::setLavaMesh(const WaterMesh& mesh) {
+void WaterRenderer::setLavaMesh(const WaterMesh& mesh, const std::vector<uint32_t>& surfaceIndexCounts) {
     clearLavaMesh();
     if (mesh.vertices.empty() || mesh.indices.empty()) return;
 
     VkDeviceSize vertexSize = mesh.vertices.size() * sizeof(WaterVertex);
     VkDeviceSize indexSize = mesh.indices.size() * sizeof(uint32_t);
     m_lavaIndexCount = static_cast<uint32_t>(mesh.indices.size());
+    uint32_t first = 0;
+    for (uint32_t n : surfaceIndexCounts) {
+        if (m_lavaSurfaces.size() == kMaxLavaSurfaces || first + n > m_lavaIndexCount) break;
+        m_lavaSurfaces.push_back({first, n});
+        first += n;
+    }
+    if (m_lavaSurfaces.empty()) m_lavaSurfaces.push_back({0, m_lavaIndexCount});
 
     if (!m_ctx->createBuffer(vertexSize,
                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -1107,17 +1115,16 @@ void WaterRenderer::render(VkCommandBuffer cmd, const Mat4& viewProj, const Vec3
                            float stormDarken,
                            float rainIntensity,
                            float rainSplashIntensity,
-                           bool drawLavaSurface) {
+                           bool drawLavaSurface,
+                           uint32_t lavaSurface) {
     if (!settings.enabled) return;
     if (!drawLavaSurface && m_indexCount == 0) return;
-    if (drawLavaSurface && m_lavaIndexCount == 0) return;
+    if (drawLavaSurface && lavaSurface >= m_lavaSurfaces.size()) return;
 
-    // Banco proprio pra lava: os dois draws do mesmo frame nao podem
-    // compartilhar UBO, senao o segundo memcpy vale pros dois.
     uint32_t frameIndex = m_ctx->currentFrame() % MAX_FRAMES;
-    // Banco proprio pra lava: os dois draws do mesmo frame nao podem
-    // compartilhar UBO, senao o segundo memcpy vale pros dois.
-    uint32_t uboSlot = frameIndex + (drawLavaSurface ? MAX_FRAMES : 0);
+    // Banco proprio por lava: os draws do mesmo frame nao podem compartilhar
+    // UBO, senao o ultimo memcpy vale para todos.
+    uint32_t uboSlot = frameIndex + (drawLavaSurface ? MAX_FRAMES * (1 + lavaSurface) : 0);
     updateUBO(frameIndex, uboSlot, settings, nearPlane, farPlane, cycle, time, cameraPos, cameraPitch,
               sunOcclusion, moonOcclusion, stormDarken, rainIntensity, rainSplashIntensity);
 
@@ -1157,12 +1164,13 @@ void WaterRenderer::render(VkCommandBuffer cmd, const Mat4& viewProj, const Vec3
     VkDeviceSize offset = 0;
     VkBuffer bindVB = drawLavaSurface ? m_lavaVertexBuffer : m_vertexBuffer;
     VkBuffer bindIB = drawLavaSurface ? m_lavaIndexBuffer : m_indexBuffer;
-    const uint32_t bindCount = drawLavaSurface ? m_lavaIndexCount : m_indexCount;
+    const uint32_t bindCount = drawLavaSurface ? m_lavaSurfaces[lavaSurface].indexCount : m_indexCount;
+    const uint32_t firstIndex = drawLavaSurface ? m_lavaSurfaces[lavaSurface].firstIndex : 0;
     if (bindVB == VK_NULL_HANDLE || bindCount == 0) return;
     vkCmdBindVertexBuffers(cmd, 0, 1, &bindVB, &offset);
     vkCmdBindIndexBuffer(cmd, bindIB, 0, VK_INDEX_TYPE_UINT32);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
-    vkCmdDrawIndexed(cmd, bindCount, 1, 0, 0, 0);
+    vkCmdDrawIndexed(cmd, bindCount, 1, firstIndex, 0, 0);
 }
 
 // ============================================================================
