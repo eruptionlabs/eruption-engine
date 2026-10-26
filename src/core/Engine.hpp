@@ -1847,6 +1847,7 @@ private:
     bool m_cameraCollide = false;
     float m_cameraCollideMargin = 6.0f;
     float m_cameraCollideDist = -1.0f; // distancia atual (< 0 = sem colisao)
+    float m_cameraCollideLift = 0.0f;  // radianos somados ao pitch (lente por cima da pedra)
     void updateCameraCollision(float dt);
     // Raio contra as malhas de chao sem balanco (CameraCollision.cpp): os
     // cruzamentos em ordem, (t, true) entrando pela face da frente.

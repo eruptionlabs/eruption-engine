@@ -375,11 +375,13 @@ declare camera: {
     -- 1.5 x start), so a fence brushing the lens no longer covers the screen.
     -- Shadows are unaffected. 0 turns it off.
     near_fade: (start: number, end_: number?) -> (),
-    -- true: the orbit camera stops short of the terrain (the open map and
-    -- the neighbors in the scene) between the target and the lens, moving
-    -- in quickly and back out slowly; options.margin keeps that many world
-    -- units between lens and ground (default 6). Thin models (trees, posts)
-    -- do not count; see_through handles them. Off by default.
+    -- true: the orbit camera keeps out of the terrain (the open map and
+    -- the neighbors in the scene). When the lens would be inside rock or
+    -- behind a hill, it steps just past the rock, rises over it, or as a
+    -- last resort moves in toward the target; it eases back slowly once the
+    -- view is clear. options.margin keeps that many world units between lens
+    -- and ground (default 6). Thin models (trees, posts) do not count;
+    -- see_through handles them. Off by default.
     collide: (on: boolean, options: { margin: number? }?) -> (),
     -- false: dragging with the left or right mouse button (a finger on the
     -- world, on a phone) no longer turns the player camera, so the game can
