@@ -2241,6 +2241,11 @@ void Engine::restoreScriptDefaults() {
 }
 
 void Engine::setDofEnabled(bool on) {
+    // ERUPTION_TEST_NO_DOF vence tambem o world.set_dof do jogo: sem isso a
+    // captura "sem DoF" de um jogo que liga o DoF no script saia com DoF, e a
+    // comparacao dava MAE 0 como se o DoF nao fizesse nada.
+    static const bool kSemDof = std::getenv("ERUPTION_TEST_NO_DOF") != nullptr;
+    if (kSemDof) on = false;
     m_postSettings.enableDoF = on;
     if (m_renderEffects.size() > 3) m_renderEffects[3]->setEnabled(on);
 }
