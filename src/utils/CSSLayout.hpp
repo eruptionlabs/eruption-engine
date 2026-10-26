@@ -78,6 +78,10 @@ public:
     struct PolyPoint {
         float fx = 0.0f, px = 0.0f, fy = 0.0f, py = 0.0f;
         float vx[4] = {0.0f, 0.0f, 0.0f, 0.0f}, vy[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        // Coordenada com funcao (calc, min, max, clamp): a expressao inteira,
+        // resolvida no desenho por parseLength (% sobre o lado do retangulo);
+        // vazia no caso comum, que usa os pesos acima.
+        std::string ex, ey;
         // Ponto na tela para o retangulo `r` numa area de `vw` x `vh` px.
         ImVec2 at(const CSSRect& r, float vw, float vh) const;
     };
