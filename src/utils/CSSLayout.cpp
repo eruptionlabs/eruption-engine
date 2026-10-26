@@ -414,38 +414,47 @@ bool CSSLayout::parsePolygon(const std::string& value, std::vector<PolyPoint>& o
         else px += sign * parseFloat(t, 0.0f);
     };
     const std::string body = value.substr(open + 8, close - open - 8);
-    size_t start = 0;
-    while (start <= body.size()) {
-        size_t comma = body.find(',', start);
-        if (comma == std::string::npos) comma = body.size();
-        // Cada coordenada e' uma soma de termos: "100% - 20px", ou o mesmo em
-        // calc(); os parenteses so' agrupam, entao saem antes de separar.
-        std::string pair = body.substr(start, comma - start);
-        for (size_t k; (k = pair.find("calc")) != std::string::npos;) pair.erase(k, 4);
-        for (char& ch : pair)
-            if (ch == '(' || ch == ')' || ch == '\t') ch = ' ';
+    // Pares separados por virgula fora de parenteses: min(a, b) fica inteiro.
+    std::vector<std::string> pairs(1);
+    int depth = 0;
+    for (char ch : body) {
+        if (ch == '(') ++depth;
+        else if (ch == ')') --depth;
+        if (ch == ',' && depth == 0) pairs.emplace_back();
+        else pairs.back() += ch;
+    }
+    for (const std::string& pair : pairs) {
+        // Palavras fora de parenteses: "calc(50% - 40px)" e' uma so'.
         std::vector<std::string> tk;
-        for (size_t i = 0; i < pair.size();) {
-            while (i < pair.size() && pair[i] == ' ') ++i;
-            size_t j = i;
-            while (j < pair.size() && pair[j] != ' ') ++j;
-            if (j > i) tk.push_back(pair.substr(i, j - i));
-            i = j;
+        depth = 0;
+        bool fresh = true;
+        for (char ch : pair) {
+            if (depth == 0 && std::isspace(static_cast<unsigned char>(ch))) { fresh = true; continue; }
+            if (fresh) { tk.emplace_back(); fresh = false; }
+            if (ch == '(') ++depth;
+            else if (ch == ')') --depth;
+            tk.back() += ch;
         }
+        // Cada coordenada e' uma soma de termos ("100% - 20px"); com funcao,
+        // guarda a expressao para o desenho.
         size_t k = 0;
-        auto coord = [&](float& frac, float& px, float* v) {
+        auto coord = [&](float& frac, float& px, float* v, std::string& ex) {
             frac = px = 0.0f;
             if (k >= tk.size()) return false;
-            term(tk[k++], 1.0f, frac, px, v);
-            while (k + 1 < tk.size() && (tk[k] == "+" || tk[k] == "-")) {
-                term(tk[k + 1], tk[k] == "-" ? -1.0f : 1.0f, frac, px, v);
-                k += 2;
+            const size_t first = k++;
+            while (k + 1 < tk.size() && (tk[k] == "+" || tk[k] == "-")) k += 2;
+            bool fn = false;
+            for (size_t i = first; i < k; ++i) fn |= tk[i].find('(') != std::string::npos;
+            if (fn) {
+                for (size_t i = first; i < k; ++i) ex += (i > first ? " " : "") + tk[i];
+                return true;
             }
+            term(tk[first], 1.0f, frac, px, v);
+            for (size_t i = first + 1; i < k; i += 2) term(tk[i + 1], tk[i] == "-" ? -1.0f : 1.0f, frac, px, v);
             return true;
         };
         PolyPoint p;
-        if (coord(p.fx, p.px, p.vx) && coord(p.fy, p.py, p.vy)) out.push_back(p);
-        start = comma + 1;
+        if (coord(p.fx, p.px, p.vx, p.ex) && coord(p.fy, p.py, p.vy, p.ey)) out.push_back(p);
     }
     if (out.size() < 3) out.clear();
     return !out.empty();
@@ -458,6 +467,10 @@ ImVec2 CSSLayout::PolyPoint::at(const CSSRect& r, float vw, float vh) const {
         x += vx[k] * u[k];
         y += vy[k] * u[k];
     }
+    const ImVec2 vp(vw, vh);
+    float e = 0.0f;
+    if (!ex.empty() && parseLength(ex, r.w, e, &vp)) x = r.x + e;
+    if (!ey.empty() && parseLength(ey, r.h, e, &vp)) y = r.y + e;
     return ImVec2(x, y);
 }
 
