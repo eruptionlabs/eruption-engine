@@ -73,31 +73,27 @@ void WaterRenderer::shutdown() {
     m_bindless = nullptr;
 }
 
+// A malha se refaz no meio do jogo (um vizinho do mundo entra ou sai e os
+// liquidos mudam), com quadros ainda na GPU: o buffer antigo so' morre quando
+// a cerca desse quadro volta (deferFrameCleanup; no fim, depois do waitIdle).
+// Destruir na hora dava 2 VUID-vkDestroyBuffer-buffer-00922 a cada troca.
+static void releaseMeshBuffer(VulkanContext* ctx, VkBuffer& buffer, VmaAllocation& alloc) {
+    if (!buffer) return;
+    VmaAllocator allocator = ctx->allocator();
+    ctx->deferFrameCleanup([allocator, buffer, alloc] { vmaDestroyBuffer(allocator, buffer, alloc); });
+    buffer = VK_NULL_HANDLE;
+    alloc = VK_NULL_HANDLE;
+}
+
 void WaterRenderer::clearWaterMesh() {
-    if (m_vertexBuffer) {
-        vmaDestroyBuffer(m_ctx->allocator(), m_vertexBuffer, m_vertexAlloc);
-        m_vertexBuffer = VK_NULL_HANDLE;
-        m_vertexAlloc = VK_NULL_HANDLE;
-    }
-    if (m_indexBuffer) {
-        vmaDestroyBuffer(m_ctx->allocator(), m_indexBuffer, m_indexAlloc);
-        m_indexBuffer = VK_NULL_HANDLE;
-        m_indexAlloc = VK_NULL_HANDLE;
-    }
+    releaseMeshBuffer(m_ctx, m_vertexBuffer, m_vertexAlloc);
+    releaseMeshBuffer(m_ctx, m_indexBuffer, m_indexAlloc);
     m_indexCount = 0;
 }
 
 void WaterRenderer::clearLavaMesh() {
-    if (m_lavaVertexBuffer) {
-        vmaDestroyBuffer(m_ctx->allocator(), m_lavaVertexBuffer, m_lavaVertexAlloc);
-        m_lavaVertexBuffer = VK_NULL_HANDLE;
-        m_lavaVertexAlloc = VK_NULL_HANDLE;
-    }
-    if (m_lavaIndexBuffer) {
-        vmaDestroyBuffer(m_ctx->allocator(), m_lavaIndexBuffer, m_lavaIndexAlloc);
-        m_lavaIndexBuffer = VK_NULL_HANDLE;
-        m_lavaIndexAlloc = VK_NULL_HANDLE;
-    }
+    releaseMeshBuffer(m_ctx, m_lavaVertexBuffer, m_lavaVertexAlloc);
+    releaseMeshBuffer(m_ctx, m_lavaIndexBuffer, m_lavaIndexAlloc);
     m_lavaIndexCount = 0;
     m_lavaSurfaces.clear();
 }
@@ -1120,7 +1116,7 @@ void WaterRenderer::updateUBO(uint32_t frameIndex, uint32_t uboSlot, const Water
 void WaterRenderer::prepareRefraction(VkCommandBuffer cmd,
                                       VkImage sceneColorImage, VkImage sceneDepthImage,
                                       uint32_t sceneWidth, uint32_t sceneHeight,
-                                      float nearPlane, float farPlane,
+                                      float /*nearPlane*/, float /*farPlane*/,
                                       const Mat4& invViewProj,
                                       const WaterSettings& settings) {
     if (!settings.enabled || (m_indexCount == 0 && m_lavaIndexCount == 0)) return;
