@@ -57,6 +57,7 @@ constexpr uint32_t kQCloudDbgBegin   = 52;
 constexpr uint32_t kQCloudDbgEnd     = 53;
 constexpr uint32_t kQGodRaysBegin    = 56;
 constexpr uint32_t kQGodRaysEnd      = 57;
+constexpr float kGodRaySunCore = 0.08f;
 // Ganho global dos raios, escolhido olhando a tocha de noite contra o halo do
 // bloom (com 1 o raio sumia dentro do halo).
 constexpr float kGodRayGain = 4.0f;
@@ -628,9 +629,24 @@ static void beginFullscreenPass(VkCommandBuffer cmd, VkImageView view, uint32_t 
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 }
 VkImageView PostProcessor::renderGodRays(VkCommandBuffer cmd, const Mat4& viewProj, const Mat4& proj,
-                                         const PostSettings& settings, const DioramaLookConfig& look) {
-    if (!m_godRaySource || m_godRayMaxLights == 0 || look.godRayIntensity <= 0.0f || m_godRayPipeline == VK_NULL_HANDLE)
-        return VK_NULL_HANDLE;
+                                         const PostSettings& settings, const DioramaLookConfig& look,
+                                         VkImageView depthInput, VkImageView hdrInput, const Vec3& lightDir) {
+    if (look.godRayIntensity <= 0.0f || m_godRayPipeline == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    // Sol: a direcao no infinito projetada. Atras da camera, ou longe demais
+    // da tela para o halo alcancar, nao entra.
+    Vec4 sun(0.0f);
+    if (m_godRaySun > 0.0f && depthInput != VK_NULL_HANDLE && hdrInput != VK_NULL_HANDLE) {
+        const Vec4 clip = viewProj * Vec4(-lightDir, 0.0f);
+        if (clip.w > 1e-4f) {
+            const Vec2 uv = Vec2(clip.x, clip.y) / clip.w * 0.5f + 0.5f;
+            // Nucleo: o disco e o brilho em volta, 0,08 da altura da tela.
+            // Medido na grade de ripas: com o alcance inteiro (0,3-0,5) de
+            // nucleo, as frestas se somavam num veu sem feixe.
+            const float reach = std::clamp(look.godRayScattering * 2.0f, 0.05f, 1.0f);
+            if (uv.x > -reach && uv.x < 1.0f + reach && uv.y > -reach && uv.y < 1.0f + reach)
+                sun = Vec4(uv.x, uv.y, kGodRaySunCore, m_godRaySun);
+        }
+    }
     // As luzes que mais pesam na tela: forca x alcance / distancia, so' as
     // que caem na frente da camera e perto do quadro (a chama de uma tocha
     // logo fora da borda ainda solta raio para dentro).
@@ -638,7 +654,7 @@ VkImageView PostProcessor::renderGodRays(VkCommandBuffer cmd, const Mat4& viewPr
     Pick picks[4];
     uint32_t count = 0;
     const float aspect = float(m_width) / float(std::max(1u, m_height));
-    for (const PointLight& l : *m_godRaySource) {
+    if (m_godRaySource && m_godRayMaxLights > 0) for (const PointLight& l : *m_godRaySource) {
         if (!l.enabled || l.intensity <= 0.0f || l.shadowCubemapIndex == kPlayerLightTag) continue;
         const Vec4 clip = viewProj * Vec4(l.position, 1.0f);
         if (clip.w <= 1.0f) continue;
@@ -659,16 +675,19 @@ VkImageView PostProcessor::renderGodRays(VkCommandBuffer cmd, const Mat4& viewPr
             if (score > picks[weakest].score) picks[weakest] = p;
         }
     }
-    if (count == 0) return VK_NULL_HANDLE;
+    if (count == 0 && sun.w <= 0.0f) return VK_NULL_HANDLE;
 
     m_ctx->writeTimestamp(cmd, kQGodRaysBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     const uint32_t w = std::max(1u, m_width / 2), h = std::max(1u, m_height / 2);
     barrierToColorAttach(cmd, m_ctx, m_godRayImage);
-    updateDescriptorSet(24, m_bloomUpViews[0], m_bloomDownViews[0]);
+    // 2 e 3 sempre escritos (o shader os declara): sem sol, o proprio bloom.
+    updateDescriptorSet(24, m_bloomUpViews[0], m_bloomDownViews[0],
+                        sun.w > 0.0f ? depthInput : m_bloomDownViews[0],
+                        sun.w > 0.0f ? hdrInput : m_bloomDownViews[0]);
     beginFullscreenPass(cmd, m_godRayView, w, h);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_godRayPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(24), 0, nullptr);
-    struct { Vec4 lights[4]; Vec4 params; Vec4 params2; } push{};
+    struct { Vec4 lights[4]; Vec4 params; Vec4 params2; Vec4 sun; } push{};
     for (uint32_t i = 0; i < count; ++i) push.lights[i] = picks[i].light;
     const int samples = std::clamp(look.godRaySamples, 4, 64);
     // Decaimento do look e' por amostra de 32: o mesmo rastro com outra
@@ -680,6 +699,7 @@ VkImageView PostProcessor::renderGodRays(VkCommandBuffer cmd, const Mat4& viewPr
     push.params = Vec4(float(samples), decay, look.godRayWeight * strength,
                        std::clamp(look.godRayScattering * 2.0f, 0.05f, 1.0f));
     push.params2 = Vec4(aspect, float(count), 0.0f, 0.0f);
+    push.sun = sun;
     static_assert(sizeof(push) <= 128, "push constant do passe de raios passa de 128 B");
     vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -1465,7 +1485,8 @@ if (!m_ctx) return;
         Profiler::addGpuTime("Bloom Up", msBloomUp);
         bloomResult = m_bloomUpViews[0];
         if (lookConfig) {
-            if (VkImageView rays = renderGodRays(cmd, proj * view, proj, settings, *lookConfig)) bloomResult = rays;
+            if (VkImageView rays = renderGodRays(cmd, proj * view, proj, settings, *lookConfig,
+                                                 depthInput, hdrInput, lightDir)) bloomResult = rays;
         }
     }
 

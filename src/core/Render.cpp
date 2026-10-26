@@ -1835,6 +1835,7 @@ void Engine::render() {
     // alimenta so' o overlay de debug de cobertura de nuvem, cujo shader
     // DECLARA u_worldPos e nunca o le' - entao o depth serve.
     m_postProcessor.setGodRayLights(&m_deferredLighting.frameLights(), m_godRayLights);
+    m_postProcessor.setGodRaySun(m_godRaySun);
     m_postProcessor.render(cmd, postHdrInput, m_gbuffer.depthView(), m_gbuffer.normalView(),
                            m_gbuffer.normalView(), m_shadowRenderer.shadowAtlasView(), m_camera.viewMatrix(),
                            m_camera.projNoJitter(), glm::inverse(m_camera.viewProjNoJitter()), m_prevViewProjNoJitter,

@@ -195,6 +195,8 @@ public:
         m_godRaySource = lights;
         m_godRayMaxLights = std::min(maxLights, 4u);
     }
+    // Raios do sol no mesmo passe (chave "god_ray_sun" do preset: forca, 0 desliga).
+    void setGodRaySun(float strength) { m_godRaySun = std::max(strength, 0.0f); }
     void resize(uint32_t width, uint32_t height);
     uint32_t width() const { return m_width; }
     uint32_t height() const { return m_height; }
@@ -253,7 +255,8 @@ private:
     // Passe dos raios de luz (depois do upsample do bloom): devolve a imagem
     // bloom + raios, ou VK_NULL_HANDLE quando nao ha' luz para desenhar.
     VkImageView renderGodRays(VkCommandBuffer cmd, const Mat4& viewProj, const Mat4& proj,
-                              const PostSettings& settings, const DioramaLookConfig& look);
+                              const PostSettings& settings, const DioramaLookConfig& look,
+                              VkImageView depthInput, VkImageView hdrInput, const Vec3& lightDir);
     static constexpr uint32_t AE_FRAMES = 3;
     VkPipeline m_lumHistPipeline = VK_NULL_HANDLE;
     VkPipeline m_lumAdaptPipeline = VK_NULL_HANDLE;
@@ -333,6 +336,7 @@ private:
     VkImageView m_godRayView = VK_NULL_HANDLE;
     const std::vector<PointLight>* m_godRaySource = nullptr;
     uint32_t m_godRayMaxLights = 0;
+    float m_godRaySun = 0.0f;
     VkPipeline m_bloomDownPipeline = VK_NULL_HANDLE;
     VkPipeline m_bloomUpPipeline = VK_NULL_HANDLE;
     VkPipeline m_weatherPipeline = VK_NULL_HANDLE;
