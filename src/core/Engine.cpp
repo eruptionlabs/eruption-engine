@@ -1105,23 +1105,14 @@ void Engine::shutdown() {
     // before VMA is torn down.
     flushPbrTextureUploads(&m_vulkan);
 
-    // Destroy any pending mesh/upload staging buffers before VMA teardown.
-    // Pending meshes also own their destination vertex/index buffers because the
-    // upload was never submitted; destroy them too to avoid leaking VMA memory.
-    for (auto& pm : s_pendingMeshes) {
-        vmaDestroyBuffer(m_vulkan.allocator(), pm.staging, pm.alloc);
-        if (pm.vb != VK_NULL_HANDLE) vmaDestroyBuffer(m_vulkan.allocator(), pm.vb, pm.vbAlloc);
-        if (pm.ib != VK_NULL_HANDLE) vmaDestroyBuffer(m_vulkan.allocator(), pm.ib, pm.ibAlloc);
-    }
-    s_pendingMeshes.clear();
-    // Pending texture uploads own both staging and the destination image until
-    // the upload is flushed. Destroy both; the corresponding AssetCache entry will
-    // hold null handles and be skipped during later cache shutdown.
-    for (auto& pu : s_pendingUploads) {
-        vmaDestroyBuffer(m_vulkan.allocator(), pu.staging, pu.stagingAlloc);
-        if (pu.image != VK_NULL_HANDLE) vmaDestroyImage(m_vulkan.allocator(), pu.image, pu.imageAlloc);
-    }
-    s_pendingUploads.clear();
+    // Envios pendentes (sair com um vizinho a meio do encaixe): TERMINA o envio
+    // em vez de destruir. A imagem/buffer de destino ja' esta' com o dono
+    // (cache de assets, regiao, ModelRenderer), que a destroi logo abaixo;
+    // destruir aqui tambem dava vmaDestroyImage duas vezes na mesma imagem
+    // (SIGSEGV no shutdown em 2 de 3 saidas com o vizinho entrando; a
+    // validacao acusava "Invalid VkImage" no AssetCache::shutdown). A GPU esta'
+    // ociosa e a fila viva, entao o envio e' so' mais uma submissao.
+    flushPendingUploads();
 
     m_assetCache.shutdown(&m_vulkan, &m_bindless);
 
