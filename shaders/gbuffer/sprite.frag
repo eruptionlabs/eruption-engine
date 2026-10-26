@@ -168,7 +168,10 @@ void main() {
     o_normal = vec4(encodedNormal, roughness);
     // Sprites use the same fallback source flag so they participate in the PBR
     // pipeline unless a real MRAH-W map is bound.
-    o_pbr = vec4(0.5, roughness, metallic, 0.0);
+    // R = origem do material: 0,75 marca SPRITE (0,5 reserva, 1 mapa real,
+    // 0,625/0,875 folhagem). Para a iluminacao e' igual a 0,5 (>= 0,5, fora
+    // da folhagem); a sombra de contato usa a marca para pular o quad.
+    o_pbr = vec4(0.75, roughness, metallic, 0.0);
     o_materialId = matId;
     // Borda da silhueta: algum vizinho transparente. Paleta (bit 256) le' o
     // indice, nao o alfa: indice 0 = transparente.

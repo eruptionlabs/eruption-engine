@@ -648,7 +648,13 @@ void main() {
     // resolvivel: pula. E o bias de rejeicao cresce com o pixel, porque o
     // erro de posicao reconstruida e' proporcional a ele.
     float csPxWorld = max(length(dFdx(worldPos)), length(dFdy(worldPos)));
-    if (lights.contactParams.x > 0.5 && shadow < 0.98 && sunElev > 0.02 &&
+    // Sprite (pbr.r = 0,75, sprite.frag) fica fora: a profundidade dele e' o quad do
+    // billboard, nao a forma do personagem, e o dither preso a worldPos.xz
+    // quase nao varia na vertical de um quad em pe' - a marcha contra o
+    // proprio quad saia em listras horizontais ("pontilhado" no personagem
+    // dentro da sombra). A sombra do mapa sobre ele vem do mapa de sombra.
+    bool csSprite = abs(pbr.r - 0.75) < 0.06;
+    if (!csSprite && lights.contactParams.x > 0.5 && shadow < 0.98 && sunElev > 0.02 &&
         lights.contactParams.y > 3.0 * csPxWorld) {
         const int CS_STEPS = 8;
         float csLen = max(lights.contactParams.y, 0.05);
