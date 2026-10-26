@@ -1006,7 +1006,15 @@ std::shared_ptr<Engine::ReadyModel> Engine::readModelForWorld(const std::string&
     out->file = glbPath;
     out->model = prepareModelFile(glbPath, false, [](const std::string&) { return false; });
     if (!out->model) return nullptr;
-    if (!out->model->embeddedTextures.empty()) readModelBakeCache(*out->model, embeddedTextureMaxSize(), out->bake);
+    // Roda na thread de leitura do vizinho: pacote velho ou ausente é
+    // comprimido e gravado aqui, não decodificado no quadro do encaixe.
+    if (!out->model->embeddedTextures.empty()) {
+        ModelFile& m = *out->model;
+        const std::string rel = m.filePath;
+        m.filePath = project::gameRef(rel).string(); // o pacote fica ao lado do .glb
+        out->bake = bakeEmbeddedTextures(m, embeddedTextureMaxSize(), pbrSynthesisEnabled());
+        m.filePath = rel;
+    }
     out->asset = convertModelToAsset(*out->model);
     out->model->nodes.clear(); // a malha segue no asset; ficam as imagens
     out->slotUse = ModelRenderer::scanSlotUse(out->asset);
