@@ -91,6 +91,19 @@ public:
     // elemento e os filhos; os filhos seguem o pai pela cadeia de --parent.
     void setAnchor(const std::string& selector, float x, float y, bool onScreen);
     void clearAnchor(const std::string& selector);
+    // Selo sobre o canto de cima a' direita do elemento ("+", um numero, um
+    // icone): texto, ou imagem quando `image` nao e' vazia. Some com o
+    // elemento. O toque nele e' dele (seletor "#id:badge"), nao do elemento.
+    void setBadge(const std::string& selector, const std::string& text, const std::string& image);
+    void clearBadge(const std::string& selector);
+    bool hasBadge(const std::string& selector) const {
+        const Element* e = find(selector);
+        return e && e->hasBadge;
+    }
+    // Circulo desenhado e area de toque (quadrado de lado >= minTouch, no
+    // mesmo centro), em pixels da tela. Falso sem selo.
+    bool badgeRects(const std::string& selector, float x, float y, float w, float h, float minTouch,
+                    CSSRect& visual, CSSRect& touch) const;
     // Recorte da imagem em coordenadas de textura (0..1): uma janela de uma
     // imagem maior (minimapa, creditos rolando). clearImageRect volta ao todo.
     void setImageRect(const std::string& selector, float u0, float v0, float u1, float v1);
@@ -140,10 +153,14 @@ private:
         float arcStart = -70.0f, arcEnd = 70.0f, arcThickness = 0.15f;
         bool hasAnchor = false, anchorOn = false;
         Vec2 anchor{0.0f};            // centro em pixels da area
+        bool hasBadge = false;
+        std::string badgeText, badgeImage;
     };
     // O elemento ou um pai esta' escondido (ui.visible ou CSS), ou ancorado
     // fora da tela. Esconder o pai esconde o grupo inteiro.
     bool chainHidden(const Element& e) const;
+    CSSRect badgeVisual(const Element& e, const Vec2& area) const;
+    void drawBadge(ImDrawList* dl, const Element& e, const CSSRect& c) const;
 
     void build();
     static void drawArcBar(ImDrawList* dl, const CSSRect& r, const Element& e, float value, uint32_t rail, uint32_t fill);

@@ -1352,6 +1352,18 @@ int ui_anchor(lua_State* L) {
     eng().setUiAnchor(sel, luaL_checkstring(L, 2), static_cast<float>(luaL_optnumber(L, 3, 0.0)));
     return 0;
 }
+// Selo sobre um elemento: texto ("+", "3") ou um PNG do projeto; nil tira.
+int ui_badge(lua_State* L) {
+    const char* sel = luaL_checkstring(L, 1);
+    if (lua_isnoneornil(L, 2)) {
+        eng().uiDocument().clearBadge(sel);
+        return 0;
+    }
+    const std::string v = luaL_checkstring(L, 2);
+    const bool png = v.size() > 4 && v.compare(v.size() - 4, 4, ".png") == 0;
+    eng().uiDocument().setBadge(sel, png ? std::string() : v, png ? v : std::string());
+    return 0;
+}
 int ui_reset(lua_State* L) {
     (void)L;
     eng().uiDocument().resetOverrides();
@@ -2063,7 +2075,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg ui[] = {{"message", ui_message}, {"minimap_label", ui_minimap_label}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
                                   {"load", ui_load}, {"place", ui_place}, {"image_rect", ui_image_rect}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
                                   {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked}, {"dragged", ui_dragged}, {"size", ui_size}, {"held", ui_held}, {"released", ui_released},
-                                  {"reset", ui_reset}, {"anchor", ui_anchor}, {nullptr, nullptr}};
+                                  {"reset", ui_reset}, {"anchor", ui_anchor}, {"badge", ui_badge}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
@@ -2207,6 +2219,12 @@ declare ui: {
     -- the camera of that frame. Its children (--parent) follow it, and it
     -- hides while the character is off screen. character = nil lets go.
     anchor: (selector: string, character: string?, dy: number?) -> (),
+    -- A badge on the element's top-right corner: text ("+", "3") or a PNG of
+    -- the project; nil removes it. It hides with the element and has its own
+    -- touch area of at least 48 dp: ui.clicked(selector .. ":badge"), and a
+    -- tap on it is not a tap on the element. --badge-color and --badge-size
+    -- in the element's CSS change the look.
+    badge: (selector: string, content: string?) -> (),
     -- Character bars (life, mana) and the minimap with the map name and time.
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),

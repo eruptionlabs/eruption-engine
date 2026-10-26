@@ -209,6 +209,60 @@ void UiDocument::clearAnchor(const std::string& selector) {
     if (Element* e = find(selector)) e->hasAnchor = false;
 }
 
+void UiDocument::setBadge(const std::string& selector, const std::string& text, const std::string& image) {
+    if (Element* e = find(selector)) {
+        e->hasBadge = true;
+        e->badgeText = text;
+        e->badgeImage = image;
+    }
+}
+
+void UiDocument::clearBadge(const std::string& selector) {
+    if (Element* e = find(selector)) e->hasBadge = false;
+}
+
+// Circulo do selo: centro no canto de cima a' direita, diametro de 4% da
+// altura da tela (minimo 18 px), --badge-size no CSS do elemento muda. Fica
+// dentro da tela quando o elemento encosta na borda.
+CSSRect UiDocument::badgeVisual(const Element& e, const Vec2& area) const {
+    const CSSRect r = resolveRect(e, area);
+    float d = std::max(18.0f, area.y * 0.04f);
+    CSSLayout::parseLength(m_layout.rawProperty(e.selector, "--badge-size"), area.y, d);
+    const float cx = std::clamp(r.x + r.w, d * 0.5f, area.x - d * 0.5f);
+    const float cy = std::clamp(r.y, d * 0.5f, area.y - d * 0.5f);
+    return CSSRect{cx - d * 0.5f, cy - d * 0.5f, d, d};
+}
+
+bool UiDocument::badgeRects(const std::string& selector, float x, float y, float w, float h, float minTouch,
+                            CSSRect& visual, CSSRect& touch) const {
+    const Element* e = find(selector);
+    if (!e || !e->hasBadge) return false;
+    visual = badgeVisual(*e, Vec2(w, h));
+    visual.x += x;
+    visual.y += y;
+    const float side = std::max(visual.w, minTouch);
+    touch = CSSRect{visual.x + visual.w * 0.5f - side * 0.5f, visual.y + visual.h * 0.5f - side * 0.5f, side, side};
+    return true;
+}
+
+// Pintura do selo: --badge-color (fundo; vermelho), a imagem inteira no
+// circulo, ou o texto centrado em branco.
+void UiDocument::drawBadge(ImDrawList* dl, const Element& e, const CSSRect& c) const {
+    const ImVec2 mid(c.x + c.w * 0.5f, c.y + c.h * 0.5f);
+    void* tex = (m_imageResolver && !e.badgeImage.empty()) ? m_imageResolver(e.badgeImage) : nullptr;
+    if (tex) {
+        dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(c.x, c.y), ImVec2(c.x + c.w, c.y + c.h));
+        return;
+    }
+    ImU32 fill = CSSLayout::parseColor(m_layout.rawProperty(e.selector, "--badge-color"), 0);
+    if (!fill) fill = IM_COL32(210, 40, 50, 255);
+    dl->AddCircleFilled(mid, c.w * 0.5f, fill, 24);
+    dl->AddCircle(mid, c.w * 0.5f, IM_COL32(255, 255, 255, 220), 24, std::max(1.0f, c.w * 0.06f));
+    if (!e.badgeText.empty())
+        CSSLayout::drawLabel(dl, mid.x, mid.y - c.h * 0.36f, c.h * 0.72f, IM_COL32(255, 255, 255, 255),
+                             e.badgeText.c_str(), 1);
+}
+
 bool UiDocument::chainHidden(const Element& e) const {
     // A mesma cadeia curta de resolveRect.
     const Element* p = &e;
@@ -235,6 +289,7 @@ void UiDocument::resetOverrides() {
         e.hasColor[0] = e.hasColor[1] = false;
         e.hasPlace = false;
         e.hasAnchor = false;
+        e.hasBadge = false;
         e.uv = Vec4(0.0f, 0.0f, 1.0f, 1.0f);
         e.text = e.textCss;
         e.value = e.valueCss;
@@ -399,6 +454,15 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
         }
     }
 
+    // Selos por cima de todos os elementos: o de um botao nao some sob o
+    // vizinho de z maior.
+    for (const Element& e : m_elements) {
+        if (!e.hasBadge || chainHidden(e)) continue;
+        CSSRect c = badgeVisual(e, area);
+        c.x += x;
+        c.y += y;
+        drawBadge(dl, e, c);
+    }
 }
 
 } // namespace eruption

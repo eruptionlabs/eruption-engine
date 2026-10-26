@@ -1326,7 +1326,8 @@ float Engine::advanceFrame() {
     m_window.pollEvents();
     // ERUPTION_TEST_CLICK="quadro,x,y;quadro,#seletor;..." (teste): clique do
     // mouse no comeco desses quadros, antes dos scripts, em (x, y) pixels da
-    // janela ou no centro de um elemento da interface do jogo (ou "minimap").
+    // janela ou no centro de um elemento da interface do jogo (ou "minimap",
+    // ou o selo de um elemento, "#id:badge").
     // Prova de ui.clicked e da interface de toque sem ninguem na maquina.
     struct TestClick { int frame; float x, y; std::string selector; };
     static const std::vector<TestClick> kTestClicks = [] {
@@ -1357,6 +1358,13 @@ float Engine::advanceFrame() {
             if (c.selector == "minimap") {
                 ux = 0.5f * (m_minimapScreen.x + m_minimapScreen.z);
                 uy = 0.5f * (m_minimapScreen.y + m_minimapScreen.w);
+            } else if (c.selector.size() > 6 && c.selector.compare(c.selector.size() - 6, 6, ":badge") == 0) {
+                CSSRect visual, touch;
+                if (m_uiDocument.badgeRects(c.selector.substr(0, c.selector.size() - 6), m_uiArea.x, m_uiArea.y,
+                                            m_uiArea.z, m_uiArea.w, 0.0f, visual, touch)) {
+                    ux = visual.x + 0.5f * visual.w;
+                    uy = visual.y + 0.5f * visual.h;
+                }
             } else {
                 CSSRect r;
                 if (m_uiDocument.rectOf(c.selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w, r)) {

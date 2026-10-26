@@ -269,6 +269,15 @@ float displayScale() {
 
 } // namespace
 
+namespace eruption::platform {
+// Densidade da tela: AConfiguration da' dpi (160 = 1 px por dp). O toque e o
+// ImGui seguem a janela, nao o framebuffer, entao display_scale nao entra.
+float pixelsPerDp() {
+    const int32_t dpi = g_app && g_app->config ? AConfiguration_getDensity(g_app->config) : 0;
+    return dpi > 0 && dpi != ACONFIGURATION_DENSITY_NONE ? static_cast<float>(dpi) / 160.0f : 1.0f;
+}
+} // namespace eruption::platform
+
 // ---- GLFW -------------------------------------------------------------------
 int glfwInit() { return GLFW_TRUE; }
 void glfwTerminate() {}

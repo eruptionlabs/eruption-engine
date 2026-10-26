@@ -54,6 +54,12 @@ declare ui: {
     -- the camera of that frame. Its children (--parent) follow it, and it
     -- hides while the character is off screen. character = nil lets go.
     anchor: (selector: string, character: string?, dy: number?) -> (),
+    -- A badge on the element's top-right corner: text ("+", "3") or a PNG of
+    -- the project; nil removes it. It hides with the element and has its own
+    -- touch area of at least 48 dp: ui.clicked(selector .. ":badge"), and a
+    -- tap on it is not a tap on the element. --badge-color and --badge-size
+    -- in the element's CSS change the look.
+    badge: (selector: string, content: string?) -> (),
     -- Character bars (life, mana) and the minimap with the map name and time.
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),

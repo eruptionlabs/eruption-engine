@@ -6,6 +6,7 @@
 #include "core/EngineInternal.hpp"
 
 #include "core/Logger.hpp"
+#include "core/Platform.hpp"
 #include "core/Project.hpp"
 #include "game/PlayerController.hpp"
 
@@ -587,6 +588,13 @@ bool Engine::uiTouchRect(const std::string& selector, CSSRect& r) {
         if (m_minimapScreenFrame + 2 < m_framesCount) return false;
         r = CSSRect{m_minimapScreen.x, m_minimapScreen.y, m_minimapScreen.z - m_minimapScreen.x,
                     m_minimapScreen.w - m_minimapScreen.y};
+    } else if (selector.size() > 6 && selector.compare(selector.size() - 6, 6, ":badge") == 0) {
+        // Selo: a area de toque, de pelo menos 48 dp (guia de toque do Android).
+        const std::string base = selector.substr(0, selector.size() - 6);
+        if (!m_uiDocument.shown(base) || m_uiArea.z <= 0.0f) return false;
+        CSSRect visual;
+        if (!m_uiDocument.badgeRects(base, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w,
+                                     48.0f * platform::pixelsPerDp(), visual, r)) return false;
     } else {
         if (!m_uiDocument.shown(selector) || m_uiArea.z <= 0.0f) return false;
         if (!m_uiDocument.rectOf(selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w, r)) return false;
@@ -599,6 +607,15 @@ static bool dentro(const CSSRect& r, const glm::vec2& p) {
     return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
 }
 
+bool Engine::uiHit(const std::string& selector, const CSSRect& r, const glm::vec2& p) const {
+    if (!dentro(r, p)) return false;
+    if (!m_uiDocument.hasBadge(selector)) return true;
+    CSSRect visual, touch;
+    m_uiDocument.badgeRects(selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w,
+                            48.0f * platform::pixelsPerDp(), visual, touch);
+    return !dentro(touch, p);
+}
+
 bool Engine::uiClicked(const std::string& selector) {
     // O retangulo sai antes do teste do clique: publica a area tocavel a cada
     // quadro, com ou sem toque.
@@ -607,7 +624,7 @@ bool Engine::uiClicked(const std::string& selector) {
     if (!Input::isMousePressed(MouseButton::Left)) return false;
     const glm::vec2 m = Input::mousePosition();
     if (Input::inUiTouchRect(m.x, m.y)) return false; // analogico do controle de toque
-    return dentro(r, uiCursor());
+    return uiHit(selector, r, uiCursor());
 }
 
 void Engine::updateUiHold() {
@@ -636,7 +653,7 @@ void Engine::updateUiHold() {
 float Engine::uiHeld(const std::string& selector) {
     updateUiHold();
     CSSRect r;
-    if (!uiTouchRect(selector, r) || !m_uiHold.active || !dentro(r, m_uiHold.start)) return 0.0f;
+    if (!uiTouchRect(selector, r) || !m_uiHold.active || !uiHit(selector, r, m_uiHold.start)) return 0.0f;
     return static_cast<float>(m_uiHold.t1 - m_uiHold.t0);
 }
 
@@ -644,7 +661,7 @@ bool Engine::uiReleased(const std::string& selector) {
     updateUiHold();
     CSSRect r;
     if (!uiTouchRect(selector, r) || !m_uiHold.released) return false;
-    return dentro(r, m_uiHold.start) && dentro(r, m_uiHold.end);
+    return uiHit(selector, r, m_uiHold.start) && dentro(r, m_uiHold.end);
 }
 
 glm::vec2 Engine::uiDragged(const std::string& selector) {
@@ -673,8 +690,7 @@ glm::vec2 Engine::uiDragged(const std::string& selector) {
     CSSRect r;
     if (!uiTouchRect(selector, r)) return glm::vec2(0.0f);
     if (!d.moving || (d.delta.x == 0.0f && d.delta.y == 0.0f)) return glm::vec2(0.0f);
-    const bool inside = d.start.x >= r.x && d.start.x <= r.x + r.w && d.start.y >= r.y && d.start.y <= r.y + r.h;
-    return inside ? d.delta : glm::vec2(0.0f);
+    return uiHit(selector, r, d.start) ? d.delta : glm::vec2(0.0f);
 }
 
 void Engine::followPlayer(int index, float distance) {
