@@ -263,11 +263,11 @@ bool IrradianceProbes::bake(TerrainRenderer& terrain, ModelRenderer& models,
     ubo.cell = Vec4(cell, 0.0f);
     ubo.dims[0] = dx; ubo.dims[1] = dy; ubo.dims[2] = dz; ubo.dims[3] = 0;
     // Raio da marcha: ate' 6 celulas XZ (copa/telhado vizinho conta, a
-    // montanha do outro lado do mapa nao), 24 passos, comeca a 1/4 de celula.
+    // montanha do outro lado do mapa nao), 24 passos quadraticos, comeca a 1/10 de celula.
     {
         const float radius = std::min(cellXZ * 6.0f, 400.0f);
         const float steps = 24.0f;
-        const float start = cellXZ * 0.25f;
+        const float start = cellXZ * 0.1f; // a marcha e' quadratica (probe_bake.comp)
         // Espessura minima da laje = meio passo, em profundidade do ortho
         // (linear: 1 unidade de mundo = 1/(far-near)). Ver probe_bake.comp.
         const float stepLen = (radius - start) / steps;
