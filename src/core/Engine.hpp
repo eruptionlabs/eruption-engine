@@ -1972,6 +1972,9 @@ private:
     void showRegion(WorldRegion& r, bool show);
     void rebuildWorldWater();
     void stitchGroundEdges();
+    // Liga/desliga cada lado do avental da borda pelo vizinho em cena (World.cpp).
+    void updateEdgeAprons();
+    bool groundOfOtherMap(const LoadedMap* owner, float x, float z) const;
     void rebuildWorldLights();
     bool buildRegionSplat(WorldRegion& r, const std::vector<std::string>& layers);
     void releaseRegionSplat(WorldRegion& r, bool now = false); // now: GPU já parada

@@ -112,6 +112,33 @@ struct LoadedMap {
     // Monta lq.contourMesh a partir de `triangles` (buildLiquidContour chama).
     static void buildLiquidContourMesh(MapLiquid& lq);
 
+    // AVENTAL DA BORDA ("edge_apron" no .env: true ou {first, bands, slope}).
+    // Onde o mapa acaba sem vizinho, a camera baixa ve' ceu abaixo do chao.
+    // O avental e' uma faixa de terreno que sai da borda da malha de chao para
+    // fora em `bands` aneis (o primeiro com `first` u, cada um o dobro do
+    // anterior), na altura da borda alisada ao longo do lado (mais longe, mais
+    // alisada) e descendo `slope` u por u; leva o material e a cor da ultima
+    // linha da grade. Um no' por lado (kEdgeApronPrefix + x0/x1/z0/z1), para
+    // esconder o lado que tem vizinho (Engine::updateEdgeAprons). Sem a chave,
+    // nada muda.
+    struct EdgeApronParams {
+        bool enabled = false;
+        float first = 64.0f;
+        int bands = 6;
+        float slope = 0.03f;
+    } edgeApronParams;
+    static constexpr const char* kEdgeApronPrefix = "edge_apron_";
+    // Pontos logo fora de cada lado (espaco do no'): coberto por chao de
+    // outro mapa = lado escondido.
+    struct EdgeApron {
+        std::string node;
+        Vec3 probe[3];
+    };
+    std::vector<EdgeApron> edgeAprons;
+    // Acrescenta os nos do avental ao modelo do mapa (malha de chao = o no'
+    // que cobre a maior area). Falso se nao achou chao em grade.
+    bool buildEdgeAprons(ModelFile& model);
+
     // Emissores de fumaça declarados no .env (chave opcional "smoke").
     // Vazio = mapa sem fumaça (todo mapa antigo cai aqui).
     std::vector<SmokeEmitter> smokeEmitters;

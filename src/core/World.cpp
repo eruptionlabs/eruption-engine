@@ -831,6 +831,7 @@ void Engine::finishRegion(WorldRegion& r) {
     r.waterLevel = e.waterLevel + r.offset.y;
     r.state = WorldRegion::State::Shown;
     ++m_worldVersion;
+    updateEdgeAprons();
     const auto tMisc = std::chrono::steady_clock::now();
     stitchGroundEdges();
     const auto tStitch = std::chrono::steady_clock::now();
@@ -877,6 +878,7 @@ void Engine::showRegion(WorldRegion& r, bool show) {
     r.state = show ? WorldRegion::State::Shown : WorldRegion::State::Hidden;
     if (!show) r.hiddenAt = std::chrono::steady_clock::now();
     ++m_worldVersion;
+    updateEdgeAprons();
     rebuildWorldLights();
     if (r.hasWater) rebuildWorldWater();
     if (r.data && !r.data->liquids.empty()) setupLavaLiquid(m_currentMap.get()); // lava do vizinho entra ou sai
@@ -1036,6 +1038,7 @@ void Engine::releaseRegion(WorldRegion& r) {
     r.firstInstance = r.endInstance = 0;
     r.state = WorldRegion::State::Idle;
     ++m_worldVersion;
+    updateEdgeAprons();
 }
 
 void Engine::rebuildWorldLights() {
@@ -1147,6 +1150,48 @@ const LoadedMap* Engine::mapAt(float x, float z, float y) const {
         }
     }
     return best ? best : m_currentMap.get();
+}
+
+// O ponto cai no chão de um mapa em cena que não é `owner`.
+bool Engine::groundOfOtherMap(const LoadedMap* owner, float x, float z) const {
+    Vec2 lo, hi;
+    if (m_currentMap && m_currentMap.get() != owner && m_currentMap->terrainFromFile &&
+        groundArea(m_currentMap->terrain, lo, hi) && inside(lo, hi, x, z))
+        return true;
+    for (const auto& r : m_regions) {
+        if (r.state != WorldRegion::State::Shown || !r.data || r.data.get() == owner) continue;
+        if (inside(r.boundsMin, r.boundsMax, x, z) && groundHas(r.data->terrain, x, z)) return true;
+    }
+    return false;
+}
+
+// Avental da borda (LoadedMap::buildEdgeAprons): o lado com chão de outro
+// mapa logo depois da borda some, senão ele furaria o chão do vizinho. Vale
+// para o mapa aberto e os vizinhos em cena; os escondidos ficam como estão
+// (showRegion devolve o estado que eles tinham).
+void Engine::updateEdgeAprons() {
+    const auto& inst = m_modelRenderer.getInstances();
+    const std::string prefix = LoadedMap::kEdgeApronPrefix;
+    for (uint32_t i = 0; i < inst.size(); ++i) {
+        if (inst[i].name.compare(0, prefix.size(), prefix) != 0) continue;
+        const LoadedMap* owner = m_currentMap.get();
+        bool shown = true;
+        for (const auto& r : m_regions)
+            if (r.endInstance > r.firstInstance && i >= r.firstInstance && i < r.endInstance) {
+                owner = r.data.get();
+                shown = r.state == WorldRegion::State::Shown;
+            }
+        if (!owner || !shown) continue;
+        const auto side = std::find_if(owner->edgeAprons.begin(), owner->edgeAprons.end(),
+                                       [&](const LoadedMap::EdgeApron& a) { return a.node == inst[i].name; });
+        if (side == owner->edgeAprons.end()) continue;
+        bool covered = false;
+        for (const Vec3& p : side->probe) {
+            const Vec3 w = Vec3(inst[i].transform * Vec4(p, 1.0f));
+            covered = covered || groundOfOtherMap(owner, w.x, w.z);
+        }
+        if (inst[i].enabled == covered) m_modelRenderer.setInstanceEnabled(i, !covered);
+    }
 }
 
 bool Engine::worldBounds(Vec2& outMin, Vec2& outMax) const {

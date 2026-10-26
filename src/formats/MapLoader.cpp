@@ -126,6 +126,17 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
         f >> j;
 
         if (j.contains("sky") && j["sky"].is_boolean()) map.env.hasSky = j["sky"].get<bool>();
+        if (j.contains("edge_apron")) {
+            const auto& a = j["edge_apron"];
+            auto& p = map.edgeApronParams;
+            p.enabled = a.is_object() || (a.is_boolean() && a.get<bool>());
+            if (a.is_object()) {
+                p.enabled = a.value("enabled", true);
+                p.first = std::max(1.0f, a.value("first", p.first));
+                p.bands = std::clamp(a.value("bands", p.bands), 1, 12);
+                p.slope = a.value("slope", p.slope);
+            }
+        }
         if (j.contains("fog") && j["fog"].is_object()) {
             map.env.fog = parseMapFog(j["fog"]);
             ERUPTION_LOG_WARN("MapLoader: nevoa do .env (cor %.2f %.2f %.2f, %.0f..%.0f, opacidade %.2f)",
@@ -815,6 +826,8 @@ bool MapLoader::loadFromGlb() {
     fs::path envPath = glbFsPath.parent_path() / (mapStem + ".env");
 
     loadMapEnv(*m_loadingMap, envPath);
+    if (m_loadingMap->edgeApronParams.enabled && !m_loadingMap->buildEdgeAprons(m_loadingMap->models.back()))
+        ERUPTION_LOG_WARN("MapLoader: edge_apron sem malha de chao em grade em '%s'", glbPath.c_str());
 
     if (fs::exists(terPath)) {
         auto terData = readFileBytes(terPath);
@@ -973,6 +986,269 @@ void MapLoader::loadTerrainChunks() {
     if (!mesh.vertices.empty()) {
         m_loadingMap->terrainChunks.push_back(std::move(mesh));
     }
+}
+
+namespace {
+
+// Vertices da malha de chao na linha pos[axis] == value, em ordem pelo eixo
+// `along`; no mesmo ponto fica o mais alto (uma saia repete o vertice da borda
+// mais embaixo).
+std::vector<uint32_t> apronSideVertices(const std::vector<Vec3>& pos, int axis, float value, int along, float eps) {
+    std::vector<uint32_t> pts;
+    for (uint32_t v = 0; v < pos.size(); ++v)
+        if (std::abs(pos[v][axis] - value) <= eps) pts.push_back(v);
+    std::sort(pts.begin(), pts.end(), [&](uint32_t a, uint32_t b) {
+        if (std::abs(pos[a][along] - pos[b][along]) > eps) return pos[a][along] < pos[b][along];
+        return pos[a].y > pos[b].y;
+    });
+    std::vector<uint32_t> out;
+    for (uint32_t v : pts)
+        if (out.empty() || std::abs(pos[v][along] - pos[out.back()][along]) > eps) out.push_back(v);
+    return out;
+}
+
+// UV da malha de chao como plano em XZ (uv = A * (x, z, 1)), por minimos
+// quadrados. Falso se a UV nao e' plana (resto acima de 1% da faixa): o
+// avental entao repete a UV da borda.
+bool apronPlanarUv(const ModelFileNode& g, glm::mat3x2& out) {
+    if (g.texCoords.size() != g.vertices.size() || g.vertices.size() < 3) return false;
+    const size_t step = std::max<size_t>(1, g.vertices.size() / 4096);
+    glm::dmat3 ata(0.0);
+    glm::dmat3x2 atb(0.0); // coluna j = soma de r_j * uv
+    for (size_t i = 0; i < g.vertices.size(); i += step) {
+        const glm::dvec3 r(g.vertices[i].x, g.vertices[i].z, 1.0);
+        ata += glm::outerProduct(r, r);
+        for (int j = 0; j < 3; ++j) atb[j] += r[j] * glm::dvec2(g.texCoords[i]);
+    }
+    if (std::abs(glm::determinant(ata)) < 1e-12) return false;
+    const glm::dmat3 inv = glm::inverse(ata);
+    glm::dmat3x2 a(0.0);
+    for (int j = 0; j < 3; ++j)
+        for (int k = 0; k < 3; ++k) a[j] += inv[k][j] * atb[k];
+    Vec2 lo(1e30f), hi(-1e30f);
+    double err = 0.0;
+    size_t n = 0;
+    for (size_t i = 0; i < g.vertices.size(); i += step, ++n) {
+        const glm::dvec2 uv = a * glm::dvec3(g.vertices[i].x, g.vertices[i].z, 1.0);
+        err += glm::dot(uv - glm::dvec2(g.texCoords[i]), uv - glm::dvec2(g.texCoords[i]));
+        lo = glm::min(lo, g.texCoords[i]);
+        hi = glm::max(hi, g.texCoords[i]);
+    }
+    const float range = std::max(hi.x - lo.x, hi.y - lo.y);
+    if (range <= 0.0f || std::sqrt(err / double(n)) > 0.01 * double(range)) return false;
+    out = glm::mat3x2(a);
+    return true;
+}
+
+// Colunas de uma linha do avental: de `stride` em `stride`, mais a ultima
+// (o canto).
+std::vector<uint32_t> apronRowColumns(size_t cols, size_t stride) {
+    std::vector<uint32_t> out;
+    for (size_t i = 0; i < cols; i += stride) out.push_back(uint32_t(i));
+    if (out.back() + 1 != cols) out.push_back(uint32_t(cols - 1));
+    return out;
+}
+
+// Triangulo com a face para o mesmo lado do chao (groundSign = sinal de y do
+// produto vetorial de um triangulo da malha de chao).
+void apronTriangle(ModelFileNode& n, uint32_t a, uint32_t b, uint32_t c, float groundSign) {
+    const Vec3 e = glm::cross(n.vertices[b] - n.vertices[a], n.vertices[c] - n.vertices[a]);
+    const bool flip = (e.y < 0.0f ? -1.0f : 1.0f) != groundSign;
+    n.indices.insert(n.indices.end(), {a, flip ? c : b, flip ? b : c});
+}
+
+// Celula de um anel: o segmento de fora [colA, colB] (vertices outA, outB)
+// ligado em leque aos vertices de dentro nas colunas colA..colB. Sem
+// junta em T: a linha de dentro e' a de fora do anel anterior.
+void apronFan(ModelFileNode& n, const std::vector<uint32_t>& innerCols, uint32_t innerStart, uint32_t colA,
+              uint32_t colB, uint32_t outA, uint32_t outB, float groundSign) {
+    const auto lo = std::lower_bound(innerCols.begin(), innerCols.end(), colA);
+    const auto hi = std::upper_bound(innerCols.begin(), innerCols.end(), colB);
+    const uint32_t first = innerStart + uint32_t(lo - innerCols.begin());
+    const uint32_t count = uint32_t(hi - lo);
+    if (count < 2) return;
+    const uint32_t mid = first + (count - 1) / 2;
+    for (uint32_t v = first; v < mid; ++v) apronTriangle(n, v, v + 1, outA, groundSign);
+    apronTriangle(n, mid, outB, outA, groundSign);
+    for (uint32_t v = mid; v + 1 < first + count; ++v) apronTriangle(n, v, v + 1, outB, groundSign);
+}
+
+template <typename T>
+void apronCopyAttr(const std::vector<T>& src, size_t srcCount, uint32_t from, std::vector<T>& dst) {
+    if (src.size() == srcCount) dst.push_back(src[from]);
+}
+
+} // namespace
+
+bool LoadedMap::buildEdgeAprons(ModelFile& model) {
+    // Chao: o no' de malha propria que cobre a maior area em XZ.
+    int ground = -1;
+    float bestArea = 0.0f;
+    Vec3 lo(0.0f), hi(0.0f);
+    for (size_t i = 0; i < model.nodes.size(); ++i) {
+        const ModelFileNode& n = model.nodes[i];
+        if (n.vertices.size() < 9 || n.skin >= 0 || n.geometryShareIndex >= 0) continue;
+        Vec3 a(1e30f), b(-1e30f);
+        for (const Vec3& p : n.vertices) {
+            a = glm::min(a, p);
+            b = glm::max(b, p);
+        }
+        const float area = (b.x - a.x) * (b.z - a.z);
+        if (area > bestArea) {
+            bestArea = area;
+            ground = int(i);
+            lo = a;
+            hi = b;
+        }
+    }
+    if (ground < 0) return false;
+    const ModelFileNode g = model.nodes[size_t(ground)]; // copia: o push_back abaixo pode realocar
+    const size_t count = g.vertices.size();
+    const float eps = std::max(hi.x - lo.x, hi.z - lo.z) * 1e-4f + 1e-3f;
+    glm::mat3x2 uvPlane(0.0f);
+    const bool planarUv = apronPlanarUv(g, uvPlane);
+    float groundSign = 1.0f;
+    if (g.indices.size() >= 3) {
+        const Vec3 a = g.vertices[g.indices[0]], b = g.vertices[g.indices[1]], c = g.vertices[g.indices[2]];
+        groundSign = glm::cross(b - a, c - a).y < 0.0f ? -1.0f : 1.0f;
+    }
+    const auto& prm = edgeApronParams;
+    std::vector<float> dist(size_t(prm.bands) + 1, 0.0f);
+    for (int k = 1; k <= prm.bands; ++k) dist[size_t(k)] = prm.first * float((1 << k) - 1);
+
+    struct Side { const char* tag; int axis; float value; int along; Vec2 out; };
+    const Side sides[4] = {{"x0", 0, lo.x, 2, Vec2(-1.0f, 0.0f)}, {"x1", 0, hi.x, 2, Vec2(1.0f, 0.0f)},
+                           {"z0", 2, lo.z, 0, Vec2(0.0f, -1.0f)}, {"z1", 2, hi.z, 0, Vec2(0.0f, 1.0f)}};
+    const bool groundIsRoot = std::find(model.rootNodeNames.begin(), model.rootNodeNames.end(), g.name) !=
+                              model.rootNodeNames.end();
+    size_t totalVerts = 0;
+    for (const Side& s : sides) {
+        const std::vector<uint32_t> edge = apronSideVertices(g.vertices, s.axis, s.value, s.along, eps);
+        const float alongLo = s.along == 0 ? lo.x : lo.z, alongHi = s.along == 0 ? hi.x : hi.z;
+        if (edge.size() < 2) continue;
+        const float span = g.vertices[edge.back()][s.along] - g.vertices[edge.front()][s.along];
+        if (span < 0.5f * (alongHi - alongLo)) continue; // borda que nao e' grade (chao recortado)
+        // Altura alisada ao longo do lado: media movel com janela que cresce
+        // com a distancia da borda (perto segue o relevo, longe some o
+        // degrau). A media do lado inteiro afundava o avental 180 u sob uma
+        // crista estreita, e a crista fazia sombra num fosso.
+        std::vector<double> prefix(edge.size() + 1, 0.0);
+        for (size_t i = 0; i < edge.size(); ++i) prefix[i + 1] = prefix[i] + double(g.vertices[edge[i]].y);
+        const float step = span / float(edge.size() - 1);
+        // Cantos em meia-esquadria: o vertice do canto anda tambem para fora
+        // do lado vizinho, e os quatro lados fecham sem fresta.
+        Vec2 along2 = s.along == 0 ? Vec2(1.0f, 0.0f) : Vec2(0.0f, 1.0f);
+        const bool startCorner = std::abs(g.vertices[edge.front()][s.along] - alongLo) <= eps;
+        const bool endCorner = std::abs(g.vertices[edge.back()][s.along] - alongHi) <= eps;
+
+        ModelFileNode n;
+        n.name = std::string(kEdgeApronPrefix) + s.tag;
+        n.parentName = g.parentName;
+        n.parentIndex = g.parentIndex;
+        n.position = g.position;
+        n.rotationAxis = g.rotationAxis;
+        n.rotationAngle = g.rotationAngle;
+        n.scale = g.scale;
+        n.offsetMatrix = g.offsetMatrix;
+        n.offset = g.offset;
+        n.nodeMatrix = g.nodeMatrix;
+        n.renderMatrix = g.renderMatrix;
+        n.textureIds = g.textureIds;
+        n.textureNames = g.textureNames;
+        n.pbrTextureNames = g.pbrTextureNames;
+        n.emissiveTextureNames = g.emissiveTextureNames;
+
+        // Colunas por anel: a borda em resolucao cheia e, para fora, de 2^n
+        // em 2^n com o passo perto de 1/4 da largura do anel. Com todas as
+        // colunas os aneis de fora viravam tiras de 5 u por 2 km, mais finas
+        // que um pixel, e o G-buffer subia 4,1 ms so' de quads desperdicados.
+        // Cada linha e' subconjunto da anterior; o anel liga as duas em leque.
+        const size_t cols = edge.size(), rings = dist.size();
+        std::vector<std::vector<uint32_t>> rowCols(rings);
+        std::vector<uint32_t> rowStart(rings);
+        size_t stride = 1;
+        for (size_t k = 0; k < rings; ++k) {
+            if (k > 0) {
+                const float want = (dist[k] - dist[k - 1]) / (4.0f * std::max(step, 1e-3f));
+                while (float(stride * 2) <= want && stride * 2 < cols) stride *= 2;
+            }
+            rowCols[k] = apronRowColumns(cols, stride);
+            rowStart[k] = uint32_t(n.vertices.size());
+            const float d = dist[k];
+            const size_t half = size_t(0.25f * d / std::max(step, 1e-3f));
+            for (const uint32_t i : rowCols[k]) {
+                const uint32_t v = edge[i];
+                Vec2 off = s.out;
+                if (i == 0 && startCorner) off -= along2;
+                if (i + 1 == cols && endCorner) off += along2;
+                const Vec3 b = g.vertices[v];
+                // Janela simetrica: encolhe ate' zero no canto, onde os dois
+                // lados dividem o vertice da esquadria e precisam da mesma altura.
+                const size_t w = std::min({half, size_t(i), cols - 1 - i});
+                const size_t i0 = i - w, i1 = i + w + 1;
+                const float smooth = float((prefix[i1] - prefix[i0]) / double(i1 - i0));
+                const Vec3 p(b.x + off.x * d, smooth - prm.slope * d, b.z + off.y * d);
+                n.vertices.push_back(k == 0 ? b : p);
+                n.texCoords.push_back(planarUv ? Vec2(uvPlane * Vec3(p.x, p.z, 1.0f))
+                                               : (g.texCoords.size() == count ? g.texCoords[v] : Vec2(0.0f)));
+                apronCopyAttr(g.colors, count, v, n.colors);
+                apronCopyAttr(g.perVertexTexIds, count, v, n.perVertexTexIds);
+                apronCopyAttr(g.perVertexBlendTexIds, count, v, n.perVertexBlendTexIds);
+                apronCopyAttr(g.perVertexBlendWeights, count, v, n.perVertexBlendWeights);
+                apronCopyAttr(g.perVertexBlendMaskTexIds, count, v, n.perVertexBlendMaskTexIds);
+                apronCopyAttr(g.perVertexBlendMaskTexIds2, count, v, n.perVertexBlendMaskTexIds2);
+                for (int l = 0; l < 8; ++l)
+                    apronCopyAttr(g.perVertexSplatTexIds[l], count, v, n.perVertexSplatTexIds[l]);
+                apronCopyAttr(g.perVertexBlendMaskUV, count, v, n.perVertexBlendMaskUV);
+                apronCopyAttr(g.perVertexEmissive, count, v, n.perVertexEmissive);
+            }
+        }
+        // Vertice da coluna `i` na linha `k` (a coluna existe nas linhas de
+        // dentro de k, pela regra de subconjunto).
+        auto at = [&](size_t k, uint32_t i) {
+            const auto& c = rowCols[k];
+            return rowStart[k] + uint32_t(std::lower_bound(c.begin(), c.end(), i) - c.begin());
+        };
+        // Normal: a da borda no anel 0 (sem costura de luz); fora, pelas
+        // vizinhas na linha e pela mesma coluna na linha de dentro.
+        n.normals.resize(n.vertices.size(), Vec3(0.0f, 1.0f, 0.0f));
+        for (size_t k = 0; k < rings; ++k)
+            for (size_t j = 0; j < rowCols[k].size(); ++j) {
+                const uint32_t i = rowCols[k][j], me = rowStart[k] + uint32_t(j);
+                if (k == 0) {
+                    if (g.normals.size() == count) n.normals[me] = g.normals[edge[i]];
+                    continue;
+                }
+                const size_t last = rowCols[k].size() - 1;
+                const Vec3 di = n.vertices[rowStart[k] + std::min(j + 1, last)] - n.vertices[rowStart[k] + (j > 0 ? j - 1 : 0)];
+                const Vec3 dk = n.vertices[me] - n.vertices[at(k - 1, i)];
+                Vec3 nn = glm::cross(di, dk);
+                if (nn.y < 0.0f) nn = -nn;
+                if (glm::dot(nn, nn) > 1e-12f) n.normals[me] = glm::normalize(nn);
+            }
+        for (size_t k = 1; k < rings; ++k)
+            for (size_t j = 0; j + 1 < rowCols[k].size(); ++j)
+                apronFan(n, rowCols[k - 1], rowStart[k - 1], rowCols[k][j], rowCols[k][j + 1], at(k, rowCols[k][j]),
+                         at(k, rowCols[k][j + 1]), groundSign);
+        for (const Vec3& p : n.vertices) {
+            n.box.min = glm::min(n.box.min, p);
+            n.box.max = glm::max(n.box.max, p);
+        }
+        EdgeApron info;
+        info.node = n.name;
+        for (int j = 0; j < 3; ++j) {
+            const Vec3 b = g.vertices[edge[(cols - 1) * size_t(j + 1) / 4]];
+            info.probe[j] = Vec3(b.x + s.out.x * 8.0f, b.y, b.z + s.out.y * 8.0f);
+        }
+        edgeAprons.push_back(info);
+        totalVerts += n.vertices.size();
+        if (groundIsRoot) model.rootNodeNames.push_back(n.name);
+        model.nodes.push_back(std::move(n));
+    }
+    if (edgeAprons.empty()) return false;
+    ERUPTION_LOG_WARN("MapLoader: edge_apron: %zu lados, %zu vertices, UV %s", edgeAprons.size(), totalVerts,
+                      planarUv ? "plana" : "da borda");
+    return true;
 }
 
 } // namespace eruption
