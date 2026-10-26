@@ -381,7 +381,15 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         delay *= std::clamp(passo / speed, 0.25f, 2.0f);
     }
     c.timer += dt * 1000.0f;
-    if (c.timer >= delay) {
+    if (moving && !named) {
+        // No ciclo de andar a sobra fica no relogio (e passa mais de um quadro
+        // se preciso): zerar arredondava cada quadro para cima, a um numero
+        // inteiro de quadros de tela. A 60 Hz, 39,7 ms viravam 50 (26% lento,
+        // o pe' deslizava). Parado e animacao nomeada seguem como antes.
+        const int passos = static_cast<int>(c.timer / delay);
+        c.frame = (c.frame + passos) % static_cast<int>(action.frames.size());
+        c.timer -= static_cast<float>(passos) * delay;
+    } else if (c.timer >= delay) {
         c.frame = (c.frame + 1) % static_cast<int>(action.frames.size());
         c.timer = 0.0f;
         // Uma vez só: ao voltar ao primeiro quadro, termina (fica no último até lá).
