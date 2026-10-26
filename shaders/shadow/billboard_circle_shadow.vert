@@ -65,14 +65,19 @@ layout(push_constant) uniform PushConstants {
 layout(location = 0) out flat vec4 v_feet;   // xyz = pe', w = raio em X
 layout(location = 1) out flat vec4 v_shape;  // x = raio em Z, y = maciez, z = folga acima, w = folga abaixo
 layout(location = 2) out flat vec4 v_plane;  // plano do proprio billboard: normal (xyz), dot(normal, ancora)
+// Direcao ao sol (xyz) e w = 1 quando o disco so' aparece fora do sol
+// ("map_contact"); w = 0, o disco de sempre.
+layout(location = 3) out flat vec4 v_sun;
 
 void main() {
+    v_sun = shadowLightDir;
     // Only billboards that cast shadows should render a drop shadow.
     if ((i_flags & 4u) == 0u || (i_flags & 512u) == 0u) {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
         v_feet = vec4(0.0);
         v_shape = vec4(0.0);
         v_plane = vec4(0.0);
+        v_sun = vec4(0.0);
         return;
     }
 

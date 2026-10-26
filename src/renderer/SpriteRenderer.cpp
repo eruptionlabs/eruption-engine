@@ -988,22 +988,35 @@ bool SpriteRenderer::createPlanarShadowPipeline() {
 void SpriteRenderer::renderBillboardCircleShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo,
                                                   const Vec2& circleParams, VkBuffer instanceBuffer, uint32_t count,
                                                   VkImageView sceneDepth, const Vec2& planarParams,
-                                                  const std::vector<SpritePointShadow>& pointShadows) {
+                                                  const std::vector<SpritePointShadow>& pointShadows,
+                                                  VkImageView sunShadowDepth, VkBuffer sunShadowUbo, const Vec4& sunGate) {
     if (count == 0 || sceneDepth == VK_NULL_HANDLE || m_circleShadowPipeline == VK_NULL_HANDLE) return;
+    if (sunShadowDepth == VK_NULL_HANDLE || sunShadowUbo == VK_NULL_HANDLE) return;
 
     VkDescriptorSet depthSet = m_decalDepthSets[m_ctx->currentFrame() % kDecalFrames];
     VkDescriptorImageInfo depthInfo{};
     depthInfo.sampler = m_decalDepthSampler;
     depthInfo.imageView = sceneDepth;
     depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = depthSet;
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &depthInfo;
-    vkUpdateDescriptorSets(m_ctx->device(), 1, &write, 0, nullptr);
+    // 1 e 2: o mapa de sombra do sol, escritos sempre (o shader os declara)
+    // mesmo quando o disco nao consulta o sol.
+    VkDescriptorImageInfo sunInfo = depthInfo;
+    sunInfo.imageView = sunShadowDepth;
+    VkDescriptorBufferInfo sunUboInfo{sunShadowUbo, 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet writes[3] = {};
+    for (uint32_t i = 0; i < 3; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = depthSet;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+    }
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].pImageInfo = &depthInfo;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].pImageInfo = &sunInfo;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[2].pBufferInfo = &sunUboInfo;
+    vkUpdateDescriptorSets(m_ctx->device(), 3, writes, 0, nullptr);
 
     if (instanceBuffer == m_instanceBuffer) {
         vmaFlushAllocation(m_ctx->allocator(), m_instanceAlloc, 0,
@@ -1034,7 +1047,7 @@ void SpriteRenderer::renderBillboardCircleShadows(VkCommandBuffer cmd, const Fra
         Vec2 circleParams; // x = dilation/radius, y = softness
     } push;
     push.viewProjection = frameUbo.viewProjection;
-    push.shadowLightDir = Vec4(0.0f);
+    push.shadowLightDir = sunGate;
     push.circleParams = circleParams;
 
     vkCmdPushConstants(cmd, m_decalPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
@@ -1073,23 +1086,28 @@ bool SpriteRenderer::createCircleShadowPipeline() {
     samplerInfo.maxLod = 0.0f;
     VK_CHECK(vkCreateSampler(m_ctx->device(), &samplerInfo, nullptr, &m_decalDepthSampler));
 
-    VkDescriptorSetLayoutBinding depthBinding{};
-    depthBinding.binding = 0;
-    depthBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    depthBinding.descriptorCount = 1;
-    depthBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // 0 = profundidade da cena; 1 e 2 = mapa de sombra do sol e as matrizes
+    // dele ("map_contact": o disco so' fora do sol).
+    VkDescriptorSetLayoutBinding depthBindings[3] = {};
+    for (uint32_t i = 0; i < 3; ++i) {
+        depthBindings[i].binding = i;
+        depthBindings[i].descriptorType = i == 2 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        depthBindings[i].descriptorCount = 1;
+        depthBindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
     VkDescriptorSetLayoutCreateInfo setLayoutInfo{};
     setLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    setLayoutInfo.bindingCount = 1;
-    setLayoutInfo.pBindings = &depthBinding;
+    setLayoutInfo.bindingCount = 3;
+    setLayoutInfo.pBindings = depthBindings;
     VK_CHECK(vkCreateDescriptorSetLayout(m_ctx->device(), &setLayoutInfo, nullptr, &m_decalDepthLayout));
 
-    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kDecalFrames};
+    VkDescriptorPoolSize poolSizes[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * kDecalFrames},
+                                         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kDecalFrames}};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.maxSets = kDecalFrames;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.poolSizeCount = 2;
+    poolInfo.pPoolSizes = poolSizes;
     VK_CHECK(vkCreateDescriptorPool(m_ctx->device(), &poolInfo, nullptr, &m_decalDepthPool));
     VkDescriptorSetLayout depthLayouts[kDecalFrames] = {m_decalDepthLayout, m_decalDepthLayout, m_decalDepthLayout};
     VkDescriptorSetAllocateInfo setAlloc{};
