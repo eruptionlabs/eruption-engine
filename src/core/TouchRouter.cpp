@@ -95,10 +95,13 @@ void TouchRouter::move(int id, float x, float y) {
                 const Finger& a = m_fingers[static_cast<size_t>(m_camera)];
                 const Finger& b = m_fingers[static_cast<size_t>(m_pinch)];
                 const float dist = std::hypot(b.x - a.x, b.y - a.y);
-                // Rolagem que da' zoom igual a' razao da pinca (o motor faz
-                // zoom(1 + rolagem * 0,1)): proporcional, nunca negativo.
+                // Rolagem pelo LOG da razao da pinca (o motor faz zoom(1 +
+                // rolagem * 0,1) com a soma do quadro). Os dois dedos andando
+                // juntos chegam como dois eventos no mesmo quadro: com o log
+                // eles se cancelam exatamente; com a razao linear sobrava
+                // zoom num arrasto paralelo (250 -> 166 em 200 px).
                 if (m_pinchDist > 1.0f && dist > 1.0f && m_sink.scroll)
-                    m_sink.scroll(static_cast<double>((dist / m_pinchDist - 1.0f) / 0.1f));
+                    m_sink.scroll(static_cast<double>(std::log(dist / m_pinchDist) / 0.1f));
                 m_pinchDist = dist;
             } else if (slot == m_camera) {
                 if (std::hypot(x - f.sx, y - f.sy) > 12.0f) f.moved = true;

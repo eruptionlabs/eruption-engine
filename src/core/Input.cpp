@@ -316,8 +316,10 @@ void Input::cursorPosCallback(GLFWwindow* window, double x, double y) {
 
 void Input::scrollCallback(GLFWwindow* window, double xoff, double yoff) {
     ImGui_ImplGlfw_ScrollCallback(window, xoff, yoff);
-    s_scrollDelta = static_cast<float>(yoff);
-    s_scroll += s_scrollDelta;
+    // Soma no quadro: varios eventos chegam juntos (a pinca manda um por dedo
+    // que anda), e guardar so' o ultimo jogava fora o resto.
+    s_scrollDelta += static_cast<float>(yoff);
+    s_scroll += static_cast<float>(yoff);
 }
 
 void Input::charCallback(GLFWwindow* window, unsigned int c) {
