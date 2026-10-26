@@ -86,11 +86,15 @@ public:
     // as curvas foram ajustadas a mao.
     float zoomPercent() const;
     void setMaxOrbitDistance(float maxDist) { m_maxOrbitDistance = maxDist; }
-    // Teto da distancia da orbita por colisao (Engine::updateCameraCollision):
-    // a posicao usa min(orbitDistance, teto); orbitDistance() continua a
-    // pedida. FLT_MAX = sem teto.
-    void setOrbitClamp(float maxDist);
-    float orbitClamp() const { return m_orbitClamp; }
+    // Ajuste da orbita pela colisao (Engine::updateCameraCollision): a
+    // distancia usada no lugar da pedida (menor com pedra entre o alvo e a
+    // lente, um pouco maior com a lente empurrada para fora da pedra; FLT_MAX
+    // = a pedida) e radianos somados ao pitch (lente subindo por cima da
+    // pedra). orbitDistance() e orbitPitch() continuam os pedidos.
+    void setOrbitOverride(float dist, float pitchLift = 0.0f);
+    float orbitOverride() const { return m_orbitOverride; }
+    // Pitch de verdade da lente (o pedido mais a subida da colisao).
+    float viewPitch() const { return m_orbitPitch + m_orbitLift; }
     float maxOrbitDistance() const { return m_maxOrbitDistance; }
 
     // LIMITES DE PITCH - fonte unica, respeitada TANTO por setOrbit() quanto
@@ -218,7 +222,8 @@ private:
     float m_defaultPitch = 0.0f;
     float m_defaultDistance = 208.0f;
     float m_maxOrbitDistance = 1000.0f;
-    float m_orbitClamp = FLT_MAX;
+    float m_orbitOverride = FLT_MAX;
+    float m_orbitLift = 0.0f;
 
     void rebuildView();
     void rebuildProjection();

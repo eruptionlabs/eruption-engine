@@ -29,6 +29,7 @@ struct GroundRayCache {
         std::vector<uint32_t> tris;  // primeiro indice do triangulo em `indices`
     };
     std::unordered_map<std::string, Grid> grids;
+    float liftHint = 0.0f; // menor subida achada no quadro anterior (comeco da busca)
     const void* map = nullptr; // mapa aberto quando as grades foram montadas
 };
 
@@ -236,92 +237,182 @@ void Engine::setCameraCollide(bool on, float margin) {
 }
 
 // Braco de mola. Duas regras:
-// - a lente nunca fica DENTRO do relevo (tela preta): o raio do alvo a' lente
-//   conta entradas (face da frente) e saidas (de tras) das malhas de chao, e
-//   a grade de altura diz se a lente esta' abaixo do chao; dentro, a lente
-//   para antes da ultima entrada;
+// - a lente nunca fica DENTRO do relevo (tela preta). O raio do alvo a' lente
+//   cruza as malhas de chao (dentro = o ultimo cruzamento antes da lente e'
+//   uma entrada, face da frente) e a grade de altura diz se a lente esta'
+//   abaixo do chao. Dentro, vale o que mexe menos, nesta ordem: sair pelo
+//   fundo da pedra se a saida esta' perto (ate' kPushShare alem da pedida),
+//   subir o pitch por cima dela (ate' kMaxLift), e so' entao parar antes da
+//   entrada. Puxar sempre colava a lente no grupo: na parede da cratera a
+//   lente a 120 u ficava 6 u antes da saida de uma pedra de 100 u, e o puxao
+//   dava close no sprite por 0,2 s;
 // - o que so' TAPA (morro entre o alvo e a lente) aproxima a camera quando
 //   ela fica a pelo menos kOcclusionShare da distancia pedida. Mais perto que
 //   isso a camera grudava no grupo atras de cada pedra (arco a 8 u do alvo) e
 //   quem cuida e' o camera.see_through.
-// Entra rapido e volta devagar (sem bombear num morro que vai e vem). So' o
-// relevo: modelo fino (arvore, poste) nao conta.
+// Entra rapido e volta devagar (sem bombear num morro que vai e vem), e o
+// caminho nao atravessa a pedra: o quadro que cairia dentro dela vai direto
+// ao destino. So' o relevo: modelo fino (arvore, poste) nao conta.
 void Engine::updateCameraCollision(float dt) {
     if (!m_cameraCollide || m_camera.isOrthographic() || !m_currentMap) {
         m_cameraCollideDist = -1.0f;
-        m_camera.setOrbitClamp(FLT_MAX);
+        m_cameraCollideLift = 0.0f;
+        m_camera.setOrbitOverride(FLT_MAX);
         return;
     }
     if (!m_groundRays || m_groundRays->map != m_currentMap.get()) warmCameraCollision();
     const float want = m_camera.orbitDistance();
     const float yaw = m_camera.orbitYaw(), pitch = m_camera.orbitPitch();
-    const Vec3 dir(std::cos(pitch) * std::cos(yaw), std::sin(pitch), std::cos(pitch) * std::sin(yaw));
     const Vec3 target = m_camera.target();
     const float margin = m_cameraCollideMargin;
-    constexpr float kMinDist = 8.0f, kOcclusionShare = 0.35f;
-    const float reach = want + margin;
+    constexpr float kMinDist = 8.0f, kOcclusionShare = 0.35f, kPushShare = 0.2f;
+    const float kMaxLift = glm::radians(35.0f), kMaxPitch = glm::radians(80.0f), kLiftStep = glm::radians(5.0f),
+                kLiftPad = glm::radians(2.0f);
 
-    static thread_local std::vector<std::pair<float, bool>> hits;
-    raycastGroundMeshes(target, dir, reach, hits);
-    // Dentro = o ultimo cruzamento antes da lente e' uma ENTRADA (face da
-    // frente); para antes dela. Contar entradas e saidas (paridade) errava
-    // com malha aberta: duas superficies coincidentes a 88 u viravam
-    // "+88 -88" ou "-88 +88" conforme o empate e a lente ficava "fora"
-    // dentro da pedra, ou o contrario.
-    float occl = FLT_MAX, inside = FLT_MAX;
-    const std::pair<float, bool>* last = nullptr;
-    for (const auto& h : hits) {
-        if (h.second) occl = std::min(occl, h.first);
-        if (h.first <= want) last = &h;
-    }
-    if (last && last->second) inside = last->first;
     // Grade de altura: so' com o alvo acima dela (dentro de uma caverna a
     // grade e' o topo do morro, nao o teto que a lente encontra) e com um
     // mapa sob ele (fora de todos a altura vale 0 e o raio inteiro parecia
-    // "debaixo do chao").
+    // "debaixo do chao"). A folga nao passa da que o proprio alvo tem (alvo
+    // no pe' do grupo, a 2 u do chao): senao o raio ja' nascia "sem folga" e
+    // a camera ia parar na cabeca.
     const float targetClear = target.y - sampleTerrainHeight(target.x, target.z);
-    if (targetClear >= 0.0f && mapAt(target.x, target.z)) {
-        float gridT = 0.0f;
-        if (raycastTerrain(target, dir, reach, gridT)) occl = std::min(occl, gridT);
-        // Lente abaixo do chao + folga: volta ate' o ultimo ponto com folga.
-        // A folga nao passa da que o proprio alvo tem (alvo no pe' do grupo,
-        // a 2 u do chao): senao o raio ja' nascia "sem folga" e a camera ia
-        // parar na cabeca.
-        const float hfMargin = std::min(margin, 0.5f * targetClear);
+    const bool useGrid = targetClear >= 0.0f && mapAt(target.x, target.z);
+    const float gridMargin = std::min(margin, 0.5f * targetClear);
+
+    struct Probe {
+        bool inside = false;
+        float stop = FLT_MAX;  // para antes disto (entrada da pedra ou chao)
+        float push = -1.0f;    // lente empurrada para fora da pedra (< 0 = nao da')
+        float pushFloor = 0.0f;
+        float occl = FLT_MAX;  // primeira parede entre o alvo e a lente
+    };
+    static thread_local std::vector<std::pair<float, bool>> hits;
+    auto probe = [&](float p, float d) {
+        Probe r;
+        const Vec3 dir(std::cos(p) * std::cos(yaw), std::sin(p), std::cos(p) * std::sin(yaw));
+        raycastGroundMeshes(target, dir, d * (1.0f + kPushShare) + margin, hits);
+        const std::pair<float, bool>* last = nullptr;
+        for (const auto& h : hits) {
+            if (h.second && h.first <= d + margin) r.occl = std::min(r.occl, h.first);
+            if (h.first <= d) last = &h;
+        }
+        // Ultimo cruzamento, nao paridade: com malha aberta duas superficies
+        // coincidentes viravam "+88 -88" ou "-88 +88" conforme o empate.
+        if (last && last->second) {
+            r.inside = true;
+            r.stop = last->first;
+            const auto ex = std::find_if(hits.begin(), hits.end(), [&](const auto& h) { return h.first > d && !h.second; });
+            if (ex != hits.end() && ex->first + margin <= d * (1.0f + kPushShare)) {
+                const float t = ex->first + margin;
+                if (std::none_of(ex + 1, hits.end(), [&](const auto& h) { return h.first <= t + margin; })) {
+                    r.push = t;
+                    r.pushFloor = ex->first + 0.5f;
+                }
+            }
+        }
+        if (!useGrid) return r;
         auto clear = [&](float t) {
-            const Vec3 p = target + dir * t;
-            return p.y - sampleTerrainHeight(p.x, p.z) - hfMargin;
+            const Vec3 q = target + dir * t;
+            return q.y - sampleTerrainHeight(q.x, q.z) - gridMargin;
         };
-        if (clear(want) < 0.0f) {
+        float gridT = 0.0f;
+        if (raycastTerrain(target, dir, d + margin, gridT)) r.occl = std::min(r.occl, gridT);
+        if (clear(d) < 0.0f) {
+            // Lente abaixo do chao + folga: volta ate' o ultimo ponto com folga.
             constexpr float kStep = 4.0f;
-            float a = want;
+            float a = d;
             while (a > 0.0f && clear(a) < 0.0f) a -= kStep;
             a = std::max(a, 0.0f);
-            float b = std::min(a + kStep, want);
+            float b = std::min(a + kStep, d);
             for (int i = 0; i < 6; ++i) {
                 const float m = 0.5f * (a + b);
                 (clear(m) < 0.0f ? b : a) = m;
             }
-            inside = std::min(inside, a + 0.5f); // `a` ja' tem a folga: o limite duro cai nele
+            r.inside = true;
+            r.stop = std::min(r.stop, a + 0.5f); // `a` ja' tem a folga: o limite duro cai nele
+            r.push = -1.0f;
+        } else if (r.push > 0.0f && clear(r.push) < 0.0f) {
+            r.push = -1.0f;
+        }
+        return r;
+    };
+
+    float lift = 0.0f, goal = want, hard = want, lo = 0.0f, stop = FLT_MAX;
+    // Bloqueada = lente dentro, ou uma parede a kOcclusionShare ou mais da
+    // pedida entre ela e o alvo (mais perto que isso cuida o see_through).
+    auto occludes = [&](const Probe& q) { return q.occl < FLT_MAX && q.occl >= kOcclusionShare * want; };
+    Probe pr = probe(pitch, want);
+    if (pr.inside && pr.push > 0.0f) {
+        goal = hard = pr.push;
+        lo = pr.pushFloor;
+    } else if (pr.inside || occludes(pr)) {
+        // Menor subida (passos de kLiftStep, depois bissecao) que libera a
+        // lente, mais kLiftPad para nao raspar o topo. Subir e' continuo: a
+        // pedra que entra no raio pede pouca subida. Puxar para a frente dela
+        // saltava de uma vez (atravessar a pedra no caminho nao vale).
+        auto blocked = [&](float l) {
+            const Probe q = probe(pitch + l, want);
+            return q.inside || occludes(q);
+        };
+        const float maxLift = std::min(kMaxLift, kMaxPitch - pitch);
+        // Intervalo [a, b] com a bloqueado e b livre; comeca na subida do
+        // quadro anterior (a pedra anda pouco entre quadros: 2-3 raios em vez
+        // de ate' 11).
+        float a = 0.0f, b = -1.0f;
+        const float hint = std::min(m_groundRays->liftHint, maxLift);
+        if (hint > 0.0f && !blocked(hint)) {
+            const float below = std::max(0.0f, hint - kLiftStep);
+            if (below == 0.0f || blocked(below)) {
+                a = below;
+                b = hint;
+            }
+        } else if (hint > 0.0f) {
+            a = hint;
+        }
+        for (float l = a + kLiftStep; b < 0.0f && l <= maxLift + kLiftStep - 1e-4f; l += kLiftStep) {
+            const float lc = std::min(l, maxLift);
+            if (!blocked(lc)) b = lc;
+            else a = lc;
+        }
+        if (b > 0.0f) {
+            for (int i = 0; i < 3; ++i) {
+                const float m = 0.5f * (a + b);
+                (blocked(m) ? a : b) = m;
+            }
+            const float l2 = std::min(b + kLiftPad, maxLift);
+            if (!blocked(l2)) lift = l2;
+        }
+        m_groundRays->liftHint = b > 0.0f ? b : 0.0f;
+        if (lift == 0.0f) {
+            if (pr.inside) stop = pr.stop;
+            if (occludes(pr)) stop = std::min(stop, pr.occl);
         }
     }
-    float stop = inside;
-    if (occl >= kOcclusionShare * want) stop = std::min(stop, occl);
-    float limit = want, hard = want;
     if (stop < FLT_MAX) {
         // Parede a menos de kMinDist do alvo: a lente chega perto da cabeca,
         // mas nao entra na pedra.
         hard = std::max(0.5f, stop - 0.5f);
-        limit = std::max(std::min(kMinDist, hard), stop - margin);
+        goal = std::max(std::min(kMinDist, hard), stop - margin);
+        lo = 0.0f;
     }
-    limit = std::min(limit, hard);
+    const float limit = std::min(goal, hard);
     float cur = m_cameraCollideDist < 0.0f ? want : m_cameraCollideDist;
+    float curLift = m_cameraCollideLift;
     // Entra em ~0,06 s e sai em ~0,35 s (constantes de tempo).
-    const float tau = limit < cur ? 0.06f : 0.35f;
-    cur += (limit - cur) * (1.0f - std::exp(-std::max(dt, 0.0f) / tau));
-    cur = std::min({cur, hard, want});
-    m_cameraCollideDist = cur;
-    m_camera.setOrbitClamp(cur >= want - 1e-3f ? FLT_MAX : cur);
+    const float k = std::max(dt, 0.0f);
+    cur += (limit - cur) * (1.0f - std::exp(-k / (limit < cur ? 0.06f : 0.35f)));
+    cur = std::max(std::min(cur, hard), lo);
+    curLift += (lift - curLift) * (1.0f - std::exp(-k / (lift > curLift ? 0.06f : 0.35f)));
+    if ((cur != limit || curLift != lift) && probe(pitch + curLift, cur).inside) {
+        cur = limit;
+        curLift = lift;
+    }
+    // De volta a' pedida: solta, e o zoom do jogo volta a valer na hora.
+    const bool distFree = std::abs(cur - want) < 0.05f;
+    if (curLift < 1e-4f) curLift = 0.0f;
+    m_cameraCollideDist = distFree ? -1.0f : cur;
+    m_cameraCollideLift = curLift;
+    m_camera.setOrbitOverride(distFree ? FLT_MAX : cur, curLift);
 }
 
 } // namespace eruption

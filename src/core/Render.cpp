@@ -566,7 +566,7 @@ void Engine::render() {
     // Spline stores X normalized over pitch 0..89°, so convert pitch to normalized X.
     constexpr float kTiltPitchMin = 0.0f;
     constexpr float kTiltPitchMax = 89.0f;
-    float pitchDeg = glm::degrees(m_camera.orbitPitch());
+    float pitchDeg = glm::degrees(m_camera.viewPitch());
     float pitchNorm = (pitchDeg - kTiltPitchMin) / (kTiltPitchMax - kTiltPitchMin);
     frameUbo.spriteTilt = m_charConfig.billboardTiltSpline.evaluate(pitchNorm);
     
