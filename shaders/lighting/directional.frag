@@ -612,7 +612,9 @@ void main() {
         lit = legacyDirectionalLight(N, albedo.rgb, viewDir, pbr);
     } else {
         // albedoLinear/roughness already carry the wet-surface modulation.
-        vec3 radiance = pbrCookTorrance(N, viewDir, L, albedoLinear, metallic, roughness, lColor, lIntensity) * lights.pbrLightScale;
+        vec3 radiance = (pbrSpriteDiffuseOnly(pbr)
+            ? albedoLinear / PBR_PI * lColor * lIntensity * max(dot(N, L), 0.0)
+            : pbrCookTorrance(N, viewDir, L, albedoLinear, metallic, roughness, lColor, lIntensity)) * lights.pbrLightScale;
         // Keep the lit image in linear space; post_composite.frag applies the final gamma.
         lit = max(radiance, vec3(0.0));
     }

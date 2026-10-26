@@ -103,6 +103,14 @@ vec3 pbrMultiScatterCompensation(vec3 F0, float roughness, float NdotV) {
 // Full energy-conserving Cook-Torrance BRDF.
 // albedo is expected to be in linear space.
 // Returns radiance already multiplied by NdotL.
+// Sprite sem mapa MRAH-W (pbr.r = 0,75 e rugosidade 1, sprite.frag): so' o
+// difuso. A arte ja' traz o brilho pintado; o lobo especular de dieletrico
+// (F0 0,04) somava por igual sobre a arte escura e a deixava cinza-lavada.
+// Bloco de arte preta (albedo 18/255) sob o sol, quadro 120: ver o commit.
+bool pbrSpriteDiffuseOnly(vec4 pbr) {
+    return abs(pbr.r - 0.75) < 0.06 && pbr.g > 0.99;
+}
+
 vec3 pbrCookTorrance(vec3 N, vec3 V, vec3 L, vec3 albedo, float metallic, float roughness, vec3 lightColor, float lightIntensity) {
     vec3 H = normalize(V + L);
 
