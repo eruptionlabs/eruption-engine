@@ -353,10 +353,14 @@ void Engine::updateWorld() {
                         // Texturas já comprimidas do pacote ao lado do .glb: sem
                         // ele cada uma era decodificada no quadro (3,8 s num mapa
                         // de 12 MB).
-                        EmbeddedBakeResult bake;
-                        if (readEmbeddedBakeCache(m, embeddedTextureMaxSize(), pbrSynthesisEnabled(), bake))
-                            for (auto& [name, tex] : bake.textures)
-                                out->baked.emplace(embeddedName(name, map), std::move(tex));
+                        // Pacote velho ou ausente (o .glb mudou depois dele):
+                        // comprime aqui, na thread, e grava o pacote. Sem isso a
+                        // decodificação caía no quadro do encaixe: 1,4 s num
+                        // vizinho de 801 instâncias com o pacote 5 h mais velho.
+                        EmbeddedBakeResult bake =
+                            bakeEmbeddedTextures(m, embeddedTextureMaxSize(), pbrSynthesisEnabled());
+                        for (auto& [name, tex] : bake.textures)
+                            out->baked.emplace(embeddedName(name, map), std::move(tex));
                         namespaceEmbedded(m, map);
                         out->models.push_back(convertModelToAsset(m));
                         out->slotUse.push_back(ModelRenderer::scanSlotUse(out->models.back()));
