@@ -74,4 +74,6 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     uvec4 u_gbSlots2;
     // Recorte por volume (FrameUBO::cutaway, gbuffer/see_through.glsl).
     vec4 u_cutaway[12];
+    // Faixa do ver atraves (FrameUBO::seeThroughBand, gbuffer/see_through.glsl).
+    vec4 u_seeThroughBand;
 };

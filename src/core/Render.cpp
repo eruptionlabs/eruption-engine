@@ -2855,10 +2855,11 @@ void Engine::toggleWireframe() {
     ERUPTION_LOG_INFO("Wireframe %s (F8)", wireframeMode() ? "ligado" : "desligado");
 }
 
-void Engine::setSeeThrough(float radius, float opacity, bool atFocus) {
+void Engine::setSeeThrough(float radius, float opacity, bool atFocus, float band) {
     m_seeThroughRadius = std::max(0.0f, radius);
     m_seeThroughOpacity = glm::clamp(opacity, 0.0f, 1.0f);
     m_seeThroughAtFocus = atFocus;
+    m_seeThroughBand = std::max(0.0f, band);
 }
 
 void Engine::setFocusPoint(const Vec3* point) {
@@ -2894,6 +2895,7 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
     ubo.seeThrough = Vec4(0.0f);
     ubo.seeThrough2 = Vec4(0.0f);
     ubo.seeThrough3 = Vec4(0.0f);
+    ubo.seeThroughBand = Vec4(0.0f);
     static const Vec2 kEnv = [] {
         Vec2 v(-1.0f, 0.25f);
         if (const char* e = std::getenv("ERUPTION_TEST_SEE_THROUGH")) std::sscanf(e, "%f,%f", &v.x, &v.y);
@@ -2925,6 +2927,16 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
     if (radii.x <= 1e-5f || radii.y <= 1e-5f) return;
     ubo.seeThrough = Vec4(c.x, c.y, radii.x, radii.y);
     ubo.seeThrough2 = Vec4(glm::distance(mid, m_camera.position()), feet.y, h, opacity);
+    // Faixa abaixo do centro: o "para baixo" da tela e' para onde vai um ponto
+    // do chao puxado na direcao da camera (vale com qualquer projecao).
+    const float dist = glm::distance(mid, m_camera.position());
+    if (m_seeThroughBand > 0.0f && m_seeThroughBand < dist) {
+        Vec3 toCam = m_camera.position() - feet;
+        toCam.y = 0.0f;
+        Vec2 cd;
+        if (glm::length(toCam) > 1e-3f && ndc(feet + glm::normalize(toCam) * r, cd) && std::abs(cd.y - c.y) > 1e-5f)
+            ubo.seeThroughBand = Vec4(dist - m_seeThroughBand, cd.y > c.y ? 1.0f : -1.0f, 1.2f * radii.x, 0.0f);
+    }
     // Ancora do padrao: um ponto do mundo preso numa grade de 512 u perto do
     // jogador (troca so' ao cruzar a grade), em pixels do alvo do G-buffer.
     const Vec3 ancora(std::round(feet.x / 512.0f) * 512.0f, std::round(feet.y / 64.0f) * 64.0f,

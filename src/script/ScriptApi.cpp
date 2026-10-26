@@ -1676,8 +1676,15 @@ int camera_keep_inside_map(lua_State* L) {
 int camera_see_through(lua_State* L) {
     static const char* const kCenters[] = {"player", "focus", nullptr};
     const bool atFocus = luaL_checkoption(L, 3, "player", kCenters) == 1;
+    // {band = margem}: tambem a faixa da tela abaixo do centro (Engine::setSeeThrough).
+    float band = 0.0f;
+    if (lua_istable(L, 4)) {
+        lua_getfield(L, 4, "band");
+        band = static_cast<float>(luaL_optnumber(L, -1, 0.0));
+        lua_pop(L, 1);
+    }
     eng().setSeeThrough(static_cast<float>(luaL_optnumber(L, 1, 0.0)), static_cast<float>(luaL_optnumber(L, 2, 0.25)),
-                        atFocus);
+                        atFocus, band);
     return 0;
 }
 // Geometria colada na camera sai em dither (Engine::setNearFade).
@@ -2448,8 +2455,12 @@ declare camera: {
     -- screen, down to `opacity` (default 0.25) at the center. 0 turns it off.
     -- center "focus": around the point given to world.set_focus instead (a
     -- group under a bridge, with the leader off to the side); the player
-    -- while no focus point is set.
-    see_through: (radius: number, opacity: number?, center: ("player" | "focus")?) -> (),
+    -- while no focus point is set. options.band: also the strip of the
+    -- screen below the center, down to the edge, cutting what is more than
+    -- `band` world units in front of it (a low camera looking past rocks);
+    -- painted ground meshes and floors at foot height stay.
+    see_through: (radius: number, opacity: number?, center: ("player" | "focus")?,
+                  options: { band: number? }?) -> (),
     -- Map and model geometry closer than `start` world units to the camera
     -- disappears as a dither pattern and comes back fully by `end` (default
     -- 1.5 x start), so a fence brushing the lens no longer covers the screen.
