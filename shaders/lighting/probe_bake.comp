@@ -35,14 +35,14 @@ layout(set = 0, binding = 4, rgba16f) uniform writeonly image3D outProbes;
 // (meio passo da marcha): um telhado de mapa legado e' UM poligono, base e topo
 // coincidem e a marcha pulava por cima sem nunca "entrar". As copas so'
 // funcionavam porque tem espessura real (topo da copa ate' a folha de baixo).
-bool beyond(mat4 vp, sampler2D depthTex, vec3 p) {
+bool beyond(mat4 vp, sampler2D depthTex, vec3 p, float eps) {
     vec4 c = vp * vec4(p, 1.0);
     vec2 uv = c.xy * 0.5 + 0.5;
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return false;
-    return c.z + u.params.w > texture(depthTex, uv).r;
+    return c.z + eps > texture(depthTex, uv).r;
 }
-bool insideModels(vec3 p) {
-    return beyond(u.topVP, modelTopDepth, p) && beyond(u.botVP, modelBotDepth, p);
+bool insideModels(vec3 p, float eps) {
+    return beyond(u.topVP, modelTopDepth, p, eps) && beyond(u.botVP, modelBotDepth, p, eps);
 }
 
 void main() {
@@ -50,8 +50,11 @@ void main() {
     if (any(greaterThanEqual(id, u.dims.xyz))) return;
     vec3 p0 = u.gridMin.xyz + (vec3(id) + 0.5) * u.cell.xyz;
 
-    // Probe enterrada no terreno ou dentro de um modelo: invalida.
-    if (beyond(u.topVP, terrainDepth, p0) || insideModels(p0)) {
+    // Probe enterrada no terreno ou dentro de um modelo: invalida. Sem a
+    // espessura minima: com ela, a probe logo abaixo de um telhado (4 u sob
+    // uma laje, com folga de ~7 u) caia "dentro", era anulada e a dilatacao
+    // a enchia com as vizinhas de ceu aberto - debaixo da tenda dava vis 1.
+    if (beyond(u.topVP, terrainDepth, p0, u.params.w) || insideModels(p0, 0.0)) {
         imageStore(outProbes, ivec3(id), vec4(-1.0, 0.0, 0.0, 0.0));
         return;
     }
@@ -73,7 +76,7 @@ void main() {
         float V = 1.0;
         for (int s = 1; s <= steps; ++s) {
             float t = start + (radius - start) * (float(s) / float(steps));
-            if (insideModels(p0 + d * t)) { V = 0.0; break; }
+            if (insideModels(p0 + d * t, u.params.w)) { V = 0.0; break; }
         }
         L0 += V * 0.282095 * w;
         L1 += V * 0.488603 * d * w;

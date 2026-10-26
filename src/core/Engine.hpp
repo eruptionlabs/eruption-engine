@@ -1119,6 +1119,11 @@ private:
     // carregar o mapa. Preset "irradiance_probes" / "irradiance_probe_strength";
     // ERUPTION_TEST_NO_PROBES=1 desliga (A/B).
     IrradianceProbes m_irradianceProbes;
+    // Instancias que a grade cozida viu (SIZE_MAX: grade nao foi cozida aqui,
+    // nao recoze). Ver refreshIrradianceProbes.
+    size_t m_probeBakedInstances = SIZE_MAX;
+    size_t m_probeSeenInstances = 0;
+    int m_probeStableFrames = 0;
     bool m_irradianceProbesEnabled = true;
     float m_irradianceProbeStrength = 1.0f;
     CloudLayerRenderer m_cloudLayerRenderer;
@@ -1925,6 +1930,7 @@ private:
     void resetWorld();
     void buildWorldGraph();
     void updateWorld();
+    void refreshIrradianceProbes(); // ProbeRefresh.cpp
     void resolveRegionSlots(WorldRegionLoad& load);
     void uploadVfxGround(); // grade de altura do mapa aberto para as particulas
     bool m_vfxGroundDirty = false; // pincel de relevo mexeu: reenviar (no maximo a cada 30 frames)

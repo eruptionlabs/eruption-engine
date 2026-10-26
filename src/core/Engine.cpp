@@ -1321,6 +1321,7 @@ float Engine::advanceFrame() {
     updateWarp(); // troca de mapa pelo seletor (leitura em thread, montagem pelo loadMap)
     updateTestTour(m_frameDt);
     updateWorld(); // vizinhos do mundo contínuo entram e saem
+    refreshIrradianceProbes(); // depois deles: a grade ve o que entrou
     updateSoundEmitters();
     m_audio.update(m_camera.position(), m_camera.forward(), m_camera.up(), m_timer.unscaledDeltaTime()); // ouvinte na câmera; o som nao para no hit-stop
 
