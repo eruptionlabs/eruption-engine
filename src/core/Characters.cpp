@@ -378,7 +378,8 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
                 altura = static_cast<float>(ls.textures[static_cast<size_t>(idx)].height) * kPixelToWorld * spr.scaleY;
         }
         const float passo = altura > 1.0f ? kAlturasPorSegundo * altura : kPassoNormal;
-        delay *= std::clamp(passo / speed, 0.25f, 2.0f);
+        // Piso 0,15: um bicho baixo a 100 u/s pede 0,2 (com 0,25 saia 26% lento).
+        delay *= std::clamp(passo / speed, 0.15f, 2.0f);
     }
     c.timer += dt * 1000.0f;
     if (moving && !named) {
