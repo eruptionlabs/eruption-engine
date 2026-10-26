@@ -468,6 +468,7 @@ public:
     float m_tessLevelCap = 64.0f;    // chave "tessellation_max_level"
     float m_tessBandScale = 1.0f;    // chave "tessellation_band_scale"
     uint32_t m_godRayLights = 4;     // chave "god_ray_lights"
+    float m_godRaySun = 0.0f;        // chave "god_ray_sun" (forca dos raios do sol)
     MapFog m_scriptFog;              // world.set_fog (set=false: nenhuma)
     DioramaLookConfig& lookConfig() { return m_lookConfig; }
     ConfigManager& dioramaConfig() { return m_dioramaConfig; }

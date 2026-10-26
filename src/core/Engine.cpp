@@ -2381,6 +2381,9 @@ void Engine::applyGraphicsPreset() {
     // Raios de luz das luzes pontuais (passe de pos, meia resolucao): quantas
     // luzes no maximo. 0 desliga (degraus baixo e medio do celular).
     m_godRayLights = static_cast<uint32_t>(std::clamp(p.value("god_ray_lights", 4), 0, 4));
+    // Raios do sol no mesmo passe: forca (0 desliga, padrao). O jogo liga no
+    // data/graphics.json do projeto.
+    m_godRaySun = std::clamp(p.value("god_ray_sun", 0.0f), 0.0f, 8.0f);
     // Particulas: pool total na GPU e escala de nascimento por preset.
     m_vfx.setBudget(static_cast<uint32_t>(std::max(1024, p.value("vfx_max_particles", 131072))),
                     p.value("vfx_spawn_scale", 1.0f));
