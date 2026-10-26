@@ -271,6 +271,8 @@ void SpriteSystem::uploadInstances() {
         uint32_t flags = static_cast<uint32_t>(s.flags);
         // Bit 8 is reserved for usePalette in some parts, but here we set MatId in 3-7
         flags |= (s.materialId & 0x1F) << 3; 
+        if (m_shadowMapCasters && hasFlag(s.flags, SpriteFlags::Billboard) && hasFlag(s.flags, SpriteFlags::CastShadow))
+            flags |= static_cast<uint32_t>(SpriteFlags::ShadowMap);
         inst.flags = flags;
         
         inst.paletteIndex = s.paletteIndex;

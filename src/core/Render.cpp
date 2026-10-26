@@ -1157,6 +1157,9 @@ void Engine::render() {
         uint32_t spriteCount = m_spriteSystem.visibleCount();
         if (spriteCount > 0) {
             const int kind = spriteShadowKind();
+            // "map": a silhueta vai no passe de sombra do sol (sprite_shadow.vert);
+            // vale a partir do proximo empacotamento das instancias.
+            m_spriteSystem.setShadowMapCasters(kind == 3);
             if (kind >= 1) {
                 // O disco do pe' e a sombra de luz pontual vao depois deste
                 // passe, como decal (precisam ler a profundidade): ver o
@@ -1197,7 +1200,7 @@ void Engine::render() {
     // leitura) e avalia a pegada no ponto visivel. O quadro deitado a +0,12 do
     // pe' brigava com o chao em listras e sumia sob laje e degrau.
     if (!m_benchmarkThunderstormStarted && m_spriteSystem.visibleCount() > 0) {
-        if (spriteShadowKind() >= 1) {
+        if (spriteShadowKind() == 1 || spriteShadowKind() == 2) {
             VkRenderingAttachmentInfo decalColor{};
             decalColor.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             decalColor.imageView = m_deferredLighting.litImageView();
@@ -3019,7 +3022,8 @@ void Engine::collectSpritePointShadows(std::vector<SpritePointShadow>& out) cons
 }
 
 // Tipo de sombra dos sprites neste quadro: characters.set_shadow, senao o
-// data/char_config.json. ERUPTION_TEST_SPRITE_SHADOW=0|1|2 (teste) fixa o tipo.
+// data/char_config.json. ERUPTION_TEST_SPRITE_SHADOW=0|1|2|3 (teste) fixa o tipo
+// (3 = "map", a silhueta no mapa de sombra).
 int Engine::spriteShadowKind() const {
     static const int kKindEnv = [] {
         const char* e = std::getenv("ERUPTION_TEST_SPRITE_SHADOW");
