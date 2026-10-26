@@ -130,6 +130,10 @@ const vec2 poissonDisk[16] = vec2[](
 // Sample one cascade quadrant. Cascades are side by side in the atlas:
 // c0 at x in [0, 0.5], c1 at x in [0.5, 1]. texelSize is in full-atlas UV,
 // so kernel offsets land on physical texels in either quadrant.
+// Pixel de sprite (pbr.r = 0,75, sprite.frag), marcado em main() antes do
+// calcShadow: a sombra sobre ele e' filtrada mais largo (sampleCascade).
+bool g_spritePixel = false;
+
 float sampleCascade(sampler2DShadow atlas, vec3 projCoord, int idx, float currentDepth, vec2 texelSize, vec2 dz_duv) {
     vec2 baseUV = vec2(projCoord.x * 0.5 + 0.5 * float(idx), projCoord.y);
     float shadow = 0.0;
@@ -190,6 +194,11 @@ float sampleCascade(sampler2DShadow atlas, vec3 projCoord, int idx, float curren
             return 0.0;
         }
     }
+    // Sprite em pe' contra a luz: o texel do mapa cai inclinado sobre o quad e
+    // a borda de um bloqueador fino (ripa, franja, folha) virava listra em
+    // zigue-zague e chuvisco sobre a arte. No pixel de sprite o filtro abre
+    // para no minimo 2,5x: a sombra sobre o personagem sai como meio-tom.
+    if (g_spritePixel) penumbraScale = max(penumbraScale, 2.5);
 
     if (usePoisson) {
         int numTaps = clamp(int(shadowParams.y), 1, 16);
@@ -619,6 +628,7 @@ void main() {
         lit = max(radiance, vec3(0.0));
     }
 
+    g_spritePixel = abs(pbr.r - 0.75) < 0.06;
     float shadow = calcShadow(spriteSelfShadowShift(worldPos, pbr), normal);
     float cloudShadow = calcCloudShadow(worldPos);
 
