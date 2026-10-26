@@ -138,7 +138,9 @@ void main() {
     } else {
         // PBR expects albedo in linear space; convert and tone-map back.
         vec3 albedoLinear = srgbToLinear(albedo.rgb);
-        vec3 radiance = pbrCookTorrance(N, viewDir, L, albedoLinear, metallic, roughness, lightColor, intensity * att) * lights.pbrLightScale;
+        vec3 radiance = (pbrSpriteDiffuseOnly(pbr)
+            ? albedoLinear / PBR_PI * lightColor * intensity * att * max(dot(N, L), 0.0)
+            : pbrCookTorrance(N, viewDir, L, albedoLinear, metallic, roughness, lightColor, intensity * att)) * lights.pbrLightScale;
         // Keep the lit image in linear space; post_composite.frag applies the final gamma.
         lit = max(radiance, vec3(0.0));
     }

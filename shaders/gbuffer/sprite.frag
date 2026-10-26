@@ -150,7 +150,9 @@ void main() {
         // original look; alpha is still sampled by the deferred pass elsewhere.
     }
 
-    float roughness = 0.5;
+    // Sem mapa: rugosidade 1, que a luz le' como "sprite so' difuso"
+    // (pbrSpriteDiffuseOnly, lighting/pbr_common.glsl).
+    float roughness = 1.0;
     // Era 0.5: METADE METAL pra' TODO sprite sem mapa MRAH-W - ou seja, pra'
     // todo personagem, monstro e NPC do jogo, que sao pele, pano, couro e
     // papel. Meio-metal escurece o difuso pela metade e joga essa metade num
