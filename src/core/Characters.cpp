@@ -425,7 +425,7 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
     const float flash = f.flashLeft > 0.0f ? f.flashLeft / std::max(1e-4f, f.flashTotal) : 0.0f;
     // Topo do quadro (ui.anchor, characters.head_screen): a parte mais alta.
     // No sprite_vert.glsl o topo da parte e' -yOff + 0,5 h - centerY, com
-    // centerY = -h/2.
+    // centerY = -h/2; a faixa transparente de cima (opaqueTop) nao conta.
     float headTop = -1e9f, headSide = 0.0f;
 
     for (const auto& spr : action.frames[static_cast<size_t>(c.frame)].sprites) {
@@ -444,8 +444,9 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         // Base do quadro no chão (mesma regra dos sprites PNG do jogador).
         s.texRect = Vec4(xOff * kPixelToWorld, spr.offsetY * kPixelToWorld, spriteYaw, -h * 0.5f);
         s.size = Vec2(w, h);
-        if (-s.texRect.y + h > headTop) {
-            headTop = -s.texRect.y + h;
+        const float topo = -s.texRect.y + h - static_cast<float>(tex.opaqueTop) * kPixelToWorld * spr.scaleY * fxScale;
+        if (topo > headTop) {
+            headTop = topo;
             headSide = s.texRect.x;
         }
         s.texIndex = tex.slot;

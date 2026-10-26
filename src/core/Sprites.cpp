@@ -92,6 +92,20 @@ namespace {
         return b;
     }
 
+    // Para na primeira linha com alfa >= 128 (o limiar das folhas PNG); toda
+    // transparente, conta o quadro inteiro.
+    uint32_t opaqueTopRow(const SprImage& img) {
+        const size_t w = img.width;
+        for (uint32_t y = 0; y < img.height; ++y) {
+            for (size_t x = 0; x < w; ++x) {
+                const size_t i = y * w + x;
+                const bool opaque = img.isIndexed ? img.pixels[i] != 0 : img.pixels[i * 4 + 3] >= 128;
+                if (opaque) return y;
+            }
+        }
+        return 0;
+    }
+
     bool isClassSpritePath(const std::string& path) {
         static const char* classNames[] = { "storm_wizard", "berserker", "falconer", "morning_star" };
         std::string lower;
@@ -143,6 +157,7 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
         outResources.push_back(res);
         return 0;
     }
+    res.opaqueTop = opaqueTopRow(img);
 
     uint32_t mipLevels = m_mipmapMenu.config.enabled ? MipmapGenerator::calculateMipLevels(img.width, img.height) : 1;
 
