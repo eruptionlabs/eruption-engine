@@ -289,31 +289,68 @@ bool CSSLayout::parsePolygon(const std::string& value, std::vector<PolyPoint>& o
     const size_t open = value.find("polygon(");
     const size_t close = value.rfind(')');
     if (open == std::string::npos || close == std::string::npos || close < open) return false;
-    // Uma coordenada: soma de termos "N%" e "Npx" (0 sem unidade e' 0).
-    auto coord = [](const std::string& t, float& frac, float& px) {
-        frac = px = 0.0f;
-        float v = 0.0f;
-        if (!t.empty() && t.back() == '%') frac = parseFloat(t.substr(0, t.size() - 1)) / 100.0f;
-        else if (t.size() > 2 && t.compare(t.size() - 2, 2, "px") == 0) px = parseFloat(t.substr(0, t.size() - 2));
-        else if ((v = parseFloat(t, 0.0f)) != 0.0f) px = v;
+    // Um termo "N%", "Npx" (sem unidade = px) ou N vw/vh/vmin/vmax, somado
+    // com o sinal dado.
+    auto term = [](const std::string& t, float sign, float& frac, float& px, float* v) {
+        static const char* kUnits[4] = {"vmin", "vmax", "vw", "vh"};
+        static const int kSlot[4] = {2, 3, 0, 1};
+        for (int u = 0; u < 4; ++u) {
+            const size_t n = std::char_traits<char>::length(kUnits[u]);
+            if (t.size() > n && t.compare(t.size() - n, n, kUnits[u]) == 0) {
+                v[kSlot[u]] += sign * parseFloat(t.substr(0, t.size() - n)) / 100.0f;
+                return;
+            }
+        }
+        if (!t.empty() && t.back() == '%') frac += sign * parseFloat(t.substr(0, t.size() - 1)) / 100.0f;
+        else if (t.size() > 2 && t.compare(t.size() - 2, 2, "px") == 0) px += sign * parseFloat(t.substr(0, t.size() - 2));
+        else px += sign * parseFloat(t, 0.0f);
     };
     const std::string body = value.substr(open + 8, close - open - 8);
     size_t start = 0;
     while (start <= body.size()) {
         size_t comma = body.find(',', start);
         if (comma == std::string::npos) comma = body.size();
-        const std::string pair = CSSParser::trim(body.substr(start, comma - start));
-        const size_t sp = pair.find_first_of(" \t");
-        if (sp != std::string::npos) {
-            PolyPoint p;
-            coord(CSSParser::trim(pair.substr(0, sp)), p.fx, p.px);
-            coord(CSSParser::trim(pair.substr(sp + 1)), p.fy, p.py);
-            out.push_back(p);
+        // Cada coordenada e' uma soma de termos: "100% - 20px", ou o mesmo em
+        // calc(); os parenteses so' agrupam, entao saem antes de separar.
+        std::string pair = body.substr(start, comma - start);
+        for (size_t k; (k = pair.find("calc")) != std::string::npos;) pair.erase(k, 4);
+        for (char& ch : pair)
+            if (ch == '(' || ch == ')' || ch == '\t') ch = ' ';
+        std::vector<std::string> tk;
+        for (size_t i = 0; i < pair.size();) {
+            while (i < pair.size() && pair[i] == ' ') ++i;
+            size_t j = i;
+            while (j < pair.size() && pair[j] != ' ') ++j;
+            if (j > i) tk.push_back(pair.substr(i, j - i));
+            i = j;
         }
+        size_t k = 0;
+        auto coord = [&](float& frac, float& px, float* v) {
+            frac = px = 0.0f;
+            if (k >= tk.size()) return false;
+            term(tk[k++], 1.0f, frac, px, v);
+            while (k + 1 < tk.size() && (tk[k] == "+" || tk[k] == "-")) {
+                term(tk[k + 1], tk[k] == "-" ? -1.0f : 1.0f, frac, px, v);
+                k += 2;
+            }
+            return true;
+        };
+        PolyPoint p;
+        if (coord(p.fx, p.px, p.vx) && coord(p.fy, p.py, p.vy)) out.push_back(p);
         start = comma + 1;
     }
     if (out.size() < 3) out.clear();
     return !out.empty();
+}
+
+ImVec2 CSSLayout::PolyPoint::at(const CSSRect& r, float vw, float vh) const {
+    const float u[4] = {vw, vh, std::min(vw, vh), std::max(vw, vh)};
+    float x = r.x + fx * r.w + px, y = r.y + fy * r.h + py;
+    for (int k = 0; k < 4; ++k) {
+        x += vx[k] * u[k];
+        y += vy[k] * u[k];
+    }
+    return ImVec2(x, y);
 }
 
 void CSSLayout::parseCornerRadii(const std::string& value, float radii[4], uint8_t& pctMask) {
