@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cmath>
 #include <algorithm>
+#include <vector>
 
 namespace eruption {
 
@@ -63,9 +64,116 @@ float CSSLayout::parseFloat(const std::string& value, float fallback) {
     }
 }
 
+namespace {
+
+// Expressao de comprimento de calc()/min()/max()/clamp(): + - * /, parenteses
+// e termos com unidade, tudo resolvido em px na hora (% sobre `base`, v* sobre
+// a tela). Ex.: calc(68px * min(100vh / 1080, 100vw / 2400)) escala igual em
+// 16:9 e 21:9.
+class LengthExpr {
+public:
+    LengthExpr(const std::string& s, float base, const ImVec2* vp) : m_s(s), m_base(base), m_vp(vp) {}
+
+    bool eval(float& out) {
+        if (!sum(out)) return false;
+        skip();
+        return m_i == m_s.size();
+    }
+
+private:
+    void skip() {
+        while (m_i < m_s.size() && std::isspace(static_cast<unsigned char>(m_s[m_i]))) ++m_i;
+    }
+    bool eat(char c) {
+        skip();
+        if (m_i < m_s.size() && m_s[m_i] == c) { ++m_i; return true; }
+        return false;
+    }
+    bool sum(float& v) {
+        if (!product(v)) return false;
+        for (;;) {
+            float r = 0.0f;
+            if (eat('+')) { if (!product(r)) return false; v += r; }
+            else if (eat('-')) { if (!product(r)) return false; v -= r; }
+            else return true;
+        }
+    }
+    bool product(float& v) {
+        if (!unary(v)) return false;
+        for (;;) {
+            float r = 0.0f;
+            if (eat('*')) { if (!unary(r)) return false; v *= r; }
+            else if (eat('/')) { if (!unary(r) || r == 0.0f) return false; v /= r; }
+            else return true;
+        }
+    }
+    bool unary(float& v) {
+        if (eat('-')) { if (!unary(v)) return false; v = -v; return true; }
+        eat('+');
+        return primary(v);
+    }
+    // Lista de argumentos ja' depois do "(": guarda cada um em `args`.
+    bool argList(std::vector<float>& args) {
+        do {
+            float v = 0.0f;
+            if (!sum(v)) return false;
+            args.push_back(v);
+        } while (eat(','));
+        return eat(')');
+    }
+    bool primary(float& v) {
+        skip();
+        if (eat('(')) return sum(v) && eat(')');
+        size_t j = m_i;
+        while (j < m_s.size() && std::isalpha(static_cast<unsigned char>(m_s[j]))) ++j;
+        if (j > m_i) {
+            const std::string fn = m_s.substr(m_i, j - m_i);
+            m_i = j;
+            if (!eat('(')) return false;
+            std::vector<float> args;
+            if (!argList(args)) return false;
+            if (fn == "calc" && args.size() == 1) v = args[0];
+            else if (fn == "min") v = *std::min_element(args.begin(), args.end());
+            else if (fn == "max") v = *std::max_element(args.begin(), args.end());
+            else if (fn == "clamp" && args.size() == 3) v = std::max(args[0], std::min(args[1], args[2]));
+            else return false;
+            return true;
+        }
+        j = m_i;
+        while (j < m_s.size() && (std::isdigit(static_cast<unsigned char>(m_s[j])) || m_s[j] == '.')) ++j;
+        if (j == m_i) return false;
+        try { v = std::stof(m_s.substr(m_i, j - m_i)); } catch (...) { return false; }
+        m_i = j;
+        while (j < m_s.size() && (std::isalpha(static_cast<unsigned char>(m_s[j])) || m_s[j] == '%')) ++j;
+        const std::string unit = m_s.substr(m_i, j - m_i);
+        m_i = j;
+        const float vw = m_vp ? m_vp->x / 100.0f : 1.0f, vh = m_vp ? m_vp->y / 100.0f : 1.0f;
+        if (unit == "%") v *= m_base / 100.0f;
+        else if (unit == "vw") v *= vw;
+        else if (unit == "vh") v *= vh;
+        else if (unit == "vmin") v *= std::min(vw, vh);
+        else if (unit == "vmax") v *= std::max(vw, vh);
+        else if (!unit.empty() && unit != "px") return false;
+        return true;
+    }
+
+    const std::string& m_s;
+    size_t m_i = 0;
+    float m_base;
+    const ImVec2* m_vp;
+};
+
+} // namespace
+
 bool CSSLayout::parseLength(const std::string& value, float base, float& out, const ImVec2* viewport) {
     if (value.empty()) return false;
     if (value == "auto") { out = -1.0f; return true; }
+    if (value.find('(') != std::string::npos) {
+        float v = 0.0f;
+        if (!LengthExpr(value, base, viewport).eval(v)) return false;
+        out = v;
+        return true;
+    }
 
     size_t idx = 0;
     while (idx < value.size() && (std::isdigit(static_cast<unsigned char>(value[idx])) || value[idx] == '.' || value[idx] == '-')) ++idx;
