@@ -1139,7 +1139,8 @@ int lights_set_sprite_shadow(lua_State* L) {
 int characters_set_shadow(lua_State* L) {
     const char* k = luaL_optstring(L, 1, "");
     const int kind = std::strcmp(k, "planar") == 0 ? 0 : std::strcmp(k, "circle") == 0 ? 1
-                   : std::strcmp(k, "lights") == 0 ? 2 : std::strcmp(k, "map") == 0 ? 3 : -1;
+                   : std::strcmp(k, "lights") == 0 ? 2 : std::strcmp(k, "map") == 0 ? 3
+                   : std::strcmp(k, "map_contact") == 0 ? 4 : -1;
     eng().setSpriteShadow(kind);
     return 0;
 }
@@ -2413,8 +2414,10 @@ declare characters: {
     -- Shadow of every character: "planar" (cast by the sun), "circle" (a
     -- contact disc) or "lights" (the disc plus a shadow cast by each of the
     -- two strongest nearby lights) or "map" (the sprite's silhouette in the sun's
-    -- shadow map: it follows the relief, breaks on steps and climbs walls). No
-    -- argument goes back to the engine default.
+    -- shadow map: it follows the relief, breaks on steps and climbs walls) or
+    -- "map_contact" (the silhouette, plus the contact disc where the sun does
+    -- not reach the feet: valleys, under roofs). No argument goes back to the
+    -- engine default.
     set_shadow: (kind: string?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.

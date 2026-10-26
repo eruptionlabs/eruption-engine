@@ -207,7 +207,8 @@ public:
     void renderBillboardCircleShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo,
                                       const Vec2& circleParams, VkBuffer instanceBuffer, uint32_t count,
                                       VkImageView sceneDepth, const Vec2& planarParams,
-                                      const std::vector<SpritePointShadow>& pointShadows);
+                                      const std::vector<SpritePointShadow>& pointShadows,
+                                      VkImageView sunShadowDepth, VkBuffer sunShadowUbo, const Vec4& sunGate);
 
     uint32_t spriteCount() const { return m_spriteCount; }
 

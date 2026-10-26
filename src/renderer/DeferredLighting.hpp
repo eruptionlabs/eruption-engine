@@ -174,6 +174,9 @@ public:
     const std::vector<PointLight>& getPointLights() const { return m_pointLights; }
     // Lista do quadro (mapa + extras + VFX) montada pelo passe de luz; o pos
     // le' depois dele (raios de luz das luzes pontuais).
+    // ShadowUBO deste quadro (matrizes do mapa de sombra do sol), para quem
+    // consulta a sombra do sol fora da iluminacao (disco do "map_contact").
+    VkBuffer shadowUboBuffer() const { return m_shadowUboBuffers[m_ctx->currentFrame()]; }
     const std::vector<PointLight>& frameLights() const {
         return (m_extraPointLights.empty() && m_vfxPointLights.empty()) ? m_pointLights : m_allPointLights;
     }
