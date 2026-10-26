@@ -176,6 +176,29 @@ Engine::Engine() {
 }
 Engine::~Engine() { shutdown(); }
 
+// data/graphics.json do PROJETO (parcial): mesclado por cima do do motor
+// (JSON merge patch: objeto mescla chave a chave, o resto troca). Assim o
+// jogo ajusta tesselacao, POM e curvas por distancia sem copiar o arquivo
+// inteiro, e o motor continua dono dos presets e da tabela auto_presets.
+// "every_preset": {...} vale para todos os presets. Nunca e' gravado de
+// volta: o arquivo do motor nao muda.
+static void mergeProjectGraphics(nlohmann::json& root) {
+    const std::string path = project::config("data/graphics.json");
+    if (path == "data/graphics.json") return; // o projeto nao tem o seu
+    std::ifstream f(path);
+    nlohmann::json patch = nlohmann::json::parse(f, nullptr, false);
+    if (!patch.is_object()) {
+        ERUPTION_LOG_WARN("[GRAPHICS] %s: JSON invalido, ignorado", path.c_str());
+        return;
+    }
+    const nlohmann::json every = patch.contains("every_preset") ? patch["every_preset"] : nlohmann::json();
+    patch.erase("every_preset");
+    root.merge_patch(patch);
+    if (every.is_object() && root.contains("presets") && root["presets"].is_object())
+        for (auto& [name, preset] : root["presets"].items()) preset.merge_patch(every);
+    ERUPTION_LOG_WARN("[GRAPHICS] %s mesclado sobre data/graphics.json", path.c_str());
+}
+
 bool Engine::init(int width, int height, const std::string& title) {
     Logger::init();
     
@@ -552,6 +575,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     if (std::getenv("ERUPTION_TEST_RAIN_OCCLUSION")) m_postSettings.debugRainOcclusion = true;
 
     m_graphicsConfig.load("data/graphics.json");
+    mergeProjectGraphics(m_graphicsConfig.root());
     // Quais formatos de bloco esta GPU sabe AMOSTRAR. Maxwell (930M, o alvo)
     // tem BC1/BC3/BC5/BC7; Android/ARM não tem nenhum. Sem isso a engine
     // criaria uma imagem que o driver rejeita - o fallback RGBA8 depende
