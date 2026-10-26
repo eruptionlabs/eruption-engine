@@ -744,8 +744,15 @@ public:
     // No do grafo do elemento tocado neste quadro (ui.graph_clicked), com
     // area de toque de pelo menos 48 dp por no; vazio se nenhum.
     std::string uiGraphClicked(const std::string& selector);
+    // No do grafo onde comecou o toque que segue apertado ha' pelo menos
+    // `seconds` (ui.graph_held); vazio se nenhum.
+    std::string uiGraphHeld(const std::string& selector, float seconds);
     struct UiHold { glm::vec2 start{0.0f}, end{0.0f}; double t0 = 0.0, t1 = 0.0; bool active = false, released = false; int frame = -1; };
     UiHold m_uiHold;
+    // Relogio da interface: soma o passo sem escala de tempo (o real com o
+    // mundo em pausa), entao um toque longo dura o mesmo com ERUPTION_TEST_FIXED_DT
+    // em qualquer maquina, e nao encolhe em camera lenta.
+    double m_uiClock = 0.0;
     void updateUiHold();
     glm::vec2 uiCursor() const;
     struct UiDrag { glm::vec2 start{0.0f}, last{0.0f}, delta{0.0f}; bool active = false, moving = false; int frame = -1; };
