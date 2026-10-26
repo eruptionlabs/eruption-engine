@@ -375,6 +375,12 @@ declare camera: {
     -- 1.5 x start), so a fence brushing the lens no longer covers the screen.
     -- Shadows are unaffected. 0 turns it off.
     near_fade: (start: number, end_: number?) -> (),
+    -- true: the orbit camera stops short of the terrain (the open map and
+    -- the neighbors in the scene) between the target and the lens, moving
+    -- in quickly and back out slowly; options.margin keeps that many world
+    -- units between lens and ground (default 6). Thin models (trees, posts)
+    -- do not count; see_through handles them. Off by default.
+    collide: (on: boolean, options: { margin: number? }?) -> (),
     -- false: dragging with the left or right mouse button (a finger on the
     -- world, on a phone) no longer turns the player camera, so the game can
     -- run its own gesture from input.touches. The middle button still pans.

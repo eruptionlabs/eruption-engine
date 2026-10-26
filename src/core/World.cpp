@@ -832,6 +832,7 @@ void Engine::finishRegion(WorldRegion& r) {
     r.state = WorldRegion::State::Shown;
     ++m_worldVersion;
     updateEdgeAprons();
+    warmCameraCollision(); // grades do relevo neste quadro, que ja' encaixa o vizinho
     const auto tMisc = std::chrono::steady_clock::now();
     stitchGroundEdges();
     const auto tStitch = std::chrono::steady_clock::now();
@@ -1039,6 +1040,7 @@ void Engine::releaseRegion(WorldRegion& r) {
     r.state = WorldRegion::State::Idle;
     ++m_worldVersion;
     updateEdgeAprons();
+    warmCameraCollision(); // solta as grades do mapa que saiu
 }
 
 void Engine::rebuildWorldLights() {

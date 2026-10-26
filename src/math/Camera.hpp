@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cfloat>
+
 #include <algorithm>
 
 #include "math/Types.hpp"
@@ -84,6 +86,11 @@ public:
     // as curvas foram ajustadas a mao.
     float zoomPercent() const;
     void setMaxOrbitDistance(float maxDist) { m_maxOrbitDistance = maxDist; }
+    // Teto da distancia da orbita por colisao (Engine::updateCameraCollision):
+    // a posicao usa min(orbitDistance, teto); orbitDistance() continua a
+    // pedida. FLT_MAX = sem teto.
+    void setOrbitClamp(float maxDist);
+    float orbitClamp() const { return m_orbitClamp; }
     float maxOrbitDistance() const { return m_maxOrbitDistance; }
 
     // LIMITES DE PITCH - fonte unica, respeitada TANTO por setOrbit() quanto
@@ -211,6 +218,7 @@ private:
     float m_defaultPitch = 0.0f;
     float m_defaultDistance = 208.0f;
     float m_maxOrbitDistance = 1000.0f;
+    float m_orbitClamp = FLT_MAX;
 
     void rebuildView();
     void rebuildProjection();
