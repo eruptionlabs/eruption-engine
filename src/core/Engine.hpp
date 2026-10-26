@@ -733,6 +733,9 @@ public:
     // Ponto `p` toca o elemento: dentro de `r` e fora do selo dele, que tem
     // toque proprio ("#id:badge").
     bool uiHit(const std::string& selector, const CSSRect& r, const glm::vec2& p) const;
+    // No do grafo do elemento tocado neste quadro (ui.graph_clicked), com
+    // area de toque de pelo menos 48 dp por no; vazio se nenhum.
+    std::string uiGraphClicked(const std::string& selector);
     struct UiHold { glm::vec2 start{0.0f}, end{0.0f}; double t0 = 0.0, t1 = 0.0; bool active = false, released = false; int frame = -1; };
     UiHold m_uiHold;
     void updateUiHold();

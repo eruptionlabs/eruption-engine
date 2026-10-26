@@ -263,6 +263,199 @@ void UiDocument::drawBadge(ImDrawList* dl, const Element& e, const CSSRect& c) c
                              e.badgeText.c_str(), 1);
 }
 
+void UiDocument::setGraph(const std::string& selector, std::vector<GraphNode> nodes) {
+    Element* e = find(selector);
+    if (!e) return;
+    const size_t n = std::min<size_t>(nodes.size(), 4096);
+    nodes.resize(n);
+    std::unordered_map<std::string, uint16_t> index;
+    for (size_t i = 0; i < n; ++i) index.emplace(nodes[i].id, static_cast<uint16_t>(i));
+    e->graphEdges.clear();
+    std::vector<int> incoming(n, 0);
+    for (size_t i = 0; i < n; ++i)
+        for (const std::string& to : nodes[i].links) {
+            const auto it = index.find(to);
+            if (it == index.end() || it->second == i) continue;
+            e->graphEdges.emplace_back(static_cast<uint16_t>(i), it->second);
+            ++incoming[it->second];
+        }
+
+    // Camadas: profundidade pela busca em largura a partir das raizes; o que
+    // sobra (ciclo sem raiz) comeca uma busca nova na profundidade 0.
+    std::vector<std::vector<uint16_t>> next(n);
+    for (const auto& ed : e->graphEdges) next[ed.first].push_back(ed.second);
+    std::vector<int> depth(n, -1);
+    std::vector<uint16_t> fila;
+    fila.reserve(n);
+    auto busca = [&](uint16_t raiz) {
+        depth[raiz] = 0;
+        fila.push_back(raiz);
+        for (size_t k = fila.size() - 1; k < fila.size(); ++k)
+            for (uint16_t j : next[fila[k]])
+                if (depth[j] < 0) { depth[j] = depth[fila[k]] + 1; fila.push_back(j); }
+    };
+    for (size_t i = 0; i < n; ++i)
+        if (incoming[i] == 0 && depth[i] < 0) busca(static_cast<uint16_t>(i));
+    for (size_t i = 0; i < n; ++i)
+        if (depth[i] < 0) busca(static_cast<uint16_t>(i));
+    int levels = 0;
+    for (int d : depth) levels = std::max(levels, d + 1);
+    std::vector<std::vector<uint16_t>> level(static_cast<size_t>(levels));
+    for (size_t i = 0; i < n; ++i) level[static_cast<size_t>(depth[i])].push_back(static_cast<uint16_t>(i));
+    size_t widest = 1;
+    for (const auto& l : level) widest = std::max(widest, l.size());
+
+    // Posicao na camada (Sugiyama, so' a parte do baricentro): uma descida
+    // pela media dos pais acerta a ORDEM de cada camada; a camada mais larga
+    // fica espalhada por igual nessa ordem; acima dela cada no vai para a
+    // media dos filhos, abaixo para a dos pais, com folga minima de uma
+    // coluna da camada mais larga. So' descer apertava os pais num canto e
+    // espalhar todas por igual cruzava as ligacoes.
+    std::vector<float> xs(n, 0.5f);
+    const float gap = 1.0f / static_cast<float>(widest);
+    auto media = [&](uint16_t j, int vizinha, bool pais) {
+        float sum = 0.0f;
+        int cnt = 0;
+        for (const auto& ed : e->graphEdges) {
+            const uint16_t de = pais ? ed.second : ed.first, para = pais ? ed.first : ed.second;
+            if (de == j && depth[para] == vizinha) sum += xs[para], ++cnt;
+        }
+        return cnt ? sum / static_cast<float>(cnt) : xs[j];
+    };
+    auto assenta = [&](std::vector<uint16_t>& l, int vizinha, bool pais) {
+        std::vector<float> alvo(l.size());
+        for (size_t k = 0; k < l.size(); ++k) alvo[k] = media(l[k], vizinha, pais);
+        for (size_t k = 0; k < l.size(); ++k) xs[l[k]] = alvo[k];
+        std::stable_sort(l.begin(), l.end(), [&xs](uint16_t a, uint16_t b) { return xs[a] < xs[b]; });
+        for (size_t k = 1; k < l.size(); ++k) xs[l[k]] = std::max(xs[l[k]], xs[l[k - 1]] + gap);
+        const float over = xs[l.back()] - (1.0f - gap * 0.5f);
+        if (over > 0.0f)
+            for (uint16_t j : l) xs[j] -= over;
+        xs[l[0]] = std::max(xs[l[0]], gap * 0.5f);
+        for (size_t k = 1; k < l.size(); ++k) xs[l[k]] = std::max(xs[l[k]], xs[l[k - 1]] + gap);
+    };
+    auto espalha = [&](const std::vector<uint16_t>& l) {
+        for (size_t k = 0; k < l.size(); ++k) xs[l[k]] = (k + 0.5f) / static_cast<float>(l.size());
+    };
+    size_t larga = 0;
+    for (size_t d = 0; d < level.size(); ++d) {
+        if (d == 0) espalha(level[d]);
+        else assenta(level[d], static_cast<int>(d) - 1, true);
+        if (level[d].size() > level[larga].size()) larga = d;
+    }
+    espalha(level[larga]);
+    for (size_t d = larga; d-- > 0;) assenta(level[d], static_cast<int>(d) + 1, false);
+    for (size_t d = larga + 1; d < level.size(); ++d) assenta(level[d], static_cast<int>(d) - 1, true);
+
+    e->graphAt.resize(n);
+    e->graphAuto.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        const bool autoPos = nodes[i].pos.x < 0.0f || nodes[i].pos.y < 0.0f;
+        e->graphAuto[i] = autoPos ? 1 : 0;
+        e->graphAt[i] = autoPos ? Vec2(xs[i], (depth[i] + 0.5f) / static_cast<float>(levels)) : nodes[i].pos;
+    }
+    e->graph = std::move(nodes);
+}
+
+void UiDocument::clearGraph(const std::string& selector) {
+    if (Element* e = find(selector)) {
+        e->graph.clear();
+        e->graphAt.clear();
+        e->graphAuto.clear();
+        e->graphEdges.clear();
+    }
+}
+
+// Diametro do no: --node-size no CSS do elemento, senao 6% da altura da tela
+// (65 px a 1080), nunca menos de 16 px.
+float UiDocument::graphRadius(const Element& e, const Vec2& area) const {
+    float d = std::max(16.0f, area.y * 0.06f);
+    CSSLayout::parseLength(m_layout.rawProperty(e.selector, "--node-size"), area.y, d);
+    return d * 0.5f;
+}
+
+bool UiDocument::graphSideways(const Element& e) const {
+    return m_layout.rawProperty(e.selector, "--graph-direction") == "right";
+}
+
+// Lido uma vez por desenho: a consulta ao CSS por ponto era metade do custo.
+Vec2 UiDocument::graphPoint(const Element& e, size_t i, const CSSRect& r, bool sideways) {
+    Vec2 a = e.graphAt[i];
+    if (sideways && e.graphAuto[i]) a = Vec2(a.y, a.x);
+    return Vec2(r.x + a.x * r.w, r.y + a.y * r.h);
+}
+
+// Ligacoes por baixo (--link-color), depois os nos: circulo (--node-color ou
+// a cor do no), o icone inscrito, ou o texto dentro; com icone, o texto vai
+// embaixo do no.
+void UiDocument::drawGraph(ImDrawList* dl, const Element& e, const CSSRect& r, const Vec2& area, float alpha) const {
+    const float rad = graphRadius(e, area);
+    ImU32 link = CSSLayout::parseColor(m_layout.rawProperty(e.selector, "--link-color"), 0);
+    if (!link) link = IM_COL32(200, 200, 210, 200);
+    link = withAlpha(link, alpha);
+    const float thick = std::max(1.5f, rad * 0.12f);
+    const bool side = graphSideways(e);
+    for (const auto& ed : e.graphEdges) {
+        const Vec2 a = graphPoint(e, ed.first, r, side), b = graphPoint(e, ed.second, r, side);
+        dl->AddLine(ImVec2(a.x, a.y), ImVec2(b.x, b.y), link, thick);
+    }
+    ImU32 fillCss = CSSLayout::parseColor(m_layout.rawProperty(e.selector, "--node-color"), 0);
+    if (!fillCss) fillCss = IM_COL32(40, 55, 80, 235);
+    const ImU32 rim = withAlpha(IM_COL32(255, 255, 255, 220), alpha);
+    const ImU32 ink = withAlpha(m_layout.textColor(e.selector, IM_COL32(240, 240, 240, 255)), alpha);
+    for (size_t i = 0; i < e.graph.size(); ++i) {
+        const GraphNode& g = e.graph[i];
+        const Vec2 p = graphPoint(e, i, r, side);
+        const ImVec2 c(p.x, p.y);
+        dl->AddCircleFilled(c, rad, withAlpha(g.hasColor ? toImU32(g.color) : fillCss, alpha), 24);
+        dl->AddCircle(c, rad, rim, 24, std::max(1.0f, rad * 0.08f));
+        void* tex = (m_imageResolver && !g.image.empty()) ? m_imageResolver(g.image) : nullptr;
+        if (tex) {
+            const float s = rad * 0.7f;
+            dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(c.x - s, c.y - s), ImVec2(c.x + s, c.y + s),
+                         ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), withAlpha(IM_COL32(255, 255, 255, 255), alpha));
+            if (!g.text.empty())
+                CSSLayout::drawLabel(dl, c.x, c.y + rad + 2.0f, rad * 0.55f, ink, g.text.c_str(), 1);
+        } else if (!g.text.empty()) {
+            CSSLayout::drawLabel(dl, c.x, c.y - rad * 0.4f, rad * 0.8f, ink, g.text.c_str(), 1);
+        }
+    }
+}
+
+bool UiDocument::graphNodeAt(const std::string& selector, float x, float y, float w, float h, float minTouch,
+                             const Vec2& p, std::string& id) const {
+    const Element* e = find(selector);
+    if (!e || e->graph.empty() || chainHidden(*e)) return false;
+    const Vec2 area(w, h);
+    CSSRect r = resolveRect(*e, area);
+    r.x += x;
+    r.y += y;
+    const float reach = std::max(graphRadius(*e, area), minTouch * 0.5f);
+    float best = reach * reach;
+    const bool side = graphSideways(*e);
+    int hit = -1;
+    for (size_t i = 0; i < e->graph.size(); ++i) {
+        const Vec2 d = graphPoint(*e, i, r, side) - p;
+        const float d2 = d.x * d.x + d.y * d.y;
+        if (d2 <= best) { best = d2; hit = static_cast<int>(i); }
+    }
+    if (hit < 0) return false;
+    id = e->graph[static_cast<size_t>(hit)].id;
+    return true;
+}
+
+bool UiDocument::graphNodeCenter(const std::string& selector, const std::string& id, float x, float y, float w,
+                                 float h, Vec2& center) const {
+    const Element* e = find(selector);
+    if (!e) return false;
+    CSSRect r = resolveRect(*e, Vec2(w, h));
+    r.x += x;
+    r.y += y;
+    for (size_t i = 0; i < e->graph.size(); ++i)
+        if (e->graph[i].id == id) { center = graphPoint(*e, i, r, graphSideways(*e)); return true; }
+    return false;
+}
+
 bool UiDocument::chainHidden(const Element& e) const {
     // A mesma cadeia curta de resolveRect.
     const Element* p = &e;
@@ -290,6 +483,10 @@ void UiDocument::resetOverrides() {
         e.hasPlace = false;
         e.hasAnchor = false;
         e.hasBadge = false;
+        e.graph.clear();
+        e.graphAt.clear();
+        e.graphAuto.clear();
+        e.graphEdges.clear();
         e.uv = Vec4(0.0f, 0.0f, 1.0f, 1.0f);
         e.text = e.textCss;
         e.value = e.valueCss;
@@ -452,6 +649,7 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
             break;
         }
         }
+        if (!e.graph.empty()) drawGraph(dl, e, r, area, alpha);
     }
 
     // Selos por cima de todos os elementos: o de um botao nao some sob o
