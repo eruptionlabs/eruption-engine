@@ -308,6 +308,9 @@ public:
         uint32_t mipLevels = 1;
         // Content bounds after erosion/dilation (for class sprites with ghost pixels).
         int contentMinX = -1, contentMinY = -1, contentMaxX = -1, contentMaxY = -1;
+        // Primeira linha (de cima) com um pixel de alfa >= 128: a cabeça de
+        // characters.head_screen, numa célula alta por causa de um efeito.
+        uint32_t opaqueTop = 0;
     };
     struct LoadedSprite {
         AnimFile act;
