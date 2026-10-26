@@ -76,4 +76,6 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_cutaway[12];
     // Faixa do ver atraves (FrameUBO::seeThroughBand, gbuffer/see_through.glsl).
     vec4 u_seeThroughBand;
+    // Elipse por personagem perto do foco (FrameUBO::seeThroughExtra).
+    vec4 u_seeThroughExtra[12];
 };

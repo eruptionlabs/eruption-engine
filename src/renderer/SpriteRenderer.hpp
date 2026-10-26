@@ -150,6 +150,12 @@ struct FrameUBO {
     // distancia de corte (0 desliga), y = sinal do "para baixo" em NDC, z =
     // meia largura em NDC.
     alignas(16) Vec4 seeThroughBand;
+    // Ver atraves com o centro no foco: uma elipse por personagem perto dele
+    // (Render.cpp), 2 vec4 cada: o primeiro como seeThrough (z <= 0 = fim
+    // da lista); o segundo como seeThrough2, mas x = distancia no plano XZ
+    // da camera aos pes.
+    static constexpr uint32_t kSeeThroughExtra = 6;
+    alignas(16) Vec4 seeThroughExtra[2 * kSeeThroughExtra];
 };
 
 // Luz pontual dominante de um sprite (Engine::spriteDominantLights), por
