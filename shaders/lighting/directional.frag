@@ -173,8 +173,12 @@ float sampleCascade(sampler2DShadow atlas, vec3 projCoord, int idx, float curren
     {
         const int BLOCKER_TAPS = 8;
         float searchRadius = max(tan(lights.sunAngularRadius) * 6.0, texelSize.x * 2.0);
-        float blockerSum = 0.0;
-        float blockerCount = 0.0;
+        // Amostra no centro alem do disco: com so' o disco, um bloqueador mais
+        // fino que o raio de busca (perna, braco de sprite; haste) podia cair
+        // entre as 8 amostras e o pixel saia aceso no meio da sombra.
+        float dC = texture(shadowAtlasDepth, clamp(baseUV, cascadeMinUV, cascadeMaxUV)).r;
+        float blockerSum = dC < currentDepth ? dC : 0.0;
+        float blockerCount = dC < currentDepth ? 1.0 : 0.0;
         for (int i = 0; i < BLOCKER_TAPS; ++i) {
             vec2 sUV = clamp(baseUV + poissonDisk[i] * searchRadius, cascadeMinUV, cascadeMaxUV);
             float d = texture(shadowAtlasDepth, sUV).r;
@@ -554,7 +558,8 @@ MaterialProps decodeMaterialProps(float a) {
 vec3 spriteSelfShadowShift(vec3 worldPos, vec4 pbr) {
     if (abs(pbr.r - 0.75) >= 0.06 || pbr.a <= 0.0) return worldPos;
     vec3 toSun = normalize(-lights.dirLightDir.xyz);
-    float reach = pbr.a * 255.0 * 1.25 / max(length(toSun.xz), 0.25) + 2.0;
+    // + 24: o recuo do cartao para o sol (kCardLift, sprite_shadow.vert).
+    float reach = pbr.a * 255.0 * 1.25 / max(length(toSun.xz), 0.25) + 2.0 + 24.0;
     return worldPos + toSun * reach;
 }
 

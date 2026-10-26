@@ -71,6 +71,9 @@ layout(location = 10) out vec3 v_billUp;
 layout(location = 11) out vec2 v_quad;
 // Instancia = indice em getSortedSprites: a luz principal dela (contraluz).
 layout(location = 12) out flat uint v_instance;
+// Meia largura do quadro em mundo, com o deslocamento horizontal (sombra no
+// mapa, ver sprite.frag).
+layout(location = 13) out flat float v_halfWidth;
 #endif
 
 void main() {
@@ -130,6 +133,7 @@ void main() {
     v_billUp = billUp;
     v_quad = a_position.xy;
     v_instance = uint(gl_InstanceIndex);
+    v_halfWidth = 0.5 * scaleX + ((i_flags & 4u) != 0u ? abs(i_texRect.x) : 0.0);
 #endif
 
     if ((i_flags & 4u) == 0u) {
