@@ -369,6 +369,15 @@ declare input: {
     -- Name of the first connected controller, or nil: show button prompts
     -- instead of key prompts while it is there.
     gamepad: () -> string?,
+    -- Mouse cursor in window pixels, with or without a button down (pan at
+    -- the screen edge). On a phone it follows the finger that moves the camera.
+    mouse_position: () -> (number, number),
+    -- Mouse wheel movement this frame (0 when still; positive forward).
+    scroll: () -> number,
+    -- Fingers on the world this frame (not on the interface or the touch
+    -- stick), in window pixels: {id, x, y}. Two fingers make a pan or a
+    -- pinch; the game reads them and decides.
+    touches: () -> { { id: number, x: number, y: number } },
 }
 
 -- Models placed in the map.

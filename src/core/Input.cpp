@@ -33,6 +33,7 @@ glm::vec2 Input::s_mousePos{0.0f};
 glm::vec2 Input::s_mousePosPrev{0.0f};
 float Input::s_scroll = 0.0f;
 float Input::s_scrollDelta = 0.0f;
+std::vector<Input::TouchPoint> Input::s_touches;
 bool Input::s_cursorVisible = true;
 bool Input::s_cursorLocked = false;
 std::array<Input::GamepadState, 4> Input::s_gamepads{};

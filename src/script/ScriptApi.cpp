@@ -687,6 +687,34 @@ int input_touch(lua_State* L) {
     lua_pushboolean(L, kFinge || Input::touchScreen());
     return 1;
 }
+// Cursor do mouse em pixels da janela, com ou sem botao (borda da tela).
+int input_mouse_position(lua_State* L) {
+    const glm::vec2 p = Input::mousePosition();
+    lua_pushnumber(L, p.x);
+    lua_pushnumber(L, p.y);
+    return 2;
+}
+// Roda do mouse neste quadro (0 parada; positivo para frente).
+int input_scroll(lua_State* L) {
+    lua_pushnumber(L, Input::mouseScrollDelta());
+    return 1;
+}
+// Dedos no mundo (fora da interface e do controle de toque): {id, x, y}.
+int input_touches(lua_State* L) {
+    const auto& ts = Input::touches();
+    lua_createtable(L, int(ts.size()), 0);
+    for (size_t i = 0; i < ts.size(); ++i) {
+        lua_createtable(L, 0, 3);
+        lua_pushinteger(L, ts[i].id);
+        lua_setfield(L, -2, "id");
+        lua_pushnumber(L, ts[i].x);
+        lua_setfield(L, -2, "x");
+        lua_pushnumber(L, ts[i].y);
+        lua_setfield(L, -2, "y");
+        lua_rawseti(L, -2, int(i) + 1);
+    }
+    return 1;
+}
 int input_pressed(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     const int b = padButtonFromName(name);
@@ -2019,7 +2047,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg fx[] = {
         {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash}, {"dim", fx_dim},
         {"fading", fx_fading}, {nullptr, nullptr}};
-    static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {"touch", input_touch}, {"touch_pad", input_touch_pad}, {"double_tapped", input_double_tapped}, {"gamepad", input_gamepad}, {nullptr, nullptr}};
+    static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {"touch", input_touch}, {"touch_pad", input_touch_pad}, {"double_tapped", input_double_tapped}, {"gamepad", input_gamepad}, {"mouse_position", input_mouse_position}, {"scroll", input_scroll}, {"touches", input_touches}, {nullptr, nullptr}};
     static const luaL_Reg models[] = {
         {"count", models_count}, {"preload", models_preload}, {"find", models_find}, {"name", models_name},
         {"position", models_position}, {"set_position", models_set_position}, {"near", models_near},
@@ -2453,6 +2481,15 @@ declare input: {
     -- Name of the first connected controller, or nil: show button prompts
     -- instead of key prompts while it is there.
     gamepad: () -> string?,
+    -- Mouse cursor in window pixels, with or without a button down (pan at
+    -- the screen edge). On a phone it follows the finger that moves the camera.
+    mouse_position: () -> (number, number),
+    -- Mouse wheel movement this frame (0 when still; positive forward).
+    scroll: () -> number,
+    -- Fingers on the world this frame (not on the interface or the touch
+    -- stick), in window pixels: {id, x, y}. Two fingers make a pan or a
+    -- pinch; the game reads them and decides.
+    touches: () -> { { id: number, x: number, y: number } },
 }
 
 -- Models placed in the map.

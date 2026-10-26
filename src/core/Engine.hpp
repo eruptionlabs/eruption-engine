@@ -651,6 +651,7 @@ public:
     // Perto da camera (camera.near_fade): o que fica a menos de `start` da
     // camera some em dither e volta ate' `end` (padrao 1,5x start). 0 desliga.
     void setNearFade(float start, float end);
+    void injectTestInput(); // ERUPTION_TEST_INPUT (Engine.cpp)
     // Recorte por volume (world.set_cutaway): malha do mapa e modelos dentro
     // do volume `slot` (0..FrameUBO::kCutaways-1) somem em dither ate'
     // `opacity`, com borda suave de `soft` unidades. shape 0 desliga, 1 caixa

@@ -21,6 +21,15 @@ bool TouchRouter::hasRole(Role r) const {
     return false;
 }
 
+// Dedos da camera e os ignorados (o terceiro dedo, o que sobra da pinca):
+// o jogo decide o que fazer com eles. Interface e controle de toque ficam de fora.
+void TouchRouter::publish() const {
+    std::vector<Input::TouchPoint> pts;
+    for (const Finger& f : m_fingers)
+        if (f.role == Role::Camera || f.role == Role::Ignored) pts.push_back({f.id, f.x, f.y});
+    Input::setTouches(std::move(pts));
+}
+
 void TouchRouter::button(int b, int action) {
     if (m_buttons[b] == action) return;
     m_buttons[b] = action;
@@ -32,6 +41,7 @@ void TouchRouter::releaseAll() {
     m_camera = m_pinch = -1;
     Input::stickTouch(false, 0.0f, 0.0f);
     button(GLFW_MOUSE_BUTTON_RIGHT, GLFW_RELEASE);
+    publish();
 }
 
 void TouchRouter::down(int id, float x, float y, int64_t tNs) {
@@ -64,6 +74,7 @@ void TouchRouter::down(int id, float x, float y, int64_t tNs) {
         button(GLFW_MOUSE_BUTTON_RIGHT, GLFW_RELEASE);
         m_pinchDist = std::hypot(x - c.x, y - c.y);
     }
+    publish();
 }
 
 void TouchRouter::move(int id, float x, float y) {
@@ -97,6 +108,7 @@ void TouchRouter::move(int id, float x, float y) {
         default:
             break;
     }
+    publish();
 }
 
 void TouchRouter::up(int id, float x, float y, int64_t tNs, bool cancelled) {
@@ -136,6 +148,7 @@ void TouchRouter::up(int id, float x, float y, int64_t tNs, bool cancelled) {
         m_camera = -1;
     }
     f = Finger{};
+    publish();
 }
 
 } // namespace eruption
