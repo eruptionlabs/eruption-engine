@@ -52,7 +52,10 @@ struct SpriteSheetSpec {
     };
     std::vector<NamedAnim> extra;
     float worldHeight = 25.0f; // altura do quadro (sem o vão do pé) no mundo
-    int footOffset = 0;        // pixels transparentes abaixo do pé (cortados de cada quadro)
+    // Linhas abaixo da linha do pé: a âncora no chão. Quadro com algo
+    // desenhado ali (corpo deitado, poeira) guarda essas linhas e desce por
+    // elas; os outros perdem o vão transparente, como sempre.
+    int footOffset = 0;
 };
 
 // Imagem já cortada e o plano de ações, para a prévia do editor e o gravador.
@@ -60,6 +63,8 @@ struct SpriteSheetResult {
     int cellW = 0, cellH = 0;
     std::vector<std::vector<uint8_t>> images; // RGBA cellW x cellH
     std::vector<std::pair<int, int>> imageCell; // (linha, coluna) de cada imagem na folha
+    std::vector<int> imageBelow; // linhas abaixo do pé que a imagem guarda (0 = cellH de altura)
+    std::vector<int> imageTop;   // linhas vazias tiradas do topo (só em quadro com algo abaixo do pé)
     int sheetW = 0, sheetH = 0, strideH = 0;    // folha e altura da célula antes do corte do pé
     struct Frame { uint32_t image; bool mirror; };
     struct Action { uint32_t delayMs; std::vector<Frame> frames; };

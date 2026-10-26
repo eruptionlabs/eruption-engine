@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -52,8 +53,8 @@ bool buildSpriteSheet(const SpriteSheetSpec& spec, SpriteSheetResult& out, std::
     }
     out.cellW = img.width / spec.columns;
     const int fullH = img.height / spec.rows;
-    // O vão transparente abaixo do pé sai da imagem: o motor põe a borda de
-    // baixo do quadro no chão.
+    // O vão abaixo do pé sai da imagem: o motor põe a borda de baixo do
+    // quadro no chão. Se o quadro tem pixel nesse vão, ele fica (ver cell).
     out.cellH = std::max(1, fullH - std::clamp(spec.footOffset, 0, fullH - 1));
     out.sheetW = img.width;
     out.sheetH = img.height;
@@ -66,13 +67,34 @@ bool buildSpriteSheet(const SpriteSheetSpec& spec, SpriteSheetResult& out, std::
         if (row < 0 || col < 0 || row >= spec.rows || col >= spec.columns) return -1;
         auto it = cellImage.find({row, col});
         if (it != cellImage.end()) return static_cast<int>(it->second);
-        std::vector<uint8_t> px(size_t(out.cellW) * out.cellH * 4);
-        for (int y = 0; y < out.cellH; ++y) {
+        // Ultima linha com algo abaixo do pe: ate' ela a imagem cresce.
+        int below = 0;
+        for (int y = fullH - 1; y >= out.cellH && below == 0; --y) {
             const uint8_t* src = &img.pixels[(size_t(row * fullH + y) * img.width + size_t(col) * out.cellW) * 4];
+            for (int x = 0; x < out.cellW; ++x)
+                if (src[x * 4 + 3] != 0) { below = y - out.cellH + 1; break; }
+        }
+        // Quadro que desce abaixo do pe' perde tambem as linhas vazias de
+        // cima: o sombreador puxa a profundidade da borda de baixo ate' o
+        // chao e interpola ate' a de cima, e um topo vazio alto fazia a
+        // rampa comecar longe da ancora (o corpo deitado passava na frente
+        // de quem estava em cima dele). A borda de baixo nao muda.
+        int top = 0;
+        for (bool empty = below > 0; empty && top < out.cellH; ++top) {
+            const uint8_t* src = &img.pixels[(size_t(row * fullH + top) * img.width + size_t(col) * out.cellW) * 4];
+            for (int x = 0; x < out.cellW && empty; ++x) empty = src[x * 4 + 3] == 0;
+            if (!empty) break;
+        }
+        const int h = out.cellH + below - top;
+        std::vector<uint8_t> px(size_t(out.cellW) * h * 4);
+        for (int y = 0; y < h; ++y) {
+            const uint8_t* src = &img.pixels[(size_t(row * fullH + top + y) * img.width + size_t(col) * out.cellW) * 4];
             std::memcpy(&px[size_t(y) * out.cellW * 4], src, size_t(out.cellW) * 4);
         }
         out.images.push_back(std::move(px));
         out.imageCell.push_back({row, col});
+        out.imageBelow.push_back(below);
+        out.imageTop.push_back(top);
         const uint32_t idx = static_cast<uint32_t>(out.images.size() - 1);
         cellImage[{row, col}] = idx;
         return static_cast<int>(idx);
@@ -149,9 +171,12 @@ bool writeEruptSprV2(const SpriteSheetResult& sheet, const std::string& path, st
     f.write("ERUPTSPR", 8);
     u32(sheet.named.empty() ? 2 : 3); // 3: com animações extras no fim
     u32(static_cast<uint32_t>(sheet.images.size()));
-    for (const auto& px : sheet.images) {
+    auto below = [&](size_t i) { return i < sheet.imageBelow.size() ? sheet.imageBelow[i] : 0; };
+    auto top = [&](size_t i) { return i < sheet.imageTop.size() ? sheet.imageTop[i] : 0; };
+    for (size_t i = 0; i < sheet.images.size(); ++i) {
+        const auto& px = sheet.images[i];
         u32(static_cast<uint32_t>(sheet.cellW));
-        u32(static_cast<uint32_t>(sheet.cellH));
+        u32(static_cast<uint32_t>(sheet.cellH + below(i) - top(i)));
         f.write(reinterpret_cast<const char*>(px.data()), static_cast<std::streamsize>(px.size()));
     }
     u32(static_cast<uint32_t>(sheet.actions.size()));
@@ -162,7 +187,9 @@ bool writeEruptSprV2(const SpriteSheetResult& sheet, const std::string& path, st
             u32(1);
             u32(fr.image);
             i32(0);
-            i32(0);
+            // Desce a camada pelas linhas guardadas abaixo do pe (em px do
+            // mundo, ja' na escala): a linha do pe fica na ancora.
+            i32(static_cast<int32_t>(std::lround(below(fr.image) * sheet.scale)));
             f32(sheet.scale);
             f32(sheet.scale);
             f32(1.0f); f32(1.0f); f32(1.0f); f32(1.0f);
