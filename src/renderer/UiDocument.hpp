@@ -182,6 +182,19 @@ private:
         std::vector<Vec2> graphAt;
         std::vector<uint8_t> graphAuto;
         std::vector<std::pair<uint16_t, uint16_t>> graphEdges;
+        // Forma e efeito (lidos em build, nao por quadro):
+        // transform: rotate(N deg|rad|turn) em torno do centro, sentido horario;
+        // clip-path: polygon(...) em rect e bar;
+        // border-radius com um raio por canto (com um so' fica o caminho antigo);
+        // --glow: <cor> <raio> ou box-shadow: dx dy desfoque [espalhar] <cor>.
+        float rotate = 0.0f;
+        std::vector<CSSLayout::PolyPoint> clip;
+        bool corners = false;
+        float radii[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        uint8_t radiiPct = 0;
+        uint32_t glowColor = 0;
+        float glowRadius = 0.0f;
+        Vec2 glowOffset{0.0f};
     };
     // O elemento ou um pai esta' escondido (ui.visible ou CSS), ou ancorado
     // fora da tela. Esconder o pai esconde o grupo inteiro.
@@ -192,6 +205,10 @@ private:
     static Vec2 graphPoint(const Element& e, size_t i, const CSSRect& r, bool sideways);
     void drawGraph(ImDrawList* dl, const Element& e, const CSSRect& r, const Vec2& area, float alpha) const;
     void drawBadge(ImDrawList* dl, const Element& e, const CSSRect& c) const;
+    // Rect e bar com clip-path ou cantos diferentes: o contorno vira poligono,
+    // a barra enche recortada pelo valor.
+    void drawShaped(ImDrawList* dl, const Element& e, const CSSRect& r, const Vec2& area, float alpha, ImU32 bg,
+                    ImU32 edge) const;
 
     void build();
     static void drawArcBar(ImDrawList* dl, const CSSRect& r, const Element& e, float value, uint32_t rail, uint32_t fill);

@@ -3,6 +3,7 @@
 #include <imgui.h>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace eruption {
 
@@ -64,7 +65,30 @@ public:
 
     static ImU32 parseColor(const std::string& value, ImU32 fallback = 0);
     static float parseFloat(const std::string& value, float fallback = 0.0f);
-    static bool parseLength(const std::string& value, float base, float& out);
+    // px, % de `base`, e com `viewport` tambem vw, vh, vmin e vmax (% da area
+    // inteira, nao do pai): um painel que guarda a forma em qualquer tela.
+    static bool parseLength(const std::string& value, float base, float& out, const ImVec2* viewport = nullptr);
+
+    // FORMAS ALEM DO RETANGULO. Lidas uma vez (UiDocument::build), pintadas
+    // por quadro sem consultar o parser.
+    //
+    // clip-path: polygon(x y, ...): cada coordenada em % do retangulo e/ou px.
+    struct PolyPoint { float fx = 0.0f, px = 0.0f, fy = 0.0f, py = 0.0f; };
+    static bool parsePolygon(const std::string& value, std::vector<PolyPoint>& out);
+    // border-radius com 1 a 4 valores, na ordem do CSS (sup-esq, sup-dir,
+    // inf-dir, inf-esq); `pctMask` marca os que sao % do menor lado.
+    static void parseCornerRadii(const std::string& value, float radii[4], uint8_t& pctMask);
+    // Contorno do retangulo com um raio por canto (pontos em sentido horario).
+    static void roundedRectPoints(const CSSRect& r, const float radii[4], std::vector<ImVec2>& out);
+    // Preenche um poligono simples: convexo com a borda suavizada do ImGui,
+    // concavo por recorte de orelhas (o ImGui desta versao so' enche convexo).
+    static void fillPolygon(ImDrawList* dl, const ImVec2* pts, int count, ImU32 color);
+    // Brilho em volta do retangulo (--glow, box-shadow): camadas que crescem
+    // ate' `radius` px e somem no caminho.
+    static void drawGlow(ImDrawList* dl, const CSSRect& r, float rounding, ImU32 color, float radius);
+    // Gira tudo o que foi desenhado desde `vtxStart` em torno de `center`
+    // (transform: rotate). O recorte do ImGui continua alinhado a' tela.
+    static void rotateVertices(ImDrawList* dl, int vtxStart, const ImVec2& center, float degrees);
 
 private:
     const CSSRule* rule(const std::string& selector) const;

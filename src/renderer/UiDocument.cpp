@@ -6,6 +6,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <cstdlib>
 #include <cmath>
@@ -26,6 +27,44 @@ ImU32 toImU32(const Vec4& c) {
 ImU32 withAlpha(ImU32 c, float mul) {
     const int a = int(((c >> IM_COL32_A_SHIFT) & 0xFF) * std::clamp(mul, 0.0f, 1.0f));
     return (c & ~IM_COL32_A_MASK) | (ImU32(a) << IM_COL32_A_SHIFT);
+}
+
+// transform: rotate(...) em graus; 0 sem rotate.
+float parseRotate(const std::string& v) {
+    const size_t at = v.find("rotate(");
+    if (at == std::string::npos) return 0.0f;
+    const size_t end = v.find(')', at);
+    const std::string arg = CSSParser::trim(v.substr(at + 7, end == std::string::npos ? std::string::npos : end - at - 7));
+    const float n = CSSLayout::parseFloat(arg, 0.0f);
+    if (arg.find("turn") != std::string::npos) return n * 360.0f;
+    if (arg.find("rad") != std::string::npos) return n * 57.2957795f;
+    return n; // deg, ou sem unidade
+}
+
+// --glow: <cor> <raio>  |  box-shadow: dx dy [desfoque [espalhar]] <cor>.
+void parseGlow(const std::string& v, bool shadow, uint32_t& color, float& radius, Vec2& offset) {
+    float nums[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    int n = 0;
+    color = 0;
+    size_t i = 0;
+    while (i < v.size()) {
+        while (i < v.size() && std::isspace(static_cast<unsigned char>(v[i]))) ++i;
+        size_t j = i;
+        while (j < v.size() && !std::isspace(static_cast<unsigned char>(v[j]))) ++j;
+        if (j > i) {
+            const std::string t = v.substr(i, j - i);
+            if (t[0] == '#') color = CSSLayout::parseColor(t, 0);
+            else if (n < 4) nums[n++] = CSSLayout::parseFloat(t, 0.0f);
+        }
+        i = j;
+    }
+    if (shadow) {
+        offset = Vec2(nums[0], nums[1]);
+        radius = std::max(nums[2] + nums[3], 0.0f);
+    } else {
+        offset = Vec2(0.0f);
+        radius = std::max(nums[0], 0.0f);
+    }
 }
 
 } // namespace
@@ -130,6 +169,15 @@ void UiDocument::build() {
             const std::string a = CSSParser::trim(*v);
             e.align = a == "center" ? 1 : (a == "right" ? 2 : 0);
         }
+        if (auto v = prop("transform")) e.rotate = parseRotate(*v);
+        if (auto v = prop("clip-path")) CSSLayout::parsePolygon(*v, e.clip);
+        if (auto v = prop("border-radius")) {
+            CSSLayout::parseCornerRadii(*v, e.radii, e.radiiPct);
+            e.corners = e.radiiPct != 0 || e.radii[1] != e.radii[0] || e.radii[2] != e.radii[0] ||
+                        e.radii[3] != e.radii[0];
+        }
+        if (auto v = prop("--glow")) parseGlow(*v, false, e.glowColor, e.glowRadius, e.glowOffset);
+        else if (auto s = prop("box-shadow")) parseGlow(*s, true, e.glowColor, e.glowRadius, e.glowOffset);
         e.z = m_layout.zIndex(r.selector, 0);
         e.visibleCss = m_layout.displayVisible(r.selector);
         e.text = e.textCss;
@@ -545,7 +593,8 @@ bool UiDocument::rectOf(const std::string& selector, float x, float y, float w, 
     if (e->widget == Widget::Text && out.w <= 0.0f && out.h <= 0.0f && ImGui::GetCurrentContext()) {
         const std::string& txt = e->hasText ? e->text : e->textCss;
         float size = h * 0.03f;
-        CSSLayout::parseLength(m_layout.rawProperty(e->selector, "font-size"), h, size);
+        const ImVec2 vp(w, h);
+        CSSLayout::parseLength(m_layout.rawProperty(e->selector, "font-size"), h, size, &vp);
         const float tw = ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.0f, txt.c_str()).x;
         out.x -= e->align == 0 ? 0.0f : (e->align == 1 ? tw * 0.5f : tw);
         out.w = tw;
@@ -578,9 +627,52 @@ void UiDocument::drawArcBar(ImDrawList* dl, const CSSRect& r, const Element& e, 
     stroke(a0, a0 + (a1 - a0) * std::clamp(value, 0.0f, 1.0f), fill);
 }
 
+void UiDocument::drawShaped(ImDrawList* dl, const Element& e, const CSSRect& r, const Vec2& area, float alpha,
+                            ImU32 bg, ImU32 edge) const {
+    std::vector<ImVec2> pts;
+    if (!e.clip.empty()) {
+        pts.reserve(e.clip.size());
+        for (const CSSLayout::PolyPoint& p : e.clip)
+            pts.push_back(ImVec2(r.x + p.fx * r.w + p.px, r.y + p.fy * r.h + p.py));
+    } else {
+        float radii[4];
+        for (int k = 0; k < 4; ++k)
+            radii[k] = (e.radiiPct >> k) & 1u ? e.radii[k] * 0.01f * std::min(r.w, r.h) : e.radii[k];
+        CSSLayout::roundedRectPoints(r, radii, pts);
+    }
+    const int n = static_cast<int>(pts.size());
+    CSSLayout::fillPolygon(dl, pts.data(), n, withAlpha(bg, alpha));
+    if (e.widget == Widget::Bar) {
+        ImU32 fill = e.hasColor[1] ? toImU32(e.color[1])
+                                   : CSSLayout::parseColor(m_layout.rawProperty(e.selector, "--fill-color"), 0);
+        if (!fill) fill = m_layout.textColor(e.selector, IM_COL32(220, 220, 220, 255));
+        const float v = std::clamp(e.hasValue ? e.value : e.valueCss, 0.0f, 1.0f);
+        if (v > 0.0f) {
+            // A forma inteira na cor do preenchimento, recortada ate' o valor.
+            dl->PushClipRect(ImVec2(r.x, r.y), ImVec2(r.x + r.w * v, r.y + r.h), true);
+            CSSLayout::fillPolygon(dl, pts.data(), n, withAlpha(fill, alpha));
+            dl->PopClipRect();
+        }
+    }
+    const float bw = m_layout.borderWidth(e.selector, 0.0f);
+    if (bw > 0.0f && (edge >> IM_COL32_A_SHIFT)) dl->AddPolyline(pts.data(), n, withAlpha(edge, alpha), ImDrawFlags_Closed, bw);
+    if (e.widget == Widget::Bar) {
+        const std::string& txt = e.hasText ? e.text : e.textCss;
+        if (!txt.empty()) {
+            float size = r.h * 0.8f;
+            const ImVec2 vp(area.x, area.y);
+            CSSLayout::parseLength(m_layout.rawProperty(e.selector, "font-size"), area.y, size, &vp);
+            CSSLayout::drawLabel(dl, r.center().x, r.y + (r.h - size) * 0.5f, size,
+                                 withAlpha(m_layout.textColor(e.selector, IM_COL32(240, 240, 240, 255)), alpha),
+                                 txt.c_str(), 1);
+        }
+    }
+}
+
 void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const {
     if (!dl || !m_loaded || w <= 0.0f || h <= 0.0f) return;
     const Vec2 area(w, h);
+    const ImVec2 viewport(w, h);
 
     for (const Element& e : m_elements) {
         if (chainHidden(e)) continue;
@@ -594,8 +686,23 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
         const ImU32 bg = e.hasColor[0] ? toImU32(e.color[0]) : m_layout.backgroundColor(e.selector, 0);
         const ImU32 edge = e.hasColor[1] ? toImU32(e.color[1]) : m_layout.borderColor(e.selector, 0);
 
+        const int vtx0 = dl->VtxBuffer.Size;
+        if (e.glowColor) {
+            CSSRect g = r;
+            g.x += e.glowOffset.x;
+            g.y += e.glowOffset.y;
+            const float round = e.corners ? std::max(std::max(e.radii[0], e.radii[1]), std::max(e.radii[2], e.radii[3]))
+                                          : m_layout.borderRadius(e.selector, 0.0f);
+            CSSLayout::drawGlow(dl, g, round, withAlpha(e.glowColor, alpha), e.glowRadius);
+        }
+
         // A pintura e' a mesma da HUD do jogador: CSSLayout::drawBox/drawBar.
-        switch (e.widget) {
+        // Forma (clip-path, um raio por canto) em rect e bar: drawShaped.
+        const bool shaped = (!e.clip.empty() || e.corners) && !e.arc &&
+                            (e.widget == Widget::Rect || e.widget == Widget::Bar);
+        if (shaped) {
+            drawShaped(dl, e, r, area, alpha, bg, edge);
+        } else switch (e.widget) {
         case Widget::Rect:
             m_layout.drawBox(dl, r, e.selector, alpha, 0, 0, 0.0f, 0.0f, bg, edge);
             break;
@@ -611,7 +718,7 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
             }
             const std::string& txt = e.hasText ? e.text : e.textCss;
             float size = r.h * 0.8f;
-            CSSLayout::parseLength(m_layout.rawProperty(e.selector, "font-size"), h, size);
+            CSSLayout::parseLength(m_layout.rawProperty(e.selector, "font-size"), h, size, &viewport);
             m_layout.drawBar(dl, r, e.selector, e.hasValue ? e.value : e.valueCss, fill, fill,
                              txt.empty() ? nullptr : txt.c_str(), size, alpha);
             break;
@@ -619,7 +726,7 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
 
         case Widget::Text: {
             float size = h * 0.03f;
-            CSSLayout::parseLength(m_layout.rawProperty(e.selector, "font-size"), h, size);
+            CSSLayout::parseLength(m_layout.rawProperty(e.selector, "font-size"), h, size, &viewport);
             const std::string& txt = e.hasText ? e.text : e.textCss;
             const float px = e.align == 0 ? r.x : (e.align == 1 ? r.center().x : r.x + r.w);
             CSSLayout::drawLabel(dl, px, r.y, size,
@@ -649,6 +756,8 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
             break;
         }
         }
+        // Texto sem caixa gira em torno do proprio ponto de ancora.
+        if (e.rotate != 0.0f) CSSLayout::rotateVertices(dl, vtx0, r.center(), e.rotate);
         if (!e.graph.empty()) drawGraph(dl, e, r, area, alpha);
     }
 
