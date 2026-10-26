@@ -104,6 +104,8 @@ public:
     // mesmo centro), em pixels da tela. Falso sem selo.
     bool badgeRects(const std::string& selector, float x, float y, float w, float h, float minTouch,
                     CSSRect& visual, CSSRect& touch) const;
+    // Algum selo desenhado agora tem a area de toque sobre `p` (pixels da tela)?
+    bool badgeTouchAt(float x, float y, float w, float h, float minTouch, const Vec2& p) const;
     // Grafo de nos sobre o elemento (ui.graph): cada no com icone (PNG) ou
     // texto, e ligacoes para outros nos por id. `pos` em fracao do retangulo
     // do elemento; sem ela (< 0), camadas pela profundidade a partir das

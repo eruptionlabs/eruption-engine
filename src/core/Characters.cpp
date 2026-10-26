@@ -609,11 +609,11 @@ static bool dentro(const CSSRect& r, const glm::vec2& p) {
 
 bool Engine::uiHit(const std::string& selector, const CSSRect& r, const glm::vec2& p) const {
     if (!dentro(r, p)) return false;
-    if (!m_uiDocument.hasBadge(selector)) return true;
-    CSSRect visual, touch;
-    m_uiDocument.badgeRects(selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w,
-                            48.0f * platform::pixelsPerDp(), visual, touch);
-    return !dentro(touch, p);
+    if (selector.size() > 6 && selector.compare(selector.size() - 6, 6, ":badge") == 0) return true;
+    // Toque que comeca na area de um selo e' so' do selo: do proprio
+    // elemento ou de outro desenhado por cima dele (o "+" sobre um botao).
+    return !m_uiDocument.badgeTouchAt(m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w,
+                                      48.0f * platform::pixelsPerDp(), Vec2(p.x, p.y));
 }
 
 bool Engine::uiClicked(const std::string& selector) {
