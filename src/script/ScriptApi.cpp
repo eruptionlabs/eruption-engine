@@ -1681,6 +1681,12 @@ int camera_near_fade(lua_State* L) {
     return 0;
 }
 
+// Arrasto do mouse/dedo gira a orbita do jogador (Engine::setOrbitInput).
+int camera_set_orbit_input(lua_State* L) {
+    eng().setOrbitInput(lua_toboolean(L, 1) != 0);
+    return 0;
+}
+
 int player_frozen(lua_State* L) {
     const PlayerController* p = ScriptBridge::player();
     lua_pushboolean(L, p && p->inputFrozen());
@@ -2043,7 +2049,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"orbit", camera_orbit}, {"set_orbit", camera_set_orbit}, {"basis", camera_basis},
         {"view", camera_view},
         {"free", camera_free}, {"keep_inside_map", camera_keep_inside_map},
-        {"see_through", camera_see_through}, {"near_fade", camera_near_fade}, {nullptr, nullptr}};
+        {"see_through", camera_see_through}, {"near_fade", camera_near_fade}, {"set_orbit_input", camera_set_orbit_input}, {nullptr, nullptr}};
     static const luaL_Reg fx[] = {
         {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash}, {"dim", fx_dim},
         {"fading", fx_fading}, {nullptr, nullptr}};
@@ -2438,6 +2444,11 @@ declare camera: {
     -- 1.5 x start), so a fence brushing the lens no longer covers the screen.
     -- Shadows are unaffected. 0 turns it off.
     near_fade: (start: number, end_: number?) -> (),
+    -- false: dragging with the left or right mouse button (a finger on the
+    -- world, on a phone) no longer turns the player camera, so the game can
+    -- run its own gesture from input.touches. The middle button still pans.
+    -- Back to true when the scripts restart.
+    set_orbit_input: (on: boolean) -> (),
 }
 
 -- Presentation of a hit: what makes a blow feel like it landed. The engine
