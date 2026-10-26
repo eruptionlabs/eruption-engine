@@ -33,6 +33,10 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
+#if defined(__linux__)
+#include <unistd.h>
+#endif
 
 namespace eruption {
 
@@ -110,6 +114,16 @@ bool groundHas(const TerrainFile& t, float x, float z) {
     return inside(lo, hi, p.x, p.y);
 }
 
+// RAM residente do processo em MB (/proc/self/statm); 0 onde não há.
+double residentMb() {
+#if defined(__linux__)
+    std::ifstream f("/proc/self/statm");
+    unsigned long long size = 0, resident = 0;
+    if (f >> size >> resident) return double(resident) * double(sysconf(_SC_PAGESIZE)) / (1024.0 * 1024.0);
+#endif
+    return 0.0;
+}
+
 // Líquidos do vizinho no lugar do mundo: centro, nível e contorno livre
 // deslocados (e girados) e a margem lobada girada. A amostra k da margem fica no ângulo 2πk/n do mundo; o giro
 // em Y leva o ângulo θ do mapa para θ - yaw, então ela vem do ângulo
@@ -156,7 +170,26 @@ struct Engine::WorldRegionLoad {
     std::unordered_map<std::string, BakedEmbeddedTexture> baked; // pacote do .glb, nomes do vizinho
     SceneEdits edits;
     std::string error;
+    // ERUPTION_TEST_CHUNK_STATS: slots de textura de cada nó (arquivo, nó),
+    // guardados antes de os slots irem para a malha.
+    std::map<std::pair<std::string, uint32_t>, std::vector<uint32_t>> nodeTexSlots;
 };
+
+namespace {
+std::vector<uint32_t> texSlotsOf(const ModelRenderer::NodeSlots& s) {
+    std::vector<uint32_t> out;
+    for (const auto& f : s.face) out.insert(out.end(), {f.texSlot, f.pbrIdx, f.normalIdx, f.emissiveSlot});
+    for (const auto& b : s.blend) out.insert(out.end(), {b.tex, b.pbrIdx, b.normalIdx});
+    out.insert(out.end(), s.mask.begin(), s.mask.end());
+    out.insert(out.end(), s.splat.begin(), s.splat.end());
+    return out;
+}
+void keepTexSlots(std::map<std::pair<std::string, uint32_t>, std::vector<uint32_t>>& dst, const std::string& file,
+                  const std::vector<ModelRenderer::NodeSlots>& slots) {
+    if (!std::getenv("ERUPTION_TEST_CHUNK_STATS")) return;
+    for (size_t n = 0; n < slots.size(); ++n) dst[{file, uint32_t(n)}] = texSlotsOf(slots[n]);
+}
+} // namespace
 
 bool Engine::mapGroundArea(const std::string& map, Vec2& lo, Vec2& hi) {
     // Só o cabeçalho do .ter (o mesmo lugar onde o MapLoader procura).
@@ -401,6 +434,10 @@ void Engine::updateWorld() {
                     return out;
                 });
                 r.state = WorldRegion::State::Loading;
+                if (std::getenv("ERUPTION_TEST_CHUNK_STATS")) {
+                    r.vramAtLoad = deviceMemoryMb();
+                    r.rssAtLoad = residentMb();
+                }
                 r.slotsResolved = false;
                 ++jobs;
             }
@@ -479,8 +516,10 @@ void Engine::resolveRegionSlots(WorldRegionLoad& load) {
         m.nodes.clear();
         if (!images.embeddedTextures.empty() && m_currentMap) m_currentMap->models.push_back(std::move(images));
     }
-    for (size_t i = 0; i < load.models.size() && i < load.slotUse.size(); ++i)
+    for (size_t i = 0; i < load.models.size() && i < load.slotUse.size(); ++i) {
         load.slots.push_back(m_modelRenderer.resolveSlots(load.models[i], load.slotUse[i]));
+        keepTexSlots(load.nodeTexSlots, load.models[i].filePath, load.slots.back());
+    }
     // Modelos da cena: os que o mapa aberto ainda não tem (o mesmo caminho do
     // addModelFromFile: imagens no mapa aberto, texturas do cache, slots).
     std::vector<std::shared_ptr<ReadyModel>> fresh;
@@ -489,6 +528,7 @@ void Engine::resolveRegionSlots(WorldRegionLoad& load) {
         m_currentMap->models.push_back(std::move(*rm->model));
         for (auto& [name, tex] : rm->bake.textures) m_embeddedBaked.emplace(name, std::move(tex));
         rm->slots = m_modelRenderer.resolveSlots(rm->asset, rm->slotUse);
+        keepTexSlots(load.nodeTexSlots, rm->asset.filePath, rm->slots);
         fresh.push_back(std::move(rm));
     }
     load.added = std::move(fresh);
@@ -568,6 +608,129 @@ bool Engine::attachRegionAdded(WorldRegion& r, double budgetMs) {
 }
 
 // Fim da entrada: cópias, espalhados, camadas, luzes, personagens; o vizinho vira chão.
+// Memória de um vizinho e de cada pedaço dele numa grade de lado S (passo 0
+// da spec de mundo em pedaços). ERUPTION_TEST_CHUNK_STATS="256,384,512": no
+// encaixe, loga a VRAM (alocações do VMA) e a RAM residente que o vizinho
+// somou desde o início da leitura e, por lado S, quanto cada pedaço da grade
+// exige: as alocações (malha, níveis de LOD, cor, MRAH-W, normal) usadas
+// pelas instâncias com centro nele, sem repetir, com a cópia que outro pedaço
+// também usa contada nos dois. O chão é uma malha só e entra inteiro em todo
+// pedaço que ele toca: a coluna "sem chão" tira ele.
+void Engine::logChunkStats(const WorldRegion& r, const WorldRegionLoad& load) {
+    const char* env = std::getenv("ERUPTION_TEST_CHUNK_STATS");
+    if (!env) return;
+    VmaAllocator vma = m_vulkan.allocator();
+    auto bytesOf = [&](VmaAllocation a) -> uint64_t {
+        if (!a) return 0;
+        VmaAllocationInfo info{};
+        vmaGetAllocationInfo(vma, a, &info);
+        return info.size;
+    };
+    // Textura por slot bindless: as do cache do motor e as de PBR do ModelRenderer.
+    std::unordered_map<uint32_t, VmaAllocation> texAlloc;
+    {
+        std::lock_guard<std::mutex> lock(m_assetCache.mutex);
+        for (const auto& [name, e] : m_assetCache.modelTextures)
+            if (e.tex.bindlessSlot) texAlloc[e.tex.bindlessSlot] = e.tex.alloc;
+    }
+    for (const auto& [slot, pbr] : m_modelRenderer.m_pbrByTexSlot) {
+        if (pbr.mrahw.index) texAlloc[pbr.mrahw.index] = pbr.mrahw.alloc;
+        if (pbr.normal.index) texAlloc[pbr.normal.index] = pbr.normal.alloc;
+    }
+    const auto& meshes = m_modelRenderer.getMeshes();
+    auto addSlot = [&](uint32_t slot, std::vector<VmaAllocation>& out) {
+        auto it = slot ? texAlloc.find(slot) : texAlloc.end();
+        if (it != texAlloc.end() && it->second) out.push_back(it->second);
+    };
+    uint32_t unknownNodes = 0;
+    auto meshAllocs = [&](const ModelInstance& in, std::vector<VmaAllocation>& out) {
+        const ModelMeshGPU& m = meshes[in.meshIndex];
+        for (VmaAllocation a : {m.vertexAlloc, m.indexAlloc, m.hiVertexAlloc, m.hiIndexAlloc, m.loIndexAlloc,
+                                m.farIndexAlloc, m.loVertexAlloc, m.farVertexAlloc, m.shIndexAlloc})
+            if (a) out.push_back(a);
+        for (uint32_t i = 0; i < m.midCount; ++i) {
+            if (m.mid[i].vertexAlloc) out.push_back(m.mid[i].vertexAlloc);
+            if (m.mid[i].indexAlloc) out.push_back(m.mid[i].indexAlloc);
+        }
+        // Nó de um arquivo que o mapa aberto já tinha: só a textura principal.
+        auto ns = load.nodeTexSlots.find({in.assetPath, in.nodeIndex});
+        if (ns == load.nodeTexSlots.end()) {
+            ++unknownNodes;
+            addSlot(m.bindlessTexSlot, out);
+            return;
+        }
+        for (uint32_t sl : ns->second) addSlot(sl, out);
+    };
+    const auto& insts = m_modelRenderer.getInstances();
+    std::set<VmaAllocation> all, ground;
+    uint64_t tris = 0;
+    for (uint32_t i = r.firstInstance; i < r.endInstance && i < insts.size(); ++i) {
+        std::vector<VmaAllocation> v;
+        meshAllocs(insts[i], v);
+        all.insert(v.begin(), v.end());
+        tris += meshes[insts[i].meshIndex].indexCount / 3;
+        if (!meshes[insts[i].meshIndex].groundCells.empty()) ground.insert(v.begin(), v.end());
+    }
+    auto sum = [&](const std::set<VmaAllocation>& s) {
+        uint64_t b = 0;
+        for (VmaAllocation a : s) b += bytesOf(a);
+        return double(b) / (1024.0 * 1024.0);
+    };
+    // Camadas pintadas do chão: do vizinho, contam com o chão.
+    std::set<VmaAllocation> splat;
+    for (const auto& t : r.splatMask) if (t.alloc) splat.insert(t.alloc);
+    for (const auto& t : r.splatLayer) if (t.alloc) splat.insert(t.alloc);
+    for (const auto& t : r.splatLayerNormal) if (t.alloc) splat.insert(t.alloc);
+    for (const auto& t : r.splatLayerMrahw) if (t.alloc) splat.insert(t.alloc);
+    ERUPTION_LOG_WARN("[CHUNK] %s: VRAM +%.1f MB (VMA), RAM +%.1f MB; instâncias %u (nó sem slots %u), triângulos %llu, "
+                      "alocações %.1f MB (chão %.1f, camadas pintadas %.1f), área %.0f x %.0f",
+                      r.map.c_str(), deviceMemoryMb() - r.vramAtLoad, residentMb() - r.rssAtLoad,
+                      r.endInstance - r.firstInstance, unknownNodes, static_cast<unsigned long long>(tris), sum(all),
+                      sum(ground), sum(splat),
+                      double(r.boundsMax.x - r.boundsMin.x), double(r.boundsMax.y - r.boundsMin.y));
+    for (const char* p = env; *p;) {
+        const float side = std::strtof(p, nullptr);
+        if (side >= 16.0f) {
+            std::map<std::pair<int, int>, std::set<VmaAllocation>> cells, cellsNoGround;
+            for (uint32_t i = r.firstInstance; i < r.endInstance && i < insts.size(); ++i) {
+                const ModelInstance& in = insts[i];
+                std::vector<VmaAllocation> v;
+                meshAllocs(in, v);
+                const bool isGround = !meshes[in.meshIndex].groundCells.empty();
+                // O chão toca todos os pedaços da caixa dele; o resto, o do centro.
+                const Vec3 lo = isGround ? in.worldAabbMin : in.worldCenter;
+                const Vec3 hi = isGround ? in.worldAabbMax : in.worldCenter;
+                const int x0 = int(std::floor((lo.x - r.boundsMin.x) / side)), x1 = int(std::floor((hi.x - r.boundsMin.x) / side));
+                const int z0 = int(std::floor((lo.z - r.boundsMin.y) / side)), z1 = int(std::floor((hi.z - r.boundsMin.y) / side));
+                for (int cx = x0; cx <= x1; ++cx)
+                    for (int cz = z0; cz <= z1; ++cz) {
+                        cells[{cx, cz}].insert(v.begin(), v.end());
+                        if (!isGround) cellsNoGround[{cx, cz}].insert(v.begin(), v.end());
+                    }
+            }
+            std::vector<double> mb, mbNoGround;
+            for (const auto& [k, s] : cells) mb.push_back(sum(s));
+            for (const auto& [k, s] : cellsNoGround) mbNoGround.push_back(sum(s));
+            auto stats = [](std::vector<double> v, double& med, double& p90, double& mx) {
+                med = p90 = mx = 0.0;
+                if (v.empty()) return;
+                std::sort(v.begin(), v.end());
+                med = v[v.size() / 2];
+                p90 = v[std::min(v.size() - 1, v.size() * 9 / 10)];
+                mx = v.back();
+            };
+            double m0, p0, x0v, m1, p1, x1v;
+            stats(mb, m0, p0, x0v);
+            stats(mbNoGround, m1, p1, x1v);
+            ERUPTION_LOG_WARN("[CHUNK] %s lado %.0f: %zu pedaços; MB por pedaço mediana %.1f, p90 %.1f, máx %.1f; "
+                              "sem chão mediana %.1f, p90 %.1f, máx %.1f",
+                              r.map.c_str(), double(side), mb.size(), m0, p0, x0v, m1, p1, x1v);
+        }
+        while (*p && *p != ',') ++p;
+        if (*p == ',') ++p;
+    }
+}
+
 void Engine::finishRegion(WorldRegion& r) {
     const auto t0 = std::chrono::steady_clock::now();
     std::shared_ptr<WorldRegionLoad> load = std::move(r.attaching);
@@ -672,6 +835,7 @@ void Engine::finishRegion(WorldRegion& r) {
     if (r.hasWater) rebuildWorldWater();
     if (r.data && !r.data->liquids.empty()) setupLavaLiquid(m_currentMap.get()); // lava do vizinho entra ou sai
     const auto tEnd = std::chrono::steady_clock::now();
+    logChunkStats(r, *load);
     auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
     const double last = ms(t0, tEnd);
     ERUPTION_LOG_WARN("World: %s in place at (%.0f, %.0f, %.0f): %u instances, %zu characters, %.0f ms in %d frames, "
