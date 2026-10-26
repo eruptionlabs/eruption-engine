@@ -1,4 +1,5 @@
 #include "editor/GameExport.hpp"
+#include "core/GraphicsMerge.hpp"
 
 #include "formats/GroundPack.hpp"
 #include "scene/SceneEdits.hpp"
@@ -214,6 +215,21 @@ ExportReport exportGame(const ExportOptions& o) {
         }
         fs::create_directories(o.outDir / "data", ec);
         std::ofstream(o.outDir / "data" / "launcher_config.json") << launch.dump(1) << "\n";
+    }
+    // data/graphics.json do projeto e' so' o patch: copiado como veio, o jogo
+    // exportado (que abre sem projeto) ficava sem "presets"/"auto_presets" e
+    // o celular caia no padrao. Vai o arquivo ja' mesclado sobre o do motor.
+    {
+        const fs::path engineGfx = (o.engineRoot.empty() ? o.projectRoot : o.engineRoot) / "data" / "graphics.json";
+        const fs::path projectGfx = o.projectRoot / "data" / "graphics.json";
+        std::ifstream pf(projectGfx), ef(engineGfx);
+        nlohmann::json patch = pf ? nlohmann::json::parse(pf, nullptr, false) : nlohmann::json();
+        nlohmann::json merged = ef ? nlohmann::json::parse(ef, nullptr, false) : nlohmann::json();
+        if (!fs::equivalent(projectGfx, engineGfx, ec) && patch.is_object() && merged.is_object()) {
+            mergeGraphicsPatch(merged, std::move(patch));
+            fs::create_directories(o.outDir / "data", ec);
+            std::ofstream(o.outDir / "data" / "graphics.json") << merged.dump(2) << "\n";
+        }
     }
     // Executável e o que ele carrega ao lado.
     const fs::path exe = o.outDir / o.binary.filename();

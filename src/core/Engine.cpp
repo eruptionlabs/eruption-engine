@@ -4,6 +4,7 @@
 #include "game/PlayerController.hpp"
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
+#include "core/GraphicsMerge.hpp"
 #include "core/Input.hpp"
 #include "core/TouchRouter.hpp"
 #include "core/JobSystem.hpp"
@@ -191,11 +192,7 @@ static void mergeProjectGraphics(nlohmann::json& root) {
         ERUPTION_LOG_WARN("[GRAPHICS] %s: JSON invalido, ignorado", path.c_str());
         return;
     }
-    const nlohmann::json every = patch.contains("every_preset") ? patch["every_preset"] : nlohmann::json();
-    patch.erase("every_preset");
-    root.merge_patch(patch);
-    if (every.is_object() && root.contains("presets") && root["presets"].is_object())
-        for (auto& [name, preset] : root["presets"].items()) preset.merge_patch(every);
+    mergeGraphicsPatch(root, std::move(patch));
     ERUPTION_LOG_WARN("[GRAPHICS] %s mesclado sobre data/graphics.json", path.c_str());
 }
 
