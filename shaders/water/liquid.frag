@@ -279,13 +279,17 @@ vec3 blackbody(float kelvin) {
 }
 
 // Fenda de uma escala: F2 - F1 do Voronoi (Worley 1996) com largura em
-// unidades de F2 - F1 e borda alargada pelo tamanho do pixel (sem serrilhar
-// a fenda fina ao longe). x = fenda, y = distancia a' fenda (relevo).
+// unidades de F2 - F1. x = calor da fenda, que cai do meio (1) ate' a borda
+// da placa (0) em degrade: o meio do canal amarelo, a borda vermelho-escura
+// (borda dura de cor unica lia como recorte de papel). O tamanho do pixel
+// alarga a borda (sem serrilhar a fenda fina ao longe). y = distancia a'
+// fenda (relevo).
 vec2 lavaCrack(vec2 p, float width) {
     vec2 f = lavaCells(p);
     float d = f.y - f.x;
     float aa = fwidth(d);
-    return vec2(1.0 - smoothstep(width - aa, width + aa, d), d);
+    float x = 1.0 - smoothstep(0.0, width + aa, d);
+    return vec2(x * (0.55 + 0.45 * x), d);
 }
 
 // Uma fase da crosta: calor (x) e altura (y) no ponto p (unidades do mundo,
@@ -336,7 +340,8 @@ vec3 lavaColor(vec3 worldPos, float radial) {
     float margemFria = smoothstep(0.93, 1.0, radial);
 
     // Onde a crosta se abre: manchas grandes e lentas, mais a borda quente.
-    float open = smoothstep(0.7, 0.95, snoise(xz * 0.0045 + vec2(t * 0.002, 0.0)) * 0.5 + 0.5);
+    // Lava ativa tem de 30 a 50% da area incandescente nos canais.
+    float open = smoothstep(0.55, 0.85, snoise(xz * 0.0045 + vec2(t * 0.002, 0.0)) * 0.5 + 0.5);
     open = clamp(open + 0.12 * borda, 0.0, 1.0) * (1.0 - margemFria);
 
     // FLUXO: a crosta anda num campo sem divergencia (rotacional de um ruido
@@ -375,7 +380,7 @@ vec3 lavaColor(vec3 worldPos, float radial) {
     // esfria por cima (filamentos e placas finas) cobre boa parte dele.
     float molten = 0.7 + 0.22 * snoise(m * 0.02 + vec2(0.0, t * 0.03));
     float ropes = 1.0 - smoothstep(0.0, 0.22, abs(snoise(m * vec2(0.045, 0.09) + 4.4)));
-    float skin = smoothstep(0.42, 0.7, snoise(m * 0.06 + 8.8) * 0.5 + 0.5);
+    float skin = smoothstep(0.55, 0.8, snoise(m * 0.06 + 8.8) * 0.5 + 0.5);
     molten *= 1.0 - 0.6 * max(ropes, skin);
     // Na regiao aberta as fendas largas viram o proprio liquido: o calor
     // delas passa a ser o do liquido, com a pele por cima (sem isso a
@@ -385,11 +390,11 @@ vec3 lavaColor(vec3 worldPos, float radial) {
     // Brilho de corpo negro: cresce como uma potencia alta da temperatura,
     // para so' o que esta' quente passar do limiar do bloom.
     float kelvin = mix(850.0, 1480.0, heat);
-    // Potencia 6: a exposicao automatica de uma caverna escura multiplica a
-    // cena ~10x, e com uma curva mais baixa todo calor acima do medio
-    // saturava no mesmo creme. Assim a pele (calor ~0,3) quase apaga, o
-    // liquido exposto fica forte e so' o nucleo e as fendas largas estouram.
-    vec3 glow = blackbody(kelvin) * (4.0 * pow(heat, 6.0) * max(calor, 0.3));
+    // Potencia 4: a exposicao automatica de uma caverna escura multiplica a
+    // cena ~10x; com a curva mais baixa todo calor acima do medio saturava
+    // no mesmo creme, e com uma mais alta a borda da fenda apagava e a lava
+    // deixava de iluminar a sala.
+    vec3 glow = blackbody(kelvin) * (3.5 * pow(heat, 4.0) * max(calor, 0.3));
 
     // CROSTA: basalto escuro e rugoso, iluminado pelo sol e pelo ambiente.
     // Normal pelas derivadas de tela da altura (Mikkelsen, "Bump Mapping
@@ -408,10 +413,13 @@ vec3 lavaColor(vec3 worldPos, float radial) {
     // Basalto: cinza quente, mais claro no topo da placa, com granulacao
     // fina (vesiculas) que quebra a superficie lisa de ardosia.
     float grain = snoise(xz * 2.3) * 0.5 + 0.5;
-    float tone = (0.03 + 0.06 * smoothstep(-0.4, 0.8, snoise(xz * 0.03 + 5.0) + c.y * 0.6)) * (0.6 + 0.8 * grain);
-    // Pedra fria: cinza levemente azulado; perto do calor, mais quente.
-    vec3 albedo = tone * mix(vec3(0.88, 0.92, 1.0), vec3(1.0, 0.88, 0.8), smoothstep(0.1, 0.5, heat));
-    // Ambiente sem a cor dele: a caverna roxa pintava a rocha preta de lilas.
+    float tone = (0.035 + 0.035 * smoothstep(-0.4, 0.8, snoise(xz * 0.03 + 5.0) + c.y * 0.6)) * (0.8 + 0.4 * grain);
+    // Basalto frio: cinza-carvao neutro, so' um pouco quente (a gradacao das
+    // cavernas puxa para o azul); o prateado vem do especular. Perto do
+    // calor, mais quente.
+    vec3 albedo = tone * mix(vec3(1.0, 0.96, 0.92), vec3(1.0, 0.85, 0.75), smoothstep(0.1, 0.5, heat));
+    // Ambiente sem a cor dele: o de uma caverna roxa pintava a rocha
+    // preta de lilas e azul.
     float amb = dot(ubo.ambientColor.rgb, vec3(0.2126, 0.7152, 0.0722)) * ubo.ambientColor.w;
     vec3 lit = ubo.sunColor.rgb * sunI * max(dot(n, l), 0.0) + vec3(amb);
     // Vidro vulcanico: pontos lisos (o grao mais claro) dao brilhos pequenos.
