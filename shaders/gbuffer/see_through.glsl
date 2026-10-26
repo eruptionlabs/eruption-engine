@@ -10,7 +10,8 @@
 // Wijk, "Pixel Masks for Screen-Door Transparency", IEEE Visualization 1998):
 // cabe no G-buffer, que nao mistura, sem ordenar nada; o limiar ordenado e' o
 // de Bayer (1973), o mesmo do crossfade de LOD.
-// Precisa de u_seeThrough/u_seeThrough2/u_seeThrough3, u_cutaway, u_viewProjNoJitter e u_cameraPos.
+// Precisa de u_seeThrough/u_seeThrough2/u_seeThrough3, u_seeThroughBand, u_cutaway, u_viewProjNoJitter
+// e u_cameraPos.
 
 const float kSeeThroughBayer[16] = float[](
     0.0, 0.5, 0.125, 0.625,
@@ -41,6 +42,35 @@ float seeThroughKeep(vec3 worldPos) {
     return mix(1.0, u_seeThrough2.w, cut);
 }
 
+// FAIXA ABAIXO DO FOCO (camera.see_through(.., "focus", {band = m})). Com a
+// camera baixa (25 graus) o que tampa o grupo nao esta' so' em volta dele: e'
+// a rocha entre a lente e o chao diante dele, que na tela fica ABAIXO do foco.
+// O retangulo vai do centro da elipse ate' a borda da tela do lado da camera,
+// com a largura da elipse x 1,2, e corta o que esta' mais perto da camera que
+// o foco menos a margem. Chao fica: malha pintada (splat), instancia de chao,
+// tudo ate' meio sprite acima dos pes e piso com normal para cima ate' um
+// sprite (cortar um morro baixo abre buraco onde o mapa nao tem nada atras).
+// Bordas em rampa (sem estalo).
+// u_seeThroughBand: x = distancia de corte (0 desliga), y = sinal do "para
+// baixo" em NDC, z = meia largura em NDC.
+float seeThroughBandKeep(vec3 worldPos, vec3 n, bool ground) {
+    if (u_seeThroughBand.x <= 0.0 || u_seeThrough.z <= 0.0) return 1.0;
+    float h = u_seeThrough2.z;
+    if (ground) return 1.0;
+    if (worldPos.y < u_seeThrough2.y + 0.5 * h) return 1.0;
+    if (length(n) > 1e-6 && normalize(n).y > 0.6 && worldPos.y < u_seeThrough2.y + h) return 1.0;
+    vec4 c = u_viewProjNoJitter * vec4(worldPos, 1.0);
+    if (c.w <= 0.0) return 1.0;
+    vec2 p = c.xy / c.w;
+    float down = (p.y - u_seeThrough.y) * u_seeThroughBand.y;
+    float hw = u_seeThroughBand.z;
+    float across = 1.0 - smoothstep(0.8 * hw, hw, abs(p.x - u_seeThrough.x));
+    float below = smoothstep(0.0, 0.25 * u_seeThrough.w, down);
+    float d = distance(worldPos, u_cameraPos);
+    float near = 1.0 - smoothstep(0.9 * u_seeThroughBand.x, u_seeThroughBand.x, d);
+    return mix(1.0, u_seeThrough2.w, across * below * near);
+}
+
 // RECORTE POR VOLUME (world.set_cutaway): dentro da caixa ou do cilindro a
 // malha sai no mesmo padrao, ate' a opacidade pedida; a borda suave vai da
 // superficie do volume ate' `soft` para dentro. Distancia com sinal (negativa
@@ -67,8 +97,11 @@ float cutawayKeep(vec3 worldPos) {
     return keep;
 }
 
-bool seeThroughDiscard(vec3 worldPos) {
+// n = normal da malha, ground = malha de chao pintada (splat): a faixa nao
+// corta chao.
+bool seeThroughDiscard(vec3 worldPos, vec3 n, bool ground) {
     float keep = min(min(seeThroughKeep(worldPos), nearFadeKeep(worldPos)), cutawayKeep(worldPos));
+    keep = min(keep, seeThroughBandKeep(worldPos, n, ground));
     if (keep >= 1.0) return false;
     // Indice do Bayer relativo a um ponto fixo do mundo (u_seeThrough3.xy):
     // preso a gl_FragCoord, o pontilhado ficava parado na tela e o chao e a

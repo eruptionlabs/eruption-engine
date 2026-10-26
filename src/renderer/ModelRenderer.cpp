@@ -3483,7 +3483,12 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         d.model = hot.transform;
         if (velocity) d.prevModel = prevTransformFor(idx, hot.transform);
         d.uvTranslateRot = m_instUvTranslateRot[idx];
-        d.uvScaleDisp = Vec4(m_instUvScale[idx], 0.0f, mesh.swayAmount);
+        // w = balanco ao vento; -1 marca chao parado (isGround sem balanco): a
+        // faixa do ver atraves (gbuffer/see_through.glsl) nao corta o chao.
+        // Chao com balanco (capim) fica com o valor: o vento e a flag de
+        // folhagem leem w > 0.
+        const float sway = mesh.isGround && mesh.swayAmount <= 0.0f ? -1.0f : mesh.swayAmount;
+        d.uvScaleDisp = Vec4(m_instUvScale[idx], 0.0f, sway);
         // Banda perto do displacement (fade POR VÉRTICE no shader; a CPU só
         // entrega amplitude + alcance, e instância além da banda nem paga).
         if (m_geoDispAmplitude > 0.0f && m_geoDispDistance > 0.0f) {

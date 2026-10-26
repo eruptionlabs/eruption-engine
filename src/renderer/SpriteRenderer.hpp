@@ -146,6 +146,10 @@ struct FrameUBO {
     // profundidade, borda suave; c = cos e sen do giro em Y, opacidade.
     static constexpr uint32_t kCutaways = 4;
     alignas(16) Vec4 cutaway[3 * kCutaways];
+    // Faixa do ver atraves abaixo do foco (gbuffer/see_through.glsl): x =
+    // distancia de corte (0 desliga), y = sinal do "para baixo" em NDC, z =
+    // meia largura em NDC.
+    alignas(16) Vec4 seeThroughBand;
 };
 
 // Luz pontual dominante de um sprite (Engine::spriteDominantLights), por

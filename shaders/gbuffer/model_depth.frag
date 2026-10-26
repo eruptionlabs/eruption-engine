@@ -63,7 +63,9 @@ void main() {
         bool keep = invert ? (dither[x + y * 4] > thr) : (dither[x + y * 4] <= thr);
         if (!keep) discard;
     }
-    if (seeThroughDiscard(inWorldPos)) discard;
+    // Chao: malha pintada (splat) ou instancia de chao (balanco -1, ModelRenderer).
+    if (seeThroughDiscard(inWorldPos, inNormal,
+                          ((inSplatTex.x | inSplatTex.y) != 0u && inBlendMaskIndex != 0u) || inSway < -0.5)) discard;
     vec4 texColor = texture(u_textures[nonuniformEXT(inTexIndex)], inTexCoord);
     if (texColor.a < 0.1) discard;
     if (inBlendWeight > 0.0) {

@@ -387,7 +387,9 @@ void main() {
             discard;
         }
     }
-    if (seeThroughDiscard(inWorldPos)) discard;
+    // Chao: malha pintada (splat) ou instancia de chao (balanco -1, ModelRenderer).
+    if (seeThroughDiscard(inWorldPos, inNormal,
+                          ((inSplatTex.x | inSplatTex.y) != 0u && inBlendMaskIndex != 0u) || inSway < -0.5)) discard;
     // Juncao com o chao (ground_blend.glsl): derivadas do XZ no fluxo uniforme.
     const vec3 gbDpdx = dFdx(inWorldPos), gbDpdy = dFdy(inWorldPos);
     const vec3 gbNg = length(inNormal) > 1e-8 ? normalize(inNormal) : vec3(0.0, 1.0, 0.0);
