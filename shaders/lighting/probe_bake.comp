@@ -73,10 +73,17 @@ void main() {
         float r = sqrt(max(0.0, 1.0 - y * y));
         float a = kGolden * float(i);
         vec3 d = vec3(r * cos(a), y, r * sin(a));
+        // Passos QUADRATICOS a partir de `start`: densos perto, ralos longe.
+        // Os uniformes comecavam em start + passo (~30 u): um telhado a menos
+        // disso da probe nunca era amostrado, e debaixo de uma tenda fechada
+        // a probe dava vis 0,49. A folga de espessura acompanha o passo
+        // local (params.w e' meio passo MEDIO), com piso de metade dela.
         float V = 1.0;
-        for (int s = 1; s <= steps; ++s) {
-            float t = start + (radius - start) * (float(s) / float(steps));
-            if (insideModels(p0 + d * t, u.params.w)) { V = 0.0; break; }
+        for (int s = 0; s < steps; ++s) {
+            float f = float(s) / float(steps - 1);
+            float t = start + (radius - start) * f * f;
+            float eps = u.params.w * max(2.0 * f * float(steps) / float(steps - 1), 0.5);
+            if (insideModels(p0 + d * t, eps)) { V = 0.0; break; }
         }
         L0 += V * 0.282095 * w;
         L1 += V * 0.488603 * d * w;
