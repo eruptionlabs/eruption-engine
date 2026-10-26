@@ -128,9 +128,14 @@ private:
         Vec4 place{0.0f};             // left, top, width, height em fracao do pai
         Vec4 uv{0.0f, 0.0f, 1.0f, 1.0f}; // recorte da imagem (u0, v0, u1, v1)
         uint32_t tintCss = 0xFFFFFFFFu;  // --image-tint (ImU32); ui.color(sel, cor, 0) troca
+        // --bar-shape: arc. Graus como no CSS (0 = em cima, sentido horario);
+        // espessura em fracao do menor lado do retangulo.
+        bool arc = false;
+        float arcStart = -70.0f, arcEnd = 70.0f, arcThickness = 0.15f;
     };
 
     void build();
+    static void drawArcBar(ImDrawList* dl, const CSSRect& r, const Element& e, float value, uint32_t rail, uint32_t fill);
     Element* find(const std::string& selector);
     const Element* find(const std::string& selector) const;
     // Retângulo do elemento, resolvendo o pai (uma cadeia curta; ciclo para).
