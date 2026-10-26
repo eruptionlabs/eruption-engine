@@ -256,6 +256,11 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
                 lq.shoreHeat = std::clamp(e.value("shoreHeat", 0.0f), 0.0f, 4.0f);
                 lq.centerHeat = std::clamp(e.value("centerHeat", 0.0f), 0.0f, 4.0f);
                 lq.flowSpeed = e.value("flowSpeed", 1.0f);
+                if (e.contains("crustCoverage") && e["crustCoverage"].is_number())
+                    lq.crustCoverage = std::clamp(e["crustCoverage"].get<float>(), 0.0f, 1.0f);
+                if (e.contains("crustTint") && e["crustTint"].is_array() && e["crustTint"].size() >= 3)
+                    lq.crustTint = Vec3(e["crustTint"][0].get<float>(), e["crustTint"][1].get<float>(),
+                                        e["crustTint"][2].get<float>());
                 if (e.contains("center") && e["center"].is_array() && e["center"].size() >= 2) {
                     lq.centerX = e["center"][0].get<float>();
                     lq.centerZ = e["center"][1].get<float>();

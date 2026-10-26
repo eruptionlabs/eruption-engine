@@ -36,6 +36,7 @@ layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 normalAdvanced;      // x=normalOctaves, yzw=unused
     vec4 causticsParams;      // x=intensity, y=depthAttenuation, zw=unused
     vec4 weatherParams;       // x=sunOcclusion, y=moonOcclusion, z=stormDarken, w=rainIntensity
+    vec4 lavaCrust;           // xyz=tinta da crosta, w=deslocamento da abertura (crustCoverage)
 } ubo;
 
 layout(push_constant) uniform Push {
