@@ -13,6 +13,35 @@
 
 namespace eruption {
 
+// Cobertura de crosta medida (ERUPTION_LIQUID_DEBUG=2, lago de raio 180,
+// emissive 3,5, vista de cima): fracao da lava com molt < 0,5 para cada par
+// (crustOpen, crustWiden). Abaixo de 0,643 o limiar ja' abriu tudo o que o
+// ruido deixa e so' alargar as fendas tira mais crosta; acima de 0,81, so'
+// estreita-las. O padrao do shader, (0, 0), da' 0,757.
+void WaterRenderer::crustFromCoverage(float coverage, float& open, float& widen) {
+    struct Ponto { float cobre, open, widen; };
+    static constexpr Ponto kTabela[] = {
+        {0.070f, 0.60f, 16.0f}, {0.087f, 0.60f, 8.0f}, {0.139f, 0.60f, 4.0f}, {0.189f, 0.60f, 3.0f},
+        {0.266f, 0.60f, 2.0f},  {0.406f, 0.60f, 1.0f}, {0.516f, 0.60f, 0.5f}, {0.573f, 0.60f, 0.25f},
+        {0.643f, 0.60f, 0.0f},  {0.649f, 0.45f, 0.0f}, {0.677f, 0.30f, 0.0f}, {0.713f, 0.15f, 0.0f},
+        {0.757f, 0.00f, 0.0f},  {0.810f, -0.25f, 0.0f}, {0.873f, -0.25f, -0.5f}, {0.913f, -0.25f, -0.8f},
+        {0.940f, -0.25f, -1.0f},
+    };
+    constexpr size_t n = sizeof(kTabela) / sizeof(kTabela[0]);
+    if (coverage <= kTabela[0].cobre) { open = kTabela[0].open; widen = kTabela[0].widen; return; }
+    for (size_t k = 1; k < n; ++k) {
+        if (coverage > kTabela[k].cobre) continue;
+        const Ponto& a = kTabela[k - 1];
+        const Ponto& b = kTabela[k];
+        const float t = (coverage - a.cobre) / (b.cobre - a.cobre);
+        open = a.open + (b.open - a.open) * t;
+        widen = a.widen + (b.widen - a.widen) * t;
+        return;
+    }
+    open = kTabela[n - 1].open;
+    widen = kTabela[n - 1].widen;
+}
+
 struct FoamAccumPushConstants {
     Vec4 params;      // x=decay, y=foamEdgeDepth, z=nearPlane, w=farPlane
     Vec4 moreParams;  // x=waterLevel, yzw=unused
@@ -1078,8 +1107,10 @@ void WaterRenderer::updateUBO(uint32_t frameIndex, uint32_t uboSlot, const Water
     ubo.normalAdvanced = Vec4(static_cast<float>(settings.normalOctaves),
                               settings.emissiveStrength, settings.shoreHeat, settings.centerHeat);
     // z = velocidade da crosta da lava (flowSpeed do .env); a lava nao usa causticas.
-    ubo.causticsParams = Vec4(settings.causticsIntensity, settings.causticsDepthAttenuation, settings.flowSpeed, 0.0f);
+    ubo.causticsParams = Vec4(settings.causticsIntensity, settings.causticsDepthAttenuation, settings.flowSpeed,
+                              settings.crustWiden);
     ubo.weatherParams = Vec4(sunOcclusion, moonOcclusion, stormDarken, rainIntensity);
+    ubo.lavaCrust = Vec4(settings.crustTint, settings.crustOpen);
     std::memcpy(m_uboMappeds[uboSlot], &ubo, sizeof(ubo));
 }
 
@@ -1134,9 +1165,11 @@ void WaterRenderer::render(VkCommandBuffer cmd, const Mat4& viewProj, const Vec3
     // ERUPTION_LIQUID_DEBUG=1 pinta a superficie liquida de ciano chapado,
     // pra medir num print de cima quanto da caldeira o disco cobre. Ciano e
     // nao magenta porque magenta e' chroma-key de descarte no model.frag.
+    // ERUPTION_LIQUID_DEBUG=2 (teste): a lava sai verde onde e' crosta e
+    // vermelha onde esta' derretida, para medir a cobertura (crustCoverage).
     static const int s_liquidDebug = []() {
         const char* e = std::getenv("ERUPTION_LIQUID_DEBUG");
-        return (e && *e == '1') ? 1 : 0;
+        return (e && (*e == '1' || *e == '2')) ? *e - '0' : 0;
     }();
     // Campo PROPRIO, nao um bit dentro do abTestMask: o mask do menu ja' vem
     // com bits altos ligados e o diagnostico acendia sozinho.

@@ -37,8 +37,9 @@ layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 extraParams;         // x=absorptionCoeff, y=maxPxScale, z=enableCaustics, w=unused
     vec4 foamSurfaceParams;   // x=foamScale, y=foamSpeed, z=foamRoughness, w=enableSurfaceFoam
     vec4 normalAdvanced;      // x=normalOctaves, y=lavaEmissive, zw=unused
-    vec4 causticsParams;      // x=intensity, y=depthAttenuation, z=lava flowSpeed, w=unused
+    vec4 causticsParams;      // x=intensity, y=depthAttenuation, z=lava flowSpeed, w=lava crustWiden
     vec4 weatherParams;       // x=sunOcclusion, y=moonOcclusion, z=stormDarken, w=rainIntensity
+    vec4 lavaCrust;           // xyz=tinta da crosta, w=deslocamento da abertura (crustCoverage)
 } ubo;
 
 layout(push_constant) uniform Push {
@@ -302,12 +303,15 @@ vec2 lavaCrack(vec2 p, float width) {
 vec2 lavaCrust(vec2 p, vec2 warpBig, vec2 warpMid, float wn, float open, float calor, float fineW) {
     vec2 pw = p + warpBig;
     vec2 pm = pw + warpMid;
-    float wBig = (0.03 + 0.20 * wn * wn) * calor * (1.0 + 4.0 * open);
+    // crustCoverage baixo alarga as fendas (causticsParams.w, 0 = padrao):
+    // placas menores entre canais largos, a mesma forma.
+    float alarga = 1.0 + ubo.causticsParams.w;
+    float wBig = (0.03 + 0.20 * wn * wn) * calor * (1.0 + 4.0 * open) * alarga;
     vec2 big = lavaCrack(pw * 0.018, wBig);
     // A fenda media afina ate' sumir ao longo dela (wn2 < 0,35): fenda de
     // largura constante e continua le' como curva de nivel.
     float wn2 = snoise(p * 0.045 + 1.3) * 0.5 + 0.5;
-    float wMid = 0.06 * smoothstep(0.35, 0.9, wn2) * (1.0 + 2.0 * open);
+    float wMid = 0.06 * smoothstep(0.35, 0.9, wn2) * (1.0 + 2.0 * open) * alarga;
     vec2 mid = lavaCrack(pm * 0.055 + 9.1, wMid);
     float heat = max(big.x, mid.x * 0.6);
     float h = smoothstep(0.0, 0.35, big.y) * 0.7 + smoothstep(0.0, 0.25, mid.y) * 0.3;
@@ -341,7 +345,9 @@ vec3 lavaColor(vec3 worldPos, float radial) {
 
     // Onde a crosta se abre: manchas grandes e lentas, mais a borda quente.
     // Lava ativa tem de 30 a 50% da area incandescente nos canais.
-    float open = smoothstep(0.55, 0.85, snoise(xz * 0.0045 + vec2(t * 0.002, 0.0)) * 0.5 + 0.5);
+    // crustCoverage do .env desloca o limiar (lavaCrust.w, 0 = padrao).
+    float abre = ubo.lavaCrust.w;
+    float open = smoothstep(0.55 - abre, 0.85 - abre, snoise(xz * 0.0045 + vec2(t * 0.002, 0.0)) * 0.5 + 0.5);
     open = clamp(open + 0.12 * borda, 0.0, 1.0) * (1.0 - margemFria);
 
     // FLUXO: a crosta anda num campo sem divergencia (rotacional de um ruido
@@ -381,7 +387,9 @@ vec3 lavaColor(vec3 worldPos, float radial) {
     float molten = 0.7 + 0.22 * snoise(m * 0.02 + vec2(0.0, t * 0.03));
     float ropes = 1.0 - smoothstep(0.0, 0.22, abs(snoise(m * vec2(0.045, 0.09) + 4.4)));
     float skin = smoothstep(0.55, 0.8, snoise(m * 0.06 + 8.8) * 0.5 + 0.5);
-    molten *= 1.0 - 0.6 * max(ropes, skin);
+    // Fendas alargadas (crustCoverage baixo) levam menos pele: a pele fria
+    // tambem e' crosta, e sem afina-la a cobertura parava em ~38%.
+    molten *= 1.0 - 0.6 / max(1.0 + ubo.causticsParams.w, 1.0) * max(ropes, skin);
     // Na regiao aberta as fendas largas viram o proprio liquido: o calor
     // delas passa a ser o do liquido, com a pele por cima (sem isso a
     // regiao inteira era fenda a calor 1, um bloco chapado).
@@ -417,7 +425,8 @@ vec3 lavaColor(vec3 worldPos, float radial) {
     // Basalto frio: cinza-carvao neutro, so' um pouco quente (a gradacao das
     // cavernas puxa para o azul); o prateado vem do especular. Perto do
     // calor, mais quente.
-    vec3 albedo = tone * mix(vec3(1.0, 0.96, 0.92), vec3(1.0, 0.85, 0.75), smoothstep(0.1, 0.5, heat));
+    vec3 albedo = tone * mix(vec3(1.0, 0.96, 0.92), vec3(1.0, 0.85, 0.75), smoothstep(0.1, 0.5, heat))
+                * ubo.lavaCrust.rgb;
     // Ambiente sem a cor dele: o de uma caverna roxa pintava a rocha
     // preta de lilas e azul.
     float amb = dot(ubo.ambientColor.rgb, vec3(0.2126, 0.7152, 0.0722)) * ubo.ambientColor.w;
@@ -429,6 +438,7 @@ vec3 lavaColor(vec3 worldPos, float radial) {
     // A crosta perto da fenda e' iluminada por ela (luz vermelha de baixo).
     crust += blackbody(1100.0) * albedo * 3.0 * smoothstep(0.1, 0.6, heat);
     float molt = smoothstep(0.35, 0.75, heat);
+    if (pc.debugMask.y == 2) return molt < 0.5 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     return mix(crust, vec3(0.0), molt * 0.85) + glow;
 }
 
@@ -439,7 +449,7 @@ void main() {
     // lago de lava de um andar de caverna (4060, 1080p) para uma imagem que
     // nao usava nada daquilo.
     if (int(ubo.extraParams.w + 0.5) == 1) {
-        fragColor = vec4(pc.debugMask.y != 0 ? vec3(0.0, 1.0, 0.0) : lavaColor(vWorldPos, vTexCoord.x), 1.0);
+        fragColor = vec4(pc.debugMask.y == 1 ? vec3(0.0, 1.0, 0.0) : lavaColor(vWorldPos, vTexCoord.x), 1.0);
         return;
     }
     float time          = ubo.waterLevelAndPlanes.w;
@@ -721,7 +731,7 @@ void main() {
     // e' chroma-key de descarte no model.frag e o pixel sumiria da tela em
     // vez de marcar. Serve pra medir num print de cima quanto da caldeira o
     // disco de fato cobre.
-    if (pc.debugMask.y != 0) {
+    if (pc.debugMask.y == 1) {
         // VERDE puro, nao ciano: o caso de teste do autor pinta a textura
         // de lava do TERRENO (a caldeira) de ciano ao mesmo tempo, pra medir
         // na MESMA foto quanto o disco liquido cobre da caldeira. Com as

@@ -1133,6 +1133,9 @@ void Engine::render() {
             lavaSettings.shoreHeat = lava.shoreHeat;
             lavaSettings.centerHeat = lava.centerHeat;
             lavaSettings.flowSpeed = lava.flowSpeed;
+            if (lava.crustCoverage >= 0.0f)
+                WaterRenderer::crustFromCoverage(lava.crustCoverage, lavaSettings.crustOpen, lavaSettings.crustWiden);
+            lavaSettings.crustTint = lava.crustTint;
             lavaSettings.enableCaustics = false;
             lavaSettings.enableFoam = false;
             lavaSettings.enableSurfaceFoam = false;

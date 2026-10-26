@@ -27,6 +27,10 @@ public:
         }
     }
 
+    // crustCoverage do .env (fracao de crosta, 0..1) para os dois botoes do
+    // shader: crustOpen e crustWiden. Tabela medida, nao formula.
+    static void crustFromCoverage(float coverage, float& open, float& widen);
+
     struct WaterSettings {
         bool enabled = true;
 
@@ -35,6 +39,9 @@ public:
         float emissiveStrength = 0.0f;
         float shoreHeat = 0.0f, centerHeat = 0.0f; // lava (ver LoadedMap::Liquid)
         float flowSpeed = 1.0f;
+        float crustOpen = 0.0f;           // lava: desloca o limiar onde a crosta se abre (0 = padrao)
+        float crustWiden = 0.0f;          // lava: fendas (1 + isto) vezes mais largas (0 = padrao)
+        Vec3 crustTint = Vec3(1.0f);      // lava: tinta do basalto
 
         // Water level
         float waterLevel = 0.0f;
@@ -215,8 +222,9 @@ private:
         Vec4 extraParams;         // x=absorptionCoeff, y=maxPxScale, z=enableCaustics, w=unused
         Vec4 foamSurfaceParams;   // x=foamScale, y=foamSpeed, z=foamRoughness, w=enableSurfaceFoam
         Vec4 normalAdvanced;      // x=normalOctaves, yzw=unused
-        Vec4 causticsParams;      // x=intensity, y=depthAttenuation, zw=unused
+        Vec4 causticsParams;      // x=intensity, y=depthAttenuation, z=lava flowSpeed, w=lava crustWiden
         Vec4 weatherParams;       // x=sunOcclusion, y=moonOcclusion, z=stormDarken, w=unused
+        Vec4 lavaCrust;           // xyz=tinta da crosta, w=deslocamento da abertura
     };
     static_assert(sizeof(WaterUBO) <= 1024, "WaterUBO too large");
 

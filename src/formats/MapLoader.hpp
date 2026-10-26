@@ -75,6 +75,10 @@ struct LoadedMap {
         // mais larga e quente nessas bordas; o meio-termo fica mais placa fria.
         float shoreHeat = 0.0f, centerHeat = 0.0f;
         float flowSpeed = 1.0f;
+        // Lava: fracao da superficie coberta de crosta (0..1; < 0 = a do
+        // shader, ~0,75) e tinta que multiplica a cor do basalto.
+        float crustCoverage = -1.0f;
+        Vec3 crustTint = Vec3(1.0f);
         // Margem LOBADA (opcional, nova feature): amostras de raio por
         // angulo, indice 0 = angulo 0, ultimo indice = quase 2*PI (o
         // wraparound entre o ultimo e o primeiro fecha o circulo). Uma
