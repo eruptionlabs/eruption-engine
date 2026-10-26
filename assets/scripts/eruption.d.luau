@@ -326,6 +326,11 @@ declare camera: {
     -- 1.5 x start), so a fence brushing the lens no longer covers the screen.
     -- Shadows are unaffected. 0 turns it off.
     near_fade: (start: number, end_: number?) -> (),
+    -- false: dragging with the left or right mouse button (a finger on the
+    -- world, on a phone) no longer turns the player camera, so the game can
+    -- run its own gesture from input.touches. The middle button still pans.
+    -- Back to true when the scripts restart.
+    set_orbit_input: (on: boolean) -> (),
 }
 
 -- Presentation of a hit: what makes a blow feel like it landed. The engine

@@ -651,6 +651,11 @@ public:
     // Perto da camera (camera.near_fade): o que fica a menos de `start` da
     // camera some em dither e volta ate' `end` (padrao 1,5x start). 0 desliga.
     void setNearFade(float start, float end);
+    // camera.set_orbit_input: arrastar com o botao esquerdo/direito (o dedo
+    // no mundo) gira a orbita do PlayerController. Desligado, o jogo faz o
+    // proprio gesto com input.touches sem o motor girar no mesmo quadro.
+    void setOrbitInput(bool on) { m_orbitInput = on; }
+    bool orbitInput() const { return m_orbitInput; }
     void injectTestInput(); // ERUPTION_TEST_INPUT (Engine.cpp)
     // Recorte por volume (world.set_cutaway): malha do mapa e modelos dentro
     // do volume `slot` (0..FrameUBO::kCutaways-1) somem em dither ate'
@@ -1790,6 +1795,7 @@ private:
     float m_seeThroughRadius = 0.0f;
     float m_seeThroughOpacity = 0.25f;
     float m_nearFadeStart = 0.0f, m_nearFadeEnd = 0.0f;
+    bool m_orbitInput = true;
     std::array<Vec4, 3 * FrameUBO::kCutaways> m_cutaway{};
     void fillSeeThrough(FrameUBO& ubo) const;
     int m_spriteShadowKind = -1;
