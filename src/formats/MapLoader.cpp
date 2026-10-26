@@ -508,6 +508,146 @@ void LoadedMap::buildLiquidContour(MapLiquid& lq) {
         for (const Vec3& p : poly) lq.radius = std::max(lq.radius, std::hypot(p.x - lq.centerX, p.z - lq.centerZ));
     lq.shoreRadius.clear();
     lq.contourLevel = lq.level;
+    buildLiquidContourMesh(lq);
+}
+
+// Bordas do contorno que nao sao compartilhadas por dois poligonos (a margem
+// de verdade): a junta entre dois pedacos do mesmo rio nao esquenta.
+static std::vector<std::pair<Vec2, Vec2>> liquidOuterEdges(const LoadedMap::MapLiquid& lq) {
+    std::vector<std::pair<Vec2, Vec2>> all;
+    for (const auto& poly : lq.polygons)
+        for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++)
+            all.push_back({Vec2(poly[j].x, poly[j].z), Vec2(poly[i].x, poly[i].z)});
+    auto same = [](Vec2 a, Vec2 b) { return glm::dot(a - b, a - b) < 1e-4f; };
+    std::vector<std::pair<Vec2, Vec2>> out;
+    for (size_t i = 0; i < all.size(); ++i) {
+        bool shared = false;
+        for (size_t k = 0; k < all.size() && !shared; ++k)
+            shared = k != i && ((same(all[i].first, all[k].second) && same(all[i].second, all[k].first)) ||
+                                (same(all[i].first, all[k].first) && same(all[i].second, all[k].second)));
+        if (!shared) out.push_back(all[i]);
+    }
+    return out;
+}
+
+namespace {
+// Distancia de um ponto a margem com as arestas numa grade uniforme: busca em
+// aneis de celulas em volta do ponto, parando quando a melhor distancia ja'
+// e' menor que a distancia ate' o anel seguinte (aresta fora dos aneis vistos
+// fica pelo menos k celulas longe). O minimo e' o mesmo de testar todas.
+struct EdgeGrid {
+    Vec2 lo{0.0f};
+    float cell = 1.0f;
+    int nx = 1, nz = 1;
+    std::vector<std::pair<Vec2, Vec2>> edges;
+    std::vector<std::vector<uint32_t>> bins;
+
+    EdgeGrid(std::vector<std::pair<Vec2, Vec2>> e, Vec2 mn, Vec2 mx, float cellSize) : edges(std::move(e)) {
+        for (const auto& ed : edges) {
+            mn = glm::min(mn, glm::min(ed.first, ed.second));
+            mx = glm::max(mx, glm::max(ed.first, ed.second));
+        }
+        lo = mn;
+        cell = std::max(cellSize, 1e-3f);
+        nx = std::max(1, int(std::ceil((mx.x - mn.x) / cell)) + 1);
+        nz = std::max(1, int(std::ceil((mx.y - mn.y) / cell)) + 1);
+        bins.resize(size_t(nx) * size_t(nz));
+        for (uint32_t i = 0; i < edges.size(); ++i) {
+            const Vec2 a = glm::min(edges[i].first, edges[i].second), b = glm::max(edges[i].first, edges[i].second);
+            const int x0 = cx(a.x), x1 = cx(b.x), z0 = cz(a.y), z1 = cz(b.y);
+            for (int z = z0; z <= z1; ++z)
+                for (int x = x0; x <= x1; ++x) bins[size_t(z) * size_t(nx) + size_t(x)].push_back(i);
+        }
+    }
+    int cx(float x) const { return std::clamp(int(std::floor((x - lo.x) / cell)), 0, nx - 1); }
+    int cz(float z) const { return std::clamp(int(std::floor((z - lo.y) / cell)), 0, nz - 1); }
+    float dist(Vec2 p) const {
+        float best = 1e30f;
+        auto test = [&](uint32_t i) {
+            const auto& e = edges[i];
+            const Vec2 d = e.second - e.first;
+            const float len2 = glm::dot(d, d);
+            const float t = len2 > 0.0f ? glm::clamp(glm::dot(p - e.first, d) / len2, 0.0f, 1.0f) : 0.0f;
+            const Vec2 q = e.first + d * t;
+            best = std::min(best, glm::dot(p - q, p - q));
+        };
+        const int px = cx(p.x), pz = cz(p.y);
+        const int kMax = std::max(nx, nz);
+        for (int k = 0; k <= kMax; ++k) {
+            for (int z = pz - k; z <= pz + k; ++z) {
+                if (z < 0 || z >= nz) continue;
+                const bool edgeRow = z == pz - k || z == pz + k;
+                for (int x = px - k; x <= px + k; x += (edgeRow || k == 0) ? 1 : 2 * k) {
+                    if (x < 0 || x >= nx) continue;
+                    for (uint32_t i : bins[size_t(z) * size_t(nx) + size_t(x)]) test(i);
+                }
+            }
+            const float reach = float(k) * cell;
+            if (best <= reach * reach) break;
+        }
+        return std::sqrt(best);
+    }
+};
+} // namespace
+
+// Malha do contorno: cada triangulo da triangulacao dividido em n x n (aresta
+// ate' `maxEdge`), altura interpolada entre os cantos. O UV x leva a fracao
+// "radial" que o shader usa para o calor de borda: 1 na margem, 0 no ponto
+// mais longe dela. As posicoes passam pela mesma conta de giro (zero) em volta
+// do centro que o desenho usa, para sair igual bit a bit ao caminho antigo.
+void LoadedMap::buildLiquidContourMesh(MapLiquid& lq) {
+    lq.contourMesh.reset();
+    if (lq.triangles.empty()) return;
+    auto mesh = std::make_shared<WaterMesh>();
+    const float maxEdge = std::max(lq.radius / 24.0f, 1.0f);
+    const float c = 1.0f, s = 0.0f;
+    auto place = [&](Vec3 p) {
+        const float dx = p.x - lq.centerX, dz = p.z - lq.centerZ;
+        return Vec3(lq.centerX + dx * c - dz * s, p.y, lq.centerZ + dx * s + dz * c);
+    };
+    Vec2 mn(1e30f), mx(-1e30f);
+    for (size_t t = 0; t + 2 < lq.triangles.size(); t += 3) {
+        const Vec3 a = place(lq.triangles[t]), b = place(lq.triangles[t + 1]), cc = place(lq.triangles[t + 2]);
+        auto lenXZ = [](Vec3 u, Vec3 v) { return std::hypot(u.x - v.x, u.z - v.z); };
+        const float longest = std::max({lenXZ(a, b), lenXZ(b, cc), lenXZ(cc, a)});
+        const int n = std::clamp(int(std::ceil(longest / maxEdge)), 1, 64);
+        const uint32_t base = uint32_t(mesh->vertices.size());
+        // Linha i (0..n) tem n - i + 1 pontos: P = a + (b - a) j/n + (cc - a) i/n.
+        for (int i = 0; i <= n; ++i)
+            for (int j = 0; j <= n - i; ++j) {
+                WaterVertex v{};
+                v.position = a + (b - a) * (float(j) / float(n)) + (cc - a) * (float(i) / float(n));
+                mn = glm::min(mn, Vec2(v.position.x, v.position.z));
+                mx = glm::max(mx, Vec2(v.position.x, v.position.z));
+                mesh->vertices.push_back(v);
+            }
+        auto at = [&](int i, int j) { return base + uint32_t(i * (n + 1) - i * (i - 1) / 2 + j); };
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n - i; ++j) {
+                mesh->indices.push_back(at(i, j));
+                mesh->indices.push_back(at(i, j + 1));
+                mesh->indices.push_back(at(i + 1, j));
+                if (j + 1 < n - i) {
+                    mesh->indices.push_back(at(i, j + 1));
+                    mesh->indices.push_back(at(i + 1, j + 1));
+                    mesh->indices.push_back(at(i + 1, j));
+                }
+            }
+        mesh->waterTileCount += uint32_t(n * n);
+    }
+    std::vector<std::pair<Vec2, Vec2>> placed;
+    for (const auto& e : liquidOuterEdges(lq)) {
+        const Vec3 p0 = place(Vec3(e.first.x, 0.0f, e.first.y)), p1 = place(Vec3(e.second.x, 0.0f, e.second.y));
+        placed.push_back({Vec2(p0.x, p0.z), Vec2(p1.x, p1.z)});
+    }
+    const EdgeGrid grid(std::move(placed), mn, mx, maxEdge);
+    float far = 0.0f;
+    for (WaterVertex& v : mesh->vertices) {
+        v.texCoord.y = grid.dist(Vec2(v.position.x, v.position.z));
+        far = std::max(far, v.texCoord.y);
+    }
+    for (WaterVertex& v : mesh->vertices) v.texCoord = Vec2(far > 0.0f ? 1.0f - v.texCoord.y / far : 1.0f, 0.0f);
+    lq.contourMesh = std::move(mesh);
 }
 
 static NavGridFile buildEmptyNavGrid(uint32_t width, uint32_t height) {

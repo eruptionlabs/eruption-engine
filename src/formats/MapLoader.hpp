@@ -95,11 +95,18 @@ struct LoadedMap {
         std::vector<std::vector<Vec3>> polygons;
         std::vector<Vec3> triangles;
         float contourLevel = 0.0f;
+        // Malha do contorno pronta (triangulos subdivididos, UV x = calor de
+        // margem), na altura do contorno, sem nudge nem giro: montar custava
+        // 146 ms num contorno de 1135 pontos, e a lava e' remontada a cada
+        // vizinho que entra ou sai. Quem desenha copia e desloca.
+        std::shared_ptr<const WaterMesh> contourMesh;
     };
     std::vector<MapLiquid> liquids;
     // Triangula os poligonos de um liquido (orelhas no plano XZ) e resume
     // centro, raio e nivel a partir deles. Sem poligono nao faz nada.
     static void buildLiquidContour(MapLiquid& lq);
+    // Monta lq.contourMesh a partir de `triangles` (buildLiquidContour chama).
+    static void buildLiquidContourMesh(MapLiquid& lq);
 
     // Emissores de fumaça declarados no .env (chave opcional "smoke").
     // Vazio = mapa sem fumaça (todo mapa antigo cai aqui).

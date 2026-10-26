@@ -19,94 +19,31 @@ namespace eruption {
 
 namespace {
 
-// Bordas do contorno que nao sao compartilhadas por dois poligonos (a margem
-// de verdade): a junta entre dois pedacos do mesmo rio nao esquenta.
-std::vector<std::pair<Vec2, Vec2>> outerEdges(const LoadedMap::MapLiquid& lq) {
-    std::vector<std::pair<Vec2, Vec2>> all;
-    for (const auto& poly : lq.polygons)
-        for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++)
-            all.push_back({Vec2(poly[j].x, poly[j].z), Vec2(poly[i].x, poly[i].z)});
-    auto same = [](Vec2 a, Vec2 b) { return glm::dot(a - b, a - b) < 1e-4f; };
-    std::vector<std::pair<Vec2, Vec2>> out;
-    for (size_t i = 0; i < all.size(); ++i) {
-        bool shared = false;
-        for (size_t k = 0; k < all.size() && !shared; ++k)
-            shared = k != i && ((same(all[i].first, all[k].second) && same(all[i].second, all[k].first)) ||
-                                (same(all[i].first, all[k].first) && same(all[i].second, all[k].second)));
-        if (!shared) out.push_back(all[i]);
-    }
-    return out;
-}
-
-float distToEdges(Vec2 p, const std::vector<std::pair<Vec2, Vec2>>& edges) {
-    float best = 1e30f;
-    for (const auto& e : edges) {
-        const Vec2 d = e.second - e.first;
-        const float len2 = glm::dot(d, d);
-        const float t = len2 > 0.0f ? glm::clamp(glm::dot(p - e.first, d) / len2, 0.0f, 1.0f) : 0.0f;
-        const Vec2 q = e.first + d * t;
-        best = std::min(best, glm::dot(p - q, p - q));
-    }
-    return std::sqrt(best);
-}
-
-// Malha de um liquido de contorno livre: cada triangulo da triangulacao
-// dividido em n x n (aresta ate' `maxEdge`), altura interpolada entre os
-// cantos. O UV x leva a fracao "radial" que o shader usa para o calor de
-// borda: 1 na margem, 0 no ponto mais longe dela.
+// Malha de um liquido de contorno livre: o molde montado na carga
+// (LoadedMap::buildLiquidContourMesh), girado em torno do centro e deslocado.
+// O calor de margem (UV x) nao muda com giro nem deslocamento.
 void appendContourMesh(const LoadedMap::MapLiquid& lq, const Vec3& move, float rotRad, WaterMesh& mesh) {
-    const float maxEdge = std::max(lq.radius / 24.0f, 1.0f);
+    std::shared_ptr<const WaterMesh> tpl = lq.contourMesh;
+    if (!tpl) {
+        LoadedMap::MapLiquid built = lq;
+        LoadedMap::buildLiquidContourMesh(built);
+        tpl = built.contourMesh;
+        if (!tpl) return;
+    }
     const float c = std::cos(rotRad), s = std::sin(rotRad);
-    auto place = [&](Vec3 p) {
-        const float dx = p.x - lq.centerX, dz = p.z - lq.centerZ;
-        return Vec3(lq.centerX + dx * c - dz * s, p.y, lq.centerZ + dx * s + dz * c) + move;
-    };
-    const auto edges = outerEdges(lq);
-    const uint32_t firstVertex = uint32_t(mesh.vertices.size());
-    for (size_t t = 0; t + 2 < lq.triangles.size(); t += 3) {
-        const Vec3 a = place(lq.triangles[t]), b = place(lq.triangles[t + 1]), cc = place(lq.triangles[t + 2]);
-        auto lenXZ = [](Vec3 u, Vec3 v) { return std::hypot(u.x - v.x, u.z - v.z); };
-        const float longest = std::max({lenXZ(a, b), lenXZ(b, cc), lenXZ(cc, a)});
-        const int n = std::clamp(int(std::ceil(longest / maxEdge)), 1, 64);
-        const uint32_t base = uint32_t(mesh.vertices.size());
-        // Linha i (0..n) tem n - i + 1 pontos: P = a + (b - a) j/n + (cc - a) i/n.
-        for (int i = 0; i <= n; ++i)
-            for (int j = 0; j <= n - i; ++j) {
-                WaterVertex v{};
-                v.position = a + (b - a) * (float(j) / float(n)) + (cc - a) * (float(i) / float(n));
-                mesh.vertices.push_back(v);
-            }
-        auto at = [&](int i, int j) { return base + uint32_t(i * (n + 1) - i * (i - 1) / 2 + j); };
-        for (int i = 0; i < n; ++i)
-            for (int j = 0; j < n - i; ++j) {
-                mesh.indices.push_back(at(i, j));
-                mesh.indices.push_back(at(i, j + 1));
-                mesh.indices.push_back(at(i + 1, j));
-                if (j + 1 < n - i) {
-                    mesh.indices.push_back(at(i, j + 1));
-                    mesh.indices.push_back(at(i + 1, j + 1));
-                    mesh.indices.push_back(at(i + 1, j));
-                }
-            }
-        mesh.waterTileCount += uint32_t(n * n);
+    const uint32_t base = uint32_t(mesh.vertices.size());
+    mesh.vertices.reserve(mesh.vertices.size() + tpl->vertices.size());
+    for (WaterVertex v : tpl->vertices) {
+        if (rotRad != 0.0f) {
+            const float dx = v.position.x - lq.centerX, dz = v.position.z - lq.centerZ;
+            v.position = Vec3(lq.centerX + dx * c - dz * s, v.position.y, lq.centerZ + dx * s + dz * c);
+        }
+        v.position += move;
+        mesh.vertices.push_back(v);
     }
-    // Margem em coordenada do contorno ja' colocado.
-    std::vector<std::pair<Vec2, Vec2>> placed;
-    placed.reserve(edges.size());
-    for (const auto& e : edges) {
-        const Vec3 p0 = place(Vec3(e.first.x, 0.0f, e.first.y)), p1 = place(Vec3(e.second.x, 0.0f, e.second.y));
-        placed.push_back({Vec2(p0.x, p0.z), Vec2(p1.x, p1.z)});
-    }
-    float far = 0.0f;
-    for (size_t i = firstVertex; i < mesh.vertices.size(); ++i) {
-        const Vec3& p = mesh.vertices[i].position;
-        mesh.vertices[i].texCoord.y = distToEdges(Vec2(p.x, p.z), placed);
-        far = std::max(far, mesh.vertices[i].texCoord.y);
-    }
-    for (size_t i = firstVertex; i < mesh.vertices.size(); ++i) {
-        WaterVertex& v = mesh.vertices[i];
-        v.texCoord = Vec2(far > 0.0f ? 1.0f - v.texCoord.y / far : 1.0f, 0.0f);
-    }
+    mesh.indices.reserve(mesh.indices.size() + tpl->indices.size());
+    for (uint32_t i : tpl->indices) mesh.indices.push_back(base + i);
+    mesh.waterTileCount += tpl->waterTileCount;
 }
 
 } // namespace
