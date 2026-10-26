@@ -572,8 +572,11 @@ declare perf: {
 }
 
 -- Particle effects (Window > Effects). `name` is an effect of the game
--- (assets/effects/<name>.vfx.json) or an engine template (fogo, faiscas,
--- fumaca, magia, lava, fumarola); a path ending in .json also works.
+-- (assets/effects/<name>.vfx.json) or an engine template (data/vfx: fogo,
+-- faiscas, fumaca, chamine, magia, detritos, rastro, lanterna, janela, and
+-- for lava scenery magma_jorro, magma_brasa, magma_fenda, magma_vapor and
+-- magma_rio, sized in meters: pass `scale` for a bigger world); a path
+-- ending in .json also works.
 declare vfx: {
     -- Starts the effect at a world position; returns its id (0 = not found).
     -- `scale` multiplies size, speed and forces; `yaw` turns it in degrees.

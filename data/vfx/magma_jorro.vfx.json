@@ -1,0 +1,293 @@
+{
+  "name": "magma_jorro",
+  "emitters": [
+    {
+      "name": "nucleo",
+      "capacity": 220,
+      "rate": 20,
+      "shape": "disc",
+      "shapeSize": [
+        0.5,
+        0.3,
+        0.5
+      ],
+      "lifetime": [
+        0.5,
+        1.0
+      ],
+      "speed": [
+        0.6,
+        1.4
+      ],
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "spread": 0.2,
+      "size": [
+        0.8,
+        1.3
+      ],
+      "rotation": [
+        -20,
+        20
+      ],
+      "angularVelocity": [
+        -10,
+        10
+      ],
+      "gravity": [
+        0,
+        1.2,
+        0
+      ],
+      "drag": 1.0,
+      "noiseStrength": 0.9,
+      "noiseFrequency": 0.7,
+      "noiseSpeed": 1.1,
+      "color": [
+        {
+          "t": 0,
+          "rgba": [
+            1,
+            0.6,
+            0.25,
+            0
+          ]
+        },
+        {
+          "t": 0.15,
+          "rgba": [
+            1,
+            0.5,
+            0.18,
+            0.8
+          ]
+        },
+        {
+          "t": 0.6,
+          "rgba": [
+            0.9,
+            0.3,
+            0.08,
+            0.45
+          ]
+        },
+        {
+          "t": 1,
+          "rgba": [
+            0.4,
+            0.08,
+            0.02,
+            0
+          ]
+        }
+      ],
+      "sizeOverLife": [
+        [
+          0,
+          0.5
+        ],
+        [
+          0.3,
+          1.0
+        ],
+        [
+          1,
+          0.7
+        ]
+      ],
+      "blend": "additive",
+      "emissive": 0.45,
+      "softDistance": 0.4,
+      "texture": "builtin:flame",
+      "flipCols": 4,
+      "flipRows": 4,
+      "flipMode": "life",
+      "flipRandomStart": true,
+      "light": {
+        "enabled": true,
+        "color": [
+          1,
+          0.4,
+          0.1
+        ],
+        "intensity": 3.0,
+        "radius": 7.0,
+        "flicker": 0.3,
+        "offset": [
+          0,
+          0.5,
+          0
+        ]
+      }
+    },
+    {
+      "name": "gotas",
+      "capacity": 240,
+      "rate": 28,
+      "shape": "disc",
+      "shapeSize": [
+        0.4,
+        0.4,
+        0.4
+      ],
+      "lifetime": [
+        0.8,
+        1.4
+      ],
+      "speed": [
+        3.0,
+        5.5
+      ],
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "spread": 0.45,
+      "size": [
+        0.08,
+        0.18
+      ],
+      "gravity": [
+        0,
+        -9.8,
+        0
+      ],
+      "drag": 0.1,
+      "collideDepth": true,
+      "bounce": 0.15,
+      "friction": 0.6,
+      "color": [
+        {
+          "t": 0,
+          "rgba": [
+            1,
+            0.7,
+            0.3,
+            1
+          ]
+        },
+        {
+          "t": 0.5,
+          "rgba": [
+            1,
+            0.38,
+            0.08,
+            1
+          ]
+        },
+        {
+          "t": 1,
+          "rgba": [
+            0.35,
+            0.06,
+            0.0,
+            0
+          ]
+        }
+      ],
+      "facing": "velocity",
+      "stretch": 0.08,
+      "blend": "additive",
+      "emissive": 0.8,
+      "softDistance": 0.0,
+      "texture": "builtin:spark"
+    },
+    {
+      "name": "fumaca",
+      "capacity": 200,
+      "rate": 8,
+      "startDelay": 0.25,
+      "shape": "disc",
+      "shapeSize": [
+        0.5,
+        0.3,
+        0.5
+      ],
+      "lifetime": [
+        2.6,
+        4.4
+      ],
+      "speed": [
+        1.2,
+        2.0
+      ],
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "spread": 0.14,
+      "size": [
+        0.8,
+        1.2
+      ],
+      "rotation": [
+        0,
+        360
+      ],
+      "angularVelocity": [
+        -14,
+        14
+      ],
+      "gravity": [
+        0,
+        0.6,
+        0
+      ],
+      "drag": 0.5,
+      "noiseStrength": 0.7,
+      "noiseFrequency": 0.3,
+      "color": [
+        {
+          "t": 0,
+          "rgba": [
+            0.16,
+            0.14,
+            0.13,
+            0
+          ]
+        },
+        {
+          "t": 0.2,
+          "rgba": [
+            0.2,
+            0.18,
+            0.17,
+            0.5
+          ]
+        },
+        {
+          "t": 1,
+          "rgba": [
+            0.35,
+            0.34,
+            0.34,
+            0
+          ]
+        }
+      ],
+      "sizeOverLife": [
+        [
+          0,
+          1.0
+        ],
+        [
+          1,
+          3.5
+        ]
+      ],
+      "blend": "alpha",
+      "lit": 1.0,
+      "softDistance": 1.0,
+      "texture": "builtin:puff",
+      "flipCols": 4,
+      "flipRows": 4,
+      "flipMode": "random",
+      "lowRes": true
+    }
+  ]
+}
