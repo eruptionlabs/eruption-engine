@@ -160,6 +160,11 @@ void Vision::rasterTarget(const Vec2& origin, float texel, uint32_t n, std::vect
         const int x1 = std::min(static_cast<int>(n) - 1, static_cast<int>(std::floor((pos.x + reach - origin.x) / texel)));
         const int y0 = std::max(0, static_cast<int>(std::floor((pos.y - reach - origin.y) / texel)));
         const int y1 = std::min(static_cast<int>(n) - 1, static_cast<int>(std::floor((pos.y + reach - origin.y) / texel)));
+        // Fora da janela na horizontal: sem isto, numa linha sem miolo o
+        // trecho "vazio" (x1 + 1 .. x0 - 1) virava cheio com x1 < x0 e o fill
+        // escrevia antes da linha (antes do buffer na linha 0): o heap
+        // corrompido derrubava o jogo depois, em outro lugar.
+        if (x0 > x1) return;
         // Por linha: o miolo (dentro do raio interno) vira um trecho de 1 sem
         // conta; raiz e smoothstep so' nos texels da borda. 200 fontes de raio
         // 40 numa janela de 1024 u: 0,25 ms -> medido no teste.
