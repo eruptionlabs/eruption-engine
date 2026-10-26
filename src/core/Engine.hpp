@@ -675,6 +675,10 @@ public:
     // Perto da camera (camera.near_fade): o que fica a menos de `start` da
     // camera some em dither e volta ate' `end` (padrao 1,5x start). 0 desliga.
     void setNearFade(float start, float end);
+    // camera.collide: a orbita encurta quando o relevo (chao do mapa aberto e
+    // dos vizinhos) fica entre o alvo e a camera, e volta devagar quando
+    // libera. `margin` = folga em u entre a lente e o chao.
+    void setCameraCollide(bool on, float margin);
     // camera.set_orbit_input: arrastar com o botao esquerdo/direito (o dedo
     // no mundo) gira a orbita do PlayerController. Desligado, o jogo faz o
     // proprio gesto com input.touches sem o motor girar no mesmo quadro.
@@ -1833,6 +1837,15 @@ private:
     float m_seeThroughOpacity = 0.25f;
     bool m_seeThroughAtFocus = false;
     float m_seeThroughBand = 0.0f;
+    bool m_cameraCollide = false;
+    float m_cameraCollideMargin = 6.0f;
+    float m_cameraCollideDist = -1.0f; // distancia atual (< 0 = sem colisao)
+    void updateCameraCollision(float dt);
+    // Raio contra as malhas de chao sem balanco (CameraCollision.cpp): os
+    // cruzamentos em ordem, (t, true) entrando pela face da frente.
+    void raycastGroundMeshes(const Vec3& origin, const Vec3& dir, float maxT, std::vector<std::pair<float, bool>>& hits);
+    void warmCameraCollision();
+    std::shared_ptr<struct GroundRayCache> m_groundRays;
     bool m_focusPointSet = false;
     Vec3 m_focusPoint{0.0f};
     float m_nearFadeStart = 0.0f, m_nearFadeEnd = 0.0f;

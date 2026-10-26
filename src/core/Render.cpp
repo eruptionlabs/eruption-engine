@@ -207,6 +207,9 @@ void Engine::render() {
     // ("a sombra ta' flickando de uma forma muito ruim" - autor).
     static const char* demoSpec = std::getenv("ERUPTION_TEST_DEMO");
     if (demoSpec) runDemoTimeline(demoSpec);
+    // Colisao da camera no topo tambem, pelo mesmo motivo: sombra, cull e LOD
+    // leem a posicao ja' corrigida.
+    updateCameraCollision(m_frameDt);
 
     // Headless screenshot/benchmark runs: disable all debug overlays so the
     // captured frame matches what a player sees in normal gameplay.

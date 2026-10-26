@@ -190,11 +190,18 @@ void Camera::resetOrbit() {
     rebuildPositionFromOrbit();
 }
 
+void Camera::setOrbitClamp(float maxDist) {
+    if (maxDist == m_orbitClamp) return;
+    m_orbitClamp = maxDist;
+    if (!m_orthographic) rebuildPositionFromOrbit();
+}
+
 void Camera::rebuildPositionFromOrbit() {
+    const float d = std::min(m_orbitDistance, m_orbitClamp);
     m_position = m_target + Vec3(
-        m_orbitDistance * std::cos(m_orbitPitch) * std::cos(m_orbitYaw),
-        m_orbitDistance * std::sin(m_orbitPitch),
-        m_orbitDistance * std::cos(m_orbitPitch) * std::sin(m_orbitYaw)
+        d * std::cos(m_orbitPitch) * std::cos(m_orbitYaw),
+        d * std::sin(m_orbitPitch),
+        d * std::cos(m_orbitPitch) * std::sin(m_orbitYaw)
     );
     rebuildView();
     updateFrustum();
