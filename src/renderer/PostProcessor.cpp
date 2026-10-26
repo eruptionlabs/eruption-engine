@@ -341,7 +341,7 @@ void PostProcessor::createDescriptors() {
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset = 0;
     pcRange.size = 128;
-    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 320, 16 * 1024);
+    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 336, 16 * 1024);
     const VkDescriptorSetLayout setLayouts[2] = {m_descriptorSetLayout, m_pushRing.layout()};
 
     VkPipelineLayoutCreateInfo plInfo{};
@@ -762,7 +762,8 @@ if (!m_ctx) return;
     float msAutoExp = 0.0f;
     if (settings.gpuAutoExposure) {
         m_ctx->writeTimestamp(cmd, kQAutoExpBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-        dispatchAutoExposure(cmd, hdrInput, settings.aeDt, settings.aeTau);
+        dispatchAutoExposure(cmd, hdrInput, depthInput, invViewProj, cameraPos,
+                             settings.belowHorizon.a > 0.5f, settings.aeDt, settings.aeTau);
         m_ctx->writeTimestamp(cmd, kQAutoExpEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         msAutoExp = m_ctx->timestampDeltaMs(kQAutoExpBegin, kQAutoExpEnd);
         Profiler::addGpuTime("Auto Exposure", msAutoExp);
@@ -1524,6 +1525,7 @@ if (!m_ctx) return;
         Vec4 shadowTint;      // rgb=matiz, a=forca
         Vec4 highlightTint;
         Vec4 sceneDim;        // rgb=cor, a=forca (fx.dim)
+        Vec4 belowHorizon;    // rgb=cor do fundo, a=liga
     } push;
     // Debug/test overrides for fog parameters (useful for headless screenshots).
     float fogStart = settings.fogStart;
@@ -1594,7 +1596,8 @@ if (!m_ctx) return;
     push.shadowTint = lookConfig ? Vec4(lookConfig->shadowTint, lookConfig->shadowTintStrength) : Vec4(1.0f, 1.0f, 1.0f, 0.0f);
     push.highlightTint = lookConfig ? Vec4(lookConfig->highlightTint, lookConfig->highlightTintStrength) : Vec4(1.0f, 1.0f, 1.0f, 0.0f);
     push.sceneDim = settings.sceneDim;
-    static_assert(sizeof(push) <= 320, "bloco da composicao passou do maxBlock do PushRing (320 B)");
+    push.belowHorizon = settings.belowHorizon;
+    static_assert(sizeof(push) <= 336, "bloco da composicao passou do maxBlock do PushRing (336 B)");
     m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, &push, sizeof(push));
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkc::cmdEndRendering(cmd);
@@ -2097,16 +2100,20 @@ void PostProcessor::createAutoExposure() {
     si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     vkCreateSampler(device, &si, nullptr, &m_lumSampler);
+    si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+    vkCreateSampler(device, &si, nullptr, &m_lumDepthSampler);
 
-    // Histogram: binding 0 = HDR image, binding 1 = histogram SSBO.
+    // Histogram: binding 0 = HDR image, binding 1 = histogram SSBO,
+    // binding 2 = profundidade (fundo abaixo do horizonte fica de fora).
     {
-        VkDescriptorSetLayoutBinding b[2]{};
+        VkDescriptorSetLayoutBinding b[3]{};
         b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         b[1].binding = 1; b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        b[2] = b[0]; b[2].binding = 2;
         VkDescriptorSetLayoutCreateInfo li{}; li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 2; li.pBindings = b;
+        li.bindingCount = 3; li.pBindings = b;
         vkCreateDescriptorSetLayout(device, &li, nullptr, &m_lumHistDescLayout);
     }
     // Adaptation: binding 0 = histogram SSBO, binding 1 = exposure SSBO.
@@ -2122,7 +2129,7 @@ void PostProcessor::createAutoExposure() {
     }
 
     VkDescriptorPoolSize ps[2]{};
-    ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[0].descriptorCount = AE_FRAMES;
+    ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[0].descriptorCount = 2 * AE_FRAMES;
     ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; ps[1].descriptorCount = AE_FRAMES + 2;
     VkDescriptorPoolCreateInfo pi{}; pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pi.maxSets = AE_FRAMES + 1; pi.poolSizeCount = 2; pi.pPoolSizes = ps;
@@ -2168,7 +2175,7 @@ void PostProcessor::createAutoExposure() {
         vkCreateComputePipelines(device, VulkanContext::globalPipelineCache(), 1, &cpi, nullptr, &outPipe);
         vkDestroyShaderModule(device, mod, nullptr);
     };
-    makeCompute("compute/luminance_histogram.comp.spv", m_lumHistDescLayout, 4 * sizeof(float),
+    makeCompute("compute/luminance_histogram.comp.spv", m_lumHistDescLayout, 16 * sizeof(float),
                 m_lumHistLayout, m_lumHistPipeline);
     makeCompute("compute/luminance_adaptation.comp.spv", m_lumAdaptDescLayout, 7 * sizeof(float),
                 m_lumAdaptLayout, m_lumAdaptPipeline);
@@ -2184,6 +2191,7 @@ void PostProcessor::destroyAutoExposure() {
     if (m_lumAdaptDescLayout){ vkDestroyDescriptorSetLayout(device, m_lumAdaptDescLayout, nullptr); m_lumAdaptDescLayout = VK_NULL_HANDLE; }
     if (m_lumDescPool)       { vkDestroyDescriptorPool(device, m_lumDescPool, nullptr); m_lumDescPool = VK_NULL_HANDLE; }
     if (m_lumSampler)        { vkDestroySampler(device, m_lumSampler, nullptr); m_lumSampler = VK_NULL_HANDLE; }
+    if (m_lumDepthSampler)   { vkDestroySampler(device, m_lumDepthSampler, nullptr); m_lumDepthSampler = VK_NULL_HANDLE; }
     if (m_lumExpBuffer) {
         vmaUnmapMemory(m_ctx->allocator(), m_lumExpAlloc);
         vmaDestroyBuffer(m_ctx->allocator(), m_lumExpBuffer, m_lumExpAlloc);
@@ -2195,8 +2203,11 @@ void PostProcessor::destroyAutoExposure() {
     }
 }
 
-void PostProcessor::dispatchAutoExposure(VkCommandBuffer cmd, VkImageView hdrView, float dt, float tau) {
+void PostProcessor::dispatchAutoExposure(VkCommandBuffer cmd, VkImageView hdrView, VkImageView depthView,
+                                         const Mat4& invViewProj, const Vec3& cameraPos, bool skipBelowHorizon,
+                                         float dt, float tau) {
     if (!m_lumHistPipeline || !m_lumAdaptPipeline || !hdrView) return;
+    if (!depthView) { depthView = hdrView; skipBelowHorizon = false; } // binding sempre escrito
 
     // Read back LAST frame's adapted exposure before recording this frame's.
     if (m_lumExpMapped) {
@@ -2210,15 +2221,17 @@ void PostProcessor::dispatchAutoExposure(VkCommandBuffer cmd, VkImageView hdrVie
 
     uint32_t frameIdx = m_ctx->currentFrame() % AE_FRAMES;
     VkDescriptorImageInfo ii{m_lumSampler, hdrView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo di{m_lumDepthSampler, depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorBufferInfo hb{m_lumHistBuffer, 0, 256 * sizeof(uint32_t)};
-    VkWriteDescriptorSet w[2]{};
+    VkWriteDescriptorSet w[3]{};
     w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; w[0].dstSet = m_lumHistSets[frameIdx];
     w[0].dstBinding = 0; w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w[0].descriptorCount = 1; w[0].pImageInfo = &ii;
     w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; w[1].dstSet = m_lumHistSets[frameIdx];
     w[1].dstBinding = 1; w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     w[1].descriptorCount = 1; w[1].pBufferInfo = &hb;
-    updateSets(w, 2);
+    w[2] = w[0]; w[2].dstBinding = 2; w[2].pImageInfo = &di;
+    updateSets(w, 3);
 
     // Guarantee a clean histogram (adaptation clears it each frame, but frame 0
     // starts undefined; the fill is 1KB, negligible).
@@ -2232,7 +2245,13 @@ void PostProcessor::dispatchAutoExposure(VkCommandBuffer cmd, VkImageView hdrVie
     const float minLogLum = -8.0f;
     const float logLumRange = 12.0f;
 
-    struct { float minLogLum, logLumRange, timeDelta, pad; } histPush{minLogLum, logLumRange, dt, 0.0f};
+    // Linhas y e w da invViewProj: o shader acha a altura do raio de cada
+    // pixel sem a matriz inteira (o push fica em 64 B).
+    struct { float minLogLum, logLumRange, timeDelta, pad; Vec4 rowY, rowW, cam; } histPush{
+        minLogLum, logLumRange, dt, 0.0f,
+        Vec4(invViewProj[0][1], invViewProj[1][1], invViewProj[2][1], invViewProj[3][1]),
+        Vec4(invViewProj[0][3], invViewProj[1][3], invViewProj[2][3], invViewProj[3][3]),
+        Vec4(cameraPos.y, skipBelowHorizon ? 1.0f : 0.0f, 0.0f, 0.0f)};
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_lumHistPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_lumHistLayout, 0, 1,
                             &m_lumHistSets[frameIdx], 0, nullptr);

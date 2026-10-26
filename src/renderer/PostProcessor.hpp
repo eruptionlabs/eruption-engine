@@ -38,6 +38,9 @@ public:
         float fogHeightFalloff = 0.01f;
         // Escurecer so' o cenario (fx.dim): rgb = cor, a = forca. A UI vem depois.
         Vec4 sceneDim = Vec4(0.0f);
+        // Fundo abaixo do horizonte onde nao ha' geometria: rgb = cor (antes
+        // da exposicao), a = 1 liga (e tira esses pixels da autoexposicao).
+        Vec4 belowHorizon = Vec4(0.0f);
         // INTERRUPTOR MESTRE DO DESFOQUE. Chamava-se `enableTiltShift`, o que
         // fez dois relatorios diferentes concluirem que "o tilt-shift esta'
         // desligado, por isso falta a pista de maquete" - errado nos dois: o
@@ -273,11 +276,14 @@ private:
     VmaAllocation m_lumExpAlloc = VK_NULL_HANDLE;
     void* m_lumExpMapped = nullptr;
     VkSampler m_lumSampler = VK_NULL_HANDLE;
+    VkSampler m_lumDepthSampler = VK_NULL_HANDLE; // NEAREST: D32 sem filtro linear no celular
     float m_gpuExposure = 1.0f;
     bool m_gpuExposureValid = false;
     void createAutoExposure();
     void destroyAutoExposure();
-    void dispatchAutoExposure(VkCommandBuffer cmd, VkImageView hdrView, float dt, float tau);
+    void dispatchAutoExposure(VkCommandBuffer cmd, VkImageView hdrView, VkImageView depthView,
+                              const Mat4& invViewProj, const Vec3& cameraPos, bool skipBelowHorizon,
+                              float dt, float tau);
 
     VkImage m_outputImage = VK_NULL_HANDLE;
     VmaAllocation m_outputAlloc = VK_NULL_HANDLE;

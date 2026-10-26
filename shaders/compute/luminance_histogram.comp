@@ -6,12 +6,16 @@ layout(set = 0, binding = 0) uniform sampler2D srcTexture;
 layout(set = 0, binding = 1, std430) buffer HistogramBuffer {
     uint histogram[];
 };
+layout(set = 0, binding = 2) uniform sampler2D depthTexture;
 
 layout(push_constant) uniform Push {
     float minLogLum;
     float logLumRange;
     float timeDelta;
     float pad;
+    vec4 rowY;  // linha y da invViewProj
+    vec4 rowW;  // linha w
+    vec4 cam;   // x = altura da camera, y = 1 tira o fundo abaixo do horizonte
 } push;
 
 shared uint localHistogram[256];
@@ -35,7 +39,14 @@ void main() {
         float lum = luminance(color);
         float logLum = clamp((log2(lum + 1e-5) - push.minLogLum) / push.logLumRange, 0.0, 1.0);
         uint bin = uint(logLum * 255.0);
-        atomicAdd(localHistogram[bin], 1u);
+        // Fundo abaixo do horizonte (sem geometria, raio descendo): o vao da
+        // borda do mundo nao e' cena e nao mexe na exposicao.
+        bool fundo = false;
+        if (push.cam.y > 0.5 && textureLod(depthTexture, uv, 0.0).r >= 0.99999) {
+            vec4 clip = vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+            fundo = dot(push.rowY, clip) / dot(push.rowW, clip) < push.cam.x;
+        }
+        if (!fundo) atomicAdd(localHistogram[bin], 1u);
     }
     
     barrier();

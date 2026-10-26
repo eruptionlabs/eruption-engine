@@ -132,6 +132,19 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
                               map.env.fog.color.r, map.env.fog.color.g, map.env.fog.color.b,
                               map.env.fog.start, map.env.fog.end, map.env.fog.opacity);
         }
+        // "background": "fog" (cor da nevoa) ou [r, g, b] (linear, antes da
+        // exposicao): o vazio abaixo do horizonte na borda do mundo.
+        if (j.contains("background")) {
+            const auto& b = j["background"];
+            if (b.is_string() && b.get<std::string>() == "fog") {
+                map.env.backgroundMode = 1;
+            } else if (b.is_array() && b.size() >= 3) {
+                map.env.backgroundMode = 2;
+                map.env.backgroundColor = Vec3(b[0].get<float>(), b[1].get<float>(), b[2].get<float>());
+            } else {
+                ERUPTION_LOG_WARN("MapLoader: \"background\" do .env deve ser \"fog\" ou [r, g, b]");
+            }
+        }
 
         if (j.contains("light") && j["light"].is_object()) {
             map.env.lightAuthored = j["light"].value("authoritative", false);

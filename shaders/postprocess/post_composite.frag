@@ -36,6 +36,7 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec4 shadowTint;      // rgb=matiz (normalizado pela luminancia), a=forca
     vec4 highlightTint;   // idem, nas luzes
     vec4 sceneDim;        // rgb=cor, a=forca: escurece so' o cenario (fx.dim), antes da UI
+    vec4 belowHorizon;    // rgb=fundo abaixo do horizonte (antes da exposicao), a=liga
 } push;
 
 // ---------------------------------------------------------------------------
@@ -344,6 +345,14 @@ void main() {
             finalFogColor *= phase / max(phase90, 1e-4);
         }
         color = mix(color, finalFogColor, fogFactor);
+    }
+
+    // FUNDO ABAIXO DO HORIZONTE ("background" do .env): sem geometria e com o
+    // raio descendo, o ceu (claro e HDR) virava um vao na borda do mundo. Sai
+    // na cor do fundo, com a mesma exposicao da nevoa para emendar no longe.
+    if (push.belowHorizon.a > 0.5 && depth >= 0.99999) {
+        float rayY = normalize(worldPos - camPos).y;
+        color = mix(color, push.belowHorizon.rgb * push.exposureBloom.x, smoothstep(0.0, -0.02, rayY));
     }
 
     // Cloud layer composite (half-res ray-marched result).
