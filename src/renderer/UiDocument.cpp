@@ -311,6 +311,17 @@ bool UiDocument::badgeRects(const std::string& selector, float x, float y, float
     return true;
 }
 
+bool UiDocument::badgeTouchAt(float x, float y, float w, float h, float minTouch, const Vec2& p) const {
+    if (!m_loaded) return false;
+    for (const Element& e : m_elements) {
+        if (!e.hasBadge || chainHidden(e)) continue;
+        CSSRect visual, touch;
+        badgeRects(e.selector, x, y, w, h, minTouch, visual, touch);
+        if (p.x >= touch.x && p.x <= touch.x + touch.w && p.y >= touch.y && p.y <= touch.y + touch.h) return true;
+    }
+    return false;
+}
+
 // Pintura do selo: --badge-color (fundo; vermelho), a imagem inteira no
 // circulo, ou o texto centrado em branco.
 void UiDocument::drawBadge(ImDrawList* dl, const Element& e, const CSSRect& c) const {
