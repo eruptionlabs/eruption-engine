@@ -354,6 +354,11 @@ float calcSingleShadow(sampler2DShadow atlas, mat4 mats[2], vec3 worldPos, vec3 
     dz_duv = clamp(dz_duv, vec2(-dzMax), vec2(dzMax));
     // Final NaN guard before the shadow kernel.
     if (any(isnan(dz_duv)) || any(isinf(dz_duv))) dz_duv = vec2(0.0);
+    // Sprite: o quadro fica em pe', quase paralelo ao raio do sol, e o plano
+    // receptor dele inclinava cada amostra do filtro (aberto a 2,5x no
+    // sprite) por dezenas de unidades: sob o bloqueador de outro objeto a
+    // arte saia em listras horizontais, linha acesa e linha apagada.
+    if (g_spritePixel) dz_duv = vec2(0.0);
 
     float sh = sampleCascade(atlas, projCoord, idx, projCoord.z - bias, texelSize, dz_duv);
 
