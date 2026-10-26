@@ -1000,6 +1000,10 @@ public:
     // até um degrau acima de y; sem chão abaixo, o mais perto acima. Sem `y`,
     // o mapa aberto primeiro.
     const LoadedMap* mapAt(float x, float z, float y = kAnyHeight) const;
+    // Todos os mapas em cena com chão em (x, z), até `max` (emendas e
+    // empilhados); devolve quantos.
+    int mapsAt(float x, float z, const LoadedMap** out, int max) const;
+    bool seamWalkable(const LoadedMap* map, float x, float z) const;
     // Área com chão de todos os mapas em cena (limite da câmera).
     bool worldBounds(Vec2& outMin, Vec2& outMax) const;
     // Lado e área de um mapa pela grade de altura (.ter); falso se não tem.

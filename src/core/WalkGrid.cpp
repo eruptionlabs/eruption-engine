@@ -35,6 +35,18 @@ bool followsTerrain(const LoadedMap& m) {
     return m.isGlbMap && m.terrainFromFile && m.navGrid.width == m.terrain.width && m.navGrid.height == m.terrain.height;
 }
 
+// Ponto do mundo no espaço do mapa da grade antiga (célula de 5 u a partir da
+// origem do mapa). Vizinho do mundo contínuo: o lugar dele (placeX/placeZ) e o
+// giro; o mapa aberto tem lugar 0 e não gira. No vizinho girado o ponto anda
+// um nada para +x/+z do mundo antes de girar: em cima da borda de uma célula
+// fica a célula do lado + do mundo, como no mapa sem giro. Sem isso, girado
+// 180°, a linha da emenda (z inteiro, onde a busca de caminho amostra) caía na
+// célula do outro lado, a parede da borda do mapa (26/10).
+Vec2 legacyLocal(const TerrainFile& t, float x, float z) {
+    constexpr float kTie = 1e-3f;
+    return t.rotated() ? t.toMap(x + kTie, z + kTie) : Vec2(x - t.placeX, z - t.placeZ);
+}
+
 // Célula da grade de caminhada sob (x, z) e o passo dela.
 bool cellOf(const LoadedMap& m, float x, float z, int& gx, int& gz) {
     if (followsTerrain(m)) {
@@ -43,8 +55,9 @@ bool cellOf(const LoadedMap& m, float x, float z, int& gx, int& gz) {
         gx = int(std::floor((p.x - t.offsetX) / t.scale + 0.5f));
         gz = int(std::floor((p.y - t.offsetZ) / t.scale + 0.5f));
     } else {
-        gx = int(x / 5.0f); // grade antiga: célula de 5 unidades a partir da origem
-        gz = int(z / 5.0f);
+        const Vec2 p = legacyLocal(m.terrain, x, z);
+        gx = int(std::floor(p.x / 5.0f)); // grade antiga: célula de 5 unidades a partir da origem
+        gz = int(std::floor(p.y / 5.0f));
     }
     return gx >= 0 && gz >= 0 && gx < int(m.navGrid.width) && gz < int(m.navGrid.height);
 }
@@ -55,7 +68,9 @@ Vec2 cellCenter(const LoadedMap& m, int gx, int gz) {
         const TerrainFile& t = m.terrain;
         return t.toWorld(t.offsetX + gx * t.scale, t.offsetZ + gz * t.scale);
     }
-    return Vec2((gx + 0.5f) * 5.0f, (gz + 0.5f) * 5.0f);
+    const TerrainFile& t = m.terrain;
+    const Vec2 p((gx + 0.5f) * 5.0f, (gz + 0.5f) * 5.0f);
+    return t.rotated() ? t.toWorld(p.x, p.y) : p + Vec2(t.placeX, t.placeZ);
 }
 
 float cellCost(const LoadedMap& m, int gx, int gz) {
@@ -78,11 +93,33 @@ bool Engine::navWalkable(float x, float z, float y) const {
     const LoadedMap* map = mapAt(x, z, y);
     int gx = 0, gz = 0;
     if (map && map != m_currentMap.get()) {
-        // Vizinho do mundo contínuo: só mapas com grade (a caminhada segue o terreno).
-        if (!followsTerrain(*map)) return true;
-        return cellOf(*map, x, z, gx, gz) && cellWalkable(*map, gx, gz);
+        // Vizinho do mundo contínuo: a grade dele, a do .ter ou a antiga de 5 u,
+        // no lugar do vizinho. Até 26/10 a antiga valia "anda em tudo", e o jogo
+        // mantinha uma grade própria para não atravessar paredes nos vizinhos.
+        if (map->navGrid.width == 0) return true;
+        if (cellOf(*map, x, z, gx, gz) && cellWalkable(*map, gx, gz)) return true;
+        return seamWalkable(map, x, z);
     }
-    return navCell(x, z, gx, gz) && cellWalkable(*m_currentMap, gx, gz);
+    if (navCell(x, z, gx, gz) && cellWalkable(*m_currentMap, gx, gz)) return true;
+    return map && seamWalkable(map, x, z);
+}
+
+// Emenda do mundo contínuo: os mapas vizinhos se sobrepõem por uma célula, e a
+// célula de sobra de cada um é a parede da borda dele. Outro mapa em cena com o
+// mesmo chão (até um degrau) no ponto também deixa passar.
+bool Engine::seamWalkable(const LoadedMap* map, float x, float z) const {
+    constexpr float kSeamStep = 4.0f; // o degrau da caminhada (GroundQuery)
+    const float h = TerrainParser::getTerrainHeightAt(map->terrain, x, z);
+    const LoadedMap* others[4];
+    const int n = mapsAt(x, z, others, 4);
+    for (int k = 0; k < n; ++k) {
+        const LoadedMap& o = *others[k];
+        if (&o == map || o.navGrid.width == 0) continue;
+        if (std::abs(TerrainParser::getTerrainHeightAt(o.terrain, x, z) - h) > kSeamStep) continue;
+        int gx = 0, gz = 0;
+        if (cellOf(o, x, z, gx, gz) && cellWalkable(o, gx, gz)) return true;
+    }
+    return false;
 }
 
 int Engine::setWalkCost(float x, float z, float radius, float cost) {
