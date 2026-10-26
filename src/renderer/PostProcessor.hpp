@@ -74,6 +74,16 @@ public:
         // grande em 1/4 da resolucao (dof_far_*.frag).
         float cocFocusBand = 0.0f;
         float cocZoomFactor = 1.0f;
+        // coc_model "thin_lens": CoC de lente fina, A*f*|z-zf|/(z*(zf-f)).
+        // Com f e zf fixos isso e' K*|z-zf|/z: K e' o borrao no infinito
+        // (coc_lens_blur), longe satura e perto cresce ate' o teto proprio.
+        // O linear (|z-zf|*abertura) com a camera inclinada vira uma faixa
+        // na tela: o borrao segue a altura da linha, nao a distancia.
+        bool cocThinLens = false;
+        float cocLensBlur = 2.0f;
+        float cocMaxBlurNear = -1.0f; // < 0: coc_max_blur
+        float cocMaxBlurFar = -1.0f;  // < 0: coc_max_blur
+        float cocEdge = 0.0f;         // u de mundo: rampa suave depois da faixa em foco
         bool cocEnableForeground = true;
         bool visualizeCoC = false;
 

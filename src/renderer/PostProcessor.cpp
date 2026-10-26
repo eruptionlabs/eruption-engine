@@ -1254,6 +1254,11 @@ if (!m_ctx) return;
             float far_plane;
             int enable_foreground;
             float focus_band;
+            int thin_lens;
+            float lens_blur;
+            float max_near;
+            float max_far;
+            float edge;
         } cocPush;
         // Da autoria por zoom (lente de referencia de 60 graus) para o espaco
         // do shader (profundidade real) - ver a nota em PostProcessor.hpp. O
@@ -1290,6 +1295,11 @@ if (!m_ctx) return;
         cocPush.far_plane = farPlane;
         cocPush.enable_foreground = (settings.focusOverride ? settings.focusForeground
                                                             : settings.cocEnableForeground) ? 1 : 0;
+        cocPush.thin_lens = settings.cocThinLens ? 1 : 0;
+        cocPush.lens_blur = settings.cocLensBlur;
+        cocPush.max_near = settings.cocMaxBlurNear >= 0.0f ? std::min(settings.cocMaxBlurNear, teto) : teto;
+        cocPush.max_far = settings.cocMaxBlurFar >= 0.0f ? std::min(settings.cocMaxBlurFar, teto) : teto;
+        cocPush.edge = settings.cocEdge;
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(cocPush), &cocPush);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkc::cmdEndRendering(cmd);
@@ -1700,6 +1710,11 @@ void PostProcessor::PostSettings::loadFromJson(const nlohmann::json& j) {
     if (const char* e = std::getenv("ERUPTION_TEST_COC_MAXBLUR")) cocMaxBlur = std::strtof(e, nullptr);
     cocZoomFactor = j.value("coc_zoom_factor", cocZoomFactor);
     cocEnableForeground = j.value("coc_enable_foreground", cocEnableForeground);
+    cocThinLens = j.value("coc_model", std::string(cocThinLens ? "thin_lens" : "linear")) == "thin_lens";
+    cocLensBlur = j.value("coc_lens_blur", cocLensBlur);
+    cocMaxBlurNear = j.value("coc_max_blur_near", cocMaxBlurNear);
+    cocMaxBlurFar = j.value("coc_max_blur_far", cocMaxBlurFar);
+    cocEdge = j.value("coc_edge", cocEdge);
     visualizeCoC = j.value("visualize_coc", visualizeCoC);
     weatherAfterDoF = j.value("weather_after_dof", weatherAfterDoF);
     debugRainOcclusion = j.value("debug_rain_occlusion", debugRainOcclusion);
