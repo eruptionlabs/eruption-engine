@@ -651,6 +651,12 @@ public:
     // Perto da camera (camera.near_fade): o que fica a menos de `start` da
     // camera some em dither e volta ate' `end` (padrao 1,5x start). 0 desliga.
     void setNearFade(float start, float end);
+    // Recorte por volume (world.set_cutaway): malha do mapa e modelos dentro
+    // do volume `slot` (0..FrameUBO::kCutaways-1) somem em dither ate'
+    // `opacity`, com borda suave de `soft` unidades. shape 0 desliga, 1 caixa
+    // (halfSize), 2 cilindro (halfSize.x = raio, .y = meia altura).
+    void setCutaway(int slot, int shape, const Vec3& center, const Vec3& halfSize, float yawDeg, float soft,
+                    float opacity);
     // Sombra dos sprites (characters.set_shadow): 0 = planar do sol, 1 =
     // disco, 2 = disco + planar das ate' 2 luzes pontuais dominantes; -1 = a
     // do data/char_config.json.
@@ -1783,6 +1789,7 @@ private:
     float m_seeThroughRadius = 0.0f;
     float m_seeThroughOpacity = 0.25f;
     float m_nearFadeStart = 0.0f, m_nearFadeEnd = 0.0f;
+    std::array<Vec4, 3 * FrameUBO::kCutaways> m_cutaway{};
     void fillSeeThrough(FrameUBO& ubo) const;
     int m_spriteShadowKind = -1;
     int spriteShadowKind() const;

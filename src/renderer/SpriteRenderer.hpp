@@ -140,6 +140,12 @@ struct FrameUBO {
     alignas(16) uint32_t gbSplat[4];
     alignas(16) uint32_t gbSlots[4];
     alignas(16) uint32_t gbSlots2[4];
+    // RECORTE POR VOLUME (world.set_cutaway, gbuffer/see_through.glsl): ate'
+    // kCutaways volumes, 3 vec4 cada. a = centro + forma (w: 0 desligado,
+    // 1 caixa, 2 cilindro); b = meia largura/raio, meia altura, meia
+    // profundidade, borda suave; c = cos e sen do giro em Y, opacidade.
+    static constexpr uint32_t kCutaways = 4;
+    alignas(16) Vec4 cutaway[3 * kCutaways];
 };
 
 // Luz pontual dominante de um sprite (Engine::spriteDominantLights), por

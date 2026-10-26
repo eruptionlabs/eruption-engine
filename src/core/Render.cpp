@@ -2857,6 +2857,16 @@ void Engine::setSeeThrough(float radius, float opacity) {
     m_seeThroughOpacity = glm::clamp(opacity, 0.0f, 1.0f);
 }
 
+void Engine::setCutaway(int slot, int shape, const Vec3& center, const Vec3& halfSize, float yawDeg, float soft,
+                        float opacity) {
+    if (slot < 0 || slot >= int(FrameUBO::kCutaways)) return;
+    const float yaw = glm::radians(yawDeg);
+    const bool on = shape == 1 || shape == 2;
+    m_cutaway[3 * slot] = Vec4(center, on ? float(shape) : 0.0f);
+    m_cutaway[3 * slot + 1] = Vec4(glm::max(halfSize, Vec3(0.0f)), std::max(soft, 0.0f));
+    m_cutaway[3 * slot + 2] = Vec4(std::cos(yaw), std::sin(yaw), glm::clamp(opacity, 0.0f, 1.0f), 0.0f);
+}
+
 void Engine::setNearFade(float start, float end) {
     m_nearFadeStart = std::max(0.0f, start);
     m_nearFadeEnd = end > m_nearFadeStart ? end : (m_nearFadeStart > 0.0f ? m_nearFadeStart * 1.5f : 0.0f);
@@ -2877,6 +2887,7 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
         if (const char* e = std::getenv("ERUPTION_TEST_SEE_THROUGH")) std::sscanf(e, "%f,%f", &v.x, &v.y);
         return v;
     }();
+    std::copy(m_cutaway.begin(), m_cutaway.end(), ubo.cutaway);
     // Perto da camera (camera.near_fade): vale com ou sem jogador.
     ubo.seeThrough3.z = m_nearFadeStart;
     ubo.seeThrough3.w = m_nearFadeEnd;

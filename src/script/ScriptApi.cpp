@@ -1560,6 +1560,46 @@ int world_set_focus(lua_State* L) {
     return 0;
 }
 
+// Recorte por volume (Engine::setCutaway): slot 1..4 e a tabela do volume, ou
+// nil para desligar. Medidas em unidades do mundo.
+int world_set_cutaway(lua_State* L) {
+    const int slot = int(luaL_checkinteger(L, 1)) - 1;
+    if (lua_isnoneornil(L, 2)) {
+        eng().setCutaway(slot, 0, Vec3(0.0f), Vec3(0.0f), 0.0f, 0.0f, 1.0f);
+        return 0;
+    }
+    luaL_checktype(L, 2, LUA_TTABLE);
+    auto num = [L](const char* k, float def) {
+        lua_getfield(L, 2, k);
+        const float v = lua_isnumber(L, -1) ? float(lua_tonumber(L, -1)) : def;
+        lua_pop(L, 1);
+        return v;
+    };
+    lua_getfield(L, 2, "shape");
+    const std::string shape = lua_isstring(L, -1) ? lua_tostring(L, -1) : "box";
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "center");
+    const Vec3 center = checkVec3(L, -1);
+    lua_pop(L, 1);
+    Vec3 half(0.0f);
+    int kind = 1;
+    if (shape == "cylinder") {
+        kind = 2;
+        half = Vec3(num("radius", 0.0f), 0.5f * num("height", 0.0f), 0.0f);
+    } else if (shape == "box") {
+        lua_getfield(L, 2, "size");
+        if (!lua_isnil(L, -1)) half = 0.5f * checkVec3(L, -1);
+        lua_pop(L, 1);
+    } else {
+        luaL_error(L, "set_cutaway: shape must be \"box\" or \"cylinder\"");
+    }
+    // Borda suave padrao: 15% da menor medida do volume.
+    const float smallest = kind == 2 ? std::min(half.x, half.y) : std::min({half.x, half.y, half.z});
+    eng().setCutaway(slot, kind, center, half, num("yaw", 0.0f), num("soft", 0.15f * smallest),
+                     num("opacity", 0.0f));
+    return 0;
+}
+
 // Juncao malha x terreno (Engine::setGroundBlend).
 int world_set_ground_blend(lua_State* L) {
     eng().setGroundBlend(static_cast<float>(luaL_optnumber(L, 1, 0.0)), static_cast<float>(luaL_optnumber(L, 2, 0.3)));
@@ -1960,7 +2000,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
         {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
-        {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend},
+        {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend}, {"set_cutaway", world_set_cutaway},
         {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids}, {"set_liquid_level", world_set_liquid_level},
         {"block_slopes", world_block_slopes}, {"set_walk_cost", world_set_walk_cost}, {"walk_cost", world_walk_cost},
         {"map", world_map}, {"load_map", world_load_map},
@@ -2225,6 +2265,14 @@ declare world: {
     -- full resolution (default 3; above it a cheap wide blur takes over). No
     -- point at all gives the lens back to the automatic focus.
     set_focus: (point: vector?, aperture: number?, foreground: boolean?, band: number?, max_blur: number?) -> (),
+    -- Hides map and model geometry inside a volume (a mountain or a wall
+    -- between the camera and the action) as a dither pattern. `slot` is 1..4;
+    -- nil turns that slot off. Table: shape = "box" (size = vector, full
+    -- width, height and depth) or "cylinder" (radius, height); center =
+    -- vector; yaw in degrees; soft = fade width inward from the surface
+    -- (default 15% of the smallest measure); opacity = what stays inside
+    -- (default 0). Shadows are unaffected.
+    set_cutaway: (slot: number, volume: { [string]: any }?) -> (),
     -- Models touching the ground take on the ground's own material (splat
     -- layers, color, normal) within `band` world units above it, so the
     -- contact line stops reading as a hard seam. Each model's band is at most
