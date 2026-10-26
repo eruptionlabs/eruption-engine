@@ -880,13 +880,19 @@ bool MapLoader::loadPhaseModels() {
     // Default directional light for GLB maps. Values are tuned to match the
     // look of legacy maps without overriding the daynight cycle.
     {
-        LoadedMap::MapLight sun;
-        sun.position = Vec3(500.0f, 1000.0f, 500.0f);
-        sun.color = Vec3(0.15f, 0.14f, 0.13f);
-        sun.intensity = 1.0f;
-        sun.range = 5000.0f;
-        sun.animType = LightAnimType::Static;
-        m_loadingMap->lights.push_back(sun);
+        // Pontual de preenchimento so' quando o .env nao manda na luz
+        // (light.authoritative): ela enche a tela por igual e, num mapa com a
+        // luz autorada, achatava o contraste sol/sombra (22,6% do brilho da
+        // tela num mapa medido, contraste 1,40 contra ~3 sem ela).
+        if (!m_loadingMap->env.lightAuthored) {
+            LoadedMap::MapLight sun;
+            sun.position = Vec3(500.0f, 1000.0f, 500.0f);
+            sun.color = Vec3(0.15f, 0.14f, 0.13f);
+            sun.intensity = 1.0f;
+            sun.range = 5000.0f;
+            sun.animType = LightAnimType::Static;
+            m_loadingMap->lights.push_back(sun);
+        }
 
         // Brighter directional + ambient light for GLB maps so authored PBR
         // textures are visible without relying on the daynight cycle.
