@@ -145,6 +145,11 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
         }
         // "background": "fog" (cor da nevoa) ou [r, g, b] (linear, antes da
         // exposicao): o vazio abaixo do horizonte na borda do mundo.
+        if (j.contains("exposure") && j["exposure"].is_object()) {
+            const auto& e = j["exposure"];
+            map.env.exposureLocked = !e.value("auto", true);
+            map.env.exposureValue = std::clamp(e.value("value", 1.0f), 0.01f, 100.0f);
+        }
         if (j.contains("background")) {
             const auto& b = j["background"];
             if (b.is_string() && b.get<std::string>() == "fog") {

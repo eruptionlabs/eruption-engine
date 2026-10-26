@@ -169,6 +169,11 @@ struct LoadedMap {
         // mundo). 0 = o ceu de sempre, 1 = a cor da nevoa, 2 = backgroundColor.
         // Fora do 0, esses pixels tambem saem da autoexposicao.
         int backgroundMode = 0;
+        // EXPOSICAO TRAVADA ("exposure": {"auto": false, "value": 1.0}): o
+        // multiplicador da autoexposicao fica nesse valor, sem histograma.
+        // Para luz calibrada a mao contra uma referencia.
+        bool exposureLocked = false;
+        float exposureValue = 1.0f;
         Vec3 backgroundColor = Vec3(0.0f);
         Vec3 sunDirection = Vec3(0.0f, -1.0f, 0.0f);
         Vec3 sunColor = Vec3(2.5f, 2.4f, 2.2f);

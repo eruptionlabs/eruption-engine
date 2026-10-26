@@ -1494,6 +1494,14 @@ int world_look(lua_State* L) {
 // Nevoa do jogo: tabela {color = vector|{r,g,b}, start, end, opacity, height,
 // falloff} (os campos do bloco "fog" do .env) vence a do mapa e a do clima;
 // nil devolve o comando para eles. Vale ate' a proxima troca de mapa.
+// Exposicao travada: `value` multiplica a imagem no lugar da autoexposicao
+// (1 = a luz como foi calibrada); nil volta ao "exposure" do .env ou a'
+// automatica. Vale ate' a proxima troca de mapa.
+int world_set_exposure(lua_State* L) {
+    eng().setScriptExposure(lua_isnoneornil(L, 1) ? -1.0f
+                                                  : std::clamp(static_cast<float>(luaL_checknumber(L, 1)), 0.01f, 100.0f));
+    return 0;
+}
 int world_set_fog(lua_State* L) {
     if (lua_isnoneornil(L, 1)) {
         eng().setScriptFog(MapFog{});
@@ -2146,7 +2154,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
-        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
+        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_exposure", world_set_exposure}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
         {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend}, {"set_cutaway", world_set_cutaway},
         {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids}, {"set_liquid_level", world_set_liquid_level},
@@ -2424,6 +2432,11 @@ declare world: {
     -- height, falloff} (the map .env "fog" block fields). Wins over the map's
     -- and the weather's fog until the next map change; nil gives control back.
     set_fog: (fog: { [string]: any }?) -> (),
+    -- Locks the exposure at `value` (1 = the light as authored) instead of
+    -- adapting to the frame, as the map .env "exposure": {"auto": false,
+    -- "value": 1.0} does. nil gives control back (the map's lock or auto).
+    -- Until the next map change.
+    set_exposure: (value: number?) -> (),
     -- Motion blur and chromatic aberration come from the quality preset; a
     -- game can tune them as art direction. `amount`: strength (engine default
     -- 1 for the blur, 0.5 for the fringe).

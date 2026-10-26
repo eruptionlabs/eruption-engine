@@ -477,6 +477,7 @@ public:
     uint32_t m_godRayLights = 4;     // chave "god_ray_lights"
     float m_godRaySun = 0.0f;        // chave "god_ray_sun" (forca dos raios do sol)
     MapFog m_scriptFog;              // world.set_fog (set=false: nenhuma)
+    float m_scriptExposure = -1.0f;  // world.set_exposure (< 0: a do .env ou automatica)
     DioramaLookConfig& lookConfig() { return m_lookConfig; }
     ConfigManager& dioramaConfig() { return m_dioramaConfig; }
     ConfigManager& skyboxConfig() { return m_skyboxConfig; }
@@ -591,6 +592,9 @@ public:
     // Nevoa por script (world.set_fog): vence a do mapa (.env) e a do clima;
     // set=false devolve o comando para eles.
     void setScriptFog(const MapFog& fog) { m_scriptFog = fog; }
+    // Exposicao travada por script (world.set_exposure): vence o "exposure"
+    // do .env; negativo devolve o comando a ele (ou a' automatica).
+    void setScriptExposure(float value) { m_scriptExposure = value; }
     void setMinimapBottomRight(bool bottomRight) { m_minimapBottomRight = bottomRight; }
     bool minimapBottomRight() const { return m_minimapBottomRight; }
     // O minimapa (e o cursor do jogador nele) segue o #minimap/#minimap-info do

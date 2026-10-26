@@ -1666,7 +1666,17 @@ void Engine::render() {
     // in PostProcessor), which already applies temporal smoothing. Fallback for
     // the first frames (before a GPU result exists): analytic estimate from the
     // light budget.
-    if (m_autoExposureEnabled) {
+    // Exposicao travada (world.set_exposure, senao "exposure" do .env): sem
+    // histograma, o mesmo valor todo quadro. Guardado em m_autoExposureCurrent
+    // para a automatica partir dele quando destravar.
+    const float lockedExposure = m_scriptExposure >= 0.0f ? m_scriptExposure
+                               : (m_currentMap && m_currentMap->env.exposureLocked) ? m_currentMap->env.exposureValue
+                                                                                     : -1.0f;
+    if (lockedExposure >= 0.0f) {
+        postSettings.gpuAutoExposure = false;
+        m_autoExposureCurrent = lockedExposure;
+        postSettings.exposure = m_postSettings.exposure * lockedExposure;
+    } else if (m_autoExposureEnabled) {
         postSettings.gpuAutoExposure = true;
         postSettings.aeTau = m_autoExposureSpeed;
         postSettings.aeDt = glm::clamp(m_timer.deltaTime(), 0.001f, 0.1f);
