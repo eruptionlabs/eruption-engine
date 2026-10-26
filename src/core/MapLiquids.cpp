@@ -266,10 +266,11 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
 // não é refeita (setLavaMesh espera a GPU); o Render passa a diferença para o
 // shader como deslocamento em Y (levelOffset), e as consultas do chão leem
 // map->liquids direto.
-bool Engine::setLiquidLevel(int index, float level) {
-    if (!m_currentMap || index < 0 || size_t(index) >= m_currentMap->liquids.size() || !std::isfinite(level))
+bool Engine::setLiquidLevel(int index, float level, LoadedMap* map) {
+    if (!map) map = m_currentMap.get();
+    if (!map || index < 0 || size_t(index) >= map->liquids.size() || !std::isfinite(level))
         return false;
-    LoadedMap::MapLiquid& lq = m_currentMap->liquids[size_t(index)];
+    LoadedMap::MapLiquid& lq = map->liquids[size_t(index)];
     if (lq.kind != 1) return false; // água: o plano global (setWaterLevel)
     lq.level = level;
     return true;

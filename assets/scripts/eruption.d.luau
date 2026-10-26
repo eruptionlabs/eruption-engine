@@ -104,12 +104,14 @@ declare world: {
     -- layer's texture file. Empty if the map has no painted layers.
     ground_layers: (x: number, z: number, radius: number?) -> { [string]: number },
     -- Liquids the map declares (lakes): kind is "water" or "lava", center is
-    -- at the liquid's level, radius is the farthest shore.
-    liquids: () -> { { name: string, kind: string, level: number, center: vector, radius: number } },
+    -- at the liquid's level, radius is the farthest shore. `map` names a
+    -- neighbor map in the scene: its liquids, in world coordinates.
+    liquids: (map: string?) -> { { name: string, kind: string, level: number, center: vector, radius: number } },
     -- Moves a lava of the map (1-based index in liquids(), or its name) to
     -- `level` during play: the surface, liquid_at and walkable follow in the
-    -- same frame. False for water or an unknown liquid.
-    set_liquid_level: (liquid: number | string, level: number) -> boolean,
+    -- same frame. False for water or an unknown liquid. With `map`, a lava of
+    -- that neighbor, `level` in world coordinates.
+    set_liquid_level: (liquid: number | string, level: number, map: string?) -> boolean,
     -- Blocks walking on every ground point steeper than `degrees` (this run
     -- only; the saved walk grid is untouched). Returns how many were blocked.
     block_slopes: (degrees: number) -> number,

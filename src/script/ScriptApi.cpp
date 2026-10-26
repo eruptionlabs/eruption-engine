@@ -53,6 +53,12 @@ struct ScriptBridge {
             if (r.map == map && r.state == Engine::WorldRegion::State::Shown) return &r.lights;
         return nullptr;
     }
+    // Mapa vizinho em cena (líquidos já no lugar do mundo); nulo fora de cena.
+    static LoadedMap* regionMap(const char* map) {
+        for (auto& r : engine->m_regions)
+            if (r.map == map && r.state == Engine::WorldRegion::State::Shown && r.data) return r.data.get();
+        return nullptr;
+    }
     // A lista do quadro copia as dos vizinhos: refazer depois de mexer nelas.
     static void regionLightsChanged() { engine->rebuildWorldLights(); }
     static PlayerController* player() { return engine->m_playerController; }
@@ -338,11 +344,21 @@ int world_block_slopes(lua_State* L) {
     return 1;
 }
 
+// O mapa dos liquidos: o aberto, ou o vizinho em cena com o nome dado no
+// argumento `arg` (os liquidos dele ja' estao no lugar do mundo).
+LoadedMap* liquidMap(lua_State* L, int arg) {
+    if (lua_isnoneornil(L, arg)) return eng().currentMap();
+    const char* name = luaL_checkstring(L, arg);
+    LoadedMap* map = ScriptBridge::regionMap(name);
+    if (!map) luaL_errorL(L, "map '%s' is not in the scene", name);
+    return map;
+}
+
 // Os liquidos que o mapa declara: { name, kind ("water" | "lava"), level,
 // center (vector na cota do liquido), radius (o maior raio da margem) }.
 int world_liquids(lua_State* L) {
+    const auto* map = liquidMap(L, 1);
     lua_newtable(L);
-    const auto* map = eng().currentMap();
     if (!map) return 1;
     int i = 0;
     for (const auto& lq : map->liquids) {
@@ -368,7 +384,7 @@ int world_liquids(lua_State* L) {
 // a superficie, world.liquid_at e o piso andavel seguem no mesmo quadro.
 // Falso para agua, nome/indice que nao existe ou nivel invalido.
 int world_set_liquid_level(lua_State* L) {
-    const auto* map = eng().currentMap();
+    LoadedMap* map = liquidMap(L, 3);
     int index = -1;
     if (map && lua_type(L, 1) == LUA_TSTRING) {
         const char* name = lua_tostring(L, 1);
@@ -377,7 +393,7 @@ int world_set_liquid_level(lua_State* L) {
     } else {
         index = int(luaL_checkinteger(L, 1)) - 1;
     }
-    lua_pushboolean(L, eng().setLiquidLevel(index, float(luaL_checknumber(L, 2))));
+    lua_pushboolean(L, eng().setLiquidLevel(index, float(luaL_checknumber(L, 2)), map));
     return 1;
 }
 
@@ -2132,12 +2148,14 @@ declare world: {
     -- layer's texture file. Empty if the map has no painted layers.
     ground_layers: (x: number, z: number, radius: number?) -> { [string]: number },
     -- Liquids the map declares (lakes): kind is "water" or "lava", center is
-    -- at the liquid's level, radius is the farthest shore.
-    liquids: () -> { { name: string, kind: string, level: number, center: vector, radius: number } },
+    -- at the liquid's level, radius is the farthest shore. `map` names a
+    -- neighbor map in the scene: its liquids, in world coordinates.
+    liquids: (map: string?) -> { { name: string, kind: string, level: number, center: vector, radius: number } },
     -- Moves a lava of the map (1-based index in liquids(), or its name) to
     -- `level` during play: the surface, liquid_at and walkable follow in the
-    -- same frame. False for water or an unknown liquid.
-    set_liquid_level: (liquid: number | string, level: number) -> boolean,
+    -- same frame. False for water or an unknown liquid. With `map`, a lava of
+    -- that neighbor, `level` in world coordinates.
+    set_liquid_level: (liquid: number | string, level: number, map: string?) -> boolean,
     -- Blocks walking on every ground point steeper than `degrees` (this run
     -- only; the saved walk grid is untouched). Returns how many were blocked.
     block_slopes: (degrees: number) -> number,
