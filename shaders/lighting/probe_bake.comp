@@ -41,8 +41,46 @@ bool beyond(mat4 vp, sampler2D depthTex, vec3 p, float eps) {
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return false;
     return c.z + eps > texture(depthTex, uv).r;
 }
+// PISO NO CHAO. Com dois heightfields, "dentro" e' estar entre o topo
+// (visto de cima) e a base (vista de baixo). Debaixo de um telhado com piso
+// modelado - tapete, assoalho, tablado - a base e' o piso, e a coluna inteira
+// do piso ao telhado parecia solida: as probes ali eram anuladas e a dilatacao
+// as enchia com as vizinhas de ceu aberto (mundo montado por instancias: 48%
+// de probes invalidas e a sombra ambiente das tendas sumindo). Quando a base
+// fica a menos de kFloorGap do terreno ela e' um piso, nao o fundo de um
+// solido: o que esta' acima dela so' e' "dentro" na casca de kRoofShell
+// abaixo do topo. Um solido de verdade no chao (rocha, parede grossa) vira
+// casca tambem - por isso a casca tem a espessura de uma parede, e a marcha
+// ainda o enxerga.
+const float kFloorGap = 12.0;  // u de mundo entre a base e o terreno
+const float kRoofShell = 10.0; // u de mundo abaixo do topo
+const float kFloorFlat = 2.0;  // u de mundo: variacao maxima da base em volta
+// So' piso PLANO: base de moita e copa baixa tambem encosta no terreno, mas e'
+// irregular; tratar folhagem como casca escurecia o chao da mata inteira
+// (medido no mapa de demonstracao a tarde: 33,5 dB, 15% dos pixels > 8).
+bool flatBase(vec2 uv, float d, float kz) {
+    vec2 o = vec2(4.0 / 2048.0, 0.0);
+    float m = max(max(abs(texture(modelBotDepth, uv + o.xy).r - d), abs(texture(modelBotDepth, uv - o.xy).r - d)),
+                  max(abs(texture(modelBotDepth, uv + o.yx).r - d), abs(texture(modelBotDepth, uv - o.yx).r - d)));
+    return m / kz < kFloorFlat;
+}
 bool insideModels(vec3 p, float eps) {
-    return beyond(u.topVP, modelTopDepth, p, eps) && beyond(u.botVP, modelBotDepth, p, eps);
+    vec4 ct = u.topVP * vec4(p, 1.0);
+    vec2 uvt = ct.xy * 0.5 + 0.5;
+    if (any(lessThan(uvt, vec2(0.0))) || any(greaterThan(uvt, vec2(1.0)))) return false;
+    float dTop = texture(modelTopDepth, uvt).r;
+    if (!(ct.z + eps > dTop)) return false;
+    vec4 cb = u.botVP * vec4(p, 1.0);
+    vec2 uvb = cb.xy * 0.5 + 0.5;
+    if (any(lessThan(uvb, vec2(0.0))) || any(greaterThan(uvb, vec2(1.0)))) return false;
+    float dBot = texture(modelBotDepth, uvb).r;
+    // Profundidade do ortho por unidade de mundo em Y (linear, igual nos
+    // dois renders): converte as diferencas de profundidade em u de mundo.
+    float kz = max(abs(u.topVP[1][2]), 1e-9);
+    // Altura da base acima do terreno nesta coluna: (yBase - p.y) + (p.y - yTerreno).
+    float gap = ((dBot - cb.z) + (ct.z - texture(terrainDepth, uvt).r)) / kz;
+    if (gap < kFloorGap && flatBase(uvb, dBot, kz)) return (ct.z - dTop) / kz < kRoofShell + eps / kz;
+    return cb.z + eps > dBot;
 }
 
 void main() {
