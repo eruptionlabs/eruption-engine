@@ -414,6 +414,8 @@ void Engine::updateWorld() {
                     } else {
                         t.offsetX += off.x;
                         t.offsetZ += off.z;
+                        t.placeX = off.x; // a grade de caminhada antiga (5 u) é do mapa, sem o deslocamento
+                        t.placeZ = off.z;
                     }
                     if (off.y != 0.0f)
                         for (auto& c : t.cubes)
@@ -1152,6 +1154,21 @@ const LoadedMap* Engine::mapAt(float x, float z, float y) const {
         }
     }
     return best ? best : m_currentMap.get();
+}
+
+int Engine::mapsAt(float x, float z, const LoadedMap** out, int max) const {
+    int n = 0;
+    Vec2 lo, hi;
+    if (m_currentMap && m_currentMap->terrainFromFile && groundArea(m_currentMap->terrain, lo, hi) &&
+        inside(lo, hi, x, z) && n < max)
+        out[n++] = m_currentMap.get();
+    for (const auto& r : m_regions) {
+        if (n >= max) break;
+        if (r.state != WorldRegion::State::Shown || !r.data || !inside(r.boundsMin, r.boundsMax, x, z)) continue;
+        if (r.yaw != 0.0f && !groundHas(r.data->terrain, x, z)) continue;
+        out[n++] = r.data.get();
+    }
+    return n;
 }
 
 // O ponto cai no chão de um mapa em cena que não é `owner`.
