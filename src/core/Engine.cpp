@@ -1317,13 +1317,17 @@ float Engine::advanceFrame() {
     m_audio.update(m_camera.position(), m_camera.forward(), m_camera.up(), m_timer.unscaledDeltaTime()); // ouvinte na câmera; o som nao para no hit-stop
 
     m_timer.tick();
+    m_uiClock += m_timer.paused() ? m_timer.realDeltaTime() : m_timer.unscaledDeltaTime();
     m_window.pollEvents();
     // ERUPTION_TEST_CLICK="quadro,x,y;quadro,#seletor;..." (teste): clique do
     // mouse no comeco desses quadros, antes dos scripts, em (x, y) pixels da
     // janela ou no centro de um elemento da interface do jogo (ou "minimap",
     // ou o selo de um elemento, "#id:badge", ou o no de um grafo, "#id@no").
+    // Com "~segundos" no fim ("#id@no~0.5"), o botao fica apertado esse tempo
+    // e solta depois (toque longo: ui.held, ui.graph_held).
     // Prova de ui.clicked e da interface de toque sem ninguem na maquina.
-    struct TestClick { int frame; float x, y; std::string selector; };
+    struct TestClick { int frame; float x, y; std::string selector; float hold = 0.0f; };
+    static double s_testHoldUntil = 0.0; // fim do toque longo em curso (relogio da interface)
     static const std::vector<TestClick> kTestClicks = [] {
         std::vector<TestClick> v;
         if (const char* e = std::getenv("ERUPTION_TEST_CLICK")) {
@@ -1335,8 +1339,12 @@ float Engine::advanceFrame() {
                 i = j + 1;
                 const size_t c = item.find(',');
                 if (c == std::string::npos) continue;
-                TestClick t{std::atoi(item.c_str()), 0.0f, 0.0f, {}};
-                const std::string resto = item.substr(c + 1);
+                TestClick t{std::atoi(item.c_str()), 0.0f, 0.0f, {}, 0.0f};
+                std::string resto = item.substr(c + 1);
+                if (const size_t til = resto.rfind('~'); til != std::string::npos) {
+                    t.hold = std::max(0.0f, static_cast<float>(std::atof(resto.c_str() + til + 1)));
+                    resto.resize(til);
+                }
                 if (std::sscanf(resto.c_str(), "%f,%f", &t.x, &t.y) != 2) t.selector = resto;
                 v.push_back(t);
             }
@@ -1384,7 +1392,18 @@ float Engine::advanceFrame() {
             y = io.DisplaySize.y > 0.0f ? uy * float(winH) / io.DisplaySize.y : uy;
         }
         ERUPTION_LOG_WARN("ERUPTION_TEST_CLICK: quadro %d em (%.0f, %.0f) %s", c.frame, x, y, c.selector.c_str());
-        Input::injectClick(x, y);
+        if (c.hold > 0.0f) {
+            Input::injectCursor(x, y);
+            Input::injectButton(GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS);
+            s_testHoldUntil = m_uiClock + c.hold;
+        } else {
+            Input::injectClick(x, y);
+        }
+    }
+    // Solta no quadro DEPOIS do que completou o tempo: ui.held chega a ele.
+    if (s_testHoldUntil > 0.0 && m_uiClock > s_testHoldUntil + 1e-4) {
+        Input::injectButton(GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE);
+        s_testHoldUntil = 0.0;
     }
     injectTestInput();
 

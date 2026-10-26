@@ -640,13 +640,24 @@ std::string Engine::uiGraphClicked(const std::string& selector) {
     return id;
 }
 
+std::string Engine::uiGraphHeld(const std::string& selector, float seconds) {
+    updateUiHold();
+    CSSRect r;
+    // Folga de 0,1 ms: a soma dos passos de 1/60 s fica um fio abaixo de 0,5.
+    if (!uiTouchRect(selector, r) || !m_uiHold.active || m_uiHold.t1 - m_uiHold.t0 + 1e-4 < seconds) return {};
+    std::string id;
+    m_uiDocument.graphNodeAt(selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w,
+                             48.0f * platform::pixelsPerDp(), Vec2(m_uiHold.start.x, m_uiHold.start.y), id);
+    return id;
+}
+
 void Engine::updateUiHold() {
     UiHold& h = m_uiHold;
     if (h.frame == m_framesCount) return; // uma vez por quadro, por mais chamadas que haja
     h.frame = m_framesCount;
     // O dedo da camera aperta o botao direito (core/TouchRouter); o mouse, o esquerdo.
     const MouseButton kDedo = Input::touchScreen() ? MouseButton::Right : MouseButton::Left;
-    const double agora = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const double agora = m_uiClock;
     h.released = false;
     if (Input::isMousePressed(kDedo)) {
         const glm::vec2 m = Input::mousePosition();

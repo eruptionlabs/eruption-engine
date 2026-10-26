@@ -1423,6 +1423,13 @@ int ui_graph_clicked(lua_State* L) {
     else lua_pushlstring(L, id.data(), id.size());
     return 1;
 }
+int ui_graph_held(lua_State* L) {
+    const float seconds = static_cast<float>(luaL_optnumber(L, 2, 0.5));
+    const std::string id = eng().uiGraphHeld(luaL_checkstring(L, 1), seconds);
+    if (id.empty()) lua_pushnil(L);
+    else lua_pushlstring(L, id.data(), id.size());
+    return 1;
+}
 int ui_reset(lua_State* L) {
     (void)L;
     eng().uiDocument().resetOverrides();
@@ -2161,7 +2168,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
                                   {"load", ui_load}, {"place", ui_place}, {"image_rect", ui_image_rect}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
                                   {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked}, {"dragged", ui_dragged}, {"size", ui_size}, {"held", ui_held}, {"released", ui_released},
                                   {"reset", ui_reset}, {"anchor", ui_anchor}, {"badge", ui_badge},
-                                  {"graph", ui_graph}, {"graph_clicked", ui_graph_clicked}, {nullptr, nullptr}};
+                                  {"graph", ui_graph}, {"graph_clicked", ui_graph_clicked}, {"graph_held", ui_graph_held}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
@@ -2324,6 +2331,10 @@ declare ui: {
     -- Id of the graph node tapped this frame, or nil. Each node takes taps
     -- within its radius or 24 dp, whichever is larger.
     graph_clicked: (selector: string) -> string?,
+    -- Id of the node where the press still held began, once it has lasted
+    -- `seconds` (default 0.5), every frame until it lifts; nil otherwise.
+    -- A long press also fires graph_clicked when it starts.
+    graph_held: (selector: string, seconds: number?) -> string?,
     -- Character bars (life, mana) and the minimap with the map name and time.
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),
