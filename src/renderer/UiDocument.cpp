@@ -120,6 +120,7 @@ void UiDocument::build() {
             if (t.size() >= 2 && (t.front() == '"' || t.front() == '\'')) t = t.substr(1, t.size() - 2);
             e.image = t;
         }
+        if (auto v = prop("--image-tint")) e.tintCss = CSSLayout::parseColor(*v, IM_COL32_WHITE);
         if (auto v = prop("--value")) e.valueCss = CSSLayout::parseFloat(*v, 1.0f);
         if (auto v = prop("text-align")) {
             const std::string a = CSSParser::trim(*v);
@@ -318,7 +319,9 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
             // desenhou.
             void* tex = (m_imageResolver && !e.image.empty()) ? m_imageResolver(e.image) : nullptr;
             if (tex) {
-                const ImU32 tint = withAlpha(IM_COL32_WHITE, alpha);
+                // Tinta multiplica a imagem: ui.color(sel, cor, 0), senao
+                // --image-tint, senao branco (a imagem como e').
+                const ImU32 tint = withAlpha(e.hasColor[0] ? toImU32(e.color[0]) : ImU32(e.tintCss), alpha);
                 dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(r.x, r.y), ImVec2(r.x + r.w, r.y + r.h),
                              ImVec2(e.uv.x, e.uv.y), ImVec2(e.uv.z, e.uv.w), tint);
                 break;
