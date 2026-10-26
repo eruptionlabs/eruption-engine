@@ -48,6 +48,9 @@ void Engine::refreshIrradianceProbes() {
     if (!(mx.x > mn.x && mx.z > mn.z)) return;
     mx.y += 40.0f;
     mn.y -= 20.0f;
+    // A linha "[PROBES] probes ..." que o bake imprime sai entre esta e a de
+    // baixo: e' a estatistica da grade recozida, nao a do loadMap.
+    ERUPTION_LOG_WARN("[PROBES] recozendo com %zu instancias (cena/vizinhos)...", n);
     const bool ok = m_irradianceProbes.bake(m_terrainRenderer, m_modelRenderer,
                                             m_shadowRenderer.shadowPipeline(), m_shadowRenderer.shadowLayout(),
                                             m_shadowRenderer.shadowInstPipeline(), m_shadowRenderer.shadowInstLayout(),
