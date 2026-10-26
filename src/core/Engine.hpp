@@ -1889,6 +1889,7 @@ private:
         VkSampler splatSampler = VK_NULL_HANDLE;
         std::chrono::steady_clock::time_point hiddenAt{};
         std::vector<std::string> modelFiles; // .glb do próprio mapa (malhas só dele)
+        double vramAtLoad = 0.0, rssAtLoad = 0.0; // MB no início da leitura (ERUPTION_TEST_CHUNK_STATS)
     };
     ImageData splatLayerImage(const std::filesystem::path& path);
     std::mutex m_splatDecodeMutex;
@@ -1897,6 +1898,7 @@ private:
     uint32_t uploadSplatLayer(TextureResource& colorTex, TextureResource& normalTex, TextureResource& mrahwTex,
                               const std::filesystem::path& colorPath, const ImageData& color);
     std::vector<WorldRegion> m_regions;
+    void logChunkStats(const WorldRegion& r, const WorldRegionLoad& load); // ERUPTION_TEST_CHUNK_STATS (World.cpp)
     std::vector<TriggerArea> m_areas;
     std::vector<SceneRibbon> m_ribbons;
     std::vector<SoundEmitter> m_soundEmitters;
