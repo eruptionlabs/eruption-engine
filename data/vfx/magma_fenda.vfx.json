@@ -1,0 +1,179 @@
+{
+  "name": "magma_fenda",
+  "emitters": [
+    {
+      "name": "bafo",
+      "capacity": 60,
+      "rate": 10,
+      "shape": "box",
+      "shapeSize": [
+        4.0,
+        0.05,
+        0.25
+      ],
+      "lifetime": [
+        0.6,
+        1.2
+      ],
+      "speed": [
+        0.2,
+        0.5
+      ],
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "spread": 0.2,
+      "size": [
+        0.35,
+        0.6
+      ],
+      "rotation": [
+        -20,
+        20
+      ],
+      "gravity": [
+        0,
+        0.6,
+        0
+      ],
+      "drag": 1.0,
+      "noiseStrength": 0.5,
+      "noiseFrequency": 0.9,
+      "color": [
+        {
+          "t": 0,
+          "rgba": [
+            1,
+            0.45,
+            0.12,
+            0
+          ]
+        },
+        {
+          "t": 0.3,
+          "rgba": [
+            1,
+            0.38,
+            0.1,
+            0.5
+          ]
+        },
+        {
+          "t": 1,
+          "rgba": [
+            0.4,
+            0.06,
+            0.0,
+            0
+          ]
+        }
+      ],
+      "sizeOverLife": [
+        [
+          0,
+          0.6
+        ],
+        [
+          1,
+          1.0
+        ]
+      ],
+      "blend": "additive",
+      "emissive": 0.35,
+      "softDistance": 0.3,
+      "texture": "builtin:flame",
+      "flipCols": 4,
+      "flipRows": 4,
+      "flipMode": "life",
+      "flipRandomStart": true
+    },
+    {
+      "name": "fagulha",
+      "capacity": 40,
+      "rate": 6,
+      "shape": "box",
+      "shapeSize": [
+        4.0,
+        0.1,
+        0.3
+      ],
+      "lifetime": [
+        0.8,
+        1.8
+      ],
+      "speed": [
+        0.6,
+        1.6
+      ],
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "spread": 0.35,
+      "size": [
+        0.04,
+        0.08
+      ],
+      "gravity": [
+        0,
+        -0.6,
+        0
+      ],
+      "drag": 0.3,
+      "noiseStrength": 0.8,
+      "noiseFrequency": 1.0,
+      "noiseSpeed": 1.2,
+      "color": [
+        {
+          "t": 0,
+          "rgba": [
+            1,
+            0.7,
+            0.3,
+            1
+          ]
+        },
+        {
+          "t": 0.6,
+          "rgba": [
+            1,
+            0.35,
+            0.06,
+            0.9
+          ]
+        },
+        {
+          "t": 1,
+          "rgba": [
+            0.5,
+            0.08,
+            0,
+            0
+          ]
+        }
+      ],
+      "blend": "additive",
+      "emissive": 1.4,
+      "texture": "builtin:spark",
+      "light": {
+        "enabled": true,
+        "color": [
+          1,
+          0.38,
+          0.08
+        ],
+        "intensity": 1.6,
+        "radius": 4.0,
+        "flicker": 0.35,
+        "offset": [
+          0,
+          0.3,
+          0
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "name": "magma_brasa",
+  "emitters": [
+    {
+      "name": "fagulha",
+      "capacity": 40,
+      "rate": 5,
+      "shape": "box",
+      "shapeSize": [
+        3.0,
+        0.2,
+        3.0
+      ],
+      "lifetime": [
+        1.6,
+        3.0
+      ],
+      "speed": [
+        0.8,
+        2.0
+      ],
+      "direction": [
+        0,
+        1,
+        0
+      ],
+      "spread": 0.3,
+      "size": [
+        0.05,
+        0.1
+      ],
+      "gravity": [
+        0,
+        -0.3,
+        0
+      ],
+      "drag": 0.3,
+      "noiseStrength": 1.0,
+      "noiseFrequency": 0.8,
+      "noiseSpeed": 1.2,
+      "color": [
+        {
+          "t": 0,
+          "rgba": [
+            1,
+            0.65,
+            0.25,
+            0
+          ]
+        },
+        {
+          "t": 0.1,
+          "rgba": [
+            1,
+            0.55,
+            0.15,
+            1
+          ]
+        },
+        {
+          "t": 0.7,
+          "rgba": [
+            1,
+            0.3,
+            0.05,
+            0.8
+          ]
+        },
+        {
+          "t": 1,
+          "rgba": [
+            0.5,
+            0.08,
+            0.0,
+            0
+          ]
+        }
+      ],
+      "blend": "additive",
+      "emissive": 1.2,
+      "texture": "builtin:spark",
+      "light": {
+        "enabled": true,
+        "color": [
+          1,
+          0.36,
+          0.08
+        ],
+        "intensity": 2.0,
+        "radius": 9.0,
+        "flicker": 0.18,
+        "offset": [
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  ]
+}
