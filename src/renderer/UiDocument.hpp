@@ -61,10 +61,11 @@ public:
     const std::filesystem::path& path() const { return m_path; }
     size_t elementCount() const { return m_elements.size(); }
     bool has(const std::string& selector) const { return find(selector) != nullptr; }
-    // Desenhado agora (o script ou o CSS o mostra), como em draw().
+    // Desenhado agora, como em draw(): o elemento e todos os pais (--parent)
+    // visiveis, e nenhum ancorado fora da tela.
     bool shown(const std::string& selector) const {
         const Element* e = find(selector);
-        return e && m_loaded && (e->hasVisible ? e->visible : e->visibleCss) && !anchorHidden(*e);
+        return e && m_loaded && !chainHidden(*e);
     }
 
     // Valores que o jogo preenche. Selector com ou sem "#" - os dois servem.
@@ -140,8 +141,9 @@ private:
         bool hasAnchor = false, anchorOn = false;
         Vec2 anchor{0.0f};            // centro em pixels da area
     };
-    // O elemento ou um pai ancorado esta' fora da tela.
-    bool anchorHidden(const Element& e) const;
+    // O elemento ou um pai esta' escondido (ui.visible ou CSS), ou ancorado
+    // fora da tela. Esconder o pai esconde o grupo inteiro.
+    bool chainHidden(const Element& e) const;
 
     void build();
     static void drawArcBar(ImDrawList* dl, const CSSRect& r, const Element& e, float value, uint32_t rail, uint32_t fill);
