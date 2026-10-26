@@ -369,8 +369,10 @@ if(SPIRV_VAL_EXECUTABLE)
     endif()
 endif()
 
-# Source files
-file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.hpp")
+# Source files. CONFIGURE_DEPENDS: cada build confere a lista de novo, entao
+# um .cpp novo entra sem reconfigurar a mao (o build-android em cache do
+# tools/android/build_apk.sh falhava no link ate' alguem rodar cmake).
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp" "src/*.hpp")
 if(NOT ANDROID)
     list(FILTER SOURCES EXCLUDE REGEX "/src/platform/android/")
 endif()
