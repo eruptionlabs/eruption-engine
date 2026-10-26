@@ -166,6 +166,14 @@ declare world: {
     -- full resolution (default 3; above it a cheap wide blur takes over). No
     -- point at all gives the lens back to the automatic focus.
     set_focus: (point: vector?, aperture: number?, foreground: boolean?, band: number?, max_blur: number?) -> (),
+    -- Hides map and model geometry inside a volume (a mountain or a wall
+    -- between the camera and the action) as a dither pattern. `slot` is 1..4;
+    -- nil turns that slot off. Table: shape = "box" (size = vector, full
+    -- width, height and depth) or "cylinder" (radius, height); center =
+    -- vector; yaw in degrees; soft = fade width inward from the surface
+    -- (default 15% of the smallest measure); opacity = what stays inside
+    -- (default 0). Shadows are unaffected.
+    set_cutaway: (slot: number, volume: { [string]: any }?) -> (),
     -- Models touching the ground take on the ground's own material (splat
     -- layers, color, normal) within `band` world units above it, so the
     -- contact line stops reading as a hard seam. Each model's band is at most

@@ -10,7 +10,7 @@
 // Wijk, "Pixel Masks for Screen-Door Transparency", IEEE Visualization 1998):
 // cabe no G-buffer, que nao mistura, sem ordenar nada; o limiar ordenado e' o
 // de Bayer (1973), o mesmo do crossfade de LOD.
-// Precisa de u_seeThrough/u_seeThrough2/u_seeThrough3, u_viewProjNoJitter e u_cameraPos.
+// Precisa de u_seeThrough/u_seeThrough2/u_seeThrough3, u_cutaway, u_viewProjNoJitter e u_cameraPos.
 
 const float kSeeThroughBayer[16] = float[](
     0.0, 0.5, 0.125, 0.625,
@@ -41,8 +41,34 @@ float seeThroughKeep(vec3 worldPos) {
     return mix(1.0, u_seeThrough2.w, cut);
 }
 
+// RECORTE POR VOLUME (world.set_cutaway): dentro da caixa ou do cilindro a
+// malha sai no mesmo padrao, ate' a opacidade pedida; a borda suave vai da
+// superficie do volume ate' `soft` para dentro. Distancia com sinal (negativa
+// dentro), no espaco do volume girado em Y.
+float cutawayKeep(vec3 worldPos) {
+    float keep = 1.0;
+    for (int k = 0; k < 4; ++k) {
+        vec4 a = u_cutaway[3 * k];
+        if (a.w < 0.5) continue;
+        vec4 b = u_cutaway[3 * k + 1], c = u_cutaway[3 * k + 2];
+        vec3 d = worldPos - a.xyz;
+        vec2 xz = vec2(c.x * d.x + c.y * d.z, -c.y * d.x + c.x * d.z);
+        float sd;
+        if (a.w < 1.5) {
+            vec3 q = abs(vec3(xz.x, d.y, xz.y)) - b.xyz;
+            sd = length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+        } else {
+            vec2 q = vec2(length(xz) - b.x, abs(d.y) - b.y);
+            sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+        }
+        float inside = 1.0 - smoothstep(-max(b.w, 1e-3), 0.0, sd);
+        keep = min(keep, mix(1.0, c.z, inside));
+    }
+    return keep;
+}
+
 bool seeThroughDiscard(vec3 worldPos) {
-    float keep = min(seeThroughKeep(worldPos), nearFadeKeep(worldPos));
+    float keep = min(min(seeThroughKeep(worldPos), nearFadeKeep(worldPos)), cutawayKeep(worldPos));
     if (keep >= 1.0) return false;
     // Indice do Bayer relativo a um ponto fixo do mundo (u_seeThrough3.xy):
     // preso a gl_FragCoord, o pontilhado ficava parado na tela e o chao e a
