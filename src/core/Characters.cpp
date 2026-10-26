@@ -381,22 +381,21 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         // Piso 0,15: um bicho baixo a 100 u/s pede 0,2 (com 0,25 saia 26% lento).
         delay *= std::clamp(passo / speed, 0.15f, 2.0f);
     }
+    // A sobra fica no relogio e passa mais de um quadro se preciso: zerar
+    // arredondava cada quadro para cima, a um numero inteiro de quadros de
+    // tela. A 60 Hz, 39,7 ms viravam 50 (o pe' deslizava); a 25 Hz, um parado
+    // de 112 ms virava 120-160.
     c.timer += dt * 1000.0f;
-    if (moving && !named) {
-        // No ciclo de andar a sobra fica no relogio (e passa mais de um quadro
-        // se preciso): zerar arredondava cada quadro para cima, a um numero
-        // inteiro de quadros de tela. A 60 Hz, 39,7 ms viravam 50 (26% lento,
-        // o pe' deslizava). Parado e animacao nomeada seguem como antes.
-        const int passos = static_cast<int>(c.timer / delay);
-        c.frame = (c.frame + passos) % static_cast<int>(action.frames.size());
-        c.timer -= static_cast<float>(passos) * delay;
-    } else if (c.timer >= delay) {
-        c.frame = (c.frame + 1) % static_cast<int>(action.frames.size());
-        c.timer = 0.0f;
+    const int quadros = static_cast<int>(action.frames.size());
+    while (c.timer >= delay) {
+        c.timer -= delay;
+        c.frame = (c.frame + 1) % quadros;
         // Uma vez só: ao voltar ao primeiro quadro, termina (fica no último até lá).
         if (named && c.frame == 0 && !c.actionLoop) {
             c.action.clear();
-            c.frame = static_cast<int>(action.frames.size()) - 1;
+            c.frame = quadros - 1;
+            c.timer = 0.0f;
+            break;
         }
     }
 
