@@ -10,11 +10,16 @@ namespace eruption {
 // (core/EngineWeb.cpp). Cada dedo fica com o papel da area onde pousou, ate'
 // sair:
 // - INTERFACE: painel do ImGui (controle de toque) -> so' o ImGui;
-// - ANALOGICO: zona do analogico flutuante (Input::inStickZone), fora de
-//   elemento CSS tocavel -> a base nasce ali e o pino segue o dedo;
-// - CAMERA: o resto. O primeiro dedo da camera e' o "mouse" (botao direito
-//   arrasta e gira; toque curto vira clique esquerdo); o segundo faz a pinca.
-// Um dedo nunca interfere no outro: o analogico anda enquanto o outro gira.
+// - BOTAO: elemento CSS tocavel (Input::inCssTouchRect) -> e' o "mouse":
+//   botao direito apertado ate' sair (ui.held, ui.dragged, ui.released) e
+//   toque curto vira clique esquerdo (ui.clicked). Nao ocupa a camera e nao
+//   conta para o duplo toque;
+// - ANALOGICO: zona do analogico flutuante (Input::inStickZone) -> a base
+//   nasce ali e o pino segue o dedo;
+// - CAMERA: o resto. O primeiro dedo gira (Input::addTouchOrbit) e o toque
+//   curto vira clique esquerdo; o segundo faz a pinca.
+// Um dedo nunca interfere no outro: o analogico anda e o botao segue
+// apertado enquanto outro dedo gira.
 class TouchRouter {
 public:
     // Para onde vao os eventos: o mouse do motor, o ImGui e a altura da tela.
@@ -37,7 +42,7 @@ public:
     void releaseAll();
 
 private:
-    enum class Role { Free, Interface, Stick, Camera, Ignored };
+    enum class Role { Free, Interface, Button, Stick, Camera, Ignored };
     struct Finger {
         int id = -1;
         Role role = Role::Free;
@@ -51,6 +56,7 @@ private:
     bool hasRole(Role r) const;
     void publish() const; // dedos no mundo para o Input (input.touches)
     void button(int b, int action);
+    void click(float x, float y);
 
     Sink m_sink;
     std::array<Finger, 10> m_fingers;

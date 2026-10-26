@@ -502,6 +502,12 @@ void PlayerController::updateCamera(float dt, bool captureMouse, bool captureKey
             if (Input::isKeyDown(Key::LeftAlt)) m_engine->camera().orbitPitch(md.y * sens);
             else m_engine->camera().orbitYaw(md.x * sens);
         }
+        // Dedo da camera: gira e inclina mesmo com outro dedo num botao.
+        const glm::vec2 td = Input::touchOrbitDelta();
+        if (orbit && (td.x != 0.0f || td.y != 0.0f)) {
+            m_engine->camera().orbitYaw(td.x * sens);
+            m_engine->camera().orbitPitch((m_engine->inputConfig().kbMouse.invertMouseY ? td.y : -td.y) * sens);
+        }
         if (orbit && Input::isMouseDown(MouseButton::Right)) {
             m_engine->camera().orbitYaw(md.x * sens);
             float my = m_engine->inputConfig().kbMouse.invertMouseY ? md.y : -md.y;
