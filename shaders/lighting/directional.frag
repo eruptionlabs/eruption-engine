@@ -693,8 +693,19 @@ void main() {
     bool csSprite = abs(pbr.r - 0.75) < 0.06;
     if (!csSprite && lights.contactParams.x > 0.5 && shadow < 0.98 && sunElev > 0.02 &&
         lights.contactParams.y > 3.0 * csPxWorld) {
-        const int CS_STEPS = 8;
         float csLen = max(lights.contactParams.y, 0.05);
+        // MARCHA LONGA (alcance > 4 u, contact_shadow_length do preset): o
+        // relevo de tesselacao, cujas cristas o mapa de sombra nao ve'. Com
+        // 8 passos, o bias de 0,30 por unidade marchada e a forca caindo com
+        // a distancia, uma crista de 12 u a 6 u de distancia precisava subir
+        // 1,9 u acima do plano e saia com meia forca: a 12 u a foto do jogo
+        // escurecia 4% dos pixels (> 20/255), ninguem via. Com 16 passos,
+        // bias 0,05 e forca cheia: 11-15%, Deferred Lighting +0,17 ms. O
+        // plano de rejeicao ja' e' o geometrico (csGeoN), entao o erro de
+        // normal que o 0,30 cobria fica pequeno. A marcha curta (o padrao)
+        // segue igual.
+        bool csLong = csLen > 4.0;
+        int CS_STEPS = csLong ? 16 : 8;
         float stepLen = csLen / float(CS_STEPS);
         // Dither ao longo do raio esconde o banding dos passos. ANCORADO NO
         // MUNDO, nao em gl_FragCoord: com a camera andando, ruido por pixel de
@@ -725,8 +736,10 @@ void main() {
         // inteira, e era isso, nao a rejeicao, que "segurava" o moire.
         //
         // O bias correto cresce com a marcha e por isso fica DENTRO do laco.
-        const float CS_NORMAL_ERR = 0.30; // sin(~17 graus) de erro de normal
-        for (int i = 1; i <= CS_STEPS; ++i) {
+        float CS_NORMAL_ERR = csLong ? 0.05 : 0.30; // sin(~17 graus) de erro de normal (curta)
+        float csFade = csLong ? 0.0 : 0.5;
+        for (int i = 1; i <= 16; ++i) {
+            if (i > CS_STEPS) break;
             float marchDist = stepLen * (float(i) - 0.5 + ign2);
             float rejectBias = 0.08 + marchDist * CS_NORMAL_ERR + csPxWorld * 0.5;
             vec3 rp = worldPos + L * marchDist;
@@ -746,7 +759,7 @@ void main() {
             vec3 toRay = rp - sp;
             float along = dot(toRay, L);
             if (along > 0.04 && along < stepLen * 2.0) {
-                csOcc = max(csOcc, 1.0 - float(i) / float(CS_STEPS) * 0.5);
+                csOcc = max(csOcc, 1.0 - float(i) / float(CS_STEPS) * csFade);
             }
         }
         shadow = max(shadow, csOcc * 0.85);
