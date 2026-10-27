@@ -834,6 +834,17 @@ public:
     void clearCharacters(bool keepNeighbors = false);
     // Anda quem tem caminho (só com o jogo rodando) e envia os sprites.
     void updateCharacters(float dt, bool moveAlongPaths);
+    // vfx.area: indicador no chao por id do script (nullptr tira).
+    void setGroundArea(const std::string& id, const GroundRing* area) {
+        for (auto it = m_groundAreas.begin(); it != m_groundAreas.end(); ++it) {
+            if (it->first != id) continue;
+            if (area) it->second = *area;
+            else m_groundAreas.erase(it);
+            return;
+        }
+        if (area) m_groundAreas.emplace_back(id, *area);
+    }
+    void clearGroundAreas() { m_groundAreas.clear(); }
     std::vector<SceneCharacter>& characters() { return m_characters; }
     // Objetos da cena (hierarquia e componentes sobre modelos e personagens).
     SceneObjects& sceneObjects() { return m_sceneObjects; }
@@ -1201,6 +1212,7 @@ private:
     // Aneis dos personagens desenhados neste quadro (drawCharacter), para o
     // decal depois da luz.
     std::vector<GroundRing> m_groundRings;
+    std::vector<std::pair<std::string, GroundRing>> m_groundAreas; // vfx.area, na ordem de criacao
     VisionMap m_visionMap;
     // Minimapa: escuro da visao no mapa inteiro, camada preta por cima da
     // imagem (ImGui). Quadro do minimapa: x, z do centro e meio lado; e o

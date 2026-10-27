@@ -16,7 +16,9 @@ layout(set = 2, binding = 1) uniform sampler2D u_gbufferPbr;
 layout(push_constant) uniform RingPush {
     vec4 center; // xyz = pe', w = raio externo
     vec4 color;  // rgb, a = alfa
-    vec4 shape;  // x = espessura, y = folga acima, z = folga abaixo
+    vec4 shape;  // x = borda, y = folga acima, z = folga abaixo, w = forma (0 coroa, 1 retangulo)
+    vec4 dir;    // xy = direcao (x, z), z = meia abertura, w = raio interno / meia largura
+    vec4 fill;   // x = progresso, y = alfa do miolo
 } ring;
 
 layout(location = 0) out vec4 outColor;
@@ -30,14 +32,44 @@ void main() {
     vec3 P = (u_inverseView * vec4(viewPos.xyz / viewPos.w, 1.0)).xyz;
     vec3 local = P - ring.center.xyz;
 
-    // Coroa no plano XZ: distancia ao meio da faixa, borda de um pixel
-    // (fwidth) para nao serrilhar nem piscar com o anel andando. Na quina de
-    // um objeto a derivada salta: limitada a meia espessura.
+    // Distancia com sinal a forma no plano XZ (negativa dentro), borda de um
+    // pixel (fwidth) para nao serrilhar nem piscar com a forma andando. Na
+    // quina de um objeto a derivada salta: limitada a meia espessura.
+    // Coroa: entre o raio interno e o externo; com meia abertura < pi vira
+    // setor (cone, arco), cortado pelos dois raios da borda. Retangulo: da
+    // origem ate' o comprimento, na direcao `dir`.
+    vec2 p = vec2(dot(local.xz, ring.dir.xy), dot(local.xz, vec2(-ring.dir.y, ring.dir.x)));
+    float R = ring.center.w, sd, frente, meia;
     float d = length(local.xz);
-    float meia = 0.5 * ring.shape.x;
-    float faixa = abs(d - (ring.center.w - meia)) - meia;
-    float aa = min(max(fwidth(d), 1e-3), meia);
-    float cobre = 1.0 - smoothstep(-aa, aa, faixa);
+    float aa = max(fwidth(d), 1e-3);
+    if (ring.shape.w > 0.5) {
+        sd = max(abs(p.x - 0.5 * R) - 0.5 * R, abs(p.y) - ring.dir.w);
+        frente = p.x - ring.fill.x * R;
+        meia = min(0.5 * R, ring.dir.w);
+    } else {
+        float ri = max(ring.dir.w, 0.0);
+        sd = max(d - R, ri - d);
+        if (ring.dir.z < 3.14159) {
+            // Setor (como a fatia de pizza de distancia exata): distancia ao
+            // raio da borda, com sinal pelo lado.
+            vec2 c = vec2(cos(ring.dir.z), sin(ring.dir.z));
+            vec2 q = vec2(p.x, abs(p.y));
+            float lado = c.x * q.y - c.y * q.x;
+            sd = max(sd, sign(lado) * length(q - c * max(dot(q, c), 0.0)));
+        }
+        frente = d - (ri + ring.fill.x * (R - ri));
+        meia = ri > 0.0 ? 0.5 * (R - ri) : R;
+    }
+    aa = min(aa, meia);
+    float dentro = 1.0 - smoothstep(-aa, aa, sd);
+    // Miolo ate' a frente do progresso (alfa fill.y), borda de espessura
+    // shape.x e a frente do progresso mais forte enquanto anda.
+    float miolo = ring.fill.y * (ring.fill.x >= 1.0 ? 1.0 : 1.0 - smoothstep(-aa, aa, frente));
+    float bw = ring.shape.x;
+    float borda = bw > 0.0 ? 1.0 - smoothstep(-aa, aa, abs(sd + 0.5 * bw) - 0.5 * bw) : 0.0;
+    float onda = ring.fill.x > 0.0 && ring.fill.x < 1.0
+                     ? 0.8 * (1.0 - smoothstep(0.0, max(bw, 2.0 * aa), abs(frente))) : 0.0;
+    float cobre = dentro * max(max(miolo, borda), onda);
     if (cobre <= 0.0) discard;
 
     // Pixel de sprite (o proprio boneco ou outro) fica de fora: o anel e' do

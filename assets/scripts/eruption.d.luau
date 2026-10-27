@@ -656,6 +656,21 @@ declare vfx: {
     move: (id: number, position: vector, scale: number?, yaw: number?) -> (),
     -- False once the effect ended or was stopped.
     playing: (id: number) -> boolean,
+    -- A shape on the ground lying on the relief (skill area, aim, range),
+    -- kept under `id` until area(id, nil). Calling again with the same id
+    -- moves or changes it. shape: "circle" (default), "ring" (inner
+    -- radius, default 0.6 of radius), "line" (from position along the
+    -- direction: length, width default 0.2 of length), "cone" (angle, the
+    -- full opening in degrees, default 90) or "arc" (a cone with inner).
+    -- Sizes in world units, like positions. direction: vector (y ignored)
+    -- or yaw in degrees. fill (0..1, default 1) grows the inside from the
+    -- center (or the start of the line), with a bright front while it runs;
+    -- fill_alpha (default 0.25) is the inside, border (default 4% of the
+    -- size, at least 1; 0 = none) the outline. color defaults to white,
+    -- alpha to 0.8. Not hidden by team vision; cleared on script reload.
+    area: (id: string | number, area: { shape: string?, position: vector, radius: number?, inner: number?,
+        length: number?, width: number?, angle: number?, direction: vector?, yaw: number?, fill: number?,
+        fill_alpha: number?, border: number?, color: vector?, alpha: number? }?) -> (),
 }
 
 -- Team vision. The map is never closed: outside the vision of the sources it

@@ -184,12 +184,15 @@ struct SpritePointShadow {
     float strength = 0.0f;
 };
 
-// Anel no chao preso a um personagem (characters.ring): push constant do
-// ground_ring.vert/.frag, um desenho por anel.
+// Decal no chao (characters.ring e vfx.area): push constant do
+// ground_ring.vert/.frag, um desenho por forma. Forma 0 e' a coroa (setor
+// de coroa: circulo, anel, cone, arco), forma 1 o retangulo (linha).
 struct GroundRing {
-    Vec4 center = Vec4(0.0f); // xyz = pe', w = raio externo
+    Vec4 center = Vec4(0.0f); // xyz = pe', w = raio externo (linha: comprimento)
     Vec4 color = Vec4(1.0f);  // rgb, a = alfa
-    Vec4 shape = Vec4(0.0f);  // x = espessura, y = folga acima, z = folga abaixo
+    Vec4 shape = Vec4(0.0f);  // x = borda, y = folga acima, z = folga abaixo, w = forma
+    Vec4 dir = Vec4(0.0f, 1.0f, 4.0f, 0.0f); // xy = direcao (x, z), z = meia abertura (rad), w = raio interno / meia largura
+    Vec4 fill = Vec4(1.0f, 1.0f, 0.0f, 0.0f); // x = progresso 0..1, y = alfa do miolo
 };
 
 class SpriteRenderer {

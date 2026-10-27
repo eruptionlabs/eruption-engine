@@ -197,6 +197,7 @@ void Engine::releaseCharacterSpriteCache(uint32_t keepGenerations) {
 
 void Engine::updateCharacters(float dt, bool moveAlongPaths) {
     m_groundRings.clear();
+    for (const auto& area : m_groundAreas) m_groundRings.push_back(area.second); // debaixo dos aneis
     m_portraitDt += dt;
     for (size_t i = 0; i < m_characters.size(); ++i) {
         SceneCharacter& c = m_characters[i];
@@ -473,7 +474,8 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         r.color = Vec4(Vec3(c.ringColor), c.ringColor.a * f.fade);
         // Folga de um raio para cima e para baixo: rampa de ate' 45 graus.
         const float folga = std::max(c.ringRadius, 4.0f);
-        r.shape = Vec4(c.ringWidth, folga, folga, 0.0f);
+        r.shape = Vec4(0.0f, folga, folga, 0.0f);
+        r.dir.w = c.ringRadius - c.ringWidth; // coroa cheia, sem borda
         m_groundRings.push_back(r);
     }
     if (headTop > -1e8f) {
