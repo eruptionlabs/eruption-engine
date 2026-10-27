@@ -275,7 +275,16 @@ void Engine::updateCameraCollision(float dt) {
     // "debaixo do chao"). A folga nao passa da que o proprio alvo tem (alvo
     // no pe' do grupo, a 2 u do chao): senao o raio ja' nascia "sem folga" e
     // a camera ia parar na cabeca.
-    const float targetClear = target.y - sampleTerrainHeight(target.x, target.z);
+    // Raio torto no pe' do alvo: nasce kFootLift acima do alvo e encontra o
+    // raio reto a kFootRun dele. O alvo fica no pe' do grupo, colado no chao
+    // ou um pouco abaixo dele (rampa, malha acima da grade); o raio reto
+    // cruzava esse chao a 1-2 u do alvo, o cruzamento contava como entrada
+    // na pedra e a lente ia parar a 0,5 u do pe', com a tela inteira cinza
+    // (a orbita de 25 graus num barranco do mapa).
+    constexpr float kFootLift = 3.0f, kFootRun = 12.0f;
+    auto footLift = [&](float t) { return kFootLift * std::max(0.0f, 1.0f - t / kFootRun); };
+    const Vec3 foot = target + Vec3(0.0f, kFootLift, 0.0f);
+    const float targetClear = foot.y - sampleTerrainHeight(target.x, target.z);
     const bool useGrid = targetClear >= 0.0f && mapAt(target.x, target.z);
     const float gridMargin = std::min(margin, 0.5f * targetClear);
 
@@ -286,11 +295,23 @@ void Engine::updateCameraCollision(float dt) {
         float pushFloor = 0.0f;
         float occl = FLT_MAX;  // primeira parede entre o alvo e a lente
     };
-    static thread_local std::vector<std::pair<float, bool>> hits;
+    static thread_local std::vector<std::pair<float, bool>> hits, hitsFar;
+    // Cruzamentos no raio torto ate' maxT, em t do raio reto.
+    auto bentHits = [&](const Vec3& dir, float maxT) {
+        const float run = std::min(kFootRun, maxT);
+        const Vec3 knee = target + dir * run;
+        const float len = glm::length(knee - foot);
+        raycastGroundMeshes(foot, (knee - foot) / len, len, hits);
+        for (auto& h : hits) h.first *= run / len;
+        if (maxT > run) {
+            raycastGroundMeshes(knee, dir, maxT - run, hitsFar);
+            for (auto& h : hitsFar) hits.emplace_back(h.first + run, h.second);
+        }
+    };
     auto probe = [&](float p, float d) {
         Probe r;
         const Vec3 dir(std::cos(p) * std::cos(yaw), std::sin(p), std::cos(p) * std::sin(yaw));
-        raycastGroundMeshes(target, dir, d * (1.0f + kPushShare) + margin, hits);
+        bentHits(dir, d * (1.0f + kPushShare) + margin);
         const std::pair<float, bool>* last = nullptr;
         for (const auto& h : hits) {
             if (h.second && h.first <= d + margin) r.occl = std::min(r.occl, h.first);
@@ -313,10 +334,10 @@ void Engine::updateCameraCollision(float dt) {
         if (!useGrid) return r;
         auto clear = [&](float t) {
             const Vec3 q = target + dir * t;
-            return q.y - sampleTerrainHeight(q.x, q.z) - gridMargin;
+            return q.y + footLift(t) - sampleTerrainHeight(q.x, q.z) - gridMargin;
         };
         float gridT = 0.0f;
-        if (raycastTerrain(target, dir, d + margin, gridT)) r.occl = std::min(r.occl, gridT);
+        if (raycastTerrain(foot, dir, d + margin, gridT)) r.occl = std::min(r.occl, gridT);
         if (clear(d) < 0.0f) {
             // Lente abaixo do chao + folga: volta ate' o ultimo ponto com folga.
             constexpr float kStep = 4.0f;
