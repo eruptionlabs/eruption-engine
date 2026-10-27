@@ -460,6 +460,7 @@ public:
         uint32_t maxTriangles = 600000; // alvo por malha (a grade abre acima disto)
     };
     void setReliefBake(const ReliefBakeConfig& config) { m_reliefBake = config; }
+    const ReliefBakeConfig& reliefBake() const { return m_reliefBake; }
     // Altura crua de uma textura pelo caminho dela: identidade do conteudo e,
     // com pixels = true, o alfa (o Engine decodifica o MRAH-W do bake das
     // texturas embutidas). Chamada tambem das threads de trabalho da carga.

@@ -163,6 +163,7 @@ int vfx_area(lua_State* L) {
     a.shape = Vec4(std::max(areaField(L, "border", std::max(1.0f, extent * 0.04f)), 0.0f), folga, folga, a.shape.w);
     a.fill = Vec4(std::clamp(areaField(L, "fill", 1.0f), 0.0f, 1.0f),
                   std::clamp(areaField(L, "fill_alpha", 0.25f), 0.0f, 1.0f), 0.0f, 0.0f);
+    g_engine->groundDecalPlane(a);
     g_engine->setGroundArea(id, &a);
     return 0;
 }

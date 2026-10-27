@@ -190,9 +190,9 @@ struct SpritePointShadow {
 struct GroundRing {
     Vec4 center = Vec4(0.0f); // xyz = pe', w = raio externo (linha: comprimento)
     Vec4 color = Vec4(1.0f);  // rgb, a = alfa
-    Vec4 shape = Vec4(0.0f);  // x = borda, y = folga acima, z = folga abaixo, w = forma
+    Vec4 shape = Vec4(0.0f);  // x = borda, y = folga acima, z = folga abaixo, w = forma (+2: no plano de fill.zw)
     Vec4 dir = Vec4(0.0f, 1.0f, 4.0f, 0.0f); // xy = direcao (x, z), z = meia abertura (rad), w = raio interno / meia largura
-    Vec4 fill = Vec4(1.0f, 1.0f, 0.0f, 0.0f); // x = progresso 0..1, y = alfa do miolo
+    Vec4 fill = Vec4(1.0f, 1.0f, 0.0f, 0.0f); // x = progresso 0..1, y = alfa do miolo, zw = inclinacao (x, z) do plano
 };
 
 class SpriteRenderer {

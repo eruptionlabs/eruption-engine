@@ -16,9 +16,9 @@ layout(set = 2, binding = 1) uniform sampler2D u_gbufferPbr;
 layout(push_constant) uniform RingPush {
     vec4 center; // xyz = pe', w = raio externo
     vec4 color;  // rgb, a = alfa
-    vec4 shape;  // x = borda, y = folga acima, z = folga abaixo, w = forma (0 coroa, 1 retangulo)
+    vec4 shape;  // x = borda, y = folga acima, z = folga abaixo, w = forma (0 coroa, 1 retangulo; +2 no plano)
     vec4 dir;    // xy = direcao (x, z), z = meia abertura, w = raio interno / meia largura
-    vec4 fill;   // x = progresso, y = alfa do miolo
+    vec4 fill;   // x = progresso, y = alfa do miolo, zw = inclinacao do plano (x, z)
 } ring;
 
 layout(location = 0) out vec4 outColor;
@@ -53,7 +53,7 @@ float cobreAt(vec2 xz, float aa0) {
     vec2 p = vec2(dot(xz, ring.dir.xy), dot(xz, vec2(-ring.dir.y, ring.dir.x)));
     float R = ring.center.w, sd, frente, meia;
     float d = length(xz);
-    if (ring.shape.w > 0.5) {
+    if (mod(ring.shape.w, 2.0) > 0.5) {
         sd = max(abs(p.x - 0.5 * R) - 0.5 * R, abs(p.y) - ring.dir.w);
         frente = p.x - ring.fill.x * R;
         meia = min(0.5 * R, ring.dir.w);
@@ -89,19 +89,24 @@ void main() {
     if (depth >= 1.0) discard; // ceu
     vec3 P = worldAt(px);
     vec3 local = P - ring.center.xyz;
-    // Chao ACIMA do pe' (crista, calombo do relevo): a forma vale onde o raio
-    // da camera cruza o plano do pe', como se o anel estivesse nele e o chao
-    // fosse transparente. Pelo ponto visivel, a crista na frente tapava
-    // trechos do anel no chao acidentado. As duas leituras coincidem onde o
-    // chao cruza a altura do pe', entao o contorno e' um so' (ler as duas e
-    // somar dobrava o anel).
+    // COM RELEVO NA VISTA (forma + 2): a forma vale onde o raio da camera
+    // cruza o plano do chao sem deslocamento (inclinacao fill.zw, da CPU),
+    // como se o relevo fosse transparente. Pelo ponto visivel, as cristas
+    // tapavam trechos e o anel saia em pedacos; pelo plano horizontal do
+    // pe', a emenda com o chao abria degrau na silhueta e a rampa entortava.
+    // A altura (folga, parede) passa a contar a partir desse plano.
     vec2 xz = local.xz;
     bool plano = false;
-    if (local.y > 0.0) {
+    float h = local.y;
+    if (ring.shape.w > 1.5) {
+        vec2 g = ring.fill.zw;
+        h = local.y - dot(g, local.xz);
         vec3 cam = u_inverseView[3].xyz;
-        vec3 ray = P - cam;
-        if (ray.y < -1e-4) {
-            xz = (cam + ray * ((ring.center.y - cam.y) / ray.y) - ring.center.xyz).xz;
+        vec3 ray = P - cam, L = cam - ring.center.xyz;
+        float den = ray.y - dot(g, ray.xz);
+        float t = den < -1e-4 ? (dot(g, L.xz) - L.y) / den : -1.0;
+        if (t > 0.0) {
+            xz = (L + ray * t).xz;
             plano = true;
         }
     }
@@ -114,8 +119,8 @@ void main() {
     if (abs(texelFetch(u_gbufferPbr, px, 0).r - 0.75) < 0.06) discard;
 
     // So' o chao perto do pe': parede ou laje muito acima/abaixo nao.
-    float altura = smoothstep(-ring.shape.z, -0.5 * ring.shape.z, local.y) *
-                   (1.0 - smoothstep(0.5 * ring.shape.y, ring.shape.y, local.y));
+    float altura = smoothstep(-ring.shape.z, -0.5 * ring.shape.z, h) *
+                   (1.0 - smoothstep(0.5 * ring.shape.y, ring.shape.y, h));
     // Parede, cerca e paredao de rocha nao: a normal da superficie (do depth,
     // 4 vizinhos a 4 px: a 1 px o degrau miudo do chao virava parede) com y abaixo de 0,5 apaga; 0,62 ja' pinta inteiro, entao a
     // rampa de 45 graus (0,71) fica toda. Lida depois do corte da forma:
@@ -124,7 +129,12 @@ void main() {
     vec3 ty = tangente(P, worldAt(px - ivec2(0, 4)), worldAt(px + ivec2(0, 4)));
     vec3 n = cross(tx, ty);
     float ny = abs(n.y) * inversesqrt(max(dot(n, n), 1e-20));
-    float a = ring.color.a * cobre * altura * (plano ? 1.0 : smoothstep(0.5, 0.62, ny));
+    // No plano a parede so' corta o que passa do relevo (folga - max(raio, 4),
+    // a amplitude que a CPU somou): caixa e rocha sim, o calombo nao.
+    float relevo = ring.shape.y - max(ring.center.w, 4.0);
+    float parede = smoothstep(0.5, 0.62, ny);
+    if (plano) parede = mix(1.0, parede, smoothstep(relevo, relevo + 2.0, abs(h)));
+    float a = ring.color.a * cobre * altura * parede;
     if (a <= 0.0) discard;
     outColor = vec4(ring.color.rgb, a);
 }

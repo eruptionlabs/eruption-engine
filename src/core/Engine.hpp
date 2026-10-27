@@ -751,11 +751,20 @@ public:
     // disco, 2 = disco + planar das ate' 2 luzes pontuais dominantes; -1 = a
     // do data/char_config.json.
     void setSpriteSink(float pixels) { m_spriteSinkPixels = std::clamp(pixels, 0.0f, 64.0f); }
-    // Folga de altura dos decais de chao (anel, vfx.area): o relevo da
-    // tesselacao tira o chao visivel da altura do pe' em ate' a amplitude.
-    float groundDecalSlack(float extent) const {
-        return std::max(extent, 4.0f) + (m_modelRenderer.tessellationActive() ? m_tessAmplitude : 0.0f);
+    // Amplitude do relevo que o chao VISIVEL tem: o da tesselacao ou o da
+    // malha assada no G-buffer (relief_bake "mesh"); 0 sem relevo na vista.
+    float reliefInView() const {
+        if (m_modelRenderer.tessellationActive()) return m_tessAmplitude;
+        const ModelRenderer::ReliefBakeConfig& rb = m_modelRenderer.reliefBake();
+        return rb.mode == 2 ? rb.amplitude : 0.0f;
     }
+    // Folga de altura dos decais de chao (anel, vfx.area): o relevo tira o
+    // chao visivel da altura do pe' em ate' a amplitude.
+    float groundDecalSlack(float extent) const { return std::max(extent, 4.0f) + reliefInView(); }
+    // Com relevo na vista, o decal e' lido no plano do chao SEM deslocamento
+    // (inclinacao pela altura do piso na CPU): segue rampa e degrau do mapa
+    // e ignora o relevo. Sem relevo, nada muda.
+    void groundDecalPlane(GroundRing& decal) const;
     void setSpriteShadow(int kind, float contactSun = 0.0f) {
         m_spriteShadowKind = kind;
         m_spriteContactSun = std::clamp(contactSun, 0.0f, 1.0f);
