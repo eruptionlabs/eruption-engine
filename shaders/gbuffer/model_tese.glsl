@@ -203,11 +203,31 @@ float dispMipFloor(uint texIdx) {
     return log2(max(texels * uvPerU * spacing * 2.0, 1.0));
 }
 
+// MIP DA LEITURA DE ALTURA. Altura cozida (MRAH-W, useAlpha) com a grade
+// por distancia (PC): o piso de Nyquist da grade (dispMipFloor) e nada mais.
+// O mip 2 fixo de antes mandava (o piso nas rochas da bancada da' ~0,7) e
+// media 4x4 texels: a fenda de 1-3 texels sumia antes de virar geometria.
+// Luminancia crua do albedo (chao com splat), sem grade conhecida ou sem
+// banda perto (celular): o mip 2/5 de antes. IDENTICO em model.vert/model.tese.
+float heightNearMip(uint texIdx, bool useAlpha) {
+    bool fineGrid = u_tessNearDistance > 0.0 && u_tessParams2.y > 0.0 && push.uvScale.z > 0.0;
+    if (useAlpha && fineGrid) return dispMipFloor(texIdx) + max(u_tessHeightBlur, 0.0);
+    return max(2.0 + u_tessHeightBlur, dispMipFloor(texIdx));
+}
+
+// Linha de base do contraste = media da textura inteira. O mip 8 so' e' a
+// media ate' 256 texels: na altura de 1024 era um mosaico 4x4 e a "media"
+// mudava de bloco em bloco. Com a banda perto le' o ultimo mip; sem ela
+// (celular) o mip 8 de antes.
+float heightBaseMip(uint texIdx) {
+    return u_tessNearDistance > 0.0 ? log2(float(textureSize(u_textures[nonuniformEXT(texIdx)], 0).x)) : 8.0;
+}
+
 float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
     // Blur (slider "Height Blur") sobe os mips de leitura da altura - mip
     // maior = media de mais texels = ruido de alta frequencia sumindo antes
     // do ganho/contraste amplificar ele. 0 = mip 2/5 originais.
-    float nearMip = max(2.0 + u_tessHeightBlur, dispMipFloor(texIdx));
+    float nearMip = heightNearMip(texIdx, useAlpha);
     float farMip = nearMip + 3.0;
     if (useAlpha) {
         float a = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, nearMip).a;
@@ -228,7 +248,7 @@ float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
         // como se fosse alta). Ganho continua sendo o slider "Height
         // contrast", agora esticando/comprimindo em torno da media de
         // verdade em vez de um meio arbitrario.
-        float base = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, 8.0).a;
+        float base = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, heightBaseMip(texIdx)).a;
         return clamp(0.5 + (a - base) * gain, 0.0, 1.0);
     }
     vec4 n = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, nearMip);
@@ -496,40 +516,101 @@ void main() {
                 // A derivada e' plana por quad de pixel: com deslocamento
                 // forte perto da camera, o chao aparecia FACETADO, em placas
                 // triangulares. Aqui a normal sai do GRADIENTE da mesma altura
-                // que deslocou o vertice - duas amostras a mais, ao longo de
-                // dois eixos tangentes - entao a luz descreve a superficie
-                // real e o resultado e' liso. So' roda na banda perto: e' a
-                // "qualidade maxima onde a camera esta'", que e' o pedido.
-                vec3 tA = normalize(abs(nrm.y) < 0.99 ? cross(nrm, vec3(0.0, 1.0, 0.0))
-                                                      : vec3(1.0, 0.0, 0.0));
-                vec3 tB = normalize(cross(nrm, tA));
-                float eps = max(0.35, ampW * 0.5);
-                float hA, hB;
-                // O passo tangente vira passo de UV pela razao entre a
-                // extensao do triangulo em mundo e em UV.
-                vec2 duv = (inTexCoord[1] - inTexCoord[0]);
-                vec3 dwp = (inWorldPos[1] - inWorldPos[0]);
-                float sc = length(duv) / max(length(dwp), 1e-4);
-                hA = heightUv(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0],
-                              uv + vec2(eps * sc, 0.0), gainH, hSrc < 1.5);
-                hB = heightUv(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0],
-                              uv + vec2(0.0, eps * sc), gainH, hSrc < 1.5);
-                vec3 pA = tA * eps + nrm * ((hA - 0.5) * ampW);
-                vec3 pB = tB * eps + nrm * ((hB - 0.5) * ampW);
-                vec3 nD = cross(pA, pB);
-                float nl = length(nD);
-                if (nl > 1e-6) {
-                    nD /= nl;
-                    if (dot(nD, nrm) < 0.0) nD = -nD;
-                    outNormal = normalize(mix(nrm, nD, clamp(amp, 0.0, 1.0)));
-                    outDispInfo.z += 10.0; // marca: normal ja' e' a do relevo
+                // que deslocou o vertice, entao a luz descreve a superficie
+                // real e o resultado e' liso. So' roda na banda perto.
+                float reliefMark = 0.0; // 10 = a normal daqui e' a do relevo
+                if (u_tessNearDistance > 0.0) {
+                    // Com a grade por distancia (PC): os eixos sao dP/du e
+                    // dP/dv do proprio triangulo (inversa da matriz de UV das
+                    // arestas), os MESMOS em que a altura e' amostrada (uv +
+                    // du, uv + dv). Os eixos de antes (abaixo) eram tangentes
+                    // tiradas do "pra cima" do mundo com a amostra andando em
+                    // U e V: o gradiente saia girado. Passo = 1 texel do mip
+                    // que heightUv le' (menor que isso so' interpola o mesmo
+                    // texel).
+                    uint hTex = hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0];
+                    bool hAlpha = hSrc < 1.5;
+                    vec3 e1 = inWorldPos[1] - inWorldPos[0], e2 = inWorldPos[2] - inWorldPos[0];
+                    vec2 t1 = inTexCoord[1] - inTexCoord[0], t2 = inTexCoord[2] - inTexCoord[0];
+                    float det = t1.x * t2.y - t2.x * t1.y;
+                    if (abs(det) > 1e-12) {
+                        vec3 dPdu = (e1 * t2.y - e2 * t1.y) / det;
+                        vec3 dPdv = (e2 * t1.x - e1 * t2.x) / det;
+                        dPdu -= nrm * dot(dPdu, nrm);
+                        dPdv -= nrm * dot(dPdv, nrm);
+                        float dUv = exp2(heightNearMip(hTex, hAlpha)) / float(textureSize(u_textures[nonuniformEXT(hTex)], 0).x);
+                        // Mesma fonte que deslocou: chao com splat le' a mistura
+                        // das camadas (a mascara muda devagar, fica no ponto).
+                        float h0, hU, hV;
+                        if (hAlpha) {
+                            h0 = heightUv(hTex, uv, gainH, true);
+                            hU = heightUv(hTex, uv + vec2(dUv, 0.0), gainH, true);
+                            hV = heightUv(hTex, uv + vec2(0.0, dUv), gainH, true);
+                        } else {
+                            h0 = heightSplatUv(uv, outBlendMaskUV, inTexIndex[0], inSplatTex[0], inSplatTex2[0],
+                                               inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
+                            hU = heightSplatUv(uv + vec2(dUv, 0.0), outBlendMaskUV, inTexIndex[0], inSplatTex[0],
+                                               inSplatTex2[0], inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
+                            hV = heightSplatUv(uv + vec2(0.0, dUv), outBlendMaskUV, inTexIndex[0], inSplatTex[0],
+                                               inSplatTex2[0], inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
+                        }
+                        // Mesma escala do deslocamento (ampW, com mascara de
+                        // costura): onde a costura zera o relevo a normal volta
+                        // a ser a da malha sozinha.
+                        vec3 sU = dPdu * dUv + nrm * ((hU - h0) * ampW);
+                        vec3 sV = dPdv * dUv + nrm * ((hV - h0) * ampW);
+                        vec3 nD = cross(sU, sV);
+                        float nl = length(nD);
+                        if (nl > 1e-12) {
+                            nD /= nl;
+                            // UV espelhada inverte o produto vetorial inteiro.
+                            if (dot(nD, nrm) < 0.0) nD = -nD;
+                            // Solda: na faixa da aresta (weldInner < 1) a altura
+                            // e a direcao vem misturadas dos dois lados; a normal
+                            // vai junto pra direcao soldada, a mesma dos dois.
+                            vec3 nRel = normalize(mix(dispDir, nD, weldInner));
+                            outNormal = normalize(mix(nrm, nRel, clamp(amp, 0.0, 1.0)));
+                            reliefMark = 10.0;
+                        }
+                    }
+                } else {
+                    // Sem banda perto (celular): a normal de antes, como foi
+                    // medida la'. Duas amostras ao longo de dois eixos
+                    // tangentes; o frag ainda a mistura com a derivada de tela.
+                    vec3 tA = normalize(abs(nrm.y) < 0.99 ? cross(nrm, vec3(0.0, 1.0, 0.0))
+                                                          : vec3(1.0, 0.0, 0.0));
+                    vec3 tB = normalize(cross(nrm, tA));
+                    float eps = max(0.35, ampW * 0.5);
+                    float hA, hB;
+                    // O passo tangente vira passo de UV pela razao entre a
+                    // extensao do triangulo em mundo e em UV.
+                    vec2 duv = (inTexCoord[1] - inTexCoord[0]);
+                    vec3 dwp = (inWorldPos[1] - inWorldPos[0]);
+                    float sc = length(duv) / max(length(dwp), 1e-4);
+                    hA = heightUv(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0],
+                                  uv + vec2(eps * sc, 0.0), gainH, hSrc < 1.5);
+                    hB = heightUv(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0],
+                                  uv + vec2(0.0, eps * sc), gainH, hSrc < 1.5);
+                    vec3 pA = tA * eps + nrm * ((hA - 0.5) * ampW);
+                    vec3 pB = tB * eps + nrm * ((hB - 0.5) * ampW);
+                    vec3 nD = cross(pA, pB);
+                    float nl = length(nD);
+                    if (nl > 1e-6) {
+                        nD /= nl;
+                        if (dot(nD, nrm) < 0.0) nD = -nD;
+                        outNormal = normalize(mix(nrm, nD, clamp(amp, 0.0, 1.0)));
+                    }
                 }
                 float dl = length(dsp);
                 // AUDITORIA: alinhamento do deslocamento com a normal do
                 // ponto e o modulo. Fica exposto no modo de auditoria do
                 // model.frag para responder "isto esta' indo pela normal?"
                 // com numero, nao com impressao.
-                outDispInfo = vec4(dl > 1e-6 ? abs(dot(dsp / dl, nrm)) : 1.0, dl, hSrc, h);
+                // z + 10 = marca pro model.frag: a normal ja' e' a do relevo,
+                // nao refazer pela derivada de tela. (Antes o +10 era somado
+                // antes desta linha, que o apagava: o frag nunca via a normal
+                // daqui.)
+                outDispInfo = vec4(dl > 1e-6 ? abs(dot(dsp / dl, nrm)) : 1.0, dl, hSrc + reliefMark, h);
             }
 
         }

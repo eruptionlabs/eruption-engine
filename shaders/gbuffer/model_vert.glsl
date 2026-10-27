@@ -321,9 +321,29 @@ float dispMipFloor(uint texIdx) {
     return log2(max(texels * uvPerU * spacing * 2.0, 1.0));
 }
 
+// MIP DA LEITURA DE ALTURA. Altura cozida (MRAH-W, useAlpha) com a grade
+// por distancia (PC): o piso de Nyquist da grade (dispMipFloor) e nada mais.
+// O mip 2 fixo de antes mandava (o piso nas rochas da bancada da' ~0,7) e
+// media 4x4 texels: a fenda de 1-3 texels sumia antes de virar geometria.
+// Luminancia crua do albedo (chao com splat), sem grade conhecida ou sem
+// banda perto (celular): o mip 2/5 de antes. IDENTICO em model.vert/model.tese.
+float heightNearMip(uint texIdx, bool useAlpha) {
+    bool fineGrid = u_tessNearDistance > 0.0 && u_tessParams2.y > 0.0 && push.uvScale.z > 0.0;
+    if (useAlpha && fineGrid) return dispMipFloor(texIdx) + max(u_tessHeightBlur, 0.0);
+    return max(2.0 + u_tessHeightBlur, dispMipFloor(texIdx));
+}
+
+// Linha de base do contraste = media da textura inteira. O mip 8 so' e' a
+// media ate' 256 texels: na altura de 1024 era um mosaico 4x4 e a "media"
+// mudava de bloco em bloco. Com a banda perto le' o ultimo mip; sem ela
+// (celular) o mip 8 de antes.
+float heightBaseMip(uint texIdx) {
+    return u_tessNearDistance > 0.0 ? log2(float(textureSize(u_textures[nonuniformEXT(texIdx)], 0).x)) : 8.0;
+}
+
 float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
     // Blur (slider "Height Blur") - ver o comentario igual em model.tese.
-    float nearMip = max(2.0 + u_tessHeightBlur, dispMipFloor(texIdx));
+    float nearMip = heightNearMip(texIdx, useAlpha);
     float farMip = nearMip + 3.0;
     if (useAlpha) {
         float a = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, nearMip).a;
@@ -334,7 +354,7 @@ float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
         // explicacao, tem que ficar identico: material fotografado real nao
         // distribui simetrico em volta de 0.5 fixo, "preto fica fixo, branco
         // sobe" era a media real da textura ficando perto do preto).
-        float base = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, 8.0).a;
+        float base = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, heightBaseMip(texIdx)).a;
         return clamp(0.5 + (a - base) * gain, 0.0, 1.0);
     }
     vec4 n = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, nearMip);
