@@ -925,6 +925,9 @@ public:
     bool navFollowsTerrain() const;
     bool navCell(float x, float z, int& gx, int& gz) const;
     bool navWalkable(float x, float z, float y = kAnyHeight) const;
+    // Passo e centro de uma celula da grade de caminhada de `map`, em mundo
+    // (a busca de caminho anda nas mesmas celulas).
+    float navCellFrame(const LoadedMap* map, Vec2& origin) const;
     bool paintWalk(const Vec2& center, float radius, bool block, int rect[4]);
     std::vector<uint8_t> walkRegion(int x0, int z0, int x1, int z1) const;
     void setWalkRegion(int x0, int z0, int x1, int z1, const std::vector<uint8_t>& blocked);

@@ -49,9 +49,20 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
     out.clear();
     // Mapas empilhados: a busca fica no andar de quem sai (a altura da origem).
     const LoadedMap* map = mapAt(from.x, from.z, from.y);
-    const float step = map && map->terrainFromFile && map->terrain.scale > 0.0f ? map->terrain.scale : 5.0f;
-    auto cellX = [&](float x) { return int(std::lround(x / step)); };
-    const int sx = cellX(from.x), sz = cellX(from.z), gx = cellX(to.x), gz = cellX(to.z);
+    // As celulas da busca sao as da grade de caminhada do mapa (passo e
+    // centro); o resto da conta fica no referencial dela (mundo - origem).
+    Vec2 org;
+    float step = navCellFrame(map, org);
+    // Com folga, meia celula: as celulas da busca sao quartos das da grade (o
+    // chao continua exato) e o caminho acha a passagem que so' cabe fora do
+    // centro de uma celula (16 u livres para folga 8 numa grade de 5 u).
+    if (wallClearance > 0.0f) {
+        step *= 0.5f;
+        org -= Vec2(0.5f * step);
+    }
+    auto cellX = [&](float x) { return int(std::lround((x - org.x) / step)); };
+    auto cellZ = [&](float z) { return int(std::lround((z - org.y) / step)); };
+    const int sx = cellX(from.x), sz = cellZ(from.z), gx = cellX(to.x), gz = cellZ(to.z);
 
     // Janela: retangulo de origem e alvo com folga (metade da distancia, no
     // minimo kMinMargin). Fora dela nao se anda.
@@ -75,8 +86,8 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
     std::vector<PathSolid> solids;
     std::vector<std::vector<uint32_t>> buckets(size_t(bw) * size_t(bd));
     {
-        const float wx0 = (x0 - 0.5f) * step, wz0 = (z0 - 0.5f) * step;
-        const float wx1 = (x0 + w + 0.5f) * step, wz1 = (z0 + d + 0.5f) * step;
+        const float wx0 = org.x + (x0 - 0.5f) * step, wz0 = org.y + (z0 - 0.5f) * step;
+        const float wx1 = org.x + (x0 + w + 0.5f) * step, wz1 = org.y + (z0 + d + 0.5f) * step;
         const auto& insts = m_modelRenderer.getInstances();
         for (uint32_t i = 0; i < m_solid.size() && i < insts.size(); ++i) {
             if (!m_solid[i] || !insts[i].enabled) continue;
@@ -92,10 +103,10 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
             ps.maxY = inst.worldAabbMax.y;
             const auto id = static_cast<uint32_t>(solids.size());
             solids.push_back(ps);
-            const int bx0 = std::clamp(int(std::floor(ps.minX / step + 0.5f)) - x0, 0, w - 1) / kBucket;
-            const int bx1 = std::clamp(int(std::ceil(ps.maxX / step + 0.5f)) - x0, 0, w - 1) / kBucket;
-            const int bz0 = std::clamp(int(std::floor(ps.minZ / step + 0.5f)) - z0, 0, d - 1) / kBucket;
-            const int bz1 = std::clamp(int(std::ceil(ps.maxZ / step + 0.5f)) - z0, 0, d - 1) / kBucket;
+            const int bx0 = std::clamp(int(std::floor((ps.minX - org.x) / step + 0.5f)) - x0, 0, w - 1) / kBucket;
+            const int bx1 = std::clamp(int(std::ceil((ps.maxX - org.x) / step + 0.5f)) - x0, 0, w - 1) / kBucket;
+            const int bz0 = std::clamp(int(std::floor((ps.minZ - org.y) / step + 0.5f)) - z0, 0, d - 1) / kBucket;
+            const int bz1 = std::clamp(int(std::ceil((ps.maxZ - org.y) / step + 0.5f)) - z0, 0, d - 1) / kBucket;
             for (int bz = bz0; bz <= bz1; ++bz)
                 for (int bx = bx0; bx <= bx1; ++bx) buckets[size_t(bz) * size_t(bw) + size_t(bx)].push_back(id);
         }
@@ -139,7 +150,7 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
         int8_t& v = walk[i];
         if (v == 0) {
             const float y = fromY + kClimb * step;
-            Vec3 p(x * step, 0.0f, z * step);
+            Vec3 p(org.x + x * step, 0.0f, org.y + z * step);
             p.y = sampleTerrainHeight(p.x, p.z, y);
             floorY[i] = p.y;
             bool ok = navWalkable(p.x, p.z, y) && !blocked(x, z, p);
@@ -150,11 +161,16 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
         }
         return v > 0;
     };
-    // Celula que anda com a folga de parede (sem folga = walkable).
+    // Celula que anda com a folga de parede (sem folga = walkable). Perto da
+    // origem (folga + uma celula) a folga nao vale: quem nasce colado na
+    // parede sai dela; antes, todo vizinho da origem ficava sem folga e a
+    // busca morria ali (grupo nascido a 2 u da beira de um corredor).
+    const float escape = wallClearance + step;
+    auto nearFrom = [&](float px, float pz) { return glm::length(Vec2(px - from.x, pz - from.z)) <= escape; };
     std::vector<int8_t> room(roomy ? cells : 0, 0);
     auto passable = [&](int x, int z, float fromY) {
         if (!walkable(x, z, fromY)) return false;
-        if (!roomy) return true;
+        if (!roomy || nearFrom(org.x + x * step, org.y + z * step)) return true;
         int8_t& v = room[idxOf(x, z)];
         if (v == 0) {
             auto base = [&](int cx, int cz) { return walkable(cx, cz, fromY); };
@@ -167,7 +183,7 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
     std::vector<float> cellCost(cells, 0.0f);
     auto costAt = [&](int x, int z) {
         float& c = cellCost[idxOf(x, z)];
-        if (c == 0.0f) c = walkCost(x * step, z * step);
+        if (c == 0.0f) c = walkCost(org.x + x * step, org.y + z * step);
         return c;
     };
     // Ponto livre perto do pedido (o alvo pode estar dentro de uma parede).
@@ -219,12 +235,18 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
             for (int dx = -1; dx <= 1; ++dx) {
                 if (!dx && !dz) continue;
                 if (!passable(nx + dx, nz + dz, yn)) continue;
-                // Diagonal nao corta quina.
-                if (dx && dz && (!passable(nx + dx, nz, yn) || !passable(nx, nz + dz, yn))) continue;
-                // Com folga, o passo entre dois centros livres tambem: no meio
-                // dele a parede pode chegar mais perto que nas pontas. A saida
-                // da origem fica livre (quem esta' colado na parede sai dela).
-                if (roomy && n != start && !moveClear(nx, nz, nx + dx, nz + dz, yn)) continue;
+                // Com folga, o passo entre dois centros livres e' amostrado
+                // (no meio dele a parede pode chegar mais perto que nas
+                // pontas) e isso ja' cuida da quina: a regra da diagonal
+                // fechava a passagem que so' cabe na diagonal (16 u entre a
+                // quina de uma parede e a de uma pedra, folga 8). A saida da
+                // origem fica livre (quem esta' colado na parede sai dela).
+                const bool fromFree = roomy && !nearFrom(org.x + nx * step, org.y + nz * step);
+                if (fromFree) {
+                    if (!moveClear(nx, nz, nx + dx, nz + dz, yn)) continue;
+                } else if (dx && dz && (!passable(nx + dx, nz, yn) || !passable(nx, nz + dz, yn))) {
+                    continue; // diagonal nao corta quina
+                }
                 const float cost = gn + (dx && dz ? 1.41421356f : 1.0f) * costAt(nx + dx, nz + dz);
                 const size_t m = idxOf(nx + dx, nz + dz);
                 if (g[m] <= cost) continue;
@@ -235,7 +257,9 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
             }
     }
     if (!reached) return false;
-    auto at = [&](size_t i) { return Vec3((x0 + int(i % size_t(w))) * step, floorY[i], (z0 + int(i / size_t(w))) * step); };
+    auto at = [&](size_t i) {
+        return Vec3(org.x + (x0 + int(i % size_t(w))) * step, floorY[i], org.y + (z0 + int(i / size_t(w))) * step);
+    };
     std::vector<size_t> path{target};
     while (path.back() != start) path.push_back(size_t(came[path.back()]));
     std::reverse(path.begin(), path.end());
@@ -244,14 +268,20 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
         if (roomy) {
             const float y = std::max(a.y, b.y);
             auto base = [&](int cx, int cz) { return walkable(cx, cz, y); };
-            if (!segmentHasClearance(a.x, a.z, b.x, b.z, step, wallClearance, base)) return false;
+            const float len = glm::length(Vec2(b.x - a.x, b.z - a.z));
+            const int n = std::max(1, int(std::ceil(len / (step * kClearanceSample))));
+            for (int i = 1; i < n; ++i) {
+                const Vec3 p = glm::mix(a, b, float(i) / n);
+                if (!nearFrom(p.x, p.z) && !pointHasClearance(p.x - org.x, p.z - org.y, step, wallClearance, base))
+                    return false;
+            }
         }
         const float len = glm::length(Vec2(b.x - a.x, b.z - a.z));
         const int n = std::max(1, int(len / (step * 0.5f)));
         for (int i = 1; i < n; ++i) {
             const Vec3 p = glm::mix(a, b, float(i) / n);
             // Atalho nao corta celula cara (o A* contornou ou pagou por ela).
-            const int cx = cellX(p.x), cz = cellX(p.z);
+            const int cx = cellX(p.x), cz = cellZ(p.z);
             if (!walkable(cx, cz, p.y) || costAt(cx, cz) > 1.0f) return false;
         }
         return true;
