@@ -103,6 +103,14 @@ struct FrameUBO {
     // (F2). Somado ao mip "perto" que heightUv() le' em model.vert/model.tese
     // (2.0 -> 2.0+blur). 0 = sem blur extra.
     float tessHeightBlur;
+    // GRADE POR DISTANCIA da tesselacao (model.tesc/model.vert/model.tese):
+    // ate' tessNearDistance u a grade usa tessNearSpacing e o piso de
+    // tessNearEdgePixels px de aresta; dali em diante a de antes
+    // (tessParams2.y e 8 px). 0 = sem banda perto. Cabem no preenchimento
+    // antes da Mat4 alinhada abaixo: nenhum offset muda.
+    float tessNearEdgePixels;
+    float tessNearDistance;
+    float tessNearSpacing;
 
     // MATRIZES SEM JITTER (FSR). As matrizes do inicio do bloco (projection,
     // viewProjection, inversas) sao as de RASTERIZACAO: com jitter quando ele

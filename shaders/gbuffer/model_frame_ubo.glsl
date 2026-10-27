@@ -52,6 +52,10 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     // z = teto de inclinacao da normal em radianos (0 desliga)
     vec4 u_tessParams2;
     float u_tessHeightBlur;
+    // Banda perto da grade fina (model.tesc/model.tese, FrameUBO::tessNear*).
+    float u_tessNearEdgePixels;
+    float u_tessNearDistance;
+    float u_tessNearSpacing;
     // Fim do FrameUBO (FSR): matrizes SEM jitter e o vento do frame anterior,
     // para a velocidade de objeto (vegetacao) - ver SpriteRenderer.hpp.
     mat4 u_viewProjNoJitter;

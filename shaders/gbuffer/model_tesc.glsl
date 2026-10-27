@@ -122,6 +122,14 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     // ver densityFactor()), z = inclinacao maxima da normal,
     // w = TETO DE FATOR PARA FOLHAGEM.
     vec4 u_tessParams2;
+    float u_tessHeightBlur;
+    // Banda perto da grade fina (FrameUBO::tessNear*, presets de PC): ate'
+    // u_tessNearDistance o piso e' u_tessNearEdgePixels e o espacamento alvo
+    // u_tessNearSpacing; dali em diante 8 px e u_tessParams2.y, como antes.
+    // 0 = sem banda (celular).
+    float u_tessNearEdgePixels;
+    float u_tessNearDistance;
+    float u_tessNearSpacing;
 };
 
 float lut8(vec4 a, vec4 b, float t) {
@@ -158,7 +166,24 @@ float tessAt(int v) {
 // Depende SO' dos dois vertices da aresta - nunca do interior do patch - entao
 // os dois patches vizinhos chegam ao mesmo numero e a aresta continua sem
 // racha, que e' a mesma regra que ja' valia para tessAt().
-const float kTargetEdgePixels = 8.0;
+// O piso era a constante 8 px, e ainda e' fora da banda perto. Na bancada de
+// relevo (rochas a ~30 u da camera, ~28 px/u) ele e o espacamento de 0,25 u
+// davam a grade de 0,25-0,28 u medida - mais grossa que metade da fenda mais
+// fina do albedo (0,3 u), entao a fenda nunca tinha vertice dentro. Com
+// 4 px e 0,12 u ate' 110 u a grade mediu 0,12-0,20 u (teto de 64 por aresta
+// nas arestas de 12 u) e 78-88% da fenda chega a geometria (58-72% antes).
+//
+// Peso da banda perto pela distancia do PONTO MEDIO da aresta: os dois
+// patches vizinhos tem as mesmas duas pontas e chegam ao mesmo numero.
+// Mesma rampa (20% depois do limite) de tessNearWeight() em model.vert/model.tese.
+float edgeNearWeight(int a, int b) {
+    float n = u_tessNearDistance;
+    if (n <= 0.0) return 0.0;
+    float d = distance(0.5 * (inWorldPos[a] + inWorldPos[b]), u_cameraPos);
+    return 1.0 - smoothstep(n, 1.2 * n, d);
+}
+
+float targetEdgePixels(int a, int b) { return mix(8.0, u_tessNearEdgePixels, edgeNearWeight(a, b)); }
 
 float edgePixels(int a, int b) {
     vec3 pa = inWorldPos[a];
@@ -213,6 +238,7 @@ float foliageCap(int a, int b) {
 float densityFactor(int a, int b) {
     float spacing = u_tessParams2.y;
     if (spacing <= 0.0) return 1.0;
+    spacing = mix(spacing, u_tessNearSpacing, edgeNearWeight(a, b));
     float curveMax = max(u_tessParams.w, 1.0001);
     float w = clamp((max(tessAt(a), tessAt(b)) - 1.0) / (curveMax - 1.0), 0.0, 1.0);
     return 1.0 + max(distance(inWorldPos[a], inWorldPos[b]) / spacing - 1.0, 0.0) * w;
@@ -223,7 +249,7 @@ float densityFactor(int a, int b) {
 // rasterizador, nao uma preferencia.
 float edgeFactor(int a, int b) {
     float fromCurve = max(max(tessAt(a), tessAt(b)), densityFactor(a, b));
-    float fromPixels = max(edgePixels(a, b) / kTargetEdgePixels, 1.0);
+    float fromPixels = max(edgePixels(a, b) / targetEdgePixels(a, b), 1.0);
     return max(min(min(fromCurve, fromPixels), foliageCap(a, b)), 1.0);
 }
 

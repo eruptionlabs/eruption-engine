@@ -489,6 +489,9 @@ public:
     void applyGraphicsPreset();
     float m_tessLevelCap = 64.0f;    // chave "tessellation_max_level"
     float m_tessBandScale = 1.0f;    // chave "tessellation_band_scale"
+    float m_tessNearDistance = 0.0f;   // chave "tessellation_near_distance" (0 = sem banda perto)
+    float m_tessNearSpacing = 0.25f;   // chave "tessellation_near_spacing"
+    float m_tessNearEdgePixels = 8.0f; // chave "tessellation_near_edge_pixels"
     uint32_t m_godRayLights = 4;     // chave "god_ray_lights"
     float m_godRaySun = 0.0f;        // chave "god_ray_sun" (forca dos raios do sol)
     MapFog m_scriptFog;              // world.set_fog (set=false: nenhuma)

@@ -124,6 +124,13 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     // somados ao mip "perto" (2.0) que heightUv() usa - 0 = sem blur extra
     // (comportamento de antes). Slider "Height Blur".
     float u_tessHeightBlur;
+    // Banda perto da grade fina (FrameUBO::tessNear*, presets de PC): ate'
+    // u_tessNearDistance a grade usa u_tessNearSpacing e o piso de
+    // u_tessNearEdgePixels; dali em diante a de antes (u_tessParams2.y e
+    // 8 px). 0 = sem banda (celular): tudo como antes.
+    float u_tessNearEdgePixels;
+    float u_tessNearDistance;
+    float u_tessNearSpacing;
 };
 
 // ALTURA PELA UV DA MALHA - o relevo coincide com a textura que se ve, onde o
@@ -157,8 +164,39 @@ layout(set = 1, binding = 0) uniform FrameUBO {
 // UV por u da malha (push.uvScale.z, mediana calculada no load). IDENTICO
 // em model.vert e model.tese - o vertice de canto do patch tem que ler a
 // mesma altura que o vertice original, senao abre fenda na borda da celula.
+//
+// O espacamento usado e' o que a grade REALMENTE tem no vertice (ver
+// dispSpacingAt), nao so' o alvo do preset.
+float g_dispSpacing = 0.0; // dispSpacingAt() do vertice; 0 = so' o alvo
+
+// GRADE POR DISTANCIA (presets de PC, u_tessNearDistance > 0). Ate' a
+// distancia da banda perto a grade e' a fina (u_tessNearSpacing e piso de
+// u_tessNearEdgePixels px de aresta); depois volta a de antes
+// (u_tessParams2.y e 8 px). Rampa nos 20% depois do limite para o mip da
+// altura e o nivel nao saltarem numa linha. Mesma conta em model.tesc (la'
+// pelo ponto medio da aresta).
+float tessNearWeight(float d) {
+    float n = u_tessNearDistance;
+    return n > 0.0 ? 1.0 - smoothstep(n, 1.2 * n, d) : 0.0;
+}
+
+// Espacamento real da grade no ponto: o alvo ou o piso em pixels de aresta
+// do model.tesc convertido para u na distancia, o que for maior. So' o alvo
+// deixava o mip abaixo do que a grade carrega (bancada de relevo: piso de
+// 8 px mandando, grade medida de 0,25-0,28 u). Depende so' da posicao e da
+// camera: os dois patches de uma aresta e o model.vert chegam ao mesmo
+// numero. Sem banda perto (celular) fica so' o alvo, como antes.
+float dispSpacingAt(vec3 p) {
+    float s = u_tessParams2.y;
+    if (s <= 0.0 || u_tessNearDistance <= 0.0) return s;
+    float d = max(distance(p, u_cameraPos), 1e-3);
+    float k = tessNearWeight(d);
+    float pxPerU = 0.5 * u_screenResolution.y * abs(u_projection[1][1]) / d;
+    return max(mix(s, u_tessNearSpacing, k), mix(8.0, u_tessNearEdgePixels, k) / max(pxPerU, 1e-6));
+}
+
 float dispMipFloor(uint texIdx) {
-    float spacing = u_tessParams2.y;
+    float spacing = g_dispSpacing > 0.0 ? g_dispSpacing : u_tessParams2.y;
     float uvPerU = push.uvScale.z;
     if (spacing <= 0.0 || uvPerU <= 0.0) return 0.0;
     float texels = float(textureSize(u_textures[nonuniformEXT(texIdx)], 0).x);
@@ -320,6 +358,7 @@ void main() {
         float f = lut8(u_tessLut0, u_tessLut1, d / max(u_tessParams.x, 1.0));
         float amp = clamp((f - 1.0) / max(u_tessParams.w - 1.0, 1e-3), 0.0, 1.0);
         if (amp > 0.0) {
+            g_dispSpacing = dispSpacingAt(wp);
             // FONTE DE ALTURA.
             // 1) alfa do MRAH-W, que e' a altura cozida no load (PbrMapGen
             //    escreve height em .a; .b e' a cavidade/AO).
