@@ -655,6 +655,10 @@ public:
     // Recalculado em drawGameFx2D, no mesmo quadro do render.
     void setUiAnchor(const std::string& selector, const std::string& character, float dyPx);
     void clearUiAnchor(const std::string& selector);
+    // Retrato (ui.portrait): o elemento mostra o personagem de frente, no
+    // recorte `crop` (x, y, w, h em fracao do primeiro quadro parado).
+    void setUiPortrait(const std::string& selector, const std::string& character, const Vec4& crop);
+    void clearUiPortrait(const std::string& selector);
     // Anda até `target` pelo caminho achado; `seconds` > 0 acerta a velocidade
     // para chegar nesse tempo (0: passo normal).
     void walkCharacter(int index, const Vec3& target, float seconds);
@@ -770,6 +774,26 @@ public:
     Vec4 m_uiArea{0.0f};        // x, y, w, h da ultima interface desenhada (drawGameFx2D)
     struct UiAnchor { std::string selector, character; float dyPx = 0.0f; };
     std::vector<UiAnchor> m_uiAnchors;
+    // Retrato: relogio proprio do parado; `ref` = caixa do primeiro quadro
+    // parado em pixels (x0, y0, x1, y1, y para baixo), da folha `refSprite`.
+    struct UiPortrait {
+        std::string selector, character, refSprite;
+        Vec4 crop{0.0f, 0.0f, 1.0f, 1.0f};
+        Vec4 ref{0.0f};
+        int frame = 0;
+        float timer = 0.0f;
+    };
+    std::vector<UiPortrait> m_uiPortraits;
+    // Tempo de jogo desde o ultimo desenho da interface (updateCharacters
+    // soma): o parado do retrato anda no relogio dos personagens, nao no do
+    // ImGui (tempo real, sem o passo fixo nem a pausa).
+    float m_portraitDt = 0.0f;
+    void updateUiPortraits();
+    // Quadro de sprite (textura de personagem) como textura do ImGui, criada
+    // na primeira vez que um retrato a mostra; sai com a folha
+    // (cleanupSpriteTextures).
+    std::unordered_map<VkImageView, VkDescriptorSet> m_uiSpriteSets;
+    void* uiSpriteTexture(const TextureResource& tex);
     Vec4 m_minimapScreen{0.0f}; // x0, y0, x1, y1 do minimapa no ultimo quadro em que apareceu
     int m_minimapScreenFrame = -100;
     // Textura de um PNG para a UI em CSS, carregada na primeira vez e

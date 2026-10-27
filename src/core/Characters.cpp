@@ -197,6 +197,7 @@ void Engine::releaseCharacterSpriteCache(uint32_t keepGenerations) {
 
 void Engine::updateCharacters(float dt, bool moveAlongPaths) {
     m_groundRings.clear();
+    m_portraitDt += dt;
     for (size_t i = 0; i < m_characters.size(); ++i) {
         SceneCharacter& c = m_characters[i];
         if (c.parked || c.removed || !moveAlongPaths) continue;
@@ -567,6 +568,130 @@ void Engine::clearUiAnchor(const std::string& selector) {
     m_uiDocument.clearAnchor(selector);
 }
 
+void Engine::setUiPortrait(const std::string& selector, const std::string& character, const Vec4& crop) {
+    for (UiPortrait& p : m_uiPortraits) {
+        if (p.selector != selector) continue;
+        if (p.character != character) p = UiPortrait{};
+        p.selector = selector;
+        p.character = character;
+        p.crop = crop;
+        return;
+    }
+    UiPortrait p;
+    p.selector = selector;
+    p.character = character;
+    p.crop = crop;
+    m_uiPortraits.push_back(p);
+}
+
+void Engine::clearUiPortrait(const std::string& selector) {
+    for (size_t i = 0; i < m_uiPortraits.size(); ++i) {
+        if (m_uiPortraits[i].selector != selector) continue;
+        m_uiPortraits.erase(m_uiPortraits.begin() + static_cast<std::ptrdiff_t>(i));
+        break;
+    }
+    m_uiDocument.clearPortrait(selector);
+}
+
+namespace {
+
+// Retangulo de uma parte do quadro em pixels (y para baixo, 0 no pe'): a
+// mesma base no chao do drawCharacter (topo = -offsetY + altura).
+Vec4 portraitPartRect(const ActSprite& spr, const Engine::TextureResource& tex) {
+    const float w = static_cast<float>(tex.width) * spr.scaleX;
+    const float h = static_cast<float>(tex.height) * spr.scaleY;
+    const float x = static_cast<float>((spr.flags & 1) != 0 ? -spr.offsetX : spr.offsetX);
+    const float y = static_cast<float>(spr.offsetY);
+    return Vec4(x - 0.5f * w, y - h, x + 0.5f * w, y);
+}
+
+const Engine::TextureResource* portraitTexture(const Engine::LoadedSprite& ls, const ActSprite& spr) {
+    const int idx = spr.index + (spr.type == 1 ? static_cast<int>(ls.indexedTextureCount) : 0);
+    if (idx < 0 || idx >= static_cast<int>(ls.textures.size())) return nullptr;
+    const Engine::TextureResource& tex = ls.textures[static_cast<size_t>(idx)];
+    return tex.isIndexed ? nullptr : &tex; // paleta: o ImGui nao converte o indice
+}
+
+} // namespace
+
+// Retrato de frente (direcao 0). Animacao com nome (o golpe, o "hit" que o
+// jogo toca no dano) vai no mesmo quadro do personagem, entao reage no
+// quadro em que ele reage; sem ela, o parado com relogio proprio no atraso
+// da folha (andar no mapa nao mexe o retrato). Clarao e opacidade do
+// personagem entram na tinta. Nada aqui passa pelo script.
+void Engine::updateUiPortraits() {
+    const float dt = m_portraitDt;
+    m_portraitDt = 0.0f;
+    for (UiPortrait& p : m_uiPortraits) {
+        std::vector<UiDocument::PortraitPart> parts;
+        const int idx = findCharacter(p.character);
+        const SceneCharacter* c = idx >= 0 ? &m_characters[static_cast<size_t>(idx)] : nullptr;
+        const LoadedSprite* ls = c ? &c->look : nullptr;
+        if (!c || !c->visible || !ls->loaded || ls->act.actions.empty() || ls->act.actions[0].frames.empty()) {
+            m_uiDocument.setPortrait(p.selector, {}, 1.0f);
+            continue;
+        }
+        if (p.refSprite != c->sprite) {
+            // Caixa de referencia fixa (o primeiro quadro parado): o recorte
+            // nao pula quando um golpe tem quadro mais largo.
+            p.refSprite = c->sprite;
+            Vec4 b(1e9f, 1e9f, -1e9f, -1e9f);
+            for (const ActSprite& spr : ls->act.actions[0].frames[0].sprites) {
+                const TextureResource* tex = portraitTexture(*ls, spr);
+                if (!tex) continue;
+                const Vec4 q = portraitPartRect(spr, *tex);
+                b = Vec4(std::min(b.x, q.x), std::min(b.y, q.y), std::max(b.z, q.z), std::max(b.w, q.w));
+            }
+            p.ref = b.z > b.x ? b : Vec4(-1.0f, -1.0f, 1.0f, 1.0f);
+            p.frame = 0;
+            p.timer = 0.0f;
+        }
+        const LoadedSprite::Named* named = c->action.empty() ? nullptr : ls->findNamed(c->action);
+        size_t actionIdx = named ? named->first : 0;
+        if (actionIdx >= ls->act.actions.size()) actionIdx = 0;
+        const auto& action = ls->act.actions[actionIdx];
+        const int quadros = static_cast<int>(action.frames.size());
+        if (quadros == 0) continue;
+        int frame = 0;
+        if (named) {
+            frame = c->frame % quadros;
+            p.frame = 0;
+            p.timer = 0.0f;
+        } else {
+            const float delay = action.delay > 0 ? action.delay : 150.0f;
+            p.timer += dt * 1000.0f;
+            while (p.timer >= delay) {
+                p.timer -= delay;
+                p.frame = (p.frame + 1) % quadros;
+            }
+            frame = p.frame % quadros;
+        }
+
+        const SceneCharacter::Fx& f = c->fx;
+        const float flash = f.flashLeft > 0.0f ? f.flashLeft / std::max(1e-4f, f.flashTotal) : 0.0f;
+        const Vec3 tinta = glm::mix(Vec3(1.0f), f.flashColor, flash);
+        const Vec4 v(p.ref.x + p.crop.x * (p.ref.z - p.ref.x), p.ref.y + p.crop.y * (p.ref.w - p.ref.y),
+                     std::max(1e-3f, p.crop.z * (p.ref.z - p.ref.x)), std::max(1e-3f, p.crop.w * (p.ref.w - p.ref.y)));
+        for (const ActSprite& spr : action.frames[static_cast<size_t>(frame)].sprites) {
+            const TextureResource* tex = portraitTexture(*ls, spr);
+            void* set = tex ? uiSpriteTexture(*tex) : nullptr;
+            if (!set) continue;
+            const Vec4 q = portraitPartRect(spr, *tex);
+            UiDocument::PortraitPart part;
+            part.tex = set;
+            part.rect = Vec4((q.x - v.x) / v.z, (q.y - v.y) / v.w, (q.z - v.x) / v.z, (q.w - v.y) / v.w);
+            if ((spr.flags & 1) != 0) part.uv = Vec4(1.0f, 0.0f, 0.0f, 1.0f);
+            const Vec4 cor = Vec4(Vec3(spr.color) * tinta, spr.color.a * f.fade);
+            part.tint = IM_COL32(static_cast<int>(std::clamp(cor.r, 0.0f, 1.0f) * 255.0f + 0.5f),
+                                 static_cast<int>(std::clamp(cor.g, 0.0f, 1.0f) * 255.0f + 0.5f),
+                                 static_cast<int>(std::clamp(cor.b, 0.0f, 1.0f) * 255.0f + 0.5f),
+                                 static_cast<int>(std::clamp(cor.a, 0.0f, 1.0f) * 255.0f + 0.5f));
+            parts.push_back(part);
+        }
+        m_uiDocument.setPortrait(p.selector, std::move(parts), v.z / v.w);
+    }
+}
+
 void Engine::drawGameFx2D(float x, float y, float w, float h, float dt) {
     // Desenho 2D do jogo por cima da cena. O canvas e' do jogo (o script
     // monta os nos); o motor so' atualiza os tempos e desenha.
@@ -589,6 +714,7 @@ void Engine::drawGameFx2D(float x, float y, float w, float h, float dt) {
         const bool on = characterHeadScreen(findCharacter(a.character), p);
         m_uiDocument.setAnchor(a.selector, p.x - x, p.y - y - a.dyPx, on);
     }
+    updateUiPortraits();
     m_uiDocument.draw(dl, x, y, w, h);
     m_uiCanvas.update(dt);
     m_uiCanvas.draw(dl, x, y, w, h, m_camera.viewProjNoJitter());

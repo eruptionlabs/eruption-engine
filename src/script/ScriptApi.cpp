@@ -1380,6 +1380,26 @@ int ui_anchor(lua_State* L) {
     eng().setUiAnchor(sel, luaL_checkstring(L, 2), static_cast<float>(luaL_optnumber(L, 3, 0.0)));
     return 0;
 }
+// Retrato de um personagem dentro do elemento; nil solta.
+int ui_portrait(lua_State* L) {
+    const char* sel = luaL_checkstring(L, 1);
+    if (lua_isnoneornil(L, 2)) {
+        eng().clearUiPortrait(sel);
+        return 0;
+    }
+    const char* nome = luaL_checkstring(L, 2);
+    Vec4 crop(0.0f, 0.0f, 1.0f, 1.0f);
+    if (lua_istable(L, 3)) {
+        for (int i = 0; i < 4; ++i) {
+            lua_rawgeti(L, 3, i + 1);
+            if (lua_isnumber(L, -1)) crop[i] = static_cast<float>(lua_tonumber(L, -1));
+            lua_pop(L, 1);
+        }
+        if (crop.z <= 0.0f || crop.w <= 0.0f) luaL_error(L, "ui.portrait: crop width and height must be > 0");
+    }
+    eng().setUiPortrait(sel, nome, crop);
+    return 0;
+}
 // Selo sobre um elemento: texto ("+", "3") ou um PNG do projeto; nil tira.
 int ui_badge(lua_State* L) {
     const char* sel = luaL_checkstring(L, 1);
@@ -2195,7 +2215,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg ui[] = {{"message", ui_message}, {"minimap_label", ui_minimap_label}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
                                   {"load", ui_load}, {"place", ui_place}, {"image_rect", ui_image_rect}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
                                   {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked}, {"dragged", ui_dragged}, {"size", ui_size}, {"held", ui_held}, {"released", ui_released},
-                                  {"reset", ui_reset}, {"anchor", ui_anchor}, {"badge", ui_badge},
+                                  {"reset", ui_reset}, {"anchor", ui_anchor}, {"portrait", ui_portrait}, {"badge", ui_badge},
                                   {"graph", ui_graph}, {"graph_clicked", ui_graph_clicked}, {"graph_held", ui_graph_held}, {nullptr, nullptr}};
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
@@ -2342,6 +2362,14 @@ declare ui: {
     -- the camera of that frame. Its children (--parent) follow it, and it
     -- hides while the character is off screen. character = nil lets go.
     anchor: (selector: string, character: string?, dy: number?) -> (),
+    -- The element shows a character facing front, cropped to `crop` = {x, y,
+    -- w, h} in fractions of its first idle frame (default the whole frame,
+    -- {0, 0, 1, 0.4} for the head), fit inside without stretching. It plays
+    -- the idle at the sheet's delay; a named animation the character plays
+    -- (characters.play, a hit) shows on the same frame, and its flash and
+    -- fade tint the portrait. No script runs per frame. character = nil
+    -- lets go.
+    portrait: (selector: string, character: string?, crop: { number }?) -> (),
     -- A badge on the element's top-right corner: text ("+", "3") or a PNG of
     -- the project; nil removes it. It hides with the element and has its own
     -- touch area of at least 48 dp: ui.clicked(selector .. ":badge"), and a

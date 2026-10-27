@@ -54,6 +54,14 @@ declare ui: {
     -- the camera of that frame. Its children (--parent) follow it, and it
     -- hides while the character is off screen. character = nil lets go.
     anchor: (selector: string, character: string?, dy: number?) -> (),
+    -- The element shows a character facing front, cropped to `crop` = {x, y,
+    -- w, h} in fractions of its first idle frame (default the whole frame,
+    -- {0, 0, 1, 0.4} for the head), fit inside without stretching. It plays
+    -- the idle at the sheet's delay; a named animation the character plays
+    -- (characters.play, a hit) shows on the same frame, and its flash and
+    -- fade tint the portrait. No script runs per frame. character = nil
+    -- lets go.
+    portrait: (selector: string, character: string?, crop: { number }?) -> (),
     -- A badge on the element's top-right corner: text ("+", "3") or a PNG of
     -- the project; nil removes it. It hides with the element and has its own
     -- touch area of at least 48 dp: ui.clicked(selector .. ":badge"), and a

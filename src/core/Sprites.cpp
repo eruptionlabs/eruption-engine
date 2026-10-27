@@ -14,6 +14,8 @@
 #include "utils/Profiler.hpp"
 #include "formats/SpriteTypes.hpp"
 #include "core/JobSystem.hpp"
+#include <imgui.h>
+#include <imgui_impl_vulkan.h>
 #include <stb_image.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -716,6 +718,19 @@ void Engine::cleanupSpriteTextures(LoadedSprite& ls) {
         VkImageView view = tex.view;
         VkImage image = tex.image;
         VmaAllocation alloc = tex.alloc;
+        // Retrato que mostrava o quadro: o set do ImGui sai junto, depois dos
+        // quadros em voo que ainda o desenham. Na saida a fila roda depois do
+        // ImGui_ImplVulkan_Shutdown: ai o pool do ImGui (destruido em
+        // seguida) e' quem solta o set; chamar o backend morto derrubava o
+        // processo (139).
+        if (auto it = m_uiSpriteSets.find(view); it != m_uiSpriteSets.end()) {
+            VkDescriptorSet set = it->second;
+            m_uiSpriteSets.erase(it);
+            m_vulkan.deferSlotImageCleanup([set]() {
+                if (ImGui::GetCurrentContext() && ImGui::GetIO().BackendRendererUserData)
+                    ImGui_ImplVulkan_RemoveTexture(set);
+            });
+        }
         m_vulkan.deferSlotImageCleanup([dev, allocator, view, image, alloc]() {
             if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
             if (image != VK_NULL_HANDLE) vmaDestroyImage(allocator, image, alloc);

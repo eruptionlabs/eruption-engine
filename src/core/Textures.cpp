@@ -700,5 +700,20 @@ void* Engine::uiImageTexture(const std::string& png) {
     return pos->second.set;
 }
 
+void* Engine::uiSpriteTexture(const TextureResource& tex) {
+#if defined(__EMSCRIPTEN__)
+    (void)tex;
+    return nullptr; // navegador: o ImGui desenha por OpenGL, sem a textura Vulkan
+#else
+    if (tex.view == VK_NULL_HANDLE) return nullptr;
+    auto it = m_uiSpriteSets.find(tex.view);
+    if (it != m_uiSpriteSets.end()) return it->second;
+    const VkDescriptorSet set =
+        ImGui_ImplVulkan_AddTexture(m_nearestSampler, tex.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    m_uiSpriteSets.emplace(tex.view, set);
+    return set;
+#endif
+}
+
 } // namespace eruption
 
