@@ -277,22 +277,35 @@ bool synthesizePbrFromPixels(const std::vector<uint8_t>& pixels, int width, int 
     src.width = width;
     src.height = height;
     src.channels = channels;
-    // Work at a modest resolution: derived detail does not need 4k and this
-    // keeps the whole synth well under a millisecond.
-    // 1024 (era 512): de perto, detalhe derivado em 512 aparece ampliado e
-    // vira ruído. O .etex comprime isso depois, então o custo é de load.
+    // REDE NA RESOLUCAO DA TEXTURA (ate' kNeuralMaxSide). Ela foi treinada em
+    // recortes de 256 na resolucao ORIGINAL; reduzir para 512 antes mudava a
+    // escala que ela ve' e entregava a altura com metade da resolucao do
+    // albedo. Na bancada de relevo (rochas com albedo 1024) a fenda tinha 1-3
+    // texels de altura - menos que a grade de vertices consegue cavar; em
+    // 1024 ela tem 2-6, e a energia fina da altura (passa-alta sigma 2 texels)
+    // sobe 2,7x (0,096 -> 0,256). Custo: 4x a inferencia e o refino, so' no
+    // bake - o pack guarda o resultado.
+    constexpr int kNeuralMaxSide = 1024;
+    if (neuralPbrAvailable()) {
+        // RGBA8 contiguo (a fonte pode vir com 3 canais; downscaleRGBA so' aceita 4).
+        int nw = width, nh = height;
+        std::vector<uint8_t> netRgba(static_cast<size_t>(nw) * nh * 4, 255);
+        for (size_t i = 0; i < static_cast<size_t>(nw) * nh; ++i)
+            for (int c = 0; c < 3; ++c) netRgba[i * 4 + c] = pixels[i * channels + c];
+        ImageUtils::downscaleRGBA(nw, nh, netRgba, kNeuralMaxSide);
+        NeuralPbrMaps nn;
+        if (neuralPbrInfer(netRgba.data(), nw, nh, nn) && fillPbrFromNeural(nn, netRgba.data(), outMrahw, outNormal))
+            return true;
+    }
+
+    // Caminho classico em resolucao modesta: o detalhe derivado do albedo
+    // nao precisa de 4k e a sintese fica barata.
     ImageUtils::downscaleRGBA(src.width, src.height, src.pixels, 512);
     const int w = src.width, h = src.height, ch = src.channels;
     if (w < 4 || h < 4) return false;
-
-    // RGBA8 contiguo pro modulo (a fonte pode vir com 3 canais).
     std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4, 255);
     for (size_t i = 0; i < static_cast<size_t>(w) * h; ++i)
         for (int c = 0; c < 3; ++c) rgba[i * 4 + c] = src.pixels[i * ch + c];
-
-    // Rede neural configurada localmente (NeuralPbr.hpp), quando existe.
-    NeuralPbrMaps nn;
-    if (neuralPbrInfer(rgba.data(), w, h, nn) && fillPbrFromNeural(nn, rgba.data(), outMrahw, outNormal)) return true;
 
     // Altura, normal e cavidade vem do MESMO lugar que o cooker offline
     // (HeightFromAlbedo.hpp) - antes cada um tinha a sua conta e nenhuma

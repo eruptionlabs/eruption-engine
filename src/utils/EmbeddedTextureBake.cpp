@@ -121,8 +121,9 @@ void logSynthesisLevels(const NeuralPbrStats& before, size_t synthesized, uint64
 // (modelo + mapeamento). Trocar de modelo invalida o pack.
 // O que o motor faz com a saida da rede tambem muda o pack: a versao do
 // pos-processo entra na chave (1 = altura refinada pelas linhas do albedo,
-// refineHeightWithAlbedoLines). Pack de rede antigo e' re-assado uma vez.
-constexpr uint32_t kNeuralPostVersion = 1u;
+// refineHeightWithAlbedoLines; 2 = rede na resolucao da textura ate' 1024,
+// synthesizePbrFromPixels). Pack de rede antigo e' re-assado uma vez.
+constexpr uint32_t kNeuralPostVersion = 2u;
 
 uint32_t synthKey(bool synthPbr) {
     if (!synthPbr) return 0u;
