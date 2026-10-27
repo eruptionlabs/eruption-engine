@@ -66,6 +66,12 @@ public:
             float textColor[3] = {1.0f, 0.235f, 0.157f};
             bool hasBackground = false;
             float background[3] = {0.0f, 0.0f, 0.0f};
+            // Contorno das letras; largura < 0 = automatica (a escala), 0 = sem.
+            float strokeColor[3] = {0.0f, 0.0f, 0.0f};
+            float strokeWidth = -1.0f;
+            // Parte final da barra que e' da fila do jogo (loading.game_progress
+            // durante o loading.hold); o motor fica com o resto.
+            float gameShare = 0.0f;
         };
         std::optional<LoadingScreen> loading;
         std::string loadingJson; // o bloco como veio: saveManifest o devolve inteiro

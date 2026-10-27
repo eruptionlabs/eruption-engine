@@ -1933,6 +1933,10 @@ int loading_held(lua_State* L) {
     lua_pushboolean(L, eng().loadingHeld());
     return 1;
 }
+int loading_game_progress(lua_State* L) {
+    eng().setGameLoadProgress(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2)));
+    return 0;
+}
 int loading_progress(lua_State* L) {
     float done = 0.0f, total = 1.0f;
     bool ready = false;
@@ -2336,7 +2340,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "fx", fx);
     lib(L, "perf", perf);
     static const luaL_Reg loading[] = {
-        {"hold", loading_hold}, {"release", loading_release}, {"held", loading_held}, {"progress", loading_progress}, {nullptr, nullptr}};
+        {"hold", loading_hold}, {"release", loading_release}, {"held", loading_held}, {"progress", loading_progress},
+        {"game_progress", loading_game_progress}, {nullptr, nullptr}};
     lib(L, "loading", loading);
     registerVfxApi(L, engine);
     registerObjectsApi(L, engine);
@@ -2979,6 +2984,12 @@ declare loading: {
     -- ready (and done/total = 1) only when nothing is pending; then it stays
     -- ready until the next map load (later streaming is the game running).
     progress: () -> (number, number, boolean),
+    -- The game's own queue while the screen is held: done of total steps.
+    -- The last part of the bar is the game's ("game_share" in the
+    -- project's "loading" block, e.g. 0.3). Between calls the bar keeps
+    -- moving at the pace of the steps so far, slowing down when a step
+    -- runs long; it shows 100% on the frame of release.
+    game_progress: (done: number, total: number) -> (),
 }
 )" + std::string(vfxApiDefinitions()) + visionApiDefinitions() + objectsApiDefinitions() + telemetryApiDefinitions() +
            NativeModule::apiDefinitions();
