@@ -23,13 +23,28 @@ layout(push_constant) uniform RingPush {
 
 layout(location = 0) out vec4 outColor;
 
+// Ponto de mundo visivel no pixel `q` (preso a' borda da tela).
+vec3 worldAt(ivec2 q) {
+    ivec2 tam = textureSize(u_sceneDepth, 0);
+    q = clamp(q, ivec2(0), tam - 1);
+    float d = texelFetch(u_sceneDepth, q, 0).r;
+    vec2 uv = (vec2(q) + 0.5) / vec2(tam);
+    vec4 viewPos = u_inverseProjection * vec4(uv * 2.0 - 1.0, d, 1.0);
+    return (u_inverseView * vec4(viewPos.xyz / viewPos.w, 1.0)).xyz;
+}
+
+// O vizinho mais perto (esquerda/direita ou baixo/cima): na quina de um
+// objeto o outro lado e' outra superficie e entortaria a normal.
+vec3 tangente(vec3 P, vec3 a, vec3 b) {
+    vec3 ta = P - a, tb = b - P;
+    return dot(ta, ta) < dot(tb, tb) ? ta : tb;
+}
+
 void main() {
     ivec2 px = ivec2(gl_FragCoord.xy);
     float depth = texelFetch(u_sceneDepth, px, 0).r;
     if (depth >= 1.0) discard; // ceu
-    vec2 uv = (vec2(px) + 0.5) / vec2(textureSize(u_sceneDepth, 0));
-    vec4 viewPos = u_inverseProjection * vec4(uv * 2.0 - 1.0, depth, 1.0);
-    vec3 P = (u_inverseView * vec4(viewPos.xyz / viewPos.w, 1.0)).xyz;
+    vec3 P = worldAt(px);
     vec3 local = P - ring.center.xyz;
 
     // Distancia com sinal a forma no plano XZ (negativa dentro), borda de um
@@ -80,7 +95,15 @@ void main() {
     // So' o chao perto do pe': parede ou laje muito acima/abaixo nao.
     float altura = smoothstep(-ring.shape.z, -0.5 * ring.shape.z, local.y) *
                    (1.0 - smoothstep(0.5 * ring.shape.y, ring.shape.y, local.y));
-    float a = ring.color.a * cobre * altura;
+    // Parede, cerca e paredao de rocha nao: a normal da superficie (do depth,
+    // 4 vizinhos a 4 px: a 1 px o degrau miudo do chao virava parede) com y abaixo de 0,5 apaga; 0,62 ja' pinta inteiro, entao a
+    // rampa de 45 graus (0,71) fica toda. Lida depois do corte da forma:
+    // so' quem a forma cobre paga as 4 leituras.
+    vec3 tx = tangente(P, worldAt(px - ivec2(4, 0)), worldAt(px + ivec2(4, 0)));
+    vec3 ty = tangente(P, worldAt(px - ivec2(0, 4)), worldAt(px + ivec2(0, 4)));
+    vec3 n = cross(tx, ty);
+    float ny = abs(n.y) * inversesqrt(max(dot(n, n), 1e-20));
+    float a = ring.color.a * cobre * altura * smoothstep(0.5, 0.62, ny);
     if (a <= 0.0) discard;
     outColor = vec4(ring.color.rgb, a);
 }
