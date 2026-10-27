@@ -9,6 +9,7 @@
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/PostFormat.hpp"
+#include "core/LoadingScreen.hpp"
 #include <stb_image.h>
 #include <vk_mem_alloc.h>
 #include <imgui.h>
@@ -59,6 +60,12 @@ void Engine::presentLoadingScreen(const std::string& mapName, const std::string&
     }
 
     m_vulkan.cmdImageBarrier(cmd, m_vulkan.swapImage(imageIndex), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    // Fundo do projeto (bloco "loading"): toda tela de carga limpa nele,
+    // inclusive a de troca de mapa, que antes desenhava sobre o ultimo quadro.
+    if (const LoadingScreenStyle* style = projectLoadingStyle(); style && style->hasBackground) {
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.clearValue.color = {{style->background[0], style->background[1], style->background[2], 1.0f}};
+    }
     m_vulkan.cmdBeginRendering(cmd, {colorAttachment}, nullptr, nullptr, m_vulkan.swapExtent());
 
     renderLoadingUI(mapName, task, progress);
@@ -97,6 +104,13 @@ void Engine::renderLoadingProgress() {
     // Smooth follower for the bottom loading bar progress shown by the logo glow.
     if (progress > m_splashBarProgress) {
         m_splashBarProgress += (progress - m_splashBarProgress) * 0.5f;
+    }
+
+    // Projeto com tela de carga propria: a mesma barra, sem fundo (o jogo
+    // continua desenhado atras durante a troca em segundo plano).
+    if (const LoadingScreenStyle* style = projectLoadingStyle()) {
+        drawProjectLoadingBar(ImGui::GetForegroundDrawList(), ImGui::GetIO().DisplaySize, *style, mapName, task, progress);
+        return;
     }
 
     // Draw the existing Van Halen style bar in the bottom-right corner
@@ -391,6 +405,14 @@ void Engine::renderLoadingUI(const std::string& mapName, const std::string& task
 
     ImGuiIO& io = ImGui::GetIO();
     ImVec2 displaySize = io.DisplaySize;
+
+    // Projeto com tela de carga propria: so' ela, do boot ao fim, sem o logo.
+    if (const LoadingScreenStyle* style = projectLoadingStyle()) {
+        drawProjectLoadingBar(ImGui::GetForegroundDrawList(), displaySize, *style, mapName, task, progress);
+        ImGui::Render();
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), m_vulkan.currentCmdBuf());
+        return;
+    }
 
     if (m_isInitialBoot) {
         ImDrawList* drawList = ImGui::GetBackgroundDrawList();

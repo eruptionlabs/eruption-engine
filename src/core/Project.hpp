@@ -48,6 +48,27 @@ public:
         // controle, o overlay F3, as barras e o minimapa. Jogo de verdade
         // deixa de fora e sai limpo, como o exportado.
         bool devTools = false;
+        // TELA DE CARGA (bloco "loading", todas as chaves opcionais). Com o
+        // bloco, o motor mostra so' a barra padrao assim ajustada, do primeiro
+        // quadro do boot ao fim de cada carga de mapa - sem o logo do motor e
+        // sem a etapa trocando embaixo (salvo text vazio). Um jogo que pintava a
+        // propria tela de "Carregando" por script ficava com duas em
+        // sequencia: a do motor ate' o script rodar, e depois a dele.
+        //   text: "Carregando" (vazio = a etapa do motor e o mapa)
+        //   scale: 3 (barra, texto e margem)   position: "corner" | "center"
+        //   bar_color, text_color (padrao = a da barra), background:
+        //   "#rrggbb" ou [r, g, b] de 0 a 1
+        struct LoadingScreen {
+            std::string text;
+            float scale = 1.0f;
+            bool center = false;
+            float barColor[3] = {1.0f, 0.235f, 0.157f};
+            float textColor[3] = {1.0f, 0.235f, 0.157f};
+            bool hasBackground = false;
+            float background[3] = {0.0f, 0.0f, 0.0f};
+        };
+        std::optional<LoadingScreen> loading;
+        std::string loadingJson; // o bloco como veio: saveManifest o devolve inteiro
     };
 
     static Project& instance();
@@ -78,6 +99,7 @@ public:
     // Blocos "spawn" e "camera" de um JSON (o manifesto, ou o
     // data/launcher_config.json do jogo exportado, que os leva copiados).
     static void readFraming(const nlohmann::json& j, Manifest& m);
+    static void readLoading(const nlohmann::json& j, Manifest& m);
 
     static constexpr const char* kManifestName = "project.eruption";
     // Subpastas de conteudo criadas por create() (e esperadas pelo editor).
