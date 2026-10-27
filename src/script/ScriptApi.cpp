@@ -561,6 +561,34 @@ int characters_hide(lua_State* L) {
     checkCharacter(L, 1)->visible = false;
     return 0;
 }
+// Anel no chao preso ao personagem; nil tira.
+int characters_ring(lua_State* L) {
+    Engine::SceneCharacter* c = checkCharacter(L, 1);
+    if (lua_isnoneornil(L, 2)) {
+        c->ringRadius = 0.0f;
+        return 0;
+    }
+    luaL_checktype(L, 2, LUA_TTABLE);
+    auto campo = [L](const char* k, float def) {
+        lua_getfield(L, 2, k);
+        const float v = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : def;
+        lua_pop(L, 1);
+        return v;
+    };
+    const float raio = campo("radius", 0.0f);
+    if (raio <= 0.0f) luaL_error(L, "characters.ring: radius must be > 0");
+    lua_getfield(L, 2, "color");
+    Vec3 cor(1.0f);
+    if (lua_isvector(L, -1)) {
+        const float* v = lua_tovector(L, -1);
+        cor = Vec3(v[0], v[1], v[2]);
+    }
+    lua_pop(L, 1);
+    c->ringRadius = raio;
+    c->ringWidth = std::clamp(campo("width", std::max(1.0f, raio * 0.15f)), 0.1f, raio);
+    c->ringColor = Vec4(cor, std::clamp(campo("alpha", 0.8f), 0.0f, 1.0f));
+    return 0;
+}
 int characters_set_sprite(lua_State* L) {
     ScriptHost::NativeWork trabalho;
     checkCharacter(L, 1);
@@ -2212,7 +2240,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"walking", characters_walking}, {"face", characters_face}, {"show", characters_show}, {"say", characters_say}, {"play", characters_play}, {"animation", characters_animation},
         {"follow", characters_follow}, {"patrol", characters_patrol}, {"stop", characters_stop},
         {"set_shadow", characters_set_shadow},
-        {"hide", characters_hide}, {"set_sprite", characters_set_sprite},
+        {"hide", characters_hide}, {"ring", characters_ring}, {"set_sprite", characters_set_sprite},
         {"add", characters_add},
         {"flash", characters_flash}, {"shake", characters_shake}, {"lunge", characters_lunge},
         {"pop", characters_pop}, {"fade", characters_fade}, {"set_scale", characters_set_scale}, {"head_screen", characters_head_screen},
@@ -2605,6 +2633,10 @@ declare characters: {
     -- Top of the character's sprite on screen, in UI pixels (those of
     -- ui.size), and whether it is on screen this frame.
     head_screen: (name: string) -> (number, number, boolean),
+    -- A ring on the ground under the character's feet, lying on the relief.
+    -- It follows hide/show, fade and team vision. width defaults to 15% of
+    -- the radius (at least 1), color to white, alpha to 0.8. nil removes it.
+    ring: (name: string, ring: { radius: number, color: vector?, alpha: number?, width: number? }?) -> (),
 }
 
 declare camera: {

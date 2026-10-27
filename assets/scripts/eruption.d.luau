@@ -341,6 +341,10 @@ declare characters: {
     -- Top of the character's sprite on screen, in UI pixels (those of
     -- ui.size), and whether it is on screen this frame.
     head_screen: (name: string) -> (number, number, boolean),
+    -- A ring on the ground under the character's feet, lying on the relief.
+    -- It follows hide/show, fade and team vision. width defaults to 15% of
+    -- the radius (at least 1), color to white, alpha to 0.8. nil removes it.
+    ring: (name: string, ring: { radius: number, color: vector?, alpha: number?, width: number? }?) -> (),
 }
 
 declare camera: {

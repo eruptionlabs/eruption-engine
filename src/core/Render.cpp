@@ -1234,6 +1234,19 @@ void Engine::render() {
         }
     }
 
+    // Aneis de chao (characters.ring): decal como o disco, com qualquer sombra.
+    if (!m_groundRings.empty()) {
+        VkRenderingAttachmentInfo ringColor{};
+        ringColor.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        ringColor.imageView = m_deferredLighting.litImageView();
+        ringColor.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ringColor.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        ringColor.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        m_vulkan.cmdBeginRendering(cmd, {ringColor}, nullptr, nullptr, renderExtent());
+        m_spriteRenderer.renderGroundRings(cmd, frameUbo, m_groundRings, m_gbuffer.depthView(), m_gbuffer.pbrView());
+        m_vulkan.cmdEndRendering(cmd);
+    }
+
     // Cloud shadows: project cloud coverage onto the lit scene using the depth buffer.
     if (m_cloudLayersEnabled) {
         // ERUPTION_TEST_NO_CLOUD_SHADOW=1 (debug): skip per-layer shadows to isolate

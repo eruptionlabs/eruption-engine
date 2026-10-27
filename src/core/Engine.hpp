@@ -400,6 +400,9 @@ public:
         Vec2 head{0.0f};
         Vec3 headAnchor{0.0f};
         int headFrame = -10;
+        // characters.ring: raio 0 = sem anel; cor com o alfa em a.
+        float ringRadius = 0.0f, ringWidth = 0.0f;
+        Vec4 ringColor{1.0f};
         Vec3 followTarget{0.0f};
     };
     struct TextureStats {
@@ -1135,6 +1138,9 @@ private:
     DeferredLighting m_deferredLighting;
     PostProcessor m_postProcessor;
     Vision m_vision;
+    // Aneis dos personagens desenhados neste quadro (drawCharacter), para o
+    // decal depois da luz.
+    std::vector<GroundRing> m_groundRings;
     VisionMap m_visionMap;
     // Minimapa: escuro da visao no mapa inteiro, camada preta por cima da
     // imagem (ImGui). Quadro do minimapa: x, z do centro e meio lado; e o
