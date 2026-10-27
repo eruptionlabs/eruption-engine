@@ -305,6 +305,9 @@ declare characters: {
     -- later with one of them only uploads it. One file or a list; still valid
     -- on the next map (call it with world.preload_map).
     preload: (sprites: string | { string }) -> (),
+    -- True when the sheet asked with preload is prepared, or when nothing is
+    -- pending for it (never asked, PNG only, already on the GPU).
+    preload_ready: (sprite: string) -> boolean,
     -- Shadow of every character: "planar" (cast by the sun), "circle" (a
     -- contact disc) or "lights" (the disc plus a shadow cast by each of the
     -- two strongest nearby lights) or "map" (the sprite's silhouette in the sun's

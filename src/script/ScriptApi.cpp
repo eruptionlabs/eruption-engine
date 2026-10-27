@@ -473,6 +473,10 @@ int characters_preload(lua_State* L) {
     }
     return 0;
 }
+int characters_preload_ready(lua_State* L) {
+    lua_pushboolean(L, eng().characterSpritePreloaded(luaL_checkstring(L, 1)));
+    return 1;
+}
 int characters_exists(lua_State* L) {
     lua_pushboolean(L, eng().findCharacter(luaL_checkstring(L, 1)) >= 0);
     return 1;
@@ -2317,7 +2321,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"morphs", models_morphs}, {"set_morph", models_set_morph},
         {nullptr, nullptr}};
     static const luaL_Reg characters[] = {
-        {"exists", characters_exists}, {"preload", characters_preload}, {"position", characters_position},
+        {"exists", characters_exists}, {"preload", characters_preload}, {"preload_ready", characters_preload_ready},
+        {"position", characters_position},
         {"set_position", characters_set_position}, {"walk_to", characters_walk_to},
         {"walking", characters_walking}, {"face", characters_face}, {"show", characters_show}, {"say", characters_say}, {"play", characters_play}, {"animation", characters_animation},
         {"follow", characters_follow}, {"patrol", characters_patrol}, {"stop", characters_stop},
@@ -2684,6 +2689,9 @@ declare characters: {
     -- later with one of them only uploads it. One file or a list; still valid
     -- on the next map (call it with world.preload_map).
     preload: (sprites: string | { string }) -> (),
+    -- True when the sheet asked with preload is prepared, or when nothing is
+    -- pending for it (never asked, PNG only, already on the GPU).
+    preload_ready: (sprite: string) -> boolean,
     -- Shadow of every character: "planar" (cast by the sun), "circle" (a
     -- contact disc) or "lights" (the disc plus a shadow cast by each of the
     -- two strongest nearby lights) or "map" (the sprite's silhouette in the sun's

@@ -336,6 +336,16 @@ void Engine::preloadCharacterSprite(const std::string& png) {
     m_spritePreloads.emplace(key, JobSystem::instance().submit([key] { return prepareSpriteSheet(key); }).share());
 }
 
+// Sem preparo pendente (pronto, nunca pedido, so' PNG ou ja' na GPU) = true:
+// o jogo espera so' o que de fato esta' a caminho.
+bool Engine::characterSpritePreloaded(const std::string& png) const {
+    std::filesystem::path spr = project::gameRef(png);
+    spr.replace_extension(".spr");
+    const auto it = m_spritePreloads.find(spr.string());
+    return it == m_spritePreloads.end() ||
+           it->second.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+}
+
 namespace {
 
 // ERUPTION_TEST_NO_UPLOAD_BATCH=1 (teste): um envio por quadro de folha, como
