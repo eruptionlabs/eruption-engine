@@ -1,10 +1,12 @@
 #include "core/LoadingScreen.hpp"
 
 #include <imgui.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <fstream>
 #include <string>
 
 namespace eruption {
@@ -74,8 +76,18 @@ void drawFramedBar(ImDrawList* dl, ImVec2 pMin, ImVec2 pMax, float s, float prog
 
 const LoadingScreenStyle* projectLoadingStyle() {
     const Project& p = Project::instance();
-    if (!p.isOpen() || !p.manifest().loading) return nullptr;
-    return &*p.manifest().loading;
+    if (p.isOpen()) return p.manifest().loading ? &*p.manifest().loading : nullptr;
+    // Jogo exportado (sem projeto aberto, PC ou Android): o export copia o
+    // bloco "loading" no launcher_config, como o "spawn" e a "camera".
+    // Lido uma vez: a tela de carga pede o estilo a cada quadro.
+    static const Project::Manifest exported = [] {
+        Project::Manifest m;
+        std::ifstream f("data/launcher_config.json");
+        const nlohmann::json j = f ? nlohmann::json::parse(f, nullptr, false) : nlohmann::json();
+        if (j.is_object()) Project::readLoading(j, m);
+        return m;
+    }();
+    return exported.loading ? &*exported.loading : nullptr;
 }
 
 void drawProjectLoadingBar(ImDrawList* dl, const ImVec2& display, const LoadingScreenStyle& style,
