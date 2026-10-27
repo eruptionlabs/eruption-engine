@@ -16,6 +16,11 @@ layout(set = 0, binding = 8) uniform sampler2D cloudVolumeCoverageTexture;
 // Visao de equipe: R8 da janela no plano XZ (1 = visivel). So' amostrada com
 // push.vision.w >= 0.
 layout(set = 0, binding = 9) uniform sampler2D visionTexture;
+// pbr do G-buffer (resolucao de render, NEAREST): r = 0,75 marca o pixel de
+// um sprite (sprite.frag). O borrao de movimento de camera poupa o sprite.
+layout(set = 0, binding = 10) uniform sampler2D spriteMarkTexture;
+
+bool spritePixel(vec2 uv) { return abs(texture(spriteMarkTexture, uv).r - 0.75) < 0.06; }
 
 // Bloco no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
 layout(std140, set = 1, binding = 0) uniform PushConstants {
@@ -244,7 +249,10 @@ void main() {
     }
 
     // Camera Motion Blur
-    if (push.motionBlurParams.x > 0.5 && depth < 1.0 && efeito > 0.0) {
+    // Sprite fora do borrao: a camera segue o heroi, que fica parado na tela,
+    // mas o vetor de camera (do depth) o arrastava junto com o fundo - o
+    // boneco andando saia dobrado, com uma copia fantasma atras.
+    if (push.motionBlurParams.x > 0.5 && depth < 1.0 && efeito > 0.0 && !spritePixel(fragUV)) {
         vec4 prevNdc = push.prevViewProj * vec4(worldPos, 1.0);
         prevNdc /= prevNdc.w;
         
@@ -259,9 +267,12 @@ void main() {
         }
 
         const int samples = 8;
+        // Amostra que cai num sprite vale a cor do centro: o boneco nao escorre
+        // para o fundo em volta dele.
+        const vec3 centro = color;
         for (int i = 1; i < samples; ++i) {
             vec2 offsetUV = fragUV + velocity * (float(i) / float(samples - 1) - 0.5);
-            color += texture(hdrTexture, offsetUV).rgb;
+            color += spritePixel(offsetUV) ? centro : texture(hdrTexture, offsetUV).rgb;
         }
         color /= float(samples);
     }
