@@ -2,6 +2,7 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 #extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_GOOGLE_include_directive : enable
 
 layout(location = 0) in vec2 a_position;
 layout(location = 1) in vec2 a_texCoord;
@@ -43,7 +44,25 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     float u_normalSmoothing;
     float u_defaultRoughness;
     float u_defaultMetallic;
+    vec4 u_sunDir;
+    vec4 u_sunColor;
+    vec4 u_ambientSky;
+    vec4 u_ambientGround;
+    // Membros do relevo (ver sprite_relief.glsl); o resto da FrameUBO, na
+    // ordem do SpriteRenderer::FrameUBO, so' para chegar neles.
+    vec4 u_pomParamsUbo;
+    vec4 u_windParams;
+    vec4 u_normalDistParams;
+    vec4 u_normalScaleLut0;
+    vec4 u_normalScaleLut1;
+    vec4 u_normalSmoothLut0;
+    vec4 u_normalSmoothLut1;
+    vec4 u_tessParams;
+    vec4 u_tessLut0;
+    vec4 u_tessLut1;
 };
+
+#include "gbuffer/sprite_relief.glsl"
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
@@ -105,14 +124,19 @@ void main() {
         // nela e sai igual. So' sprite ERUPTSPR/PNG (bit 11): o deslocamento
         // de camada de outros formatos fica como estava.
         float upBelow = -yOff + a_position.y * scaleY - centerY;
+        float depthScale = 1.0;
         if (upBelow < 0.0 && (i_flags & 2048u) != 0u) {
             vec3 groundN = (u_view * vec4(0.0, 1.0, 0.0, 0.0)).xyz;
             float across = dot(groundN, viewPos.xyz);
             float hit = abs(across) > 1e-5 ? dot(groundN, anchorView.xyz) / across : 0.0;
-            if (hit > 0.0 && hit < 1.0) {
-                vec4 pc = u_projection * vec4(viewPos.xyz * (hit * 0.999), 1.0);
-                gl_Position.z = pc.z / pc.w * gl_Position.w;
-            }
+            if (hit > 0.0 && hit < 1.0) depthScale = hit * 0.999;
+        }
+        // Acima do relevo da tesselacao (sprite_relief.glsl).
+        float reliefLift = spriteReliefLift(i_anchorPoint.xyz, u_cameraPos, u_tessParams, u_tessLut0, u_tessLut1);
+        depthScale *= spriteReliefPull(length(viewPos.xyz) * depthScale, reliefLift);
+        if (depthScale != 1.0) {
+            vec4 pc = u_projection * vec4(viewPos.xyz * depthScale, 1.0);
+            gl_Position.z = pc.z / pc.w * gl_Position.w;
         }
     } else {
         vec3 right = normalize(model[0].xyz);
