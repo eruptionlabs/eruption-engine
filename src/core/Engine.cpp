@@ -2396,6 +2396,10 @@ void Engine::applyGraphicsPreset() {
     // triangular/moiré em superfície quase plana com normal map. Preset pode
     // desligar (ganho de custo + some o artefato).
     if (p.contains("contact_shadows")) m_contactShadowEnabled = p["contact_shadows"];
+    // Alcance da marcha em unidades de mundo. Com a camera longe a marcha
+    // curta (1,2) cabe em menos de 3 pixels e e' pulada; relevo de
+    // tesselacao alto pede um alcance da ordem da amplitude dele.
+    if (p.contains("contact_shadow_length")) m_contactShadowLength = p["contact_shadow_length"].get<float>();
     envOverrideBool("ERUPTION_TEST_CONTACT_SHADOW", m_contactShadowEnabled);
     // SONDA DE CEU (G36). ERUPTION_TEST_NO_SKY_PROBE=1 desliga (A/B).
     if (p.contains("sky_probe")) m_skyProbeEnabled = p["sky_probe"];

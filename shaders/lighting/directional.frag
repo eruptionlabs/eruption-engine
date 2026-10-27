@@ -736,6 +736,10 @@ void main() {
             if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) break;
             vec3 sp = worldFromDepth(suv, texture(gbufferDepth, suv).r);
             if (any(isnan(sp))) continue;
+            // Sprite nao bloqueia: a profundidade dele e' o quad do billboard,
+            // e com alcance longo o quad manchava o chao ao lado do
+            // personagem. A sombra dele vem dos caminhos de sprite.
+            if (abs(texture(gbufferPBR, suv).r - 0.75) < 0.06) continue;
             // Superficie amostrada so' conta como bloqueador se SOBE claramente
             // acima do plano do receptor (ver o bloco de rejeicao acima).
             if (dot(sp - worldPos, csGeoN) < rejectBias) continue;
