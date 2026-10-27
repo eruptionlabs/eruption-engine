@@ -15,6 +15,8 @@ layout(location = 4) out float v_viewZ;
 layout(location = 5) flat out uvec2 v_texBlend; // x textura (0xFFFFFFFF = disco), y mistura
 layout(location = 6) out float v_soft;
 layout(location = 7) out vec2 v_corner;
+layout(location = 8) flat out vec4 v_decal;    // decal: centro, tamanho
+layout(location = 9) flat out vec4 v_decalRot; // decal: cos, sin do giro, celula da folha
 
 layout(push_constant) uniform Push {
     uint listOffset;  // inicio da lista no buffer de desenho
@@ -117,4 +119,35 @@ void main() {
     v_texBlend = uvec2(r.sheet.x, (r.sheet.y >> 16) & 3u);
     v_soft = uintBitsToFloat(r.sheet.w);
     v_corner = c;
+    v_decal = vec4(pos, size);
+    v_decalRot = vec4(cs, sn, cell);
+
+    if (((r.sheet.y >> 20) & 1u) != 0u) {
+        // DECAL (como o characters.ring): o quadro cobre, na tela, a caixa da
+        // particula deitada, com folga em altura para rampa de ate' ~35 graus;
+        // o fragmento le' a profundidade e projeta a textura no ponto visivel.
+        // Deitada simples (facing horizontal) corta numa encosta e flutua na
+        // outra. So' os vertices 0..3 contam; 4..7 colapsam no 3.
+        uint v = min(uint(gl_VertexIndex) & 7u, 3u);
+        float R = size * 1.4143; // canto do quadrado girado
+        float H = size * 1.1;
+        vec2 mn = vec2(1e9), mx = vec2(-1e9);
+        bool behind = false;
+        for (int k = 0; k < 8; ++k) {
+            vec3 q = pos + vec3((k & 1) != 0 ? R : -R, (k & 2) != 0 ? H : -H, (k & 4) != 0 ? R : -R);
+            vec4 clip = u_viewProjection * vec4(q, 1.0);
+            if (clip.w <= 1e-3) { behind = true; break; }
+            mn = min(mn, clip.xy / clip.w);
+            mx = max(mx, clip.xy / clip.w);
+        }
+        if (behind) { mn = vec2(-1.0); mx = vec2(1.0); }
+        vec2 k01 = vec2((v == 1u || v == 2u) ? 1.0 : 0.0, v >= 2u ? 1.0 : 0.0);
+        gl_Position = vec4(mix(mn, mx, k01), 0.0, 1.0);
+        // Origem dos dois quadros na folha; o fragmento soma a posicao.
+        v_uv0 = vec2(mod(f0, float(cols)), floor(f0 / float(cols))) * cell;
+        v_uv1 = vec2(mod(f1, float(cols)), floor(f1 / float(cols))) * cell;
+        v_texBlend.y |= 16u;
+        v_soft = 0.0;
+        v_corner = vec2(0.0);
+    }
 }

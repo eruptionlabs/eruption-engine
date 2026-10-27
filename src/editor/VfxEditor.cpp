@@ -428,6 +428,7 @@ bool VfxEditor::drawEmitter(VfxEmitterDesc& e) {
         c = true;
     }
     c |= ImGui::Checkbox(tr("Half resolution (smoke, dust)"), &e.lowRes);
+    c |= ImGui::Checkbox(tr("Decal (projected on the ground)"), &e.decal);
     // Malha no lugar do sprite: opaca, iluminada pela cena (detritos, pedras).
     if (ImGui::BeginCombo(tr("Mesh"), e.mesh.empty() ? tr("None (sprite)") : e.mesh.c_str())) {
         if (ImGui::Selectable(tr("None (sprite)"), e.mesh.empty())) {
