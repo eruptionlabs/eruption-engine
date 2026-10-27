@@ -478,8 +478,9 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         GroundRing r;
         r.center = Vec4(c.position, c.ringRadius);
         r.color = Vec4(Vec3(c.ringColor), c.ringColor.a * f.fade);
-        // Folga de um raio para cima e para baixo: rampa de ate' 45 graus.
-        const float folga = std::max(c.ringRadius, 4.0f);
+        // Folga de um raio para cima e para baixo (rampa de ate' 45 graus),
+        // mais a amplitude do relevo: sem ela o chao deslocado cortava o anel.
+        const float folga = groundDecalSlack(c.ringRadius);
         r.shape = Vec4(0.0f, folga, folga, 0.0f);
         r.dir.w = c.ringRadius - c.ringWidth; // coroa cheia, sem borda
         m_groundRings.push_back(r);
