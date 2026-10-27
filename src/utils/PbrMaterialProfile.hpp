@@ -55,18 +55,23 @@ inline const PbrMaterialProfile& getPbrProfile(const std::string& texturePath) {
 // quanto pelo popup de preview (SpherePreview.cpp), pra' nao ter dois lugares
 // que podem desalinhar (era exatamente o bug: o preview tinha 1.0 fixo,
 // ignorando a categoria de verdade do material clicado). Chao, terra e neve
-// tem relevo de verdade e levam a amplitude cheia. Pedra e madeira levam
-// menos: malha de arquitetura tem triangulo GRANDE e chapado, e deslocar por
-// altura de textura ali estica o triangulo em espeto. Telhado, metal e agua
-// ficam em zero: superficie dura, lisa ou com shader proprio.
+// tem relevo de verdade e levam a amplitude cheia. Pedra e material sem
+// categoria (todo modelo de cena cujo nome nao esta' no pbr_materials.json)
+// tambem: eram 0,45 e 0,35 pelo medo do triangulo GRANDE esticado em espeto,
+// que a grade por distancia (aresta em pixels, model.tesc) e a solda da
+// costura ja' resolvem. Com 0,35 o relevo das rochas e paredoes na camera de
+// orbita a 250 u nao se lia (autor, 2026-10-27: "so' o chao ganha"); com 1,0
+// a borda dos terracos vira pedra recortada. Madeira fica em 0,30 (tabua
+// lisa). Telhado, metal e agua ficam em zero: superficie dura, lisa ou com
+// shader proprio.
 inline float dispScaleForCategory(const std::string& category) {
     if (category == "ground" || category == "dirt" || category == "snow") return 1.0f;
     if (category == "grass") return 0.6f;
-    if (category == "stone") return 0.45f;
+    if (category == "stone") return 1.0f;
     if (category == "wood") return 0.30f;
     if (category == "roof" || category == "metal" || category == "water" ||
         category == "vegetation") return 0.0f;
-    return 0.35f;
+    return 1.0f;
 }
 
 } // namespace eruption

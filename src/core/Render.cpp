@@ -655,6 +655,26 @@ void Engine::render() {
     frameUbo.tessNearDistance = m_tessNearDistance;
     frameUbo.tessNearSpacing = m_tessNearSpacing;
     m_modelRenderer.setTessellation(tessOn, m_tessCurve.evaluate(0.0f) > 1.001f ? distMax * 0.12f : 0.0f);
+    m_modelRenderer.setTessAmplitude(frameUbo.tessParams.z);
+    // Relevo efetivo no log quando muda (amplitude, banda da curva, banda
+    // perto): o patch de graphics.json de um jogo pode trocar tudo isso, e sem
+    // o numero no log nao da' para saber qual valeu (a camera de orbita a
+    // 250 u fica fora da banda perto de 110 u dos presets de PC). Fazer a
+    // banda perto seguir o foco da camera foi medido e ficou de fora: na
+    // camera de orbita do mapa base o chao inteiro da tela fica a 200-350 u,
+    // entao a grade fina cobre a tela toda - G-buffer 8,0 -> 13,6 ms (xvfb,
+    // P3) por 22 dB de diferenca. Jogo que quiser paga pelo preset
+    // (tessellation_near_distance).
+    {
+        static Vec4 s_lastRelief(-1.0f);
+        const Vec4 relief(tessOn ? 1.0f : 0.0f, frameUbo.tessParams.z, m_modelRenderer.tessBandDistance(),
+                          frameUbo.tessNearDistance);
+        if (glm::any(glm::greaterThan(glm::abs(relief - s_lastRelief), Vec4(0.5f, 0.01f, 1.0f, 5.0f)))) {
+            s_lastRelief = relief;
+            ERUPTION_LOG_WARN("[GRAPHICS] relevo: tess=%d amplitude=%.2f banda=%.0f u perto=%.0f u",
+                              tessOn ? 1 : 0, relief.y, relief.z, relief.w);
+        }
+    }
     Vec4 shOpLo(1.0f), shOpHi(1.0f);
     sampleLut(m_shadowOpacitySpline, shOpLo, shOpHi);
     m_deferredLighting.setShadowOpacityCurve(

@@ -3100,6 +3100,22 @@ static void groundCellBox(const ModelMeshGPU& mesh, const ModelMeshGPU::GroundCe
     mx = wc + we;
 }
 
+// TETO DO RELEVO PELO TAMANHO DA MALHA. A amplitude do preset (12 u nos de
+// PC) foi ajustada no chao; numa pedra de 9-70 u ela vira estilhaco - medido
+// no mapa de lava de teste: pedra de 67 x 40 x 71 u deslocada ~9 u na camera
+// de orbita saia em lascas, e o chao subia por cima da base dela. O
+// deslocamento de uma malha que nao e' chao fica em ate' kReliefPerSize da
+// aresta MEDIANA da caixa local (a menor cortava o terraco de 200 x 25 x
+// 200 u, que e' fino so' na altura): terraco e paredao (>= 200 u) levam a
+// amplitude cheia, a pedra de 67 u uns 4 u, caixote quase nada.
+static float reliefSizeScale(const ModelMeshGPU& mesh, float amplitude) {
+    constexpr float kReliefPerSize = 0.06f;
+    if (mesh.isGround || amplitude <= 1e-4f) return 1.0f;
+    const Vec3 e = mesh.aabbMax - mesh.aabbMin;
+    const float midExt = std::max(std::min(e.x, e.y), std::min(std::max(e.x, e.y), e.z));
+    return std::clamp(kReliefPerSize * midExt / amplitude, 0.0f, 1.0f);
+}
+
 void ModelRenderer::render(VkCommandBuffer cmd,
                            const Mat4& viewProj, const Frustum& frustum, const Vec3& cameraPos) {
     PROFILE_CPU_SCOPE(ProfilerCategory::Culling);
@@ -3347,7 +3363,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         push.metallicScale = mesh.metallicScale;
         push.roughnessScale = mesh.roughnessScale;
         push.uvScale.z = mesh.uvPerUnit;
-        push.uvScale.w = mesh.dispScale;
+        push.uvScale.w = mesh.dispScale * reliefSizeScale(mesh, m_tessAmplitude);
         if (runClusters) {
             // Caixa de cada pedaco no mundo, crescida do que o vertex shader
             // pode mover: o vento (altura da instancia x sway x escala x 0,65,
