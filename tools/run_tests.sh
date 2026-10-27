@@ -45,6 +45,7 @@ run_src test_css_classes src/utils/CSSParser.cpp
 run_src test_ground_pack src/formats/GroundPack.cpp -I build/_deps/nlohmann_json-src/include
 run_src test_ribbon src/formats/Ribbon.cpp
 run_src test_vision src/core/Vision.cpp
+run_src test_relief_bake src/renderer/ReliefBake.cpp
 
 printf '\n========================================\n'
 [ $FAIL -eq 0 ] && echo "TODOS OS TESTES PASSARAM" || echo "HOUVE FALHA"
