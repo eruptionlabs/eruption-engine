@@ -347,6 +347,7 @@ void DefaultApplication::onUpdate(float deltaTime) {
             if (!edits.load(SceneEdits::pathFor(m_sceneEditsMap), error)) ERUPTION_LOG_ERROR("%s", error.c_str());
             else if (!edits.empty())
                 ERUPTION_LOG_WARN("Scene edits: %d change(s) applied to %s", edits.apply(*m_engine), m_sceneEditsMap.c_str());
+            m_engine->applySolidFiles(); // tipos de modelo sólidos (models.set_solid_file)
             phase("cena");
             m_engine->loadScatter(m_sceneEditsMap); // objetos espalhados pelo pincel
             phase("scatter");

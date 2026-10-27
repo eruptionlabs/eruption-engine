@@ -70,6 +70,33 @@ void Engine::setSolid(uint32_t instance, bool solid) {
 
 bool Engine::isSolid(uint32_t instance) const { return instance < m_solid.size() && m_solid[instance]; }
 
+// O caminho da instância termina no arquivo pedido (relativo ao projeto)?
+static bool sameModelFile(const std::string& assetPath, const std::string& file) {
+    if (file.empty() || assetPath.size() < file.size()) return false;
+    const size_t at = assetPath.size() - file.size();
+    return assetPath.compare(at, file.size(), file) == 0 && (at == 0 || assetPath[at - 1] == '/');
+}
+
+void Engine::setSolidFile(const std::string& file, bool solid) {
+    const auto it = std::find(m_solidFiles.begin(), m_solidFiles.end(), file);
+    if (solid && it == m_solidFiles.end()) m_solidFiles.push_back(file);
+    if (!solid && it != m_solidFiles.end()) m_solidFiles.erase(it);
+    const auto& insts = m_modelRenderer.getInstances();
+    for (uint32_t i = 0; i < insts.size(); ++i)
+        if (sameModelFile(insts[i].assetPath, file)) setSolid(i, solid);
+}
+
+void Engine::applySolidFiles() {
+    if (m_solidFiles.empty()) return;
+    const auto& insts = m_modelRenderer.getInstances();
+    for (uint32_t i = 0; i < insts.size(); ++i)
+        for (const std::string& f : m_solidFiles)
+            if (sameModelFile(insts[i].assetPath, f)) {
+                setSolid(i, true);
+                break;
+            }
+}
+
 bool Engine::blockedAt(const Vec3& p, float radius) const {
     const auto& insts = m_modelRenderer.getInstances();
     for (uint32_t i = 0; i < m_solid.size() && i < insts.size(); ++i) {

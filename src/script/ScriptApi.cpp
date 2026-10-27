@@ -889,6 +889,10 @@ int models_set_solid(lua_State* L) {
     eng().setSolid(static_cast<uint32_t>(checkModel(L, 1)), lua_toboolean(L, 2) != 0);
     return 0;
 }
+int models_set_solid_file(lua_State* L) {
+    eng().setSolidFile(luaL_checkstring(L, 1), lua_toboolean(L, 2) != 0);
+    return 0;
+}
 int models_solid(lua_State* L) {
     lua_pushboolean(L, eng().isSolid(static_cast<uint32_t>(checkModel(L, 1))));
     return 1;
@@ -1676,10 +1680,15 @@ float fromYArg(lua_State* L, int idx) {
 }
 int world_floor_height(lua_State* L) {
     bool onModel = false;
+    int instance = -1;
     lua_pushnumber(L, eng().floorHeight(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2)),
-                                        fromYArg(L, 3), &onModel));
+                                        fromYArg(L, 3), &onModel, &instance));
     lua_pushboolean(L, onModel);
-    return 2;
+    // O modelo do piso: o jogo le' o tipo dele (models.file) e decide corrimao,
+    // perigo embaixo etc. pelo proprio dado.
+    if (instance >= 0) lua_pushinteger(L, instance + 1);
+    else lua_pushnil(L);
+    return 3;
 }
 int world_floor_walkable(lua_State* L) {
     lua_pushboolean(L, eng().floorWalkable(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2)),
@@ -2321,6 +2330,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"move_by", models_move_by}, {"rotate_by", models_rotate_by},
         {"visible", models_visible}, {"set_visible", models_set_visible},
         {"show", models_show}, {"hide", models_hide}, {"solid", models_solid}, {"set_solid", models_set_solid},
+        {"set_solid_file", models_set_solid_file},
         {"play", models_play}, {"animation", models_animation}, {"animations", models_animations},
         {"morphs", models_morphs}, {"set_morph", models_set_morph},
         {nullptr, nullptr}};

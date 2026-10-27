@@ -821,6 +821,7 @@ void Engine::finishRegion(WorldRegion& r) {
         const int idx = ob.solid ? findInRegion(ob.name) : -1;
         if (idx >= 0) setSolid(static_cast<uint32_t>(idx), true);
     }
+    applySolidFiles(); // os tipos de modelo sólidos que o jogo declarou
     r.sounds.clear();
     for (const auto& snd : e.sounds) {
         const std::string name = prefix + snd.name;

@@ -507,6 +507,10 @@ declare models: {
     -- Solid models block the player (the bottom of the model: trunk, wall base).
     solid: (model: Model) -> boolean,
     set_solid: (model: Model, solid: boolean) -> (),
+    -- Every model made from this file (models.file) is solid: in this map,
+    -- in neighbors as they come in and in maps loaded later, until turned off.
+    -- One line per model type (all bridges of the same piece).
+    set_solid_file: (file: string, solid: boolean) -> (),
     -- Models with a skeleton (.glb with skin): plays the animation by name
     -- ("" = rest pose). loop defaults to true, speed to 1. The pose on screen
     -- blends into the new one over `fade` seconds (default 0.2; 0 = cut).
