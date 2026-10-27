@@ -186,7 +186,11 @@ declare world: {
     -- { radius, margin } (world units) keeps every cell and every smoothed
     -- segment radius + margin away from solids AND from cells that do not
     -- walk (walls, blocked slopes); a start that touches a wall may leave it.
-    path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number? })?) -> { vector }?,
+    -- avoid_liquid (true, "lava" or "water") keeps the path out of cells with
+    -- that liquid over the floor; the body can still stand there. The path
+    -- also runs on solid objects: a bridge is crossed on its deck when the
+    -- walk reaches it at its end, and passed under from below.
+    path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number?, avoid_liquid: (boolean | string)? })?) -> { vector }?,
     -- The game's own fog: {color = vector or {r, g, b}, start, end, opacity,
     -- height, falloff} (the map .env "fog" block fields). Wins over the map's
     -- and the weather's fog until the next map change; nil gives control back.

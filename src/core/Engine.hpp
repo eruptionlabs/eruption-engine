@@ -698,9 +698,14 @@ public:
     // Caminho no chão de `from` a `to` (grade de caminhada + objetos sólidos),
     // já alisado; falso se não há caminho. `radius` cresce os sólidos;
     // `wallClearance` (> 0) mantém células e trechos a essa distância de
-    // qualquer célula que não anda.
+    // qualquer célula que não anda. Em camadas: o piso de cada célula é o
+    // terreno ou o topo de um sólido logo abaixo de quem chega nela (ponte
+    // sobre ravina: por cima entrando pela ponta, por baixo pela ravina).
+    // `avoidLiquid` (kAvoidWater | kAvoidLava): célula com esse líquido acima
+    // do piso não entra no caminho (o corpo ainda anda nela).
+    enum AvoidLiquid : uint8_t { kAvoidWater = 1, kAvoidLava = 2 };
     bool findPath(const Vec3& from, const Vec3& to, float radius, std::vector<Vec3>& out,
-                  float wallClearance = 0.0f) const;
+                  float wallClearance = 0.0f, uint8_t avoidLiquid = 0) const;
     // Um personagem (fora `ignore`) ocupa (x, z)?
     bool characterAt(const Vec3& p, float radius, int ignore = -1) const;
     // Balões de fala (personagens e jogador) sobre a área do jogo.
@@ -1043,6 +1048,10 @@ public:
                       float* heights, uint8_t* flags) const;
     bool bodyBlocked(const std::vector<uint32_t>& cand, int floorInstance, float floorY, float x, float z,
                      float radius) const;
+    // Piso em (x, z) abaixo de fromY entre os sólidos `cand` (o terreno é
+    // terrainY); `instance` = o sólido do piso ou -1.
+    float floorAmong(const std::vector<uint32_t>& cand, float terrainY, float x, float z, float fromY,
+                     int& instance) const;
     bool liquidOver(float x, float z, float floorY, LiquidAt& out) const;
     bool walkableOver(const std::vector<uint32_t>& cand, int floorInstance, float floorY, float x, float z,
                       float radius) const;
