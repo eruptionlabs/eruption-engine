@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <string>
@@ -74,6 +75,7 @@ bool Project::open(const fs::path& dir, std::string* err) {
         m.startupMap = j.value("startup_map", std::string());
         m.devTools = j.value("dev_tools", false);
         readFraming(j, m);
+        readLoading(j, m);
     } catch (const std::exception& e) {
         if (err) *err = std::string("project.eruption is not valid JSON: ") + e.what();
         return false;
@@ -153,6 +155,7 @@ bool Project::saveManifest(std::string* err) {
             if (m_manifest.cameraKeepInsideMap) c["keep_inside_map"] = true;
             if (!c.empty()) j["camera"] = c;
         }
+        if (!m_manifest.loadingJson.empty()) j["loading"] = json::parse(m_manifest.loadingJson);
         std::ofstream f(m_root / kManifestName);
         if (!f) {
             if (err) *err = "could not write " + (m_root / kManifestName).string();
@@ -204,6 +207,43 @@ void Project::readFraming(const json& j, Manifest& m) {
         if (c.contains("keep_inside_map") && c["keep_inside_map"].is_boolean())
             m.cameraKeepInsideMap = c["keep_inside_map"].get<bool>();
     }
+}
+
+namespace {
+
+// "#rrggbb" ou [r, g, b] de 0 a 1. Outra coisa deixa a cor como estava.
+bool readColor(const json& v, float out[3]) {
+    if (v.is_string()) {
+        const std::string s = v.get<std::string>();
+        unsigned r = 0, g = 0, b = 0;
+        if (s.size() != 7 || s[0] != '#' || std::sscanf(s.c_str() + 1, "%2x%2x%2x", &r, &g, &b) != 3) return false;
+        out[0] = float(r) / 255.0f;
+        out[1] = float(g) / 255.0f;
+        out[2] = float(b) / 255.0f;
+        return true;
+    }
+    if (!v.is_array() || v.size() != 3) return false;
+    for (int i = 0; i < 3; ++i)
+        if (!v[i].is_number()) return false;
+    for (int i = 0; i < 3; ++i) out[i] = std::clamp(v[i].get<float>(), 0.0f, 1.0f);
+    return true;
+}
+
+} // namespace
+
+void Project::readLoading(const json& j, Manifest& m) {
+    if (!j.contains("loading") || !j["loading"].is_object()) return;
+    const json& l = j["loading"];
+    Manifest::LoadingScreen s;
+    if (l.contains("text") && l["text"].is_string()) s.text = l["text"].get<std::string>();
+    if (l.contains("scale") && l["scale"].is_number()) s.scale = std::clamp(l["scale"].get<float>(), 0.25f, 8.0f);
+    s.center = l.value("position", std::string("corner")) == "center";
+    if (l.contains("bar_color") && readColor(l["bar_color"], s.barColor))
+        std::copy(s.barColor, s.barColor + 3, s.textColor);
+    if (l.contains("text_color")) readColor(l["text_color"], s.textColor);
+    if (l.contains("background")) s.hasBackground = readColor(l["background"], s.background);
+    m.loading = s;
+    m.loadingJson = l.dump();
 }
 
 fs::path Project::requested(int argc, char** argv, bool* explicitlyAsked) {
