@@ -601,6 +601,19 @@ declare perf: {
     system: () -> PerfSystem,
 }
 
+-- The engine's loading screen, held by the game while it builds its own
+-- scene: called before the first frame of a map (top of a script,
+-- on.start, or before a map change), no frame of the scene shows until
+-- release. The game keeps running behind it; the bar creeps toward 99%
+-- and never reaches 100%.
+declare loading: {
+    -- Holds the loading screen; let go by itself after max_seconds
+    -- (default 30) so a missing release never locks the game.
+    hold: (max_seconds: number?) -> (),
+    release: () -> (),
+    held: () -> boolean,
+}
+
 -- Particle effects (Window > Effects). `name` is an effect of the game
 -- (assets/effects/<name>.vfx.json) or an engine template (data/vfx: fogo,
 -- faiscas, fumaca, chamine, magia, detritos, rastro, lanterna, janela, and

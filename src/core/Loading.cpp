@@ -80,6 +80,28 @@ void Engine::presentLoadingScreen(const std::string& mapName, const std::string&
 // Background loading helpers (frame CB upload)
 // ------------------------------------------------------------------
 
+void Engine::holdLoading(bool on, float maxSeconds) {
+    if (on && !m_loadingHeld) m_loadingHeldProgress = 0.97f; // logo depois do "Finalizing" (0.95)
+    m_loadingHeld = on;
+    m_loadingHeldLeft = on ? std::max(maxSeconds, 0.0f) : 0.0f;
+}
+
+// Quadro com a carga segura pelo script: a mesma tela do fim da carga,
+// barra subindo devagar sem chegar a 100% (so' o release termina).
+void Engine::presentHeldLoading() {
+    const float dt = std::min(m_timer.realDeltaTime(), 0.25f);
+    m_loadingHeldLeft -= dt;
+    if (m_loadingHeldLeft <= 0.0f) {
+        // Script que esqueceu o release (ou parou com erro) nao prende o jogo.
+        ERUPTION_LOG_WARN("[LOADING] loading.hold sem release: soltando pelo tempo maximo");
+        m_loadingHeld = false;
+        render();
+        return;
+    }
+    m_loadingHeldProgress += (0.99f - m_loadingHeldProgress) * std::min(1.0f, dt * 0.5f);
+    presentLoadingScreen(m_currentMapName, "Finalizing", m_loadingHeldProgress, true);
+}
+
 void Engine::renderLoadingProgress() {
     // Barra enquanto um mapa é lido em segundo plano (troca pelo seletor).
     const bool hasActiveLoad = m_warpJobActive;

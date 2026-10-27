@@ -147,7 +147,10 @@ public:
         // do jogador, enviado depois do corte, saia um quadro atrasado.
         m_spriteSystem.processSprites(m_camera.frustum(), m_camera.position(), m_camera.forward());
         auto _t2 = std::chrono::steady_clock::now();
-        render();
+        // Segura pelo script (loading.hold): nenhum quadro da cena antes do
+        // release; no editor a espera nao vale (a interface sumiria).
+        if (m_loadingHeld && !m_editorMode) presentHeldLoading();
+        else render();
         auto _t3 = std::chrono::steady_clock::now();
         app.onRender(*this);
         Input::update();
@@ -304,6 +307,10 @@ public:
     }
     void setPlayerController(PlayerController* pc);
     bool isPlayerSpawnedOnActiveMap() const { return m_playerSpawnedOnActiveMap; }
+    // loading.hold()/release() do script: a tela de carga fica no lugar da
+    // cena (o jogo roda por tras) ate' soltar ou passar maxSeconds.
+    void holdLoading(bool on, float maxSeconds = 30.0f);
+    bool loadingHeld() const { return m_loadingHeld; }
     struct TextureResource {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation alloc = VK_NULL_HANDLE;
@@ -1150,6 +1157,7 @@ private:
     // VRAM do processo: alocacoes VMA nas heaps locais da placa (MB).
     double deviceMemoryMb() const;
     void renderLoadingProgress();
+    void presentHeldLoading();
     void takeScreenshot(const std::string& filename);
     void readPostOutput(std::vector<float>& rgb, uint32_t& w, uint32_t& h);
     void takeScreenshotLit(const std::string& filename);
@@ -1648,6 +1656,9 @@ private:
     bool m_isInitialBoot = true;
     bool m_inFrame = false;
     bool m_playerSpawnedOnActiveMap = false;
+    bool m_loadingHeld = false;
+    float m_loadingHeldLeft = 0.0f;     // segundos ate' soltar sozinho
+    float m_loadingHeldProgress = 0.0f; // barra durante a espera, ate' 0.99
     inline static const Vec3 kSafePreWarpPlayerPos = Vec3(0.0f, -1000.0f, 0.0f);
     std::string m_pendingMapWarp;
     TextureResource m_splashLogo;
