@@ -2419,6 +2419,18 @@ void Engine::applyGraphicsPreset() {
     // celular troca alcance e densidade por quadro (Engine::render).
     m_tessLevelCap = std::clamp(p.value("tessellation_max_level", 64.0f), 1.0f, 64.0f);
     m_tessBandScale = std::clamp(p.value("tessellation_band_scale", 1.0f), 0.0f, 1.0f);
+    // GRADE POR DISTANCIA (model.tesc/model.tese): ate' a distancia da banda
+    // perto o espacamento alvo cai para "tessellation_near_spacing" e o piso
+    // de aresta para "tessellation_near_edge_pixels"; dali ate' o fim da
+    // curva (~400 u) fica a grade de antes (tessellation_vertex_spacing e
+    // 8 px). 0 = sem banda perto: a grade, o mip da altura e a normal de
+    // antes (celular). Bancada de relevo (rochas a ~30 u, PC): grade de
+    // 0,25-0,40 u para 0,12-0,20 u, 78-88% da fenda do albedo vira
+    // geometria (58-72% antes); G-buffer +0,7 a +1,7 ms com a peca enchendo
+    // a tela, ~0,1 ms a 400 u.
+    m_tessNearDistance = std::clamp(p.value("tessellation_near_distance", 0.0f), 0.0f, 1000.0f);
+    m_tessNearSpacing = std::clamp(p.value("tessellation_near_spacing", m_tessVertexSpacing), 0.01f, 4.0f);
+    m_tessNearEdgePixels = std::clamp(p.value("tessellation_near_edge_pixels", 8.0f), 1.0f, 32.0f);
     // Solda da costura do deslocamento (ModelRenderer::createSeamWeld): vale
     // para as malhas carregadas depois. ERUPTION_TEST_SEAM_WELD=0|1 (bancada)
     // passa por cima do preset.

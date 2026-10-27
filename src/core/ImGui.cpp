@@ -825,6 +825,11 @@ void Engine::drawLightingControls() {
         ImGui::SliderFloat("Vertex spacing (u)", &m_tessVertexSpacing, 0.0f, 2.0f, "%.2f");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Target distance between tessellated vertices near the camera. Smaller = more detail (stones get their shape), more triangles. 0 = distance curve only (old behavior, max 8 per edge).");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Blurs the height map before displacement (raises the mip level it's sampled from). 0 = off. Use it to kill high-frequency noise in the relief without touching Height contrast's gain.");
+        ImGui::SliderFloat("Near band (u)", &m_tessNearDistance, 0.0f, 400.0f, "%.0f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Up to this distance the tessellation uses the near grid below; beyond it, Vertex spacing and 8 px edges. 0 = no near band.");
+        ImGui::SliderFloat("Near spacing (u)", &m_tessNearSpacing, 0.02f, 2.0f, "%.2f");
+        ImGui::SliderFloat("Near min edge (px)", &m_tessNearEdgePixels, 1.0f, 16.0f, "%.1f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shortest tessellated edge on screen inside the near band. Lower = finer relief up close, more triangles and quad overshading.");
         SplineEditorUI::draw("Tessellation Factor by Distance", m_tessCurve,
                              0.0f, m_normalDistMax, 1.0f, 16.0f, camDist,
                              m_tessCurve.evaluate(camDist / std::max(m_normalDistMax, 1.0f)),

@@ -651,6 +651,9 @@ void Engine::render() {
     // model.tesc).
     frameUbo.tessParams2 = Vec4(0.0f, m_tessVertexSpacing, glm::radians(m_normalMaxSlopeDeg), kFoliageTessCap);
     frameUbo.tessHeightBlur = m_tessHeightBlur;
+    frameUbo.tessNearEdgePixels = m_tessNearEdgePixels;
+    frameUbo.tessNearDistance = m_tessNearDistance;
+    frameUbo.tessNearSpacing = m_tessNearSpacing;
     m_modelRenderer.setTessellation(tessOn, m_tessCurve.evaluate(0.0f) > 1.001f ? distMax * 0.12f : 0.0f);
     Vec4 shOpLo(1.0f), shOpHi(1.0f);
     sampleLut(m_shadowOpacitySpline, shOpLo, shOpHi);
