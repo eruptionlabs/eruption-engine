@@ -22,6 +22,7 @@ bool AudioSystem::playing(uint32_t) const { return false; }
 void AudioSystem::setVolume(uint32_t, float, float) {}
 void AudioSystem::setPitch(uint32_t, float) {}
 bool AudioSystem::preload(const std::string&) { return false; }
+size_t AudioSystem::pendingLoads() { return 0; }
 void AudioSystem::music(const std::string& file, float, float, const std::string&, bool) { m_musicFile = file; }
 void AudioSystem::stopMusic(float) { m_musicFile.clear(); }
 void AudioSystem::setMusicVolume(float volume, float) { m_musicVolume = volume; }

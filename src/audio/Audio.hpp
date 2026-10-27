@@ -52,6 +52,8 @@ public:
     // Decodifica o arquivo em segundo plano e o guarda: o primeiro toque sai
     // na hora. Falso se o arquivo não existe.
     bool preload(const std::string& file);
+    // Arquivos do preload ainda sendo decodificados (loading.progress).
+    size_t pendingLoads();
 
     // Uma música por vez; trocar faz a passagem suave entre as duas. Com
     // `loopFile`, `file` é a introdução e o laço emenda nela sem lacuna.

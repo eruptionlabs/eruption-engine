@@ -1933,6 +1933,15 @@ int loading_held(lua_State* L) {
     lua_pushboolean(L, eng().loadingHeld());
     return 1;
 }
+int loading_progress(lua_State* L) {
+    float done = 0.0f, total = 1.0f;
+    bool ready = false;
+    eng().loadProgress(done, total, ready);
+    lua_pushnumber(L, done);
+    lua_pushnumber(L, total);
+    lua_pushboolean(L, ready);
+    return 3;
+}
 
 int perf_fps(lua_State* L) {
     lua_pushnumber(L, eng().fps());
@@ -2327,7 +2336,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "fx", fx);
     lib(L, "perf", perf);
     static const luaL_Reg loading[] = {
-        {"hold", loading_hold}, {"release", loading_release}, {"held", loading_held}, {nullptr, nullptr}};
+        {"hold", loading_hold}, {"release", loading_release}, {"held", loading_held}, {"progress", loading_progress}, {nullptr, nullptr}};
     lib(L, "loading", loading);
     registerVfxApi(L, engine);
     registerObjectsApi(L, engine);
@@ -2960,6 +2969,16 @@ declare loading: {
     hold: (max_seconds: number?) -> (),
     release: () -> (),
     held: () -> boolean,
+    -- Pending loading work: (done, total, ready). done/total is the loading
+    -- bar's fraction and never goes back. total counts the map plus every
+    -- sprite sheet being prepared, neighbor map loading, texture waiting
+    -- for upload and sound decoding seen since this load began. The map
+    -- itself ends at 0.95; the rest is that pending work. On the first load
+    -- with the project's loading screen the bar gives the boot 0-30% and
+    -- the map 30-100%, so done/total is 0.3 + 0.7 * p there, as drawn.
+    -- ready (and done/total = 1) only when nothing is pending; then it stays
+    -- ready until the next map load (later streaming is the game running).
+    progress: () -> (number, number, boolean),
 }
 )" + std::string(vfxApiDefinitions()) + visionApiDefinitions() + objectsApiDefinitions() + telemetryApiDefinitions() +
            NativeModule::apiDefinitions();

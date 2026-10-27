@@ -616,6 +616,16 @@ declare loading: {
     hold: (max_seconds: number?) -> (),
     release: () -> (),
     held: () -> boolean,
+    -- Pending loading work: (done, total, ready). done/total is the loading
+    -- bar's fraction and never goes back. total counts the map plus every
+    -- sprite sheet being prepared, neighbor map loading, texture waiting
+    -- for upload and sound decoding seen since this load began. The map
+    -- itself ends at 0.95; the rest is that pending work. On the first load
+    -- with the project's loading screen the bar gives the boot 0-30% and
+    -- the map 30-100%, so done/total is 0.3 + 0.7 * p there, as drawn.
+    -- ready (and done/total = 1) only when nothing is pending; then it stays
+    -- ready until the next map load (later streaming is the game running).
+    progress: () -> (number, number, boolean),
 }
 
 -- Particle effects (Window > Effects). `name` is an effect of the game

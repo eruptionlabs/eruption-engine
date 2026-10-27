@@ -71,6 +71,9 @@ struct AudioSystem::Impl {
     uint32_t nextId = 1;
     std::unordered_map<std::string, ma_sound_group*> groups;
     std::vector<std::string> preloaded;                  // caminhos registrados no gerenciador
+    // Uma fonte por preload ainda decodificando: o registro nao diz quando
+    // acaba; a fonte do mesmo arquivo divide o buffer e responde MA_BUSY.
+    std::vector<ma_resource_manager_data_source*> decoding;
     std::unordered_map<std::string, ma_uint64> musicPos; // onde cada faixa parou (retomar)
     std::string musicLoop;     // arquivo do laço da música atual ("" = sem introdução)
     bool musicLoopOnly = false; // a música atual começou direto no laço (retomada)
@@ -153,6 +156,11 @@ void AudioSystem::shutdown() {
     }
     m->groups.clear();
     ma_resource_manager* rm = ma_engine_get_resource_manager(&m->engine);
+    for (auto* ds : m->decoding) {
+        ma_resource_manager_data_source_uninit(ds);
+        delete ds;
+    }
+    m->decoding.clear();
     for (const auto& path : m->preloaded) ma_resource_manager_unregister_file(rm, path.c_str());
     m->preloaded.clear();
     if (m->wav.f) {
@@ -317,10 +325,31 @@ bool AudioSystem::preload(const std::string& file) {
     // Registrado, o arquivo fica decodificado no gerenciador ate' o fim: o
     // ma_sound_init_from_file do primeiro toque so' aponta para ele.
     const ma_uint32 flags = MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_DECODE | MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_ASYNC;
-    if (ma_resource_manager_register_file(ma_engine_get_resource_manager(&m->engine), path.c_str(), flags) != MA_SUCCESS)
-        return false;
+    ma_resource_manager* rm = ma_engine_get_resource_manager(&m->engine);
+    if (ma_resource_manager_register_file(rm, path.c_str(), flags) != MA_SUCCESS) return false;
     m->preloaded.push_back(path);
+    auto* ds = new ma_resource_manager_data_source{};
+    if (ma_resource_manager_data_source_init(rm, path.c_str(), flags, nullptr, ds) == MA_SUCCESS)
+        m->decoding.push_back(ds);
+    else
+        delete ds;
     return true;
+}
+
+size_t AudioSystem::pendingLoads() {
+    if (!m || !m->ready) return 0;
+    auto& d = m->decoding;
+    for (size_t i = 0; i < d.size();) {
+        if (ma_resource_manager_data_source_result(d[i]) == MA_BUSY) {
+            ++i;
+            continue;
+        }
+        ma_resource_manager_data_source_uninit(d[i]);
+        delete d[i];
+        d[i] = d.back();
+        d.pop_back();
+    }
+    return d.size();
 }
 
 void AudioSystem::music(const std::string& file, float volume, float fadeSeconds, const std::string& loopFile,

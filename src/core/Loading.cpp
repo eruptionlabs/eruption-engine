@@ -81,7 +81,7 @@ void Engine::presentLoadingScreen(const std::string& mapName, const std::string&
 // ------------------------------------------------------------------
 
 void Engine::holdLoading(bool on, float maxSeconds) {
-    if (on && !m_loadingHeld) m_loadingHeldProgress = 0.97f; // logo depois do "Finalizing" (0.95)
+    if (on && !m_loadingHeld) m_loadingHeldProgress = 0.95f; // o "Finalizing"; dai' segue loading.progress
     m_loadingHeld = on;
     m_loadingHeldLeft = on ? std::max(maxSeconds, 0.0f) : 0.0f;
 }
@@ -98,11 +98,17 @@ void Engine::presentHeldLoading() {
         render();
         return;
     }
-    m_loadingHeldProgress += (0.99f - m_loadingHeldProgress) * std::min(1.0f, dt * 0.5f);
+    // A barra segue o trabalho pendente (a mesma conta do loading.progress),
+    // sem chegar a 100% (so' o release termina).
+    float done = 0.0f, total = 1.0f;
+    bool ready = false;
+    loadProgress(done, total, ready);
+    m_loadingHeldProgress = std::max(m_loadingHeldProgress, std::min(m_lpRaw, 0.99f));
     presentLoadingScreen(m_currentMapName, "Finalizing", m_loadingHeldProgress, true);
 }
 
 void Engine::renderLoadingProgress() {
+    m_firstLoadOver = true; // a primeira carga (e a espera dela) acabou
     // Barra enquanto um mapa é lido em segundo plano (troca pelo seletor).
     const bool hasActiveLoad = m_warpJobActive;
     // A weather cloud field still draining its spawn queue counts as loading:
@@ -433,12 +439,11 @@ void Engine::renderLoadingUI(const std::string& mapName, const std::string& task
         // Boot e primeiro mapa numa barra so', que nunca volta: o boot ocupa
         // os primeiros 30% e o mapa o resto. Separadas, a barra ia a 80% no
         // boot e caia para 10% no inicio do mapa.
-        // Acaba no fim (0.95) da primeira carga de mapa.
+        // Acaba no primeiro quadro normal: a espera do loading.hold depois do
+        // mapa ainda e' a primeira carga (o script ve' a mesma conta).
         static float s_bootShown = 0.0f;
-        static bool s_firstLoadDone = false;
         float shown = std::clamp(progress, 0.0f, 1.0f);
-        if (!s_firstLoadDone) {
-            if (!m_isInitialBoot && shown >= 0.95f) s_firstLoadDone = true;
+        if (!m_firstLoadOver) {
             shown = m_isInitialBoot ? 0.3f * shown : 0.3f + 0.7f * shown;
             shown = std::max(shown, s_bootShown);
             s_bootShown = shown;
