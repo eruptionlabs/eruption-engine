@@ -200,6 +200,12 @@ public:
     }
     // Raios do sol no mesmo passe (chave "god_ray_sun" do preset: forca, 0 desliga).
     void setGodRaySun(float strength) { m_godRaySun = std::max(strength, 0.0f); }
+    // Lens flare do sol no passe dos raios: forca (0 = desligado) e linhas
+    // da estrela (o look pode trocar as duas).
+    void setLensFlare(float strength, int rays) {
+        m_lensFlare = std::max(strength, 0.0f);
+        m_lensFlareRays = rays;
+    }
     // Visao de equipe (core/Vision): textura R8 da janela e x=canto x, y=canto
     // z, z=1/lado, w=dim (< 0 = desligada, o composite nem amostra).
     void setVisionMap(VkImageView view, const Vec4& params) { m_visionView = view; m_visionParams = params; }
@@ -346,6 +352,8 @@ private:
     const std::vector<PointLight>* m_godRaySource = nullptr;
     uint32_t m_godRayMaxLights = 0;
     float m_godRaySun = 0.0f;
+    float m_lensFlare = 0.0f;
+    int m_lensFlareRays = 6;
     VkImageView m_visionView = VK_NULL_HANDLE;
     Vec4 m_visionParams = Vec4(0.0f, 0.0f, 0.0f, -1.0f);
     VkPipeline m_bloomDownPipeline = VK_NULL_HANDLE;

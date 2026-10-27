@@ -494,6 +494,8 @@ public:
     float m_tessNearEdgePixels = 8.0f; // chave "tessellation_near_edge_pixels"
     uint32_t m_godRayLights = 4;     // chave "god_ray_lights"
     float m_godRaySun = 0.0f;        // chave "god_ray_sun" (forca dos raios do sol)
+    float m_lensFlare = 0.0f;        // chave "lens_flare" (forca do flare do sol)
+    int m_lensFlareRays = 6;         // chave "lens_flare_rays" (linhas da estrela)
     MapFog m_scriptFog;              // world.set_fog (set=false: nenhuma)
     float m_scriptExposure = -1.0f;  // world.set_exposure (< 0: a do .env ou automatica)
     DioramaLookConfig& lookConfig() { return m_lookConfig; }

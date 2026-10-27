@@ -1880,6 +1880,7 @@ void Engine::render() {
     // DECLARA u_worldPos e nunca o le' - entao o depth serve.
     m_postProcessor.setGodRayLights(&m_deferredLighting.frameLights(), m_godRayLights);
     m_postProcessor.setGodRaySun(m_godRaySun);
+    m_postProcessor.setLensFlare(m_lensFlare, m_lensFlareRays);
     m_postProcessor.render(cmd, postHdrInput, m_gbuffer.depthView(), m_gbuffer.normalView(),
                            m_gbuffer.normalView(), m_shadowRenderer.shadowAtlasView(), m_camera.viewMatrix(),
                            m_camera.projNoJitter(), glm::inverse(m_camera.viewProjNoJitter()), m_prevViewProjNoJitter,

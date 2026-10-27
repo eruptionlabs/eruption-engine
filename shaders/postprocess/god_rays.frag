@@ -17,6 +17,16 @@
 // escura entre os raios. Ceu so' pelo brilho seria fragil: o bright pass
 // corta o ceu claro mas abaixo do limiar.
 //
+// LENS FLARE DO SOL (preset "lens_flare"): reflexos internas da lente,
+// analiticos, sem textura - fantasmas (discos coloridos na reta do sol ao
+// centro da tela, do lado oposto), halo (anel em volta do sol, com
+// dispersao de cor) e estrela (linhas finas pelo sol; "lens_flare_rays"
+// linhas, 1 = um risco so'). Tudo pesado pela fracao do disco do sol que e'
+// ceu na profundidade (12 pontos): o que passa na frente apaga o flare aos
+// poucos, e a cor vem do ceu em volta do sol (nuvem e por do sol tingem).
+// Base: Kawase, "Practical Implementation of High Dynamic Range Rendering"
+// (GDC 2004) e Chapman, "Pseudo Lens Flare" (2013).
+//
 // A saida e' o bloom + os raios, e entra no lugar do bloom no composite (que
 // ja' soma o bloom a cena); a forca vem dividida pela intensidade do bloom.
 
@@ -31,7 +41,7 @@ layout(set = 0, binding = 3) uniform sampler2D u_scene;   // cena HDR (cor do ce
 layout(push_constant) uniform GodRaysPush {
     vec4 lights[4]; // xy = luz na tela (uv), z = raio do nucleo (uv, em altura), w = forca
     vec4 params;    // x = amostras, y = decaimento por amostra, z = peso, w = alcance (uv, em altura)
-    vec4 params2;   // x = aspecto (largura/altura), y = quantas luzes
+    vec4 params2;   // x = aspecto (largura/altura), y = quantas luzes, z = forca do flare (0 = sem), w = linhas da estrela
     vec4 sun;       // xy = sol na tela (uv), z = raio do nucleo (uv, em altura), w = forca (0 = sem sol)
 } push;
 
@@ -42,6 +52,53 @@ vec3 sunOcclusionMask(vec2 uv, vec2 aspect) {
     float d = length((uv - push.sun.xy) * aspect) / push.sun.z;
     float halo = max(1.0 - d, 0.0);
     return min(texture(u_scene, uv).rgb, vec3(4.0)) * (halo * halo);
+}
+
+// Lens flare do sol no pixel `uv` (distancias em alturas de tela).
+vec3 lensFlare(vec2 uv, vec2 aspect) {
+    const vec2 sun = push.sun.xy;
+    // Visibilidade e cor: pontos em espiral no disco do sol (raio 0,012).
+    vec3 tint = vec3(0.0);
+    float vis = 0.0;
+    for (int i = 0; i < 12; ++i) {
+        const float a = float(i) * 2.39996;
+        const vec2 p = sun + vec2(cos(a), sin(a)) * (0.012 * sqrt((float(i) + 0.5) / 12.0)) / aspect;
+        if (texture(u_depth, p).r >= 0.9999) {
+            vis += 1.0;
+            tint += min(texture(u_scene, p).rgb, vec3(4.0));
+        }
+    }
+    if (vis <= 0.0) return vec3(0.0);
+    tint /= vis;
+    // Some perto da borda da tela em vez de cortar quando o sol sai.
+    const vec2 border = min(sun, 1.0 - sun) * aspect;
+    vis *= smoothstep(0.0, 0.08, min(border.x, border.y)) / 12.0;
+
+    const vec2 P = (uv - sun) * aspect;
+    const float d = length(P);
+    // Fantasmas: t = 1 e' o centro da tela, 2 o ponto espelhado do sol.
+    const vec2 axis = vec2(0.5) - sun;
+    const float gt[5] = float[5](0.45, 0.8, 1.35, 1.7, 2.3);
+    const float gr[5] = float[5](0.025, 0.05, 0.035, 0.08, 0.12);
+    const vec3 gc[5] = vec3[5](vec3(1.0, 0.7, 0.35), vec3(0.4, 1.0, 0.6), vec3(0.75, 0.45, 1.0),
+                               vec3(0.35, 0.6, 1.0), vec3(1.0, 0.85, 0.6));
+    vec3 ghosts = vec3(0.0);
+    for (int k = 0; k < 5; ++k) {
+        const float g = length((uv - (sun + axis * gt[k])) * aspect) / gr[k];
+        // Disco com a borda um pouco mais clara (abertura poligonal da lente).
+        ghosts += gc[k] * (smoothstep(1.0, 0.8, g) * (0.5 + 0.5 * smoothstep(0.4, 0.95, g)));
+    }
+    // Halo: anel de raio 0,35 em volta do sol, vermelho por fora.
+    const vec3 hr = vec3(0.357, 0.35, 0.343);
+    const vec3 halo = exp(-(d - hr) * (d - hr) / 0.00018);
+    // Estrela: distancia a' linha mais perto (periodo pi / linhas), largura fixa.
+    const float lines = push.params2.w;
+    const float period = 3.14159265 / lines;
+    const float phi = mod(atan(P.y, P.x) + 6.28318531, period);
+    const float off = d * sin(min(phi, period - phi));
+    const float star = exp(-off * off / 0.000006) * exp(-d / 0.16);
+    const float core = exp(-d / 0.012);
+    return tint * vis * push.params2.z * (ghosts * 0.3 + halo * 0.06 + star * 1.2 + core * 0.4);
 }
 
 void main() {
@@ -103,5 +160,6 @@ void main() {
             rays += acc * (push.params.z * push.sun.w * fall / float(samples));
         }
     }
+    if (push.params2.z > 0.0) rays += lensFlare(fragUV, aspect);
     outColor = vec4(bloom + rays, 1.0);
 }

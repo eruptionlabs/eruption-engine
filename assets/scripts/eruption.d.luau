@@ -158,7 +158,9 @@ declare world: {
     look: () -> string,
     -- `preset` may also be a TABLE with the same fields as a preset (only
     -- the given ones change): a game's own look without a preset in the engine.
-    -- Fields include saturation, contrast, god_ray_*, vignette (strength,
+    -- Fields include saturation, contrast, god_ray_*, lens_flare (multiplies
+    -- the preset's sun lens flare; 0 hides it), lens_flare_rays (lines of
+    -- the flare's star; 1 = a single streak), vignette (strength,
     -- 0 = off), vignette_softness, shadow_tint / highlight_tint (a color as
     -- vector or {r, g, b}) with shadow_tint_strength / highlight_tint_strength.
     set_look: (preset: string | { [string]: any }) -> boolean,
