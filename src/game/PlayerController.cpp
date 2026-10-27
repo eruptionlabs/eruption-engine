@@ -526,7 +526,7 @@ void PlayerController::updateWorld(float dt) {
     using _clk = std::chrono::steady_clock;
     using _ms = std::chrono::duration<float, std::milli>;
     auto _p = _clk::now();
-    float w_day = 0, w_anim = 0, w_spr = 0, w_chunk = 0;
+    float w_day = 0, w_anim = 0, w_chunk = 0;
     auto _lap = [&](float& out) { if (pcMarks) { auto n = _clk::now(); out = _ms(n - _p).count(); _p = n; } };
 
     m_engine->dayNightCycle().update(dt);
@@ -534,8 +534,7 @@ void PlayerController::updateWorld(float dt) {
     _lap(w_day);
     m_engine->modelRenderer().updateAnimations(m_engine->timer().elapsed() * 1000.0f);
     _lap(w_anim);
-    m_engine->spriteSystem().processSprites(m_engine->camera().frustum(), m_engine->camera().position(), m_engine->camera().forward());
-    _lap(w_spr);
+    // O corte dos sprites saiu daqui para Engine::runFrame (camera final).
     // Contador p/ F3/telemetria: reusa o resultado do culling AVX2 do passe
     // de terreno (1 frame atras - estatistica, nao decisao de render). A
     // versao anterior re-varria TODOS os chunks (AoS 72B) com teste escalar
@@ -549,8 +548,7 @@ void PlayerController::updateWorld(float dt) {
         wacc += dt;
         if (wacc >= 1.0f) {
             wacc = 0.0f;
-            ERUPTION_LOG_WARN("[PC-WORLD] daynight=%.2f modelAnim=%.2f sprites=%.2f chunkCull=%.2f ms",
-                              w_day, w_anim, w_spr, w_chunk);
+            ERUPTION_LOG_WARN("[PC-WORLD] daynight=%.2f modelAnim=%.2f chunkCull=%.2f ms", w_day, w_anim, w_chunk);
         }
     }
     m_engine->debugLineRenderer().clearLines();
@@ -765,8 +763,6 @@ eruption::CSSRect PlayerController::getMinimapInfoRect(const ImVec2& displaySize
 static Palette s_lastBodyPal;
 static Palette s_lastHairPal;
 void PlayerController::editorSprites() {
-    m_engine->spriteSystem().processSprites(m_engine->camera().frustum(), m_engine->camera().position(),
-                                            m_engine->camera().forward());
     updatePlayerSprites(0.0f);
 }
 
