@@ -11,6 +11,9 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <string>
 #include <vector>
 
 namespace eruption {
@@ -95,6 +98,75 @@ int vfx_move(lua_State* L) {
     return 0;
 }
 
+// vfx.area(id, {shape, position, ...}) ou vfx.area(id, nil): indicador de
+// area no chao (decal do characters.ring), preso ao id ate' sair.
+float areaField(lua_State* L, const char* k, float def) {
+    lua_getfield(L, 2, k);
+    const float v = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : def;
+    lua_pop(L, 1);
+    return v;
+}
+
+int vfx_area(lua_State* L) {
+    const std::string id = luaL_checkstring(L, 1); // numero vira texto
+    if (lua_isnoneornil(L, 2)) {
+        g_engine->setGroundArea(id, nullptr);
+        return 0;
+    }
+    luaL_checktype(L, 2, LUA_TTABLE);
+    lua_getfield(L, 2, "shape");
+    const std::string shape = lua_isstring(L, -1) ? lua_tostring(L, -1) : "circle";
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "position");
+    if (!lua_isvector(L, -1)) luaL_error(L, "vfx.area: position (vector) is required");
+    const float* pv = lua_tovector(L, -1);
+    const Vec3 pos(pv[0], pv[1], pv[2]);
+    lua_pop(L, 1);
+    // Direcao: vetor (y ignorado) ou yaw em graus, como no vfx.play.
+    const float yaw = glm::radians(areaField(L, "yaw", 0.0f));
+    Vec2 dir(std::sin(yaw), std::cos(yaw));
+    lua_getfield(L, 2, "direction");
+    if (lua_isvector(L, -1)) {
+        const float* v = lua_tovector(L, -1);
+        if (v[0] * v[0] + v[2] * v[2] > 1e-8f) dir = glm::normalize(Vec2(v[0], v[2]));
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "color");
+    Vec3 cor(1.0f);
+    if (lua_isvector(L, -1)) {
+        const float* v = lua_tovector(L, -1);
+        cor = Vec3(v[0], v[1], v[2]);
+    }
+    lua_pop(L, 1);
+
+    GroundRing a;
+    a.dir = Vec4(dir, 4.0f, 0.0f);
+    float extent = 0.0f;
+    if (shape == "line") {
+        extent = areaField(L, "length", 0.0f);
+        a.shape.w = 1.0f;
+        a.dir.w = 0.5f * std::max(areaField(L, "width", extent * 0.2f), 0.1f);
+    } else {
+        extent = areaField(L, "radius", 0.0f);
+        const bool setor = shape == "cone" || shape == "arc";
+        if (shape == "ring" || shape == "arc")
+            a.dir.w = std::clamp(areaField(L, "inner", extent * 0.6f), 0.0f, extent * 0.98f);
+        else if (shape != "circle" && shape != "cone")
+            luaL_error(L, "vfx.area: unknown shape '%s' (circle, ring, line, cone, arc)", shape.c_str());
+        if (setor) a.dir.z = 0.5f * glm::radians(std::clamp(areaField(L, "angle", 90.0f), 1.0f, 360.0f));
+    }
+    if (extent <= 0.0f) luaL_error(L, "vfx.area: %s must be > 0", shape == "line" ? "length" : "radius");
+    a.center = Vec4(pos, extent);
+    a.color = Vec4(cor, std::clamp(areaField(L, "alpha", 0.8f), 0.0f, 1.0f));
+    // Folga de um raio para cima e para baixo (rampa de ate' 45 graus), como o anel.
+    const float folga = std::max(extent, 4.0f);
+    a.shape = Vec4(std::max(areaField(L, "border", std::max(1.0f, extent * 0.04f)), 0.0f), folga, folga, a.shape.w);
+    a.fill = Vec4(std::clamp(areaField(L, "fill", 1.0f), 0.0f, 1.0f),
+                  std::clamp(areaField(L, "fill_alpha", 0.25f), 0.0f, 1.0f), 0.0f, 0.0f);
+    g_engine->setGroundArea(id, &a);
+    return 0;
+}
+
 int vfx_playing(lua_State* L) {
     lua_pushboolean(L, g_engine->vfx().isPlaying(static_cast<uint32_t>(luaL_checknumber(L, 1))));
     return 1;
@@ -106,10 +178,12 @@ void registerVfxApi(lua_State* L, Engine& engine) {
     g_engine = &engine;
     for (uint32_t id : g_owned) engine.vfx().stop(id, true);
     g_owned.clear();
+    engine.clearGroundAreas(); // o script novo nao conhece os ids do antigo
     static const luaL_Reg fns[] = {{"play", vfx_play},
                                    {"stop", vfx_stop},
                                    {"move", vfx_move},
                                    {"playing", vfx_playing},
+                                   {"area", vfx_area},
                                    {nullptr, nullptr}};
     lua_newtable(L);
     for (const luaL_Reg* f = fns; f->name; ++f) {
@@ -143,6 +217,21 @@ declare vfx: {
     move: (id: number, position: vector, scale: number?, yaw: number?) -> (),
     -- False once the effect ended or was stopped.
     playing: (id: number) -> boolean,
+    -- A shape on the ground lying on the relief (skill area, aim, range),
+    -- kept under `id` until area(id, nil). Calling again with the same id
+    -- moves or changes it. shape: "circle" (default), "ring" (inner
+    -- radius, default 0.6 of radius), "line" (from position along the
+    -- direction: length, width default 0.2 of length), "cone" (angle, the
+    -- full opening in degrees, default 90) or "arc" (a cone with inner).
+    -- Sizes in world units, like positions. direction: vector (y ignored)
+    -- or yaw in degrees. fill (0..1, default 1) grows the inside from the
+    -- center (or the start of the line), with a bright front while it runs;
+    -- fill_alpha (default 0.25) is the inside, border (default 4% of the
+    -- size, at least 1; 0 = none) the outline. color defaults to white,
+    -- alpha to 0.8. Not hidden by team vision; cleared on script reload.
+    area: (id: string | number, area: { shape: string?, position: vector, radius: number?, inner: number?,
+        length: number?, width: number?, angle: number?, direction: vector?, yaw: number?, fill: number?,
+        fill_alpha: number?, border: number?, color: vector?, alpha: number? }?) -> (),
 }
 )";
 }
