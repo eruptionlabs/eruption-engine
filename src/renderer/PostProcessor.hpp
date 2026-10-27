@@ -209,6 +209,8 @@ public:
     // Visao de equipe (core/Vision): textura R8 da janela e x=canto x, y=canto
     // z, z=1/lado, w=dim (< 0 = desligada, o composite nem amostra).
     void setVisionMap(VkImageView view, const Vec4& params) { m_visionView = view; m_visionParams = params; }
+    // pbr do G-buffer: a marca de sprite que o borrao de movimento respeita.
+    void setSpriteMark(VkImageView view) { m_spriteMarkView = view; }
     void resize(uint32_t width, uint32_t height);
     uint32_t width() const { return m_width; }
     uint32_t height() const { return m_height; }
@@ -356,6 +358,7 @@ private:
     int m_lensFlareRays = 6;
     VkImageView m_visionView = VK_NULL_HANDLE;
     Vec4 m_visionParams = Vec4(0.0f, 0.0f, 0.0f, -1.0f);
+    VkImageView m_spriteMarkView = VK_NULL_HANDLE;
     VkPipeline m_bloomDownPipeline = VK_NULL_HANDLE;
     VkPipeline m_bloomUpPipeline = VK_NULL_HANDLE;
     VkPipeline m_weatherPipeline = VK_NULL_HANDLE;

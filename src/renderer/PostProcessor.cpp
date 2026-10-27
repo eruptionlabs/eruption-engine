@@ -239,7 +239,7 @@ void PostProcessor::createImages() {
 }
 
 void PostProcessor::createDescriptors() {
-    VkDescriptorSetLayoutBinding bindings[10] = {};
+    VkDescriptorSetLayoutBinding bindings[11] = {};
     // Bindings 0..3: image samplers used by postprocess passes.
     // Binding 3 is also reused as the cloud color input by post_composite.frag.
     for (int i = 0; i < 4; i++) {
@@ -284,6 +284,12 @@ void PostProcessor::createDescriptors() {
     bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[9].descriptorCount = 1;
     bindings[9].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Binding 10: pbr do G-buffer (marca de sprite), lido pelo borrao de
+    // movimento do composite.
+    bindings[10].binding = 10;
+    bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[10].descriptorCount = 1;
+    bindings[10].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     // UPDATE_AFTER_BIND: estes sets sao reescritos por frame com as MESMAS
     // views enquanto o CB do frame anterior ainda esta' pendente - sem a flag
@@ -292,17 +298,17 @@ void PostProcessor::createDescriptors() {
     // corrida real de dados.
     // Flag SO' nos combined-image-samplers: UAB de UBO/SSBO exige features
     // proprias (descriptorBinding*BufferUpdateAfterBind) que nao habilitamos.
-    std::vector<VkDescriptorBindingFlags> uabFlags(10, 0);
-    for (uint32_t b = 0; b < 10; ++b)
+    std::vector<VkDescriptorBindingFlags> uabFlags(11, 0);
+    for (uint32_t b = 0; b < 11; ++b)
         if (m_ctx->bindless() && bindings[b].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
             uabFlags[b] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo uabInfo{};
     uabInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-    uabInfo.bindingCount = 10;
+    uabInfo.bindingCount = 11;
     uabInfo.pBindingFlags = uabFlags.data();
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 10;
+    layoutInfo.bindingCount = 11;
     layoutInfo.pBindings = bindings;
     layoutInfo.pNext = m_ctx->bindless() ? &uabInfo : nullptr;
     // Sem descriptor indexing nao ha' UPDATE_AFTER_BIND (caminho .nb).
@@ -315,7 +321,7 @@ void PostProcessor::createDescriptors() {
     const uint32_t numSets = kSetsPerFrame * VulkanContext::MAX_FRAMES_IN_FLIGHT;
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 8 * numSets;
+    poolSizes[0].descriptorCount = 9 * numSets;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[1].descriptorCount = numSets;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -1530,6 +1536,13 @@ if (!m_ctx) return;
         w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w.descriptorCount = 1;
         w.pImageInfo = &info;
+        updateSets(&w, 1);
+        // Binding 10 (marca de sprite) idem: sem G-buffer, a profundidade.
+        // NEAREST (o da profundidade da exposicao): marca nao se interpola.
+        const VkImageView mark = m_spriteMarkView != VK_NULL_HANDLE ? m_spriteMarkView : depthInput;
+        VkDescriptorImageInfo markInfo{m_lumDepthSampler, mark, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        w.dstBinding = 10;
+        w.pImageInfo = &markInfo;
         updateSets(&w, 1);
     }
     beginFullscreenPass(cmd, compositeTarget, m_width, m_height);
