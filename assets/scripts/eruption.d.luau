@@ -318,6 +318,9 @@ declare characters: {
     -- the disc also under the feet in the sun, at that strength. The disc is
     -- as wide as the sprite's feet (the bottom of its opaque pixels).
     set_shadow: (kind: string?, opts: { contact_sun: number? }?) -> (),
+    -- Every character's sprite drawn this many frame pixels lower (0..64,
+    -- default 0): the feet sink into the ground instead of resting on it.
+    set_sink: (pixels: number?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,

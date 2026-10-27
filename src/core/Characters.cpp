@@ -445,7 +445,12 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         float xOff = static_cast<float>(spr.offsetX);
         if (mirror) xOff = -xOff;
         // Base do quadro no chão (mesma regra dos sprites PNG do jogador).
-        s.texRect = Vec4(xOff * kPixelToWorld, spr.offsetY * kPixelToWorld, spriteYaw, -h * 0.5f);
+        // characters.set_sink: o quadro desce uns pixels, o pe' entra no chao
+        // (sem isso a borda de baixo do desenho fica na ancora e o boneco
+        // parece flutuar). O trecho abaixo da ancora toma a profundidade do
+        // chao no sprite_vert.glsl e passa por cima dele, sem ser cortado.
+        const float sink = m_spriteSinkPixels * kPixelToWorld * fxScale;
+        s.texRect = Vec4(xOff * kPixelToWorld, spr.offsetY * kPixelToWorld + sink, spriteYaw, -h * 0.5f);
         s.size = Vec2(w, h);
         const float topo = -s.texRect.y + h - static_cast<float>(tex.opaqueTop) * kPixelToWorld * spr.scaleY * fxScale;
         if (topo > headTop) {
