@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
@@ -211,12 +212,16 @@ static uint8_t toUnorm8(float v) {
 
 // Altura da rede (media zero, unidade dela) -> [0,1] centrado em 0.5, com o
 // percentil 98 de |h| em 0.45: a mesma faixa util da sintese classica, que
-// e' a que os controles de displacement esperam.
-static std::vector<float> neuralHeightToUnit(const std::vector<float>& h) {
-    if (h.empty()) return {};
-    std::vector<float> mag(h.size());
-    for (size_t i = 0; i < h.size(); ++i) mag[i] = std::fabs(h[i]);
-    const size_t k = h.size() * 98 / 100;
+// e' a que os controles de displacement esperam. A escala sai da altura CRUA
+// da rede (scaleFrom) e vale pra refinada (h): o relevo grosso fica igual
+// quando o detalhe fino volta (rocha com fendas: 1,3% dos texels fora de
+// [0,1] e cortados, contra 1,0% escalando pela refinada, que achatava o
+// relevo grosso em 4%).
+static std::vector<float> neuralHeightToUnit(const std::vector<float>& h, const std::vector<float>& scaleFrom) {
+    if (h.empty() || scaleFrom.size() != h.size()) return {};
+    std::vector<float> mag(scaleFrom.size());
+    for (size_t i = 0; i < scaleFrom.size(); ++i) mag[i] = std::fabs(scaleFrom[i]);
+    const size_t k = mag.size() * 98 / 100;
     std::nth_element(mag.begin(), mag.begin() + static_cast<std::ptrdiff_t>(k), mag.end());
     const float scale = 0.45f / std::max(mag[k], 1e-6f);
     std::vector<float> out(h.size());
@@ -226,10 +231,22 @@ static std::vector<float> neuralHeightToUnit(const std::vector<float>& h) {
 
 // MRAH-W + normal a partir da saida da rede. Exige normal e altura (o que o
 // relevo usa); metal/rugosidade/AO que a rede nao der ficam no padrao.
-static bool fillPbrFromNeural(const NeuralPbrMaps& nn, PbrTextureData& outMrahw, PbrTextureData& outNormal) {
+// A altura da rede vem borrada (fenda fina vira vale largo e raso); o
+// detalhe fino volta das linhas do albedo (refineHeightWithAlbedoLines).
+static bool fillPbrFromNeural(const NeuralPbrMaps& nn, const uint8_t* rgba,
+                              PbrTextureData& outMrahw, PbrTextureData& outNormal) {
     const size_t np = static_cast<size_t>(nn.width) * nn.height;
     if (nn.normal.size() != np * 3 || nn.heightMap.size() != np) return false;
-    const std::vector<float> height = neuralHeightToUnit(nn.heightMap);
+    std::vector<float> refined = nn.heightMap;
+    // ERUPTION_TEST_NO_HEIGHT_REFINE=1: altura crua da rede, pra A/B na
+    // bancada (so' na sintese direta; nao assar pack com isto ligado - a
+    // chave do pack nao sabe dele).
+    static const bool kNoRefine = [] {
+        const char* e = std::getenv("ERUPTION_TEST_NO_HEIGHT_REFINE");
+        return e && *e && *e != '0';
+    }();
+    if (!kNoRefine) refineHeightWithAlbedoLines(rgba, nn.normal.data(), nn.width, nn.height, refined);
+    const std::vector<float> height = neuralHeightToUnit(refined, nn.heightMap);
     const bool hasMetal = nn.metallic.size() == np, hasRough = nn.roughness.size() == np, hasAo = nn.ao.size() == np;
     outNormal.width = outMrahw.width = nn.width;
     outNormal.height = outMrahw.height = nn.height;
@@ -275,7 +292,7 @@ bool synthesizePbrFromPixels(const std::vector<uint8_t>& pixels, int width, int 
 
     // Rede neural configurada localmente (NeuralPbr.hpp), quando existe.
     NeuralPbrMaps nn;
-    if (neuralPbrInfer(rgba.data(), w, h, nn) && fillPbrFromNeural(nn, outMrahw, outNormal)) return true;
+    if (neuralPbrInfer(rgba.data(), w, h, nn) && fillPbrFromNeural(nn, rgba.data(), outMrahw, outNormal)) return true;
 
     // Altura, normal e cavidade vem do MESMO lugar que o cooker offline
     // (HeightFromAlbedo.hpp) - antes cada um tinha a sua conta e nenhuma

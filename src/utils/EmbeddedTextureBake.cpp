@@ -119,10 +119,17 @@ void logSynthesisLevels(const NeuralPbrStats& before, size_t synthesized, uint64
 
 // Quem sintetizou o PBR: 0 = ninguem, 1 = classica, senao a chave da rede
 // (modelo + mapeamento). Trocar de modelo invalida o pack.
+// O que o motor faz com a saida da rede tambem muda o pack: a versao do
+// pos-processo entra na chave (1 = altura refinada pelas linhas do albedo,
+// refineHeightWithAlbedoLines). Pack de rede antigo e' re-assado uma vez.
+constexpr uint32_t kNeuralPostVersion = 1u;
+
 uint32_t synthKey(bool synthPbr) {
     if (!synthPbr) return 0u;
-    const uint32_t k = neuralPbrKey();
-    return k > 1u ? k : 1u;
+    const uint32_t net = neuralPbrKey();
+    if (net <= 1u) return 1u;
+    const uint32_t k = (net ^ (kNeuralPostVersion * 0x9E3779B9u)) * 16777619u;
+    return k > 1u ? k : 2u; // 0 e 1 sao "sem sintese" e "sintese classica"
 }
 
 // Pack assado com a rede numa maquina vale numa maquina SEM rede (ex.: GPU

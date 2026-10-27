@@ -94,4 +94,18 @@ struct HeightFromAlbedoParams {
 HeightFromAlbedoResult heightFromAlbedo(const uint8_t* rgba, int width, int height,
                                         const HeightFromAlbedoParams& params = {});
 
+// Devolve a altura de uma fonte externa (a rede neural do bake) o detalhe fino
+// que ela borra. Onde: linhas finas do albedo (Hessiana na menor escala), com
+// sinal e peso pela correlacao local da propria altura com essas linhas.
+// Quanto: a energia de gradiente fino que a NORMAL da mesma fonte tem e a
+// altura nao (escala normal->altura pela banda de 30-125 texels). Sem deficit
+// ou sem linha, nao mexe. normalXyz: xyz intercalado, +Y pra cima na imagem
+// (NeuralPbrMaps::normal). Altura em qualquer unidade, media zero; no lugar.
+// Por que (rocha com fendas de lava, rede em 512, 2026-10-26): a rede poe a
+// fenda baixa mas larga (-0,30 desvio no centro, ainda -0,19 a 2 texels) e a
+// geometria saia chapada, enquanto a normal dela pede o dobro da inclinacao
+// fina que a altura tem. Pedra e chao (normal ja' coerente): nao mudam.
+void refineHeightWithAlbedoLines(const uint8_t* rgba, const float* normalXyz, int width, int height,
+                                 std::vector<float>& heightMap);
+
 } // namespace eruption
