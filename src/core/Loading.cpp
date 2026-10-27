@@ -83,14 +83,18 @@ void Engine::presentLoadingScreen(const std::string& mapName, const std::string&
 void Engine::setGameLoadProgress(float done, float total) {
     total = std::max(total, 0.0f);
     done = std::clamp(done, 0.0f, total);
-    if (done > m_gameLoadDone + 1e-4f && m_gameStepAge > 0.0f) {
-        // Ritmo dos passos (media movel): a barra anda nesse passo ate' o proximo.
-        const float perStep = m_gameStepAge / std::max(done - m_gameLoadDone, 1.0f);
-        m_gameStepSecs = std::clamp(0.5f * m_gameStepSecs + 0.5f * perStep, 0.05f, 10.0f);
-        m_gameStepAge = 0.0f;
-    }
+    const float before = m_gameLoadTotal > 0.0f ? m_gameLoadDone / m_gameLoadTotal : 0.0f;
     m_gameLoadDone = std::max(m_gameLoadDone, done);
     m_gameLoadTotal = std::max(total, m_gameLoadDone);
+    // Um aviso que avancou e' um passo: o ritmo (segundos e fracao por aviso,
+    // medias moveis) vem dos avisos, nao de 1/total. O jogo que manda fracao
+    // (feito 0.03 de total 1) tinha um "passo" do tamanho da fila inteira.
+    const float gained = m_gameLoadTotal > 0.0f ? m_gameLoadDone / m_gameLoadTotal - before : 0.0f;
+    if (gained > 1e-5f && m_gameStepAge > 0.0f) {
+        m_gameStepSecs = std::clamp(0.5f * m_gameStepSecs + 0.5f * m_gameStepAge, 0.01f, 10.0f);
+        m_gameStepFrac = m_gameStepFrac < 0.0f ? gained : 0.5f * m_gameStepFrac + 0.5f * gained;
+        m_gameStepAge = 0.0f;
+    }
 }
 
 void Engine::holdLoading(bool on, float maxSeconds) {
@@ -124,20 +128,22 @@ void Engine::presentHeldLoading() {
     if (m_loadingFinishing) {
         m_loadingHeldProgress = 1.0f;
     } else {
-        // Entre dois avisos do jogo a barra anda no ritmo medido dos passos
-        // anteriores e vai freando (ate' 2 passos a frente), com um piso que
-        // anda 25%/s do que falta: nunca parada com trabalho andando. O max a
-        // segura quando o proximo aviso chega atras dela. Simulado em filas de
-        // 3 a 60 passos: no maximo ~0,5 s na mesma %, salvo o ultimo passo
-        // muito longo (a barra espera o release em 99%).
+        // Entre dois avisos do jogo a barra anda no ritmo medido dos avisos
+        // anteriores e vai freando, com um piso a 30% desse ritmo; os dois
+        // param 2 passos a frente do informado. O max a segura quando o
+        // proximo aviso chega atras dela. O piso antigo (25%/s do que falta,
+        // sem teto) chegava a 99% em 40% de uma fila linear e parava ~20 s.
+        // Simulado: fila linear de 30 s acompanha o informado a 0,3%; passos
+        // irregulares, ate' 17% de desvio.
         m_gameStepAge += dt;
         float game = 0.0f;
         if (m_gameLoadTotal > 0.0f) {
             const float reported = m_gameLoadDone / m_gameLoadTotal;
-            const float step = 1.0f / m_gameLoadTotal;
+            const float step = m_gameStepFrac > 0.0f ? m_gameStepFrac : std::min(1.0f / m_gameLoadTotal, 0.05f);
+            const float ceiling = std::min(reported + 2.0f * step, 1.0f);
             const float walk = 2.0f * (1.0f - std::exp(-m_gameStepAge / (2.0f * m_gameStepSecs)));
-            game = std::min(std::max(reported + step * walk,
-                                     m_gameLoadShown + (1.0f - m_gameLoadShown) * 0.25f * dt), 1.0f);
+            const float floorWalk = std::min(m_gameLoadShown + 0.3f * step / m_gameStepSecs * dt, ceiling);
+            game = std::min(std::max(reported + step * walk, floorWalk), ceiling);
         }
         m_gameLoadShown = std::max(m_gameLoadShown, game);
         const LoadingScreenStyle* style = projectLoadingStyle();
@@ -153,7 +159,8 @@ void Engine::presentHeldLoading() {
         // A fila do jogo recomeca na proxima carga.
         m_loadingFinishing = false;
         m_gameLoadDone = m_gameLoadTotal = m_gameLoadShown = m_gameStepAge = 0.0f;
-        m_gameStepSecs = 0.5f;
+        m_gameStepSecs = 2.0f;
+        m_gameStepFrac = -1.0f;
     }
 }
 

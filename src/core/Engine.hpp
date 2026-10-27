@@ -1677,7 +1677,8 @@ private:
     float m_gameLoadDone = 0.0f, m_gameLoadTotal = 0.0f; // loading.game_progress
     float m_gameLoadShown = 0.0f;       // fracao do jogo na barra, andando dentro do passo
     float m_gameStepAge = 0.0f;         // segundos desde o ultimo passo do jogo
-    float m_gameStepSecs = 0.5f;        // duracao media de um passo (ritmo da barra)
+    float m_gameStepSecs = 2.0f;        // segundos entre avisos (media; comeca lento)
+    float m_gameStepFrac = -1.0f;       // fracao ganha por aviso (media; < 0 = sem aviso)
     // loading.progress (LoadProgress.cpp): a carga em curso comeca num mapa
     // novo ou numa troca em segundo plano.
     std::string m_lpMap;
