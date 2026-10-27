@@ -425,6 +425,10 @@ public:
         m_tessBandDistance = bandDistance;
     }
     bool tessellationActive() const { return m_tessEnabled && m_tessPipeline != VK_NULL_HANDLE; }
+    float tessBandDistance() const { return m_tessBandDistance; }
+    // Amplitude do deslocamento (u_tessParams.z) para o teto por tamanho de
+    // malha (reliefSizeScale em ModelRenderer.cpp).
+    void setTessAmplitude(float amplitude) { m_tessAmplitude = amplitude; }
     // Solda da costura (preset "tessellation_seam_weld"): vale para as malhas
     // carregadas depois da chamada.
     void setSeamWeld(bool enabled) { m_seamWeld = enabled; }
@@ -1119,6 +1123,7 @@ private:
     size_t m_weldBytes = 0; // VRAM das soldas vivas (teto em createSeamWeld)
     VkShaderStageFlags m_pushStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     float m_tessBandDistance = 0.0f;
+    float m_tessAmplitude = 0.0f;
     VkPipeline m_tessPipeline = VK_NULL_HANDLE;
     // PRE-PASSE DE PROFUNDIDADE da folhagem: m_depthPipeline so' descarta e
     // escreve profundidade; m_pipelineNoDepthWrite e' o m_pipeline sem escrita
