@@ -135,6 +135,13 @@ bool Engine::bodyBlocked(const std::vector<uint32_t>& cand, int floorInstance, f
     return false;
 }
 
+float Engine::floorAmong(const std::vector<uint32_t>& cand, float terrainY, float x, float z, float fromY,
+                         int& instance) const {
+    const Floor f = floorOver(m_modelRenderer, cand, terrainY, x, z, fromY);
+    instance = f.instance;
+    return f.y;
+}
+
 float Engine::floorHeight(float x, float z, float fromY, bool* onModel) const {
     std::vector<uint32_t> cand;
     solidsIn(m_solid, m_modelRenderer.getInstances(), x, z, x, z, cand);

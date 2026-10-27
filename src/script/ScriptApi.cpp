@@ -1612,12 +1612,15 @@ int world_walkable(lua_State* L) {
 // Terceiro argumento: numero (raio so' contra os solidos, como sempre foi) ou
 // tabela { radius, margin }: raio do agente mais folga, longe dos solidos E
 // das celulas que nao andam (parede, rampa), tambem nos trechos alisados.
+// avoid_liquid na tabela: celula com o liquido acima do piso fica fora do
+// caminho (Engine::findPath).
 int world_path(lua_State* L) {
     // Busca longa num mapa grande e' trabalho do motor, nao laco do script:
     // fora do orcamento de tempo da chamada (como game.load).
     ScriptHost::NativeWork trabalho;
     const Vec3 from = checkVec3(L, 1), to = checkVec3(L, 2);
     float radius = 0.0f, clearance = 0.0f;
+    uint8_t avoid = 0;
     if (lua_istable(L, 3)) {
         lua_getfield(L, 3, "radius");
         const float agent = std::max(0.0f, float(luaL_optnumber(L, -1, 0.0)));
@@ -1625,11 +1628,22 @@ int world_path(lua_State* L) {
         const float margin = std::max(0.0f, float(luaL_optnumber(L, -1, 0.0)));
         lua_pop(L, 2);
         radius = clearance = agent + margin;
+        // avoid_liquid: true (qualquer liquido), "lava" ou "water".
+        lua_getfield(L, 3, "avoid_liquid");
+        if (lua_isboolean(L, -1) && lua_toboolean(L, -1)) {
+            avoid = Engine::kAvoidWater | Engine::kAvoidLava;
+        } else if (lua_isstring(L, -1)) {
+            const std::string kind = lua_tostring(L, -1);
+            if (kind == "lava") avoid = Engine::kAvoidLava;
+            else if (kind == "water") avoid = Engine::kAvoidWater;
+            else luaL_error(L, "avoid_liquid: true, \"lava\" or \"water\"");
+        }
+        lua_pop(L, 1);
     } else {
         radius = float(luaL_optnumber(L, 3, 0.0));
     }
     std::vector<Vec3> path;
-    if (!eng().findPath(from, to, radius, path, clearance)) {
+    if (!eng().findPath(from, to, radius, path, clearance, avoid)) {
         lua_pushnil(L);
         return 1;
     }
@@ -2544,7 +2558,11 @@ declare world: {
     -- { radius, margin } (world units) keeps every cell and every smoothed
     -- segment radius + margin away from solids AND from cells that do not
     -- walk (walls, blocked slopes); a start that touches a wall may leave it.
-    path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number? })?) -> { vector }?,
+    -- avoid_liquid (true, "lava" or "water") keeps the path out of cells with
+    -- that liquid over the floor; the body can still stand there. The path
+    -- also runs on solid objects: a bridge is crossed on its deck when the
+    -- walk reaches it at its end, and passed under from below.
+    path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number?, avoid_liquid: (boolean | string)? })?) -> { vector }?,
     -- Floor under (x, z) counting solid objects (bridges, walkways, kit
     -- slabs): the highest top below `fromY` (default: anywhere). Second value:
     -- true when it is an object, not the terrain.
