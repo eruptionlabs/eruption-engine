@@ -2448,6 +2448,11 @@ void Engine::applyGraphicsPreset() {
     // Raios do sol no mesmo passe: forca (0 desliga, padrao). O jogo liga no
     // data/graphics.json do projeto.
     m_godRaySun = std::clamp(p.value("god_ray_sun", 0.0f), 0.0f, 8.0f);
+    // Lens flare do sol no mesmo passe (fantasmas, halo, estrela): forca (0
+    // desliga, padrao) e linhas da estrela. O jogo liga no data/graphics.json
+    // do projeto; o script troca a forca e as linhas pelo look.
+    m_lensFlare = std::clamp(p.value("lens_flare", 0.0f), 0.0f, 8.0f);
+    m_lensFlareRays = std::clamp(p.value("lens_flare_rays", 6), 1, 16);
     // Particulas: pool total na GPU e escala de nascimento por preset.
     m_vfx.setBudget(static_cast<uint32_t>(std::max(1024, p.value("vfx_max_particles", 131072))),
                     p.value("vfx_spawn_scale", 1.0f));

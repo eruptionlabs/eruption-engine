@@ -67,6 +67,11 @@ struct LookConfig {
     float godRayWeight = 0.25f;
     float godRayExposure = 0.50f;
 
+    // --- Lens flare do sol (no mesmo passe; o preset "lens_flare" liga) ---
+    // forca = preset x lensFlare; linhas da estrela: 0 = as do preset.
+    float lensFlare = 1.0f;
+    int   lensFlareRays = 0;
+
     // --- Camada distante (parallax / profundidade aerea) ---
     // Distancia dessatura e lava a cor em direcao a atmosfera. E' o que separa
     // um plano de fundo "colado" de um que parece longe.

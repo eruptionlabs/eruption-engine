@@ -122,6 +122,8 @@ void LookConfig::loadFromJson(const nlohmann::json& j) {
     godRayDecay      = j.value("god_ray_decay", godRayDecay);
     godRayWeight     = j.value("god_ray_weight", godRayWeight);
     godRayExposure   = j.value("god_ray_exposure", godRayExposure);
+    lensFlare        = j.value("lens_flare", lensFlare);
+    lensFlareRays    = j.value("lens_flare_rays", lensFlareRays);
 
     vignette         = j.value("vignette", vignette);
     vignetteSoftness = j.value("vignette_softness", vignetteSoftness);
