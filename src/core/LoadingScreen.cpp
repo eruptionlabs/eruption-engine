@@ -16,10 +16,18 @@ ImU32 color(const float c[3], float alpha = 1.0f) {
                     int(alpha * 255.0f + 0.5f));
 }
 
-void strokedText(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 col, const char* text, float stroke) {
-    const ImU32 black = IM_COL32(0, 0, 0, 255);
-    for (const ImVec2 d : {ImVec2(-stroke, -stroke), ImVec2(stroke, -stroke), ImVec2(-stroke, stroke), ImVec2(stroke, stroke)})
-        dl->AddText(font, size, ImVec2(pos.x + d.x, pos.y + d.y), black, text);
+// Contorno: a letra repetida num circulo de raio `stroke` atras dela. So'
+// as 4 diagonais deixavam buraco nas retas a partir de 2 px; 8 cobrem ate'
+// 2 px e 16 o resto.
+void strokedText(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 col, const char* text, float stroke,
+                 ImU32 strokeCol) {
+    if (stroke > 0.0f) {
+        const int n = stroke <= 2.0f ? 8 : 16;
+        for (int i = 0; i < n; ++i) {
+            const float a = 6.2831853f * float(i) / float(n);
+            dl->AddText(font, size, ImVec2(pos.x + std::cos(a) * stroke, pos.y + std::sin(a) * stroke), strokeCol, text);
+        }
+    }
     dl->AddText(font, size, pos, col, text);
 }
 
@@ -65,19 +73,20 @@ void drawProjectLoadingBar(ImDrawList* dl, const ImVec2& display, const LoadingS
 
     ImFont* font = ImGui::GetFont();
     const float size = ImGui::GetFontSize() * s;
-    const float stroke = std::max(1.0f, s);
+    const float stroke = style.strokeWidth < 0.0f ? std::max(1.0f, s) : style.strokeWidth;
+    const ImU32 strokeCol = color(style.strokeColor);
     const ImU32 textCol = color(style.textColor);
     const std::string pct = std::to_string(int(progress * 100.0f)) + "%";
     const ImVec2 pctSize = font->CalcTextSizeA(size, FLT_MAX, 0.0f, pct.c_str());
-    strokedText(dl, font, size, ImVec2(pMax.x - pctSize.x, pMin.y - pctSize.y - 5.0f * s), textCol, pct.c_str(), stroke);
+    strokedText(dl, font, size, ImVec2(pMax.x - pctSize.x, pMin.y - pctSize.y - 5.0f * s), textCol, pct.c_str(), stroke, strokeCol);
 
     const float line = pMin.y - pctSize.y - 5.0f * s;
     if (!style.text.empty()) {
-        strokedText(dl, font, size, ImVec2(pMin.x, line), textCol, style.text.c_str(), stroke);
+        strokedText(dl, font, size, ImVec2(pMin.x, line), textCol, style.text.c_str(), stroke, strokeCol);
     } else if (!task.empty()) {
-        strokedText(dl, font, size, ImVec2(pMin.x, line), IM_COL32(150, 150, 150, 255), task.c_str(), stroke);
+        strokedText(dl, font, size, ImVec2(pMin.x, line), IM_COL32(150, 150, 150, 255), task.c_str(), stroke, strokeCol);
         if (!mapName.empty())
-            strokedText(dl, font, size, ImVec2(pMin.x, line - size - 2.0f * s), textCol, mapName.c_str(), stroke);
+            strokedText(dl, font, size, ImVec2(pMin.x, line - size - 2.0f * s), textCol, mapName.c_str(), stroke, strokeCol);
     }
 }
 

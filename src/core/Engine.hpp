@@ -149,7 +149,7 @@ public:
         auto _t2 = std::chrono::steady_clock::now();
         // Segura pelo script (loading.hold): nenhum quadro da cena antes do
         // release; no editor a espera nao vale (a interface sumiria).
-        if (m_loadingHeld && !m_editorMode) presentHeldLoading();
+        if ((m_loadingHeld || m_loadingFinishing) && !m_editorMode) presentHeldLoading();
         else render();
         auto _t3 = std::chrono::steady_clock::now();
         app.onRender(*this);
@@ -311,6 +311,8 @@ public:
     // cena (o jogo roda por tras) ate' soltar ou passar maxSeconds.
     void holdLoading(bool on, float maxSeconds = 30.0f);
     bool loadingHeld() const { return m_loadingHeld; }
+    // loading.game_progress: a fila do proprio jogo durante a espera.
+    void setGameLoadProgress(float done, float total);
     // loading.progress: (feito, total, pronto) da carga em curso. feito/total
     // e' a fracao da barra (nunca volta; na primeira carga, 0.3 + 0.7 * p,
     // como a barra unica do boot); total conta o mapa e o trabalho pendente
@@ -1670,6 +1672,12 @@ private:
     bool m_loadingHeld = false;
     float m_loadingHeldLeft = 0.0f;     // segundos ate' soltar sozinho
     float m_loadingHeldProgress = 0.0f; // barra durante a espera, ate' 0.99
+    bool m_loadingFinishing = false;    // release: um quadro a 100% antes da cena
+    bool m_presentingHeld = false;      // quadro desenhado pela espera (barra ja' pronta)
+    float m_gameLoadDone = 0.0f, m_gameLoadTotal = 0.0f; // loading.game_progress
+    float m_gameLoadShown = 0.0f;       // fracao do jogo na barra, andando dentro do passo
+    float m_gameStepAge = 0.0f;         // segundos desde o ultimo passo do jogo
+    float m_gameStepSecs = 0.5f;        // duracao media de um passo (ritmo da barra)
     // loading.progress (LoadProgress.cpp): a carga em curso comeca num mapa
     // novo ou numa troca em segundo plano.
     std::string m_lpMap;

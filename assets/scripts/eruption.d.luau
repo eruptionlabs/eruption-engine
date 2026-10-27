@@ -626,6 +626,12 @@ declare loading: {
     -- ready (and done/total = 1) only when nothing is pending; then it stays
     -- ready until the next map load (later streaming is the game running).
     progress: () -> (number, number, boolean),
+    -- The game's own queue while the screen is held: done of total steps.
+    -- The last part of the bar is the game's ("game_share" in the
+    -- project's "loading" block, e.g. 0.3). Between calls the bar keeps
+    -- moving at the pace of the steps so far, slowing down when a step
+    -- runs long; it shows 100% on the frame of release.
+    game_progress: (done: number, total: number) -> (),
 }
 
 -- Particle effects (Window > Effects). `name` is an effect of the game

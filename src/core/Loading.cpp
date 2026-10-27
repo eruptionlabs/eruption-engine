@@ -80,8 +80,24 @@ void Engine::presentLoadingScreen(const std::string& mapName, const std::string&
 // Background loading helpers (frame CB upload)
 // ------------------------------------------------------------------
 
+void Engine::setGameLoadProgress(float done, float total) {
+    total = std::max(total, 0.0f);
+    done = std::clamp(done, 0.0f, total);
+    if (done > m_gameLoadDone + 1e-4f && m_gameStepAge > 0.0f) {
+        // Ritmo dos passos (media movel): a barra anda nesse passo ate' o proximo.
+        const float perStep = m_gameStepAge / std::max(done - m_gameLoadDone, 1.0f);
+        m_gameStepSecs = std::clamp(0.5f * m_gameStepSecs + 0.5f * perStep, 0.05f, 10.0f);
+        m_gameStepAge = 0.0f;
+    }
+    m_gameLoadDone = std::max(m_gameLoadDone, done);
+    m_gameLoadTotal = std::max(total, m_gameLoadDone);
+}
+
 void Engine::holdLoading(bool on, float maxSeconds) {
-    if (on && !m_loadingHeld) m_loadingHeldProgress = 0.95f; // o "Finalizing"; dai' segue loading.progress
+    if (!on && m_loadingHeld) m_loadingFinishing = true; // o release mostra 100% num quadro
+    // Do zero: a conta da espera (motor + jogo) parte de onde a barra estava
+    // e o max dela nunca deixa voltar; partir de 0.95 pulava a parte do jogo.
+    if (on && !m_loadingHeld) m_loadingHeldProgress = 0.0f;
     m_loadingHeld = on;
     m_loadingHeldLeft = on ? std::max(maxSeconds, 0.0f) : 0.0f;
 }
@@ -91,20 +107,54 @@ void Engine::holdLoading(bool on, float maxSeconds) {
 void Engine::presentHeldLoading() {
     const float dt = std::min(m_timer.realDeltaTime(), 0.25f);
     m_loadingHeldLeft -= dt;
-    if (m_loadingHeldLeft <= 0.0f) {
+    if (m_loadingHeld && m_loadingHeldLeft <= 0.0f) {
         // Script que esqueceu o release (ou parou com erro) nao prende o jogo.
         ERUPTION_LOG_WARN("[LOADING] loading.hold sem release: soltando pelo tempo maximo");
         m_loadingHeld = false;
         render();
         return;
     }
-    // A barra segue o trabalho pendente (a mesma conta do loading.progress),
-    // sem chegar a 100% (so' o release termina).
+    // A barra segue o trabalho pendente do motor (a mesma conta do
+    // loading.progress) e a fila do jogo (loading.game_progress), cada um na
+    // sua parte (game_share do bloco "loading"), sem chegar a 100%: so' o
+    // release termina, com um quadro a 100% antes da cena.
     float done = 0.0f, total = 1.0f;
     bool ready = false;
     loadProgress(done, total, ready);
-    m_loadingHeldProgress = std::max(m_loadingHeldProgress, std::min(m_lpRaw, 0.99f));
+    if (m_loadingFinishing) {
+        m_loadingHeldProgress = 1.0f;
+    } else {
+        // Entre dois avisos do jogo a barra anda no ritmo medido dos passos
+        // anteriores e vai freando (ate' 2 passos a frente), com um piso que
+        // anda 25%/s do que falta: nunca parada com trabalho andando. O max a
+        // segura quando o proximo aviso chega atras dela. Simulado em filas de
+        // 3 a 60 passos: no maximo ~0,5 s na mesma %, salvo o ultimo passo
+        // muito longo (a barra espera o release em 99%).
+        m_gameStepAge += dt;
+        float game = 0.0f;
+        if (m_gameLoadTotal > 0.0f) {
+            const float reported = m_gameLoadDone / m_gameLoadTotal;
+            const float step = 1.0f / m_gameLoadTotal;
+            const float walk = 2.0f * (1.0f - std::exp(-m_gameStepAge / (2.0f * m_gameStepSecs)));
+            game = std::min(std::max(reported + step * walk,
+                                     m_gameLoadShown + (1.0f - m_gameLoadShown) * 0.25f * dt), 1.0f);
+        }
+        m_gameLoadShown = std::max(m_gameLoadShown, game);
+        const LoadingScreenStyle* style = projectLoadingStyle();
+        const float share = style ? style->gameShare : 0.0f;
+        const float engine = total > 0.0f ? done / total : 1.0f;
+        const float bar = (1.0f - share) * engine + share * m_gameLoadShown;
+        m_loadingHeldProgress = std::max(m_loadingHeldProgress, std::min(bar, 0.99f));
+    }
+    m_presentingHeld = true;
     presentLoadingScreen(m_currentMapName, "Finalizing", m_loadingHeldProgress, true);
+    m_presentingHeld = false;
+    if (m_loadingFinishing) {
+        // A fila do jogo recomeca na proxima carga.
+        m_loadingFinishing = false;
+        m_gameLoadDone = m_gameLoadTotal = m_gameLoadShown = m_gameStepAge = 0.0f;
+        m_gameStepSecs = 0.5f;
+    }
 }
 
 void Engine::renderLoadingProgress() {
@@ -443,10 +493,18 @@ void Engine::renderLoadingUI(const std::string& mapName, const std::string& task
         // mapa ainda e' a primeira carga (o script ve' a mesma conta).
         static float s_bootShown = 0.0f;
         float shown = std::clamp(progress, 0.0f, 1.0f);
-        if (!m_firstLoadOver) {
-            shown = m_isInitialBoot ? 0.3f * shown : 0.3f + 0.7f * shown;
-            shown = std::max(shown, s_bootShown);
-            s_bootShown = shown;
+        if (m_presentingHeld) {
+            // A espera ja' manda a barra pronta (motor + jogo, presentHeldLoading).
+            // Uma carga de mapa com o hold ja' ligado (hold no topo do script,
+            // lido no boot) passa pelo outro ramo, como qualquer carga.
+        } else {
+            if (!m_firstLoadOver) {
+                shown = m_isInitialBoot ? 0.3f * shown : 0.3f + 0.7f * shown;
+                shown = std::max(shown, s_bootShown);
+                s_bootShown = shown;
+            }
+            // O fim da barra e' da fila do jogo: o motor anda so' no resto.
+            shown *= 1.0f - style->gameShare;
         }
         drawProjectLoadingBar(ImGui::GetForegroundDrawList(), displaySize, *style, mapName, task, shown);
         ImGui::Render();

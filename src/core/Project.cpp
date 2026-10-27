@@ -242,6 +242,14 @@ void Project::readLoading(const json& j, Manifest& m) {
         std::copy(s.barColor, s.barColor + 3, s.textColor);
     if (l.contains("text_color")) readColor(l["text_color"], s.textColor);
     if (l.contains("background")) s.hasBackground = readColor(l["background"], s.background);
+    if (l.contains("text_stroke") && l["text_stroke"].is_object()) {
+        const json& st = l["text_stroke"];
+        if (st.contains("color")) readColor(st["color"], s.strokeColor);
+        if (st.contains("width") && st["width"].is_number())
+            s.strokeWidth = std::clamp(st["width"].get<float>(), 0.0f, 16.0f);
+    }
+    if (l.contains("game_share") && l["game_share"].is_number())
+        s.gameShare = std::clamp(l["game_share"].get<float>(), 0.0f, 0.9f);
     m.loading = s;
     m.loadingJson = l.dump();
 }
