@@ -671,6 +671,7 @@ public:
     };
     std::unordered_map<std::string, std::shared_future<std::shared_ptr<PreparedSheet>>> m_spritePreloads;
     void preloadCharacterSprite(const std::string& png);
+    bool characterSpritePreloaded(const std::string& png) const;
     bool loadSpriteFromPng(const std::string& path, LoadedSprite& out);
     bool loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out);
     void cleanupSpriteTextures(LoadedSprite& ls);
