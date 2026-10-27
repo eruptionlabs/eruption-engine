@@ -21,6 +21,7 @@ layout(location = 6) out vec4 v_prevClip;
 layout(location = 7) flat out float v_emissive;
 layout(location = 8) out vec3 v_obj;   // posicao na malha (detalhe da superficie)
 layout(location = 9) out vec2 v_shade;
+layout(location = 10) flat out vec3 v_ice; // translucida: refracao, absorcao, tamanho
 
 // Matrizes sem jitter do frame atual e do anterior (velocidade no G-buffer):
 // a malha e' desenhada no passe de geometria, antes da simulacao deste frame.
@@ -29,6 +30,7 @@ layout(std140, set = 3, binding = 0) uniform Push {
     mat4 viewProjNoJitter;
     mat4 prevViewProjNoJitter;
     uint listOffset;
+    uint translucent; // 0: passe opaco (G-buffer), 1: passe translucido
 } pc;
 
 mat3 axisAngle(vec3 a, float ang) {
@@ -41,6 +43,11 @@ mat3 axisAngle(vec3 a, float ang) {
 void main() {
     uint idx = renderList[pc.listOffset + gl_InstanceIndex];
     RenderRec r = recs[idx];
+    // Cada malha num passe so': fora do dela, o triangulo cai fora da tela.
+    if ((r.cutout.x != 0u) != (pc.translucent != 0u)) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        return;
+    }
     uint seed = r.sheet.w;
     mat3 R = axisAngle(unpackOct(r.look.w), unpackHalf2x16(r.look.z).x);
     // Cada particula com a sua forma e o seu tom: escala por eixo e brilho
@@ -66,6 +73,7 @@ void main() {
     vec2 dz = unpackHalf2x16(r.sheet.y);
     vec3 disp = vec3(unpackHalf2x16(r.sheet.z), dz.x);
     v_emissive = dz.y;
+    v_ice = vec3(unpackHalf2x16(r.cutout.y), r.posSize.w * k);
     gl_Position = u_viewProjection * vec4(world, 1.0);
     v_clip = pc.viewProjNoJitter * vec4(world, 1.0);
     v_prevClip = pc.prevViewProjNoJitter * vec4(world - disp, 1.0);

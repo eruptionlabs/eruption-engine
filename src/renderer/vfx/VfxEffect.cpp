@@ -150,6 +150,9 @@ void readEmitter(const json& j, VfxEmitterDesc& e) {
     e.nearFade = std::max(0.0f, num(j, "nearFade", e.nearFade));
     e.lowRes = num(j, "lowRes", e.lowRes);
     e.decal = num(j, "decal", e.decal);
+    e.translucent = num(j, "translucent", e.translucent);
+    e.refraction = num(j, "refraction", e.refraction);
+    e.absorption = num(j, "absorption", e.absorption);
     if (j.contains("mesh") && j["mesh"].is_string()) e.mesh = j["mesh"].get<std::string>();
     auto readSub = [&](const char* key, VfxSubEmitter& s) {
         if (!j.contains(key) || !j[key].is_object()) return;
@@ -252,6 +255,11 @@ json writeEmitter(const VfxEmitterDesc& e) {
     j["nearFade"] = e.nearFade;
     j["lowRes"] = e.lowRes;
     if (e.decal) j["decal"] = true;
+    if (e.translucent) {
+        j["translucent"] = true;
+        j["refraction"] = e.refraction;
+        j["absorption"] = e.absorption;
+    }
     if (!e.mesh.empty()) j["mesh"] = e.mesh;
     auto writeSub = [&](const char* key, const VfxSubEmitter& s) {
         if (s.emitter.empty()) return;
