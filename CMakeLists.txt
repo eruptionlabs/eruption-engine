@@ -134,6 +134,15 @@ foreach(luau_target Luau.Ast Luau.Compiler Luau.Config Luau.Analysis Luau.EqSat 
         endif()
     endif()
 endforeach()
+# Android: o Luau declara __register_frame como simbolo fraco, e o libunwind do
+# NDK e' estatico e escondido, entao a referencia fraca nao o puxava: ficava
+# para o carregador resolver em outra biblioteca do aparelho (ou em nada). O
+# codigo nativo do Luau registrava o desenrolar num unwinder que nao e' o que
+# lanca o erro de script, e um erro dentro de pcall chegava ao std::terminate
+# (app fechado com lua_exception nao capturada). Forte, liga no do proprio .so.
+if(ANDROID AND TARGET Luau.CodeGen)
+    target_compile_definitions(Luau.CodeGen PRIVATE LUAU_ENABLE_REGISTER_FRAME)
+endif()
 
 # Avoid stb_image conflicts with the engine's own ImageUtils.cpp implementation.
 target_compile_definitions(tinygltf PRIVATE
