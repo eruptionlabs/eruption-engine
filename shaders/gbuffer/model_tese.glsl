@@ -73,6 +73,7 @@ layout(push_constant) uniform PushConstants {
     float roughnessScale;
     float _pad;           // ERUPTION_TEST_MAGENTA_DEBUG - nao e' padding
     vec4 uvScale;
+    vec4 weld;            // solda da costura: x = slot, y = 1o triangulo do desenho, z = linhas (0 = sem)
 } push;
 
 layout(set = 1, binding = 0) uniform FrameUBO {
@@ -212,6 +213,15 @@ float seamEdgeMask(bool sa, bool sb, vec3 p, vec3 a, vec3 b, float r) {
     if (sa) m *= smoothstep(0.0, r, distance(p, a));
     if (sb) m *= smoothstep(0.0, r, distance(p, b));
     return m;
+}
+
+// SOLDA DA COSTURA (ModelRenderer::createSeamWeld). Por triangulo, 10
+// texels RGBA32F: 0..2 quina (normal soldada xyz, marcada), 3..5 quina (UV dona
+// xy, slot do MRAH-W dono em z, -1 = borda de malha), 6..8 aresta e = quina e ->
+// e+1 (UV do lado dono nas duas pontas), 9 tipo de cada aresta (0 interna,
+// 1 costura, 2 borda) + 4 x slot do dono.
+vec4 weldTexel(uint slot, int i) {
+    return textureLod(u_textures[nonuniformEXT(slot)], (vec2(float(i % 4096), float(i / 4096)) + 0.5) / vec2(4096.0, max(push.weld.z, 1.0)), 0.0);
 }
 
 float lut8(vec4 a, vec4 b, float t) {
@@ -375,8 +385,72 @@ void main() {
                                       distToSegment(wp, inWorldPos[2], inWorldPos[0])),
                                   distToSegment(wp, inWorldPos[0], inWorldPos[1]));
                 float seamMask = max(edgeBlend, smoothstep(0.0, kSeamR, dEdge));
+                vec3 dispDir = nrm;
+                float weldInner = 1.0; // 1 = miolo do triangulo, 0 = em cima da aresta soldada
+                const uint wslot = uint(push.weld.x + 0.5);
+                if (wslot != 0u && hSrc < 1.5) {
+                    // Os dois lados de cada aresta calculam o MESMO valor nela:
+                    // costura le a UV do dono, borda fica neutra, quina marcada
+                    // vale o da posicao; direcao pela normal soldada. Nada preso
+                    // em zero alem da borda da malha.
+                    const int base = (int(push.weld.y + 0.5) + gl_PrimitiveID) * 10;
+                    vec3 cWn[3];
+                    float cMark[3], cH[3];
+                    for (int c = 0; c < 3; ++c) {
+                        vec4 qa = weldTexel(wslot, base + c);
+                        vec4 qb = weldTexel(wslot, base + 3 + c);
+                        cWn[c] = normalize(qa.xyz);
+                        cMark[c] = qa.w;
+                        cH[c] = qb.z < -0.5 ? 0.5 : heightUv(uint(qb.z + 0.5), qb.xy, gainH, true);
+                    }
+                    vec4 codes = weldTexel(wslot, base + 9);
+                    float hE = 0.0, wsumE = 0.0;
+                    vec3 dE = vec3(0.0);
+                    for (int e = 0; e < 3; ++e) {
+                        int a = e, b = (e + 1) % 3;
+                        float s = bc[a] + bc[b];
+                        float t = s > 1e-6 ? bc[b] / s : 0.5;
+                        float len = distance(inWorldPos[a], inWorldPos[b]);
+                        float R = max(0.25 * len, 1e-3);
+                        float type = mod(codes[e], 4.0);
+                        float He = h;
+                        vec3 De = nrm;
+                        if (type > 1.5) {
+                            He = 0.5;
+                            De = normalize(mix(cWn[a], cWn[b], t));
+                        } else if (type > 0.5) {
+                            vec4 ou = weldTexel(wslot, base + 6 + e);
+                            He = heightUv(uint(floor(codes[e] / 4.0) + 0.5), mix(ou.xy, ou.zw, t), gainH, true);
+                            De = normalize(mix(cWn[a], cWn[b], t));
+                        }
+                        float ka = cMark[a] > 0.5 ? 1.0 - smoothstep(0.0, R, t * len) : 0.0;
+                        float kb = cMark[b] > 0.5 ? 1.0 - smoothstep(0.0, R, (1.0 - t) * len) : 0.0;
+                        He = mix(mix(He, cH[a], ka), cH[b], kb);
+                        De = mix(mix(De, cWn[a], ka), cWn[b], kb);
+                        float w = bc[a] * bc[b];
+                        hE += w * He;
+                        dE += w * De;
+                        wsumE += w;
+                    }
+                    float rT = 0.25 * min(min(distance(inWorldPos[0], inWorldPos[1]), distance(inWorldPos[1], inWorldPos[2])),
+                                          distance(inWorldPos[2], inWorldPos[0]));
+                    float mIn = smoothstep(0.0, max(rT, 1e-3), dEdge);
+                    float hB = h;
+                    vec3 dB = nrm;
+                    if (wsumE < 1e-7) {
+                        int c = bc.x > 0.5 ? 0 : (bc.y > 0.5 ? 1 : 2);
+                        if (cMark[c] > 0.5) { hB = cH[c]; dB = cWn[c]; }
+                    } else {
+                        hB = hE / wsumE;
+                        dB = dE;
+                    }
+                    h = mix(hB, h, mIn);
+                    weldInner = mIn;
+                    dispDir = normalize(mix(normalize(dB), nrm, mIn));
+                    seamMask = 1.0;
+                }
                 float ampW = u_tessParams.z * amp * push.uvScale.w * seamMask;
-                vec3 dsp = nrm * ((h - 0.5) * ampW);
+                vec3 dsp = dispDir * ((h - 0.5) * ampW);
                 wp += dsp;
 
                 // NORMAL ANALITICA DO RELEVO, no lugar da derivada de tela.

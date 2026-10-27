@@ -332,7 +332,9 @@ bool SpherePreview::createPipeline() {
     pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
                          VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
     pcRange.offset = 0;
-    pcRange.size = sizeof(Mat4) + sizeof(Vec4) * 2; // mesmo bloco de model_vert.glsl (96 B)
+    // Mesmo bloco de model.tese (112 B, com a solda da costura): o intervalo
+    // tem que cobrir o bloco inteiro que o estagio declara.
+    pcRange.size = sizeof(Mat4) + sizeof(Vec4) * 3;
 
     VkDescriptorSetLayout layouts[3] = {m_bindless->layout(), m_frameUboLayout, m_instLayout};
     VkPipelineLayoutCreateInfo layoutInfo{};
@@ -523,7 +525,8 @@ void SpherePreview::render(VkCommandBuffer cmd, float dt, const Vec3& cameraPos)
     VkDescriptorSet sets[3] = {m_bindless->set(), m_frameUboSet, m_instSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 3, sets, 0, nullptr);
 
-    struct { Mat4 vp; float alpha; float metallicScale; float roughnessScale; float pad; Vec4 uvScale; } push{};
+    // weld = 0: a esfera nao tem solda da costura.
+    struct { Mat4 vp; float alpha; float metallicScale; float roughnessScale; float pad; Vec4 uvScale; Vec4 weld; } push{};
     push.vp = vp; push.alpha = 1.0f; push.metallicScale = 0.0f; push.roughnessScale = 1.0f;
     // .w = fator de deslocamento (push.uvScale.w, mesmo campo que
     // ModelMeshGPU::dispScale) - m_dispScale, setado em setMaterial() com o

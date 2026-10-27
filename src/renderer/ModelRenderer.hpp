@@ -22,6 +22,13 @@
 namespace eruption {
 
 struct ModelMeshGPU {
+    // Solda da costura do deslocamento (ModelRenderer::createSeamWeld): textura
+    // de dados por triangulo do indice base (model_tese.glsl, weldTexel). E' do
+    // ModelRenderer, como os niveis de LOD: nasce depois do resolver.
+    uint32_t weldSlot = 0, weldRows = 0, weldTris = 0;
+    VkImage weldImage = VK_NULL_HANDLE;
+    VkImageView weldView = VK_NULL_HANDLE;
+    VmaAllocation weldAlloc = VK_NULL_HANDLE;
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
     // Malha com esqueleto: posições do frame anterior (vetor de movimento);
     // NULL = a própria malha (vértice parado). Dono: o skinning.
@@ -418,6 +425,9 @@ public:
         m_tessBandDistance = bandDistance;
     }
     bool tessellationActive() const { return m_tessEnabled && m_tessPipeline != VK_NULL_HANDLE; }
+    // Solda da costura (preset "tessellation_seam_weld"): vale para as malhas
+    // carregadas depois da chamada.
+    void setSeamWeld(bool enabled) { m_seamWeld = enabled; }
 
     void setGeoDisplacement(float amplitude, float distance) {
         m_geoDispAmplitude = amplitude;
@@ -798,6 +808,11 @@ private:
     static PreparedNode prepareNode(const ModelAsset& asset, size_t n, const NodeSlots& slots, const LodParams& lod,
                                     bool computeLod);
     static bool wantsLod(const LodParams& lod, bool skinned, size_t indexCount, size_t vertexCount);
+    // Solda da costura do deslocamento (preset "tessellation_seam_weld").
+    void createSeamWeld(ModelMeshGPU& mesh, const std::vector<struct TerrainVertex>& vertices,
+                        const std::vector<uint32_t>& indices);
+    // deferred: a GPU ainda pode estar lendo (descarga de asset no meio do jogo).
+    void releaseSeamWeld(ModelMeshGPU& mesh, bool deferred);
 
 public:
     struct PreparedAsset {
@@ -1097,6 +1112,11 @@ private:
     std::vector<uint32_t> m_lodSeenFrame;
 
     bool m_tessEnabled = false;
+    bool m_seamWeld = false;
+    // Amostrador da textura da solda: sem filtro (RGBA32F e' dado, e filtro
+    // linear em formato de 32 bits nao existe em toda GPU) e sem repeticao.
+    VkSampler m_weldSampler = VK_NULL_HANDLE;
+    size_t m_weldBytes = 0; // VRAM das soldas vivas (teto em createSeamWeld)
     VkShaderStageFlags m_pushStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     float m_tessBandDistance = 0.0f;
     VkPipeline m_tessPipeline = VK_NULL_HANDLE;
@@ -1115,7 +1135,7 @@ private:
         uint32_t mesh, count, instances, firstIndex, firstInstance;
         uint32_t levelCount; // indices do degrau inteiro (o desenho pode ser so' um trecho)
         bool tess;
-        uint8_t push[96];
+        uint8_t push[112];
     };
     std::vector<DrawRec> m_drawRecs;
     // Escala do balanco ao vento (windParams.y do quadro): folga das caixas
