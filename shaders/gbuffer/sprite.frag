@@ -94,6 +94,16 @@ mat3 computeTBN(vec3 N, vec3 worldPos, vec2 uv) {
     return mat3(T, B, N);
 }
 
+// Fade por pontilhado (characters.fade, alfa da tinta): Bayer 4x4 na tela,
+// parado no tempo. O sprite e' opaco no G-buffer (deferred), entao some
+// pixel a pixel em vez de misturar; alfa 1 nunca corta, 0 corta tudo.
+bool fadeCut(float a) {
+    const float bayer[16] = float[](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,
+                                    3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    ivec2 p = ivec2(gl_FragCoord.xy) & 3;
+    return a < (bayer[p.y * 4 + p.x] + 0.5) / 16.0;
+}
+
 void main() {
     vec4 albedo = texture(nonuniformEXT(u_textures[v_texIndex]), v_uv);
     // Derivadas antes de qualquer discard (depois dele o quad fica incompleto).
@@ -108,7 +118,7 @@ void main() {
         albedo.a = 1.0;
     }
 
-    if (albedo.a < 0.01) discard;
+    if (albedo.a < 0.01 || fadeCut(v_tint.a)) discard;
 
     // Keep albedo in sRGB for both legacy and PBR paths so the base brightness
     // matches the pre-PBR branch. Only F0/specular benefits from linear-space

@@ -124,7 +124,7 @@ void main() {
     projectedPos.y = groundY + 0.05; // Slightly above ground to avoid z-fighting
     projectedPos.xz -= lightDir.xz * (worldPos.y - groundY) / denom;
 
-    v_strength = 1.0;
+    v_strength = clamp(i_tintColor.a, 0.0, 1.0); // characters.fade clareia a sombra junto
 
     v_softness = clamp(planarParams.y, 0.0, 1.0);
 

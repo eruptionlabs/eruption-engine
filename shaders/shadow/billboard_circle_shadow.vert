@@ -68,9 +68,11 @@ layout(location = 2) out flat vec4 v_plane;  // plano do proprio billboard: norm
 // Direcao ao sol (xyz) e w = 1 quando o disco so' aparece fora do sol
 // ("map_contact"); w = 0, o disco de sempre.
 layout(location = 3) out flat vec4 v_sun;
+layout(location = 4) out flat float v_fade; // alfa da tinta (characters.fade)
 
 void main() {
     v_sun = shadowLightDir;
+    v_fade = clamp(i_tintColor.a, 0.0, 1.0);
     // Only billboards that cast shadows should render a drop shadow.
     if ((i_flags & 4u) == 0u || (i_flags & 512u) == 0u) {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0);

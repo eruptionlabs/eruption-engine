@@ -6,6 +6,7 @@ layout(location = 1) in flat vec4 v_shape;  // x = raio em Z, y = maciez, z = fo
 layout(location = 2) in flat vec4 v_plane;  // plano do proprio billboard
 layout(location = 3) in flat vec4 v_sun;    // xyz = direcao ao sol, w = 1: so' fora do sol
 
+layout(location = 4) in flat float v_fade; // characters.fade: o disco clareia junto
 layout(location = 0) out vec4 outShadow;
 
 // Set 0 reserved for bindless textures (not used but required to match pipeline layout)
@@ -124,6 +125,6 @@ void main() {
     // Dark multiplicative shadow without touching the lit-image alpha,
     // because the post-processor uses alpha for transparency blending.
     // 0.75 gives a strong but not black center (25% remaining light).
-    float darken = 1.0 - fade * intensity * 0.75;
+    float darken = 1.0 - fade * intensity * v_fade * 0.75;
     outShadow = vec4(darken, darken, darken, 1.0);
 }

@@ -57,8 +57,10 @@ layout(location = 0) out vec2 v_uv;
 layout(location = 1) out flat uint v_texIndex;
 layout(location = 2) out flat uint v_flags;
 layout(location = 3) out flat uint v_paletteIndex;
+layout(location = 4) out flat float v_fade; // alfa da tinta (characters.fade)
 
 void main() {
+    v_fade = i_tintColor.a;
     mat4 model = mat4(i_modelRow0, i_modelRow1, i_modelRow2, i_modelRow3);
     
     vec3 worldPos = vec3(model[3]);

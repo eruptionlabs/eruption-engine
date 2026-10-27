@@ -148,7 +148,8 @@ void main() {
     vec3 rightW = (u_inverseView * vec4(-1.0, 0.0, 0.0, 0.0)).xyz;
     vec3 n = normalize(cross(rightW, upW));
 
-    v_light = vec4(L, clamp(shadowLightDir.w, 0.0, 1.0));
+    // Opacidade vezes o alfa da tinta: characters.fade clareia a sombra junto.
+    v_light = vec4(L, clamp(shadowLightDir.w, 0.0, 1.0) * clamp(i_tintColor.a, 0.0, 1.0));
     v_anchor = vec4(A, xOff);
     v_axis = vec4(camR.x, scaleX, camR.z, scaleY);
     v_axisTop = rTop.xz;
