@@ -477,6 +477,17 @@ bool ModelRenderer::init(VulkanContext* ctx, BindlessDescriptor* bindless) {
         ERUPTION_LOG_ERROR("ModelRenderer: Failed to create sampler");
         return false;
     }
+    // Textura da solda da costura (createSeamWeld): dado por texel.
+    VkSamplerCreateInfo weldInfo{};
+    weldInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    weldInfo.magFilter = VK_FILTER_NEAREST;
+    weldInfo.minFilter = VK_FILTER_NEAREST;
+    weldInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    weldInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    weldInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    weldInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(m_ctx->device(), &weldInfo, nullptr, &m_weldSampler) != VK_SUCCESS)
+        m_weldSampler = VK_NULL_HANDLE; // sem solda; a costura fica presa como antes
 
     createPipeline();
 
@@ -587,6 +598,10 @@ void ModelRenderer::shutdown() {
         vkDestroyPipelineLayout(m_ctx->device(), m_pipelineLayout, nullptr);
         m_pipelineLayout = VK_NULL_HANDLE;
     }
+    if (m_weldSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(m_ctx->device(), m_weldSampler, nullptr);
+        m_weldSampler = VK_NULL_HANDLE;
+    }
     if (m_sampler != VK_NULL_HANDLE) {
         vkDestroySampler(m_ctx->device(), m_sampler, nullptr);
         m_sampler = VK_NULL_HANDLE;
@@ -603,6 +618,7 @@ void ModelRenderer::shutdown() {
 void ModelRenderer::clear() {
     clearSkinning(false);
     for (auto& mesh : m_meshes) {
+        releaseSeamWeld(mesh, false);
         mesh.shutdown(m_ctx);
     }
     m_meshes.clear();
@@ -763,9 +779,10 @@ void ModelRenderer::createPipeline() {
         m_pushStages |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
     pcRange.stageFlags = m_pushStages;
     pcRange.offset = 0;
-    // Push: viewProj (mat4) + alpha, metallic, roughness, pad + uvScale (vec4) = 96 B,
-    // dentro dos 128 B garantidos (GPU de celular para ai').
-    pcRange.size = sizeof(Mat4) + sizeof(Vec4) * 2;
+    // Push: viewProj (mat4) + alpha, metallic, roughness, pad + uvScale (vec4)
+    // + solda da costura (vec4, so' o model.tese le') = 112 B, dentro dos
+    // 128 B garantidos (GPU de celular para ai').
+    pcRange.size = sizeof(Mat4) + sizeof(Vec4) * 3;
 
     VkDescriptorSetLayout bindlessLayout = m_bindless->layout();
 
@@ -2245,6 +2262,18 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                 }
             }
 
+            // Solda da costura do deslocamento: so' onde a tesselacao le' a
+            // altura cozida (MRAH-W em .pbrIndex) e desloca de fato. Folhagem
+            // e malha com esqueleto ficam de fora. Antes do LOD, que pode
+            // levar os vertices.
+            if (m_seamWeld && m_ctx->tessellationSupported() && m_bindless != nullptr &&
+                !skinned && mesh.dispScale > 0.0f && mesh.swayAmount <= 0.0f) {
+                bool baked = false;
+                for (const auto& v : vertices)
+                    if (v.pbrIndex != 0) { baked = true; break; }
+                if (baked) createSeamWeld(mesh, vertices, *useIndices);
+            }
+
             // LOD grosseiro por distância. Um index buffer simplificado
             // sobre o MESMO vertex buffer: a instância longe desenha menos
             // triângulo sem uma segunda cópia da malha na VRAM.
@@ -2801,6 +2830,7 @@ std::vector<std::string> ModelRenderer::releaseAsset(const std::string& filePath
     rebuildHotData();
     // Os níveis de LOD são do renderizador; a base é do cache de assets (chaves).
     VulkanContext* ctx = m_ctx;
+    for (auto& m : dead) releaseSeamWeld(m, true);
     ctx->deferFrameCleanup([ctx, dead]() mutable {
         for (auto& m : dead) m.destroyLodBuffers(ctx);
     });
@@ -3219,8 +3249,10 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         float roughnessScale;
         float __pad;
         Vec4 uvScale;
+        Vec4 weld; // solda da costura: so' o model.tese le' (0 = sem)
     } push;
-    static_assert(sizeof(push) == 96, "push do modelo: layout de model_vert.glsl");
+    static_assert(sizeof(push) == 112, "push do modelo: layout de model_vert.glsl");
+    push.weld = Vec4(0.0f);
     push.vp = viewProj;
     push.__pad = magentaDebug ? 1.0f : 0.0f;
     // uvScale.x = ladrilhamento estocastico do CHAO (model_frag.glsl). Entra
@@ -3284,6 +3316,13 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         // uvScale.y = altura da malha (caixa local): a juncao com o chao
         // limita a faixa a uma fracao dela, para pedra baixa nao sumir inteira.
         push.uvScale.y = mesh < m_meshes.size() ? m_meshes[mesh].aabbMax.y - m_meshes[mesh].aabbMin.y : 0.0f;
+        push.weld = Vec4(0.0f);
+        if (mesh < m_meshes.size()) {
+            const ModelMeshGPU& wm = m_meshes[mesh];
+            if (tessBound && wm.weldSlot != 0 && ib == wm.indexBuffer && firstIndex / 3 < wm.weldTris)
+                push.weld = Vec4(static_cast<float>(wm.weldSlot), static_cast<float>(firstIndex / 3),
+                                 static_cast<float>(wm.weldRows), 0.0f);
+        }
         std::memcpy(r.push, &push, sizeof(push));
         m_drawRecs.push_back(r);
     };
@@ -5229,6 +5268,206 @@ void ModelRenderer::sortVisibleByMesh(std::vector<uint32_t>& list, bool useLod, 
         return;
     }
     list.swap(m_sortScratch);
+}
+
+
+// SOLDA DA COSTURA. Sem ela a costura (posicao com UV/textura/normal
+// diferente de um lado e do outro) prende o deslocamento em zero: nas pedras
+// de textura em retalhos quase toda aresta fica parada e a superficie dobra
+// ate' ela. Aqui cada lado da aresta recebe o que precisa para calcular o
+// MESMO valor nela: a UV do triangulo dono (o de menor indice), a altura da
+// posicao nas quinas e a normal soldada (media das normais da posicao).
+// Watertight displacement (Castano, NVIDIA 2008), por textura de dados de
+// 160 B por triangulo; teto de 400 mil triangulos por malha e de 256 MB no
+// total (o que passar fica com a costura presa, como antes).
+void ModelRenderer::createSeamWeld(ModelMeshGPU& mesh, const std::vector<TerrainVertex>& vertices,
+                                   const std::vector<uint32_t>& indices) {
+    const size_t nv = vertices.size(), nt = indices.size() / 3;
+    constexpr size_t kMaxTris = 400000;
+    constexpr size_t kMaxBytes = size_t(256) << 20;
+    if (nv == 0 || nt == 0 || nt > kMaxTris || m_weldBytes + nt * 160 > kMaxBytes || m_weldSampler == VK_NULL_HANDLE) return;
+    // Grupo de posicao de cada vertice (mesma chave do marcador de costura).
+    struct PosRef { int64_t x, y, z; uint32_t vi; };
+    std::vector<PosRef> pos(nv);
+    for (uint32_t vi = 0; vi < nv; ++vi) {
+        const Vec3& p = vertices[vi].position;
+        pos[vi] = {std::llround(p.x * 1000.0f), std::llround(p.y * 1000.0f), std::llround(p.z * 1000.0f), vi};
+    }
+    std::sort(pos.begin(), pos.end(), [](const PosRef& a, const PosRef& b) {
+        if (a.x != b.x) return a.x < b.x;
+        if (a.y != b.y) return a.y < b.y;
+        if (a.z != b.z) return a.z < b.z;
+        return a.vi < b.vi;
+    });
+    std::vector<uint32_t> gid(nv), domVert;
+    std::vector<Vec3> weldN;
+    for (size_t g0 = 0; g0 < nv;) {
+        size_t g1 = g0 + 1;
+        while (g1 < nv && pos[g1].x == pos[g0].x && pos[g1].y == pos[g0].y && pos[g1].z == pos[g0].z) ++g1;
+        Vec3 n(0.0f);
+        for (size_t k = g0; k < g1; ++k) {
+            gid[pos[k].vi] = static_cast<uint32_t>(domVert.size());
+            n += vertices[pos[k].vi].normal;
+        }
+        domVert.push_back(pos[g0].vi);
+        const float l = glm::length(n);
+        weldN.push_back(l > 1e-6f ? n / l : vertices[pos[g0].vi].normal);
+        g0 = g1;
+    }
+    // Arestas por par de posicoes: 1 uso = borda; 2+ usos com os mesmos
+    // indices = interna; senao costura, e o dono e' o primeiro uso.
+    struct EdgeUse { uint64_t key; uint32_t te; };
+    std::vector<EdgeUse> uses;
+    uses.reserve(nt * 3);
+    for (uint32_t t = 0; t < nt; ++t)
+        for (uint32_t e = 0; e < 3; ++e) {
+            const uint32_t ga = gid[indices[t * 3 + e]], gb = gid[indices[t * 3 + (e + 1) % 3]];
+            uses.push_back({(static_cast<uint64_t>(std::min(ga, gb)) << 32) | std::max(ga, gb), t * 3 + e});
+        }
+    std::sort(uses.begin(), uses.end(), [](const EdgeUse& a, const EdgeUse& b) {
+        return a.key != b.key ? a.key < b.key : a.te < b.te;
+    });
+    std::vector<uint8_t> edgeType(nt * 3, 0);
+    std::vector<uint32_t> edgeOwner(nt * 3, 0);
+    std::vector<uint8_t> boundaryPos(domVert.size(), 0);
+    auto vertOf = [&](uint32_t te, uint32_t k) { return indices[(te / 3) * 3 + (te % 3 + k) % 3]; };
+    for (size_t u0 = 0; u0 < uses.size();) {
+        size_t u1 = u0 + 1;
+        while (u1 < uses.size() && uses[u1].key == uses[u0].key) ++u1;
+        const uint32_t owner = uses[u0].te;
+        if (u1 - u0 == 1) {
+            edgeType[owner] = 2;
+            boundaryPos[gid[vertOf(owner, 0)]] = 1;
+            boundaryPos[gid[vertOf(owner, 1)]] = 1;
+        } else {
+            const uint32_t oa = vertOf(owner, 0), ob = vertOf(owner, 1);
+            for (size_t k = u0; k < u1; ++k) {
+                const uint32_t te = uses[k].te, a = vertOf(te, 0), b = vertOf(te, 1);
+                const bool same = (a == oa && b == ob) || (a == ob && b == oa);
+                bool split = false;
+                for (size_t j = u0; j < u1 && !split; ++j) {
+                    const uint32_t c = vertOf(uses[j].te, 0), d = vertOf(uses[j].te, 1);
+                    split = !((a == c && b == d) || (a == d && b == c));
+                }
+                edgeType[te] = split ? 1 : 0;
+                edgeOwner[te] = same ? te : owner;
+            }
+        }
+        u0 = u1;
+    }
+    // 10 texels por triangulo (ver weldTexel em model_tese.glsl).
+    const uint32_t kW = 4096;
+    const uint32_t texels = static_cast<uint32_t>(nt * 10);
+    const uint32_t rows = (texels + kW - 1) / kW;
+    std::vector<float> data(static_cast<size_t>(kW) * rows * 4, 0.0f);
+    auto put = [&](uint32_t i, float a, float b, float c, float d) {
+        float* q = &data[static_cast<size_t>(i) * 4];
+        q[0] = a; q[1] = b; q[2] = c; q[3] = d;
+    };
+    for (uint32_t t = 0; t < nt; ++t) {
+        const uint32_t base = t * 10;
+        for (uint32_t c = 0; c < 3; ++c) {
+            const uint32_t vi = indices[t * 3 + c], g = gid[vi];
+            const TerrainVertex& dv = vertices[domVert[g]];
+            const bool marked = (vertices[vi].matId & 0x8000u) != 0 || boundaryPos[g];
+            put(base + c, weldN[g].x, weldN[g].y, weldN[g].z, marked ? 1.0f : 0.0f);
+            put(base + 3 + c, dv.texCoord.x, dv.texCoord.y, boundaryPos[g] ? -1.0f : static_cast<float>(dv.pbrIndex), 0.0f);
+        }
+        float codes[3];
+        for (uint32_t e = 0; e < 3; ++e) {
+            const uint32_t te = t * 3 + e, own = edgeOwner[te];
+            const uint32_t a = vertOf(te, 0);
+            const uint32_t oa = vertOf(own, 0), ob = vertOf(own, 1);
+            const bool aligned = gid[oa] == gid[a];
+            const Vec2 uvA = vertices[aligned ? oa : ob].texCoord, uvB = vertices[aligned ? ob : oa].texCoord;
+            put(base + 6 + e, uvA.x, uvA.y, uvB.x, uvB.y);
+            codes[e] = static_cast<float>(edgeType[te]) + 4.0f * static_cast<float>(vertices[oa].pbrIndex);
+        }
+        put(base + 9, codes[0], codes[1], codes[2], 0.0f);
+    }
+    const VkDeviceSize bytes = data.size() * sizeof(float);
+    VkBuffer staging = VK_NULL_HANDLE;
+    VmaAllocation stagingAlloc = VK_NULL_HANDLE;
+    if (!m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc))
+        return;
+    void* mapped = nullptr;
+    vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
+    std::memcpy(mapped, data.data(), bytes);
+    vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
+    VkImage image = VK_NULL_HANDLE;
+    VmaAllocation alloc = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    const VkFormat fmt = VK_FORMAT_R32G32B32A32_SFLOAT;
+    if (m_ctx->createImage(kW, rows, fmt, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                           VMA_MEMORY_USAGE_GPU_ONLY, image, alloc)) {
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = image;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = fmt;
+        vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        vi.subresourceRange.levelCount = 1;
+        vi.subresourceRange.layerCount = 1;
+        if (vkc::createImageView(m_ctx->device(), &vi, nullptr, &view) != VK_SUCCESS) view = VK_NULL_HANDLE;
+    }
+    if (view == VK_NULL_HANDLE) {
+        if (image != VK_NULL_HANDLE) vmaDestroyImage(m_ctx->allocator(), image, alloc);
+        vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
+        return;
+    }
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        m_ctx->cmdImageBarrier(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                               VK_ACCESS_TRANSFER_WRITE_BIT);
+        VkBufferImageCopy copy{};
+        copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy.imageSubresource.layerCount = 1;
+        copy.imageExtent = {kW, rows, 1};
+        vkCmdCopyBufferToImage(cmd, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        m_ctx->cmdImageBarrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                               VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                               VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    });
+    vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
+    mesh.weldSlot = m_bindless->allocateSlot();
+    if (mesh.weldSlot == 0) {
+        vkDestroyImageView(m_ctx->device(), view, nullptr);
+        vmaDestroyImage(m_ctx->allocator(), image, alloc);
+        return;
+    }
+    m_bindless->updateTexture(mesh.weldSlot, view, m_weldSampler);
+    m_bindless->flushUpdates();
+    mesh.weldImage = image;
+    mesh.weldView = view;
+    mesh.weldAlloc = alloc;
+    mesh.weldRows = rows;
+    mesh.weldTris = static_cast<uint32_t>(nt);
+    m_weldBytes += static_cast<size_t>(bytes);
+    PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, bytes);
+}
+
+void ModelRenderer::releaseSeamWeld(ModelMeshGPU& mesh, bool deferred) {
+    if (mesh.weldSlot == 0) return;
+    const size_t bytes = static_cast<size_t>(mesh.weldRows) * 4096 * 16;
+    m_weldBytes -= std::min(m_weldBytes, bytes);
+    PROFILE_VRAM_FREE(ProfilerCategory::Meshes, bytes);
+    // Mesma ordem das texturas soltas no meio do jogo (World.cpp): o slot
+    // volta ja' (aponta para a textura padrao) e a imagem espera os frames.
+    m_bindless->freeSlot(mesh.weldSlot);
+    VulkanContext* ctx = m_ctx;
+    VkImage image = mesh.weldImage;
+    VkImageView view = mesh.weldView;
+    VmaAllocation alloc = mesh.weldAlloc;
+    auto destroy = [ctx, image, view, alloc] {
+        if (view != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), view, nullptr);
+        if (image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), image, alloc);
+    };
+    if (deferred) ctx->deferSlotImageCleanup(destroy);
+    else destroy();
+    mesh.weldSlot = mesh.weldRows = mesh.weldTris = 0;
+    mesh.weldImage = VK_NULL_HANDLE;
+    mesh.weldView = VK_NULL_HANDLE;
+    mesh.weldAlloc = VK_NULL_HANDLE;
 }
 
 } // namespace eruption

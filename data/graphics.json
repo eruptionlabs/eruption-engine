@@ -151,7 +151,8 @@
       "render_scale": 0.7,
       "post_format": "packed",
       "mesh_lod_min_tris": 300,
-      "mesh_lod_min_distance": 300.0
+      "mesh_lod_min_distance": 300.0,
+      "tessellation_seam_weld": true
     },
     "medium": {
       "mesh_tri_budget": 3000000,
@@ -204,7 +205,8 @@
       "render_scale": 0.85,
       "post_format": "packed",
       "mesh_lod_min_tris": 500,
-      "mesh_lod_min_distance": 300.0
+      "mesh_lod_min_distance": 300.0,
+      "tessellation_seam_weld": true
     },
     "high": {
       "mesh_tri_budget": 5000000,
@@ -254,7 +256,8 @@
       "render_scale": 1.0,
       "post_format": "rgba16f",
       "mesh_lod_min_tris": 800,
-      "mesh_lod_min_distance": 250.0
+      "mesh_lod_min_distance": 250.0,
+      "tessellation_seam_weld": true
     }
   }
 }

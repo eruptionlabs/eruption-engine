@@ -2419,6 +2419,12 @@ void Engine::applyGraphicsPreset() {
     // celular troca alcance e densidade por quadro (Engine::render).
     m_tessLevelCap = std::clamp(p.value("tessellation_max_level", 64.0f), 1.0f, 64.0f);
     m_tessBandScale = std::clamp(p.value("tessellation_band_scale", 1.0f), 0.0f, 1.0f);
+    // Solda da costura do deslocamento (ModelRenderer::createSeamWeld): vale
+    // para as malhas carregadas depois. ERUPTION_TEST_SEAM_WELD=0|1 (bancada)
+    // passa por cima do preset.
+    bool seamWeld = p.value("tessellation_seam_weld", false);
+    if (const char* e = std::getenv("ERUPTION_TEST_SEAM_WELD")) seamWeld = std::atoi(e) != 0;
+    m_modelRenderer.setSeamWeld(seamWeld && p.value("tessellation", true));
     // Raios de luz das luzes pontuais (passe de pos, meia resolucao): quantas
     // luzes no maximo. 0 desliga (degraus baixo e medio do celular).
     m_godRayLights = static_cast<uint32_t>(std::clamp(p.value("god_ray_lights", 4), 0, 4));
