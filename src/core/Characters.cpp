@@ -454,7 +454,8 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         }
         s.texIndex = tex.slot;
         s.paletteIndex = 0;
-        s.flags = SpriteFlags::Billboard | SpriteFlags::CastShadow | SpriteFlags::PngSprite | SpriteFlags::TeamVision;
+        s.flags = SpriteFlags::Billboard | SpriteFlags::CastShadow | SpriteFlags::PngSprite | SpriteFlags::TeamVision |
+                  footBits(tex.footWidth, tex.footCenter);
         if (mirror) s.flags = s.flags | SpriteFlags::FlipX;
         s.tintColor = spr.color;
         // Clarao: puxa a cor na direcao da cor que o script pediu, sem

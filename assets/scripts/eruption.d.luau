@@ -311,8 +311,10 @@ declare characters: {
     -- shadow map: it follows the relief, breaks on steps and climbs walls) or
     -- "map_contact" (the silhouette, plus the contact disc where the sun does
     -- not reach the feet: valleys, under roofs). No argument goes back to the
-    -- engine default.
-    set_shadow: (kind: string?) -> (),
+    -- engine default. opts.contact_sun (0..1, default 0): with "map_contact",
+    -- the disc also under the feet in the sun, at that strength. The disc is
+    -- as wide as the sprite's feet (the bottom of its opaque pixels).
+    set_shadow: (kind: string?, opts: { contact_sun: number? }?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,

@@ -38,6 +38,12 @@ inline SpriteFlags operator&(SpriteFlags a, SpriteFlags b) {
 inline bool hasFlag(SpriteFlags flags, SpriteFlags flag) {
     return (static_cast<uint32_t>(flags) & static_cast<uint32_t>(flag)) != 0;
 }
+// Bits 16-23: largura do pe' (faixa de baixo do opaco) em 1/255 da largura
+// do quadro; 24-31: centro dela em x, 128 = meio. Lidos pelo disco de
+// contato (billboard_circle_shadow.vert); largura 0 = sem medida.
+inline SpriteFlags footBits(uint8_t width, uint8_t center) {
+    return static_cast<SpriteFlags>((uint32_t(width) << 16) | (uint32_t(center) << 24));
+}
 
 struct Sprite {
     Vec3 position = Vec3(0.0f);

@@ -335,6 +335,10 @@ public:
         // Primeira linha (de cima) com um pixel de alfa >= 128: a cabeça de
         // characters.head_screen, numa célula alta por causa de um efeito.
         uint32_t opaqueTop = 0;
+        // Pe' (faixa de baixo do opaco): largura e centro em x, em 1/255 da
+        // largura do quadro; largura 0 = sem medida. Vao nos bits 16-31 das
+        // flags do sprite (SpriteFlags::footBits) para o disco de contato.
+        uint8_t footWidth = 0, footCenter = 128;
     };
     struct LoadedSprite {
         AnimFile act;
@@ -745,7 +749,10 @@ public:
     // Sombra dos sprites (characters.set_shadow): 0 = planar do sol, 1 =
     // disco, 2 = disco + planar das ate' 2 luzes pontuais dominantes; -1 = a
     // do data/char_config.json.
-    void setSpriteShadow(int kind) { m_spriteShadowKind = kind; }
+    void setSpriteShadow(int kind, float contactSun = 0.0f) {
+        m_spriteShadowKind = kind;
+        m_spriteContactSun = std::clamp(contactSun, 0.0f, 1.0f);
+    }
     // Juncao malha x terreno (world.set_ground_blend): faixa de altura acima do
     // chao em que a peca mistura com o material dele; 0 desliga. GroundBlend.cpp.
     // `fraction`: a faixa de cada peca e' no maximo essa fracao da altura dela.
@@ -1996,6 +2003,7 @@ private:
     std::array<Vec4, 3 * FrameUBO::kCutaways> m_cutaway{};
     void fillSeeThrough(FrameUBO& ubo) const;
     int m_spriteShadowKind = -1;
+    float m_spriteContactSun = 0.0f; // "map_contact": forca do disco ao sol (0..1)
     int spriteShadowKind() const;
     float m_groundBlendBand = 0.0f;
     float m_groundBlendFraction = 0.3f;

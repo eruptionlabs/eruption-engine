@@ -118,7 +118,8 @@ void main() {
     if (v_sun.w > 0.5) {
         vec2 toSun = normalize(v_sun.xz + vec2(1e-5, 0.0));
         vec3 Q = v_feet.xyz + vec3(toSun.x, 0.0, toSun.y) * (1.5 * v_feet.w + 4.0) + vec3(0.0, 3.0, 0.0);
-        intensity = sunShadowAt(Q);
+        // w - 1 = contact_sun: o disco tambem ao sol, nessa forca.
+        intensity = max(sunShadowAt(Q), v_sun.w - 1.0);
         if (intensity <= 0.0) discard;
     }
 

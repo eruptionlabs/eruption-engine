@@ -107,6 +107,18 @@ void main() {
     // 312 px para um corpo de ~120). Um corpo em pe' tem uns 55% da altura de
     // largura; a sombra fica no menor dos dois. Sprite alto e fino nao muda.
     float pegada = min(scaleX, scaleY * 0.55);
+    // Largura medida do pe' (bits 16-23 das flags, faixa de baixo do opaco):
+    // bicho largo e baixo tem as patas mais abertas que essa conta, e o
+    // disco estreito ficava so' no meio (o bicho parecia flutuar). O disco
+    // nunca fica menor que antes; o centro segue o do pe' (bits 24-31).
+    float pe = float((i_flags >> 16u) & 255u) / 255.0;
+    if (pe > 0.0 && (i_flags & 2048u) != 0u) {
+        pegada = max(pegada, pe * scaleX);
+        float c = float(i_flags >> 24u) / 255.0 - 0.5;
+        if ((i_flags & 1u) != 0u) c = -c;
+        vec3 rightPe = (u_inverseView * vec4(-1.0, 0.0, 0.0, 0.0)).xyz;
+        feetWorldPos += rightPe * (i_texRect.x + c * scaleX);
+    }
 
     // Elipse no plano XZ: Z comprimido (0,6) como o sprite visto de cima.
     float rx = 0.5 * pegada * dilation;
