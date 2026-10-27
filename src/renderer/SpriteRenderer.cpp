@@ -704,7 +704,7 @@ void SpriteRenderer::renderSprites(VkCommandBuffer cmd, const FrameUBO& frameUbo
     vkCmdDraw(cmd, 6, count, 0, 0);
 }
 
-void SpriteRenderer::renderSpritesForward(VkCommandBuffer cmd, const FrameUBO& frameUbo, VkBuffer instanceBuffer, uint32_t count, const ShadowRenderer* shadows) {
+void SpriteRenderer::renderSpritesForward(VkCommandBuffer cmd, const FrameUBO& frameUbo, VkBuffer instanceBuffer, uint32_t count, const ShadowRenderer* /*shadows*/) {
     if (count == 0) return;
 
     if (instanceBuffer == m_instanceBuffer) {
@@ -1235,7 +1235,7 @@ VkPipeline SpriteRenderer::createDecalPipeline(const std::string& shaderBase) {
     return pipeline;
 }
 
-void SpriteRenderer::renderShadow(VkCommandBuffer cmd, VkPipelineLayout shadowLayout, const Mat4& lightSpaceMatrix, const FrameUBO& frameUbo, VkBuffer instanceBuffer, uint32_t count) {
+void SpriteRenderer::renderShadow(VkCommandBuffer cmd, VkPipelineLayout /*shadowLayout*/, const Mat4& lightSpaceMatrix, const FrameUBO& frameUbo, VkBuffer instanceBuffer, uint32_t count) {
     if (count == 0) return;
 
     if (instanceBuffer == m_instanceBuffer) {
