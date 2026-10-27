@@ -72,6 +72,14 @@ public:
             // Parte final da barra que e' da fila do jogo (loading.game_progress
             // durante o loading.hold); o motor fica com o resto.
             float gameShare = 0.0f;
+            // "style": "frame": moldura fina com trilho escuro e a barra lisa
+            // dentro, em vez da barra listrada padrao.
+            bool frame = false;
+            float frameColor[3] = {1.0f, 0.235f, 0.157f}; // padrao: bar_color
+            float trackColor[3] = {0.137f, 0.078f, 0.059f};
+            float width = 0.0f;     // fracao da largura da tela; 0 = 220 px x escala
+            float textScale = 0.0f; // escala do texto; 0 = a da barra
+            bool stripes = true;    // listras no preenchimento ("stripes": false = liso)
         };
         std::optional<LoadingScreen> loading;
         std::string loadingJson; // o bloco como veio: saveManifest o devolve inteiro

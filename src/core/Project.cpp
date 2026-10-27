@@ -248,6 +248,14 @@ void Project::readLoading(const json& j, Manifest& m) {
         if (st.contains("width") && st["width"].is_number())
             s.strokeWidth = std::clamp(st["width"].get<float>(), 0.0f, 16.0f);
     }
+    s.frame = l.value("style", std::string()) == "frame";
+    s.stripes = l.value("stripes", true);
+    std::copy(s.barColor, s.barColor + 3, s.frameColor);
+    if (l.contains("frame_color")) readColor(l["frame_color"], s.frameColor);
+    if (l.contains("track_color")) readColor(l["track_color"], s.trackColor);
+    if (l.contains("width") && l["width"].is_number()) s.width = std::clamp(l["width"].get<float>(), 0.05f, 0.95f);
+    if (l.contains("text_scale") && l["text_scale"].is_number())
+        s.textScale = std::clamp(l["text_scale"].get<float>(), 0.25f, 8.0f);
     if (l.contains("game_share") && l["game_share"].is_number())
         s.gameShare = std::clamp(l["game_share"].get<float>(), 0.0f, 0.9f);
     m.loading = s;
