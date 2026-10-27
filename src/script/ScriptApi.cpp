@@ -1609,14 +1609,27 @@ int world_walkable(lua_State* L) {
     return 1;
 }
 // Caminho no chao (ja' alisado) de `de` a `para`, ou nil se nao ha'.
+// Terceiro argumento: numero (raio so' contra os solidos, como sempre foi) ou
+// tabela { radius, margin }: raio do agente mais folga, longe dos solidos E
+// das celulas que nao andam (parede, rampa), tambem nos trechos alisados.
 int world_path(lua_State* L) {
     // Busca longa num mapa grande e' trabalho do motor, nao laco do script:
     // fora do orcamento de tempo da chamada (como game.load).
     ScriptHost::NativeWork trabalho;
     const Vec3 from = checkVec3(L, 1), to = checkVec3(L, 2);
-    const float radius = float(luaL_optnumber(L, 3, 0.0));
+    float radius = 0.0f, clearance = 0.0f;
+    if (lua_istable(L, 3)) {
+        lua_getfield(L, 3, "radius");
+        const float agent = std::max(0.0f, float(luaL_optnumber(L, -1, 0.0)));
+        lua_getfield(L, 3, "margin");
+        const float margin = std::max(0.0f, float(luaL_optnumber(L, -1, 0.0)));
+        lua_pop(L, 2);
+        radius = clearance = agent + margin;
+    } else {
+        radius = float(luaL_optnumber(L, 3, 0.0));
+    }
     std::vector<Vec3> path;
-    if (!eng().findPath(from, to, radius, path)) {
+    if (!eng().findPath(from, to, radius, path, clearance)) {
         lua_pushnil(L);
         return 1;
     }
@@ -2513,7 +2526,11 @@ declare world: {
     -- Cost of the cell at (x, z) (1 when the game set none).
     walk_cost: (x: number, z: number) -> number,
     -- Path on the ground from `from` to `to` (smoothed), or nil if none.
-    path: (from: vector, to: vector, radius: number?) -> { vector }?,
+    -- A number `radius` grows only the solid objects (the old call). A table
+    -- { radius, margin } (world units) keeps every cell and every smoothed
+    -- segment radius + margin away from solids AND from cells that do not
+    -- walk (walls, blocked slopes); a start that touches a wall may leave it.
+    path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number? })?) -> { vector }?,
     -- Floor under (x, z) counting solid objects (bridges, walkways, kit
     -- slabs): the highest top below `fromY` (default: anywhere). Second value:
     -- true when it is an object, not the terrain.

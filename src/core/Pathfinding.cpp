@@ -2,6 +2,7 @@
 // objetos sólidos e pesando o custo por célula do jogo, e depois alisado (pula
 // os pontos que se vê em linha reta).
 #include "core/Engine.hpp"
+#include "core/PathClearance.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -39,7 +40,12 @@ constexpr float kClimb = 2.0f;
 // Agora os solidos da janela sao recortados uma vez e postos em baldes de
 // 16x16 celulas (cada celula testa so' os do seu balde), o estado da busca e'
 // vetor denso, e o teto e' o tamanho da janela.
-bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vector<Vec3>& out) const {
+// wallClearance > 0: cada celula do caminho e cada trecho alisado (amostrado a
+// cada quarto de celula) fica a essa distancia de qualquer celula que nao
+// anda (parede, rampa bloqueada, solido). Sem ela, a grade so' testa o
+// centro da celula e o alisamento corta a quina para fora do chao.
+bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vector<Vec3>& out,
+                      float wallClearance) const {
     out.clear();
     // Mapas empilhados: a busca fica no andar de quem sai (a altura da origem).
     const LoadedMap* map = mapAt(from.x, from.z, from.y);
@@ -119,6 +125,12 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
     // origem fica para tras e, entre mapas empilhados (caverna sob a
     // montanha), mapAt escolhia o mapa de baixo no meio da subida e a busca
     // morria na emenda.
+    // Com folga, a celula so' anda se o quadrado inteiro dela anda: a grade de
+    // 5 u antiga comeca na origem (celula [5i, 5i+5)) e a busca centra a celula
+    // em 5i, entao o centro cai na divisa de duas celulas da grade e a metade
+    // de la' podia ser parede (o caminho passava rente a ela). Os quatro
+    // pontos a um quarto de celula do centro caem um em cada metade.
+    const bool roomy = wallClearance > 0.0f;
     std::vector<int8_t> walk(cells, 0); // 0 nao sabe, 1 anda, -1 nao
     std::vector<float> floorY(cells, from.y);
     auto walkable = [&](int x, int z, float fromY) {
@@ -130,7 +142,23 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
             Vec3 p(x * step, 0.0f, z * step);
             p.y = sampleTerrainHeight(p.x, p.z, y);
             floorY[i] = p.y;
-            v = navWalkable(p.x, p.z, y) && !blocked(x, z, p) ? 1 : -1;
+            bool ok = navWalkable(p.x, p.z, y) && !blocked(x, z, p);
+            const float q = step * 0.25f;
+            for (int k = 0; k < 4 && ok && roomy; ++k)
+                ok = navWalkable(p.x + (k & 1 ? q : -q), p.z + (k & 2 ? q : -q), y);
+            v = ok ? 1 : -1;
+        }
+        return v > 0;
+    };
+    // Celula que anda com a folga de parede (sem folga = walkable).
+    std::vector<int8_t> room(roomy ? cells : 0, 0);
+    auto passable = [&](int x, int z, float fromY) {
+        if (!walkable(x, z, fromY)) return false;
+        if (!roomy) return true;
+        int8_t& v = room[idxOf(x, z)];
+        if (v == 0) {
+            auto base = [&](int cx, int cz) { return walkable(cx, cz, fromY); };
+            v = pointHasClearance(x * step, z * step, step, wallClearance, base) ? 1 : -1;
         }
         return v > 0;
     };
@@ -144,12 +172,13 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
     };
     // Ponto livre perto do pedido (o alvo pode estar dentro de uma parede).
     int tx = gx, tz = gz;
-    if (!walkable(tx, tz, to.y)) {
+    if (!passable(tx, tz, to.y)) {
         bool found = false;
-        for (int r = 1; r <= 6 && !found; ++r)
+        const int reach = 6 + int(std::ceil(wallClearance / step));
+        for (int r = 1; r <= reach && !found; ++r)
             for (int dz = -r; dz <= r && !found; ++dz)
                 for (int dx = -r; dx <= r && !found; ++dx)
-                    if (std::max(std::abs(dx), std::abs(dz)) == r && walkable(gx + dx, gz + dz, to.y)) {
+                    if (std::max(std::abs(dx), std::abs(dz)) == r && passable(gx + dx, gz + dz, to.y)) {
                         tx = gx + dx;
                         tz = gz + dz;
                         found = true;
@@ -166,6 +195,10 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
     std::vector<std::pair<float, int32_t>> open; // heap de minimo por f
     auto heapLess = [](const std::pair<float, int32_t>& a, const std::pair<float, int32_t>& b) { return a.first > b.first; };
     const size_t start = idxOf(sx, sz), target = idxOf(tx, tz);
+    auto moveClear = [&](int ax, int az, int bx, int bz, float y) {
+        auto base = [&](int cx, int cz) { return walkable(cx, cz, y); };
+        return segmentHasClearance(ax * step, az * step, bx * step, bz * step, step, wallClearance, base);
+    };
     g[start] = 0.0f;
     open.push_back({h(sx, sz), int32_t(start)});
     bool reached = false;
@@ -185,9 +218,13 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
         for (int dz = -1; dz <= 1; ++dz)
             for (int dx = -1; dx <= 1; ++dx) {
                 if (!dx && !dz) continue;
-                if (!walkable(nx + dx, nz + dz, yn)) continue;
+                if (!passable(nx + dx, nz + dz, yn)) continue;
                 // Diagonal nao corta quina.
-                if (dx && dz && (!walkable(nx + dx, nz, yn) || !walkable(nx, nz + dz, yn))) continue;
+                if (dx && dz && (!passable(nx + dx, nz, yn) || !passable(nx, nz + dz, yn))) continue;
+                // Com folga, o passo entre dois centros livres tambem: no meio
+                // dele a parede pode chegar mais perto que nas pontas. A saida
+                // da origem fica livre (quem esta' colado na parede sai dela).
+                if (roomy && n != start && !moveClear(nx, nz, nx + dx, nz + dz, yn)) continue;
                 const float cost = gn + (dx && dz ? 1.41421356f : 1.0f) * costAt(nx + dx, nz + dz);
                 const size_t m = idxOf(nx + dx, nz + dz);
                 if (g[m] <= cost) continue;
@@ -204,6 +241,11 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
     std::reverse(path.begin(), path.end());
     // Alisa: de cada ponto, vai direto ao mais longe que se ve' sem obstaculo.
     auto clear = [&](const Vec3& a, const Vec3& b) {
+        if (roomy) {
+            const float y = std::max(a.y, b.y);
+            auto base = [&](int cx, int cz) { return walkable(cx, cz, y); };
+            if (!segmentHasClearance(a.x, a.z, b.x, b.z, step, wallClearance, base)) return false;
+        }
         const float len = glm::length(Vec2(b.x - a.x, b.z - a.z));
         const int n = std::max(1, int(len / (step * 0.5f)));
         for (int i = 1; i < n; ++i) {
