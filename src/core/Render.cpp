@@ -1250,7 +1250,8 @@ void Engine::render() {
                                                           planarParams, pointShadows,
                                                           m_shadowRenderer.shadowAtlasView(),
                                                           m_deferredLighting.shadowUboBuffer(),
-                                                          Vec4(-m_shadowRenderer.currentLightDir(), decalKind == 4 ? 1.0f : 0.0f));
+                                                          Vec4(-m_shadowRenderer.currentLightDir(),
+                                                               decalKind == 4 ? 1.0f + m_spriteContactSun : 0.0f));
             m_vulkan.cmdEndRendering(cmd);
             m_vulkan.writeTimestamp(cmd, 61, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             Profiler::addGpuTime("Sprite Shadow Decal", m_vulkan.timestampDeltaMs(60, 61));

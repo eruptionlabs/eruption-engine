@@ -108,6 +108,33 @@ namespace {
         return 0;
     }
 
+    // Pe' do quadro: a faixa de baixo do opaco (15% da altura dele, pelo
+    // menos 2 linhas), da' a largura e o centro em x. Bicho largo e baixo
+    // tem as patas espalhadas: o disco de contato precisa dessa largura,
+    // nao da altura do corpo.
+    void footSpan(const SprImage& img, uint32_t top, uint8_t& width, uint8_t& center) {
+        const size_t w = img.width;
+        auto opaque = [&img, w](size_t x, size_t y) {
+            const size_t i = y * w + x;
+            return img.isIndexed ? img.pixels[i] != 0 : img.pixels[i * 4 + 3] >= 128;
+        };
+        int bottom = -1;
+        for (int y = int(img.height) - 1; y >= int(top) && bottom < 0; --y)
+            for (size_t x = 0; x < w; ++x)
+                if (opaque(x, size_t(y))) { bottom = y; break; }
+        width = 0;
+        center = 128;
+        if (bottom < 0 || w == 0) return;
+        const int band = std::max(2, int(0.15f * float(bottom - int(top) + 1)));
+        size_t minX = w, maxX = 0;
+        for (int y = bottom; y > bottom - band && y >= 0; --y)
+            for (size_t x = 0; x < w; ++x)
+                if (opaque(x, size_t(y))) { minX = std::min(minX, x); maxX = std::max(maxX, x); }
+        if (minX > maxX) return;
+        width = uint8_t(std::clamp(std::lround(255.0 * double(maxX - minX + 1) / double(w)), 1L, 255L));
+        center = uint8_t(std::clamp(std::lround(255.0 * (0.5 * double(minX + maxX + 1)) / double(w)), 0L, 255L));
+    }
+
     bool isClassSpritePath(const std::string& path) {
         static const char* classNames[] = { "storm_wizard", "berserker", "falconer", "morning_star" };
         std::string lower;
@@ -160,6 +187,7 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
         return 0;
     }
     res.opaqueTop = opaqueTopRow(img);
+    footSpan(img, res.opaqueTop, res.footWidth, res.footCenter);
 
     uint32_t mipLevels = m_mipmapMenu.config.enabled ? MipmapGenerator::calculateMipLevels(img.width, img.height) : 1;
 

@@ -1169,7 +1169,14 @@ int characters_set_shadow(lua_State* L) {
     const int kind = std::strcmp(k, "planar") == 0 ? 0 : std::strcmp(k, "circle") == 0 ? 1
                    : std::strcmp(k, "lights") == 0 ? 2 : std::strcmp(k, "map") == 0 ? 3
                    : std::strcmp(k, "map_contact") == 0 ? 4 : -1;
-    eng().setSpriteShadow(kind);
+    // {contact_sun = 0..1}: "map_contact" com o disco tambem ao sol.
+    float contactSun = 0.0f;
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "contact_sun");
+        if (lua_isnumber(L, -1)) contactSun = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+    }
+    eng().setSpriteShadow(kind, contactSun);
     return 0;
 }
 
@@ -2683,8 +2690,10 @@ declare characters: {
     -- shadow map: it follows the relief, breaks on steps and climbs walls) or
     -- "map_contact" (the silhouette, plus the contact disc where the sun does
     -- not reach the feet: valleys, under roofs). No argument goes back to the
-    -- engine default.
-    set_shadow: (kind: string?) -> (),
+    -- engine default. opts.contact_sun (0..1, default 0): with "map_contact",
+    -- the disc also under the feet in the sun, at that strength. The disc is
+    -- as wide as the sprite's feet (the bottom of its opaque pixels).
+    set_shadow: (kind: string?, opts: { contact_sun: number? }?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,
