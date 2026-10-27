@@ -411,9 +411,12 @@ void Engine::renderLoadingUI(const std::string& mapName, const std::string& task
         // Boot e primeiro mapa numa barra so', que nunca volta: o boot ocupa
         // os primeiros 30% e o mapa o resto. Separadas, a barra ia a 80% no
         // boot e caia para 10% no inicio do mapa.
+        // Acaba no fim (0.95) da primeira carga de mapa.
         static float s_bootShown = 0.0f;
+        static bool s_firstLoadDone = false;
         float shown = std::clamp(progress, 0.0f, 1.0f);
-        if (m_isInitialBoot || s_bootSplash) {
+        if (!s_firstLoadDone) {
+            if (!m_isInitialBoot && shown >= 0.95f) s_firstLoadDone = true;
             shown = m_isInitialBoot ? 0.3f * shown : 0.3f + 0.7f * shown;
             shown = std::max(shown, s_bootShown);
             s_bootShown = shown;
