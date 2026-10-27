@@ -201,16 +201,17 @@ ExportReport exportGame(const ExportOptions& o) {
         ++report.files;
         report.bytes += fs::file_size(dst, ec);
     }
-    // Configuração de partida: o mapa inicial e o enquadramento do jogo
+    // Configuração de partida: o mapa inicial, o enquadramento do jogo
     // ("spawn" e "camera" do project.eruption - sem eles o exportado abria com
-    // a abertura padrão do motor em vez da do jogo). Nada desta máquina.
+    // a abertura padrão do motor em vez da do jogo) e a tela de carga
+    // ("loading": sem ela o exportado mostrava a do motor). Nada desta máquina.
     {
         nlohmann::json launch;
         launch["initial_map"] = o.maps.front();
         std::ifstream pf(o.projectRoot / "project.eruption");
         const nlohmann::json pj = pf ? nlohmann::json::parse(pf, nullptr, false) : nlohmann::json();
         if (pj.is_object()) {
-            for (const char* key : {"spawn", "camera"})
+            for (const char* key : {"spawn", "camera", "loading"})
                 if (pj.contains(key)) launch[key] = pj[key];
         }
         fs::create_directories(o.outDir / "data", ec);
