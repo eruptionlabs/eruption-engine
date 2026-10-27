@@ -89,6 +89,22 @@ bool Engine::navCell(float x, float z, int& gx, int& gz) const {
     return m_currentMap && cellOf(*m_currentMap, x, z, gx, gz);
 }
 
+// Grade antiga de um vizinho (celula de 5 u a partir do lugar dele, .ter de
+// outro passo): a busca andava no passo do .ter (10 u) centrado em 0, entao
+// cada celula da busca cobria quatro da grade, meio deslocadas, e com folga
+// de parede um corredor de 25 u nao cabia. Vizinho girado: so' o passo.
+float Engine::navCellFrame(const LoadedMap* map, Vec2& origin) const {
+    origin = Vec2(0.0f);
+    if (!map || !map->terrainFromFile) return 5.0f;
+    const TerrainFile& t = map->terrain;
+    const float step = followsTerrain(*map) ? (t.scale > 0.0f ? t.scale : 5.0f) : 5.0f;
+    if (!t.rotated()) {
+        const Vec2 c = cellCenter(*map, 0, 0);
+        origin = c - step * glm::floor(c / step);
+    }
+    return step;
+}
+
 bool Engine::navWalkable(float x, float z, float y) const {
     const LoadedMap* map = mapAt(x, z, y);
     int gx = 0, gz = 0;
