@@ -2437,6 +2437,11 @@ void Engine::applyGraphicsPreset() {
     bool seamWeld = p.value("tessellation_seam_weld", false);
     if (const char* e = std::getenv("ERUPTION_TEST_SEAM_WELD")) seamWeld = std::atoi(e) != 0;
     m_modelRenderer.setSeamWeld(seamWeld && p.value("tessellation", true));
+    // Amplitude do relevo por preset, por cima da do bloco normal_distance
+    // (1,25, que segue valendo no celular). PC: 12, a da bancada de relevo em
+    // que a grade por distancia, a solda e a altura refinada foram medidas.
+    if (p.contains("tessellation_amplitude"))
+        m_tessAmplitude = std::clamp(p.value("tessellation_amplitude", m_tessAmplitude), 0.0f, 16.0f);
     // Raios de luz das luzes pontuais (passe de pos, meia resolucao): quantas
     // luzes no maximo. 0 desliga (degraus baixo e medio do celular).
     m_godRayLights = static_cast<uint32_t>(std::clamp(p.value("god_ray_lights", 4), 0, 4));
