@@ -1128,7 +1128,13 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
         inst.hidden = segueVisao && m_hideTest && m_hideTest(pos);
         if (inst.firstFrame) inst.prevPos = pos;
         inst.velocity = dt > 1e-6f ? (pos - inst.prevPos) / dt : Vec3(0.0f);
-        const float moved = glm::length(pos - inst.prevPos);
+        // Rastro (ratePerMeter) em metros DO EFEITO: a distancia vem em
+        // unidades do mapa e a escala da instancia ja' traz as unidades por
+        // metro (e o `scale` do play). Contado em unidades, um mapa de 16 u/m
+        // nascia 16x o pedido: a fita enchia a capacidade no primeiro meio
+        // metro e as 128 particulas aditivas empilhadas estouravam num disco
+        // branco (bancada da fita movida por vfx.move).
+        const float moved = glm::length(pos - inst.prevPos) / std::max(glm::length(Vec3(inst.transform[0])), 1e-6f);
         const float prevTime = inst.time;
         inst.time += dt;
         // Efeito com duracao: em laco recomeca as rajadas; sem laco para de nascer.
