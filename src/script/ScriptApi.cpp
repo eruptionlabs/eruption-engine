@@ -1168,6 +1168,10 @@ int lights_set_sprite_shadow(lua_State* L) {
     return 0;
 }
 // Tipo de sombra dos sprites do projeto (Engine::setSpriteShadow).
+int characters_set_sink(lua_State* L) {
+    eng().setSpriteSink(static_cast<float>(luaL_optnumber(L, 1, 0.0)));
+    return 0;
+}
 int characters_set_shadow(lua_State* L) {
     const char* k = luaL_optstring(L, 1, "");
     const int kind = std::strcmp(k, "planar") == 0 ? 0 : std::strcmp(k, "circle") == 0 ? 1
@@ -2326,7 +2330,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"set_position", characters_set_position}, {"walk_to", characters_walk_to},
         {"walking", characters_walking}, {"face", characters_face}, {"show", characters_show}, {"say", characters_say}, {"play", characters_play}, {"animation", characters_animation},
         {"follow", characters_follow}, {"patrol", characters_patrol}, {"stop", characters_stop},
-        {"set_shadow", characters_set_shadow},
+        {"set_shadow", characters_set_shadow}, {"set_sink", characters_set_sink},
         {"hide", characters_hide}, {"ring", characters_ring}, {"set_sprite", characters_set_sprite},
         {"add", characters_add},
         {"flash", characters_flash}, {"shake", characters_shake}, {"lunge", characters_lunge},
@@ -2702,6 +2706,9 @@ declare characters: {
     -- the disc also under the feet in the sun, at that strength. The disc is
     -- as wide as the sprite's feet (the bottom of its opaque pixels).
     set_shadow: (kind: string?, opts: { contact_sun: number? }?) -> (),
+    -- Every character's sprite drawn this many frame pixels lower (0..64,
+    -- default 0): the feet sink into the ground instead of resting on it.
+    set_sink: (pixels: number?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,

@@ -750,6 +750,7 @@ public:
     // Sombra dos sprites (characters.set_shadow): 0 = planar do sol, 1 =
     // disco, 2 = disco + planar das ate' 2 luzes pontuais dominantes; -1 = a
     // do data/char_config.json.
+    void setSpriteSink(float pixels) { m_spriteSinkPixels = std::clamp(pixels, 0.0f, 64.0f); }
     void setSpriteShadow(int kind, float contactSun = 0.0f) {
         m_spriteShadowKind = kind;
         m_spriteContactSun = std::clamp(contactSun, 0.0f, 1.0f);
@@ -2005,6 +2006,7 @@ private:
     void fillSeeThrough(FrameUBO& ubo) const;
     int m_spriteShadowKind = -1;
     float m_spriteContactSun = 0.0f; // "map_contact": forca do disco ao sol (0..1)
+    float m_spriteSinkPixels = 0.0f; // characters.set_sink: pixels do quadro abaixo do chao
     int spriteShadowKind() const;
     float m_groundBlendBand = 0.0f;
     float m_groundBlendFraction = 0.3f;
