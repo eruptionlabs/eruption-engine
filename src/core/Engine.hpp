@@ -751,6 +751,11 @@ public:
     // disco, 2 = disco + planar das ate' 2 luzes pontuais dominantes; -1 = a
     // do data/char_config.json.
     void setSpriteSink(float pixels) { m_spriteSinkPixels = std::clamp(pixels, 0.0f, 64.0f); }
+    // Folga de altura dos decais de chao (anel, vfx.area): o relevo da
+    // tesselacao tira o chao visivel da altura do pe' em ate' a amplitude.
+    float groundDecalSlack(float extent) const {
+        return std::max(extent, 4.0f) + (m_modelRenderer.tessellationActive() ? m_tessAmplitude : 0.0f);
+    }
     void setSpriteShadow(int kind, float contactSun = 0.0f) {
         m_spriteShadowKind = kind;
         m_spriteContactSun = std::clamp(contactSun, 0.0f, 1.0f);

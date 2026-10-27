@@ -159,7 +159,7 @@ int vfx_area(lua_State* L) {
     a.center = Vec4(pos, extent);
     a.color = Vec4(cor, std::clamp(areaField(L, "alpha", 0.8f), 0.0f, 1.0f));
     // Folga de um raio para cima e para baixo (rampa de ate' 45 graus), como o anel.
-    const float folga = std::max(extent, 4.0f);
+    const float folga = g_engine->groundDecalSlack(extent);
     a.shape = Vec4(std::max(areaField(L, "border", std::max(1.0f, extent * 0.04f)), 0.0f), folga, folga, a.shape.w);
     a.fill = Vec4(std::clamp(areaField(L, "fill", 1.0f), 0.0f, 1.0f),
                   std::clamp(areaField(L, "fill_alpha", 0.25f), 0.0f, 1.0f), 0.0f, 0.0f);
