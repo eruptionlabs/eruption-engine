@@ -1057,6 +1057,9 @@ public:
                       float* heights, uint8_t* flags) const;
     bool bodyBlocked(const std::vector<uint32_t>& cand, int floorInstance, float floorY, float x, float z,
                      float radius) const;
+    // O sólido `instance` tem, em todo ponto dele sob o corpo, o topo a no
+    // máximo um degrau acima do piso (a peça vizinha da mesma ponte ou laje)?
+    bool solidLowUnderBody(uint32_t instance, float floorY, float x, float z, float radius) const;
     // Piso em (x, z) abaixo de fromY entre os sólidos `cand` (o terreno é
     // terrainY); `instance` = o sólido do piso ou -1.
     float floorAmong(const std::vector<uint32_t>& cand, float terrainY, float x, float z, float fromY,

@@ -123,7 +123,7 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
     }
     // A mesma conta do Engine::bodyBlocked, so' com os solidos do balde: o
     // corpo de pe' no piso p.y (o solido do piso nao conta, nem o que nao
-    // passa de um degrau acima dele).
+    // passa de um degrau acima dele, pela caixa ou pelo topo sob o corpo).
     auto bucketOf = [&](int x, int z) -> const std::vector<uint32_t>& {
         return buckets[size_t((z - z0) / kBucket) * size_t(bw) + size_t((x - x0) / kBucket)];
     };
@@ -141,7 +141,7 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
                 const Vec2 n(edge.y / len, -edge.x / len);
                 if (glm::dot(Vec2(p.x, p.z) - a, n) > radius) inside = false;
             }
-            if (inside) return true;
+            if (inside && !solidLowUnderBody(s.inst, p.y, p.x, p.z, radius)) return true;
         }
         return false;
     };
