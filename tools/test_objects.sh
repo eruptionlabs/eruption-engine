@@ -36,7 +36,7 @@ cat > "$TMP/saves/quebrado.json" <<'JSON'
 JSON
 FAIL=0
 
-TESTS="api cena comportamento salvar prefab luz personagem robusto faixa terreno_vivo andar_script visao cabeca anel retrato"
+TESTS="api cena comportamento salvar prefab luz personagem robusto faixa terreno_vivo andar_script visao cabeca anel retrato telemetria"
 
 # Confere um log: cada teste com OBJ-OK pelo menos $2 vezes, nenhum OBJ-FALHOU,
 # nenhum script parado por erro.
@@ -60,6 +60,14 @@ ERUPTION_PROJECT="$PROJ" ERUPTION_SAVE_DIR="$TMP/saves" ERUPTION_TEST_SCREENSHOT
     timeout 300 xvfb-run -a ./eruption-engine --map parana_field_lite --screenshot "$TMP/jogo.png" > "$TMP/jogo.log" 2>&1
 rc=$?; [ $rc -eq 0 ] || { echo "  FALHOU: o motor saiu com $rc"; FAIL=1; }
 check_log "$TMP/jogo.log" 1
+# O arquivo do teste "telemetria": o resumo le' sem erro e acha os 50 eventos.
+TEL="$TMP/telemetry/teste_objetos.jsonl"
+if python3 tools/telemetry_summary.py "$TEL" --json > "$TMP/tel.json" 2>&1 &&
+   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=d["channels"]; assert c["teste"]["count"]==50 and c["vazio"]["count"]==1 and c["teste"]["fields"]["valor"]["sum"]==1275 and d["bad_lines"]==0' "$TMP/tel.json"; then
+    echo "  ok   telemetria (arquivo)"
+else
+    echo "  FALHOU telemetria (arquivo)"; head -5 "$TEL" "$TMP/tel.json"; FAIL=1
+fi
 
 printf '\n=== editor: Play, Stop, Play de novo, Stop, Ctrl+S ===\n'
 SCENE="$PROJ/assets/scenes/parana_field_lite.scene.luau"

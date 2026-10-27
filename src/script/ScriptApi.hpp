@@ -35,6 +35,11 @@ std::string ribbonApiDefinitions();
 // Tabela `vision` (ScriptApiVision.cpp): visao de equipe.
 void registerVisionApi(lua_State* L, Engine& engine);
 const char* visionApiDefinitions();
+// Tabela `telemetry` (ScriptApiTelemetry.cpp): eventos do jogo em JSONL.
+// openTelemetryFromEnv liga pelo ERUPTION_GAME_TELEMETRY no inicio do jogo.
+void registerTelemetryApi(lua_State* L, Engine& engine);
+const char* telemetryApiDefinitions();
+void openTelemetryFromEnv();
 void releaseScriptObjects();
 // Empilha o Object (nil se o id não vale).
 struct ObjectId;

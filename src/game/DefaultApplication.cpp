@@ -100,6 +100,9 @@ void DefaultApplication::parseArgs(int argc, char** argv) {
         } else if (arg == "--telemetry" && i + 1 < argc) {
             // Same switch the perf/ harness uses via env var.
             platform::setEnv("ERUPTION_TELEMETRY_OUT", argv[++i]);
+        } else if (arg == "--game-telemetry" && i + 1 < argc) {
+            // Eventos do jogo (telemetry.emit), nao o custo dos quadros.
+            platform::setEnv("ERUPTION_GAME_TELEMETRY", argv[++i]);
         } else if (arg == "--warp-on-load" && i + 1 < argc) {
             m_warpOnLoad = argv[++i];
         } else if (arg == "--dump-frames" && i + 2 < argc) {

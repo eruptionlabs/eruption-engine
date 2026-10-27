@@ -713,6 +713,32 @@ declare objects: {
     count: () -> number,
 }
 
+-- Game event log for balancing: one JSON object per line (JSONL). The first
+-- line is {"ch":"_head", v, project, map, build, date, part}; each event is
+-- {"t": game time in ms, "f": script frame, "ch": channel, ...your fields};
+-- the last is {"ch":"_end", events, dropped}. tools/telemetry_summary.py
+-- prints count, sum, mean, p50 and p95 per channel and field.
+-- Also turned on by --game-telemetry <file> or ERUPTION_GAME_TELEMETRY.
+-- While off, emit costs nothing. Writing happens off the game thread through
+-- a fixed 1 MB buffer: if it fills, events are dropped and counted, the
+-- frame never waits for the disk.
+declare telemetry: {
+    -- Records an event. Fields are flat: number, boolean, string (cut at 512
+    -- bytes) or vector; t, f and ch are reserved. Channels starting with "_"
+    -- belong to the engine.
+    emit: (channel: string, fields: { [string]: any }?) -> (),
+    -- Starts a new file (truncates it) and returns its full path, or nil. A
+    -- relative path lands in the game's data folder, next to the saves, under
+    -- telemetry/. Past max_mb (default 64) the file becomes <file>.1 and a
+    -- new part starts.
+    open: (path: string, options: { max_mb: number? }?) -> string?,
+    -- Writes what is pending and the "_end" line. Stopping the game closes too.
+    close: () -> (),
+    enabled: () -> boolean,
+    -- Events written and dropped since open.
+    stats: () -> (number, number),
+}
+
 -- C++ functions of this project (native/*.cpp, include/eruption/native_module.h):
 -- native.<name>(...) with numbers in and one number out. Saving a .cpp file
 -- rebuilds and reloads them while the game runs.
