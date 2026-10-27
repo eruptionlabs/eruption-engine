@@ -311,6 +311,14 @@ public:
     // cena (o jogo roda por tras) ate' soltar ou passar maxSeconds.
     void holdLoading(bool on, float maxSeconds = 30.0f);
     bool loadingHeld() const { return m_loadingHeld; }
+    // loading.progress: (feito, total, pronto) da carga em curso. feito/total
+    // e' a fracao da barra (nunca volta; na primeira carga, 0.3 + 0.7 * p,
+    // como a barra unica do boot); total conta o mapa e o trabalho pendente
+    // visto nesta carga. Pronto so' com nada pendente.
+    void loadProgress(float& done, float& total, bool& ready);
+    // Trabalho de carga pendente agora: folhas de sprite em preparo, mapa e
+    // vizinhos lendo, texturas na fila de envio, sons decodificando.
+    int pendingLoadWork();
     struct TextureResource {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation alloc = VK_NULL_HANDLE;
@@ -1662,6 +1670,16 @@ private:
     bool m_loadingHeld = false;
     float m_loadingHeldLeft = 0.0f;     // segundos ate' soltar sozinho
     float m_loadingHeldProgress = 0.0f; // barra durante a espera, ate' 0.99
+    // loading.progress (LoadProgress.cpp): a carga em curso comeca num mapa
+    // novo ou numa troca em segundo plano.
+    std::string m_lpMap;
+    bool m_lpWarp = false;
+    int m_lpSessions = 0;
+    int m_lpPendingLast = 0, m_lpSeen = 0;
+    float m_lpRaw = 0.0f;   // fracao da carga, a da barra antes do 0.3 + 0.7 * p
+    bool m_lpMapped = false; // carga que comecou no boot: o script ve' 0.3 + 0.7 * p
+    bool m_lpReady = false;  // esta carga ja' acabou (fica ate' a proxima)
+    bool m_firstLoadOver = false; // primeiro quadro normal depois do boot: a barra deixa o 0.3 + 0.7 * p
     inline static const Vec3 kSafePreWarpPlayerPos = Vec3(0.0f, -1000.0f, 0.0f);
     std::string m_pendingMapWarp;
     TextureResource m_splashLogo;
