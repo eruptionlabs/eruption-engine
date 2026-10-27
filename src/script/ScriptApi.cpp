@@ -1906,6 +1906,21 @@ int characters_add(lua_State* L) {
 // que vem da maquina (temperatura, bateria) e' lido de /sys no maximo uma vez
 // por segundo, so' quando um script pede.
 
+// loading.hold/release: o jogo segura a tela de carga do motor enquanto
+// monta a propria cena, sem quadro de cena crua entre os dois.
+int loading_hold(lua_State* L) {
+    eng().holdLoading(true, float(luaL_optnumber(L, 1, 30.0)));
+    return 0;
+}
+int loading_release(lua_State*) {
+    eng().holdLoading(false);
+    return 0;
+}
+int loading_held(lua_State* L) {
+    lua_pushboolean(L, eng().loadingHeld());
+    return 1;
+}
+
 int perf_fps(lua_State* L) {
     lua_pushnumber(L, eng().fps());
     return 1;
@@ -2298,6 +2313,9 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "characters", characters);
     lib(L, "fx", fx);
     lib(L, "perf", perf);
+    static const luaL_Reg loading[] = {
+        {"hold", loading_hold}, {"release", loading_release}, {"held", loading_held}, {nullptr, nullptr}};
+    lib(L, "loading", loading);
     registerVfxApi(L, engine);
     registerObjectsApi(L, engine);
     registerRibbonApi(L, engine);
@@ -2912,6 +2930,19 @@ declare perf: {
     set_fps_cap: (fps: number) -> (),
     -- Temperatures, battery and memory, read at most once a second.
     system: () -> PerfSystem,
+}
+
+-- The engine's loading screen, held by the game while it builds its own
+-- scene: called before the first frame of a map (top of a script,
+-- on.start, or before a map change), no frame of the scene shows until
+-- release. The game keeps running behind it; the bar creeps toward 99%
+-- and never reaches 100%.
+declare loading: {
+    -- Holds the loading screen; let go by itself after max_seconds
+    -- (default 30) so a missing release never locks the game.
+    hold: (max_seconds: number?) -> (),
+    release: () -> (),
+    held: () -> boolean,
 }
 )" + std::string(vfxApiDefinitions()) + visionApiDefinitions() + objectsApiDefinitions() + telemetryApiDefinitions() +
            NativeModule::apiDefinitions();

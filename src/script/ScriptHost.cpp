@@ -731,6 +731,7 @@ void ScriptHost::update(float dt) {
 
 void ScriptHost::stop() {
     if (!L || !m_running) return;
+    if (m_engine) m_engine->holdLoading(false); // espera de carga morre com o script
     stopBehaviors();
     for (auto& s : m_scripts) {
         if (s.started) call(s, "on_stop", 0);
