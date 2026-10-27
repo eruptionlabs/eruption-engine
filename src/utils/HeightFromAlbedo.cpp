@@ -191,14 +191,17 @@ Img frankotChellappa(const Img& p, const Img& q, int w, int h) {
 // A polaridade que forma a REDE dominante da textura e' o rejunte - isso e' o
 // "contexto": a decisao e' da textura inteira, nao do pixel.
 // ---------------------------------------------------------------------------
-void frangiLines(const Img& L, int w, int h, Img& valley, Img& ridge) {
+// Ate' 5 texels: junta de tabua e' mais larga que rejunte de pedra.
+constexpr float kLineSigmas[5] = {1.0f, 1.5f, 2.25f, 3.4f, 5.0f};
+
+void frangiLines(const Img& L, int w, int h, Img& valley, Img& ridge,
+                 const float* sigmas = kLineSigmas, int sigmaCount = 5) {
     const size_t n = static_cast<size_t>(w) * h;
     valley.assign(n, 0.0f);
     ridge.assign(n, 0.0f);
-    // Ate' 5 texels: junta de tabua e' mais larga que rejunte de pedra.
-    const float sigmas[5] = {1.0f, 1.5f, 2.25f, 3.4f, 5.0f};
     const float beta = 0.5f;
-    for (float sg : sigmas) {
+    for (int si = 0; si < sigmaCount; ++si) {
+        const float sg = sigmas[si];
         Img G = gaussWrap(L, w, h, sg);
         auto at = [&](int x, int y) { return G[static_cast<size_t>(wrapi(y, h)) * w + wrapi(x, w)]; };
         Img l1(n), l2(n), edgeSup(n, 1.0f);
@@ -675,6 +678,159 @@ HeightFromAlbedoResult heightFromAlbedo(const uint8_t* rgba, int w, int h,
         }
     }
     return out;
+}
+
+
+// ---------------------------------------------------------------------------
+// DETALHE FINO DA ALTURA DE FORA (rede) A PARTIR DAS LINHAS DO ALBEDO.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Variancia de uma imagem (media removida).
+float varianceOf(const Img& a) {
+    const float m = meanOf(a);
+    double s = 0.0;
+    for (float v : a) s += static_cast<double>(v - m) * (v - m);
+    return static_cast<float>(s / static_cast<double>(a.size()));
+}
+
+// Banda fina (comprimento de onda abaixo de ~16 texels): x menos a gaussiana
+// de sigma 2.5 (ganho 0.62 em lambda = 16).
+float fineBandVariance(const Img& x, int w, int h) {
+    const Img g = gaussWrap(x, w, h, 2.5f);
+    Img d(x.size());
+    for (size_t i = 0; i < x.size(); ++i) d[i] = x[i] - g[i];
+    return varianceOf(d);
+}
+
+// Banda de referencia (~30 a ~125 texels): onde a altura da rede ainda e'
+// confiavel (o espectro dela so' despenca abaixo de ~32 texels).
+Img referenceBand(const Img& x, int w, int h) {
+    const Img a = gaussWrap(x, w, h, 5.0f), b = gaussWrap(x, w, h, 20.0f);
+    Img d(x.size());
+    for (size_t i = 0; i < x.size(); ++i) d[i] = a[i] - b[i];
+    return d;
+}
+
+// Gradiente por diferenca central com wrap (x pra direita, y pra baixo).
+void centralGradient(const Img& src, int w, int h, Img& gx, Img& gy) {
+    gx.resize(src.size());
+    gy.resize(src.size());
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const size_t i = static_cast<size_t>(y) * w + x;
+            gx[i] = 0.5f * (src[static_cast<size_t>(y) * w + wrapi(x + 1, w)] - src[static_cast<size_t>(y) * w + wrapi(x - 1, w)]);
+            gy[i] = 0.5f * (src[static_cast<size_t>(wrapi(y + 1, h)) * w + x] - src[static_cast<size_t>(wrapi(y - 1, h)) * w + x]);
+        }
+    }
+}
+
+float fineGradientEnergy(const Img& x, int w, int h) {
+    Img gx, gy;
+    centralGradient(x, w, h, gx, gy);
+    return fineBandVariance(gx, w, h) + fineBandVariance(gy, w, h);
+}
+
+// Correlacao de Pearson em janela (2r+1)^2, suavizada pela mesma janela.
+// Limitada a [-1, 1]: nao amplifica como uma regressao (deconvolucao) faria
+// (medido: regressao local da altura contra a linha borrada dava ganho de
+// -12 a +390 conforme o sigma, e a fenda saia com 10 desvios de fundura).
+Img localCorrelation(const Img& a, const Img& b, int w, int h, int r) {
+    const size_t n = a.size();
+    Img aa(n), bb(n), ab(n);
+    for (size_t i = 0; i < n; ++i) { aa[i] = a[i] * a[i]; bb[i] = b[i] * b[i]; ab[i] = a[i] * b[i]; }
+    const Img ma = boxWrap(a, w, h, r), mb = boxWrap(b, w, h, r);
+    const Img maa = boxWrap(aa, w, h, r), mbb = boxWrap(bb, w, h, r), mab = boxWrap(ab, w, h, r);
+    Img c(n);
+    for (size_t i = 0; i < n; ++i) {
+        const float va = maa[i] - ma[i] * ma[i], vb = mbb[i] - mb[i] * mb[i];
+        c[i] = (mab[i] - ma[i] * mb[i]) / std::sqrt(std::max(va * vb, 1e-12f));
+    }
+    return boxWrap(c, w, h, r);
+}
+
+} // namespace
+
+void refineHeightWithAlbedoLines(const uint8_t* rgba, const float* normalXyz, int w, int h,
+                                 std::vector<float>& height) {
+    const size_t n = static_cast<size_t>(w) * h;
+    if (!rgba || !normalXyz || w < 16 || h < 16 || height.size() != n) return;
+
+    // AMPLITUDE: a da propria normal da rede. A normal dela carrega a
+    // inclinacao fina (borda da fenda) que a altura dela borra; a altura
+    // certa e' a que tem essa inclinacao. Inclinacao da normal (+Y pra cima
+    // na imagem): p = dh/dx = -nx/nz, q = dh/dlinha = +ny/nz (medido contra a
+    // altura da rede: correlacao -0,74 em x e +0,77 em y). A escala entre as
+    // duas sai da banda em que a altura ainda presta (30-125 texels):
+    // regressao do gradiente da altura contra (p, q) - correlacao 0,86 na
+    // rocha. O que falta de energia de gradiente na banda fina e' o que se
+    // devolve; se a altura ja' tem (pedra, chao: a normal pede MENOS
+    // inclinacao fina do que a altura ja' tem), nao mexe. Usar so' a razao
+    // altura/albedo pra amplitude dava 4x mais na rocha e espinhos na
+    // silhueta da pedra (bancada de relevo, tess 12, 2026-10-26).
+    Img p(n), q(n);
+    for (size_t i = 0; i < n; ++i) {
+        const float nz = std::max(normalXyz[i * 3 + 2], 0.2f);
+        p[i] = -normalXyz[i * 3 + 0] / nz;
+        q[i] = normalXyz[i * 3 + 1] / nz;
+    }
+    Img hx, hy;
+    centralGradient(height, w, h, hx, hy);
+    const Img bhx = referenceBand(hx, w, h), bhy = referenceBand(hy, w, h);
+    const Img bp = referenceBand(p, w, h), bq = referenceBand(q, w, h);
+    double num = 0.0, den = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        num += static_cast<double>(bhx[i]) * bp[i] + static_cast<double>(bhy[i]) * bq[i];
+        den += static_cast<double>(bp[i]) * bp[i] + static_cast<double>(bq[i]) * bq[i];
+    }
+    if (den <= 1e-20 || num <= 0.0) return; // normal e altura discordam: nada a transferir
+    const float k = static_cast<float>(num / den);
+    const float target = k * k * (fineBandVariance(p, w, h) + fineBandVariance(q, w, h));
+    const float deficit = target - (fineBandVariance(hx, w, h) + fineBandVariance(hy, w, h));
+    if (deficit <= 0.0f) return;
+
+    // FORMA: linhas finas do albedo pela Hessiana, so' a menor escala (sigma
+    // pedido 1, ~1,4 efetivo nas 3 boxes do gaussWrap - o que a rede borra),
+    // as duas polaridades separadas, na luminancia linear (na sRGB o grao da
+    // pedra vira linha: ruido fora das linhas de 0,08 pra 0,16 desvio).
+    // Linha e' o que precisa de nitidez (fenda, junta, rejunte); o grao
+    // isotropico e' ruido e a Hessiana o derruba (medido: com o detalhe cru
+    // do albedo no lugar das linhas, a fenda virava fileira de furos).
+    Img L(n);
+    for (size_t i = 0; i < n; ++i)
+        L[i] = 0.2126f * srgbToLinear(rgba[i * 4 + 0] / 255.0f) + 0.7152f * srgbToLinear(rgba[i * 4 + 1] / 255.0f)
+             + 0.0722f * srgbToLinear(rgba[i * 4 + 2] / 255.0f);
+    static constexpr float kFineSigma[1] = {1.0f};
+    Img valley, ridge;
+    frangiLines(L, w, h, valley, ridge, kFineSigma, 1);
+    Img bright = std::move(ridge), dark(n);
+    for (size_t i = 0; i < n; ++i) dark[i] = -valley[i]; // mesmo sinal do contraste no albedo
+
+    // SINAL E PESO: da propria rede. Ela ja' poe a fenda mais baixa, so' que
+    // larga; a correlacao local entre a altura dela e a linha borrada na
+    // mesma escala (sigma 3) diz, por regiao do atlas, se aquela polaridade
+    // afunda (negativa) ou sobe e o quanto a rede concorda. Nada de regra de
+    // cor: lava clara e junta escura saem do mesmo calculo. Janela de 24
+    // texels a cada 512 (uma regiao do atlas, nao a textura toda).
+    const int radius = std::max(4, static_cast<int>(std::lround(24.0 * std::min(w, h) / 512.0)));
+    const Img brightBlur = gaussWrap(bright, w, h, 3.0f), darkBlur = gaussWrap(dark, w, h, 3.0f);
+    const Img cBright = localCorrelation(height, brightBlur, w, h, radius);
+    const Img cDark = localCorrelation(height, darkBlur, w, h, radius);
+
+    Img dBright(n), dDark(n);
+    for (size_t i = 0; i < n; ++i) {
+        dBright[i] = bright[i] - brightBlur[i];
+        dDark[i] = dark[i] - darkBlur[i];
+    }
+    const float sBright = 1.0f / std::sqrt(std::max(fineBandVariance(dBright, w, h), 1e-12f));
+    const float sDark = 1.0f / std::sqrt(std::max(fineBandVariance(dDark, w, h), 1e-12f));
+    Img detail(n);
+    for (size_t i = 0; i < n; ++i)
+        detail[i] = cBright[i] * dBright[i] * sBright + cDark[i] * dDark[i] * sDark;
+    const float detailEnergy = fineGradientEnergy(detail, w, h);
+    if (detailEnergy <= 1e-20f) return;
+    const float amplitude = std::sqrt(deficit / detailEnergy);
+    for (size_t i = 0; i < n; ++i) height[i] += amplitude * detail[i];
 }
 
 } // namespace eruption
