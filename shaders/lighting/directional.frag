@@ -758,7 +758,20 @@ void main() {
             if (dot(sp - worldPos, csGeoN) < rejectBias) continue;
             vec3 toRay = rp - sp;
             float along = dot(toRay, L);
-            if (along > 0.04 && along < stepLen * 2.0) {
+            bool hit = along > 0.04 && along < stepLen * 2.0;
+            // Marcha longa: a janela `along` (ate' 2 passos, ~3 u com alcance
+            // 24) aceitava superficie ABAIXO do ponto do raio, e lona curva,
+            // malha facetada e o grao do relevo se sombreavam sozinhos (acne
+            // no mapa inteiro, listras na lona no mobile_high). Aqui o ponto
+            // do raio so' esta' na sombra se a camera ve' a superficie do
+            // G-buffer NA FRENTE dele: mais que a tolerancia (pixel e passo)
+            // e menos que a espessura de um bloqueador.
+            if (csLong) {
+                float behind = distance(cameraPos, rp) - distance(cameraPos, sp);
+                float tol = 0.15 + csPxWorld * 1.5 + marchDist * 0.02;
+                hit = behind > tol && behind < max(4.0 * stepLen, 2.0);
+            }
+            if (hit) {
                 csOcc = max(csOcc, 1.0 - float(i) / float(CS_STEPS) * csFade);
             }
         }
