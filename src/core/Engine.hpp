@@ -1830,7 +1830,12 @@ private:
     float m_cpuAppUpdateMs = 0.0f;  // app.onUpdate(): gameplay/controller
     float m_cpuRenderMs = 0.0f;     // render(): command recording + submit
     float m_cpuTailMs = 0.0f;       // onRender + input + profiler commit
-    bool m_normalMapInvertY = false;   // true = flip normal-map green channel (Y down)
+    // Ligado de fabrica: o TBN do motor (cotangente em model/terrain.frag,
+    // gbTBN no chao misturado) tem B = dP/dv, e os normal maps gerados pela
+    // rede saem com o verde no sentido oposto. Medido contra a normal tirada
+    // da propria altura do MRAH-W: x correlaciona +0,61..+0,74 e y -0,65..-0,77
+    // em pedra, rocha e camada de chao - fenda iluminada como saliencia.
+    bool m_normalMapInvertY = true;    // true = flip normal-map green channel (Y down)
     float m_defaultRoughness = 0.8f;   // Fallback roughness when no PBR map is bound
     float m_defaultMetallic = 0.0f;    // Fallback metallic when no PBR map is bound
     struct CharConfig m_charConfig;
