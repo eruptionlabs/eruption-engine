@@ -21,6 +21,7 @@
 #include "renderer/skymap/SkySystem.hpp"
 #include "renderer/skymap/SkyConfig.hpp"
 #include "renderer/WeatherTypes.hpp"
+#include "renderer/ReliefSource.hpp"
 #include <cfloat>
 #include <cstdlib>
 #include <fstream>
@@ -482,6 +483,30 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_modelRenderer.setMipmapsEnabled(m_mipmapMenu.config.enabled);
     m_modelRenderer.setTextureResolver([this](const std::string& path) {
         return this->resolveModelTexture(path);
+    });
+    // Relevo assado: alfa do MRAH-W que o bake das texturas embutidas fez para
+    // a textura de cor (o mesmo mapa que a tesselacao le'). Chamado na carga
+    // do modelo, tambem das threads de trabalho (so' le' m_embeddedBaked).
+    m_modelRenderer.setReliefSource([this](const std::string& texture, bool pixels, std::vector<uint8_t>& alpha, int& w,
+                                           int& h, uint64_t& id) {
+        if (texture.empty() || m_embeddedBaked.empty()) return false;
+        std::string name = texture;
+        auto it = m_embeddedBaked.find(name);
+        if (it == m_embeddedBaked.end()) {
+            std::replace(name.begin(), name.end(), '\\', '/');
+            it = m_embeddedBaked.find(name);
+            if (it == m_embeddedBaked.end() && !name.empty() && name[0] == '/') it = m_embeddedBaked.find(name.substr(1));
+            if (it == m_embeddedBaked.end()) return false;
+        }
+        const EtexData& e = it->second.mrahw;
+        if (!e.valid()) return false;
+        if (!pixels) {
+            id = reliefContentHash(e.payload.data(), e.payload.size());
+            return true;
+        }
+        w = int(e.width);
+        h = int(e.height);
+        return reliefDecodeAlpha(e, alpha);
     });
     // Lets the PBR synthesis reach albedos that exist only inside a GLB.
     // Without it, every embedded-texture material renders with flat fallback
@@ -2446,6 +2471,28 @@ void Engine::applyGraphicsPreset() {
     // que a grade por distancia, a solda e a altura refinada foram medidas.
     if (p.contains("tessellation_amplitude"))
         m_tessAmplitude = std::clamp(p.value("tessellation_amplitude", m_tessAmplitude), 0.0f, 16.0f);
+    // RELEVO ASSADO NA CARGA (ModelRenderer::applyReliefs): o deslocamento da
+    // tesselacao feito uma vez, numa malha estatica partida ate'
+    // "relief_bake_spacing" (u). "shadow" (PC): so' o passe de sombra desenha
+    // a malha assada - o G-buffer segue na tesselacao e o sol passa a ver o
+    // relevo. "mesh" (celular): o G-buffer tambem, e a tesselacao desliga
+    // (seria o relevo duas vezes). "off" ou ausente: nada. Mesma amplitude e
+    // contraste da tesselacao; ERUPTION_TEST_TESS_AMP vale aqui tambem.
+    {
+        ModelRenderer::ReliefBakeConfig rb;
+        const std::string mode = p.value("relief_bake", std::string("off"));
+        rb.mode = mode == "shadow" ? 1 : mode == "mesh" ? 2 : 0;
+        rb.spacing = std::clamp(p.value("relief_bake_spacing", 2.0f), 0.25f, 64.0f);
+        rb.maxTriangles = static_cast<uint32_t>(std::clamp(p.value("relief_bake_max_tris", 600000), 1024, 4194304));
+        rb.amplitude = m_tessAmplitude;
+        if (const char* e = std::getenv("ERUPTION_TEST_TESS_AMP")) rb.amplitude = std::max(0.0f, std::stof(e));
+        rb.gain = std::max(m_tessHeightGain, 0.1f);
+        if (rb.mode == 2) {
+            m_tessEnabled = false;
+            m_modelRenderer.setSeamWeld(false);
+        }
+        m_modelRenderer.setReliefBake(rb);
+    }
     // Raios de luz das luzes pontuais (passe de pos, meia resolucao): quantas
     // luzes no maximo. 0 desliga (degraus baixo e medio do celular).
     m_godRayLights = static_cast<uint32_t>(std::clamp(p.value("god_ray_lights", 4), 0, 4));

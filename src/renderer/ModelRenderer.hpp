@@ -17,6 +17,8 @@
 #include <string>
 #include <unordered_map>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <cstdint>
 
 namespace eruption {
@@ -138,6 +140,24 @@ struct ModelMeshGPU {
     VkBuffer shIndexBuffer = VK_NULL_HANDLE;
     VmaAllocation shIndexAlloc = VK_NULL_HANDLE;
     uint32_t shIndexCount = 0;
+
+    // RELEVO ASSADO NA CARGA (preset "relief_bake", ModelRenderer::applyReliefs):
+    // vertex buffer = os vertices da malha ja' deslocados, nos MESMOS indices,
+    // e depois os vertices novos da subdivisao - todo nivel de LOD que usa os
+    // vertices da malha (sombra, "lo", celulas do chao) desenha o relevo sem
+    // indice novo. Index buffer = o que a malha subiu (cheia + niveis das
+    // celulas) e, no fim, a malha cheia partida, a partir de reliefFirst.
+    // reliefCells = groundCells com first/count na parte partida. Dono: o
+    // ModelRenderer (destroyLodBuffers), mesmo com a malha externa.
+    // reliefInView: o G-buffer tambem usa (celular, sem tesselacao); senao so'
+    // a sombra (PC: a tesselacao segue no G-buffer e o sol ve' o relevo).
+    VkBuffer reliefVertexBuffer = VK_NULL_HANDLE;
+    VmaAllocation reliefVertexAlloc = VK_NULL_HANDLE;
+    VkBuffer reliefIndexBuffer = VK_NULL_HANDLE;
+    VmaAllocation reliefIndexAlloc = VK_NULL_HANDLE;
+    uint32_t reliefFirst = 0, reliefIndexCount = 0;
+    bool reliefInView = false;
+    std::vector<GroundCell> reliefCells;
 
     // CHAO (G38): malha de terreno vinda como modelo (mapa GLB: material de chao,
     // categoria "ground" ou vertices com splat). O bake das probes de
@@ -429,6 +449,24 @@ public:
     // Amplitude do deslocamento (u_tessParams.z) para o teto por tamanho de
     // malha (reliefSizeScale em ModelRenderer.cpp).
     void setTessAmplitude(float amplitude) { m_tessAmplitude = amplitude; }
+    // Relevo assado na carga (data/graphics.json "relief_bake*", aplicado em
+    // Engine::applyGraphicsPreset): vale para as malhas carregadas depois.
+    // mode 0 = nao assa; 1 = so' a sombra; 2 = sombra e G-buffer (sem tesselacao).
+    struct ReliefBakeConfig {
+        int mode = 0;
+        float spacing = 2.0f;   // grade (u)
+        float amplitude = 0.0f; // a da tesselacao (u)
+        float gain = 1.5f;      // contraste da altura (o da tesselacao)
+        uint32_t maxTriangles = 600000; // alvo por malha (a grade abre acima disto)
+    };
+    void setReliefBake(const ReliefBakeConfig& config) { m_reliefBake = config; }
+    // Altura crua de uma textura pelo caminho dela: identidade do conteudo e,
+    // com pixels = true, o alfa (o Engine decodifica o MRAH-W do bake das
+    // texturas embutidas). Chamada tambem das threads de trabalho da carga.
+    // Ver renderer/ReliefSource.
+    using ReliefTextureSource = std::function<bool(const std::string& texture, bool pixels, std::vector<uint8_t>& alpha,
+                                                   int& w, int& h, uint64_t& id)>;
+    void setReliefSource(ReliefTextureSource source) { m_reliefSource = std::move(source); }
     // Solda da costura (preset "tessellation_seam_weld"): vale para as malhas
     // carregadas depois da chamada.
     void setSeamWeld(bool enabled) { m_seamWeld = enabled; }
@@ -1124,6 +1162,33 @@ private:
     VkShaderStageFlags m_pushStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     float m_tessBandDistance = 0.0f;
     float m_tessAmplitude = 0.0f;
+    ReliefBakeConfig m_reliefBake;
+    ReliefTextureSource m_reliefSource;
+    struct ReliefAlpha {
+        std::string name;
+        uint64_t id = 0;
+        std::once_flag decoded; // so' na falta de cache, uma vez por textura
+        std::vector<uint8_t> alpha;
+        int w = 0, h = 0;
+        bool ok = false;
+    };
+    struct ReliefTask {
+        uint32_t mesh = 0;
+        std::vector<TerrainVertex> vertices;
+        std::vector<uint32_t> uploaded; // o index buffer da malha (cheia + niveis)
+        uint32_t fullCount = 0;         // so' a malha cheia, no inicio de `uploaded`
+        float amplitude = 0.0f;
+        std::vector<TerrainVertex> outVertices;
+        std::vector<uint32_t> outIndices;
+        std::vector<ModelMeshGPU::GroundCell> outCells;
+        uint32_t outFirst = 0, outCount = 0;
+        float spacing = 0.0f;
+        bool ok = false, fromCache = false;
+        double ms = 0.0;
+    };
+    void computeRelief(ReliefTask& task, std::unordered_map<uint32_t, std::unique_ptr<ReliefAlpha>>& alphas) const;
+    void applyReliefs(std::vector<ReliefTask>& tasks, const std::string& label,
+                      const std::unordered_map<uint32_t, std::string>& slotNames);
     VkPipeline m_tessPipeline = VK_NULL_HANDLE;
     // PRE-PASSE DE PROFUNDIDADE da folhagem: m_depthPipeline so' descarta e
     // escreve profundidade; m_pipelineNoDepthWrite e' o m_pipeline sem escrita

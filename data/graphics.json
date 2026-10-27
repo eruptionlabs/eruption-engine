@@ -156,7 +156,10 @@
       "tessellation_near_distance": 110.0,
       "tessellation_near_spacing": 0.12,
       "tessellation_near_edge_pixels": 4.0,
-      "tessellation_amplitude": 12.0
+      "tessellation_amplitude": 12.0,
+      "relief_bake": "shadow",
+      "relief_bake_spacing": 4.0,
+      "relief_bake_max_tris": 75000
     },
     "medium": {
       "mesh_tri_budget": 3000000,
@@ -214,7 +217,10 @@
       "tessellation_near_distance": 110.0,
       "tessellation_near_spacing": 0.12,
       "tessellation_near_edge_pixels": 4.0,
-      "tessellation_amplitude": 12.0
+      "tessellation_amplitude": 12.0,
+      "relief_bake": "shadow",
+      "relief_bake_spacing": 3.0,
+      "relief_bake_max_tris": 150000
     },
     "high": {
       "mesh_tri_budget": 5000000,
@@ -269,7 +275,10 @@
       "tessellation_near_distance": 110.0,
       "tessellation_near_spacing": 0.12,
       "tessellation_near_edge_pixels": 4.0,
-      "tessellation_amplitude": 12.0
+      "tessellation_amplitude": 12.0,
+      "relief_bake": "shadow",
+      "relief_bake_spacing": 2.0,
+      "relief_bake_max_tris": 300000
     }
   }
 }

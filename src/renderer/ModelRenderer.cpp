@@ -18,6 +18,7 @@
 #include "renderer/ShaderCompiler.hpp"
 #include "formats/TerrainParser.hpp" // for TerrainVertex
 #include "core/Logger.hpp"
+#include "renderer/ReliefSource.hpp"
 #include "utils/ImageUtils.hpp"
 #include "utils/Profiler.hpp"
 
@@ -435,6 +436,20 @@ VkDeviceSize ModelMeshGPU::destroyLodBuffers(VulkanContext* ctx) {
         shIndexAlloc = VK_NULL_HANDLE;
     }
     shIndexCount = 0;
+    for (auto [buf, alloc] : {std::pair<VkBuffer*, VmaAllocation*>{&reliefVertexBuffer, &reliefVertexAlloc},
+                              std::pair<VkBuffer*, VmaAllocation*>{&reliefIndexBuffer, &reliefIndexAlloc}}) {
+        if (*buf == VK_NULL_HANDLE) continue;
+        VmaAllocationInfo info;
+        vmaGetAllocationInfo(ctx->allocator(), *alloc, &info);
+        PROFILE_VRAM_FREE(ProfilerCategory::Meshes, info.size);
+        freed += info.size;
+        vmaDestroyBuffer(ctx->allocator(), *buf, *alloc);
+        *buf = VK_NULL_HANDLE;
+        *alloc = VK_NULL_HANDLE;
+    }
+    reliefFirst = reliefIndexCount = 0;
+    reliefInView = false;
+    reliefCells.clear();
     return freed;
 }
 
@@ -616,6 +631,7 @@ void ModelRenderer::shutdown() {
 }
 
 void ModelRenderer::clear() {
+    reliefClearMaps(); // alturas medianas do mapa que sai
     clearSkinning(false);
     for (auto& mesh : m_meshes) {
         releaseSeamWeld(mesh, false);
@@ -1471,6 +1487,195 @@ void ModelRenderer::applyLods(std::vector<LodBuild>& builds) {
     vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
 }
 
+// Relevo assado: troca os buffers da malha pelos dela quando o desenho vai
+// usar os vertices da malha (o nivel com vertices proprios fica como esta') ou
+// a malha cheia.
+static void reliefSwap(const ModelMeshGPU& m, VkBuffer& vb, VkBuffer& ib, uint32_t& count) {
+    if (m.reliefVertexBuffer == VK_NULL_HANDLE) return;
+    if (vb == m.vertexBuffer) vb = m.reliefVertexBuffer;
+    if (ib == m.indexBuffer) {
+        ib = m.reliefIndexBuffer;
+        if (count == m.indexCount) count = m.reliefIndexCount; // a cheia; os niveis seguem no lugar
+    }
+}
+
+// Celulas do chao validas para o index buffer em uso (nullptr = nenhuma).
+static const std::vector<ModelMeshGPU::GroundCell>* cellsFor(const ModelMeshGPU& m, VkBuffer ib) {
+    if (ib == m.indexBuffer) return &m.groundCells;
+    if (m.reliefIndexBuffer != VK_NULL_HANDLE && ib == m.reliefIndexBuffer && !m.reliefCells.empty()) return &m.reliefCells;
+    return nullptr;
+}
+
+static float reliefSizeScale(const ModelMeshGPU& mesh, float amplitude);
+
+// Uma malha (thread de trabalho): cache ou assado, e a malha final.
+void ModelRenderer::computeRelief(ReliefTask& t, std::unordered_map<uint32_t, std::unique_ptr<ReliefAlpha>>& alphas) const {
+    const std::vector<uint32_t> full(t.uploaded.begin(), t.uploaded.begin() + t.fullCount);
+    ReliefParams p;
+    p.spacing = m_reliefBake.spacing;
+    p.amplitude = t.amplitude;
+    p.gain = m_reliefBake.gain;
+    p.maxTriangles = m_reliefBake.maxTriangles;
+    auto source = [this, &alphas](uint32_t slot, bool pixels, std::vector<uint8_t>& alpha, int& w, int& h,
+                                  uint64_t& id) {
+        auto it = alphas.find(slot);
+        if (it == alphas.end()) return false;
+        ReliefAlpha& a = *it->second;
+        id = a.id;
+        if (!pixels) return true;
+        std::call_once(a.decoded, [&] {
+            uint64_t ignored = 0;
+            a.ok = m_reliefSource(a.name, true, a.alpha, a.w, a.h, ignored);
+        });
+        if (!a.ok) return false;
+        alpha = a.alpha;
+        w = a.w;
+        h = a.h;
+        return true;
+    };
+    ReliefResult r;
+    if (!reliefBakeCached(t.vertices, full, p, source, r)) return;
+    const ReliefBakeRecord& rec = r.record;
+    // Vertices: os da malha, os meios na ordem do registro, e entao cada um
+    // anda o que o assado mandou (posicao interpolada ANTES de deslocar).
+    std::vector<TerrainVertex>& v = t.outVertices;
+    v = std::move(t.vertices);
+    const size_t base = v.size();
+    v.reserve(base + rec.parents.size() / 2);
+    auto lerpColor = [](uint32_t a, uint32_t b) {
+        uint32_t out = 0;
+        for (int k = 0; k < 32; k += 8) out |= (((((a >> k) & 0xFFu) + ((b >> k) & 0xFFu)) / 2u) & 0xFFu) << k;
+        return out;
+    };
+    for (size_t i = 0; i * 2 < rec.parents.size(); ++i) {
+        const TerrainVertex a = v[rec.parents[2 * i]], b = v[rec.parents[2 * i + 1]];
+        TerrainVertex m = a;
+        m.position = (a.position + b.position) * 0.5f;
+        m.texCoord = (a.texCoord + b.texCoord) * 0.5f;
+        const Vec3 n = a.normal + b.normal;
+        m.normal = glm::dot(n, n) > 1e-12f ? glm::normalize(n) : a.normal;
+        m.blendWeight = 0.5f * (a.blendWeight + b.blendWeight);
+        m.blendMaskUV = (a.blendMaskUV + b.blendMaskUV) * 0.5f;
+        m.color = lerpColor(a.color, b.color);
+        v.push_back(m);
+    }
+    for (size_t i = 0; i < v.size(); ++i)
+        v[i].position += Vec3(rec.dir[3 * i], rec.dir[3 * i + 1], rec.dir[3 * i + 2]) * rec.offset[i];
+    // Indices: o que a malha subiu, e a cheia partida no fim.
+    t.outIndices = std::move(t.uploaded);
+    const uint32_t first = static_cast<uint32_t>(t.outIndices.size());
+    t.outIndices.insert(t.outIndices.end(), rec.indices.begin(), rec.indices.end());
+    // Celulas: o intervalo de triangulos da entrada vira o dos filhos.
+    std::vector<uint32_t> prefix(rec.children.size() + 1, 0);
+    for (size_t k = 0; k < rec.children.size(); ++k) prefix[k + 1] = prefix[k] + rec.children[k];
+    for (ModelMeshGPU::GroundCell& c : t.outCells) {
+        const size_t a = std::min<size_t>(c.first / 3, rec.children.size());
+        const size_t b = std::min<size_t>((c.first + c.count) / 3, rec.children.size());
+        c.first = first + prefix[a] * 3;
+        c.count = (prefix[b] - prefix[a]) * 3;
+    }
+    t.spacing = r.spacing;
+    t.outFirst = first;
+    t.outCount = static_cast<uint32_t>(rec.indices.size());
+    t.fromCache = r.fromCache;
+    t.ms = r.ms;
+    t.ok = true;
+}
+
+// Assa as malhas do asset em paralelo e sobe numa submissao so'.
+void ModelRenderer::applyReliefs(std::vector<ReliefTask>& tasks, const std::string& label,
+                                 const std::unordered_map<uint32_t, std::string>& slotNames) {
+    if (tasks.empty()) return;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::sort(tasks.begin(), tasks.end(),
+              [](const ReliefTask& a, const ReliefTask& b) { return a.fullCount > b.fullCount; });
+    // Altura de cada textura das malhas, decodificada uma vez para o asset.
+    std::unordered_map<uint32_t, std::unique_ptr<ReliefAlpha>> alphas;
+    if (m_reliefSource) {
+        std::vector<uint32_t> slots;
+        for (const ReliefTask& t : tasks)
+            for (const TerrainVertex& v : t.vertices)
+                if (v.pbrIndex != 0 && v.texIndex != 0) slots.push_back(v.texIndex);
+        std::sort(slots.begin(), slots.end());
+        slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+        for (uint32_t slot : slots) {
+            auto it = slotNames.find(slot);
+            if (it == slotNames.end()) continue;
+            auto a = std::make_unique<ReliefAlpha>();
+            a->name = it->second;
+            std::vector<uint8_t> none;
+            int w = 0, h = 0;
+            if (m_reliefSource(a->name, false, none, w, h, a->id)) alphas.emplace(slot, std::move(a));
+        }
+    }
+    auto job = platform::runAsync([&] {
+        JobSystem::instance().parallelFor(static_cast<uint32_t>(tasks.size()),
+                                          [&](uint32_t k) { computeRelief(tasks[k], alphas); });
+    });
+    job.wait();
+    job.get();
+    const auto t1 = std::chrono::steady_clock::now();
+    struct Up { const void* data; VkDeviceSize size; VkBuffer dst; };
+    std::vector<Up> ups;
+    size_t done = 0, cached = 0, trisIn = 0, trisOut = 0, bytes = 0;
+    float gridMax = 0.0f;
+    for (ReliefTask& t : tasks) {
+        if (!t.ok || t.mesh >= m_meshes.size()) continue;
+        ModelMeshGPU& mesh = m_meshes[t.mesh];
+        const VkDeviceSize vs = t.outVertices.size() * sizeof(TerrainVertex);
+        const VkDeviceSize is = t.outIndices.size() * sizeof(uint32_t);
+        m_ctx->createBuffer(vs, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                            VMA_MEMORY_USAGE_GPU_ONLY, mesh.reliefVertexBuffer, mesh.reliefVertexAlloc);
+        m_ctx->createBuffer(is, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                            VMA_MEMORY_USAGE_GPU_ONLY, mesh.reliefIndexBuffer, mesh.reliefIndexAlloc);
+        PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, vs + is);
+        ups.push_back({t.outVertices.data(), vs, mesh.reliefVertexBuffer});
+        ups.push_back({t.outIndices.data(), is, mesh.reliefIndexBuffer});
+        mesh.reliefFirst = t.outFirst;
+        mesh.reliefIndexCount = t.outCount;
+        mesh.reliefInView = m_reliefBake.mode == 2;
+        mesh.reliefCells = std::move(t.outCells);
+        ++done;
+        cached += t.fromCache ? 1 : 0;
+        bytes += size_t(vs + is);
+        trisIn += t.fullCount / 3;
+        trisOut += t.outCount / 3;
+        gridMax = std::max(gridMax, t.spacing);
+    }
+    if (!ups.empty()) {
+        VkDeviceSize total = 0;
+        for (const Up& u : ups) total += (u.size + 15) & ~VkDeviceSize(15);
+        VkBuffer staging = VK_NULL_HANDLE;
+        VmaAllocation stagingAlloc = VK_NULL_HANDLE;
+        m_ctx->createBuffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
+        void* mapped = nullptr;
+        vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
+        std::vector<VkDeviceSize> offsets(ups.size());
+        VkDeviceSize off = 0;
+        for (size_t k = 0; k < ups.size(); ++k) {
+            offsets[k] = off;
+            std::memcpy(static_cast<uint8_t*>(mapped) + off, ups[k].data, static_cast<size_t>(ups[k].size));
+            off += (ups[k].size + 15) & ~VkDeviceSize(15);
+        }
+        vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
+        m_ctx->immediateSubmit([&](VkCommandBuffer c) {
+            for (size_t k = 0; k < ups.size(); ++k) {
+                const VkBufferCopy cp{offsets[k], 0, ups[k].size};
+                vkCmdCopyBuffer(c, staging, ups[k].dst, 1, &cp);
+            }
+        });
+        vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
+    }
+    const auto t2 = std::chrono::steady_clock::now();
+    ERUPTION_LOG_WARN("[RELEVO] %s: %zu de %zu malhas assadas (%zu do cache), grade %.2f u (ate' %.2f), tris %zu -> %zu, "
+                      "%.1f MB na GPU, %.0f ms em paralelo, subida %.0f ms",
+                      label.c_str(), done, tasks.size(), cached, double(m_reliefBake.spacing), double(gridMax), trisIn,
+                      trisOut,
+                      double(bytes) / (1024.0 * 1024.0), std::chrono::duration<double, std::milli>(t1 - t0).count(),
+                      std::chrono::duration<double, std::milli>(t2 - t1).count());
+    tasks.clear();
+}
+
 ModelRenderer::NodeSlotUse ModelRenderer::scanNodeSlotUse(const ModelAsset& asset, const ModelNode& node) {
     NodeSlotUse u;
     size_t faceCacheSize = node.textureNames.size();
@@ -2091,6 +2296,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
         std::vector<uint32_t> meshIndices(asset.nodes.size(), 0xFFFFFFFF);
         size_t dbgReidxOk = 0, dbgReidxFail = 0, dbgVertsBefore = 0, dbgVertsAfter = 0;
         std::vector<LodBuild> lodBuilds;
+        std::vector<ReliefTask> reliefTasks;
 
         std::vector<uint32_t> assetTexIndexToBindlessSlot(asset.textures.size(), 0);
         for (size_t t = 0; t < asset.textures.size(); ++t) {
@@ -2274,6 +2480,26 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                 if (baked) createSeamWeld(mesh, vertices, *useIndices);
             }
 
+            // Relevo assado (preset "relief_bake"): onde a tesselacao desloca
+            // pela altura cozida - o mesmo criterio da solda acima. Tarefa:
+            // roda depois do laco, em paralelo (applyReliefs).
+            if (m_reliefBake.mode != 0 && m_reliefBake.amplitude > 0.0f && !skinned && mesh.dispScale > 0.0f &&
+                mesh.swayAmount <= 0.0f) {
+                bool baked = false;
+                for (const auto& v : vertices)
+                    if (v.pbrIndex != 0) { baked = true; break; }
+                if (baked) {
+                    ReliefTask t;
+                    t.mesh = static_cast<uint32_t>(m_meshes.size());
+                    t.vertices = vertices;
+                    t.uploaded = *useIndices;
+                    t.fullCount = static_cast<uint32_t>(useIndices->size());
+                    t.amplitude = m_reliefBake.amplitude * mesh.dispScale * reliefSizeScale(mesh, m_reliefBake.amplitude);
+                    t.outCells = mesh.groundCells;
+                    reliefTasks.push_back(std::move(t));
+                }
+            }
+
             // LOD grosseiro por distância. Um index buffer simplificado
             // sobre o MESMO vertex buffer: a instância longe desenha menos
             // triângulo sem uma segunda cópia da malha na VRAM.
@@ -2333,6 +2559,12 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             ERUPTION_LOG_WARN("[LOD] %s: %zu meshes, %.0f ms in parallel, upload %.0f ms", asset.filePath.c_str(),
                               lodBuilds.size(), std::chrono::duration<double, std::milli>(lt1 - lt0).count(),
                               std::chrono::duration<double, std::milli>(lt2 - lt1).count());
+        }
+        if (!reliefTasks.empty()) {
+            std::unordered_map<uint32_t, std::string> slotNames;
+            for (size_t t = 0; t < asset.textures.size(); ++t)
+                if (assetTexIndexToBindlessSlot[t] != 0) slotNames.emplace(assetTexIndexToBindlessSlot[t], asset.textures[t]);
+            applyReliefs(reliefTasks, asset.filePath, slotNames);
         }
         // Nós que compartilham geometria (geometryShareIndex >= 0) não
         // subiram malha nenhuma: apontam para o ModelMeshGPU do dono. Passe
@@ -3351,11 +3583,12 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         // instancia ja' basta.
         // As células são faixas da malha CHEIA: um chão longe, no nível
         // reduzido (outro buffer de índices), vai inteiro (mapa vizinho).
-        const bool tessCells = tessellationActive() && mesh.isGround && runIb == mesh.indexBuffer &&
-                               m_tessBandDistance > 0.0f && !mesh.groundCells.empty();
+        const std::vector<ModelMeshGPU::GroundCell>* meshCells = cellsFor(mesh, runIb);
+        const bool tessCells = tessellationActive() && mesh.isGround && meshCells &&
+                               m_tessBandDistance > 0.0f && !meshCells->empty();
         // Chao de uma instancia so': as celulas fora da tela nem sao
         // desenhadas (a malha inteira passava pelo vertex shader).
-        const bool cullCells = mesh.isGround && runIb == mesh.indexBuffer && !mesh.groundCells.empty() &&
+        const bool cullCells = mesh.isGround && meshCells && !meshCells->empty() &&
                                runLen == 1;
         const bool wantTess = tessCells || cullCells;
         if (!tessCells) bindPipelineFor(tessellationActive() && runNear);
@@ -3419,7 +3652,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
                 segOpen = false;
             };
             const Mat4 cellModel = runModel;
-            for (const auto& c : mesh.groundCells) {
+            for (const auto& c : (*meshCells)) {
                 if (cullCells) {
                     Vec3 cmn, cmx;
                     groundCellBox(mesh, c, cellModel, cmn, cmx);
@@ -3530,6 +3763,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         VkBuffer vb, ib;
         uint32_t drawCount;
         pickBuffers(mesh, lod, vb, ib, drawCount);
+        if (mesh.reliefInView) reliefSwap(mesh, vb, ib, drawCount);
         if (m_hiLodActive.size() > idx) m_hiLodActive[idx] = (lod == 0);
         if (m_loLodActive.size() > idx) m_loLodActive[idx] = (lod == 2);
 
@@ -3794,6 +4028,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             VkBuffer vb2, ib2;
             uint32_t drawCount2;
             pickBuffers(mesh, job.lod, vb2, ib2, drawCount2);
+            if (mesh.reliefInView) reliefSwap(mesh, vb2, ib2, drawCount2);
             const bool sameRun2 = runLen2 > 0 && vb2 == runVb2 && ib2 == runIb2 &&
                                   drawCount2 == runCount2 && job.meshIndex == runMesh2 &&
                                   job.alpha == runAlpha2;
@@ -4133,6 +4368,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
                     if (mesh.loVertexBuffer != VK_NULL_HANDLE) useVb = mesh.loVertexBuffer;
                 }
             }
+            reliefSwap(mesh, useVb, useIb, useCount);
             if (useVb != bvb || useIb != bib) {
                 VkDeviceSize off = 0;
                 vkCmdBindVertexBuffers(cmd, 0, 1, &useVb, &off);
@@ -4206,7 +4442,8 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
         // Chao de uma instancia so': so' as celulas dentro da cascata e cuja
         // sombra pode cair na tela (o mesmo teste dos casters, ver acima).
         const ModelMeshGPU& rm = m_meshes[runMesh];
-        if (rm.isGround && runIb == rm.indexBuffer && runLen == 1 && !rm.groundCells.empty()) {
+        const std::vector<ModelMeshGPU::GroundCell>* rmCells = cellsFor(rm, runIb);
+        if (rm.isGround && rmCells && runLen == 1 && !rmCells->empty()) {
             const Mat4 model = runModel;
             uint32_t segFirst = 0, segCount = 0;
             auto flushSeg = [&]() {
@@ -4215,7 +4452,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
                 ++m_shadowDrawCallsDbg;
                 segCount = 0;
             };
-            for (const auto& c : rm.groundCells) {
+            for (const auto& c : (*rmCells)) {
                 Vec3 cmn, cmx;
                 groundCellBox(rm, c, model, cmn, cmx);
                 const bool keep = (!frustumMask || shadowFrustum.intersectsAABB(cmn, cmx)) &&
@@ -4292,6 +4529,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
             }
         }
 
+        reliefSwap(mesh, useVb, useIb, useCount);
         dst[slot] = hot.transform;
 
         const bool sameRun = runLen > 0 && useVb == runVb &&
