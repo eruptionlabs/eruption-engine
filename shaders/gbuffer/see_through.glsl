@@ -60,7 +60,10 @@ float seeThroughKeep(vec3 worldPos, bool steep, bool ground) {
     if (c.w <= 0.0) return 1.0;
     vec2 p = c.xy / c.w;
     float d = distance(worldPos, u_cameraPos);
-    float cut = seeThroughEllipse(p, d, worldPos.y, steep, u_seeThrough, u_seeThrough2);
+    // u_seeThroughBand.w = 1: centro no foco com personagens perto; so' as
+    // elipses deles (abaixo) cortam, nunca a do foco (Render.cpp).
+    float cut = u_seeThroughBand.w > 0.5 ? 0.0
+                                         : seeThroughEllipse(p, d, worldPos.y, steep, u_seeThrough, u_seeThrough2);
     // Personagens perto do foco (centro no foco): cada um com a sua elipse,
     // e nelas toda face fora do chao a mais de kSteepFront u na frente dele
     // sai (a beirada e o topo da pedra logo na frente da montaria; o "1/4 de
@@ -89,7 +92,7 @@ float seeThroughKeep(vec3 worldPos, bool steep, bool ground) {
 // u_seeThroughBand: x = distancia de corte (0 desliga), y = sinal do "para
 // baixo" em NDC, z = meia largura em NDC.
 float seeThroughBandKeep(vec3 worldPos, vec3 n, bool ground, bool steep) {
-    if (u_seeThroughBand.x <= 0.0 || u_seeThrough.z <= 0.0) return 1.0;
+    if (u_seeThroughBand.x <= 0.0 || u_seeThrough.z <= 0.0 || u_seeThroughBand.w > 0.5) return 1.0;
     float h = u_seeThrough2.z;
     if (ground) return 1.0;
     if (worldPos.y < u_seeThrough2.y + (steep ? 0.02 : 0.5) * h) return 1.0;
