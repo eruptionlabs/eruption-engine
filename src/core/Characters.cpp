@@ -53,6 +53,24 @@ bool Engine::loadCharacterSprite(const std::string& png, LoadedSprite& out) {
     return true;
 }
 
+void Engine::groundDecalPlane(GroundRing& decal) const {
+    if (reliefInView() <= 0.0f) return;
+    // Inclinacao por diferenca central a meio raio (minimo 2 u): o piso da
+    // CPU e' a malha sem o relevo. Limitada a 45 graus, a folga do quadro.
+    const Vec3 c(decal.center);
+    const float d = std::max(0.5f * decal.center.w, 2.0f);
+    const float fromY = c.y + decal.shape.y;
+    auto altura = [&](float x, float z) {
+        const float y = floorHeight(x, z, fromY);
+        return std::abs(y - c.y) <= decal.shape.y ? y : c.y; // sem piso por perto: plano
+    };
+    const float gx = (altura(c.x + d, c.z) - altura(c.x - d, c.z)) / (2.0f * d);
+    const float gz = (altura(c.x, c.z + d) - altura(c.x, c.z - d)) / (2.0f * d);
+    decal.fill.z = std::clamp(gx, -1.0f, 1.0f);
+    decal.fill.w = std::clamp(gz, -1.0f, 1.0f);
+    decal.shape.w += 2.0f; // forma + 2: ler no plano
+}
+
 int Engine::addCharacter(const std::string& name, const std::string& sprite, const Vec3& position, float facingDeg) {
     SceneCharacter c;
     c.name = name;
@@ -483,6 +501,7 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         const float folga = groundDecalSlack(c.ringRadius);
         r.shape = Vec4(0.0f, folga, folga, 0.0f);
         r.dir.w = c.ringRadius - c.ringWidth; // coroa cheia, sem borda
+        groundDecalPlane(r);
         m_groundRings.push_back(r);
     }
     if (headTop > -1e8f) {
