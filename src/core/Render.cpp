@@ -1613,7 +1613,8 @@ void Engine::render() {
         if (m_vfx.active()) {
             m_vulkan.writeTimestamp(cmd, 14, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             m_vfx.drawLowRes(cmd, m_gbuffer.depthView(), renderExtent()); // fumaca em meia resolucao
-            m_vfx.draw(cmd, m_deferredLighting.litImageView(), m_gbuffer.depthView(), renderExtent());
+            m_vfx.draw(cmd, m_deferredLighting.litImage(), m_deferredLighting.litImageView(), m_gbuffer.depthView(),
+                       renderExtent());
             m_vulkan.writeTimestamp(cmd, 15, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             Profiler::addGpuTime("VFX Draw", m_vulkan.timestampDeltaMs(14, 15));
         }

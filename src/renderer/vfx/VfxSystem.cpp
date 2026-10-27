@@ -31,7 +31,7 @@ constexpr uint32_t kCounterCount = 84;
 constexpr uint32_t kCEventDispatch = 32;
 constexpr uint32_t kRecordBytes = 64;
 constexpr uint32_t kMaxEvents = 16384;
-constexpr uint32_t kBindings = 17;
+constexpr uint32_t kBindings = 18;
 
 struct DrawPush {
     uint32_t listOffset;
@@ -41,7 +41,8 @@ struct MeshPush {
     Mat4 viewProjNoJitter;
     Mat4 prevViewProjNoJitter;
     uint32_t listOffset;
-    uint32_t pad[3];
+    uint32_t translucent; // 0: so' as opacas (G-buffer); 1: so' as translucidas
+    uint32_t pad[2];
 };
 // Sombra: sem a matriz do quadro anterior, cabe em push constant.
 struct MeshShadowPush {
@@ -207,6 +208,7 @@ bool VfxSystem::createDescriptors() {
     b[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     b[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     b[16].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[17].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = kBindings;
@@ -222,7 +224,7 @@ bool VfxSystem::createDescriptors() {
     const uint32_t n = VulkanContext::MAX_FRAMES_IN_FLIGHT * 3;
     VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 13 * n},
                                      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, n},
-                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * n}};
+                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * n}};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pi.maxSets = n;
@@ -256,7 +258,7 @@ bool VfxSystem::createDescriptors() {
 
 void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
     if (m_setBuffersWritten[frame] && m_setDepth[frame] == depthView && m_setLow[frame] == m_lowView &&
-        m_setGround[frame] == m_groundView)
+        m_setGround[frame] == m_groundView && m_setIce[frame] == m_iceView)
         return;
     VkDescriptorBufferInfo bi[8] = {
         {m_particles.buf, 0, VK_WHOLE_SIZE}, {m_dead.buf, 0, VK_WHOLE_SIZE},    {m_alive.buf, 0, VK_WHOLE_SIZE},
@@ -278,6 +280,9 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
     // Sem grade de altura: a profundidade ocupa o binding (groundInfo.w = 0, nunca lida).
     const VkDescriptorImageInfo groundInfo{m_linearSampler, m_groundView ? m_groundView : depthView,
                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    // Sem malha translucida: a profundidade ocupa o binding (nunca lida).
+    const VkDescriptorImageInfo iceInfo{m_iceView ? m_linearSampler : m_depthSampler, m_iceView ? m_iceView : depthView,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet w[2 * kBindings]{};
     for (uint32_t s = 0; s < 2; ++s) {
         for (uint32_t i = 0; i < kBindings; ++i) {
@@ -301,12 +306,15 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
         w[s * kBindings + 15].pBufferInfo = &ribbonInfo;
         w[s * kBindings + 16].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[s * kBindings + 16].pImageInfo = &groundInfo;
+        w[s * kBindings + 17].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[s * kBindings + 17].pImageInfo = &iceInfo;
     }
     vkUpdateDescriptorSets(m_ctx->device(), 2 * kBindings, w, 0, nullptr);
     m_setBuffersWritten[frame] = true;
     m_setDepth[frame] = depthView;
     m_setLow[frame] = m_lowView;
     m_setGround[frame] = m_groundView;
+    m_setIce[frame] = m_iceView;
 }
 
 bool VfxSystem::createPipelines() {
@@ -513,6 +521,20 @@ bool VfxSystem::createPipelines() {
             ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
             r = vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_meshFwdPipe);
         }
+        // Translucida: mesmos alvos da previa, le' a copia do lit. Opcional:
+        // sem ela (ou sem blit linear de RGBA16F) a malha translucida sai opaca.
+        VkFormatProperties fp16{};
+        vkGetPhysicalDeviceFormatProperties(m_ctx->physicalDevice(), VK_FORMAT_R16G16B16A16_SFLOAT, &fp16);
+        const VkFormatFeatureFlags blitNeeds = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
+                                               VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+        VkShaderModule mice = r == VK_SUCCESS && (fp16.optimalTilingFeatures & blitNeeds) == blitNeeds
+                                  ? loadModule(dev, "vfx/vfx_mesh_ice.frag.spv")
+                                  : VK_NULL_HANDLE;
+        if (mice) {
+            st[1].module = mice;
+            if (vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_meshIcePipe) != VK_SUCCESS)
+                m_meshIcePipe = VK_NULL_HANDLE;
+        }
         // Sombra: so' vertice (profundidade no atlas da cascata). Opcional: sem
         // ela as malhas so' nao fazem sombra.
         VkShaderModule msh = r == VK_SUCCESS ? loadModule(dev, "vfx/vfx_mesh_shadow.vert.spv") : VK_NULL_HANDLE;
@@ -546,7 +568,7 @@ bool VfxSystem::createPipelines() {
             ri.colorAttachmentCount = 2;
             ri.pColorAttachmentFormats = colorFormats;
         }
-        for (VkShaderModule m : {mvs, mfs, mfwd, msh})
+        for (VkShaderModule m : {mvs, mfs, mfwd, msh, mice})
             if (m) vkDestroyShaderModule(dev, m, nullptr);
         gi.pVertexInputState = &vi;
         gi.pColorBlendState = &cb;
@@ -693,7 +715,7 @@ void VfxSystem::shutdown() {
     destroyGround(false);
     for (VkPipeline* p : {&m_emitPipe, &m_argsPipe, &m_simPipe, &m_finishPipe, &m_drawPipe, &m_drawLowPipe,
                           &m_compositePipe, &m_sortHistPipe, &m_sortScanPipe, &m_sortScatterPipe, &m_eventPipe,
-                          &m_meshPipe, &m_meshFwdPipe, &m_meshShadowPipe})
+                          &m_meshPipe, &m_meshFwdPipe, &m_meshIcePipe, &m_meshShadowPipe})
         if (*p) vkDestroyPipeline(dev, *p, nullptr), *p = VK_NULL_HANDLE;
     destroyReactive();
     destroyBuf(m_ringIndex);
@@ -707,6 +729,11 @@ void VfxSystem::shutdown() {
     m_meshLayout = VK_NULL_HANDLE;
     if (m_lowView) vkDestroyImageView(dev, m_lowView, nullptr);
     if (m_lowImage) vmaDestroyImage(m_ctx->allocator(), m_lowImage, m_lowAlloc);
+    if (m_iceView) vkDestroyImageView(dev, m_iceView, nullptr);
+    if (m_iceImage) vmaDestroyImage(m_ctx->allocator(), m_iceImage, m_iceAlloc);
+    m_iceView = VK_NULL_HANDLE;
+    m_iceImage = VK_NULL_HANDLE;
+    m_iceExtent = {0, 0};
     m_lowView = VK_NULL_HANDLE;
     m_lowImage = VK_NULL_HANDLE;
     m_lowExtent = {0, 0};
@@ -1017,8 +1044,10 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     if (inst.killed) flags |= 1u << 12;
     if (e.lowRes) flags |= 1u << 14;
     if (e.decal) flags |= 1u << 24; // VFXF_DECAL
+    uint32_t mesh = 0;
     if (!e.mesh.empty()) {
         const uint32_t id = meshId(e.mesh);
+        mesh = id;
         flags |= (id & 0xFu) << 16;
         if (id) m_meshMask |= 1u << (id - 1);
         // Versao de longe (so' as embutidas tem).
@@ -1030,6 +1059,16 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     o.flags = glm::uvec4(flags, m_slotGen[slot], tex.slot, (e.flipCols & 0xFFu) | ((e.flipRows & 0xFFu) << 8));
     for (int k = 0; k < 4; ++k)
         o.cutout[k] = glm::packHalf2x16(glm::vec2(tex.cutout[2 * k], tex.cutout[2 * k + 1]));
+    // Malha nao usa o poligono da textura: o campo leva o material
+    // translucido (x = 1 liga, y = refracao e absorcao em half).
+    if (mesh) {
+        o.cutout = glm::uvec4(0u);
+        if (e.translucent && m_meshIcePipe) {
+            o.cutout.x = 1u;
+            o.cutout.y = glm::packHalf2x16(glm::vec2(e.refraction, e.absorption / m_unitsPerMeter));
+            m_anyTranslucent = true;
+        }
+    }
     // Sub-emissores: o filho e' outro emissor desta mesma instancia (pelo nome).
     o.events = glm::uvec4(0u);
     auto childSlot = [&](const std::string& name) -> uint32_t {
@@ -1084,6 +1123,24 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     for (int i = 0; i < 8; ++i)
         o.sizeLut[i] = glm::packHalf2x16(
             glm::vec2(e.sizeOverLife.sample(float(2 * i) / 15.0f), e.sizeOverLife.sample(float(2 * i + 1) / 15.0f)));
+    if (o.cutout.x != 0u) {
+        // Alcance das particulas (mundo): a copia do lit cobre so' o
+        // retangulo da tela onde elas podem estar. A copia inteira custava
+        // 0,17 ms em 1080p na 4060, mais que o desenho do gelo.
+        float curve = 1.0f;
+        for (int i = 0; i < 16; ++i) curve = std::max(curve, e.sizeOverLife.sample(float(i) / 15.0f));
+        const float life = std::max(e.lifetime.x, e.lifetime.y);
+        // Forma: meia-caixa por eixo na caixa; raio nos outros formatos.
+        const float r = std::max({e.shapeSize.x, e.shapeSize.y, e.shapeSize.z});
+        const Vec3 shape = e.shape == VfxShape::Box ? glm::abs(e.shapeSize) : Vec3(std::fabs(r));
+        float reach = 1.25f * e.size.y * curve + std::max(std::fabs(e.speed.x), std::fabs(e.speed.y)) * life +
+                      0.5f * (glm::length(e.gravity) + std::fabs(e.noiseStrength)) * life * life;
+        if (!e.graph.empty()) reach = 1e9f; // forca do grafo: sem limite conhecido
+        const Vec3 half = (glm::abs(c0) * shape.x + glm::abs(c1) * shape.y + glm::abs(c2) * shape.z + reach) * scale +
+                          glm::length(inst.velocity) * std::fabs(e.inheritVelocity) * life;
+        m_iceBounds.push_back({pos, half});
+        m_iceRefraction = std::max(m_iceRefraction, e.refraction);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1116,6 +1173,9 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     m_requests.clear();
     m_spawnTotal = 0;
     m_anyLowRes = false;
+    m_anyTranslucent = false;
+    m_iceBounds.clear();
+    m_iceRefraction = 0.0f;
     m_meshMask = 0;
     m_sortThisFrame = false;
     m_anyEvents = false;
@@ -1303,6 +1363,7 @@ void VfxSystem::simulate(VkCommandBuffer cmd, VkImageView depthView) {
     // O alvo de meia resolucao nasce/muda ANTES de qualquer set ser ligado
     // neste command buffer (reescrever um set ja' ligado invalida a gravacao).
     if (m_anyLowRes && !ensureLowResTarget(m_renderSize)) m_anyLowRes = false;
+    if (m_anyTranslucent && !ensureIceTarget(m_renderSize)) m_anyTranslucent = false;
     writeDescriptors(frame, depthView);
 
     // O frame anterior ainda pode estar lendo emissores/pedidos/contadores.
@@ -1477,36 +1538,99 @@ void VfxSystem::debugDump() {
     }
 }
 
-bool VfxSystem::ensureLowResTarget(VkExtent2D full) {
+bool VfxSystem::ensureHalfTarget(VkExtent2D full, VkImageUsageFlags usage, VkImage& image, VmaAllocation& alloc,
+                                 VkImageView& view, VkExtent2D& extent) {
     const VkExtent2D want{std::max(1u, (full.width + 1) / 2), std::max(1u, (full.height + 1) / 2)};
-    if (m_lowImage && want.width == m_lowExtent.width && want.height == m_lowExtent.height) return true;
+    if (image && want.width == extent.width && want.height == extent.height) return true;
     // Tamanho mudou (janela, painel do editor): o antigo morre quando os
     // frames em voo que o usam terminarem.
-    if (m_lowImage) {
-        VkImage img = m_lowImage;
-        VmaAllocation alloc = m_lowAlloc;
-        VkImageView view = m_lowView;
+    if (image) {
+        VkImage oldImage = image;
+        VmaAllocation oldAlloc = alloc;
+        VkImageView oldView = view;
         VulkanContext* ctx = m_ctx;
-        m_ctx->deferFrameCleanup([ctx, img, alloc, view]() {
-            vkDestroyImageView(ctx->device(), view, nullptr);
-            vmaDestroyImage(ctx->allocator(), img, alloc);
+        m_ctx->deferFrameCleanup([ctx, oldImage, oldAlloc, oldView]() {
+            vkDestroyImageView(ctx->device(), oldView, nullptr);
+            vmaDestroyImage(ctx->allocator(), oldImage, oldAlloc);
         });
-        m_lowImage = VK_NULL_HANDLE;
-        m_lowView = VK_NULL_HANDLE;
+        image = VK_NULL_HANDLE;
+        view = VK_NULL_HANDLE;
     }
-    if (!m_ctx->createImage(want.width, want.height, VK_FORMAT_R16G16B16A16_SFLOAT,
-                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VMA_MEMORY_USAGE_GPU_ONLY,
-                            m_lowImage, m_lowAlloc))
+    if (!m_ctx->createImage(want.width, want.height, VK_FORMAT_R16G16B16A16_SFLOAT, usage, VMA_MEMORY_USAGE_GPU_ONLY,
+                            image, alloc))
         return false;
     VkImageViewCreateInfo vi{};
     vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    vi.image = m_lowImage;
+    vi.image = image;
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    if (vkc::createImageView(m_ctx->device(), &vi, nullptr, &m_lowView) != VK_SUCCESS) return false;
-    m_lowExtent = want;
+    if (vkc::createImageView(m_ctx->device(), &vi, nullptr, &view) != VK_SUCCESS) return false;
+    extent = want;
     return true;
+}
+
+bool VfxSystem::ensureLowResTarget(VkExtent2D full) {
+    return ensureHalfTarget(full, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, m_lowImage,
+                            m_lowAlloc, m_lowView, m_lowExtent);
+}
+
+bool VfxSystem::ensureIceTarget(VkExtent2D full) {
+    // Meia resolucao: a refracao do gelo e' borrada de qualquer jeito, e a
+    // copia le' o lit inteiro mas escreve 1/4.
+    return ensureHalfTarget(full, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, m_iceImage, m_iceAlloc,
+                            m_iceView, m_iceExtent);
+}
+
+VkRect2D VfxSystem::iceCopyRect(VkExtent2D extent) const {
+    // Cantos de cada caixa projetados; folga para o desvio da refracao e o
+    // jitter. Canto atras da camera: tela inteira.
+    Vec2 lo(1e9f), hi(-1e9f);
+    for (const IceBox& b : m_iceBounds)
+        for (int k = 0; k < 8; ++k) {
+            const Vec3 c = b.center + b.half * Vec3(k & 1 ? 1.0f : -1.0f, k & 2 ? 1.0f : -1.0f, k & 4 ? 1.0f : -1.0f);
+            const Vec4 p = m_viewProjNoJitter * Vec4(c, 1.0f);
+            if (p.w <= 1e-3f) return {{0, 0}, extent};
+            lo = glm::min(lo, Vec2(p) / p.w);
+            hi = glm::max(hi, Vec2(p) / p.w);
+        }
+    const Vec2 size(float(extent.width), float(extent.height));
+    const Vec2 pad = Vec2(2.0f * 1.25f * m_iceRefraction) * size.y / size + 8.0f / size;
+    const Vec2 a = glm::clamp((lo - pad) * 0.5f + 0.5f, Vec2(0.0f), Vec2(1.0f)) * size;
+    const Vec2 z = glm::clamp((hi + pad) * 0.5f + 0.5f, Vec2(0.0f), Vec2(1.0f)) * size;
+    // Pares: cada texel da meia resolucao sai de 2x2 inteiros.
+    const int32_t x0 = int32_t(a.x) & ~1, y0 = int32_t(a.y) & ~1;
+    const int32_t x1 = std::min((int32_t(std::ceil(z.x)) + 1) & ~1, int32_t(extent.width));
+    const int32_t y1 = std::min((int32_t(std::ceil(z.y)) + 1) & ~1, int32_t(extent.height));
+    if (x1 <= x0 || y1 <= y0) return {{0, 0}, {0, 0}};
+    return {{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+}
+
+void VfxSystem::copyLitForRefraction(VkCommandBuffer cmd, VkImage litImage, VkRect2D rect) {
+    m_ctx->cmdImageBarrier(cmd, litImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    m_ctx->cmdImageBarrier(cmd, m_iceImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                           VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkImageBlit blit{};
+    blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    blit.srcOffsets[0] = {rect.offset.x, rect.offset.y, 0};
+    blit.srcOffsets[1] = {rect.offset.x + int32_t(rect.extent.width), rect.offset.y + int32_t(rect.extent.height), 1};
+    blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    blit.dstOffsets[0] = {blit.srcOffsets[0].x / 2, blit.srcOffsets[0].y / 2, 0};
+    blit.dstOffsets[1] = {std::min(blit.srcOffsets[1].x / 2, int32_t(m_iceExtent.width)),
+                          std::min(blit.srcOffsets[1].y / 2, int32_t(m_iceExtent.height)), 1};
+    vkCmdBlitImage(cmd, litImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_iceImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   1, &blit, VK_FILTER_LINEAR);
+    m_ctx->cmdImageBarrier(cmd, litImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_ACCESS_TRANSFER_READ_BIT,
+                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT);
+    m_ctx->cmdImageBarrier(cmd, m_iceImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                           VK_ACCESS_SHADER_READ_BIT);
 }
 
 void VfxSystem::drawLowRes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent) {
@@ -1609,10 +1733,15 @@ void VfxSystem::endFrame(VkCommandBuffer cmd) {
     m_reactiveWritten = false;
 }
 
-void VfxSystem::draw(VkCommandBuffer cmd, VkImageView litView, VkImageView depthView, VkExtent2D extent) {
+void VfxSystem::draw(VkCommandBuffer cmd, VkImage litImage, VkImageView litView, VkImageView depthView,
+                     VkExtent2D extent) {
     if (!m_ready || !m_active || !m_reactiveImage) return;
     const uint32_t frame = m_ctx->currentFrame();
     writeDescriptors(frame, depthView);
+    // O alvo ja' existe (simulate): aqui so' a copia, fora do rendering.
+    const VkRect2D iceRect = m_anyTranslucent ? iceCopyRect(extent) : VkRect2D{};
+    const bool ice = m_anyTranslucent && m_meshMaskSimulated && m_iceView && litImage && iceRect.extent.width;
+    if (ice) copyLitForRefraction(cmd, litImage, iceRect);
     m_ctx->cmdImageBarrier(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -1655,7 +1784,9 @@ void VfxSystem::draw(VkCommandBuffer cmd, VkImageView litView, VkImageView depth
         vkCmdDraw(cmd, 3, 1, 0, 0);
     }
     if (m_forwardMeshes && m_meshMaskSimulated)
-        recordMeshes(cmd, m_meshFwdPipe, extent, m_viewProjNoJitter, m_viewProjNoJitter);
+        recordMeshes(cmd, m_meshFwdPipe, extent, m_viewProjNoJitter, m_viewProjNoJitter, 0u);
+    // Gelo antes das particulas: fumaca e faisca na frente dele continuam por cima.
+    if (ice) recordMeshes(cmd, m_meshIcePipe, extent, m_viewProjNoJitter, m_viewProjNoJitter, 1u);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_drawPipe);
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc);
@@ -1699,7 +1830,7 @@ uint32_t VfxSystem::meshId(const std::string& name) {
 }
 
 void VfxSystem::recordMeshes(VkCommandBuffer cmd, VkPipeline pipe, VkExtent2D extent, const Mat4& vp,
-                             const Mat4& prevVp) {
+                             const Mat4& prevVp, uint32_t translucent) {
     const uint32_t frame = m_ctx->currentFrame();
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
     const VkViewport viewport{0.0f, 0.0f, float(extent.width), float(extent.height), 0.0f, 1.0f};
@@ -1711,6 +1842,7 @@ void VfxSystem::recordMeshes(VkCommandBuffer cmd, VkPipeline pipe, VkExtent2D ex
     MeshPush push{};
     push.viewProjNoJitter = vp;
     push.prevViewProjNoJitter = prevVp;
+    push.translucent = translucent;
     const uint32_t per = m_capacity / kMeshTypes;
     for (uint32_t m = 0; m < m_meshes.size(); ++m) {
         if (!(m_meshMaskSimulated & (1u << m)) || !m_meshes[m].indexCount) continue;
@@ -1729,8 +1861,9 @@ void VfxSystem::drawMeshes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2
     // Os sets sao (re)escritos aqui, antes de ligar: a simulacao deste frame
     // encontra tudo igual e nao reescreve um set ja' ligado.
     if (m_anyLowRes && !ensureLowResTarget(m_renderSize)) m_anyLowRes = false;
+    if (m_anyTranslucent && !ensureIceTarget(m_renderSize)) m_anyTranslucent = false;
     writeDescriptors(m_ctx->currentFrame(), depthView);
-    recordMeshes(cmd, m_meshPipe, extent, viewProjNoJitter, prevViewProjNoJitter);
+    recordMeshes(cmd, m_meshPipe, extent, viewProjNoJitter, prevViewProjNoJitter, 0u);
 }
 
 void VfxSystem::drawMeshShadows(VkCommandBuffer cmd, const Mat4& lightViewProj) {

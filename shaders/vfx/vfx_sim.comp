@@ -235,7 +235,7 @@ void main() {
                 rec.posSize = vec4(p.pos, size);
                 rec.look = uvec4(packHalf2x16(col.rg), packHalf2x16(col.ba), packHalf2x16(vec2(sr.y, 0.0)), packOct(axis));
                 rec.sheet = uvec4(e.flags.z, packHalf2x16(vec2(disp.z, e.render.x)), packHalf2x16(disp.xy), p.seed);
-                rec.cutout = uvec4(0u);
+                rec.cutout = e.cutout; // malha: x = translucida, y = refracao/absorcao
                 recs[idx] = rec;
                 // LOD: pequena na tela (raio < 24 px) usa a versao de longe
                 // (80 triangulos ainda fecham a silhueta), que nao faz sombra.

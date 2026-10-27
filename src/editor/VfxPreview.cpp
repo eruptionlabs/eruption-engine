@@ -210,7 +210,9 @@ bool VfxPreview::createTargets() {
     m_w = std::max(64u, m_wantW);
     m_h = std::max(64u, m_wantH);
     VkDevice dev = m_ctx->device();
-    if (!m_ctx->createImage(m_w, m_h, kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+    if (!m_ctx->createImage(m_w, m_h, kHdrFormat,
+                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT, // copia da refracao (malha translucida)
                             VMA_MEMORY_USAGE_GPU_ONLY, m_hdr, m_hdrAlloc) ||
         !m_ctx->createImage(m_w, m_h, kDepthFormat,
                             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -397,7 +399,7 @@ void VfxPreview::render(VkCommandBuffer cmd, float dt) {
                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
     m_sys.drawLowRes(cmd, m_depthView, ext);
-    m_sys.draw(cmd, m_hdrView, m_depthView, ext);
+    m_sys.draw(cmd, m_hdr, m_hdrView, m_depthView, ext);
     m_sys.endFrame(cmd);
 
     // HDR -> LDR da interface

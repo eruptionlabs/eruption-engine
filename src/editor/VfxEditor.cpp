@@ -442,6 +442,13 @@ bool VfxEditor::drawEmitter(VfxEmitterDesc& e) {
             }
         ImGui::EndCombo();
     }
+    if (!e.mesh.empty()) {
+        c |= ImGui::Checkbox(tr("Translucent (ice, glass)"), &e.translucent);
+        if (e.translucent) {
+            c |= ImGui::DragFloat(tr("Refraction"), &e.refraction, 0.002f, 0.0f, 0.2f, "%.3f");
+            c |= ImGui::DragFloat(tr("Absorption (per m)"), &e.absorption, 0.05f, 0.0f, 20.0f, "%.2f");
+        }
+    }
 
     if (ImGui::CollapsingHeader(tr("Spawning"), ImGuiTreeNodeFlags_DefaultOpen)) {
         c |= ImGui::DragFloat(tr("Rate (per s)"), &e.rate, 0.5f, 0.0f, 100000.0f, "%.1f");

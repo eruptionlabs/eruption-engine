@@ -129,6 +129,12 @@ struct VfxEmitterDesc {
                                // (circulo de magia, marca): segue rampa e
                                // degrau em vez de cortar ou flutuar; gira com
                                // a particula e com o efeito
+    bool translucent = false;  // malha translucida (gelo, vidro, cristal):
+                               // depois da luz, refrata a cena atras, cor da
+                               // particula = tinta pela espessura, borda de
+                               // Fresnel e brilho do sol
+    float refraction = 0.04f;  // desvio da cena atras (fracao da tela)
+    float absorption = 1.0f;   // tinta por metro de espessura (0 = incolor)
 
     // --- Sub-emissores ---
     VfxSubEmitter onDeath;

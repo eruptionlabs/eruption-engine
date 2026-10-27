@@ -169,7 +169,9 @@ public:
     // Rendering proprio sobre `litView` (RGBA16F em COLOR_ATTACHMENT) com a
     // profundidade so' leitura: compoe a meia resolucao, desenha as particulas
     // e escreve a cobertura delas na mascara reativa (R8, para o FSR).
-    void draw(VkCommandBuffer cmd, VkImageView litView, VkImageView depthView, VkExtent2D extent);
+    // `litImage` (com TRANSFER_SRC) e' copiado antes so' se ha' malha
+    // translucida: a refracao le' a copia.
+    void draw(VkCommandBuffer cmd, VkImage litImage, VkImageView litView, VkImageView depthView, VkExtent2D extent);
     // Particulas de malha num passe do G-buffer reaberto DEPOIS da simulacao
     // (opacas, luz da cena, velocidade para o FSR): a colisao le' a
     // profundidade sem elas. Sem malha viva nao faz nada.
@@ -260,6 +262,10 @@ private:
     void fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, uint32_t slot, VfxEmitterGpu& out);
     const VfxTextureInfo& texture(const std::string& path, uint32_t cols, uint32_t rows);
     bool ensureLowResTarget(VkExtent2D full);
+    bool ensureIceTarget(VkExtent2D full);
+    bool ensureHalfTarget(VkExtent2D full, VkImageUsageFlags usage, VkImage& image, VmaAllocation& alloc,
+                          VkImageView& view, VkExtent2D& extent);
+    void copyLitForRefraction(VkCommandBuffer cmd, VkImage litImage, VkRect2D rect);
 
     VulkanContext* m_ctx = nullptr;
     BindlessDescriptor* m_bindless = nullptr;
@@ -286,6 +292,7 @@ private:
     PushRing m_meshPushRing; // bloco de 144 B das malhas: set 3 (passa dos 128 de push constant)
     VkPipeline m_meshPipe = VK_NULL_HANDLE;    // malha no G-buffer
     VkPipeline m_meshFwdPipe = VK_NULL_HANDLE; // malha na previa (forward)
+    VkPipeline m_meshIcePipe = VK_NULL_HANDLE; // malha translucida, no lit depois da luz
     // Sombra das malhas: set proprio so' com a lista e os registros (o set de
     // desenho pode ser reescrito depois do passe de sombra, no mesmo frame).
     VkDescriptorSetLayout m_shadowSetLayout = VK_NULL_HANDLE;
@@ -294,7 +301,8 @@ private:
     std::array<VkDescriptorSet, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_shadowSets{};
     std::array<bool, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_shadowSetWritten{};
     uint32_t meshId(const std::string& name);
-    void recordMeshes(VkCommandBuffer cmd, VkPipeline pipe, VkExtent2D extent, const Mat4& vp, const Mat4& prevVp);
+    void recordMeshes(VkCommandBuffer cmd, VkPipeline pipe, VkExtent2D extent, const Mat4& vp, const Mat4& prevVp,
+                      uint32_t translucent);
     uint32_t m_meshMask = 0;          // malhas em uso neste frame (CPU)
     uint32_t m_meshMaskSimulated = 0; // malhas que a ultima simulacao listou
     bool m_forwardMeshes = false;
@@ -307,6 +315,11 @@ private:
     VmaAllocation m_lowAlloc = VK_NULL_HANDLE;
     VkImageView m_lowView = VK_NULL_HANDLE;
     VkExtent2D m_lowExtent{0, 0};
+    // Copia do lit em meia resolucao (refracao das malhas translucidas).
+    VkImage m_iceImage = VK_NULL_HANDLE;
+    VmaAllocation m_iceAlloc = VK_NULL_HANDLE;
+    VkImageView m_iceView = VK_NULL_HANDLE;
+    VkExtent2D m_iceExtent{0, 0};
     VkExtent2D m_renderSize{0, 0};
     // Mascara reativa do FSR (cobertura das particulas), na resolucao de render.
     VkImage m_reactiveImage = VK_NULL_HANDLE;
@@ -317,6 +330,7 @@ private:
     void destroyReactive();
     std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setLow{};
     std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setGround{};
+    std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setIce{};
     VkImage m_groundImage = VK_NULL_HANDLE;
     VmaAllocation m_groundAlloc = VK_NULL_HANDLE;
     VkImageView m_groundView = VK_NULL_HANDLE;
@@ -388,6 +402,13 @@ private:
     uint32_t m_cur = 0;          // lista de vivas atual (0/1)
     bool m_active = false;
     bool m_anyLowRes = false;   // algum emissor lowRes tocando (CPU sabe)
+    bool m_anyTranslucent = false; // alguma malha translucida tocando
+    struct IceBox {
+        Vec3 center, half; // caixa alinhada aos eixos do mundo
+    };
+    std::vector<IceBox> m_iceBounds; // onde as translucidas podem estar
+    float m_iceRefraction = 0.0f;   // maior desvio pedido (fracao da tela)
+    VkRect2D iceCopyRect(VkExtent2D extent) const;
     bool m_sortThisFrame = false; // algum emissor com mistura alfa tocando
     float m_idleTime = 1e9f;     // tempo sem instancia nenhuma
 
