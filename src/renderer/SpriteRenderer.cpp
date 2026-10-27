@@ -26,6 +26,7 @@ bool SpriteRenderer::init(VulkanContext* ctx, GBuffer* gbuffer, BindlessDescript
     if (!createShadowPipeline()) return false;
     if (!createPlanarShadowPipeline()) return false;
     if (!createCircleShadowPipeline()) return false;
+    if (!createRingPipeline()) return false;
 
     // Create palette sampler (Nearest)
     VkSamplerCreateInfo samplerInfo{};
@@ -59,6 +60,14 @@ void SpriteRenderer::shutdown() {
         vkDestroyPipelineLayout(m_ctx->device(), m_decalPipelineLayout, nullptr);
         m_decalPipelineLayout = VK_NULL_HANDLE;
     }
+    if (m_ringPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), m_ringPipeline, nullptr);
+    if (m_ringPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_ctx->device(), m_ringPipelineLayout, nullptr);
+    if (m_ringDepthPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_ctx->device(), m_ringDepthPool, nullptr);
+    if (m_ringDepthLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(m_ctx->device(), m_ringDepthLayout, nullptr);
+    m_ringPipeline = VK_NULL_HANDLE;
+    m_ringPipelineLayout = VK_NULL_HANDLE;
+    m_ringDepthPool = VK_NULL_HANDLE;
+    m_ringDepthLayout = VK_NULL_HANDLE;
     if (m_decalDepthPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_ctx->device(), m_decalDepthPool, nullptr);
         m_decalDepthPool = VK_NULL_HANDLE;
@@ -1134,6 +1143,146 @@ bool SpriteRenderer::createCircleShadowPipeline() {
     m_circleShadowPipeline = createDecalPipeline("shaders/shadow/billboard_circle_shadow");
     m_pointShadowPipeline = createDecalPipeline("shaders/shadow/billboard_point_shadow");
     return m_circleShadowPipeline != VK_NULL_HANDLE && m_pointShadowPipeline != VK_NULL_HANDLE;
+}
+
+bool SpriteRenderer::createRingPipeline() {
+    // 0 = profundidade da cena; 1 = pbr do G-buffer (r = 0,75 marca sprite).
+    VkDescriptorSetLayoutBinding bindings[2] = {};
+    for (uint32_t i = 0; i < 2; ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo setLayoutInfo{};
+    setLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    setLayoutInfo.bindingCount = 2;
+    setLayoutInfo.pBindings = bindings;
+    VK_CHECK(vkCreateDescriptorSetLayout(m_ctx->device(), &setLayoutInfo, nullptr, &m_ringDepthLayout));
+
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * kDecalFrames};
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = kDecalFrames;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    VK_CHECK(vkCreateDescriptorPool(m_ctx->device(), &poolInfo, nullptr, &m_ringDepthPool));
+    VkDescriptorSetLayout layouts[kDecalFrames] = {m_ringDepthLayout, m_ringDepthLayout, m_ringDepthLayout};
+    VkDescriptorSetAllocateInfo setAlloc{};
+    setAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    setAlloc.descriptorPool = m_ringDepthPool;
+    setAlloc.descriptorSetCount = kDecalFrames;
+    setAlloc.pSetLayouts = layouts;
+    VK_CHECK(vkAllocateDescriptorSets(m_ctx->device(), &setAlloc, m_ringDepthSets));
+
+    const VkDescriptorSetLayout sets[3] = {m_bindless->layout(), m_frameUboLayout, m_ringDepthLayout};
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.size = sizeof(GroundRing);
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 3;
+    layoutInfo.pSetLayouts = sets;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
+    VK_CHECK(vkCreatePipelineLayout(m_ctx->device(), &layoutInfo, nullptr, &m_ringPipelineLayout));
+
+    auto vertCode = ShaderCompiler::loadSPIRV("shaders/shadow/ground_ring.vert.spv");
+    auto fragCode = ShaderCompiler::loadSPIRV("shaders/shadow/ground_ring.frag.spv");
+    if (vertCode.empty() || fragCode.empty()) {
+        ERUPTION_LOG_ERROR("Failed to load ground ring shaders");
+        return false;
+    }
+    VkShaderModule modules[2] = {};
+    VkShaderModuleCreateInfo smInfo{};
+    smInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smInfo.codeSize = vertCode.size() * sizeof(uint32_t);
+    smInfo.pCode = vertCode.data();
+    vkCreateShaderModule(m_ctx->device(), &smInfo, nullptr, &modules[0]);
+    smInfo.codeSize = fragCode.size() * sizeof(uint32_t);
+    smInfo.pCode = fragCode.data();
+    vkCreateShaderModule(m_ctx->device(), &smInfo, nullptr, &modules[1]);
+    std::vector<VkPipelineShaderStageCreateInfo> stages(2);
+    for (uint32_t i = 0; i < 2; ++i) {
+        stages[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[i].stage = i == 0 ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[i].module = modules[i];
+        stages[i].pName = "main";
+    }
+
+    // Mistura alfa comum na cor; o alfa da imagem lit (transparencia do pos)
+    // fica como estava.
+    VkPipelineColorBlendAttachmentState blend{};
+    blend.blendEnable = VK_TRUE;
+    blend.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.colorBlendOp = VK_BLEND_OP_ADD;
+    blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend.alphaBlendOp = VK_BLEND_OP_ADD;
+    blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    m_ringPipeline = PipelineBuilder()
+        .setShaderStages(stages)
+        .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+        .setViewport(0, 0, static_cast<float>(m_gbuffer->extent().width), static_cast<float>(m_gbuffer->extent().height))
+        .setScissor(0, 0, m_gbuffer->extent().width, m_gbuffer->extent().height)
+        .setPolygonMode(VK_POLYGON_MODE_FILL)
+        .setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+        .setDepthState(false, false, VK_COMPARE_OP_ALWAYS)
+        .setBlendState({blend})
+        .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
+        .setLayout(m_ringPipelineLayout)
+        .setColorAttachmentFormats({VK_FORMAT_R16G16B16A16_SFLOAT})
+        .build(m_ctx->device());
+    vkDestroyShaderModule(m_ctx->device(), modules[0], nullptr);
+    vkDestroyShaderModule(m_ctx->device(), modules[1], nullptr);
+    return m_ringPipeline != VK_NULL_HANDLE;
+}
+
+void SpriteRenderer::renderGroundRings(VkCommandBuffer cmd, const FrameUBO& frameUbo,
+                                       const std::vector<GroundRing>& rings, VkImageView sceneDepth,
+                                       VkImageView gbufferPbr) {
+    if (rings.empty() || sceneDepth == VK_NULL_HANDLE || gbufferPbr == VK_NULL_HANDLE ||
+        m_ringPipeline == VK_NULL_HANDLE)
+        return;
+    VkDescriptorSet depthSet = m_ringDepthSets[m_ctx->currentFrame() % kDecalFrames];
+    const VkDescriptorImageInfo infos[2] = {
+        {m_decalDepthSampler, sceneDepth, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {m_decalDepthSampler, gbufferPbr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+    VkWriteDescriptorSet writes[2] = {};
+    for (uint32_t i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = depthSet;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(m_ctx->device(), 2, writes, 0, nullptr);
+
+    FrameUBO finalUbo = frameUbo;
+    finalUbo.spriteExposure = m_spriteExposure;
+    std::memcpy(m_mappedFrameUbo, &finalUbo, sizeof(FrameUBO));
+    vmaFlushAllocation(m_ctx->allocator(), m_frameUboAlloc, 0, sizeof(FrameUBO));
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ringPipeline);
+    VkViewport viewport{};
+    viewport.width = static_cast<float>(m_gbuffer->extent().width);
+    viewport.height = static_cast<float>(m_gbuffer->extent().height);
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    VkRect2D scissor{};
+    scissor.extent = m_gbuffer->extent();
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    VkDescriptorSet sets[3] = {m_bindless->set(), m_frameUboSet, depthSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ringPipelineLayout, 0, 3, sets, 0, nullptr);
+    for (const GroundRing& r : rings) {
+        vkCmdPushConstants(cmd, m_ringPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(GroundRing), &r);
+        vkCmdDraw(cmd, 6, 1, 0, 0);
+    }
 }
 
 // Pipeline de decal de sombra (disco do pe', sombra de luz pontual): mesma

@@ -196,6 +196,7 @@ void Engine::releaseCharacterSpriteCache(uint32_t keepGenerations) {
 }
 
 void Engine::updateCharacters(float dt, bool moveAlongPaths) {
+    m_groundRings.clear();
     for (size_t i = 0; i < m_characters.size(); ++i) {
         SceneCharacter& c = m_characters[i];
         if (c.parked || c.removed || !moveAlongPaths) continue;
@@ -462,6 +463,17 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         s.tintColor.a *= f.fade;
         s.sortOrder = 0.0f;
         m_spriteSystem.submitSprite(s);
+    }
+    // Anel no chao: no pe' sem o suco (o boneco treme, o anel nao), com a
+    // opacidade dele e a mesma regra de visao dos sprites (applyVisionTest).
+    if (c.ringRadius > 0.0f && c.ringColor.a * f.fade > 0.0f && m_vision.visible(Vec2(c.position.x, c.position.z))) {
+        GroundRing r;
+        r.center = Vec4(c.position, c.ringRadius);
+        r.color = Vec4(Vec3(c.ringColor), c.ringColor.a * f.fade);
+        // Folga de um raio para cima e para baixo: rampa de ate' 45 graus.
+        const float folga = std::max(c.ringRadius, 4.0f);
+        r.shape = Vec4(c.ringWidth, folga, folga, 0.0f);
+        m_groundRings.push_back(r);
     }
     if (headTop > -1e8f) {
         c.head = Vec2(headSide, headTop);

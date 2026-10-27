@@ -176,6 +176,14 @@ struct SpritePointShadow {
     float strength = 0.0f;
 };
 
+// Anel no chao preso a um personagem (characters.ring): push constant do
+// ground_ring.vert/.frag, um desenho por anel.
+struct GroundRing {
+    Vec4 center = Vec4(0.0f); // xyz = pe', w = raio externo
+    Vec4 color = Vec4(1.0f);  // rgb, a = alfa
+    Vec4 shape = Vec4(0.0f);  // x = espessura, y = folga acima, z = folga abaixo
+};
+
 class SpriteRenderer {
 public:
     bool init(VulkanContext* ctx, GBuffer* gbuffer, BindlessDescriptor* bindless);
@@ -215,6 +223,12 @@ public:
                                       VkImageView sceneDepth, const Vec2& planarParams,
                                       const std::vector<SpritePointShadow>& pointShadows,
                                       VkImageView sunShadowDepth, VkBuffer sunShadowUbo, const Vec4& sunGate);
+
+    // Aneis de chao como decal (ground_ring.vert): trecho so' com a imagem
+    // lit, depois dos discos; `sceneDepth` e `gbufferPbr` (marca de sprite)
+    // em leitura.
+    void renderGroundRings(VkCommandBuffer cmd, const FrameUBO& frameUbo, const std::vector<GroundRing>& rings,
+                           VkImageView sceneDepth, VkImageView gbufferPbr);
 
     uint32_t spriteCount() const { return m_spriteCount; }
 
@@ -278,6 +292,13 @@ private:
     VkDescriptorSet m_decalDepthSets[kDecalFrames] = {};
     VkSampler m_decalDepthSampler = VK_NULL_HANDLE;
     VkPipelineLayout m_decalPipelineLayout = VK_NULL_HANDLE;
+    // Anel: set 2 proprio (profundidade e pbr do G-buffer). O do disco ja' foi ligado no
+    // quadro; reescreve-lo depois invalidaria o command buffer.
+    VkPipeline m_ringPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_ringPipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_ringDepthLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_ringDepthPool = VK_NULL_HANDLE;
+    VkDescriptorSet m_ringDepthSets[kDecalFrames] = {};
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
 
     VkBuffer m_quadVertexBuffer = VK_NULL_HANDLE;
@@ -325,6 +346,7 @@ private:
     bool createPlanarShadowPipeline();
     bool createCircleShadowPipeline();
     VkPipeline createDecalPipeline(const std::string& shaderBase);
+    bool createRingPipeline();
 };
 
 } // namespace eruption
