@@ -168,11 +168,12 @@ float Engine::floorAmong(const std::vector<uint32_t>& cand, float terrainY, floa
     return f.y;
 }
 
-float Engine::floorHeight(float x, float z, float fromY, bool* onModel) const {
+float Engine::floorHeight(float x, float z, float fromY, bool* onModel, int* instance) const {
     std::vector<uint32_t> cand;
     solidsIn(m_solid, m_modelRenderer.getInstances(), x, z, x, z, cand);
     const Floor f = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z, fromY), x, z, fromY);
     if (onModel) *onModel = f.instance >= 0;
+    if (instance) *instance = f.instance;
     return f.y;
 }
 

@@ -1026,6 +1026,12 @@ public:
     // Objeto sólido: o jogador não atravessa o pé dele (a parte de baixo da malha).
     void setSolid(uint32_t instance, bool solid);
     bool isSolid(uint32_t instance) const;
+    // Sólido pelo ARQUIVO do modelo (o tipo: toda ponte feita do mesmo .glb):
+    // vale para as instâncias do mapa aberto, dos vizinhos que entram e dos
+    // mapas carregados depois, até ser desligado.
+    void setSolidFile(const std::string& file, bool solid);
+    // Reaplica os arquivos sólidos às instâncias de agora (mapa novo, vizinho).
+    void applySolidFiles();
     // Algum objeto sólido ocupa (x, z) na altura de p (raio do corpo em volta)?
     bool blockedAt(const Vec3& p, float radius) const;
     // (x, z) dentro do pé do objeto (core/Areas.cpp), crescido pelo raio.
@@ -1034,7 +1040,7 @@ public:
     // Consultas do chão para o jogo (core/GroundQuery.cpp). O piso é o
     // terreno ou o topo de um objeto sólido (passarela, ponte, laje de kit):
     // floorHeight devolve o mais alto abaixo de `fromY`.
-    float floorHeight(float x, float z, float fromY, bool* onModel = nullptr) const;
+    float floorHeight(float x, float z, float fromY, bool* onModel = nullptr, int* instance = nullptr) const;
     // Dá para ficar de pé em (x, z) sobre o piso: grade de caminhada (só no
     // terreno; sobre um objeto sólido vale a peça), nenhum outro sólido
     // ocupando o corpo acima do piso, no raio, e no máximo um degrau de
@@ -2134,6 +2140,7 @@ private:
     bool m_playerActionStarted = false;
     MapRequest m_mapRequest;
     std::vector<uint8_t> m_solid; // por instância
+    std::vector<std::string> m_solidFiles; // setSolidFile
     static const char* worldStateName(WorldRegion::State s);
     std::vector<WorldNeighbor> m_worldNeighbors;
     bool m_worldStarted = false;
