@@ -139,6 +139,13 @@ public:
         // Objetos da cena: puxa o que mexeram nas tabelas, propaga pai ->
         // filho e empurra o que mudou, antes de desenhar.
         m_sceneObjects.sync(*this);
+        // Sprites: corte, ordem e envio com a camera FINAL do quadro, depois
+        // do jogo inteiro. Feito no PlayerController, o corte usava a camera
+        // de antes dos scripts: um jogo que mira a camera por script
+        // (camera.set_target num personagem longe do jogador) via o
+        // personagem cortado - 2 sprites enviados, 0 visiveis - e o sprite
+        // do jogador, enviado depois do corte, saia um quadro atrasado.
+        m_spriteSystem.processSprites(m_camera.frustum(), m_camera.position(), m_camera.forward());
         auto _t2 = std::chrono::steady_clock::now();
         render();
         auto _t3 = std::chrono::steady_clock::now();
