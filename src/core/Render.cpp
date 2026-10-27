@@ -3033,6 +3033,12 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
                 Vec4(glm::length(Vec2(sc->position.x - cam.x, sc->position.z - cam.z)), sc->position.y, hc, opacity);
             ++k;
         }
+        // Com personagens perto, so' as elipses DELES cortam (w = 1 na faixa):
+        // a elipse do foco (raio do jogo, dezenas de u) e a faixa cortavam
+        // tudo na frente do foco, e a tenda grande entre a lente e o grupo
+        // saia em grade pontilhada sobre o chao inteiro embaixo dela, longe
+        // de qualquer personagem. O raio segue escolhendo quem entra.
+        if (k > 0) ubo.seeThroughBand.w = 1.0f;
     }
     // Ancora do padrao: um ponto do mundo preso numa grade de 512 u perto do
     // jogador (troca so' ao cruzar a grade), em pixels do alvo do G-buffer.
