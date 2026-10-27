@@ -959,6 +959,13 @@ if(ERUPTION_BUILD_TESTS)
     endif()
     add_test(NAME VisionTests COMMAND eruption-vision-tests)
 
+    add_executable(eruption-relief-bake-tests tests/test_relief_bake.cpp src/renderer/ReliefBake.cpp)
+    target_include_directories(eruption-relief-bake-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-relief-bake-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME ReliefBakeTests COMMAND eruption-relief-bake-tests)
+
     add_executable(eruption-path-clearance-tests tests/test_path_clearance.cpp)
     target_include_directories(eruption-path-clearance-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
