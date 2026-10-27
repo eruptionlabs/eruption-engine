@@ -958,6 +958,13 @@ if(ERUPTION_BUILD_TESTS)
         target_compile_options(eruption-vision-tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME VisionTests COMMAND eruption-vision-tests)
+
+    add_executable(eruption-path-clearance-tests tests/test_path_clearance.cpp)
+    target_include_directories(eruption-path-clearance-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-path-clearance-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME PathClearanceTests COMMAND eruption-path-clearance-tests)
 endif()
 
 # Generate Linux .desktop shortcut

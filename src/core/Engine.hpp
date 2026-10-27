@@ -686,8 +686,11 @@ public:
     // passos; um salto de mais de 2 alturas de corpo é teleporte (não anima).
     void placeCharacter(int index, const Vec3& position, bool walk);
     // Caminho no chão de `from` a `to` (grade de caminhada + objetos sólidos),
-    // já alisado; falso se não há caminho.
-    bool findPath(const Vec3& from, const Vec3& to, float radius, std::vector<Vec3>& out) const;
+    // já alisado; falso se não há caminho. `radius` cresce os sólidos;
+    // `wallClearance` (> 0) mantém células e trechos a essa distância de
+    // qualquer célula que não anda.
+    bool findPath(const Vec3& from, const Vec3& to, float radius, std::vector<Vec3>& out,
+                  float wallClearance = 0.0f) const;
     // Um personagem (fora `ignore`) ocupa (x, z)?
     bool characterAt(const Vec3& p, float radius, int ignore = -1) const;
     // Balões de fala (personagens e jogador) sobre a área do jogo.
