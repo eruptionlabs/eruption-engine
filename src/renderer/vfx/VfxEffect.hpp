@@ -125,6 +125,10 @@ struct VfxEmitterDesc {
                                // opaca, no G-buffer, com a luz da cena
     bool lowRes = false;       // desenha em meia resolucao (fumaca, poeira:
                                // 1/4 dos pixels; o ganho maior em GPU fraca)
+    bool decal = false;        // deitada e PROJETADA no que esta' na tela
+                               // (circulo de magia, marca): segue rampa e
+                               // degrau em vez de cortar ou flutuar; gira com
+                               // a particula e com o efeito
 
     // --- Sub-emissores ---
     VfxSubEmitter onDeath;

@@ -1016,6 +1016,7 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
                      (e.collideDepth ? 1u << 11 : 0u);
     if (inst.killed) flags |= 1u << 12;
     if (e.lowRes) flags |= 1u << 14;
+    if (e.decal) flags |= 1u << 24; // VFXF_DECAL
     if (!e.mesh.empty()) {
         const uint32_t id = meshId(e.mesh);
         flags |= (id & 0xFu) << 16;

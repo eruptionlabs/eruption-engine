@@ -282,6 +282,12 @@ void main() {
                 rec.sheet = uvec4(e.flags.z, cols | (rows << 8) | (blend << 16) | (facing << 18),
                                   uint(f0) | (uint(fmix * 255.0 + 0.5) << 16), floatBitsToUint(e.angVel.w * e.rot0.w));
                 rec.cutout = e.cutout;
+                if ((e.flags.x & VFXF_DECAL) != 0u) {
+                    // Decal: o giro do efeito em volta do Y entra no da
+                    // particula (rot0 = eixo X do efeito no mundo).
+                    rec.sheet.y |= 1u << 20;
+                    rec.look.z = packHalf2x16(vec2(sr.y + av.x * p.age + atan(e.rot0.z, e.rot0.x), stretchLen));
+                }
                 if (ribbon) {
                     // Vizinho na fita: o ponto que nasceu logo depois (seq + 1),
                     // se ainda for desta fita e estiver vivo.
