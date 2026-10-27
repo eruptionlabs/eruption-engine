@@ -12,6 +12,7 @@
 
 #include "script/NativeModule.hpp"
 #include "core/Project.hpp"
+#include "utils/EventLog.hpp"
 
 #include <lua.h>
 #include <lualib.h>
@@ -603,6 +604,7 @@ void ScriptHost::start() {
     // Depois das variáveis: as de um jogo carregado que guardam objeto são
     // refeitas aqui, já com os objetos do mapa.
     mapReady();
+    openTelemetryFromEnv(); // antes do on.start, que ja' pode emitir
     NativeModule::instance().start();
     for (auto& s : m_scripts) {
         if (!resume) {
@@ -699,6 +701,7 @@ void ScriptHost::update(float dt) {
     if (!L || !m_running) return;
     flushProfile();
     const auto t0 = std::chrono::steady_clock::now();
+    EventLog::instance().advance(dt); // t e f dos eventos deste quadro
     updateTweens(dt);
     for (auto it = m_messages.begin(); it != m_messages.end();) {
         it->remaining -= dt;
@@ -743,6 +746,7 @@ void ScriptHost::stop() {
     m_engine->sceneObjects().restoreAuthored(*m_engine);
     m_engine->audio().stopAll(); // Stop do editor: o som do jogo para junto
     m_engine->vision().reset();  // e a visao de equipe (fontes do jogo) desliga
+    EventLog::instance().close();  // e o registro de eventos sai completo
     m_messages.clear();
     m_lastUpdateMs = 0.0f;
 }
