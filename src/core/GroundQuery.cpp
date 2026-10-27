@@ -122,6 +122,30 @@ int lavaAt(const LoadedMap* map, float x, float z, float y, float& surface) {
 
 } // namespace
 
+// Topo do sólido sob o disco do corpo, numa grade de no máximo 0,75 u, de
+// cima da caixa para baixo. A caixa sozinha não basta: a peça vizinha de uma
+// ponte tem o corrimão acima do degrau e bloqueava o corpo em toda junta do
+// tabuleiro (no mapa base de teste, 1 amostra do perfil em cada 3 a 4). Um
+// ponto acima do degrau bloqueia; sem ponto nenhum sobre a peça o corpo só
+// encosta na caixa dela e passa. Dois anéis de 8 pontos, medidos antes,
+// deixavam o raio 2 preso numa junta que o raio 3,5 passava.
+bool Engine::solidLowUnderBody(uint32_t instance, float floorY, float x, float z, float radius) const {
+    const ModelInstance& inst = m_modelRenderer.getInstances()[instance];
+    const float top = inst.worldAabbMax.y + 1.0f;
+    const int n = std::max(0, int(std::ceil(radius / 0.75f)));
+    const float cell = n > 0 ? radius / float(n) : 0.0f;
+    for (int iz = -n; iz <= n; ++iz)
+        for (int ix = -n; ix <= n; ++ix) {
+            const float dx = ix * cell, dz = iz * cell;
+            if (dx * dx + dz * dz > radius * radius + 1e-4f) continue;
+            const float sx = x + dx, sz = z + dz;
+            if (!insideXZ(inst, sx, sz, 0.0f)) continue;
+            const float t = m_modelRenderer.raycastInstance(instance, Vec3(sx, top, sz), Vec3(0.0f, -1.0f, 0.0f));
+            if (t >= 0.0f && top - t > floorY + kStep) return false;
+        }
+    return true;
+}
+
 // Algum sólido além do próprio piso ocupa o corpo acima dele, no raio?
 bool Engine::bodyBlocked(const std::vector<uint32_t>& cand, int floorInstance, float floorY, float x, float z,
                          float radius) const {
@@ -130,7 +154,9 @@ bool Engine::bodyBlocked(const std::vector<uint32_t>& cand, int floorInstance, f
         if (int(i) == floorInstance) continue;
         const ModelInstance& inst = insts[i];
         if (inst.worldAabbMax.y < floorY + kStep || inst.worldAabbMin.y > floorY + kBody) continue;
-        if (insideXZ(inst, x, z, radius) && footprintContains(i, Vec2(x, z), radius)) return true;
+        if (insideXZ(inst, x, z, radius) && footprintContains(i, Vec2(x, z), radius) &&
+            !solidLowUnderBody(i, floorY, x, z, radius))
+            return true;
     }
     return false;
 }
