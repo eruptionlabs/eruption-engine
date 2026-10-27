@@ -91,6 +91,18 @@ public:
     // elemento e os filhos; os filhos seguem o pai pela cadeia de --parent.
     void setAnchor(const std::string& selector, float x, float y, bool onScreen);
     void clearAnchor(const std::string& selector);
+    // Retrato (ui.portrait): partes de um quadro de sprite desenhadas dentro
+    // do elemento, postas a cada quadro. `rect` em fracao da vista (x0, y0,
+    // x1, y1; pode sair dela, o elemento recorta); a vista de proporcao
+    // `aspect` (largura/altura) cabe inteira no elemento, centrada.
+    struct PortraitPart {
+        void* tex = nullptr;
+        Vec4 rect{0.0f};
+        Vec4 uv{0.0f, 0.0f, 1.0f, 1.0f};
+        uint32_t tint = 0xFFFFFFFFu; // ImU32
+    };
+    void setPortrait(const std::string& selector, std::vector<PortraitPart> parts, float aspect);
+    void clearPortrait(const std::string& selector);
     // Selo sobre o canto de cima a' direita do elemento ("+", um numero, um
     // icone): texto, ou imagem quando `image` nao e' vazia. Some com o
     // elemento. O toque nele e' dele (seletor "#id:badge"), nao do elemento.
@@ -178,6 +190,8 @@ private:
         Vec2 anchor{0.0f};            // centro em pixels da area
         bool hasBadge = false;
         std::string badgeText, badgeImage;
+        std::vector<PortraitPart> portrait;
+        float portraitAspect = 1.0f;
         // Grafo: nos, posicao de cada um (0..1; auto = da camada) e as
         // ligacoes ja' em indices, resolvidos uma vez em setGraph.
         std::vector<GraphNode> graph;
@@ -210,6 +224,7 @@ private:
     bool graphSideways(const Element& e) const;
     static Vec2 graphPoint(const Element& e, size_t i, const CSSRect& r, bool sideways);
     void drawGraph(ImDrawList* dl, const Element& e, const CSSRect& r, const Vec2& area, float alpha) const;
+    static void drawPortrait(ImDrawList* dl, const Element& e, const CSSRect& r, float alpha);
     void drawBadge(ImDrawList* dl, const Element& e, const CSSRect& c) const;
     // Rect e bar com clip-path ou cantos diferentes: o contorno vira poligono,
     // a barra enche recortada pelo valor.

@@ -274,6 +274,35 @@ void UiDocument::clearAnchor(const std::string& selector) {
     if (Element* e = find(selector)) e->hasAnchor = false;
 }
 
+void UiDocument::setPortrait(const std::string& selector, std::vector<PortraitPart> parts, float aspect) {
+    if (Element* e = find(selector)) {
+        e->portrait = std::move(parts);
+        e->portraitAspect = aspect > 1e-3f ? aspect : 1.0f;
+    }
+}
+
+void UiDocument::clearPortrait(const std::string& selector) {
+    if (Element* e = find(selector)) e->portrait.clear();
+}
+
+// A vista cabe inteira no elemento (sem esticar), centrada; o que passa da
+// vista fica recortado pelo retangulo do elemento.
+void UiDocument::drawPortrait(ImDrawList* dl, const Element& e, const CSSRect& r, float alpha) {
+    float vw = r.w, vh = r.w / e.portraitAspect;
+    if (vh > r.h) {
+        vh = r.h;
+        vw = r.h * e.portraitAspect;
+    }
+    const float ox = r.x + (r.w - vw) * 0.5f, oy = r.y + (r.h - vh) * 0.5f;
+    dl->PushClipRect(ImVec2(r.x, r.y), ImVec2(r.x + r.w, r.y + r.h), true);
+    for (const PortraitPart& p : e.portrait) {
+        dl->AddImage(reinterpret_cast<ImTextureID>(p.tex), ImVec2(ox + p.rect.x * vw, oy + p.rect.y * vh),
+                     ImVec2(ox + p.rect.z * vw, oy + p.rect.w * vh), ImVec2(p.uv.x, p.uv.y), ImVec2(p.uv.z, p.uv.w),
+                     withAlpha(p.tint, alpha));
+    }
+    dl->PopClipRect();
+}
+
 void UiDocument::setBadge(const std::string& selector, const std::string& text, const std::string& image) {
     if (Element* e = find(selector)) {
         e->hasBadge = true;
@@ -790,6 +819,7 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
             break;
         }
         }
+        if (!e.portrait.empty()) drawPortrait(dl, e, r, alpha);
         // Texto sem caixa gira em torno do proprio ponto de ancora.
         if (e.rotate != 0.0f) CSSLayout::rotateVertices(dl, vtx0, r.center(), e.rotate);
         if (!e.graph.empty()) drawGraph(dl, e, r, area, alpha);
