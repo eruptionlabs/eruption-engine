@@ -2752,7 +2752,9 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                     t.vertices = vertices;
                     t.uploaded = *useIndices;
                     t.fullCount = static_cast<uint32_t>(useIndices->size());
-                    t.amplitude = m_reliefBake.amplitude * mesh.dispScale * reliefSizeScale(mesh, m_reliefBake.amplitude);
+                    // A mesma amplitude para toda malha assada (ver relief_bake_amplitude
+                    // em Engine::applyGraphicsPreset): dispScale so' decide se assa.
+                    t.amplitude = m_reliefBake.amplitude;
                     t.outCells = mesh.groundCells;
                     for (const auto& v : vertices)
                         if (v.pbrIndex != 0 && v.texIndex != 0 && (t.slots.empty() || t.slots.back() != v.texIndex))
