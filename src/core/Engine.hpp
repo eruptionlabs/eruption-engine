@@ -352,6 +352,11 @@ public:
         uint32_t indexedTextureCount = 0;
         bool loaded = false;
         bool isPngSprite = false;
+        // Largura do pe' da folha (mediana do footWidth de todos os quadros,
+        // em pixels) e quantas texturas ela viu: o disco de contato usa a
+        // mesma pegada em todo quadro (ver footMedianPx em Characters.cpp).
+        float footMedianPx = 0.0f;
+        size_t footMedianOf = 0;
         // ERUPTSPR v2: o atraso de cada ação vem do arquivo (andar escala
         // com a velocidade a partir dele, não do valor fixo antigo).
         bool authoredTiming = false;

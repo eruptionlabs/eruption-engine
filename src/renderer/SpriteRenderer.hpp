@@ -229,6 +229,12 @@ public:
     // com a imagem lit (sem anexo de profundidade).
     // `pointShadows` (sombra por luz pontual, characters.set_shadow("lights"))
     // sai no mesmo trecho, tambem como decal: billboard_point_shadow.vert.
+    // Amplitude do relevo no chao visivel (u): a folga de altura do disco
+    // soma ela, senao o chao deslocado sai da janela e o disco some.
+    void setDecalReliefSlack(float slack) { m_decalReliefSlack = slack; }
+    // pbr do G-buffer: o disco pula o pixel de sprite (r = 0,75), que grava
+    // a profundidade do chao e cairia na janela de altura alargada.
+    void setDecalGbufferPbr(VkImageView pbr) { m_decalGbufferPbr = pbr; }
     void renderBillboardCircleShadows(VkCommandBuffer cmd, const FrameUBO& frameUbo,
                                       const Vec2& circleParams, VkBuffer instanceBuffer, uint32_t count,
                                       VkImageView sceneDepth, const Vec2& planarParams,
@@ -303,6 +309,8 @@ private:
     VkDescriptorSet m_decalDepthSets[kDecalFrames] = {};
     VkSampler m_decalDepthSampler = VK_NULL_HANDLE;
     VkPipelineLayout m_decalPipelineLayout = VK_NULL_HANDLE;
+    float m_decalReliefSlack = 0.0f;
+    VkImageView m_decalGbufferPbr = VK_NULL_HANDLE;
     // Anel: set 2 proprio (profundidade e pbr do G-buffer). O do disco ja' foi ligado no
     // quadro; reescreve-lo depois invalidaria o command buffer.
     VkPipeline m_ringPipeline = VK_NULL_HANDLE;

@@ -55,6 +55,8 @@ layout(set = 2, binding = 2) uniform SunShadowUBO {
     vec4 shadowParams;
     vec4 shadowRanges;   // y = profundidade real da caixa, z = vies
 };
+// pbr do G-buffer: r = 0,75 marca o pixel de um sprite (sprite.frag).
+layout(set = 2, binding = 3) uniform sampler2D u_gbufferPbr;
 
 // Fracao de sombra do sol num ponto (0 = sol, 1 = sombra), PCF 3x3 na
 // cascata que o contem. Fora das duas, sol.
@@ -83,13 +85,28 @@ void main() {
     ivec2 px = ivec2(gl_FragCoord.xy);
     float depth = texelFetch(u_sceneDepth, px, 0).r;
     if (depth >= 1.0) discard; // ceu
+    // Pixel de sprite fica de fora: ele grava a profundidade do chao perto
+    // do pe' e, com a janela de altura somando o relevo, o disco pintava o
+    // proprio boneco e os vizinhos.
+    if (abs(texelFetch(u_gbufferPbr, px, 0).r - 0.75) < 0.06) discard;
     vec2 uv = (vec2(px) + 0.5) / vec2(textureSize(u_sceneDepth, 0));
     vec4 viewPos = u_inverseProjection * vec4(uv * 2.0 - 1.0, depth, 1.0);
     vec3 P = (u_inverseView * vec4(viewPos.xyz / viewPos.w, 1.0)).xyz;
     vec3 local = P - v_feet.xyz;
 
-    // Distancia na elipse da pegada, na escala do quadro antigo (raio 0,5).
-    float dist = 0.5 * length(vec2(local.x / v_feet.w, local.z / v_shape.x));
+    // Distancia na elipse da pegada, na escala do quadro antigo (raio 0,5),
+    // medida onde o raio do pixel cruza o plano do pe' (y do pe'), como o
+    // anel. Medida no ponto visivel, a elipse seguia cada faceta do relevo:
+    // numa faceta quase em pe' atras do boneco ela virava uma fresta reta e
+    // o disco saia cortado em linha. A janela de altura abaixo continua no
+    // ponto visivel e decide que chao recebe.
+    vec3 ray = P - u_cameraPos;
+    vec2 noPlano = local.xz;
+    if (abs(ray.y) > 1e-4) {
+        float t = (v_feet.y - u_cameraPos.y) / ray.y;
+        if (t > 0.0) noPlano = (u_cameraPos.xz + ray.xz * t) - v_feet.xz;
+    }
+    float dist = 0.5 * length(vec2(noPlano.x / v_feet.w, noPlano.y / v_shape.x));
     if (dist > 0.5) discard;
 
     // O proprio sprite: o pixel no plano dele, acima do pe' (a beira do pe'
