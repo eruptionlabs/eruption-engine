@@ -1,5 +1,6 @@
 #include <cstdio>
 #include "core/Engine.hpp"
+#include "core/LoadingScreen.hpp"
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "formats/FlatMap.hpp"
@@ -219,6 +220,7 @@ int eruptionMain(int argc, char** argv) {
     eruption::Engine engine;
 #endif
     engine.setEditorMode(eruption::wantsEditor(argc, argv));
+    eruption::setLoadingScreenEditor(engine.editorMode());
     ERUPTION_LOG_INFO("[MAIN] Engine init starting...");
     // ERUPTION_WINDOW_SIZE=<L>x<A>: tamanho da janela (capturas em alta resolução).
     int winW = 1280, winH = 720;

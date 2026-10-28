@@ -15,8 +15,13 @@ namespace eruption {
 using LoadingScreenStyle = Project::Manifest::LoadingScreen;
 
 // O estilo do projeto aberto, ou nullptr (sem projeto ou sem o bloco: a tela
-// padrao, como sempre).
+// padrao, como sempre). No editor, sempre nullptr.
 const LoadingScreenStyle* projectLoadingStyle();
+
+// O editor, com ou sem projeto aberto, fica na tela de carga do motor; a do
+// projeto e' so' do jogo (--game, jogo exportado, celular). main.cpp chama
+// com o mesmo valor de Engine::setEditorMode.
+void setLoadingScreenEditor(bool editor);
 
 // Barra, porcentagem e texto. Texto vazio no estilo: o mapa e a etapa.
 void drawProjectLoadingBar(ImDrawList* dl, const ImVec2& display, const LoadingScreenStyle& style,
