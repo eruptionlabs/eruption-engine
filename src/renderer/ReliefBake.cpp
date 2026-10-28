@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <unordered_map>
 
 namespace eruption {
@@ -228,6 +229,106 @@ ReliefBakeStats bakeRelief(std::vector<ReliefVertex>& verts, std::vector<uint32_
     st.verticesOut = verts.size();
     st.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     return st;
+}
+
+namespace {
+
+struct P {
+    float x, y, z;
+};
+
+// Altura do topo da malha nos pontos da grade (NaN = sem superficie).
+void rasterTop(const ReliefPositions& v, const std::vector<uint32_t>& idx, const ReliefFloorGrid& g,
+               std::vector<float>& top) {
+    top.assign(size_t(g.nx) * size_t(g.nz), std::numeric_limits<float>::quiet_NaN());
+    for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+        if (idx[t] >= v.count || idx[t + 1] >= v.count || idx[t + 2] >= v.count) continue;
+        const float *pa = v.at(idx[t]), *pb = v.at(idx[t + 1]), *pc = v.at(idx[t + 2]);
+        const P a{pa[0], pa[1], pa[2]}, b{pb[0], pb[1], pb[2]}, c{pc[0], pc[1], pc[2]};
+        const float det = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+        if (std::fabs(det) < 1e-9f) continue; // de pe': nao e' chao
+        const int x0 = std::max(0, int(std::ceil((std::min({a.x, b.x, c.x}) - g.minX) / g.cell)));
+        const int x1 = std::min(g.nx - 1, int(std::floor((std::max({a.x, b.x, c.x}) - g.minX) / g.cell)));
+        const int z0 = std::max(0, int(std::ceil((std::min({a.z, b.z, c.z}) - g.minZ) / g.cell)));
+        const int z1 = std::min(g.nz - 1, int(std::floor((std::max({a.z, b.z, c.z}) - g.minZ) / g.cell)));
+        for (int iz = z0; iz <= z1; ++iz)
+            for (int ix = x0; ix <= x1; ++ix) {
+                const float px = g.minX + float(ix) * g.cell, pz = g.minZ + float(iz) * g.cell;
+                const float l1 = ((b.z - c.z) * (px - c.x) + (c.x - b.x) * (pz - c.z)) / det;
+                const float l2 = ((c.z - a.z) * (px - c.x) + (a.x - c.x) * (pz - c.z)) / det;
+                const float l3 = 1.0f - l1 - l2;
+                constexpr float kE = -1e-4f;
+                if (l1 < kE || l2 < kE || l3 < kE) continue;
+                const float y = l1 * a.y + l2 * b.y + l3 * c.y;
+                float& o = top[size_t(iz) * size_t(g.nx) + size_t(ix)];
+                if (!(o >= y)) o = y; // NaN ou mais baixo
+            }
+    }
+}
+
+} // namespace
+
+bool ReliefFloorGrid::sample(float x, float z, float& delta, float& baseY) const {
+    if (dy.empty()) return false;
+    const float fx = (x - minX) / cell, fz = (z - minZ) / cell;
+    if (fx < 0.0f || fz < 0.0f || fx > float(nx - 1) || fz > float(nz - 1)) return false;
+    const int ix = std::min(int(fx), nx - 2), iz = std::min(int(fz), nz - 2);
+    const float tx = fx - float(ix), tz = fz - float(iz);
+    const size_t i0 = size_t(iz) * size_t(nx) + size_t(ix), i1 = i0 + size_t(nx);
+    const int16_t b[4] = {base[i0], base[i0 + 1], base[i1], base[i1 + 1]};
+    for (int16_t v : b)
+        if (v == kNone) return false; // beira da malha: o chao de antes vale
+    auto lerp = [&](const int16_t* v) {
+        return (float(v[0]) * (1.0f - tx) + float(v[1]) * tx) * (1.0f - tz) +
+               (float(v[2]) * (1.0f - tx) + float(v[3]) * tx) * tz;
+    };
+    const int16_t d[4] = {dy[i0], dy[i0 + 1], dy[i1], dy[i1 + 1]};
+    delta = lerp(d) * dyStep;
+    baseY = baseMin + lerp(b) * baseStep;
+    return true;
+}
+
+ReliefFloorGrid reliefFloorGrid(const ReliefPositions& before, const std::vector<uint32_t>& idxBefore,
+                                const ReliefPositions& after, const std::vector<uint32_t>& idxAfter, float cell) {
+    ReliefFloorGrid g;
+    if (before.count == 0 || cell <= 0.0f) return g;
+    float mnx = before.at(0)[0], mxx = mnx, mnz = before.at(0)[2], mxz = mnz;
+    for (uint32_t i = 0; i < before.count; ++i) {
+        const float* q = before.at(i);
+        mnx = std::min(mnx, q[0]);
+        mxx = std::max(mxx, q[0]);
+        mnz = std::min(mnz, q[2]);
+        mxz = std::max(mxz, q[2]);
+    }
+    g.cell = cell;
+    g.minX = mnx;
+    g.minZ = mnz;
+    g.nx = int(std::ceil((mxx - mnx) / cell)) + 2;
+    g.nz = int(std::ceil((mxz - mnz) / cell)) + 2;
+    if (g.nx < 2 || g.nz < 2 || size_t(g.nx) * size_t(g.nz) > (size_t(1) << 24)) return {};
+    std::vector<float> hb, ha;
+    rasterTop(before, idxBefore, g, hb);
+    rasterTop(after, idxAfter, g, ha);
+    float dMax = 0.0f, bMin = std::numeric_limits<float>::max(), bMax = -bMin;
+    for (size_t i = 0; i < hb.size(); ++i) {
+        if (hb[i] != hb[i]) continue;
+        if (ha[i] == ha[i]) dMax = std::max(dMax, std::fabs(ha[i] - hb[i]));
+        bMin = std::min(bMin, hb[i]);
+        bMax = std::max(bMax, hb[i]);
+    }
+    // Nada subiu nem desceu um centesimo: o chao de antes vale (sem grade).
+    if (bMin > bMax || dMax < 0.01f) return {};
+    g.dyStep = std::max(dMax, 1e-3f) / 32767.0f;
+    g.baseMin = bMin;
+    g.baseStep = std::max(bMax - bMin, 1e-3f) / 32766.0f;
+    g.dy.assign(hb.size(), 0);
+    g.base.assign(hb.size(), ReliefFloorGrid::kNone);
+    for (size_t i = 0; i < hb.size(); ++i) {
+        if (hb[i] != hb[i]) continue;
+        g.base[i] = int16_t(std::lround((hb[i] - bMin) / g.baseStep));
+        if (ha[i] == ha[i]) g.dy[i] = int16_t(std::lround((ha[i] - hb[i]) / g.dyStep));
+    }
+    return g;
 }
 
 } // namespace eruption

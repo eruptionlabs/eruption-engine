@@ -144,10 +144,12 @@ void Engine::uploadVfxGround() {
     m_vfx.setGroundHeights(h, vw, vd, Vec2(t.offsetX, t.offsetZ), t.scale > 0.0f ? t.scale : 10.0f);
 }
 
-float Engine::sampleTerrainHeight(float x, float z, float y) const {
+float Engine::sampleTerrainHeight(float x, float z, float y, bool withRelief) const {
     const LoadedMap* map = mapAt(x, z, y); // o aberto ou um vizinho em cena
     if (!map) return 0.0f;
-    return sampleGlbOrTerrainHeight(*map, x, z);
+    // + o desnivel do chao assado, onde ele vai para a tela (celular).
+    const float h = sampleGlbOrTerrainHeight(*map, x, z);
+    return withRelief ? h + m_modelRenderer.reliefFloorDelta(x, z, h) : h;
 }
 
 bool Engine::raycastTerrain(const Vec3& origin, const Vec3& dir, float maxT, float& hitT) const {

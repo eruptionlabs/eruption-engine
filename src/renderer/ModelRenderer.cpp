@@ -450,6 +450,7 @@ VkDeviceSize ModelMeshGPU::destroyLodBuffers(VulkanContext* ctx) {
     reliefFirst = reliefIndexCount = 0;
     reliefInView = false;
     reliefCells.clear();
+    reliefFloor.reset();
     return freed;
 }
 
@@ -632,6 +633,8 @@ void ModelRenderer::shutdown() {
 
 void ModelRenderer::clear() {
     reliefClearMaps(); // alturas medianas do mapa que sai
+    m_reliefFloors.clear();
+    m_reliefFloorBuckets.clear();
     clearSkinning(false);
     for (auto& mesh : m_meshes) {
         releaseSeamWeld(mesh, false);
@@ -1538,6 +1541,11 @@ void ModelRenderer::computeRelief(ReliefTask& t, std::unordered_map<uint32_t, st
     const ReliefBakeRecord& rec = r.record;
     // Vertices: os da malha, os meios na ordem do registro, e entao cada um
     // anda o que o assado mandou (posicao interpolada ANTES de deslocar).
+    // Malha assada na tela (celular): a grade do desnivel, antes de os
+    // vertices de antes irem embora (ver ReliefFloorGrid).
+    const bool floorGrid = m_reliefBake.mode == 2;
+    std::vector<TerrainVertex> before;
+    if (floorGrid) before = t.vertices;
     std::vector<TerrainVertex>& v = t.outVertices;
     v = std::move(t.vertices);
     const size_t base = v.size();
@@ -1561,6 +1569,10 @@ void ModelRenderer::computeRelief(ReliefTask& t, std::unordered_map<uint32_t, st
     }
     for (size_t i = 0; i < v.size(); ++i)
         v[i].position += Vec3(rec.dir[3 * i], rec.dir[3 * i + 1], rec.dir[3 * i + 2]) * rec.offset[i];
+    if (floorGrid)
+        t.outFloor = std::make_shared<const ReliefFloorGrid>(
+            reliefFloorGrid({before.data(), before.size(), sizeof(TerrainVertex)}, full,
+                            {v.data(), v.size(), sizeof(TerrainVertex)}, rec.indices, std::max(0.5f, r.spacing * 0.25f)));
     // Indices: o que a malha subiu, e a cheia partida no fim.
     t.outIndices = std::move(t.uploaded);
     const uint32_t first = static_cast<uint32_t>(t.outIndices.size());
@@ -1583,6 +1595,49 @@ void ModelRenderer::computeRelief(ReliefTask& t, std::unordered_map<uint32_t, st
 }
 
 // Assa as malhas do asset em paralelo e sobe numa submissao so'.
+void ModelRenderer::addReliefFloor(const Mat4& transform, const Vec3& wMin, const Vec3& wMax,
+                                   const std::shared_ptr<const ReliefFloorGrid>& grid) {
+    ReliefFloorRef r;
+    const Mat4 inv = glm::inverse(transform);
+    for (int k = 0; k < 4; ++k) {
+        r.lx[k] = inv[k][0];
+        r.lz[k] = inv[k][2];
+        r.wy[k] = transform[k][1];
+    }
+    r.minX = wMin.x;
+    r.minZ = wMin.z;
+    r.maxX = wMax.x;
+    r.maxZ = wMax.z;
+    r.grid = grid;
+    const uint32_t id = static_cast<uint32_t>(m_reliefFloors.size());
+    m_reliefFloors.push_back(std::move(r));
+    const int x0 = int(std::floor(wMin.x / kReliefFloorBucket)), x1 = int(std::floor(wMax.x / kReliefFloorBucket));
+    const int z0 = int(std::floor(wMin.z / kReliefFloorBucket)), z1 = int(std::floor(wMax.z / kReliefFloorBucket));
+    for (int bz = z0; bz <= z1; ++bz)
+        for (int bx = x0; bx <= x1; ++bx)
+            m_reliefFloorBuckets[(uint64_t(uint32_t(bx)) << 32) | uint32_t(bz)].push_back(id);
+}
+
+float ModelRenderer::reliefFloorDelta(float x, float z, float baseY) const {
+    if (m_reliefFloors.empty()) return 0.0f;
+    const int bx = int(std::floor(x / kReliefFloorBucket)), bz = int(std::floor(z / kReliefFloorBucket));
+    const auto it = m_reliefFloorBuckets.find((uint64_t(uint32_t(bx)) << 32) | uint32_t(bz));
+    if (it == m_reliefFloorBuckets.end()) return 0.0f;
+    for (uint32_t id : it->second) {
+        const ReliefFloorRef& r = m_reliefFloors[id];
+        if (x < r.minX || x > r.maxX || z < r.minZ || z > r.maxZ) continue;
+        const float px = r.lx[0] * x + r.lx[1] * baseY + r.lx[2] * z + r.lx[3];
+        const float pz = r.lz[0] * x + r.lz[1] * baseY + r.lz[2] * z + r.lz[3];
+        float d = 0.0f, b = 0.0f;
+        if (!r.grid->sample(px, pz, d, b)) continue;
+        // Modelo sem inclinacao (o chao): o eixo Y local vai para o Y do mundo.
+        const float wb = r.wy[0] * px + r.wy[1] * b + r.wy[2] * pz + r.wy[3];
+        if (std::fabs(wb - baseY) > 1.0f) continue; // outra superficie (ponte, laje)
+        return r.wy[1] * d;
+    }
+    return 0.0f;
+}
+
 void ModelRenderer::applyReliefs(std::vector<ReliefTask>& tasks, const std::string& label,
                                  const std::unordered_map<uint32_t, std::string>& slotNames) {
     if (tasks.empty()) return;
@@ -1617,7 +1672,7 @@ void ModelRenderer::applyReliefs(std::vector<ReliefTask>& tasks, const std::stri
     const auto t1 = std::chrono::steady_clock::now();
     struct Up { const void* data; VkDeviceSize size; VkBuffer dst; };
     std::vector<Up> ups;
-    size_t done = 0, cached = 0, trisIn = 0, trisOut = 0, bytes = 0;
+    size_t done = 0, cached = 0, trisIn = 0, trisOut = 0, bytes = 0, floorBytes = 0;
     float gridMax = 0.0f;
     for (ReliefTask& t : tasks) {
         if (!t.ok || t.mesh >= m_meshes.size()) continue;
@@ -1635,6 +1690,8 @@ void ModelRenderer::applyReliefs(std::vector<ReliefTask>& tasks, const std::stri
         mesh.reliefIndexCount = t.outCount;
         mesh.reliefInView = m_reliefBake.mode == 2;
         mesh.reliefCells = std::move(t.outCells);
+        mesh.reliefFloor = std::move(t.outFloor);
+        if (mesh.reliefFloor) floorBytes += mesh.reliefFloor->bytes();
         ++done;
         cached += t.fromCache ? 1 : 0;
         bytes += size_t(vs + is);
@@ -1668,10 +1725,10 @@ void ModelRenderer::applyReliefs(std::vector<ReliefTask>& tasks, const std::stri
     }
     const auto t2 = std::chrono::steady_clock::now();
     ERUPTION_LOG_WARN("[RELEVO] %s: %zu de %zu malhas assadas (%zu do cache), grade %.2f u (ate' %.2f), tris %zu -> %zu, "
-                      "%.1f MB na GPU, %.0f ms em paralelo, subida %.0f ms",
+                      "%.1f MB na GPU, piso %.2f MB na CPU, %.0f ms em paralelo, subida %.0f ms",
                       label.c_str(), done, tasks.size(), cached, double(m_reliefBake.spacing), double(gridMax), trisIn,
                       trisOut,
-                      double(bytes) / (1024.0 * 1024.0), std::chrono::duration<double, std::milli>(t1 - t0).count(),
+                      double(bytes) / (1024.0 * 1024.0), double(floorBytes) / (1024.0 * 1024.0), std::chrono::duration<double, std::milli>(t1 - t0).count(),
                       std::chrono::duration<double, std::milli>(t2 - t1).count());
     tasks.clear();
 }
@@ -2677,6 +2734,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
         );
         inst.boundingRadius = glm::length(worldSize) * 0.5f;
         m_instances.push_back(inst);
+        if (m_meshes[meshIdx].reliefFloor && !m_meshes[meshIdx].reliefFloor->empty()) addReliefFloor(inst.transform, wMin, wMax, m_meshes[meshIdx].reliefFloor);
         if (m_skinBases.count(meshIdx)) makeSkinnedInstance(static_cast<uint32_t>(m_instances.size() - 1));
 
         // Detect animated nodes

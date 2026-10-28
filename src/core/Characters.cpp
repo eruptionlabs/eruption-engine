@@ -61,7 +61,7 @@ void Engine::groundDecalPlane(GroundRing& decal) const {
     const float d = std::max(0.5f * decal.center.w, 2.0f);
     const float fromY = c.y + decal.shape.y;
     auto altura = [&](float x, float z) {
-        const float y = floorHeight(x, z, fromY);
+        const float y = floorHeight(x, z, fromY, nullptr, nullptr, false); // sem o relevo assado
         return std::abs(y - c.y) <= decal.shape.y ? y : c.y; // sem piso por perto: plano
     };
     const float gx = (altura(c.x + d, c.z) - altura(c.x - d, c.z)) / (2.0f * d);

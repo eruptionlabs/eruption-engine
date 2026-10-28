@@ -23,6 +23,8 @@
 
 namespace eruption {
 
+struct ReliefFloorGrid;
+
 struct ModelMeshGPU {
     // Solda da costura do deslocamento (ModelRenderer::createSeamWeld): textura
     // de dados por triangulo do indice base (model_tese.glsl, weldTexel). E' do
@@ -158,6 +160,9 @@ struct ModelMeshGPU {
     uint32_t reliefFirst = 0, reliefIndexCount = 0;
     bool reliefInView = false;
     std::vector<GroundCell> reliefCells;
+    // Chao com a malha assada na tela: quanto a superficie subiu (ver
+    // ModelRenderer::reliefFloorDelta). nullptr = o chao de antes vale.
+    std::shared_ptr<const ReliefFloorGrid> reliefFloor;
 
     // CHAO (G38): malha de terreno vinda como modelo (mapa GLB: material de chao,
     // categoria "ground" ou vertices com splat). O bake das probes de
@@ -468,6 +473,11 @@ public:
     using ReliefTextureSource = std::function<bool(const std::string& texture, bool pixels, std::vector<uint8_t>& alpha,
                                                    int& w, int& h, uint64_t& id)>;
     void setReliefSource(ReliefTextureSource source) { m_reliefSource = std::move(source); }
+    // Quanto o chao assado na tela subiu em (x, z) do mundo, na malha cuja
+    // superficie de antes passa a ate' 1 u de baseY (0 fora dela ou sem assado
+    // na tela): somado ao piso de antes (Engine::sampleTerrainHeight, floorHeight)
+    // para o pe' e o caminho pisarem no que se ve'. Seguro em qualquer thread.
+    float reliefFloorDelta(float x, float z, float baseY) const;
     // Solda da costura (preset "tessellation_seam_weld"): vale para as malhas
     // carregadas depois da chamada.
     void setSeamWeld(bool enabled) { m_seamWeld = enabled; }
@@ -1165,6 +1175,22 @@ private:
     float m_tessAmplitude = 0.0f;
     ReliefBakeConfig m_reliefBake;
     ReliefTextureSource m_reliefSource;
+    struct ReliefFloorRef {
+        // Linhas das matrizes, sem Mat4 por pergunta: o A* pergunta o chao
+        // por no' expandido (Pathfinding) e o caminho do grupo dobrava o pico.
+        float lx[4], lz[4], wy[4];
+        float minX = 0.0f, minZ = 0.0f, maxX = 0.0f, maxZ = 0.0f;
+        std::shared_ptr<const ReliefFloorGrid> grid;
+    };
+    // Gravado so' na thread principal, na carga (como m_instances); lido em
+    // paralelo so' com ela parada (parallelFor da grade de andar). Baldes de
+    // kReliefFloorBucket u: a grade de andar pergunta o chao de cada celula
+    // do mapa, e varrer milhares de instancias por pergunta travava 200 ms.
+    static constexpr float kReliefFloorBucket = 64.0f;
+    std::vector<ReliefFloorRef> m_reliefFloors;
+    std::unordered_map<uint64_t, std::vector<uint32_t>> m_reliefFloorBuckets;
+    void addReliefFloor(const Mat4& transform, const Vec3& wMin, const Vec3& wMax,
+                        const std::shared_ptr<const ReliefFloorGrid>& grid);
     struct ReliefAlpha {
         std::string name;
         uint64_t id = 0;
@@ -1184,6 +1210,7 @@ private:
         std::vector<ModelMeshGPU::GroundCell> outCells;
         uint32_t outFirst = 0, outCount = 0;
         float spacing = 0.0f;
+        std::shared_ptr<const ReliefFloorGrid> outFloor;
         bool ok = false, fromCache = false;
         double ms = 0.0;
     };
