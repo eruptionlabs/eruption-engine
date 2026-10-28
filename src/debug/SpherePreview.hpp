@@ -68,6 +68,9 @@ public:
     bool worldScale() const { return m_worldScale; }
     bool hasWorldUvPerUnit() const { return m_worldUvPerUnit > 0.0f; }
     void setSpin(bool on) { m_spin = on; if (!on) m_rotation = 0.0f; }
+    // true: o sol e o ambiente do mapa aberto (FrameUBO) em vez da luz fixa de estudio.
+    void setWorldLight(bool on) { m_worldLight = on; }
+    bool worldLight() const { return m_worldLight; }
     bool spin() const { return m_spin; }
 
     // ESFERA OU CUBO (pedido do autor: comparar com chao real - superficie
@@ -170,6 +173,7 @@ private:
     static constexpr float kMaxDist = 30.0f;
     std::string m_materialLabel;
     float m_dispScale = 1.0f;
+    bool m_worldLight = false;
     uint32_t m_curTexIndex = 0;
     uint32_t m_curPbrIndex = 0;
     uint32_t m_curNormalIndex = 0;

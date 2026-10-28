@@ -1450,6 +1450,8 @@ private:
         uint32_t slot = 0;
         int groundRole = 0;
         float amplitude = 0.0f, worldAmplitude = 0.0f, spacing = 0.0f, edge = 0.0f;
+        float gridMin = 0.0f, gridMax = 0.0f, cubeSpacing = 0.0f; // malhas do arquivo; a que o cubo usou
+        uint32_t gridMeshes = 0;
         bool baked = true, bakeFailed = false;
         bool inlineCube = false; // o editor desenha o cubo no painel: sem a janela da depuracao
         size_t triangles = 0;
@@ -1457,7 +1459,7 @@ private:
         VkDescriptorSet sets[6] = {};
     } m_embPreview;
     void openEmbeddedPreview(const std::string& key, const std::string& image, const std::string& label,
-                             uint32_t slot, int groundRole);
+                             uint32_t slot, int groundRole, const std::string& file);
     void rebuildEmbeddedCube();
     void releaseEmbeddedTiles();
     bool embeddedMaterialImages(const std::string& image, std::vector<uint8_t> rgba[3], int w[3], int h[3]);
