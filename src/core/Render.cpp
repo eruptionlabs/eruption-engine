@@ -1226,6 +1226,22 @@ void Engine::render() {
     // Make depth readable so the cloud-shadow fullscreen pass can reconstruct world positions.
     m_vulkan.cmdImageBarrier(cmd, m_gbuffer.depthImage(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
 
+    // Aneis de chao (characters.ring, vfx.area): decal como o disco, com
+    // qualquer sombra. ANTES do disco de contato: a cor da area, somada
+    // por cima, apagava o disco no chao marcado (o boneco flutuava dentro
+    // da mira); assim a sombra escurece a marca, como no chao pintado.
+    if (!m_groundRings.empty()) {
+        VkRenderingAttachmentInfo ringColor{};
+        ringColor.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        ringColor.imageView = m_deferredLighting.litImageView();
+        ringColor.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ringColor.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        ringColor.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        m_vulkan.cmdBeginRendering(cmd, {ringColor}, nullptr, nullptr, renderExtent());
+        m_spriteRenderer.renderGroundRings(cmd, frameUbo, m_groundRings, m_gbuffer.depthView(), m_gbuffer.pbrView());
+        m_vulkan.cmdEndRendering(cmd);
+    }
+
     // Disco do pe' dos sprites como DECAL: le' a profundidade (agora so'
     // leitura) e avalia a pegada no ponto visivel. O quadro deitado a +0,12 do
     // pe' brigava com o chao em listras e sumia sob laje e degrau.
@@ -1256,19 +1272,6 @@ void Engine::render() {
             m_vulkan.writeTimestamp(cmd, 61, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             Profiler::addGpuTime("Sprite Shadow Decal", m_vulkan.timestampDeltaMs(60, 61));
         }
-    }
-
-    // Aneis de chao (characters.ring): decal como o disco, com qualquer sombra.
-    if (!m_groundRings.empty()) {
-        VkRenderingAttachmentInfo ringColor{};
-        ringColor.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        ringColor.imageView = m_deferredLighting.litImageView();
-        ringColor.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        ringColor.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        ringColor.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        m_vulkan.cmdBeginRendering(cmd, {ringColor}, nullptr, nullptr, renderExtent());
-        m_spriteRenderer.renderGroundRings(cmd, frameUbo, m_groundRings, m_gbuffer.depthView(), m_gbuffer.pbrView());
-        m_vulkan.cmdEndRendering(cmd);
     }
 
     // Cloud shadows: project cloud coverage onto the lit scene using the depth buffer.
