@@ -2489,12 +2489,15 @@ void Engine::applyGraphicsPreset() {
     // "relief_bake_spacing" (u). "shadow" (PC): so' o passe de sombra desenha
     // a malha assada - o G-buffer segue na tesselacao e o sol passa a ver o
     // relevo. "mesh" (celular): o G-buffer tambem, e a tesselacao desliga
-    // (seria o relevo duas vezes). "off" ou ausente: nada. Mesma amplitude e
-    // contraste da tesselacao; ERUPTION_TEST_TESS_AMP vale aqui tambem.
+    // (seria o relevo duas vezes). "gbuffer" (PC): o G-buffer e a sombra
+    // desenham a malha assada onde ela existe e a tesselacao fica so' para as
+    // malhas sem assado - o relevo da tesselacao mudava com a camera (ver
+    // ModelRenderer::ReliefBakeConfig). "off" ou ausente: nada. Mesma
+    // amplitude e contraste da tesselacao; ERUPTION_TEST_TESS_AMP vale aqui.
     {
         ModelRenderer::ReliefBakeConfig rb;
         const std::string mode = p.value("relief_bake", std::string("off"));
-        rb.mode = mode == "shadow" ? 1 : mode == "mesh" ? 2 : 0;
+        rb.mode = mode == "shadow" ? 1 : mode == "mesh" ? 2 : mode == "gbuffer" ? 3 : 0;
         rb.spacing = std::clamp(p.value("relief_bake_spacing", 2.0f), 0.25f, 64.0f);
         rb.maxTriangles = static_cast<uint32_t>(std::clamp(p.value("relief_bake_max_tris", 600000), 1024, 4194304));
         rb.amplitude = m_tessAmplitude;
