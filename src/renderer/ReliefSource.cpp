@@ -65,8 +65,8 @@ std::mutex g_mapMutex;
 std::unordered_map<uint64_t, std::shared_ptr<const HeightMap>> g_maps;
 
 std::shared_ptr<const HeightMap> heightMapFor(uint64_t id, const std::vector<uint8_t>& alpha, int w, int h,
-                                              int radius) {
-    const uint64_t key = hashBytes(&radius, sizeof(radius), id);
+                                              int radius, int blur) {
+    const uint64_t key = hashBytes(&blur, sizeof(blur), hashBytes(&radius, sizeof(radius), id));
     {
         std::lock_guard<std::mutex> lock(g_mapMutex);
         auto it = g_maps.find(key);
@@ -79,6 +79,7 @@ std::shared_ptr<const HeightMap> heightMapFor(uint64_t id, const std::vector<uin
     // le' em heightBaseMip).
     m->mean = float(sum / double(std::max<size_t>(alpha.size(), 1)) / 255.0);
     m->h = reliefMedian(alpha.data(), w, h, radius);
+    for (int pass = 0; pass < 2; ++pass) m->h = reliefBoxBlur(m->h.data(), w, h, blur);
     m->w = w;
     m->hh = h;
     std::lock_guard<std::mutex> lock(g_mapMutex);
@@ -98,7 +99,7 @@ template <class T> bool get(std::FILE* f, std::vector<T>& v) {
 }
 
 constexpr uint32_t kMagic = 0x31564C52; // "RLV1"
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 2; // 2: caixa dupla no Nyquist da grade e leitura bilinear
 
 bool readRecord(const std::string& path, size_t vertsIn, size_t trisIn, ReliefBakeRecord& r) {
     std::FILE* f = std::fopen(path.c_str(), "rb");
@@ -287,7 +288,11 @@ bool reliefBakeCached(const std::vector<TerrainVertex>& vertices, const std::vec
 
     // Mediana no raio da grade: k texels entre dois vertices, raio k/2 (1 com
     // k = 2, nenhum abaixo de 1,5 - bancada de variantes,
-    // i23_assado_variantes_high_medium_low.png).
+    // i23_assado_variantes_high_medium_low.png). Depois dela, o FILTRO DO
+    // NYQUIST: caixa dupla de raio k/2 (tenda de largura ~2k), sem teto. A
+    // mediana para em 32 texels (custo) e preserva degrau: num chao de mapa grande
+    // a 2,98 u (k ~ 90 texels) a grade carregava detalhe mais fino que ela e a
+    // aresta no rasante saia em serra. A leitura passa a ser bilinear.
     std::unordered_map<uint32_t, std::shared_ptr<const HeightMap>> maps;
     for (const auto& [slot, id] : ids) {
         std::vector<uint8_t> alpha;
@@ -297,7 +302,8 @@ bool reliefBakeCached(const std::vector<TerrainVertex>& vertices, const std::vec
             continue;
         const float k = spacing * uvpu.at(slot) * float(std::max(w, h));
         const int radius = k < 1.5f ? 0 : std::clamp(int(std::lround(k * 0.5f)), 1, 32);
-        maps.emplace(slot, heightMapFor(id, alpha, w, h, radius));
+        const int blur = k < 1.5f ? 0 : std::clamp(int(std::lround(k * 0.5f)), 1, std::max(w, h) / 2);
+        maps.emplace(slot, heightMapFor(id, alpha, w, h, radius, blur));
     }
     if (maps.empty()) return false;
 
@@ -322,7 +328,7 @@ bool reliefBakeCached(const std::vector<TerrainVertex>& vertices, const std::vec
         auto it = maps.find(tex);
         if (tex == 0 || it == maps.end()) return 0.5f;
         const HeightMap& m = *it->second;
-        const float a = reliefSampleNearest(m.h, m.w, m.hh, u, v);
+        const float a = reliefSampleBilinear(m.h, m.w, m.hh, u, v);
         if (a > 0.999f) return 0.5f; // 255 = textura sem altura (heightUv)
         return std::clamp(0.5f + (a - m.mean) * gain, 0.0f, 1.0f);
     };

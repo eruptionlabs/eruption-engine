@@ -157,7 +157,7 @@
       "tessellation_near_spacing": 0.12,
       "tessellation_near_edge_pixels": 4.0,
       "tessellation_amplitude": 12.0,
-      "relief_bake": "gbuffer",
+      "relief_bake": "mesh",
       "relief_bake_spacing": 4.0,
       "relief_bake_max_tris": 75000
     },
@@ -218,8 +218,8 @@
       "tessellation_near_spacing": 0.12,
       "tessellation_near_edge_pixels": 4.0,
       "tessellation_amplitude": 12.0,
-      "relief_bake": "gbuffer",
-      "relief_bake_spacing": 3.0,
+      "relief_bake": "mesh",
+      "relief_bake_spacing": 2.0,
       "relief_bake_max_tris": 150000
     },
     "high": {
@@ -276,9 +276,9 @@
       "tessellation_near_spacing": 0.12,
       "tessellation_near_edge_pixels": 4.0,
       "tessellation_amplitude": 12.0,
-      "relief_bake": "gbuffer",
-      "relief_bake_spacing": 4.0,
-      "relief_bake_max_tris": 300000
+      "relief_bake": "mesh",
+      "relief_bake_spacing": 1.0,
+      "relief_bake_max_tris": 1500000
     }
   }
 }

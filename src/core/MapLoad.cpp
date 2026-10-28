@@ -417,6 +417,10 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     // BC, m_embeddedBaked fica vazio e o caminho RGBA8 abaixo roda igual.
     // ------------------------------------------------------------------
     m_embeddedBaked.clear();
+    {
+        std::lock_guard<std::mutex> lock(m_reliefAlbedoMutex);
+        m_reliefAlbedo.clear();
+    }
     loadPhase("geometria/costuras");
     if (m_currentMap) {
         for (auto& model : m_currentMap->models) {
