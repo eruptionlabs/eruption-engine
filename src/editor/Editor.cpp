@@ -548,9 +548,13 @@ void Editor::update(float dt) {
         m_worldVersionSeen = m_engine->worldVersion();
         applyLayerVisibility();
     }
-    // ERUPTION_TEST_EDITOR_ASSET=caminho (teste): abre a prévia desse asset.
+    // ERUPTION_TEST_EDITOR_ASSET=caminho (teste): abre a prévia desse asset;
+    // ":map_textures" abre as texturas embutidas do mapa.
     static const char* testAsset = std::getenv("ERUPTION_TEST_EDITOR_ASSET");
-    if (testAsset && m_frame == 30) selectAsset(testAsset);
+    if (testAsset && m_frame == 30) {
+        if (std::string(testAsset) == ":map_textures") openMapTextures();
+        else selectAsset(testAsset);
+    }
     // ERUPTION_TEST_EDITOR_SELECT=trecho (teste/prints): seleciona e enquadra o
     // modelo mais perto da câmera cujo nome contém o trecho.
     static const char* testSelect = std::getenv("ERUPTION_TEST_EDITOR_SELECT");

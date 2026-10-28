@@ -1003,6 +1003,10 @@ void Editor::drawProject() {
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 ImGui::SetTooltip("%s", tr("New Luau script in the scripts folder"));
             ImGui::SameLine();
+            if (ImGui::SmallButton(tr("Map textures"))) openMapTextures();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("%s", tr("Textures inside the loaded map files, on a cube with the world's material"));
+            ImGui::SameLine();
             ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x));
             ImGui::InputTextWithHint("##pfilter", tr("Filter..."), filter, sizeof(filter));
             ImGui::Separator();

@@ -278,8 +278,8 @@ bool reliefBakeCached(const std::vector<TerrainVertex>& vertices, const std::vec
     std::snprintf(name, sizeof(name), "relevo_%016llx.bin", static_cast<unsigned long long>(key.h));
     const std::string local = std::string(".cache/eruption/relevo/") + name;
     const char* pack = packDir();
-    if ((pack && readRecord(std::string(pack) + "/" + name, vertices.size(), trisIn, out.record)) ||
-        readRecord(local, vertices.size(), trisIn, out.record)) {
+    if (params.store && ((pack && readRecord(std::string(pack) + "/" + name, vertices.size(), trisIn, out.record)) ||
+                         readRecord(local, vertices.size(), trisIn, out.record))) {
         if (kPackOut) writeRecord(std::string(kPackOut) + "/" + name, vertices.size(), out.record);
         out.fromCache = true;
         out.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -347,6 +347,10 @@ bool reliefBakeCached(const std::vector<TerrainVertex>& vertices, const std::vec
         bp.spacing *= 1.3f;
     }
     out.spacing = bp.spacing;
+    if (!params.store) {
+        out.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        return true;
+    }
     if (!writeRecord(local, vertices.size(), out.record))
         ERUPTION_LOG_WARN("[RELEVO] cache nao gravado: %s", local.c_str());
     if (kPackOut) writeRecord(std::string(kPackOut) + "/" + name, vertices.size(), out.record);

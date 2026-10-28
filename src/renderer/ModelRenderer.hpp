@@ -732,6 +732,27 @@ public:
         auto it = m_texUvPerUnit.find(slot);
         return it != m_texUvPerUnit.end() ? it->second : 0.0f;
     }
+    // Relevo assado que o mundo deu a esta textura: amplitude (u; 0 = nenhuma
+    // malha assada le' a altura dela) e grade que o assado usou (0 = nenhuma).
+    float reliefAmplitudeForSlot(uint32_t slot) const {
+        auto it = m_texReliefAmp.find(slot);
+        return it != m_texReliefAmp.end() ? it->second : 0.0f;
+    }
+    float reliefSpacingForSlot(uint32_t slot) const {
+        auto it = m_texReliefSpacing.find(slot);
+        return it != m_texReliefSpacing.end() ? it->second : 0.0f;
+    }
+    // Textura do chao do mapa: 1 = cor de uma malha de chao (a que da' a altura
+    // do relevo dela), 2 = so' camada do splat, 0 = nao e' do chao.
+    int groundRoleForSlot(uint32_t slot) const {
+        auto it = m_groundTexRole.find(slot);
+        return it != m_groundTexRole.end() ? it->second : 0;
+    }
+    // Previa de material: a malha (espaco do modelo, UV na densidade do mundo)
+    // assada como o mundo assa, com a altura da textura `texture` (slot `slot`)
+    // nos vertices de pbrIndex != 0. Sem cache em disco. false = sem altura.
+    bool bakeReliefPreview(std::vector<TerrainVertex>& vertices, std::vector<uint32_t>& indices, uint32_t slot,
+                           const std::string& texture, float amplitude, float spacing) const;
 
     // ANIMAÇÃO POR ESQUELETO (ModelSkinning.cpp). Cada instância de malha com
     // skin tem uma cópia da malha com buffer de vértices próprio; a cada frame
@@ -926,6 +947,8 @@ private:
     std::unordered_map<std::string, uint32_t> m_textureCache;
     std::unordered_map<std::string, PbrTextureSlots> m_pbrTextureCache;
     std::unordered_map<uint32_t, float> m_texUvPerUnit;
+    std::unordered_map<uint32_t, float> m_texReliefAmp, m_texReliefSpacing; // previa de material
+    std::unordered_map<uint32_t, int> m_groundTexRole;
     std::unordered_map<uint32_t, PbrTextureSlots> m_pbrByTexSlot;
     std::unordered_map<std::string, std::vector<uint32_t>> m_modelMeshCache;
 
@@ -1226,6 +1249,9 @@ private:
         std::vector<uint32_t> uploaded; // o index buffer da malha (cheia + niveis)
         uint32_t fullCount = 0;         // so' a malha cheia, no inicio de `uploaded`
         float amplitude = 0.0f;
+        float spacing0 = 0.0f;       // grade pedida (0 = a do preset)
+        bool store = true;           // cache em disco (a previa nao grava)
+        std::vector<uint32_t> slots; // texturas que dao a altura (previa de material)
         std::vector<TerrainVertex> outVertices;
         std::vector<uint32_t> outIndices;
         std::vector<ModelMeshGPU::GroundCell> outCells;

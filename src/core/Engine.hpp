@@ -578,6 +578,16 @@ public:
     // como objeto do mundo - autor: "a esfera tem que aparecer num pop do
     // mapa" / "atualmente eu clico e ele muda a textura do chao (errado)").
     SpherePreview& spherePreview() { return m_spherePreview; }
+    // TEXTURAS EMBUTIDAS DOS ARQUIVOS DO MAPA (EmbeddedTextures.cpp): lista
+    // por arquivo, chao do mapa primeiro; o clique abre a textura no cubo da
+    // previa com o material que o mundo usa (cor, MRAH-W e normal dos slots
+    // do mundo), os canais, e o relevo assado pela mesma rotina do mundo.
+    // `tr` traduz a interface (nullptr = ingles); `file` = so' esse arquivo
+    // (vazio = todos); `inlineCube` = desenha o cubo aqui (o editor) e nao so'
+    // na janela "Texture Preview" da depuracao.
+    using UiText = const char* (*)(const char*);
+    void drawEmbeddedTextures(UiText tr, const std::string& file, bool inlineCube);
+    void closeEmbeddedPreview();
     bool& showPlayerLightMenu() { return m_showPlayerLightMenu; }
     // Luz de teste presa ao sprite principal (F10): pra' ver a interacao da
     // point light com o mundo (PBR, PCSS, molhado) sem depender de prop com
@@ -1396,6 +1406,23 @@ private:
     bool m_showResourceManager = false; 
     bool m_showABTestMenu = false;
     SpherePreview m_spherePreview;
+    struct EmbeddedPreview {
+        const void* map = nullptr; // m_currentMap quando abriu
+        std::string key, image, label;
+        uint32_t slot = 0;
+        int groundRole = 0;
+        float amplitude = 0.0f, worldAmplitude = 0.0f, spacing = 0.0f, edge = 0.0f;
+        bool baked = true, bakeFailed = false;
+        bool inlineCube = false; // o editor desenha o cubo no painel: sem a janela da depuracao
+        size_t triangles = 0;
+        TextureResource tiles[6]; // cor, normal, M, R, A(O), altura
+        VkDescriptorSet sets[6] = {};
+    } m_embPreview;
+    void openEmbeddedPreview(const std::string& key, const std::string& image, const std::string& label,
+                             uint32_t slot, int groundRole);
+    void rebuildEmbeddedCube();
+    void releaseEmbeddedTiles();
+    bool embeddedMaterialImages(const std::string& image, std::vector<uint8_t> rgba[3], int w[3], int h[3]);
     // Particulas e efeitos (GPU). Texturas das folhas de quadros: do motor,
     // liberadas no shutdown.
     VfxSystem m_vfx;

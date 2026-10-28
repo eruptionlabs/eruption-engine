@@ -184,6 +184,8 @@ private:
     // Prévia de asset no Inspetor
     void selectAsset(const std::filesystem::path& path);
     void closeAssetPreview();
+    // Texturas embutidas dos arquivos do mapa carregado, no Inspetor.
+    void openMapTextures();
     void drawAssetPreview();
     void drawImagePreview();
     void drawModelPreview();
@@ -556,7 +558,7 @@ private:
 
     struct AssetPreviewState {
         std::filesystem::path path;
-        enum class Kind { None, Image, Model, Text, Sound } kind = Kind::None;
+        enum class Kind { None, Image, Model, Text, Sound, MapTextures } kind = Kind::None;
         // Modelo 3D girável (desenhado na CPU, ModelRaster).
         std::shared_ptr<RasterMesh> raster;
         std::shared_ptr<std::future<std::shared_ptr<RasterMesh>>> rasterJob;
