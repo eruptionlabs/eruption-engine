@@ -262,7 +262,7 @@ ExportReport exportGame(const ExportOptions& o) {
         std::ifstream pf(o.projectRoot / "project.eruption");
         const nlohmann::json pj = pf ? nlohmann::json::parse(pf, nullptr, false) : nlohmann::json();
         if (pj.is_object()) {
-            for (const char* key : {"spawn", "camera", "loading"})
+            for (const char* key : {"name", "spawn", "camera", "loading"})
                 if (pj.contains(key)) launch[key] = pj[key];
             copyGameIcon(o, pj, launch, report);
         }

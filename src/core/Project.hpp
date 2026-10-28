@@ -120,6 +120,9 @@ public:
     // PNG do icone do jogo: o do manifesto aberto, ou o "icon" do
     // data/launcher_config.json do jogo exportado. Vazio = o do motor.
     static std::filesystem::path gameIcon();
+    // Nome do jogo: o do manifesto aberto, ou o "name" do launcher_config do
+    // exportado (titulo da janela). Vazio = sem jogo.
+    static std::string gameName();
 
     static constexpr const char* kManifestName = "project.eruption";
     // Subpastas de conteudo criadas por create() (e esperadas pelo editor).

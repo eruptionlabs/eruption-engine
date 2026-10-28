@@ -232,10 +232,10 @@ int eruptionMain(int argc, char** argv) {
         }
     }
     std::string title = engine.editorMode() ? "Eruption Editor" : "Eruption Engine";
-    if (eruption::Project::instance().isOpen()) {
-        const std::string& game = eruption::Project::instance().manifest().name;
+    // O nome do jogo: do projeto aberto ou, no exportado (sem projeto), do
+    // launcher_config que o export grava.
+    if (const std::string game = eruption::Project::gameName(); !game.empty())
         title = engine.editorMode() ? game + " - Eruption Editor" : game;
-    }
     if (!engine.init(winW, winH, title.c_str())) {
         ERUPTION_LOG_FATAL("Engine initialization failed");
         return 1;
