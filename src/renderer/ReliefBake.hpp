@@ -76,4 +76,35 @@ ReliefBakeStats bakeRelief(std::vector<ReliefVertex>& verts, std::vector<uint32_
                            const ReliefBakeParams& params, const ReliefHeightSampler& height,
                            ReliefBakeRecord* record = nullptr);
 
+// CHAO QUE ANDA COM O ASSADO. Onde a malha assada vai para a tela (celular),
+// o pe' e o caminho precisam pisar nela, nao no chao de antes: grade de
+// quanto a superficie subiu (u, espaco do modelo, a de cima quando ha' duas)
+// e de onde ela estava, amostradas nas duas malhas em XZ a 1/4 da grade do
+// assado. Compacta - nada da malha fica na CPU, 4 bytes por ponto (int16).
+// Erro medio do pe' contra a malha assada (1080p, camera de jogo a 250 u,
+// fov 20): 0,4-1,5 px com a celula a 1/2 da grade, 0,15-0,6 px a 1/4.
+struct ReliefFloorGrid {
+    static constexpr int16_t kNone = INT16_MIN;
+    float minX = 0.0f, minZ = 0.0f, cell = 1.0f;
+    int nx = 0, nz = 0;
+    float dyStep = 1.0f, baseMin = 0.0f, baseStep = 1.0f;
+    std::vector<int16_t> dy;   // quanto subiu, em dyStep
+    std::vector<int16_t> base; // altura de antes, baseMin + base * baseStep (kNone sem superficie)
+    bool empty() const { return dy.empty(); }
+    size_t bytes() const { return (dy.size() + base.size()) * sizeof(int16_t); }
+    // Bilinear; false fora da grade ou sem superficie de antes nos 4 cantos.
+    bool sample(float x, float z, float& delta, float& baseY) const;
+};
+// Posicoes: 3 floats no comeco de cada vertice, `stride` bytes entre um e outro.
+struct ReliefPositions {
+    const void* data = nullptr;
+    size_t count = 0, stride = 0;
+    const float* at(uint32_t i) const {
+        return reinterpret_cast<const float*>(static_cast<const uint8_t*>(data) + size_t(i) * stride);
+    }
+};
+// Grade vazia quando nada mudou um centesimo (o chao de antes vale).
+ReliefFloorGrid reliefFloorGrid(const ReliefPositions& before, const std::vector<uint32_t>& idxBefore,
+                                const ReliefPositions& after, const std::vector<uint32_t>& idxAfter, float cell);
+
 } // namespace eruption

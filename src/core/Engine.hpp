@@ -237,7 +237,9 @@ public:
     const std::string& currentMapName() const { return m_currentMapName; }
     // `y` (opcional): altura de quem pergunta, para escolher entre mapas
     // empilhados (ver mapAt).
-    float sampleTerrainHeight(float x, float z, float y = kAnyHeight) const;
+    // withRelief = false: o chao sem o desnivel do relevo assado na tela
+    // (ModelRenderer::reliefFloorDelta) - a inclinacao do anel no chao.
+    float sampleTerrainHeight(float x, float z, float y = kAnyHeight, bool withRelief = true) const;
     // Raio contra a grade de altura do mapa (.ter); falso se o mapa não tem uma.
     bool raycastTerrain(const Vec3& origin, const Vec3& dir, float maxT, float& hitT) const;
     static bool raycastGrid(const TerrainFile& ter, const Vec3& origin, const Vec3& dir, float maxT, float& hitT);
@@ -1049,7 +1051,8 @@ public:
     // Consultas do chão para o jogo (core/GroundQuery.cpp). O piso é o
     // terreno ou o topo de um objeto sólido (passarela, ponte, laje de kit):
     // floorHeight devolve o mais alto abaixo de `fromY`.
-    float floorHeight(float x, float z, float fromY, bool* onModel = nullptr, int* instance = nullptr) const;
+    float floorHeight(float x, float z, float fromY, bool* onModel = nullptr, int* instance = nullptr,
+                      bool withRelief = true) const;
     // Dá para ficar de pé em (x, z) sobre o piso: grade de caminhada (só no
     // terreno; sobre um objeto sólido vale a peça), nenhum outro sólido
     // ocupando o corpo acima do piso, no raio, e no máximo um degrau de
@@ -1083,7 +1086,7 @@ public:
     // Piso em (x, z) abaixo de fromY entre os sólidos `cand` (o terreno é
     // terrainY); `instance` = o sólido do piso ou -1.
     float floorAmong(const std::vector<uint32_t>& cand, float terrainY, float x, float z, float fromY,
-                     int& instance) const;
+                     int& instance, bool withRelief = true) const;
     bool liquidOver(float x, float z, float floorY, LiquidAt& out) const;
     bool walkableOver(const std::vector<uint32_t>& cand, int floorInstance, float floorY, float x, float z,
                       float radius) const;

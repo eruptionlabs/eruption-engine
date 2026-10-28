@@ -50,17 +50,21 @@ void solidsIn(const std::vector<uint8_t>& solid, const std::vector<ModelInstance
 // Raio vertical de cima para baixo nos sólidos: o topo mais alto abaixo de
 // fromY que fique acima do terreno.
 Floor floorOver(const ModelRenderer& mr, const std::vector<uint32_t>& cand, float terrainY, float x, float z,
-                float fromY) {
+                float fromY, bool withRelief = true) {
     Floor f{terrainY, -1};
     const auto& insts = mr.getInstances();
+    const auto& meshes = mr.getMeshes();
     for (uint32_t i : cand) {
         const ModelInstance& inst = insts[i];
         if (!insideXZ(inst, x, z, 0.0f) || inst.worldAabbMin.y >= fromY) continue;
         const float top = std::min(fromY, inst.worldAabbMax.y + 1.0f);
         if (top <= f.y) continue;
         const float t = mr.raycastInstance(i, Vec3(x, top, z), Vec3(0.0f, -1.0f, 0.0f));
-        if (t < 0.0f || top - t <= f.y) continue;
-        f = {top - t, int(i)};
+        // Chao com a malha assada na tela: o raio bate na de antes; soma o desnivel.
+        const bool assado = withRelief && inst.meshIndex < meshes.size() && meshes[inst.meshIndex].reliefFloor;
+        const float y = top - t + (assado ? mr.reliefFloorDelta(x, z, top - t) : 0.0f);
+        if (t < 0.0f || y <= f.y) continue;
+        f = {y, int(i)};
     }
     return f;
 }
@@ -162,16 +166,17 @@ bool Engine::bodyBlocked(const std::vector<uint32_t>& cand, int floorInstance, f
 }
 
 float Engine::floorAmong(const std::vector<uint32_t>& cand, float terrainY, float x, float z, float fromY,
-                         int& instance) const {
-    const Floor f = floorOver(m_modelRenderer, cand, terrainY, x, z, fromY);
+                         int& instance, bool withRelief) const {
+    const Floor f = floorOver(m_modelRenderer, cand, terrainY, x, z, fromY, withRelief);
     instance = f.instance;
     return f.y;
 }
 
-float Engine::floorHeight(float x, float z, float fromY, bool* onModel, int* instance) const {
+float Engine::floorHeight(float x, float z, float fromY, bool* onModel, int* instance, bool withRelief) const {
     std::vector<uint32_t> cand;
     solidsIn(m_solid, m_modelRenderer.getInstances(), x, z, x, z, cand);
-    const Floor f = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z, fromY), x, z, fromY);
+    const Floor f = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z, fromY, withRelief), x, z, fromY,
+                              withRelief);
     if (onModel) *onModel = f.instance >= 0;
     if (instance) *instance = f.instance;
     return f.y;

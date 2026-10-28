@@ -17,6 +17,7 @@
 //   g++ -std=c++17 -I src tests/test_relief_bake.cpp src/renderer/ReliefBake.cpp
 #include "renderer/ReliefBake.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <map>
@@ -191,12 +192,66 @@ static void tempoChao() {
                 st.trianglesIn, st.trianglesOut, st.verticesOut, st.ms);
 }
 
+// Grade do chao assado: o desnivel e a altura de antes batem com as duas
+// malhas, fora dela nao ha' amostra, e o que nao mexeu nao vira grade.
+static void testaPiso() {
+    std::vector<ReliefVertex> vs;
+    std::vector<uint32_t> is;
+    quadrado(40.0f, vs, is);
+    for (ReliefVertex& v : vs) v.pos[1] = 0.1f * v.pos[0]; // rampa de 10%
+    const std::vector<ReliefVertex> antes = vs;
+    const std::vector<uint32_t> isAntes = is;
+    ReliefBakeParams p;
+    p.spacing = 2.0f;
+    p.amplitude = 4.0f;
+    // Altura em degraus suaves pelo UV: o assado sobe e desce.
+    bakeRelief(vs, is, p, [](uint32_t, float u, float v) { return 0.5f + 0.4f * std::sin(9.0f * u) * std::cos(7.0f * v); });
+    const ReliefPositions pa{antes.data(), antes.size(), sizeof(ReliefVertex)};
+    const ReliefPositions pd{vs.data(), vs.size(), sizeof(ReliefVertex)};
+    const ReliefFloorGrid g = reliefFloorGrid(pa, isAntes, pd, is, 0.5f);
+    checa(!g.empty() && g.bytes() == size_t(g.nx) * size_t(g.nz) * 4, "piso: grade de 4 bytes por ponto");
+    // Altura exata da malha assada em (x, z), triangulo a triangulo.
+    auto topo = [&](float x, float z) {
+        float best = -1e30f;
+        for (size_t t = 0; t + 2 < is.size(); t += 3) {
+            const float *a = vs[is[t]].pos, *b = vs[is[t + 1]].pos, *c = vs[is[t + 2]].pos;
+            const float det = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+            if (std::fabs(det) < 1e-9f) continue;
+            const float l1 = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / det;
+            const float l2 = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / det;
+            const float l3 = 1.0f - l1 - l2;
+            if (l1 < -1e-4f || l2 < -1e-4f || l3 < -1e-4f) continue;
+            best = std::max(best, l1 * a[1] + l2 * b[1] + l3 * c[1]);
+        }
+        return best;
+    };
+    float pior = 0.0f, piorBase = 0.0f, maiorDesnivel = 0.0f;
+    for (int i = 0; i < 400; ++i) {
+        const float x = 1.0f + 38.0f * float((i * 37) % 400) / 400.0f, z = 1.0f + 38.0f * float(i) / 400.0f;
+        float d = 0.0f, b = 0.0f;
+        if (!g.sample(x, z, d, b)) {
+            pior = 1e9f;
+            continue;
+        }
+        pior = std::max(pior, std::fabs(b + d - topo(x, z)));
+        piorBase = std::max(piorBase, std::fabs(b - 0.1f * x));
+        maiorDesnivel = std::max(maiorDesnivel, std::fabs(d));
+    }
+    std::printf("  piso: desnivel ate' %.2f u, erro da grade %.3f u, base %.4f u\n", maiorDesnivel, pior, piorBase);
+    checa(maiorDesnivel > 0.5f && pior < 0.1f, "piso: grade segue a malha assada (< 0,1 u)");
+    checa(piorBase < 0.01f, "piso: altura de antes preservada");
+    float d = 0.0f, b = 0.0f;
+    checa(!g.sample(-5.0f, 10.0f, d, b) && !g.sample(10.0f, 60.0f, d, b), "piso: fora da malha nao amostra");
+    checa(reliefFloorGrid(pa, isAntes, pa, isAntes, 0.5f).empty(), "piso: sem desnivel, sem grade");
+}
+
 int main() {
     testaMediana();
     testaSubdivisao();
     testaDeslocamento();
     testaTeto();
     testaRegistro();
+    testaPiso();
     tempoChao();
     if (g_falhas) {
         std::printf("FALHAS: %d\n", g_falhas);

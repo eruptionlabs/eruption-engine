@@ -178,8 +178,11 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
             if (p.x >= s.minX && p.x <= s.maxX && p.z >= s.minZ && p.z <= s.maxZ) cand.push_back(s.inst);
         }
         int inst = -1;
-        const float terrain = sampleTerrainHeight(p.x, p.z, y);
-        p.y = cand.empty() ? terrain : floorAmong(cand, terrain, p.x, p.z, y, inst);
+        // Chao de antes, sem o relevo assado: o A* so' compara degrau e queda
+        // (passos de `step`, bem acima do desnivel do assado), e o desnivel
+        // por no' dobrava o pico de 40 ms de cada busca (mobile_high, medido).
+        const float terrain = sampleTerrainHeight(p.x, p.z, y, false);
+        p.y = cand.empty() ? terrain : floorAmong(cand, terrain, p.x, p.z, y, inst, false);
         if (fromY - p.y > kDrop * step) return -1;
         size_t slot = nodes, nearest = c * kLayers;
         for (int l = 0; l < kLayers; ++l) {
