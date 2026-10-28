@@ -95,12 +95,25 @@ bool Window::init(int width, int height, const std::string& title) {
         }
     };
 
-    load_icon(icons::eruption_v3_16_png, icons::eruption_v3_16_png_len);
-    load_icon(icons::eruption_v3_32_png, icons::eruption_v3_32_png_len);
-    load_icon(icons::eruption_v3_64_png, icons::eruption_v3_64_png_len);
-    load_icon(icons::eruption_v3_128_png, icons::eruption_v3_128_png_len);
-    load_icon(icons::eruption_v3_256_png, icons::eruption_v3_256_png_len);
-    load_icon(icons::eruption_v3_512_png, icons::eruption_v3_512_png_len);
+    // Icone do jogo (Project::gameIcon, so' no modo jogo): uma imagem, o
+    // sistema reduz. Sem ele, ou ilegivel, os tamanhos do icone do motor.
+    if (!m_iconFile.empty()) {
+        int w = 0, h = 0, channels = 0;
+        if (unsigned char* pixels = stbi_load(m_iconFile.c_str(), &w, &h, &channels, 4)) {
+            images[0] = GLFWimage{w, h, pixels};
+            count = 1;
+        } else {
+            ERUPTION_LOG_WARN("[WINDOW] icone do jogo ilegivel: %s", m_iconFile.c_str());
+        }
+    }
+    if (count == 0) {
+        load_icon(icons::eruption_v3_16_png, icons::eruption_v3_16_png_len);
+        load_icon(icons::eruption_v3_32_png, icons::eruption_v3_32_png_len);
+        load_icon(icons::eruption_v3_64_png, icons::eruption_v3_64_png_len);
+        load_icon(icons::eruption_v3_128_png, icons::eruption_v3_128_png_len);
+        load_icon(icons::eruption_v3_256_png, icons::eruption_v3_256_png_len);
+        load_icon(icons::eruption_v3_512_png, icons::eruption_v3_512_png_len);
+    }
 
     if (count > 0) {
         glfwSetWindowIcon(m_window, count, images);
