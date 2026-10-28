@@ -620,6 +620,7 @@ void SpherePreview::render(VkCommandBuffer cmd, float dt, const Vec3& cameraPos)
     // weld = 0: a esfera nao tem solda da costura.
     struct { Mat4 vp; float alpha; float metallicScale; float roughnessScale; float pad; Vec4 uvScale; Vec4 weld; } push{};
     push.vp = vp; push.alpha = 1.0f; push.metallicScale = 0.0f; push.roughnessScale = 1.0f;
+    push.pad = m_worldLight ? 1.0f : 0.0f; // sphere_preview.frag: luz do mundo (o model.vert nao le')
     // .w = fator de deslocamento (push.uvScale.w, mesmo campo que
     // ModelMeshGPU::dispScale) - m_dispScale, setado em setMaterial() com o
     // MESMO valor por categoria que o chao real usa (dispScaleForCategory(),

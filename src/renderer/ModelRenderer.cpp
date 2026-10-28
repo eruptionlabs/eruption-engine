@@ -1,4 +1,5 @@
 #include "renderer/GBuffer.hpp"
+#include <filesystem>
 #include <cfloat>
 #include <limits>
 #include <cmath>
@@ -673,7 +674,7 @@ void ModelRenderer::clear() {
     m_textureCache.clear();
     m_texUvPerUnit.clear();
     m_texReliefAmp.clear();
-    m_texReliefSpacing.clear();
+    m_texReliefGrid.clear();
     m_groundTexRole.clear();
     m_pbrByTexSlot.clear();
     m_lastModels.clear();
@@ -1705,7 +1706,7 @@ void ModelRenderer::computeRelief(ReliefTask& t, ReliefAlphas& alphas) const {
 // cache em disco.
 bool ModelRenderer::bakeReliefPreview(std::vector<TerrainVertex>& vertices, std::vector<uint32_t>& indices,
                                       uint32_t slot, const std::string& texture, float amplitude,
-                                      float spacing) const {
+                                      float spacing, float* usedSpacing) const {
     if (!m_reliefSource || slot == 0 || amplitude <= 0.0f || vertices.empty() || indices.size() < 3) return false;
     auto a = std::make_unique<ReliefAlpha>();
     a->name = texture;
@@ -1723,9 +1724,28 @@ bool ModelRenderer::bakeReliefPreview(std::vector<TerrainVertex>& vertices, std:
     t.store = false;
     computeRelief(t, alphas);
     if (!t.ok) return false;
+    if (usedSpacing) *usedSpacing = t.spacing;
     vertices = std::move(t.outVertices);
     indices.assign(t.outIndices.begin() + t.outFirst, t.outIndices.begin() + t.outFirst + t.outCount);
     return true;
+}
+
+ModelRenderer::ReliefGridInfo ModelRenderer::reliefGridForSlot(uint32_t slot, const std::string& file) const {
+    ReliefGridInfo out;
+    auto it = m_texReliefGrid.find(slot);
+    if (it == m_texReliefGrid.end()) return out;
+    const std::string want = file.empty() ? std::string() : std::filesystem::path(file).filename().string();
+    for (const auto& [f, g] : it->second) {
+        if (!want.empty() && f != want) continue;
+        out.minSpacing = out.meshes ? std::min(out.minSpacing, g.minSpacing) : g.minSpacing;
+        out.maxSpacing = std::max(out.maxSpacing, g.maxSpacing);
+        if (g.dominantTris > out.dominantTris) {
+            out.dominantTris = g.dominantTris;
+            out.dominant = g.dominant;
+        }
+        out.meshes += g.meshes;
+    }
+    return out;
 }
 
 // Assa as malhas do asset em paralelo e sobe numa submissao so'.
@@ -1848,9 +1868,16 @@ void ModelRenderer::uploadReliefs(std::vector<ReliefTask>& tasks, const std::str
     float gridMax = 0.0f;
     for (ReliefTask& t : tasks) {
         if (!t.ok || t.mesh >= m_meshes.size()) continue;
+        const std::string file = std::filesystem::path(label).filename().string();
         for (uint32_t s : t.slots) {
-            float& sp = m_texReliefSpacing[s];
-            sp = std::max(sp, t.spacing);
+            ReliefGridInfo& g = m_texReliefGrid[s][file];
+            g.minSpacing = g.meshes ? std::min(g.minSpacing, t.spacing) : t.spacing;
+            g.maxSpacing = std::max(g.maxSpacing, t.spacing);
+            if (t.fullCount / 3 > g.dominantTris) {
+                g.dominantTris = t.fullCount / 3;
+                g.dominant = t.spacing;
+            }
+            ++g.meshes;
         }
         ModelMeshGPU& mesh = m_meshes[t.mesh];
         const VkDeviceSize vs = t.outVertices.size() * sizeof(TerrainVertex);

@@ -219,7 +219,7 @@ void Engine::closeEmbeddedPreview() {
 }
 
 void Engine::openEmbeddedPreview(const std::string& key, const std::string& image, const std::string& label,
-                                 uint32_t slot, int groundRole) {
+                                 uint32_t slot, int groundRole, const std::string& file) {
     releaseEmbeddedTiles();
     EmbeddedPreview& st = m_embPreview;
     st.map = m_currentMap.get();
@@ -231,8 +231,13 @@ void Engine::openEmbeddedPreview(const std::string& key, const std::string& imag
     st.worldAmplitude = m_modelRenderer.reliefAmplitudeForSlot(slot);
     st.amplitude = st.worldAmplitude;
     st.baked = st.worldAmplitude > 0.0f;
-    st.spacing = m_modelRenderer.reliefSpacingForSlot(slot);
-    if (st.spacing <= 0.0f) st.spacing = m_modelRenderer.reliefBake().spacing;
+    // Grade: a do chao jogavel deste arquivo com esta textura (a malha com mais
+    // triangulos de origem), e com ela o mesmo filtro de Nyquist, que segue a grade.
+    const ModelRenderer::ReliefGridInfo grid = m_modelRenderer.reliefGridForSlot(slot, file);
+    st.spacing = grid.dominant > 0.0f ? grid.dominant : m_modelRenderer.reliefBake().spacing;
+    st.gridMin = grid.minSpacing;
+    st.gridMax = grid.maxSpacing;
+    st.gridMeshes = grid.meshes;
     const float uvpu = m_modelRenderer.uvPerUnitForSlot(slot);
     st.edge = uvpu > 0.0f ? 1.0f / uvpu : 16.0f;
 
@@ -282,10 +287,14 @@ void Engine::rebuildEmbeddedCube() {
     build(4);
     bool baked = false;
     if (st.baked && st.amplitude > 0.0f)
-        baked = m_modelRenderer.bakeReliefPreview(v, idx, st.slot, st.key, st.amplitude, st.spacing);
+        baked = m_modelRenderer.bakeReliefPreview(v, idx, st.slot, st.key, st.amplitude, st.spacing, &st.cubeSpacing);
     st.bakeFailed = st.baked && st.amplitude > 0.0f && !baked;
     if (!baked) build(10);
     st.triangles = idx.size() / 3;
+    if (!baked) st.cubeSpacing = 0.0f;
+    ERUPTION_LOG_WARN("[RELEVO_CUBO] %s: amplitude %.2f u, grade do mundo %.2f u (%u malhas, %.2f a %.2f u), "
+                      "grade do cubo %.2f u, %zu tris", st.key.c_str(), double(st.amplitude), double(st.spacing),
+                      st.gridMeshes, double(st.gridMin), double(st.gridMax), double(st.cubeSpacing), st.triangles);
     m_spherePreview.setCustomMesh(std::move(v), std::move(idx), st.edge);
 }
 
@@ -380,7 +389,7 @@ void Engine::drawEmbeddedTextures(UiText tr, const std::string& file, bool inlin
                 openListed = openListed || sel;
                 if (ImGui::Selectable(label.c_str(), sel) || counter == s_testPick) {
                     if (counter == s_testPick) s_testPick = -1;
-                    openEmbeddedPreview(it.key, it.image, it.name, it.slot, it.role);
+                    openEmbeddedPreview(it.key, it.image, it.name, it.slot, it.role, g.file);
                     openListed = true;
                 }
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", it.key.c_str());
@@ -409,10 +418,16 @@ void Engine::drawEmbeddedTextures(UiText tr, const std::string& file, bool inlin
     }
     if (!st.sets[2]) ImGui::TextDisabled("%s", tr("No MRAH-W for this texture in the world."));
 
-    if (st.worldAmplitude > 0.0f)
+    if (st.worldAmplitude > 0.0f) {
         ImGui::Text(tr("World relief: %.1f u, grid %.2f u"), double(st.worldAmplitude), double(st.spacing));
-    else
+        if (st.gridMeshes > 1)
+            ImGui::TextDisabled(tr("%u meshes in this file, grid %.2f to %.2f u"), st.gridMeshes, double(st.gridMin),
+                                double(st.gridMax));
+        if (st.cubeSpacing > 0.0f)
+            ImGui::TextDisabled(tr("Cube: grid %.2f u, %zu triangles"), double(st.cubeSpacing), st.triangles);
+    } else {
         ImGui::TextDisabled("%s", tr("The world bakes no relief from this texture."));
+    }
     bool rebuild = false;
     if (ImGui::RadioButton(tr("Baked relief"), st.baked) && !st.baked) {
         st.baked = true;
@@ -423,6 +438,16 @@ void Engine::drawEmbeddedTextures(UiText tr, const std::string& file, bool inlin
         st.baked = false;
         rebuild = true;
     }
+    // ERUPTION_TEST_CUBE_WORLD_LIGHT=1 (teste/prints): abre com a luz do mundo.
+    static bool s_worldLight = std::getenv("ERUPTION_TEST_CUBE_WORLD_LIGHT") != nullptr;
+    if (s_worldLight) {
+        m_spherePreview.setWorldLight(true);
+        s_worldLight = false;
+    }
+    bool worldLight = m_spherePreview.worldLight();
+    if (ImGui::Checkbox(tr("World light"), &worldLight)) m_spherePreview.setWorldLight(worldLight);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("%s", tr("The sun and ambient of the open map, as on the ground. Off: fixed studio light."));
     ImGui::BeginDisabled(!st.baked);
     const float top = std::max(24.0f, st.worldAmplitude * 2.0f);
     ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x * 0.5f));

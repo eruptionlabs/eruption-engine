@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
 // FRAGMENT DEDICADO DO POPUP DE PREVIEW (src/debug/SpherePreview.*). NAO e'
@@ -33,6 +34,10 @@ layout(location = 19) in vec4 inDispInfo;
 
 layout(location = 0) out vec4 outColor;
 
+// O FrameUBO ja' esta' ligado no set 1 (o model.vert le'); so' a "luz do
+// mundo" usa o sol e o ambiente dele.
+#include "gbuffer/model_frame_ubo.glsl"
+
 layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 
 // 96 B (sem a matriz model e o uvTranslateRot, que nenhum shader lia): cabe
@@ -42,7 +47,7 @@ layout(push_constant) uniform PushConstants {
     float alpha;
     float metallicScale;
     float roughnessScale;
-    float _pad;
+    float worldLight; // 1 = sol e ambiente do mapa aberto (FrameUBO), 0 = luz de estudio
     vec4 uvScale;
 } push;
 
@@ -97,8 +102,18 @@ void main() {
         albedo = texture(u_textures[nonuniformEXT(inTexIndex)], inTexCoord).rgb;
     }
     vec3 L = normalize(-kLightDir);
-    float ndl = max(dot(N, L), 0.0);
+    vec3 lightColor = kLightColor;
     vec3 ambient = kAmbientSky * 0.55 + kAmbientGround * 0.20;
-    vec3 lit = albedo * (ambient + kLightColor * ndl);
+    // LUZ DO MUNDO (botao do painel): a direcao, a cor e a intensidade do sol
+    // do mapa aberto agora e o ambiente dele (ceu em cima, chao embaixo), para
+    // comparar o cubo com o chao do jogo na mesma luz. Sem sombra, GI nem
+    // exposicao do passe diferido: so' difuso + ambiente.
+    if (push.worldLight > 0.5) {
+        L = normalize(-u_sunDir.xyz);
+        lightColor = u_sunColor.rgb * u_sunDir.w;
+        ambient = mix(u_ambientGround.rgb, u_ambientSky.rgb, N.y * 0.5 + 0.5) * u_ambientSky.w;
+    }
+    float ndl = max(dot(N, L), 0.0);
+    vec3 lit = albedo * (ambient + lightColor * ndl);
     outColor = vec4(lit, 1.0);
 }

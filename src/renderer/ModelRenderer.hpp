@@ -738,10 +738,17 @@ public:
         auto it = m_texReliefAmp.find(slot);
         return it != m_texReliefAmp.end() ? it->second : 0.0f;
     }
-    float reliefSpacingForSlot(uint32_t slot) const {
-        auto it = m_texReliefSpacing.find(slot);
-        return it != m_texReliefSpacing.end() ? it->second : 0.0f;
-    }
+    // Grade do assado nesta textura pelas malhas de um arquivo (nome do
+    // arquivo; vazio = todos): a da malha com mais triangulos de origem (o
+    // chao jogavel, modelado com mais detalhe que a borda), a menor e a maior. A mesma textura em outro arquivo nao entra: o
+    // chao de um mapa e a montanha do vizinho dividem o slot, e a maior grade
+    // de todas (a da montanha, 4-10 u) ia para o cubo da previa.
+    struct ReliefGridInfo {
+        float dominant = 0.0f, minSpacing = 0.0f, maxSpacing = 0.0f;
+        uint32_t dominantTris = 0; // triangulos de origem da malha que da' `dominant`
+        uint32_t meshes = 0;
+    };
+    ReliefGridInfo reliefGridForSlot(uint32_t slot, const std::string& file) const;
     // Textura do chao do mapa: 1 = cor de uma malha de chao (a que da' a altura
     // do relevo dela), 2 = so' camada do splat, 0 = nao e' do chao.
     int groundRoleForSlot(uint32_t slot) const {
@@ -752,7 +759,8 @@ public:
     // assada como o mundo assa, com a altura da textura `texture` (slot `slot`)
     // nos vertices de pbrIndex != 0. Sem cache em disco. false = sem altura.
     bool bakeReliefPreview(std::vector<TerrainVertex>& vertices, std::vector<uint32_t>& indices, uint32_t slot,
-                           const std::string& texture, float amplitude, float spacing) const;
+                           const std::string& texture, float amplitude, float spacing,
+                           float* usedSpacing = nullptr) const;
 
     // ANIMAÇÃO POR ESQUELETO (ModelSkinning.cpp). Cada instância de malha com
     // skin tem uma cópia da malha com buffer de vértices próprio; a cada frame
@@ -947,7 +955,8 @@ private:
     std::unordered_map<std::string, uint32_t> m_textureCache;
     std::unordered_map<std::string, PbrTextureSlots> m_pbrTextureCache;
     std::unordered_map<uint32_t, float> m_texUvPerUnit;
-    std::unordered_map<uint32_t, float> m_texReliefAmp, m_texReliefSpacing; // previa de material
+    std::unordered_map<uint32_t, float> m_texReliefAmp; // previa de material
+    std::unordered_map<uint32_t, std::unordered_map<std::string, ReliefGridInfo>> m_texReliefGrid; // slot -> arquivo
     std::unordered_map<uint32_t, int> m_groundTexRole;
     std::unordered_map<uint32_t, PbrTextureSlots> m_pbrByTexSlot;
     std::unordered_map<std::string, std::vector<uint32_t>> m_modelMeshCache;
