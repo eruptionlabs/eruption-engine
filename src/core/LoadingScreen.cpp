@@ -74,7 +74,14 @@ void drawFramedBar(ImDrawList* dl, ImVec2 pMin, ImVec2 pMax, float s, float prog
 
 } // namespace
 
+namespace {
+bool s_editor = false;
+} // namespace
+
+void setLoadingScreenEditor(bool editor) { s_editor = editor; }
+
 const LoadingScreenStyle* projectLoadingStyle() {
+    if (s_editor) return nullptr;
     const Project& p = Project::instance();
     if (p.isOpen()) return p.manifest().loading ? &*p.manifest().loading : nullptr;
     // Jogo exportado (sem projeto aberto, PC ou Android): o export copia o
