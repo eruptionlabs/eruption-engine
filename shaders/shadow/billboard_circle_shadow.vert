@@ -52,6 +52,7 @@ layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
     vec4 shadowLightDir;
     vec2 circleParams; // x = dilation/radius, y = softness
+    float reliefSlack; // amplitude do relevo no chao visivel (u)
 };
 
 // DECAL NO CHAO (nao mais um quadro deitado no pe'). O quadro plano a +0,12 do
@@ -107,13 +108,14 @@ void main() {
     // 312 px para um corpo de ~120). Um corpo em pe' tem uns 55% da altura de
     // largura; a sombra fica no menor dos dois. Sprite alto e fino nao muda.
     float pegada = min(scaleX, scaleY * 0.55);
-    // Largura medida do pe' (bits 16-23 das flags, faixa de baixo do opaco):
-    // bicho largo e baixo tem as patas mais abertas que essa conta, e o
-    // disco estreito ficava so' no meio (o bicho parecia flutuar). O disco
-    // nunca fica menor que antes; o centro segue o do pe' (bits 24-31).
+    // Largura medida do pe' (bits 16-23 das flags: a mediana da folha, ver
+    // footMedianPx em Characters.cpp), quando ha': e' ela que manda. A conta
+    // pela celula fica para quem nao tem medida. Pela celula, um mago de
+    // capa saia com um disco de 30 u para pes de 6 u; o centro segue o do
+    // pe' do quadro (bits 24-31).
     float pe = float((i_flags >> 16u) & 255u) / 255.0;
     if (pe > 0.0 && (i_flags & 2048u) != 0u) {
-        pegada = max(pegada, pe * scaleX);
+        pegada = pe * scaleX;
         float c = float(i_flags >> 24u) / 255.0 - 0.5;
         if ((i_flags & 1u) != 0u) c = -c;
         vec3 rightPe = (u_inverseView * vec4(-1.0, 0.0, 0.0, 0.0)).xyz;
@@ -125,8 +127,10 @@ void main() {
     float rz = rx * 0.6;
     // Folga em altura: o chao sob a pegada pode subir meio raio (pedra, borda
     // de laje) e descer um raio (degrau abaixo do pe').
-    float acima = rx * 0.5;
-    float abaixo = rx;
+    // Com relevo (tesselacao ou malha assada) o chao visivel sai da altura do
+    // pe' em ate' a amplitude: sem somar, o disco sumia no chao acidentado.
+    float acima = rx * 0.5 + reliefSlack;
+    float abaixo = rx + reliefSlack;
 
     // Retangulo da tela que cobre os 8 cantos da caixa.
     vec2 mn = vec2(1e9), mx = vec2(-1e9);

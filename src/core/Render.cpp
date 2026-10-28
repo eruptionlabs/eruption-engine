@@ -1260,6 +1260,8 @@ void Engine::render() {
             pointShadows.clear();
             if (spriteShadowKind() == 2) collectSpritePointShadows(pointShadows);
             Vec2 circleParams(m_charConfig.circleShadowDilation, m_charConfig.circleShadowSoftness);
+            m_spriteRenderer.setDecalReliefSlack(reliefInView());
+            m_spriteRenderer.setDecalGbufferPbr(m_gbuffer.pbrView());
             Vec2 planarParams(m_charConfig.planarShadowDilation, m_charConfig.planarShadowSoftness);
             m_spriteRenderer.renderBillboardCircleShadows(cmd, frameUbo, circleParams, m_spriteSystem.instanceBuffer(),
                                                           m_spriteSystem.visibleCount(), m_gbuffer.depthView(),

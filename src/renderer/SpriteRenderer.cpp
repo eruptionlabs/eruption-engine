@@ -1001,6 +1001,7 @@ void SpriteRenderer::renderBillboardCircleShadows(VkCommandBuffer cmd, const Fra
                                                   VkImageView sunShadowDepth, VkBuffer sunShadowUbo, const Vec4& sunGate) {
     if (count == 0 || sceneDepth == VK_NULL_HANDLE || m_circleShadowPipeline == VK_NULL_HANDLE) return;
     if (sunShadowDepth == VK_NULL_HANDLE || sunShadowUbo == VK_NULL_HANDLE) return;
+    if (m_decalGbufferPbr == VK_NULL_HANDLE) return;
 
     VkDescriptorSet depthSet = m_decalDepthSets[m_ctx->currentFrame() % kDecalFrames];
     VkDescriptorImageInfo depthInfo{};
@@ -1012,8 +1013,10 @@ void SpriteRenderer::renderBillboardCircleShadows(VkCommandBuffer cmd, const Fra
     VkDescriptorImageInfo sunInfo = depthInfo;
     sunInfo.imageView = sunShadowDepth;
     VkDescriptorBufferInfo sunUboInfo{sunShadowUbo, 0, VK_WHOLE_SIZE};
-    VkWriteDescriptorSet writes[3] = {};
-    for (uint32_t i = 0; i < 3; ++i) {
+    VkDescriptorImageInfo pbrInfo = depthInfo;
+    pbrInfo.imageView = m_decalGbufferPbr;
+    VkWriteDescriptorSet writes[4] = {};
+    for (uint32_t i = 0; i < 4; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = depthSet;
         writes[i].dstBinding = i;
@@ -1025,7 +1028,9 @@ void SpriteRenderer::renderBillboardCircleShadows(VkCommandBuffer cmd, const Fra
     writes[1].pImageInfo = &sunInfo;
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[2].pBufferInfo = &sunUboInfo;
-    vkUpdateDescriptorSets(m_ctx->device(), 3, writes, 0, nullptr);
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[3].pImageInfo = &pbrInfo;
+    vkUpdateDescriptorSets(m_ctx->device(), 4, writes, 0, nullptr);
 
     if (instanceBuffer == m_instanceBuffer) {
         vmaFlushAllocation(m_ctx->allocator(), m_instanceAlloc, 0,
@@ -1054,10 +1059,12 @@ void SpriteRenderer::renderBillboardCircleShadows(VkCommandBuffer cmd, const Fra
         Mat4 viewProjection;
         Vec4 shadowLightDir;
         Vec2 circleParams; // x = dilation/radius, y = softness
+        float reliefSlack; // amplitude do relevo no chao visivel (u)
     } push;
     push.viewProjection = frameUbo.viewProjection;
     push.shadowLightDir = sunGate;
     push.circleParams = circleParams;
+    push.reliefSlack = m_decalReliefSlack;
 
     vkCmdPushConstants(cmd, m_decalPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
                        0, sizeof(push), &push);
@@ -1096,9 +1103,10 @@ bool SpriteRenderer::createCircleShadowPipeline() {
     VK_CHECK(vkCreateSampler(m_ctx->device(), &samplerInfo, nullptr, &m_decalDepthSampler));
 
     // 0 = profundidade da cena; 1 e 2 = mapa de sombra do sol e as matrizes
-    // dele ("map_contact": o disco so' fora do sol).
-    VkDescriptorSetLayoutBinding depthBindings[3] = {};
-    for (uint32_t i = 0; i < 3; ++i) {
+    // dele ("map_contact": o disco so' fora do sol); 3 = pbr do G-buffer
+    // (marca de sprite).
+    VkDescriptorSetLayoutBinding depthBindings[4] = {};
+    for (uint32_t i = 0; i < 4; ++i) {
         depthBindings[i].binding = i;
         depthBindings[i].descriptorType = i == 2 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         depthBindings[i].descriptorCount = 1;
@@ -1106,11 +1114,11 @@ bool SpriteRenderer::createCircleShadowPipeline() {
     }
     VkDescriptorSetLayoutCreateInfo setLayoutInfo{};
     setLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    setLayoutInfo.bindingCount = 3;
+    setLayoutInfo.bindingCount = 4;
     setLayoutInfo.pBindings = depthBindings;
     VK_CHECK(vkCreateDescriptorSetLayout(m_ctx->device(), &setLayoutInfo, nullptr, &m_decalDepthLayout));
 
-    VkDescriptorPoolSize poolSizes[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * kDecalFrames},
+    VkDescriptorPoolSize poolSizes[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * kDecalFrames},
                                          {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kDecalFrames}};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1131,7 +1139,7 @@ bool SpriteRenderer::createCircleShadowPipeline() {
     const VkDescriptorSetLayout decalSets[3] = {m_bindless->layout(), m_frameUboLayout, m_decalDepthLayout};
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    pushRange.size = sizeof(Mat4) + sizeof(Vec4) + sizeof(Vec2);
+    pushRange.size = sizeof(Mat4) + sizeof(Vec4) + sizeof(Vec2) + sizeof(float); // + folga do relevo
     VkPipelineLayoutCreateInfo decalLayoutInfo{};
     decalLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     decalLayoutInfo.setLayoutCount = 3;

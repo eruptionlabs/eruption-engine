@@ -120,6 +120,27 @@ static constexpr float kTeleporteEmAlturas = 2.0f;
 
 // Altura do corpo pela célula do primeiro quadro parado (de frente), na
 // escala em que vai à tela; sem folha carregada, a de um boneco comum.
+// Largura do pe' da folha em pixels: a mediana do footWidth de todos os
+// quadros. O disco de contato saia do tamanho da celula (min(w, 0,55 h)) e a
+// celula carrega capa, arma e folga: um mago de 196x204 px ganhava um disco
+// de 30 u de largura para pes de 6 u, e os discos do grupo viravam um plato
+// que a borda da laje cortava em reta. A mediana nao pulsa com o passo.
+static float footMedianPx(Engine::LoadedSprite& ls) {
+    if (ls.footMedianOf == ls.textures.size()) return ls.footMedianPx;
+    std::vector<float> larguras;
+    larguras.reserve(ls.textures.size());
+    for (const auto& t : ls.textures)
+        if (t.footWidth > 0) larguras.push_back(float(t.footWidth) / 255.0f * float(t.width));
+    float mediana = 0.0f;
+    if (!larguras.empty()) {
+        std::nth_element(larguras.begin(), larguras.begin() + larguras.size() / 2, larguras.end());
+        mediana = larguras[larguras.size() / 2];
+    }
+    ls.footMedianPx = mediana;
+    ls.footMedianOf = ls.textures.size();
+    return mediana;
+}
+
 static float alturaDoCorpo(const Engine::LoadedSprite& ls) {
     if (ls.loaded && !ls.act.actions.empty() && !ls.act.actions.front().frames.empty()) {
         const auto& camadas = ls.act.actions.front().frames.front().sprites;
@@ -448,6 +469,7 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
     // No sprite_vert.glsl o topo da parte e' -yOff + 0,5 h - centerY, com
     // centerY = -h/2; a faixa transparente de cima (opaqueTop) nao conta.
     float headTop = -1e9f, headSide = 0.0f;
+    const float peFolha = footMedianPx(ls);
 
     for (const auto& spr : action.frames[static_cast<size_t>(c.frame)].sprites) {
         int texIdx = spr.index + (spr.type == 1 ? static_cast<int>(ls.indexedTextureCount) : 0);
@@ -478,7 +500,10 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         s.texIndex = tex.slot;
         s.paletteIndex = 0;
         s.flags = SpriteFlags::Billboard | SpriteFlags::CastShadow | SpriteFlags::PngSprite | SpriteFlags::TeamVision |
-                  footBits(tex.footWidth, tex.footCenter);
+                  footBits(tex.footWidth > 0 && peFolha > 0.0f && tex.width > 0
+                               ? uint8_t(std::clamp(std::lround(255.0f * peFolha / float(tex.width)), 1L, 255L))
+                               : uint8_t(0),
+                           tex.footCenter);
         if (mirror) s.flags = s.flags | SpriteFlags::FlipX;
         s.tintColor = spr.color;
         // Clarao: puxa a cor na direcao da cor que o script pediu, sem
