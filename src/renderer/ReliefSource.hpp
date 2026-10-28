@@ -46,6 +46,9 @@ struct ReliefParams {
     // Alvo de triangulos por malha: malha grande (paredao de 2000 u) abre a
     // grade ate' caber (ReliefResult::spacing); o teto do assado e' 2x isto.
     size_t maxTriangles = 600000;
+    // false: nem le' nem grava o cache em disco (previa de material no cubo,
+    // que muda a cada arrasto do controle).
+    bool store = true;
 };
 
 struct ReliefResult {

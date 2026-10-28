@@ -40,8 +40,7 @@ void SpherePreview::shutdown() {
     if (m_instLayout) vkDestroyDescriptorSetLayout(dev, m_instLayout, nullptr);
     if (m_ownPool) vkDestroyDescriptorPool(dev, m_ownPool, nullptr);
     if (m_instBuffer) { if (m_instMapped) vmaUnmapMemory(m_ctx->allocator(), m_instAlloc); vmaDestroyBuffer(m_ctx->allocator(), m_instBuffer, m_instAlloc); }
-    if (m_vertexBuffer) { if (m_vertexMapped) vmaUnmapMemory(m_ctx->allocator(), m_vertexAlloc); vmaDestroyBuffer(m_ctx->allocator(), m_vertexBuffer, m_vertexAlloc); }
-    if (m_indexBuffer) vmaDestroyBuffer(m_ctx->allocator(), m_indexBuffer, m_indexAlloc);
+    destroyGeometryBuffers();
     if (m_colorView) vkDestroyImageView(dev, m_colorView, nullptr);
     if (m_colorImage) vmaDestroyImage(m_ctx->allocator(), m_colorImage, m_colorAlloc);
     if (m_depthView) vkDestroyImageView(dev, m_depthView, nullptr);
@@ -93,8 +92,14 @@ void SpherePreview::buildSphereGeometry() {
 // right x up = normal (so' documentação - cull esta' OFF nesse preview, entao
 // nem precisaria, mas errado ia confundir quem olhar o codigo depois).
 void SpherePreview::buildCubeGeometry() {
-    m_vertices.clear();
-    m_indices.clear();
+    cubeMesh(2.0f * kRadius, kCubeGrid, m_vertices, m_indices);
+}
+
+void SpherePreview::cubeMesh(float edge, int grid, std::vector<TerrainVertex>& vertices,
+                             std::vector<uint32_t>& indices) {
+    vertices.clear();
+    indices.clear();
+    const float half = 0.5f * edge;
     struct Face { Vec3 normal, right, up; };
     const Face faces[6] = {
         {{ 1, 0, 0}, { 0, 0,-1}, {0, 1, 0}},
@@ -104,16 +109,16 @@ void SpherePreview::buildCubeGeometry() {
         {{ 0, 0, 1}, { 1, 0, 0}, {0, 1, 0}},
         {{ 0, 0,-1}, {-1, 0, 0}, {0, 1, 0}},
     };
-    constexpr int N = kCubeGrid;
+    const int N = std::max(grid, 1);
     for (const Face& f : faces) {
-        const uint32_t base = static_cast<uint32_t>(m_vertices.size());
+        const uint32_t base = static_cast<uint32_t>(vertices.size());
         for (int gy = 0; gy <= N; ++gy) {
             const float v = static_cast<float>(gy) / static_cast<float>(N);
             for (int gx = 0; gx <= N; ++gx) {
                 const float u = static_cast<float>(gx) / static_cast<float>(N);
                 TerrainVertex tv{};
-                tv.position = f.normal * kRadius + f.right * ((u * 2.0f - 1.0f) * kRadius)
-                                                  + f.up * ((v * 2.0f - 1.0f) * kRadius);
+                tv.position = f.normal * half + f.right * ((u * 2.0f - 1.0f) * half)
+                                                + f.up * ((v * 2.0f - 1.0f) * half);
                 tv.normal = f.normal;
                 tv.texCoord = Vec2(u, v);
                 tv.color = 0xFFFFFFFFu;
@@ -121,18 +126,77 @@ void SpherePreview::buildCubeGeometry() {
                 // normal diferente) - mesma marca que o load poe no chao real,
                 // entao o cubo mostra o mesmo comportamento de junta.
                 if (gx == 0 || gx == N || gy == 0 || gy == N) tv.matId = 0x8000u;
-                m_vertices.push_back(tv);
+                vertices.push_back(tv);
             }
         }
         for (int gy = 0; gy < N; ++gy) {
             for (int gx = 0; gx < N; ++gx) {
                 const uint32_t i0 = base + static_cast<uint32_t>(gy * (N + 1) + gx);
                 const uint32_t i1 = i0 + static_cast<uint32_t>(N + 1);
-                m_indices.push_back(i0); m_indices.push_back(i1); m_indices.push_back(i0 + 1);
-                m_indices.push_back(i0 + 1); m_indices.push_back(i1); m_indices.push_back(i1 + 1);
+                indices.push_back(i0); indices.push_back(i1); indices.push_back(i0 + 1);
+                indices.push_back(i0 + 1); indices.push_back(i1); indices.push_back(i1 + 1);
             }
         }
     }
+}
+
+void SpherePreview::setCustomMesh(std::vector<TerrainVertex> vertices, std::vector<uint32_t> indices, float edge) {
+    if (vertices.empty() || indices.empty() || edge <= 0.0f) return;
+    m_pendingVertices = std::move(vertices);
+    m_pendingIndices = std::move(indices);
+    m_pendingEdge = edge;
+    m_pendingCustom = true;
+}
+
+// Troca a malha antes de gravar o quadro: o clique vem da interface, que roda
+// depois de o popup ja' ter sido gravado no quadro atual.
+void SpherePreview::applyPendingCustomMesh() {
+    if (!m_pendingCustom) return;
+    m_pendingCustom = false;
+    if (m_pendingVertices.size() > m_vertexCap || m_pendingIndices.size() > m_indexCap) {
+        // Clique raro: espera a GPU largar os buffers dos quadros em voo.
+        vkDeviceWaitIdle(m_ctx->device());
+        const size_t vCap = std::max(m_pendingVertices.size(), m_vertexCap);
+        const size_t iCap = std::max(m_pendingIndices.size(), m_indexCap);
+        destroyGeometryBuffers();
+        if (!createGeometryBuffers(vCap, iCap)) {
+            ERUPTION_LOG_ERROR("[SPHEREPREVIEW] sem memoria para a malha de %zu vertices", vCap);
+            m_initialized = false;
+            return;
+        }
+    }
+    m_vertices = std::move(m_pendingVertices);
+    m_indices = std::move(m_pendingIndices);
+    m_pendingVertices.clear();
+    m_pendingIndices.clear();
+    m_custom = true;
+    m_customEdge = m_pendingEdge;
+    applyCurrentMaterialToVertices();
+    uploadVertices();
+    uploadIndices();
+}
+
+bool SpherePreview::createGeometryBuffers(size_t vertexCap, size_t indexCap) {
+    if (!m_ctx->createBuffer(vertexCap * sizeof(TerrainVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                             VMA_MEMORY_USAGE_CPU_TO_GPU, m_vertexBuffer, m_vertexAlloc)) return false;
+    vmaMapMemory(m_ctx->allocator(), m_vertexAlloc, &m_vertexMapped);
+    if (!m_ctx->createBuffer(indexCap * sizeof(uint32_t), VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                             VMA_MEMORY_USAGE_GPU_ONLY, m_indexBuffer, m_indexAlloc)) return false;
+    m_vertexCap = vertexCap;
+    m_indexCap = indexCap;
+    return true;
+}
+
+void SpherePreview::destroyGeometryBuffers() {
+    if (m_vertexBuffer) {
+        if (m_vertexMapped) vmaUnmapMemory(m_ctx->allocator(), m_vertexAlloc);
+        vmaDestroyBuffer(m_ctx->allocator(), m_vertexBuffer, m_vertexAlloc);
+    }
+    if (m_indexBuffer) vmaDestroyBuffer(m_ctx->allocator(), m_indexBuffer, m_indexAlloc);
+    m_vertexBuffer = m_indexBuffer = VK_NULL_HANDLE;
+    m_vertexAlloc = m_indexAlloc = VK_NULL_HANDLE;
+    m_vertexMapped = nullptr;
+    m_vertexCap = m_indexCap = 0;
 }
 
 void SpherePreview::applyCurrentMaterialToVertices() {
@@ -144,7 +208,9 @@ void SpherePreview::applyCurrentMaterialToVertices() {
 }
 
 void SpherePreview::setShape(Shape s) {
-    if (s == m_shape && m_initialized) return;
+    m_pendingCustom = false;
+    if (s == m_shape && m_initialized && !m_custom) return;
+    m_custom = false;
     m_shape = s;
     if (s == Shape::Cube) buildCubeGeometry();
     else buildSphereGeometry();
@@ -214,6 +280,32 @@ bool SpherePreview::createTargets() {
     if (vkCreateSampler(dev, &si, nullptr, &m_sampler) != VK_SUCCESS) return false;
 
     m_imguiTextureId = ImGui_ImplVulkan_AddTexture(m_sampler, m_colorView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    // Layout de partida: a interface pode mostrar a imagem no mesmo quadro do
+    // clique, antes do primeiro render() (a camada de validacao acusava cor em
+    // UNDEFINED), e a profundidade nunca saia de UNDEFINED.
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        VkImageMemoryBarrier2 b[2]{};
+        for (VkImageMemoryBarrier2& x : b) {
+            x.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            x.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            x.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            x.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            x.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        }
+        b[0].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        b[0].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        b[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b[0].image = m_colorImage;
+        b[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        b[1].dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+        b[1].dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        b[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        b[1].image = m_depthImage;
+        b[1].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        m_ctx->cmdImageBarriers(cmd, {b[0], b[1]});
+    });
+    m_firstFrame = false;
     return true;
 }
 
@@ -224,18 +316,13 @@ bool SpherePreview::createInstanceBuffer() {
     // reescrever texIndex/pbrIndex no vetor CPU e memcpy de novo (~100 KB,
     // irrelevante). Nada de staging: e' um popup de debug, nao um asset do
     // jogo.
-    const VkDeviceSize vSize = m_vertices.size() * sizeof(TerrainVertex);
-    if (!m_ctx->createBuffer(vSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                             VMA_MEMORY_USAGE_CPU_TO_GPU, m_vertexBuffer, m_vertexAlloc)) return false;
-    vmaMapMemory(m_ctx->allocator(), m_vertexAlloc, &m_vertexMapped);
+    if (!createGeometryBuffers(m_vertices.size(), m_indices.size())) return false;
     uploadVertices();
 
-    // Buffer do indice DIMENSIONADO PRA ESFERA (6144), a maior das duas
+    // Buffers DIMENSIONADOS PRA ESFERA (6144 indices), a maior das duas
     // formas - trocar pro cubo (uploadIndices(), menos indices) so' preenche
-    // uma fracao dele, nunca precisa realocar.
-    const VkDeviceSize iCapacity = m_indices.size() * sizeof(uint32_t);
-    if (!m_ctx->createBuffer(iCapacity, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                             VMA_MEMORY_USAGE_GPU_ONLY, m_indexBuffer, m_indexAlloc)) return false;
+    // uma fracao deles; so' a malha propria maior realoca
+    // (applyPendingCustomMesh).
     uploadIndices();
 
     // Instancia: 1 SSBO, mapeado - a rotacao e' reescrita todo frame direto
@@ -443,6 +530,8 @@ void SpherePreview::setMaterial(uint32_t texIndex, uint32_t pbrIndex, float disp
 
 void SpherePreview::render(VkCommandBuffer cmd, float dt, const Vec3& cameraPos) {
     if (!m_initialized || !m_active) return;
+    applyPendingCustomMesh();
+    if (!m_initialized) return;
 
     // Gira sozinha, sem sistema de keyframe/animacao nenhum - so' reescreve
     // a matriz no buffer mapeado deste frame.
@@ -457,6 +546,8 @@ void SpherePreview::render(VkCommandBuffer cmd, float dt, const Vec3& cameraPos)
     const Vec3 spherePos = cameraPos + Vec3(0.0f, 0.0f, 0.001f);
     GpuInstance inst{};
     inst.model = glm::translate(Mat4(1.0f), spherePos) * glm::rotate(Mat4(1.0f), m_rotation, Vec3(0, 1, 0));
+    // Malha propria no tamanho do mundo: encolhe para o lado do cubo de sempre.
+    if (m_custom) inst.model = inst.model * glm::scale(Mat4(1.0f), Vec3(2.0f * kRadius / m_customEdge));
     inst.uvTranslateRot = Vec4(0.0f);
     // ESCALA DO MUNDO: UV nativa da forma (cubo = 1 textura por face de
     // 2*kRadius u) reescalada pra' densidade que a malha REAL usa com essa
@@ -466,7 +557,8 @@ void SpherePreview::render(VkCommandBuffer cmd, float dt, const Vec3& cameraPos)
     const float baseUvPerUnit = (m_shape == Shape::Cube)
         ? 1.0f / (2.0f * kRadius)
         : 0.5f * (1.0f / (2.0f * glm::pi<float>() * kRadius) + 1.0f / (glm::pi<float>() * kRadius));
-    const float uvScale = (m_worldScale && m_worldUvPerUnit > 0.0f) ? m_worldUvPerUnit / baseUvPerUnit : 1.0f;
+    const float uvScale =
+        (!m_custom && m_worldScale && m_worldUvPerUnit > 0.0f) ? m_worldUvPerUnit / baseUvPerUnit : 1.0f;
     const float uvPerUnit = baseUvPerUnit * uvScale;
     inst.uvScaleDisp = Vec4(uvScale, uvScale, 0.0f, 0.0f);
     std::memcpy(m_instMapped, &inst, sizeof(inst));
@@ -520,7 +612,7 @@ void SpherePreview::render(VkCommandBuffer cmd, float dt, const Vec3& cameraPos)
     VkRect2D scissor{{0, 0}, {kSize, kSize}};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    VkPipeline pipe = (m_tessPipeline != VK_NULL_HANDLE) ? m_tessPipeline : m_pipeline;
+    VkPipeline pipe = (m_tessPipeline != VK_NULL_HANDLE && !m_custom) ? m_tessPipeline : m_pipeline;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
     VkDescriptorSet sets[3] = {m_bindless->set(), m_frameUboSet, m_instSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 3, sets, 0, nullptr);
@@ -539,7 +631,7 @@ void SpherePreview::render(VkCommandBuffer cmd, float dt, const Vec3& cameraPos)
     // grande - resolvido com VK_CULL_MODE_NONE no createPipeline().
     // .z = UV por unidade de mundo EFETIVA (calculada acima, ja' com a escala
     // do mundo) - mesmo papel da mediana da malha no chao real (dispMipFloor()).
-    push.uvScale = Vec4(1.0f, 1.0f, uvPerUnit, m_dispScale);
+    push.uvScale = Vec4(1.0f, 1.0f, uvPerUnit, m_custom ? 0.0f : m_dispScale);
     vkCmdPushConstants(cmd, m_pipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
                        VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,

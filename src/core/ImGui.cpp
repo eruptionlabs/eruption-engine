@@ -60,6 +60,9 @@
 #include "utils/ImageUtils.hpp"
 #include "utils/TextureCache.hpp"
 #include <vk_mem_alloc.h>
+#if ERUPTION_EDITOR
+#include "editor/Translate.hpp"
+#endif
 
 namespace eruption {
 
@@ -1725,6 +1728,15 @@ void Engine::renderImGui() {
                     // tesselada renderizada num alvo OFFSCREEN PROPRIO - nao
                     // mexe no mapa, nao recarrega nada, nao troca textura de
                     // chao nenhum (a 1a versao fazia isso e estava errada).
+                    // Texturas embutidas nos arquivos do mapa, por arquivo e
+                    // com o chao primeiro (EmbeddedTextures.cpp); a lista crua
+                    // do cache vem depois.
+#if ERUPTION_EDITOR
+                    drawEmbeddedTextures(&tr, {}, false);
+#else
+                    drawEmbeddedTextures(nullptr, {}, false);
+#endif
+                    ImGui::Separator();
                     ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), "Clique numa textura: abre um popup com ela numa esfera de teste tesselada.");
                     const auto& tCache = m_modelRenderer.getTextureCache();
                     if (ImGui::BeginChild("TextureList", ImVec2(0, 150), true)) {
@@ -1745,6 +1757,7 @@ void Engine::renderImGui() {
                                     m_spherePreview.setMaterial(slot, pbr.mrahw.index, 1.0f, pbr.normal.index);
                                 }
                                 m_spherePreview.setWorldUvPerUnit(m_modelRenderer.uvPerUnitForSlot(slot));
+                                m_spherePreview.setShape(m_spherePreview.shape()); // sai do cubo do material embutido
                                 m_spherePreview.setMaterialLabel(path);
                                 m_spherePreview.setActive(true);
                             }
@@ -1838,7 +1851,7 @@ void Engine::renderImGui() {
         // POPUP DE PREVIEW (debug/SpherePreview.hpp): fica aberto sozinho,
         // independente do painel F1 - clicar numa textura la' liga isto e
         // continua mostrando mesmo se o F1 for fechado depois.
-        if (m_spherePreview.active()) {
+        if (m_spherePreview.active() && !(m_embPreview.slot != 0 && m_embPreview.inlineCube)) {
             bool open = true;
             ImGui::SetNextWindowSize(ImVec2(static_cast<float>(m_spherePreview.size()) + 16.0f,
                                             static_cast<float>(m_spherePreview.size()) + 60.0f), ImGuiCond_FirstUseEver);

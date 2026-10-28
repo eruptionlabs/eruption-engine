@@ -672,6 +672,9 @@ void ModelRenderer::clear() {
     m_modelMeshCache.clear();
     m_textureCache.clear();
     m_texUvPerUnit.clear();
+    m_texReliefAmp.clear();
+    m_texReliefSpacing.clear();
+    m_groundTexRole.clear();
     m_pbrByTexSlot.clear();
     m_lastModels.clear();
     m_lastInstances.clear();
@@ -1537,6 +1540,26 @@ static const std::vector<ModelMeshGPU::GroundCell>* cellsFor(const ModelMeshGPU&
 
 static float reliefSizeScale(const ModelMeshGPU& mesh, float amplitude);
 
+// Papel de cada textura de uma malha de chao (previa de material): a cor do
+// vertice e' a que da' a altura do relevo; as camadas do splat so' pintam.
+// Vertice vizinho repete quase sempre as mesmas: so' olha quando muda.
+static void noteGroundTextures(const std::vector<TerrainVertex>& vertices, std::unordered_map<uint32_t, int>& role) {
+    uint32_t lastTex = 0, last[4] = {0, 0, 0, 0};
+    for (const TerrainVertex& v : vertices) {
+        if (v.texIndex != 0 && v.texIndex != lastTex) {
+            lastTex = v.texIndex;
+            role[v.texIndex] = 1;
+        }
+        const uint32_t packs[4] = {v.splatTex01, v.splatTex23, v.splatTex45, v.splatTex67};
+        for (int k = 0; k < 4; ++k) {
+            if (packs[k] == last[k]) continue;
+            last[k] = packs[k];
+            for (uint32_t s : {packs[k] & 0xFFFFu, packs[k] >> 16})
+                if (s != 0) role.emplace(s, 2);
+        }
+    }
+}
+
 // NORMAL DA MALHA ASSADA. O assado so' movia os vertices: a normal ficava a
 // da malha de antes, interpolada, e a luz nao via o relevo (a tesselacao
 // calcula a normal pela altura em model.tese; com ela desligada no PC e' o
@@ -1593,10 +1616,11 @@ static void reliefBakedNormals(std::vector<TerrainVertex>& v, const std::vector<
 void ModelRenderer::computeRelief(ReliefTask& t, ReliefAlphas& alphas) const {
     const std::vector<uint32_t> full(t.uploaded.begin(), t.uploaded.begin() + t.fullCount);
     ReliefParams p;
-    p.spacing = m_reliefBake.spacing;
+    p.spacing = t.spacing0 > 0.0f ? t.spacing0 : m_reliefBake.spacing;
     p.amplitude = t.amplitude;
     p.gain = m_reliefBake.gain;
     p.maxTriangles = m_reliefBake.maxTriangles;
+    p.store = t.store;
     auto source = [this, &alphas](uint32_t slot, bool pixels, std::vector<uint8_t>& alpha, int& w, int& h,
                                   uint64_t& id) {
         auto it = alphas.find(slot);
@@ -1621,7 +1645,7 @@ void ModelRenderer::computeRelief(ReliefTask& t, ReliefAlphas& alphas) const {
     // anda o que o assado mandou (posicao interpolada ANTES de deslocar).
     // Malha assada na tela (celular): a grade do desnivel, antes de os
     // vertices de antes irem embora (ver ReliefFloorGrid).
-    const bool floorGrid = m_reliefBake.mode >= 2;
+    const bool floorGrid = m_reliefBake.mode >= 2 && t.store;
     std::vector<TerrainVertex> before;
     if (floorGrid) before = t.vertices;
     std::vector<TerrainVertex>& v = t.outVertices;
@@ -1674,6 +1698,34 @@ void ModelRenderer::computeRelief(ReliefTask& t, ReliefAlphas& alphas) const {
     t.fromCache = r.fromCache;
     t.ms = r.ms;
     t.ok = true;
+}
+
+// PREVIA DE MATERIAL (cubo do painel de texturas embutidas): o mesmo assado
+// de computeRelief, na thread principal (cubo de ~10 mil triangulos), sem
+// cache em disco.
+bool ModelRenderer::bakeReliefPreview(std::vector<TerrainVertex>& vertices, std::vector<uint32_t>& indices,
+                                      uint32_t slot, const std::string& texture, float amplitude,
+                                      float spacing) const {
+    if (!m_reliefSource || slot == 0 || amplitude <= 0.0f || vertices.empty() || indices.size() < 3) return false;
+    auto a = std::make_unique<ReliefAlpha>();
+    a->name = texture;
+    std::vector<uint8_t> none;
+    int w = 0, h = 0;
+    if (!m_reliefSource(a->name, false, none, w, h, a->id)) return false;
+    ReliefAlphas alphas;
+    alphas.emplace(slot, std::move(a));
+    ReliefTask t;
+    t.vertices = vertices;
+    t.uploaded = indices;
+    t.fullCount = static_cast<uint32_t>(indices.size());
+    t.amplitude = amplitude;
+    t.spacing0 = spacing;
+    t.store = false;
+    computeRelief(t, alphas);
+    if (!t.ok) return false;
+    vertices = std::move(t.outVertices);
+    indices.assign(t.outIndices.begin() + t.outFirst, t.outIndices.begin() + t.outFirst + t.outCount);
+    return true;
 }
 
 // Assa as malhas do asset em paralelo e sobe numa submissao so'.
@@ -1796,6 +1848,10 @@ void ModelRenderer::uploadReliefs(std::vector<ReliefTask>& tasks, const std::str
     float gridMax = 0.0f;
     for (ReliefTask& t : tasks) {
         if (!t.ok || t.mesh >= m_meshes.size()) continue;
+        for (uint32_t s : t.slots) {
+            float& sp = m_texReliefSpacing[s];
+            sp = std::max(sp, t.spacing);
+        }
         ModelMeshGPU& mesh = m_meshes[t.mesh];
         const VkDeviceSize vs = t.outVertices.size() * sizeof(TerrainVertex);
         const VkDeviceSize is = t.outIndices.size() * sizeof(uint32_t);
@@ -2541,6 +2597,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             }
             dbgVertsAfter += vertices.size();
             for (const auto& [slot, d] : pn->texUvPerUnit) m_texUvPerUnit.emplace(slot, d);
+            if (isGroundMesh) noteGroundTextures(vertices, m_groundTexRole);
             std::vector<ModelMeshGPU::GroundCell> groundCells = std::move(pn->groundCells);
 
             ModelMeshGPU mesh;
@@ -2697,6 +2754,15 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                     t.fullCount = static_cast<uint32_t>(useIndices->size());
                     t.amplitude = m_reliefBake.amplitude * mesh.dispScale * reliefSizeScale(mesh, m_reliefBake.amplitude);
                     t.outCells = mesh.groundCells;
+                    for (const auto& v : vertices)
+                        if (v.pbrIndex != 0 && v.texIndex != 0 && (t.slots.empty() || t.slots.back() != v.texIndex))
+                            t.slots.push_back(v.texIndex);
+                    std::sort(t.slots.begin(), t.slots.end());
+                    t.slots.erase(std::unique(t.slots.begin(), t.slots.end()), t.slots.end());
+                    for (uint32_t s : t.slots) {
+                        float& amp = m_texReliefAmp[s];
+                        amp = std::max(amp, t.amplitude);
+                    }
                     reliefTasks.push_back(std::move(t));
                 }
             }

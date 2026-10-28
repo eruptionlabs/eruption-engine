@@ -298,9 +298,16 @@ void Editor::closeAssetPreview() {
                           &a.pbrChannels[2], &a.pbrChannels[3]})
         releaseTexture(*t);
     if (a.materialReady) m_engine->m_spherePreview.setActive(false);
+    m_engine->closeEmbeddedPreview();
     if (a.soundId) m_engine->audio().stop(a.soundId);
     releaseTexture(a.rasterTex);
     a = AssetPreviewState{};
+}
+
+void Editor::openMapTextures() {
+    closeAssetPreview();
+    m_selection = {SelectionKind::Asset, 0};
+    m_asset.kind = AssetPreviewState::Kind::MapTextures;
 }
 
 void Editor::selectAsset(const fs::path& path) {
@@ -425,7 +432,7 @@ void Editor::drawMaterialPreview() {
     struct Tile { const char* label; const GuiTexture* tex; };
     const Tile tiles[] = {
         {"Albedo", &a.albedo}, {"Normal", &a.normal}, {"Metal", &a.pbrChannels[0]},
-        {"Roughness", &a.pbrChannels[1]}, {"Height", &a.pbrChannels[2]}, {"Wetness", &a.pbrChannels[3]},
+        {"Roughness", &a.pbrChannels[1]}, {"AO", &a.pbrChannels[2]}, {"Height", &a.pbrChannels[3]},
     };
     const float tile = std::max(48.0f, (ImGui::GetContentRegionAvail().x - 16.0f) / 3.0f);
     int col = 0;
@@ -644,6 +651,12 @@ void Editor::drawModelPreview() {
 
 void Editor::drawAssetPreview() {
     AssetPreviewState& a = m_asset;
+    if (a.kind == AssetPreviewState::Kind::MapTextures) {
+        ImGui::TextColored(kAccent, "%s", tr("Map textures"));
+        ImGui::Separator();
+        m_engine->drawEmbeddedTextures(&tr, {}, true);
+        return;
+    }
     std::error_code ec;
     ImGui::TextColored(kAccent, "%s", a.path.filename().string().c_str());
     const fs::path shown = a.path.is_absolute() ? a.path.lexically_relative(m_projectRoot) : a.path;
@@ -660,6 +673,7 @@ void Editor::drawAssetPreview() {
         case AssetPreviewState::Kind::Model:
             drawModel3D();
             drawModelPreview();
+            m_engine->drawEmbeddedTextures(&tr, a.path.string(), true); // so' se o mapa usa este arquivo
             break;
         case AssetPreviewState::Kind::Text:
             ImGui::BeginChild("##text", ImVec2(0, 0), ImGuiChildFlags_Border, ImGuiWindowFlags_HorizontalScrollbar);
@@ -682,6 +696,7 @@ void Editor::drawAssetPreview() {
             break;
         }
         case AssetPreviewState::Kind::None:
+        case AssetPreviewState::Kind::MapTextures:
             ImGui::TextDisabled("%s", tr("No preview for this kind of file."));
             break;
     }

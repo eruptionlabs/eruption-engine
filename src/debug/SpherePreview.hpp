@@ -80,6 +80,18 @@ public:
     void setShape(Shape s);
     Shape shape() const { return m_shape; }
 
+    // MALHA PROPRIA: o cubo do painel de texturas embutidas, no tamanho do
+    // mundo (uma repeticao da textura por face), com ou sem o relevo assado
+    // como o mundo assa. `edge` = lado em unidades do mundo: o popup encolhe
+    // para caber e desenha sem tesselacao (o relevo, se houver, ja' esta' nos
+    // vertices, como no chao assado). Entra no proximo render(); setShape volta
+    // para a forma de sempre.
+    void setCustomMesh(std::vector<TerrainVertex> vertices, std::vector<uint32_t> indices, float edge);
+    bool customMesh() const { return m_custom || m_pendingCustom; }
+    // Cubo de lado `edge` com `grid` x `grid` quadrados por face e UV 0..1 em
+    // cada face; borda da face marcada como costura (matId 0x8000).
+    static void cubeMesh(float edge, int grid, std::vector<TerrainVertex>& vertices, std::vector<uint32_t>& indices);
+
 private:
     static constexpr uint32_t kSize = 384;
     static constexpr int kStacks = 32;
@@ -97,6 +109,9 @@ private:
     void applyCurrentMaterialToVertices();
     bool createTargets();
     bool createInstanceBuffer();
+    bool createGeometryBuffers(size_t vertexCap, size_t indexCap);
+    void destroyGeometryBuffers();
+    void applyPendingCustomMesh();
     bool createPipeline();
 
     VulkanContext* m_ctx = nullptr;
@@ -121,6 +136,11 @@ private:
     void* m_vertexMapped = nullptr;
     VkBuffer m_indexBuffer = VK_NULL_HANDLE;
     VmaAllocation m_indexAlloc = VK_NULL_HANDLE;
+    size_t m_vertexCap = 0, m_indexCap = 0; // em elementos
+    bool m_custom = false, m_pendingCustom = false;
+    float m_customEdge = 1.0f, m_pendingEdge = 1.0f;
+    std::vector<TerrainVertex> m_pendingVertices;
+    std::vector<uint32_t> m_pendingIndices;
 
     // Layout do EngInstance de model_vert.glsl (prevModel só é lido com velocidade).
     struct GpuInstance { Mat4 model; Vec4 uvTranslateRot; Vec4 uvScaleDisp; Mat4 prevModel; };
