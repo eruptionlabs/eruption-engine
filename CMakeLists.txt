@@ -14,6 +14,18 @@ option(ERUPTION_DEBUG "Debug build with validation layers" ON)
 # Exportação do jogo (File > Export Game): sem o editor e com o binário enxuto.
 option(ERUPTION_EDITOR "Build the editor into the executable" ON)
 option(ERUPTION_LEAN "Size-optimized game build: LTO, dead code removal, no symbols" OFF)
+# ccache e' pre-requisito: o motor e' recompilado por varias pastas de build
+# (PC, Android, copias de teste) e o mesmo arquivo nao precisa compilar duas
+# vezes. -DERUPTION_CCACHE=OFF compila sem ele.
+option(ERUPTION_CCACHE "Compile through ccache (required unless OFF)" ON)
+if(ERUPTION_CCACHE AND NOT EMSCRIPTEN)
+    find_program(ERUPTION_CCACHE_PROGRAM ccache)
+    if(NOT ERUPTION_CCACHE_PROGRAM)
+        message(FATAL_ERROR "ccache nao encontrado. Instale (sudo apt install ccache) ou configure com -DERUPTION_CCACHE=OFF.")
+    endif()
+    set(CMAKE_C_COMPILER_LAUNCHER ${ERUPTION_CCACHE_PROGRAM})
+    set(CMAKE_CXX_COMPILER_LAUNCHER ${ERUPTION_CCACHE_PROGRAM})
+endif()
 
 # Demo map (release asset, downloaded on first configure if missing)
 include(${CMAKE_SOURCE_DIR}/cmake/DemoMap.cmake)
