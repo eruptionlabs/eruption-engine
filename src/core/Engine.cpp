@@ -2496,17 +2496,24 @@ void Engine::applyGraphicsPreset() {
     // (seria o relevo duas vezes). "gbuffer" (PC): o G-buffer e a sombra
     // desenham a malha assada onde ela existe e a tesselacao fica so' para as
     // malhas sem assado - o relevo da tesselacao mudava com a camera (ver
-    // ModelRenderer::ReliefBakeConfig). "off" ou ausente: nada. Mesma
-    // amplitude e contraste da tesselacao; ERUPTION_TEST_TESS_AMP vale aqui.
+    // ModelRenderer::ReliefBakeConfig). "off" ou ausente: nada.
+    // UMA REGRA SO' PARA TUDO: "relief_bake_amplitude" (u) e
+    // "relief_bake_height_gain" valem igual para chao e modelo, sem teto pelo
+    // tamanho da malha nem fator de categoria. Antes o chao levava 12 u x
+    // ganho 1,5 = 18 u por unidade de altura, 106x mais ingreme que a
+    // inclinacao do proprio normal map do PBR (08_0002, mapa base): ondinha
+    // demais. 1,5 u com ganho 1 (a altura do PBR como sai, em volta da media)
+    // foi a escolha do autor no visualizador de texturas.
+    // ERUPTION_TEST_TESS_AMP (teste) troca a amplitude.
     {
         ModelRenderer::ReliefBakeConfig rb;
         const std::string mode = p.value("relief_bake", std::string("off"));
         rb.mode = mode == "shadow" ? 1 : mode == "mesh" ? 2 : mode == "gbuffer" ? 3 : 0;
         rb.spacing = std::clamp(p.value("relief_bake_spacing", 2.0f), 0.25f, 64.0f);
         rb.maxTriangles = static_cast<uint32_t>(std::clamp(p.value("relief_bake_max_tris", 600000), 1024, 4194304));
-        rb.amplitude = m_tessAmplitude;
+        rb.amplitude = std::clamp(p.value("relief_bake_amplitude", 1.5f), 0.0f, 16.0f);
         if (const char* e = std::getenv("ERUPTION_TEST_TESS_AMP")) rb.amplitude = std::max(0.0f, std::stof(e));
-        rb.gain = std::max(m_tessHeightGain, 0.1f);
+        rb.gain = std::clamp(p.value("relief_bake_height_gain", 1.0f), 0.1f, 8.0f);
         if (rb.mode == 2) {
             m_tessEnabled = false;
             m_modelRenderer.setSeamWeld(false);
