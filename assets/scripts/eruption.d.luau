@@ -186,6 +186,9 @@ declare world: {
     -- { radius, margin } (world units) keeps every cell and every smoothed
     -- segment radius + margin away from solids AND from cells that do not
     -- walk (walls, blocked slopes); a start that touches a wall may leave it.
+    -- The searches of one frame share a time budget: when it runs out the
+    -- path ends at the point found closest to `to` (ask again later), and
+    -- once it is spent the call returns nil.
     -- avoid_liquid (true, "lava" or "water") keeps the path out of cells with
     -- that liquid over the floor; the body can still stand there. The path
     -- also runs on solid objects: a bridge is crossed on its deck when the

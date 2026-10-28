@@ -709,10 +709,14 @@ public:
     // terreno ou o topo de um sólido logo abaixo de quem chega nela (ponte
     // sobre ravina: por cima entrando pela ponta, por baixo pela ravina).
     // `avoidLiquid` (kAvoidWater | kAvoidLava): célula com esse líquido acima
-    // do piso não entra no caminho (o corpo ainda anda nela).
+    // do piso não entra no caminho (o corpo ainda anda nela). As buscas de um
+    // quadro dividem kPathFrameBudgetMs (Pathfinding.cpp): esgotado o tempo,
+    // devolve o trecho até o ponto mais perto do alvo; sem tempo, falso.
     enum AvoidLiquid : uint8_t { kAvoidWater = 1, kAvoidLava = 2 };
     bool findPath(const Vec3& from, const Vec3& to, float radius, std::vector<Vec3>& out,
                   float wallClearance = 0.0f, uint8_t avoidLiquid = 0) const;
+    mutable uint32_t m_pathBudgetFrame = ~0u;
+    mutable double m_pathBudgetLeftMs = 0.0;
     // Um personagem (fora `ignore`) ocupa (x, z)?
     bool characterAt(const Vec3& p, float radius, int ignore = -1) const;
     // Balões de fala (personagens e jogador) sobre a área do jogo.

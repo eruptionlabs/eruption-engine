@@ -5,6 +5,7 @@
 #include "core/PathClearance.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -27,6 +28,13 @@ struct PathSolid {
 constexpr int kBucket = 16;         // celulas por lado do balde de solidos
 constexpr int kMinMargin = 64;      // folga minima da janela em volta de origem e alvo
 constexpr int64_t kMaxWindow = 1600 * 1600;
+// Tempo de busca por quadro, somando todas as chamadas: um grupo rapido
+// refaz o caminho de cada aliado quase todo quadro (o destino anda mais que
+// o limiar do jogo) e uma busca entre mapas levava 300-940 ms, quadro
+// travado no meio da caminhada. Esgotado o tempo, a busca devolve o trecho
+// ate' o no' mais perto do alvo (o jogo pede de novo depois); com o tempo do
+// quadro ja' gasto, nao busca.
+constexpr double kPathFrameBudgetMs = 12.0;
 // Subida aceita de uma celula para a vizinha, em passos da grade: a rampa de
 // entrada de uma caverna medida em 26/10 sobe 14 u em 10 u.
 constexpr float kClimb = 2.0f;
@@ -56,6 +64,20 @@ constexpr float kStep = 4.0f;
 bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vector<Vec3>& out,
                       float wallClearance, uint8_t avoidLiquid) const {
     out.clear();
+    if (m_pathBudgetFrame != m_timer.frameCount()) {
+        m_pathBudgetFrame = m_timer.frameCount();
+        m_pathBudgetLeftMs = kPathFrameBudgetMs;
+    }
+    if (m_pathBudgetLeftMs <= 0.0) return false;
+    const auto budgetStart = std::chrono::steady_clock::now();
+    auto spentMs = [&] {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - budgetStart).count();
+    };
+    struct Charge {
+        double& left;
+        std::chrono::steady_clock::time_point t0;
+        ~Charge() { left -= std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); }
+    } charge{m_pathBudgetLeftMs, budgetStart};
     // Mapas empilhados: a busca fica no andar de quem sai (a altura da origem).
     const LoadedMap* map = mapAt(from.x, from.z, from.y);
     // As celulas da busca sao as da grade de caminhada do mapa (passo e
@@ -166,6 +188,12 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
     std::vector<int8_t> walk(nodes, 0); // 0 nao sabe, 1 anda, -1 nao
     std::vector<float> floorY(nodes, from.y);
     std::vector<uint32_t> cand;
+    // Chao da celula sem solido e com um mapa so' por baixo: nao depende da
+    // altura de quem chega, entao fica guardado (NaN = nao lido, inf = mapas
+    // empilhados, pergunta de novo). Sem isso cada vizinho visitado, e cada
+    // amostra da folga de parede, refazia mapAt + altura da grade: 36 -> 13 us
+    // por no' expandido numa rota entre 3 mapas (perf: 45% do quadro era isso).
+    std::vector<float> flatY(cells, std::numeric_limits<float>::quiet_NaN());
     auto cellOf = [](size_t node) { return node / kLayers; };
     auto walkable = [&](int x, int z, float fromY) -> int64_t {
         if (!inWindow(x, z)) return -1;
@@ -181,7 +209,18 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
         // Chao de antes, sem o relevo assado: o A* so' compara degrau e queda
         // (passos de `step`, bem acima do desnivel do assado), e o desnivel
         // por no' dobrava o pico de 40 ms de cada busca (mobile_high, medido).
-        const float terrain = sampleTerrainHeight(p.x, p.z, y, false);
+        float terrain;
+        if (cand.empty()) {
+            float& f = flatY[c];
+            if (f != f) {
+                const LoadedMap* maps[2];
+                f = mapsAt(p.x, p.z, maps, 2) <= 1 ? sampleTerrainHeight(p.x, p.z, y, false)
+                                                   : std::numeric_limits<float>::infinity();
+            }
+            terrain = std::isinf(f) ? sampleTerrainHeight(p.x, p.z, y, false) : f;
+        } else {
+            terrain = sampleTerrainHeight(p.x, p.z, y, false);
+        }
         p.y = cand.empty() ? terrain : floorAmong(cand, terrain, p.x, p.z, y, inst, false);
         if (fromY - p.y > kDrop * step) return -1;
         size_t slot = nodes, nearest = c * kLayers;
@@ -278,7 +317,10 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
     g[start] = 0.0f;
     open.push_back({h(sx, sz), int32_t(start)});
     bool reached = false;
+    size_t best = start, expanded = 0;
+    float bestH = h(sx, sz);
     while (!open.empty()) {
+        if ((++expanded & 255u) == 0 && spentMs() > m_pathBudgetLeftMs) break; // tempo do quadro
         std::pop_heap(open.begin(), open.end(), heapLess);
         const auto [f, ni] = open.back();
         open.pop_back();
@@ -291,6 +333,10 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
         const float gn = g[n];
         const float yn = floorY[n];
         if (f - h(nx, nz) > gn + 1e-3f) continue; // entrada velha
+        if (h(nx, nz) < bestH) {
+            bestH = h(nx, nz);
+            best = n;
+        }
         for (int dz = -1; dz <= 1; ++dz)
             for (int dx = -1; dx <= 1; ++dx) {
                 if (!dx && !dz) continue;
@@ -317,7 +363,12 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
                 std::push_heap(open.begin(), open.end(), heapLess);
             }
     }
-    if (!reached) return false;
+    if (!reached) {
+        if (open.empty() || best == start) return false; // sem caminho, ou nada andado
+        target = int64_t(best); // tempo esgotado: o trecho ate' o mais perto do alvo
+        tx = x0 + int(cellOf(best) % size_t(w));
+        tz = z0 + int(cellOf(best) / size_t(w));
+    }
     auto at = [&](size_t i) {
         const size_t c = cellOf(i);
         return Vec3(org.x + (x0 + int(c % size_t(w))) * step, floorY[i], org.y + (z0 + int(c / size_t(w))) * step);
