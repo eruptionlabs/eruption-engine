@@ -661,6 +661,19 @@ bool Engine::init(int width, int height, const std::string& title) {
     }
 
     m_skyboxConfig.load("data/skybox_config.json");
+    // data/skybox_config.json do PROJETO (parcial): mesclado por cima do do
+    // motor, como o graphics.json - o jogo ajusta sol, halo e estrelas sem
+    // copiar o arquivo. O jogo exportado leva o arquivo ja' mesclado.
+    if (const std::string sky = project::config("data/skybox_config.json"); sky != "data/skybox_config.json") {
+        std::ifstream f(sky);
+        json patch = json::parse(f, nullptr, false);
+        if (patch.is_object()) {
+            mergeGraphicsPatch(m_skyboxConfig.root(), std::move(patch));
+            ERUPTION_LOG_WARN("[SKY] %s mesclado sobre data/skybox_config.json", sky.c_str());
+        } else {
+            ERUPTION_LOG_WARN("[SKY] %s: JSON invalido, ignorado", sky.c_str());
+        }
+    }
     SkyConfig skyConfig;
     skyConfig.loadFromJson(m_skyboxConfig.root());
     {
