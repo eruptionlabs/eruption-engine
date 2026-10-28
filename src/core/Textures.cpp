@@ -20,6 +20,8 @@
 #include "utils/PbrTextureLoader.hpp"
 #include "utils/PbrMaterialProfile.hpp"
 #include "formats/MapLoader.hpp"
+#include "ml/NeuralPbr.hpp"
+#include "renderer/ReliefSource.hpp"
 #include <stb_image.h>
 #include <vk_mem_alloc.h>
 #include <algorithm>
@@ -146,6 +148,75 @@ bool Engine::findEmbeddedAlbedoPixels(const std::string& name, std::vector<uint8
         }
     }
     return false;
+}
+
+// RELEVO ASSADO DE TEXTURA SEM MRAH-W PRONTO. O modelo de cena sem .etexpack
+// sintetiza o MRAH-W na subida da textura (synthesizePbrForAlbedoKey) e nao o
+// guarda na CPU: o assado nao achava a altura e a malha ficava sem relevo
+// assado (rocha de 23 x 39 x 20 u: "0 de 1 malhas assadas"). Aqui a mesma
+// sintese sobre os mesmos pixels que findEmbeddedAlbedoPixels entrega. Sem
+// `pixels` (thread principal, na carga do modelo): copia o albedo e da' a
+// identidade (albedo + rede); com `pixels` (thread do assado): sintetiza da
+// copia. A copia vive ate' a troca de mapa.
+bool Engine::reliefAlphaFromAlbedo(const std::string& name, bool pixels, std::vector<uint8_t>& alpha, int& w, int& h,
+                                   uint64_t& id) {
+    std::string key = name;
+    std::replace(key.begin(), key.end(), '/', '\\');
+    if (!key.empty() && key[0] == '\\') key = key.substr(1);
+    if (!pixels) {
+        if (!m_currentMap) return false;
+        for (const auto& model : m_currentMap->models)
+            for (const auto& et : model.embeddedTextures) {
+                if (et.name != key) continue;
+                auto a = std::make_shared<ReliefAlbedo>();
+                if (!et.pixels.empty()) {
+                    a->bytes = et.pixels;
+                    a->w = et.width;
+                    a->h = et.height;
+                    a->channels = et.channels > 0 ? et.channels : 4;
+                } else if (!et.encodedData.empty()) {
+                    a->bytes.assign(et.encodedData.data(), et.encodedData.data() + et.encodedData.size());
+                } else {
+                    return false;
+                }
+                id = reliefContentHash(a->bytes.data(), a->bytes.size()) ^ (uint64_t(neuralPbrKey()) << 32) ^
+                     (uint64_t(a->w) << 16) ^ uint64_t(a->channels);
+                std::lock_guard<std::mutex> lock(m_reliefAlbedoMutex);
+                m_reliefAlbedo[key] = std::move(a);
+                return true;
+            }
+        return false;
+    }
+    std::shared_ptr<const ReliefAlbedo> a;
+    {
+        std::lock_guard<std::mutex> lock(m_reliefAlbedoMutex);
+        auto it = m_reliefAlbedo.find(key);
+        if (it != m_reliefAlbedo.end()) a = it->second;
+    }
+    if (!a) return false;
+    std::vector<uint8_t> px;
+    int pw = a->w, ph = a->h, ch = a->channels;
+    if (ch > 0) {
+        px = a->bytes;
+    } else {
+        ImageData img = ImageUtils::loadFromMemoryRaw(a->bytes.data(), a->bytes.size());
+        if (!img.isValid()) return false;
+        px = std::move(img.pixels);
+        pw = img.width;
+        ph = img.height;
+        ch = img.channels > 0 ? img.channels : 4;
+    }
+    PbrTextureData mrahw, normal;
+    if (!synthesizePbrFromPixels(px, pw, ph, ch, mrahw, normal)) return false;
+    w = mrahw.width;
+    h = mrahw.height;
+    if (mrahw.etex.valid()) return reliefDecodeAlpha(mrahw.etex, alpha);
+    const size_t n = size_t(w) * size_t(h);
+    const int mc = mrahw.channels > 0 ? mrahw.channels : 4;
+    if (mc < 4 || mrahw.pixels.size() < n * size_t(mc)) return false;
+    alpha.resize(n);
+    for (size_t i = 0; i < n; ++i) alpha[i] = mrahw.pixels[i * size_t(mc) + 3];
+    return true;
 }
 
 uint32_t Engine::resolveModelTexture(const std::string& path) {

@@ -487,19 +487,21 @@ bool Engine::init(int width, int height, const std::string& title) {
     // Relevo assado: alfa do MRAH-W que o bake das texturas embutidas fez para
     // a textura de cor (o mesmo mapa que a tesselacao le'). Chamado na carga
     // do modelo, tambem das threads de trabalho (so' le' m_embeddedBaked).
+    // Sem esse MRAH-W (modelo de cena sem .etexpack), a mesma sintese da
+    // subida da textura (reliefAlphaFromAlbedo).
     m_modelRenderer.setReliefSource([this](const std::string& texture, bool pixels, std::vector<uint8_t>& alpha, int& w,
                                            int& h, uint64_t& id) {
-        if (texture.empty() || m_embeddedBaked.empty()) return false;
+        if (texture.empty()) return false;
         std::string name = texture;
         auto it = m_embeddedBaked.find(name);
         if (it == m_embeddedBaked.end()) {
             std::replace(name.begin(), name.end(), '\\', '/');
             it = m_embeddedBaked.find(name);
             if (it == m_embeddedBaked.end() && !name.empty() && name[0] == '/') it = m_embeddedBaked.find(name.substr(1));
-            if (it == m_embeddedBaked.end()) return false;
         }
+        if (it == m_embeddedBaked.end() || !it->second.mrahw.valid())
+            return reliefAlphaFromAlbedo(texture, pixels, alpha, w, h, id);
         const EtexData& e = it->second.mrahw;
-        if (!e.valid()) return false;
         if (!pixels) {
             id = reliefContentHash(e.payload.data(), e.payload.size());
             return true;

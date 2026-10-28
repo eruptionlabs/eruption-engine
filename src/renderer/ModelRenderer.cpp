@@ -1537,6 +1537,58 @@ static const std::vector<ModelMeshGPU::GroundCell>* cellsFor(const ModelMeshGPU&
 
 static float reliefSizeScale(const ModelMeshGPU& mesh, float amplitude);
 
+// NORMAL DA MALHA ASSADA. O assado so' movia os vertices: a normal ficava a
+// da malha de antes, interpolada, e a luz nao via o relevo (a tesselacao
+// calcula a normal pela altura em model.tese; com ela desligada no PC e' o
+// assado que tem de levar). Aqui a normal lisa de antes gira pelo que o
+// relevo girou a face: soma, por posicao (a costura de UV divide vertices),
+// as normais de face da malha deslocada e da partida sem deslocar, e soma a
+// diferenca das duas a normal lisa. A aresta dura da malha de origem continua
+// dura. Peso 0,3 da diferenca: a tesselacao misturava a normal do relevo pela
+// rampa da distancia (mix(nrm, nRel, amp)); de 70 a 110 u, contra a rodada 5,
+// SSIM 0,676 (0,3), 0,666 (0,6), 0,651 (1,0), e com 1,0 o chao longe escurece
+// no rasante.
+constexpr float kReliefNormalWeight = 0.3f;
+static void reliefBakedNormals(std::vector<TerrainVertex>& v, const std::vector<Vec3>& flat,
+                               const std::vector<uint32_t>& idx) {
+    struct Acc {
+        Vec3 moved{0.0f}, flat{0.0f};
+    };
+    std::unordered_map<uint64_t, uint32_t> slotOf;
+    slotOf.reserve(v.size());
+    std::vector<uint32_t> slot(v.size());
+    std::vector<Acc> acc;
+    acc.reserve(v.size());
+    for (size_t i = 0; i < v.size(); ++i) {
+        // Mesma posicao e mesma normal de antes = o mesmo ponto da superficie.
+        const Vec3& q = flat[i];
+        const Vec3& n = v[i].normal;
+        auto qz = [](float x, float s) { return uint64_t(int64_t(std::lround(double(x) * s)) & 0xFFFFF); };
+        const uint64_t key = (qz(q.x, 512.0f) | (qz(q.y, 512.0f) << 20) | (qz(q.z, 512.0f) << 40)) ^
+                             (qz(n.x, 64.0f) * 0x9E3779B97F4A7C15ull) ^ (qz(n.y + 2.0f * n.z, 64.0f) << 7);
+        auto [it, fresh] = slotOf.emplace(key, uint32_t(acc.size()));
+        if (fresh) acc.emplace_back();
+        slot[i] = it->second;
+    }
+    for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+        const uint32_t a = idx[t], b = idx[t + 1], c = idx[t + 2];
+        const Vec3 nm = glm::cross(v[b].position - v[a].position, v[c].position - v[a].position);
+        const Vec3 nf = glm::cross(flat[b] - flat[a], flat[c] - flat[a]);
+        for (uint32_t k : {a, b, c}) {
+            acc[slot[k]].moved += nm;
+            acc[slot[k]].flat += nf;
+        }
+    }
+    for (size_t i = 0; i < v.size(); ++i) {
+        const Acc& s = acc[slot[i]];
+        const float lm = glm::length(s.moved), lf = glm::length(s.flat);
+        if (lm <= 1e-12f || lf <= 1e-12f) continue;
+        Vec3 n = v[i].normal + (s.moved / lm - s.flat / lf) * kReliefNormalWeight;
+        const float ln = glm::length(n);
+        if (ln > 1e-6f && glm::dot(n, v[i].normal) > 0.0f) v[i].normal = n / ln;
+    }
+}
+
 // Uma malha (thread de trabalho): cache ou assado, e a malha final.
 void ModelRenderer::computeRelief(ReliefTask& t, ReliefAlphas& alphas) const {
     const std::vector<uint32_t> full(t.uploaded.begin(), t.uploaded.begin() + t.fullCount);
@@ -1593,8 +1645,12 @@ void ModelRenderer::computeRelief(ReliefTask& t, ReliefAlphas& alphas) const {
         m.color = lerpColor(a.color, b.color);
         v.push_back(m);
     }
-    for (size_t i = 0; i < v.size(); ++i)
+    std::vector<Vec3> flat(v.size());
+    for (size_t i = 0; i < v.size(); ++i) {
+        flat[i] = v[i].position;
         v[i].position += Vec3(rec.dir[3 * i], rec.dir[3 * i + 1], rec.dir[3 * i + 2]) * rec.offset[i];
+    }
+    reliefBakedNormals(v, flat, rec.indices);
     if (floorGrid)
         t.outFloor = std::make_shared<const ReliefFloorGrid>(
             reliefFloorGrid({before.data(), before.size(), sizeof(TerrainVertex)}, full,
@@ -3489,12 +3545,17 @@ static void groundCellBox(const ModelMeshGPU& mesh, const ModelMeshGPU::GroundCe
 // aresta MEDIANA da caixa local (a menor cortava o terraco de 200 x 25 x
 // 200 u, que e' fino so' na altura): terraco e paredao (>= 200 u) levam a
 // amplitude cheia, a pedra de 67 u uns 4 u, caixote quase nada.
+// PISO: o teto nunca desce abaixo de kReliefFloor da amplitude, o fator que o
+// modelo sem categoria tinha no relevo aprovado (rodada 5: rocha de 23 x 39 x
+// 20 u a 0,35 x 12 = 4,2 u). So' o teto deixava ela com 1,4 u, quase lisa:
+// 22-23 dB contra a referencia, 3 angulos a 70 e 110 u.
 static float reliefSizeScale(const ModelMeshGPU& mesh, float amplitude) {
     constexpr float kReliefPerSize = 0.06f;
+    constexpr float kReliefFloor = 0.35f;
     if (mesh.isGround || amplitude <= 1e-4f) return 1.0f;
     const Vec3 e = mesh.aabbMax - mesh.aabbMin;
     const float midExt = std::max(std::min(e.x, e.y), std::min(std::max(e.x, e.y), e.z));
-    return std::clamp(kReliefPerSize * midExt / amplitude, 0.0f, 1.0f);
+    return std::clamp(std::max(kReliefPerSize * midExt / amplitude, kReliefFloor), 0.0f, 1.0f);
 }
 
 void ModelRenderer::render(VkCommandBuffer cmd,

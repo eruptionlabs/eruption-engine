@@ -62,6 +62,22 @@ static void testaMediana() {
     checa(m[3 * 16 + 7] == 20 && m[3 * 16 + 8] == 220, "degrau fica no lugar");
 }
 
+static void testaFiltroGrade() {
+    std::printf("filtro da grade\n");
+    std::vector<uint8_t> c(16 * 16, 77);
+    checa(reliefBoxBlur(c.data(), 16, 16, 3) == c, "mapa constante fica igual");
+    // Listras de 1 texel (mais finas que a janela de 3) viram a media.
+    std::vector<uint8_t> s(16 * 16);
+    for (int i = 0; i < 16 * 16; ++i) s[i] = (i % 2) ? 200 : 0;
+    const auto b = reliefBoxBlur(reliefBoxBlur(s.data(), 16, 16, 1).data(), 16, 16, 1);
+    int pior = 0;
+    for (uint8_t v : b) pior = std::max(pior, std::abs(int(v) - 100));
+    checa(pior <= 12, "listra mais fina que a grade some");
+    std::vector<uint8_t> r = {0, 255, 0, 255};
+    checa(std::abs(reliefSampleBilinear(r, 2, 2, 0.5f, 0.25f) - 0.5f) < 0.01f, "bilinear no meio da aresta");
+    checa(std::abs(reliefSampleBilinear(r, 2, 2, 0.25f, 0.25f)) < 0.01f, "bilinear no centro do texel");
+}
+
 static void testaSubdivisao() {
     std::printf("subdivisao\n");
     std::vector<ReliefVertex> vs;
@@ -247,6 +263,7 @@ static void testaPiso() {
 
 int main() {
     testaMediana();
+    testaFiltroGrade();
     testaSubdivisao();
     testaDeslocamento();
     testaTeto();

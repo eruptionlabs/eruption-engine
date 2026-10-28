@@ -70,6 +70,14 @@ std::vector<uint8_t> reliefMedian(const uint8_t* src, int w, int h, int radius);
 // Leitura do vizinho mais proximo com UV repetido (o que a grade reduzida le').
 float reliefSampleNearest(const std::vector<uint8_t>& map, int w, int h, float u, float v);
 
+// Caixa de raio `radius` (janela 2r+1, bordas repetidas como a textura),
+// separavel e deslizante: O(1) por texel em qualquer raio. Duas passadas dao
+// a tenda, perto da gaussiana. radius <= 0 devolve a copia.
+std::vector<uint8_t> reliefBoxBlur(const uint8_t* src, int w, int h, int radius);
+
+// Leitura bilinear com UV repetido (texel no centro, como o sampler da GPU).
+float reliefSampleBilinear(const std::vector<uint8_t>& map, int w, int h, float u, float v);
+
 // Subdivide e desloca `verts`/`indices` (triangulos) no lugar; `record`
 // (opcional) recebe o que foi feito.
 ReliefBakeStats bakeRelief(std::vector<ReliefVertex>& verts, std::vector<uint32_t>& indices,

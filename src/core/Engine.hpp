@@ -1221,6 +1221,10 @@ private:
     // textures that have no file on disk. Returns false when not found.
     bool findEmbeddedAlbedoPixels(const std::string& name, std::vector<uint8_t>& outPixels,
                                   int& outW, int& outH, int& outChannels);
+    // Altura do relevo assado sintetizada do albedo embutido, para a textura
+    // sem MRAH-W pronto em m_embeddedBaked (Textures.cpp).
+    bool reliefAlphaFromAlbedo(const std::string& name, bool pixels, std::vector<uint8_t>& alpha, int& w, int& h,
+                               uint64_t& id);
     void recordTelemetry();
     // Plano proximo da camera (ERUPTION_TEST_NEAR para bancada).
     static float cameraNear() {
@@ -1903,6 +1907,14 @@ private:
     // quando a GPU não suporta BC ou o bake falhou: o caminho RGBA8 continua
     // valendo, é só mais VRAM.
     std::unordered_map<std::string, BakedEmbeddedTexture> m_embeddedBaked;
+    // Albedo copiado na thread principal para reliefAlphaFromAlbedo sintetizar
+    // a altura nas threads do assado (o mapa aberto muda enquanto elas rodam).
+    struct ReliefAlbedo {
+        std::vector<uint8_t> bytes; // PNG/JPG embutido, ou pixels ja' decodificados
+        int w = 0, h = 0, channels = 0; // > 0: `bytes` sao pixels
+    };
+    std::mutex m_reliefAlbedoMutex;
+    std::unordered_map<std::string, std::shared_ptr<const ReliefAlbedo>> m_reliefAlbedo;
     // Teto de resolução de textura do preset (data/graphics.json).
     int   m_textureMaxSize = 1024;
     // Screen-space contact shadows: short march toward the sun in the lighting

@@ -90,6 +90,46 @@ float reliefSampleNearest(const std::vector<uint8_t>& map, int w, int h, float u
     return float(map[size_t(y) * w + size_t(x)]) / 255.0f;
 }
 
+std::vector<uint8_t> reliefBoxBlur(const uint8_t* src, int w, int h, int radius) {
+    std::vector<uint8_t> out(src, src + size_t(w) * size_t(h));
+    if (radius <= 0 || w <= 0 || h <= 0) return out;
+    const int win = 2 * radius + 1;
+    std::vector<uint8_t> tmp(out.size());
+    // Horizontal: soma deslizante por linha.
+    for (int y = 0; y < h; ++y) {
+        const uint8_t* row = src + size_t(y) * w;
+        int acc = 0;
+        for (int dx = -radius; dx <= radius; ++dx) acc += row[wrap(dx, w)];
+        for (int x = 0; x < w; ++x) {
+            tmp[size_t(y) * w + x] = uint8_t((acc + win / 2) / win);
+            acc += row[wrap(x + radius + 1, w)] - row[wrap(x - radius, w)];
+        }
+    }
+    // Vertical, sobre o resultado horizontal.
+    for (int x = 0; x < w; ++x) {
+        int acc = 0;
+        for (int dy = -radius; dy <= radius; ++dy) acc += tmp[size_t(wrap(dy, h)) * w + x];
+        for (int y = 0; y < h; ++y) {
+            out[size_t(y) * w + x] = uint8_t((acc + win / 2) / win);
+            acc += tmp[size_t(wrap(y + radius + 1, h)) * w + x] - tmp[size_t(wrap(y - radius, h)) * w + x];
+        }
+    }
+    return out;
+}
+
+float reliefSampleBilinear(const std::vector<uint8_t>& map, int w, int h, float u, float v) {
+    if (w <= 0 || h <= 0 || map.size() < size_t(w) * size_t(h)) return 0.5f;
+    const float fx = u * float(w) - 0.5f, fy = v * float(h) - 0.5f;
+    const float x0f = std::floor(fx), y0f = std::floor(fy);
+    const float tx = fx - x0f, ty = fy - y0f;
+    const int x0 = wrap(int(x0f), w), y0 = wrap(int(y0f), h);
+    const int x1 = wrap(x0 + 1, w), y1 = wrap(y0 + 1, h);
+    auto at = [&](int x, int y) { return float(map[size_t(y) * w + size_t(x)]); };
+    const float a = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
+    const float b = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
+    return (a + (b - a) * ty) / 255.0f;
+}
+
 ReliefBakeStats bakeRelief(std::vector<ReliefVertex>& verts, std::vector<uint32_t>& indices,
                            const ReliefBakeParams& params, const ReliefHeightSampler& height,
                            ReliefBakeRecord* record) {
