@@ -400,6 +400,10 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
     if (action.frames.empty()) return;
     if (c.frame >= static_cast<int>(action.frames.size())) c.frame = 0;
     float delay = action.delay > 0 ? action.delay : 150.0f;
+    // Duracao pedida (characters.play com seconds): um golpe que precisa
+    // caber no intervalo do ataque toca inteiro nele, em vez de ser cortado
+    // pela proxima chamada no ritmo fixo da folha.
+    if (named && c.actionSeconds > 0.0f) delay = c.actionSeconds * 1000.0f / static_cast<float>(action.frames.size());
     // O CICLO DE PASSOS ACOMPANHA A VELOCIDADE. A folha diz o ritmo da
     // caminhada no passo natural do boneco; quem anda mais rapido que isso - um script que manda atravessar um
     // palco em meio segundo - tocava os mesmos 75 ms por quadro e PATINAVA:
@@ -953,12 +957,13 @@ bool Engine::playPlayerAction(const std::string& name, bool loop) {
     return true;
 }
 
-bool Engine::playCharacterAction(int index, const std::string& name, bool loop) {
+bool Engine::playCharacterAction(int index, const std::string& name, bool loop, float seconds) {
     if (index < 0 || index >= static_cast<int>(m_characters.size())) return false;
     SceneCharacter& c = m_characters[static_cast<size_t>(index)];
     if (!name.empty() && !c.look.findNamed(name)) return false;
     c.action = name;
     c.actionLoop = loop;
+    c.actionSeconds = seconds > 0.0f ? seconds : 0.0f;
     c.frame = 0;
     c.timer = 0.0f;
     return true;

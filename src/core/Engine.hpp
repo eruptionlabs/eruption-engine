@@ -406,6 +406,7 @@ public:
         // Animação extra tocando (do sprite v3); vazia = parado/andando.
         std::string action;
         bool actionLoop = false;
+        float actionSeconds = 0.0f; // duracao pedida da animacao inteira; 0 = a da folha
         // Comportamento: seguir o jogador ou patrulhar pontos (só com o jogo rodando).
         // SUCO (juice) de apresentacao. Sem isso uma acao nao tem peso: o
         // boneco se mexe, o numero aparece e nada na tela reage. Todos decaem
@@ -738,7 +739,9 @@ public:
     void sayPlayer(const std::string& text, float seconds);
     // Toca uma animação extra do sprite (v3, "attack", "jump"...); vazio para.
     bool playPlayerAction(const std::string& name, bool loop);
-    bool playCharacterAction(int index, const std::string& name, bool loop);
+    // seconds > 0: a animacao inteira dura isso (o atraso da folha estica ou
+    // encolhe por igual); 0 = o ritmo da folha.
+    bool playCharacterAction(int index, const std::string& name, bool loop, float seconds = 0.0f);
     const std::string& playerAction() const { return m_playerAction; }
     void followPlayer(int index, float distance);
     // Ver atraves (camera.see_through): o que fica entre a camera e o jogador,
