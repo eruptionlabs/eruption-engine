@@ -157,7 +157,7 @@
       "tessellation_near_spacing": 0.12,
       "tessellation_near_edge_pixels": 4.0,
       "tessellation_amplitude": 12.0,
-      "relief_bake": "shadow",
+      "relief_bake": "gbuffer",
       "relief_bake_spacing": 4.0,
       "relief_bake_max_tris": 75000
     },
@@ -218,7 +218,7 @@
       "tessellation_near_spacing": 0.12,
       "tessellation_near_edge_pixels": 4.0,
       "tessellation_amplitude": 12.0,
-      "relief_bake": "shadow",
+      "relief_bake": "gbuffer",
       "relief_bake_spacing": 3.0,
       "relief_bake_max_tris": 150000
     },
@@ -276,7 +276,7 @@
       "tessellation_near_spacing": 0.12,
       "tessellation_near_edge_pixels": 4.0,
       "tessellation_amplitude": 12.0,
-      "relief_bake": "shadow",
+      "relief_bake": "gbuffer",
       "relief_bake_spacing": 4.0,
       "relief_bake_max_tris": 300000
     }
