@@ -353,6 +353,7 @@ void Engine::buildWorldGraph() {
 }
 
 void Engine::updateWorld() {
+    m_modelRenderer.pollReliefJobs();
     if (!m_worldStarted || m_regions.empty() || !m_currentMap) return;
     // Perto de quem: do jogador no jogo; da câmera no editor.
     Vec3 focus = m_camera.position();
@@ -448,6 +449,20 @@ void Engine::updateWorld() {
             }
             break;
         case WorldRegion::State::Loading:
+            if (r.attaching && r.uploadPending) {
+                if (attachedThisFrame) break;
+                const auto tUp = std::chrono::steady_clock::now();
+                flushPendingUploads();
+                m_modelRenderer.setInstancesEnabled(r.uploadHidden, true);
+                r.uploadHidden.clear();
+                r.uploadPending = false;
+                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tUp).count();
+                ++r.attachFrames;
+                r.attachMs += ms;
+                r.attachMaxMs = std::max(r.attachMaxMs, ms);
+                attachedThisFrame = true;
+                break;
+            }
             if (r.attaching) {
                 // Fatias da lista added; dentro da área o jogador não espera.
                 const bool inside = dist <= 0.0f;
@@ -551,6 +566,7 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
     const bool keep = mr.keepGroundVertices();
     mr.setKeepGroundVertices(true); // camadas e bordas costuradas mexem nos vértices
     mr.setMeshLodSuspended(true);   // o LOD veio da thread; simplificar aqui travava o frame
+    mr.setReliefDeferred(true);     // o relevo assa em segundo plano (pollReliefJobs)
     for (size_t i = 0; i < load.models.size(); ++i) {
         const std::string file = load.models[i].filePath;
         if (i < load.prepared.size()) mr.providePrepared(file, std::move(load.prepared[i]));
@@ -562,7 +578,7 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
         mr.addModel(std::move(load.models[i]), desc);
         r.modelFiles.push_back(file);
     }
-    flushPendingUploads();
+    mr.setReliefDeferred(false);
     mr.setMeshLodSuspended(false);
     mr.setKeepGroundVertices(keep);
     const auto tModels = std::chrono::steady_clock::now();
@@ -577,6 +593,13 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
     load.added.clear();
     r.addedNext = 0;
     r.attachFrames = 2;
+    // O envio das malhas e texturas (flushPendingUploads, 8-30 ms) fica para
+    // o quadro seguinte; ate' la' as instancias novas nao desenham.
+    r.uploadHidden.clear();
+    for (uint32_t i = r.firstInstance; i < mapEnd; ++i)
+        if (mr.getInstances()[i].enabled) r.uploadHidden.push_back(i);
+    mr.setInstancesEnabled(r.uploadHidden, false);
+    r.uploadPending = true;
     const double modelsMs = std::chrono::duration<double, std::milli>(tModels - t0).count();
     r.attachMs = r.slotsMs + modelsMs;
     r.attachMaxMs = std::max(r.slotsMs, modelsMs);
@@ -601,7 +624,9 @@ bool Engine::attachRegionAdded(WorldRegion& r, double budgetMs) {
             inner = p.matrix();
         }
         SceneEdits::AddedInstance out;
+        m_modelRenderer.setReliefDeferred(true);
         SceneEdits::addModel(*this, file, node, prefix + a.name, place * a.transform.matrix(), inner, out);
+        m_modelRenderer.setReliefDeferred(false);
         if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() > budgetMs) break;
     }
     flushPendingUploads();

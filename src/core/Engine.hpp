@@ -2115,6 +2115,10 @@ private:
         std::shared_ptr<WorldRegionLoad> attaching;
         size_t addedNext = 0;
         int attachFrames = 0;
+        // Modelos do mapa no lugar, envio para a GPU no quadro seguinte
+        // (attachRegion); as instancias ligadas esperam apagadas.
+        bool uploadPending = false;
+        std::vector<uint32_t> uploadHidden;
         double slotsMs = 0.0, attachMs = 0.0, attachMaxMs = 0.0;
         std::shared_ptr<LoadedMap> data; // grade e caminhada já no lugar do mundo
         uint32_t firstInstance = 0, endInstance = 0;
