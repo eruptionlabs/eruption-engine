@@ -843,8 +843,10 @@ void Engine::finishRegion(WorldRegion& r) {
         r.areas.push_back(name);
     }
     for (const auto& ob : e.objects) {
-        const int idx = ob.solid ? findInRegion(ob.name) : -1;
-        if (idx >= 0) setSolid(static_cast<uint32_t>(idx), true);
+        SurfaceKind kind = kSurfaceFloor;
+        if (!ob.surface.empty()) parseSurface(ob.surface, kind);
+        const int idx = ob.solid || !ob.surface.empty() ? findInRegion(ob.name) : -1;
+        if (idx >= 0) setSurface(static_cast<uint32_t>(idx), kind);
     }
     applySolidFiles(); // os tipos de modelo sólidos que o jogo declarou
     r.sounds.clear();

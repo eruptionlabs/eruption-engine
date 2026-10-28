@@ -172,8 +172,19 @@ declare world: {
     set_time_scale: (scale: number, seconds: number?) -> (),
     time_scale: () -> number,
     -- Walk grid of the engine (block_slopes and solid objects included):
-    -- whether a character of `radius` can stand at (x, z).
-    walkable: (x: number, z: number, radius: number?) -> boolean,
+    -- whether a character of `radius` can stand at (x, z). With terrain
+    -- rules on (set_nav_rules) or a `caps` table it is the whole ground test
+    -- of floor_walkable on the highest floor there: stone tops, bridges,
+    -- liquid. caps: swim enters deep water, protected enters hazards (lava,
+    -- "hazard" surfaces); a knocked-back body is the game's call.
+    walkable: (x: number, z: number, radius: number?, caps: { swim: boolean?, protected: boolean? }?) -> boolean,
+    -- Terrain rules: every cell inside the maps in the scene walks, except
+    -- steep ones (more than max_step of rise within half a cell, or steeper
+    -- than max_slope degrees, from the terrain heights); the painted walk
+    -- grid no longer counts. Objects decide by their surface (models.
+    -- set_surface), liquids by caps. Stays on for later maps; nil turns it off.
+    set_nav_rules: (rules: { max_step: number?, max_slope: number? }?) -> (),
+    nav_rules: () -> { max_step: number, max_slope: number }?,
     -- Cost of walking the grid cells within `radius` of (x, z) (0: only the
     -- cell of the point), this run only: 1 is normal, math.huge blocks.
     -- walkable, path and walking see it in the same frame; path goes around
@@ -193,7 +204,9 @@ declare world: {
     -- that liquid over the floor; the body can still stand there. The path
     -- also runs on solid objects: a bridge is crossed on its deck when the
     -- walk reaches it at its end, and passed under from below.
-    path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number?, avoid_liquid: (boolean | string)? })?) -> { vector }?,
+    -- With terrain rules on, the path also stays out of hazards and deep
+    -- water unless the table says protected / swim.
+    path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number?, avoid_liquid: (boolean | string)?, swim: boolean?, protected: boolean? })?) -> { vector }?,
     -- The game's own fog: {color = vector or {r, g, b}, start, end, opacity,
     -- height, falloff} (the map .env "fog" block fields). Wins over the map's
     -- and the weather's fog until the next map change; nil gives control back.
@@ -510,6 +523,15 @@ declare models: {
     -- Solid models block the player (the bottom of the model: trunk, wall base).
     solid: (model: Model) -> boolean,
     set_solid: (model: Model, solid: boolean) -> (),
+    -- Surface of a model for walking: "floor" (the solid above: its top is
+    -- floor, what rises past a step is wall), "hazard" (floor only for
+    -- protected walkers), "blocked" and "wall" (never stepped on, at any
+    -- height; wall also tells the game it stops projectiles), "none". In the
+    -- scene file: objects = { name = { surface = "hazard" } }.
+    surface: (model: Model) -> string,
+    set_surface: (model: Model, surface: string) -> (),
+    -- The same by model file, for every instance now and later (see set_solid_file).
+    set_surface_file: (file: string, surface: string) -> (),
     -- Every model made from this file (models.file) is solid: in this map,
     -- in neighbors as they come in and in maps loaded later, until turned off.
     -- One line per model type (all bridges of the same piece).

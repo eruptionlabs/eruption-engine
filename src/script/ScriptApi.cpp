@@ -897,6 +897,24 @@ int models_solid(lua_State* L) {
     lua_pushboolean(L, eng().isSolid(static_cast<uint32_t>(checkModel(L, 1))));
     return 1;
 }
+Engine::SurfaceKind checkSurface(lua_State* L, int arg) {
+    Engine::SurfaceKind kind = Engine::kSurfaceNone;
+    if (!Engine::parseSurface(luaL_checkstring(L, arg), kind))
+        luaL_argerror(L, arg, "\"none\", \"floor\", \"hazard\", \"blocked\" or \"wall\"");
+    return kind;
+}
+int models_surface(lua_State* L) {
+    lua_pushstring(L, Engine::surfaceName(eng().surfaceOf(static_cast<uint32_t>(checkModel(L, 1)))));
+    return 1;
+}
+int models_set_surface(lua_State* L) {
+    eng().setSurface(static_cast<uint32_t>(checkModel(L, 1)), checkSurface(L, 2));
+    return 0;
+}
+int models_set_surface_file(lua_State* L) {
+    eng().setSurfaceFile(luaL_checkstring(L, 1), checkSurface(L, 2));
+    return 0;
+}
 int models_play(lua_State* L) {
     const auto i = static_cast<uint32_t>(checkModel(L, 1));
     const char* name = luaL_optstring(L, 2, "");
@@ -1620,11 +1638,58 @@ int world_time_scale(lua_State* L) {
 // Grade de caminhada do motor exposta ao jogo (alcance de pontos, saidas):
 // a mesma conta do andar dos personagens - grade do mapa (com block_slopes)
 // mais os objetos solidos no raio.
+// Capacidades de quem anda numa tabela { swim, protected } (MoveCaps).
+uint8_t moveCaps(lua_State* L, int idx) {
+    if (!lua_istable(L, idx)) return 0;
+    uint8_t caps = 0;
+    lua_getfield(L, idx, "swim");
+    if (lua_toboolean(L, -1)) caps |= Engine::kMoveSwim;
+    lua_getfield(L, idx, "protected");
+    if (lua_toboolean(L, -1)) caps |= Engine::kMoveProtected;
+    lua_pop(L, 2);
+    return caps;
+}
+// Com as regras de terreno (world.set_nav_rules) a conta e' a do chao inteiro:
+// o piso mais alto no ponto (pedra, ponte), o liquido e as capacidades.
 int world_walkable(lua_State* L) {
     const float x = float(luaL_checknumber(L, 1)), z = float(luaL_checknumber(L, 2));
     const float radius = float(luaL_optnumber(L, 3, 0.0));
+    if (eng().navRules().on || lua_istable(L, 4)) {
+        lua_pushboolean(L, eng().floorWalkable(x, z, radius, FLT_MAX, moveCaps(L, 4)));
+        return 1;
+    }
     const Vec3 p(x, eng().sampleTerrainHeight(x, z), z);
     lua_pushboolean(L, eng().navWalkable(x, z) && !eng().blockedAt(p, radius));
+    return 1;
+}
+// Regras de terreno: { max_step, max_slope } liga (vale ate' desligar, nos
+// mapas seguintes tambem); nil desliga e volta a grade pintada.
+int world_set_nav_rules(lua_State* L) {
+    Engine::NavRules r;
+    if (lua_istable(L, 1)) {
+        r.on = true;
+        lua_getfield(L, 1, "max_step");
+        r.maxStep = float(luaL_optnumber(L, -1, r.maxStep));
+        lua_getfield(L, 1, "max_slope");
+        r.maxSlopeDeg = float(luaL_optnumber(L, -1, r.maxSlopeDeg));
+        lua_pop(L, 2);
+    } else if (!lua_isnoneornil(L, 1)) {
+        luaL_typeerror(L, 1, "table or nil");
+    }
+    eng().setNavRules(r);
+    return 0;
+}
+int world_nav_rules(lua_State* L) {
+    const Engine::NavRules& r = eng().navRules();
+    if (!r.on) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_createtable(L, 0, 2);
+    lua_pushnumber(L, r.maxStep);
+    lua_setfield(L, -2, "max_step");
+    lua_pushnumber(L, r.maxSlopeDeg);
+    lua_setfield(L, -2, "max_slope");
     return 1;
 }
 // Caminho no chao (ja' alisado) de `de` a `para`, ou nil se nao ha'.
@@ -1640,6 +1705,13 @@ int world_path(lua_State* L) {
     const Vec3 from = checkVec3(L, 1), to = checkVec3(L, 2);
     float radius = 0.0f, clearance = 0.0f;
     uint8_t avoid = 0;
+    // Regras de terreno: o caminho nao passa por onde o corpo nao entra
+    // (perigo sem protected, agua funda sem swim).
+    if (eng().navRules().on) {
+        const uint8_t caps = moveCaps(L, 3);
+        if (!(caps & Engine::kMoveProtected)) avoid |= Engine::kAvoidLava;
+        if (!(caps & Engine::kMoveSwim)) avoid |= Engine::kAvoidWater;
+    }
     if (lua_istable(L, 3)) {
         lua_getfield(L, 3, "radius");
         const float agent = std::max(0.0f, float(luaL_optnumber(L, -1, 0.0)));
@@ -1650,11 +1722,11 @@ int world_path(lua_State* L) {
         // avoid_liquid: true (qualquer liquido), "lava" ou "water".
         lua_getfield(L, 3, "avoid_liquid");
         if (lua_isboolean(L, -1) && lua_toboolean(L, -1)) {
-            avoid = Engine::kAvoidWater | Engine::kAvoidLava;
+            avoid |= Engine::kAvoidWater | Engine::kAvoidLava;
         } else if (lua_isstring(L, -1)) {
             const std::string kind = lua_tostring(L, -1);
-            if (kind == "lava") avoid = Engine::kAvoidLava;
-            else if (kind == "water") avoid = Engine::kAvoidWater;
+            if (kind == "lava") avoid |= Engine::kAvoidLava;
+            else if (kind == "water") avoid |= Engine::kAvoidWater;
             else luaL_error(L, "avoid_liquid: true, \"lava\" or \"water\"");
         }
         lua_pop(L, 1);
@@ -1692,7 +1764,7 @@ int world_floor_height(lua_State* L) {
 }
 int world_floor_walkable(lua_State* L) {
     lua_pushboolean(L, eng().floorWalkable(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2)),
-                                           float(luaL_optnumber(L, 3, 0.0)), fromYArg(L, 4)));
+                                           float(luaL_optnumber(L, 3, 0.0)), fromYArg(L, 4), moveCaps(L, 5)));
     return 1;
 }
 int world_liquid_at(lua_State* L) {
@@ -2299,7 +2371,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
-        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_exposure", world_set_exposure}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
+        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_exposure", world_set_exposure}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"set_nav_rules", world_set_nav_rules}, {"nav_rules", world_nav_rules}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
         {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend}, {"set_cutaway", world_set_cutaway},
         {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids}, {"set_liquid_level", world_set_liquid_level},
@@ -2330,7 +2402,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"move_by", models_move_by}, {"rotate_by", models_rotate_by},
         {"visible", models_visible}, {"set_visible", models_set_visible},
         {"show", models_show}, {"hide", models_hide}, {"solid", models_solid}, {"set_solid", models_set_solid},
-        {"set_solid_file", models_set_solid_file},
+        {"set_solid_file", models_set_solid_file}, {"surface", models_surface}, {"set_surface", models_set_surface},
+        {"set_surface_file", models_set_surface_file},
         {"play", models_play}, {"animation", models_animation}, {"animations", models_animations},
         {"morphs", models_morphs}, {"set_morph", models_set_morph},
         {nullptr, nullptr}};
@@ -2570,8 +2643,19 @@ declare world: {
     set_time_scale: (scale: number, seconds: number?) -> (),
     time_scale: () -> number,
     -- Walk grid of the engine (block_slopes and solid objects included):
-    -- whether a character of `radius` can stand at (x, z).
-    walkable: (x: number, z: number, radius: number?) -> boolean,
+    -- whether a character of `radius` can stand at (x, z). With terrain
+    -- rules on (set_nav_rules) or a `caps` table it is the whole ground test
+    -- of floor_walkable on the highest floor there: stone tops, bridges,
+    -- liquid. caps: swim enters deep water, protected enters hazards (lava,
+    -- "hazard" surfaces); a knocked-back body is the game's call.
+    walkable: (x: number, z: number, radius: number?, caps: { swim: boolean?, protected: boolean? }?) -> boolean,
+    -- Terrain rules: every cell inside the maps in the scene walks, except
+    -- steep ones (more than max_step of rise within half a cell, or steeper
+    -- than max_slope degrees, from the terrain heights); the painted walk
+    -- grid no longer counts. Objects decide by their surface (models.
+    -- set_surface), liquids by caps. Stays on for later maps; nil turns it off.
+    set_nav_rules: (rules: { max_step: number?, max_slope: number? }?) -> (),
+    nav_rules: () -> { max_step: number, max_slope: number }?,
     -- Cost of walking the grid cells within `radius` of (x, z) (0: only the
     -- cell of the point), this run only: 1 is normal, math.huge blocks.
     -- walkable, path and walking see it in the same frame; path goes around
@@ -2591,21 +2675,26 @@ declare world: {
     -- that liquid over the floor; the body can still stand there. The path
     -- also runs on solid objects: a bridge is crossed on its deck when the
     -- walk reaches it at its end, and passed under from below.
-    path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number?, avoid_liquid: (boolean | string)? })?) -> { vector }?,
+    -- With terrain rules on, the path also stays out of hazards and deep
+    -- water unless the table says protected / swim.
+    path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number?, avoid_liquid: (boolean | string)?, swim: boolean?, protected: boolean? })?) -> { vector }?,
     -- Floor under (x, z) counting solid objects (bridges, walkways, kit
     -- slabs): the highest top below `fromY` (default: anywhere). Second value:
     -- true when it is an object, not the terrain.
     floor_height: (x: number, z: number, fromY: number?) -> (number, boolean),
     -- Whether a character of `radius` can stand on that floor: the walk grid
     -- on the terrain, the piece itself on an object, no other solid in the body.
-    floor_walkable: (x: number, z: number, radius: number?, fromY: number?) -> boolean,
+    floor_walkable: (x: number, z: number, radius: number?, fromY: number?, caps: { swim: boolean?, protected: boolean? }?) -> boolean,
     -- Liquid showing at (x, z) (inside its shore and above the floor: a bridge
     -- over lava has none): {kind = "water" | "lava", level, index} or nil.
     -- index is the map's liquid (1-based), 0 for the global water plane.
     liquid_at: (x: number, z: number) -> { kind: string, level: number, index: number, map: string? }?,
     -- A whole nx * nz grid from (x0, z0) with spacing `step`, x varying
     -- fastest: heights (f32 per point) and flags (u8 per point: 1 walkable,
-    -- 2 water, 4 lava, 8 on an object). Read with buffer.readf32(h, i * 4).
+    -- 2 water, 4 lava, 8 on an object; when not walkable, 16 wall (steep
+    -- cell or a solid in the body) or 32 blocked (outside the maps, painted
+    -- cell, "blocked" object); 64 standing on a "hazard" object).
+    -- Read with buffer.readf32(h, i * 4).
     ground_grid: (x0: number, z0: number, step: number, nx: number, nz: number, radius: number?) -> (buffer, buffer),
     -- The game's own fog: {color = vector or {r, g, b}, start, end, opacity,
     -- height, falloff} (the map .env "fog" block fields). Wins over the map's
@@ -2908,6 +2997,15 @@ declare models: {
     -- Solid models block the player (the bottom of the model: trunk, wall base).
     solid: (model: Model) -> boolean,
     set_solid: (model: Model, solid: boolean) -> (),
+    -- Surface of a model for walking: "floor" (the solid above: its top is
+    -- floor, what rises past a step is wall), "hazard" (floor only for
+    -- protected walkers), "blocked" and "wall" (never stepped on, at any
+    -- height; wall also tells the game it stops projectiles), "none". In the
+    -- scene file: objects = { name = { surface = "hazard" } }.
+    surface: (model: Model) -> string,
+    set_surface: (model: Model, surface: string) -> (),
+    -- The same by model file, for every instance now and later (see set_solid_file).
+    set_surface_file: (file: string, surface: string) -> (),
     -- Models with a skeleton (.glb with skin): plays the animation by name
     -- ("" = rest pose). loop defaults to true, speed to 1. The pose on screen
     -- blends into the new one over `fade` seconds (default 0.2; 0 = cut).

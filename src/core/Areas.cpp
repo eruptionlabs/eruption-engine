@@ -60,15 +60,34 @@ void Engine::clearAreas(bool keepNeighbors) {
                   m_areas.end());
 }
 
-void Engine::setSolid(uint32_t instance, bool solid) {
-    if (instance >= m_solid.size()) {
-        if (!solid) return;
-        m_solid.resize(instance + 1, 0);
-    }
-    m_solid[instance] = solid ? 1 : 0;
-}
+void Engine::setSolid(uint32_t instance, bool solid) { setSurface(instance, solid ? kSurfaceFloor : kSurfaceNone); }
 
 bool Engine::isSolid(uint32_t instance) const { return instance < m_solid.size() && m_solid[instance]; }
+
+void Engine::setSurface(uint32_t instance, SurfaceKind kind) {
+    if (instance >= m_solid.size()) {
+        if (kind == kSurfaceNone) return;
+        m_solid.resize(instance + 1, 0);
+    }
+    m_solid[instance] = kind;
+}
+
+Engine::SurfaceKind Engine::surfaceOf(uint32_t instance) const {
+    return instance < m_solid.size() ? SurfaceKind(m_solid[instance]) : kSurfaceNone;
+}
+
+static const char* const kSurfaceNames[] = {"none", "floor", "hazard", "blocked", "wall"};
+
+const char* Engine::surfaceName(SurfaceKind kind) { return kind <= kSurfaceWall ? kSurfaceNames[kind] : "none"; }
+
+bool Engine::parseSurface(const std::string& name, SurfaceKind& out) {
+    for (uint8_t k = 0; k <= kSurfaceWall; ++k)
+        if (name == kSurfaceNames[k]) {
+            out = SurfaceKind(k);
+            return true;
+        }
+    return false;
+}
 
 // O caminho da instância termina no arquivo pedido (relativo ao projeto)?
 static bool sameModelFile(const std::string& assetPath, const std::string& file) {
@@ -77,22 +96,25 @@ static bool sameModelFile(const std::string& assetPath, const std::string& file)
     return assetPath.compare(at, file.size(), file) == 0 && (at == 0 || assetPath[at - 1] == '/');
 }
 
-void Engine::setSolidFile(const std::string& file, bool solid) {
-    const auto it = std::find(m_solidFiles.begin(), m_solidFiles.end(), file);
-    if (solid && it == m_solidFiles.end()) m_solidFiles.push_back(file);
-    if (!solid && it != m_solidFiles.end()) m_solidFiles.erase(it);
+void Engine::setSolidFile(const std::string& file, bool solid) { setSurfaceFile(file, solid ? kSurfaceFloor : kSurfaceNone); }
+
+void Engine::setSurfaceFile(const std::string& file, SurfaceKind kind) {
+    const auto it = std::find_if(m_solidFiles.begin(), m_solidFiles.end(), [&](const auto& f) { return f.first == file; });
+    if (kind != kSurfaceNone && it == m_solidFiles.end()) m_solidFiles.emplace_back(file, kind);
+    else if (kind != kSurfaceNone) it->second = kind;
+    else if (it != m_solidFiles.end()) m_solidFiles.erase(it);
     const auto& insts = m_modelRenderer.getInstances();
     for (uint32_t i = 0; i < insts.size(); ++i)
-        if (sameModelFile(insts[i].assetPath, file)) setSolid(i, solid);
+        if (sameModelFile(insts[i].assetPath, file)) setSurface(i, kind);
 }
 
 void Engine::applySolidFiles() {
     if (m_solidFiles.empty()) return;
     const auto& insts = m_modelRenderer.getInstances();
     for (uint32_t i = 0; i < insts.size(); ++i)
-        for (const std::string& f : m_solidFiles)
-            if (sameModelFile(insts[i].assetPath, f)) {
-                setSolid(i, true);
+        for (const auto& f : m_solidFiles)
+            if (sameModelFile(insts[i].assetPath, f.first)) {
+                setSurface(i, SurfaceKind(f.second));
                 break;
             }
 }
@@ -102,8 +124,10 @@ bool Engine::blockedAt(const Vec3& p, float radius) const {
     for (uint32_t i = 0; i < m_solid.size() && i < insts.size(); ++i) {
         if (!m_solid[i] || !insts[i].enabled) continue;
         const ModelInstance& inst = insts[i];
-        // Corpo do jogador (p.y até +20) contra a altura do objeto.
-        if (p.y + 20.0f < inst.worldAabbMin.y || p.y > inst.worldAabbMax.y) continue;
+        // Corpo do jogador (p.y até +20) contra a altura do objeto; Blocked e
+        // Wall barram em qualquer altura.
+        const bool hard = m_solid[i] >= kSurfaceBlocked;
+        if (!hard && (p.y + 20.0f < inst.worldAabbMin.y || p.y > inst.worldAabbMax.y)) continue;
         if (p.x < inst.worldAabbMin.x - radius || p.x > inst.worldAabbMax.x + radius ||
             p.z < inst.worldAabbMin.z - radius || p.z > inst.worldAabbMax.z + radius)
             continue;

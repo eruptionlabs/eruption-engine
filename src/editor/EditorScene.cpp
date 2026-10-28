@@ -195,12 +195,16 @@ SceneEdits Editor::currentEdits() const {
             m_engine->isScatterInstance(i))
             continue;
         auto it = std::find_if(e.objects.begin(), e.objects.end(), [&](const SceneEdits::Object& o) { return o.name == insts[i].name; });
+        const Engine::SurfaceKind kind = m_engine->surfaceOf(i);
+        const std::string surface = kind == Engine::kSurfaceFloor ? "" : Engine::surfaceName(kind);
         if (it != e.objects.end()) {
             it->solid = true;
+            it->surface = surface;
         } else {
             SceneEdits::Object o;
             o.name = insts[i].name;
             o.solid = true;
+            o.surface = surface;
             e.objects.push_back(std::move(o));
         }
     }

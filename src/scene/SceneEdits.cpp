@@ -213,6 +213,7 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
                 o.transform = readTransform(L, lua_gettop(L), o.hasTransform);
                 o.hidden = readBool(L, lua_gettop(L), "hidden", false);
                 o.solid = readBool(L, lua_gettop(L), "solid", false);
+                o.surface = readStr(L, lua_gettop(L), "surface");
                 o.animation = readStr(L, lua_gettop(L), "animation");
                 o.parent = readStr(L, lua_gettop(L), "parent");
                 o.tags = readStrList(L, lua_gettop(L), "tags");
@@ -467,6 +468,7 @@ std::string SceneEdits::serialize(const std::string& map) const {
             std::vector<std::string> parts;
             if (ob.hidden) parts.push_back("hidden = true");
             if (ob.solid) parts.push_back("solid = true");
+            if (!ob.surface.empty()) parts.push_back("surface = " + quoted(ob.surface));
             if (!ob.animation.empty()) parts.push_back("animation = " + quoted(ob.animation));
             if (!ob.parent.empty()) parts.push_back("parent = " + quoted(ob.parent));
             if (!ob.tags.empty()) parts.push_back("tags = " + quotedList(ob.tags));
@@ -662,15 +664,18 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
     // Sólido depois das cópias (uma cópia também pode ser sólida). O nome de um
     // modelo acrescentado com vários nós vale para todos ("muro" -> "muro/Box"...).
     for (const auto& ob : objects) {
-        if (!ob.solid) continue;
+        Engine::SurfaceKind kind = Engine::kSurfaceFloor;
+        if (!ob.surface.empty() && !Engine::parseSurface(ob.surface, kind))
+            ERUPTION_LOG_WARN("Scene: object %s has an unknown surface '%s'", ob.name.c_str(), ob.surface.c_str());
+        if (!ob.solid && ob.surface.empty()) continue;
         const int idx = scriptFindModel(ob.name);
         if (idx >= 0) {
-            engine.setSolid(static_cast<uint32_t>(idx), true);
+            engine.setSurface(static_cast<uint32_t>(idx), kind);
             continue;
         }
         const auto& insts = mr.getInstances();
         for (uint32_t i = 0; i < insts.size(); ++i)
-            if (insts[i].name.rfind(ob.name + "/", 0) == 0) engine.setSolid(i, true);
+            if (insts[i].name.rfind(ob.name + "/", 0) == 0) engine.setSurface(i, kind);
     }
     // Animação inicial (modelo com esqueleto), também nos nós "nome/...".
     for (const auto& ob : objects) {

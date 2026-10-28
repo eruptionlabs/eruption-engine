@@ -223,6 +223,15 @@ declare models: {
     -- Solid models block the player (the bottom of the model: trunk, wall base).
     solid: (model: Model) -> boolean,
     set_solid: (model: Model, solid: boolean) -> (),
+    -- Surface of a model for walking: "floor" (the solid above: its top is
+    -- floor, what rises past a step is wall), "hazard" (floor only for
+    -- protected walkers), "blocked" and "wall" (never stepped on, at any
+    -- height; wall also tells the game it stops projectiles), "none". In the
+    -- scene file: objects = { name = { surface = "hazard" } }.
+    surface: (model: Model) -> string,
+    set_surface: (model: Model, surface: string) -> (),
+    -- The same by model file, for every instance now and later (see set_solid_file).
+    set_surface_file: (file: string, surface: string) -> (),
     -- Models with a skeleton (.glb with skin): plays the animation by name
     -- ("" = rest pose). loop defaults to true, speed to 1. The pose on screen
     -- blends into the new one over `fade` seconds (default 0.2; 0 = cut).

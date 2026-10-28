@@ -45,6 +45,10 @@ struct LoadedMap {
     // Custo de andar por célula de navGrid escrito pelo jogo, só nesta partida
     // (Engine::setWalkCost): vazio = 1 em todas; infinito = bloqueada.
     std::vector<float> walkCost;
+    // Regras de terreno (Engine::setNavRules): 1 = célula íngreme. Refeita
+    // quando navRulesVersion difere da do motor.
+    std::vector<uint8_t> navSteep;
+    uint32_t navRulesVersion = 0;
 
     // Lights extracted from the GLB (if any) or defaults.
     struct MapLight {
