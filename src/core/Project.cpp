@@ -76,6 +76,7 @@ bool Project::open(const fs::path& dir, std::string* err) {
         m.devTools = j.value("dev_tools", false);
         readFraming(j, m);
         readLoading(j, m);
+        if (j.contains("export") && j["export"].is_object()) m.icon = j["export"].value("icon", std::string());
     } catch (const std::exception& e) {
         if (err) *err = std::string("project.eruption is not valid JSON: ") + e.what();
         return false;
@@ -328,4 +329,13 @@ std::string config(const std::string& rel) {
 }
 
 } // namespace project
+
+std::filesystem::path Project::gameIcon() {
+    const Project& p = instance();
+    if (p.isOpen()) return p.manifest().icon.empty() ? std::filesystem::path() : p.root() / p.manifest().icon;
+    std::ifstream f("data/launcher_config.json");
+    const nlohmann::json j = f ? nlohmann::json::parse(f, nullptr, false) : nlohmann::json();
+    return j.is_object() && j.contains("icon") && j["icon"].is_string() ? std::filesystem::path(j["icon"].get<std::string>())
+                                                                         : std::filesystem::path();
+}
 } // namespace eruption

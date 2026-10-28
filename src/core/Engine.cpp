@@ -200,6 +200,7 @@ static void mergeProjectGraphics(nlohmann::json& root) {
 bool Engine::init(int width, int height, const std::string& title) {
     Logger::init();
     
+    if (!m_editorMode) m_window.setIconFile(Project::gameIcon().string());
     if (!m_window.init(width, height, title)) return false;
     if (m_editorMode) m_window.maximize();
 

@@ -83,6 +83,9 @@ public:
         };
         std::optional<LoadingScreen> loading;
         std::string loadingJson; // o bloco como veio: saveManifest o devolve inteiro
+        // "export": {"icon": "<png>"}: icone do jogo (relativo a' pasta do
+        // projeto), na janela do modo jogo e no export. Vazio = o do motor.
+        std::string icon;
     };
 
     static Project& instance();
@@ -114,6 +117,9 @@ public:
     // data/launcher_config.json do jogo exportado, que os leva copiados).
     static void readFraming(const nlohmann::json& j, Manifest& m);
     static void readLoading(const nlohmann::json& j, Manifest& m);
+    // PNG do icone do jogo: o do manifesto aberto, ou o "icon" do
+    // data/launcher_config.json do jogo exportado. Vazio = o do motor.
+    static std::filesystem::path gameIcon();
 
     static constexpr const char* kManifestName = "project.eruption";
     // Subpastas de conteudo criadas por create() (e esperadas pelo editor).

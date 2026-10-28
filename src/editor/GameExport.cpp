@@ -1,5 +1,6 @@
 #include "editor/GameExport.hpp"
 #include "core/GraphicsMerge.hpp"
+#include "core/Logger.hpp"
 
 #include "formats/GroundPack.hpp"
 #include "scene/SceneEdits.hpp"
@@ -8,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <deque>
 #include <fstream>
 #include <functional>
@@ -62,6 +64,55 @@ std::set<fs::path> packGrounds(const fs::path& outDir, const std::set<fs::path>&
         report.bytes += fs::file_size(dst, ec);
     }
     return packed;
+}
+
+// "export": {"icon": "<png>"} do project.eruption: vai como
+// assets/icon/game.png e o launcher_config diz qual e' (Project::gameIcon).
+void copyGameIcon(const ExportOptions& o, const nlohmann::json& pj, nlohmann::json& launch, ExportReport& report) {
+    if (!pj.contains("export") || !pj["export"].is_object()) return;
+    const std::string icon = pj["export"].value("icon", std::string());
+    if (icon.empty()) return;
+    std::error_code ec;
+    const fs::path dst = o.outDir / "assets" / "icon" / "game.png";
+    fs::create_directories(dst.parent_path(), ec);
+    fs::copy_file(o.projectRoot / icon, dst, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        ERUPTION_LOG_WARN("[EXPORT] icone %s: %s", icon.c_str(), ec.message().c_str());
+        return;
+    }
+    launch["icon"] = "assets/icon/game.png";
+    report.bytes += fs::file_size(dst, ec);
+    ++report.files;
+}
+
+// Atalho do Linux (<pasta>/<jogo>.desktop) com o icone do launcher_config
+// (o do jogo) ou o do motor. Caminhos absolutos (o .desktop nao aceita
+// relativos): pasta movida, exportar de novo.
+void writeDesktopEntry(const ExportOptions& o) {
+#if defined(__linux__) && !defined(__ANDROID__)
+    std::error_code ec;
+    const fs::path dir = fs::absolute(o.outDir, ec);
+    std::string name, icon = "assets/icon/eruption_v3_256.png";
+    {
+        std::ifstream pf(o.projectRoot / "project.eruption");
+        const nlohmann::json pj = pf ? nlohmann::json::parse(pf, nullptr, false) : nlohmann::json();
+        if (pj.is_object()) name = pj.value("name", std::string());
+        std::ifstream lf(dir / "data" / "launcher_config.json");
+        const nlohmann::json lj = lf ? nlohmann::json::parse(lf, nullptr, false) : nlohmann::json();
+        if (lj.is_object() && lj.contains("icon") && lj["icon"].is_string()) icon = lj["icon"].get<std::string>();
+    }
+    if (name.empty()) name = dir.filename().string();
+    std::string file;
+    for (char c : name) file.push_back(std::isalnum(static_cast<unsigned char>(c)) ? c : '_');
+    const fs::path desktop = dir / (file + ".desktop");
+    std::ofstream d(desktop);
+    d << "[Desktop Entry]\nType=Application\nName=" << name << "\nExec=\"" << (dir / "run.sh").string() << "\"\nPath="
+      << dir.string() << "\nIcon=" << (dir / icon).string() << "\nTerminal=false\nCategories=Game;\n";
+    d.close();
+    fs::permissions(desktop, fs::perms::owner_exec, fs::perm_options::add, ec);
+#else
+    (void)o;
+#endif
 }
 
 } // namespace
@@ -213,6 +264,7 @@ ExportReport exportGame(const ExportOptions& o) {
         if (pj.is_object()) {
             for (const char* key : {"spawn", "camera", "loading"})
                 if (pj.contains(key)) launch[key] = pj[key];
+            copyGameIcon(o, pj, launch, report);
         }
         fs::create_directories(o.outDir / "data", ec);
         std::ofstream(o.outDir / "data" / "launcher_config.json") << launch.dump(1) << "\n";
@@ -257,6 +309,7 @@ ExportReport exportGame(const ExportOptions& o) {
     run.close();
     fs::permissions(o.outDir / "run.sh", fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
                     fs::perm_options::add, ec);
+    writeDesktopEntry(o);
     std::sort(report.missing.begin(), report.missing.end());
     report.missing.erase(std::unique(report.missing.begin(), report.missing.end()), report.missing.end());
     return report;

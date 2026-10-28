@@ -20,6 +20,8 @@ public:
     Window& operator=(const Window&) = delete;
 
     bool init(int width, int height, const std::string& title);
+    // PNG do icone (antes de init); vazio ou ilegivel = o icone do motor.
+    void setIconFile(const std::string& path) { m_iconFile = path; }
     void maximize();
     void shutdown();
 
@@ -50,6 +52,7 @@ private:
 
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
     static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);
+    std::string m_iconFile;
 };
 
 } // namespace eruption
