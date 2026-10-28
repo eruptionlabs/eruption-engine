@@ -1543,7 +1543,7 @@ void ModelRenderer::computeRelief(ReliefTask& t, std::unordered_map<uint32_t, st
     // anda o que o assado mandou (posicao interpolada ANTES de deslocar).
     // Malha assada na tela (celular): a grade do desnivel, antes de os
     // vertices de antes irem embora (ver ReliefFloorGrid).
-    const bool floorGrid = m_reliefBake.mode == 2;
+    const bool floorGrid = m_reliefBake.mode >= 2;
     std::vector<TerrainVertex> before;
     if (floorGrid) before = t.vertices;
     std::vector<TerrainVertex>& v = t.outVertices;
@@ -1688,7 +1688,7 @@ void ModelRenderer::applyReliefs(std::vector<ReliefTask>& tasks, const std::stri
         ups.push_back({t.outIndices.data(), is, mesh.reliefIndexBuffer});
         mesh.reliefFirst = t.outFirst;
         mesh.reliefIndexCount = t.outCount;
-        mesh.reliefInView = m_reliefBake.mode == 2;
+        mesh.reliefInView = m_reliefBake.mode >= 2;
         mesh.reliefCells = std::move(t.outCells);
         mesh.reliefFloor = std::move(t.outFloor);
         if (mesh.reliefFloor) floorBytes += mesh.reliefFloor->bytes();
@@ -3618,7 +3618,13 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     m_drawRecs.clear();
     auto record = [&](VkBuffer vb, VkBuffer ib, uint32_t mesh, uint32_t count, uint32_t instances,
                       uint32_t firstIndex, uint32_t firstInstance, uint32_t levelCount) {
-        DrawRec r{vb, ib, mesh, count, instances, firstIndex, firstInstance, levelCount, tessBound, {}};
+        // Malha assada (relief_bake "mesh"/"gbuffer"): o relevo ja' esta' nela,
+        // entao nem patch nem o deslocamento do model.vert (seria duas vezes).
+        const bool baked = mesh < m_meshes.size() && m_meshes[mesh].reliefInView &&
+                           ib == m_meshes[mesh].reliefIndexBuffer;
+        DrawRec r{vb, ib, mesh, count, instances, firstIndex, firstInstance, levelCount, tessBound && !baked, {}};
+        const float dispKeep = push.uvScale.w;
+        if (baked) push.uvScale.w = 0.0f;
         // uvScale.y = altura da malha (caixa local): a juncao com o chao
         // limita a faixa a uma fracao dela, para pedra baixa nao sumir inteira.
         push.uvScale.y = mesh < m_meshes.size() ? m_meshes[mesh].aabbMax.y - m_meshes[mesh].aabbMin.y : 0.0f;
@@ -3630,6 +3636,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
                                  static_cast<float>(wm.weldRows), 0.0f);
         }
         std::memcpy(r.push, &push, sizeof(push));
+        push.uvScale.w = dispKeep;
         m_drawRecs.push_back(r);
     };
 

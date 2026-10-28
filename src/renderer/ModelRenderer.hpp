@@ -458,6 +458,13 @@ public:
     // Engine::applyGraphicsPreset): vale para as malhas carregadas depois.
     // mode 0 = nao assa; 1 = so' a sombra; 2 = sombra e G-buffer (sem tesselacao).
     struct ReliefBakeConfig {
+        // 0 desliga, 1 so' a sombra, 2 G-buffer e sombra sem tesselacao
+        // nenhuma (celular), 3 G-buffer e sombra com a tesselacao so' nas
+        // malhas sem assado (PC). No 3 a malha assada vai pelo pipeline
+        // normal e sem o deslocamento do model.vert: a altura da tesselacao
+        // dependia da camera (amplitude pela curva de distancia, mip da altura
+        // pelo piso em pixels, grade pela distancia) e o chao entortava ao
+        // girar e ao dar zoom.
         int mode = 0;
         float spacing = 2.0f;   // grade (u)
         float amplitude = 0.0f; // a da tesselacao (u)
