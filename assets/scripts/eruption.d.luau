@@ -354,7 +354,9 @@ declare characters: {
     say: (name: string, text: string, seconds: number?) -> (),
     -- Extra animation of the sprite (Sprite Importer > Extra animations), e.g.
     -- "attack"; once unless `loop`. "" goes back to standing/walking.
-    play: (name: string, animation: string, loop: boolean?) -> boolean,
+    -- `seconds`: the whole animation lasts that long (each loop, when
+    -- looping), e.g. an attack fitted to the interval between hits.
+    play: (name: string, animation: string, loop: boolean?, seconds: number?) -> boolean,
     -- Extra animation playing now ("" when standing or walking).
     animation: (name: string) -> string,
     -- Follows the player, stopping `distance` away (default 30).

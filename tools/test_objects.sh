@@ -36,7 +36,21 @@ cat > "$TMP/saves/quebrado.json" <<'JSON'
 JSON
 FAIL=0
 
-TESTS="api cena comportamento salvar prefab luz personagem robusto faixa terreno_vivo andar_script visao cabeca anel retrato telemetria"
+# Folha v3 com uma animacao extra "golpe" (6 quadros de 40 ms em cada uma
+# das 8 direcoes) para o teste "duracao" (characters.play com seconds).
+python3 - "$PROJ/assets/sprites/golpe.spr" <<'PY'
+import struct, sys
+img = bytes([255, 255, 255, 255]) * (8 * 16)
+sprite = struct.pack("<Iiiff4fI", 0, 0, 0, 1.0, 1.0, 1, 1, 1, 1, 0)
+acoes = [(150, 1)] * 16 + [(40, 6)] * 8
+out = b"ERUPTSPR" + struct.pack("<II", 3, 1) + struct.pack("<II", 8, 16) + img + struct.pack("<I", len(acoes))
+for delay, quadros in acoes:
+    out += struct.pack("<II", delay, quadros) + (struct.pack("<I", 1) + sprite) * quadros
+out += struct.pack("<I", 1) + struct.pack("<H", 5) + b"golpe" + struct.pack("<II", 16, 0)
+open(sys.argv[1], "wb").write(out)
+PY
+
+TESTS="api cena comportamento salvar prefab luz personagem robusto faixa terreno_vivo andar_script visao cabeca anel retrato telemetria duracao"
 
 # Confere um log: cada teste com OBJ-OK pelo menos $2 vezes, nenhum OBJ-FALHOU,
 # nenhum script parado por erro.
