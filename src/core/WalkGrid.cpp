@@ -12,6 +12,7 @@
 #include "utils/ImageUtils.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -105,9 +106,84 @@ float Engine::navCellFrame(const LoadedMap* map, Vec2& origin) const {
     return step;
 }
 
+void Engine::setNavRules(const NavRules& rules) {
+    m_navRules = rules;
+    m_navRules.maxStep = std::max(0.1f, rules.maxStep);
+    m_navRules.maxSlopeDeg = std::clamp(rules.maxSlopeDeg, 1.0f, 89.0f);
+    ++m_navRulesVersion; // cada mapa refaz a grade na primeira consulta
+}
+
+// Grade das regras de terreno de um mapa: célula íngreme pela altura do
+// terreno no centro e a meia célula para cada lado (desnível acima do degrau)
+// e pela inclinação de uma ponta à outra. Mapa sem .ter (chão de reserva
+// gerado) não tem relevo: tudo anda. Linhas em paralelo; o tempo vai no log.
+void Engine::bakeNavRules(const LoadedMap& map) const {
+    auto& m = const_cast<LoadedMap&>(map); // cache da grade, refeita sob demanda
+    const auto t0 = std::chrono::steady_clock::now();
+    const NavGridFile& nav = m.navGrid;
+    const uint32_t w = nav.width, d = nav.height;
+    m.navSteep.assign(size_t(w) * d, 0);
+    m.navRulesVersion = m_navRulesVersion;
+    if (!m.terrainFromFile || w == 0) return;
+    const float cell = followsTerrain(m) ? m.terrain.scale : 5.0f;
+    const float half = 0.5f * cell;
+    const float slope = std::tan(glm::radians(m_navRules.maxSlopeDeg));
+    const float step = m_navRules.maxStep;
+    std::vector<uint32_t> perRow(d, 0);
+    JobSystem::instance().parallelFor(d, [&](uint32_t gz) {
+        uint32_t n = 0;
+        for (uint32_t gx = 0; gx < w; ++gx) {
+            const Vec2 c = cellCenter(m, int(gx), int(gz));
+            auto h = [&](float dx, float dz) { return TerrainParser::getTerrainHeightAt(m.terrain, c.x + dx, c.y + dz); };
+            const float hc = h(0, 0), e = h(half, 0), wv = h(-half, 0), nn = h(0, half), s = h(0, -half);
+            const float jump = std::max(std::max(std::fabs(e - hc), std::fabs(wv - hc)),
+                                        std::max(std::fabs(nn - hc), std::fabs(s - hc)));
+            const float sx = (e - wv) / cell, sz = (nn - s) / cell;
+            if (jump > step || sx * sx + sz * sz > slope * slope) {
+                m.navSteep[size_t(gz) * w + gx] = 1;
+                ++n;
+            }
+        }
+        perRow[gz] = n;
+    });
+    size_t steep = 0;
+    for (uint32_t n : perRow) steep += n;
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    ERUPTION_LOG_WARN("Nav rules: %s %ux%u cells, %zu steep (step %.1f, slope %.0f deg), %.1f ms", m.mapName.c_str(), w,
+                      d, steep, step, m_navRules.maxSlopeDeg, ms);
+}
+
+bool Engine::ruleCellWalkable(const LoadedMap& map, int gx, int gz) const {
+    if (map.navRulesVersion != m_navRulesVersion || map.navSteep.size() != map.navGrid.cells.size()) bakeNavRules(map);
+    const size_t i = size_t(gz) * map.navGrid.width + size_t(gx);
+    return !map.navSteep[i] && std::isfinite(cellCost(map, gx, gz));
+}
+
+int Engine::navCellKind(float x, float z, float y) const {
+    if (navWalkable(x, z, y)) return 1;
+    const LoadedMap* map = mapAt(x, z, y);
+    int gx = 0, gz = 0;
+    if (!map || !cellOf(*map, x, z, gx, gz)) return 0;
+    if (m_navRules.on && map->navSteep.size() == map->navGrid.cells.size() &&
+        map->navSteep[size_t(gz) * map->navGrid.width + size_t(gx)])
+        return 2;
+    return 3;
+}
+
 bool Engine::navWalkable(float x, float z, float y) const {
     const LoadedMap* map = mapAt(x, z, y);
     int gx = 0, gz = 0;
+    if (m_navRules.on) {
+        // Dentro de qualquer mapa em cena anda, salvo a célula íngreme: a
+        // borda pintada de cada mapa (a parede da emenda) não vale mais.
+        if (map && cellOf(*map, x, z, gx, gz)) return ruleCellWalkable(*map, gx, gz);
+        const LoadedMap* others[4];
+        const int n = mapsAt(x, z, others, 4);
+        for (int k = 0; k < n; ++k)
+            if (others[k] != map && cellOf(*others[k], x, z, gx, gz) && ruleCellWalkable(*others[k], gx, gz))
+                return true;
+        return false;
+    }
     if (map && map != m_currentMap.get()) {
         // Vizinho do mundo contínuo: a grade dele, a do .ter ou a antiga de 5 u,
         // no lugar do vizinho. Até 26/10 a antiga valia "anda em tudo", e o jogo

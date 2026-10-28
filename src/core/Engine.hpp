@@ -985,6 +985,21 @@ public:
     bool navFollowsTerrain() const;
     bool navCell(float x, float z, int& gx, int& gz) const;
     bool navWalkable(float x, float z, float y = kAnyHeight) const;
+    // Regras de terreno (core/WalkGrid.cpp): ligadas, a grade pintada (.nav,
+    // .walk.png) deixa de valer e cada célula dentro dos mapas em cena anda,
+    // salvo a íngreme: mais que maxStep de desnível até meia célula, ou
+    // inclinação acima de maxSlopeDeg. Líquido e objetos seguem nas consultas
+    // do chão (perigo e água pelas capacidades). Vale para os mapas seguintes.
+    struct NavRules {
+        bool on = false;
+        float maxStep = 4.0f;
+        float maxSlopeDeg = 45.0f;
+    };
+    void setNavRules(const NavRules& rules);
+    const NavRules& navRules() const { return m_navRules; }
+    // Célula sob (x, z): 0 fora de todo mapa, 1 anda, 2 íngreme (regras), 3
+    // bloqueada pela grade pintada ou pelo custo.
+    int navCellKind(float x, float z, float y = kAnyHeight) const;
     // Passo e centro de uma celula da grade de caminhada de `map`, em mundo
     // (a busca de caminho anda nas mesmas celulas).
     float navCellFrame(const LoadedMap* map, Vec2& origin) const;
@@ -1056,10 +1071,24 @@ public:
     // Objeto sólido: o jogador não atravessa o pé dele (a parte de baixo da malha).
     void setSolid(uint32_t instance, bool solid);
     bool isSolid(uint32_t instance) const;
+    // Tipo de superfície de um objeto (core/Areas.cpp). Floor = o sólido de
+    // sempre: o topo é piso e o que passa de um degrau acima do piso é parede.
+    // Hazard: piso que só quem tem kMoveProtected pisa (ou o empurrão, que o
+    // jogo trata). Blocked e Wall: o pé inteiro não se pisa, em qualquer altura
+    // (Wall ainda diz ao jogo que barra projétil).
+    enum SurfaceKind : uint8_t { kSurfaceNone = 0, kSurfaceFloor, kSurfaceHazard, kSurfaceBlocked, kSurfaceWall };
+    void setSurface(uint32_t instance, SurfaceKind kind);
+    SurfaceKind surfaceOf(uint32_t instance) const;
+    static const char* surfaceName(SurfaceKind kind);
+    static bool parseSurface(const std::string& name, SurfaceKind& out);
+    // Capacidades de quem anda: entrar em água funda (swim) e em perigo
+    // (lava, superfície Hazard: protected).
+    enum MoveCaps : uint8_t { kMoveSwim = 1, kMoveProtected = 2 };
     // Sólido pelo ARQUIVO do modelo (o tipo: toda ponte feita do mesmo .glb):
     // vale para as instâncias do mapa aberto, dos vizinhos que entram e dos
     // mapas carregados depois, até ser desligado.
     void setSolidFile(const std::string& file, bool solid);
+    void setSurfaceFile(const std::string& file, SurfaceKind kind);
     // Reaplica os arquivos sólidos às instâncias de agora (mapa novo, vizinho).
     void applySolidFiles();
     // Algum objeto sólido ocupa (x, z) na altura de p (raio do corpo em volta)?
@@ -1077,7 +1106,7 @@ public:
     // ocupando o corpo acima do piso, no raio, e no máximo um degrau de
     // líquido por cima. Só conta objeto marcado sólido (scene.luau `solid`,
     // models.set_solid): peça do .env sem a marca não é piso.
-    bool floorWalkable(float x, float z, float radius, float fromY) const;
+    bool floorWalkable(float x, float z, float radius, float fromY, uint8_t caps = 0) const;
     struct LiquidAt {
         int index = -1;  // em map->liquids (-1 = o plano de água global)
         int kind = 0;    // 0 água, 1 lava
@@ -1091,7 +1120,13 @@ public:
     // superfície sobe no shader (a malha fica) e liquidAt/sampleGround usam o
     // nível novo no mesmo quadro. Falso para água ou índice inválido.
     bool setLiquidLevel(int index, float level, LoadedMap* map = nullptr);
-    enum GroundFlag : uint8_t { kGroundWalkable = 1, kGroundWater = 2, kGroundLava = 4, kGroundOnModel = 8 };
+    // Wall: célula íngreme (regras de terreno) ou corpo barrado por sólido;
+    // Blocked: fora da grade, célula pintada ou objeto Blocked; Hazard: piso
+    // num objeto Hazard.
+    enum GroundFlag : uint8_t {
+        kGroundWalkable = 1, kGroundWater = 2, kGroundLava = 4, kGroundOnModel = 8,
+        kGroundWall = 16, kGroundBlocked = 32, kGroundHazard = 64
+    };
     // Grade nx x nz a partir de (x0, z0) com passo `step`, linha a linha (x
     // varia mais rápido): altura do piso e GroundFlag por ponto. Uma chamada
     // no lugar de milhares de floorHeight/floorWalkable/liquidAt.
@@ -1108,7 +1143,7 @@ public:
                      int& instance, bool withRelief = true) const;
     bool liquidOver(float x, float z, float floorY, LiquidAt& out) const;
     bool walkableOver(const std::vector<uint32_t>& cand, int floorInstance, float floorY, float x, float z,
-                      float radius) const;
+                      float radius, uint8_t caps = 0) const;
 
     // Mundo contínuo (core/World.cpp): mapas emendados ao aberto, declarados no
     // scene.luau (neighbors = {{map = "b", offset = {x, y, z}}}), entram em
@@ -2203,8 +2238,12 @@ private:
     bool m_playerActionLoop = false;
     bool m_playerActionStarted = false;
     MapRequest m_mapRequest;
-    std::vector<uint8_t> m_solid; // por instância
-    std::vector<std::string> m_solidFiles; // setSolidFile
+    std::vector<uint8_t> m_solid; // por instância: SurfaceKind (0 = não sólido)
+    std::vector<std::pair<std::string, uint8_t>> m_solidFiles; // setSurfaceFile
+    NavRules m_navRules;
+    uint32_t m_navRulesVersion = 0; // muda a cada setNavRules: a grade de cada mapa refaz na hora
+    void bakeNavRules(const LoadedMap& map) const;
+    bool ruleCellWalkable(const LoadedMap& map, int gx, int gz) const;
     static const char* worldStateName(WorldRegion::State s);
     std::vector<WorldNeighbor> m_worldNeighbors;
     bool m_worldStarted = false;

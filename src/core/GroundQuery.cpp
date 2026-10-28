@@ -157,9 +157,10 @@ bool Engine::bodyBlocked(const std::vector<uint32_t>& cand, int floorInstance, f
     for (uint32_t i : cand) {
         if (int(i) == floorInstance) continue;
         const ModelInstance& inst = insts[i];
-        if (inst.worldAabbMax.y < floorY + kStep || inst.worldAabbMin.y > floorY + kBody) continue;
+        const bool hard = surfaceOf(i) >= kSurfaceBlocked; // barra em qualquer altura
+        if (!hard && (inst.worldAabbMax.y < floorY + kStep || inst.worldAabbMin.y > floorY + kBody)) continue;
         if (insideXZ(inst, x, z, radius) && footprintContains(i, Vec2(x, z), radius) &&
-            !solidLowUnderBody(i, floorY, x, z, radius))
+            (hard || !solidLowUnderBody(i, floorY, x, z, radius)))
             return true;
     }
     return false;
@@ -210,19 +211,30 @@ bool Engine::liquidOver(float x, float z, float floorY, LiquidAt& out) const {
 // Grade (no terreno) ou a peça (sobre sólido), corpo livre e no máximo um
 // degrau de líquido sobre o piso: a grade de caminhada não sabe do líquido
 // (no teste do jogo, piso a -133 com lava a -117 saía andável).
+// Com as regras de terreno (setNavRules) a lava é perigo a partir de meio
+// palmo sobre o piso (a margem assentada no chão fica um nada acima dele) e a
+// água funda pede nado; sem elas, como antes: um degrau de qualquer líquido.
+// `caps` (MoveCaps) deixa entrar: protected no perigo, swim na água.
 bool Engine::walkableOver(const std::vector<uint32_t>& cand, int floorInstance, float floorY, float x, float z,
-                          float radius) const {
+                          float radius, uint8_t caps) const {
+    constexpr float kHazardDepth = 0.5f;
     if (floorInstance < 0 && !navWalkable(x, z, floorY)) return false;
+    if (floorInstance >= 0 && surfaceOf(uint32_t(floorInstance)) == kSurfaceHazard && !(caps & kMoveProtected))
+        return false;
     LiquidAt lq;
-    if (liquidOver(x, z, floorY, lq) && lq.level - floorY > kStep) return false;
+    if (liquidOver(x, z, floorY, lq)) {
+        const float depth = lq.level - floorY;
+        if (lq.kind == 1 && depth > (m_navRules.on ? kHazardDepth : kStep) && !(caps & kMoveProtected)) return false;
+        if (lq.kind != 1 && depth > kStep && !(caps & kMoveSwim)) return false;
+    }
     return !bodyBlocked(cand, floorInstance, floorY, x, z, radius);
 }
 
-bool Engine::floorWalkable(float x, float z, float radius, float fromY) const {
+bool Engine::floorWalkable(float x, float z, float radius, float fromY, uint8_t caps) const {
     std::vector<uint32_t> cand;
     solidsIn(m_solid, m_modelRenderer.getInstances(), x - radius, z - radius, x + radius, z + radius, cand);
     const Floor f = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z, fromY), x, z, fromY);
-    return walkableOver(cand, f.instance, f.y, x, z, radius);
+    return walkableOver(cand, f.instance, f.y, x, z, radius, caps);
 }
 
 bool Engine::liquidAt(float x, float z, LiquidAt& out) const {
@@ -251,7 +263,21 @@ void Engine::sampleGround(float x0, float z0, float step, int nx, int nz, float 
             const Floor f = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z, kTop), x, z,
                                       std::numeric_limits<float>::max());
             uint8_t fl = f.instance >= 0 ? kGroundOnModel : 0;
-            if (walkableOver(cand, f.instance, f.y, x, z, radius)) fl |= kGroundWalkable;
+            if (walkableOver(cand, f.instance, f.y, x, z, radius)) {
+                fl |= kGroundWalkable;
+            } else {
+                // Por que não anda (o mapa de tipos do jogo): grade, objeto ou corpo.
+                const int kind = f.instance < 0 ? navCellKind(x, z, f.y) : 1;
+                if (kind == 2) fl |= kGroundWall;
+                else if (kind != 1) fl |= kGroundBlocked;
+                else if (bodyBlocked(cand, f.instance, f.y, x, z, radius)) {
+                    bool hard = false;
+                    for (uint32_t i : cand)
+                        hard |= surfaceOf(i) == kSurfaceBlocked && footprintContains(i, Vec2(x, z), radius);
+                    fl |= hard ? kGroundBlocked : kGroundWall;
+                }
+            }
+            if (f.instance >= 0 && surfaceOf(uint32_t(f.instance)) == kSurfaceHazard) fl |= kGroundHazard;
             LiquidAt lq;
             if (liquidOver(x, z, f.y, lq)) fl |= lq.kind == 1 ? kGroundLava : kGroundWater;
             const size_t o = size_t(iz) * size_t(nx) + size_t(ix);

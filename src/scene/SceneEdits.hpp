@@ -58,6 +58,9 @@ struct SceneEdits {
         Transform transform;
         bool hidden = false;
         bool solid = false; // bloqueia o jogador
+        // Tipo de superfície ("floor", "hazard", "blocked", "wall"; vazio =
+        // floor se solid): Engine::SurfaceKind.
+        std::string surface;
         std::string animation; // modelo com esqueleto: animação que toca ao abrir
         // Objeto da cena: pai (nome ou caminho "a/b"), etiquetas e scripts de
         // objeto (módulos de assets/scripts, ligados quando o jogo começa).

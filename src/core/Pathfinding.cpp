@@ -23,6 +23,7 @@ struct PathSolid {
     float minY, maxY;
     Vec2 quad[4];
     uint32_t inst; // indice da instancia (piso por cima dele)
+    bool hard;     // Blocked/Wall: barra em qualquer altura
 };
 
 constexpr int kBucket = 16;         // celulas por lado do balde de solidos
@@ -133,6 +134,7 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
             ps.minY = inst.worldAabbMin.y;
             ps.maxY = inst.worldAabbMax.y;
             ps.inst = i;
+            ps.hard = m_solid[i] >= kSurfaceBlocked;
             const auto id = static_cast<uint32_t>(solids.size());
             solids.push_back(ps);
             const int bx0 = std::clamp(int(std::floor((ps.minX - org.x) / step + 0.5f)) - x0, 0, w - 1) / kBucket;
@@ -152,7 +154,7 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
     auto blocked = [&](int x, int z, const Vec3& p, int floorInst) {
         for (uint32_t id : bucketOf(x, z)) {
             const PathSolid& s = solids[id];
-            if (int(s.inst) == floorInst || s.maxY < p.y + kStep || s.minY > p.y + kBody) continue;
+            if (int(s.inst) == floorInst || (!s.hard && (s.maxY < p.y + kStep || s.minY > p.y + kBody))) continue;
             if (p.x < s.minX || p.x > s.maxX || p.z < s.minZ || p.z > s.maxZ) continue;
             bool inside = true;
             for (int e = 0; e < 4 && inside; ++e) {
@@ -163,7 +165,7 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
                 const Vec2 n(edge.y / len, -edge.x / len);
                 if (glm::dot(Vec2(p.x, p.z) - a, n) > radius) inside = false;
             }
-            if (inside && !solidLowUnderBody(s.inst, p.y, p.x, p.z, radius)) return true;
+            if (inside && (s.hard || !solidLowUnderBody(s.inst, p.y, p.x, p.z, radius))) return true;
         }
         return false;
     };
@@ -241,8 +243,13 @@ bool Engine::findPath(const Vec3& from, const Vec3& to, float radius, std::vecto
         for (int k = 0; k < 4 && ok && roomy && inst < 0; ++k)
             ok = navWalkable(p.x + (k & 1 ? q : -q), p.z + (k & 2 ? q : -q), y);
         LiquidAt lq;
-        if (ok && avoidLiquid && liquidOver(p.x, p.z, p.y, lq) && lq.level > p.y)
+        // Com as regras de terreno a água rasa (até um degrau) anda, como o
+        // corpo; a lava conta de qualquer altura.
+        if (ok && avoidLiquid && liquidOver(p.x, p.z, p.y, lq) &&
+            lq.level - p.y > (m_navRules.on && lq.kind != 1 ? kStep : 0.0f))
             ok = !(avoidLiquid & (lq.kind == 1 ? kAvoidLava : kAvoidWater));
+        // Piso num objeto Hazard: perigo como a lava.
+        if (ok && inst >= 0 && (avoidLiquid & kAvoidLava) && surfaceOf(uint32_t(inst)) == kSurfaceHazard) ok = false;
         walk[slot] = ok ? 1 : -1;
         return ok ? int64_t(slot) : -1;
     };
