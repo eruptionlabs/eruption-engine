@@ -330,6 +330,14 @@ std::string config(const std::string& rel) {
 
 } // namespace project
 
+std::string Project::gameName() {
+    const Project& p = instance();
+    if (p.isOpen()) return p.manifest().name;
+    std::ifstream f("data/launcher_config.json");
+    const nlohmann::json j = f ? nlohmann::json::parse(f, nullptr, false) : nlohmann::json();
+    return j.is_object() && j.contains("name") && j["name"].is_string() ? j["name"].get<std::string>() : std::string();
+}
+
 std::filesystem::path Project::gameIcon() {
     const Project& p = instance();
     if (p.isOpen()) return p.manifest().icon.empty() ? std::filesystem::path() : p.root() / p.manifest().icon;
