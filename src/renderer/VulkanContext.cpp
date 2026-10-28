@@ -1,4 +1,7 @@
 #include "renderer/VulkanContext.hpp"
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#include <dlfcn.h>
+#endif
 #if defined(__linux__) && !defined(__ANDROID__)
 #include <execinfo.h>
 #endif
@@ -436,7 +439,25 @@ bool VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 
     VkResult result = vmaCreateBuffer(m_allocator, &bufferInfo, &allocInfo, &buffer, &alloc, nullptr);
     if (result != VK_SUCCESS) {
-        ERUPTION_LOG_ERROR("Failed to create buffer");
+        // Tamanho, uso e quem pediu: so' "Failed to create buffer" no celular
+        // (init que caiu em 27/10) nao dizia qual buffer era. O chamador sai
+        // como deslocamento dentro do binario; addr2line -f -C -e <binario
+        // nao enxugado> <deslocamento> da' a funcao.
+        const void* caller = __builtin_return_address(0);
+        uintptr_t callerOffset = reinterpret_cast<uintptr_t>(caller);
+        const char* binary = "?";
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+        Dl_info info{};
+        if (dladdr(caller, &info) && info.dli_fbase) {
+            callerOffset -= reinterpret_cast<uintptr_t>(info.dli_fbase);
+            if (info.dli_fname) binary = info.dli_fname;
+        }
+#endif
+        ERUPTION_LOG_ERROR("Failed to create buffer: %llu bytes, usage 0x%x, memory usage %d, VkResult %d "
+                           "(chamador %s+0x%llx)",
+                           static_cast<unsigned long long>(size), static_cast<unsigned>(usage),
+                           static_cast<int>(memUsage), static_cast<int>(result), binary,
+                           static_cast<unsigned long long>(callerOffset));
         return false;
     }
     // ERUPTION_TEST_VMA_TRACE=1: um log por buffer criado (tamanho, uso,
