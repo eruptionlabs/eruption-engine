@@ -806,6 +806,17 @@ declare telemetry: {
     enabled: () -> boolean,
     -- Events written and dropped since open.
     stats: () -> (number, number),
+    -- Packs every file in telemetry/ into one .zip (each cut at its last full
+    -- line; the open session's newest ~1 s may be missing) and returns the
+    -- path it will have, or nil when there is nothing to pack or an export is
+    -- still running. The zip is written in the background and appears at that
+    -- path whole when done (see exporting). On PC it lands in the user's
+    -- Documents folder; the name is the one given (letters, digits, '-', '_',
+    -- '.') or <game>-telemetry-<date>.zip.
+    export: (name: string?) -> string?,
+    -- Whether an export is still being written, and whether the last one
+    -- that finished succeeded (nil before any finished).
+    exporting: () -> (boolean, boolean?),
 }
 
 -- C++ functions of this project (native/*.cpp, include/eruption/native_module.h):
