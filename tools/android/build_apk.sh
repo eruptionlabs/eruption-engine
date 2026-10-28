@@ -5,6 +5,8 @@
 #   (varios mapas: o primeiro abre; o painel de toque lista todos)
 #   ERUPTION_APK_ENV=extra.txt tools/android/build_apk.sh <mapa>   (variaveis do motor no APK)
 #   ERUPTION_APK_JPEG=0   mantem as texturas do mapa como vieram (padrao: opacas em JPEG)
+#   ERUPTION_APK_CMAKE_ARGS="-DA=x -DB=y"  flags a mais no configure do build-android
+#     (separadas por espaco; com ela o configure roda tambem sobre um cache existente)
 # Precisa do SDK/NDK do Android (ANDROID_HOME, padrao ~/Android/Sdk) e de um
 # JDK 17 (JAVA_HOME, padrao ~/Android/jdk17). Compila build-android/ se faltar.
 set -euo pipefail
@@ -24,10 +26,12 @@ B=$ROOT/build-android; [ "$ABI" != "arm64-v8a" ] && B=$ROOT/build-android-$ABI
 STAGE=$B/apk
 OUT=${OUT:-$B/eruption-$MAP.apk}
 
-if [ ! -f "$B/CMakeCache.txt" ]; then
+read -ra CMAKE_EXTRA <<< "${ERUPTION_APK_CMAKE_ARGS:-}"
+if [ ! -f "$B/CMakeCache.txt" ] || [ ${#CMAKE_EXTRA[@]} -gt 0 ]; then
     cmake -S "$ROOT" -B "$B" -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
         -DANDROID_ABI=$ABI -DANDROID_PLATFORM=android-28 -DCMAKE_BUILD_TYPE=Release \
-        -DERUPTION_EDITOR=OFF -DERUPTION_MODULE_NEURAL_PBR=OFF -DERUPTION_ONNX=OFF -DERUPTION_DEBUG=OFF
+        -DERUPTION_EDITOR=OFF -DERUPTION_MODULE_NEURAL_PBR=OFF -DERUPTION_ONNX=OFF -DERUPTION_DEBUG=OFF \
+        ${CMAKE_EXTRA[@]+"${CMAKE_EXTRA[@]}"}
 fi
 cmake --build "$B" --target eruption-engine -j"$(nproc)"
 
