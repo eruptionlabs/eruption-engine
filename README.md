@@ -44,6 +44,7 @@ Requirements:
 - CMake 3.28+
 - Vulkan SDK 1.3+
 - GLFW 3.3+, zlib, iconv
+- ccache (configure with `-DERUPTION_CCACHE=OFF` to build without it)
 - For Debug builds: the Vulkan validation layers (`vulkan-validationlayers`)
 
 All other dependencies (GLM, VMA, shaderc, Dear ImGui, nlohmann/json, tinygltf, Draco, bc7enc) are fetched by CMake.
