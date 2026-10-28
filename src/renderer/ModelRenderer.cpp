@@ -2529,7 +2529,11 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             // altura cozida (MRAH-W em .pbrIndex) e desloca de fato. Folhagem
             // e malha com esqueleto ficam de fora. Antes do LOD, que pode
             // levar os vertices.
-            if (m_seamWeld && m_ctx->tessellationSupported() && m_bindless != nullptr &&
+            // No relief_bake "gbuffer" a malha que vai assada (mesmo criterio
+            // do bloco seguinte) nao passa pela tesselacao: sem solda. Ela
+            // levava 60-87 ms do quadro de entrada de cada vizinho.
+            const bool bakedInView = m_reliefBake.mode == 3 && m_reliefBake.amplitude > 0.0f;
+            if (m_seamWeld && !bakedInView && m_ctx->tessellationSupported() && m_bindless != nullptr &&
                 !skinned && mesh.dispScale > 0.0f && mesh.swayAmount <= 0.0f) {
                 bool baked = false;
                 for (const auto& v : vertices)
