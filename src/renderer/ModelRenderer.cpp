@@ -583,6 +583,10 @@ float resolveSwayAmount(const std::string& texName, const std::string& category)
 } // namespace
 
 void ModelRenderer::shutdown() {
+    dropReliefJobs(nullptr);
+    if (m_staging != VK_NULL_HANDLE) vmaDestroyBuffer(m_ctx->allocator(), m_staging, m_stagingAlloc);
+    m_staging = VK_NULL_HANDLE;
+    m_stagingSize = 0;
     // Instancing: buffers mapeados + pool + layout do set 2.
     destroyInstanceBuffers(false);
     destroyShadowBuffers(false);
@@ -632,6 +636,7 @@ void ModelRenderer::shutdown() {
 }
 
 void ModelRenderer::clear() {
+    dropReliefJobs(nullptr); // as tarefas escrevem em malhas que vao sair
     reliefClearMaps(); // alturas medianas do mapa que sai
     m_reliefFloors.clear();
     m_reliefFloorBuckets.clear();
@@ -1420,9 +1425,52 @@ void ModelRenderer::finishLod(LodBuild& b) {
 }
 
 // Sobe os níveis de LOD calculados (uma submissão só para todos).
+// Copias de uma submissao so', por um staging que fica (ate' kStagingKeep).
+// Um staging novo por envio custava 14-15 ms so' para alocar a memoria do
+// host (LOD de 7-15 MB na entrada de vizinho; a copia em si, 0,4 ms).
+void ModelRenderer::uploadCopies(const std::vector<StagedCopy>& ups) {
+    if (ups.empty()) return;
+    constexpr VkDeviceSize kStagingKeep = VkDeviceSize(48) << 20;
+    VkDeviceSize total = 0;
+    for (const StagedCopy& u : ups) total += (u.size + 15) & ~VkDeviceSize(15);
+    VkBuffer staging = VK_NULL_HANDLE;
+    VmaAllocation stagingAlloc = VK_NULL_HANDLE;
+    const bool keep = total <= kStagingKeep;
+    if (keep && total > m_stagingSize) {
+        if (m_staging != VK_NULL_HANDLE) vmaDestroyBuffer(m_ctx->allocator(), m_staging, m_stagingAlloc);
+        m_staging = VK_NULL_HANDLE;
+        m_stagingSize = 0;
+        const VkDeviceSize size = std::min(kStagingKeep, std::max(total, VkDeviceSize(16) << 20));
+        if (m_ctx->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, m_staging, m_stagingAlloc))
+            m_stagingSize = size;
+    }
+    if (keep && m_staging != VK_NULL_HANDLE) {
+        staging = m_staging;
+        stagingAlloc = m_stagingAlloc;
+    } else if (!m_ctx->createBuffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc)) {
+        return;
+    }
+    void* mapped = nullptr;
+    vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
+    std::vector<VkDeviceSize> offsets(ups.size());
+    VkDeviceSize off = 0;
+    for (size_t k = 0; k < ups.size(); ++k) {
+        offsets[k] = off;
+        std::memcpy(static_cast<uint8_t*>(mapped) + off, ups[k].data, static_cast<size_t>(ups[k].size));
+        off += (ups[k].size + 15) & ~VkDeviceSize(15);
+    }
+    vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
+    m_ctx->immediateSubmit([&](VkCommandBuffer c) {
+        for (size_t k = 0; k < ups.size(); ++k) {
+            const VkBufferCopy cp{offsets[k], 0, ups[k].size};
+            vkCmdCopyBuffer(c, staging, ups[k].dst, 1, &cp);
+        }
+    });
+    if (staging != m_staging) vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
+}
+
 void ModelRenderer::applyLods(std::vector<LodBuild>& builds) {
-    struct Up { const void* data; VkDeviceSize size; VkBuffer dst; };
-    std::vector<Up> ups;
+    std::vector<StagedCopy> ups;
     auto make = [&](const void* data, VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VmaAllocation& alloc) {
         if (size == 0) return;
         m_ctx->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage, VMA_MEMORY_USAGE_GPU_ONLY, buf, alloc);
@@ -1465,29 +1513,7 @@ void ModelRenderer::applyLods(std::vector<LodBuild>& builds) {
             mesh.shIndexCount = static_cast<uint32_t>(b.sh.size());
         }
     }
-    if (ups.empty()) return;
-    VkDeviceSize total = 0;
-    for (const Up& u : ups) total += (u.size + 15) & ~VkDeviceSize(15);
-    VkBuffer staging = VK_NULL_HANDLE;
-    VmaAllocation stagingAlloc = VK_NULL_HANDLE;
-    m_ctx->createBuffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
-    void* mapped = nullptr;
-    vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
-    std::vector<VkDeviceSize> offsets(ups.size());
-    VkDeviceSize off = 0;
-    for (size_t k = 0; k < ups.size(); ++k) {
-        offsets[k] = off;
-        std::memcpy(static_cast<uint8_t*>(mapped) + off, ups[k].data, static_cast<size_t>(ups[k].size));
-        off += (ups[k].size + 15) & ~VkDeviceSize(15);
-    }
-    vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
-    m_ctx->immediateSubmit([&](VkCommandBuffer c) {
-        for (size_t k = 0; k < ups.size(); ++k) {
-            const VkBufferCopy cp{offsets[k], 0, ups[k].size};
-            vkCmdCopyBuffer(c, staging, ups[k].dst, 1, &cp);
-        }
-    });
-    vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
+    uploadCopies(ups);
 }
 
 // Relevo assado: troca os buffers da malha pelos dela quando o desenho vai
@@ -1512,7 +1538,7 @@ static const std::vector<ModelMeshGPU::GroundCell>* cellsFor(const ModelMeshGPU&
 static float reliefSizeScale(const ModelMeshGPU& mesh, float amplitude);
 
 // Uma malha (thread de trabalho): cache ou assado, e a malha final.
-void ModelRenderer::computeRelief(ReliefTask& t, std::unordered_map<uint32_t, std::unique_ptr<ReliefAlpha>>& alphas) const {
+void ModelRenderer::computeRelief(ReliefTask& t, ReliefAlphas& alphas) const {
     const std::vector<uint32_t> full(t.uploaded.begin(), t.uploaded.begin() + t.fullCount);
     ReliefParams p;
     p.spacing = m_reliefBake.spacing;
@@ -1645,7 +1671,8 @@ void ModelRenderer::applyReliefs(std::vector<ReliefTask>& tasks, const std::stri
     std::sort(tasks.begin(), tasks.end(),
               [](const ReliefTask& a, const ReliefTask& b) { return a.fullCount > b.fullCount; });
     // Altura de cada textura das malhas, decodificada uma vez para o asset.
-    std::unordered_map<uint32_t, std::unique_ptr<ReliefAlpha>> alphas;
+    auto alphasPtr = std::make_shared<ReliefAlphas>();
+    ReliefAlphas& alphas = *alphasPtr;
     if (m_reliefSource) {
         std::vector<uint32_t> slots;
         for (const ReliefTask& t : tasks)
@@ -1663,15 +1690,52 @@ void ModelRenderer::applyReliefs(std::vector<ReliefTask>& tasks, const std::stri
             if (m_reliefSource(a->name, false, none, w, h, a->id)) alphas.emplace(slot, std::move(a));
         }
     }
-    auto job = platform::runAsync([&] {
-        JobSystem::instance().parallelFor(static_cast<uint32_t>(tasks.size()),
-                                          [&](uint32_t k) { computeRelief(tasks[k], alphas); });
+    auto tasksPtr = std::make_shared<std::vector<ReliefTask>>(std::move(tasks));
+    tasks.clear();
+    auto job = platform::runAsync([this, tasksPtr, alphasPtr] {
+        std::vector<ReliefTask>& ts = *tasksPtr;
+        JobSystem::instance().parallelFor(static_cast<uint32_t>(ts.size()),
+                                          [&](uint32_t k) { computeRelief(ts[k], *alphasPtr); });
     });
+    if (m_reliefDeferred) {
+        m_reliefJobs.push_back({label, tasksPtr, alphasPtr, std::move(job), t0});
+        return;
+    }
     job.wait();
     job.get();
+    uploadReliefs(*tasksPtr, label,
+                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(), false);
+}
+
+void ModelRenderer::pollReliefJobs() {
+    // Uma por quadro: a subida de um chao assado sao 10-25 ms.
+    for (size_t k = 0; k < m_reliefJobs.size(); ++k) {
+        ReliefJob& j = m_reliefJobs[k];
+        if (j.done.wait_for(std::chrono::seconds(0)) != std::future_status::ready) continue;
+        j.done.get();
+        ReliefJob job = std::move(j);
+        m_reliefJobs.erase(m_reliefJobs.begin() + static_cast<std::ptrdiff_t>(k));
+        uploadReliefs(*job.tasks, job.label,
+                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - job.t0).count(), true);
+        return;
+    }
+}
+
+void ModelRenderer::dropReliefJobs(const std::string* label) {
+    for (size_t k = 0; k < m_reliefJobs.size();) {
+        if (label && m_reliefJobs[k].label != *label) {
+            ++k;
+            continue;
+        }
+        m_reliefJobs[k].done.wait();
+        m_reliefJobs.erase(m_reliefJobs.begin() + static_cast<std::ptrdiff_t>(k));
+    }
+}
+
+void ModelRenderer::uploadReliefs(std::vector<ReliefTask>& tasks, const std::string& label, double parallelMs,
+                                  bool late) {
     const auto t1 = std::chrono::steady_clock::now();
-    struct Up { const void* data; VkDeviceSize size; VkBuffer dst; };
-    std::vector<Up> ups;
+    std::vector<StagedCopy> ups;
     size_t done = 0, cached = 0, trisIn = 0, trisOut = 0, bytes = 0, floorBytes = 0;
     float gridMax = 0.0f;
     for (ReliefTask& t : tasks) {
@@ -1692,6 +1756,10 @@ void ModelRenderer::applyReliefs(std::vector<ReliefTask>& tasks, const std::stri
         mesh.reliefCells = std::move(t.outCells);
         mesh.reliefFloor = std::move(t.outFloor);
         if (mesh.reliefFloor) floorBytes += mesh.reliefFloor->bytes();
+        if (late && mesh.reliefFloor && !mesh.reliefFloor->empty())
+            for (const ModelInstance& inst : m_instances)
+                if (inst.meshIndex == t.mesh)
+                    addReliefFloor(inst.transform, inst.worldAabbMin, inst.worldAabbMax, mesh.reliefFloor);
         ++done;
         cached += t.fromCache ? 1 : 0;
         bytes += size_t(vs + is);
@@ -1699,37 +1767,14 @@ void ModelRenderer::applyReliefs(std::vector<ReliefTask>& tasks, const std::stri
         trisOut += t.outCount / 3;
         gridMax = std::max(gridMax, t.spacing);
     }
-    if (!ups.empty()) {
-        VkDeviceSize total = 0;
-        for (const Up& u : ups) total += (u.size + 15) & ~VkDeviceSize(15);
-        VkBuffer staging = VK_NULL_HANDLE;
-        VmaAllocation stagingAlloc = VK_NULL_HANDLE;
-        m_ctx->createBuffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
-        void* mapped = nullptr;
-        vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
-        std::vector<VkDeviceSize> offsets(ups.size());
-        VkDeviceSize off = 0;
-        for (size_t k = 0; k < ups.size(); ++k) {
-            offsets[k] = off;
-            std::memcpy(static_cast<uint8_t*>(mapped) + off, ups[k].data, static_cast<size_t>(ups[k].size));
-            off += (ups[k].size + 15) & ~VkDeviceSize(15);
-        }
-        vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
-        m_ctx->immediateSubmit([&](VkCommandBuffer c) {
-            for (size_t k = 0; k < ups.size(); ++k) {
-                const VkBufferCopy cp{offsets[k], 0, ups[k].size};
-                vkCmdCopyBuffer(c, staging, ups[k].dst, 1, &cp);
-            }
-        });
-        vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
-    }
+    uploadCopies(ups);
     const auto t2 = std::chrono::steady_clock::now();
     ERUPTION_LOG_WARN("[RELEVO] %s: %zu de %zu malhas assadas (%zu do cache), grade %.2f u (ate' %.2f), tris %zu -> %zu, "
-                      "%.1f MB na GPU, piso %.2f MB na CPU, %.0f ms em paralelo, subida %.0f ms",
+                      "%.1f MB na GPU, piso %.2f MB na CPU, %.0f ms %s, subida %.0f ms",
                       label.c_str(), done, tasks.size(), cached, double(m_reliefBake.spacing), double(gridMax), trisIn,
                       trisOut,
-                      double(bytes) / (1024.0 * 1024.0), double(floorBytes) / (1024.0 * 1024.0), std::chrono::duration<double, std::milli>(t1 - t0).count(),
-                      std::chrono::duration<double, std::milli>(t2 - t1).count());
+                      double(bytes) / (1024.0 * 1024.0), double(floorBytes) / (1024.0 * 1024.0), parallelMs,
+                      late ? "em segundo plano" : "em paralelo", std::chrono::duration<double, std::milli>(t2 - t1).count());
     tasks.clear();
 }
 
@@ -2298,6 +2343,29 @@ ModelRenderer::PreparedNode ModelRenderer::prepareNode(const ModelAsset& asset, 
     return out;
 }
 
+static bool compactWanted(const ModelNode& node) {
+    constexpr size_t kMinIndices = 65536;
+    return node.indices.size() >= kMinIndices && node.skin < 0 && node.skinJoints.empty() && node.morphTargets <= 0;
+}
+
+// A solda (so' leitura do no'): roda na thread de leitura do vizinho.
+static ModelRenderer::PreparedAsset::CompactNode compactNodeData(const ModelNode& node) {
+    ModelRenderer::PreparedAsset::CompactNode out;
+    if (!compactWanted(node)) return out;
+    std::vector<unsigned char> bytes;
+    if (reindexMesh(node.vertices.data(), node.vertices.size(), sizeof(ModelVertex), node.indices, bytes, out.indices)) {
+        const auto* first = reinterpret_cast<const ModelVertex*>(bytes.data());
+        out.vertices.assign(first, first + bytes.size() / sizeof(ModelVertex));
+        out.ok = true;
+    }
+    return out;
+}
+
+static void compactPrepared(const ModelAsset& asset, ModelRenderer::PreparedAsset& out) {
+    out.compact.resize(asset.nodes.size());
+    for (size_t n = 0; n < asset.nodes.size(); ++n) out.compact[n] = compactNodeData(asset.nodes[n]);
+}
+
 ModelRenderer::PreparedAsset ModelRenderer::prepareAsset(const ModelAsset& asset, std::vector<NodeSlots> slots,
                                                          const LodParams& lod) {
     PreparedAsset out;
@@ -2305,6 +2373,7 @@ ModelRenderer::PreparedAsset ModelRenderer::prepareAsset(const ModelAsset& asset
     for (size_t n = 0; n < asset.nodes.size() && n < slots.size(); ++n)
         out.nodes[n] = prepareNode(asset, n, slots[n], lod, true);
     out.slots = std::move(slots);
+    compactPrepared(asset, out);
     return out;
 }
 
@@ -2320,25 +2389,40 @@ void ModelRenderer::providePrepared(const std::string& filePath, PreparedAsset&&
 // ate' a troca de mapa (massif no celular de 3 GB, que fechava por memoria).
 // Soldada (mesmos bytes, mesmas posicoes e triangulos) cai para ~1/6. So' acima
 // de 65536 indices: abaixo, a solda custa mais tempo de carga do que poupa.
-static void compactUploadedNode(ModelNode& node) {
-    constexpr size_t kMinIndices = 65536;
-    if (node.indices.size() < kMinIndices || node.skin >= 0 || !node.skinJoints.empty() || node.morphTargets > 0)
-        return;
-    std::vector<unsigned char> bytes;
-    std::vector<uint32_t> indices;
-    if (reindexMesh(node.vertices.data(), node.vertices.size(), sizeof(ModelVertex), node.indices, bytes, indices)) {
-        const auto* first = reinterpret_cast<const ModelVertex*>(bytes.data());
-        std::vector<ModelVertex>(first, first + bytes.size() / sizeof(ModelVertex)).swap(node.vertices);
-        node.indices.swap(indices);
+// `pre`: a solda ja' feita fora (compactPrepared), ou nullptr para fazer aqui.
+// Os vetores velhos saem numa thread: liberar centenas de MB levava 25-43 ms
+// do quadro de entrada do vizinho (sonda na rota rapida, 28/10).
+static void compactUploadedNode(ModelNode& node, ModelRenderer::PreparedAsset::CompactNode* pre) {
+    if (!compactWanted(node)) return;
+    ModelRenderer::PreparedAsset::CompactNode own;
+    if (!pre || (!pre->ok && pre->indices.empty())) {
+        own = compactNodeData(node);
+        pre = &own;
     }
-    std::vector<uint32_t>().swap(node.perVertexTexIds);
-    std::vector<uint16_t>().swap(node.perVertexBlendTexIds);
-    std::vector<float>().swap(node.perVertexBlendWeights);
-    std::vector<uint16_t>().swap(node.perVertexBlendMaskTexIds);
-    std::vector<uint16_t>().swap(node.perVertexBlendMaskTexIds2);
-    for (auto& ids : node.perVertexSplatTexIds) std::vector<uint16_t>().swap(ids);
-    std::vector<Vec2>().swap(node.perVertexBlendMaskUV);
-    std::vector<float>().swap(node.perVertexEmissive);
+    struct Old {
+        std::vector<ModelVertex> vertices;
+        std::vector<uint32_t> indices, texIds;
+        std::vector<uint16_t> blendTex, mask1, mask2;
+        std::vector<float> blendW, emissive;
+        std::vector<Vec2> maskUv;
+        std::vector<std::vector<uint16_t>> splat;
+    };
+    auto old = std::make_shared<Old>();
+    if (pre->ok) {
+        old->vertices.swap(node.vertices);
+        old->indices.swap(node.indices);
+        node.vertices.swap(pre->vertices);
+        node.indices.swap(pre->indices);
+    }
+    old->texIds.swap(node.perVertexTexIds);
+    old->blendTex.swap(node.perVertexBlendTexIds);
+    old->blendW.swap(node.perVertexBlendWeights);
+    old->mask1.swap(node.perVertexBlendMaskTexIds);
+    old->mask2.swap(node.perVertexBlendMaskTexIds2);
+    for (auto& ids : node.perVertexSplatTexIds) old->splat.emplace_back().swap(ids);
+    old->maskUv.swap(node.perVertexBlendMaskUV);
+    old->emissive.swap(node.perVertexEmissive);
+    platform::runAsync([old]() mutable { old.reset(); });
 }
 
 void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanceDesc& ref,
@@ -2665,7 +2749,9 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                               withLod ? minSw : 0.0f, maxSw);
         }
         m_modelMeshCache[asset.filePath] = meshIndices;
-        for (ModelNode& node : m_lastModels[assetIndex].nodes) compactUploadedNode(node);
+        auto& doneNodes = m_lastModels[assetIndex].nodes;
+        for (size_t n = 0; n < doneNodes.size(); ++n)
+            compactUploadedNode(doneNodes[n], n < pre.compact.size() ? &pre.compact[n] : nullptr);
     }
 
     // Create instances for each node
@@ -3072,6 +3158,7 @@ std::vector<std::string> ModelRenderer::releaseAsset(const std::string& filePath
     std::vector<std::string> keys;
     auto it = m_modelMeshCache.find(filePath);
     if (it == m_modelMeshCache.end()) return keys;
+    dropReliefJobs(&filePath);
     std::vector<ModelMeshGPU> dead;
     std::vector<uint32_t> seen;
     for (size_t n = 0; n < it->second.size(); ++n) {

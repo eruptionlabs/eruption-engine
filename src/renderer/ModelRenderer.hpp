@@ -18,6 +18,8 @@
 #include <unordered_map>
 #include <functional>
 #include <memory>
+#include <chrono>
+#include <future>
 #include <mutex>
 #include <cstdint>
 
@@ -676,6 +678,10 @@ public:
     LodParams lodParams() const;
     static PreparedAsset prepareAsset(const ModelAsset& asset, std::vector<NodeSlots> slots, const LodParams& lod);
     void providePrepared(const std::string& filePath, PreparedAsset&& prepared);
+    // Entrada de vizinho no mundo continuo: o relevo assa em segundo plano e
+    // entra num quadro seguinte (pollReliefJobs, uma vez por quadro).
+    void setReliefDeferred(bool deferred) { m_reliefDeferred = deferred; }
+    void pollReliefJobs();
     // Distancia ao longo do raio (mundo, dir normalizada) ate' o triangulo
     // mais proximo da instancia, ou -1. Usa a malha da CPU do modelo.
     float raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const;
@@ -878,6 +884,14 @@ public:
     struct PreparedAsset {
         std::vector<NodeSlots> slots;
         std::vector<PreparedNode> nodes;
+        // compactUploadedNode feito na thread de leitura (ok = soldou); a
+        // thread principal so' troca os vetores.
+        struct CompactNode {
+            bool ok = false;
+            std::vector<ModelVertex> vertices;
+            std::vector<uint32_t> indices;
+        };
+        std::vector<CompactNode> compact;
     };
 
 private:
@@ -1221,9 +1235,36 @@ private:
         bool ok = false, fromCache = false;
         double ms = 0.0;
     };
-    void computeRelief(ReliefTask& task, std::unordered_map<uint32_t, std::unique_ptr<ReliefAlpha>>& alphas) const;
+    using ReliefAlphas = std::unordered_map<uint32_t, std::unique_ptr<ReliefAlpha>>;
+    void computeRelief(ReliefTask& task, ReliefAlphas& alphas) const;
     void applyReliefs(std::vector<ReliefTask>& tasks, const std::string& label,
                       const std::unordered_map<uint32_t, std::string>& slotNames);
+    // Sobe as malhas assadas (thread principal). `late`: as instancias ja'
+    // existem (assado em segundo plano), entao o piso entra nelas aqui.
+    void uploadReliefs(std::vector<ReliefTask>& tasks, const std::string& label, double parallelMs, bool late);
+    // ASSADO EM SEGUNDO PLANO (setReliefDeferred): a malha desenha pelo
+    // caminho sem assado ate' pollReliefJobs trocar. Uma tarefa por asset.
+    struct ReliefJob {
+        std::string label;
+        std::shared_ptr<std::vector<ReliefTask>> tasks;
+        std::shared_ptr<ReliefAlphas> alphas;
+        std::future<void> done;
+        std::chrono::steady_clock::time_point t0;
+    };
+    std::vector<ReliefJob> m_reliefJobs;
+    bool m_reliefDeferred = false;
+    struct StagedCopy {
+        const void* data;
+        VkDeviceSize size;
+        VkBuffer dst;
+    };
+    void uploadCopies(const std::vector<StagedCopy>& ups);
+    VkBuffer m_staging = VK_NULL_HANDLE;
+    VmaAllocation m_stagingAlloc = VK_NULL_HANDLE;
+    VkDeviceSize m_stagingSize = 0;
+    // Espera e descarta as tarefas do asset (todas com nullptr): a malha vai
+    // sair ou o mapa inteiro vai embora.
+    void dropReliefJobs(const std::string* label);
     VkPipeline m_tessPipeline = VK_NULL_HANDLE;
     // PRE-PASSE DE PROFUNDIDADE da folhagem: m_depthPipeline so' descarta e
     // escreve profundidade; m_pipelineNoDepthWrite e' o m_pipeline sem escrita
