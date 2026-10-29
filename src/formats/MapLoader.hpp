@@ -26,6 +26,19 @@ struct MapFog {
 // serve ao world.set_fog.
 MapFog parseMapFog(const nlohmann::json& f);
 
+// Borda de mundo (E-BORDA-VAZIO, spec 12): bloco "world_border" do .env, ou
+// world.set_border. Fora do retangulo [x0,z0]-[x1,z1] a tela funde para
+// `color` ao longo de `fade` unidades. `set` falso = nenhuma (padrao).
+struct WorldBorder {
+    bool set = false;
+    float x0 = 0.0f, z0 = 0.0f, x1 = 0.0f, z1 = 0.0f; // retangulo, em unidades do mundo
+    float fade = 200.0f;                              // u de fusao ate' a cor
+    Vec3 color = Vec3(0.0f);                           // preto = vazio do AoM
+};
+// Bloco "world_border" ({x0, z0, x1, z1, fade, color}); o mesmo formato serve
+// ao world.set_border.
+WorldBorder parseWorldBorder(const nlohmann::json& b);
+
 struct LoadedMap {
     std::string mapName;
 
@@ -218,6 +231,9 @@ struct LoadedMap {
         // vale a ceu aberto. Desligado, o fundo fica na cor de limpeza e o
         // que nao tem geometria le' como escuro.
         bool hasSky = true;
+        // BORDA-VAZIO ("world_border" no .env, E-BORDA-VAZIO/spec 12): vence
+        // ate' world.set_border chamar. Ver WorldBorder.
+        WorldBorder worldBorder;
     } env;
 
     // Approximate CPU RAM used by this map's raw parsed data

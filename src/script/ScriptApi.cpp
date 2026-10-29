@@ -1624,6 +1624,39 @@ int world_set_fog(lua_State* L) {
     eng().setScriptFog(parseMapFog(j));
     return 0;
 }
+// Borda de mundo (E-BORDA-VAZIO, spec 12): { x0, z0, x1, z1, fade, color }
+// vence o bloco "world_border" do .env; nil devolve o comando para ele (ou
+// desliga, sem mapa). Fora do retangulo a tela funde para `color` (preto por
+// padrao) ao longo de `fade` unidades.
+int world_set_border(lua_State* L) {
+    if (lua_isnoneornil(L, 1)) {
+        eng().setScriptBorder(WorldBorder{});
+        return 0;
+    }
+    luaL_checktype(L, 1, LUA_TTABLE);
+    nlohmann::json j = nlohmann::json::object();
+    for (const char* k : {"x0", "z0", "x1", "z1", "fade"}) {
+        lua_getfield(L, 1, k);
+        if (lua_type(L, -1) == LUA_TNUMBER) j[k] = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+    }
+    lua_getfield(L, 1, "color");
+    if (lua_type(L, -1) == LUA_TVECTOR) {
+        const float* v = lua_tovector(L, -1);
+        j["color"] = {v[0], v[1], v[2]};
+    } else if (lua_type(L, -1) == LUA_TTABLE) {
+        nlohmann::json c = nlohmann::json::array();
+        for (int i = 1; i <= 3; ++i) {
+            lua_rawgeti(L, -1, i);
+            c.push_back(lua_type(L, -1) == LUA_TNUMBER ? lua_tonumber(L, -1) : 0.0);
+            lua_pop(L, 1);
+        }
+        j["color"] = c;
+    }
+    lua_pop(L, 1);
+    eng().setScriptBorder(parseWorldBorder(j));
+    return 0;
+}
 // Escala de tempo do mundo (hit-stop, camera lenta): animacao de sprite, VFX,
 // clima e o dt dos scripts andam escalados; `seconds` conta em tempo cheio e
 // devolve a 1 sozinho (0 ou nada = ate' a proxima chamada). O som e o
@@ -2372,7 +2405,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
-        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_exposure", world_set_exposure}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"set_nav_rules", world_set_nav_rules}, {"nav_rules", world_nav_rules}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
+        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_border", world_set_border}, {"set_exposure", world_set_exposure}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"set_nav_rules", world_set_nav_rules}, {"nav_rules", world_nav_rules}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
         {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend}, {"set_cutaway", world_set_cutaway},
         {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids}, {"set_liquid_level", world_set_liquid_level},
@@ -2701,6 +2734,12 @@ declare world: {
     -- height, falloff} (the map .env "fog" block fields). Wins over the map's
     -- and the weather's fog until the next map change; nil gives control back.
     set_fog: (fog: { [string]: any }?) -> (),
+    -- World edge void (E-BORDA-VAZIO, spec 12): {x0, z0, x1, z1, fade, color}.
+    -- Outside the [x0,z0]-[x1,z1] rectangle the screen fades to `color`
+    -- (black by default) over `fade` world units (default 200). Wins over
+    -- the map .env "world_border" block until the next map change; nil gives
+    -- control back. The sky never darkens, same rule as vision.
+    set_border: (border: { [string]: any }?) -> (),
     -- Locks the exposure at `value` (1 = the light as authored) instead of
     -- adapting to the frame, as the map .env "exposure": {"auto": false,
     -- "value": 1.0} does. nil gives control back (the map's lock or auto).
