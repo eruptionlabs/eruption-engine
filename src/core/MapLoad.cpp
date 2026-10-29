@@ -810,6 +810,16 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
         }
     }
     loadPhase("vfx+fim");
+    // ERUPTION_TEST_DUMP_RELIEF_AMP=1 (prova, eada502): amplitude registrada
+    // (ModelRenderer::m_texReliefAmp) de cada textura de CHAO deste mapa -
+    // todas tem que sair 2,5 u (m_reliefBake.amplitude e' uma regra so').
+    if (std::getenv("ERUPTION_TEST_DUMP_RELIEF_AMP")) {
+        for (const auto& [name, slot] : m_modelRenderer.getTextureCache()) {
+            if (m_modelRenderer.groundRoleForSlot(slot) != 1) continue;
+            ERUPTION_LOG_WARN("RELEVO-AMP mapa='%s' textura='%s' slot=%u amplitude=%.3f", m_currentMapName.c_str(),
+                              name.c_str(), slot, m_modelRenderer.reliefAmplitudeForSlot(slot));
+        }
+    }
     return true;
 }
 
