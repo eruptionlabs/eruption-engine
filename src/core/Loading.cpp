@@ -167,24 +167,16 @@ void Engine::presentHeldLoading() {
 void Engine::renderLoadingProgress() {
     m_firstLoadOver = true; // a primeira carga (e a espera dela) acabou
     // Barra enquanto um mapa é lido em segundo plano (troca pelo seletor).
+    // Nuvens do clima semeando NAO contam: o jogo troca o clima no meio da
+    // partida (uma skill de tempestade) e a barra "Carregando" aparecia no
+    // centro da tela com o jogo rodando. Cada nuvem custa 0,1-0,6 ms de CPU
+    // (sem espera de GPU) e a fila anda com 2 ms por quadro.
     const bool hasActiveLoad = m_warpJobActive;
-    // A weather cloud field still draining its spawn queue counts as loading:
-    // spawn warm-up belongs behind the loading overlay, not as an in-game hitch.
-    const bool hasPendingClouds = !m_pendingCloudSpawns.empty();
-    if (!hasActiveLoad && !hasPendingClouds) return;
+    if (!hasActiveLoad) return;
 
-    float progress = 0.0f;
-    std::string task = "Loading...";
+    const float progress = 0.4f;
+    const std::string task = "Loading map data";
     std::string mapName = m_warpJobMap;
-
-    if (hasActiveLoad) {
-        progress = 0.4f;
-        task = "Loading map data";
-    } else {
-        // Only cloud spawns pending: near-full bar until the field is up.
-        progress = 0.9f;
-        task = "Spawning weather";
-    }
 
     // Smooth follower for the bottom loading bar progress shown by the logo glow.
     if (progress > m_splashBarProgress) {
