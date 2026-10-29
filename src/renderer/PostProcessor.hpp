@@ -41,6 +41,12 @@ public:
         // Fundo abaixo do horizonte onde nao ha' geometria: rgb = cor (antes
         // da exposicao), a = 1 liga (e tira esses pixels da autoexposicao).
         Vec4 belowHorizon = Vec4(0.0f);
+        // BORDA-VAZIO (world_border do .env, ou world.set_border): fora do
+        // retangulo [x0,z0]-[x1,z1] a tela funde para worldBorderParams.yzw
+        // (cor linear) ao longo de worldBorderParams.x unidades.
+        // worldBorderParams.x < 0 = desligada (padrao).
+        Vec4 worldBorderRect = Vec4(0.0f);
+        Vec4 worldBorderParams = Vec4(-1.0f, 0.0f, 0.0f, 0.0f);
         // INTERRUPTOR MESTRE DO DESFOQUE. Chamava-se `enableTiltShift`, o que
         // fez dois relatorios diferentes concluirem que "o tilt-shift esta'
         // desligado, por isso falta a pista de maquete" - errado nos dois: o
@@ -436,6 +442,8 @@ private:
     static constexpr uint32_t kSetsPerFrame = 32;
     VkDescriptorSet& dset(uint32_t i) { return m_descriptorSets[m_ctx->currentFrame() * kSetsPerFrame + i]; }
     VkSampler m_linearSampler = VK_NULL_HANDLE;
+    VkSampler m_pointSampler = VK_NULL_HANDLE;
+    VkSampler samplerFor(VkImageView view) const;
 
     void createImages();
     void createPipelines();

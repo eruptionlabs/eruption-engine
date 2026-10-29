@@ -354,7 +354,9 @@ void PostProcessor::createDescriptors() {
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset = 0;
     pcRange.size = 128;
-    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 352, 16 * 1024);
+    // 352 + 32 B (borderRect/borderParams, E-BORDA-VAZIO): o bloco da
+    // composicao cresceu alem do antigo teto de 352 B.
+    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 384, 16 * 1024);
     const VkDescriptorSetLayout setLayouts[2] = {m_descriptorSetLayout, m_pushRing.layout()};
 
     VkPipelineLayoutCreateInfo plInfo{};
@@ -1571,6 +1573,8 @@ if (!m_ctx) return;
         Vec4 sceneDim;        // rgb=cor, a=forca (fx.dim)
         Vec4 belowHorizon;    // rgb=cor do fundo, a=liga
         Vec4 vision;          // visao de equipe: canto xz, 1/lado, dim (< 0 = desligada)
+        Vec4 borderRect;      // E-BORDA-VAZIO: x0,z0,x1,z1 em unidades do mundo
+        Vec4 borderParams;    // x=distancia de fusao (< 0 = desligada), yzw=cor
     } push;
     // Debug/test overrides for fog parameters (useful for headless screenshots).
     float fogStart = settings.fogStart;
@@ -1643,7 +1647,9 @@ if (!m_ctx) return;
     push.sceneDim = settings.sceneDim;
     push.belowHorizon = settings.belowHorizon;
     push.vision = m_visionParams;
-    static_assert(sizeof(push) <= 352, "bloco da composicao passou do maxBlock do PushRing (352 B)");
+    push.borderRect = settings.worldBorderRect;
+    push.borderParams = settings.worldBorderParams;
+    static_assert(sizeof(push) <= 384, "bloco da composicao passou do maxBlock do PushRing (384 B)");
     m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, &push, sizeof(push));
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkc::cmdEndRendering(cmd);

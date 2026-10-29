@@ -46,6 +46,11 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec4 sceneDim;        // rgb=cor, a=forca: escurece so' o cenario (fx.dim), antes da UI
     vec4 belowHorizon;    // rgb=fundo abaixo do horizonte (antes da exposicao), a=liga
     vec4 vision;          // xy=canto xz da janela, z=1/lado, w=dim (< 0 = desligada)
+    // BORDA-VAZIO (world_border do .env, ou world.set_border): fora do
+    // retangulo [x0,z0]-[x1,z1] do mapa a cor funde para borderParams.yzw ao
+    // longo de borderParams.x unidades. borderParams.x < 0 = desligada.
+    vec4 borderRect;      // x0,z0,x1,z1 em unidades do mundo
+    vec4 borderParams;    // x=distancia de fusao, yzw=cor (linear)
 } push;
 
 // ---------------------------------------------------------------------------
@@ -446,6 +451,17 @@ void main() {
         float vis = all(greaterThanEqual(vuv, vec2(0.0))) && all(lessThanEqual(vuv, vec2(1.0)))
                     ? texture(visionTexture, vuv).r : 0.0;
         color *= mix(push.vision.w, 1.0, vis);
+    }
+    // BORDA-VAZIO depois do gamma, como a visao: fora do retangulo do mapa a
+    // tela funde para a cor do vazio ao longo de borderParams.x unidades. O
+    // ceu nao escurece (mesma regra da visao).
+    if (push.borderParams.x >= 0.0 && depth < 0.99999) {
+        vec2 p = worldPos.xz;
+        vec2 d = max(max(push.borderRect.xy - p, p - push.borderRect.zw), vec2(0.0));
+        float dist = length(d);
+        float t = clamp(dist / max(push.borderParams.x, 1e-3), 0.0, 1.0);
+        vec3 borderColor = pow(max(push.borderParams.yzw, vec3(0.0)), vec3(1.0 / 2.2));
+        color = mix(color, borderColor, t);
     }
     // fx.dim depois do gamma: a forca e' a que se ve' (0,7 = 70% mais escuro);
     // antes do gamma 0,7 escurecia so' ~42% na tela.

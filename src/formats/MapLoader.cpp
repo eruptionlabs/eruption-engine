@@ -112,6 +112,19 @@ MapFog parseMapFog(const nlohmann::json& f) {
     return fog;
 }
 
+WorldBorder parseWorldBorder(const nlohmann::json& b) {
+    WorldBorder wb;
+    wb.set = true;
+    wb.x0 = b.value("x0", wb.x0);
+    wb.z0 = b.value("z0", wb.z0);
+    wb.x1 = std::max(b.value("x1", wb.x1), wb.x0 + 1.0f);
+    wb.z1 = std::max(b.value("z1", wb.z1), wb.z0 + 1.0f);
+    wb.fade = std::max(b.value("fade", wb.fade), 0.0f);
+    if (b.contains("color") && b["color"].is_array() && b["color"].size() >= 3)
+        wb.color = Vec3(b["color"][0].get<float>(), b["color"][1].get<float>(), b["color"][2].get<float>());
+    return wb;
+}
+
 static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
     if (!fs::exists(envPath)) return;
 
@@ -142,6 +155,12 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
             ERUPTION_LOG_WARN("MapLoader: nevoa do .env (cor %.2f %.2f %.2f, %.0f..%.0f, opacidade %.2f)",
                               map.env.fog.color.r, map.env.fog.color.g, map.env.fog.color.b,
                               map.env.fog.start, map.env.fog.end, map.env.fog.opacity);
+        }
+        if (j.contains("world_border") && j["world_border"].is_object()) {
+            map.env.worldBorder = parseWorldBorder(j["world_border"]);
+            ERUPTION_LOG_WARN("MapLoader: borda de mundo do .env (%.0f,%.0f)-(%.0f,%.0f) fusao %.0f u",
+                              map.env.worldBorder.x0, map.env.worldBorder.z0, map.env.worldBorder.x1,
+                              map.env.worldBorder.z1, map.env.worldBorder.fade);
         }
         // "background": "fog" (cor da nevoa) ou [r, g, b] (linear, antes da
         // exposicao): o vazio abaixo do horizonte na borda do mundo.

@@ -211,6 +211,12 @@ declare world: {
     -- height, falloff} (the map .env "fog" block fields). Wins over the map's
     -- and the weather's fog until the next map change; nil gives control back.
     set_fog: (fog: { [string]: any }?) -> (),
+    -- World edge void (E-BORDA-VAZIO, spec 12): {x0, z0, x1, z1, fade, color}.
+    -- Outside the [x0,z0]-[x1,z1] rectangle the screen fades to `color`
+    -- (black by default) over `fade` world units (default 200). Wins over
+    -- the map .env "world_border" block until the next map change; nil gives
+    -- control back. The sky never darkens, same rule as vision.
+    set_border: (border: { [string]: any }?) -> (),
     -- Locks the exposure at `value` (1 = the light as authored) instead of
     -- adapting to the frame, as the map .env "exposure": {"auto": false,
     -- "value": 1.0} does. nil gives control back (the map's lock or auto).

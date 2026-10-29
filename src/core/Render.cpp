@@ -1787,6 +1787,16 @@ void Engine::render() {
             postSettings.belowHorizon = Vec4(m_currentMap->env.backgroundMode == 1 ? postSettings.fogColor
                                                                                    : m_currentMap->env.backgroundColor, 1.0f);
 
+        // Borda de mundo (world.set_border, senao o bloco "world_border" do
+        // .env) - E-BORDA-VAZIO, spec 12: fora do retangulo a tela funde para
+        // a cor do vazio. Sem nenhum dos dois, desligada (fade < 0).
+        const WorldBorder* border = m_scriptBorder.set ? &m_scriptBorder
+                                   : (m_currentMap && m_currentMap->env.worldBorder.set) ? &m_currentMap->env.worldBorder
+                                                                                          : nullptr;
+        postSettings.worldBorderRect = border ? Vec4(border->x0, border->z0, border->x1, border->z1) : Vec4(0.0f);
+        postSettings.worldBorderParams = border ? Vec4(border->fade, border->color.r, border->color.g, border->color.b)
+                                                 : Vec4(-1.0f, 0.0f, 0.0f, 0.0f);
+
         // Coerência atmosférica: ajustar sol/lua conforme oclusão de nuvens
         auto& skyParams = m_skybox.editableConfig().procedural;
         skyParams.sunHaloIntensity *= m_weatherSystem.sunOcclusion();

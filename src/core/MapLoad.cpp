@@ -232,6 +232,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     loadPhase("clima+waitIdle");
     clearCharacters(); // os do mapa novo vêm do scene.luau dele
     m_scriptFog = MapFog{}; // world.set_fog e' do mapa que o pediu
+    m_scriptBorder = WorldBorder{}; // world.set_border tambem
     m_scriptExposure = -1.0f; // world.set_exposure tambem
     clearPlayerStart();
     endSplatEditing();

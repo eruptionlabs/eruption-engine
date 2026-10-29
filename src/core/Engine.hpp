@@ -526,6 +526,7 @@ public:
     float m_lensFlare = 0.0f;        // chave "lens_flare" (forca do flare do sol)
     int m_lensFlareRays = 6;         // chave "lens_flare_rays" (linhas da estrela)
     MapFog m_scriptFog;              // world.set_fog (set=false: nenhuma)
+    WorldBorder m_scriptBorder;       // world.set_border (set=false: nenhuma)
     float m_scriptExposure = -1.0f;  // world.set_exposure (< 0: a do .env ou automatica)
     DioramaLookConfig& lookConfig() { return m_lookConfig; }
     ConfigManager& dioramaConfig() { return m_dioramaConfig; }
@@ -653,6 +654,9 @@ public:
     // Nevoa por script (world.set_fog): vence a do mapa (.env) e a do clima;
     // set=false devolve o comando para eles.
     void setScriptFog(const MapFog& fog) { m_scriptFog = fog; }
+    // Borda de mundo por script (world.set_border): vence a "world_border" do
+    // .env; set=false devolve o comando para ela (ou desliga, sem mapa).
+    void setScriptBorder(const WorldBorder& b) { m_scriptBorder = b; }
     // Exposicao travada por script (world.set_exposure): vence o "exposure"
     // do .env; negativo devolve o comando a ele (ou a' automatica).
     void setScriptExposure(float value) { m_scriptExposure = value; }
