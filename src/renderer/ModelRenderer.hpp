@@ -11,6 +11,7 @@
 #include "math/CullingSIMD.hpp"
 #include "utils/MeshClusters.hpp"
 #include "utils/AlignedAllocator.hpp"
+#include "renderer/RaycastBvh.hpp"
 
 #include <atomic>
 #include <algorithm>
@@ -961,6 +962,12 @@ private:
     std::unordered_map<uint32_t, int> m_groundTexRole;
     std::unordered_map<uint32_t, PbrTextureSlots> m_pbrByTexSlot;
     std::unordered_map<std::string, std::vector<uint32_t>> m_modelMeshCache;
+    // E-PISO-GRANDE (spec 12): BVH por no' (chave "arquivo#indice do no'"),
+    // construida na primeira raycastInstance e reusada depois - antes era
+    // triangulo por triangulo a cada chamada (custava ~1,2 ms por consulta de
+    // piso numa montanha de dezenas de milhares de triangulos). Invalidada em
+    // releaseAsset (prefixo "arquivo#").
+    mutable std::unordered_map<std::string, RaycastBvh> m_raycastBvh;
 
     VkBuffer m_globalVertexBuffer = VK_NULL_HANDLE;
     VmaAllocation m_globalVertexAlloc = VK_NULL_HANDLE;

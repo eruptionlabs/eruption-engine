@@ -3267,32 +3267,19 @@ float ModelRenderer::raycastInstance(uint32_t index, const Vec3& origin, const V
     const Mat4 inv = glm::inverse(inst.transform);
     const Vec3 o = Vec3(inv * Vec4(origin, 1.0f));
     const Vec3 d = Vec3(inv * Vec4(dir, 0.0f));
-    float best = FLT_MAX;
-    auto tri = [&](const Vec3& a, const Vec3& b, const Vec3& c) {
-        // Moller-Trumbore, dos dois lados.
-        const Vec3 e1 = b - a, e2 = c - a, pv = glm::cross(d, e2);
-        const float det = glm::dot(e1, pv);
-        if (std::abs(det) < 1e-12f) return;
-        const float invDet = 1.0f / det;
-        const Vec3 tv = o - a;
-        const float u = glm::dot(tv, pv) * invDet;
-        if (u < 0.0f || u > 1.0f) return;
-        const Vec3 qv = glm::cross(tv, e1);
-        const float v = glm::dot(d, qv) * invDet;
-        if (v < 0.0f || u + v > 1.0f) return;
-        const float t = glm::dot(e2, qv) * invDet;
-        if (t > 0.0f && t < best) best = t;
-    };
-    const auto& vs = node.vertices;
-    if (!node.indices.empty()) {
-        for (size_t i = 0; i + 2 < node.indices.size(); i += 3) {
-            const uint32_t a = node.indices[i], b = node.indices[i + 1], c = node.indices[i + 2];
-            if (a < vs.size() && b < vs.size() && c < vs.size()) tri(vs[a].position, vs[b].position, vs[c].position);
-        }
-    } else {
-        for (size_t i = 0; i + 2 < vs.size(); i += 3) tri(vs[i].position, vs[i + 1].position, vs[i + 2].position);
+    // E-PISO-GRANDE (spec 12): BVH por no', construida uma vez e reusada -
+    // antes disto era triangulo por triangulo A CADA chamada (world.floor_*
+    // e world.path chamam isto centenas de vezes por consulta; custava
+    // ~1,2 ms por chamada numa malha de dezenas de milhares de triangulos,
+    // como uma montanha de terreno grande).
+    const std::string key = inst.assetPath + "#" + std::to_string(inst.nodeIndex);
+    auto it = m_raycastBvh.find(key);
+    if (it == m_raycastBvh.end()) {
+        RaycastBvh bvh;
+        bvh.build(node.vertices, node.indices);
+        it = m_raycastBvh.emplace(key, std::move(bvh)).first;
     }
-    return best == FLT_MAX ? -1.0f : best;
+    return it->second.raycastClosest(o, d);
 }
 
 uint32_t ModelRenderer::addModel(const ModelAsset& asset, const ModelInstanceDesc& ref, const std::string& nodeName) {
@@ -3360,6 +3347,8 @@ std::vector<std::string> ModelRenderer::releaseAsset(const std::string& filePath
     }
     for (auto it2 = m_footprintCache.begin(); it2 != m_footprintCache.end();)
         it2 = it2->first.rfind(filePath + "#", 0) == 0 ? m_footprintCache.erase(it2) : std::next(it2);
+    for (auto it2 = m_raycastBvh.begin(); it2 != m_raycastBvh.end();)
+        it2 = it2->first.rfind(filePath + "#", 0) == 0 ? m_raycastBvh.erase(it2) : std::next(it2);
     for (auto& a : m_lastModels)
         if (a.filePath == filePath) {
             a.nodes.clear();
