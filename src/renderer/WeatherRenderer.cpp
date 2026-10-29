@@ -1107,11 +1107,30 @@ namespace {
 // the map (author request 2026-08-10: "é tudo a mesma coisa, só muda direção
 // e como interage com o mapa"). Pool sizing, buffer upload and draw slicing
 // stay in WeatherRenderer.
+// PCG32: semear a tempestade (393k gotas, ~12 sorteios cada) com mt19937 e
+// uniform_real_distribution levava 27 ms num quadro so' na troca de clima.
+struct SeedRng {
+    uint64_t state;
+    uint32_t next() {
+        const uint64_t old = state;
+        state = old * 6364136223846793005ULL + 1442695040888963407ULL;
+        const uint32_t x = static_cast<uint32_t>(((old >> 18u) ^ old) >> 27u);
+        const uint32_t r = static_cast<uint32_t>(old >> 59u);
+        return (x >> r) | (x << ((32u - r) & 31u));
+    }
+};
+struct SeedDist {
+    float lo, hi;
+    float operator()(SeedRng& rng) const {
+        return lo + (hi - lo) * static_cast<float>(rng.next() >> 8) * (1.0f / 16777216.0f);
+    }
+};
+
 struct ParticleSeedContext {
     const WeatherParams& weather;
-    std::mt19937& rng;
-    std::uniform_real_distribution<float>& dist;   // [-1, 1]
-    std::uniform_real_distribution<float>& dist01; // [0, 1]
+    SeedRng& rng;
+    const SeedDist& dist;   // [-1, 1]
+    const SeedDist& dist01; // [0, 1]
     Vec3 spawnCenter;       // pool center (camera box, or first follower footprint)
     Vec3 spawnBoxSize;      // pool extents (grows to the largest follower box)
     Vec3 fixedBoxCenter;    // legacy 80x80 camera box (coverage placement)
@@ -1403,12 +1422,9 @@ void WeatherRenderer::updateParticlesForWeather(const WeatherParams& weather, co
     m_rainRebuildTimer = 0.0f;
     m_lastRainCameraPos = cameraPos;
 
-    std::vector<WeatherParticleGPU> particles;
-    particles.reserve(total);
-
-    std::mt19937 rng(12345);
-    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-    std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
+    SeedRng rng{12345u};
+    const SeedDist dist{-1.0f, 1.0f};
+    const SeedDist dist01{0.0f, 1.0f};
 
     // The coverage map only biases PRECIP placement, and only when the global
     // weather actually rains outside suppress mode (see PrecipKind::seedOrigin
@@ -1425,19 +1441,7 @@ void WeatherRenderer::updateParticlesForWeather(const WeatherParams& weather, co
     const SnowKind snowKind;
     const DustKind dustKind(isSandstorm);
 
-    // Pool layout [rain | snow | dust]: the draw code slices by these ranges.
-    auto spawn = [&](const WeatherParticleKind& kind, uint32_t count) {
-        for (uint32_t i = 0; i < count; ++i) {
-            WeatherParticleGPU p{};
-            kind.seed(p, ctx);
-            particles.push_back(p);
-        }
-    };
-    spawn(precipKind, rainCount);
-    spawn(snowKind, snowCount);
-    spawn(dustKind, dustCount);
-
-    m_particleCount = static_cast<uint32_t>(particles.size());
+    m_particleCount = rainCount + snowCount + dustCount;
     m_snowStart = rainCount;
     m_snowCount = (m_particleCount > 0) ? glm::min(snowCount, m_particleCount - glm::min(m_snowStart, m_particleCount)) : 0;
     m_dustStart = rainCount + m_snowCount;
@@ -1446,9 +1450,9 @@ void WeatherRenderer::updateParticlesForWeather(const WeatherParams& weather, co
     m_poolSnowCount = snowCount;
     m_poolDustCount = dustCount;
 
-    if (particles.empty()) return;
+    if (m_particleCount == 0) return;
 
-    VkDeviceSize size = particles.size() * sizeof(WeatherParticleGPU);
+    VkDeviceSize size = VkDeviceSize(m_particleCount) * sizeof(WeatherParticleGPU);
 
     // Grow (or shrink) the GPU buffer when the dynamic particle count changes.
     if (m_particleCount > m_particleBufferCapacity) {
@@ -1477,9 +1481,21 @@ void WeatherRenderer::updateParticlesForWeather(const WeatherParams& weather, co
     VmaAllocation stagingAlloc;
     if (!m_ctx->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, staging, stagingAlloc)) return;
 
+    // Semeia direto no staging (sem vetor e copia: 3,7 ms dos 31 da troca).
+    // Pool layout [rain | snow | dust]: the draw code slices by these ranges.
     void* data;
     vmaMapMemory(m_ctx->allocator(), stagingAlloc, &data);
-    memcpy(data, particles.data(), size);
+    WeatherParticleGPU* out = static_cast<WeatherParticleGPU*>(data);
+    auto spawn = [&](const WeatherParticleKind& kind, uint32_t count) {
+        for (uint32_t i = 0; i < count; ++i) {
+            WeatherParticleGPU p{};
+            kind.seed(p, ctx);
+            *out++ = p;
+        }
+    };
+    spawn(precipKind, rainCount);
+    spawn(snowKind, snowCount);
+    spawn(dustKind, dustCount);
     vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
 
     if (m_ctx->isFrameRecording()) {
