@@ -323,6 +323,7 @@ bool reliefBakeCached(const std::vector<TerrainVertex>& vertices, const std::vec
     bp.spacing = spacing;
     bp.amplitude = params.amplitude;
     bp.maxTriangles = params.maxTriangles * 2;
+    bp.stop = params.stop;
     const float gain = params.gain;
     auto height = [&](uint32_t tex, float u, float v) -> float {
         auto it = maps.find(tex);
@@ -338,6 +339,7 @@ bool reliefBakeCached(const std::vector<TerrainVertex>& vertices, const std::vec
         std::vector<ReliefVertex> rv = rv0;
         std::vector<uint32_t> idx = indices;
         const ReliefBakeStats st = bakeRelief(rv, idx, bp, height, &out.record);
+        if (st.stopped) return false;
         if (!st.capped || tries == 5) {
             if (st.capped)
                 ERUPTION_LOG_WARN("[RELEVO] malha de %zu tris parou no teto (%zu tris) na grade de %.2f u", trisIn,

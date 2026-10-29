@@ -12,6 +12,7 @@
 #include "utils/MeshClusters.hpp"
 #include "utils/AlignedAllocator.hpp"
 
+#include <atomic>
 #include <algorithm>
 #include <vector>
 #include <string>
@@ -1271,7 +1272,7 @@ private:
         double ms = 0.0;
     };
     using ReliefAlphas = std::unordered_map<uint32_t, std::unique_ptr<ReliefAlpha>>;
-    void computeRelief(ReliefTask& task, ReliefAlphas& alphas) const;
+    void computeRelief(ReliefTask& task, ReliefAlphas& alphas, const std::atomic<bool>* stop = nullptr) const;
     void applyReliefs(std::vector<ReliefTask>& tasks, const std::string& label,
                       const std::unordered_map<uint32_t, std::string>& slotNames);
     // Sobe as malhas assadas (thread principal). `late`: as instancias ja'
@@ -1285,6 +1286,9 @@ private:
         std::shared_ptr<ReliefAlphas> alphas;
         std::future<void> done;
         std::chrono::steady_clock::time_point t0;
+        // Ligado por dropReliefJobs: as malhas que ainda nao comecaram nem
+        // entram no assado (o resultado ia para o lixo de qualquer jeito).
+        std::shared_ptr<std::atomic<bool>> stop;
     };
     std::vector<ReliefJob> m_reliefJobs;
     bool m_reliefDeferred = false;

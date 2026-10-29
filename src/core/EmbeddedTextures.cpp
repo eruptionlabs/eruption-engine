@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -231,6 +233,8 @@ void Engine::openEmbeddedPreview(const std::string& key, const std::string& imag
     st.worldAmplitude = m_modelRenderer.reliefAmplitudeForSlot(slot);
     st.amplitude = st.worldAmplitude;
     st.baked = st.worldAmplitude > 0.0f;
+    // ERUPTION_TEST_CUBE_AMP=<u> (teste/prints): abre o cubo com essa amplitude.
+    if (const char* e = std::getenv("ERUPTION_TEST_CUBE_AMP")) st.amplitude = std::max(0.0f, float(std::atof(e)));
     // Grade: a do chao jogavel deste arquivo com esta textura (a malha com mais
     // triangulos de origem), e com ela o mesmo filtro de Nyquist, que segue a grade.
     const ModelRenderer::ReliefGridInfo grid = m_modelRenderer.reliefGridForSlot(slot, file);
@@ -285,6 +289,7 @@ void Engine::rebuildEmbeddedCube() {
         }
     };
     build(4);
+    const auto t0 = std::chrono::steady_clock::now();
     bool baked = false;
     if (st.baked && st.amplitude > 0.0f)
         baked = m_modelRenderer.bakeReliefPreview(v, idx, st.slot, st.key, st.amplitude, st.spacing, &st.cubeSpacing);
@@ -292,9 +297,25 @@ void Engine::rebuildEmbeddedCube() {
     if (!baked) build(10);
     st.triangles = idx.size() / 3;
     if (!baked) st.cubeSpacing = 0.0f;
+    // Deslocamento de verdade nos vertices: quanto cada um saiu da face dele
+    // (o eixo de maior coordenada), para conferir o controle de amplitude.
+    float dMin = 0.0f, dMax = 0.0f;
+    double dSum = 0.0, dSq = 0.0;
+    for (const TerrainVertex& t : v) {
+        const Vec3 a = glm::abs(t.position);
+        const float d = std::max(a.x, std::max(a.y, a.z)) - 0.5f * st.edge;
+        dMin = std::min(dMin, d);
+        dMax = std::max(dMax, d);
+        dSum += d;
+        dSq += double(d) * d;
+    }
+    const double n = double(std::max<size_t>(v.size(), 1));
+    const double dStd = std::sqrt(std::max(dSq / n - (dSum / n) * (dSum / n), 0.0));
     ERUPTION_LOG_WARN("[RELEVO_CUBO] %s: amplitude %.2f u, grade do mundo %.2f u (%u malhas, %.2f a %.2f u), "
-                      "grade do cubo %.2f u, %zu tris", st.key.c_str(), double(st.amplitude), double(st.spacing),
-                      st.gridMeshes, double(st.gridMin), double(st.gridMax), double(st.cubeSpacing), st.triangles);
+                      "grade do cubo %.2f u, %zu tris; deslocamento %.2f a %.2f u (desvio %.2f u), %.0f ms", st.key.c_str(),
+                      double(st.amplitude), double(st.spacing), st.gridMeshes, double(st.gridMin), double(st.gridMax),
+                      double(st.cubeSpacing), st.triangles, double(dMin), double(dMax), dStd,
+                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
     m_spherePreview.setCustomMesh(std::move(v), std::move(idx), st.edge);
 }
 
@@ -451,7 +472,18 @@ void Engine::drawEmbeddedTextures(UiText tr, const std::string& file, bool inlin
     ImGui::BeginDisabled(!st.baked);
     const float top = std::max(24.0f, st.worldAmplitude * 2.0f);
     ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x * 0.5f));
-    ImGui::SliderFloat(tr("Amplitude (u)"), &st.amplitude, 0.0f, top, "%.1f");
+    const bool dragged = ImGui::SliderFloat(tr("Amplitude (u)"), &st.amplitude, 0.0f, top, "%.1f");
+    // Assa tambem durante o arrasto, no maximo a cada 150 ms: so' ao soltar, o
+    // cubo parecia nao responder ao controle. O cubo de 24 mil triangulos na
+    // grade do mundo assa em ~15 ms (altura ja' filtrada fica em cache).
+    static std::chrono::steady_clock::time_point s_lastDragBake;
+    if (dragged && ImGui::IsItemActive()) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - s_lastDragBake >= std::chrono::milliseconds(150)) {
+            s_lastDragBake = now;
+            rebuild = true;
+        }
+    }
     if (ImGui::IsItemDeactivatedAfterEdit()) rebuild = true;
     ImGui::SameLine();
     if (ImGui::SmallButton(tr("World value"))) {
