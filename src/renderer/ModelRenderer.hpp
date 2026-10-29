@@ -470,7 +470,7 @@ public:
         // girar e ao dar zoom.
         int mode = 0;
         float spacing = 2.0f;   // grade (u)
-        float amplitude = 1.5f; // u, igual para toda malha (relief_bake_amplitude)
+        float amplitude = 2.5f; // u, igual para toda malha (relief_bake_amplitude)
         float gain = 1.0f;      // contraste da altura em volta da media (relief_bake_height_gain)
         uint32_t maxTriangles = 600000; // alvo por malha (a grade abre acima disto)
     };

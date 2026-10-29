@@ -160,7 +160,7 @@
       "relief_bake": "mesh",
       "relief_bake_spacing": 4.0,
       "relief_bake_max_tris": 75000,
-      "relief_bake_amplitude": 1.5,
+      "relief_bake_amplitude": 2.5,
       "relief_bake_height_gain": 1.0
     },
     "medium": {
@@ -223,7 +223,7 @@
       "relief_bake": "mesh",
       "relief_bake_spacing": 2.0,
       "relief_bake_max_tris": 150000,
-      "relief_bake_amplitude": 1.5,
+      "relief_bake_amplitude": 2.5,
       "relief_bake_height_gain": 1.0
     },
     "high": {
@@ -283,7 +283,7 @@
       "relief_bake": "mesh",
       "relief_bake_spacing": 1.0,
       "relief_bake_max_tris": 1500000,
-      "relief_bake_amplitude": 1.5,
+      "relief_bake_amplitude": 2.5,
       "relief_bake_height_gain": 1.0
     }
   }
