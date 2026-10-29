@@ -2796,10 +2796,9 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                             t.slots.push_back(v.texIndex);
                     std::sort(t.slots.begin(), t.slots.end());
                     t.slots.erase(std::unique(t.slots.begin(), t.slots.end()), t.slots.end());
-                    for (uint32_t s : t.slots) {
-                        float& amp = m_texReliefAmp[s];
-                        amp = std::max(amp, t.amplitude);
-                    }
+                    // Sobrescreve: a regra e' uma so' (m_reliefBake.amplitude), entao o
+                    // painel nunca guarda o maior valor ja visto no processo.
+                    for (uint32_t s : t.slots) m_texReliefAmp[s] = t.amplitude;
                     reliefTasks.push_back(std::move(t));
                 }
             }
