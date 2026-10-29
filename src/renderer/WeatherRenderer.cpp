@@ -743,6 +743,7 @@ bool WeatherRenderer::createTopDownDepthResources() {
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
     vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_topDownDepthView);
 
+    m_topDownDepthWritten = false;
     return m_topDownDepthView != VK_NULL_HANDLE;
 }
 
@@ -775,7 +776,11 @@ void WeatherRenderer::renderTopDownDepth(VkCommandBuffer cmd,
     // The top-down depth pass re-renders terrain/models/sprites into a 1024²
     // target. Only run it every N frames; the heightmap compute pass can reuse
     // the previous frame's depth target (it stays in SHADER_READ_ONLY_OPTIMAL).
-    if ((++m_topDownFrameCounter % TOPDOWN_DEPTH_INTERVAL) != 0) return;
+    // A primeira vez desenha ja': antes disso a imagem esta' em UNDEFINED e o
+    // heightmap a amostrava assim no quadro em que a chuva comeca
+    // (DrawState-InvalidImageLayout a cada troca para tempestade).
+    if ((++m_topDownFrameCounter % TOPDOWN_DEPTH_INTERVAL) != 0 && m_topDownDepthWritten) return;
+    m_topDownDepthWritten = true;
 
     const float worldHalf = HEIGHTMAP_WORLD_SIZE * 0.5f;
     Vec3 eye = cameraPos + Vec3(0.0f, 5000.0f, 0.0f);
@@ -948,6 +953,7 @@ bool WeatherRenderer::createHeightmapPipeline() {
     m_heightmapBlurDescSets[0] = sets[1];
     m_heightmapBlurDescSets[1] = sets[2];
     m_heightmapBlurSetViews[0] = m_heightmapBlurSetViews[1] = VK_NULL_HANDLE;
+    m_heightmapUpdateSetViews[0] = m_heightmapUpdateSetViews[1] = VK_NULL_HANDLE;
 
     return true;
 }
@@ -959,12 +965,15 @@ void WeatherRenderer::updateHeightmapOnly(VkCommandBuffer cmd, VkImageView depth
 void WeatherRenderer::updateHeightmap(VkCommandBuffer cmd, VkImageView depthView, const RenderParams& params) {
     if (!m_heightmapUpdatePipeline || depthView == VK_NULL_HANDLE) return;
 
-    // 1) Clear the heightmap to 0 (transfer -> compute).
+    // 1) Clear the heightmap to 0 (transfer -> compute). De UNDEFINED: o
+    // conteudo e' apagado, e o blur do quadro anterior deixa a imagem em
+    // GENERAL (declarar SHADER_READ_ONLY dava InvalidImageLayout a cada
+    // quadro de chuva).
     m_ctx->cmdImageBarrier(cmd, m_heightmapImage,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 
     VkClearColorValue clearVal{};
     clearVal.uint32[0] = 0u;
@@ -977,31 +986,37 @@ void WeatherRenderer::updateHeightmap(VkCommandBuffer cmd, VkImageView depthView
         VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 
     // 2) Update descriptor set: top-down orthographic depth -> heightmap.
-    VkDescriptorImageInfo depthInfo{};
-    depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    depthInfo.imageView = depthView;
-    depthInfo.sampler = m_linearSampler;
+    // So' quando as views mudam: o set e' um so', e reescreve-lo com o quadro
+    // anterior em voo e' VUID-vkUpdateDescriptorSets-None-03047.
+    if (m_heightmapUpdateSetViews[0] != depthView || m_heightmapUpdateSetViews[1] != m_heightmapView) {
+        VkDescriptorImageInfo depthInfo{};
+        depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        depthInfo.imageView = depthView;
+        depthInfo.sampler = m_linearSampler;
 
-    VkDescriptorImageInfo currInfo{};
-    currInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    currInfo.imageView = m_heightmapView;
+        VkDescriptorImageInfo currInfo{};
+        currInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        currInfo.imageView = m_heightmapView;
 
-    VkWriteDescriptorSet updateWrites[2] = {};
-    updateWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    updateWrites[0].dstSet = m_heightmapUpdateDescSet;
-    updateWrites[0].dstBinding = 0;
-    updateWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    updateWrites[0].descriptorCount = 1;
-    updateWrites[0].pImageInfo = &depthInfo;
+        VkWriteDescriptorSet updateWrites[2] = {};
+        updateWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        updateWrites[0].dstSet = m_heightmapUpdateDescSet;
+        updateWrites[0].dstBinding = 0;
+        updateWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        updateWrites[0].descriptorCount = 1;
+        updateWrites[0].pImageInfo = &depthInfo;
 
-    updateWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    updateWrites[1].dstSet = m_heightmapUpdateDescSet;
-    updateWrites[1].dstBinding = 1;
-    updateWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    updateWrites[1].descriptorCount = 1;
-    updateWrites[1].pImageInfo = &currInfo;
+        updateWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        updateWrites[1].dstSet = m_heightmapUpdateDescSet;
+        updateWrites[1].dstBinding = 1;
+        updateWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        updateWrites[1].descriptorCount = 1;
+        updateWrites[1].pImageInfo = &currInfo;
 
-    vkUpdateDescriptorSets(m_ctx->device(), 2, updateWrites, 0, nullptr);
+        vkUpdateDescriptorSets(m_ctx->device(), 2, updateWrites, 0, nullptr);
+        m_heightmapUpdateSetViews[0] = depthView;
+        m_heightmapUpdateSetViews[1] = m_heightmapView;
+    }
 
     // 3) Dispatch one thread per heightmap texel.
     struct HMPush {

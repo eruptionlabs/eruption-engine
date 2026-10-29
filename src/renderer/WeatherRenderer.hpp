@@ -351,6 +351,7 @@ private:
     // 8 frames keeps rain occlusion responsive while halving the geometry cost
     // versus the old 4-frame interval.
     uint32_t m_topDownFrameCounter = 0;
+    bool m_topDownDepthWritten = false; // a 1a chuva desenha ja': o compute nao le' a imagem crua
     static constexpr uint32_t TOPDOWN_DEPTH_INTERVAL = 8;
 
     // Throttle splash rebuilds; they only need to follow the camera slowly.
@@ -391,6 +392,7 @@ private:
     VkPipelineLayout m_heightmapBlurPipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSet m_heightmapBlurDescSets[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkImageView m_heightmapBlurSetViews[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkImageView m_heightmapUpdateSetViews[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE}; // profundidade, altura
     VkPipelineLayout m_heightmapPipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_heightmapUpdatePipeline = VK_NULL_HANDLE;
     VkPipeline m_heightmapBlurPipeline = VK_NULL_HANDLE;
