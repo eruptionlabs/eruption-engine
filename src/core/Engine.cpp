@@ -2502,8 +2502,9 @@ void Engine::applyGraphicsPreset() {
     // tamanho da malha nem fator de categoria. Antes o chao levava 12 u x
     // ganho 1,5 = 18 u por unidade de altura, 106x mais ingreme que a
     // inclinacao do proprio normal map do PBR (08_0002, mapa base): ondinha
-    // demais. 1,5 u com ganho 1 (a altura do PBR como sai, em volta da media)
-    // foi a escolha do autor no visualizador de texturas.
+    // demais. Ganho 1 (a altura do PBR como sai, em volta da media) e 2,5 u:
+    // o autor escolheu entre 1,5 e 4 no cubo da previa (1,5 mal aparecia na
+    // camera do jogo: 1,1 u de pico a pico num ladrilho de 41 u).
     // ERUPTION_TEST_TESS_AMP (teste) troca a amplitude.
     {
         ModelRenderer::ReliefBakeConfig rb;
@@ -2511,7 +2512,7 @@ void Engine::applyGraphicsPreset() {
         rb.mode = mode == "shadow" ? 1 : mode == "mesh" ? 2 : mode == "gbuffer" ? 3 : 0;
         rb.spacing = std::clamp(p.value("relief_bake_spacing", 2.0f), 0.25f, 64.0f);
         rb.maxTriangles = static_cast<uint32_t>(std::clamp(p.value("relief_bake_max_tris", 600000), 1024, 4194304));
-        rb.amplitude = std::clamp(p.value("relief_bake_amplitude", 1.5f), 0.0f, 16.0f);
+        rb.amplitude = std::clamp(p.value("relief_bake_amplitude", 2.5f), 0.0f, 16.0f);
         if (const char* e = std::getenv("ERUPTION_TEST_TESS_AMP")) rb.amplitude = std::max(0.0f, std::stof(e));
         rb.gain = std::clamp(p.value("relief_bake_height_gain", 1.0f), 0.1f, 8.0f);
         if (rb.mode == 2) {
