@@ -146,6 +146,10 @@ ReliefBakeStats bakeRelief(std::vector<ReliefVertex>& verts, std::vector<uint32_
     // (um so', pela chave da aresta) e cada triangulo vira 2, 3 ou 4 conforme
     // quantas arestas dele partiram.
     for (;;) {
+        if (params.stop && params.stop->load(std::memory_order_relaxed)) {
+            st.stopped = true;
+            return st;
+        }
         std::unordered_map<uint64_t, uint32_t> mids;
         const size_t tris = indices.size() / 3;
         size_t grow = 0;

@@ -1614,7 +1614,7 @@ static void reliefBakedNormals(std::vector<TerrainVertex>& v, const std::vector<
 }
 
 // Uma malha (thread de trabalho): cache ou assado, e a malha final.
-void ModelRenderer::computeRelief(ReliefTask& t, ReliefAlphas& alphas) const {
+void ModelRenderer::computeRelief(ReliefTask& t, ReliefAlphas& alphas, const std::atomic<bool>* stop) const {
     const std::vector<uint32_t> full(t.uploaded.begin(), t.uploaded.begin() + t.fullCount);
     ReliefParams p;
     p.spacing = t.spacing0 > 0.0f ? t.spacing0 : m_reliefBake.spacing;
@@ -1622,6 +1622,7 @@ void ModelRenderer::computeRelief(ReliefTask& t, ReliefAlphas& alphas) const {
     p.gain = m_reliefBake.gain;
     p.maxTriangles = m_reliefBake.maxTriangles;
     p.store = t.store;
+    p.stop = stop;
     auto source = [this, &alphas](uint32_t slot, bool pixels, std::vector<uint8_t>& alpha, int& w, int& h,
                                   uint64_t& id) {
         auto it = alphas.find(slot);
@@ -1820,13 +1821,15 @@ void ModelRenderer::applyReliefs(std::vector<ReliefTask>& tasks, const std::stri
     }
     auto tasksPtr = std::make_shared<std::vector<ReliefTask>>(std::move(tasks));
     tasks.clear();
-    auto job = platform::runAsync([this, tasksPtr, alphasPtr] {
+    auto stop = std::make_shared<std::atomic<bool>>(false);
+    auto job = platform::runAsync([this, tasksPtr, alphasPtr, stop] {
         std::vector<ReliefTask>& ts = *tasksPtr;
-        JobSystem::instance().parallelFor(static_cast<uint32_t>(ts.size()),
-                                          [&](uint32_t k) { computeRelief(ts[k], *alphasPtr); });
+        JobSystem::instance().parallelFor(static_cast<uint32_t>(ts.size()), [&](uint32_t k) {
+            if (!stop->load(std::memory_order_relaxed)) computeRelief(ts[k], *alphasPtr, stop.get());
+        });
     });
     if (m_reliefDeferred) {
-        m_reliefJobs.push_back({label, tasksPtr, alphasPtr, std::move(job), t0});
+        m_reliefJobs.push_back({label, tasksPtr, alphasPtr, std::move(job), t0, std::move(stop)});
         return;
     }
     job.wait();
@@ -1849,7 +1852,12 @@ void ModelRenderer::pollReliefJobs() {
     }
 }
 
+// Avisa todas antes de esperar a primeira: na saida com a fila cheia de malhas
+// grandes, esperar o assado inteiro segurou o processo por mais de uma hora
+// (grade fina de teste num paredao); agora espera so' as malhas ja' em curso.
 void ModelRenderer::dropReliefJobs(const std::string* label) {
+    for (ReliefJob& j : m_reliefJobs)
+        if (!label || j.label == *label) j.stop->store(true, std::memory_order_relaxed);
     for (size_t k = 0; k < m_reliefJobs.size();) {
         if (label && m_reliefJobs[k].label != *label) {
             ++k;

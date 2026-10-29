@@ -17,6 +17,7 @@
 
 #include "renderer/ReliefBake.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -49,6 +50,7 @@ struct ReliefParams {
     // false: nem le' nem grava o cache em disco (previa de material no cubo,
     // que muda a cada arrasto do controle).
     bool store = true;
+    const std::atomic<bool>* stop = nullptr; // ligado: larga o assado, sem gravar cache
 };
 
 struct ReliefResult {

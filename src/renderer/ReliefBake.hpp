@@ -19,6 +19,7 @@
 // e de volta pelo ReliefBakeRecord (de quem cada vertice novo e' o meio e
 // quanto cada um andou), que e' tambem o que vai para o cache.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -51,12 +52,14 @@ struct ReliefBakeParams {
     float spacing = 1.0f;         // aresta maxima depois da subdivisao (u)
     float amplitude = 0.0f;       // deslocamento de h = 0 a h = 1 (u)
     size_t maxTriangles = 4u << 20; // teto: a subdivisao para antes de passar
+    const std::atomic<bool>* stop = nullptr; // ligado: larga o assado (saida do motor)
 };
 
 struct ReliefBakeStats {
     size_t trianglesIn = 0, trianglesOut = 0, verticesOut = 0;
     int rounds = 0;
     bool capped = false; // parou no teto com aresta maior que `spacing`
+    bool stopped = false; // largado por `stop`: malha pela metade, nao usar
     double ms = 0.0;
 };
 
