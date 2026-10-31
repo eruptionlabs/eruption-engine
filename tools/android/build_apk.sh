@@ -95,6 +95,12 @@ cat > "$STAGE/AndroidManifest.xml" <<XML
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Share sheet (telemetry.export): o unico jeito de outro app ler um
+             arquivo do nosso espaco privado e' por content://; a propria
+             activity chama EruptionActivity.shareFile, que monta o Intent. -->
+        <provider android:name="com.eruptionlabs.engine.EruptionFileProvider"
+            android:authorities="${ERUPTION_APK_PACKAGE:-com.eruptionlabs.engine}.fileprovider"
+            android:exported="false" android:grantUriPermissions="true"/>
     </application>
 </manifest>
 XML

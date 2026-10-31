@@ -7,6 +7,7 @@
 
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
+#include "core/Platform.hpp"
 #include "core/Project.hpp"
 #include "script/ScriptHost.hpp"
 #include "utils/EventLog.hpp"
@@ -364,6 +365,19 @@ int telemetry_exporting(lua_State* L) {
     return 2;
 }
 
+// telemetry.share: abre o share sheet do sistema (Android) para o .zip que
+// telemetry.export devolveu. No PC/navegador nao ha' share sheet, devolve
+// false - o jogo manda o jogador abrir a pasta do export nesse caso.
+int telemetry_share(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    // O export devolve o caminho como o jogo o guarda (relativo no Android);
+    // o lado Java nao tem o diretorio de trabalho do motor: vai absoluto.
+    std::error_code ec;
+    const fs::path absolute = fs::absolute(path, ec);
+    lua_pushboolean(L, eruption::platform::shareFile(ec ? std::string(path) : absolute.string(), "application/zip"));
+    return 1;
+}
+
 } // namespace
 
 void openTelemetryFromEnv() {
@@ -379,7 +393,8 @@ void registerTelemetryApi(lua_State* L, Engine& engine) {
     static const luaL_Reg fns[] = {{"emit", telemetry_emit},       {"open", telemetry_open},
                                    {"close", telemetry_close},     {"enabled", telemetry_enabled},
                                    {"stats", telemetry_stats},     {"export", telemetry_export},
-                                   {"exporting", telemetry_exporting}, {nullptr, nullptr}};
+                                   {"exporting", telemetry_exporting}, {"share", telemetry_share},
+                                   {nullptr, nullptr}};
     lua_newtable(L);
     for (const luaL_Reg* f = fns; f->name; ++f) {
         lua_pushcfunction(L, f->func, f->name);
@@ -425,6 +440,12 @@ declare telemetry: {
     -- Whether an export is still being written, and whether the last one
     -- that finished succeeded (nil before any finished).
     exporting: () -> (boolean, boolean?),
+    -- Opens the system share sheet for a path that `export` returned, once
+    -- `exporting` says it finished. Android only (the file sits in the
+    -- app's own storage, unreachable by other apps without this); on PC and
+    -- the browser it does nothing and returns false, since the file is
+    -- already in a folder the player can open directly.
+    share: (path: string) -> boolean,
 }
 )";
 }

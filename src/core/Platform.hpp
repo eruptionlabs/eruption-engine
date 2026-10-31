@@ -108,6 +108,17 @@ inline float pixelsPerDp() {
 }
 #endif
 
+// Pede pro sistema compartilhar um arquivo (share sheet): o celular nao
+// deixa expor caminho de arquivo direto a outro aplicativo, so' um content://
+// (FileProvider, do lado Java). No desktop e no navegador nao ha' share
+// sheet: devolve false sem fazer nada. 'path' tem que estar dentro da pasta
+// de export do app (src/platform/android/java/.../EruptionFileProvider).
+#if defined(__ANDROID__)
+bool shareFile(const std::string& path, const char* mimeType); // src/platform/android/AndroidMain.cpp
+#else
+inline bool shareFile(const std::string&, const char*) { return false; }
+#endif
+
 // Roda `fn` em outra thread e devolve o futuro (std::async). No navegador a v1
 // nao tem threads (pediria COOP/COEP do servidor): roda aqui e o futuro sai
 // pronto, entao quem consulta com wait_for(0) recebe `ready` na hora.

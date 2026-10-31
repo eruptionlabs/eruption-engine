@@ -315,6 +315,38 @@ float pixelsPerDp() {
     const int32_t dpi = g_app && g_app->config ? AConfiguration_getDensity(g_app->config) : 0;
     return dpi > 0 && dpi != ACONFIGURATION_DENSITY_NONE ? static_cast<float>(dpi) / 160.0f : 1.0f;
 }
+
+// Chama EruptionActivity.shareFile(String,String) por JNI: o Java abre o
+// share sheet do sistema com um content:// (EruptionFileProvider), ja' que o
+// Android nao deixa outro app abrir um caminho de arquivo direto. 'path' tem
+// que estar dentro de internalDataPath/export (unica pasta que o provider
+// serve). Chamado da thread do motor (nao a do Android): anexa e desanexa da
+// JVM a cada chamada, compartilhar e' raro e nao vale manter anexado.
+bool shareFile(const std::string& path, const char* mimeType) {
+    if (!g_app || !g_app->activity || !g_app->activity->vm) return false;
+    JavaVM* vm = g_app->activity->vm;
+    JNIEnv* env = nullptr;
+    const jint getRc = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+    const bool attached = getRc == JNI_OK;
+    if (!attached && vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return false;
+    bool ok = false;
+    jobject activity = g_app->activity->clazz;
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID mid = env->GetMethodID(cls, "shareFile", "(Ljava/lang/String;Ljava/lang/String;)Z");
+    if (mid) {
+        jstring jpath = env->NewStringUTF(path.c_str());
+        jstring jmime = env->NewStringUTF(mimeType && *mimeType ? mimeType : "*/*");
+        ok = env->CallBooleanMethod(activity, mid, jpath, jmime) == JNI_TRUE;
+        env->DeleteLocalRef(jpath);
+        env->DeleteLocalRef(jmime);
+    } else {
+        env->ExceptionClear();
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "shareFile: EruptionActivity.shareFile nao encontrado");
+    }
+    env->DeleteLocalRef(cls);
+    if (!attached) vm->DetachCurrentThread();
+    return ok;
+}
 } // namespace eruption::platform
 
 // ---- GLFW -------------------------------------------------------------------
