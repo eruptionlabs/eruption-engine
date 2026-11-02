@@ -249,12 +249,12 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
     // This used to derive the extent arithmetically as `terrain.width * 10`,
     // centred at `width * 0.5`. Both halves of that were wrong:
     //   - the 10 units/cell scale is not universal (maps carry their own
-    //     scale; the medieval village is 5x), so on parana_field the assumed
+    //     scale; the medieval village is 5x), so on such a map the assumed
     //     extent was nearly twice the real one and the map occupied only the
-    //     top half of the minimap with the rest black - the bug PIROCLASTO
+    //     top half of the minimap with the rest black - the bug
     //     reported;
     //   - it assumed the terrain starts at the world origin, but the .ter
-    //     carries an offset (parana_field's is (-55.02, -45.91)).
+    //     carries an offset (e.g. (-55.02, -45.91)).
     // Measuring the real bounds removes both guesses at once and works for
     // GLB-only maps, which have no .ter dimensions to derive anything from.
     float zoom = 600.0f;
@@ -277,7 +277,7 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
             // `enabled` is not enough: the instance list is complete from map
             // load, but the meshes behind it upload for seconds afterwards, and
             // some never resolve at all. Those phantom instances still carry a
-            // world AABB, and on parana_field they stretched the bound in +Z to
+            // world AABB, and on a large map they stretched the bound in +Z to
             // 2006 while the geometry that really draws ends around 1120. The
             // ortho then centred 443 units past the real middle and the map
             // rendered against the top edge with a black band below -- measured
@@ -469,12 +469,12 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
         //
         // The instance COUNT is final almost immediately (the list is built at
         // map load), but the meshes behind those instances stream to the GPU
-        // for seconds afterwards -- parana_field spends ~6 s just baking
+        // for seconds afterwards -- a large map spends ~6 s just baking
         // embedded textures. Gating only on instance/chunk COUNT therefore
         // baked the minimap while most meshes still had no vertex buffer, and
         // never baked again: whole regions of the map were simply missing, in
         // a band that moved between runs because it followed load order. That
-        // is the "minimapa preto" PIROCLASTO reported -- not framing, not
+        // is the "minimapa preto" reported -- not framing, not
         // lighting, not culling.
         //
         // Triangles actually drawn is the honest readiness signal: it keeps
