@@ -135,12 +135,13 @@ namespace {
         center = uint8_t(std::clamp(std::lround(255.0 * (0.5 * double(minX + maxX + 1)) / double(w)), 0L, 255L));
     }
 
-    bool isClassSpritePath(const std::string& path) {
-        static const char* classNames[] = { "storm_wizard", "berserker", "falconer", "morning_star" };
+    // `patterns` vem de resources.ini ([sprites] clean_bounds); o motor nao
+    // conhece nome de sprite nenhum.
+    bool matchesCleanBounds(const std::string& path, const std::vector<std::string>& patterns) {
         std::string lower;
         lower.reserve(path.size());
         for (char c : path) lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-        for (const char* name : classNames) {
+        for (const std::string& name : patterns) {
             if (lower.find(name) != std::string::npos) return true;
         }
         return false;
@@ -215,9 +216,9 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
         }
     }
 
-    // Class sprites may have fake ghost pixels to force dimensions; run a
+    // Sprites listed in resources.ini may have fake ghost pixels to force dimensions; run a
     // morphological opening to discover the real silhouette bounds.
-    if (!preCleaned && !sourcePath.empty() && isClassSpritePath(sourcePath)) {
+    if (!preCleaned && !sourcePath.empty() && matchesCleanBounds(sourcePath, m_resourceConfig.cleanBoundsPatterns)) {
         ERUPTION_LOG_WARN("TODO: deprecated future - applying erosion+dilation to class sprite %s", sourcePath.c_str());
         std::vector<uint8_t> mask((size_t)img.width * img.height);
         for (size_t i = 0; i < mask.size(); ++i) mask[i] = rgbaPixels[i * 4 + 3] > 10 ? 1 : 0;
