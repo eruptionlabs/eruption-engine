@@ -378,9 +378,11 @@ void Engine::updateWorld() {
                 const Vec3 off = r.offset;
                 const float yaw = r.yaw;
                 r.job = platform::runAsync([map, off, yaw] {
+                    const auto tStart = std::chrono::steady_clock::now();
                     auto out = std::make_shared<WorldRegionLoad>();
                     MapLoader loader;
                     out->map = loader.loadMap(map);
+                    const auto tParsed = std::chrono::steady_clock::now();
                     if (!out->map || !out->map->isGlbMap || !out->map->terrainFromFile) {
                         out->error = "only maps with a height grid (.ter) can be neighbors";
                         out->map.reset();
@@ -402,6 +404,7 @@ void Engine::updateWorld() {
                         out->models.push_back(convertModelToAsset(m));
                         out->slotUse.push_back(ModelRenderer::scanSlotUse(out->models.back()));
                     }
+                    const auto tModels = std::chrono::steady_clock::now();
                     HeightEdit h;
                     applyHeightDelta(*out->map, out->models, h);
                     applySavedWalk(*out->map);
@@ -437,6 +440,13 @@ void Engine::updateWorld() {
                     }
                     for (const auto& file : files)
                         if (auto rm = readModelForWorld(file)) out->added.push_back(std::move(rm));
+                    // Um log por fase da thread (a espera por um vizinho e' isto, mais o
+                    // encaixe no quadro): onde o tempo de um vizinho vai.
+                    const auto tEnd = std::chrono::steady_clock::now();
+                    const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+                    ERUPTION_LOG_WARN("[CHUNKPHASE] %s: leitura glb/ter/nav %.0f, texturas+conversao %.0f, grade/cena/modelos extras %.0f "
+                                      "ms (total %.0f)",
+                                      map.c_str(), ms(tStart, tParsed), ms(tParsed, tModels), ms(tModels, tEnd), ms(tStart, tEnd));
                     return out;
                 });
                 r.state = WorldRegion::State::Loading;
