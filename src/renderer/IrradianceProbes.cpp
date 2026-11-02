@@ -13,6 +13,7 @@
 #include <cstring>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace eruption {
 
@@ -190,7 +191,8 @@ void IrradianceProbes::destroyDepth(DepthTarget& t) {
 bool IrradianceProbes::createGrid(uint32_t dx, uint32_t dy, uint32_t dz) {
     destroyGrid();
     if (!make3D(m_ctx, dx, dy, dz, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, m_bakeImage, m_bakeAlloc, m_bakeView)) return false;
-    if (!make3D(m_ctx, dx, dy, dz, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, m_finalImage, m_finalAlloc, m_finalView)) return false;
+    if (!make3D(m_ctx, dx, dy, dz, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                m_finalImage, m_finalAlloc, m_finalView)) return false;
     m_dims[0] = dx; m_dims[1] = dy; m_dims[2] = dz;
     return true;
 }
@@ -205,6 +207,137 @@ void IrradianceProbes::destroyGrid() {
     m_bakeView = m_finalView = VK_NULL_HANDLE;
     m_bakeImage = m_finalImage = VK_NULL_HANDLE;
     m_valid = false;
+}
+
+namespace {
+// Cabecalho do <mapa>.glb.probes, seguido de dx*dy*dz texels RGBA16F.
+struct ProbeCacheHeader {
+    char magic[4];
+    uint32_t version;
+    float sceneMin[3], sceneMax[3];
+    float gridMin[3], gridInvExtent[3];
+    uint32_t dims[3];
+    uint64_t contentKey;
+};
+constexpr uint32_t kProbeCacheVersion = 4;
+
+bool sameBox(const float* a, const Vec3& b) {
+    return std::abs(a[0] - b.x) < 0.01f && std::abs(a[1] - b.y) < 0.01f && std::abs(a[2] - b.z) < 0.01f;
+}
+} // namespace
+
+bool IrradianceProbes::saveCache(const std::string& path, const Vec3& sceneMin, const Vec3& sceneMax,
+                                 uint64_t contentKey) {
+    if (!m_valid || !m_finalImage) return false;
+    const VkDeviceSize bytes = VkDeviceSize(m_dims[0]) * m_dims[1] * m_dims[2] * 8;
+    VkBuffer buf = VK_NULL_HANDLE;
+    VmaAllocation alloc = VK_NULL_HANDLE;
+    if (!m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_TO_CPU, buf, alloc))
+        return false;
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        m_ctx->cmdImageBarrier(cmd, m_finalImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
+                               VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        VkBufferImageCopy rc{};
+        rc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        rc.imageExtent = {m_dims[0], m_dims[1], m_dims[2]};
+        vkCmdCopyImageToBuffer(cmd, m_finalImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &rc);
+        m_ctx->cmdImageBarrier(cmd, m_finalImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_COPY_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                               VK_ACCESS_2_TRANSFER_READ_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    });
+    ProbeCacheHeader hdr{};
+    std::memcpy(hdr.magic, "EPRB", 4);
+    hdr.version = kProbeCacheVersion;
+    hdr.contentKey = contentKey;
+    for (int i = 0; i < 3; ++i) {
+        hdr.sceneMin[i] = sceneMin[i];
+        hdr.sceneMax[i] = sceneMax[i];
+        hdr.gridMin[i] = m_gridMin[i];
+        hdr.gridInvExtent[i] = m_gridInvExtent[i];
+        hdr.dims[i] = m_dims[i];
+    }
+    bool ok = false;
+    void* mp = nullptr;
+    if (vmaMapMemory(m_ctx->allocator(), alloc, &mp) == VK_SUCCESS) {
+        vmaInvalidateAllocation(m_ctx->allocator(), alloc, 0, bytes);
+        // Grava ao lado e troca com rename, nunca por cima do existente: uma
+        // copia do projeto feita com hardlink (cp -al) divide o inode, e
+        // reescrever no lugar mudava o arquivo de todas as copias. De quebra,
+        // um processo que morre no meio nao deixa grade pela metade.
+        const std::string tmp = path + ".tmp";
+        if (FILE* fp = std::fopen(tmp.c_str(), "wb")) {
+            ok = std::fwrite(&hdr, sizeof(hdr), 1, fp) == 1 && std::fwrite(mp, bytes, 1, fp) == 1;
+            ok = (std::fclose(fp) == 0) && ok;
+        }
+        if (ok && std::rename(tmp.c_str(), path.c_str()) != 0) {
+            std::remove(path.c_str()); // Windows: rename nao troca um arquivo que ja' existe
+            ok = std::rename(tmp.c_str(), path.c_str()) == 0;
+        }
+        if (!ok) std::remove(tmp.c_str());
+        vmaUnmapMemory(m_ctx->allocator(), alloc);
+    }
+    vmaDestroyBuffer(m_ctx->allocator(), buf, alloc);
+    if (ok) ERUPTION_LOG_WARN("[PROBES] grade gravada em %s (conteudo %016llx)", path.c_str(),
+                              static_cast<unsigned long long>(contentKey));
+    return ok;
+}
+
+bool IrradianceProbes::loadCache(const std::string& path, const Vec3& sceneMin, const Vec3& sceneMax,
+                                 uint64_t contentKey) {
+    FILE* fp = std::fopen(path.c_str(), "rb");
+    if (!fp) return false;
+    ProbeCacheHeader hdr{};
+    bool ok = std::fread(&hdr, sizeof(hdr), 1, fp) == 1 && std::memcmp(hdr.magic, "EPRB", 4) == 0 &&
+              hdr.version == kProbeCacheVersion && contentKey != 0 && hdr.contentKey == contentKey &&
+              sameBox(hdr.sceneMin, sceneMin) && sameBox(hdr.sceneMax, sceneMax) &&
+              hdr.dims[0] >= 2 && hdr.dims[1] >= 2 && hdr.dims[2] >= 2 &&
+              hdr.dims[0] <= 96 && hdr.dims[1] <= 24 && hdr.dims[2] <= 96;
+    const VkDeviceSize bytes = ok ? VkDeviceSize(hdr.dims[0]) * hdr.dims[1] * hdr.dims[2] * 8 : 0;
+    std::vector<uint8_t> texels(bytes);
+    ok = ok && std::fread(texels.data(), bytes, 1, fp) == 1;
+    std::fclose(fp);
+    if (!ok) {
+        ERUPTION_LOG_WARN("[PROBES] %s nao serve para esta cena (versao %u, conteudo %016llx; esta cena %016llx)",
+                          path.c_str(), hdr.version, static_cast<unsigned long long>(hdr.contentKey),
+                          static_cast<unsigned long long>(contentKey));
+        return false;
+    }
+    vkDeviceWaitIdle(m_ctx->device());
+    destroyGrid();
+    if (!make3D(m_ctx, hdr.dims[0], hdr.dims[1], hdr.dims[2], VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                m_finalImage, m_finalAlloc, m_finalView))
+        return false;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VmaAllocation stagingAlloc = VK_NULL_HANDLE;
+    if (!m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, staging, stagingAlloc)) {
+        destroyGrid();
+        return false;
+    }
+    void* mp = nullptr;
+    vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mp);
+    std::memcpy(mp, texels.data(), bytes);
+    vmaFlushAllocation(m_ctx->allocator(), stagingAlloc, 0, bytes);
+    vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        m_ctx->cmdImageBarrier(cmd, m_finalImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
+                               0, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        VkBufferImageCopy rc{};
+        rc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        rc.imageExtent = {hdr.dims[0], hdr.dims[1], hdr.dims[2]};
+        vkCmdCopyBufferToImage(cmd, staging, m_finalImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rc);
+        m_ctx->cmdImageBarrier(cmd, m_finalImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_COPY_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                               VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    });
+    vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
+    for (int i = 0; i < 3; ++i) m_dims[i] = hdr.dims[i];
+    m_gridMin = Vec3(hdr.gridMin[0], hdr.gridMin[1], hdr.gridMin[2]);
+    m_gridInvExtent = Vec3(hdr.gridInvExtent[0], hdr.gridInvExtent[1], hdr.gridInvExtent[2]);
+    m_valid = true;
+    ERUPTION_LOG_WARN("[PROBES] grade %ux%ux%u lida de %s (sem cozimento)", m_dims[0], m_dims[1], m_dims[2], path.c_str());
+    return true;
 }
 
 void IrradianceProbes::clear() {

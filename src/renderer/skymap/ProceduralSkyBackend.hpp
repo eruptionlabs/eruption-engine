@@ -32,6 +32,7 @@ public:
 
 private:
     void createOutputImage();
+    void drawSky(VkCommandBuffer cmd, const DayNightCycle& cycle, const Mat4& viewProj, uint32_t width, uint32_t height);
     void createDepthImage();
     void createPipeline();
     void createUBO();
@@ -67,6 +68,9 @@ private:
 
     uint32_t m_width = 0;
     uint32_t m_height = 0;
+    // Textura do ceu (reflexo da agua): na GPU fraca, 1/4 da cena em cada eixo.
+    uint32_t m_texWidth = 0;
+    uint32_t m_texHeight = 0;
 
     SkyConfig m_config;
 };

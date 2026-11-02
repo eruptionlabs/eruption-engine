@@ -120,6 +120,8 @@ public:
 
     // Accessors for integration.
     VkImageView cloudColorView() const { return m_cloudColorView; }
+    // Falso quando render() volta sem desenhar: os alvos ficam sem conteudo.
+    bool drawsLayers() const { return m_cfg.enabled && m_ctx != nullptr; }
     VkImageView cloudDepthView() const { return m_cloudDepthView; }
     CloudCoverageArray& coverageArray() { return m_coverageArray; }
     VulkanContext* context() const { return m_ctx; }

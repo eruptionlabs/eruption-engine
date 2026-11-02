@@ -23,6 +23,7 @@
 #include <chrono>
 #include <future>
 #include <mutex>
+#include <mutex>
 #include <cstdint>
 
 namespace eruption {
@@ -51,7 +52,15 @@ struct ModelMeshGPU {
     // estagio, mesmo com fator 1. Com os indices reordenados por celula, so' as
     // celulas que caem na banda vao pelo caminho de tesselacao (~1 ms) e o
     // resto do chao continua no desenho normal.
-    struct GroundCell { float minX, minZ, maxX, maxZ; uint32_t first, count; };
+    // Niveis reduzidos da celula (ver ModelRenderer::groundCellRange): no mesmo
+    // buffer de indices, depois da malha cheia; erro em unidades do mundo.
+    // lvCount 0 = sem o nivel.
+    struct GroundCell {
+        float minX, minZ, maxX, maxZ;
+        uint32_t first, count;
+        uint32_t lvFirst[2] = {0, 0}, lvCount[2] = {0, 0};
+        float lvError[2] = {0.0f, 0.0f};
+    };
     std::vector<GroundCell> groundCells;
     uint32_t bindlessTexSlot = 0; // primary texture
     uint32_t firstIndex = 0;
@@ -111,6 +120,8 @@ struct ModelMeshGPU {
     // compensacao de area (pruneCardsAreaPreserving): os cartoes que ficam sao
     // ESCALADOS, entao o index buffer sozinho nao descreve o nivel.
     // VK_NULL_HANDLE = o nivel usa vertexBuffer (caminho classico).
+    // LodSystem: os niveis dividem o vertex buffer do "lo" (os outros o apontam com
+    // alocacao nula, e quem destroi pula o que nao tem alocacao).
     VkBuffer loVertexBuffer = VK_NULL_HANDLE;
     VmaAllocation loVertexAlloc = VK_NULL_HANDLE;
     VkBuffer farVertexBuffer = VK_NULL_HANDLE;
@@ -134,10 +145,25 @@ struct ModelMeshGPU {
         VmaAllocation indexAlloc = VK_NULL_HANDLE;
         uint32_t indexCount = 0;
         std::vector<Cluster> clusters;
+        float maxPx = 0.0f; // > 0: nivel por tamanho na tela (diametro em pixels ate' isso)
+        float px = 0.0f;    // diametro para o qual o nivel foi feito
+        float dist = 0.0f;  // erro do nivel nesse diametro (area x erro^2, pixels)
     };
-    static constexpr uint32_t kMaxMidLods = 3;
+    static constexpr uint32_t kMaxMidLods = 6;   // a cadeia comum usa ate' 3 (kMotorMidLods); o LodSystem, todos
+    static constexpr uint32_t kMotorMidLods = 3;
     MidLod mid[kMaxMidLods];
     uint32_t midCount = 0;
+    // Troca de nivel pelo TAMANHO NA TELA (niveis feitos para um diametro em
+    // pixels, como os do LodSystem): "lo"/"far" valem com o diametro ate'
+    // loMaxPx/farMaxPx; a cadeia intermediaria usa MidLod::maxPx.
+    bool lodBySize = false;
+    float loMaxPx = 0.0f, farMaxPx = 0.0f;
+    float loPx = 0.0f, farPx = 0.0f, loDist = 0.0f, farDist = 0.0f;
+    // "far" e' um IMPOSTOR DE VISTAS (impViews x impViews ladrilhos): quadrado
+    // canonico, a matriz e o ladrilho saem da direcao da camera (ver impostorPick).
+    // impTiles = centro do objeto (3) e por ladrilho centro, eixo x, eixo y, direcao.
+    uint32_t impViews = 0;
+    std::vector<float> impTiles;
 
     // LOD EXCLUSIVO DA SOMBRA, bem mais agressivo que o da tela. Medido: trocar
     // a malha da sombra pelo LOD dá RMS 0,000 - a silhueta simplificada projeta
@@ -291,6 +317,12 @@ public:
     void setForceBaseLod(bool on) { m_forceBaseLod = on; }
     // Vista de detalhe total (editor): a sombra também usa a malha original.
     void setShadowFullDetail(bool on) { m_shadowFullDetail = on; }
+    // Caster de sombra no nivel que a camera escolhe para o objeto, em vez do
+    // LOD fixo de sombra (ver renderShadow).
+    // 0 = LOD fixo de sombra; 1 = o nivel que a camera escolhe para o objeto;
+    // 2 = o nivel pelo diametro do objeto em texels da cascata (setShadowTexel).
+    void setShadowLodView(int mode) { m_shadowLodView = mode; }
+    void setShadowTexel(float worldUnits) { m_shadowTexel = worldUnits; }
     bool forceBaseLod() const { return m_forceBaseLod; }
 
     size_t lastVisibleCount() const { return m_visibleInstanceIndices.size(); }
@@ -330,7 +362,29 @@ public:
 
     // Texture resolver: called to get bindless slot for a texture path.
     void setTextureResolver(std::function<uint32_t(const std::string&)> resolver) {
-        m_textureResolver = std::move(resolver);
+        // guarda o nome de cada slot: quem precisa dos pixels de uma textura
+        // de malha so' tem o slot (por vertice)
+        m_textureResolver = [this, resolver = std::move(resolver)](const std::string& path) {
+            const uint32_t slot = resolver(path);
+            if (slot != 0) {
+                std::lock_guard<std::mutex> lock(m_slotNameMutex);
+                m_slotName.emplace(slot, path);
+            }
+            return slot;
+        };
+    }
+    std::string textureNameForSlot(uint32_t slot) const {
+        std::lock_guard<std::mutex> lock(m_slotNameMutex);
+        auto it = m_slotName.find(slot);
+        return it == m_slotName.end() ? std::string() : it->second;
+    }
+    // Cria uma textura RGBA8 com slot bindless (texturas proprias de um nivel de LOD).
+    void setTextureCreator(std::function<uint32_t(const std::string& name, const uint8_t* rgba, int w, int h)> creator) {
+        m_textureCreator = std::move(creator);
+    }
+    // Idem, textura ja' comprimida em bloco com os mips (EtexData).
+    void setEtexTextureCreator(std::function<uint32_t(const std::string& name, const struct EtexData& etex)> creator) {
+        m_etexCreator = std::move(creator);
     }
 
     // Mesh resolver: called to get a GPU mesh. If it doesn't exist, the resolver creates it.
@@ -342,11 +396,16 @@ public:
 
     // Load models from generic map data. Fica com `models` (movido, sem
     // cópia): é a cópia que o editor usa depois para criar instâncias.
+    // Os nós montados por provideMapPrepared (se houver) entram no envio.
     void loadMapModels(std::vector<ModelAsset>&& models,
                        const std::vector<ModelInstanceDesc>& instances,
                        float centerX, float centerZ);
 
     void clear();
+
+    // Entradas de vértice do TerrainVertex nos shaders de modelo (location 0-6;
+    // 14 = posição anterior, com velocidade).
+    static std::vector<VkVertexInputAttributeDescription> vertexAttributes();
 
     // Render all visible models to G-Buffer
     void render(VkCommandBuffer cmd,
@@ -398,6 +457,17 @@ public:
     // por pixel cai (suave, alguns frames) ate' o total caber: o detalhe vai
     // para quem ocupa mais tela por triangulo. 0 = sem teto.
     void setMeshTriBudget(uint32_t tris) { m_meshTriBudget = tris; }
+    // Chao em celulas: cada celula escolhe o seu nivel pelo erro dele projetado
+    // na distancia da camera ate' a caixa dela; px e' o erro maximo na tela
+    // (0 = sempre a malha cheia).
+    void setGroundLodPx(float px) { m_groundLodPx = std::max(0.0f, px); }
+    // Camera e pixels por unidade (a distancia 1) do chao em celulas. Proprios,
+    // e nao os do descarte por tela: a sombra desenha antes de setScreenMetrics
+    // e o minimapa zera aqueles.
+    void setGroundLodView(const Vec3& cameraPos, float pixelsPerUnit) {
+        m_groundLodCam = cameraPos;
+        m_groundLodPpu = pixelsPerUnit;
+    }
     float lodBudgetScale() const { return m_lodBudgetScale; }
     // Filtro de CHAO para renderShadow (G38, bake das probes): 0 = tudo,
     // 1 = so' malhas isGround, 2 = tudo menos isGround. Sem mexer na
@@ -406,6 +476,13 @@ public:
     // chao (domo de ceu, plano d'agua, placa do mapa inteiro) - nao e' um
     // oclusor de luz do ceu, e' o proprio cenario.
     void setShadowGroundFilter(int filter, float hugeXZ = 0.0f) { m_shadowGroundFilter = filter; m_shadowGroundHugeXZ = hugeXZ; }
+    // Sombra pre-assada (ShadowRenderer, shadow_cache): 0 = todos os casters,
+    // 1 = so' os parados, 2 = so' os que se mexem (com esqueleto, animados ou
+    // movidos depois de criados). Voltar a 0 depois.
+    void setShadowCasterFilter(int filter) { m_shadowCasterFilter = filter; }
+    // Muda quando o conjunto de casters parados muda: instancia nova, ligada,
+    // desligada, com outra malha ou que passou a se mexer.
+    uint64_t staticShadowVersion() const { return m_staticShadowVersion; }
     // Diagnostico do bake: quantas malhas foram classificadas como chao.
     void groundMeshStats(uint32_t& ground, uint32_t& total, uint32_t& groundInstances) const {
         ground = total = groundInstances = 0;
@@ -431,6 +508,11 @@ public:
     // viewport / (2 tan(fov/2)) - pixels por unidade de mundo a distancia 1;
     // 0 desliga (minimapa, passes ortograficos).
     void setScreenCull(float minPixels) { m_screenCullMinPx = minPixels; }
+    // Raleamento de vegetacao (vento ou recorte): abaixo de px de raio na tela fica so'
+    // a fracao px/thinPx das instancias, nunca menos que keep. 0 desliga.
+    void setThin(float thinPx, float keep) { m_thinPx = thinPx; m_thinKeep = keep; }
+    // Meta de tempo de GPU do quadro para o LOD (ex.: 33 ms = 30 FPS); 0 = so' o teto de triangulos.
+    void setLodGpuTargetMs(float ms) { m_lodGpuTargetMs = std::max(0.0f, ms); }
     void setScreenMetrics(float pixelsPerUnit, float screenW = 0.0f, float screenH = 0.0f) {
         m_pixelsPerUnit = pixelsPerUnit;
         m_screenW = screenW;
@@ -688,6 +770,14 @@ public:
     // mais proximo da instancia, ou -1. Usa a malha da CPU do modelo.
     float raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const;
 
+    // Terreno grande: dispara em segundo plano o RaycastBvh dos nos grandes
+    // (acima de kRaycastBvhWarmTris triangulos) usados por instancias atuais
+    // e ainda sem BVH pronta nem em construcao. Chamar ao terminar de montar
+    // o mapa (fora do quadro de jogo), bem antes da 1a consulta de piso do
+    // script. pollRaycastBvhJobs (uma vez por quadro) recolhe o que acabou.
+    void warmRaycastBvh();
+    void pollRaycastBvhJobs();
+
     // Pincel de terreno (editor): cópia na CPU dos vértices do chão como estão
     // na GPU, e envio só dos vértices mudados no início do próximo frame.
     void setKeepGroundVertices(bool keep) { m_keepGroundVertices = keep; }
@@ -879,11 +969,34 @@ private:
         std::vector<std::vector<uint32_t>> mid;
         std::vector<std::vector<unsigned char>> midVerts; // vazio = vertex buffer da malha
         std::vector<std::vector<ModelMeshGPU::Cluster>> midClusters;
+        // LodSystem: um vertex buffer so' para todos os niveis (os vertices da malha
+        // e, depois, os criados por cada nivel); vazio = cada nivel com o seu.
+        std::vector<unsigned char> sysVerts;
+        // Textura propria de um nivel (2 = lo, 3 = far, 4.. = mid): os vertices
+        // [begin, begin + count) do vertex buffer do nivel leem dela.
+        struct LevelTexture {
+            uint8_t level = 0;
+            uint32_t begin = 0, count = 0;
+            std::vector<uint8_t> rgba;
+            std::vector<uint8_t> normal; // normal map (espaco tangente); vazio = sem
+            int w = 0, h = 0;
+            int nw = 0, nh = 0;          // tamanho do normal map
+            std::vector<uint8_t> etex, netex; // as mesmas, comprimidas em bloco (.etex); vazio = RGBA8
+            std::vector<uint8_t> setex;       // MRAH-W do nivel (.etex, mesma UV); vazio = o da folha
+        };
+        std::vector<LevelTexture> levelTextures;
+        // niveis por tamanho na tela (lodBySize): diametro maximo de cada um
+        bool bySize = false;
+        float loMaxPx = 0.0f, farMaxPx = 0.0f, loPx = 0.0f, farPx = 0.0f, loDist = 0.0f, farDist = 0.0f;
+        std::vector<float> midMaxPx, midPx, midDist;
+        uint32_t impViews = 0;          // far e' impostor de vistas (ver ModelMeshGPU)
+        std::vector<float> impTiles;
         MeshCardStats cs;     // topologia (so' folhagem): cartao x folha modelada
         bool csValid = false;
         MeshLodResult loRes, farRes, shRes; // as três partes, antes de decidir
         LodParams p;
         bool done = false; // já calculado (montagem fora da thread principal)
+        int sys = -1;      // LodSystem: -1 nao tentado, 0 recusou, 1 assumiu a malha
     };
     // Malha de um nó pronta para subir: tudo o que não depende da GPU.
     struct PreparedNode {
@@ -891,6 +1004,7 @@ private:
         std::vector<struct TerrainVertex> vertices;
         std::vector<uint32_t> indices;
         std::vector<ModelMeshGPU::GroundCell> groundCells;
+        std::vector<uint32_t> groundLevelIdx; // niveis das celulas, vao depois de `indices` no buffer
         Vec3 aabbMin{0.0f}, aabbMax{0.0f};
         size_t verticesBefore = 0;
         float uvPerUnit = 0.0f;
@@ -911,6 +1025,12 @@ private:
     // deferred: a GPU ainda pode estar lendo (descarga de asset no meio do jogo).
     void releaseSeamWeld(ModelMeshGPU& mesh, bool deferred);
 
+    // Slots provisórios (entrada e -> e+1) para preparar sem textura
+    // resolvida, e a troca pelos reais antes do envio. false = a preparação
+    // provisória não vale para estes slots (o chamador prepara de novo).
+    static NodeSlots proxyNodeSlots(const ModelAsset& asset, const ModelNode& node, const NodeSlotUse& use);
+    static bool remapProxySlots(PreparedNode& pn, const NodeSlots& real);
+
 public:
     struct PreparedAsset {
         std::vector<NodeSlots> slots;
@@ -923,15 +1043,28 @@ public:
             std::vector<uint32_t> indices;
         };
         std::vector<CompactNode> compact;
+        // prepareAssetProxy: slots provisórios, trocados no envio (appendAssetInstances).
+        bool proxy = false;
+        std::vector<NodeSlotUse> use;
     };
+    // Monta os nós (vértices, solda, células do chão, costuras) sem textura
+    // resolvida: roda na thread de leitura do mapa, longe da GPU e do bindless.
+    static PreparedAsset prepareAssetProxy(const ModelAsset& asset);
+    // Nós montados fora da thread principal para o PRÓXIMO loadMapModels
+    // (sobrevivem ao clear() do começo dele), por caminho de arquivo.
+    void provideMapPrepared(std::unordered_map<std::string, PreparedAsset>&& prepared) {
+        m_mapPrepared = std::move(prepared);
+    }
 
 private:
     std::unordered_map<std::string, PreparedAsset> m_prepared; // providePrepared -> próximo addModel do arquivo
+    std::unordered_map<std::string, PreparedAsset> m_mapPrepared; // provideMapPrepared -> próximo loadMapModels
     static void computeLodPart(LodBuild& b, int part);
     static void computeMidChain(LodBuild& b);
     static constexpr size_t kMidLodMinTris = 60000; // abaixo disso o salto cheia -> "lo" ja' e' curto
     static constexpr size_t kClusterMinTris = 20000; // degrau com pedacos (descarte pela borda da tela)
     static void finishLod(LodBuild& b);
+    static bool tryLodSystem(LodBuild& b);
     void applyLods(std::vector<LodBuild>& builds);
     void registerSkinBase(uint32_t mesh, const ModelAsset& asset, const ModelNode& node,
                           const std::vector<struct TerrainVertex>& vertices);
@@ -968,6 +1101,16 @@ private:
     // piso numa montanha de dezenas de milhares de triangulos). Invalidada em
     // releaseAsset (prefixo "arquivo#").
     mutable std::unordered_map<std::string, RaycastBvh> m_raycastBvh;
+    // Terreno grande: para uma malha grande, montar o BVH na hora custa mais de
+    // 250 ms - inaceitavel no meio do quadro da 1a consulta de piso.
+    // warmRaycastBvh (chamada no fim do loadMap) poe a construcao em segundo
+    // plano para os nos grandes; raycastInstance espera o futuro em vez de
+    // reconstruir se ele ainda estiver rodando quando a 1a consulta chegar.
+    struct RaycastBvhJob {
+        std::string key;
+        std::future<RaycastBvh> future;
+    };
+    mutable std::vector<RaycastBvhJob> m_raycastBvhJobs;
 
     VkBuffer m_globalVertexBuffer = VK_NULL_HANDLE;
     VmaAllocation m_globalVertexAlloc = VK_NULL_HANDLE;
@@ -975,6 +1118,10 @@ private:
     VmaAllocation m_globalIndexAlloc = VK_NULL_HANDLE;
 
     std::function<uint32_t(const std::string&)> m_textureResolver;
+    std::function<uint32_t(const std::string&, const uint8_t*, int, int)> m_textureCreator;
+    std::function<uint32_t(const std::string&, const struct EtexData&)> m_etexCreator;
+    std::unordered_map<uint32_t, std::string> m_slotName;
+    mutable std::mutex m_slotNameMutex;
     std::function<ModelMeshGPU(const std::string&, const std::vector<struct TerrainVertex>&, const std::vector<uint32_t>&)> m_meshResolver;
 
     // Hot data used for culling and drawing; mirrors the subset of ModelInstance
@@ -1041,9 +1188,43 @@ private:
     LodSwitch lodSwitchFor(const ModelInstanceHot& hot, const ModelMeshGPU& mesh) const;
     static LodFadePair lodFadePairFor(const ModelMeshGPU& mesh, const LodSwitch& sw, float dist);
     uint8_t lodLevelFor(uint32_t idx, const ModelMeshGPU& mesh) const;
+    uint8_t sizeLevelFor(uint32_t idx, const ModelMeshGPU& mesh) const;
+    uint8_t rdLevelFor(uint32_t idx, const ModelMeshGPU& mesh) const;
     // Degrau da cadeia intermediaria (1 = cheia, 4.. = mid) por triangulo/pixel.
     uint8_t midLevelFor(uint32_t idx, const ModelInstanceHot& hot, const ModelMeshGPU& mesh, float dist) const;
     std::vector<uint8_t> m_lodOfInstance;   // preenchido pelo sort, lido no draw
+    PopStats m_popStats;
+    std::vector<uint32_t> m_popShownFrame; // ultimo quadro (m_popFrame) em que a instancia apareceu
+    std::vector<uint8_t> m_popShownLod;
+    std::vector<uint32_t> m_popPrev;       // visiveis no quadro anterior
+    uint32_t m_popFrame = 0;
+    uint32_t m_popNewFrom = 0; // indices daqui para cima nasceram neste quadro
+    bool popInside(uint32_t idx) const;
+    std::vector<float> m_spawnFadeStart;    // segundo (m_spawnClock) em que a entrada comecou; < 0 = nenhuma
+    float m_spawnClock = 0.0f;
+    std::vector<uint8_t> m_spawnNoFade;     // skipSpawnFade
+    uint32_t m_spawnKnown = 0;              // instancias que ja' existiam no ultimo passe principal
+    bool m_mapDrawn = false;                // o mapa ja' teve um passe principal
+    bool m_spawnFadeSuspended = false;
+    float spawnFadeT(uint32_t idx) const;   // 1 = inteira
+    void startSpawnFade(uint32_t idx);
+    std::vector<uint8_t> m_cullWhy, m_cullWhyPrev; // motivo do corte por instancia (ver PopStats)
+    // DISSOLUCAO POR TEMPO da escolha por taxa-distorcao: rdLevelFor nao tem banda
+    // de distancia, entao a troca de nivel abre um crossfade de N quadros (o par
+    // de niveis desenhado com dither complementar, o mesmo do crossfade de banda).
+    // De onde a instancia veio e em que quadro trocou (kSemFade = nenhum).
+    static constexpr uint32_t kSemFade = 0xFFFFFFFFu;
+    std::vector<uint8_t> m_rdFadeFrom, m_rdShown;          // de onde veio; nivel mostrado no ultimo quadro
+    std::vector<uint32_t> m_rdFadeStart, m_rdShownFrame;   // em quadros do passe principal (m_rdFrame)
+    uint32_t m_rdFrame = 0;
+    static bool rdMesh(const ModelMeshGPU& mesh);
+    // Par em transicao desta instancia: banda de distancia (malhas comuns) ou
+    // dissolucao por tempo (rdMesh). Contagem e desenho TEM que usar este.
+    LodFadePair fadePairFor(uint32_t idx, const ModelInstanceHot& hot, const ModelMeshGPU& mesh) const;
+    // Os dois ladrilhos do impostor mais proximos da direcao da camera e o peso do segundo.
+    struct ImpPick { uint32_t a = 0, b = 0; float t = 0.0f; };
+    ImpPick impostorPick(const ModelInstanceHot& hot, const ModelMeshGPU& mesh, const Vec3& cam) const;
+
     Vec3 m_lastCameraPos = Vec3(0.0f);
 
     // ---- Instancing (SIMT) ----
@@ -1054,6 +1235,9 @@ private:
         Vec4 uvScaleDisp;
         Mat4 prevModel; // frame anterior: vetor de movimento de objeto que se move
     };
+    // Matriz (modelo x ladrilho) e UV do ladrilho do impostor nos dados da instancia.
+    static void impostorData(GpuModelInstance& d, const Mat4& model, const Mat4* prevModel,
+                             const ModelMeshGPU& mesh, uint32_t tile);
     // Matriz de cada instância no último frame em que foi desenhada.
     struct MotionRecord {
         Mat4 last{1.0f}, prev{1.0f};
@@ -1131,22 +1315,6 @@ private:
     // quase colado na camera e pipoca quando ela se move. Malha pequena nao
     // paga o passe: simplifica-la e' perda pura.
     uint32_t m_meshLodMinTris = 800;
-    PopStats m_popStats;
-    std::vector<uint32_t> m_popShownFrame; // ultimo quadro (m_popFrame) em que a instancia apareceu
-    std::vector<uint8_t> m_popShownLod;
-    std::vector<uint32_t> m_popPrev;       // visiveis no quadro anterior
-    uint32_t m_popFrame = 0;
-    uint32_t m_popNewFrom = 0; // indices daqui para cima nasceram neste quadro
-    bool popInside(uint32_t idx) const;
-    std::vector<float> m_spawnFadeStart;    // segundo (m_spawnClock) em que a entrada comecou; < 0 = nenhuma
-    float m_spawnClock = 0.0f;
-    std::vector<uint8_t> m_spawnNoFade;     // skipSpawnFade
-    uint32_t m_spawnKnown = 0;              // instancias que ja' existiam no ultimo passe principal
-    bool m_mapDrawn = false;                // o mapa ja' teve um passe principal
-    bool m_spawnFadeSuspended = false;
-    float spawnFadeT(uint32_t idx) const;   // 1 = inteira
-    void startSpawnFade(uint32_t idx);
-    std::vector<uint8_t> m_cullWhy, m_cullWhyPrev; // motivo do corte por instancia (ver PopStats)
     float m_meshLodMinDistance = 0.0f;
     // Piso da troca pro nivel "far" (cartoes 8x): o orcamento tri/px puxa o
     // far pra ~2x o lo, e com camera de diorama (700+ u) isso poe lencois em
@@ -1164,13 +1332,36 @@ private:
     float m_meshLodFarDistanceMul = 3.0f;
     float m_meshLodTrisPerPx = 0.0f;   // ver setMeshLodTrisPerPx / lodSwitchFor
     uint32_t m_meshTriBudget = 0;      // ver setMeshTriBudget
+    float m_groundLodPx = 0.0f;        // ver setGroundLodPx
+    Vec3 m_groundLodCam = Vec3(0.0f);  // ver setGroundLodView
+    float m_groundLodPpu = 0.0f;
+    // Nivel atual de cada celula do chao, por malha (a histerese precisa dele;
+    // a sombra desenha o que o passe principal escolheu).
+    mutable std::unordered_map<uint32_t, std::vector<uint8_t>> m_groundCellLevel;
+    void groundCellRange(uint32_t meshIndex, size_t cellIndex, const ModelMeshGPU::GroundCell& c, const Vec3& cellMin,
+                         const Vec3& cellMax, float errorScale, bool choose, uint32_t& first, uint32_t& count) const;
     float m_lodBudgetScale = 1.0f;     // <= 1: aperta o orcamento por pixel
     float m_lodPixelScale = 1.0f;      // ver setLodPixelScale
+    float m_sizeBudgetScale = 1.0f;    // teto global para os niveis por tamanho (sem piso)
+    float m_lodGpuTargetMs = 0.0f;     // > 0: teto por tempo de GPU do quadro (alem dos triangulos)
+    float m_lodGpuMsAvg = 0.0f;
+    float m_lodLambda = 1.0f;          // peso da distorcao na escolha por taxa-distorcao (ajustado pelo teto)
     float trisPerPx() const { return m_meshLodTrisPerPx * m_lodBudgetScale * m_lodPixelScale; }
+    // niveis por tamanho na tela: triangulos ~ area, entao o teto global vira raiz no diametro
+    // O chao fica fora: e' um objeto so' do tamanho do mapa, o relevo nao paga pela folhagem.
+    float sizeLodScale(const ModelMeshGPU& mesh) const {
+        static const float kTest = [] { const char* e = std::getenv("ERUPTION_TEST_LODSYS_PX_SCALE"); return e ? float(std::atof(e)) : 1.0f; }();
+        if (mesh.isGround) return 1.0f;
+        return kTest * (m_meshLodTrisPerPx > 0.0f ? std::sqrt(m_sizeBudgetScale * m_lodPixelScale) : 1.0f);
+    }
     static uint32_t levelTris(const ModelMeshGPU& m, uint8_t level);
     int m_shadowGroundFilter = 0;      // ver setShadowGroundFilter
+    int m_shadowCasterFilter = 0;      // ver setShadowCasterFilter
+    std::vector<uint8_t> m_instMoves;  // 1 = a instancia ja' se mexeu (caster dinamico)
+    uint64_t m_staticShadowVersion = 0;
     float m_shadowGroundHugeXZ = 0.0f;
     float m_screenCullMinPx = 0.0f;
+    float m_thinPx = 0.0f, m_thinKeep = 1.0f;
     float m_shadowMinPx = 0.0f;
     // Histerese do descarte de caster por tamanho na tela: sem ela o objeto
     // que cruza o limiar liga e desliga a sombra a cada frame com a camera em
@@ -1354,7 +1545,8 @@ private:
     uint32_t m_groundBlendPending = 0xFFFFFFFFu; // chao com splat novo, ainda nao capturado
     // So' as instancias acrescentadas no fim desde o ultimo espelho (addInstanceOf).
     void syncNewHotEntries();
-    void syncHotEntry(uint32_t i);
+    void syncHotEntry(uint32_t i, bool known);
+    void syncHotInstance(uint32_t index);
     void touchInstance(uint32_t index);
     std::vector<uint32_t> m_touched;
     std::vector<uint8_t> m_touchedMark;
@@ -1383,6 +1575,9 @@ private:
 
     bool m_forceBaseLod = false;
     bool m_shadowFullDetail = false;
+    int m_shadowLodView = 0;
+    float m_shadowTexel = 0.0f;   // texel da cascata em desenho, unidades do mundo
+    uint8_t shadowLevelFor(const ModelInstanceHot& hot, const ModelMeshGPU& mesh) const;
     uint32_t m_lastDrawnTriangles = 0;
     uint32_t m_lastDrawCalls = 0;
 };

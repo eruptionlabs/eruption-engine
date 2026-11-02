@@ -85,6 +85,11 @@ bool PostProcessor::init(VulkanContext* ctx, uint32_t width, uint32_t height) {
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.maxAnisotropy = 1.0f;
     vkCreateSampler(m_ctx->device(), &samplerInfo, nullptr, &m_linearSampler);
+    // Profundidade (D32, R32F) sem filtro linear no aparelho (celular): lida
+    // com este, por samplerFor().
+    samplerInfo.magFilter = samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    vkCreateSampler(m_ctx->device(), &samplerInfo, nullptr, &m_pointSampler);
 
     createImages();
     createDescriptors();
@@ -129,6 +134,8 @@ void PostProcessor::shutdown() {
     vkDestroyDescriptorSetLayout(device, m_descriptorSetLayout, nullptr);
     vkDestroyDescriptorPool(device, m_descriptorPool, nullptr);
     vkDestroySampler(device, m_linearSampler, nullptr);
+    vkDestroySampler(device, m_pointSampler, nullptr);
+    m_pointSampler = VK_NULL_HANDLE;
 
     auto destroyImg = [&](VkImage& img, VmaAllocation& alloc, VkImageView& view) {
         if (view != VK_NULL_HANDLE) {
@@ -368,6 +375,10 @@ void PostProcessor::createDescriptors() {
     vkCreatePipelineLayout(m_ctx->device(), &plInfo, nullptr, &m_layout);
 }
 
+VkSampler PostProcessor::samplerFor(VkImageView view) const {
+    return m_ctx->filterFor(vkc::viewFormat(view)) == VK_FILTER_LINEAR ? m_linearSampler : m_pointSampler;
+}
+
 void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, VkImageView view1, VkImageView view2, VkImageView view3) {
     if (setIndex >= kSetsPerFrame) return;
     VkDescriptorSet set = dset(setIndex);
@@ -380,7 +391,7 @@ void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, Vk
         if (v != VK_NULL_HANDLE) {
             infos[count].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             infos[count].imageView = v;
-            infos[count].sampler = m_linearSampler;
+            infos[count].sampler = samplerFor(v);
             writes[count].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[count].dstSet = set;
             writes[count].dstBinding = binding;
@@ -413,7 +424,7 @@ void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, Vk
         if (v != VK_NULL_HANDLE) {
             infos[count].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             infos[count].imageView = v;
-            infos[count].sampler = m_linearSampler;
+            infos[count].sampler = samplerFor(v);
             writes[count].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[count].dstSet = set;
             writes[count].dstBinding = binding;
@@ -1083,7 +1094,7 @@ if (!m_ctx) return;
                 if (v != VK_NULL_HANDLE) {
                     infos[count].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                     infos[count].imageView = v;
-                    infos[count].sampler = s != VK_NULL_HANDLE ? s : m_linearSampler;
+                    infos[count].sampler = s != VK_NULL_HANDLE ? s : samplerFor(v);
                     writes[count].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                     writes[count].dstSet = set;
                     writes[count].dstBinding = binding;
@@ -1101,7 +1112,12 @@ if (!m_ctx) return;
             // drivers — the rain-occlusion mask (rainShadowMask) then lets
             // crowns/splash through under roofs and canopies (author feedback
             // 2026-08-10). Bind it with the NEAREST sampler instead.
-            addImage(heightmapView, m_weatherRenderer.heightmapSampler(), 2);
+            // Sem o mapa de altura deste quadro (clima baixo/medio), a imagem
+            // do proprio clima: o shader declara o binding e um descritor
+            // nunca escrito lia memoria qualquer (retangulos de lixo na tela
+            // depois da troca de escala, VUID-vkCmdDraw-None-02699).
+            addImage(heightmapView != VK_NULL_HANDLE ? heightmapView : m_weatherRenderer.heightmapView(),
+                     m_weatherRenderer.heightmapSampler(), 2);
             // Binding 3 e' sampler2DArray - nao ha' fallback 2D valido; quando
             // nao ha' coverage o shader nao amostra (gate no UBO).
             addImage(cloudCoverageView, cloudCoverageSampler, 3);
@@ -2038,7 +2054,7 @@ void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, Vk
         if (v != VK_NULL_HANDLE) {
             infos[count].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             infos[count].imageView = v;
-            infos[count].sampler = m_linearSampler;
+            infos[count].sampler = samplerFor(v);
             writes[count].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[count].dstSet = set;
             writes[count].dstBinding = binding;
@@ -2085,7 +2101,7 @@ void PostProcessor::updateDescriptorSet(uint32_t setIndex, VkImageView view0, Vk
         if (v != VK_NULL_HANDLE) {
             infos[count].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             infos[count].imageView = v;
-            infos[count].sampler = (sampler != VK_NULL_HANDLE) ? sampler : m_linearSampler;
+            infos[count].sampler = (sampler != VK_NULL_HANDLE) ? sampler : samplerFor(v);
             writes[count].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[count].dstSet = set;
             writes[count].dstBinding = binding;
@@ -2297,10 +2313,14 @@ void PostProcessor::dispatchAutoExposure(VkCommandBuffer cmd, VkImageView hdrVie
     const float minLogLum = -8.0f;
     const float logLumRange = 12.0f;
 
+    // GPU fraca: uma amostra a cada 4x4 pixels. O histograma so' precisa da
+    // distribuicao, e os atomicos por pixel custavam ~8 ms no celular.
+    const uint32_t stride = m_ctx->shaderLite() ? 4u : 1u;
+    const uint32_t sampledW = (m_width + stride - 1) / stride, sampledH = (m_height + stride - 1) / stride;
     // Linhas y e w da invViewProj: o shader acha a altura do raio de cada
     // pixel sem a matriz inteira (o push fica em 64 B).
-    struct { float minLogLum, logLumRange, timeDelta, pad; Vec4 rowY, rowW, cam; } histPush{
-        minLogLum, logLumRange, dt, 0.0f,
+    struct { float minLogLum, logLumRange, timeDelta, sampleStride; Vec4 rowY, rowW, cam; } histPush{
+        minLogLum, logLumRange, dt, float(stride),
         Vec4(invViewProj[0][1], invViewProj[1][1], invViewProj[2][1], invViewProj[3][1]),
         Vec4(invViewProj[0][3], invViewProj[1][3], invViewProj[2][3], invViewProj[3][3]),
         Vec4(cameraPos.y, skipBelowHorizon ? 1.0f : 0.0f, 0.0f, 0.0f)};
@@ -2308,7 +2328,7 @@ void PostProcessor::dispatchAutoExposure(VkCommandBuffer cmd, VkImageView hdrVie
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_lumHistLayout, 0, 1,
                             &m_lumHistSets[frameIdx], 0, nullptr);
     vkCmdPushConstants(cmd, m_lumHistLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(histPush), &histPush);
-    vkCmdDispatch(cmd, (m_width + 15) / 16, (m_height + 15) / 16, 1);
+    vkCmdDispatch(cmd, (sampledW + 15) / 16, (sampledH + 15) / 16, 1);
 
     mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
@@ -2316,7 +2336,7 @@ void PostProcessor::dispatchAutoExposure(VkCommandBuffer cmd, VkImageView hdrVie
                          0, 1, &mb, 0, nullptr, 0, nullptr);
 
     struct { float minLogLum, logLumRange, timeDelta, tau; uint32_t numPixels; float lowP, highP; }
-        adaptPush{minLogLum, logLumRange, dt, tau, m_width * m_height, 0.01f, 0.99f};
+        adaptPush{minLogLum, logLumRange, dt, tau, sampledW * sampledH, 0.01f, 0.99f};
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_lumAdaptPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_lumAdaptLayout, 0, 1,
                             &m_lumAdaptSet, 0, nullptr);

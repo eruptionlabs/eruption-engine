@@ -77,6 +77,7 @@ void ShadowRenderer::shutdown() {
         vmaDestroyImage(m_ctx->allocator(), m_nextAtlasImage, m_nextAtlasAlloc);
         m_nextAtlasImage = VK_NULL_HANDLE;
     }
+    destroyCacheImage();
 }
 
 void ShadowRenderer::resizeAtlas(uint32_t newSize) {
@@ -103,6 +104,7 @@ void ShadowRenderer::resizeAtlas(uint32_t newSize) {
     // (o preset grafico chama resizeAtlas no boot, 4096 -> 3072).
     m_atlasView = VK_NULL_HANDLE;      m_atlasImage = VK_NULL_HANDLE;     m_atlasAlloc = VK_NULL_HANDLE;
     m_nextAtlasView = VK_NULL_HANDLE;  m_nextAtlasImage = VK_NULL_HANDLE; m_nextAtlasAlloc = VK_NULL_HANDLE;
+    destroyCacheImage();
 
     m_currentAtlasSize = newSize;
     createShadowAtlas(newSize);
@@ -111,7 +113,12 @@ void ShadowRenderer::resizeAtlas(uint32_t newSize) {
 }
 
 void ShadowRenderer::createShadowAtlas(uint32_t size) {
-    uint32_t currentSize = size;
+    // As cascatas ficam lado a lado: a largura é size * CASCADE_COUNT e não
+    // pode passar do limite do aparelho (4096 numa GPU de celular).
+    const auto& lim = m_ctx->deviceProperties().limits;
+    const uint32_t maxWidth = std::min(lim.maxImageDimension2D, lim.maxFramebufferWidth);
+    const uint32_t maxHeight = std::min(lim.maxImageDimension2D, lim.maxFramebufferHeight);
+    uint32_t currentSize = std::min({size, maxWidth / CASCADE_COUNT, maxHeight});
     VkResult res = VK_ERROR_OUT_OF_DEVICE_MEMORY;
     
     while (currentSize >= MIN_ATLAS_SIZE) {
@@ -127,7 +134,9 @@ void ShadowRenderer::createShadowAtlas(uint32_t size) {
         imageInfo.format = VK_FORMAT_D32_SFLOAT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        // TRANSFER_DST: a sombra pre-assada chega ao atlas por copia.
+        imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -284,13 +293,15 @@ void ShadowRenderer::createShadowPipeline() {
     bindingDesc.stride = sizeof(TerrainVertex); // keep in sync with vertex layout
     bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::vector<VkVertexInputAttributeDescription> attribs(6);
+    // texIndex e matId aos pares (R16G16, offset alinhado a 4): um R16 sozinho
+    // em offset so' par de 2 bytes faz a PowerVR de celular buscar o vertice
+    // por um caminho lento (a sombra custava 700 ms).
+    std::vector<VkVertexInputAttributeDescription> attribs(5);
     attribs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
     attribs[1] = {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(TerrainVertex, texCoord)};
     attribs[2] = {2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TerrainVertex, normal)};
-    attribs[3] = {3, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, texIndex)};
-    attribs[4] = {4, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, matId)};
-    attribs[5] = {5, 0, VK_FORMAT_R32_UINT, offsetof(TerrainVertex, color)};
+    attribs[3] = {3, 0, VK_FORMAT_R16G16_UINT, offsetof(TerrainVertex, texIndex)}; // + matId
+    attribs[4] = {5, 0, VK_FORMAT_R32_UINT, offsetof(TerrainVertex, color)};
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -338,7 +349,10 @@ void ShadowRenderer::createShadowPipeline() {
 
     // ---- Variante instanciada (so' modelos) ----
     // (criada ANTES de destruir os modulos: o frag e' compartilhado)
-    auto instVertCode = ShaderCompiler::loadSPIRV("shaders/shadow/shadow_inst.vert.spv");
+    // ERUPTION_TEST_SHADOW_NO_INSTANCING=1 (debug): modelos pelo caminho por-draw.
+    const bool kNoInstancing = std::getenv("ERUPTION_TEST_SHADOW_NO_INSTANCING") != nullptr;
+    auto instVertCode = kNoInstancing ? std::vector<uint32_t>{}
+                                      : ShaderCompiler::loadSPIRV("shaders/shadow/shadow_inst.vert.spv");
     if (!instVertCode.empty()) {
         VkShaderModule instVert;
         VkShaderModuleCreateInfo ivci{};
@@ -384,9 +398,23 @@ void ShadowRenderer::createShadowPipeline() {
 
             VkPipelineShaderStageCreateInfo instStages[2] = { stages[0], stages[1] };
             instStages[0].module = instVert;
+            // Matriz da instância como atributo por instância (entrada 1, o
+            // mesmo buffer do ModelRenderer), não como SSBO lido no vértice: na
+            // PowerVR de celular a leitura do SSBO por gl_InstanceIndex derrubava
+            // a GPU a cada quadro (715 ms contra 7 ms).
+            const VkVertexInputBindingDescription instBindings[2] = {
+                bindingDesc, {1, sizeof(Mat4), VK_VERTEX_INPUT_RATE_INSTANCE}};
+            std::vector<VkVertexInputAttributeDescription> instAttribs = attribs;
+            for (uint32_t c = 0; c < 4; ++c)
+                instAttribs.push_back({6 + c, 1, VK_FORMAT_R32G32B32A32_SFLOAT, c * static_cast<uint32_t>(sizeof(Vec4))});
+            VkPipelineVertexInputStateCreateInfo instVertexInput = vertexInput;
+            instVertexInput.vertexBindingDescriptionCount = 2;
+            instVertexInput.pVertexBindingDescriptions = instBindings;
+            instVertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(instAttribs.size());
+            instVertexInput.pVertexAttributeDescriptions = instAttribs.data();
             m_shadowInstPipeline = PipelineBuilder()
                 .setShaderStages({instStages[0], instStages[1]})
-                .setVertexInput(vertexInput)
+                .setVertexInput(instVertexInput)
                 .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
                 .setViewport(0, 0, 2048.0f, 2048.0f)
                 .setScissor(0, 0, 2048, 2048)
@@ -410,7 +438,7 @@ void ShadowRenderer::createShadowPipeline() {
             // quando so' se escreve profundidade, que e' exatamente o caso.
             m_shadowInstOpaquePipeline = PipelineBuilder()
                 .setShaderStages({instStages[0]})
-                .setVertexInput(vertexInput)
+                .setVertexInput(instVertexInput)
                 .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
                 .setViewport(0, 0, 2048.0f, 2048.0f)
                 .setScissor(0, 0, 2048, 2048)
@@ -995,6 +1023,7 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
     computeMatrices(currentLightDir, m_cascadeRenderMatrices, m_cascadeLookupMatrices);
     computeMatrices(nextLightDir, m_nextCascadeRenderMatrices, m_nextCascadeLookupMatrices);
     holdFarCascade(camera, currentLightDir);
+    holdStaticCache(camera.target());
     {
         // Receptores: a visao da camera sem jitter, 2% mais larga (o jitter
         // e o filtro da sombra leem um pouco alem da borda). A cascata
@@ -1040,6 +1069,162 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
     }
 }
 
+// Sombra pre-assada: enquanto o cozimento ainda serve (mesmo tamanho de
+// caixa, sol quase no mesmo lugar, camera dentro da folga), a iluminacao fica
+// com as matrizes dele; senao ele vale como perdido e o proximo renderCascades
+// coze de novo com as matrizes deste quadro. Parada, a imagem e' identica a
+// sem cache; andando, so' a borda da caixa atrasa ate' a folga.
+void ShadowRenderer::holdStaticCache(const Vec3& center) {
+    m_cache.center = center;
+    if (!staticCacheActive() || !m_cache.valid) return;
+    const float slack = m_cache.halfSize * m_settings.staticCacheMargin;
+    const Vec2 moved(center.x - m_cache.bakedCenter.x, center.z - m_cache.bakedCenter.z);
+    const bool fits = m_cache.size == m_currentAtlasSize && m_cascadeSplitsVec.x == m_cache.halfSize &&
+                      glm::dot(moved, moved) <= slack * slack &&
+                      glm::dot(m_currentLightDir, m_cache.lightDir) >=
+                          std::cos(glm::radians(m_settings.staticCacheMaxDeg));
+    if (!fits) {
+        m_cache.valid = false;
+        return;
+    }
+    m_cascadeRenderMatrices[0] = m_cascadeRenderMatrices[1] = m_cache.render;
+    m_cascadeLookupMatrices[0] = m_cascadeLookupMatrices[1] = m_cache.lookup;
+    m_cascadeSplitsVec = m_cache.splits;
+    m_currentWorldTexelSize = m_c1WorldTexelSize = m_cache.texel;
+    m_shadowDepthRange = m_cache.depthRange;
+    m_currentLightDir = m_cache.lightDir;
+}
+
+bool ShadowRenderer::ensureCacheImage() {
+    if (m_cache.image != VK_NULL_HANDLE) return true;
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent = {m_currentAtlasSize, m_currentAtlasSize, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = VK_FORMAT_D32_SFLOAT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    if (vmaCreateImage(m_ctx->allocator(), &imageInfo, &allocInfo, &m_cache.image, &m_cache.alloc, nullptr) !=
+        VK_SUCCESS) {
+        ERUPTION_LOG_WARN("[SOMBRA] sem memoria para a sombra pre-assada - desligada");
+        m_cache.image = VK_NULL_HANDLE;
+        m_settings.staticCache = false;
+        return false;
+    }
+    PROFILE_VRAM_ALLOC(ProfilerCategory::ShadowMaps, m_ctx->allocationSize(m_cache.alloc));
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_cache.image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_D32_SFLOAT;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.layerCount = 1;
+    vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_cache.view);
+    m_cache.size = m_currentAtlasSize;
+    m_cache.valid = false;
+    return true;
+}
+
+void ShadowRenderer::destroyCacheImage() {
+    if (m_cache.view != VK_NULL_HANDLE) vkDestroyImageView(m_ctx->device(), m_cache.view, nullptr);
+    if (m_cache.image != VK_NULL_HANDLE) {
+        PROFILE_VRAM_FREE(ProfilerCategory::ShadowMaps, m_ctx->allocationSize(m_cache.alloc));
+        vmaDestroyImage(m_ctx->allocator(), m_cache.image, m_cache.alloc);
+    }
+    m_cache.view = VK_NULL_HANDLE;
+    m_cache.image = VK_NULL_HANDLE;
+    m_cache.alloc = VK_NULL_HANDLE;
+    m_cache.size = 0;
+    m_cache.valid = false;
+}
+
+// Cozimento (quando preciso) do cenario parado na imagem propria, copia dela
+// para a cascata 0 do atlas e, por cima, so' os casters que se mexem.
+void ShadowRenderer::renderWithStaticCache(VkCommandBuffer cmd, const CasterSources& src) {
+    const uint64_t version = src.models ? src.models->staticShadowVersion() : 0;
+    const VkExtent2D extent{m_cache.size, m_cache.size};
+    VkRenderingAttachmentInfo depth{};
+    depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depth.clearValue.depthStencil = {1.0f, 0};
+    if (version != m_cache.seenVersion) {
+        m_cache.seenVersion = version;
+        m_cache.stableFrames = 0;
+    } else if (m_cache.stableFrames < kStaticSettleFrames) {
+        ++m_cache.stableFrames;
+    }
+    m_cache.staleFrames = m_cache.version != version ? m_cache.staleFrames + 1 : 0;
+    const bool settled = m_cache.stableFrames >= kStaticSettleFrames || m_cache.staleFrames >= kStaticMaxStaleFrames;
+    if (!m_cache.valid || (m_cache.version != version && settled)) {
+        m_ctx->cmdImageBarrier(cmd, m_cache.image,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+            0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+        depth.imageView = m_cache.view;
+        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        m_ctx->cmdBeginRendering(cmd, {}, &depth, nullptr, extent);
+        // Sem recorte por receptor: a camera gira sem pedir cozimento novo.
+        drawCascade(cmd, src, m_cascadeRenderMatrices[0], 0, nullptr, Casters::Static);
+        m_ctx->cmdEndRendering(cmd);
+        m_ctx->cmdImageBarrier(cmd, m_cache.image,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+        // Diagnóstico de GPU de celular sem timestamp (PowerVR): cada
+        // cozimento desenha todo o cenário parado; vários seguidos (objetos
+        // nascendo em quadros seguidos) somam num quadro longo.
+        ERUPTION_LOG_WARN("Shadow cache: baked (%s, version %llu)", m_cache.valid ? "static set changed" : "sun, camera or first",
+                          static_cast<unsigned long long>(version));
+        m_cache.valid = true;
+        m_cache.version = version;
+        m_cache.staleFrames = 0;
+        m_cache.bakedCenter = m_cache.center;
+        m_cache.lightDir = m_currentLightDir;
+        m_cache.halfSize = m_cascadeSplitsVec.x;
+        m_cache.render = m_cascadeRenderMatrices[0];
+        m_cache.lookup = m_cascadeLookupMatrices[0];
+        m_cache.splits = m_cascadeSplitsVec;
+        m_cache.texel = m_currentWorldTexelSize;
+        m_cache.depthRange = m_shadowDepthRange;
+    }
+
+    m_ctx->cmdImageBarrier(cmd, m_atlasImage,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    const VkImageSubresourceLayers layer{VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+    const VkImageCopy region{layer, {0, 0, 0}, layer, {0, 0, 0}, {m_cache.size, m_cache.size, 1}};
+    vkCmdCopyImage(cmd, m_cache.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   m_atlasImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    m_ctx->cmdImageBarrier(cmd, m_atlasImage,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        VK_IMAGE_ASPECT_DEPTH_BIT);
+    depth.imageView = m_atlasView;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    m_ctx->cmdBeginRendering(cmd, {}, &depth, nullptr, extent);
+    drawCascade(cmd, src, m_cascadeRenderMatrices[0], 0, m_settings.receiverCull ? &m_receivers : nullptr,
+                Casters::Moving);
+    m_ctx->cmdEndRendering(cmd);
+    m_ctx->cmdImageBarrier(cmd, m_atlasImage,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+        VK_IMAGE_ASPECT_DEPTH_BIT);
+}
+
 // Decide se a cascata distante e' redesenhada neste frame. Se nao, a busca da
 // iluminacao fica com a matriz do frame em que ela foi desenhada (o atlas
 // guarda aquela imagem), entao a sombra continua no lugar certo; so' a
@@ -1083,6 +1268,131 @@ static const bool kOpaqueShadowPipe = [] {
     return !(e && std::atoi(e) == 0);
 }();
 
+VkRect2D ShadowRenderer::cascadeRect(uint32_t cascade) const {
+    return {{static_cast<int32_t>((cascade % 2) * m_currentAtlasSize), static_cast<int32_t>((cascade / 2) * m_currentAtlasSize)},
+            {m_currentAtlasSize, m_currentAtlasSize}};
+}
+
+// Os casters de uma cascata, com o rendering ja' aberto no atlas (ou na
+// imagem da sombra pre-assada, que tem o tamanho de uma cascata).
+void ShadowRenderer::drawCascade(VkCommandBuffer cmd, const CasterSources& src, const Mat4& mat, uint32_t cascade,
+                                 const Frustum* receivers, Casters which) {
+    const VkRect2D scissor = cascadeRect(cascade);
+    const VkViewport viewport{static_cast<float>(scissor.offset.x), static_cast<float>(scissor.offset.y),
+                              static_cast<float>(scissor.extent.width),
+                              static_cast<float>(scissor.extent.height), 0.0f, 1.0f};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    if (m_bindless) {
+        VkDescriptorSet bindlessSet = m_bindless->set();
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowLayout,
+                                0, 1, &bindlessSet, 0, nullptr);
+    }
+
+    // Render terrain and models for this cascade
+    Frustum shadowFrustum;
+    shadowFrustum.extractFromMatrix(mat);
+
+    static const bool kProf = std::getenv("ERUPTION_TEST_SHADOW_DEBUG") != nullptr;
+    auto tProf = std::chrono::steady_clock::now();
+    auto lap = [&](const char* tag) {
+        if (!kProf) return;
+        auto now = std::chrono::steady_clock::now();
+        static int fr = 0; static double acc[3] = {0,0,0}; static const char* tags[3];
+        int slot = (tag[0]=='t')?0:(tag[0]=='m')?1:2;
+        acc[slot] += std::chrono::duration<double,std::milli>(now - tProf).count();
+        tags[slot] = tag; tProf = now;
+        if (slot == 2 && ++fr % 120 == 0) {
+            ERUPTION_LOG_WARN("[SHPROF] %s=%.2f %s=%.2f %s=%.2f (ms, media 120f)",
+                              tags[0], acc[0]/120, tags[1], acc[1]/120, tags[2], acc[2]/120);
+            acc[0]=acc[1]=acc[2]=0;
+        }
+    };
+
+    // Terrain shadows
+    // DIAGNOSTICO: ERUPTION_TEST_SHADOW_NO_TERRAIN=1 mede a fatia do
+    // terreno LEGADO (formato .ter; em mapa GLB o chao e' malha de modelo
+    // e ja' passa pelo ModelRenderer). Nao e' caminho de producao.
+    static const bool kNoTerrainCaster = [] {
+        const char* e = std::getenv("ERUPTION_TEST_SHADOW_NO_TERRAIN");
+        return e && std::atoi(e) != 0;
+    }();
+    if (!kNoTerrainCaster && which != Casters::Moving) {
+        src.terrain->renderShadow(cmd, m_shadowPipeline, m_shadowLayout, mat,
+                              shadowFrustum, m_settings.enableShadowCulling);
+    }
+    lap("terrain");
+
+    // Model shadows. ERUPTION_TEST_SHADOW_NO_MODELS=1 (debug): mede o
+    // passe sem os modelos, num aparelho sem timestamp de GPU.
+    static const bool kNoModelCasters = std::getenv("ERUPTION_TEST_SHADOW_NO_MODELS") != nullptr;
+    ModelRenderer* models = src.models;
+    if (models && models->isInitialized() && !kNoModelCasters) {
+        float minSize = 0.0f;
+        if (m_settings.enableAdaptiveShadows) {
+            minSize = m_settings.minModelShadowSizeCurve.evaluate(m_zoomPercent);
+            // Limita a curva ao que ESTA cascata nao consegue resolver.
+            // O texel e' POR CASCATA: usar sempre o da c0 (fino) fazia
+            // a cascata 1 desenhar milhares de props que ali ocupam
+            // MENOS DE UM TEXEL - invisiveis, e o item mais caro do
+            // modo csm (medido: Shadow CPU 0.86ms no single de 1 slot
+            // contra 4.59ms nas 2 cascatas; a c1 e' quem arrasta).
+            // Com o texel certo, um prop de 2u so' entra na cascata
+            // onde ele de fato cobre pixel.
+            const float cascadeTexel = (cascade == 0) ? m_currentWorldTexelSize
+                                                : m_c1WorldTexelSize;
+            const float texelReq = (cascade == 0) ? m_settings.minShadowTexels
+                                            : m_settings.minShadowTexels * m_settings.csmFarTexelBias;
+            const float texelFloor = cascadeTexel * texelReq;
+            if (texelFloor > 0.0f) {
+                // c0 mantem o comportamento antigo (min entre curva e
+                // piso). Cascatas distantes usam o PISO como minimo
+                // efetivo: nelas o piso e' o criterio fisico (nao da'
+                // para resolver o que e' menor que um texel), a curva
+                // e' so' preferencia artistica de perto.
+                minSize = (cascade == 0) ? std::min(minSize, texelFloor)
+                                   : std::max(minSize, texelFloor);
+                // CSM: so' o criterio FISICO (menor que N texels desta
+                // cascata nao resolve). A curva por zoom era o
+                // "culling esquisito" que o autor viu em cidade-A ao
+                // afastar: em zoom 0 ela cortava tudo abaixo de 10 u.
+                // O que e' pequeno DEMAIS NA TELA e' cortado no
+                // ModelRenderer por pixels projetados (shadow_caster_
+                // min_px), continuo no zoom e na distancia.
+                if (m_settings.csmStable) minSize = texelFloor;
+            }
+        }
+        // ERUPTION_TEST_NO_SIZE_CULL=1 (referencia da bancada): caster
+        // menor que o texel da cascata tambem entra.
+        static const bool kNoSizeCull = std::getenv("ERUPTION_TEST_NO_SIZE_CULL") != nullptr;
+        if (kNoSizeCull) minSize = 0.0f;
+        models->setShadowCasterFilter(which == Casters::All ? 0 : which == Casters::Static ? 1 : 2);
+        // Texel desta cascata em unidades do mundo: o nivel de cada caster sai
+        // do tamanho dele NESTA cascata (ModelRenderer::shadowLevelFor).
+        models->setShadowTexel(cascade == 0 ? m_currentWorldTexelSize : m_c1WorldTexelSize);
+        models->renderShadow(cmd,
+                             m_shadowInstPipeline != VK_NULL_HANDLE ? m_shadowInstPipeline : m_shadowPipeline,
+                             m_shadowInstLayout != VK_NULL_HANDLE ? m_shadowInstLayout : m_shadowLayout,
+                             mat, shadowFrustum, minSize, m_settings.enableShadowCulling,
+                             m_shadowInstPipeline != VK_NULL_HANDLE, src.frameUbo.windParams,
+                             kOpaqueShadowPipe && m_shadowInstPipeline != VK_NULL_HANDLE
+                                 ? m_shadowInstOpaquePipeline : VK_NULL_HANDLE,
+                             receivers, m_receiverMargin[cascade]);
+        models->setShadowCasterFilter(0);
+    }
+
+    lap("models");
+
+    // Sprite shadows e oclusores extras: sempre do lado de quem se mexe.
+    if (which != Casters::Static) {
+        if (src.sprites && src.spriteCount > 0)
+            src.sprites->renderShadow(cmd, m_shadowLayout, mat, src.frameUbo, src.spriteBuffer, src.spriteCount);
+        lap("sprites");
+        if (m_extraCasters) m_extraCasters(cmd, mat, cascade);
+    }
+}
+
 void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrain, ModelRenderer* models, SpriteRenderer* sprites, const FrameUBO& frameUbo, VkBuffer spriteInstanceBuffer, uint32_t spriteCount) {
     // ERUPTION_TEST_SHADOW_DEBUG=1: quem entra no atlas por frame (a cada 120).
     static const bool kCastDbg = std::getenv("ERUPTION_TEST_SHADOW_DEBUG") != nullptr;
@@ -1095,6 +1405,11 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
     }
 
     if (!terrain || !terrain->isInitialized()) return;
+    const CasterSources src{terrain, models, sprites, frameUbo, spriteInstanceBuffer, spriteCount};
+    if (staticCacheActive() && !m_settings.enableTemporalBlend && ensureCacheImage()) {
+        renderWithStaticCache(cmd, src);
+        return;
+    }
 
     // Helper to render one atlas
     auto renderAtlas = [&](VkImage atlasImage, VkImageView atlasView, const Mat4* renderMats) {
@@ -1125,9 +1440,6 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
         // deixa o slot 1 em 1.0 = sem oclusor, e o lookup morto nunca amostra).
         const uint32_t drawCount = m_settings.singleMap ? 1u : CASCADE_COUNT;
         for (uint32_t i = 0; i < drawCount; i++) {
-            uint32_t cx = (i % 2) * m_currentAtlasSize;
-            uint32_t cy = (i / 2) * m_currentAtlasSize;
-
             VkRenderingAttachmentInfo depthAttachment{};
             depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             depthAttachment.imageView = atlasView;
@@ -1136,20 +1448,14 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
             depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             depthAttachment.clearValue.depthStencil = {1.0f, 0};
 
-            VkViewport viewport{};
-            viewport.x = static_cast<float>(cx);
-            viewport.y = static_cast<float>(cy);
-            viewport.width = static_cast<float>(m_currentAtlasSize);
-            viewport.height = static_cast<float>(m_currentAtlasSize);
-            viewport.minDepth = 0.0f;
-            viewport.maxDepth = 1.0f;
-
-            VkRect2D scissor{{static_cast<int32_t>(cx), static_cast<int32_t>(cy)},
-                             {m_currentAtlasSize, m_currentAtlasSize}};
+            const VkRect2D scissor = cascadeRect(i);
 
             if (i == 0) {
                 // Cascades are side by side: atlas is size*CASCADE_COUNT wide, size tall.
-                uint32_t renderW = m_currentAtlasSize * CASCADE_COUNT;
+                // So' a area das cascatas desenhadas: no modo de mapa unico a
+                // metade de fora nem era lida, e limpar/gravar ela custava
+                // banda (GPU de celular paga por ladrilho).
+                uint32_t renderW = m_currentAtlasSize * drawCount;
                 uint32_t renderH = m_currentAtlasSize;
                 m_ctx->cmdBeginRendering(cmd, {}, &depthAttachment, nullptr, {renderW, renderH});
                 if (keepFar) {
@@ -1165,107 +1471,7 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
                 continue;
             }
 
-            vkCmdSetViewport(cmd, 0, 1, &viewport);
-            vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-            if (m_bindless) {
-                VkDescriptorSet bindlessSet = m_bindless->set();
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowLayout,
-                                        0, 1, &bindlessSet, 0, nullptr);
-            }
-
-            // Render terrain and models for this cascade
-            Frustum shadowFrustum;
-            shadowFrustum.extractFromMatrix(renderMats[i]);
-
-            static const bool kProf = std::getenv("ERUPTION_TEST_SHADOW_DEBUG") != nullptr;
-            auto tProf = std::chrono::steady_clock::now();
-            auto lap = [&](const char* tag) {
-                if (!kProf) return;
-                auto now = std::chrono::steady_clock::now();
-                static int fr = 0; static double acc[3] = {0,0,0}; static const char* tags[3];
-                int slot = (tag[0]=='t')?0:(tag[0]=='m')?1:2;
-                acc[slot] += std::chrono::duration<double,std::milli>(now - tProf).count();
-                tags[slot] = tag; tProf = now;
-                if (slot == 2 && ++fr % 120 == 0) {
-                    ERUPTION_LOG_WARN("[SHPROF] %s=%.2f %s=%.2f %s=%.2f (ms, media 120f)",
-                                      tags[0], acc[0]/120, tags[1], acc[1]/120, tags[2], acc[2]/120);
-                    acc[0]=acc[1]=acc[2]=0;
-                }
-            };
-
-            // Terrain shadows
-            // DIAGNOSTICO: ERUPTION_TEST_SHADOW_NO_TERRAIN=1 mede a fatia do
-            // terreno LEGADO (formato .ter; em mapa GLB o chao e' malha de modelo
-            // e ja' passa pelo ModelRenderer). Nao e' caminho de producao.
-            static const bool kNoTerrainCaster = [] {
-                const char* e = std::getenv("ERUPTION_TEST_SHADOW_NO_TERRAIN");
-                return e && std::atoi(e) != 0;
-            }();
-            if (!kNoTerrainCaster) {
-                terrain->renderShadow(cmd, m_shadowPipeline, m_shadowLayout, renderMats[i],
-                                      shadowFrustum, m_settings.enableShadowCulling);
-            }
-            lap("terrain");
-
-            // Model shadows
-            if (models && models->isInitialized()) {
-                float minSize = 0.0f;
-                if (m_settings.enableAdaptiveShadows) {
-                    minSize = m_settings.minModelShadowSizeCurve.evaluate(m_zoomPercent);
-                    // Limita a curva ao que ESTA cascata nao consegue resolver.
-                    // O texel e' POR CASCATA: usar sempre o da c0 (fino) fazia
-                    // a cascata 1 desenhar milhares de props que ali ocupam
-                    // MENOS DE UM TEXEL - invisiveis, e o item mais caro do
-                    // modo csm (medido: Shadow CPU 0.86ms no single de 1 slot
-                    // contra 4.59ms nas 2 cascatas; a c1 e' quem arrasta).
-                    // Com o texel certo, um prop de 2u so' entra na cascata
-                    // onde ele de fato cobre pixel.
-                    const float cascadeTexel = (i == 0) ? m_currentWorldTexelSize
-                                                        : m_c1WorldTexelSize;
-                    const float texelReq = (i == 0) ? m_settings.minShadowTexels
-                                                    : m_settings.minShadowTexels * m_settings.csmFarTexelBias;
-                    const float texelFloor = cascadeTexel * texelReq;
-                    if (texelFloor > 0.0f) {
-                        // c0 mantem o comportamento antigo (min entre curva e
-                        // piso). Cascatas distantes usam o PISO como minimo
-                        // efetivo: nelas o piso e' o criterio fisico (nao da'
-                        // para resolver o que e' menor que um texel), a curva
-                        // e' so' preferencia artistica de perto.
-                        minSize = (i == 0) ? std::min(minSize, texelFloor)
-                                           : std::max(minSize, texelFloor);
-                        // CSM: so' o criterio FISICO (menor que N texels desta
-                        // cascata nao resolve). A curva por zoom era o
-                        // "culling esquisito" que o autor viu em cidade-A ao
-                        // afastar: em zoom 0 ela cortava tudo abaixo de 10 u.
-                        // O que e' pequeno DEMAIS NA TELA e' cortado no
-                        // ModelRenderer por pixels projetados (shadow_caster_
-                        // min_px), continuo no zoom e na distancia.
-                        if (m_settings.csmStable) minSize = texelFloor;
-                    }
-                }
-                // ERUPTION_TEST_NO_SIZE_CULL=1 (referencia da bancada): caster
-                // menor que o texel da cascata tambem entra.
-                static const bool kNoSizeCull = std::getenv("ERUPTION_TEST_NO_SIZE_CULL") != nullptr;
-                if (kNoSizeCull) minSize = 0.0f;
-                models->renderShadow(cmd,
-                                     m_shadowInstPipeline != VK_NULL_HANDLE ? m_shadowInstPipeline : m_shadowPipeline,
-                                     m_shadowInstLayout != VK_NULL_HANDLE ? m_shadowInstLayout : m_shadowLayout,
-                                     renderMats[i], shadowFrustum, minSize, m_settings.enableShadowCulling,
-                                     m_shadowInstPipeline != VK_NULL_HANDLE, frameUbo.windParams,
-                                     kOpaqueShadowPipe && m_shadowInstPipeline != VK_NULL_HANDLE
-                                         ? m_shadowInstOpaquePipeline : VK_NULL_HANDLE,
-                                     receivers, m_receiverMargin[i]);
-            }
-
-            lap("models");
-
-            // Sprite shadows
-            if (sprites && spriteCount > 0) {
-                sprites->renderShadow(cmd, m_shadowLayout, renderMats[i], frameUbo, spriteInstanceBuffer, spriteCount);
-            }
-            lap("sprites");
-            if (m_extraCasters) m_extraCasters(cmd, renderMats[i], i);
+            drawCascade(cmd, src, renderMats[i], i, receivers, Casters::All);
 
             if (i == drawCount - 1) {
                 m_ctx->cmdEndRendering(cmd);

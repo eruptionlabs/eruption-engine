@@ -145,7 +145,13 @@ private:
 
     bool createComputePipeline();
     void destroyComputePipeline();
-    void dispatchCompute(VkCommandBuffer cmd);
+    void dispatchCompute(VkCommandBuffer cmd, uint32_t firstLayer, uint32_t layers, uint32_t firstRowGroup,
+                         uint32_t rowGroups);
+    void generateInChunks();
+    void fillWithoutCompute();
+    bool compactFormats() const;
+    VkFormat coverageFormat() const;
+    VkFormat altitudeFormat() const;
 
     bool createLocalCloudBuffer();
     void destroyLocalCloudBuffer();

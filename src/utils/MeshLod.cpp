@@ -589,6 +589,60 @@ MeshLodResult simplifyMesh(const float* positions,
 }
 
 
+std::vector<uint32_t> simplifyPatchLockedBorder(const float* positions, const float* normals, size_t stride,
+                                                const uint32_t* indices, size_t indexCount, size_t targetIndexCount,
+                                                float& worldError) {
+    worldError = 0.0f;
+    std::vector<uint32_t> out;
+#ifdef ERUPTION_HAVE_MESHOPT
+    if (!positions || indexCount < 3 || targetIndexCount >= indexCount) return out;
+    // Malha local do pedaco: o simplificador aloca por vertice da malha que
+    // recebe, e chamar com a malha inteira para cada pedaco custaria a malha
+    // inteira por pedaco.
+    const unsigned char* base = reinterpret_cast<const unsigned char*>(positions);
+    std::unordered_map<uint32_t, uint32_t> localOf;
+    localOf.reserve(indexCount);
+    std::vector<uint32_t> globalOf, localIdx;
+    std::vector<float> localPos, localNrm;
+    localIdx.reserve(indexCount);
+    const unsigned char* nbase = reinterpret_cast<const unsigned char*>(normals);
+    for (size_t i = 0; i < indexCount; ++i) {
+        const auto [it, fresh] = localOf.try_emplace(indices[i], uint32_t(globalOf.size()));
+        if (fresh) {
+            globalOf.push_back(indices[i]);
+            const float* p = reinterpret_cast<const float*>(base + size_t(indices[i]) * stride);
+            localPos.insert(localPos.end(), {p[0], p[1], p[2]});
+            if (nbase) {
+                const float* q = reinterpret_cast<const float*>(nbase + size_t(indices[i]) * stride);
+                localNrm.insert(localNrm.end(), {q[0], q[1], q[2]});
+            }
+        }
+        localIdx.push_back(it->second);
+    }
+    std::vector<uint32_t> simp(localIdx.size());
+    float err = 0.0f;
+    size_t n = 0;
+    if (nbase) {
+        // Peso 1 na normal: 0,1 de desvio da normal custa como 0,1 do tamanho
+        // do pedaco em posicao (o erro do meshoptimizer e' relativo a ele).
+        const float w[3] = {1.0f, 1.0f, 1.0f};
+        n = meshopt_simplifyWithAttributes(simp.data(), localIdx.data(), localIdx.size(), localPos.data(),
+                                           globalOf.size(), sizeof(float) * 3, localNrm.data(), sizeof(float) * 3, w,
+                                           3, nullptr, targetIndexCount, 1.0f, meshopt_SimplifyLockBorder, &err);
+    } else {
+        n = meshopt_simplify(simp.data(), localIdx.data(), localIdx.size(), localPos.data(), globalOf.size(),
+                             sizeof(float) * 3, targetIndexCount, 1.0f, meshopt_SimplifyLockBorder, &err);
+    }
+    if (n < 3 || n * 4 > indexCount * 3) return out;
+    worldError = err * meshopt_simplifyScale(localPos.data(), globalOf.size(), sizeof(float) * 3);
+    out.reserve(n);
+    for (size_t k = 0; k < n; ++k) out.push_back(globalOf[simp[k]]);
+#else
+    (void)positions; (void)normals; (void)stride; (void)indices; (void)indexCount; (void)targetIndexCount;
+#endif
+    return out;
+}
+
 bool reindexMesh(const void* vertexBytes, size_t count, size_t stride,
                  const std::vector<uint32_t>& indices,
                  std::vector<unsigned char>& outVertices,

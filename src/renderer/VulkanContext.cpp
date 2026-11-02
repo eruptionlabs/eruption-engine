@@ -9,6 +9,7 @@
 #include <csignal>
 #include <chrono>
 #include "core/Logger.hpp"
+#include "renderer/ShaderCompiler.hpp"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -24,6 +25,10 @@
 #include <vector>
 
 namespace eruption {
+
+static const char* storageLabel(const VkFormatProperties& props) {
+    return (props.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) ? "yes" : "NO";
+}
 
 bool VulkanContext::init(GLFWwindow* window) {
     m_window = window;
@@ -45,6 +50,10 @@ bool VulkanContext::init(GLFWwindow* window) {
     if (!createTimestampPools()) return false;
     if (!createPipelineStatsPools()) return false;
     createPipelineCache();
+    markPhase("idle");
+#if !defined(__EMSCRIPTEN__) // navegador sem threads (v1) e sem GPU para travar
+    m_watchdog = std::thread(&VulkanContext::watchdogLoop, this);
+#endif
 
     ERUPTION_LOG_INFO("Vulkan context initialized successfully");
     return true;
@@ -96,6 +105,14 @@ void VulkanContext::createPipelineCache() {
 
 void VulkanContext::destroyPipelineCache() {
     if (m_pipelineCache == VK_NULL_HANDLE) return;
+    savePipelineCache();
+    vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
+    m_pipelineCache = VK_NULL_HANDLE;
+    s_pipelineCache = VK_NULL_HANDLE;
+}
+
+void VulkanContext::savePipelineCache() {
+    if (m_pipelineCache == VK_NULL_HANDLE) return;
     size_t size = 0;
     if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, nullptr) == VK_SUCCESS && size > 0) {
         std::vector<char> blob(size);
@@ -114,12 +131,11 @@ void VulkanContext::destroyPipelineCache() {
             if (!ok || ec) std::filesystem::remove(tmp, ec);
         }
     }
-    vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
-    m_pipelineCache = VK_NULL_HANDLE;
-    s_pipelineCache = VK_NULL_HANDLE;
 }
 
 void VulkanContext::shutdown() {
+    m_watchdogStop = true;
+    if (m_watchdog.joinable()) m_watchdog.join();
     waitIdle();
 
     // Execute any deferred per-frame cleanups that were scheduled but never
@@ -259,14 +275,29 @@ bool VulkanContext::beginFrame() {
     static const bool kDbgPresent = std::getenv("ERUPTION_DEBUG_PRESENT") != nullptr;
     using Clk = std::chrono::steady_clock;
     auto t0 = kDbgPresent ? Clk::now() : Clk::time_point{};
-    vkWaitForFences(m_device, 1, &m_frameFences[m_currentFrame], VK_TRUE, UINT64_MAX);
+    // GPU travada (driver de celular) nao pode ser espera muda: depois de 5 s
+    // o log diz ate' que timestamp o frame chegou.
+    markPhase("frame fence");
+    bool stallReported = false;
+    while (vkWaitForFences(m_device, 1, &m_frameFences[m_currentFrame], VK_TRUE, 5'000'000'000ull) == VK_TIMEOUT) {
+        if (!stallReported) reportGpuStall(m_currentFrame);
+        stallReported = true;
+    }
     vkc::beginFrame(m_currentFrame);
     for (auto& hook : m_frameBeginHooks) hook(m_currentFrame);
     auto t1 = kDbgPresent ? Clk::now() : Clk::time_point{};
 
-    VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
-                                            m_imageAvailable[m_currentFrame],
-                                            VK_NULL_HANDLE, &m_imageIndex);
+    // A trava tambem aparece aqui: o compositor espera o frame anterior.
+    markPhase("acquire");
+    VkResult result;
+    while ((result = vkAcquireNextImageKHR(m_device, m_swapchain, 5'000'000'000ull, m_imageAvailable[m_currentFrame],
+                                           VK_NULL_HANDLE, &m_imageIndex)) == VK_TIMEOUT ||
+           result == VK_NOT_READY) {
+        if (!stallReported)
+            for (uint32_t f = 0; f < MAX_FRAMES_IN_FLIGHT; ++f) reportGpuStall(f);
+        stallReported = true;
+    }
+    markPhase("recording");
     if (kDbgPresent) {
         auto t2 = Clk::now();
         m_dbgFenceMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -290,8 +321,11 @@ bool VulkanContext::beginFrame() {
     // to serialize CPU/GPU every frame). WITH_AVAILABILITY keeps unwritten
     // queries from failing the whole read: the buffer is (value, availability)
     // pairs, stride = 2 uint64 per query.
+    const bool queriesReady = (m_querySlotsReady & (1u << m_currentFrame)) != 0;
     if (!m_timestampPools.empty() && m_timestampPools[m_currentFrame] != VK_NULL_HANDLE) {
         m_timestampResults[m_currentFrame].assign(TIMESTAMP_QUERY_COUNT * 2, 0);
+    }
+    if (queriesReady && !m_timestampPools.empty() && m_timestampPools[m_currentFrame] != VK_NULL_HANDLE) {
         VkResult qr = vkGetQueryPoolResults(m_device, m_timestampPools[m_currentFrame], 0, TIMESTAMP_QUERY_COUNT,
                                             sizeof(uint64_t) * TIMESTAMP_QUERY_COUNT * 2, m_timestampResults[m_currentFrame].data(),
                                             sizeof(uint64_t) * 2, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
@@ -304,7 +338,7 @@ bool VulkanContext::beginFrame() {
     // Pipeline statistics do mesmo slot. Sem WITH_AVAILABILITY: e' uma
     // consulta so' e a fence acima ja' garantiu que o frame terminou; se ela
     // nao tiver sido escrita (passe pulado), VK_NOT_READY deixa os zeros.
-    if (m_pipeStatsSupported && !m_pipeStatsPools.empty() &&
+    if (queriesReady && m_pipeStatsSupported && !m_pipeStatsPools.empty() &&
         m_pipeStatsPools[m_currentFrame] != VK_NULL_HANDLE) {
         auto& dst = m_pipeStatsResults[m_currentFrame];
         dst.assign(PIPE_STATS_COUNT, 0);
@@ -339,6 +373,7 @@ bool VulkanContext::beginFrame() {
         m_pipeStatsPools[m_currentFrame] != VK_NULL_HANDLE) {
         vkCmdResetQueryPool(m_commandBuffers[m_currentFrame], m_pipeStatsPools[m_currentFrame], 0, 1);
     }
+    m_querySlotsReady |= 1u << m_currentFrame;
 
     m_isFrameRecording = true;
     return true;
@@ -360,6 +395,7 @@ bool VulkanContext::endFrame() {
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = &m_renderFinished[m_imageIndex]; // por imagem, nao por frame
 
+    markPhase("submit");
     VkResult submitResult = vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, m_frameFences[m_currentFrame]);
     if (submitResult == VK_ERROR_DEVICE_LOST) {
         m_deviceLost = true;
@@ -383,7 +419,9 @@ bool VulkanContext::endFrame() {
     // teto artificial de ~135 FPS. Sem expor esse numero, nenhum FPS colhido
     // headless pode ser interpretado.
     const auto tp0 = std::chrono::steady_clock::now();
+    markPhase("present");
     VkResult result = vkQueuePresentKHR(m_presentQueue, &presentInfo);
+    markPhase("idle");
     m_lastPresentMs = static_cast<float>(
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tp0).count());
     if (kDbgPresent2) {
@@ -525,7 +563,9 @@ void VulkanContext::immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& f
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
+    m_inImmediateSubmit = true;
     fn(cmd);
+    m_inImmediateSubmit = false;
 
     vkEndCommandBuffer(cmd);
 
@@ -539,8 +579,24 @@ void VulkanContext::immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& f
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     vkCreateFence(m_device, &fenceInfo, nullptr, &fence);
 
-    vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence);
-    vkWaitForFences(m_device, 1, &fence, VK_TRUE, UINT64_MAX);
+    const VkResult submitted = vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence);
+    if (submitted != VK_SUCCESS) ERUPTION_LOG_ERROR("immediateSubmit: vkQueueSubmit failed (%d)", static_cast<int>(submitted));
+    // GPU travada nao pode virar espera eterna sem rastro (celular): avisa a
+    // cada 10 s e continua esperando.
+    while (submitted == VK_SUCCESS) {
+        const VkResult r = vkWaitForFences(m_device, 1, &fence, VK_TRUE, 10'000'000'000ull);
+        if (r != VK_TIMEOUT) {
+            if (r != VK_SUCCESS) ERUPTION_LOG_ERROR("immediateSubmit: fence wait failed (%d)", static_cast<int>(r));
+            break;
+        }
+        // Um quadro (tela de carregamento) ainda pendente na fila = o envio
+        // travado e' ele, e este so' espera atras.
+        std::string pending;
+        for (uint32_t f = 0; f < MAX_FRAMES_IN_FLIGHT; ++f)
+            if (vkGetFenceStatus(m_device, m_frameFences[f]) == VK_NOT_READY) pending += " " + std::to_string(f);
+        ERUPTION_LOG_ERROR("immediateSubmit: GPU did not finish in 10 s (last shader loaded: %s; frames pending:%s)",
+                           ShaderCompiler::lastLoaded().c_str(), pending.empty() ? " none" : pending.c_str());
+    }
 
     vkDestroyFence(m_device, fence, nullptr);
     vkFreeCommandBuffers(m_device, m_transferPool, 1, &cmd);
@@ -851,8 +907,8 @@ bool VulkanContext::pickPhysicalDevice() {
         if (!m_bindless) {
             m_descriptorIndexing = {};
             m_descriptorIndexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
-            ERUPTION_LOG_WARN("No descriptor indexing%s: fixed texture array (%u slots, no-bindless shaders)",
-                              force ? " (forced by ERUPTION_NO_BINDLESS)" : "", ERUPTION_FALLBACK_TEX_SLOTS);
+            ERUPTION_LOG_WARN("No descriptor indexing%s: textures in array layers (no-bindless shaders)",
+                              force ? " (forced by ERUPTION_NO_BINDLESS)" : "");
         }
     }
 
@@ -880,6 +936,26 @@ bool VulkanContext::pickPhysicalDevice() {
         }
     }
     ERUPTION_LOG_WARN("GPU em uso: %s", m_deviceProperties.deviceName);
+    m_shaderLite = !m_bindless;
+    if (const char* e = std::getenv("ERUPTION_SHADER_LITE")) m_shaderLite = e[0] == '1';
+    m_liteValue = m_shaderLite ? VK_TRUE : VK_FALSE;
+    if (m_shaderLite) ERUPTION_LOG_WARN("Shaders: caminho enxuto (sem micro-sombra, PCSS, sombra de contato)");
+    {
+        // Limites de geometria que GPU de celular corta (o caminho dos modelos
+        // usa ~20 atributos e saidas de vertice largas).
+        const auto& lim = m_deviceProperties.limits;
+        VkFormatProperties r16{}, r8{}, r16u{};
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, VK_FORMAT_R16_UINT, &r16);
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, VK_FORMAT_R8_UNORM, &r8);
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, VK_FORMAT_R16_UNORM, &r16u);
+        ERUPTION_LOG_WARN("GPU limits: vertex attributes %u, bindings %u, vertex outputs %u, fragment inputs %u, "
+                          "R16_UINT vertex %s; storage extended formats %s, R8 %s, R16 %s",
+                          lim.maxVertexInputAttributes, lim.maxVertexInputBindings, lim.maxVertexOutputComponents,
+                          lim.maxFragmentInputComponents,
+                          (r16.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) ? "yes" : "NO",
+                          m_supportedFeatures.shaderStorageImageExtendedFormats ? "yes" : "NO", storageLabel(r8),
+                          storageLabel(r16u));
+    }
     ERUPTION_LOG_INFO("Selected GPU: %s", m_deviceProperties.deviceName);
     ERUPTION_LOG_INFO("Max push constants size: %u", m_deviceProperties.limits.maxPushConstantsSize);
     ERUPTION_LOG_INFO("Timestamp period: %.3f ns", m_deviceProperties.limits.timestampPeriod);
@@ -936,6 +1012,16 @@ bool VulkanContext::createLogicalDevice() {
     features.independentBlend = m_supportedFeatures.independentBlend ? VK_TRUE : VK_FALSE;
     features.fillModeNonSolid = m_supportedFeatures.fillModeNonSolid ? VK_TRUE : VK_FALSE;
     features.wideLines = m_supportedFeatures.wideLines ? VK_TRUE : VK_FALSE;
+    // Índice que muda dentro do draw em array de texturas (u_textures[i] no
+    // caminho sem bindless, covArrays[j] da chuva). A NVIDIA aceita sem pedir;
+    // o driver de celular só compila o shader com o recurso ligado.
+    // r8/r16/rg16f como storage image (nuvens, chuva): pedido quando existe.
+    features.shaderStorageImageExtendedFormats =
+        m_supportedFeatures.shaderStorageImageExtendedFormats ? VK_TRUE : VK_FALSE;
+    features.shaderSampledImageArrayDynamicIndexing =
+        m_supportedFeatures.shaderSampledImageArrayDynamicIndexing ? VK_TRUE : VK_FALSE;
+    if (!m_supportedFeatures.shaderSampledImageArrayDynamicIndexing)
+        ERUPTION_LOG_WARN("GPU without shaderSampledImageArrayDynamicIndexing");
     // FSR 3.1: a saida do upscaler e' uma storage image SEM formato no GLSL.
     features.shaderStorageImageWriteWithoutFormat =
         m_supportedFeatures.shaderStorageImageWriteWithoutFormat ? VK_TRUE : VK_FALSE;
@@ -1280,9 +1366,19 @@ bool VulkanContext::deviceHasExtension(VkPhysicalDevice device, const char* name
     return false;
 }
 
+// Diz no log por que a GPU ficou de fora: sem isso o celular só mostra
+// "No suitable Vulkan device found".
+static bool rejectDevice(VkPhysicalDevice device, const char* reason) {
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(device, &props);
+    ERUPTION_LOG_WARN("GPU %s rejected: %s (Vulkan %u.%u)", props.deviceName, reason,
+                      VK_API_VERSION_MAJOR(props.apiVersion), VK_API_VERSION_MINOR(props.apiVersion));
+    return false;
+}
+
 bool VulkanContext::isDeviceSuitable(VkPhysicalDevice device) {
     QueueFamilyIndices indices = findQueueFamilies(device);
-    if (!indices.isComplete()) return false;
+    if (!indices.isComplete()) return rejectDevice(device, "missing queue family");
 
     // Check device extension support
     uint32_t extensionCount;
@@ -1294,31 +1390,28 @@ bool VulkanContext::isDeviceSuitable(VkPhysicalDevice device) {
     for (const auto& ext : availableExtensions) {
         requiredExtensions.erase(ext.extensionName);
     }
-    if (!requiredExtensions.empty()) return false;
+    if (!requiredExtensions.empty()) return rejectDevice(device, "no swapchain extension");
 
     // Check swapchain support
     SwapchainSupportDetails swapchainSupport = querySwapchainSupport(device);
     if (swapchainSupport.formats.empty() || swapchainSupport.presentModes.empty()) {
-        return false;
+        return rejectDevice(device, "no surface format or present mode");
     }
 
-    // Check features
-    VkPhysicalDeviceFeatures features;
-    vkGetPhysicalDeviceFeatures(device, &features);
-    if (!features.samplerAnisotropy) return false;
+    // samplerAnisotropy é opcional (applyAnisotropy): a PowerVR GE8320 não tem.
 
     // Texturas sem limite fixo por material (bindless): extensão de indexação
     // de descritores (núcleo no 1.2). Sem ela o motor ainda não tem caminho.
     VkPhysicalDeviceProperties devProps;
     vkGetPhysicalDeviceProperties(device, &devProps);
-    if (devProps.apiVersion < VK_API_VERSION_1_1) return false;
+    if (devProps.apiVersion < VK_API_VERSION_1_1) return rejectDevice(device, "Vulkan older than 1.1");
     // Descriptor indexing NAO e' mais requisito: sem ele o motor usa o
     // caminho de array fixo (ver bindless()).
 
     // The GBuffer uses 6 color attachments; make sure the device supports them.
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(device, &props);
-    if (props.limits.maxColorAttachments < 6) return false;
+    if (props.limits.maxColorAttachments < 6) return rejectDevice(device, "fewer than 6 color attachments");
 
     return true;
 }
@@ -1497,8 +1590,22 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanContext::debugCallback(
 }
 
 bool VulkanContext::createTimestampPools() {
+    uint32_t familyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(m_physicalDevice, &familyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> families(familyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(m_physicalDevice, &familyCount, families.data());
+    const uint32_t gfx = m_queueFamilies.graphicsFamily;
+    m_timestampsSupported = gfx < familyCount && families[gfx].timestampValidBits > 0 &&
+                            m_deviceProperties.limits.timestampPeriod > 0.0f;
+    if (!m_timestampsSupported) {
+        // Sem pools: writeTimestamp e as leituras viram nada, e o tempo de
+        // GPU por passe fica zerado.
+        ERUPTION_LOG_WARN("GPU timestamps not supported on the graphics queue: per-pass GPU times off");
+        return true;
+    }
     m_timestampPools.resize(MAX_FRAMES_IN_FLIGHT, VK_NULL_HANDLE);
     m_timestampResults.resize(MAX_FRAMES_IN_FLIGHT);
+    m_querySlotsReady = 0;
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         VkQueryPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
@@ -1588,13 +1695,126 @@ void VulkanContext::destroyTimestampPools() {
     m_timestampResults.clear();
 }
 
+VkFilter VulkanContext::filterFor(VkFormat format) const {
+    VkFormatProperties props{};
+    vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &props);
+    return (props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) ? VK_FILTER_LINEAR
+                                                                                           : VK_FILTER_NEAREST;
+}
+
+bool VulkanContext::storageImageFormatSupported(VkFormat format) const {
+    VkFormatProperties props{};
+    vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &props);
+    if (!(props.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) return false;
+    switch (format) {
+    // Conjunto que o SPIR-V aceita sem StorageImageExtendedFormats.
+    case VK_FORMAT_R32G32B32A32_SFLOAT: case VK_FORMAT_R16G16B16A16_SFLOAT: case VK_FORMAT_R32_SFLOAT:
+    case VK_FORMAT_R8G8B8A8_UNORM: case VK_FORMAT_R8G8B8A8_SNORM: case VK_FORMAT_R32G32B32A32_SINT:
+    case VK_FORMAT_R16G16B16A16_SINT: case VK_FORMAT_R8G8B8A8_SINT: case VK_FORMAT_R32_SINT:
+    case VK_FORMAT_R32G32B32A32_UINT: case VK_FORMAT_R16G16B16A16_UINT: case VK_FORMAT_R8G8B8A8_UINT:
+    case VK_FORMAT_R32_UINT:
+        return true;
+    default:
+        return m_supportedFeatures.shaderStorageImageExtendedFormats == VK_TRUE;
+    }
+}
+
+void VulkanContext::setShaderLite(bool on) {
+    if (std::getenv("ERUPTION_SHADER_LITE")) return;
+    const bool lite = on || !m_bindless;
+    if (lite && !m_shaderLite) ERUPTION_LOG_WARN("Shaders: caminho enxuto pelo preset");
+    m_shaderLite = lite;
+    m_liteValue = m_shaderLite ? VK_TRUE : VK_FALSE;
+}
+
+void VulkanContext::markPhase(const char* phase) {
+    m_phase = phase;
+    m_lastProgressMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void VulkanContext::watchdogLoop() {
+    int64_t reportedAt = -1;
+    while (!m_watchdogStop) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count();
+        const int64_t last = m_lastProgressMs;
+        const char* phase = m_phase;
+        // "idle": entre frames (carga de mapa, compilação) - demorar ali é normal.
+        if (now - last < 6000 || last == reportedAt || std::strcmp(phase, "idle") == 0) continue;
+        reportedAt = last;
+        ERUPTION_LOG_ERROR("Engine thread stuck for 6 s in: %s", phase);
+        for (uint32_t f = 0; f < MAX_FRAMES_IN_FLIGHT; ++f) reportGpuStall(f);
+    }
+}
+
+// Quais timestamps do frame a GPU ja' escreveu: o passe travado e' o que tem o
+// de inicio e nao o de fim (os indices de cada passe estao em core/Render.cpp).
+void VulkanContext::reportGpuStall(uint32_t frame) {
+    std::string written;
+    if (frame < m_timestampPools.size() && m_timestampPools[frame] != VK_NULL_HANDLE) {
+        std::vector<uint64_t> results(TIMESTAMP_QUERY_COUNT * 2, 0);
+        vkGetQueryPoolResults(m_device, m_timestampPools[frame], 0, TIMESTAMP_QUERY_COUNT,
+                              results.size() * sizeof(uint64_t), results.data(), sizeof(uint64_t) * 2,
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+        for (uint32_t q = 0; q < TIMESTAMP_QUERY_COUNT; ++q)
+            if (results[q * 2 + 1] != 0) written += " " + std::to_string(q);
+    }
+    ERUPTION_LOG_ERROR("GPU stalled for 5 s; frame slot %u, timestamps written:%s", frame,
+                       written.empty() ? " none" : written.c_str());
+}
+
 void VulkanContext::resetTimestampPool(VkCommandBuffer cmd) {
     if (!m_timestampPools.empty() && m_timestampPools[m_currentFrame] != VK_NULL_HANDLE) {
         vkCmdResetQueryPool(cmd, m_timestampPools[m_currentFrame], 0, TIMESTAMP_QUERY_COUNT);
     }
 }
 
+// ERUPTION_DEBUG_SPLIT_SUBMIT=1 (aparelho novo que trava a GPU): cada ponto de
+// timestamp vira um envio separado com espera, e o log diz até onde a GPU
+// chegou. Os índices de cada passe estão em core/Render.cpp; só cortam os que
+// ficam fora de um passe de desenho aberto: sombra, G-buffer, simulação de
+// VFX, iluminação, profundidade da chuva, camadas de nuvem e pós.
+static bool splitPoint(uint32_t queryIndex) {
+    switch (queryIndex) {
+    case 0: case 1: case 2: case 3: case 4: case 5: case 8: case 9: case 12: case 13:
+    case 20: case 21: case 24: case 25: case 26: case 27:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void VulkanContext::debugSplitSubmit(VkCommandBuffer cmd, uint32_t mark) {
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    VkFenceCreateInfo fi{};
+    fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkFence fence = VK_NULL_HANDLE;
+    vkCreateFence(m_device, &fi, nullptr, &fence);
+    const auto t0 = std::chrono::steady_clock::now();
+    vkQueueSubmit(m_graphicsQueue, 1, &si, fence);
+    VkResult r = vkWaitForFences(m_device, 1, &fence, VK_TRUE, 5'000'000'000ull);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    ERUPTION_LOG_WARN("[SPLIT] timestamp %u: %s (%.1f ms)", mark, r == VK_SUCCESS ? "ok" : "GPU HUNG", ms);
+    while (r == VK_TIMEOUT) r = vkWaitForFences(m_device, 1, &fence, VK_TRUE, 5'000'000'000ull);
+    vkDestroyFence(m_device, fence, nullptr);
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bi);
+}
+
 void VulkanContext::writeTimestamp(VkCommandBuffer cmd, uint32_t queryIndex, VkPipelineStageFlagBits stage) {
+    static const bool kSplit = [] {
+        const char* e = std::getenv("ERUPTION_DEBUG_SPLIT_SUBMIT");
+        return e && e[0] == '1';
+    }();
+    if (kSplit && splitPoint(queryIndex)) debugSplitSubmit(cmd, queryIndex);
     if (queryIndex >= TIMESTAMP_QUERY_COUNT) return;
     if (!m_timestampPools.empty() && m_timestampPools[m_currentFrame] != VK_NULL_HANDLE) {
         vkCmdWriteTimestamp(cmd, stage, m_timestampPools[m_currentFrame], queryIndex);

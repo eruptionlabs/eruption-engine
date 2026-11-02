@@ -2,6 +2,9 @@
 
 #include "renderer/VulkanContext.hpp"
 #include "math/Types.hpp"
+#include "rhi/Rhi.hpp"
+
+#include <memory>
 
 namespace eruption {
 
@@ -45,37 +48,29 @@ public:
     void bindSource(VkImageView source);
 
 private:
-    VkPipeline createPipeline(const std::vector<uint32_t>& fragCode, VkFormat colorFormat,
-                              VkPipelineLayout layout, uint32_t w, uint32_t h);
+    // Primeiro renderer na RHI (rhi/Rhi.hpp): o mesmo codigo serve o alvo web.
+    rhi::RenderPipeline* createFxaaPipeline();
+    void destroyRenderTarget();
+    void createRenderTarget();
+    void rebuildFxaaGroup();
 
     VulkanContext* m_ctx = nullptr;
+    std::unique_ptr<rhi::Device> m_device;
     uint32_t m_renderWidth = 0, m_renderHeight = 0;
-    VkFormat m_renderFormat = VK_FORMAT_UNDEFINED;
+    rhi::Format m_renderFormat = rhi::Format::Undefined;
 
-    VkSampler m_sampler = VK_NULL_HANDLE; // linear, clamp-to-edge, sem comparacao
-
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_descPool = VK_NULL_HANDLE;
-    VkDescriptorSet m_fxaaSet = VK_NULL_HANDLE;
-    VkDescriptorSet m_upscaleSet = VK_NULL_HANDLE;
-
-    // Dois layouts (push constants de tamanho diferente), UM set layout so'
-    // (os dois passes tem a mesma forma de binding: 1 combined-image-sampler).
-    VkPipelineLayout m_fxaaLayout = VK_NULL_HANDLE;
-    VkPipelineLayout m_upscaleLayout = VK_NULL_HANDLE;
-    VkPipeline m_fxaaPipeline = VK_NULL_HANDLE;
-    VkPipeline m_upscalePipeline = VK_NULL_HANDLE; // dynamic rendering, formato do swapchain
+    rhi::Sampler* m_sampler = nullptr; // linear, clamp-to-edge, sem comparacao
+    // Um layout so' (os dois passes tem a mesma forma: 1 textura amostrada).
+    rhi::BindGroupLayout* m_groupLayout = nullptr;
+    rhi::Texture* m_source = nullptr; // embrulho da saida do PostProcessor/FSR
+    rhi::BindGroup* m_fxaaGroup = nullptr;
+    rhi::BindGroup* m_upscaleGroup = nullptr;
+    rhi::RenderPipeline* m_fxaaPipeline = nullptr;
+    rhi::RenderPipeline* m_upscalePipeline = nullptr; // formato da swapchain
 
     // Saida do FXAA: mesma resolucao/formato da entrada de render, e' o que
     // alimenta o passe de upscale.
-    VkImage m_fxaaImage = VK_NULL_HANDLE;
-    VmaAllocation m_fxaaAlloc = VK_NULL_HANDLE;
-    VkImageView m_fxaaView = VK_NULL_HANDLE;
-
-    void destroyRenderTarget();
-    void createRenderTarget();
-    void writeFxaaSet(VkImageView sourceView);
-    void writeUpscaleSet(VkImageView fxaaOutputView);
+    rhi::Texture* m_fxaaTarget = nullptr;
 };
 
 } // namespace eruption

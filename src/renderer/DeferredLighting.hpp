@@ -62,6 +62,9 @@ struct ShadowUBO {
     Vec4 shadowOpacityLut1;
 };
 
+// Caminho enxuto: luzes de ponto por bloco da tela (ver fillLightTiles).
+constexpr uint32_t kLightTilesX = 16, kLightTilesY = 8, kLightTiles = kLightTilesX * kLightTilesY;
+
 struct LightingUBO {
     Vec4 dirLightDir;       // xyz=dir, w=intensidade
     Vec4 dirLightColor;     // xyz=cor RGB, w=ambientIntensity
@@ -104,6 +107,10 @@ struct LightingUBO {
     // xyz = 1/extensao da grade, w = forca (0..1).
     alignas(16) Vec4 probeGridMin;
     alignas(16) Vec4 probeGridInvExtent;
+    // Caminho enxuto: ate' 16 indices de luz de ponto (8 bits, 0xFF fecha a
+    // lista) por bloco de kLightTilesX x kLightTilesY da tela. No fim, como
+    // os dois acima.
+    alignas(16) glm::uvec4 tileLights[kLightTiles];
 };
 
 struct DirectionalLight {
@@ -154,6 +161,11 @@ public:
     // a chave "point_lights" do preset (o `low` dizia false e as luzes
     // desenhavam do mesmo jeito) - o mesmo defeito da caixa de bloom.
     void setPointLightsEnabled(bool on) { m_pointLightsEnabled = on; }
+    // Teto de luzes de ponto por quadro (0 = todas; no caminho enxuto, ate' as
+    // 128 do UBO): ficam as mais perto do alvo da camera. Preset "point_light_max".
+    void setPointLightMax(uint32_t n) { m_pointLightMax = n; }
+    // Caminho enxuto: luzes por bloco da tela, 1..16 (preset "point_light_tile_max").
+    void setTileLightMax(uint32_t n) { m_tileLightMax = std::clamp(n, 1u, 16u); }
     // SONDA DE CEU (G36): cubemap pre-filtrado (binding 15) + SH9 (binding 16).
     // Escreve os descritores de TODOS os frames uma vez (as views sao fixas) -
     // chamar no init, antes do primeiro frame, para nao esbarrar em set
@@ -302,6 +314,9 @@ private:
     std::vector<PointLight> m_allPointLights; // m_pointLights + m_extraPointLights, montado no frame
     const std::vector<PointLight>& allPointLights();
     bool m_pointLightsEnabled = true;
+    uint32_t m_pointLightMax = 0;
+    uint32_t m_tileLightMax = 16;
+    std::vector<std::pair<float, uint32_t>> m_pointLightPick; // (distancia^2, indice) para o teto
     bool m_skyProbeEnabled = false;
     bool m_skyProbeBound = false;
     float m_skyProbeIntensity = 1.0f;
@@ -372,6 +387,8 @@ private:
                                VkImageView rainOcclusionView, VkSampler rainOcclusionSampler,
                                float totalTime);
     void renderPointLights(VkCommandBuffer cmd, const Camera& camera);
+    void pickPointLights(const Camera& camera);
+    static void fillLightTiles(LightingUBO& ubo, const Vec3& focus, uint32_t count, uint32_t perTile);
 };
 
 } // namespace eruption

@@ -51,6 +51,15 @@ bool CloudCoverageArray::init(VulkanContext* ctx,
     if (!createAltitudeImage()) return false;
     if (!createAltitudeSampler()) return false;
     if (!createLocalCloudBuffer()) return false;
+    // Sem o compute de cobertura em GPU sem descriptor indexing (celular
+    // fraco): na PowerVR GE8320 só criar essa pipeline já deixa a GPU travada
+    // em metade das aberturas. ERUPTION_TEST_NO_COVERAGE_GEN=1 força em
+    // qualquer GPU.
+    const bool kNoGen = !m_ctx->bindless() || std::getenv("ERUPTION_TEST_NO_COVERAGE_GEN") != nullptr;
+    if (kNoGen) {
+        fillWithoutCompute();
+        return true;
+    }
     if (!createComputePipeline()) {
         Logger::error("CloudCoverageArray: failed to create compute pipeline; continuing without GPU generation");
         return false;
@@ -61,13 +70,84 @@ bool CloudCoverageArray::init(VulkanContext* ctx,
     // are recorded into the frame command buffer and do not stall.
     // generateNow=false: the caller guarantees the frame records the generation
     // before any pass reads the texture (layers created mid-game).
-    if (generateNow) {
-        m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
-            recordComputeGeneration(cmd);
-        });
-    }
+    if (generateNow) generateInChunks();
 
     return true;
+}
+
+// Sem o compute: cobertura uniforme (cloudAmount) e altitude no meio. As
+// camadas ficam lisas, mas existem para quem as lê.
+void CloudCoverageArray::fillWithoutCompute() {
+    const VkImage coverage = m_image, altitude = m_altitudeImage;
+    const float amount = m_coverage;
+    const uint32_t layers = m_layerCount;
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        for (VkImage image : {coverage, altitude})
+            m_ctx->cmdImageBarrier(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                   VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        const VkClearColorValue covValue{{amount, 0.0f, 0.0f, 0.0f}};
+        const VkClearColorValue altValue{{0.5f, 0.0f, 0.0f, 0.0f}};
+        const VkImageSubresourceRange covRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
+        const VkImageSubresourceRange altRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cmd, coverage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &covValue, 1, &covRange);
+        vkCmdClearColorImage(cmd, altitude, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &altValue, 1, &altRange);
+        for (VkImage image : {coverage, altitude})
+            m_ctx->cmdImageBarrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                   VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    });
+    m_coverageDirty = false;
+    m_paramsDirty = false;
+    m_firstGeneration = false;
+}
+
+// Geração inicial em pedaços (uma camada e uma faixa de linhas por envio): o
+// array inteiro de uma vez passa de um segundo de GPU num celular, e o driver
+// da PowerVR derruba a GPU quando um envio demora assim. Mesma imagem.
+void CloudCoverageArray::generateInChunks() {
+    if (!m_ctx || m_computePipeline == VK_NULL_HANDLE) return;
+    updateLocalCloudBuffer(); // tem envio próprio: fora de outra gravação
+    const VkImageLayout from = m_firstGeneration ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        for (VkImage image : {m_image, m_altitudeImage})
+            m_ctx->cmdImageBarrier(cmd, image, from, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, VK_ACCESS_SHADER_WRITE_BIT,
+                                   VK_IMAGE_ASPECT_COLOR_BIT);
+    });
+    constexpr uint32_t kRowGroupsPerSubmit = 2; // 32 linhas
+    const uint32_t groups = (m_size + 15) / 16;
+    for (uint32_t layer = 0; layer < m_layerCount; ++layer) {
+        for (uint32_t row = 0; row < groups; row += kRowGroupsPerSubmit) {
+            const uint32_t rows = std::min(kRowGroupsPerSubmit, groups - row);
+            m_ctx->immediateSubmit([&](VkCommandBuffer cmd) { dispatchCompute(cmd, layer, 1, row, rows); });
+        }
+    }
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        for (VkImage image : {m_image, m_altitudeImage})
+            m_ctx->cmdImageBarrier(cmd, image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                   VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    });
+    m_coverageDirty = false;
+    m_paramsDirty = false;
+    m_firstGeneration = false;
+}
+
+// r8/r16 quando a GPU grava nesses formatos; senão r32f nos dois (4x a
+// memória, só nesses aparelhos).
+bool CloudCoverageArray::compactFormats() const {
+    return m_ctx->storageImageFormatSupported(VK_FORMAT_R8_UNORM) &&
+           m_ctx->storageImageFormatSupported(VK_FORMAT_R16_UNORM);
+}
+
+VkFormat CloudCoverageArray::coverageFormat() const {
+    return compactFormats() ? VK_FORMAT_R8_UNORM : VK_FORMAT_R32_SFLOAT;
+}
+
+VkFormat CloudCoverageArray::altitudeFormat() const {
+    return compactFormats() ? VK_FORMAT_R16_UNORM : VK_FORMAT_R32_SFLOAT;
 }
 
 void CloudCoverageArray::shutdown() {
@@ -103,7 +183,7 @@ void CloudCoverageArray::recordComputeGeneration(VkCommandBuffer cmd) {
                            srcAccess, VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 
     updateLocalCloudBuffer();
-    dispatchCompute(cmd);
+    dispatchCompute(cmd, 0, m_layerCount, 0, (m_size + 15) / 16);
 
     // Transition back to shader-read for the fragment passes in the same frame.
     m_ctx->cmdImageBarrier(cmd, m_image,
@@ -239,7 +319,7 @@ void CloudCoverageArray::setCloudBottom(float bottom) {
 bool CloudCoverageArray::createImage() {
     if (!m_ctx) return false;
 
-    VkImageUsageFlags usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -249,7 +329,7 @@ bool CloudCoverageArray::createImage() {
     imageInfo.extent.depth = 1;
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = m_layerCount;
-    imageInfo.format = VK_FORMAT_R8_UNORM;
+    imageInfo.format = coverageFormat();
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = usage;
@@ -269,7 +349,7 @@ bool CloudCoverageArray::createImage() {
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = m_image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-    viewInfo.format = VK_FORMAT_R8_UNORM;
+    viewInfo.format = coverageFormat();
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, m_layerCount};
     if (vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_imageView) != VK_SUCCESS) {
         Logger::error("CloudCoverageArray: failed to create image view");
@@ -327,7 +407,7 @@ void CloudCoverageArray::destroySampler() {
 bool CloudCoverageArray::createAltitudeImage() {
     if (!m_ctx) return false;
 
-    VkImageUsageFlags usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -337,7 +417,7 @@ bool CloudCoverageArray::createAltitudeImage() {
     imageInfo.extent.depth = 1;
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
-    imageInfo.format = VK_FORMAT_R16_UNORM;
+    imageInfo.format = altitudeFormat();
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = usage;
@@ -356,7 +436,7 @@ bool CloudCoverageArray::createAltitudeImage() {
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = m_altitudeImage;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R16_UNORM;
+    viewInfo.format = altitudeFormat();
     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     if (vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_altitudeView) != VK_SUCCESS) {
         Logger::error("CloudCoverageArray: failed to create altitude view");
@@ -381,11 +461,14 @@ void CloudCoverageArray::destroyAltitudeImage() {
 bool CloudCoverageArray::createAltitudeSampler() {
     if (!m_ctx) return false;
 
+    // R16_UNORM nao filtra linear em toda GPU (Xclipse): filterFor cai em
+    // NEAREST onde o formato nao deixa.
+    const VkFilter filter = m_ctx->filterFor(altitudeFormat());
     VkSamplerCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    info.magFilter = VK_FILTER_LINEAR;
-    info.minFilter = VK_FILTER_LINEAR;
-    info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    info.magFilter = filter;
+    info.minFilter = filter;
+    info.mipmapMode = filter == VK_FILTER_LINEAR ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
     info.addressModeU = m_addressMode;
     info.addressModeV = m_addressMode;
     info.anisotropyEnable = VK_FALSE;
@@ -460,7 +543,8 @@ void CloudCoverageArray::updateLocalCloudBuffer() {
 bool CloudCoverageArray::createComputePipeline() {
     if (!m_ctx) return false;
 
-    auto code = ShaderCompiler::loadSPIRV("clouds/coverage_gen.comp.spv");
+    auto code = ShaderCompiler::loadSPIRV(compactFormats() ? "clouds/coverage_gen.comp.spv"
+                                                           : "clouds/coverage_gen_r32f.comp.spv");
     if (code.empty()) {
         Logger::error("CloudCoverageArray: failed to load compute shader");
         return false;
@@ -630,7 +714,8 @@ void CloudCoverageArray::destroyComputePipeline() {
     m_computeDescSet = VK_NULL_HANDLE;
 }
 
-void CloudCoverageArray::dispatchCompute(VkCommandBuffer cmd) {
+void CloudCoverageArray::dispatchCompute(VkCommandBuffer cmd, uint32_t firstLayer, uint32_t layers,
+                                         uint32_t firstRowGroup, uint32_t rowGroups) {
     struct Push {
         Vec2 worldMin;
         Vec2 worldMax;
@@ -643,6 +728,8 @@ void CloudCoverageArray::dispatchCompute(VkCommandBuffer cmd) {
         int layerCount;
         int imageSize;
         int localCloudCount;
+        int rowOffset;
+        int layerOffset;
     } pc;
     pc.worldMin = Vec2(m_worldMin.x, m_worldMin.z);
     pc.worldMax = Vec2(m_worldMax.x, m_worldMax.z);
@@ -655,13 +742,15 @@ void CloudCoverageArray::dispatchCompute(VkCommandBuffer cmd) {
     pc.layerCount = static_cast<int>(m_layerCount);
     pc.imageSize = static_cast<int>(m_size);
     pc.localCloudCount = static_cast<int>(glm::min(m_localClouds.size(), size_t(LocalCloud::MAX_COUNT)));
+    pc.rowOffset = static_cast<int>(firstRowGroup * 16);
+    pc.layerOffset = static_cast<int>(firstLayer);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipelineLayout, 0, 1, &m_computeDescSet, 0, nullptr);
     vkCmdPushConstants(cmd, m_computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
-    uint32_t groups = (m_size + 15) / 16;
-    vkCmdDispatch(cmd, groups, groups, m_layerCount);
+    const uint32_t groups = (m_size + 15) / 16;
+    vkCmdDispatch(cmd, groups, rowGroups, layers);
 }
 
 float CloudCoverageArray::layerProfile(float t) {

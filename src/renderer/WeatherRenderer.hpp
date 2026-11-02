@@ -240,6 +240,9 @@ public:
     // rains; non-rain weathers with manual rainy clouds keep a 12-follower
     // budget.
     static constexpr uint32_t MAX_RAIN_OCCLUDERS = 100;
+    // Quantas silhuetas de nuvem o shader da chuva liga de fato: MAX_RAIN_OCCLUDERS
+    // ou menos, se a GPU tem poucos samplers por estágio.
+    uint32_t coverageSlots() const { return m_covSlots; }
 
 private:
     VulkanContext* m_ctx = nullptr;
@@ -325,6 +328,7 @@ private:
     // blurred rain mask + smoother coverage. Pool density does NOT scale
     // with this anymore (decoupled).
     std::vector<RainFollower> m_rainFollowers;
+    uint32_t m_covSlots = MAX_RAIN_OCCLUDERS;
     float m_followerRainIntensity = 0.5f;
     bool m_suppressGlobalPrecip = false;
 

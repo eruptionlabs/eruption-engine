@@ -37,8 +37,7 @@ bool TerrainRenderer::init(VulkanContext* ctx, BindlessDescriptor* bindless) {
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.anisotropyEnable = VK_TRUE;
-    samplerInfo.maxAnisotropy = 16.0f;
+    m_ctx->applyAnisotropy(samplerInfo, 16.0f);
     samplerInfo.mipLodBias = m_ctx->textureLodBias(); // FSR: mip da resolucao de saida
     samplerInfo.minLod = 0.0f;
     samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
@@ -161,19 +160,18 @@ void TerrainRenderer::createPipeline() {
     bindingDesc.stride = sizeof(TerrainVertex);
     bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::vector<VkVertexInputAttributeDescription> attribs(12);
+    std::vector<VkVertexInputAttributeDescription> attribs(9);
     attribs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TerrainVertex, position)};
     attribs[1] = {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(TerrainVertex, texCoord)};
     attribs[2] = {2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TerrainVertex, normal)};
-    attribs[3] = {3, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, texIndex)};
-    attribs[4] = {4, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, matId)};
-    attribs[5] = {5, 0, VK_FORMAT_R32_UINT, offsetof(TerrainVertex, color)};
-    attribs[6] = {6, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, pbrIndex)};
-    attribs[7] = {7, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, normalIndex)};
-    attribs[8] = {8, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, blendTexIndex)};
-    attribs[9] = {9, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, blendPbrIndex)};
-    attribs[10] = {10, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, blendNormalIndex)};
-    attribs[11] = {11, 0, VK_FORMAT_R32_SFLOAT, offsetof(TerrainVertex, blendWeight)};
+    // Indices de 16 bits aos pares (R16G16, offset alinhado a 4): R16 sozinho
+    // em offset so' par de 2 bytes cai num caminho lento na PowerVR de celular.
+    attribs[3] = {3, 0, VK_FORMAT_R16G16_UINT, offsetof(TerrainVertex, texIndex)};      // + matId
+    attribs[4] = {5, 0, VK_FORMAT_R32_UINT, offsetof(TerrainVertex, color)};
+    attribs[5] = {6, 0, VK_FORMAT_R16G16_UINT, offsetof(TerrainVertex, pbrIndex)};      // + normalIndex
+    attribs[6] = {8, 0, VK_FORMAT_R16G16_UINT, offsetof(TerrainVertex, blendTexIndex)}; // + blendPbrIndex
+    attribs[7] = {10, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, blendNormalIndex)};
+    attribs[8] = {11, 0, VK_FORMAT_R32_SFLOAT, offsetof(TerrainVertex, blendWeight)};
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;

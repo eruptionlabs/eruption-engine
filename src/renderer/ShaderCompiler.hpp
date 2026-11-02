@@ -25,6 +25,9 @@ public:
     // Sem descriptor indexing: loadSPIRV prefere a variante <nome>.nb.spv
     // (array de texturas fixo), quando o shader tem uma.
     static void setNoBindless(bool on) { s_noBindless = on; }
+    // Último .spv lido nesta thread: o log de pipeline recusada diz qual era
+    // (o driver só devolve o código de erro).
+    static const std::string& lastLoaded() { return s_lastLoaded; }
 
     static bool compileOrLoad(const std::string& glslPath,
                                const std::string& spvPath,
@@ -33,6 +36,7 @@ public:
 
 private:
     static inline bool s_noBindless = false;
+    static inline thread_local std::string s_lastLoaded;
     static std::vector<uint32_t> loadSPIRVExact(const std::string& filepath, bool quiet);
 };
 

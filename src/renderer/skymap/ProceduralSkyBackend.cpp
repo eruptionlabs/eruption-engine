@@ -2,6 +2,7 @@
 #include "renderer/ShaderCompiler.hpp"
 #include "core/Logger.hpp"
 #include <glm/gtc/matrix_transform.hpp>
+#include <algorithm>
 #include <cstring>
 #include <cstdlib>
 
@@ -30,6 +31,11 @@ bool ProceduralSkyBackend::init(VulkanContext* ctx, uint32_t width, uint32_t hei
     m_ctx = ctx;
     m_width = width;
     m_height = height;
+    // O shader do ceu nao depende da resolucao: a textura do reflexo pode ser
+    // menor que a cena. Em GPU fraca ela custava tanto quanto o G-buffer.
+    const uint32_t div = ctx->shaderLite() ? 4u : 1u;
+    m_texWidth = std::max(64u, width / div);
+    m_texHeight = std::max(64u, height / div);
     createOutputImage();
     createDepthImage();
     createUBO();
@@ -64,7 +70,7 @@ void ProceduralSkyBackend::createOutputImage() {
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    imageInfo.extent = {m_width, m_height, 1};
+    imageInfo.extent = {m_texWidth, m_texHeight, 1};
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -101,7 +107,7 @@ void ProceduralSkyBackend::createDepthImage() {
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.format = VK_FORMAT_D32_SFLOAT;
-    imageInfo.extent = {m_width, m_height, 1};
+    imageInfo.extent = {m_texWidth, m_texHeight, 1};
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -438,20 +444,25 @@ bool ProceduralSkyBackend::renderProbeFace(VkCommandBuffer cmd, const DayNightCy
 }
 
 void ProceduralSkyBackend::render(VkCommandBuffer cmd, const DayNightCycle& cycle, const Mat4& viewProj) {
+    drawSky(cmd, cycle, viewProj, m_width, m_height);
+}
+
+void ProceduralSkyBackend::drawSky(VkCommandBuffer cmd, const DayNightCycle& cycle, const Mat4& viewProj,
+                                   uint32_t width, uint32_t height) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
 
     VkViewport vp{};
     vp.x = 0;
     vp.y = 0;
-    vp.width = static_cast<float>(m_width);
-    vp.height = static_cast<float>(m_height);
+    vp.width = static_cast<float>(width);
+    vp.height = static_cast<float>(height);
     vp.minDepth = 1.0f;
     vp.maxDepth = 1.0f;
     vkCmdSetViewport(cmd, 0, 1, &vp);
 
     VkRect2D scissor{};
     scissor.offset = {0, 0};
-    scissor.extent = {m_width, m_height};
+    scissor.extent = {width, height};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     updateUBO(cycle, viewProj);
@@ -499,14 +510,14 @@ void ProceduralSkyBackend::renderToTexture(VkCommandBuffer cmd, const DayNightCy
 
     VkRenderingInfo renderingInfo = {};
     renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    renderingInfo.renderArea = {{0, 0}, {m_width, m_height}};
+    renderingInfo.renderArea = {{0, 0}, {m_texWidth, m_texHeight}};
     renderingInfo.layerCount = 1;
     renderingInfo.colorAttachmentCount = 1;
     renderingInfo.pColorAttachments = &colorAttach;
     renderingInfo.pDepthAttachment = &depthAttach;
 
     vkc::cmdBeginRendering(cmd, &renderingInfo);
-    render(cmd, cycle, viewProj);
+    drawSky(cmd, cycle, viewProj, m_texWidth, m_texHeight);
     vkc::cmdEndRendering(cmd);
 
     barriers[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;

@@ -19,6 +19,7 @@ std::vector<uint32_t> ShaderCompiler::compileGLSL(const std::string& source,
 
 std::vector<uint32_t> ShaderCompiler::loadSPIRV(const std::string& filepath) {
     static const std::string kExt = ".spv";
+    s_lastLoaded = filepath;
     if (s_noBindless && filepath.size() > kExt.size() &&
         filepath.compare(filepath.size() - kExt.size(), kExt.size(), kExt) == 0) {
         auto nb = loadSPIRVExact(filepath.substr(0, filepath.size() - kExt.size()) + ".nb.spv", true);

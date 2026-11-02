@@ -2,6 +2,7 @@
 
 #include "core/Logger.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -15,8 +16,19 @@ VkDevice g_device = VK_NULL_HANDLE;
 std::mutex g_mutex;
 std::unordered_map<VkImageView, VkFormat> g_viewFormats;
 std::unordered_map<std::string, VkRenderPass> g_renderPasses;
-std::vector<std::vector<VkFramebuffer>> g_framebuffers; // por slot de frame
-uint32_t g_frame = 0;
+// Framebuffers reaproveitados entre quadros, pela combinacao de render pass,
+// views e tamanho. Criar e destruir um por passe a cada quadro custava ~40% da
+// CPU no driver de GPU de celular (registro do alvo no kernel).
+struct CachedFramebuffer {
+    VkFramebuffer fb = VK_NULL_HANDLE;
+    uint64_t lastUse = 0;
+    std::vector<VkImageView> views;
+};
+std::unordered_map<std::string, CachedFramebuffer> g_framebuffers;
+uint64_t g_frameNumber = 0;
+uint32_t g_framesInFlight = 0;
+PipelineHook g_pipelineHook = nullptr;
+void* g_pipelineHookUser = nullptr;
 
 struct AttachmentDesc {
     VkFormat format;
@@ -30,6 +42,13 @@ struct AttachmentDesc {
 bool hasStencil(VkFormat f) {
     return f == VK_FORMAT_D24_UNORM_S8_UINT || f == VK_FORMAT_D32_SFLOAT_S8_UINT || f == VK_FORMAT_D16_UNORM_S8_UINT ||
            f == VK_FORMAT_S8_UINT;
+}
+
+// STORE_OP_NONE (attachment so' lido no passe) so' existe na render pass
+// classica com VK_KHR_load_store_op_none; sem ela, STORE guarda o mesmo
+// conteudo. DONT_CARE nao serve: descartaria a profundidade que o passe le'.
+VkAttachmentStoreOp classicStoreOp(VkAttachmentStoreOp op) {
+    return op == VK_ATTACHMENT_STORE_OP_NONE ? VK_ATTACHMENT_STORE_OP_STORE : op;
 }
 
 // Cria (ou acha no cache) o render pass de uma subpassagem com estes anexos.
@@ -50,9 +69,9 @@ VkRenderPass renderPassFor(const std::vector<AttachmentDesc>& atts, size_t color
         d.format = atts[i].format;
         d.samples = VK_SAMPLE_COUNT_1_BIT;
         d.loadOp = atts[i].load;
-        d.storeOp = atts[i].store;
+        d.storeOp = classicStoreOp(atts[i].store);
         d.stencilLoadOp = atts[i].stencilLoad;
-        d.stencilStoreOp = atts[i].stencilStore;
+        d.stencilStoreOp = classicStoreOp(atts[i].stencilStore);
         // Sem transição dentro do passe: as barreiras do motor já deixaram a
         // imagem no layout de uso, como no dynamic rendering.
         d.initialLayout = atts[i].layout;
@@ -81,12 +100,6 @@ VkRenderPass renderPassFor(const std::vector<AttachmentDesc>& atts, size_t color
     return rp;
 }
 
-VkFormat viewFormat(VkImageView view) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    auto it = g_viewFormats.find(view);
-    return it == g_viewFormats.end() ? VK_FORMAT_UNDEFINED : it->second;
-}
-
 // synchronization2 -> 1.1: os bits antigos têm o mesmo valor; os novos viram
 // o estágio/acesso antigo que os contém.
 VkPipelineStageFlags stageV1(VkPipelineStageFlags2 s, bool src) {
@@ -112,16 +125,22 @@ VkAccessFlags accessV1(VkAccessFlags2 a) {
 
 } // namespace
 
+VkFormat viewFormat(VkImageView view) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    auto it = g_viewFormats.find(view);
+    return it == g_viewFormats.end() ? VK_FORMAT_UNDEFINED : it->second;
+}
+
 void init(VkDevice device, uint32_t framesInFlight) {
     g_device = device;
-    g_framebuffers.assign(framesInFlight, {});
-    g_frame = 0;
+    g_framebuffers.clear();
+    g_frameNumber = 0;
+    g_framesInFlight = framesInFlight;
 }
 
 void shutdown() {
     std::lock_guard<std::mutex> lock(g_mutex);
-    for (auto& list : g_framebuffers)
-        for (VkFramebuffer fb : list) vkDestroyFramebuffer(g_device, fb, nullptr);
+    for (auto& [key, cached] : g_framebuffers) vkDestroyFramebuffer(g_device, cached.fb, nullptr);
     g_framebuffers.clear();
     for (auto& [k, rp] : g_renderPasses) vkDestroyRenderPass(g_device, rp, nullptr);
     g_renderPasses.clear();
@@ -129,12 +148,34 @@ void shutdown() {
     g_device = VK_NULL_HANDLE;
 }
 
-void beginFrame(uint32_t frameIndex) {
+void beginFrame(uint32_t /*frameIndex*/) {
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_framebuffers.empty()) return;
-    g_frame = frameIndex % static_cast<uint32_t>(g_framebuffers.size());
-    for (VkFramebuffer fb : g_framebuffers[g_frame]) vkDestroyFramebuffer(g_device, fb, nullptr);
-    g_framebuffers[g_frame].clear();
+    ++g_frameNumber;
+    // Sem uso ha' mais quadros do que os em voo: nenhum comando pendente o usa.
+    const uint64_t keep = g_framesInFlight + 1u;
+    for (auto it = g_framebuffers.begin(); it != g_framebuffers.end();) {
+        if (it->second.lastUse + keep < g_frameNumber) {
+            vkDestroyFramebuffer(g_device, it->second.fb, nullptr);
+            it = g_framebuffers.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+// Uma view nova pode reusar o handle de uma destruida: os framebuffers que
+// apontavam para a antiga nao servem mais (e quem destruiu a view ja' esperou
+// a GPU, entao eles tambem estao livres).
+static void forgetFramebuffersOf(VkImageView view) {
+    for (auto it = g_framebuffers.begin(); it != g_framebuffers.end();) {
+        const auto& v = it->second.views;
+        if (std::find(v.begin(), v.end(), view) != v.end()) {
+            vkDestroyFramebuffer(g_device, it->second.fb, nullptr);
+            it = g_framebuffers.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 VkResult createImageView(VkDevice device, const VkImageViewCreateInfo* info, const VkAllocationCallbacks* alloc,
@@ -143,6 +184,7 @@ VkResult createImageView(VkDevice device, const VkImageViewCreateInfo* info, con
     if (r == VK_SUCCESS) {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_viewFormats[*view] = info->format;
+        forgetFramebuffersOf(*view);
     }
     return r;
 }
@@ -182,7 +224,39 @@ VkResult createGraphicsPipelines(VkDevice device, VkPipelineCache cache, uint32_
         if (!prev) ci.pNext = node->pNext;
         else ERUPTION_LOG_WARN("vkc: VkPipelineRenderingCreateInfo no meio da cadeia pNext; mantida");
     }
-    return vkCreateGraphicsPipelines(device, cache, count, fixed.data(), alloc, pipelines);
+    const VkResult r = vkCreateGraphicsPipelines(device, cache, count, fixed.data(), alloc, pipelines);
+    // Driver de celular recusa pipeline que o do PC aceita: o código de erro
+    // no log é o ponto de partida.
+    if (r != VK_SUCCESS) ERUPTION_LOG_ERROR("vkc: vkCreateGraphicsPipelines failed (%d)", static_cast<int>(r));
+    if (g_pipelineHook) g_pipelineHook(g_pipelineHookUser);
+    return r;
+}
+
+PipelineHookScope::PipelineHookScope(PipelineHook hook, void* user)
+    : m_prevHook(g_pipelineHook), m_prevUser(g_pipelineHookUser) {
+    g_pipelineHook = hook;
+    g_pipelineHookUser = user;
+}
+
+PipelineHookScope::~PipelineHookScope() {
+    g_pipelineHook = m_prevHook;
+    g_pipelineHookUser = m_prevUser;
+}
+
+static VkFramebuffer framebufferFor(const VkFramebufferCreateInfo& fi, const std::vector<VkImageView>& views) {
+    std::string key(reinterpret_cast<const char*>(&fi.renderPass), sizeof(fi.renderPass));
+    key.append(reinterpret_cast<const char*>(&fi.width), sizeof(fi.width));
+    key.append(reinterpret_cast<const char*>(&fi.height), sizeof(fi.height));
+    key.append(reinterpret_cast<const char*>(&fi.layers), sizeof(fi.layers));
+    key.append(reinterpret_cast<const char*>(views.data()), views.size() * sizeof(VkImageView));
+    std::lock_guard<std::mutex> lock(g_mutex);
+    CachedFramebuffer& cached = g_framebuffers[key];
+    if (cached.fb == VK_NULL_HANDLE) {
+        vkCreateFramebuffer(g_device, &fi, nullptr, &cached.fb);
+        cached.views = views;
+    }
+    cached.lastUse = g_frameNumber;
+    return cached.fb;
 }
 
 void cmdBeginRendering(VkCommandBuffer cmd, const VkRenderingInfo* info) {
@@ -221,12 +295,7 @@ void cmdBeginRendering(VkCommandBuffer cmd, const VkRenderingInfo* info) {
     fi.width = static_cast<uint32_t>(info->renderArea.offset.x) + info->renderArea.extent.width;
     fi.height = static_cast<uint32_t>(info->renderArea.offset.y) + info->renderArea.extent.height;
     fi.layers = info->layerCount ? info->layerCount : 1;
-    VkFramebuffer fb = VK_NULL_HANDLE;
-    vkCreateFramebuffer(g_device, &fi, nullptr, &fb);
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        if (!g_framebuffers.empty()) g_framebuffers[g_frame].push_back(fb);
-    }
+    const VkFramebuffer fb = framebufferFor(fi, views);
 
     VkRenderPassBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
