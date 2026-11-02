@@ -72,6 +72,7 @@ tests/*
 !tests/maps/**
 !tests/objects/
 !tests/objects/**
+!tests/net_hostile_peer.hpp
 !tests/test_object_world.cpp
 
 # Ignore asset icons
