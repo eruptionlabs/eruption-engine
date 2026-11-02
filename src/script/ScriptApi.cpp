@@ -2577,6 +2577,14 @@ declare ui: {
     -- Text of the box under the minimap instead of map name, cell and time;
     -- nil goes back to the default.
     minimap_label: (text: string?) -> (),
+    -- The engine's own minimap orthographic frame: world (cx, cz) of its
+    -- centre and zoom (half-side in world units). This is the REAL frame the
+    -- engine baked (from terrain/instance AABBs), not the map's nominal size,
+    -- so it stays correct on a map whose geometry does not match its grid, or
+    -- while it is still loading. Use it to place minimap markers instead of
+    -- recomputing the framing formula from map data. zoom <= 0 before the
+    -- first bake (no map loaded yet).
+    minimap_frame: () -> (number, number, number),
     -- Position and size of an element of the loaded UI file, in percent of
     -- its parent (or of the screen), like CSS left/top/width/height. Without
     -- width/height the file's size stays; left = nil gives it back to the CSS.
