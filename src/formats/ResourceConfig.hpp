@@ -17,11 +17,16 @@ struct ResourceEntry {
 class ResourceConfig {
 public:
     std::vector<ResourceEntry> entries;
+    // Trechos de caminho (minusculos) dos sprites que ganham recorte do contorno
+    // por abertura morfologica; vem da secao [sprites], chave clean_bounds
+    // (lista separada por virgula). Vazio = nenhum sprite usa o recorte.
+    std::vector<std::string> cleanBoundsPatterns;
     std::string configPath = "resources.ini";
 
     bool load(const std::string& path = "resources.ini") {
         configPath = path;
         entries.clear();
+        cleanBoundsPatterns.clear();
         std::ifstream file(path);
         if (!file.is_open()) {
             ERUPTION_LOG_WARN("Resource config not found: %s", path.c_str());
@@ -30,6 +35,7 @@ public:
 
         std::string line;
         bool inDataSection = false;
+        bool inSpritesSection = false;
         while (std::getline(file, line)) {
             // Trim whitespace
             size_t start = line.find_first_not_of(" \t\r\n");
@@ -42,6 +48,25 @@ public:
                 std::string section = trimmed.substr(1, trimmed.size() - 2);
                 std::transform(section.begin(), section.end(), section.begin(), ::tolower);
                 inDataSection = (section == "data");
+                inSpritesSection = (section == "sprites");
+                continue;
+            }
+
+            if (inSpritesSection) {
+                size_t sEq = trimmed.find('=');
+                if (sEq == std::string::npos) continue;
+                std::string key = trimmed.substr(0, sEq);
+                key.erase(key.find_last_not_of(" \t") + 1);
+                if (key != "clean_bounds") continue;
+                std::stringstream list(trimmed.substr(sEq + 1));
+                std::string item;
+                while (std::getline(list, item, ',')) {
+                    size_t a = item.find_first_not_of(" \t");
+                    if (a == std::string::npos) continue;
+                    item = item.substr(a, item.find_last_not_of(" \t") - a + 1);
+                    std::transform(item.begin(), item.end(), item.begin(), ::tolower);
+                    cleanBoundsPatterns.push_back(item);
+                }
                 continue;
             }
 
@@ -80,6 +105,12 @@ public:
         file << "[Data]\n";
         for (size_t i = 0; i < entries.size(); i++) {
             file << i << "=" << entries[i].path << "\n";
+        }
+        if (!cleanBoundsPatterns.empty()) {
+            file << "\n[sprites]\nclean_bounds=";
+            for (size_t i = 0; i < cleanBoundsPatterns.size(); i++)
+                file << (i ? "," : "") << cleanBoundsPatterns[i];
+            file << "\n";
         }
         return true;
     }
