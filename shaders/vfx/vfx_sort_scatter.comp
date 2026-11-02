@@ -13,6 +13,7 @@ void main() {
     if (i >= counters[VFXC_RENDER + pc.list]) return;
     uint cap = frame.counts.y;
     uint idx = renderList[pc.list * cap + i];
+    if (idx >= cap) return; // ver vfx_finish.comp
     uint pos = atomicAdd(sortData[pc.list * 512u + 256u + depthBucket(particles[idx].pos)], 1u);
     renderList[(2u + pc.list) * cap + pos] = idx;
 }

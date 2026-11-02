@@ -22,7 +22,11 @@ void main() {
         counters[base + 4u] = 0u;
     }
     for (uint l = 0u; l < 2u; ++l) {
-        uint n = counters[VFXC_RENDER + l];
+        // Teto na capacidade: leitura ou escrita fora do buffer trava o PowerVR
+        // GE8320 ate' o reboot (sem robustBufferAccess), e uma contagem acima da
+        // lista viraria isso na ordenacao e no desenho.
+        uint n = min(counters[VFXC_RENDER + l], frame.counts.y);
+        counters[VFXC_RENDER + l] = n;
         // Indexado: 18 indices sobre 8 vertices (poligono de 8 lados); o
         // cache de vertices roda o vertex shader 8 vezes, nao 18.
         counters[VFXC_DRAW + l * 5u + 0u] = 18u;

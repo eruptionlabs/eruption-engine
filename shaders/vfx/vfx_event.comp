@@ -25,7 +25,8 @@ void main() {
     uint seed = pcg((packed >> 8) ^ pcg(k * 0x9E3779B9u + 0x1234567u));
     Particle p = vfxMakeParticle(c, childSlot, ev.posSlot.xyz, ev.velSeed.xyz, seed, 0.0);
     particles[idx] = p;
+    memoryBarrierBuffer(); // PowerVR GE8320: ver vfx_emit.comp
     uint next = 1u - frame.counts.x;
     uint slot = atomicAdd(counters[next], 1u);
-    aliveList[next * frame.counts.y + slot] = idx;
+    if (slot < frame.counts.y) aliveList[next * frame.counts.y + slot] = idx;
 }

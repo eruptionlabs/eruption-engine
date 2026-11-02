@@ -7,7 +7,7 @@
 #include "vfx/vfx_common.glsl"
 #include "vfx/vfx_frame_ubo.glsl"
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#include "common/slot_textures.glsl"
 
 layout(location = 0) in vec2 v_uv0;
 layout(location = 1) in vec2 v_uv1;
@@ -66,8 +66,8 @@ void main() {
         tex = vec4(1.0, 1.0, 1.0, a * a);
     } else {
         uint slot = v_texBlend.x;
-        tex = texture(u_textures[nonuniformEXT(slot)], uv0);
-        if (v_frameMix > 0.0) tex = mix(tex, texture(u_textures[nonuniformEXT(slot)], uv1), v_frameMix);
+        tex = slotTexture(slot, uv0);
+        if (v_frameMix > 0.0) tex = mix(tex, slotTexture(slot, uv1), v_frameMix);
     }
     vec4 c = v_color * tex;
     c.a *= cover;

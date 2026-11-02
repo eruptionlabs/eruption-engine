@@ -23,7 +23,13 @@ layout(set = 0, binding = 5) uniform RainOccluders {
     vec4 bounds[100]; // xy = coverage world min XZ, zw = coverage world size XZ
     vec4 wind[100];   // xy = coverage wind offset (UV)
 } occ;
-layout(set = 0, binding = 6) uniform sampler2DArray covArrays[100];
+// Tamanho real do array: o motor baixa por especialização quando a GPU tem
+// poucos samplers por estágio (PowerVR de celular: 32). CROSS_OCCLUSION falso
+// tira os laços que indexam o array: o compilador da PowerVR não aceita
+// índice variável em array de samplers dentro de laço.
+layout(constant_id = 0) const int COV_SLOTS = 100;
+layout(constant_id = 1) const bool CROSS_OCCLUSION = true;
+layout(set = 0, binding = 6) uniform sampler2DArray covArrays[COV_SLOTS];
 
 // Rain streak shape tuning (same UBO as the vertex stage).
 layout(set = 0, binding = 7) uniform RainTuning {
@@ -160,9 +166,9 @@ void main() {
     // whose plane the camera->drop ray crosses inside that cloud's OPAQUE
     // coverage (exact silhouette, same 0.10 gate as the owning cloud — thin
     // transparent regions still let the rain through).
-    if (!isParticle) {
+    if (CROSS_OCCLUSION && !isParticle) {
         int ownIndex = int(floor(push.cloudParams.y + 0.5));
-        int occCount = int(floor(push.cloudParams.z + 0.5));
+        int occCount = min(int(floor(push.cloudParams.z + 0.5)), COV_SLOTS);
         if (occCount > 0 && abs(rayDy) > 0.001) {
             for (int j = 0; j < occCount; ++j) {
                 if (j == ownIndex) continue;
@@ -207,11 +213,11 @@ void main() {
     // a slab above the plane, so test the ray against the blob's vertical
     // cylinder and sample coverage where the ray is inside it. Yaw-neutral:
     // the cylinder surrounds the cloud instead of extrapolating past it.
-    if (!isParticle && debugOcclusion) {
+    if (CROSS_OCCLUSION && !isParticle && debugOcclusion) {
         vec3 O = push.cameraPos.xyz;
         vec3 D = iWorldPos - O;
         int ownIndex2 = int(floor(push.cloudParams.y + 0.5));
-        int occCount2 = int(floor(push.cloudParams.z + 0.5));
+        int occCount2 = min(int(floor(push.cloudParams.z + 0.5)), COV_SLOTS);
         for (int j = -1; j < occCount2; ++j) {
             // j == -1: the owning cloud (push constants); else UBO occluders.
             vec2 C; float planeY; float radius; vec4 b; vec2 windOff;

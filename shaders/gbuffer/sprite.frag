@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 #extension GL_EXT_nonuniform_qualifier : enable
@@ -18,7 +19,8 @@ layout(location = 11) in vec2 v_quad;
 layout(location = 12) in flat uint v_instance;
 layout(location = 13) in flat float v_halfWidth;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#define ERUPTION_SLOT_NEAREST // atlas de sprite e paleta sem filtro
+#include "common/slot_textures.glsl"
 
 layout(location = 0) out vec4 o_albedo;
 layout(location = 1) out vec4 o_normal;
@@ -105,16 +107,16 @@ bool fadeCut(float a) {
 }
 
 void main() {
-    vec4 albedo = texture(nonuniformEXT(u_textures[v_texIndex]), v_uv);
     // Derivadas antes de qualquer discard (depois dele o quad fica incompleto).
     const vec2 rimDx = dFdx(v_uv) * 2.5, rimDy = dFdy(v_uv) * 2.5;
+    vec4 albedo = slotTexture(v_texIndex, v_uv);
 
     // bit 8: usePalette
     if ((v_flags & 256u) != 0) {
         float idx = albedo.r * 255.0;
         if (idx < 0.5) discard;
         float u = (idx + 0.5) / 256.0;
-        albedo = texture(nonuniformEXT(u_textures[v_paletteIndex]), vec2(u, 0.5));
+        albedo = slotTexture(v_paletteIndex, vec2(u, 0.5));
         albedo.a = 1.0;
     }
 
@@ -169,7 +171,7 @@ void main() {
     // Sprite sem mapa e' dieletrico ate' prova em contrario: 0.
     float metallic = 0.0;
     if (v_mrahwTexIndex != 0u) {
-        vec4 mrahw = texture(nonuniformEXT(u_textures[v_mrahwTexIndex]), v_uv);
+        vec4 mrahw = slotTexture(v_mrahwTexIndex, v_uv);
         metallic  = mrahw.r;
         roughness = mrahw.g;
     }
@@ -196,8 +198,8 @@ void main() {
     // indice, nao o alfa: indice 0 = transparente.
     vec3 rim = vec3(0.0);
     if ((v_flags & 256u) == 0u) {
-        float minA = min(min(texture(nonuniformEXT(u_textures[v_texIndex]), v_uv + rimDx).a, texture(nonuniformEXT(u_textures[v_texIndex]), v_uv - rimDx).a),
-                         min(texture(nonuniformEXT(u_textures[v_texIndex]), v_uv + rimDy).a, texture(nonuniformEXT(u_textures[v_texIndex]), v_uv - rimDy).a));
+        float minA = min(min(slotTexture(v_texIndex, v_uv + rimDx).a, slotTexture(v_texIndex, v_uv - rimDx).a),
+                         min(slotTexture(v_texIndex, v_uv + rimDy).a, slotTexture(v_texIndex, v_uv - rimDy).a));
         float edge = 1.0 - smoothstep(0.05, 0.6, minA);
         if (edge > 0.0) {
             const vec3 toCam = normalize(u_cameraPos - v_worldPos);

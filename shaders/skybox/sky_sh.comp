@@ -1,13 +1,15 @@
 #version 450
 // SONDA DE CEU -> SH9 (G36). Projeta o cubemap do ceu procedural (32x32 por
 // face, sem disco solar) nos 9 primeiros harmonicos esfericos. Um workgroup
-// so': 6*N*N texels / 256 threads = 24 texels por thread, reducao em shared.
+// so': 6*N*N texels / 128 threads = 48 texels por thread, reducao em shared.
+// 128 e nao 256: acc[][9] em vec3 cabe nos 16 KB de shared de GPU de celular.
 // O ambient.frag avalia a irradiancia com a formula fechada de Ramamoorthi &
 // Hanrahan 2001 ("An Efficient Representation for Irradiance Environment
 // Maps"); o directional.frag usa os mips do mesmo cubemap como especular
 // pre-filtrado. Ordem dos coeficientes: 0=L00, 1=L1-1(y), 2=L10(z), 3=L11(x),
 // 4=L2-2(xy), 5=L2-1(yz), 6=L20(3z^2-1), 7=L21(xz), 8=L22(x^2-y^2).
-layout(local_size_x = 256) in;
+const uint THREADS = 128u;
+layout(local_size_x = 128) in;
 
 layout(set = 0, binding = 0) uniform samplerCube skyCube;
 layout(std430, set = 0, binding = 1) writeonly buffer SkySH { vec4 sh[9]; } outSH;
@@ -21,7 +23,7 @@ const vec3 A[6] = vec3[6](vec3( 1, 0, 0), vec3(-1, 0, 0), vec3(0, 1, 0), vec3(0,
 const vec3 B[6] = vec3[6](vec3( 0, 0,-1), vec3( 0, 0, 1), vec3(1, 0, 0), vec3(1, 0, 0), vec3(1, 0, 0), vec3(-1, 0, 0));
 const vec3 C[6] = vec3[6](vec3( 0,-1, 0), vec3( 0,-1, 0), vec3(0, 0, 1), vec3(0, 0,-1), vec3(0,-1, 0), vec3( 0,-1, 0));
 
-shared vec3 acc[256][9];
+shared vec3 acc[THREADS][9];
 
 void main() {
     const uint tid = gl_LocalInvocationID.x;
@@ -30,7 +32,7 @@ void main() {
     const uint N = max(pc.faceSize, 1u);
     const uint total = 6u * N * N;
     const float invN2 = 1.0 / float(N * N);
-    for (uint idx = tid; idx < total; idx += 256u) {
+    for (uint idx = tid; idx < total; idx += THREADS) {
         const uint face = idx / (N * N);
         const uint r = idx - face * N * N;
         const uint x = r % N;
@@ -56,7 +58,7 @@ void main() {
     }
     for (int i = 0; i < 9; ++i) acc[tid][i] = s[i];
     barrier();
-    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    for (uint stride = THREADS / 2u; stride > 0u; stride >>= 1u) {
         if (tid < stride) {
             for (int i = 0; i < 9; ++i) acc[tid][i] += acc[tid + stride][i];
         }

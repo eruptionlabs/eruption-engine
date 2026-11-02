@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 #extension GL_EXT_nonuniform_qualifier : enable
@@ -12,7 +13,8 @@ layout(location = 5) flat in float vLevel;
 
 layout(location = 0) out vec4 fragColor;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#define ERUPTION_SLOT_DIRECT // refração, profundidade e espuma são render targets
+#include "common/slot_textures.glsl"
 
 layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 baseColorDeep;
@@ -497,9 +499,9 @@ void main() {
     if (waterTexSlot >= 0) {
         vec2 texScroll = vec2(time * waveSpeed * 0.1, time * waveSpeed * 0.07);
         vec2 uv = vWorldPos.xz * normalScale + texScroll;
-        float h  = texture(u_textures[nonuniformEXT(waterTexSlot)], uv).r;
-        float hx = texture(u_textures[nonuniformEXT(waterTexSlot)], uv + vec2(0.01, 0.0)).r;
-        float hy = texture(u_textures[nonuniformEXT(waterTexSlot)], uv + vec2(0.0, 0.01)).r;
+        float h  = slotTexture(waterTexSlot, uv).r;
+        float hx = slotTexture(waterTexSlot, uv + vec2(0.01, 0.0)).r;
+        float hy = slotTexture(waterTexSlot, uv + vec2(0.0, 0.01)).r;
         float derivScale = 8.0;
         vec3 localN = normalize(vec3((h - hx) * derivScale, 1.0, (h - hy) * derivScale));
         vec3 pn = localN.x * vTangent + localN.y * vNormal + localN.z * vBitangent;
@@ -512,7 +514,8 @@ void main() {
         float psLen = length(ps);
         perturbedNormal = (psLen > 1e-5) ? (ps / psLen) : vNormal;
     } else {
-        vec3 localN = sampleProceduralNormal(vWorldPos.xz, normalScale, waveSpeed, time, normalStr, normalOctaves);
+        vec3 localN = sampleProceduralNormal(vWorldPos.xz, normalScale, waveSpeed, time, normalStr,
+                                             LITE ? 1 : normalOctaves);
         vec3 pn = localN.x * vTangent + localN.y * vNormal + localN.z * vBitangent;
         float pnLen = length(pn);
         perturbedNormal = (pnLen > 1e-5) ? (pn / pnLen) : vNormal;
@@ -559,13 +562,18 @@ void main() {
     vec2 gUV = clamp(ssr + refrOff * vec2(0.7, 1.0), vec2(0.001), vec2(0.999));
     vec2 bUV = clamp(ssr + refrOff * vec2(1.0, 1.0), vec2(0.001), vec2(0.999));
 
-    float bgR = texture(u_textures[nonuniformEXT(screenTexSlot)], rUV).r;
-    float bgG = texture(u_textures[nonuniformEXT(screenTexSlot)], gUV).g;
-    float bgB = texture(u_textures[nonuniformEXT(screenTexSlot)], bUV).b;
-    vec3 background = vec3(bgR, bgG, bgB);
+    vec3 background;
+    if (LITE) {
+        background = slotTexture(screenTexSlot, bUV).rgb; // sem a dispersao por canal
+    } else {
+        float bgR = slotTexture(screenTexSlot, rUV).r;
+        float bgG = slotTexture(screenTexSlot, gUV).g;
+        float bgB = slotTexture(screenTexSlot, bUV).b;
+        background = vec3(bgR, bgG, bgB);
+    }
 
     // ---- Depth-based coloring using VERTICAL thickness (corrected) ----
-    float sceneDepth = texture(u_textures[nonuniformEXT(depthTexSlot)], ssr).r;
+    float sceneDepth = slotTexture(depthTexSlot, ssr).r;
     vec3 floorWorldPos = reconstructWorldPos(ssr, sceneDepth);
     float thickness = max(0.0, waterLevel - floorWorldPos.y);
     float depthFactor = clamp(thickness / 8.0, 0.0, 1.0);
@@ -592,7 +600,7 @@ void main() {
     vec3 ssrDir = reflect(-viewDir, ssrNormal);
     vec3 ssrColor = vec3(0.0);
     float ssrHit = 0.0;
-    if (ssrDir.y > 0.0) {
+    if (!LITE && ssrDir.y > 0.0) {
         const int ssrSteps = 40;
         float t = 0.6, dt = 0.8, tPrev = 0.0;
         for (int i = 0; i < ssrSteps; i++) {
@@ -601,7 +609,7 @@ void main() {
             if (clip.w <= 0.0) break;
             vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
             if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
-            float sd = texture(u_textures[nonuniformEXT(depthTexSlot)], uv).r;
+            float sd = slotTexture(depthTexSlot, uv).r;
             if (sd < 1.0) {
                 float rayDist = length(rayPos - ubo.cameraPos.xyz);
                 float sceneDist = length(reconstructWorldPos(uv, sd) - ubo.cameraPos.xyz);
@@ -612,17 +620,17 @@ void main() {
                         vec3 mp = vWorldPos + ssrDir * mid;
                         vec4 mc = pc.viewProj * vec4(mp, 1.0);
                         vec2 muv = mc.xy / mc.w * 0.5 + 0.5;
-                        float md = texture(u_textures[nonuniformEXT(depthTexSlot)], muv).r;
+                        float md = slotTexture(depthTexSlot, muv).r;
                         float sdist = length(reconstructWorldPos(muv, md) - ubo.cameraPos.xyz);
                         if (length(mp - ubo.cameraPos.xyz) > sdist) hi = mid; else lo = mid;
                     }
                     vec3 hp = vWorldPos + ssrDir * hi;
                     vec4 hc = pc.viewProj * vec4(hp, 1.0);
                     vec2 huv = hc.xy / hc.w * 0.5 + 0.5;
-                    float hd = texture(u_textures[nonuniformEXT(depthTexSlot)], huv).r;
+                    float hd = slotTexture(depthTexSlot, huv).r;
                     float gap = length(hp - ubo.cameraPos.xyz) - length(reconstructWorldPos(huv, hd) - ubo.cameraPos.xyz);
                     if (gap < max(dt * 2.0, 3.0)) {
-                        ssrColor = texture(u_textures[nonuniformEXT(screenTexSlot)], huv).rgb;
+                        ssrColor = slotTexture(screenTexSlot, huv).rgb;
                         vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv) * smoothstep(vec2(0.0), vec2(0.08), 1.0 - huv);
                         ssrHit = edge.x * edge.y * (1.0 - smoothstep(0.6, 1.0, float(i) / float(ssrSteps)));
                     }
@@ -649,7 +657,7 @@ void main() {
         vec4 skyClip = pc.viewProj * vec4(reflectDir, 0.0);
         vec2 skyUV = skyClip.xy / skyClip.w * 0.5 + 0.5;
         if (all(greaterThanEqual(skyUV, vec2(0.0))) && all(lessThanEqual(skyUV, vec2(1.0)))) {
-            vec3 skyTexColor = texture(u_textures[nonuniformEXT(skyboxTexSlot)], skyUV).rgb;
+            vec3 skyTexColor = slotTexture(skyboxTexSlot, skyUV).rgb;
             // Rough surfaces blur reflection back to gradient
             reflectionColor = mix(skyTexColor, skyGradient, roughness);
         }
@@ -661,7 +669,7 @@ void main() {
     // ---- Unified Foam System ----
     float totalFoam = 0.0;
     // A) Surface foam (Worley) — only on wave crests
-    if (enableSurfaceFoam) {
+    if (!LITE && enableSurfaceFoam) {
         float surfaceFoam = foamSurface(vWorldPos.xz, foamScale, foamSpeed, time);
         float crest = waveCrestMask(perturbedNormal, 0.75);
         totalFoam = max(totalFoam, surfaceFoam * crest);
@@ -674,11 +682,11 @@ void main() {
     // C) Contact foam (CPU mask)
     if (enableFoam) {
         vec2 foamUV = (vWorldPos.xz / vec2(128.0, 128.0)) + 0.5;
-        float contactFoam = texture(u_textures[nonuniformEXT(foamMaskSlot)], foamUV).r * contactStr;
+        float contactFoam = slotTexture(foamMaskSlot, foamUV).r * contactStr;
         totalFoam = max(totalFoam, contactFoam);
     }
     // D) Rain splash contact foam
-    if (rainIntensity > 0.001 && rainSplashFoam > 0.001) {
+    if (!LITE && rainIntensity > 0.001 && rainSplashFoam > 0.001) {
         float splash = rainSplashPattern(vWorldPos.xz, time * 3.0) * rainIntensity * rainSplashFoam;
         totalFoam = max(totalFoam, splash);
     }
@@ -702,7 +710,7 @@ void main() {
     // ---- Caustics (stronger in shallow water, animated) ----
     float caustics = 0.0;
     vec3 causticsColor = vec3(0.0);
-    if (enableCaustics) {
+    if (!LITE && enableCaustics) {
         caustics = causticsPattern(vWorldPos.xz, time) * exp(-thickness * causticsDepthAtt) * sunIntensity * (1.0 - storm * 0.7);
         causticsColor = ubo.sunColor.rgb * caustics * causticsIntensity;
     }

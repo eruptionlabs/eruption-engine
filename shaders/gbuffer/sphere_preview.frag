@@ -38,7 +38,7 @@ layout(location = 0) out vec4 outColor;
 // mundo" usa o sol e o ambiente dele.
 #include "gbuffer/model_frame_ubo.glsl"
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#include "common/slot_textures.glsl"
 
 // 96 B (sem a matriz model e o uvTranslateRot, que nenhum shader lia): cabe
 // nos 128 B de push constant garantidos (GPU de celular).
@@ -93,13 +93,13 @@ void main() {
     // Forca 0.35: o mesmo recuo que o model.frag aplica na banda perto (o
     // relevo grosso ja' esta' na geometria, o normal map so' completa).
     if (inNormalIndex != 0u) {
-        vec3 tn = texture(u_textures[nonuniformEXT(inNormalIndex)], inTexCoord).xyz * 2.0 - 1.0;
+        vec3 tn = slotTexture(inNormalIndex, inTexCoord).xyz * 2.0 - 1.0;
         tn = mix(vec3(0.0, 0.0, 1.0), tn, 0.35);
         N = normalize(tbnFromDerivatives(N, inWorldPos, inTexCoord) * normalize(tn));
     }
     vec3 albedo = vec3(0.8);
     if (inTexIndex != 0u) {
-        albedo = texture(u_textures[nonuniformEXT(inTexIndex)], inTexCoord).rgb;
+        albedo = slotTexture(inTexIndex, inTexCoord).rgb;
     }
     vec3 L = normalize(-kLightDir);
     vec3 lightColor = kLightColor;

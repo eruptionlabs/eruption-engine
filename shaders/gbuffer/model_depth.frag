@@ -33,7 +33,7 @@ layout(location = 17) in flat uint inBlendMaskIndex2;
 layout(location = 18) in flat float inSway;
 layout(location = 19) in vec4 inDispInfo;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#include "common/slot_textures.glsl"
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
@@ -66,12 +66,12 @@ void main() {
     // Chao: malha pintada (splat) ou instancia de chao (balanco -1, ModelRenderer).
     if (seeThroughDiscard(inWorldPos, inNormal,
                           ((inSplatTex.x | inSplatTex.y) != 0u && inBlendMaskIndex != 0u) || inSway < -0.5)) discard;
-    vec4 texColor = texture(u_textures[nonuniformEXT(inTexIndex)], inTexCoord);
+    vec4 texColor = slotTexture(inTexIndex, inTexCoord);
     if (texColor.a < 0.1) discard;
     if (inBlendWeight > 0.0) {
-        vec4 bColor = texture(u_textures[nonuniformEXT(inBlendTexIndex)], inTexCoord);
+        vec4 bColor = slotTexture(inBlendTexIndex, inTexCoord);
         float blendT = inBlendWeight;
-        if (inBlendMaskIndex != 0u) blendT = texture(u_textures[nonuniformEXT(inBlendMaskIndex)], inBlendMaskUV).r;
+        if (inBlendMaskIndex != 0u) blendT = slotTexture(inBlendMaskIndex, inBlendMaskUV).r;
         float hA = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
         float hB = dot(bColor.rgb,  vec3(0.299, 0.587, 0.114));
         blendT = clamp(blendT + (hB - hA) * 0.35, 0.0, 1.0);

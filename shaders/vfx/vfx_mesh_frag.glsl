@@ -5,7 +5,7 @@
 #include "vfx/vfx_common.glsl"
 #include "vfx/vfx_frame_ubo.glsl"
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#include "common/slot_textures.glsl"
 
 layout(location = 0) in vec3 v_normal;
 layout(location = 1) in vec2 v_uv;
@@ -48,7 +48,7 @@ float noise3(vec3 p) {
 
 void main() {
     vec3 albedo = v_color.rgb;
-    if (v_tex != 0xFFFFFFFFu) albedo *= texture(u_textures[nonuniformEXT(v_tex)], v_uv).rgb;
+    if (v_tex != 0xFFFFFFFFu) albedo *= slotTexture(v_tex, v_uv).rgb;
     // Superficie: manchas largas + grao fino; a face de fratura e' rocha
     // limpa (mais clara e menos saturada) e o fundo do relevo escurece.
     float n1 = noise3(v_obj);

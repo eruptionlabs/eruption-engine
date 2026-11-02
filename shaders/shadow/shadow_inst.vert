@@ -12,8 +12,9 @@
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in vec3 inNormal;
-layout(location = 3) in uint inTexIndex;
-layout(location = 4) in uint inMatId;
+layout(location = 3) in uvec2 inTexMat; // texIndex, matId (R16G16, ver ShadowRenderer)
+#define inTexIndex inTexMat.x
+#define inMatId inTexMat.y
 layout(location = 5) in uint inColor;
 
 layout(location = 0) out vec2 outTexCoord;
@@ -36,9 +37,12 @@ layout(push_constant) uniform PushConstants {
     layout(offset = 80) float swayAmount;
 };
 
-layout(set = 1, binding = 0, std430) readonly buffer ShadowInstances {
-    mat4 u_model[];
-};
+// Matriz da instância: atributo por instância (ShadowRenderer, entrada 1), não
+// SSBO - a leitura por gl_InstanceIndex derrubava a GPU de celular.
+layout(location = 6) in vec4 inModel0;
+layout(location = 7) in vec4 inModel1;
+layout(location = 8) in vec4 inModel2;
+layout(location = 9) in vec4 inModel3;
 
 // Copia de applyWindSway (shaders/gbuffer/model.vert). MESMOS coeficientes de
 // proposito: a sombra tem que descrever a mesma curva que a malha, senao
@@ -73,7 +77,7 @@ vec3 applyWindSway(vec3 worldPos, float localHeight, float sway) {
 }
 
 void main() {
-    mat4 model = u_model[gl_InstanceIndex];
+    mat4 model = mat4(inModel0, inModel1, inModel2, inModel3);
     vec4 worldPos = model * vec4(inPosition, 1.0);
 
     // Mesma logica de model.vert: altura acima da BASE da instancia (nao a

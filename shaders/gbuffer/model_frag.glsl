@@ -50,7 +50,7 @@ layout(location = 5) out vec2 outVelocity;
 layout(location = 20) in vec3 inPrevWorldPos;
 #endif
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#include "common/slot_textures.glsl"
 
 // 96 B (sem a matriz model e o uvTranslateRot, que nenhum shader lia): cabe
 // nos 128 B de push constant garantidos (GPU de celular).
@@ -82,6 +82,64 @@ float lut8(vec4 a, vec4 b, float t) {
     return mix(v0, v1, f);
 }
 
+// RELEVO HIBRIDO: a mesma altura que model_tese.glsl desloca (alfa do MRAH-W,
+// mip perto + ganho em volta da media), dividida pelo angulo de vista. A
+// tesselacao fica com o rasante; aqui o POM faz a parte de frente, com a
+// amplitude em unidades de mundo convertida para UV por uvScale.z (UV por u).
+float reliefPomWeight(float NdotV) {
+    float lo = u_pomParams.x, hi = u_tessParams2.x;
+    return clamp((NdotV - lo) / max(hi - lo, 1e-4), 0.0, 1.0);
+}
+
+float reliefHeight(uint texIdx, vec2 uvIn) {
+    float nearMip = 2.0 + u_tessHeightBlur;
+    float spacing = u_tessParams2.y;
+    if (spacing > 0.0 && push.uvScale.z > 0.0) {
+        float texels = float(slotTextureSize(texIdx, 0).x);
+        nearMip = max(nearMip, log2(max(texels * push.uvScale.z * spacing * 2.0, 1.0)));
+    }
+    float a = slotTextureLod(texIdx, uvIn, nearMip).a;
+    if (a > 0.999) return 0.5;
+    float base = slotTextureLod(texIdx, uvIn, 8.0).a;
+    return clamp(0.5 + (a - base) * max(u_normalDistParams.w, 0.1), 0.0, 1.0);
+}
+
+// Marcha do raio de vista pela camada [-A/2, +A/2] em volta da superficie,
+// 16 passos + refinamento linear na travessia. So' com a tesselacao ligada
+// (sem ela o relevo continua so' normal map, como antes).
+vec2 reliefPomUv(vec2 uv, mat3 TBN, vec3 N) {
+    if (u_tessParams.y < 0.5 || u_tessParams.z <= 1e-5 || push.uvScale.z <= 0.0) return uv;
+    vec3 V = normalize(u_cameraPos - inWorldPos);
+    float w = reliefPomWeight(abs(dot(N, V)));
+    if (w <= 0.0) return uv;
+    float f = lut8(u_tessLut0, u_tessLut1, distance(inWorldPos, u_cameraPos) / max(u_tessParams.x, 1.0));
+    float amp = clamp((f - 1.0) / max(u_tessParams.w - 1.0, 1e-3), 0.0, 1.0);
+    float A = u_tessParams.z * amp * push.uvScale.w * w;
+    if (A <= 1e-4 || slotTextureLod(inPbrIndex, uv, 0.0).a > 0.999) return uv;
+    vec3 vTS = transpose(TBN) * V;
+    vec2 duvPerDescent = -vTS.xy / max(vTS.z, 0.05) * push.uvScale.z;
+    float z0 = 0.5 * A;
+    vec2 uvTop = uv - duvPerDescent * z0;
+    const int kSteps = 16;
+    float dz = A / float(kSteps);
+    float zPrev = z0;
+    float sPrev = (reliefHeight(inPbrIndex, uvTop) - 0.5) * A;
+    vec2 p = uvTop;
+    for (int i = 1; i <= kSteps; ++i) {
+        float z = z0 - dz * float(i);
+        vec2 q = uvTop + duvPerDescent * (z0 - z);
+        float s = (reliefHeight(inPbrIndex, q) - 0.5) * A;
+        if (z <= s) {
+            float t = (zPrev - sPrev) / max((zPrev - sPrev) - (z - s), 1e-6);
+            return mix(p, q, t);
+        }
+        zPrev = z;
+        sPrev = s;
+        p = q;
+    }
+    return p;
+}
+
 // ===================== SO' PRO MODO DE AUDITORIA 3 (height map) ========
 // heightUv (model.tese/model.vert) le' no MIP 2 e aplica
 // GANHO - e' o que desloca a malha, e so' existe em umas dezenas de vertices
@@ -97,7 +155,7 @@ float lut8(vec4 a, vec4 b, float t) {
 // splat do chao sem PBR proprio (heightDebug*Splat*, mesmo criterio de
 // heightSplatUv em model.tese).
 float heightDebugUv(uint texIdx, vec2 uvIn, bool useAlpha) {
-    vec4 s = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, 0.0);
+    vec4 s = slotTextureLod(texIdx, uvIn, 0.0);
     if (useAlpha) return s.a > 0.999 ? 0.5 : s.a;
     const vec3 kL = vec3(0.2126, 0.7152, 0.0722);
     return dot(s.rgb, kL);
@@ -107,7 +165,7 @@ float heightDebugSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec
                          uint maskIdx, uint maskIdx2) {
     float hBase = heightDebugUv(baseTex, uvIn, false);
     if ((splat.x | splat.y) == 0u || maskIdx == 0u) return hBase;
-    vec4 w = textureLod(u_textures[nonuniformEXT(maskIdx)], maskUv, 0.0);
+    vec4 w = slotTextureLod(maskIdx, maskUv, 0.0);
     uint s0 =  splat.x        & 0x3FFFu;
     uint s1 = (splat.x >> 16) & 0x3FFFu;
     uint s2 =  splat.y        & 0x3FFFu;
@@ -119,7 +177,7 @@ float heightDebugSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec
     if (s2 != 0u) { acc += heightDebugUv(s2, uvIn, false) * w.b; sum += w.b; }
     if (s3 != 0u) { acc += heightDebugUv(s3, uvIn, false) * w.a; sum += w.a; }
     if (maskIdx2 != 0u) {
-        vec4 w2 = textureLod(u_textures[nonuniformEXT(maskIdx2)], maskUv, 0.0);
+        vec4 w2 = slotTextureLod(maskIdx2, maskUv, 0.0);
         uint s4 =  splat2.x        & 0x3FFFu;
         uint s5 = (splat2.x >> 16) & 0x3FFFu;
         uint s6 =  splat2.y        & 0x3FFFu;
@@ -204,11 +262,11 @@ vec2 sorteioDoVertice(vec2 p) {
 vec4 amostraSemGrade(uint idx, vec2 uv, vec2 ddxUV, vec2 ddyUV, bool restauraVariancia) {
     vec3 w; vec2 v1, v2, v3;
     gradeTriangular(uv, w, v1, v2, v3);
-    vec4 c = w.x * textureGrad(u_textures[idx], uv + sorteioDoVertice(v1), ddxUV, ddyUV)
-           + w.y * textureGrad(u_textures[idx], uv + sorteioDoVertice(v2), ddxUV, ddyUV)
-           + w.z * textureGrad(u_textures[idx], uv + sorteioDoVertice(v3), ddxUV, ddyUV);
+    vec4 c = w.x * slotTextureGrad(idx, uv + sorteioDoVertice(v1), ddxUV, ddyUV)
+           + w.y * slotTextureGrad(idx, uv + sorteioDoVertice(v2), ddxUV, ddyUV)
+           + w.z * slotTextureGrad(idx, uv + sorteioDoVertice(v3), ddxUV, ddyUV);
     if (!restauraVariancia) return c;
-    vec4 media = textureLod(u_textures[idx], uv, 14.0);  // topo da piramide = media da imagem
+    vec4 media = slotTextureLod(idx, uv, 14.0);  // topo da piramide = media da imagem
     return (c - media) * inversesqrt(max(dot(w, w), 1e-4)) + media;
 }
 
@@ -218,7 +276,9 @@ vec4 amostraSemGrade(uint idx, vec2 uv, vec2 ddxUV, vec2 ddyUV, bool restauraVar
 // nenhuma — so' borra o que o artista colocou no lugar certo. `quebrar` vem
 // de `hasSplat`, e ERUPTION_NO_STOCHASTIC_TILING desliga pelo motor.
 vec4 amostraChao(uint idx, vec2 uv, vec2 ddxUV, vec2 ddyUV, bool quebrar, bool restauraVariancia) {
-    if (!quebrar) return texture(u_textures[idx], uv);
+    // Gradiente explicito: com o POM o uv salta entre pixels, e a derivada
+    // implicita escolhia mip errado (riscos finos). Sem POM e' o mesmo mip.
+    if (!quebrar) return slotTextureGrad(idx, uv, ddxUV, ddyUV);
     return amostraSemGrade(idx, uv, ddxUV, ddyUV, restauraVariancia);
 }
 
@@ -549,8 +609,10 @@ void main() {
     // Normal mapping is only computed when a real normal map is bound.
     vec2 uv = inTexCoord;
     mat3 TBN;
-    bool hasPbr = inPbrIndex != 0u;
-    bool hasNormal = inNormalIndex != 0u;
+    // GPU fraca: sem mapas de normal e de PBR (o preset que liga o LITE ja'
+    // desliga a iluminacao PBR); normal do vertice e rugosidade padrao.
+    bool hasPbr = !LITE && inPbrIndex != 0u;
+    bool hasNormal = !LITE && inNormalIndex != 0u;
     // Camadas do splat com normal/MRAH-W proprios (bits 15/14 do slot de cada
     // camada, ver TerrainPaint.cpp): o chao entra no caminho de normal mesmo
     // sem normal map na malha.
@@ -562,17 +624,18 @@ void main() {
     if (hasNormal || hasPbr || splatNrm) {
         TBN = computeTBN(N, inWorldPos, inTexCoord);
     }
-    // POM REMOVIDO (decisão de projeto, docs/displacement_design.md): a
-    // qualidade do parallax é função do ângulo de vista, e aqui o pitch da
-    // câmera é variável livre - o jogador sempre alcança a zona ruim.
-    // Relevo vem de: geometria real perto + sombra própria (horizon map,
-    // dependente do SOL, não da vista) + normal map.
+    // POM de volta, so' na parte de frente do relevo: o rasante (a zona ruim
+    // do parallax, que a camera livre sempre alcanca) e' da tesselacao - ver
+    // reliefPomUv. O UV deslocado alimenta todas as leituras; as derivadas
+    // ficam as do UV original (o deslocado salta entre pixels e o mip piscaria).
+    vec2 uvBase = uv;
+    if (hasPbr) uv = reliefPomUv(uv, TBN, N);
 
     // Quebrar a repeticao vale SO' no chao com splat (ver amostraChao).
     // Calculado aqui em cima porque a amostra base ja' precisa dele.
-    bool quebraLadrilho = (inSplatTex.x | inSplatTex.y) != 0u && inBlendMaskIndex != 0u
+    bool quebraLadrilho = !LITE && (inSplatTex.x | inSplatTex.y) != 0u && inBlendMaskIndex != 0u
                           && push.uvScale.x > 0.5;
-    vec2 ddxUV = dFdx(uv), ddyUV = dFdy(uv);
+    vec2 ddxUV = dFdx(uvBase), ddyUV = dFdy(uvBase);
 
     uint texIdx = nonuniformEXT(inTexIndex);
     vec4 texColor = amostraChao(texIdx, uv, ddxUV, ddyUV, quebraLadrilho, true);
@@ -657,7 +720,7 @@ void main() {
         }
     }
     if (hasSplat) {
-        vec4 w = texture(u_textures[nonuniformEXT(inBlendMaskIndex)], inBlendMaskUV);
+        vec4 w = slotTexture(inBlendMaskIndex, inBlendMaskUV);
         // AS DUAS CAMADAS QUE MAIS PESAM. Cada camada custa ate' 3 mapas (cor,
         // normal, MRAH-W) x 3 projecoes na encosta x 3 amostras do
         // ladrilhamento estocastico; ler as 8 levava o G-buffer do andar de
@@ -682,7 +745,7 @@ void main() {
         // Segunda mascara (camadas 4..7 - dobra o splat pra 9 no total com a
         // base). Mesma UV da primeira, indice de material proprio. Inerte
         // (peso 0) em qualquer GLB que so' tenha o splat de 4.
-        vec4 w2 = inBlendMaskIndex2 != 0u ? texture(u_textures[nonuniformEXT(inBlendMaskIndex2)], inBlendMaskUV) : vec4(0.0);
+        vec4 w2 = inBlendMaskIndex2 != 0u ? slotTexture(inBlendMaskIndex2, inBlendMaskUV) : vec4(0.0);
         topDuas( inSplatTex2.x        & 0xFFFFu, w2.r, s0, p0, s1, p1);
         topDuas((inSplatTex2.x >> 16) & 0xFFFFu, w2.g, s0, p0, s1, p1);
         topDuas( inSplatTex2.y        & 0xFFFFu, w2.b, s0, p0, s1, p1);
@@ -712,21 +775,23 @@ void main() {
         // uma pra brilho, outra (fase/offset diferente) pra empurrar
         // quente/frio. Faixa pequena de proposito (10%/8%) - o objetivo e'
         // quebrar a repeticao, nao mudar qual material se le.
-        float macroLum = eruptionMacroFbm(inWorldPos.xz, 1.0 / 180.0);
-        float macroWarm = eruptionMacroFbm(inWorldPos.xz + vec2(500.0, 500.0), 1.0 / 260.0);
-        texColor.rgb *= (1.0 + macroLum * 0.16);
-        texColor.rgb *= vec3(1.0 + max(macroWarm, 0.0) * 0.12,
-                              1.0 - abs(macroWarm) * 0.05,
-                              1.0 - max(macroWarm, 0.0) * 0.09);
+        if (!LITE) { // variacao macro: dois FBM por pixel
+            float macroLum = eruptionMacroFbm(inWorldPos.xz, 1.0 / 180.0);
+            float macroWarm = eruptionMacroFbm(inWorldPos.xz + vec2(500.0, 500.0), 1.0 / 260.0);
+            texColor.rgb *= (1.0 + macroLum * 0.16);
+            texColor.rgb *= vec3(1.0 + max(macroWarm, 0.0) * 0.12,
+                                  1.0 - abs(macroWarm) * 0.05,
+                                  1.0 - max(macroWarm, 0.0) * 0.09);
+        }
     }
 
     bool hasBlendMask = inBlendMaskIndex != 0u;
     float blendT = inBlendWeight;
     if (!hasSplat && inBlendWeight > 0.0) {
         uint bTexIdx = nonuniformEXT(inBlendTexIndex);
-        vec4 bColor = texture(u_textures[bTexIdx], uv);
+        vec4 bColor = slotTextureGrad(bTexIdx, uv, ddxUV, ddyUV);
         if (hasBlendMask) {
-            blendT = texture(u_textures[nonuniformEXT(inBlendMaskIndex)], inBlendMaskUV).r;
+            blendT = slotTexture(inBlendMaskIndex, inBlendMaskUV).r;
         }
         // Height-biased blend (familia "height lerp"): nudge the
         // weight by the two textures' own luminance so the 50% contour follows
@@ -819,10 +884,10 @@ void main() {
         // Malha sem normal map (so' as camadas trazem): parte da normal plana.
         vec4 sampledNormal = !hasNormal ? vec4(0.5, 0.5, 1.0, 0.0)
                            : quebraLadrilho ? amostraSemGrade(nIdx, uv, ddxUV, ddyUV, false)
-                                            : texture(u_textures[nIdx], uv, ndSmooth);
+                                            : slotTextureGrad(nIdx, uv, ddxUV * exp2(ndSmooth), ddyUV * exp2(ndSmooth));
         if (!hasSplat && inBlendWeight > 0.0 && inBlendNormalIndex != 0u) {
             uint bnIdx = nonuniformEXT(inBlendNormalIndex);
-            vec4 bNormal = texture(u_textures[bnIdx], uv, ndSmooth);
+            vec4 bNormal = slotTextureGrad(bnIdx, uv, ddxUV * exp2(ndSmooth), ddyUV * exp2(ndSmooth));
             sampledNormal = mix(sampledNormal, bNormal, blendT);
         }
         // Normal das camadas do splat pelo mesmo peso da cor. Mistura linear
@@ -900,21 +965,32 @@ void main() {
         // 3,08 ms/Mpx a 1080p) porque a folhagem usa descarte por alfa e nao
         // tem early-Z, entao cada camada de folha roda o shader inteiro.
         // Some suavemente entre 150 e 260 unidades para nao criar costura.
-        float msFade = 1.0 - smoothstep(150.0, 260.0, distance(inWorldPos, u_cameraPos));
-        if (strength > 0.01 && msFade > 0.01) {
+        //
+        // DE LONGE (2026-10-14, autor: "de longe parece que a luz nao pega"):
+        // a marcha passa a ter no minimo ~4 pixels de tela (o passo em UV
+        // cresce com a pegada do pixel), entao a fresta entre as pedras
+        // continua visivel na distancia de jogo (~300 u no celular). So' a
+        // marcha do SOL vai longe; a do ambiente fica no alcance antigo.
+        float msDist = distance(inWorldPos, u_cameraPos);
+        float msFade = 1.0 - smoothstep(420.0, 650.0, msDist);
+        float fillFade = 1.0 - smoothstep(150.0, 260.0, msDist);
+        if (!LITE && strength > 0.01 && msFade > 0.01) {
             const vec3 LUMA = vec3(0.299, 0.587, 0.114);
             // Prefer the REAL displacement height packed in MRAH-W alpha
             // (255 = "no height data" -> luminance fallback).
             uint hIdx = hasPbr ? nonuniformEXT(inPbrIndex) : 0u;
-            float hProbe = hasPbr ? texture(u_textures[hIdx], uv).a : 1.0;
+            float hProbe = hasPbr ? slotTextureGrad(hIdx, uv, ddxUV, ddyUV).a : 1.0;
             bool useDisp = hasPbr && hProbe < 0.995;
             float h0 = useDisp ? hProbe : dot(texColor.rgb, LUMA);
             const int   MS_STEPS = 5;
-            const float MS_SCALE = 0.018;      // total march in uv units
+            const float MS_BASE = 0.018;       // marcha minima em UV (perto)
+            const float MS_PIXELS = 4.0;       // marcha minima em pixels de tela
+            float pixelUV = max(length(ddxUV), length(ddyUV));
+            float MS_SCALE = max(MS_BASE, pixelUV * MS_PIXELS);
             // LOD fixo: no rasante de VISTA o texel estica e a marcha com mip
             // automatico vira aliasing. Um nivel estavel mantem o sulco limpo
             // de qualquer angulo de camera.
-            float msLod = textureQueryLod(u_textures[hIdx], uv).y + 0.5;
+            float msLod = slotQueryLod(hIdx, uv).y + 0.5;
 
             // MARCHA 1, direcao do SOL -> luz direta (outEmissive.a). A
             // auto-sombra e' dependente do SOL, nao da vista: e' ela que faz
@@ -939,13 +1015,13 @@ void main() {
                         float occ = 0.0;
                         for (int s = 1; s <= MS_STEPS; ++s) {
                             float hs = useDisp
-                                ? textureLod(u_textures[hIdx], uv + dUV * float(s), msLod).a
-                                : dot(textureLod(u_textures[texIdx], uv + dUV * float(s), msLod).rgb, LUMA);
+                                ? slotTextureLod(hIdx, uv + dUV * float(s), msLod).a
+                                : dot(slotTextureLod(texIdx, uv + dUV * float(s), msLod).rgb, LUMA);
                             float rayH = h0 + MS_SCALE * (float(s) / float(MS_STEPS));
                             occ = max(occ, (hs - rayH) * 4.0);
                         }
                         occ *= sunGraze * msFade;
-                        sunSelfShadow = clamp(1.0 - occ * strength * 0.45, 0.55, 1.0);
+                        sunSelfShadow = clamp(1.0 - occ * strength * 0.8, 0.35, 1.0);
                     }
                 }
             }
@@ -963,7 +1039,7 @@ void main() {
             // sombra a luz apaga e a textura se move", relato do autor). E nao
             // multiplicava por msFade: pop seco a 260 unidades. Agora roda
             // independente do sol e some suave com a distancia.
-            {
+            if (fillFade > 0.01) {
                 vec3 Fw = normalize(vec3(0.35, 0.75, 0.55));
                 vec3 Fts = transpose(TBN) * Fw;
                 float fl = length(Fts);
@@ -977,12 +1053,12 @@ void main() {
                         float fOcc = 0.0;
                         for (int s = 1; s <= MS_STEPS; ++s) {
                             float hs = useDisp
-                                ? textureLod(u_textures[hIdx], uv + fUV * float(s), msLod).a
-                                : dot(textureLod(u_textures[texIdx], uv + fUV * float(s), msLod).rgb, LUMA);
+                                ? slotTextureLod(hIdx, uv + fUV * float(s), msLod).a
+                                : dot(slotTextureLod(texIdx, uv + fUV * float(s), msLod).rgb, LUMA);
                             float rayH = h0 + MS_SCALE * (float(s) / float(MS_STEPS));
                             fOcc = max(fOcc, (hs - rayH) * 4.0);
                         }
-                        fOcc *= msFade;
+                        fOcc *= fillFade;
                         if ((msMask & 2u) != 0u) fillSelfShadow = clamp(1.0 - fOcc * strength * 0.8, 0.35, 1.0);
                     }
                 }
@@ -1022,7 +1098,7 @@ void main() {
         vec4 mrahw = amostraChao(pIdx, uv, ddxUV, ddyUV, quebraLadrilho, true);
         if (!hasSplat && inBlendWeight > 0.0 && inBlendPbrIndex != 0u) {
             uint bpIdx = nonuniformEXT(inBlendPbrIndex);
-            vec4 bMrahw = texture(u_textures[bpIdx], uv);
+            vec4 bMrahw = slotTexture(bpIdx, uv);
             mrahw = mix(mrahw, bMrahw, blendT);
         }
         if (splatMrahwW > 0.0) mrahw = mix(mrahw, splatMrahw, splatMrahwW);
@@ -1133,7 +1209,7 @@ void main() {
         h ^= h >> 13u; h *= 0x5bd1e995u; h ^= h >> 15u;
         const float thr = 0.3 + 0.35 * float(h & 0xFFFFu) / 65535.0;
         if (u_sunDir.w < thr)
-            emissiveRgb += texture(u_textures[nonuniformEXT(emissiveIdx)], uv).rgb * 2.5;
+            emissiveRgb += slotTexture(emissiveIdx, uv).rgb * 2.5;
     }
     outEmissive = vec4(emissiveRgb, sunSelfShadow);
 }

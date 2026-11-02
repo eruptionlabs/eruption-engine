@@ -44,8 +44,12 @@ void main() {
         ribbonRing[e.ribbon.x + seq % e.ribbon.y] = idx;
     }
     particles[idx] = p;
+    // Barreira entre a escrita da particula e o atomico da lista de vivas: sem
+    // ela o PowerVR GE8320 trava a GPU quando varias threads do mesmo dispatch
+    // fazem as duas coisas (cada uma sozinha passa; medido num celular de teste).
+    memoryBarrierBuffer();
 
     uint cur = frame.counts.x;
     uint slot = atomicAdd(counters[cur], 1u);
-    aliveList[cur * frame.counts.y + slot] = idx;
+    if (slot < frame.counts.y) aliveList[cur * frame.counts.y + slot] = idx;
 }

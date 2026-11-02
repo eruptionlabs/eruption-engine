@@ -23,7 +23,7 @@ struct GroundSample {
 
 float gbAltura(vec2 xz) {
     const vec2 huv = vec2(xz.x * u_gbHeight.x + u_gbHeight.y, xz.y * u_gbHeight.z + u_gbHeight.w);
-    return u_gbUvU.w + texture(u_textures[nonuniformEXT(u_gbSlots.z)], huv).r * u_gbUvV.w;
+    return u_gbUvU.w + slotTexture(u_gbSlots.z, huv).r * u_gbUvV.w;
 }
 
 // Normal do relevo pela grade de altura (diferenca central, uma celula).
@@ -83,8 +83,8 @@ GroundSample gbAmostra(vec3 wp, vec3 ng, vec3 dpdx, vec3 dpdy, float lumPeca, fl
     if (lz.w < 0.02) { topo += lz.w; lz.w = 0.0; }
 
     // As duas camadas que mais pesam (mesma regra do splat do chao).
-    const vec4 w1 = texture(u_textures[nonuniformEXT(u_gbSlots.x)], muv);
-    const vec4 w2 = u_gbSlots.y != 0u ? texture(u_textures[nonuniformEXT(u_gbSlots.y)], muv) : vec4(0.0);
+    const vec4 w1 = slotTexture(u_gbSlots.x, muv);
+    const vec4 w2 = u_gbSlots.y != 0u ? slotTexture(u_gbSlots.y, muv) : vec4(0.0);
     uint s0 = 0u, s1 = 0u; // sem array indexado por variavel (ver topDuas)
     float p0 = 0.0, p1 = 0.0;
     topDuas( u_gbSplat.x        & 0xFFFFu, w1.r, s0, p0, s1, p1);

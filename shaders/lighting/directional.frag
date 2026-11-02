@@ -7,6 +7,13 @@
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outLit;
 
+// GPU fraca (VulkanContext::shaderLite): sombra com uma amostra (PCF 2x2 do
+// hardware) no lugar do PCSS + kernel, nuvem com uma amostra, sem sombra de
+// contato, translucidez de folha e rebatimento. Constante de especialização:
+// o driver tira o código, não só pula - o shader inteiro ocupava registrador
+// demais para a GPU de celular manter fragmentos em voo.
+layout(constant_id = 0) const bool LITE = false;
+
 // G-Buffer samplers
 layout(set = 0, binding = 0) uniform sampler2D gbufferAlbedo;
 layout(set = 0, binding = 1) uniform sampler2D gbufferNormal;
@@ -75,6 +82,10 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     vec4 skyHorizon;        // xyz=procedural sky horizon colour
     mat4 invViewProj;
     vec4 skyProbeParams;    // x=sonda de ceu ligada, y=mip max, z=intensidade (G36)
+    vec4 probeGridMin;
+    vec4 probeGridInvExtent;
+    // Caminho enxuto: 16 indices de 8 bits por bloco de 16x8 da tela (0xFF fecha).
+    uvec4 tileLights[128];
 } lights;
 // SONDA DE CEU (G36): o proprio skybox.frag em cubemap 32x32 com mips -
 // especular ambiental pre-filtrado (roughness -> lod).
@@ -131,7 +142,7 @@ const vec2 poissonDisk[16] = vec2[](
 // c0 at x in [0, 0.5], c1 at x in [0.5, 1]. texelSize is in full-atlas UV,
 // so kernel offsets land on physical texels in either quadrant.
 // Pixel de sprite (pbr.r = 0,75, sprite.frag), marcado em main() antes do
-// calcShadow: a sombra sobre ele e' filtrada mais largo (sampleCascade).
+// calcShadow: o caminho enxuto filtra a sombra so' para ele.
 bool g_spritePixel = false;
 
 float sampleCascade(sampler2DShadow atlas, vec3 projCoord, int idx, float currentDepth, vec2 texelSize, vec2 dz_duv) {
@@ -153,6 +164,28 @@ float sampleCascade(sampler2DShadow atlas, vec3 projCoord, int idx, float curren
     // from the neighbour cascade, which manifests as flickering black rectangles.
     vec2 cascadeMinUV = vec2(0.5 * float(idx), 0.0);
     vec2 cascadeMaxUV = vec2(0.5 * float(idx) + 0.5, 1.0);
+    if (LITE) {
+        // Um texel do celular cobre varios pixels do quad do sprite: com uma
+        // comparacao so', a borda da sombra de um modelo atravessava o
+        // personagem em degraus e xadrez. No sprite, PCF de TENDA em 4x4
+        // texels com peso bilinear pela posicao dentro do texel (pesos por
+        // eixo 1-f, 1, 1, f): a transicao fica continua, sem degrau - a caixa
+        // 3x3 alinhada aos texels so' amaciava os degraus. No resto, a
+        // comparacao unica de sempre.
+        if (!g_spritePixel) return 1.0 - texture(atlas, vec3(clamp(baseUV, cascadeMinUV, cascadeMaxUV), currentDepth));
+        vec2 t = baseUV / texelSize - 0.5;
+        vec2 f = fract(t);
+        vec2 c0 = (floor(t) + 0.5) * texelSize;
+        float lit = 0.0;
+        for (int y = -1; y <= 2; ++y) {
+            float wy = y == -1 ? 1.0 - f.y : (y == 2 ? f.y : 1.0);
+            for (int x = -1; x <= 2; ++x) {
+                float wx = x == -1 ? 1.0 - f.x : (x == 2 ? f.x : 1.0);
+                lit += wx * wy * texture(atlas, vec3(clamp(c0 + vec2(x, y) * texelSize, cascadeMinUV, cascadeMaxUV), currentDepth));
+            }
+        }
+        return 1.0 - lit / 9.0;
+    }
 
     // PCSS — LARGURA DE PENUMBRA POR DISTANCIA DO BLOQUEADOR.
     //
@@ -332,6 +365,9 @@ float calcSingleShadow(sampler2DShadow atlas, mat4 mats[2], vec3 worldPos, vec3 
 
     // Calculate analytical depth gradient (dz/du, dz/dv) in light space
     // to tilt the depth comparison plane exactly parallel to the geometry.
+    // GPU fraca: sem o viés por plano do receptor (inversa 4x4 por pixel) nem a
+    // mistura com a cascata de fora na borda.
+    if (LITE) return sampleCascade(atlas, projCoord, idx, projCoord.z - bias, texelSize, vec2(0.0));
     mat4 M = mats[idx];
     // Robust inverse: if the matrix is singular (e.g., near-degenerate
     // projections), inverse() can produce NaN/Inf and create black pixels.
@@ -401,6 +437,7 @@ float calcSingleShadow(sampler2DShadow atlas, mat4 mats[2], vec3 worldPos, vec3 
 float calcShadow(vec3 worldPos, vec3 normal) {
     if (cascadeScales.w > 0.5) return 0.0; // ERUPTION_TEST_NO_SHADOW=1 (debug)
     float shadow1 = calcSingleShadow(shadowAtlas, lightSpaceMats, worldPos, normal);
+    if (LITE) return shadow1; // sem a mistura com o atlas seguinte
     
     // Blend factor is used only for legacy temporal blend (now deprecated).
     // With Positional Snap, blend is always 0.0 and only shadowAtlas is sampled.
@@ -422,6 +459,7 @@ float calcCloudShadow(vec3 worldPos) {
         projCoord.y < 0.0 || projCoord.y > 1.0)
         return 0.0;
 
+    if (LITE) return (1.0 - texture(cloudShadowMap, projCoord)) * cloudShadowIntensity;
     vec2 texelSize = 1.0 / vec2(textureSize(cloudShadowMap, 0));
     float shadow = 0.0;
     int kernel = 3;
@@ -572,6 +610,96 @@ bool isPbrFallback(vec4 pbr) {
     return pbr.r < 0.5;
 }
 
+// Visibilidade do ceu pelas probes de irradiancia (a mesma conta do
+// ambient.frag; no celular a grade vem pronta do <mapa>.glb.probes).
+layout(set = 0, binding = 17) uniform sampler3D probeVis;
+float probeSkyVisibilityLite(vec3 worldPos, vec3 N) {
+    if (lights.probeGridMin.w < 0.5) return 1.0;
+    vec3 g = (worldPos - lights.probeGridMin.xyz) * lights.probeGridInvExtent.xyz;
+    if (any(lessThan(g, vec3(0.0))) || any(greaterThan(g, vec3(1.0)))) return 1.0;
+    vec4 sh = texture(probeVis, g);
+    float vis = clamp((0.886227 * sh.x + 1.023328 * dot(sh.yzw, N)) / 3.14159265, 0.0, 1.0);
+    return mix(1.0, vis, lights.probeGridInvExtent.w);
+}
+
+// Irradiancia da sonda de ceu (SH9, skybox/sky_sh.comp) - a mesma conta do
+// ambient.frag, que a usa no lugar do gradiente de duas cores.
+layout(std430, set = 0, binding = 16) readonly buffer SkySH { vec4 sh[9]; } skySH;
+vec3 shIrradianceLite(vec3 n) {
+    const float c1 = 0.429043, c2 = 0.511664, c3 = 0.743125, c4 = 0.886227, c5 = 0.247708;
+    vec3 L00 = skySH.sh[0].rgb, L1m1 = skySH.sh[1].rgb, L10 = skySH.sh[2].rgb, L11 = skySH.sh[3].rgb;
+    vec3 L2m2 = skySH.sh[4].rgb, L2m1 = skySH.sh[5].rgb, L20 = skySH.sh[6].rgb;
+    vec3 L21 = skySH.sh[7].rgb, L22 = skySH.sh[8].rgb;
+    float x = n.x, y = n.y, z = n.z;
+    return c1 * L22 * (x * x - y * y) + c3 * L20 * z * z + c4 * L00 - c5 * L20
+         + 2.0 * c1 * (L2m2 * x * y + L21 * x * z + L2m1 * y * z)
+         + 2.0 * c2 * (L11 * x + L1m1 * y + L10 * z);
+}
+
+// GPU fraca (LITE): sol e ambiente num passe so' - o passe de ambiente nao
+// roda (DeferredLighting::render), e este soma o hemisferio ceu/chao, a luz de
+// preenchimento e o emissivo que ele daria. Sem especular, chuva nem sondas.
+vec3 shadeLite(vec4 albedo) {
+    vec4 nTex = texture(gbufferNormal, inUV);
+    vec3 Nraw = nTex.rgb * 2.0 - 1.0;
+    vec3 N = dot(Nraw, Nraw) > 1e-12 ? normalize(Nraw) : vec3(0.0, 1.0, 0.0);
+    vec3 worldPos = worldFromDepth(inUV, texture(gbufferDepth, inUV).r);
+    vec3 c = albedo.rgb;
+    vec3 albedoLinear = c * (c * (c * 0.305306011 + 0.682171111) + 0.012522878);
+    vec3 L = normalize(-lights.dirLightDir.xyz);
+    float NdotL = max(dot(N, L), 0.0);
+    float ao = albedo.a;
+
+    vec4 pbrLite = texture(gbufferPBR, inUV);
+    g_spritePixel = abs(pbrLite.r - 0.75) < 0.06;
+    float shadow = calcShadow(spriteSelfShadowShift(worldPos, pbrLite), nTex.rgb) * mix(0.45, 1.0, smoothstep(0.0, 0.12, L.y));
+    if (shadowOpacityParams.y > 0.5) {
+        shadow *= lut8(shadowOpacityLut0, shadowOpacityLut1,
+                       length(cameraPos - worldPos) / max(shadowOpacityParams.x, 1.0));
+    }
+    float sunVis = (1.0 - max(shadow, calcCloudShadow(worldPos))) * texture(gbufferEmissive, inUV).a;
+    vec3 lit = albedoLinear * lights.dirLightColor.rgb * (NdotL * lights.dirLightDir.w * sunVis);
+    lit *= mix(1.0, ao, (1.0 - NdotL) * 0.8);
+
+    float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 skyIrr = mix(lights.skyHorizon.rgb, lights.ambientSky.rgb, up * up);
+    if (lights.skyProbeParams.x > 0.5)
+        skyIrr = max(shIrradianceLite(N), vec3(0.0)) * (lights.skyProbeParams.z / 3.14159265);
+    float hemiFloor = clamp(lights.indirectParams.w, 0.0, 1.0);
+    vec3 hemi = mix(lights.ambientGround.rgb, skyIrr, hemiFloor + (1.0 - hemiFloor) * up);
+    hemi *= probeSkyVisibilityLite(worldPos, N);
+    vec3 ambient = max(hemi * lights.giIntensity, vec3(lights.giAmbientFloor));
+    float sunI = clamp(lights.dirLightDir.w, 0.0, 1.0);
+    ambient *= pow(clamp(ao, 0.0, 1.0), mix(max(lights.indirectParams.z, 1.0), 1.35, sunI)) * 1.12;
+    float fillN = max(dot(N, normalize(vec3(0.35, 0.75, 0.55))), 0.0);
+    fillN = fillN * fillN * (3.0 - 2.0 * fillN);
+    float fillK = clamp(lights.bounceParams.z, 0.0, 1.5);
+    float dirMod = (1.0 + fillK * (2.0 * fillN - 1.0)) * mix(1.0, nTex.a, clamp(fillK, 0.0, 1.0) * fillN);
+    lit += albedoLinear * ambient * max(dirMod, 0.55);
+
+    // Luzes de ponto do bloco da tela (DeferredLighting::fillLightTiles): no
+    // passe unico elas entram aqui, no lugar do passe de esferas. Mesma
+    // atenuacao do point_light.frag, sem o cone de spot.
+    uvec2 tile = min(uvec2(inUV * vec2(16.0, 8.0)), uvec2(15u, 7u));
+    uvec4 tileList = lights.tileLights[tile.y * 16u + tile.x];
+    for (uint k = 0u; k < 16u; ++k) {
+        uint i = (tileList[k >> 2u] >> ((k & 3u) * 8u)) & 0xFFu;
+        if (i == 0xFFu) break;
+        vec3 toL = lights.pointLights[i].xyz - worldPos;
+        float r2 = lights.pointLights[i].w * lights.pointLights[i].w;
+        float d2 = dot(toL, toL);
+        if (d2 >= r2) continue;
+        float s2 = d2 / r2;
+        float att = (1.0 - s2) * (1.0 - s2) / (1.0 + s2);
+        float nl = max(dot(N, toL * inversesqrt(max(d2, 1e-6))), 0.0);
+        lit += albedoLinear * lights.pointColors[i].rgb * (lights.pointColors[i].w * att * nl);
+    }
+
+    vec3 e = texture(gbufferEmissive, inUV).rgb;
+    lit += e * (e * (e * 0.305306011 + 0.682171111) + 0.012522878);
+    return clamp(lit, 0.0, 100.0);
+}
+
 void main() {
     vec4 albedo = texture(gbufferAlbedo, inUV);
     if (albedo.a < 0.001 || any(isnan(albedo.rgb)) || any(isinf(albedo.rgb))) { outLit = vec4(0.0); return; }
@@ -579,6 +707,7 @@ void main() {
     // ambient.frag). Este passe SOMA por cima, entao aqui so' pode sair zero -
     // senao a leitura mudaria com o sol e com a sombra, que era o bug.
     if ((lights.pbrDebugMode & 95u) != 0u) { outLit = vec4(0.0); return; }
+    if (LITE) { outLit = vec4(shadeLite(albedo), 1.0); return; }
     // Diagnostico (bit 32 de pbrDebugMode, ERUPTION_DEBUG_FLAT_ALBEDO=1): albedo
     // CIANO chapado em tudo - modelo, terreno, sprite - so' a iluminacao e a
     // sombra sobrevivem. Isola cintilacao de sombra de cintilacao de textura.
@@ -691,7 +820,7 @@ void main() {
     // proprio quad saia em listras horizontais ("pontilhado" no personagem
     // dentro da sombra). A sombra do mapa sobre ele vem do mapa de sombra.
     bool csSprite = abs(pbr.r - 0.75) < 0.06;
-    if (!csSprite && lights.contactParams.x > 0.5 && shadow < 0.98 && sunElev > 0.02 &&
+    if (!LITE && !csSprite && lights.contactParams.x > 0.5 && shadow < 0.98 && sunElev > 0.02 &&
         lights.contactParams.y > 3.0 * csPxWorld) {
         float csLen = max(lights.contactParams.y, 0.05);
         // MARCHA LONGA (alcance > 4 u, contact_shadow_length do preset): o
@@ -755,6 +884,10 @@ void main() {
             if (abs(texture(gbufferPBR, suv).r - 0.75) < 0.06) continue;
             // Superficie amostrada so' conta como bloqueador se SOBE claramente
             // acima do plano do receptor (ver o bloco de rejeicao acima).
+            // Marcha longa: a rejeicao e a janela de espessura viram RAMPAS (peso 0..1), nao
+            // cortes. Binario, o pixel liga e desliga quando a camera desloca o G-buffer de
+            // sub-pixel (acerto/erro na borda da tolerancia): medido no campo, o 'baixa
+            // frequencia' temporal caia 25% so' desligando a marcha; a rampa o deixa continuo.
             if (dot(sp - worldPos, csGeoN) < rejectBias) continue;
             vec3 toRay = rp - sp;
             float along = dot(toRay, L);
@@ -805,7 +938,7 @@ void main() {
         vec3 aLin = srgbToLinear(albedo.rgb);
         float greenness = clamp((aLin.g - max(aLin.r, aLin.b)) * 5.0, 0.0, 1.0);
         const bool foliage = abs(fract(pbr.r * 4.0) - 0.5) < 0.15;
-        float leafGate = foliage ? mix(0.35, 1.0, greenness) : 0.0;
+        float leafGate = (foliage && !LITE) ? mix(0.35, 1.0, greenness) : 0.0;
         if (leafGate > 0.01) {
             vec3 Lsun = normalize(-lights.dirLightDir.xyz);
             // Luz "distorcida" pela normal: quanto mais o olhar encara a luz
@@ -912,7 +1045,7 @@ void main() {
     // ground colour (computed at load - real per-map colour bleed), and lights
     // walls and undersides from below. Strongest on surfaces facing DOWN toward
     // the lit ground plane, scaled by the sun and occluded by AO/SSAO.
-    if (lights.bounceParams.x > 0.5 && lights.usePbr != 0u) {
+    if (!LITE && lights.bounceParams.x > 0.5 && lights.usePbr != 0u) {
         float sunI2 = clamp(lights.dirLightDir.w, 0.0, 2.0);
         if (sunI2 > 0.02) {
             // How much of the bounced (upward) light this surface catches.

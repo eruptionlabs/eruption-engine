@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
 layout(location = 0) in vec3 inWorldPos;
@@ -20,7 +21,7 @@ layout(location = 2) out vec4 outPBR;
 layout(location = 3) out uint outMaterialID;
 layout(location = 4) out vec4 outEmissive;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#include "common/slot_textures.glsl"
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
@@ -113,18 +114,18 @@ vec2 sorteioDoVertice(vec2 p) {
 vec4 amostraSemGrade(uint idx, vec2 uv, vec2 ddxUV, vec2 ddyUV, bool restauraVariancia) {
     vec3 w; vec2 v1, v2, v3;
     gradeTriangular(uv, w, v1, v2, v3);
-    vec4 c = w.x * textureGrad(u_textures[idx], uv + sorteioDoVertice(v1), ddxUV, ddyUV)
-           + w.y * textureGrad(u_textures[idx], uv + sorteioDoVertice(v2), ddxUV, ddyUV)
-           + w.z * textureGrad(u_textures[idx], uv + sorteioDoVertice(v3), ddxUV, ddyUV);
+    vec4 c = w.x * slotTextureGrad(idx, uv + sorteioDoVertice(v1), ddxUV, ddyUV)
+           + w.y * slotTextureGrad(idx, uv + sorteioDoVertice(v2), ddxUV, ddyUV)
+           + w.z * slotTextureGrad(idx, uv + sorteioDoVertice(v3), ddxUV, ddyUV);
     if (!restauraVariancia) return c;
-    vec4 media = textureLod(u_textures[idx], uv, 14.0);  // topo da piramide = media da imagem
+    vec4 media = slotTextureLod(idx, uv, 14.0);  // topo da piramide = media da imagem
     return (c - media) * inversesqrt(max(dot(w, w), 1e-4)) + media;
 }
 
 // Uma porta so': com o interruptor em zero volta a ser uma amostra direta, e
 // o custo de tres amostras por textura some. E' por aqui que se mede.
 vec4 amostraChao(uint idx, vec2 uv, vec2 ddxUV, vec2 ddyUV, bool restauraVariancia) {
-    if (stochasticTiling < 0.5) return texture(u_textures[idx], uv);
+    if (stochasticTiling < 0.5) return slotTexture(idx, uv);
     return amostraSemGrade(idx, uv, ddxUV, ddyUV, restauraVariancia);
 }
 
@@ -301,14 +302,14 @@ void main() {
             // Prefer the REAL displacement height packed in MRAH-W alpha
             // (255 = "no height data" -> luminance fallback).
             uint hIdx = hasPbr ? nonuniformEXT(inPbrIndex) : 0u;
-            float hProbe = hasPbr ? texture(u_textures[hIdx], uv).a : 1.0;
+            float hProbe = hasPbr ? slotTexture(hIdx, uv).a : 1.0;
             bool useDisp = hasPbr && hProbe < 0.995;
             float h0 = useDisp ? hProbe : dot(texColor.rgb, LUMA);
             const int   MS_STEPS = 5;
             const float MS_SCALE = 0.018;
             // LOD fixo: no rasante de VISTA o texel estica e a marcha com mip
             // automatico vira aliasing (ver model.frag).
-            float msLod = textureQueryLod(u_textures[hIdx], uv).y + 0.5;
+            float msLod = slotQueryLod(hIdx, uv).y + 0.5;
 
             // MARCHA 1, direcao do SOL -> luz direta (outEmissive.a).
             if ((msMask & 1u) != 0u && u_sunDir.w > 0.01) {
@@ -327,8 +328,8 @@ void main() {
                         float occ = 0.0;
                         for (int s = 1; s <= MS_STEPS; ++s) {
                             float hs = useDisp
-                                ? textureLod(u_textures[hIdx], uv + dUV * float(s), msLod).a
-                                : dot(textureLod(u_textures[texIdx], uv + dUV * float(s), msLod).rgb, LUMA);
+                                ? slotTextureLod(hIdx, uv + dUV * float(s), msLod).a
+                                : dot(slotTextureLod(texIdx, uv + dUV * float(s), msLod).rgb, LUMA);
                             float rayH = h0 + MS_SCALE * (float(s) / float(MS_STEPS));
                             occ = max(occ, (hs - rayH) * 4.0);
                         }
@@ -365,8 +366,8 @@ void main() {
                         float fOcc = 0.0;
                         for (int s = 1; s <= MS_STEPS; ++s) {
                             float hs = useDisp
-                                ? textureLod(u_textures[hIdx], uv + fUV * float(s), msLod).a
-                                : dot(textureLod(u_textures[texIdx], uv + fUV * float(s), msLod).rgb, LUMA);
+                                ? slotTextureLod(hIdx, uv + fUV * float(s), msLod).a
+                                : dot(slotTextureLod(texIdx, uv + fUV * float(s), msLod).rgb, LUMA);
                             float rayH = h0 + MS_SCALE * (float(s) / float(MS_STEPS));
                             fOcc = max(fOcc, (hs - rayH) * 4.0);
                         }

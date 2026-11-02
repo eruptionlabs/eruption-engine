@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
 layout(location = 0) in vec2 v_uv;
@@ -17,20 +18,21 @@ bool fadeCut(float a) {
     return a < (bayer[p.y * 4 + p.x] + 0.5) / 16.0;
 }
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#define ERUPTION_SLOT_NEAREST // atlas de sprite e paleta sem filtro
+#include "common/slot_textures.glsl"
 
 void main() {
     if ((v_flags & 512u) == 0) discard; // SpriteFlags::CastShadow = 1 << 9
 
     uint texIdx = nonuniformEXT(v_texIndex);
-    vec4 albedo = texture(u_textures[texIdx], v_uv);
+    vec4 albedo = slotTexture(texIdx, v_uv);
     
     // Palettization support for alpha test (bit 8: UsePalette = 256)
     if ((v_flags & 256u) != 0) {
         float idx = albedo.r * 255.0;
         if (idx < 0.5) discard;
         float u = (idx + 0.5) / 256.0;
-        albedo = texture(u_textures[nonuniformEXT(v_paletteIndex)], vec2(u, 0.5));
+        albedo = slotTexture(v_paletteIndex, vec2(u, 0.5));
         albedo.a = 1.0; // Indexed palettes often have alpha=0 for all entries
     }
     

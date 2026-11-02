@@ -250,7 +250,28 @@ float densityFactor(int a, int b) {
 float edgeFactor(int a, int b) {
     float fromCurve = max(max(tessAt(a), tessAt(b)), densityFactor(a, b));
     float fromPixels = max(edgePixels(a, b) / targetEdgePixels(a, b), 1.0);
-    return max(min(min(fromCurve, fromPixels), foliageCap(a, b)), 1.0);
+    float f = max(min(min(fromCurve, fromPixels), foliageCap(a, b)), 1.0);
+    // Relevo hibrido (model_tese/model_frag): onde o POM fica com o relevo
+    // (vista de frente) a geometria nao desloca, entao nao subdivide. So' em
+    // material com MRAH-W - o chao de splat continua todo na tesselacao. O
+    // peso sai so' dos dois vertices da aresta: o triangulo vizinho calcula o
+    // mesmo nivel e a aresta nao abre fenda.
+    if (inPbrIndex[0] != 0u) {
+        vec3 mid = 0.5 * (inWorldPos[a] + inWorldPos[b]);
+        vec3 n = inNormal[a] + inNormal[b];
+        float nl = length(n);
+        if (nl > 1e-5) {
+            float NdotV = abs(dot(n / nl, normalize(u_cameraPos - mid)));
+            float lo = u_pomParams.x, hi = u_tessParams2.x;
+            float pom = clamp((NdotV - lo) / max(hi - lo, 1e-4), 0.0, 1.0);
+            // Piso de 25%: com nivel 1 o chao do G-buffer ficava identico ao
+            // que o passe de sombra desenha (sem tesselacao) e a sombra saia
+            // em listras horizontais; com 25% elas somem e o G-buffer fica em
+            // 0,88 ms contra 2,73 ms (so' tesselacao, vista de cima, PC).
+            f = 1.0 + (f - 1.0) * max(1.0 - pom, 0.25);
+        }
+    }
+    return f;
 }
 
 void main() {

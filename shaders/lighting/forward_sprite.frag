@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
 layout(location = 0) in vec2 inUV;
@@ -10,7 +11,8 @@ layout(location = 5) in flat uint inFlags;
 
 layout(location = 0) out vec4 outColor;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#define ERUPTION_SLOT_NEAREST // atlas de sprite e paleta sem filtro
+#include "common/slot_textures.glsl"
 
 layout(set = 1, binding = 0) uniform FrameUBO {
     mat4 view;
@@ -43,7 +45,7 @@ layout(set = 1, binding = 0) uniform FrameUBO {
 } frame;
 
 void main() {
-    vec4 texColor = texture(nonuniformEXT(u_textures[inTexIndex]), inUV);
+    vec4 texColor = slotTexture(inTexIndex, inUV);
     if (texColor.a < 0.01) discard;
 
     vec3 albedo = texColor.rgb * inTint.rgb;

@@ -33,6 +33,29 @@ layout(set = 0, binding = 1) uniform sampler2D gNormal;  // rgb = N*0.5+0.5
 // errado deixa o conteudo INDEFINIDO - o que explica por que o depth lido aqui
 // vinha no valor de limpeza. Sem amostrar, o problema deixa de existir.
 layout(set = 0, binding = 3) uniform usampler2D gHeight;
+// Emissivo do G-buffer (lampadas, cristais, qualquer modelo com material
+// emissivo - model_frag.glsl). O composite relitava so' com albedo+normal e
+// ignorava este canal por completo; sem ele um prop emissivo ficava tao
+// escuro no minimapa quanto rocha comum.
+layout(set = 0, binding = 4) uniform sampler2D gEmissive;
+
+// Liquidos do mapa (lava, sobretudo), para pintar o lago de lava com brilho
+// proprio em vez de mostrar so' a rocha por baixo. O lago de lava e' um passe
+// FORWARD do WaterRenderer (shaders/water/liquid.frag) e nunca escreve no
+// G-buffer, entao sem isto o composite nao tem absolutamente nenhum sinal de
+// onde ele esta' - e' a causa raiz de "lava fica marrom escuro, dificil de
+// distinguir de rocha normal". Preenchido por Engine::writeMinimapLiquids().
+// Aproximacao: cada liquido e' um circulo (center/radius medio), nao o
+// contorno lobado exato.
+struct MinimapLiquid {
+    vec4 posRadiusLevel; // x=centerX, y=centerZ, z=radius, w=level (world Y)
+    vec4 kindEmissive;   // x=kind (0=agua, 1=lava), y=forca emissiva, zw nao usados
+};
+layout(set = 0, binding = 5, std430) readonly buffer MinimapLiquids {
+    uint liquidCount;
+    uint _pad0, _pad1, _pad2;
+    MinimapLiquid liquids[];
+};
 
 layout(push_constant) uniform Push {
     mat4 invViewProj;   // minimap ortho VP, inverted
@@ -178,16 +201,29 @@ void main() {
     // Key light: relief and cast shadow, on a fixed budget. The sun's colour
     // still tints it (a sunset minimap reads warm) but its INTENSITY does not
     // set the exposure, so the map never fades out.
+    // 0.55 -> 0.72: a maior contribuicao do key term alarga a faixa entre
+    // encosta voltada pro sol e encosta na sombra - mais relevo, mais
+    // contraste, sem mexer no piso de legibilidade noturna (que vem do fill).
     float NdotL = max(dot(N, L), 0.0);
     vec3 sunTint = mix(vec3(1.0), push.sunColor.rgb, 0.6);
-    vec3 key = sunTint * (0.55 * NdotL * (1.0 - shadow));
+    vec3 key = sunTint * (0.72 * NdotL * (1.0 - shadow));
 
     // Fill: hemispheric, floored. This is what guarantees a readable map at
     // midnight; the floor is what the old blit effectively had for free.
+    // Faixa alargada (0.32..0.78, era 0.42..0.66): separa melhor chao voltado
+    // pra baixo de chao voltado pra cima sem baixar o piso noturno (o ponto
+    // medio da faixa e' quase o mesmo de antes).
     float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 fill = mix(vec3(0.42, 0.44, 0.50), vec3(0.66, 0.70, 0.78), up) * 0.75;
+    vec3 fill = mix(vec3(0.32, 0.34, 0.40), vec3(0.72, 0.76, 0.84), up) * 0.75;
 
     vec3 color = albedo.rgb * (key + fill * mix(1.0, ao, 0.7));
+
+    // --- Emissivo do G-buffer ----------------------------------------------
+    // Aditivo, igual ao passe de ambiente (ambient.frag): lampadas, cristais
+    // e qualquer modelo com material emissivo passam a brilhar no minimapa em
+    // vez de aparecer tao escuros quanto a rocha ao lado. O canal ja' vem
+    // pre-multiplicado pela intensidade no G-buffer (model_frag.glsl).
+    color += texture(gEmissive, gbufUV(inUV)).rgb;
 
     // --- Water ------------------------------------------------------------
     // Terrain below the map's water level is underwater. Reconstructing it from
@@ -204,6 +240,62 @@ void main() {
         // flat dead hole.
         color += kDeepWater * 0.12 * (1.0 - fade);
     }
+
+    // --- Lava ---------------------------------------------------------------
+    // Lagos de lava sao um passe FORWARD do WaterRenderer (liquid.frag) e
+    // nunca escrevem no G-buffer, entao sem este bloco o composite nao tinha
+    // NENHUM sinal de onde eles estao - a minimapa mostrava so' a rocha do
+    // cratera por baixo, escura e parecida com qualquer outra rocha. Um
+    // liquido so' pinta se o pixel estiver dentro do circulo E a altura do
+    // terreno estiver na ou abaixo da superficie (mesma logica da agua, por
+    // liquido em vez de um nivel global). Varios vulcoes com crateras perto
+    // se sobrepondo: fica so' com o de maior forca emissiva, pra nao
+    // acumular blend e saturar.
+    vec2 worldXZ = worldFromNdc(inUV).xz;
+    float bestLavaT = 0.0;
+    float bestLavaStrength = 0.0;
+    for (uint i = 0u; i < liquidCount; ++i) {
+        MinimapLiquid lq = liquids[i];
+        if (lq.kindEmissive.x < 0.5) continue; // so' lava aqui; agua ja' foi tratada acima
+        vec2 d = worldXZ - lq.posRadiusLevel.xy;
+        float r = lq.posRadiusLevel.z;
+        float distSq = dot(d, d);
+        if (distSq >= r * r) continue;
+        if (worldY > lq.posRadiusLevel.w + 1.0) continue; // acima da superficie: rocha em volta, nao lava
+        float strength = clamp(lq.kindEmissive.y / 3.5, 0.35, 1.0);
+        if (strength > bestLavaStrength) {
+            bestLavaStrength = strength;
+            bestLavaT = clamp(1.0 - distSq / (r * r), 0.0, 1.0); // 0 na margem, 1 no centro
+        }
+    }
+    if (bestLavaStrength > 0.0) {
+        // Crosta escura na margem, nucleo quase branco de calor no centro -
+        // o mesmo gradiente que liquid.frag usa pra crosta/fenda, simplificado
+        // pra uma unica leitura no minimapa.
+        vec3 crust = vec3(0.12, 0.03, 0.02);
+        vec3 core = vec3(1.0, 0.55, 0.12);
+        vec3 lavaColor = mix(crust, core, 0.35 + 0.65 * bestLavaT);
+        color = mix(color, lavaColor, 0.9);
+        // Auto-iluminada: a lava brilha por conta propria, de dia ou de
+        // noite, ao contrario do resto do relevo (que so' tem o piso do
+        // fill). Sem isto ela ficaria tao apagada a noite quanto a rocha ao
+        // redor.
+        color += vec3(1.0, 0.42, 0.08) * bestLavaStrength * (0.35 + 0.65 * bestLavaT);
+    }
+
+    // --- Contraste geral ----------------------------------------------------
+    // O minimapa inteiro (nao so' a lava) ficava murcho mesmo de dia: o piso
+    // de legibilidade noturna do fill comprime a faixa de cores pra perto do
+    // meio-cinza. Um contraste leve em torno do cinza medio mais um puxao de
+    // saturacao devolvem separacao visual sem estourar areas que ja' estavam
+    // claras (a curva e' linear em torno do pivo 0.5, entao claro fica mais
+    // claro e escuro mais escuro na mesma proporcao - nunca so' um ganho que
+    // empurraria tudo pra 1.0).
+    const float kContrast = 1.22;
+    color = (color - 0.5) * kContrast + 0.5;
+    float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    color = mix(vec3(lum), color, 1.15);
+    color = clamp(color, 0.0, 1.0);
 
     outColor = vec4(color, 1.0);
 }
