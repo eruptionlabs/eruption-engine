@@ -1,0 +1,4 @@
+netcode v1.4.8 (BSD-3-Clause), https://github.com/mas-bandwidth/netcode
+commit 47a156b17df9110c1a2d5d8cbf5b7768d1838a47 (2026-09-13)
+sodium/: subconjunto amalgamado do libsodium (ISC) que vem no proprio netcode.
+Arquivos copiados sem alteracao.
