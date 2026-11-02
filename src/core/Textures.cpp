@@ -14,6 +14,7 @@
 #include "core/JobSystem.hpp"
 #include "utils/Profiler.hpp"
 #include "utils/EtexLoader.hpp"
+#include "renderer/LodSystemBridge.hpp"
 #include "utils/ImageUtils.hpp"
 #include <backends/imgui_impl_vulkan.h>
 #include "utils/TextureCache.hpp"
@@ -26,11 +27,29 @@
 #include <vk_mem_alloc.h>
 #include <algorithm>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
 #include <filesystem>
 #include <string>
 #include <vector>
 
 namespace eruption {
+
+// Todo pixel RGBA8 com alfa 255.
+static bool rgbaFullyOpaque(const uint8_t* rgba, size_t pixels) {
+    for (size_t i = 0; i < pixels; ++i)
+        if (rgba[i * 4 + 3] != 255) return false;
+    return true;
+}
+
+// Lado máximo da imagem de origem. Sem descriptor indexing a textura é
+// copiada para uma camada de lado fixo (TextureLayers) e a origem continua viva
+// depois da cópia: no celular PowerVR de 4 GB, 18 origens de 1024² e 88 de 512²
+// somavam ~210 MB de memória de GPU sem aparecer na imagem.
+static int sourceTextureCap(const BindlessDescriptor& bindless, int cap) {
+    const uint32_t layer = bindless.layerSize();
+    return layer > 0 ? std::min(cap, int(layer)) : cap;
+}
 
 bool Engine::createTextureFromPixels(const unsigned char* pixels, int w, int h, Engine::TextureResource& out) {
     out.width = w;
@@ -114,6 +133,62 @@ bool Engine::createTextureFromFile(const char* path, Engine::TextureResource& ou
     vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &out.view);
     
     return true;
+}
+
+bool Engine::embeddedTextureIdentity(const std::string& name, bool surface, uint64_t& id) const {
+    if (surface) {
+        // A mesma busca da fonte de MRAH-W (lodBridgeSetSurfaceSource em Engine.cpp).
+        std::string n = name;
+        if (n.empty() || m_embeddedBaked.empty()) return false;
+        auto it = m_embeddedBaked.find(n);
+        if (it == m_embeddedBaked.end()) {
+            std::replace(n.begin(), n.end(), '\\', '/');
+            it = m_embeddedBaked.find(n);
+            if (it == m_embeddedBaked.end() && !n.empty() && n[0] == '/') it = m_embeddedBaked.find(n.substr(1));
+            if (it == m_embeddedBaked.end()) return false;
+        }
+        const EtexData& e = it->second.mrahw;
+        if (!e.valid()) return false;
+        id = lodBridgeFastHash(e.payload.data(), e.payload.size(), (uint64_t(e.width) << 32) | e.height);
+        return true;
+    }
+    // A mesma busca de findEmbeddedAlbedoPixels.
+    if (!m_currentMap) return false;
+    std::string sanitized = name;
+    std::replace(sanitized.begin(), sanitized.end(), '/', '\\');
+    if (!sanitized.empty() && sanitized[0] == '\\') sanitized = sanitized.substr(1);
+    for (const auto& model : m_currentMap->models) {
+        for (const auto& et : model.embeddedTextures) {
+            if (et.name != sanitized) continue;
+            if (!et.pixels.empty()) {
+                id = lodBridgeFastHash(et.pixels.data(), et.pixels.size(),
+                                       (uint64_t(et.width) << 32) ^ (uint64_t(et.height) << 8) ^ uint64_t(et.channels));
+                return true;
+            }
+            if (et.encodedData.empty()) return false;
+            // Uma vez por textura: as malhas de um modelo repetem as mesmas, e
+            // cada uma pedia o hash de novo (alguns MB por pedido). Chave pelo
+            // ponteiro e tamanho dos bytes, que nao mudam com o mapa aberto; o
+            // cache recomeca quando o mapa muda. Chamado das threads do LOD.
+            static std::mutex mtx;
+            static const void* mapaDoCache = nullptr;
+            static std::unordered_map<const void*, std::pair<size_t, uint64_t>> cache;
+            std::lock_guard<std::mutex> lock(mtx);
+            if (mapaDoCache != m_currentMap.get()) {
+                cache.clear();
+                mapaDoCache = m_currentMap.get();
+            }
+            auto it = cache.find(et.encodedData.data());
+            if (it != cache.end() && it->second.first == et.encodedData.size()) {
+                id = it->second.second;
+                return true;
+            }
+            id = lodBridgeFastHash(et.encodedData.data(), et.encodedData.size(), 1);
+            cache[et.encodedData.data()] = {et.encodedData.size(), id};
+            return true;
+        }
+    }
+    return false;
 }
 
 bool Engine::findEmbeddedAlbedoPixels(const std::string& name, std::vector<uint8_t>& outPixels,
@@ -321,7 +396,8 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
                         ERUPTION_LOG_WARN("Engine::resolveModelTexture: failed to decode embedded texture '%s'", sanitized.c_str());
                         continue;
                     }
-                    ImageUtils::downscaleRGBA(img.width, img.height, img.pixels, EMBEDDED_TEXTURE_MAX_SIZE);
+                    ImageUtils::downscaleRGBA(img.width, img.height, img.pixels,
+                                              sourceTextureCap(m_bindless, EMBEDDED_TEXTURE_MAX_SIZE));
                     tempDecodedPixels = std::move(img.pixels);
                     pixelsData = tempDecodedPixels.data();
                     pixelSize = tempDecodedPixels.size();
@@ -379,6 +455,12 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
                 uint32_t slot = m_bindless.allocateSlotSafe();
                 if (slot != 0) {
                     m_bindless.updateTextureSafe(slot, view, m_defaultSampler);
+                    // Sem BC (celular, JPEG) o formato não diz se há alfa: olha
+                    // os pixels. Opaca = o caster pula o teste de alfa na
+                    // sombra; com descarte a PowerVR perde a remoção de
+                    // superfície oculta e a sombra custava 700 ms.
+                    m_bindless.setSlotOpaque(slot, rgbaFullyOpaque(static_cast<const uint8_t*>(pixelsData),
+                                                                   static_cast<size_t>(decodedWidth) * decodedHeight));
                 }
 
                 ModelTextureGPU tex{};
@@ -488,6 +570,7 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
         m_assetCache.addModelTexture(sanitized, ModelTextureGPU{});
         return 0;
     }
+    ImageUtils::downscaleRGBA(img.width, img.height, img.pixels, sourceTextureCap(m_bindless, 1 << 16));
 
     uint32_t mipLevels = m_mipmapMenu.config.enabled ? MipmapGenerator::calculateMipLevels(img.width, img.height) : 1;
 
@@ -591,6 +674,7 @@ uint32_t Engine::resolveTerrainTexture(const std::string& path) {
         m_assetCache.addTerrainTexture(sanitized, TerrainTextureGPU{});
         return 0;
     }
+    ImageUtils::downscaleRGBA(img.width, img.height, img.pixels, sourceTextureCap(m_bindless, 1 << 16));
 
     uint32_t mipLevels = m_mipmapMenu.config.enabled ? MipmapGenerator::calculateMipLevels(img.width, img.height) : 1;
 
@@ -760,10 +844,16 @@ void* Engine::uiImageTexture(const std::string& png) {
     UiImage novo;
     // Falha tambem entra no cache, com set nulo: sem isso um caminho errado
     // tentaria abrir o arquivo de novo a cada quadro.
+#if defined(__EMSCRIPTEN__)
+    // Navegador: textura GL direto para o backend OpenGL3 do ImGui.
+    novo.set = static_cast<VkDescriptorSet>(webUiTexture(project::gameRef(png).string()));
+    if (!novo.set) {
+#else
     if (createTextureFromFile(project::gameRef(png).string().c_str(), novo.tex)) {
         novo.set = ImGui_ImplVulkan_AddTexture(m_defaultSampler, novo.tex.view,
                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     } else {
+#endif
         ERUPTION_LOG_WARN("UI: imagem %s nao abriu (%s)", png.c_str(),
                           project::gameRef(png).string().c_str());
     }

@@ -21,7 +21,9 @@
 #include <functional>
 #include <mutex>
 #include "utils/ImageUtils.hpp"
+#include "formats/GroundPack.hpp"
 #include "formats/MapLoader.hpp"
+#include "core/LoadPump.hpp"
 #include <future>
 #include "formats/ModelDataConverter.hpp"
 #include "scene/SceneEdits.hpp"
@@ -35,6 +37,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -211,6 +214,146 @@ void Engine::setPlayerController(PlayerController* pc) {
     }
 }
 
+// Assinatura da geometria para os caches que dependem dela (grade de
+// sondas): numero de nos, vertices e indices, a matriz de cada no e uma
+// amostra das posicoes. Igual no PC e no celular (o pacote do celular so'
+// troca texturas); muda quando uma ferramenta regrava o relevo do GLB.
+static void fnvMix(uint64_t& h, const void* data, size_t bytes) {
+    const auto* p = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < bytes; ++i) h = (h ^ p[i]) * 1099511628211ull;
+}
+
+// Arredonda para 1/16 de unidade antes de misturar: o mesmo GLB convertido
+// num x86 e num ARM (que funde multiplica-soma) difere no ultimo bit, e o
+// relevo que importa muda muito mais que isso.
+static void fnvMixQuantized(uint64_t& h, const float* values, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        const int32_t q = static_cast<int32_t>(std::lround(values[i] * 16.0f));
+        fnvMix(h, &q, sizeof(q));
+    }
+}
+
+// Chave de conteudo do mapa para caches cozidos num aparelho e lidos em outro
+// (a grade de sondas do PC no celular): FNV dos bytes de todo buffer do GLB que
+// nao e' imagem (malha, indices, animacao) e do relevo salvo pelo editor. O
+// pacote do celular so' recodifica imagens, entao a chave bate; uma ferramenta
+// que regrave o relevo muda os bytes. A geometria ja' convertida nao serve: a
+// fusao de nos repetidos escolhe outro no' canonico em outra biblioteca C++.
+static bool hashGlbGeometry(const std::string& glbPath, uint64_t& h) {
+    // Le' so' o JSON e passa pelos trechos de geometria em blocos de 1 MB: o
+    // GLB inteiro na memoria (68-200 MB) com o mapa anterior ainda carregado
+    // travava a GPU do celular de 4 GB na troca de mapa, e custava 2,8 s.
+    std::ifstream f(glbPath, std::ios::binary);
+    uint32_t head[5] = {};
+    if (!f.read(reinterpret_cast<char*>(head), sizeof(head))) return false;
+    const uint32_t jsonLen = head[3];
+    std::string jsonText(jsonLen, '\0');
+    uint32_t binHead[2] = {};
+    if (!f.read(jsonText.data(), jsonLen) || !f.read(reinterpret_cast<char*>(binHead), sizeof(binHead))) return false;
+    const std::streamoff binStart = 28 + std::streamoff(jsonLen);
+    const size_t binSize = binHead[0];
+    const json doc = json::parse(jsonText, nullptr, false);
+    if (doc.is_discarded()) return false;
+    // Fora da chave: imagens e a normal. A normal muda entre maquinas
+    // (contracao FMA no ARM) e no chao desempacotado de um .relevo, que a
+    // recalcula; posicao, UV e indices saem byte-iguais (mesma regra da chave
+    // do LOD). Assim a grade cozida no PC vale no celular e no .relevo.
+    std::vector<bool> skipView(doc.value("bufferViews", json::array()).size(), false);
+    for (const json& img : doc.value("images", json::array()))
+        if (img.contains("bufferView") && img["bufferView"].get<size_t>() < skipView.size())
+            skipView[img["bufferView"].get<size_t>()] = true;
+    const json accessors = doc.value("accessors", json::array());
+    for (const json& mesh : doc.value("meshes", json::array()))
+        for (const json& prim : mesh.value("primitives", json::array())) {
+            const json attrs = prim.value("attributes", json::object());
+            for (const char* name : {"NORMAL", "TANGENT"}) {
+                if (!attrs.contains(name)) continue;
+                const size_t a = attrs[name].get<size_t>();
+                if (a >= accessors.size() || !accessors[a].contains("bufferView")) continue;
+                const size_t v = accessors[a]["bufferView"].get<size_t>();
+                if (v < skipView.size()) skipView[v] = true;
+            }
+        }
+    std::vector<char> chunk(1 << 20);
+    size_t index = 0;
+    for (const json& view : doc.value("bufferViews", json::array())) {
+        const size_t off = view.value("byteOffset", size_t(0)), len = view.value("byteLength", size_t(0));
+        if (skipView[index++] || off + len > binSize) continue;
+        f.seekg(binStart + std::streamoff(off));
+        for (size_t done = 0; done < len;) {
+            const size_t n = std::min(chunk.size(), len - done);
+            if (!f.read(chunk.data(), std::streamsize(n))) return false;
+            fnvMix(h, chunk.data(), n);
+            done += n;
+        }
+    }
+    return true;
+}
+
+static uint64_t mapContentKeyRead(const std::string& glbPath, const std::string& mapName) {
+    uint64_t h = 1469598103934665603ull;
+    // Chao vindo de um .relevo: le' o .glb desempacotado no cache (a mesma
+    // chave do .glb original, que a normal fica de fora).
+    std::filesystem::path source = glbPath;
+    if (const std::string relevo = groundSourceFor(glbPath); !relevo.empty()) {
+        std::filesystem::path ter;
+        std::string error;
+        if (!unpackGroundCached(relevo, source, ter, error)) return 0;
+    }
+    if (!hashGlbGeometry(source.string(), h)) return 0;
+    std::filesystem::path heights = SceneEdits::pathFor(mapName);
+    heights.replace_extension();
+    heights.replace_extension(".height.bin");
+    std::ifstream hf(heights, std::ios::binary);
+    std::vector<char> hraw((std::istreambuf_iterator<char>(hf)), std::istreambuf_iterator<char>());
+    if (!hraw.empty()) fnvMix(h, hraw.data(), hraw.size());
+    return h;
+}
+
+// A chave le' a geometria inteira do GLB (centenas de MB no mapa grande; 962
+// ms com o disco frio num mapa de cidade, na thread principal da troca). Lembrada
+// por caminho + tamanho + data do GLB e do .height.bin: a thread de leitura
+// do mapa (preload/warp) calcula antes e a troca so' consulta.
+static uint64_t mapContentKey(const std::string& glbPath, const std::string& mapName) {
+    std::filesystem::path heights = SceneEdits::pathFor(mapName);
+    heights.replace_extension();
+    heights.replace_extension(".height.bin");
+    std::error_code ec;
+    auto stamp = [&ec](const std::filesystem::path& p) -> uint64_t {
+        const auto size = std::filesystem::file_size(p, ec);
+        if (ec) return 0;
+        const auto when = std::filesystem::last_write_time(p, ec).time_since_epoch().count();
+        return ec ? 0 : uint64_t(size) * 1099511628211ull ^ uint64_t(when);
+    };
+    const std::string relevo = groundSourceFor(glbPath);
+    const uint64_t s = stamp(relevo.empty() ? glbPath : relevo) * 31u + stamp(heights);
+    static std::mutex mutex;
+    static std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> memo; // nome -> (selo, chave)
+    const std::string id = glbPath + "|" + mapName;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (auto it = memo.find(id); it != memo.end() && it->second.first == s) return it->second.second;
+    }
+    const uint64_t key = mapContentKeyRead(glbPath, mapName);
+    std::lock_guard<std::mutex> lock(mutex);
+    memo[id] = {s, key};
+    return key;
+}
+
+static uint64_t mapGeometryKey(const std::vector<ModelAsset>& models) {
+    uint64_t h = 1469598103934665603ull;
+    for (const ModelAsset& model : models) {
+        for (const ModelNode& node : model.nodes) {
+            const uint64_t sizes[2] = {node.vertices.size(), node.indices.size()};
+            fnvMix(h, sizes, sizeof(sizes));
+            fnvMixQuantized(h, &node.renderMatrix[3][0], 3); // translacao do no
+            for (size_t v = 0; v < node.vertices.size(); v += 61)
+                fnvMixQuantized(h, &node.vertices[v].position.x, 3);
+        }
+    }
+    return h;
+}
+
 // ERUPTION_TEST_LOAD_PHASES=1 (bancada): duracao de cada fase do loadMap no
 // log ("[LOADPHASE] fase ms"), para achar o que trava a troca de mapa.
 static void loadPhase(const char* fase) {
@@ -224,12 +367,18 @@ static void loadPhase(const char* fase) {
 
 bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preloaded) {
     loadPhase("inicio");
+    if (!preloaded) { // so' valem junto do mapa lido que veio com eles
+        m_convertedModels.clear();
+        m_convertedPrepared.clear();
+        m_convertedBakes.clear();
+    }
     m_fsrReset = true; // historico temporal do FSR nao vale entre mapas
     m_isInitialBoot = false; // No longer the initial boot
     TelemetryExporter::recordLoadStart(name);
     loadMapClimate(name);
     m_vulkan.waitIdle();
     loadPhase("clima+waitIdle");
+    const vkc::PipelineHookScope shaderProgress(&Engine::onPipelineCompiled, this);
     clearCharacters(); // os do mapa novo vêm do scene.luau dele
     m_scriptFog = MapFog{}; // world.set_fog e' do mapa que o pediu
     m_scriptBorder = WorldBorder{}; // world.set_border tambem
@@ -254,7 +403,6 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     // textura errada, sem crash. Mesma semantica do warp: o que o mapa novo
     // reusar renova a idade; o que ficar 3 cargas sem uso sai.
     m_assetCache.incrementWarp();
-    m_assetCache.cleanupOldTextures(&m_vulkan, &m_bindless, 3);
     // Modelos pedidos para outro mapa e nao usados em duas trocas saem.
     ++m_modelPreloadGen;
     for (auto it = m_modelPreloads.begin(); it != m_modelPreloads.end();)
@@ -282,6 +430,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
         for (auto it = s_preloadPbr.begin(); it != s_preloadPbr.end();)
             it = keep.count(it->first) ? std::next(it) : s_preloadPbr.erase(it);
     }
+    m_assetCache.cleanupOldTextures(&m_vulkan, &m_bindless, m_assetCacheMaps);
 
     // Independent clouds belong to the previous map: drop them so stale world
     // bounds / layers don't leak into the newly loaded map. The weather field
@@ -294,7 +443,17 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
 
     // MapLoader accepts either a plain map name (resolved to assets/external/<name>/<name>.glb)
     // or an explicit file path ending in .glb/.map.
-    auto loadedMap = preloaded ? std::move(preloaded) : m_mapLoader->loadMap(name);
+    // Leitura numa thread (como no updateWarp) enquanto a tela de carregamento
+    // segue viva; sem tela para manter, o resultado e' o mesmo.
+    std::shared_ptr<LoadedMap> loadedMap = std::move(preloaded);
+    if (!loadedMap) {
+        auto job = platform::runAsync([name] {
+            MapLoader loader;
+            return loader.loadMap(name);
+        });
+        while (job.wait_for(std::chrono::milliseconds(16)) != std::future_status::ready) loadPump();
+        loadedMap = job.get();
+    }
     if (!loadedMap) {
         ERUPTION_LOG_ERROR("Failed to load map: %s", name.c_str());
         return false;
@@ -362,9 +521,16 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     genericModels.reserve(loadedMap->models.size());
     // A malha lida do GLB sai daqui convertida e é liberada no caminho:
     // depois da conversão o mapa só guarda as texturas embutidas e o caminho.
-    for (auto& model : loadedMap->models) {
-        genericModels.push_back(convertModelToAssetReleasing(model));
+    // O warp (e o preloadMap) ja' convertem na thread de leitura.
+    if (m_convertedModels.size() == loadedMap->models.size() && !m_convertedModels.empty()) {
+        genericModels = std::move(m_convertedModels);
+    } else {
+        m_convertedPrepared.clear();
+        for (auto& model : loadedMap->models) {
+            genericModels.push_back(convertModelToAssetReleasing(model));
+        }
     }
+    m_convertedModels.clear();
 
     std::vector<ModelInstanceDesc> genericInstances;
     for (const auto& m : loadedMap->models) {
@@ -400,6 +566,14 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     prepareHeightEdits(*loadedMap, genericModels);
     loadPhase("conversao modelos");
     applySavedWalk(*loadedMap);
+    m_mapGeometryKey = mapGeometryKey(genericModels);
+    // Nós montados na thread de leitura: valem se a geometria e' a mesma que
+    // eles viram (retoque de relevo ou escala mudam a assinatura).
+    if (!m_convertedPrepared.empty()) {
+        if (m_convertedKey == m_mapGeometryKey) m_modelRenderer.provideMapPrepared(std::move(m_convertedPrepared));
+        else ERUPTION_LOG_WARN("Engine::loadMap: geometry changed after the background read; preparing nodes here");
+        m_convertedPrepared.clear();
+    }
     ERUPTION_LOG_WARN("Engine::loadMap: loading %zu models, %zu instances", genericModels.size(), genericInstances.size());
     // GLB maps are authored in world space; do not add a center offset.
     float modelCenterX = loadedMap->isGlbMap ? 0.0f : m_centerX;
@@ -426,8 +600,16 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     if (m_currentMap) {
         for (auto& model : m_currentMap->models) {
             if (model.embeddedTextures.empty()) continue;
-            EmbeddedBakeResult bake = bakeEmbeddedTextures(
-                model, static_cast<uint32_t>(m_textureMaxSize), pbrSynthesisEnabled());
+            // Lido do cache na thread do warp/preload, quando veio de la'.
+            EmbeddedBakeResult bake;
+            if (auto pre = m_convertedBakes.find(model.filePath); pre != m_convertedBakes.end()) {
+                bake = std::move(pre->second);
+                m_convertedBakes.erase(pre);
+                ERUPTION_LOG_WARN("EmbeddedTextureBake: '%s' lido antes da troca (%zu texturas)",
+                                  model.filePath.c_str(), bake.textures.size());
+            } else {
+                bake = bakeEmbeddedTextures(model, static_cast<uint32_t>(m_textureMaxSize), pbrSynthesisEnabled());
+            }
             // OVERRIDE do .env tem prioridade sobre a media automatica. A
             // media e' tirada de TODAS as texturas embutidas do GLB (no
             // parana_field sao 188: arvore, folha, rocha, lava), entao ela
@@ -566,6 +748,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     
     presentLoadingScreen(name, "Finalizing", 0.95f);
     loadPhase("uploads+splat");
+    m_vulkan.savePipelineCache();
     if (loadedMap) {
         // OFFSET DO CENTRO SO' EM MAPA LEGADO. As luzes de um mapa legado vem em
         // coordenada RELATIVA ao centro do mapa; as de um GLB (o .env ao lado)
@@ -735,20 +918,34 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
             mx = glm::max(mx, imx);
         }
         const bool haveBounds = mx.x > mn.x && mx.z > mn.z;
+        // Grade em disco ao lado do GLB do mapa: quem coze grava, quem nao
+        // coze (celular) so' le'.
+        const std::string probeCache = m_currentMap && !m_currentMap->models.empty()
+            ? project::gameRef(m_currentMap->models.front().filePath).string() + ".probes" : std::string();
+        const uint64_t contentKey = (m_irradianceProbesEnabled && !probeCache.empty())
+            ? mapContentKey(probeCache.substr(0, probeCache.size() - 7), m_currentMapName) : 0;
         loadPhase("probes: chave");
+        bool ready = false;
         m_probeBakedInstances = SIZE_MAX;
         if (haveBounds && m_irradianceProbesEnabled) {
             mx.y += 40.0f;
             mn.y -= 20.0f;
-            if (m_irradianceProbes.bake(m_terrainRenderer, m_modelRenderer,
-                                        m_shadowRenderer.shadowPipeline(), m_shadowRenderer.shadowLayout(),
-                                        m_shadowRenderer.shadowInstPipeline(), m_shadowRenderer.shadowInstLayout(),
-                                        &m_bindless, mn, mx)) {
-                m_probeBakedInstances = m_modelRenderer.instanceCount();
+            if (m_irradianceProbeBake) {
+                ready = m_irradianceProbes.bake(m_terrainRenderer, m_modelRenderer,
+                                                m_shadowRenderer.shadowPipeline(), m_shadowRenderer.shadowLayout(),
+                                                m_shadowRenderer.shadowInstPipeline(), m_shadowRenderer.shadowInstLayout(),
+                                                &m_bindless, mn, mx);
+                if (ready && !probeCache.empty()) m_irradianceProbes.saveCache(probeCache, mn, mx, contentKey);
+                if (ready) m_probeBakedInstances = m_modelRenderer.instanceCount();
+            } else if (!probeCache.empty()) {
+                ready = m_irradianceProbes.loadCache(probeCache, mn, mx, contentKey);
+            }
+            if (ready) {
                 m_deferredLighting.setIrradianceProbes(m_irradianceProbes.view(), m_irradianceProbes.sampler(),
                                                        m_irradianceProbes.gridMin(), m_irradianceProbes.gridInvExtent(), true);
             }
-        } else {
+        }
+        if (!ready) {
             m_irradianceProbes.clear();
             m_deferredLighting.setIrradianceProbes(m_irradianceProbes.view(), m_irradianceProbes.sampler(),
                                                    Vec3(0.0f), Vec3(0.0f), false);
@@ -820,6 +1017,12 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
                               name.c_str(), slot, m_modelRenderer.reliefAmplitudeForSlot(slot));
         }
     }
+    // Terreno grande: poe o BVH das malhas grandes do mapa pra construir em
+    // segundo plano agora (fora de qualquer quadro de jogo), bem antes da 1a
+    // consulta de piso do script - sem isso, a 1a chamada de floor_height/
+    // floor_walkable numa malha grande (ex. uma montanha grande de terreno)
+    // pagava a construcao inteira de uma vez e travava o quadro por >250 ms.
+    m_modelRenderer.warmRaycastBvh();
     return true;
 }
 
@@ -1164,32 +1367,208 @@ int Engine::addModelFromFile(const std::string& glbPath, const Vec3& position, c
     return static_cast<int>(first);
 }
 
+struct Engine::PreparedMap {
+    std::string name;
+    std::shared_ptr<LoadedMap> map;
+    std::vector<ModelAsset> models; // convertidos de map->models (que fica sem a malha)
+    // Nós montados com slots provisórios, por arquivo, e a assinatura da
+    // geometria que eles viram.
+    std::unordered_map<std::string, ModelRenderer::PreparedAsset> prepared;
+    uint64_t geometryKey = 0;
+    // Texturas embutidas ja' lidas do cache, por arquivo (readEmbeddedBakeCache).
+    std::unordered_map<std::string, EmbeddedBakeResult> bakes;
+};
+
+// Leitura de um mapa fora da thread principal: os arquivos (MapLoader) e a
+// conversao dos modelos, que nao dependem da GPU.
+std::shared_ptr<Engine::PreparedMap> Engine::readPreparedMap(const std::string& name) {
+    MapLoader loader;
+    auto out = std::make_shared<PreparedMap>();
+    out->name = name;
+    out->map = loader.loadMap(name);
+    if (!out->map) return nullptr;
+    // Chave de conteudo dos probes (o loadMap da troca so' consulta a memoria).
+    if (!out->map->models.empty())
+        mapContentKey(project::gameRef(out->map->models.front().filePath).string(), name);
+    // Cache das texturas embutidas: o arquivo (centenas de MB no mapa grande)
+    // era lido na troca, na thread principal (137 ms num mapa de cidade).
+    for (const auto& model : out->map->models) {
+        EmbeddedBakeResult bake;
+        if (readEmbeddedBakeCache(model, embeddedTextureMaxSize(), pbrSynthesisEnabled(), bake))
+            out->bakes.emplace(model.filePath, std::move(bake));
+    }
+    out->models.reserve(out->map->models.size());
+    for (auto& model : out->map->models) out->models.push_back(convertModelToAssetReleasing(model));
+    // Vertices, solda, celulas do chao e costuras: so' CPU, sem textura
+    // resolvida (o envio troca os slots provisorios pelos reais).
+    out->geometryKey = mapGeometryKey(out->models);
+    for (const ModelAsset& model : out->models)
+        out->prepared.emplace(model.filePath, ModelRenderer::prepareAssetProxy(model));
+    return out;
+}
+
+bool Engine::preloadMap(const std::string& name) {
+    auto known = [this, &name] {
+        return std::find(m_availableMaps.begin(), m_availableMaps.end(), name) != m_availableMaps.end();
+    };
+    // Mapa que chegou depois da partida (pacote baixado com o jogo rodando, no
+    // navegador): relê a pasta só quando falta, então o caso comum não paga nada.
+    if (!known()) populateMaps();
+    if (!known()) {
+        ERUPTION_LOG_WARN("Preload: map %s not found", name.c_str());
+        return false;
+    }
+    if (name == m_currentMapName) return true;
+    m_preloadWanted = name;
+    updatePreload();
+    // O que a cena e o scatter do destino acrescentam, lido numa thread; o
+    // updatePreload dispara os preloads quando a lista chega.
+    if (!m_preloadListJob.valid())
+        m_preloadListJob = platform::runAsync([this, name] { return readPreloadLists(name); });
+    return true;
+}
+
+// Arquivos que a cena e o scatter de `name` acrescentam ao mapa. So' le':
+// roda fora do fio principal.
+Engine::PreloadLists Engine::readPreloadLists(const std::string& name) const {
+    PreloadLists out;
+    SceneEdits edits;
+    std::string error;
+    if (edits.load(SceneEdits::pathFor(name), error)) {
+        // Camadas de terreno: a decodificacao dos PNGs era metade dos ~530 ms
+        // de [SCENEPHASE] camadas na chegada (8 camadas, 24 imagens).
+        out.layers = edits.terrainLayers;
+        // Modelos acrescentados: o [SCENEPHASE] modelos da chegada era
+        // leitura+conversao de GLB novo no fio principal (~300 ms num mapa de 3400 u).
+        // Prefab fica de fora (o arquivo vem dele).
+        for (const SceneEdits::Added& a : edits.added)
+            if (!a.file.empty()) out.models.push_back(a.file);
+    }
+    // E os do scatter (pincel de objetos): o [MAPPHASE] scatter da chegada era
+    // o mesmo custo, um GLB novo por grupo no fio principal.
+    for (std::string& f : scatterFiles(name)) out.models.push_back(std::move(f));
+    return out;
+}
+
+// Uma leitura por vez: o pedido que chega durante outra espera ela acabar;
+// o resultado de um nome que ninguem mais quer e' jogado fora.
+void Engine::updatePreload() {
+    if (m_preloadListJob.valid() && m_preloadListJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        const PreloadLists lists = m_preloadListJob.get();
+        if (!lists.layers.empty()) preloadSplatLayers(lists.layers);
+        for (const std::string& f : lists.models) preloadModel(f);
+    }
+    if (m_preloadJob.valid() && m_preloadJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        std::shared_ptr<PreparedMap> done = m_preloadJob.get();
+        if (!done) {
+            ERUPTION_LOG_ERROR("Preload: could not read map %s", m_preloadWanted.c_str());
+            m_preloadWanted.clear();
+        } else if (done->name == m_preloadWanted) {
+            m_preloaded = std::move(done);
+            ERUPTION_LOG_WARN("Preload: %s ready for the warp", m_preloaded->name.c_str());
+        }
+    }
+    const bool haveWanted = m_preloaded && m_preloaded->name == m_preloadWanted;
+    if (!m_preloadJob.valid() && !m_preloadWanted.empty() && !haveWanted) {
+        m_preloaded.reset();
+        const std::string map = m_preloadWanted;
+        m_preloadJob = platform::runAsync([map] { return readPreparedMap(map); });
+        ERUPTION_LOG_WARN("Preload: reading %s in the background", map.c_str());
+    }
+}
+
+// ERUPTION_TEST_PRELOAD_NEXT=1 (teste, com ERUPTION_TEST_TOUR): ao chegar num
+// mapa, pre-carrega o seguinte de ERUPTION_TOUCH_MAPS, como um jogo faria com
+// a proxima area.
+static std::string testPreloadTarget(const std::string& current) {
+    static const bool kOn = std::getenv("ERUPTION_TEST_PRELOAD_NEXT") != nullptr;
+    const char* list = std::getenv("ERUPTION_TOUCH_MAPS");
+    if (!kOn || !list || current.empty()) return {};
+    std::vector<std::string> maps;
+    std::stringstream ss(list);
+    for (std::string item; std::getline(ss, item, ',');)
+        if (!item.empty()) maps.push_back(item);
+    const auto it = std::find(maps.begin(), maps.end(), current);
+    if (it == maps.end() || maps.size() < 2) return {};
+    return std::next(it) == maps.end() ? maps.front() : *std::next(it);
+}
+
+// Troca de mapa com fade: a tela escurece enquanto o mapa e' lido em segundo
+// plano, a troca acontece com ela preta e depois clareia (sem o salto seco de
+// um mapa para o outro). ERUPTION_WARP_FADE=0 volta a troca seca.
+void Engine::beginWarpFade() {
+    static const bool kOff = [] {
+        const char* e = std::getenv("ERUPTION_WARP_FADE");
+        return e && e[0] == '0';
+    }();
+    if (kOff || m_editorMode) return;
+    constexpr float kFadeOutSeconds = 0.35f;
+    m_uiCanvas.screenFade(Vec4(0.0f, 0.0f, 0.0f, 1.0f), m_uiCanvas.fadeAlpha(), 1.0f, kFadeOutSeconds);
+    m_warpFading = true;
+}
+
+void Engine::endWarpFade() {
+    if (!m_warpFading) return;
+    constexpr float kFadeInSeconds = 0.5f;
+    m_uiCanvas.screenFade(Vec4(0.0f, 0.0f, 0.0f, 1.0f), 1.0f, 0.0f, kFadeInSeconds);
+    m_warpFading = false;
+}
+
 void Engine::updateWarp() {
+    if (!m_warpJobActive && m_pendingMapWarp.empty()) {
+        const std::string next = testPreloadTarget(m_currentMapName);
+        if (!next.empty() && next != m_preloadWanted && !(m_preloaded && m_preloaded->name == next)) preloadMap(next);
+    }
+    updatePreload();
     // Um pedido por vez: outro pedido durante a leitura espera ela acabar e
-    // o resultado velho é jogado fora.
+    // o resultado velho é jogado fora. O que o preloadMap ja' leu (ou esta'
+    // lendo) para o mesmo mapa vira a leitura do warp.
     if (!m_warpJobActive && !m_pendingMapWarp.empty()) {
         m_warpJobMap = m_pendingMapWarp;
         m_pendingMapWarp.clear();
         m_warpJobActive = true;
         const std::string map = m_warpJobMap;
-        m_warpJob = platform::runAsync([map] {
-            MapLoader loader;
-            return loader.loadMap(map);
-        });
-        ERUPTION_LOG_WARN("Warp: reading %s in the background", map.c_str());
+        if (m_preloaded && m_preloaded->name == map) {
+            std::promise<std::shared_ptr<PreparedMap>> ready;
+            ready.set_value(std::move(m_preloaded));
+            m_warpJob = ready.get_future();
+            m_preloadWanted.clear();
+            ERUPTION_LOG_WARN("Warp: %s already read by preload", map.c_str());
+        } else if (m_preloadJob.valid() && m_preloadWanted == map) {
+            m_warpJob = std::move(m_preloadJob);
+            m_preloadWanted.clear();
+            ERUPTION_LOG_WARN("Warp: waiting for the preload of %s", map.c_str());
+        } else {
+            m_warpJob = platform::runAsync([map] { return readPreparedMap(map); });
+            ERUPTION_LOG_WARN("Warp: reading %s in the background", map.c_str());
+        }
+        beginWarpFade();
         return;
     }
     if (!m_warpJobActive || m_warpJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
-    std::shared_ptr<LoadedMap> map = m_warpJob.get();
+    if (m_warpFading && m_uiCanvas.fading()) return; // troca so' com a tela ja' preta
+    std::shared_ptr<PreparedMap> prepared = m_warpJob.get();
     m_warpJobActive = false;
     const std::string name = m_warpJobMap;
     if (!m_pendingMapWarp.empty()) return; // pediram outro mapa no meio: começa no próximo frame
-    if (!map) {
+    if (!prepared) {
         ERUPTION_LOG_ERROR("Warp: could not read map %s", name.c_str());
         return;
     }
+    if (m_preloaded && m_preloaded->name == name) m_preloaded.reset();
+    m_convertedModels = std::move(prepared->models);
+    m_convertedPrepared = std::move(prepared->prepared);
+    m_convertedKey = prepared->geometryKey;
+    m_convertedBakes = std::move(prepared->bakes);
     const auto t0 = std::chrono::steady_clock::now();
-    if (!loadMap(name, std::move(map))) return;
+    const bool loaded = loadMap(name, std::move(prepared->map));
+    endWarpFade();
+    m_convertedBakes.clear(); // o que o mapa nao usou (arquivo sem textura embutida)
+    if (!loaded) {
+        m_convertedModels.clear();
+        m_convertedPrepared.clear();
+        return;
+    }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     TelemetryExporter::recordMapSwap(name, ms);
     ERUPTION_LOG_WARN("Warp: %s in place (%.0f ms on the main thread)", name.c_str(), ms);

@@ -108,7 +108,11 @@ void Camera::zoom(float factor) {
             // This keeps bind-to-player HUD widgets inside the designed layout
             // bounds at both zoom extremes.
             const float minHudDistance = 10.0f + (1.0f - 0.95f) * (1000.0f - 10.0f); // 59.5
-            const float maxHudDistance = 10.0f + (1.0f - 0.70f) * (1000.0f - 10.0f); // 307.0
+            // O afastamento vai ao menos a 1,5x a distancia padrao: a camera
+            // nasce a 1000 e o teto antigo de 307 cortava o primeiro gesto de
+            // zoom ali, sem volta para a vista inicial (celular, pinca).
+            const float maxHudDistance = std::min(
+                std::max(10.0f + (1.0f - 0.70f) * (1000.0f - 10.0f), m_defaultDistance * 1.5f), m_maxOrbitDistance);
             if (m_orbitDistance < minHudDistance) m_orbitDistance = minHudDistance;
             if (m_orbitDistance > maxHudDistance) m_orbitDistance = maxHudDistance;
         }

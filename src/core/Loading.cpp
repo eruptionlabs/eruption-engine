@@ -8,9 +8,12 @@
 #include "utils/ImageUtils.hpp"
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/ShaderCompiler.hpp"
+#include "core/LoadPump.hpp"
 #include "renderer/PostFormat.hpp"
 #include "core/LoadingScreen.hpp"
 #include <stb_image.h>
+#include <cmath>
+#include <string>
 #include <vk_mem_alloc.h>
 #include <imgui.h>
 #include <GLFW/glfw3.h>
@@ -18,6 +21,7 @@
 #include <imgui_impl_vulkan.h>
 #include <glm/glm.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -26,11 +30,63 @@
 
 namespace eruption {
 
+// Margem (em texels da textura do halo, meia resolucao do logo) em volta da
+// silhueta, para o desfoque largo caber inteiro.
+static constexpr int kSplashGlowPad = 64;
+
+// O splash (logo + halo) segue na tela durante a primeira carga de mapa,
+// limpando o fundo a cada quadro. Antes, a carga desenhava so' a barra por
+// cima de uma imagem velha da swapchain (texto da etapa anterior, halo
+// parado). Desliga no "Finalizing" (0.95) da primeira carga ou no primeiro
+// quadro normal (editor aberto sem mapa).
+static bool s_bootSplash = true;
+
+// Relogio do halo. m_timer so' anda no laco de quadro (tick), parado durante
+// o boot, entao o pulso usa o relogio de parede desde initSplashLogo.
+static std::chrono::steady_clock::time_point s_splashStart;
+
+void Engine::onPipelineCompiled(void* engine) {
+    static_cast<Engine*>(engine)->showShaderProgress();
+}
+
+void Engine::showShaderProgress() {
+    ++m_shadersCompiled;
+    // A própria tela pode criar pipeline; e pipeline criada no meio de uma
+    // gravação (immediateSubmit, frame) não pode abrir outra tela ali.
+    if (m_drawingShaderProgress || m_vulkan.busyRecording()) return;
+    // ERUPTION_TEST_NO_SHADER_PROGRESS=1 (debug): conta mas não redesenha.
+    static const bool kOff = std::getenv("ERUPTION_TEST_NO_SHADER_PROGRESS") != nullptr;
+    if (kOff) return;
+    const auto now = std::chrono::steady_clock::now();
+    // Com o logo na tela, 30 Hz: o halo pulsa num ciclo de 1 s. O intervalo
+    // nunca fica abaixo de 4x o custo do ultimo redesenho: onde apresentar e'
+    // caro (xvfb, ~0,3 s por quadro) a tela gastava mais que a compilacao.
+    static std::chrono::steady_clock::duration s_lastCost{};
+    const auto interval = std::max<std::chrono::steady_clock::duration>(
+        std::chrono::milliseconds((m_isInitialBoot || s_bootSplash) ? 33 : 200), s_lastCost * 4);
+    if (now - m_lastShaderProgress < interval) return;
+    m_lastShaderProgress = now;
+    // O total não é conhecido: a barra avança cada vez menos, sem passar da
+    // próxima etapa.
+    const float extra = 0.12f * (1.0f - std::exp(-static_cast<float>(m_shadersCompiled) / 40.0f));
+    m_drawingShaderProgress = true;
+    presentLoadingScreen(m_loadingMap, m_loadingTask + " - compiling shaders (" + std::to_string(m_shadersCompiled) + ")",
+                         m_loadingProgress + extra, m_loadingClear);
+    m_drawingShaderProgress = false;
+    s_lastCost = std::chrono::steady_clock::now() - now;
+}
+
 void Engine::presentLoadingScreen(const std::string& mapName, const std::string& task, float progress, bool clear) {
+    if (!m_drawingShaderProgress) {
+        m_loadingMap = mapName;
+        m_loadingTask = task;
+        m_loadingProgress = progress;
+        m_loadingClear = clear;
+        m_shadersCompiled = 0;
+    }
     float clampedProgress = std::clamp(progress, 0.0f, 1.0f);
 
-    // Smooth followers for the two independent logo glows.
-    // Task glow follows the current boot phase; bar glow follows the overall progress bar.
+    // Smooth followers of the progress.
     if (clampedProgress > m_splashTaskProgress) {
         m_splashTaskProgress += (clampedProgress - m_splashTaskProgress) * 0.5f;
     }
@@ -52,7 +108,8 @@ void Engine::presentLoadingScreen(const std::string& mapName, const std::string&
     colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
-    if (clear) {
+    const bool splash = m_isInitialBoot || s_bootSplash;
+    if (clear || splash) {
         colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         colorAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
     } else {
@@ -74,6 +131,8 @@ void Engine::presentLoadingScreen(const std::string& mapName, const std::string&
     m_vulkan.cmdImageBarrier(cmd, m_vulkan.swapImage(imageIndex), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0);
 
     m_vulkan.endFrame();
+
+    if (!m_isInitialBoot && clampedProgress >= 0.95f) s_bootSplash = false;
 }
 
 // ------------------------------------------------------------------
@@ -166,6 +225,7 @@ void Engine::presentHeldLoading() {
 
 void Engine::renderLoadingProgress() {
     m_firstLoadOver = true; // a primeira carga (e a espera dela) acabou
+    s_bootSplash = false; // ja' houve quadro normal: o boot acabou
     // Barra enquanto um mapa é lido em segundo plano (troca pelo seletor).
     // Nuvens do clima semeando NAO contam: o jogo troca o clima no meio da
     // partida (uma skill de tempestade) e a barra "Carregando" aparecia no
@@ -251,6 +311,12 @@ void Engine::renderLoadingProgress() {
 
 
 void Engine::initSplashLogo() {
+    s_splashStart = std::chrono::steady_clock::now();
+    // Enquanto o logo estiver na tela, espera longa redesenha (o halo segue pulsando).
+    setLoadPump([this] {
+        if (!(m_isInitialBoot || s_bootSplash)) return;
+        presentLoadingScreen(m_loadingMap, m_loadingTask, m_loadingProgress, m_loadingClear);
+    });
     // 1. Load main logo and create texture
     if (createTextureFromFile("assets/icon/eruption_v3_512.png", m_splashLogo)) {
         m_splashLogoDescriptorSet = ImGui_ImplVulkan_AddTexture(m_defaultSampler, m_splashLogo.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -282,56 +348,75 @@ void Engine::initSplashLogo() {
             m_splashSilhouetteDescriptorSet = ImGui_ImplVulkan_AddTexture(m_defaultSampler, m_splashSilhouette.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
 
-        // 2b. Gaussian blur the silhouette alpha to create a soft glow texture
+        // 2b. Halo do logo. O logo aparece a 0.5x, entao a silhueta desce a
+        // meia resolucao (media 2x2, ja' com borda suave) e ganha margem: o
+        // halo morre dentro da textura, sem corte reto na borda do quad.
+        // Duas larguras de desfoque: uma justa (calor colado ao logo) e uma
+        // larga (o halo). A cor vai pre-assada, laranja claro perto do logo e
+        // vermelho na ponta, e o alpha leva dither para nao bandear.
+        // O desenho so' anima a intensidade (renderLoadingUI).
         {
-            int radius = 28;
-            float sigma = 10.0f;
-            std::vector<float> kernel(2 * radius + 1);
-            float sum = 0.0f;
-            for (int i = -radius; i <= radius; ++i) {
-                float v = std::exp(-(float)(i * i) / (2.0f * sigma * sigma));
-                kernel[i + radius] = v;
-                sum += v;
-            }
-            for (float& v : kernel) v /= sum;
-
-            std::vector<float> src(w * h), tmp(w * h);
-            for (int i = 0; i < w * h; ++i) src[i] = silhouette_pixels[i * 4 + 3] / 255.0f;
-
-            // Horizontal pass
-            for (int y = 0; y < h; ++y) {
-                for (int x = 0; x < w; ++x) {
+            const int gw = w / 2 + 2 * kSplashGlowPad;
+            const int gh = h / 2 + 2 * kSplashGlowPad;
+            std::vector<float> mask(static_cast<size_t>(gw) * gh, 0.0f);
+            for (int y = 0; y < h / 2; ++y) {
+                for (int x = 0; x < w / 2; ++x) {
                     float acc = 0.0f;
-                    for (int k = -radius; k <= radius; ++k) {
-                        int sx = std::clamp(x + k, 0, w - 1);
-                        acc += src[y * w + sx] * kernel[k + radius];
-                    }
-                    tmp[y * w + x] = acc;
-                }
-            }
-            // Vertical pass
-            for (int y = 0; y < h; ++y) {
-                for (int x = 0; x < w; ++x) {
-                    float acc = 0.0f;
-                    for (int k = -radius; k <= radius; ++k) {
-                        int sy = std::clamp(y + k, 0, h - 1);
-                        acc += tmp[sy * w + x] * kernel[k + radius];
-                    }
-                    src[y * w + x] = acc;
+                    for (int dy = 0; dy < 2; ++dy)
+                        for (int dx = 0; dx < 2; ++dx)
+                            acc += silhouette_pixels[(static_cast<size_t>(2 * y + dy) * w + (2 * x + dx)) * 4 + 3];
+                    mask[static_cast<size_t>(y + kSplashGlowPad) * gw + (x + kSplashGlowPad)] = acc / (4.0f * 255.0f);
                 }
             }
 
-            // Build RGBA glow pixels (white with blurred alpha)
-            std::vector<unsigned char> glow_pixels(w * h * 4);
-            for (int i = 0; i < w * h; ++i) {
-                unsigned char a = (unsigned char)std::clamp(src[i] * 255.0f, 0.0f, 255.0f);
+            auto blur = [&](const std::vector<float>& in, float sigma) {
+                const int radius = static_cast<int>(std::ceil(sigma * 3.0f));
+                std::vector<float> kernel(2 * radius + 1);
+                float sum = 0.0f;
+                for (int i = -radius; i <= radius; ++i) {
+                    kernel[i + radius] = std::exp(-static_cast<float>(i * i) / (2.0f * sigma * sigma));
+                    sum += kernel[i + radius];
+                }
+                for (float& v : kernel) v /= sum;
+                // Fora da textura e' zero (a margem garante que nada se perde).
+                std::vector<float> tmp(in.size()), out(in.size());
+                for (int y = 0; y < gh; ++y)
+                    for (int x = 0; x < gw; ++x) {
+                        float acc = 0.0f;
+                        for (int k = std::max(-radius, -x); k <= std::min(radius, gw - 1 - x); ++k)
+                            acc += in[static_cast<size_t>(y) * gw + (x + k)] * kernel[k + radius];
+                        tmp[static_cast<size_t>(y) * gw + x] = acc;
+                    }
+                for (int y = 0; y < gh; ++y)
+                    for (int x = 0; x < gw; ++x) {
+                        float acc = 0.0f;
+                        for (int k = std::max(-radius, -y); k <= std::min(radius, gh - 1 - y); ++k)
+                            acc += tmp[static_cast<size_t>(y + k) * gw + x] * kernel[k + radius];
+                        out[static_cast<size_t>(y) * gw + x] = acc;
+                    }
+                return out;
+            };
+            const std::vector<float> tight = blur(mask, 5.0f);
+            const std::vector<float> wide = blur(mask, 18.0f);
+
+            std::vector<unsigned char> glow_pixels(static_cast<size_t>(gw) * gh * 4);
+            for (int i = 0; i < gw * gh; ++i) {
+                const float g = std::min(1.0f, 0.5f * tight[i] + 1.1f * wide[i]);
+                // Calor: 0 na ponta do halo, 1 colado no logo.
+                const float heat = std::clamp(g * 1.6f, 0.0f, 1.0f);
+                // Dither triangular de +-1 nivel (hash inteiro, estavel).
+                uint32_t hsh = static_cast<uint32_t>(i) * 2654435761u;
+                hsh ^= hsh >> 15; hsh *= 2246822519u; hsh ^= hsh >> 13;
+                const float dither = (static_cast<float>(hsh & 0xFFu) + static_cast<float>((hsh >> 8) & 0xFFu)) / 255.0f - 1.0f;
+                // Fora do halo fica zero exato: o dither nao suja o resto do quad.
+                const float a = g < 1.0f / 255.0f ? 0.0f : std::clamp(g * 255.0f + dither, 0.0f, 255.0f);
                 glow_pixels[i * 4 + 0] = 255;
-                glow_pixels[i * 4 + 1] = 255;
-                glow_pixels[i * 4 + 2] = 255;
-                glow_pixels[i * 4 + 3] = a;
+                glow_pixels[i * 4 + 1] = static_cast<unsigned char>(70.0f + 100.0f * heat);
+                glow_pixels[i * 4 + 2] = static_cast<unsigned char>(15.0f + 45.0f * heat * heat);
+                glow_pixels[i * 4 + 3] = static_cast<unsigned char>(a + 0.5f);
             }
 
-            if (createTextureFromPixels(glow_pixels.data(), w, h, m_splashGlow)) {
+            if (createTextureFromPixels(glow_pixels.data(), gw, gh, m_splashGlow)) {
                 m_splashGlowDescriptorSet = ImGui_ImplVulkan_AddTexture(m_defaultSampler, m_splashGlow.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             }
         }
@@ -475,9 +560,22 @@ void Engine::shutdownSplashLogo() {
     if (m_splashDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(m_vulkan.device(), m_splashDescriptorSetLayout, nullptr);
 }
 
+// A escala do framebuffer da UI sai do swapchain DE VERDADE. No Android o
+// shim supoe a escala de tela do preset (display_scale), mas o swapchain so'
+// encolhe quando o quadro do jogo processa a troca - na carga ele ainda esta'
+// cheio, e a tela de carregamento saia desenhada a 0,5/0,75 no canto ("o app
+// abre pequeno"). No desktop o swapchain e' o framebuffer: nada muda.
+void Engine::syncUiFramebufferScale() {
+    ImGuiIO& io = ImGui::GetIO();
+    const VkExtent2D e = m_vulkan.swapExtent();
+    if (io.DisplaySize.x > 0.0f && io.DisplaySize.y > 0.0f && e.width && e.height)
+        io.DisplayFramebufferScale = ImVec2(float(e.width) / io.DisplaySize.x, float(e.height) / io.DisplaySize.y);
+}
+
 void Engine::renderLoadingUI(const std::string& mapName, const std::string& task, float progress) {
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
+    syncUiFramebufferScale();
     ImGui::NewFrame();
 
     ImGuiIO& io = ImGui::GetIO();
@@ -511,7 +609,7 @@ void Engine::renderLoadingUI(const std::string& mapName, const std::string& task
         return;
     }
 
-    if (m_isInitialBoot) {
+    if (m_isInitialBoot || s_bootSplash) {
         ImDrawList* drawList = ImGui::GetBackgroundDrawList();
         if (m_splashLogoDescriptorSet != VK_NULL_HANDLE) {
             float logoWidth = (float)m_splashLogo.width * 0.5f;
@@ -523,45 +621,26 @@ void Engine::renderLoadingUI(const std::string& mapName, const std::string& task
 
             ImVec2 logoCenter((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
 
-            // Two independent glows BEHIND the logo.
-            // The blurred silhouette texture acts as a halo/contour around the logo.
-            // Order: larger/bar glow (bottom), smaller/task glow (middle), logo (top).
+            // Halo atras do logo: um quad so', com a textura assada em
+            // initSplashLogo. Pulsa num ciclo de 1 s de relogio de parede:
+            // quase apagado no vale, suave no pico.
             if (m_splashGlowDescriptorSet != VK_NULL_HANDLE) {
-                // Smooth 60fps sine breathing, different periods so they feel alive.
-                float taskBreath = 0.5f + 0.5f * std::sin(m_timer.elapsed() * 1.8f);
-                float barBreath  = 0.5f + 0.5f * std::sin(m_timer.elapsed() * 2.5f);
-
-                // Helper: draw a multi-layer glow for a smooth professional fadeout.
-                auto drawLayeredGlow = [&](float progress, float breath, float minGlow, float maxGlow,
-                                           float scaleRange, int baseAlpha, int peakAlpha,
-                                           int r, int g, int b, int layers) {
-                    float glowFactor = minGlow + (maxGlow - minGlow) * breath;
-                    float startScale = 1.0f + 0.04f * glowFactor;
-                    float endScale   = 1.0f + scaleRange * glowFactor;
-                    int maxAlpha = baseAlpha + (int)((peakAlpha - baseAlpha) * glowFactor);
-
-                    for (int i = 0; i < layers; ++i) {
-                        float t = (float)i / (float)(layers - 1);
-                        float scale = startScale + (endScale - startScale) * t;
-                        float fade = std::pow(1.0f - t, 1.8f);
-                        int alpha = (int)(maxAlpha * fade);
-                        if (alpha <= 1) continue;
-
-                        ImVec2 g0(logoCenter.x - (logoWidth  * 0.5f) * scale,
-                                  logoCenter.y - (logoHeight * 0.5f) * scale);
-                        ImVec2 g1(logoCenter.x + (logoWidth  * 0.5f) * scale,
-                                  logoCenter.y + (logoHeight * 0.5f) * scale);
-                        drawList->AddImage(m_splashGlowDescriptorSet, g0, g1, ImVec2(0,0), ImVec2(1,1), IM_COL32(r, g, b, alpha));
-                    }
-                };
-
-                // 1) Larger bar glow: volcanic diffuse halo, grows with the bottom loading bar.
-                drawLayeredGlow(m_splashBarProgress, barBreath, 0.02f, 1.2f, 0.35f, 3, 35,
-                                255, 160, 60, 10);
-
-                // 2) Smaller task glow: tighter inner halo, grows with the current boot task.
-                drawLayeredGlow(m_splashTaskProgress, taskBreath, 0.03f, 1.0f, 0.12f, 4, 45,
-                                255, 100, 20, 6);
+                constexpr float kTwoPi = 6.28318530718f;
+                constexpr float kPeriod = 2.0f; // segundos por pulso
+                constexpr float kBase = 0.05f;  // vale
+                constexpr float kAmp = 0.60f;   // pico = kBase + kAmp
+                const float t = std::chrono::duration<float>(std::chrono::steady_clock::now() - s_splashStart).count();
+                const float pulse = 0.5f + 0.5f * std::sin(kTwoPi * t / kPeriod);
+                const float intensity = kBase + kAmp * pulse;
+                // Texel do halo = 2 texels do logo; a margem cresce um pouco no pico.
+                const float texel = logoWidth / (static_cast<float>(m_splashGlow.width) - 2.0f * kSplashGlowPad);
+                const float halfW = 0.5f * static_cast<float>(m_splashGlow.width) * texel * (1.0f + 0.03f * pulse);
+                const float halfH = 0.5f * static_cast<float>(m_splashGlow.height) * texel * (1.0f + 0.03f * pulse);
+                drawList->AddImage(m_splashGlowDescriptorSet,
+                                   ImVec2(logoCenter.x - halfW, logoCenter.y - halfH),
+                                   ImVec2(logoCenter.x + halfW, logoCenter.y + halfH),
+                                   ImVec2(0, 0), ImVec2(1, 1),
+                                   IM_COL32(255, 255, 255, static_cast<int>(intensity * 255.0f + 0.5f)));
             }
 
             // Draw main logo on top of the glows
@@ -574,7 +653,9 @@ void Engine::renderLoadingUI(const std::string& mapName, const std::string& task
                 drawList->AddText(ImVec2((displaySize.x - textSize.x) * 0.5f, textY), IM_COL32(200, 200, 200, 200), task.c_str());
             }
         }
-    } else {
+    }
+    // Barra do canto: em toda carga de mapa, inclusive a primeira (com o logo na tela).
+    if (!m_isInitialBoot) {
         // Modern Minimalist Van Halen inspired progress bar - Bottom Right
         ImDrawList* drawList = ImGui::GetForegroundDrawList();
         

@@ -5,6 +5,7 @@
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "core/GraphicsMerge.hpp"
+#include "core/Platform.hpp"
 #include "core/Input.hpp"
 #include "core/TouchRouter.hpp"
 #include "core/JobSystem.hpp"
@@ -16,6 +17,8 @@
 #include "utils/PbrMaterialProfile.hpp"
 #include "utils/PbrTextureLoader.hpp"
 #include <stb_image.h>
+#include "renderer/LodSystemBridge.hpp"
+#include "utils/BcCompressor.hpp"
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/skymap/SkySystem.hpp"
@@ -27,6 +30,7 @@
 #include <fstream>
 #include <limits>
 #include <numeric>
+#include <sstream>
 #include "renderer/SplineEditorUI.hpp"
 #include "renderer/SpritePickerUI.hpp"
 #include "formats/MapLoader.hpp"
@@ -178,23 +182,27 @@ Engine::Engine() {
 }
 Engine::~Engine() { shutdown(); }
 
-// data/graphics.json do PROJETO (parcial): mesclado por cima do do motor
-// (JSON merge patch: objeto mescla chave a chave, o resto troca). Assim o
-// jogo ajusta tesselacao, POM e curvas por distancia sem copiar o arquivo
-// inteiro, e o motor continua dono dos presets e da tabela auto_presets.
-// "every_preset": {...} vale para todos os presets. Nunca e' gravado de
-// volta: o arquivo do motor nao muda.
-static void mergeProjectGraphics(nlohmann::json& root) {
-    const std::string path = project::config("data/graphics.json");
-    if (path == "data/graphics.json") return; // o projeto nao tem o seu
-    std::ifstream f(path);
-    nlohmann::json patch = nlohmann::json::parse(f, nullptr, false);
-    if (!patch.is_object()) {
-        ERUPTION_LOG_WARN("[GRAPHICS] %s: JSON invalido, ignorado", path.c_str());
-        return;
+// Valor booleano de um preset de data/graphics.json, para o que precisa ser
+// decidido antes de applyGraphicsPreset.
+static void applyPresetOverrides(nlohmann::json& preset);
+static void mergeProjectGraphics(nlohmann::json& root);
+
+static bool presetBool(const std::string& preset, const char* key, bool fallback) {
+    try {
+        std::ifstream f("data/graphics.json");
+        if (!f) return fallback;
+        nlohmann::json gj;
+        f >> gj;
+        if (!gj.contains("presets") || !gj["presets"].contains(preset)) return fallback;
+        // ERUPTION_TEST_PRESET_SET vale tambem para o que e' decidido antes dos
+        // pipelines (shader_lite): sem isso a bancada do celular nao isola o
+        // shader enxuto sem refazer o pacote.
+        nlohmann::json p = gj["presets"][preset];
+        applyPresetOverrides(p);
+        return p.value(key, fallback);
+    } catch (...) {
+        return fallback;
     }
-    mergeGraphicsPatch(root, std::move(patch));
-    ERUPTION_LOG_WARN("[GRAPHICS] %s mesclado sobre data/graphics.json", path.c_str());
 }
 
 bool Engine::init(int width, int height, const std::string& title) {
@@ -227,8 +235,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.anisotropyEnable = VK_TRUE;
-    samplerInfo.maxAnisotropy = 16.0f;
+    m_vulkan.applyAnisotropy(samplerInfo, 16.0f);
     samplerInfo.minLod = 0.0f;
     samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
     vkCreateSampler(m_vulkan.device(), &samplerInfo, nullptr, &m_defaultSampler);
@@ -242,8 +249,10 @@ bool Engine::init(int width, int height, const std::string& title) {
 
     // Force progress to 0 initially
     presentLoadingScreen("", "Initializing Engine", 0.0f, true);
+    const vkc::PipelineHookScope shaderProgress(&Engine::onPipelineCompiled, this);
 
     if (!m_bindless.init(&m_vulkan)) return false;
+    m_bindless.markNearestSampler(m_nearestSampler);
     ERUPTION_LOG_WARN("Resolucao de RENDER (G-buffer): %dx%d (%.2f Mpx)", width, height,
                       width * height / 1.0e6);
     {
@@ -261,8 +270,7 @@ bool Engine::init(int width, int height, const std::string& title) {
             std::ifstream uf("data/graphics.json");
             if (uf) {
                 nlohmann::json gj; uf >> gj;
-                std::string pr = gj.value("preset", "high");
-                if (const char* pe = std::getenv("ERUPTION_TEST_GRAPHICS_PRESET")) pr = pe;
+                const std::string& pr = graphicsPresetName();
                 if (gj.contains("presets") && gj["presets"].contains(pr)) {
                     upscaler = gj["presets"][pr].value("upscaler", upscaler);
                     fsrMode = gj["presets"][pr].value("fsr_mode", fsrMode);
@@ -288,8 +296,7 @@ bool Engine::init(int width, int height, const std::string& title) {
                 std::ifstream rf("data/graphics.json");
                 if (rf) {
                     nlohmann::json gj; rf >> gj;
-                    std::string pr = gj.value("preset", "high");
-                    if (const char* pe = std::getenv("ERUPTION_TEST_GRAPHICS_PRESET")) pr = pe;
+                    const std::string& pr = graphicsPresetName();
                     if (gj.contains("presets") && gj["presets"].contains(pr)) {
                         rs = std::clamp<float>(gj["presets"][pr].value("render_scale", 1.0f), 0.25f, 1.0f);
                     }
@@ -305,6 +312,9 @@ bool Engine::init(int width, int height, const std::string& title) {
         m_renderH = static_cast<uint32_t>(height);
         m_displayW = m_vulkan.swapExtent().width;
     }
+    // Shaders enxutos por preset ("shader_lite", ver VulkanContext::shaderLite):
+    // decidido antes de qualquer pipeline de cena nascer.
+    if (presetBool(graphicsPresetName(), "shader_lite", false)) m_vulkan.setShaderLite(true);
     // Upscaler: env > preset > FXAA. Decidido ANTES do G-buffer: a velocidade de
     // objeto (6o alvo) depende dele. Com FSR o post_scale e' ignorado (abaixo).
     {
@@ -314,8 +324,7 @@ bool Engine::init(int width, int height, const std::string& title) {
             std::ifstream pf("data/graphics.json");
             if (pf) {
                 nlohmann::json gj; pf >> gj;
-                std::string pr = gj.value("preset", "high");
-                if (const char* pe = std::getenv("ERUPTION_TEST_GRAPHICS_PRESET")) pr = pe;
+                const std::string& pr = graphicsPresetName();
                 if (gj.contains("presets") && gj["presets"].contains(pr)) {
                     mode = gj["presets"][pr].value("upscaler", mode);
                     m_fsrSharpness = gj["presets"][pr].value("fsr_sharpness", m_fsrSharpness);
@@ -400,8 +409,7 @@ bool Engine::init(int width, int height, const std::string& title) {
                 // Respeita o override de preset dos testes: sem isto o
                 // post_scale sempre vinha do preset gravado no JSON, e
                 // ERUPTION_TEST_GRAPHICS_PRESET=low nao mudava nada.
-                std::string pr = gj.value("preset", "high");
-                if (const char* pe = std::getenv("ERUPTION_TEST_GRAPHICS_PRESET")) pr = pe;
+                const std::string& pr = graphicsPresetName();
                 if (gj.contains("presets") && gj["presets"].contains(pr))
                     m_postScale = std::clamp<float>(gj["presets"][pr].value("post_scale", 1.0f), 0.25f, 1.0f);
             }
@@ -445,14 +453,14 @@ bool Engine::init(int width, int height, const std::string& title) {
             si.magFilter = si.minFilter = VK_FILTER_LINEAR;
             si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
             si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            si.anisotropyEnable = VK_TRUE;
-            si.maxAnisotropy = 16.0f;
+            m_vulkan.applyAnisotropy(si, 16.0f);
             si.mipLodBias = bias;
             si.minLod = 0.0f;
             si.maxLod = VK_LOD_CLAMP_NONE;
             vkCreateSampler(m_vulkan.device(), &si, nullptr, &m_defaultSampler);
             si.magFilter = si.minFilter = VK_FILTER_NEAREST;
             vkCreateSampler(m_vulkan.device(), &si, nullptr, &m_nearestSampler);
+            m_bindless.markNearestSampler(m_nearestSampler);
             ERUPTION_LOG_WARN("FSR 3.1 %s: %dx%d -> %ux%u, vies de mip %.2f",
                               m_upscalerMode == UpscalerMode::FsrBeforePost ? "antes do pos (HDR)" : "depois do pos (LDR)",
                               width, height, displayExt.width, displayExt.height, bias);
@@ -511,6 +519,122 @@ bool Engine::init(int width, int height, const std::string& title) {
         h = int(e.height);
         return reliefDecodeAlpha(e, alpha);
     });
+    // LodSystem: pixels das texturas das malhas (pelo slot) e textura propria dos niveis.
+    lodBridgeSetPixelSource([this](uint32_t slot, std::vector<uint8_t>& rgba, int& w, int& h) {
+        const std::string name = m_modelRenderer.textureNameForSlot(slot);
+        std::vector<uint8_t> px;
+        int ch = 0;
+        if (name.empty() || !findEmbeddedAlbedoPixels(name, px, w, h, ch) || w <= 0 || h <= 0 || ch < 3) return false;
+        if (ch == 4) {
+            rgba = std::move(px);
+        } else {
+            rgba.resize(size_t(w) * h * 4);
+            for (size_t i = 0; i < size_t(w) * h; ++i) {
+                for (int c = 0; c < 3; ++c) rgba[4 * i + c] = px[i * ch + c];
+                rgba[4 * i + 3] = 255;
+            }
+        }
+        return true;
+    });
+    // MRAH-W da textura de cor (o par sintetizado no bake do GLB), em RGBA8.
+    lodBridgeSetSurfaceSource([this](uint32_t slot, std::vector<uint8_t>& rgba, int& w, int& h) {
+        std::string name = m_modelRenderer.textureNameForSlot(slot);
+        if (name.empty() || m_embeddedBaked.empty()) return false;
+        auto it = m_embeddedBaked.find(name);
+        if (it == m_embeddedBaked.end()) {
+            std::replace(name.begin(), name.end(), '\\', '/');
+            it = m_embeddedBaked.find(name);
+            if (it == m_embeddedBaked.end() && !name.empty() && name[0] == '/') it = m_embeddedBaked.find(name.substr(1));
+            if (it == m_embeddedBaked.end()) return false;
+        }
+        if (!it->second.mrahw.valid() || !decodeEtexMip0(it->second.mrahw, rgba)) return false;
+        w = int(it->second.mrahw.width); h = int(it->second.mrahw.height);
+        return true;
+    });
+    lodBridgeSetSlotIdentity([this](uint32_t slot, bool surface, uint64_t& id) {
+        return embeddedTextureIdentity(m_modelRenderer.textureNameForSlot(slot), surface, id);
+    });
+    auto modelTextureFromRgba = [this](const std::string& name, const uint8_t* rgba, int w, int h) -> uint32_t {
+        ModelTextureGPU cached;
+        if (m_assetCache.getModelTexture(name, cached)) return cached.bindlessSlot;
+        TextureResource res;
+        if (!createTextureFromPixels(rgba, w, h, res)) return 0;
+        // Sem slot (array cheio) a imagem fica no cache com slot 0, como em
+        // Textures.cpp: sair aqui deixava imagem e view sem dono.
+        const uint32_t slot = m_bindless.allocateSlotSafe();
+        if (slot != 0) m_bindless.updateTextureSafe(slot, res.view, m_defaultSampler);
+        ModelTextureGPU tex{};
+        tex.image = res.image;
+        tex.alloc = res.alloc;
+        tex.view = res.view;
+        tex.bindlessSlot = slot;
+        tex.width = res.width;
+        tex.height = res.height;
+        tex.mipLevels = res.mipLevels;
+        m_assetCache.addModelTexture(name, tex);
+        return slot;
+    };
+    m_modelRenderer.setEtexTextureCreator([this, modelTextureFromRgba](const std::string& name, const EtexData& e) -> uint32_t {
+        ModelTextureGPU cached;
+        if (m_assetCache.getModelTexture(name, cached)) return cached.bindlessSlot;
+        // Formato que a GPU nao amostra (BC do pacote de LOD num PowerVR GE8320):
+        // o driver nao devolve erro, cai dentro de vmaCreateImage (SIGSEGV num
+        // celular de teste ao carregar um mapa grande). Fallback: decodifica na CPU.
+        VkFormatProperties fp{};
+        vkGetPhysicalDeviceFormatProperties(m_vulkan.physicalDevice(), static_cast<VkFormat>(e.vkFormat), &fp);
+        if ((fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == 0) {
+            std::vector<uint8_t> rgba;
+            if (!decodeEtexMip0(e, rgba)) return 0;
+            return modelTextureFromRgba(name, rgba.data(), int(e.width), int(e.height));
+        }
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = static_cast<VkFormat>(e.vkFormat);
+        imageInfo.extent = {e.width, e.height, 1};
+        imageInfo.mipLevels = e.mipCount;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        VmaAllocationCreateInfo allocCI{};
+        allocCI.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation alloc = VK_NULL_HANDLE;
+        if (vmaCreateImage(m_vulkan.allocator(), &imageInfo, &allocCI, &image, &alloc, nullptr) != VK_SUCCESS) return 0;
+        PROFILE_VRAM_ALLOC(ProfilerCategory::Textures, m_vulkan.allocationSize(alloc));
+        VkBuffer staging;
+        VmaAllocation stagingAlloc;
+        m_vulkan.createBuffer(e.payload.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
+        void* mapped = nullptr;
+        vmaMapMemory(m_vulkan.allocator(), stagingAlloc, &mapped);
+        std::memcpy(mapped, e.payload.data(), e.payload.size());
+        vmaUnmapMemory(m_vulkan.allocator(), stagingAlloc);
+        s_pendingUploads.push_back({image, alloc, staging, stagingAlloc, e.width, e.height, e.mipCount, e.mipSizes});
+        VkImageView view;
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = static_cast<VkFormat>(e.vkFormat);
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = e.mipCount;
+        viewInfo.subresourceRange.layerCount = 1;
+        vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &view);
+        const uint32_t slot = m_bindless.allocateSlotSafe();   // 0 = cheio: idem acima
+        if (slot != 0) m_bindless.updateTextureSafe(slot, view, m_defaultSampler);
+        ModelTextureGPU tex{};
+        tex.image = image;
+        tex.alloc = alloc;
+        tex.view = view;
+        tex.bindlessSlot = slot;
+        tex.width = static_cast<int>(e.width);
+        tex.height = static_cast<int>(e.height);
+        tex.mipLevels = e.mipCount;
+        m_assetCache.addModelTexture(name, tex);
+        return slot;
+    });
+    m_modelRenderer.setTextureCreator(modelTextureFromRgba);
     // Lets the PBR synthesis reach albedos that exist only inside a GLB.
     // Without it, every embedded-texture material renders with flat fallback
     // constants (parana_field: ~90% of its materials).
@@ -935,6 +1059,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         sprites->setTooltip("2D sprite rendering for characters, NPCs and billboards.");
         m_renderEffects.push_back(std::move(sprites));
     }
+    applyPresetEffects();
 
     // ERUPTION_TEST_NO_EFFECTS=1 (debug): desliga fog, DoF, bloom, ceu/IBL e
     // agua, mas MANTEM sombras e luzes. Para dumps de frame que isolam a
@@ -975,6 +1100,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_showDebugOverlay = m_devTools;
     setHudBars(m_devTools);
     setMinimapHud(m_devTools);
+    m_vulkan.savePipelineCache();
 
     return true;
 }
@@ -2266,6 +2392,44 @@ static void envOverrideBool(const char* name, bool& out) {
     if (const char* e = std::getenv(name)) out = std::stof(e) != 0.0f;
 }
 
+// Nome do preset ativo, resolvido uma vez: ERUPTION_TEST_GRAPHICS_PRESET
+// (medicao A/B sem editar o arquivo) > "preset" do data/graphics.json. O nome
+// "auto" escolhe pela GPU com a tabela "auto_presets": a primeira regra cujo
+// "gpu" aparece no nome do aparelho ("*" casa com qualquer um).
+const std::string& Engine::graphicsPresetName() {
+    if (!m_graphicsPreset.empty()) return m_graphicsPreset;
+    json gj;
+    try {
+        std::ifstream f("data/graphics.json");
+        if (f) f >> gj;
+    } catch (...) {}
+    std::string name = gj.is_object() ? gj.value("preset", "high") : "high";
+    if (const char* e = std::getenv("ERUPTION_TEST_GRAPHICS_PRESET"); e && *e) name = e;
+    if (name == "auto") {
+        const std::string gpu = m_vulkan.deviceProperties().deviceName;
+        name = "high";
+        for (const json& rule : gj.value("auto_presets", json::array())) {
+            const std::string match = rule.value("gpu", "*");
+            if (match == "*" || gpu.find(match) != std::string::npos) {
+                name = rule.value("preset", name);
+                break;
+            }
+        }
+        ERUPTION_LOG_WARN("Preset grafico automatico: '%s' para a GPU %s", name.c_str(), gpu.c_str());
+        m_graphicsPresetAuto = name;
+        // Escolha do jogador guardada (botao Qualidade do painel de toque): um
+        // preset que exista no arquivo vence a tabela.
+        std::ifstream choice(kPresetOverrideFile);
+        std::string chosen;
+        if (choice >> chosen && gj.contains("presets") && gj["presets"].contains(chosen)) {
+            ERUPTION_LOG_WARN("Preset grafico escolhido pelo jogador: '%s' (%s)", chosen.c_str(), kPresetOverrideFile);
+            name = chosen;
+        }
+    }
+    m_graphicsPreset = name;
+    return m_graphicsPreset;
+}
+
 // DoF ligado por script ou pela linha do tempo da demo: o efeito 3 e' quem
 // manda (o render recopia enableDoF dele a cada quadro).
 void Engine::captureScriptDefaults() {
@@ -2300,20 +2464,96 @@ void Engine::setDofEnabled(bool on) {
     if (m_renderEffects.size() > 3) m_renderEffects[3]->setEnabled(on);
 }
 
-void Engine::applyGraphicsPreset() {
-    const json& root = m_graphicsConfig.root();
-    if (!root.is_object()) return;
-    // ERUPTION_TEST_GRAPHICS_PRESET=low|medium|high (debug): força o preset
-    // sem editar data/graphics.json (medição A/B de custo por preset).
-    const char* presetEnv = std::getenv("ERUPTION_TEST_GRAPHICS_PRESET");
-    const std::string active = (presetEnv && *presetEnv) ? std::string(presetEnv)
-                                                         : root.value("preset", "high");
-    json presets = root.value("presets", json::object());
-    if (!presets.contains(active)) {
-        ERUPTION_LOG_WARN("[GRAPHICS] preset '%s' not found in data/graphics.json", active.c_str());
+// Botao Qualidade do painel de toque: Baixa -> Media -> Alta -> Baixa. Vale
+// na proxima abertura: o caminho enxuto dos shaders e' decidido antes das
+// pipelines nascerem. Onde a tabela escolheu mobile_low o ciclo para em Media
+// (no PowerVR GE8320 o preset alto passa de 1 s de GPU e trava o aparelho).
+void Engine::cycleQualityPreset() {
+    const size_t levels = m_graphicsPresetAuto == kQualityPresets[0] ? 2 : 3;
+    const std::string& now = m_presetChoiceNext.empty() ? m_graphicsPreset : m_presetChoiceNext;
+    size_t level = 0;
+    while (level < levels && now != kQualityPresets[level]) ++level;
+    const char* next = kQualityPresets[level >= levels ? 0 : (level + 1) % levels];
+    if (std::ofstream f(kPresetOverrideFile); f) f << next << '\n';
+    m_presetChoiceNext = next;
+}
+
+// data/graphics.json do PROJETO (parcial): mesclado por cima do do motor
+// (JSON merge patch: objeto mescla chave a chave, o resto troca). Assim o
+// jogo ajusta tesselacao, POM e curvas por distancia sem copiar o arquivo
+// inteiro, e o motor continua dono dos presets e da tabela auto_presets.
+// "every_preset": {...} vale para todos os presets. Nunca e' gravado de
+// volta: o arquivo do motor nao muda.
+static void mergeProjectGraphics(json& root) {
+    const std::string path = project::config("data/graphics.json");
+    if (path == "data/graphics.json") return; // o projeto nao tem o seu
+    std::ifstream f(path);
+    json patch = json::parse(f, nullptr, false);
+    if (!patch.is_object()) {
+        ERUPTION_LOG_WARN("[GRAPHICS] %s: JSON invalido, ignorado", path.c_str());
         return;
     }
-    const json& p = presets[active];
+    mergeGraphicsPatch(root, std::move(patch));
+    ERUPTION_LOG_WARN("[GRAPHICS] %s mesclado sobre data/graphics.json", path.c_str());
+}
+
+// ERUPTION_TEST_PRESET_SET="chave=valor,chave=valor" (bancada): sobrepoe chaves
+// do preset ativo sem editar o graphics.json nem refazer o pacote do celular.
+// O valor e' lido como JSON (numero, true/false); o que nao for vira texto.
+static void applyPresetOverrides(json& preset) {
+    const char* e = std::getenv("ERUPTION_TEST_PRESET_SET");
+    if (!e || !*e) return;
+    std::stringstream list(e);
+    std::string item;
+    while (std::getline(list, item, ',')) {
+        const size_t eq = item.find('=');
+        if (eq == std::string::npos || eq == 0) continue;
+        const std::string key = item.substr(0, eq), value = item.substr(eq + 1);
+        preset[key] = json::parse(value, nullptr, false).is_discarded() ? json(value) : json::parse(value);
+        ERUPTION_LOG_WARN("[GRAPHICS] preset: %s = %s (ERUPTION_TEST_PRESET_SET)", key.c_str(), value.c_str());
+    }
+}
+
+const json* Engine::activeGraphicsPreset() {
+    json& root = m_graphicsConfig.root();
+    if (!root.is_object() || !root.contains("presets")) return nullptr;
+    const std::string& active = graphicsPresetName();
+    json& presets = root["presets"];
+    if (!presets.contains(active)) {
+        ERUPTION_LOG_WARN("[GRAPHICS] preset '%s' not found in data/graphics.json", active.c_str());
+        return nullptr;
+    }
+    if (!m_presetOverridesApplied) {
+        m_presetOverridesApplied = true;
+        applyPresetOverrides(presets[active]);
+    }
+    return &presets[active];
+}
+
+// RenderEffect toggles: 0 Fog, 1 GI, 2 Bloom, 3 DoF, 4 Point Lights, 7 Water.
+// Shadows/skybox/sprites are never preset-disabled ("se tem sombra, mantenha").
+// Roda depois de criar os efeitos: o applyGraphicsPreset vem antes deles no
+// init, e ali estas chaves do preset nao tinham onde cair.
+void Engine::applyPresetEffects() {
+    const json* preset = activeGraphicsPreset();
+    if (!preset) return;
+    static const std::pair<size_t, const char*> kEffectKeys[] = {
+        {0, "fog"}, {1, "gi"}, {2, "bloom"}, {3, "dof"}, {4, "point_lights"}, {7, "water"}};
+    for (const auto& [idx, key] : kEffectKeys) {
+        if (preset->contains(key) && m_renderEffects.size() > idx)
+            m_renderEffects[idx]->setEnabled((*preset)[key].get<bool>());
+    }
+    // ERUPTION_TEST_NO_DOF vale por cima do preset: o quadro copia o toggle do
+    // efeito para m_postSettings, entao so' desligar no inicio nao bastava (o
+    // preset do mapa religava o DoF e a bancada media com desfoque).
+    if (std::getenv("ERUPTION_TEST_NO_DOF") && m_renderEffects.size() > 3) m_renderEffects[3]->setEnabled(false);
+}
+
+void Engine::applyGraphicsPreset() {
+    const json& root = m_graphicsConfig.root();
+    const json* preset = activeGraphicsPreset();
+    if (!preset) return;
+    const json& p = *preset;
 
     // RELEVO POR DISTANCIA (bloco de topo, comum a todos os presets). Duas
     // curvas de quatro nos: forca do normal map e vies de mip, avaliadas por
@@ -2393,23 +2633,54 @@ void Engine::applyGraphicsPreset() {
     if (p.contains("motion_blur")) m_postSettings.enableMotionBlur = p["motion_blur"];
     if (p.contains("chromatic_aberration")) m_postSettings.enableChromaticAberration = p["chromatic_aberration"];
     if (p.contains("tilt_shift")) m_postSettings.enableDoF = p["tilt_shift"];
-    // RenderEffect toggles: 0 Fog, 1 GI, 2 Bloom, 3 DoF, 4 Point Lights, 7 Water.
-    // Shadows/skybox/sprites are never preset-disabled ("se tem sombra, mantenha").
-    auto setEffect = [&](size_t idx, const char* key) {
-        if (p.contains(key) && m_renderEffects.size() > idx)
-            m_renderEffects[idx]->setEnabled(p[key].get<bool>());
-    };
-    setEffect(0, "fog");
-    setEffect(1, "gi");
-    setEffect(2, "bloom");
-    setEffect(3, "dof");
+    applyPresetEffects();
     // O passe le' m_postSettings.enableDoF, e ate' agora esse campo so'
     // era sincronizado com o toggle DENTRO do bloco da UI do F2 - que nunca
     // roda headless. Resultado: o knob "dof" do preset nao desligava nada.
     // Medido em cidade-A 1920x1080: DoF custava 3,87 ms com dof=false.
     if (p.contains("dof")) m_postSettings.enableDoF = p["dof"].get<bool>();
-    setEffect(4, "point_lights");
-    setEffect(7, "water");
+    if (std::getenv("ERUPTION_TEST_NO_DOF")) m_postSettings.enableDoF = false;
+    // Iluminação PBR (GGX) ou a clássica, mais barata (celular fraco: -25% no
+    // passe de luz). ERUPTION_TEST_NO_PBR continua valendo por cima.
+    if (p.contains("pbr_lighting"))
+        m_deferredLighting.setUsePbr(p["pbr_lighting"].get<bool>() && !std::getenv("ERUPTION_TEST_NO_PBR"));
+    // Modo da sombra: "csm" (duas cascatas) ou "single" (um mapa, os casters
+    // desenhados uma vez). A sombra em si nunca sai pelo preset.
+    if (p.contains("shadow_mode") && !std::getenv("ERUPTION_SHADOW_MODE")) {
+        const std::string mode = p["shadow_mode"].get<std::string>();
+        m_shadowRenderer.settings().csmStable = (mode == "csm");
+        m_shadowRenderer.settings().singleMap = (mode == "single");
+    }
+    // Saida do celular: fracao da tela do swapchain (o compositor estica o
+    // resto). Aparelho forte usa a tela inteira; fraco, metade.
+    if (p.contains("display_scale")) platform::setDisplayScale(p["display_scale"].get<float>());
+    m_deferredLighting.setPointLightMax(static_cast<uint32_t>(std::max(0, p.value("point_light_max", 0))));
+    m_deferredLighting.setTileLightMax(static_cast<uint32_t>(std::max(1, p.value("point_light_tile_max", 16))));
+    // Texel maximo do mapa unico (unidades de mundo): com o atlas, decide a
+    // cobertura da sombra em volta da camera (texel x atlas / 2).
+    if (p.contains("shadow_max_texel"))
+        m_shadowRenderer.settings().singleMaxTexel = std::clamp(p["shadow_max_texel"].get<float>(), 0.1f, 8.0f);
+    // Sombra pre-assada (so' no modo single): cenario parado cozido a parte,
+    // so' quem se mexe e' desenhado a cada atualizacao. ERUPTION_SHADOW_CACHE manda.
+    m_shadowRenderer.settings().staticCache = p.value("shadow_cache", false);
+    envOverrideBool("ERUPTION_SHADOW_CACHE", m_shadowRenderer.settings().staticCache);
+    m_shadowRenderer.settings().staticCacheMargin = std::clamp(
+        p.value("shadow_cache_margin", m_shadowRenderer.settings().staticCacheMargin), 0.0f, 1.0f);
+    if (const char* e = std::getenv("ERUPTION_SHADOW_CACHE_MARGIN"))
+        m_shadowRenderer.settings().staticCacheMargin = std::clamp(std::strtof(e, nullptr), 0.0f, 1.0f);
+    // A cada N quadros refaz o mapa de sombra (1 = todo quadro). Nos outros a
+    // iluminacao le o mapa e as matrizes do ultimo feito, que seguem casados.
+    m_shadowUpdateInterval = std::clamp<int>(p.value("shadow_update_interval", 1), 1, 4);
+    // Escala da cena calibrada pelo FPS (settleRenderScale): parte do
+    // render_scale e anda entre render_scale_min e render_scale_max.
+    // ERUPTION_RENDER_SCALE fixa a escala e desliga a calibracao.
+    m_scaleTuning = {};
+    if (!std::getenv("ERUPTION_RENDER_SCALE")) {
+        const float start = std::clamp<float>(p.value("render_scale", 1.0f), 0.25f, 1.0f);
+        m_scaleTuning.targetFps = std::max(0.0f, p.value("target_fps", 0.0f));
+        m_scaleTuning.minScale = std::clamp<float>(p.value("render_scale_min", start), 0.25f, start);
+        m_scaleTuning.maxScale = std::clamp<float>(p.value("render_scale_max", start), start, 1.0f);
+    }
     m_maxRainFollowers = std::clamp<int>(
         p.value("max_rain_followers", m_maxRainFollowers), 1,
         static_cast<int>(WeatherRenderer::MAX_RAIN_OCCLUDERS));
@@ -2450,6 +2721,8 @@ void Engine::applyGraphicsPreset() {
     m_skyProbeIntensity = std::clamp<float>(p.value("sky_probe_intensity", 1.0f), 0.0f, 4.0f);
     // PROBES DE IRRADIANCIA (G38). ERUPTION_TEST_NO_PROBES=1 desliga (A/B).
     if (p.contains("irradiance_probes")) m_irradianceProbesEnabled = p["irradiance_probes"];
+    m_irradianceProbeBake = p.value("irradiance_probe_bake", true);
+    m_assetCacheMaps = static_cast<uint32_t>(std::clamp(p.value("asset_cache_maps", 3), 1, 8));
     if (std::getenv("ERUPTION_TEST_NO_PROBES")) m_irradianceProbesEnabled = false;
     m_irradianceProbeStrength = std::clamp<float>(p.value("irradiance_probe_strength", 1.0f), 0.0f, 1.0f);
 
@@ -2461,6 +2734,9 @@ void Engine::applyGraphicsPreset() {
     // parte dos pixels do mapa; o teto é o botão mais direto de VRAM. Vale
     // para as texturas EMBUTIDAS do GLB (é onde estão os sheets grandes).
     m_textureMaxSize = std::clamp<int>(p.value("texture_max_size", 1024), 128, 4096);
+    // Tesselacao da banda perto: o preset so' pode vetar (os niveis vem da
+    // configuracao das normais). Desligada nos degraus baixo e medio do celular.
+    m_tessPresetAllowed = p.value("tessellation", true);
     // Teto do nivel de subdivisao e escala da banda perto, por preset: na GPU
     // de celular o estagio de patch custa caro mesmo em nivel baixo, entao o
     // celular troca alcance e densidade por quadro (Engine::render).
@@ -2517,7 +2793,7 @@ void Engine::applyGraphicsPreset() {
         if (const char* e = std::getenv("ERUPTION_TEST_TESS_AMP")) rb.amplitude = std::max(0.0f, std::stof(e));
         rb.gain = std::clamp(p.value("relief_bake_height_gain", 1.0f), 0.1f, 8.0f);
         if (rb.mode == 2) {
-            m_tessEnabled = false;
+            m_tessPresetAllowed = false;
             m_modelRenderer.setSeamWeld(false);
         }
         m_modelRenderer.setReliefBake(rb);
@@ -2603,11 +2879,26 @@ void Engine::applyGraphicsPreset() {
     if (const char* tb = std::getenv("ERUPTION_TEST_MESH_TRI_BUDGET")) triBudget = std::max(0, std::atoi(tb));
     if (meshLodRatio <= 0.0f) triBudget = 0;
     m_modelRenderer.setMeshTriBudget(static_cast<uint32_t>(triBudget));
+    // Erro maximo do chao em celulas, em pixels na tela (ModelRenderer::setGroundLodPx).
+    // ERUPTION_TEST_GROUND_LOD_PX=<px> sobrepoe o preset (0 desliga: malha cheia).
+    float groundLodPx = std::max(0.0f, p.value("ground_lod_px", 0.0f));
+    if (const char* g = std::getenv("ERUPTION_TEST_GROUND_LOD_PX")) groundLodPx = std::max(0.0f, std::strtof(g, nullptr));
+    m_modelRenderer.setGroundLodPx(groundLodPx);
+    // Nivel do caster de sombra (ModelRenderer::setShadowLodView): 0 = LOD fixo de
+    // sombra, 1 = o da camera para o objeto, 2 = pelo tamanho em texels da cascata.
+    // ERUPTION_TEST_SHADOW_LOD_VIEW=<0|1|2> sobrepoe o preset.
+    int shadowLodView = std::clamp(p.value("shadow_lod_view", 0), 0, 2);
+    if (const char* sv = std::getenv("ERUPTION_TEST_SHADOW_LOD_VIEW")) shadowLodView = std::clamp(std::atoi(sv), 0, 2);
+    m_modelRenderer.setShadowLodView(shadowLodView);
     // ERUPTION_TEST_NO_SIZE_CULL=1 (referencia "sem LOD" da bancada): nada
     // some por ser pequeno na tela - nem objeto, nem caster de sombra.
     static const bool kNoSizeCull = std::getenv("ERUPTION_TEST_NO_SIZE_CULL") != nullptr;
     m_modelRenderer.setScreenCull(kNoSizeCull ? 0.0f
                                               : std::clamp<float>(p.value("small_object_cull_px", 0.0f), 0.0f, 16.0f));
+    // Raleamento de vegetacao pequena na tela (mesh_thin_px = raio em px onde comeca,
+    // mesh_thin_keep = fracao minima que fica). Para GPU fraca que paga por instancia.
+    m_modelRenderer.setThin(kNoSizeCull ? 0.0f : std::clamp<float>(p.value("mesh_thin_px", 0.0f), 0.0f, 256.0f),
+                            std::clamp<float>(p.value("mesh_thin_keep", 1.0f), 0.0f, 1.0f));
     // Escala do balanco da vegetacao ao vento (0 desliga). Chega ao vertex
     // shader em windParams.y.
     m_windSwayScale = std::clamp<float>(p.value("wind_sway_scale", 0.15f), 0.0f, 2.0f);
@@ -2637,8 +2928,9 @@ void Engine::applyGraphicsPreset() {
     m_cloudLayerRenderer.setMarchStepBudget(
         std::clamp<int>(p.value("cloud_march_steps", 0), 0, 32));
 
-    // Top-level battery/present controls (independent of the preset).
-    m_fpsCap = std::clamp<int>(root.value("fps_cap", m_fpsCap), 0, 1000);
+    // Top-level battery/present controls; a preset may set its own fps_cap
+    // (phones: 30, so the GPU rests between frames instead of heating up).
+    m_fpsCap = std::clamp<int>(p.value("fps_cap", root.value("fps_cap", m_fpsCap)), 0, 1000);
     const std::string pm = root.value("present_mode", "auto");
     const bool wantFifo = (pm == "fifo" || pm == "vsync");
     const bool wantImmediate = (pm == "immediate");
@@ -2821,17 +3113,32 @@ void Engine::initImGui() {
         ImFontConfig cjkCfg; cjkCfg.MergeMode = true; cjkCfg.SizePixels = 14.0f; cjkCfg.OversampleH = 1; cjkCfg.OversampleV = 1;
         io.Fonts->AddFontFromFileTTF("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 14.0f, &cjkCfg, koreanRanges);
     }
+    // ERUPTION_TOUCH_HUD=<px>, ou < 1 = fracao da altura da janela (o APK usa
+    // a fracao: a mesma proporcao em qualquer tela e escala de swapchain).
     if (const char* e = std::getenv("ERUPTION_TOUCH_HUD")) {
         ImFontConfig hudCfg;
-        hudCfg.SizePixels = std::max(14.0f, static_cast<float>(std::atof(e)));
+        float px = static_cast<float>(std::atof(e));
+        if (px < 1.0f) {
+            int winW = 0, winH = 0;
+            glfwGetWindowSize(m_window.handle(), &winW, &winH);
+            px *= static_cast<float>(winH);
+        }
+        hudCfg.SizePixels = std::max(14.0f, px);
         m_touchHudFont = io.Fonts->AddFontDefault(&hudCfg);
     }
-    // Contador de FPS grande (ERUPTION_FPS_OVERLAY): fonte propria no tamanho
+    // Contador de FPS grande (ERUPTION_FPS_OVERLAY=<px>, ou < 1 = fracao da
+    // altura da janela, como o painel de toque): fonte propria no tamanho
     // pedido, a ULTIMA do atlas. Esticar a de 14 px apagava os tracos.
     if (const char* e = std::getenv("ERUPTION_FPS_OVERLAY")) {
         static const ImWchar kDigits[] = {0x0020, 0x0020, 0x0030, 0x0039, 0x0046, 0x0046, 0x0050, 0x0050, 0x0053, 0x0053, 0};
         ImFontConfig bigCfg;
-        bigCfg.SizePixels = std::max(16.0f, static_cast<float>(std::atof(e)));
+        float px = static_cast<float>(std::atof(e));
+        if (px < 1.0f) {
+            int winW = 0, winH = 0;
+            glfwGetWindowSize(m_window.handle(), &winW, &winH);
+            px *= static_cast<float>(winH);
+        }
+        bigCfg.SizePixels = std::max(16.0f, px);
         bigCfg.GlyphRanges = kDigits;
         io.Fonts->AddFontDefault(&bigCfg);
     }

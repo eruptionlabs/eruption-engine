@@ -3,6 +3,7 @@
 #include <fstream>
 #include "core/Logger.hpp"
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <glm/glm.hpp>
 
@@ -554,7 +555,6 @@ WaterMesh TerrainParser::generateWaterMesh(const TerrainFile& terrain,
                                        float waterLevel, float waveHeight,
                                        bool forceAllTiles,
                                        bool skipIfPositive) {
-    (void)forceAllTiles;
     WaterMesh wmesh;
     uint32_t W = terrain.width;
     uint32_t H = terrain.height;
@@ -574,46 +574,59 @@ WaterMesh TerrainParser::generateWaterMesh(const TerrainFile& terrain,
     uint32_t effH = std::min(chunkH, H - startZ);
     if (effW == 0 || effH == 0) return wmesh;
 
-    // Grid has (effW+1) x (effH+1) vertices.
-    uint32_t vertW = effW + 1;
-    uint32_t vertH = effH + 1;
-    wmesh.vertices.reserve(vertW * vertH);
-
-    for (uint32_t z = 0; z < vertH; z++) {
-        uint32_t worldZ = startZ + z;
-        for (uint32_t x = 0; x < vertW; x++) {
-            uint32_t worldX = startX + x;
-            float sx = static_cast<float>(worldX) * tileSize;
-            float sz = static_cast<float>(worldZ) * tileSize;
-
-            // UV tiling: 5x5 repeat pattern (like source data)
-            float u = (float)(worldX % 5) / 5.0f;
-            float v = (float)(worldZ % 5) / 5.0f;
-
-            WaterVertex vtx;
-            vtx.position = Vec3(sx, waterLevel, sz);
-            vtx.texCoord = Vec2(u, v);
-            wmesh.vertices.push_back(vtx);
-        }
+    // So' as celulas onde a agua aparece: algum canto do chao abaixo do nivel
+    // (mais a onda), dilatado em 1 celula para a margem nao abrir fresta. A
+    // grade inteira do terreno ia para a GPU com ondas por vertice: no mapa
+    // de 500x500 eram 251 mil vertices e 500 mil triangulos por quadro, quase
+    // tudo debaixo de chao seco - o passe mais caro do quadro no PowerVR
+    // GE8320. Sem celulas de terreno, ou com a agua forcada, fica a grade toda.
+    // ERUPTION_TEST_WATER_FULL_GRID=1 (bancada): a grade inteira, para o A/B.
+    static const bool kFullGrid = std::getenv("ERUPTION_TEST_WATER_FULL_GRID") != nullptr;
+    const bool haveCells = !forceAllTiles && !kFullGrid && terrain.cubes.size() == static_cast<size_t>(W) * H;
+    std::vector<uint8_t> wet(static_cast<size_t>(effW) * effH, haveCells ? 0 : 1);
+    if (haveCells) {
+        const float top = waterLevel + std::max(waveHeight, 0.0f) + 0.5f;
+        std::vector<uint8_t> raw(wet.size(), 0);
+        for (uint32_t z = 0; z < effH; ++z)
+            for (uint32_t x = 0; x < effW; ++x) {
+                const TerrainCube& c = terrain.cubes[(startZ + z) * W + startX + x];
+                const float lowest = -std::max(std::max(c.height[0], c.height[1]), std::max(c.height[2], c.height[3]));
+                raw[z * effW + x] = lowest < top ? 1 : 0;
+            }
+        for (uint32_t z = 0; z < effH; ++z)
+            for (uint32_t x = 0; x < effW; ++x) {
+                bool any = false;
+                for (int dz = -1; dz <= 1 && !any; ++dz)
+                    for (int dx = -1; dx <= 1 && !any; ++dx) {
+                        const int nx = int(x) + dx, nz = int(z) + dz;
+                        any = nx >= 0 && nz >= 0 && nx < int(effW) && nz < int(effH) && raw[nz * effW + nx];
+                    }
+                wet[z * effW + x] = any ? 1 : 0;
+            }
     }
 
-    // Indices for triangle strips
-    uint32_t rowVerts = vertW;
-    wmesh.indices.reserve(effW * effH * 6);
+    // Vertices sob demanda: (effW+1) x (effH+1) posicoes possiveis, so' as
+    // usadas por uma celula molhada entram.
+    const uint32_t vertW = effW + 1;
+    std::vector<uint32_t> remap(static_cast<size_t>(vertW) * (effH + 1), UINT32_MAX);
+    auto vertexAt = [&](uint32_t x, uint32_t z) -> uint32_t {
+        uint32_t& slot = remap[z * vertW + x];
+        if (slot != UINT32_MAX) return slot;
+        const uint32_t worldX = startX + x, worldZ = startZ + z;
+        WaterVertex vtx;
+        vtx.position = Vec3(static_cast<float>(worldX) * tileSize, waterLevel, static_cast<float>(worldZ) * tileSize);
+        // UV tiling: 5x5 repeat pattern (like source data)
+        vtx.texCoord = Vec2(float(worldX % 5) / 5.0f, float(worldZ % 5) / 5.0f);
+        slot = static_cast<uint32_t>(wmesh.vertices.size());
+        wmesh.vertices.push_back(vtx);
+        return slot;
+    };
     for (uint32_t z = 0; z < effH; z++) {
         for (uint32_t x = 0; x < effW; x++) {
-            uint32_t i0 = z * rowVerts + x;
-            uint32_t i1 = i0 + 1;
-            uint32_t i2 = i0 + rowVerts;
-            uint32_t i3 = i2 + 1;
-
-            wmesh.indices.push_back(i0);
-            wmesh.indices.push_back(i1);
-            wmesh.indices.push_back(i2);
-            wmesh.indices.push_back(i1);
-            wmesh.indices.push_back(i3);
-            wmesh.indices.push_back(i2);
-
+            if (!wet[z * effW + x]) continue;
+            const uint32_t i0 = vertexAt(x, z), i1 = vertexAt(x + 1, z);
+            const uint32_t i2 = vertexAt(x, z + 1), i3 = vertexAt(x + 1, z + 1);
+            wmesh.indices.insert(wmesh.indices.end(), {i0, i1, i2, i1, i3, i2});
             wmesh.waterTileCount++;
         }
     }

@@ -16,6 +16,7 @@
 #include "renderer/BindlessDescriptor.hpp"
 #include "renderer/SpriteRenderer.hpp"
 #include "renderer/ModelRenderer.hpp"
+#include "utils/EmbeddedTextureBake.hpp"
 #include "utils/ImageUtils.hpp"
 #include "renderer/TerrainRenderer.hpp"
 #include "renderer/DeferredLighting.hpp"
@@ -179,8 +180,12 @@ public:
             _next += std::chrono::duration_cast<_clk::duration>(
                 std::chrono::duration<double>(1.0 / m_fpsCap));
             const auto _now = _clk::now();
+            m_capSleepMs = 0.0f;
             if (_next < _now) _next = _now;
-            else std::this_thread::sleep_until(_next);
+            else {
+                m_capSleepMs = _ms(_next - _now).count();
+                std::this_thread::sleep_until(_next);
+            }
         }
         m_cpuFrameWallMs = _ms(std::chrono::steady_clock::now() - _t0).count();
 
@@ -223,6 +228,11 @@ public:
     // mapas); o resto é o mesmo carregamento do mapa aberto direto.
     bool loadMap(const std::string& name, std::shared_ptr<LoadedMap> preloaded = nullptr);
     bool warpLoading() const { return m_warpJobActive; }
+    // Le' o mapa numa thread (arquivos e conversao dos modelos) antes do warp
+    // para ele; o warp seguinte so' monta. false = o mapa nao existe. Chamar
+    // de novo com o mesmo nome nao refaz nada; outro nome espera a leitura em
+    // curso acabar e entao toma o lugar.
+    bool preloadMap(const std::string& name);
     // Acrescenta um .glb ao mapa aberto, com o chao do modelo em `position`.
     // Devolve o indice da primeira instancia (uma por no) ou -1.
     // `nodeName` não vazio: só esse nó do arquivo.
@@ -470,6 +480,12 @@ public:
     }
     // Novo tamanho do painel Cena, aplicado no comeco do proximo frame.
     void setViewportSize(uint32_t w, uint32_t h);
+    // Quadro ortografico do minimapa: x, z do centro em mundo e meio-lado
+    // (zoom). E' o MESMO enquadramento que renderMinimap() calcula a partir
+    // das AABBs de terreno/instancia - exposto para o jogo posicionar
+    // marcadores sem reimplementar a formula por fora (ver ui.minimap_frame
+    // em ScriptApi.cpp). z <= 0 antes do primeiro bake.
+    Vec3 minimapFrame() const { return m_minimapFrame; }
     // Descritor da imagem da cena para ImGui::Image (VK_NULL_HANDLE sem editor).
     VkDescriptorSet viewportTexture() const { return m_viewportTexture; }
     InputConfig& inputConfig() { return m_inputConfig; }
@@ -516,6 +532,10 @@ public:
     // atlas, SSAO, post toggles, cloud/rain budgets). Only keys present in
     // the preset are applied; safe to call at init and on F5 hot-reload.
     void applyGraphicsPreset();
+    const json* activeGraphicsPreset();
+    const std::string& graphicsPresetName();
+    std::string m_graphicsPreset; // resolvido uma vez (graphicsPresetName)
+    bool m_tessPresetAllowed = true; // chave "tessellation" do preset
     float m_tessLevelCap = 64.0f;    // chave "tessellation_max_level"
     float m_tessBandScale = 1.0f;    // chave "tessellation_band_scale"
     float m_tessNearDistance = 0.0f;   // chave "tessellation_near_distance" (0 = sem banda perto)
@@ -528,6 +548,14 @@ public:
     MapFog m_scriptFog;              // world.set_fog (set=false: nenhuma)
     WorldBorder m_scriptBorder;       // world.set_border (set=false: nenhuma)
     float m_scriptExposure = -1.0f;  // world.set_exposure (< 0: a do .env ou automatica)
+    std::string m_graphicsPresetAuto; // o que a tabela auto_presets escolheu (vazio fora do auto)
+    std::string m_presetChoiceNext;   // escolha do botao Qualidade, vale na proxima abertura
+    static constexpr const char* kPresetOverrideFile = "preset_override.txt";
+    static constexpr const char* kQualityPresets[3] = {"mobile_low", "mobile_medium", "mobile_high"};
+    void cycleQualityPreset();
+    void syncUiFramebufferScale();
+    bool m_presetOverridesApplied = false; // ERUPTION_TEST_PRESET_SET, uma vez
+    void applyPresetEffects();
     DioramaLookConfig& lookConfig() { return m_lookConfig; }
     ConfigManager& dioramaConfig() { return m_dioramaConfig; }
     ConfigManager& skyboxConfig() { return m_skyboxConfig; }
@@ -630,6 +658,9 @@ public:
     // e ceu limpo - para comparar com tudo ligado. Desligar restaura o estado
     // de antes.
     void setClassicMode(bool on);
+    // Luz do modo classico: a do proprio mapa (direcao e cor do sol, cor do
+    // ambiente), cor x (ambiente + difusa x N.L).
+    void applyClassicLight(LightingEnvironment& env) const;
     bool classicMode() const { return m_classic.on; }
     struct ClassicSaved {
         bool on = false;
@@ -1230,6 +1261,9 @@ private:
     void populateMaps();
     void flushPendingUploads();
     void render();
+    // Calibra a escala da cena para target_fps (graphics.json) nos primeiros
+    // segundos de cada mapa: uns poucos ajustes, sem oscilar durante o jogo.
+    void settleRenderScale();
     void renderImGui();
     void drawLightingControls();
     uint32_t resolveModelTexture(const std::string& path);
@@ -1242,6 +1276,13 @@ private:
     // Caminho WebGL2 (EngineWeb.cpp): sem Vulkan no navegador.
     void renderWeb();
     void initImGuiWebBackend();
+    void* webUiTexture(const std::string& path); // GLuint como ImTextureID; nulo se nao abriu
+    void renderWebScene();                         // EngineWebScene.cpp
+    void renderWebPost(struct WebSceneGl& s, const Mat4& viewProj, const LightingEnvironment& env, unsigned screenFb,
+                       bool skyInHdr);
+    void uploadWebLights(unsigned program, const Vec3& eye);
+    void updateWebSkyProbe(struct WebSceneGl& s);
+    struct WebSceneGl* m_webScene = nullptr;       // estado GL da cena (vive com o motor estatico)
     bool m_webReady = false; // Module.onReady() ja foi chamado (1o quadro desenhado)
 #endif
     void shutdownImGui();
@@ -1264,6 +1305,17 @@ private:
     void shutdownSplashLogo();
     void renderLoadingUI(const std::string& mapName, const std::string& task, float progress);
     void presentLoadingScreen(const std::string& mapName, const std::string& task, float progress, bool clear = false);
+    // A barra anda enquanto o driver compila shaders (vkc::PipelineHookScope):
+    // cada pipeline conta, e a tela é redesenhada a cada 200 ms.
+    static void onPipelineCompiled(void* engine);
+    void showShaderProgress();
+    std::string m_loadingMap;
+    std::string m_loadingTask;
+    float m_loadingProgress = 0.0f;
+    bool m_loadingClear = false;
+    bool m_drawingShaderProgress = false;
+    uint32_t m_shadersCompiled = 0;
+    std::chrono::steady_clock::time_point m_lastShaderProgress{};
     void renderResourceManager();
 public:
     bool createTextureFromFile(const char* path, TextureResource& out);
@@ -1271,6 +1323,9 @@ public:
 private:
     // Decodes a GLB-embedded albedo by name so PBR synthesis can run on
     // textures that have no file on disk. Returns false when not found.
+    // Hash da textura embutida como esta' no arquivo (cor: os bytes do PNG/JPEG;
+    // surface: o MRAH-W ja' comprimido), sem decodificar - a chave rapida do LOD.
+    bool embeddedTextureIdentity(const std::string& name, bool surface, uint64_t& id) const;
     bool findEmbeddedAlbedoPixels(const std::string& name, std::vector<uint8_t>& outPixels,
                                   int& outW, int& outH, int& outChannels);
     // Altura do relevo assado sintetizada do albedo embutido, para a textura
@@ -1305,6 +1360,7 @@ private:
     float computeObstructionScreenSpace() const;
     float computeObstructionAngular() const;
     void drawWeatherTab();
+    void writeMinimapLiquids();
     Mat4 computeCloudShadowMatrix(const Vec3& lightDir, const Vec3& target) const;
     Window m_window;
     VulkanContext m_vulkan;
@@ -1372,12 +1428,26 @@ private:
     // carregar o mapa. Preset "irradiance_probes" / "irradiance_probe_strength";
     // ERUPTION_TEST_NO_PROBES=1 desliga (A/B).
     IrradianceProbes m_irradianceProbes;
+    bool m_irradianceProbesEnabled = true;
+    // false: a grade nunca e' cozida aqui, so' lida do <mapa>.glb.probes que o
+    // PC grava (preset "irradiance_probe_bake"; celular).
+    bool m_irradianceProbeBake = true;
     // Instancias que a grade cozida viu (SIZE_MAX: grade nao foi cozida aqui,
     // nao recoze). Ver refreshIrradianceProbes.
     size_t m_probeBakedInstances = SIZE_MAX;
     size_t m_probeSeenInstances = 0;
     int m_probeStableFrames = 0;
-    bool m_irradianceProbesEnabled = true;
+    // Assinatura da geometria do mapa carregado (mapGeometryKey): valida os
+    // caches derivados dela, como o <mapa>.glb.probes.
+    uint64_t m_mapGeometryKey = 0;
+    // Cargas de mapa que uma textura sem uso sobrevive no cache (preset
+    // "asset_cache_maps"). Celular fraco: 1, senao as texturas de tres mapas
+    // somadas passam de 512 camadas e o crescimento da grade trava a GPU.
+    uint32_t m_assetCacheMaps = 3;
+    // Troca de mapa com fade (MapLoad.cpp, beginWarpFade/endWarpFade).
+    bool m_warpFading = false;
+    void beginWarpFade();
+    void endWarpFade();
     float m_irradianceProbeStrength = 1.0f;
     CloudLayerRenderer m_cloudLayerRenderer;
     WeatherSystem m_weatherSystem;
@@ -1422,6 +1492,9 @@ private:
     // Periodo do laco medido NO MESMO frame que as fases de CPU (ver run()).
     // m_frameTime e' media de janela e nao serve de denominador para elas.
     float m_cpuFrameWallMs = 0.0f;
+    // Sono do limitador de FPS no ultimo quadro: a calibracao da escala mede o
+    // trabalho, nao o intervalo travado pelo limite.
+    float m_capSleepMs = 0.0f;
     // Janela do contador de FPS (ver run()). Fica aqui, no laco, porque um
     // frame renderizado tem que ser contado mesmo quando a logica de jogo nao
     // roda naquele frame.
@@ -1436,6 +1509,17 @@ private:
     bool m_waterFullyBuried = false;
     // Escala do balanco da vegetacao (graphics.json wind_sway_scale).
     float m_windSwayScale = 0.15f;
+    // Mapa de sombra refeito a cada N quadros (graphics.json shadow_update_interval).
+    int m_shadowUpdateInterval = 1;
+    // Escala automatica da cena (settleRenderScale). target_fps 0 desliga.
+    struct RenderScaleTuning {
+        float targetFps = 0.0f;
+        float minScale = 1.0f;
+        float maxScale = 1.0f;
+        int frames = 0;
+        int steps = 0;
+        std::array<float, 90> frameMs{}; // janela medida
+    } m_scaleTuning;
     bool m_showDebugOverlay = true;
     bool m_devTools = true;
     bool m_showGameHud = true, m_showHudBars = true, m_showMinimapHud = true;
@@ -1632,10 +1716,35 @@ private:
     // Troca de mapa pelo seletor (warp): o .glb é lido numa thread e o mapa
     // entra pelo mesmo loadMap do carregamento direto (antes era um segundo
     // caminho de montagem, sem LOD, sem soldar vértices, sem GI nem chão).
-    std::future<std::shared_ptr<LoadedMap>> m_warpJob;
+    // Mapa lido em segundo plano, com os modelos ja' convertidos (MapLoad.cpp).
+    struct PreparedMap;
+    static std::shared_ptr<PreparedMap> readPreparedMap(const std::string& name);
+    std::future<std::shared_ptr<PreparedMap>> m_warpJob;
     std::string m_warpJobMap;
     bool m_warpJobActive = false;
     void updateWarp();
+    // preloadMap: leitura em curso, ultimo pedido e o mapa pronto para o warp.
+    std::future<std::shared_ptr<PreparedMap>> m_preloadJob;
+    // Arquivos que a cena e o scatter do mapa pedido acrescentam (modelos e
+    // camadas de terreno), lidos fora do quadro: interpretar a cena de um mapa
+    // de 12,7 mil pecas custava ~150 ms dentro do world.preload_map.
+    struct PreloadLists {
+        std::vector<std::string> models, layers;
+    };
+    std::future<PreloadLists> m_preloadListJob;
+    PreloadLists readPreloadLists(const std::string& name) const;
+    std::string m_preloadWanted;
+    std::shared_ptr<PreparedMap> m_preloaded;
+    void updatePreload();
+    // Modelos convertidos na thread do warp; o loadMap seguinte os usa no
+    // lugar de converter de novo.
+    std::vector<ModelAsset> m_convertedModels;
+    // Nós montados na mesma thread (slots provisórios) e a assinatura da
+    // geometria que eles viram: só valem se o retoque de relevo não mudou nada.
+    std::unordered_map<std::string, ModelRenderer::PreparedAsset> m_convertedPrepared;
+    uint64_t m_convertedKey = 0;
+    // Texturas embutidas lidas do cache na mesma thread, por arquivo.
+    std::unordered_map<std::string, EmbeddedBakeResult> m_convertedBakes;
     // UI-inclusive screenshot capture state.
     bool m_screenshotPending = false;
     uint32_t m_screenshotSubmitFrame = 0;
@@ -2101,6 +2210,16 @@ private:
     VkPipeline m_minimapCompositePipeline = VK_NULL_HANDLE;
     VkDescriptorSet m_minimapCompositeDS = VK_NULL_HANDLE;
     static constexpr uint32_t MINIMAP_RES = 256;
+    // Liquidos (lava, sobretudo) do mapa, para o composite pintar o lago de
+    // lava com brilho proprio em vez de deixar so' a rocha por baixo - ver
+    // initMinimapComposite()/renderMinimap() e minimap_composite.frag. Buffer
+    // host-visivel, mapeado para sempre; os bytes sao reescritos a cada rebake
+    // (cadencia ja' rara, gated por `dirty`), o handle nunca muda, entao o
+    // descriptor write so' acontece uma vez.
+    static constexpr uint32_t kMinimapMaxLiquids = 64;
+    VkBuffer m_minimapLiquidsBuffer = VK_NULL_HANDLE;
+    VmaAllocation m_minimapLiquidsAlloc = VK_NULL_HANDLE;
+    void* m_minimapLiquidsMapped = nullptr;
     PlayerController* m_playerController = nullptr;
     float m_seeThroughRadius = 0.0f;
     float m_seeThroughOpacity = 0.25f;
@@ -2121,7 +2240,6 @@ private:
     float m_nearFadeStart = 0.0f, m_nearFadeEnd = 0.0f;
     bool m_orbitInput = true;
     std::array<Vec4, 3 * FrameUBO::kCutaways> m_cutaway{};
-    void fillSeeThrough(FrameUBO& ubo) const;
     int m_spriteShadowKind = -1;
     float m_spriteContactSun = 0.0f; // "map_contact": forca do disco ao sol (0..1)
     float m_spriteSinkPixels = 0.0f; // characters.set_sink: pixels do quadro abaixo do chao
@@ -2140,6 +2258,7 @@ private:
     std::vector<SpriteLight> m_spriteLights[2];
     void updateSpriteDominantLights();
     void collectSpritePointShadows(std::vector<SpritePointShadow>& out) const;
+    void fillSeeThrough(FrameUBO& ubo) const;
     std::vector<SceneCharacter> m_characters;
     SceneObjects m_sceneObjects;
     // Sprite de personagem ja lido, por caminho de arquivo. Sem isto, cada
@@ -2225,7 +2344,7 @@ private:
         VkSampler splatSampler = VK_NULL_HANDLE;
         std::chrono::steady_clock::time_point hiddenAt{};
         std::vector<std::string> modelFiles; // .glb do próprio mapa (malhas só dele)
-        double vramAtLoad = 0.0, rssAtLoad = 0.0; // MB no início da leitura (ERUPTION_TEST_CHUNK_STATS)
+        double vramAtLoad = 0.0, rssAtLoad = 0.0, heapAtLoad = 0.0; // MB no início da leitura (ERUPTION_TEST_CHUNK_STATS)
     };
     ImageData splatLayerImage(const std::filesystem::path& path);
     std::mutex m_splatDecodeMutex;

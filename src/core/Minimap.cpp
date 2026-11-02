@@ -50,16 +50,27 @@ void Engine::initMinimap() {
 // never runs for the minimap camera) and no water (water is a forward pass drawn
 // after lighting, into the lit target, so it never reaches the G-buffer).
 void Engine::initMinimapComposite() {
-    VkDescriptorSetLayoutBinding bindings[4] = {};
-    for (uint32_t i = 0; i < 4; ++i) {
+    // Binding 4: emissive do G-buffer (lampadas, cristais, qualquer modelo com
+    // material emissivo - o composite relitava so' com albedo+normal e
+    // ignorava esse canal de todo, por isso prop emissivo nao brilhava no
+    // minimapa). Binding 5: lista de liquidos do mapa (storage buffer), usada
+    // para pintar lava com brilho proprio - o lago de lava e' um passe
+    // FORWARD do WaterRenderer, nunca toca o G-buffer, entao sem isto o
+    // composite nao tem como saber onde ele esta'.
+    VkDescriptorSetLayoutBinding bindings[6] = {};
+    for (uint32_t i = 0; i < 5; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorCount = 1;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
+    bindings[5].binding = 5;
+    bindings[5].descriptorCount = 1;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo dslInfo{};
     dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslInfo.bindingCount = 4;
+    dslInfo.bindingCount = 6;
     dslInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(m_vulkan.device(), &dslInfo, nullptr, &m_minimapCompositeSetLayout) != VK_SUCCESS) {
         ERUPTION_LOG_ERROR("[MINIMAP] failed to create composite descriptor set layout");
@@ -94,6 +105,30 @@ void Engine::initMinimapComposite() {
         ERUPTION_LOG_ERROR("[MINIMAP] failed to allocate composite descriptor set");
         m_minimapCompositeDS = VK_NULL_HANDLE;
         return;
+    }
+
+    // Buffer da lista de liquidos: host-visivel, mapeado para sempre. O
+    // handle e' escrito no descriptor UMA vez aqui; so' os BYTES mudam a cada
+    // rebake do minimapa (writeMinimapLiquids(), chamado de renderMinimap()).
+    const VkDeviceSize liquidsBufSize = sizeof(Vec4) + VkDeviceSize(kMinimapMaxLiquids) * sizeof(Vec4) * 2;
+    if (m_vulkan.createBuffer(liquidsBufSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                              VMA_MEMORY_USAGE_CPU_TO_GPU, m_minimapLiquidsBuffer, m_minimapLiquidsAlloc)) {
+        vmaMapMemory(m_vulkan.allocator(), m_minimapLiquidsAlloc, &m_minimapLiquidsMapped);
+        memset(m_minimapLiquidsMapped, 0, liquidsBufSize);
+        VkDescriptorBufferInfo liquidsInfo{};
+        liquidsInfo.buffer = m_minimapLiquidsBuffer;
+        liquidsInfo.offset = 0;
+        liquidsInfo.range = liquidsBufSize;
+        VkWriteDescriptorSet liquidsWrite{};
+        liquidsWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        liquidsWrite.dstSet = m_minimapCompositeDS;
+        liquidsWrite.dstBinding = 5;
+        liquidsWrite.descriptorCount = 1;
+        liquidsWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        liquidsWrite.pBufferInfo = &liquidsInfo;
+        vkUpdateDescriptorSets(m_vulkan.device(), 1, &liquidsWrite, 0, nullptr);
+    } else {
+        ERUPTION_LOG_ERROR("[MINIMAP] failed to create liquids buffer; lava stays unlit on minimap");
     }
 
     auto vertCode = ShaderCompiler::loadSPIRV("postprocess/fullscreen.vert.spv");
@@ -150,6 +185,12 @@ void Engine::shutdownMinimap() {
     if (m_minimapCompositePipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_vulkan.device(), m_minimapCompositePipeline, nullptr);
     if (m_minimapCompositeLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_vulkan.device(), m_minimapCompositeLayout, nullptr);
     if (m_minimapCompositeSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(m_vulkan.device(), m_minimapCompositeSetLayout, nullptr);
+    if (m_minimapLiquidsBuffer != VK_NULL_HANDLE) {
+        if (m_minimapLiquidsMapped) vmaUnmapMemory(m_vulkan.allocator(), m_minimapLiquidsAlloc);
+        vmaDestroyBuffer(m_vulkan.allocator(), m_minimapLiquidsBuffer, m_minimapLiquidsAlloc);
+        m_minimapLiquidsBuffer = VK_NULL_HANDLE;
+        m_minimapLiquidsMapped = nullptr;
+    }
     if (m_minimapView != VK_NULL_HANDLE) vkDestroyImageView(m_vulkan.device(), m_minimapView, nullptr);
     if (m_minimapImage != VK_NULL_HANDLE) vmaDestroyImage(m_vulkan.allocator(), m_minimapImage, m_minimapAlloc);
 }
@@ -205,6 +246,45 @@ void Engine::cacheWaterBounds(const WaterMesh& mesh) {
     m_waterBoundsValid = true;
 }
 
+// Copia os liquidos do mapa (lava, sobretudo) para o buffer que o composite
+// le' (binding 5, std430: um cabecalho de 16 B com a contagem, depois 2 vec4
+// por liquido). So' chamada quando o minimapa vai ser re-assado (mesma
+// cadencia do resto de renderMinimap()), entao o custo e' irrelevante.
+//
+// Aproximacao deliberada: cada liquido vira um CIRCULO (center/radius), nunca
+// o contorno lobado real (shoreRadius/polygon) que mapas de vulcao usam para
+// a margem exata. No tamanho de um minimapa isso nao se nota; o composite
+// so' precisa saber ONDE tem lava para parar de desenhar rocha crua por
+// cima dela.
+void Engine::writeMinimapLiquids() {
+    if (!m_minimapLiquidsMapped || !m_currentMap) return;
+    struct GpuHeader { uint32_t count; uint32_t pad[3]; };
+    struct GpuLiquid { float cx, cz, radius, level; float kind, emissive, pad0, pad1; };
+    auto* header = static_cast<GpuHeader*>(m_minimapLiquidsMapped);
+    auto* entries = reinterpret_cast<GpuLiquid*>(header + 1);
+    uint32_t n = 0;
+    for (const auto& lq : m_currentMap->liquids) {
+        if (n >= kMinimapMaxLiquids) {
+            ERUPTION_LOG_WARN("[MINIMAP] mapa tem mais de %u liquidos; o resto fica sem brilho no minimapa", kMinimapMaxLiquids);
+            break;
+        }
+        // Raio efetivo: a media do contorno lobado quando ha' um (melhor do
+        // que o `radius` nominal, que em mapa lobado e' so' resumo), senao o
+        // proprio radius.
+        float radius = lq.radius;
+        if (!lq.shoreRadius.empty()) {
+            float sum = 0.0f;
+            for (float r : lq.shoreRadius) sum += r;
+            radius = sum / float(lq.shoreRadius.size());
+        }
+        if (radius <= 0.0f) continue;
+        entries[n] = GpuLiquid{lq.centerX, lq.centerZ, radius, lq.level,
+                               float(lq.kind), lq.emissive, 0.0f, 0.0f};
+        ++n;
+    }
+    header->count = n;
+}
+
 void Engine::renderMinimap(VkCommandBuffer cmd) {
     if (!m_currentMap || m_minimapImage == VK_NULL_HANDLE) return;
 
@@ -249,12 +329,12 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
     // This used to derive the extent arithmetically as `terrain.width * 10`,
     // centred at `width * 0.5`. Both halves of that were wrong:
     //   - the 10 units/cell scale is not universal (maps carry their own
-    //     scale; the medieval village is 5x), so on such a map the assumed
+    //     scale; the medieval village is 5x), so on parana_field the assumed
     //     extent was nearly twice the real one and the map occupied only the
     //     top half of the minimap with the rest black - the bug
     //     reported;
     //   - it assumed the terrain starts at the world origin, but the .ter
-    //     carries an offset (e.g. (-55.02, -45.91)).
+    //     carries an offset (parana_field's is (-55.02, -45.91)).
     // Measuring the real bounds removes both guesses at once and works for
     // GLB-only maps, which have no .ter dimensions to derive anything from.
     float zoom = 600.0f;
@@ -277,20 +357,56 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
             // `enabled` is not enough: the instance list is complete from map
             // load, but the meshes behind it upload for seconds afterwards, and
             // some never resolve at all. Those phantom instances still carry a
-            // world AABB, and on a large map they stretched the bound in +Z to
+            // world AABB, and on parana_field they stretched the bound in +Z to
             // 2006 while the geometry that really draws ends around 1120. The
             // ortho then centred 443 units past the real middle and the map
             // rendered against the top edge with a black band below -- measured
             // as exactly the 54-row offset observed.
+            //
+            // Streaming bug: on a GLB-only map
+            // with world-streamed neighbors (RP-33/34), `getInstances()`
+            // covers every loaded region, not just the open map -- it has to,
+            // so the neighbor renders seamlessly in the real 3D view. The
+            // neighbor's instances carry perfectly valid, already-resolved
+            // world AABBs (they are not phantoms like the comment above), so
+            // they used to pass every filter here and drag one axis of the
+            // union far past the playable area (a neighbor map's mountain
+            // pulled +Z from ~2300 to 4170). The framing
+            // centred on that inflated box, and the real terrain -- small
+            // relative to the union -- rendered into a corner with the rest
+            // black (nothing drawn in the empty gap toward the neighbor).
+            // `isRegionInstance` already exists for exactly this "home map
+            // only" distinction (World.cpp:953), so reuse it here instead of
+            // string-matching the "<mapa>:" name prefix.
             const auto& meshes = m_modelRenderer.getMeshes();
-            for (const auto& inst : m_modelRenderer.getInstances()) {
+            const auto& instances = m_modelRenderer.getInstances();
+            const bool dumpDbg = std::getenv("ERUPTION_TEST_DUMP_MINIMAP") != nullptr;
+            const void* extremeMinX = nullptr, *extremeMaxX = nullptr, *extremeMinZ = nullptr, *extremeMaxZ = nullptr;
+            for (uint32_t i = 0; i < instances.size(); ++i) {
+                const auto& inst = instances[i];
                 if (!inst.enabled) continue;
+                if (isRegionInstance(i)) continue; // vizinho streamado, não é do mapa aberto
                 if (inst.meshIndex >= meshes.size()) continue;
                 const auto& m = meshes[inst.meshIndex];
                 if (m.vertexBuffer == VK_NULL_HANDLE || m.indexCount == 0) continue;
+                if (dumpDbg) {
+                    if (inst.worldAabbMin.x < bmin.x) extremeMinX = &inst;
+                    if (inst.worldAabbMax.x > bmax.x) extremeMaxX = &inst;
+                    if (inst.worldAabbMin.z < bmin.z) extremeMinZ = &inst;
+                    if (inst.worldAabbMax.z > bmax.z) extremeMaxZ = &inst;
+                }
                 bmin = glm::min(bmin, inst.worldAabbMin);
                 bmax = glm::max(bmax, inst.worldAabbMax);
                 any = true;
+            }
+            if (dumpDbg) {
+                auto nameOf = [](const void* p) -> std::string {
+                    if (!p) return "?";
+                    return static_cast<const ModelInstance*>(p)->name;
+                };
+                ERUPTION_LOG_WARN("[MINIMAP] extremos: -X=%s +X=%s -Z=%s +Z=%s",
+                                   nameOf(extremeMinX).c_str(), nameOf(extremeMaxX).c_str(),
+                                   nameOf(extremeMinZ).c_str(), nameOf(extremeMaxZ).c_str());
             }
         }
         if (any && bmax.x > bmin.x && bmax.z > bmin.z) {
@@ -303,6 +419,12 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
             zoom = glm::max(bmax.x - bmin.x, bmax.z - bmin.z) * 0.5f;
             zoom *= 1.02f; // hairline margin so the border texel is not clipped
             m_minimapKeep = Vec4(bmin.x, bmin.z, bmax.x, bmax.z);
+            if (std::getenv("ERUPTION_TEST_DUMP_MINIMAP")) {
+                ERUPTION_LOG_WARN("[MINIMAP] aabb bmin=(%.1f,%.1f) bmax=(%.1f,%.1f) centro=(%.1f,%.1f) zoom=%.1f chunks_com_indices=%d",
+                                   bmin.x, bmin.z, bmax.x, bmax.z, mapCenter.x, mapCenter.z, zoom,
+                                   (int)std::count_if(m_terrainRenderer.chunks().begin(), m_terrainRenderer.chunks().end(),
+                                                       [](const auto& c){ return c.indexCount != 0; }));
+            }
         } else if (m_currentMap) {
             // Last resort, only when nothing has loaded yet.
             const auto& terr = m_currentMap->terrain;
@@ -347,7 +469,7 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
     // above, so it runs on map change / progressive-load growth only. The
     // 4,9 ms -> 0,5 ms win from commit 1f8c4a5 is preserved.
     if (m_minimapCompositePipeline != VK_NULL_HANDLE && m_minimapCompositeDS != VK_NULL_HANDLE) {
-        VkDescriptorImageInfo imgs[4] = {};
+        VkDescriptorImageInfo imgs[5] = {};
         imgs[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         imgs[0].imageView = m_gbuffer.albedoView();
         imgs[0].sampler = m_defaultSampler;
@@ -373,14 +495,20 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
         // sampler LINEAR aqui era VUID-vkCmdDraw-magFilter-04553 em todo frame
         // (usampler2D no shader - a leitura ja' era nearest de fato).
         imgs[3].sampler = m_nearestSampler;
+        // Emissivo do G-buffer: lampadas, cristais, qualquer modelo com
+        // emissiveStrength/emissiveTextureNames (model_frag.glsl). Ate' aqui o
+        // composite nao amostrava este canal de todo.
+        imgs[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imgs[4].imageView = m_gbuffer.emissiveView();
+        imgs[4].sampler = m_defaultSampler;
 
         // So' reescreve o DS quando as views mudaram (recriacao do G-buffer):
         // atualizar todo re-bake enquanto o CB do frame anterior ainda esta'
         // pendente e' VUID-03047 (2 por frame). As views sao estaveis entre
         // resizes, entao a escrita e' quase sempre pulada.
         if (m_minimapCompositeDSAlbedoView != m_gbuffer.albedoView()) {
-            VkWriteDescriptorSet writes[4] = {};
-            for (uint32_t i = 0; i < 4; ++i) {
+            VkWriteDescriptorSet writes[5] = {};
+            for (uint32_t i = 0; i < 5; ++i) {
                 writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 writes[i].dstSet = m_minimapCompositeDS;
                 writes[i].dstBinding = i;
@@ -388,9 +516,11 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
                 writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 writes[i].pImageInfo = &imgs[i];
             }
-            vkUpdateDescriptorSets(m_vulkan.device(), 4, writes, 0, nullptr);
+            vkUpdateDescriptorSets(m_vulkan.device(), 5, writes, 0, nullptr);
             m_minimapCompositeDSAlbedoView = m_gbuffer.albedoView();
         }
+
+        writeMinimapLiquids();
 
         m_vulkan.cmdImageBarrier(cmd, m_gbuffer.albedoImage(),
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -401,6 +531,10 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
         m_vulkan.cmdImageBarrier(cmd, m_gbuffer.normalImage(),
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+        m_vulkan.cmdImageBarrier(cmd, m_gbuffer.emissiveImage(),
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
@@ -469,7 +603,7 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
         //
         // The instance COUNT is final almost immediately (the list is built at
         // map load), but the meshes behind those instances stream to the GPU
-        // for seconds afterwards -- a large map spends ~6 s just baking
+        // for seconds afterwards -- parana_field spends ~6 s just baking
         // embedded textures. Gating only on instance/chunk COUNT therefore
         // baked the minimap while most meshes still had no vertex buffer, and
         // never baked again: whole regions of the map were simply missing, in
