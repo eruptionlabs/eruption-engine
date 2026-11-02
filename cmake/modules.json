@@ -1,0 +1,42 @@
+{
+  "about": "Modulos opcionais do motor. Uma fonte so' para o CMake (opcao, fontes, implementacao muda), o perfil de build do jogo exportado e a janela de exportacao do editor (deteccao no projeto). Desligado, o modulo troca as fontes pela implementacao muda com a mesma interface.",
+  "modules": [
+    {
+      "name": "audio",
+      "option": "ERUPTION_MODULE_AUDIO",
+      "label": "Sound",
+      "summary": "game sound (miniaudio, ~1 MB)",
+      "default": true,
+      "export": true,
+      "sources": ["src/audio/Audio.cpp", "src/audio/MiniaudioImpl.cpp"],
+      "null_sources": ["src/audio/AudioNull.cpp"],
+      "detect": {
+        "script_globals": ["audio"],
+        "scene_fields": ["sounds"]
+      }
+    },
+    {
+      "name": "neural_pbr",
+      "option": "ERUPTION_MODULE_NEURAL_PBR",
+      "label": "Neural PBR",
+      "summary": "PBR maps from a neural network at load time (the model is not exported)",
+      "default": true,
+      "export": false,
+      "sources": ["src/ml/*.cpp"],
+      "null_sources": ["src/ml/NeuralPbrNull.cpp"]
+    },
+    {
+      "name": "net",
+      "option": "ERUPTION_MODULE_NET",
+      "label": "Network",
+      "summary": "multiplayer: hosted match or dedicated server",
+      "default": true,
+      "export": true,
+      "sources": ["src/net/*.cpp"],
+      "null_sources": ["src/net/NetNull.cpp"],
+      "detect": {
+        "script_globals": ["net"]
+      }
+    }
+  ]
+}
