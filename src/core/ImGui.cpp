@@ -2949,11 +2949,23 @@ void Engine::renderImGui() {
 // Ligado por padrão só nas ferramentas de desenvolvimento; o jogo exportado
 // mostra se o projeto pedir (ui.show_hud / ui.show_minimap).
 bool Engine::minimapFollowsCss() const {
-    // O #minimap/#minimap-info do CSS mandam quando o projeto traz a propria
-    // folha da HUD (data/hud/default.css): o layout e' do jogo. Sem ela fica o
-    // quadrado fixo de sempre no canto (o CSS do motor o poria em outro lugar).
-    static const bool kProjectHud = project::config("data/hud/default.css") != "data/hud/default.css";
-    return m_minimapBottomRight || kProjectHud;
+    // O #minimap/#minimap-info do CSS mandam quando a folha da HUD realmente
+    // define um dos dois: o layout e' do jogo. Sem eles fica o quadrado fixo
+    // de sempre no canto (o CSS do motor o poria em outro lugar).
+    //
+    // Antes isso comparava o caminho devolvido por project::config() com o
+    // caminho padrao, pra saber se o PROJETO trouxe a propria folha. No jogo
+    // exportado isso nunca funcionava: Project::isOpen() fica sempre falso
+    // (o exportado roda sem projeto aberto - so' --game, sem --project), e
+    // project::config() cai sempre no mesmo caminho sem checar nada. No
+    // Android isso aparecia como o quadrado de reserva no canto, por cima de
+    // uma caixa vazia no lugar certo do CSS (a folha carregou bem - o
+    // HudRenderer le' pelo caminho relativo normal, que existe de verdade
+    // porque os assets do APK sao extraidos pro disco antes do motor rodar -
+    // so' quem decidia a posicao do minimapa nao usava esse resultado).
+    // Agora a pergunta e' feita direto na folha que o HudRenderer leu de
+    // verdade, sem depender de projeto aberto.
+    return m_minimapBottomRight || (m_playerController && m_playerController->hudDefinesMinimap());
 }
 
 void Engine::drawGameHud(ImDrawList* target, ImVec2 origin, ImVec2 size) {

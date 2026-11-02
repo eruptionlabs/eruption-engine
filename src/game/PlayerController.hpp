@@ -25,6 +25,9 @@ public:
     // Retorna a área do minimapa definida pelo CSS (#minimap), se houver.
     eruption::CSSRect getMinimapRect(const ImVec2& displaySize) const;
     eruption::CSSRect getMinimapInfoRect(const ImVec2& displaySize) const;
+    // A folha de CSS carregada define #minimap ou #minimap-info? (ver
+    // HudRenderer::definesMinimap)
+    bool hudDefinesMinimap() const;
     void renderMapSelector();
     void setHudRenderer(HudRenderer* hud) { m_hud = hud; }
     void shutdown();
