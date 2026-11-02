@@ -265,6 +265,13 @@ declare world: {
     -- player walks into the mouth of the passage, not when they reach it.
     warp_map: (map: string) -> (),
     warping: () -> boolean,
+    -- How close (meters from the map's edge) the player gets before a neighbor
+    -- map of the scene starts loading in its thread (default 300; 50..3000).
+    -- A bigger distance starts the load earlier, so a heavy neighbor is ready
+    -- by the time the player reaches it, at the cost of keeping more maps in
+    -- memory (a neighbor is released only past 1.5x this distance).
+    set_load_distance: (meters: number) -> (),
+    load_distance: () -> number,
     -- Ribbon (road, trail, shallow river) along a centripetal Catmull-Rom
     -- through `points` (vectors; y is ignored, the ground gives it). opts:
     -- closed, width (or widths, one per point), step (meters between
