@@ -465,6 +465,12 @@ list(APPEND SOURCES
     "${CMAKE_SOURCE_DIR}/src/utils/GpuAutoSelect.hpp"
 )
 
+# Ponte do LOD externo: sem src/renderer/LodSystemBridge.cpp (fora do repositorio),
+# vale a ponte nula, que deixa o LOD comum.
+if(EXISTS "${CMAKE_SOURCE_DIR}/src/renderer/LodSystemBridge.cpp")
+    list(REMOVE_ITEM SOURCES "${CMAKE_SOURCE_DIR}/src/renderer/LodSystemBridgeNull.cpp")
+endif()
+
 # LodSystem: implementacao externa, fora do repositorio (fontes em src/ ou
 # biblioteca pronta em lib/). Sem ela, src/utils/LodSystemNull.cpp.
 set(ERUPTION_LOD_SYSTEM_DIR "${CMAKE_SOURCE_DIR}/not_commit/lod_system" CACHE PATH "Implementacao externa de LodSystem")
