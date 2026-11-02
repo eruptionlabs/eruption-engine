@@ -1175,7 +1175,7 @@ void main() {
     // O minimapa precisa da altura para saber o que esta' submerso e para
     // marchar sombra em campo de altura, e passou a ler daqui.
     //
-    // A faixa cobre desde o fundo de caldeira ate' o topo de torre nos mapas
+    // A faixa cobre desde o fundo de cratera ate' o topo de torre nos mapas
     // atuais; ~7,8 unidades por passo, folgado para decidir "abaixo da agua".
     outMaterialID = uint(clamp((inWorldPos.y + 500.0) / 2000.0, 0.0, 1.0) * 255.0 + 0.5);
     // .a carrega a visibilidade do sol do micro-relevo; a luz direcional

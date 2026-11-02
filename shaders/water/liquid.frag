@@ -737,12 +737,12 @@ void main() {
     // Diagnostico de cobertura do disco (ERUPTION_LIQUID_DEBUG=1): pinta a
     // superficie de CIANO chapado. Ciano e nao magenta de proposito - magenta
     // e' chroma-key de descarte no model.frag e o pixel sumiria da tela em
-    // vez de marcar. Serve pra medir num print de cima quanto da caldeira o
+    // vez de marcar. Serve pra medir num print de cima quanto da cratera o
     // disco de fato cobre.
     if (pc.debugMask.y == 1) {
         // VERDE puro, nao ciano: o caso de teste do autor pinta a textura
-        // de lava do TERRENO (a caldeira) de ciano ao mesmo tempo, pra medir
-        // na MESMA foto quanto o disco liquido cobre da caldeira. Com as
+        // de lava do TERRENO (a cratera) de ciano ao mesmo tempo, pra medir
+        // na MESMA foto quanto o disco liquido cobre da cratera. Com as
         // duas na mesma cor as duas manchas se fundem e a comparacao fica
         // impossivel de ler a olho ou de segmentar por cor.
         color = vec3(0.0, 1.0, 0.0);
