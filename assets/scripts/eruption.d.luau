@@ -933,6 +933,12 @@ declare telemetry: {
     -- Whether an export is still being written, and whether the last one
     -- that finished succeeded (nil before any finished).
     exporting: () -> (boolean, boolean?),
+    -- Opens the system share sheet for a path that `export` returned, once
+    -- `exporting` says it finished. Android only (the file sits in the
+    -- app's own storage, unreachable by other apps without this); on PC and
+    -- the browser it does nothing and returns false, since the file is
+    -- already in a folder the player can open directly.
+    share: (path: string) -> boolean,
 }
 
 -- C++ functions of this project (native/*.cpp, include/eruption/native_module.h):
