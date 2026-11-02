@@ -65,6 +65,13 @@ public:
 
     CSSRect getMinimapRect(const ImVec2& displaySize) const;
     CSSRect getMinimapInfoRect(const ImVec2& displaySize) const;
+    // A folha de CSS que foi REALMENTE carregada do disco (a do projeto, se
+    // ele trouxe uma, senao a do motor) define algum dos dois seletores?
+    // Usado pra decidir se o minimapa segue o CSS ou o quadrado fixo de
+    // sempre, olhando o CSS lido - e nao se existe um "projeto aberto"
+    // (Project::isOpen() fica sempre falso no jogo exportado, mesmo quando a
+    // folha certa ja esta' no lugar certo).
+    bool definesMinimap() const;
 
     HudStats& stats() { return m_stats; }
     const CSSLayout& layout() const { return m_layout; }

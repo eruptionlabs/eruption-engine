@@ -89,6 +89,14 @@ CSSRect HudRenderer::getMinimapInfoRect(const ImVec2& displaySize) const {
     return resolveWidget("#minimap-info", displaySize, {}, &found);
 }
 
+bool HudRenderer::definesMinimap() const {
+    bool found = false;
+    resolveWidget("#minimap", ImVec2(0.0f, 0.0f), {}, &found);
+    if (found) return true;
+    resolveWidget("#minimap-info", ImVec2(0.0f, 0.0f), {}, &found);
+    return found;
+}
+
 // Os dois sao a mesma pintura do UiDocument: a implementacao mora em
 // CSSLayout (uma so'), e aqui ficam os valores de reserva da HUD do jogador.
 constexpr ImU32 kHudBg = IM_COL32(20, 22, 28, 220);

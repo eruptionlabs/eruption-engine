@@ -760,6 +760,8 @@ eruption::CSSRect PlayerController::getMinimapInfoRect(const ImVec2& displaySize
     return {};
 }
 
+bool PlayerController::hudDefinesMinimap() const { return m_hud && m_hud->definesMinimap(); }
+
 static Palette s_lastBodyPal;
 static Palette s_lastHairPal;
 void PlayerController::editorSprites() {
