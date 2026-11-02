@@ -18,6 +18,11 @@ Ao contribuir com este projeto — seja por pull request, issue, patch, sugestã
 
 ## 2. Como contribuir
 
+As regras de código, os padrões e os passos para provar que uma mudança está
+certa (build sem avisos, testes, validação do Vulkan, PSNR antes e depois)
+estão no [AGENTS.md](AGENTS.md). O que falta no motor, com o ponto de partida
+de cada item, está no [ROADMAP.md](ROADMAP.md).
+
 1. **Abra uma issue primeiro** para discutir mudanças grandes.
 2. Faça um fork do repositório.
 3. Crie uma branch com nome descritivo: `feature/nome-da-feature` ou `fix/nome-do-bug`.

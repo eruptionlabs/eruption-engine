@@ -61,6 +61,14 @@ Para rodar um mapa específico:
 ./launch.sh --project projects/parana_field --map parana_field_lite
 ```
 
+### Android
+
+```bash
+tools/android/build_apk.sh <mapa>[,<mapa>...]   # gera build-android/eruption-<mapa>.apk
+```
+
+Precisa do SDK e do NDK do Android (`ANDROID_HOME`, padrão `~/Android/Sdk`) e do JDK 17. O pacote escolhe um preset de celular pela GPU (`mobile_low`, `mobile_medium` ou `mobile_high` no `data/graphics.json`) e calibra a resolução da cena para 30 FPS nos primeiros segundos de cada mapa. Um painel de toque traz um analógico para a câmera, a hora do dia, o clima e, quando o pacote leva vários mapas, a troca de mapa.
+
 ### Projetos de jogo
 
 Um jogo mora na pasta dele, fora deste repositório: mapas, cenas, prefabs,
@@ -100,7 +108,7 @@ A demonstração é um projeto de jogo, `projects/parana_field` (no mesmo format
 
 ## Contribuindo
 
-Leia o [CONTRIBUTING.md](CONTRIBUTING.md) antes de abrir um pull request. Contribuições de código entram sob a Apache License 2.0. Não aceitamos assets, modelos, texturas ou mapas com direitos de terceiros.
+Leia o [CONTRIBUTING.md](CONTRIBUTING.md) antes de abrir um pull request. O [AGENTS.md](AGENTS.md) traz as regras de código e como verificar uma mudança (escrito para servir também a agentes de programação), e o [ROADMAP.md](ROADMAP.md) lista o que falta e por onde cada item começa. Contribuições de código entram sob a Apache License 2.0. Não aceitamos assets, modelos, texturas ou mapas com direitos de terceiros.
 
 ## Licença
 

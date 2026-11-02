@@ -61,6 +61,14 @@ cd eruption-engine
 ./launch.sh --project projects/parana_field --map parana_field_lite
 ```
 
+### Android
+
+```bash
+tools/android/build_apk.sh <マップ>[,<マップ>...]   # build-android/eruption-<マップ>.apk を生成
+```
+
+Android SDK と NDK（`ANDROID_HOME`、既定は `~/Android/Sdk`）および JDK 17 が必要です。パッケージは GPU 名からスマートフォン用プリセット（`data/graphics.json` の `mobile_low`、`mobile_medium`、`mobile_high`）を選び、各マップの最初の数秒でシーン解像度を 30 FPS に合わせて調整します。タッチパネルにはカメラ用スティック、時刻、天候、そして複数のマップを含むパッケージではマップ切り替えがあります。
+
 ### ゲームプロジェクト
 
 ゲームはこのリポジトリの外にある専用フォルダで管理します。マップ、シーン、
@@ -101,7 +109,7 @@ cd eruption-engine
 
 ## コントリビュート
 
-プルリクエストを送る前に [CONTRIBUTING.md](CONTRIBUTING.md) をお読みください。コードの貢献は Apache License 2.0 のもとで受け付けます。第三者の権利を含むアセット、モデル、テクスチャ、マップは受け付けていません。
+プルリクエストを送る前に [CONTRIBUTING.md](CONTRIBUTING.md) をお読みください。コードの規約と変更の検証方法は [AGENTS.md](AGENTS.md)（コーディングエージェントも従えるように書かれています）に、足りない機能と各項目の着手点は [ROADMAP.md](ROADMAP.md) にあります。コードの貢献は Apache License 2.0 のもとで受け付けます。第三者の権利を含むアセット、モデル、テクスチャ、マップは受け付けていません。
 
 ## ライセンス
 
