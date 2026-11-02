@@ -50,7 +50,7 @@ out += struct.pack("<I", 1) + struct.pack("<H", 5) + b"golpe" + struct.pack("<II
 open(sys.argv[1], "wb").write(out)
 PY
 
-TESTS="api cena comportamento salvar prefab luz personagem robusto faixa terreno_vivo andar_script visao cabeca anel retrato telemetria duracao"
+TESTS="api cena comportamento salvar prefab luz personagem robusto faixa terreno_vivo andar_script visao cabeca anel retrato telemetria duracao distancia"
 
 # Confere um log: cada teste com OBJ-OK pelo menos $2 vezes, nenhum OBJ-FALHOU,
 # nenhum script parado por erro.

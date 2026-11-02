@@ -279,6 +279,15 @@ int world_warp_map(lua_State* L) {
     eng().setPendingMapWarp(luaL_checkstring(L, 1));
     return 0;
 }
+int world_set_load_distance(lua_State* L) {
+    // A thread do vizinho ja' e' assincrona; o que o jogo ganha e' comecar mais cedo.
+    eng().worldLoadDistance = std::clamp(static_cast<float>(luaL_checknumber(L, 1)), 50.0f, 3000.0f);
+    return 0;
+}
+int world_load_distance(lua_State* L) {
+    lua_pushnumber(L, eng().worldLoadDistance);
+    return 1;
+}
 int world_warping(lua_State* L) {
     lua_pushboolean(L, eng().warpLoading());
     return 1;
@@ -2410,7 +2419,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend}, {"set_cutaway", world_set_cutaway},
         {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids}, {"set_liquid_level", world_set_liquid_level},
         {"block_slopes", world_block_slopes}, {"set_walk_cost", world_set_walk_cost}, {"walk_cost", world_walk_cost},
-        {"map", world_map}, {"load_map", world_load_map},
+        {"map", world_map}, {"load_map", world_load_map}, {"set_load_distance", world_set_load_distance},
+        {"load_distance", world_load_distance},
         {"warp_map", world_warp_map}, {"warping", world_warping}, {nullptr, nullptr}};
     static const luaL_Reg player[] = {
         {"position", player_position}, {"set_position", player_set_position}, {"set_sprite", player_set_sprite}, {"near", player_near},
@@ -2788,6 +2798,13 @@ declare world: {
     -- player walks into the mouth of the passage, not when they reach it.
     warp_map: (map: string) -> (),
     warping: () -> boolean,
+    -- How close (meters from the map's edge) the player gets before a neighbor
+    -- map of the scene starts loading in its thread (default 300; 50..3000).
+    -- A bigger distance starts the load earlier, so a heavy neighbor is ready
+    -- by the time the player reaches it, at the cost of keeping more maps in
+    -- memory (a neighbor is released only past 1.5x this distance).
+    set_load_distance: (meters: number) -> (),
+    load_distance: () -> number,
 )" + ribbonApiDefinitions() + R"(}
 
 -- Saved games: map, player position, vars, time, weather and music, kept in the
