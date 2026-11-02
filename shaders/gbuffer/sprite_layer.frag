@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 // CAMADA DE SPRITES (FSR): o sprite redesenhado na resolucao de DISPLAY, por
 // cima da saida do FSR (HDR linear, antes do pos).
@@ -20,7 +21,8 @@ layout(location = 2) in flat uint v_flags;
 layout(location = 3) in vec4 v_tint;
 layout(location = 6) in flat uint v_paletteIndex;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#define ERUPTION_SLOT_NEAREST // atlas de sprite e paleta sem filtro
+#include "common/slot_textures.glsl"
 layout(set = 2, binding = 0) uniform sampler2D u_depth;   // depth do G-buffer (render)
 layout(set = 2, binding = 1) uniform sampler2D u_lit;     // imagem iluminada (render, HDR linear)
 layout(set = 2, binding = 2) uniform sampler2D u_albedo;  // albedo do G-buffer (render)
@@ -59,12 +61,12 @@ bool fadeCut(float a) {
 }
 
 void main() {
-    vec4 albedo = texture(nonuniformEXT(u_textures[v_texIndex]), v_uv);
+    vec4 albedo = slotTexture(v_texIndex, v_uv);
     if ((v_flags & 256u) != 0) {
         float idx = albedo.r * 255.0;
         if (idx < 0.5) discard;
         float u = (idx + 0.5) / 256.0;
-        albedo = texture(nonuniformEXT(u_textures[v_paletteIndex]), vec2(u, 0.5));
+        albedo = slotTexture(v_paletteIndex, vec2(u, 0.5));
         albedo.a = 1.0;
     }
     if (albedo.a < 0.01 || fadeCut(v_tint.a)) discard;

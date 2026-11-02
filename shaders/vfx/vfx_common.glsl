@@ -177,9 +177,15 @@ vec3 unpackOct(uint p) {
 // Balde de profundidade (0 = mais longe): log da distancia entre perto e
 // longe, de tras para frente (a mistura alfa precisa do fundo primeiro).
 uint depthBucket(vec3 pos) {
-    float w = max((frame.viewProj * vec4(pos, 1.0)).w, frame.timeInfo.w);
-    float t = log2(w / frame.timeInfo.w) / log2(max(frame.depthInfo.z / frame.timeInfo.w, 1.0001));
-    return VFX_SORT_BUCKETS - 1u - uint(clamp(t, 0.0, 1.0) * float(VFX_SORT_BUCKETS - 1u));
+    float nearW = max(frame.timeInfo.w, 1e-3);
+    float w = max((frame.viewProj * vec4(pos, 1.0)).w, nearW);
+    float t = log2(w / nearW) / log2(max(frame.depthInfo.z / nearW, 1.0001));
+    // O teto e' inteiro, depois da conversao: no PowerVR GE8320 um NaN aqui
+    // (clamp com NaN e' indefinido, e o compilador do driver reescreve o teste
+    // em float como clamp) levava o balde para fora do buffer de ordenacao e o
+    // atomico travava a GPU ate' o reboot, na chegada a um mapa com fumaca.
+    uint b = uint(max(t, 0.0) * float(VFX_SORT_BUCKETS - 1u));
+    return VFX_SORT_BUCKETS - 1u - min(b, VFX_SORT_BUCKETS - 1u);
 }
 
 // Aleatorio sem estado (PCG hash): o mesmo resultado em qualquer ordem de

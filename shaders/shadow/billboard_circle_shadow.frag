@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
 layout(location = 0) in flat vec4 v_feet;   // xyz = pe', w = raio em X
@@ -10,7 +11,8 @@ layout(location = 4) in flat float v_fade; // characters.fade: o disco clareia j
 layout(location = 0) out vec4 outShadow;
 
 // Set 0 reserved for bindless textures (not used but required to match pipeline layout)
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#define ERUPTION_SLOT_NEAREST // atlas de sprite e paleta sem filtro
+#include "common/slot_textures.glsl"
 
 layout(set = 1, binding = 0) uniform FrameUBO {
     mat4 u_view;

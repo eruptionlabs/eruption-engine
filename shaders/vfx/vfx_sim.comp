@@ -180,6 +180,9 @@ void main() {
             }
             natural = natural || (p.age >= p.life);
             alive = p.age < p.life;
+            // Posicao ou velocidade invalida (NaN/inf) morre aqui: no desenho
+            // e na ordenacao ela viraria indice fora do buffer.
+            if (any(isnan(p.pos)) || any(isinf(p.pos)) || any(isnan(p.vel))) alive = false;
             particles[idx] = p;
             // Sub-emissor na batida: so' impacto de verdade (a particula
             // parada no chao "bate" todo frame e virava chuva de eventos).

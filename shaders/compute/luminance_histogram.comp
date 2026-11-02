@@ -12,7 +12,7 @@ layout(push_constant) uniform Push {
     float minLogLum;
     float logLumRange;
     float timeDelta;
-    float pad;
+    float sampleStride; // 1 = todo pixel; N = um a cada NxN (GPU fraca)
     vec4 rowY;  // linha y da invViewProj
     vec4 rowW;  // linha w
     vec4 cam;   // x = altura da camera, y = 1 tira o fundo abaixo do horizonte
@@ -32,9 +32,11 @@ void main() {
     barrier();
 
     ivec2 texSize = textureSize(srcTexture, 0);
-    vec2 uv = (vec2(gl_GlobalInvocationID.xy) + 0.5) / vec2(texSize);
-    
-    if (gl_GlobalInvocationID.x < uint(texSize.x) && gl_GlobalInvocationID.y < uint(texSize.y)) {
+    uint stride = max(uint(push.sampleStride), 1u);
+    uvec2 texel = gl_GlobalInvocationID.xy * stride;
+    vec2 uv = (vec2(texel) + 0.5 * float(stride)) / vec2(texSize);
+
+    if (texel.x < uint(texSize.x) && texel.y < uint(texSize.y)) {
         vec3 color = texture(srcTexture, uv).rgb;
         float lum = luminance(color);
         float logLum = clamp((log2(lum + 1e-5) - push.minLogLum) / push.logLumRange, 0.0, 1.0);

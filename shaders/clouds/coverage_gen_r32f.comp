@@ -1,0 +1,5 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Variante para GPU sem formatos estendidos de storage image (ver o corpo).
+#define COVERAGE_R32F
+#include "clouds/coverage_gen_body.glsl"

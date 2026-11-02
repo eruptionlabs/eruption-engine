@@ -29,6 +29,10 @@
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
+// GPU fraca: o mesmo Catmull-Rom em 9 leituras bilineares (os dois pesos do
+// meio de cada eixo viram uma leitura so') em vez de 16 texelFetch.
+layout(constant_id = 0) const bool LITE = false;
+
 layout(set = 0, binding = 0) uniform sampler2D u_input; // linear, clamp-to-edge
 
 layout(push_constant) uniform PushConstants {
@@ -75,8 +79,47 @@ vec3 catmullRomSample(vec2 uv) {
     return max(result, vec3(0.0));
 }
 
+vec3 catmullRomBilinear(vec2 uv) {
+    vec2 samplePos = uv * push.srcSize;
+    vec2 texPos1 = floor(samplePos - 0.5) + 0.5;
+    vec2 f = samplePos - texPos1;
+    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    vec2 w3 = f * f * (-0.5 + 0.5 * f);
+    vec2 w12 = w1 + w2;
+    vec2 p0 = (texPos1 - 1.0) * push.invSrcSize;
+    vec2 p12 = (texPos1 + w2 / w12) * push.invSrcSize;
+    vec2 p3 = (texPos1 + 2.0) * push.invSrcSize;
+    vec3 r = (texture(u_input, vec2(p0.x, p0.y)).rgb * w0.x
+            + texture(u_input, vec2(p12.x, p0.y)).rgb * w12.x
+            + texture(u_input, vec2(p3.x, p0.y)).rgb * w3.x) * w0.y;
+    r += (texture(u_input, vec2(p0.x, p12.y)).rgb * w0.x
+        + texture(u_input, vec2(p12.x, p12.y)).rgb * w12.x
+        + texture(u_input, vec2(p3.x, p12.y)).rgb * w3.x) * w12.y;
+    r += (texture(u_input, vec2(p0.x, p3.y)).rgb * w0.x
+        + texture(u_input, vec2(p12.x, p3.y)).rgb * w12.x
+        + texture(u_input, vec2(p3.x, p3.y)).rgb * w3.x) * w3.y;
+    return max(r, vec3(0.0));
+}
+
+// Anti-estouro: a base cubica passa do valor dos vizinhos perto de ponto muito
+// claro (lampada, janela acesa, acima de 1), cada canal de um jeito, e sobrava
+// um pontinho branco com franja colorida. O resultado fica no intervalo dos 4
+// texels de origem em volta.
+vec3 clampToFootprint(vec3 c, vec2 uv) {
+    ivec2 b = ivec2(floor(uv * push.srcSize - 0.5));
+    ivec2 hi = ivec2(push.srcSize) - 1;
+    vec3 t00 = texelFetch(u_input, clamp(b, ivec2(0), hi), 0).rgb;
+    vec3 t10 = texelFetch(u_input, clamp(b + ivec2(1, 0), ivec2(0), hi), 0).rgb;
+    vec3 t01 = texelFetch(u_input, clamp(b + ivec2(0, 1), ivec2(0), hi), 0).rgb;
+    vec3 t11 = texelFetch(u_input, clamp(b + ivec2(1, 1), ivec2(0), hi), 0).rgb;
+    return clamp(c, min(min(t00, t10), min(t01, t11)), max(max(t00, t10), max(t01, t11)));
+}
+
 void main() {
-    vec3 center = catmullRomSample(inUV);
+    vec3 center = LITE ? catmullRomBilinear(inUV) : catmullRomSample(inUV);
+    center = clampToFootprint(center, inUV);
 
     if (push.sharpenAmount <= 0.0001) {
         outColor = vec4(center, 1.0);

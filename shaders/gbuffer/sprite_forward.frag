@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 #extension GL_EXT_nonuniform_qualifier : enable
@@ -13,7 +14,8 @@ layout(location = 6) in flat uint v_paletteIndex;
 layout(location = 7) in flat uint v_normalTexIndex;
 layout(location = 8) in flat uint v_mrahwTexIndex;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#define ERUPTION_SLOT_NEAREST // atlas de sprite e paleta sem filtro
+#include "common/slot_textures.glsl"
 
 layout(set = 1, binding = 0) uniform FrameUBO {
     mat4 view;
@@ -50,11 +52,11 @@ layout(set = 1, binding = 0) uniform FrameUBO {
 layout(location = 0) out vec4 o_color;
 
 void main() {
-    vec4 albedo = texture(nonuniformEXT(u_textures[v_texIndex]), v_uv);
+    vec4 albedo = slotTexture(v_texIndex, v_uv);
     
     if ((v_flags & 256u) != 0) {
         float idx = albedo.r;
-        vec4 pal = texture(nonuniformEXT(u_textures[v_paletteIndex]), vec2(idx, 0.5));
+        vec4 pal = slotTexture(v_paletteIndex, vec2(idx, 0.5));
         albedo.rgb = pal.rgb;
         albedo.a = 1.0; 
         if (idx < 0.001) discard; 

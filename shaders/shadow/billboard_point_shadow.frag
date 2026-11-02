@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
 // Decal da sombra de luz pontual: ver billboard_point_shadow.vert.
@@ -13,7 +14,8 @@ layout(location = 7) in flat vec2 v_axisTop;
 
 layout(location = 0) out vec4 outShadow;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#define ERUPTION_SLOT_NEAREST // atlas de sprite e paleta sem filtro
+#include "common/slot_textures.glsl"
 layout(set = 1, binding = 0) uniform FrameUBO {
     mat4 u_view;
     mat4 u_projection;
@@ -49,7 +51,7 @@ layout(set = 2, binding = 0) uniform sampler2D u_sceneDepth;
 
 // Cobertura do sprite neste UV (paleta: indice 0 e' transparente).
 float silhouette(vec2 uv) {
-    vec4 albedo = texture(u_textures[nonuniformEXT(v_texIndex)], uv);
+    vec4 albedo = slotTexture(nonuniformEXT(v_texIndex), uv);
     if ((v_flags & 256u) != 0u) return albedo.r * 255.0 < 0.5 ? 0.0 : 1.0;
     return albedo.a;
 }

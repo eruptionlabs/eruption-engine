@@ -4,8 +4,9 @@
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in vec3 inNormal;
-layout(location = 3) in uint inTexIndex;
-layout(location = 4) in uint inMatId;
+layout(location = 3) in uvec2 inTexMat; // texIndex, matId (R16G16, ver ShadowRenderer)
+#define inTexIndex inTexMat.x
+#define inMatId inTexMat.y
 layout(location = 5) in uint inColor;
 
 layout(location = 0) out vec2 outTexCoord;

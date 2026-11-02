@@ -1,29 +1,37 @@
 // Corpo de model.vert: incluído por model.vert (com velocidade de objeto, FSR)
 // e por model_novel.vert (ERUPTION_NO_VELOCITY: sem o alvo de velocidade).
 
+// Campos vizinhos do TerrainVertex chegam em blocos de 16 bytes e são
+// desempacotados aqui (GPU de celular paga por entrada lida). Mesma numeração
+// de ModelRenderer::vertexAttributes.
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in vec3 inNormal;
-layout(location = 3) in uint inTexIndex;
-layout(location = 4) in uint inMatId;
-layout(location = 5) in uint inColor;
-layout(location = 6) in uint inPbrIndex;
-layout(location = 7) in uint inNormalIndex;
-layout(location = 8) in uint inBlendTexIndex;
-layout(location = 9) in uint inBlendPbrIndex;
-layout(location = 10) in uint inBlendNormalIndex;
-layout(location = 11) in float inBlendWeight;
-layout(location = 12) in uint inBlendMaskIndex;
-layout(location = 13) in vec2 inBlendMaskUV;
-layout(location = 14) in float inEmissiveStrength;
-layout(location = 15) in uvec2 inSplatTex;
-layout(location = 16) in uvec2 inSplatTex2;
-layout(location = 17) in uint inBlendMaskIndex2;
-layout(location = 18) in uint inEmissiveIndex;
+layout(location = 3) in uvec4 inColorBlend; // color, blendWeight, blendMaskUV (bits de float)
+layout(location = 4) in uvec4 inSplat;      // splatTex01, 23, 45, 67
+layout(location = 5) in uvec4 inMaterial;   // emissiveStrength (bits), pares de 16 bits:
+                                            // texIndex|matId, pbr|normal, blendTex|blendPbr
+layout(location = 6) in uvec4 inMaterial2;  // blendNormal, blendMask, blendMask2, emissive
+#define inColor inColorBlend.x
+#define inBlendWeight uintBitsToFloat(inColorBlend.y)
+#define inBlendMaskUV uintBitsToFloat(inColorBlend.zw)
+#define inSplatTex inSplat.xy
+#define inSplatTex2 inSplat.zw
+#define inEmissiveStrength uintBitsToFloat(inMaterial.x)
+#define inTexIndex (inMaterial.y & 0xFFFFu)
+#define inMatId (inMaterial.y >> 16u)
+#define inPbrIndex (inMaterial.z & 0xFFFFu)
+#define inNormalIndex (inMaterial.z >> 16u)
+#define inBlendTexIndex (inMaterial.w & 0xFFFFu)
+#define inBlendPbrIndex (inMaterial.w >> 16u)
+#define inBlendNormalIndex inMaterial2.x
+#define inBlendMaskIndex inMaterial2.y
+#define inBlendMaskIndex2 inMaterial2.z
+#define inEmissiveIndex inMaterial2.w
 #ifndef ERUPTION_NO_VELOCITY
 // Posicao no frame anterior: a pose passada da malha com esqueleto, ou a
 // propria posicao (o buffer da malha ligado de novo na entrada 1).
-layout(location = 19) in vec3 inPrevPosition;
+layout(location = 14) in vec3 inPrevPosition;
 #endif
 
 layout(location = 0) out vec3 outWorldPos;
@@ -59,7 +67,8 @@ layout(location = 19) out vec4 outDispInfo;
 layout(location = 20) out vec3 outPrevWorldPos;
 #endif
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#define ERUPTION_SLOT_NO_FRAGMENT_OPS
+#include "common/slot_textures.glsl"
 
 // Prefixo do FrameUBO compartilhado (ver model.frag) - só o que o vertex
 // stage precisa; um bloco menor que o buffer é válido com offsets idênticos.
@@ -317,7 +326,7 @@ float dispMipFloor(uint texIdx) {
     float spacing = g_dispSpacing > 0.0 ? g_dispSpacing : u_tessParams2.y;
     float uvPerU = push.uvScale.z;
     if (spacing <= 0.0 || uvPerU <= 0.0) return 0.0;
-    float texels = float(textureSize(u_textures[nonuniformEXT(texIdx)], 0).x);
+    float texels = float(slotTextureSize(texIdx, 0).x);
     return log2(max(texels * uvPerU * spacing * 2.0, 1.0));
 }
 
@@ -338,7 +347,7 @@ float heightNearMip(uint texIdx, bool useAlpha) {
 // mudava de bloco em bloco. Com a banda perto le' o ultimo mip; sem ela
 // (celular) o mip 8 de antes.
 float heightBaseMip(uint texIdx) {
-    return u_tessNearDistance > 0.0 ? log2(float(textureSize(u_textures[nonuniformEXT(texIdx)], 0).x)) : 8.0;
+    return u_tessNearDistance > 0.0 ? log2(float(slotTextureSize(texIdx, 0).x)) : 8.0;
 }
 
 float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
@@ -346,7 +355,7 @@ float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
     float nearMip = heightNearMip(texIdx, useAlpha);
     float farMip = nearMip + 3.0;
     if (useAlpha) {
-        float a = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, nearMip).a;
+        float a = slotTextureLod(texIdx, uvIn, nearMip).a;
         if (a > 0.999) return 0.5;
         // GANHO como CONTRASTE em torno de uma LINHA DE BASE DINAMICA (media
         // da textura inteira, mip 8 - o sampler clampa sozinho no ultimo
@@ -354,11 +363,11 @@ float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
         // explicacao, tem que ficar identico: material fotografado real nao
         // distribui simetrico em volta de 0.5 fixo, "preto fica fixo, branco
         // sobe" era a media real da textura ficando perto do preto).
-        float base = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, heightBaseMip(texIdx)).a;
+        float base = slotTextureLod(texIdx, uvIn, heightBaseMip(texIdx)).a;
         return clamp(0.5 + (a - base) * gain, 0.0, 1.0);
     }
-    vec4 n = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, nearMip);
-    vec4 f = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, farMip);
+    vec4 n = slotTextureLod(texIdx, uvIn, nearMip);
+    vec4 f = slotTextureLod(texIdx, uvIn, farMip);
     const vec3 kL = vec3(0.2126, 0.7152, 0.0722);
     float hn = dot(n.rgb, kL);
     float hf = dot(f.rgb, kL);
@@ -387,7 +396,7 @@ float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 spl
                      uint maskIdx, uint maskIdx2, float gain) {
     float hBase = heightUv(baseTex, uvIn, gain, false);
     if ((splat.x | splat.y) == 0u || maskIdx == 0u) return hBase;
-    vec4 w = textureLod(u_textures[nonuniformEXT(maskIdx)], maskUv, 0.0);
+    vec4 w = slotTextureLod(maskIdx, maskUv, 0.0);
     uint s0 =  splat.x        & 0x3FFFu;
     uint s1 = (splat.x >> 16) & 0x3FFFu;
     uint s2 =  splat.y        & 0x3FFFu;
@@ -399,7 +408,7 @@ float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 spl
     if (s2 != 0u) { acc += heightUv(s2, uvIn, gain, false) * w.b; sum += w.b; }
     if (s3 != 0u) { acc += heightUv(s3, uvIn, gain, false) * w.a; sum += w.a; }
     if (maskIdx2 != 0u) {
-        vec4 w2 = textureLod(u_textures[nonuniformEXT(maskIdx2)], maskUv, 0.0);
+        vec4 w2 = slotTextureLod(maskIdx2, maskUv, 0.0);
         uint s4 =  splat2.x        & 0x3FFFu;
         uint s5 = (splat2.x >> 16) & 0x3FFFu;
         uint s6 =  splat2.y        & 0x3FFFu;
@@ -463,7 +472,7 @@ void main() {
         float fadeStart = geoDist * 0.75;
         float t = 1.0 - clamp((dCam - fadeStart) / (geoDist - fadeStart), 0.0, 1.0);
         if (t > 0.0) {
-            float h = textureLod(u_textures[nonuniformEXT(inPbrIndex)], animUv, 3.0).a;
+            float h = slotTextureLod(inPbrIndex, animUv, 3.0).a;
             if (h < 0.995) {
                 worldPos.xyz += worldNormal * ((h - 0.5) * u_inst[gl_InstanceIndex].uvScaleDisp.z * t);
             }

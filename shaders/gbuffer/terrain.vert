@@ -3,14 +3,18 @@
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in vec3 inNormal;
-layout(location = 3) in uint inTexIndex;
-layout(location = 4) in uint inMatId;
+// Indices de 16 bits aos pares (R16G16), como TerrainRenderer::createPipeline.
+layout(location = 3) in uvec2 inTexMat;        // texIndex, matId
 layout(location = 5) in uint inColor;
-layout(location = 6) in uint inPbrIndex;
-layout(location = 7) in uint inNormalIndex;
-layout(location = 8) in uint inBlendTexIndex;
-layout(location = 9) in uint inBlendPbrIndex;
+layout(location = 6) in uvec2 inPbrNormal;     // pbrIndex, normalIndex
+layout(location = 8) in uvec2 inBlendTexPbr;   // blendTexIndex, blendPbrIndex
 layout(location = 10) in uint inBlendNormalIndex;
+#define inTexIndex inTexMat.x
+#define inMatId inTexMat.y
+#define inPbrIndex inPbrNormal.x
+#define inNormalIndex inPbrNormal.y
+#define inBlendTexIndex inBlendTexPbr.x
+#define inBlendPbrIndex inBlendTexPbr.y
 layout(location = 11) in float inBlendWeight;
 
 layout(location = 0) out vec3 outWorldPos;

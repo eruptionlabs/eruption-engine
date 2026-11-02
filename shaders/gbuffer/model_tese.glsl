@@ -62,7 +62,8 @@ layout(location = 20) in vec3 inPrevWorldPos[];
 layout(location = 20) out vec3 outPrevWorldPos;
 #endif
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#define ERUPTION_SLOT_NO_FRAGMENT_OPS
+#include "common/slot_textures.glsl"
 
 // 96 B (sem a matriz model e o uvTranslateRot, que nenhum shader lia): cabe
 // nos 128 B de push constant garantidos (GPU de celular).
@@ -199,7 +200,7 @@ float dispMipFloor(uint texIdx) {
     float spacing = g_dispSpacing > 0.0 ? g_dispSpacing : u_tessParams2.y;
     float uvPerU = push.uvScale.z;
     if (spacing <= 0.0 || uvPerU <= 0.0) return 0.0;
-    float texels = float(textureSize(u_textures[nonuniformEXT(texIdx)], 0).x);
+    float texels = float(slotTextureSize(texIdx, 0).x);
     return log2(max(texels * uvPerU * spacing * 2.0, 1.0));
 }
 
@@ -220,7 +221,7 @@ float heightNearMip(uint texIdx, bool useAlpha) {
 // mudava de bloco em bloco. Com a banda perto le' o ultimo mip; sem ela
 // (celular) o mip 8 de antes.
 float heightBaseMip(uint texIdx) {
-    return u_tessNearDistance > 0.0 ? log2(float(textureSize(u_textures[nonuniformEXT(texIdx)], 0).x)) : 8.0;
+    return u_tessNearDistance > 0.0 ? log2(float(slotTextureSize(texIdx, 0).x)) : 8.0;
 }
 
 float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
@@ -230,7 +231,7 @@ float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
     float nearMip = heightNearMip(texIdx, useAlpha);
     float farMip = nearMip + 3.0;
     if (useAlpha) {
-        float a = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, nearMip).a;
+        float a = slotTextureLod(texIdx, uvIn, nearMip).a;
         if (a > 0.999) return 0.5;
         // GANHO como CONTRASTE em torno de uma LINHA DE BASE DINAMICA - nao
         // mais 0.5 fixo, e nao mais diferenca entre dois mips proximos (isso
@@ -248,11 +249,11 @@ float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
         // como se fosse alta). Ganho continua sendo o slider "Height
         // contrast", agora esticando/comprimindo em torno da media de
         // verdade em vez de um meio arbitrario.
-        float base = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, heightBaseMip(texIdx)).a;
+        float base = slotTextureLod(texIdx, uvIn, heightBaseMip(texIdx)).a;
         return clamp(0.5 + (a - base) * gain, 0.0, 1.0);
     }
-    vec4 n = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, nearMip);
-    vec4 f = textureLod(u_textures[nonuniformEXT(texIdx)], uvIn, farMip);
+    vec4 n = slotTextureLod(texIdx, uvIn, nearMip);
+    vec4 f = slotTextureLod(texIdx, uvIn, farMip);
     const vec3 kL = vec3(0.2126, 0.7152, 0.0722);
     float hn = dot(n.rgb, kL);
     float hf = dot(f.rgb, kL);
@@ -273,13 +274,23 @@ float seamEdgeMask(bool sa, bool sb, vec3 p, vec3 a, vec3 b, float r) {
     return m;
 }
 
+// RELEVO HIBRIDO (com model_frag.glsl, reliefPomUv): a altura se divide pelo
+// angulo de vista. Rasante fica com a geometria - e' onde o POM desmancha e a
+// silhueta conta -, de frente fica com o POM, que ali e' exato e custa menos.
+// Peso do POM = rampa do cosseno entre u_pomParams.x e u_tessParams2.x; a
+// tesselacao desloca so' o resto (1 - peso), entao nada desloca duas vezes.
+float reliefPomWeight(float NdotV) {
+    float lo = u_pomParams.x, hi = u_tessParams2.x;
+    return clamp((NdotV - lo) / max(hi - lo, 1e-4), 0.0, 1.0);
+}
+
 // SOLDA DA COSTURA (ModelRenderer::createSeamWeld). Por triangulo, 10
 // texels RGBA32F: 0..2 quina (normal soldada xyz, marcada), 3..5 quina (UV dona
 // xy, slot do MRAH-W dono em z, -1 = borda de malha), 6..8 aresta e = quina e ->
 // e+1 (UV do lado dono nas duas pontas), 9 tipo de cada aresta (0 interna,
 // 1 costura, 2 borda) + 4 x slot do dono.
 vec4 weldTexel(uint slot, int i) {
-    return textureLod(u_textures[nonuniformEXT(slot)], (vec2(float(i % 4096), float(i / 4096)) + 0.5) / vec2(4096.0, max(push.weld.z, 1.0)), 0.0);
+    return slotTextureLod(slot, (vec2(float(i % 4096), float(i / 4096)) + 0.5) / vec2(4096.0, max(push.weld.z, 1.0)), 0.0);
 }
 
 float lut8(vec4 a, vec4 b, float t) {
@@ -308,7 +319,7 @@ float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 spl
                      uint maskIdx, uint maskIdx2, float gain) {
     float hBase = heightUv(baseTex, uvIn, gain, false);
     if ((splat.x | splat.y) == 0u || maskIdx == 0u) return hBase;
-    vec4 w = textureLod(u_textures[nonuniformEXT(maskIdx)], maskUv, 0.0);
+    vec4 w = slotTextureLod(maskIdx, maskUv, 0.0);
     uint s0 =  splat.x        & 0x3FFFu;
     uint s1 = (splat.x >> 16) & 0x3FFFu;
     uint s2 =  splat.y        & 0x3FFFu;
@@ -320,7 +331,7 @@ float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 spl
     if (s2 != 0u) { acc += heightUv(s2, uvIn, gain, false) * w.b; sum += w.b; }
     if (s3 != 0u) { acc += heightUv(s3, uvIn, gain, false) * w.a; sum += w.a; }
     if (maskIdx2 != 0u) {
-        vec4 w2 = textureLod(u_textures[nonuniformEXT(maskIdx2)], maskUv, 0.0);
+        vec4 w2 = slotTextureLod(maskIdx2, maskUv, 0.0);
         uint s4 =  splat2.x        & 0x3FFFu;
         uint s5 = (splat2.x >> 16) & 0x3FFFu;
         uint s6 =  splat2.y        & 0x3FFFu;
@@ -509,6 +520,8 @@ void main() {
                     seamMask = 1.0;
                 }
                 float ampW = u_tessParams.z * amp * push.uvScale.w * seamMask;
+                // Material com MRAH-W: o POM do frag cobre a parte de frente.
+                if (hSrc < 1.5) ampW *= 1.0 - reliefPomWeight(abs(dot(dispDir, normalize(u_cameraPos - wp))));
                 vec3 dsp = dispDir * ((h - 0.5) * ampW);
                 wp += dsp;
 
@@ -538,7 +551,7 @@ void main() {
                         vec3 dPdv = (e2 * t1.x - e1 * t2.x) / det;
                         dPdu -= nrm * dot(dPdu, nrm);
                         dPdv -= nrm * dot(dPdv, nrm);
-                        float dUv = exp2(heightNearMip(hTex, hAlpha)) / float(textureSize(u_textures[nonuniformEXT(hTex)], 0).x);
+                        float dUv = exp2(heightNearMip(hTex, hAlpha)) / float(slotTextureSize(hTex, 0).x);
                         // Mesma fonte que deslocou: chao com splat le' a mistura
                         // das camadas (a mascara muda devagar, fica no ponto).
                         float h0, hU, hV;

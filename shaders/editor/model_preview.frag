@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
 // VISUALIZADOR DE MODELO do editor (src/editor/ModelPreview.cpp). O vértice
@@ -30,7 +31,7 @@ layout(location = 19) in vec4 inDispInfo;
 
 layout(location = 0) out vec4 outColor;
 
-layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
+#include "common/slot_textures.glsl"
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
@@ -70,7 +71,7 @@ mat3 tbnFromDerivatives(vec3 N, vec3 p, vec2 uv) {
 void main() {
     const int mode = int(push.lightMode.w + 0.5);
     vec4 tex = vec4(0.8, 0.8, 0.8, 1.0);
-    if (inTexIndex != 0u) tex = texture(u_textures[nonuniformEXT(inTexIndex)], inTexCoord);
+    if (inTexIndex != 0u) tex = slotTexture(inTexIndex, inTexCoord);
     if (mode == 4) { // aramado: cor sólida
         outColor = vec4(push.wireCut.rgb, 1.0);
         return;
@@ -79,7 +80,7 @@ void main() {
     vec3 N = normalize(inNormal);
     if (!gl_FrontFacing) N = -N; // os dois lados (folhas)
     if (inNormalIndex != 0u) {
-        vec3 tn = texture(u_textures[nonuniformEXT(inNormalIndex)], inTexCoord).xyz * 2.0 - 1.0;
+        vec3 tn = slotTexture(inNormalIndex, inTexCoord).xyz * 2.0 - 1.0;
         N = normalize(tbnFromDerivatives(N, inWorldPos, inTexCoord) * normalize(tn));
     }
     if (mode == 2) { // normais
@@ -99,7 +100,7 @@ void main() {
     }
     float metallic = 0.0, rough = 0.8, ao = 1.0;
     if (inPbrIndex != 0u) {
-        vec4 m = texture(u_textures[nonuniformEXT(inPbrIndex)], inTexCoord);
+        vec4 m = slotTexture(inPbrIndex, inTexCoord);
         metallic = clamp(m.r * push.metallicScale, 0.0, 1.0);
         rough = clamp(m.g * push.roughnessScale, 0.04, 1.0);
         ao = m.b;
