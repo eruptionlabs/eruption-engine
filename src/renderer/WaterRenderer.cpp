@@ -1165,7 +1165,7 @@ void WaterRenderer::render(VkCommandBuffer cmd, const Mat4& viewProj, const Vec3
     WaterPushConstants pc{};
     pc.viewProj = viewProj;
     // ERUPTION_LIQUID_DEBUG=1 pinta a superficie liquida de ciano chapado,
-    // pra medir num print de cima quanto da caldeira o disco cobre. Ciano e
+    // pra medir num print de cima quanto da cratera o disco cobre. Ciano e
     // nao magenta porque magenta e' chroma-key de descarte no model.frag.
     // ERUPTION_LIQUID_DEBUG=2 (teste): a lava sai verde onde e' crosta e
     // vermelha onde esta' derretida, para medir a cobertura (crustCoverage).

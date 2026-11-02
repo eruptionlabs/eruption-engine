@@ -356,7 +356,7 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
             // faltava so' GERAR a luz a partir do liquido.
             //
             // Dedup contra luz AUTORAL: parana_demo ja' tem 18 point lights
-            // autorais em volta da caldeira (centro pulsando + anel em flicker,
+            // autorais em volta da cratera (centro pulsando + anel em flicker,
             // cor 1.0/0.42/0.13, intensity 3.2 = exatamente o `emissive` 3.2 do
             // liquido). Se o autor ja' iluminou aquela lava, nao empilhamos uma
             // segunda luz em cima. So' sintetiza pra' lava sem nenhuma luz a

@@ -99,7 +99,7 @@ struct LoadedMap {
         // Margem LOBADA (opcional, nova feature): amostras de raio por
         // angulo, indice 0 = angulo 0, ultimo indice = quase 2*PI (o
         // wraparound entre o ultimo e o primeiro fecha o circulo). Uma
-        // caldeira real nao e' um circulo - o raio onde a parede cruza a
+        // cratera real nao e' um circulo - o raio onde a parede cruza a
         // cota do liquido varia por azimute (medido: 116 a 234 num vulcao
         // lobado). Um disco circular nao tem raio nenhum que cubra isso sem
         // sobrar vazio de um lado ou vazar pra fora de outro. Vazio = usa

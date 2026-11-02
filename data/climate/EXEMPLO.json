@@ -28,7 +28,7 @@
     "",
     "As regioes sao aplicadas EM ORDEM sobre o clima global, entao uma regiao",
     "posterior vence onde houver sobreposicao - e' o que voce quer para um",
-    "foco pequeno e intenso (a boca da caldeira) dentro de um maior e ameno",
+    "foco pequeno e intenso (a boca da cratera) dentro de um maior e ameno",
     "(o macico vulcanico).",
     "",
     "radius  = raio de forca total",
@@ -57,7 +57,7 @@
       }
     },
     {
-      "name": "caldeira",
+      "name": "cratera",
       "center": [0.0, 0.0, 0.0],
       "radius": 200.0,
       "falloff": 260.0,
