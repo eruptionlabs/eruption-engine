@@ -1,6 +1,7 @@
 #include "utils/SystemMonitor.hpp"
 #include "core/Logger.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -152,11 +153,19 @@ void SystemMonitor::readGpuNvml() {
 }
 
 void SystemMonitor::readGpuSmiFallback() {
+    // Cada chamada sobe um shell: sem nvidia-smi (celular, GPU AMD/Intel) a
+    // primeira falha desliga a tentativa - no celular eram 22% da CPU.
+    static bool s_smiMissing = false;
+    if (s_smiMissing) return;
     FILE* pipe = popen("nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null", "r");
-    if (!pipe) return;
+    if (!pipe) {
+        s_smiMissing = true;
+        return;
+    }
     int gpu = 0;
     unsigned long long used = 0, total = 0;
-    if (fscanf(pipe, "%d, %llu, %llu", &gpu, &used, &total) == 3) {
+    if (fscanf(pipe, "%d, %llu, %llu", &gpu, &used, &total) != 3) s_smiMissing = true;
+    else {
         s_gpuCore = static_cast<float>(gpu);
         s_gpuVramBytes = used * 1024ULL * 1024ULL;
         s_gpuVramTotal = total * 1024ULL * 1024ULL;
@@ -245,6 +254,12 @@ void SystemMonitor::readGpuSysfs() {
 }
 
 void SystemMonitor::update() {
+    // Números de painel: uma leitura por segundo basta (cada uma lê arquivos
+    // de /proc e pode consultar o driver da GPU).
+    static std::chrono::steady_clock::time_point s_last{};
+    const auto now = std::chrono::steady_clock::now();
+    if (now - s_last < std::chrono::seconds(1)) return;
+    s_last = now;
     Sample cur{};
     readProcSelfStat(cur);
     readProcStat(cur);

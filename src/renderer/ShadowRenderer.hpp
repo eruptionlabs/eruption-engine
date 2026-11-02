@@ -75,6 +75,15 @@ struct ShadowSettings {
     // hardcoded before; weak GPUs (930M profile) should run 2048 or lower via
     // "atlas_size" in data/shadows.json.
     int atlasSize = 4096;
+    // Sombra pre-assada (so' no modo single; preset "shadow_cache"): o cenario
+    // parado e' desenhado numa imagem propria so' quando o sol vira mais que
+    // staticCacheMaxDeg, a camera sai da folga ou o conjunto parado muda. A
+    // cada atualizacao ela e' copiada para o atlas e so' quem se mexe e'
+    // desenhado por cima. A camera anda ate' staticCacheMargin da meia caixa
+    // antes de um cozimento novo. ERUPTION_SHADOW_CACHE=0|1 manda.
+    bool staticCache = false;
+    float staticCacheMargin = 0.1f;
+    float staticCacheMaxDeg = 0.4f;
     bool usePoisson = false;
     int poissonTaps = 4;
     int pcfKernelSize = 7;
@@ -195,6 +204,53 @@ public:
     float m_shadowTimeSnaps[MAX_SHADOW_SNAPS] = {0};
 
 private:
+    // Quem entra num desenho do atlas (sombra pre-assada separa os dois).
+    enum class Casters { All, Static, Moving };
+    struct CasterSources {
+        TerrainRenderer* terrain;
+        ModelRenderer* models;
+        SpriteRenderer* sprites;
+        const FrameUBO& frameUbo;
+        VkBuffer spriteBuffer;
+        uint32_t spriteCount;
+    };
+    VkRect2D cascadeRect(uint32_t cascade) const;
+    void drawCascade(VkCommandBuffer cmd, const CasterSources& src, const Mat4& mat, uint32_t cascade,
+                     const Frustum* receivers, Casters which);
+
+    // Estado da sombra pre-assada (ShadowSettings::staticCache).
+    struct StaticShadowCache {
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation alloc = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        uint32_t size = 0;
+        bool valid = false;    // a imagem guarda o cozimento descrito abaixo
+        uint64_t version = 0;  // ModelRenderer::staticShadowVersion do cozimento
+        Vec3 center{0.0f};       // alvo da camera no ultimo updateCascades
+        Vec3 bakedCenter{0.0f};  // alvo da camera no cozimento
+        Vec3 lightDir{0.0f, -1.0f, 0.0f};
+        float halfSize = 0.0f;
+        Mat4 render{1.0f}, lookup{1.0f};
+        Vec4 splits{0.0f};
+        float texel = 0.0f, depthRange = 0.0f;
+        uint64_t seenVersion = 0;   // última versão vista do conjunto parado
+        uint32_t stableFrames = 0;  // quadros seguidos com seenVersion sem mudar
+        uint32_t staleFrames = 0;   // quadros com o cozimento atrás da versão
+    } m_cache;
+    // Quadros com o conjunto parado sem mudar antes de recozer: objetos que
+    // nascem ao longo de vários quadros pediam um cozimento por quadro (53
+    // seguidos no celular PowerVR, que trava a GPU com quadro de mais de ~1 s).
+    // Até lá vale o cozimento anterior; o objeto novo fica sem sombra uns
+    // quadros. Conjunto que nunca assenta (muda todo quadro) recoze a cada
+    // kStaticMaxStaleFrames, para a sombra não ficar velha de vez.
+    static constexpr uint32_t kStaticSettleFrames = 8;
+    static constexpr uint32_t kStaticMaxStaleFrames = 60;
+    bool staticCacheActive() const { return m_settings.staticCache && m_settings.singleMap; }
+    void holdStaticCache(const Vec3& center);
+    bool ensureCacheImage();
+    void destroyCacheImage();
+    void renderWithStaticCache(VkCommandBuffer cmd, const CasterSources& src);
+
     std::function<void(VkCommandBuffer, const Mat4&, uint32_t)> m_extraCasters;
     VulkanContext* m_ctx = nullptr;
     BindlessDescriptor* m_bindless = nullptr;

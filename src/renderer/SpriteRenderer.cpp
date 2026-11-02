@@ -38,6 +38,7 @@ bool SpriteRenderer::init(VulkanContext* ctx, GBuffer* gbuffer, BindlessDescript
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     vkCreateSampler(m_ctx->device(), &samplerInfo, nullptr, &m_paletteSampler);
+    if (m_bindless) m_bindless->markNearestSampler(m_paletteSampler);
 
     ERUPTION_LOG_INFO("SpriteRenderer initialized (max instances: %d)", m_maxInstances);
     return true;

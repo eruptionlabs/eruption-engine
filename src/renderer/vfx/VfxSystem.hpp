@@ -215,6 +215,13 @@ public:
     void setFrameUboSet(VkDescriptorSet set) { m_frameUboSet = set; }
 
     const Stats& stats() const { return m_stats; }
+    // Estado que update() montou para o frame, para quem simula sem compute
+    // (navegador, WebGL2): pedidos de nascimento, emissores por slot (ate'
+    // slotCount) e o relogio que a turbulencia usa.
+    const std::vector<VfxSpawnRequestGpu>& spawnRequests() const { return m_requests; }
+    const VfxEmitterGpu* slotData() const { return m_slotData.data(); }
+    uint32_t slotCount() const { return m_slotHighWater; }
+    float simTime() const { return m_time; }
     // Depuracao: le' (com espera) as primeiras particulas da lista de desenho.
     void debugDump();
 
@@ -309,7 +316,10 @@ private:
     uint32_t m_lightBudget = 16;
     Mat4 m_viewProjNoJitter{1.0f};
     VkPipelineLayout m_compositeLayout = VK_NULL_HANDLE;
+    void resetPool();
+    void splitMark(VkCommandBuffer cmd, uint32_t frame, uint32_t mark);
     VkSampler m_linearSampler = VK_NULL_HANDLE;
+    VkSampler m_groundSampler = VK_NULL_HANDLE; // grade de altura R32F (filterFor)
     // Alvo de meia resolucao (RGBA16F, cor premultiplicada + cobertura).
     VkImage m_lowImage = VK_NULL_HANDLE;
     VmaAllocation m_lowAlloc = VK_NULL_HANDLE;

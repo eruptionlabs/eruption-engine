@@ -60,9 +60,16 @@ const BcFormatSupport& bcFormatSupport();
 // guardar assim no cache evita sintetizar o mapa de novo a cada carga.
 EtexData rgbaToEtexRaw(const uint8_t* rgba, int width, int height);
 
+// alphaTestCutoff > 0 (alfa de recorte, quem desenha descarta abaixo dele): em
+// cada mip o alfa e' escalado para que a fracao de texels acima do corte seja a
+// cobertura do mip 0 (alfa >= 0,5) da regiao (coverageRegion texels no mip 0;
+// 0 = a textura inteira) - Castano, "Computing alpha mipmaps". No mip 0 o
+// texel cheio fica em 2x o corte: o filtro bilinear cruza o corte no meio do
+// caminho entre cheio e vazio, sem engordar a silhueta.
 EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind kind,
                             bool hasAlpha = false,
-                            const std::vector<std::vector<float>>* roughnessBroadenR = nullptr);
+                            const std::vector<std::vector<float>>* roughnessBroadenR = nullptr,
+                            float alphaTestCutoff = -1.0f, int coverageRegion = 0);
 
 // Variancia da normal map por nivel de mip (Toksvig 2005 / Neubelt & Pettineo,
 // "Crafting a Next-Gen Material Pipeline for The Order: 1886", GDC 2013).
@@ -88,6 +95,9 @@ std::vector<std::vector<float>> computeNormalMipVariance(const uint8_t* normalRg
 
 // Serialize / parse an EtexData into the on-disk .etex byte layout (same
 // header the offline baker writes), used by the GLB texture cache bundle.
+// Mip 0 de volta para RGBA8 (BC1, BC3, BC7 ou RGBA8 cru). false sem decoder ou formato.
+bool decodeEtexMip0(const EtexData& e, std::vector<uint8_t>& rgba);
+
 void appendEtexBytes(const EtexData& e, std::vector<uint8_t>& out);
 bool readEtexBytes(const uint8_t* data, size_t size, size_t& cursor, EtexData& out);
 

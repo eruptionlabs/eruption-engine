@@ -251,6 +251,10 @@ bool VfxSystem::createDescriptors() {
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.maxLod = 0.0f;
     if (vkCreateSampler(dev, &si, nullptr, &m_depthSampler) != VK_SUCCESS) return false;
+    // Grade de altura em R32F: filtro linear so' onde o formato deixa (PowerVR
+    // trava a GPU com LINEAR em R32F/D32, ver AGENTS.md).
+    si.magFilter = si.minFilter = m_ctx->filterFor(VK_FORMAT_R32_SFLOAT);
+    if (vkCreateSampler(dev, &si, nullptr, &m_groundSampler) != VK_SUCCESS) return false;
     si.magFilter = VK_FILTER_LINEAR;
     si.minFilter = VK_FILTER_LINEAR;
     return vkCreateSampler(dev, &si, nullptr, &m_linearSampler) == VK_SUCCESS;
@@ -274,11 +278,13 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
                                    {m_depthSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
     // Sem alvo de meia resolucao ainda: a profundidade ocupa o binding (nunca
     // e' lida enquanto nao houver emissor lowRes).
-    const VkDescriptorImageInfo lowInfo{m_linearSampler, m_lowView ? m_lowView : depthView,
+    // Quando a profundidade ocupa o binding, vai com o sampler NEAREST dela.
+    const VkDescriptorImageInfo lowInfo{m_lowView ? m_linearSampler : m_depthSampler, m_lowView ? m_lowView : depthView,
                                         m_lowView ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                                                   : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     // Sem grade de altura: a profundidade ocupa o binding (groundInfo.w = 0, nunca lida).
-    const VkDescriptorImageInfo groundInfo{m_linearSampler, m_groundView ? m_groundView : depthView,
+    const VkDescriptorImageInfo groundInfo{m_groundView ? m_groundSampler : m_depthSampler,
+                                           m_groundView ? m_groundView : depthView,
                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     // Sem malha translucida: a profundidade ocupa o binding (nunca lida).
     const VkDescriptorImageInfo iceInfo{m_iceView ? m_linearSampler : m_depthSampler, m_iceView ? m_iceView : depthView,
@@ -739,8 +745,10 @@ void VfxSystem::shutdown() {
     m_lowExtent = {0, 0};
     if (m_compositeLayout) vkDestroyPipelineLayout(dev, m_compositeLayout, nullptr);
     if (m_linearSampler) vkDestroySampler(dev, m_linearSampler, nullptr);
+    if (m_groundSampler) vkDestroySampler(dev, m_groundSampler, nullptr);
     m_compositeLayout = VK_NULL_HANDLE;
     m_linearSampler = VK_NULL_HANDLE;
+    m_groundSampler = VK_NULL_HANDLE;
     if (m_computeLayout) vkDestroyPipelineLayout(dev, m_computeLayout, nullptr);
     if (m_drawLayout) vkDestroyPipelineLayout(dev, m_drawLayout, nullptr);
     if (m_pool) vkDestroyDescriptorPool(dev, m_pool, nullptr);
@@ -768,12 +776,17 @@ void VfxSystem::setBudget(uint32_t capacity, float spawnScale) {
         return;
     }
     if (capacity == m_capacity) return;
-    // Pool novo: as particulas vivas se perdem (os efeitos seguem nascendo).
+    m_capacity = capacity;
+    resetPool();
+}
+
+// Pool novo na GPU (lista de mortas cheia, vivas, desenho e contadores
+// zerados): as particulas vivas se perdem e os efeitos seguem nascendo.
+void VfxSystem::resetPool() {
     m_ctx->waitIdle();
     destroyBuffers();
-    m_capacity = capacity;
     if (!createBuffers()) {
-        ERUPTION_LOG_ERROR("VFX: sem memoria para %u particulas", capacity);
+        ERUPTION_LOG_ERROR("VFX: sem memoria para %u particulas", m_capacity);
         m_ready = false;
         return;
     }
@@ -978,6 +991,10 @@ void VfxSystem::clear() {
             }
     m_instances.clear();
     m_meshMaskSimulated = 0;
+    // Troca de mapa: a GPU comeca do zero, como numa carga fria. Sem isto as
+    // listas do mapa anterior seguiam vivas e, no PowerVR GE8320, a ordenacao
+    // da lista de meia resolucao travava a GPU no primeiro quadro do mapa novo.
+    if (m_ready) resetPool();
 }
 
 const VfxGraphCompiled& VfxSystem::graphFor(const VfxGraph& g) {
@@ -1158,6 +1175,13 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
         vmaInvalidateAllocation(m_ctx->allocator(), m_readback[frame].alloc, 0, VK_WHOLE_SIZE);
         const uint32_t* c = static_cast<const uint32_t*>(m_readback[frame].mapped);
         m_stats.alive = c[1u - m_readbackList[frame]];
+        // ERUPTION_TEST_VFX_COUNTERS=1 (depuracao de travamento): contadores
+        // da GPU por quadro (vivas, mortas, listas de desenho e ordenacao).
+        static const bool kLogCounters = std::getenv("ERUPTION_TEST_VFX_COUNTERS") != nullptr;
+        if (kLogCounters)
+            ERUPTION_LOG_WARN("[VFXC] cap %u vivas %u/%u mortas %u desenho %u/%u ordena %u/%u eventos %u",
+                              m_capacity, c[0], c[1], c[kCDead], c[kCRender], c[kCRender + 1], c[kCSortDispatch],
+                              c[kCSortDispatch + 4], c[5]);
         m_stats.rendered = c[kCRender] + c[kCRender + 1];
         for (uint32_t m = 0; m < kMeshTypes; ++m) m_stats.rendered += c[kCMeshDraw + m * 5 + 1];
         m_readbackPending[frame] = false;
@@ -1422,20 +1446,25 @@ void VfxSystem::simulate(VkCommandBuffer cmd, VkImageView depthView) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_emitPipe);
         vkCmdDispatch(cmd, (m_spawnTotal + 63) / 64, 1, 1);
         computeToCompute(0, 0);
+        splitMark(cmd, frame, 101);
     }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_argsPipe);
     vkCmdDispatch(cmd, 1, 1, 1);
     computeToCompute(VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
+    splitMark(cmd, frame, 102);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_simPipe);
     vkCmdDispatchIndirect(cmd, m_counters.buf, kCDispatch * 4);
     computeToCompute(0, 0);
+    splitMark(cmd, frame, 103);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_finishPipe);
     vkCmdDispatch(cmd, 1, 1, 1);
+    splitMark(cmd, frame, 104);
     // Filhas dos sub-emissores (um grupo por evento escrito pela simulacao).
     if (m_anyEvents) {
         computeToCompute(VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_eventPipe);
         vkCmdDispatchIndirect(cmd, m_counters.buf, kCEventDispatch * 4);
+        splitMark(cmd, frame, 105);
     }
     // Ordem de tras para frente so' quando ha mistura alfa tocando (aditiva
     // nao precisa): contagem por balde, soma prefixada, espalhamento.
@@ -1447,12 +1476,17 @@ void VfxSystem::simulate(VkCommandBuffer cmd, VkImageView depthView) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sortHistPipe);
             vkCmdDispatchIndirect(cmd, m_counters.buf, (kCSortDispatch + list * 4) * 4);
             computeToCompute(0, 0);
+            splitMark(cmd, frame, 106);
+            vkCmdPushConstants(cmd, m_computeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &list);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sortScanPipe);
             vkCmdDispatch(cmd, 1, 1, 1);
             computeToCompute(0, 0);
+            splitMark(cmd, frame, 107);
+            vkCmdPushConstants(cmd, m_computeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &list);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sortScatterPipe);
             vkCmdDispatchIndirect(cmd, m_counters.buf, (kCSortDispatch + list * 4) * 4);
             computeToCompute(0, 0);
+            splitMark(cmd, frame, 108);
         }
     }
     memBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
@@ -1465,6 +1499,18 @@ void VfxSystem::simulate(VkCommandBuffer cmd, VkImageView depthView) {
     m_readbackPending[frame] = true;
     m_readbackList[frame] = m_cur;
     m_cur = 1u - m_cur;
+}
+
+// ERUPTION_DEBUG_SPLIT_SUBMIT=1: cada etapa da simulacao vira um envio com
+// espera (o log diz em qual a GPU parou); o estado do compute e' religado.
+void VfxSystem::splitMark(VkCommandBuffer cmd, uint32_t frame, uint32_t mark) {
+    static const bool kSplit = [] {
+        const char* e = std::getenv("ERUPTION_DEBUG_SPLIT_SUBMIT");
+        return e && e[0] == '1';
+    }();
+    if (!kSplit) return;
+    m_ctx->debugSplitSubmit(cmd, mark);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_computeLayout, 0, 1, &m_sets[frame], 0, nullptr);
 }
 
 void VfxSystem::debugDump() {

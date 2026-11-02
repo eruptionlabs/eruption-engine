@@ -1,5 +1,6 @@
 #pragma once
 
+#include "renderer/TextureLayers.hpp"
 #include "renderer/VulkanContext.hpp"
 
 #include <unordered_map>
@@ -21,14 +22,19 @@ public:
 
     uint32_t allocateSlot();
     void freeSlot(uint32_t slot);
-
-    void updateTexture(uint32_t slot, VkImageView view, VkSampler sampler);
     // N slots livres SEGUIDOS: a camada do splat guarda cor, normal e MRAH-W
     // em s, s+1 e s+2 e o shader acha os dois ultimos pelo primeiro.
     // 0 = sem sequencia livre. Cada slot volta sozinho por freeSlot().
     uint32_t allocateRange(uint32_t count);
 
+    // `dynamic`: o conteúdo da imagem muda depois do registro (render target).
+    // Só faz diferença sem descriptor indexing (TextureLayers), onde a textura
+    // comum é copiada uma vez para uma camada e a dinâmica fica ligada direto.
+    void updateTexture(uint32_t slot, VkImageView view, VkSampler sampler, bool dynamic = false);
     void flushUpdates();
+    // Sampler sem filtro (pixel art, paleta): sem descriptor indexing a
+    // textura precisa ir para a ligação "nearest" das camadas.
+    void markNearestSampler(VkSampler sampler);
 
     // Thread-safe wrappers
     uint32_t allocateSlotSafe();
@@ -51,10 +57,10 @@ public:
         return slot < m_slotOpaque.size() && m_slotOpaque[slot] != 0u;
     }
     void freeSlotSafe(uint32_t slot);
-    void updateTextureSafe(uint32_t slot, VkImageView view, VkSampler sampler);
+    void updateTextureSafe(uint32_t slot, VkImageView view, VkSampler sampler, bool dynamic = false);
     void flushUpdatesSafe();
     // Para trabalho gravado fora do laço de frames (bakes do carregamento):
-    // no caminho de array fixo, espera a GPU e aplica as escritas pendentes em
+    // no caminho de camadas, espera a GPU e aplica as escritas pendentes em
     // todos os sets, senão o bake vê a textura padrão no lugar das novas.
     // Não chamar com um frame sendo gravado.
     void syncNow();
@@ -67,9 +73,12 @@ public:
     uint32_t highWater() const { return m_highWater; }
 
     VkDescriptorSetLayout layout() const { return m_layout; }
-    // Com array fixo (sem descriptor indexing) ha' um set por frame em voo.
-    VkDescriptorSet set() const { return m_fixed ? m_frameSets[m_ctx->currentFrame()] : m_set; }
+    // Com camadas (sem descriptor indexing) ha' um set por frame em voo.
+    VkDescriptorSet set() const { return m_layered ? m_frameSets[m_ctx->currentFrame()] : m_set; }
     uint32_t slotCount() const { return m_slotCount; }
+    // Lado das camadas (0 = com descriptor indexing, sem camadas). Textura
+    // maior que isto só ocupa memória: a cópia reamostra para este lado.
+    uint32_t layerSize() const { return m_layered ? m_layers.layerSize() : 0; }
 
 private:
     std::vector<uint8_t> m_slotOpaque;
@@ -91,20 +100,19 @@ private:
 
     struct PendingUpdate {
         uint32_t slot;
-        VkImageView view;
+        VkImageView view; // VK_NULL_HANDLE nas camadas: slot liberado
         VkSampler sampler;
+        bool dynamic = false;
     };
     std::vector<PendingUpdate> m_pendingUpdates;
 
-    // Caminho sem descriptor indexing: o array inteiro precisa estar escrito
-    // (sem PARTIALLY_BOUND) e um set em uso nao pode mudar (sem
-    // UPDATE_AFTER_BIND). Cada set recebe as escritas no inicio do seu frame.
-    bool m_fixed = false;
+    // Caminho sem descriptor indexing (GPU de celular): as texturas vão para
+    // camadas de sampler2DArray (TextureLayers) e um set em uso não pode mudar
+    // (sem UPDATE_AFTER_BIND); cada set é atualizado no início do seu frame.
+    bool m_layered = false;
     uint32_t m_slotCount = MAX_BINDLESS_TEXTURES;
     VkDescriptorSet m_frameSets[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
-    // Só a última escrita de cada slot: uma view intermediária pode já ter sido
-    // destruída quando o frame do set chegar (slot liberado ou reaproveitado).
-    std::unordered_map<uint32_t, PendingUpdate> m_framePending[VulkanContext::MAX_FRAMES_IN_FLIGHT];
+    TextureLayers m_layers;
     void writeSet(VkDescriptorSet set, const std::vector<PendingUpdate>& updates);
     void onFrameBegin(uint32_t frame);
 

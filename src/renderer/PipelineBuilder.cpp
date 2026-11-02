@@ -1,6 +1,7 @@
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/VulkanContext.hpp"
 #include "core/Logger.hpp"
+#include "renderer/ShaderCompiler.hpp"
 
 namespace eruption {
 
@@ -164,7 +165,8 @@ VkPipeline PipelineBuilder::build(VkDevice device) {
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkResult result = vkc::createGraphicsPipelines(device, VulkanContext::globalPipelineCache(), 1, &pipelineInfo, nullptr, &pipeline);
     if (result != VK_SUCCESS) {
-        ERUPTION_LOG_ERROR("Failed to create graphics pipeline: %d", result);
+        ERUPTION_LOG_ERROR("Failed to create graphics pipeline: %d (last shader loaded: %s)", result,
+                           ShaderCompiler::lastLoaded().c_str());
         return VK_NULL_HANDLE;
     }
     return pipeline;

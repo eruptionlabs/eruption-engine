@@ -99,6 +99,7 @@ void WaterRenderer::clearLavaMesh() {
 }
 
 void WaterRenderer::setLavaMesh(const WaterMesh& mesh, const std::vector<uint32_t>& surfaceIndexCounts) {
+    ERUPTION_LOG_WARN("[WATER] malha de %s: %zu vertices, %zu indices", "lava", mesh.vertices.size(), mesh.indices.size());
     clearLavaMesh();
     if (mesh.vertices.empty() || mesh.indices.empty()) return;
 
@@ -151,6 +152,7 @@ void WaterRenderer::setLavaMesh(const WaterMesh& mesh, const std::vector<uint32_
 }
 
 void WaterRenderer::setWaterMesh(const WaterMesh& mesh) {
+    ERUPTION_LOG_WARN("[WATER] malha de %s: %zu vertices, %zu indices", "agua", mesh.vertices.size(), mesh.indices.size());
     clearWaterMesh();
     if (mesh.vertices.empty() || mesh.indices.empty()) return;
 
@@ -470,7 +472,7 @@ void WaterRenderer::createFoamAccumResources(uint32_t width, uint32_t height) {
         viewInfo.image = m_foamAccumImage[i];
         vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_foamAccumView[i]);
         m_foamAccumSlot[i] = m_bindless->allocateSlot();
-        m_bindless->updateTexture(m_foamAccumSlot[i], m_foamAccumView[i], m_foamAccumSampler);
+        m_bindless->updateTexture(m_foamAccumSlot[i], m_foamAccumView[i], m_foamAccumSampler, true);
     }
     m_bindless->flushUpdates();
 
@@ -1127,7 +1129,11 @@ void WaterRenderer::prepareRefraction(VkCommandBuffer cmd,
     uploadFoamMask(cmd);
 
     uint32_t frameIndex = m_ctx->currentFrame() % MAX_FRAMES;
-    copySceneToRefraction(cmd, sceneColorImage, sceneDepthImage, sceneWidth, sceneHeight, frameIndex);
+    // ERUPTION_TEST_WATER_NO_COPY=1 (bancada de aparelho sem timestamp): pula a
+    // copia da cena para a refracao, para medir quanto ela custa sozinha.
+    static const bool kNoCopy = std::getenv("ERUPTION_TEST_WATER_NO_COPY") != nullptr;
+    if (!kNoCopy)
+        copySceneToRefraction(cmd, sceneColorImage, sceneDepthImage, sceneWidth, sceneHeight, frameIndex);
 
     m_invViewProj = invViewProj;
 }
@@ -1493,6 +1499,7 @@ void WaterRenderer::createPipeline() {
     fragStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     fragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     fragStage.module = fragModule;
+    fragStage.pSpecializationInfo = m_ctx->liteSpecialization(); // LITE do liquid.frag
     fragStage.pName = "main";
 
     VkPipelineShaderStageCreateInfo stages[] = {vertStage, fragStage};

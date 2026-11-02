@@ -4,8 +4,11 @@
 #include <vk_mem_alloc.h>
 #include "renderer/VkCompat.hpp"
 
+#include <algorithm>
 #include <vector>
+#include <atomic>
 #include <string>
+#include <thread>
 #include <functional>
 #include <cstdint>
 
@@ -213,6 +216,19 @@ private:
     VkDevice m_device = VK_NULL_HANDLE;
     VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
     static VkPipelineCache s_pipelineCache;
+    // Vigia de GPU travada: driver de celular trava dentro de submit/present
+    // sem timeout. Se o frame não anda em 6 s, o vigia diz em que chamada a
+    // thread do motor parou e que timestamps cada frame já escreveu.
+    std::thread m_watchdog;
+    std::atomic<bool> m_watchdogStop{false};
+    std::atomic<int64_t> m_lastProgressMs{0};
+    std::atomic<const char*> m_phase{"init"};
+    bool m_inImmediateSubmit = false;
+    bool m_shaderLite = false;
+    VkBool32 m_liteValue = VK_FALSE;
+    VkSpecializationMapEntry m_liteSpecEntry{0, 0, sizeof(VkBool32)};
+    VkSpecializationInfo m_liteSpecInfo{1, &m_liteSpecEntry, sizeof(VkBool32), &m_liteValue};
+    void watchdogLoop();
     void createPipelineCache();
     void destroyPipelineCache();
 
@@ -245,6 +261,9 @@ private:
     std::vector<VkQueryPool> m_pipeStatsPools;
     std::vector<std::vector<uint64_t>> m_pipeStatsResults;
     bool m_pipeStatsSupported = false;
+    // Fila gráfica grava timestamp (timestampValidBits > 0). Sem isso,
+    // vkCmdWriteTimestamp é uso inválido: a PowerVR GE8320 trava a GPU.
+    bool m_timestampsSupported = false;
     bool m_tessellationSupported = false;
     bool m_fsrSupported = false;
     bool m_bindless = true;
@@ -257,14 +276,43 @@ private:
     uint32_t m_maxTessLevel = 1;
 public:
     bool tessellationSupported() const { return m_tessellationSupported; }
+    // Grava o cache de pipelines no disco. Também roda no shutdown, mas o
+    // celular mata o app sem shutdown: o motor grava depois de cada carga.
+    void savePipelineCache();
+    // Um immediateSubmit ou um frame está sendo gravado: desenhar outra tela
+    // agora (barra de carregamento) misturaria os comandos.
+    bool busyRecording() const { return m_inImmediateSubmit || m_isFrameRecording; }
     // Aramado (VK_POLYGON_MODE_LINE): pedido na criação quando o aparelho tem.
     bool wireframeSupported() const { return m_supportedFeatures.fillModeNonSolid == VK_TRUE; }
+    // Caminho enxuto dos shaders pesados (modelos, iluminação): GPU sem
+    // descriptor indexing (celular fraco), ou ERUPTION_SHADER_LITE=1/0.
+    // liteSpecialization() vai no estágio de fragmento: constant_id 0 = LITE.
+    bool shaderLite() const { return m_shaderLite; }
+    // Liga o caminho enxuto por escolha (preset "shader_lite"), antes de as
+    // pipelines serem criadas. ERUPTION_SHADER_LITE continua mandando.
+    void setShaderLite(bool on);
+    const VkSpecializationInfo* liteSpecialization() const { return &m_liteSpecInfo; }
+    // Pode gravar neste formato como storage image (imageStore com o
+    // qualificador de formato). Fora do conjunto básico (r32f, rgba8, rgba16f...)
+    // exige shaderStorageImageExtendedFormats - GPU de celular nem sempre tem.
+    bool storageImageFormatSupported(VkFormat format) const;
+    // Filtro para um sampler que lê este formato: LINEAR se o aparelho filtra,
+    // senão NEAREST (D32/R32F em GPU de celular: linear ali é indefinido).
+    VkFilter filterFor(VkFormat format) const;
+    // Filtro anisotrópico até `wanted`, dentro do limite do aparelho. GPU sem
+    // samplerAnisotropy (PowerVR de celular barato) fica com o filtro comum.
+    void applyAnisotropy(VkSamplerCreateInfo& info, float wanted) const {
+        const bool on = m_supportedFeatures.samplerAnisotropy == VK_TRUE && wanted > 1.0f;
+        info.anisotropyEnable = on ? VK_TRUE : VK_FALSE;
+        info.maxAnisotropy = on ? std::min(wanted, m_deviceProperties.limits.maxSamplerAnisotropy) : 1.0f;
+    }
     // FSR 3.1 utilizavel neste device (subgroup quad em compute, escrita de
     // storage image sem formato, grupo de 256 invocacoes).
     bool fsrSupported() const { return m_fsrSupported; }
     // Array de texturas indexado livremente no shader (descriptor indexing).
     // Sem ele (GPU/driver antigo, ou ERUPTION_NO_BINDLESS=1 para testar) o
-    // motor usa os shaders .nb.spv e um array fixo, um set por frame em voo.
+    // motor usa os shaders .nb.spv e as camadas de TextureLayers, um set por
+    // frame em voo.
     bool bindless() const { return m_bindless; }
     const char* gpuName() const { return m_deviceProperties.deviceName; }
     const VkPhysicalDeviceProperties& deviceProperties() const { return m_deviceProperties; }
@@ -279,6 +327,9 @@ private:
     bool m_pipeStatsActive = false;
     std::vector<VkQueryPool> m_timestampPools;
     std::vector<std::vector<uint64_t>> m_timestampResults;
+    // Slot cujas consultas ja' foram resetadas num quadro enviado: antes disso
+    // ler o resultado e' uso invalido (consulta nunca resetada).
+    uint32_t m_querySlotsReady = 0;
     uint32_t m_currentFrame = 0;
     uint32_t m_imageIndex = 0;
     bool m_isFrameRecording = false;
@@ -352,6 +403,10 @@ public:
     bool pipelineStatsSupported() const { return m_pipeStatsSupported; }
     void writeTimestamp(VkCommandBuffer cmd, uint32_t queryIndex, VkPipelineStageFlagBits stage);
     float timestampDeltaMs(uint32_t startIndex, uint32_t endIndex) const;
+    void reportGpuStall(uint32_t frame);
+    void debugSplitSubmit(VkCommandBuffer cmd, uint32_t mark);
+    // Em que chamada do frame a thread do motor está (o vigia mostra no log).
+    void markPhase(const char* phase);
 
 private:
     bool isDeviceSuitable(VkPhysicalDevice device);

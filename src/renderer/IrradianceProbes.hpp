@@ -20,6 +20,8 @@
 #include "renderer/VulkanContext.hpp"
 #include "math/Types.hpp"
 
+#include <string>
+
 namespace eruption {
 
 class TerrainRenderer;
@@ -43,6 +45,11 @@ public:
               const Vec3& sceneMin, const Vec3& sceneMax);
     // Descarta a grade (mapa novo). O lighting deve voltar ao fallback.
     void clear();
+    // Grade cozida em disco (<mapa>.glb.probes): quem coze grava, e a GPU que
+    // nao coze (preset irradiance_probe_bake false, celular) so' le'. Vale
+    // enquanto a caixa da cena e a chave de conteudo do mapa forem as do cozimento.
+    bool saveCache(const std::string& path, const Vec3& sceneMin, const Vec3& sceneMax, uint64_t contentKey);
+    bool loadCache(const std::string& path, const Vec3& sceneMin, const Vec3& sceneMax, uint64_t contentKey);
 
     bool valid() const { return m_valid; }
     VkImageView view() const { return m_valid ? m_finalView : m_fallbackView; }

@@ -24,12 +24,31 @@ void beginFrame(uint32_t frameIndex);
 // Mesma assinatura das funções do Vulkan.
 VkResult createImageView(VkDevice device, const VkImageViewCreateInfo* info,
                          const VkAllocationCallbacks* alloc, VkImageView* view);
+// Formato com que a view foi criada por createImageView (UNDEFINED se não foi).
+VkFormat viewFormat(VkImageView view);
 VkResult createGraphicsPipelines(VkDevice device, VkPipelineCache cache, uint32_t count,
                                  const VkGraphicsPipelineCreateInfo* infos,
                                  const VkAllocationCallbacks* alloc, VkPipeline* pipelines);
 void cmdBeginRendering(VkCommandBuffer cmd, const VkRenderingInfo* info);
 void cmdEndRendering(VkCommandBuffer cmd);
 void cmdPipelineBarrier2(VkCommandBuffer cmd, const VkDependencyInfo* dep);
+
+// Chamado depois de cada pipeline gráfica criada: a tela de carregamento conta
+// a compilação de shaders (no celular, minutos na primeira vez). A cena liga
+// o gancho só enquanto mostra a tela; fora dela pipelines nascem no meio de um
+// frame e não podem desenhar nada.
+using PipelineHook = void (*)(void* user);
+class PipelineHookScope {
+public:
+    PipelineHookScope(PipelineHook hook, void* user);
+    ~PipelineHookScope();
+    PipelineHookScope(const PipelineHookScope&) = delete;
+    PipelineHookScope& operator=(const PipelineHookScope&) = delete;
+
+private:
+    PipelineHook m_prevHook;
+    void* m_prevUser;
+};
 
 // Render pass compatível com estes formatos (para pipelines feitas fora do
 // motor, como a da interface).

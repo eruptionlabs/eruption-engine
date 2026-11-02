@@ -11,6 +11,7 @@
 #include <vector>
 #include <random>
 #include <algorithm>
+#include <cstddef>
 
 namespace eruption {
 
@@ -28,7 +29,7 @@ namespace {
 
 VkPipeline createParticlePipeline(VulkanContext* ctx, VkPipelineLayout layout,
                                   const char* vertPath, const char* fragPath,
-                                  VkFormat colorFormat) {
+                                  VkFormat colorFormat, uint32_t coverageSlots) {
     auto vertCode = ShaderCompiler::loadSPIRV(vertPath);
     auto fragCode = ShaderCompiler::loadSPIRV(fragPath);
     if (vertCode.empty() || fragCode.empty()) {
@@ -55,6 +56,17 @@ VkPipeline createParticlePipeline(VulkanContext* ctx, VkPipelineLayout layout,
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = fragModule;
     stages[1].pName = "main";
+    // COV_SLOTS e CROSS_OCCLUSION (constant_id 0 e 1) do particle_render.frag:
+    // sem o array inteiro (GPU de celular) a chuva não testa as outras nuvens.
+    struct CoverageSpec { int32_t slots; VkBool32 cross; };
+    const CoverageSpec covSpec{static_cast<int32_t>(coverageSlots),
+                               coverageSlots >= WeatherRenderer::MAX_RAIN_OCCLUDERS ? VK_TRUE : VK_FALSE};
+    const VkSpecializationMapEntry covEntries[2] = {
+        {0, offsetof(CoverageSpec, slots), sizeof(int32_t)},
+        {1, offsetof(CoverageSpec, cross), sizeof(VkBool32)},
+    };
+    const VkSpecializationInfo spec{2, covEntries, sizeof(CoverageSpec), &covSpec};
+    stages[1].pSpecializationInfo = &spec;
 
     VkVertexInputBindingDescription binding{};
     binding.binding = 0;
@@ -397,26 +409,36 @@ VkPipeline createSplashPipeline(VulkanContext* ctx, VkPipelineLayout layout,
 
 } // anonymous namespace
 
+static bool initFailed(const char* step) {
+    ERUPTION_LOG_ERROR("WeatherRenderer: %s failed", step);
+    return false;
+}
+
 bool WeatherRenderer::init(VulkanContext* ctx) {
     m_ctx = ctx;
 
+    // Lê também profundidade (D32 da cena, R32F das nuvens): sem filtro linear
+    // nesses formatos (celular), nearest.
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.magFilter = (m_ctx->filterFor(VK_FORMAT_D32_SFLOAT) == VK_FILTER_LINEAR &&
+                             m_ctx->filterFor(VK_FORMAT_R32_SFLOAT) == VK_FILTER_LINEAR)
+                                ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+    samplerInfo.minFilter = samplerInfo.magFilter;
     samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     vkCreateSampler(m_ctx->device(), &samplerInfo, nullptr, &m_linearSampler);
 
-    if (!createParticleBuffer()) return false;
-    if (!createSplashBuffer()) return false;
-    if (!createDescriptors()) return false;
-    if (!createHeightmapResources()) return false;
-    if (!createTopDownDepthResources()) return false;
-    if (!createHeightmapPipeline()) return false;
-    if (!createPipelines()) return false;
+    // Cada etapa diz no log se falhou: no celular é o único rastro.
+    if (!createParticleBuffer()) return initFailed("particle buffer");
+    if (!createSplashBuffer()) return initFailed("splash buffer");
+    if (!createDescriptors()) return initFailed("descriptors");
+    if (!createHeightmapResources()) return initFailed("heightmap resources");
+    if (!createTopDownDepthResources()) return initFailed("top-down depth");
+    if (!createHeightmapPipeline()) return initFailed("heightmap pipeline");
+    if (!createPipelines()) return initFailed("pipelines");
 
     return true;
 }
@@ -432,6 +454,11 @@ void WeatherRenderer::shutdown() {
     vkDestroyPipelineLayout(device, m_debugMapLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, m_descLayout, nullptr);
     vkDestroyDescriptorPool(device, m_descPool, nullptr);
+    m_descPool = VK_NULL_HANDLE;
+    // Os sets de seguidor morreram com o pool: sem limpar, o reinit (troca de
+    // escala da cena) reaproveitava handles liberados e o update caia no
+    // driver (SIGSEGV no Xclipse 940 com chuva, 3 de 3).
+    for (auto& sets : m_followerDescSets) sets.clear();
     m_pushRing.shutdown();
     vkDestroySampler(device, m_linearSampler, nullptr);
 
@@ -516,7 +543,14 @@ bool WeatherRenderer::createDescriptors() {
     VkDescriptorSetLayoutBinding covArraysBinding{};
     covArraysBinding.binding = 6;
     covArraysBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    covArraysBinding.descriptorCount = MAX_RAIN_OCCLUDERS;
+    // O array inteiro conta no limite de samplers do estágio: deixa folga para
+    // as outras 3 texturas do fragmento e para o que o driver reserva.
+    {
+        const auto& lim = m_ctx->deviceProperties().limits;
+        const uint32_t perStage = std::min(lim.maxPerStageDescriptorSamplers, lim.maxPerStageDescriptorSampledImages);
+        m_covSlots = std::clamp<uint32_t>(perStage > 8 ? perStage - 8 : 1, 1, MAX_RAIN_OCCLUDERS);
+    }
+    covArraysBinding.descriptorCount = m_covSlots;
     covArraysBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     // Rain streak shape tuning (2 vec4s; see WeatherParams rainStreak*).
@@ -605,7 +639,7 @@ bool WeatherRenderer::createPipelines() {
     m_particlePipeline = createParticlePipeline(m_ctx, m_pipelineLayout,
                                                  "weather/particle_render.vert.spv",
                                                  "weather/particle_render.frag.spv",
-                                                 postColorFormat(m_ctx->physicalDevice()));
+                                                 postColorFormat(m_ctx->physicalDevice()), m_covSlots);
     m_splashPipeline = createSplashPipeline(m_ctx, m_pipelineLayout,
                                              "weather/splash_render.vert.spv",
                                              "weather/splash_render.frag.spv",
@@ -614,6 +648,9 @@ bool WeatherRenderer::createPipelines() {
                                                  "weather/debug_occ_map.vert.spv",
                                                  "weather/debug_occ_map.frag.spv",
                                                  postColorFormat(m_ctx->physicalDevice()));
+    if (m_particlePipeline == VK_NULL_HANDLE) ERUPTION_LOG_ERROR("WeatherRenderer: particle pipeline failed");
+    if (m_splashPipeline == VK_NULL_HANDLE) ERUPTION_LOG_ERROR("WeatherRenderer: splash pipeline failed");
+    if (m_debugMapPipeline == VK_NULL_HANDLE) ERUPTION_LOG_ERROR("WeatherRenderer: debug map pipeline failed");
     return m_particlePipeline != VK_NULL_HANDLE && m_splashPipeline != VK_NULL_HANDLE &&
            m_debugMapPipeline != VK_NULL_HANDLE;
 }
@@ -1856,7 +1893,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
 
     // Binding 6: every follower's coverage array (exact cross-cloud silhouettes).
     VkDescriptorImageInfo covArrayImgs[MAX_RAIN_OCCLUDERS] = {};
-    for (uint32_t j = 0; j < MAX_RAIN_OCCLUDERS; ++j) {
+    for (uint32_t j = 0; j < m_covSlots; ++j) {
         covArrayImgs[j].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         covArrayImgs[j].imageView = m_cloudCoverageView;
         covArrayImgs[j].sampler = m_cloudCoverageSampler;
@@ -1869,7 +1906,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     writes[6].dstSet = baseSet;
     writes[6].dstBinding = 6;
     writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[6].descriptorCount = MAX_RAIN_OCCLUDERS;
+    writes[6].descriptorCount = m_covSlots;
     writes[6].pImageInfo = covArrayImgs;
 
     // Binding 7: rain streak shape tuning (refreshed every frame from WeatherParams).
@@ -2030,7 +2067,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
         }
     }
     const float occCount = static_cast<float>(std::min(m_rainFollowers.size(),
-                                                       static_cast<size_t>(MAX_RAIN_OCCLUDERS)));
+                                                       static_cast<size_t>(m_covSlots)));
     // cloudParams.w: carries the camera near plane, used by the particle fragment
     // shader to linearize the scene depth for the soft rain occlusion. The
     // splash draws below re-push this slot with the splash opacity instead.

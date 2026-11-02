@@ -2513,6 +2513,15 @@ bool CloudLayerRenderer::createPipelines() {
     pipeInfo.pDepthStencilState = &ds;
     pipeInfo.pColorBlendState = &blendState;
     pipeInfo.layout = m_pipelineLayout;
+    // Viewport dinamico: render() o define a cada frame. Fixo na criacao, a
+    // troca de escala da cena (resizeTargets) deixava o raymarch no tamanho
+    // antigo, so' no canto do alvo novo, e o resto virava lixo na tela.
+    const VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicInfo{};
+    dynamicInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicInfo.dynamicStateCount = 2;
+    dynamicInfo.pDynamicStates = dynamicStates;
+    pipeInfo.pDynamicState = &dynamicInfo;
 
     if (vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &m_raymarchPipeline) != VK_SUCCESS) {
         Logger::error("CloudLayerRenderer: failed to create raymarch pipeline");

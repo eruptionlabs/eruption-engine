@@ -15,6 +15,7 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #include "rgbcx.h"
 #include "bc7enc.h"
+#include "bc7decomp.h"
 #pragma GCC diagnostic pop
 #endif
 
@@ -234,11 +235,13 @@ EtexData rgbaToEtexRaw(const uint8_t* rgba, int width, int height) {
 }
 
 EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind kind,
-                            bool hasAlpha, const std::vector<std::vector<float>>* roughnessBroadenR) {
+                            bool hasAlpha, const std::vector<std::vector<float>>* roughnessBroadenR,
+                            float alphaTestCutoff, int coverageRegion) {
     EtexData out;
 #ifndef ERUPTION_HAVE_BC_ENCODER
     // Build sem encoder vendorizado: nada a comprimir, caminho RGBA8 assume.
     (void)rgba; (void)width; (void)height; (void)kind; (void)hasAlpha; (void)roughnessBroadenR;
+    (void)alphaTestCutoff; (void)coverageRegion;
     return out;
 #else
     if (!rgba || width < 4 || height < 4) return out;
@@ -298,6 +301,62 @@ EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind k
     }
 
     int w = width, h = height;
+    // Cobertura do alfa de recorte por regiao (ver o cabecalho): alfa em float,
+    // media 2x2 sem a escala, e o alvo de cada regiao tirado do mip 0.
+    const bool cobertura = hasAlpha && alphaTestCutoff > 0.0f && kind == BcKind::Albedo;
+    std::vector<float> af;
+    std::vector<float> alvo;
+    const int R0 = coverageRegion > 0 ? coverageRegion : std::max(width, height);
+    const int nrx = (width + R0 - 1) / R0, nry = (height + R0 - 1) / R0;
+    if (cobertura) {
+        af.resize(static_cast<size_t>(w) * h);
+        for (size_t p = 0; p < af.size(); ++p) af[p] = level[p * 4 + 3] / 255.0f;
+        alvo.assign(static_cast<size_t>(nrx) * nry, 0.0f);
+        std::vector<int> n(alvo.size(), 0);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const size_t r = static_cast<size_t>(y / R0) * nrx + x / R0;
+                alvo[r] += af[static_cast<size_t>(y) * w + x] >= 0.5f ? 1.0f : 0.0f;
+                ++n[r];
+            }
+        for (size_t r = 0; r < alvo.size(); ++r) alvo[r] = n[r] ? alvo[r] / float(n[r]) : 0.0f;
+    }
+    auto aplicaCobertura = [&](int mip) {
+        const int Rm = R0 >> mip;
+        // regiao menor que um texel: o mip inteiro com o alvo medio
+        const bool junta = Rm < 1;
+        const int rw = junta ? w : Rm, rh = junta ? h : Rm;
+        float alvoMedio = 0.0f;
+        if (junta) { for (float c : alvo) alvoMedio += c; alvoMedio /= float(std::max<size_t>(1, alvo.size())); }
+        std::vector<float> v;
+        for (int ry = 0; ry < h; ry += rh)
+            for (int rx = 0; rx < w; rx += rw) {
+                const float c = junta ? alvoMedio : alvo[static_cast<size_t>(ry / Rm) * nrx + rx / Rm];
+                v.clear();
+                for (int y = ry; y < std::min(h, ry + rh); ++y)
+                    for (int x = rx; x < std::min(w, rx + rw); ++x) v.push_back(af[static_cast<size_t>(y) * w + x]);
+                const int nIn = int(std::lround(double(c) * v.size()));
+                float limiar = 2.0f;   // nada passa
+                if (nIn >= int(v.size())) {
+                    float mn = 1.0f;
+                    for (float a : v) if (a > 0.0f) mn = std::min(mn, a);
+                    limiar = 0.5f * mn;
+                } else if (nIn > 0) {
+                    const size_t k = v.size() - size_t(nIn);   // primeiro que passa, em ordem crescente
+                    std::nth_element(v.begin(), v.begin() + k, v.end());
+                    const float acima = v[k];
+                    const float abaixo = *std::max_element(v.begin(), v.begin() + k);
+                    limiar = 0.5f * (abaixo + acima);
+                    if (limiar <= 0.0f) limiar = 0.5f * acima;
+                }
+                const float esc = limiar > 1.5f ? 0.0f : alphaTestCutoff / std::max(limiar, 1e-4f);
+                for (int y = ry; y < std::min(h, ry + rh); ++y)
+                    for (int x = rx; x < std::min(w, rx + rw); ++x) {
+                        const size_t p = static_cast<size_t>(y) * w + x;
+                        level[p * 4 + 3] = static_cast<uint8_t>(std::lround(std::clamp(af[p] * esc, 0.0f, 1.0f) * 255.0f));
+                    }
+            }
+    };
     out.vkFormat = static_cast<uint32_t>(fmt);
     out.width = static_cast<uint32_t>(width);
     out.height = static_cast<uint32_t>(height);
@@ -326,6 +385,7 @@ EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind k
                 }
             }
         }
+        if (cobertura) aplicaCobertura(mipLevel);
         std::vector<uint8_t> enc;
         encodeLevel(fmt, level, w, h, enc);
         out.mipSizes.push_back(static_cast<uint32_t>(enc.size()));
@@ -334,6 +394,17 @@ EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind k
         std::vector<uint8_t> next;
         int nw = 0, nh = 0;
         halveRgba(level, w, h, next, nw, nh);
+        if (cobertura) {
+            std::vector<float> an(static_cast<size_t>(nw) * nh);
+            for (int y = 0; y < nh; ++y)
+                for (int x = 0; x < nw; ++x) {
+                    const int x0 = std::min(2 * x, w - 1), x1 = std::min(2 * x + 1, w - 1);
+                    const int y0 = std::min(2 * y, h - 1), y1 = std::min(2 * y + 1, h - 1);
+                    an[static_cast<size_t>(y) * nw + x] = 0.25f * (af[static_cast<size_t>(y0) * w + x0] + af[static_cast<size_t>(y0) * w + x1] +
+                                                                    af[static_cast<size_t>(y1) * w + x0] + af[static_cast<size_t>(y1) * w + x1]);
+                }
+            af.swap(an);
+        }
         level.swap(next);
         w = nw; h = nh;
         ++mipLevel;
@@ -341,6 +412,44 @@ EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind k
     out.mipCount = static_cast<uint32_t>(out.mipSizes.size());
     return out;
 #endif // ERUPTION_HAVE_BC_ENCODER
+}
+
+bool decodeEtexMip0(const EtexData& e, std::vector<uint8_t>& rgba) {
+    if (!e.valid() || e.mipSizes.empty() || e.width == 0 || e.height == 0) return false;
+    const uint32_t w = e.width, h = e.height;
+    const size_t n0 = e.mipSizes[0];
+    if (n0 > e.payload.size()) return false;
+    rgba.assign(size_t(w) * h * 4, 0);
+    if (e.vkFormat == VK_FORMAT_R8G8B8A8_UNORM || e.vkFormat == VK_FORMAT_R8G8B8A8_SRGB) {
+        if (n0 < rgba.size()) return false;
+        std::memcpy(rgba.data(), e.payload.data(), rgba.size());
+        return true;
+    }
+#ifdef ERUPTION_HAVE_BC_ENCODER
+    const bool bc1 = e.vkFormat == VK_FORMAT_BC1_RGBA_UNORM_BLOCK || e.vkFormat == VK_FORMAT_BC1_RGB_UNORM_BLOCK ||
+                     e.vkFormat == VK_FORMAT_BC1_RGBA_SRGB_BLOCK || e.vkFormat == VK_FORMAT_BC1_RGB_SRGB_BLOCK;
+    const bool bc3 = e.vkFormat == VK_FORMAT_BC3_UNORM_BLOCK || e.vkFormat == VK_FORMAT_BC3_SRGB_BLOCK;
+    const bool bc7 = e.vkFormat == VK_FORMAT_BC7_UNORM_BLOCK || e.vkFormat == VK_FORMAT_BC7_SRGB_BLOCK;
+    if (!bc1 && !bc3 && !bc7) return false;
+    const size_t bloco = bc1 ? 8 : 16;
+    const uint32_t bw = (w + 3) / 4, bh = (h + 3) / 4;
+    if (n0 < size_t(bw) * bh * bloco) return false;
+    bcCompressorInit();
+    uint8_t px[16 * 4];
+    for (uint32_t by = 0; by < bh; ++by)
+        for (uint32_t bx = 0; bx < bw; ++bx) {
+            const uint8_t* b = e.payload.data() + (size_t(by) * bw + bx) * bloco;
+            if (bc1) rgbcx::unpack_bc1(b, px);
+            else if (bc3) rgbcx::unpack_bc3(b, px);
+            else bc7decomp::unpack_bc7(b, reinterpret_cast<bc7decomp::color_rgba*>(px));
+            for (uint32_t y = 0; y < 4 && by * 4 + y < h; ++y)
+                for (uint32_t x = 0; x < 4 && bx * 4 + x < w; ++x)
+                    std::memcpy(&rgba[((size_t(by) * 4 + y) * w + bx * 4 + x) * 4], &px[(y * 4 + x) * 4], 4);
+        }
+    return true;
+#else
+    return false;
+#endif
 }
 
 void appendEtexBytes(const EtexData& e, std::vector<uint8_t>& out) {

@@ -4,6 +4,7 @@
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "math/Camera.hpp"
+#include "math/Frustum.hpp"
 #include "core/Logger.hpp"
 
 #include <cstring>
@@ -83,11 +84,13 @@ bool DeferredLighting::init(VulkanContext* ctx, GBuffer* gbuffer, BindlessDescri
 
     createDescriptors();
 
-    // Create a plain linear sampler for G-Buffer sampling
+    // Create a plain linear sampler for G-Buffer sampling. O mesmo sampler lê a
+    // profundidade (D32): sem filtro linear nesse formato (celular), nearest.
     VkSamplerCreateInfo samplerInfo{}; samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.magFilter = m_ctx->filterFor(GBuffer::DepthFormat);
+    samplerInfo.minFilter = samplerInfo.magFilter;
+    samplerInfo.mipmapMode = samplerInfo.magFilter == VK_FILTER_LINEAR ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+                                                                       : VK_SAMPLER_MIPMAP_MODE_NEAREST;
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -450,6 +453,7 @@ void DeferredLighting::createPipelines() {
         stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = vert; stages[0].pName = "main";
         stages[1] = {}; stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = frag; stages[1].pName = "main";
+        stages[1].pSpecializationInfo = m_ctx->liteSpecialization(); // LITE do directional.frag
 
         VkPipelineVertexInputStateCreateInfo vertexInput{}; vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
@@ -900,8 +904,8 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
                               float totalTime) {
     uint32_t frameIndex = m_ctx->currentFrame();
 
-    // Fill Lighting UBO. SEM `{}`: sizeof(LightingUBO) = 4416 bytes (69 cache
-    // lines), e `ubo{}` zerava esse total todo frame - incluindo pointLights[128]
+    // Fill Lighting UBO. SEM `{}`: sizeof(LightingUBO) passa de 4 KB (era
+    // 4416 bytes, 69 cache lines), e `ubo{}` zerava esse total todo frame - incluindo pointLights[128]
     // e pointColors[128] (2048B cada) alem de activeLights, que o shader nunca
     // le (so' consome ate' numPointLights). Era memset puro jogado fora.
     //
@@ -927,9 +931,10 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
 
     uint32_t activeLights = 0;
     const std::vector<PointLight>& lightList = allPointLights();
-    for (uint32_t i = 0; i < (uint32_t)lightList.size() && activeLights < 128; i++) {
-        const auto& pl = lightList[i];
-        if (!pl.enabled) continue;
+    pickPointLights(camera);
+    for (const auto& [dist2, index] : m_pointLightPick) {
+        if (activeLights == 128) break;
+        const auto& pl = lightList[index];
 
         ubo.pointLights[activeLights] = Vec4(pl.position, pl.radius);
         
@@ -976,6 +981,7 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
                               m_skyProbeMaxMip, m_skyProbeIntensity, 0.0f);
     ubo.probeGridMin = Vec4(m_probeGridMin, (m_probesEnabled && m_probeStrength > 0.0f) ? 1.0f : 0.0f);
     ubo.probeGridInvExtent = Vec4(m_probeGridInvExtent, m_probeStrength);
+    if (m_ctx->shaderLite()) fillLightTiles(ubo, camera.target(), activeLights, m_tileLightMax);
     
     std::memcpy(m_lightingUboMappeds[frameIndex], &ubo, sizeof(LightingUBO));
     vmaFlushAllocation(m_ctx->allocator(), m_lightingUboAllocs[frameIndex], 0, sizeof(LightingUBO));
@@ -1052,6 +1058,11 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    // Caminho enxuto: o passe do sol ja' soma o ambiente (directional.frag,
+    // shadeLite). Sem o passe de ambiente o ceu fica com o alfa da limpeza,
+    // entao ela usa o alfa 0 que o ambiente escreveria ali.
+    const bool singlePass = m_ctx->shaderLite() && shadows && (m_pbrDebugMode & 95u) == 0u;
+    if (singlePass) colorAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
 
     VkExtent2D extent{m_width, m_height};
     m_ctx->cmdBeginRendering(cmd, {colorAttachment}, nullptr, nullptr, extent);
@@ -1067,7 +1078,7 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     // Pass 1: Ambient + Emissive
-    renderAmbientPass(cmd);
+    if (!singlePass) renderAmbientPass(cmd);
 
     // Pass 2: Directional light + Point Lights (Combined in the same pipeline now)
     if (shadows) {
@@ -1076,8 +1087,9 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
                               rainOcclusionView, rainOcclusionSampler, totalTime);
     }
 
-    // Pass 3: Point lights (restored volumetric rendering)
-    renderPointLights(cmd, camera);
+    // Pass 3: Point lights (restored volumetric rendering). No passe unico o
+    // directional.frag ja' somou as do UBO.
+    if (!singlePass) renderPointLights(cmd, camera);
 
     m_ctx->cmdEndRendering(cmd);
 }
@@ -1206,6 +1218,71 @@ void DeferredLighting::renderDirectionalPass(VkCommandBuffer cmd, const Camera& 
 
 }
 
+// Luzes de ponto do quadro em m_pointLightPick (distancia^2 ao alvo, indice
+// em allPointLights). Sem luzes ligadas, vazio. No caminho enxuto entram so'
+// as que a camera ve, das mais perto para as mais longe: o passe do sol soma
+// todas as do UBO para cada pixel, entao o teto e' o custo.
+void DeferredLighting::pickPointLights(const Camera& camera) {
+    m_pointLightPick.clear();
+    static const bool kNoPointLights = std::getenv("ERUPTION_TEST_NO_POINT_LIGHTS") != nullptr;
+    if (!m_pointLightsEnabled || kNoPointLights) return;
+    const bool lite = m_ctx->shaderLite();
+    Frustum view;
+    if (lite) view.extractFromMatrix(camera.viewProjNoJitter());
+    const std::vector<PointLight>& lights = allPointLights();
+    for (uint32_t i = 0; i < static_cast<uint32_t>(lights.size()); ++i) {
+        const PointLight& pl = lights[i];
+        if (!pl.enabled || (lite && !view.intersectsSphere(pl.position, pl.radius))) continue;
+        const Vec3 d = pl.position - camera.target();
+        m_pointLightPick.emplace_back(glm::dot(d, d), i);
+    }
+    const size_t cap = lite ? std::min<size_t>(m_pointLightMax > 0 ? m_pointLightMax : 128u, 128u)
+                            : m_pointLightMax;
+    if (lite) {
+        // Ordem importa: cada bloco da tela guarda as 16 primeiras que o tocam.
+        std::sort(m_pointLightPick.begin(), m_pointLightPick.end());
+        if (m_pointLightPick.size() > cap) m_pointLightPick.resize(cap);
+    } else if (cap > 0 && m_pointLightPick.size() > cap) {
+        std::nth_element(m_pointLightPick.begin(), m_pointLightPick.begin() + static_cast<std::ptrdiff_t>(cap),
+                         m_pointLightPick.end());
+        m_pointLightPick.resize(cap);
+    }
+}
+
+// Lista de luzes para o passe unico (directional.frag, shadeLite), repetida em
+// todos os blocos do UBO (o shader le' por bloco).
+void DeferredLighting::fillLightTiles(LightingUBO& ubo, const Vec3& focus, uint32_t count, uint32_t perTile) {
+    // Uma lista so' para a tela toda: as luzes que mais pesam perto do ponto
+    // que a camera olha. Lista por bloco (16x8) com teto fazia blocos vizinhos
+    // escolherem luzes diferentes - remendos quadrados de luz que mudavam ao
+    // girar e ao dar zoom. O alvo da orbita nao se move com giro nem zoom,
+    // entao a escolha fica parada enquanto a camera gira em volta dele.
+    perTile = std::min<uint32_t>(perTile, 16u);
+    uint8_t pick[16];
+    float pickScore[16];
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const float r2 = ubo.pointLights[i].w * ubo.pointLights[i].w;
+        const Vec3 d = Vec3(ubo.pointLights[i]) - focus;
+        const float score = ubo.pointColors[i].w * r2 / (r2 + glm::dot(d, d) + 1e-3f);
+        uint32_t slot = n;
+        if (n == perTile) {
+            slot = static_cast<uint32_t>(std::min_element(pickScore, pickScore + n) - pickScore);
+            if (pickScore[slot] >= score) continue;
+        } else {
+            ++n;
+        }
+        pick[slot] = static_cast<uint8_t>(i);
+        pickScore[slot] = score;
+    }
+    uint8_t list[16];
+    std::memset(list, 0xFF, sizeof(list));
+    // Ordem por indice: a mesma soma em todo pixel, sem depender da troca.
+    std::sort(pick, pick + n);
+    std::memcpy(list, pick, n);
+    for (uint32_t t = 0; t < kLightTiles; ++t) std::memcpy(&ubo.tileLights[t], list, sizeof(list));
+}
+
 void DeferredLighting::renderPointLights(VkCommandBuffer cmd, const Camera& camera) {
     // ERUPTION_TEST_NO_POINT_LIGHTS=1 (debug): desliga so' este passe, com o
     // preset intacto - e' o unico jeito de medir o custo/efeito das point
@@ -1227,8 +1304,9 @@ void DeferredLighting::renderPointLights(VkCommandBuffer cmd, const Camera& came
     Mat4 viewProj = camera.viewProjJittered();
     Mat4 invViewProj = glm::inverse(viewProj);
 
-    for (const auto& light : allPointLights()) {
-        if (!light.enabled) continue;
+    const std::vector<PointLight>& lights = allPointLights();
+    for (const auto& [dist2, index] : m_pointLightPick) {
+        const PointLight& light = lights[index];
 
         Mat4 model = glm::translate(Mat4(1.0f), light.position);
         model = glm::scale(model, Vec3(light.radius));

@@ -205,4 +205,16 @@ bool reindexMesh(const void* vertexBytes, size_t count, size_t stride,
                  std::vector<unsigned char>& outVertices,
                  std::vector<uint32_t>& outIndices);
 
+// Simplifica um pedaco de uma malha maior (indices globais) com a borda do
+// pedaco presa: dois pedacos vizinhos, cada um no seu nivel, continuam com a
+// mesma aresta e nao abre fenda. Nao cria vertice (devolve indices globais da
+// mesma malha). worldError recebe o erro geometrico em unidades do mundo.
+// normals (opcional, mesmo stride) entra no erro: o relevo pode ficar dentro
+// do erro e a luz mudar, porque o triangulo maior interpola a normal numa
+// area maior. Vazio quando nao reduz a menos de 3/4 do pedaco ou sem
+// meshoptimizer.
+std::vector<uint32_t> simplifyPatchLockedBorder(const float* positions, const float* normals, size_t stride,
+                                                const uint32_t* indices, size_t indexCount, size_t targetIndexCount,
+                                                float& worldError);
+
 } // namespace eruption
