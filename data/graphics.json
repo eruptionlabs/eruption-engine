@@ -35,17 +35,17 @@
       },
       {
         "x": 0.1,
-        "y": 1.0,
+        "y": 0.3,
         "interpolation": "Smoothstep"
       },
       {
         "x": 0.18,
-        "y": 1.0,
+        "y": 0.3,
         "interpolation": "Smoothstep"
       },
       {
         "x": 1.0,
-        "y": 1.0,
+        "y": 0.3,
         "interpolation": "Smoothstep"
       }
     ],
@@ -80,12 +80,17 @@
         "interpolation": "Smoothstep"
       },
       {
-        "x": 0.05,
-        "y": 4.0,
+        "x": 0.12,
+        "y": 6.0,
         "interpolation": "Smoothstep"
       },
       {
-        "x": 0.1,
+        "x": 0.28,
+        "y": 3.0,
+        "interpolation": "Smoothstep"
+      },
+      {
+        "x": 0.42,
         "y": 1.0,
         "interpolation": "Smoothstep"
       },
@@ -102,6 +107,214 @@
   "fps_cap": 0,
   "present_mode": "auto",
   "presets": {
+    "mobile_low": {
+      "relief_bake": "mesh",
+      "relief_bake_spacing": 12.0,
+      "relief_bake_max_tris": 10000,
+      "relief_bake_amplitude": 2.5,
+      "relief_bake_height_gain": 1.0,
+      "fps_cap": 30,
+      "mesh_tri_budget": 1500000,
+      "vfx_max_particles": 8192,
+      "vfx_spawn_scale": 0.35,
+      "vfx_max_lights": 2,
+      "weather_tier": "mobile",
+      "shadow_atlas": 1024,
+      "ssao": false,
+      "motion_blur": false,
+      "chromatic_aberration": false,
+      "tilt_shift": false,
+      "dof": false,
+      "point_lights": true,
+      "max_rain_followers": 4,
+      "max_field_clouds": 4,
+      "pom_height_scale": 0.0,
+      "geo_disp_amplitude": 0.0,
+      "geo_disp_distance": 0.0,
+      "geo_lod_budget_mb": 0,
+      "pbr_synthesis": false,
+      "contact_shadows": false,
+      "sky_probe": false,
+      "sky_probe_intensity": 1.0,
+      "irradiance_probes": true,
+      "irradiance_probe_strength": 1.0,
+      "fill_light": 0.55,
+      "smoke": true,
+      "smoke_steps": 8,
+      "smoke_sun_tap": false,
+      "smoke_detail": false,
+      "texture_max_size": 256,
+      "mesh_lod_ratio": 0.45,
+      "mesh_lod_error": 0.15,
+      "mesh_lod_distance_factor": 120.0,
+      "cloud_march_steps": 8,
+      "mesh_lod_max_tris": 2000,
+      "shadow_lod_max_tris": 400,
+      "mesh_lod_far_max_tris": 150,
+      "mesh_lod_far_distance_mul": 3.0,
+      "mesh_lod_tris_per_px": 0.25,
+      "small_object_cull_px": 5.0,
+      "shadow_caster_min_px": 3.0,
+      "wind_sway_scale": 0.35,
+      "post_scale": 1.0,
+      "render_scale": 0.7,
+      "post_format": "packed",
+      "mesh_lod_min_tris": 300,
+      "mesh_lod_min_distance": 300.0,
+      "pbr_lighting": false,
+      "shadow_mode": "single",
+      "bloom": false,
+      "shader_lite": true,
+      "shadow_update_interval": 1,
+      "target_fps": 30,
+      "render_scale_min": 0.45,
+      "render_scale_max": 1.0,
+      "shadow_cache": true,
+      "point_light_max": 0,
+      "point_light_tile_max": 16,
+      "irradiance_probe_bake": false,
+      "display_scale": 0.5,
+      "asset_cache_maps": 1,
+      "shadow_max_texel": 1.0,
+      "tessellation": false,
+      "god_ray_lights": 0
+    },
+    "mobile_medium": {
+      "relief_bake": "mesh",
+      "relief_bake_spacing": 8.0,
+      "relief_bake_max_tris": 20000,
+      "relief_bake_amplitude": 2.5,
+      "relief_bake_height_gain": 1.0,
+      "fps_cap": 30,
+      "mesh_tri_budget": 1500000,
+      "vfx_max_particles": 16384,
+      "vfx_spawn_scale": 0.5,
+      "vfx_max_lights": 4,
+      "weather_tier": "medium",
+      "shadow_atlas": 1024,
+      "ssao": false,
+      "motion_blur": false,
+      "chromatic_aberration": false,
+      "tilt_shift": false,
+      "dof": false,
+      "point_lights": true,
+      "max_rain_followers": 8,
+      "max_field_clouds": 8,
+      "pom_height_scale": 0.0,
+      "geo_disp_amplitude": 0.0,
+      "geo_disp_distance": 0.0,
+      "geo_lod_budget_mb": 0,
+      "pbr_synthesis": false,
+      "contact_shadows": false,
+      "sky_probe": false,
+      "sky_probe_intensity": 1.0,
+      "irradiance_probes": true,
+      "irradiance_probe_strength": 1.0,
+      "fill_light": 0.55,
+      "smoke": true,
+      "smoke_steps": 12,
+      "smoke_sun_tap": false,
+      "smoke_detail": false,
+      "texture_max_size": 512,
+      "mesh_lod_ratio": 0.45,
+      "mesh_lod_error": 0.15,
+      "mesh_lod_distance_factor": 120.0,
+      "cloud_march_steps": 12,
+      "mesh_lod_max_tris": 3000,
+      "shadow_lod_max_tris": 600,
+      "mesh_lod_far_max_tris": 200,
+      "mesh_lod_far_distance_mul": 3.0,
+      "mesh_lod_tris_per_px": 0.35,
+      "small_object_cull_px": 3.5,
+      "shadow_caster_min_px": 2.0,
+      "wind_sway_scale": 0.35,
+      "post_scale": 1.0,
+      "render_scale": 0.75,
+      "post_format": "packed",
+      "mesh_lod_min_tris": 300,
+      "mesh_lod_min_distance": 300.0,
+      "pbr_lighting": false,
+      "shadow_mode": "single",
+      "bloom": true,
+      "shader_lite": true,
+      "shadow_update_interval": 1,
+      "target_fps": 30,
+      "render_scale_min": 0.5,
+      "render_scale_max": 1.0,
+      "shadow_cache": true,
+      "point_light_max": 0,
+      "irradiance_probe_bake": false,
+      "display_scale": 0.75,
+      "asset_cache_maps": 1,
+      "shadow_max_texel": 1.5,
+      "point_light_tile_max": 16,
+      "tessellation": false,
+      "god_ray_lights": 0
+    },
+    "mobile_high": {
+      "relief_bake": "mesh",
+      "relief_bake_spacing": 6.0,
+      "relief_bake_max_tris": 40000,
+      "relief_bake_amplitude": 2.5,
+      "relief_bake_height_gain": 1.0,
+      "fps_cap": 30,
+      "mesh_tri_budget": 2500000,
+      "weather_tier": "high",
+      "shadow_atlas": 3072,
+      "ssao": true,
+      "motion_blur": false,
+      "chromatic_aberration": false,
+      "dof": true,
+      "point_lights": true,
+      "max_rain_followers": 100,
+      "max_field_clouds": 16,
+      "pom_height_scale": 0.0,
+      "pom_max_steps": 12,
+      "pom_min_steps": 4,
+      "geo_disp_amplitude": 0.0,
+      "geo_disp_distance": 0.0,
+      "geo_lod_budget_mb": 0,
+      "geo_lod_edge": 8.0,
+      "geo_lod_lowpass": 0.5,
+      "geo_lod_distance": 150.0,
+      "pbr_synthesis": true,
+      "contact_shadows": true,
+      "sky_probe": true,
+      "sky_probe_intensity": 1.0,
+      "irradiance_probes": true,
+      "irradiance_probe_strength": 1.0,
+      "fill_light": 0.55,
+      "smoke": true,
+      "smoke_steps": 40,
+      "smoke_sun_tap": true,
+      "smoke_detail": true,
+      "texture_max_size": 1024,
+      "mesh_lod_ratio": 0.45,
+      "mesh_lod_error": 0.05,
+      "mesh_lod_distance_factor": 400.0,
+      "cloud_march_steps": 24,
+      "mesh_lod_max_tris": 12000,
+      "shadow_lod_max_tris": 400,
+      "mesh_lod_far_max_tris": 400,
+      "mesh_lod_far_distance_mul": 3.0,
+      "mesh_lod_tris_per_px": 1.0,
+      "small_object_cull_px": 2.5,
+      "shadow_caster_min_px": 0.75,
+      "wind_sway_scale": 0.5,
+      "post_scale": 1.0,
+      "render_scale": 1.0,
+      "post_format": "rgba16f",
+      "mesh_lod_min_tris": 800,
+      "mesh_lod_min_distance": 250.0,
+      "upscaler": "fsr",
+      "fsr_mode": "quality",
+      "display_scale": 1.0,
+      "tessellation": true,
+      "god_ray_lights": 1,
+      "target_fps": 30,
+      "render_scale_min": 0.5,
+      "render_scale_max": 1.0
+    },
     "low": {
       "god_ray_lights": 2,
       "mesh_tri_budget": 1500000,
@@ -115,8 +328,6 @@
       "chromatic_aberration": false,
       "tilt_shift": false,
       "dof": false,
-      "point_lights": false,
-      "gi": false,
       "max_rain_followers": 12,
       "max_field_clouds": 16,
       "pom_height_scale": 0.0,
@@ -286,5 +497,81 @@
       "relief_bake_amplitude": 2.5,
       "relief_bake_height_gain": 1.0
     }
-  }
+  },
+  "auto_presets": [
+    {
+      "gpu": "PowerVR",
+      "preset": "mobile_low"
+    },
+    {
+      "gpu": "Mali-T",
+      "preset": "mobile_low"
+    },
+    {
+      "gpu": "Mali-G3",
+      "preset": "mobile_low"
+    },
+    {
+      "gpu": "Mali-G5",
+      "preset": "mobile_low"
+    },
+    {
+      "gpu": "Adreno (TM) 5",
+      "preset": "mobile_low"
+    },
+    {
+      "gpu": "Adreno (TM) 60",
+      "preset": "mobile_low"
+    },
+    {
+      "gpu": "Adreno (TM) 61",
+      "preset": "mobile_low"
+    },
+    {
+      "gpu": "Immortalis",
+      "preset": "mobile_high"
+    },
+    {
+      "gpu": "Mali-G710",
+      "preset": "mobile_medium"
+    },
+    {
+      "gpu": "Mali-G715",
+      "preset": "mobile_medium"
+    },
+    {
+      "gpu": "Mali-G72",
+      "preset": "mobile_medium"
+    },
+    {
+      "gpu": "Mali-G6",
+      "preset": "mobile_medium"
+    },
+    {
+      "gpu": "Mali-G7",
+      "preset": "mobile_medium"
+    },
+    {
+      "gpu": "Adreno (TM) 6",
+      "preset": "mobile_medium"
+    },
+    {
+      "gpu": "Adreno (TM) 7",
+      "preset": "mobile_high"
+    },
+    {
+      "gpu": "Adreno (TM) 8",
+      "preset": "mobile_high"
+    },
+    {
+      "gpu": "Xclipse",
+      "preset": "mobile_medium"
+    },
+    {
+      "gpu": "*",
+      "preset": "mobile_medium"
+    }
+  ],
+  "_auto_presets_comment": "Preset \"auto\" (padrao do APK): a primeira regra cujo \"gpu\" aparece no nome da GPU escolhe o preset; \"*\" casa com qualquer uma. A escala da cena ainda se calibra pelo target_fps do preset escolhido.",
+  "_quality_choice_comment": "Com o preset \"auto\", o botao Qualidade do painel de toque grava Baixa/Media/Alta (mobile_low/mobile_medium/mobile_high) em preset_override.txt; vale na proxima abertura. Onde a tabela escolhe mobile_low, o botao para em Media."
 }
