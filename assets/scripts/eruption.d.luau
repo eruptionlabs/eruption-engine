@@ -42,6 +42,14 @@ declare ui: {
     -- Text of the box under the minimap instead of map name, cell and time;
     -- nil goes back to the default.
     minimap_label: (text: string?) -> (),
+    -- The engine's own minimap orthographic frame: world (cx, cz) of its
+    -- centre and zoom (half-side in world units). This is the REAL frame the
+    -- engine baked (from terrain/instance AABBs), not the map's nominal size,
+    -- so it stays correct on a map whose geometry does not match its grid, or
+    -- while it is still loading. Use it to place minimap markers instead of
+    -- recomputing the framing formula from map data. zoom <= 0 before the
+    -- first bake (no map loaded yet).
+    minimap_frame: () -> (number, number, number),
     -- Position and size of an element of the loaded UI file, in percent of
     -- its parent (or of the screen), like CSS left/top/width/height. Without
     -- width/height the file's size stays; left = nil gives it back to the CSS.
@@ -80,6 +88,10 @@ declare ui: {
     -- Id of the graph node tapped this frame, or nil. Each node takes taps
     -- within its radius or 24 dp, whichever is larger.
     graph_clicked: (selector: string) -> string?,
+    -- Id of the node where the press still held began, once it has lasted
+    -- `seconds` (default 0.5), every frame until it lifts; nil otherwise.
+    -- A long press also fires graph_clicked when it starts.
+    graph_held: (selector: string, seconds: number?) -> string?,
     -- Character bars (life, mana) and the minimap with the map name and time.
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),
@@ -207,6 +219,24 @@ declare world: {
     -- With terrain rules on, the path also stays out of hazards and deep
     -- water unless the table says protected / swim.
     path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number?, avoid_liquid: (boolean | string)?, swim: boolean?, protected: boolean? })?) -> { vector }?,
+    -- Floor under (x, z) counting solid objects (bridges, walkways, kit
+    -- slabs): the highest top below `fromY` (default: anywhere). Second value:
+    -- true when it is an object, not the terrain.
+    floor_height: (x: number, z: number, fromY: number?) -> (number, boolean),
+    -- Whether a character of `radius` can stand on that floor: the walk grid
+    -- on the terrain, the piece itself on an object, no other solid in the body.
+    floor_walkable: (x: number, z: number, radius: number?, fromY: number?, caps: { swim: boolean?, protected: boolean? }?) -> boolean,
+    -- Liquid showing at (x, z) (inside its shore and above the floor: a bridge
+    -- over lava has none): {kind = "water" | "lava", level, index} or nil.
+    -- index is the map's liquid (1-based), 0 for the global water plane.
+    liquid_at: (x: number, z: number) -> { kind: string, level: number, index: number, map: string? }?,
+    -- A whole nx * nz grid from (x0, z0) with spacing `step`, x varying
+    -- fastest: heights (f32 per point) and flags (u8 per point: 1 walkable,
+    -- 2 water, 4 lava, 8 on an object; when not walkable, 16 wall (steep
+    -- cell or a solid in the body) or 32 blocked (outside the maps, painted
+    -- cell, "blocked" object); 64 standing on a "hazard" object).
+    -- Read with buffer.readf32(h, i * 4).
+    ground_grid: (x0: number, z0: number, step: number, nx: number, nz: number, radius: number?) -> (buffer, buffer),
     -- The game's own fog: {color = vector or {r, g, b}, start, end, opacity,
     -- height, falloff} (the map .env "fog" block fields). Wins over the map's
     -- and the weather's fog until the next map change; nil gives control back.
@@ -272,6 +302,10 @@ declare world: {
     -- memory (a neighbor is released only past 1.5x this distance).
     set_load_distance: (meters: number) -> (),
     load_distance: () -> number,
+    -- Reads a map in a thread ahead of time; a later warp_map to it only
+    -- uploads. Call it when the next area becomes likely. False if the map
+    -- does not exist.
+    preload_map: (map: string) -> boolean,
     -- Ribbon (road, trail, shallow river) along a centripetal Catmull-Rom
     -- through `points` (vectors; y is ignored, the ground gives it). opts:
     -- closed, width (or widths, one per point), step (meters between
@@ -288,6 +322,55 @@ declare world: {
     ribbon_point: (name: string, t: number) -> { t: number, s: number, lateral: number, edge: number, width: number, height: number, normal: vector, tangent: vector, position: vector, segment: number },
     ribbon_length: (name: string) -> number,
 }
+
+-- Multiplayer. One player hosts (their game is the server) or a dedicated
+-- server runs the match; the others join by "ip:port". Both sides must have
+-- the same map, scene ribbons, scripts and `version`, or the join fails with
+-- "conteudo_diferente". Events are reliable and ordered.
+-- Reasons in on_leave/on_fail: "saiu", "caiu", "cheio", "sem_resposta",
+-- "conteudo_diferente", "mensagem_invalida", "excesso", "servidor_saiu",
+-- "endereco_invalido", "token_vencido".
+declare net: {
+    -- Opens a match. opts: max_players (1..16, default 4), port (default
+    -- 41920, 0 = any), name (local player), version (game version string),
+    -- dedicated (no local player), relay ("ip:port" of a VPS running
+    -- eruption-relay, for hosts behind carrier NAT) and relay_key (the
+    -- relay's 64 hex digit key). Returns "ip:port" for the others to join
+    -- ("" while the relay has not answered yet: read net.address()), or nil
+    -- and the reason.
+    host: (opts: { [string]: any }?) -> (string?, string?),
+    -- destination: "ip", "ip:port" or "localhost". opts: name, version.
+    -- The result arrives in on_join (success) or on_fail.
+    join: (destination: string, opts: { [string]: any }?) -> boolean,
+    leave: () -> (),
+    -- Host: the address the others join ("" while waiting for the relay).
+    address: () -> string,
+    -- "offline" | "connecting" | "connected" | "hosting" | "server"
+    state: () -> string,
+    -- True on the host and on a dedicated server (the side that decides).
+    is_server: () -> boolean,
+    -- Local player id (0 = dedicated server or not in a match).
+    my_id: () -> number,
+    players: () -> { { id: number, name: string, ping: number } },
+    stats: () -> { ping: number, jitter: number, loss: number, kbps_in: number, kbps_out: number, players: number },
+    -- Top level of a script, like on.*. on_join also fires for players already
+    -- in the match when you enter, and for yourself.
+    on_join: (fn: (id: number, name: string) -> ()) -> (),
+    on_leave: (fn: (id: number, reason: string) -> ()) -> (),
+    on_fail: (fn: (reason: string) -> ()) -> (),
+    -- Event handler. `from` is the sender id (0 = server). Clients may only
+    -- send names registered with opts.from_client = true (max_bytes, default
+    -- 256); anything else disconnects them.
+    on: (name: string, fn: (from: number, data: any) -> (), opts: { from_client: boolean?, max_bytes: number? }?) -> (),
+    -- data: number, boolean, string (up to 200 bytes) or a flat table of those.
+    -- Server -> everyone (the host's own player included).
+    send: (name: string, data: any) -> (),
+    -- Server -> one player.
+    send_to: (id: number, name: string, data: any) -> boolean,
+    -- Player -> server (only names the server registered with from_client).
+    ask: (name: string, data: any) -> (),
+}
+
 
 -- Saved games: map, player position, vars, time, weather and music, kept in the
 -- player's data folder. Slots are names or numbers (default 1).
@@ -547,10 +630,6 @@ declare models: {
     set_surface: (model: Model, surface: string) -> (),
     -- The same by model file, for every instance now and later (see set_solid_file).
     set_surface_file: (file: string, surface: string) -> (),
-    -- Every model made from this file (models.file) is solid: in this map,
-    -- in neighbors as they come in and in maps loaded later, until turned off.
-    -- One line per model type (all bridges of the same piece).
-    set_solid_file: (file: string, solid: boolean) -> (),
     -- Models with a skeleton (.glb with skin): plays the animation by name
     -- ("" = rest pose). loop defaults to true, speed to 1. The pose on screen
     -- blends into the new one over `fade` seconds (default 0.2; 0 = cut).

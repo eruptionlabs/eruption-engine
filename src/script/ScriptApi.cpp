@@ -152,6 +152,19 @@ int ui_minimap_label(lua_State* L) {
     eng().setMinimapLabel(luaL_optstring(L, 1, ""));
     return 0;
 }
+// Quadro ortografico do minimapa (cx, cz, zoom): centro em mundo e meio-lado
+// do enquadramento que o motor calcula internamente a partir das AABBs reais
+// de terreno/instancia (Engine::m_minimapFrame, ver Minimap.cpp). O jogo tinha
+// uma formula propria assumindo a AABB NOMINAL do mapa; isto devolve a AABB
+// REAL usada no bake, que pode diferir quando um mapa carrega so' parcialmente
+// ou tem geometria fora da grade nominal. zoom <= 0 antes do primeiro bake.
+int ui_minimap_frame(lua_State* L) {
+    const Vec3 f = eng().minimapFrame();
+    lua_pushnumber(L, f.x);
+    lua_pushnumber(L, f.y);
+    lua_pushnumber(L, f.z);
+    return 3;
+}
 int ui_message(lua_State* L) {
     size_t len = 0;
     const char* text = luaL_tolstring(L, 1, &len);
@@ -278,6 +291,15 @@ int world_load_map(lua_State* L) {
 int world_warp_map(lua_State* L) {
     eng().setPendingMapWarp(luaL_checkstring(L, 1));
     return 0;
+}
+// Le' o mapa numa thread ANTES do warp (Engine::preloadMap): o jogo pede a
+// proxima area enquanto o jogador ainda esta' longe da passagem, e o
+// warp_map do mesmo mapa so' faz o envio para a GPU. Falso se o mapa nao
+// existe.
+int world_preload_map(lua_State* L) {
+    ScriptHost::NativeWork trabalho; // pedido ao motor, nao laco do script
+    lua_pushboolean(L, eng().preloadMap(luaL_checkstring(L, 1)));
+    return 1;
 }
 int world_set_load_distance(lua_State* L) {
     // A thread do vizinho ja' e' assincrona; o que o jogo ganha e' comecar mais cedo.
@@ -2406,7 +2428,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"start", on_start}, {"update", on_update}, {"every", on_every}, {"key", on_key},
         {"near", on_near}, {"hour", on_hour}, {"enter", on_enter}, {"leave", on_leave}, {nullptr, nullptr}};
     static const luaL_Reg vars[] = {{"get", vars_get}, {"set", vars_set}, {"add", vars_add}, {nullptr, nullptr}};
-    static const luaL_Reg ui[] = {{"message", ui_message}, {"minimap_label", ui_minimap_label}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
+    static const luaL_Reg ui[] = {{"message", ui_message}, {"minimap_label", ui_minimap_label}, {"minimap_frame", ui_minimap_frame}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
                                   {"load", ui_load}, {"place", ui_place}, {"image_rect", ui_image_rect}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
                                   {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked}, {"dragged", ui_dragged}, {"size", ui_size}, {"held", ui_held}, {"released", ui_released},
                                   {"reset", ui_reset}, {"anchor", ui_anchor}, {"portrait", ui_portrait}, {"badge", ui_badge},
@@ -2421,7 +2443,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"block_slopes", world_block_slopes}, {"set_walk_cost", world_set_walk_cost}, {"walk_cost", world_walk_cost},
         {"map", world_map}, {"load_map", world_load_map}, {"set_load_distance", world_set_load_distance},
         {"load_distance", world_load_distance},
-        {"warp_map", world_warp_map}, {"warping", world_warping}, {nullptr, nullptr}};
+        {"warp_map", world_warp_map}, {"warping", world_warping},
+        {"preload_map", world_preload_map}, {nullptr, nullptr}};
     static const luaL_Reg player[] = {
         {"position", player_position}, {"set_position", player_set_position}, {"set_sprite", player_set_sprite}, {"near", player_near},
         {"inside", player_inside}, {"say", player_say}, {"play", player_play}, {"animation", player_animation},
@@ -2505,6 +2528,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     registerRibbonApi(L, engine);
     registerVisionApi(L, engine);
     registerTelemetryApi(L, engine);
+    registerNetApi(L, engine);
     NativeModule::registerApi(L);
 }
 
@@ -2805,7 +2829,12 @@ declare world: {
     -- memory (a neighbor is released only past 1.5x this distance).
     set_load_distance: (meters: number) -> (),
     load_distance: () -> number,
+    -- Reads a map in a thread ahead of time; a later warp_map to it only
+    -- uploads. Call it when the next area becomes likely. False if the map
+    -- does not exist.
+    preload_map: (map: string) -> boolean,
 )" + ribbonApiDefinitions() + R"(}
+)" + netApiDefinitions() + R"(
 
 -- Saved games: map, player position, vars, time, weather and music, kept in the
 -- player's data folder. Slots are names or numbers (default 1).

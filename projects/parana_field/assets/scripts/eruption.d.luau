@@ -18,7 +18,7 @@ declare on: {
     update: (fn: (dt: number) -> ()) -> (),
     every: (seconds: number, fn: () -> ()) -> (),
     -- Key names: "A".."Z", "0".."9", "space", "enter", "escape", "tab",
-    -- "left", "right", "up", "down", "shift", "ctrl", "alt".
+    -- "left", "right", "up", "down", "shift", "ctrl", "alt", "f1".."f12".
     key: (key: string, fn: () -> ()) -> (),
     -- Fires when the player gets within `distance` of the model.
     near: (model: string, distance: number, fn: () -> ()) -> (),
@@ -39,6 +39,43 @@ declare vars: {
 declare ui: {
     -- Shows a message on screen for some seconds (default 3).
     message: (text: string, seconds: number?) -> (),
+    -- Text of the box under the minimap instead of map name, cell and time;
+    -- nil goes back to the default.
+    minimap_label: (text: string?) -> (),
+    -- Position and size of an element of the loaded UI file, in percent of
+    -- its parent (or of the screen), like CSS left/top/width/height. Without
+    -- width/height the file's size stays; left = nil gives it back to the CSS.
+    place: (selector: string, left: number?, top: number?, width: number?, height: number?) -> (),
+    -- Crop of an image element in texture coordinates (0..1): a window into a
+    -- bigger image. u0 = nil shows the whole image again.
+    image_rect: (selector: string, u0: number?, v0: number?, u1: number?, v1: number?) -> (),
+    -- Keeps the element's center on the top of a character's sprite (the
+    -- current frame, scale included), `dy` pixels above it, every frame with
+    -- the camera of that frame. Its children (--parent) follow it, and it
+    -- hides while the character is off screen. character = nil lets go.
+    anchor: (selector: string, character: string?, dy: number?) -> (),
+    -- A badge on the element's top-right corner: text ("+", "3") or a PNG of
+    -- the project; nil removes it. It hides with the element and has its own
+    -- touch area of at least 48 dp: ui.clicked(selector .. ":badge"), and a
+    -- tap on it is not a tap on the element. --badge-color and --badge-size
+    -- in the element's CSS change the look.
+    badge: (selector: string, content: string?) -> (),
+    -- A graph of nodes drawn on the element (a skill tree, a map of stages):
+    -- each node { id, x?, y?, icon?, text?, color?, links? }. x and y are
+    -- 0..1 in the element's box; without them the nodes go in layers by
+    -- depth from the roots (nodes no link reaches), top to bottom, or left
+    -- to right with --graph-direction: right. links lists the ids a node
+    -- points to. icon is a PNG of the project; with it, text goes under the
+    -- node. --node-size, --node-color and --link-color in the element's CSS
+    -- change the look. nil removes the graph.
+    graph: (selector: string, nodes: { { id: string, x: number?, y: number?, icon: string?, text: string?, color: vector?, links: { string }? } }?) -> (),
+    -- Id of the graph node tapped this frame, or nil. Each node takes taps
+    -- within its radius or 24 dp, whichever is larger.
+    graph_clicked: (selector: string) -> string?,
+    -- Id of the node where the press still held began, once it has lasted
+    -- `seconds` (default 0.5), every frame until it lifts; nil otherwise.
+    -- A long press also fires graph_clicked when it starts.
+    graph_held: (selector: string, seconds: number?) -> string?,
     -- Character bars (life, mana) and the minimap with the map name and time.
     -- Off in exported games until the game turns them on.
     show_hud: (on: boolean) -> (),
@@ -48,15 +85,38 @@ declare ui: {
     -- and `--widget` says whether it is a rect, text, a bar or an image.
     -- The script only fills VALUES in; where each thing sits, in what color
     -- and what size, is the file's business, reloaded when it changes.
+    -- Lengths take px, % of the parent, or vw/vh/vmin/vmax of the screen.
+    -- Shapes: clip-path: polygon(x y, ...) and border-radius with one value
+    -- per corner, on rects and bars; transform: rotate(30deg) on any element
+    -- (taps keep the unrotated box); --glow: <color> <radius>, or
+    -- box-shadow: dx dy blur <color>, lights up the area around it.
     load: (css: string) -> boolean,
     text: (selector: string, text: string) -> (),
     value: (selector: string, value: number) -> (),   -- bar, 0 to 1
     -- Troca o arquivo de um widget de imagem (--widget: image).
     image: (selector: string, png: string) -> (),
+    -- Hiding an element hides its children (--parent) with it.
     visible: (selector: string, on: boolean) -> (),
-    -- which: 0 = background / rail / text, 1 = bar fill or border.
+    -- which: 0 = background / rail / text / image tint (multiplies the
+    -- image; --image-tint in the file), 1 = bar fill or border.
     color: (selector: string, color: vector, which: number?, opacity: number?) -> (),
     has: (selector: string) -> boolean,
+    -- Tapped (phone) or clicked (mouse) this frame: an element of the file
+    -- that is on screen, or "minimap". Makes any element a button.
+    clicked: (selector: string) -> boolean,
+    -- Finger or mouse movement this frame, in screen pixels, for a drag that
+    -- started on the element (0, 0 until it moves past a small slop): scroll
+    -- a list by it.
+    dragged: (selector: string) -> (number, number),
+    -- Size of the interface in pixels (the unit of ui.dragged): scale a drag
+    -- by it so scrolling feels the same on any screen.
+    size: () -> (number, number),
+    -- Seconds the finger (mouse button) has been held on a press that started
+    -- on the element; 0 when not. With ui.released: hold to preview, let go
+    -- to confirm.
+    held: (selector: string) -> number,
+    -- The press that started on the element was let go over it this frame.
+    released: (selector: string) -> boolean,
     -- Drops everything the script set; the file decides again.
     reset: () -> (),
 }
@@ -73,11 +133,117 @@ declare world: {
     set_weather: (name: string) -> (),
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
+    -- Painted ground layers around (x, z): average weight of each layer in
+    -- a disc of `radius` (0 or nil: the nearest grid point), keyed by the
+    -- layer's texture file. Empty if the map has no painted layers.
+    ground_layers: (x: number, z: number, radius: number?) -> { [string]: number },
+    -- Liquids the map declares (lakes): kind is "water" or "lava", center is
+    -- at the liquid's level, radius is the farthest shore. `map` names a
+    -- neighbor map in the scene: its liquids, in world coordinates.
+    liquids: (map: string?) -> { { name: string, kind: string, level: number, center: vector, radius: number } },
+    -- Moves a lava of the map (1-based index in liquids(), or its name) to
+    -- `level` during play: the surface, liquid_at and walkable follow in the
+    -- same frame. False for water or an unknown liquid. With `map`, a lava of
+    -- that neighbor, `level` in world coordinates.
+    set_liquid_level: (liquid: number | string, level: number, map: string?) -> boolean,
+    -- Blocks walking on every ground point steeper than `degrees` (this run
+    -- only; the saved walk grid is untouched). Returns how many were blocked.
+    block_slopes: (degrees: number) -> number,
     -- Scene look: a preset from data/diorama.json (color grading, god rays)
     -- and the depth-of-field blur. False if there is no preset by that name.
     look: () -> string,
-    set_look: (preset: string) -> boolean,
+    -- `preset` may also be a TABLE with the same fields as a preset (only
+    -- the given ones change): a game's own look without a preset in the engine.
+    -- Fields include saturation, contrast, god_ray_*, vignette (strength,
+    -- 0 = off), vignette_softness, shadow_tint / highlight_tint (a color as
+    -- vector or {r, g, b}) with shadow_tint_strength / highlight_tint_strength.
+    set_look: (preset: string | { [string]: any }) -> boolean,
     set_dof: (on: boolean) -> (),
+    -- World time scale (hit-stop, slow motion): sprite animation, effects,
+    -- weather and the scripts' dt run scaled (0 = frozen). `seconds` counts in
+    -- full time and goes back to 1 by itself (0 or none = until the next call).
+    -- Sound and the screen fade/flash keep going.
+    set_time_scale: (scale: number, seconds: number?) -> (),
+    time_scale: () -> number,
+    -- Walk grid of the engine (block_slopes and solid objects included):
+    -- whether a character of `radius` can stand at (x, z).
+    walkable: (x: number, z: number, radius: number?) -> boolean,
+    -- Cost of walking the grid cells within `radius` of (x, z) (0: only the
+    -- cell of the point), this run only: 1 is normal, math.huge blocks.
+    -- walkable, path and walking see it in the same frame; path goes around
+    -- costly cells when that is cheaper. Returns how many cells changed.
+    set_walk_cost: (x: number, z: number, radius: number, cost: number) -> number,
+    -- Cost of the cell at (x, z) (1 when the game set none).
+    walk_cost: (x: number, z: number) -> number,
+    -- Path on the ground from `from` to `to` (smoothed), or nil if none.
+    -- A number `radius` grows only the solid objects (the old call). A table
+    -- { radius, margin } (world units) keeps every cell and every smoothed
+    -- segment radius + margin away from solids AND from cells that do not
+    -- walk (walls, blocked slopes); a start that touches a wall may leave it.
+    path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number? })?) -> { vector }?,
+    -- Floor under (x, z) counting solid objects (bridges, walkways, kit
+    -- slabs): the highest top below `fromY` (default: anywhere). Second value:
+    -- true when it is an object, not the terrain.
+    floor_height: (x: number, z: number, fromY: number?) -> (number, boolean),
+    -- Whether a character of `radius` can stand on that floor: the walk grid
+    -- on the terrain, the piece itself on an object, no other solid in the body.
+    floor_walkable: (x: number, z: number, radius: number?, fromY: number?) -> boolean,
+    -- Liquid showing at (x, z) (inside its shore and above the floor: a bridge
+    -- over lava has none): {kind = "water" | "lava", level, index} or nil.
+    -- index is the map's liquid (1-based), 0 for the global water plane.
+    liquid_at: (x: number, z: number) -> { kind: string, level: number, index: number, map: string? }?,
+    -- A whole nx * nz grid from (x0, z0) with spacing `step`, x varying
+    -- fastest: heights (f32 per point) and flags (u8 per point: 1 walkable,
+    -- 2 water, 4 lava, 8 on an object). Read with buffer.readf32(h, i * 4).
+    ground_grid: (x0: number, z0: number, step: number, nx: number, nz: number, radius: number?) -> (buffer, buffer),
+    -- The game's own fog: {color = vector or {r, g, b}, start, end, opacity,
+    -- height, falloff} (the map .env "fog" block fields). Wins over the map's
+    -- and the weather's fog until the next map change; nil gives control back.
+    set_fog: (fog: { [string]: any }?) -> (),
+    -- World edge void (E-BORDA-VAZIO, spec 12): {x0, z0, x1, z1, fade, color}.
+    -- Outside the [x0,z0]-[x1,z1] rectangle the screen fades to `color`
+    -- (black by default) over `fade` world units (default 200). Wins over
+    -- the map .env "world_border" block until the next map change; nil gives
+    -- control back. The sky never darkens, same rule as vision.
+    set_border: (border: { [string]: any }?) -> (),
+    -- Locks the exposure at `value` (1 = the light as authored) instead of
+    -- adapting to the frame, as the map .env "exposure": {"auto": false,
+    -- "value": 1.0} does. nil gives control back (the map's lock or auto).
+    -- Until the next map change.
+    set_exposure: (value: number?) -> (),
+    -- Motion blur and chromatic aberration come from the quality preset; a
+    -- game can tune them as art direction. `amount`: strength (engine default
+    -- 1 for the blur, 0.5 for the fringe).
+    set_motion_blur: (on: boolean, amount: number?) -> (),
+    set_chromatic_aberration: (on: boolean, amount: number?) -> (),
+    -- Clear radius: inside a circle around the screen center (where the camera
+    -- puts the subject) there is no motion blur or chromatic aberration; they
+    -- grow smoothly outside it. Fractions of the screen HEIGHT; radius 0 puts
+    -- the effects back on the whole screen.
+    set_effect_radius: (radius: number, feather: number?) -> (),
+    -- Where the lens focuses: a point of the scene, instead of the automatic
+    -- \"how far did the player zoom in\" curve. `aperture` is blur per unit of
+    -- depth (0.15 keeps a stage sharp and softens the background);
+    -- `foreground` also blurs what sits IN FRONT of that point. `band` keeps
+    -- that many world units on each side of the point fully sharp (a whole
+    -- group, not a single plane); `max_blur` is the blur limit in pixels at
+    -- full resolution (default 3; above it a cheap wide blur takes over). No
+    -- point at all gives the lens back to the automatic focus.
+    set_focus: (point: vector?, aperture: number?, foreground: boolean?, band: number?, max_blur: number?) -> (),
+    -- Hides map and model geometry inside a volume (a mountain or a wall
+    -- between the camera and the action) as a dither pattern. `slot` is 1..4;
+    -- nil turns that slot off. Table: shape = "box" (size = vector, full
+    -- width, height and depth) or "cylinder" (radius, height); center =
+    -- vector; yaw in degrees; soft = fade width inward from the surface
+    -- (default 15% of the smallest measure); opacity = what stays inside
+    -- (default 0). Shadows are unaffected.
+    set_cutaway: (slot: number, volume: { [string]: any }?) -> (),
+    -- Models touching the ground take on the ground's own material (splat
+    -- layers, color, normal) within `band` world units above it, so the
+    -- contact line stops reading as a hard seam. Each model's band is at most
+    -- `fraction` (default 0.3) of its own height, so a low stone keeps its
+    -- look. 0 turns it off.
+    set_ground_blend: (band: number, fraction: number?) -> (),
     -- Name of the map being played.
     map: () -> string,
     -- Goes to another map (a door, a cave); the player appears at `position`
@@ -88,7 +254,75 @@ declare world: {
     -- player walks into the mouth of the passage, not when they reach it.
     warp_map: (map: string) -> (),
     warping: () -> boolean,
+    -- Reads a map in a thread ahead of time; a later warp_map to it only
+    -- uploads. Call it when the next area becomes likely. False if the map
+    -- does not exist.
+    preload_map: (map: string) -> boolean,
+    -- Ribbon (road, trail, shallow river) along a centripetal Catmull-Rom
+    -- through `points` (vectors; y is ignored, the ground gives it). opts:
+    -- closed, width (or widths, one per point), step (meters between
+    -- samples), uv_length, lift (gap above the ground). Same name replaces it.
+    -- Ribbons in the scene file (ribbons = {...}) exist from the map load.
+    ribbon: (name: string, points: { vector }, opts: { [string]: any }?) -> boolean,
+    -- Where `position` is relative to the ribbon (pure: same input, same
+    -- result): t (0..1 along), s (meters), lateral (+ = right of the way),
+    -- edge (distance to the nearest edge, < 0 = outside), normal (from that
+    -- edge inward), tangent, width, height (ribbon surface), position (the
+    -- nearest point of the center line).
+    ribbon_query: (name: string, position: vector) -> { t: number, s: number, lateral: number, edge: number, width: number, height: number, normal: vector, tangent: vector, position: vector, segment: number },
+    -- The center line at t (closed ribbons wrap, open ones clamp).
+    ribbon_point: (name: string, t: number) -> { t: number, s: number, lateral: number, edge: number, width: number, height: number, normal: vector, tangent: vector, position: vector, segment: number },
+    ribbon_length: (name: string) -> number,
 }
+
+-- Multiplayer. One player hosts (their game is the server) or a dedicated
+-- server runs the match; the others join by "ip:port". Both sides must have
+-- the same map, scene ribbons, scripts and `version`, or the join fails with
+-- "conteudo_diferente". Events are reliable and ordered.
+-- Reasons in on_leave/on_fail: "saiu", "caiu", "cheio", "sem_resposta",
+-- "conteudo_diferente", "mensagem_invalida", "excesso", "servidor_saiu",
+-- "endereco_invalido", "token_vencido".
+declare net: {
+    -- Opens a match. opts: max_players (1..16, default 4), port (default
+    -- 41920, 0 = any), name (local player), version (game version string),
+    -- dedicated (no local player), relay ("ip:port" of a VPS running
+    -- eruption-relay, for hosts behind carrier NAT) and relay_key (the
+    -- relay's 64 hex digit key). Returns "ip:port" for the others to join
+    -- ("" while the relay has not answered yet: read net.address()), or nil
+    -- and the reason.
+    host: (opts: { [string]: any }?) -> (string?, string?),
+    -- destination: "ip", "ip:port" or "localhost". opts: name, version.
+    -- The result arrives in on_join (success) or on_fail.
+    join: (destination: string, opts: { [string]: any }?) -> boolean,
+    leave: () -> (),
+    -- Host: the address the others join ("" while waiting for the relay).
+    address: () -> string,
+    -- "offline" | "connecting" | "connected" | "hosting" | "server"
+    state: () -> string,
+    -- True on the host and on a dedicated server (the side that decides).
+    is_server: () -> boolean,
+    -- Local player id (0 = dedicated server or not in a match).
+    my_id: () -> number,
+    players: () -> { { id: number, name: string, ping: number } },
+    stats: () -> { ping: number, jitter: number, loss: number, kbps_in: number, kbps_out: number, players: number },
+    -- Top level of a script, like on.*. on_join also fires for players already
+    -- in the match when you enter, and for yourself.
+    on_join: (fn: (id: number, name: string) -> ()) -> (),
+    on_leave: (fn: (id: number, reason: string) -> ()) -> (),
+    on_fail: (fn: (reason: string) -> ()) -> (),
+    -- Event handler. `from` is the sender id (0 = server). Clients may only
+    -- send names registered with opts.from_client = true (max_bytes, default
+    -- 256); anything else disconnects them.
+    on: (name: string, fn: (from: number, data: any) -> (), opts: { from_client: boolean?, max_bytes: number? }?) -> (),
+    -- data: number, boolean, string (up to 200 bytes) or a flat table of those.
+    -- Server -> everyone (the host's own player included).
+    send: (name: string, data: any) -> (),
+    -- Server -> one player.
+    send_to: (id: number, name: string, data: any) -> boolean,
+    -- Player -> server (only names the server registered with from_client).
+    ask: (name: string, data: any) -> (),
+}
+
 
 -- Saved games: map, player position, vars, time, weather and music, kept in the
 -- player's data folder. Slots are names or numbers (default 1).
@@ -97,6 +331,14 @@ declare game: {
     load: (slot: (string | number)?) -> boolean,
     has_save: (slot: (string | number)?) -> boolean,
     delete_save: (slot: (string | number)?) -> boolean,
+    -- Starts the game over: scripts from scratch (variables cleared, objects
+    -- made by scripts removed) on the project's first map. Happens after the
+    -- current frame.
+    restart: () -> (),
+    -- Player settings (volumes, speed...), kept apart from saved games.
+    save_settings: (settings: { [string]: any }) -> boolean,
+    -- The table last saved with save_settings, or an empty table.
+    settings: () -> { [string]: any },
 }
 
 declare player: {
@@ -116,11 +358,33 @@ declare player: {
     -- running). For dialogue, cutscenes and battle.
     freeze: (on: boolean) -> (),
     frozen: () -> boolean,
+    -- Keeps running on without holding the run key (a phone's run button).
+    set_run: (on: boolean) -> (),
     -- Hidden: the player's sprite is not drawn (a scene he is not in).
     hide: (on: boolean) -> (),
 }
 
 declare characters: {
+    -- Reads and prepares sprite sheets off the frame, so a character added
+    -- later with one of them only uploads it. One file or a list; still valid
+    -- on the next map (call it with world.preload_map).
+    preload: (sprites: string | { string }) -> (),
+    -- True when the sheet asked with preload is prepared, or when nothing is
+    -- pending for it (never asked, PNG only, already on the GPU).
+    preload_ready: (sprite: string) -> boolean,
+    -- Shadow of every character: "planar" (cast by the sun), "circle" (a
+    -- contact disc) or "lights" (the disc plus a shadow cast by each of the
+    -- two strongest nearby lights) or "map" (the sprite's silhouette in the sun's
+    -- shadow map: it follows the relief, breaks on steps and climbs walls) or
+    -- "map_contact" (the silhouette, plus the contact disc where the sun does
+    -- not reach the feet: valleys, under roofs). No argument goes back to the
+    -- engine default. opts.contact_sun (0..1, default 0): with "map_contact",
+    -- the disc also under the feet in the sun, at that strength. The disc is
+    -- as wide as the sprite's feet (the bottom of its opaque pixels).
+    set_shadow: (kind: string?, opts: { contact_sun: number? }?) -> (),
+    -- Every character's sprite drawn this many frame pixels lower (0..64,
+    -- default 0): the feet sink into the ground instead of resting on it.
+    set_sink: (pixels: number?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,
@@ -161,7 +425,12 @@ declare characters: {
     shake: (name: string, amplitude: number?, seconds: number?) -> (),
     lunge: (name: string, towards: vector, distance: number?, seconds: number?) -> (),
     pop: (name: string, amount: number?, seconds: number?) -> (),
+    -- Size that stays (1 = the sheet's size); pop, shake and the rest act on top.
+    set_scale: (name: string, scale: number) -> (),
     fade: (name: string, to: number, seconds: number?) -> (),
+    -- Top of the character's sprite on screen, in UI pixels (those of
+    -- ui.size), and whether it is on screen this frame.
+    head_screen: (name: string) -> (number, number, boolean),
 }
 
 declare camera: {
@@ -176,6 +445,39 @@ declare camera: {
     -- Free camera: stops following the player, so the script (or the mouse)
     -- decides where it looks. Same switch as the middle mouse button.
     free: (on: boolean) -> (),
+    -- The following camera stops before the FRAME passes the map edge (the
+    -- player leaves the center near the border, as in a 2D RPG). Same as
+    -- "keep_inside_map" in the project's camera block.
+    keep_inside_map: (on: boolean) -> (),
+    -- What stands between the camera and the player (a wall, a cliff) is
+    -- drawn as a dither pattern within `radius` world units of the player on
+    -- screen, down to `opacity` (default 0.25) at the center. 0 turns it off.
+    -- center "focus": around the point given to world.set_focus instead (a
+    -- group under a bridge, with the leader off to the side); the player
+    -- while no focus point is set. options.band: also the strip of the
+    -- screen below the center, down to the edge, cutting what is more than
+    -- `band` world units in front of it (a low camera looking past rocks);
+    -- painted ground meshes and floors at foot height stay.
+    see_through: (radius: number, opacity: number?, center: ("player" | "focus")?,
+                  options: { band: number? }?) -> (),
+    -- Map and model geometry closer than `start` world units to the camera
+    -- disappears as a dither pattern and comes back fully by `end` (default
+    -- 1.5 x start), so a fence brushing the lens no longer covers the screen.
+    -- Shadows are unaffected. 0 turns it off.
+    near_fade: (start: number, end_: number?) -> (),
+    -- true: the orbit camera keeps out of the terrain (the open map and
+    -- the neighbors in the scene). When the lens would be inside rock or
+    -- behind a hill, it steps just past the rock, rises over it, or as a
+    -- last resort moves in toward the target; it eases back slowly once the
+    -- view is clear. options.margin keeps that many world units between lens
+    -- and ground (default 6). Thin models (trees, posts) do not count;
+    -- see_through handles them. Off by default.
+    collide: (on: boolean, options: { margin: number? }?) -> (),
+    -- false: dragging with the left or right mouse button (a finger on the
+    -- world, on a phone) no longer turns the player camera, so the game can
+    -- run its own gesture from input.touches. The middle button still pans.
+    -- Back to true when the scripts restart.
+    set_orbit_input: (on: boolean) -> (),
 }
 
 -- Presentation of a hit: what makes a blow feel like it landed. The engine
@@ -190,26 +492,65 @@ declare fx: {
     number: (position: vector, text: string, color: vector?, seconds: number?, rise: number?, size: number?) -> (),
     -- Full-screen color going from one opacity to another: the battle wipe.
     fade: (color: vector, from: number, to: number, seconds: number?) -> (),
-    -- Flash: full opacity (or `strength`) fading to nothing.
+    -- Flash: full opacity (or `strength`) fading to nothing. Its own layer:
+    -- it does not cancel a fade or a dim in progress.
     flash: (color: vector?, seconds: number?, strength: number?) -> (),
+    -- Darkens only the SCENE (the interface stays on top, untouched): blends
+    -- toward `color` by `strength` (0..1), animating from the current value.
+    dim: (color: vector?, strength: number, seconds: number?) -> (),
     fading: () -> boolean,
 }
 
 
 declare input: {
+    -- Key names as in on.key, or a controller button (any connected
+    -- controller, Xbox layout): "pad_a", "pad_b", "pad_x", "pad_y",
+    -- "pad_lb", "pad_rb", "pad_back", "pad_start", "pad_guide", "pad_ls",
+    -- "pad_rs", "pad_up", "pad_right", "pad_down", "pad_left".
     down: (key: string) -> boolean,
     -- True only on the frame the key went down.
     pressed: (key: string) -> boolean,
+    -- The screen is a touch screen (phone): hide drawn key hints.
+    touch: () -> boolean,
+    -- Shows or hides the on-screen touch stick (phone builds with a touch
+    -- pad); show it only where it is used, such as free exploration.
+    touch_pad: (on: boolean) -> (),
+    -- Double tap on the camera area (phone) or double right click (PC), true
+    -- for one frame. The engine does nothing with it; the game decides.
+    double_tapped: () -> boolean,
+    -- Name of the first connected controller, or nil: show button prompts
+    -- instead of key prompts while it is there.
+    gamepad: () -> string?,
+    -- Mouse cursor in window pixels, with or without a button down (pan at
+    -- the screen edge). On a phone it follows the finger that moves the camera.
+    mouse_position: () -> (number, number),
+    -- Mouse wheel movement this frame (0 when still; positive forward).
+    scroll: () -> number,
+    -- Fingers on the world this frame (not on the interface or the touch
+    -- stick), in window pixels: {id, x, y}. Two fingers make a pan or a
+    -- pinch; the game reads them and decides.
+    touches: () -> { { id: number, x: number, y: number } },
 }
 
 -- Models placed in the map.
 declare models: {
     count: () -> number,
+    -- Reads .glb files off the frame (embedded textures decoded), so placing
+    -- them later only uploads to the GPU. One file or a list; still valid on
+    -- the next map (call it with world.preload_map).
+    preload: (files: string | { string }) -> (),
     -- Index of the first model with this name, or nil.
     find: (name: string) -> number?,
     name: (model: Model) -> string,
     position: (model: Model) -> vector,
     set_position: (model: Model, position: vector) -> (),
+    -- Enabled models within `radius` of `position` on the ground plane
+    -- (height ignored), nearest first.
+    near: (position: vector, radius: number) -> {Model},
+    -- The file the model came from (relative to the game folder).
+    file: (model: Model) -> string,
+    -- Scale along X, Y and Z.
+    scale: (model: Model) -> vector,
     -- Rotation in degrees around X, Y and Z.
     set_rotation: (model: Model, degrees: vector) -> (),
     set_scale: (model: Model, scale: number | vector) -> (),
@@ -223,15 +564,6 @@ declare models: {
     -- Solid models block the player (the bottom of the model: trunk, wall base).
     solid: (model: Model) -> boolean,
     set_solid: (model: Model, solid: boolean) -> (),
-    -- Surface of a model for walking: "floor" (the solid above: its top is
-    -- floor, what rises past a step is wall), "hazard" (floor only for
-    -- protected walkers), "blocked" and "wall" (never stepped on, at any
-    -- height; wall also tells the game it stops projectiles), "none". In the
-    -- scene file: objects = { name = { surface = "hazard" } }.
-    surface: (model: Model) -> string,
-    set_surface: (model: Model, surface: string) -> (),
-    -- The same by model file, for every instance now and later (see set_solid_file).
-    set_surface_file: (file: string, surface: string) -> (),
     -- Models with a skeleton (.glb with skin): plays the animation by name
     -- ("" = rest pose). loop defaults to true, speed to 1. The pose on screen
     -- blends into the new one over `fade` seconds (default 0.2; 0 = cut).
@@ -251,43 +583,110 @@ declare models: {
 -- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a
 -- sound return a number for audio.stop / audio.playing.
 declare audio: {
-    play: (file: string, volume: number?) -> number,
+    -- `options`: a volume number, or {volume, pitch, range, min, falloff, group, loop}.
+    -- pitch: 1 = as recorded, 2 = an octave up. group: a bus with its own volume.
+    play: (file: string, options: (number | { [string]: any })?, pitch: number?) -> number,
     -- At a point or model: quieter far away (`range` units, default 300), panned to its side.
-    play_at: (file: string, place: vector | Model, volume: number?, range: number?) -> number,
-    loop: (file: string, volume: number?) -> number,
-    loop_at: (file: string, place: vector | Model, volume: number?, range: number?) -> number,
+    -- `min`: full volume up to this distance; `falloff`: "linear", "inverse" or "exponential".
+    play_at: (file: string, place: vector | Model, options: (number | { [string]: any })?, range: number?, pitch: number?) -> number,
+    loop: (file: string, options: (number | { [string]: any })?, pitch: number?) -> number,
+    loop_at: (file: string, place: vector | Model, options: (number | { [string]: any })?, range: number?, pitch: number?) -> number,
     stop: (sound: number, fade_seconds: number?) -> (),
     playing: (sound: number) -> boolean,
-    -- One music at a time; a new one cross-fades (default 1 s).
-    music: (file: string, volume: number?, fade_seconds: number?) -> (),
+    -- Decodes a file in the background so its first play starts at once.
+    preload: (file: string) -> boolean,
+    -- One music at a time; a new one cross-fades (default 1 s). With a second
+    -- file, the first is an intro and the second loops after it with no gap.
+    -- As a table: {volume, fade, loop = file, resume = true} (resume: from where
+    -- this track last stopped).
+    music: (file: string, options: (number | string | { [string]: any })?, fade_seconds: number?) -> (),
     stop_music: (fade_seconds: number?) -> (),
-    -- Master volume, 1 = normal.
-    set_volume: (volume: number) -> (),
+    -- Volume of the music that is playing, without restarting it.
+    music_volume: (volume: number, fade_seconds: number?) -> (),
+    -- set_volume(volume): master volume, 1 = normal. set_volume(sound, volume,
+    -- fade_seconds?): a sound that is already playing.
+    set_volume: (sound_or_volume: number, volume: number?, fade_seconds: number?) -> (),
+    set_pitch: (sound: number, pitch: number) -> (),
+    -- Volume of a group (bus); "music" is the group of the music.
+    group_volume: (group: string, volume: number, fade_seconds: number?) -> (),
 }
 
 -- Point lights of the map. Indices start at 1.
+-- The optional last argument `map` names a neighbor map in the scene
+-- (scene `neighbors`): its lights, numbered as in its own scene. count(map)
+-- is 0 while that neighbor is not in the scene.
 declare lights: {
-    count: () -> number,
-    position: (index: number) -> vector,
-    set_position: (index: number, position: vector) -> (),
+    count: (map: string?) -> number,
+    position: (index: number, map: string?) -> vector,
+    set_position: (index: number, position: vector, map: string?) -> (),
     -- Linear RGB, 0 to 1 per channel.
-    color: (index: number) -> vector,
-    set_color: (index: number, color: vector) -> (),
-    intensity: (index: number) -> number,
-    set_intensity: (index: number, intensity: number) -> (),
-    enabled: (index: number) -> boolean,
-    set_enabled: (index: number, enabled: boolean) -> (),
-    turn_on: (index: number) -> (),
-    turn_off: (index: number) -> (),
+    color: (index: number, map: string?) -> vector,
+    set_color: (index: number, color: vector, map: string?) -> (),
+    intensity: (index: number, map: string?) -> number,
+    set_intensity: (index: number, intensity: number, map: string?) -> (),
+    enabled: (index: number, map: string?) -> boolean,
+    set_enabled: (index: number, enabled: boolean, map: string?) -> (),
+    turn_on: (index: number, map: string?) -> (),
+    turn_off: (index: number, map: string?) -> (),
+    -- Whether this light casts sprite shadows (characters.set_shadow("lights")).
+    -- Turn it off on a light the game moves along with the party.
+    set_sprite_shadow: (index: number, on: boolean, map: string?) -> (),
+}
+
+-- Machine readings for a performance meter. A field is nil where this
+-- machine does not report it. Temperatures in degrees Celsius.
+type PerfSystem = {
+    ram_mb: number?,            -- memory of this process
+    vram_mb: number?,           -- GPU memory allocated by the engine
+    cpu_percent: number?,       -- this process, of the whole machine
+    gpu_percent: number?,       -- the whole GPU
+    cpu_temp: number?,
+    gpu_temp: number?,
+    gpu_watts: number?,
+    battery: number?,           -- charge, 0 to 100
+    battery_temp: number?,
+    battery_watts: number?,     -- power drawn from (or into) the battery
+    charging: boolean?,
+    -- Phones: "none", "light", "moderate", "severe", "critical",
+    -- "emergency", "shutdown" (the system throttles from "moderate" on).
+    thermal: string?,
+    -- Phones: 1.0 = the point where the system starts to throttle.
+    thermal_headroom: number?,
+}
+
+-- Performance counters for an on-screen meter: the numbers the engine already
+-- measures for its debug panel and telemetry.
+declare perf: {
+    -- Frames per second over the last half second.
+    fps: () -> number,
+    -- The last frame, in ms: wall time (for graphs and the 1% low), CPU work
+    -- (simulation, scripts, recording; no waiting for the GPU, vsync or the
+    -- FPS cap) and GPU time, nil where the GPU has no timers.
+    frame: () -> (number, number, number?),
+    -- Scene width and height, scale (scene / screen), then screen width and
+    -- height, in pixels.
+    resolution: () -> (number, number, number, number, number),
+    -- Frame limiter in frames per second, 0 = none. The graphics preset sets
+    -- it (30 on phones); a change lasts until the preset is applied again.
+    fps_cap: () -> number,
+    set_fps_cap: (fps: number) -> (),
+    -- Temperatures, battery and memory, read at most once a second.
+    system: () -> PerfSystem,
 }
 
 -- Particle effects (Window > Effects). `name` is an effect of the game
--- (assets/effects/<name>.vfx.json) or an engine template (fogo, faiscas,
--- fumaca, magia, lava, fumarola); a path ending in .json also works.
+-- (assets/effects/<name>.vfx.json) or an engine template (data/vfx: fogo,
+-- faiscas, fumaca, chamine, magia, detritos, rastro, lanterna, janela, and
+-- for lava scenery magma_jorro, magma_brasa, magma_fenda, magma_vapor and
+-- magma_rio, sized in meters: pass `scale` for a bigger world); a path
+-- ending in .json also works.
 declare vfx: {
     -- Starts the effect at a world position; returns its id (0 = not found).
     -- `scale` multiplies size, speed and forces; `yaw` turns it in degrees.
-    play: (name: string, position: vector, scale: number?, yaw: number?) -> number,
+    -- As a table: {scale, yaw, color = vector (recolors, keeping each key's
+    -- brightness), tint = vector (multiplies), offsets = {emitter = vector}
+    -- (meters, effect space)} - color variants without one file per color.
+    play: (name: string, position: vector, options: (number | { [string]: any })?, yaw: number?) -> number,
     -- Stops spawning (the live particles finish); `immediate` clears them now.
     stop: (id: number, immediate: boolean?) -> (),
     -- Moves a playing effect (a trail follows the object this way).
@@ -309,6 +708,96 @@ declare vfx: {
     area: (id: string | number, area: { shape: string?, position: vector, radius: number?, inner: number?,
         length: number?, width: number?, angle: number?, direction: vector?, yaw: number?, fill: number?,
         fill_alpha: number?, border: number?, color: vector?, alpha: number? }?) -> (),
+}
+
+-- Team vision. The map is never closed: outside the vision of the sources it
+-- only dims (the sky does not), and characters, effects and minimap markers
+-- there are hidden. Off by default; off, nothing changes on screen.
+declare vision: {
+    -- opts: dim (fraction of brightness left outside, 0.05..1, default 0.35),
+    -- fade (half-life in seconds of the edge, default 0.15), team (whose
+    -- sources count, default 1). enable(false) turns it off.
+    enable: (on: boolean?, opts: { dim: number?, fade: number?, team: number? }?) -> (),
+    enabled: () -> boolean,
+    -- A disc of vision on the ground (y is ignored). The same id moves it.
+    add_source: (id: string | number, position: vector, radius: number, team: number?) -> (),
+    remove_source: (id: string | number) -> boolean,
+    -- mode "block" (default): inside, only a source that is also inside sees
+    -- (a pit, a tall grass patch). "reveal": always visible, no source needed.
+    zone: (id: string | number, position: vector, radius: number, opts: { mode: string? }?) -> (),
+    remove_zone: (id: string | number) -> boolean,
+    -- The exact rule, anywhere on the map (no edge, no fade): the radius of a
+    -- source is the line. Always true while vision is off.
+    visible: (position: vector) -> boolean,
+}
+
+-- An object of the scene: every model and character of the map is one, and
+-- scripts make more. The handle stays valid until the object is destroyed;
+-- after that alive() is false and reading a field is an error. game.load
+-- builds the objects again: look them up by name after loading (handles kept
+-- in vars and in obj.data come back on their own).
+-- Positions are in the world; local_position, rotation and scale are relative
+-- to the parent. Rotation is in degrees around X, Y and Z.
+declare class Object
+    name: string
+    position: vector
+    local_position: vector
+    rotation: vector
+    scale: vector
+    parent: Object?
+    -- Off hides the object and everything under it.
+    active: boolean
+    -- The game's own table for this object (life, owner, state).
+    data: {[any]: any}
+    -- Index of its model for models.* (from 1), or nil.
+    model: number?
+    -- Name of its character for characters.*, or nil.
+    character: string?
+    -- Index of its light for lights.* (from 1), or nil. Lights are objects
+    -- named "light_1", "light_2"...: put one inside a model and it follows;
+    -- turning the object off puts the light out.
+    light: number?
+    -- Name of its trigger area / sound emitter, or nil.
+    area: string?
+    sound: string?
+    -- A number unique to this object while the game runs (a table key).
+    -- It changes after game.load; to keep a reference, store the Object.
+    id: number
+    function destroy(self): ()
+    function alive(self): boolean
+    function children(self): {Object}
+    -- A child by name; "door/handle" goes down the hierarchy.
+    function find(self, name: string): Object?
+    -- keep_world (default true): stays where it is on screen.
+    function set_parent(self, parent: Object?, keep_world: boolean?): ()
+    function move_by(self, offset: vector): ()
+    -- Gives the object a script: assets/scripts/<module>.luau returns
+    -- { start = function(self) end, update = function(self, dt) end,
+    --   stop = function(self) end } (all optional). Keep the object's own
+    -- state in self.data: saving the file swaps the code, not the state.
+    function attach(self, module: string): ()
+    function add_tag(self, tag: string): ()
+    function remove_tag(self, tag: string): ()
+    function has_tag(self, tag: string): boolean
+    function tags(self): {string}
+end
+
+declare objects: {
+    -- By name; "house/door" goes down the hierarchy.
+    find: (name: string) -> Object?,
+    find_all: (name: string) -> {Object},
+    with_tag: (tag: string) -> {Object},
+    -- An empty object (a group, a point to aim at).
+    create: (name: string, position: vector?, parent: Object?) -> Object,
+    -- An object with a model: a .glb ("file.glb#Node" takes one node) or a
+    -- .prefab.luau. Destroyed objects give their models back for the next
+    -- spawn of the same file. Objects made by scripts go away on Stop. After
+    -- the map's first frame a new object fades in over ~0.3 s instead of
+    -- popping; `fade` false makes it appear at once.
+    spawn: (file: string, position: vector?, parent: Object?, name: string?, fade: boolean?) -> Object?,
+    -- The object of a models.* index.
+    of_model: (model: number) -> Object?,
+    count: () -> number,
 }
 
 -- C++ functions of this project (native/*.cpp, include/eruption/native_module.h):

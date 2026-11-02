@@ -13,6 +13,7 @@
 #include "script/NativeModule.hpp"
 #include "core/Project.hpp"
 #include "utils/EventLog.hpp"
+#include "net/Net.hpp"
 
 #include <lua.h>
 #include <lualib.h>
@@ -625,6 +626,7 @@ void ScriptHost::dispatch(Script& s, float dt, float prevHour, float hour) {
         if (s.failed) return;
         switch (h.kind) {
             case EventKind::Start:
+            case EventKind::Net: // dispatchNet, quando chega o evento
                 break;
             case EventKind::Update:
                 lua_pushnumber(L, dt);
@@ -660,6 +662,24 @@ void ScriptHost::dispatch(Script& s, float dt, float prevHour, float hour) {
                 if (h.kind == EventKind::Enter ? (inside && !h.flag) : (!inside && h.flag)) callRef(s, h.fnRef, 0);
                 h.flag = inside;
                 break;
+            }
+        }
+    }
+}
+
+// Rede (net.*): o relógio dela anda com o jogo; cada evento vai para os
+// net.on* com a mesma chave em todos os scripts.
+void ScriptHost::dispatchNet(float dt) {
+    NetSystem& net = NetSystem::instance();
+    net.update(dt);
+    NetScriptEvent e;
+    while (net.poll(e)) {
+        const std::string key = netEventKey(e);
+        for (auto& s : m_scripts) {
+            for (auto& h : s.handlers) {
+                if (s.failed) break;
+                if (h.kind != EventKind::Net || h.text != key) continue;
+                callRef(s, h.fnRef, scriptPushNetEvent(L, e));
             }
         }
     }
@@ -710,6 +730,7 @@ void ScriptHost::update(float dt) {
     }
     const float hour = m_engine->dayNightCycle().timeOfDay() * 24.0f;
     NativeModule::instance().update(dt);
+    dispatchNet(dt);
     for (auto& s : m_scripts) {
         lua_pushnumber(L, dt);
         call(s, "on_update", 1);
@@ -748,6 +769,7 @@ void ScriptHost::stop() {
     m_engine->audio().stopAll(); // Stop do editor: o som do jogo para junto
     m_engine->vision().reset();  // e a visao de equipe (fontes do jogo) desliga
     EventLog::instance().close();  // e o registro de eventos sai completo
+    NetSystem::instance().leave(); // e a partida em rede fecha
     m_messages.clear();
     m_lastUpdateMs = 0.0f;
 }
