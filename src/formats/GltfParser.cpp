@@ -222,11 +222,14 @@ static void smoothNormalsByAngle(ModelFileNode& node, float thresholdDeg = 55.0f
     for (const auto& [k, ids] : buckets) {
         if (ids.size() < 2) continue;
         for (uint32_t i : ids) {
-            Vec3 acc = node.normals[i];
+            // Soma na ordem do balde, a mesma para todo vértice: duplicatas saem com
+            // os mesmos bits e a solda as junta em qualquer plataforma. Começando
+            // pela própria normal, a ordem mudava por vértice e o arredondamento
+            // (FMA no ARM) decidia a solda: no celular sobravam outros vértices.
+            Vec3 acc(0.0f);
             for (uint32_t j : ids) {
-                if (i == j) continue;
                 // Só acumula faces que pertencem à mesma superfície suave.
-                if (glm::dot(node.normals[i], node.normals[j]) >= cosThreshold) {
+                if (i == j || glm::dot(node.normals[i], node.normals[j]) >= cosThreshold) {
                     acc += node.normals[j];
                 }
             }

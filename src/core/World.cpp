@@ -35,6 +35,7 @@
 #include <map>
 #include <set>
 #if defined(__linux__)
+#include <malloc.h>
 #include <unistd.h>
 #endif
 
@@ -122,6 +123,18 @@ double residentMb() {
     if (f >> size >> resident) return double(resident) * double(sysconf(_SC_PAGESIZE)) / (1024.0 * 1024.0);
 #endif
     return 0.0;
+}
+
+// Heap em uso (o que o malloc entregou e não voltou); o RSS ainda conta o que
+// o alocador guardou depois de liberado.
+double heapMb() {
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+    return double(mallinfo2().uordblks) / (1024.0 * 1024.0);
+#elif defined(__linux__)
+    return double(static_cast<unsigned>(mallinfo().uordblks)) / (1024.0 * 1024.0);
+#else
+    return 0.0;
+#endif
 }
 
 // Líquidos do vizinho no lugar do mundo: centro, nível e contorno livre
@@ -354,6 +367,7 @@ void Engine::buildWorldGraph() {
 
 void Engine::updateWorld() {
     m_modelRenderer.pollReliefJobs();
+    m_modelRenderer.pollRaycastBvhJobs();
     if (!m_worldStarted || m_regions.empty() || !m_currentMap) return;
     // Perto de quem: do jogador no jogo; da câmera no editor.
     Vec3 focus = m_camera.position();
@@ -453,6 +467,7 @@ void Engine::updateWorld() {
                 if (std::getenv("ERUPTION_TEST_CHUNK_STATS")) {
                     r.vramAtLoad = deviceMemoryMb();
                     r.rssAtLoad = residentMb();
+                    r.heapAtLoad = heapMb();
                 }
                 r.slotsResolved = false;
                 ++jobs;
@@ -722,6 +737,29 @@ void Engine::logChunkStats(const WorldRegion& r, const WorldRegionLoad& load) {
     for (const auto& t : r.splatLayer) if (t.alloc) splat.insert(t.alloc);
     for (const auto& t : r.splatLayerNormal) if (t.alloc) splat.insert(t.alloc);
     for (const auto& t : r.splatLayerMrahw) if (t.alloc) splat.insert(t.alloc);
+    // O que fica na CPU depois do encaixe, pelos contêineres maiores.
+    auto mb = [](size_t b) { return double(b) / (1024.0 * 1024.0); };
+    size_t gridB = 0, chunkB = 0, navB = 0, imgB = 0, pixB = 0, bakedB = 0;
+    if (r.data) {
+        const TerrainFile& t = r.data->terrain;
+        gridB = t.cubes.size() * sizeof(TerrainCube) + t.surfaces.size() * sizeof(TerrainSurface) +
+                t.smoothNormals.size() * sizeof(Vec3) + t.smoothColors.size() * sizeof(uint32_t);
+        for (const auto& c : r.data->terrainChunks)
+            chunkB += c.vertices.size() * sizeof(TerrainVertex) + c.indices.size() * sizeof(uint32_t);
+        navB = r.data->navGrid.cells.size() * sizeof(r.data->navGrid.cells[0]) + r.data->walkCost.size() * sizeof(float);
+    }
+    if (m_currentMap)
+        for (const auto& m : m_currentMap->models)
+            for (const auto& et : m.embeddedTextures) {
+                imgB += et.encodedData.size();
+                pixB += et.pixels.size();
+            }
+    for (const auto& [name, b] : m_embeddedBaked)
+        bakedB += b.albedo.payload.size() + b.normal.payload.size() + b.mrahw.payload.size();
+    ERUPTION_LOG_WARN("[CHUNK] %s: heap em uso +%.1f MB; grade %.1f, malha do chão na CPU %.1f, nav %.1f MB "
+                      "(do vizinho); no mapa aberto: imagens embutidas %.1f codificadas + %.1f RGBA, pacotes BC %.1f MB",
+                      r.map.c_str(), heapMb() - r.heapAtLoad, mb(gridB), mb(chunkB), mb(navB), mb(imgB), mb(pixB),
+                      mb(bakedB));
     ERUPTION_LOG_WARN("[CHUNK] %s: VRAM +%.1f MB (VMA), RAM +%.1f MB; instâncias %u (nó sem slots %u), triângulos %llu, "
                       "alocações %.1f MB (chão %.1f, camadas pintadas %.1f), área %.0f x %.0f",
                       r.map.c_str(), deviceMemoryMb() - r.vramAtLoad, residentMb() - r.rssAtLoad,
@@ -859,6 +897,7 @@ void Engine::finishRegion(WorldRegion& r) {
         if (idx >= 0) setSurface(static_cast<uint32_t>(idx), kind);
     }
     applySolidFiles(); // os tipos de modelo sólidos que o jogo declarou
+    m_modelRenderer.warmRaycastBvh(); // Terreno grande: malha grande deste vizinho, em segundo plano
     r.sounds.clear();
     for (const auto& snd : e.sounds) {
         const std::string name = prefix + snd.name;

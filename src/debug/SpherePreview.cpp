@@ -1,5 +1,6 @@
 #include "debug/SpherePreview.hpp"
 #include "core/Logger.hpp"
+#include "renderer/ModelRenderer.hpp"
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/ShaderCompiler.hpp"
 
@@ -382,31 +383,11 @@ bool SpherePreview::createPipeline() {
     stages[1] = {}; stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fragModule; stages[1].pName = "main";
 
-    // Layout de vertice IDENTICO ao de ModelRenderer::createPipeline() -
-    // reusa model.vert.spv tal e qual, o layout tem que bater exatamente.
+    // Mesmo layout de vertice de ModelRenderer (reusa model_novel.vert).
     VkVertexInputBindingDescription bindingDesc{};
     bindingDesc.binding = 0; bindingDesc.stride = sizeof(TerrainVertex);
     bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    std::vector<VkVertexInputAttributeDescription> attribs(19);
-    attribs[0]  = {0,  0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TerrainVertex, position)};
-    attribs[1]  = {1,  0, VK_FORMAT_R32G32_SFLOAT,    offsetof(TerrainVertex, texCoord)};
-    attribs[2]  = {2,  0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TerrainVertex, normal)};
-    attribs[3]  = {3,  0, VK_FORMAT_R16_UINT,         offsetof(TerrainVertex, texIndex)};
-    attribs[4]  = {4,  0, VK_FORMAT_R16_UINT,         offsetof(TerrainVertex, matId)};
-    attribs[5]  = {5,  0, VK_FORMAT_R32_UINT,         offsetof(TerrainVertex, color)};
-    attribs[6]  = {6,  0, VK_FORMAT_R16_UINT,         offsetof(TerrainVertex, pbrIndex)};
-    attribs[7]  = {7,  0, VK_FORMAT_R16_UINT,         offsetof(TerrainVertex, normalIndex)};
-    attribs[8]  = {8,  0, VK_FORMAT_R16_UINT,         offsetof(TerrainVertex, blendTexIndex)};
-    attribs[9]  = {9,  0, VK_FORMAT_R16_UINT,         offsetof(TerrainVertex, blendPbrIndex)};
-    attribs[10] = {10, 0, VK_FORMAT_R16_UINT,         offsetof(TerrainVertex, blendNormalIndex)};
-    attribs[11] = {11, 0, VK_FORMAT_R32_SFLOAT,       offsetof(TerrainVertex, blendWeight)};
-    attribs[12] = {12, 0, VK_FORMAT_R16_UINT,         offsetof(TerrainVertex, blendMaskIndex)};
-    attribs[13] = {13, 0, VK_FORMAT_R32G32_SFLOAT,    offsetof(TerrainVertex, blendMaskUV)};
-    attribs[14] = {14, 0, VK_FORMAT_R32_SFLOAT,       offsetof(TerrainVertex, emissiveStrength)};
-    attribs[15] = {15, 0, VK_FORMAT_R32G32_UINT,      offsetof(TerrainVertex, splatTex01)};
-    attribs[16] = {16, 0, VK_FORMAT_R32G32_UINT,      offsetof(TerrainVertex, splatTex45)};
-    attribs[17] = {17, 0, VK_FORMAT_R16_UINT,         offsetof(TerrainVertex, blendMaskIndex2)};
-    attribs[18] = {18, 0, VK_FORMAT_R16_UINT,         offsetof(TerrainVertex, emissiveIndex)};
+    const std::vector<VkVertexInputAttributeDescription> attribs = ModelRenderer::vertexAttributes();
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertexInput.vertexBindingDescriptionCount = 1; vertexInput.pVertexBindingDescriptions = &bindingDesc;

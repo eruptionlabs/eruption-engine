@@ -3,6 +3,7 @@
 #include "core/LoadingScreen.hpp"
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
+#include "editor/GameExport.hpp"
 #include "formats/FlatMap.hpp"
 #if ERUPTION_EDITOR
 #include "../plugins/mapgen/MapGen.hpp"
@@ -51,6 +52,70 @@ static bool wantsEditor(int argc, char** argv) {
         if (std::string(*e).rfind("ERUPTION_TEST_", 0) == 0) automated = true;
     return !automated;
 }
+
+#if ERUPTION_EDITOR
+// --export-game <pasta> [--export-map <mapa>]...: o File > Export Game do
+// editor sem janela. Sem --export-map vai o mapa inicial do projeto. Copia o
+// programa ao lado do editor (o enxuto, se build-export/ existir) e diz quais
+// modulos opcionais o projeto usa (o perfil para compilar o enxuto).
+int runExportGameCli(int argc, char** argv, const std::filesystem::path& outDir) {
+    const std::filesystem::path dir = Project::requested(argc, argv);
+    std::string err;
+    if (!dir.empty() && !Project::instance().open(dir, &err)) {
+        ERUPTION_LOG_FATAL("--export-game: %s", err.c_str());
+        return 1;
+    }
+    ExportOptions o;
+    o.projectRoot = project::isOpen() ? project::root() : std::filesystem::current_path();
+    o.engineRoot = project::isOpen() ? project::engineRoot() : std::filesystem::path();
+    for (int k = 1; k + 1 < argc; ++k)
+        if (std::string(argv[k]) == "--export-map") o.maps.push_back(argv[k + 1]);
+    if (o.maps.empty() && project::isOpen() && !Project::instance().manifest().startupMap.empty())
+        o.maps.push_back(Project::instance().manifest().startupMap);
+    o.outDir = outDir;
+    const std::filesystem::path engineRoot = o.engineRoot.empty() ? o.projectRoot : o.engineRoot;
+    // Perfil que o jogo pede: os modulos opcionais que o projeto usa.
+    const std::vector<ModuleInfo> table = loadModuleTable(engineRoot, &err);
+    BuildProfile profile;
+    for (const ModuleInfo& m : table) {
+        profile.modules[m.option] = m.exportable && moduleUsedByProject(m, o.projectRoot);
+        ERUPTION_LOG_WARN("[EXPORT] modulo %s: %s", m.name.c_str(),
+                          !m.exportable ? "nunca vai no jogo" : (profile.modules[m.option] ? "usado" : "nao usado"));
+    }
+    const std::string wanted = profileCMakeFlags(table, profile);
+    ERUPTION_LOG_WARN("[EXPORT] perfil do programa enxuto: %s", wanted.c_str());
+    // Programa do jogo: o enxuto de build-export/ se foi compilado com esse
+    // perfil; senao (outra sessao o recompilou para outro projeto, ou falta
+    // um modulo que o jogo usa, como a rede) vai o completo ao lado do
+    // editor, que tem todos. Antes a exportacao terminava e so' depois
+    // falhava pelo perfil, com a pasta ja' escrita.
+    const std::filesystem::path lean = engineRoot / "build-export" / "eruption-engine";
+    std::error_code ec;
+    o.binary = engineRoot / "eruption-engine";
+    BuildProfile built;
+    if (std::filesystem::exists(lean, ec)) {
+        if (builtProfile(lean.parent_path(), table, built) && profileCMakeFlags(table, built) == wanted)
+            o.binary = lean;
+        else
+            ERUPTION_LOG_WARN("[EXPORT] build-export/ foi compilado com outro perfil (%s): vai o programa completo; "
+                              "para o enxuto, recompile com o perfil acima",
+                              profileCMakeFlags(table, built).c_str());
+    }
+    const ExportReport r = exportGame(o);
+    if (!r.error.empty()) {
+        ERUPTION_LOG_FATAL("--export-game: %s", r.error.c_str());
+        return 1;
+    }
+    ERUPTION_LOG_WARN("[EXPORT] %zu arquivos (%zu scripts compilados, %zu mapas vizinhos, %zu excluidos), %.1f MB em %s",
+                      r.files, r.compiled, r.neighbors, r.excluded, double(r.bytes) / (1024.0 * 1024.0),
+                      outDir.string().c_str());
+    for (const auto& m : r.missing) ERUPTION_LOG_WARN("[EXPORT] nao encontrado (ficou de fora): %s", m.c_str());
+    if (r.groundPacked) ERUPTION_LOG_WARN("[EXPORT] %zu chao(s) de mapa empacotado(s) como .relevo", r.groundPacked);
+    for (const auto& g : r.groundKept) ERUPTION_LOG_WARN("[EXPORT] chao foi como .glb + .ter (nao empacotou): %s", g.c_str());
+    ERUPTION_LOG_WARN("[EXPORT] programa: %s", o.binary.string().c_str());
+    return 0;
+}
+#endif
 } // namespace eruption
 
 // No Android quem chama e' a NativeActivity (src/platform/android/AndroidMain.cpp).
@@ -125,6 +190,9 @@ int eruptionMain(int argc, char** argv) {
                           res.w, res.d, res.layers.size(), res.scatter.size(), ms);
         return 0;
     }
+
+    for (int i = 1; i + 1 < argc; ++i)
+        if (std::string(argv[i]) == "--export-game") return eruption::runExportGameCli(argc, argv, argv[i + 1]);
 #endif
 
     // --new-map <nome> [--map-size <lado>] [--map-color r,g,b]: cria o mapa

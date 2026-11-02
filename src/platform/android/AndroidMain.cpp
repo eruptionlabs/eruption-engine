@@ -19,6 +19,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include "core/Input.hpp"
+#include "core/Platform.hpp"
 #include "core/TouchRouter.hpp"
 
 #include <android/asset_manager.h>
@@ -294,19 +295,39 @@ void pumpEvents(int timeoutMs) {
 int windowW() { return g_app && g_app->window ? ANativeWindow_getWidth(g_app->window) : 0; }
 int windowH() { return g_app && g_app->window ? ANativeWindow_getHeight(g_app->window) : 0; }
 
-// ERUPTION_DISPLAY_SCALE=0.5..1: o swapchain sai menor que a tela e o
-// compositor do Android estica de graca no hardware de video. Tudo que roda
-// na resolucao de saida (FSR, pos, UI) fica proporcionalmente mais barato.
-// Toque e ImGui seguem em coordenadas da janela; so' o framebuffer encolhe.
+// Escala de saida 0.5..1: o swapchain sai menor que a tela e o compositor do
+// Android estica de graca no hardware de video. Tudo que roda na resolucao de
+// saida (FSR, pos, UI) fica proporcionalmente mais barato. Toque e ImGui
+// seguem em coordenadas da janela; so' o framebuffer encolhe. Vem do preset
+// ("display_scale", platform::setDisplayScale); ERUPTION_DISPLAY_SCALE manda.
+float g_displayScale = 1.0f;
+bool g_displayScaleFromEnv = false;
+
 float displayScale() {
-    static const float s = [] {
-        const char* e = std::getenv("ERUPTION_DISPLAY_SCALE");
-        return e ? std::clamp(static_cast<float>(std::atof(e)), 0.5f, 1.0f) : 1.0f;
+    static const bool s_init = [] {
+        if (const char* e = std::getenv("ERUPTION_DISPLAY_SCALE")) {
+            // O env vai ate' 0,25 (bancada: separa custo por pixel de custo fixo
+            // num aparelho sem timestamp); o preset continua com piso de 0,5.
+            g_displayScale = std::clamp(static_cast<float>(std::atof(e)), 0.25f, 1.0f);
+            g_displayScaleFromEnv = true;
+        }
+        return true;
     }();
-    return s;
+    (void)s_init;
+    return g_displayScale;
 }
 
 } // namespace
+
+namespace eruption::platform {
+void setDisplayScale(float scale) {
+    displayScale(); // le' o env antes de decidir
+    const float s = std::clamp(scale, 0.5f, 1.0f);
+    if (g_displayScaleFromEnv || s == g_displayScale) return;
+    g_displayScale = s;
+    g_window.lastW = g_window.lastH = 0; // o proximo glfwPollEvents recria o swapchain
+}
+} // namespace eruption::platform
 
 namespace eruption::platform {
 // Densidade da tela: AConfiguration da' dpi (160 = 1 px por dp). O toque e o

@@ -350,6 +350,21 @@ void Engine::setClassicMode(bool on) {
     m_classic.on = on;
 }
 
+// O ciclo dia/noite parado ao meio-dia punha o sol a pino e o ambiente fraco
+// do ciclo; com GI e SSAO apagados, a face sem sol ficava quase preta e o sol
+// "trocava de lado" em relacao ao modo ERUPT. O modo classico acende tudo
+// com a luz que o proprio mapa traz: sol na direcao do .env e um ambiente
+// chapado alto.
+void Engine::applyClassicLight(LightingEnvironment& env) const {
+    env.sun.direction = m_mapSunDirection;
+    env.sun.color = m_mapSunColor;
+    env.sun.intensity = 1.0f;
+    env.ambientColor = m_mapAmbientColor;
+    env.ambientSkyColor = m_mapAmbientColor;
+    env.ambientGroundColor = m_mapAmbientColor;
+    env.ambientIntensity = 1.0f;
+}
+
 // Painel de toque: analogico de mover a camera no canto de baixo a' esquerda,
 // hora do dia, relogio parado/andando e clima no da direita. O resto da tela
 // continua sendo da camera (um dedo gira, pinca aproxima).
@@ -583,7 +598,9 @@ void Engine::drawTouchHud() {
     ImGui::PushStyleColor(ImGuiCol_Button, on ? ImVec4(0.10f, 0.55f, 0.20f, 0.90f) : ImVec4(0.65f, 0.12f, 0.10f, 0.90f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, on ? ImVec4(0.15f, 0.65f, 0.25f, 1.0f) : ImVec4(0.75f, 0.18f, 0.14f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, on ? ImVec4(0.08f, 0.45f, 0.16f, 1.0f) : ImVec4(0.55f, 0.10f, 0.08f, 1.0f));
-    const float bw = m_touchHudFont->FontSize * 7.5f;
+    // Largura do maior rotulo do painel ("Qualidade: Media" cortava em 7,5 fontes).
+    const float bw = std::max(m_touchHudFont->FontSize * 7.5f,
+                              ImGui::CalcTextSize("Qualidade: Media").x + ImGui::GetStyle().FramePadding.x * 2.0f);
     if (ImGui::Button(on ? "ERUPT ON" : "ERUPT OFF", ImVec2(bw, m_touchHudFont->FontSize * 1.8f))) setClassicMode(on);
     ImGui::PopStyleColor(3);
     if (ImGui::Button(m_touchHudTelemetry ? "Telemetria -" : "Telemetria +", ImVec2(bw, 0.0f)))
@@ -603,6 +620,17 @@ void Engine::drawTouchHud() {
         }
         return out;
     }();
+    // Qualidade Baixa/Media/Alta (so' com o preset automatico do celular).
+    // A troca vale na proxima abertura.
+    if (!m_graphicsPresetAuto.empty()) {
+        static const char* const kLabels[3] = {"Qualidade: Baixa", "Qualidade: Media", "Qualidade: Alta"};
+        const std::string& shown = m_presetChoiceNext.empty() ? m_graphicsPreset : m_presetChoiceNext;
+        int level = 0;
+        while (level < 2 && shown != kQualityPresets[level]) ++level;
+        if (ImGui::Button(kLabels[level], ImVec2(bw, 0.0f))) cycleQualityPreset();
+        if (!m_presetChoiceNext.empty() && m_presetChoiceNext != m_graphicsPreset)
+            ImGui::TextUnformatted("Reabra o app");
+    }
     if (s_maps.size() > 1) {
         if (ImGui::Button(m_touchHudMaps ? "Mapas -" : "Mapas +", ImVec2(bw, 0.0f))) m_touchHudMaps = !m_touchHudMaps;
         if (m_touchHudMaps) {
@@ -907,7 +935,7 @@ void Engine::renderImGui() {
     if (!m_editor && m_showGameHud) drawGameHud();
     if (m_touchHudFont && !m_editor) drawTouchHud();
 
-    // ERUPTION_FPS_OVERLAY=<altura em px> (demonstracao): FPS grande no
+    // ERUPTION_FPS_OVERLAY=<altura em px ou fracao da tela> (demonstracao): FPS grande no
     // canto, media de meio segundo. Para mostrar o jogo rodando ao vivo.
     static const float s_fpsOverlay = [] {
         const char* e = std::getenv("ERUPTION_FPS_OVERLAY");
@@ -942,14 +970,29 @@ void Engine::renderImGui() {
                 top += b;
             }
             ERUPTION_LOG_WARN("[FPS] %.0f | GPU %.1f ms:%s", shown, gpuSum, top.c_str());
+            // ERUPTION_TEST_CPU_MARKS=1: o lado da CPU do mesmo quadro (celular
+            // sem profiler: onde vai o tempo quando a GPU não é o limite).
+            if (std::getenv("ERUPTION_TEST_CPU_MARKS")) {
+                std::string stages;
+                for (size_t i = 1; i < m_benchmarkCpuFrameMs.size(); ++i) {
+                    char b[24];
+                    std::snprintf(b, sizeof(b), " %zu=%.1f", i, m_benchmarkCpuFrameMs[i]);
+                    stages += b;
+                }
+                ERUPTION_LOG_WARN("[CPU] sim=%.1f app=%.1f render=%.1f tail=%.1f begin=%.1f | etapas:%s",
+                                  m_cpuAdvanceMs, m_cpuAppUpdateMs, m_cpuRenderMs, m_cpuTailMs, m_cpuBeginFrameMs,
+                                  stages.c_str());
+            }
         }
         char txt[32];
         std::snprintf(txt, sizeof(txt), "%.0f FPS", shown);
         ImDrawList* dl = ImGui::GetForegroundDrawList();
-        const ImVec2 at(s_fpsOverlay * 0.5f, s_fpsOverlay * 0.4f);
+        // O tamanho vem da fonte (o env pode ser fracao da altura da tela).
         ImFont* big = ImGui::GetIO().Fonts->Fonts.back(); // criada em initImGui com o mesmo env
-        dl->AddText(big, s_fpsOverlay, ImVec2(at.x + 3, at.y + 3), IM_COL32(0, 0, 0, 200), txt);
-        dl->AddText(big, s_fpsOverlay, at, IM_COL32(120, 255, 140, 255), txt);
+        const float size = big->FontSize;
+        const ImVec2 at(size * 0.5f, size * 0.4f);
+        dl->AddText(big, size, ImVec2(at.x + 3, at.y + 3), IM_COL32(0, 0, 0, 200), txt);
+        dl->AddText(big, size, at, IM_COL32(120, 255, 140, 255), txt);
     }
 
 

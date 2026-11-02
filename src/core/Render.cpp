@@ -191,6 +191,65 @@ void Engine::bindFsrInputs(bool write) {
     m_fsrReset = true;
 }
 
+// Fim da faixa de tesselacao: onde a curva chega a 1 (sem subdivisao), com
+// 20% de folga para a malha entrar na faixa antes do primeiro vertice
+// deslocado. Era distMax * 0,12 fixo - a curva ia mais longe e a faixa nao.
+static float tessBandDistance(const SplineCurve& curve, float distMax) {
+    if (curve.evaluate(0.0f) <= 1.001f) return 0.0f;
+    constexpr int kSamples = 200;
+    for (int i = 1; i <= kSamples; ++i) {
+        const float x = static_cast<float>(i) / kSamples;
+        if (curve.evaluate(x) <= 1.001f) return std::min(x * 1.2f, 1.0f) * distMax;
+    }
+    return distMax;
+}
+
+void Engine::settleRenderScale() {
+    RenderScaleTuning& t = m_scaleTuning;
+    // Aquecimento longo: no primeiro lancamento os shaders ainda compilam.
+    constexpr int kWarmup = 90, kMaxSteps = 4;
+    constexpr int kWindow = static_cast<int>(std::tuple_size_v<decltype(t.frameMs)>);
+    // Com FSR a escala da cena vem do modo dele (qualidade, desempenho...).
+    if (t.targetFps <= 0.0f || t.steps >= kMaxSteps || !m_currentMap || m_displayW == 0 || fsrActive()) return;
+    const float dt = m_timer.deltaTime();
+    if (dt <= 0.0f || dt > 0.25f) return; // carga ou travada: nao e' o ritmo do jogo
+    if (++t.frames <= kWarmup) return;
+    // Com fps_cap o quadro dura o periodo do limite; sem descontar o sono a
+    // conta veria "no limite" e baixaria a escala a cada janela.
+    const float workMs = std::max(dt * 1000.0f - m_capSleepMs, 0.1f);
+    t.frameMs[static_cast<size_t>(t.frames - kWarmup - 1)] = workMs;
+    if (t.frames < kWarmup + kWindow) return;
+
+    // Media simples (as travadas ja' ficaram de fora acima): a mediana caia
+    // num dos degraus do vsync (quadros de 1, 2 ou 3 intervalos).
+    float sumMs = 0.0f;
+    for (float ms : t.frameMs) sumMs += ms;
+    const float frameMs = sumMs / kWindow;
+    const float targetMs = 1000.0f / t.targetFps;
+    const float scale = float(m_renderW) / float(m_displayW);
+    float next = scale;
+    // Pixels ~ escala ao quadrado, mas boa parte do quadro nao depende deles:
+    // a descida e' linear no tempo (chega em um passo, cada passo e' uma
+    // travada de redimensionar) e a subida, pela raiz, fica abaixo do ponto.
+    // Mira 3% abaixo do tempo da meta: assentar no limite deixa o FPS oscilando
+    // um degrau abaixo dela.
+    if (frameMs > targetMs * 0.97f) next = scale * (targetMs / frameMs) * 0.95f;
+    else if (frameMs < targetMs * 0.7f) next = scale * std::sqrt(targetMs * 0.8f / frameMs);
+    // Degraus de 0,05, sempre para baixo: errar para o lado do FPS.
+    next = std::clamp(std::floor(next * 20.0f + 1e-3f) / 20.0f, t.minScale, t.maxScale);
+    t.frames = 0;
+    if (std::abs(next - scale) < 0.025f) {
+        t.steps = kMaxSteps; // assentou
+        return;
+    }
+    ++t.steps;
+    ERUPTION_LOG_WARN("Escala da cena: %.2f -> %.2f (%.1f ms por quadro, alvo %.0f FPS)",
+                      scale, next, frameMs, t.targetFps);
+    m_renderW = std::max(64u, uint32_t(float(m_displayW) * next));
+    m_renderH = std::max(64u, uint32_t(float(displayExtent().height) * next));
+    m_resized = true;
+}
+
 void Engine::render() {
 #if defined(__EMSCRIPTEN__)
     renderWeb(); // WebGL2 (EngineWeb.cpp)
@@ -219,6 +278,7 @@ void Engine::render() {
         m_shadowRenderer.settings().debugMagentaShadow = false;
     }
 
+    settleRenderScale();
     if (m_resized) {
         m_vulkan.recreateSwapchain();
         const VkExtent2D disp = displayExtent();
@@ -333,7 +393,7 @@ void Engine::render() {
     // Start ImGui frame only after a successful beginFrame (skip during
     // automated benchmarks to remove UI overhead from measurements).
     if (!m_benchmarkThunderstorm) {
-        ImGui_ImplVulkan_NewFrame(); ImGui_ImplGlfw_NewFrame(); ImGui::NewFrame();
+        ImGui_ImplVulkan_NewFrame(); ImGui_ImplGlfw_NewFrame(); syncUiFramebufferScale(); ImGui::NewFrame();
         // Precisa rodar 1x por frame de ImGui, antes de qualquer
         // ImGuizmo::Manipulate() (Object Manager F1, Lava shape no Liquids) -
         // documentado assim no proprio ImGuizmo.h.
@@ -480,6 +540,7 @@ void Engine::render() {
         env.sun.color = m_mapSunColor;
         env.sun.intensity = m_mapSunIntensity;
     }
+    if (m_classic.on) applyClassicLight(env);
 
     // Cloud shadows: base strength = sun/(sun+ambient), so a dense cloud
     // darkens the ground like map geometry shadows (author feedback 2026-08-10).
@@ -514,7 +575,9 @@ void Engine::render() {
     // mesmo pedindo pra' nao pagar. Mesmo padrao do [5] logo acima.
     if (m_renderEffects.size() > 4) m_deferredLighting.setPointLightsEnabled(m_renderEffects[4]->isEnabled());
     
-    float giIntensity = m_renderEffects[1]->isEnabled() ? m_renderEffects[1]->getParam(0) : 0.0f;
+    // Modo classico: o efeito de GI fica desligado, mas o ambiente do mapa
+    // tem que continuar inteiro (ver applyClassicLight).
+    float giIntensity = m_classic.on ? 1.0f : (m_renderEffects[1]->isEnabled() ? m_renderEffects[1]->getParam(0) : 0.0f);
     m_deferredLighting.setGlobalIllumination(env.ambientIntensity * giIntensity, 0.0f);
     m_deferredLighting.setIndirectParams(m_ssaoEnabled, m_ssaoStrength, m_ssaoRadius,
                                          m_envSpecEnabled, m_envSpecIntensity,
@@ -620,7 +683,7 @@ void Engine::render() {
         const char* e = std::getenv("ERUPTION_TEST_TESS");
         return e ? std::atoi(e) : -1;
     }();
-    const bool tessWanted = (kTessEnv < 0) ? m_tessEnabled : (kTessEnv != 0);
+    const bool tessWanted = (kTessEnv < 0) ? (m_tessEnabled && m_tessPresetAllowed) : (kTessEnv != 0);
     const bool tessOn = tessWanted && m_vulkan.tessellationSupported() && tessMax > 1.001f;
     if (std::getenv("ERUPTION_TEST_TESS_DIAG")) {
         static bool kLogged = false;
@@ -649,12 +712,34 @@ void Engine::render() {
     }();
     // x = reservado, y = espacamento alvo entre vertices (densityFactor(),
     // model.tesc).
-    frameUbo.tessParams2 = Vec4(0.0f, m_tessVertexSpacing, glm::radians(m_normalMaxSlopeDeg), kFoliageTessCap);
+    // Relevo hibrido (model_tese/model_frag, reliefPomWeight): rampa do POM no
+    // cosseno da vista, de kReliefCos.x (abaixo: so' tesselacao) a .y (acima:
+    // so' POM). 0,3..0,6 medido no PC (mapa urbano de teste, 4 inclinacoes, minimo de 3
+    // execucoes): G-buffer 2,49 -> 1,87 ms contra so' tesselacao, PSNR contra
+    // ela 29-40 dB; 0,2..0,4 economiza mais (1,60 ms) mas cai a 28,9 dB no
+    // rasante, 0,4..0,7 ganha 0,6 dB por +0,14 ms. ERUPTION_TEST_RELIEF=pom|tess|hybrid (bancada de PSNR): pom e
+    // tess forcam um lado so' com a mesma altura; ERUPTION_TEST_RELIEF_COS=
+    // "lo,hi" troca a rampa.
+    // Desligado (2026-10-27, aprovado pelo autor): com a grade por distancia
+    // o relevo misto custou mais que so' tesselacao (bancada de relevo, ate'
+    // +2,9 ms contra +1,1 a +2,1 ms) e o POM perto da amplitude 12 ficou a
+    // 0,3-2,5 dB de nenhum relevo. Rampa (2, 2) = peso do POM sempre zero, o
+    // frag nem marcha; ERUPTION_TEST_RELIEF_COS=0.3,0.6 volta a rampa medida.
+    static const Vec2 kReliefCos = [] {
+        Vec2 c(2.0f, 2.0f);
+        if (const char* e = std::getenv("ERUPTION_TEST_RELIEF_COS")) std::sscanf(e, "%f,%f", &c.x, &c.y);
+        if (const char* e = std::getenv("ERUPTION_TEST_RELIEF")) {
+            if (std::strcmp(e, "pom") == 0) c = Vec2(-2.0f);
+            else if (std::strcmp(e, "tess") == 0) c = Vec2(2.0f);
+        }
+        return c;
+    }();
+    frameUbo.tessParams2 = Vec4(kReliefCos.y, m_tessVertexSpacing, glm::radians(m_normalMaxSlopeDeg), kFoliageTessCap);
     frameUbo.tessHeightBlur = m_tessHeightBlur;
     frameUbo.tessNearEdgePixels = m_tessNearEdgePixels;
     frameUbo.tessNearDistance = m_tessNearDistance;
     frameUbo.tessNearSpacing = m_tessNearSpacing;
-    m_modelRenderer.setTessellation(tessOn, m_tessCurve.evaluate(0.0f) > 1.001f ? distMax * 0.12f : 0.0f);
+    m_modelRenderer.setTessellation(tessOn, tessBandDistance(m_tessCurve, distMax) * m_tessBandScale);
     m_modelRenderer.setTessAmplitude(frameUbo.tessParams.z);
     // Relevo efetivo no log quando muda (amplitude, banda da curva, banda
     // perto): o patch de graphics.json de um jogo pode trocar tudo isso, e sem
@@ -693,7 +778,7 @@ void Engine::render() {
         const char* e = std::getenv("ERUPTION_TEST_MICRO_SHADOW");
         return e ? static_cast<float>(std::atoi(e)) : 7.0f;
     }();
-    frameUbo.pomParams = Vec4(m_pomHeightScale,
+    frameUbo.pomParams = Vec4(kReliefCos.x,
                               kMicroShadowMask,
                               static_cast<float>(m_pomMinSteps),
                               m_weatherSystem.surfaceWetness());
@@ -749,7 +834,14 @@ void Engine::render() {
     frameUbo.giIntensity = env.ambientIntensity * giIntensity;
     frameUbo.giAmbientFloor = 0.0f;
 
-    if (m_shadowRenderer.settings().enabled) {
+    // shadow_update_interval > 1: nos quadros sem atualizacao nem as matrizes
+    // mudam - a sombra de quem se move so' atrasa ate' o proximo mapa.
+    const bool shadowUpdate = m_framesCount % m_shadowUpdateInterval == 0;
+    // Antes da sombra: o chao em celulas escolhe o nivel pela camera deste
+    // quadro ja' no mapa de sombra (o primeiro, assado, inclusive).
+    m_modelRenderer.setGroundLodView(m_camera.position(), static_cast<float>(displayExtent().height) /
+                                                              (2.0f * std::tan(glm::radians(m_camera.fov()) * 0.5f)));
+    if (m_shadowRenderer.settings().enabled && shadowUpdate) {
         m_shadowRenderer.setSunAngularRadius(m_deferredLighting.sunAngularRadius());
         m_shadowRenderer.updateCascades(env.sun, m_camera, zoomPercent, m_dayNightCycle.timeOfDay());
         m_vulkan.writeTimestamp(cmd, 0, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
@@ -824,8 +916,12 @@ void Engine::render() {
     // headless screenshot shows the skybox with nothing occluding it, for
     // isolating skybox-only gradient/seam bugs from foreground silhouettes.
     static const bool skyboxOnlyTest = std::getenv("ERUPTION_TEST_SKYBOX_ONLY") != nullptr;
+    // ERUPTION_TEST_NO_TERRAIN / ERUPTION_TEST_NO_MODELS (debug): separa o custo
+    // do G-buffer entre chão e modelos num aparelho sem timestamp de GPU.
+    static const bool noTerrainTest = std::getenv("ERUPTION_TEST_NO_TERRAIN") != nullptr;
+    static const bool noModelsTest = std::getenv("ERUPTION_TEST_NO_MODELS") != nullptr;
     if (!skyboxOnlyTest) {
-        if (m_currentMap) {
+        if (m_currentMap && !noTerrainTest) {
             m_terrainRenderer.render(cmd, m_camera.viewProjJittered(), m_camera.frustum());
         }
         // Pixels por unidade de mundo a distancia 1 (descarte por tamanho na tela).
@@ -849,7 +945,15 @@ void Engine::render() {
         const bool fullDetail = forceBaseLod || m_demoForceBaseLod || m_fullDetailView;
         if (fullDetail) m_modelRenderer.setForceBaseLod(true);
         m_modelRenderer.setWindSwayScale(frameUbo.windParams.y);
-        m_modelRenderer.render(cmd, m_camera.viewProjJittered(), m_camera.frustum(), m_camera.position());
+        // Cortina de tela cheia (fx.fade): o que nasce sob ela, e nos 6 quadros
+        // depois de ela abrir (o script costuma montar a cena no mesmo quadro
+        // em que tira a cortina), entra inteiro.
+        static int s_coverHold = 0;
+        s_coverHold = m_uiCanvas.fadeAlpha() >= 0.9f ? 6 : std::max(0, s_coverHold - 1);
+        m_modelRenderer.setSpawnFadeSuspended(s_coverHold > 0);
+        m_modelRenderer.setSpawnFadeClock(m_timer.elapsed());
+        if (!noModelsTest)
+            m_modelRenderer.render(cmd, m_camera.viewProjJittered(), m_camera.frustum(), m_camera.position());
         if (fullDetail) m_modelRenderer.setForceBaseLod(false);
     }
 
@@ -933,13 +1037,6 @@ void Engine::render() {
         m_vulkan.writeTimestamp(cmd, 12, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         m_vfx.simulate(cmd, m_gbuffer.depthView());
         // Particulas de malha (detritos, estilhacos): opacas, no G-buffer,
-        // Cortina de tela cheia (fx.fade): o que nasce sob ela, e nos 6 quadros
-        // depois de ela abrir (o script costuma montar a cena no mesmo quadro
-        // em que tira a cortina), entra inteiro.
-        static int s_coverHold = 0;
-        s_coverHold = m_uiCanvas.fadeAlpha() >= 0.9f ? 6 : std::max(0, s_coverHold - 1);
-        m_modelRenderer.setSpawnFadeSuspended(s_coverHold > 0);
-        m_modelRenderer.setSpawnFadeClock(m_timer.elapsed());
         // DEPOIS da simulacao. A colisao le' a profundidade so' da cena - com
         // a pedra nela, a pedra batia na propria imagem e o chao embaixo
         // dela ficava escondido. De quebra desenham o passo DESTE frame.
@@ -965,7 +1062,6 @@ void Engine::render() {
         // (setPointLights() substitui a lista) e segue o jogador sem precisar
         // guardar indice.
         {
-            constexpr uint32_t kPlayerLightTag = 0xFFFFFFFEu;
             auto& pls = m_deferredLighting.getPointLights();
             pls.erase(std::remove_if(pls.begin(), pls.end(),
                                      [](const PointLight& p) { return p.shadowCubemapIndex == kPlayerLightTag; }),
@@ -1880,8 +1976,12 @@ void Engine::render() {
     m_vulkan.writeTimestamp(cmd, 8, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     Vec3 sunVisualDir = m_dayNightCycle.getSunVisualDirection();
     Vec3 cameraDir = m_camera.forward();
-    VkImageView cloudColorView = m_cloudLayersEnabled ? m_cloudLayerRenderer.cloudColorView() : VK_NULL_HANDLE;
-    VkImageView cloudDepthView = m_cloudLayersEnabled ? m_cloudLayerRenderer.cloudDepthView() : VK_NULL_HANDLE;
+    // So' com o raymarch desta frame: com a configuracao das camadas desligada
+    // o render() volta cedo e os alvos (recriados na troca de escala) ficavam
+    // sem conteudo - o composite somava memoria qualquer (blocos de lixo).
+    const bool cloudLayersDrawn = m_cloudLayersEnabled && m_cloudLayerRenderer.drawsLayers();
+    VkImageView cloudColorView = cloudLayersDrawn ? m_cloudLayerRenderer.cloudColorView() : VK_NULL_HANDLE;
+    VkImageView cloudDepthView = cloudLayersDrawn ? m_cloudLayerRenderer.cloudDepthView() : VK_NULL_HANDLE;
     float cloudBaseHeight = m_cloudLayerRenderer.coverageArray().cloudBottom();
     if (m_postSettings.debugRainRegions) {
         for (const auto& icl : m_independentCloudLayers) {

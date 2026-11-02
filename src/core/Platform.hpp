@@ -108,6 +108,14 @@ inline float pixelsPerDp() {
 }
 #endif
 
+// Fracao da tela usada pelo swapchain (preset "display_scale"). So' o Android
+// tem compositor que estica de graca; no desktop nao faz nada.
+#if defined(__ANDROID__)
+void setDisplayScale(float scale); // src/platform/android/AndroidMain.cpp
+#else
+inline void setDisplayScale(float) {}
+#endif
+
 // Pede pro sistema compartilhar um arquivo (share sheet): o celular nao
 // deixa expor caminho de arquivo direto a outro aplicativo, so' um content://
 // (FileProvider, do lado Java). No desktop e no navegador nao ha' share

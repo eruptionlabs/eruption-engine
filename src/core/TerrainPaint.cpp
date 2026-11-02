@@ -568,6 +568,8 @@ namespace eruption {
 
 // Camadas pintadas de um mapa vizinho (mundo contínuo): máscaras e texturas
 // próprias, ligadas aos vértices do chão dele. Só leitura (pinta-se no mapa aberto).
+
+
 bool Engine::buildRegionSplat(WorldRegion& r, const std::vector<std::string>& layers) {
     if (layers.empty() || !r.data) return false;
     const TerrainFile& t = r.data->terrain;
