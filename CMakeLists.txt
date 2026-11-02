@@ -750,7 +750,7 @@ if(ERUPTION_MODULE_NET)
     # Relay para VPS (tools/relay): programa a parte, sem GPU; so no desktop.
     if(NOT ANDROID)
         add_executable(eruption-relay tools/relay/eruption_relay.cpp src/net/Relay.cpp src/net/NetcodeEndpoint.cpp
-            src/net/PacketLink.cpp src/core/Logger.cpp ${ERUPTION_NETCODE_SOURCES})
+            src/net/PacketLink.cpp src/net/WebSocketLink.cpp src/core/Logger.cpp ${ERUPTION_NETCODE_SOURCES})
         set_target_properties(eruption-relay PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
         target_include_directories(eruption-relay PRIVATE ${CMAKE_SOURCE_DIR}/src)
         target_include_directories(eruption-relay SYSTEM PRIVATE ${ERUPTION_NETCODE_INCLUDES})
