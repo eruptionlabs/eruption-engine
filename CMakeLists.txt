@@ -209,8 +209,6 @@ endif()
 
 # Shader compilation
 set(SHADER_SOURCE_DIR ${CMAKE_SOURCE_DIR}/shaders)
-# Tamanho do array de texturas nos shaders .nb.spv (GPU sem descriptor indexing).
-set(ERUPTION_FALLBACK_TEX_SLOTS 4096 CACHE STRING "Texture array size of the no-bindless shader variants")
 set(SHADER_BINARY_DIR ${CMAKE_SOURCE_DIR}/shaders)
 
 file(GLOB_RECURSE SHADER_SOURCES
@@ -269,8 +267,9 @@ foreach(shader ${SHADER_SOURCES})
     list(APPEND SHADER_BINARIES ${output})
 
     # Variante sem descriptor indexing (<nome>.nb.spv) para GPUs sem bindless:
-    # array de texturas de tamanho fixo e sem nonuniformEXT. So' para shaders
-    # que leem o array de texturas (direto ou no corpo incluido).
+    # texturas em camadas de sampler2DArray (common/slot_textures.glsl) e sem
+    # nonuniformEXT. So' para shaders que leem textura por slot (direto ou no
+    # corpo incluido).
     file(READ ${shader} shader_text)
     string(REGEX MATCHALL "#include \"[^\"]+\"" shader_incs "${shader_text}")
     foreach(inc ${shader_incs})
@@ -280,9 +279,9 @@ foreach(shader ${SHADER_SOURCES})
             string(APPEND shader_text "${inc_text}")
         endif()
     endforeach()
-    if(shader_text MATCHES "ERUPTION_TEX_SLOTS")
+    if(shader_text MATCHES "slot_textures\\.glsl")
         string(REGEX REPLACE "\\.spv$" ".nb.spv" output_nb "${output}")
-        set(nb_defs "-DERUPTION_TEX_SLOTS=${ERUPTION_FALLBACK_TEX_SLOTS}" "-DnonuniformEXT=")
+        set(nb_defs "-DnonuniformEXT=")
         string(REPLACE "-DERUPTION_TEX_SLOTS=" "-DERUPTION_NO_BINDLESS" nb_flags "${SHADER_FLAGS}")
         if(GLSLC_EXECUTABLE)
             add_custom_command(OUTPUT ${output_nb}
@@ -404,27 +403,84 @@ endif()
 # mesmos bits no PC e no ARM (o pragma do arquivo vale so' no clang).
 set_source_files_properties(src/formats/Ribbon.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 
-# Modulos opcionais: o editor liga o que o projeto usa ao exportar (perfil de
-# build). Desligado, o modulo vira uma implementacao muda com a mesma
-# interface - nada de #if espalhado pelo motor.
-option(ERUPTION_MODULE_AUDIO "Som do jogo (miniaudio)" ON)
-option(ERUPTION_MODULE_NEURAL_PBR "PBR por rede neural no bake (src/ml)" ON)
-if(ERUPTION_MODULE_AUDIO)
-    list(REMOVE_ITEM SOURCES "${CMAKE_SOURCE_DIR}/src/audio/AudioNull.cpp")
-else()
-    list(REMOVE_ITEM SOURCES "${CMAKE_SOURCE_DIR}/src/audio/Audio.cpp" "${CMAKE_SOURCE_DIR}/src/audio/MiniaudioImpl.cpp")
+# Modulos opcionais: a tabela cmake/modules.json diz, por modulo, a opcao, as
+# fontes e a implementacao muda (mesma interface, nada de #if espalhado pelo
+# motor). O editor le a mesma tabela para montar o perfil do jogo exportado:
+# o que o projeto nao usa fica fora do binario.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/cmake/modules.json")
+file(READ "${CMAKE_SOURCE_DIR}/cmake/modules.json" ERUPTION_MODULES_JSON)
+string(JSON ERUPTION_MODULE_COUNT LENGTH "${ERUPTION_MODULES_JSON}" modules)
+if(ERUPTION_MODULE_COUNT LESS 1)
+    message(FATAL_ERROR "cmake/modules.json: a lista 'modules' esta vazia")
 endif()
-if(ERUPTION_MODULE_NEURAL_PBR)
-    list(REMOVE_ITEM SOURCES "${CMAKE_SOURCE_DIR}/src/ml/NeuralPbrNull.cpp")
-else()
-    file(GLOB ERUPTION_ML_SOURCES "${CMAKE_SOURCE_DIR}/src/ml/*.cpp")
-    list(REMOVE_ITEM ERUPTION_ML_SOURCES "${CMAKE_SOURCE_DIR}/src/ml/NeuralPbrNull.cpp")
-    list(REMOVE_ITEM SOURCES ${ERUPTION_ML_SOURCES})
-endif()
-message(STATUS "Modulos: audio=${ERUPTION_MODULE_AUDIO} neural_pbr=${ERUPTION_MODULE_NEURAL_PBR}")
+math(EXPR ERUPTION_MODULE_LAST "${ERUPTION_MODULE_COUNT} - 1")
+set(ERUPTION_MODULE_SUMMARY "")
+function(eruption_module_files json index key out)
+    set(files "")
+    # Fontes como lista; um texto solto engoliria as duas implementacoes (simbolos repetidos).
+    string(JSON kind ERROR_VARIABLE missing TYPE "${json}" modules ${index} ${key})
+    if(NOT missing AND NOT kind STREQUAL "ARRAY")
+        message(FATAL_ERROR "cmake/modules.json: '${key}' do modulo ${index} tem que ser uma lista")
+    endif()
+    string(JSON count ERROR_VARIABLE missing LENGTH "${json}" modules ${index} ${key})
+    if(NOT missing AND count GREATER 0)
+        math(EXPR last "${count} - 1")
+        foreach(i RANGE ${last})
+            string(JSON pattern GET "${json}" modules ${index} ${key} ${i})
+            file(GLOB matched "${CMAKE_SOURCE_DIR}/${pattern}")
+            list(APPEND files ${matched})
+        endforeach()
+    endif()
+    set(${out} ${files} PARENT_SCOPE)
+endfunction()
+foreach(index RANGE ${ERUPTION_MODULE_LAST})
+    string(JSON module_name GET "${ERUPTION_MODULES_JSON}" modules ${index} name)
+    string(JSON module_option GET "${ERUPTION_MODULES_JSON}" modules ${index} option)
+    string(JSON module_label ERROR_VARIABLE no_label GET "${ERUPTION_MODULES_JSON}" modules ${index} label)
+    if(no_label)
+        set(module_label "${module_name}")
+    endif()
+    string(JSON module_default ERROR_VARIABLE no_default GET "${ERUPTION_MODULES_JSON}" modules ${index} default)
+    if(no_default)
+        set(module_default ON)
+    endif()
+    option(${module_option} "${module_label}" ${module_default})
+    eruption_module_files("${ERUPTION_MODULES_JSON}" ${index} sources module_sources)
+    eruption_module_files("${ERUPTION_MODULES_JSON}" ${index} null_sources module_null)
+    if(module_null)
+        list(REMOVE_ITEM module_sources ${module_null})
+    endif()
+    if(${module_option})
+        if(module_null)
+            list(REMOVE_ITEM SOURCES ${module_null})
+        endif()
+    elseif(module_sources)
+        list(REMOVE_ITEM SOURCES ${module_sources})
+    endif()
+    list(APPEND ERUPTION_MODULE_SUMMARY "${module_name}=${${module_option}}")
+endforeach()
+string(REPLACE ";" " " ERUPTION_MODULE_SUMMARY "${ERUPTION_MODULE_SUMMARY}")
+message(STATUS "Modulos: ${ERUPTION_MODULE_SUMMARY}")
 list(APPEND SOURCES
     "${CMAKE_SOURCE_DIR}/src/utils/GpuAutoSelect.hpp"
 )
+
+# LodSystem: implementacao externa, fora do repositorio (fontes em src/ ou
+# biblioteca pronta em lib/). Sem ela, src/utils/LodSystemNull.cpp.
+set(ERUPTION_LOD_SYSTEM_DIR "${CMAKE_SOURCE_DIR}/not_commit/lod_system" CACHE PATH "Implementacao externa de LodSystem")
+file(GLOB ERUPTION_LOD_SYSTEM_SOURCES "${ERUPTION_LOD_SYSTEM_DIR}/src/*.cpp")
+set(ERUPTION_LOD_SYSTEM_LIB "")
+if(NOT ERUPTION_LOD_SYSTEM_SOURCES AND EXISTS "${ERUPTION_LOD_SYSTEM_DIR}/lib/liblodsystem.a")
+    set(ERUPTION_LOD_SYSTEM_LIB "${ERUPTION_LOD_SYSTEM_DIR}/lib/liblodsystem.a")
+endif()
+if(ERUPTION_LOD_SYSTEM_SOURCES OR ERUPTION_LOD_SYSTEM_LIB)
+    list(REMOVE_ITEM SOURCES "${CMAKE_SOURCE_DIR}/src/utils/LodSystemNull.cpp")
+    list(APPEND SOURCES ${ERUPTION_LOD_SYSTEM_SOURCES})
+    if(ERUPTION_LOD_SYSTEM_SOURCES)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ERUPTION_LOD_SYSTEM_DIR}/src")
+    endif()
+    message(STATUS "LodSystem: ${ERUPTION_LOD_SYSTEM_DIR}")
+endif()
 
 # Encoders de bloco (BC1/BC3 via rgbcx, BC7 via bc7enc). Os mesmos que
 # tools/bake_assets.py usa offline, agora tambem em runtime para as texturas
@@ -617,9 +673,11 @@ if(ANDROID)
     set_target_properties(eruption-engine PROPERTIES OUTPUT_NAME eruption LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 else()
 add_executable(eruption-engine ${SOURCES} ${IMGUI_SOURCES} ${ICONS_HEADER})
+if(ERUPTION_LOD_SYSTEM_LIB)
+    target_link_libraries(eruption-engine PRIVATE "${ERUPTION_LOD_SYSTEM_LIB}")
+endif()
 endif()
 add_dependencies(eruption-engine generate_icons)
-target_compile_definitions(eruption-engine PRIVATE ERUPTION_FALLBACK_TEX_SLOTS=${ERUPTION_FALLBACK_TEX_SLOTS})
 if(ERUPTION_EDITOR)
     target_compile_definitions(eruption-engine PRIVATE ERUPTION_EDITOR=1)
 else()
@@ -654,6 +712,46 @@ if(ERUPTION_HAVE_ORT)
     file(GLOB ERUPTION_ORT_LIBS "${ERUPTION_ORT_DIR}/lib/libonnxruntime.so*")
     add_custom_command(TARGET eruption-engine POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ERUPTION_ORT_LIBS} "$<TARGET_FILE_DIR:eruption-engine>")
+endif()
+
+# netcode (Mas Bandwidth, BSD-3) com o subconjunto do libsodium que vem nele
+# (ISC), reliable (Mas Bandwidth, BSD-3) e Monocypher (BSD-2/CC0): conexao
+# segura, acks/fragmentos e X25519/BLAKE2b do modulo de rede. Codigo de terceiros copiado sem alteracao em
+# third_party/ (versao em VERSION), compilado sem avisos. Sempre em modo
+# release: as afirmacoes de depuracao deles encerram o processo, e um
+# servidor nao pode cair por pacote de fora.
+set(ERUPTION_NETCODE_SOURCES
+    "${CMAKE_SOURCE_DIR}/third_party/netcode/netcode.c"
+    "${CMAKE_SOURCE_DIR}/third_party/netcode/sodium/sodium.c"
+    "${CMAKE_SOURCE_DIR}/third_party/reliable/reliable.c"
+    "${CMAKE_SOURCE_DIR}/third_party/monocypher/monocypher.c")
+set_source_files_properties(${ERUPTION_NETCODE_SOURCES} PROPERTIES
+    COMPILE_OPTIONS "-w;-ffp-contract=off"
+    COMPILE_DEFINITIONS "NETCODE_RELEASE;RELIABLE_RELEASE")
+set(ERUPTION_NETCODE_INCLUDES
+    "${CMAKE_SOURCE_DIR}/third_party/netcode"
+    "${CMAKE_SOURCE_DIR}/third_party/netcode/sodium"
+    "${CMAKE_SOURCE_DIR}/third_party/reliable"
+    "${CMAKE_SOURCE_DIR}/third_party/monocypher")
+if(ERUPTION_MODULE_NET)
+    target_sources(eruption-engine PRIVATE ${ERUPTION_NETCODE_SOURCES})
+    target_include_directories(eruption-engine SYSTEM PRIVATE ${ERUPTION_NETCODE_INCLUDES})
+    # Navegador: backend ws (src/net/WebSocketWasm.cpp) usa a API WebSocket do
+    # Emscripten, que vem da biblioteca websocket.js no link (spec 26).
+    if(EMSCRIPTEN)
+        target_link_options(eruption-engine PRIVATE "-lwebsocket.js")
+    endif()
+    # Relay para VPS (tools/relay): programa a parte, sem GPU; so no desktop.
+    if(NOT ANDROID)
+        add_executable(eruption-relay tools/relay/eruption_relay.cpp src/net/Relay.cpp src/net/NetcodeEndpoint.cpp
+            src/net/PacketLink.cpp src/core/Logger.cpp ${ERUPTION_NETCODE_SOURCES})
+        set_target_properties(eruption-relay PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+        target_include_directories(eruption-relay PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_include_directories(eruption-relay SYSTEM PRIVATE ${ERUPTION_NETCODE_INCLUDES})
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(eruption-relay PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>)
+        endif()
+    endif()
 endif()
 
 # Include directories
@@ -785,8 +883,16 @@ if(EMSCRIPTEN)
     # de handle colidiriam. Como nada chama o Vulkan de verdade no navegador,
     # os handles ficam ponteiros tipados, como no desktop.
     target_compile_definitions(eruption-engine PRIVATE VK_USE_64_BIT_PTR_DEFINES=1)
+    # ENV exportado: a pagina de teste passa ERUPTION_TEST_* ao getenv do motor
+    # (bancada de imagem e tempo no navegador). HEAPF32: o callback de audio do
+    # miniaudio (ScriptProcessorNode) escreve as amostras por ele; sem o export
+    # o primeiro callback aborta o modulo e o quadro para. O desbloqueio do som
+    # no primeiro gesto (celular: o AudioContext nasce suspenso) chama
+    # Module._ma_device__on_notification_unlocked; a ponte em C dela e' a
+    # eruption_ma_unlocked (src/audio/MiniaudioImpl.cpp).
     target_link_options(eruption-engine PRIVATE -sUSE_GLFW=3 -sUSE_ZLIB=1
-        -sMODULARIZE=1 -sEXPORT_NAME=createEruption -sEXPORTED_RUNTIME_METHODS=FS
+        -sMODULARIZE=1 -sEXPORT_NAME=createEruption -sEXPORTED_RUNTIME_METHODS=FS,ENV,HEAPF32
+        -sEXPORTED_FUNCTIONS=_main,_eruption_ma_unlocked
         -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB -sMAX_WEBGL_VERSION=2 -sMIN_WEBGL_VERSION=2
         -sENVIRONMENT=web -sFORCE_FILESYSTEM=1
         # Pilha do desktop (8 MB): o motor tem buffers grandes na pilha; os
@@ -803,6 +909,34 @@ if(EMSCRIPTEN)
         DEPENDS ${CMAKE_SOURCE_DIR}/tools/web/vulkan_stub.py ${CMAKE_SOURCE_DIR}/src/platform/web/VulkanNull.cpp
         COMMENT "Stub do Vulkan para o build web")
     target_sources(eruption-engine PRIVATE ${ERUPTION_VK_STUB})
+    # Shaders do desktop em GLSL ES 3.00 para a cena WebGL2: SPIR-V do repo
+    # -> spirv-cross (tools/web/shaders_gles.py) -> cabecalho embutido. Assim
+    # o navegador roda o texto real do shader, nao uma copia feita a mao.
+    find_program(ERUPTION_SPIRV_CROSS spirv-cross HINTS $ENV{HOME}/spirv-cross/build REQUIRED)
+    set(ERUPTION_WEB_GLES skybox/skybox.frag postprocess/fullscreen.vert)
+    set(ERUPTION_WEB_GLES_DIR ${CMAKE_BINARY_DIR}/web_gen/gles)
+    set(ERUPTION_WEB_GLES_HPP ${CMAKE_BINARY_DIR}/web_gen/WebGles.hpp)
+    set(_gles_args "")
+    set(_gles_deps "")
+    set(_gles_cmds "")
+    foreach(sh ${ERUPTION_WEB_GLES})
+        string(REGEX REPLACE "[/.]" "_" _nome ${sh})
+        set(_spv ${CMAKE_SOURCE_DIR}/shaders/${sh}.spv)
+        if(EXISTS ${CMAKE_SOURCE_DIR}/shaders/${sh}.nb.spv)
+            set(_spv ${CMAKE_SOURCE_DIR}/shaders/${sh}.nb.spv)
+        endif()
+        list(APPEND _gles_deps ${_spv})
+        list(APPEND _gles_args "${_nome}=${ERUPTION_WEB_GLES_DIR}/${sh}.gles")
+    endforeach()
+    add_custom_command(OUTPUT ${ERUPTION_WEB_GLES_HPP}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/web/shaders_gles.py
+                ${ERUPTION_SPIRV_CROSS} ${CMAKE_SOURCE_DIR}/shaders ${ERUPTION_WEB_GLES_DIR}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/web/embed_gles.py
+                ${ERUPTION_WEB_GLES_HPP} ${_gles_args}
+        DEPENDS ${_gles_deps} ${CMAKE_SOURCE_DIR}/tools/web/shaders_gles.py ${CMAKE_SOURCE_DIR}/tools/web/embed_gles.py
+        COMMENT "Shaders GLSL ES do build web")
+    target_sources(eruption-engine PRIVATE ${ERUPTION_WEB_GLES_HPP})
+    target_include_directories(eruption-engine PRIVATE ${CMAKE_BINARY_DIR}/web_gen)
     set_source_files_properties(${ERUPTION_VK_STUB} PROPERTIES COMPILE_OPTIONS "-w")
     set_target_properties(eruption-engine PROPERTIES SUFFIX ".js" OUTPUT_NAME "eruption"
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/web)
@@ -948,6 +1082,47 @@ if(ERUPTION_BUILD_TESTS)
     endif()
     add_test(NAME GroundPackTests COMMAND eruption-ground-pack-tests)
 
+    if(ERUPTION_MODULE_NET)
+        add_executable(eruption-net-tests tests/test_net_wire.cpp src/net/Wire.cpp)
+        target_include_directories(eruption-net-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(eruption-net-tests PRIVATE -Wall -Wextra -Wpedantic)
+        endif()
+        add_test(NAME NetWireTests COMMAND eruption-net-tests)
+
+        add_executable(eruption-net-transport-tests tests/test_net_transport.cpp
+            src/net/NetcodeEndpoint.cpp src/net/PacketLink.cpp src/net/LinkSim.cpp src/core/Logger.cpp
+            ${ERUPTION_NETCODE_SOURCES})
+        target_include_directories(eruption-net-transport-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_include_directories(eruption-net-transport-tests SYSTEM PRIVATE ${ERUPTION_NETCODE_INCLUDES})
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(eruption-net-transport-tests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>)
+        endif()
+        add_test(NAME NetTransportTests COMMAND eruption-net-transport-tests)
+
+        add_executable(eruption-net-channels-tests tests/test_net_channels.cpp
+            src/net/Channels.cpp src/net/Blake2b.cpp src/net/Wire.cpp src/core/Logger.cpp ${ERUPTION_NETCODE_SOURCES})
+        set(ERUPTION_NET_SESSION_SOURCES src/net/NetSession.cpp src/net/Channels.cpp src/net/TokenGate.cpp
+            src/net/NetValue.cpp src/net/Blake2b.cpp src/net/Wire.cpp src/net/NetcodeEndpoint.cpp src/net/PacketLink.cpp
+            src/net/LinkSim.cpp src/net/Relay.cpp src/net/WebSocketLink.cpp src/core/Logger.cpp ${ERUPTION_NETCODE_SOURCES})
+        add_executable(eruption-net-matrix-tests tests/test_net_matrix.cpp ${ERUPTION_NET_SESSION_SOURCES})
+        add_executable(eruption-net-relay-tests tests/test_net_relay.cpp ${ERUPTION_NET_SESSION_SOURCES})
+        add_executable(eruption-net-web-tests tests/test_net_web.cpp ${ERUPTION_NET_SESSION_SOURCES})
+        add_executable(eruption-net-session-tests tests/test_net_session.cpp ${ERUPTION_NET_SESSION_SOURCES})
+        foreach(t eruption-net-channels-tests eruption-net-session-tests eruption-net-matrix-tests eruption-net-relay-tests eruption-net-web-tests)
+            target_include_directories(${t} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+            target_include_directories(${t} SYSTEM PRIVATE ${ERUPTION_NETCODE_INCLUDES})
+            if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+                target_compile_options(${t} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>)
+            endif()
+        endforeach()
+        add_test(NAME NetChannelsTests COMMAND eruption-net-channels-tests)
+        add_test(NAME NetSessionTests COMMAND eruption-net-session-tests)
+        add_test(NAME NetMatrixTests COMMAND eruption-net-matrix-tests)
+        add_test(NAME NetRelayTests COMMAND eruption-net-relay-tests)
+        add_test(NAME NetWebTests COMMAND eruption-net-web-tests)
+    endif()
+
     add_executable(eruption-ribbon-tests tests/test_ribbon.cpp src/formats/Ribbon.cpp)
     target_include_directories(eruption-ribbon-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -984,6 +1159,19 @@ if(ERUPTION_BUILD_TESTS)
         target_compile_options(eruption-path-clearance-tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME PathClearanceTests COMMAND eruption-path-clearance-tests)
+
+    # Terreno grande: prova do pico da 1a consulta de piso numa malha grande e
+    # de que aquecer o RaycastBvh em segundo plano resolve. Logica pura
+    # (RaycastBvh + std::async), sem GPU nem motor.
+    add_executable(eruption-raycast-bvh-warm-tests tests/test_raycast_bvh_warm.cpp src/renderer/RaycastBvh.cpp)
+    target_include_directories(eruption-raycast-bvh-warm-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(eruption-raycast-bvh-warm-tests SYSTEM PRIVATE ${glm_SOURCE_DIR})
+    target_link_libraries(eruption-raycast-bvh-warm-tests PRIVATE glm Threads::Threads)
+    target_compile_definitions(eruption-raycast-bvh-warm-tests PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_LEFT_HANDED)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-raycast-bvh-warm-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME RaycastBvhWarmTests COMMAND eruption-raycast-bvh-warm-tests)
 endif()
 
 # Generate Linux .desktop shortcut

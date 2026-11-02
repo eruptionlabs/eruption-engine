@@ -29,6 +29,8 @@ data/*
 resources.ini
 assets/hidden_alley.zip
 assets/external/
+# Niveis de LOD prontos para o pacote do jogo (gerados pela carga com ERUPTION_LODSYS_PACK_OUT)
+assets/lodcache/
 assets/data/hidden_alley.map
 assets/Medieval\ Village/
 assets/maps/
@@ -167,3 +169,14 @@ tools/scripts/
 /future/
 libonnxruntime*.so*
 .eruption/
+
+# Saidas de build/teste e rascunhos gerados na raiz.
+/build-*/
+/eruption-*-tests
+*.glb.probes
+__pycache__/
+/desk_120_pos.png
+/loader_example.js
+/loader_example.wasm
+/ls_*.txt
+/docs/slice/
