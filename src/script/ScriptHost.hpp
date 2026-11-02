@@ -60,12 +60,12 @@ public:
     static constexpr int kWatchdogMs = 250;
 
     // ---- usado pela API (ScriptApi.cpp)
-    enum class EventKind { Start, Update, Every, Key, Near, Hour, Enter, Leave };
+    enum class EventKind { Start, Update, Every, Key, Near, Hour, Enter, Leave, Net };
     struct Handler {
         EventKind kind = EventKind::Start;
         int fnRef = -1;
         double number = 0.0;   // segundos (every), distância (near), hora (hour)
-        std::string text;      // tecla (key) ou nome do modelo (near)
+        std::string text;      // tecla (key), nome do modelo (near), evento de rede (net)
         double timer = 0.0;
         bool flag = false;     // near: estava perto no frame anterior
     };
@@ -209,6 +209,7 @@ private:
     void stopBehaviors();
     Script* scriptByPath(const std::filesystem::path& path);
     void dispatch(Script& s, float dt, float prevHour, float hour);
+    void dispatchNet(float dt);
     void resetVars();
     bool createState(); // VM nova com a API registrada (init e reboot)
     void writeTypeDefinitions();

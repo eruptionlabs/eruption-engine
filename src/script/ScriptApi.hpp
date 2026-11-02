@@ -40,6 +40,14 @@ const char* visionApiDefinitions();
 void registerTelemetryApi(lua_State* L, Engine& engine);
 const char* telemetryApiDefinitions();
 void openTelemetryFromEnv();
+// Tabela `net` (ScriptApiNet.cpp): partida em rede. ScriptHost entrega os
+// eventos da rede aos net.on* pela chave ("@join", "@leave", "@fail" ou o
+// nome do evento); scriptPushNetEvent empilha os argumentos e diz quantos.
+struct NetScriptEvent;
+void registerNetApi(lua_State* L, Engine& engine);
+const char* netApiDefinitions();
+std::string netEventKey(const NetScriptEvent& event);
+int scriptPushNetEvent(lua_State* L, const NetScriptEvent& event);
 void releaseScriptObjects();
 // Empilha o Object (nil se o id não vale).
 struct ObjectId;

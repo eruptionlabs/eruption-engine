@@ -1,6 +1,6 @@
 -- Mapa que muda durante o jogo: custo por celula da grade de caminhada
--- (world.set_walk_cost). Vale no mesmo quadro: a consulta logo depois da
--- escrita ja' ve a mudanca.
+-- (world.set_walk_cost) e nivel da lava (world.set_liquid_level). Tudo vale
+-- no mesmo quadro: a consulta logo depois da escrita ja' ve a mudanca.
 local q = 0
 on.start(function() q = 0 end)
 local function falha(m) log("OBJ-FALHOU terreno_vivo: " .. m) end
@@ -66,5 +66,25 @@ on.update(function()
     if world.walk_cost(x, z) ~= 1 then falha("disco nao voltou a 1") return end
     log(string.format("terreno_vivo: custo + caminho em %.2f ms", ms))
 
+    -- Lava: subir o lago muda liquid_at no mesmo quadro; agua e nome errado = false.
+    local lagos = world.liquids()
+    local lava
+    for i, l in lagos do if l.kind == "lava" then lava = i break end end
+    if lava then
+        local l = lagos[lava]
+        local base = l.level
+        if not world.set_liquid_level(lava, base + 5000) then falha("subir a lava") return end
+        local em = world.liquid_at(l.center.x, l.center.z)
+        if not em or em.kind ~= "lava" or math.abs(em.level - (base + 5000)) > 0.01 then falha("liquid_at nao viu a lava alta") return end
+        if world.floor_walkable(l.center.x, l.center.z) then
+            falha("dentro da lava alta continua andavel") return
+        end
+        if not world.set_liquid_level(l.name, base - 5000) then falha("baixar a lava pelo nome") return end
+        if world.liquid_at(l.center.x, l.center.z) then falha("lava abaixo do chao ainda aparece") return end
+        world.set_liquid_level(lava, base)
+        if world.liquids()[lava].level ~= base then falha("nivel nao voltou") return end
+    end
+    if world.set_liquid_level("nao_existe", 0) then falha("liquido inexistente aceito") return end
+    if world.set_liquid_level(999, 0) then falha("indice inexistente aceito") return end
     log("OBJ-OK terreno_vivo")
 end)
