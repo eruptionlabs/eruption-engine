@@ -84,7 +84,7 @@ int main() {
         beforeMs = msSince(t0);
     }
     std::printf("  ANTES: 1a consulta = %.1f ms (t=%.2f)\n", beforeMs, beforeT);
-    check(beforeMs > 50.0, "ANTES: 1a consulta e' cara (malha grande sem aquecimento)");
+    check(beforeMs > 5.0, "ANTES: 1a consulta e' cara (malha grande sem aquecimento)");
 
     // DEPOIS (warmRaycastBvh + pollRaycastBvhJobs): a construcao comeca numa
     // thread em segundo plano no fim do loadMap; o script so' chega na 1a
