@@ -354,10 +354,16 @@ private:
         char outDir[512] = {};
         std::atomic<bool> running{false}, building{false};
         std::string status, buildStatus;
-        bool profileDetected = false, audio = true, usesSound = false; // módulos do programa do jogo
+        // Módulos do programa do jogo (cmake/modules.json): ligado e usado pelo projeto.
+        bool profileDetected = false;
+        std::vector<ModuleInfo> modules;
+        std::vector<char> moduleUsed;
+        BuildProfile profile;
     } m_export;
     std::mutex m_exportMutex;
     void drawExportWindow();
+    void detectExportModules();
+    void drawExportModules(bool lean);
     void startExport();
     void buildLeanBinary();
     // Gerador de mapas (EditorMapGen.cpp, plugins/mapgen)

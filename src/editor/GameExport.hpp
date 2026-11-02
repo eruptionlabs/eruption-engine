@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -13,9 +14,15 @@ namespace eruption {
 // Nós do grafo: a pasta do mapa (assets/external/<mapa>), os arquivos de cena
 // (assets/scenes/<mapa>.*), o clima do mapa, os scripts, e todo caminho entre
 // aspas nesses arquivos que exista no disco (modelos acrescentados, prefabs e
-// o modelo deles, sprites com o .spr ao lado, camadas de terreno). Mais os
+// o modelo deles, sprites com o .spr ao lado, camadas de terreno, folhas de
+// interface .css e as imagens que elas citam). Efeitos de partícula entram
+// pelo nome citado ("tocha" -> assets/effects/tocha.vfx.json, ou o modelo do
+// motor em data/vfx). String interpolada do Luau leva os arquivos da pasta que
+// casam com o modelo (`retratos/{nome}.png` -> retratos/*.png). Mais os
 // arquivos fixos do motor (configurações, shaders compilados, sprite padrão).
-// Limite: caminhos montados em tempo de execução não aparecem no texto.
+// Limite: caminho montado por concatenação não aparece no texto; para esses,
+// o project.eruption aceita "export": { "include": [globs], "exclude": [globs] }
+// (relativos à raiz do projeto; '*' por componente, "**" em qualquer profundidade).
 struct ExportOptions {
     std::filesystem::path projectRoot; // pasta do jogo (projeto aberto)
     // Pasta do motor, quando o projeto esta' fora dela: o que e' do motor
@@ -33,6 +40,7 @@ struct ExportReport {
     std::vector<std::string> missing; // citado em algum arquivo mas não existe
     size_t compiled = 0;               // .luau que foram como bytecode
     size_t neighbors = 0;              // mapas vizinhos (mundo contínuo) que foram junto
+    size_t excluded = 0;               // tirados por export.exclude do projeto
     size_t groundPacked = 0;           // chao de mapa (.glb + .ter) que foi como .relevo
     std::vector<std::string> groundKept; // chao que nao empacotou: "<arquivo>: motivo"
     std::string error;
@@ -40,15 +48,25 @@ struct ExportReport {
 
 ExportReport exportGame(const ExportOptions& options);
 
-// Perfil de build do jogo exportado: módulos opcionais (opções ERUPTION_MODULE_*
-// do CMake). O som é detectado no projeto (scripts com audio.*, cenas com
-// emissores de som); a rede de PBR nunca vai (o modelo não é exportado).
-struct BuildProfile {
-    bool audio = true;
+// Módulos opcionais do motor, lidos de cmake/modules.json (a mesma tabela
+// que o CMake usa para opção, fontes e implementação muda). O editor detecta
+// no projeto quais o jogo usa, e o programa enxuto leva só esses.
+struct ModuleInfo {
+    std::string name, option, label, summary;
+    bool defaultOn = true;
+    bool exportable = true; // false: o jogo exportado nunca leva (ex.: modelo não exportado)
+    std::vector<std::string> scriptGlobals; // API de script que liga o módulo (`audio.play`)
+    std::vector<std::string> sceneFields;   // campo de cena que liga o módulo (`sounds = {...}`)
 };
-bool projectUsesSound(const std::filesystem::path& root);
+std::vector<ModuleInfo> loadModuleTable(const std::filesystem::path& engineRoot, std::string* error = nullptr);
+bool moduleUsedByProject(const ModuleInfo& m, const std::filesystem::path& projectRoot);
+
+// Perfil de build do jogo exportado: opção CMake -> ligada.
+struct BuildProfile {
+    std::map<std::string, bool> modules;
+};
 // Perfil com que build-export/ foi configurado (false se ainda não existe).
-bool builtProfile(const std::filesystem::path& buildDir, BuildProfile& out);
-std::string profileCMakeFlags(const BuildProfile& p);
+bool builtProfile(const std::filesystem::path& buildDir, const std::vector<ModuleInfo>& table, BuildProfile& out);
+std::string profileCMakeFlags(const std::vector<ModuleInfo>& table, const BuildProfile& p);
 
 } // namespace eruption

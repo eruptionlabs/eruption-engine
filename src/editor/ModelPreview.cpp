@@ -176,27 +176,7 @@ bool ModelPreview::createPipelines() {
 
     // Mesmo layout de vértice do ModelRenderer (o vértice é o model_novel.vert).
     VkVertexInputBindingDescription binding{0, sizeof(TerrainVertex), VK_VERTEX_INPUT_RATE_VERTEX};
-    const std::vector<VkVertexInputAttributeDescription> attribs = {
-        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TerrainVertex, position)},
-        {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(TerrainVertex, texCoord)},
-        {2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(TerrainVertex, normal)},
-        {3, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, texIndex)},
-        {4, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, matId)},
-        {5, 0, VK_FORMAT_R32_UINT, offsetof(TerrainVertex, color)},
-        {6, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, pbrIndex)},
-        {7, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, normalIndex)},
-        {8, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, blendTexIndex)},
-        {9, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, blendPbrIndex)},
-        {10, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, blendNormalIndex)},
-        {11, 0, VK_FORMAT_R32_SFLOAT, offsetof(TerrainVertex, blendWeight)},
-        {12, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, blendMaskIndex)},
-        {13, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(TerrainVertex, blendMaskUV)},
-        {14, 0, VK_FORMAT_R32_SFLOAT, offsetof(TerrainVertex, emissiveStrength)},
-        {15, 0, VK_FORMAT_R32G32_UINT, offsetof(TerrainVertex, splatTex01)},
-        {16, 0, VK_FORMAT_R32G32_UINT, offsetof(TerrainVertex, splatTex45)},
-        {17, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, blendMaskIndex2)},
-        {18, 0, VK_FORMAT_R16_UINT, offsetof(TerrainVertex, emissiveIndex)},
-    };
+    const std::vector<VkVertexInputAttributeDescription> attribs = ModelRenderer::vertexAttributes();
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi.vertexBindingDescriptionCount = 1;
