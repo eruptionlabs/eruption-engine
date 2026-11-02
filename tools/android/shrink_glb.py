@@ -12,7 +12,41 @@ import json
 import struct
 import sys
 
-from PIL import Image
+from PIL import Image, ImageChops
+
+
+def cutout_palette_png(rgba):
+    """PNG de paleta para recorte binario (alfa so' 0 ou 255), ou None.
+
+    Os pixels transparentes guardam a cor da vizinhanca (dilatacao feita na
+    conversao do mapa): o filtro linear e os mips da borda leem essa cor. Uma
+    paleta comum com alfa junta todos os transparentes numa entrada (quase
+    sempre preta) e a borda do recorte ganha contorno escuro. Aqui a cor vai
+    em 128 entradas e a paleta e' duplicada: as 128 de cima sao as mesmas
+    cores com alfa 0. Alfa com meio-termo (vidro) fica como veio (None).
+    """
+    alpha = rgba.getchannel('A')
+    if alpha.point(lambda v: 0 if v in (0, 255) else 255).getextrema()[1] > 0:
+        return None
+    rgb = rgba.convert("RGB").quantize(128, method=0, dither=0)  # 0 = MEDIANCUT, sem dither
+    palette = rgb.getpalette()[:128 * 3]
+    palette += [0] * (128 * 3 - len(palette))
+    index = Image.frombytes('L', rgb.size, rgb.tobytes())  # indices crus 0..127
+    transparent = alpha.point(lambda v: 0 if v == 255 else 128)
+    out_img = Image.frombytes('P', rgb.size, ImageChops.add(index, transparent).tobytes())
+    out_img.putpalette(palette + palette)
+    out = io.BytesIO()
+    out_img.save(out, 'PNG', optimize=True, transparency=bytes([255] * 128 + [0] * 128))
+    return out.getvalue()
+
+
+def has_color_key(im):
+    """Algum pixel exatamente FF00FF (a chave de recorte dos mapas)."""
+    r, g, b = im.convert('RGB').split()
+    mask = ImageChops.multiply(ImageChops.multiply(r.point(lambda v: 255 if v == 255 else 0),
+                                                   g.point(lambda v: 255 if v == 0 else 0)),
+                               b.point(lambda v: 255 if v == 255 else 0))
+    return mask.getextrema()[1] > 0
 
 
 def main():
@@ -35,17 +69,16 @@ def main():
             continue
         data = views[img['bufferView']]
         im = Image.open(io.BytesIO(data))
+        if has_color_key(im):
+            # Rosa puro (FF00FF) e' chave de recorte no shader: JPEG e paleta
+            # mexem nessa cor e o recorte vira rosa visivel com contorno escuro.
+            continue
         if im.mode in ('RGBA', 'LA', 'P'):
             rgba = im.convert('RGBA')
             if rgba.getchannel('A').getextrema()[0] < 255:
-                # Com recorte: PNG de paleta (256 cores com alfa), como as
-                # texturas de 8 bits que esses mapas usam de origem.
-                out = io.BytesIO()
-                # method=2: FASTOCTREE, o unico quantizador do PIL que aceita alfa.
-                # Sem dither: pontilhado no alfa vira recorte granulado (folhas).
-                rgba.quantize(256, method=2, dither=0).save(out, 'PNG', optimize=True)
-                if 0 < out.tell() < len(data):
-                    views[img['bufferView']] = out.getvalue()
+                out = cutout_palette_png(rgba)
+                if out is not None and 0 < len(out) < len(data):
+                    views[img['bufferView']] = out
                     converted += 1
                 continue
             im = rgba

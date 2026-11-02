@@ -43,6 +43,38 @@ run_src test_mesh_clusters src/utils/MeshClusters.cpp
 run_src test_object_world src/scene/ObjectWorld.cpp
 run_src test_css_classes src/utils/CSSParser.cpp
 run_src test_ground_pack src/formats/GroundPack.cpp -I build/_deps/nlohmann_json-src/include
+run_src test_net_wire src/net/Wire.cpp
+
+# Rede: netcode, libsodium, reliable e Monocypher (C, terceiros) compilam a parte, sem avisos.
+NETC="$TMP/netc"; mkdir -p "$NETC"
+NET_OK=1
+gcc -O1 -w -ffp-contract=off -DNETCODE_RELEASE -I third_party/netcode/sodium \
+    -c third_party/netcode/netcode.c -o "$NETC/netcode.o" &&
+gcc -O1 -w -ffp-contract=off -I third_party/netcode/sodium \
+    -c third_party/netcode/sodium/sodium.c -o "$NETC/sodium.o" &&
+gcc -O1 -w -ffp-contract=off -DRELIABLE_RELEASE -c third_party/reliable/reliable.c -o "$NETC/reliable.o" &&
+gcc -O1 -w -ffp-contract=off -c third_party/monocypher/monocypher.c -o "$NETC/monocypher.o" || NET_OK=0
+run_net() {
+    local name=$1; shift
+    printf '\n=== %s ===\n' "$name"
+    if [ $NET_OK -eq 1 ] &&
+       g++ -std=c++17 -I src -isystem third_party/netcode -isystem third_party/netcode/sodium \
+           -isystem third_party/reliable -isystem third_party/monocypher "tests/$name.cpp" "$@" src/core/Logger.cpp \
+           "$NETC/netcode.o" "$NETC/sodium.o" "$NETC/reliable.o" "$NETC/monocypher.o" -o "$TMP/$name" > "$TMP/$name.log" 2>&1; then
+        "$TMP/$name" || FAIL=1
+    else
+        head -20 "$TMP/$name.log" 2>/dev/null; echo "  ERRO DE COMPILACAO"; FAIL=1
+    fi
+}
+run_net test_net_transport src/net/NetcodeEndpoint.cpp src/net/PacketLink.cpp src/net/LinkSim.cpp
+run_net test_net_channels src/net/Channels.cpp src/net/Blake2b.cpp src/net/Wire.cpp
+NET_SESSION="src/net/NetSession.cpp src/net/Channels.cpp src/net/TokenGate.cpp src/net/NetValue.cpp src/net/Blake2b.cpp
+    src/net/Wire.cpp src/net/NetcodeEndpoint.cpp src/net/PacketLink.cpp src/net/LinkSim.cpp src/net/Relay.cpp
+    src/net/WebSocketLink.cpp"
+run_net test_net_session $NET_SESSION
+run_net test_net_matrix $NET_SESSION
+run_net test_net_relay $NET_SESSION
+run_net test_net_web $NET_SESSION
 run_src test_ribbon src/formats/Ribbon.cpp
 run_src test_vision src/core/Vision.cpp
 run_src test_relief_bake src/renderer/ReliefBake.cpp
