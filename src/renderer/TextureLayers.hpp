@@ -57,6 +57,23 @@ public:
 
     uint32_t layerSize() const { return m_layerSize; }
 
+    // Situacao do array de camadas (telemetria): camadas em uso, capacidade, lado
+    // e memoria da alocacao (inclui as camadas ainda livres e os mips).
+    struct Stats {
+        uint32_t used = 0, capacity = 0, side = 0;
+        double mb = 0.0;
+    };
+    Stats stats() const {
+        Stats s;
+        s.side = m_layerSize;
+        s.capacity = m_array.capacity;
+        const uint32_t taken = m_array.next > 0 ? m_array.next - 1 : 0; // a camada 0 e' a padrao
+        const uint32_t freed = static_cast<uint32_t>(m_array.freeLayers.size());
+        s.used = taken > freed ? taken - freed : 0;
+        if (m_ctx && m_array.alloc) s.mb = static_cast<double>(m_ctx->allocationSize(m_array.alloc)) / (1024.0 * 1024.0);
+        return s;
+    }
+
 private:
     struct LayerArray {
         VkImage image = VK_NULL_HANDLE;

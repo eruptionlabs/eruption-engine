@@ -263,6 +263,8 @@ void TelemetryExporter::recordFrame(const FrameStats& st) {
         {"vram_mb", static_cast<double>(vramBytes) / (1024.0 * 1024.0)},
         {"vram_total_mb", static_cast<double>(SystemMonitor::gpuVramTotalBytes()) / (1024.0 * 1024.0)},
         {"vma_device_mb", st.vmaDeviceMb},
+        {"layers", {{"used", st.layersUsed}, {"capacity", st.layersCapacity}, {"side", st.layersSide},
+                    {"mb", st.layersMb}}},
     };
     j["scene"] = {
         {"instances", st.instances}, {"meshes", st.meshes},

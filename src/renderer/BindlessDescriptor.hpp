@@ -19,6 +19,8 @@ class BindlessDescriptor {
 public:
     bool init(VulkanContext* ctx);
     void shutdown();
+    // Array de camadas (so' sem descriptor indexing): zeros no caminho com bindless.
+    TextureLayers::Stats layerStats() const { return m_layered ? m_layers.stats() : TextureLayers::Stats{}; }
     // Lado pedido da camada de textura (antes de init); 0 = o padrao.
     void setLayerSizeRequest(uint32_t size) { m_layerSizeRequest = size; }
 

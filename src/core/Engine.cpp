@@ -3015,6 +3015,11 @@ void Engine::recordTelemetry() {
     // allocationBytes e nao blockBytes: o bloco do VMA e' de 256 MB, entao
     // blockBytes so' se move de 256 em 256 MB e esconde a economia real.
     if (m_vulkan.allocator()) st.vmaDeviceMb = deviceMemoryMb();
+    const TextureLayers::Stats layers = m_bindless.layerStats();
+    st.layersUsed = layers.used;
+    st.layersCapacity = layers.capacity;
+    st.layersSide = layers.side;
+    st.layersMb = layers.mb;
     TelemetryExporter::recordFrame(st);
 }
 

@@ -100,6 +100,11 @@ public:
         // sys.vram_mb vem do NVML e é do dispositivo inteiro (desktop, outros
         // processos); só esta serve para atribuir custo à engine.
         double vmaDeviceMb = 0.0;
+        // Array de camadas de textura (GPU sem bindless; zeros nas outras): em
+        // uso, capacidade, lado em pixels e MB da alocacao. A VRAM por
+        // categoria ja' sai em vram_cat.
+        uint32_t layersUsed = 0, layersCapacity = 0, layersSide = 0;
+        double layersMb = 0.0;
     };
 
     static bool enabled();
