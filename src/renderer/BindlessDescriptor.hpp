@@ -19,6 +19,8 @@ class BindlessDescriptor {
 public:
     bool init(VulkanContext* ctx);
     void shutdown();
+    // Lado pedido da camada de textura (antes de init); 0 = o padrao.
+    void setLayerSizeRequest(uint32_t size) { m_layerSizeRequest = size; }
 
     uint32_t allocateSlot();
     void freeSlot(uint32_t slot);
@@ -121,6 +123,7 @@ private:
     bool allocateSet();
 
     std::mutex m_mutex;
+    uint32_t m_layerSizeRequest = 0;
 };
 
 } // namespace eruption

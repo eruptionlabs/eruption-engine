@@ -187,6 +187,23 @@ Engine::~Engine() { shutdown(); }
 static void applyPresetOverrides(nlohmann::json& preset);
 static void mergeProjectGraphics(nlohmann::json& root);
 
+// Valor numerico de uma chave do preset (mesmas regras de presetBool, inclusive
+// ERUPTION_TEST_PRESET_SET); `fallback` quando a chave nao existe.
+static double presetNumber(const std::string& preset, const char* key, double fallback) {
+    try {
+        std::ifstream f("data/graphics.json");
+        if (!f) return fallback;
+        nlohmann::json gj;
+        f >> gj;
+        if (!gj.contains("presets") || !gj["presets"].contains(preset)) return fallback;
+        nlohmann::json p = gj["presets"][preset];
+        applyPresetOverrides(p);
+        return p.value(key, fallback);
+    } catch (...) {
+        return fallback;
+    }
+}
+
 static bool presetBool(const std::string& preset, const char* key, bool fallback) {
     try {
         std::ifstream f("data/graphics.json");
@@ -251,6 +268,12 @@ bool Engine::init(int width, int height, const std::string& title) {
     presentLoadingScreen("", "Initializing Engine", 0.0f, true);
     const vkc::PipelineHookScope shaderProgress(&Engine::onPipelineCompiled, this);
 
+    // Lado, em pixels, de cada camada de textura (so' a GPU sem descriptor
+    // indexing, onde as texturas vao para um array: 0,33 MB por camada a 256,
+    // 0,08 MB a 128). Chave "texture_layer_size" do preset (0 = padrao 256);
+    // ERUPTION_TEX_LAYER_SIZE vence. Lida aqui porque o array nasce no init.
+    m_bindless.setLayerSizeRequest(
+        static_cast<uint32_t>(std::max(0.0, presetNumber(graphicsPresetName(), "texture_layer_size", 0.0))));
     if (!m_bindless.init(&m_vulkan)) return false;
     m_bindless.markNearestSampler(m_nearestSampler);
     ERUPTION_LOG_WARN("Resolucao de RENDER (G-buffer): %dx%d (%.2f Mpx)", width, height,
