@@ -57,7 +57,12 @@ public:
     // Mensagens de ui.message na área do jogo (retângulo em pixels de tela).
     void drawMessages(float x, float y, float w, float h) const;
 
-    static constexpr int kWatchdogMs = 250;
+    // Limite de tempo de Luau numa chamada (ms). 250 por padrao; a chave
+    // "script_watchdog_ms" do preset sobe isso nas GPUs/CPUs lentas, onde um
+    // trabalho legitimo passa de 250 ms de relogio e o script era desligado.
+    static constexpr int kDefaultWatchdogMs = 250;
+    static int watchdogMs() { return s_watchdogMs; }
+    static void setWatchdogMs(int ms) { s_watchdogMs = ms < 50 ? 50 : (ms > 10000 ? 10000 : ms); }
 
     // ---- usado pela API (ScriptApi.cpp)
     enum class EventKind { Start, Update, Every, Key, Near, Hour, Enter, Leave, Net };
@@ -257,6 +262,7 @@ private:
     bool m_native = false;
     float m_lastUpdateMs = 0.0f;
     std::chrono::steady_clock::time_point m_lastScan{};
+    static inline int s_watchdogMs = kDefaultWatchdogMs;
 };
 
 } // namespace eruption

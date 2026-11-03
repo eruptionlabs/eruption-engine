@@ -45,9 +45,9 @@ std::chrono::steady_clock::duration g_nativeTime{};
 void interruptCallback(lua_State* L, int gc) {
     if (gc >= 0 || !g_inCall) return;
     const auto elapsed = std::chrono::steady_clock::now() - g_callStart - g_nativeTime;
-    if (elapsed > std::chrono::milliseconds(ScriptHost::kWatchdogMs)) {
+    if (elapsed > std::chrono::milliseconds(ScriptHost::watchdogMs())) {
         g_inCall = false;
-        luaL_errorL(L, "script took more than %d ms in one call (infinite loop?)", ScriptHost::kWatchdogMs);
+        luaL_errorL(L, "script took more than %d ms in one call (infinite loop?)", ScriptHost::watchdogMs());
     }
 }
 
