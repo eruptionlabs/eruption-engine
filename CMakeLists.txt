@@ -281,7 +281,9 @@ foreach(shader ${SHADER_SOURCES})
     endforeach()
     if(shader_text MATCHES "slot_textures\\.glsl")
         string(REGEX REPLACE "\\.spv$" ".nb.spv" output_nb "${output}")
-        set(nb_defs "-DnonuniformEXT=")
+        # ERUPTION_NO_VS_TESS_DISP: sem o deslocamento de tesselacao no vertex
+        # (ver model_vert.glsl); a tesselacao nao liga sem bindless.
+        set(nb_defs "-DnonuniformEXT=" "-DERUPTION_NO_VS_TESS_DISP")
         string(REPLACE "-DERUPTION_TEX_SLOTS=" "-DERUPTION_NO_BINDLESS" nb_flags "${SHADER_FLAGS}")
         if(GLSLC_EXECUTABLE)
             add_custom_command(OUTPUT ${output_nb}
