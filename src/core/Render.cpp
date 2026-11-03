@@ -683,7 +683,11 @@ void Engine::render() {
         const char* e = std::getenv("ERUPTION_TEST_TESS");
         return e ? std::atoi(e) : -1;
     }();
-    const bool tessWanted = (kTessEnv < 0) ? (m_tessEnabled && m_tessPresetAllowed) : (kTessEnv != 0);
+    // Sem descriptor indexing (variante .nb dos shaders) o vertex nao tem o
+    // deslocamento da tesselacao (ERUPTION_NO_VS_TESS_DISP): ligar a tesselacao
+    // abriria frestas, entao nem o override de teste liga.
+    const bool tessWanted = !ShaderCompiler::noBindless() &&
+                            ((kTessEnv < 0) ? (m_tessEnabled && m_tessPresetAllowed) : (kTessEnv != 0));
     const bool tessOn = tessWanted && m_vulkan.tessellationSupported() && tessMax > 1.001f;
     if (std::getenv("ERUPTION_TEST_TESS_DIAG")) {
         static bool kLogged = false;

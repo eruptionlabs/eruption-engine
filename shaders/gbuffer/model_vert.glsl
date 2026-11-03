@@ -484,6 +484,15 @@ void main() {
     // vulcao DESLIZAR. Eu ja' restaurei isso uma vez por engano, achando que
     // era perda acidental de working tree - nao era. Se voltar, some de novo.
 
+    // ERUPTION_NO_VS_TESS_DISP (so' a variante .nb, sem descriptor indexing: o
+    // CMake define): o bloco abaixo so' roda com a tesselacao ligada, e a
+    // tesselacao nunca liga nessas GPUs (Render.cpp). Na variante .nb cada
+    // leitura de textura vira consulta a' tabela de slots + leitura do array
+    // de camadas, e este bloco sozinho tinha ~35 pontos de amostragem: 30 KB
+    // dos 43 KB do vertex (13 KB sem ele). O compilador do driver de uma GPU de
+    // celular entrava em recursao infinita ao compilar esse vertex (derrubava
+    // o processo ao criar o pipeline); sem o bloco todos os pipelines saem.
+#ifndef ERUPTION_NO_VS_TESS_DISP
     // DESLOCAMENTO IGUAL AO DA TESSELACAO, nos vertices originais.
     // Sem isto, o vertice compartilhado entre um triangulo tesselado e um
     // vizinho que nao foi tesselado ia parar em DOIS lugares diferentes - e a
@@ -535,6 +544,8 @@ void main() {
             }
         }
     }
+
+#endif // ERUPTION_NO_VS_TESS_DISP
 
     gl_Position = push.viewProjection * worldPos;
     outWorldPos = worldPos.xyz;
