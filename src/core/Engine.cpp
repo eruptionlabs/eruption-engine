@@ -1,4 +1,5 @@
 #include "core/Engine.hpp"
+#include "script/ScriptHost.hpp"
 #include "core/EngineInternal.hpp"
 #include "renderer/PostFormat.hpp"
 #include "game/PlayerController.hpp"
@@ -2760,6 +2761,9 @@ void Engine::applyGraphicsPreset() {
     // Tesselacao da banda perto: o preset so' pode vetar (os niveis vem da
     // configuracao das normais). Desligada nos degraus baixo e medio do celular.
     m_tessPresetAllowed = p.value("tessellation", true);
+    // Limite de uma chamada de script (ScriptHost): mais folgado nos presets
+    // de celular fraco, onde trabalho legitimo passa de 250 ms de relogio.
+    ScriptHost::setWatchdogMs(p.value("script_watchdog_ms", ScriptHost::kDefaultWatchdogMs));
     // Teto do nivel de subdivisao e escala da banda perto, por preset: na GPU
     // de celular o estagio de patch custa caro mesmo em nivel baixo, entao o
     // celular troca alcance e densidade por quadro (Engine::render).
