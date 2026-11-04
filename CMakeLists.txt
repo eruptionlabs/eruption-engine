@@ -196,6 +196,10 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 # Find shader compiler (glslc preferred, glslangValidator fallback)
 find_program(GLSLC_EXECUTABLE glslc PATHS ${Vulkan_BIN_DIR} $ENV{VULKAN_SDK}/bin)
 find_program(GLSLANG_VALIDATOR glslangValidator)
+# O glslc ja' otimiza (-O); o glslangValidator nao. Sem glslc, os shaders de
+# compute passam pelo spirv-opt: o vfx_emit sem otimizar (41 KB) travava a GPU
+# de um celular de teste e otimizado (-Os, 26 KB) nao trava, mesmo codigo.
+find_program(SPIRV_OPT_EXECUTABLE spirv-opt PATHS ${Vulkan_BIN_DIR} $ENV{VULKAN_SDK}/bin)
 
 if(GLSLC_EXECUTABLE)
     set(SHADER_COMPILER ${GLSLC_EXECUTABLE})
@@ -255,11 +259,16 @@ foreach(shader ${SHADER_SOURCES})
             COMMENT "Compiling shader: ${rel_path}"
         )
     else()
+        set(opt_cmd "")
+        if(SPIRV_OPT_EXECUTABLE AND shader MATCHES "\\.comp$")
+            set(opt_cmd COMMAND ${SPIRV_OPT_EXECUTABLE} -Os --target-env=vulkan1.1 ${output} -o ${output})
+        endif()
         add_custom_command(
             OUTPUT ${output}
             COMMAND ${SHADER_COMPILER}
                     ${shader}
                     ${SHADER_FLAGS} ${output}
+            ${opt_cmd}
             DEPENDS ${shader} ${SHADER_INCLUDES}
             COMMENT "Compiling shader: ${rel_path}"
         )
@@ -292,8 +301,13 @@ foreach(shader ${SHADER_SOURCES})
                 COMMENT "Compiling shader (no bindless): ${rel_path}")
         else()
             list(REMOVE_ITEM nb_flags "-o")
+            set(opt_cmd_nb "")
+            if(SPIRV_OPT_EXECUTABLE AND shader MATCHES "\\.comp$")
+                set(opt_cmd_nb COMMAND ${SPIRV_OPT_EXECUTABLE} -Os --target-env=vulkan1.1 ${output_nb} -o ${output_nb})
+            endif()
             add_custom_command(OUTPUT ${output_nb}
                 COMMAND ${SHADER_COMPILER} ${shader} ${nb_flags} ${nb_defs} -o ${output_nb}
+                ${opt_cmd_nb}
                 DEPENDS ${shader} ${SHADER_INCLUDES}
                 COMMENT "Compiling shader (no bindless): ${rel_path}")
         endif()
