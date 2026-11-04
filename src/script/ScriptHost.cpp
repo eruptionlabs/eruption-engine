@@ -715,12 +715,20 @@ void ScriptHost::dispatchNet(float dt) {
 // ERUPTION_TEST_SCRIPT_PROFILE=1 (bancada): tempo de CPU dos handlers por
 // arquivo de script; a cada segundo o log lista os mais caros (soma e a
 // chamada mais longa). Separa o custo do jogo (scripts) do custo do motor.
-static const bool kScriptProfile = std::getenv("ERUPTION_TEST_SCRIPT_PROFILE") != nullptr;
+// Lidas na primeira chamada, nao na carga da biblioteca: no Android o env.txt
+// so' e' aplicado depois do dlopen, e um `static const` perderia as duas.
+static bool scriptProfileOn() {
+    static const bool on = std::getenv("ERUPTION_TEST_SCRIPT_PROFILE") != nullptr;
+    return on;
+}
 // ERUPTION_TELEMETRY_SCRIPTS=1: so' o custo por handler na telemetria
 // (cpu_script), sem o log de 1 s do perfil acima.
-static const bool kHandlerTelemetry = std::getenv("ERUPTION_TELEMETRY_SCRIPTS") != nullptr;
+static bool handlerTelemetryOn() {
+    static const bool on = std::getenv("ERUPTION_TELEMETRY_SCRIPTS") != nullptr;
+    return on;
+}
 
-bool ScriptHost::handlerProfileEnabled() { return kScriptProfile || kHandlerTelemetry; }
+bool ScriptHost::handlerProfileEnabled() { return scriptProfileOn() || handlerTelemetryOn(); }
 
 void ScriptHost::setProfLabel(const Script& s, const std::string& what) {
     if (!handlerProfileEnabled()) return;
@@ -730,7 +738,7 @@ void ScriptHost::setProfLabel(const Script& s, const std::string& what) {
 void ScriptHost::profileCall(const Script& s, double ms) {
     if (!handlerProfileEnabled()) return;
     if (m_profLabel.empty()) m_profLabel = s.path.filename().string() + ": ?";
-    if (kScriptProfile) {
+    if (scriptProfileOn()) {
         auto& p = m_profile[m_profLabel];
         p.first += ms;
         p.second = std::max(p.second, ms);
@@ -749,7 +757,7 @@ void ScriptHost::profileCall(const Script& s, double ms) {
 }
 
 void ScriptHost::flushProfile() {
-    if (!kScriptProfile || m_profile.empty()) return;
+    if (!scriptProfileOn() || m_profile.empty()) return;
     const auto now = std::chrono::steady_clock::now();
     if (now - m_profileSince < std::chrono::seconds(1)) return;
     std::vector<std::pair<std::string, std::pair<double, double>>> rows(m_profile.begin(), m_profile.end());
