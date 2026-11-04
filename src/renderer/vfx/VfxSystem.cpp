@@ -1441,10 +1441,15 @@ void VfxSystem::simulate(VkCommandBuffer cmd, VkImageView depthView) {
                              0, 1, &b, 0, nullptr, 0, nullptr);
     };
 
+    // Marcas 96/97 (so' com ERUPTION_DEBUG_SPLIT_SUBMIT): separam as copias de
+    // upload + barreiras (96) do dispatch de nascimento (97) e da barreira
+    // seguinte (101), para o log dizer qual das tres trava a GPU.
+    splitMark(cmd, frame, 96);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_computeLayout, 0, 1, &m_sets[frame], 0, nullptr);
     if (m_spawnTotal > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_emitPipe);
         vkCmdDispatch(cmd, (m_spawnTotal + 63) / 64, 1, 1);
+        splitMark(cmd, frame, 97);
         computeToCompute(0, 0);
         splitMark(cmd, frame, 101);
     }
