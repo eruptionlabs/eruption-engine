@@ -117,6 +117,7 @@ public:
         double layersMb = 0.0;
         // Copias por fazer e imagens de origem ja' liberadas (Engine::releaseCopiedTextureSources).
         uint32_t layersWaiting = 0, texSourcesReleased = 0;
+        uint32_t layersLost = 0, layersLostEvents = 0; // slots sem camada agora / tentativas que falharam
         double texSourcesReleasedMb = 0.0;
     };
 

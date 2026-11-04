@@ -73,12 +73,17 @@ public:
         uint32_t used = 0, capacity = 0, side = 0;
         uint32_t waiting = 0; // copias ainda por fazer (cada uma segura a imagem de origem)
         double mb = 0.0;
+        // Slots que agora mostram a textura padrao por falta de camada (distintos)
+        // e quantas vezes a alocacao falhou desde o inicio (uma por tentativa).
+        uint32_t lost = 0, lostEvents = 0;
     };
     Stats stats() const {
         Stats s;
         s.side = m_layerSize;
         s.capacity = m_array.capacity;
         s.waiting = static_cast<uint32_t>(m_jobs.size());
+        s.lost = static_cast<uint32_t>(m_lostSlots.size());
+        s.lostEvents = m_layersLost;
         const uint32_t taken = m_array.next > 0 ? m_array.next - 1 : 0; // a camada 0 e' a padrao
         const uint32_t freed = static_cast<uint32_t>(m_array.freeLayers.size());
         s.used = taken > freed ? taken - freed : 0;
@@ -152,7 +157,8 @@ private:
     bool m_tableDirty[kFrames] = {};
     bool m_directDirty[kFrames] = {};
     bool m_warnedDirectFull = false;
-    uint32_t m_layersLost = 0; // texturas que ficaram com a padrao por falta de camada
+    uint32_t m_layersLost = 0; // tentativas de alocacao que falharam (camada 0 devolvida)
+    std::unordered_set<uint32_t> m_lostSlots; // slots sem camada agora (saem em release/nova tentativa)
 
     // Passe de cópia: triângulo de tela cheia que amostra a fonte.
     VkDescriptorSetLayout m_copySetLayout = VK_NULL_HANDLE;

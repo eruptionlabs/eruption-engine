@@ -8,6 +8,7 @@
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/VkCompat.hpp"
 
+#include <cstdlib>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -101,6 +102,18 @@ std::vector<VkDescriptorPoolSize> TextureLayers::poolSizes(uint32_t sets) {
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, sets}};
 }
 
+// Teto de camadas do array: o limite do dispositivo (2048 em varias GPUs de
+// celular). ERUPTION_TEST_MAX_LAYERS=<n> (teste) baixa o teto para provar o
+// caminho "array cheio" no PC.
+static uint32_t layerLimit(const VulkanContext* ctx) {
+    uint32_t limit = std::min(ctx->deviceProperties().limits.maxImageArrayLayers, 0xFFFFu);
+    if (const char* e = std::getenv("ERUPTION_TEST_MAX_LAYERS")) {
+        const long v = std::strtol(e, nullptr, 10);
+        if (v >= 64) limit = std::min(limit, static_cast<uint32_t>(v));
+    }
+    return limit;
+}
+
 bool TextureLayers::init(VulkanContext* ctx, uint32_t slotCount, uint32_t layerSize, const VkDescriptorSet* sets,
                          VkImageView defaultView, VkSampler defaultSampler, uint32_t reserve) {
     m_ctx = ctx;
@@ -124,7 +137,7 @@ bool TextureLayers::init(VulkanContext* ctx, uint32_t slotCount, uint32_t layerS
     vkCreateSampler(ctx->device(), &si, nullptr, &m_nearestSampler);
     m_nearestSamplers.insert(m_nearestSampler);
 
-    const uint32_t maxLayers = std::min(ctx->deviceProperties().limits.maxImageArrayLayers, 0xFFFFu);
+    const uint32_t maxLayers = layerLimit(ctx);
     const uint32_t initial = std::clamp(reserve, 32u, maxLayers);
     if (!createArray(m_array, VK_FORMAT_R8G8B8A8_UNORM, initial)) return false;
     if (initial > 32) ERUPTION_LOG_WARN("Texture layers: %u layers reserved at start", initial);
@@ -242,7 +255,7 @@ void TextureLayers::destroyArray(LayerArray& arr) {
 // carga do mapa; espera a GPU para trocar a imagem em todos os sets.
 bool TextureLayers::growArray() {
     LayerArray& arr = m_array;
-    const uint32_t maxLayers = std::min(m_ctx->deviceProperties().limits.maxImageArrayLayers, 0xFFFFu);
+    const uint32_t maxLayers = layerLimit(m_ctx);
     // Cresce 1/4 por vez, não o dobro: a matriz é a maior alocação do
     // celular (1024 camadas de 256² = 344 MB com ~960 em uso) e o dobro
     // pediria 688 MB mais a antiga viva durante a cópia.
@@ -368,8 +381,8 @@ uint32_t TextureLayers::allocLayer() {
         // celular de teste); registra so' nas potencias de dois, com o total.
         ++m_layersLost;
         if ((m_layersLost & (m_layersLost - 1)) == 0)
-            ERUPTION_LOG_ERROR("Texture layers: array full (%u layers); %u texture(s) so far show the default texture",
-                               arr.capacity, m_layersLost);
+            ERUPTION_LOG_ERROR("Texture layers: array full (%u layers); %u failed attempt(s) so far, %zu slot(s) without a layer now",
+                               arr.capacity, m_layersLost, m_lostSlots.size());
         return 0;
     }
     return arr.next++;
@@ -402,6 +415,7 @@ void TextureLayers::assign(uint32_t slot, VkImageView view, VkSampler sampler, b
         return;
     }
     m_jobs.erase(slot);
+    m_lostSlots.erase(slot);
     Place& p = m_places[slot];
     uint32_t k = kDirectCount;
     if (p.kind >= kDirectKind && p.kind != kNone) {
@@ -429,6 +443,7 @@ void TextureLayers::assign(uint32_t slot, VkImageView view, VkSampler sampler, b
 void TextureLayers::release(uint32_t slot) {
     if (slot >= m_table.size()) return;
     m_jobs.erase(slot);
+    m_lostSlots.erase(slot);
     freePlace(slot);
     setTable(slot, 0, 0);
 }
@@ -505,8 +520,12 @@ void TextureLayers::runCopies(size_t maxCopies) {
         } else {
             freePlace(slot);
             layer = allocLayer();
-            if (layer == 0) continue;
+            if (layer == 0) {
+                m_lostSlots.insert(slot);
+                continue;
+            }
         }
+        m_lostSlots.erase(slot);
         targets.push_back({slot, layer, job});
     }
 
