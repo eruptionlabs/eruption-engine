@@ -10,6 +10,8 @@
 #include <chrono>
 #include "core/Logger.hpp"
 #include "renderer/ShaderCompiler.hpp"
+#include <nlohmann/json.hpp>
+#include <map>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -1226,6 +1228,13 @@ bool VulkanContext::createAllocator() {
     vulkanFunctions.vkGetDeviceProcAddr = &vkGetDeviceProcAddr;
 
     VmaAllocatorCreateInfo allocatorInfo{};
+    // ERUPTION_VMA_BLOCK_MB=<MB>: tamanho preferido do bloco do VMA (padrao do
+    // VMA: 256 MB nas heaps grandes). Numa GPU integrada (celular) o bloco e'
+    // memoria do mesmo pool da RAM, e a folga nao usada dentro dele conta.
+    if (const char* e = std::getenv("ERUPTION_VMA_BLOCK_MB")) {
+        const long mb = std::strtol(e, nullptr, 10);
+        if (mb >= 4 && mb <= 512) allocatorInfo.preferredLargeHeapBlockSize = static_cast<VkDeviceSize>(mb) * 1024 * 1024;
+    }
     allocatorInfo.physicalDevice = m_physicalDevice;
     allocatorInfo.device = m_device;
     allocatorInfo.instance = m_instance;
@@ -1739,6 +1748,18 @@ void VulkanContext::watchdogLoop() {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now().time_since_epoch()).count();
+        // ERUPTION_TEST_VMA_SUMMARY=<s>: o inventario agregado de alocacoes no log
+        // a cada <s> segundos (diagnostico; roda aqui porque a carga de mapa
+        // prende o fio do motor).
+        static const long kSummaryPeriodS = [] {
+            const char* e = std::getenv("ERUPTION_TEST_VMA_SUMMARY");
+            return e ? std::strtol(e, nullptr, 10) : 0L;
+        }();
+        static int64_t s_lastSummaryMs = 0;
+        if (kSummaryPeriodS > 0 && now - s_lastSummaryMs >= kSummaryPeriodS * 1000) {
+            s_lastSummaryMs = now;
+            logAllocationSummary("periodico");
+        }
         const int64_t last = m_lastProgressMs;
         const char* phase = m_phase;
         // "idle": entre frames (carga de mapa, compilação) - demorar ali é normal.
@@ -1841,6 +1862,59 @@ void VulkanContext::dumpVmaStats(const char* path) const {
     if (!json) return;
     if (FILE* f = std::fopen(path, "wb")) { std::fputs(json, f); std::fclose(f); }
     vmaFreeStatsString(m_allocator, json);
+}
+
+void VulkanContext::logAllocationSummary(const char* tag) const {
+    if (m_allocator == VK_NULL_HANDLE) return;
+    char* raw = nullptr;
+    vmaBuildStatsString(m_allocator, &raw, VK_TRUE);
+    if (!raw) return;
+    const nlohmann::json j = nlohmann::json::parse(raw, nullptr, false);
+    vmaFreeStatsString(m_allocator, raw);
+    if (!j.is_object() || !j.contains("DefaultPools")) return;
+    struct Group { uint64_t bytes = 0; uint32_t count = 0; };
+    std::map<std::string, Group> groups;
+    uint64_t allocated = 0, blocks = 0, slack = 0;
+    uint32_t blockCount = 0, allocCount = 0;
+    auto usageNames = [](bool image, uint32_t u) {
+        static const char* kBuf[] = {"SRC", "DST", "UTEXEL", "STEXEL", "UNIFORM", "STORAGE", "INDEX", "VERTEX", "INDIRECT"};
+        static const char* kImg[] = {"SRC", "DST", "SAMPLED", "STORAGE", "COLOR", "DEPTH", "TRANSIENT", "INPUT"};
+        std::string s;
+        for (uint32_t b = 0; b < 9; ++b)
+            if ((u & (1u << b)) && (image ? b < 8 : true)) s += std::string(s.empty() ? "" : "|") + (image ? kImg[b] : kBuf[b]);
+        return s.empty() ? std::string("-") : s;
+    };
+    auto add = [&](const nlohmann::json& a, bool dedicated) {
+        const std::string type = a.value("Type", std::string());
+        if (type.empty() || type == "FREE" || !a.contains("Size")) return;
+        const uint64_t size = a["Size"].get<uint64_t>();
+        const std::string key = type + (dedicated ? " (dedicated) " : " ") + usageNames(type.find("IMAGE") != std::string::npos, a.value("Usage", 0u));
+        groups[key].bytes += size;
+        groups[key].count += 1;
+        allocated += size;
+        ++allocCount;
+    };
+    for (const auto& pool : j["DefaultPools"]) {
+        if (pool.contains("Blocks"))
+            for (const auto& blk : pool["Blocks"]) {
+                blocks += blk.value("TotalBytes", 0ull);
+                slack += blk.value("UnusedBytes", 0ull);
+                ++blockCount;
+                if (blk.contains("Suballocations"))
+                    for (const auto& a : blk["Suballocations"]) add(a, false);
+            }
+        if (pool.contains("DedicatedAllocations"))
+            for (const auto& a : pool["DedicatedAllocations"]) add(a, true);
+    }
+    constexpr double kMb = 1.0 / (1024.0 * 1024.0);
+    ERUPTION_LOG_WARN("[VMA] %s: alocado %.0f MB (%u alocacoes) | blocos %.0f MB (%u) | folga nos blocos %.0f MB", tag,
+                      static_cast<double>(allocated) * kMb, allocCount, static_cast<double>(blocks) * kMb, blockCount,
+                      static_cast<double>(slack) * kMb);
+    std::vector<std::pair<std::string, Group>> sorted(groups.begin(), groups.end());
+    std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.second.bytes > b.second.bytes; });
+    for (size_t i = 0; i < sorted.size() && i < 12; ++i)
+        ERUPTION_LOG_WARN("[VMA]   %7.1f MB x%-4u %s", static_cast<double>(sorted[i].second.bytes) * kMb, sorted[i].second.count,
+                          sorted[i].first.c_str());
 }
 
 } // namespace eruption

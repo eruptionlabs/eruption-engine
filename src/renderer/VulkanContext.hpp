@@ -143,6 +143,10 @@ public:
     // PROFILE_VRAM_FREE ja' usam; o ALLOC tem que espelhar para bater.
     // Grava vmaBuildStatsString (JSON com cada alocacao viva) em `path`.
     void dumpVmaStats(const char* path) const;
+    // O mesmo inventario, agregado por tipo e uso e escrito no log: o que
+    // ocupa a memoria do dispositivo (alocado, blocos reservados e a folga que
+    // sobra neles). Funciona onde o arquivo nao e' acessivel (celular).
+    void logAllocationSummary(const char* tag) const;
     VkDeviceSize allocationSize(VmaAllocation alloc) const {
         if (alloc == VK_NULL_HANDLE) return 0;
         VmaAllocationInfo info{};
