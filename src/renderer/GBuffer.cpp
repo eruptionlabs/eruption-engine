@@ -48,7 +48,10 @@ bool GBuffer::init(VulkanContext* ctx, uint32_t width, uint32_t height) {
                           VK_IMAGE_ASPECT_DEPTH_BIT,
                           m_depthImage, m_depthAlloc, m_depthView)) return false;
 
-    ERUPTION_LOG_INFO("G-Buffer created: %dx%d (5 alvos, %d B/px)", width, height, 8+8+4+1+4);
+    // albedo 4 + normal 8 + pbr 4 + material 1 + emissivo 4 + velocidade 4 + profundidade 4.
+    constexpr uint32_t kBytesPerPixel = 4 + 8 + 4 + 1 + 4 + 4 + 4;
+    ERUPTION_LOG_WARN("G-Buffer created: %ux%u (6 alvos de cor + profundidade, %u B/px, %.1f MB)", width, height,
+                      kBytesPerPixel, static_cast<double>(width) * height * kBytesPerPixel / (1024.0 * 1024.0));
     return true;
 }
 
