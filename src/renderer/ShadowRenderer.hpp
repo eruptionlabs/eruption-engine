@@ -285,6 +285,15 @@ private:
     uint32_t m_farAge = 0, m_farHeldAtlas = 0;
     Mat4 m_farRenderHeld{1.0f}, m_farLookupHeld{1.0f};
     Vec3 m_farHeldCam{0.0f}, m_farHeldLight{0.0f, -1.0f, 0.0f}, m_farHeldFwd{0.0f};
+    // Teste de estabilidade (ERUPTION_TEST_SHADOW_SHIFT): deslocamento e giro
+    // que so' a sombra enxerga neste quadro (zero fora do teste).
+    Vec3 m_testShift{0.0f};
+    float m_testYaw = 0.0f;
+    Vec3 testRotate(const Vec3& f) const {
+        if (m_testYaw == 0.0f) return f;
+        const float c = std::cos(m_testYaw), s = std::sin(m_testYaw);
+        return Vec3(c * f.x - s * f.z, f.y, s * f.x + c * f.z);
+    }
     // Visao da camera (um pouco alargada) contra a qual a sombra de cada
     // caster e' testada; a cascata guardada usa a do frame em que foi
     // desenhada, com folga para a camera andar ate' o proximo redesenho.
