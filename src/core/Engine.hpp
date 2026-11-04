@@ -1265,6 +1265,21 @@ private:
     void releaseCopiedTextureSources();
     uint32_t m_texSourcesReleased = 0;
     double m_texSourcesReleasedMb = 0.0;
+    // Quadros de sprite (so' GPU sem bindless): a imagem de origem de cada slot,
+    // ate' a copia para a camada. A folha decide quais quadros o retrato
+    // (ui.portrait) ainda le' direto (decideSpriteSources); os outros perdem a
+    // origem depois da copia. m_releasedSpriteSlots: slots cuja imagem ja' foi
+    // destruida (a destruicao da folha nao pode destruir de novo).
+    struct SpriteSource {
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation alloc = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        bool decided = false, keep = true, copied = false;
+    };
+    std::unordered_map<uint32_t, SpriteSource> m_spriteSources;
+    std::unordered_set<uint32_t> m_releasedSpriteSlots;
+    void decideSpriteSources(const LoadedSprite& ls);
+    void destroySpriteSource(uint32_t slot, const SpriteSource& s);
     void render();
     // Calibra a escala da cena para target_fps (graphics.json) nos primeiros
     // segundos de cada mapa: uns poucos ajustes, sem oscilar durante o jogo.

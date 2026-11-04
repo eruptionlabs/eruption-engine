@@ -62,6 +62,18 @@ void Engine::releaseCopiedTextureSources() {
     if (kKeep || m_bindless.layerSize() == 0) return;
     const std::vector<uint32_t> slots = m_bindless.takeCopiedLayerSlots();
     if (slots.empty()) return;
+    // Quadros de sprite: a folha ja' disse quais o retrato ainda le' (decideSpriteSources).
+    for (uint32_t slot : slots) {
+        const auto it = m_spriteSources.find(slot);
+        if (it == m_spriteSources.end()) continue;
+        if (!it->second.decided) {
+            it->second.copied = true; // a decisao ainda nao veio: solta quando vier
+            continue;
+        }
+        const SpriteSource s = it->second;
+        m_spriteSources.erase(it);
+        if (!s.keep) destroySpriteSource(slot, s);
+    }
     struct Dead {
         VkImage image;
         VmaAllocation alloc;

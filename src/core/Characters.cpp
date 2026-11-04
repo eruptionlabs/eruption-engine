@@ -47,6 +47,7 @@ bool Engine::loadCharacterSprite(const std::string& png, LoadedSprite& out) {
     if (!ok) return false;
 
     lido.texturesShared = std::make_shared<char>(0);
+    decideSpriteSources(lido);
     m_characterSpriteCache[png] = lido;
     m_characterSpriteUse[png] = m_characterSpriteGen;
     out = std::move(lido);
@@ -216,6 +217,55 @@ void Engine::clearCharacters(bool keepNeighbors) {
     // sem uso ha' duas trocas (como a expiracao do cache de assets).
     ++m_characterSpriteGen;
     releaseCharacterSpriteCache(2);
+}
+
+// GPU sem bindless: cada quadro de sprite existe como imagem de origem e como
+// camada. Depois da copia so' a camada e' lida, salvo pelo retrato (ui.portrait),
+// que desenha da imagem de origem: o ciclo parado (acao 0) e as animacoes com nome,
+// sempre na direcao 0 (updateUiPortraits). Esses quadros ficam; os outros (as 7
+// outras direcoes, o andar...) perdem a origem assim que a copia termina.
+void Engine::decideSpriteSources(const LoadedSprite& ls) {
+    if (m_spriteSources.empty()) return;
+    std::unordered_set<int> keep;
+    auto keepAction = [&](size_t action) {
+        if (action >= ls.act.actions.size()) return;
+        for (const auto& frame : ls.act.actions[action].frames)
+            for (const ActSprite& spr : frame.sprites)
+                keep.insert(spr.index + (spr.type == 1 ? static_cast<int>(ls.indexedTextureCount) : 0));
+    };
+    keepAction(0);
+    for (const LoadedSprite::Named& n : ls.named) keepAction(n.first);
+    std::vector<std::pair<uint32_t, SpriteSource>> dead;
+    for (size_t i = 0; i < ls.textures.size(); ++i) {
+        const auto it = m_spriteSources.find(ls.textures[i].slot);
+        if (it == m_spriteSources.end() || it->second.decided) continue;
+        it->second.decided = true;
+        it->second.keep = keep.count(static_cast<int>(i)) != 0;
+        // Ja' copiada antes da decisao (a copia roda no inicio do quadro, a carga de
+        // varias folhas pode passar por mais de um): solta agora.
+        if (it->second.copied && !it->second.keep) {
+            dead.emplace_back(it->first, it->second);
+            m_spriteSources.erase(it);
+        } else if (it->second.copied) {
+            m_spriteSources.erase(it);
+        }
+    }
+    for (const auto& d : dead) destroySpriteSource(d.first, d.second);
+}
+
+void Engine::destroySpriteSource(uint32_t slot, const SpriteSource& s) {
+    m_releasedSpriteSlots.insert(slot);
+    ++m_texSourcesReleased;
+    m_texSourcesReleasedMb += static_cast<double>(m_vulkan.allocationSize(s.alloc)) / (1024.0 * 1024.0);
+    VkDevice dev = m_vulkan.device();
+    VmaAllocator allocator = m_vulkan.allocator();
+    const VkImageView view = s.view;
+    const VkImage image = s.image;
+    const VmaAllocation alloc = s.alloc;
+    m_vulkan.deferSlotImageCleanup([dev, allocator, view, image, alloc] {
+        if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
+        if (image != VK_NULL_HANDLE) vmaDestroyImage(allocator, image, alloc);
+    });
 }
 
 void Engine::releaseCharacterSpriteCache(uint32_t keepGenerations) {
