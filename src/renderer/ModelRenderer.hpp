@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/VulkanContext.hpp"
+#include <deque>
 #include "renderer/BindlessDescriptor.hpp"
 #include "renderer/MipmapGenerator.hpp"
 #include "renderer/ModelData.hpp"
@@ -604,7 +605,16 @@ public:
                       float minSizeThreshold, bool enableCulling,
                       bool instanced = false, const Vec4& windParams = Vec4(0.0f),
                       VkPipeline opaquePipeline = VK_NULL_HANDLE,
-                      const Frustum* receivers = nullptr, float receiverMargin = 0.0f);
+                      const Frustum* receivers = nullptr, float receiverMargin = 0.0f,
+                      VkPipeline streamPipeline = VK_NULL_HANDLE, VkPipeline streamOpaquePipeline = VK_NULL_HANDLE);
+    // VRAM dos streams de vertice da sombra (spec 52, OE-03), em bytes.
+    static VkDeviceSize shadowStreamBytes();
+    // Buffers de um stream: posicao (12 B/vertice) e UV + texIndex/matId (12 B).
+    struct ShadowStreamBufs {
+        VkBuffer pos = VK_NULL_HANDLE, attr = VK_NULL_HANDLE;
+        VmaAllocation posAlloc = VK_NULL_HANDLE, attrAlloc = VK_NULL_HANDLE;
+        VkDeviceSize bytes = 0;
+    };
 
     bool isInitialized() const { return m_initialized; }
     void setMipmapsEnabled(bool enabled) { m_mipmapsEnabled = enabled; }
@@ -1496,6 +1506,14 @@ private:
         VkBuffer dst;
     };
     void uploadCopies(const std::vector<StagedCopy>& ups);
+    // Stream de vertice da sombra de `src` (spec 52, OE-03): cria os buffers e
+    // enfileira a copia; flushShadowStreams() sobe tudo de uma vez. Os dados
+    // ficam em m_streamData (deque: endereco estavel) ate' la'.
+    void addShadowStream(VkBuffer src, const void* vertices, VkDeviceSize bytes);
+    void flushShadowStreams();
+    std::deque<std::vector<uint8_t>> m_streamData;
+    std::vector<StagedCopy> m_streamUps;
+    std::vector<std::pair<VkBuffer, ShadowStreamBufs>> m_streamPending;
     VkBuffer m_staging = VK_NULL_HANDLE;
     VmaAllocation m_stagingAlloc = VK_NULL_HANDLE;
     VkDeviceSize m_stagingSize = 0;

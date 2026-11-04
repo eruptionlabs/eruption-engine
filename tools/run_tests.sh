@@ -42,6 +42,7 @@ run_src test_shadow_receivers src/math/Frustum.cpp
 run_src test_mesh_clusters src/utils/MeshClusters.cpp
 run_src test_object_world src/scene/ObjectWorld.cpp
 run_src test_css_classes src/utils/CSSParser.cpp
+run_src test_shadow_stream
 run_src test_ground_pack src/formats/GroundPack.cpp -I build/_deps/nlohmann_json-src/include
 run_src test_net_wire src/net/Wire.cpp
 

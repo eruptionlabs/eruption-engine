@@ -106,6 +106,9 @@ private:
 
 // Chamado por vkc::cmdBeginRendering. viewFormat: formato de cada view.
 void recordRendering(const VkRenderingInfo& info, VkFormat (*viewFormat)(VkImageView));
+// Bytes de vertice buscados por um draw (indices x instancias x passo), no
+// passe corrente.
+void addVertexFetch(uint64_t bytes);
 // Fecha o quadro anterior (chamado por vkc::beginFrame) e le' o contador real.
 void beginFrame();
 // Fabricante do dispositivo em uso (o NVML so' vale se for NVIDIA).
@@ -117,11 +120,16 @@ struct PassStat {
     uint64_t read = 0;
     uint64_t written = 0;
     uint32_t renders = 0; // quantos cmdBeginRendering o passe abriu
+    // Busca de vertice (spec 52): indices desenhados x passo do vertice, limite
+    // superior (sem o cache pos-transformacao). Fora de read/written, que sao
+    // so' anexos.
+    uint64_t vertexBytes = 0;
 };
 struct FrameStat {
     uint64_t frame = 0;
     uint64_t read = 0;
     uint64_t written = 0;
+    uint64_t vertexBytes = 0;     // soma de PassStat::vertexBytes
     std::vector<PassStat> passes; // na ordem em que apareceram no quadro
     // Contador real do controlador de memoria (sistema inteiro: CPU, iGPU,
     // tela), no intervalo entre o inicio deste quadro e o do proximo.
