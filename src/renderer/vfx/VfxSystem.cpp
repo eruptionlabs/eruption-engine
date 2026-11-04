@@ -1328,7 +1328,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     m_maxLifeSeen = std::max(m_maxLifeSeen, maxLife);
     if (m_instances.empty()) m_idleTime += dt;
     else m_idleTime = 0.0f;
-    m_active = !m_instances.empty() || m_idleTime <= m_maxLifeSeen + 0.5f;
+    m_active = (!m_instances.empty() || m_idleTime <= m_maxLifeSeen + 0.5f) && !m_suspended;
     if (!m_active) {
         m_slotHighWater = 0;
         m_maxLifeSeen = 0.0f;
