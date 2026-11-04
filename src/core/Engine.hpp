@@ -1452,6 +1452,13 @@ private:
     // irradiancia, histograma de exposicao, vetores de movimento sem uso, efeitos
     // de particula). Para GPUs de celular cujo driver trava em compute.
     bool m_computeFree = false;
+    // Preset "camera_near_scale" (0 = desligado, o plano proximo fixo de
+    // cameraNear()): plano proximo = escala x distancia da orbita, limitado a
+    // [cameraNear(), 60]. Profundidade D32 padrao com near 0,1 e far 50000 tem
+    // passo de ~0,1 u a 400 u do olho; a posicao reconstruida do pixel pula nesse
+    // passo e o fator de sombra vira binario a cada deslocamento sub-pixel da
+    // camera (tremida). Recorta geometria mais perto da lente que o near.
+    float m_cameraNearScale = 0.0f;
     bool m_skyProbeEnabled = true;
     float m_skyProbeIntensity = 1.0f;
     // PROBES DE IRRADIANCIA (G38): visibilidade do ceu por probe, bakeada ao
