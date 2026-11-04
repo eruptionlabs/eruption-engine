@@ -402,7 +402,9 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
                 // O formato que o bake escolheu E' o flag de opacidade: BC1 so' sai
                 // quando a textura nao tem alfa (bake_assets.py). Guardado por slot
                 // para o passe de sombra pular o fragment shader em caster solido.
-                m_bindless.setSlotOpaque(slot, e.vkFormat == VK_FORMAT_BC1_RGBA_UNORM_BLOCK);
+                m_bindless.setSlotOpaque(slot, e.vkFormat == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ||
+                                                   e.vkFormat == VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK ||
+                                                   bakedIt->second.albedoOpaque);
                 if (slot != 0) m_bindless.updateTextureSafe(slot, view, m_defaultSampler);
 
                 ModelTextureGPU tex{};

@@ -1,6 +1,8 @@
 #include "utils/BcCompressor.hpp"
 
 #include "core/JobSystem.hpp"
+#include "utils/TextureEncoder.hpp"
+#include "utils/TextureFormatPolicy.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -54,78 +56,6 @@ constexpr uint32_t kEtexMagic = 0x31585445; // 'ETX1'
         }
     }
 }
-
-// Gather one 4x4 block, clamping at the edges so mips smaller than a block
-// (2x2, 1x1) still produce a well-defined block instead of reading garbage.
-inline void gatherBlock(const std::vector<uint8_t>& img, int w, int h,
-                        int bx, int by, uint8_t out[64]) {
-    for (int y = 0; y < 4; ++y) {
-        const int sy = std::min(by + y, h - 1);
-        for (int x = 0; x < 4; ++x) {
-            const int sx = std::min(bx + x, w - 1);
-            std::memcpy(&out[(y * 4 + x) * 4], &img[(static_cast<size_t>(sy) * w + sx) * 4], 4);
-        }
-    }
-}
-
-[[maybe_unused]] size_t blockBytesFor(VkFormat f) {
-    switch (f) {
-        case VK_FORMAT_BC1_RGBA_UNORM_BLOCK: return 8;
-        case VK_FORMAT_BC3_UNORM_BLOCK:
-        case VK_FORMAT_BC5_UNORM_BLOCK:
-        case VK_FORMAT_BC7_UNORM_BLOCK: return 16;
-        default: return 0;
-    }
-}
-
-#ifdef ERUPTION_HAVE_BC_ENCODER
-void encodeLevel(VkFormat fmt, const std::vector<uint8_t>& img, int w, int h,
-                 std::vector<uint8_t>& out) {
-    const int bw = (w + 3) / 4;
-    const int bh = (h + 3) / 4;
-    const size_t bb = blockBytesFor(fmt);
-    out.resize(static_cast<size_t>(bw) * bh * bb);
-
-    bc7enc_compress_block_params bc7p{};
-    if (fmt == VK_FORMAT_BC7_UNORM_BLOCK) {
-        bc7enc_compress_block_params_init(&bc7p);
-        // mrahw is DATA (metallic/roughness/height/wetness), not colour: the
-        // perceptual luma weighting would spend bits on the wrong channels.
-        bc7enc_compress_block_params_init_linear_weights(&bc7p);
-        // Runtime budget: partitions dominate the cost. 16 keeps most of the
-        // quality that made BC7 necessary here (BC3 on mrahw measured RMS 9-14)
-        // at a fraction of the time of the default 64.
-        bc7p.m_max_partitions = 16;
-        bc7p.m_uber_level = 0;
-    }
-
-    for (int by = 0; by < bh; ++by) {
-        for (int bx = 0; bx < bw; ++bx) {
-            uint8_t block[64];
-            gatherBlock(img, w, h, bx * 4, by * 4, block);
-            uint8_t* dst = &out[(static_cast<size_t>(by) * bw + bx) * bb];
-            switch (fmt) {
-                case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
-                    rgbcx::encode_bc1(5, dst, block, true, false);
-                    break;
-                case VK_FORMAT_BC3_UNORM_BLOCK:
-                    rgbcx::encode_bc3(5, dst, block);
-                    break;
-                case VK_FORMAT_BC5_UNORM_BLOCK:
-                    // R,G of the tangent-space normal; Z is reconstructed in the
-                    // shader from x/y (BC5 stores exactly two channels).
-                    rgbcx::encode_bc5(dst, block, 0, 1, 4);
-                    break;
-                case VK_FORMAT_BC7_UNORM_BLOCK:
-                    bc7enc_compress_block(dst, block, &bc7p);
-                    break;
-                default:
-                    break;
-            }
-        }
-    }
-}
-#endif // ERUPTION_HAVE_BC_ENCODER
 
 // Toksvig factor (Neubelt & Pettineo, GDC 2013): dado `r` (comprimento do
 // vetor normal medio, pre-renormalizacao - ver computeNormalMipVariance) e a
@@ -196,7 +126,17 @@ void bcCompressorInit() {
 #endif
 }
 
-void setBcFormatSupport(const BcFormatSupport& s) { g_support = s; }
+void setBcFormatSupport(const BcFormatSupport& s) {
+    g_support = s;
+    // Quem so' conhece o BC (autoteste, ferramentas) continua valendo: a
+    // politica de formato (spec 51) le' os mesmos bits.
+    texfmt::Caps c = texfmt::deviceCaps();
+    c.bc1 = s.bc1;
+    c.bc3 = s.bc3;
+    c.bc5 = s.bc5;
+    c.bc7 = s.bc7;
+    texfmt::setDeviceCaps(c);
+}
 const BcFormatSupport& bcFormatSupport() { return g_support; }
 
 EtexData rgbaToEtexRaw(const uint8_t* rgba, int width, int height) {
@@ -238,42 +178,25 @@ EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind k
                             bool hasAlpha, const std::vector<std::vector<float>>* roughnessBroadenR,
                             float alphaTestCutoff, int coverageRegion) {
     EtexData out;
-#ifndef ERUPTION_HAVE_BC_ENCODER
-    // Build sem encoder vendorizado: nada a comprimir, caminho RGBA8 assume.
-    (void)rgba; (void)width; (void)height; (void)kind; (void)hasAlpha; (void)roughnessBroadenR;
-    (void)alphaTestCutoff; (void)coverageRegion;
-    return out;
-#else
     if (!rgba || width < 4 || height < 4) return out;
     bcCompressorInit();
 
-    VkFormat fmt = VK_FORMAT_UNDEFINED;
-    switch (kind) {
-        case BcKind::Albedo:
-            if (hasAlpha) {
-                if (g_support.bc3) fmt = VK_FORMAT_BC3_UNORM_BLOCK;
-            } else {
-                if (g_support.bc1) fmt = VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
-                else if (g_support.bc3) fmt = VK_FORMAT_BC3_UNORM_BLOCK;
-            }
-            break;
-        case BcKind::Normal:
-            // Nunca BC1 aqui (paleta RGB conjunta num normal = iluminação em
-            // blocos). E NUNCA BC5 NESTA ENGINE: BC5 guarda só R,G — a amostra
-            // volta com B=0 e A=1, e o shader faz `sampledNormal.xyz*2-1`, ou
-            // seja z = -1. Os normal maps daqui NÃO são unitários de propósito
-            // (azul ~239 para plano; ver a nota em gbuffer/model.frag) e o
-            // alfa é materialProps, então reconstruir z de x,y mudaria o look.
-            // BC7 guarda os quatro canais pelo mesmo 1 byte/texel do BC5.
-            // (Medido: com BC5 aqui a cena dava RMS 9,7 e -8,5 de brilho.)
-            if (g_support.bc7) fmt = VK_FORMAT_BC7_UNORM_BLOCK;
-            break;
-        case BcKind::Data:
-            if (g_support.bc7) fmt = VK_FORMAT_BC7_UNORM_BLOCK;
-            else if (g_support.bc3) fmt = VK_FORMAT_BC3_UNORM_BLOCK;
-            break;
-    }
-    if (fmt == VK_FORMAT_UNDEFINED) return out; // caller falls back to RGBA8
+    // Formato pela politica (spec 51): classe da textura x formatos que a GPU
+    // amostra x modo do preset. PC: albedo BC1 (BC3 com alfa), normal e dados
+    // BC7 - o mesmo de antes. Celular: ASTC 4x4 (ou ETC2/EAC, reserva).
+    //
+    // Normal NUNCA em BC1/BC3 (paleta RGB conjunta = iluminacao em blocos) e,
+    // por padrao, nunca em 2 canais (BC5/EAC RG): a amostra voltaria com B=0 e
+    // A=1, e o shader faz `sampledNormal.xyz*2-1`, ou seja z = -1. Os normal
+    // maps daqui NAO sao unitarios de proposito (azul ~239 para plano; ver a
+    // nota em gbuffer/model.frag) e o alfa e' materialProps, entao reconstruir
+    // z de x,y mudaria o look. (Medido: com BC5 aqui a cena dava RMS 9,7.)
+    // BC7/ASTC 4x4 guardam os quatro canais pelo mesmo 1 byte/texel.
+    texfmt::Class cls = texfmt::Class::Data4;
+    if (kind == BcKind::Albedo) cls = hasAlpha ? texfmt::Class::AlbedoAlpha : texfmt::Class::AlbedoOpaque;
+    else if (kind == BcKind::Normal) cls = texfmt::Class::Normal;
+    const VkFormat fmt = texfmt::chooseActive(cls);
+    if (fmt == VK_FORMAT_UNDEFINED || !texenc::available(fmt)) return out; // caller falls back to RGBA8
 
     std::vector<uint8_t> level(static_cast<size_t>(width) * height * 4);
     std::memcpy(level.data(), rgba, level.size());
@@ -387,7 +310,7 @@ EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind k
         }
         if (cobertura) aplicaCobertura(mipLevel);
         std::vector<uint8_t> enc;
-        encodeLevel(fmt, level, w, h, enc);
+        if (!texenc::encodeLevel(fmt, level.data(), w, h, enc)) return EtexData{};
         out.mipSizes.push_back(static_cast<uint32_t>(enc.size()));
         out.payload.insert(out.payload.end(), enc.begin(), enc.end());
         if (w == 1 && h == 1) break;
@@ -411,7 +334,6 @@ EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind k
     }
     out.mipCount = static_cast<uint32_t>(out.mipSizes.size());
     return out;
-#endif // ERUPTION_HAVE_BC_ENCODER
 }
 
 bool decodeEtexMip0(const EtexData& e, std::vector<uint8_t>& rgba) {
@@ -430,7 +352,8 @@ bool decodeEtexMip0(const EtexData& e, std::vector<uint8_t>& rgba) {
                      e.vkFormat == VK_FORMAT_BC1_RGBA_SRGB_BLOCK || e.vkFormat == VK_FORMAT_BC1_RGB_SRGB_BLOCK;
     const bool bc3 = e.vkFormat == VK_FORMAT_BC3_UNORM_BLOCK || e.vkFormat == VK_FORMAT_BC3_SRGB_BLOCK;
     const bool bc7 = e.vkFormat == VK_FORMAT_BC7_UNORM_BLOCK || e.vkFormat == VK_FORMAT_BC7_SRGB_BLOCK;
-    if (!bc1 && !bc3 && !bc7) return false;
+    if (!bc1 && !bc3 && !bc7)
+        return texenc::decodeLevel(static_cast<VkFormat>(e.vkFormat), e.payload.data(), n0, int(w), int(h), rgba);
     const size_t bloco = bc1 ? 8 : 16;
     const uint32_t bw = (w + 3) / 4, bh = (h + 3) / 4;
     if (n0 < size_t(bw) * bh * bloco) return false;
@@ -448,7 +371,7 @@ bool decodeEtexMip0(const EtexData& e, std::vector<uint8_t>& rgba) {
         }
     return true;
 #else
-    return false;
+    return texenc::decodeLevel(static_cast<VkFormat>(e.vkFormat), e.payload.data(), n0, int(w), int(h), rgba);
 #endif
 }
 
