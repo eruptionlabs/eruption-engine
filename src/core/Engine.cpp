@@ -1,6 +1,7 @@
 #include "core/Engine.hpp"
 #include "script/ScriptHost.hpp"
 #include "core/EngineInternal.hpp"
+#include "renderer/LeanFormats.hpp"
 #include "renderer/PostFormat.hpp"
 #include "game/PlayerController.hpp"
 #include "core/Logger.hpp"
@@ -344,6 +345,17 @@ bool Engine::init(int width, int height, const std::string& title) {
     // Shaders enxutos por preset ("shader_lite", ver VulkanContext::shaderLite):
     // decidido antes de qualquer pipeline de cena nascer.
     if (presetBool(graphicsPresetName(), "shader_lite", false)) m_vulkan.setShaderLite(true);
+    // Formatos enxutos (spec 50, LeanFormats.hpp): preset, env forca, GPU decide.
+    {
+        bool d16 = presetBool(graphicsPresetName(), "shadow_depth16", false);
+        if (const char* e = std::getenv("ERUPTION_TEST_SHADOW_D16")) d16 = e[0] == '1';
+        if (d16 && !lean::shadowD16Supported(m_vulkan.physicalDevice())) {
+            ERUPTION_LOG_WARN("[FLUXO] shadow_depth16 pedido mas a GPU nao tem D16 amostravel/copiavel: atlas em D32");
+            d16 = false;
+        }
+        lean::shadowD16() = d16;
+        if (d16) ERUPTION_LOG_WARN("[FLUXO] atlas de sombra em D16 (metade dos bytes do D32)");
+    }
     // Upscaler: env > preset > FXAA. Decidido ANTES do G-buffer: a velocidade de
     // objeto (6o alvo) depende dele. Com FSR o post_scale e' ignorado (abaixo).
     {
