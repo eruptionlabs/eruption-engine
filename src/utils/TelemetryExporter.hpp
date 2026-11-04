@@ -105,6 +105,9 @@ public:
         // categoria ja' sai em vram_cat.
         uint32_t layersUsed = 0, layersCapacity = 0, layersSide = 0;
         double layersMb = 0.0;
+        // Copias por fazer e imagens de origem ja' liberadas (Engine::releaseCopiedTextureSources).
+        uint32_t layersWaiting = 0, texSourcesReleased = 0;
+        double texSourcesReleasedMb = 0.0;
     };
 
     static bool enabled();

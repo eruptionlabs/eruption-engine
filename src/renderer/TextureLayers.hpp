@@ -3,6 +3,7 @@
 #include "renderer/VulkanContext.hpp"
 
 #include <cstdint>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -57,16 +58,23 @@ public:
 
     uint32_t layerSize() const { return m_layerSize; }
 
+    // Slots cuja textura ESTATICA ja' foi copiada para uma camada: a imagem de
+    // origem nao e' mais lida pela GPU (a copia e' sincrona) e quem a possui
+    // pode libera-la. Devolve a lista e a esvazia.
+    std::vector<uint32_t> takeCopiedStatic();
+
     // Situacao do array de camadas (telemetria): camadas em uso, capacidade, lado
     // e memoria da alocacao (inclui as camadas ainda livres e os mips).
     struct Stats {
         uint32_t used = 0, capacity = 0, side = 0;
+        uint32_t waiting = 0; // copias ainda por fazer (cada uma segura a imagem de origem)
         double mb = 0.0;
     };
     Stats stats() const {
         Stats s;
         s.side = m_layerSize;
         s.capacity = m_array.capacity;
+        s.waiting = static_cast<uint32_t>(m_jobs.size());
         const uint32_t taken = m_array.next > 0 ? m_array.next - 1 : 0; // a camada 0 e' a padrao
         const uint32_t freed = static_cast<uint32_t>(m_array.freeLayers.size());
         s.used = taken > freed ? taken - freed : 0;
@@ -158,6 +166,8 @@ private:
     void recordCopy(VkCommandBuffer cmd, VkDescriptorSet copySet, uint32_t layer, bool srgb, VkImageView layerView);
     void writeArrayBindings(VkDescriptorSet set);
     void writeDirectBindings(VkDescriptorSet set);
+    std::mutex m_copiedMutex;
+    std::vector<uint32_t> m_copiedStatic;
 };
 
 } // namespace eruption

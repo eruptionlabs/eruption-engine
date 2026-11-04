@@ -275,7 +275,8 @@ void TelemetryExporter::recordFrame(const FrameStats& st) {
                  {"vm_pswpin", SystemMonitor::memoryDetail().vmPswpIn},
                  {"vm_pswpout", SystemMonitor::memoryDetail().vmPswpOut}}},
         {"layers", {{"used", st.layersUsed}, {"capacity", st.layersCapacity}, {"side", st.layersSide},
-                    {"mb", st.layersMb}}},
+                    {"mb", st.layersMb}, {"waiting", st.layersWaiting}, {"sources_released", st.texSourcesReleased},
+                    {"sources_released_mb", st.texSourcesReleasedMb}}},
     };
     j["scene"] = {
         {"instances", st.instances}, {"meshes", st.meshes},

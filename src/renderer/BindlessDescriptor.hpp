@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 
 namespace eruption {
@@ -20,7 +21,15 @@ public:
     bool init(VulkanContext* ctx);
     void shutdown();
     // Array de camadas (so' sem descriptor indexing): zeros no caminho com bindless.
-    TextureLayers::Stats layerStats() const { return m_layered ? m_layers.stats() : TextureLayers::Stats{}; }
+    TextureLayers::Stats layerStats() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_layered ? m_layers.stats() : TextureLayers::Stats{};
+    }
+    // Slots estaticos que o array de camadas acabou de copiar (vazio com bindless).
+    std::vector<uint32_t> takeCopiedLayerSlots() { return m_layered ? m_layers.takeCopiedStatic() : std::vector<uint32_t>{}; }
+    // Chamado no inicio de cada quadro, DEPOIS das copias e fora da trava: o Engine libera
+    // as imagens de origem que a copia deixou sem uso.
+    void setAfterCopies(std::function<void()> fn) { m_afterCopies = std::move(fn); }
     // Lado pedido da camada de textura (antes de init); 0 = o padrao.
     void setLayerSizeRequest(uint32_t size) { m_layerSizeRequest = size; }
 
@@ -126,6 +135,7 @@ private:
 
     std::mutex m_mutex;
     uint32_t m_layerSizeRequest = 0;
+    std::function<void()> m_afterCopies;
 };
 
 } // namespace eruption

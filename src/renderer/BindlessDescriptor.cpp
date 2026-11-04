@@ -240,8 +240,11 @@ void BindlessDescriptor::syncNow() {
 }
 
 void BindlessDescriptor::onFrameBegin(uint32_t frame) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_layers.apply(frame);
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_layers.apply(frame);
+    }
+    if (m_afterCopies) m_afterCopies();
 }
 
 void BindlessDescriptor::writeSet(VkDescriptorSet set, const std::vector<PendingUpdate>& updates) {
