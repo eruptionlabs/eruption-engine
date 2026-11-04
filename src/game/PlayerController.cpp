@@ -320,7 +320,15 @@ void PlayerController::updateMovement(float dt) {
         if (testMove) {
             float dx = 0.0f, dz = 0.0f;
             std::sscanf(testMove, "%f,%f", &dx, &dz);
-            move += Vec3(dx, 0.0f, dz);
+            // ERUPTION_TEST_PLAYER_MOVE_FRAMES=N (teste): segura o controle so'
+            // nos N primeiros quadros e solta - o jogador anda e PARA, e a
+            // camera desacelera pelo suavizador de verdade (updateCamera).
+            static const int kMoveFrames = [] {
+                const char* e = std::getenv("ERUPTION_TEST_PLAYER_MOVE_FRAMES");
+                return e ? std::atoi(e) : -1;
+            }();
+            static int moveCalls = 0;
+            if (kMoveFrames < 0 || moveCalls++ < kMoveFrames) move += Vec3(dx, 0.0f, dz);
         }
         m_isMoving = false;
         if (glm::length(move) > 0.001f) {
