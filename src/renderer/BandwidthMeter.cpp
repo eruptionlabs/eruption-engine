@@ -540,8 +540,9 @@ std::vector<CensusRow> textureCensus() {
     for (const auto& [image, d] : s.images) {
         const TextureCategory c = categoryOf(s, image, d);
         if (c == kTexNone) continue;
+        const VkFormat fmt = d.format; // C++17: lambda nao captura binding estruturado
         auto r = std::find_if(rows.begin(), rows.end(),
-                              [&](const CensusRow& x) { return x.category == c && x.format == d.format; });
+                              [c, fmt](const CensusRow& x) { return x.category == c && x.format == fmt; });
         if (r == rows.end()) {
             rows.push_back(CensusRow{c, d.format, 0, 0});
             r = rows.end() - 1;

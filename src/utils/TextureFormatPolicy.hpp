@@ -39,9 +39,13 @@ enum class Mode : uint8_t {
     Bc,
     Astc,
     Etc2,
+    // Cozido SEM compressao: o mesmo bake (mips na CPU, Toksvig, cobertura de
+    // alfa), guardado em RGBA8. Referencia de qualidade que isola o codec do
+    // caminho de carga; nunca para jogo (4-8x a VRAM).
+    Raw,
 };
 const char* modeName(Mode m);
-// "off"|"auto"|"bc"|"astc"|"etc2" (e "0"/"1"); outro texto devolve `fallback`.
+// "off"|"auto"|"bc"|"astc"|"etc2"|"raw" (e "0"/"1"); outro texto devolve `fallback`.
 Mode parseMode(const std::string& s, Mode fallback);
 
 // Formatos que a GPU amostra com filtro linear e aceita como destino de copia.

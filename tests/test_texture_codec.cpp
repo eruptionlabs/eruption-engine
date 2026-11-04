@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -71,7 +72,46 @@ struct Case {
 
 } // namespace
 
-int main() {
+// --bench N: custo de CPU do cozimento, por formato, numa imagem NxN com a cadeia
+// de mips inteira (uma thread; o bake divide as texturas entre as threads).
+static int bench(int n) {
+    std::vector<uint8_t> img = synth(n, n, 11);
+    const VkFormat fs[] = {VK_FORMAT_BC1_RGBA_UNORM_BLOCK, VK_FORMAT_BC3_UNORM_BLOCK, VK_FORMAT_BC4_UNORM_BLOCK,
+                           VK_FORMAT_BC5_UNORM_BLOCK, VK_FORMAT_BC7_UNORM_BLOCK, VK_FORMAT_ASTC_4x4_UNORM_BLOCK,
+                           VK_FORMAT_ASTC_6x6_UNORM_BLOCK, VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK,
+                           VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK, VK_FORMAT_EAC_R11_UNORM_BLOCK,
+                           VK_FORMAT_EAC_R11G11_UNORM_BLOCK};
+    for (VkFormat f : fs) {
+        if (!texenc::available(f)) continue;
+        std::vector<uint8_t> level = img, out;
+        int w = n, h = n;
+        size_t bytes = 0;
+        double ms = 0.0, px = 0.0;
+        for (;;) {
+            const auto t0 = std::chrono::steady_clock::now();
+            texenc::encodeLevel(f, level.data(), w, h, out);
+            ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            bytes += out.size();
+            px += double(w) * h;
+            if (w == 1 && h == 1) break;
+            const int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
+            std::vector<uint8_t> next(size_t(nw) * nh * 4);
+            for (int y = 0; y < nh; ++y)
+                for (int x = 0; x < nw; ++x)
+                    for (int c = 0; c < 4; ++c)
+                        next[(size_t(y) * nw + x) * 4 + c] = level[(size_t(std::min(2 * y, h - 1)) * w + std::min(2 * x, w - 1)) * 4 + c];
+            level.swap(next);
+            w = nw;
+            h = nh;
+        }
+        std::printf("bench %-9s %dx%d com mips: %8.1f ms  %6.2f Mtexel/s  %.2f MB (RGBA8 %.2f MB)\n", texfmt::formatTag(f), n,
+                    n, ms, px / ms / 1000.0, bytes / 1048576.0, px * 4 / 1048576.0);
+    }
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc > 2 && std::string(argv[1]) == "--bench") return bench(std::max(4, std::atoi(argv[2])));
     using namespace eruption::texfmt;
     std::printf("1. modo e capacidade\n");
     CHECK(parseMode("off", Mode::Auto) == Mode::Off);
@@ -220,7 +260,14 @@ int main() {
     CHECK(texenc::levelBytes(VK_FORMAT_ASTC_6x6_UNORM_BLOCK, 256, 256) == 43u * 43u * 16u);
     CHECK(texenc::levelBytes(VK_FORMAT_BC1_RGBA_UNORM_BLOCK, 1, 1) == 8u);
     std::vector<uint8_t> rawOut;
-    CHECK(!texenc::encodeLevel(VK_FORMAT_R8G8B8A8_UNORM, img.data(), W, H, rawOut)); // RGBA8 nao e' bloco
+    CHECK(!texenc::encodeLevel(VK_FORMAT_R16G16B16A16_SFLOAT, img.data(), W, H, rawOut)); // sem codificador
+    // Modo raw: RGBA8 "codificado" = copia exata (referencia que isola o codec).
+    CHECK(texenc::encodeLevel(VK_FORMAT_R8G8B8A8_UNORM, img.data(), W, H, rawOut) && rawOut == img);
+    Options raw = o;
+    raw.mode = Mode::Raw;
+    CHECK(parseMode("raw", Mode::Off) == Mode::Raw);
+    for (int c = 0; c < kClassCount; ++c) CHECK(choose(static_cast<Class>(c), none, raw) == VK_FORMAT_R8G8B8A8_UNORM);
+    CHECK(policyKey(pc, raw) != policyKey(pc, o));
 
     std::printf(g_falhas ? "HOUVE FALHA (%d)\n" : "OK\n", g_falhas);
     return g_falhas ? 1 : 0;

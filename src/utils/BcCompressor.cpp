@@ -26,7 +26,7 @@ namespace eruption {
 namespace {
 
 BcFormatSupport g_support;
-std::once_flag g_initOnce;
+[[maybe_unused]] std::once_flag g_initOnce;
 
 constexpr uint32_t kEtexMagic = 0x31585445; // 'ETX1'
 
