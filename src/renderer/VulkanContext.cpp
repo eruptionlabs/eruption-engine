@@ -984,6 +984,10 @@ bool VulkanContext::pickPhysicalDevice() {
                           (r16.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) ? "yes" : "NO",
                           m_supportedFeatures.shaderStorageImageExtendedFormats ? "yes" : "NO", storageLabel(r8),
                           storageLabel(r16u));
+        ERUPTION_LOG_WARN("GPU limits (descritores): samplers/estagio %u, imagens amostradas/estagio %u, recursos/estagio %u, "
+                          "samplers/set %u, camadas de array %u",
+                          lim.maxPerStageDescriptorSamplers, lim.maxPerStageDescriptorSampledImages,
+                          lim.maxPerStageResources, lim.maxDescriptorSetSamplers, lim.maxImageArrayLayers);
     }
     ERUPTION_LOG_INFO("Selected GPU: %s", m_deviceProperties.deviceName);
     ERUPTION_LOG_INFO("Max push constants size: %u", m_deviceProperties.limits.maxPushConstantsSize);

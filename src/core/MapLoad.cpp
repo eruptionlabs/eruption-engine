@@ -1033,15 +1033,30 @@ void Engine::flushPendingUploads() {
         // Tamanho do envio (um so' para todas as texturas embutidas pendentes):
         // um envio que o driver recusa por memoria diz aqui o quanto pedia.
         double uploadMb = 0.0;
+        std::vector<double> sizeMb;
+        sizeMb.reserve(s_pendingUploads.size());
         for (const auto& u : s_pendingUploads) {
             uint64_t bytes = 0;
             for (uint32_t s : u.mipSizes) bytes += s;
             if (bytes == 0) bytes = static_cast<uint64_t>(u.width) * u.height * 4;
-            uploadMb += static_cast<double>(bytes) / (1024.0 * 1024.0);
+            sizeMb.push_back(static_cast<double>(bytes) / (1024.0 * 1024.0));
+            uploadMb += sizeMb.back();
         }
-        ERUPTION_LOG_WARN("[UPLOAD] %zu textura(s) embutida(s), %.1f MB, num envio", s_pendingUploads.size(), uploadMb);
+        // Em lotes de ate' kUploadChunkMb por envio: 454 texturas (95,7 MB) num
+        // envio so' foram recusadas com VK_ERROR_OUT_OF_DEVICE_MEMORY na carga de
+        // um celular de teste (memoria interna do driver, nao a nossa); um lote
+        // pequeno por envio mantem o que o driver segura de cada vez limitado.
+        constexpr double kUploadChunkMb = 16.0;
+        ERUPTION_LOG_WARN("[UPLOAD] %zu textura(s) embutida(s), %.1f MB, lotes de ate' %.0f MB", s_pendingUploads.size(),
+                          uploadMb, kUploadChunkMb);
+        size_t from = 0;
+        while (from < s_pendingUploads.size()) {
+        size_t to = from;
+        double chunkMb = 0.0;
+        while (to < s_pendingUploads.size() && (to == from || chunkMb + sizeMb[to] <= kUploadChunkMb)) chunkMb += sizeMb[to++];
         m_vulkan.immediateSubmit([&](VkCommandBuffer cmd) {
-            for (auto& u : s_pendingUploads) {
+            for (size_t k = from; k < to; ++k) {
+                auto& u = s_pendingUploads[k];
                 m_vulkan.cmdImageBarrier(cmd, u.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
                 if (!u.mipSizes.empty()) {
@@ -1079,6 +1094,8 @@ void Engine::flushPendingUploads() {
                 }
             }
         });
+        from = to;
+        }
         for (auto& u : s_pendingUploads) {
             vmaDestroyBuffer(m_vulkan.allocator(), u.staging, u.stagingAlloc);
         }
