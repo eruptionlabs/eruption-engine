@@ -47,6 +47,15 @@ public:
     bool running() const { return m_running; }
     bool nativeCode() const { return m_native; }
     float lastUpdateMs() const { return m_lastUpdateMs; }
+    // Custo de Luau por handler no ultimo update() (ERUPTION_TEST_SCRIPT_PROFILE=1
+    // ou ERUPTION_TELEMETRY_SCRIPTS=1; vazio sem eles): "arquivo: on.every 0.5s #2".
+    struct HandlerCost {
+        std::string name;
+        double ms = 0.0;
+        uint32_t calls = 0;
+    };
+    const std::vector<HandlerCost>& lastHandlerCosts() const { return m_frameCosts; }
+    static bool handlerProfileEnabled();
     size_t scriptCount() const { return m_scripts.size(); }
     size_t failedCount() const;
     const std::filesystem::path& dir() const { return m_dir; }
@@ -169,6 +178,8 @@ private:
     // ERUPTION_TEST_SCRIPT_PROFILE: arquivo -> (ms somados, chamada mais longa).
     std::unordered_map<std::string, std::pair<double, double>> m_profile;
     std::chrono::steady_clock::time_point m_profileSince{};
+    std::vector<HandlerCost> m_frameCosts; // do ultimo update(), por handler
+    std::string m_profLabel;               // handler da chamada em curso (so' com o perfil ligado)
     friend class ScriptDebugger;
     std::unique_ptr<ScriptDebugger> m_debugger;
     struct Script {
@@ -202,6 +213,7 @@ private:
     bool load(Script& s, bool keepState);
     bool call(Script& s, const char* fn, int nargs);
     void profileCall(const Script& s, double ms);
+    void setProfLabel(const Script& s, const std::string& what);
     void flushProfile();
     bool callRef(Script& s, int fnRef, int nargs);
     void startScript(Script& s);

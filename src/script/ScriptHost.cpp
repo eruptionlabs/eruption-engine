@@ -284,6 +284,7 @@ void ScriptHost::updateBehaviors(float dt) {
             if (Script* again = scriptByPath(m_behaviors[k].script)) {
                 scriptPushObject(L, m_behaviors[k].object);
                 lua_pushnumber(L, dt);
+                if (handlerProfileEnabled()) setProfLabel(*again, "object.update " + m_behaviors[k].script.filename().string());
                 call(*again, "update", 2);
             }
         }
@@ -489,8 +490,10 @@ bool ScriptHost::callRef(Script& s, int fnRef, int nargs) {
 bool ScriptHost::call(Script& s, const char* fn, int nargs) {
     if (s.moduleRef < 0 || s.failed) {
         lua_pop(L, nargs);
+        m_profLabel.clear();
         return false;
     }
+    if (handlerProfileEnabled() && m_profLabel.empty()) setProfLabel(s, fn);
     lua_getref(L, s.moduleRef);
     lua_getfield(L, -1, fn);
     lua_remove(L, -2);
@@ -620,8 +623,30 @@ void ScriptHost::start() {
     }
 }
 
+// Nome do handler no perfil: tipo, periodo/argumento e posicao no arquivo.
+static std::string handlerLabel(const ScriptHost::Handler& h, size_t index) {
+    using K = ScriptHost::EventKind;
+    char buf[96];
+    switch (h.kind) {
+        case K::Update: std::snprintf(buf, sizeof(buf), "on.update #%zu", index); break;
+        case K::Every: std::snprintf(buf, sizeof(buf), "on.every %.3gs #%zu", h.number, index); break;
+        case K::Key: std::snprintf(buf, sizeof(buf), "on.key %.40s #%zu", h.text.c_str(), index); break;
+        case K::Near: std::snprintf(buf, sizeof(buf), "on.near %.40s #%zu", h.text.c_str(), index); break;
+        case K::Hour: std::snprintf(buf, sizeof(buf), "on.hour %.3g #%zu", h.number, index); break;
+        case K::Enter: std::snprintf(buf, sizeof(buf), "on.enter %.40s #%zu", h.text.c_str(), index); break;
+        case K::Leave: std::snprintf(buf, sizeof(buf), "on.leave %.40s #%zu", h.text.c_str(), index); break;
+        case K::Net: std::snprintf(buf, sizeof(buf), "on.net %.40s #%zu", h.text.c_str(), index); break;
+        default: std::snprintf(buf, sizeof(buf), "on.start #%zu", index); break;
+    }
+    return buf;
+}
+
 void ScriptHost::dispatch(Script& s, float dt, float prevHour, float hour) {
     PlayerController* player = m_engine->m_playerController;
+    const auto run = [&](Script& sc, Handler& h, int nargs) {
+        if (handlerProfileEnabled()) setProfLabel(sc, handlerLabel(h, static_cast<size_t>(&h - sc.handlers.data())));
+        return callRef(sc, h.fnRef, nargs);
+    };
     for (auto& h : s.handlers) {
         if (s.failed) return;
         switch (h.kind) {
@@ -630,36 +655,36 @@ void ScriptHost::dispatch(Script& s, float dt, float prevHour, float hour) {
                 break;
             case EventKind::Update:
                 lua_pushnumber(L, dt);
-                callRef(s, h.fnRef, 1);
+                run(s, h, 1);
                 break;
             case EventKind::Every:
                 h.timer += dt;
                 if (h.number > 0.0 && h.timer >= h.number) {
                     h.timer -= h.number * std::floor(h.timer / h.number);
-                    callRef(s, h.fnRef, 0);
+                    run(s, h, 0);
                 }
                 break;
             case EventKind::Key:
-                if (Input::isKeyPressed(scriptKeyFromName(h.text.c_str()))) callRef(s, h.fnRef, 0);
+                if (Input::isKeyPressed(scriptKeyFromName(h.text.c_str()))) run(s, h, 0);
                 break;
             case EventKind::Near: {
                 const int idx = scriptFindModel(h.text);
                 if (!player || idx < 0) break;
                 const ModelInstance& inst = m_engine->modelRenderer().getInstances()[static_cast<size_t>(idx)];
                 const bool near = distanceToBox(player->pos(), inst.worldAabbMin, inst.worldAabbMax) <= h.number;
-                if (near && !h.flag) callRef(s, h.fnRef, 0);
+                if (near && !h.flag) run(s, h, 0);
                 h.flag = near;
                 break;
             }
             case EventKind::Hour:
-                if (crossedHour(prevHour, hour, static_cast<float>(h.number))) callRef(s, h.fnRef, 0);
+                if (crossedHour(prevHour, hour, static_cast<float>(h.number))) run(s, h, 0);
                 break;
             case EventKind::Enter:
             case EventKind::Leave: {
                 // Área de gatilho: o pé do jogador dentro da caixa.
                 const int a = m_engine->findArea(h.text);
                 const bool inside = player && a >= 0 && m_engine->areas()[static_cast<size_t>(a)].contains(player->pos());
-                if (h.kind == EventKind::Enter ? (inside && !h.flag) : (!inside && h.flag)) callRef(s, h.fnRef, 0);
+                if (h.kind == EventKind::Enter ? (inside && !h.flag) : (!inside && h.flag)) run(s, h, 0);
                 h.flag = inside;
                 break;
             }
@@ -679,6 +704,8 @@ void ScriptHost::dispatchNet(float dt) {
             for (auto& h : s.handlers) {
                 if (s.failed) break;
                 if (h.kind != EventKind::Net || h.text != key) continue;
+                if (handlerProfileEnabled())
+                    setProfLabel(s, handlerLabel(h, static_cast<size_t>(&h - s.handlers.data())));
                 callRef(s, h.fnRef, scriptPushNetEvent(L, e));
             }
         }
@@ -689,12 +716,36 @@ void ScriptHost::dispatchNet(float dt) {
 // arquivo de script; a cada segundo o log lista os mais caros (soma e a
 // chamada mais longa). Separa o custo do jogo (scripts) do custo do motor.
 static const bool kScriptProfile = std::getenv("ERUPTION_TEST_SCRIPT_PROFILE") != nullptr;
+// ERUPTION_TELEMETRY_SCRIPTS=1: so' o custo por handler na telemetria
+// (cpu_script), sem o log de 1 s do perfil acima.
+static const bool kHandlerTelemetry = std::getenv("ERUPTION_TELEMETRY_SCRIPTS") != nullptr;
+
+bool ScriptHost::handlerProfileEnabled() { return kScriptProfile || kHandlerTelemetry; }
+
+void ScriptHost::setProfLabel(const Script& s, const std::string& what) {
+    if (!handlerProfileEnabled()) return;
+    m_profLabel = s.path.filename().string() + ": " + what;
+}
 
 void ScriptHost::profileCall(const Script& s, double ms) {
-    if (!kScriptProfile) return;
-    auto& p = m_profile[s.path.filename().string()];
-    p.first += ms;
-    p.second = std::max(p.second, ms);
+    if (!handlerProfileEnabled()) return;
+    if (m_profLabel.empty()) m_profLabel = s.path.filename().string() + ": ?";
+    if (kScriptProfile) {
+        auto& p = m_profile[m_profLabel];
+        p.first += ms;
+        p.second = std::max(p.second, ms);
+    }
+    // Poucos handlers por quadro: busca linear, sem alocar depois do 1o quadro.
+    for (HandlerCost& c : m_frameCosts) {
+        if (c.name == m_profLabel) {
+            c.ms += ms;
+            ++c.calls;
+            m_profLabel.clear();
+            return;
+        }
+    }
+    m_frameCosts.push_back({m_profLabel, ms, 1});
+    m_profLabel.clear();
 }
 
 void ScriptHost::flushProfile() {
@@ -721,6 +772,7 @@ void ScriptHost::update(float dt) {
     if (!L || !m_running) return;
     flushProfile();
     const auto t0 = std::chrono::steady_clock::now();
+    for (HandlerCost& c : m_frameCosts) { c.ms = 0.0; c.calls = 0; } // so' o quadro corrente
     EventLog::instance().advance(dt); // t e f dos eventos deste quadro
     updateTweens(dt);
     for (auto it = m_messages.begin(); it != m_messages.end();) {
@@ -733,6 +785,7 @@ void ScriptHost::update(float dt) {
     dispatchNet(dt);
     for (auto& s : m_scripts) {
         lua_pushnumber(L, dt);
+        setProfLabel(s, "on_update");
         call(s, "on_update", 1);
         dispatch(s, dt, m_prevHour, hour);
     }

@@ -88,6 +88,16 @@ public:
         uint32_t lodSwaps = 0, popIn = 0, popOut = 0;
         uint32_t popInWhy[4] = {}; // frustum, desligada, pequena, raleamento
         uint32_t popInNew = 0;     // instancia criada neste quadro
+        // Custo de Luau por handler neste quadro (ERUPTION_TELEMETRY_SCRIPTS=1),
+        // so' os mais caros; scriptCalls/scriptMs somam todos.
+        struct ScriptCost {
+            std::string name;
+            float ms = 0.0f;
+            uint32_t calls = 0;
+        };
+        std::vector<ScriptCost> scripts;
+        uint32_t scriptCalls = 0;
+        float scriptMs = 0.0f;
         // ms por fase dentro de render(), deste frame
         std::vector<std::pair<const char*, float>> cpuPhases;
         bool loading = false;
