@@ -1030,6 +1030,16 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
 void Engine::flushPendingUploads() {
     // Texturas embutidas pendentes
     if (!s_pendingUploads.empty()) {
+        // Tamanho do envio (um so' para todas as texturas embutidas pendentes):
+        // um envio que o driver recusa por memoria diz aqui o quanto pedia.
+        double uploadMb = 0.0;
+        for (const auto& u : s_pendingUploads) {
+            uint64_t bytes = 0;
+            for (uint32_t s : u.mipSizes) bytes += s;
+            if (bytes == 0) bytes = static_cast<uint64_t>(u.width) * u.height * 4;
+            uploadMb += static_cast<double>(bytes) / (1024.0 * 1024.0);
+        }
+        ERUPTION_LOG_WARN("[UPLOAD] %zu textura(s) embutida(s), %.1f MB, num envio", s_pendingUploads.size(), uploadMb);
         m_vulkan.immediateSubmit([&](VkCommandBuffer cmd) {
             for (auto& u : s_pendingUploads) {
                 m_vulkan.cmdImageBarrier(cmd, u.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,

@@ -159,6 +159,7 @@ private:
     uint32_t m_mipLevels = 1;
     LayerArray m_array;  // camadas [0, teto)
     LayerArray m_arrayB; // camadas alem do teto de m_array
+    bool m_bDisabled = false; // ERUPTION_DISABLE_LAYER_B (diagnostico): sem o 2o array
     VkSampler m_linearSampler = VK_NULL_HANDLE;
     VkSampler m_nearestSampler = VK_NULL_HANDLE;
     VkImageView m_defaultView = VK_NULL_HANDLE;

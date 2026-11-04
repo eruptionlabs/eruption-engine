@@ -603,9 +603,13 @@ void VulkanContext::immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& f
     vkCreateFence(m_device, &fenceInfo, nullptr, &fence);
 
     const VkResult submitted = vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence);
-    if (submitted != VK_SUCCESS)
+    if (submitted != VK_SUCCESS) {
         ERUPTION_LOG_ERROR("immediateSubmit: vkQueueSubmit failed (%d %s) chamado de %s:%d (fase: %s)", static_cast<int>(submitted),
                            vkResultName(submitted), baseName(file), line, m_phase.load());
+        // Uma vez por processo: o que o motor tinha alocado quando o driver recusou.
+        static std::atomic<bool> s_summarized{false};
+        if (!s_summarized.exchange(true)) logAllocationSummary("submit falhou");
+    }
     // GPU travada nao pode virar espera eterna sem rastro (celular): avisa a
     // cada 10 s e continua esperando.
     while (submitted == VK_SUCCESS) {
