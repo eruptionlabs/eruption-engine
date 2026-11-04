@@ -23,6 +23,10 @@ public:
         size_t rssAnonBytes = 0, rssFileBytes = 0, rssShmemBytes = 0, swapBytes = 0;
         size_t systemAvailableBytes = 0, systemSwapFreeBytes = 0;
         float psiSomeAvg10 = -1.0f, psiFullAvg10 = -1.0f;
+        // Contadores acumulados de /proc/vmstat (o aparelho sem PSI): faltas de
+        // pagina graves (leram do disco/swap) e paginas trocadas para dentro e
+        // para fora do swap. A diferenca entre dois instantes e' o reclaim.
+        uint64_t vmPgMajFault = 0, vmPswpIn = 0, vmPswpOut = 0;
     };
     static const MemoryDetail& memoryDetail();
 

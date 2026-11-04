@@ -105,6 +105,18 @@ void SystemMonitor::readMemory() {
         fclose(f);
     }
 
+    f = fopen("/proc/vmstat", "r");
+    if (f) {
+        char line[128];
+        while (fgets(line, sizeof(line), f)) {
+            unsigned long long v = 0;
+            if (strncmp(line, "pgmajfault ", 11) == 0 && sscanf(line, "pgmajfault %llu", &v) == 1) s_memoryDetail.vmPgMajFault = v;
+            else if (strncmp(line, "pswpin ", 7) == 0 && sscanf(line, "pswpin %llu", &v) == 1) s_memoryDetail.vmPswpIn = v;
+            else if (strncmp(line, "pswpout ", 8) == 0 && sscanf(line, "pswpout %llu", &v) == 1) s_memoryDetail.vmPswpOut = v;
+        }
+        fclose(f);
+    }
+
     // Pressao de memoria (Linux 4.20+, ligada no Android): "some avg10=" e
     // "full avg10=" em %, a fracao do tempo das ultimas 10 s com tarefas
     // paradas esperando memoria. A pressao alta e' o aparelho em reclaim.
