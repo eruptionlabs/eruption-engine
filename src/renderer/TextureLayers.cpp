@@ -550,12 +550,21 @@ void TextureLayers::runCopies(size_t maxCopies) {
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     ERUPTION_LOG_WARN("Texture layers: %zu copies in %.1f ms (%u layers used, %zu waiting)", targets.size(), ms,
                       m_array.next, m_jobs.size());
+    std::lock_guard<std::mutex> copiedLock(m_copiedMutex);
     for (const Target& t : targets) {
         if (t.slot == kNone) continue;
         const uint32_t kind = (t.job.srgb ? 1u : 0u) | (t.job.nearest ? 2u : 0u);
         m_places[t.slot] = Place{kind, t.layer};
         setTable(t.slot, kind, t.layer);
+        m_copiedStatic.push_back(t.slot);
     }
+}
+
+std::vector<uint32_t> TextureLayers::takeCopiedStatic() {
+    std::lock_guard<std::mutex> lock(m_copiedMutex);
+    std::vector<uint32_t> out;
+    out.swap(m_copiedStatic);
+    return out;
 }
 
 void TextureLayers::writeArrayBindings(VkDescriptorSet set) {

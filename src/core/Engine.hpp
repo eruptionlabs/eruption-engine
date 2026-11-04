@@ -1260,6 +1260,11 @@ private:
     float advanceFrame();
     void populateMaps();
     void flushPendingUploads();
+    // GPU sem bindless: libera as imagens de origem das texturas de modelo que o
+    // array de camadas ja' copiou (Textures.cpp). Contadores na telemetria.
+    void releaseCopiedTextureSources();
+    uint32_t m_texSourcesReleased = 0;
+    double m_texSourcesReleasedMb = 0.0;
     void render();
     // Calibra a escala da cena para target_fps (graphics.json) nos primeiros
     // segundos de cada mapa: uns poucos ajustes, sem oscilar durante o jogo.
@@ -1772,6 +1777,7 @@ private:
             uint32_t lastSeenWarpId;
         };
         std::unordered_map<std::string, CacheEntry> modelTextures;
+        std::unordered_map<uint32_t, std::string> slotKey; // slot -> chave em modelTextures (detachCopiedSource)
         std::unordered_map<std::string, TerrainCacheEntry> terrainTextures;
         std::unordered_map<std::string, MeshCacheEntry> modelMeshes;
         uint32_t currentWarpId = 0;
@@ -1801,6 +1807,41 @@ private:
         void addModelTexture(const std::string& path, const ModelTextureGPU& tex) {
             std::lock_guard<std::mutex> lock(mutex);
             modelTextures[path] = {tex, currentWarpId};
+            if (!tex.isExternal) {
+                if (tex.bindlessSlot && tex.image != VK_NULL_HANDLE) slotKey[tex.bindlessSlot] = path;
+                if (tex.pbrSlot && tex.pbrImage != VK_NULL_HANDLE) slotKey[tex.pbrSlot] = path;
+                if (tex.normalSlot && tex.normalImage != VK_NULL_HANDLE) slotKey[tex.normalSlot] = path;
+            }
+        }
+        // Sem o array de camadas (GPU sem bindless) a textura vive duas vezes: a
+        // imagem de origem e a camada. Depois da copia tira do cache a imagem de
+        // origem do `slot` (a entrada fica, so' sem ela: o slot segue valendo);
+        // quem chama a destroi. false se o slot nao e' de uma textura de modelo
+        // do cache ou ela ja' foi liberada.
+        bool detachCopiedSource(uint32_t slot, VkImage& image, VmaAllocation& alloc, VkImageView& view) {
+            std::lock_guard<std::mutex> lock(mutex);
+            const auto key = slotKey.find(slot);
+            if (key == slotKey.end()) return false;
+            const auto it = modelTextures.find(key->second);
+            slotKey.erase(key);
+            if (it == modelTextures.end()) return false;
+            ModelTextureGPU& t = it->second.tex;
+            if (t.bindlessSlot == slot && t.image != VK_NULL_HANDLE) {
+                image = t.image; alloc = t.alloc; view = t.view;
+                t.image = VK_NULL_HANDLE; t.alloc = VK_NULL_HANDLE; t.view = VK_NULL_HANDLE;
+                return true;
+            }
+            if (t.pbrSlot == slot && t.pbrImage != VK_NULL_HANDLE) {
+                image = t.pbrImage; alloc = t.pbrAlloc; view = t.pbrView;
+                t.pbrImage = VK_NULL_HANDLE; t.pbrAlloc = VK_NULL_HANDLE; t.pbrView = VK_NULL_HANDLE;
+                return true;
+            }
+            if (t.normalSlot == slot && t.normalImage != VK_NULL_HANDLE) {
+                image = t.normalImage; alloc = t.normalAlloc; view = t.normalView;
+                t.normalImage = VK_NULL_HANDLE; t.normalAlloc = VK_NULL_HANDLE; t.normalView = VK_NULL_HANDLE;
+                return true;
+            }
+            return false;
         }
         bool hasTerrainTexture(const std::string& path) {
             std::lock_guard<std::mutex> lock(mutex);

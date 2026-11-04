@@ -276,6 +276,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_bindless.setLayerSizeRequest(
         static_cast<uint32_t>(std::max(0.0, presetNumber(graphicsPresetName(), "texture_layer_size", 0.0))));
     if (!m_bindless.init(&m_vulkan)) return false;
+    m_bindless.setAfterCopies([this] { releaseCopiedTextureSources(); });
     m_bindless.markNearestSampler(m_nearestSampler);
     ERUPTION_LOG_WARN("Resolucao de RENDER (G-buffer): %dx%d (%.2f Mpx)", width, height,
                       width * height / 1.0e6);
@@ -3024,6 +3025,9 @@ void Engine::recordTelemetry() {
     st.layersCapacity = layers.capacity;
     st.layersSide = layers.side;
     st.layersMb = layers.mb;
+    st.layersWaiting = layers.waiting;
+    st.texSourcesReleased = m_texSourcesReleased;
+    st.texSourcesReleasedMb = m_texSourcesReleasedMb;
     TelemetryExporter::recordFrame(st);
 }
 

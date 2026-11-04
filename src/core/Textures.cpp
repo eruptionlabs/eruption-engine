@@ -51,6 +51,44 @@ static int sourceTextureCap(const BindlessDescriptor& bindless, int cap) {
     return layer > 0 ? std::min(cap, int(layer)) : cap;
 }
 
+// Sem descriptor indexing cada textura de modelo existe duas vezes depois da
+// copia: a imagem de origem (que o cache guarda) e a camada do array. A copia e'
+// sincrona, entao a origem nao e' mais lida pela GPU; aqui ela e' destruida
+// (depois dos quadros em voo). Os quadros de sprite NAO passam por aqui: ficam
+// em LoadedSprite e a interface le' a vista deles direto.
+// ERUPTION_KEEP_TEXTURE_SOURCES=1 desliga (A/B).
+void Engine::releaseCopiedTextureSources() {
+    static const bool kKeep = std::getenv("ERUPTION_KEEP_TEXTURE_SOURCES") != nullptr;
+    if (kKeep || m_bindless.layerSize() == 0) return;
+    const std::vector<uint32_t> slots = m_bindless.takeCopiedLayerSlots();
+    if (slots.empty()) return;
+    struct Dead {
+        VkImage image;
+        VmaAllocation alloc;
+        VkImageView view;
+    };
+    std::vector<Dead> dead;
+    VkDeviceSize bytes = 0;
+    for (uint32_t slot : slots) {
+        Dead d{};
+        if (!m_assetCache.detachCopiedSource(slot, d.image, d.alloc, d.view)) continue;
+        bytes += m_vulkan.allocationSize(d.alloc);
+        dead.push_back(d);
+    }
+    if (dead.empty()) return;
+    PROFILE_VRAM_FREE(ProfilerCategory::Textures, bytes);
+    m_texSourcesReleased += static_cast<uint32_t>(dead.size());
+    m_texSourcesReleasedMb += static_cast<double>(bytes) / (1024.0 * 1024.0);
+    VkDevice dev = m_vulkan.device();
+    VmaAllocator allocator = m_vulkan.allocator();
+    m_vulkan.deferSlotImageCleanup([dev, allocator, dead] {
+        for (const Dead& d : dead) {
+            if (d.view != VK_NULL_HANDLE) vkDestroyImageView(dev, d.view, nullptr);
+            if (d.image != VK_NULL_HANDLE) vmaDestroyImage(allocator, d.image, d.alloc);
+        }
+    });
+}
+
 bool Engine::createTextureFromPixels(const unsigned char* pixels, int w, int h, Engine::TextureResource& out) {
     out.width = w;
     out.height = h;
