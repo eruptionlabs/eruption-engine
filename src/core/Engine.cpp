@@ -2993,6 +2993,20 @@ void Engine::recordTelemetry() {
     st.cpuRenderMs = m_cpuRenderMs;
     st.cpuBeginWaitMs = m_cpuBeginFrameMs;
     st.cpuTailMs = m_cpuTailMs;
+    if (ScriptHost::handlerProfileEnabled()) {
+        if (const ScriptHost* sh = ScriptHost::current()) {
+            for (const auto& c : sh->lastHandlerCosts()) {
+                if (c.calls == 0) continue;
+                st.scriptCalls += c.calls;
+                st.scriptMs += static_cast<float>(c.ms);
+                st.scripts.push_back({c.name, static_cast<float>(c.ms), c.calls});
+            }
+            // Os 12 mais caros bastam para achar o culpado e mantem a linha curta.
+            std::sort(st.scripts.begin(), st.scripts.end(),
+                      [](const auto& a, const auto& b) { return a.ms > b.ms; });
+            if (st.scripts.size() > 12) st.scripts.resize(12);
+        }
+    }
     st.presentMs = m_vulkan.lastPresentMs();
     st.instances = static_cast<uint32_t>(m_modelRenderer.getInstances().size());
     st.meshes = static_cast<uint32_t>(m_modelRenderer.getMeshes().size());

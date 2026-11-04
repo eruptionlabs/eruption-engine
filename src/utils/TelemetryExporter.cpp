@@ -213,6 +213,11 @@ void TelemetryExporter::recordFrame(const FrameStats& st) {
         {"render_ms", st.cpuRenderMs}, {"begin_wait_ms", st.cpuBeginWaitMs},
         {"tail_ms", st.cpuTailMs},
     };
+    if (!st.scripts.empty() || st.scriptCalls > 0) {
+        nlohmann::json cs = {{"_total_ms", st.scriptMs}, {"_calls", st.scriptCalls}};
+        for (const auto& c : st.scripts) cs[c.name] = {{"ms", c.ms}, {"calls", c.calls}};
+        j["cpu_script"] = cs;
+    }
     nlohmann::json cpuCat;
     for (uint32_t c = 0; c < static_cast<uint32_t>(ProfilerCategory::Count); ++c) {
         const auto cat = static_cast<ProfilerCategory>(c);
