@@ -549,6 +549,32 @@ else()
     message(WARNING "Encoder BC em runtime: bc7enc_rdo AUSENTE - texturas embutidas sobem RGBA8 com downscale")
 endif()
 
+# Encoders de celular (spec 51): ASTC pelo astcenc 5.2.0 (Arm, Apache-2.0) e
+# ETC2/EAC pelo etcpak (Bartosz Taudul, BSD-3), vendorizados so' com o nucleo
+# (sem a linha de comando). Sem eles o celular continua no RGBA8 de sempre.
+# A ISA (SSE/AVX2/NEON) sai das flags do compilador. O web nao amostra formato
+# de bloco nenhum (VulkanNull), entao fica de fora la'.
+set(ERUPTION_HAVE_ASTC_ENCODER OFF)
+set(ERUPTION_HAVE_ETC_ENCODER OFF)
+set(ERUPTION_ASTCENC_SOURCES "")
+set(ERUPTION_ETCPAK_SOURCES "")
+if(NOT EMSCRIPTEN AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/astcenc/astcenc.h")
+    file(GLOB ERUPTION_ASTCENC_SOURCES "${CMAKE_SOURCE_DIR}/third_party/astcenc/astcenc_*.cpp")
+    list(APPEND SOURCES ${ERUPTION_ASTCENC_SOURCES})
+    set(ERUPTION_HAVE_ASTC_ENCODER ON)
+endif()
+if(NOT EMSCRIPTEN AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/etcpak/ProcessRGB.hpp")
+    set(ERUPTION_ETCPAK_SOURCES
+        "${CMAKE_SOURCE_DIR}/third_party/etcpak/ProcessRGB.cpp"
+        "${CMAKE_SOURCE_DIR}/third_party/etcpak/Tables.cpp"
+        "${CMAKE_SOURCE_DIR}/third_party/etcpak/Dither.cpp"
+        "${CMAKE_SOURCE_DIR}/third_party/etcpak/Decode.cpp"
+        "${CMAKE_SOURCE_DIR}/third_party/etcpak/bcdec.c")
+    list(APPEND SOURCES ${ERUPTION_ETCPAK_SOURCES})
+    set(ERUPTION_HAVE_ETC_ENCODER ON)
+endif()
+message(STATUS "Encoders de celular: ASTC=${ERUPTION_HAVE_ASTC_ENCODER} ETC2=${ERUPTION_HAVE_ETC_ENCODER}")
+
 # miniaudio (David Reid, MIT-0 / dominio publico): som do jogo, um arquivo so'.
 # Mesmo backend em Linux, Windows, Android e iOS. A implementacao entra em
 # src/audio/MiniaudioImpl.cpp, compilada sem avisos (codigo de terceiros).
@@ -722,6 +748,14 @@ endif()
 if(ERUPTION_HAVE_BC_ENCODER)
     target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_BC_ENCODER=1)
 endif()
+if(ERUPTION_HAVE_ASTC_ENCODER)
+    target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_ASTC_ENCODER=1)
+    target_include_directories(eruption-engine SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/third_party/astcenc")
+endif()
+if(ERUPTION_HAVE_ETC_ENCODER)
+    target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_ETC_ENCODER=1)
+    target_include_directories(eruption-engine SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/third_party/etcpak")
+endif()
 if(ERUPTION_HAVE_MESHOPT)
     target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_MESHOPT=1)
 endif()
@@ -892,6 +926,11 @@ if(NOT ANDROID AND NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD
     endif()
     if(NOT ERUPTION_CPU_LEVEL STREQUAL "portable")
         target_compile_definitions(eruption-engine PRIVATE GLM_FORCE_AVX2)
+    endif()
+    # etcpak usa _tzcnt_u32 (BMI1) no caminho AVX2; o nivel "dev" liga AVX2 sem
+    # BMI. Toda CPU com AVX2 tem BMI1, entao so' acende o que ja' existe.
+    if(ERUPTION_CPU_LEVEL STREQUAL "dev" AND ERUPTION_ETCPAK_SOURCES)
+        set_source_files_properties(${ERUPTION_ETCPAK_SOURCES} PROPERTIES COMPILE_OPTIONS "-w;-mbmi")
     endif()
 endif()
 message(STATUS "CPU: ${ERUPTION_CPU_LEVEL} (${ERUPTION_CPU_FLAGS})")
@@ -1205,6 +1244,29 @@ if(ERUPTION_BUILD_TESTS)
         target_compile_options(eruption-bandwidth-tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME BandwidthMeterTests COMMAND eruption-bandwidth-tests)
+
+    # Texturas comprimidas (spec 51): politica de formato e codificadores com
+    # ida-e-volta na CPU (BC pelo bc7enc_rdo, ASTC pelo astcenc, ETC2 pelo etcpak).
+    set(ERUPTION_TEXCODEC_TEST_SOURCES tests/test_texture_codec.cpp src/utils/TextureFormatPolicy.cpp
+        src/utils/TextureEncoder.cpp ${ERUPTION_ASTCENC_SOURCES} ${ERUPTION_ETCPAK_SOURCES})
+    if(ERUPTION_HAVE_BC_ENCODER)
+        list(APPEND ERUPTION_TEXCODEC_TEST_SOURCES "${ERUPTION_BC7ENC_DIR}/rgbcx.cpp" "${ERUPTION_BC7ENC_DIR}/bc7enc.cpp"
+             "${ERUPTION_BC7ENC_DIR}/bc7decomp.cpp")
+    endif()
+    add_executable(eruption-texture-codec-tests ${ERUPTION_TEXCODEC_TEST_SOURCES})
+    target_include_directories(eruption-texture-codec-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(eruption-texture-codec-tests SYSTEM PRIVATE ${ERUPTION_BC7ENC_DIR}
+                               "${CMAKE_SOURCE_DIR}/third_party/astcenc" "${CMAKE_SOURCE_DIR}/third_party/etcpak")
+    target_link_libraries(eruption-texture-codec-tests PRIVATE Vulkan::Vulkan Threads::Threads)
+    foreach(_def BC ASTC ETC)
+        if(ERUPTION_HAVE_${_def}_ENCODER)
+            target_compile_definitions(eruption-texture-codec-tests PRIVATE ERUPTION_HAVE_${_def}_ENCODER=1)
+        endif()
+    endforeach()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-texture-codec-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME TextureCodecTests COMMAND eruption-texture-codec-tests)
 endif()
 
 # Generate Linux .desktop shortcut

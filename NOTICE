@@ -29,6 +29,11 @@ Vendorizadas em third_party/:
 - stb_image / stb_image_write (https://github.com/nothings/stb) — Public Domain / MIT License
 - AMD FidelityFX Super Resolution 3.1 upscaler, so' headers de GPU e passes GLSL
   (https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK, tag v1.1.4) — MIT License
+- astc-encoder (https://github.com/ARM-software/astc-encoder), versao 5.2.0,
+  commit 2319d9c4, so' o nucleo da biblioteca, em third_party/astcenc/ — Apache License 2.0
+- etcpak (https://github.com/wolfpld/etcpak), commit 3d716e15, so' os codificadores
+  ETC2/EAC e o decodificador, em third_party/etcpak/ — BSD 3-Clause License;
+  inclui bcdec.h (https://github.com/iOrange/bcdec) — MIT License / Unlicense
 
 Vendorizadas em compat/ (camada de compatibilidade de plugins, opcional,
 -DERUPTION_MODULE_COMPAT=ON):
