@@ -21,6 +21,7 @@
 #include <stb_image.h>
 #include "renderer/LodSystemBridge.hpp"
 #include "utils/BcCompressor.hpp"
+#include "utils/TextureFormatPolicy.hpp"
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/skymap/SkySystem.hpp"
@@ -807,6 +808,32 @@ bool Engine::init(int width, int height, const std::string& title) {
         setBcFormatSupport(sup);
         ERUPTION_LOG_WARN("[GRAPHICS] compressao de bloco: BC1=%d BC3=%d BC5=%d BC7=%d",
                           sup.bc1, sup.bc3, sup.bc5, sup.bc7);
+        // Spec 51: o resto da familia de bloco (BC4, ASTC LDR, ETC2/EAC). Amostrar
+        // com filtro linear e' o minimo: e' assim que todo material e' lido.
+        auto probeLinear = [&](VkFormat f) {
+            VkFormatProperties props{};
+            vkGetPhysicalDeviceFormatProperties(m_vulkan.physicalDevice(), f, &props);
+            const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                              VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+            return (props.optimalTilingFeatures & need) == need;
+        };
+        texfmt::Caps caps;
+        caps.bc1 = sup.bc1;
+        caps.bc3 = sup.bc3;
+        caps.bc5 = sup.bc5;
+        caps.bc7 = sup.bc7;
+        caps.bc4 = probeLinear(VK_FORMAT_BC4_UNORM_BLOCK) && (sup.bc1 || sup.bc3 || sup.bc5 || sup.bc7);
+        caps.astc4x4 = probeLinear(VK_FORMAT_ASTC_4x4_UNORM_BLOCK);
+        caps.astc6x6 = probeLinear(VK_FORMAT_ASTC_6x6_UNORM_BLOCK);
+        caps.etc2Rgb = probeLinear(VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK);
+        caps.etc2Rgba = probeLinear(VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK);
+        caps.eacR11 = probeLinear(VK_FORMAT_EAC_R11_UNORM_BLOCK);
+        caps.eacRg11 = probeLinear(VK_FORMAT_EAC_R11G11_UNORM_BLOCK);
+        // ERUPTION_TEST_TEXTURE_CAPS=astc,etc2,...: restringe ao que a lista diz
+        // (simula a GPU de um aparelho; nunca liga o que o driver nao tem).
+        if (const char* e = std::getenv("ERUPTION_TEST_TEXTURE_CAPS")) caps = texfmt::intersect(caps, texfmt::parseCaps(e));
+        texfmt::setDeviceCaps(caps);
+        ERUPTION_LOG_WARN("[TEXCOMP] formatos de bloco amostraveis: %s", texfmt::describeCaps(caps).c_str());
     }
     applyGraphicsPreset();
     // Respect postprocess.json for DoF/Tilt-Shift; users can toggle it via the
@@ -2792,6 +2819,38 @@ void Engine::applyGraphicsPreset() {
     // parte dos pixels do mapa; o teto é o botão mais direto de VRAM. Vale
     // para as texturas EMBUTIDAS do GLB (é onde estão os sheets grandes).
     m_textureMaxSize = std::clamp<int>(p.value("texture_max_size", 1024), 128, 4096);
+    // Compressao de textura (spec 51): familia e opcoes por preset, sobre a
+    // capacidade sondada no init. ERUPTION_TEXTURE_COMPRESSION=auto|off|bc|astc|etc2
+    // sobrepoe (A/B na bancada); ERUPTION_NO_TEXTURE_BC=1 continua sendo "off".
+    // Trocar de modo nao reassa o que ja' foi assado: cada familia tem o seu pacote.
+    {
+        auto str = [&p](const char* k, const char* def) {
+            const auto it = p.find(k);
+            return (it != p.end() && it->is_string()) ? it->get<std::string>() : std::string(def);
+        };
+        auto flag = [&p](const char* k) {
+            const auto it = p.find(k);
+            return it != p.end() && (it->is_boolean() ? it->get<bool>() : (it->is_number() && it->get<double>() != 0.0));
+        };
+        // Padrao "bc": o comportamento de antes (BC onde a GPU tem, senao RGBA8).
+        // "auto" acende ASTC/ETC2 na GPU sem BC (celular); ver docs/texturas_comprimidas.md.
+        texfmt::Options o;
+        o.mode = texfmt::parseMode(str("texture_compression", "bc"), texfmt::Mode::Bc);
+        o.albedoBc7 = flag("texture_albedo_bc7");
+        o.alphaBc7 = flag("texture_alpha_bc7");
+        o.astcAlbedo6x6 = flag("texture_astc_albedo_6x6");
+        if (const char* e = std::getenv("ERUPTION_TEXTURE_COMPRESSION")) o.mode = texfmt::parseMode(e, o.mode);
+        if (const char* e = std::getenv("ERUPTION_NO_TEXTURE_BC"); e && e[0] == '1') o.mode = texfmt::Mode::Off;
+        texfmt::setOptions(o);
+        const texfmt::Caps caps = texfmt::deviceCaps();
+        ERUPTION_LOG_WARN("[TEXCOMP] modo %s -> familia %s: albedo %s, albedo_alfa %s, normal %s, dados %s%s",
+                          texfmt::modeName(o.mode), texfmt::modeName(texfmt::family(caps, o)),
+                          texfmt::formatTag(texfmt::choose(texfmt::Class::AlbedoOpaque, caps, o)),
+                          texfmt::formatTag(texfmt::choose(texfmt::Class::AlbedoAlpha, caps, o)),
+                          texfmt::formatTag(texfmt::choose(texfmt::Class::Normal, caps, o)),
+                          texfmt::formatTag(texfmt::choose(texfmt::Class::Data4, caps, o)),
+                          texfmt::classicActive() ? " (pacote BC classico)" : "");
+    }
     // Tesselacao da banda perto: o preset so' pode vetar (os niveis vem da
     // configuracao das normais). Desligada nos degraus baixo e medio do celular.
     m_tessPresetAllowed = p.value("tessellation", true);

@@ -1,4 +1,5 @@
 #include "utils/EmbeddedTextureBake.hpp"
+#include "utils/TextureFormatPolicy.hpp"
 #include "formats/GroundPack.hpp"
 
 #include "core/JobSystem.hpp"
@@ -89,6 +90,11 @@ uint32_t bcMask() {
 }
 
 uint32_t formatKey() {
+    // Pacote BC classico: a mesma chave de antes da spec 51 (os packs que ja'
+    // existem continuam valendo). Fora dele (ASTC/ETC2, BC7 no albedo): a chave
+    // da politica, com o bit alto para nunca coincidir com a classica.
+    if (!texfmt::classicActive())
+        return (texfmt::policyKey(texfmt::deviceCaps(), texfmt::options()) ^ (bcMask() * 0x9E3779B9u)) | 0x80000000u;
     const BcFormatSupport& s = bcFormatSupport();
     return (s.bc1 ? 1u : 0u) | (s.bc3 ? 2u : 0u) | (s.bc5 ? 4u : 0u) | (s.bc7 ? 8u : 0u)
          | (bcMask() << 4);
@@ -99,8 +105,12 @@ uint32_t formatKey() {
 // invalidava o cache e recomprimia TUDO - medido em parana_field: 23,8 s de
 // re-bake por troca de preset. Agora cada combinacao tem o seu arquivo, entao
 // alternar entre presets so' paga na primeira vez de cada um.
+// Fora do pacote BC classico o arquivo leva a etiqueta da politica (spec 51):
+// A/B entre formatos (bancada, ERUPTION_TEXTURE_COMPRESSION) nao reassa a cada troca.
 std::string packPathFor(const std::string& glbPath, uint32_t maxSize, bool synthPbr) {
-    return glbPath + "." + std::to_string(maxSize) + (synthPbr ? "s" : "n") + ".etexpack";
+    const std::string tag = texfmt::activeTag();
+    return glbPath + "." + std::to_string(maxSize) + (synthPbr ? "s" : "n") + (tag.empty() ? "" : "." + tag) +
+           ".etexpack";
 }
 // Caminho historico, sem sufixo. Continua sendo LIDO para nao invalidar packs
 // que ja' existem no disco de quem atualiza a engine - o cache e' artefato
@@ -179,6 +189,7 @@ bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
     if (!fs::exists(path, ec)) {
         // Compatibilidade: pack antigo sem sufixo. O cabecalho carrega
         // maxSize/synthPbr, entao a validacao abaixo rejeita se nao bater.
+        if (!texfmt::classicActive()) return false; // o legado e' sempre BC classico
         path = legacyPackPathFor(glbPath);
         if (!fs::exists(path, ec)) return false;
     }
@@ -222,6 +233,7 @@ bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
         if (mask & 1u) { if (!readEtexBytes(r.d, r.n, r.c, t.albedo)) return false; }
         if (mask & 2u) { if (!readEtexBytes(r.d, r.n, r.c, t.normal)) return false; }
         if (mask & 4u) { if (!readEtexBytes(r.d, r.n, r.c, t.mrahw)) return false; }
+        t.albedoOpaque = (mask & 8u) != 0;
         out.bytes += t.albedo.byteSize() + t.normal.byteSize() + t.mrahw.byteSize();
         out.textures.emplace(std::move(name), std::move(t));
     }
@@ -258,6 +270,9 @@ void writeCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
         if (t.albedo.valid()) mask |= 1u;
         if (t.normal.valid()) mask |= 2u;
         if (t.mrahw.valid()) mask |= 4u;
+        // Bit 8: albedo sem alfa. Leitor antigo ignora; o formato sozinho so'
+        // diz isso no BC1 (ASTC 4x4 e' o mesmo com e sem alfa).
+        if (t.albedo.valid() && t.albedoOpaque) mask |= 8u;
         put32(buf, mask);
         if (mask & 1u) appendEtexBytes(t.albedo, buf);
         if (mask & 2u) appendEtexBytes(t.normal, buf);
@@ -400,7 +415,7 @@ std::unordered_map<std::string, double> computeUpFacingArea(const ModelFile& mod
 
 bool readEmbeddedBakeCache(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr,
                            EmbeddedBakeResult& out) {
-    if (model.embeddedTextures.empty() || model.filePath.empty() || !bcFormatSupport().any()) return false;
+    if (model.embeddedTextures.empty() || model.filePath.empty() || !texfmt::anyActive()) return false;
     if (std::getenv("ERUPTION_TEST_DUMP_TEX_DIR")) return false; // o dump quer bake fresco
     return readCache(model.filePath, maxTextureSize, synthesizePbr, out);
 }
@@ -409,9 +424,8 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
                                         bool synthesizePbr) {
     EmbeddedBakeResult res;
     if (model.embeddedTextures.empty()) return res;
-    if (!bcFormatSupport().any()) {
-        // No block-compressed format on this GPU (e.g. a mobile/Android build):
-        // keep the plain RGBA8 path, nothing to bake.
+    if (!texfmt::anyActive()) {
+        // Nenhum formato de bloco nesta GPU (ou modo off): caminho RGBA8, nada a assar.
         return res;
     }
     bcCompressorInit();
@@ -527,6 +541,7 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
         }
         if (bcMask() & 1u) {
             baked[i].albedo = compressRgbaToEtex(pixels.data(), w, h, BcKind::Albedo, hasAlpha);
+            baked[i].albedoOpaque = !hasAlpha;
         }
 
         if (synthesizePbr) {
@@ -662,9 +677,10 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
     const double ms = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - t0).count();
     ERUPTION_LOG_WARN("EmbeddedTextureBake: comprimiu %zu/%zu texturas embutidas em %.0f ms "
-                      "(%.1f MB de payload BC, teto %u)",
+                      "(%.1f MB de payload, familia %s, teto %u)",
                       compressed.load(), n, ms,
-                      static_cast<double>(res.bytes) / (1024.0 * 1024.0), maxTextureSize);
+                      static_cast<double>(res.bytes) / (1024.0 * 1024.0),
+                      texfmt::modeName(texfmt::family(texfmt::deviceCaps(), texfmt::options())), maxTextureSize);
     if (synthesizePbr) logSynthesisLevels(statsBefore, synthesized.load(), synthMicros.load());
 
     if (!model.filePath.empty() && !res.textures.empty()) {
