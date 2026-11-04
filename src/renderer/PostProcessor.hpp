@@ -126,6 +126,13 @@ public:
         // com ceu ou fundo atras, neve de 4 px sumia.
         bool weatherAfterDoF = true;
 
+        // Clima parado (nenhum efeito de tela do overlay e nenhuma gota ou
+        // floco para desenhar): pula o "Weather Overlay", que so' copiaria a
+        // cena para m_weatherImage (1 leitura + 1 escrita de tela cheia).
+        // Preset "weather_skip_idle" / ERUPTION_WEATHER_SKIP_IDLE (=0 volta a
+        // copiar sempre). Ligado: a imagem sai identica.
+        bool weatherSkipIdle = true;
+
         // Weather debug: color rain particles by occlusion fate (DoF-style view).
         bool debugRainOcclusion = false;
         bool debugRainRegions = false;

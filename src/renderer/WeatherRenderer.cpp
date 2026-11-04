@@ -1766,13 +1766,10 @@ void WeatherRenderer::updateSplashesForWeather(const WeatherParams& weather, con
     }
 }
 
-void WeatherRenderer::render(VkCommandBuffer cmd,
-                             VkImageView inputColor,
-                             VkImageView outputColor,
-                             uint32_t width, uint32_t height,
-                             const WeatherParams& weather,
-                             const RenderParams& params) {
-    if (!m_ctx || m_tier == WeatherTier::Mobile) return;
+bool WeatherRenderer::prepare(const WeatherParams& weather, const RenderParams& params) {
+    m_prepared = true;
+    m_preparedDraws = false;
+    if (!m_ctx || m_tier == WeatherTier::Mobile) return false;
 
     // Camera-under-cloud cutoff: above the cloud layer no precipitation is
     // rendered, like being above the water surface.
@@ -1780,23 +1777,9 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
     float cameraUnderCloud = (params.debugRainRegions > 0.5f) ? 1.0f : (1.0f - glm::smoothstep(cloudBase - 15.0f,
                                                                                                cloudBase + 15.0f,
                                                                                                params.cameraPos.y));
-    if (cameraUnderCloud < 0.001f) return;
+    if (cameraUnderCloud < 0.001f) return false;
 
-    const float boxHeight = glm::max(m_cloudBaseHeight * 0.95f, 60.0f);
-
-    // ERUPTION_TEST_WR_CPU=1: onde a CPU gasta DENTRO do WeatherRenderer.
-    // Motivo: em fire_smoke a fase Post da CPU marcava 17,3 ms/frame (0,06 em
-    // clear) e o tempo de GPU nao explicava.
-    static const bool kWrCpu = std::getenv("ERUPTION_TEST_WR_CPU") != nullptr;
-    static double wAcc[6] = {0,0,0,0,0,0}; static int wN = 0;
-    auto wT = std::chrono::steady_clock::now();
-    auto wLap = [&](int k) {
-        if (!kWrCpu) return;
-        auto n = std::chrono::steady_clock::now();
-        wAcc[k] += std::chrono::duration<double, std::milli>(n - wT).count(); wT = n;
-    };
     updateParticlesForWeather(weather, params.cameraPos, params.invViewProj, params.deltaTime, params.debugRainRegions > 0.5f);
-    wLap(0);
     updateSplashesForWeather(weather, params.cameraPos,
                              (params.rainAnchor.y > -1.0e8f) ? params.rainAnchor : params.cameraPos,
                              params.deltaTime);
@@ -1813,8 +1796,38 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
                          params.cameraPos.y, m_suppressGlobalPrecip ? 1 : 0);
         }
     }
+    m_preparedDraws = m_particleCount != 0 || m_splashCount != 0;
+    return m_preparedDraws;
+}
+
+void WeatherRenderer::render(VkCommandBuffer cmd,
+                             VkImageView inputColor,
+                             VkImageView outputColor,
+                             uint32_t width, uint32_t height,
+                             const WeatherParams& weather,
+                             const RenderParams& params) {
+    if (!m_ctx || m_tier == WeatherTier::Mobile) { m_prepared = false; return; }
+
+    const float boxHeight = glm::max(m_cloudBaseHeight * 0.95f, 60.0f);
+
+    // ERUPTION_TEST_WR_CPU=1: onde a CPU gasta DENTRO do WeatherRenderer.
+    // Motivo: em fire_smoke a fase Post da CPU marcava 17,3 ms/frame (0,06 em
+    // clear) e o tempo de GPU nao explicava. A fatia 0 e' a simulacao inteira
+    // (prepare); a 1 fica zero.
+    static const bool kWrCpu = std::getenv("ERUPTION_TEST_WR_CPU") != nullptr;
+    static double wAcc[6] = {0,0,0,0,0,0}; static int wN = 0;
+    auto wT = std::chrono::steady_clock::now();
+    auto wLap = [&](int k) {
+        if (!kWrCpu) return;
+        auto n = std::chrono::steady_clock::now();
+        wAcc[k] += std::chrono::duration<double, std::milli>(n - wT).count(); wT = n;
+    };
+    // Simulacao do quadro: feita aqui, ou antes pelo PostProcessor (prepare).
+    const bool draws = m_prepared ? m_preparedDraws : prepare(weather, params);
+    m_prepared = false;
+    wLap(0);
     wLap(1);
-    if (m_particleCount == 0 && m_splashCount == 0) return;
+    if (!draws) return;
 
     // Assumes outputColor is already in COLOR_ATTACHMENT_OPTIMAL layout
     // and will be transitioned to SHADER_READ by the caller.

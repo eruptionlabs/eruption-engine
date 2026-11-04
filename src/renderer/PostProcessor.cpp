@@ -874,7 +874,36 @@ if (!m_ctx) return;
         lap(0);
     }
 
-    if (weatherActive) {
+    // CLIMA PARADO SEM COPIA (settings.weatherSkipIdle, ligado por padrao).
+    // Com todos os efeitos de tela do weather_overlay.frag abaixo dos gates do
+    // proprio shader (calor, miragem, arco-iris, aurora, meteoros, poeira,
+    // redemoinho, tornado, tinta, tempestade, raio, chuva/respingo; gota na
+    // lente esta' desligada no codigo), o overlay devolve a cena: e' so' uma
+    // copia de tela cheia. Pula-se quando, alem disso, as particulas que
+    // desenhariam POR CIMA da copia nao tem nada neste quadro (prepare()
+    // simula agora; o render() reaproveita). Debug de chuva sempre desenha.
+    const bool particlesAfterDof = settings.enableDoF && settings.weatherAfterDoF;
+    bool overlayIdle = false;
+    if (weatherActive && settings.weatherSkipIdle && !settings.debugRainRegions &&
+        !settings.debugSplashArea && !settings.debugRainOcclusion) {
+        const WeatherParams& w = *weather;
+        constexpr float kOff = 0.001f; // o mesmo corte dos gates do shader
+        overlayIdle = w.heatShimmer < kOff && w.mirageIntensity < kOff && w.rainbowIntensity < kOff &&
+                      w.auroraIntensity < kOff && w.shootingStarIntensity < kOff &&
+                      w.windDebrisIntensity < kOff && w.atmosphericTint < kOff &&
+                      w.dustDevilIntensity < kOff && w.tornadoIntensity < kOff &&
+                      w.stormTint < kOff && w.lightningFlash < kOff && w.rainIntensity < kOff &&
+                      w.effectiveRainSplashIntensity() * 0.5f < kOff;
+        if (overlayIdle && settings.weatherTier != WeatherTier::Mobile && !particlesAfterDof) {
+            m_weatherRenderer.setTier(settings.weatherTier);
+            m_weatherRenderer.setCloudAltitudeTexture(cloudAltitudeView, cloudAltitudeSampler);
+            m_weatherRenderer.setCloudAltitudeRange(cloudBottom, cloudTop);
+            m_weatherRenderer.setCloudScale(cloudScale);
+            if (m_weatherRenderer.prepare(*weather, wrParams)) overlayIdle = false;
+        }
+    }
+
+    if (weatherActive && !overlayIdle) {
         m_ctx->writeTimestamp(cmd, 32, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         bw::pushPass("Weather Overlay"); // medidor de banda (spec 50)
         // Upload CPU-simulated drops or dispatch GPU compute update
@@ -1273,7 +1302,6 @@ if (!m_ctx) return;
 
     // Weather particle pass (Medium/High tier) rendered over the overlay copy,
     // or over the DoF result (weatherAfterDoF) - same pass, other target.
-    const bool particlesAfterDof = settings.enableDoF && settings.weatherAfterDoF;
     auto drawWeatherParticles = [&](VkImage target, VkImageView targetView, VkImageView sceneInput) {
         m_weatherRenderer.setTier(settings.weatherTier);
         m_weatherRenderer.setCloudAltitudeTexture(cloudAltitudeView, cloudAltitudeSampler);
@@ -1293,8 +1321,12 @@ if (!m_ctx) return;
     };
     const bool drawParticles = weatherActive && settings.weatherTier != WeatherTier::Mobile;
     if (drawParticles && !particlesAfterDof) {
-        drawWeatherParticles(m_weatherImage, m_weatherView, compositeSource);
-        compositeSource = m_weatherView;
+        if (overlayIdle) {
+            m_weatherRenderer.dropPrepared(); // prepare() disse: nada a desenhar
+        } else {
+            drawWeatherParticles(m_weatherImage, m_weatherView, compositeSource);
+            compositeSource = m_weatherView;
+        }
     }
 
     // DoF and bloom below read through hdrInput: rebind it to the weathered
