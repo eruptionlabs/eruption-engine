@@ -152,6 +152,7 @@ private:
     bool m_tableDirty[kFrames] = {};
     bool m_directDirty[kFrames] = {};
     bool m_warnedDirectFull = false;
+    uint32_t m_layersLost = 0; // texturas que ficaram com a padrao por falta de camada
 
     // Passe de cópia: triângulo de tela cheia que amostra a fonte.
     VkDescriptorSetLayout m_copySetLayout = VK_NULL_HANDLE;
