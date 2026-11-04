@@ -270,7 +270,10 @@ void TelemetryExporter::recordFrame(const FrameStats& st) {
                  {"system_available_mb", static_cast<double>(SystemMonitor::memoryDetail().systemAvailableBytes) / (1024.0 * 1024.0)},
                  {"system_swap_free_mb", static_cast<double>(SystemMonitor::memoryDetail().systemSwapFreeBytes) / (1024.0 * 1024.0)},
                  {"psi_some_avg10", SystemMonitor::memoryDetail().psiSomeAvg10},
-                 {"psi_full_avg10", SystemMonitor::memoryDetail().psiFullAvg10}}},
+                 {"psi_full_avg10", SystemMonitor::memoryDetail().psiFullAvg10},
+                 {"vm_pgmajfault", SystemMonitor::memoryDetail().vmPgMajFault},
+                 {"vm_pswpin", SystemMonitor::memoryDetail().vmPswpIn},
+                 {"vm_pswpout", SystemMonitor::memoryDetail().vmPswpOut}}},
         {"layers", {{"used", st.layersUsed}, {"capacity", st.layersCapacity}, {"side", st.layersSide},
                     {"mb", st.layersMb}}},
     };
