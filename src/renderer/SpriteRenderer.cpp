@@ -1,5 +1,6 @@
 #include "renderer/GBuffer.hpp"
 #include "renderer/SpriteRenderer.hpp"
+#include "renderer/LeanFormats.hpp"
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "core/Logger.hpp"
@@ -833,7 +834,7 @@ bool SpriteRenderer::createShadowPipeline() {
         .setBlendState({blend})
         .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
         .setLayout(m_pipelineLayout)
-        .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
+        .setDepthAttachmentFormat(lean::shadowDepthFormat()) // o atlas de sombra (spec 50)
         .build(m_ctx->device());
 
     vkDestroyShaderModule(m_ctx->device(), vertModule, nullptr);

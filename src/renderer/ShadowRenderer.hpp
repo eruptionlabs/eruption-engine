@@ -180,9 +180,11 @@ public:
     float getShadowDepthRange() const { return m_shadowDepthRange; }
     Vec3 currentLightDir() const { return m_currentLightDir; }
 
-    VkPipeline shadowPipeline() const { return m_shadowPipeline; }
+    // Pipelines de caster para alvos D32 FORA do atlas (chuva vista de cima,
+    // probes): com o atlas em D16 (spec 50) sao variantes proprias.
+    VkPipeline shadowPipeline() const { return m_shadowPipelineD32; }
     // Variante INSTANCIADA (shadow_inst.vert): VK_NULL_HANDLE se nao existir.
-    VkPipeline shadowInstPipeline() const { return m_shadowInstPipeline; }
+    VkPipeline shadowInstPipeline() const { return m_shadowInstPipelineD32; }
     VkPipeline shadowInstOpaquePipeline() const { return m_shadowInstOpaquePipeline; }
     VkPipelineLayout shadowInstLayout() const { return m_shadowInstLayout; }
     VkPipelineLayout shadowLayout() const { return m_shadowLayout; }
@@ -326,6 +328,8 @@ private:
     // Variante sem fragment shader, para caster cujas texturas nao tem
     // alfa. Ver o comentario na criacao, em ShadowRenderer.cpp.
     VkPipeline m_shadowInstOpaquePipeline = VK_NULL_HANDLE;
+    VkPipeline m_shadowPipelineD32 = VK_NULL_HANDLE;     // == m_shadowPipeline com atlas D32
+    VkPipeline m_shadowInstPipelineD32 = VK_NULL_HANDLE; // == m_shadowInstPipeline com atlas D32
     VkPipelineLayout m_shadowInstLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_shadowInstSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_shadowLayout = VK_NULL_HANDLE;

@@ -1,4 +1,5 @@
 #include "renderer/ShadowRenderer.hpp"
+#include "renderer/LeanFormats.hpp"
 #include <chrono>
 #include "utils/Profiler.hpp"
 #include <cstdlib>
@@ -31,6 +32,12 @@ bool ShadowRenderer::init(VulkanContext* ctx, BindlessDescriptor* bindless) {
 }
 
 void ShadowRenderer::shutdown() {
+    if (m_shadowPipelineD32 != VK_NULL_HANDLE && m_shadowPipelineD32 != m_shadowPipeline)
+        vkDestroyPipeline(m_ctx->device(), m_shadowPipelineD32, nullptr);
+    m_shadowPipelineD32 = VK_NULL_HANDLE;
+    if (m_shadowInstPipelineD32 != VK_NULL_HANDLE && m_shadowInstPipelineD32 != m_shadowInstPipeline)
+        vkDestroyPipeline(m_ctx->device(), m_shadowInstPipelineD32, nullptr);
+    m_shadowInstPipelineD32 = VK_NULL_HANDLE;
     if (m_shadowPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_shadowPipeline, nullptr);
         m_shadowPipeline = VK_NULL_HANDLE;
@@ -131,7 +138,7 @@ void ShadowRenderer::createShadowAtlas(uint32_t size) {
         imageInfo.extent.depth = 1;
         imageInfo.mipLevels = 1;
         imageInfo.arrayLayers = 1;
-        imageInfo.format = VK_FORMAT_D32_SFLOAT;
+        imageInfo.format = lean::shadowDepthFormat();
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         // TRANSFER_DST: a sombra pre-assada chega ao atlas por copia.
@@ -180,7 +187,7 @@ void ShadowRenderer::createShadowAtlas(uint32_t size) {
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = m_atlasImage;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_D32_SFLOAT;
+    viewInfo.format = lean::shadowDepthFormat();
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;
@@ -202,7 +209,7 @@ bool ShadowRenderer::createNextAtlasImage(uint32_t size) {
     imageInfo.extent = { size * 2, size, 1 };
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
-    imageInfo.format = VK_FORMAT_D32_SFLOAT;
+    imageInfo.format = lean::shadowDepthFormat();
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -230,7 +237,7 @@ void ShadowRenderer::ensureNextAtlas() {
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = m_nextAtlasImage;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_D32_SFLOAT;
+    viewInfo.format = lean::shadowDepthFormat();
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
@@ -330,8 +337,8 @@ void ShadowRenderer::createShadowPipeline() {
     blend.colorWriteMask = 0;
     blend.blendEnable = VK_FALSE;
 
-    auto pipeline = PipelineBuilder()
-        .setShaderStages(stages)
+    PipelineBuilder shadowBuilder;
+    shadowBuilder.setShaderStages(stages)
         .setVertexInput(vertexInput)
         .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setViewport(0, 0, 2048.0f, 2048.0f) // Dynamic state will override this
@@ -341,11 +348,13 @@ void ShadowRenderer::createShadowPipeline() {
         .setDepthState(true, true, VK_COMPARE_OP_LESS)
         .setBlendState({blend})
         .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
-        .setLayout(m_shadowLayout)
-        .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
-        .build(m_ctx->device());
-
-    m_shadowPipeline = pipeline;
+        .setLayout(m_shadowLayout);
+    m_shadowPipeline = shadowBuilder.setDepthAttachmentFormat(lean::shadowDepthFormat()).build(m_ctx->device());
+    // Atlas em D16 (spec 50): chuva vista de cima e probes usam estas mesmas
+    // pipelines nos proprios alvos D32, entao ganham a variante D32.
+    m_shadowPipelineD32 = lean::shadowD16()
+        ? shadowBuilder.setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT).build(m_ctx->device())
+        : m_shadowPipeline;
 
     // ---- Variante instanciada (so' modelos) ----
     // (criada ANTES de destruir os modulos: o frag e' compartilhado)
@@ -412,8 +421,8 @@ void ShadowRenderer::createShadowPipeline() {
             instVertexInput.pVertexBindingDescriptions = instBindings;
             instVertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(instAttribs.size());
             instVertexInput.pVertexAttributeDescriptions = instAttribs.data();
-            m_shadowInstPipeline = PipelineBuilder()
-                .setShaderStages({instStages[0], instStages[1]})
+            PipelineBuilder instBuilder;
+            instBuilder.setShaderStages({instStages[0], instStages[1]})
                 .setVertexInput(instVertexInput)
                 .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
                 .setViewport(0, 0, 2048.0f, 2048.0f)
@@ -423,9 +432,12 @@ void ShadowRenderer::createShadowPipeline() {
                 .setDepthState(true, true, VK_COMPARE_OP_LESS)
                 .setBlendState({blend})
                 .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
-                .setLayout(m_shadowInstLayout)
-                .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
-                .build(m_ctx->device());
+                .setLayout(m_shadowInstLayout);
+            m_shadowInstPipeline =
+                instBuilder.setDepthAttachmentFormat(lean::shadowDepthFormat()).build(m_ctx->device());
+            m_shadowInstPipelineD32 = lean::shadowD16()
+                ? instBuilder.setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT).build(m_ctx->device())
+                : m_shadowInstPipeline;
             // CASTER SOLIDO: mesma pipeline, SEM fragment shader nenhum.
             //
             // shadow.frag existe so' para o teste de alfa (texture()+discard).
@@ -448,7 +460,7 @@ void ShadowRenderer::createShadowPipeline() {
                 .setBlendState({blend})
                 .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
                 .setLayout(m_shadowInstLayout)
-                .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
+                .setDepthAttachmentFormat(lean::shadowDepthFormat())
                 .build(m_ctx->device());
             if (m_shadowInstOpaquePipeline == VK_NULL_HANDLE) {
                 ERUPTION_LOG_WARN("[SOMBRA] pipeline opaca indisponivel - caster solido "
@@ -1103,7 +1115,7 @@ bool ShadowRenderer::ensureCacheImage() {
     imageInfo.extent = {m_currentAtlasSize, m_currentAtlasSize, 1};
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
-    imageInfo.format = VK_FORMAT_D32_SFLOAT;
+    imageInfo.format = lean::shadowDepthFormat();
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -1123,7 +1135,7 @@ bool ShadowRenderer::ensureCacheImage() {
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = m_cache.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_D32_SFLOAT;
+    viewInfo.format = lean::shadowDepthFormat();
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
