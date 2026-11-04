@@ -47,4 +47,11 @@ inline bool& leanOps() {
     return on;
 }
 
+// OE-02: o composite do DoF vai para dentro do Composite (um alvo de tela
+// cheia a menos). Preset "post_fused"; ERUPTION_TEST_POST_FUSED=1|0 forca.
+inline bool& postFused() {
+    static bool on = false;
+    return on;
+}
+
 } // namespace eruption::lean
