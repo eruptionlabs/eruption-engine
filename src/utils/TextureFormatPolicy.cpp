@@ -27,6 +27,7 @@ const char* modeName(Mode m) {
     case Mode::Bc: return "bc";
     case Mode::Astc: return "astc";
     case Mode::Etc2: return "etc2";
+    case Mode::Raw: return "raw";
     }
     return "?";
 }
@@ -47,6 +48,7 @@ Mode parseMode(const std::string& s0, Mode fallback) {
     if (s == "bc") return Mode::Bc;
     if (s == "astc") return Mode::Astc;
     if (s == "etc2" || s == "etc") return Mode::Etc2;
+    if (s == "raw") return Mode::Raw;
     return fallback;
 }
 
@@ -119,6 +121,7 @@ Mode family(const Caps& caps, const Options& o) {
     case Mode::Bc: return caps.anyBc() ? Mode::Bc : Mode::Off;
     case Mode::Astc: return caps.anyAstc() ? Mode::Astc : Mode::Off;
     case Mode::Etc2: return caps.anyEtc2() ? Mode::Etc2 : Mode::Off;
+    case Mode::Raw: return Mode::Raw;
     case Mode::Auto:
         if (caps.anyBc()) return Mode::Bc;
         if (caps.anyAstc()) return Mode::Astc;
@@ -199,6 +202,7 @@ VkFormat choose(Class c, const Caps& caps, const Options& o) {
     case Mode::Bc: return chooseBc(c, caps, o);
     case Mode::Astc: return chooseAstc(c, caps, o);
     case Mode::Etc2: return chooseEtc2(c, caps, o);
+    case Mode::Raw: return VK_FORMAT_R8G8B8A8_UNORM;
     default: return VK_FORMAT_UNDEFINED;
     }
 }

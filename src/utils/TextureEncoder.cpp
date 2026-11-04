@@ -30,7 +30,7 @@ namespace {
 
 // Nivel copiado para um retangulo multiplo do bloco, repetindo a borda (mip
 // menor que o bloco, 2x2 ou 1x1, vira um bloco bem definido).
-std::vector<uint8_t> padTo(const uint8_t* rgba, int w, int h, int pw, int ph) {
+[[maybe_unused]] std::vector<uint8_t> padTo(const uint8_t* rgba, int w, int h, int pw, int ph) {
     std::vector<uint8_t> out(static_cast<size_t>(pw) * ph * 4);
     for (int y = 0; y < ph; ++y) {
         const int sy = std::min(y, h - 1);
@@ -283,6 +283,7 @@ Family familyOf(VkFormat f) {
 } // namespace
 
 bool available(VkFormat f) {
+    if (f == VK_FORMAT_R8G8B8A8_UNORM) return true; // "codificar" = copiar (modo raw)
     switch (familyOf(f)) {
 #ifdef ERUPTION_HAVE_BC_ENCODER
     case Family::Bc: return true;
@@ -298,6 +299,7 @@ bool available(VkFormat f) {
 }
 
 size_t levelBytes(VkFormat f, int w, int h) {
+    if (f == VK_FORMAT_R8G8B8A8_UNORM && w > 0 && h > 0) return static_cast<size_t>(w) * h * 4;
     const texfmt::BlockInfo bi = texfmt::blockInfo(f);
     if (bi.bytes == 0 || w < 1 || h < 1) return 0;
     return static_cast<size_t>((w + static_cast<int>(bi.w) - 1) / static_cast<int>(bi.w)) *
@@ -306,6 +308,10 @@ size_t levelBytes(VkFormat f, int w, int h) {
 
 bool encodeLevel(VkFormat f, const uint8_t* rgba, int w, int h, std::vector<uint8_t>& out, const Params& p) {
     if (!rgba || w < 1 || h < 1 || !available(f)) return false;
+    if (f == VK_FORMAT_R8G8B8A8_UNORM) {
+        out.assign(rgba, rgba + static_cast<size_t>(w) * h * 4);
+        return true;
+    }
     switch (familyOf(f)) {
 #ifdef ERUPTION_HAVE_BC_ENCODER
     case Family::Bc: return encodeBc(f, rgba, w, h, out, p);
