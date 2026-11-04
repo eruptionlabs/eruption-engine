@@ -988,6 +988,11 @@ bool VulkanContext::pickPhysicalDevice() {
                           "samplers/set %u, camadas de array %u",
                           lim.maxPerStageDescriptorSamplers, lim.maxPerStageDescriptorSampledImages,
                           lim.maxPerStageResources, lim.maxDescriptorSetSamplers, lim.maxImageArrayLayers);
+        ERUPTION_LOG_WARN("GPU compressao de textura: ASTC %s, ETC2 %s, BC %s; anisotropia %s; atributos de cor maximos %u",
+                          m_supportedFeatures.textureCompressionASTC_LDR ? "sim" : "NAO",
+                          m_supportedFeatures.textureCompressionETC2 ? "sim" : "NAO",
+                          m_supportedFeatures.textureCompressionBC ? "sim" : "NAO",
+                          m_supportedFeatures.samplerAnisotropy ? "sim" : "NAO", lim.maxColorAttachments);
     }
     ERUPTION_LOG_INFO("Selected GPU: %s", m_deviceProperties.deviceName);
     ERUPTION_LOG_INFO("Max push constants size: %u", m_deviceProperties.limits.maxPushConstantsSize);
