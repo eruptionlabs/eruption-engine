@@ -889,6 +889,10 @@ Vec2 PlayerController::getSpriteScreenBase(const Camera& camera, float screenW, 
     int actionIdx = direction;
     if (m_tacticalView) actionIdx = 4 * 8 + direction;
     if (actionIdx >= (int)ls.act.actions.size()) actionIdx %= 8;
+    // Sprite de PNG tem UMA acao (loadSpriteFromPng): a direcao (0..7) passava
+    // do fim do vetor e lia memoria solta, conforme o angulo da camera - queda
+    // intermitente no HUD sobre a cabeca (overhead-hp-sp).
+    if (actionIdx >= (int)ls.act.actions.size()) actionIdx = 0;
     const auto& action = ls.act.actions[actionIdx];
     if (action.frames.empty()) return Vec2(-1.0f);
     const auto& frame = action.frames[0];
