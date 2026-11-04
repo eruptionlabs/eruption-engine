@@ -141,6 +141,7 @@ bool TextureLayers::init(VulkanContext* ctx, uint32_t slotCount, uint32_t layerS
     const uint32_t initial = std::clamp(reserve, 32u, maxLayers);
     if (!createArray(m_array, VK_FORMAT_R8G8B8A8_UNORM, initial)) return false;
     if (initial > 32) ERUPTION_LOG_WARN("Texture layers: %u layers reserved at start", initial);
+    if (!createArray(m_arrayB, VK_FORMAT_R8G8B8A8_UNORM, 2)) return false;
     if (!createCopyPipeline()) return false;
 
     m_table.assign(slotCount, 0u);
@@ -179,6 +180,7 @@ void TextureLayers::shutdown() {
     if (!m_ctx) return;
     VkDevice dev = m_ctx->device();
     destroyArray(m_array);
+    destroyArray(m_arrayB);
     for (uint32_t f = 0; f < kFrames; ++f) {
         if (m_tableBuffer[f] == VK_NULL_HANDLE) continue;
         vmaUnmapMemory(m_ctx->allocator(), m_tableAlloc[f]);
@@ -253,8 +255,7 @@ void TextureLayers::destroyArray(LayerArray& arr) {
 
 // Array cheio: outro com o dobro de camadas, as antigas copiadas. Acontece na
 // carga do mapa; espera a GPU para trocar a imagem em todos os sets.
-bool TextureLayers::growArray() {
-    LayerArray& arr = m_array;
+bool TextureLayers::growArray(LayerArray& arr) {
     const uint32_t maxLayers = layerLimit(m_ctx);
     // Cresce 1/4 por vez, não o dobro: a matriz é a maior alocação do
     // celular (1024 camadas de 256² = 344 MB com ~960 em uso) e o dobro
@@ -306,7 +307,7 @@ bool TextureLayers::growArray() {
     destroyArray(arr);
     arr = std::move(bigger);
     for (VkDescriptorSet set : m_sets) writeArrayBindings(set);
-    ERUPTION_LOG_INFO("Texture layers: array grown to %u layers", capacity);
+    ERUPTION_LOG_INFO("Texture layers: array %s grown to %u layers", &arr == &m_arrayB ? "B" : "A", capacity);
     return true;
 }
 
@@ -369,29 +370,34 @@ bool TextureLayers::createCopyPipeline() {
     return m_copyPipeline != VK_NULL_HANDLE;
 }
 
+// Primeiro o array A (ate o teto do dispositivo), depois o B. O resultado traz
+// kBLayerFlag quando a camada e' do B; 0 = nenhum dos dois tem lugar.
 uint32_t TextureLayers::allocLayer() {
-    LayerArray& arr = m_array;
-    if (!arr.freeLayers.empty()) {
-        const uint32_t layer = arr.freeLayers.back();
-        arr.freeLayers.pop_back();
-        return layer;
+    for (LayerArray* arr : {&m_array, &m_arrayB}) {
+        const uint32_t flag = arr == &m_arrayB ? kBLayerFlag : 0u;
+        if (!arr->freeLayers.empty()) {
+            const uint32_t layer = arr->freeLayers.back();
+            arr->freeLayers.pop_back();
+            return layer | flag;
+        }
+        if (arr->next >= arr->capacity && !growArray(*arr)) continue;
+        return arr->next++ | flag;
     }
-    if (arr.next >= arr.capacity && !growArray()) {
+    {
         // Um erro por textura enchia o log (centenas de linhas iguais em um
         // celular de teste); registra so' nas potencias de dois, com o total.
         ++m_layersLost;
         if ((m_layersLost & (m_layersLost - 1)) == 0)
             ERUPTION_LOG_ERROR("Texture layers: array full (%u layers); %u failed attempt(s) so far, %zu slot(s) without a layer now",
-                               arr.capacity, m_layersLost, m_lostSlots.size());
+                               m_array.capacity + m_arrayB.capacity, m_layersLost, m_lostSlots.size());
         return 0;
     }
-    return arr.next++;
 }
 
 void TextureLayers::freePlace(uint32_t slot) {
     Place& p = m_places[slot];
-    if (p.kind < kDirectKind) {
-        if (p.layer != 0) m_array.freeLayers.push_back(p.layer);
+    if (isArrayKind(p.kind)) {
+        if (p.layer != 0) (p.kind >= kBKind ? m_arrayB : m_array).freeLayers.push_back(p.layer);
     } else if (p.kind != kNone) {
         m_direct[p.kind - kDirectKind] = Direct{};
         for (bool& d : m_directDirty) d = true;
@@ -418,7 +424,7 @@ void TextureLayers::assign(uint32_t slot, VkImageView view, VkSampler sampler, b
     m_lostSlots.erase(slot);
     Place& p = m_places[slot];
     uint32_t k = kDirectCount;
-    if (p.kind >= kDirectKind && p.kind != kNone) {
+    if (isDirectKind(p.kind)) {
         k = p.kind - kDirectKind;
     } else {
         freePlace(slot);
@@ -448,9 +454,8 @@ void TextureLayers::release(uint32_t slot) {
     setTable(slot, 0, 0);
 }
 
-void TextureLayers::recordCopy(VkCommandBuffer cmd, VkDescriptorSet copySet, uint32_t layer, bool srgb,
-                               VkImageView layerView) {
-    const VkImage image = m_array.image;
+void TextureLayers::recordCopy(VkCommandBuffer cmd, VkDescriptorSet copySet, VkImage image, uint32_t layer,
+                               bool srgb, VkImageView layerView) {
     const int32_t size = static_cast<int32_t>(m_layerSize);
     barrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
             layerBarrier(image, layer, 0, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
@@ -502,6 +507,7 @@ void TextureLayers::runCopies(size_t maxCopies) {
     struct Target {
         uint32_t slot;
         uint32_t layer;
+        bool inB; // a camada e' do 2o array
         CopyJob job;
     };
     std::vector<Target> targets;
@@ -510,13 +516,13 @@ void TextureLayers::runCopies(size_t maxCopies) {
         const uint32_t slot = it->first;
         const CopyJob& job = it->second;
         if (slot == kNone) {
-            targets.push_back({kNone, 0, job}); // textura padrão: camada 0
+            targets.push_back({kNone, 0, false, job}); // textura padrão: camada 0
             continue;
         }
         const Place p = m_places[slot];
         uint32_t layer;
-        if (p.kind < kDirectKind && p.layer != 0) {
-            layer = p.layer; // mesma textura trocada: reaproveita a camada
+        if (isArrayKind(p.kind) && p.layer != 0) {
+            layer = p.layer | (p.kind >= kBKind ? kBLayerFlag : 0u); // mesma textura trocada: reaproveita a camada
         } else {
             freePlace(slot);
             layer = allocLayer();
@@ -526,7 +532,7 @@ void TextureLayers::runCopies(size_t maxCopies) {
             }
         }
         m_lostSlots.erase(slot);
-        targets.push_back({slot, layer, job});
+        targets.push_back({slot, layer & ~kBLayerFlag, (layer & kBLayerFlag) != 0, job});
     }
 
     VkDevice dev = m_ctx->device();
@@ -559,7 +565,7 @@ void TextureLayers::runCopies(size_t maxCopies) {
 
             VkImageViewCreateInfo vi{};
             vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            vi.image = m_array.image;
+            vi.image = t.inB ? m_arrayB.image : m_array.image;
             vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
             vi.format = m_array.format;
             vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, t.layer, 1};
@@ -568,7 +574,7 @@ void TextureLayers::runCopies(size_t maxCopies) {
         m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
             for (size_t i = 0; i < count; ++i) {
                 const Target& t = targets[first + i];
-                recordCopy(cmd, sets[i], t.layer, t.job.srgb, layerViews[i]);
+                recordCopy(cmd, sets[i], t.inB ? m_arrayB.image : m_array.image, t.layer, t.job.srgb, layerViews[i]);
             }
         });
         for (VkImageView v : layerViews) vkDestroyImageView(dev, v, nullptr);
@@ -576,11 +582,11 @@ void TextureLayers::runCopies(size_t maxCopies) {
 
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     ERUPTION_LOG_WARN("Texture layers: %zu copies in %.1f ms (%u layers used, %zu waiting)", targets.size(), ms,
-                      m_array.next, m_jobs.size());
+                      m_array.next + (m_arrayB.next > 1 ? m_arrayB.next - 1 : 0), m_jobs.size());
     std::lock_guard<std::mutex> copiedLock(m_copiedMutex);
     for (const Target& t : targets) {
         if (t.slot == kNone) continue;
-        const uint32_t kind = (t.job.srgb ? 1u : 0u) | (t.job.nearest ? 2u : 0u);
+        const uint32_t kind = (t.job.srgb ? 1u : 0u) | (t.job.nearest ? 2u : 0u) | (t.inB ? kBKind : 0u);
         m_places[t.slot] = Place{kind, t.layer};
         setTable(t.slot, kind, t.layer);
         m_copiedStatic.push_back(t.slot);
@@ -595,20 +601,23 @@ std::vector<uint32_t> TextureLayers::takeCopiedStatic() {
 }
 
 void TextureLayers::writeArrayBindings(VkDescriptorSet set) {
-    const VkDescriptorImageInfo infos[2] = {
+    const VkDescriptorImageInfo infos[4] = {
         {m_linearSampler, m_array.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
         {m_nearestSampler, m_array.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {m_linearSampler, m_arrayB.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {m_nearestSampler, m_arrayB.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
     };
-    VkWriteDescriptorSet writes[2] = {};
-    for (uint32_t i = 0; i < 2; ++i) {
+    const uint32_t bindings[4] = {kLayersBinding, kLayersNearestBinding, kLayersBBinding, kLayersNearestBBinding};
+    VkWriteDescriptorSet writes[4] = {};
+    for (uint32_t i = 0; i < 4; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = set;
-        writes[i].dstBinding = kLayersBinding + i;
+        writes[i].dstBinding = bindings[i];
         writes[i].descriptorCount = 1;
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[i].pImageInfo = &infos[i];
     }
-    vkUpdateDescriptorSets(m_ctx->device(), 2, writes, 0, nullptr);
+    vkUpdateDescriptorSets(m_ctx->device(), 4, writes, 0, nullptr);
 }
 
 void TextureLayers::writeDirectBindings(VkDescriptorSet set) {

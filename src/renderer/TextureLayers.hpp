@@ -29,7 +29,11 @@ public:
     static constexpr uint32_t kTableBinding = 2;
     static constexpr uint32_t kDirectBinding = 3;
     static constexpr uint32_t kDirectCount = 8;
-    static constexpr uint32_t kBindingCount = kDirectBinding + kDirectCount;
+    // Segundo array (mesmo formato): camadas alem do teto de um array, que num
+    // celular costuma ser 2048. Fica com 2 camadas ate o primeiro encher.
+    static constexpr uint32_t kLayersBBinding = kDirectBinding + kDirectCount;
+    static constexpr uint32_t kLayersNearestBBinding = kLayersBBinding + 1;
+    static constexpr uint32_t kBindingCount = kLayersNearestBBinding + 1;
 
     // Ligações e tamanhos de pool do set 0 neste modo.
     static std::vector<VkDescriptorSetLayoutBinding> layoutBindings();
@@ -87,7 +91,12 @@ public:
         const uint32_t taken = m_array.next > 0 ? m_array.next - 1 : 0; // a camada 0 e' a padrao
         const uint32_t freed = static_cast<uint32_t>(m_array.freeLayers.size());
         s.used = taken > freed ? taken - freed : 0;
+        const uint32_t takenB = m_arrayB.next > 0 ? m_arrayB.next - 1 : 0; // a camada 0 do 2o array nao e' usada
+        const uint32_t freedB = static_cast<uint32_t>(m_arrayB.freeLayers.size());
+        s.used += takenB > freedB ? takenB - freedB : 0;
+        s.capacity += m_arrayB.capacity;
         if (m_ctx && m_array.alloc) s.mb = static_cast<double>(m_ctx->allocationSize(m_array.alloc)) / (1024.0 * 1024.0);
+        if (m_ctx && m_arrayB.alloc) s.mb += static_cast<double>(m_ctx->allocationSize(m_arrayB.alloc)) / (1024.0 * 1024.0);
         return s;
     }
 
@@ -120,6 +129,12 @@ private:
     };
     static constexpr uint32_t kNone = UINT32_MAX;
     static constexpr uint32_t kDirectKind = 4;
+    // Camada do 2o array: kBKind + os bits de sempre (sRGB, sem filtro). allocLayer
+    // devolve a camada com kBLayerFlag somado quando ela e' do 2o array.
+    static constexpr uint32_t kBKind = 16;
+    static constexpr uint32_t kBLayerFlag = 0x10000;
+    static bool isArrayKind(uint32_t k) { return k < kDirectKind || (k >= kBKind && k < kBKind + 4); }
+    static bool isDirectKind(uint32_t k) { return k >= kDirectKind && k < kBKind; }
     // Cópias por envio: na PowerVR GE8320 cada cópia (camada com 9 mips) leva
     // ~13 ms de GPU, e 64 num envio davam ~0,9 s, na beira do ~1 s que prende
     // a GPU até reiniciar (travou nos primeiros quadros depois da carga).
@@ -139,7 +154,8 @@ private:
     VulkanContext* m_ctx = nullptr;
     uint32_t m_layerSize = 256;
     uint32_t m_mipLevels = 1;
-    LayerArray m_array;
+    LayerArray m_array;  // camadas [0, teto)
+    LayerArray m_arrayB; // camadas alem do teto de m_array
     VkSampler m_linearSampler = VK_NULL_HANDLE;
     VkSampler m_nearestSampler = VK_NULL_HANDLE;
     VkImageView m_defaultView = VK_NULL_HANDLE;
@@ -167,14 +183,15 @@ private:
     VkDescriptorPool m_copyPool = VK_NULL_HANDLE;
 
     bool createArray(LayerArray& arr, VkFormat format, uint32_t capacity);
-    bool growArray();
+    bool growArray(LayerArray& arr);
     void destroyArray(LayerArray& arr);
     bool createCopyPipeline();
     uint32_t allocLayer();
     void freePlace(uint32_t slot);
     void setTable(uint32_t slot, uint32_t kind, uint32_t layer);
     void runCopies(size_t maxCopies);
-    void recordCopy(VkCommandBuffer cmd, VkDescriptorSet copySet, uint32_t layer, bool srgb, VkImageView layerView);
+    void recordCopy(VkCommandBuffer cmd, VkDescriptorSet copySet, VkImage image, uint32_t layer, bool srgb,
+                    VkImageView layerView);
     void writeArrayBindings(VkDescriptorSet set);
     void writeDirectBindings(VkDescriptorSet set);
     std::mutex m_copiedMutex;

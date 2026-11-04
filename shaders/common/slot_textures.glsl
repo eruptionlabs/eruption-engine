@@ -39,8 +39,14 @@ layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 // Mesma numeração de TextureLayers (k*Binding e o formato da tabela).
 layout(set = 0, binding = 0) uniform sampler2DArray u_layers;
 layout(set = 0, binding = 1) uniform sampler2DArray u_layersNearest;
+// Segundo array de camadas (kind >= 16): o que passa do teto de camadas de um
+// array. A versao sem filtro so' existe nos shaders que a usam (sprites).
+layout(set = 0, binding = 11) uniform sampler2DArray u_layersB;
+#ifdef ERUPTION_SLOT_NEAREST
+layout(set = 0, binding = 12) uniform sampler2DArray u_layersNearestB;
+#endif
 // Por slot: camada nos 16 bits de baixo; em cima o tipo: bit 0 = sRGB,
-// bit 1 = sem filtro; 4 + k = ligação direta k.
+// bit 1 = sem filtro; 4 + k = ligação direta k; 16 + bits = camada do 2º array.
 layout(std430, set = 0, binding = 2) readonly buffer SlotTable { uint u_slotTable[]; };
 #ifdef ERUPTION_SLOT_DIRECT
 layout(set = 0, binding = 3) uniform sampler2D u_direct0;
@@ -79,8 +85,14 @@ vec4 slotTexture(uint s, vec2 uv) {
     case 11u: return texture(u_direct7, uv);
     }
 #endif
-    if (kind >= 4u) return vec4(0.5, 0.5, 0.5, 1.0);
     vec3 c = vec3(uv, float(e & 0xFFFFu));
+    if (kind >= 16u) {
+#ifdef ERUPTION_SLOT_NEAREST
+        if ((kind & 2u) != 0u) return slotDecode(texture(u_layersNearestB, c), kind);
+#endif
+        return slotDecode(texture(u_layersB, c), kind);
+    }
+    if (kind >= 4u) return vec4(0.5, 0.5, 0.5, 1.0);
 #ifdef ERUPTION_SLOT_NEAREST
     if ((kind & 2u) != 0u) return slotDecode(texture(u_layersNearest, c), kind);
 #endif
@@ -90,6 +102,7 @@ vec4 slotTexture(uint s, vec2 uv) {
 vec4 slotTextureBias(uint s, vec2 uv, float bias) {
     uint e = u_slotTable[s];
     uint kind = e >> 16u;
+    if (kind >= 16u) return slotDecode(texture(u_layersB, vec3(uv, float(e & 0xFFFFu)), bias), kind);
     if (kind >= 4u) return vec4(0.5, 0.5, 0.5, 1.0);
     return slotDecode(texture(u_layers, vec3(uv, float(e & 0xFFFFu)), bias), kind);
 }
@@ -115,6 +128,7 @@ vec4 slotTextureLod(uint s, vec2 uv, float lod) {
     case 11u: return textureLod(u_direct7, uv, lod);
     }
 #endif
+    if (kind >= 16u) return slotDecode(textureLod(u_layersB, vec3(uv, float(e & 0xFFFFu)), lod), kind);
     if (kind >= 4u) return vec4(0.5, 0.5, 0.5, 1.0);
     return slotDecode(textureLod(u_layers, vec3(uv, float(e & 0xFFFFu)), lod), kind);
 }
@@ -122,6 +136,7 @@ vec4 slotTextureLod(uint s, vec2 uv, float lod) {
 vec4 slotTextureGrad(uint s, vec2 uv, vec2 dx, vec2 dy) {
     uint e = u_slotTable[s];
     uint kind = e >> 16u;
+    if (kind >= 16u) return slotDecode(textureGrad(u_layersB, vec3(uv, float(e & 0xFFFFu)), dx, dy), kind);
     if (kind >= 4u) return vec4(0.5, 0.5, 0.5, 1.0);
     return slotDecode(textureGrad(u_layers, vec3(uv, float(e & 0xFFFFu)), dx, dy), kind);
 }
