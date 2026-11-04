@@ -32,6 +32,8 @@ public:
     void setAfterCopies(std::function<void()> fn) { m_afterCopies = std::move(fn); }
     // Lado pedido da camada de textura (antes de init); 0 = o padrao.
     void setLayerSizeRequest(uint32_t size) { m_layerSizeRequest = size; }
+    // Camadas reservadas ja' no init do array (antes de init); 0 = o minimo.
+    void setLayerReserveRequest(uint32_t layers) { m_layerReserveRequest = layers; }
 
     uint32_t allocateSlot();
     void freeSlot(uint32_t slot);
@@ -136,6 +138,7 @@ private:
     std::mutex m_mutex;
     uint32_t m_layerSizeRequest = 0;
     std::function<void()> m_afterCopies;
+    uint32_t m_layerReserveRequest = 0;
 };
 
 } // namespace eruption

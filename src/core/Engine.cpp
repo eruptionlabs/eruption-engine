@@ -275,6 +275,8 @@ bool Engine::init(int width, int height, const std::string& title) {
     // ERUPTION_TEX_LAYER_SIZE vence. Lida aqui porque o array nasce no init.
     m_bindless.setLayerSizeRequest(
         static_cast<uint32_t>(std::max(0.0, presetNumber(graphicsPresetName(), "texture_layer_size", 0.0))));
+    m_bindless.setLayerReserveRequest(
+        static_cast<uint32_t>(std::max(0.0, presetNumber(graphicsPresetName(), "texture_layer_reserve", 0.0))));
     if (!m_bindless.init(&m_vulkan)) return false;
     m_bindless.setAfterCopies([this] { releaseCopiedTextureSources(); });
     m_bindless.markNearestSampler(m_nearestSampler);

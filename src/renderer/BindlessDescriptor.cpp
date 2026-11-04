@@ -105,7 +105,11 @@ bool BindlessDescriptor::init(VulkanContext* ctx) {
         // 256 - cabe na memória de um celular de 4 GB.
         uint32_t layerSize = m_layerSizeRequest ? m_layerSizeRequest : 256;
         if (const char* e = std::getenv("ERUPTION_TEX_LAYER_SIZE")) layerSize = static_cast<uint32_t>(std::atoi(e));
-        if (!m_layers.init(m_ctx, m_slotCount, layerSize, m_frameSets, m_defaultView, m_defaultSampler)) return false;
+        // Camadas reservadas no inicio: ERUPTION_TEX_LAYER_RESERVE vence a chave
+        // "texture_layer_reserve" do preset (Engine::init); 0 = so' o minimo.
+        uint32_t reserve = m_layerReserveRequest;
+        if (const char* e = std::getenv("ERUPTION_TEX_LAYER_RESERVE")) reserve = static_cast<uint32_t>(std::atoi(e));
+        if (!m_layers.init(m_ctx, m_slotCount, layerSize, m_frameSets, m_defaultView, m_defaultSampler, reserve)) return false;
         m_ctx->addFrameBeginHook([this](uint32_t frame) { onFrameBegin(frame); });
     } else {
         updateTexture(0, m_defaultView, m_defaultSampler);

@@ -37,8 +37,12 @@ public:
 
     // `layerSize`: lado de cada camada (as texturas são reamostradas para ele).
     // `sets`: os sets do BindlessDescriptor, um por frame em voo.
+    // `reserve`: camadas pedidas ja' no inicio (0 = o minimo, 32): o array cresce
+    // 1/4 por vez, e cada passo faz vkDeviceWaitIdle e copia as camadas em uso
+    // para um array maior (com os dois vivos), o que numa GPU lenta prende o
+    // quadro por segundos. Reservar o numero esperado evita os passos.
     bool init(VulkanContext* ctx, uint32_t slotCount, uint32_t layerSize, const VkDescriptorSet* sets,
-              VkImageView defaultView, VkSampler defaultSampler);
+              VkImageView defaultView, VkSampler defaultSampler, uint32_t reserve = 0);
     void shutdown();
 
     // Sampler sem filtro (pixel art, paleta): a textura é lida pela ligação
