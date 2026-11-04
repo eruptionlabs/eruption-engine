@@ -239,6 +239,7 @@
       "shadow_mode": "single",
       "bloom": true,
       "shader_lite": true,
+      "shader_lite_relevo": true,
       "shadow_update_interval": 1,
       "target_fps": 30,
       "render_scale_min": 0.5,
