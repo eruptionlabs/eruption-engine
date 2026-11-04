@@ -2,6 +2,7 @@
 #include "renderer/PostProcessor.hpp"
 #include "renderer/CameraMotion.hpp"
 #include <cstdlib>
+#include "renderer/BandwidthMeter.hpp"
 #include "renderer/PostFormat.hpp"
 #include "renderer/DeferredLighting.hpp"
 #include "renderer/ShaderCompiler.hpp"
@@ -711,6 +712,7 @@ VkImageView PostProcessor::renderGodRays(VkCommandBuffer cmd, const Mat4& viewPr
     const bool sunInputs = sun.w > 0.0f || flareOn;
 
     m_ctx->writeTimestamp(cmd, kQGodRaysBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::pushPass("God Rays"); // medidor de banda (spec 50)
     const uint32_t w = std::max(1u, m_width / 2), h = std::max(1u, m_height / 2);
     barrierToColorAttach(cmd, m_ctx, m_godRayImage);
     // 2 e 3 sempre escritos (o shader os declara): sem sol, o proprio bloom.
@@ -742,6 +744,7 @@ VkImageView PostProcessor::renderGodRays(VkCommandBuffer cmd, const Mat4& viewPr
     vkc::cmdEndRendering(cmd);
     barrierToShaderRead(cmd, m_ctx, m_godRayImage);
     m_ctx->writeTimestamp(cmd, kQGodRaysEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::popPass();
     Profiler::addGpuTime("God Rays", m_ctx->timestampDeltaMs(kQGodRaysBegin, kQGodRaysEnd));
     return m_godRayView;
 }
@@ -798,9 +801,11 @@ if (!m_ctx) return;
     float msAutoExp = 0.0f;
     if (settings.gpuAutoExposure) {
         m_ctx->writeTimestamp(cmd, kQAutoExpBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::pushPass("Auto Exposure"); // medidor de banda (spec 50)
         dispatchAutoExposure(cmd, hdrInput, depthInput, invViewProj, cameraPos,
                              settings.belowHorizon.a > 0.5f, settings.aeDt, settings.aeTau);
         m_ctx->writeTimestamp(cmd, kQAutoExpEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::popPass();
         msAutoExp = m_ctx->timestampDeltaMs(kQAutoExpBegin, kQAutoExpEnd);
         Profiler::addGpuTime("Auto Exposure", msAutoExp);
     }
@@ -860,8 +865,10 @@ if (!m_ctx) return;
         wrParams.debugSplashArea = settings.debugSplashArea ? 1.0f : 0.0f;
         // wrParams doesn't need softness; it's fixed at 2.0 via shader default/push
         m_ctx->writeTimestamp(cmd, 30, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::pushPass("Rain Heightmap"); // medidor de banda (spec 50)
         m_weatherRenderer.updateHeightmapOnly(cmd, topDownDepthView, wrParams);
         m_ctx->writeTimestamp(cmd, 31, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::popPass();
         msHeightmap = m_ctx->timestampDeltaMs(30, 31);
         Profiler::addGpuTime("Rain Heightmap", msHeightmap);
         lap(0);
@@ -869,6 +876,7 @@ if (!m_ctx) return;
 
     if (weatherActive) {
         m_ctx->writeTimestamp(cmd, 32, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::pushPass("Weather Overlay"); // medidor de banda (spec 50)
         // Upload CPU-simulated drops or dispatch GPU compute update
         bool useBufferDrops = (weather->lensDropMode == LensDropMode::CpuBuffer ||
                                weather->lensDropMode == LensDropMode::GpuCompute);
@@ -1257,6 +1265,7 @@ if (!m_ctx) return;
         vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_weatherImage);
         m_ctx->writeTimestamp(cmd, 33, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::popPass();
         msOverlay = m_ctx->timestampDeltaMs(32, 33);
         Profiler::addGpuTime("Weather Overlay", msOverlay);
         compositeSource = m_weatherView;
@@ -1273,8 +1282,10 @@ if (!m_ctx) return;
 
         barrierToColorAttach(cmd, m_ctx, target);
         m_ctx->writeTimestamp(cmd, 34, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::pushPass("Weather Particles"); // medidor de banda (spec 50)
         m_weatherRenderer.render(cmd, sceneInput, targetView, m_width, m_height, *weather, wrParams);
         m_ctx->writeTimestamp(cmd, 35, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::popPass();
         msParticles = m_ctx->timestampDeltaMs(34, 35);
         Profiler::addGpuTime("Weather Particles", msParticles);
         lap(1);
@@ -1295,6 +1306,7 @@ if (!m_ctx) return;
     // heightmap de chuva, bloom, composite): na chuva marcava 7-10 ms e parecia
     // que o DoF explodia, quando era o overlay + particulas.
     m_ctx->writeTimestamp(cmd, 40, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::pushPass("DoF / Tilt-Shift"); // medidor de banda (spec 50)
     if (settings.enableDoF) {
         // CAMINHO UNICO DE DESFOQUE (Circle of Confusion).
         // O ramo legado (tilt-shift por profundidade) vivia aqui num
@@ -1441,6 +1453,7 @@ if (!m_ctx) return;
         compositeSource = m_dofView;
     }
     m_ctx->writeTimestamp(cmd, 41, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::popPass();
     // Gotas nitidas por cima do desfoque. A cena de entrada (refracao) e' a
     // de antes do DoF: ler e escrever m_dofImage no mesmo passe nao pode.
     if (drawParticles && particlesAfterDof) drawWeatherParticles(m_dofImage, m_dofView, hdrInput);
@@ -1465,6 +1478,7 @@ if (!m_ctx) return;
     if (settings.enableBloom && !kNoBloom) {
         // 1. Bright Pass
         m_ctx->writeTimestamp(cmd, kQBloomDownBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::pushPass("Bloom Down"); // medidor de banda (spec 50)
         barrierToColorAttach(cmd, m_ctx, m_bloomDownImages[0]);
         updateDescriptorSet(10, hdrInput);
         beginFullscreenPass(cmd, m_bloomDownViews[0], m_width / 2, m_height / 2);
@@ -1498,12 +1512,14 @@ if (!m_ctx) return;
         // porque os dois tem custo bem diferente (o down le' em full-res no
         // primeiro nivel; o up faz BLOOM_MIPS-1 blends com tent filter).
         m_ctx->writeTimestamp(cmd, kQBloomDownEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::popPass();
         msBloomDown = m_ctx->timestampDeltaMs(kQBloomDownBegin, kQBloomDownEnd);
         Profiler::addGpuTime("Bloom Down", msBloomDown);
 
         // 3. Upsample Pyramid
         // Start from the smallest mip
         m_ctx->writeTimestamp(cmd, kQBloomUpBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::pushPass("Bloom Up"); // medidor de banda (spec 50)
         VkImageView lastView = m_bloomDownViews[BLOOM_MIPS - 1];
         for (int i = BLOOM_MIPS - 2; i >= 0; i--) {
             barrierToColorAttach(cmd, m_ctx, m_bloomUpImages[i]);
@@ -1523,6 +1539,7 @@ if (!m_ctx) return;
             lastView = m_bloomUpViews[i];
         }
         m_ctx->writeTimestamp(cmd, kQBloomUpEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::popPass();
         msBloomUp = m_ctx->timestampDeltaMs(kQBloomUpBegin, kQBloomUpEnd);
         Profiler::addGpuTime("Bloom Up", msBloomUp);
         bloomResult = m_bloomUpViews[0];
@@ -1539,6 +1556,7 @@ if (!m_ctx) return;
     // Binding 2 idem com o bloom desligado: a propria cena no lugar (o shader
     // nao a soma com exposureBloom.w == 0).
     m_ctx->writeTimestamp(cmd, kQCompositeBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::pushPass("Composite"); // medidor de banda (spec 50)
     updateDescriptorSet(5, compositeSource, depthInput,
                         bloomResult != VK_NULL_HANDLE ? bloomResult : compositeSource, cloudColorView, cloudDepthView,
                         cloudVolumeOccView != VK_NULL_HANDLE ? cloudVolumeOccView : cloudColorView);
@@ -1675,6 +1693,7 @@ if (!m_ctx) return;
     // para isolar um deles use as env vars de A/B (ERUPTION_TEST_NO_CA,
     // ERUPTION_TEST_NO_BLOOM, ...) - e' o que perf/test_shader_cost.py faz.
     m_ctx->writeTimestamp(cmd, kQCompositeEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::popPass();
     msComposite = m_ctx->timestampDeltaMs(kQCompositeBegin, kQCompositeEnd);
     Profiler::addGpuTime("Composite", msComposite);
 
@@ -1683,6 +1702,7 @@ if (!m_ctx) return;
     // output independent of the depth-aware composite.
     if (settings.showCloudCoverageDebug && cloudColorView != VK_NULL_HANDLE && gbufferWorldPos != VK_NULL_HANDLE) {
         m_ctx->writeTimestamp(cmd, kQCloudDbgBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::pushPass("Cloud Debug Overlay"); // medidor de banda (spec 50)
         // Ensure the composite pass writes are visible before we blend on top.
         if (targetOutput == VK_NULL_HANDLE) {
             VkImageMemoryBarrier2 barrier{};
@@ -1725,6 +1745,7 @@ if (!m_ctx) return;
     }
     if (settings.showCloudCoverageDebug && cloudColorView != VK_NULL_HANDLE && gbufferWorldPos != VK_NULL_HANDLE) {
         m_ctx->writeTimestamp(cmd, kQCloudDbgEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::popPass();
         msCloudDbg = m_ctx->timestampDeltaMs(kQCloudDbgBegin, kQCloudDbgEnd);
         Profiler::addGpuTime("Cloud Debug Overlay", msCloudDbg);
     }

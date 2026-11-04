@@ -78,6 +78,7 @@ run_net test_net_web $NET_SESSION
 run_src test_ribbon src/formats/Ribbon.cpp
 run_src test_vision src/core/Vision.cpp
 run_src test_relief_bake src/renderer/ReliefBake.cpp
+run_src test_bandwidth_meter src/renderer/BandwidthMeter.cpp src/utils/Profiler.cpp src/core/Logger.cpp -lpthread
 
 # Estabilidade das cascatas de sombra (ancoragem ao mundo, tamanho do texel,
 # sem historia), com o ShadowRenderer::updateCascades de verdade, sem GPU, em

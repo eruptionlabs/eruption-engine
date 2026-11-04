@@ -10,6 +10,7 @@
 #include <chrono>
 #include "core/Logger.hpp"
 #include "renderer/ShaderCompiler.hpp"
+#include "renderer/BandwidthMeter.hpp"
 #include <nlohmann/json.hpp>
 #include <map>
 
@@ -911,6 +912,7 @@ bool VulkanContext::pickPhysicalDevice() {
     }
 
     vkGetPhysicalDeviceProperties(m_physicalDevice, &m_deviceProperties);
+    bw::setDeviceVendor(m_deviceProperties.vendorID); // o NVML so' vale para NVIDIA
     vkGetPhysicalDeviceFeatures(m_physicalDevice, &m_supportedFeatures);
 
     m_hasImageRobustness = deviceHasExtension(m_physicalDevice, VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME);
@@ -1258,10 +1260,27 @@ bool VulkanContext::createImageViews() {
     return true;
 }
 
+// Auditoria de banda (spec 50): toda imagem do VMA passa por aqui, e o medidor
+// guarda usage/flags/formato para avisar quando um anexo nasce com flag que
+// desliga a compressao de framebuffer. O VMA chama estas no lugar das do driver.
+static VKAPI_ATTR VkResult VKAPI_CALL auditCreateImage(VkDevice device, const VkImageCreateInfo* info,
+                                                       const VkAllocationCallbacks* alloc, VkImage* image) {
+    const VkResult r = vkCreateImage(device, info, alloc, image);
+    if (r == VK_SUCCESS) bw::noteImage(*image, bw::describeImage(*info));
+    return r;
+}
+
+static VKAPI_ATTR void VKAPI_CALL auditDestroyImage(VkDevice device, VkImage image, const VkAllocationCallbacks* alloc) {
+    if (image != VK_NULL_HANDLE) bw::forgetImage(image);
+    vkDestroyImage(device, image, alloc);
+}
+
 bool VulkanContext::createAllocator() {
     VmaVulkanFunctions vulkanFunctions = {};
     vulkanFunctions.vkGetInstanceProcAddr = &vkGetInstanceProcAddr;
     vulkanFunctions.vkGetDeviceProcAddr = &vkGetDeviceProcAddr;
+    vulkanFunctions.vkCreateImage = &auditCreateImage;
+    vulkanFunctions.vkDestroyImage = &auditDestroyImage;
 
     VmaAllocatorCreateInfo allocatorInfo{};
     // ERUPTION_VMA_BLOCK_MB=<MB>: tamanho preferido do bloco do VMA (padrao do

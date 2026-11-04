@@ -1,6 +1,7 @@
 #include "renderer/VkCompat.hpp"
 
 #include "core/Logger.hpp"
+#include "renderer/BandwidthMeter.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -149,6 +150,8 @@ void shutdown() {
 }
 
 void beginFrame(uint32_t /*frameIndex*/) {
+    // Medidor de banda: fecha o quadro anterior (spec 50).
+    bw::beginFrame();
     std::lock_guard<std::mutex> lock(g_mutex);
     ++g_frameNumber;
     // Sem uso ha' mais quadros do que os em voo: nenhum comando pendente o usa.
@@ -182,6 +185,7 @@ VkResult createImageView(VkDevice device, const VkImageViewCreateInfo* info, con
                          VkImageView* view) {
     const VkResult r = vkCreateImageView(device, info, alloc, view);
     if (r == VK_SUCCESS) {
+        bw::noteView(*view, info->image);
         std::lock_guard<std::mutex> lock(g_mutex);
         g_viewFormats[*view] = info->format;
         forgetFramebuffersOf(*view);
@@ -260,6 +264,8 @@ static VkFramebuffer framebufferFor(const VkFramebufferCreateInfo& fi, const std
 }
 
 void cmdBeginRendering(VkCommandBuffer cmd, const VkRenderingInfo* info) {
+    // Todo passe do motor passa por aqui: o medidor de banda conta os anexos.
+    bw::recordRendering(*info, &viewFormat);
     std::vector<AttachmentDesc> atts;
     std::vector<VkImageView> views;
     std::vector<VkClearValue> clears;
