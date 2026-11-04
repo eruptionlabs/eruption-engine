@@ -346,7 +346,7 @@ struct State {
     std::unordered_set<std::string> warned;
     AuditStat audit;
     std::vector<PassStat> cur;
-    uint64_t curRead = 0, curWritten = 0;
+    uint64_t curRead = 0, curWritten = 0, curVertex = 0;
     FrameStat last;
     uint64_t frame = 0;
     uint32_t vendor = 0;
@@ -403,18 +403,15 @@ std::string formatLabel(VkFormat f) {
     return "fmt" + std::to_string(static_cast<int>(f));
 }
 
+PassStat& passStat(State& s, const char* pass) {
+    for (auto& e : s.cur)
+        if (e.name == pass) return e;
+    s.cur.push_back(PassStat{pass, 0, 0, 0, 0});
+    return s.cur.back();
+}
+
 void accumulate(State& s, const char* pass, const Traffic& t) {
-    PassStat* p = nullptr;
-    for (auto& e : s.cur) {
-        if (e.name == pass) {
-            p = &e;
-            break;
-        }
-    }
-    if (!p) {
-        s.cur.push_back(PassStat{pass, 0, 0, 0});
-        p = &s.cur.back();
-    }
+    PassStat* p = &passStat(s, pass);
     p->read += t.read;
     p->written += t.written;
     s.curRead += t.read;
@@ -531,12 +528,22 @@ void recordRendering(const VkRenderingInfo& info, VkFormat (*viewFormat)(VkImage
         if (e.name == pass) ++e.renders;
 }
 
+void addVertexFetch(uint64_t bytes) {
+    const char* pass = t_pass ? t_pass : "outros";
+    State& s = state();
+    std::lock_guard<std::mutex> lock(s.m);
+    passStat(s, pass).vertexBytes += bytes;
+    s.curVertex += bytes;
+}
+
 void beginFrame() {
     State& s = state();
     std::lock_guard<std::mutex> lock(s.m);
     s.last.frame = s.frame++;
     s.last.read = s.curRead;
     s.last.written = s.curWritten;
+    s.last.vertexBytes = s.curVertex;
+    s.curVertex = 0;
     s.last.passes.swap(s.cur);
     s.cur.clear();
     if (s.detail) {
@@ -630,9 +637,13 @@ void maybeReport(uint64_t frame) {
     for (const auto& p : f.passes) {
         const float ms = Profiler::getGpuTime(p.name);
         const double gbs = ms > 0.0f ? (p.read + p.written) / (ms * 1e6) : 0.0;
-        ERUPTION_LOG_WARN("[FLUXO]   %-28s le %7.2f MB grava %7.2f MB  %2u render(s)  gpu %.3f ms  %.1f GB/s",
-                          p.name.c_str(), p.read / kMB, p.written / kMB, p.renders, ms, gbs);
+        ERUPTION_LOG_WARN("[FLUXO]   %-28s le %7.2f MB grava %7.2f MB  %2u render(s)  gpu %.3f ms  %.1f GB/s"
+                          "  vertices %.2f MB",
+                          p.name.c_str(), p.read / kMB, p.written / kMB, p.renders, ms, gbs, p.vertexBytes / kMB);
     }
+    ERUPTION_LOG_WARN("[FLUXO] quadro %llu: busca de vertice %.2f MB (indices x passo, limite superior; so' passes "
+                      "instrumentados)",
+                      static_cast<unsigned long long>(f.frame), f.vertexBytes / kMB);
     if (f.dramValid && f.dramSeconds > 0.0)
         ERUPTION_LOG_WARN("[FLUXO] DRAM (controlador, sistema inteiro): %.2f GB/s leitura, %.2f GB/s escrita",
                           f.dramReadBytes / f.dramSeconds / 1e9, f.dramWriteBytes / f.dramSeconds / 1e9);

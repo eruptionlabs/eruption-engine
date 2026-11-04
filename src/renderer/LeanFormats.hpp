@@ -54,4 +54,12 @@ inline bool& postFused() {
     return on;
 }
 
+// OE-03: stream de vertice so' da sombra (posicao 12 B + UV/indice 12 B por
+// vertice) no lugar do vertice inteiro de 88 B. Preset "shadow_vertex_stream";
+// ERUPTION_TEST_SHADOW_STREAM=1|0 forca.
+inline bool& shadowStream() {
+    static bool on = false;
+    return on;
+}
+
 } // namespace eruption::lean

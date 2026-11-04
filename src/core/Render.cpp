@@ -2960,6 +2960,17 @@ void Engine::render() {
     // ERUPTION_TEST_FLUXO_REPORT=<quadro>: tabela de bytes por passe no log
     // (medidor de banda, spec 50), no mesmo relogio de quadros da gravacao.
     bw::maybeReport(static_cast<uint64_t>(std::max(0, m_framesCount)));
+    {
+        // Spec 52 (OE-03): VRAM extra dos streams de vertice da sombra, na
+        // mesma linha do relatorio do medidor.
+        static const long kAt = [] {
+            const char* e = std::getenv("ERUPTION_TEST_FLUXO_REPORT");
+            return e ? std::strtol(e, nullptr, 10) : -1L;
+        }();
+        if (kAt >= 0 && m_framesCount == kAt)
+            ERUPTION_LOG_WARN("[FLUXO] streams de vertice da sombra: %.2f MB de VRAM",
+                              double(ModelRenderer::shadowStreamBytes()) / (1024.0 * 1024.0));
+    }
 
     // ERUPTION_TEST_RECORD="pasta,primeiro,quantos[,passo]" (teste): grava
     // `quantos` PNGs a partir do quadro `primeiro`, um a cada `passo` quadros
