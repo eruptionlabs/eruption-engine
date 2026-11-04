@@ -34,4 +34,17 @@ inline bool shadowD16Supported(VkPhysicalDevice gpu) {
     return (p.optimalTilingFeatures & need) == need;
 }
 
+// OPERACOES ENXUTAS (spec 52). Mesmo esquema: chave de preset + env de A/B,
+// decididas uma vez no Engine::init, antes de qualquer pipeline.
+
+// OE-01: load/store enxutos (cascata guardada sem LOAD do atlas, profundidade
+// do ceu-para-textura descartada, passe vazio nao abre, STORE_OP_NONE nativo,
+// mascara reativa so' gravada quando o FSR le'). Preset "lean_ops";
+// ERUPTION_TEST_LEAN_OPS=1|0 forca. A imagem nao muda: so' deixa de ler e
+// gravar o que ninguem usa.
+inline bool& leanOps() {
+    static bool on = false;
+    return on;
+}
+
 } // namespace eruption::lean

@@ -327,6 +327,8 @@ public:
     // FSR 3.1 utilizavel neste device (subgroup quad em compute, escrita de
     // storage image sem formato, grupo de 256 invocacoes).
     bool fsrSupported() const { return m_fsrSupported; }
+    // VK_KHR/EXT_load_store_op_none ligada no device (spec 52).
+    bool storeOpNoneSupported() const { return m_storeOpNoneExt != nullptr; }
     // Array de texturas indexado livremente no shader (descriptor indexing).
     // Sem ele (GPU/driver antigo, ou ERUPTION_NO_BINDLESS=1 para testar) o
     // motor usa os shaders .nb.spv e as camadas de TextureLayers, um set por
@@ -361,6 +363,7 @@ private:
     VkPhysicalDeviceDescriptorIndexingFeatures m_descriptorIndexing{};
     VkPhysicalDeviceImageRobustnessFeatures m_imageRobustness{};
     bool m_hasImageRobustness = false;
+    const char* m_storeOpNoneExt = nullptr; // nome da extensao ligada, ou nullptr
     static bool deviceHasExtension(VkPhysicalDevice device, const char* name);
 
     // Transfer pool for immediate submit

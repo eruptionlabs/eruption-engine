@@ -1,6 +1,7 @@
 #include "renderer/skymap/ProceduralSkyBackend.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "core/Logger.hpp"
+#include "renderer/LeanFormats.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cstring>
@@ -505,7 +506,9 @@ void ProceduralSkyBackend::renderToTexture(VkCommandBuffer cmd, const DayNightCy
     depthAttach.imageView = m_depthView;
     depthAttach.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthAttach.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    // Spec 52 (lean_ops): a profundidade so' serve ao teste deste passe e
+    // ninguem a amostra depois (o reflexo le' so' a cor): nao vai a memoria.
+    depthAttach.storeOp = lean::leanOps() ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
     depthAttach.clearValue.depthStencil = {1.0f, 0};
 
     VkRenderingInfo renderingInfo = {};

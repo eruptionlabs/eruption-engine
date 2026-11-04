@@ -7,6 +7,7 @@
 #include "renderer/BindlessDescriptor.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/VkCompat.hpp"
+#include "renderer/LeanFormats.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
@@ -1807,7 +1808,8 @@ void VfxSystem::draw(VkCommandBuffer cmd, VkImage litImage, VkImageView litView,
     colors[1].imageView = m_reactiveView;
     colors[1].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colors[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colors[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colors[1].storeOp = (lean::leanOps() && !m_reactiveConsumed) ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                                                 : VK_ATTACHMENT_STORE_OP_STORE;
     colors[1].clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
     VkRenderingAttachmentInfo depth{};
     depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;

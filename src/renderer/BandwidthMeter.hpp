@@ -41,6 +41,10 @@ struct Traffic {
 // CLEAR e DONT_CARE nao leem; DONT_CARE nao grava.
 Traffic attachmentTraffic(VkFormat f, uint32_t w, uint32_t h, uint32_t layers, VkAttachmentLoadOp load,
                           VkAttachmentStoreOp store);
+// Com STORE_OP_NONE nativo (VK_KHR/EXT_load_store_op_none ligada e usada,
+// spec 52) o anexo so' lido nao e' gravado: NONE deixa de contar.
+void setStoreOpNoneNative(bool native);
+bool storeOpNoneNative();
 
 // --------------------------------------------------------------- auditoria
 struct ImageDesc {
