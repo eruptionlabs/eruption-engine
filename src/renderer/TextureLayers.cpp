@@ -85,9 +85,15 @@ VkShaderModule loadModule(VkDevice device, const char* path) {
 
 } // namespace
 
+bool TextureLayers::layerBDisabled() {
+    static const bool disabled = std::getenv("ERUPTION_DISABLE_LAYER_B") != nullptr;
+    return disabled;
+}
+
 std::vector<VkDescriptorSetLayoutBinding> TextureLayers::layoutBindings() {
-    std::vector<VkDescriptorSetLayoutBinding> bindings(kBindingCount);
-    for (uint32_t i = 0; i < kBindingCount; ++i) {
+    const uint32_t count = layerBDisabled() ? kLayersBBinding : kBindingCount;
+    std::vector<VkDescriptorSetLayoutBinding> bindings(count);
+    for (uint32_t i = 0; i < count; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = i == kTableBinding ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
                                                         : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -98,7 +104,8 @@ std::vector<VkDescriptorSetLayoutBinding> TextureLayers::layoutBindings() {
 }
 
 std::vector<VkDescriptorPoolSize> TextureLayers::poolSizes(uint32_t sets) {
-    return {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, (kBindingCount - 1) * sets},
+    const uint32_t count = layerBDisabled() ? kLayersBBinding : kBindingCount;
+    return {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, (count - 1) * sets},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, sets}};
 }
 
@@ -143,7 +150,7 @@ bool TextureLayers::init(VulkanContext* ctx, uint32_t slotCount, uint32_t layerS
     if (initial > 32) ERUPTION_LOG_WARN("Texture layers: %u layers reserved at start", initial);
     // ERUPTION_DISABLE_LAYER_B=1 (diagnostico): nao cria o 2o array nem o usa;
     // as ligacoes 11/12 recebem a vista do A (precisam apontar para algo valido).
-    m_bDisabled = std::getenv("ERUPTION_DISABLE_LAYER_B") != nullptr;
+    m_bDisabled = layerBDisabled();
     if (m_bDisabled) {
         ERUPTION_LOG_WARN("Texture layers: array B desligado (ERUPTION_DISABLE_LAYER_B)");
     } else {
@@ -619,7 +626,8 @@ void TextureLayers::writeArrayBindings(VkDescriptorSet set) {
     };
     const uint32_t bindings[4] = {kLayersBinding, kLayersNearestBinding, kLayersBBinding, kLayersNearestBBinding};
     VkWriteDescriptorSet writes[4] = {};
-    for (uint32_t i = 0; i < 4; ++i) {
+    const uint32_t writeCount = m_bDisabled ? 2u : 4u; // sem B, as ligacoes 11/12 nem existem no layout
+    for (uint32_t i = 0; i < writeCount; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = set;
         writes[i].dstBinding = bindings[i];
@@ -627,7 +635,7 @@ void TextureLayers::writeArrayBindings(VkDescriptorSet set) {
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[i].pImageInfo = &infos[i];
     }
-    vkUpdateDescriptorSets(m_ctx->device(), 4, writes, 0, nullptr);
+    vkUpdateDescriptorSets(m_ctx->device(), writeCount, writes, 0, nullptr);
 }
 
 void TextureLayers::writeDirectBindings(VkDescriptorSet set) {

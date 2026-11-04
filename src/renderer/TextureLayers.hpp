@@ -35,6 +35,9 @@ public:
     static constexpr uint32_t kLayersNearestBBinding = kLayersBBinding + 1;
     static constexpr uint32_t kBindingCount = kLayersNearestBBinding + 1;
 
+    // ERUPTION_DISABLE_LAYER_B=1 (diagnostico): sem o 2o array, e o layout do set 0 volta a ter so'
+    // as ligacoes 0..10 (como antes do 2o array), em vez de so' nao usar as 11 e 12.
+    static bool layerBDisabled();
     // Ligações e tamanhos de pool do set 0 neste modo.
     static std::vector<VkDescriptorSetLayoutBinding> layoutBindings();
     static std::vector<VkDescriptorPoolSize> poolSizes(uint32_t sets);
