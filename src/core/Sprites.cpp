@@ -284,6 +284,7 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
     res.slot = m_bindless.allocateSlot();
     res.mipLevels = mipLevels;
     m_bindless.updateTexture(res.slot, res.view, m_nearestSampler);
+    if (m_bindless.layerSize() > 0) m_spriteSources[res.slot] = SpriteSource{res.image, res.alloc, res.view};
     outResources.push_back(res);
     ERUPTION_LOG_INFO("Created sprite texture: %dx%d %s -> slot %u (mips=%u)", img.width, img.height, isActuallyIndexed ? "indexed" : "rgba", res.slot, mipLevels);
     return res.slot;
@@ -770,10 +771,15 @@ void Engine::cleanupSpriteTextures(LoadedSprite& ls) {
                     ImGui_ImplVulkan_RemoveTexture(set);
             });
         }
-        m_vulkan.deferSlotImageCleanup([dev, allocator, view, image, alloc]() {
-            if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
-            if (image != VK_NULL_HANDLE) vmaDestroyImage(allocator, image, alloc);
-        });
+        // Origem ja' liberada depois da copia para a camada (decideSpriteSources):
+        // so' o slot volta.
+        const bool released = m_releasedSpriteSlots.erase(tex.slot) > 0;
+        m_spriteSources.erase(tex.slot);
+        if (!released)
+            m_vulkan.deferSlotImageCleanup([dev, allocator, view, image, alloc]() {
+                if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
+                if (image != VK_NULL_HANDLE) vmaDestroyImage(allocator, image, alloc);
+            });
         m_bindless.freeSlot(tex.slot);
     }
     m_bindless.flushUpdates(); // o slot volta à textura padrão antes de a imagem morrer
@@ -833,7 +839,7 @@ Engine::TextureStats Engine::getTextureStats() const {
         auto processSprite = [&](const LoadedSprite& ls) {
             if (!ls.loaded) return;
             for (const auto& tex : ls.textures) {
-                if (tex.image == VK_NULL_HANDLE) continue;
+                if (tex.image == VK_NULL_HANDLE || m_releasedSpriteSlots.count(tex.slot)) continue;
                 stats.totalTextures++;
                 stats.spriteTexCount++;
                 if (tex.mipLevels > 1) {
