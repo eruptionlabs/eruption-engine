@@ -204,6 +204,9 @@ public:
     VkImageView reactiveView() const { return m_reactiveView; }
     // Algo para simular/desenhar? (sem nenhum efeito, o sistema custa zero)
     bool active() const { return m_active; }
+    // Efeitos desligados (tier sem compute): nao simula nem desenha; os emissores
+    // seguem sendo lidos e jogados fora. Chamar antes do primeiro update.
+    void setSuspended(bool suspended) { m_suspended = suspended; }
     // Luz da cena para a luz por particula (a mesma do FrameUBO): sol (xyz
     // direcao em que viaja, w intensidade), cor do sol, ceu (xyz cor, w intensidade).
     void setLighting(const Vec4& sunDir, const Vec4& sunColor, const Vec4& ambient) {
@@ -404,6 +407,7 @@ private:
     void destroyBuf(Buf& b);
 
     bool m_ready = false;
+    bool m_suspended = false;
     uint32_t m_capacity = 0;
     float m_spawnScale = 1.0f;
     float m_time = 0.0f;

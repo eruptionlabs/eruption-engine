@@ -2754,6 +2754,15 @@ void Engine::applyGraphicsPreset() {
     m_assetCacheMaps = static_cast<uint32_t>(std::clamp(p.value("asset_cache_maps", 3), 1, 8));
     if (std::getenv("ERUPTION_TEST_NO_PROBES")) m_irradianceProbesEnabled = false;
     m_irradianceProbeStrength = std::clamp<float>(p.value("irradiance_probe_strength", 1.0f), 0.0f, 1.0f);
+    // COMPUTE_FREE (preset ou ERUPTION_TEST_COMPUTE_FREE=1): sem compute por quadro.
+    m_computeFree = p.value("compute_free", false);
+    envOverrideBool("ERUPTION_TEST_COMPUTE_FREE", m_computeFree);
+    if (m_computeFree) {
+        m_skyProbeEnabled = false;
+        m_irradianceProbesEnabled = false;
+        ERUPTION_LOG_WARN("[PRESET] compute_free: sem sondas, sem histograma de exposicao, sem efeitos de particula");
+    }
+    m_vfx.setSuspended(m_computeFree);
 
     // Síntese de PBR (relevo derivado onde não há PBR autoral): custa ~1,9 ms
     // de GPU por cobrir todos os materiais. Preset low abre mão.

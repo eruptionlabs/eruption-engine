@@ -1442,6 +1442,10 @@ private:
     // (especular). Preset "sky_probe" / "sky_probe_intensity";
     // ERUPTION_TEST_NO_SKY_PROBE=1 desliga (A/B).
     SkyProbe m_skyProbe;
+    // Preset "compute_free": nenhum passe de compute por quadro (sondas de ceu e de
+    // irradiancia, histograma de exposicao, vetores de movimento sem uso, efeitos
+    // de particula). Para GPUs de celular cujo driver trava em compute.
+    bool m_computeFree = false;
     bool m_skyProbeEnabled = true;
     float m_skyProbeIntensity = 1.0f;
     // PROBES DE IRRADIANCIA (G38): visibilidade do ceu por probe, bakeada ao

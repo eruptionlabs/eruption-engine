@@ -1760,7 +1760,9 @@ void Engine::render() {
     // Motion vectors de camera a partir do depth final do frame (entrada do
     // FSR). Precisa do prevViewProjNoJitter AINDA do frame anterior: ele so'
     // e' atualizado depois do pos.
-    m_cameraMotion.dispatch(cmd, m_camera, m_prevViewProjNoJitter);
+    // compute_free sem FSR nem borrao de movimento: ninguem le o resultado.
+    if (!m_computeFree || fsrActive() || m_postSettings.enableMotionBlur)
+        m_cameraMotion.dispatch(cmd, m_camera, m_prevViewProjNoJitter);
     auto fsrParams = [&]() {
         Fsr3Upscaler::FrameParams fp;
         fp.jitterPx = m_jitterPx;
@@ -1825,12 +1827,13 @@ void Engine::render() {
         m_autoExposureCurrent = lockedExposure;
         postSettings.exposure = m_postSettings.exposure * lockedExposure;
     } else if (m_autoExposureEnabled) {
-        postSettings.gpuAutoExposure = true;
+        // compute_free: sem histograma; a exposicao segue so' o orcamento de luz (abaixo).
+        postSettings.gpuAutoExposure = !m_computeFree;
         postSettings.aeTau = m_autoExposureSpeed;
         postSettings.aeDt = glm::clamp(m_timer.deltaTime(), 0.001f, 0.1f);
 
         bool gpuValid = false;
-        float gpuExp = m_postProcessor.gpuAutoExposure(gpuValid);
+        float gpuExp = m_computeFree ? 1.0f : m_postProcessor.gpuAutoExposure(gpuValid);
         if (gpuValid) {
             // Key rescales the mid-grey target: 1.55 (default) ~= x1 at noon.
             m_autoExposureCurrent = glm::clamp(gpuExp * (m_autoExposureKey / 1.55f),
