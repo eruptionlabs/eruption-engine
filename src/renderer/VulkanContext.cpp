@@ -550,7 +550,28 @@ void VulkanContext::deferFrameCleanup(std::function<void()>&& fn) {
     m_frameCleanupQueues[m_currentFrame].push_back(std::move(fn));
 }
 
-void VulkanContext::immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& fn) {
+static const char* vkResultName(VkResult r) {
+    switch (r) {
+        case VK_SUCCESS: return "VK_SUCCESS";
+        case VK_NOT_READY: return "VK_NOT_READY";
+        case VK_TIMEOUT: return "VK_TIMEOUT";
+        case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
+        case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
+        case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
+        case VK_ERROR_DEVICE_LOST: return "VK_ERROR_DEVICE_LOST";
+        case VK_ERROR_MEMORY_MAP_FAILED: return "VK_ERROR_MEMORY_MAP_FAILED";
+        case VK_ERROR_TOO_MANY_OBJECTS: return "VK_ERROR_TOO_MANY_OBJECTS";
+        case VK_ERROR_FRAGMENTED_POOL: return "VK_ERROR_FRAGMENTED_POOL";
+        default: return "VkResult desconhecido";
+    }
+}
+
+static const char* baseName(const char* path) {
+    const char* slash = std::strrchr(path ? path : "", '/');
+    return slash ? slash + 1 : (path ? path : "?");
+}
+
+void VulkanContext::immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& fn, const char* file, int line) {
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -582,7 +603,9 @@ void VulkanContext::immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& f
     vkCreateFence(m_device, &fenceInfo, nullptr, &fence);
 
     const VkResult submitted = vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence);
-    if (submitted != VK_SUCCESS) ERUPTION_LOG_ERROR("immediateSubmit: vkQueueSubmit failed (%d)", static_cast<int>(submitted));
+    if (submitted != VK_SUCCESS)
+        ERUPTION_LOG_ERROR("immediateSubmit: vkQueueSubmit failed (%d %s) chamado de %s:%d (fase: %s)", static_cast<int>(submitted),
+                           vkResultName(submitted), baseName(file), line, m_phase.load());
     // GPU travada nao pode virar espera eterna sem rastro (celular): avisa a
     // cada 10 s e continua esperando.
     while (submitted == VK_SUCCESS) {
@@ -596,8 +619,8 @@ void VulkanContext::immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& f
         std::string pending;
         for (uint32_t f = 0; f < MAX_FRAMES_IN_FLIGHT; ++f)
             if (vkGetFenceStatus(m_device, m_frameFences[f]) == VK_NOT_READY) pending += " " + std::to_string(f);
-        ERUPTION_LOG_ERROR("immediateSubmit: GPU did not finish in 10 s (last shader loaded: %s; frames pending:%s)",
-                           ShaderCompiler::lastLoaded().c_str(), pending.empty() ? " none" : pending.c_str());
+        ERUPTION_LOG_ERROR("immediateSubmit: GPU did not finish in 10 s (chamado de %s:%d; last shader loaded: %s; frames pending:%s)",
+                           baseName(file), line, ShaderCompiler::lastLoaded().c_str(), pending.empty() ? " none" : pending.c_str());
     }
 
     vkDestroyFence(m_device, fence, nullptr);

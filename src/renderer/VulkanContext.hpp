@@ -155,7 +155,10 @@ public:
     }
 
     // Synchronization helpers
-    void immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& fn);
+    // `file`/`line`: quem chamou (argumentos padrao avaliados no ponto da chamada),
+    // para o log de um envio que falha ou trava dizer de onde veio.
+    void immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& fn, const char* file = __builtin_FILE(),
+                         int line = __builtin_LINE());
     // Leva uma imagem recém-criada de UNDEFINED para `layout` já (submit e
     // espera). Para imagens que entram num descritor antes do primeiro uso:
     // sem descriptor indexing o validador confere o set inteiro.
