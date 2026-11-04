@@ -232,9 +232,13 @@ private:
     std::atomic<const char*> m_phase{"init"};
     bool m_inImmediateSubmit = false;
     bool m_shaderLite = false;
-    VkBool32 m_liteValue = VK_FALSE;
-    VkSpecializationMapEntry m_liteSpecEntry{0, 0, sizeof(VkBool32)};
-    VkSpecializationInfo m_liteSpecInfo{1, &m_liteSpecEntry, sizeof(VkBool32), &m_liteValue};
+    // [0] = LITE (constant_id 0), [1] = LITE_RELEVO (constant_id 4). Shader que
+    // nao declara um id ignora a entrada dele (regra da especializacao Vulkan).
+    VkBool32 m_liteValues[2] = {VK_FALSE, VK_FALSE};
+    VkSpecializationMapEntry m_liteSpecEntries[2] = {{0, 0, sizeof(VkBool32)},
+                                                    {4, sizeof(VkBool32), sizeof(VkBool32)}};
+    VkSpecializationInfo m_liteSpecInfo{2, m_liteSpecEntries, sizeof(m_liteValues), m_liteValues};
+    bool m_shaderLiteRelevo = false;
     void watchdogLoop();
     void createPipelineCache();
     void destroyPipelineCache();
@@ -298,6 +302,13 @@ public:
     // Liga o caminho enxuto por escolha (preset "shader_lite"), antes de as
     // pipelines serem criadas. ERUPTION_SHADER_LITE continua mandando.
     void setShaderLite(bool on);
+    // Caminho enxuto MEDIO (constant_id 4 = LITE_RELEVO, so' vale com LITE):
+    // devolve o normal map (malha e camadas do splat) e um especular GGX
+    // simples no passe unico do sol, sem MRAH-W, POM nem micro-sombra.
+    // Preset "shader_lite_relevo" / ERUPTION_SHADER_LITE_RELEVO=1|0; padrao
+    // desligado. GPU sem descriptor indexing fica no enxuto puro.
+    void setShaderLiteRelevo(bool on);
+    bool shaderLiteRelevo() const { return m_shaderLiteRelevo; }
     const VkSpecializationInfo* liteSpecialization() const { return &m_liteSpecInfo; }
     // Pode gravar neste formato como storage image (imageStore com o
     // qualificador de formato). Fora do conjunto básico (r32f, rgba8, rgba16f...)

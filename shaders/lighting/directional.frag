@@ -13,6 +13,9 @@ layout(location = 0) out vec4 outLit;
 // o driver tira o código, não só pula - o shader inteiro ocupava registrador
 // demais para a GPU de celular manter fragmentos em voo.
 layout(constant_id = 0) const bool LITE = false;
+// Enxuto MEDIO (VulkanContext::shaderLiteRelevo): no passe unico do LITE soma
+// um especular GGX simples do sol (rugosidade/metal do G-buffer, F0 0,04).
+layout(constant_id = 4) const bool LITE_RELEVO = false;
 
 // G-Buffer samplers
 layout(set = 0, binding = 0) uniform sampler2D gbufferAlbedo;
@@ -660,6 +663,26 @@ vec3 shadeLite(vec4 albedo) {
     float sunVis = (1.0 - max(shadow, calcCloudShadow(worldPos))) * texture(gbufferEmissive, inUV).a;
     vec3 lit = albedoLinear * lights.dirLightColor.rgb * (NdotL * lights.dirLightDir.w * sunVis);
     lit *= mix(1.0, ao, (1.0 - NdotL) * 0.8);
+    // Enxuto medio: brilho do sol que depende da vista e da normal (GGX +
+    // Smith-Schlick + Fresnel de Schlick), sem IBL, chuva nem sonda. Sprite
+    // fica fora, como no caminho cheio.
+    if (LITE_RELEVO && !g_spritePixel && NdotL > 0.0 && sunVis > 0.0) {
+        vec3 V = normalize(cameraPos - worldPos);
+        vec3 H = normalize(L + V);
+        float NdotV = max(dot(N, V), 1e-3);
+        float NdotH = max(dot(N, H), 0.0);
+        float VdotH = max(dot(V, H), 0.0);
+        float rough = clamp(pbrLite.g, 0.08, 1.0);
+        float a = rough * rough;
+        float a2 = a * a;
+        float dd = NdotH * NdotH * (a2 - 1.0) + 1.0;
+        float D = a2 / (3.14159265 * dd * dd);
+        float k = a * 0.5;
+        float vis = 0.25 / ((NdotL * (1.0 - k) + k) * (NdotV * (1.0 - k) + k));
+        vec3 F0 = mix(vec3(0.04), albedoLinear, clamp(pbrLite.b, 0.0, 1.0));
+        vec3 F = F0 + (1.0 - F0) * exp2((-5.55473 * VdotH - 6.98316) * VdotH);
+        lit += D * vis * F * lights.dirLightColor.rgb * (NdotL * lights.dirLightDir.w * sunVis);
+    }
 
     float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
     vec3 skyIrr = mix(lights.skyHorizon.rgb, lights.ambientSky.rgb, up * up);

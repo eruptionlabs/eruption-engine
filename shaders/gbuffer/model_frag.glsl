@@ -331,6 +331,9 @@ mat3 computeTBN(vec3 N, vec3 worldPos, vec2 uv) {
 // ladrilho (3 amostras por textura de chão). Constante de especialização: o
 // driver tira o código e o shader cabe em menos registradores.
 layout(constant_id = 0) const bool LITE = false;
+// Enxuto MEDIO (VulkanContext::shaderLiteRelevo, so' com LITE): o normal map
+// da malha e das camadas do splat volta; MRAH-W, POM e micro-sombra seguem fora.
+layout(constant_id = 4) const bool LITE_RELEVO = false;
 
 // Bits altos do slot de 16 bits da camada do splat (o slot cabe em 12): a
 // camada traz normal em slot+1 e/ou MRAH-W em slot+2 (TerrainPaint.cpp).
@@ -612,12 +615,12 @@ void main() {
     // GPU fraca: sem mapas de normal e de PBR (o preset que liga o LITE ja'
     // desliga a iluminacao PBR); normal do vertice e rugosidade padrao.
     bool hasPbr = !LITE && inPbrIndex != 0u;
-    bool hasNormal = !LITE && inNormalIndex != 0u;
+    bool hasNormal = (!LITE || LITE_RELEVO) && inNormalIndex != 0u;
     // Camadas do splat com normal/MRAH-W proprios (bits 15/14 do slot de cada
     // camada, ver TerrainPaint.cpp): o chao entra no caminho de normal mesmo
     // sem normal map na malha.
     const uint splatBits = inBlendMaskIndex != 0u ? (inSplatTex.x | inSplatTex.y | inSplatTex2.x | inSplatTex2.y) : 0u;
-    const bool splatNrm = !LITE && (splatBits & (kSplatHasNormal | (kSplatHasNormal << 16))) != 0u;
+    const bool splatNrm = (!LITE || LITE_RELEVO) && (splatBits & (kSplatHasNormal | (kSplatHasNormal << 16))) != 0u;
     const bool splatMrh = !LITE && (splatBits & (kSplatHasMrahw | (kSplatHasMrahw << 16))) != 0u;
     vec4 splatNormal = vec4(0.0), splatMrahw = vec4(0.0);
     float splatNormalW = 0.0, splatMrahwW = 0.0; // fracao do pixel coberta por camada com o mapa
