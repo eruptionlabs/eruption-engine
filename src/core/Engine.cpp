@@ -2632,6 +2632,12 @@ void Engine::applyGraphicsPreset() {
     if (const char* e = std::getenv("ERUPTION_TEST_TESS_HEIGHT_BLUR")) m_tessHeightBlur = std::stof(e);
     if (const char* e = std::getenv("ERUPTION_TEST_TESS_SPACING")) m_tessVertexSpacing = std::stof(e);
 
+    // Clima parado sem copia de tela (PostProcessor, "Weather Overlay"): preset
+    // "weather_skip_idle" ou ERUPTION_WEATHER_SKIP_IDLE=1|0. Padrao LIGADO: a
+    // imagem sai identica (PSNR 99 em clear, cloudy, rainy, heat_haze,
+    // thunderstorm; high, medium, mobile_low) - o overlay so' some quando seria copia.
+    m_postSettings.weatherSkipIdle = p.value("weather_skip_idle", true);
+    if (const char* e = std::getenv("ERUPTION_WEATHER_SKIP_IDLE")) m_postSettings.weatherSkipIdle = e[0] == '1';
     if (p.contains("weather_tier")) {
         const std::string tier = p["weather_tier"];
         m_postSettings.weatherTier = (tier == "mobile") ? WeatherTier::Mobile

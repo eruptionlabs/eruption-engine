@@ -110,6 +110,16 @@ public:
                 const WeatherParams& weather,
                 const RenderParams& params);
 
+    // Parte de CPU do render() (simula gotas/flocos/respingos do quadro) sem
+    // gravar comando. Devolve se o render() deste quadro vai desenhar algo.
+    // Quem chama antes (PostProcessor, para saber se o overlay de clima pode
+    // ser pulado) faz o render() seguinte reaproveitar a simulacao - ela roda
+    // uma vez por quadro, como antes.
+    bool prepare(const WeatherParams& weather, const RenderParams& params);
+    // prepare() chamado mas o render() deste quadro nao vai acontecer: o
+    // proximo render() volta a simular.
+    void dropPrepared() { m_prepared = false; }
+
     // Build/clear the top-down heightmap from the top-down orthographic depth
     // pass. Called by PostProcessor before the weather overlay pass so the
     // overlay and particle shaders can both read the same heightmap.
@@ -253,6 +263,9 @@ private:
     VmaAllocation m_particleAlloc = VK_NULL_HANDLE;
     uint32_t m_particleCount = 0;
     uint32_t m_particleBufferCapacity = 0;
+    // prepare() ja' rodou neste quadro: o render() seguinte nao simula de novo.
+    bool m_prepared = false;
+    bool m_preparedDraws = false;
     // Snow slice inside the contiguous [rain | snow | dust] particle pool:
     // drawn standalone when the procedural cloud field suppresses the global
     // precipitation draw (Snow-category clouds carry no rain followers).
