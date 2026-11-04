@@ -436,6 +436,13 @@ declare characters: {
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,
+    -- Takes a character out of the scene. When it was the last one using its
+    -- sprite sheet, the sheet's GPU memory (and, on phones, its texture layers)
+    -- is released too. False if there is no such character.
+    remove: (name: string) -> boolean,
+    -- Releases a sprite sheet no character uses any more (a monster type that
+    -- has left the scene). False if some character still uses it or it is not loaded.
+    release_sheet: (sprite: string) -> boolean,
     -- Characters placed in the scene (drag a PNG from the Project panel), by name.
     exists: (name: string) -> boolean,
     position: (name: string) -> vector,

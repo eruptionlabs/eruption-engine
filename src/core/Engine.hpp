@@ -734,6 +734,12 @@ public:
     int addCharacter(const std::string& name, const std::string& sprite, const Vec3& position, float facingDeg);
     bool setCharacterSprite(int index, const std::string& sprite);
     int findCharacter(const std::string& name) const;
+    // Tira o personagem da cena e devolve a folha de sprite dele se mais ninguem a usa
+    // (GPU sem bindless: cada quadro ocupa uma camada de textura). Falso se nao existe.
+    bool removeCharacter(const std::string& name);
+    // Solta uma folha da cache sem personagem usando; falso se ainda ha' quem a use
+    // ou ela nao esta carregada.
+    bool releaseCharacterSheet(const std::string& sprite);
     // Topo do sprite do personagem na tela, em pixels da interface (os de
     // ui.size), projetado com a camera e a inclinacao do billboard deste
     // quadro. Falso quando o personagem nao foi desenhado ou cai fora da tela.
