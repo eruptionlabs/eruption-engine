@@ -1248,7 +1248,7 @@ void Engine::render() {
         for (uint32_t li = 0; li < m_lavaLiquids.size() && li < m_water.lavaSurfaceCount(); ++li) {
             const LoadedMap::MapLiquid& lava = m_lavaLiquids[li];
             WaterRenderer::WaterSettings lavaSettings = adjustedSettings;
-            lavaSettings.liquidKind = 1;
+            lavaSettings.liquidKind = lava.lavaClassic ? 3 : 1; // 3 = lava classica (liquid.frag)
             // Nível vivo (setLiquidLevel) menos o da malha: a superfície sobe no shader.
             float lift = 0.0f;
             if (li < m_lavaSources.size() && m_lavaSources[li].map &&

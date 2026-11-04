@@ -729,6 +729,23 @@ void main() {
     color += causticsColor;
     color = mix(color, foamColor, totalFoam);
 
+    // LAVA CLASSICA (liquidKind 3, "lavaStyle": "classic" no .env): o visual de
+    // antes das placas de crosta - duas camadas de ruido, calor e brilho do
+    // sol; passa pela agua inteira (so' sunSpecular entra na cor).
+    if (int(ubo.extraParams.w + 0.5) == 3) {
+        float t = ubo.waterLevelAndPlanes.w;
+        vec2 fw = vWorldPos.xz * 0.010;
+        float crust = snoise(fw + vec2(t * 0.013, t * 0.021)) * 0.5 + 0.5;
+        float veins = snoise(fw * 2.7 - vec2(t * 0.027, t * 0.017)) * 0.5 + 0.5;
+        float heat = clamp(pow(1.0 - crust, 2.2) * 0.75 + pow(veins, 5.0) * 0.85, 0.0, 1.0);
+        vec3 crustCol = vec3(0.055, 0.030, 0.028);
+        vec3 hotCol = vec3(1.0, 0.30, 0.055);
+        vec3 coreCol = vec3(1.0, 0.80, 0.32);
+        vec3 lava = mix(crustCol, hotCol, heat);
+        lava = mix(lava, coreCol, pow(heat, 4.0));
+        color = lava + hotCol * heat * 1.9 + sunSpecular * 0.15;
+    }
+
     // NaN/Inf final guard
     if (any(isnan(color)) || any(isinf(color))) {
         color = vec3(0.05, 0.1, 0.15);

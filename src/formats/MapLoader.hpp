@@ -96,6 +96,9 @@ struct LoadedMap {
         // shader, ~0,75) e tinta que multiplica a cor do basalto.
         float crustCoverage = -1.0f;
         Vec3 crustTint = Vec3(1.0f);
+        // Lava: "lavaStyle": "classic" no .env = o visual anterior as placas de crosta
+        // (ruido simples com veios); ausente ou "plates" = o atual.
+        bool lavaClassic = false;
         // Margem LOBADA (opcional, nova feature): amostras de raio por
         // angulo, indice 0 = angulo 0, ultimo indice = quase 2*PI (o
         // wraparound entre o ultimo e o primeiro fecha o circulo). Uma
