@@ -1,4 +1,5 @@
 #include "renderer/ReliefSource.hpp"
+#include "utils/TextureEncoder.hpp"
 
 #include "core/Logger.hpp"
 #include "formats/TerrainParser.hpp"
@@ -180,6 +181,18 @@ std::unordered_map<uint32_t, float> uvPerUnitBySlot(const std::vector<TerrainVer
 
 } // namespace
 
+// Formatos fora do trio BC1/BC3/BC7 (ASTC, ETC2/EAC): decodifica o mip 0 pelo
+// decodificador de referencia do codificador e guarda so' o alfa.
+static bool decodeAlphaGeneric(const EtexData& e, size_t mip0, std::vector<uint8_t>& alpha) {
+    std::vector<uint8_t> rgba;
+    if (!texenc::decodeLevel(static_cast<VkFormat>(e.vkFormat), e.payload.data(), std::min(mip0, e.payload.size()),
+                             int(e.width), int(e.height), rgba))
+        return false;
+    alpha.resize(size_t(e.width) * e.height);
+    for (size_t i = 0; i < alpha.size(); ++i) alpha[i] = rgba[4 * i + 3];
+    return true;
+}
+
 bool reliefDecodeAlpha(const EtexData& e, std::vector<uint8_t>& alpha) {
     if (!e.valid() || e.width == 0 || e.height == 0) return false;
     const size_t w = e.width, h = e.height;
@@ -194,7 +207,7 @@ bool reliefDecodeAlpha(const EtexData& e, std::vector<uint8_t>& alpha) {
     const bool bc1 = e.vkFormat == VK_FORMAT_BC1_RGBA_UNORM_BLOCK || e.vkFormat == VK_FORMAT_BC1_RGB_UNORM_BLOCK;
     const bool bc3 = e.vkFormat == VK_FORMAT_BC3_UNORM_BLOCK;
     const bool bc7 = e.vkFormat == VK_FORMAT_BC7_UNORM_BLOCK;
-    if (!bc1 && !bc3 && !bc7) return false;
+    if (!bc1 && !bc3 && !bc7) return decodeAlphaGeneric(e, mip0, alpha); // ASTC/ETC2 (spec 51)
     const size_t bw = (w + 3) / 4, bh = (h + 3) / 4, bb = bc1 ? 8 : 16;
     if (e.payload.size() < bw * bh * bb) return false;
     alpha.assign(w * h, 255);
@@ -211,7 +224,7 @@ bool reliefDecodeAlpha(const EtexData& e, std::vector<uint8_t>& alpha) {
         }
     return true;
 #else
-    return false;
+    return decodeAlphaGeneric(e, mip0, alpha);
 #endif
 }
 
