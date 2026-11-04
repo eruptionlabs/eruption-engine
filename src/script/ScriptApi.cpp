@@ -82,6 +82,7 @@ struct ScriptBridge {
     // Mesmo total do F3 (sem os agregados, que repetem os passes filhos).
     static float gpuMs() { return std::max(0.0f, Profiler::lastGpuTotalMs()); }
     static double vramMb() { return engine->deviceMemoryMb(); }
+    static TextureLayers::Stats layerStats() { return engine->m_bindless.layerStats(); }
 };
 Engine* ScriptBridge::engine = nullptr;
 
@@ -2339,6 +2340,17 @@ int perf_system(lua_State* L) {
     if (const size_t ram = SystemMonitor::processRamBytes()) setNumberField(L, "ram_mb", ram / (1024.0 * 1024.0));
     const double vram = ScriptBridge::vramMb();
     if (vram > 0.0) setNumberField(L, "vram_mb", vram);
+    const TextureLayers::Stats layers = ScriptBridge::layerStats();
+    if (layers.capacity > 0) {
+        lua_createtable(L, 0, 6);
+        setNumberField(L, "used", layers.used);
+        setNumberField(L, "capacity", layers.capacity);
+        setNumberField(L, "waiting", layers.waiting);
+        setNumberField(L, "lost", layers.lost);
+        setNumberField(L, "lost_events", layers.lostEvents);
+        setNumberField(L, "side", layers.side);
+        lua_setfield(L, -2, "layers");
+    }
     if (const float c = SystemMonitor::processCpuPercent(); c > 0.0f) setNumberField(L, "cpu_percent", c);
     if (const float g = SystemMonitor::gpuCorePercent(); g > 0.0f) setNumberField(L, "gpu_percent", g);
     setNumberField(L, "cpu_temp", r.cpuTemp);
@@ -3171,6 +3183,18 @@ declare lights: {
     set_sprite_shadow: (index: number, on: boolean, map: string?) -> (),
 }
 
+-- Texture layer use (phones). `lost` = textures that show the default texture
+-- right now because no layer was left; `lost_events` = failed attempts since
+-- start (one per retry). Release unused characters/maps when `lost` > 0.
+type PerfLayers = {
+    used: number,
+    capacity: number,
+    waiting: number,            -- copies still queued
+    lost: number,
+    lost_events: number,
+    side: number,               -- pixels of each layer
+}
+
 -- Machine readings for a performance meter. A field is nil where this
 -- machine does not report it. Temperatures in degrees Celsius.
 type PerfSystem = {
@@ -3190,6 +3214,9 @@ type PerfSystem = {
     thermal: string?,
     -- Phones: 1.0 = the point where the system starts to throttle.
     thermal_headroom: number?,
+    -- GPUs without descriptor indexing (most phones): the texture layers all
+    -- textures are copied into. nil on GPUs that do not use them.
+    layers: PerfLayers?,
 }
 
 -- Performance counters for an on-screen meter: the numbers the engine already

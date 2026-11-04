@@ -699,6 +699,18 @@ declare lights: {
     set_sprite_shadow: (index: number, on: boolean, map: string?) -> (),
 }
 
+-- Texture layer use (phones). `lost` = textures that show the default texture
+-- right now because no layer was left; `lost_events` = failed attempts since
+-- start (one per retry). Release unused characters/maps when `lost` > 0.
+type PerfLayers = {
+    used: number,
+    capacity: number,
+    waiting: number,            -- copies still queued
+    lost: number,
+    lost_events: number,
+    side: number,               -- pixels of each layer
+}
+
 -- Machine readings for a performance meter. A field is nil where this
 -- machine does not report it. Temperatures in degrees Celsius.
 type PerfSystem = {
@@ -718,6 +730,9 @@ type PerfSystem = {
     thermal: string?,
     -- Phones: 1.0 = the point where the system starts to throttle.
     thermal_headroom: number?,
+    -- GPUs without descriptor indexing (most phones): the texture layers all
+    -- textures are copied into. nil on GPUs that do not use them.
+    layers: PerfLayers?,
 }
 
 -- Performance counters for an on-screen meter: the numbers the engine already
