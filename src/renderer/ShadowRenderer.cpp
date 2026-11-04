@@ -1,6 +1,8 @@
 #include "renderer/ShadowRenderer.hpp"
 #include "renderer/LeanFormats.hpp"
+#include <array>
 #include <chrono>
+#include <cstdio>
 #include "utils/Profiler.hpp"
 #include <cstdlib>
 #include "renderer/DeferredLighting.hpp"
@@ -486,6 +488,27 @@ void ShadowRenderer::setShadowSnaps(const float* yawSnaps, const float* timeSnap
 
 void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera& camera, float zoomPercent, float timeOfDay) {
     m_zoomPercent = zoomPercent;
+    // ERUPTION_TEST_SHADOW_SHIFT="dx,dz,dyawGraus" (debug, teste de estabilidade):
+    // a cada quadro a SOMBRA passa a ver a camera deslocada mais (dx,dz) em XZ e
+    // o olhar girado mais dyaw, acumulando; a camera de verdade (e a imagem)
+    // fica parada. Cena parada + so' a sombra "andando" = qualquer pixel que
+    // muda na tela e' a sombra nadando. Com o snap ao texel da cascata a borda
+    // da sombra em ponto parado do mundo tem que mover 0 texel.
+    {
+        static const std::array<float, 3> kShift = [] {
+            std::array<float, 3> s{0.0f, 0.0f, 0.0f};
+            if (const char* e = std::getenv("ERUPTION_TEST_SHADOW_SHIFT"))
+                std::sscanf(e, "%f,%f,%f", &s[0], &s[1], &s[2]);
+            return s;
+        }();
+        static uint32_t sCalls = 0;
+        if (kShift[0] != 0.0f || kShift[1] != 0.0f || kShift[2] != 0.0f) {
+            const float n = static_cast<float>(++sCalls);
+            m_testShift = Vec3(kShift[0] * n, 0.0f, kShift[1] * n);
+            m_testYaw = glm::radians(kShift[2] * n);
+        }
+    }
+    auto testFwd = [this](Vec3 f) { return testRotate(f); };
     Vec3 trueLightDir = glm::normalize(light.direction);
     float yaw = std::atan2(trueLightDir.z, trueLightDir.x);
     float pitch = std::asin(trueLightDir.y);
@@ -575,7 +598,7 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
     auto computeMatrices = [&](Vec3 lDir, Mat4* renderMats, Mat4* lookupMats) {
         Vec3 up = std::abs(lDir.y) < 0.99f ? Vec3(0.0f, 1.0f, 0.0f) : Vec3(0.0f, 0.0f, 1.0f);
 
-        Vec3 camTarget = camera.target();
+        Vec3 camTarget = camera.target() + m_testShift;
         Vec3 shadowCenter = Vec3(camTarget.x, 0.0f, camTarget.z);
 
         float lightPitchFactor = 1.0f / std::max(std::abs(lDir.y), 0.15f);
@@ -636,6 +659,20 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
             m_shadowDepthRange = depthRange; // exposed to shader via shadowRanges.y
 
         Mat4 lightViewRaw = glm::lookAt(shadowCenter - lDir * eyeOffset, shadowCenter, up);
+        // PROFUNDIDADE ANCORADA NO MUNDO (so' com o atlas em D16). O olho da
+        // luz segue o alvo da camera sem snap em Z, entao a origem da
+        // profundidade desliza junto. Em D32 isso nao se ve; em D16 o degrau
+        // de quantizacao (faixa / 65535, ~0,2 m) desliza com a camera e a
+        // borda da sombra "nada" (teste de estabilidade: 0,035% x 0% dos
+        // pixels mudando por quadro com so' a camera andando). Tira a fracao
+        // de degrau da translacao em Z: a grade de profundidade fica parada
+        // no mundo, como o snap de texel ja' faz em X/Y.
+        if (lean::shadowD16()) {
+            const float zStep = (depthRange - 0.1f) / 65535.0f;
+            const float tz = lightViewRaw[3][2];
+            lightViewRaw = glm::translate(Mat4(1.0f), Vec3(0.0f, 0.0f, -(tz - std::floor(tz / zStep) * zStep))) *
+                           lightViewRaw;
+        }
 
         // Positional Snap, DONE RIGHT: the old code rounded shadowCenter in
         // WORLD axes. But the shadow texel lattice lives in LIGHT space,
@@ -814,8 +851,8 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
                 splits[i] = glm::mix(uni, log, m_settings.csmLambda);
             }
 
-            const Vec3 camPos = camera.position();
-            const Vec3 camFwd = camera.forward();
+            const Vec3 camPos = camera.position() + m_testShift;
+            const Vec3 camFwd = testFwd(camera.forward());
 
             for (uint32_t i = 0; i < CASCADE_COUNT; ++i) {
                 const float n = splits[i];
@@ -844,14 +881,19 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
 
                 // Grade ABSOLUTA: remove a fracao sub-texel da origem do
                 // mundo (viewSnapDelta) e depois trava o centro na grade.
-                Vec2 d = viewSnapDelta(texel, texel);
+                // ERUPTION_TEST_SHADOW_NO_SNAP=1 (debug): controle NEGATIVO do
+                // teste de estabilidade - sem o snap a sombra tem que nadar.
+                static const bool kNoSnap = std::getenv("ERUPTION_TEST_SHADOW_NO_SNAP") != nullptr;
+                Vec2 d = kNoSnap ? Vec2(0.0f) : viewSnapDelta(texel, texel);
                 const Mat4 lightViewI =
                     glm::translate(Mat4(1.0f), Vec3(-d.x, -d.y, 0.0f)) * lightViewRaw;
 
                 const Vec3 centerWorld = camPos + camFwd * C;
                 Vec3 cLs = Vec3(lightViewI * Vec4(centerWorld, 1.0f));
-                cLs.x = std::floor(cLs.x / texel) * texel;
-                cLs.y = std::floor(cLs.y / texel) * texel;
+                if (!kNoSnap) {
+                    cLs.x = std::floor(cLs.x / texel) * texel;
+                    cLs.y = std::floor(cLs.y / texel) * texel;
+                }
 
                 Mat4 proj = glm::ortho(cLs.x - radius, cLs.x + radius,
                                        cLs.y - radius, cLs.y + radius,
@@ -916,7 +958,7 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
         float orthoB = -halfSize, orthoT = halfSize;
         {
             const Mat4 invViewProj = glm::inverse(camera.viewProjNoJitter());
-            const Vec3 camPos = camera.position();
+            const Vec3 camPos = camera.position() + m_testShift;
             const float groundY = camTarget.y - 300.0f; // relief allowance
             const float capHalf = m_settings.lowPitchMaxTexel *
                                   static_cast<float>(m_currentAtlasSize) / 2.0f;
@@ -1035,7 +1077,7 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
     computeMatrices(currentLightDir, m_cascadeRenderMatrices, m_cascadeLookupMatrices);
     computeMatrices(nextLightDir, m_nextCascadeRenderMatrices, m_nextCascadeLookupMatrices);
     holdFarCascade(camera, currentLightDir);
-    holdStaticCache(camera.target());
+    holdStaticCache(camera.target() + m_testShift);
     {
         // Receptores: a visao da camera sem jitter, 2% mais larga (o jitter
         // e o filtro da sombra leem um pouco alem da borda). A cascata
@@ -1245,14 +1287,14 @@ void ShadowRenderer::renderWithStaticCache(VkCommandBuffer cmd, const CasterSour
 void ShadowRenderer::holdFarCascade(const Camera& camera, const Vec3& lightDir) {
     const uint32_t interval = m_settings.csmFarInterval;
     const bool canHold = interval > 1 && !m_settings.singleMap && !m_settings.enableTemporalBlend;
-    const Vec3 cam = camera.position();
+    const Vec3 cam = camera.position() + m_testShift;
     const Vec3 light = glm::normalize(lightDir);
     // Meia largura da cascata pela escala da projecao ortografica (2 / largura).
     const float half = 1.0f / std::max(std::abs(m_cascadeRenderMatrices[1][0][0]), 1e-6f);
     // Giro da camera tambem redesenha: a sombra guardada so' traz os casters
     // da visao daquele frame (receiverCull), e a ponta distante do quadro
     // anda muito mais que a posicao num giro.
-    const Vec3 fwd = camera.forward();
+    const Vec3 fwd = testRotate(camera.forward());
     bool draw = !canHold || !m_farHeldValid || m_farHeldAtlas != m_currentAtlasSize ||
                 glm::distance(cam, m_farHeldCam) > 0.03f * half || glm::dot(light, m_farHeldLight) < 0.99996f ||
                 glm::dot(fwd, m_farHeldFwd) < 0.9995f;
