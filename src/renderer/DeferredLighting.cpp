@@ -1140,6 +1140,24 @@ void DeferredLighting::renderDirectionalPass(VkCommandBuffer cmd, const Camera& 
     
     shadowUbo.cascadeSplits = shadows->getCascadeSplits();
 
+    // ERUPTION_TEST_SHADOW_ANCHOR_LOG=1 (teste): posicao (0..1 dentro da
+    // cascata; o teste multiplica pelo atlas do preset) de dois pontos fixos do mundo segundo as matrizes que a luz de fato usa
+    // (depois do cache da sombra e da cascata distante guardada). Se a sombra
+    // estiver ancorada ao mundo, a parte fracionaria nao muda quando a camera
+    // anda; tools/test_shadow_anchor.sh confere. Uma linha por quadro.
+    static const bool kAnchorLog = std::getenv("ERUPTION_TEST_SHADOW_ANCHOR_LOG") != nullptr;
+    if (kAnchorLog) {
+        const Vec3 probes[2] = {Vec3(123.4f, 3.0f, -77.7f), Vec3(2310.6f, 0.0f, 1544.2f)};
+        for (int c = 0; c < 2; ++c) {
+            for (int k = 0; k < 2; ++k) {
+                const Vec4 p = shadows->getCascadeMatrices()[c] * Vec4(probes[k], 1.0f);
+                ERUPTION_LOG_WARN("[SHADOWANCHOR] c%d p%d u=%.8f v=%.8f texel=%.5f", c, k,
+                                  static_cast<double>(p.x), static_cast<double>(p.y),
+                                  c == 0 ? shadows->getWorldTexelSize() : shadows->getC1WorldTexelSize());
+            }
+        }
+    }
+
     const auto& ss = shadows->settings();
 
     // ERUPTION_TEST_SHADOW_TINT=<0..1> (debug): paint sun-shadowed fragments magenta
