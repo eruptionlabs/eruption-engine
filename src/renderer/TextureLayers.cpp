@@ -4,6 +4,7 @@
 #include "renderer/TextureLayers.hpp"
 
 #include "core/Logger.hpp"
+#include "renderer/BandwidthMeter.hpp"
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/VkCompat.hpp"
@@ -240,6 +241,7 @@ bool TextureLayers::createArray(LayerArray& arr, VkFormat format, uint32_t capac
         ERUPTION_LOG_ERROR("Texture layers: could not create a %u-layer array", capacity);
         return false;
     }
+    bw::tagImage(arr.image, bw::kTexLayers); // censo de texturas (spec 51)
     VkImageViewCreateInfo vi{};
     vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     vi.image = arr.image;

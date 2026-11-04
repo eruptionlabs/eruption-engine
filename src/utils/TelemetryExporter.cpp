@@ -279,6 +279,13 @@ void TelemetryExporter::recordFrame(const FrameStats& st) {
         if (busy >= 0.0f && bw::deviceVendor() == 0x10DE) b["vram_busy_pct"] = busy;
         const bw::AuditStat a = bw::auditStats();
         b["audit"] = {{"targets", a.targets}, {"flagged", a.flagged}, {"warnings", a.warnings}};
+        // Censo de texturas (spec 51): [MB em bloco, MB sem compressao, imagens] por categoria.
+        nlohmann::json tex;
+        for (int c = bw::kTexContent; c < bw::kTexCategories; ++c) {
+            const bw::CensusTotal t = bw::censusTotal(static_cast<bw::TextureCategory>(c));
+            tex[bw::categoryName(static_cast<bw::TextureCategory>(c))] = {t.block / kMB, t.raw / kMB, t.count};
+        }
+        b["tex_mb"] = tex;
         j["bw"] = b;
     }
     const size_t ramBytes = SystemMonitor::processRamBytes();
