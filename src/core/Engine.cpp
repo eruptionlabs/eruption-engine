@@ -3042,6 +3042,8 @@ void Engine::recordTelemetry() {
     st.layersSide = layers.side;
     st.layersMb = layers.mb;
     st.layersWaiting = layers.waiting;
+    st.layersLost = layers.lost;
+    st.layersLostEvents = layers.lostEvents;
     st.texSourcesReleased = m_texSourcesReleased;
     st.texSourcesReleasedMb = m_texSourcesReleasedMb;
     TelemetryExporter::recordFrame(st);
