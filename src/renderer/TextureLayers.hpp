@@ -45,8 +45,11 @@ public:
     // 1/4 por vez, e cada passo faz vkDeviceWaitIdle e copia as camadas em uso
     // para um array maior (com os dois vivos), o que numa GPU lenta prende o
     // quadro por segundos. Reservar o numero esperado evita os passos.
+    // `reserveB`: o mesmo para o segundo array (0 = 2 camadas): cada passo de
+    // crescimento tem o array antigo e o novo vivos juntos, o que numa GPU com
+    // pouca memoria interna pode derrubar o envio; reservar o B evita os passos.
     bool init(VulkanContext* ctx, uint32_t slotCount, uint32_t layerSize, const VkDescriptorSet* sets,
-              VkImageView defaultView, VkSampler defaultSampler, uint32_t reserve = 0);
+              VkImageView defaultView, VkSampler defaultSampler, uint32_t reserve = 0, uint32_t reserveB = 0);
     void shutdown();
 
     // Sampler sem filtro (pixel art, paleta): a textura é lida pela ligação

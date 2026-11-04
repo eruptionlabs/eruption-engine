@@ -34,6 +34,8 @@ public:
     void setLayerSizeRequest(uint32_t size) { m_layerSizeRequest = size; }
     // Camadas reservadas ja' no init do array (antes de init); 0 = o minimo.
     void setLayerReserveRequest(uint32_t layers) { m_layerReserveRequest = layers; }
+    // O mesmo para o segundo array de camadas (antes de init); 0 = 2 camadas.
+    void setLayerReserveBRequest(uint32_t layers) { m_layerReserveBRequest = layers; }
 
     uint32_t allocateSlot();
     void freeSlot(uint32_t slot);
@@ -139,6 +141,7 @@ private:
     uint32_t m_layerSizeRequest = 0;
     std::function<void()> m_afterCopies;
     uint32_t m_layerReserveRequest = 0;
+    uint32_t m_layerReserveBRequest = 0;
 };
 
 } // namespace eruption

@@ -115,7 +115,7 @@ static uint32_t layerLimit(const VulkanContext* ctx) {
 }
 
 bool TextureLayers::init(VulkanContext* ctx, uint32_t slotCount, uint32_t layerSize, const VkDescriptorSet* sets,
-                         VkImageView defaultView, VkSampler defaultSampler, uint32_t reserve) {
+                         VkImageView defaultView, VkSampler defaultSampler, uint32_t reserve, uint32_t reserveB) {
     m_ctx = ctx;
     m_layerSize = 1;
     while (m_layerSize * 2 <= std::clamp(layerSize, 16u, 4096u)) m_layerSize *= 2;
@@ -141,7 +141,9 @@ bool TextureLayers::init(VulkanContext* ctx, uint32_t slotCount, uint32_t layerS
     const uint32_t initial = std::clamp(reserve, 32u, maxLayers);
     if (!createArray(m_array, VK_FORMAT_R8G8B8A8_UNORM, initial)) return false;
     if (initial > 32) ERUPTION_LOG_WARN("Texture layers: %u layers reserved at start", initial);
-    if (!createArray(m_arrayB, VK_FORMAT_R8G8B8A8_UNORM, 2)) return false;
+    const uint32_t initialB = std::clamp(reserveB, 2u, maxLayers);
+    if (!createArray(m_arrayB, VK_FORMAT_R8G8B8A8_UNORM, initialB)) return false;
+    if (initialB > 2) ERUPTION_LOG_WARN("Texture layers: %u layers reserved at start (array B)", initialB);
     if (!createCopyPipeline()) return false;
 
     m_table.assign(slotCount, 0u);

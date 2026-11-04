@@ -109,7 +109,12 @@ bool BindlessDescriptor::init(VulkanContext* ctx) {
         // "texture_layer_reserve" do preset (Engine::init); 0 = so' o minimo.
         uint32_t reserve = m_layerReserveRequest;
         if (const char* e = std::getenv("ERUPTION_TEX_LAYER_RESERVE")) reserve = static_cast<uint32_t>(std::atoi(e));
-        if (!m_layers.init(m_ctx, m_slotCount, layerSize, m_frameSets, m_defaultView, m_defaultSampler, reserve)) return false;
+        // Idem para o segundo array: ERUPTION_TEX_LAYER_RESERVE_B / "texture_layer_reserve_b".
+        uint32_t reserveB = m_layerReserveBRequest;
+        if (const char* e = std::getenv("ERUPTION_TEX_LAYER_RESERVE_B")) reserveB = static_cast<uint32_t>(std::atoi(e));
+        if (!m_layers.init(m_ctx, m_slotCount, layerSize, m_frameSets, m_defaultView, m_defaultSampler, reserve,
+                           reserveB))
+            return false;
         m_ctx->addFrameBeginHook([this](uint32_t frame) { onFrameBegin(frame); });
     } else {
         updateTexture(0, m_defaultView, m_defaultSampler);
