@@ -364,7 +364,12 @@ uint32_t TextureLayers::allocLayer() {
         return layer;
     }
     if (arr.next >= arr.capacity && !growArray()) {
-        ERUPTION_LOG_ERROR("Texture layers: array full (%u layers)", arr.capacity);
+        // Um erro por textura enchia o log (centenas de linhas iguais em um
+        // celular de teste); registra so' nas potencias de dois, com o total.
+        ++m_layersLost;
+        if ((m_layersLost & (m_layersLost - 1)) == 0)
+            ERUPTION_LOG_ERROR("Texture layers: array full (%u layers); %u texture(s) so far show the default texture",
+                               arr.capacity, m_layersLost);
         return 0;
     }
     return arr.next++;
