@@ -11,6 +11,7 @@
 
 #include "core/Engine.hpp"
 #include "core/EngineInternal.hpp"
+#include "renderer/BandwidthMeter.hpp"
 #include "renderer/PostFormat.hpp"
 #include "game/PlayerController.hpp"
 #include "core/Logger.hpp"
@@ -849,8 +850,10 @@ void Engine::render() {
         m_shadowRenderer.setSunAngularRadius(m_deferredLighting.sunAngularRadius());
         m_shadowRenderer.updateCascades(env.sun, m_camera, zoomPercent, m_dayNightCycle.timeOfDay());
         m_vulkan.writeTimestamp(cmd, 0, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::setPass("Shadows"); // medidor de banda: mesmo nome do tempo de GPU
         m_shadowRenderer.renderCascades(cmd, &m_terrainRenderer, &m_modelRenderer, &m_spriteRenderer, frameUbo, m_spriteSystem.instanceBuffer(), m_spriteSystem.visibleCount());
         m_vulkan.writeTimestamp(cmd, 1, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::setPass(nullptr);
         Profiler::addGpuTime("Shadows", m_vulkan.timestampDeltaMs(0, 1));
     }
     cpuMark(2);
@@ -871,7 +874,9 @@ void Engine::render() {
     }
     
     if (!m_benchmarkThunderstorm && m_showMinimapHud) { // minimapa escondido: nem desenha
+        bw::setPass("Minimap");
         renderMinimap(cmd);
+        bw::setPass(nullptr);
     cpuMark(3); // minimap fora do custo do G-buffer
     }
 
@@ -905,6 +910,7 @@ void Engine::render() {
     updateSpriteDominantLights();
     m_spriteRenderer.uploadSpriteLights(spriteDominantLights()); // contraluz no sprite.frag (M9)
     m_vulkan.writeTimestamp(cmd, 2, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass("GBuffer"); // medidor de banda: mesmo nome do tempo de GPU
     m_gbuffer.beginPass(cmd);
     // PIPELINE STATISTICS em volta do passe de GEOMETRIA: e' aqui que se
     // responde quantos triangulos o rasterizador de fato viu (e nao quantos o
@@ -970,6 +976,7 @@ void Engine::render() {
     m_vulkan.endPipelineStats(cmd);
     m_gbuffer.endPass(cmd);
     m_vulkan.writeTimestamp(cmd, 3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass(nullptr);
     Profiler::addGpuTime("GBuffer", m_vulkan.timestampDeltaMs(2, 3));
     cpuMark(4);
 
@@ -1039,6 +1046,7 @@ void Engine::render() {
     }
     if (m_vfx.active()) {
         m_vulkan.writeTimestamp(cmd, 12, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::setPass("VFX Sim"); // medidor de banda: mesmo nome do tempo de GPU
         m_vfx.simulate(cmd, m_gbuffer.depthView());
         // Particulas de malha (detritos, estilhacos): opacas, no G-buffer,
         // DEPOIS da simulacao. A colisao le' a profundidade so' da cena - com
@@ -1052,9 +1060,11 @@ void Engine::render() {
             m_gbuffer.transitionToRead(cmd);
         }
         m_vulkan.writeTimestamp(cmd, 13, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::setPass(nullptr);
         Profiler::addGpuTime("VFX Sim", m_vulkan.timestampDeltaMs(12, 13));
     }
     m_vulkan.writeTimestamp(cmd, 4, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass("Deferred Lighting"); // medidor de banda: mesmo nome do tempo de GPU
     {
         Vec3 worldMin(-3000.0f, 0.0f, -3000.0f);
         Vec3 worldMax(3000.0f, 2000.0f, 3000.0f);
@@ -1093,6 +1103,7 @@ void Engine::render() {
             m_timer.elapsed());
     }
     m_vulkan.writeTimestamp(cmd, 5, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass(nullptr);
     Profiler::addGpuTime("Deferred Lighting", m_vulkan.timestampDeltaMs(4, 5));
     cpuMark(6);
 
@@ -1154,6 +1165,7 @@ void Engine::render() {
     }
 
     m_vulkan.cmdImageBarrier(cmd, m_gbuffer.depthImage(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    bw::setPass("Forward"); // medidor de banda: abertura do passe de agua/ceu (LOAD+STORE)
     m_vulkan.cmdBeginRendering(cmd, {colorAttachment}, &depthAttachment, nullptr, renderExtent());
 
     // Water forward pass (transparent) — BEFORE skybox so depth buffer still has terrain
@@ -1172,6 +1184,7 @@ void Engine::render() {
 
     m_water.setViewport((float)renderExtent().width, (float)renderExtent().height);
     m_vulkan.writeTimestamp(cmd, 10, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass("Water"); // medidor de banda: mesmo nome do tempo de GPU
     if (m_renderEffects[7]->isEnabled()) {
         WaterRenderer::WaterSettings adjustedSettings = m_waterMenu.config;
         adjustedSettings.waterLevel = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
@@ -1279,6 +1292,7 @@ void Engine::render() {
         }
     }
     m_vulkan.writeTimestamp(cmd, 11, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass(nullptr);
     Profiler::addGpuTime("Water", m_vulkan.timestampDeltaMs(10, 11));
     cpuMark(7);
 
@@ -1303,6 +1317,7 @@ void Engine::render() {
     }
 
     m_vulkan.writeTimestamp(cmd, 6, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass("Skybox IBL"); // medidor de banda: mesmo nome do tempo de GPU
     if (!m_benchmarkThunderstormStarted) {
         // ERUPTION_TEST_NO_SKY=1 (captura): fundo sem ceu, como nos mapas
         // classicos de visao isometrica.
@@ -1311,6 +1326,7 @@ void Engine::render() {
             m_skybox.render(cmd, m_dayNightCycle, m_camera.skyboxViewProjJittered());
     }
     m_vulkan.writeTimestamp(cmd, 7, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass(nullptr);
     Profiler::addGpuTime("Skybox IBL", m_vulkan.timestampDeltaMs(6, 7));
 
     // Cloud layers are rendered later in the frame before post-processing.
@@ -1337,9 +1353,11 @@ void Engine::render() {
         ringColor.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         ringColor.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
         ringColor.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        bw::setPass("Ground Rings"); // medidor de banda
         m_vulkan.cmdBeginRendering(cmd, {ringColor}, nullptr, nullptr, renderExtent());
         m_spriteRenderer.renderGroundRings(cmd, frameUbo, m_groundRings, m_gbuffer.depthView(), m_gbuffer.pbrView());
         m_vulkan.cmdEndRendering(cmd);
+        bw::setPass(nullptr);
     }
 
     // Disco do pe' dos sprites como DECAL: le' a profundidade (agora so'
@@ -1355,6 +1373,7 @@ void Engine::render() {
             decalColor.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             decalColor.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             m_vulkan.writeTimestamp(cmd, 60, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            bw::setPass("Sprite Shadow Decal"); // medidor de banda: mesmo nome do tempo de GPU
             m_vulkan.cmdBeginRendering(cmd, {decalColor}, nullptr, nullptr, renderExtent());
             static std::vector<SpritePointShadow> pointShadows;
             pointShadows.clear();
@@ -1372,6 +1391,7 @@ void Engine::render() {
                                                                decalKind == 4 ? 1.0f + m_spriteContactSun : 0.0f));
             m_vulkan.cmdEndRendering(cmd);
             m_vulkan.writeTimestamp(cmd, 61, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            bw::setPass(nullptr);
             Profiler::addGpuTime("Sprite Shadow Decal", m_vulkan.timestampDeltaMs(60, 61));
         }
     }
@@ -1413,6 +1433,7 @@ void Engine::render() {
             shadowInfo.colorAttachmentCount = 1;
             shadowInfo.pColorAttachments = &shadowColorAttach;
 
+            bw::setPass("Cloud Shadows"); // medidor de banda: abertura do acumulo de sombra de nuvem
             vkc::cmdBeginRendering(cmd, &shadowInfo);
         }
         // Global cloud shadow: dormant while the procedural field replaces the
@@ -1425,6 +1446,7 @@ void Engine::render() {
         // Independent cloud layers: each casts its own ground shadow.
         const Vec3 cloudLightDir = m_shadowRenderer.currentLightDir();
         m_vulkan.writeTimestamp(cmd, 28, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::setPass("Cloud Shadows (field)"); // medidor de banda: mesmo nome do tempo de GPU
         if (!skipCloudShadows) {
             for (const auto& icl : m_independentCloudLayers) {
                 m_cloudLayerRenderer.renderCloudLayerShadow(cmd, icl.rendererId,
@@ -1435,6 +1457,7 @@ void Engine::render() {
             }
         }
         m_vulkan.writeTimestamp(cmd, 29, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::setPass(nullptr);
         Profiler::addGpuTime("Cloud Shadows (field)", m_vulkan.timestampDeltaMs(28, 29));
         if (accumBegun) {
             m_cloudLayerRenderer.endCloudShadowAccumApply(cmd, m_deferredLighting.litImageView(), swapW, swapH);
@@ -1477,6 +1500,7 @@ void Engine::render() {
         planeInfo.pColorAttachments = &planeColorAttach;
         planeInfo.pDepthAttachment = &planeDepthAttach;
 
+        bw::setPass("Cloud Volumes (field)"); // medidor de banda: mesmo nome do tempo de GPU
         vkc::cmdBeginRendering(cmd, &planeInfo);
         m_vulkan.writeTimestamp(cmd, 36, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         // Global coverage plane: dormant while the procedural field replaces
@@ -1669,6 +1693,7 @@ void Engine::render() {
             }
         }
         m_vulkan.writeTimestamp(cmd, 37, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::setPass(nullptr);
         Profiler::addGpuTime("Cloud Volumes (field)", m_vulkan.timestampDeltaMs(36, 37));
 
         // Fumaça do mapa (emissores declarados no .env): uma coluna
@@ -1682,6 +1707,7 @@ void Engine::render() {
                                m_cloudLayerRenderer.hasSmokePipeline();
         if (drawSmoke) {
             m_vulkan.writeTimestamp(cmd, 38, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            bw::setPass("Map Smoke"); // medidor de banda: mesmo nome do tempo de GPU
             // Vento do clima, convertido para m/s com a mesma constante que
             // move as nuvens independentes (uvFactor 20 / tamanho do mundo).
             const auto& ccfg = m_cloudLayerRenderer.config();
@@ -1732,16 +1758,19 @@ void Engine::render() {
             }
             vkc::cmdEndRendering(cmd);
             m_vulkan.writeTimestamp(cmd, 39, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            bw::setPass(nullptr);
             Profiler::addGpuTime("Map Smoke", m_vulkan.timestampDeltaMs(38, 39));
         }
         // Particulas: depois da fumaca, no lit com a profundidade so' leitura
         // (teste de profundidade por hardware + borda suave pela amostra).
         if (m_vfx.active()) {
             m_vulkan.writeTimestamp(cmd, 14, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            bw::setPass("VFX Draw"); // medidor de banda: mesmo nome do tempo de GPU
             m_vfx.drawLowRes(cmd, m_gbuffer.depthView(), renderExtent()); // fumaca em meia resolucao
             m_vfx.draw(cmd, m_deferredLighting.litImage(), m_deferredLighting.litImageView(), m_gbuffer.depthView(),
                        renderExtent());
             m_vulkan.writeTimestamp(cmd, 15, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            bw::setPass(nullptr);
             Profiler::addGpuTime("VFX Draw", m_vulkan.timestampDeltaMs(14, 15));
         }
         m_vfx.endFrame(cmd); // sem particula: zera a mascara reativa uma vez
@@ -1752,6 +1781,7 @@ void Engine::render() {
     // Cobertura dos sprites (render) enquanto o depth ainda e' attachment de
     // leitura: vira a mascara reativa do FSR logo abaixo.
     if (m_spriteLayerActive) {
+        bw::PassScope bwSprite("Sprite Layer"); // medidor de banda
         m_spriteLayer.renderMask(cmd, m_gbuffer.depthView(), m_spriteSystem.instanceBuffer(),
                                  m_spriteSystem.visibleCount(), m_camera.viewProjJittered());
         m_spriteLayer.buildReactive(cmd);
@@ -1788,12 +1818,15 @@ void Engine::render() {
     };
     if (m_upscalerMode == UpscalerMode::FsrBeforePost) {
         m_vulkan.writeTimestamp(cmd, kQFsrBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::setPass("FSR"); // medidor de banda: mesmo nome do tempo de GPU
         m_fsr.dispatch(cmd, fsrParams());
         m_vulkan.writeTimestamp(cmd, kQFsrEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::setPass(nullptr);
         Profiler::addGpuTime("FSR", m_vulkan.timestampDeltaMs(kQFsrBegin, kQFsrEnd));
         // Sprites nitidos por cima da saida do FSR, ainda em HDR linear: o pos
         // (DoF, bloom, tonemap) passa por cima deles como antes.
         if (m_spriteLayerActive) {
+            bw::PassScope bwSprite("Sprite Layer"); // medidor de banda
             m_spriteLayer.renderLayer(cmd, m_fsr.outputImage(), m_fsr.outputView(),
                                       {m_fsr.displayWidth(), m_fsr.displayHeight()},
                                       m_spriteSystem.instanceBuffer(), m_spriteSystem.visibleCount(),
@@ -1939,6 +1972,7 @@ void Engine::render() {
     // the sand/dust box uses the same heightmap for below-terrain kill and
     // the directional wind-shadow occlusion) to avoid wasting GPU time.
     m_vulkan.writeTimestamp(cmd, 24, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass("Rain TopDown Depth"); // medidor de banda: mesmo nome do tempo de GPU
     VkImageView topDownDepthView = VK_NULL_HANDLE;
     const WeatherParams& currentWeather = m_weatherSystem.current();
     bool needsTopDownDepth = postSettings.weatherTier != WeatherTier::Mobile &&
@@ -1963,6 +1997,7 @@ void Engine::render() {
         topDownDepthView = m_postProcessor.weatherRenderer().topDownDepthView();
     }
     m_vulkan.writeTimestamp(cmd, 25, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass(nullptr);
     Profiler::addGpuTime("Rain TopDown Depth", m_vulkan.timestampDeltaMs(24, 25));
 
     // Render volumetric cloud layers before post-processing.
@@ -1971,6 +2006,7 @@ void Engine::render() {
     // cloudDepth como véu de overcast. Otimizar = trocar a fonte do véu,
     // não desligar o passe (docs/perf_log.md, item 3.1).
     m_vulkan.writeTimestamp(cmd, 26, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass("Cloud Layers"); // medidor de banda: mesmo nome do tempo de GPU
     if (m_cloudLayersEnabled) {
         m_cloudLayerRenderer.render(cmd, m_camera, env.sun.direction,
                                     env.sun.intensity, m_timer.elapsed(),
@@ -1978,9 +2014,11 @@ void Engine::render() {
         cpuMark(12);
     }
     m_vulkan.writeTimestamp(cmd, 27, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass(nullptr);
     Profiler::addGpuTime("Cloud Layers", m_vulkan.timestampDeltaMs(26, 27));
 
     m_vulkan.writeTimestamp(cmd, 8, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass("Post Total"); // medidor de banda: mesmo nome do tempo de GPU
     Vec3 sunVisualDir = m_dayNightCycle.getSunVisualDirection();
     Vec3 cameraDir = m_camera.forward();
     // So' com o raymarch desta frame: com a configuracao das camadas desligada
@@ -2038,6 +2076,7 @@ void Engine::render() {
                            coverageArray.cloudBottom(), coverageArray.cloudTop(), cloudCfg.cloudScale,
                            cloudVolOccReady ? m_cloudLayerRenderer.cloudVolumeAccumView() : VK_NULL_HANDLE);
     m_vulkan.writeTimestamp(cmd, 9, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::setPass(nullptr);
     // 8..9 envolve o post inteiro; o DoF real esta' em 40..41 (PostProcessor).
     Profiler::addGpuTime("Post Total", m_vulkan.timestampDeltaMs(8, 9));
     cpuMark(13);
@@ -2061,8 +2100,10 @@ void Engine::render() {
     m_vulkan.cmdImageBarrier(cmd, m_postProcessor.outputImage(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
     if (m_upscalerMode == UpscalerMode::FsrAfterPost) {
         m_vulkan.writeTimestamp(cmd, kQFsrBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::setPass("FSR"); // medidor de banda: mesmo nome do tempo de GPU
         m_fsr.dispatch(cmd, fsrParams());
         m_vulkan.writeTimestamp(cmd, kQFsrEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        bw::setPass(nullptr);
         Profiler::addGpuTime("FSR", m_vulkan.timestampDeltaMs(kQFsrBegin, kQFsrEnd));
     }
     m_vulkan.cmdImageBarrier(cmd, m_vulkan.swapImage(imageIndex), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
@@ -2072,6 +2113,7 @@ void Engine::render() {
     // Com FSR a imagem ja' chega com anti-aliasing e na resolucao de display:
     // o UpscaleAA so' copia (FXAA desligado, Catmull-Rom 1:1, sem nitidez).
     const bool upscaleFromFsr = m_upscalerMode == UpscalerMode::FsrAfterPost;
+    bw::setPass("AA/Upscale");
     m_upscaleAA.render(cmd, upscaleFromFsr ? m_fsr.outputView() : m_postProcessor.outputView(),
                        upscaleFromFsr ? m_fsr.outputImage() : m_postProcessor.outputImage(),
                        sceneView, sceneImage,
@@ -2138,6 +2180,7 @@ void Engine::render() {
     swapAttachment.loadOp = toViewport ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
     swapAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     swapAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    bw::setPass("UI");
     m_vulkan.cmdBeginRendering(cmd, {swapAttachment}, nullptr, nullptr, m_vulkan.swapExtent());
 
     if (!m_benchmarkThunderstorm && !(m_benchmarkHeavyRain && m_benchmarkHideHud)) {
@@ -2167,6 +2210,7 @@ void Engine::render() {
     }
 
     m_vulkan.cmdEndRendering(cmd);
+    bw::setPass(nullptr);
     // CAPTURA DE TELA, com a interface junto. Fica DEPOIS do cmdEndRendering
     // de proposito: copiar a imagem enquanto ela ainda e' alvo de cor do
     // passe e' invalido em Vulkan, e na pratica a copia saia sem NADA do que
@@ -2865,6 +2909,9 @@ void Engine::render() {
     }
 
     if (m_screenshotPending) finishPendingScreenshot();
+    // ERUPTION_TEST_FLUXO_REPORT=<quadro>: tabela de bytes por passe no log
+    // (medidor de banda, spec 50), no mesmo relogio de quadros da gravacao.
+    bw::maybeReport(static_cast<uint64_t>(std::max(0, m_framesCount)));
 
     // ERUPTION_TEST_RECORD="pasta,primeiro,quantos[,passo]" (teste): grava
     // `quantos` PNGs a partir do quadro `primeiro`, um a cada `passo` quadros

@@ -9,6 +9,7 @@
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "game/PlayerController.hpp"
+#include "renderer/BandwidthMeter.hpp"
 #include "renderer/UiCanvas.hpp"
 #include "renderer/WeatherTypes.hpp"
 #include "utils/Profiler.hpp"
@@ -2385,6 +2386,52 @@ int perf_system(lua_State* L) {
     return 1;
 }
 
+// perf.bandwidth(): o medidor de banda (spec 50). Bytes por passe do quadro
+// anterior (estimativa dos anexos: formato x area x load/store), DRAM medida
+// onde ha' contador (Intel) e ocupacao da VRAM (NVML). A primeira chamada liga
+// o contador de DRAM.
+int perf_bandwidth(lua_State* L) {
+    static const bool kDram = bw::enableDramCounter();
+    (void)kDram;
+    constexpr double kMB = 1024.0 * 1024.0;
+    const bw::FrameStat f = bw::lastFrame();
+    lua_createtable(L, 0, 8);
+    setNumberField(L, "read_mb", f.read / kMB);
+    setNumberField(L, "write_mb", f.written / kMB);
+    lua_createtable(L, static_cast<int>(f.passes.size()), 0);
+    int i = 0;
+    for (const auto& p : f.passes) {
+        lua_createtable(L, 0, 4);
+        lua_pushstring(L, p.name.c_str());
+        lua_setfield(L, -2, "name");
+        setNumberField(L, "read_mb", p.read / kMB);
+        setNumberField(L, "write_mb", p.written / kMB);
+        const float ms = Profiler::getGpuTime(p.name);
+        if (ms > 0.0f) setNumberField(L, "gpu_ms", ms);
+        lua_rawseti(L, -2, ++i);
+    }
+    lua_setfield(L, -2, "passes");
+    if (f.dramValid && f.dramSeconds > 0.0) {
+        setNumberField(L, "dram_read_gbs", f.dramReadBytes / f.dramSeconds / 1e9);
+        setNumberField(L, "dram_write_gbs", f.dramWriteBytes / f.dramSeconds / 1e9);
+    }
+    lua_pushstring(L, bw::dramStatus());
+    lua_setfield(L, -2, "dram");
+    const float busy = SystemMonitor::gpuMemBusyPercent();
+    if (busy >= 0.0f && bw::deviceVendor() == 0x10DE) setNumberField(L, "vram_busy_pct", busy);
+    const bw::AuditStat a = bw::auditStats();
+    lua_createtable(L, 0, 3);
+    setNumberField(L, "targets", a.targets);
+    setNumberField(L, "flagged", a.flagged);
+    setNumberField(L, "warnings", a.warnings);
+    lua_setfield(L, -2, "audit");
+    lua_createtable(L, 0, 2);
+    setNumberField(L, "compressed_mb", a.textureCompressedBytes / kMB);
+    setNumberField(L, "uncompressed_mb", a.textureUncompressedBytes / kMB);
+    lua_setfield(L, -2, "textures");
+    return 1;
+}
+
 void lib(lua_State* L, const char* name, const luaL_Reg* fns) {
     lua_newtable(L);
     for (const luaL_Reg* f = fns; f->name; ++f) {
@@ -2540,7 +2587,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg perf[] = {
         {"fps", perf_fps}, {"frame", perf_frame}, {"resolution", perf_resolution},
         {"fps_cap", perf_fps_cap}, {"set_fps_cap", perf_set_fps_cap}, {"system", perf_system},
-        {nullptr, nullptr}};
+        {"bandwidth", perf_bandwidth}, {nullptr, nullptr}};
     lib(L, "characters", characters);
     lib(L, "fx", fx);
     lib(L, "perf", perf);
@@ -3239,6 +3286,35 @@ type PerfSystem = {
     layers: PerfLayers?,
 }
 
+-- One render pass in perf.bandwidth(): megabytes its attachments read and
+-- write (format x size x load/store; texture sampling, compute and copies are
+-- not counted) and its GPU time where the GPU has timers.
+type PerfBandwidthPass = {
+    name: string,
+    read_mb: number,
+    write_mb: number,
+    gpu_ms: number?,
+}
+
+-- Memory traffic of the last frame. The pass list is an estimate; the dram_*
+-- fields are measured by the memory controller (Intel on Linux; the whole
+-- system: CPU, integrated GPU and display) and vram_busy_pct by the NVIDIA
+-- driver (percent of time the video memory was busy, not GB/s).
+type PerfBandwidth = {
+    read_mb: number,
+    write_mb: number,
+    passes: { PerfBandwidthPass },
+    dram_read_gbs: number?,
+    dram_write_gbs: number?,
+    dram: string,               -- counter source, or why there is none
+    vram_busy_pct: number?,
+    -- Render targets seen, how many carry a flag that turns off framebuffer
+    -- compression, and the distinct warnings written to the log.
+    audit: { targets: number, flagged: number, warnings: number },
+    -- Sampled textures in memory: block-compressed and uncompressed.
+    textures: { compressed_mb: number, uncompressed_mb: number },
+}
+
 -- Performance counters for an on-screen meter: the numbers the engine already
 -- measures for its debug panel and telemetry.
 declare perf: {
@@ -3257,6 +3333,9 @@ declare perf: {
     set_fps_cap: (fps: number) -> (),
     -- Temperatures, battery and memory, read at most once a second.
     system: () -> PerfSystem,
+    -- Bytes moved per render pass in the last frame and measured memory
+    -- traffic where the machine has a counter.
+    bandwidth: () -> PerfBandwidth,
 }
 
 -- The engine's loading screen, held by the game while it builds its own

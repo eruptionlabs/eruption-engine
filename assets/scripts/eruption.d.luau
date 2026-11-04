@@ -742,6 +742,35 @@ type PerfSystem = {
     layers: PerfLayers?,
 }
 
+-- One render pass in perf.bandwidth(): megabytes its attachments read and
+-- write (format x size x load/store; texture sampling, compute and copies are
+-- not counted) and its GPU time where the GPU has timers.
+type PerfBandwidthPass = {
+    name: string,
+    read_mb: number,
+    write_mb: number,
+    gpu_ms: number?,
+}
+
+-- Memory traffic of the last frame. The pass list is an estimate; the dram_*
+-- fields are measured by the memory controller (Intel on Linux; the whole
+-- system: CPU, integrated GPU and display) and vram_busy_pct by the NVIDIA
+-- driver (percent of time the video memory was busy, not GB/s).
+type PerfBandwidth = {
+    read_mb: number,
+    write_mb: number,
+    passes: { PerfBandwidthPass },
+    dram_read_gbs: number?,
+    dram_write_gbs: number?,
+    dram: string,               -- counter source, or why there is none
+    vram_busy_pct: number?,
+    -- Render targets seen, how many carry a flag that turns off framebuffer
+    -- compression, and the distinct warnings written to the log.
+    audit: { targets: number, flagged: number, warnings: number },
+    -- Sampled textures in memory: block-compressed and uncompressed.
+    textures: { compressed_mb: number, uncompressed_mb: number },
+}
+
 -- Performance counters for an on-screen meter: the numbers the engine already
 -- measures for its debug panel and telemetry.
 declare perf: {
@@ -760,6 +789,9 @@ declare perf: {
     set_fps_cap: (fps: number) -> (),
     -- Temperatures, battery and memory, read at most once a second.
     system: () -> PerfSystem,
+    -- Bytes moved per render pass in the last frame and measured memory
+    -- traffic where the machine has a counter.
+    bandwidth: () -> PerfBandwidth,
 }
 
 -- The engine's loading screen, held by the game while it builds its own

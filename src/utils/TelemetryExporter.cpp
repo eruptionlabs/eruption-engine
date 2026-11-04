@@ -1,5 +1,6 @@
 #include "TelemetryExporter.hpp"
 
+#include "renderer/BandwidthMeter.hpp"
 #include "utils/CacheStats.hpp"
 #include "utils/Profiler.hpp"
 #include "utils/SystemMonitor.hpp"
@@ -259,6 +260,27 @@ void TelemetryExporter::recordFrame(const FrameStats& st) {
     }
     j["gpu"] = gpu;
     j["gpu_total_ms"] = gpuTotal;
+    // Medidor de banda (spec 50): bytes por passe do quadro anterior
+    // (estimativa dos anexos) e, onde ha' contador, a DRAM medida.
+    {
+        static const bool kDram = bw::enableDramCounter();
+        (void)kDram;
+        constexpr double kMB = 1024.0 * 1024.0;
+        const bw::FrameStat f = bw::lastFrame();
+        nlohmann::json passes;
+        for (const auto& p : f.passes) passes[p.name] = {p.read / kMB, p.written / kMB};
+        nlohmann::json b = {{"read_mb", f.read / kMB}, {"write_mb", f.written / kMB}, {"passes", passes}};
+        if (f.dramValid && f.dramSeconds > 0.0) {
+            b["dram_read_mb"] = f.dramReadBytes / kMB;
+            b["dram_write_mb"] = f.dramWriteBytes / kMB;
+            b["dram_s"] = f.dramSeconds;
+        }
+        const float busy = SystemMonitor::gpuMemBusyPercent();
+        if (busy >= 0.0f && bw::deviceVendor() == 0x10DE) b["vram_busy_pct"] = busy;
+        const bw::AuditStat a = bw::auditStats();
+        b["audit"] = {{"targets", a.targets}, {"flagged", a.flagged}, {"warnings", a.warnings}};
+        j["bw"] = b;
+    }
     const size_t ramBytes = SystemMonitor::processRamBytes();
     const size_t vramBytes = SystemMonitor::gpuVramBytes();
     j["sys"] = {

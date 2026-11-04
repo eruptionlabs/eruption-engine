@@ -19,6 +19,7 @@ size_t SystemMonitor::s_processRamBytes = 0;
 size_t SystemMonitor::s_totalRamBytes = 0;
 SystemMonitor::MemoryDetail SystemMonitor::s_memoryDetail;
 float SystemMonitor::s_gpuCore = 0.0f;
+float SystemMonitor::s_gpuMemBusy = -1.0f;
 float SystemMonitor::s_gpuVram = 0.0f;
 size_t SystemMonitor::s_gpuVramBytes = 0;
 size_t SystemMonitor::s_gpuVramTotal = 0;
@@ -186,6 +187,7 @@ void SystemMonitor::readGpuNvml() {
     nvmlMemory_t mem{};
     if (getUtil(device, &util) == 0) {
         s_gpuCore = static_cast<float>(util.gpu);
+        s_gpuMemBusy = static_cast<float>(util.memory);
     }
     if (getMem(device, &mem) == 0) {
         s_gpuVramBytes = mem.used;
@@ -331,6 +333,7 @@ size_t SystemMonitor::processRamBytes() { return s_processRamBytes; }
 size_t SystemMonitor::totalRamBytes() { return s_totalRamBytes; }
 const SystemMonitor::MemoryDetail& SystemMonitor::memoryDetail() { return s_memoryDetail; }
 float SystemMonitor::gpuCorePercent() { return s_gpuCore; }
+float SystemMonitor::gpuMemBusyPercent() { return s_gpuMemBusy; }
 float SystemMonitor::gpuVramPercent() { return s_gpuVram; }
 size_t SystemMonitor::gpuVramBytes() { return s_gpuVramBytes; }
 size_t SystemMonitor::gpuVramTotalBytes() { return s_gpuVramTotal; }

@@ -1194,6 +1194,17 @@ if(ERUPTION_BUILD_TESTS)
         target_compile_options(eruption-raycast-bvh-warm-tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME RaycastBvhWarmTests COMMAND eruption-raycast-bvh-warm-tests)
+
+    # Medidor de banda e auditoria de compressao (spec 50): formula de bytes
+    # por anexo e regras de flags, logica pura (so' os tipos do Vulkan).
+    add_executable(eruption-bandwidth-tests tests/test_bandwidth_meter.cpp src/renderer/BandwidthMeter.cpp
+                   src/utils/Profiler.cpp src/core/Logger.cpp)
+    target_include_directories(eruption-bandwidth-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(eruption-bandwidth-tests PRIVATE Vulkan::Vulkan Threads::Threads)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-bandwidth-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME BandwidthMeterTests COMMAND eruption-bandwidth-tests)
 endif()
 
 # Generate Linux .desktop shortcut

@@ -31,6 +31,10 @@ public:
     static const MemoryDetail& memoryDetail();
 
     static float gpuCorePercent();
+    // NVML: % do tempo em que a memoria da GPU esteve lendo ou escrevendo na
+    // ultima janela do driver (nao e' GB/s). < 0 = sem NVML. Medidor de banda
+    // (spec 50).
+    static float gpuMemBusyPercent();
     static float gpuVramPercent();
     static size_t gpuVramBytes();
     static size_t gpuVramTotalBytes();
@@ -51,6 +55,7 @@ private:
     static MemoryDetail s_memoryDetail;
 
     static float s_gpuCore;
+    static float s_gpuMemBusy;
     static float s_gpuVram;
     static size_t s_gpuVramBytes;
     static size_t s_gpuVramTotal;
