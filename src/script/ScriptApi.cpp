@@ -2089,6 +2089,19 @@ int characters_add(lua_State* L) {
     return 1;
 }
 
+// Tira o personagem e, se foi o ultimo da folha, devolve as camadas dela.
+int characters_remove(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
+    lua_pushboolean(L, eng().removeCharacter(luaL_checkstring(L, 1)));
+    return 1;
+}
+// Solta uma folha de sprite da cache que nenhum personagem usa mais.
+int characters_release_sheet(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
+    lua_pushboolean(L, eng().releaseCharacterSheet(luaL_checkstring(L, 1)));
+    return 1;
+}
+
 // ---------------------------------------------------------------- perf
 // Contador de desempenho para o jogo desenhar (o F3 e' do editor). Os numeros
 // do quadro sao os que o laco principal ja' mede para o F3 e a telemetria; o
@@ -2494,7 +2507,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"follow", characters_follow}, {"patrol", characters_patrol}, {"stop", characters_stop},
         {"set_shadow", characters_set_shadow}, {"set_sink", characters_set_sink},
         {"hide", characters_hide}, {"ring", characters_ring}, {"set_sprite", characters_set_sprite},
-        {"add", characters_add},
+        {"add", characters_add}, {"remove", characters_remove}, {"release_sheet", characters_release_sheet},
         {"flash", characters_flash}, {"shake", characters_shake}, {"lunge", characters_lunge},
         {"pop", characters_pop}, {"fade", characters_fade}, {"set_scale", characters_set_scale}, {"head_screen", characters_head_screen},
         {nullptr, nullptr}};
@@ -2920,6 +2933,13 @@ declare characters: {
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,
+    -- Takes a character out of the scene. When it was the last one using its
+    -- sprite sheet, the sheet's GPU memory (and, on phones, its texture layers)
+    -- is released too. False if there is no such character.
+    remove: (name: string) -> boolean,
+    -- Releases a sprite sheet no character uses any more (a monster type that
+    -- has left the scene). False if some character still uses it or it is not loaded.
+    release_sheet: (sprite: string) -> boolean,
     -- Characters placed in the scene (drag a PNG from the Project panel), by name.
     exists: (name: string) -> boolean,
     position: (name: string) -> vector,

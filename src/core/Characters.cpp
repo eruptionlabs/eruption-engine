@@ -103,6 +103,29 @@ int Engine::findCharacter(const std::string& name) const {
     return -1;
 }
 
+bool Engine::removeCharacter(const std::string& name) {
+    const int idx = findCharacter(name);
+    if (idx < 0) return false;
+    SceneCharacter& c = m_characters[static_cast<size_t>(idx)];
+    const std::string sheet = c.sprite;
+    cleanupSpriteTextures(c.look);
+    c.removed = true;
+    c.name.clear();
+    releaseCharacterSheet(sheet); // a cache segura uma referencia a mais: so' sai se foi o ultimo
+    return true;
+}
+
+bool Engine::releaseCharacterSheet(const std::string& sprite) {
+    const auto it = m_characterSpriteCache.find(sprite);
+    if (it == m_characterSpriteCache.end() || !it->second.loaded) return false;
+    // Outro personagem com a mesma folha: ela fica (use_count > 1 = cache + quem usa).
+    if (it->second.texturesShared && it->second.texturesShared.use_count() > 1) return false;
+    cleanupSpriteTextures(it->second);
+    m_characterSpriteUse.erase(sprite);
+    m_characterSpriteCache.erase(it);
+    return true;
+}
+
 // Velocidade padrao de walkCharacter quando ninguem pede um tempo.
 static constexpr float kPassoNormal = 60.0f;
 // Ritmo em que a animacao de andar de uma folha casa com o chao: ~1,1 altura
