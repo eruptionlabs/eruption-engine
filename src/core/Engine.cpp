@@ -2775,6 +2775,8 @@ void Engine::applyGraphicsPreset() {
     if (std::getenv("ERUPTION_TEST_NO_PROBES")) m_irradianceProbesEnabled = false;
     m_irradianceProbeStrength = std::clamp<float>(p.value("irradiance_probe_strength", 1.0f), 0.0f, 1.0f);
     // COMPUTE_FREE (preset ou ERUPTION_TEST_COMPUTE_FREE=1): sem compute por quadro.
+    m_cameraNearScale = std::clamp(p.value("camera_near_scale", 0.0f), 0.0f, 0.2f);
+    if (const char* e = std::getenv("ERUPTION_TEST_NEAR_SCALE")) m_cameraNearScale = std::clamp(std::strtof(e, nullptr), 0.0f, 0.2f);
     m_computeFree = p.value("compute_free", false);
     envOverrideBool("ERUPTION_TEST_COMPUTE_FREE", m_computeFree);
     if (m_computeFree) {

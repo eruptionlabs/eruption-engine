@@ -270,6 +270,11 @@ void Engine::render() {
     // Colisao da camera no topo tambem, pelo mesmo motivo: sombra, cull e LOD
     // leem a posicao ja' corrigida.
     updateCameraCollision(m_frameDt);
+    if (m_cameraNearScale > 0.0f) {
+        // Em passos de 1 u: a projecao so' e' refeita quando o zoom muda de verdade.
+        const float want = std::round(std::clamp(m_cameraNearScale * glm::length(m_camera.position() - m_camera.target()), cameraNear(), 60.0f));
+        if (std::abs(want - m_camera.nearPlane()) > 0.5f) m_camera.setNearPlane(std::max(want, cameraNear()));
+    }
 
     // Headless screenshot/benchmark runs: disable all debug overlays so the
     // captured frame matches what a player sees in normal gameplay.
