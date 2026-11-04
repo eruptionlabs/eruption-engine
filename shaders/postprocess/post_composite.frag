@@ -20,6 +20,14 @@ layout(set = 0, binding = 9) uniform sampler2D visionTexture;
 // um sprite (sprite.frag). O borrao de movimento de camera poupa o sprite.
 layout(set = 0, binding = 10) uniform sampler2D spriteMarkTexture;
 
+// DoF fundido (spec 52, OE-02): borrao pequeno, CoC (alfa) e borrao grande
+// pre-multiplicado. Lidos so' com push.gradingParams.w > 0 (o teto do DoF);
+// a mistura e' a mesma conta do coc_composite.frag, feita aqui em vez de
+// gravar e reler uma imagem de tela cheia.
+layout(set = 0, binding = 11) uniform sampler2D dofBlurTexture;
+layout(set = 0, binding = 12) uniform sampler2D dofCocTexture;
+layout(set = 0, binding = 13) uniform sampler2D dofFarTexture;
+
 bool spritePixel(vec2 uv) { return abs(texture(spriteMarkTexture, uv).r - 0.75) < 0.06; }
 
 // Bloco no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
@@ -38,7 +46,7 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec4 motionBlurParams; // x=enable, y=amount, z=tonemap, w=raio limpo (0 = sem)
     vec4 chromaticAberrationParams; // x=enable, y=amount, z=transicao do raio limpo, w=debug
     vec4 fogHeightParams; // x=fogHeight, y=fogHeightFalloff, z=enableHeightFog, w=unused
-    vec4 gradingParams;   // x=saturacao, y=contraste, zw=livre
+    vec4 gradingParams;   // x=saturacao, y=contraste, z=G-buffer cru, w=teto do DoF fundido
     // Do look (LookConfig): vinheta e split-toning. Bloco do PushRing de 320 B.
     vec4 vignetteParams;  // x=forca (0 desliga), y=suavidade
     vec4 shadowTint;      // rgb=matiz (normalizado pela luminancia), a=forca
@@ -52,6 +60,22 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec4 borderRect;      // x0,z0,x1,z1 em unidades do mundo
     vec4 borderParams;    // x=distancia de fusao, yzw=cor (linear)
 } push;
+
+// Cor da cena em `uv`, com o DoF misturado quando ele vem fundido.
+vec3 sceneColor(vec2 uv) {
+    vec3 orig = texture(hdrTexture, uv).rgb;
+    float maxBlur = push.gradingParams.w;
+    if (maxBlur <= 0.0) return orig;
+    vec3 blur = texture(dofBlurTexture, uv).rgb;
+    float cocA = texture(dofCocTexture, uv).a;
+    float smallCap = min(maxBlur, 3.0);
+    float blend = clamp(cocA / smallCap, 0.0, 1.0);
+    if (maxBlur > 3.0) {
+        vec4 far = texture(dofFarTexture, uv);
+        if (far.a > 1e-4) blur = mix(blur, far.rgb / far.a, smoothstep(smallCap, maxBlur, cocA));
+    }
+    return mix(orig, blur, blend);
+}
 
 // ---------------------------------------------------------------------------
 // Color grading artistico
@@ -220,7 +244,7 @@ void main() {
     // leitura conforme a cena. Sai direto e sem gamma: o pixel na tela e'
     // exatamente o texel do G-buffer.
     if (push.gradingParams.z > 0.5) {
-        outColor = vec4(texture(hdrTexture, fragUV).rgb, 1.0);
+        outColor = vec4(sceneColor(fragUV), 1.0);
         return;
     }
 
@@ -245,12 +269,12 @@ void main() {
         
         float amount = push.chromaticAberrationParams.y * distSq * 0.1 * efeito;
         
-        float r = texture(hdrTexture, fragUV + centerDist * amount).r;
-        float g = texture(hdrTexture, fragUV).g;
-        float b = texture(hdrTexture, fragUV - centerDist * amount).b;
+        float r = sceneColor(fragUV + centerDist * amount).r;
+        float g = sceneColor(fragUV).g;
+        float b = sceneColor(fragUV - centerDist * amount).b;
         color = vec3(r, g, b);
     } else {
-        color = texture(hdrTexture, fragUV).rgb;
+        color = sceneColor(fragUV);
     }
 
     // Camera Motion Blur
@@ -277,7 +301,7 @@ void main() {
         const vec3 centro = color;
         for (int i = 1; i < samples; ++i) {
             vec2 offsetUV = fragUV + velocity * (float(i) / float(samples - 1) - 0.5);
-            color += spritePixel(offsetUV) ? centro : texture(hdrTexture, offsetUV).rgb;
+            color += spritePixel(offsetUV) ? centro : sceneColor(offsetUV);
         }
         color /= float(samples);
     }

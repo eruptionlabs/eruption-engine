@@ -369,12 +369,14 @@ bool Engine::init(int width, int height, const std::string& title) {
             return on;
         };
         lean::leanOps() = key("lean_ops", "ERUPTION_TEST_LEAN_OPS");
+        lean::postFused() = key("post_fused", "ERUPTION_TEST_POST_FUSED");
         // STORE_OP_NONE nativo so' com a extensao (o device ja' existe aqui).
         const bool none = lean::leanOps() && m_vulkan.storeOpNoneSupported();
         vkc::setStoreOpNone(none);
         bw::setStoreOpNoneNative(none);
-        ERUPTION_LOG_WARN("[FLUXO] spec 52: lean_ops=%d (store_op_none %s)",
-                          lean::leanOps() ? 1 : 0, m_vulkan.storeOpNoneSupported() ? "nativo" : "sem extensao");
+        ERUPTION_LOG_WARN("[FLUXO] spec 52: lean_ops=%d (store_op_none %s) post_fused=%d",
+                          lean::leanOps() ? 1 : 0, m_vulkan.storeOpNoneSupported() ? "nativo" : "sem extensao",
+                          lean::postFused() ? 1 : 0);
     }
     // Upscaler: env > preset > FXAA. Decidido ANTES do G-buffer: a velocidade de
     // objeto (6o alvo) depende dele. Com FSR o post_scale e' ignorado (abaixo).
