@@ -1498,7 +1498,13 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
             depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             depthAttachment.imageView = atlasView;
             depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            depthAttachment.loadOp = (i == 0 && !keepFar) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            // Spec 52 (lean_ops): com a distante guardada, o passe cobre so' a
+            // c0 e a limpa no load; a c1 fica fora da render area, preservada.
+            // Antes: LOAD do atlas inteiro + vkCmdClearAttachments da c0.
+            const bool leanKeep = keepFar && lean::leanOps() && cascadeRect(0).offset.x == 0 &&
+                                  cascadeRect(0).offset.y == 0;
+            depthAttachment.loadOp = (i == 0 && (!keepFar || leanKeep)) ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                                                                       : VK_ATTACHMENT_LOAD_OP_LOAD;
             depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             depthAttachment.clearValue.depthStencil = {1.0f, 0};
 
@@ -1509,10 +1515,10 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
                 // So' a area das cascatas desenhadas: no modo de mapa unico a
                 // metade de fora nem era lida, e limpar/gravar ela custava
                 // banda (GPU de celular paga por ladrilho).
-                uint32_t renderW = m_currentAtlasSize * drawCount;
+                uint32_t renderW = leanKeep ? m_currentAtlasSize : m_currentAtlasSize * drawCount;
                 uint32_t renderH = m_currentAtlasSize;
                 m_ctx->cmdBeginRendering(cmd, {}, &depthAttachment, nullptr, {renderW, renderH});
-                if (keepFar) {
+                if (keepFar && !leanKeep) {
                     VkClearAttachment clear{};
                     clear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
                     clear.clearValue.depthStencil = {1.0f, 0};

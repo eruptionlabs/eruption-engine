@@ -198,6 +198,9 @@ public:
     void setForwardMeshes(bool on) { m_forwardMeshes = on; }
     // Fim do frame: sem particula, limpa a mascara uma vez (nao fica rastro).
     void endFrame(VkCommandBuffer cmd);
+    // Quem le' a mascara reativa (o FSR). Sem leitor e com lean_ops (spec 52)
+    // o passe de particulas nao grava a mascara de volta na memoria.
+    void setReactiveConsumed(bool consumed) { m_reactiveConsumed = consumed; }
     // Tamanho de render (cria a mascara reativa). Chamar sem frame em voo
     // usando a imagem antiga (o motor chama no bloco de resize).
     bool resize(uint32_t w, uint32_t h);
@@ -340,6 +343,7 @@ private:
     VkImageView m_reactiveView = VK_NULL_HANDLE;
     VkExtent2D m_reactiveExtent{0, 0};
     bool m_reactiveWritten = false;
+    bool m_reactiveConsumed = true;
     void destroyReactive();
     std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setLow{};
     std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setGround{};

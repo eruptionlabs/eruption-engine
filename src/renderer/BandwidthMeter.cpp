@@ -105,13 +105,20 @@ double bytesPerTexel(VkFormat f) {
     return 0.0;
 }
 
+namespace {
+bool g_noneNative = false;
+} // namespace
+
+void setStoreOpNoneNative(bool native) { g_noneNative = native; }
+bool storeOpNoneNative() { return g_noneNative; }
+
 Traffic attachmentTraffic(VkFormat f, uint32_t w, uint32_t h, uint32_t layers, VkAttachmentLoadOp load,
                           VkAttachmentStoreOp store) {
     const double bytes = bytesPerTexel(f) * static_cast<double>(w) * h * std::max(1u, layers);
     const uint64_t b = static_cast<uint64_t>(bytes + 0.5);
     Traffic t;
     if (load == VK_ATTACHMENT_LOAD_OP_LOAD) t.read = b;
-    if (store == VK_ATTACHMENT_STORE_OP_STORE || store == VK_ATTACHMENT_STORE_OP_NONE) t.written = b;
+    if (store == VK_ATTACHMENT_STORE_OP_STORE || (store == VK_ATTACHMENT_STORE_OP_NONE && !g_noneNative)) t.written = b;
     return t;
 }
 
@@ -317,8 +324,22 @@ bool readImc(Dram& d, std::vector<uint64_t>& now) {
 }
 #endif
 
+// Um anexo aberto no quadro (so' com ERUPTION_TEST_FLUXO_REPORT ligado): a
+// auditoria de load/store (spec 52) le' a sequencia de usos de cada imagem.
+struct AttachRec {
+    const char* pass;
+    VkImage image;
+    VkFormat format;
+    uint32_t w, h, layers;
+    VkAttachmentLoadOp load;
+    VkAttachmentStoreOp store;
+    bool depth;
+};
+
 struct State {
     std::mutex m;
+    bool detail = std::getenv("ERUPTION_TEST_FLUXO_REPORT") != nullptr;
+    std::vector<AttachRec> curAtt, lastAtt;
     std::unordered_map<VkImage, ImageDesc> images;
     std::unordered_map<VkImageView, VkImage> views;
     std::unordered_set<VkImage> audited;
@@ -487,6 +508,11 @@ void recordRendering(const VkRenderingInfo& info, VkFormat (*viewFormat)(VkImage
         const VkFormat f = viewFormat(a.imageView);
         accumulate(s, pass, attachmentTraffic(f, w, h, layers, a.loadOp, a.storeOp));
         auditAttachment(s, pass, a.imageView, f, a, true);
+        if (s.detail) {
+            const auto vi = s.views.find(a.imageView);
+            s.curAtt.push_back({pass, vi == s.views.end() ? VK_NULL_HANDLE : vi->second, f, w, h, layers, a.loadOp,
+                                a.storeOp, false});
+        }
     }
     const VkRenderingAttachmentInfo* d = info.pDepthAttachment;
     if (!(d && d->imageView)) d = info.pStencilAttachment;
@@ -494,6 +520,11 @@ void recordRendering(const VkRenderingInfo& info, VkFormat (*viewFormat)(VkImage
         const VkFormat f = viewFormat(d->imageView);
         accumulate(s, pass, attachmentTraffic(f, w, h, layers, d->loadOp, d->storeOp));
         auditAttachment(s, pass, d->imageView, f, *d, false);
+        if (s.detail) {
+            const auto vi = s.views.find(d->imageView);
+            s.curAtt.push_back({pass, vi == s.views.end() ? VK_NULL_HANDLE : vi->second, f, w, h, layers, d->loadOp,
+                                d->storeOp, true});
+        }
     }
     // Conta o passe uma vez (o nome ja' existe depois de accumulate).
     for (auto& e : s.cur)
@@ -508,6 +539,10 @@ void beginFrame() {
     s.last.written = s.curWritten;
     s.last.passes.swap(s.cur);
     s.cur.clear();
+    if (s.detail) {
+        s.lastAtt.swap(s.curAtt);
+        s.curAtt.clear();
+    }
     s.curRead = s.curWritten = 0;
     s.last.dramValid = false;
 #if ERUPTION_BW_IMC
@@ -601,6 +636,27 @@ void maybeReport(uint64_t frame) {
     if (f.dramValid && f.dramSeconds > 0.0)
         ERUPTION_LOG_WARN("[FLUXO] DRAM (controlador, sistema inteiro): %.2f GB/s leitura, %.2f GB/s escrita",
                           f.dramReadBytes / f.dramSeconds / 1e9, f.dramWriteBytes / f.dramSeconds / 1e9);
+    // Sequencia de anexos do quadro (spec 52, auditoria de load/store): uma
+    // linha por anexo, na ordem de abertura, com a imagem para seguir quem
+    // le' o que o passe anterior gravou.
+    std::vector<AttachRec> atts;
+    {
+        State& s = state();
+        std::lock_guard<std::mutex> lock(s.m);
+        atts = s.lastAtt;
+    }
+    static const char* const kLoad[] = {"LOAD", "CLEAR", "DONT_CARE"};
+    for (const AttachRec& r : atts) {
+        const char* ld = r.load <= VK_ATTACHMENT_LOAD_OP_DONT_CARE ? kLoad[r.load] : "NONE";
+        const char* st = r.store == VK_ATTACHMENT_STORE_OP_STORE       ? "STORE"
+                         : r.store == VK_ATTACHMENT_STORE_OP_DONT_CARE ? "DONT_CARE"
+                                                                       : "NONE";
+        // Handle nao-despachavel: ponteiro em 64 bits, uint64_t em 32 (web).
+        unsigned long long id = 0;
+        std::memcpy(&id, &r.image, sizeof(r.image) < sizeof(id) ? sizeof(r.image) : sizeof(id));
+        ERUPTION_LOG_WARN("[FLUXO]   anexo %-26s img %llx %-5s %4ux%-4u x%u %-10s %-9s %s", r.pass, id,
+                          r.depth ? "depth" : "cor", r.w, r.h, r.layers, ld, st, formatLabel(r.format).c_str());
+    }
     ERUPTION_LOG_WARN("[FLUXO] auditoria: %u alvos vistos, %u com flag que desliga compressao, %u avisos; texturas "
                       "%.1f MB em bloco (BC/ETC/ASTC), %.1f MB sem compressao",
                       a.targets, a.flagged, a.warnings, a.textureCompressedBytes / kMB, a.textureUncompressedBytes / kMB);

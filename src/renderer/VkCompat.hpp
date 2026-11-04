@@ -50,6 +50,12 @@ private:
     void* m_prevUser;
 };
 
+// STORE_OP_NONE nativo (VK_KHR/EXT_load_store_op_none ligada no device, spec
+// 52): o anexo so' lido no passe nao e' gravado de volta. Desligado, NONE vira
+// STORE como antes (mesmo conteudo, gravacao inteira).
+void setStoreOpNone(bool native);
+bool storeOpNone();
+
 // Render pass compatível com estes formatos (para pipelines feitas fora do
 // motor, como a da interface).
 VkRenderPass compatibleRenderPass(const std::vector<VkFormat>& colors, VkFormat depth, VkFormat stencil);
