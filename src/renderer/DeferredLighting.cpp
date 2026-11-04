@@ -1147,6 +1147,10 @@ void DeferredLighting::renderDirectionalPass(VkCommandBuffer cmd, const Camera& 
     // anda; tools/test_shadow_anchor.sh confere. Uma linha por quadro.
     static const bool kAnchorLog = std::getenv("ERUPTION_TEST_SHADOW_ANCHOR_LOG") != nullptr;
     if (kAnchorLog) {
+        {
+            const Vec3 cp = camera.position();
+            ERUPTION_LOG_WARN("[SHADOWCAM] lighting cam=%.5f,%.5f,%.5f", cp.x, cp.y, cp.z);
+        }
         const Vec3 probes[2] = {Vec3(123.4f, 3.0f, -77.7f), Vec3(2310.6f, 0.0f, 1544.2f)};
         for (int c = 0; c < 2; ++c) {
             for (int k = 0; k < 2; ++k) {

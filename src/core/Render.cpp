@@ -849,6 +849,14 @@ void Engine::render() {
     if (m_shadowRenderer.settings().enabled && shadowUpdate) {
         m_shadowRenderer.setSunAngularRadius(m_deferredLighting.sunAngularRadius());
         m_shadowRenderer.updateCascades(env.sun, m_camera, zoomPercent, m_dayNightCycle.timeOfDay());
+        // ERUPTION_TEST_SHADOW_ANCHOR_LOG=1: posicao da camera lida pelas cascatas
+        // neste quadro; a do passe de luz sai na linha [SHADOWANCHOR] (mesmo quadro?).
+        static const bool kAnchorLog = std::getenv("ERUPTION_TEST_SHADOW_ANCHOR_LOG") != nullptr;
+        if (kAnchorLog) {
+            const Vec3 cp = m_camera.position();
+            ERUPTION_LOG_WARN("[SHADOWCAM] frame=%llu cascades cam=%.5f,%.5f,%.5f",
+                              static_cast<unsigned long long>(m_framesCount), cp.x, cp.y, cp.z);
+        }
         m_vulkan.writeTimestamp(cmd, 0, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         bw::setPass("Shadows"); // medidor de banda: mesmo nome do tempo de GPU
         m_shadowRenderer.renderCascades(cmd, &m_terrainRenderer, &m_modelRenderer, &m_spriteRenderer, frameUbo, m_spriteSystem.instanceBuffer(), m_spriteSystem.visibleCount());
