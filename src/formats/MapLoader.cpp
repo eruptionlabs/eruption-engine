@@ -304,6 +304,7 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
                 lq.shoreHeat = std::clamp(e.value("shoreHeat", 0.0f), 0.0f, 4.0f);
                 lq.centerHeat = std::clamp(e.value("centerHeat", 0.0f), 0.0f, 4.0f);
                 lq.flowSpeed = e.value("flowSpeed", 1.0f);
+                lq.lavaClassic = e.value("lavaStyle", std::string()) == "classic";
                 if (e.contains("crustCoverage") && e["crustCoverage"].is_number())
                     lq.crustCoverage = std::clamp(e["crustCoverage"].get<float>(), 0.0f, 1.0f);
                 if (e.contains("crustTint") && e["crustTint"].is_array() && e["crustTint"].size() >= 3)
