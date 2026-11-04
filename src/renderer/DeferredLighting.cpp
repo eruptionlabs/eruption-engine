@@ -1188,7 +1188,13 @@ void DeferredLighting::renderDirectionalPass(VkCommandBuffer cmd, const Camera& 
 
     float finalBlendFactor = ss.enableTemporalBlend ? shadows->getBlendFactor() : 0.0f;
     // Slope bias removed, using constant depth and normal bias
-    shadowUbo.shadowRanges = Vec4(ss.normalBias, shadows->getShadowDepthRange(), ss.biasValue, finalBlendFactor); 
+    // ERUPTION_TEST_SHADOW_BIAS=<x> / ERUPTION_TEST_SHADOW_NORMAL_BIAS=<x> (teste):
+    // trocam bias_value / normal_bias de shadows.json sem editar o arquivo, para
+    // varrer o bias medindo os pixels que mudam com a camera quase parada.
+    static const float kBiasEnv = [] { const char* e = std::getenv("ERUPTION_TEST_SHADOW_BIAS"); return e ? std::strtof(e, nullptr) : -1.0f; }();
+    static const float kNBiasEnv = [] { const char* e = std::getenv("ERUPTION_TEST_SHADOW_NORMAL_BIAS"); return e ? std::strtof(e, nullptr) : -1.0f; }();
+    shadowUbo.shadowRanges = Vec4(kNBiasEnv >= 0.0f ? kNBiasEnv : ss.normalBias, shadows->getShadowDepthRange(),
+                                  kBiasEnv >= 0.0f ? kBiasEnv : ss.biasValue, finalBlendFactor); 
     // Opacidade da sombra por distancia (ver Engine::m_shadowOpacity): os
     // mesmos quatro nos do relevo, avaliados no shader com a distancia ate' a
     // camera. knots.x < 0 desliga e a sombra volta a ser cheia.
