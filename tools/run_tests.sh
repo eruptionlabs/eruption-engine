@@ -79,6 +79,22 @@ run_src test_ribbon src/formats/Ribbon.cpp
 run_src test_vision src/core/Vision.cpp
 run_src test_relief_bake src/renderer/ReliefBake.cpp
 
+# Estabilidade das cascatas de sombra (ancoragem ao mundo, tamanho do texel,
+# sem historia), com o ShadowRenderer::updateCascades de verdade, sem GPU, em
+# todos os modos que os presets usam. Os simbolos de Vulkan que o fonte
+# referencia mas o teste nunca chama ficam sem resolver de proposito.
+printf '\n=== test_shadow_stability ===\n'
+if g++ -std=c++17 -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DGLM_FORCE_LEFT_HANDED -I src -I include \
+    -I build/_deps/vma-src/include -I build/_deps/glm-src \
+    -I build/_deps/nlohmann_json-src/single_include -I build/_deps/nlohmann_json-src/include \
+    tests/test_shadow_stability.cpp src/renderer/ShadowRenderer.cpp src/math/Camera.cpp \
+    src/math/Frustum.cpp "$OBJ/core/Logger.cpp.o" -Wl,--unresolved-symbols=ignore-all \
+    -o "$TMP/test_shadow_stability" 2>&1 | head -20; then
+    "$TMP/test_shadow_stability" || FAIL=1
+else
+    echo "  ERRO DE COMPILACAO"; FAIL=1
+fi
+
 printf '\n========================================\n'
 [ $FAIL -eq 0 ] && echo "TODOS OS TESTES PASSARAM" || echo "HOUVE FALHA"
 printf '========================================\n'
