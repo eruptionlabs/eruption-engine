@@ -969,7 +969,7 @@ bool VulkanContext::pickPhysicalDevice() {
     ERUPTION_LOG_WARN("GPU em uso: %s", m_deviceProperties.deviceName);
     m_shaderLite = !m_bindless;
     if (const char* e = std::getenv("ERUPTION_SHADER_LITE")) m_shaderLite = e[0] == '1';
-    m_liteValue = m_shaderLite ? VK_TRUE : VK_FALSE;
+    m_liteValues[0] = m_shaderLite ? VK_TRUE : VK_FALSE;
     if (m_shaderLite) ERUPTION_LOG_WARN("Shaders: caminho enxuto (sem micro-sombra, PCSS, sombra de contato)");
     {
         // Limites de geometria que GPU de celular corta (o caminho dos modelos
@@ -1788,7 +1788,16 @@ void VulkanContext::setShaderLite(bool on) {
     const bool lite = on || !m_bindless;
     if (lite && !m_shaderLite) ERUPTION_LOG_WARN("Shaders: caminho enxuto pelo preset");
     m_shaderLite = lite;
-    m_liteValue = m_shaderLite ? VK_TRUE : VK_FALSE;
+    m_liteValues[0] = m_shaderLite ? VK_TRUE : VK_FALSE;
+}
+
+void VulkanContext::setShaderLiteRelevo(bool on) {
+    if (const char* e = std::getenv("ERUPTION_SHADER_LITE_RELEVO")) on = e[0] == '1';
+    // Sem bindless o normal map nao tem como ser indexado: fica no enxuto puro.
+    m_shaderLiteRelevo = on && m_bindless;
+    m_liteValues[1] = m_shaderLiteRelevo ? VK_TRUE : VK_FALSE;
+    if (m_shaderLiteRelevo && m_shaderLite)
+        ERUPTION_LOG_WARN("Shaders: enxuto com relevo (normal map + especular simples)");
 }
 
 void VulkanContext::markPhase(const char* phase) {

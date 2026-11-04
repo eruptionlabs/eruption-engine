@@ -345,6 +345,8 @@ bool Engine::init(int width, int height, const std::string& title) {
     // Shaders enxutos por preset ("shader_lite", ver VulkanContext::shaderLite):
     // decidido antes de qualquer pipeline de cena nascer.
     if (presetBool(graphicsPresetName(), "shader_lite", false)) m_vulkan.setShaderLite(true);
+    // Enxuto medio (normal map + especular simples), so' com o enxuto ligado.
+    m_vulkan.setShaderLiteRelevo(presetBool(graphicsPresetName(), "shader_lite_relevo", false));
     // Formatos enxutos (spec 50, LeanFormats.hpp): preset, env forca, GPU decide.
     {
         bool d16 = presetBool(graphicsPresetName(), "shadow_depth16", false);
