@@ -141,9 +141,16 @@ bool TextureLayers::init(VulkanContext* ctx, uint32_t slotCount, uint32_t layerS
     const uint32_t initial = std::clamp(reserve, 32u, maxLayers);
     if (!createArray(m_array, VK_FORMAT_R8G8B8A8_UNORM, initial)) return false;
     if (initial > 32) ERUPTION_LOG_WARN("Texture layers: %u layers reserved at start", initial);
-    const uint32_t initialB = std::clamp(reserveB, 2u, maxLayers);
-    if (!createArray(m_arrayB, VK_FORMAT_R8G8B8A8_UNORM, initialB)) return false;
-    if (initialB > 2) ERUPTION_LOG_WARN("Texture layers: %u layers reserved at start (array B)", initialB);
+    // ERUPTION_DISABLE_LAYER_B=1 (diagnostico): nao cria o 2o array nem o usa;
+    // as ligacoes 11/12 recebem a vista do A (precisam apontar para algo valido).
+    m_bDisabled = std::getenv("ERUPTION_DISABLE_LAYER_B") != nullptr;
+    if (m_bDisabled) {
+        ERUPTION_LOG_WARN("Texture layers: array B desligado (ERUPTION_DISABLE_LAYER_B)");
+    } else {
+        const uint32_t initialB = std::clamp(reserveB, 2u, maxLayers);
+        if (!createArray(m_arrayB, VK_FORMAT_R8G8B8A8_UNORM, initialB)) return false;
+        if (initialB > 2) ERUPTION_LOG_WARN("Texture layers: %u layers reserved at start (array B)", initialB);
+    }
     if (!createCopyPipeline()) return false;
 
     m_table.assign(slotCount, 0u);
@@ -376,6 +383,7 @@ bool TextureLayers::createCopyPipeline() {
 // kBLayerFlag quando a camada e' do B; 0 = nenhum dos dois tem lugar.
 uint32_t TextureLayers::allocLayer() {
     for (LayerArray* arr : {&m_array, &m_arrayB}) {
+        if (arr == &m_arrayB && m_bDisabled) continue;
         const uint32_t flag = arr == &m_arrayB ? kBLayerFlag : 0u;
         if (!arr->freeLayers.empty()) {
             const uint32_t layer = arr->freeLayers.back();
@@ -606,8 +614,8 @@ void TextureLayers::writeArrayBindings(VkDescriptorSet set) {
     const VkDescriptorImageInfo infos[4] = {
         {m_linearSampler, m_array.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
         {m_nearestSampler, m_array.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {m_linearSampler, m_arrayB.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {m_nearestSampler, m_arrayB.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {m_linearSampler, m_bDisabled ? m_array.view : m_arrayB.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {m_nearestSampler, m_bDisabled ? m_array.view : m_arrayB.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
     };
     const uint32_t bindings[4] = {kLayersBinding, kLayersNearestBinding, kLayersBBinding, kLayersNearestBBinding};
     VkWriteDescriptorSet writes[4] = {};
