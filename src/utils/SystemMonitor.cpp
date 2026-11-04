@@ -17,6 +17,7 @@ float SystemMonitor::s_processCpu = 0.0f;
 float SystemMonitor::s_processRam = 0.0f;
 size_t SystemMonitor::s_processRamBytes = 0;
 size_t SystemMonitor::s_totalRamBytes = 0;
+SystemMonitor::MemoryDetail SystemMonitor::s_memoryDetail;
 float SystemMonitor::s_gpuCore = 0.0f;
 float SystemMonitor::s_gpuVram = 0.0f;
 size_t SystemMonitor::s_gpuVramBytes = 0;
@@ -64,10 +65,22 @@ void SystemMonitor::readMemory() {
     if (f) {
         char line[256];
         while (fgets(line, sizeof(line), f)) {
+            long kb = 0;
             if (strncmp(line, "VmRSS:", 6) == 0) {
-                long kb = 0;
                 sscanf(line, "VmRSS: %ld", &kb);
                 s_processRamBytes = static_cast<size_t>(kb) * 1024;
+            } else if (strncmp(line, "RssAnon:", 8) == 0) {
+                sscanf(line, "RssAnon: %ld", &kb);
+                s_memoryDetail.rssAnonBytes = static_cast<size_t>(kb) * 1024;
+            } else if (strncmp(line, "RssFile:", 8) == 0) {
+                sscanf(line, "RssFile: %ld", &kb);
+                s_memoryDetail.rssFileBytes = static_cast<size_t>(kb) * 1024;
+            } else if (strncmp(line, "RssShmem:", 9) == 0) {
+                sscanf(line, "RssShmem: %ld", &kb);
+                s_memoryDetail.rssShmemBytes = static_cast<size_t>(kb) * 1024;
+            } else if (strncmp(line, "VmSwap:", 7) == 0) {
+                sscanf(line, "VmSwap: %ld", &kb);
+                s_memoryDetail.swapBytes = static_cast<size_t>(kb) * 1024;
             }
         }
         fclose(f);
@@ -77,12 +90,31 @@ void SystemMonitor::readMemory() {
     if (f) {
         char line[256];
         while (fgets(line, sizeof(line), f)) {
+            long kb = 0;
             if (strncmp(line, "MemTotal:", 9) == 0) {
-                long kb = 0;
                 sscanf(line, "MemTotal: %ld", &kb);
                 s_totalRamBytes = static_cast<size_t>(kb) * 1024;
-                break;
+            } else if (strncmp(line, "MemAvailable:", 13) == 0) {
+                sscanf(line, "MemAvailable: %ld", &kb);
+                s_memoryDetail.systemAvailableBytes = static_cast<size_t>(kb) * 1024;
+            } else if (strncmp(line, "SwapFree:", 9) == 0) {
+                sscanf(line, "SwapFree: %ld", &kb);
+                s_memoryDetail.systemSwapFreeBytes = static_cast<size_t>(kb) * 1024;
             }
+        }
+        fclose(f);
+    }
+
+    // Pressao de memoria (Linux 4.20+, ligada no Android): "some avg10=" e
+    // "full avg10=" em %, a fracao do tempo das ultimas 10 s com tarefas
+    // paradas esperando memoria. A pressao alta e' o aparelho em reclaim.
+    f = fopen("/proc/pressure/memory", "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            float v = 0.0f;
+            if (strncmp(line, "some ", 5) == 0 && sscanf(line, "some avg10=%f", &v) == 1) s_memoryDetail.psiSomeAvg10 = v;
+            else if (strncmp(line, "full ", 5) == 0 && sscanf(line, "full avg10=%f", &v) == 1) s_memoryDetail.psiFullAvg10 = v;
         }
         fclose(f);
     }
@@ -285,6 +317,7 @@ float SystemMonitor::processCpuPercent() { return s_processCpu; }
 float SystemMonitor::processRamPercent() { return s_processRam; }
 size_t SystemMonitor::processRamBytes() { return s_processRamBytes; }
 size_t SystemMonitor::totalRamBytes() { return s_totalRamBytes; }
+const SystemMonitor::MemoryDetail& SystemMonitor::memoryDetail() { return s_memoryDetail; }
 float SystemMonitor::gpuCorePercent() { return s_gpuCore; }
 float SystemMonitor::gpuVramPercent() { return s_gpuVram; }
 size_t SystemMonitor::gpuVramBytes() { return s_gpuVramBytes; }
@@ -297,6 +330,10 @@ float SystemMonitor::processCpuPercent() { return 0.0f; }
 float SystemMonitor::processRamPercent() { return 0.0f; }
 size_t SystemMonitor::processRamBytes() { return 0; }
 size_t SystemMonitor::totalRamBytes() { return 0; }
+const SystemMonitor::MemoryDetail& SystemMonitor::memoryDetail() {
+    static const MemoryDetail empty;
+    return empty;
+}
 float SystemMonitor::gpuCorePercent() { return 0.0f; }
 float SystemMonitor::gpuVramPercent() { return 0.0f; }
 size_t SystemMonitor::gpuVramBytes() { return 0; }

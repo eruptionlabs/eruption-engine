@@ -14,6 +14,18 @@ public:
     static size_t processRamBytes();
     static size_t totalRamBytes();
 
+    // Detalhe da memoria, lido junto com o resto (1 Hz): onde o RSS do processo
+    // esta (anonimo = heap, arquivo = mapeado, shmem) e quanto foi para o swap,
+    // quanto o sistema ainda tem livre e a pressao de memoria (PSI, janela de
+    // 10 s: fracao do tempo em que alguma tarefa esperou por memoria). Zeros
+    // onde o arquivo nao existe; psiSomeAvg10 < 0 = sem PSI.
+    struct MemoryDetail {
+        size_t rssAnonBytes = 0, rssFileBytes = 0, rssShmemBytes = 0, swapBytes = 0;
+        size_t systemAvailableBytes = 0, systemSwapFreeBytes = 0;
+        float psiSomeAvg10 = -1.0f, psiFullAvg10 = -1.0f;
+    };
+    static const MemoryDetail& memoryDetail();
+
     static float gpuCorePercent();
     static float gpuVramPercent();
     static size_t gpuVramBytes();
@@ -32,6 +44,7 @@ private:
     static float s_processRam;
     static size_t s_processRamBytes;
     static size_t s_totalRamBytes;
+    static MemoryDetail s_memoryDetail;
 
     static float s_gpuCore;
     static float s_gpuVram;
