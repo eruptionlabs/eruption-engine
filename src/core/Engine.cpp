@@ -192,14 +192,30 @@ Engine::~Engine() { shutdown(); }
 static void applyPresetOverrides(nlohmann::json& preset);
 static void mergeProjectGraphics(nlohmann::json& root);
 
+// data/graphics.json do motor com o do PROJETO mesclado por cima (o mesmo que
+// applyGraphicsPreset usa), lido uma vez: as chaves que o motor decide ANTES de
+// applyGraphicsPreset (lean_ops, camera_near_scale, texture_layers_compressed,
+// shadow_depth16, shader_lite...) tambem tem de respeitar o jogo, que assim
+// consegue desligar o que o motor liga por padrao.
+static nlohmann::json loadMergedGraphicsRoot() {
+    static const nlohmann::json cached = [] {
+        nlohmann::json gj = nlohmann::json::object();
+        try {
+            std::ifstream f("data/graphics.json");
+            if (f) f >> gj;
+        } catch (...) {}
+        mergeProjectGraphics(gj);
+        return gj;
+    }();
+    return cached;
+}
+
 // Valor numerico de uma chave do preset (mesmas regras de presetBool, inclusive
 // ERUPTION_TEST_PRESET_SET); `fallback` quando a chave nao existe.
 static double presetNumber(const std::string& preset, const char* key, double fallback) {
     try {
-        std::ifstream f("data/graphics.json");
-        if (!f) return fallback;
-        nlohmann::json gj;
-        f >> gj;
+        const nlohmann::json gj = loadMergedGraphicsRoot();
+        if (!gj.is_object()) return fallback;
         if (!gj.contains("presets") || !gj["presets"].contains(preset)) return fallback;
         nlohmann::json p = gj["presets"][preset];
         applyPresetOverrides(p);
@@ -237,10 +253,8 @@ static texfmt::Options textureOptionsFromPreset(const nlohmann::json& p) {
 // e' decidido antes de applyGraphicsPreset; objeto vazio se faltar.
 static nlohmann::json presetObject(const std::string& preset) {
     try {
-        std::ifstream f("data/graphics.json");
-        if (!f) return nlohmann::json::object();
-        nlohmann::json gj;
-        f >> gj;
+        const nlohmann::json gj = loadMergedGraphicsRoot();
+        if (!gj.is_object()) return nlohmann::json::object();
         if (!gj.contains("presets") || !gj["presets"].contains(preset)) return nlohmann::json::object();
         nlohmann::json p = gj["presets"][preset];
         applyPresetOverrides(p);
@@ -252,10 +266,8 @@ static nlohmann::json presetObject(const std::string& preset) {
 
 static bool presetBool(const std::string& preset, const char* key, bool fallback) {
     try {
-        std::ifstream f("data/graphics.json");
-        if (!f) return fallback;
-        nlohmann::json gj;
-        f >> gj;
+        const nlohmann::json gj = loadMergedGraphicsRoot();
+        if (!gj.is_object()) return fallback;
         if (!gj.contains("presets") || !gj["presets"].contains(preset)) return fallback;
         // ERUPTION_TEST_PRESET_SET vale tambem para o que e' decidido antes dos
         // pipelines (shader_lite): sem isso a bancada do celular nao isola o
@@ -421,9 +433,8 @@ bool Engine::init(int width, int height, const std::string& title) {
         // upscaler (1.9 ms em 1080p) a um quadro que nao ficava mais barato.
         std::string upscaler = "fxaa", fsrMode = "quality";
         try {
-            std::ifstream uf("data/graphics.json");
-            if (uf) {
-                nlohmann::json gj; uf >> gj;
+            {
+                nlohmann::json gj = loadMergedGraphicsRoot();
                 const std::string& pr = graphicsPresetName();
                 if (gj.contains("presets") && gj["presets"].contains(pr)) {
                     upscaler = gj["presets"][pr].value("upscaler", upscaler);
@@ -447,9 +458,8 @@ bool Engine::init(int width, int height, const std::string& title) {
             rs = 1.0f / ratio;
         } else {
             try {
-                std::ifstream rf("data/graphics.json");
-                if (rf) {
-                    nlohmann::json gj; rf >> gj;
+                {
+                    nlohmann::json gj = loadMergedGraphicsRoot();
                     const std::string& pr = graphicsPresetName();
                     if (gj.contains("presets") && gj["presets"].contains(pr)) {
                         rs = std::clamp<float>(gj["presets"][pr].value("render_scale", 1.0f), 0.25f, 1.0f);
@@ -507,9 +517,8 @@ bool Engine::init(int width, int height, const std::string& title) {
         std::string mode = "fxaa";
         bool objectVelocity = true;
         try {
-            std::ifstream pf("data/graphics.json");
-            if (pf) {
-                nlohmann::json gj; pf >> gj;
+            {
+                nlohmann::json gj = loadMergedGraphicsRoot();
                 const std::string& pr = graphicsPresetName();
                 if (gj.contains("presets") && gj["presets"].contains(pr)) {
                     mode = gj["presets"][pr].value("upscaler", mode);
@@ -589,9 +598,8 @@ bool Engine::init(int width, int height, const std::string& title) {
         m_postScale = std::clamp(std::strtof(e, nullptr), 0.25f, 1.0f);
     } else {
         try {
-            std::ifstream pf("data/graphics.json");
-            if (pf) {
-                nlohmann::json gj; pf >> gj;
+            {
+                nlohmann::json gj = loadMergedGraphicsRoot();
                 // Respeita o override de preset dos testes: sem isto o
                 // post_scale sempre vinha do preset gravado no JSON, e
                 // ERUPTION_TEST_GRAPHICS_PRESET=low nao mudava nada.
@@ -2548,11 +2556,7 @@ static void envOverrideBool(const char* name, bool& out) {
 // "gpu" aparece no nome do aparelho ("*" casa com qualquer um).
 const std::string& Engine::graphicsPresetName() {
     if (!m_graphicsPreset.empty()) return m_graphicsPreset;
-    json gj;
-    try {
-        std::ifstream f("data/graphics.json");
-        if (f) f >> gj;
-    } catch (...) {}
+    json gj = loadMergedGraphicsRoot();
     std::string name = gj.is_object() ? gj.value("preset", "high") : "high";
     if (const char* e = std::getenv("ERUPTION_TEST_GRAPHICS_PRESET"); e && *e) name = e;
     if (name == "auto") {

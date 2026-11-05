@@ -287,10 +287,14 @@ void Engine::render() {
     // Colisao da camera no topo tambem, pelo mesmo motivo: sombra, cull e LOD
     // leem a posicao ja' corrigida.
     updateCameraCollision(m_frameDt);
-    if (m_cameraNearScale > 0.0f) {
-        // Em passos de 1 u: a projecao so' e' refeita quando o zoom muda de verdade.
-        const float want = std::round(std::clamp(m_cameraNearScale * glm::length(m_camera.position() - m_camera.target()), cameraNear(), 60.0f));
-        if (std::abs(want - m_camera.nearPlane()) > 0.5f) m_camera.setNearPlane(std::max(want, cameraNear()));
+    {
+        // Plano proximo continuo (sem degraus que pulem com o zoom) e que volta ao
+        // padrao quando a chave e' desligada em tempo real. So' refaz a projecao
+        // quando o valor muda de verdade (mais de 0,01 u).
+        float want = cameraNear();
+        if (m_cameraNearScale > 0.0f)
+            want = std::clamp(m_cameraNearScale * glm::length(m_camera.position() - m_camera.target()), cameraNear(), 60.0f);
+        if (std::abs(want - m_camera.nearPlane()) > 0.01f) m_camera.setNearPlane(want);
     }
 
     // Headless screenshot/benchmark runs: disable all debug overlays so the
@@ -352,7 +356,7 @@ void Engine::render() {
         m_water.setSkyTexture(m_skybox.outputView(), m_skybox.outputSampler());
         // Mantem a abertura em vigor: redimensionar a janela nao e' motivo pra
         // voltar pro padrao de fabrica (o jogo pode ter pedido outra).
-        m_camera.setPerspective(m_camera.fov(), (float)w / (float)h, cameraNear(), m_camera.farPlane());
+        m_camera.setPerspective(m_camera.fov(), (float)w / (float)h, m_camera.nearPlane(), m_camera.farPlane());
         recreateViewportTarget();
         m_resized = false;
     }
