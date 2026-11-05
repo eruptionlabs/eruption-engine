@@ -1632,9 +1632,24 @@ void ModelRenderer::addShadowStream(VkBuffer src, const void* vertices, VkDevice
     if (!lean::shadowStream() || src == VK_NULL_HANDLE || vertices == nullptr) return;
     const size_t n = static_cast<size_t>(bytes / sizeof(TerrainVertex));
     if (n == 0) return;
+    // A chave e' o VkBuffer, e o Vulkan reusa o handle de um buffer destruido. Todo caminho que destroi
+    // um vertex buffer ja' chama forgetShadowStream, mas um que falhasse deixaria um stream velho
+    // (mesmo handle, vertices outros) valendo para o buffer novo: a sombra sairia da malha errada.
+    // Por isso o stream guarda o hash dos vertices de origem e um handle repetido com vertices
+    // diferentes e' tratado como buffer novo: o stream velho sai e o novo e' montado.
+    const uint64_t srcHash = svs::hashVertices(vertices, static_cast<size_t>(n) * sizeof(TerrainVertex));
+    bool stale = false;
     {
         std::lock_guard<std::mutex> lock(g_streamMutex);
-        if (g_streams.count(src)) return; // buffer do cache ja' visto
+        auto it = g_streams.find(src);
+        if (it != g_streams.end()) {
+            if (it->second.srcHash == srcHash) return; // buffer do cache ja' visto
+            stale = true;
+        }
+    }
+    if (stale) {
+        ERUPTION_LOG_WARN("[SHADOW-STREAM] handle de vertex buffer reusado com vertices diferentes: stream velho descartado");
+        forgetShadowStream(m_ctx, src, true);
     }
     for (const auto& pnd : m_streamPending)
         if (pnd.first == src) return;
@@ -1647,6 +1662,7 @@ void ModelRenderer::addShadowStream(VkBuffer src, const void* vertices, VkDevice
         return;
     }
     st.bytes = posBytes + attrBytes;
+    st.srcHash = srcHash;
     PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, st.bytes);
     // Os bytes da posicao, da UV e do par texIndex/matId copiados como estao.
     m_streamData.emplace_back(static_cast<size_t>(posBytes));

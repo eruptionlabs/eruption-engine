@@ -175,6 +175,23 @@ int main() {
         CHECK(ns < 2000.0);
     }
 
+    std::printf("3b. mapa de views limitado\n");
+    {
+        bw::ImageDesc di;
+        di.format = VK_FORMAT_R8G8B8A8_UNORM;
+        di.extent = {64, 64, 1};
+        di.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+        const VkImage im = handle<VkImage>(0x7000);
+        bw::noteImage(im, di);
+        const size_t before = bw::trackedViews();
+        for (uint64_t k = 0; k < 3; ++k) bw::noteView(handle<VkImageView>(0x7100 + k), im);
+        CHECK(bw::trackedViews() == before + 3);
+        bw::forgetImage(im);                      // as views da imagem saem junto
+        CHECK(bw::trackedViews() == before);
+        for (uint64_t k = 0; k < 40000; ++k) bw::noteView(handle<VkImageView>(0x80000 + k), handle<VkImage>(0x90000 + k % 7));
+        CHECK(bw::trackedViews() <= 16385);       // views de imagem desconhecida: poda no teto
+    }
+
     std::printf("4. auditoria\n");
     bw::ImageDesc d;
     d.format = VK_FORMAT_R16G16B16A16_SFLOAT;

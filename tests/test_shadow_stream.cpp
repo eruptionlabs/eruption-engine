@@ -67,6 +67,16 @@ int main() {
     std::printf("  vertice %zu B -> solido %zu B, alfa %zu B\n", sizeof(TerrainVertex), svs::kPosStride,
                 svs::kPosStride + svs::kAttrStride);
 
+    std::printf("4. hash dos vertices de origem (handle de VkBuffer reusado)\n");
+    {
+        std::vector<TerrainVertex> a(37, TerrainVertex{}), b(37, TerrainVertex{});
+        const uint64_t ha = svs::hashVertices(a.data(), a.size() * sizeof(TerrainVertex));
+        CHECK(ha == svs::hashVertices(b.data(), b.size() * sizeof(TerrainVertex)));  // mesmos bytes, mesmo hash
+        b[20].position.x = 1.0f;                                                       // um vertice muda
+        CHECK(ha != svs::hashVertices(b.data(), b.size() * sizeof(TerrainVertex)));
+        CHECK(ha != svs::hashVertices(a.data(), (a.size() - 1) * sizeof(TerrainVertex))); // outro tamanho
+    }
+
     std::printf(g_falhas ? "FALHOU (%d)\n" : "OK\n", g_falhas);
     return g_falhas ? 1 : 0;
 }
