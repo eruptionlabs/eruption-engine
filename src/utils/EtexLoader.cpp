@@ -12,10 +12,10 @@ namespace fs = std::filesystem;
 
 static constexpr uint32_t kEtexMagic = 0x31585445; // 'ETX1'
 
-EtexData loadEtexForImage(const std::string& imagePath) {
+EtexData loadEtexForImage(const std::string& imagePath, const std::string& ext) {
     EtexData out;
     if (imagePath.empty()) return out;
-    const std::string etexPath = imagePath + ".etex";
+    const std::string etexPath = imagePath + ext;
 
     std::error_code ec;
     if (!fs::exists(etexPath, ec)) return out;

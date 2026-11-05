@@ -14,6 +14,7 @@
 #include "utils/Profiler.hpp"
 #include "formats/SpriteTypes.hpp"
 #include "core/JobSystem.hpp"
+#include "renderer/BandwidthMeter.hpp"
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
 #include <stb_image.h>
@@ -273,6 +274,7 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
     VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     if (mipLevels > 1) usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     m_vulkan.createImage(img.width, img.height, format, usage, VMA_MEMORY_USAGE_GPU_ONLY, res.image, res.alloc, mipLevels);
+    bw::tagImage(res.image, bw::kTexSprite); // censo de texturas (spec 51)
     std::vector<SpriteUpload> single;
     std::vector<SpriteUpload>& uploads = m_spriteUploads ? *m_spriteUploads : single;
     uploads.push_back({staging, stagingAlloc, res.image, img.width, img.height, mipLevels, format});
