@@ -520,6 +520,39 @@ void writeDesktopEntry(const ExportOptions& o) {
 #endif
 }
 
+// Avisos de licenca que acompanham o jogo (Apache-2.0 do motor, MIT/BSD/Zlib das bibliotecas):
+// NOTICE, LICENSE e o LICENSE de cada pasta de third_party/, em licenses/. Procura a raiz do motor
+// subindo a partir do executavel (build-rel/ fica um nivel abaixo). Sem a raiz (binario solto),
+// avisa no relatorio mas nao falha o export.
+void copyLicenses(const ExportOptions& o, ExportReport& report) {
+    std::error_code ec;
+    fs::path root = fs::absolute(o.binary, ec).parent_path();
+    for (int up = 0; up < 4 && !root.empty() && !fs::exists(root / "NOTICE", ec); ++up) root = root.parent_path();
+    if (!fs::exists(root / "NOTICE", ec)) {
+        ERUPTION_LOG_WARN("[EXPORT] NOTICE nao encontrado ao lado do executavel: licencas de terceiros fora do pacote");
+        return;
+    }
+    const fs::path dst = o.outDir / "licenses";
+    fs::create_directories(dst, ec);
+    auto put = [&](const fs::path& src, const std::string& name) {
+        std::error_code e;
+        fs::copy_file(src, dst / name, fs::copy_options::overwrite_existing, e);
+        if (e) return;
+        report.bytes += fs::file_size(dst / name, e);
+        ++report.files;
+    };
+    put(root / "NOTICE", "NOTICE");
+    if (fs::exists(root / "LICENSE", ec)) put(root / "LICENSE", "LICENSE");
+    for (fs::directory_iterator it(root / "third_party", ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_directory(ec)) continue;
+        for (fs::directory_iterator f(it->path(), ec), fend; !ec && f != fend; f.increment(ec)) {
+            const std::string n = f->path().filename().string();
+            if (n.rfind("LICENSE", 0) == 0 || n.rfind("COPYING", 0) == 0)
+                put(f->path(), it->path().filename().string() + "_" + n);
+        }
+    }
+}
+
 // Executável, as bibliotecas que ele carrega ao lado e o run.sh.
 bool copyProgram(const ExportOptions& o, ExportReport& report) {
     std::error_code ec;
@@ -547,6 +580,7 @@ bool copyProgram(const ExportOptions& o, ExportReport& report) {
     fs::permissions(o.outDir / "run.sh", fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
                     fs::perm_options::add, ec);
     writeDesktopEntry(o);
+    copyLicenses(o, report);
     return true;
 }
 

@@ -933,6 +933,12 @@ if(NOT ANDROID AND NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD
         set_source_files_properties(${ERUPTION_ETCPAK_SOURCES} PROPERTIES COMPILE_OPTIONS "-w;-mbmi")
     endif()
 endif()
+# Codigo de terceiros (etcpak) sem aviso em QUALQUER alvo (portatil, Android, web): o -w e' so'
+# nos fontes dele, o do motor segue com todos os avisos. Fica fora do bloco x86 acima.
+if(ERUPTION_ETCPAK_SOURCES AND NOT (NOT ANDROID AND NOT EMSCRIPTEN AND ERUPTION_CPU_LEVEL STREQUAL "dev"
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|i.86"))
+    set_source_files_properties(${ERUPTION_ETCPAK_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
+endif()
 message(STATUS "CPU: ${ERUPTION_CPU_LEVEL} (${ERUPTION_CPU_FLAGS})")
 
 # Web: contrato com a casca da pagina (pagina hospedeira):

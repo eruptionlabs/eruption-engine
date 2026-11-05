@@ -105,6 +105,12 @@ while IFS=$'\t' read -r dest src; do
     cp -L "$src" "$STAGE/assets/$dest"
 done < "$STAGE/files.tsv"
 rm -f "$STAGE/files.tsv"
+# Avisos de licenca (Apache-2.0 do motor e das bibliotecas de terceiros) dentro do APK.
+mkdir -p "$STAGE/assets/licenses"
+cp NOTICE "$STAGE/assets/licenses/NOTICE"; [ -f LICENSE ] && cp LICENSE "$STAGE/assets/licenses/LICENSE"
+for f in third_party/*/LICENSE* third_party/*/COPYING*; do
+    [ -f "$f" ] && cp "$f" "$STAGE/assets/licenses/$(basename "$(dirname "$f")")_$(basename "$f")"
+done
 # O pacote movel vai com o nome que o motor procura no celular.
 for f in "$STAGE"/assets/assets/external/*/*.mobile.etexpack; do
     [ -f "$f" ] && mv "$f" "${f%.mobile.etexpack}.etexpack"
