@@ -119,6 +119,11 @@ public:
         uint32_t layersWaiting = 0, texSourcesReleased = 0;
         uint32_t layersLost = 0, layersLostEvents = 0; // slots sem camada agora / tentativas que falharam
         double texSourcesReleasedMb = 0.0;
+        // Memoria pedida por camada (KB, A e B) e o A em bloco (spec 51, TC-05):
+        // camadas em uso nele, codificacoes do cache / feitas, CPU somada (ms).
+        double layersKbPerLayer = 0.0, layersKbPerLayerB = 0.0;
+        uint32_t layersBlock = 0, layersBlockCacheHits = 0, layersBlockEncoded = 0, layersBlockDirect = 0;
+        double layersBlockMs = 0.0;
     };
 
     static bool enabled();

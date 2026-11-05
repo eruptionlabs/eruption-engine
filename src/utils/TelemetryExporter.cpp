@@ -311,7 +311,11 @@ void TelemetryExporter::recordFrame(const FrameStats& st) {
         {"layers", {{"used", st.layersUsed}, {"capacity", st.layersCapacity}, {"side", st.layersSide},
                     {"mb", st.layersMb}, {"waiting", st.layersWaiting}, {"lost", st.layersLost}, {"lost_events", st.layersLostEvents},
                     {"sources_released", st.texSourcesReleased},
-                    {"sources_released_mb", st.texSourcesReleasedMb}}},
+                    {"sources_released_mb", st.texSourcesReleasedMb},
+                    {"kb_per_layer", st.layersKbPerLayer}, {"kb_per_layer_b", st.layersKbPerLayerB},
+                    {"block", st.layersBlock}, {"block_cache_hits", st.layersBlockCacheHits},
+                    {"block_encoded", st.layersBlockEncoded}, {"block_direct", st.layersBlockDirect},
+                    {"block_ms", st.layersBlockMs}}},
     };
     j["scene"] = {
         {"instances", st.instances}, {"meshes", st.meshes},

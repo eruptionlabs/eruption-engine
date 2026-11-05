@@ -80,6 +80,14 @@ Mode family(const Caps& caps, const Options& o);
 // Formato de bloco da classe, ou VK_FORMAT_UNDEFINED (RGBA8).
 VkFormat choose(Class c, const Caps& caps, const Options& o);
 
+// Formato do array de camadas comprimido (GPU sem descriptor indexing, TC-05):
+// um so' formato para cor, normal e dados, entao de 4 canais e 1 B/texel - BC7,
+// ASTC 4x4 ou ETC2 RGBA (EAC no alfa), conforme a familia. Opaco e alfa dividem
+// o formato (o codificador trata cada camada como opaca ou com alfa); um formato
+// opaco de 0,5 B/texel pediria um terceiro array e outra ligacao no set 0.
+// VK_FORMAT_UNDEFINED: sem familia (off/raw) ou a GPU nao tem o formato.
+VkFormat layerFormat(const Caps& caps, const Options& o);
+
 // Bytes por bloco e lado do bloco (4x4, ou o do ASTC); 0 = formato sem codificador.
 struct BlockInfo {
     uint32_t bytes = 0;

@@ -21,6 +21,8 @@ namespace eruption {
 //
 // Quem usa é o BindlessDescriptor: ele guarda os slots e chama assign/release;
 // as cópias acontecem em apply/flush, fora da gravação de um frame.
+// Opcional (setBlockFormat, spec 51 TC-05): o array A em formato de bloco, com
+// o B em RGBA8 para o resto; mesma tabela, mesmas ligações, mesmo shader.
 class TextureLayers {
 public:
     // Ligações do set 0, na numeração de slot_textures.glsl.
@@ -55,6 +57,19 @@ public:
               VkImageView defaultView, VkSampler defaultSampler, uint32_t reserve = 0, uint32_t reserveB = 0);
     void shutdown();
 
+    // Array A em formato de bloco (spec 51, TC-05; antes de init). BC7, ASTC 4x4
+    // ou ETC2 RGBA: 1 B/texel contra 4 do RGBA8. Cada textura que ja' chega
+    // comprimida (BC/ASTC/ETC2) ou e' cor sRGB vai para o A: a copia de sempre
+    // desenha a camada num RGBA8 de passagem, que volta para a CPU, e' codificada
+    // (opaca ou com alfa, conforme a camada) e sobe para o A; o resultado fica em
+    // cache no disco pelo conteudo da camada. Dados sem compressao na origem
+    // (RGBA8/R8/RG8 lineares) e as sem filtro (sprites) ficam no B, em RGBA8, que
+    // tambem recebe o que nao couber no A. Tabela, ligacoes e shader nao mudam.
+    // VK_FORMAT_UNDEFINED (padrao) = A em RGBA8; formato que a GPU nao copia ou
+    // nao amostra em array, ou sem codificador, tambem volta para RGBA8.
+    void setBlockFormat(VkFormat format) { m_blockRequest = format; }
+    VkFormat blockFormat() const { return m_blockFormat; }
+
     // Sampler sem filtro (pixel art, paleta): a textura é lida pela ligação
     // "nearest" do array.
     void markNearest(VkSampler sampler) { m_nearestSamplers.insert(sampler); }
@@ -86,17 +101,33 @@ public:
         // Slots que agora mostram a textura padrao por falta de camada (distintos)
         // e quantas vezes a alocacao falhou desde o inicio (uma por tentativa).
         uint32_t lost = 0, lostEvents = 0;
+        // Memoria pedida por camada em cada array (KB: alocacao / capacidade, com mips)
+        // e, com o A em bloco (TC-05): camadas em uso no A, quantas codificacoes
+        // vieram do cache e quantas foram feitas, quantas foram copia direta de uma
+        // fonte ja' no formato, e o tempo de CPU somado do caminho.
+        double kbPerLayer = 0.0, kbPerLayerB = 0.0;
+        uint32_t blockLayers = 0, blockCacheHits = 0, blockEncoded = 0, blockDirect = 0;
+        double blockMs = 0.0;
     };
     Stats stats() const {
         Stats s;
         s.side = m_layerSize;
         s.capacity = m_array.capacity;
+        s.blockCacheHits = m_blockCacheHits;
+        s.blockEncoded = m_blockEncoded;
+        s.blockDirect = m_blockDirect;
+        s.blockMs = m_blockMs;
+        if (m_ctx && m_array.alloc && m_array.capacity)
+            s.kbPerLayer = static_cast<double>(m_ctx->allocationSize(m_array.alloc)) / 1024.0 / m_array.capacity;
+        if (m_ctx && m_arrayB.alloc && m_arrayB.capacity)
+            s.kbPerLayerB = static_cast<double>(m_ctx->allocationSize(m_arrayB.alloc)) / 1024.0 / m_arrayB.capacity;
         s.waiting = static_cast<uint32_t>(m_jobs.size());
         s.lost = static_cast<uint32_t>(m_lostSlots.size());
         s.lostEvents = m_layersLost;
         const uint32_t taken = m_array.next > 0 ? m_array.next - 1 : 0; // a camada 0 e' a padrao
         const uint32_t freed = static_cast<uint32_t>(m_array.freeLayers.size());
         s.used = taken > freed ? taken - freed : 0;
+        if (m_blockFormat != VK_FORMAT_UNDEFINED) s.blockLayers = s.used;
         const uint32_t takenB = m_arrayB.next > 0 ? m_arrayB.next - 1 : 0; // a camada 0 do 2o array nao e' usada
         const uint32_t freedB = static_cast<uint32_t>(m_arrayB.freeLayers.size());
         s.used += takenB > freedB ? takenB - freedB : 0;
@@ -127,6 +158,7 @@ private:
         VkSampler sampler;
         bool nearest;
         bool srgb;
+        VkFormat format = VK_FORMAT_UNDEFINED; // da origem: decide se vai para o A em bloco
     };
     struct Direct {
         uint32_t slot = UINT32_MAX;
@@ -189,11 +221,62 @@ private:
     VkPipeline m_copyPipeline = VK_NULL_HANDLE;
     VkDescriptorPool m_copyPool = VK_NULL_HANDLE;
 
-    bool createArray(LayerArray& arr, VkFormat format, uint32_t capacity);
+    // A em bloco (TC-05). m_blockRequest: o pedido (setBlockFormat); m_blockFormat:
+    // o que o init aceitou (UNDEFINED = A em RGBA8). m_scratch: RGBA8 de passagem
+    // (kBlockGroup camadas), so' enquanto ha copias para o A; some quando a fila esvazia.
+    VkFormat m_blockRequest = VK_FORMAT_UNDEFINED;
+    VkFormat m_blockFormat = VK_FORMAT_UNDEFINED;
+    uint32_t m_blockMaxLayers = 0; // teto de camadas do formato de bloco nesta GPU
+    LayerArray m_scratch;
+    uint32_t m_blockCacheHits = 0, m_blockEncoded = 0, m_blockDirect = 0;
+    double m_blockMs = 0.0;
+    // Camadas por rodada no caminho em bloco: desenhadas em lotes de kCopyBatch,
+    // lidas de volta e codificadas em paralelo (uma por thread).
+    static constexpr uint32_t kBlockGroup = 16;
+
+    bool createArray(LayerArray& arr, VkFormat format, uint32_t capacity, const char* label);
     bool growArray(LayerArray& arr);
     void destroyArray(LayerArray& arr);
     bool createCopyPipeline();
-    uint32_t allocLayer();
+    // A textura vai para o A em bloco (fica no B em RGBA8 se false).
+    bool wantsBlock(const CopyJob& job) const;
+    bool blockArrayInit(); // aceita (ou recusa) m_blockRequest nesta GPU
+    struct BlockTarget {
+        uint32_t layer;
+        bool srgb;
+        CopyJob job;
+    };
+    void runBlockCopies(const std::vector<BlockTarget>& targets);
+    // Fonte ja' no formato do A (mesma classe de bloco), quadrada e com mips ate'
+    // 1x1 a partir do lado da camada: a camada e' copia de bloco dela
+    // (vkCmdCopyImage), sem desenhar, ler de volta nem codificar - e sem perda.
+    // Fonte ETC2 RGB num A em ETC2 RGBA (addAlpha): os blocos voltam para a CPU e
+    // sobem com um bloco de alfa 255 na frente de cada um - tambem sem perda.
+    struct DirectSource {
+        VkImage image;
+        uint32_t mip;   // mip da fonte que vira o mip 0 da camada
+        uint32_t layer; // camada da fonte
+        bool addAlpha;
+    };
+    bool directSource(const CopyJob& job, DirectSource& out) const;
+    struct DirectTarget {
+        uint32_t layer; // camada do A
+        DirectSource src;
+    };
+    void runDirectCopies(const std::vector<DirectTarget>& targets);
+    void runAlphaCopies(const std::vector<DirectTarget>& targets); // os addAlpha
+    void settleLayers(const std::vector<uint32_t>& layers);        // falha: tira do UNDEFINED
+    // ERUPTION_TEX_LAYER_PSNR=1: qualidade de cada camada em bloco (medida, log).
+    struct LayerPsnr {
+        float rgb = 0.0f, alpha = -1.0f; // dB no mip 0; alfa -1 = camada opaca
+        bool srgb = false, valid = false;
+    };
+    std::vector<LayerPsnr> m_psnr;
+    void logLayerPsnr(const char* tag) const;
+    bool allocCopySets(size_t count, std::vector<VkDescriptorSet>& sets); // ate' kCopyBatch
+    void writeCopySource(VkDescriptorSet set, const CopyJob& job);
+    VkImageView makeLayerView(const LayerArray& arr, uint32_t layer); // mip 0 de uma camada
+    uint32_t allocLayer(bool block);
     void freePlace(uint32_t slot);
     void setTable(uint32_t slot, uint32_t kind, uint32_t layer);
     void runCopies(size_t maxCopies);
