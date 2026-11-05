@@ -2006,6 +2006,7 @@ void Engine::render() {
     // A autoria por zoom do ramo legado saiu junto com ele; so' o CoC
     // mapeia zoom -> focal/abertura agora.
     postSettings.cocZoomFactor = zoomPercent;
+    postSettings.frameDt = std::clamp(m_frameDt, 1.0f / 240.0f, 1.0f);
     if (postSettings.cocEnableZoomMapping) {
         float baseFocal = postSettings.cocFocalCurve.evaluate(zoomPercent);
         postSettings.cocFocalDistance = baseFocal;
@@ -2309,7 +2310,19 @@ void Engine::render() {
         const char* e = std::getenv("ERUPTION_TEST_CAM_ORBIT");
         return e ? static_cast<float>(std::atof(e)) : 0.0f;
     }();
-    if (camOrbit != 0.0f) m_camera.orbitYaw(glm::radians(camOrbit));
+    // ERUPTION_TEST_CAM_ORBIT_FRAMES=<n>: o giro acima para depois de n quadros (medir o que
+    // acontece DEPOIS de girar e parar: sombra, LOD, historico).
+    static const uint64_t camOrbitFrames = [] {
+        const char* e = std::getenv("ERUPTION_TEST_CAM_ORBIT_FRAMES");
+        return e ? static_cast<uint64_t>(std::atoll(e)) : ~0ull;
+    }();
+    static const uint64_t camOrbitStart = [] {
+        const char* e = std::getenv("ERUPTION_TEST_CAM_ORBIT_START");   // primeiro quadro do giro (padrao 0)
+        return e ? static_cast<uint64_t>(std::atoll(e)) : 0ull;
+    }();
+    if (camOrbit != 0.0f && static_cast<uint64_t>(m_framesCount) >= camOrbitStart &&
+        static_cast<uint64_t>(m_framesCount) <= camOrbitFrames)
+        m_camera.orbitYaw(glm::radians(camOrbit));
     // ERUPTION_TEST_CAM_DIST=<dist> (debug): trava a DISTANCIA da orbita todo
     // frame, mantendo alvo/yaw/pitch do mapa. 0% de zoom = 1000. Serve pra
     // medir custo por zoom sem depender do alvo de spawn (que CAM_POSE exige).

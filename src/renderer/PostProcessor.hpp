@@ -175,6 +175,14 @@ public:
 
         bool enableMotionBlur = true;
         float motionBlurAmount = 1.0f;
+        // Tempo do quadro (s), escrito pelo Engine a cada quadro. O comprimento do
+        // borrao de movimento vem do deslocamento ENTRE quadros, que cresce com o
+        // tempo do quadro: com a banda/GPU reduzida (fps cai) o rastro ficava
+        // maior e parecia imagem fantasma. Acima de motionBlurRefDt o borrao e'
+        // escalado por refDt/dt (comprimento no tempo constante); ate' ali, igual.
+        // 0 desliga a escala (ERUPTION_TEST_MB_DT_REF=0 para A/B).
+        float frameDt = 1.0f / 60.0f;
+        float motionBlurRefDt = 0.02f;
 
         bool enableChromaticAberration = true;
         float chromaticAberrationAmount = 0.5f;
