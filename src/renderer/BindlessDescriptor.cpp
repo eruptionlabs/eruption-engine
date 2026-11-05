@@ -243,12 +243,14 @@ void BindlessDescriptor::flushUpdates() {
 
 void BindlessDescriptor::syncNow() {
     if (!m_layered) return;
+    if (m_beforeCopies) m_beforeCopies();
     std::lock_guard<std::mutex> lock(m_mutex);
     flushUpdates();
     m_layers.applyAll();
 }
 
 void BindlessDescriptor::onFrameBegin(uint32_t frame) {
+    if (m_beforeCopies) m_beforeCopies();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_layers.apply(frame);

@@ -476,6 +476,14 @@ void Engine::updateWorld() {
         case WorldRegion::State::Loading:
             if (r.attaching && r.uploadPending) {
                 if (attachedThisFrame) break;
+                // ERUPTION_TEST_UPLOAD_DELAY=<n> (teste): o envio adiado do vizinho espera n quadros a mais,
+                // para provar que nenhuma origem e' copiada ou liberada antes de enviada (UPLOAD-GUARD).
+                static const int kUploadDelay = [] {
+                    const char* e = std::getenv("ERUPTION_TEST_UPLOAD_DELAY");
+                    return e ? std::max(0, std::atoi(e)) : 0;
+                }();
+                if (r.uploadDelayLeft < 0) r.uploadDelayLeft = kUploadDelay;
+                if (r.uploadDelayLeft > 0) { --r.uploadDelayLeft; break; }
                 const auto tUp = std::chrono::steady_clock::now();
                 flushPendingUploads();
                 m_modelRenderer.setInstancesEnabled(r.uploadHidden, true);
@@ -625,6 +633,7 @@ void Engine::attachRegion(WorldRegion& r, WorldRegionLoad& load) {
         if (mr.getInstances()[i].enabled) r.uploadHidden.push_back(i);
     mr.setInstancesEnabled(r.uploadHidden, false);
     r.uploadPending = true;
+    r.uploadDelayLeft = -1;
     const double modelsMs = std::chrono::duration<double, std::milli>(tModels - t0).count();
     r.attachMs = r.slotsMs + modelsMs;
     r.attachMaxMs = std::max(r.slotsMs, modelsMs);

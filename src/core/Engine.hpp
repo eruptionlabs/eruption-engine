@@ -1269,6 +1269,7 @@ private:
     // GPU sem bindless: libera as imagens de origem das texturas de modelo que o
     // array de camadas ja' copiou (Textures.cpp). Contadores na telemetria.
     void releaseCopiedTextureSources();
+    uint32_t m_uploadGuardFlushes = 0; // envios adiantados por setBeforeCopies (ver Engine::init)
     uint32_t m_texSourcesReleased = 0;
     double m_texSourcesReleasedMb = 0.0;
     // Quadros de sprite (so' GPU sem bindless): a imagem de origem de cada slot,
@@ -2398,6 +2399,7 @@ private:
         // Modelos do mapa no lugar, envio para a GPU no quadro seguinte
         // (attachRegion); as instancias ligadas esperam apagadas.
         bool uploadPending = false;
+        int uploadDelayLeft = -1; // ERUPTION_TEST_UPLOAD_DELAY
         std::vector<uint32_t> uploadHidden;
         double slotsMs = 0.0, attachMs = 0.0, attachMaxMs = 0.0;
         std::shared_ptr<LoadedMap> data; // grade e caminhada já no lugar do mundo
