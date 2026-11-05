@@ -165,6 +165,12 @@ bool VfxSystem::createBuffers() {
     std::memcpy(staging.mapped, dead.data(), size_t(deadBytes));
     std::memcpy(static_cast<char*>(staging.mapped) + deadBytes, counters, sizeof(counters));
     m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        // Buffers da GPU nascem SEM inicializacao: num PowerVR vem lixo, e uma lista, um grafo ou um emissor
+        // lidos antes da primeira escrita davam laco longo e GPU travada. Zera tudo menos o que a copia
+        // abaixo preenche (m_dead e m_counters, sem sobreposicao: nao precisa de barreira entre os dois).
+        for (const Buf* z : {&m_particles, &m_alive, &m_render, &m_sort, &m_events, &m_recs, &m_ribbonRing,
+                             &m_graphCode, &m_graphConst, &m_emitterDev, &m_spawnDev})
+            if (z->buf != VK_NULL_HANDLE) vkCmdFillBuffer(cmd, z->buf, 0, VK_WHOLE_SIZE, 0);
         const VkBufferCopy c0{0, 0, deadBytes};
         vkCmdCopyBuffer(cmd, staging.buf, m_dead.buf, 1, &c0);
         const VkBufferCopy c1{deadBytes, 0, sizeof(counters)};

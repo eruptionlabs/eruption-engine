@@ -1,4 +1,5 @@
 #include "renderer/vfx/VfxGraph.hpp"
+#include "core/Logger.hpp"
 
 #include <functional>
 #include <map>
@@ -165,6 +166,14 @@ struct Compiler {
         if (failed) return VfxGraphProgram{};
         p.offset = codeBase + start;
         p.length = uint32_t(out.code.size()) - start;
+        // O interpretador (vfx_graph.glsl) limita len a 1024 palavras: programa maior seria cortado em
+        // silencio, entao e' recusado aqui (sem programa = o emissor roda sem o grafo).
+        constexpr uint32_t kMaxProgramWords = 1024;
+        if (p.length > kMaxProgramWords) {
+            ERUPTION_LOG_WARN("VFX: programa de grafo com %u palavras passa do limite %u: ignorado", p.length, kMaxProgramWords);
+            out.code.resize(start);
+            return VfxGraphProgram{};
+        }
         return p;
     }
 };
