@@ -207,6 +207,15 @@ VkFormat choose(Class c, const Caps& caps, const Options& o) {
     }
 }
 
+VkFormat layerFormat(const Caps& caps, const Options& o) {
+    switch (family(caps, o)) {
+    case Mode::Bc: return caps.bc7 ? VK_FORMAT_BC7_UNORM_BLOCK : VK_FORMAT_UNDEFINED;
+    case Mode::Astc: return caps.astc4x4 ? VK_FORMAT_ASTC_4x4_UNORM_BLOCK : VK_FORMAT_UNDEFINED;
+    case Mode::Etc2: return caps.etc2Rgba ? VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK : VK_FORMAT_UNDEFINED;
+    default: return VK_FORMAT_UNDEFINED;
+    }
+}
+
 BlockInfo blockInfo(VkFormat f) {
     switch (f) {
     case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
