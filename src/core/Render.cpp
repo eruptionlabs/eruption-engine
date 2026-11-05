@@ -12,6 +12,7 @@
 #include "core/Engine.hpp"
 #include "core/EngineInternal.hpp"
 #include "renderer/BandwidthMeter.hpp"
+#include "renderer/LeanFormats.hpp"
 #include "renderer/PostFormat.hpp"
 #include "game/PlayerController.hpp"
 #include "core/Logger.hpp"
@@ -195,6 +196,22 @@ void Engine::bindFsrInputs(bool write) {
 // Fim da faixa de tesselacao: onde a curva chega a 1 (sem subdivisao), com
 // 20% de folga para a malha entrar na faixa antes do primeiro vertice
 // deslocado. Era distMax * 0,12 fixo - a curva ia mais longe e a faixa nao.
+// Caixa de culling de uma coluna de fumaca: base de raio `radius` na boca,
+// topo com raio `radius * (1 + spread)`, mais a folga lateral da adveccao pelo
+// vento (a mesma conta que o passe "Map Smoke" fazia em linha).
+static float smokeMargin(const SmokeEmitter& sm, const Vec2& wdir, float wspd) {
+    const float rTopo = sm.radius * (1.0f + std::max(sm.spread, 0.0f));
+    return rTopo + glm::length(wdir * wspd * 20.0f * sm.windScale);
+}
+static Vec3 smokeBoxMin(const SmokeEmitter& sm, const Vec2& wdir, float wspd) {
+    const float folga = smokeMargin(sm, wdir, wspd);
+    return Vec3(sm.position.x - folga, sm.position.y, sm.position.z - folga);
+}
+static Vec3 smokeBoxMax(const SmokeEmitter& sm, const Vec2& wdir, float wspd) {
+    const float folga = smokeMargin(sm, wdir, wspd);
+    return Vec3(sm.position.x + folga, sm.position.y + sm.height, sm.position.z + folga);
+}
+
 static float tessBandDistance(const SplineCurve& curve, float distMax) {
     if (curve.evaluate(0.0f) <= 1.001f) return 0.0f;
     constexpr int kSamples = 200;
@@ -1145,6 +1162,7 @@ void Engine::render() {
     // e' um passe inteiro de skybox jogado fora todo frame. Medido em cidade-A
     // com a agua fora do quadro: a fase inteira custava 2,045 ms de CPU.
     if (!m_benchmarkThunderstormStarted && waterInView) {
+        bw::PassScope bwSky("Sky Reflection"); // medidor de banda (spec 52): era "outros"
         if (!wireframeMode()) m_skybox.renderToTexture(cmd, m_dayNightCycle, m_camera.skyboxViewProjJittered());
     }
 
@@ -1431,7 +1449,12 @@ void Engine::render() {
         }
         const uint32_t shW = accumBegun ? (swapW + 3) / 4 : swapW;
         const uint32_t shH = accumBegun ? (swapH + 3) / 4 : swapH;
-        if (!accumBegun) {
+        // Spec 52 (lean_ops): sem nenhum draw abaixo (campo procedural sem
+        // camadas, ou sombra de nuvem desligada) o passe nao abre - aberto
+        // vazio, ele so' lia e regravava o lit inteiro.
+        const bool shadowDraws = !m_useProceduralCloudField || (!skipCloudShadows && !m_independentCloudLayers.empty());
+        const bool openDirect = !accumBegun && (shadowDraws || !lean::leanOps());
+        if (openDirect) {
             VkRenderingAttachmentInfo shadowColorAttach{};
             shadowColorAttach.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             shadowColorAttach.imageView = m_deferredLighting.litImageView();
@@ -1474,7 +1497,7 @@ void Engine::render() {
         Profiler::addGpuTime("Cloud Shadows (field)", m_vulkan.timestampDeltaMs(28, 29));
         if (accumBegun) {
             m_cloudLayerRenderer.endCloudShadowAccumApply(cmd, m_deferredLighting.litImageView(), swapW, swapH);
-        } else {
+        } else if (openDirect) {
             vkc::cmdEndRendering(cmd);
         }
         cpuMark(9);
@@ -1503,7 +1526,9 @@ void Engine::render() {
         planeDepthAttach.imageView = m_gbuffer.depthView();
         planeDepthAttach.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         planeDepthAttach.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        planeDepthAttach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        // Layout somente leitura: nada grava a profundidade aqui. Com
+        // lean_ops (spec 52) NONE, que com a extensao nao volta a memoria.
+        planeDepthAttach.storeOp = lean::leanOps() ? VK_ATTACHMENT_STORE_OP_NONE : VK_ATTACHMENT_STORE_OP_STORE;
 
         VkRenderingInfo planeInfo{};
         planeInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -1514,11 +1539,21 @@ void Engine::render() {
         planeInfo.pDepthAttachment = &planeDepthAttach;
 
         bw::setPass("Cloud Volumes (field)"); // medidor de banda: mesmo nome do tempo de GPU
-        vkc::cmdBeginRendering(cmd, &planeInfo);
+        // Spec 52 (lean_ops): o passe dos planos abre so' antes do primeiro
+        // draw. Quando toda camada vai pelo acumulo em baixa resolucao, ele
+        // ficava aberto vazio (LOAD+STORE do lit e da profundidade).
+        bool planeOpen = false;
+        auto openPlane = [&]() {
+            if (planeOpen) return;
+            vkc::cmdBeginRendering(cmd, &planeInfo);
+            planeOpen = true;
+        };
+        if (!lean::leanOps()) openPlane();
         m_vulkan.writeTimestamp(cmd, 36, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         // Global coverage plane: dormant while the procedural field replaces
         // the global cloud layer.
         if (!m_useProceduralCloudField) {
+            openPlane();
             m_cloudLayerRenderer.renderDebugPlane(cmd, m_camera,
                                                   m_deferredLighting.litImageView(), m_gbuffer.depthView(),
                                                   renderExtent().width, renderExtent().height);
@@ -1653,6 +1688,7 @@ void Engine::render() {
                     // Classic/manual clouds render with the pre-field
                     // volumetric dome look; weather-field clouds use the
                     // flat POM deck.
+                    openPlane();
                     m_cloudLayerRenderer.renderCloudLayerPlane(cmd, icl->rendererId,
                                                                drawPlaneY,
                                                                m_camera, m_gbuffer.depthView(), tint,
@@ -1666,6 +1702,7 @@ void Engine::render() {
                     if (wantVolAccum) {
                         pendingBillboards.emplace_back(icl, tint);
                     } else {
+                        openPlane();
                         m_cloudLayerRenderer.renderCloudLayerBillboard(cmd, icl->rendererId,
                                                                        icl->planeY,
                                                                        m_camera, m_gbuffer.depthView(), tint);
@@ -1673,7 +1710,7 @@ void Engine::render() {
                 }
             }
         }
-        vkc::cmdEndRendering(cmd);
+        if (planeOpen) vkc::cmdEndRendering(cmd);
 
         // Half-res volume pass: all collected puffs ray-march into the
         // half-res offscreen, then a single premultiplied composite applies
@@ -1731,8 +1768,15 @@ void Engine::render() {
             sq.maxSteps = m_smokeMaxSteps;
             sq.sunTap = m_smokeSunTap;
             sq.detail = m_smokeDetail;
-            vkc::cmdBeginRendering(cmd, &planeInfo);
-            {
+            // Spec 52 (lean_ops): o culling por frustum vem ANTES de abrir o
+            // passe; sem coluna na tela ele nem abre (antes: LOAD+STORE do lit
+            // e da profundidade com zero draws).
+            const bool openSmoke = !lean::leanOps() || std::any_of(
+                m_currentMap->smokeEmitters.begin(), m_currentMap->smokeEmitters.end(),
+                [&](const SmokeEmitter& sm) { return m_camera.frustum().intersectsAABB(
+                    smokeBoxMin(sm, wdir, wspd), smokeBoxMax(sm, wdir, wspd)); });
+            if (openSmoke) vkc::cmdBeginRendering(cmd, &planeInfo);
+            if (openSmoke) {
                 // Scratch estatico (varredura 2026-09-02): reserve evitava
                 // realocacao, nao a alocacao+free por frame.
                 static std::vector<const SmokeEmitter*> ordered;
@@ -1758,18 +1802,13 @@ void Engine::render() {
                 // topo em `height` com raio `radius * (1 + spread)`, mais uma
                 // folga lateral para a adveccao pelo vento nao sumir na borda.
                 for (const SmokeEmitter* sm : ordered) {
-                    const float rTopo = sm->radius * (1.0f + std::max(sm->spread, 0.0f));
-                    const float folga = rTopo + glm::length(wdir * wspd * 20.0f * sm->windScale);
-                    const Vec3 mn(sm->position.x - folga, sm->position.y,
-                                  sm->position.z - folga);
-                    const Vec3 mx(sm->position.x + folga, sm->position.y + sm->height,
-                                  sm->position.z + folga);
-                    if (!m_camera.frustum().intersectsAABB(mn, mx)) continue;
+                    if (!m_camera.frustum().intersectsAABB(smokeBoxMin(*sm, wdir, wspd),
+                                                           smokeBoxMax(*sm, wdir, wspd))) continue;
                     m_cloudLayerRenderer.renderSmokePlume(cmd, *sm, m_camera, m_gbuffer.depthView(),
                                                           wdir * wspd * 20.0f * sm->windScale, sq);
                 }
             }
-            vkc::cmdEndRendering(cmd);
+            if (openSmoke) vkc::cmdEndRendering(cmd);
             m_vulkan.writeTimestamp(cmd, 39, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             bw::setPass(nullptr);
             Profiler::addGpuTime("Map Smoke", m_vulkan.timestampDeltaMs(38, 39));
@@ -1779,6 +1818,7 @@ void Engine::render() {
         if (m_vfx.active()) {
             m_vulkan.writeTimestamp(cmd, 14, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             bw::setPass("VFX Draw"); // medidor de banda: mesmo nome do tempo de GPU
+            m_vfx.setReactiveConsumed(fsrActive()); // so' o FSR le' a mascara reativa
             m_vfx.drawLowRes(cmd, m_gbuffer.depthView(), renderExtent()); // fumaca em meia resolucao
             m_vfx.draw(cmd, m_deferredLighting.litImage(), m_deferredLighting.litImageView(), m_gbuffer.depthView(),
                        renderExtent());
@@ -2925,6 +2965,17 @@ void Engine::render() {
     // ERUPTION_TEST_FLUXO_REPORT=<quadro>: tabela de bytes por passe no log
     // (medidor de banda, spec 50), no mesmo relogio de quadros da gravacao.
     bw::maybeReport(static_cast<uint64_t>(std::max(0, m_framesCount)));
+    {
+        // Spec 52 (OE-03): VRAM extra dos streams de vertice da sombra, na
+        // mesma linha do relatorio do medidor.
+        static const long kAt = [] {
+            const char* e = std::getenv("ERUPTION_TEST_FLUXO_REPORT");
+            return e ? std::strtol(e, nullptr, 10) : -1L;
+        }();
+        if (kAt >= 0 && m_framesCount == kAt)
+            ERUPTION_LOG_WARN("[FLUXO] streams de vertice da sombra: %.2f MB de VRAM",
+                              double(ModelRenderer::shadowStreamBytes()) / (1024.0 * 1024.0));
+    }
 
     // ERUPTION_TEST_RECORD="pasta,primeiro,quantos[,passo]" (teste): grava
     // `quantos` PNGs a partir do quadro `primeiro`, um a cada `passo` quadros

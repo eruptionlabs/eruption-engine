@@ -29,6 +29,7 @@ std::unordered_map<std::string, CachedFramebuffer> g_framebuffers;
 uint64_t g_frameNumber = 0;
 uint32_t g_framesInFlight = 0;
 PipelineHook g_pipelineHook = nullptr;
+bool g_storeOpNone = false;
 void* g_pipelineHookUser = nullptr;
 
 struct AttachmentDesc {
@@ -49,6 +50,7 @@ bool hasStencil(VkFormat f) {
 // classica com VK_KHR_load_store_op_none; sem ela, STORE guarda o mesmo
 // conteudo. DONT_CARE nao serve: descartaria a profundidade que o passe le'.
 VkAttachmentStoreOp classicStoreOp(VkAttachmentStoreOp op) {
+    if (g_storeOpNone) return op;
     return op == VK_ATTACHMENT_STORE_OP_NONE ? VK_ATTACHMENT_STORE_OP_STORE : op;
 }
 
@@ -125,6 +127,9 @@ VkAccessFlags accessV1(VkAccessFlags2 a) {
 }
 
 } // namespace
+
+void setStoreOpNone(bool native) { g_storeOpNone = native; }
+bool storeOpNone() { return g_storeOpNone; }
 
 VkFormat viewFormat(VkImageView view) {
     std::lock_guard<std::mutex> lock(g_mutex);

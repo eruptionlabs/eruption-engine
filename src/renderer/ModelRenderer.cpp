@@ -25,6 +25,9 @@
 #include "renderer/ReliefSource.hpp"
 #include "utils/ImageUtils.hpp"
 #include "utils/Profiler.hpp"
+#include "renderer/BandwidthMeter.hpp"
+#include "renderer/LeanFormats.hpp"
+#include "renderer/ShadowStreamPack.hpp"
 
 #include <cstring>
 #include <algorithm>
@@ -33,6 +36,56 @@
 #include <mutex>
 
 namespace eruption {
+
+// STREAM DE VERTICE DA SOMBRA (spec 52, OE-03; chave shadow_vertex_stream).
+// O passe de sombra so' le' a posicao (caster solido, sem fragment shader) ou
+// posicao + UV + indice de textura (teste de alfa), mas buscava o vertice
+// inteiro de 88 B. Cada vertex buffer de malha estatica ganha, na carga, um
+// buffer de posicoes (12 B, float, os mesmos bits: sombra igual) e um de
+// UV/indice (12 B). Chave = o VkBuffer de origem; sai junto com ele
+// (destroy*Buffers) ou quando ele e' reescrito (patch de vertice). Malha sem
+// stream (esqueleto, morph, criada fora destes caminhos) desenha como antes.
+namespace {
+using ShadowStream = ModelRenderer::ShadowStreamBufs;
+constexpr VkDeviceSize kStreamPosStride = svs::kPosStride, kStreamAttrStride = svs::kAttrStride;
+std::mutex g_streamMutex;
+std::unordered_map<VkBuffer, ShadowStream> g_streams;
+VkDeviceSize g_streamBytes = 0;
+
+void destroyStream(VulkanContext* ctx, const ShadowStream& st, bool deferred) {
+    PROFILE_VRAM_FREE(ProfilerCategory::Meshes, st.bytes);
+    VmaAllocator a = ctx->allocator();
+    auto kill = [a, st] {
+        vmaDestroyBuffer(a, st.pos, st.posAlloc);
+        vmaDestroyBuffer(a, st.attr, st.attrAlloc);
+    };
+    if (deferred) ctx->deferFrameCleanup(kill);
+    else kill();
+}
+
+// O buffer de origem vai sumir (ou mudar): o stream vai junto.
+void forgetShadowStream(VulkanContext* ctx, VkBuffer src, bool deferred = false) {
+    if (src == VK_NULL_HANDLE) return;
+    ShadowStream st;
+    {
+        std::lock_guard<std::mutex> lock(g_streamMutex);
+        auto it = g_streams.find(src);
+        if (it == g_streams.end()) return;
+        st = it->second;
+        g_streamBytes -= st.bytes;
+        g_streams.erase(it);
+    }
+    destroyStream(ctx, st, deferred);
+}
+
+bool findShadowStream(VkBuffer src, ShadowStream& out) {
+    std::lock_guard<std::mutex> lock(g_streamMutex);
+    auto it = g_streams.find(src);
+    if (it == g_streams.end()) return false;
+    out = it->second;
+    return true;
+}
+} // namespace
 
 // Piso de area (fracao da copa original) que o LOD DISTANTE de malha de
 // cartao pode descer - ver o comentario na chamada de simplifyMesh do far.
@@ -334,6 +387,7 @@ static TextureAnimState interpolateTextureAnimation(const ModelNode& node, int32
 VkDeviceSize ModelMeshGPU::destroyBaseBuffers(VulkanContext* ctx) {
     VkDeviceSize freed = 0;
     if (vertexBuffer != VK_NULL_HANDLE) {
+        forgetShadowStream(ctx, vertexBuffer);
         VmaAllocationInfo vInfo;
         vmaGetAllocationInfo(ctx->allocator(), vertexAlloc, &vInfo);
         PROFILE_VRAM_FREE(ProfilerCategory::Meshes, vInfo.size);
@@ -382,6 +436,7 @@ VkDeviceSize ModelMeshGPU::destroyLodBuffers(VulkanContext* ctx) {
                                   std::pair<VkBuffer*, VmaAllocation*>{&m.indexBuffer, &m.indexAlloc}}) {
             if (*buf == VK_NULL_HANDLE) continue;
             if (*alloc == VK_NULL_HANDLE) { *buf = VK_NULL_HANDLE; continue; }   // o do "lo" (LodSystem)
+            forgetShadowStream(ctx, *buf);
             VmaAllocationInfo info;
             vmaGetAllocationInfo(ctx->allocator(), *alloc, &info);
             PROFILE_VRAM_FREE(ProfilerCategory::Meshes, info.size);
@@ -404,6 +459,7 @@ VkDeviceSize ModelMeshGPU::destroyLodBuffers(VulkanContext* ctx) {
     }
     loIndexCount = 0;
     if (loVertexBuffer != VK_NULL_HANDLE) {
+        forgetShadowStream(ctx, loVertexBuffer);
         VmaAllocationInfo lv;
         vmaGetAllocationInfo(ctx->allocator(), loVertexAlloc, &lv);
         PROFILE_VRAM_FREE(ProfilerCategory::Meshes, lv.size);
@@ -414,6 +470,7 @@ VkDeviceSize ModelMeshGPU::destroyLodBuffers(VulkanContext* ctx) {
     }
     if (farVertexBuffer != VK_NULL_HANDLE && farVertexAlloc == VK_NULL_HANDLE) farVertexBuffer = VK_NULL_HANDLE;
     if (farVertexBuffer != VK_NULL_HANDLE) {
+        forgetShadowStream(ctx, farVertexBuffer);
         VmaAllocationInfo fv;
         vmaGetAllocationInfo(ctx->allocator(), farVertexAlloc, &fv);
         PROFILE_VRAM_FREE(ProfilerCategory::Meshes, fv.size);
@@ -445,6 +502,7 @@ VkDeviceSize ModelMeshGPU::destroyLodBuffers(VulkanContext* ctx) {
     for (auto [buf, alloc] : {std::pair<VkBuffer*, VmaAllocation*>{&reliefVertexBuffer, &reliefVertexAlloc},
                               std::pair<VkBuffer*, VmaAllocation*>{&reliefIndexBuffer, &reliefIndexAlloc}}) {
         if (*buf == VK_NULL_HANDLE) continue;
+        forgetShadowStream(ctx, *buf);
         VmaAllocationInfo info;
         vmaGetAllocationInfo(ctx->allocator(), *alloc, &info);
         PROFILE_VRAM_FREE(ProfilerCategory::Meshes, info.size);
@@ -607,6 +665,22 @@ void ModelRenderer::shutdown() {
 
     clear();
     clearSkinning(true);
+    // Streams de sombra cujo buffer de origem e' do cache de assets (malha
+    // externa) ficam ate' aqui; voltam na proxima carga pelo resolver.
+    {
+        std::vector<ShadowStream> left;
+        {
+            std::lock_guard<std::mutex> lock(g_streamMutex);
+            for (auto& [src, st] : g_streams) left.push_back(st);
+            g_streams.clear();
+            g_streamBytes = 0;
+        }
+        for (auto& [src, st] : m_streamPending) left.push_back(st);
+        m_streamPending.clear();
+        m_streamUps.clear();
+        m_streamData.clear();
+        for (const ShadowStream& st : left) destroyStream(m_ctx, st, false);
+    }
     if (m_tessPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_tessPipeline, nullptr);
         m_tessPipeline = VK_NULL_HANDLE;
@@ -1554,6 +1628,58 @@ void ModelRenderer::finishLod(LodBuild& b) {
 // Copias de uma submissao so', por um staging que fica (ate' kStagingKeep).
 // Um staging novo por envio custava 14-15 ms so' para alocar a memoria do
 // host (LOD de 7-15 MB na entrada de vizinho; a copia em si, 0,4 ms).
+void ModelRenderer::addShadowStream(VkBuffer src, const void* vertices, VkDeviceSize bytes) {
+    if (!lean::shadowStream() || src == VK_NULL_HANDLE || vertices == nullptr) return;
+    const size_t n = static_cast<size_t>(bytes / sizeof(TerrainVertex));
+    if (n == 0) return;
+    {
+        std::lock_guard<std::mutex> lock(g_streamMutex);
+        if (g_streams.count(src)) return; // buffer do cache ja' visto
+    }
+    for (const auto& pnd : m_streamPending)
+        if (pnd.first == src) return;
+    ShadowStream st;
+    const VkDeviceSize posBytes = VkDeviceSize(n) * kStreamPosStride, attrBytes = VkDeviceSize(n) * kStreamAttrStride;
+    const VkBufferUsageFlags use = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    if (!m_ctx->createBuffer(posBytes, use, VMA_MEMORY_USAGE_GPU_ONLY, st.pos, st.posAlloc)) return;
+    if (!m_ctx->createBuffer(attrBytes, use, VMA_MEMORY_USAGE_GPU_ONLY, st.attr, st.attrAlloc)) {
+        vmaDestroyBuffer(m_ctx->allocator(), st.pos, st.posAlloc);
+        return;
+    }
+    st.bytes = posBytes + attrBytes;
+    PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, st.bytes);
+    // Os bytes da posicao, da UV e do par texIndex/matId copiados como estao.
+    m_streamData.emplace_back(static_cast<size_t>(posBytes));
+    std::vector<uint8_t>& pos = m_streamData.back();
+    m_streamData.emplace_back(static_cast<size_t>(attrBytes));
+    std::vector<uint8_t>& attr = m_streamData.back();
+    svs::pack(vertices, n, pos.data(), attr.data());
+    m_streamUps.push_back({pos.data(), posBytes, st.pos});
+    m_streamUps.push_back({attr.data(), attrBytes, st.attr});
+    m_streamPending.emplace_back(src, st);
+}
+
+// Sobe os streams pendentes numa copia so' (por asset, nao por malha) e so'
+// entao os publica: a sombra nunca le' um stream ainda vazio.
+void ModelRenderer::flushShadowStreams() {
+    if (!m_streamUps.empty()) uploadCopies(m_streamUps);
+    {
+        std::lock_guard<std::mutex> lock(g_streamMutex);
+        for (const auto& [src, st] : m_streamPending) {
+            g_streams[src] = st;
+            g_streamBytes += st.bytes;
+        }
+    }
+    m_streamPending.clear();
+    m_streamUps.clear();
+    m_streamData.clear();
+}
+
+VkDeviceSize ModelRenderer::shadowStreamBytes() {
+    std::lock_guard<std::mutex> lock(g_streamMutex);
+    return g_streamBytes;
+}
+
 void ModelRenderer::uploadCopies(const std::vector<StagedCopy>& ups) {
     if (ups.empty()) return;
     constexpr VkDeviceSize kStagingKeep = VkDeviceSize(48) << 20;
@@ -1602,6 +1728,7 @@ void ModelRenderer::applyLods(std::vector<LodBuild>& builds) {
         m_ctx->createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage, VMA_MEMORY_USAGE_GPU_ONLY, buf, alloc);
         PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, size);
         ups.push_back({data, size, buf});
+        if (usage == VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) addShadowStream(buf, data, size);
     };
     // MRAH-W dos niveis com textura propria: o mapa da folha lido com a UV do atlas
     // da' metal/rugosidade/cavidade de um texel qualquer (brilho solto e manchas de
@@ -1713,6 +1840,7 @@ void ModelRenderer::applyLods(std::vector<LodBuild>& builds) {
         }
     }
     uploadCopies(ups);
+    flushShadowStreams();
 }
 
 // Relevo assado: troca os buffers da malha pelos dela quando o desenho vai
@@ -2092,6 +2220,7 @@ void ModelRenderer::uploadReliefs(std::vector<ReliefTask>& tasks, const std::str
         PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, vs + is);
         ups.push_back({t.outVertices.data(), vs, mesh.reliefVertexBuffer});
         ups.push_back({t.outIndices.data(), is, mesh.reliefIndexBuffer});
+        addShadowStream(mesh.reliefVertexBuffer, t.outVertices.data(), vs);
         mesh.reliefFirst = t.outFirst;
         mesh.reliefIndexCount = t.outCount;
         mesh.reliefInView = m_reliefBake.mode >= 2;
@@ -2110,6 +2239,7 @@ void ModelRenderer::uploadReliefs(std::vector<ReliefTask>& tasks, const std::str
         gridMax = std::max(gridMax, t.spacing);
     }
     uploadCopies(ups);
+    flushShadowStreams();
     const auto t2 = std::chrono::steady_clock::now();
     ERUPTION_LOG_WARN("[RELEVO] %s: %zu de %zu malhas assadas (%zu do cache), grade %.2f u (ate' %.2f), tris %zu -> %zu, "
                       "%.1f MB na GPU, piso %.2f MB na CPU, %.0f ms %s, subida %.0f ms",
@@ -3027,6 +3157,9 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                 mesh = m_meshResolver(meshKey, vertices, *uploadIdx);
                 mesh.aabbMin = aabbMin;
                 mesh.aabbMax = aabbMax;
+                // Buffer do cache: o stream nasce na primeira malha que o usa
+                // (as outras caem no "ja' visto").
+                addShadowStream(mesh.vertexBuffer, vertices.data(), vertices.size() * sizeof(TerrainVertex));
             } else {
                 VkDeviceSize vertexSize = vertices.size() * sizeof(TerrainVertex);
                 VkDeviceSize indexSize = uploadIdx->size() * sizeof(uint32_t);
@@ -3056,7 +3189,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                     vkCmdCopyBuffer(cmd, stagingBuffer, mesh.indexBuffer, 1, &ci);
                 });
                 vmaDestroyBuffer(m_ctx->allocator(), stagingBuffer, stagingAlloc);
-
+                addShadowStream(mesh.vertexBuffer, vertices.data(), vertexSize);
             }
             mesh.indexCount = static_cast<uint32_t>(useIndices->size());
             mesh.groundCells = std::move(groundCells);
@@ -3231,6 +3364,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             // Editor: o chão fica com cópia na CPU para o pincel de terreno.
             if (m_keepGroundVertices && mesh.isGround) m_groundCpu[meshIndices[n]] = vertices;
         }
+        flushShadowStreams(); // streams das malhas cheias deste asset (spec 52)
         if (!lodBuilds.empty() || !readyLods.empty()) {
             // Maiores primeiro: com as threads pegando a próxima tarefa livre,
             // a malha grande não fica para o fim sozinha.
@@ -3593,6 +3727,9 @@ void ModelRenderer::flushVertexPatches(VkCommandBuffer cmd) {
         }
         vmaUnmapMemory(m_ctx->allocator(), alloc);
         vkCmdCopyBuffer(cmd, staging, m_meshes[mesh].vertexBuffer, static_cast<uint32_t>(regions.size()), regions.data());
+        // Vertice reescrito: o stream da sombra ficaria com a posicao velha.
+        // A malha volta ao vertice inteiro (spec 52, OE-03).
+        forgetShadowStream(m_ctx, m_meshes[mesh].vertexBuffer, true);
         VmaAllocator allocator = m_ctx->allocator();
         m_ctx->deferFrameCleanup([allocator, staging, alloc] { vmaDestroyBuffer(allocator, staging, alloc); });
     }
@@ -5011,8 +5148,17 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
                                  const Mat4& cascadeMatrix, const Frustum& shadowFrustum,
                                  float minSizeThreshold, bool enableCulling, bool instanced,
                                  const Vec4& windParams, VkPipeline opaquePipeline,
-                                 const Frustum* receivers, float receiverMargin) {
+                                 const Frustum* receivers, float receiverMargin,
+                                 VkPipeline streamPipeline, VkPipeline streamOpaquePipeline) {
     if (!m_initialized || m_instances.empty()) return;
+    // Bytes de vertice buscados (spec 52): soma local e UMA chamada ao medidor
+    // no fim (ele trava um mutex; por draw custaria CPU mesmo com tudo desligado).
+    struct VertexFetchSum {
+        uint64_t bytes = 0;
+        ~VertexFetchSum() {
+            if (bytes) bw::addVertexFetch(bytes);
+        }
+    } vertexFetch;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
 
@@ -5195,6 +5341,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
                 bvb = useVb; bib = useIb;
             }
             vkCmdDrawIndexed(cmd, useCount, 1, 0, 0, 0);
+            vertexFetch.bytes += uint64_t(useCount) * sizeof(TerrainVertex);
         }
         return;
     }
@@ -5245,22 +5392,36 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
     // constante dentro dele e a troca acontece no maximo uma vez por run.
     bool runOpaque = false;
     VkPipeline boundPipe = shadowPipeline;
+    // Stream de vertice da sombra (spec 52, OE-03): com as duas pipelines e o
+    // stream do buffer, o run busca 12 B (solido) ou 24 B (alfa) por vertice.
+    const bool streams = streamPipeline != VK_NULL_HANDLE && streamOpaquePipeline != VK_NULL_HANDLE;
+    VkBuffer boundAttr = VK_NULL_HANDLE;
 
     auto flushRun = [&]() {
         if (runLen == 0) return;
-        VkPipeline want = (runOpaque && opaquePipeline != VK_NULL_HANDLE)
-                        ? opaquePipeline : shadowPipeline;
+        ShadowStream st;
+        const bool useStream = streams && findShadowStream(runVb, st);
+        VkPipeline want = useStream ? (runOpaque ? streamOpaquePipeline : streamPipeline)
+                        : (runOpaque && opaquePipeline != VK_NULL_HANDLE) ? opaquePipeline : shadowPipeline;
         if (want != boundPipe) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
             boundPipe = want;
         }
-        if (runVb != boundVb || runIb != boundIb) {
+        const VkBuffer vb0 = useStream ? st.pos : runVb;
+        if (vb0 != boundVb || runIb != boundIb) {
             VkDeviceSize offset = 0;
-            vkCmdBindVertexBuffers(cmd, 0, 1, &runVb, &offset);
+            vkCmdBindVertexBuffers(cmd, 0, 1, &vb0, &offset);
             vkCmdBindIndexBuffer(cmd, runIb, 0, VK_INDEX_TYPE_UINT32);
-            boundVb = runVb;
+            boundVb = vb0;
             boundIb = runIb;
         }
+        if (useStream && !runOpaque && st.attr != boundAttr) {
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 2, 1, &st.attr, &offset);
+            boundAttr = st.attr;
+        }
+        const uint64_t stride = !useStream ? sizeof(TerrainVertex)
+                              : runOpaque ? kStreamPosStride : kStreamPosStride + kStreamAttrStride;
         // Chao de uma instancia so': so' as celulas dentro da cascata e cuja
         // sombra pode cair na tela (o mesmo teste dos casters, ver acima).
         const ModelMeshGPU& rm = m_meshes[runMesh];
@@ -5271,6 +5432,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
             auto flushSeg = [&]() {
                 if (segCount == 0) return;
                 vkCmdDrawIndexed(cmd, segCount, 1, segFirst, 0, m_shadowCursor + runFirst);
+                vertexFetch.bytes += uint64_t(segCount) * stride;
                 ++m_shadowDrawCallsDbg;
                 segCount = 0;
             };
@@ -5295,6 +5457,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
             return;
         }
         vkCmdDrawIndexed(cmd, runCount, runLen, 0, 0, m_shadowCursor + runFirst);
+        vertexFetch.bytes += uint64_t(runCount) * runLen * stride;
         ++m_shadowDrawCallsDbg;
         runLen = 0;
     };
