@@ -90,14 +90,64 @@ compressão fica dentro do ruído, em 720p e em 1440p. Numa GPU integrada
 processo a mediana do quadro cai 14-18% (ASTC/BC), com faixas sobrepostas. O
 ganho certo é memória e carga; o de quadro aparece onde a banda é curta.
 
+## GPU sem descriptor indexing: array de camadas em bloco
+
+Sem descriptor indexing (GPU de celular com poucos samplers), cada textura de
+conteúdo é copiada para uma camada de lado fixo (`texture_layer_size`, padrão
+256) de um `sampler2DArray`. Em RGBA8 cada camada de 256 com mips pede 344 KB;
+na cena de demonstração em high são 464 camadas, 163 MB, e cada passo de
+crescimento do array pede o novo com o velho ainda vivo.
+
+Chave `texture_layers_compressed` do preset (padrão `false`) ou
+`ERUPTION_TEX_LAYER_COMPRESSED=1`: o array A passa a um formato de bloco de
+1 B/texel, o da família de `texture_compression` sobre os formatos da GPU —
+BC7 (família BC), ASTC 4×4 (ASTC) ou ETC2 RGBA (ETC2). Opaco e alfa dividem o
+formato: o codificador trata cada camada como opaca ou com alfa. Um formato
+opaco de 0,5 B/texel pediria um terceiro array e uma ligação nova no set 0;
+o layout de ligações, a tabela por slot e o shader são os mesmos do RGBA8.
+
+- Fonte já no formato do A, quadrada, com mips até 1×1 a partir do lado da
+  camada: a camada é cópia de bloco (`vkCmdCopyImage`), sem decodificar nem
+  codificar — sem perda em relação à fonte.
+- Fonte ETC2 RGB (albedo opaco da família ETC2) no A em ETC2 RGBA: os blocos
+  da fonte voltam para a CPU e sobem com um bloco de alfa 255 na frente de cada
+  um — também sem perda e sem codificar.
+- Outra fonte comprimida (ex.: albedo BC1 no array BC7) ou cor sRGB: a cópia
+  de sempre desenha a camada num RGBA8 de passagem, que volta para a CPU, é
+  codificado e sobe para o A. O resultado fica em cache em
+  `.cache/eruption/layers/` pela soma do conteúdo da camada (troca a textura,
+  troca a chave). `ERUPTION_TEX_LAYER_CACHE=0` desliga o cache (medida a frio).
+- Dados lineares sem compressão (RGBA8, R8, RG8) e texturas sem filtro
+  (sprites, pixel art) ficam no array B, em RGBA8, que também recebe o que não
+  couber no A. Com o A em bloco o B cresce de 8 em 8 camadas.
+- GPU sem o formato (sem cópia ou sem amostragem em array), modo `off`/`raw`,
+  navegador ou `ERUPTION_DISABLE_LAYER_B`: o A fica em RGBA8, como antes.
+
+Medido na cena de demonstração em high (464 camadas de 256): o array vai de
+163,0 para 43,9 MB e cada camada pede 88 KB em vez de 344 KB (4060; 108 KB em
+vez de 390 KB no Intel); o maior pedido durante o crescimento cai de 295 para
+79 MB. Com ASTC 4×4 quase toda camada é cópia direta (455 de 457, 59 ms) e a
+imagem fica invisível contra as camadas RGBA8 (50,7 dB, SSIM 0,996); ETC2 dá
+42,2 dB e BC7 47,7 dB. O tempo de GPU por quadro não muda além do ruído: o
+ganho é de memória.
+
+Diagnóstico: o log diz o formato e a memória pedida por camada
+(`Texture layers: array A BC7 com 487 camadas: 41,9 MB pedidos, 88,0 KB por
+camada`), quantas camadas foram cópia direta, quantas vieram do cache e quantas
+foram codificadas; a telemetria tem `sys.layers.kb_per_layer`, `block`,
+`block_direct`, `block_cache_hits`, `block_encoded` e `block_ms`.
+`ERUPTION_TEX_LAYER_PSNR=1` mede cada camada codificada contra o RGBA8 que a
+cópia desenhou; `ERUPTION_TEX_LAYER_DIRECT=0` força tudo pelo caminho que
+codifica (A/B).
+
 ## Limites
 
 - A primeira carga de um mapa num modo novo paga o cozimento (na cena de
   demonstração, teto 1024, CPU de 14 threads: BC 7,8 s, ETC2 4,4 s, ASTC 4×4
   15,0 s). Num celular a CPU é mais lenta; meça antes de ligar `auto` num preset
   de celular.
-- O caminho sem bindless (GPU sem descriptor indexing) ainda guarda o array de
-  camadas em RGBA8: as fontes são comprimidas, mas a camada não.
+- O array de camadas em bloco (seção acima) é desligado por padrão; sem ele, o
+  caminho sem bindless guarda as camadas em RGBA8.
 - Quadros de sprite e as poucas imagens geradas em tempo de execução ficam em
   RGBA8.
 - O censo por formato sai no relatório de fluxo (`ERUPTION_TEST_FLUXO_REPORT=<quadro>`,
