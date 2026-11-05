@@ -2312,6 +2312,9 @@ private:
     bool m_focusPointSet = false;
     Vec3 m_focusPoint{0.0f};
     float m_nearFadeStart = 0.0f, m_nearFadeEnd = 0.0f;
+    // Chaves de preset alpha_hash (0..1, alfa-teste por hash) e shadow_soft (0/1/2, PCF da variante leve).
+    float m_alphaHash = 0.0f;
+    int m_shadowSoft = 0;
     bool m_orbitInput = true;
     std::array<Vec4, 3 * FrameUBO::kCutaways> m_cutaway{};
     int m_spriteShadowKind = -1;

@@ -164,6 +164,8 @@ struct FrameUBO {
     // da camera aos pes.
     static constexpr uint32_t kSeeThroughExtra = 6;
     alignas(16) Vec4 seeThroughExtra[2 * kSeeThroughExtra];
+    // x = forca do alfa-teste por hash (chave de preset alpha_hash), 0 = limiar fixo de sempre.
+    alignas(16) Vec4 alphaHash;
 };
 
 // Luz pontual dominante de um sprite (Engine::spriteDominantLights), por

@@ -220,6 +220,7 @@ public:
     }
     // Luz de preenchimento de direção fixa (sem sombra): mantém o relevo do
     // normal map legível onde o sol não bate ("fake 3D" na sombra).
+    void setShadowSoft(int taps) { m_shadowSoft = static_cast<float>(taps); }
     void setFillLight(float intensity) { m_fillLightIntensity = intensity; }
     // Curva de opacidade da sombra (ver ShadowUBO::shadowOpacityKnots).
     void setShadowOpacityCurve(const Vec4& params, const Vec4& lut0, const Vec4& lut1) {
@@ -333,6 +334,7 @@ private:
     float m_giAmbientFloor = 0.10f;
     bool m_usePbr = [] { return std::getenv("ERUPTION_TEST_NO_PBR") == nullptr; }();
     Vec4 m_shadowOpacityParams{1000.0f, 0.0f, 0.0f, 0.0f};
+    float m_shadowSoft = 0.0f; // 0/1/2: PCF da variante leve (shadowOpacityParams.z no shader)
     Vec4 m_shadowOpacityLut0{1.0f, 1.0f, 1.0f, 1.0f};
     Vec4 m_shadowOpacityLut1{1.0f, 1.0f, 1.0f, 1.0f};
     uint32_t m_pbrDebugMode = 0;

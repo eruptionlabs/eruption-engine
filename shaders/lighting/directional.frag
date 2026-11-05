@@ -175,7 +175,25 @@ float sampleCascade(sampler2DShadow atlas, vec3 projCoord, int idx, float curren
         // eixo 1-f, 1, 1, f): a transicao fica continua, sem degrau - a caixa
         // 3x3 alinhada aos texels so' amaciava os degraus. No resto, a
         // comparacao unica de sempre.
-        if (!g_spritePixel) return 1.0 - texture(atlas, vec3(clamp(baseUV, cascadeMinUV, cascadeMaxUV), currentDepth));
+        if (!g_spritePixel) {
+            // shadow_soft (shadowOpacityParams.z): 0 = comparacao unica; 1 = 4 taps a meio texel (cada um ja' e'
+            // um PCF 2x2 do hardware: tenda 3x3); 2 = 9 taps a 1 texel com pesos 1-2-1 (tenda 4x4).
+            if (shadowOpacityParams.z < 0.5) return 1.0 - texture(atlas, vec3(clamp(baseUV, cascadeMinUV, cascadeMaxUV), currentDepth));
+            float lit = 0.0;
+            if (shadowOpacityParams.z < 1.5) {
+                for (int i = 0; i < 4; ++i) {
+                    vec2 o = vec2((i & 1) == 0 ? -0.5 : 0.5, (i & 2) == 0 ? -0.5 : 0.5) * texelSize;
+                    lit += texture(atlas, vec3(clamp(baseUV + o, cascadeMinUV, cascadeMaxUV), currentDepth));
+                }
+                return 1.0 - lit * 0.25;
+            }
+            for (int y = -1; y <= 1; ++y)
+                for (int x = -1; x <= 1; ++x) {
+                    float w = (x == 0 ? 2.0 : 1.0) * (y == 0 ? 2.0 : 1.0);
+                    lit += w * texture(atlas, vec3(clamp(baseUV + vec2(x, y) * texelSize, cascadeMinUV, cascadeMaxUV), currentDepth));
+                }
+            return 1.0 - lit * (1.0 / 16.0);
+        }
         vec2 t = baseUV / texelSize - 0.5;
         vec2 f = fract(t);
         vec2 c0 = (floor(t) + 0.5) * texelSize;

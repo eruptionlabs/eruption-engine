@@ -46,6 +46,7 @@ layout(push_constant) uniform PushConstants {
 
 #include "gbuffer/model_frame_ubo.glsl"
 #include "gbuffer/see_through.glsl"
+#include "gbuffer/alpha_hash.glsl"
 
 const float dither[16] = float[](
     0.0, 0.5, 0.125, 0.625,
@@ -67,7 +68,7 @@ void main() {
     if (seeThroughDiscard(inWorldPos, inNormal,
                           ((inSplatTex.x | inSplatTex.y) != 0u && inBlendMaskIndex != 0u) || inSway < -0.5)) discard;
     vec4 texColor = slotTexture(inTexIndex, inTexCoord);
-    if (texColor.a < 0.1) discard;
+    if (texColor.a < alphaCutoff()) discard;
     if (inBlendWeight > 0.0) {
         vec4 bColor = slotTexture(inBlendTexIndex, inTexCoord);
         float blendT = inBlendWeight;

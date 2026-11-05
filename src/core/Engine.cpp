@@ -2806,6 +2806,14 @@ void Engine::applyGraphicsPreset() {
     // cru. `aa_sharpen` 0 = so' o upscale, sem nitidez (equivalente visual ao
     // upscale antigo, so' que menos borrado por ser bicubico em vez de
     // bilinear). ERUPTION_TEST_NO_AA=1 desliga o FXAA pra A/B.
+    // alpha_hash: forca (0..1) do alfa-teste por hash no G-buffer das malhas; shadow_soft: 0 comparacao unica,
+    // 1 = 4 taps, 2 = 9 taps de PCF na variante leve. Padrao 0 (desligado). ERUPTION_TEST_ALPHA_HASH /
+    // ERUPTION_TEST_SHADOW_SOFT vencem o preset (A/B).
+    m_alphaHash = p.contains("alpha_hash") ? std::clamp<float>(p["alpha_hash"], 0.0f, 1.0f) : 0.0f;
+    if (const char* e = std::getenv("ERUPTION_TEST_ALPHA_HASH")) m_alphaHash = std::clamp(std::strtof(e, nullptr), 0.0f, 1.0f);
+    m_shadowSoft = p.contains("shadow_soft") ? std::clamp<int>(p["shadow_soft"], 0, 2) : 0;
+    if (const char* e = std::getenv("ERUPTION_TEST_SHADOW_SOFT")) m_shadowSoft = std::clamp(std::atoi(e), 0, 2);
+    m_deferredLighting.setShadowSoft(m_shadowSoft);
     if (p.contains("fxaa")) m_enableFXAA = p["fxaa"];
     if (p.contains("aa_sharpen")) m_aaSharpenAmount = std::clamp<float>(p["aa_sharpen"], 0.0f, 1.0f);
     if (std::getenv("ERUPTION_TEST_NO_AA")) m_enableFXAA = false;

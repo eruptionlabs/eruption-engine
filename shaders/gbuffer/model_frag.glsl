@@ -70,6 +70,7 @@ layout(push_constant) uniform PushConstants {
 
 #include "gbuffer/model_frame_ubo.glsl"
 #include "gbuffer/see_through.glsl"
+#include "gbuffer/alpha_hash.glsl"
 
 // Tabela de 8 valores com interpolacao linear. t em 0..1.
 float lut8(vec4 a, vec4 b, float t) {
@@ -652,7 +653,7 @@ void main() {
     // altera so' o .rgb, de proposito - misturar o alfa puxava texColor.a
     // abaixo do limiar e abria buracos). O teste de MAGENTA continua embaixo,
     // porque le' o rgb ja' misturado.
-    if (texColor.a < 0.1) discard;
+    if (texColor.a < alphaCutoff()) discard;
     // Ground crossfade. `inBlendWeight` is a per-vertex weight (0 when the mesh
     // carries no _BLEND_* attributes, so untagged maps are untouched). A plain
     // mix() of that weight interpolates linearly across each mesh triangle, so
@@ -810,7 +811,7 @@ void main() {
     }
 
     float magentaness = min(texColor.r, texColor.b) - texColor.g;
-    if (texColor.a < 0.1 || magentaness > 0.35) {
+    if (texColor.a < alphaCutoff() || magentaness > 0.35) {
         discard;
     }
 

@@ -3213,6 +3213,7 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
     ubo.seeThrough = Vec4(0.0f);
     ubo.seeThrough2 = Vec4(0.0f);
     ubo.seeThrough3 = Vec4(0.0f);
+    ubo.alphaHash = Vec4(m_alphaHash, 0.0f, 0.0f, 0.0f);
     ubo.seeThroughBand = Vec4(0.0f);
     std::fill(std::begin(ubo.seeThroughExtra), std::end(ubo.seeThroughExtra), Vec4(0.0f));
     static const Vec2 kEnv = [] {
