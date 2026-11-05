@@ -57,14 +57,61 @@ bool layerCacheOn() {
     return on;
 }
 
+// Poda do cache das camadas em bloco: o que nao e' tocado ha' mais de 30 dias sai, e acima
+// de 512 MB sai o mais antigo primeiro. Uma vez por execucao, ao abrir o diretorio.
+void pruneLayerCache(const std::filesystem::path& dir) {
+    namespace fs = std::filesystem;
+    constexpr uintmax_t kMaxBytes = 512ull * 1024 * 1024;
+    constexpr auto kMaxAge = std::chrono::hours(24 * 30);
+    struct Entry { fs::path path; fs::file_time_type time; uintmax_t size; };
+    std::vector<Entry> all;
+    uintmax_t total = 0;
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code e2;
+        if (!it->is_regular_file(e2)) continue;
+        const auto t = it->last_write_time(e2);
+        const auto sz = it->file_size(e2);
+        if (e2) continue;
+        all.push_back({it->path(), t, sz});
+        total += sz;
+    }
+    std::sort(all.begin(), all.end(), [](const Entry& a, const Entry& b) { return a.time < b.time; });
+    const auto now = fs::file_time_type::clock::now();
+    size_t removed = 0;
+    for (const Entry& e : all) {
+        if (total <= kMaxBytes && now - e.time <= kMaxAge) continue;
+        std::error_code e3;
+        if (fs::remove(e.path, e3)) {
+            total -= std::min(total, e.size);
+            ++removed;
+        }
+    }
+    if (removed) ERUPTION_LOG_WARN("[TEXCOMP] cache das camadas: %zu arquivo(s) podado(s), %.1f MB ficam",
+                                   removed, double(total) / (1024.0 * 1024.0));
+}
+
+// Diretorio fixo (nao o cwd): ERUPTION_TEX_LAYER_CACHE_DIR, senao $XDG_CACHE_HOME ou $HOME/.cache
+// + eruption/layers; sem nenhum dos dois (celular), o relativo de sempre.
 const std::string& layerCacheDir() {
     static const std::string dir = [] {
+        std::string d;
+        if (const char* e = std::getenv("ERUPTION_TEX_LAYER_CACHE_DIR"); e && *e) d = e;
+        else if (const char* x = std::getenv("XDG_CACHE_HOME"); x && *x) d = std::string(x) + "/eruption/layers";
+        else if (const char* h = std::getenv("HOME"); h && *h) d = std::string(h) + "/.cache/eruption/layers";
+        else d = ".cache/eruption/layers";
+        if (d.back() != '/') d += '/';
         std::error_code ec;
-        std::filesystem::create_directories(".cache/eruption/layers", ec);
-        return std::string(".cache/eruption/layers/");
+        std::filesystem::create_directories(d, ec);
+        pruneLayerCache(d);
+        return d;
     }();
     return dir;
 }
+
+// Versao dos codificadores na chave: trocar astcenc/etcpak/bc7enc muda os blocos, entao o cache
+// antigo nao pode valer. Atualizar ao subir a versao de qualquer um.
+constexpr const char* kEncoderTag = "astcenc-5.2.0;etcpak;bc7enc_rdo";
 
 // Formatos que a cópia leva para RGBA8 sem perder nada: 8 bits por canal e os
 // comprimidos de faixa normal. Float e profundidade vão para ligação direta.
@@ -926,11 +973,17 @@ void TextureLayers::runBlockCopies(const std::vector<BlockTarget>& targets) {
 
     for (size_t first = 0; first < targets.size(); first += group) {
         const size_t count = std::min(group, targets.size() - first);
+        std::vector<char> copyFailed(count, 0);
         // 1) GPU: a copia de sempre numa camada de passagem, e de volta para a CPU.
         for (size_t sub = 0; sub < count; sub += kCopyBatch) {
             const size_t n = std::min<size_t>(kCopyBatch, count - sub);
             std::vector<VkDescriptorSet> sets;
-            if (!allocCopySets(n, sets)) continue;
+            if (!allocCopySets(n, sets)) {
+                // Sem copia, o buffer de leitura ficaria com lixo de um lote anterior: nao
+                // codifica nem grava no cache estas camadas.
+                for (size_t i = 0; i < n; ++i) copyFailed[sub + i] = 1;
+                continue;
+            }
             std::vector<VkImageView> views(n);
             for (size_t i = 0; i < n; ++i) {
                 writeCopySource(sets[i], targets[first + sub + i].job);
@@ -976,6 +1029,11 @@ void TextureLayers::runBlockCopies(const std::vector<BlockTarget>& targets) {
         const auto e0 = std::chrono::steady_clock::now();
         JobSystem::instance().parallelFor(static_cast<uint32_t>(count), [&](uint32_t i) {
             const BlockTarget& t = targets[first + i];
+            if (copyFailed[i]) {
+                ++failed;
+                std::memset(upMapped + i * blockBytes, 0, blockBytes);
+                return;
+            }
             // Copia local: a memoria mapeada pode ser lenta de ler muitas vezes.
             const std::vector<uint8_t> rgba(readMapped + i * rgbaBytes, readMapped + (i + 1) * rgbaBytes);
             uint8_t* dst = upMapped + i * blockBytes;
@@ -1003,7 +1061,8 @@ void TextureLayers::runBlockCopies(const std::vector<BlockTarget>& targets) {
             const uint64_t seed = (static_cast<uint64_t>(fmt) << 32) ^ (static_cast<uint64_t>(m_layerSize) << 12) ^
                                   (static_cast<uint64_t>(kBlockCacheVersion) << 4) ^ (p.linear ? 1u : 0u) ^
                                   (static_cast<uint64_t>(p.bc7Partitions) << 40) ^
-                                  (static_cast<uint64_t>(p.astcQuality * 16.0f) << 48);
+                                  (static_cast<uint64_t>(p.astcQuality * 16.0f) << 48) ^
+                                  layerHash(reinterpret_cast<const uint8_t*>(kEncoderTag), std::strlen(kEncoderTag), 0x51ull);
             char name[96];
             std::snprintf(name, sizeof(name), "%s_%u_%016llx.bin", tag, m_layerSize,
                           static_cast<unsigned long long>(layerHash(rgba.data(), rgba.size(), seed)));

@@ -289,7 +289,14 @@ uint32_t policyKey(const Caps& caps, const Options& o) {
 namespace {
 std::mutex g_mutex;
 Caps g_caps;
-Options g_options;
+// Padrao BC (o do preset): ate' applyGraphicsPreset rodar, o que for decidido com
+// options() (cache de textura, sondagem) ja' usa o modo que o preset vai pedir.
+Options defaultOptions() {
+    Options o;
+    o.mode = Mode::Bc;
+    return o;
+}
+Options g_options = defaultOptions();
 } // namespace
 
 void setDeviceCaps(const Caps& c) {

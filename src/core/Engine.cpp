@@ -386,6 +386,9 @@ bool Engine::init(int width, int height, const std::string& title) {
         // (simula a GPU de um aparelho; nunca liga o que o driver nao tem).
         if (const char* e = std::getenv("ERUPTION_TEST_TEXTURE_CAPS")) caps = texfmt::intersect(caps, texfmt::parseCaps(e));
         texfmt::setDeviceCaps(caps);
+        // Opcoes do preset ja' aqui (nao so' em applyGraphicsPreset): nada entre a sondagem e o
+        // preset enxerga o modo errado.
+        texfmt::setOptions(textureOptionsFromPreset(presetObject(graphicsPresetName())));
         ERUPTION_LOG_WARN("[TEXCOMP] formatos de bloco amostraveis: %s", texfmt::describeCaps(caps).c_str());
     }
     // Lado, em pixels, de cada camada de textura (so' a GPU sem descriptor
