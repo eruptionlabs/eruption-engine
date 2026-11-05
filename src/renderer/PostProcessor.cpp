@@ -1741,7 +1741,13 @@ if (!m_ctx) return;
     // Sem borrao no quadro de um CORTE de camera: o prevViewProj e' o do
     // plano anterior, e a "velocidade" entre dois planos lavava a tela.
     const bool borrao = settings.enableMotionBlur && !kNoMotionBlur && !CameraMotion::corteNesteQuadro();
-    push.motionBlurParams = Vec4(borrao ? 1.0f : 0.0f, settings.motionBlurAmount,
+    static const float kMbRefEnv = [] {
+        const char* e = std::getenv("ERUPTION_TEST_MB_DT_REF");
+        return e ? std::strtof(e, nullptr) : -1.0f;
+    }();
+    const float mbRef = kMbRefEnv >= 0.0f ? kMbRefEnv : settings.motionBlurRefDt;
+    const float mbDtScale = (mbRef > 0.0f && settings.frameDt > mbRef) ? mbRef / settings.frameDt : 1.0f;
+    push.motionBlurParams = Vec4(borrao ? 1.0f : 0.0f, settings.motionBlurAmount * mbDtScale,
                                  static_cast<float>(settings.toneMapMode), settings.effectClearRadius);
     bool caEnabled = settings.enableChromaticAberration;
     if (std::getenv("ERUPTION_TEST_NO_CA") != nullptr) caEnabled = false;
