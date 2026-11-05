@@ -95,6 +95,15 @@ int main() {
     t = bw::attachmentTraffic(VK_FORMAT_D32_SFLOAT, 1920, 1080, 1, VK_ATTACHMENT_LOAD_OP_LOAD,
                               VK_ATTACHMENT_STORE_OP_NONE);
     CHECK(t.read == px * 4 && t.written == px * 4); // NONE vira STORE no Vulkan 1.1 do motor
+    // Spec 52: com a extensao load_store_op_none ligada, NONE nao grava.
+    bw::setStoreOpNoneNative(true);
+    t = bw::attachmentTraffic(VK_FORMAT_D32_SFLOAT, 1920, 1080, 1, VK_ATTACHMENT_LOAD_OP_LOAD,
+                              VK_ATTACHMENT_STORE_OP_NONE);
+    CHECK(t.read == px * 4 && t.written == 0);
+    t = bw::attachmentTraffic(VK_FORMAT_D32_SFLOAT, 1920, 1080, 1, VK_ATTACHMENT_LOAD_OP_LOAD,
+                              VK_ATTACHMENT_STORE_OP_STORE);
+    CHECK(t.written == px * 4); // STORE continua gravando
+    bw::setStoreOpNoneNative(false);
     t = bw::attachmentTraffic(VK_FORMAT_D32_SFLOAT, 2048, 2048, 4, VK_ATTACHMENT_LOAD_OP_CLEAR,
                               VK_ATTACHMENT_STORE_OP_STORE);
     CHECK(t.written == 2048ull * 2048ull * 4ull * 4ull);

@@ -337,6 +337,11 @@ private:
     // Variante sem fragment shader, para caster cujas texturas nao tem
     // alfa. Ver o comentario na criacao, em ShadowRenderer.cpp.
     VkPipeline m_shadowInstOpaquePipeline = VK_NULL_HANDLE;
+    // Stream de vertice da sombra (spec 52, OE-03): alfa e solida.
+    VkPipeline m_shadowInstStreamPipeline = VK_NULL_HANDLE;
+    VkPipeline m_shadowInstStreamOpaquePipeline = VK_NULL_HANDLE;
+    void createStreamPipelines(const VkPipelineShaderStageCreateInfo& fragStage,
+                               const VkPipelineColorBlendAttachmentState& blend);
     VkPipeline m_shadowPipelineD32 = VK_NULL_HANDLE;     // == m_shadowPipeline com atlas D32
     VkPipeline m_shadowInstPipelineD32 = VK_NULL_HANDLE; // == m_shadowInstPipeline com atlas D32
     VkPipelineLayout m_shadowInstLayout = VK_NULL_HANDLE;

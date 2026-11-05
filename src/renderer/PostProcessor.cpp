@@ -3,6 +3,7 @@
 #include "renderer/CameraMotion.hpp"
 #include <cstdlib>
 #include "renderer/BandwidthMeter.hpp"
+#include "renderer/LeanFormats.hpp"
 #include "renderer/PostFormat.hpp"
 #include "renderer/DeferredLighting.hpp"
 #include "renderer/ShaderCompiler.hpp"
@@ -247,7 +248,8 @@ void PostProcessor::createImages() {
 }
 
 void PostProcessor::createDescriptors() {
-    VkDescriptorSetLayoutBinding bindings[11] = {};
+    constexpr uint32_t kBindings = 14;
+    VkDescriptorSetLayoutBinding bindings[kBindings] = {};
     // Bindings 0..3: image samplers used by postprocess passes.
     // Binding 3 is also reused as the cloud color input by post_composite.frag.
     for (int i = 0; i < 4; i++) {
@@ -298,6 +300,15 @@ void PostProcessor::createDescriptors() {
     bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[10].descriptorCount = 1;
     bindings[10].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Bindings 11..13: DoF fundido no composite (spec 52, OE-02) - borrao
+    // pequeno, CoC e borrao grande, lidos so' pelo post_composite.frag. Sempre
+    // escritos no set do composite (sem a fusao, a propria cena no lugar).
+    for (uint32_t b = 11; b < kBindings; ++b) {
+        bindings[b].binding = b;
+        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[b].descriptorCount = 1;
+        bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
 
     // UPDATE_AFTER_BIND: estes sets sao reescritos por frame com as MESMAS
     // views enquanto o CB do frame anterior ainda esta' pendente - sem a flag
@@ -306,17 +317,17 @@ void PostProcessor::createDescriptors() {
     // corrida real de dados.
     // Flag SO' nos combined-image-samplers: UAB de UBO/SSBO exige features
     // proprias (descriptorBinding*BufferUpdateAfterBind) que nao habilitamos.
-    std::vector<VkDescriptorBindingFlags> uabFlags(11, 0);
-    for (uint32_t b = 0; b < 11; ++b)
+    std::vector<VkDescriptorBindingFlags> uabFlags(kBindings, 0);
+    for (uint32_t b = 0; b < kBindings; ++b)
         if (m_ctx->bindless() && bindings[b].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
             uabFlags[b] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo uabInfo{};
     uabInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-    uabInfo.bindingCount = 11;
+    uabInfo.bindingCount = kBindings;
     uabInfo.pBindingFlags = uabFlags.data();
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 11;
+    layoutInfo.bindingCount = kBindings;
     layoutInfo.pBindings = bindings;
     layoutInfo.pNext = m_ctx->bindless() ? &uabInfo : nullptr;
     // Sem descriptor indexing nao ha' UPDATE_AFTER_BIND (caminho .nb).
@@ -329,7 +340,7 @@ void PostProcessor::createDescriptors() {
     const uint32_t numSets = kSetsPerFrame * VulkanContext::MAX_FRAMES_IN_FLIGHT;
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 9 * numSets;
+    poolSizes[0].descriptorCount = 12 * numSets; // 0-3, 5, 7-13
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[1].descriptorCount = numSets;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -902,6 +913,21 @@ if (!m_ctx) return;
             if (m_weatherRenderer.prepare(*weather, wrParams)) overlayIdle = false;
         }
     }
+    // DoF fundido (spec 52, OE-02): as gotas depois do DoF desenham SOBRE a
+    // imagem misturada, que a fusao nao grava. Sem gota no quadro (a mesma
+    // simulacao que o render() faria, aqui antes) a fusao vale; com gota, o
+    // passe proprio fica.
+    bool afterDofIdle = false;
+    if (lean::postFused() && weatherActive && particlesAfterDof && settings.weatherTier != WeatherTier::Mobile) {
+        m_weatherRenderer.setTier(settings.weatherTier);
+        m_weatherRenderer.setCloudAltitudeTexture(cloudAltitudeView, cloudAltitudeSampler);
+        m_weatherRenderer.setCloudAltitudeRange(cloudBottom, cloudTop);
+        m_weatherRenderer.setCloudScale(cloudScale);
+        if (!m_weatherRenderer.prepare(*weather, wrParams)) {
+            m_weatherRenderer.dropPrepared();
+            afterDofIdle = true;
+        }
+    }
 
     if (weatherActive && !overlayIdle) {
         m_ctx->writeTimestamp(cmd, 32, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
@@ -1339,6 +1365,11 @@ if (!m_ctx) return;
     // que o DoF explodia, quando era o overlay + particulas.
     m_ctx->writeTimestamp(cmd, 40, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     bw::pushPass("DoF / Tilt-Shift"); // medidor de banda (spec 50)
+    // DoF fundido no Composite (OE-02): maxBlur 0 = sem fusao neste quadro.
+    struct {
+        float maxBlur = 0.0f;
+        VkImageView blur = VK_NULL_HANDLE, coc = VK_NULL_HANDLE, far = VK_NULL_HANDLE;
+    } fusedDof;
     if (settings.enableDoF) {
         // CAMINHO UNICO DE DESFOQUE (Circle of Confusion).
         // O ramo legado (tilt-shift por profundidade) vivia aqui num
@@ -1462,7 +1493,29 @@ if (!m_ctx) return;
             }
         }
 
-        // Pass 3: Composite
+        // Pass 3: Composite. Com post_fused (spec 52, OE-02) a mistura
+        // nitido/borrao vai para dentro do Composite final: some um alvo de
+        // tela cheia (gravar aqui + ler la'). Fica o passe proprio quando a
+        // imagem misturada e' destino de outro desenho (gotas depois do DoF)
+        // ou quando o shader dele pinta o mapa de CoC.
+        // Com aberracao cromatica ou borrao de movimento o Composite le' a cena
+        // em varios pontos por pixel e cada leitura fundida vira 3-4 (cena,
+        // borrao, CoC, distante): medido +0,30 ms no pos do high a 2560x1440,
+        // entao esses quadros ficam no passe proprio.
+        static const bool kNoMbEnv = std::getenv("ERUPTION_TEST_NO_MOTION_BLUR") != nullptr;
+        static const bool kNoCaEnv = std::getenv("ERUPTION_TEST_NO_CA") != nullptr;
+        const bool multiTap = (settings.enableMotionBlur && !kNoMbEnv) ||
+                              (settings.enableChromaticAberration && !kNoCaEnv);
+        const float compMaxBlur = farBlur ? teto : std::min(teto, 3.0f);
+        const bool fuse = lean::postFused() && !settings.visualizeCoC && !multiTap &&
+                          !(drawParticles && particlesAfterDof && !afterDofIdle) && compMaxBlur > 0.0f;
+        if (fuse) {
+            fusedDof.maxBlur = compMaxBlur;
+            fusedDof.blur = m_blurVView;
+            fusedDof.coc = m_cocView;
+            fusedDof.far = farBlur ? m_dofFarViews[2] : m_blurVView;
+        }
+        if (!fuse) {
         barrierToColorAttach(cmd, m_ctx, m_dofImage);
         // Binding 3 sempre escrito: sem o borrao grande, a imagem do borrao
         // pequeno no lugar (o shader nao a le').
@@ -1483,12 +1536,13 @@ if (!m_ctx) return;
         vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_dofImage);
         compositeSource = m_dofView;
+        }
     }
     m_ctx->writeTimestamp(cmd, 41, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     bw::popPass();
     // Gotas nitidas por cima do desfoque. A cena de entrada (refracao) e' a
     // de antes do DoF: ler e escrever m_dofImage no mesmo passe nao pode.
-    if (drawParticles && particlesAfterDof) drawWeatherParticles(m_dofImage, m_dofView, hdrInput);
+    if (drawParticles && particlesAfterDof && !afterDofIdle) drawWeatherParticles(m_dofImage, m_dofView, hdrInput);
     msDof = m_ctx->timestampDeltaMs(40, 41);
     // O rotulo do passe segue "DoF / Tilt-Shift" DE PROPOSITO, mesmo depois
     // de o tilt-shift ter sido apagado: perf/breakdown_lib.py,
@@ -1612,6 +1666,18 @@ if (!m_ctx) return;
         w.dstBinding = 10;
         w.pImageInfo = &markInfo;
         updateSets(&w, 1);
+        // Bindings 11..13 (DoF fundido, OE-02): sem a fusao, a cena no lugar
+        // (o shader nao os le' com gradingParams.w == 0).
+        const bool fused = fusedDof.maxBlur > 0.0f;
+        const VkImageView dofViews[3] = {fused ? fusedDof.blur : compositeSource,
+                                         fused ? fusedDof.coc : compositeSource,
+                                         fused ? fusedDof.far : compositeSource};
+        for (uint32_t k = 0; k < 3; ++k) {
+            VkDescriptorImageInfo di{samplerFor(dofViews[k]), dofViews[k], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            w.dstBinding = 11 + k;
+            w.pImageInfo = &di;
+            updateSets(&w, 1);
+        }
     }
     beginFullscreenPass(cmd, compositeTarget, m_width, m_height);
     lap(3);
@@ -1632,7 +1698,7 @@ if (!m_ctx) return;
         Vec4 motionBlurParams; // x=enable, y=amount
         Vec4 chromaticAberrationParams; // x=enable, y=amount
         Vec4 fogHeightParams; // x=fogHeight, y=fogHeightFalloff, z=enableHeightFog
-        Vec4 gradingParams;   // x=saturacao, y=contraste, zw=livre
+        Vec4 gradingParams;   // x=saturacao, y=contraste, z=G-buffer cru, w=teto do DoF fundido
         Vec4 vignetteParams;  // x=forca, y=suavidade (LookConfig)
         Vec4 shadowTint;      // rgb=matiz, a=forca
         Vec4 highlightTint;
@@ -1707,6 +1773,8 @@ if (!m_ctx) return;
         return e && (std::atoi(e) & 31) != 0;
     }();
     if (settings.pbrDebugActive || kPbrDebugEnv) push.gradingParams.z = 1.0f;
+    // .w: teto do DoF fundido (OE-02); 0 = a cena ja' chega misturada (ou sem DoF).
+    push.gradingParams.w = fusedDof.maxBlur;
     push.vignetteParams = lookConfig ? Vec4(lookConfig->vignette, lookConfig->vignetteSoftness, 0.0f, 0.0f) : Vec4(0.0f);
     push.shadowTint = lookConfig ? Vec4(lookConfig->shadowTint, lookConfig->shadowTintStrength) : Vec4(1.0f, 1.0f, 1.0f, 0.0f);
     push.highlightTint = lookConfig ? Vec4(lookConfig->highlightTint, lookConfig->highlightTintStrength) : Vec4(1.0f, 1.0f, 1.0f, 0.0f);

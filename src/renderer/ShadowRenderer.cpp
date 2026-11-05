@@ -1,5 +1,6 @@
 #include "renderer/ShadowRenderer.hpp"
 #include "renderer/LeanFormats.hpp"
+#include "renderer/ShadowStreamPack.hpp"
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -51,6 +52,10 @@ void ShadowRenderer::shutdown() {
     if (m_shadowInstOpaquePipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_shadowInstOpaquePipeline, nullptr);
         m_shadowInstOpaquePipeline = VK_NULL_HANDLE;
+    }
+    for (VkPipeline* p : {&m_shadowInstStreamPipeline, &m_shadowInstStreamOpaquePipeline}) {
+        if (*p != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), *p, nullptr);
+        *p = VK_NULL_HANDLE;
     }
     if (m_shadowInstPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_shadowInstPipeline, nullptr);
@@ -265,6 +270,85 @@ void ShadowRenderer::createShadowSampler() {
     vkCreateSampler(m_ctx->device(), &samplerInfo, nullptr, &m_shadowSampler);
 }
 
+// STREAM DE VERTICE DA SOMBRA (spec 52, OE-03): as mesmas duas pipelines
+// instanciadas (alfa e solida), lendo posicao (entrada 0, 12 B) e UV +
+// texIndex/matId (entrada 2, 12 B) dos streams que o ModelRenderer gera na
+// carga, em vez do vertice inteiro de 88 B. Mesmo layout, mesmo push.
+void ShadowRenderer::createStreamPipelines(const VkPipelineShaderStageCreateInfo& fragStage,
+                                           const VkPipelineColorBlendAttachmentState& blend) {
+    auto posCode = ShaderCompiler::loadSPIRV("shaders/shadow/shadow_inst_pos.vert.spv");
+    auto alphaCode = ShaderCompiler::loadSPIRV("shaders/shadow/shadow_inst_stream.vert.spv");
+    if (posCode.empty() || alphaCode.empty()) {
+        ERUPTION_LOG_WARN("[SOMBRA] shaders do stream de vertice ausentes - sombra no vertice inteiro");
+        return;
+    }
+    VkShaderModule posMod = VK_NULL_HANDLE, alphaMod = VK_NULL_HANDLE;
+    VkShaderModuleCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    ci.codeSize = posCode.size() * sizeof(uint32_t);
+    ci.pCode = posCode.data();
+    vkCreateShaderModule(m_ctx->device(), &ci, nullptr, &posMod);
+    ci.codeSize = alphaCode.size() * sizeof(uint32_t);
+    ci.pCode = alphaCode.data();
+    vkCreateShaderModule(m_ctx->device(), &ci, nullptr, &alphaMod);
+
+    std::vector<VkVertexInputAttributeDescription> attribs = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+    };
+    for (uint32_t c = 0; c < 4; ++c)
+        attribs.push_back({6 + c, 1, VK_FORMAT_R32G32B32A32_SFLOAT, c * static_cast<uint32_t>(sizeof(Vec4))});
+    const VkVertexInputBindingDescription posBindings[2] = {{0, svs::kPosStride, VK_VERTEX_INPUT_RATE_VERTEX},
+                                                            {1, sizeof(Mat4), VK_VERTEX_INPUT_RATE_INSTANCE}};
+    VkPipelineVertexInputStateCreateInfo posInput{};
+    posInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    posInput.vertexBindingDescriptionCount = 2;
+    posInput.pVertexBindingDescriptions = posBindings;
+    posInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attribs.size());
+    posInput.pVertexAttributeDescriptions = attribs.data();
+
+    std::vector<VkVertexInputAttributeDescription> alphaAttribs = attribs;
+    alphaAttribs.push_back({1, 2, VK_FORMAT_R32G32_SFLOAT, svs::kAttrUv});
+    alphaAttribs.push_back({3, 2, VK_FORMAT_R16G16_UINT, svs::kAttrTexMat}); // + matId
+    const VkVertexInputBindingDescription alphaBindings[3] = {posBindings[0], posBindings[1],
+                                                              {2, svs::kAttrStride, VK_VERTEX_INPUT_RATE_VERTEX}};
+    VkPipelineVertexInputStateCreateInfo alphaInput = posInput;
+    alphaInput.vertexBindingDescriptionCount = 3;
+    alphaInput.pVertexBindingDescriptions = alphaBindings;
+    alphaInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(alphaAttribs.size());
+    alphaInput.pVertexAttributeDescriptions = alphaAttribs.data();
+
+    VkPipelineShaderStageCreateInfo vs{};
+    vs.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vs.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vs.pName = "main";
+    auto build = [&](std::vector<VkPipelineShaderStageCreateInfo> stages, const VkPipelineVertexInputStateCreateInfo& vi) {
+        return PipelineBuilder()
+            .setShaderStages(stages)
+            .setVertexInput(vi)
+            .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            .setViewport(0, 0, 2048.0f, 2048.0f)
+            .setScissor(0, 0, 2048, 2048)
+            .setPolygonMode(VK_POLYGON_MODE_FILL)
+            .setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+            .setDepthState(true, true, VK_COMPARE_OP_LESS)
+            .setBlendState({blend})
+            .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
+            .setLayout(m_shadowInstLayout)
+            .setDepthAttachmentFormat(lean::shadowDepthFormat())
+            .build(m_ctx->device());
+    };
+    if (posMod != VK_NULL_HANDLE && alphaMod != VK_NULL_HANDLE) {
+        vs.module = alphaMod;
+        m_shadowInstStreamPipeline = build({vs, fragStage}, alphaInput);
+        vs.module = posMod;
+        m_shadowInstStreamOpaquePipeline = build({vs}, posInput);
+    }
+    if (posMod != VK_NULL_HANDLE) vkDestroyShaderModule(m_ctx->device(), posMod, nullptr);
+    if (alphaMod != VK_NULL_HANDLE) vkDestroyShaderModule(m_ctx->device(), alphaMod, nullptr);
+    if (m_shadowInstStreamPipeline == VK_NULL_HANDLE || m_shadowInstStreamOpaquePipeline == VK_NULL_HANDLE)
+        ERUPTION_LOG_WARN("[SOMBRA] pipelines do stream de vertice indisponiveis - sombra no vertice inteiro");
+}
+
 void ShadowRenderer::createShadowPipeline() {
     auto vertCode = ShaderCompiler::loadSPIRV("shaders/shadow/shadow.vert.spv");
     auto fragCode = ShaderCompiler::loadSPIRV("shaders/shadow/shadow.frag.spv");
@@ -468,6 +552,7 @@ void ShadowRenderer::createShadowPipeline() {
                 ERUPTION_LOG_WARN("[SOMBRA] pipeline opaca indisponivel - caster solido "
                                   "continua pagando o teste de alfa");
             }
+            if (lean::shadowStream()) createStreamPipelines(instStages[1], blend);
             vkDestroyShaderModule(m_ctx->device(), instVert, nullptr);
         }
     }
@@ -1432,7 +1517,11 @@ void ShadowRenderer::drawCascade(VkCommandBuffer cmd, const CasterSources& src, 
                              m_shadowInstPipeline != VK_NULL_HANDLE, src.frameUbo.windParams,
                              kOpaqueShadowPipe && m_shadowInstPipeline != VK_NULL_HANDLE
                                  ? m_shadowInstOpaquePipeline : VK_NULL_HANDLE,
-                             receivers, m_receiverMargin[cascade]);
+                             receivers, m_receiverMargin[cascade],
+                             // Stream de vertice (spec 52, OE-03): so' com o par
+                             // instanciado de pe' (alfa + solido sem frag).
+                             kOpaqueShadowPipe ? m_shadowInstStreamPipeline : VK_NULL_HANDLE,
+                             kOpaqueShadowPipe ? m_shadowInstStreamOpaquePipeline : VK_NULL_HANDLE);
         models->setShadowCasterFilter(0);
     }
 
@@ -1498,7 +1587,13 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
             depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             depthAttachment.imageView = atlasView;
             depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            depthAttachment.loadOp = (i == 0 && !keepFar) ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            // Spec 52 (lean_ops): com a distante guardada, o passe cobre so' a
+            // c0 e a limpa no load; a c1 fica fora da render area, preservada.
+            // Antes: LOAD do atlas inteiro + vkCmdClearAttachments da c0.
+            const bool leanKeep = keepFar && lean::leanOps() && cascadeRect(0).offset.x == 0 &&
+                                  cascadeRect(0).offset.y == 0;
+            depthAttachment.loadOp = (i == 0 && (!keepFar || leanKeep)) ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                                                                       : VK_ATTACHMENT_LOAD_OP_LOAD;
             depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             depthAttachment.clearValue.depthStencil = {1.0f, 0};
 
@@ -1509,10 +1604,10 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
                 // So' a area das cascatas desenhadas: no modo de mapa unico a
                 // metade de fora nem era lida, e limpar/gravar ela custava
                 // banda (GPU de celular paga por ladrilho).
-                uint32_t renderW = m_currentAtlasSize * drawCount;
+                uint32_t renderW = leanKeep ? m_currentAtlasSize : m_currentAtlasSize * drawCount;
                 uint32_t renderH = m_currentAtlasSize;
                 m_ctx->cmdBeginRendering(cmd, {}, &depthAttachment, nullptr, {renderW, renderH});
-                if (keepFar) {
+                if (keepFar && !leanKeep) {
                     VkClearAttachment clear{};
                     clear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
                     clear.clearValue.depthStencil = {1.0f, 0};

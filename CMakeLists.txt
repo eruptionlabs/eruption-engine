@@ -1267,6 +1267,18 @@ if(ERUPTION_BUILD_TESTS)
         target_compile_options(eruption-texture-codec-tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME TextureCodecTests COMMAND eruption-texture-codec-tests)
+
+    # Stream de vertice da sombra (spec 52, OE-03): os bits que o passe de
+    # sombra le' saem iguais do vertice inteiro, nos offsets das pipelines.
+    add_executable(eruption-shadow-stream-tests tests/test_shadow_stream.cpp)
+    target_include_directories(eruption-shadow-stream-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(eruption-shadow-stream-tests SYSTEM PRIVATE ${glm_SOURCE_DIR})
+    target_link_libraries(eruption-shadow-stream-tests PRIVATE glm)
+    target_compile_definitions(eruption-shadow-stream-tests PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_LEFT_HANDED)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-shadow-stream-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME ShadowStreamTests COMMAND eruption-shadow-stream-tests)
 endif()
 
 # Generate Linux .desktop shortcut

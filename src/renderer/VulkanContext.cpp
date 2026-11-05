@@ -916,6 +916,14 @@ bool VulkanContext::pickPhysicalDevice() {
     vkGetPhysicalDeviceFeatures(m_physicalDevice, &m_supportedFeatures);
 
     m_hasImageRobustness = deviceHasExtension(m_physicalDevice, VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME);
+    // STORE_OP_NONE na render pass classica (spec 52): EXT ou KHR, o mesmo
+    // valor de enum. Opcional: sem ela o motor grava o anexo so' lido. EXT
+    // primeiro: a camada de validacao instalada nao conhece a KHR e avisa que
+    // pode validar errado com ela ligada.
+    if (deviceHasExtension(m_physicalDevice, "VK_EXT_load_store_op_none"))
+        m_storeOpNoneExt = "VK_EXT_load_store_op_none";
+    else if (deviceHasExtension(m_physicalDevice, "VK_KHR_load_store_op_none"))
+        m_storeOpNoneExt = "VK_KHR_load_store_op_none";
     m_descriptorIndexing = {};
     m_descriptorIndexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
     m_imageRobustness = {};
@@ -1105,6 +1113,7 @@ bool VulkanContext::createLogicalDevice() {
         deviceExtensions.push_back(VK_KHR_MAINTENANCE3_EXTENSION_NAME);
         deviceExtensions.push_back(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
     }
+    if (m_storeOpNoneExt) deviceExtensions.push_back(m_storeOpNoneExt);
     void* featureChain = m_bindless ? static_cast<void*>(&descIndexing) : nullptr;
     if (m_hasImageRobustness && robustness.robustImageAccess) {
         deviceExtensions.push_back(VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME);
@@ -1554,7 +1563,7 @@ VkPresentModeKHR VulkanContext::chooseSwapPresentMode(const std::vector<VkPresen
     // Prefer low-latency, uncapped modes. FIFO caps the frame rate to the
     // monitor refresh rate, so we only fall back to it when nothing else is
     // available.
-    auto findMode = [&](VkPresentModeKHR target, const char* name) -> VkPresentModeKHR {
+    auto findMode = [&](VkPresentModeKHR target, [[maybe_unused]] const char* name) -> VkPresentModeKHR {
         for (const auto& mode : modes) {
             if (mode == target) {
                 ERUPTION_LOG_DEBUG("Selected present mode: %s", name);
