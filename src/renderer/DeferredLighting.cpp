@@ -1199,6 +1199,7 @@ void DeferredLighting::renderDirectionalPass(VkCommandBuffer cmd, const Camera& 
     // mesmos quatro nos do relevo, avaliados no shader com a distancia ate' a
     // camera. knots.x < 0 desliga e a sombra volta a ser cheia.
     shadowUbo.shadowOpacityParams = m_shadowOpacityParams;
+    shadowUbo.shadowOpacityParams.z = m_shadowSoft;
     shadowUbo.shadowOpacityLut0 = m_shadowOpacityLut0;
     shadowUbo.shadowOpacityLut1 = m_shadowOpacityLut1;
 

@@ -82,4 +82,6 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_seeThroughBand;
     // Elipse por personagem perto do foco (FrameUBO::seeThroughExtra).
     vec4 u_seeThroughExtra[12];
+    // x = forca do alfa-teste por hash (gbuffer/alpha_hash.glsl), 0 desliga.
+    vec4 u_alphaHash;
 };
