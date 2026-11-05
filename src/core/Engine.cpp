@@ -209,6 +209,47 @@ static double presetNumber(const std::string& preset, const char* key, double fa
     }
 }
 
+// Chave booleana tolerante (true/false ou numero) de um preset ja' lido.
+static bool presetFlag(const nlohmann::json& p, const char* k) {
+    const auto it = p.find(k);
+    return it != p.end() && (it->is_boolean() ? it->get<bool>() : (it->is_number() && it->get<double>() != 0.0));
+}
+
+// Opcoes de compressao de textura (spec 51) de um preset, com as variaveis de
+// ambiente por cima. Padrao "bc": o comportamento de antes (BC onde a GPU tem,
+// senao RGBA8). "auto" acende ASTC/ETC2 na GPU sem BC (celular); ver
+// docs/texturas_comprimidas.md. ERUPTION_TEXTURE_COMPRESSION=auto|off|bc|astc|etc2|raw
+// sobrepoe (A/B na bancada); ERUPTION_NO_TEXTURE_BC=1 continua sendo "off".
+static texfmt::Options textureOptionsFromPreset(const nlohmann::json& p) {
+    const auto it = p.find("texture_compression");
+    const std::string mode = (it != p.end() && it->is_string()) ? it->get<std::string>() : std::string("bc");
+    texfmt::Options o;
+    o.mode = texfmt::parseMode(mode, texfmt::Mode::Bc);
+    o.albedoBc7 = presetFlag(p, "texture_albedo_bc7");
+    o.alphaBc7 = presetFlag(p, "texture_alpha_bc7");
+    o.astcAlbedo6x6 = presetFlag(p, "texture_astc_albedo_6x6");
+    if (const char* e = std::getenv("ERUPTION_TEXTURE_COMPRESSION")) o.mode = texfmt::parseMode(e, o.mode);
+    if (const char* e = std::getenv("ERUPTION_NO_TEXTURE_BC"); e && e[0] == '1') o.mode = texfmt::Mode::Off;
+    return o;
+}
+
+// O preset inteiro (data/graphics.json + ERUPTION_TEST_PRESET_SET), para o que
+// e' decidido antes de applyGraphicsPreset; objeto vazio se faltar.
+static nlohmann::json presetObject(const std::string& preset) {
+    try {
+        std::ifstream f("data/graphics.json");
+        if (!f) return nlohmann::json::object();
+        nlohmann::json gj;
+        f >> gj;
+        if (!gj.contains("presets") || !gj["presets"].contains(preset)) return nlohmann::json::object();
+        nlohmann::json p = gj["presets"][preset];
+        applyPresetOverrides(p);
+        return p;
+    } catch (...) {
+        return nlohmann::json::object();
+    }
+}
+
 static bool presetBool(const std::string& preset, const char* key, bool fallback) {
     try {
         std::ifstream f("data/graphics.json");
@@ -273,6 +314,68 @@ bool Engine::init(int width, int height, const std::string& title) {
     presentLoadingScreen("", "Initializing Engine", 0.0f, true);
     const vkc::PipelineHookScope shaderProgress(&Engine::onPipelineCompiled, this);
 
+    // Quais formatos de bloco esta GPU sabe AMOSTRAR. Maxwell (930M, o alvo)
+    // tem BC1/BC3/BC5/BC7; Android/ARM não tem nenhum. Sem isso a engine
+    // criaria uma imagem que o driver rejeita - o fallback RGBA8 depende
+    // desta sondagem estar correta.
+    {
+        BcFormatSupport sup;
+        auto probe = [&](VkFormat f) {
+            VkFormatProperties props{};
+            vkGetPhysicalDeviceFormatProperties(m_vulkan.physicalDevice(), f, &props);
+            return (props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0;
+        };
+        sup.bc1 = probe(VK_FORMAT_BC1_RGBA_UNORM_BLOCK);
+        sup.bc3 = probe(VK_FORMAT_BC3_UNORM_BLOCK);
+        sup.bc5 = probe(VK_FORMAT_BC5_UNORM_BLOCK);
+        sup.bc7 = probe(VK_FORMAT_BC7_UNORM_BLOCK);
+        // Escape hatch de A/B e de suporte: ERUPTION_NO_TEXTURE_BC=1 desliga a
+        // compressao de bloco e exercita o caminho RGBA8 puro (o mesmo que uma
+        // GPU sem BC pega). Sem isso nao da' pra medir a regressao visual do
+        // codec no mesmo binario.
+        if (const char* e = std::getenv("ERUPTION_NO_TEXTURE_BC")) {
+            if (e[0] == '1') sup = BcFormatSupport{};
+        }
+        // ERUPTION_TEXTURE_BC=bc1,bc3: so' estes formatos, mesmo que a GPU tenha
+        // mais. Assa no PC o pacote de texturas de uma GPU de celular (Xclipse:
+        // BC1/BC3) com o PBR da rede, que o celular nao roda.
+        if (const char* e = std::getenv("ERUPTION_TEXTURE_BC")) {
+            const std::string only = e;
+            sup.bc1 = sup.bc1 && only.find("bc1") != std::string::npos;
+            sup.bc3 = sup.bc3 && only.find("bc3") != std::string::npos;
+            sup.bc5 = sup.bc5 && only.find("bc5") != std::string::npos;
+            sup.bc7 = sup.bc7 && only.find("bc7") != std::string::npos;
+        }
+        setBcFormatSupport(sup);
+        ERUPTION_LOG_WARN("[GRAPHICS] compressao de bloco: BC1=%d BC3=%d BC5=%d BC7=%d",
+                          sup.bc1, sup.bc3, sup.bc5, sup.bc7);
+        // Spec 51: o resto da familia de bloco (BC4, ASTC LDR, ETC2/EAC). Amostrar
+        // com filtro linear e' o minimo: e' assim que todo material e' lido.
+        auto probeLinear = [&](VkFormat f) {
+            VkFormatProperties props{};
+            vkGetPhysicalDeviceFormatProperties(m_vulkan.physicalDevice(), f, &props);
+            const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                              VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+            return (props.optimalTilingFeatures & need) == need;
+        };
+        texfmt::Caps caps;
+        caps.bc1 = sup.bc1;
+        caps.bc3 = sup.bc3;
+        caps.bc5 = sup.bc5;
+        caps.bc7 = sup.bc7;
+        caps.bc4 = probeLinear(VK_FORMAT_BC4_UNORM_BLOCK) && (sup.bc1 || sup.bc3 || sup.bc5 || sup.bc7);
+        caps.astc4x4 = probeLinear(VK_FORMAT_ASTC_4x4_UNORM_BLOCK);
+        caps.astc6x6 = probeLinear(VK_FORMAT_ASTC_6x6_UNORM_BLOCK);
+        caps.etc2Rgb = probeLinear(VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK);
+        caps.etc2Rgba = probeLinear(VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK);
+        caps.eacR11 = probeLinear(VK_FORMAT_EAC_R11_UNORM_BLOCK);
+        caps.eacRg11 = probeLinear(VK_FORMAT_EAC_R11G11_UNORM_BLOCK);
+        // ERUPTION_TEST_TEXTURE_CAPS=astc,etc2,...: restringe ao que a lista diz
+        // (simula a GPU de um aparelho; nunca liga o que o driver nao tem).
+        if (const char* e = std::getenv("ERUPTION_TEST_TEXTURE_CAPS")) caps = texfmt::intersect(caps, texfmt::parseCaps(e));
+        texfmt::setDeviceCaps(caps);
+        ERUPTION_LOG_WARN("[TEXCOMP] formatos de bloco amostraveis: %s", texfmt::describeCaps(caps).c_str());
+    }
     // Lado, em pixels, de cada camada de textura (so' a GPU sem descriptor
     // indexing, onde as texturas vao para um array: 0,33 MB por camada a 256,
     // 0,08 MB a 128). Chave "texture_layer_size" do preset (0 = padrao 256);
@@ -283,6 +386,24 @@ bool Engine::init(int width, int height, const std::string& title) {
         static_cast<uint32_t>(std::max(0.0, presetNumber(graphicsPresetName(), "texture_layer_reserve", 0.0))));
     m_bindless.setLayerReserveBRequest(
         static_cast<uint32_t>(std::max(0.0, presetNumber(graphicsPresetName(), "texture_layer_reserve_b", 0.0))));
+    // Array de camadas em formato de bloco (spec 51, TC-05): chave
+    // "texture_layers_compressed" do preset (padrao false: o RGBA8 de sempre);
+    // ERUPTION_TEX_LAYER_COMPRESSED=0|1 vence. O formato (BC7, ASTC 4x4 ou ETC2
+    // RGBA) segue a familia do "texture_compression" do mesmo preset sobre os
+    // formatos sondados acima (ERUPTION_TEST_TEXTURE_CAPS simula um celular).
+    // Decidido aqui porque o array nasce no init; so' vale sem descriptor indexing.
+    {
+        const nlohmann::json preset = presetObject(graphicsPresetName());
+        bool layersCompressed = presetFlag(preset, "texture_layers_compressed");
+        if (const char* e = std::getenv("ERUPTION_TEX_LAYER_COMPRESSED")) layersCompressed = e[0] == '1';
+        if (layersCompressed) {
+            const texfmt::Options o = textureOptionsFromPreset(preset);
+            const VkFormat f = texfmt::layerFormat(texfmt::deviceCaps(), o);
+            ERUPTION_LOG_WARN("[TEXCOMP] camadas comprimidas pedidas: modo %s -> %s", texfmt::modeName(o.mode),
+                              f == VK_FORMAT_UNDEFINED ? "sem formato (RGBA8)" : texfmt::formatTag(f));
+            m_bindless.setLayerBlockFormat(f);
+        }
+    }
     if (!m_bindless.init(&m_vulkan)) return false;
     m_bindless.setAfterCopies([this] { releaseCopiedTextureSources(); });
     m_bindless.markNearestSampler(m_nearestSampler);
@@ -794,68 +915,6 @@ bool Engine::init(int width, int height, const std::string& title) {
 
     m_graphicsConfig.load("data/graphics.json");
     mergeProjectGraphics(m_graphicsConfig.root());
-    // Quais formatos de bloco esta GPU sabe AMOSTRAR. Maxwell (930M, o alvo)
-    // tem BC1/BC3/BC5/BC7; Android/ARM não tem nenhum. Sem isso a engine
-    // criaria uma imagem que o driver rejeita - o fallback RGBA8 depende
-    // desta sondagem estar correta.
-    {
-        BcFormatSupport sup;
-        auto probe = [&](VkFormat f) {
-            VkFormatProperties props{};
-            vkGetPhysicalDeviceFormatProperties(m_vulkan.physicalDevice(), f, &props);
-            return (props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0;
-        };
-        sup.bc1 = probe(VK_FORMAT_BC1_RGBA_UNORM_BLOCK);
-        sup.bc3 = probe(VK_FORMAT_BC3_UNORM_BLOCK);
-        sup.bc5 = probe(VK_FORMAT_BC5_UNORM_BLOCK);
-        sup.bc7 = probe(VK_FORMAT_BC7_UNORM_BLOCK);
-        // Escape hatch de A/B e de suporte: ERUPTION_NO_TEXTURE_BC=1 desliga a
-        // compressao de bloco e exercita o caminho RGBA8 puro (o mesmo que uma
-        // GPU sem BC pega). Sem isso nao da' pra medir a regressao visual do
-        // codec no mesmo binario.
-        if (const char* e = std::getenv("ERUPTION_NO_TEXTURE_BC")) {
-            if (e[0] == '1') sup = BcFormatSupport{};
-        }
-        // ERUPTION_TEXTURE_BC=bc1,bc3: so' estes formatos, mesmo que a GPU tenha
-        // mais. Assa no PC o pacote de texturas de uma GPU de celular (Xclipse:
-        // BC1/BC3) com o PBR da rede, que o celular nao roda.
-        if (const char* e = std::getenv("ERUPTION_TEXTURE_BC")) {
-            const std::string only = e;
-            sup.bc1 = sup.bc1 && only.find("bc1") != std::string::npos;
-            sup.bc3 = sup.bc3 && only.find("bc3") != std::string::npos;
-            sup.bc5 = sup.bc5 && only.find("bc5") != std::string::npos;
-            sup.bc7 = sup.bc7 && only.find("bc7") != std::string::npos;
-        }
-        setBcFormatSupport(sup);
-        ERUPTION_LOG_WARN("[GRAPHICS] compressao de bloco: BC1=%d BC3=%d BC5=%d BC7=%d",
-                          sup.bc1, sup.bc3, sup.bc5, sup.bc7);
-        // Spec 51: o resto da familia de bloco (BC4, ASTC LDR, ETC2/EAC). Amostrar
-        // com filtro linear e' o minimo: e' assim que todo material e' lido.
-        auto probeLinear = [&](VkFormat f) {
-            VkFormatProperties props{};
-            vkGetPhysicalDeviceFormatProperties(m_vulkan.physicalDevice(), f, &props);
-            const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
-                                              VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
-            return (props.optimalTilingFeatures & need) == need;
-        };
-        texfmt::Caps caps;
-        caps.bc1 = sup.bc1;
-        caps.bc3 = sup.bc3;
-        caps.bc5 = sup.bc5;
-        caps.bc7 = sup.bc7;
-        caps.bc4 = probeLinear(VK_FORMAT_BC4_UNORM_BLOCK) && (sup.bc1 || sup.bc3 || sup.bc5 || sup.bc7);
-        caps.astc4x4 = probeLinear(VK_FORMAT_ASTC_4x4_UNORM_BLOCK);
-        caps.astc6x6 = probeLinear(VK_FORMAT_ASTC_6x6_UNORM_BLOCK);
-        caps.etc2Rgb = probeLinear(VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK);
-        caps.etc2Rgba = probeLinear(VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK);
-        caps.eacR11 = probeLinear(VK_FORMAT_EAC_R11_UNORM_BLOCK);
-        caps.eacRg11 = probeLinear(VK_FORMAT_EAC_R11G11_UNORM_BLOCK);
-        // ERUPTION_TEST_TEXTURE_CAPS=astc,etc2,...: restringe ao que a lista diz
-        // (simula a GPU de um aparelho; nunca liga o que o driver nao tem).
-        if (const char* e = std::getenv("ERUPTION_TEST_TEXTURE_CAPS")) caps = texfmt::intersect(caps, texfmt::parseCaps(e));
-        texfmt::setDeviceCaps(caps);
-        ERUPTION_LOG_WARN("[TEXCOMP] formatos de bloco amostraveis: %s", texfmt::describeCaps(caps).c_str());
-    }
     applyGraphicsPreset();
     // Respect postprocess.json for DoF/Tilt-Shift; users can toggle it via the
     // effects UI or config file instead of having it forced on at startup.
@@ -2847,23 +2906,7 @@ void Engine::applyGraphicsPreset() {
     // sobrepoe (A/B na bancada); ERUPTION_NO_TEXTURE_BC=1 continua sendo "off".
     // Trocar de modo nao reassa o que ja' foi assado: cada familia tem o seu pacote.
     {
-        auto str = [&p](const char* k, const char* def) {
-            const auto it = p.find(k);
-            return (it != p.end() && it->is_string()) ? it->get<std::string>() : std::string(def);
-        };
-        auto flag = [&p](const char* k) {
-            const auto it = p.find(k);
-            return it != p.end() && (it->is_boolean() ? it->get<bool>() : (it->is_number() && it->get<double>() != 0.0));
-        };
-        // Padrao "bc": o comportamento de antes (BC onde a GPU tem, senao RGBA8).
-        // "auto" acende ASTC/ETC2 na GPU sem BC (celular); ver docs/texturas_comprimidas.md.
-        texfmt::Options o;
-        o.mode = texfmt::parseMode(str("texture_compression", "bc"), texfmt::Mode::Bc);
-        o.albedoBc7 = flag("texture_albedo_bc7");
-        o.alphaBc7 = flag("texture_alpha_bc7");
-        o.astcAlbedo6x6 = flag("texture_astc_albedo_6x6");
-        if (const char* e = std::getenv("ERUPTION_TEXTURE_COMPRESSION")) o.mode = texfmt::parseMode(e, o.mode);
-        if (const char* e = std::getenv("ERUPTION_NO_TEXTURE_BC"); e && e[0] == '1') o.mode = texfmt::Mode::Off;
+        const texfmt::Options o = textureOptionsFromPreset(p);
         texfmt::setOptions(o);
         const texfmt::Caps caps = texfmt::deviceCaps();
         ERUPTION_LOG_WARN("[TEXCOMP] modo %s -> familia %s: albedo %s, albedo_alfa %s, normal %s, dados %s%s",
@@ -3157,6 +3200,13 @@ void Engine::recordTelemetry() {
     st.layersWaiting = layers.waiting;
     st.layersLost = layers.lost;
     st.layersLostEvents = layers.lostEvents;
+    st.layersKbPerLayer = layers.kbPerLayer;
+    st.layersKbPerLayerB = layers.kbPerLayerB;
+    st.layersBlock = layers.blockLayers;
+    st.layersBlockCacheHits = layers.blockCacheHits;
+    st.layersBlockEncoded = layers.blockEncoded;
+    st.layersBlockDirect = layers.blockDirect;
+    st.layersBlockMs = layers.blockMs;
     st.texSourcesReleased = m_texSourcesReleased;
     st.texSourcesReleasedMb = m_texSourcesReleasedMb;
     TelemetryExporter::recordFrame(st);

@@ -36,6 +36,9 @@ public:
     void setLayerReserveRequest(uint32_t layers) { m_layerReserveRequest = layers; }
     // O mesmo para o segundo array de camadas (antes de init); 0 = 2 camadas.
     void setLayerReserveBRequest(uint32_t layers) { m_layerReserveBRequest = layers; }
+    // Formato de bloco do array de camadas (spec 51, TC-05; antes de init):
+    // VK_FORMAT_UNDEFINED = RGBA8, o de sempre. Ver TextureLayers::setBlockFormat.
+    void setLayerBlockFormat(VkFormat format) { m_layers.setBlockFormat(format); }
 
     uint32_t allocateSlot();
     void freeSlot(uint32_t slot);
