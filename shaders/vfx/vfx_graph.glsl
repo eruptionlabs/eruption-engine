@@ -15,9 +15,17 @@ vec3 vfxCurl(vec3 p, float t) {
 }
 
 vec4 vfxRunGraph(uint off, uint len, Particle p, Emitter e) {
+    // Registradores zerados: um programa que le' um registrador antes de escreve-lo (ou lixo no buffer) nao
+    // pode dar NaN/Inf. Limites vindos do PROPRIO buffer (a GPU sem inicializacao do PowerVR lia off/len/indice
+    // de lixo e o laco rodava ate' a GPU travar): len <= 1024 palavras (kMaxProgramWords em VfxGraph.cpp recusa programa maior) e o fim nunca
+    // passa do tamanho do buffer de codigo.
     vec4 r[16];
+    for (int k = 0; k < 16; ++k) r[k] = vec4(0.0);
+    const uint codeCap = uint(graphCode.length());
+    const uint constCap = uint(graphConst.length());
+    if (off >= codeCap || constCap == 0u) return vec4(0.0);
     uint i = off;
-    uint end = off + len;
+    uint end = min(off + min(len, 1024u), codeCap);
     float t = clamp(p.age / max(p.life, 1e-4), 0.0, 1.0);
     while (i < end) {
         uint w = graphCode[i++];
@@ -25,7 +33,7 @@ vec4 vfxRunGraph(uint off, uint len, Particle p, Emitter e) {
         uint d = (w >> 6) & 15u, a = (w >> 10) & 15u, b = (w >> 14) & 15u, c = (w >> 18) & 15u;
         switch (op) {
         case 0u: return r[a];                                         // End
-        case 1u: r[d] = graphConst[graphCode[i++]]; break;            // Const
+        case 1u: r[d] = graphConst[min(graphCode[min(i++, codeCap - 1u)], constCap - 1u)]; break; // Const
         case 2u: r[d] = vec4(p.age); break;                           // InAge
         case 3u: r[d] = vec4(t); break;                               // InLife
         case 4u: r[d] = vec4(p.pos, 1.0); break;                      // InPos
