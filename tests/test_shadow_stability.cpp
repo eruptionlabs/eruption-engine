@@ -42,16 +42,25 @@ using namespace eruption;
 namespace {
 int g_fail = 0, g_checks = 0;
 
-struct Case { const char* name; const char* mode; uint32_t atlas; float maxTexel; };
-// Valores de data/graphics.json: atlas e shadow_max_texel por preset.
-const Case kCases[] = {
-    {"high",          "csm",    3072, 0.5f},
-    {"medium",        "csm",    1024, 0.5f},
-    {"low",           "csm",    1024, 0.5f},
-    {"mobile_high",   "csm",    3072, 0.5f},
-    {"mobile_medium", "single", 1024, 1.5f},
-    {"mobile_low",    "single", 1024, 1.0f},
-};
+struct Case { std::string name; std::string mode; uint32_t atlas; float maxTexel; };
+// Atlas, modo e shadow_max_texel de cada preset vem de data/graphics.json (a mesma fonte do motor):
+// mudar o preset sem mudar o teste deixa de ser possivel. Rode da raiz do repositorio.
+std::vector<Case> loadCases() {
+    std::vector<Case> out;
+    std::ifstream f("data/graphics.json");
+    if (!f) { std::printf("ERRO: data/graphics.json nao encontrado (rode da raiz)\n"); ++g_fail; return out; }
+    nlohmann::json j;
+    try { f >> j; } catch (...) { std::printf("ERRO: graphics.json invalido\n"); ++g_fail; return out; }
+    const auto& presets = j.contains("presets") ? j["presets"] : j;
+    for (const char* name : {"high", "medium", "low", "mobile_high", "mobile_medium", "mobile_low"}) {
+        if (!presets.contains(name)) continue;
+        const auto& p = presets[name];
+        Case c{name, p.value("shadow_mode", std::string("csm")), static_cast<uint32_t>(p.value("shadow_atlas", 1024)),
+               p.value("shadow_max_texel", 0.5f)};
+        out.push_back(c);
+    }
+    return out;
+}
 
 // Posicao do ponto P no atlas da cascata i, em texels (sem o offset do atlas).
 void texelOf(const ShadowRenderer& sr, uint32_t i, const Vec3& P, double* u, double* v) {
@@ -101,7 +110,9 @@ int main() {
     const Vec3 P(123.4f, 3.0f, -77.7f);   // ponto fixo do mundo (borda de sombra imaginaria)
     const Vec3 P2(-2310.6f, 0.0f, 1544.2f);
     const double kTol = 0.03;             // texels; float de 32 bits em coordenadas de milhares
-    for (const Case& c : kCases) {
+    const std::vector<Case> cases = loadCases();
+    if (cases.empty()) ++g_fail;
+    for (const Case& c : cases) {
         const uint32_t nc = std::string(c.mode) == "single" ? 1u : 2u;
         // --- A e B: andar em passos sub-texel e girar -----------------------
         {
@@ -126,9 +137,9 @@ int main() {
                 if (nc > 1) maxTexelDiff = std::max(maxTexelDiff, std::fabs(r.sr.getC1WorldTexelSize() - t0[1]) / t0[1]);
             }
             std::printf("  %-14s %-7s ancoragem max=%.4f texel | variacao do texel=%.5f\n",
-                        c.name, c.mode, maxFrac, maxTexelDiff);
-            check(maxFrac < kTol, c.name, 0, "A ancoragem andando+girando (texels)", maxFrac, kTol);
-            check(maxTexelDiff < 1e-4, c.name, 0, "B tamanho do texel andando+girando", maxTexelDiff, 1e-4);
+                        c.name.c_str(), c.mode.c_str(), maxFrac, maxTexelDiff);
+            check(maxFrac < kTol, c.name.c_str(), 0, "A ancoragem andando+girando (texels)", maxFrac, kTol);
+            check(maxTexelDiff < 1e-4, c.name.c_str(), 0, "B tamanho do texel andando+girando", maxTexelDiff, 1e-4);
             // ponto longe tambem (erro de precisao / escala errada aparece longe do centro)
             double uf, vf; texelOf(r.sr, 0, P2, &uf, &vf);
             (void)uf; (void)vf;
@@ -151,8 +162,8 @@ int main() {
                     double ua, va, ub, vb; texelOf(a.sr, i, Q, &ua, &va); texelOf(b.sr, i, Q, &ub, &vb);
                     worst = std::max(worst, std::max(std::fabs(ua - ub), std::fabs(va - vb)));
                 }
-            std::printf("  %-14s %-7s mesma pose, historia diferente: max=%.5f texel\n", c.name, c.mode, worst);
-            check(worst < kTol, c.name, 0, "C pose igual => matrizes iguais (texels)", worst, kTol);
+            std::printf("  %-14s %-7s mesma pose, historia diferente: max=%.5f texel\n", c.name.c_str(), c.mode.c_str(), worst);
+            check(worst < kTol, c.name.c_str(), 0, "C pose igual => matrizes iguais (texels)", worst, kTol);
         }
     }
     std::printf("%d verificacoes, %d falhas\n", g_checks, g_fail);

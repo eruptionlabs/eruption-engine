@@ -16,6 +16,7 @@
 //       src/utils/Profiler.cpp src/core/Logger.cpp -lpthread
 #include "renderer/BandwidthMeter.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -161,13 +162,16 @@ int main() {
         ri.pDepthAttachment = &depth;
         bw::setPass("GBuffer");
         const int n = 200000;
-        const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < n; ++i) bw::recordRendering(ri, &fakeViewFormat);
-        const double ns =
-            std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count() / n;
+        // Melhor de 5 rodadas: a maquina carregada (outro agente na CPU) estica uma rodada, nao as 5.
+        double ns = 1e30;
+        for (int rep = 0; rep < 5; ++rep) {
+            const auto t0 = std::chrono::steady_clock::now();
+            for (int i = 0; i < n; ++i) bw::recordRendering(ri, &fakeViewFormat);
+            ns = std::min(ns, std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count() / n);
+        }
         bw::setPass(nullptr);
         bw::beginFrame();
-        std::printf("   custo: %.0f ns por abertura de passe com 6 anexos\n", ns);
+        std::printf("   custo: %.0f ns por abertura de passe com 6 anexos (melhor de 5)\n", ns);
         CHECK(ns < 2000.0);
     }
 

@@ -1,4 +1,5 @@
 #include "game/PlayerController.hpp"
+#include "game/ActionIndex.hpp"
 #include "game/HudRenderer.hpp"
 #include "core/Input.hpp"
 #include "renderer/skymap/SkyConfig.hpp"
@@ -894,13 +895,8 @@ Vec2 PlayerController::getSpriteScreenBase(const Camera& camera, float screenW, 
         direction = static_cast<int>((roAngle + 22.5f) / 45.0f) % 8;
     }
 
-    int actionIdx = direction;
-    if (m_tacticalView) actionIdx = 4 * 8 + direction;
-    if (actionIdx >= (int)ls.act.actions.size()) actionIdx %= 8;
-    // Sprite de PNG tem UMA acao (loadSpriteFromPng): a direcao (0..7) passava
-    // do fim do vetor e lia memoria solta, conforme o angulo da camera - queda
-    // intermitente no HUD sobre a cabeca (overhead-hp-sp).
-    if (actionIdx >= (int)ls.act.actions.size()) actionIdx = 0;
+    const int actionIdx = safeActionIndex(m_tacticalView ? 4 * 8 + direction : direction, ls.act.actions.size());
+    if (actionIdx < 0) return Vec2(-1.0f);
     const auto& action = ls.act.actions[actionIdx];
     if (action.frames.empty()) return Vec2(-1.0f);
     const auto& frame = action.frames[0];
