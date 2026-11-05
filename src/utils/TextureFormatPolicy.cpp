@@ -208,12 +208,24 @@ VkFormat choose(Class c, const Caps& caps, const Options& o) {
 }
 
 VkFormat layerFormat(const Caps& caps, const Options& o) {
-    switch (family(caps, o)) {
-    case Mode::Bc: return caps.bc7 ? VK_FORMAT_BC7_UNORM_BLOCK : VK_FORMAT_UNDEFINED;
+    // Off e Raw: sem compressao pedida. Familia forcada (Astc/Etc2): so' ela.
+    // Bc e Auto: o array leva o que a GPU tiver - BC7, senao ASTC 4x4, senao ETC2 -
+    // mesmo com texture_compression "bc" num celular sem BC. A familia das
+    // texturas de CONTEUDO continua a de family()/choose(): ASTC no conteudo
+    // custa segundos de CPU por mapa num A53, e o array e' cacheado em disco.
+    switch (o.mode) {
+    case Mode::Off:
+    case Mode::Raw: return VK_FORMAT_UNDEFINED;
     case Mode::Astc: return caps.astc4x4 ? VK_FORMAT_ASTC_4x4_UNORM_BLOCK : VK_FORMAT_UNDEFINED;
     case Mode::Etc2: return caps.etc2Rgba ? VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK : VK_FORMAT_UNDEFINED;
-    default: return VK_FORMAT_UNDEFINED;
+    case Mode::Bc:
+    case Mode::Auto:
+        if (caps.bc7) return VK_FORMAT_BC7_UNORM_BLOCK;
+        if (caps.astc4x4) return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
+        if (caps.etc2Rgba) return VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK;
+        return VK_FORMAT_UNDEFINED;
     }
+    return VK_FORMAT_UNDEFINED;
 }
 
 BlockInfo blockInfo(VkFormat f) {

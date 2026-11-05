@@ -1452,7 +1452,7 @@ private:
     // irradiancia, histograma de exposicao, vetores de movimento sem uso, efeitos
     // de particula). Para GPUs de celular cujo driver trava em compute.
     bool m_computeFree = false;
-    // Preset "camera_near_scale" (0 = desligado, o plano proximo fixo de
+    // Preset "camera_near_scale" (0 = desligado, padrao do motor; o jogo liga: plano proximo fixo de
     // cameraNear()): plano proximo = escala x distancia da orbita, limitado a
     // [cameraNear(), 60]. Profundidade D32 padrao com near 0,1 e far 50000 tem
     // passo de ~0,1 u a 400 u do olho; a posicao reconstruida do pixel pula nesse

@@ -206,13 +206,27 @@ int main(int argc, char** argv) {
     CHECK(layerFormat(mali, o6) == VK_FORMAT_ASTC_4x4_UNORM_BLOCK); // 6x6 e' so' do albedo: o array leva normal
     CHECK(layerFormat(mali, oe) == VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK);
     CHECK(layerFormat(etcOnly, o) == VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK);
-    CHECK(layerFormat(xclipse, o) == VK_FORMAT_UNDEFINED); // BC sem BC7: fica RGBA8
+    CHECK(layerFormat(xclipse, o) == VK_FORMAT_UNDEFINED); // so' BC1/BC3 (sem BC7, ASTC, ETC2): fica RGBA8
     CHECK(layerFormat(pc, off) == VK_FORMAT_UNDEFINED);
     CHECK(layerFormat(none, o) == VK_FORMAT_UNDEFINED);
     CHECK(layerFormat(pc, forcedAstc) == VK_FORMAT_UNDEFINED);
     Options rawMode = o;
     rawMode.mode = Mode::Raw;
     CHECK(layerFormat(pc, rawMode) == VK_FORMAT_UNDEFINED);
+    // Preset com texture_compression "bc" (o padrao dos 6) num celular SEM BC (Mali, PowerVR, Adreno):
+    // o array comprimido escolhe pela capacidade (ASTC, senao ETC2), mas o CONTEUDO continua RGBA8 -
+    // ASTC no conteudo custa segundos de CPU por mapa num A53.
+    Options bcMode = o;
+    bcMode.mode = Mode::Bc;
+    CHECK(layerFormat(pc, bcMode) == VK_FORMAT_BC7_UNORM_BLOCK);
+    CHECK(layerFormat(mali, bcMode) == VK_FORMAT_ASTC_4x4_UNORM_BLOCK);
+    CHECK(layerFormat(etcOnly, bcMode) == VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK);
+    CHECK(layerFormat(xclipse, bcMode) == VK_FORMAT_UNDEFINED);
+    CHECK(layerFormat(none, bcMode) == VK_FORMAT_UNDEFINED);
+    for (int c = 0; c < kClassCount; ++c) {
+        CHECK(choose(static_cast<Class>(c), mali, bcMode) == VK_FORMAT_UNDEFINED);
+        CHECK(choose(static_cast<Class>(c), etcOnly, bcMode) == VK_FORMAT_UNDEFINED);
+    }
     for (const Caps* k : {&pc, &mali, &etcOnly})
         for (const Options* op : {&o, &oe}) {
             const VkFormat f = layerFormat(*k, *op);
