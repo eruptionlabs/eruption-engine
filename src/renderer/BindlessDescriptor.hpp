@@ -30,6 +30,12 @@ public:
     // Chamado no inicio de cada quadro, DEPOIS das copias e fora da trava: o Engine libera
     // as imagens de origem que a copia deixou sem uso.
     void setAfterCopies(std::function<void()> fn) { m_afterCopies = std::move(fn); }
+    // Chamado ANTES das copias (inicio do quadro e syncNow), fora da trava: o Engine
+    // sobe as texturas que ainda estao na fila de envio. Sem isso o array copiava
+    // uma origem ainda sem conteudo (layout UNDEFINED: camada preta/lixo) e o
+    // setAfterCopies destruia essa origem antes do envio, que depois gravava
+    // vkCmdCopyBufferToImage numa VkImage ja' destruida (uso apos liberacao).
+    void setBeforeCopies(std::function<void()> fn) { m_beforeCopies = std::move(fn); }
     // Lado pedido da camada de textura (antes de init); 0 = o padrao.
     void setLayerSizeRequest(uint32_t size) { m_layerSizeRequest = size; }
     // Camadas reservadas ja' no init do array (antes de init); 0 = o minimo.
@@ -143,6 +149,7 @@ private:
     std::mutex m_mutex;
     uint32_t m_layerSizeRequest = 0;
     std::function<void()> m_afterCopies;
+    std::function<void()> m_beforeCopies;
     uint32_t m_layerReserveRequest = 0;
     uint32_t m_layerReserveBRequest = 0;
 };

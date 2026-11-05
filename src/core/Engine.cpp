@@ -420,6 +420,22 @@ bool Engine::init(int width, int height, const std::string& title) {
         }
     }
     if (!m_bindless.init(&m_vulkan)) return false;
+    // Sem descriptor indexing a textura nova e' copiada para o array de camadas no
+    // inicio do quadro; o envio dela pode ter ficado para depois (vizinho do mundo
+    // adia flushPendingUploads um quadro). Sobe antes da copia, senao a copia le' a
+    // origem vazia e a origem e' liberada antes do proprio envio.
+    m_bindless.setBeforeCopies([this] {
+        if (s_pendingUploads.empty() && pendingPbrUploadCount() == 0) return;
+        // ERUPTION_TEST_NO_UPLOAD_GUARD=1 (so' para provar que o teste enxerga o defeito): desliga a guarda.
+        static const bool kOff = std::getenv("ERUPTION_TEST_NO_UPLOAD_GUARD") != nullptr;
+        if (kOff) return;
+        // A copia iria ler uma origem ainda sem dados (layout UNDEFINED) e a liberacao a destruiria antes do
+        // envio. Sobe agora; o contador e o log provam, nos testes, que o caso aconteceu.
+        ++m_uploadGuardFlushes;
+        ERUPTION_LOG_WARN("[UPLOAD-GUARD] %zu textura(s) com envio pendente subidas antes da copia para as camadas (%u vez(es))",
+                          s_pendingUploads.size() + pendingPbrUploadCount(), m_uploadGuardFlushes);
+        flushPendingUploads();
+    });
     m_bindless.setAfterCopies([this] { releaseCopiedTextureSources(); });
     m_bindless.markNearestSampler(m_nearestSampler);
     ERUPTION_LOG_WARN("Resolucao de RENDER (G-buffer): %dx%d (%.2f Mpx)", width, height,

@@ -61,6 +61,14 @@ static int sourceTextureCap(const BindlessDescriptor& bindless, int cap) {
 void Engine::releaseCopiedTextureSources() {
     static const bool kKeep = std::getenv("ERUPTION_KEEP_TEXTURE_SOURCES") != nullptr;
     if (kKeep || m_bindless.layerSize() == 0) return;
+    // Uma origem so' pode ser destruida depois do envio dela: o vkCmdCopyBufferToImage do envio gravaria numa
+    // VkImage liberada (uso apos liberacao no driver). setBeforeCopies ja' sobe a fila antes da copia; isto e' a
+    // guarda para um caminho futuro que enfileire envio entre a copia e a liberacao. Os slots ficam para a proxima.
+    static const bool kGuardOff = std::getenv("ERUPTION_TEST_NO_UPLOAD_GUARD") != nullptr;
+    if (!kGuardOff && (!s_pendingUploads.empty() || pendingPbrUploadCount() > 0)) {
+        ERUPTION_LOG_WARN("[UPLOAD-GUARD] liberacao das origens adiada: %zu envio(s) ainda na fila", s_pendingUploads.size() + pendingPbrUploadCount());
+        return;
+    }
     const std::vector<uint32_t> slots = m_bindless.takeCopiedLayerSlots();
     if (slots.empty()) return;
     // Quadros de sprite: a folha ja' disse quais o retrato ainda le' (decideSpriteSources).
