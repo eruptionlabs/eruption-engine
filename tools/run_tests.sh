@@ -2,7 +2,8 @@
 # Roda todos os testes que linkam contra os objetos ja' compilados da engine.
 # Sao rapidos (segundos) porque nao sobem Vulkan: exercitam a logica pura.
 # Exige um build antes (./build.sh).
-set -u
+# pipefail: sem ele, "g++ ... | head" devolve o status do head e um erro de compilacao passa
+set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 OBJ="build/CMakeFiles/eruption-engine.dir/src"
 [ -f "$OBJ/renderer/WeatherSystem.cpp.o" ] || { echo "ERRO: rode ./build.sh primeiro."; exit 1; }
@@ -77,6 +78,7 @@ run_net test_net_matrix $NET_SESSION
 run_net test_net_relay $NET_SESSION
 run_net test_net_web $NET_SESSION
 run_src test_ribbon src/formats/Ribbon.cpp
+run_src test_action_index
 run_src test_vision src/core/Vision.cpp
 run_src test_relief_bake src/renderer/ReliefBake.cpp
 run_src test_bandwidth_meter src/renderer/BandwidthMeter.cpp src/utils/Profiler.cpp src/core/Logger.cpp -lpthread

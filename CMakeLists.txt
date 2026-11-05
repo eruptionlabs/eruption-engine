@@ -1205,6 +1205,13 @@ if(ERUPTION_BUILD_TESTS)
     endif()
     add_test(NAME EventLogTests COMMAND eruption-event-log-tests)
 
+    add_executable(eruption-action-index-tests tests/test_action_index.cpp)
+    target_include_directories(eruption-action-index-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-action-index-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME ActionIndexTests COMMAND eruption-action-index-tests)
+
     add_executable(eruption-vision-tests tests/test_vision.cpp src/core/Vision.cpp)
     target_include_directories(eruption-vision-tests PRIVATE ${CMAKE_SOURCE_DIR}/src ${glm_SOURCE_DIR})
     target_compile_definitions(eruption-vision-tests PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_LEFT_HANDED)

@@ -2,6 +2,7 @@
 // suave e meia-vida, janela que anda sem tremer, zonas block/reveal e custo.
 #include "core/Vision.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -129,10 +130,14 @@ int main() {
     for (int i = 0; i < 10; ++i)
         p.setZone("z" + std::to_string(i), Vec2(rnd() * 1024.0f - 512.0f, rnd() * 1024.0f - 512.0f), 30.0f, i % 2 == 0);
     for (int i = 0; i < 10; ++i) p.raster(Vec2(0.0f), 1.0f / 60.0f);
-    const auto t0 = std::chrono::steady_clock::now();
+    // Melhor de 5 rodadas: a maquina carregada estica uma rodada, nao as 5.
     const int frames = 200;
-    for (int i = 0; i < frames; ++i) p.raster(Vec2(static_cast<float>(i % 3) * 4.0f, 0.0f), 1.0f / 60.0f);
-    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / frames;
+    double ms = 1e30;
+    for (int rep = 0; rep < 5; ++rep) {
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < frames; ++i) p.raster(Vec2(static_cast<float>(i % 3) * 4.0f, 0.0f), 1.0f / 60.0f);
+        ms = std::min(ms, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / frames);
+    }
     int vis = 0;
     const auto t1 = std::chrono::steady_clock::now();
     for (int i = 0; i < 500; ++i) vis += p.visible(Vec2(rnd() * 2000.0f - 1000.0f, rnd() * 2000.0f - 1000.0f)) ? 1 : 0;
