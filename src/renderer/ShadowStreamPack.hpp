@@ -26,6 +26,21 @@ static_assert(offsetof(TerrainVertex, matId) == offsetof(TerrainVertex, texIndex
 
 // `count` vertices (TerrainVertex crus, sem alinhamento garantido) para os dois
 // streams; `pos` com count * kPosStride bytes, `attr` com count * kAttrStride.
+// FNV-1a de 8 em 8 bytes: identifica os vertices de origem de um stream. O Vulkan reusa o handle de um
+// VkBuffer destruido; com o hash, um handle repetido com vertices diferentes e' um buffer novo.
+inline uint64_t hashVertices(const void* data, size_t bytes) {
+    const uint8_t* p = static_cast<const uint8_t*>(data);
+    uint64_t h = 0xcbf29ce484222325ull;
+    size_t i = 0;
+    for (; i + 8 <= bytes; i += 8) {
+        uint64_t w;
+        std::memcpy(&w, p + i, 8);
+        h = (h ^ w) * 0x100000001B3ull;
+    }
+    for (; i < bytes; ++i) h = (h ^ p[i]) * 0x100000001B3ull;
+    return h ^ (h >> 32);
+}
+
 inline void pack(const void* vertices, size_t count, uint8_t* pos, uint8_t* attr) {
     const uint8_t* v = static_cast<const uint8_t*>(vertices);
     for (size_t i = 0; i < count; ++i, v += sizeof(TerrainVertex)) {

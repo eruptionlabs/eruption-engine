@@ -84,6 +84,8 @@ uint64_t imageBytes(const ImageDesc& d);
 void noteImage(VkImage image, const ImageDesc& d);
 void forgetImage(VkImage image);
 void noteView(VkImageView view, VkImage image);
+// Quantas views o medidor guarda (teste: o mapa nao cresce sem limite).
+size_t trackedViews();
 
 // Nome do passe atual (o mesmo do Profiler::addGpuTime). nullptr = "outros".
 // O ponteiro precisa viver ate' o fim do quadro (use literais).

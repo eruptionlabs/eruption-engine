@@ -523,6 +523,8 @@ void forgetImage(VkImage image) {
     s.images.erase(it);
     s.tags.erase(image);
     s.audited.erase(image);
+    // As views da imagem que sumiu: sem isto o mapa so' crescia (uma entrada por view criada).
+    for (auto v = s.views.begin(); v != s.views.end();) v = (v->second == image) ? s.views.erase(v) : std::next(v);
 }
 
 TextureCategory categorize(const ImageDesc& d) {
@@ -602,6 +604,19 @@ void noteView(VkImageView view, VkImage image) {
     State& s = state();
     std::lock_guard<std::mutex> lock(s.m);
     s.views[view] = image;
+    // Views de passagem (criadas e destruidas sem destruir a imagem) nao passam por forgetImage:
+    // acima de um teto, sai o que aponta para imagem que o medidor nao conhece mais.
+    constexpr size_t kMaxViews = 16384;
+    if (s.views.size() > kMaxViews) {
+        for (auto v = s.views.begin(); v != s.views.end();)
+            v = (s.images.find(v->second) == s.images.end()) ? s.views.erase(v) : std::next(v);
+    }
+}
+
+size_t trackedViews() {
+    State& s = state();
+    std::lock_guard<std::mutex> lock(s.m);
+    return s.views.size();
 }
 
 void setPass(const char* name) { t_pass = name; }

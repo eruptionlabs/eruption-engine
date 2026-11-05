@@ -614,6 +614,7 @@ public:
         VkBuffer pos = VK_NULL_HANDLE, attr = VK_NULL_HANDLE;
         VmaAllocation posAlloc = VK_NULL_HANDLE, attrAlloc = VK_NULL_HANDLE;
         VkDeviceSize bytes = 0;
+        uint64_t srcHash = 0; // hash dos vertices de origem: o Vulkan reusa o handle de um VkBuffer destruido
     };
 
     bool isInitialized() const { return m_initialized; }
