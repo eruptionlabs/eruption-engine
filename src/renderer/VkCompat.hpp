@@ -26,6 +26,14 @@ VkResult createImageView(VkDevice device, const VkImageViewCreateInfo* info,
                          const VkAllocationCallbacks* alloc, VkImageView* view);
 // Formato com que a view foi criada por createImageView (UNDEFINED se não foi).
 VkFormat viewFormat(VkImageView view);
+// Imagem, tipo e faixa de uma view criada por createImageView (false se não foi).
+struct ViewInfo {
+    VkImage image = VK_NULL_HANDLE;
+    VkImageViewType type = VK_IMAGE_VIEW_TYPE_2D;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkImageSubresourceRange range{};
+};
+bool viewInfo(VkImageView view, ViewInfo& out);
 VkResult createGraphicsPipelines(VkDevice device, VkPipelineCache cache, uint32_t count,
                                  const VkGraphicsPipelineCreateInfo* infos,
                                  const VkAllocationCallbacks* alloc, VkPipeline* pipelines);

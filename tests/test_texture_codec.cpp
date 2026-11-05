@@ -2,6 +2,7 @@
 // (TC-03) sem GPU. Ida-e-volta na CPU com o decodificador de referencia de cada
 // biblioteca (bc7decomp/rgbcx, astcenc, etcpak).
 #include "utils/TextureEncoder.hpp"
+#include "renderer/LayerBlockRules.hpp"
 #include "utils/TextureFormatPolicy.hpp"
 
 #include <algorithm>
@@ -198,6 +199,123 @@ int main(int argc, char** argv) {
     Options o6pc = o;
     o6pc.astcAlbedo6x6 = true; // nao muda nada no PC
     CHECK(policyKey(pc, o) == policyKey(pc, o6pc));
+
+    std::printf("2b. array de camadas em bloco (TC-05): formato por familia\n");
+    CHECK(layerFormat(pc, o) == VK_FORMAT_BC7_UNORM_BLOCK);
+    CHECK(layerFormat(mali, o) == VK_FORMAT_ASTC_4x4_UNORM_BLOCK); // auto: ASTC antes de ETC2
+    CHECK(layerFormat(mali, o6) == VK_FORMAT_ASTC_4x4_UNORM_BLOCK); // 6x6 e' so' do albedo: o array leva normal
+    CHECK(layerFormat(mali, oe) == VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK);
+    CHECK(layerFormat(etcOnly, o) == VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK);
+    CHECK(layerFormat(xclipse, o) == VK_FORMAT_UNDEFINED); // BC sem BC7: fica RGBA8
+    CHECK(layerFormat(pc, off) == VK_FORMAT_UNDEFINED);
+    CHECK(layerFormat(none, o) == VK_FORMAT_UNDEFINED);
+    CHECK(layerFormat(pc, forcedAstc) == VK_FORMAT_UNDEFINED);
+    Options rawMode = o;
+    rawMode.mode = Mode::Raw;
+    CHECK(layerFormat(pc, rawMode) == VK_FORMAT_UNDEFINED);
+    for (const Caps* k : {&pc, &mali, &etcOnly})
+        for (const Options* op : {&o, &oe}) {
+            const VkFormat f = layerFormat(*k, *op);
+            CHECK(f == VK_FORMAT_UNDEFINED || (encodable(f) && blockInfo(f).bytes == 16 && texenc::available(f)));
+        }
+    // Memoria de uma camada com todos os mips: 1/4 do RGBA8 a 256 e a 128.
+    for (const int side : {256, 128}) {
+        size_t rgba = 0, blocks = 0;
+        for (int s = side; s >= 1; s /= 2) {
+            rgba += size_t(s) * s * 4;
+            blocks += texenc::levelBytes(VK_FORMAT_BC7_UNORM_BLOCK, s, s);
+            CHECK(texenc::levelBytes(VK_FORMAT_ASTC_4x4_UNORM_BLOCK, s, s) ==
+                  texenc::levelBytes(VK_FORMAT_BC7_UNORM_BLOCK, s, s));
+            CHECK(texenc::levelBytes(VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK, s, s) ==
+                  texenc::levelBytes(VK_FORMAT_BC7_UNORM_BLOCK, s, s));
+        }
+        std::printf("   camada %d com mips: RGBA8 %zu B, bloco %zu B (%.3f)\n", side, rgba, blocks,
+                    double(blocks) / double(rgba));
+        CHECK(blocks * 4 <= rgba + 128); // so' os mips menores que o bloco (2x2, 1x1) passam de 1/4
+    }
+
+    std::printf("2c. camadas em bloco: o que vai para o A e quando a copia e' direta\n");
+    {
+        using namespace eruption::layerrules;
+        CHECK(wantsBlock(VK_FORMAT_BC1_RGBA_UNORM_BLOCK, false));
+        CHECK(wantsBlock(VK_FORMAT_ASTC_4x4_UNORM_BLOCK, false));
+        CHECK(wantsBlock(VK_FORMAT_R8G8B8A8_SRGB, false));      // cor sRGB sem compressao
+        CHECK(!wantsBlock(VK_FORMAT_R8G8B8A8_UNORM, false));    // dado linear fica RGBA8
+        CHECK(!wantsBlock(VK_FORMAT_R8_UNORM, false));
+        CHECK(!wantsBlock(VK_FORMAT_BC7_UNORM_BLOCK, true));    // sem filtro (sprite) fica RGBA8
+        CHECK(blockClass(VK_FORMAT_BC7_SRGB_BLOCK) == VK_FORMAT_BC7_UNORM_BLOCK);
+        CHECK(blockClass(VK_FORMAT_ASTC_4x4_SRGB_BLOCK) == VK_FORMAT_ASTC_4x4_UNORM_BLOCK);
+        Source src;
+        src.imageFormat = src.viewFormat = VK_FORMAT_BC7_UNORM_BLOCK;
+        src.width = src.height = 512;
+        src.mips = 10;
+        src.levelCount = VK_REMAINING_MIP_LEVELS;
+        src.transferSrc = true;
+        uint32_t mip = 99;
+        CHECK(directCopy(src, VK_FORMAT_BC7_UNORM_BLOCK, 256, 9, mip) && mip == 1); // 512 -> pula 1 mip
+        CHECK(directCopy(src, VK_FORMAT_BC7_UNORM_BLOCK, 128, 8, mip) && mip == 2);
+        Source s2 = src;
+        s2.width = s2.height = 256;
+        s2.mips = 9;
+        CHECK(directCopy(s2, VK_FORMAT_BC7_UNORM_BLOCK, 256, 9, mip) && mip == 0);
+        CHECK(!directCopy(s2, VK_FORMAT_ASTC_4x4_UNORM_BLOCK, 256, 9, mip)); // outra classe
+        s2.mips = 5;
+        CHECK(!directCopy(s2, VK_FORMAT_BC7_UNORM_BLOCK, 256, 9, mip)); // mips curtos
+        s2 = src;
+        s2.height = 256;
+        CHECK(!directCopy(s2, VK_FORMAT_BC7_UNORM_BLOCK, 256, 9, mip)); // nao quadrada
+        s2 = src;
+        s2.width = s2.height = 128;
+        s2.mips = 8;
+        CHECK(!directCopy(s2, VK_FORMAT_BC7_UNORM_BLOCK, 256, 9, mip)); // menor que a camada: codifica
+        s2 = src;
+        s2.transferSrc = false;
+        CHECK(!directCopy(s2, VK_FORMAT_BC7_UNORM_BLOCK, 256, 9, mip));
+        s2 = src;
+        s2.width = s2.height = 384; // nao e' potencia de 2
+        CHECK(!directCopy(s2, VK_FORMAT_BC7_UNORM_BLOCK, 256, 9, mip));
+        s2 = src;
+        s2.viewFormat = VK_FORMAT_BC7_SRGB_BLOCK; // view sRGB da mesma imagem: mesmos bits
+        CHECK(directCopy(s2, VK_FORMAT_BC7_UNORM_BLOCK, 256, 9, mip));
+        s2 = src;
+        s2.baseMip = 1; // view que comeca no mip 1 (256): copia do mip 1
+        s2.levelCount = 9;
+        CHECK(directCopy(s2, VK_FORMAT_BC7_UNORM_BLOCK, 256, 9, mip) && mip == 1);
+        s2.levelCount = 4;
+        CHECK(!directCopy(s2, VK_FORMAT_BC7_UNORM_BLOCK, 256, 9, mip));
+        CHECK(!directCopy(src, VK_FORMAT_UNDEFINED, 256, 9, mip));
+        // ETC2 RGB (albedo opaco da familia) num A em ETC2 RGBA: so' pelo caminho do alfa.
+        Source e = src;
+        e.imageFormat = e.viewFormat = VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK;
+        CHECK(!directCopy(e, VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK, 256, 9, mip));
+        CHECK(etc2AddAlpha(e, VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK, 256, 9, mip) && mip == 1);
+        CHECK(!etc2AddAlpha(e, VK_FORMAT_BC7_UNORM_BLOCK, 256, 9, mip));
+        CHECK(!etc2AddAlpha(src, VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK, 256, 9, mip));
+    }
+
+    std::printf("2d. ETC2 RGB -> RGBA com alfa 255: mesmo RGB, alfa 255 em todo texel\n");
+    if (texenc::available(VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK) && texenc::available(VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK)) {
+        const int w = 64, h = 64;
+        std::vector<uint8_t> img(size_t(w) * h * 4);
+        uint32_t st = 12345u;
+        for (size_t i = 0; i < img.size(); ++i) {
+            st = st * 1664525u + 1013904223u;
+            img[i] = (i % 4 == 3) ? 255 : uint8_t((st >> 24) / 2 + ((i / 4) % w) * 2);
+        }
+        std::vector<uint8_t> rgb, rgba(size_t(w / 4) * (h / 4) * 16), a, b;
+        CHECK(texenc::encodeLevel(VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK, img.data(), w, h, rgb));
+        CHECK(rgb.size() * 2 == rgba.size());
+        eruption::layerrules::etc2RgbToRgba(rgb.data(), rgb.size() / 8, rgba.data());
+        CHECK(texenc::decodeLevel(VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK, rgb.data(), rgb.size(), w, h, a));
+        CHECK(texenc::decodeLevel(VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK, rgba.data(), rgba.size(), w, h, b));
+        size_t diff = 0, alphaOff = 0;
+        for (size_t px = 0; px < size_t(w) * h; ++px) {
+            for (int c = 0; c < 3; ++c) diff += a[px * 4 + size_t(c)] != b[px * 4 + size_t(c)];
+            alphaOff += b[px * 4 + 3] != 255;
+        }
+        CHECK(diff == 0);
+        CHECK(alphaOff == 0);
+    }
 
     std::printf("3. codificadores: ida-e-volta na CPU\n");
     const Case cases[] = {

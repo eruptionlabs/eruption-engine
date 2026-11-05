@@ -15,7 +15,7 @@ namespace {
 
 VkDevice g_device = VK_NULL_HANDLE;
 std::mutex g_mutex;
-std::unordered_map<VkImageView, VkFormat> g_viewFormats;
+std::unordered_map<VkImageView, ViewInfo> g_views;
 std::unordered_map<std::string, VkRenderPass> g_renderPasses;
 // Framebuffers reaproveitados entre quadros, pela combinacao de render pass,
 // views e tamanho. Criar e destruir um por passe a cada quadro custava ~40% da
@@ -128,8 +128,16 @@ VkAccessFlags accessV1(VkAccessFlags2 a) {
 
 VkFormat viewFormat(VkImageView view) {
     std::lock_guard<std::mutex> lock(g_mutex);
-    auto it = g_viewFormats.find(view);
-    return it == g_viewFormats.end() ? VK_FORMAT_UNDEFINED : it->second;
+    auto it = g_views.find(view);
+    return it == g_views.end() ? VK_FORMAT_UNDEFINED : it->second.format;
+}
+
+bool viewInfo(VkImageView view, ViewInfo& out) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    auto it = g_views.find(view);
+    if (it == g_views.end()) return false;
+    out = it->second;
+    return true;
 }
 
 void init(VkDevice device, uint32_t framesInFlight) {
@@ -145,7 +153,7 @@ void shutdown() {
     g_framebuffers.clear();
     for (auto& [k, rp] : g_renderPasses) vkDestroyRenderPass(g_device, rp, nullptr);
     g_renderPasses.clear();
-    g_viewFormats.clear();
+    g_views.clear();
     g_device = VK_NULL_HANDLE;
 }
 
@@ -187,7 +195,7 @@ VkResult createImageView(VkDevice device, const VkImageViewCreateInfo* info, con
     if (r == VK_SUCCESS) {
         bw::noteView(*view, info->image);
         std::lock_guard<std::mutex> lock(g_mutex);
-        g_viewFormats[*view] = info->format;
+        g_views[*view] = ViewInfo{info->image, info->viewType, info->format, info->subresourceRange};
         forgetFramebuffersOf(*view);
     }
     return r;

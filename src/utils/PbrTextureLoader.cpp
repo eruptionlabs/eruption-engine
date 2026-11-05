@@ -582,6 +582,8 @@ static PbrTextureSlot uploadPbrTextureSlot(VulkanContext* ctx, BindlessDescripto
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     if (!baked) imageInfo.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT; // blit chain
+    // Bloco: o array de camadas em bloco (sem bindless, spec 51 TC-05) copia os mips daqui.
+    if (baked && texfmt::blockInfo(format).bytes > 0) imageInfo.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VmaAllocationCreateInfo allocInfo{};

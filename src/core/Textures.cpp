@@ -14,6 +14,7 @@
 #include "core/JobSystem.hpp"
 #include "utils/Profiler.hpp"
 #include "utils/EtexLoader.hpp"
+#include "utils/TextureFormatPolicy.hpp"
 #include "renderer/LodSystemBridge.hpp"
 #include "utils/ImageUtils.hpp"
 #include <backends/imgui_impl_vulkan.h>
@@ -370,6 +371,9 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
             imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
             imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
             imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            // Bloco: o array de camadas em bloco (sem bindless, spec 51 TC-05) copia
+            // os mips daqui sem decodificar.
+            if (texfmt::blockInfo(imageInfo.format).bytes > 0) imageInfo.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
             VmaAllocationCreateInfo allocCI{};
             allocCI.usage = VMA_MEMORY_USAGE_GPU_ONLY;
             VkImage image = VK_NULL_HANDLE;
