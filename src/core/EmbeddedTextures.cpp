@@ -5,6 +5,7 @@
 // mundo (ModelRenderer::bakeReliefPreview), entao o que o cubo mostra e' o
 // que a malha do mapa faz com essa textura.
 #include "core/Engine.hpp"
+#include "utils/TextureEncoder.hpp"
 #include "core/Logger.hpp"
 #include "formats/MapLoader.hpp"
 #include "utils/BcCompressor.hpp"
@@ -113,7 +114,9 @@ bool etexToRgba(const EtexData& e, std::vector<uint8_t>& rgba) {
                      e.vkFormat == VK_FORMAT_BC1_RGBA_SRGB_BLOCK || e.vkFormat == VK_FORMAT_BC1_RGB_SRGB_BLOCK;
     const bool bc3 = e.vkFormat == VK_FORMAT_BC3_UNORM_BLOCK || e.vkFormat == VK_FORMAT_BC3_SRGB_BLOCK;
     const bool bc7 = e.vkFormat == VK_FORMAT_BC7_UNORM_BLOCK || e.vkFormat == VK_FORMAT_BC7_SRGB_BLOCK;
-    if (!bc1 && !bc3 && !bc7) return false;
+    if (!bc1 && !bc3 && !bc7) // ASTC/ETC2/EAC (spec 51): decodificador de referencia de cada biblioteca
+        return texenc::decodeLevel(static_cast<VkFormat>(e.vkFormat), e.payload.data(),
+                                   e.mipSizes.empty() ? e.payload.size() : e.mipSizes[0], int(w), int(h), rgba);
     const size_t bw = (w + 3) / 4, bh = (h + 3) / 4, bb = bc1 ? 8 : 16;
     if (e.payload.size() < bw * bh * bb) return false;
     bcCompressorInit();
@@ -130,7 +133,8 @@ bool etexToRgba(const EtexData& e, std::vector<uint8_t>& rgba) {
         }
     return true;
 #else
-    return false;
+    return texenc::decodeLevel(static_cast<VkFormat>(e.vkFormat), e.payload.data(),
+                               e.mipSizes.empty() ? e.payload.size() : e.mipSizes[0], int(w), int(h), rgba);
 #endif
 }
 

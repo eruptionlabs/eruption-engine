@@ -252,6 +252,72 @@ int main() {
     uint64_t want = 0;
     for (uint32_t s = 256; s >= 1; s /= 2) want += uint64_t(s) * s * 4;
     CHECK(bw::imageBytes(m) == want);
+    // Bloco do formato: ASTC 6x6 de 256x256 = ceil(256/6)^2 = 43^2 blocos de 16 bytes
+    // (antes contava como 4x4: 4096 blocos, 2,2x a mais).
+    bw::ImageDesc a6;
+    a6.format = VK_FORMAT_ASTC_6x6_UNORM_BLOCK;
+    a6.extent = {256, 256, 1};
+    CHECK(bw::imageBytes(a6) == 43ull * 43ull * 16ull);
+    // Mip menor que o bloco ocupa um bloco inteiro: BC1 2x2 = 8 bytes.
+    bw::ImageDesc b1;
+    b1.format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    b1.extent = {2, 2, 1};
+    CHECK(bw::imageBytes(b1) == 8);
+    CHECK(bw::formatLabel(VK_FORMAT_ASTC_6x6_SRGB_BLOCK) == "ASTC6x6");
+    CHECK(bw::formatLabel(VK_FORMAT_BC7_UNORM_BLOCK) == "BC7");
+    CHECK(bw::formatLabel(VK_FORMAT_EAC_R11G11_UNORM_BLOCK) == "EAC_RG11");
+
+    std::printf("6. censo de texturas (spec 51)\n");
+    {
+        const bw::CensusTotal c0 = bw::censusTotal(bw::kTexContent);
+        const bw::CensusTotal l0 = bw::censusTotal(bw::kTexLayers);
+        // Conteudo pelas flags: BC7 1024x1024 com mips e RGBA8 com mips por compute (STORAGE).
+        bw::ImageDesc t1;
+        t1.format = VK_FORMAT_BC7_UNORM_BLOCK;
+        t1.extent = {1024, 1024, 1};
+        t1.mips = 11;
+        t1.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        bw::ImageDesc t2 = m;
+        t2.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+        CHECK(bw::categorize(t1) == bw::kTexContent);
+        CHECK(bw::categorize(t2) == bw::kTexContent);
+        bw::ImageDesc dep = t1;
+        dep.format = VK_FORMAT_D32_SFLOAT; // copia de profundidade: nao e' conteudo
+        CHECK(bw::categorize(dep) == bw::kTexNone);
+        bw::noteImage(handle<VkImage>(0x5001), t1);
+        bw::noteImage(handle<VkImage>(0x5002), t2);
+        bw::CensusTotal c1 = bw::censusTotal(bw::kTexContent);
+        CHECK(c1.block == c0.block + bw::imageBytes(t1));
+        CHECK(c1.raw == c0.raw + bw::imageBytes(t2));
+        CHECK(c1.count == c0.count + 2);
+        // Array de camadas: pelas flags e' alvo de render (nao entra) ate' a marca.
+        bw::ImageDesc arr = m;
+        arr.layers = 32;
+        arr.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        CHECK(bw::categorize(arr) == bw::kTexNone);
+        bw::noteImage(handle<VkImage>(0x5003), arr);
+        CHECK(bw::censusTotal(bw::kTexLayers).raw == l0.raw);
+        bw::tagImage(handle<VkImage>(0x5003), bw::kTexLayers);
+        CHECK(bw::censusTotal(bw::kTexLayers).raw == l0.raw + 32ull * want);
+        // Marca muda a categoria: o RGBA8 sai do conteudo e vai para sprite.
+        bw::tagImage(handle<VkImage>(0x5002), bw::kTexSprite);
+        CHECK(bw::censusTotal(bw::kTexContent).raw == c0.raw);
+        CHECK(bw::censusTotal(bw::kTexSprite).raw == bw::imageBytes(t2));
+        // A linha do censo bate com os totais.
+        uint64_t layersRows = 0;
+        for (const bw::CensusRow& r : bw::textureCensus())
+            if (r.category == bw::kTexLayers) layersRows += r.bytes;
+        CHECK(layersRows == bw::censusTotal(bw::kTexLayers).raw + bw::censusTotal(bw::kTexLayers).block);
+        // Destruir tira de onde estava (com a marca).
+        for (uint64_t h : {0x5001ull, 0x5002ull, 0x5003ull}) bw::forgetImage(handle<VkImage>(h));
+        c1 = bw::censusTotal(bw::kTexContent);
+        CHECK(c1.block == c0.block && c1.raw == c0.raw && c1.count == c0.count);
+        CHECK(bw::censusTotal(bw::kTexLayers).raw == l0.raw);
+        CHECK(bw::censusTotal(bw::kTexSprite).count == 0);
+        bw::ImageDesc found;
+        CHECK(!bw::findImage(handle<VkImage>(0x5001), found));
+    }
 
     std::printf(g_falhas ? "HOUVE FALHA (%d)\n" : "OK\n", g_falhas);
     return g_falhas ? 1 : 0;

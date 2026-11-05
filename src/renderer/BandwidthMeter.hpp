@@ -137,6 +137,47 @@ struct AuditStat {
 };
 AuditStat auditStats();
 
+// ------------------------------------------------- censo de texturas (spec 51)
+// VRAM de textura por formato e por categoria, para provar o que a compressao
+// muda. O que e' "textura de conteudo" sai das flags (amostrada e enviada por
+// copia, sem ser alvo de render); o array de camadas do caminho sem bindless e
+// os quadros de sprite se identificam com tagImage, porque pelas flags o array
+// parece alvo de render (o passe de copia desenha nele).
+enum TextureCategory : uint8_t {
+    kTexNone = 0,    // nao e' textura (alvo de render, buffer de profundidade...)
+    kTexContent = 1, // conteudo: modelo, terreno, imagem solta, UI
+    kTexLayers = 2,  // array de camadas (TextureLayers, GPU sem descriptor indexing)
+    kTexSprite = 3,  // quadros de sprite
+};
+constexpr int kTexCategories = 4;
+// Categoria pelas flags (sem marca): conteudo = SAMPLED + TRANSFER_DST, sem
+// anexo de cor/profundidade (STORAGE pode: a cadeia de mips por compute).
+TextureCategory categorize(const ImageDesc& d);
+// Marca uma imagem ja' anotada (noteImage) com a categoria; tira da antiga.
+void tagImage(VkImage image, TextureCategory c);
+struct CensusRow {
+    TextureCategory category = kTexNone;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    uint32_t count = 0;
+    uint64_t bytes = 0;
+};
+// Uma linha por (categoria, formato) com imagem viva, na ordem de bytes.
+std::vector<CensusRow> textureCensus();
+// Totais de uma categoria: bytes em bloco (BC/ETC/ASTC) e sem compressao.
+struct CensusTotal {
+    uint64_t block = 0;
+    uint64_t raw = 0;
+    uint32_t count = 0;
+};
+CensusTotal censusTotal(TextureCategory c);
+const char* categoryName(TextureCategory c);
+// Nome curto do formato ("BC7", "ASTC6x6", "RGBA8"...).
+std::string formatLabel(VkFormat f);
+// Extensao do bloco do formato (1x1 sem compressao).
+void blockExtent(VkFormat f, uint32_t& bw, uint32_t& bh);
+// Descricao anotada de uma imagem viva (false = nao passou pelo VMA).
+bool findImage(VkImage image, ImageDesc& out);
+
 // Contador real de DRAM (Intel uncore_imc_free_running, Linux de PC). Liga na
 // primeira chamada; false = indisponivel (motivo em dramStatus()).
 bool enableDramCounter();

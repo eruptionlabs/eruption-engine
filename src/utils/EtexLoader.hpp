@@ -24,6 +24,8 @@ struct EtexData {
 // Loads "<imagePath>.etex" if present, well-formed and not older than the
 // source image. Returns an invalid EtexData otherwise (caller falls back to
 // the runtime decode path).
-EtexData loadEtexForImage(const std::string& imagePath);
+// `ext`: sufixo do cozido (".etex" no pacote BC classico; ".<etiqueta>.etex"
+// para os outros formatos da spec 51, que convivem lado a lado).
+EtexData loadEtexForImage(const std::string& imagePath, const std::string& ext = ".etex");
 
 } // namespace eruption

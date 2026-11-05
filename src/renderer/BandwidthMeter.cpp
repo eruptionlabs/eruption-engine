@@ -185,17 +185,29 @@ bool clearLosesFastClear(const VkClearColorValue& c, VkFormat f) {
     return false;
 }
 
+void blockExtent(VkFormat f, uint32_t& bw, uint32_t& bh) {
+    bw = bh = 1;
+    if (in(f, VK_FORMAT_ASTC_4x4_UNORM_BLOCK, VK_FORMAT_ASTC_12x12_SRGB_BLOCK)) {
+        const auto* b = kAstcBlocks[(f - VK_FORMAT_ASTC_4x4_UNORM_BLOCK) / 2];
+        bw = b[0];
+        bh = b[1];
+    } else if (isBlockCompressed(f)) {
+        bw = bh = 4; // BC, ETC2 e EAC
+    }
+}
+
 uint64_t imageBytes(const ImageDesc& d) {
     const double bpt = bytesPerTexel(d.format);
-    const bool block = isBlockCompressed(d.format);
+    uint32_t bw = 1, bh = 1;
+    blockExtent(d.format, bw, bh);
     double total = 0.0;
     uint32_t w = std::max(1u, d.extent.width), h = std::max(1u, d.extent.height);
     const uint32_t depth = std::max(1u, d.extent.depth);
     for (uint32_t m = 0; m < d.mips; ++m) {
-        // Bloco: a menor unidade e' o bloco inteiro (4x4 em BC/ETC; ASTC idem
-        // como aproximacao).
-        const uint32_t ew = block ? std::max(4u, (w + 3u) & ~3u) : w;
-        const uint32_t eh = block ? std::max(4u, (h + 3u) & ~3u) : h;
+        // Bloco: a menor unidade e' o bloco inteiro (4x4 em BC/ETC, o do
+        // formato em ASTC: 6x6 ocupa 16 bytes por 36 texels).
+        const uint32_t ew = (w + bw - 1) / bw * bw;
+        const uint32_t eh = (h + bh - 1) / bh * bh;
         total += bpt * ew * eh * depth;
         w = std::max(1u, w / 2);
         h = std::max(1u, h / 2);
@@ -320,6 +332,8 @@ bool readImc(Dram& d, std::vector<uint64_t>& now) {
 struct State {
     std::mutex m;
     std::unordered_map<VkImage, ImageDesc> images;
+    std::unordered_map<VkImage, TextureCategory> tags; // categoria marcada (tagImage)
+    CensusTotal census[kTexCategories];
     std::unordered_map<VkImageView, VkImage> views;
     std::unordered_set<VkImage> audited;
     std::unordered_set<std::string> warned;
@@ -352,6 +366,20 @@ void addTexture(AuditStat& a, const ImageDesc& d, bool add) {
     slot = add ? slot + b : (slot > b ? slot - b : 0);
 }
 
+TextureCategory categoryOf(const State& s, VkImage image, const ImageDesc& d) {
+    const auto it = s.tags.find(image);
+    return it != s.tags.end() ? it->second : categorize(d);
+}
+
+void addCensus(State& s, TextureCategory c, const ImageDesc& d, bool add) {
+    if (c == kTexNone) return;
+    CensusTotal& t = s.census[c];
+    uint64_t& slot = isBlockCompressed(d.format) ? t.block : t.raw;
+    const uint64_t b = imageBytes(d);
+    slot = add ? slot + b : (slot > b ? slot - b : 0);
+    t.count = add ? t.count + 1 : (t.count > 0 ? t.count - 1 : 0);
+}
+
 const char* formatName(VkFormat f) {
     switch (f) {
     case VK_FORMAT_R8_UNORM: return "R8";
@@ -377,10 +405,33 @@ const char* formatName(VkFormat f) {
     }
 }
 
+} // namespace
+
 std::string formatLabel(VkFormat f) {
     if (const char* n = formatName(f)) return n;
-    return "fmt" + std::to_string(static_cast<int>(f));
+    if (in(f, VK_FORMAT_ASTC_4x4_UNORM_BLOCK, VK_FORMAT_ASTC_12x12_SRGB_BLOCK)) {
+        const auto* b = kAstcBlocks[(f - VK_FORMAT_ASTC_4x4_UNORM_BLOCK) / 2];
+        return "ASTC" + std::to_string(b[0]) + "x" + std::to_string(b[1]);
+    }
+    switch (f) {
+    case VK_FORMAT_BC1_RGB_UNORM_BLOCK: case VK_FORMAT_BC1_RGB_SRGB_BLOCK:
+    case VK_FORMAT_BC1_RGBA_UNORM_BLOCK: case VK_FORMAT_BC1_RGBA_SRGB_BLOCK: return "BC1";
+    case VK_FORMAT_BC2_UNORM_BLOCK: case VK_FORMAT_BC2_SRGB_BLOCK: return "BC2";
+    case VK_FORMAT_BC3_UNORM_BLOCK: case VK_FORMAT_BC3_SRGB_BLOCK: return "BC3";
+    case VK_FORMAT_BC4_UNORM_BLOCK: case VK_FORMAT_BC4_SNORM_BLOCK: return "BC4";
+    case VK_FORMAT_BC5_UNORM_BLOCK: case VK_FORMAT_BC5_SNORM_BLOCK: return "BC5";
+    case VK_FORMAT_BC6H_UFLOAT_BLOCK: case VK_FORMAT_BC6H_SFLOAT_BLOCK: return "BC6H";
+    case VK_FORMAT_BC7_UNORM_BLOCK: case VK_FORMAT_BC7_SRGB_BLOCK: return "BC7";
+    case VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK: case VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK: return "ETC2";
+    case VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK: case VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK: return "ETC2A1";
+    case VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK: case VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK: return "ETC2A8";
+    case VK_FORMAT_EAC_R11_UNORM_BLOCK: case VK_FORMAT_EAC_R11_SNORM_BLOCK: return "EAC_R11";
+    case VK_FORMAT_EAC_R11G11_UNORM_BLOCK: case VK_FORMAT_EAC_R11G11_SNORM_BLOCK: return "EAC_RG11";
+    default: return "fmt" + std::to_string(static_cast<int>(f));
+    }
 }
+
+namespace {
 
 void accumulate(State& s, const char* pass, const Traffic& t) {
     PassStat* p = nullptr;
@@ -433,10 +484,15 @@ void noteImage(VkImage image, const ImageDesc& d) {
     State& s = state();
     std::lock_guard<std::mutex> lock(s.m);
     auto it = s.images.find(image);
-    if (it != s.images.end()) addTexture(s.audit, it->second, false);
+    if (it != s.images.end()) {
+        addTexture(s.audit, it->second, false);
+        addCensus(s, categoryOf(s, image, it->second), it->second, false);
+    }
+    s.tags.erase(image); // handle reaproveitado: a marca era da imagem antiga
     s.images[image] = d;
     s.audited.erase(image);
     addTexture(s.audit, d, true);
+    addCensus(s, categorize(d), d, true);
 }
 
 void forgetImage(VkImage image) {
@@ -445,8 +501,83 @@ void forgetImage(VkImage image) {
     auto it = s.images.find(image);
     if (it == s.images.end()) return;
     addTexture(s.audit, it->second, false);
+    addCensus(s, categoryOf(s, image, it->second), it->second, false);
     s.images.erase(it);
+    s.tags.erase(image);
     s.audited.erase(image);
+}
+
+TextureCategory categorize(const ImageDesc& d) {
+    const VkImageUsageFlags att = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    const VkImageUsageFlags need = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    // Profundidade copiada (destino de copia, sem ser anexo) nao e' conteudo.
+    switch (d.format) {
+    case VK_FORMAT_D16_UNORM:
+    case VK_FORMAT_X8_D24_UNORM_PACK32:
+    case VK_FORMAT_D32_SFLOAT:
+    case VK_FORMAT_D16_UNORM_S8_UINT:
+    case VK_FORMAT_D24_UNORM_S8_UINT:
+    case VK_FORMAT_D32_SFLOAT_S8_UINT: return kTexNone;
+    default: break;
+    }
+    return ((d.usage & need) == need && !(d.usage & att)) ? kTexContent : kTexNone;
+}
+
+void tagImage(VkImage image, TextureCategory c) {
+    State& s = state();
+    std::lock_guard<std::mutex> lock(s.m);
+    const auto it = s.images.find(image);
+    if (it == s.images.end()) return;
+    addCensus(s, categoryOf(s, image, it->second), it->second, false);
+    s.tags[image] = c;
+    addCensus(s, c, it->second, true);
+}
+
+std::vector<CensusRow> textureCensus() {
+    State& s = state();
+    std::lock_guard<std::mutex> lock(s.m);
+    std::vector<CensusRow> rows;
+    for (const auto& [image, d] : s.images) {
+        const TextureCategory c = categoryOf(s, image, d);
+        if (c == kTexNone) continue;
+        const VkFormat fmt = d.format; // C++17: lambda nao captura binding estruturado
+        auto r = std::find_if(rows.begin(), rows.end(),
+                              [c, fmt](const CensusRow& x) { return x.category == c && x.format == fmt; });
+        if (r == rows.end()) {
+            rows.push_back(CensusRow{c, d.format, 0, 0});
+            r = rows.end() - 1;
+        }
+        ++r->count;
+        r->bytes += imageBytes(d);
+    }
+    std::sort(rows.begin(), rows.end(), [](const CensusRow& a, const CensusRow& b) {
+        return a.category != b.category ? a.category < b.category : a.bytes > b.bytes;
+    });
+    return rows;
+}
+
+CensusTotal censusTotal(TextureCategory c) {
+    State& s = state();
+    std::lock_guard<std::mutex> lock(s.m);
+    return c < kTexCategories ? s.census[c] : CensusTotal{};
+}
+
+const char* categoryName(TextureCategory c) {
+    switch (c) {
+    case kTexContent: return "conteudo";
+    case kTexLayers: return "camadas";
+    case kTexSprite: return "sprite";
+    default: return "-";
+    }
+}
+
+bool findImage(VkImage image, ImageDesc& out) {
+    State& s = state();
+    std::lock_guard<std::mutex> lock(s.m);
+    const auto it = s.images.find(image);
+    if (it == s.images.end()) return false;
+    out = it->second;
+    return true;
 }
 
 void noteView(VkImageView view, VkImage image) {
@@ -604,6 +735,23 @@ void maybeReport(uint64_t frame) {
     ERUPTION_LOG_WARN("[FLUXO] auditoria: %u alvos vistos, %u com flag que desliga compressao, %u avisos; texturas "
                       "%.1f MB em bloco (BC/ETC/ASTC), %.1f MB sem compressao",
                       a.targets, a.flagged, a.warnings, a.textureCompressedBytes / kMB, a.textureUncompressedBytes / kMB);
+    // Censo (spec 51): por categoria, total em bloco/sem compressao e os formatos.
+    const std::vector<CensusRow> rows = textureCensus();
+    for (int c = kTexContent; c < kTexCategories; ++c) {
+        const CensusTotal t = censusTotal(static_cast<TextureCategory>(c));
+        if (t.count == 0) continue;
+        std::string fmts;
+        for (const CensusRow& r : rows) {
+            if (r.category != c) continue;
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "%s%s x%u %.1f MB", fmts.empty() ? "" : ", ", formatLabel(r.format).c_str(),
+                          r.count, r.bytes / kMB);
+            fmts += buf;
+        }
+        ERUPTION_LOG_WARN("[TEXCOMP] censo %s: %u imagens, %.1f MB (%.1f em bloco, %.1f sem compressao): %s",
+                          categoryName(static_cast<TextureCategory>(c)), t.count, (t.block + t.raw) / kMB, t.block / kMB,
+                          t.raw / kMB, fmts.c_str());
+    }
 }
 
 } // namespace eruption::bw

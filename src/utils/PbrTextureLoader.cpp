@@ -1,4 +1,5 @@
 #include "utils/PbrTextureLoader.hpp"
+#include "utils/TextureFormatPolicy.hpp"
 
 #include "core/Project.hpp"
 #include "utils/HeightFromAlbedo.hpp"
@@ -650,8 +651,14 @@ static PbrTextureSlot uploadPbrTextureSlot(VulkanContext* ctx, BindlessDescripto
 PbrTextureData loadPbrTextureData(const std::string& path) {
     static const bool kTrace = std::getenv("ERUPTION_TEST_PBR_TRACE") != nullptr;
     PbrTextureData out;
-    // Baked BC texture beside the PNG: skip the decode entirely.
-    out.etex = loadEtexForImage(path);
+    // Cozido ao lado do PNG: pula o decode. So' o do formato que a politica
+    // escolhe hoje (spec 51) e que esta GPU amostra; modo off = RGBA8 puro.
+    const std::string etexTag = texfmt::activeTag();
+    const std::string etexExt = etexTag.empty() ? std::string(".etex") : "." + etexTag + ".etex";
+    if (texfmt::anyActive()) {
+        out.etex = loadEtexForImage(path, etexExt);
+        if (out.etex.valid() && !texfmt::deviceSamples(static_cast<VkFormat>(out.etex.vkFormat))) out.etex = EtexData{};
+    }
     if (out.etex.valid()) {
         out.width = static_cast<int>(out.etex.width);
         out.height = static_cast<int>(out.etex.height);
@@ -676,7 +683,7 @@ PbrTextureData loadPbrTextureData(const std::string& path) {
     // e a ausencia dele nunca quebra nada - so' custa mais VRAM.
     // ERUPTION_NO_TEXTURE_BC=1 desliga (mesmo interruptor do caminho embutido).
     static const bool kNoBc = std::getenv("ERUPTION_NO_TEXTURE_BC") != nullptr;
-    if (!kNoBc && bcFormatSupport().any() && img.width >= 4 && img.height >= 4) {
+    if (!kNoBc && texfmt::anyActive() && img.width >= 4 && img.height >= 4) {
         // BC5 em normal map NAO serve nesta engine: a amostra volta B=0/A=1 e o
         // shader faz xyz*2-1, dando z=-1 (medido: RMS 9,7 contra 0,77 do BC7).
         // Normal e mrahw vao os dois para o caminho BC7.
@@ -694,7 +701,7 @@ PbrTextureData loadPbrTextureData(const std::string& path) {
             // deixar arquivo pela metade se o processo morrer no meio.
             std::vector<uint8_t> bytes;
             appendEtexBytes(e, bytes);
-            const std::string etexOut = path + ".etex";
+            const std::string etexOut = path + etexExt;
             const std::string tmp = etexOut + ".tmp";
             std::error_code wec;
             {

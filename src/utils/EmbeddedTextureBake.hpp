@@ -17,6 +17,7 @@ struct BakedEmbeddedTexture {
     EtexData albedo;
     EtexData normal;
     EtexData mrahw;
+    bool albedoOpaque = false; // albedo sem alfa (o formato so' diz isso no BC1)
 };
 
 struct EmbeddedBakeResult {
