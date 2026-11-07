@@ -520,6 +520,18 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
 
     const Vec3 toCam = m_camera.position() - m_camera.target();
     const float spriteYaw = std::atan2(toCam.x, toCam.z);
+    // ERUPTION_TEST_SPRITE_TRACE=1 (teste): por quadro, posicao no mundo e na tela (pixels do alvo de render,
+    // com a camera deste ponto do quadro) de cada personagem desenhado: separa personagem que ANDA no mundo
+    // de camera que desliza.
+    static const bool kTrace = std::getenv("ERUPTION_TEST_SPRITE_TRACE") != nullptr;
+    if (kTrace) {
+        const Vec4 clip = m_camera.viewProjNoJitter() * Vec4(c.position, 1.0f);
+        const VkExtent2D re = renderExtent();
+        const float w = std::max(clip.w, 1e-4f);
+        ERUPTION_LOG_WARN("[SPR] q=%llu %s mundo=(%.2f,%.2f) tela=(%.1f,%.1f) yaw=%.1f", static_cast<unsigned long long>(m_framesCount),
+                          c.name.c_str(), c.position.x, c.position.z, (clip.x / w * 0.5f + 0.5f) * re.width,
+                          (clip.y / w * 0.5f + 0.5f) * re.height, glm::degrees(spriteYaw));
+    }
 
     // SUCO: deslocamento, clarao, estica e opacidade deste quadro.
     const SceneCharacter::Fx& f = c.fx;

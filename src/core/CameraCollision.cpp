@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cstdlib>
 #include <cmath>
 #include <unordered_map>
 #include <unordered_set>
@@ -254,7 +255,10 @@ void Engine::setCameraCollide(bool on, float margin) {
 // caminho nao atravessa a pedra: o quadro que cairia dentro dela vai direto
 // ao destino. So' o relevo: modelo fino (arvore, poste) nao conta.
 void Engine::updateCameraCollision(float dt) {
-    if (!m_cameraCollide || m_camera.isOrthographic() || !m_currentMap) {
+    // ERUPTION_TEST_NO_CAM_COLLIDE=1 (teste): ignora camera.collide, para medir quanto a suavizacao da
+    // distancia/elevacao da lente move os personagens na tela quando a camera gira.
+    static const bool kTestOff = std::getenv("ERUPTION_TEST_NO_CAM_COLLIDE") != nullptr;
+    if (kTestOff || !m_cameraCollide || m_camera.isOrthographic() || !m_currentMap) {
         m_cameraCollideDist = -1.0f;
         m_cameraCollideLift = 0.0f;
         m_camera.setOrbitOverride(FLT_MAX);
@@ -434,6 +438,10 @@ void Engine::updateCameraCollision(float dt) {
     m_cameraCollideDist = distFree ? -1.0f : cur;
     m_cameraCollideLift = curLift;
     m_camera.setOrbitOverride(distFree ? FLT_MAX : cur, curLift);
+    // ERUPTION_TEST_CAM_COLLIDE_LOG=1 (teste): uma linha por quadro com pedida, efetiva e elevacao.
+    static const bool kLog = std::getenv("ERUPTION_TEST_CAM_COLLIDE_LOG") != nullptr;
+    if (kLog) ERUPTION_LOG_WARN("[CAMCOL] yaw=%.1f pedida=%.1f efetiva=%.1f elevacao=%.2f graus", glm::degrees(yaw), want,
+                                distFree ? want : cur, glm::degrees(curLift));
 }
 
 } // namespace eruption
