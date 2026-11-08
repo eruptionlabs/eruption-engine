@@ -20,6 +20,7 @@
 #include <limits>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <chrono>
 #include <unordered_map>
 namespace eruption {
@@ -424,7 +425,12 @@ void PlayerController::updateCamera(float dt, bool captureMouse, bool captureKey
         Vec3 targetPos = m_pos;
         targetPos.y += m_spriteHeight * 0.5f;
         Vec3 target = m_engine->camera().target();
-        target += (targetPos - target) * glm::clamp(m_cameraSmoothFactor * dt, 0.0f, 1.0f);
+        // Seguimento independente de FPS: 1 - exp(-k*dt) da' a mesma curva com 30 ou 144 quadros
+        // (k*dt linear mudava o atraso com o dt). ERUPTION_CAM_LOCK=1 trava a camera no jogador
+        // sem atraso (o boneco nao desliza na tela).
+        static const bool camLock = std::getenv("ERUPTION_CAM_LOCK") != nullptr;
+        const float follow = camLock ? 1.0f : 1.0f - std::exp(-std::max(0.0f, m_cameraSmoothFactor) * dt);
+        target += (targetPos - target) * glm::clamp(follow, 0.0f, 1.0f);
         Vec2 lo, hi; // mapa aberto + vizinhos em cena
         if (m_engine->worldBounds(lo, hi)) {
             if (m_keepViewInsideMap) viewInsideBounds(lo, hi);
