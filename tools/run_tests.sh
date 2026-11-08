@@ -82,6 +82,7 @@ run_src test_action_index
 run_src test_vision src/core/Vision.cpp
 run_src test_relief_bake src/renderer/ReliefBake.cpp
 run_src test_bandwidth_meter src/renderer/BandwidthMeter.cpp src/utils/Profiler.cpp src/core/Logger.cpp -lpthread
+run_src test_minimap_walk src/core/MinimapWalk.cpp -I build/_deps/nlohmann_json-src/include
 
 # Estabilidade das cascatas de sombra (ancoragem ao mundo, tamanho do texel,
 # sem historia), com o ShadowRenderer::updateCascades de verdade, sem GPU, em

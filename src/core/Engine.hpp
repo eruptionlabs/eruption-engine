@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include "core/MinimapWalk.hpp"
 #include "core/Window.hpp"
 #include "core/Timer.hpp"
 #include <chrono>
@@ -1388,6 +1389,7 @@ private:
     float computeObstructionAngular() const;
     void drawWeatherTab();
     void writeMinimapLiquids();
+    bool bakeWalkMinimapImage(VkCommandBuffer cmd, const Mat4& vp);
     Mat4 computeCloudShadowMatrix(const Vec3& lightDir, const Vec3& target) const;
     Window m_window;
     VulkanContext m_vulkan;
@@ -2294,6 +2296,14 @@ private:
     VkBuffer m_minimapLiquidsBuffer = VK_NULL_HANDLE;
     VmaAllocation m_minimapLiquidsAlloc = VK_NULL_HANDLE;
     void* m_minimapLiquidsMapped = nullptr;
+    // Minimapa por grade de andar (core/MinimapWalk.hpp, data/hud/minimap.json):
+    // os pixels saem da CPU uma vez por bake, por um buffer host-visivel
+    // persistente e uma copia para a textura que ja' existe (sem alvo nem passe).
+    MinimapWalkConfig m_minimapWalkCfg;
+    const void* m_minimapWalkCfgKey = nullptr; // a config e' relida a cada mapa
+    VkBuffer m_minimapWalkBuffer = VK_NULL_HANDLE;
+    VmaAllocation m_minimapWalkAlloc = VK_NULL_HANDLE;
+    void* m_minimapWalkMapped = nullptr;
     PlayerController* m_playerController = nullptr;
     float m_seeThroughRadius = 0.0f;
     float m_seeThroughOpacity = 0.25f;
