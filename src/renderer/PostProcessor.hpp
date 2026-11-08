@@ -201,6 +201,16 @@ public:
         // Debug overlay that projects the cloud coverage map onto the scene.
         bool showCloudCoverageDebug = false;
 
+        // Contorno fino por borda de profundidade (no Composite, sem passe extra). O modo e' chave de preset
+        // (`outline`: 0 desliga, 1 lite com 4 taps, 2 completo com 8; `outline_sprites` 1 inclui os sprites,
+        // padrao 0); cor, espessura e limiar vem de data/postprocess.json (`outline_color` RGBA em gamma de
+        // tela, `outline_thickness` em px a 1080p, `outline_threshold` relativo a' distancia).
+        int outlineMode = 0;
+        bool outlineSprites = false;
+        Vec4 outlineColor = Vec4(0.10f, 0.10f, 0.10f, 0.60f);
+        float outlineThickness = 1.0f;
+        float outlineThreshold = 0.02f;
+
         void loadFromJson(const nlohmann::json& j);
     };
 

@@ -373,9 +373,9 @@ void PostProcessor::createDescriptors() {
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset = 0;
     pcRange.size = 128;
-    // 352 + 32 B (borderRect/borderParams, E-BORDA-VAZIO): o bloco da
+    // 352 + 32 B (borderRect/borderParams, E-BORDA-VAZIO) + 48 B (contorno): o bloco da
     // composicao cresceu alem do antigo teto de 352 B.
-    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 384, 16 * 1024);
+    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 432, 16 * 1024);
     const VkDescriptorSetLayout setLayouts[2] = {m_descriptorSetLayout, m_pushRing.layout()};
 
     VkPipelineLayoutCreateInfo plInfo{};
@@ -1707,6 +1707,9 @@ if (!m_ctx) return;
         Vec4 vision;          // visao de equipe: canto xz, 1/lado, dim (< 0 = desligada)
         Vec4 borderRect;      // E-BORDA-VAZIO: x0,z0,x1,z1 em unidades do mundo
         Vec4 borderParams;    // x=distancia de fusao (< 0 = desligada), yzw=cor
+        Vec4 outlineParams;   // x=modo, y=espessura em px da tela, z=near, w=far
+        Vec4 outlineColor;    // rgb=cor, a=opacidade
+        Vec4 outlineParams2;  // x=limiar relativo, y=sprites
     } push;
     // Debug/test overrides for fog parameters (useful for headless screenshots).
     float fogStart = settings.fogStart;
@@ -1789,7 +1792,13 @@ if (!m_ctx) return;
     push.vision = m_visionParams;
     push.borderRect = settings.worldBorderRect;
     push.borderParams = settings.worldBorderParams;
-    static_assert(sizeof(push) <= 384, "bloco da composicao passou do maxBlock do PushRing (384 B)");
+    // A espessura e' definida a 1080p e acompanha a altura real da tela, para a linha parecer a mesma em 720p/1440p.
+    push.outlineParams = Vec4(static_cast<float>(settings.outlineMode),
+                              std::max(0.5f, settings.outlineThickness * static_cast<float>(m_height) / 1080.0f),
+                              nearPlane, farPlane);
+    push.outlineColor = settings.outlineColor;
+    push.outlineParams2 = Vec4(std::max(settings.outlineThreshold, 1e-4f), settings.outlineSprites ? 1.0f : 0.0f, 0.0f, 0.0f);
+    static_assert(sizeof(push) <= 432, "bloco da composicao passou do maxBlock do PushRing (432 B)");
     m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, &push, sizeof(push));
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkc::cmdEndRendering(cmd);
@@ -1909,6 +1918,11 @@ void PostProcessor::PostSettings::loadFromJson(const nlohmann::json& j) {
     fogHeightFalloff = j.value("fog_height_falloff", fogHeightFalloff);
     if (j.contains("fog_color") && j["fog_color"].is_array() && j["fog_color"].size() >= 3) {
         fogColor = Vec3(j["fog_color"][0], j["fog_color"][1], j["fog_color"][2]);
+    }
+    outlineThickness = j.value("outline_thickness", outlineThickness);
+    outlineThreshold = j.value("outline_threshold", outlineThreshold);
+    if (j.contains("outline_color") && j["outline_color"].is_array() && j["outline_color"].size() >= 4) {
+        outlineColor = Vec4(j["outline_color"][0], j["outline_color"][1], j["outline_color"][2], j["outline_color"][3]);
     }
     enableDoF = j.value("enable_dof", j.value("enable_tilt_shift", enableDoF));
     focalOffset = j.value("focal_offset", focalOffset);

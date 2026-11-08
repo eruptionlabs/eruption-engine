@@ -59,6 +59,10 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
     // longo de borderParams.x unidades. borderParams.x < 0 = desligada.
     vec4 borderRect;      // x0,z0,x1,z1 em unidades do mundo
     vec4 borderParams;    // x=distancia de fusao, yzw=cor (linear)
+    // Contorno fino por borda de profundidade (preset `outline`). Bloco do PushRing de 432 B.
+    vec4 outlineParams;   // x=modo (0 desliga, 1 lite 4 taps, 2 completo 8 taps), y=espessura em px, z=near, w=far
+    vec4 outlineColor;    // rgb=cor (ja' em gamma de tela), a=opacidade maxima
+    vec4 outlineParams2;  // x=limiar relativo de profundidade, y=1 inclui sprites
 } push;
 
 // Cor da cena em `uv`, com o DoF misturado quando ele vem fundido.
@@ -225,8 +229,47 @@ vec3 applyToneMapping(vec3 c, float mode) {
     return c; // legado
 }
 
+// Contorno por borda de profundidade, sem geometria extra. O teste e' o laplaciano de 1/z (no espaco da tela
+// 1/z e' AFIM num plano, entao um plano visto de raspao da' laplaciano exatamente 0 e nao vira linha), relativo
+// a 1/z do centro (limiar proporcional a' distancia: espessura aparente igual perto e longe). Em funcao da
+// profundidade d do buffer, 1/z ~ f - d (f - n): o laplaciano sai de (da + db - 2 dc), sem linearizar cada tap
+// (so' uma divisao por pixel; medido: tirar as 6 divisoes dos taps poupou parte do custo). So' o pixel MAIS
+// PERTO da descontinuidade e' pintado (linha de 1 px dentro da silhueta; o ceu, o mais longe, nunca). A
+// cobertura sai de um smoothstep (nao binaria) para a borda nao serrilhar nem rastejar com o jitter do FSR3.
+// Laplaciano relativo de um eixo: vizinhos mais longe que o centro => positivo.
+float outlineAxis(ivec2 c, ivec2 o, float dc, float k) {
+    return k * (texelFetch(depthTexture, c + o, 0).r + texelFetch(depthTexture, c - o, 0).r - 2.0 * dc);
+}
+bool spriteAt(vec2 uv) { return abs(textureLod(spriteMarkTexture, uv, 0.0).r - 0.75) < 0.06; }
+float outlineAt(vec2 uv, float depth) {
+    if (push.outlineParams.x < 0.5 || depth >= 0.99999) return 0.0;
+    // texelFetch com passo inteiro em px: sem filtragem nem conta de uv por tap (a espessura vira inteira >= 1).
+    ivec2 sz = textureSize(depthTexture, 0);
+    ivec2 c = clamp(ivec2(uv * vec2(sz)), ivec2(1), sz - ivec2(2));
+    int w = max(1, int(push.outlineParams.y + 0.5));
+    float n = push.outlineParams.z, f = push.outlineParams.w;
+    float k = (f - n) / max(f - depth * (f - n), 1e-6);
+    float lap = max(outlineAxis(c, ivec2(w, 0), depth, k), outlineAxis(c, ivec2(0, w), depth, k));
+    // Modo completo: as duas diagonais (linha mais cheia nas quinas).
+    if (push.outlineParams.x > 1.5) {
+        lap = max(lap, outlineAxis(c, ivec2(w, w), depth, k));
+        lap = max(lap, outlineAxis(c, ivec2(w, -w), depth, k));
+    }
+    float t = push.outlineParams2.x;
+    float e = smoothstep(t, 2.0 * t, lap);
+    // Sprites fora (padrao): so' a marca do PROPRIO pixel, lida SO' onde ha' borda. Um vizinho sprite mais perto deixa
+    // o laplaciano negativo (sem linha no chao); um sprite mais longe atras de uma arvore e' borda de cenario, que
+    // deve ter linha. Medido na 4060 high 1080p: a marca vem do G-buffer PBR e ler em todo pixel custa +0,46 ms,
+    // so' nas bordas +0,28 ms; com sprites incluidos (outline_sprites=1) nao le' e custa ~0.
+    if (e > 0.0 && push.outlineParams2.y < 0.5 && spriteAt(uv)) return 0.0;
+    return e;
+}
+
 void main() {
     float depth = texture(depthTexture, fragUV).r;
+    // O contorno so' precisa da profundidade: os taps saem ja' aqui para a latencia da leitura se esconder atras
+    // do resto do shader (lido so' no fim, depois do gamma).
+    const float outlineEdge = outlineAt(fragUV, depth);
     
     // Reconstruct world position
     vec4 ndc = vec4(fragUV * 2.0 - 1.0, depth, 1.0);
@@ -468,6 +511,9 @@ void main() {
 
     // Gamma 2.2
     color = pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
+    // Contorno: depois do tonemap/grading/vinheta (cor de tela), antes da visao e do escurecimento.
+    color = mix(color, push.outlineColor.rgb, push.outlineColor.a * outlineEdge);
+
     // Visao de equipe depois do gamma, como o fx.dim: dim 0,35 e' 35% do
     // brilho que se ve'. O ceu nao escurece; fora da janela e' sem visao.
     if (push.vision.w >= 0.0 && depth < 0.99999) {
