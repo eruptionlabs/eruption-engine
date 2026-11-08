@@ -111,6 +111,7 @@ void Engine::setNavRules(const NavRules& rules) {
     m_navRules.maxStep = std::max(0.1f, rules.maxStep);
     m_navRules.maxSlopeDeg = std::clamp(rules.maxSlopeDeg, 1.0f, 89.0f);
     ++m_navRulesVersion; // cada mapa refaz a grade na primeira consulta
+    m_minimapForce = true; // o minimapa por grade de andar (data/hud/minimap.json) depende destas regras: reassa
 }
 
 // Grade das regras de terreno de um mapa: célula íngreme pela altura do
