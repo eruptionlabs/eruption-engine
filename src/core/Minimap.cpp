@@ -313,13 +313,15 @@ bool Engine::bakeWalkMinimapImage(VkCommandBuffer cmd, const Mat4& vp) {
         vmaMapMemory(m_vulkan.allocator(), m_minimapWalkAlloc, &m_minimapWalkMapped);
     }
     const Mat4 inv = glm::inverse(vp);
-    const Vec4 keep = m_minimapKeep; // minX, minZ, maxX, maxZ do que existe
     std::vector<uint8_t> px;
     bakeWalkMinimap(m_minimapWalkCfg, MINIMAP_RES, [&](float u, float v) {
         const Vec4 w = inv * Vec4(2.0f * u - 1.0f, 2.0f * v - 1.0f, 0.5f, 1.0f);
         const float x = w.x / w.w, z = w.z / w.w;
-        if (x < keep.x || x > keep.z || z < keep.y || z > keep.w) return 0;
-        return navWalkable(x, z) ? 1 : 2;
+        // 0 fora de todo mapa em cena (transparente), 1 anda, o resto bloqueia.
+        // Vale tambem para os vizinhos do mundo continuo, que o desenho de cena
+        // mostra fora do enquadramento do mapa aberto.
+        const int kind = navCellKind(x, z);
+        return kind == 0 ? 0 : (kind == 1 ? 1 : 2);
     }, px);
     memcpy(m_minimapWalkMapped, px.data(), px.size());
     vmaFlushAllocation(m_vulkan.allocator(), m_minimapWalkAlloc, 0, VK_WHOLE_SIZE);
