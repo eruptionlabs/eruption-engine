@@ -1,4 +1,7 @@
 {
+  "outline_color": [0.1, 0.1, 0.1, 0.6],
+  "outline_thickness": 1.0,
+  "outline_threshold": 0.02,
   "exposure": 1.2,
   "enable_fog": true,
   "fog_start": 50.0,
