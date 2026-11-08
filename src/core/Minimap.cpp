@@ -15,6 +15,7 @@
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "formats/MapLoader.hpp"
+#include "core/Project.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <vk_mem_alloc.h>
 #include <imgui.h>
@@ -191,6 +192,12 @@ void Engine::shutdownMinimap() {
         m_minimapLiquidsBuffer = VK_NULL_HANDLE;
         m_minimapLiquidsMapped = nullptr;
     }
+    if (m_minimapWalkBuffer != VK_NULL_HANDLE) {
+        if (m_minimapWalkMapped) vmaUnmapMemory(m_vulkan.allocator(), m_minimapWalkAlloc);
+        vmaDestroyBuffer(m_vulkan.allocator(), m_minimapWalkBuffer, m_minimapWalkAlloc);
+        m_minimapWalkBuffer = VK_NULL_HANDLE;
+        m_minimapWalkMapped = nullptr;
+    }
     if (m_minimapView != VK_NULL_HANDLE) vkDestroyImageView(m_vulkan.device(), m_minimapView, nullptr);
     if (m_minimapImage != VK_NULL_HANDLE) vmaDestroyImage(m_vulkan.allocator(), m_minimapImage, m_minimapAlloc);
 }
@@ -283,6 +290,50 @@ void Engine::writeMinimapLiquids() {
         ++n;
     }
     header->count = n;
+}
+
+// Minimapa por grade de andar. Devolve true se pintou a textura (ligado em
+// data/hud/minimap.json e o mapa tem grade de andar); false deixa o composite
+// de cena de sempre. Custo so' no bake (65 mil consultas da grade + uma copia
+// de 256 KB); nenhum alvo ou passe novo, e nada por quadro.
+bool Engine::bakeWalkMinimapImage(VkCommandBuffer cmd, const Mat4& vp) {
+    if (!m_currentMap) return false;
+    const void* key = static_cast<const void*>(m_currentMap.get());
+    if (key != m_minimapWalkCfgKey) {
+        m_minimapWalkCfgKey = key;
+        m_minimapWalkCfg = MinimapWalkConfig::load(project::config("data/hud/minimap.json"));
+        if (const char* env = std::getenv("ERUPTION_TEST_MINIMAP_WALK")) m_minimapWalkCfg.enabled = (env[0] == '1');
+    }
+    if (!m_minimapWalkCfg.enabled) return false;
+    if (m_currentMap->navGrid.width == 0 && !m_navRules.on) return false; // sem grade: desenho atual
+    if (!m_minimapWalkMapped) {
+        const VkDeviceSize bytes = VkDeviceSize(MINIMAP_RES) * MINIMAP_RES * 4;
+        if (!m_vulkan.createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU,
+                                   m_minimapWalkBuffer, m_minimapWalkAlloc)) return false;
+        vmaMapMemory(m_vulkan.allocator(), m_minimapWalkAlloc, &m_minimapWalkMapped);
+    }
+    const Mat4 inv = glm::inverse(vp);
+    const Vec4 keep = m_minimapKeep; // minX, minZ, maxX, maxZ do que existe
+    std::vector<uint8_t> px;
+    bakeWalkMinimap(m_minimapWalkCfg, MINIMAP_RES, [&](float u, float v) {
+        const Vec4 w = inv * Vec4(2.0f * u - 1.0f, 2.0f * v - 1.0f, 0.5f, 1.0f);
+        const float x = w.x / w.w, z = w.z / w.w;
+        if (x < keep.x || x > keep.z || z < keep.y || z > keep.w) return 0;
+        return navWalkable(x, z) ? 1 : 2;
+    }, px);
+    memcpy(m_minimapWalkMapped, px.data(), px.size());
+    vmaFlushAllocation(m_vulkan.allocator(), m_minimapWalkAlloc, 0, VK_WHOLE_SIZE);
+    m_vulkan.cmdImageBarrier(cmd, m_minimapImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkBufferImageCopy region{};
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {MINIMAP_RES, MINIMAP_RES, 1};
+    vkCmdCopyBufferToImage(cmd, m_minimapWalkBuffer, m_minimapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    m_vulkan.cmdImageBarrier(cmd, m_minimapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    return true;
 }
 
 void Engine::renderMinimap(VkCommandBuffer cmd) {
@@ -468,7 +519,11 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
     // Both cost nothing per frame: this whole function is gated by `dirty`
     // above, so it runs on map change / progressive-load growth only. The
     // 4,9 ms -> 0,5 ms win from commit 1f8c4a5 is preserved.
-    if (m_minimapCompositePipeline != VK_NULL_HANDLE && m_minimapCompositeDS != VK_NULL_HANDLE) {
+    if (bakeWalkMinimapImage(cmd, vp)) {
+        const uint32_t drawnWalk = m_modelRenderer.lastDrawnTriangles();
+        m_minimapForce = (drawnWalk != m_minimapTriangles);
+        m_minimapTriangles = drawnWalk;
+    } else if (m_minimapCompositePipeline != VK_NULL_HANDLE && m_minimapCompositeDS != VK_NULL_HANDLE) {
         VkDescriptorImageInfo imgs[5] = {};
         imgs[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         imgs[0].imageView = m_gbuffer.albedoView();
