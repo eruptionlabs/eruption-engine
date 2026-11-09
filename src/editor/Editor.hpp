@@ -267,7 +267,7 @@ private:
     Selection m_selection;
 
     // Câmera de edição
-    float m_flySpeed = 30.0f;
+    float m_flySpeed = 150.0f; // u/s; a roda do mouse (com o botao direito) ajusta de 1 a 2000
     bool m_flying = false;
     bool m_cameraDrag = false;
     float m_savedMaxDistance = 0.0f;

@@ -79,6 +79,16 @@ void Editor::drawViewport() {
     m_engine->drawSpeechBubbles(pos.x, pos.y, avail.x, avail.y, ImGui::GetIO().DeltaTime);
     m_engine->drawGameFx2D(pos.x, pos.y, avail.x, avail.y, ImGui::GetIO().DeltaTime);
     if (m_scripts) m_scripts->drawMessages(pos.x, pos.y, avail.x, avail.y);
+    if (m_flying) {
+        // Velocidade do voo na tela enquanto o botao direito esta segurado: sem ela a roda
+        // muda um numero que ninguem ve.
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), tr("Fly speed %.0f u/s   (wheel: change, Shift: x3)"), m_flySpeed);
+        const ImVec2 ts = ImGui::CalcTextSize(buf);
+        const ImVec2 p(pos.x + 0.5f * (avail.x - ts.x), pos.y + 10.0f);
+        dl->AddRectFilled(ImVec2(p.x - 8.0f, p.y - 3.0f), ImVec2(p.x + ts.x + 8.0f, p.y + ts.y + 3.0f), IM_COL32(0, 0, 0, 150), 4.0f);
+        dl->AddText(p, IM_COL32(255, 255, 255, 235), buf);
+    }
 
     // .glb solto do painel Projeto: entra no chão sob o mouse.
     if (m_play == PlayState::Editing && ImGui::BeginDragDropTarget()) {
