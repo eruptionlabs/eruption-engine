@@ -76,7 +76,17 @@ layout(push_constant) uniform PushConstants {
     float roughnessScale;
     float _pad;           // ERUPTION_TEST_MAGENTA_DEBUG - nao e' padding
     vec4 uvScale;
+#ifdef ERUPTION_TESS_GEOMORPH
+    vec4 weld;            // w = escala de densidade do geomorph do chao (ver abaixo)
+#endif
 } push;
+
+#ifdef ERUPTION_TESS_GEOMORPH
+// Peso do geomorph por aresta (xyz, aresta i oposta ao vertice i) e do
+// interior (w): 0 = vertice novo do nivel colado no vertice grosso, 1 = no
+// lugar dele. Ver geomorphLevel().
+layout(location = 21) patch out vec4 tcMorph;
+#endif
 
 layout(set = 1, binding = 0) uniform FrameUBO {
     mat4 u_view;
@@ -131,6 +141,7 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     float u_tessNearDistance;
     float u_tessNearSpacing;
 };
+
 
 float lut8(vec4 a, vec4 b, float t) {
     float x = clamp(t, 0.0, 1.0) * 7.0;
@@ -274,6 +285,52 @@ float edgeFactor(int a, int b) {
     return f;
 }
 
+#ifdef ERUPTION_TESS_GEOMORPH
+// NIVEIS EM DEGRAUS + GEOMORPH (so' o chao: pipeline proprio, model_ground.*,
+// preset tessellation_ground_geomorph).
+//
+// Com o nivel continuo e fractional_odd_spacing, todo vertice gerado DESLIZA
+// sobre o mapa de altura quando a camera anda (o nivel muda um pouco a cada
+// quadro) e le' outra altura: o chao "nada". Medido no mapa de deserto (2a
+// derivada temporal no monte de areia): 2,886 com a tesselacao contra 2,384
+// sem ela.
+//
+// Aqui o nivel e' potencia de 2 com equal_spacing (model_tese): dentro de um
+// degrau os vertices ficam PARADOS no mundo. A grade do nivel 2n contem a do
+// nivel n (anel interno de um triangulo com nivel inteiro uniforme e' a grade
+// regular, e a grade de 2n refina a de n), entao cada vertice novo e' o ponto
+// medio de uma aresta grossa. No degrau novo ele nasce COLADO numa ponta dessa
+// aresta (model_tese, geomorphCoord) - a malha fina vira exatamente a grossa,
+// sem pulo - e anda ate' o lugar dele na primeira fracao kMorphSpan do degrau
+// (em log2 do nivel). Depois fica parado ate' o proximo degrau.
+//
+// O nivel continuo e' o de sempre (edgeFactor) vezes push.weld.w: a potencia
+// de 2 arredonda PARA CIMA, e sem a escala o chao teria em media ~2,2x os
+// triangulos de antes.
+//
+// Sem racha: o degrau e o peso da aresta dependem so' do nivel continuo dela,
+// que ja' e' o mesmo nos dois patches vizinhos.
+//
+// Medido (mapa de deserto, 60 quadros, so' a areia do monte): 3,80 antes; 3,70
+// com degrau seco (sem geomorph, com pulo) - o piso do que e' deslizamento;
+// 3,77 com kMorphSpan 0,5 (metade dos patches sempre andando); 3,70 com 0,15.
+// O que sobra acima do sem-tesselacao (3,37) nao e' vertice andando: o mip da
+// altura segue a distancia (dispSpacingAt) - congelar a camera so' no
+// model_tese tirou mais 0,12 - e o resto e' o relevo fino parado no mundo.
+// G-buffer igual dentro do ruido com escala 0,7.
+const float kMorphSpan = 0.15;
+
+float geomorphLevel(float f, out float morph) {
+    float g = f * push.weld.w;
+    morph = 1.0;
+    if (g <= 1.0) return 1.0;
+    float lg = log2(g);
+    float k = min(ceil(lg), 6.0);
+    morph = clamp((lg - (k - 1.0)) / kMorphSpan, 0.0, 1.0);
+    return exp2(k);
+}
+#endif
+
 void main() {
     outWorldPos[gl_InvocationID] = inWorldPos[gl_InvocationID];
     outTexCoord[gl_InvocationID] = inTexCoord[gl_InvocationID];
@@ -303,6 +360,20 @@ void main() {
         float e0 = edgeFactor(1, 2);
         float e1 = edgeFactor(2, 0);
         float e2 = edgeFactor(0, 1);
+#ifdef ERUPTION_TESS_GEOMORPH
+        {
+            vec4 m;
+            float ei = max(max(e0, e1), e2);
+            e0 = geomorphLevel(e0, m.x);
+            e1 = geomorphLevel(e1, m.y);
+            e2 = geomorphLevel(e2, m.z);
+            // Mesmo degrau que max(e0, e1, e2) (a quantizacao e' monotona) e
+            // peso tirado do continuo do maior, entao o interior troca de
+            // degrau no mesmo instante em que os vertices novos nascem colados.
+            geomorphLevel(ei, m.w);
+            tcMorph = m;
+        }
+#endif
         // PATCH FORA DA BANDA PASSA DIRETO (nivel 1), NAO E' DESCARTADO.
         //
         // Aqui era nivel 0 - descarte - e isso ABRIA BURACO NO CHAO. O corte

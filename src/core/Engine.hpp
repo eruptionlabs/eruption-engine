@@ -545,6 +545,11 @@ public:
     float m_tessBandScale = 1.0f;    // chave "tessellation_band_scale"
     float m_tessNearDistance = 0.0f;   // chave "tessellation_near_distance" (0 = sem banda perto)
     float m_tessNearSpacing = 0.25f;   // chave "tessellation_near_spacing"
+    float m_tessHeightMinSpacing = 0.0f; // chave "tessellation_height_min_spacing" (0 = so' a grade)
+    // Sprites (FrameUBO::spriteParams): chave "sprite_filter" (0 nearest, 1
+    // bilinear nitido) e "sprite_normal_strength" (normal map autoral, 0 = sem).
+    float m_spriteFilter = 0.0f;
+    float m_spriteNormalStrength = 1.0f;
     float m_tessNearEdgePixels = 8.0f; // chave "tessellation_near_edge_pixels"
     uint32_t m_godRayLights = 4;     // chave "god_ray_lights"
     float m_godRaySun = 0.0f;        // chave "god_ray_sun" (forca dos raios do sol)

@@ -685,7 +685,8 @@ void ModelRenderer::shutdown() {
         vkDestroyPipeline(m_ctx->device(), m_tessPipeline, nullptr);
         m_tessPipeline = VK_NULL_HANDLE;
     }
-    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineGroundLast, &m_tessPipelineGroundLast}) {
+    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineGroundLast, &m_tessPipelineGroundLast,
+                          &m_tessPipelineGeo, &m_tessPipelineGeoGroundLast}) {
         if (*p != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -1038,9 +1039,17 @@ void ModelRenderer::createPipeline() {
     // mesma malha - so' muda a topologia (patch de 3 pontos) e os dois
     // estagios a mais. Se o driver nao tiver a feature, ou os SPIR-V nao
     // existirem, fica NULL e o render usa o pipeline normal: nada quebra.
-    if (m_ctx->tessellationSupported()) {
-        auto tescCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/" + variant + ".tesc.spv");
-        auto teseCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/" + variant + ".tese.spv");
+    // O par "_ground" (model_ground.tesc/.tese) e' o do chao com niveis em
+    // degraus + geomorph (preset tessellation_ground_geomorph): equal_spacing
+    // e' layout do .tese, entao precisa de pipeline proprio. Os objetos seguem
+    // no par de sempre.
+    struct TessPair { const char* suffix; VkPipeline* pipe; VkPipeline* groundLast; };
+    const TessPair tessPairs[] = {{"", &m_tessPipeline, &m_tessPipelineGroundLast},
+                                  {"_ground", &m_tessPipelineGeo, &m_tessPipelineGeoGroundLast}};
+    for (const TessPair& tp : tessPairs) {
+        if (!m_ctx->tessellationSupported()) break;
+        auto tescCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/" + variant + tp.suffix + ".tesc.spv");
+        auto teseCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/" + variant + tp.suffix + ".tese.spv");
         if (!tescCode.empty() && !teseCode.empty()) {
             VkShaderModule tescModule = VK_NULL_HANDLE, teseModule = VK_NULL_HANDLE;
             VkShaderModuleCreateInfo tsm{};
@@ -1062,7 +1071,7 @@ void ModelRenderer::createPipeline() {
                 teseStage.module = teseModule;
 
                 std::vector<VkPipelineShaderStageCreateInfo> tessStages = { stages[0], tescStage, teseStage, stages[1] };
-                m_tessPipeline = PipelineBuilder()
+                *tp.pipe = PipelineBuilder()
                     .setShaderStages(tessStages)
                     .setVertexInput(vertexInput)
                     .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_PATCH_LIST)
@@ -1079,7 +1088,7 @@ void ModelRenderer::createPipeline() {
                     .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
                     .build(m_ctx->device());
                 // O chao da banda tambem vai por ultimo (ver m_pipelineGroundLast).
-                m_tessPipelineGroundLast = PipelineBuilder()
+                *tp.groundLast = PipelineBuilder()
                     .setShaderStages(tessStages)
                     .setVertexInput(vertexInput)
                     .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_PATCH_LIST)
@@ -1097,8 +1106,8 @@ void ModelRenderer::createPipeline() {
                     .build(m_ctx->device());
                 vkDestroyShaderModule(m_ctx->device(), tescModule, nullptr);
                 vkDestroyShaderModule(m_ctx->device(), teseModule, nullptr);
-                ERUPTION_LOG_WARN("[TESS] pipeline de tesselacao %s",
-                                  m_tessPipeline != VK_NULL_HANDLE ? "criado" : "FALHOU");
+                ERUPTION_LOG_WARN("[TESS] pipeline de tesselacao%s %s", tp.suffix,
+                                  *tp.pipe != VK_NULL_HANDLE ? "criado" : "FALHOU");
             }
         }
     }
@@ -3359,7 +3368,12 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             // do bloco seguinte) nao passa pela tesselacao: sem solda. Ela
             // levava 60-87 ms do quadro de entrada de cada vizinho.
             const bool bakedInView = m_reliefBake.mode == 3 && m_reliefBake.amplitude > 0.0f;
-            if (m_seamWeld && !bakedInView && m_ctx->tessellationSupported() && m_bindless != nullptr && m_bindless->layerSize() == 0 &&
+            // HIBRIDO (relief_bake "gbuffer"): o chao nao assa, fica na
+            // tesselacao ao vivo - o assado de um chao grande abria a grade
+            // pelo teto de triangulos (mapa de campo: 1 u pedido, 3 u feito) e o
+            // filtro da grade apagava o grao. Modelos seguem assados.
+            const bool groundLive = m_reliefBake.mode == 3 && mesh.isGround;
+            if (m_seamWeld && (!bakedInView || groundLive) && m_ctx->tessellationSupported() && m_bindless != nullptr && m_bindless->layerSize() == 0 &&
                 !skinned && mesh.dispScale > 0.0f && mesh.swayAmount <= 0.0f) {
                 bool baked = false;
                 for (const auto& v : vertices)
@@ -3371,7 +3385,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             // pela altura cozida - o mesmo criterio da solda acima. Tarefa:
             // roda depois do laco, em paralelo (applyReliefs).
             if (m_reliefBake.mode != 0 && m_reliefBake.amplitude > 0.0f && !skinned && mesh.dispScale > 0.0f &&
-                mesh.swayAmount <= 0.0f) {
+                mesh.swayAmount <= 0.0f && !groundLive) {
                 bool baked = false;
                 for (const auto& v : vertices)
                     if (v.pbrIndex != 0) { baked = true; break; }
@@ -4102,7 +4116,8 @@ void ModelRenderer::recreatePipeline() {
         vkDestroyPipeline(m_ctx->device(), m_tessPipeline, nullptr);
         m_tessPipeline = VK_NULL_HANDLE;
     }
-    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineGroundLast, &m_tessPipelineGroundLast}) {
+    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineGroundLast, &m_tessPipelineGroundLast,
+                          &m_tessPipelineGeo, &m_tessPipelineGeoGroundLast}) {
         if (*p != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -4561,7 +4576,10 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         // entao nem patch nem o deslocamento do model.vert (seria duas vezes).
         const bool baked = mesh < m_meshes.size() && m_meshes[mesh].reliefInView &&
                            ib == m_meshes[mesh].reliefIndexBuffer;
-        DrawRec r{vb, ib, mesh, count, instances, firstIndex, firstInstance, levelCount, tessBound && !baked, {}};
+        DrawRec r{vb, ib, mesh, count, instances, firstIndex, firstInstance, levelCount, tessBound && !baked, false, {}};
+        // Chao na banda: niveis em degraus + geomorph (model_ground.tesc/.tese).
+        r.geo = r.tess && m_tessGroundGeomorph > 0.0f && m_tessPipelineGeo != VK_NULL_HANDLE &&
+                mesh < m_meshes.size() && m_meshes[mesh].isGround;
         const float dispKeep = push.uvScale.w;
         if (baked) push.uvScale.w = 0.0f;
         // uvScale.y = altura da malha (caixa local): a juncao com o chao
@@ -4574,6 +4592,12 @@ void ModelRenderer::render(VkCommandBuffer cmd,
                 push.weld = Vec4(static_cast<float>(wm.weldSlot), static_cast<float>(firstIndex / 3),
                                  static_cast<float>(wm.weldRows), 0.0f);
         }
+        // w > 0 em TODO desenho do chao com geomorph, com patch ou sem: o
+        // model.vert das celulas de fora da banda le' o mip em degraus
+        // (steppedMip) como o model.tese, e o vertice da divisa sai igual.
+        if (m_tessGroundGeomorph > 0.0f && m_tessPipelineGeo != VK_NULL_HANDLE && tessellationActive() &&
+            mesh < m_meshes.size() && m_meshes[mesh].isGround)
+            push.weld.w = m_tessGroundGeomorph;
         std::memcpy(r.push, &push, sizeof(push));
         push.uvScale.w = dispKeep;
         m_drawRecs.push_back(r);
@@ -5146,16 +5170,18 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     static const bool kGroundFirst = std::getenv("ERUPTION_TEST_GROUND_FIRST") != nullptr;
     const bool groundLast = !kGroundFirst && m_pipelineGroundLast != VK_NULL_HANDLE && !wireframeMode();
     auto last = [&](const DrawRec& r) {
-        return groundLast && m_meshes[r.mesh].isGround && (!r.tess || m_tessPipelineGroundLast != VK_NULL_HANDLE);
+        return groundLast && m_meshes[r.mesh].isGround &&
+               (!r.tess || (r.geo ? m_tessPipelineGeoGroundLast : m_tessPipelineGroundLast) != VK_NULL_HANDLE);
     };
     for (const DrawRec& r : m_drawRecs) {
         if (last(r)) continue;
-        VkPipeline pipe = r.tess ? m_tessPipeline : m_pipeline;
+        VkPipeline pipe = r.tess ? (r.geo ? m_tessPipelineGeo : m_tessPipeline) : m_pipeline;
         if (pre(r)) pipe = m_pipelineNoDepthWrite;
         play(r, pipe);
     }
     for (const DrawRec& r : m_drawRecs)
-        if (last(r)) play(r, r.tess ? m_tessPipelineGroundLast : m_pipelineGroundLast);
+        if (last(r))
+            play(r, r.tess ? (r.geo ? m_tessPipelineGeoGroundLast : m_tessPipelineGroundLast) : m_pipelineGroundLast);
     // ERUPTION_DEBUG_LODFADE=1: um log por frame com jobs>0 - diagnostico
     // pontual pra confirmar que a banda de transicao esta' sendo cruzada
     // (o log periodico do ERUPTION_DEBUG_DRAWSTATS so' imprime a cada 120

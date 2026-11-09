@@ -28,7 +28,7 @@ struct PreviewPush {
     Mat4 viewProjection;
     float alpha, metallicScale, roughnessScale, pad;
     Vec4 uvScale;    // z: UV por unidade, w: deslocamento (0 = desligado)
-    Vec4 eye;        // o vértice não lê; o fragment usa como olho
+    Vec4 eye;        // xyz: olho do fragment; w = weld.w do model.vert (0)
     Vec4 lightMode;  // xyz: direção da luz, w: modo
     Vec4 wireCut;    // rgb: cor do aramado, a: corte de alfa
 };
@@ -504,7 +504,7 @@ void ModelPreview::render(VkCommandBuffer cmd, float dt) {
                 push.alpha = 1.0f;
                 push.metallicScale = m->metallicScale;
                 push.roughnessScale = m->roughnessScale;
-                push.eye = Vec4(eye, 1.0f);
+                push.eye = Vec4(eye, 0.0f); // w cai no weld.w do model.vert: 0 = sem mip em degraus
                 push.uvScale = Vec4(1.0f, 1.0f, m->uvPerUnit, 0.0f);
                 push.lightMode = Vec4(-toLight, modeValue);
                 push.wireCut = Vec4(0.95f, 0.55f, 0.20f, alphaCut ? 0.5f : 0.0f);

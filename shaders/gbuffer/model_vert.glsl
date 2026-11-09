@@ -133,6 +133,23 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     mat4 u_prevViewProjNoJitter;
     vec4 u_jitterNdc;
     vec4 u_prevWindParams;
+    // Resto do FrameUBO ate' u_reliefParams (mesma ordem de model_frame_ubo.glsl).
+    vec4 u_seeThrough;
+    vec4 u_seeThrough2;
+    vec4 u_seeThrough3;
+    vec4 u_gbMaskU;
+    vec4 u_gbMaskV;
+    vec4 u_gbUvU;
+    vec4 u_gbUvV;
+    vec4 u_gbHeight;
+    uvec4 u_gbSplat;
+    uvec4 u_gbSlots;
+    uvec4 u_gbSlots2;
+    vec4 u_cutaway[12];
+    vec4 u_seeThroughBand;
+    vec4 u_seeThroughExtra[12];
+    vec4 u_alphaHash;
+    vec4 u_reliefParams;
 };
 
 // -----------------------------------------------------------------------------
@@ -236,6 +253,9 @@ layout(push_constant) uniform PushConstants {
     // telhado/metal/agua 0) - ver o bloco de categoria em ModelRenderer.
     vec4 uvScale;         // xy = nao usado, z = UV por unidade de mundo da
                           // malha (dispMipFloor), w = dispScale
+    // Mesmo bloco de model.tese: xyz = solda (so' o .tese le'), w > 0 = chao
+    // com geomorph (steppedMip). 0 em todo o resto (objetos, visualizadores).
+    vec4 weld;
 } push;
 
 vec2 applyUvAnimation(vec2 uv) {
@@ -322,12 +342,32 @@ float dispSpacingAt(vec3 p) {
     return max(mix(s, u_tessNearSpacing, k), mix(8.0, u_tessNearEdgePixels, k) / max(pxPerU, 1e-6));
 }
 
+// MIP DA ALTURA EM DEGRAUS (chao com geomorph, push.weld.w > 0 - ver
+// model_tesc.glsl, geomorphLevel). O mip continuo seguia a distancia
+// (dispSpacingAt) e a forma do relevo mudava a cada quadro com a camera
+// andando: medido no mapa de deserto, congelar so' isso tirava 0,12 de 0,33 do
+// tremido da areia. Aqui ele fica no inteiro de baixo e so' sobe para o
+// proximo na ultima fracao kMipStepSpan da oitava - a forma fica parada
+// entre as trocas e a troca e' rapida e suave, como o geomorph da grade.
+// Depende so' da posicao e da camera: o canto do patch (model.tese) e o
+// vertice original (model.vert) chegam ao mesmo mip e a mesma altura.
+// IDENTICO em model.vert/model.tese.
+const float kMipStepSpan = 0.15;
+float steppedMip(float m) {
+    float k = floor(m);
+    return k + clamp((m - k - (1.0 - kMipStepSpan)) / kMipStepSpan, 0.0, 1.0);
+}
+
 float dispMipFloor(uint texIdx) {
     float spacing = g_dispSpacing > 0.0 ? g_dispSpacing : u_tessParams2.y;
+    // Piso em u de mundo (tessellation_height_min_spacing): a forma do relevo
+    // nao muda com a distancia da camera. IDENTICO em model.vert/model.tese.
+    spacing = max(spacing, u_reliefParams.x);
     float uvPerU = push.uvScale.z;
     if (spacing <= 0.0 || uvPerU <= 0.0) return 0.0;
     float texels = float(slotTextureSize(texIdx, 0).x);
-    return log2(max(texels * uvPerU * spacing * 2.0, 1.0));
+    float m = log2(max(texels * uvPerU * spacing * 2.0, 1.0));
+    return push.weld.w > 0.0 ? steppedMip(m) : m;
 }
 
 // MIP DA LEITURA DE ALTURA. Altura cozida (MRAH-W, useAlpha) com a grade
@@ -392,37 +432,54 @@ float lut8(vec4 a, vec4 b, float t) {
 // vertice da banda longe (aqui) desloca diferente do vertice tesselado perto
 // (model.tese) e abre fenda na fronteira da banda (ver o bloco "DESLOCAMENTO
 // IGUAL AO DA TESSELACAO" abaixo).
-float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 splat2,
+// Altura de UMA camada do splat pela palavra de 16 bits dela: com MRAH-W
+// (bit kSplatHasMrahw, ModelRenderer::splatLayerSlot / TerrainPaint) le' a
+// altura cozida no slot+2; sem, a luminancia em passa-alta, como antes.
+float heightSplatLayer(uint word, vec2 uvIn, float gain) {
+    uint slot = word & 0x3FFFu;
+    if ((word & 0x4000u) != 0u) return heightUv(slot + 2u, uvIn, gain, true);
+    return heightUv(slot, uvIn, gain, false);
+}
+
+// basePbr != 0: a base do chao tem MRAH-W e entra pelo alfa dele (antes o chao
+// com base PBR ignorava as camadas e o relevo saia so' da base, mesmo onde a
+// tela mostrava outra camada - mapa de lava). basePbr = 0: o de antes.
+float heightSplatMix(vec2 uvIn, vec2 maskUv, uint baseTex, uint basePbr, uvec2 splat, uvec2 splat2,
                      uint maskIdx, uint maskIdx2, float gain) {
-    float hBase = heightUv(baseTex, uvIn, gain, false);
+    float hBase = basePbr != 0u ? heightUv(basePbr, uvIn, gain, true) : heightUv(baseTex, uvIn, gain, false);
     if ((splat.x | splat.y) == 0u || maskIdx == 0u) return hBase;
     vec4 w = slotTextureLod(maskIdx, maskUv, 0.0);
-    uint s0 =  splat.x        & 0x3FFFu;
-    uint s1 = (splat.x >> 16) & 0x3FFFu;
-    uint s2 =  splat.y        & 0x3FFFu;
-    uint s3 = (splat.y >> 16) & 0x3FFFu;
+    uint s0 =  splat.x        & 0xFFFFu;
+    uint s1 = (splat.x >> 16) & 0xFFFFu;
+    uint s2 =  splat.y        & 0xFFFFu;
+    uint s3 = (splat.y >> 16) & 0xFFFFu;
     float wBaseSum = w.r + w.g + w.b + w.a;
     float acc = 0.0, sum = 0.0;
-    if (s0 != 0u) { acc += heightUv(s0, uvIn, gain, false) * w.r; sum += w.r; }
-    if (s1 != 0u) { acc += heightUv(s1, uvIn, gain, false) * w.g; sum += w.g; }
-    if (s2 != 0u) { acc += heightUv(s2, uvIn, gain, false) * w.b; sum += w.b; }
-    if (s3 != 0u) { acc += heightUv(s3, uvIn, gain, false) * w.a; sum += w.a; }
+    if ((s0 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s0, uvIn, gain) * w.r; sum += w.r; }
+    if ((s1 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s1, uvIn, gain) * w.g; sum += w.g; }
+    if ((s2 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s2, uvIn, gain) * w.b; sum += w.b; }
+    if ((s3 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s3, uvIn, gain) * w.a; sum += w.a; }
     if (maskIdx2 != 0u) {
         vec4 w2 = slotTextureLod(maskIdx2, maskUv, 0.0);
-        uint s4 =  splat2.x        & 0x3FFFu;
-        uint s5 = (splat2.x >> 16) & 0x3FFFu;
-        uint s6 =  splat2.y        & 0x3FFFu;
-        uint s7 = (splat2.y >> 16) & 0x3FFFu;
+        uint s4 =  splat2.x        & 0xFFFFu;
+        uint s5 = (splat2.x >> 16) & 0xFFFFu;
+        uint s6 =  splat2.y        & 0xFFFFu;
+        uint s7 = (splat2.y >> 16) & 0xFFFFu;
         wBaseSum += w2.r + w2.g + w2.b + w2.a;
-        if (s4 != 0u) { acc += heightUv(s4, uvIn, gain, false) * w2.r; sum += w2.r; }
-        if (s5 != 0u) { acc += heightUv(s5, uvIn, gain, false) * w2.g; sum += w2.g; }
-        if (s6 != 0u) { acc += heightUv(s6, uvIn, gain, false) * w2.b; sum += w2.b; }
-        if (s7 != 0u) { acc += heightUv(s7, uvIn, gain, false) * w2.a; sum += w2.a; }
+        if ((s4 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s4, uvIn, gain) * w2.r; sum += w2.r; }
+        if ((s5 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s5, uvIn, gain) * w2.g; sum += w2.g; }
+        if ((s6 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s6, uvIn, gain) * w2.b; sum += w2.b; }
+        if ((s7 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s7, uvIn, gain) * w2.a; sum += w2.a; }
     }
     float wBase = max(0.0, 1.0 - wBaseSum);
     acc += hBase * wBase;
     sum += wBase;
     return sum > 1e-4 ? acc / sum : hBase;
+}
+
+float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 splat2,
+                     uint maskIdx, uint maskIdx2, float gain) {
+    return heightSplatMix(uvIn, maskUv, baseTex, 0u, splat, splat2, maskIdx, maskIdx2, gain);
 }
 
 void main() {
@@ -525,7 +582,10 @@ void main() {
             float hSrc = 0.0; // 1 = MRAH-W (altura cozida), 2 = albedo
             float gainH = max(u_normalDistParams.w, 0.1);
             if (inPbrIndex != 0u) {
-                hT = heightUv(inPbrIndex, animUv, gainH, true);
+                // Base com MRAH-W: no chao com splat as camadas entram na
+                // mistura (cada uma pelo proprio MRAH-W quando tiver).
+                hT = heightSplatMix(animUv, inBlendMaskUV, inTexIndex, inPbrIndex, inSplatTex, inSplatTex2,
+                                    inBlendMaskIndex, inBlendMaskIndex2, gainH);
                 hSrc = 1.0;
             } else if (inTexIndex != 0u) {
                 hT = heightSplatUv(animUv, inBlendMaskUV, inTexIndex, inSplatTex, inSplatTex2,

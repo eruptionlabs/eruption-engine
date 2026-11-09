@@ -166,6 +166,13 @@ struct FrameUBO {
     alignas(16) Vec4 seeThroughExtra[2 * kSeeThroughExtra];
     // x = forca do alfa-teste por hash (chave de preset alpha_hash), 0 = limiar fixo de sempre.
     alignas(16) Vec4 alphaHash;
+    // x = espacamento minimo (u) do filtro da altura da tesselacao (chave
+    // tessellation_height_min_spacing; 0 = so' a grade). model.vert/model.tese.
+    alignas(16) Vec4 reliefParams;
+    // SPRITES (gbuffer/sprite.frag, sprite_layer.frag): x = filtro (chave de
+    // preset sprite_filter: 0 nearest, 1 bilinear nitido), y = forca do normal
+    // map AUTORAL do sprite (sprite_normal_strength; 0 = sem). zw reservados.
+    alignas(16) Vec4 spriteParams;
 };
 
 // Luz pontual dominante de um sprite (Engine::spriteDominantLights), por

@@ -770,6 +770,8 @@ void Engine::render() {
     frameUbo.tessNearEdgePixels = m_tessNearEdgePixels;
     frameUbo.tessNearDistance = m_tessNearDistance;
     frameUbo.tessNearSpacing = m_tessNearSpacing;
+    frameUbo.reliefParams = Vec4(m_tessHeightMinSpacing, 0.0f, 0.0f, 0.0f);
+    frameUbo.spriteParams = Vec4(m_spriteFilter, m_spriteNormalStrength, 0.0f, 0.0f);
     m_modelRenderer.setTessellation(tessOn, tessBandDistance(m_tessCurve, distMax) * m_tessBandScale);
     m_modelRenderer.setTessAmplitude(frameUbo.tessParams.z);
     // Relevo efetivo no log quando muda (amplitude, banda da curva, banda

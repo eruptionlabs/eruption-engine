@@ -550,6 +550,12 @@ public:
     // Amplitude do deslocamento (u_tessParams.z) para o teto por tamanho de
     // malha (reliefSizeScale em ModelRenderer.cpp).
     void setTessAmplitude(float amplitude) { m_tessAmplitude = amplitude; }
+    // Chao tesselado com niveis em degraus (potencia de 2) + geomorph
+    // (model_ground.tesc/.tese): os vertices ficam parados no mundo e o relevo
+    // nao "nada" com a camera. Valor = escala do nivel continuo antes de
+    // arredondar para cima (densidade parecida com a de antes perto de 0,7);
+    // 0 = o caminho de antes (fractional_odd), bit a bit.
+    void setTessGroundGeomorph(float scale) { m_tessGroundGeomorph = scale; }
     // Relevo assado na carga (data/graphics.json "relief_bake*", aplicado em
     // Engine::applyGraphicsPreset): vale para as malhas carregadas depois.
     // mode 0 = nao assa; 1 = so' a sombra; 2 = sombra e G-buffer (sem tesselacao).
@@ -1451,6 +1457,7 @@ private:
     VkShaderStageFlags m_pushStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     float m_tessBandDistance = 0.0f;
     float m_tessAmplitude = 0.0f;
+    float m_tessGroundGeomorph = 0.0f;
     ReliefBakeConfig m_reliefBake;
     ReliefTextureSource m_reliefSource;
     struct ReliefFloorRef {
@@ -1544,6 +1551,10 @@ private:
     VkPipeline m_pipelineNoDepthWrite = VK_NULL_HANDLE;
     VkPipeline m_pipelineGroundLast = VK_NULL_HANDLE; // m_pipeline com teste <, ver render()
     VkPipeline m_tessPipelineGroundLast = VK_NULL_HANDLE; // idem, o de tesselacao
+    // Chao com niveis em degraus + geomorph (model_ground.tesc/.tese): so' as
+    // celulas de chao na banda, com m_tessGroundGeomorph > 0.
+    VkPipeline m_tessPipelineGeo = VK_NULL_HANDLE;
+    VkPipeline m_tessPipelineGeoGroundLast = VK_NULL_HANDLE;
     // Desenhos do passe principal, gravados para tocar duas vezes (pre-passe
     // e G-buffer). Push inteiro por desenho: a segunda passada do crossfade
     // herda campos do push anterior, e a copia preserva isso.
@@ -1552,6 +1563,7 @@ private:
         uint32_t mesh, count, instances, firstIndex, firstInstance;
         uint32_t levelCount; // indices do degrau inteiro (o desenho pode ser so' um trecho)
         bool tess;
+        bool geo; // tess pelo par do chao com geomorph (m_tessPipelineGeo*)
         uint8_t push[112];
     };
     std::vector<DrawRec> m_drawRecs;

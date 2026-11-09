@@ -10,7 +10,14 @@
 // curva chega a 1 (fim da banda) o deslocamento e' ZERO e o patch coincide com
 // o triangulo original. E' o que evita costura na fronteira.
 
+#ifdef ERUPTION_TESS_GEOMORPH
+// Chao com geomorph (model_tesc.glsl, geomorphLevel): nivel inteiro, potencia
+// de 2 - equal_spacing da' a grade regular, que se aninha entre degraus.
+layout(triangles, equal_spacing, ccw) in;
+layout(location = 21) patch in vec4 tcMorph;
+#else
 layout(triangles, fractional_odd_spacing, ccw) in;
+#endif
 
 layout(location = 0) in vec3 inWorldPos[];
 layout(location = 1) in vec2 inTexCoord[];
@@ -132,7 +139,30 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     float u_tessNearEdgePixels;
     float u_tessNearDistance;
     float u_tessNearSpacing;
+    mat4 u_viewProjNoJitter;
+    mat4 u_prevViewProjNoJitter;
+    vec4 u_jitterNdc;
+    vec4 u_prevWindParams;
+    // Resto do FrameUBO ate' u_reliefParams (mesma ordem de model_frame_ubo.glsl).
+    vec4 u_seeThrough;
+    vec4 u_seeThrough2;
+    vec4 u_seeThrough3;
+    vec4 u_gbMaskU;
+    vec4 u_gbMaskV;
+    vec4 u_gbUvU;
+    vec4 u_gbUvV;
+    vec4 u_gbHeight;
+    uvec4 u_gbSplat;
+    uvec4 u_gbSlots;
+    uvec4 u_gbSlots2;
+    vec4 u_cutaway[12];
+    vec4 u_seeThroughBand;
+    vec4 u_seeThroughExtra[12];
+    vec4 u_alphaHash;
+    vec4 u_reliefParams;
 };
+
+
 
 // ALTURA PELA UV DA MALHA - o relevo coincide com a textura que se ve, onde o
 // desenho e' escuro/fundo a geometria afunda (o que o olho espera). Existiu
@@ -196,12 +226,38 @@ float dispSpacingAt(vec3 p) {
     return max(mix(s, u_tessNearSpacing, k), mix(8.0, u_tessNearEdgePixels, k) / max(pxPerU, 1e-6));
 }
 
+#ifdef ERUPTION_TESS_GEOMORPH
+// MIP DA ALTURA EM DEGRAUS (chao com geomorph, push.weld.w > 0 - ver
+// model_tesc.glsl, geomorphLevel). O mip continuo seguia a distancia
+// (dispSpacingAt) e a forma do relevo mudava a cada quadro com a camera
+// andando: medido no mapa de deserto, congelar so' isso tirava 0,12 de 0,33 do
+// tremido da areia. Aqui ele fica no inteiro de baixo e so' sobe para o
+// proximo na ultima fracao kMipStepSpan da oitava - a forma fica parada
+// entre as trocas e a troca e' rapida e suave, como o geomorph da grade.
+// Depende so' da posicao e da camera: o canto do patch (model.tese) e o
+// vertice original (model.vert) chegam ao mesmo mip e a mesma altura.
+// IDENTICO em model.vert/model.tese.
+const float kMipStepSpan = 0.15;
+float steppedMip(float m) {
+    float k = floor(m);
+    return k + clamp((m - k - (1.0 - kMipStepSpan)) / kMipStepSpan, 0.0, 1.0);
+}
+#endif
+
 float dispMipFloor(uint texIdx) {
     float spacing = g_dispSpacing > 0.0 ? g_dispSpacing : u_tessParams2.y;
+    // Piso em u de mundo (tessellation_height_min_spacing): a forma do relevo
+    // nao muda com a distancia da camera. IDENTICO em model.vert/model.tese.
+    spacing = max(spacing, u_reliefParams.x);
     float uvPerU = push.uvScale.z;
     if (spacing <= 0.0 || uvPerU <= 0.0) return 0.0;
     float texels = float(slotTextureSize(texIdx, 0).x);
+#ifdef ERUPTION_TESS_GEOMORPH
+    float m = log2(max(texels * uvPerU * spacing * 2.0, 1.0));
+    return push.weld.w > 0.0 ? steppedMip(m) : m;
+#else
     return log2(max(texels * uvPerU * spacing * 2.0, 1.0));
+#endif
 }
 
 // MIP DA LEITURA DE ALTURA. Altura cozida (MRAH-W, useAlpha) com a grade
@@ -315,32 +371,44 @@ float lut8(vec4 a, vec4 b, float t) {
 // de 1, normaliza no fim. Custa ate' 8 leituras de height a mais (1 par de
 // mip por camada ativa) so' dentro da banda perto tesselada - caro se o autor
 // usar as 8 camadas nesse alcance, mas o alcance ja' e' pequeno de proposito.
-float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 splat2,
+// Altura de UMA camada do splat pela palavra de 16 bits dela: com MRAH-W
+// (bit kSplatHasMrahw, ModelRenderer::splatLayerSlot / TerrainPaint) le' a
+// altura cozida no slot+2; sem, a luminancia em passa-alta, como antes.
+float heightSplatLayer(uint word, vec2 uvIn, float gain) {
+    uint slot = word & 0x3FFFu;
+    if ((word & 0x4000u) != 0u) return heightUv(slot + 2u, uvIn, gain, true);
+    return heightUv(slot, uvIn, gain, false);
+}
+
+// basePbr != 0: a base do chao tem MRAH-W e entra pelo alfa dele (antes o chao
+// com base PBR ignorava as camadas e o relevo saia so' da base, mesmo onde a
+// tela mostrava outra camada - mapa de lava). basePbr = 0: o de antes.
+float heightSplatMix(vec2 uvIn, vec2 maskUv, uint baseTex, uint basePbr, uvec2 splat, uvec2 splat2,
                      uint maskIdx, uint maskIdx2, float gain) {
-    float hBase = heightUv(baseTex, uvIn, gain, false);
+    float hBase = basePbr != 0u ? heightUv(basePbr, uvIn, gain, true) : heightUv(baseTex, uvIn, gain, false);
     if ((splat.x | splat.y) == 0u || maskIdx == 0u) return hBase;
     vec4 w = slotTextureLod(maskIdx, maskUv, 0.0);
-    uint s0 =  splat.x        & 0x3FFFu;
-    uint s1 = (splat.x >> 16) & 0x3FFFu;
-    uint s2 =  splat.y        & 0x3FFFu;
-    uint s3 = (splat.y >> 16) & 0x3FFFu;
+    uint s0 =  splat.x        & 0xFFFFu;
+    uint s1 = (splat.x >> 16) & 0xFFFFu;
+    uint s2 =  splat.y        & 0xFFFFu;
+    uint s3 = (splat.y >> 16) & 0xFFFFu;
     float wBaseSum = w.r + w.g + w.b + w.a;
     float acc = 0.0, sum = 0.0;
-    if (s0 != 0u) { acc += heightUv(s0, uvIn, gain, false) * w.r; sum += w.r; }
-    if (s1 != 0u) { acc += heightUv(s1, uvIn, gain, false) * w.g; sum += w.g; }
-    if (s2 != 0u) { acc += heightUv(s2, uvIn, gain, false) * w.b; sum += w.b; }
-    if (s3 != 0u) { acc += heightUv(s3, uvIn, gain, false) * w.a; sum += w.a; }
+    if ((s0 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s0, uvIn, gain) * w.r; sum += w.r; }
+    if ((s1 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s1, uvIn, gain) * w.g; sum += w.g; }
+    if ((s2 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s2, uvIn, gain) * w.b; sum += w.b; }
+    if ((s3 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s3, uvIn, gain) * w.a; sum += w.a; }
     if (maskIdx2 != 0u) {
         vec4 w2 = slotTextureLod(maskIdx2, maskUv, 0.0);
-        uint s4 =  splat2.x        & 0x3FFFu;
-        uint s5 = (splat2.x >> 16) & 0x3FFFu;
-        uint s6 =  splat2.y        & 0x3FFFu;
-        uint s7 = (splat2.y >> 16) & 0x3FFFu;
+        uint s4 =  splat2.x        & 0xFFFFu;
+        uint s5 = (splat2.x >> 16) & 0xFFFFu;
+        uint s6 =  splat2.y        & 0xFFFFu;
+        uint s7 = (splat2.y >> 16) & 0xFFFFu;
         wBaseSum += w2.r + w2.g + w2.b + w2.a;
-        if (s4 != 0u) { acc += heightUv(s4, uvIn, gain, false) * w2.r; sum += w2.r; }
-        if (s5 != 0u) { acc += heightUv(s5, uvIn, gain, false) * w2.g; sum += w2.g; }
-        if (s6 != 0u) { acc += heightUv(s6, uvIn, gain, false) * w2.b; sum += w2.b; }
-        if (s7 != 0u) { acc += heightUv(s7, uvIn, gain, false) * w2.a; sum += w2.a; }
+        if ((s4 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s4, uvIn, gain) * w2.r; sum += w2.r; }
+        if ((s5 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s5, uvIn, gain) * w2.g; sum += w2.g; }
+        if ((s6 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s6, uvIn, gain) * w2.b; sum += w2.b; }
+        if ((s7 & 0x3FFFu) != 0u) { acc += heightSplatLayer(s7, uvIn, gain) * w2.a; sum += w2.a; }
     }
     float wBase = max(0.0, 1.0 - wBaseSum);
     acc += hBase * wBase;
@@ -348,12 +416,81 @@ float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 spl
     return sum > 1e-4 ? acc / sum : hBase;
 }
 
+float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 splat2,
+                     uint maskIdx, uint maskIdx2, float gain) {
+    return heightSplatMix(uvIn, maskUv, baseTex, 0u, splat, splat2, maskIdx, maskIdx2, gain);
+}
+
 
 // NAO nomear o parametro 'x': o preprocessador do GLSL substitui tokens, e o
 // 'x' de gl_TessCoord.x tambem seria trocado ("unknown swizzle selection").
-#define BARY(attr_) (gl_TessCoord.x * attr_[0] + gl_TessCoord.y * attr_[1] + gl_TessCoord.z * attr_[2])
+#ifdef ERUPTION_TESS_GEOMORPH
+// Coordenada do vertice depois do geomorph (geomorphCoord); tudo que era
+// gl_TessCoord le' daqui.
+vec3 g_bc;
+#define TESS_BC g_bc
+
+// Ordem fixa entre as duas pontas de uma aresta, pela posicao no mundo: os
+// dois patches que dividem a aresta a percorrem em sentidos opostos, mas
+// chegam a mesma ponta "primeira" - e o vertice da aresta vai pro mesmo lugar
+// nos dois (sem racha).
+bool worldLess(vec3 a, vec3 b) {
+    if (a.x != b.x) return a.x < b.x;
+    if (a.y != b.y) return a.y < b.y;
+    return a.z < b.z;
+}
+
+// GEOMORPH (ver model_tesc.glsl, geomorphLevel). No nivel n (potencia de 2,
+// equal_spacing) os vertices sao a grade (i, j, k) / n. Os que tem as tres
+// coordenadas pares ja' existiam no degrau n/2 e ficam onde estao; os outros
+// tem duas impares e sao o ponto medio de uma aresta da grade grossa - nascem
+// numa ponta dela (peso 0) e andam ate' o lugar (peso 1). Com todos colados, a
+// malha fina e' a grossa: em cada triangulo grosso exatamente um triangulo
+// fino cobre o grosso inteiro e o resto degenera (as pontas escolhidas formam
+// um ciclo e o do meio cobre, ou ha' uma ponta de onde as duas arestas saem e
+// o do canto cobre). A coordenada inteira muda (UV, normal, altura...), entao
+// o vertice colado e' identico ao vertice grosso, inclusive na luz.
+vec3 geomorphCoord() {
+    vec3 t = gl_TessCoord;
+    for (int e = 0; e < 3; ++e) {
+        if (t[e] > 1e-4) continue;
+        // Vertice na aresta e (oposta ao vertice e): nivel e peso da aresta,
+        // que os dois patches vizinhos tem iguais.
+        float q = gl_TessLevelOuter[e];
+        if (q < 1.5) return t;
+        int a = (e + 1) % 3, b = (e + 2) % 3;
+        bool aFirst = worldLess(inWorldPos[a], inWorldPos[b]);
+        float s = aFirst ? t[b] : t[a];      // fracao a partir da ponta "primeira"
+        float k = floor(s * q + 0.5);
+        if (mod(k, 2.0) < 0.5) return t;     // ja' existia no degrau de baixo
+        float sc = (k - 1.0) / q;
+        vec3 r = vec3(0.0);
+        if (aFirst) { r[b] = sc; r[a] = 1.0 - sc; }
+        else        { r[a] = sc; r[b] = 1.0 - sc; }
+        return mix(r, t, tcMorph[e]);
+    }
+    float q = gl_TessLevelInner[0];
+    if (q < 1.5) return t;
+    vec3 k = floor(t * q + 0.5);
+    k.z = q - k.x - k.y;
+    bvec3 odd = greaterThan(mod(k, 2.0), vec3(0.5));
+    if (!any(odd)) return t;
+    // Duas impares (a soma q e' par): sobe a primeira, desce a segunda.
+    vec3 r = k;
+    if (odd.x) { r.x += 1.0; if (odd.y) r.y -= 1.0; else r.z -= 1.0; }
+    else       { r.y += 1.0; r.z -= 1.0; }
+    return mix(r / q, t, tcMorph.w);
+}
+#else
+#define TESS_BC gl_TessCoord
+#endif
+
+#define BARY(attr_) (TESS_BC.x * attr_[0] + TESS_BC.y * attr_[1] + TESS_BC.z * attr_[2])
 
 void main() {
+#ifdef ERUPTION_TESS_GEOMORPH
+    g_bc = geomorphCoord();
+#endif
     vec3 wp   = BARY(inWorldPos);
     const vec3 wpBase = wp;
     vec2 uv   = BARY(inTexCoord);
@@ -408,7 +545,10 @@ void main() {
             float hSrc = 0.0; // 1 = MRAH-W (altura cozida), 2 = albedo
             float gainH = max(u_normalDistParams.w, 0.1);
             if (inPbrIndex[0] != 0u) {
-                h = heightUv(inPbrIndex[0], uv, gainH, true);
+                // Base com MRAH-W: no chao com splat as camadas entram na
+                // mistura (cada uma pelo proprio MRAH-W quando tiver).
+                h = heightSplatMix(uv, outBlendMaskUV, inTexIndex[0], inPbrIndex[0], inSplatTex[0], inSplatTex2[0],
+                                   inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
                 hSrc = 1.0;
             } else if (inTexIndex[0] != 0u) {
                 // CHAO COM SPLAT: la' embaixo pode ter ate' 8 camadas por cima
@@ -439,7 +579,7 @@ void main() {
                 bool sm0 = (inMatId[0] & 0x8000u) != 0u;
                 bool sm1 = (inMatId[1] & 0x8000u) != 0u;
                 bool sm2 = (inMatId[2] & 0x8000u) != 0u;
-                vec3 bc = gl_TessCoord;
+                vec3 bc = TESS_BC;
                 float we0 = bc.y * bc.z, we1 = bc.z * bc.x, we2 = bc.x * bc.y;
                 float wsum = we0 + we1 + we2;
                 float edgeBlend;
@@ -556,9 +696,12 @@ void main() {
                         // das camadas (a mascara muda devagar, fica no ponto).
                         float h0, hU, hV;
                         if (hAlpha) {
-                            h0 = heightUv(hTex, uv, gainH, true);
-                            hU = heightUv(hTex, uv + vec2(dUv, 0.0), gainH, true);
-                            hV = heightUv(hTex, uv + vec2(0.0, dUv), gainH, true);
+                            h0 = heightSplatMix(uv, outBlendMaskUV, inTexIndex[0], hTex, inSplatTex[0], inSplatTex2[0],
+                                                inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
+                            hU = heightSplatMix(uv + vec2(dUv, 0.0), outBlendMaskUV, inTexIndex[0], hTex, inSplatTex[0],
+                                                inSplatTex2[0], inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
+                            hV = heightSplatMix(uv + vec2(0.0, dUv), outBlendMaskUV, inTexIndex[0], hTex, inSplatTex[0],
+                                                inSplatTex2[0], inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
                         } else {
                             h0 = heightSplatUv(uv, outBlendMaskUV, inTexIndex[0], inSplatTex[0], inSplatTex2[0],
                                                inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);

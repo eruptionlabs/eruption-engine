@@ -2991,12 +2991,32 @@ void Engine::applyGraphicsPreset() {
     m_tessNearDistance = std::clamp(p.value("tessellation_near_distance", 0.0f), 0.0f, 1000.0f);
     m_tessNearSpacing = std::clamp(p.value("tessellation_near_spacing", m_tessVertexSpacing), 0.01f, 4.0f);
     m_tessNearEdgePixels = std::clamp(p.value("tessellation_near_edge_pixels", 8.0f), 1.0f, 32.0f);
+    // PISO DO FILTRO DA ALTURA, em u de mundo. A altura e' lida com o filtro
+    // do espacamento da grade, e a grade afina com a camera (2,6 u a 300 u,
+    // 0,25 u a 50 u): chegando perto aparecia relevo novo e forte que de longe
+    // nao existia - o chao "mudava de forma" e exagerava (mapa de deserto). Com o
+    // piso a forma do relevo fica a mesma em toda a banda perto; a grade fina
+    // continua, so' deixa a superficie mais lisa. 0 = como antes.
+    m_tessHeightMinSpacing = std::clamp(p.value("tessellation_height_min_spacing", 0.0f), 0.0f, 16.0f);
+    m_spriteFilter = std::clamp(p.value("sprite_filter", 0.0f), 0.0f, 1.0f);
+    // Luz volumetrica do sol: 0 desliga, 1 meia resolucao, 2 um quarto.
+    m_volumetricMode = std::clamp(p.value("volumetric_light", 0), 0, 2);
+    m_volumetricSteps = std::clamp(p.value("volumetric_steps", 24), 4, 128);
+    m_volumetricMaxDist = std::clamp(p.value("volumetric_max_distance", 600.0f), 10.0f, 20000.0f);
+    m_volumetric.setMode(m_volumetricMode);
+    m_spriteNormalStrength = std::clamp(p.value("sprite_normal_strength", 1.0f), 0.0f, 2.0f);
     // Solda da costura do deslocamento (ModelRenderer::createSeamWeld): vale
     // para as malhas carregadas depois. ERUPTION_TEST_SEAM_WELD=0|1 (bancada)
     // passa por cima do preset.
     bool seamWeld = p.value("tessellation_seam_weld", false);
     if (const char* e = std::getenv("ERUPTION_TEST_SEAM_WELD")) seamWeld = std::atoi(e) != 0;
     m_modelRenderer.setSeamWeld(seamWeld && p.value("tessellation", true));
+    // CHAO SEM "NADAR" (model_ground.tesc/.tese): niveis da tesselacao do chao
+    // em potencia de 2 com geomorph - os vertices ficam parados no mundo e os
+    // novos de cada degrau nascem colados nos grossos. O valor escala o nivel
+    // continuo antes do arredondamento para cima (densidade); 0 = o caminho
+    // de antes (fractional_odd), bit a bit. Os objetos nao mudam.
+    m_modelRenderer.setTessGroundGeomorph(std::clamp(p.value("tessellation_ground_geomorph", 0.0f), 0.0f, 2.0f));
     // Amplitude do relevo por preset, por cima da do bloco normal_distance
     // (1,25, que segue valendo no celular). PC: 12, a da bancada de relevo em
     // que a grade por distancia, a solda e a altura refinada foram medidas.

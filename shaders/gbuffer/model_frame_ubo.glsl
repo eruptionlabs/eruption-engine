@@ -84,4 +84,9 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_seeThroughExtra[12];
     // x = forca do alfa-teste por hash (gbuffer/alpha_hash.glsl), 0 desliga.
     vec4 u_alphaHash;
+    // x = espacamento minimo (u) do filtro da altura (FrameUBO::reliefParams).
+    vec4 u_reliefParams;
+    // Sprites (FrameUBO::spriteParams): x = sprite_filter (0 nearest, 1
+    // bilinear nitido), y = sprite_normal_strength (normal map autoral).
+    vec4 u_spriteParams;
 };
