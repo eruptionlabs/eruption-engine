@@ -634,6 +634,9 @@ bool Engine::init(int width, int height, const std::string& title) {
     uint32_t postH = std::max(64u, static_cast<uint32_t>(height * m_postScale));
     if (m_upscalerMode == UpscalerMode::FsrBeforePost) { postW = displayExt.width; postH = displayExt.height; }
     if (!m_postProcessor.init(&m_vulkan, postW, postH)) return false;
+    // Modo 0 ate' o preset ser lido (applyGraphicsPreset chama setMode).
+    if (!m_volumetric.init(&m_vulkan, static_cast<uint32_t>(width), static_cast<uint32_t>(height), 0))
+        ERUPTION_LOG_WARN("Luz volumetrica: pipelines nao criadas, efeito desligado");
     m_postProcessor.setWeatherSystem(&m_weatherSystem);
     // Sem o mapa a visao so' nao escurece a tela (o composite recebe a cena).
     if (!m_visionMap.init(&m_vulkan, m_vision.texels())) ERUPTION_LOG_WARN("Visao: sem textura, a tela nao escurece");
@@ -940,6 +943,23 @@ bool Engine::init(int width, int height, const std::string& title) {
 
     m_postConfig.load(project::config("data/postprocess.json"));
     m_postSettings.loadFromJson(m_postConfig.root());
+    // ERUPTION_TEST_POST_SET="chave=valor,chave=valor" (bancada): sobrepoe
+    // chaves do data/postprocess.json (visualize_coc, tilt_*, coc_*) sem editar
+    // o arquivo do projeto. Vai numa copia: o editor nunca grava o override.
+    if (const char* e = std::getenv("ERUPTION_TEST_POST_SET"); e && *e) {
+        nlohmann::json over = m_postConfig.root().is_object() ? m_postConfig.root() : nlohmann::json::object();
+        std::stringstream list(e);
+        std::string item;
+        while (std::getline(list, item, ',')) {
+            const size_t eq = item.find('=');
+            if (eq == std::string::npos || eq == 0) continue;
+            const std::string key = item.substr(0, eq), value = item.substr(eq + 1);
+            const nlohmann::json v = nlohmann::json::parse(value, nullptr, false);
+            over[key] = v.is_discarded() ? nlohmann::json(value) : v;
+            ERUPTION_LOG_WARN("[POST] %s = %s (ERUPTION_TEST_POST_SET)", key.c_str(), value.c_str());
+        }
+        m_postSettings.loadFromJson(over);
+    }
     // ERUPTION_TEST_RAIN_OCCLUSION=1: mapa de oclusao das particulas de clima
     // (cor = motivo do descarte), o mesmo do checkbox do painel.
     if (std::getenv("ERUPTION_TEST_RAIN_OCCLUSION")) m_postSettings.debugRainOcclusion = true;
@@ -1020,6 +1040,23 @@ bool Engine::init(int width, int height, const std::string& title) {
         }
     } else {
         m_lookConfig = DioramaLookConfig::fieldLook();
+    }
+    // ERUPTION_TEST_LOOK_SET="chave=valor;chave=valor" (bancada): campos do
+    // look por cima do preset, como um world.set_look (lift=[0.02,0,0],
+    // wb_temperature=20...). Separador ';' porque as cores levam virgula.
+    if (const char* e = std::getenv("ERUPTION_TEST_LOOK_SET"); e && *e) {
+        nlohmann::json over = nlohmann::json::object();
+        std::stringstream list(e);
+        std::string item;
+        while (std::getline(list, item, ';')) {
+            const size_t eq = item.find('=');
+            if (eq == std::string::npos || eq == 0) continue;
+            const std::string key = item.substr(0, eq), value = item.substr(eq + 1);
+            const nlohmann::json v = nlohmann::json::parse(value, nullptr, false);
+            over[key] = v.is_discarded() ? nlohmann::json(value) : v;
+            ERUPTION_LOG_WARN("[LOOK] %s = %s (ERUPTION_TEST_LOOK_SET)", key.c_str(), value.c_str());
+        }
+        m_lookConfig.loadFromJson(over);
     }
 
     m_charConfig.load(project::config("data/char_config.json"));
@@ -1509,7 +1546,7 @@ void Engine::shutdown() {
     m_fsr.shutdown();
     m_visionMap.shutdown();
     m_visionMinimap.shutdown();
-    m_postProcessor.shutdown(); shutdownShimmerMetric(); MipmapGenerator::shutdownCompute(&m_vulkan);
+    m_volumetric.shutdown(); m_postProcessor.shutdown(); shutdownShimmerMetric(); MipmapGenerator::shutdownCompute(&m_vulkan);
     // Independent cloud layers must be released while the Vulkan context and
     // the cloud renderer are still alive (they own VMA allocations and hold
     // renderer slots).
@@ -2815,6 +2852,17 @@ void Engine::applyGraphicsPreset() {
     }
     if (p.contains("ssao")) m_ssaoEnabled = p["ssao"];
     envOverrideBool("ERUPTION_TEST_SSAO", m_ssaoEnabled);
+    // Forca, raio e direcoes do SSAO por preset; as variaveis de teste vencem.
+    // ERUPTION_TEST_SSAO_TAPS=<4..12> (teste): direcoes do kernel.
+    if (p.contains("ssao_strength")) m_ssaoStrength = p["ssao_strength"];
+    if (p.contains("ssao_radius")) m_ssaoRadius = p["ssao_radius"];
+    if (const char* e = std::getenv("ERUPTION_TEST_SSAO_STRENGTH")) m_ssaoStrength = std::stof(e);
+    if (const char* e = std::getenv("ERUPTION_TEST_SSAO_RADIUS")) m_ssaoRadius = std::stof(e);
+    {
+        int taps = p.value("ssao_taps", 12);
+        if (const char* e = std::getenv("ERUPTION_TEST_SSAO_TAPS")) taps = std::atoi(e);
+        m_deferredLighting.setSsaoTaps(taps);
+    }
     // FXAA no fim do post + upscale bicubico/nitidez, no lugar do bilinear
     // cru. `aa_sharpen` 0 = so' o upscale, sem nitidez (equivalente visual ao
     // upscale antigo, so' que menos borrado por ser bicubico em vez de

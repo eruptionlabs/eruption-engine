@@ -28,6 +28,14 @@ layout(set = 0, binding = 11) uniform sampler2D dofBlurTexture;
 layout(set = 0, binding = 12) uniform sampler2D dofCocTexture;
 layout(set = 0, binding = 13) uniform sampler2D dofFarTexture;
 
+// LUT 3D de grading (renderer/ColorGrade.cpp): entrada = cor pos-tonemap em
+// gamma 1/2.2, saida = linear/2 em gamma 1/2.2. Lida so' com gradeParams2.x > 0.
+layout(set = 0, binding = 14) uniform sampler3D gradeLut;
+// Luz volumetrica do sol (VolumetricLight, 1/2 ou 1/4 da resolucao): rgb =
+// luz espalhada no ar (unidades da cena, antes da exposicao). Lida so' com
+// volumetricParams.x > 0.
+layout(set = 0, binding = 15) uniform sampler2D volumetricTexture;
+
 bool spritePixel(vec2 uv) { return abs(texture(spriteMarkTexture, uv).r - 0.75) < 0.06; }
 
 // Bloco no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
@@ -63,7 +71,18 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec4 outlineParams;   // x=modo (0 desliga, 1 lite 4 taps, 2 completo 8 taps), y=espessura em px, z=near, w=far
     vec4 outlineColor;    // rgb=cor (ja' em gamma de tela), a=opacidade maxima
     vec4 outlineParams2;  // x=limiar relativo de profundidade, y=1 inclui sprites
+    vec4 gradeParams2;    // x=mistura da LUT 3D de grading (0 = analitico).
+    vec4 volumetricParams; // x=forca da luz volumetrica (0 = nao le'). Bloco de 464 B.
 } push;
+
+// A LUT substitui applyGrading + applySplitToning (e soma balanco de branco,
+// lift/gamma/gain, vibrance, curva e .cube): ver ColorGrade.hpp.
+vec3 applyGradeLut(vec3 c) {
+    const float n = float(textureSize(gradeLut, 0).x);
+    vec3 e = pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+    vec3 g = texture(gradeLut, e * ((n - 1.0) / n) + 0.5 / n).rgb;
+    return pow(g, vec3(2.2)) * 2.0;
+}
 
 // Cor da cena em `uv`, com o DoF misturado quando ele vem fundido.
 vec3 sceneColor(vec2 uv) {
@@ -349,6 +368,10 @@ void main() {
         color /= float(samples);
     }
 
+    // Luz volumetrica do sol: antes da exposicao (mesmas unidades da cena) e
+    // da nevoa, que a cobre no longe como cobre o resto.
+    if (push.volumetricParams.x > 0.0) color += texture(volumetricTexture, fragUV).rgb * push.volumetricParams.x;
+
     // Exposure
     color *= push.exposureBloom.x;
 
@@ -505,8 +528,12 @@ void main() {
     color = applyToneMapping(max(color, vec3(0.0)), push.motionBlurParams.z);
 
     // Grading do LookConfig (saturacao/contraste do preset ativo).
-    color = applyGrading(color, push.gradingParams.x, push.gradingParams.y);
-    color = applySplitToning(color, push.shadowTint, push.highlightTint);
+    if (push.gradeParams2.x > 0.0) {
+        color = mix(color, applyGradeLut(color), push.gradeParams2.x);
+    } else {
+        color = applyGrading(color, push.gradingParams.x, push.gradingParams.y);
+        color = applySplitToning(color, push.shadowTint, push.highlightTint);
+    }
     color *= vignetteFactor(fragUV, vec2(textureSize(hdrTexture, 0)), push.vignetteParams);
 
     // Gamma 2.2

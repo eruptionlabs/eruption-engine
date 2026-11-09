@@ -1,4 +1,9 @@
 #pragma once
+
+#include "renderer/ColorGrade.hpp"
+#include <memory>
+
+#include <limits>
 #include "renderer/PushRing.hpp"
 #include <map>
 
@@ -93,6 +98,25 @@ public:
         float cocMaxBlurNear = -1.0f; // < 0: coc_max_blur
         float cocMaxBlurFar = -1.0f;  // < 0: coc_max_blur
         float cocEdge = 0.0f;         // u de mundo: rampa suave depois da faixa em foco
+        // coc_model "tilt_plane": tilt-shift de verdade. O plano focal passa
+        // pelo ponto de foco (world.set_focus; sem ele, o centro da tela na
+        // distancia focal), contem o vetor direita da camera e tem a normal
+        // girada por cocTiltAngle graus a partir da horizontal: 0 = plano
+        // vertical de frente para a camera (tudo que esta' em pe na distancia
+        // do assunto fica nitido; o chao na frente e atras desfoca), 90 =
+        // plano horizontal na altura do assunto. CoC com sinal pela distancia
+        // s ao plano (u de mundo): longe = cocTiltMaxFar*smoothstep(faixa,
+        // faixa+rampa_longe, s), perto idem com -s. Tetos em px a 1080p
+        // (escalados pela altura real). cocScreenMix mistura uma faixa de
+        // tela (0 = so' o plano).
+        bool cocTiltPlane = false;
+        float cocTiltAngle = 0.0f;     // graus
+        float cocTiltBand = 30.0f;     // u de mundo de cada lado do plano
+        float cocRampNear = 60.0f;     // u de mundo
+        float cocRampFar = 150.0f;     // u de mundo
+        float cocTiltMaxNear = 6.0f;   // px a 1080p
+        float cocTiltMaxFar = 12.0f;   // px a 1080p
+        float cocScreenMix = 0.0f;     // 0..1
         bool cocEnableForeground = true;
         bool visualizeCoC = false;
 
@@ -116,6 +140,20 @@ public:
         bool focusForeground = true;   // borra tambem o que esta' na FRENTE
         float focusBand = -1.0f;       // < 0: mantem cocFocusBand
         float focusMaxBlur = -1.0f;    // < 0: mantem cocMaxBlur
+        // Ponto do assunto (mundo) para o plano do coc_model "tilt_plane".
+        bool focusPointSet = false;
+        Vec3 focusPoint{0.0f};
+        // Tabela do world.set_focus (forma nova): modelo e plano so' enquanto
+        // focusOverride vale. focusModel < 0 mantem o do postprocess.json
+        // (0 linear, 1 thin_lens, 2 tilt_plane); os campos < 0 (ou NaN no
+        // angulo) mantem os do arquivo.
+        int focusModel = -1;
+        float focusTiltAngle = std::numeric_limits<float>::quiet_NaN();
+        float focusRampNear = -1.0f;
+        float focusRampFar = -1.0f;
+        float focusTiltMaxNear = -1.0f;
+        float focusTiltMaxFar = -1.0f;
+        float focusScreenMix = -1.0f;
         // Visualizacao crua do G-buffer ligada (checkbox "Show Normal (RGB)" e
         // irmaos). Faz o composite pular fog/tonemap/bloom para a leitura nao
         // mudar com a hora do dia - ver post_composite.frag.
@@ -471,6 +509,28 @@ private:
     VkSampler samplerFor(VkImageView view) const;
 
     void createImages();
+    VkImageView m_volumetricView = VK_NULL_HANDLE;
+    bool m_volumetricOn = false;
+    // LUT 3D de grading (renderer/ColorGrade; binding 14 do composite).
+    // Sempre existe e sempre e' escrita (identidade ate' o primeiro look);
+    // reassada e reenviada so' quando o look muda (gradeLutHash).
+    void createGradeLut();
+    void destroyGradeLut();
+    // Grava a copia no `cmd` (fora de passe de render). Devolve a mistura
+    // para o composite: 0 = grading analitico, 1 = LUT.
+    float updateGradeLut(VkCommandBuffer cmd, const LookConfig* look);
+    VkImage m_gradeLutImage = VK_NULL_HANDLE;
+    VmaAllocation m_gradeLutAlloc = VK_NULL_HANDLE;
+    VkImageView m_gradeLutView = VK_NULL_HANDLE;
+    VkBuffer m_gradeLutStaging = VK_NULL_HANDLE;
+    VmaAllocation m_gradeLutStagingAlloc = VK_NULL_HANDLE;
+    void* m_gradeLutMapped = nullptr;
+    uint64_t m_gradeLutHash = 0;
+    bool m_gradeLutReady = false;      // ja' saiu de UNDEFINED
+    uint32_t m_gradeLutLastUpload = 0; // quadro do ultimo envio (staging reusado)
+    uint32_t m_postFrame = 0;
+    std::unique_ptr<CubeLut> m_cubeLut;
+    std::string m_cubeLutPath;
     void createPipelines();
     void createDescriptors();
     void createWeatherUbo();
@@ -478,6 +538,11 @@ private:
     void createLensDropBuffer();
     void destroyLensDropBuffer();
     void createLensDropCompute();
+public:
+    // Luz volumetrica do sol (VolumetricLight): a imagem que o composite soma
+    // antes da nevoa (binding 15) e se ela tem conteudo neste quadro.
+    void setVolumetric(VkImageView view, bool on) { m_volumetricView = view; m_volumetricOn = on; }
+private:
     void destroyLensDropCompute();
     void dispatchLensDropCompute(VkCommandBuffer cmd, const WeatherParams& weather, float time, float dt);
     VkPipeline createFullscreenPipeline(const std::vector<uint32_t>& fragCode,

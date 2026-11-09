@@ -58,6 +58,10 @@ const vec2 kDisc[KERNEL] = vec2[](
     vec2( 0.8080, 0.0000), vec2( 0.6187, 0.6187), vec2( 0.0000,-0.9330), vec2(-0.6894, 0.6894)
 );
 
+// Quantas direcoes do kernel usar (preset "ssao_taps", 4..12). Constante de
+// especializacao (so' no fragment: regra dos GPUs moveis); 12 = o de sempre.
+layout(constant_id = 0) const int SSAO_TAPS = 12;
+
 float ign(vec2 px) {
     return fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
 }
@@ -85,12 +89,12 @@ void main() {
 
     float occ = 0.0;
     float used = 0.0;
-    for (int i = 0; i < KERNEL; ++i) {
+    for (int i = 0; i < SSAO_TAPS && i < KERNEL; ++i) {
         vec2 d = rot * kDisc[i];
         // Lift the disc into the hemisphere: sample point above the surface.
-        float lift = 0.35 + 0.4 * float(i) / float(KERNEL);
+        float lift = 0.35 + 0.4 * float(i) / float(SSAO_TAPS);
         vec3 dir = normalize(T * d.x + B * d.y + N * lift);
-        vec3 sw = P + dir * radius * (0.25 + 0.75 * float(i + 1) / float(KERNEL));
+        vec3 sw = P + dir * radius * (0.25 + 0.75 * float(i + 1) / float(SSAO_TAPS));
 
         vec4 clip = lights.viewProj * vec4(sw, 1.0);
         if (clip.w <= 0.0) continue;

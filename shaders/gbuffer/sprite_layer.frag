@@ -23,6 +23,9 @@ layout(location = 6) in flat uint v_paletteIndex;
 
 #define ERUPTION_SLOT_NEAREST // atlas de sprite e paleta sem filtro
 #include "common/slot_textures.glsl"
+// FrameUBO (set 1, o mesmo do G-buffer): u_spriteParams.x = sprite_filter.
+#include "gbuffer/model_frame_ubo.glsl"
+#include "common/sprite_sample.glsl"
 layout(set = 2, binding = 0) uniform sampler2D u_depth;   // depth do G-buffer (render)
 layout(set = 2, binding = 1) uniform sampler2D u_lit;     // imagem iluminada (render, HDR linear)
 layout(set = 2, binding = 2) uniform sampler2D u_albedo;  // albedo do G-buffer (render)
@@ -61,7 +64,15 @@ bool fadeCut(float a) {
 }
 
 void main() {
-    vec4 albedo = slotTexture(v_texIndex, v_uv);
+    const vec2 uvDx = dFdx(v_uv), uvDy = dFdy(v_uv);
+    vec4 albedo;
+    if (u_spriteParams.x > 0.5) {
+        // sprite_filter 1: borda anti-serrilhada, misturada pre-multiplicada
+        // sobre a cena (a pipeline usa ONE, ONE_MINUS_SRC_ALPHA).
+        albedo = spriteSample(v_texIndex, v_paletteIndex, (v_flags & 256u) != 0u, v_uv, uvDx, uvDy);
+        if (albedo.a < 0.01 || fadeCut(v_tint.a)) discard;
+    } else {
+    albedo = slotTexture(v_texIndex, v_uv);
     if ((v_flags & 256u) != 0) {
         float idx = albedo.r * 255.0;
         if (idx < 0.5) discard;
@@ -70,6 +81,8 @@ void main() {
         albedo.a = 1.0;
     }
     if (albedo.a < 0.01 || fadeCut(v_tint.a)) discard;
+    albedo.a = 1.0;
+    }
     albedo.rgb *= v_tint.rgb;
 
     const vec2 scale = p_sizes.xy / p_sizes.zw;
@@ -120,5 +133,5 @@ void main() {
         D = max((cov + mu * ratio) / (varA + mu), vec3(0.0));
         S = max(ml - D * ma, vec3(0.0));
     }
-    o_color = vec4(srgbToLinear(albedo.rgb) * D + S, 1.0);
+    o_color = vec4((srgbToLinear(albedo.rgb) * D + S) * albedo.a, albedo.a);
 }

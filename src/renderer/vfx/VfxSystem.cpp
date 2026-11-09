@@ -32,7 +32,7 @@ constexpr uint32_t kCounterCount = 84;
 constexpr uint32_t kCEventDispatch = 32;
 constexpr uint32_t kRecordBytes = 64;
 constexpr uint32_t kMaxEvents = 16384;
-constexpr uint32_t kBindings = 18;
+constexpr uint32_t kBindings = 20; // 18 = mapa de sombra do sol, 19 = matrizes dele
 
 struct DrawPush {
     uint32_t listOffset;
@@ -117,9 +117,13 @@ bool VfxSystem::createBuffers() {
               createBuf(m_events, VkDeviceSize(kMaxEvents) * 32, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_recs, cap * kRecordBytes, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_ribbonRing, VkDeviceSize(kRibbonRingTotal) * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
+              // Reserva do binding 19 (do tamanho do comeco do ShadowUBO lido).
+              // Zerado: matriz nula = "sem mapa" no shader (vfxSunShadow).
+              createBuf(m_sunUboFallback, 512, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_ONLY, true) &&
               createBuf(m_counters, kCounterCount * 4,
                         ssbo | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                         VMA_MEMORY_USAGE_GPU_ONLY, false);
+    if (ok) std::memset(m_sunUboFallback.mapped, 0, 512);
     // Por frame em voo: uma area de envio (CPU) com emissores, pedidos e
     // parametros, copiada para a GPU no comeco da simulacao. A simulacao le'
     // o emissor por particula: da memoria da placa, nao do outro lado do PCIe.
@@ -184,7 +188,7 @@ bool VfxSystem::createBuffers() {
 }
 
 void VfxSystem::destroyBuffers() {
-    for (Buf* b : {&m_particles, &m_dead, &m_alive, &m_render, &m_sort, &m_events, &m_recs, &m_ribbonRing, &m_counters,
+    for (Buf* b : {&m_particles, &m_dead, &m_alive, &m_render, &m_sort, &m_events, &m_recs, &m_ribbonRing, &m_counters, &m_sunUboFallback,
                    &m_emitterDev,
                    &m_spawnDev,
                    &m_frameDev, &m_graphCode, &m_graphConst})
@@ -216,6 +220,8 @@ bool VfxSystem::createDescriptors() {
     b[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     b[16].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     b[17].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[18].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[19].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = kBindings;
@@ -230,8 +236,8 @@ bool VfxSystem::createDescriptors() {
 
     const uint32_t n = VulkanContext::MAX_FRAMES_IN_FLIGHT * 3;
     VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 13 * n},
-                                     {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, n},
-                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * n}};
+                                     {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * n},
+                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5 * n}};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pi.maxSets = n;
@@ -269,7 +275,8 @@ bool VfxSystem::createDescriptors() {
 
 void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
     if (m_setBuffersWritten[frame] && m_setDepth[frame] == depthView && m_setLow[frame] == m_lowView &&
-        m_setGround[frame] == m_groundView && m_setIce[frame] == m_iceView)
+        m_setGround[frame] == m_groundView && m_setIce[frame] == m_iceView &&
+        m_setSunShadow[frame] == m_sunShadowView && m_setSunUbo[frame] == m_sunShadowUbo)
         return;
     VkDescriptorBufferInfo bi[8] = {
         {m_particles.buf, 0, VK_WHOLE_SIZE}, {m_dead.buf, 0, VK_WHOLE_SIZE},    {m_alive.buf, 0, VK_WHOLE_SIZE},
@@ -296,6 +303,11 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
     // Sem malha translucida: a profundidade ocupa o binding (nunca lida).
     const VkDescriptorImageInfo iceInfo{m_iceView ? m_linearSampler : m_depthSampler, m_iceView ? m_iceView : depthView,
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    // Sombra do sol (emissor "shadowed"): sem mapa, a profundidade e o buffer
+    // reserva ocupam os bindings e frame.depthInfo.w = 0 diz que nao ha' mapa.
+    const VkDescriptorImageInfo sunInfo{m_depthSampler, m_sunShadowView ? m_sunShadowView : depthView,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorBufferInfo sunUboInfo{m_sunShadowUbo ? m_sunShadowUbo : m_sunUboFallback.buf, 0, VK_WHOLE_SIZE};
     VkWriteDescriptorSet w[2 * kBindings]{};
     for (uint32_t s = 0; s < 2; ++s) {
         for (uint32_t i = 0; i < kBindings; ++i) {
@@ -321,6 +333,10 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
         w[s * kBindings + 16].pImageInfo = &groundInfo;
         w[s * kBindings + 17].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[s * kBindings + 17].pImageInfo = &iceInfo;
+        w[s * kBindings + 18].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[s * kBindings + 18].pImageInfo = &sunInfo;
+        w[s * kBindings + 19].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w[s * kBindings + 19].pBufferInfo = &sunUboInfo;
     }
     vkUpdateDescriptorSets(m_ctx->device(), 2 * kBindings, w, 0, nullptr);
     m_setBuffersWritten[frame] = true;
@@ -328,6 +344,8 @@ void VfxSystem::writeDescriptors(uint32_t frame, VkImageView depthView) {
     m_setLow[frame] = m_lowView;
     m_setGround[frame] = m_groundView;
     m_setIce[frame] = m_iceView;
+    m_setSunShadow[frame] = m_sunShadowView;
+    m_setSunUbo[frame] = m_sunShadowUbo;
 }
 
 bool VfxSystem::createPipelines() {
@@ -1068,6 +1086,9 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     if (inst.killed) flags |= 1u << 12;
     if (e.lowRes) flags |= 1u << 14;
     if (e.decal) flags |= 1u << 24; // VFXF_DECAL
+    // ERUPTION_TEST_VFX_SHADOWED=1 (teste): todo emissor iluminado vira "shadowed".
+    static const bool kForceShadowed = std::getenv("ERUPTION_TEST_VFX_SHADOWED") != nullptr;
+    if (e.shadowed || (kForceShadowed && e.lit > 0.0f)) flags |= 1u << 25; // VFXF_SHADOWED
     uint32_t mesh = 0;
     if (!e.mesh.empty()) {
         const uint32_t id = meshId(e.mesh);

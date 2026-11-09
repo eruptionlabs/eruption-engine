@@ -20,11 +20,25 @@ layout(push_constant) uniform PushConstants {
     float focus_band;
     // coc_model "thin_lens" (PostSettings::cocThinLens): K*|z-zf|/z, com
     // teto separado perto e longe e rampa suave de `edge` u depois da faixa.
-    int thin_lens;
+    // 0 linear, 1 thin_lens, 2 tilt_plane (PostSettings::cocTiltPlane).
+    int coc_model;
     float lens_blur;
     float max_near;
     float max_far;
     float edge;
+    // tilt_plane: rampas (u de mundo), mistura com a faixa de tela, altura
+    // do assunto na tela, plano focal em espaco de vista (normal, d) e
+    // 1/P00, 1/P11 para reconstruir a posicao de vista da profundidade.
+    float ramp_near;
+    float ramp_far;
+    float screen_mix;
+    float focus_uv_y;
+    float plane_x;
+    float plane_y;
+    float plane_z;
+    float plane_d;
+    float inv_p00;
+    float inv_p11;
 } push;
 
 float bandDist(float z, float f) {
@@ -39,6 +53,28 @@ float thinLensCoc(float z, float f) {
     float c = push.lens_blur * d / max(z, 1e-3);
     if (push.edge > 0.0) c *= smoothstep(0.0, push.edge, d);
     return min(c, z < f ? push.max_near : push.max_far);
+}
+
+// TILT-SHIFT DE PLANO: distancia com sinal s ao plano focal (positivo =
+// atras do assunto). Nitido dentro da faixa; depois rampas separadas para
+// longe e perto, com teto proprio cada. A faixa de tela opcional desfoca
+// pela altura na tela em volta do assunto (o tilt-shift "de foto").
+float tiltPlaneCoc(float z) {
+    vec2 ndc = in_uv * 2.0 - 1.0;
+    vec3 pv = vec3(ndc.x * z * push.inv_p00, ndc.y * z * push.inv_p11, -z);
+    float s = dot(vec3(push.plane_x, push.plane_y, push.plane_z), pv) + push.plane_d;
+    float far = push.max_far * smoothstep(push.focus_band, push.focus_band + push.ramp_far, s);
+    float near = push.max_near * smoothstep(push.focus_band, push.focus_band + push.ramp_near, -s);
+    if (push.enable_foreground == 0) near = 0.0;
+    float c = far + near;
+    if (push.screen_mix > 0.0) {
+        // Acima do assunto na tela = longe (camera de cima), abaixo = perto.
+        float t = push.focus_uv_y - in_uv.y;
+        float farS = push.max_far * smoothstep(0.08, 0.43, t);
+        float nearS = push.enable_foreground != 0 ? push.max_near * smoothstep(0.08, 0.30, -t) : 0.0;
+        c = mix(c, farS + nearS, push.screen_mix);
+    }
+    return c;
 }
 
 float linearize_depth(float d) {
@@ -62,10 +98,16 @@ void main() {
     float coc_r = bandDist(z, fd * 1.02) * apt;
     float coc_g = coc;
     float coc_b = bandDist(z, fd * 0.98) * apt;
-    if (push.thin_lens != 0) {
+    if (push.coc_model == 1) {
         coc_r = thinLensCoc(z, fd * 1.02);
         coc_g = thinLensCoc(z, fd);
         coc_b = thinLensCoc(z, fd * 0.98);
+    } else if (push.coc_model == 2) {
+        // Um CoC so' para os tres canais: o plano nao tem a "lente" que
+        // separava o foco por cor, e o teto ja' vem em max_blur.
+        float c = clamp(tiltPlaneCoc(z), 0.0, push.max_blur);
+        out_coc = vec4(c, c, c, c);
+        return;
     }
     
     if (push.enable_foreground == 0) {

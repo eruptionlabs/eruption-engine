@@ -150,6 +150,7 @@ void readEmitter(const json& j, VfxEmitterDesc& e) {
     e.nearFade = std::max(0.0f, num(j, "nearFade", e.nearFade));
     e.lowRes = num(j, "lowRes", e.lowRes);
     e.decal = num(j, "decal", e.decal);
+    e.shadowed = num(j, "shadowed", e.shadowed);
     e.translucent = num(j, "translucent", e.translucent);
     e.refraction = num(j, "refraction", e.refraction);
     e.absorption = num(j, "absorption", e.absorption);
@@ -255,6 +256,7 @@ json writeEmitter(const VfxEmitterDesc& e) {
     j["nearFade"] = e.nearFade;
     j["lowRes"] = e.lowRes;
     if (e.decal) j["decal"] = true;
+    if (e.shadowed) j["shadowed"] = true;
     if (e.translucent) {
         j["translucent"] = true;
         j["refraction"] = e.refraction;

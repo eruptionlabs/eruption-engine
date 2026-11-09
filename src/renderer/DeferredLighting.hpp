@@ -208,6 +208,8 @@ public:
 
     // Indirect-lighting controls (inline contact SSAO + analytic env specular +
     // ambient shaping). Driven by the Lighting tab.
+    // Direcoes do kernel do SSAO (4..12); refaz o pipeline se mudar.
+    void setSsaoTaps(int taps);
     void setIndirectParams(bool ssao, float ssaoStrength, float ssaoRadius,
                            bool envSpec, float envSpecIntensity,
                            float nightAoPow, float ambientHemiFloor) {
@@ -343,6 +345,7 @@ private:
     float m_snowIntensity = 0.0f;
     float m_temperatureC = 20.0f;
     bool  m_ssaoEnabled = true;
+    int   m_ssaoTaps = 12; // preset ssao_taps (especializacao do ssao.frag)
     // True while the SSAO targets hold neutral white in SHADER_READ layout,
     // letting the per-frame chain be skipped entirely when SSAO is off.
     bool  m_ssaoNeutralCleared = false;
@@ -374,6 +377,7 @@ private:
     void createLitImage();
     void createLightVolumeGeometry();
     void createPipelines();
+    void createSsaoPipelines();
     void createDescriptors();
     void updateDescriptorSet(VkImageView shadowView, VkSampler shadowSampler,
                              VkImageView nextShadowView, VkSampler nextShadowSampler,

@@ -8,6 +8,7 @@
 #include "renderer/DeferredLighting.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include <cmath>
 #include <cstring>
 #include "utils/Profiler.hpp"
@@ -29,7 +30,9 @@ namespace eruption {
 // = 64), confirmado por grep em 2026-09-02:
 //    0-11  Engine  (sombra 0-1, gbuffer 2-3, deferred 4-5, skybox 6-7,
 //                   POST TOTAL 8-9, agua 10-11)
-//   12-19  LIVRES
+//   12-15  Engine  (VFX sim 12-13, 14-15)
+//   16-17  VolumetricLight (luz volumetrica do sol, antes do post)
+//   18-19  LIVRES
 //   20-29  Engine  (cloud shadow map 20-21, minimapa 22-23, rain topdown
 //                   24-25, cloud layers 26-27, cloud shadows field 28-29)
 //   30-35  PostProcessor (heightmap 30-31, overlay 32-33, particulas 34-35)
@@ -99,6 +102,7 @@ bool PostProcessor::init(VulkanContext* ctx, uint32_t width, uint32_t height) {
     createLensDropBuffer();
     createLensDropCompute();
     createAutoExposure();
+    createGradeLut();
     createPipelines();
     return true;
 }
@@ -107,6 +111,7 @@ void PostProcessor::shutdown() {
     if (!m_ctx) return;
     auto device = m_ctx->device();
     destroyAutoExposure();
+    destroyGradeLut();
 
     vkDestroyPipeline(device, m_cocPipeline, nullptr);
     vkDestroyPipeline(device, m_blurHPipeline, nullptr);
@@ -212,7 +217,6 @@ void PostProcessor::createImages() {
 
     createImg(m_outputImage, m_outputAlloc, m_outputView);
     createImg(m_dofImage, m_dofAlloc, m_dofView);
-    createImg(m_cocImage, m_cocAlloc, m_cocView);
     createImg(m_blurHImage, m_blurHAlloc, m_blurHView);
     createImg(m_blurVImage, m_blurVAlloc, m_blurVView);
     createImg(m_weatherImage, m_weatherAlloc, m_weatherView);
@@ -244,11 +248,25 @@ void PostProcessor::createImages() {
         viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_dofFarViews[i]);
     }
+    // Mapa de CoC: RGBA16F SEMPRE. O composite e o borrao leem o CoC no
+    // alfa; na cadeia B10G11R11 (post_format "packed", preset medium) o alfa
+    // nao existe e volta 1,0 -> a tela inteira saia com 1/3 de borrao.
+    imageInfo.extent = {m_width, m_height, 1};
+    vmaCreateImage(m_ctx->allocator(), &imageInfo, &allocInfo, &m_cocImage, &m_cocAlloc, nullptr);
+    {
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_cocImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = imageInfo.format;
+        viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_cocView);
+    }
     imageInfo.format = postFmt;
 }
 
 void PostProcessor::createDescriptors() {
-    constexpr uint32_t kBindings = 14;
+    constexpr uint32_t kBindings = 16;
     VkDescriptorSetLayoutBinding bindings[kBindings] = {};
     // Bindings 0..3: image samplers used by postprocess passes.
     // Binding 3 is also reused as the cloud color input by post_composite.frag.
@@ -303,6 +321,8 @@ void PostProcessor::createDescriptors() {
     // Bindings 11..13: DoF fundido no composite (spec 52, OE-02) - borrao
     // pequeno, CoC e borrao grande, lidos so' pelo post_composite.frag. Sempre
     // escritos no set do composite (sem a fusao, a propria cena no lugar).
+    // Binding 14: LUT 3D de grading (sampler3D), so' do composite.
+    // Binding 15: luz volumetrica do sol (VolumetricLight; 1x1 preta sem ela).
     for (uint32_t b = 11; b < kBindings; ++b) {
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -340,7 +360,7 @@ void PostProcessor::createDescriptors() {
     const uint32_t numSets = kSetsPerFrame * VulkanContext::MAX_FRAMES_IN_FLIGHT;
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 12 * numSets; // 0-3, 5, 7-13
+    poolSizes[0].descriptorCount = 14 * numSets; // 0-3, 5, 7-15
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[1].descriptorCount = numSets;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -375,7 +395,8 @@ void PostProcessor::createDescriptors() {
     pcRange.size = 128;
     // 352 + 32 B (borderRect/borderParams, E-BORDA-VAZIO) + 48 B (contorno): o bloco da
     // composicao cresceu alem do antigo teto de 352 B.
-    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 432, 16 * 1024);
+    // + 32 B (gradeParams2 da LUT 3D de grading, volumetricParams).
+    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 464, 16 * 1024);
     const VkDescriptorSetLayout setLayouts[2] = {m_descriptorSetLayout, m_pushRing.layout()};
 
     VkPipelineLayoutCreateInfo plInfo{};
@@ -583,7 +604,7 @@ void PostProcessor::createPipelines() {
     auto weatherFrag = ShaderCompiler::loadSPIRV("postprocess/weather_overlay.frag.spv");
     auto cloudCoverageDebugFrag = ShaderCompiler::loadSPIRV("postprocess/cloud_coverage_debug.frag.spv");
 
-    m_cocPipeline = createFullscreenPipeline(cocFrag, m_width, m_height);
+    m_cocPipeline = createFullscreenPipeline(cocFrag, m_width, m_height, false, VK_FORMAT_R16G16B16A16_SFLOAT);
     m_blurHPipeline = createFullscreenPipeline(blurHFrag, m_width, m_height);
     m_blurVPipeline = createFullscreenPipeline(blurVFrag, m_width, m_height);
     m_cocCompositePipeline = createFullscreenPipeline(cocCompFrag, m_width, m_height);
@@ -806,6 +827,9 @@ void PostProcessor::render(VkCommandBuffer cmd, VkImageView hdrInput, VkImageVie
 if (!m_ctx) return;
     (void)weatherCoverage; // superseded by the field-mode flag in cloudParams.z
     VkImageView compositeSource = hdrInput;
+    ++m_postFrame;
+    // Antes de qualquer passe de render: a copia da LUT e' transferencia.
+    const float gradeLutMix = updateGradeLut(cmd, lookConfig);
 
     // Histogram auto-exposure: measure this frame's HDR luminance on the GPU.
     // The CPU consumed LAST frame's adapted value at the top of the dispatch.
@@ -1391,11 +1415,19 @@ if (!m_ctx) return;
             float far_plane;
             int enable_foreground;
             float focus_band;
-            int thin_lens;
+            int coc_model; // 0 linear, 1 thin_lens, 2 tilt_plane
             float lens_blur;
             float max_near;
             float max_far;
             float edge;
+            // tilt_plane: rampas, mistura de tela, plano em espaco de vista
+            // (normal, d) e 1/P00, 1/P11 para reconstruir a posicao.
+            float ramp_near;
+            float ramp_far;
+            float screen_mix;
+            float focus_uv_y;
+            float plane_x, plane_y, plane_z, plane_d;
+            float inv_p00, inv_p11;
         } cocPush;
         // Da autoria por zoom (lente de referencia de 60 graus) para o espaco
         // do shader (profundidade real) - ver a nota em PostProcessor.hpp. O
@@ -1432,11 +1464,52 @@ if (!m_ctx) return;
         cocPush.far_plane = farPlane;
         cocPush.enable_foreground = (settings.focusOverride ? settings.focusForeground
                                                             : settings.cocEnableForeground) ? 1 : 0;
-        cocPush.thin_lens = settings.cocThinLens ? 1 : 0;
         cocPush.lens_blur = settings.cocLensBlur;
         cocPush.max_near = settings.cocMaxBlurNear >= 0.0f ? std::min(settings.cocMaxBlurNear, teto) : teto;
         cocPush.max_far = settings.cocMaxBlurFar >= 0.0f ? std::min(settings.cocMaxBlurFar, teto) : teto;
         cocPush.edge = settings.cocEdge;
+        int cocModel = settings.cocTiltPlane ? 2 : (settings.cocThinLens ? 1 : 0);
+        if (settings.focusOverride && settings.focusModel >= 0) cocModel = std::min(settings.focusModel, 2);
+        cocPush.coc_model = cocModel;
+        float cocTetoReal = cocModel == 1 ? std::max(cocPush.max_near, cocPush.max_far) : teto;
+        cocPush.ramp_near = cocPush.ramp_far = cocPush.screen_mix = cocPush.focus_uv_y = 0.0f;
+        cocPush.plane_x = cocPush.plane_y = cocPush.plane_z = cocPush.plane_d = 0.0f;
+        cocPush.inv_p00 = 1.0f / (std::abs(proj[0][0]) > 1e-6f ? proj[0][0] : 1e-6f);
+        cocPush.inv_p11 = 1.0f / (std::abs(proj[1][1]) > 1e-6f ? proj[1][1] : 1e-6f);
+        if (cocModel == 2) {
+            const bool fo = settings.focusOverride;
+            auto pick = [fo](float over, float base) { return fo && over >= 0.0f ? over : base; };
+            const float angulo = fo && !std::isnan(settings.focusTiltAngle) ? settings.focusTiltAngle
+                                                                             : settings.cocTiltAngle;
+            // Tetos em px a 1080p: a mesma moldura em qualquer resolucao.
+            const float escala = float(m_height) / 1080.0f;
+            cocPush.max_near = pick(settings.focusTiltMaxNear, settings.cocTiltMaxNear) * escala;
+            cocPush.max_far = pick(settings.focusTiltMaxFar, settings.cocTiltMaxFar) * escala;
+            cocPush.focus_band = pick(settings.focusBand, settings.cocTiltBand);
+            cocPush.ramp_near = std::max(pick(settings.focusRampNear, settings.cocRampNear), 1e-3f);
+            cocPush.ramp_far = std::max(pick(settings.focusRampFar, settings.cocRampFar), 1e-3f);
+            cocPush.screen_mix = glm::clamp(pick(settings.focusScreenMix, settings.cocScreenMix), 0.0f, 1.0f);
+            // Ponto do assunto no espaco de vista; sem ele, o centro da tela
+            // na distancia focal.
+            const Vec3 foco = (fo && settings.focusPointSet) ? Vec3(view * Vec4(settings.focusPoint, 1.0f))
+                                                             : Vec3(0.0f, 0.0f, -cocFocal);
+            const Vec3 direita(view[0][0], view[1][0], view[2][0]);
+            const Vec3 cima(0.0f, 1.0f, 0.0f);
+            Vec3 frenteH = glm::cross(cima, direita);
+            frenteH = glm::length(frenteH) > 1e-4f ? glm::normalize(frenteH) : Vec3(0.0f, 0.0f, -1.0f);
+            const float a = glm::radians(angulo);
+            const Vec3 nMundo = std::cos(a) * frenteH + std::sin(a) * cima;
+            const Vec3 nVista = glm::normalize(Mat3(view) * nMundo);
+            cocPush.plane_x = nVista.x;
+            cocPush.plane_y = nVista.y;
+            cocPush.plane_z = nVista.z;
+            cocPush.plane_d = -glm::dot(nVista, foco);
+            const Vec4 clip = proj * Vec4(foco, 1.0f);
+            cocPush.focus_uv_y = clip.w > 1e-4f ? glm::clamp(clip.y / clip.w * 0.5f + 0.5f, 0.0f, 1.0f) : 0.5f;
+            cocTetoReal = std::max(cocPush.max_near, cocPush.max_far);
+            cocPush.max_blur = cocTetoReal;
+        }
+        static_assert(sizeof(cocPush) <= 128, "push do coc_map passou de 128 B");
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(cocPush), &cocPush);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkc::cmdEndRendering(cmd);
@@ -1464,7 +1537,13 @@ if (!m_ctx) return;
 
         // Pass 2c: borrao grande em 1/4 da resolucao, so' com teto acima de
         // 3 px (abaixo disso o composite nem le' a imagem). Conjuntos 27-29.
-        const bool farBlur = teto > 3.0f && m_dofFarDownPipeline != VK_NULL_HANDLE &&
+        // O teto que DECIDE a cadeia grande e a rampa da mistura e' o maior CoC
+        // que o shader pode de fato escrever: na lente fina ele e' limitado
+        // por max_near/max_far (1/5 px no jogo) e nao pelo max_blur do
+        // set_focus (8). Com o teto nominal a rampa smoothstep(3, 8) deixava
+        // a cadeia de 1/4 entrar com no maximo ~35% num CoC real de 5 px.
+        const float tetoReal = cocTetoReal;
+        const bool farBlur = tetoReal > 3.0f && m_dofFarDownPipeline != VK_NULL_HANDLE &&
                              m_dofFarBlurPipeline != VK_NULL_HANDLE;
         if (farBlur) {
             const uint32_t qw = std::max(1u, m_width / 4), qh = std::max(1u, m_height / 4);
@@ -1473,7 +1552,7 @@ if (!m_ctx) return;
             beginFullscreenPass(cmd, m_dofFarViews[0], qw, qh);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_dofFarDownPipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(27), 0, nullptr);
-            const float downPush[2] = {teto, 3.0f};
+            const float downPush[2] = {tetoReal, 3.0f};
             vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(downPush), downPush);
             vkCmdDraw(cmd, 3, 1, 0, 0);
             vkc::cmdEndRendering(cmd);
@@ -1506,7 +1585,7 @@ if (!m_ctx) return;
         static const bool kNoCaEnv = std::getenv("ERUPTION_TEST_NO_CA") != nullptr;
         const bool multiTap = (settings.enableMotionBlur && !kNoMbEnv) ||
                               (settings.enableChromaticAberration && !kNoCaEnv);
-        const float compMaxBlur = farBlur ? teto : std::min(teto, 3.0f);
+        const float compMaxBlur = farBlur ? tetoReal : std::min(tetoReal, 3.0f);
         const bool fuse = lean::postFused() && !settings.visualizeCoC && !multiTap &&
                           !(drawParticles && particlesAfterDof && !afterDofIdle) && compMaxBlur > 0.0f;
         if (fuse) {
@@ -1528,7 +1607,7 @@ if (!m_ctx) return;
             float max_blur;
             float visualize_coc;
         } compPush;
-        compPush.max_blur = farBlur ? teto : std::min(teto, 3.0f);
+        compPush.max_blur = compMaxBlur;
         compPush.visualize_coc = settings.visualizeCoC ? 1.0f : 0.0f;
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(compPush), &compPush);
         
@@ -1678,6 +1757,19 @@ if (!m_ctx) return;
             w.pImageInfo = &di;
             updateSets(&w, 1);
         }
+        // Binding 14 (LUT de grading): sempre a mesma imagem 3D, identidade
+        // ate' o primeiro look que a peca.
+        VkDescriptorImageInfo lutInfo{m_linearSampler, m_gradeLutView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        w.dstBinding = 14;
+        w.pImageInfo = &lutInfo;
+        updateSets(&w, 1);
+        // Binding 15 (luz volumetrica): a imagem dela ou a 1x1 preta; sem
+        // nenhuma (VolumetricLight nao iniciou) a cena, que o shader nao le'.
+        const VkImageView vol = m_volumetricView != VK_NULL_HANDLE ? m_volumetricView : compositeSource;
+        VkDescriptorImageInfo volInfo{m_linearSampler, vol, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        w.dstBinding = 15;
+        w.pImageInfo = &volInfo;
+        updateSets(&w, 1);
     }
     beginFullscreenPass(cmd, compositeTarget, m_width, m_height);
     lap(3);
@@ -1710,6 +1802,8 @@ if (!m_ctx) return;
         Vec4 outlineParams;   // x=modo, y=espessura em px da tela, z=near, w=far
         Vec4 outlineColor;    // rgb=cor, a=opacidade
         Vec4 outlineParams2;  // x=limiar relativo, y=sprites
+        Vec4 gradeParams2;    // x=mistura da LUT 3D de grading (0 = analitico), yzw livres
+        Vec4 volumetricParams; // x=forca da luz volumetrica (0 = nao le' o binding 15)
     } push;
     // Debug/test overrides for fog parameters (useful for headless screenshots).
     float fogStart = settings.fogStart;
@@ -1798,7 +1892,9 @@ if (!m_ctx) return;
                               nearPlane, farPlane);
     push.outlineColor = settings.outlineColor;
     push.outlineParams2 = Vec4(std::max(settings.outlineThreshold, 1e-4f), settings.outlineSprites ? 1.0f : 0.0f, 0.0f, 0.0f);
-    static_assert(sizeof(push) <= 432, "bloco da composicao passou do maxBlock do PushRing (432 B)");
+    push.gradeParams2 = Vec4(gradeLutMix, 0.0f, 0.0f, 0.0f);
+    push.volumetricParams = Vec4(m_volumetricView != VK_NULL_HANDLE && m_volumetricOn ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+    static_assert(sizeof(push) <= 464, "bloco da composicao passou do maxBlock do PushRing (464 B)");
     m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, &push, sizeof(push));
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkc::cmdEndRendering(cmd);
@@ -1907,6 +2003,121 @@ if (!m_ctx) return;
     }
 }
 
+// ---------------------------------------------------------------------------
+// LUT 3D de grading
+// ---------------------------------------------------------------------------
+void PostProcessor::createGradeLut() {
+    const uint32_t n = kGradeLutSize;
+    VkImageCreateInfo ii{};
+    ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ii.imageType = VK_IMAGE_TYPE_3D;
+    ii.format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+    ii.extent = {n, n, n};
+    ii.mipLevels = 1;
+    ii.arrayLayers = 1;
+    ii.samples = VK_SAMPLE_COUNT_1_BIT;
+    ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VmaAllocationCreateInfo ai{};
+    ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    vmaCreateImage(m_ctx->allocator(), &ii, &ai, &m_gradeLutImage, &m_gradeLutAlloc, nullptr);
+    VkImageViewCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = m_gradeLutImage;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_3D;
+    vi.format = ii.format;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkc::createImageView(m_ctx->device(), &vi, nullptr, &m_gradeLutView);
+    const VkDeviceSize bytes = VkDeviceSize(n) * n * n * 4;
+    if (m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU,
+                            m_gradeLutStaging, m_gradeLutStagingAlloc))
+        vmaMapMemory(m_ctx->allocator(), m_gradeLutStagingAlloc, &m_gradeLutMapped);
+    m_gradeLutHash = 0;
+    m_gradeLutReady = false;
+}
+
+void PostProcessor::destroyGradeLut() {
+    if (m_gradeLutMapped) vmaUnmapMemory(m_ctx->allocator(), m_gradeLutStagingAlloc);
+    m_gradeLutMapped = nullptr;
+    if (m_gradeLutStaging) vmaDestroyBuffer(m_ctx->allocator(), m_gradeLutStaging, m_gradeLutStagingAlloc);
+    m_gradeLutStaging = VK_NULL_HANDLE;
+    if (m_gradeLutView) vkDestroyImageView(m_ctx->device(), m_gradeLutView, nullptr);
+    m_gradeLutView = VK_NULL_HANDLE;
+    if (m_gradeLutImage) vmaDestroyImage(m_ctx->allocator(), m_gradeLutImage, m_gradeLutAlloc);
+    m_gradeLutImage = VK_NULL_HANDLE;
+}
+
+float PostProcessor::updateGradeLut(VkCommandBuffer cmd, const LookConfig* look) {
+    if (!m_gradeLutImage || !m_gradeLutMapped) return 0.0f;
+    // ERUPTION_TEST_GRADE_LUT=1 liga a LUT com qualquer look (prova contra o
+    // analitico); =0 desliga mesmo com campos novos no look.
+    static const int kForce = [] {
+        const char* e = std::getenv("ERUPTION_TEST_GRADE_LUT");
+        return e ? std::atoi(e) : -1;
+    }();
+    const LookConfig neutro = [] {
+        LookConfig l;
+        l.saturation = 1.0f;
+        l.contrast = 1.0f;
+        return l;
+    }();
+    const bool quer = look && (kForce == 1 || (kForce != 0 && lookWantsGradeLut(*look)));
+    const LookConfig& alvo = quer ? *look : neutro;
+    // .cube: carregado quando o caminho muda (falha = sem .cube, com aviso).
+    if (quer && look->lutPath != m_cubeLutPath) {
+        m_cubeLutPath = look->lutPath;
+        m_cubeLut.reset();
+        if (!m_cubeLutPath.empty()) {
+            auto cube = std::make_unique<CubeLut>();
+            const std::string disk = project::gameRef(m_cubeLutPath).string();
+            if (cube->load(disk)) m_cubeLut = std::move(cube);
+            else ERUPTION_LOG_WARN("[GRADE] LUT .cube nao carregou: %s", disk.c_str());
+        }
+    }
+    const CubeLut* cube = quer ? m_cubeLut.get() : nullptr;
+    const uint64_t h = gradeLutHash(alvo) ^ (cube ? 0x9e3779b97f4a7c15ull : 0ull);
+    // O staging e' um so': nao regrava enquanto um envio recente pode estar
+    // em voo (look mudando a cada quadro fica com a LUT de alguns quadros
+    // atras, nunca com uma meio escrita).
+    const bool podeEnviar = !m_gradeLutReady || m_postFrame - m_gradeLutLastUpload > VulkanContext::MAX_FRAMES_IN_FLIGHT;
+    if ((h != m_gradeLutHash || !m_gradeLutReady) && podeEnviar) {
+        const std::vector<uint32_t> texels = bakeGradeLut(alvo, cube, kGradeLutSize);
+        std::memcpy(m_gradeLutMapped, texels.data(), texels.size() * sizeof(uint32_t));
+        vmaFlushAllocation(m_ctx->allocator(), m_gradeLutStagingAlloc, 0, VK_WHOLE_SIZE);
+        VkImageMemoryBarrier2 b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        b.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        b.srcAccessMask = 0;
+        b.dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.image = m_gradeLutImage;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkDependencyInfo dep{};
+        dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dep.imageMemoryBarrierCount = 1;
+        dep.pImageMemoryBarriers = &b;
+        vkc::cmdPipelineBarrier2(cmd, &dep);
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {uint32_t(kGradeLutSize), uint32_t(kGradeLutSize), uint32_t(kGradeLutSize)};
+        vkCmdCopyBufferToImage(cmd, m_gradeLutStaging, m_gradeLutImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        b.srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkc::cmdPipelineBarrier2(cmd, &dep);
+        m_gradeLutHash = h;
+        m_gradeLutReady = true;
+        m_gradeLutLastUpload = m_postFrame;
+    }
+    return quer && m_gradeLutHash == h ? 1.0f : 0.0f;
+}
+
 void PostProcessor::PostSettings::loadFromJson(const nlohmann::json& j) {
     if (!j.is_object()) return;
     exposure = j.value("exposure", exposure);
@@ -1943,7 +2154,19 @@ void PostProcessor::PostSettings::loadFromJson(const nlohmann::json& j) {
     if (const char* e = std::getenv("ERUPTION_TEST_COC_MAXBLUR")) cocMaxBlur = std::strtof(e, nullptr);
     cocZoomFactor = j.value("coc_zoom_factor", cocZoomFactor);
     cocEnableForeground = j.value("coc_enable_foreground", cocEnableForeground);
-    cocThinLens = j.value("coc_model", std::string(cocThinLens ? "thin_lens" : "linear")) == "thin_lens";
+    {
+        const std::string atual = cocTiltPlane ? "tilt_plane" : (cocThinLens ? "thin_lens" : "linear");
+        const std::string modelo = j.value("coc_model", atual);
+        cocThinLens = modelo == "thin_lens";
+        cocTiltPlane = modelo == "tilt_plane";
+    }
+    cocTiltAngle = j.value("tilt_plane_angle", cocTiltAngle);
+    cocTiltBand = j.value("tilt_band", cocTiltBand);
+    cocRampNear = j.value("tilt_ramp_near", cocRampNear);
+    cocRampFar = j.value("tilt_ramp_far", cocRampFar);
+    cocTiltMaxNear = j.value("tilt_max_near", cocTiltMaxNear);
+    cocTiltMaxFar = j.value("tilt_max_far", cocTiltMaxFar);
+    cocScreenMix = j.value("tilt_screen_mix", cocScreenMix);
     cocLensBlur = j.value("coc_lens_blur", cocLensBlur);
     cocMaxBlurNear = j.value("coc_max_blur_near", cocMaxBlurNear);
     cocMaxBlurFar = j.value("coc_max_blur_far", cocMaxBlurFar);

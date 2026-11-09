@@ -45,6 +45,34 @@ vec3 worldFromDepth(vec2 uv, float d) {
     return w.xyz / w.w;
 }
 
+// Sombra do sol para emissores "shadowed" (binding 18/19: o atlas e o comeco
+// do ShadowUBO de directional.frag). 1 = sol, 0 = sombra; um tap por
+// particula (a particula e' borrada, PCF nao compensa). Sem mapa (buffer
+// reserva zerado) ou fora das duas cascatas: acesa.
+layout(set = VFX_SET, binding = 18) uniform sampler2D sunShadowDepth;
+layout(std140, set = VFX_SET, binding = 19) uniform SunShadowUBO {
+    mat4 lightSpaceMats[2];
+    mat4 nextLightSpaceMats[2];
+    vec4 cascadeSplits;
+    vec4 cascadeScales;
+    vec4 shadowParams;
+    vec4 shadowRanges;  // y = profundidade da caixa, z = vies
+} sunShadow;
+float vfxSunShadow(vec3 P) {
+    if (sunShadow.lightSpaceMats[0][3][3] == 0.0) return 1.0;
+    for (int idx = 0; idx < 2; ++idx) {
+        vec4 ls = sunShadow.lightSpaceMats[idx] * vec4(P, 1.0);
+        vec3 c = ls.xyz / ls.w;
+        if (c.z > 1.0 || any(lessThan(c.xy, vec2(0.0))) || any(greaterThan(c.xy, vec2(1.0)))) continue;
+        vec2 uv = clamp(vec2(c.x * 0.5 + 0.5 * float(idx), c.y), vec2(0.5 * float(idx), 0.0),
+                        vec2(0.5 * float(idx) + 0.5, 1.0));
+        float texelWorld = idx == 0 ? sunShadow.cascadeScales.x : sunShadow.cascadeScales.y;
+        float bias = sunShadow.shadowRanges.z + 2.0 * texelWorld / max(sunShadow.shadowRanges.y, 100.0);
+        return textureLod(sunShadowDepth, uv, 0.0).r < c.z - bias ? 0.0 : 1.0;
+    }
+    return 1.0;
+}
+
 void main() {
     if (gl_LocalInvocationIndex == 0u) {
         sAlive = 0u;
@@ -262,6 +290,7 @@ void main() {
                     vec3 L = -normalize(frame.sunDir.xyz);
                     vec3 n = normalize(toCam + vec3(0.0, 1.0, 0.0));
                     float wrap = clamp(dot(n, L) * 0.5 + 0.5, 0.0, 1.0);
+                    if ((e.flags.x & VFXF_SHADOWED) != 0u) wrap *= vfxSunShadow(p.pos);
                     vec3 light = frame.ambient.rgb * frame.ambient.w + frame.sunColor.rgb * frame.sunDir.w * wrap;
                     col.rgb *= mix(vec3(1.0), light, e.render.y);
                 }

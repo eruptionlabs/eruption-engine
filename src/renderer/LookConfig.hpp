@@ -2,6 +2,7 @@
 
 #include "math/Types.hpp"
 #include <string>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 namespace eruption {
@@ -56,6 +57,30 @@ struct LookConfig {
     float shadowTintStrength = 0.0f;
     Vec3  highlightTint = Vec3(1.0f);
     float highlightTintStrength = 0.0f;
+
+    // --- LUT 3D de grading (renderer/ColorGrade, post_composite binding 14) ---
+    // Assada quando o look muda; com ela o composite troca saturacao,
+    // contraste e split-toning pela leitura do cubo. Liga sozinha quando um
+    // campo abaixo sai do padrao (ou color_lut = true).
+    bool  colorLut = false;          // "color_lut"
+    float wbTemperature = 0.0f;      // "wb_temperature" -100..100 (> 0 esquenta)
+    float wbTint = 0.0f;             // "wb_tint" -100..100 (> 0 magenta)
+    Vec3  lift = Vec3(0.0f);         // "lift"  (somado nas sombras)
+    Vec3  gammaRgb = Vec3(1.0f);     // "gamma" (meios-tons, > 1 clareia)
+    Vec3  gain = Vec3(1.0f);         // "gain"  (multiplica as luzes)
+    float vibrance = 0.0f;           // "vibrance" (satura o pouco saturado)
+    std::vector<float> curvePoints;  // "curve": x0,y0,x1,y1... em gamma de tela
+    std::string lutPath;             // "lut": arquivo .cube (caminho do projeto)
+    float lutStrength = 1.0f;        // "lut_strength"
+
+    // --- Luz volumetrica do sol (renderer/VolumetricLight) ---
+    // Forca (0 desliga; o preset escolhe resolucao e passos), densidade do ar
+    // na altura da nevoa (1/u; cai com a nevoa de altura do PostSettings),
+    // tinta e anisotropia g de Henyey-Greenstein.
+    float volumetricIntensity = 0.0f;   // "volumetric_intensity"
+    float volumetricDensity = 0.002f;   // "volumetric_density"
+    Vec3  volumetricTint = Vec3(1.0f);  // "volumetric_tint"
+    float volumetricAnisotropy = 0.6f;  // "volumetric_anisotropy"
 
     // --- God rays das luzes pontuais (PostProcessor::renderGodRays) ---
     // intensity x exposure = forca; scattering x 2 = alcance na tela (fracao da

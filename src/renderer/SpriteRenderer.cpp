@@ -1511,6 +1511,17 @@ bool SpriteRenderer::createLayerPipelines(VkDescriptorSetLayout layerInputs) {
     li.setLayoutCount = 4;
     li.pSetLayouts = layouts;
     if (vkCreatePipelineLayout(dev, &li, nullptr, &m_layerPipelineLayout) != VK_SUCCESS) return false;
+    // Mistura pre-multiplicada (sprite_layer.frag grava cor*alfa, alfa): com
+    // sprite_filter 0 o alfa e' 1 e a escrita e' a opaca de antes, bit a bit;
+    // com o filtro bilinear nitido a borda funde com a cena do FSR.
+    VkPipelineColorBlendAttachmentState premult = opaque;
+    premult.blendEnable = VK_TRUE;
+    premult.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    premult.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    premult.colorBlendOp = VK_BLEND_OP_ADD;
+    premult.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    premult.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    premult.alphaBlendOp = VK_BLEND_OP_ADD;
     VkShaderModule vLayer = loadModule("gbuffer/sprite_layer.vert.spv");
     VkShaderModule fLayer = loadModule("gbuffer/sprite_layer.frag.spv");
     if (vLayer && fLayer) {
@@ -1523,7 +1534,7 @@ bool SpriteRenderer::createLayerPipelines(VkDescriptorSetLayout layerInputs) {
             .setPolygonMode(VK_POLYGON_MODE_FILL)
             .setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE)
             .setDepthState(false, false, VK_COMPARE_OP_ALWAYS)
-            .setBlendState({opaque})
+            .setBlendState({premult})
             .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
             .setLayout(m_layerPipelineLayout)
             .setColorAttachmentFormats({VK_FORMAT_R16G16B16A16_SFLOAT})

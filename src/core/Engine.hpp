@@ -23,6 +23,7 @@
 #include "renderer/DeferredLighting.hpp"
 #include "renderer/ShadowRenderer.hpp"
 #include "renderer/PostProcessor.hpp"
+#include "renderer/VolumetricLight.hpp"
 #include "renderer/UpscaleAA.hpp"
 #include "renderer/CameraMotion.hpp"
 #include "renderer/Fsr3Upscaler.hpp"
@@ -1411,6 +1412,11 @@ private:
     ShadowRenderer m_shadowRenderer;
     DeferredLighting m_deferredLighting;
     PostProcessor m_postProcessor;
+    // Luz volumetrica do sol (preset volumetric_light/_steps/_max_distance).
+    VolumetricLight m_volumetric;
+    int m_volumetricMode = 0;
+    int m_volumetricSteps = 24;
+    float m_volumetricMaxDist = 600.0f;
     Vision m_vision;
     // Aneis dos personagens desenhados neste quadro (drawCharacter), para o
     // decal depois da luz.

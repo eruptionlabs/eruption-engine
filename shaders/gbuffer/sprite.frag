@@ -28,33 +28,10 @@ layout(location = 2) out vec4 o_pbr;
 layout(location = 3) out uint o_materialId;
 layout(location = 4) out vec4 o_emissive;
 
-layout(set = 1, binding = 0) uniform FrameUBO {
-    mat4 u_view;
-    mat4 u_projection;
-    mat4 u_viewProjection;
-    mat4 u_inverseView;
-    mat4 u_inverseProjection;
-    vec3 u_cameraPos;
-    float u_time;
-    vec2 u_screenResolution;
-    float u_nearPlane;
-    float u_farPlane;
-    uint u_frameIndex;
-    uint u_debugMode;
-    float u_spriteExposure;
-    float u_giIntensity;
-    float u_giAmbientFloor;
-    float u_spriteTilt;
-    float u_shadowHeightScale;
-    float u_spriteNormalYMix;
-    float u_normalMapScale;
-    float u_normalMapInvertY;
-    float u_normalSmoothing;
-    float u_defaultRoughness;
-    float u_defaultMetallic;
-    vec4 u_sunDir;        // xyz = direcao de viagem da luz do sol, w = intensidade
-    vec4 u_sunColor;
-};
+// Bloco inteiro (gbuffer/model_frame_ubo.glsl): o filtro do sprite e a forca
+// do normal map autoral vivem no fim dele (u_spriteParams).
+#include "gbuffer/model_frame_ubo.glsl"
+#include "common/sprite_sample.glsl"
 
 // Luz pontual principal de cada sprite (Engine::spriteDominantLights; a
 // mesma escolha da sombra planar das luzes). strength 0 = nenhuma perto.
@@ -108,8 +85,17 @@ bool fadeCut(float a) {
 
 void main() {
     // Derivadas antes de qualquer discard (depois dele o quad fica incompleto).
-    const vec2 rimDx = dFdx(v_uv) * 2.5, rimDy = dFdy(v_uv) * 2.5;
-    vec4 albedo = slotTexture(v_texIndex, v_uv);
+    const vec2 uvDx = dFdx(v_uv), uvDy = dFdy(v_uv);
+    const vec2 rimDx = uvDx * 2.5, rimDy = uvDy * 2.5;
+    vec4 albedo;
+    if (u_spriteParams.x > 0.5) {
+        // sprite_filter 1: bilinear nitido (common/sprite_sample.glsl), alfa
+        // filtrado cortado em 0,5 (a silhueta fica no mesmo lugar do nearest).
+        albedo = spriteSample(v_texIndex, v_paletteIndex, (v_flags & 256u) != 0u, v_uv, uvDx, uvDy);
+        if (albedo.a < 0.5 || fadeCut(v_tint.a)) discard;
+        albedo.a = 1.0;
+    } else {
+    albedo = slotTexture(v_texIndex, v_uv);
 
     // bit 8: usePalette
     if ((v_flags & 256u) != 0) {
@@ -121,6 +107,7 @@ void main() {
     }
 
     if (albedo.a < 0.01 || fadeCut(v_tint.a)) discard;
+    }
 
     // Keep albedo in sRGB for both legacy and PBR paths so the base brightness
     // matches the pre-PBR branch. Only F0/specular benefits from linear-space

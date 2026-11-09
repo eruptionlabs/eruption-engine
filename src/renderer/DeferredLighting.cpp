@@ -592,9 +592,24 @@ void DeferredLighting::createPipelines() {
         vkDestroyShaderModule(m_ctx->device(), frag, nullptr);
     }
 
+    createSsaoPipelines();
+}
+
+// SSAO + borrao: separados para setSsaoTaps refazer so' o do SSAO.
+void DeferredLighting::createSsaoPipelines() {
+    auto loadShader = [&](const char* path, VkShaderStageFlagBits) -> VkShaderModule {
+        auto code = ShaderCompiler::loadSPIRV(path);
+        if (code.empty()) return VK_NULL_HANDLE;
+        VkShaderModuleCreateInfo info{}; info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        info.codeSize = code.size() * sizeof(uint32_t);
+        info.pCode = code.data();
+        VkShaderModule mod;
+        vkCreateShaderModule(m_ctx->device(), &info, nullptr, &mod);
+        return mod;
+    };
     // --- SSAO + bilateral blur (half-res fullscreen passes, R8) ---
     {
-        auto buildAoPipeline = [&](const char* fragPath, VkPipeline& out) {
+        auto buildAoPipeline = [&](const char* fragPath, VkPipeline& out, const VkSpecializationInfo* spec) {
             VkShaderModule vert = loadShader("shaders/lighting/ambient.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
             VkShaderModule frag = loadShader(fragPath, VK_SHADER_STAGE_FRAGMENT_BIT);
             if (!vert || !frag) {
@@ -606,6 +621,7 @@ void DeferredLighting::createPipelines() {
             stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = vert; stages[0].pName = "main";
             stages[1] = {}; stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
             stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = frag; stages[1].pName = "main";
+            stages[1].pSpecializationInfo = spec;
 
             VkPipelineVertexInputStateCreateInfo vertexInput{};
             vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -632,8 +648,15 @@ void DeferredLighting::createPipelines() {
             vkDestroyShaderModule(m_ctx->device(), vert, nullptr);
             vkDestroyShaderModule(m_ctx->device(), frag, nullptr);
         };
-        buildAoPipeline("shaders/lighting/ssao.frag.spv", m_ssaoPipeline);
-        buildAoPipeline("shaders/lighting/ssao_blur.frag.spv", m_ssaoBlurPipeline);
+        // Numero de direcoes do SSAO (preset ssao_taps): especializacao so' no
+        // fragment (regra dos GPUs moveis).
+        const int32_t taps = m_ssaoTaps;
+        const VkSpecializationMapEntry tapEntry{0, 0, sizeof(int32_t)};
+        VkSpecializationInfo tapSpec{1, &tapEntry, sizeof(int32_t), &taps};
+        if (m_ssaoPipeline == VK_NULL_HANDLE)
+            buildAoPipeline("shaders/lighting/ssao.frag.spv", m_ssaoPipeline, &tapSpec);
+        if (m_ssaoBlurPipeline == VK_NULL_HANDLE)
+            buildAoPipeline("shaders/lighting/ssao_blur.frag.spv", m_ssaoBlurPipeline, nullptr);
     }
 }
 
@@ -1385,6 +1408,18 @@ void DeferredLighting::renderPointLights(VkCommandBuffer cmd, const Camera& came
 
         vkCmdDrawIndexed(cmd, m_sphereIndexCount, 1, 0, 0, 0);
     }
+}
+
+void DeferredLighting::setSsaoTaps(int taps) {
+    taps = std::clamp(taps, 4, 12);
+    if (taps == m_ssaoTaps) return;
+    m_ssaoTaps = taps;
+    if (m_ssaoPipeline == VK_NULL_HANDLE) return; // ainda nao criado: nasce com o valor
+    // Troca de preset (rara): espera a GPU largar o pipeline antigo.
+    vkDeviceWaitIdle(m_ctx->device());
+    vkDestroyPipeline(m_ctx->device(), m_ssaoPipeline, nullptr);
+    m_ssaoPipeline = VK_NULL_HANDLE;
+    createSsaoPipelines();
 }
 
 } // namespace eruption

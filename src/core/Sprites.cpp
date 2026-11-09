@@ -380,6 +380,52 @@ void Engine::flushSpriteUploads(std::vector<SpriteUpload>& uploads) {
     uploads.clear();
 }
 
+
+// Dilatacao de cor da folha RGBA (ver loadSpriteFromPng): alfa < 128 vira
+// alfa 0 com a cor do vizinho opaco mais proximo (ate' kPassos texels; alem
+// disso, preto como antes); o resto fica opaco.
+static void dilateSpriteColor(std::vector<uint8_t>& px, int w, int h) {
+    const size_t n = static_cast<size_t>(w) * h;
+    std::vector<uint8_t> done(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+        if (px[i * 4 + 3] < 128) {
+            px[i * 4 + 0] = px[i * 4 + 1] = px[i * 4 + 2] = px[i * 4 + 3] = 0;
+        } else {
+            px[i * 4 + 3] = 255;
+            done[i] = 1;
+        }
+    }
+    constexpr int kPassos = 4;
+    std::vector<uint8_t> next;
+    for (int passo = 0; passo < kPassos; ++passo) {
+        next = done;
+        bool mudou = false;
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                const size_t i = static_cast<size_t>(y) * w + x;
+                if (done[i]) continue;
+                int soma[3] = {0, 0, 0}, cnt = 0;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int nx = x + dx, ny = y + dy;
+                        if ((dx | dy) == 0 || nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                        const size_t j = static_cast<size_t>(ny) * w + nx;
+                        if (!done[j]) continue;
+                        for (int c = 0; c < 3; ++c) soma[c] += px[j * 4 + c];
+                        ++cnt;
+                    }
+                }
+                if (cnt == 0) continue;
+                for (int c = 0; c < 3; ++c) px[i * 4 + c] = static_cast<uint8_t>((soma[c] + cnt / 2) / cnt);
+                next[i] = 1;
+                mudou = true;
+            }
+        }
+        done.swap(next);
+        if (!mudou) break;
+    }
+}
+
 bool Engine::loadSpriteFromPng(const std::string& path, LoadedSprite& out) {
     cleanupSpriteTextures(out);
 
@@ -399,20 +445,13 @@ bool Engine::loadSpriteFromPng(const std::string& path, LoadedSprite& out) {
     img.pixels.assign(data, data + static_cast<size_t>(w) * h * 4);
     stbi_image_free(data);
 
-    // Pre-process: remove anti-aliased purple/magenta fringes from the alpha border.
-    // Some PNGs carry colored semi-transparent pixels that become a visible outline
-    // under nearest/bilinear sampling; threshold them to hard alpha and neutral RGB.
-    for (int i = 0; i < w * h; ++i) {
-        uint8_t a = img.pixels[i * 4 + 3];
-        if (a < 128) {
-            img.pixels[i * 4 + 0] = 0;
-            img.pixels[i * 4 + 1] = 0;
-            img.pixels[i * 4 + 2] = 0;
-            img.pixels[i * 4 + 3] = 0;
-        } else {
-            img.pixels[i * 4 + 3] = 255;
-        }
-    }
+    // Pre-process: alfa duro (limiar 128) e DILATACAO DE COR: o texel
+    // transparente leva a cor do vizinho opaco (alfa 0). Antes ele virava
+    // preto, e qualquer leitura filtrada (sprite_filter 1, mips) puxava a
+    // borda para um contorno escuro; as franjas roxas da arte anti-serrilhada
+    // saem igual, porque a cor vem do miolo opaco. Na leitura nearest o texel
+    // transparente e' descartado, entao a imagem nao muda.
+    dilateSpriteColor(img.pixels, w, h);
 
     createTextureFromSprImage(img, nullptr, false, out.textures, false, path);
     out.indexedTextureCount = 0;

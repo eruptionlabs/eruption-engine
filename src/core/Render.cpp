@@ -1088,6 +1088,7 @@ void Engine::render() {
     if (m_vfx.active()) {
         m_vulkan.writeTimestamp(cmd, 12, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         bw::setPass("VFX Sim"); // medidor de banda: mesmo nome do tempo de GPU
+        m_vfx.setSunShadow(m_shadowRenderer.shadowAtlasView(), m_deferredLighting.shadowUboBuffer());
         m_vfx.simulate(cmd, m_gbuffer.depthView());
         // Particulas de malha (detritos, estilhacos): opacas, no G-buffer,
         // DEPOIS da simulacao. A colisao le' a profundidade so' da cena - com
@@ -2128,6 +2129,28 @@ void Engine::render() {
     m_postProcessor.setGodRaySun(m_godRaySun);
     m_postProcessor.setLensFlare(m_lensFlare, m_lensFlareRays);
     m_postProcessor.setSpriteMark(m_gbuffer.pbrView());
+    {
+        // Luz volumetrica do sol, antes do post (o composite soma, binding 15).
+        m_volumetric.resize(m_gbuffer.extent().width, m_gbuffer.extent().height);
+        VolumetricLight::Params vp;
+        vp.invViewProj = glm::inverse(m_camera.viewProjNoJitter());
+        vp.cameraPos = m_camera.position();
+        vp.toSun = glm::normalize(-env.sun.direction);
+        vp.sunRadiance = env.sun.color * env.sun.intensity;
+        vp.tint = m_lookConfig.volumetricTint;
+        vp.intensity = m_lookConfig.volumetricIntensity;
+        vp.density = m_lookConfig.volumetricDensity;
+        vp.anisotropy = m_lookConfig.volumetricAnisotropy;
+        vp.fogHeight = postSettings.fogHeight;
+        vp.fogFalloff = postSettings.fogHeightFalloff;
+        vp.maxDistance = m_volumetricMaxDist;
+        vp.steps = m_volumetricSteps;
+        vp.nearPlane = m_camera.nearPlane();
+        vp.farPlane = m_camera.farPlane();
+        m_volumetric.render(cmd, m_gbuffer.depthView(), m_shadowRenderer.shadowAtlasView(),
+                            m_deferredLighting.shadowUboBuffer(), vp);
+        m_postProcessor.setVolumetric(m_volumetric.outputView(), m_volumetric.active());
+    }
     m_postProcessor.render(cmd, postHdrInput, m_gbuffer.depthView(), m_gbuffer.normalView(),
                            m_gbuffer.normalView(), m_shadowRenderer.shadowAtlasView(), m_camera.viewMatrix(),
                            m_camera.projNoJitter(), glm::inverse(m_camera.viewProjNoJitter()), m_prevViewProjNoJitter,

@@ -132,6 +132,31 @@ void LookConfig::loadFromJson(const nlohmann::json& j) {
     shadowTintStrength    = j.value("shadow_tint_strength", shadowTintStrength);
     highlightTintStrength = j.value("highlight_tint_strength", highlightTintStrength);
 
+    colorLut      = j.value("color_lut", colorLut);
+    wbTemperature = j.value("wb_temperature", wbTemperature);
+    wbTint        = j.value("wb_tint", wbTint);
+    readColor(j, "lift", lift);
+    readColor(j, "gamma", gammaRgb);
+    readColor(j, "gain", gain);
+    vibrance      = j.value("vibrance", vibrance);
+    if (j.contains("curve") && j["curve"].is_array()) {
+        curvePoints.clear();
+        for (const auto& v : j["curve"]) {
+            if (v.is_number()) curvePoints.push_back(v.get<float>());
+            else if (v.is_array() && v.size() >= 2) { // [[x,y], ...]
+                curvePoints.push_back(v[0].get<float>());
+                curvePoints.push_back(v[1].get<float>());
+            }
+        }
+    }
+    lutPath       = j.value("lut", lutPath);
+    lutStrength   = j.value("lut_strength", lutStrength);
+
+    volumetricIntensity  = j.value("volumetric_intensity", volumetricIntensity);
+    volumetricDensity    = j.value("volumetric_density", volumetricDensity);
+    readColor(j, "volumetric_tint", volumetricTint);
+    volumetricAnisotropy = j.value("volumetric_anisotropy", volumetricAnisotropy);
+
     farLayerSaturation = j.value("far_layer_saturation", farLayerSaturation);
     farLayerFog        = j.value("far_layer_fog", farLayerFog);
 

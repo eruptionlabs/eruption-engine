@@ -1928,6 +1928,47 @@ int world_set_focus(lua_State* L) {
     // tela ficaria desfocado por estar "longe" quando esta' no mesmo plano.
     const Vec3 frente = glm::normalize(c.forward());
     s.focusDistance = glm::max(glm::dot(p - c.position(), frente), 0.01f);
+    s.focusPointSet = true;
+    s.focusPoint = p;
+    s.focusModel = -1;
+    s.focusTiltAngle = std::numeric_limits<float>::quiet_NaN();
+    s.focusRampNear = s.focusRampFar = s.focusTiltMaxNear = s.focusTiltMaxFar = s.focusScreenMix = -1.0f;
+    if (lua_istable(L, 2)) {
+        // Forma nova: world.set_focus(ponto, {aperture, foreground, band,
+        // max_blur, model, tilt_angle, ramp_near, ramp_far, max_near,
+        // max_far, screen_mix}). Campo ausente = o do postprocess.json.
+        auto campo = [L](const char* k, float def) {
+            lua_getfield(L, 2, k);
+            const float v = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : def;
+            lua_pop(L, 1);
+            return v;
+        };
+        s.focusAperture = campo("aperture", -1.0f);
+        lua_getfield(L, 2, "foreground");
+        s.focusForeground = lua_isnil(L, -1) ? true : lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        const float faixa = campo("band", -1.0f);
+        s.focusBand = faixa < 0.0f ? -1.0f : faixa;
+        const float teto = campo("max_blur", -1.0f);
+        s.focusMaxBlur = teto < 0.0f ? -1.0f : teto;
+        lua_getfield(L, 2, "model");
+        if (lua_isstring(L, -1)) {
+            const std::string m = lua_tostring(L, -1);
+            s.focusModel = m == "tilt_plane" ? 2 : (m == "thin_lens" ? 1 : (m == "linear" ? 0 : -1));
+            if (s.focusModel < 0) luaL_error(L, "world.set_focus: model must be \"linear\", \"thin_lens\" or \"tilt_plane\"");
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, 2, "tilt_angle");
+        if (lua_isnumber(L, -1)) s.focusTiltAngle = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+        s.focusRampNear = campo("ramp_near", -1.0f);
+        s.focusRampFar = campo("ramp_far", -1.0f);
+        s.focusTiltMaxNear = campo("max_near", -1.0f);
+        s.focusTiltMaxFar = campo("max_far", -1.0f);
+        s.focusScreenMix = campo("screen_mix", -1.0f);
+        s.focusOverride = true;
+        return 0;
+    }
     s.focusAperture = lua_isnoneornil(L, 2) ? -1.0f : static_cast<float>(luaL_checknumber(L, 2));
     s.focusForeground = lua_isnoneornil(L, 3) ? true : lua_toboolean(L, 3) != 0;
     // Faixa nitida e teto do borrao (PostSettings::focusBand/focusMaxBlur).
@@ -2876,8 +2917,13 @@ declare world: {
     -- that many world units on each side of the point fully sharp (a whole
     -- group, not a single plane); `max_blur` is the blur limit in pixels at
     -- full resolution (default 3; above it a cheap wide blur takes over). No
-    -- point at all gives the lens back to the automatic focus.
-    set_focus: (point: vector?, aperture: number?, foreground: boolean?, band: number?, max_blur: number?) -> (),
+    -- point at all gives the lens back to the automatic focus. The second
+    -- argument may also be a table: {aperture, foreground, band, max_blur,
+    -- model = \"linear\" | \"thin_lens\" | \"tilt_plane\", tilt_angle (degrees,
+    -- 0 = upright plane facing the camera, 90 = level plane), ramp_near,
+    -- ramp_far (world units after the band), max_near, max_far (pixels at
+    -- 1080p), screen_mix (0..1, mixes in a screen-height band)}.
+    set_focus: (point: vector?, aperture: (number | {[string]: any})?, foreground: boolean?, band: number?, max_blur: number?) -> (),
     -- Hides map and model geometry inside a volume (a mountain or a wall
     -- between the camera and the action) as a dither pattern. `slot` is 1..4;
     -- nil turns that slot off. Table: shape = "box" (size = vector, full

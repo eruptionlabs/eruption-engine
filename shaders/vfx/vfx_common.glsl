@@ -73,6 +73,7 @@ const uint VFXF_HIDDEN       = 1u << 15; // fora da visao de equipe: simula, nao
 const uint VFXF_MESH_SHIFT   = 16u;     // 4 bits: malha da particula + 1 (0 = sprite)
 const uint VFXF_MESHLO_SHIFT = 20u;     // 4 bits: versao de longe da malha + 1 (0 = nao tem)
 const uint VFXF_DECAL        = 1u << 24; // deitada e projetada na profundidade da cena
+const uint VFXF_SHADOWED     = 1u << 25; // termo do sol passa pelo mapa de sombra do sol
 
 // Pedido de nascimento (CPU -> GPU): `count` particulas do emissor `slot`,
 // ocupando [first, first+count) da fila de nascimento deste frame.

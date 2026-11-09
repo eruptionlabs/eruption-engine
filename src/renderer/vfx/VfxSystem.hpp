@@ -163,6 +163,9 @@ public:
     // Compute (depois do G-buffer: a colisao usa a profundidade deste frame,
     // que precisa estar em SHADER_READ_ONLY_OPTIMAL).
     void simulate(VkCommandBuffer cmd, VkImageView depthView);
+    // Mapa de sombra do sol + ShadowUBO (emissores "shadowed"). Chamar antes
+    // de simulate(); VK_NULL_HANDLE = sem sombra (acesas).
+    void setSunShadow(VkImageView atlas, VkBuffer ubo) { m_sunShadowView = atlas; m_sunShadowUbo = ubo; }
     // Camada de meia resolucao (fumaca): FORA de qualquer rendering, antes de
     // draw(). Sem emissor lowRes ativo nao faz nada.
     void drawLowRes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent);
@@ -348,6 +351,10 @@ private:
     std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setLow{};
     std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setGround{};
     std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setIce{};
+    std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setSunShadow{};
+    std::array<VkBuffer, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setSunUbo{};
+    VkImageView m_sunShadowView = VK_NULL_HANDLE;
+    VkBuffer m_sunShadowUbo = VK_NULL_HANDLE;
     VkImage m_groundImage = VK_NULL_HANDLE;
     VmaAllocation m_groundAlloc = VK_NULL_HANDLE;
     VkImageView m_groundView = VK_NULL_HANDLE;
@@ -370,6 +377,7 @@ private:
         VkDeviceSize size = 0;
     };
     Buf m_particles, m_dead, m_alive, m_counters, m_render, m_sort, m_events, m_recs;
+    Buf m_sunUboFallback; // binding 19 sem ShadowUBO
     Buf m_ringIndex; // 18 indices do poligono de 8 lados (draw indexado)
     // Malhas de particula carregadas (ate' 8; id no emissor = indice + 1).
     struct GpuMesh {
