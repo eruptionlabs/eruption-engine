@@ -2596,6 +2596,29 @@ ModelRenderer::PreparedNode ModelRenderer::prepareNode(const ModelAsset& asset, 
         aabbMin = glm::min(aabbMin, v.position);
         aabbMax = glm::max(aabbMax, v.position);
     }
+    // ALVO DO CROSSFADE POR TRIANGULO. O indice da textura de destino chega
+    // 'flat' ao shader (vem do primeiro vertice), mas so' os vertices com peso
+    // > 0 recebiam o slot: com o primeiro canto em peso 0 e os outros nao, o
+    // triangulo inteiro misturava com o slot 0 (textura padrao escura) - um
+    // losango escuro por par de triangulos na borda da transicao. Aqui todo
+    // canto do triangulo leva o alvo de quem tem; o peso 0 continua 0.
+    if (vertices.size() == node.vertices.size()) {
+        for (size_t t = 0; t + 2 < node.indices.size(); t += 3) {
+            const uint32_t a = node.indices[t], b = node.indices[t + 1], c = node.indices[t + 2];
+            if (a >= vertices.size() || b >= vertices.size() || c >= vertices.size()) continue;
+            TerrainVertex* corner[3] = {&vertices[a], &vertices[b], &vertices[c]};
+            const TerrainVertex* src = nullptr;
+            for (const TerrainVertex* k : corner)
+                if (k->blendTexIndex != 0 && k->blendWeight > 0.0f) { src = k; break; }
+            if (!src) continue;
+            for (TerrainVertex* k : corner)
+                if (k->blendTexIndex == 0) {
+                    k->blendTexIndex = src->blendTexIndex;
+                    k->blendPbrIndex = src->blendPbrIndex;
+                    k->blendNormalIndex = src->blendNormalIndex;
+                }
+        }
+    }
 
     XLAP("vertices");
     // Reindexa: a malha vem DESINDEXADA do parser (um vértice por

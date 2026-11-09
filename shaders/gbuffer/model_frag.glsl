@@ -791,7 +791,7 @@ void main() {
 
     bool hasBlendMask = inBlendMaskIndex != 0u;
     float blendT = inBlendWeight;
-    if (!hasSplat && inBlendWeight > 0.0) {
+    if (!hasSplat && inBlendWeight > 0.0 && inBlendTexIndex != 0u) {
         uint bTexIdx = nonuniformEXT(inBlendTexIndex);
         vec4 bColor = slotTextureGrad(bTexIdx, uv, ddxUV, ddyUV);
         if (hasBlendMask) {
@@ -889,7 +889,7 @@ void main() {
         vec4 sampledNormal = !hasNormal ? vec4(0.5, 0.5, 1.0, 0.0)
                            : quebraLadrilho ? amostraSemGrade(nIdx, uv, ddxUV, ddyUV, false)
                                             : slotTextureGrad(nIdx, uv, ddxUV * exp2(ndSmooth), ddyUV * exp2(ndSmooth));
-        if (!hasSplat && inBlendWeight > 0.0 && inBlendNormalIndex != 0u) {
+        if (!hasSplat && inBlendWeight > 0.0 && inBlendTexIndex != 0u && inBlendNormalIndex != 0u) {
             uint bnIdx = nonuniformEXT(inBlendNormalIndex);
             vec4 bNormal = slotTextureGrad(bnIdx, uv, ddxUV * exp2(ndSmooth), ddyUV * exp2(ndSmooth));
             sampledNormal = mix(sampledNormal, bNormal, blendT);
@@ -1100,7 +1100,7 @@ void main() {
     if (hasPbr) {
         uint pIdx = nonuniformEXT(inPbrIndex);
         vec4 mrahw = amostraChao(pIdx, uv, ddxUV, ddyUV, quebraLadrilho, true);
-        if (!hasSplat && inBlendWeight > 0.0 && inBlendPbrIndex != 0u) {
+        if (!hasSplat && inBlendWeight > 0.0 && inBlendTexIndex != 0u && inBlendPbrIndex != 0u) {
             uint bpIdx = nonuniformEXT(inBlendPbrIndex);
             vec4 bMrahw = slotTexture(bpIdx, uv);
             mrahw = mix(mrahw, bMrahw, blendT);

@@ -383,9 +383,22 @@ float heightSplatLayer(uint word, vec2 uvIn, float gain) {
 // basePbr != 0: a base do chao tem MRAH-W e entra pelo alfa dele (antes o chao
 // com base PBR ignorava as camadas e o relevo saia so' da base, mesmo onde a
 // tela mostrava outra camada - mapa de lava). basePbr = 0: o de antes.
+// Crossfade de 2 materiais (blend por vertice, fora do splat): o alvo entra na
+// altura pelo mesmo peso da cor (model_frag), pelo MRAH-W dele quando tiver.
+// Antes a altura era so' a da base: onde a tela mostrava o alvo, o relevo e a
+// luz continuavam os da base. Preenchidos no main antes de ler a altura.
+uint gBlendTex = 0u, gBlendPbr = 0u;
+float gBlendW = 0.0;
+float heightBlendTarget(float hBase, vec2 uvIn, float gain) {
+    if (gBlendW <= 0.0 || gBlendTex == 0u) return hBase;
+    float hT = gBlendPbr != 0u ? heightUv(gBlendPbr, uvIn, gain, true) : heightUv(gBlendTex, uvIn, gain, false);
+    return mix(hBase, hT, gBlendW);
+}
+
 float heightSplatMix(vec2 uvIn, vec2 maskUv, uint baseTex, uint basePbr, uvec2 splat, uvec2 splat2,
                      uint maskIdx, uint maskIdx2, float gain) {
     float hBase = basePbr != 0u ? heightUv(basePbr, uvIn, gain, true) : heightUv(baseTex, uvIn, gain, false);
+    hBase = heightBlendTarget(hBase, uvIn, gain);
     if ((splat.x | splat.y) == 0u || maskIdx == 0u) return hBase;
     vec4 w = slotTextureLod(maskIdx, maskUv, 0.0);
     uint s0 =  splat.x        & 0xFFFFu;
@@ -517,6 +530,12 @@ void main() {
     outSplatTex = inSplatTex[0];
     outSplatTex2 = inSplatTex2[0];
     outBlendMaskIndex2 = inBlendMaskIndex2[0];
+    // Alvo do crossfade so' fora do splat, como no frag (hasSplat desliga o blend).
+    if ((inSplatTex[0].x | inSplatTex[0].y) == 0u || inBlendMaskIndex[0] == 0u) {
+        gBlendTex = inBlendTexIndex[0];
+        gBlendPbr = inBlendPbrIndex[0];
+        gBlendW = gBlendTex != 0u ? clamp(outBlendWeight, 0.0, 1.0) : 0.0;
+    }
 
     // DESLOCAMENTO. Amplitude = u_tessParams.z, atenuada pela posicao na curva:
     // 1 no pico da banda, 0 onde o fator volta a 1. Mip 2 na leitura de altura:
