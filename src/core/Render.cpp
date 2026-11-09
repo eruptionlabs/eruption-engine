@@ -874,6 +874,11 @@ void Engine::render() {
                                                               (2.0f * std::tan(glm::radians(m_camera.fov()) * 0.5f)));
     if (m_shadowRenderer.settings().enabled && shadowUpdate) {
         m_shadowRenderer.setSunAngularRadius(m_deferredLighting.sunAngularRadius());
+        // Editor (voo): centro da sombra no chao do centro da tela, nao no
+        // alvo 500 u a' frente - com a camera mais baixa a caixa ficava longe
+        // do que se ve e cortava a sombra pela metade (ponte do mapa de teste).
+        if (m_editorMode) m_shadowRenderer.setFocus(m_camera.position() + m_camera.forward() * cameraGroundDistance());
+        else m_shadowRenderer.clearFocus();
         m_shadowRenderer.updateCascades(env.sun, m_camera, zoomPercent, m_dayNightCycle.timeOfDay());
         // ERUPTION_TEST_SHADOW_ANCHOR_LOG=1: posicao da camera lida pelas cascatas
         // neste quadro; a do passe de luz sai na linha [SHADOWANCHOR] (mesmo quadro?).

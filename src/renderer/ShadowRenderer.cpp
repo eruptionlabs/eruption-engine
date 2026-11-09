@@ -656,7 +656,6 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
     // -----------------------------------------------------------------
     // RANGE & CASCADE SETUP
     // -----------------------------------------------------------------
-    float orbitDist = camera.orbitDistance();
     float camPitch = camera.orbitPitch();
     float tPitch = glm::clamp((glm::degrees(camPitch) - 10.0f) / (90.0f - 10.0f), 0.0f, 1.0f);
 
@@ -683,7 +682,7 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
     auto computeMatrices = [&](Vec3 lDir, Mat4* renderMats, Mat4* lookupMats) {
         Vec3 up = std::abs(lDir.y) < 0.99f ? Vec3(0.0f, 1.0f, 0.0f) : Vec3(0.0f, 0.0f, 1.0f);
 
-        Vec3 camTarget = camera.target() + m_testShift;
+        Vec3 camTarget = (m_hasFocus ? m_focus : camera.target()) + m_testShift;
         Vec3 shadowCenter = Vec3(camTarget.x, 0.0f, camTarget.z);
 
         float lightPitchFactor = 1.0f / std::max(std::abs(lDir.y), 0.15f);
@@ -846,8 +845,15 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
                 const float tau = std::max(m_settings.csmFarSmoothTau, 1e-3f);
                 smoothK = 1.0f - std::exp(-dt / tau);
             }
+            // ALTURA REAL da camera sobre o chao do foco. orbitDist*sin(pitch)
+            // so' vale na orbita; no voo do editor a orbita fica presa em 500 e
+            // a altura sai maior que a real - o near ia alem do chao da parte de
+            // baixo da tela e a sombra ali sumia, pior quanto mais baixo
+            // (mapa de deserto, pitch 33). Na orbita as duas contas dao o mesmo.
+            const float camHeight = std::max(camera.position().y -
+                (m_hasFocus ? m_focus.y : camera.target().y), 1.0f);
             if (m_settings.csmFarAdaptive) {
-                const float h = std::max(orbitDist * std::sin(std::max(camPitch, 0.0f)), 1.0f);
+                const float h = camHeight;
                 const float angDown = camPitch + fovy * 0.5f;
                 if (angDown < glm::radians(89.0f) && angDown > glm::radians(1.0f)) {
                     const float x = h / std::tan(angDown);
@@ -885,7 +891,7 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
             // de ~4 graus ele aponta pro horizonte e vale o teto.
             float sfRaw = m_settings.csmFar;
             if (m_settings.csmFarAdaptive) {
-                const float h = std::max(orbitDist * std::sin(std::max(camPitch, 0.0f)), 1.0f);
+                const float h = camHeight;
                 const float ang = camPitch - fovy * 0.5f;
                 float groundFar = (ang > glm::radians(4.0f)) ? (h / std::sin(ang)) * 1.15f
                                                              : m_settings.csmFarMax;
@@ -1162,7 +1168,7 @@ void ShadowRenderer::updateCascades(const DirectionalLight& light, const Camera&
     computeMatrices(currentLightDir, m_cascadeRenderMatrices, m_cascadeLookupMatrices);
     computeMatrices(nextLightDir, m_nextCascadeRenderMatrices, m_nextCascadeLookupMatrices);
     holdFarCascade(camera, currentLightDir);
-    holdStaticCache(camera.target() + m_testShift);
+    holdStaticCache((m_hasFocus ? m_focus : camera.target()) + m_testShift);
     {
         // Receptores: a visao da camera sem jitter, 2% mais larga (o jitter
         // e o filtro da sombra leem um pouco alem da borda). A cascata

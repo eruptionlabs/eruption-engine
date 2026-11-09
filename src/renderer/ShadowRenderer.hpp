@@ -154,6 +154,12 @@ public:
 
     void resizeAtlas(uint32_t newSize);
     void setShadowSnaps(const float* yawSnaps, const float* timeSnaps, uint32_t count);
+    // Centro da sombra: por padrao o alvo da orbita (no jogo, o jogador no
+    // chao). O voo do editor deixa o alvo 500 u a' frente, embaixo do chao e
+    // longe do que a tela mostra; ali o Engine passa o ponto do chao no centro
+    // da tela (setFocus) e a caixa da cascata acompanha a vista.
+    void setFocus(const Vec3& p) { m_focus = p; m_hasFocus = true; }
+    void clearFocus() { m_hasFocus = false; }
     void updateCascades(const DirectionalLight& light, const Camera& camera, float zoomPercent, float timeOfDay);
     void renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrain, ModelRenderer* models, SpriteRenderer* sprites, const FrameUBO& frameUbo, VkBuffer spriteInstanceBuffer, uint32_t spriteCount);
     // Oclusores extras em cada cascata, depois dos sprites (particulas de
@@ -288,6 +294,8 @@ private:
     // Teste de estabilidade (ERUPTION_TEST_SHADOW_SHIFT): deslocamento e giro
     // que so' a sombra enxerga neste quadro (zero fora do teste).
     Vec3 m_testShift{0.0f};
+    Vec3 m_focus{0.0f};
+    bool m_hasFocus = false;
     float m_testYaw = 0.0f;
     Vec3 testRotate(const Vec3& f) const {
         if (m_testYaw == 0.0f) return f;
