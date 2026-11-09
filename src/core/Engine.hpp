@@ -253,6 +253,10 @@ public:
     float sampleTerrainHeight(float x, float z, float y = kAnyHeight, bool withRelief = true) const;
     // Raio contra a grade de altura do mapa (.ter); falso se o mapa não tem uma.
     bool raycastTerrain(const Vec3& origin, const Vec3& dir, float maxT, float& hitT) const;
+    // Distancia da camera ao chao no centro da tela (marcador das curvas por distancia).
+    float cameraGroundDistance() const;
+    // Painel fixo da camera (posicao/rotacao) com botao que grava a pose no log.
+    void drawCameraHud();
     static bool raycastGrid(const TerrainFile& ter, const Vec3& origin, const Vec3& dir, float maxT, float& hitT);
     // CLI/test hooks: spawn independent clouds (altitudes) at the player after
     // map load, tint clouds by altitude for automated tests, debug auto-spawn.
@@ -1567,6 +1571,7 @@ private:
     bool m_showEffectsMenu = false; 
     bool m_showObjectMenu = false;
     bool m_showStatsMenu = false;
+    bool m_showCameraHud = true; // painel "Camera" (ImGui.cpp, drawCameraHud)
     bool m_showPostProcessMenu = false;
     bool m_showSpritePicker = false; 
     bool m_showResourceManager = false; 

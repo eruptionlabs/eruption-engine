@@ -813,7 +813,7 @@ void Engine::drawLightingControls() {
     ImGui::Checkbox("Distance curves (relief)", &m_normalDistCurve);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Normal-map strength and mip bias driven by distance to the camera.");
     if (m_normalDistCurve) {
-        const float camDist = m_camera.orbitDistance();
+        const float camDist = cameraGroundDistance();
         ImGui::DragFloat("Curve max distance (u)", &m_normalDistMax, 5.0f, 50.0f, 20000.0f, "%.0f");
         SplineEditorUI::draw("Normal Map Scale by Distance", m_normalScaleCurve,
                              0.0f, m_normalDistMax, 0.0f, 3.0f, camDist,
@@ -873,7 +873,7 @@ void Engine::drawLightingControls() {
     // de sombra do sol antes de escurecer o pixel: 1 = como era, 0 = sem sombra.
     ImGui::Checkbox("Distance curve (shadow)", &m_shadowOpacityCurve);
     if (m_shadowOpacityCurve) {
-        const float camDist = m_camera.orbitDistance();
+        const float camDist = cameraGroundDistance();
         SplineEditorUI::draw("Sun Shadow Opacity by Distance", m_shadowOpacitySpline,
                              0.0f, m_normalDistMax, 0.0f, 1.0f, camDist,
                              m_shadowOpacitySpline.evaluate(camDist / std::max(m_normalDistMax, 1.0f)),
@@ -1949,6 +1949,8 @@ void Engine::renderImGui() {
             ImGui::End();
             if (!open) m_spherePreview.setActive(false);
         }
+
+        if (m_showCameraHud && (m_editorMode || m_showStatsMenu)) drawCameraHud();
 
         // ERUPTION_TEST_SHOW_STATS=1 (debug): open the F3 telemetry window from boot
         // (and preselect the Weather tab) so headless screenshot runs capture it.
@@ -3074,6 +3076,78 @@ void Engine::drawGameHud(ImDrawList* target, ImVec2 origin, ImVec2 size) {
     if (m_playerController && !m_demoHidePanels) m_playerController->renderMinimapMarkers();
 
     HudRenderer::endArea(target, mark, origin);
+}
+
+// Distancia que as curvas por distancia realmente veem: o shader mede da
+// camera ate' o vertice, e o marcador antes usava orbitDistance - que no modo
+// voo do editor nao muda (o alvo anda junto) e o marcador ficava parado.
+// Raio pelo centro da tela ate' o chao; sem acerto (olhando o ceu), a altura
+// da camera acima do alvo; por ultimo a distancia de orbita.
+float Engine::cameraGroundDistance() const {
+    const Vec3 origin = m_camera.position();
+    float t = 0.0f;
+    const Vec3 dir = m_camera.forward();
+    if (raycastTerrain(origin, dir, 20000.0f, t) && t > 0.0f) return t;
+    // Mapa sem grade .ter (chao so' no GLB, caso dos mapas do projeto): marcha
+    // pelo raio contra a altura do chao, passo crescendo com a distancia (2%),
+    // e refina o cruzamento por interpolacao. ~300 amostras ate' 5000 u, so'
+    // enquanto o painel esta' aberto.
+    float prevT = 0.0f, prevD = origin.y - sampleTerrainHeight(origin.x, origin.z, kAnyHeight, false);
+    if (prevD > 0.0f) {
+        for (t = 1.0f; t < 5000.0f; t += std::max(1.0f, t * 0.02f)) {
+            const Vec3 p = origin + dir * t;
+            const float d = p.y - sampleTerrainHeight(p.x, p.z, kAnyHeight, false);
+            if (d <= 0.0f) return prevT + (t - prevT) * prevD / std::max(prevD - d, 1e-4f);
+            prevT = t;
+            prevD = d;
+        }
+    }
+    const float dy = origin.y - m_camera.target().y;
+    if (dy > 0.0f) return dy;
+    return m_camera.orbitDistance();
+}
+
+// PAINEL DA CAMERA: onde ela esta' no mundo e para onde olha, sempre a' vista no
+// editor (e no jogo com o F3 aberto). "Gravar pose no log" escreve a linha
+// [CAMERA] nos dois formatos dos hooks de teste - ERUPTION_TEST_CAM_POSE
+// (absoluto) e uma linha de ERUPTION_TEST_POSE_LIST (relativa ao jogador) -
+// e copia a primeira para a area de transferencia: a vista do autor vira um
+// teste reproduzivel sem adivinhar zoom/angulo.
+void Engine::drawCameraHud() {
+    const Vec3 pos = m_camera.position();
+    const Vec3 tgt = m_camera.target();
+    const float yaw = glm::degrees(m_camera.orbitYaw());
+    const float pitch = glm::degrees(m_camera.orbitPitch());
+    const float dist = m_camera.orbitDistance();
+    const float chao = cameraGroundDistance();
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    // Dentro da vista da cena (canto de cima, a' esquerda), nao em cima dos
+    // paineis laterais do editor.
+    ImGui::SetNextWindowPos(m_editorMode ? ImVec2(ds.x * 0.19f, 85.0f) : ImVec2(10.0f, ds.y - 190.0f),
+                            ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    if (ImGui::Begin("Camera", &m_showCameraHud, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing)) {
+        ImGui::Text("mapa     %s", m_currentMapName.c_str());
+        ImGui::Text("posicao  %.2f  %.2f  %.2f", pos.x, pos.y, pos.z);
+        ImGui::Text("alvo     %.2f  %.2f  %.2f", tgt.x, tgt.y, tgt.z);
+        ImGui::Text("yaw %.1f   pitch %.1f   (graus)", yaw, pitch);
+        ImGui::Text("orbita %.1f u   ate' o chao %.1f u", dist, chao);
+        if (ImGui::Button("Gravar pose no log")) {
+            char abs[160];
+            std::snprintf(abs, sizeof(abs), "%.3f,%.3f,%.3f,%.2f,%.2f,%.2f", tgt.x, tgt.y, tgt.z, yaw, pitch, dist);
+            ImGui::SetClipboardText(abs);
+            if (m_playerController) {
+                const Vec3 sp = m_playerController->pos();
+                ERUPTION_LOG_WARN("[CAMERA] mapa=%s pos=(%.3f, %.3f, %.3f) ERUPTION_TEST_CAM_POSE=\"%s\" POSE_LIST=\"%.3f %.3f %.2f %.2f %.2f\"",
+                                  m_currentMapName.c_str(), pos.x, pos.y, pos.z, abs, tgt.x - sp.x, tgt.z - sp.z, yaw, pitch, dist);
+            } else {
+                ERUPTION_LOG_WARN("[CAMERA] mapa=%s pos=(%.3f, %.3f, %.3f) ERUPTION_TEST_CAM_POSE=\"%s\"",
+                                  m_currentMapName.c_str(), pos.x, pos.y, pos.z, abs);
+            }
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Escreve a pose no log ([CAMERA]) e copia o valor de ERUPTION_TEST_CAM_POSE.");
+    }
+    ImGui::End();
 }
 
 } // namespace eruption
