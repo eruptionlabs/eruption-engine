@@ -2757,15 +2757,6 @@ void Engine::applyPresetEffects() {
         if (preset->contains(key) && m_renderEffects.size() > idx)
             m_renderEffects[idx]->setEnabled((*preset)[key].get<bool>());
     }
-    // Contorno de sprite 2D (assado no carregamento): sprite_outline 0/1,
-    // sprite_outline_px (1..8), sprite_outline_color [r,g,b] 0..255.
-    m_spriteOutline = preset->value("sprite_outline", 0) != 0;
-    m_spriteOutlinePx = std::clamp(preset->value("sprite_outline_px", 1), 1, 8);
-    m_spriteOutlineRgb = {40, 40, 40};
-    if (preset->contains("sprite_outline_color") && (*preset)["sprite_outline_color"].is_array() &&
-        (*preset)["sprite_outline_color"].size() >= 3)
-        for (size_t c = 0; c < 3; ++c)
-            m_spriteOutlineRgb[c] = static_cast<uint8_t>(std::clamp((*preset)["sprite_outline_color"][c].get<int>(), 0, 255));
     // ERUPTION_TEST_NO_DOF vale por cima do preset: o quadro copia o toggle do
     // efeito para m_postSettings, entao so' desligar no inicio nao bastava (o
     // preset do mapa religava o DoF e a bancada media com desfoque).
@@ -3102,28 +3093,6 @@ void Engine::applyGraphicsPreset() {
             m_modelRenderer.setSeamWeld(false);
         }
         m_modelRenderer.setReliefBake(rb);
-    }
-    // CONTORNO DE MODELO (casco invertido assado na carga, ModelOutline.hpp):
-    // "model_outline" 0/1 (padrao 0 = igual a antes), "model_outline_color"
-    // [r,g,b] 0..1 e "model_outline_width" em unidades de mundo. O bloco
-    // "model_outline" do project.eruption passa por cima do preset.
-    {
-        ModelRenderer::OutlineConfig oc;
-        oc.enabled = p.value("model_outline", 0) != 0;
-        float rgb[3] = {0.12f, 0.12f, 0.12f};
-        if (p.contains("model_outline_color") && p["model_outline_color"].is_array() && p["model_outline_color"].size() == 3)
-            for (int i = 0; i < 3; ++i) rgb[i] = std::clamp(p["model_outline_color"][i].get<float>(), 0.0f, 1.0f);
-        oc.width = std::clamp(p.value("model_outline_width", 0.03f), 0.0f, 10.0f);
-        if (Project::instance().isOpen() && Project::instance().manifest().modelOutline.present) {
-            const auto& mo = Project::instance().manifest().modelOutline;
-            oc.enabled = mo.enabled;
-            oc.width = mo.width;
-            for (int i = 0; i < 3; ++i) rgb[i] = mo.color[i];
-        }
-        if (const char* e = std::getenv("ERUPTION_TEST_MODEL_OUTLINE")) oc.enabled = std::atoi(e) != 0;
-        auto b = [&](float v) { return uint32_t(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
-        oc.color = b(rgb[0]) | (b(rgb[1]) << 8) | (b(rgb[2]) << 16) | 0xFF000000u;
-        m_modelRenderer.setOutline(oc);
     }
     // Raios de luz das luzes pontuais (passe de pos, meia resolucao): quantas
     // luzes no maximo. 0 desliga (degraus baixo e medio do celular).
