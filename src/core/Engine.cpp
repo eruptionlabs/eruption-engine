@@ -706,6 +706,10 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_modelRenderer.setTextureResolver([this](const std::string& path) {
         return this->resolveModelTexture(path);
     });
+    m_modelRenderer.setTextureViewResolver([this](const std::string& path) {
+        ModelTextureGPU t;
+        return m_assetCache.getModelTexture(path, t) ? t.view : VkImageView(VK_NULL_HANDLE);
+    });
     // Relevo assado: alfa do MRAH-W que o bake das texturas embutidas fez para
     // a textura de cor (o mesmo mapa que a tesselacao le'). Chamado na carga
     // do modelo, tambem das threads de trabalho (so' le' m_embeddedBaked).

@@ -362,6 +362,15 @@ public:
     void shutdown();
 
     // Texture resolver: called to get bindless slot for a texture path.
+    // View da textura de cor ja' resolvida (nome saneado). Serve para a camada
+    // do splat do chao repetir a cor num trio de slots seguidos com o normal e
+    // o MRAH-W dela (splatLayerSlot); sem isso a camada pinta so' a cor.
+    void setTextureViewResolver(std::function<VkImageView(const std::string&)> r) { m_textureViewResolver = std::move(r); }
+    // Slot de cor por tras da palavra de 16 bits de uma camada do splat.
+    uint32_t splatColorSlot(uint32_t word) const {
+        auto it = m_splatRangeColor.find(word & 0x3FFFu);
+        return it != m_splatRangeColor.end() ? it->second : (word & 0x3FFFu);
+    }
     void setTextureResolver(std::function<uint32_t(const std::string&)> resolver) {
         // guarda o nome de cada slot: quem precisa dos pixels de uma textura
         // de malha so' tem o slot (por vertice)
@@ -1105,6 +1114,12 @@ private:
     std::unordered_map<uint32_t, std::unordered_map<std::string, ReliefGridInfo>> m_texReliefGrid; // slot -> arquivo
     std::unordered_map<uint32_t, int> m_groundTexRole;
     std::unordered_map<uint32_t, PbrTextureSlots> m_pbrByTexSlot;
+    // Camadas do splat do chao com PBR: trio cor/normal/MRAH-W em s, s+1, s+2
+    // (o mesmo contrato do TerrainPaint, kSplatHasNormal/kSplatHasMrahw).
+    uint32_t splatLayerSlot(const std::string& path, const std::string& pbrName);
+    std::function<VkImageView(const std::string&)> m_textureViewResolver;
+    std::unordered_map<std::string, uint32_t> m_splatLayerCache; // nome -> palavra empacotada
+    std::unordered_map<uint32_t, uint32_t> m_splatRangeColor;    // primeiro slot do trio -> slot da cor
     std::unordered_map<std::string, std::vector<uint32_t>> m_modelMeshCache;
     // E-PISO-GRANDE (spec 12): BVH por no' (chave "arquivo#indice do no'"),
     // construida na primeira raycastInstance e reusada depois - antes era

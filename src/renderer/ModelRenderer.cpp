@@ -716,6 +716,13 @@ void ModelRenderer::shutdown() {
 
 void ModelRenderer::clear() {
     dropReliefJobs(nullptr); // as tarefas escrevem em malhas que vao sair
+    // Trios das camadas do splat: as views sao de outros donos (cache de
+    // texturas e m_pbrTextureCache, liberado abaixo); so' os slots sao nossos.
+    if (m_bindless)
+        for (const auto& [first, color] : m_splatRangeColor)
+            for (uint32_t k = 0; k < 3; ++k) m_bindless->freeSlot(first + k);
+    m_splatRangeColor.clear();
+    m_splatLayerCache.clear();
     reliefClearMaps(); // alturas medianas do mapa que sai
     m_reliefFloors.clear();
     m_reliefFloorBuckets.clear();
@@ -1127,6 +1134,45 @@ uint32_t ModelRenderer::resolveTexture(const std::string& path) {
 
     m_textureCache[sanitizedPath] = slot;
     return slot;
+}
+
+// CAMADA DO SPLAT DO CHAO COM PBR. A camada so' levava o slot da cor: o
+// model.frag (camadaSplat) e a altura da tesselacao (heightSplatLayer) acham o
+// normal e o MRAH-W em slot+1 e slot+2 quando os bits 0x8000/0x4000 vem na
+// palavra - o contrato do TerrainPaint. No mapa importado a palavra vinha sem
+// bit, entao a camada pintava a cor sem normal, sem MRAH-W e sem relevo (visto
+// no mapa de lava: a textura de lava cobre o chao e ficava chapado). Aqui a
+// mesma view da cor e as duas do PBR vao para um trio de slots seguidos.
+uint32_t ModelRenderer::splatLayerSlot(const std::string& path, const std::string& pbrName) {
+    const uint32_t color = resolveTexture(path);
+    if (color == 0 || !m_bindless || !m_textureViewResolver) return color;
+    std::string key = path;
+    std::replace(key.begin(), key.end(), '/', '\\');
+    if (!key.empty() && key[0] == '\\') key = key.substr(1);
+    if (auto it = m_splatLayerCache.find(key); it != m_splatLayerCache.end()) return it->second;
+    uint32_t word = color;
+    // PBR pelo nome do MATERIAL, como a camada base (resolveNodeSlots): o
+    // nome da imagem embutida no GLB e' sintetico ("#mapa|imagem_0009.png") e
+    // nao acha os mapas cozidos (_normal/_mrahw) - a camada caia na sintese a
+    // partir do albedo e o relevo/AO nao eram os do material.
+    const PbrTextureSlots pbr = resolvePbrTextures(pbrName.empty() ? key : pbrName);
+    const VkImageView view = pbr.valid() ? m_textureViewResolver(key) : VK_NULL_HANDLE;
+    const uint32_t first = view != VK_NULL_HANDLE ? m_bindless->allocateRange(3) : 0;
+    if (first != 0 && first + 2 <= 0x3FFFu) {
+        m_bindless->updateTexture(first, view, m_sampler);
+        m_bindless->updateTexture(first + 1, pbr.normal.view, m_sampler);
+        m_bindless->updateTexture(first + 2, pbr.mrahw.view, m_sampler);
+        m_splatRangeColor[first] = color;
+        m_pbrByTexSlot.emplace(first, pbr);
+        word = first | 0x8000u | 0x4000u;
+    } else if (first != 0) {
+        for (uint32_t k = 0; k < 3; ++k) m_bindless->freeSlot(first + k);
+    }
+    ERUPTION_LOG_INFO("[SPLAT_PBR] camada '%s': cor %u -> %s (pbr %s, view %s)", key.c_str(), color,
+                      (word & 0x4000u) ? "trio cor/normal/MRAH-W" : "so' cor", pbr.valid() ? "sim" : "nao",
+                      view != VK_NULL_HANDLE ? "sim" : "nao");
+    m_splatLayerCache[key] = word;
+    return word;
 }
 
 void ModelRenderer::registerResolvedTexture(const std::string& path, uint32_t slot) {
@@ -1883,7 +1929,8 @@ static float reliefSizeScale(const ModelMeshGPU& mesh, float amplitude);
 // Papel de cada textura de uma malha de chao (previa de material): a cor do
 // vertice e' a que da' a altura do relevo; as camadas do splat so' pintam.
 // Vertice vizinho repete quase sempre as mesmas: so' olha quando muda.
-static void noteGroundTextures(const std::vector<TerrainVertex>& vertices, std::unordered_map<uint32_t, int>& role) {
+static void noteGroundTextures(const std::vector<TerrainVertex>& vertices, std::unordered_map<uint32_t, int>& role,
+                               const ModelRenderer& mr) {
     uint32_t lastTex = 0, last[4] = {0, 0, 0, 0};
     for (const TerrainVertex& v : vertices) {
         if (v.texIndex != 0 && v.texIndex != lastTex) {
@@ -1895,7 +1942,7 @@ static void noteGroundTextures(const std::vector<TerrainVertex>& vertices, std::
             if (packs[k] == last[k]) continue;
             last[k] = packs[k];
             for (uint32_t s : {packs[k] & 0xFFFFu, packs[k] >> 16})
-                if (s != 0) role.emplace(s, 2);
+                if ((s & 0x3FFFu) != 0) role.emplace(mr.splatColorSlot(s), 2);
         }
     }
 }
@@ -2057,6 +2104,13 @@ bool ModelRenderer::bakeReliefPreview(std::vector<TerrainVertex>& vertices, std:
     alphas.emplace(slot, std::move(a));
     ReliefTask t;
     t.vertices = vertices;
+    // Textura sem MRAH-W na GPU (camada de splat, imagem sem PBR): o assado so'
+    // le' altura de vertice com pbrIndex, e o cubo ficava liso com qualquer
+    // amplitude. A fonte acima ja' sintetiza a altura pelo albedo; a marca
+    // sai de novo na malha assada (o cubo desenha sem MRAH-W, como antes).
+    const bool marked = std::all_of(vertices.begin(), vertices.end(), [](const TerrainVertex& v) { return v.pbrIndex == 0; });
+    if (marked)
+        for (TerrainVertex& v : t.vertices) v.pbrIndex = 1;
     t.uploaded = indices;
     t.fullCount = static_cast<uint32_t>(indices.size());
     t.amplitude = amplitude;
@@ -2064,6 +2118,8 @@ bool ModelRenderer::bakeReliefPreview(std::vector<TerrainVertex>& vertices, std:
     t.store = false;
     computeRelief(t, alphas);
     if (!t.ok) return false;
+    if (marked)
+        for (TerrainVertex& v : t.outVertices) v.pbrIndex = 0;
     if (usedSpacing) *usedSpacing = t.spacing;
     vertices = std::move(t.outVertices);
     indices.assign(t.outIndices.begin() + t.outFirst, t.outIndices.begin() + t.outFirst + t.outCount);
@@ -2397,7 +2453,9 @@ ModelRenderer::NodeSlots ModelRenderer::resolveNodeSlots(const ModelAsset& asset
     out.splat.assign(nt, 0);
     for (size_t k = 0; k < nt; ++k) {
         if (k < use.mask.size() && use.mask[k]) out.mask[k] = resolveTexture(node.textureNames[k]);
-        if (k < use.splat.size() && use.splat[k]) out.splat[k] = resolveTexture(node.textureNames[k]);
+        if (k < use.splat.size() && use.splat[k])
+            out.splat[k] = splatLayerSlot(node.textureNames[k],
+                                          k < node.pbrTextureNames.size() ? node.pbrTextureNames[k] : std::string());
     }
     // NOME DO MATERIAL, nao o da imagem embutida: o GLB traz imagens com nome
     // sintetico ("#-00_0000.png") e o parser guarda o do material em
@@ -3154,7 +3212,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             }
             dbgVertsAfter += vertices.size();
             for (const auto& [slot, d] : pn->texUvPerUnit) m_texUvPerUnit.emplace(slot, d);
-            if (isGroundMesh) noteGroundTextures(vertices, m_groundTexRole);
+            if (isGroundMesh) noteGroundTextures(vertices, m_groundTexRole, *this);
             std::vector<ModelMeshGPU::GroundCell> groundCells = std::move(pn->groundCells);
             // Os niveis das celulas do chao sobem no mesmo buffer, depois da
             // malha cheia; indexCount continua sendo so' a malha cheia.
