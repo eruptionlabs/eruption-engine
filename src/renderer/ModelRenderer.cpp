@@ -760,6 +760,7 @@ void ModelRenderer::clear() {
     m_textureCache.clear();
     m_texUvPerUnit.clear();
     m_texReliefAmp.clear();
+    m_texReliefWhy.clear();
     m_texReliefGrid.clear();
     m_groundTexRole.clear();
     m_pbrByTexSlot.clear();
@@ -2322,6 +2323,14 @@ void ModelRenderer::uploadReliefs(std::vector<ReliefTask>& tasks, const std::str
     uploadCopies(ups);
     flushShadowStreams();
     const auto t2 = std::chrono::steady_clock::now();
+    // ERUPTION_TEST_RELIEF_SLOTS=<trecho> (diagnostico): lista, para cada textura do mapa cujo nome contem o
+    // trecho, o slot, a amplitude de relevo assado e o motivo de nao assar.
+    if (const char* want = std::getenv("ERUPTION_TEST_RELIEF_SLOTS")) {
+        for (const auto& [key, slot] : m_textureCache)
+            if (key.find(want) != std::string::npos)
+                ERUPTION_LOG_WARN("[RELEVO_SLOT] '%s' slot=%u amplitude=%.2f motivo=%u (1 esqueleto, 2 balanca, 4 desloc.0, 8 sem MRAH-W, 16 preset)",
+                                  key.c_str(), unsigned(slot), double(reliefAmplitudeForSlot(slot)), unsigned(reliefWhyForSlot(slot)));
+    }
     ERUPTION_LOG_WARN("[RELEVO] %s: %zu de %zu malhas assadas (%zu do cache), grade %.2f u (ate' %.2f), tris %zu -> %zu, "
                       "%.1f MB na GPU, piso %.2f MB na CPU, %.0f ms %s, subida %.0f ms",
                       label.c_str(), done, tasks.size(), cached, double(m_reliefBake.spacing), double(gridMax), trisIn,
@@ -3402,6 +3411,54 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                 for (const auto& v : vertices)
                     if (v.pbrIndex != 0) { baked = true; break; }
                 if (baked) createSeamWeld(mesh, vertices, *useIndices);
+            }
+
+            // Motivo de a malha NAO assar relevo, por textura (so' para o painel de material).
+            {
+                bool anyPbr = false;
+                for (const auto& v : vertices)
+                    if (v.pbrIndex != 0) { anyPbr = true; break; }
+                uint8_t why = 0;
+                if (m_reliefBake.mode == 0 || m_reliefBake.amplitude <= 0.0f) why |= 16;
+                if (skinned) why |= 1;
+                if (mesh.swayAmount > 0.0f) why |= 2;
+                if (mesh.dispScale <= 0.0f) why |= 4;
+                if (!anyPbr) why |= 8;
+                if (groundLive) why |= 64;
+                if (why != 0) {
+                    uint32_t last = 0;
+                    for (const auto& v : vertices)
+                        if (v.texIndex != 0 && v.texIndex != last) { last = v.texIndex; m_texReliefWhy[last] |= why; }
+                }
+                // Alvo do crossfade de 2 materiais (blend por vertice): a textura
+                // esta' na malha mesmo sem ser a base de nenhum triangulo. Sem
+                // isto o painel dizia "nenhuma malha deste mapa usa" para uma
+                // textura que aparece na tela. Leva o motivo da malha; numa
+                // malha assada (why = 0) o assado le' so' a altura da base: 128.
+                {
+                    uint32_t last = 0;
+                    for (const auto& v : vertices)
+                        if (v.blendTexIndex != 0 && v.blendWeight > 0.0f && v.blendTexIndex != last) {
+                            last = v.blendTexIndex;
+                            m_texReliefWhy[last] |= why != 0 ? why : uint8_t(128);
+                        }
+                }
+                // Camadas do splat do chao: a altura (assada ou ao vivo) vem
+                // so' da textura base, a camada nao tem altura propria. Sem
+                // isto o painel dizia "nenhuma malha deste mapa usa".
+                if (mesh.isGround) {
+                    uint32_t lastPk[4] = {};
+                    for (const auto& v : vertices) {
+                        if (v.blendMaskIndex == 0) continue;
+                        const uint32_t pk[4] = {v.splatTex01, v.splatTex23, v.splatTex45, v.splatTex67};
+                        if (std::equal(pk, pk + 4, lastPk)) continue;
+                        std::copy(pk, pk + 4, lastPk);
+                        for (int k = 0; k < (v.blendMaskIndex2 != 0 ? 8 : 4); ++k) {
+                            const uint32_t l = splatColorSlot((pk[k / 2] >> ((k & 1) * 16)) & 0xFFFFu);
+                            if (l != 0 && l != v.texIndex) m_texReliefWhy[l] |= 32;
+                        }
+                    }
+                }
             }
 
             // Relevo assado (preset "relief_bake"): onde a tesselacao desloca

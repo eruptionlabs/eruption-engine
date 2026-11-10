@@ -452,10 +452,25 @@ void Engine::drawEmbeddedTextures(UiText tr, const std::string& file, bool inlin
             ImGui::TextDisabled(tr("Cube: grid %.2f u, %zu triangles"), double(st.cubeSpacing), st.triangles);
     } else {
         ImGui::TextDisabled("%s", tr("The world bakes no relief from this texture."));
+        const uint8_t why = m_modelRenderer.reliefWhyForSlot(st.slot);
+        if (why == 0) ImGui::TextDisabled("%s", tr("Reason: no mesh in this map uses it."));
+        if (why & 16) ImGui::TextDisabled("%s", tr("Reason: the graphics preset has relief_bake off."));
+        if (why & 1) ImGui::TextDisabled("%s", tr("Reason: the mesh is skinned (animated skeleton)."));
+        if (why & 2) ImGui::TextDisabled("%s", tr("Reason: the mesh sways (vegetation)."));
+        if (why & 4) ImGui::TextDisabled("%s", tr("Reason: displacement factor is zero for this material (water)."));
+        if (why & 8) ImGui::TextDisabled("%s", tr("Reason: the mesh has no MRAH-W for this texture."));
+        if (why & 32)
+            ImGui::TextDisabled("%s", tr("Reason: ground splat layer - the ground relief comes from its base texture only."));
+        if (why & 64)
+            ImGui::TextDisabled("%s", tr("Reason: the ground uses live tessellation near the camera (relief_bake gbuffer)."));
+        if (why & 128)
+            ImGui::TextDisabled("%s", tr("Reason: only a two-material crossfade target - the baked relief reads the base texture."));
     }
     bool rebuild = false;
     if (ImGui::RadioButton(tr("Baked relief"), st.baked) && !st.baked) {
         st.baked = true;
+        // O mundo nao assa esta textura (amplitude 0): comeca pela amplitude do preset, para o cubo mostrar algo.
+        if (st.amplitude <= 0.0f) st.amplitude = m_modelRenderer.reliefBake().amplitude;
         rebuild = true;
     }
     ImGui::SameLine();
@@ -512,5 +527,6 @@ void Engine::drawEmbeddedTextures(UiText tr, const std::string& file, bool inlin
         }
     }
 }
+
 
 } // namespace eruption

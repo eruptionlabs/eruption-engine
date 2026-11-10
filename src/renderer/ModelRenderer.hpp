@@ -852,6 +852,15 @@ public:
     }
     // Relevo assado que o mundo deu a esta textura: amplitude (u; 0 = nenhuma
     // malha assada le' a altura dela) e grade que o assado usou (0 = nenhuma).
+    // Por que nenhuma malha com esta textura entrou no assado de relevo (bits:
+    // 1 malha com esqueleto, 2 balanca, 4 fator de deslocamento zero, 8 sem
+    // MRAH-W, 16 preset com o assado desligado, 32 camada de splat do chao, 64
+    // chao na tesselacao ao vivo, 128 so' alvo do crossfade de 2 materiais
+    // numa malha assada). 0 = nenhuma malha usa a textura.
+    uint8_t reliefWhyForSlot(uint32_t slot) const {
+        auto it = m_texReliefWhy.find(slot);
+        return it != m_texReliefWhy.end() ? it->second : uint8_t(0);
+    }
     float reliefAmplitudeForSlot(uint32_t slot) const {
         auto it = m_texReliefAmp.find(slot);
         return it != m_texReliefAmp.end() ? it->second : 0.0f;
@@ -1117,6 +1126,7 @@ private:
     std::unordered_map<std::string, PbrTextureSlots> m_pbrTextureCache;
     std::unordered_map<uint32_t, float> m_texUvPerUnit;
     std::unordered_map<uint32_t, float> m_texReliefAmp; // previa de material
+    std::unordered_map<uint32_t, uint8_t> m_texReliefWhy; // motivo de uma textura ficar sem relevo assado
     std::unordered_map<uint32_t, std::unordered_map<std::string, ReliefGridInfo>> m_texReliefGrid; // slot -> arquivo
     std::unordered_map<uint32_t, int> m_groundTexRole;
     std::unordered_map<uint32_t, PbrTextureSlots> m_pbrByTexSlot;
