@@ -89,4 +89,7 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     // Sprites (FrameUBO::spriteParams): x = sprite_filter (0 nearest, 1
     // bilinear nitido), y = sprite_normal_strength (normal map autoral).
     vec4 u_spriteParams;
+    // Luz de borda do lado do sol (FrameUBO::spriteRim): rgb = tinta, w =
+    // forca (0 desliga; characters.set_rim vezes a chave sprite_rim do preset).
+    vec4 u_spriteRim;
 };

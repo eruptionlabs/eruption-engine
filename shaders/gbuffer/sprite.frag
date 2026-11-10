@@ -50,6 +50,22 @@ float contraluz(vec3 toLight, vec3 toCam) {
     return smoothstep(-0.15, 0.75, -dot(normalize(toLight), toCam));
 }
 
+// LUZ DE BORDA DO LADO DA LUZ (rim): o filete claro na borda da silhueta que
+// ENCARA a luz (o lado do sol, de uma tocha forte), o que descola o boneco do
+// fundo mesmo de frente para a camera. A direcao "para fora" da borda vem do
+// gradiente do alfa na tela (vizinhos a +-2,5 px); a da luz, projetada no
+// plano do quadro pelas derivadas da posicao (eixos x/y da tela no mundo), o
+// que vale com qualquer FlipX ou convencao de Y. lateral = quanto a luz esta'
+// fora do eixo da vista (luz atras da camera nao desenha borda). Resultado
+// em 0..1 (mascara; a forca e a tinta ficam com quem soma a luz).
+float bordaParaLuz(vec2 fora, vec3 toLight, vec3 eixoX, vec3 eixoY) {
+    vec2 ls = vec2(dot(toLight, eixoX), dot(toLight, eixoY));
+    float lateral = length(ls);
+    if (lateral < 1e-3 || dot(fora, fora) < 1e-6) return 0.0;
+    float encara = dot(normalize(fora), ls / lateral);
+    return smoothstep(0.15, 0.85, encara) * smoothstep(0.05, 0.5, lateral);
+}
+
 float srgbToLinear(float c) {
     return (c <= 0.04045) ? (c / 12.92) : pow((c + 0.055) / 1.055, 2.4);
 }
@@ -203,20 +219,43 @@ void main() {
     // Borda da silhueta: algum vizinho transparente. Paleta (bit 256) le' o
     // indice, nao o alfa: indice 0 = transparente.
     vec3 rim = vec3(0.0);
-    if ((v_flags & 256u) == 0u) {
-        float minA = min(min(slotTexture(v_texIndex, v_uv + rimDx).a, slotTexture(v_texIndex, v_uv - rimDx).a),
-                         min(slotTexture(v_texIndex, v_uv + rimDy).a, slotTexture(v_texIndex, v_uv - rimDy).a));
+    // Luz de borda do sol (alfa do emissivo = 1 - mascara; directional.frag
+    // soma a luz com a sombra do sol e a tinta). 1 = sem borda (o padrao de
+    // todo sprite, e o que o caminho sem a luz de borda continua escrevendo).
+    float sunRim = 0.0;
+    const bool rimOn = u_spriteRim.w > 0.0;
+    if ((v_flags & 256u) == 0u || rimOn) {
+        const bool pal = (v_flags & 256u) != 0u;
+        vec4 tR = slotTexture(v_texIndex, v_uv + rimDx), tL = slotTexture(v_texIndex, v_uv - rimDx);
+        vec4 tD = slotTexture(v_texIndex, v_uv + rimDy), tU = slotTexture(v_texIndex, v_uv - rimDy);
+        vec4 aN = pal ? step(vec4(0.5 / 255.0), vec4(tR.r, tL.r, tD.r, tU.r)) : vec4(tR.a, tL.a, tD.a, tU.a);
+        float minA = min(min(aN.x, aN.y), min(aN.z, aN.w));
         float edge = 1.0 - smoothstep(0.05, 0.6, minA);
         if (edge > 0.0) {
             const vec3 toCam = normalize(u_cameraPos - v_worldPos);
             SpriteLight l = u_spriteLights[v_instance];
-            if (l.posStrength.w > 0.0)
-                rim += l.color.rgb * l.posStrength.w * contraluz(l.posStrength.xyz - v_worldPos, toCam) * 0.35;
-            // Sol (fica fora da lista): mais fraco, so' de dia.
-            if (u_sunDir.w > 0.0)
-                rim += u_sunColor.rgb * u_sunDir.w * contraluz(-u_sunDir.xyz, toCam) * 0.12;
+            if (!pal) {
+                if (l.posStrength.w > 0.0)
+                    rim += l.color.rgb * l.posStrength.w * contraluz(l.posStrength.xyz - v_worldPos, toCam) * 0.35;
+                // Sol (fica fora da lista): mais fraco, so' de dia.
+                if (u_sunDir.w > 0.0)
+                    rim += u_sunColor.rgb * u_sunDir.w * contraluz(-u_sunDir.xyz, toCam) * 0.12;
+            }
+            if (rimOn && dot(posDx, posDx) > 1e-12 && dot(posDy, posDy) > 1e-12) {
+                // Para fora = contra o gradiente do alfa, em pixels de tela.
+                const vec2 fora = -vec2(aN.x - aN.y, aN.z - aN.w);
+                const vec3 ex = normalize(posDx), ey = normalize(posDy);
+                if (u_sunDir.w > 0.0) sunRim = bordaParaLuz(fora, -u_sunDir.xyz, ex, ey) * edge;
+                // Luz pontual forte do lado: direto no emissivo (sem sombra,
+                // como a contraluz dela acima).
+                if (l.posStrength.w > 0.0) {
+                    const vec3 toL = normalize(l.posStrength.xyz - v_worldPos);
+                    rim += l.color.rgb * u_spriteRim.rgb * (l.posStrength.w * u_spriteRim.w * 0.5) *
+                           bordaParaLuz(fora, toL, ex, ey);
+                }
+            }
             rim *= edge * albedo.rgb * 2.0;
         }
     }
-    o_emissive = vec4(rim, 1.0);
+    o_emissive = vec4(rim, 1.0 - clamp(sunRim, 0.0, 1.0));
 }

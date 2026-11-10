@@ -837,6 +837,12 @@ public:
     // disco, 2 = disco + planar das ate' 2 luzes pontuais dominantes; -1 = a
     // do data/char_config.json.
     void setSpriteSink(float pixels) { m_spriteSinkPixels = std::clamp(pixels, 0.0f, 64.0f); }
+    // LUZ DE BORDA dos sprites do lado da luz (characters.set_rim): forca
+    // (0 desliga, ~0,3-0,8 sutil) e tinta; o preset "sprite_rim" multiplica.
+    void setSpriteRim(float strength, const Vec3& tint) {
+        m_spriteRimStrength = std::clamp(strength, 0.0f, 2.0f);
+        m_spriteRimTint = glm::clamp(tint, Vec3(0.0f), Vec3(1.0f));
+    }
     // Amplitude do relevo que o chao VISIVEL tem: o da tesselacao ou o da
     // malha assada no G-buffer (relief_bake "mesh"); 0 sem relevo na vista.
     float reliefInView() const {
@@ -2356,6 +2362,9 @@ private:
     int m_spriteShadowKind = -1;
     float m_spriteContactSun = 0.0f; // "map_contact": forca do disco ao sol (0..1)
     float m_spriteSinkPixels = 0.0f; // characters.set_sink: pixels do quadro abaixo do chao
+    float m_spriteRimStrength = 0.0f;  // characters.set_rim (0 = sem luz de borda)
+    Vec3 m_spriteRimTint{1.0f};
+    float m_spriteRimPreset = 1.0f;    // chave "sprite_rim" do preset (multiplica; 0 desliga)
     int spriteShadowKind() const;
     float m_groundBlendBand = 0.0f;
     float m_groundBlendFraction = 0.3f;

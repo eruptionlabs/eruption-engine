@@ -1228,6 +1228,20 @@ int characters_set_sink(lua_State* L) {
     eng().setSpriteSink(static_cast<float>(luaL_optnumber(L, 1, 0.0)));
     return 0;
 }
+// Luz de borda do lado da luz (Engine::setSpriteRim): forca e {color}.
+int characters_set_rim(lua_State* L) {
+    Vec3 tint(1.0f);
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "color");
+        if (lua_isvector(L, -1)) {
+            const float* v = lua_tovector(L, -1);
+            tint = Vec3(v[0], v[1], v[2]);
+        }
+        lua_pop(L, 1);
+    }
+    eng().setSpriteRim(static_cast<float>(luaL_optnumber(L, 1, 0.0)), tint);
+    return 0;
+}
 int characters_set_shadow(lua_State* L) {
     const char* k = luaL_optstring(L, 1, "");
     const int kind = std::strcmp(k, "planar") == 0 ? 0 : std::strcmp(k, "circle") == 0 ? 1
@@ -2594,6 +2608,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"walking", characters_walking}, {"face", characters_face}, {"show", characters_show}, {"say", characters_say}, {"play", characters_play}, {"animation", characters_animation},
         {"follow", characters_follow}, {"patrol", characters_patrol}, {"stop", characters_stop},
         {"set_shadow", characters_set_shadow}, {"set_sink", characters_set_sink},
+        {"set_rim", characters_set_rim},
         {"hide", characters_hide}, {"ring", characters_ring}, {"set_sprite", characters_set_sprite},
         {"add", characters_add}, {"remove", characters_remove}, {"release_sheet", characters_release_sheet},
         {"flash", characters_flash}, {"shake", characters_shake}, {"lunge", characters_lunge},
@@ -3027,6 +3042,12 @@ declare characters: {
     -- Every character's sprite drawn this many frame pixels lower (0..64,
     -- default 0): the feet sink into the ground instead of resting on it.
     set_sink: (pixels: number?) -> (),
+    -- Rim light: a thin bright edge on the side of every sprite that faces
+    -- the sun (only where the sun reaches it) and a strong nearby light.
+    -- strength 0 = off (default), ~0.3-0.8 subtle, up to 2; opts.color tints
+    -- it (0..1, default white). The graphics preset's "sprite_rim" multiplies
+    -- it (0 turns it off on weak GPUs).
+    set_rim: (strength: number?, opts: { color: vector? }?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,

@@ -772,6 +772,13 @@ void Engine::render() {
     frameUbo.tessNearSpacing = m_tessNearSpacing;
     frameUbo.reliefParams = Vec4(m_tessHeightMinSpacing, 0.0f, 0.0f, 0.0f);
     frameUbo.spriteParams = Vec4(m_spriteFilter, m_spriteNormalStrength, 0.0f, 0.0f);
+    {
+        // Luz de borda (characters.set_rim x preset sprite_rim): a das luzes
+        // pontuais sai no sprite.frag, a do sol no directional.frag (com a sombra).
+        const float rim = m_spriteRimStrength * m_spriteRimPreset;
+        frameUbo.spriteRim = Vec4(m_spriteRimTint, rim);
+        m_deferredLighting.setSpriteRim(m_spriteRimTint, rim);
+    }
     m_modelRenderer.setTessellation(tessOn, tessBandDistance(m_tessCurve, distMax) * m_tessBandScale);
     m_modelRenderer.setTessAmplitude(frameUbo.tessParams.z);
     // Relevo efetivo no log quando muda (amplitude, banda da curva, banda

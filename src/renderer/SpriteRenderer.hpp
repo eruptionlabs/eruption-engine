@@ -173,6 +173,9 @@ struct FrameUBO {
     // preset sprite_filter: 0 nearest, 1 bilinear nitido), y = forca do normal
     // map AUTORAL do sprite (sprite_normal_strength; 0 = sem). zw reservados.
     alignas(16) Vec4 spriteParams;
+    // LUZ DE BORDA do lado da luz (gbuffer/sprite.frag + lighting/directional.frag):
+    // rgb = tinta, w = forca efetiva (characters.set_rim x preset sprite_rim; 0 desliga).
+    alignas(16) Vec4 spriteRim;
 };
 
 // Luz pontual dominante de um sprite (Engine::spriteDominantLights), por

@@ -86,7 +86,9 @@ struct LightingUBO {
     // maquete - ate' agora o raio de PCF era FIXO, o que equivale a dizer
     // "fonte pontual no infinito" em toda cena.
     float sunAngularRadius;
-    uint32_t pad1;
+    // Luz de borda dos sprites do lado do sol (directional.frag): unorm 4x8,
+    // rgb = tinta, a = forca / 2. 0 = desligada (era pad1).
+    uint32_t spriteRim;
     alignas(16) Vec4 ambientSky;        // xyz=skyColor, w=unused
     alignas(16) Vec4 ambientGround;     // xyz=groundColor, w=unused
     alignas(16) Vec4 ssaoParams;        // x=enabled(0/1), y=strength, z=radius, w=unused
@@ -153,6 +155,8 @@ public:
     const LightingEnvironment& environment() const { return m_env; }
     void setGlobalIllumination(float intensity, float floor) { m_giIntensity = intensity; m_giAmbientFloor = floor; }
     void setSunAngularRadius(float radians) { m_sunAngularRadius = radians; }
+    // Luz de borda dos sprites do lado do sol: tinta (0..1) e forca (0..2; 0 desliga).
+    void setSpriteRim(const Vec3& tint, float strength);
     // O raio em uso (com o override de teste): a busca de bloqueador do PCSS
     // depende dele, e o recorte de casters da sombra precisa do mesmo alcance.
     float sunAngularRadius() const;
@@ -332,6 +336,7 @@ private:
     // Raio angular da fonte de sol, em radianos. Default = disco solar real
     // (0,53 grau). O preset diorama sobe isso pra fingir softbox.
     float m_sunAngularRadius = 0.0046f;
+    uint32_t m_spriteRim = 0; // LightingUBO::spriteRim
     float m_giIntensity = 1.0f;
     float m_giAmbientFloor = 0.10f;
     bool m_usePbr = [] { return std::getenv("ERUPTION_TEST_NO_PBR") == nullptr; }();

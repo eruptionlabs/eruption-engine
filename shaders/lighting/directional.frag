@@ -74,7 +74,7 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     float temperatureC;  // surface temperature in Celsius
     float pbrLightScale; // multiplier for PBR direct-light response (legacy unchanged)
     float sunAngularRadius; // era pad0; raio angular da fonte, em radianos
-    uint pad1;
+    uint spriteRim; // luz de borda do sprite: unorm 4x8, rgb = tinta, a = forca / 2 (0 desliga)
     vec4 ambientSky;
     vec4 ambientGround;
     vec4 ssaoParams;        // x=enabled, y=strength, z=radius, w=unused
@@ -1003,6 +1003,17 @@ void main() {
     // relevo que lê mesmo com a câmera de cima. Só a luz DIRETA é afetada;
     // o ambiente segue com a cavidade (albedo.a).
     float microSunVis = texture(gbufferEmissive, inUV).a;
+    // No sprite o alfa do emissivo e' outra coisa: 1 - mascara da borda do
+    // lado do sol (gbuffer/sprite.frag). A borda pega o sol so' onde o sol
+    // chega (sombra do mapa e das nuvens), na tinta e na forca do jogo.
+    if (g_spritePixel) {
+        vec4 rimP = unpackUnorm4x8(lights.spriteRim);
+        float rimMask = 1.0 - microSunVis;
+        microSunVis = 1.0;
+        if (rimP.a > 0.0 && rimMask > 0.0)
+            lit += albedoLinear * rimP.rgb * lColor * lIntensity * lights.pbrLightScale *
+                   (rimMask * rimP.a * 2.0 * (1.0 - max(shadow, cloudShadow)));
+    }
     lit *= microSunVis;
 
     // OCLUSAO DE CAVIDADE NA LUZ DIRETA.

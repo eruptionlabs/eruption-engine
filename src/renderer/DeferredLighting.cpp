@@ -911,6 +911,13 @@ void DeferredLighting::setIrradianceProbes(VkImageView view, VkSampler sampler,
 
 // ERUPTION_TEST_SUN_ANGULAR=<graus> (debug): varre o tamanho da fonte sem
 // recompilar. 0.53 = disco solar; 37 = softbox de 60cm a 40cm da maquete.
+void DeferredLighting::setSpriteRim(const Vec3& tint, float strength) {
+    auto u8 = [](float v) { return static_cast<uint32_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    m_spriteRim = strength > 0.0f
+                      ? (u8(tint.r) | (u8(tint.g) << 8) | (u8(tint.b) << 16) | (std::max(u8(strength * 0.5f), 1u) << 24))
+                      : 0u;
+}
+
 float DeferredLighting::sunAngularRadius() const {
     static const float kSunAngEnv = [] {
         const char* e = std::getenv("ERUPTION_TEST_SUN_ANGULAR");
@@ -945,7 +952,7 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     // sobre uma maquete), que e' o que endurece a sombra no contato e a
     // alarga longe do contato.
     ubo.sunAngularRadius = sunAngularRadius();
-    ubo.pad1 = 0;
+    ubo.spriteRim = m_spriteRim;
     ubo.dirLightDir = Vec4(m_env.sun.direction, m_env.sun.intensity);
     ubo.dirLightColor = Vec4(m_env.sun.color, m_env.ambientIntensity);
     

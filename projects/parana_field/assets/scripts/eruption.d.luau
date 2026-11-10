@@ -385,6 +385,12 @@ declare characters: {
     -- Every character's sprite drawn this many frame pixels lower (0..64,
     -- default 0): the feet sink into the ground instead of resting on it.
     set_sink: (pixels: number?) -> (),
+    -- Rim light: a thin bright edge on the side of every sprite that faces
+    -- the sun (only where the sun reaches it) and a strong nearby light.
+    -- strength 0 = off (default), ~0.3-0.8 subtle, up to 2; opts.color tints
+    -- it (0..1, default white). The graphics preset's "sprite_rim" multiplies
+    -- it (0 turns it off on weak GPUs).
+    set_rim: (strength: number?, opts: { color: vector? }?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,

@@ -3084,6 +3084,9 @@ void Engine::applyGraphicsPreset() {
     m_volumetricMaxDist = std::clamp(p.value("volumetric_max_distance", 600.0f), 10.0f, 20000.0f);
     m_volumetric.setMode(m_volumetricMode);
     m_spriteNormalStrength = std::clamp(p.value("sprite_normal_strength", 1.0f), 0.0f, 2.0f);
+    // HD-2D do jogo: o script liga, o preset so' multiplica ou desliga.
+    // Luz de borda (characters.set_rim): forca multiplicada por sprite_rim.
+    m_spriteRimPreset = std::clamp(p.value("sprite_rim", 1.0f), 0.0f, 2.0f);
     m_distortionStrength = std::clamp(p.value("distortion", 1.0f), 0.0f, 4.0f);
     m_vfx.setDistortionEnabled(m_distortionStrength > 0.0f);
     // Solda da costura do deslocamento (ModelRenderer::createSeamWeld): vale
