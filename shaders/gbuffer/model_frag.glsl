@@ -919,20 +919,12 @@ void main() {
             tangentNormal.y = -tangentNormal.y;
         }
         float strength = clamp(ndScale, 0.0, 3.0);
-        // RELEVO CONTADO UMA VEZ SO'. Na banda perto o vertice ja' chega
-        // DESLOCADO e com a normal do relevo (gradiente da altura, model.tese
-        // / derivada em model.vert) - e o normal map vem da MESMA altura. Com
-        // strength cheia aqui o sulco era iluminado duas vezes: uma pela
-        // geometria, outra pelo normal map, e a luz nao batia com a forma
-        // (autor: "a gente usava o normal antes, por algum motivo estava
-        // bugado"). Recua o normal map pela MESMA rampa com que o
-        // deslocamento entra na geometria: onde o relevo e' todo geometria
-        // sobra so' o detalhe fino (35%), na borda da banda volta inteiro.
-        if (u_tessParams.y > 0.5) {
-            float fN = lut8(u_tessLut0, u_tessLut1, distCam / max(u_tessParams.x, 1.0));
-            float inGeom = clamp((fN - 1.0) / max(u_tessParams.w - 1.0, 1e-3), 0.0, 1.0);
-            strength *= mix(1.0, 0.35, inGeom);
-        }
+        // NORMAL MAP INTEIRO TAMBEM NA FAIXA TESSELADA. Ele recuava para 35%
+        // onde a tesselacao desloca, para o sulco nao ser iluminado duas vezes.
+        // Mas a altura que desloca e' filtrada pelo espacamento da grade (com
+        // piso de 1 u, uns 20 px por ladrilho de ~40 u): a geometria so' leva o
+        // relevo grosso e o grao fino so' existe aqui. Com o recuo o grao sumia
+        // em toda a faixa tesselada.
         vec3 flatNormal = vec3(0.0, 0.0, 1.0);
         tangentNormal = mix(flatNormal, tangentNormal, strength);
         // TETO DE INCLINACAO DA NORMAL (ver u_tessParams2.z; 0 desliga).
