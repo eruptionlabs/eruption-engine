@@ -530,16 +530,32 @@ void ScriptHost::startScript(Script& s) {
 void ScriptHost::scan() {
     std::error_code ec;
     std::vector<fs::path> found;
-    for (const auto& e : fs::recursive_directory_iterator(m_dir, ec)) {
-        if (e.is_regular_file(ec) && e.path().extension() == ".luau" &&
-            e.path().filename().string().find(".d.luau") == std::string::npos)
-            found.push_back(e.path());
+    // Erro em qualquer ponto da listagem (disco lento/ocupado: o stat de uma
+    // entrada ou o passo do iterador falha) deixa a lista incompleta.
+    bool listingComplete = true;
+    fs::recursive_directory_iterator dirIt(m_dir, ec), dirEnd;
+    if (ec) listingComplete = false;
+    for (; !ec && dirIt != dirEnd; dirIt.increment(ec)) {
+        std::error_code fileEc;
+        const bool regular = dirIt->is_regular_file(fileEc);
+        if (fileEc) listingComplete = false;
+        if (regular && dirIt->path().extension() == ".luau" &&
+            dirIt->path().filename().string().find(".d.luau") == std::string::npos)
+            found.push_back(dirIt->path());
     }
+    if (ec) listingComplete = false;
     std::sort(found.begin(), found.end());
 
-    // Removidos
+    // So' sai quem SUMIU de fato. Antes um script fora da lista era tratado
+    // como apagado (on_stop + descarga) e voltava do zero na passada seguinte,
+    // perdendo o estado: uma listagem pela metade no disco lento "removia"
+    // dezenas de scripts de uma vez. Agora, com a lista incompleta ninguem
+    // sai, e mesmo com ela completa o arquivo tem de nao existir.
     for (auto it = m_scripts.begin(); it != m_scripts.end();) {
-        if (std::find(found.begin(), found.end(), it->path) == found.end()) {
+        std::error_code existsEc;
+        const bool gone = listingComplete && std::find(found.begin(), found.end(), it->path) == found.end() &&
+                          !fs::exists(it->path, existsEc) && !existsEc;
+        if (gone) {
             if (m_running && it->started) call(*it, "on_stop", 0);
             unload(*it);
             Logger::warning("Script removed: %s", it->path.filename().string().c_str());
