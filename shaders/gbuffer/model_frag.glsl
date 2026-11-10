@@ -474,7 +474,14 @@ void main() {
     // da tesselacao, quem deslocou foi o model.vert e a derivada de tela e' a
     // unica fonte da normal deslocada; facetada, mas melhor que sombrear como
     // se a superficie fosse lisa.
-    if (u_tessParams.y > 0.5 && inDispInfo.z < 9.0) {
+    // So' sem a grade por distancia (u_tessNearDistance = 0) e so' onde houve
+    // deslocamento (inDispInfo.y). Com a grade o model.tese ja' manda a normal
+    // analitica, e o que sobrava aqui era malha grosseira: o chao num nivel de
+    // LOD reduzido (fora do patch, deslocado so' nos vertices pelo model.vert)
+    // e a malha assada (sem deslocamento nenhum). A derivada de tela sombreava
+    // cada triangulo grande como um plano chapado - os "planos fantasma" por
+    // cima do chao e da pedra, e os dentes claros na base da pedra assada.
+    if (u_tessParams.y > 0.5 && u_tessNearDistance <= 0.0 && inDispInfo.z < 9.0 && inDispInfo.y > 1e-5) {
         float dT = distance(inWorldPos, u_cameraPos);
         float fT = lut8(u_tessLut0, u_tessLut1, dT / max(u_tessParams.x, 1.0));
         if (fT > 1.001) {
