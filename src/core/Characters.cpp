@@ -313,6 +313,7 @@ void Engine::updateCharacters(float dt, bool moveAlongPaths) {
     m_groundRings.clear();
     for (const auto& area : m_groundAreas) m_groundRings.push_back(area.second); // debaixo dos aneis
     m_portraitDt += dt;
+    m_spriteStepClock += dt; // relogio dos degraus da animacao (spriteStepFpsFor)
     for (size_t i = 0; i < m_characters.size(); ++i) {
         SceneCharacter& c = m_characters[i];
         if (c.parked || c.removed || !moveAlongPaths) continue;
@@ -451,6 +452,28 @@ void Engine::fadeCharacter(int index, float to, float seconds) {
     if (f.fadeTotal <= 0.0f) f.fade = f.fadeTo;
 }
 
+void Engine::setSpriteStepFps(const std::string& key, float fps) {
+    if (key.empty()) {
+        m_spriteStepFps = std::clamp(fps, 0.0f, 60.0f);
+    } else if (fps < 0.0f) {
+        m_spriteStepByKey.erase(key);
+    } else {
+        m_spriteStepByKey[key] = std::min(fps, 60.0f);
+    }
+}
+
+// fps dos degraus deste personagem: o nome dele, depois a folha, depois o
+// global; 0 = livre. O preset "sprite_step" false desliga tudo.
+float Engine::spriteStepFpsFor(const SceneCharacter& c) const {
+    if (!m_spriteStepAllowed) return 0.0f;
+    if (!m_spriteStepByKey.empty()) {
+        auto it = m_spriteStepByKey.find(c.name);
+        if (it == m_spriteStepByKey.end()) it = m_spriteStepByKey.find(c.sprite);
+        if (it != m_spriteStepByKey.end()) return it->second;
+    }
+    return m_spriteStepFps;
+}
+
 void Engine::drawCharacter(SceneCharacter& c, float dt) {
     if (!m_playerSpawnedOnActiveMap) return;
     LoadedSprite& ls = c.look;
@@ -520,19 +543,41 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         }
     }
 
+    // ANIMACAO EM DEGRAUS ("on twos"): a animacao acima segue no ritmo da
+    // folha; o quadro MOSTRADO so' troca quando o relogio comum passa de um
+    // degrau (1/fps s), igual para todo personagem no mesmo fps - o boneco
+    // anima a 8-12 quadros/s, como desenho animado, enquanto a posicao, a
+    // camera e as particulas seguem no fps da tela. Trocar de acao (virar,
+    // parar, golpe) mostra na hora: esperar o degrau atrasava a resposta.
+    int quadroMostrado = c.frame;
+    const float stepFps = spriteStepFpsFor(c);
+    if (stepFps > 0.0f) {
+        const int64_t degrau = static_cast<int64_t>(std::floor(m_spriteStepClock * double(stepFps)));
+        if (c.shownAction != actionIdx || c.shownStep != degrau || c.shownFrame >= quadros) {
+            c.shownAction = actionIdx;
+            c.shownFrame = c.frame;
+            c.shownStep = degrau;
+        }
+        quadroMostrado = c.shownFrame;
+    } else {
+        c.shownAction = -1;
+    }
+
     const Vec3 toCam = m_camera.position() - m_camera.target();
     const float spriteYaw = std::atan2(toCam.x, toCam.z);
     // ERUPTION_TEST_SPRITE_TRACE=1 (teste): por quadro, posicao no mundo e na tela (pixels do alvo de render,
     // com a camera deste ponto do quadro) de cada personagem desenhado: separa personagem que ANDA no mundo
-    // de camera que desliza.
+    // de camera que desliza. acao/quadro/mostrado: a animacao da folha e o quadro
+    // desenhado (diferem com a animacao em degraus, characters.set_anim_fps).
     static const bool kTrace = std::getenv("ERUPTION_TEST_SPRITE_TRACE") != nullptr;
     if (kTrace) {
         const Vec4 clip = m_camera.viewProjNoJitter() * Vec4(c.position, 1.0f);
         const VkExtent2D re = renderExtent();
         const float w = std::max(clip.w, 1e-4f);
-        ERUPTION_LOG_WARN("[SPR] q=%llu %s mundo=(%.2f,%.2f) tela=(%.1f,%.1f) yaw=%.1f", static_cast<unsigned long long>(m_framesCount),
-                          c.name.c_str(), c.position.x, c.position.z, (clip.x / w * 0.5f + 0.5f) * re.width,
-                          (clip.y / w * 0.5f + 0.5f) * re.height, glm::degrees(spriteYaw));
+        ERUPTION_LOG_WARN("[SPR] q=%llu %s mundo=(%.2f,%.2f) tela=(%.1f,%.1f) yaw=%.1f acao=%d quadro=%d mostrado=%d",
+                          static_cast<unsigned long long>(m_framesCount), c.name.c_str(), c.position.x, c.position.z,
+                          (clip.x / w * 0.5f + 0.5f) * re.width, (clip.y / w * 0.5f + 0.5f) * re.height,
+                          glm::degrees(spriteYaw), actionIdx, c.frame, quadroMostrado);
     }
 
     // SUCO: deslocamento, clarao, estica e opacidade deste quadro.
@@ -562,7 +607,7 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
     float headTop = -1e9f, headSide = 0.0f;
     const float peFolha = footMedianPx(ls);
 
-    for (const auto& spr : action.frames[static_cast<size_t>(c.frame)].sprites) {
+    for (const auto& spr : action.frames[static_cast<size_t>(quadroMostrado)].sprites) {
         int texIdx = spr.index + (spr.type == 1 ? static_cast<int>(ls.indexedTextureCount) : 0);
         if (texIdx < 0 || texIdx >= static_cast<int>(ls.textures.size())) continue;
         const auto& tex = ls.textures[static_cast<size_t>(texIdx)];

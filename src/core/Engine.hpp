@@ -416,6 +416,10 @@ public:
         LoadedSprite look;
         int frame = 0;
         float timer = 0.0f;
+        // Animacao em degraus (setSpriteStepFps): acao e quadro MOSTRADOS e
+        // o ultimo degrau do relogio em que foram trocados.
+        int shownAction = -1, shownFrame = 0;
+        int64_t shownStep = -1;
         bool walking = false;
         // Caminho achado (desvia de objetos sólidos e do que não se anda).
         std::vector<Vec3> path;
@@ -843,6 +847,12 @@ public:
         m_spriteRimStrength = std::clamp(strength, 0.0f, 2.0f);
         m_spriteRimTint = glm::clamp(tint, Vec3(0.0f), Vec3(1.0f));
     }
+    // ANIMACAO EM DEGRAUS (characters.set_anim_fps): o quadro mostrado do
+    // sprite so' muda N vezes por segundo, num relogio comum a todos (o
+    // passo do mundo, da camera e das particulas segue liso). 0 = livre.
+    // `key` vazio = global; senao o nome de um personagem ou o arquivo de
+    // uma folha (.spr), que vencem o global; fps < 0 apaga a regra da chave.
+    void setSpriteStepFps(const std::string& key, float fps);
     // Amplitude do relevo que o chao VISIVEL tem: o da tesselacao ou o da
     // malha assada no G-buffer (relief_bake "mesh"); 0 sem relevo na vista.
     float reliefInView() const {
@@ -2365,6 +2375,11 @@ private:
     float m_spriteRimStrength = 0.0f;  // characters.set_rim (0 = sem luz de borda)
     Vec3 m_spriteRimTint{1.0f};
     float m_spriteRimPreset = 1.0f;    // chave "sprite_rim" do preset (multiplica; 0 desliga)
+    float m_spriteStepFps = 0.0f;      // characters.set_anim_fps global (0 = livre)
+    std::unordered_map<std::string, float> m_spriteStepByKey; // personagem ou folha -> fps
+    bool m_spriteStepAllowed = true;   // chave "sprite_step" do preset (false desliga)
+    double m_spriteStepClock = 0.0;    // s; relogio comum dos degraus
+    float spriteStepFpsFor(const SceneCharacter& c) const;
     int spriteShadowKind() const;
     float m_groundBlendBand = 0.0f;
     float m_groundBlendFraction = 0.3f;

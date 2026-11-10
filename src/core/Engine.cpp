@@ -3087,6 +3087,8 @@ void Engine::applyGraphicsPreset() {
     // HD-2D do jogo: o script liga, o preset so' multiplica ou desliga.
     // Luz de borda (characters.set_rim): forca multiplicada por sprite_rim.
     m_spriteRimPreset = std::clamp(p.value("sprite_rim", 1.0f), 0.0f, 2.0f);
+    // Animacao em degraus (characters.set_anim_fps, custo zero): sprite_step false desliga.
+    m_spriteStepAllowed = p.value("sprite_step", true);
     m_distortionStrength = std::clamp(p.value("distortion", 1.0f), 0.0f, 4.0f);
     m_vfx.setDistortionEnabled(m_distortionStrength > 0.0f);
     // Solda da costura do deslocamento (ModelRenderer::createSeamWeld): vale

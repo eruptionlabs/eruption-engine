@@ -391,6 +391,13 @@ declare characters: {
     -- it (0..1, default white). The graphics preset's "sprite_rim" multiplies
     -- it (0 turns it off on weak GPUs).
     set_rim: (strength: number?, opts: { color: vector? }?) -> (),
+    -- Stepped sprite animation ("on twos"): the frame shown changes only
+    -- `fps` times per second (8-12 reads as hand-drawn), on a clock shared
+    -- by every character; movement, camera and effects stay smooth. 0 = off
+    -- (default). With `key` (a character name or a sheet file) the rule is
+    -- only for it and wins over the global one; fps < 0 removes it. The
+    -- preset's "sprite_step" = false turns every rule off.
+    set_anim_fps: (fps: number?, key: string?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,

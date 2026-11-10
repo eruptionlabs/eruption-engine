@@ -1242,6 +1242,12 @@ int characters_set_rim(lua_State* L) {
     eng().setSpriteRim(static_cast<float>(luaL_optnumber(L, 1, 0.0)), tint);
     return 0;
 }
+// Animacao em degraus (Engine::setSpriteStepFps): fps e, opcional, o nome
+// de um personagem ou o arquivo de uma folha.
+int characters_set_anim_fps(lua_State* L) {
+    eng().setSpriteStepFps(luaL_optstring(L, 2, ""), static_cast<float>(luaL_optnumber(L, 1, 0.0)));
+    return 0;
+}
 int characters_set_shadow(lua_State* L) {
     const char* k = luaL_optstring(L, 1, "");
     const int kind = std::strcmp(k, "planar") == 0 ? 0 : std::strcmp(k, "circle") == 0 ? 1
@@ -2609,6 +2615,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         {"follow", characters_follow}, {"patrol", characters_patrol}, {"stop", characters_stop},
         {"set_shadow", characters_set_shadow}, {"set_sink", characters_set_sink},
         {"set_rim", characters_set_rim},
+        {"set_anim_fps", characters_set_anim_fps},
         {"hide", characters_hide}, {"ring", characters_ring}, {"set_sprite", characters_set_sprite},
         {"add", characters_add}, {"remove", characters_remove}, {"release_sheet", characters_release_sheet},
         {"flash", characters_flash}, {"shake", characters_shake}, {"lunge", characters_lunge},
@@ -3048,6 +3055,13 @@ declare characters: {
     -- it (0..1, default white). The graphics preset's "sprite_rim" multiplies
     -- it (0 turns it off on weak GPUs).
     set_rim: (strength: number?, opts: { color: vector? }?) -> (),
+    -- Stepped sprite animation ("on twos"): the frame shown changes only
+    -- `fps` times per second (8-12 reads as hand-drawn), on a clock shared
+    -- by every character; movement, camera and effects stay smooth. 0 = off
+    -- (default). With `key` (a character name or a sheet file) the rule is
+    -- only for it and wins over the global one; fps < 0 removes it. The
+    -- preset's "sprite_step" = false turns every rule off.
+    set_anim_fps: (fps: number?, key: string?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,
