@@ -319,6 +319,13 @@ bool Engine::init(int width, int height, const std::string& title) {
     samplerInfo.minFilter = VK_FILTER_NEAREST;
     vkCreateSampler(m_vulkan.device(), &samplerInfo, nullptr, &m_nearestSampler);
 
+    // Formato dos alvos de post (preset "post_format": "packed" = B10G11R11,
+    // ver PostFormat.hpp). Tem que valer ANTES do primeiro postColorFormat(),
+    // que guarda o resultado para sempre: era lido so' depois do bindless, e
+    // initSplashLogo() (pipeline da tela de carga, logo abaixo) ja' tinha
+    // fixado RGBA16F - a chave nunca valia. presetObject() respeita o
+    // ERUPTION_TEST_PRESET_SET.
+    postPackedPreference() = presetObject(graphicsPresetName()).value("post_format", std::string("rgba16f")) == "packed";
     initImGui();
     initSplashLogo();
 
@@ -458,11 +465,8 @@ bool Engine::init(int width, int height, const std::string& title) {
                 if (gj.contains("presets") && gj["presets"].contains(pr)) {
                     upscaler = gj["presets"][pr].value("upscaler", upscaler);
                     fsrMode = gj["presets"][pr].value("fsr_mode", fsrMode);
-                    // Formato dos alvos de post: "packed" = B10G11R11 (metade
-                    // da banda, ver PostFormat.hpp). Lido aqui porque tem que
-                    // valer ANTES de PostProcessor::init.
-                    postPackedPreference() =
-                        (gj["presets"][pr].value("post_format", std::string("rgba16f")) == "packed");
+                    // "post_format" e' lido no inicio do init (antes da tela
+                    // de carga, o primeiro postColorFormat).
                 }
             }
         } catch (...) {}

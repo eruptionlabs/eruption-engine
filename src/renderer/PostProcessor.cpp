@@ -196,6 +196,9 @@ void PostProcessor::resize(uint32_t width, uint32_t height) {
 void PostProcessor::createImages() {
     // Um so' formato para toda a cadeia intermediaria - ver PostFormat.hpp.
     const VkFormat postFmt = postColorFormat(m_ctx->physicalDevice());
+    ERUPTION_LOG_INFO("PostProcessor: alvos de pos em %s (%ux%u)",
+                      postFmt == VK_FORMAT_B10G11R11_UFLOAT_PACK32 ? "B10G11R11 (packed)" : "RGBA16F", m_width,
+                      m_height);
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
