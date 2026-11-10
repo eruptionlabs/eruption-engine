@@ -101,6 +101,48 @@ public:
         bool forceWater = false;
     };
 
+    // Estilo diorama (preset "water_hd2d" e bloco "water_style" do
+    // data/graphics.json). Desligado, a agua e' a de antes, bit a bit.
+    //  - reflexo planar em espaco de tela (SSPR): cada pixel da cena acima
+    //    do plano d'agua e' espelhado nele e escrito onde a imagem espelhada
+    //    cai; a agua le' esse buffer (com distorcao das ondas). Sem buffer
+    //    (ou outra altura de agua) volta ao reflexo por marcha de raio;
+    //  - ondas por soma de senos com derivada analitica, filtradas pelo
+    //    tamanho do pixel (sem cintilacao ao longe);
+    //  - cor por absorcao por canal ao longo do raio dentro d'agua;
+    //  - espuma de margem e de contato pela diferenca de profundidade;
+    //  - aneis de chuva na normal, pela intensidade da chuva do clima;
+    //  - brilhos do sol (pontos) que o bloom transforma em estrela;
+    //  - a agua escreve profundidade (o DoF e a neblina enxergam a superficie).
+    struct StyleConfig {
+        bool hd2d = false;
+        bool planarReflection = true;
+        bool depthWrite = true;
+        float reflectionStrength = 1.0f; // multiplica o Fresnel do reflexo
+        float reflectionDistortion = 1.0f; // quanto as ondas entortam o reflexo
+        float sparkle = 1.0f;            // brilhos do sol
+        float rainRipples = 1.0f;        // aneis de chuva
+        float shoreFoam = 1.0f;          // largura da espuma de margem
+        float clarity = 10.0f;           // unidades de mundo ate' o vermelho cair a 1/e
+        float waveSlope = 1.0f;          // inclinacao das ondas (x normalStrength)
+        Vec3 deepColor = Vec3(0.012f, 0.06f, 0.075f); // cor da agua funda (espalhamento)
+        bool operator==(const StyleConfig& o) const {
+            return hd2d == o.hd2d && planarReflection == o.planarReflection && depthWrite == o.depthWrite &&
+                   reflectionStrength == o.reflectionStrength && reflectionDistortion == o.reflectionDistortion &&
+                   sparkle == o.sparkle && rainRipples == o.rainRipples && shoreFoam == o.shoreFoam &&
+                   clarity == o.clarity && waveSlope == o.waveSlope && deepColor == o.deepColor;
+        }
+    };
+    void setStyle(const StyleConfig& style);
+    const StyleConfig& style() const { return m_style; }
+    // Sprites no reflexo planar: o alvo PBR do G-buffer (marca o sprite com
+    // R = 0,75) e o "cima" do quadro em mundo. Chamar todo quadro, antes de
+    // prepareRefraction.
+    void setSpriteBillboard(VkImageView gbufferPbrView, const Vec3& billboardUp) {
+        m_spritePbrView = gbufferPbrView;
+        m_spriteUp = billboardUp;
+    }
+
     bool init(VulkanContext* ctx, BindlessDescriptor* bindless);
     void shutdown();
 
@@ -225,6 +267,10 @@ private:
         Vec4 causticsParams;      // x=intensity, y=depthAttenuation, z=lava flowSpeed, w=lava crustWiden
         Vec4 weatherParams;       // x=sunOcclusion, y=moonOcclusion, z=stormDarken, w=unused
         Vec4 lavaCrust;           // xyz=tinta da crosta, w=deslocamento da abertura
+        Vec4 styleParams;         // x=hd2d, y=forca do reflexo, z=brilhos, w=aneis de chuva
+        Vec4 styleParams2;        // x=espuma de margem, y=nivel do SSPR, z=distorcao do reflexo, w=clareza
+        Vec4 styleDeep;           // xyz=cor funda, w=inclinacao das ondas
+        IVec4 styleSlots;         // x=slot do SSPR (-1 = sem)
     };
     static_assert(sizeof(WaterUBO) <= 1024, "WaterUBO too large");
 
@@ -312,6 +358,37 @@ private:
 
     float m_viewportW = 1920.0f;
     float m_viewportH = 1080.0f;
+
+    StyleConfig m_style;
+    // Reflexo planar em espaco de tela: chave (profundidade espelhada, R32_UINT,
+    // so' do compute) e cor (RGBA16F, alfa = cobertura), uma de cada: o
+    // compute e a agua do mesmo quadro se ordenam por barreira.
+    VkImage m_ssprKeyImage = VK_NULL_HANDLE;
+    VmaAllocation m_ssprKeyAlloc = VK_NULL_HANDLE;
+    VkImageView m_ssprKeyView = VK_NULL_HANDLE;
+    VkImage m_ssprColorImage = VK_NULL_HANDLE;
+    VmaAllocation m_ssprColorAlloc = VK_NULL_HANDLE;
+    VkImageView m_ssprColorView = VK_NULL_HANDLE;
+    VkSampler m_ssprSampler = VK_NULL_HANDLE;
+    uint32_t m_ssprSlot = 0;
+    bool m_ssprLayoutsReady = false;
+    bool m_ssprValidThisFrame = false;
+    VkPipeline m_ssprPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_ssprLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_ssprDescLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_ssprPool = VK_NULL_HANDLE;
+    VkDescriptorSet m_ssprSets[MAX_FRAMES] = {};
+    // Altura do plano espelhado: a mais comum entre os vertices da malha
+    // (o lago do mapa); outra altura cai na marcha de raio.
+    float m_ssprMeshLevel = 0.0f;
+    float m_ssprLevel = 0.0f;
+    VkImageView m_spritePbrView = VK_NULL_HANDLE;
+    Vec3 m_spriteUp = Vec3(0.0f, 1.0f, 0.0f);
+    void createSsprPipeline();
+    void destroySsprPipeline();
+    void createSsprResources();
+    void destroySsprResources();
+    void dispatchSspr(VkCommandBuffer cmd, uint32_t frameIndex, const Mat4& invViewProj, float level);
 
     struct WaterPushConstants {
         Mat4 viewProj;

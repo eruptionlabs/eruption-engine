@@ -60,8 +60,21 @@ bool WaterRenderer::init(VulkanContext* ctx, BindlessDescriptor* bindless) {
     return m_pipeline != VK_NULL_HANDLE;
 }
 
+void WaterRenderer::setStyle(const StyleConfig& style) {
+    if (style == m_style) return;
+    // Escrever profundidade e' estado do pipeline: so' ele obriga a refazer.
+    const bool depthChanged = (style.hd2d && style.depthWrite) != (m_style.hd2d && m_style.depthWrite);
+    m_style = style;
+    if (depthChanged && m_ctx && m_pipeline != VK_NULL_HANDLE) reloadShaders();
+    ERUPTION_LOG_INFO("[WATER] estilo diorama %s (reflexo planar %s, profundidade %s)",
+                      m_style.hd2d ? "ligado" : "desligado", m_style.planarReflection ? "sim" : "nao",
+                      m_style.depthWrite ? "sim" : "nao");
+}
+
 void WaterRenderer::shutdown() {
     clearWaterMesh();
+    destroySsprResources();
+    destroySsprPipeline();
     destroyRefractionResources();
     destroyFoamAccumResources();
     destroyFoamAccumPipeline();
@@ -159,6 +172,23 @@ void WaterRenderer::setWaterMesh(const WaterMesh& mesh) {
     VkDeviceSize vertexSize = mesh.vertices.size() * sizeof(WaterVertex);
     VkDeviceSize indexSize = mesh.indices.size() * sizeof(uint32_t);
     m_indexCount = static_cast<uint32_t>(mesh.indices.size());
+
+    // Altura mais comum dos vertices (em centimos): o plano do reflexo planar.
+    {
+        std::vector<int64_t> alturas;
+        alturas.reserve(mesh.vertices.size());
+        for (const WaterVertex& v : mesh.vertices) alturas.push_back(static_cast<int64_t>(std::llround(v.position.y * 100.0f)));
+        std::sort(alturas.begin(), alturas.end());
+        int64_t melhor = alturas.front();
+        size_t melhorN = 0;
+        for (size_t i = 0; i < alturas.size();) {
+            size_t j = i;
+            while (j < alturas.size() && alturas[j] == alturas[i]) ++j;
+            if (j - i > melhorN) { melhorN = j - i; melhor = alturas[i]; }
+            i = j;
+        }
+        m_ssprMeshLevel = static_cast<float>(melhor) * 0.01f;
+    }
 
     if (!m_ctx->createBuffer(vertexSize,
                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -395,9 +425,12 @@ void WaterRenderer::createRefractionResources(uint32_t width, uint32_t height) {
         m_bindless->flushUpdates();
         for (VkImage img : m_depthCopyImage) m_ctx->transitionNow(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
     }
+    // Os sets do SSPR apontam para as copias acima: refazem junto.
+    if (m_style.hd2d && m_style.planarReflection) createSsprResources();
 }
 
 void WaterRenderer::destroyRefractionResources() {
+    destroySsprResources();
     for (uint32_t i = 0; i < MAX_FRAMES; ++i) {
         if (m_refractionSlot[i] != 0) { m_bindless->freeSlot(m_refractionSlot[i]); m_refractionSlot[i] = 0; }
         if (m_depthCopySlot[i] != 0) { m_bindless->freeSlot(m_depthCopySlot[i]); m_depthCopySlot[i] = 0; }
@@ -1109,6 +1142,19 @@ void WaterRenderer::updateUBO(uint32_t frameIndex, uint32_t uboSlot, const Water
                               settings.crustWiden);
     ubo.weatherParams = Vec4(sunOcclusion, moonOcclusion, stormDarken, rainIntensity);
     ubo.lavaCrust = Vec4(settings.crustTint, settings.crustOpen);
+    const bool hd2d = m_style.hd2d && settings.liquidKind == 0 && !m_ctx->shaderLite();
+    ubo.styleParams = Vec4(hd2d ? 1.0f : 0.0f, m_style.reflectionStrength, m_style.sparkle, m_style.rainRipples);
+    ubo.styleParams2 = Vec4(m_style.shoreFoam, m_ssprLevel, m_style.reflectionDistortion, std::max(m_style.clarity, 0.1f));
+    ubo.styleDeep = Vec4(m_style.deepColor, m_style.waveSlope);
+    ubo.styleSlots = IVec4(hd2d && m_ssprValidThisFrame ? static_cast<int32_t>(m_ssprSlot) : -1, 0, 0, 0);
+    if (hd2d) {
+        // Diorama: o lago nao ondula a malha. As ondas de Gerstner do vertice,
+        // com comprimento de ~3 unidades numa malha de grade larga, viravam
+        // faixas diagonais (serrilhado da propria malha); a onda fica so' na
+        // normal do fragmento, filtrada pelo tamanho do pixel.
+        ubo.waveParams.x = 0.0f;
+        for (auto& w : ubo.waveDirAmp) w.z = 0.0f;
+    }
     std::memcpy(m_uboMappeds[uboSlot], &ubo, sizeof(ubo));
 }
 
@@ -1136,6 +1182,276 @@ void WaterRenderer::prepareRefraction(VkCommandBuffer cmd,
         copySceneToRefraction(cmd, sceneColorImage, sceneDepthImage, sceneWidth, sceneHeight, frameIndex);
 
     m_invViewProj = invViewProj;
+
+    // Reflexo planar: depois da copia (le' a cor e a profundidade copiadas).
+    m_ssprValidThisFrame = false;
+    if (m_style.hd2d && m_style.planarReflection && !m_ctx->shaderLite() && !kNoCopy && m_indexCount > 0) {
+        if (m_ssprColorImage == VK_NULL_HANDLE) createSsprResources();
+        if (m_ssprColorImage != VK_NULL_HANDLE && m_ssprPipeline != VK_NULL_HANDLE) {
+            m_ssprLevel = m_ssprMeshLevel + settings.levelOffset;
+            dispatchSspr(cmd, frameIndex, invViewProj, m_ssprLevel);
+            m_ssprValidThisFrame = true;
+        }
+    }
+}
+
+// ============================================================================
+// Reflexo planar em espaco de tela (SSPR)
+// ============================================================================
+// Push do sspr.comp. A matriz leva o ponto de recorte da cena direto ao
+// recorte do ponto espelhado (viewProj * espelho * invViewProj), e as duas
+// linhas de invViewProj dao a altura do ponto. spriteDirClip leva o pixel de
+// sprite ao reflexo de um cartao em pe' (ver sspr.comp). 128 bytes.
+struct SsprPushConstants {
+    Mat4 mirrorClip;
+    Vec4 invRowY;
+    Vec4 invRowW;
+    Vec4 params;        // x = nivel, y = fase (0 profundidade, 1 cor), z = sprites como cartao
+    Vec4 spriteDirClip; // viewProj * (cima do quadro + Y, 0) / cima.y
+};
+static_assert(sizeof(SsprPushConstants) <= 128, "push do SSPR passa de 128 bytes");
+
+void WaterRenderer::createSsprPipeline() {
+    if (m_ssprPipeline != VK_NULL_HANDLE) return;
+    auto code = ShaderCompiler::loadSPIRV("shaders/water/sspr.comp.spv");
+    if (code.empty()) {
+        ERUPTION_LOG_WARN("[WATER] sspr.comp.spv ausente: reflexo planar desligado");
+        return;
+    }
+    VkShaderModule module = VK_NULL_HANDLE;
+    VkShaderModuleCreateInfo smInfo{};
+    smInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smInfo.codeSize = code.size() * sizeof(uint32_t);
+    smInfo.pCode = code.data();
+    VK_CHECK_VOID(vkCreateShaderModule(m_ctx->device(), &smInfo, nullptr, &module));
+
+    // 0 profundidade, 1 cor, 2 chave, 3 reflexo, 4 alvo PBR do G-buffer.
+    VkDescriptorSetLayoutBinding b[5]{};
+    for (uint32_t i = 0; i < 5; ++i) {
+        b[i].binding = i;
+        b[i].descriptorCount = 1;
+        b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        b[i].descriptorType = (i == 2 || i == 3) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 5;
+    li.pBindings = b;
+    VK_CHECK_VOID(vkCreateDescriptorSetLayout(m_ctx->device(), &li, nullptr, &m_ssprDescLayout));
+
+    VkPushConstantRange pr{};
+    pr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pr.size = sizeof(SsprPushConstants);
+    VkPipelineLayoutCreateInfo pli{};
+    pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &m_ssprDescLayout;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &pr;
+    VK_CHECK_VOID(vkCreatePipelineLayout(m_ctx->device(), &pli, nullptr, &m_ssprLayout));
+
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = module;
+    ci.stage.pName = "main";
+    ci.layout = m_ssprLayout;
+    VK_CHECK_VOID(vkCreateComputePipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &ci, nullptr, &m_ssprPipeline));
+    vkDestroyShaderModule(m_ctx->device(), module, nullptr);
+
+    VkDescriptorPoolSize ps[2]{};
+    ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ps[0].descriptorCount = 3 * MAX_FRAMES;
+    ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    ps[1].descriptorCount = 2 * MAX_FRAMES;
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = MAX_FRAMES;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = ps;
+    VK_CHECK_VOID(vkCreateDescriptorPool(m_ctx->device(), &pi, nullptr, &m_ssprPool));
+    VkDescriptorSetLayout layouts[MAX_FRAMES];
+    for (uint32_t i = 0; i < MAX_FRAMES; ++i) layouts[i] = m_ssprDescLayout;
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = m_ssprPool;
+    ai.descriptorSetCount = MAX_FRAMES;
+    ai.pSetLayouts = layouts;
+    VK_CHECK_VOID(vkAllocateDescriptorSets(m_ctx->device(), &ai, m_ssprSets));
+}
+
+void WaterRenderer::destroySsprPipeline() {
+    if (!m_ctx) return;
+    if (m_ssprPool) { vkDestroyDescriptorPool(m_ctx->device(), m_ssprPool, nullptr); m_ssprPool = VK_NULL_HANDLE; }
+    if (m_ssprPipeline) { vkDestroyPipeline(m_ctx->device(), m_ssprPipeline, nullptr); m_ssprPipeline = VK_NULL_HANDLE; }
+    if (m_ssprLayout) { vkDestroyPipelineLayout(m_ctx->device(), m_ssprLayout, nullptr); m_ssprLayout = VK_NULL_HANDLE; }
+    if (m_ssprDescLayout) { vkDestroyDescriptorSetLayout(m_ctx->device(), m_ssprDescLayout, nullptr); m_ssprDescLayout = VK_NULL_HANDLE; }
+    for (auto& s : m_ssprSets) s = VK_NULL_HANDLE;
+}
+
+void WaterRenderer::createSsprResources() {
+    if (m_refractionImage[0] == VK_NULL_HANDLE || m_refractionWidth == 0) return;
+    createSsprPipeline();
+    if (m_ssprPipeline == VK_NULL_HANDLE) return;
+    destroySsprResources();
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    auto makeImage = [&](VkFormat fmt, VkImageUsageFlags usage, VkImage& img, VmaAllocation& alloc, VkImageView& view) {
+        VkImageCreateInfo ii{};
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.extent = {m_refractionWidth, m_refractionHeight, 1};
+        ii.mipLevels = 1;
+        ii.arrayLayers = 1;
+        ii.format = fmt;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        ii.usage = usage;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        if (vmaCreateImage(m_ctx->allocator(), &ii, &allocInfo, &img, &alloc, nullptr) != VK_SUCCESS) return false;
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = img;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = fmt;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        return vkc::createImageView(m_ctx->device(), &vi, nullptr, &view) == VK_SUCCESS;
+    };
+    const bool ok =
+        makeImage(VK_FORMAT_R32_UINT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                  m_ssprKeyImage, m_ssprKeyAlloc, m_ssprKeyView) &&
+        makeImage(VK_FORMAT_R16G16B16A16_SFLOAT,
+                  VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                  m_ssprColorImage, m_ssprColorAlloc, m_ssprColorView);
+    if (!ok) {
+        ERUPTION_LOG_WARN("[WATER] SSPR: falha ao criar as imagens; reflexo planar desligado");
+        destroySsprResources();
+        return;
+    }
+
+    VkSamplerCreateInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.magFilter = VK_FILTER_LINEAR;
+    si.minFilter = VK_FILTER_LINEAR;
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.maxLod = 0.0f;
+    vkCreateSampler(m_ctx->device(), &si, nullptr, &m_ssprSampler);
+    m_ssprSlot = m_bindless->allocateSlot();
+    m_bindless->updateTexture(m_ssprSlot, m_ssprColorView, m_ssprSampler);
+    m_bindless->flushUpdates();
+    m_ssprLayoutsReady = false;
+
+    for (uint32_t i = 0; i < MAX_FRAMES; ++i) {
+        VkDescriptorImageInfo depth{m_depthCopySampler, m_depthCopyView[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo color{m_refractionSampler, m_refractionView[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo key{VK_NULL_HANDLE, m_ssprKeyView, VK_IMAGE_LAYOUT_GENERAL};
+        VkDescriptorImageInfo refl{VK_NULL_HANDLE, m_ssprColorView, VK_IMAGE_LAYOUT_GENERAL};
+        // 4: a copia de cor ate' o G-buffer chegar (setSpriteBillboard); o
+        // shader so' a le' com params.z ligado.
+        const VkDescriptorImageInfo* infos[5] = {&depth, &color, &key, &refl, &color};
+        VkWriteDescriptorSet w[5]{};
+        for (uint32_t b = 0; b < 5; ++b) {
+            w[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[b].dstSet = m_ssprSets[i];
+            w[b].dstBinding = b;
+            w[b].descriptorCount = 1;
+            w[b].descriptorType = (b == 2 || b == 3) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[b].pImageInfo = infos[b];
+        }
+        vkUpdateDescriptorSets(m_ctx->device(), 5, w, 0, nullptr);
+    }
+}
+
+void WaterRenderer::destroySsprResources() {
+    if (!m_ctx) return;
+    if (m_ssprSlot != 0) { m_bindless->freeSlot(m_ssprSlot); m_ssprSlot = 0; }
+    if (m_ssprKeyView) { vkDestroyImageView(m_ctx->device(), m_ssprKeyView, nullptr); m_ssprKeyView = VK_NULL_HANDLE; }
+    if (m_ssprColorView) { vkDestroyImageView(m_ctx->device(), m_ssprColorView, nullptr); m_ssprColorView = VK_NULL_HANDLE; }
+    if (m_ssprKeyImage) { vmaDestroyImage(m_ctx->allocator(), m_ssprKeyImage, m_ssprKeyAlloc); m_ssprKeyImage = VK_NULL_HANDLE; m_ssprKeyAlloc = VK_NULL_HANDLE; }
+    if (m_ssprColorImage) { vmaDestroyImage(m_ctx->allocator(), m_ssprColorImage, m_ssprColorAlloc); m_ssprColorImage = VK_NULL_HANDLE; m_ssprColorAlloc = VK_NULL_HANDLE; }
+    if (m_ssprSampler) { vkDestroySampler(m_ctx->device(), m_ssprSampler, nullptr); m_ssprSampler = VK_NULL_HANDLE; }
+    m_ssprLayoutsReady = false;
+    m_ssprValidThisFrame = false;
+}
+
+void WaterRenderer::dispatchSspr(VkCommandBuffer cmd, uint32_t frameIndex, const Mat4& invViewProj, float level) {
+    // 1) chave e cor de volta a GENERAL e limpas (a cor do quadro anterior foi
+    //    lida pela agua; a chave so' pelo compute).
+    const VkImageLayout colorFrom = m_ssprLayoutsReady ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    const VkImageLayout keyFrom = m_ssprLayoutsReady ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    m_ctx->cmdImageBarrier(cmd, m_ssprColorImage, colorFrom, VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    m_ctx->cmdImageBarrier(cmd, m_ssprKeyImage, keyFrom, VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    m_ssprLayoutsReady = true;
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkClearColorValue keyClear{};
+    keyClear.uint32[0] = 0xFFFFFFFFu;
+    vkCmdClearColorImage(cmd, m_ssprKeyImage, VK_IMAGE_LAYOUT_GENERAL, &keyClear, 1, &range);
+    VkClearColorValue colorClear{};
+    vkCmdClearColorImage(cmd, m_ssprColorImage, VK_IMAGE_LAYOUT_GENERAL, &colorClear, 1, &range);
+
+    // Limpeza e a copia da cena (transferencias) antes do compute; o G-buffer
+    // ja' passou a leitura antes da iluminacao (fragmento): a cadeia chega ao
+    // compute por aqui.
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                         1, &mb, 0, nullptr, 0, nullptr);
+
+    // Alvo PBR do quadro (o G-buffer muda de view no resize): o set deste
+    // quadro foi usado ha' MAX_FRAMES quadros, ja' terminados.
+    const bool sprites = m_spritePbrView != VK_NULL_HANDLE && std::fabs(m_spriteUp.y) > 0.05f;
+    if (sprites) {
+        VkDescriptorImageInfo pbr{m_depthCopySampler, m_spritePbrView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = m_ssprSets[frameIndex];
+        w.dstBinding = 4;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &pbr;
+        vkUpdateDescriptorSets(m_ctx->device(), 1, &w, 0, nullptr);
+    }
+
+    // Espelho no plano y = level: y' = 2*level - y.
+    Mat4 mirror(1.0f);
+    mirror[1][1] = -1.0f;
+    mirror[3][1] = 2.0f * level;
+    const Mat4 viewProj = glm::inverse(invViewProj);
+    SsprPushConstants pc{};
+    pc.mirrorClip = viewProj * mirror * invViewProj;
+    pc.invRowY = Vec4(invViewProj[0][1], invViewProj[1][1], invViewProj[2][1], invViewProj[3][1]);
+    pc.invRowW = Vec4(invViewProj[0][3], invViewProj[1][3], invViewProj[2][3], invViewProj[3][3]);
+    pc.params = Vec4(level, 0.0f, sprites ? 1.0f : 0.0f, 0.0f);
+    if (sprites) pc.spriteDirClip = viewProj * Vec4(m_spriteUp + Vec3(0.0f, 1.0f, 0.0f), 0.0f) / m_spriteUp.y;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssprPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssprLayout, 0, 1, &m_ssprSets[frameIndex], 0, nullptr);
+    const uint32_t gx = (m_refractionWidth + 7) / 8, gy = (m_refractionHeight + 7) / 8;
+    // 2) fase 0: o ponto espelhado mais perto da camera ganha o pixel (atomicMin).
+    vkCmdPushConstants(cmd, m_ssprLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cmd, gx, gy, 1);
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                         1, &mb, 0, nullptr, 0, nullptr);
+    // 3) fase 1: quem ganhou escreve a cor.
+    pc.params.y = 1.0f;
+    vkCmdPushConstants(cmd, m_ssprLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cmd, gx, gy, 1);
+    // 4) a agua le' a cor por amostragem.
+    m_ctx->cmdImageBarrier(cmd, m_ssprColorImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 }
 
 void WaterRenderer::render(VkCommandBuffer cmd, const Mat4& viewProj, const Vec3& cameraPos,
@@ -1550,7 +1866,10 @@ void WaterRenderer::createPipeline() {
     VkPipelineDepthStencilStateCreateInfo ds{};
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     ds.depthTestEnable = VK_TRUE;
-    ds.depthWriteEnable = VK_FALSE;
+    // Diorama: a superficie escreve profundidade, para o DoF, a neblina e os
+    // vetores de movimento verem a agua e nao o fundo do lago (com o fundo, a
+    // margem tinha dois focos: chao nitido e agua borrada como se fosse funda).
+    ds.depthWriteEnable = (m_style.hd2d && m_style.depthWrite && !m_ctx->shaderLite()) ? VK_TRUE : VK_FALSE;
     ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     ds.depthBoundsTestEnable = VK_FALSE;
     ds.stencilTestEnable = VK_FALSE;

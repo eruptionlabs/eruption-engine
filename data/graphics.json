@@ -104,6 +104,17 @@
     "tessellation_height_blur": 0.15,
     "tessellation_vertex_spacing": 0.25
   },
+  "water_style": {
+    "_comment": "Agua de diorama (presets com water_hd2d). reflection_strength multiplica o Fresnel do reflexo; reflection_distortion, o quanto as ondas entortam o reflexo; sparkle, os brilhos do sol; rain_ripples, os aneis de chuva; shore_foam, a largura da espuma de margem (x foam.edgeDepth da agua); clarity, unidades de mundo ate' o vermelho cair a 1/e dentro d'agua; wave_slope, a inclinacao das ondas (x normal.strength); deep_color, a cor da agua funda.",
+    "reflection_strength": 1.0,
+    "reflection_distortion": 1.0,
+    "sparkle": 1.0,
+    "rain_ripples": 1.0,
+    "shore_foam": 1.0,
+    "clarity": 10.0,
+    "wave_slope": 1.0,
+    "deep_color": [0.003, 0.028, 0.042]
+  },
   "fps_cap": 0,
   "present_mode": "auto",
   "presets": {
@@ -420,7 +431,8 @@
       "relief_bake_spacing": 4.0,
       "relief_bake_max_tris": 75000,
       "relief_bake_amplitude": 2.5,
-      "relief_bake_height_gain": 1.0
+      "relief_bake_height_gain": 1.0,
+      "water_hd2d": true
     },
     "medium": {
       "mesh_tri_budget": 3000000,
@@ -495,7 +507,8 @@
       "relief_bake_spacing": 2.0,
       "relief_bake_max_tris": 150000,
       "relief_bake_amplitude": 2.5,
-      "relief_bake_height_gain": 1.0
+      "relief_bake_height_gain": 1.0,
+      "water_hd2d": true
     },
     "high": {
       "mesh_tri_budget": 5000000,
@@ -569,7 +582,8 @@
       "relief_bake_spacing": 1.0,
       "relief_bake_max_tris": 1500000,
       "relief_bake_amplitude": 2.5,
-      "relief_bake_height_gain": 1.0
+      "relief_bake_height_gain": 1.0,
+      "water_hd2d": true
     }
   },
   "auto_presets": [

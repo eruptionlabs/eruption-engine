@@ -1198,6 +1198,15 @@ void Engine::render() {
     // existia e ninguem consultava. O regen de malha logo abaixo continua
     // rodando, entao ligar forceWater reativa tudo no frame seguinte.
     if (waterInView) {
+        // Reflexo planar: o sprite (quadro virado para a camera) reflete como
+        // um cartao em pe'. O "cima" do quadro e' o da camera inclinado pela
+        // spline do billboard, como em sprite_vert.glsl.
+        {
+            const float tilt = glm::radians(frameUbo.spriteTilt);
+            const Mat4 invView = glm::inverse(m_camera.viewMatrix());
+            const Vec3 up = Vec3(invView * Vec4(0.0f, std::cos(tilt), -std::sin(tilt), 0.0f));
+            m_water.setSpriteBillboard(m_gbuffer.pbrView(), glm::length(up) > 1e-5f ? glm::normalize(up) : Vec3(0, 1, 0));
+        }
         m_water.updateContactFoam(m_timer.deltaTime(), m_waterMenu.config);
         m_water.prepareRefraction(cmd,
                                   m_deferredLighting.litImage(), m_gbuffer.depthImage(),

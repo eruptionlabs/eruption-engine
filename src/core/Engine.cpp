@@ -2952,6 +2952,32 @@ void Engine::applyGraphicsPreset() {
     m_smokeSunTap = p.value("smoke_sun_tap", true);
     m_smokeDetail = p.value("smoke_detail", true);
 
+    // AGUA DE DIORAMA (WaterRenderer::StyleConfig). Liga por preset
+    // ("water_hd2d"; sem a chave, a agua de antes); a aparencia vem do bloco
+    // "water_style" da raiz, comum a todos os presets.
+    // ERUPTION_TEST_WATER_HD2D=0|1 (A/B de captura) troca sem editar o json.
+    {
+        WaterRenderer::StyleConfig ws = m_water.style();
+        ws.hd2d = p.value("water_hd2d", false);
+        ws.planarReflection = p.value("water_planar_reflection", true);
+        ws.depthWrite = p.value("water_depth_write", true);
+        if (root.contains("water_style") && root["water_style"].is_object()) {
+            const json& s = root["water_style"];
+            ws.reflectionStrength = std::clamp(s.value("reflection_strength", ws.reflectionStrength), 0.0f, 4.0f);
+            ws.reflectionDistortion = std::clamp(s.value("reflection_distortion", ws.reflectionDistortion), 0.0f, 4.0f);
+            ws.sparkle = std::clamp(s.value("sparkle", ws.sparkle), 0.0f, 4.0f);
+            ws.rainRipples = std::clamp(s.value("rain_ripples", ws.rainRipples), 0.0f, 4.0f);
+            ws.shoreFoam = std::clamp(s.value("shore_foam", ws.shoreFoam), 0.0f, 8.0f);
+            ws.clarity = std::clamp(s.value("clarity", ws.clarity), 0.1f, 1000.0f);
+            ws.waveSlope = std::clamp(s.value("wave_slope", ws.waveSlope), 0.0f, 8.0f);
+            if (s.contains("deep_color") && s["deep_color"].is_array() && s["deep_color"].size() == 3)
+                ws.deepColor = Vec3(s["deep_color"][0].get<float>(), s["deep_color"][1].get<float>(),
+                                    s["deep_color"][2].get<float>());
+        }
+        if (const char* e = std::getenv("ERUPTION_TEST_WATER_HD2D")) ws.hd2d = e[0] == '1';
+        m_water.setStyle(ws);
+    }
+
     if (p.contains("pom_height_scale")) m_pomHeightScale = std::clamp<float>(p["pom_height_scale"], 0.0f, 0.1f);
     if (p.contains("pom_max_steps")) m_pomMaxSteps = std::clamp<int>(p["pom_max_steps"], 2, 32);
     if (p.contains("pom_min_steps")) m_pomMinSteps = std::clamp<int>(p["pom_min_steps"], 1, 16);

@@ -42,6 +42,10 @@ layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 causticsParams;      // x=intensity, y=depthAttenuation, z=lava flowSpeed, w=lava crustWiden
     vec4 weatherParams;       // x=sunOcclusion, y=moonOcclusion, z=stormDarken, w=rainIntensity
     vec4 lavaCrust;           // xyz=tinta da crosta, w=deslocamento da abertura (crustCoverage)
+    vec4 styleParams;         // x=diorama (0/1), y=forca do reflexo, z=brilhos, w=aneis de chuva
+    vec4 styleParams2;        // x=espuma de margem, y=nivel do SSPR, z=distorcao do reflexo, w=clareza
+    vec4 styleDeep;           // xyz=cor funda, w=inclinacao das ondas
+    ivec4 styleSlots;         // x=slot do reflexo planar (-1 = sem)
 } ubo;
 
 layout(push_constant) uniform Push {
@@ -254,6 +258,360 @@ float ggxSpecular(vec3 N, vec3 H, float roughness) {
 }
 
 // ============================================================================
+// Reflexo por marcha de raio em espaco de tela (rgb = cor, a = acerto)
+// ============================================================================
+// O raio anda com passo que cresce com a distancia (fino perto do casco,
+// largo longe) e, ao cruzar a cena, refina por busca binaria. O acerto
+// compara distancias a' camera em unidades de mundo.
+vec4 marchReflection(vec3 origin, vec3 ssrDir, int depthTexSlot, int screenTexSlot) {
+    vec3 ssrColor = vec3(0.0);
+    float ssrHit = 0.0;
+    if (ssrDir.y > 0.0) {
+        const int ssrSteps = 40;
+        float t = 0.6, dt = 0.8, tPrev = 0.0;
+        for (int i = 0; i < ssrSteps; i++) {
+            vec3 rayPos = origin + ssrDir * t;
+            vec4 clip = pc.viewProj * vec4(rayPos, 1.0);
+            if (clip.w <= 0.0) break;
+            vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+            if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
+            float sd = slotTexture(depthTexSlot, uv).r;
+            if (sd < 1.0) {
+                float rayDist = length(rayPos - ubo.cameraPos.xyz);
+                float sceneDist = length(reconstructWorldPos(uv, sd) - ubo.cameraPos.xyz);
+                if (rayDist > sceneDist) {
+                    float lo = tPrev, hi = t;
+                    for (int k = 0; k < 6; k++) {
+                        float mid = 0.5 * (lo + hi);
+                        vec3 mp = origin + ssrDir * mid;
+                        vec4 mc = pc.viewProj * vec4(mp, 1.0);
+                        vec2 muv = mc.xy / mc.w * 0.5 + 0.5;
+                        float md = slotTexture(depthTexSlot, muv).r;
+                        float sdist = length(reconstructWorldPos(muv, md) - ubo.cameraPos.xyz);
+                        if (length(mp - ubo.cameraPos.xyz) > sdist) hi = mid; else lo = mid;
+                    }
+                    vec3 hp = origin + ssrDir * hi;
+                    vec4 hc = pc.viewProj * vec4(hp, 1.0);
+                    vec2 huv = hc.xy / hc.w * 0.5 + 0.5;
+                    float hd = slotTexture(depthTexSlot, huv).r;
+                    float gap = length(hp - ubo.cameraPos.xyz) - length(reconstructWorldPos(huv, hd) - ubo.cameraPos.xyz);
+                    if (gap < max(dt * 2.0, 3.0)) {
+                        ssrColor = slotTexture(screenTexSlot, huv).rgb;
+                        vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv) * smoothstep(vec2(0.0), vec2(0.08), 1.0 - huv);
+                        ssrHit = edge.x * edge.y * (1.0 - smoothstep(0.6, 1.0, float(i) / float(ssrSteps)));
+                    }
+                    break;
+                }
+            }
+            tPrev = t;
+            t += dt;
+            dt *= 1.12;
+        }
+    }
+    return vec4(ssrColor, ssrHit);
+}
+
+// Ceu refletido: a imagem do ceu desta camera (ceu-para-textura) onde a
+// direcao cai dentro dela, senao o degrade do ciclo do dia.
+vec3 skyReflection(vec3 reflectDir, float roughness, float storm, float rainIntensity, float moonOcc, int skyboxTexSlot) {
+    float skyT = clamp(reflectDir.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 skyGradient = mix(ubo.skyHorizon.rgb, ubo.skyTop.rgb, skyT);
+    // Storm darkens and desaturates sky reflection
+    skyGradient = mix(skyGradient, vec3(0.04, 0.04, 0.05), storm * 0.75);
+    // Rain further reduces reflection color so water doesn't look foamy bright
+    skyGradient = mix(skyGradient, vec3(0.06, 0.07, 0.08) * moonOcc, rainIntensity * 0.3);
+
+    vec3 reflectionColor = skyGradient;
+    if (skyboxTexSlot >= 0) {
+        vec4 skyClip = pc.viewProj * vec4(reflectDir, 0.0);
+        vec2 skyUV = skyClip.xy / skyClip.w * 0.5 + 0.5;
+        if (all(greaterThanEqual(skyUV, vec2(0.0))) && all(lessThanEqual(skyUV, vec2(1.0)))) {
+            vec3 skyTexColor = slotTexture(skyboxTexSlot, skyUV).rgb;
+            // Rough surfaces blur reflection back to gradient
+            reflectionColor = mix(skyTexColor, skyGradient, roughness);
+        }
+    }
+    return reflectionColor;
+}
+
+// ============================================================================
+// AGUA DE DIORAMA (preset "water_hd2d"): so' funcoes analiticas, sem textura
+// ============================================================================
+float dioHash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+vec3 dioHash32(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return fract((p3.xxy + p3.yzz) * p3.zyx);
+}
+
+// Ondas: 8 trens de onda em leque em volta do vento (waveDir0), cada um
+// exp(sin(fase) - 1) - crista estreita e cavado largo, como a agua real - com
+// a derivada exata (nada de diferenca finita de ruido, que era 3x o ruido
+// por pixel e chiava). Cada trem some quando o comprimento de onda fica
+// abaixo de ~4 pixels: o que sumiu da inclinacao volta como rugosidade (z),
+// entao ao longe a agua fica lisa e o brilho do sol so' alarga, em vez de
+// virar chuvisco de pontos. Retorna (dh/dx, dh/dz, variancia perdida).
+vec3 dioramaWaves(vec2 p, float t, float footprint) {
+    float scale = max(ubo.normalParams.x, 1e-3);
+    float slope = ubo.normalParams.z * ubo.styleDeep.w * 2.6;
+    float speed = ubo.waveParams.z;
+    vec2 wind = ubo.waveDirAmp[0].xy;
+    float baseAng = dot(wind, wind) > 1e-6 ? atan(wind.y, wind.x) : 0.0;
+    vec2 g = vec2(0.0);
+    float lost = 0.0;
+    // Torcao lenta do dominio (meio comprimento da onda maior): sem ela os
+    // 8 trens se cruzam numa grade regular, cara de metal martelado. A
+    // derivada da torcao fica de fora (ela e' 20x mais larga que as ondas).
+    float wl = 1.0 / (scale * 0.33);
+    p += wl * 0.5 * vec2(snoise(p * scale * 0.06 + vec2(t * 0.02, 0.0)),
+                         snoise(p * scale * 0.06 + vec2(5.2, 1.3 - t * 0.02)));
+    float k = 6.2831853 * scale * 0.33;
+    float amp = 0.42;
+    for (int i = 0; i < 8; ++i) {
+        float fi = float(i);
+        float ang = baseAng + (fract(fi * 0.618034) - 0.5) * 2.6;
+        vec2 d = vec2(cos(ang), sin(ang));
+        float omega = speed * sqrt(9.8 * k) * 0.9; // dispersao de agua funda
+        float ph = dot(d, p) * k - omega * t + fi * 1.7;
+        float dh = exp(sin(ph) - 1.0) * cos(ph);
+        float s = slope * amp;
+        float keep = smoothstep(1.5, 4.0, 6.2831853 / (k * footprint));
+        g += d * (dh * s * keep);
+        lost += 0.25 * s * s * (1.0 - keep);
+        k *= 1.42;
+        amp *= 0.78;
+    }
+    return vec3(g, lost);
+}
+
+// Aneis de chuva: grade de celulas em 3 camadas; cada celula tem uma gota por
+// ciclo com chance = intensidade da chuva, num ponto novo a cada ciclo. O
+// anel e' um pacote de onda que abre e some; entra na NORMAL (o anel aparece
+// pelo reflexo e pelo brilho, como na agua real), mais um ponto de respingo
+// no primeiro instante. Com ceu encoberto o reflexo e' quase liso e a
+// normal sozinha nao aparece: a crista do anel tambem acende um pouco (w),
+// o fio claro que o diorama desenha. Retorna (dh/dx, dh/dz, respingo, crista).
+vec4 rainRipples(vec2 p, float t, float footprint, float intensity) {
+    vec4 acc = vec4(0.0);
+    float cell = 4.0 / max(ubo.normalParams.x, 1e-3);
+    for (int layer = 0; layer < 3; ++layer) {
+        float fl = float(layer);
+        float c = cell * (1.0 + 0.31 * fl);
+        vec2 q = p / c + vec2(0.37, 0.71) * fl * 3.1;
+        vec2 id = floor(q);
+        vec2 f = fract(q);
+        vec3 h = dioHash32(id + fl * 19.7);
+        float tt = t / (0.9 + 0.5 * h.z) + h.x * 7.0;
+        float cyc = floor(tt);
+        if (dioHash12(id * 1.37 + cyc * 0.91 + fl * 3.3) > intensity) continue;
+        float life = fract(tt);
+        vec2 center = 0.3 + 0.4 * dioHash32(id + cyc * 3.17 + fl).xy;
+        vec2 v = (f - center) * c;
+        float r = length(v);
+        float w = c * 0.045;
+        float x = r - life * c * 0.3;
+        float lam = w * 3.0;
+        float fade = (1.0 - life) * (1.0 - life);
+        float env = exp(-(x * x) / (w * w * 2.5)) * fade;
+        float keep = smoothstep(1.5, 4.0, lam / footprint);
+        float wave = sin(x * 6.2831853 / lam);
+        acc.xy += (v / max(r, 1e-4)) * (wave * env * keep);
+        acc.z += (1.0 - smoothstep(0.0, w * 1.6, r)) * (1.0 - smoothstep(0.0, 0.15, life));
+        acc.w += max(cos(x * 6.2831853 / lam), 0.0) * env * keep;
+    }
+    return acc;
+}
+
+// Brilhos do sol: cada celula tem uma faceta de inclinacao sorteada (troca
+// num ciclo proprio); acende onde a faceta manda o sol para a camera. O
+// ponto tem no minimo ~1,2 pixel (com a energia dividida), para nao virar
+// chuvisco de 1 pixel que pisca entre quadros.
+float sunSparkle(vec2 p, vec3 n, vec3 V, vec3 L, float t, float footprint) {
+    float cell = 0.55 / max(ubo.normalParams.x, 1e-3);
+    vec2 q = p / cell;
+    vec2 id = floor(q), f = fract(q);
+    vec3 h = dioHash32(id);
+    float tt = t * (0.35 + 0.5 * h.z) + h.x * 10.0;
+    vec3 h2 = dioHash32(id + floor(tt) * 7.31);
+    vec2 slope = (h2.xy - 0.5) * 0.5;
+    vec3 nf = normalize(n + vec3(-slope.x, 0.0, -slope.y));
+    float a = dot(reflect(-V, nf), L);
+    float facet = smoothstep(0.9950, 0.9992, a);
+    float blink = sin(fract(tt) * 3.14159265);
+    float rWorld = cell * 0.07;
+    float rDraw = max(rWorld, footprint * 0.6);
+    float spot = 1.0 - smoothstep(rDraw * 0.4, rDraw, length((f - (0.25 + 0.5 * h2.zx)) * cell));
+    return facet * blink * blink * spot * (rWorld * rWorld) / (rDraw * rDraw);
+}
+
+// Espuma de margem pela profundidade vertical (depthV): a linha de contato
+// rente ao chao, rendada por ruido, e faixas que andam para a margem e se
+// desfazem. Vale tambem em volta de tronco, pedra e personagem dentro d'agua:
+// a cena logo atras da superficie fica rasa ali.
+float shoreFoamMask(vec2 p, float depthV, float t, float width) {
+    if (width <= 0.0) return 0.0;
+    float x = depthV / width;
+    if (x > 2.0) return 0.0;
+    float s = max(ubo.normalParams.x, 1e-3);
+    float n1 = snoise(p * s * 0.9 + vec2(t * 0.05, -t * 0.04)) * 0.5 + 0.5;
+    float n2 = snoise(p * s * 2.6 - vec2(t * 0.09, t * 0.07)) * 0.5 + 0.5;
+    float lace = n1 * 0.6 + n2 * 0.4;
+    float line = (1.0 - smoothstep(0.05, 0.25 + 0.35 * lace, x)) * smoothstep(0.25, 0.55, lace + 0.2);
+    float bandPh = x * 2.2 + t * 0.35 + lace * 0.8;
+    float band = 1.0 - smoothstep(0.04, 0.16, abs(fract(bandPh) - 0.5));
+    band *= (1.0 - smoothstep(0.4, 1.6, x)) * smoothstep(0.45, 0.7, lace);
+    return clamp(max(line, band * 0.65), 0.0, 1.0);
+}
+
+vec3 shadeDiorama() {
+    float time  = ubo.waterLevelAndPlanes.w;
+    float level = vLevel;
+    vec2 viewport = ubo.screenSize.xy;
+    vec2 suv = getScreenUV();
+    int screenTexSlot = ubo.textureSlots.x;
+    int depthTexSlot  = ubo.textureSlots.y;
+    float rain  = clamp(ubo.weatherParams.w, 0.0, 1.0);
+    float storm = ubo.weatherParams.z;
+    vec3 V = normalize(ubo.cameraPos.xyz - vWorldPos);
+    float viewDist = length(ubo.cameraPos.xyz - vWorldPos);
+    vec3 L = normalize(-ubo.sunDirIntensity.xyz);
+    float sunI = ubo.sunDirIntensity.w * ubo.weatherParams.x * (1.0 - storm * 0.6);
+
+    // Tamanho do pixel no plano (o maior eixo: conservador no rasante).
+    vec2 dpx = dFdx(vWorldPos.xz), dpy = dFdy(vWorldPos.xz);
+    float footprint = max(max(length(dpx), length(dpy)), 1e-4);
+
+    // Profundidade vertical sob este pixel (espuma, calmaria, borda).
+    float sceneDepth = slotTextureLod(depthTexSlot, suv, 0.0).r;
+    vec3 floorPos = reconstructWorldPos(suv, sceneDepth);
+    float depthV = sceneDepth >= 1.0 ? 1e4 : max(0.0, level - floorPos.y);
+    float shoreW = max(ubo.foamParams.x, 0.05) * 6.0 * ubo.styleParams2.x;
+    float edge = smoothstep(0.0, max(shoreW, 0.05) * 0.35, depthV);
+
+    // ---- Normal: ondas + aneis de chuva; a agua rasa da margem acalma ----
+    vec3 w = dioramaWaves(vWorldPos.xz, time, footprint);
+    vec2 grad = w.xy;
+    float splash = 0.0, ringLight = 0.0;
+    if (rain > 0.001 && ubo.styleParams.w > 0.0) {
+        vec4 rr = rainRipples(vWorldPos.xz, time, footprint, rain);
+        grad += rr.xy * 0.5 * ubo.styleParams.w;
+        splash = rr.z;
+        ringLight = min(rr.w, 1.0) * ubo.styleParams.w;
+    }
+    grad *= mix(0.35, 1.0, smoothstep(0.0, shoreW * 1.5, depthV));
+    vec3 N = normalize(vec3(-grad.x, 1.0, -grad.y));
+    float NoV = clamp(dot(N, V), 0.0, 1.0);
+
+    // ---- Refracao: fundo deslocado pela onda; amostra que cai em algo
+    // acima d'agua (o tronco, a margem) volta para a nao deslocada ----
+    vec2 refrOff = N.xz * ubo.waterParams.y * 0.3 * edge;
+    vec2 pxOff = refrOff * viewport * 0.5;
+    if (length(pxOff) > ubo.extraParams.y) refrOff *= ubo.extraParams.y / length(pxOff);
+    vec2 ruv = clamp(suv + refrOff, vec2(0.001), vec2(0.999));
+    float rd = slotTextureLod(depthTexSlot, ruv, 0.0).r;
+    vec3 rFloor = reconstructWorldPos(ruv, rd);
+    if (rd < 1.0 && rFloor.y > level) { ruv = suv; rd = sceneDepth; rFloor = floorPos; }
+    vec3 bg = slotTextureLod(screenTexSlot, ruv, 0.0).rgb;
+    float path = rd >= 1.0 ? 1e4 : length(rFloor - vWorldPos);
+
+    // Luz que chega na agua (para o espalhamento e a espuma).
+    vec3 amb = max(ubo.ambientColor.rgb * ubo.ambientColor.w, vec3(0.04));
+    vec3 sunL = ubo.sunColor.rgb * sunI;
+    vec3 inLight = amb + sunL * max(L.y, 0.0) * 0.6;
+
+    // Causticas no fundo raso.
+    if (ubo.extraParams.z > 0.5) {
+        float c = causticsPattern(rFloor.xz * max(ubo.normalParams.x, 1e-3) * 4.0, time);
+        bg *= 1.0 + c * ubo.causticsParams.x * exp(-depthV * ubo.causticsParams.y) * sunI * (1.0 - storm * 0.7);
+    }
+
+    // ---- Corpo d'agua: absorcao por canal ao longo do raio dentro d'agua
+    // (o vermelho some primeiro: raso transparente esverdeado, fundo azul
+    // petroleo) e o espalhamento da cor funda no lugar do que foi absorvido.
+    vec3 sigma = vec3(1.0, 0.36, 0.22) / ubo.styleParams2.w;
+    vec3 T = exp(-sigma * path);
+    vec3 under = bg * T + ubo.styleDeep.rgb * inLight * (1.0 - T);
+
+    // ---- Reflexo: ceu, e por cima os objetos (planar; se esta agua nao
+    // esta' no plano do SSPR, marcha de raio) ----
+    // A rugosidade do json (feita para a agua de antes, que nao tinha onda
+    // de verdade) vira micro-rugosidade: a onda ja' espalha o sol.
+    float rough = clamp(ubo.waterParams.w, 0.02, 1.0);
+    float roughEff = clamp(sqrt(rough * rough * 0.12 + w.z * 2.0 + rain * 0.02), 0.02, 1.0);
+    vec3 R = reflect(-V, N);
+    vec3 refl = skyReflection(R, rough, storm, rain, ubo.weatherParams.y, ubo.skyboxSlot.x);
+    vec3 objCol = vec3(0.0);
+    float objHit = 0.0;
+    if (ubo.styleSlots.x >= 0 && abs(level - ubo.styleParams2.y) < 0.5) {
+        // A onda desloca o ponto da superficie de onde o reflexo e' lido;
+        // proporcional a' distancia, o desvio na tela nao depende do zoom.
+        float D = ubo.styleParams2.z * 0.05 * viewDist;
+        vec4 cp = pc.viewProj * vec4(vWorldPos + vec3(N.x, 0.0, N.z) * D, 1.0);
+        vec2 puv = cp.xy / cp.w * 0.5 + 0.5;
+        vec2 px = 1.0 / viewport;
+        // Cinco amostras em cruz: tapam os furos do espelhamento (a imagem
+        // espelhada estica e deixa pixel sem dono) e suavizam a borda.
+        vec4 acc = vec4(0.0);
+        const vec2 taps[5] = vec2[](vec2(0.0), vec2(0.0, 1.5), vec2(0.0, -1.5), vec2(1.5, 0.0), vec2(-1.5, 0.0));
+        for (int i = 0; i < 5; ++i) {
+            vec4 s = slotTextureLod(ubo.styleSlots.x, clamp(puv + taps[i] * px, vec2(0.0), vec2(1.0)), 0.0);
+            acc += vec4(s.rgb * s.a, s.a);
+        }
+        if (acc.a > 1e-3) objCol = acc.rgb / acc.a;
+        objHit = clamp(acc.a / 2.5, 0.0, 1.0);
+    } else {
+        vec4 m = marchReflection(vWorldPos, reflect(-V, normalize(mix(vec3(0.0, 1.0, 0.0), N, 0.25))),
+                                 depthTexSlot, screenTexSlot);
+        objCol = m.rgb;
+        objHit = m.a;
+    }
+    objHit *= 1.0 - rough * 0.5;
+    refl = mix(refl, objCol, objHit);
+
+    // Fresnel: o do ceu fica perto do fisico (F0 ate' 0,12: com 0,25 o ceu
+    // claro lavava o lago inteiro de branco-azulado); o dos objetos e' o
+    // dobro - estilizado, como no diorama, onde o reflexo da arvore e do
+    // personagem e' o que conta.
+    float F0 = mix(0.02, 0.12, clamp(ubo.waterParams.z, 0.0, 1.0));
+    float F = F0 + (1.0 - F0) * pow(1.0 - NoV, 5.0);
+    F = mix(F, min(F * 2.2, 1.0), objHit);
+    F = clamp(F * ubo.styleParams.y, 0.0, 1.0) * (1.0 - rain * 0.25) * (1.0 - storm * 0.5) * edge;
+
+    // ---- Sol: GGX com o Fresnel da agua (o termo sem Fresnel estourava em
+    // mancha branca), mais os brilhos ----
+    vec3 H = normalize(L + V);
+    float VoH = clamp(dot(V, H), 0.0, 1.0);
+    float Fh = 0.02 + 0.98 * pow(1.0 - VoH, 5.0);
+    float spec = ggxSpecular(N, H, roughEff) * Fh / (4.0 * max(NoV, 0.15)) * step(0.0, dot(N, L));
+    vec3 sunSpec = sunL * spec * (1.0 - rain * 0.6) * edge;
+    if (ubo.styleParams.z > 0.0 && sunI > 0.001) {
+        float sp = sunSparkle(vWorldPos.xz, N, V, L, time, footprint);
+        sunSpec += sunL * sp * 3.0 * ubo.styleParams.z * (1.0 - rain * 0.8) * edge;
+    }
+    sunSpec = min(sunSpec, vec3(4.0));
+
+    // ---- Espuma: margem/contato, mascara de contato da CPU, respingo ----
+    float foam = 0.0;
+    if (ubo.foamParams.z > 0.5) {
+        foam = shoreFoamMask(vWorldPos.xz, depthV, time, shoreW);
+        vec2 foamUV = (vWorldPos.xz / vec2(128.0, 128.0)) + 0.5;
+        foam = max(foam, slotTextureLod(ubo.textureSlots.z, foamUV, 0.0).r * ubo.foamParams.y);
+    }
+    foam = max(foam, splash * rain * ubo.foamParams.w);
+    foam = clamp(foam, 0.0, 1.0);
+    vec3 foamCol = vec3(0.90, 0.95, 0.97) * (amb + sunL * max(L.y, 0.0) * 0.85);
+
+    vec3 color = mix(under, refl, F) + sunSpec;
+    // Crista dos aneis de chuva: o ceu refletido mais claro num fio.
+    color += skyReflection(vec3(0.0, 1.0, 0.0), rough, storm, rain, ubo.weatherParams.y, -1) * ringLight * 0.35 * edge;
+    return mix(color, foamCol, foam);
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 // GPU fraca (VulkanContext::shaderLite): sem o reflexo em espaço de tela
@@ -454,6 +812,12 @@ void main() {
         fragColor = vec4(pc.debugMask.y == 1 ? vec3(0.0, 1.0, 0.0) : lavaColor(vWorldPos, vTexCoord.x), 1.0);
         return;
     }
+    if (!LITE && ubo.styleParams.x > 0.5) {
+        vec3 c = shadeDiorama();
+        if (any(isnan(c)) || any(isinf(c))) c = vec3(0.05, 0.1, 0.15);
+        fragColor = vec4(pc.debugMask.y == 1 ? vec3(0.0, 1.0, 0.0) : c, 1.0);
+        return;
+    }
     float time          = ubo.waterLevelAndPlanes.w;
     float nearPlane     = ubo.waterLevelAndPlanes.y;
     float farPlane      = ubo.waterLevelAndPlanes.z;
@@ -597,71 +961,16 @@ void main() {
     // longe) e, ao cruzar a cena, refina por busca binaria. O acerto compara
     // distancias a' camera em unidades de mundo.
     vec3 ssrNormal = normalize(mix(vNormal, perturbedNormal, 0.25));
-    vec3 ssrDir = reflect(-viewDir, ssrNormal);
     vec3 ssrColor = vec3(0.0);
     float ssrHit = 0.0;
-    if (!LITE && ssrDir.y > 0.0) {
-        const int ssrSteps = 40;
-        float t = 0.6, dt = 0.8, tPrev = 0.0;
-        for (int i = 0; i < ssrSteps; i++) {
-            vec3 rayPos = vWorldPos + ssrDir * t;
-            vec4 clip = pc.viewProj * vec4(rayPos, 1.0);
-            if (clip.w <= 0.0) break;
-            vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
-            if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
-            float sd = slotTexture(depthTexSlot, uv).r;
-            if (sd < 1.0) {
-                float rayDist = length(rayPos - ubo.cameraPos.xyz);
-                float sceneDist = length(reconstructWorldPos(uv, sd) - ubo.cameraPos.xyz);
-                if (rayDist > sceneDist) {
-                    float lo = tPrev, hi = t;
-                    for (int k = 0; k < 6; k++) {
-                        float mid = 0.5 * (lo + hi);
-                        vec3 mp = vWorldPos + ssrDir * mid;
-                        vec4 mc = pc.viewProj * vec4(mp, 1.0);
-                        vec2 muv = mc.xy / mc.w * 0.5 + 0.5;
-                        float md = slotTexture(depthTexSlot, muv).r;
-                        float sdist = length(reconstructWorldPos(muv, md) - ubo.cameraPos.xyz);
-                        if (length(mp - ubo.cameraPos.xyz) > sdist) hi = mid; else lo = mid;
-                    }
-                    vec3 hp = vWorldPos + ssrDir * hi;
-                    vec4 hc = pc.viewProj * vec4(hp, 1.0);
-                    vec2 huv = hc.xy / hc.w * 0.5 + 0.5;
-                    float hd = slotTexture(depthTexSlot, huv).r;
-                    float gap = length(hp - ubo.cameraPos.xyz) - length(reconstructWorldPos(huv, hd) - ubo.cameraPos.xyz);
-                    if (gap < max(dt * 2.0, 3.0)) {
-                        ssrColor = slotTexture(screenTexSlot, huv).rgb;
-                        vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv) * smoothstep(vec2(0.0), vec2(0.08), 1.0 - huv);
-                        ssrHit = edge.x * edge.y * (1.0 - smoothstep(0.6, 1.0, float(i) / float(ssrSteps)));
-                    }
-                    break;
-                }
-            }
-            tPrev = t;
-            t += dt;
-            dt *= 1.12;
-        }
+    if (!LITE) {
+        vec4 m = marchReflection(vWorldPos, reflect(-viewDir, ssrNormal), depthTexSlot, screenTexSlot);
+        ssrColor = m.rgb;
+        ssrHit = m.a;
     }
-
-    float skyT = clamp(reflectDir.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 skyGradient = mix(ubo.skyHorizon.rgb, ubo.skyTop.rgb, skyT);
 
     float storm = stormDarken;
-    // Storm darkens and desaturates sky reflection
-    skyGradient = mix(skyGradient, vec3(0.04, 0.04, 0.05), storm * 0.75);
-    // Rain further reduces reflection color so water doesn't look foamy bright
-    skyGradient = mix(skyGradient, vec3(0.06, 0.07, 0.08) * moonOcc, rainIntensity * 0.3);
-
-    vec3 reflectionColor = skyGradient;
-    if (skyboxTexSlot >= 0) {
-        vec4 skyClip = pc.viewProj * vec4(reflectDir, 0.0);
-        vec2 skyUV = skyClip.xy / skyClip.w * 0.5 + 0.5;
-        if (all(greaterThanEqual(skyUV, vec2(0.0))) && all(lessThanEqual(skyUV, vec2(1.0)))) {
-            vec3 skyTexColor = slotTexture(skyboxTexSlot, skyUV).rgb;
-            // Rough surfaces blur reflection back to gradient
-            reflectionColor = mix(skyTexColor, skyGradient, roughness);
-        }
-    }
+    vec3 reflectionColor = skyReflection(reflectDir, roughness, storm, rainIntensity, moonOcc, skyboxTexSlot);
 
     // Blend SSR over sky reflection so objects are visible on the water surface.
     reflectionColor = mix(reflectionColor, ssrColor, ssrHit * (1.0 - roughness * 0.7));

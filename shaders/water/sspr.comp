@@ -1,0 +1,64 @@
+#version 450
+// Reflexo planar em espaco de tela (SSPR). Cada pixel da cena ACIMA do plano
+// d'agua e' espelhado nele (y' = 2*nivel - y) e projetado de volta na tela; a
+// imagem espelhada que cair sobre a agua e' o reflexo dela. Dois pontos podem
+// cair no mesmo pixel: ganha o espelhado mais perto da camera (o que ficaria
+// na frente no mundo espelhado). Sem atomico de 64 bits (celular), em duas
+// fases: a 0 grava a menor profundidade por atomicMin, a 1 deixa so' quem a
+// igualou escrever a cor. Pixel sem ninguem fica com alfa 0 (a agua cai no
+// ceu ou na marcha de raio).
+//
+// SPRITE: o quadro do personagem esta' virado para a camera (inclinado para
+// tras com ela). Espelhado como esta', o reflexo dele sai achatado, quase de
+// perfil. O sprite esta' ali no lugar de alguem EM PE', entao ele reflete
+// como um cartao vertical: o pixel desce pelo "cima" do quadro ate' a linha
+// d'agua (F) e o reflexo fica a' mesma distancia abaixo dela, na vertical.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_depth;   // profundidade da cena (copia)
+layout(set = 0, binding = 1) uniform sampler2D u_color;   // cor da cena (copia)
+layout(set = 0, binding = 2, r32ui) uniform uimage2D u_key;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D u_refl;
+layout(set = 0, binding = 4) uniform sampler2D u_gbufPbr; // R = 0,75: sprite
+
+layout(push_constant) uniform Push {
+    mat4 mirrorClip;     // viewProj * espelho * invViewProj
+    vec4 invRowY;        // linha y de invViewProj (altura do ponto)
+    vec4 invRowW;        // linha w de invViewProj
+    vec4 params;         // x = nivel, y = fase, z = sprites como cartao
+    vec4 spriteDirClip;  // viewProj * (cima do quadro + Y, 0) / cima.y
+} pc;
+
+void main() {
+    ivec2 size = imageSize(u_key);
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= size.x || p.y >= size.y) return;
+    float d = texelFetch(u_depth, p, 0).r;
+    if (d >= 1.0) return; // ceu: a agua usa o ceu dela
+    vec4 ndc = vec4((vec2(p) + 0.5) / vec2(size) * 2.0 - 1.0, d, 1.0);
+    float wp = dot(pc.invRowW, ndc);
+    float wy = dot(pc.invRowY, ndc) / wp;
+    // So' o que esta' acima d'agua reflete (a folga evita o proprio chao
+    // da margem refletir nele mesmo).
+    if (wy <= pc.params.x + 0.05) return;
+    vec4 c;
+    if (pc.params.z > 0.5 && abs(texelFetch(u_gbufPbr, p, 0).r - 0.75) < 0.04) {
+        // recorte(P) = ndc / wp; o reflexo do cartao e' P - s*(cima + Y),
+        // s = (altura - nivel) / cima.y.
+        c = ndc / wp - (wy - pc.params.x) * pc.spriteDirClip;
+    } else {
+        c = pc.mirrorClip * ndc;
+    }
+    if (c.w <= 1e-5) return;
+    vec3 m = c.xyz / c.w;
+    if (m.z < 0.0 || m.z > 1.0) return;
+    ivec2 q = ivec2(floor((m.xy * 0.5 + 0.5) * vec2(size)));
+    if (q.x < 0 || q.y < 0 || q.x >= size.x || q.y >= size.y) return;
+    uint key = floatBitsToUint(m.z);
+    if (pc.params.y < 0.5) {
+        imageAtomicMin(u_key, q, key);
+    } else if (imageLoad(u_key, q).r == key) {
+        imageStore(u_refl, q, vec4(texelFetch(u_color, p, 0).rgb, 1.0));
+    }
+}
