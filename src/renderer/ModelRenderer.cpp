@@ -5086,7 +5086,11 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             // nao precisa curvar a lamina. Medido no parana_field original:
             // as arvores de 1,6 M na banda custavam 6,3 ms de G-buffer so' de
             // patch, sem mudar a imagem.
-            if (m_meshes[hot.meshIndex].midCount > 0) band = 0.0f;
+            // O CHAO fica de fora: e' uma malha so' do mapa inteiro, a cadeia
+            // dele e' de distancia, e o relevo dele so' existe pela tesselacao.
+            // Com a banda zerada o chao de um mapa vizinho (com cadeia) nunca
+            // tesselava: o model.vert deslocava so' os vertices grossos.
+            if (m_meshes[hot.meshIndex].midCount > 0 && !m_meshes[hot.meshIndex].isGround) band = 0.0f;
             instNear = band > 0.0f &&
                        (glm::distance(m_lastCameraPos, c) - r) < band;
         }
