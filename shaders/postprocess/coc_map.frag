@@ -20,7 +20,7 @@ layout(push_constant) uniform PushConstants {
     float focus_band;
     // coc_model "thin_lens" (PostSettings::cocThinLens): K*|z-zf|/z, com
     // teto separado perto e longe e rampa suave de `edge` u depois da faixa.
-    // 0 linear, 1 thin_lens, 2 tilt_plane (PostSettings::cocTiltPlane).
+    // 0 linear, 1 thin_lens, 2 tilt_plane, 3 spotlight (PostSettings).
     int coc_model;
     float lens_blur;
     float max_near;
@@ -39,6 +39,19 @@ layout(push_constant) uniform PushConstants {
     float plane_d;
     float inv_p00;
     float inv_p11;
+    // spotlight: ponto de foco em espaco de vista (o "para cima" do
+    // mundo vai em plane_x/y/z).
+    float focus_vx;
+    float focus_vy;
+    float focus_vz;
+    // Camera ortografica (1) ou perspectiva (0) e o deslocamento P[3][0],
+    // P[3][1] da projecao ortografica, para reconstruir a posicao de vista.
+    float ortho;
+    float p30;
+    float p31;
+    // Sinal do eixo "para frente" no espaco de vista (+1 ou -1): a view do
+    // motor olha para +Z; uma lookAt classica, para -Z.
+    float fwd_z;
 } push;
 
 float bandDist(float z, float f) {
@@ -61,7 +74,7 @@ float thinLensCoc(float z, float f) {
 // pela altura na tela em volta do assunto (o tilt-shift "de foto").
 float tiltPlaneCoc(float z) {
     vec2 ndc = in_uv * 2.0 - 1.0;
-    vec3 pv = vec3(ndc.x * z * push.inv_p00, ndc.y * z * push.inv_p11, -z);
+    vec3 pv = vec3(ndc.x * z * push.inv_p00, ndc.y * z * push.inv_p11, z * push.fwd_z);
     float s = dot(vec3(push.plane_x, push.plane_y, push.plane_z), pv) + push.plane_d;
     float far = push.max_far * smoothstep(push.focus_band, push.focus_band + push.ramp_far, s);
     float near = push.max_near * smoothstep(push.focus_band, push.focus_band + push.ramp_near, -s);
@@ -77,7 +90,31 @@ float tiltPlaneCoc(float z) {
     return c;
 }
 
+// SPOTLIGHT DE FOCO (circulo no chao): o borrao cresce com a distancia HORIZONTAL ate'
+// o assunto, nao com a profundidade da camera. Na tela vira uma elipse
+// nitida em volta do grupo que acompanha o chao em perspectiva; o fundo e
+// os lados desfocam igual. O que sobe acima do assunto (copa, telhado perto
+// da lente) desfoca pela altura, com teto proprio.
+//   raio = focus_band, rampa = ramp_far, teto longe = max_far
+//   altura inicial = screen_mix, rampa da altura = ramp_near, teto = max_near
+float spotlightCoc(float z) {
+    vec2 ndc = in_uv * 2.0 - 1.0;
+    vec3 pv = push.ortho > 0.5
+        ? vec3((ndc.x - push.p30) * push.inv_p00, (ndc.y - push.p31) * push.inv_p11, z * push.fwd_z)
+        : vec3(ndc.x * z * push.inv_p00, ndc.y * z * push.inv_p11, z * push.fwd_z);
+    vec3 up = vec3(push.plane_x, push.plane_y, push.plane_z);
+    vec3 d = pv - vec3(push.focus_vx, push.focus_vy, push.focus_vz);
+    float h = dot(d, up);
+    float r = length(d - up * h);
+    float far = push.max_far * smoothstep(push.focus_band, push.focus_band + push.ramp_far, r);
+    float near = push.enable_foreground != 0
+        ? push.max_near * smoothstep(push.screen_mix, push.screen_mix + push.ramp_near, h) : 0.0;
+    return max(far, near);
+}
+
 float linearize_depth(float d) {
+    // Ortografica: a profundidade ja' e' linear entre near e far.
+    if (push.ortho > 0.5) return push.near_plane + d * (push.far_plane - push.near_plane);
     // Vulkan [0, 1] depth linearization
     return push.near_plane * push.far_plane / (push.far_plane + d * (push.near_plane - push.far_plane));
 }
@@ -102,6 +139,10 @@ void main() {
         coc_r = thinLensCoc(z, fd * 1.02);
         coc_g = thinLensCoc(z, fd);
         coc_b = thinLensCoc(z, fd * 0.98);
+    } else if (push.coc_model == 3) {
+        float c = clamp(spotlightCoc(z), 0.0, push.max_blur);
+        out_coc = vec4(c, c, c, c);
+        return;
     } else if (push.coc_model == 2) {
         // Um CoC so' para os tres canais: o plano nao tem a "lente" que
         // separava o foco por cor, e o teto ja' vem em max_blur.

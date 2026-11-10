@@ -1603,6 +1603,9 @@ if (!m_ctx) return;
             float focus_uv_y;
             float plane_x, plane_y, plane_z, plane_d;
             float inv_p00, inv_p11;
+            float focus_vx, focus_vy, focus_vz; // spotlight
+            float ortho, p30, p31;               // camera ortografica: z linear e deslocamento
+            float fwd_z;                         // sinal de "para frente" no espaco de vista
         } cocPush;
         // Da autoria por zoom (lente de referencia de 60 graus) para o espaco
         // do shader (profundidade real) - ver a nota em PostProcessor.hpp. O
@@ -1643,12 +1646,21 @@ if (!m_ctx) return;
         cocPush.max_near = settings.cocMaxBlurNear >= 0.0f ? std::min(settings.cocMaxBlurNear, teto) : teto;
         cocPush.max_far = settings.cocMaxBlurFar >= 0.0f ? std::min(settings.cocMaxBlurFar, teto) : teto;
         cocPush.edge = settings.cocEdge;
-        int cocModel = settings.cocTiltPlane ? 2 : (settings.cocThinLens ? 1 : 0);
-        if (settings.focusOverride && settings.focusModel >= 0) cocModel = std::min(settings.focusModel, 2);
+        int cocModel = settings.cocSpotlight ? 3 : (settings.cocTiltPlane ? 2 : (settings.cocThinLens ? 1 : 0));
+        if (settings.focusOverride && settings.focusModel >= 0) cocModel = std::min(settings.focusModel, 3);
         cocPush.coc_model = cocModel;
         float cocTetoReal = cocModel == 1 ? std::max(cocPush.max_near, cocPush.max_far) : teto;
         cocPush.ramp_near = cocPush.ramp_far = cocPush.screen_mix = cocPush.focus_uv_y = 0.0f;
         cocPush.plane_x = cocPush.plane_y = cocPush.plane_z = cocPush.plane_d = 0.0f;
+        cocPush.focus_vx = cocPush.focus_vy = cocPush.focus_vz = 0.0f;
+        // proj[2][3] = 0 so' na ortografica (a perspectiva tem -1 ali).
+        cocPush.ortho = std::abs(proj[2][3]) < 1e-6f ? 1.0f : 0.0f;
+        cocPush.p30 = proj[3][0];
+        cocPush.p31 = proj[3][1];
+        // A view do motor olha para +Z (o assunto 'a frente sai com z > 0); a
+        // reconstrucao do shader usava -z e mandava o ponto para tras da
+        // camera: plano e spotlight longe de tudo, borrao no quadro inteiro.
+        cocPush.fwd_z = (Mat3(view) * glm::normalize(cameraDir)).z >= 0.0f ? 1.0f : -1.0f;
         cocPush.inv_p00 = 1.0f / (std::abs(proj[0][0]) > 1e-6f ? proj[0][0] : 1e-6f);
         cocPush.inv_p11 = 1.0f / (std::abs(proj[1][1]) > 1e-6f ? proj[1][1] : 1e-6f);
         if (cocModel == 2) {
@@ -1666,7 +1678,7 @@ if (!m_ctx) return;
             cocPush.screen_mix = glm::clamp(pick(settings.focusScreenMix, settings.cocScreenMix), 0.0f, 1.0f);
             // Ponto do assunto no espaco de vista; sem ele, o centro da tela
             // na distancia focal.
-            const Vec3 foco = (fo && settings.focusPointSet) ? Vec3(view * Vec4(settings.focusPoint, 1.0f))
+            const Vec3 foco = (fo && settings.focusPointSet) ? Vec3(Mat3(view) * (settings.focusPoint - cameraPos))
                                                              : Vec3(0.0f, 0.0f, -cocFocal);
             const Vec3 direita(view[0][0], view[1][0], view[2][0]);
             const Vec3 cima(0.0f, 1.0f, 0.0f);
@@ -1681,6 +1693,31 @@ if (!m_ctx) return;
             cocPush.plane_d = -glm::dot(nVista, foco);
             const Vec4 clip = proj * Vec4(foco, 1.0f);
             cocPush.focus_uv_y = clip.w > 1e-4f ? glm::clamp(clip.y / clip.w * 0.5f + 0.5f, 0.0f, 1.0f) : 0.5f;
+            cocTetoReal = std::max(cocPush.max_near, cocPush.max_far);
+            cocPush.max_blur = cocTetoReal;
+        }
+        if (cocModel == 3) {
+            const bool fo = settings.focusOverride;
+            auto pick = [fo](float over, float base) { return fo && over >= 0.0f ? over : base; };
+            const float escala = float(m_height) / 1080.0f;
+            cocPush.max_near = pick(settings.focusTiltMaxNear, settings.cocSpotMaxNear) * escala;
+            cocPush.max_far = pick(settings.focusTiltMaxFar, settings.cocSpotMaxFar) * escala;
+            cocPush.focus_band = pick(settings.focusBand, settings.cocSpotRadius);
+            cocPush.ramp_far = std::max(pick(settings.focusRampFar, settings.cocSpotRamp), 1e-3f);
+            cocPush.ramp_near = std::max(pick(settings.focusRampNear, settings.cocSpotHeightRamp), 1e-3f);
+            cocPush.screen_mix = pick(settings.focusSpotHeight, settings.cocSpotHeight);
+            const Vec3 foco = (fo && settings.focusPointSet) ? Vec3(Mat3(view) * (settings.focusPoint - cameraPos))
+                                                             : Vec3(0.0f, 0.0f, -cocFocal);
+            // Ponto em espaco de vista pela ROTACAO e a posicao da camera: a view
+            // do motor pode vir relativa 'a camera (sem translacao), e view*p dava
+            // um foco longe de tudo (o quadro inteiro no teto do borrao).
+            const Vec3 cimaVista = glm::normalize(Mat3(view) * Vec3(0.0f, 1.0f, 0.0f));
+            cocPush.plane_x = cimaVista.x;
+            cocPush.plane_y = cimaVista.y;
+            cocPush.plane_z = cimaVista.z;
+            cocPush.focus_vx = foco.x;
+            cocPush.focus_vy = foco.y;
+            cocPush.focus_vz = foco.z;
             cocTetoReal = std::max(cocPush.max_near, cocPush.max_far);
             cocPush.max_blur = cocTetoReal;
         }
@@ -2385,11 +2422,19 @@ void PostProcessor::PostSettings::loadFromJson(const nlohmann::json& j) {
     cocZoomFactor = j.value("coc_zoom_factor", cocZoomFactor);
     cocEnableForeground = j.value("coc_enable_foreground", cocEnableForeground);
     {
-        const std::string atual = cocTiltPlane ? "tilt_plane" : (cocThinLens ? "thin_lens" : "linear");
+        const std::string atual = cocSpotlight ? "spotlight"
+                                  : (cocTiltPlane ? "tilt_plane" : (cocThinLens ? "thin_lens" : "linear"));
         const std::string modelo = j.value("coc_model", atual);
         cocThinLens = modelo == "thin_lens";
         cocTiltPlane = modelo == "tilt_plane";
+        cocSpotlight = modelo == "spotlight";
     }
+    cocSpotRadius = j.value("spotlight_radius", cocSpotRadius);
+    cocSpotRamp = j.value("spotlight_ramp", cocSpotRamp);
+    cocSpotMaxFar = j.value("spotlight_max_far", cocSpotMaxFar);
+    cocSpotMaxNear = j.value("spotlight_max_near", cocSpotMaxNear);
+    cocSpotHeight = j.value("spotlight_height", cocSpotHeight);
+    cocSpotHeightRamp = j.value("spotlight_height_ramp", cocSpotHeightRamp);
     cocTiltAngle = j.value("tilt_plane_angle", cocTiltAngle);
     cocTiltBand = j.value("tilt_band", cocTiltBand);
     cocRampNear = j.value("tilt_ramp_near", cocRampNear);
@@ -2402,6 +2447,8 @@ void PostProcessor::PostSettings::loadFromJson(const nlohmann::json& j) {
     cocMaxBlurFar = j.value("coc_max_blur_far", cocMaxBlurFar);
     cocEdge = j.value("coc_edge", cocEdge);
     visualizeCoC = j.value("visualize_coc", visualizeCoC);
+    // ERUPTION_TEST_VISUALIZE_COC=1 (teste): mostra o mapa de CoC no lugar da imagem.
+    if (std::getenv("ERUPTION_TEST_VISUALIZE_COC")) visualizeCoC = true;
     weatherAfterDoF = j.value("weather_after_dof", weatherAfterDoF);
     debugRainOcclusion = j.value("debug_rain_occlusion", debugRainOcclusion);
     debugRainRegions = j.value("debug_rain_regions", debugRainRegions);

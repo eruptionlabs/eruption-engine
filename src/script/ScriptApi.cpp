@@ -2004,6 +2004,7 @@ int world_set_focus(lua_State* L) {
     s.focusModel = -1;
     s.focusTiltAngle = std::numeric_limits<float>::quiet_NaN();
     s.focusRampNear = s.focusRampFar = s.focusTiltMaxNear = s.focusTiltMaxFar = s.focusScreenMix = -1.0f;
+    s.focusSpotHeight = -1.0f;
     if (lua_istable(L, 2)) {
         // Forma nova: world.set_focus(ponto, {aperture, foreground, band,
         // max_blur, model, tilt_angle, ramp_near, ramp_far, max_near,
@@ -2025,8 +2026,10 @@ int world_set_focus(lua_State* L) {
         lua_getfield(L, 2, "model");
         if (lua_isstring(L, -1)) {
             const std::string m = lua_tostring(L, -1);
-            s.focusModel = m == "tilt_plane" ? 2 : (m == "thin_lens" ? 1 : (m == "linear" ? 0 : -1));
-            if (s.focusModel < 0) luaL_error(L, "world.set_focus: model must be \"linear\", \"thin_lens\" or \"tilt_plane\"");
+            s.focusModel = m == "spotlight" ? 3
+                         : (m == "tilt_plane" ? 2 : (m == "thin_lens" ? 1 : (m == "linear" ? 0 : -1)));
+            if (s.focusModel < 0)
+                luaL_error(L, "world.set_focus: model must be \"linear\", \"thin_lens\", \"tilt_plane\" or \"spotlight\"");
         }
         lua_pop(L, 1);
         lua_getfield(L, 2, "tilt_angle");
@@ -2037,6 +2040,8 @@ int world_set_focus(lua_State* L) {
         s.focusTiltMaxNear = campo("max_near", -1.0f);
         s.focusTiltMaxFar = campo("max_far", -1.0f);
         s.focusScreenMix = campo("screen_mix", -1.0f);
+        // spotlight: band = raio, ramp_far = rampa, height/ramp_near = altura.
+        s.focusSpotHeight = campo("height", -1.0f);
         s.focusOverride = true;
         return 0;
     }
@@ -3006,10 +3011,13 @@ declare world: {
     -- full resolution (default 3; above it a cheap wide blur takes over). No
     -- point at all gives the lens back to the automatic focus. The second
     -- argument may also be a table: {aperture, foreground, band, max_blur,
-    -- model = \"linear\" | \"thin_lens\" | \"tilt_plane\", tilt_angle (degrees,
+    -- model = \"linear\" | \"thin_lens\" | \"tilt_plane\" | \"spotlight\", tilt_angle (degrees,
     -- 0 = upright plane facing the camera, 90 = level plane), ramp_near,
     -- ramp_far (world units after the band), max_near, max_far (pixels at
     -- 1080p), screen_mix (0..1, mixes in a screen-height band)}.
+    -- model = \"spotlight\": a sharp circle ON THE GROUND around the
+    -- point; band = radius, ramp_far = ramp after it, max_far = blur outside;
+    -- height + ramp_near + max_near blur what rises above the point.
     set_focus: (point: vector?, aperture: (number | {[string]: any})?, foreground: boolean?, band: number?, max_blur: number?) -> (),
     -- Hides map and model geometry inside a volume (a mountain or a wall
     -- between the camera and the action) as a dither pattern. `slot` is 1..4;

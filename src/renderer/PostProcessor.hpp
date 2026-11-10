@@ -117,6 +117,17 @@ public:
         float cocTiltMaxNear = 6.0f;   // px a 1080p
         float cocTiltMaxFar = 12.0f;   // px a 1080p
         float cocScreenMix = 0.0f;     // 0..1
+        // coc_model "spotlight": foco em circulo no chao em volta do
+        // assunto (coc_map.frag spotlightCoc). Raio e rampas em u de
+        // mundo, tetos em px a 1080p. A altura desfoca o que sobe acima do
+        // assunto (copa, telhado perto da lente).
+        bool cocSpotlight = false;
+        float cocSpotRadius = 120.0f;
+        float cocSpotRamp = 220.0f;
+        float cocSpotMaxFar = 8.0f;
+        float cocSpotMaxNear = 4.0f;
+        float cocSpotHeight = 90.0f;
+        float cocSpotHeightRamp = 120.0f;
         bool cocEnableForeground = true;
         bool visualizeCoC = false;
 
@@ -145,7 +156,7 @@ public:
         Vec3 focusPoint{0.0f};
         // Tabela do world.set_focus (forma nova): modelo e plano so' enquanto
         // focusOverride vale. focusModel < 0 mantem o do postprocess.json
-        // (0 linear, 1 thin_lens, 2 tilt_plane); os campos < 0 (ou NaN no
+        // (0 linear, 1 thin_lens, 2 tilt_plane, 3 spotlight); os campos < 0 (ou NaN no
         // angulo) mantem os do arquivo.
         int focusModel = -1;
         float focusTiltAngle = std::numeric_limits<float>::quiet_NaN();
@@ -154,6 +165,7 @@ public:
         float focusTiltMaxNear = -1.0f;
         float focusTiltMaxFar = -1.0f;
         float focusScreenMix = -1.0f;
+        float focusSpotHeight = -1.0f; // spotlight: altura em que o borrao de cima comeca
         // Visualizacao crua do G-buffer ligada (checkbox "Show Normal (RGB)" e
         // irmaos). Faz o composite pular fog/tonemap/bloom para a leitura nao
         // mudar com a hora do dia - ver post_composite.frag.
