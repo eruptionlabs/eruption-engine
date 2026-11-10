@@ -304,7 +304,7 @@ std::shared_ptr<Engine::PreparedSheet> prepareSpriteSheet(const std::string& spr
     if (!f || std::memcmp(magic, "ERUPTSPR", 8) != 0) return nullptr;
     auto u32 = [&f]() { uint32_t v = 0; f.read(reinterpret_cast<char*>(&v), 4); return v; };
     const uint32_t version = u32();
-    if (version != 2 && version != 3) return nullptr;
+    if (version < 2 || version > 4) return nullptr;
     const uint32_t count = u32();
     if (count == 0 || count > 4096) return nullptr;
     auto sheet = std::make_shared<Engine::PreparedSheet>();
@@ -432,7 +432,7 @@ static void dilateSpriteColor(std::vector<uint8_t>& px, int w, int h) {
 // bate, a folha fica sem mapa e o sprite com a normal abaulada de sempre.
 // Os pixels vao crus (sem a limpeza de alfa/magenta da cor): rgb = normal.
 void Engine::loadSpriteNormals(const std::string& path, LoadedSprite& out) {
-    out.normalTextures.clear();
+    if (!out.normalTextures.empty()) return; // embutido na propria folha (.spr v4)
     std::filesystem::path p(path);
     const std::string ext = p.extension().string();
     if (p.stem().string().size() >= 7 && p.stem().string().compare(p.stem().string().size() - 7, 7, "_normal") == 0)
@@ -579,7 +579,7 @@ bool Engine::loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out) 
     }
 
     uint32_t version = readU32();
-    if (version == 2 || version == 3) return loadEruptSprV2(f, path, out, version);
+    if (version >= 2 && version <= 4) return loadEruptSprV2(f, path, out, version);
     if (version != 1) {
         ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: unsupported version %u in %s", version, path.c_str());
         return false;
@@ -820,6 +820,31 @@ bool Engine::loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSpr
             f.read(name.data(), len);
             const uint32_t first = u32(), loop = u32();
             if (f && first + 8 <= anim.actions.size()) out.named.push_back({name, first, loop != 0});
+        }
+    }
+    // v4: NORMAL MAP EMBUTIDO. Depois das animações, "NRML", a contagem e, por
+    // imagem (mesma ordem e tamanho das de cor), os pixels RGBA crus da normal
+    // (OpenGL, verde para cima). Folha sem o bloco fica com a normal abaulada.
+    out.normalTextures.clear();
+    if (version >= 4) {
+        char tag[4] = {};
+        f.read(tag, 4);
+        const uint32_t count = u32();
+        if (f && std::memcmp(tag, "NRML", 4) == 0 && count == sizes.size()) {
+            for (uint32_t i = 0; i < count && f; ++i) {
+                SprImage img;
+                img.width = static_cast<uint16_t>(sizes[i].first);
+                img.height = static_cast<uint16_t>(sizes[i].second);
+                img.isIndexed = false;
+                img.pixels.resize(size_t(sizes[i].first) * sizes[i].second * 4);
+                f.read(reinterpret_cast<char*>(img.pixels.data()), static_cast<std::streamsize>(img.pixels.size()));
+                if (f) createTextureFromSprImage(img, nullptr, false, out.normalTextures, false, "", true);
+            }
+            if (!f || out.normalTextures.size() != count) {
+                ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: bloco de normais incompleto em %s (ignorado)", path.c_str());
+                for (auto& tex : out.normalTextures) out.textures.push_back(tex); // solta junto com a folha
+                out.normalTextures.clear();
+            }
         }
     }
     out.act = std::move(anim);

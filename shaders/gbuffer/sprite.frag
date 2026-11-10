@@ -144,9 +144,11 @@ void main() {
         float t = clamp(v_quad.y * 2.0, -1.0, 1.0);
         N = normalize(N + v_billRight * (s * kAbaulaH) + v_billUp * (t * kAbaulaV));
     }
-    // NORMAL MAP AUTORAL (<folha>_normal.png ao lado da folha, mesmo UV;
-    // core/Sprites.cpp): quem desenhou o boneco diz para onde cada pedaco
-    // aponta, e a normal abaulada acima sai de cena. Convencao OpenGL (verde =
+    // NORMAL MAP AUTORAL (embutido no .spr v4, ou <folha>_normal.png ao lado
+    // da folha, mesmo UV; core/Sprites.cpp): o detalhe da arte (dobra de
+    // pano, borda de armadura) PERTURBA a normal abaulada acima, nao a troca.
+    // Trocar apagava o volume do corpo: mapa quase plano (z ~ 1) deixava o
+    // boneco mais chapado do que sem mapa nenhum. Convencao OpenGL (verde =
     // para cima na arte). A base tangente vem das derivadas do quadro (u para
     // a direita da arte na tela, v para baixo), entao espelhar o sprite
     // (FlipX) espelha a normal junto. Forca: sprite_normal_strength (0 = sem;
@@ -154,7 +156,7 @@ void main() {
     if (v_normalTexIndex != 0u && u_spriteParams.y > 0.0) {
         vec3 n = slotTexture(v_normalTexIndex, v_uv).xyz * 2.0 - 1.0;
         n.xy *= u_spriteParams.y;
-        vec3 Nf = normalize(v_normal);
+        vec3 Nf = N; // base = a abaulada
         vec3 T = posDx * uvDy.t - posDy * uvDx.t;
         vec3 B = -posDx * uvDy.s + posDy * uvDx.s;
         if (dot(T, T) > 1e-12 && dot(B, B) > 1e-12) {
