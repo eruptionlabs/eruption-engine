@@ -808,8 +808,17 @@ void UiDocument::draw(ImDrawList* dl, float x, float y, float w, float h) const 
                 // Tinta multiplica a imagem: ui.color(sel, cor, 0), senao
                 // --image-tint, senao branco (a imagem como e').
                 const ImU32 tint = withAlpha(e.hasColor[0] ? toImU32(e.color[0]) : ImU32(e.tintCss), alpha);
-                dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(r.x, r.y), ImVec2(r.x + r.w, r.y + r.h),
-                             ImVec2(e.uv.x, e.uv.y), ImVec2(e.uv.z, e.uv.w), tint);
+                // border-radius tambem recorta a imagem (999 numa caixa
+                // quadrada = imagem redonda, p.ex. um minimapa circular).
+                const float round = e.corners ? std::max(std::max(e.radii[0], e.radii[1]), std::max(e.radii[2], e.radii[3]))
+                                              : m_layout.borderRadius(e.selector, 0.0f);
+                if (round > 0.0f)
+                    dl->AddImageRounded(reinterpret_cast<ImTextureID>(tex), ImVec2(r.x, r.y), ImVec2(r.x + r.w, r.y + r.h),
+                                        ImVec2(e.uv.x, e.uv.y), ImVec2(e.uv.z, e.uv.w), tint,
+                                        std::min(round, 0.5f * std::min(r.w, r.h)));
+                else
+                    dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(r.x, r.y), ImVec2(r.x + r.w, r.y + r.h),
+                                 ImVec2(e.uv.x, e.uv.y), ImVec2(e.uv.z, e.uv.w), tint);
                 break;
             }
             m_layout.drawBox(dl, r, e.selector, alpha, 0, IM_COL32(150, 150, 150, 200), 1.0f, 0.0f, bg, edge);
