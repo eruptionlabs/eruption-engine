@@ -728,8 +728,13 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
     }
     phase("camadas", terrainLayers.size());
     if (hasEnvironment) {
-        engine.dayNightCycle().setTimeOfDay(time / 24.0f);
-        engine.dayNightCycle().setPaused(paused);
+        // ERUPTION_TEST_TIME (captura) vence a hora fixa da cena: sem isto a
+        // cena que trava a hora regravava por cima e a captura de noite saia
+        // de dia (so' o world.set_time do script conseguia mudar).
+        if (!std::getenv("ERUPTION_TEST_TIME")) {
+            engine.dayNightCycle().setTimeOfDay(time / 24.0f);
+            engine.dayNightCycle().setPaused(paused);
+        }
         if (!weather.empty()) engine.setInitialWeatherType(weather);
         if (hasWater) engine.setWaterLevel(true, waterLevel);
         ++applied;
