@@ -549,7 +549,19 @@ public:
         m_dofQuality = quality;
         m_bokehTaps = std::clamp(taps, 8, 128);
     }
+    // Distorcao de tela (VfxSystem::distortionView, nulo = sem passe) e a
+    // forca do preset ("distortion", 0 desliga).
+    void setDistortion(VkImageView view, float strength) {
+        m_distortSrc = view;
+        m_distortStrength = std::max(strength, 0.0f);
+    }
 private:
+    VkImageView m_distortSrc = VK_NULL_HANDLE;
+    float m_distortStrength = 1.0f;
+    VkImage m_distortImage = VK_NULL_HANDLE; // cena entortada, resolucao cheia
+    VmaAllocation m_distortAlloc = VK_NULL_HANDLE;
+    VkImageView m_distortView = VK_NULL_HANDLE;
+    VkPipeline m_distortPipeline = VK_NULL_HANDLE;
     int m_dofQuality = 0;
     int m_bokehTaps = 40;
     VkImage m_bokehImage = VK_NULL_HANDLE; // meia resolucao, RGBA16F

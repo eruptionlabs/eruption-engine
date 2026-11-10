@@ -1,0 +1,26 @@
+{
+  "name": "calor",
+  "emitters": [
+    {
+      "name": "ar_quente",
+      "capacity": 200,
+      "rate": 10,
+      "shape": "disc",
+      "shapeSize": [1.2, 1.2, 1.2],
+      "lifetime": [1.6, 2.4],
+      "speed": [0.6, 1.0],
+      "direction": [0, 1, 0],
+      "spread": 0.1,
+      "size": [1.6, 2.2],
+      "rotation": [0, 0],
+      "color": [
+        {"t": 0, "rgba": [1, 1, 1, 0]},
+        {"t": 0.25, "rgba": [1, 1, 1, 1]},
+        {"t": 1, "rgba": [1, 1, 1, 0]}
+      ],
+      "sizeOverLife": [[0, 0.8], [1, 1.6]],
+      "softDistance": 0.5,
+      "distortion": 0.006
+    }
+  ]
+}

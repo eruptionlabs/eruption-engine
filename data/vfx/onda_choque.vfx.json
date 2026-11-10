@@ -1,0 +1,27 @@
+{
+  "name": "onda_choque",
+  "emitters": [
+    {
+      "name": "anel",
+      "capacity": 8,
+      "rate": 0,
+      "burstCount": 1,
+      "burstInterval": 1.5,
+      "shape": "point",
+      "lifetime": [1.0, 1.0],
+      "speed": [0, 0],
+      "spread": 0,
+      "size": [6, 6],
+      "rotation": [0, 0],
+      "color": [
+        {"t": 0, "rgba": [1, 1, 1, 1]},
+        {"t": 1, "rgba": [1, 1, 1, 0]}
+      ],
+      "sizeOverLife": [[0, 0.1], [1, 1.0]],
+      "maxScreenSize": 2.0,
+      "softDistance": 0,
+      "distortion": 0.025,
+      "distortionRadial": 1.0
+    }
+  ]
+}

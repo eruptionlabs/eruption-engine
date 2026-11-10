@@ -21,6 +21,7 @@ layout(location = 9) flat out vec4 v_decalRot; // decal: cos, sin do giro, celul
 layout(push_constant) uniform Push {
     uint listOffset;  // inicio da lista no buffer de desenho
     float depthScale; // 1 = resolucao cheia, 2 = meia resolucao
+    uint distortPass; // 1 = passe do buffer de distorcao (so' emissores "distortion")
 } pc;
 
 // Poligono de 8 lados recortado pela textura: cada lado k tem normal a k*45
@@ -45,6 +46,12 @@ vec2 ringPoint(uvec4 cut, uint k) {
 void main() {
     uint idx = renderList[pc.listOffset + gl_InstanceIndex];
     RenderRec r = recs[idx];
+    // Emissor de distorcao so' no passe dele, e so' ele: o resto colapsa
+    // num ponto fora do recorte (triangulo vazio, nenhum fragmento).
+    if ((((r.sheet.y >> 21) & 1u) != 0u) != (pc.distortPass != 0u)) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        return;
+    }
     vec3 pos = r.posSize.xyz;
     float size = r.posSize.w;
     vec2 rs = unpackHalf2x16(r.look.z); // rotacao, comprimento esticado

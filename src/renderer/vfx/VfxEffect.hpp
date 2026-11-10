@@ -138,6 +138,13 @@ struct VfxEmitterDesc {
                                // Fresnel e brilho do sol
     float refraction = 0.04f;  // desvio da cena atras (fracao da tela)
     float absorption = 1.0f;   // tinta por metro de espessura (0 = incolor)
+    // DISTORCAO DE TELA (calor, agua, onda de choque): > 0 o emissor nao
+    // desenha cor; escreve um deslocamento no buffer de distorcao, que o pos
+    // usa para entortar a cena atras (fracao da altura da tela, vezes o alfa
+    // da cor ao longo da vida). Com textura, o rg dela e' a direcao
+    // (0,5 = parado) e o alfa a mascara; sem textura, ondulacao de calor.
+    float distortion = 0.0f;
+    float distortionRadial = 0.0f; // 0 = ondulacao, 1 = empurra do centro para fora (anel de choque)
 
     // --- Sub-emissores ---
     VfxSubEmitter onDeath;

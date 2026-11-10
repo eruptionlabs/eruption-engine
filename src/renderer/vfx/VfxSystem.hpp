@@ -208,6 +208,11 @@ public:
     // usando a imagem antiga (o motor chama no bloco de resize).
     bool resize(uint32_t w, uint32_t h);
     VkImageView reactiveView() const { return m_reactiveView; }
+    // Buffer de distorcao da tela (RG16F, deslocamento em fracao da altura da
+    // tela) escrito neste quadro pelos emissores "distortion"; nulo quando
+    // nenhum escreveu (o pos pula o passe). Preset "distortion" 0 desliga.
+    VkImageView distortionView() const { return m_distortWritten ? m_distortView : VK_NULL_HANDLE; }
+    void setDistortionEnabled(bool on) { m_distortEnabled = on; }
     // Algo para simular/desenhar? (sem nenhum efeito, o sistema custa zero)
     bool active() const { return m_active; }
     // Efeitos desligados (tier sem compute): nao simula nem desenha; os emissores
@@ -348,6 +353,17 @@ private:
     bool m_reactiveWritten = false;
     bool m_reactiveConsumed = true;
     void destroyReactive();
+    static constexpr VkFormat kDistortFormat = VK_FORMAT_R16G16_SFLOAT;
+    VkPipeline m_distortPipe = VK_NULL_HANDLE;
+    VkImage m_distortImage = VK_NULL_HANDLE;
+    VmaAllocation m_distortAlloc = VK_NULL_HANDLE;
+    VkImageView m_distortView = VK_NULL_HANDLE;
+    VkExtent2D m_distortExtent{0, 0};
+    bool m_anyDistortion = false;  // algum emissor de distorcao tocando
+    bool m_distortEnabled = true;  // preset "distortion" > 0
+    bool m_distortWritten = false; // o buffer tem o quadro atual
+    void drawDistortion(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent);
+    void destroyDistortion();
     std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setLow{};
     std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setGround{};
     std::array<VkImageView, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_setIce{};

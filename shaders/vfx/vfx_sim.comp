@@ -252,7 +252,9 @@ void main() {
             // Emissor fora da visao de equipe: a fita some inteira (o vizinho
             // que um ponto le' e' do mesmo emissor, tambem escondido).
             if ((e.flags.x & VFXF_HIDDEN) != 0u) visible = false;
-            lowRes = (e.flags.x & VFXF_LOWRES) != 0u;
+            // Distorcao vai na lista cheia: o passe dela tem o teste de
+            // profundidade por hardware.
+            lowRes = (e.flags.x & (VFXF_LOWRES | VFXF_DISTORT)) == VFXF_LOWRES;
             uint meshId = (e.flags.x >> VFXF_MESH_SHIFT) & 0xFu;
             if (visible && meshId != 0u) {
                 // MALHA: opaca no G-buffer (luz da cena de verdade). Registro
@@ -319,6 +321,12 @@ void main() {
                     // particula (rot0 = eixo X do efeito no mundo).
                     rec.sheet.y |= 1u << 20;
                     rec.look.z = packHalf2x16(vec2(sr.y + av.x * p.age + atan(e.rot0.z, e.rot0.x), stretchLen));
+                }
+                if ((e.flags.x & VFXF_DISTORT) != 0u) {
+                    // Distorcao: a cor nao aparece; leva forca (r) e mistura
+                    // radial (g), o alfa (vida, perto da camera) modula.
+                    rec.look.x = packHalf2x16(vec2(e.collide.w, e.flip.w));
+                    rec.sheet.y |= 1u << 21;
                 }
                 if (ribbon) {
                     // Vizinho na fita: o ponto que nasceu logo depois (seq + 1),

@@ -122,6 +122,8 @@ void PostProcessor::shutdown() {
     vkDestroyPipeline(device, m_bokehGatherPipeline, nullptr);
     vkDestroyPipeline(device, m_bokehCompositePipeline, nullptr);
     m_bokehGatherPipeline = m_bokehCompositePipeline = VK_NULL_HANDLE;
+    vkDestroyPipeline(device, m_distortPipeline, nullptr);
+    m_distortPipeline = VK_NULL_HANDLE;
     vkDestroyPipeline(device, m_compositePipeline, nullptr);
     vkDestroyPipeline(device, m_copyPipeline, nullptr);
     
@@ -167,6 +169,7 @@ void PostProcessor::shutdown() {
     destroyImg(m_godRayImage, m_godRayAlloc, m_godRayView);
     for (uint32_t i = 0; i < kDofFarImages; i++) destroyImg(m_dofFarImages[i], m_dofFarAllocs[i], m_dofFarViews[i]);
     destroyImg(m_bokehImage, m_bokehAlloc, m_bokehView);
+    destroyImg(m_distortImage, m_distortAlloc, m_distortView);
 
     for (uint32_t i = 0; i < BLOOM_MIPS; i++) {
         destroyImg(m_bloomDownImages[i], m_bloomDownAllocs[i], m_bloomDownViews[i]);
@@ -224,6 +227,7 @@ void PostProcessor::createImages() {
     createImg(m_blurHImage, m_blurHAlloc, m_blurHView);
     createImg(m_blurVImage, m_blurVAlloc, m_blurVView);
     createImg(m_weatherImage, m_weatherAlloc, m_weatherView);
+    createImg(m_distortImage, m_distortAlloc, m_distortView);
 
     // Bloom Pyramid
     uint32_t bw = m_width / 2;
@@ -643,6 +647,8 @@ void PostProcessor::createPipelines() {
                                                          VK_FORMAT_R16G16B16A16_SFLOAT);
         m_bokehCompositePipeline = createFullscreenPipeline(bokehCompFrag, m_width, m_height);
     }
+    auto distortFrag = ShaderCompiler::loadSPIRV("postprocess/distortion.frag.spv");
+    if (!distortFrag.empty()) m_distortPipeline = createFullscreenPipeline(distortFrag, m_width, m_height);
     m_compositePipeline = createFullscreenPipeline(compositeFrag, m_width, m_height);
     m_copyPipeline = createFullscreenPipeline(copyFrag, m_width, m_height, false, m_ctx->swapFormat());
 
@@ -1404,6 +1410,25 @@ if (!m_ctx) return;
             drawWeatherParticles(m_weatherImage, m_weatherView, compositeSource);
             compositeSource = m_weatherView;
         }
+    }
+
+    // Distorcao de tela (emissores "distortion" do VFX): a cena entortada
+    // entra no lugar da original antes do DoF e do bloom. So' quando algum
+    // emissor escreveu o buffer neste quadro (sem ele, custo zero).
+    if (m_distortSrc != VK_NULL_HANDLE && m_distortStrength > 0.0f && m_distortPipeline != VK_NULL_HANDLE) {
+        bw::pushPass("Distortion");
+        barrierToColorAttach(cmd, m_ctx, m_distortImage);
+        updateDescriptorSet(25, compositeSource, m_distortSrc);
+        beginFullscreenPass(cmd, m_distortView, m_width, m_height);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_distortPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(25), 0, nullptr);
+        const float push[2] = {m_distortStrength, float(m_height) / float(std::max(1u, m_width))};
+        vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkc::cmdEndRendering(cmd);
+        barrierToShaderRead(cmd, m_ctx, m_distortImage);
+        bw::popPass();
+        compositeSource = m_distortView;
     }
 
     // DoF and bloom below read through hdrInput: rebind it to the weathered

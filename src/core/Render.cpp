@@ -2151,6 +2151,7 @@ void Engine::render() {
                             m_deferredLighting.shadowUboBuffer(), vp);
         m_postProcessor.setVolumetric(m_volumetric.outputView(), m_volumetric.active());
     }
+    m_postProcessor.setDistortion(m_vfx.distortionView(), m_distortionStrength);
     m_postProcessor.render(cmd, postHdrInput, m_gbuffer.depthView(), m_gbuffer.normalView(),
                            m_gbuffer.normalView(), m_shadowRenderer.shadowAtlasView(), m_camera.viewMatrix(),
                            m_camera.projNoJitter(), glm::inverse(m_camera.viewProjNoJitter()), m_prevViewProjNoJitter,

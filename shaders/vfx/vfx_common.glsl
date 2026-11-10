@@ -43,9 +43,9 @@ struct Emitter {
     vec4 angVel;      // x,y vel. angular min/max (rad/s); z esticar; w distancia suave
     vec4 gravityDrag; // xyz gravidade, w arrasto
     vec4 noise;       // x forca, y frequencia, z velocidade, w quique
-    vec4 collide;     // x altura do plano, y atrito, z perda de vida por batida
+    vec4 collide;     // x altura do plano, y atrito, z perda de vida por batida, w forca da distorcao
     vec4 render;      // x emissivo, y iluminada 0..1, z tamanho max na tela, w some perto da camera
-    vec4 flip;        // x quadros/s, y total de quadros, z modo (0 vida, 1 fps, 2 sorteado)
+    vec4 flip;        // x quadros/s, y total de quadros, z modo (0 vida, 1 fps, 2 sorteado), w distorcao radial
     uint colorLut[16];// RGBA8 (cor * emissivo vai no shader), 16 amostras da vida
     uint sizeLut[8];  // 16 halfs: tamanho ao longo da vida
     uvec4 cutout;     // 8 halfs: poligono justo da textura (alcance em 8 direcoes)
@@ -74,6 +74,7 @@ const uint VFXF_MESH_SHIFT   = 16u;     // 4 bits: malha da particula + 1 (0 = s
 const uint VFXF_MESHLO_SHIFT = 20u;     // 4 bits: versao de longe da malha + 1 (0 = nao tem)
 const uint VFXF_DECAL        = 1u << 24; // deitada e projetada na profundidade da cena
 const uint VFXF_SHADOWED     = 1u << 25; // termo do sol passa pelo mapa de sombra do sol
+const uint VFXF_DISTORT      = 1u << 26; // escreve no buffer de distorcao da tela, nao na cor
 
 // Pedido de nascimento (CPU -> GPU): `count` particulas do emissor `slot`,
 // ocupando [first, first+count) da fila de nascimento deste frame.
@@ -112,7 +113,7 @@ struct FrameParams {
 struct RenderRec {
     vec4 posSize;  // xyz posicao, w tamanho final (mundo)
     uvec4 look;    // x,y cor half4 (rgb linear com luz, a); z half2(rotacao, comprimento esticado); w eixo (octaedro 2x16)
-    uvec4 sheet;   // x textura; y colunas | linhas<<8 | mistura<<16 | direcao<<18; z quadro | mistura do proximo (8 bits)<<16; w borda suave (float)
+    uvec4 sheet;   // x textura; y colunas | linhas<<8 | mistura<<16 | direcao<<18 | decal<<20 | distorcao<<21; z quadro | mistura do proximo (8 bits)<<16; w borda suave (float)
     uvec4 cutout;  // 8 halfs: poligono justo da textura
 };
 

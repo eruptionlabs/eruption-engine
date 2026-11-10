@@ -154,6 +154,8 @@ void readEmitter(const json& j, VfxEmitterDesc& e) {
     e.translucent = num(j, "translucent", e.translucent);
     e.refraction = num(j, "refraction", e.refraction);
     e.absorption = num(j, "absorption", e.absorption);
+    e.distortion = std::clamp(num(j, "distortion", e.distortion), 0.0f, 0.25f);
+    e.distortionRadial = std::clamp(num(j, "distortionRadial", e.distortionRadial), 0.0f, 1.0f);
     if (j.contains("mesh") && j["mesh"].is_string()) e.mesh = j["mesh"].get<std::string>();
     auto readSub = [&](const char* key, VfxSubEmitter& s) {
         if (!j.contains(key) || !j[key].is_object()) return;
@@ -261,6 +263,10 @@ json writeEmitter(const VfxEmitterDesc& e) {
         j["translucent"] = true;
         j["refraction"] = e.refraction;
         j["absorption"] = e.absorption;
+    }
+    if (e.distortion > 0.0f) {
+        j["distortion"] = e.distortion;
+        j["distortionRadial"] = e.distortionRadial;
     }
     if (!e.mesh.empty()) j["mesh"] = e.mesh;
     auto writeSub = [&](const char* key, const VfxSubEmitter& s) {

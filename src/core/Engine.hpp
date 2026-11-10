@@ -551,6 +551,9 @@ public:
     // bilinear nitido) e "sprite_normal_strength" (normal map autoral, 0 = sem).
     float m_spriteFilter = 0.0f;
     float m_spriteNormalStrength = 1.0f;
+    // Distorcao de tela dos emissores "distortion" (preset "distortion":
+    // multiplica o autorado; 0 desliga o passe do VFX e o do pos).
+    float m_distortionStrength = 1.0f;
     float m_tessNearEdgePixels = 8.0f; // chave "tessellation_near_edge_pixels"
     uint32_t m_godRayLights = 4;     // chave "god_ray_lights"
     float m_godRaySun = 0.0f;        // chave "god_ray_sun" (forca dos raios do sol)

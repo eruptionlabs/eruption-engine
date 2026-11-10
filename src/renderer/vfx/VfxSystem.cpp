@@ -37,6 +37,7 @@ constexpr uint32_t kBindings = 20; // 18 = mapa de sombra do sol, 19 = matrizes 
 struct DrawPush {
     uint32_t listOffset;
     float depthScale;
+    uint32_t distortPass; // 1 = passe do buffer de distorcao (vfx_distort.frag)
 };
 struct MeshPush {
     Mat4 viewProjNoJitter;
@@ -492,6 +493,37 @@ bool VfxSystem::createPipelines() {
     }
     if (fsLow) vkDestroyShaderModule(dev, fsLow, nullptr);
     else r = VK_ERROR_INITIALIZATION_FAILED;
+    // Buffer de distorcao: o mesmo vertex shader, um alvo RG16F somado (os
+    // deslocamentos de particulas sobrepostas se somam), profundidade so'
+    // para o teste. Sem o shader, os emissores de distorcao so' nao aparecem.
+    VkShaderModule fsDistort = loadModule(dev, "vfx/vfx_distort.frag.spv");
+    if (r == VK_SUCCESS && fsDistort) {
+        st[1].module = fsDistort;
+        const VkFormat distortFormat = kDistortFormat;
+        VkPipelineColorBlendAttachmentState add{};
+        add.blendEnable = VK_TRUE;
+        add.srcColorBlendFactor = add.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        add.srcAlphaBlendFactor = add.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        add.colorBlendOp = add.alphaBlendOp = VK_BLEND_OP_ADD;
+        add.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT;
+        cb.attachmentCount = 1;
+        cb.pAttachments = &add;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachmentFormats = &distortFormat;
+        ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        ds.depthTestEnable = VK_TRUE;
+        if (vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_distortPipe) != VK_SUCCESS)
+            m_distortPipe = VK_NULL_HANDLE;
+        // Devolve o estado que os pipelines seguintes (malha, previa,
+        // composicao) herdam deste `gi`: os dois alvos do draw() e a mistura
+        // premultiplicada. Sem isto a composicao da meia resolucao saia com
+        // 1 alvo de mistura para 2 de cor (e um ponteiro morto) e travava a GPU.
+        cb.attachmentCount = 2;
+        cb.pAttachments = blends;
+        ri.colorAttachmentCount = 2;
+        ri.pColorAttachmentFormats = colorFormats;
+    }
+    if (fsDistort) vkDestroyShaderModule(dev, fsDistort, nullptr);
     vkDestroyShaderModule(dev, vs, nullptr);
     vkDestroyShaderModule(dev, fs, nullptr);
     if (r != VK_SUCCESS) return false;
@@ -744,11 +776,12 @@ void VfxSystem::shutdown() {
     VkDevice dev = m_ctx->device();
     destroyBuffers();
     destroyGround(false);
-    for (VkPipeline* p : {&m_emitPipe, &m_argsPipe, &m_simPipe, &m_finishPipe, &m_drawPipe, &m_drawLowPipe,
+    for (VkPipeline* p : {&m_emitPipe, &m_argsPipe, &m_simPipe, &m_finishPipe, &m_drawPipe, &m_drawLowPipe, &m_distortPipe,
                           &m_compositePipe, &m_sortHistPipe, &m_sortScanPipe, &m_sortScatterPipe, &m_eventPipe,
                           &m_meshPipe, &m_meshFwdPipe, &m_meshIcePipe, &m_meshShadowPipe})
         if (*p) vkDestroyPipeline(dev, *p, nullptr), *p = VK_NULL_HANDLE;
     destroyReactive();
+    destroyDistortion();
     destroyBuf(m_ringIndex);
     for (GpuMesh& m : m_meshes) {
         destroyBuf(m.vb);
@@ -1089,6 +1122,13 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     // ERUPTION_TEST_VFX_SHADOWED=1 (teste): todo emissor iluminado vira "shadowed".
     static const bool kForceShadowed = std::getenv("ERUPTION_TEST_VFX_SHADOWED") != nullptr;
     if (e.shadowed || (kForceShadowed && e.lit > 0.0f)) flags |= 1u << 25; // VFXF_SHADOWED
+    // Distorcao: so' sprite (malha e fita desenham cor). Sem o pipeline dela
+    // (ou com o preset em 0) o emissor some, como um efeito sem cor.
+    const bool distort = e.distortion > 0.0f && e.mesh.empty() && e.facing != VfxFacing::Ribbon;
+    if (distort) {
+        flags |= 1u << 26; // VFXF_DISTORT
+        m_anyDistortion = true;
+    }
     uint32_t mesh = 0;
     if (!e.mesh.empty()) {
         const uint32_t id = meshId(e.mesh);
@@ -1158,9 +1198,9 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     o.angVel = Vec4(glm::radians(e.angularVelocity.x), glm::radians(e.angularVelocity.y), e.stretch, e.softDistance);
     o.gravityDrag = Vec4(e.gravity, e.drag);
     o.noise = Vec4(e.noiseStrength, e.noiseFrequency, e.noiseSpeed, e.bounce);
-    o.collide = Vec4(e.planeY, e.friction, e.collisionLifeLoss, 0.0f);
+    o.collide = Vec4(e.planeY, e.friction, e.collisionLifeLoss, distort ? e.distortion : 0.0f);
     o.render = Vec4(e.emissive, e.lit, e.maxScreenSize, e.nearFade);
-    o.flip = Vec4(e.flipFps, float(e.flipCols * e.flipRows), float(uint32_t(e.flipMode)), 0.0f);
+    o.flip = Vec4(e.flipFps, float(e.flipCols * e.flipRows), float(uint32_t(e.flipMode)), e.distortionRadial);
     for (int i = 0; i < 16; ++i) {
         const Vec4 c = glm::clamp(instanceColor(e.color.sample(float(i) / 15.0f), inst.color), Vec4(0.0f), Vec4(1.0f));
         o.colorLut[i] = glm::packUnorm4x8(c);
@@ -1226,6 +1266,8 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     m_spawnTotal = 0;
     m_anyLowRes = false;
     m_anyTranslucent = false;
+    m_anyDistortion = false;
+    m_distortWritten = false;
     m_iceBounds.clear();
     m_iceRefraction = 0.0f;
     m_meshMask = 0;
@@ -1740,7 +1782,7 @@ void VfxSystem::drawLowRes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2
     vkCmdSetScissor(cmd, 0, 1, &sc);
     VkDescriptorSet sets[3] = {m_bindless->set(), m_frameUboSet, m_drawSets[frame]};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_drawLayout, 0, 3, sets, 0, nullptr);
-    const DrawPush push{(m_sortThisFrame ? 3u : 1u) * m_capacity, float(extent.width) / float(m_lowExtent.width)};
+    const DrawPush push{(m_sortThisFrame ? 3u : 1u) * m_capacity, float(extent.width) / float(m_lowExtent.width), 0u};
     vkCmdPushConstants(cmd, m_drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
                        &push);
     vkCmdBindIndexBuffer(cmd, m_ringIndex.buf, 0, VK_INDEX_TYPE_UINT16);
@@ -1757,6 +1799,7 @@ bool VfxSystem::resize(uint32_t w, uint32_t h) {
     if (m_reactiveImage && w == m_reactiveExtent.width && h == m_reactiveExtent.height) return true;
     m_ctx->waitIdle();
     destroyReactive();
+    destroyDistortion(); // recriado no proximo desenho, no tamanho novo
     if (!m_ctx->createImage(w, h, VK_FORMAT_R8_UNORM,
                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -1872,7 +1915,7 @@ void VfxSystem::draw(VkCommandBuffer cmd, VkImage litImage, VkImageView litView,
     vkCmdSetScissor(cmd, 0, 1, &sc);
     VkDescriptorSet sets[3] = {m_bindless->set(), m_frameUboSet, m_drawSets[frame]};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_drawLayout, 0, 3, sets, 0, nullptr);
-    const DrawPush push{m_sortThisFrame ? 2u * m_capacity : 0u, 1.0f};
+    const DrawPush push{m_sortThisFrame ? 2u * m_capacity : 0u, 1.0f, 0u};
     vkCmdPushConstants(cmd, m_drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
                        &push);
     vkCmdBindIndexBuffer(cmd, m_ringIndex.buf, 0, VK_INDEX_TYPE_UINT16);
@@ -1883,6 +1926,87 @@ void VfxSystem::draw(VkCommandBuffer cmd, VkImage litImage, VkImageView litView,
                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
     m_reactiveWritten = true;
+    drawDistortion(cmd, depthView, extent);
+}
+
+// Passe do buffer de distorcao: a mesma lista de desenho, so' os emissores
+// "distortion" (o vertex shader descarta o resto), num RG16F zerado. So'
+// roda com emissor de distorcao vivo e o preset ligado; sem ele o pos nem
+// le' o buffer (distortionView() nulo).
+void VfxSystem::drawDistortion(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent) {
+    if (!m_anyDistortion || !m_distortEnabled || !m_distortPipe) return;
+    if (!m_distortImage || m_distortExtent.width != extent.width || m_distortExtent.height != extent.height) {
+        // Primeira vez (ou outro tamanho): o resize ja' esperou a GPU antes de
+        // destruir o anterior; aqui so' falta criar.
+        if (m_distortImage) return; // tamanho mudou sem resize: espera o proximo
+        if (!m_ctx->createImage(extent.width, extent.height, kDistortFormat,
+                                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                VMA_MEMORY_USAGE_GPU_ONLY, m_distortImage, m_distortAlloc))
+            return;
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = m_distortImage;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = kDistortFormat;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkc::createImageView(m_ctx->device(), &vi, nullptr, &m_distortView) != VK_SUCCESS) {
+            destroyDistortion();
+            return;
+        }
+        m_distortExtent = extent;
+    }
+    m_ctx->cmdImageBarrier(cmd, m_distortImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT);
+    VkRenderingAttachmentInfo color{};
+    color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    color.imageView = m_distortView;
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color.clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    VkRenderingAttachmentInfo depth{};
+    depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth.imageView = depthView;
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_NONE;
+    VkRenderingInfo ri{};
+    ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    ri.renderArea = {{0, 0}, extent};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments = &color;
+    ri.pDepthAttachment = &depth;
+    vkc::cmdBeginRendering(cmd, &ri);
+    const VkViewport vp{0.0f, 0.0f, float(extent.width), float(extent.height), 0.0f, 1.0f};
+    const VkRect2D sc{{0, 0}, extent};
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_distortPipe);
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    VkDescriptorSet sets[3] = {m_bindless->set(), m_frameUboSet, m_drawSets[m_ctx->currentFrame()]};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_drawLayout, 0, 3, sets, 0, nullptr);
+    const DrawPush push{m_sortThisFrame ? 2u * m_capacity : 0u, 1.0f, 1u};
+    vkCmdPushConstants(cmd, m_drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
+                       &push);
+    vkCmdBindIndexBuffer(cmd, m_ringIndex.buf, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdDrawIndexedIndirect(cmd, m_counters.buf, kCDraw * 4, 1, 20);
+    vkc::cmdEndRendering(cmd);
+    m_ctx->cmdImageBarrier(cmd, m_distortImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                           VK_ACCESS_SHADER_READ_BIT);
+    m_distortWritten = true;
+}
+
+void VfxSystem::destroyDistortion() {
+    if (!m_ctx) return;
+    if (m_distortView) vkDestroyImageView(m_ctx->device(), m_distortView, nullptr);
+    if (m_distortImage) vmaDestroyImage(m_ctx->allocator(), m_distortImage, m_distortAlloc);
+    m_distortView = VK_NULL_HANDLE;
+    m_distortImage = VK_NULL_HANDLE;
+    m_distortExtent = {0, 0};
+    m_distortWritten = false;
 }
 
 uint32_t VfxSystem::meshId(const std::string& name) {
