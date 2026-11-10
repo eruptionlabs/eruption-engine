@@ -158,6 +158,16 @@ declare world: {
     -- 0 = off), vignette_softness, shadow_tint / highlight_tint (a color as
     -- vector or {r, g, b}) with shadow_tint_strength / highlight_tint_strength.
     set_look: (preset: string | { [string]: any }) -> boolean,
+    -- Ambient particles around the camera focus: a list of layers, each
+    -- {type = "dust" (motes lit by the sun through the shadow map: they
+    -- shine in light shafts) | "leaves" (falling) | "fireflies" (blinking,
+    -- night only by default) | "embers" (rising sparks), density (1 = the
+    -- type's default count), radius / height (meters around and above the
+    -- focus), size, color (vector, recolors), time = "day" | "night" |
+    -- "any"}. nil or {} removes them. The preset's "ambient_particles"
+    -- scales the density (0 = off).
+    set_ambient: (layers: { { type: string, density: number?, radius: number?, height: number?,
+        size: number?, color: vector?, time: string? } }?) -> (),
     set_dof: (on: boolean) -> (),
     -- World time scale (hit-stop, slow motion): sprite animation, effects,
     -- weather and the scripts' dt run scaled (0 = frozen). `seconds` counts in

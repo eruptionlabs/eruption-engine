@@ -1007,6 +1007,11 @@ void VfxSystem::setTransform(uint32_t id, const Mat4& transform) {
         if (inst.id == id) inst.transform = transform * glm::scale(Mat4(1.0f), Vec3(m_unitsPerMeter));
 }
 
+void VfxSystem::setRateScale(uint32_t id, float scale) {
+    for (Instance& inst : m_instances)
+        if (inst.id == id) inst.rateScale = std::max(scale, 0.0f);
+}
+
 void VfxSystem::stop(uint32_t id, bool immediate) {
     for (Instance& inst : m_instances) {
         if (inst.id != id) continue;
@@ -1320,12 +1325,12 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
             uint32_t n = 0;
             if (emitting) {
                 anySpawning = true;
-                es.spawnAccum += (e.rate * dt + e.ratePerMeter * moved) * m_spawnScale;
+                es.spawnAccum += (e.rate * dt + e.ratePerMeter * moved) * m_spawnScale * inst.rateScale;
                 const float whole = std::floor(es.spawnAccum);
                 n = static_cast<uint32_t>(whole);
                 es.spawnAccum -= whole;
                 if (e.burstCount > 0) {
-                    const uint32_t burst = static_cast<uint32_t>(std::ceil(float(e.burstCount) * m_spawnScale));
+                    const uint32_t burst = static_cast<uint32_t>(std::ceil(float(e.burstCount) * m_spawnScale * inst.rateScale));
                     if (es.burstsDone == 0) {
                         n += burst;
                         es.burstsDone = 1;

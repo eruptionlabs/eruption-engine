@@ -1586,6 +1586,57 @@ int camera_basis(lua_State* L) {
 }
 
 
+// Particulas de ambiente (AmbientParticles): lista de camadas ou nil.
+float ambientField(lua_State* L, int t, const char* k, float def) {
+    lua_getfield(L, t, k);
+    const float v = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : def;
+    lua_pop(L, 1);
+    return v;
+}
+int world_set_ambient(lua_State* L) {
+    std::vector<AmbientLayer> layers;
+    if (!lua_isnoneornil(L, 1)) {
+        luaL_checktype(L, 1, LUA_TTABLE);
+        const int n = lua_objlen(L, 1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, 1, i);
+            const int t = lua_gettop(L);
+            if (!lua_istable(L, t)) luaL_error(L, "world.set_ambient: layer %d is not a table", i);
+            AmbientLayer l;
+            lua_getfield(L, t, "type");
+            const std::string kind = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_pop(L, 1);
+            if (!AmbientLayer::kindFromName(kind, l.kind))
+                luaL_error(L, "world.set_ambient: unknown type '%s' (dust, leaves, fireflies, embers)", kind.c_str());
+            if (l.kind == AmbientLayer::Kind::Fireflies) l.when = AmbientLayer::When::Night;
+            lua_getfield(L, t, "time");
+            if (lua_isstring(L, -1)) {
+                const std::string w = lua_tostring(L, -1);
+                if (w == "day") l.when = AmbientLayer::When::Day;
+                else if (w == "night") l.when = AmbientLayer::When::Night;
+                else if (w == "any") l.when = AmbientLayer::When::Any;
+                else luaL_error(L, "world.set_ambient: time '%s' (day, night, any)", w.c_str());
+            }
+            lua_pop(L, 1);
+            l.density = ambientField(L, t, "density", 1.0f);
+            l.radius = ambientField(L, t, "radius", 0.0f);
+            l.height = ambientField(L, t, "height", 0.0f);
+            l.size = ambientField(L, t, "size", 1.0f);
+            lua_getfield(L, t, "color");
+            if (lua_isvector(L, -1)) {
+                const float* v = lua_tovector(L, -1);
+                l.color = Vec3(v[0], v[1], v[2]);
+                l.hasColor = true;
+            }
+            lua_pop(L, 1);
+            lua_pop(L, 1);
+            if (l.density > 0.0f) layers.push_back(l);
+        }
+    }
+    eng().setAmbientLayers(layers);
+    return 0;
+}
+
 // LOOK da cena por script: os presets de data/diorama.json (grading, god
 // rays) e o desfoque de profundidade. Generico: vale pra RPG, pra maquete e
 // pra estudo de arquitetura - e' o "visual desta cena", nao uma regra de jogo.
@@ -2569,7 +2620,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
-        {"look", world_look}, {"set_look", world_set_look}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_border", world_set_border}, {"set_exposure", world_set_exposure}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"set_nav_rules", world_set_nav_rules}, {"nav_rules", world_nav_rules}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
+        {"look", world_look}, {"set_look", world_set_look}, {"set_ambient", world_set_ambient}, {"set_dof", world_set_dof}, {"set_fog", world_set_fog}, {"set_border", world_set_border}, {"set_exposure", world_set_exposure}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"set_nav_rules", world_set_nav_rules}, {"nav_rules", world_nav_rules}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
         {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend}, {"set_cutaway", world_set_cutaway},
         {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids}, {"set_liquid_level", world_set_liquid_level},
@@ -2850,6 +2901,16 @@ declare world: {
     -- bokeh_threshold / bokeh_shape (0 disc, 1 hexagon), grain_intensity /
     -- grain_size (px at 1080p). These last ones override data/postprocess.json.
     set_look: (preset: string | { [string]: any }) -> boolean,
+    -- Ambient particles around the camera focus: a list of layers, each
+    -- {type = "dust" (motes lit by the sun through the shadow map: they
+    -- shine in light shafts) | "leaves" (falling) | "fireflies" (blinking,
+    -- night only by default) | "embers" (rising sparks), density (1 = the
+    -- type's default count), radius / height (meters around and above the
+    -- focus), size, color (vector, recolors), time = "day" | "night" |
+    -- "any"}. nil or {} removes them. The preset's "ambient_particles"
+    -- scales the density (0 = off).
+    set_ambient: (layers: { { type: string, density: number?, radius: number?, height: number?,
+        size: number?, color: vector?, time: string? } }?) -> (),
     set_dof: (on: boolean) -> (),
     -- World time scale (hit-stop, slow motion): sprite animation, effects,
     -- weather and the scripts' dt run scaled (0 = frozen). `seconds` counts in

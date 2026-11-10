@@ -165,6 +165,44 @@ VfxImage makeStar() {
     return img;
 }
 
+// Folha (particula de ambiente): 2x2 variacoes de forma e cor - verde,
+// verde-amarelo, ocre e marrom -, lanceta com nervura central e borda
+// escurecida, para ler como folha mesmo com 6-10 px na tela. Cor
+// premultiplicada.
+VfxImage makeLeaf() {
+    VfxImage img;
+    img.width = img.height = 128;
+    img.cols = img.rows = 2;
+    img.rgba.assign(size_t(img.width) * img.height * 4, 0);
+    const int cell = 64;
+    const float cores[4][3] = {{0.38f, 0.62f, 0.22f}, {0.66f, 0.72f, 0.24f}, {0.82f, 0.56f, 0.20f}, {0.58f, 0.36f, 0.18f}};
+    const float largura[4] = {0.42f, 0.34f, 0.48f, 0.38f};
+    for (int c = 0; c < 4; ++c) {
+        const int ox = (c % 2) * cell, oy = (c / 2) * cell;
+        for (int y = 0; y < cell; ++y)
+            for (int x = 0; x < cell; ++x) {
+                const float u = (float(x) + 0.5f) / cell * 2.0f - 1.0f; // largura
+                const float v = (float(y) + 0.5f) / cell * 2.0f - 1.0f; // comprimento (-1 ponta, 1 cabo)
+                // Meia largura da lanceta ao longo do comprimento: zero nas pontas.
+                const float t = std::clamp((v + 0.9f) / 1.75f, 0.0f, 1.0f);
+                const float w = largura[c] * std::pow(std::sin(t * 3.14159265f), 0.8f) * (1.0f - 0.25f * t);
+                const float d = w > 1e-3f ? std::abs(u) / w : 2.0f;
+                float a = std::clamp((1.0f - d) * 6.0f, 0.0f, 1.0f);
+                // Cabinho: fio de 1 px que sai da base.
+                if (v > 0.82f && v < 0.98f && std::abs(u) < 0.04f) a = 1.0f;
+                if (x < 1 || y < 1 || x >= cell - 1 || y >= cell - 1) a = 0.0f;
+                const float n = fbm((u + 1.0f) * 4.0f, (v + 1.0f) * 4.0f, 64, 23 + c * 13, 3);
+                const float nervura = std::exp(-u * u * 900.0f) * (v < 0.85f ? 0.35f : 0.0f);
+                const float borda = 1.0f - 0.35f * std::clamp(d * d, 0.0f, 1.0f);
+                const float k = (0.8f + 0.35f * n) * borda + nervura;
+                // Cor PREMULTIPLICADA pelo alfa (use com "blend": "premultiplied", sem
+                // ordenar): fora da folha a cor e' zero e o quad nao soma nada.
+                put(img, ox + x, oy + y, cores[c][0] * k * a, cores[c][1] * k * a, cores[c][2] * k * a, a);
+            }
+    }
+    return img;
+}
+
 } // namespace
 
 void computeVfxCutout(const uint8_t* rgba, uint32_t w, uint32_t h, uint32_t cols, uint32_t rows, float out[8]) {
@@ -201,13 +239,14 @@ bool makeVfxBuiltin(const std::string& name, VfxImage& out) {
     else if (name == "builtin:spark") out = makeSpark();
     else if (name == "builtin:ring") out = makeRing();
     else if (name == "builtin:star") out = makeStar();
+    else if (name == "builtin:leaf") out = makeLeaf();
     else return false;
     return true;
 }
 
 const std::vector<std::string>& vfxBuiltinNames() {
     static const std::vector<std::string> names = {"builtin:puff", "builtin:flame", "builtin:spark", "builtin:ring",
-                                                   "builtin:star"};
+                                                   "builtin:star", "builtin:leaf"};
     return names;
 }
 

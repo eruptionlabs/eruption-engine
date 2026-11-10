@@ -35,6 +35,7 @@
 #include "renderer/skymap/SkyConfig.hpp"
 #include "renderer/CloudLayerRenderer.hpp"
 #include "renderer/vfx/VfxSystem.hpp"
+#include "renderer/vfx/AmbientParticles.hpp"
 #include "renderer/VisionMap.hpp"
 #include "core/Vision.hpp"
 #include "formats/Ribbon.hpp"
@@ -853,6 +854,8 @@ public:
     // `key` vazio = global; senao o nome de um personagem ou o arquivo de
     // uma folha (.spr), que vencem o global; fps < 0 apaga a regra da chave.
     void setSpriteStepFps(const std::string& key, float fps);
+    // PARTICULAS DE AMBIENTE (world.set_ambient): camadas presas ao foco.
+    void setAmbientLayers(const std::vector<AmbientLayer>& layers) { m_ambient.setLayers(m_vfx, layers); }
     // Amplitude do relevo que o chao VISIVEL tem: o da tesselacao ou o da
     // malha assada no G-buffer (relief_bake "mesh"); 0 sem relevo na vista.
     float reliefInView() const {
@@ -2380,6 +2383,8 @@ private:
     bool m_spriteStepAllowed = true;   // chave "sprite_step" do preset (false desliga)
     double m_spriteStepClock = 0.0;    // s; relogio comum dos degraus
     float spriteStepFpsFor(const SceneCharacter& c) const;
+    AmbientParticles m_ambient;
+    float m_ambientPreset = 1.0f;      // chave "ambient_particles" (densidade; 0 desliga)
     int spriteShadowKind() const;
     float m_groundBlendBand = 0.0f;
     float m_groundBlendFraction = 0.3f;

@@ -148,6 +148,9 @@ public:
     // Deslocamento (m, espaco do efeito) de um emissor desta instancia, pelo nome.
     void setEmitterOffset(uint32_t id, const std::string& emitter, const Vec3& offset);
     void setTransform(uint32_t id, const Mat4& transform);
+    // Multiplica a taxa e as rajadas desta instancia (0 = para de nascer sem
+    // matar as vivas; particulas de ambiente que so' existem de noite).
+    void setRateScale(uint32_t id, float scale);
     void stop(uint32_t id, bool immediate = false); // sem immediate: para de nascer, as vivas terminam
     void restart(uint32_t id);
     bool isPlaying(uint32_t id) const;
@@ -271,6 +274,7 @@ private:
         // efeito (a recarga a quente troca o `desc` e isto continua valendo).
         Vec4 color{1.0f, 1.0f, 1.0f, 0.0f}; // rgb; a: 0 = sem cor (padrao), 1 = recolore, 2 = multiplica
         std::vector<Vec3> offsets;   // m, somado ao `offset` de cada emissor (indice = emissor)
+        float rateScale = 1.0f;      // setRateScale
     };
 
     bool createPipelines();

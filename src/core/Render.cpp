@@ -935,6 +935,14 @@ void Engine::render() {
         uploadVfxGround();
         m_vfxGroundDirty = false;
     }
+    {
+        // Particulas de ambiente (world.set_ambient): caixa no foco da camera;
+        // vaga-lume so' de noite (19h-5h, rampa de 1,5 h), pela hora do ciclo.
+        const float h = m_dayNightCycle.timeOfDay() * 24.0f;
+        const float night = std::clamp(glm::smoothstep(18.5f, 20.0f, h) + 1.0f - glm::smoothstep(4.5f, 6.0f, h), 0.0f, 1.0f);
+        m_ambient.setDensityScale(m_ambientPreset);
+        m_ambient.update(m_vfx, m_camera.target(), night);
+    }
     m_vfx.update(m_timer.deltaTime(), m_camera, renderExtent());
     {
         // Luz de particula: uma por emissor com "light" (vizinhas fundidas),
