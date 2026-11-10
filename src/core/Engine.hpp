@@ -361,6 +361,11 @@ public:
     struct LoadedSprite {
         AnimFile act;
         std::vector<TextureResource> textures;
+        // Normal map AUTORAL da folha (<folha>_normal.png ao lado do PNG, ou
+        // <folha>_normal.spr com as mesmas imagens do .spr): mesmo indice e UV
+        // de `textures`; vazio = sem mapa (o sprite fica so' com a normal
+        // abaulada). Forca no preset: sprite_normal_strength.
+        std::vector<TextureResource> normalTextures;
         // Varias personagens podem usar o mesmo arquivo de sprite. Quando isso
         // acontece elas DIVIDEM as texturas; esta ficha conta quantas ainda
         // usam, e so a ultima a soltar devolve os slots a GPU.
@@ -740,6 +745,8 @@ public:
     void preloadCharacterSprite(const std::string& png);
     bool characterSpritePreloaded(const std::string& png) const;
     bool loadSpriteFromPng(const std::string& path, LoadedSprite& out);
+    // <folha>_normal.png / _normal.spr opcional ao lado (LoadedSprite::normalTextures).
+    void loadSpriteNormals(const std::string& path, LoadedSprite& out);
     bool loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out);
     void cleanupSpriteTextures(LoadedSprite& ls);
     void calculateMaxCharHeight();

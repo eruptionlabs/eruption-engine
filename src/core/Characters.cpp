@@ -43,6 +43,8 @@ bool Engine::loadCharacterSprite(const std::string& png, LoadedSprite& out) {
     spr.replace_extension(".spr");
     std::error_code ec;
     bool ok = std::filesystem::exists(spr, ec) && loadSpriteFromEruptSpr(spr.string(), lido);
+    // Normal map autoral da folha (.spr; o PNG ja' procura o dele).
+    if (ok) loadSpriteNormals(spr.string(), lido);
     if (!ok) ok = loadSpriteFromPng(png, lido);
     if (!ok) return false;
 
@@ -566,6 +568,8 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         const auto& tex = ls.textures[static_cast<size_t>(texIdx)];
         const bool mirror = (spr.flags & 1) != 0;
         Sprite s;
+        if (static_cast<size_t>(texIdx) < ls.normalTextures.size())
+            s.normalTexIndex = ls.normalTextures[static_cast<size_t>(texIdx)].slot;
         s.position = c.position + fxOffset;
         s.position.y += 2.0f;
         s.anchorPoint = c.position + fxOffset;

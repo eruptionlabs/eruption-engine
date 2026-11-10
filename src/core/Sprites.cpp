@@ -426,6 +426,57 @@ static void dilateSpriteColor(std::vector<uint8_t>& px, int w, int h) {
     }
 }
 
+// NORMAL MAP AUTORAL DA FOLHA: <folha>_normal.png ao lado de um PNG (mesmo
+// tamanho, mesmo UV) ou <folha>_normal.spr ao lado de um .spr (as mesmas
+// imagens, na mesma ordem e tamanho). Sem o arquivo, ou com tamanho que nao
+// bate, a folha fica sem mapa e o sprite com a normal abaulada de sempre.
+// Os pixels vao crus (sem a limpeza de alfa/magenta da cor): rgb = normal.
+void Engine::loadSpriteNormals(const std::string& path, LoadedSprite& out) {
+    out.normalTextures.clear();
+    std::filesystem::path p(path);
+    const std::string ext = p.extension().string();
+    if (p.stem().string().size() >= 7 && p.stem().string().compare(p.stem().string().size() - 7, 7, "_normal") == 0)
+        return; // a propria folha de normais
+    std::filesystem::path np = p;
+    np.replace_filename(p.stem().string() + "_normal" + ext);
+    std::error_code ec;
+    if (!std::filesystem::exists(project::gameRef(np.string()), ec)) return;
+    if (ext == ".spr") {
+        LoadedSprite tmp;
+        if (!loadSpriteFromEruptSpr(np.string(), tmp)) return;
+        bool ok = tmp.textures.size() == out.textures.size();
+        for (size_t i = 0; ok && i < tmp.textures.size(); ++i)
+            ok = tmp.textures[i].width == out.textures[i].width && tmp.textures[i].height == out.textures[i].height;
+        if (!ok) {
+            ERUPTION_LOG_WARN("Sprite: %s nao bate com as imagens de %s (ignorado)", np.string().c_str(), path.c_str());
+            cleanupSpriteTextures(tmp);
+            return;
+        }
+        out.normalTextures = std::move(tmp.textures);
+        ERUPTION_LOG_INFO("Sprite: normal map %s", np.string().c_str());
+        return;
+    }
+    if (out.textures.size() != 1) return;
+    int w = 0, h = 0, channels = 0;
+    unsigned char* data = stbi_load(project::gameRef(np.string()).string().c_str(), &w, &h, &channels, 4);
+    if (!data) return;
+    if (uint32_t(w) != out.textures[0].width || uint32_t(h) != out.textures[0].height) {
+        ERUPTION_LOG_WARN("Sprite: %s (%dx%d) nao tem o tamanho da folha %s (ignorado)", np.string().c_str(), w, h,
+                          path.c_str());
+        stbi_image_free(data);
+        return;
+    }
+    SprImage img;
+    img.width = static_cast<uint16_t>(w);
+    img.height = static_cast<uint16_t>(h);
+    img.isIndexed = false;
+    img.pixels.assign(data, data + static_cast<size_t>(w) * h * 4);
+    stbi_image_free(data);
+    createTextureFromSprImage(img, nullptr, false, out.normalTextures, false, "", true);
+    m_bindless.flushUpdates();
+    ERUPTION_LOG_INFO("Sprite: normal map %s", np.string().c_str());
+}
+
 bool Engine::loadSpriteFromPng(const std::string& path, LoadedSprite& out) {
     cleanupSpriteTextures(out);
 
@@ -491,6 +542,7 @@ bool Engine::loadSpriteFromPng(const std::string& path, LoadedSprite& out) {
 
     m_bindless.flushUpdates();
     ERUPTION_LOG_INFO("loadSpriteFromPng: loaded %s (%dx%d) as sprite scale=%.2f", path.c_str(), w, h, pngScale);
+    loadSpriteNormals(path, out);
     return true;
 }
 
@@ -786,6 +838,7 @@ void Engine::cleanupSpriteTextures(LoadedSprite& ls) {
     if (ls.texturesShared && ls.texturesShared.use_count() > 1) {
         ls.texturesShared.reset();
         ls.textures.clear();
+        ls.normalTextures.clear();
         ls.indexedTextureCount = 0;
         ls.loaded = false;
         ls.authoredTiming = false;
@@ -793,6 +846,9 @@ void Engine::cleanupSpriteTextures(LoadedSprite& ls) {
     }
     ls.texturesShared.reset();
     // Frames em voo ainda podem amostrar as texturas: destruir depois deles.
+    // As do normal map autoral saem pelo mesmo caminho.
+    for (auto& tex : ls.normalTextures) ls.textures.push_back(tex);
+    ls.normalTextures.clear();
     for (auto& tex : ls.textures) {
         VkDevice dev = m_vulkan.device();
         VmaAllocator allocator = m_vulkan.allocator();
@@ -1092,6 +1148,7 @@ void Engine::renderSpritePart(LoadedSprite& ls, uint32_t paletteSlot, int& frame
         }
         const auto& tex = ls.textures[texIdx];
         Sprite s;
+        if (static_cast<size_t>(texIdx) < ls.normalTextures.size()) s.normalTexIndex = ls.normalTextures[texIdx].slot;
         float scale = m_playerController->tacticalView() ? 1.0f : 0.15f;
         bool mirror = (spr.flags & 1);
         

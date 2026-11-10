@@ -87,6 +87,7 @@ void main() {
     // Derivadas antes de qualquer discard (depois dele o quad fica incompleto).
     const vec2 uvDx = dFdx(v_uv), uvDy = dFdy(v_uv);
     const vec2 rimDx = uvDx * 2.5, rimDy = uvDy * 2.5;
+    const vec3 posDx = dFdx(v_worldPos), posDy = dFdy(v_worldPos); // base do normal map autoral
     vec4 albedo;
     if (u_spriteParams.x > 0.5) {
         // sprite_filter 1: bilinear nitido (common/sprite_sample.glsl), alfa
@@ -143,9 +144,25 @@ void main() {
         float t = clamp(v_quad.y * 2.0, -1.0, 1.0);
         N = normalize(N + v_billRight * (s * kAbaulaH) + v_billUp * (t * kAbaulaV));
     }
-    if (v_normalTexIndex != 0u) {
-        // Generated normal maps are kept out of sprite lighting to preserve the
-        // original look; alpha is still sampled by the deferred pass elsewhere.
+    // NORMAL MAP AUTORAL (<folha>_normal.png ao lado da folha, mesmo UV;
+    // core/Sprites.cpp): quem desenhou o boneco diz para onde cada pedaco
+    // aponta, e a normal abaulada acima sai de cena. Convencao OpenGL (verde =
+    // para cima na arte). A base tangente vem das derivadas do quadro (u para
+    // a direita da arte na tela, v para baixo), entao espelhar o sprite
+    // (FlipX) espelha a normal junto. Forca: sprite_normal_strength (0 = sem;
+    // acima de 1 exagera o relevo). Sem o arquivo, v_normalTexIndex = 0.
+    if (v_normalTexIndex != 0u && u_spriteParams.y > 0.0) {
+        vec3 n = slotTexture(v_normalTexIndex, v_uv).xyz * 2.0 - 1.0;
+        n.xy *= u_spriteParams.y;
+        vec3 Nf = normalize(v_normal);
+        vec3 T = posDx * uvDy.t - posDy * uvDx.t;
+        vec3 B = -posDx * uvDy.s + posDy * uvDx.s;
+        if (dot(T, T) > 1e-12 && dot(B, B) > 1e-12) {
+            T = normalize(T - Nf * dot(T, Nf));
+            B = normalize(B - Nf * dot(B, Nf) - T * dot(B, T));
+            // B segue +v (para baixo na arte): o verde "para cima" e' -B.
+            N = normalize(T * n.x - B * n.y + Nf * max(n.z, 0.05));
+        }
     }
 
     // Sem mapa: rugosidade 1, que a luz le' como "sprite so' difuso"
