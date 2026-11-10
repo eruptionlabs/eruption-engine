@@ -2877,6 +2877,12 @@ void Engine::applyGraphicsPreset() {
     m_postSettings.outlineSprites = p.contains("outline_sprites") && static_cast<int>(p["outline_sprites"]) != 0;
     if (const char* e = std::getenv("ERUPTION_TEST_OUTLINE")) m_postSettings.outlineMode = std::clamp(std::atoi(e), 0, 2);
     if (const char* e = std::getenv("ERUPTION_TEST_OUTLINE_SPRITES")) m_postSettings.outlineSprites = std::atoi(e) != 0;
+    // Temperos HD-2D (forca e cor no data/postprocess.json e no look): o preset
+    // so' liga ou desliga cada um. Padrao ligado; o celular fraco desliga.
+    m_postSettings.presetHalation = !p.contains("post_halation") || presetFlag(p, "post_halation");
+    m_postSettings.presetGrain = !p.contains("post_grain") || presetFlag(p, "post_grain");
+    m_postSettings.presetBokehHighlights = !p.contains("post_bokeh_highlights") || presetFlag(p, "post_bokeh_highlights");
+    m_postSettings.presetLut = !p.contains("post_lut") || presetFlag(p, "post_lut");
     if (p.contains("fxaa")) m_enableFXAA = p["fxaa"];
     if (p.contains("aa_sharpen")) m_aaSharpenAmount = std::clamp<float>(p["aa_sharpen"], 0.0f, 1.0f);
     if (std::getenv("ERUPTION_TEST_NO_AA")) m_enableFXAA = false;

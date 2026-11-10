@@ -86,7 +86,15 @@
     ]
   },
   "bokeh_threshold": 0.6,
-  "bokeh_intensity": 2.0,
+  "bokeh_intensity": 0.0,
+  "bokeh_shape": 0.0,
+  "halation_intensity": 0.0,
+  "halation_threshold": 0.6,
+  "halation_tint": [1.0, 0.62, 0.38],
+  "grain_intensity": 0.0,
+  "grain_size": 1.0,
+  "color_lut": "",
+  "color_lut_strength": 1.0,
   "coc_enable_adaptive_focal": true,
   "coc_adaptive_focal_method": "MultiRayGrid",
   "multi_ray_weights": [

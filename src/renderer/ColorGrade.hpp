@@ -24,11 +24,16 @@ struct LookConfig;
 constexpr float kGradeLutRange = 2.0f;
 constexpr int kGradeLutSize = 32;
 
-// LUT .cube (Adobe/Resolve, LUT_3D_SIZE, dominio 0..1 em gamma de tela).
+// LUT .cube (Adobe/Resolve, LUT_3D_SIZE, dominio 0..1 em gamma de tela) ou
+// .png em tira (a "LUT neutra" dos editores de imagem: N fatias N x N lado a
+// lado, largura N*N, altura N; azul = fatia, vermelho = x na fatia, verde = y
+// de cima para baixo; mesmo dominio). Para fazer uma: pinte por cima da tira
+// neutra no editor de foto, com os mesmos ajustes da imagem de referencia.
 struct CubeLut {
     int size = 0;
     std::vector<Vec3> data; // r mais rapido, depois g, depois b
-    bool load(const std::string& path);
+    bool load(const std::string& path); // .cube, ou .png em tira
+    bool loadStrip(const std::string& path);
     Vec3 sample(const Vec3& c) const; // trilinear, c em 0..1
 };
 

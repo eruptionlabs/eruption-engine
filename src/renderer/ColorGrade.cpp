@@ -6,6 +6,7 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <stb_image.h>
 
 namespace eruption {
 
@@ -77,7 +78,28 @@ float decode(float v) { return std::pow(std::max(v, 0.0f), 2.2f); }
 
 } // namespace
 
+bool CubeLut::loadStrip(const std::string& path) {
+    int w = 0, h = 0, n = 0;
+    unsigned char* px = stbi_load(path.c_str(), &w, &h, &n, STBI_rgb);
+    if (!px) return false;
+    const bool ok = h >= 2 && h <= 128 && w == h * h;
+    if (ok) {
+        size = h;
+        data.resize(static_cast<size_t>(size) * size * size);
+        for (int b = 0; b < size; ++b)
+            for (int g = 0; g < size; ++g)
+                for (int r = 0; r < size; ++r) {
+                    const unsigned char* p = px + (static_cast<size_t>(g) * w + b * size + r) * 3;
+                    data[(static_cast<size_t>(b) * size + g) * size + r] = Vec3(p[0], p[1], p[2]) / 255.0f;
+                }
+    }
+    stbi_image_free(px);
+    return ok;
+}
+
 bool CubeLut::load(const std::string& path) {
+    const std::string ext = path.size() >= 4 ? path.substr(path.size() - 4) : std::string();
+    if (ext == ".png" || ext == ".PNG") return loadStrip(path);
     std::ifstream f(path);
     if (!f) return false;
     size = 0;

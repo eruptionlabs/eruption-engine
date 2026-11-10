@@ -202,7 +202,38 @@ public:
         float cocAdaptiveFocalDamping = 0.05f; // 0..1 interpolation factor per frame at 60fps
 
         float bokehThreshold = 0.6f;
-        float bokehIntensity = 2.0f;
+        float bokehIntensity = 0.0f;
+        float bokehShape = 0.0f;
+
+        // HALATION: brilho largo, quente e fraco em volta da luz forte e do
+        // ceu claro, alem do bloom (que tem limiar alto e raio curto). Usa
+        // as imagens 1..4 da piramide do bloom depois que ele terminou (sem
+        // memoria nova) e o composite move a energia acima do limiar para a
+        // vizinhanca (soma o borrao, tira o excesso local): o total nao
+        // cresce. Limiar em luminancia exposta (1 = branco antes do tonemap);
+        // tinta normalizada pela luminancia. Intensidade 0 = desligado.
+        float halationIntensity = 0.0f;
+        float halationThreshold = 0.6f;
+        Vec3 halationTint = Vec3(1.0f, 0.62f, 0.38f);
+
+        // GRAO DE FILME: ruido de luminancia animado depois do gamma, mais
+        // forte nos meios-tons. grainSize = lado do grao em px a 1080p (o
+        // mesmo grao em qualquer resolucao). Intensidade 0 = desligado.
+        float grainIntensity = 0.0f;
+        float grainSize = 1.0f;
+
+        // LUT de cor padrao do jogo (.png em tira 32^3 ou .cube), usada
+        // quando o look nao traz a sua ("lut"). Ver ColorGrade.hpp.
+        std::string colorLut;
+        float colorLutStrength = 1.0f;
+
+        // Chaves do preset (data/graphics.json): post_halation, post_grain,
+        // post_bokeh_highlights, post_lut. O celular desliga cada uma sem
+        // mexer no look do jogo.
+        bool presetHalation = true;
+        bool presetGrain = true;
+        bool presetBokehHighlights = true;
+        bool presetLut = true;
 
         // Tone mapping: 0=legado (so' gamma), 1=AgX, 2=ACES, 3=Khronos Neutral.
         // Antes disto a engine nao tinha operador nenhum - ver post_composite.frag.
@@ -213,6 +244,12 @@ public:
 
         bool enableMotionBlur = true;
         float motionBlurAmount = 1.0f;
+        // BOKEH DOS REALCES (so' no dof_quality 3, bokeh_gather.frag): a
+        // amostra cuja luminancia exposta passa de bokehThreshold pesa
+        // 1 + bokehIntensity x excesso na media do disco, entao o ponto claro
+        // fora de foco vira um disco visivel em vez de sumir na media.
+        // bokehShape: 0 = disco, 1 = hexagono (abertura de 6 laminas).
+        // Intensidade 0 (padrao) = a coleta de sempre, bit a bit.
         // Tempo do quadro (s), escrito pelo Engine a cada quadro. O comprimento do
         // borrao de movimento vem do deslocamento ENTRE quadros, que cresce com o
         // tempo do quadro: com a banda/GPU reduzida (fps cai) o rastro ficava
@@ -352,6 +389,11 @@ private:
     VkDescriptorSet m_lumAdaptSet = VK_NULL_HANDLE;
     VkBuffer m_lumHistBuffer = VK_NULL_HANDLE;
     VmaAllocation m_lumHistAlloc = VK_NULL_HANDLE;
+    // Halation (PostSettings::halationIntensity) depois do bloom, nas imagens
+    // 1..4 da piramide dele: devolve o borrao em 1/8 da resolucao (bloom up
+    // 2) ou VK_NULL_HANDLE quando desligado.
+    VkImageView renderHalation(VkCommandBuffer cmd, VkImageView hdrInput, float threshold, float exposure);
+    VkPipeline m_halationPipeline = VK_NULL_HANDLE;
     VkBuffer m_lumExpBuffer = VK_NULL_HANDLE;
     VmaAllocation m_lumExpAlloc = VK_NULL_HANDLE;
     void* m_lumExpMapped = nullptr;

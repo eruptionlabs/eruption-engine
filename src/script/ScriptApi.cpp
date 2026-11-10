@@ -2822,7 +2822,11 @@ declare world: {
     -- the preset's sun lens flare; 0 hides it), lens_flare_rays (lines of
     -- the flare's star; 1 = a single streak), vignette (strength,
     -- 0 = off), vignette_softness, shadow_tint / highlight_tint (a color as
-    -- vector or {r, g, b}) with shadow_tint_strength / highlight_tint_strength.
+    -- vector or {r, g, b}) with shadow_tint_strength / highlight_tint_strength,
+    -- lut (a .cube or a 32^3 strip .png in the project) with lut_strength 0..1,
+    -- halation_intensity / halation_threshold / halation_tint, bokeh_intensity /
+    -- bokeh_threshold / bokeh_shape (0 disc, 1 hexagon), grain_intensity /
+    -- grain_size (px at 1080p). These last ones override data/postprocess.json.
     set_look: (preset: string | { [string]: any }) -> boolean,
     set_dof: (on: boolean) -> (),
     -- World time scale (hit-stop, slow motion): sprite animation, effects,

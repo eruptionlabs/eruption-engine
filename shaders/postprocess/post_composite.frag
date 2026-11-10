@@ -35,6 +35,9 @@ layout(set = 0, binding = 14) uniform sampler3D gradeLut;
 // luz espalhada no ar (unidades da cena, antes da exposicao). Lida so' com
 // volumetricParams.x > 0.
 layout(set = 0, binding = 15) uniform sampler2D volumetricTexture;
+// Halation (PostProcessor::renderHalation, 1/8 da resolucao): o excesso
+// acima do limiar, borrado bem largo. Lida so' com halationParams.x > 0.
+layout(set = 0, binding = 16) uniform sampler2D halationTexture;
 
 bool spritePixel(vec2 uv) { return abs(texture(spriteMarkTexture, uv).r - 0.75) < 0.06; }
 
@@ -73,7 +76,50 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec4 outlineParams2;  // x=limiar relativo de profundidade, y=1 inclui sprites
     vec4 gradeParams2;    // x=mistura da LUT 3D de grading (0 = analitico).
     vec4 volumetricParams; // x=forca da luz volumetrica (0 = nao le'). Bloco de 464 B.
+    vec4 halationParams;   // x=forca (0 = nao le'), y=limiar exposto, z=1/niveis somados
+    vec4 halationTint;     // rgb=tinta normalizada pela luminancia
+    vec4 grainParams;      // x=forca (0 desliga), y=graos na altura da tela, z=semente. Bloco de 512 B.
 } push;
+
+// HALATION: soma o borrao largo do excesso e tira o excesso do proprio pixel
+// (a mesma conta do halation_prefilter.frag). A energia acima do limiar sai
+// da luz e vai para a vizinhanca: o halo nao clareia a imagem inteira. A
+// tinta (normalizada pela luminancia, entao a luminancia total se conserva)
+// so' entra no halo: tirar o excesso tingido do nucleo mudava a matiz da
+// propria luz (nucleo esverdeado com a tinta quente).
+vec3 applyHalation(vec3 c, vec2 uv) {
+    const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
+    float l = dot(c, kLuma);
+    float e = max(l - push.halationParams.y, 0.0);
+    e = e / (1.0 + e * 0.25);
+    vec3 local = c * (e / max(l, 1e-4));
+    vec3 halo = texture(halationTexture, uv).rgb * push.halationParams.z;
+    return max(c + push.halationParams.x * (push.halationTint.rgb * halo - local), vec3(0.0));
+}
+
+// GRAO DE FILME: ruido de valor (grade de graos com interpolacao suave) com
+// hash inteiro, de media zero. A grade e' medida na ALTURA da tela, entao o
+// grao tem o mesmo tamanho aparente em 720p e em 4K. So' luminancia (o mesmo
+// valor nos tres canais), mais forte nos meios-tons: nem o preto vira cinza
+// nem o branco escurece.
+float grainHash(uvec3 p) {
+    p = p * uvec3(1664525u, 1013904223u, 2654435761u) + uvec3(1013904223u, 1664525u, 22695477u);
+    p.x += p.y * p.z; p.y += p.z * p.x; p.z += p.x * p.y;
+    p ^= p >> 16u;
+    p.x += p.y * p.z; p.y += p.z * p.x; p.z += p.x * p.y;
+    return float(p.x & 0xffffu) / 65535.0;
+}
+float grainNoise(vec2 uv, vec2 size) {
+    // -0,5: na altura de referencia o centro do pixel cai no no' (grao nitido).
+    vec2 g = uv * vec2(size.x / max(size.y, 1.0), 1.0) * push.grainParams.y - 0.5;
+    vec2 i = floor(g), f = g - i;
+    f = f * f * (3.0 - 2.0 * f);
+    uint s = uint(push.grainParams.z);
+    uvec2 b = uvec2(ivec2(i) + 32768);
+    float a00 = grainHash(uvec3(b, s)), a10 = grainHash(uvec3(b + uvec2(1, 0), s));
+    float a01 = grainHash(uvec3(b + uvec2(0, 1), s)), a11 = grainHash(uvec3(b + uvec2(1, 1), s));
+    return mix(mix(a00, a10, f.x), mix(a01, a11, f.x), f.y) - 0.5;
+}
 
 // A LUT substitui applyGrading + applySplitToning (e soma balanco de branco,
 // lift/gamma/gain, vibrance, curva e .cube): ver ColorGrade.hpp.
@@ -524,6 +570,10 @@ void main() {
         return;
     }
 
+    // Halation antes do tonemap: em luz de cena, depois da nevoa e das nuvens
+    // (o halo do ceu passa por cima do horizonte enevoado).
+    if (push.halationParams.x > 0.0) color = applyHalation(color, fragUV);
+
     // Tone mapping ANTES do gamma (a curva opera em linear).
     color = applyToneMapping(max(color, vec3(0.0)), push.motionBlurParams.z);
 
@@ -538,6 +588,12 @@ void main() {
 
     // Gamma 2.2
     color = pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
+    // Grao depois do gamma (amplitude em valor de tela), antes do contorno.
+    if (push.grainParams.x > 0.0) {
+        float l = clamp(dot(color, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+        float w = 0.25 + 3.0 * l * (1.0 - l);
+        color = max(color + grainNoise(fragUV, vec2(textureSize(hdrTexture, 0))) * push.grainParams.x * w, vec3(0.0));
+    }
     // Contorno: depois do tonemap/grading/vinheta (cor de tela), antes da visao e do escurecimento.
     color = mix(color, push.outlineColor.rgb, push.outlineColor.a * outlineEdge);
 

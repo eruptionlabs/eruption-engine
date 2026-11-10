@@ -152,6 +152,15 @@ void LookConfig::loadFromJson(const nlohmann::json& j) {
     lutPath       = j.value("lut", lutPath);
     lutStrength   = j.value("lut_strength", lutStrength);
 
+    halationIntensity = j.value("halation_intensity", halationIntensity);
+    halationThreshold = j.value("halation_threshold", halationThreshold);
+    readColor(j, "halation_tint", halationTint);
+    bokehIntensity    = j.value("bokeh_intensity", bokehIntensity);
+    bokehThreshold    = j.value("bokeh_threshold", bokehThreshold);
+    bokehShape        = j.value("bokeh_shape", bokehShape);
+    grainIntensity    = j.value("grain_intensity", grainIntensity);
+    grainSize         = j.value("grain_size", grainSize);
+
     volumetricIntensity  = j.value("volumetric_intensity", volumetricIntensity);
     volumetricDensity    = j.value("volumetric_density", volumetricDensity);
     readColor(j, "volumetric_tint", volumetricTint);

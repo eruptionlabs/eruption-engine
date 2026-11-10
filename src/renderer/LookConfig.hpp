@@ -70,8 +70,20 @@ struct LookConfig {
     Vec3  gain = Vec3(1.0f);         // "gain"  (multiplica as luzes)
     float vibrance = 0.0f;           // "vibrance" (satura o pouco saturado)
     std::vector<float> curvePoints;  // "curve": x0,y0,x1,y1... em gamma de tela
-    std::string lutPath;             // "lut": arquivo .cube (caminho do projeto)
+    std::string lutPath;             // "lut": .cube ou .png em tira (caminho do projeto)
     float lutStrength = 1.0f;        // "lut_strength"
+
+    // --- Temperos HD-2D (PostProcessor; ver PostSettings) ---
+    // Mesmos nomes do data/postprocess.json. < 0 (padrao) = vale o do
+    // arquivo; o look por regiao sobrepoe so' o que declarar.
+    float halationIntensity = -1.0f; // "halation_intensity"
+    float halationThreshold = -1.0f; // "halation_threshold"
+    Vec3  halationTint = Vec3(-1.0f);// "halation_tint" (x < 0 = do arquivo)
+    float bokehIntensity = -1.0f;    // "bokeh_intensity"
+    float bokehThreshold = -1.0f;    // "bokeh_threshold"
+    float bokehShape = -1.0f;        // "bokeh_shape" (0 disco, 1 hexagono)
+    float grainIntensity = -1.0f;    // "grain_intensity"
+    float grainSize = -1.0f;         // "grain_size" (px a 1080p)
 
     // --- Luz volumetrica do sol (renderer/VolumetricLight) ---
     // Forca (0 desliga; o preset escolhe resolucao e passos), densidade do ar

@@ -39,7 +39,10 @@ namespace eruption {
 //   36-39  Engine  (cloud volumes 36-37, map smoke 38-39)
 //   40-41  PostProcessor (DoF / tilt-shift)
 //   42-53  PostProcessor (ESTE bloco)
-//   54-63  LIVRES
+//   54-55  Engine  (FSR)
+//   56-59  PostProcessor (raios de luz 56-57, halation 58-59)
+//   60-61  Engine
+//   62-63  LIVRES
 //
 // CUIDADO ao ler a soma: sao timestamps de BOTTOM_OF_PIPE, e a GPU pode
 // sobrepor passes vizinhos. Por isso o residuo vira um passe proprio
@@ -62,12 +65,39 @@ constexpr uint32_t kQCloudDbgBegin   = 52;
 constexpr uint32_t kQCloudDbgEnd     = 53;
 constexpr uint32_t kQGodRaysBegin    = 56;
 constexpr uint32_t kQGodRaysEnd      = 57;
+constexpr uint32_t kQHalationBegin   = 58;
+constexpr uint32_t kQHalationEnd     = 59;
 constexpr float kGodRaySunCore = 0.08f;
 // Ganho global dos raios, escolhido olhando a tocha de noite contra o halo do
 // bloom (com 1 o raio sumia dentro do halo).
 constexpr float kGodRayGain = 4.0f;
 // Lens flare: a mesma divisao pela intensidade do bloom dos raios.
 constexpr float kLensFlareGain = 1.0f;
+
+// Temperos HD-2D deste quadro: o campo do look (world.set_look) vence o do
+// data/postprocess.json quando >= 0; a chave do preset zera o efeito.
+struct Hd2dParams {
+    float halation, halationThreshold;
+    Vec3 halationTint; // normalizada pela luminancia
+    float bokehIntensity, bokehThreshold, bokehShape;
+    float grain, grainSize;
+};
+Hd2dParams resolveHd2d(const PostProcessor::PostSettings& s, const LookConfig* look) {
+    auto pick = [](float fromLook, float fromFile) { return fromLook >= 0.0f ? fromLook : fromFile; };
+    Hd2dParams p{};
+    p.halation = s.presetHalation ? pick(look ? look->halationIntensity : -1.0f, s.halationIntensity) : 0.0f;
+    p.halationThreshold = std::max(pick(look ? look->halationThreshold : -1.0f, s.halationThreshold), 0.0f);
+    Vec3 tint = (look && look->halationTint.x >= 0.0f) ? look->halationTint : s.halationTint;
+    tint = glm::max(tint, Vec3(0.0f));
+    const float luma = glm::dot(tint, Vec3(0.2126f, 0.7152f, 0.0722f));
+    p.halationTint = luma > 1e-4f ? tint / luma : Vec3(1.0f);
+    p.bokehIntensity = s.presetBokehHighlights ? pick(look ? look->bokehIntensity : -1.0f, s.bokehIntensity) : 0.0f;
+    p.bokehThreshold = std::max(pick(look ? look->bokehThreshold : -1.0f, s.bokehThreshold), 0.0f);
+    p.bokehShape = std::clamp(pick(look ? look->bokehShape : -1.0f, s.bokehShape), 0.0f, 1.0f);
+    p.grain = s.presetGrain ? pick(look ? look->grainIntensity : -1.0f, s.grainIntensity) : 0.0f;
+    p.grainSize = std::max(pick(look ? look->grainSize : -1.0f, s.grainSize), 0.25f);
+    return p;
+}
 } // namespace
 
 bool PostProcessor::init(VulkanContext* ctx, uint32_t width, uint32_t height) {
@@ -129,6 +159,8 @@ void PostProcessor::shutdown() {
     
     vkDestroyPipeline(device, m_brightPassPipeline, nullptr);
     vkDestroyPipeline(device, m_godRayPipeline, nullptr);
+    vkDestroyPipeline(device, m_halationPipeline, nullptr);
+    m_halationPipeline = VK_NULL_HANDLE;
     vkDestroyPipeline(device, m_bloomDownPipeline, nullptr);
     vkDestroyPipeline(device, m_bloomUpPipeline, nullptr);
     vkDestroyPipeline(device, m_weatherPipeline, nullptr);
@@ -290,7 +322,7 @@ void PostProcessor::createImages() {
 }
 
 void PostProcessor::createDescriptors() {
-    constexpr uint32_t kBindings = 16;
+    constexpr uint32_t kBindings = 17;
     VkDescriptorSetLayoutBinding bindings[kBindings] = {};
     // Bindings 0..3: image samplers used by postprocess passes.
     // Binding 3 is also reused as the cloud color input by post_composite.frag.
@@ -347,6 +379,7 @@ void PostProcessor::createDescriptors() {
     // escritos no set do composite (sem a fusao, a propria cena no lugar).
     // Binding 14: LUT 3D de grading (sampler3D), so' do composite.
     // Binding 15: luz volumetrica do sol (VolumetricLight; 1x1 preta sem ela).
+    // Binding 16: halation (1/8 da resolucao; a cena sem ela).
     for (uint32_t b = 11; b < kBindings; ++b) {
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -384,7 +417,7 @@ void PostProcessor::createDescriptors() {
     const uint32_t numSets = kSetsPerFrame * VulkanContext::MAX_FRAMES_IN_FLIGHT;
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 14 * numSets; // 0-3, 5, 7-15
+    poolSizes[0].descriptorCount = 15 * numSets; // 0-3, 5, 7-16
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[1].descriptorCount = numSets;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -420,7 +453,8 @@ void PostProcessor::createDescriptors() {
     // 352 + 32 B (borderRect/borderParams, E-BORDA-VAZIO) + 48 B (contorno): o bloco da
     // composicao cresceu alem do antigo teto de 352 B.
     // + 32 B (gradeParams2 da LUT 3D de grading, volumetricParams).
-    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 464, 16 * 1024);
+    // + 48 B (halation e grao).
+    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 512, 16 * 1024);
     const VkDescriptorSetLayout setLayouts[2] = {m_descriptorSetLayout, m_pushRing.layout()};
 
     VkPipelineLayoutCreateInfo plInfo{};
@@ -660,6 +694,9 @@ void PostProcessor::createPipelines() {
     m_bloomUpPipeline = createFullscreenPipeline(bloomUpFrag, m_width / 2, m_height / 2);
     m_godRayPipeline = createFullscreenPipeline(ShaderCompiler::loadSPIRV("postprocess/god_rays.frag.spv"),
                                                 m_width / 2, m_height / 2);
+    // Halation: so' o filtro de entrada e' novo; a piramide e' a do bloom.
+    auto halationFrag = ShaderCompiler::loadSPIRV("postprocess/halation_prefilter.frag.spv");
+    if (!halationFrag.empty()) m_halationPipeline = createFullscreenPipeline(halationFrag, m_width / 4, m_height / 4);
     m_weatherPipeline = createFullscreenPipeline(weatherFrag, m_width, m_height);
     m_cloudCoverageDebugPipeline = createFullscreenPipeline(cloudCoverageDebugFrag, m_width, m_height, false, VK_FORMAT_UNDEFINED, true);
 }
@@ -817,6 +854,75 @@ VkImageView PostProcessor::renderGodRays(VkCommandBuffer cmd, const Mat4& viewPr
     return m_godRayView;
 }
 
+// HALATION na piramide do bloom. Depois do upsample dele as imagens down 1..4
+// e up 1..3 nao sao mais lidas (o composite so' le' a up 0 ou a dos raios),
+// entao viram rascunho: filtro de entrada em 1/4 (down 1), Kawase ate' 1/32
+// (down 4) e de volta a 1/8 (up 3, up 2). O resultado soma tres niveis
+// (1/8 + 1/16 + 1/32): um halo de ~10% da altura da tela, bem mais largo que
+// o bloom, sem memoria nova. Chamado so' com o bloom desligado ou ja' pronto.
+VkImageView PostProcessor::renderHalation(VkCommandBuffer cmd, VkImageView hdrInput, float threshold, float exposure) {
+    if (m_halationPipeline == VK_NULL_HANDLE || hdrInput == VK_NULL_HANDLE || m_width < 64 || m_height < 64)
+        return VK_NULL_HANDLE;
+    m_ctx->writeTimestamp(cmd, kQHalationBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::pushPass("Halation"); // medidor de banda (spec 50)
+    auto mipSize = [this](uint32_t i) {
+        return std::pair<uint32_t, uint32_t>(std::max(1u, (m_width / 2) >> i), std::max(1u, (m_height / 2) >> i));
+    };
+    // 1. Filtro de entrada: cena cheia -> down 1 (1/4), so' o que passa do limiar.
+    {
+        const auto [w, h] = mipSize(1);
+        barrierToColorAttach(cmd, m_ctx, m_bloomDownImages[1]);
+        updateDescriptorSet(15, hdrInput);
+        beginFullscreenPass(cmd, m_bloomDownViews[1], w, h);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_halationPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(15), 0, nullptr);
+        const float push[2] = {threshold, exposure};
+        vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkc::cmdEndRendering(cmd);
+        barrierToShaderRead(cmd, m_ctx, m_bloomDownImages[1]);
+    }
+    struct { Vec2 size; float lod; float pad; } push{};
+    // 2. Kawase para baixo: down 1 -> 2 -> 3 -> 4 (conjuntos 16..18).
+    for (uint32_t i = 2; i < BLOOM_MIPS; ++i) {
+        const auto [w, h] = mipSize(i);
+        const auto [sw, sh] = mipSize(i - 1);
+        barrierToColorAttach(cmd, m_ctx, m_bloomDownImages[i]);
+        updateDescriptorSet(14 + i, m_bloomDownViews[i - 1]);
+        beginFullscreenPass(cmd, m_bloomDownViews[i], w, h);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomDownPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(14 + i), 0, nullptr);
+        push.size = Vec2(float(sw), float(sh));
+        vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkc::cmdEndRendering(cmd);
+        barrierToShaderRead(cmd, m_ctx, m_bloomDownImages[i]);
+    }
+    // 3. Kawase para cima: (down 4 + down 3) -> up 3, (up 3 + down 2) -> up 2
+    // (conjuntos 19 e 26).
+    VkImageView last = m_bloomDownViews[BLOOM_MIPS - 1];
+    for (uint32_t i = BLOOM_MIPS - 2; i >= 2; --i) {
+        const auto [w, h] = mipSize(i);
+        const auto [sw, sh] = mipSize(i + 1);
+        const uint32_t set = i == 3 ? 19u : 26u;
+        barrierToColorAttach(cmd, m_ctx, m_bloomUpImages[i]);
+        updateDescriptorSet(set, last, m_bloomDownViews[i]);
+        beginFullscreenPass(cmd, m_bloomUpViews[i], w, h);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomUpPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(set), 0, nullptr);
+        push.size = Vec2(float(sw), float(sh));
+        vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkc::cmdEndRendering(cmd);
+        barrierToShaderRead(cmd, m_ctx, m_bloomUpImages[i]);
+        last = m_bloomUpViews[i];
+    }
+    m_ctx->writeTimestamp(cmd, kQHalationEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    bw::popPass();
+    Profiler::addGpuTime("Halation", m_ctx->timestampDeltaMs(kQHalationBegin, kQHalationEnd));
+    return last;
+}
+
 void PostProcessor::render(VkCommandBuffer cmd, VkImageView hdrInput, VkImageView depthInput,
             VkImageView gbufferWorldPos, VkImageView /*gbufferNormal*/, VkImageView /*shadowInput*/,
             const Mat4& view, const Mat4& proj, const Mat4& invViewProj,
@@ -864,8 +970,22 @@ if (!m_ctx) return;
     (void)weatherCoverage; // superseded by the field-mode flag in cloudParams.z
     VkImageView compositeSource = hdrInput;
     ++m_postFrame;
+    // Temperos HD-2D (halation, bokeh dos realces, grao, LUT padrao): o look
+    // vence o data/postprocess.json, e o preset desliga cada um.
+    const Hd2dParams hd2d = resolveHd2d(settings, lookConfig);
+    // A LUT padrao do postprocess.json entra so' quando o look nao tem a
+    // sua; com post_lut = false nenhuma LUT de arquivo entra.
+    const LookConfig* gradeLook = lookConfig;
+    LookConfig lutLook;
+    if (lookConfig && (!settings.presetLut ? !lookConfig->lutPath.empty()
+                                           : (lookConfig->lutPath.empty() && !settings.colorLut.empty()))) {
+        lutLook = *lookConfig;
+        lutLook.lutPath = settings.presetLut ? settings.colorLut : std::string();
+        if (settings.presetLut) lutLook.lutStrength = settings.colorLutStrength;
+        gradeLook = &lutLook;
+    }
     // Antes de qualquer passe de render: a copia da LUT e' transferencia.
-    const float gradeLutMix = updateGradeLut(cmd, lookConfig);
+    const float gradeLutMix = updateGradeLut(cmd, gradeLook);
 
     // Histogram auto-exposure: measure this frame's HDR luminance on the GPU.
     // The CPU consumed LAST frame's adapted value at the top of the dispatch.
@@ -1585,7 +1705,10 @@ if (!m_ctx) return;
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(30), 0, nullptr);
             // Teto do disco: o maior CoC que o mapa pode ter neste quadro, com
             // limite para o custo (o raio do disco cresce, as amostras nao).
-            const float gatherPush[2] = {std::min(cocTetoReal, 32.0f), float(m_bokehTaps)};
+            // Realces: limiar em luminancia exposta, forca e forma (bokeh_*).
+            const float gatherPush[6] = {std::min(cocTetoReal, 32.0f), float(m_bokehTaps),
+                                         hd2d.bokehThreshold, hd2d.bokehIntensity, settings.exposure,
+                                         hd2d.bokehShape};
             vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(gatherPush), gatherPush);
             vkCmdDraw(cmd, 3, 1, 0, 0);
             vkc::cmdEndRendering(cmd);
@@ -1844,6 +1967,11 @@ if (!m_ctx) return;
             w.pImageInfo = &di;
             updateSets(&w, 1);
         }
+    // Halation: depois do bloom (reusa a piramide dele). Funciona tambem com o
+    // bloom desligado - as imagens existem do mesmo jeito.
+    const VkImageView halationView =
+        hd2d.halation > 0.0f ? renderHalation(cmd, hdrInput, hd2d.halationThreshold, settings.exposure)
+                             : VK_NULL_HANDLE;
         // Binding 14 (LUT de grading): sempre a mesma imagem 3D, identidade
         // ate' o primeiro look que a peca.
         VkDescriptorImageInfo lutInfo{m_linearSampler, m_gradeLutView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -1901,6 +2029,12 @@ if (!m_ctx) return;
     if (const char* e = std::getenv("ERUPTION_TEST_FOG_END")) fogEnd = std::stof(e);
     if (const char* e = std::getenv("ERUPTION_TEST_FOG_OPACITY")) fogOpacity = std::stof(e);
 
+        // Binding 16 (halation): o borrao em 1/8 ou a cena, que o shader nao le'.
+        const VkImageView hal = halationView != VK_NULL_HANDLE ? halationView : compositeSource;
+        VkDescriptorImageInfo halInfo{m_linearSampler, hal, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        w.dstBinding = 16;
+        w.pImageInfo = &halInfo;
+        updateSets(&w, 1);
     // ERUPTION_TEST_NO_BLOOM pula os passes la' em cima; o composite tambem
     // tem de parar de somar a textura, que ficava com o bloom de antes.
     static const bool kNoBloomComposite = std::getenv("ERUPTION_TEST_NO_BLOOM") != nullptr;
@@ -1935,6 +2069,9 @@ if (!m_ctx) return;
                                  static_cast<float>(settings.toneMapMode), settings.effectClearRadius);
     bool caEnabled = settings.enableChromaticAberration;
     if (std::getenv("ERUPTION_TEST_NO_CA") != nullptr) caEnabled = false;
+        Vec4 halationParams;   // x=forca (0 = nao le' o binding 16), y=limiar exposto, z=1/niveis somados
+        Vec4 halationTint;     // rgb=tinta normalizada pela luminancia
+        Vec4 grainParams;      // x=forca (0 desliga), y=graos na altura da tela, z=semente do quadro
     static const bool cloudOccDebug = std::getenv("ERUPTION_TEST_CLOUD_OCC_DEBUG") != nullptr;
     push.chromaticAberrationParams = Vec4(caEnabled ? 1.0f : 0.0f, settings.chromaticAberrationAmount,
                                           settings.effectClearFeather, cloudOccDebug ? 1.0f : 0.0f);
@@ -1981,7 +2118,13 @@ if (!m_ctx) return;
     push.outlineParams2 = Vec4(std::max(settings.outlineThreshold, 1e-4f), settings.outlineSprites ? 1.0f : 0.0f, 0.0f, 0.0f);
     push.gradeParams2 = Vec4(gradeLutMix, 0.0f, 0.0f, 0.0f);
     push.volumetricParams = Vec4(m_volumetricView != VK_NULL_HANDLE && m_volumetricOn ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
-    static_assert(sizeof(push) <= 464, "bloco da composicao passou do maxBlock do PushRing (464 B)");
+    push.halationParams = Vec4(halationView != VK_NULL_HANDLE ? hd2d.halation : 0.0f, hd2d.halationThreshold,
+                               1.0f / 3.0f, 0.0f);
+    push.halationTint = Vec4(hd2d.halationTint, 0.0f);
+    // Semente por quadro (o quadro do pos, deterministico com
+    // ERUPTION_TEST_FIXED_DT): o grao anda a cada quadro.
+    push.grainParams = Vec4(hd2d.grain, 1080.0f / hd2d.grainSize, float(m_postFrame % 4096u), 0.0f);
+    static_assert(sizeof(push) <= 512, "bloco da composicao passou do maxBlock do PushRing (512 B)");
     m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, &push, sizeof(push));
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkc::cmdEndRendering(cmd);
@@ -2159,7 +2302,7 @@ float PostProcessor::updateGradeLut(VkCommandBuffer cmd, const LookConfig* look)
             auto cube = std::make_unique<CubeLut>();
             const std::string disk = project::gameRef(m_cubeLutPath).string();
             if (cube->load(disk)) m_cubeLut = std::move(cube);
-            else ERUPTION_LOG_WARN("[GRADE] LUT .cube nao carregou: %s", disk.c_str());
+            else ERUPTION_LOG_WARN("[GRADE] LUT (.cube/.png) nao carregou: %s", disk.c_str());
         }
     }
     const CubeLut* cube = quer ? m_cubeLut.get() : nullptr;
@@ -2326,6 +2469,16 @@ void PostProcessor::createLensDropBuffer() {
     bool ok = m_ctx->createBuffer(size,
                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                   VMA_MEMORY_USAGE_CPU_TO_GPU,
+    bokehShape = j.value("bokeh_shape", bokehShape);
+    halationIntensity = j.value("halation_intensity", halationIntensity);
+    halationThreshold = j.value("halation_threshold", halationThreshold);
+    if (j.contains("halation_tint") && j["halation_tint"].is_array() && j["halation_tint"].size() >= 3)
+        halationTint = Vec3(j["halation_tint"][0].get<float>(), j["halation_tint"][1].get<float>(),
+                            j["halation_tint"][2].get<float>());
+    grainIntensity = j.value("grain_intensity", grainIntensity);
+    grainSize = j.value("grain_size", grainSize);
+    colorLut = j.value("color_lut", colorLut);
+    colorLutStrength = j.value("color_lut_strength", colorLutStrength);
                                   m_lensDropBuffer, m_lensDropAlloc);
     if (!ok) {
         Logger::error("PostProcessor: failed to create lens-drop SSBO");
