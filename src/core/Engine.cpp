@@ -2886,6 +2886,10 @@ void Engine::applyGraphicsPreset() {
     // Medido em cidade-A 1920x1080: DoF custava 3,87 ms com dof=false.
     if (p.contains("dof")) m_postSettings.enableDoF = p["dof"].get<bool>();
     if (std::getenv("ERUPTION_TEST_NO_DOF")) m_postSettings.enableDoF = false;
+    // Qualidade do DoF: ate' 2 (padrao) o caminho separavel (gaussiana em
+    // resolucao cheia + borrao grande em 1/4); 3 = bokeh por coleta em disco a
+    // meia resolucao, com "dof_bokeh_taps" amostras (PostProcessor::setDofQuality).
+    m_postProcessor.setDofQuality(std::clamp(p.value("dof_quality", 2), 0, 3), p.value("dof_bokeh_taps", 40));
     // Iluminação PBR (GGX) ou a clássica, mais barata (celular fraco: -25% no
     // passe de luz). ERUPTION_TEST_NO_PBR continua valendo por cima.
     if (p.contains("pbr_lighting"))

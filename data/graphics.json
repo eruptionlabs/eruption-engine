@@ -513,6 +513,8 @@
       "motion_blur": true,
       "chromatic_aberration": true,
       "dof": true,
+      "dof_quality": 3,
+      "dof_bokeh_taps": 40,
       "point_lights": true,
       "max_rain_followers": 100,
       "max_field_clouds": 40,

@@ -119,6 +119,9 @@ void PostProcessor::shutdown() {
     vkDestroyPipeline(device, m_cocCompositePipeline, nullptr);
     vkDestroyPipeline(device, m_dofFarDownPipeline, nullptr);
     vkDestroyPipeline(device, m_dofFarBlurPipeline, nullptr);
+    vkDestroyPipeline(device, m_bokehGatherPipeline, nullptr);
+    vkDestroyPipeline(device, m_bokehCompositePipeline, nullptr);
+    m_bokehGatherPipeline = m_bokehCompositePipeline = VK_NULL_HANDLE;
     vkDestroyPipeline(device, m_compositePipeline, nullptr);
     vkDestroyPipeline(device, m_copyPipeline, nullptr);
     
@@ -163,6 +166,7 @@ void PostProcessor::shutdown() {
     destroyImg(m_weatherImage, m_weatherAlloc, m_weatherView);
     destroyImg(m_godRayImage, m_godRayAlloc, m_godRayView);
     for (uint32_t i = 0; i < kDofFarImages; i++) destroyImg(m_dofFarImages[i], m_dofFarAllocs[i], m_dofFarViews[i]);
+    destroyImg(m_bokehImage, m_bokehAlloc, m_bokehView);
 
     for (uint32_t i = 0; i < BLOOM_MIPS; i++) {
         destroyImg(m_bloomDownImages[i], m_bloomDownAllocs[i], m_bloomDownViews[i]);
@@ -247,6 +251,19 @@ void PostProcessor::createImages() {
         viewInfo.format = imageInfo.format;
         viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_dofFarViews[i]);
+    }
+    // Bokeh de meia resolucao (dof_quality 3): RGBA16F porque a cobertura
+    // pelo primeiro plano desfocado vai no alfa. 1/4 de uma imagem cheia.
+    imageInfo.extent = {std::max(1u, m_width / 2), std::max(1u, m_height / 2), 1};
+    vmaCreateImage(m_ctx->allocator(), &imageInfo, &allocInfo, &m_bokehImage, &m_bokehAlloc, nullptr);
+    {
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_bokehImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = imageInfo.format;
+        viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_bokehView);
     }
     // Mapa de CoC: RGBA16F SEMPRE. O composite e o borrao leem o CoC no
     // alfa; na cadeia B10G11R11 (post_format "packed", preset medium) o alfa
@@ -615,6 +632,16 @@ void PostProcessor::createPipelines() {
         const uint32_t qw = std::max(1u, m_width / 4), qh = std::max(1u, m_height / 4);
         m_dofFarDownPipeline = createFullscreenPipeline(farDownFrag, qw, qh, false, VK_FORMAT_R16G16B16A16_SFLOAT);
         m_dofFarBlurPipeline = createFullscreenPipeline(farBlurFrag, qw, qh, false, VK_FORMAT_R16G16B16A16_SFLOAT);
+    }
+    // Bokeh por coleta em disco (dof_quality 3). Sem o SPIR-V, o caminho
+    // separavel de sempre.
+    auto bokehGatherFrag = ShaderCompiler::loadSPIRV("postprocess/bokeh_gather.frag.spv");
+    auto bokehCompFrag = ShaderCompiler::loadSPIRV("postprocess/bokeh_composite.frag.spv");
+    if (!bokehGatherFrag.empty() && !bokehCompFrag.empty()) {
+        m_bokehGatherPipeline = createFullscreenPipeline(bokehGatherFrag, std::max(1u, m_width / 2),
+                                                         std::max(1u, m_height / 2), false,
+                                                         VK_FORMAT_R16G16B16A16_SFLOAT);
+        m_bokehCompositePipeline = createFullscreenPipeline(bokehCompFrag, m_width, m_height);
     }
     m_compositePipeline = createFullscreenPipeline(compositeFrag, m_width, m_height);
     m_copyPipeline = createFullscreenPipeline(copyFrag, m_width, m_height, false, m_ctx->swapFormat());
@@ -1515,6 +1542,37 @@ if (!m_ctx) return;
         vkc::cmdEndRendering(cmd);
         barrierToShaderRead(cmd, m_ctx, m_cocImage);
 
+        // dof_quality 3: bokeh por coleta em disco a meia resolucao no lugar
+        // das passadas separaveis (2a-2c) e da mistura (3). A visualizacao do
+        // CoC segue no caminho de sempre (o shader dela esta' la').
+        const bool bokeh = m_dofQuality >= 3 && m_bokehGatherPipeline != VK_NULL_HANDLE &&
+                           m_bokehCompositePipeline != VK_NULL_HANDLE && m_bokehView != VK_NULL_HANDLE &&
+                           !settings.visualizeCoC && cocTetoReal > 0.0f;
+        if (bokeh) {
+            const uint32_t hw = std::max(1u, m_width / 2), hh = std::max(1u, m_height / 2);
+            barrierToColorAttach(cmd, m_ctx, m_bokehImage);
+            updateDescriptorSet(30, hdrInput, m_cocView, depthInput);
+            beginFullscreenPass(cmd, m_bokehView, hw, hh);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bokehGatherPipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(30), 0, nullptr);
+            // Teto do disco: o maior CoC que o mapa pode ter neste quadro, com
+            // limite para o custo (o raio do disco cresce, as amostras nao).
+            const float gatherPush[2] = {std::min(cocTetoReal, 32.0f), float(m_bokehTaps)};
+            vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(gatherPush), gatherPush);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkc::cmdEndRendering(cmd);
+            barrierToShaderRead(cmd, m_ctx, m_bokehImage);
+
+            barrierToColorAttach(cmd, m_ctx, m_dofImage);
+            updateDescriptorSet(31, hdrInput, m_bokehView, m_cocView);
+            beginFullscreenPass(cmd, m_dofView, m_width, m_height);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bokehCompositePipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &dset(31), 0, nullptr);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkc::cmdEndRendering(cmd);
+            barrierToShaderRead(cmd, m_ctx, m_dofImage);
+            compositeSource = m_dofView;
+        } else {
         // Pass 2a: Horizontal Blur
         barrierToColorAttach(cmd, m_ctx, m_blurHImage);
         updateDescriptorSet(2, hdrInput, m_cocView);
@@ -1616,6 +1674,7 @@ if (!m_ctx) return;
         barrierToShaderRead(cmd, m_ctx, m_dofImage);
         compositeSource = m_dofView;
         }
+        } // fim do caminho separavel (dof_quality <= 2)
     }
     m_ctx->writeTimestamp(cmd, 41, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     bw::popPass();

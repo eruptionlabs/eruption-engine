@@ -542,7 +542,21 @@ public:
     // Luz volumetrica do sol (VolumetricLight): a imagem que o composite soma
     // antes da nevoa (binding 15) e se ela tem conteudo neste quadro.
     void setVolumetric(VkImageView view, bool on) { m_volumetricView = view; m_volumetricOn = on; }
+    // Qualidade do DoF (preset "dof_quality"): ate' 2 = o caminho separavel
+    // de sempre (gaussiana + borrao grande em 1/4); 3 = bokeh por coleta em
+    // disco a meia resolucao (bokeh_gather.frag), com `taps` amostras.
+    void setDofQuality(int quality, int taps) {
+        m_dofQuality = quality;
+        m_bokehTaps = std::clamp(taps, 8, 128);
+    }
 private:
+    int m_dofQuality = 0;
+    int m_bokehTaps = 40;
+    VkImage m_bokehImage = VK_NULL_HANDLE; // meia resolucao, RGBA16F
+    VmaAllocation m_bokehAlloc = VK_NULL_HANDLE;
+    VkImageView m_bokehView = VK_NULL_HANDLE;
+    VkPipeline m_bokehGatherPipeline = VK_NULL_HANDLE;
+    VkPipeline m_bokehCompositePipeline = VK_NULL_HANDLE;
     void destroyLensDropCompute();
     void dispatchLensDropCompute(VkCommandBuffer cmd, const WeatherParams& weather, float time, float dt);
     VkPipeline createFullscreenPipeline(const std::vector<uint32_t>& fragCode,
