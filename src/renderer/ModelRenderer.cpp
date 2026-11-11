@@ -3326,6 +3326,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             // movia 98,65% da tela.
             mesh.metallicScale = profile.metallic;
             mesh.roughnessScale = profile.roughness;
+            mesh.materialAbsolute = profile.absolute;
             mesh.swayAmount = resolveSwayAmount(nomeMaterial, profile.category);
             // FATOR DE DESLOCAMENTO POR MATERIAL (tesselacao da banda
             // perto) - ver dispScaleForCategory() em PbrMaterialProfile.hpp
@@ -4595,6 +4596,10 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     push.weld = Vec4(0.0f);
     push.vp = viewProj;
     push.__pad = magentaDebug ? 1.0f : 0.0f;
+    // __pad: bit 1 = depuracao magenta, bit 2 = material absoluto (perfil).
+    auto padMaterial = [&](const ModelMeshGPU& m) {
+        return (magentaDebug ? 1.0f : 0.0f) + (m.materialAbsolute ? 2.0f : 0.0f);
+    };
     // uvScale.x = ladrilhamento estocastico do CHAO (model_frag.glsl). Entra
     // aqui, e nao num campo novo, porque o bloco de push tem 96 bytes fixos e
     // .x estava livre (o vertex le' so' .z e .w). Ligado por padrao: a
@@ -4703,6 +4708,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         push.alpha = runAlpha;
         push.metallicScale = mesh.metallicScale;
         push.roughnessScale = mesh.roughnessScale;
+        push.__pad = padMaterial(mesh);
         push.uvScale.z = mesh.uvPerUnit;
         push.uvScale.w = mesh.dispScale * reliefSizeScale(mesh, m_tessAmplitude);
         if (runClusters) {
@@ -5150,6 +5156,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             push.alpha = runAlpha2;
             push.metallicScale = mesh.metallicScale;
             push.roughnessScale = mesh.roughnessScale;
+            push.__pad = padMaterial(mesh);
             record(runVb2, runIb2, runMesh2, runCount2, runLen2, 0, instBase + slot + runFirst2, runCount2);
             dbgDraws++;
             dbgIdx += runCount2 * runLen2;

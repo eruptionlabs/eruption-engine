@@ -59,7 +59,7 @@ layout(push_constant) uniform PushConstants {
     float alpha;
     float metallicScale;  // absolute metallic value from the material profile
     float roughnessScale; // absolute roughness value from the material profile
-    float _pad;           // ERUPTION_TEST_MAGENTA_DEBUG (nao e' padding!)
+    float _pad;           // +1 ERUPTION_TEST_MAGENTA_DEBUG, +2 material absoluto (nao e' padding!)
     // O fragment so' precisava ate' aqui, mas o bloco de push tem 96 bytes
     // (static_assert em ModelRenderer.cpp) e `uvScale` fecha a conta. Declarar
     // o campo inteiro e' o que permite usar `uvScale.x`, que esta' livre
@@ -823,7 +823,7 @@ void main() {
     }
 
     // ERUPTION_TEST_MAGENTA_DEBUG=1: green=clean, cyan=residual magenta bleed
-    if (push._pad > 0.5) {
+    if (mod(push._pad, 2.0) > 0.5) {
         vec3 dbg = (magentaness > 0.05) ? vec3(0.0, 1.0, 1.0) : vec3(0.0, 1.0, 0.0);
         outAlbedo = vec4(dbg, 1.0);
         outNormal = vec4(0.5, 0.5, 1.0, 0.0);
@@ -1105,8 +1105,11 @@ void main() {
             mrahw = mix(mrahw, bMrahw, blendT);
         }
         if (splatMrahwW > 0.0) mrahw = mix(mrahw, splatMrahw, splatMrahwW);
-        roughness = push.roughnessScale * mrahw.g;
-        metallic  = push.metallicScale * mrahw.r;
+        // Perfil absoluto (pbr_materials.json "absolute": true): o valor da
+        // tabela vale sozinho. Senao escala o mapa cozido.
+        const bool matAbs = push._pad > 1.5;
+        roughness = push.roughnessScale * (matAbs ? 1.0 : mrahw.g);
+        metallic  = push.metallicScale * (matAbs ? 1.0 : mrahw.r);
         // MRAH-W alpha IS the cavity/pooling mask baked by PbrMapGen stage 5
         // (curvature * depression); height lives in .b (stage 6). This used to
         // be overwritten with u_pomParams.w -- the global rain intensity --

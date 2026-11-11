@@ -298,7 +298,8 @@ bool Engine::init(int width, int height, const std::string& title) {
 
     // Load PBR material profiles if the agy-generated file exists.
     // This is done early so every renderer can query profiles during map load.
-    PbrMaterialProfileManager::instance().loadFromFile("assets/data/pbr_materials.json");
+    // A tabela do projeto vence a do motor (mesmo caminho relativo).
+    PbrMaterialProfileManager::instance().loadFromFile(project::config("assets/data/pbr_materials.json"));
 
     Input::init(m_window.handle());
 

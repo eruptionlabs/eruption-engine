@@ -90,6 +90,9 @@ void PbrMaterialProfileManager::loadFromFile(const std::string& path) {
                 if (value.contains("wettable") && value["wettable"].is_boolean()) {
                     profile.wettable = value["wettable"].get<bool>();
                 }
+                if (value.contains("absolute") && value["absolute"].is_boolean()) {
+                    profile.absolute = value["absolute"].get<bool>();
+                }
                 if (value.contains("category") && value["category"].is_string()) {
                     profile.category = value["category"].get<std::string>();
                 }

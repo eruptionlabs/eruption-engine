@@ -77,6 +77,7 @@ struct ModelMeshGPU {
     // ver dispMipFloor() em model.vert/model.tese.
     float uvPerUnit = 0.0f;
     float roughnessScale = 1.0f;
+    bool materialAbsolute = false; // PbrMaterialProfile::absolute
     // Quanto esta malha balanca ao vento, 0 = rigida. Resolvido no LOAD a
     // partir da categoria do material, pelo mesmo caminho de metallic/roughness
     // - folhagem balanca, pedra e parede nao.

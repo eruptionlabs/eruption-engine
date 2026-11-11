@@ -13,6 +13,9 @@ struct PbrMaterialProfile {
     float roughness = 0.8f;  // default slightly rough, natural look
     float ao = 1.0f;         // ambient occlusion factor (not written to gbuffer yet)
     bool wettable = false;   // whether this surface can become wet from rain
+    // true: metallic/roughness valem como estao, sem multiplicar pelo mapa
+    // cozido (a rede da' metal ~0 em cristal; 1 x 0 continuava 0).
+    bool absolute = false;
     std::string category;    // semantic category, e.g. "water", "stone", "metal"
 };
 
