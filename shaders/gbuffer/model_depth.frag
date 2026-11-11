@@ -78,6 +78,8 @@ void main() {
         blendT = clamp(blendT + (hB - hA) * 0.35, 0.0, 1.0);
         texColor.rgb = mix(texColor.rgb, bColor.rgb, blendT);
     }
+    // Chave magenta (FF00FF = 1,0). Com 0,35 o rosa e o lilas claros de
+    // cristais e flores (0,35-0,5) sumiam e o fundo aparecia por buracos.
     float magentaness = min(texColor.r, texColor.b) - texColor.g;
-    if (magentaness > 0.35) discard;
+    if (magentaness > 0.6) discard;
 }

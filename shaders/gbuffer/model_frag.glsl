@@ -818,7 +818,7 @@ void main() {
     }
 
     float magentaness = min(texColor.r, texColor.b) - texColor.g;
-    if (texColor.a < alphaCutoff() || magentaness > 0.35) {
+    if (texColor.a < alphaCutoff() || magentaness > 0.6) { // 0,6: ver model_depth.frag
         discard;
     }
 
