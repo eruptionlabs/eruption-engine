@@ -1,4 +1,5 @@
 #include "formats/GroundPack.hpp"
+#include "utils/ReadWholeFile.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -26,7 +27,7 @@ constexpr float kNormalTolerance = 1e-5f;
 bool readFile(const fs::path& path, std::vector<uint8_t>& out) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return false;
-    out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    readWholeFile(f, out);
     return true;
 }
 

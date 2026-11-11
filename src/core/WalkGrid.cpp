@@ -3,6 +3,7 @@
 // o editor pinta células bloqueadas e o resultado fica em
 // assets/scenes/<mapa>.walk.png (branco = bloqueado).
 #include "core/Engine.hpp"
+#include "utils/ReadWholeFile.hpp"
 
 #include "core/Logger.hpp"
 #include "core/JobSystem.hpp"
@@ -251,7 +252,8 @@ void Engine::applySavedWalk(LoadedMap& map) {
     if (!followsTerrain(map)) return;
     std::ifstream f(walkPathFor(map.mapName), std::ios::binary);
     if (!f) return;
-    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::vector<uint8_t> bytes;
+    readWholeFile(f, bytes);
     ImageData img = ImageUtils::loadFromMemoryRaw(bytes.data(), bytes.size());
     if (!img.isValid() || uint32_t(img.width) != map.navGrid.width || uint32_t(img.height) != map.navGrid.height) {
         ERUPTION_LOG_WARN("Walk grid for %s doesn't match the map; ignored", map.mapName.c_str());

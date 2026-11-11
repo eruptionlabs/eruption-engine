@@ -7,6 +7,7 @@
 // swap e drena a fila de upload e' o MapUpload.cpp.
 
 #include "core/Engine.hpp"
+#include "utils/ReadWholeFile.hpp"
 #include "core/Platform.hpp"
 #include "core/EngineInternal.hpp"
 #include "game/PlayerController.hpp"
@@ -1165,7 +1166,8 @@ bool Engine::loadModelForPreview(const std::string& glbPath) {
     // cena); quem abre o arquivo e' o caminho resolvido no projeto.
     const std::string diskPath = project::gameRef(glbPath).string();
     std::ifstream f(diskPath, std::ios::binary);
-    const std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::vector<uint8_t> data;
+    readWholeFile(f, data);
     if (data.size() < 12 || std::memcmp(data.data(), "glTF", 4) != 0) {
         ERUPTION_LOG_ERROR("Preview: not a GLB file: %s", glbPath.c_str());
         return false;
@@ -1197,7 +1199,7 @@ std::shared_ptr<ModelFile> prepareModelFile(const std::string& glbPath, bool par
     std::vector<uint8_t> data;
     {
         std::ifstream f(diskPath, std::ios::binary);
-        data.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+        readWholeFile(f, data);
     }
     if (data.size() < 12 || std::memcmp(data.data(), "glTF", 4) != 0) return nullptr;
     auto model = std::make_shared<ModelFile>(

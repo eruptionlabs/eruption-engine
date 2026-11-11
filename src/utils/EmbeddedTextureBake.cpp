@@ -1,4 +1,5 @@
 #include "utils/EmbeddedTextureBake.hpp"
+#include "utils/ReadWholeFile.hpp"
 #include "utils/TextureFormatPolicy.hpp"
 #include "formats/GroundPack.hpp"
 
@@ -201,7 +202,8 @@ bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
 
     std::ifstream f(path, std::ios::binary);
     if (!f.is_open()) return false;
-    std::vector<uint8_t> buf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::vector<uint8_t> buf;
+    readWholeFile(f, buf);
     if (buf.size() < 40) return false;
 
     Reader r{buf.data(), buf.size()};

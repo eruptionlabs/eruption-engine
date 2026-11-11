@@ -4,6 +4,7 @@
 // num mapa sem splat (New Map) os vértices do chão passam a apontar para elas
 // quando a primeira camada é escolhida. Salvas como PNG ao lado da cena.
 #include "core/Engine.hpp"
+#include "utils/ReadWholeFile.hpp"
 #include <mutex>
 #include <chrono>
 #include "core/JobSystem.hpp"
@@ -83,7 +84,8 @@ bool createMaskImage(VulkanContext& vk, uint32_t w, uint32_t h, const uint8_t* r
 // para sprites; numa máscara o alfa é o peso da 4ª camada).
 ImageData loadRawPNG(const fs::path& p) {
     std::ifstream f(p, std::ios::binary);
-    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::vector<uint8_t> bytes;
+    readWholeFile(f, bytes);
     if (bytes.empty()) return {};
     return ImageUtils::loadFromMemoryRaw(bytes.data(), bytes.size());
 }
