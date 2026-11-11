@@ -79,6 +79,7 @@ struct ModelMeshGPU {
     float roughnessScale = 1.0f;
     bool materialAbsolute = false; // PbrMaterialProfile::absolute
     bool materialFlat = false;     // PbrMaterialProfile::flatNormals
+    float materialGlow = 0.0f;     // PbrMaterialProfile::glow
     // Quanto esta malha balanca ao vento, 0 = rigida. Resolvido no LOAD a
     // partir da categoria do material, pelo mesmo caminho de metallic/roughness
     // - folhagem balanca, pedra e parede nao.

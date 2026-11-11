@@ -19,6 +19,9 @@ struct PbrMaterialProfile {
     // true: normal da FACE (sem suavizar e sem mapa de normal). Cristal com
     // normal suavizada sombreava como capsula: o sol virava uma bola de luz.
     bool flatNormals = false;
+    // Luz propria vinda de dentro (0 = nenhuma): a cor e' a da textura, mais
+    // forte nas faces de frente para a camera (le' como translucido).
+    float glow = 0.0f;
     std::string category;    // semantic category, e.g. "water", "stone", "metal"
 };
 

@@ -59,7 +59,7 @@ layout(push_constant) uniform PushConstants {
     float alpha;
     float metallicScale;  // absolute metallic value from the material profile
     float roughnessScale; // absolute roughness value from the material profile
-    float _pad;           // +1 ERUPTION_TEST_MAGENTA_DEBUG, +2 material absoluto, +4 normal da face (nao e' padding!)
+    float _pad;           // +1 ERUPTION_TEST_MAGENTA_DEBUG, +2 material absoluto, +4 normal da face, +8*n brilho n/8 (nao e' padding!)
     // O fragment so' precisava ate' aqui, mas o bloco de push tem 96 bytes
     // (static_assert em ModelRenderer.cpp) e `uvScale` fecha a conta. Declarar
     // o campo inteiro e' o que permite usar `uvScale.x`, que esta' livre
@@ -1222,6 +1222,20 @@ void main() {
         const float thr = 0.3 + 0.35 * float(h & 0xFFFFu) / 65535.0;
         if (u_sunDir.w < thr)
             emissiveRgb += slotTexture(emissiveIdx, uv).rgb * 2.5;
+    }
+    // Perfil "glow" (cristal): luz de dentro para fora, como os shaders de
+    // cristal estilizado fazem - o brilho mora na BORDA (fresnel: face de
+    // lado para a camera) e o miolo fica fundo e saturado, sem acender a face
+    // inteira (isso estourava para branco e o bloom virava uma bola). A cor
+    // e' a da textura com o quadrado (mais saturada e mais escura). O bloom
+    // faz o halo a partir da borda.
+    const float glowK = float(uint(push._pad + 0.5) >> 3u) / 8.0;
+    if (glowK > 0.0) {
+        const float NoVg = clamp(dot(N, normalize(u_cameraPos - inWorldPos)), 0.0, 1.0);
+        const float borda = pow(1.0 - NoVg, 3.0);
+        const vec3 fundo = texColor.rgb * texColor.rgb;
+        const float noiteG = 1.0 - smoothstep(0.3, 0.65, u_sunDir.w);
+        emissiveRgb += fundo * glowK * (0.12 + borda) * mix(0.5, 1.0, noiteG);
     }
     outEmissive = vec4(emissiveRgb, sunSelfShadow);
 }

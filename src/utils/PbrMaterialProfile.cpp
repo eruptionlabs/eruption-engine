@@ -96,6 +96,9 @@ void PbrMaterialProfileManager::loadFromFile(const std::string& path) {
                 if (value.contains("flat_normals") && value["flat_normals"].is_boolean()) {
                     profile.flatNormals = value["flat_normals"].get<bool>();
                 }
+                if (value.contains("glow") && value["glow"].is_number()) {
+                    profile.glow = value["glow"].get<float>();
+                }
                 if (value.contains("category") && value["category"].is_string()) {
                     profile.category = value["category"].get<std::string>();
                 }
