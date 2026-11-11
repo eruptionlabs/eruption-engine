@@ -1960,6 +1960,11 @@ if (!m_ctx) return;
                                                  depthInput, hdrInput, lightDir)) bloomResult = rays;
         }
     }
+    // Halation: depois do bloom (reusa a piramide dele). Funciona tambem com o
+    // bloom desligado - as imagens existem do mesmo jeito.
+    const VkImageView halationView =
+        hd2d.halation > 0.0f ? renderHalation(cmd, hdrInput, hd2d.halationThreshold, settings.exposure)
+                             : VK_NULL_HANDLE;
 
     // Binding 8 must always get a write before the very first composite draw
     // (an unwritten combined-image-sampler is a validation error, unlike a
@@ -2004,11 +2009,6 @@ if (!m_ctx) return;
             w.pImageInfo = &di;
             updateSets(&w, 1);
         }
-    // Halation: depois do bloom (reusa a piramide dele). Funciona tambem com o
-    // bloom desligado - as imagens existem do mesmo jeito.
-    const VkImageView halationView =
-        hd2d.halation > 0.0f ? renderHalation(cmd, hdrInput, hd2d.halationThreshold, settings.exposure)
-                             : VK_NULL_HANDLE;
         // Binding 14 (LUT de grading): sempre a mesma imagem 3D, identidade
         // ate' o primeiro look que a peca.
         VkDescriptorImageInfo lutInfo{m_linearSampler, m_gradeLutView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -2021,6 +2021,12 @@ if (!m_ctx) return;
         VkDescriptorImageInfo volInfo{m_linearSampler, vol, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         w.dstBinding = 15;
         w.pImageInfo = &volInfo;
+        updateSets(&w, 1);
+        // Binding 16 (halation): o borrao em 1/8 ou a cena, que o shader nao le'.
+        const VkImageView hal = halationView != VK_NULL_HANDLE ? halationView : compositeSource;
+        VkDescriptorImageInfo halInfo{m_linearSampler, hal, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        w.dstBinding = 16;
+        w.pImageInfo = &halInfo;
         updateSets(&w, 1);
     }
     beginFullscreenPass(cmd, compositeTarget, m_width, m_height);
@@ -2056,6 +2062,9 @@ if (!m_ctx) return;
         Vec4 outlineParams2;  // x=limiar relativo, y=sprites
         Vec4 gradeParams2;    // x=mistura da LUT 3D de grading (0 = analitico), yzw livres
         Vec4 volumetricParams; // x=forca da luz volumetrica (0 = nao le' o binding 15)
+        Vec4 halationParams;   // x=forca (0 = nao le' o binding 16), y=limiar exposto, z=1/niveis somados
+        Vec4 halationTint;     // rgb=tinta normalizada pela luminancia
+        Vec4 grainParams;      // x=forca (0 desliga), y=graos na altura da tela, z=semente do quadro
     } push;
     // Debug/test overrides for fog parameters (useful for headless screenshots).
     float fogStart = settings.fogStart;
@@ -2066,12 +2075,6 @@ if (!m_ctx) return;
     if (const char* e = std::getenv("ERUPTION_TEST_FOG_END")) fogEnd = std::stof(e);
     if (const char* e = std::getenv("ERUPTION_TEST_FOG_OPACITY")) fogOpacity = std::stof(e);
 
-        // Binding 16 (halation): o borrao em 1/8 ou a cena, que o shader nao le'.
-        const VkImageView hal = halationView != VK_NULL_HANDLE ? halationView : compositeSource;
-        VkDescriptorImageInfo halInfo{m_linearSampler, hal, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        w.dstBinding = 16;
-        w.pImageInfo = &halInfo;
-        updateSets(&w, 1);
     // ERUPTION_TEST_NO_BLOOM pula os passes la' em cima; o composite tambem
     // tem de parar de somar a textura, que ficava com o bloom de antes.
     static const bool kNoBloomComposite = std::getenv("ERUPTION_TEST_NO_BLOOM") != nullptr;
@@ -2106,9 +2109,6 @@ if (!m_ctx) return;
                                  static_cast<float>(settings.toneMapMode), settings.effectClearRadius);
     bool caEnabled = settings.enableChromaticAberration;
     if (std::getenv("ERUPTION_TEST_NO_CA") != nullptr) caEnabled = false;
-        Vec4 halationParams;   // x=forca (0 = nao le' o binding 16), y=limiar exposto, z=1/niveis somados
-        Vec4 halationTint;     // rgb=tinta normalizada pela luminancia
-        Vec4 grainParams;      // x=forca (0 desliga), y=graos na altura da tela, z=semente do quadro
     static const bool cloudOccDebug = std::getenv("ERUPTION_TEST_CLOUD_OCC_DEBUG") != nullptr;
     push.chromaticAberrationParams = Vec4(caEnabled ? 1.0f : 0.0f, settings.chromaticAberrationAmount,
                                           settings.effectClearFeather, cloudOccDebug ? 1.0f : 0.0f);
@@ -2462,6 +2462,16 @@ void PostProcessor::PostSettings::loadFromJson(const nlohmann::json& j) {
     }
     bokehThreshold = j.value("bokeh_threshold", bokehThreshold);
     bokehIntensity = j.value("bokeh_intensity", bokehIntensity);
+    bokehShape = j.value("bokeh_shape", bokehShape);
+    halationIntensity = j.value("halation_intensity", halationIntensity);
+    halationThreshold = j.value("halation_threshold", halationThreshold);
+    if (j.contains("halation_tint") && j["halation_tint"].is_array() && j["halation_tint"].size() >= 3)
+        halationTint = Vec3(j["halation_tint"][0].get<float>(), j["halation_tint"][1].get<float>(),
+                            j["halation_tint"][2].get<float>());
+    grainIntensity = j.value("grain_intensity", grainIntensity);
+    grainSize = j.value("grain_size", grainSize);
+    colorLut = j.value("color_lut", colorLut);
+    colorLutStrength = j.value("color_lut_strength", colorLutStrength);
 
     toneMapMode = j.value("tone_map_mode", toneMapMode);
     enableBloom = j.value("enable_bloom", enableBloom);
@@ -2516,16 +2526,6 @@ void PostProcessor::createLensDropBuffer() {
     bool ok = m_ctx->createBuffer(size,
                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                   VMA_MEMORY_USAGE_CPU_TO_GPU,
-    bokehShape = j.value("bokeh_shape", bokehShape);
-    halationIntensity = j.value("halation_intensity", halationIntensity);
-    halationThreshold = j.value("halation_threshold", halationThreshold);
-    if (j.contains("halation_tint") && j["halation_tint"].is_array() && j["halation_tint"].size() >= 3)
-        halationTint = Vec3(j["halation_tint"][0].get<float>(), j["halation_tint"][1].get<float>(),
-                            j["halation_tint"][2].get<float>());
-    grainIntensity = j.value("grain_intensity", grainIntensity);
-    grainSize = j.value("grain_size", grainSize);
-    colorLut = j.value("color_lut", colorLut);
-    colorLutStrength = j.value("color_lut_strength", colorLutStrength);
                                   m_lensDropBuffer, m_lensDropAlloc);
     if (!ok) {
         Logger::error("PostProcessor: failed to create lens-drop SSBO");

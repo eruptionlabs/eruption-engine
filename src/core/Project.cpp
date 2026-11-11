@@ -74,6 +74,7 @@ bool Project::open(const fs::path& dir, std::string* err) {
         m.description = j.value("description", std::string());
         m.startupMap = j.value("startup_map", std::string());
         m.devTools = j.value("dev_tools", false);
+        m.fastLoad = j.value("fast_load", false);
         readFraming(j, m);
         readLoading(j, m);
         if (j.contains("export") && j["export"].is_object()) m.icon = j["export"].value("icon", std::string());
@@ -143,6 +144,7 @@ bool Project::saveManifest(std::string* err) {
         j["description"] = m_manifest.description;
         j["startup_map"] = m_manifest.startupMap;
         if (m_manifest.devTools) j["dev_tools"] = true;
+        if (m_manifest.fastLoad) j["fast_load"] = true;
         if (m_manifest.hasSpawn) j["spawn"] = {m_manifest.spawn[0], m_manifest.spawn[1], m_manifest.spawn[2]};
         // Salvar o manifesto nao pode APAGAR o enquadramento: o editor grava
         // este arquivo ao mexer no projeto, e o bloco da camera precisa

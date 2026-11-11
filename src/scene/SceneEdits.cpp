@@ -588,6 +588,16 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
     // 110 modelos novos levavam 6,6-9,3 s na abertura de um mapa grande.
     for (const auto& a : added)
         if (a.prefab.empty() && !a.file.empty() && scriptFindModel(a.name) < 0) engine.preloadModel(a.file);
+    {
+        std::vector<std::string> files;
+        for (const auto& a : added)
+            if (a.prefab.empty() && !a.file.empty() && scriptFindModel(a.name) < 0) files.push_back(a.file);
+        engine.prepareSceneModels(files);
+    }
+    // Relevo dos modelos da cena em segundo plano, todos juntos, e subindo um
+    // por quadro (pollReliefJobs): esperado um a um no quadro, o relevo era a
+    // maior parte dos 10-20 s parados ao abrir uma cidade.
+    mr.setReliefDeferred(true);
     for (const auto& a : added) {
         if (scriptFindModel(a.name) >= 0) continue;
         std::string file = a.file, node = a.node;
@@ -619,6 +629,7 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         if (addedOut) addedOut->push_back(std::move(inst));
         ++applied;
     }
+    mr.setReliefDeferred(false);
     // Prefab composto: filhos, etiquetas e scripts sob o objeto da raiz.
     phase("modelos", added.size());
     if (!prefabRoots.empty()) {

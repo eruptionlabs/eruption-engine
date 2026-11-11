@@ -210,24 +210,31 @@ PbrWetness pbrWetSurface(vec3 albedoLin, float roughness, float metallic,
     // Porosity proxy. A rough dielectric is porous (stone, dirt, cloth, wood);
     // a smooth or metallic one is sealed (glass, painted metal, polished tile).
     // Porous surfaces darken and smooth hard; sealed ones barely change.
-    float porosity = clamp(roughness, 0.0, 1.0) * (1.0 - clamp(metallic, 0.0, 1.0));
+    // Piso 0,35: pedra, madeira e terra com mapa de roughness baixo (cozido
+    // liso) ainda escurecem na chuva; so' o metal fica de fora.
+    float porosity = max(clamp(roughness, 0.0, 1.0), 0.35) * (1.0 - clamp(metallic, 0.0, 1.0));
 
     // Standing water in the depressions baked by PbrMapGen. Exposed tops only
     // get damp, low areas actually pool.
     float pool = clamp(cavity, 0.0, 1.0);
-    float film = clamp(wetAmount * collect * (0.55 + 0.45 * pool), 0.0, 1.0);
+    // Chao encharcado (wetAmount ~1 depois de alguns segundos de chuva) fica
+    // com pelicula quase cheia; antes 0,55 x chuva 0,55 dava ~0,3 e mal se via.
+    float film = clamp(wetAmount * collect * (0.8 + 0.2 * pool), 0.0, 1.0);
 
     // (1) Darkening. A very porous wet surface loses roughly a third of its
     // diffuse reflectance; a sealed one loses almost none. Multiplicative so
     // hue is preserved and only value drops.
-    float darken = mix(1.0, mix(0.95, 0.62, porosity), film);
+    float darken = mix(1.0, mix(0.85, 0.45, porosity), film);
     w.albedo = albedoLin * darken;
 
     // (2) Smoothing toward the film's own roughness, scaled by how much pore
     // volume there is for the water to fill. min() so a surface already
     // smoother than the film is never made rougher by getting wet.
-    float filmRough = mix(0.30, 0.06, pool); // a puddle is smoother than damp stone
-    w.roughness = mix(roughness, min(roughness, filmRough), film * porosity);
+    // A pelicula e' agua: lisa em qualquer material. Antes o alisamento era
+    // multiplicado pela porosidade, e com roughness ~0,5 (chao comum) a chuva
+    // quase nao mudava o brilho - "nao ativa o roughness quando chove".
+    float filmRough = mix(0.18, 0.05, pool); // a puddle is smoother than damp stone
+    w.roughness = mix(roughness, min(roughness, filmRough), film);
 
     w.film = film;
     return w;

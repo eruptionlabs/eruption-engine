@@ -526,12 +526,44 @@ void Engine::render() {
         }
     }
 
+    // ERUPTION_TEST_CLASSIC=1 (teste): abre ja' no modo classico (ERUPT OFF).
+    // Aqui e nao no painel de toque: sem ERUPTION_TOUCH_HUD o painel nao
+    // desenha e a captura "original" saia com tudo ligado.
+    static bool s_classicHook = std::getenv("ERUPTION_TEST_CLASSIC") != nullptr;
+    if (s_classicHook) {
+        s_classicHook = false;
+        setClassicMode(true);
+    }
+
     LightingEnvironment env;
     env.sun.direction = m_dayNightCycle.getSunDirection(); env.sun.color = m_dayNightCycle.getSunColor();
     env.sun.intensity = m_dayNightCycle.getSunIntensity(); env.ambientColor = m_dayNightCycle.getAmbientColor();
     env.ambientIntensity = m_dayNightCycle.getAmbientIntensity(); env.ambientSkyColor = m_dayNightCycle.getSkyTopColor();
     env.ambientGroundColor = m_mapGroundAlbedo;
     env.skyHorizonColor = m_dayNightCycle.getSkyHorizonColor();
+
+    // Luz e ambiente do mapa (.env): valem como o MEIO-DIA do mapa, e o ciclo
+    // dia/noite escurece e tinge por cima. Antes eles substituiam o ciclo a
+    // cada quadro: num mapa com .env so' o ceu mudava com a hora. k = sol do
+    // ciclo agora / sol do ciclo ao meio-dia; no amanhecer e no entardecer a
+    // direcao vai para a do ciclo (sombra longa) e a cor puxa para a dele.
+    // Entra ANTES do preenchimento noturno, que leva a luz para a lua.
+    {
+        const float noon = std::max(m_dayNightCycle.sunIntensityCurve.evaluate(0.5f), 1e-3f);
+        const float k = glm::clamp(m_dayNightCycle.getSunIntensity() / noon, 0.0f, 1.0f);
+        if (m_mapAmbientAuthored) {
+            env.ambientColor = m_mapAmbientColor;
+            env.ambientIntensity = m_mapAmbientIntensity * glm::mix(0.35f, 1.0f, k);
+        }
+        if (m_mapLightAuthored) {
+            const Vec3 cyc = env.sun.color;
+            const Vec3 tint = cyc / std::max(std::max(cyc.x, cyc.y), std::max(cyc.z, 1e-3f));
+            const Vec3 dir = glm::mix(env.sun.direction, m_mapSunDirection, glm::smoothstep(0.0f, 0.6f, k));
+            env.sun.direction = glm::length(dir) > 1e-4f ? glm::normalize(dir) : m_mapSunDirection;
+            env.sun.color = m_mapSunColor * glm::mix(tint, Vec3(1.0f), k);
+            env.sun.intensity = m_mapSunIntensity * k;
+        }
+    }
 
     // Night fill: keep the ambient roughly at its daytime level all day/night
     // (the authored spline cranked it to ~4x at night, which flat-washed the
@@ -555,25 +587,59 @@ void Engine::render() {
         }
     }
 
-    // Ambiente do mapa, se o .env escreveu um. Entra DEPOIS do preenchimento
-    // noturno de proposito: a ordem contraria deixava o ciclo apagar o valor
-    // do autor no mesmo quadro em que ele era lido.
-    if (m_mapAmbientAuthored) {
-        env.ambientColor = m_mapAmbientColor;
-        env.ambientIntensity = m_mapAmbientIntensity;
-    }
-    if (m_mapLightAuthored) {
-        env.sun.direction = m_mapSunDirection;
-        env.sun.color = m_mapSunColor;
-        env.sun.intensity = m_mapSunIntensity;
-    }
     if (m_classic.on) applyClassicLight(env);
 
     // Cloud shadows: base strength = sun/(sun+ambient), so a dense cloud
     // darkens the ground like map geometry shadows (author feedback 2026-08-10).
     m_cloudLayerRenderer.setSceneAmbientIntensity(env.ambientIntensity);
     m_deferredLighting.setEnvironment(env);
-    m_deferredLighting.setWeatherState(m_weatherSystem.current().rainIntensity,
+    // Chuva local: discos das nuvens de chuva do campo (centro andando com o
+    // vento, raio do blob). Com o campo de nuvens ligado a chuva cai so'
+    // debaixo delas (o global nao desenha), entao o chao so' molha ali.
+    {
+        static std::vector<Vec4> spots;
+        spots.clear();
+        for (const auto& icl : m_independentCloudLayers) {
+            if (!icl.hasRain || !icl.array) continue;
+            const Vec3 wmin = icl.array->worldMin(), wmax = icl.array->worldMax();
+            const Vec2 windUv = icl.array->windOffset();
+            const Vec2 drift(windUv.x * (wmax.x - wmin.x), windUv.y * (wmax.z - wmin.z));
+            for (const LocalCloud& lc : icl.array->localClouds()) {
+                if (!lc.alive || spots.size() >= 64) continue;
+                spots.emplace_back(lc.center.x + drift.x, lc.center.y + drift.y, std::max(lc.radius.x, lc.radius.y), 1.0f);
+            }
+        }
+        // Rastro molhado: onde choveu continua molhado e seca devagar
+        // (kSecaS), mesmo depois que a nuvem passou ou a chuva parou.
+        constexpr float kSecaS = 90.0f;
+        const float dtw = std::min(m_timer.deltaTime(), 0.1f);
+        for (Vec4& t : m_wetTrail) t.w -= dtw / kSecaS;
+        m_wetTrail.erase(std::remove_if(m_wetTrail.begin(), m_wetTrail.end(), [](const Vec4& t) { return t.w <= 0.02f; }),
+                         m_wetTrail.end());
+        for (const Vec4& sp : spots) {
+            Vec4* near = nullptr;
+            for (Vec4& t : m_wetTrail)
+                if (glm::length(Vec2(t.x - sp.x, t.y - sp.y)) < 0.5f * std::max(t.z, sp.z)) { near = &t; break; }
+            if (near) { near->x = sp.x; near->y = sp.y; near->z = std::max(near->z, sp.z); near->w = 1.0f; }
+            else m_wetTrail.push_back(sp);
+        }
+        if (m_wetTrail.size() > 64) {
+            std::sort(m_wetTrail.begin(), m_wetTrail.end(), [](const Vec4& a, const Vec4& b) { return a.w > b.w; });
+            m_wetTrail.resize(64);
+        }
+        m_deferredLighting.setRainSpots(m_wetTrail, m_useProceduralCloudField && m_autoCloud && m_cloudLayersEnabled);
+    }
+    // Chao encharca com a chuva (~6 s) e seca devagar quando ela para: o
+    // roughness volta ao normal em kSeca segundos, nao de uma vez.
+    {
+        constexpr float kSeca = 90.0f;
+        const float dtw = std::min(m_timer.deltaTime(), 0.1f);
+        const float rain = m_weatherSystem.current().rainIntensity;
+        const float alvo = rain > 0.02f ? std::min(1.0f, 0.4f + rain) : 0.0f;
+        if (alvo > m_groundWet) m_groundWet += (alvo - m_groundWet) * (1.0f - std::exp(-dtw / 6.0f));
+        else m_groundWet = std::max(alvo, m_groundWet - dtw / kSeca);
+    }
+    m_deferredLighting.setWeatherState(m_groundWet,
                                        m_weatherSystem.current().snowIntensity,
                                        m_weatherSystem.temperatureC());
 
@@ -1999,7 +2065,16 @@ void Engine::render() {
                           : (m_currentMap && m_currentMap->env.fog.set) ? &m_currentMap->env.fog : nullptr;
         if (fog) {
             postSettings.enableFog = fog->opacity > 0.001f;
-            postSettings.fogColor = fog->color;
+            // A cor autoral e' a do dia: o ciclo escurece por cima (antes a
+            // nevoa ficava clara a noite e lavava a cena de branco). Mesmo k da
+            // luz do .env: sol do ciclo agora / ao meio-dia; a noite puxa para
+            // a cor de nevoa do proprio ciclo, escurecida.
+            {
+                const float noon = std::max(m_dayNightCycle.sunIntensityCurve.evaluate(0.5f), 1e-3f);
+                const float k = glm::clamp(m_dayNightCycle.getSunIntensity() / noon, 0.0f, 1.0f);
+                const Vec3 night = glm::min(m_dayNightCycle.getFogColor(), fog->color) * 0.35f;
+                postSettings.fogColor = glm::mix(night, fog->color, glm::smoothstep(0.0f, 0.5f, k));
+            }
             postSettings.fogStart = fog->start;
             postSettings.fogEnd = fog->end;
             postSettings.fogOpacity = fog->opacity;

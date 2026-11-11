@@ -47,7 +47,9 @@ bool Window::init(int width, int height, const std::string& title) {
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+    // Sem monitor (tela desligada/DPMS: o X para de listar saida) o primario
+    // vem nulo e glfwGetVideoMode(nullptr) derrubava a engine no X11.
+    const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
     int nativeW = mode ? mode->width : width;
     int nativeH = mode ? mode->height : height;
 

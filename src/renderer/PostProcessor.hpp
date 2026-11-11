@@ -213,6 +213,12 @@ public:
         AdaptiveFocalMethod cocAdaptiveFocalMethod = AdaptiveFocalMethod::SingleRay;
         float cocAdaptiveFocalDamping = 0.05f; // 0..1 interpolation factor per frame at 60fps
 
+        // BOKEH DOS REALCES (so' no dof_quality 3, bokeh_gather.frag): a
+        // amostra cuja luminancia exposta passa de bokehThreshold pesa
+        // 1 + bokehIntensity x excesso na media do disco, entao o ponto claro
+        // fora de foco vira um disco visivel em vez de sumir na media.
+        // bokehShape: 0 = disco, 1 = hexagono (abertura de 6 laminas).
+        // Intensidade 0 (padrao) = a coleta de sempre, bit a bit.
         float bokehThreshold = 0.6f;
         float bokehIntensity = 0.0f;
         float bokehShape = 0.0f;
@@ -256,12 +262,6 @@ public:
 
         bool enableMotionBlur = true;
         float motionBlurAmount = 1.0f;
-        // BOKEH DOS REALCES (so' no dof_quality 3, bokeh_gather.frag): a
-        // amostra cuja luminancia exposta passa de bokehThreshold pesa
-        // 1 + bokehIntensity x excesso na media do disco, entao o ponto claro
-        // fora de foco vira um disco visivel em vez de sumir na media.
-        // bokehShape: 0 = disco, 1 = hexagono (abertura de 6 laminas).
-        // Intensidade 0 (padrao) = a coleta de sempre, bit a bit.
         // Tempo do quadro (s), escrito pelo Engine a cada quadro. O comprimento do
         // borrao de movimento vem do deslocamento ENTRE quadros, que cresce com o
         // tempo do quadro: com a banda/GPU reduzida (fps cai) o rastro ficava
@@ -389,6 +389,11 @@ private:
     VkImageView renderGodRays(VkCommandBuffer cmd, const Mat4& viewProj, const Mat4& proj,
                               const PostSettings& settings, const DioramaLookConfig& look,
                               VkImageView depthInput, VkImageView hdrInput, const Vec3& lightDir);
+    // Halation (PostSettings::halationIntensity) depois do bloom, nas imagens
+    // 1..4 da piramide dele: devolve o borrao em 1/8 da resolucao (bloom up
+    // 2) ou VK_NULL_HANDLE quando desligado.
+    VkImageView renderHalation(VkCommandBuffer cmd, VkImageView hdrInput, float threshold, float exposure);
+    VkPipeline m_halationPipeline = VK_NULL_HANDLE;
     static constexpr uint32_t AE_FRAMES = 3;
     VkPipeline m_lumHistPipeline = VK_NULL_HANDLE;
     VkPipeline m_lumAdaptPipeline = VK_NULL_HANDLE;
@@ -401,11 +406,6 @@ private:
     VkDescriptorSet m_lumAdaptSet = VK_NULL_HANDLE;
     VkBuffer m_lumHistBuffer = VK_NULL_HANDLE;
     VmaAllocation m_lumHistAlloc = VK_NULL_HANDLE;
-    // Halation (PostSettings::halationIntensity) depois do bloom, nas imagens
-    // 1..4 da piramide dele: devolve o borrao em 1/8 da resolucao (bloom up
-    // 2) ou VK_NULL_HANDLE quando desligado.
-    VkImageView renderHalation(VkCommandBuffer cmd, VkImageView hdrInput, float threshold, float exposure);
-    VkPipeline m_halationPipeline = VK_NULL_HANDLE;
     VkBuffer m_lumExpBuffer = VK_NULL_HANDLE;
     VmaAllocation m_lumExpAlloc = VK_NULL_HANDLE;
     void* m_lumExpMapped = nullptr;

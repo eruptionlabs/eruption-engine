@@ -133,7 +133,11 @@ void drawProjectLoadingBar(ImDrawList* dl, const ImVec2& display, const LoadingS
     if (!style.text.empty()) {
         strokedText(dl, font, size, ImVec2(pMin.x, line), textCol, style.text.c_str(), stroke, strokeCol);
     } else if (!task.empty()) {
-        strokedText(dl, font, size, ImVec2(pMin.x, line), IM_COL32(150, 150, 150, 255), task.c_str(), stroke, strokeCol);
+        // Cortada antes do % (tarefa longa passava por cima dele).
+        const std::string fit = fitLoadingText(task, width - pctSize.x - 12.0f * ts, [&](const char* t) {
+            return font->CalcTextSizeA(size, FLT_MAX, 0.0f, t).x;
+        });
+        strokedText(dl, font, size, ImVec2(pMin.x, line), IM_COL32(150, 150, 150, 255), fit.c_str(), stroke, strokeCol);
         if (!mapName.empty())
             strokedText(dl, font, size, ImVec2(pMin.x, line - size - 2.0f * ts), textCol, mapName.c_str(), stroke, strokeCol);
     }

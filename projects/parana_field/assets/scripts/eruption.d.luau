@@ -42,6 +42,14 @@ declare ui: {
     -- Text of the box under the minimap instead of map name, cell and time;
     -- nil goes back to the default.
     minimap_label: (text: string?) -> (),
+    -- The engine's own minimap orthographic frame: world (cx, cz) of its
+    -- centre and zoom (half-side in world units). This is the REAL frame the
+    -- engine baked (from terrain/instance AABBs), not the map's nominal size,
+    -- so it stays correct on a map whose geometry does not match its grid, or
+    -- while it is still loading. Use it to place minimap markers instead of
+    -- recomputing the framing formula from map data. zoom <= 0 before the
+    -- first bake (no map loaded yet).
+    minimap_frame: () -> (number, number, number),
     -- Position and size of an element of the loaded UI file, in percent of
     -- its parent (or of the screen), like CSS left/top/width/height. Without
     -- width/height the file's size stays; left = nil gives it back to the CSS.
@@ -54,6 +62,14 @@ declare ui: {
     -- the camera of that frame. Its children (--parent) follow it, and it
     -- hides while the character is off screen. character = nil lets go.
     anchor: (selector: string, character: string?, dy: number?) -> (),
+    -- The element shows a character facing front, cropped to `crop` = {x, y,
+    -- w, h} in fractions of its first idle frame (default the whole frame,
+    -- {0, 0, 1, 0.4} for the head), fit inside without stretching. It plays
+    -- the idle at the sheet's delay; a named animation the character plays
+    -- (characters.play, a hit) shows on the same frame, and its flash and
+    -- fade tint the portrait. No script runs per frame. character = nil
+    -- lets go.
+    portrait: (selector: string, character: string?, crop: { number }?) -> (),
     -- A badge on the element's top-right corner: text ("+", "3") or a PNG of
     -- the project; nil removes it. It hides with the element and has its own
     -- touch area of at least 48 dp: ui.clicked(selector .. ":badge"), and a
@@ -154,7 +170,9 @@ declare world: {
     look: () -> string,
     -- `preset` may also be a TABLE with the same fields as a preset (only
     -- the given ones change): a game's own look without a preset in the engine.
-    -- Fields include saturation, contrast, god_ray_*, vignette (strength,
+    -- Fields include saturation, contrast, god_ray_*, lens_flare (multiplies
+    -- the preset's sun lens flare; 0 hides it), lens_flare_rays (lines of
+    -- the flare's star; 1 = a single streak), vignette (strength,
     -- 0 = off), vignette_softness, shadow_tint / highlight_tint (a color as
     -- vector or {r, g, b}) with shadow_tint_strength / highlight_tint_strength.
     set_look: (preset: string | { [string]: any }) -> boolean,
@@ -176,8 +194,19 @@ declare world: {
     set_time_scale: (scale: number, seconds: number?) -> (),
     time_scale: () -> number,
     -- Walk grid of the engine (block_slopes and solid objects included):
-    -- whether a character of `radius` can stand at (x, z).
-    walkable: (x: number, z: number, radius: number?) -> boolean,
+    -- whether a character of `radius` can stand at (x, z). With terrain
+    -- rules on (set_nav_rules) or a `caps` table it is the whole ground test
+    -- of floor_walkable on the highest floor there: stone tops, bridges,
+    -- liquid. caps: swim enters deep water, protected enters hazards (lava,
+    -- "hazard" surfaces); a knocked-back body is the game's call.
+    walkable: (x: number, z: number, radius: number?, caps: { swim: boolean?, protected: boolean? }?) -> boolean,
+    -- Terrain rules: every cell inside the maps in the scene walks, except
+    -- steep ones (more than max_step of rise within half a cell, or steeper
+    -- than max_slope degrees, from the terrain heights); the painted walk
+    -- grid no longer counts. Objects decide by their surface (models.
+    -- set_surface), liquids by caps. Stays on for later maps; nil turns it off.
+    set_nav_rules: (rules: { max_step: number?, max_slope: number? }?) -> (),
+    nav_rules: () -> { max_step: number, max_slope: number }?,
     -- Cost of walking the grid cells within `radius` of (x, z) (0: only the
     -- cell of the point), this run only: 1 is normal, math.huge blocks.
     -- walkable, path and walking see it in the same frame; path goes around
@@ -190,21 +219,33 @@ declare world: {
     -- { radius, margin } (world units) keeps every cell and every smoothed
     -- segment radius + margin away from solids AND from cells that do not
     -- walk (walls, blocked slopes); a start that touches a wall may leave it.
-    path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number? })?) -> { vector }?,
+    -- The searches of one frame share a time budget: when it runs out the
+    -- path ends at the point found closest to `to` (ask again later), and
+    -- once it is spent the call returns nil.
+    -- avoid_liquid (true, "lava" or "water") keeps the path out of cells with
+    -- that liquid over the floor; the body can still stand there. The path
+    -- also runs on solid objects: a bridge is crossed on its deck when the
+    -- walk reaches it at its end, and passed under from below.
+    -- With terrain rules on, the path also stays out of hazards and deep
+    -- water unless the table says protected / swim.
+    path: (from: vector, to: vector, radius: (number | { radius: number?, margin: number?, avoid_liquid: (boolean | string)?, swim: boolean?, protected: boolean? })?) -> { vector }?,
     -- Floor under (x, z) counting solid objects (bridges, walkways, kit
     -- slabs): the highest top below `fromY` (default: anywhere). Second value:
     -- true when it is an object, not the terrain.
     floor_height: (x: number, z: number, fromY: number?) -> (number, boolean),
     -- Whether a character of `radius` can stand on that floor: the walk grid
     -- on the terrain, the piece itself on an object, no other solid in the body.
-    floor_walkable: (x: number, z: number, radius: number?, fromY: number?) -> boolean,
+    floor_walkable: (x: number, z: number, radius: number?, fromY: number?, caps: { swim: boolean?, protected: boolean? }?) -> boolean,
     -- Liquid showing at (x, z) (inside its shore and above the floor: a bridge
     -- over lava has none): {kind = "water" | "lava", level, index} or nil.
     -- index is the map's liquid (1-based), 0 for the global water plane.
     liquid_at: (x: number, z: number) -> { kind: string, level: number, index: number, map: string? }?,
     -- A whole nx * nz grid from (x0, z0) with spacing `step`, x varying
     -- fastest: heights (f32 per point) and flags (u8 per point: 1 walkable,
-    -- 2 water, 4 lava, 8 on an object). Read with buffer.readf32(h, i * 4).
+    -- 2 water, 4 lava, 8 on an object; when not walkable, 16 wall (steep
+    -- cell or a solid in the body) or 32 blocked (outside the maps, painted
+    -- cell, "blocked" object); 64 standing on a "hazard" object).
+    -- Read with buffer.readf32(h, i * 4).
     ground_grid: (x0: number, z0: number, step: number, nx: number, nz: number, radius: number?) -> (buffer, buffer),
     -- The game's own fog: {color = vector or {r, g, b}, start, end, opacity,
     -- height, falloff} (the map .env "fog" block fields). Wins over the map's
@@ -238,8 +279,13 @@ declare world: {
     -- that many world units on each side of the point fully sharp (a whole
     -- group, not a single plane); `max_blur` is the blur limit in pixels at
     -- full resolution (default 3; above it a cheap wide blur takes over). No
-    -- point at all gives the lens back to the automatic focus.
-    set_focus: (point: vector?, aperture: number?, foreground: boolean?, band: number?, max_blur: number?) -> (),
+    -- point at all gives the lens back to the automatic focus. The second
+    -- argument may also be a table: {aperture, foreground, band, max_blur,
+    -- model = \"linear\" | \"thin_lens\" | \"tilt_plane\", tilt_angle (degrees,
+    -- 0 = upright plane facing the camera, 90 = level plane), ramp_near,
+    -- ramp_far (world units after the band), max_near, max_far (pixels at
+    -- 1080p), screen_mix (0..1, mixes in a screen-height band)}.
+    set_focus: (point: vector?, aperture: (number | {[string]: any})?, foreground: boolean?, band: number?, max_blur: number?) -> (),
     -- Hides map and model geometry inside a volume (a mountain or a wall
     -- between the camera and the action) as a dither pattern. `slot` is 1..4;
     -- nil turns that slot off. Table: shape = "box" (size = vector, full
@@ -264,6 +310,13 @@ declare world: {
     -- player walks into the mouth of the passage, not when they reach it.
     warp_map: (map: string) -> (),
     warping: () -> boolean,
+    -- How close (meters from the map's edge) the player gets before a neighbor
+    -- map of the scene starts loading in its thread (default 300; 50..3000).
+    -- A bigger distance starts the load earlier, so a heavy neighbor is ready
+    -- by the time the player reaches it, at the cost of keeping more maps in
+    -- memory (a neighbor is released only past 1.5x this distance).
+    set_load_distance: (meters: number) -> (),
+    load_distance: () -> number,
     -- Reads a map in a thread ahead of time; a later warp_map to it only
     -- uploads. Call it when the next area becomes likely. False if the map
     -- does not exist.
@@ -411,6 +464,13 @@ declare characters: {
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,
+    -- Takes a character out of the scene. When it was the last one using its
+    -- sprite sheet, the sheet's GPU memory (and, on phones, its texture layers)
+    -- is released too. False if there is no such character.
+    remove: (name: string) -> boolean,
+    -- Releases a sprite sheet no character uses any more (a monster type that
+    -- has left the scene). False if some character still uses it or it is not loaded.
+    release_sheet: (sprite: string) -> boolean,
     -- Characters placed in the scene (drag a PNG from the Project panel), by name.
     exists: (name: string) -> boolean,
     position: (name: string) -> vector,
@@ -425,7 +485,9 @@ declare characters: {
     say: (name: string, text: string, seconds: number?) -> (),
     -- Extra animation of the sprite (Sprite Importer > Extra animations), e.g.
     -- "attack"; once unless `loop`. "" goes back to standing/walking.
-    play: (name: string, animation: string, loop: boolean?) -> boolean,
+    -- `seconds`: the whole animation lasts that long (each loop, when
+    -- looping), e.g. an attack fitted to the interval between hits.
+    play: (name: string, animation: string, loop: boolean?, seconds: number?) -> boolean,
     -- Extra animation playing now ("" when standing or walking).
     animation: (name: string) -> string,
     -- Follows the player, stopping `distance` away (default 30).
@@ -454,6 +516,10 @@ declare characters: {
     -- Top of the character's sprite on screen, in UI pixels (those of
     -- ui.size), and whether it is on screen this frame.
     head_screen: (name: string) -> (number, number, boolean),
+    -- A ring on the ground under the character's feet, lying on the relief.
+    -- It follows hide/show, fade and team vision. width defaults to 15% of
+    -- the radius (at least 1), color to white, alpha to 0.8. nil removes it.
+    ring: (name: string, ring: { radius: number, color: vector?, alpha: number?, width: number? }?) -> (),
 }
 
 declare camera: {
@@ -477,7 +543,10 @@ declare camera: {
     -- screen, down to `opacity` (default 0.25) at the center. 0 turns it off.
     -- center "focus": around the point given to world.set_focus instead (a
     -- group under a bridge, with the leader off to the side); the player
-    -- while no focus point is set. options.band: also the strip of the
+    -- while no focus point is set. With "focus", each character within
+    -- `radius` of it also gets its own patch, cutting what stands more than
+    -- 4 units in front of that character (a rock right in front of a big
+    -- mount). options.band: also the strip of the
     -- screen below the center, down to the edge, cutting what is more than
     -- `band` world units in front of it (a low camera looking past rocks);
     -- painted ground meshes and floors at foot height stay.
@@ -587,6 +656,15 @@ declare models: {
     -- Solid models block the player (the bottom of the model: trunk, wall base).
     solid: (model: Model) -> boolean,
     set_solid: (model: Model, solid: boolean) -> (),
+    -- Surface of a model for walking: "floor" (the solid above: its top is
+    -- floor, what rises past a step is wall), "hazard" (floor only for
+    -- protected walkers), "blocked" and "wall" (never stepped on, at any
+    -- height; wall also tells the game it stops projectiles), "none". In the
+    -- scene file: objects = { name = { surface = "hazard" } }.
+    surface: (model: Model) -> string,
+    set_surface: (model: Model, surface: string) -> (),
+    -- The same by model file, for every instance now and later (see set_solid_file).
+    set_surface_file: (file: string, surface: string) -> (),
     -- Models with a skeleton (.glb with skin): plays the animation by name
     -- ("" = rest pose). loop defaults to true, speed to 1. The pose on screen
     -- blends into the new one over `fade` seconds (default 0.2; 0 = cut).
@@ -656,6 +734,18 @@ declare lights: {
     set_sprite_shadow: (index: number, on: boolean, map: string?) -> (),
 }
 
+-- Texture layer use (phones). `lost` = textures that show the default texture
+-- right now because no layer was left; `lost_events` = failed attempts since
+-- start (one per retry). Release unused characters/maps when `lost` > 0.
+type PerfLayers = {
+    used: number,
+    capacity: number,
+    waiting: number,            -- copies still queued
+    lost: number,
+    lost_events: number,
+    side: number,               -- pixels of each layer
+}
+
 -- Machine readings for a performance meter. A field is nil where this
 -- machine does not report it. Temperatures in degrees Celsius.
 type PerfSystem = {
@@ -675,6 +765,38 @@ type PerfSystem = {
     thermal: string?,
     -- Phones: 1.0 = the point where the system starts to throttle.
     thermal_headroom: number?,
+    -- GPUs without descriptor indexing (most phones): the texture layers all
+    -- textures are copied into. nil on GPUs that do not use them.
+    layers: PerfLayers?,
+}
+
+-- One render pass in perf.bandwidth(): megabytes its attachments read and
+-- write (format x size x load/store; texture sampling, compute and copies are
+-- not counted) and its GPU time where the GPU has timers.
+type PerfBandwidthPass = {
+    name: string,
+    read_mb: number,
+    write_mb: number,
+    gpu_ms: number?,
+}
+
+-- Memory traffic of the last frame. The pass list is an estimate; the dram_*
+-- fields are measured by the memory controller (Intel on Linux; the whole
+-- system: CPU, integrated GPU and display) and vram_busy_pct by the NVIDIA
+-- driver (percent of time the video memory was busy, not GB/s).
+type PerfBandwidth = {
+    read_mb: number,
+    write_mb: number,
+    passes: { PerfBandwidthPass },
+    dram_read_gbs: number?,
+    dram_write_gbs: number?,
+    dram: string,               -- counter source, or why there is none
+    vram_busy_pct: number?,
+    -- Render targets seen, how many carry a flag that turns off framebuffer
+    -- compression, and the distinct warnings written to the log.
+    audit: { targets: number, flagged: number, warnings: number },
+    -- Sampled textures in memory: block-compressed and uncompressed.
+    textures: { compressed_mb: number, uncompressed_mb: number },
 }
 
 -- Performance counters for an on-screen meter: the numbers the engine already
@@ -695,6 +817,38 @@ declare perf: {
     set_fps_cap: (fps: number) -> (),
     -- Temperatures, battery and memory, read at most once a second.
     system: () -> PerfSystem,
+    -- Bytes moved per render pass in the last frame and measured memory
+    -- traffic where the machine has a counter.
+    bandwidth: () -> PerfBandwidth,
+}
+
+-- The engine's loading screen, held by the game while it builds its own
+-- scene: called before the first frame of a map (top of a script,
+-- on.start, or before a map change), no frame of the scene shows until
+-- release. The game keeps running behind it; the bar creeps toward 99%
+-- and never reaches 100%.
+declare loading: {
+    -- Holds the loading screen; let go by itself after max_seconds
+    -- (default 30) so a missing release never locks the game.
+    hold: (max_seconds: number?) -> (),
+    release: () -> (),
+    held: () -> boolean,
+    -- Pending loading work: (done, total, ready). done/total is the loading
+    -- bar's fraction and never goes back. total counts the map plus every
+    -- sprite sheet being prepared, neighbor map loading, texture waiting
+    -- for upload and sound decoding seen since this load began. The map
+    -- itself ends at 0.95; the rest is that pending work. On the first load
+    -- with the project's loading screen the bar gives the boot 0-30% and
+    -- the map 30-100%, so done/total is 0.3 + 0.7 * p there, as drawn.
+    -- ready (and done/total = 1) only when nothing is pending; then it stays
+    -- ready until the next map load (later streaming is the game running).
+    progress: () -> (number, number, boolean),
+    -- The game's own queue while the screen is held: done of total steps.
+    -- The last part of the bar is the game's ("game_share" in the
+    -- project's "loading" block, e.g. 0.3). Between calls the bar keeps
+    -- moving at the pace of the steps so far, slowing down when a step
+    -- runs long; it shows 100% on the frame of release.
+    game_progress: (done: number, total: number) -> (),
 }
 
 -- Particle effects (Window > Effects). `name` is an effect of the game
@@ -709,7 +863,10 @@ declare vfx: {
     -- As a table: {scale, yaw, color = vector (recolors, keeping each key's
     -- brightness), tint = vector (multiplies), offsets = {emitter = vector}
     -- (meters, effect space)} - color variants without one file per color.
-    play: (name: string, position: vector, options: (number | { [string]: any })?, yaw: number?) -> number,
+    -- vision = false (also "vision": false in the .vfx.json): scenery that
+    -- team vision only dims, never hides. The table may also come after a
+    -- number scale: play(name, pos, 2, {vision = false}).
+    play: (name: string, position: vector, options: (number | { [string]: any })?, yaw: (number | { [string]: any })?) -> number,
     -- Stops spawning (the live particles finish); `immediate` clears them now.
     stop: (id: number, immediate: boolean?) -> (),
     -- Moves a playing effect (a trail follows the object this way).
@@ -821,6 +978,49 @@ declare objects: {
     -- The object of a models.* index.
     of_model: (model: number) -> Object?,
     count: () -> number,
+}
+
+-- Game event log for balancing: one JSON object per line (JSONL). The first
+-- line is {"ch":"_head", v, project, map, build, date, part}; each event is
+-- {"t": game time in ms, "f": script frame, "ch": channel, ...your fields};
+-- the last is {"ch":"_end", events, dropped}. tools/telemetry_summary.py
+-- prints count, sum, mean, p50 and p95 per channel and field.
+-- Also turned on by --game-telemetry <file> or ERUPTION_GAME_TELEMETRY.
+-- While off, emit costs nothing. Writing happens off the game thread through
+-- a fixed 1 MB buffer: if it fills, events are dropped and counted, the
+-- frame never waits for the disk.
+declare telemetry: {
+    -- Records an event. Fields are flat: number, boolean, string (cut at 512
+    -- bytes) or vector; t, f and ch are reserved. Channels starting with "_"
+    -- belong to the engine.
+    emit: (channel: string, fields: { [string]: any }?) -> (),
+    -- Starts a new file (truncates it) and returns its full path, or nil. A
+    -- relative path lands in the game's data folder, next to the saves, under
+    -- telemetry/. Past max_mb (default 64) the file becomes <file>.1 and a
+    -- new part starts.
+    open: (path: string, options: { max_mb: number? }?) -> string?,
+    -- Writes what is pending and the "_end" line. Stopping the game closes too.
+    close: () -> (),
+    enabled: () -> boolean,
+    -- Events written and dropped since open.
+    stats: () -> (number, number),
+    -- Packs every file in telemetry/ into one .zip (each cut at its last full
+    -- line; the open session's newest ~1 s may be missing) and returns the
+    -- path it will have, or nil when there is nothing to pack or an export is
+    -- still running. The zip is written in the background and appears at that
+    -- path whole when done (see exporting). On PC it lands in the user's
+    -- Documents folder; the name is the one given (letters, digits, '-', '_',
+    -- '.') or <game>-telemetry-<date>.zip.
+    export: (name: string?) -> string?,
+    -- Whether an export is still being written, and whether the last one
+    -- that finished succeeded (nil before any finished).
+    exporting: () -> (boolean, boolean?),
+    -- Opens the system share sheet for a path that `export` returned, once
+    -- `exporting` says it finished. Android only (the file sits in the
+    -- app's own storage, unreachable by other apps without this); on PC and
+    -- the browser it does nothing and returns false, since the file is
+    -- already in a folder the player can open directly.
+    share: (path: string) -> boolean,
 }
 
 -- C++ functions of this project (native/*.cpp, include/eruption/native_module.h):

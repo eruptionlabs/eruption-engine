@@ -301,7 +301,8 @@ bool Engine::reliefAlphaFromAlbedo(const std::string& name, bool pixels, std::ve
         if (!m_currentMap) return false;
         for (const auto& model : m_currentMap->models)
             for (const auto& et : model.embeddedTextures) {
-                if (et.name != key) continue;
+                // A chave do cache de texturas leva um '#' na frente; o nome da imagem no arquivo nao.
+                if (et.name != key && !(key.size() > 1 && key[0] == '#' && et.name == key.substr(1))) continue;
                 auto a = std::make_shared<ReliefAlbedo>();
                 if (!et.pixels.empty()) {
                     a->bytes = et.pixels;

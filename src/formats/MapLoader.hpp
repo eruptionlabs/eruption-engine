@@ -39,6 +39,21 @@ struct WorldBorder {
 // ao world.set_border.
 WorldBorder parseWorldBorder(const nlohmann::json& b);
 
+// CAIXA DAS NUVENS DO CLIMA por mapa ("cloud_box" no .env: {bottom, thickness,
+// shadows, count, density}): onde nascem as nuvens independentes do campo do
+// clima, igual a --cloud-bottom/--cloud-thickness (p.ex. abaixo de uma cidade
+// flutuante). count = minimo de nuvens que o mapa sempre tem, em qualquer
+// clima (o limpo nao tem nenhuma); density e scale = densidade e tamanho delas. Sem o bloco, a caixa de antes.
+struct MapCloudLayer {
+    bool set = false;
+    float bottom = 500.0f;
+    float thickness = 800.0f;
+    bool shadows = true; // caixa abaixo do chao: sem sombra de nuvem no mapa
+    int count = 0;
+    float density = 0.6f;
+    float scale = 0.0f; // tamanho das nuvens do minimo (0 = o do clima)
+};
+
 struct LoadedMap {
     std::string mapName;
 
@@ -237,6 +252,7 @@ struct LoadedMap {
         // BORDA-VAZIO ("world_border" no .env, E-BORDA-VAZIO/spec 12): vence
         // ate' world.set_border chamar. Ver WorldBorder.
         WorldBorder worldBorder;
+        MapCloudLayer cloudLayer;
     } env;
 
     // Approximate CPU RAM used by this map's raw parsed data

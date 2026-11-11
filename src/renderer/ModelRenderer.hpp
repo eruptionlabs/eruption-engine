@@ -1230,6 +1230,7 @@ private:
     LodSwitch lodSwitchFor(const ModelInstanceHot& hot, const ModelMeshGPU& mesh) const;
     static LodFadePair lodFadePairFor(const ModelMeshGPU& mesh, const LodSwitch& sw, float dist);
     uint8_t lodLevelFor(uint32_t idx, const ModelMeshGPU& mesh) const;
+    bool reliefNear(uint32_t idx) const; // relevo assado so' perto da camera
     uint8_t sizeLevelFor(uint32_t idx, const ModelMeshGPU& mesh) const;
     uint8_t rdLevelFor(uint32_t idx, const ModelMeshGPU& mesh) const;
     // Degrau da cadeia intermediaria (1 = cheia, 4.. = mid) por triangulo/pixel.

@@ -132,8 +132,9 @@ void logSynthesisLevels(const NeuralPbrStats& before, size_t synthesized, uint64
 // O que o motor faz com a saida da rede tambem muda o pack: a versao do
 // pos-processo entra na chave (1 = altura refinada pelas linhas do albedo,
 // refineHeightWithAlbedoLines; 2 = rede na resolucao da textura ate' 1024,
-// synthesizePbrFromPixels). Pack de rede antigo e' re-assado uma vez.
-constexpr uint32_t kNeuralPostVersion = 2u;
+// synthesizePbrFromPixels; 3 = mapa PBR do disco antes da rede). Pack de rede
+// antigo e' re-assado uma vez.
+constexpr uint32_t kNeuralPostVersion = 3u;
 
 uint32_t synthKey(bool synthPbr) {
     if (!synthPbr) return 0u;
@@ -144,11 +145,12 @@ uint32_t synthKey(bool synthPbr) {
 }
 
 // Pack assado com a rede numa maquina vale numa maquina SEM rede (ex.: GPU
-// fraca com o PBR vindo pronto). Com rede aqui, so' o pack da mesma rede.
+// fraca com o PBR vindo pronto) e com a sintese desligada (carga rapida): o
+// trabalho ja' esta' feito. Com rede aqui, so' o pack da mesma rede.
 bool synthKeyAccepted(uint32_t cached, bool synthPbr) {
     const uint32_t local = synthKey(synthPbr);
     if (cached == local) return true;
-    return local == 1u && cached > 1u;
+    return local <= 1u && cached > 1u;
 }
 
 // Impressao digital do .glb: hash de 64 trechos de 64 KB espalhados pelo
@@ -186,6 +188,9 @@ bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
                EmbeddedBakeResult& out) {
     std::error_code ec;
     std::string path = packPathFor(glbPath, maxSize, synthPbr);
+    // Sintese desligada: o pack assado com ela tambem serve (synthKeyAccepted).
+    if (!synthPbr && !fs::exists(path, ec) && fs::exists(packPathFor(glbPath, maxSize, true), ec))
+        path = packPathFor(glbPath, maxSize, true);
     if (!fs::exists(path, ec)) {
         // Compatibilidade: pack antigo sem sufixo. O cabecalho carrega
         // maxSize/synthPbr, entao a validacao abaixo rejeita se nao bater.
@@ -420,6 +425,30 @@ bool readEmbeddedBakeCache(const ModelFile& model, uint32_t maxTextureSize, bool
     return readCache(model.filePath, maxTextureSize, synthesizePbr, out);
 }
 
+namespace {
+// _mrahw/_normal do disco em RGBA cru (o resto do bake comprime os pixels).
+bool loadDiskPbrRgba(const std::string& albedoName, PbrTextureData& mrahw, PbrTextureData& normal) {
+    const PbrTexturePathPair paths = resolvePbrTexturePaths(albedoName);
+    if (!paths.valid || paths.mrahw.empty() || paths.normal.empty()) return false;
+    auto load = [](const std::string& path, PbrTextureData& out) {
+        ImageData img = ImageUtils::loadPNG(path);
+        if (!img.isValid() || (img.channels != 4 && img.channels != 3)) return false;
+        if (img.channels == 3) {
+            std::vector<uint8_t> rgba(static_cast<size_t>(img.width) * img.height * 4, 255);
+            for (size_t i = 0; i < static_cast<size_t>(img.width) * img.height; ++i)
+                for (int c = 0; c < 3; ++c) rgba[i * 4 + c] = img.pixels[i * 3 + c];
+            img.pixels = std::move(rgba);
+        }
+        out.pixels = std::move(img.pixels);
+        out.width = img.width;
+        out.height = img.height;
+        out.channels = 4;
+        return true;
+    };
+    return load(paths.mrahw, mrahw) && load(paths.normal, normal);
+}
+} // namespace
+
 EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxTextureSize,
                                         bool synthesizePbr) {
     EmbeddedBakeResult res;
@@ -485,6 +514,7 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
     std::atomic<size_t> compressed{0};
     std::atomic<uint64_t> synthMicros{0};
     std::atomic<size_t> synthesized{0};
+    std::atomic<size_t> fromDisk{0};
     const NeuralPbrStats statsBefore = neuralPbrStats();
 
     JobSystem::instance().parallelFor(static_cast<uint32_t>(n), [&](uint32_t i) {
@@ -544,15 +574,20 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
             baked[i].albedoOpaque = !hasAlpha;
         }
 
-        if (synthesizePbr) {
+        { // PBR: o do disco sempre; a rede so' com a sintese ligada
             PbrTextureData mrahw, normal;
             const auto itOrg = organicImage.find(et.name);
             const bool organic = itOrg != organicImage.end() && itOrg->second;
             const auto synthStart = std::chrono::steady_clock::now();
-            const bool synthOk = synthesizePbrFromPixels(pixels, w, h, 4, mrahw, normal, organic);
+            // Mapa PBR pronto no disco (_mrahw/_normal ao lado do albedo
+            // original) vence: a rede so' roda para a textura que nao tem.
+            const bool doDisco = loadDiskPbrRgba(et.name, mrahw, normal);
+            bool synthOk = doDisco;
+            if (doDisco) ++fromDisk;
+            else if (synthesizePbr) synthOk = synthesizePbrFromPixels(pixels, w, h, 4, mrahw, normal, organic);
             synthMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - synthStart).count());
-            if (synthOk) ++synthesized;
+            if (synthOk && !doDisco) ++synthesized;
             if (synthOk && mrahw.valid() && normal.valid()) {
                 // DUMP CRU (ERUPTION_TEST_DUMP_TEX_DIR): pedido do autor pra
                 // OLHAR o MRAH-W como ele sai do bake, sem passar por shader
@@ -682,6 +717,8 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
                       static_cast<double>(res.bytes) / (1024.0 * 1024.0),
                       texfmt::modeName(texfmt::family(texfmt::deviceCaps(), texfmt::options())), maxTextureSize);
     if (synthesizePbr) logSynthesisLevels(statsBefore, synthesized.load(), synthMicros.load());
+    if (fromDisk.load() > 0)
+        ERUPTION_LOG_WARN("EmbeddedTextureBake: %zu de %zu texturas com PBR do disco (sem rede)", fromDisk.load(), n);
 
     if (!model.filePath.empty() && !res.textures.empty()) {
         writeCache(model.filePath, maxTextureSize, synthesizePbr, res);

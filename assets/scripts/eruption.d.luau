@@ -174,7 +174,11 @@ declare world: {
     -- the preset's sun lens flare; 0 hides it), lens_flare_rays (lines of
     -- the flare's star; 1 = a single streak), vignette (strength,
     -- 0 = off), vignette_softness, shadow_tint / highlight_tint (a color as
-    -- vector or {r, g, b}) with shadow_tint_strength / highlight_tint_strength.
+    -- vector or {r, g, b}) with shadow_tint_strength / highlight_tint_strength,
+    -- lut (a .cube or a 32^3 strip .png in the project) with lut_strength 0..1,
+    -- halation_intensity / halation_threshold / halation_tint, bokeh_intensity /
+    -- bokeh_threshold / bokeh_shape (0 disc, 1 hexagon), grain_intensity /
+    -- grain_size (px at 1080p). These last ones override data/postprocess.json.
     set_look: (preset: string | { [string]: any }) -> boolean,
     -- Ambient particles around the camera focus: a list of layers, each
     -- {type = "dust" (motes lit by the sun through the shadow map: they
@@ -187,6 +191,11 @@ declare world: {
     set_ambient: (layers: { { type: string, density: number?, radius: number?, height: number?,
         size: number?, color: vector?, time: string? } }?) -> (),
     set_dof: (on: boolean) -> (),
+    -- Classic mode (the ERUPT button off): old diffuse-only light, no PBR,
+    -- relief, shadows, GI, bloom, DoF or SSAO, noon and clear sky. Turning it
+    -- off restores what was on before; set_dof while on applies afterwards.
+    set_classic: (on: boolean) -> (),
+    classic: () -> boolean,
     -- World time scale (hit-stop, slow motion): sprite animation, effects,
     -- weather and the scripts' dt run scaled (0 = frozen). `seconds` counts in
     -- full time and goes back to 1 by itself (0 or none = until the next call).
@@ -279,8 +288,16 @@ declare world: {
     -- that many world units on each side of the point fully sharp (a whole
     -- group, not a single plane); `max_blur` is the blur limit in pixels at
     -- full resolution (default 3; above it a cheap wide blur takes over). No
-    -- point at all gives the lens back to the automatic focus.
-    set_focus: (point: vector?, aperture: number?, foreground: boolean?, band: number?, max_blur: number?) -> (),
+    -- point at all gives the lens back to the automatic focus. The second
+    -- argument may also be a table: {aperture, foreground, band, max_blur,
+    -- model = \"linear\" | \"thin_lens\" | \"tilt_plane\" | \"spotlight\", tilt_angle (degrees,
+    -- 0 = upright plane facing the camera, 90 = level plane), ramp_near,
+    -- ramp_far (world units after the band), max_near, max_far (pixels at
+    -- 1080p), screen_mix (0..1, mixes in a screen-height band)}.
+    -- model = \"spotlight\": a sharp circle ON THE GROUND around the
+    -- point; band = radius, ramp_far = ramp after it, max_far = blur outside;
+    -- height + ramp_near + max_near blur what rises above the point.
+    set_focus: (point: vector?, aperture: (number | {[string]: any})?, foreground: boolean?, band: number?, max_blur: number?) -> (),
     -- Hides map and model geometry inside a volume (a mountain or a wall
     -- between the camera and the action) as a dither pattern. `slot` is 1..4;
     -- nil turns that slot off. Table: shape = "box" (size = vector, full

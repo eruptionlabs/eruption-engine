@@ -14,6 +14,7 @@
 // Sem projeto aberto as duas funcoes dao no mesmo lugar (a pasta do
 // executavel/repositorio), e nada muda pra quem abre um mapa direto.
 
+#include <cstdlib>
 #include <filesystem>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
@@ -48,6 +49,7 @@ public:
         // controle, o overlay F3, as barras e o minimapa. Jogo de verdade
         // deixa de fora e sai limpo, como o exportado.
         bool devTools = false;
+        bool fastLoad = false; // "fast_load": sem PBR neural nem tela de "compiling shaders"
         // TELA DE CARGA (bloco "loading", todas as chaves opcionais). Com o
         // bloco, o motor mostra so' a barra padrao assim ajustada, do primeiro
         // quadro do boot ao fim de cada carga de mapa - sem o logo do motor e
@@ -157,4 +159,10 @@ inline const std::filesystem::path& root() { return Project::instance().root(); 
 inline const std::filesystem::path& engineRoot() { return Project::instance().engineRoot(); }
 
 } // namespace project
+
+// Carga rapida: "fast_load" no project.eruption ou ERUPTION_FAST_LOAD=1.
+inline bool fastLoadEnabled() {
+    if (const char* e = std::getenv("ERUPTION_FAST_LOAD")) return *e == '1';
+    return Project::instance().isOpen() && Project::instance().manifest().fastLoad;
+}
 } // namespace eruption

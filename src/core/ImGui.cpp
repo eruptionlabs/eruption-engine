@@ -323,6 +323,8 @@ void Engine::setClassicMode(bool on) {
     if (on) {
         m_classic.usePbr = m_deferredLighting.usePbr();
         m_classic.ssao = m_ssaoEnabled;
+        m_classic.tess = m_tessEnabled;
+        m_classic.contact = m_contactShadowEnabled;
         m_classic.normalMapScale = m_normalMapScale;
         m_classic.timeOfDay = m_dayNightCycle.timeOfDay();
         m_classic.timeScale = m_dayNightCycle.timeScale();
@@ -331,15 +333,21 @@ void Engine::setClassicMode(bool on) {
             m_classic.effects[k] = kEffects[k] < m_renderEffects.size() && m_renderEffects[kEffects[k]]->isEnabled();
         m_deferredLighting.setUsePbr(false);
         m_ssaoEnabled = false;
+        m_tessEnabled = false;          // sem relevo deslocado no chao
+        m_contactShadowEnabled = false; // sem sombra de contato
         m_normalMapScale = 0.0f;
         m_dayNightCycle.setTimeOfDay(0.5f);
         m_dayNightCycle.setTimeScale(0.0f);
         applyWeatherTypeFull(WeatherType::Clear, 1.0f);
+        // Sombras (5) ficam: com o sol travado na direcao do .env elas nao
+        // andam, como o mapa de sombra assado do original.
         for (size_t idx : kEffects)
-            if (idx < m_renderEffects.size()) m_renderEffects[idx]->setEnabled(false);
+            if (idx < m_renderEffects.size()) m_renderEffects[idx]->setEnabled(idx == 5);
     } else {
         m_deferredLighting.setUsePbr(m_classic.usePbr);
         m_ssaoEnabled = m_classic.ssao;
+        m_tessEnabled = m_classic.tess;
+        m_contactShadowEnabled = m_classic.contact;
         m_normalMapScale = m_classic.normalMapScale;
         m_dayNightCycle.setTimeOfDay(m_classic.timeOfDay);
         m_dayNightCycle.setTimeScale(m_classic.timeScale);
@@ -497,12 +505,6 @@ void Engine::drawTouchHud() {
         drawTouchPad();
         return;
     }
-    // ERUPTION_TEST_CLASSIC=1 (teste): abre ja' no modo classico (ERUPT OFF).
-    static bool s_classicHook = std::getenv("ERUPTION_TEST_CLASSIC") != nullptr;
-    if (s_classicHook) {
-        s_classicHook = false;
-        setClassicMode(true);
-    }
     ImGui::PushFont(m_touchHudFont);
     Input::clearUiTouchRects();
     const auto publishRect = [] {
@@ -587,7 +589,7 @@ void Engine::drawTouchHud() {
     ImGui::End();
 
     // Canto de cima a' direita: o liga/desliga de tudo e a telemetria.
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - pad, vp->WorkPos.y + pad), ImGuiCond_Always,
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - pad, std::max(vp->WorkPos.y + pad, m_controlPanelBottom + pad)), ImGuiCond_Always,
                             ImVec2(1.0f, 0.0f));
     ImGui::SetNextWindowBgAlpha(0.35f);
     ImGui::Begin("##erupt", nullptr,
@@ -975,7 +977,7 @@ void Engine::renderImGui() {
             if (std::getenv("ERUPTION_TEST_CPU_MARKS")) {
                 std::string stages;
                 for (size_t i = 1; i < m_benchmarkCpuFrameMs.size(); ++i) {
-                    char b[24];
+                    char b[48];
                     std::snprintf(b, sizeof(b), " %zu=%.1f", i, m_benchmarkCpuFrameMs[i]);
                     stages += b;
                 }
@@ -2796,6 +2798,8 @@ void Engine::renderImGui() {
         // Control Panel: sempre no canto superior direito
         ImGui::SetNextWindowPos(m_demoHidePanels ? ImVec2(-10000.0f, -10000.0f) : ImVec2(ImGui::GetIO().DisplaySize.x - 10, 10), ImGuiCond_Always, ImVec2(1, 0));
         if (ImGui::Begin("Control Panel", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            // O painel de toque (ERUPT) desce para baixo deste, no mesmo canto.
+            m_controlPanelBottom = m_demoHidePanels ? 0.0f : ImGui::GetWindowPos().y + ImGui::GetWindowSize().y;
             if (m_playerController) m_playerController->renderImGui();
             ImGui::Text("Cam Target: %.1f, %.1f, %.1f", m_camera.target().x, m_camera.target().y, m_camera.target().z);
             ImGui::Text("Yaw: %.1f, Pitch: %.1f", glm::degrees(m_camera.orbitYaw()), glm::degrees(m_camera.orbitPitch()));

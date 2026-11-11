@@ -116,9 +116,18 @@ float measureCloudAreaFraction(const std::vector<LocalCloud>& blobs, uint32_t se
 }
 } // namespace
 
-float Engine::independentCloudPlaneY(float altitude) const {
+// Caixa das nuvens do .env vale para a nuvem de chuva so' se ficar acima do
+// jogador: abaixo dele (cidade no ceu) a chuva nunca chegaria ao chao, entao
+// a nuvem que chove nasce no ceu de sempre, por cima.
+bool Engine::cloudBoxFor(bool rain) const {
+    if (!m_cloudBoxOverride) return false;
+    if (rain && m_cloudBoxBottom + m_cloudBoxThickness < m_camera.target().y) return false;
+    return true;
+}
+
+float Engine::independentCloudPlaneY(float altitude, bool rain) const {
     altitude = glm::clamp(altitude, 0.0f, 1.0f);
-    if (m_cloudBoxOverride)
+    if (cloudBoxFor(rain))
         return m_cloudBoxBottom + altitude * m_cloudBoxThickness;
     // Independent clouds live near the player, NOT in the global sky box
     // (cloudBottom=5000 would put them kilometers above the camera: only
@@ -208,14 +217,15 @@ void Engine::spawnIndependentCloud(float altitude, float density, Vec2 jitterXZ,
     // altitude mapping (8 + alt*120 above the player) so they stay low and
     // readable with the legacy volumetric dome; the weather field keeps the
     // high sky mapping (30 + alt*600).
-    const float planeY = fromField ? independentCloudPlaneY(altitude)
+    const bool useBox = cloudBoxFor(hasRain);
+    const float planeY = fromField ? independentCloudPlaneY(altitude, hasRain)
                                    : (m_camera.target().y + 8.0f + altitude * 120.0f);
     // Keep the coverage array's vertical box consistent with the plane Y:
     // with the override use it verbatim, otherwise use the local box
     // anchored near the player (same mapping as the plane Y above).
     const float altSpan = fromField ? 400.0f : 120.0f;
-    const float boxBottom = m_cloudBoxOverride ? m_cloudBoxBottom : (planeY - altitude * altSpan);
-    const float boxThickness = m_cloudBoxOverride ? m_cloudBoxThickness : altSpan;
+    const float boxBottom = useBox ? m_cloudBoxBottom : (planeY - altitude * altSpan);
+    const float boxThickness = useBox ? m_cloudBoxThickness : altSpan;
     // Spawn-phase timing (perf investigation): each phase is a blocking
     // immediateSubmit or heavy CPU loop — log the breakdown per spawn.
     const auto spawnPhaseT0 = std::chrono::steady_clock::now();
@@ -346,6 +356,18 @@ void Engine::spawnWeatherCloudField(WeatherType type) {
         // Revert oversized optimization by user request: Thunderstorm needs a 
         // MASSIVE amount of clouds (proportional to others) to look impressive.
         spec = {150, 0.10f, 0.45f, 0.85f, 1.00f, 3.0f, 5.0f, 0.6f, true};
+    }
+
+    // Minimo do mapa (cloud_box.count no .env): o mapa sempre tem estas nuvens,
+    // tambem no limpo (p.ex. o mar de nuvens abaixo de uma cidade flutuante).
+    if (m_mapCloudMinCount > spec.count) {
+        spec.count = m_mapCloudMinCount;
+        spec.denMin = std::max(spec.denMin, m_mapCloudMinDensity - 0.1f);
+        spec.denMax = std::max(spec.denMax, m_mapCloudMinDensity + 0.1f);
+        if (m_mapCloudMinScale > 0.0f) {
+            spec.scaleMin = 0.8f * m_mapCloudMinScale;
+            spec.scaleMax = 1.2f * m_mapCloudMinScale;
+        }
     }
 
     // Rain intensity drives cloud size: a cloud that rains a LOT is a VERY

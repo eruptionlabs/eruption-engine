@@ -3,6 +3,7 @@
 #include "core/Project.hpp"
 
 #include <string>
+#include <utility>
 
 struct ImDrawList;
 struct ImVec2;
@@ -22,6 +23,20 @@ const LoadingScreenStyle* projectLoadingStyle();
 // projeto e' so' do jogo (--game, jogo exportado, celular). main.cpp chama
 // com o mesmo valor de Engine::setEditorMode.
 void setLoadingScreenEditor(bool editor);
+
+// O texto cortado com "..." para caber em `maxWidth` px (medida por `widthOf`).
+template <class WidthOf>
+std::string fitLoadingText(const std::string& text, float maxWidth, WidthOf&& widthOf) {
+    if (widthOf(text.c_str()) <= maxWidth) return text;
+    std::string t = text;
+    while (!t.empty()) {
+        // Tira um caractere UTF-8 inteiro: os bytes de continuacao e o inicial.
+        while (!t.empty() && (static_cast<unsigned char>(t.back()) & 0xC0) == 0x80) t.pop_back();
+        if (!t.empty()) t.pop_back();
+        if (widthOf((t + "...").c_str()) <= maxWidth) return t + "...";
+    }
+    return std::string();
+}
 
 // Barra, porcentagem e texto. Texto vazio no estilo: o mapa e a etapa.
 void drawProjectLoadingBar(ImDrawList* dl, const ImVec2& display, const LoadingScreenStyle& style,

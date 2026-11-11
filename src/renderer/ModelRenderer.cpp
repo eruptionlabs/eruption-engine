@@ -4860,7 +4860,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         VkBuffer vb, ib;
         uint32_t drawCount;
         pickBuffers(mesh, lod, vb, ib, drawCount);
-        if (mesh.reliefInView) reliefSwap(mesh, vb, ib, drawCount);
+        if (mesh.reliefInView && reliefNear(idx)) reliefSwap(mesh, vb, ib, drawCount);
         if (m_hiLodActive.size() > idx) m_hiLodActive[idx] = (lod == 0);
         if (m_loLodActive.size() > idx) m_loLodActive[idx] = (lod == 2);
 
@@ -5517,7 +5517,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
                     if (mesh.loVertexBuffer != VK_NULL_HANDLE) useVb = mesh.loVertexBuffer;
                 }
             }
-            reliefSwap(mesh, useVb, useIb, useCount);
+            if (reliefNear(idx)) reliefSwap(mesh, useVb, useIb, useCount);
             if (useVb != bvb || useIb != bib) {
                 VkDeviceSize off = 0;
                 vkCmdBindVertexBuffers(cmd, 0, 1, &useVb, &off);
@@ -5711,7 +5711,7 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
             }
         }
 
-        reliefSwap(mesh, useVb, useIb, useCount);
+        if (reliefNear(idx)) reliefSwap(mesh, useVb, useIb, useCount);
         dst[slot] = hot.transform;
 
         const bool sameRun = runLen > 0 && useVb == runVb &&
@@ -6556,6 +6556,19 @@ float ModelRenderer::lodDistanceFor(uint32_t idx, const ModelInstanceHot& hot) c
     const Vec3 c = (hot.worldAabbMin + hot.worldAabbMax) * 0.5f;
     const float r = glm::length(hot.worldAabbMax - hot.worldAabbMin) * 0.5f;
     return glm::distance(m_lastCameraPos, c) - r;
+}
+
+// Relevo assado (malha pre-tesselada, ate' milhoes de triangulos) so' perto:
+// com o zoom todo para fora o relevo de cada malha da cidade ia inteiro para o
+// G-buffer e para as cascatas de sombra, e o FPS desabava em qualquer mapa.
+// Longe, os centimetros do relevo nao aparecem; vale a malha original.
+bool ModelRenderer::reliefNear(uint32_t idx) const {
+    static const float kMax = [] {
+        const char* e = std::getenv("ERUPTION_RELIEF_MAX_DIST");
+        return e ? static_cast<float>(std::atof(e)) : 900.0f;
+    }();
+    if (idx >= m_instanceHot.size()) return true;
+    return lodDistanceFor(idx, m_instanceHot[idx]) < kMax;
 }
 
 uint8_t ModelRenderer::lodLevelFor(uint32_t idx, const ModelMeshGPU& mesh) const {

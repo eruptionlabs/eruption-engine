@@ -565,6 +565,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     // Retoque de terreno salvo pelo editor: entra nos vértices antes de subir.
     prepareHeightEdits(*loadedMap, genericModels);
     loadPhase("conversao modelos");
+    presentLoadingScreen(name, "Converting models", 0.74f); // a barra anda dentro da etapa (ficava parada no 70%)
     applySavedWalk(*loadedMap);
     m_mapGeometryKey = mapGeometryKey(genericModels);
     // Nós montados na thread de leitura: valem se a geometria e' a mesma que
@@ -597,6 +598,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
         m_reliefAlbedo.clear();
     }
     loadPhase("geometria/costuras");
+    presentLoadingScreen(name, "Building geometry", 0.78f); // a barra anda dentro da etapa (ficava parada no 70%)
     if (m_currentMap) {
         for (auto& model : m_currentMap->models) {
             if (model.embeddedTextures.empty()) continue;
@@ -718,6 +720,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     }
 
     loadPhase("texturas embutidas");
+    presentLoadingScreen(name, "Uploading textures", 0.84f); // a barra anda dentro da etapa (ficava parada no 70%)
     auto _tLMM = std::chrono::steady_clock::now();
     // Cópia do chão na CPU: pincel do editor, ou pintura salva que o jogo
     // aplica nos vértices (mapas sem splat próprio).
@@ -738,6 +741,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     flushPendingUploads();
     if (!m_modelRenderer.groundMeshes().empty()) bindHeightEditToMeshes();
     loadPhase("loadMapModels");
+    presentLoadingScreen(name, "Placing models", 0.9f); // a barra anda dentro da etapa (ficava parada no 70%)
     if (hasSavedSplat(name)) beginSplatEditing(); // máscaras pintadas no editor
 
 
@@ -894,6 +898,40 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
         m_cloudLayersEnabled = true;
         m_cloudLayerRenderer.setConfig(cfg);
         m_cloudLayerRenderer.coverageArray().setLayerCount(cfg.layerCount);
+    }
+    // Caixa das nuvens do clima por mapa (.env "cloud_box"): a mesma caixa do
+    // --cloud-bottom/--cloud-thickness, onde as nuvens independentes do campo
+    // do clima nascem (independentCloudPlaneY). P.ex. abaixo de uma cidade
+    // flutuante. O mapa seguinte sem o bloco volta ao estado de antes.
+    {
+        if (!m_cloudBoxBaseSaved) {
+            m_cloudBoxBase = {m_cloudBoxOverride, m_cloudBoxBottom, m_cloudBoxThickness, true};
+            m_cloudBoxBaseSaved = true;
+            m_cloudShadowsBase = m_cloudLayerRenderer.config().showCloudShadows;
+        }
+        const MapCloudLayer& cb = loadedMap->env.cloudLayer;
+        const bool antes = m_cloudBoxOverride;
+        const float antesY = m_cloudBoxBottom;
+        if (cb.set) {
+            setCloudBoxOverride(cb.bottom, cb.thickness);
+        } else {
+            m_cloudBoxOverride = m_cloudBoxBase.on;
+            m_cloudBoxBottom = m_cloudBoxBase.bottom;
+            m_cloudBoxThickness = m_cloudBoxBase.thickness;
+        }
+        const int minAntes = m_mapCloudMinCount;
+        m_mapCloudMinCount = cb.set ? cb.count : 0;
+        m_mapCloudMinDensity = cb.density;
+        m_mapCloudMinScale = cb.scale;
+        // Nuvens ja' nascidas na caixa antiga ficariam na altura errada; com
+        // outro minimo do mapa, o campo do clima nasce de novo.
+        if (antes != m_cloudBoxOverride || antesY != m_cloudBoxBottom || minAntes != m_mapCloudMinCount) {
+            clearIndependentClouds();
+            m_weatherFieldType = -1;
+        }
+        CloudLayerRenderer::Config cfg = m_cloudLayerRenderer.config();
+        cfg.showCloudShadows = cb.set ? cb.shadows : m_cloudShadowsBase;
+        m_cloudLayerRenderer.setConfig(cfg);
     }
 
     loadPhase("nuvens");
@@ -1170,7 +1208,19 @@ std::shared_ptr<ModelFile> prepareModelFile(const std::string& glbPath, bool par
     std::unordered_set<std::string> baked;
     if (bakeMaxSize > 0 && !model->embeddedTextures.empty()) {
         EmbeddedBakeResult bake;
-        if (readEmbeddedBakeCache(*model, static_cast<uint32_t>(bakeMaxSize), pbrSynthesisEnabled(), bake)) {
+        // O pacote fica ao lado do .glb no disco: pelo caminho relativo ao
+        // projeto o preload nunca o achava. Sem pacote, assa aqui (BC + PBR,
+        // fora do quadro) e grava: so' a primeira abertura paga a sintese, que
+        // antes se refazia inteira a cada mapa aberto (cena de 1058 objetos:
+        // 90 s parados).
+        model->filePath = diskPath;
+        bool ok = readEmbeddedBakeCache(*model, static_cast<uint32_t>(bakeMaxSize), pbrSynthesisEnabled(), bake);
+        if (!ok) {
+            bake = bakeEmbeddedTextures(*model, static_cast<uint32_t>(bakeMaxSize), pbrSynthesisEnabled());
+            ok = !bake.textures.empty();
+        }
+        model->filePath = glbPath;
+        if (ok) {
             for (const auto& t : bake.textures) baked.insert(t.first);
             std::lock_guard<std::mutex> lock(s_preloadBakeMutex);
             s_preloadBakes[glbPath] = std::move(bake);
@@ -1271,13 +1321,169 @@ std::shared_ptr<Engine::ReadyModel> Engine::readModelForWorld(const std::string&
     return out;
 }
 
+bool Engine::modelTextureOnGpu(const std::string& name) {
+    std::string key = name;
+    std::replace(key.begin(), key.end(), '/', '\\');
+    if (!key.empty() && key[0] == '\\') key.erase(0, 1);
+    ModelTextureGPU cached;
+    return m_assetCache.getModelTexture(key, cached);
+}
+
+// O ModelFile de um .glb pedido antes por preloadModel (copia do pronto, com
+// as texturas de familia ja' decodificadas por outro preload), ou so' o parse.
+std::shared_ptr<ModelFile> Engine::takePreparedModelFile(const std::string& glbPath) {
+    auto onGpu = [this](const std::string& name) { return modelTextureOnGpu(name); };
+    // Pedido antes por preloadModel: pega o pronto (ou espera o que falta).
+    std::shared_ptr<ModelFile> prepared;
+    // So' o pronto, e por copia: o preload pode ter sido pedido para o
+    // MAPA SEGUINTE, e um spawn daqui nao pode nem esperar o job (946 ms
+    // numa peca da arena) nem gastar a entrada antes do warp. Ela sai
+    // sozinha depois de duas trocas de mapa.
+    const auto pre = m_modelPreloads.find(glbPath);
+    if (pre != m_modelPreloads.end() &&
+        pre->second.model.wait_for(std::chrono::seconds(0)) == std::future_status::ready &&
+        pre->second.model.get()) {
+        prepared = std::make_shared<ModelFile>(*pre->second.model.get());
+        // Textura da familia que outro preload decodificou: copia de la'.
+        if (prepared) for (EmbeddedTexture& et : prepared->embeddedTextures) {
+            if (et.isDecoded() || !et.hasEncodedData() || onGpu(et.name)) continue;
+            for (auto& entry : m_modelPreloads) {
+                const ModelPreload& other = entry.second;
+                // So' os prontos: esperar um que talvez nem tenha a textura
+                // custaria mais que decodificar aqui.
+                if (other.model.wait_for(std::chrono::seconds(0)) != std::future_status::ready) continue;
+                const std::shared_ptr<ModelFile>& o = other.model.get();
+                if (!o) continue;
+                const auto hit = std::find_if(o->embeddedTextures.begin(), o->embeddedTextures.end(),
+                                              [&et](const EmbeddedTexture& t) { return t.name == et.name && t.isDecoded(); });
+                if (hit == o->embeddedTextures.end()) continue;
+                et.pixels = hit->pixels;
+                et.width = hit->width;
+                et.height = hit->height;
+                break;
+            }
+        }
+    } else {
+        // Textura ja' na GPU (outro arquivo da mesma familia) nao decodifica.
+        // Sem preload: so' o parse aqui; as texturas vem do bake abaixo.
+        prepared = prepareModelFile(glbPath, true, [](const std::string&) { return false; });
+    }
+    return prepared;
+}
+
+void Engine::applyModelBake(ModelFile& model, const std::string& glbPath) {
+    // Texturas embutidas em bloco com o PBR pronto, como as do mapa, quando
+    // o .etexpack ja' existe ao lado do .glb (o mesmo cache do mapa).
+    if (!model.embeddedTextures.empty()) {
+        EmbeddedBakeResult bake;
+        bool have = false;
+        {
+            std::lock_guard<std::mutex> lock(s_preloadBakeMutex);
+            if (auto it = s_preloadBakes.find(glbPath); it != s_preloadBakes.end()) {
+                bake = it->second; // copia: a entrada fica para o mapa seguinte
+                have = true;
+            }
+        }
+        const bool missing = std::any_of(model.embeddedTextures.begin(), model.embeddedTextures.end(),
+                                         [&](const EmbeddedTexture& et) { return !modelTextureOnGpu(et.name); });
+        // Sem preload: so' o cache, se ja' existir. O bake no quadro custava
+        // ~2,8 s por textura na primeira vez (BC + sintese), muito mais
+        // que a sintese direta abaixo dele (medido no warp de 17:03).
+        if (!have && missing) readModelBakeCache(model, static_cast<uint32_t>(m_textureMaxSize), bake);
+        for (auto& [name, tex] : bake.textures) m_embeddedBaked.emplace(name, std::move(tex));
+    }
+}
+
+// Cena de muitos modelos (SceneEdits::apply): o que so' o fio principal faz
+// (texturas e slots) vai aqui, um modelo por vez, e a montagem pesada (malha,
+// LOD) de todos em paralelo; o addModelFromFile seguinte os acha prontos, pelo
+// mesmo caminho do mundo continuo. Um a um no quadro eram 13,5 s numa cidade.
+void Engine::prepareSceneModels(const std::vector<std::string>& files) {
+    if (!m_currentMap) return;
+    static const bool kPhases = std::getenv("ERUPTION_TEST_LOAD_PHASES") != nullptr;
+    using clk = std::chrono::steady_clock;
+    double msWait = 0.0, msMain = 0.0;
+    std::vector<std::shared_ptr<ReadyModel>> batch;
+    std::unordered_set<std::string> seen;
+    // A tela de carga anda com a cena (e a janela segue respondendo): parada
+    // no 70% por 10-20 s, a troca de mapa parecia travada.
+    // O contador e' de PRONTOS (leitura em paralelo terminada), nao da posicao
+    // no laco: o 1o arquivo espera enquanto todos carregam juntos, entao pela
+    // posicao ficava em 1-5 e pulava de uma vez para o total.
+    std::vector<std::string> todo;
+    {
+        std::unordered_set<std::string> uniq;
+        for (const std::string& f : files)
+            if (!f.empty() && !m_modelRenderer.hasAsset(f) && !m_readyModels.count(f) && uniq.insert(f).second)
+                todo.push_back(f);
+    }
+    const size_t total = todo.size();
+    size_t k = 0;
+    auto prontos = [&]() {
+        size_t n = 0;
+        for (const std::string& f : todo) {
+            const auto pre = m_modelPreloads.find(f);
+            if (pre == m_modelPreloads.end() || !pre->second.model.valid() ||
+                pre->second.model.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+                ++n;
+        }
+        return std::max(n, k);
+    };
+    auto lastDraw = clk::now();
+    auto pump = [&](bool force) {
+        const auto now = clk::now();
+        if (!force && now - lastDraw < std::chrono::milliseconds(100)) return;
+        lastDraw = now;
+        const size_t done = prontos();
+        const float frac = total > 0 ? static_cast<float>(done) / static_cast<float>(total) : 1.0f;
+        presentLoadingScreen(m_currentMapName,
+                             "Scene objects " + std::to_string(done) + "/" + std::to_string(total),
+                             // 95-99%: roda depois do "Finalizing" (95%); daqui a barra voltava a 70%.
+                             0.95f + 0.04f * frac, true);
+    };
+    pump(true);
+    for (const std::string& f : files) {
+        if (f.empty() || !seen.insert(f).second || m_modelRenderer.hasAsset(f) || m_readyModels.count(f)) continue;
+        ++k;
+        const auto t0 = clk::now();
+        if (const auto pre = m_modelPreloads.find(f); pre != m_modelPreloads.end() && pre->second.model.valid())
+            while (pre->second.model.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready) pump(false);
+        pump(false);
+        const auto t1 = clk::now();
+        msWait += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        std::shared_ptr<ModelFile> prepared = takePreparedModelFile(f);
+        if (!prepared) continue;
+        auto rm = std::make_shared<ReadyModel>();
+        rm->file = f;
+        m_currentMap->models.push_back(std::move(*prepared));
+        ModelFile& model = m_currentMap->models.back();
+        applyModelBake(model, f);
+        rm->asset = convertModelToAsset(model);
+        rm->slotUse = ModelRenderer::scanSlotUse(rm->asset);
+        rm->slots = m_modelRenderer.resolveSlots(rm->asset, rm->slotUse);
+        batch.push_back(std::move(rm));
+        msMain += std::chrono::duration<double, std::milli>(clk::now() - t1).count();
+    }
+    if (batch.empty()) return;
+    const auto tP = clk::now();
+    const ModelRenderer::LodParams lod = m_modelRenderer.lodParams();
+    JobSystem::instance().parallelFor(static_cast<uint32_t>(batch.size()), [&batch, &lod](uint32_t i) {
+        batch[i]->prepared = ModelRenderer::prepareAsset(batch[i]->asset, std::move(batch[i]->slots), lod);
+    });
+    for (auto& rm : batch) m_readyModels[rm->file] = rm;
+    if (kPhases)
+        ERUPTION_LOG_WARN("[SCENEPREP] %zu modelos: espera preload %.0f ms, texturas+slots %.0f ms, malhas em paralelo %.0f ms",
+                          batch.size(), msWait, msMain, std::chrono::duration<double, std::milli>(clk::now() - tP).count());
+    flushPendingUploads();
+}
+
 int Engine::addModelFromFile(const std::string& glbPath, const Vec3& position, const std::string& nodeName) {
     if (!m_currentMap) return -1;
     // ERUPTION_TEST_LOAD_PHASES=1: onde vai o tempo de um modelo posto por
     // script/cena (leitura+parse, conversao+envio, uploads pendentes).
     static const bool kPhases = std::getenv("ERUPTION_TEST_LOAD_PHASES") != nullptr;
     const auto tA = std::chrono::steady_clock::now();
-    auto tB = tA, tC = tA;
+    auto tB = tA, tC = tA, tConv = tA;
     const bool novo = !m_modelRenderer.hasAsset(glbPath);
     ModelInstanceDesc desc;
     desc.modelPath = glbPath;
@@ -1302,48 +1508,7 @@ int Engine::addModelFromFile(const std::string& glbPath, const Vec3& position, c
                 for (EmbeddedTexture& et : m.embeddedTextures)
                     if (et.hasEncodedData()) std::vector<uint8_t>().swap(et.pixels);
     } else {
-        auto onGpu = [this](const std::string& name) {
-            std::string key = name;
-            std::replace(key.begin(), key.end(), '/', '\\');
-            if (!key.empty() && key[0] == '\\') key.erase(0, 1);
-            ModelTextureGPU cached;
-            return m_assetCache.getModelTexture(key, cached);
-        };
-        // Pedido antes por preloadModel: pega o pronto (ou espera o que falta).
-        std::shared_ptr<ModelFile> prepared;
-        // So' o pronto, e por copia: o preload pode ter sido pedido para o
-        // MAPA SEGUINTE, e um spawn daqui nao pode nem esperar o job (946 ms
-        // numa peca da arena) nem gastar a entrada antes do warp. Ela sai
-        // sozinha depois de duas trocas de mapa.
-        const auto pre = m_modelPreloads.find(glbPath);
-        if (pre != m_modelPreloads.end() &&
-            pre->second.model.wait_for(std::chrono::seconds(0)) == std::future_status::ready &&
-            pre->second.model.get()) {
-            prepared = std::make_shared<ModelFile>(*pre->second.model.get());
-            // Textura da familia que outro preload decodificou: copia de la'.
-            if (prepared) for (EmbeddedTexture& et : prepared->embeddedTextures) {
-                if (et.isDecoded() || !et.hasEncodedData() || onGpu(et.name)) continue;
-                for (auto& entry : m_modelPreloads) {
-                    const ModelPreload& other = entry.second;
-                    // So' os prontos: esperar um que talvez nem tenha a textura
-                    // custaria mais que decodificar aqui.
-                    if (other.model.wait_for(std::chrono::seconds(0)) != std::future_status::ready) continue;
-                    const std::shared_ptr<ModelFile>& o = other.model.get();
-                    if (!o) continue;
-                    const auto hit = std::find_if(o->embeddedTextures.begin(), o->embeddedTextures.end(),
-                                                  [&et](const EmbeddedTexture& t) { return t.name == et.name && t.isDecoded(); });
-                    if (hit == o->embeddedTextures.end()) continue;
-                    et.pixels = hit->pixels;
-                    et.width = hit->width;
-                    et.height = hit->height;
-                    break;
-                }
-            }
-        } else {
-            // Textura ja' na GPU (outro arquivo da mesma familia) nao decodifica.
-            // Sem preload: so' o parse aqui; as texturas vem do bake abaixo.
-            prepared = prepareModelFile(glbPath, true, [](const std::string&) { return false; });
-        }
+        std::shared_ptr<ModelFile> prepared = takePreparedModelFile(glbPath);
         if (!prepared) {
             ERUPTION_LOG_ERROR("addModelFromFile: not a GLB file with meshes: %s", glbPath.c_str());
             return -1;
@@ -1352,27 +1517,10 @@ int Engine::addModelFromFile(const std::string& glbPath, const Vec3& position, c
         // As texturas embutidas são procuradas nos modelos do mapa aberto.
         m_currentMap->models.push_back(std::move(*prepared));
         ModelFile& model = m_currentMap->models.back();
-        // Texturas embutidas em bloco com o PBR pronto, como as do mapa, quando
-        // o .etexpack ja' existe ao lado do .glb (o mesmo cache do mapa).
-        if (!model.embeddedTextures.empty()) {
-            EmbeddedBakeResult bake;
-            bool have = false;
-            {
-                std::lock_guard<std::mutex> lock(s_preloadBakeMutex);
-                if (auto it = s_preloadBakes.find(glbPath); it != s_preloadBakes.end()) {
-                    bake = it->second; // copia: a entrada fica para o mapa seguinte
-                    have = true;
-                }
-            }
-            const bool missing = std::any_of(model.embeddedTextures.begin(), model.embeddedTextures.end(),
-                                             [&](const EmbeddedTexture& et) { return !onGpu(et.name); });
-            // Sem preload: so' o cache, se ja' existir. O bake no quadro custava
-            // ~2,8 s por textura na primeira vez (BC + sintese), muito mais
-            // que a sintese direta abaixo dele (medido no warp de 17:03).
-            if (!have && missing) readModelBakeCache(model, static_cast<uint32_t>(m_textureMaxSize), bake);
-            for (auto& [name, tex] : bake.textures) m_embeddedBaked.emplace(name, std::move(tex));
-        }
-        first = m_modelRenderer.addModel(convertModelToAsset(model), desc, nodeName);
+        applyModelBake(model, glbPath);
+        ModelAsset asset = convertModelToAsset(model);
+        tConv = std::chrono::steady_clock::now();
+        first = m_modelRenderer.addModel(std::move(asset), desc, nodeName);
         // Ja' na GPU (o cache de texturas guarda pelo nome): fica so' o
         // arquivo codificado, para o caso de a textura ser expulsa e voltar.
         for (EmbeddedTexture& et : model.embeddedTextures)
@@ -1383,8 +1531,8 @@ int Engine::addModelFromFile(const std::string& glbPath, const Vec3& position, c
     if (kPhases && novo) {
         const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
         const auto tD = std::chrono::steady_clock::now();
-        ERUPTION_LOG_WARN("[MODELPHASE] %s: parse %.1f, converte+envia %.1f, uploads %.1f ms", glbPath.c_str(), ms(tA, tB),
-                          ms(tB, tC), ms(tC, tD));
+        ERUPTION_LOG_WARN("[MODELPHASE] %s: parse %.1f, converte+envia %.1f (converte %.1f), uploads %.1f ms", glbPath.c_str(), ms(tA, tB),
+                          ms(tB, tC), tConv > tB ? ms(tB, tConv) : 0.0, ms(tC, tD));
     }
     if (first == 0xFFFFFFFFu) {
         ERUPTION_LOG_ERROR("addModelFromFile: nothing to add from %s%s%s", glbPath.c_str(),

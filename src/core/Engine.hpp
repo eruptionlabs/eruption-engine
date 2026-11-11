@@ -243,6 +243,7 @@ public:
     // Le, interpreta e decodifica as texturas embutidas de um .glb num job,
     // fora do quadro; o addModelFromFile seguinte so' envia para a GPU.
     void preloadModel(const std::string& glbPath);
+    void prepareSceneModels(const std::vector<std::string>& files); // cena: malhas em paralelo
     // Espera o preload deste arquivo terminar (se houver um). Para quem vai
     // usar o modelo agora no mesmo mapa e disparou varios preloads antes
     // (cena aplicada): todos se preparam em paralelo, cada um espera so' o seu.
@@ -664,6 +665,8 @@ public:
     bool m_demoForceBaseLod = false;
     float m_demoStartTime = -1.0f;
     bool m_demoPinStats = false;   // painel F3 fixo no canto direito (video)
+    std::vector<Vec4> m_wetTrail; // chuva local: x,z,raio,forca (seca devagar)
+    float m_groundWet = 0.0f;      // 0..1: encharca na chuva, seca em ~90 s
     bool m_demoHidePanels = false; // esconde Shortcuts/Control Panel/minimapa (video)
     // Painel de toque (ERUPTION_TOUCH_HUD=<px>): hora e clima sem teclado, para
     // celular. Fonte propria no tamanho pedido; nullptr = desligado.
@@ -676,9 +679,10 @@ public:
     void setTouchPadVisible(bool on) { m_touchPadVisible = on; }
     bool m_touchPadVisible = true;
     bool m_touchHudTelemetry = false; // painel de numeros ligado pelo botao
+    float m_controlPanelBottom = 0.0f; // base do "Control Panel" (dev tools) no quadro anterior
     bool m_touchHudMaps = false;      // lista de mapas aberta (ERUPTION_TOUCH_MAPS)
-    // Modo classico: luz fixa do jeito antigo (Blinn-Phong, sem relevo, sem
-    // sombra, GI, bloom, DoF, luzes de ponto nem SSAO), dia parado ao meio-dia
+    // Modo classico: luz fixa do jeito antigo (so' difusa, sem relevo, sem
+    // sombra, tesselacao, GI, bloom, DoF, luzes de ponto nem SSAO), meio-dia
     // e ceu limpo - para comparar com tudo ligado. Desligar restaura o estado
     // de antes.
     void setClassicMode(bool on);
@@ -691,6 +695,7 @@ public:
         bool usePbr = true, ssao = true;
         float normalMapScale = 1.0f, timeOfDay = 0.5f, timeScale = 1.0f;
         int weatherType = 0;
+        bool tess = true, contact = true;
         bool effects[6] = {};
     } m_classic;
     std::string m_demoLabel;       // rotulo grande no rodape (ver runDemoTimeline: label=)
@@ -1710,7 +1715,8 @@ private:
                                Vec2 jitterXZ = Vec2(0.0f), bool hasRain = false,
                                float radiusScale = 1.0f, bool fromField = false);
     void clearIndependentClouds();
-    float independentCloudPlaneY(float altitude) const;
+    float independentCloudPlaneY(float altitude, bool rain = false) const;
+    bool cloudBoxFor(bool rain) const;
 
     // Procedural cloud field: each weather type spawns its own set of
     // independent clouds (varying count/size/density/rain) instead of
@@ -1727,6 +1733,15 @@ private:
     bool m_cloudBoxOverride = false;
     float m_cloudBoxBottom = 5000.0f;
     float m_cloudBoxThickness = 640.0f;
+    // Caixa antes do 1o mapa (linha de comando ou nenhuma): o .env "cloud_box"
+    // vale so' no mapa dele (MapLoad).
+    struct CloudBoxBase { bool on; float bottom; float thickness; bool valid; };
+    CloudBoxBase m_cloudBoxBase{false, 5000.0f, 640.0f, false};
+    bool m_cloudBoxBaseSaved = false;
+    bool m_cloudShadowsBase = true;
+    int m_mapCloudMinCount = 0;       // "count" do cloud_box do .env: nuvens em qualquer clima
+    float m_mapCloudMinDensity = 0.6f;
+    float m_mapCloudMinScale = 0.0f;
     float m_cloudWindOverride = -1.0f; // >= 0: overrides cfg.windSpeed
     float m_cloudDebugLogTimer = 0.0f; // periodic position/UV log accumulator
 
@@ -2450,6 +2465,9 @@ private:
         ModelRenderer::PreparedAsset prepared;
     };
     static std::shared_ptr<ReadyModel> readModelForWorld(const std::string& glbPath); // qualquer thread
+    bool modelTextureOnGpu(const std::string& name);
+    std::shared_ptr<ModelFile> takePreparedModelFile(const std::string& glbPath);
+    void applyModelBake(ModelFile& model, const std::string& glbPath);
     std::unordered_map<std::string, std::shared_ptr<ReadyModel>> m_readyModels;
     struct WorldRegion {
         std::string map;

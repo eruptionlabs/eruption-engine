@@ -2678,6 +2678,11 @@ void Engine::setDofEnabled(bool on) {
     // comparacao dava MAE 0 como se o DoF nao fizesse nada.
     static const bool kSemDof = std::getenv("ERUPTION_TEST_NO_DOF") != nullptr;
     if (kSemDof) on = false;
+    // Modo classico: o pedido vale para quando ele desligar (efeito 3 = 3o de kEffects).
+    if (m_classic.on) {
+        m_classic.effects[2] = on;
+        on = false;
+    }
     m_postSettings.enableDoF = on;
     if (m_renderEffects.size() > 3) m_renderEffects[3]->setEnabled(on);
 }
@@ -3025,7 +3030,9 @@ void Engine::applyGraphicsPreset() {
 
     // Síntese de PBR (relevo derivado onde não há PBR autoral): custa ~1,9 ms
     // de GPU por cobrir todos os materiais. Preset low abre mão.
-    setPbrSynthesisEnabled(p.value("pbr_synthesis", true) && !std::getenv("ERUPTION_TEST_NO_PBR_SYNTH"));
+    // Carga rapida (projeto "fast_load" ou ERUPTION_FAST_LOAD=1): sem PBR
+    // neural; os mapas PBR do disco e os pacotes ja' assados continuam.
+    setPbrSynthesisEnabled(p.value("pbr_synthesis", true) && !fastLoadEnabled() && !std::getenv("ERUPTION_TEST_NO_PBR_SYNTH"));
 
     // Teto de resolução de textura. Os 20 sheets 2048² do parana são a maior
     // parte dos pixels do mapa; o teto é o botão mais direto de VRAM. Vale

@@ -89,6 +89,8 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     vec4 probeGridInvExtent;
     // Caminho enxuto: 16 indices de 8 bits por bloco de 16x8 da tela (0xFF fecha).
     uvec4 tileLights[128];
+    vec4 rainSpots[64];     // chuva local: xy = centro XZ, z = raio
+    vec4 rainSpotParams;    // x = quantos, y = 1 com campo de nuvens (so' molha debaixo delas)
 } lights;
 // SONDA DE CEU (G36): o proprio skybox.frag em cubemap 32x32 com mips -
 // especular ambiental pre-filtrado (roughness -> lod).
@@ -536,16 +538,9 @@ vec3 legacyDirectionalLight(vec3 N, vec3 albedo, vec3 viewDir, vec4 pbr) {
     vec3 albedoLinear = srgbToLinear(albedo.rgb);
     vec3 diffuse = albedoLinear * lColor * NdotL * lIntensity;
 
-    vec3 H = normalize(L + viewDir);
-    float roughness = pbr.g;
-    float metallic = pbr.b;
-    float specPower = mix(8.0, 256.0, 1.0 - roughness);
-    // DEBUG: guard roughness/metallic to avoid pow(0, huge) or specular blowout.
-    float NdotH = max(dot(N, H), 0.0);
-    float specular = (NdotH > 0.0 && specPower < 1000.0) ? pow(NdotH, specPower) * lIntensity : 0.0;
-    vec3 specColor = mix(vec3(0.04), albedoLinear, metallic);
-
-    return diffuse + specColor * specular;
+    // Luz antiga (modo classico, usePbr = 0): so' difusa (ambiente + N.L), sem
+    // especular - o brilho vinha do roughness dos mapas PBR, que o modo antigo nao tem.
+    return diffuse;
 }
 
 vec3 legacyComputePointLight(vec3 worldPos, vec3 N, vec3 albedo, uint idx) {
@@ -787,8 +782,25 @@ void main() {
     // brightness, so convert once here and reuse everywhere below.
     vec3 albedoLinear = srgbToLinear(albedo.rgb);
     float wetDrive = lights.rainIntensity * smoothstep(-1.0, 2.0, lights.temperatureC);
+    // Chuva local: com o campo de nuvens, so' molha debaixo das que chovem
+    // (borda suave de 70% a 120% do raio do blob).
+    if (lights.rainSpotParams.y > 0.5 && wetDrive > 0.0) {
+        float local = 0.0;
+        int n = int(lights.rainSpotParams.x);
+        for (int i = 0; i < n; ++i) {
+            vec4 s = lights.rainSpots[i];
+            float d = length(worldPos.xz - s.xy);
+            local = max(local, s.w * (1.0 - smoothstep(0.7 * s.z, 1.2 * s.z, d)));
+        }
+        wetDrive *= local;
+    }
+    if ((lights.pbrDebugMode & 256u) != 0u) wetDrive = 0.0; // A/B: sem molhado (bit 256)
+    // Diagnostico (bit 128, ERUPTION_TEST_PBR_DEBUG=128): r = quanto molha
+    // aqui (chuva x nuvem local), g = mascara de poca do material.
+    if ((lights.pbrDebugMode & 128u) != 0u) { outLit = vec4(wetDrive, pbr.a, 0.0, 1.0); return; }
     PbrWetness wet = pbrWetSurface(albedoLinear, roughness, metallic,
-                                   abs(pbr.r - 0.75) < 0.06 ? 0.0 : pbr.a, N.y, wetDrive);
+                                   abs(pbr.r - 0.75) < 0.06 ? 0.0 : pbr.a, N.y,
+                                   abs(pbr.r - 0.75) < 0.06 ? 0.0 : wetDrive); // sprite nao encharca
     albedoLinear = wet.albedo;
     roughness    = wet.roughness;
 
@@ -1088,9 +1100,11 @@ void main() {
         float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
         vec2 envBRDF = vec2(-1.04, 1.04) * a004 + r.zw;
         vec3 specEnv = F0e * envBRDF.x + envBRDF.y;
+        // A pelicula d'agua reflete o ceu como um espelho raso: reforco pela
+        // fracao molhada (sem ele, chao quase horizontal visto do alto lia seco).
         lit += envCol * specEnv * ao
                * max(lights.giIntensity, lights.giAmbientFloor)
-               * lights.indirectParams.y;
+               * lights.indirectParams.y * (1.0 + 0.5 * wet.film);
     }
 
     // One-bounce GI: sunlight hits the ground, picks up the map's average

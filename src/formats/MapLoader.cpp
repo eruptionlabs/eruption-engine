@@ -162,6 +162,19 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
                               map.env.worldBorder.x0, map.env.worldBorder.z0, map.env.worldBorder.x1,
                               map.env.worldBorder.z1, map.env.worldBorder.fade);
         }
+        if (j.contains("cloud_box") && j["cloud_box"].is_object()) {
+            const auto& c = j["cloud_box"];
+            auto& cl = map.env.cloudLayer;
+            cl.set = true;
+            cl.bottom = c.value("bottom", cl.bottom);
+            cl.thickness = std::max(c.value("thickness", cl.thickness), 50.0f);
+            cl.shadows = c.value("shadows", cl.bottom > 0.0f);
+            cl.count = std::clamp(c.value("count", 0), 0, 150);
+            cl.density = std::clamp(c.value("density", cl.density), 0.05f, 1.0f);
+            cl.scale = std::clamp(c.value("scale", 0.0f), 0.0f, 12.0f);
+            ERUPTION_LOG_WARN("MapLoader: caixa das nuvens do .env (base y=%.0f, espessura %.0f, sombra %d, minimo %d)",
+                              cl.bottom, cl.thickness, int(cl.shadows), cl.count);
+        }
         // "background": "fog" (cor da nevoa) ou [r, g, b] (linear, antes da
         // exposicao): o vazio abaixo do horizonte na borda do mundo.
         if (j.contains("exposure") && j["exposure"].is_object()) {

@@ -5,6 +5,7 @@
 
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
 #include "utils/ImageUtils.hpp"
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/ShaderCompiler.hpp"
@@ -55,7 +56,9 @@ void Engine::showShaderProgress() {
     // gravação (immediateSubmit, frame) não pode abrir outra tela ali.
     if (m_drawingShaderProgress || m_vulkan.busyRecording()) return;
     // ERUPTION_TEST_NO_SHADER_PROGRESS=1 (debug): conta mas não redesenha.
-    static const bool kOff = std::getenv("ERUPTION_TEST_NO_SHADER_PROGRESS") != nullptr;
+    // Carga rapida: sem redesenhar a tela de "compiling shaders" (cada quadro
+    // dela custava mais que a propria compilacao onde apresentar e' caro).
+    static const bool kOff = std::getenv("ERUPTION_TEST_NO_SHADER_PROGRESS") != nullptr || fastLoadEnabled();
     if (kOff) return;
     const auto now = std::chrono::steady_clock::now();
     // Com o logo na tela, 30 Hz: o halo pulsa num ciclo de 1 s. O intervalo
@@ -289,18 +292,21 @@ void Engine::renderLoadingProgress() {
         drawList->AddText(pos, col, text);
     };
 
+    // Linha logo acima da barra: tarefa a' esquerda, % a' direita; o mapa na
+    // linha de cima. A tarefa e' cortada com "..." antes do %: as tarefas
+    // longas ("Placing scene objects (512/1058)") passavam por cima dele.
     std::string progressPct = std::to_string((int)(progress * 100.0f)) + "%";
     ImVec2 pctSize = ImGui::CalcTextSize(progressPct.c_str());
-    drawStrokedText(ImVec2(pMax.x - pctSize.x, pMin.y - pctSize.y - 5.0f), IM_COL32(200, 200, 200, 255), progressPct.c_str());
+    const float lineY = pMin.y - pctSize.y - 5.0f;
+    drawStrokedText(ImVec2(pMax.x - pctSize.x, lineY), IM_COL32(200, 200, 200, 255), progressPct.c_str());
 
     if (!task.empty()) {
-        float yOffset = -18.0f;
-        if (!mapName.empty()) {
-            drawStrokedText(ImVec2(pMin.x, pMin.y + yOffset - 15.0f), vhRed, mapName.c_str());
-            drawStrokedText(ImVec2(pMin.x, pMin.y + yOffset), IM_COL32(150, 150, 150, 255), task.c_str());
-        } else {
-            drawStrokedText(ImVec2(pMin.x, pMin.y + yOffset), IM_COL32(150, 150, 150, 255), task.c_str());
-        }
+        const std::string fit = fitLoadingText(task, width - pctSize.x - 12.0f, [](const char* t) {
+            return ImGui::CalcTextSize(t).x;
+        });
+        drawStrokedText(ImVec2(pMin.x, lineY), IM_COL32(150, 150, 150, 255), fit.c_str());
+        if (!mapName.empty())
+            drawStrokedText(ImVec2(pMin.x, lineY - pctSize.y - 2.0f), vhRed, mapName.c_str());
     }
 }
 
@@ -711,14 +717,15 @@ void Engine::renderLoadingUI(const std::string& mapName, const std::string& task
         drawStrokedText(ImVec2(pMax.x - pctSize.x, pMin.y - pctSize.y - 5.0f), IM_COL32(200, 200, 200, 255), progressPct.c_str());
         
         // Task info and Map Name
+        // Tarefa cortada com "..." antes do % (as longas passavam por cima dele).
         if (!task.empty()) {
-            float yOffset = -18.0f;
-            if (!mapName.empty()) {
-                drawStrokedText(ImVec2(pMin.x, pMin.y + yOffset - 15.0f), vhRed, mapName.c_str());
-                drawStrokedText(ImVec2(pMin.x, pMin.y + yOffset), IM_COL32(150, 150, 150, 255), task.c_str());
-            } else {
-                drawStrokedText(ImVec2(pMin.x, pMin.y + yOffset), IM_COL32(150, 150, 150, 255), task.c_str());
-            }
+            const float lineY = pMin.y - pctSize.y - 5.0f;
+            const std::string fit = fitLoadingText(task, width - pctSize.x - 12.0f, [](const char* t) {
+                return ImGui::CalcTextSize(t).x;
+            });
+            drawStrokedText(ImVec2(pMin.x, lineY), IM_COL32(150, 150, 150, 255), fit.c_str());
+            if (!mapName.empty())
+                drawStrokedText(ImVec2(pMin.x, lineY - pctSize.y - 2.0f), vhRed, mapName.c_str());
         }
     }
 

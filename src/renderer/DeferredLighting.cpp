@@ -990,11 +990,14 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     // permite validar headless que a leitura nao muda com a hora do dia.
     static const uint32_t kPbrDebugEnv = [] {
         const char* e = std::getenv("ERUPTION_TEST_PBR_DEBUG");
-        return e ? (static_cast<uint32_t>(std::atoi(e)) & 95u) : 0u; // 64 = AO cru
+        // 64 = AO cru, 128 = quanto molha (chuva x nuvem), 256 = sem molhado (A/B)
+        return e ? (static_cast<uint32_t>(std::atoi(e)) & 479u) : 0u;
     }();
     ubo.pbrDebugMode = m_pbrDebugMode | kFlatAlbedo | kPbrDebugEnv;
     ubo.pbrLightScale = m_pbrLightScale;
     ubo.rainIntensity = m_rainIntensity;
+    for (uint32_t i = 0; i < m_rainSpotCount; ++i) ubo.rainSpots[i] = m_rainSpots[i];
+    ubo.rainSpotParams = Vec4(static_cast<float>(m_rainSpotCount), m_rainSpotsLocal ? 1.0f : 0.0f, 0.0f, 0.0f);
     ubo.snowIntensity = m_snowIntensity;
     ubo.temperatureC = m_temperatureC;
     ubo.ambientSky = Vec4(m_env.ambientSkyColor, 0.0f);

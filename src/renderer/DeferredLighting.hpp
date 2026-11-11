@@ -113,6 +113,11 @@ struct LightingUBO {
     // lista) por bloco de kLightTilesX x kLightTilesY da tela. No fim, como
     // os dois acima.
     alignas(16) glm::uvec4 tileLights[kLightTiles];
+    // CHUVA LOCAL: o chao so' molha debaixo das nuvens que chovem. Ate'
+    // kRainSpots discos (xy = centro XZ, z = raio); rainSpotParams.x = quantos,
+    // y = 1 se ha' campo de nuvens (sem ele a chuva global molha tudo). No fim.
+    alignas(16) Vec4 rainSpots[64];
+    alignas(16) Vec4 rainSpotParams;
 };
 
 struct DirectionalLight {
@@ -240,6 +245,13 @@ public:
 
     // Climate state drives rain wetting, snow/frost accumulation and surface
     // temperature for the PBR semantic material system.
+    // Discos de chuva (centro XZ, raio) das nuvens que chovem; local = false:
+    // nao ha' campo de nuvens e a chuva global vale no mapa inteiro.
+    void setRainSpots(const std::vector<Vec4>& spots, bool local) {
+        m_rainSpotCount = static_cast<uint32_t>(std::min<size_t>(spots.size(), 64));
+        for (uint32_t i = 0; i < m_rainSpotCount; ++i) m_rainSpots[i] = spots[i];
+        m_rainSpotsLocal = local;
+    }
     void setWeatherState(float rainIntensity, float snowIntensity, float temperatureC) {
         m_rainIntensity = rainIntensity;
         m_snowIntensity = snowIntensity;
@@ -349,6 +361,9 @@ private:
     float m_rainIntensity = 0.0f;
     float m_snowIntensity = 0.0f;
     float m_temperatureC = 20.0f;
+    Vec4 m_rainSpots[64] = {};
+    uint32_t m_rainSpotCount = 0;
+    bool m_rainSpotsLocal = false;
     bool  m_ssaoEnabled = true;
     int   m_ssaoTaps = 12; // preset ssao_taps (especializacao do ssao.frag)
     // True while the SSAO targets hold neutral white in SHADER_READ layout,

@@ -59,7 +59,9 @@ VfxEffectDesc buildEffect(const AmbientLayer& l, float& yOffset) {
                         key(0.8f, 1.0f, 0.93f, 0.78f, 0.9f), key(1.0f, 1.0f, 0.93f, 0.78f, 0.0f)};
         e.texture = "builtin:spark";
         e.emissive = 2.2f;
-        e.lit = 1.0f;
+        // Luz propria: 60% do brilho nao depende do sol (na sombra e de noite
+        // a poeira continua acesa); os outros 40% seguem o facho de luz.
+        e.lit = 0.4f;
         e.shadowed = true;
         break;
     case AmbientLayer::Kind::Leaves:
