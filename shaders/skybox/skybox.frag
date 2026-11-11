@@ -15,7 +15,7 @@ layout(set = 0, binding = 0) uniform SkyParamsUBO {
     vec4 proceduralParams3; // x=moonSize, y=enableStars, z=enableClouds, w=starTwinkleSpeed
     vec4 proceduralParams4; // x=cloudSoftness, y=cloudThickness, z=stormTint, w=sunLimbDarkening
     vec4 proceduralParams5; // x=sunHaloIntensity, y=sunHaloRays, z=sunHaloSize, w=moonPhase
-    vec4 proceduralParams6; // x=moonPhaseAuto, y=ERUPTION_TEST_SKY_GRADIENT_DEBUG flag
+    vec4 proceduralParams6; // x=moonPhaseAuto, y=ERUPTION_TEST_SKY_GRADIENT_DEBUG flag, z=aurora (0..1), w=relogio da aurora (s)
     mat4 invViewProj;
 } ubo;
 
@@ -218,6 +218,53 @@ vec3 getMoon(vec3 rayDir, vec3 moonDir, vec3 sunDir, float moonIntensity, vec3 m
     return moonColor * moonIntensity * (moonLit + earthshine + moonGlow);
 }
 
+// AURORA (clima aurora_borealis/australis). Cortinas presas ao ceu
+// (azimute x elevacao): borda de baixo nitida e verde, raios verticais que
+// tremulam e correm devagar ao longo da cortina, topo que passa a roxo e some.
+// Fica AQUI e nao no pos: so' o ceu desenhado recebe, e o reflexo da agua (que
+// usa este mesmo shader) mostra a aurora. A camera de jogo olha para baixo e
+// so' ve' o ceu perto do horizonte, entao a base das cortinas fica baixa.
+float auroraCortina(float az, float el, float t, float fase, float base) {
+    float dobra = base + 0.035 * sin(az * 3.0 + fase + t * 0.05)
+                + 0.09 * (fbm(vec2(az * 1.6 + fase, t * 0.015)) - 0.5);
+    float h = el - dobra;
+    if (h < -0.02) return 0.0;
+    float borda = smoothstep(-0.012, 0.004, h);
+    // Raios: ruido so' em azimute (finos, verticais), em duas escalas, com
+    // o contraste por potencia (o smoothstep cortava em blocos retos).
+    float r1 = fbm(vec2(az * 40.0 + fase * 7.0 - t * 0.08, t * 0.2 + h * 3.0));
+    float r2 = fbm(vec2(az * 110.0 - fase * 3.0 + t * 0.05, t * 0.3));
+    float raios = pow(clamp(r1 * 0.7 + r2 * 0.45, 0.0, 1.0), 3.0) * 4.0 + 0.1;
+    // Borda de baixo mais acesa, corpo que apaga em ~0,15 rad.
+    float corpo = exp(-max(h, 0.0) * 11.0) * (1.0 + 1.5 * exp(-max(h, 0.0) * 60.0));
+    float renda = smoothstep(0.35, 0.7, fbm(vec2(az * 2.2 - fase + t * 0.01, t * 0.03)));
+    return borda * corpo * raios * renda;
+}
+
+vec3 aurora(vec3 dir, float intensidade, float t) {
+    float el = asin(clamp(dir.y, -1.0, 1.0));
+    if (el < -0.04) return vec3(0.0);
+    float az = atan(dir.x, dir.z);
+    vec3 cor = vec3(0.0);
+    for (int k = 0; k < 3; ++k) {
+        float fase = float(k) * 2.1;
+        float base = -0.015 + 0.03 * float(k);
+        float c = auroraCortina(az, el, t, fase, base);
+        float h = el - base;
+        vec3 tom = mix(vec3(0.15, 1.0, 0.30), vec3(0.70, 0.25, 1.0), smoothstep(0.06, 0.20, h));
+        tom = mix(tom, vec3(1.0, 0.25, 0.45), smoothstep(0.30, 0.50, h) * 0.5);
+        cor += tom * c * (k == 0 ? 1.0 : 0.65);
+    }
+    // Brilho verde difuso no ceu em volta das cortinas.
+    cor += vec3(0.01, 0.05, 0.03) * smoothstep(-0.02, 0.15, el) * (1.0 - smoothstep(0.3, 0.8, el));
+    // Escala baixa: a exposicao da noite amplifica o ceu; com 1,0 a cortina
+    // virava uma faixa ciano chapada.
+    // Satura pelo canal mais forte, mantendo o tom: por canal o verde batia
+    // no teto e o vermelho/azul continuavam subindo - a cortina virava cinza.
+    float pico = max(max(cor.r, cor.g), max(cor.b, 1e-4));
+    return 0.30 * cor / pico * (1.0 - exp(-pico * intensidade * 1.4)) * smoothstep(-0.04, 0.0, el);
+}
+
 void main() {
     vec3 rayDir = getRayDir(fragUV);
 
@@ -344,6 +391,12 @@ void main() {
         // Darken the sky behind clouds for readable silhouettes
         skyColor *= 1.0 - cloudMask * 0.35 * horizonFade;
         skyColor = mix(skyColor, cloudColor, cloudMask * 0.95 * horizonFade);
+    }
+
+    // ---- Aurora (so' de noite) ----
+    if (ubo.proceduralParams6.z > 0.001) {
+        float noite = 1.0 - smoothstep(-0.15, 0.05, sunHeight);
+        skyColor += aurora(rayDir, ubo.proceduralParams6.z, ubo.proceduralParams6.w) * noite;
     }
 
     float groundFactor = smoothstep(-0.02, -0.35, viewY);

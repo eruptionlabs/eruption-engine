@@ -594,55 +594,24 @@ vec3 tornado(vec2 uv, vec3 worldPos, float depth, float t) {
     return cor * alfa;
 }
 
-// Aurora borealis/australis curtains in the night sky.
-// Aurora: cortinas presas ao CEU (direcao de visao, azimute x elevacao), nao
-// a' tela - antes era uma onda de seno em uv que andava junto com a camera.
-// Cada cortina: borda de baixo nitida e verde, raios verticais finos que
-// tremulam, topo que vira roxo e some; duas cortinas em alturas diferentes
-// e um brilho verde fraco no ceu em volta.
-float auroraCurtain(float az, float el, float t, float phase, float base) {
-    float fold = base + 0.025 * sin(az * 3.0 + phase + t * 0.04) + 0.03 * (fbm2(vec2(az * 1.3 + phase, t * 0.02)) - 0.47);
-    float h = el - fold;
-    if (h < -0.01) return 0.0;
-    float edge = smoothstep(-0.008, 0.003, h);
-    float rays = fbm2(vec2(az * 38.0 + phase * 7.0, t * 0.25)) * 0.5 + 0.5;
-    rays = pow(rays, 2.2) * 1.6 + 0.25;
-    float body = exp(-max(h, 0.0) * 7.0);
-    float lace = smoothstep(0.15, 0.6, fbm2(vec2(az * 3.0 - phase, t * 0.05)) * 0.5 + 0.5);
-    return edge * body * rays * lace;
-}
-
-vec3 aurora(vec2 uv, vec3 worldPos, float depth, float t) {
+// Aurora: as cortinas ficam no CEU (skybox.frag, so' onde o ceu e' desenhado
+// e no reflexo da agua). Aqui so' a LUZ dela no chao: um verde fraco em faixas
+// largas que correm devagar, mais forte no que ja' e' claro (a luz bate na
+// superficie, nao vira neblina sobre o preto). A camera de jogo olha para
+// baixo e quase nao ve' ceu; e' esta luz que conta que ha' aurora.
+vec3 aurora(vec2 uv, vec3 worldPos, float depth, float t, vec3 cena) {
     float intensity = push.params9.w;
-    if (intensity < 0.001) return vec3(0.0);
-    // So' o ceu: a cupula do ceu tem profundidade < 1, entao vale o mesmo
-    // teste das estrelas cadentes (alto e longe), alem do fundo vazio.
+    if (intensity < 0.001 || depth >= 1.0) return vec3(0.0);
     float dist = length(worldPos - push.cameraPos.xyz);
-    float sky = depth >= 1.0 ? 1.0 : smoothstep(0.0, 30.0, worldPos.y - push.cameraPos.y) * smoothstep(600.0, 1500.0, dist);
-    if (sky < 0.01) return vec3(0.0);
-    vec3 v = normalize(worldPos - push.cameraPos.xyz);
-    if (depth >= 1.0) {
-        vec4 far = ubo.invViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
-        v = normalize(far.xyz / far.w - push.cameraPos.xyz);
-    }
-    float el = asin(clamp(v.y, -1.0, 1.0));
-    if (el < -0.05) return vec3(0.0);
-    float az = atan(v.x, v.z);
-    vec3 col = vec3(0.0);
-    for (int k = 0; k < 2; ++k) {
-        float phase = float(k) * 2.3;
-        // Baixas no horizonte: a camera de jogo (tele, olhando para baixo) so' ve' o ceu ate' ~5 graus.
-        float base = k == 0 ? -0.01 : 0.035;
-        float c = auroraCurtain(az, el, t, phase, base);
-        float h = el - base;
-        vec3 tint = mix(vec3(0.12, 1.0, 0.42), vec3(0.65, 0.22, 0.95), smoothstep(0.08, 0.22, h)); // verde na faixa vista, roxo so' no alto
-        col += tint * c * (k == 0 ? 1.0 : 0.6);
-    }
-    col += vec3(0.05, 0.25, 0.12) * smoothstep(0.0, 0.25, el) * (1.0 - smoothstep(0.4, 0.9, el)) * 0.25;
-    // Satura por canal (mantem o verde): x3 linear estourava em branco com bloom
-    // quando o "ceu" era um cenario de fundo distante.
-    col = 0.9 * (vec3(1.0) - exp(-col * intensity * 2.2));
-    return col * sky * smoothstep(-0.05, 0.0, el);
+    float perto = 1.0 - smoothstep(900.0, 2500.0, dist);
+    if (perto < 0.01) return vec3(0.0);
+    vec2 p = worldPos.xz * 0.0025;
+    float faixa = fbm2(vec2(p.x + t * 0.012, p.y * 0.35 - t * 0.006));
+    faixa = smoothstep(0.35, 0.75, faixa);
+    float roxo = smoothstep(0.55, 0.8, fbm2(p * 0.7 + vec2(3.1, -t * 0.008)));
+    vec3 tom = mix(vec3(0.15, 1.0, 0.5), vec3(0.6, 0.3, 1.0), roxo * 0.5);
+    float lum = dot(cena, vec3(0.299, 0.587, 0.114));
+    return tom * (0.010 + lum * 0.55) * (0.35 + 0.65 * faixa) * intensity * perto;
 }
 
 // Atmospheric tint for sand/dust/smoke/volcanic ash.
@@ -1025,7 +994,7 @@ void main() {
     color += rainbow(uv, worldPos, depth);
 
     // Aurora curtains.
-    color += aurora(uv, worldPos, depth, push.params2.w);
+    color += aurora(uv, worldPos, depth, push.params2.w, color);
 
     // Shooting stars / meteors.
     color += shootingStars(uv, worldPos, depth, push.params2.w);

@@ -99,6 +99,10 @@ bool SkySystem::renderProbeFace(VkCommandBuffer cmd, const DayNightCycle& cycle,
     return m_backend->renderProbeFace(cmd, cycle, invViewProj, faceView, depthView, size, face);
 }
 
+void SkySystem::setAurora(float intensity, float seconds) {
+    if (m_backend) m_backend->setAurora(intensity, seconds);
+}
+
 size_t SkySystem::skyParams(const DayNightCycle& cycle, const Mat4& invViewProj, void* out) const {
     return m_backend ? m_backend->skyParams(cycle, invViewProj, out) : 0;
 }

@@ -24,6 +24,7 @@ public:
 
     Vec3 getSkyColor(const Vec3& direction, const DayNightCycle& cycle) const override;
     size_t skyParams(const DayNightCycle& cycle, const Mat4& invViewProj, void* out) const override;
+    void setAurora(float intensity, float seconds) override { m_auroraIntensity = intensity; m_auroraTime = seconds; }
 
     VkImageView outputView() const override { return m_outputView; }
     VkSampler outputSampler() const override { return m_outputSampler; }
@@ -73,6 +74,8 @@ private:
     uint32_t m_texHeight = 0;
 
     SkyConfig m_config;
+    float m_auroraIntensity = 0.0f;
+    float m_auroraTime = 0.0f;
 };
 
 } // namespace eruption

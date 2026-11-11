@@ -1259,6 +1259,7 @@ void Engine::render() {
     // O ceu-para-textura existe SO' para o reflexo da agua: sem agua na vista,
     // e' um passe inteiro de skybox jogado fora todo frame. Medido em cidade-A
     // com a agua fora do quadro: a fase inteira custava 2,045 ms de CPU.
+    m_skybox.setAurora(m_weatherSystem.current().auroraIntensity, m_timer.elapsed());
     if (!m_benchmarkThunderstormStarted && waterInView) {
         bw::PassScope bwSky("Sky Reflection"); // medidor de banda (spec 52): era "outros"
         if (!wireframeMode()) m_skybox.renderToTexture(cmd, m_dayNightCycle, m_camera.skyboxViewProjJittered());

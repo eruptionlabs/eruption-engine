@@ -33,6 +33,7 @@ public:
 
     Vec3 getSkyColor(const Vec3& direction, const DayNightCycle& cycle) const;
     size_t skyParams(const DayNightCycle& cycle, const Mat4& invViewProj, void* out) const;
+    void setAurora(float intensity, float seconds);
 
     VkImageView outputView() const;
     VkSampler outputSampler() const;

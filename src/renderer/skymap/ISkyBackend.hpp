@@ -39,6 +39,11 @@ public:
     // skybox.frag (convertido do SPIR-V) com estes bytes.
     virtual size_t skyParams(const DayNightCycle&, const Mat4& /*invViewProj*/, void* /*out*/) const { return 0; }
 
+    // Aurora no proprio ceu (clima): intensidade 0..1 e relogio em segundos.
+    // So' o ceu desenhado recebe a cortina - antes ela era pintada no pos e
+    // caia em cenario de fundo distante tomado por ceu.
+    virtual void setAurora(float /*intensity*/, float /*seconds*/) {}
+
     // Approximate sky color for a world-space direction (fallback for non-sampled code).
     virtual Vec3 getSkyColor(const Vec3& direction, const DayNightCycle& cycle) const = 0;
 

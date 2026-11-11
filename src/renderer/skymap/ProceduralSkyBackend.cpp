@@ -378,6 +378,8 @@ static void fillSkyParams(SkyParamsUBO& ubo, const SkyConfig& cfg, const DayNigh
 size_t ProceduralSkyBackend::skyParams(const DayNightCycle& cycle, const Mat4& invViewProj, void* out) const {
     SkyParamsUBO ubo;
     fillSkyParams(ubo, m_config, cycle);
+    ubo.proceduralParams6.z = m_auroraIntensity;
+    ubo.proceduralParams6.w = m_auroraTime;
     ubo.invViewProj = invViewProj;
     std::memcpy(out, &ubo, sizeof(ubo));
     return sizeof(ubo);
@@ -386,6 +388,8 @@ size_t ProceduralSkyBackend::skyParams(const DayNightCycle& cycle, const Mat4& i
 void ProceduralSkyBackend::updateUBO(const DayNightCycle& cycle, const Mat4& viewProj) {
     SkyParamsUBO ubo;
     fillSkyParams(ubo, m_config, cycle);
+    ubo.proceduralParams6.z = m_auroraIntensity; // aurora (setAurora)
+    ubo.proceduralParams6.w = m_auroraTime;
     ubo.invViewProj = glm::inverse(viewProj);
     std::memcpy(m_uboMapped, &ubo, sizeof(ubo));
 }
