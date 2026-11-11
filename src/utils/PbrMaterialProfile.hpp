@@ -16,6 +16,9 @@ struct PbrMaterialProfile {
     // true: metallic/roughness valem como estao, sem multiplicar pelo mapa
     // cozido (a rede da' metal ~0 em cristal; 1 x 0 continuava 0).
     bool absolute = false;
+    // true: normal da FACE (sem suavizar e sem mapa de normal). Cristal com
+    // normal suavizada sombreava como capsula: o sol virava uma bola de luz.
+    bool flatNormals = false;
     std::string category;    // semantic category, e.g. "water", "stone", "metal"
 };
 

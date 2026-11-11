@@ -3327,6 +3327,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             mesh.metallicScale = profile.metallic;
             mesh.roughnessScale = profile.roughness;
             mesh.materialAbsolute = profile.absolute;
+            mesh.materialFlat = profile.flatNormals;
             mesh.swayAmount = resolveSwayAmount(nomeMaterial, profile.category);
             // FATOR DE DESLOCAMENTO POR MATERIAL (tesselacao da banda
             // perto) - ver dispScaleForCategory() em PbrMaterialProfile.hpp
@@ -4596,9 +4597,11 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     push.weld = Vec4(0.0f);
     push.vp = viewProj;
     push.__pad = magentaDebug ? 1.0f : 0.0f;
-    // __pad: bit 1 = depuracao magenta, bit 2 = material absoluto (perfil).
+    // __pad: bit 1 = depuracao magenta, bit 2 = material absoluto, bit 4 =
+    // normal da face (perfil).
     auto padMaterial = [&](const ModelMeshGPU& m) {
-        return (magentaDebug ? 1.0f : 0.0f) + (m.materialAbsolute ? 2.0f : 0.0f);
+        return (magentaDebug ? 1.0f : 0.0f) + (m.materialAbsolute ? 2.0f : 0.0f) +
+               (m.materialFlat ? 4.0f : 0.0f);
     };
     // uvScale.x = ladrilhamento estocastico do CHAO (model_frag.glsl). Entra
     // aqui, e nao num campo novo, porque o bloco de push tem 96 bytes fixos e
