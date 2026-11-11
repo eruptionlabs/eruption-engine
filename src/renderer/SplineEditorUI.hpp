@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/FxFilter.hpp"
 #include <imgui.h>
 #include "utils/SplineCurve.hpp"
 #include <string>
@@ -11,14 +12,16 @@ class SplineEditorUI {
 public:
     // Legacy draw with X normalized to 0..1 and displayed as percent.
     static void draw(const char* label, SplineCurve& curve, float minY, float maxY, float currentX, float currentY, bool isAperture = false, const char* xLabel = "Zoom %") {
+        if (::eruption::fx::skip(label)) return; // busca do F2: o grafico so' aparece se o nome bater
         draw(label, curve, 0.0f, 1.0f, minY, maxY, currentX, currentY, isAperture, xLabel, true);
     }
 
     // Flexible draw with real X range. X values are still stored normalized 0..1 in the curve,
     // but the UI displays and edits them in [minX, maxX] units.
     static void draw(const char* label, SplineCurve& curve, float minX, float maxX, float minY, float maxY, float currentXReal, float currentY, bool isAperture = false, const char* xLabel = "X", bool displayAsPercent = false) {
+        if (::eruption::fx::skip(label)) return; // busca do F2: o grafico so' aparece se o nome bater
         ImGui::PushID(label);
-        ImGui::Text("%s", label);
+        ::eruption::fx::Text("%s", label);
         
         // Use curve's own m_maxY if it's larger than provided maxY to ensure points are visible
         float effectiveMaxY = std::max(maxY, curve.m_maxY);
@@ -57,8 +60,8 @@ public:
             ImGui::SetCursorScreenPos(ImVec2(p_pos.x - 10, p_pos.y - 10));
             ImGui::InvisibleButton("dot", ImVec2(20, 20));
             
-            bool hovered = ImGui::IsItemHovered();
-            bool active = ImGui::IsItemActive();
+            bool hovered = ::eruption::fx::IsItemHovered();
+            bool active = ::eruption::fx::IsItemActive();
             
             if (active && ImGui::IsMouseDown(0)) {
                 ImVec2 mouse = ImGui::GetIO().MousePos;
@@ -95,7 +98,7 @@ public:
 
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.16f);
             float realX = curve.pointsX[i] * xRange + minX;
-            if (ImGui::DragFloat(xLabel, &realX, 0.1f, minX, maxX, displayAsPercent ? "%.0f%%" : "%.1f")) {
+            if (::eruption::fx::DragFloat(xLabel, &realX, 0.1f, minX, maxX, displayAsPercent ? "%.0f%%" : "%.1f")) {
                 float minXN = (i > 0) ? curve.pointsX[i-1] + 0.001f : 0.0f;
                 float maxXN = (i < curve.pointsX.size() - 1) ? curve.pointsX[i+1] - 0.001f : 1.0f;
                 float realMinX = minXN * xRange + minX;
@@ -104,19 +107,19 @@ public:
                 curve.pointsX[i] = (clampedRealX - minX) / xRange;
             }
 
-            ImGui::SameLine();
+            ::eruption::fx::SameLine();
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.20f);
             float vVal = curve.pointsY[i];
-            if (ImGui::DragFloat(isAperture ? "Apt %" : "Val", &vVal, 0.001f, minY, effectiveMaxY, "%.2f")) {
+            if (::eruption::fx::DragFloat(isAperture ? "Apt %" : "Val", &vVal, 0.001f, minY, effectiveMaxY, "%.2f")) {
                 curve.pointsY[i] = vVal;
                 curve.m_maxY = std::max(curve.m_maxY, curve.pointsY[i]);
             }
 
             if (i < curve.modes.size()) {
-                ImGui::SameLine();
+                ::eruption::fx::SameLine();
                 ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.32f);
                 int curM = (int)curve.modes[i];
-                if (ImGui::Combo("Transition", &curM, interpNames, 4)) {
+                if (::eruption::fx::Combo("Transition", &curM, interpNames, 4)) {
                     curve.modes[i] = (InterpolationMode)curM;
                 }
             }
@@ -124,7 +127,7 @@ public:
             ImGui::EndGroup();
             ImGui::PopID();
         }
-        ImGui::Separator();
+        ::eruption::fx::Separator();
         ImGui::PopID();
     }
 };

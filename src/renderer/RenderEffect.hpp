@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/FxFilter.hpp"
 #include <string>
 #include <vector>
 #include <imgui.h>
@@ -27,15 +28,17 @@ public:
      */
     virtual void drawUI() {
         ImGui::PushID(m_name.c_str());
-        ImGui::Checkbox(m_name.c_str(), &m_enabled);
-        if (ImGui::IsItemHovered() && !m_tooltip.empty()) {
-            ImGui::SetTooltip("%s", m_tooltip.c_str());
+        ::eruption::fx::describe(m_name.c_str(), m_tooltip.c_str());
+        ::eruption::fx::Checkbox(m_name.c_str(), &m_enabled);
+        if (::eruption::fx::IsItemHovered() && !m_tooltip.empty()) {
+            ::eruption::fx::SetTooltip("%s", m_tooltip.c_str());
         }
-        if (m_enabled) {
+        if (m_enabled || ::eruption::fx::active()) {
             for (auto& param : m_parameters) {
-                ImGui::SliderFloat(param.name.c_str(), &param.value, param.min, param.max);
-                if (ImGui::IsItemHovered() && !param.help.empty()) {
-                    ImGui::SetTooltip("%s", param.help.c_str());
+                ::eruption::fx::describe(param.name.c_str(), param.help.c_str());
+                ::eruption::fx::SliderFloat(param.name.c_str(), &param.value, param.min, param.max);
+                if (::eruption::fx::IsItemHovered() && !param.help.empty()) {
+                    ::eruption::fx::SetTooltip("%s", param.help.c_str());
                 }
             }
         }

@@ -128,6 +128,9 @@ public:
         float cocSpotMaxNear = 4.0f;
         float cocSpotHeight = 90.0f;
         float cocSpotHeightRamp = 120.0f;
+        // F2: os valores do spotlight do painel passam por cima dos que o
+        // jogo manda por world.set_focus (e ligam o spotlight).
+        bool cocSpotPanel = false;
         bool cocEnableForeground = true;
         bool visualizeCoC = false;
 

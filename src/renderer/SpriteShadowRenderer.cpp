@@ -1,3 +1,4 @@
+#include "core/FxFilter.hpp"
 #include "renderer/SpriteShadowRenderer.hpp"
 #include "renderer/PipelineBuilder.hpp"
 #include "renderer/ShaderCompiler.hpp"
@@ -542,22 +543,22 @@ void SpriteShadowRenderer::renderBlob(VkCommandBuffer cmd, const FrameUBO& frame
 }
 
 void SpriteShadowRenderer::debugUI() {
-    ImGui::TextColored(ImVec4(0, 1, 1, 1), "Sprite Shadow System");
-    ImGui::Text("Active: %u | Planar: %u | Blob: %u | Proxy: %u",
+    ::eruption::fx::TextColored(ImVec4(0, 1, 1, 1), "Sprite Shadow System");
+    ::eruption::fx::Text("Active: %u | Planar: %u | Blob: %u | Proxy: %u",
                 m_activeCount, m_planarCount, m_blobCount, m_proxyCount);
-    ImGui::Text("GPU Time: %.3f ms", m_gpuTimeMs);
-    ImGui::Separator();
+    ::eruption::fx::Text("GPU Time: %.3f ms", m_gpuTimeMs);
+    ::eruption::fx::Separator();
 
-    ImGui::SliderFloat("Global Intensity", &m_config.globalIntensity, 0.0f, 1.0f);
-    ImGui::SliderFloat("Shadow Intensity", &m_config.shadowIntensity, 0.0f, 1.0f);
-    ImGui::SliderFloat("Max Planar Dist", &m_config.maxPlanarDistance, 5.0f, 50.0f);
-    ImGui::SliderFloat("Max Blob Dist", &m_config.maxBlobDistance, 30.0f, 150.0f);
-    ImGui::SliderFloat("Blob Scale", &m_config.blobScale, 0.2f, 2.0f);
-    ImGui::Checkbox("Force Blob", &m_config.forceBlob);
-    ImGui::Checkbox("Align to Terrain", &m_config.alignToTerrain);
-    ImGui::Checkbox("Enabled", &m_config.enabled);
-    ImGui::Checkbox("Debug Show Blob", &m_config.debugShowBlob);
-    if (ImGui::Button("Reload Shaders")) {
+    ::eruption::fx::SliderFloat("Global Intensity", &m_config.globalIntensity, 0.0f, 1.0f);
+    ::eruption::fx::SliderFloat("Shadow Intensity", &m_config.shadowIntensity, 0.0f, 1.0f);
+    ::eruption::fx::SliderFloat("Max Planar Dist", &m_config.maxPlanarDistance, 5.0f, 50.0f);
+    ::eruption::fx::SliderFloat("Max Blob Dist", &m_config.maxBlobDistance, 30.0f, 150.0f);
+    ::eruption::fx::SliderFloat("Blob Scale", &m_config.blobScale, 0.2f, 2.0f);
+    ::eruption::fx::Checkbox("Force Blob", &m_config.forceBlob);
+    ::eruption::fx::Checkbox("Align to Terrain", &m_config.alignToTerrain);
+    ::eruption::fx::Checkbox("Enabled", &m_config.enabled);
+    ::eruption::fx::Checkbox("Debug Show Blob", &m_config.debugShowBlob);
+    if (::eruption::fx::Button("Reload Shaders")) {
         reloadShaders();
     }
 }

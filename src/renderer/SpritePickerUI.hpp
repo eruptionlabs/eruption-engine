@@ -1,4 +1,5 @@
 #pragma once
+#include "core/FxFilter.hpp"
 #include <string>
 #include <vector>
 #include "renderer/PaletteManager.hpp"
@@ -181,11 +182,11 @@ public:
     static void draw(bool* open, CharConfig& config, const PackManager& /*packManager*/) {
         if (!ImGui::Begin("Sprite Picker (F6)", open)) { ImGui::End(); return; }
 
-        ImGui::Text("Sprite picker is disabled.");
-        ImGui::Text("Legacy sprite formats are no longer supported.");
-        ImGui::Text("Set a PNG path in char_config.json or use the default sprite.");
+        ::eruption::fx::Text("Sprite picker is disabled.");
+        ::eruption::fx::Text("Legacy sprite formats are no longer supported.");
+        ::eruption::fx::Text("Set a PNG path in char_config.json or use the default sprite.");
 
-        if (ImGui::Button("Reset to default sprite")) {
+        if (::eruption::fx::Button("Reset to default sprite")) {
             config.job = "assets/sprites/default.png";
             config.save("data/char_config.json");
         }

@@ -1,3 +1,4 @@
+#include "core/FxFilter.hpp"
 #include "debug/WaterDebugMenu.hpp"
 #include "core/Logger.hpp"
 #include <imgui.h>
@@ -254,9 +255,10 @@ void WaterDebugMenu::applySelectedLiquid() {
 void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, float screenH) {
     ensureDefaultLiquid();
 
-    if (ImGui::CollapsingHeader("Liquids", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::TextDisabled("%zu liquid surface(s) in this map", liquids.size());
-        if (ImGui::BeginListBox("##liquidlist", ImVec2(-FLT_MIN, 4 * ImGui::GetTextLineHeightWithSpacing()))) {
+    if (::eruption::fx::CollapsingHeader("Liquids", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ::eruption::fx::TextDisabled("%zu liquid surface(s) in this map", liquids.size());
+        // A lista de liquidos nao e' controle de efeito: some enquanto a busca do F2 filtra.
+        if (!fx::active() && ImGui::BeginListBox("##liquidlist", ImVec2(-FLT_MIN, 4 * ImGui::GetTextLineHeightWithSpacing()))) {
             for (int i = 0; i < static_cast<int>(liquids.size()); ++i) {
                 char label[128];
                 snprintf(label, sizeof(label), "%s  [%s]  y=%.1f",
@@ -274,7 +276,7 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
 
         LiquidEntry& sel = liquids[static_cast<size_t>(selectedLiquid)];
         const char* kindNames[WaterRenderer::kLiquidKindCount] = { "Water", "Lava" };
-        if (ImGui::Combo("Type", &sel.kind, kindNames, WaterRenderer::kLiquidKindCount)) {
+        if (::eruption::fx::Combo("Type", &sel.kind, kindNames, WaterRenderer::kLiquidKindCount)) {
             config.liquidKind = sel.kind;
             settingsChanged = true;
             saveConfig();
@@ -289,18 +291,18 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
         // verdade da lava e' Height Offset, na secao Shape abaixo - o
         // draw da lava sempre le m_lavaLiquid.level, nunca config.waterLevel.
         if (sel.kind == 0) {
-            if (ImGui::DragFloat("Surface Level", &sel.level, 0.5f)) {
+            if (::eruption::fx::DragFloat("Surface Level", &sel.level, 0.5f)) {
                 config.waterLevel = sel.level;
                 settingsChanged = true;
                 saveConfig();
             }
         }
         if (sel.kind == 1) {
-            if (ImGui::SliderFloat("Emissive", &config.emissiveStrength, 0.0f, 8.0f, "%.2f")) {
+            if (::eruption::fx::SliderFloat("Emissive", &config.emissiveStrength, 0.0f, 8.0f, "%.2f")) {
                 settingsChanged = true;
                 saveConfig();
             }
-            if (ImGui::SliderFloat("Flow Speed", &config.flowSpeed, 0.0f, 4.0f, "%.2f")) {
+            if (::eruption::fx::SliderFloat("Flow Speed", &config.flowSpeed, 0.0f, 4.0f, "%.2f")) {
                 settingsChanged = true;
                 saveConfig();
             }
@@ -316,36 +318,36 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
             // convencao RGB=XYZ dos editores 3D (X vermelho, Y verde, Z
             // azul), so' pra ajudar a associar qual campo mexe em qual eixo;
             // nao ha' gizmo nenhum aqui, o "alinhar com mouse" e' o proprio
-            // click-and-drag que o ImGui::InputFloat ja' da' de graca no
+            // click-and-drag que o ::eruption::fx::InputFloat ja' da' de graca no
             // texto (arrasta pra cima/baixo com o botao direito, ou digita
             // o numero direto).
-            ImGui::Separator();
-            ImGui::TextDisabled("Shape (live nudge, not saved to disk)");
+            ::eruption::fx::Separator();
+            ::eruption::fx::TextDisabled("Shape (live nudge, not saved to disk)");
 
             const float AXIS_STEP = 1.0f;
             const float AXIS_STEP_FAST = 10.0f;
-            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "X");
-            ImGui::SameLine();
-            if (ImGui::InputFloat("Center Offset##offX", &sel.offsetX, AXIS_STEP, AXIS_STEP_FAST, "%.1f")) {
+            ::eruption::fx::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "X");
+            ::eruption::fx::SameLine();
+            if (::eruption::fx::InputFloat("Center Offset##offX", &sel.offsetX, AXIS_STEP, AXIS_STEP_FAST, "%.1f")) {
                 liquidShapeDirty = true;
             }
-            ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.35f, 1.0f), "Y");
-            ImGui::SameLine();
-            if (ImGui::InputFloat("Height Offset##offY", &sel.offsetY, AXIS_STEP, AXIS_STEP_FAST, "%.1f")) {
+            ::eruption::fx::TextColored(ImVec4(0.35f, 0.85f, 0.35f, 1.0f), "Y");
+            ::eruption::fx::SameLine();
+            if (::eruption::fx::InputFloat("Height Offset##offY", &sel.offsetY, AXIS_STEP, AXIS_STEP_FAST, "%.1f")) {
                 liquidShapeDirty = true;
             }
-            ImGui::TextColored(ImVec4(0.35f, 0.55f, 0.95f, 1.0f), "Z");
-            ImGui::SameLine();
-            if (ImGui::InputFloat("Center Offset##offZ", &sel.offsetZ, AXIS_STEP, AXIS_STEP_FAST, "%.1f")) {
+            ::eruption::fx::TextColored(ImVec4(0.35f, 0.55f, 0.95f, 1.0f), "Z");
+            ::eruption::fx::SameLine();
+            if (::eruption::fx::InputFloat("Center Offset##offZ", &sel.offsetZ, AXIS_STEP, AXIS_STEP_FAST, "%.1f")) {
                 liquidShapeDirty = true;
             }
             // Sem clamp/wrap de proposito: 400 graus e 40 graus dao o
             // mesmo seno/cosseno no shader, entao nao ha' necessidade
             // funcional de normalizar - so' adicionaria complexidade.
-            if (ImGui::InputFloat("Rotation (deg)", &sel.rotationDeg, 1.0f, 15.0f, "%.0f")) {
+            if (::eruption::fx::InputFloat("Rotation (deg)", &sel.rotationDeg, 1.0f, 15.0f, "%.0f")) {
                 liquidShapeDirty = true;
             }
-            ImGui::SetItemTooltip("Spins the shore-radius profile (the lobed caldera outline) "
+            ::eruption::fx::SetItemTooltip("Spins the shore-radius profile (the lobed caldera outline) "
                                    "around the center. Position offsets move the whole disc.");
 
             // Nudge por teclado: setas movem no plano XZ, Ctrl+cima/baixo
@@ -353,7 +355,7 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
             // de texto sendo editado no momento (senao roubaria as setas de
             // quem esta' digitando um numero ou navegando o cursor dentro
             // do proprio InputFloat).
-            ImGui::TextDisabled("Arrows: move X/Z    Ctrl+Up/Down: move Y");
+            ::eruption::fx::TextDisabled("Arrows: move X/Z    Ctrl+Up/Down: move Y");
             if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
                 !ImGui::IsAnyItemActive()) {
                 const float dt = ImGui::GetIO().DeltaTime;
@@ -375,7 +377,7 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
                 if (moved) liquidShapeDirty = true;
             }
 
-            if (ImGui::Button("Reset Shape")) {
+            if (::eruption::fx::Button("Reset Shape")) {
                 sel.offsetX = 0.0f;
                 sel.offsetZ = 0.0f;
                 sel.offsetY = 0.0f;
@@ -391,11 +393,11 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
             // level, sincronizados em Engine::syncLiquidMenuFromMap) + o
             // nudge atual (offset*/rotationDeg) - igual a conta que
             // Engine::setupLavaLiquid faz pra construir a malha de verdade.
-            ImGui::Separator();
+            ::eruption::fx::Separator();
             static ImGuizmo::OPERATION s_lavaGizmoOp = ImGuizmo::TRANSLATE;
-            if (ImGui::RadioButton("Move##lavaGizmo", s_lavaGizmoOp == ImGuizmo::TRANSLATE)) s_lavaGizmoOp = ImGuizmo::TRANSLATE;
-            ImGui::SameLine();
-            if (ImGui::RadioButton("Rotate##lavaGizmo", s_lavaGizmoOp == ImGuizmo::ROTATE)) s_lavaGizmoOp = ImGuizmo::ROTATE;
+            if (::eruption::fx::RadioButton("Move##lavaGizmo", s_lavaGizmoOp == ImGuizmo::TRANSLATE)) s_lavaGizmoOp = ImGuizmo::TRANSLATE;
+            ::eruption::fx::SameLine();
+            if (::eruption::fx::RadioButton("Rotate##lavaGizmo", s_lavaGizmoOp == ImGuizmo::ROTATE)) s_lavaGizmoOp = ImGuizmo::ROTATE;
 
             float gizT[3] = { sel.centerX + sel.offsetX, sel.level + sel.offsetY, sel.centerZ + sel.offsetZ };
             float gizR[3] = { 0.0f, sel.rotationDeg, 0.0f };
@@ -432,7 +434,7 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
             }
         }
 
-        if (ImGui::Button("Add")) {
+        if (::eruption::fx::Button("Add")) {
             LiquidEntry e;
             char nm[64];
             snprintf(nm, sizeof(nm), "Liquid %zu", liquids.size());
@@ -444,14 +446,14 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
             applySelectedLiquid();
             settingsChanged = true;
         }
-        ImGui::SameLine();
-        if (liquids.size() > 1 && ImGui::Button("Remove")) {
+        ::eruption::fx::SameLine();
+        if (liquids.size() > 1 && ::eruption::fx::Button("Remove")) {
             liquids.erase(liquids.begin() + selectedLiquid);
             selectedLiquid = 0;
             applySelectedLiquid();
             settingsChanged = true;
         }
-        ImGui::Separator();
+        ::eruption::fx::Separator();
     }
 
     // TODA esta secao (onda, normal map, espuma, optico - "Water Height
@@ -469,47 +471,47 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
     // mostrar aqui - ela usa exatamente os valores da agua ate' alguem
     // construir um conjunto independente.
     if (!liquids.empty() && liquids[static_cast<size_t>(selectedLiquid)].kind == 1) {
-        ImGui::TextDisabled("Lava usa o nivel/emissivo/vazao dela (acima) - onda,");
-        ImGui::TextDisabled("normal map e espuma ainda sao os da agua (ver Water,");
-        ImGui::TextDisabled("selecione Water pra mexer nisso).");
+        ::eruption::fx::TextDisabled("Lava usa o nivel/emissivo/vazao dela (acima) - onda,");
+        ::eruption::fx::TextDisabled("normal map e espuma ainda sao os da agua (ver Water,");
+        ::eruption::fx::TextDisabled("selecione Water pra mexer nisso).");
         return;
     }
 
-    if (!ImGui::CollapsingHeader("Surface Settings", ImGuiTreeNodeFlags_DefaultOpen))
+    if (!::eruption::fx::CollapsingHeader("Surface Settings", ImGuiTreeNodeFlags_DefaultOpen))
         return;
 
     // Helpers with tooltips
     auto WSliderFloat = [&](const char* label, float* v, float min, float max, const char* fmt, const char* tip) {
-        if (ImGui::SliderFloat(label, v, min, max, fmt)) { settingsChanged = true; saveConfig(); }
-        if (tip) ImGui::SetItemTooltip("%s", tip);
+        if (::eruption::fx::SliderFloat(label, v, min, max, fmt)) { settingsChanged = true; saveConfig(); }
+        if (tip) ::eruption::fx::SetItemTooltip("%s", tip);
     };
     auto WSliderInt = [&](const char* label, int* v, int min, int max, const char* tip) {
-        if (ImGui::SliderInt(label, v, min, max)) { settingsChanged = true; saveConfig(); }
-        if (tip) ImGui::SetItemTooltip("%s", tip);
+        if (::eruption::fx::SliderInt(label, v, min, max)) { settingsChanged = true; saveConfig(); }
+        if (tip) ::eruption::fx::SetItemTooltip("%s", tip);
     };
     auto WCheckbox = [&](const char* label, bool* v, const char* tip) {
-        if (ImGui::Checkbox(label, v)) { settingsChanged = true; saveConfig(); }
-        if (tip) ImGui::SetItemTooltip("%s", tip);
+        if (::eruption::fx::Checkbox(label, v)) { settingsChanged = true; saveConfig(); }
+        if (tip) ::eruption::fx::SetItemTooltip("%s", tip);
     };
     auto WColorEdit3 = [&](const char* label, float* v, const char* tip) {
-        if (ImGui::ColorEdit3(label, v)) { settingsChanged = true; saveConfig(); }
-        if (tip) ImGui::SetItemTooltip("%s", tip);
+        if (::eruption::fx::ColorEdit3(label, v)) { settingsChanged = true; saveConfig(); }
+        if (tip) ::eruption::fx::SetItemTooltip("%s", tip);
     };
 
     WCheckbox("Enable Water", &config.enabled, "Master toggle for water rendering.");
     if (!config.enabled) {
-        ImGui::TextDisabled("Water rendering disabled.");
+        ::eruption::fx::TextDisabled("Water rendering disabled.");
         return;
     }
 
     WCheckbox("Force Water (all tiles)", &config.forceWater, "Render water on every tile, ignoring map water data.");
     if (config.forceWater) {
-        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "WARNING: Water on every tile!");
+        ::eruption::fx::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "WARNING: Water on every tile!");
     }
 
     // ===================== LAYER 1: WAVE BODY (Gerstner) =====================
-    ImGui::Separator();
-    if (ImGui::TreeNodeEx("LAYER 1: Wave Body (Gerstner)", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ::eruption::fx::Separator();
+    if (::eruption::fx::TreeNodeEx("LAYER 1: Wave Body (Gerstner)", ImGuiTreeNodeFlags_DefaultOpen)) {
         WSliderFloat("Amplitude", &config.waveAmplitude, 0.0f, 2.0f, "%.2f",
             "Height of the Gerstner waves. Higher = bigger swell.");
         WSliderFloat("Frequency", &config.waveFrequency, 0.1f, 5.0f, "%.2f",
@@ -522,24 +524,24 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
             float angle = atan2(config.waveDirections[i].y, config.waveDirections[i].x) * 57.2958f;
             char label[32];
             snprintf(label, sizeof(label), "Wave %d Angle", i + 1);
-            if (ImGui::SliderFloat(label, &angle, -180.0f, 180.0f, "%.0f deg")) {
+            if (::eruption::fx::SliderFloat(label, &angle, -180.0f, 180.0f, "%.0f deg")) {
                 float rad = angle * 0.0174533f;
                 config.waveDirections[i] = Vec2(cos(rad), sin(rad));
                 settingsChanged = true; saveConfig();
             }
-            ImGui::SetItemTooltip("Direction the wave travels, in degrees.");
+            ::eruption::fx::SetItemTooltip("Direction the wave travels, in degrees.");
             snprintf(label, sizeof(label), "Wave %d Steepness", i + 1);
-            if (ImGui::SliderFloat(label, &config.waveSteepness[i], 0.0f, 1.0f, "%.2f")) {
+            if (::eruption::fx::SliderFloat(label, &config.waveSteepness[i], 0.0f, 1.0f, "%.2f")) {
                 settingsChanged = true; saveConfig();
             }
-            ImGui::SetItemTooltip("How sharply the wave peaks. 0 = round sine, 1 = sharp crest.");
+            ::eruption::fx::SetItemTooltip("How sharply the wave peaks. 0 = round sine, 1 = sharp crest.");
         }
-        ImGui::TreePop();
+        ::eruption::fx::TreePop();
     }
 
     // ===================== LAYER 2: SURFACE DETAIL (Normal) =====================
-    ImGui::Separator();
-    if (ImGui::TreeNodeEx("LAYER 2: Surface Detail (Normal Map)", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ::eruption::fx::Separator();
+    if (::eruption::fx::TreeNodeEx("LAYER 2: Surface Detail (Normal Map)", ImGuiTreeNodeFlags_DefaultOpen)) {
         WCheckbox("Use Procedural Normal", &config.useProceduralTexture,
             "ON: generate normal map from multi-octave Simplex noise in shader.\nOFF: use loaded texture.");
         WSliderFloat("Normal Scale", &config.normalScale, 0.01f, 5.0f, "%.2f",
@@ -550,27 +552,27 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
             "Number of noise layers blended. More octaves = large swell + fine detail.");
         if (!config.useProceduralTexture) {
             static char texPath[256] = "";
-            ImGui::InputText("Path", texPath, sizeof(texPath));
-            ImGui::SameLine();
-            if (ImGui::Button("Load")) {
+            ::eruption::fx::InputText("Path", texPath, sizeof(texPath));
+            ::eruption::fx::SameLine();
+            if (::eruption::fx::Button("Load")) {
                 config.waterTexturePath = texPath;
                 requestLoadTexture = true;
                 settingsChanged = true; saveConfig();
             }
-            ImGui::SetItemTooltip("Load an external PNG/JPG as the water normal map.");
-            if (ImGui::Button("Generate Blue Noise")) {
+            ::eruption::fx::SetItemTooltip("Load an external PNG/JPG as the water normal map.");
+            if (::eruption::fx::Button("Generate Blue Noise")) {
                 requestGenerateBlueNoise = true;
                 config.useProceduralTexture = false;
                 settingsChanged = true; saveConfig();
             }
-            ImGui::SetItemTooltip("Generate a procedural blue noise texture for the normal map.");
+            ::eruption::fx::SetItemTooltip("Generate a procedural blue noise texture for the normal map.");
         }
-        ImGui::TreePop();
+        ::eruption::fx::TreePop();
     }
 
     // ===================== LAYER 3: FOAM SYSTEM =====================
-    ImGui::Separator();
-    if (ImGui::TreeNodeEx("LAYER 3: Foam System", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ::eruption::fx::Separator();
+    if (::eruption::fx::TreeNodeEx("LAYER 3: Foam System", ImGuiTreeNodeFlags_DefaultOpen)) {
         WCheckbox("Enable Surface Foam", &config.enableSurfaceFoam,
             "Procedural foam on wave crests using Worley/Voronoi noise.");
         if (config.enableSurfaceFoam) {
@@ -593,12 +595,12 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
             WSliderFloat("Contact Decay", &config.contactFoamDecay, 0.0f, 1.0f, "%.3f",
                 "How fast contact foam fades away over time.");
         }
-        ImGui::TreePop();
+        ::eruption::fx::TreePop();
     }
 
     // ===================== LAYER 4: OPTICAL PROPERTIES =====================
-    ImGui::Separator();
-    if (ImGui::TreeNodeEx("LAYER 4: Optical Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ::eruption::fx::Separator();
+    if (::eruption::fx::TreeNodeEx("LAYER 4: Optical Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
         WColorEdit3("Deep Color", &config.baseColorDeep.x,
             "Color of deep water. Seen where the floor is far below.");
         WColorEdit3("Shallow Color", &config.baseColorShallow.x,
@@ -611,12 +613,12 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
             "Strength of sky reflection. 0 = no reflection, 1 = mirror-like at glancing angles.");
         WSliderFloat("Roughness", &config.roughness, 0.0f, 1.0f, "%.2f",
             "Surface roughness of the water itself. 0 = mirror, 1 = diffuse.");
-        ImGui::TreePop();
+        ::eruption::fx::TreePop();
     }
 
     // ===================== LAYER 5: LIGHTING EFFECTS =====================
-    ImGui::Separator();
-    if (ImGui::TreeNodeEx("LAYER 5: Lighting Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ::eruption::fx::Separator();
+    if (::eruption::fx::TreeNodeEx("LAYER 5: Lighting Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
         WCheckbox("Enable Caustics", &config.enableCaustics,
             "Animated light patterns projected onto the underwater floor.");
         if (config.enableCaustics) {
@@ -625,15 +627,15 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
             WSliderFloat("Depth Attenuation", &config.causticsDepthAttenuation, 0.05f, 1.0f, "%.2f",
                 "How fast caustics fade with depth. Low = penetrates deep, High = fades quickly.");
         }
-        ImGui::TreePop();
+        ::eruption::fx::TreePop();
     }
 
     // ===================== ACTIONS =====================
-    ImGui::Separator();
-    if (ImGui::Button("Reload Water Shaders")) {
+    ::eruption::fx::Separator();
+    if (::eruption::fx::Button("Reload Water Shaders")) {
         requestReloadShaders = true;
     }
-    ImGui::SetItemTooltip("Hot-reload liquid.vert and liquid.frag without restarting the game.");
+    ::eruption::fx::SetItemTooltip("Hot-reload liquid.vert and liquid.frag without restarting the game.");
 }
 
 } // namespace eruption

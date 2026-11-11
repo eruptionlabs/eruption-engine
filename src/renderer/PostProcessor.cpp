@@ -1648,6 +1648,7 @@ if (!m_ctx) return;
         cocPush.edge = settings.cocEdge;
         int cocModel = settings.cocSpotlight ? 3 : (settings.cocTiltPlane ? 2 : (settings.cocThinLens ? 1 : 0));
         if (settings.focusOverride && settings.focusModel >= 0) cocModel = std::min(settings.focusModel, 3);
+        if (settings.cocSpotPanel) cocModel = 3;
         cocPush.coc_model = cocModel;
         float cocTetoReal = cocModel == 1 ? std::max(cocPush.max_near, cocPush.max_far) : teto;
         cocPush.ramp_near = cocPush.ramp_far = cocPush.screen_mix = cocPush.focus_uv_y = 0.0f;
@@ -1702,7 +1703,7 @@ if (!m_ctx) return;
             cocPush.max_blur = cocTetoReal;
         }
         if (cocModel == 3) {
-            const bool fo = settings.focusOverride;
+            const bool fo = settings.focusOverride && !settings.cocSpotPanel;
             auto pick = [fo](float over, float base) { return fo && over >= 0.0f ? over : base; };
             const float escala = float(m_height) / 1080.0f;
             cocPush.max_near = pick(settings.focusTiltMaxNear, settings.cocSpotMaxNear) * escala;
@@ -2429,6 +2430,11 @@ void PostProcessor::PostSettings::loadFromJson(const nlohmann::json& j) {
     if (const char* e = std::getenv("ERUPTION_TEST_COC_FOCAL")) cocFocalDistance = std::strtof(e, nullptr);
     if (const char* e = std::getenv("ERUPTION_TEST_COC_APERTURE")) cocAperture = std::strtof(e, nullptr);
     if (const char* e = std::getenv("ERUPTION_TEST_COC_MAXBLUR")) cocMaxBlur = std::strtof(e, nullptr);
+    // Bancada do painel do spotlight: liga "painel no comando" com este raio.
+    if (const char* e = std::getenv("ERUPTION_TEST_SPOT_RADIUS")) {
+        cocSpotPanel = true;
+        cocSpotRadius = std::strtof(e, nullptr);
+    }
     cocZoomFactor = j.value("coc_zoom_factor", cocZoomFactor);
     cocEnableForeground = j.value("coc_enable_foreground", cocEnableForeground);
     {
@@ -2440,6 +2446,7 @@ void PostProcessor::PostSettings::loadFromJson(const nlohmann::json& j) {
         cocSpotlight = modelo == "spotlight";
     }
     cocSpotRadius = j.value("spotlight_radius", cocSpotRadius);
+    cocSpotPanel = j.value("spotlight_panel", cocSpotPanel);
     cocSpotRamp = j.value("spotlight_ramp", cocSpotRamp);
     cocSpotMaxFar = j.value("spotlight_max_far", cocSpotMaxFar);
     cocSpotMaxNear = j.value("spotlight_max_near", cocSpotMaxNear);
