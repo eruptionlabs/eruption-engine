@@ -1678,8 +1678,13 @@ if (!m_ctx) return;
             cocPush.screen_mix = glm::clamp(pick(settings.focusScreenMix, settings.cocScreenMix), 0.0f, 1.0f);
             // Ponto do assunto no espaco de vista; sem ele, o centro da tela
             // na distancia focal.
+            // Sem ponto do jogo: o alvo da camera (centro da tela, no chao) - o
+            // circulo anda junto com a camera. O padrao antigo (0, 0, -focal)
+            // caia ATRAS da camera (a view olha para +Z) e borrava o quadro
+            // inteiro, o centro igual ao resto.
             const Vec3 foco = (fo && settings.focusPointSet) ? Vec3(Mat3(view) * (settings.focusPoint - cameraPos))
-                                                             : Vec3(0.0f, 0.0f, -cocFocal);
+                            : settings.cameraTargetSet ? Vec3(Mat3(view) * (settings.cameraTarget - cameraPos))
+                                                       : Vec3(0.0f, 0.0f, cocFocal * cocPush.fwd_z);
             const Vec3 direita(view[0][0], view[1][0], view[2][0]);
             const Vec3 cima(0.0f, 1.0f, 0.0f);
             Vec3 frenteH = glm::cross(cima, direita);
@@ -1706,8 +1711,13 @@ if (!m_ctx) return;
             cocPush.ramp_far = std::max(pick(settings.focusRampFar, settings.cocSpotRamp), 1e-3f);
             cocPush.ramp_near = std::max(pick(settings.focusRampNear, settings.cocSpotHeightRamp), 1e-3f);
             cocPush.screen_mix = pick(settings.focusSpotHeight, settings.cocSpotHeight);
+            // Sem ponto do jogo: o alvo da camera (centro da tela, no chao) - o
+            // circulo anda junto com a camera. O padrao antigo (0, 0, -focal)
+            // caia ATRAS da camera (a view olha para +Z) e borrava o quadro
+            // inteiro, o centro igual ao resto.
             const Vec3 foco = (fo && settings.focusPointSet) ? Vec3(Mat3(view) * (settings.focusPoint - cameraPos))
-                                                             : Vec3(0.0f, 0.0f, -cocFocal);
+                            : settings.cameraTargetSet ? Vec3(Mat3(view) * (settings.cameraTarget - cameraPos))
+                                                       : Vec3(0.0f, 0.0f, cocFocal * cocPush.fwd_z);
             // Ponto em espaco de vista pela ROTACAO e a posicao da camera: a view
             // do motor pode vir relativa 'a camera (sem translacao), e view*p dava
             // um foco longe de tudo (o quadro inteiro no teto do borrao).

@@ -2119,6 +2119,8 @@ void Engine::render() {
     // A autoria por zoom do ramo legado saiu junto com ele; so' o CoC
     // mapeia zoom -> focal/abertura agora.
     postSettings.cocZoomFactor = zoomPercent;
+    postSettings.cameraTarget = m_camera.target();
+    postSettings.cameraTargetSet = true;
     postSettings.frameDt = std::clamp(m_frameDt, 1.0f / 240.0f, 1.0f);
     if (postSettings.cocEnableZoomMapping) {
         float baseFocal = postSettings.cocFocalCurve.evaluate(zoomPercent);

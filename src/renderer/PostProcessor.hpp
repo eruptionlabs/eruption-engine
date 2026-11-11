@@ -154,6 +154,10 @@ public:
         // Ponto do assunto (mundo) para o plano do coc_model "tilt_plane".
         bool focusPointSet = false;
         Vec3 focusPoint{0.0f};
+        // Alvo da camera (o centro da tela no chao), posto pelo motor a cada
+        // quadro: foco padrao do spotlight e do tilt sem ponto dado pelo jogo.
+        bool cameraTargetSet = false;
+        Vec3 cameraTarget{0.0f};
         // Tabela do world.set_focus (forma nova): modelo e plano so' enquanto
         // focusOverride vale. focusModel < 0 mantem o do postprocess.json
         // (0 linear, 1 thin_lens, 2 tilt_plane, 3 spotlight); os campos < 0 (ou NaN no
