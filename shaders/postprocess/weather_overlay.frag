@@ -284,8 +284,8 @@ vec3 heatShimmer(vec2 uv, vec3 worldPos, float depth) {
 // Arco-iris de verdade: anel de 42 graus em volta do ponto antissolar, na
 // DIRECAO de visao (nao na tela). Antes era um anel fixo na tela, desenhado
 // por cima do chao e das casas com o espectro saturado. Agora: vermelho por
-// fora (42,3), violeta por dentro (40,5), arco secundario fraco e invertido
-// (50-53,5), ceu mais claro dentro do arco; so' no ceu e nas coisas longe
+// fora (42,3), violeta por dentro (40,5), ceu mais claro dentro do arco (o
+// secundario 50-53,5 saiu: lia como dois arcos); so' no ceu e nas coisas longe
 // (a cortina de chuva fica atras da cidade), nunca no chao perto.
 vec3 rainbowSpectrum(float t) { // t: 0 = violeta (dentro) .. 1 = vermelho (fora)
     vec3 c = vec3(smoothstep(0.45, 0.9, t) + 0.35 * (1.0 - smoothstep(0.0, 0.15, t)),
@@ -305,12 +305,10 @@ vec3 rainbow(vec2 uv, vec3 worldPos, float depth) {
         view = normalize(far.xyz / far.w - push.cameraPos.xyz);
     }
     float ang = degrees(acos(clamp(dot(view, -toSun), -1.0, 1.0)));
-    // Primario 40,5..42,3 com borda macia; secundario 50..53,5 (cores trocadas).
+    // Primario 40,5..42,3 com borda macia (um arco so').
     float p = smoothstep(39.8, 40.6, ang) * (1.0 - smoothstep(42.2, 43.0, ang));
-    float s2 = smoothstep(49.6, 50.3, ang) * (1.0 - smoothstep(53.3, 54.0, ang));
     float inner = (1.0 - smoothstep(30.0, 40.5, ang)) * 0.06; // ceu clareia dentro do arco
     vec3 col = rainbowSpectrum(clamp((ang - 40.5) / 1.8, 0.0, 1.0)) * p
-             + rainbowSpectrum(1.0 - clamp((ang - 50.0) / 3.5, 0.0, 1.0)) * s2 * 0.35
              + vec3(inner);
     // So' ceu e longe; some perto do horizonte de baixo (o arco nasce no chao distante).
     float dist = length(worldPos - push.cameraPos.xyz);
