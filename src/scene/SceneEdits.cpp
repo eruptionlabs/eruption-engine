@@ -276,6 +276,7 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
                 l.intensity = readNum(L, t, "intensity", 1.0f);
                 l.range = readNum(L, t, "range", 10.0f);
                 l.enabled = readBool(L, t, "enabled", true);
+                l.night = readBool(L, t, "night", false);
                 lights.push_back(l);
             }
             lua_pop(L, 1);
@@ -495,7 +496,7 @@ std::string SceneEdits::serialize(const std::string& map) const {
         for (const auto& l : lights)
             o << "        [" << l.index << "] = { position = " << vec(l.position) << ", color = " << vec(l.color)
               << ", intensity = " << num(l.intensity) << ", range = " << num(l.range)
-              << ", enabled = " << (l.enabled ? "true" : "false") << " },\n";
+              << ", enabled = " << (l.enabled ? "true" : "false") << (l.night ? ", night = true" : "") << " },\n";
         o << "    },\n";
     }
     if (!characters.empty()) {
@@ -706,7 +707,10 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         p.color = l.color;
         p.intensity = l.intensity;
         p.radius = l.range;
-        p.enabled = l.enabled;
+        // Luz noturna: Engine::updateNightLights liga e desliga pela hora;
+        // nasce apagada e o primeiro quadro decide. Apagada na cena fica apagada.
+        p.nightOnly = l.night && l.enabled;
+        p.enabled = l.enabled && !l.night;
         ++applied;
     }
     phase("luzes", lights.size());

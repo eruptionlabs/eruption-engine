@@ -29,6 +29,7 @@ class Engine;
 //           { from = "nome_do_objeto", name = "nome_novo", position = {...}, rotation = {...}, scale = {...} },
 //       },
 //       lights = { [3] = { position = {...}, color = {r, g, b}, intensity = 2, range = 40, enabled = true } },
+//                  (night = true: acende so' de noite, como as luzes "nightOnly" do mapa)
 //       characters = {
 //           { name = "guarda", sprite = "assets/sprites/guarda.png", position = {...}, facing = 90 },
 //       },
@@ -98,6 +99,8 @@ struct SceneEdits {
         Vec3 position{0.0f}, color{1.0f};
         float intensity = 1.0f, range = 10.0f;
         bool enabled = true;
+        // Acende so' de noite (PointLight::nightOnly): lampiao, poste, tocha.
+        bool night = false;
     };
 
     std::vector<Added> added;

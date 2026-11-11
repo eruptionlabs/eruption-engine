@@ -31,7 +31,7 @@ bool sameMatrix(const Mat4& a, const Mat4& b) {
 
 bool sameLight(const PointLight& a, const PointLight& b) {
     return a.position == b.position && a.color == b.color && a.intensity == b.intensity && a.radius == b.radius &&
-           a.enabled == b.enabled;
+           a.enabled == b.enabled && a.nightOnly == b.nightOnly;
 }
 
 } // namespace
@@ -254,14 +254,16 @@ SceneEdits Editor::currentEdits() const {
     for (size_t i = 0; i < ls.size(); ++i) {
         if (ls[i].shadowCubemapIndex == kPlayerLightTag) continue; // luz do jogador (F10) não é da cena
         const bool fromMap = i < m_original.lights.size();
-        if (fromMap ? sameLight(ls[i], m_original.lights[i]) : !ls[i].enabled) continue; // luz nova apagada = removida
+        // Luz nova apagada = removida (a noturna apaga sozinha de dia: fica).
+        if (fromMap ? sameLight(ls[i], m_original.lights[i]) : !ls[i].enabled && !ls[i].nightOnly) continue;
         SceneEdits::Light l;
         l.index = static_cast<int>(i) + 1;
         l.position = ls[i].position;
         l.color = ls[i].color;
         l.intensity = ls[i].intensity;
         l.range = ls[i].radius;
-        l.enabled = ls[i].enabled;
+        l.enabled = ls[i].nightOnly || ls[i].enabled;
+        l.night = ls[i].nightOnly;
         e.lights.push_back(l);
     }
     if (m_envEdited) {
