@@ -49,7 +49,10 @@ VfxEffectDesc buildEffect(const AmbientLayer& l, float& yOffset) {
         count = 900.0f;
         e.lifetime = Vec2(6.0f, 11.0f);
         e.speed = Vec2(0.02f, 0.12f);
-        e.size = Vec2(0.04f, 0.09f);
+        // Grao de poeira e' pequeno: com 4-9 cm (e ate' 5% da tela) cada grao
+        // aceso lia como floco de neve.
+        e.size = Vec2(0.015f, 0.035f);
+        e.maxScreenSize = 0.012f;
         e.gravity = Vec3(0.0f, -0.01f, 0.0f);
         e.drag = 0.6f;
         e.noiseStrength = 0.18f;

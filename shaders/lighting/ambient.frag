@@ -45,7 +45,7 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     vec4 probeGridInvExtent;// xyz=1/extensao da grade, w=forca
     uvec4 tileLights[128];  // (do passe direcional; so' para chegar aos campos abaixo)
     vec4 rainSpots[64];     // chuva local: xy = centro XZ, z = raio
-    vec4 rainSpotParams;    // x = quantos, y = 1 com campo de nuvens
+    vec4 rainSpotParams;    // x = quantos, y = 1 com campo de nuvens, z = nivel da agua, w = tempo
 } lights;
 
 // PROBES DE IRRADIANCIA (G38): visibilidade do ceu por probe, SH L1 numa
@@ -219,6 +219,9 @@ void main() {
             }
             wetDriveA *= localA;
         }
+        // Beira d'agua (espuma/onda): molha e seca sozinha, com ou sem chuva.
+        if (lights.rainSpotParams.z > -1.0e8)
+            wetDriveA = max(wetDriveA, shoreWetness(worldFromDepth(inUV, texture(gbufferDepth, inUV).r), lights.rainSpotParams.z, lights.rainSpotParams.w, pbrA.a));
         if ((lights.pbrDebugMode & 256u) != 0u) wetDriveA = 0.0; // A/B: sem molhado (bit 256)
         PbrWetness wetA = pbrWetSurface(albedoLinear, pbrA.g, pbrA.b,
                                         abs(pbrA.r - 0.75) < 0.06 ? 0.0 : pbrA.a, N.y,

@@ -1417,6 +1417,14 @@ void WeatherRenderer::updateParticlesForWeather(const WeatherParams& weather, co
     // ~28k, light snow ~10k, frost ~3k. The MAX_SNOW cap only bounds the
     // intensity=1.0 reference; the total pool cap has headroom.
     uint32_t snowCount = uint32_t(cameraUnderCloud * weather.snowIntensity * 8.0f * float(MAX_SNOW_PARTICLES));
+    // A neve tambem cai nas caixas debaixo de cada nuvem (followers), como a
+    // chuva: com 40 nuvens o mesmo pool se espalhava por todas e a nevasca
+    // chegava rala na camera. Mesmo multiplicador da chuva, ate' 4x.
+    if (!m_rainFollowers.empty() && snowCount > 0) {
+        const uint32_t effFollowers = glm::max(static_cast<uint32_t>(m_rainFollowers.size()),
+                                               m_poolTargetFollowerCount);
+        snowCount *= glm::clamp((effFollowers + 7u) / 8u, 1u, 4u);
+    }
     uint32_t dustCount = 0;
     // Wind-blown debris spawns for EVERY weather with windDebrisIntensity
     // (Light Wind, Pollen, Volcanic Ash, Tornado, ...), not only the Heat

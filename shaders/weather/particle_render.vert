@@ -134,6 +134,15 @@ void main() {
     vec2 boxXZ = followerBox ? push.cloudRange.yw : vec2(80.0);
     float boxHeight = max(push.cloudRange.x * 0.95, 60.0);
     vec3 boxCenter = push.rainBoxCenter.xyz + vec3(0.0, boxHeight * 0.5, 0.0);
+    if (followerBox && isSnow) {
+        // So' a neve (a chuva foi afinada com a caixa antiga). A caixa da nuvem comeca no CHAO (sunDir.w = altura do alvo da camera),
+        // nao em y=0: num mapa alto (chao a 400+) mais da metade da chuva/neve
+        // nascia dentro do terreno e a nevasca chegava rala.
+        float groundY = push.sunDir.w > -1.0e8 ? push.sunDir.w : 0.0; // sem ancora: o antigo (y=0)
+        float floorY = min(groundY, push.cloudRange.x * 0.95 - 60.0) - 20.0;
+        boxHeight = max(push.cloudRange.x * 0.95 - floorY, 60.0);
+        boxCenter = vec3(push.rainBoxCenter.x, floorY + boxHeight * 0.5, push.rainBoxCenter.z);
+    }
     if (isSand || isDust) {
         // Sand/dust: low ground-hugging box (40 m) anchored at the REAL ground
         // level (sunDir.w = orbit target Y) and centered on the player

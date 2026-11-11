@@ -352,6 +352,13 @@ void Engine::spawnWeatherCloudField(WeatherType type) {
         case WeatherCategory::Extreme:  spec = {100, 0.10f, 0.45f, 0.85f, 1.00f, 3.0f, 5.0f, 0.6f, true }; break;
         default:                        spec = {  0, 0.65f, 1.00f, 0.00f, 0.20f, 2.0f, 3.5f, 0.6f, false}; break;
     }
+    // Arco-iris: o sol tem que bater em quem olha; a chuva fica longe, atras do
+    // arco. As nuvens de chuva por cima (categoria chuva) cobriam a tela de
+    // gotas e apagavam o sol que faz o arco.
+    if (type == WeatherType::Rainbow) {
+        spec.rain = false;
+        spec.count = std::min(spec.count, 20);
+    }
     if (type == WeatherType::Stormy || type == WeatherType::Thunderstorm) {
         // Revert oversized optimization by user request: Thunderstorm needs a 
         // MASSIVE amount of clouds (proportional to others) to look impressive.

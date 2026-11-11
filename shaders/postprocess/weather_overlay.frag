@@ -281,34 +281,42 @@ vec3 heatShimmer(vec2 uv, vec3 worldPos, float depth) {
     return color;
 }
 
-// Rainbow arc screen-space effect.
+// Arco-iris de verdade: anel de 42 graus em volta do ponto antissolar, na
+// DIRECAO de visao (nao na tela). Antes era um anel fixo na tela, desenhado
+// por cima do chao e das casas com o espectro saturado. Agora: vermelho por
+// fora (42,3), violeta por dentro (40,5), arco secundario fraco e invertido
+// (50-53,5), ceu mais claro dentro do arco; so' no ceu e nas coisas longe
+// (a cortina de chuva fica atras da cidade), nunca no chao perto.
+vec3 rainbowSpectrum(float t) { // t: 0 = violeta (dentro) .. 1 = vermelho (fora)
+    vec3 c = vec3(smoothstep(0.45, 0.9, t) + 0.35 * (1.0 - smoothstep(0.0, 0.15, t)),
+                  smoothstep(0.2, 0.5, t) * (1.0 - smoothstep(0.65, 0.95, t)),
+                  1.0 - smoothstep(0.15, 0.45, t));
+    return c / max(max(c.r, max(c.g, c.b)), 1e-3);
+}
+
 vec3 rainbow(vec2 uv, vec3 worldPos, float depth) {
     float intensity = push.params7.w;
     if (intensity < 0.001) return vec3(0.0);
-
-    vec3 sunDir = normalize(push.params7.xyz);
-    vec3 antiSolar = -sunDir;
-    vec2 center = vec2(0.5, 0.65) + vec2(antiSolar.x, antiSolar.y) * 0.25;
-
-    float radius = length(uv - center);
-    float band = smoothstep(0.48, 0.45, radius) * smoothstep(0.32, 0.35, radius);
-    if (band < 0.001) return vec3(0.0);
-
-    float angle = atan(uv.y - center.y, uv.x - center.x);
-    float hue = fract(angle * 0.4 + 0.7);
-
-    vec3 spectrum;
-    spectrum.r = smoothstep(0.0, 0.16, hue) * smoothstep(0.32, 0.16, hue)
-               + smoothstep(0.66, 0.83, hue) * smoothstep(1.0, 0.83, hue);
-    spectrum.g = smoothstep(0.16, 0.33, hue) * smoothstep(0.50, 0.33, hue)
-               + smoothstep(0.83, 0.91, hue) * smoothstep(1.0, 0.91, hue);
-    spectrum.b = smoothstep(0.33, 0.50, hue) * smoothstep(0.66, 0.50, hue);
-
-    float skyFade = smoothstep(0.0, 0.35, uv.y);
-    float secondary = smoothstep(0.58, 0.55, radius) * smoothstep(0.48, 0.51, radius) * 0.25;
-
-    return spectrum * band * skyFade * intensity * 0.6
-         + spectrum * secondary * skyFade * intensity * 0.15;
+    vec3 toSun = normalize(push.params7.xyz);
+    if (toSun.y < -0.05) return vec3(0.0); // sol abaixo do horizonte: nao ha arco
+    vec3 view = normalize(worldPos - push.cameraPos.xyz);
+    if (depth >= 1.0) {
+        vec4 far = ubo.invViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+        view = normalize(far.xyz / far.w - push.cameraPos.xyz);
+    }
+    float ang = degrees(acos(clamp(dot(view, -toSun), -1.0, 1.0)));
+    // Primario 40,5..42,3 com borda macia; secundario 50..53,5 (cores trocadas).
+    float p = smoothstep(39.8, 40.6, ang) * (1.0 - smoothstep(42.2, 43.0, ang));
+    float s2 = smoothstep(49.6, 50.3, ang) * (1.0 - smoothstep(53.3, 54.0, ang));
+    float inner = (1.0 - smoothstep(30.0, 40.5, ang)) * 0.06; // ceu clareia dentro do arco
+    vec3 col = rainbowSpectrum(clamp((ang - 40.5) / 1.8, 0.0, 1.0)) * p
+             + rainbowSpectrum(1.0 - clamp((ang - 50.0) / 3.5, 0.0, 1.0)) * s2 * 0.35
+             + vec3(inner);
+    // So' ceu e longe; some perto do horizonte de baixo (o arco nasce no chao distante).
+    float dist = length(worldPos - push.cameraPos.xyz);
+    float far = depth >= 1.0 ? 1.0 : smoothstep(400.0, 1500.0, dist);
+    float horizon = smoothstep(-0.08, 0.05, view.y);
+    return col * far * horizon * intensity * 0.7;
 }
 
 // Sand/dust atmospheric overlay. The actual 3D depth comes from the
@@ -587,24 +595,54 @@ vec3 tornado(vec2 uv, vec3 worldPos, float depth, float t) {
 }
 
 // Aurora borealis/australis curtains in the night sky.
+// Aurora: cortinas presas ao CEU (direcao de visao, azimute x elevacao), nao
+// a' tela - antes era uma onda de seno em uv que andava junto com a camera.
+// Cada cortina: borda de baixo nitida e verde, raios verticais finos que
+// tremulam, topo que vira roxo e some; duas cortinas em alturas diferentes
+// e um brilho verde fraco no ceu em volta.
+float auroraCurtain(float az, float el, float t, float phase, float base) {
+    float fold = base + 0.025 * sin(az * 3.0 + phase + t * 0.04) + 0.03 * (fbm2(vec2(az * 1.3 + phase, t * 0.02)) - 0.47);
+    float h = el - fold;
+    if (h < -0.01) return 0.0;
+    float edge = smoothstep(-0.008, 0.003, h);
+    float rays = fbm2(vec2(az * 38.0 + phase * 7.0, t * 0.25)) * 0.5 + 0.5;
+    rays = pow(rays, 2.2) * 1.6 + 0.25;
+    float body = exp(-max(h, 0.0) * 7.0);
+    float lace = smoothstep(0.15, 0.6, fbm2(vec2(az * 3.0 - phase, t * 0.05)) * 0.5 + 0.5);
+    return edge * body * rays * lace;
+}
+
 vec3 aurora(vec2 uv, vec3 worldPos, float depth, float t) {
     float intensity = push.params9.w;
     if (intensity < 0.001) return vec3(0.0);
-
-    float sky = smoothstep(0.0, 30.0, worldPos.y - push.cameraPos.y);
-    if (depth >= 1.0) sky = 1.0;
-    if (sky < 0.1) return vec3(0.0);
-
-    float x = uv.x * 4.0 + t * 0.03;
-    float y = uv.y * 2.0;
-    float curtain = 0.0;
-    curtain += sin(x * 3.0 + fbm2(vec2(x * 0.5, t * 0.1)) * 2.0) * 0.5 + 0.5;
-    curtain *= smoothstep(0.2, 0.8, uv.y) * smoothstep(1.0, 0.5, uv.y);
-
-    vec3 color = vec3(0.2, 0.85, 0.4) * curtain;
-    color += vec3(0.6, 0.2, 0.7) * (1.0 - curtain) * 0.4;
-
-    return color * intensity * sky * 0.4;
+    // So' o ceu: a cupula do ceu tem profundidade < 1, entao vale o mesmo
+    // teste das estrelas cadentes (alto e longe), alem do fundo vazio.
+    float dist = length(worldPos - push.cameraPos.xyz);
+    float sky = depth >= 1.0 ? 1.0 : smoothstep(0.0, 30.0, worldPos.y - push.cameraPos.y) * smoothstep(600.0, 1500.0, dist);
+    if (sky < 0.01) return vec3(0.0);
+    vec3 v = normalize(worldPos - push.cameraPos.xyz);
+    if (depth >= 1.0) {
+        vec4 far = ubo.invViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+        v = normalize(far.xyz / far.w - push.cameraPos.xyz);
+    }
+    float el = asin(clamp(v.y, -1.0, 1.0));
+    if (el < -0.05) return vec3(0.0);
+    float az = atan(v.x, v.z);
+    vec3 col = vec3(0.0);
+    for (int k = 0; k < 2; ++k) {
+        float phase = float(k) * 2.3;
+        // Baixas no horizonte: a camera de jogo (tele, olhando para baixo) so' ve' o ceu ate' ~5 graus.
+        float base = k == 0 ? -0.01 : 0.035;
+        float c = auroraCurtain(az, el, t, phase, base);
+        float h = el - base;
+        vec3 tint = mix(vec3(0.12, 1.0, 0.42), vec3(0.65, 0.22, 0.95), smoothstep(0.08, 0.22, h)); // verde na faixa vista, roxo so' no alto
+        col += tint * c * (k == 0 ? 1.0 : 0.6);
+    }
+    col += vec3(0.05, 0.25, 0.12) * smoothstep(0.0, 0.25, el) * (1.0 - smoothstep(0.4, 0.9, el)) * 0.25;
+    // Satura por canal (mantem o verde): x3 linear estourava em branco com bloom
+    // quando o "ceu" era um cenario de fundo distante.
+    col = 0.9 * (vec3(1.0) - exp(-col * intensity * 2.2));
+    return col * sky * smoothstep(-0.05, 0.0, el);
 }
 
 // Atmospheric tint for sand/dust/smoke/volcanic ash.

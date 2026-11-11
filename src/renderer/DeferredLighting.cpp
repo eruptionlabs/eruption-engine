@@ -997,7 +997,7 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     ubo.pbrLightScale = m_pbrLightScale;
     ubo.rainIntensity = m_rainIntensity;
     for (uint32_t i = 0; i < m_rainSpotCount; ++i) ubo.rainSpots[i] = m_rainSpots[i];
-    ubo.rainSpotParams = Vec4(static_cast<float>(m_rainSpotCount), m_rainSpotsLocal ? 1.0f : 0.0f, 0.0f, 0.0f);
+    ubo.rainSpotParams = Vec4(static_cast<float>(m_rainSpotCount), m_rainSpotsLocal ? 1.0f : 0.0f, m_shoreWaterY, m_shoreTime);
     ubo.snowIntensity = m_snowIntensity;
     ubo.temperatureC = m_temperatureC;
     ubo.ambientSky = Vec4(m_env.ambientSkyColor, 0.0f);

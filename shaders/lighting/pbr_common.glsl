@@ -185,6 +185,48 @@ struct PbrWetness {
     float film;       // 0..1 how much film this pixel actually carries
 };
 
+// BEIRA D'AGUA: a onda sobe e desce ate' `runup` acima do nivel; a faixa
+// que ela cobre fica encharcada e seca em ~tau s depois que a agua recua.
+// Sem estado: pela fase da onda sabe-se ha' quanto tempo a agua saiu de cada
+// altura. MASCARA: a frente da onda e' recortada por ruido, e acima da linha
+// da agua so' molham as manchas (ruido + cavidade do material): o ponto alto
+// e exposto seca primeiro, a depressao segura a agua. waterY < -1e8 = sem agua.
+float shoreHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float shoreNoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(shoreHash(i), shoreHash(i + vec2(1, 0)), f.x),
+               mix(shoreHash(i + vec2(0, 1)), shoreHash(i + vec2(1, 1)), f.x), f.y);
+}
+float shoreWetness(vec3 wp, float waterY, float t, float cavity) {
+    if (waterY < -1.0e8) return 0.0;
+    const float runup = 5.0;   // u acima do nivel que a onda alcanca (1 celula = 5 u)
+    const float omega = 0.9;   // rad/s (onda a cada ~7 s)
+    const float tau = 4.5;     // s para secar
+    float y = wp.y - waterY;
+    if (y < -0.5 || y > runup + 3.0) return 0.0;
+    // Frente recortada: a onda chega mais longe em umas linguas que em outras.
+    float n1 = shoreNoise(wp.xz * 0.09) * 0.65 + shoreNoise(wp.xz * 0.31) * 0.35;
+    float yr = y - (n1 - 0.5) * 2.5;
+    float ph = omega * t + dot(wp.xz, vec2(0.031, 0.023));
+    float rel = clamp(yr / runup, 0.0, 1.0);
+    // A onda (0..runup) cobre esta altura quando sin(ph) >= 2*rel - 1.
+    float s0 = asin(clamp(2.0 * rel - 1.0, -1.0, 1.0));
+    float since = mod(ph - (3.14159265 - s0), 6.2831853); // radianos desde que a agua saiu
+    bool covered = sin(ph) >= 2.0 * rel - 1.0;
+    // Mascara de retencao: depressao (cavidade) e manchas finas seguram a agua.
+    float n2 = shoreNoise(wp.xz * 0.6 + 17.0);
+    float hold = clamp(0.55 * clamp(cavity, 0.0, 1.0) + 0.6 * n2 - 0.1, 0.0, 1.0);
+    // Seca mais rapido onde segura menos (topo exposto) - 1,5 a 6 s.
+    float tauM = tau * mix(0.33, 1.35, hold);
+    float wet = covered ? 1.0 : exp(-(since / omega) / tauM);
+    // Faixa de areia sempre umida rente 'a agua, so' nas manchas que seguram.
+    wet = max(wet, 0.4 * hold * (1.0 - smoothstep(0.0, runup, yr)));
+    // Fora do alcance da onda a mascara corta (sem faixa uniforme).
+    wet *= mix(hold, 1.0, 1.0 - smoothstep(0.2, 0.8, rel)) ;
+    return wet * (1.0 - smoothstep(runup + 0.5, runup + 3.0, y));
+}
+
 // albedoLin : linear-space albedo
 // roughness : dry microsurface roughness
 // metallic  : used ONLY as a porosity hint; never modified

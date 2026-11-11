@@ -252,6 +252,11 @@ public:
         for (uint32_t i = 0; i < m_rainSpotCount; ++i) m_rainSpots[i] = spots[i];
         m_rainSpotsLocal = local;
     }
+    // Beira d'agua molhada pela onda: nivel da agua (sem agua: has = false) e o tempo.
+    void setShoreWater(bool has, float waterY, float time) {
+        m_shoreWaterY = has ? waterY : -1.0e9f;
+        m_shoreTime = time;
+    }
     void setWeatherState(float rainIntensity, float snowIntensity, float temperatureC) {
         m_rainIntensity = rainIntensity;
         m_snowIntensity = snowIntensity;
@@ -364,6 +369,8 @@ private:
     Vec4 m_rainSpots[64] = {};
     uint32_t m_rainSpotCount = 0;
     bool m_rainSpotsLocal = false;
+    float m_shoreWaterY = -1.0e9f;
+    float m_shoreTime = 0.0f;
     bool  m_ssaoEnabled = true;
     int   m_ssaoTaps = 12; // preset ssao_taps (especializacao do ssao.frag)
     // True while the SSAO targets hold neutral white in SHADER_READ layout,

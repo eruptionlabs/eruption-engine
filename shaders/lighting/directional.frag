@@ -90,7 +90,7 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     // Caminho enxuto: 16 indices de 8 bits por bloco de 16x8 da tela (0xFF fecha).
     uvec4 tileLights[128];
     vec4 rainSpots[64];     // chuva local: xy = centro XZ, z = raio
-    vec4 rainSpotParams;    // x = quantos, y = 1 com campo de nuvens (so' molha debaixo delas)
+    vec4 rainSpotParams;    // x = quantos, y = 1 com campo de nuvens (so' molha debaixo delas), z = nivel da agua, w = tempo
 } lights;
 // SONDA DE CEU (G36): o proprio skybox.frag em cubemap 32x32 com mips -
 // especular ambiental pre-filtrado (roughness -> lod).
@@ -794,6 +794,8 @@ void main() {
         }
         wetDrive *= local;
     }
+    // Beira d'agua (espuma/onda): molha e seca sozinha, com ou sem chuva.
+    wetDrive = max(wetDrive, shoreWetness(worldPos, lights.rainSpotParams.z, lights.rainSpotParams.w, pbr.a));
     if ((lights.pbrDebugMode & 256u) != 0u) wetDrive = 0.0; // A/B: sem molhado (bit 256)
     // Diagnostico (bit 128, ERUPTION_TEST_PBR_DEBUG=128): r = quanto molha
     // aqui (chuva x nuvem local), g = mascara de poca do material.

@@ -629,6 +629,11 @@ void Engine::render() {
         }
         m_deferredLighting.setRainSpots(m_wetTrail, m_useProceduralCloudField && m_autoCloud && m_cloudLayersEnabled);
     }
+    // Beira d'agua: a onda molha a faixa da praia (shoreWetness no shader).
+    // O tempo da volta a cada ~2 h (mod) para o float do shader nao perder precisao.
+    m_deferredLighting.setShoreWater(m_water.hasWater() && m_renderEffects.size() > 7 && m_renderEffects[7]->isEnabled(),
+                                     m_mapBaseWaterLevel + m_waterMenu.config.waterLevel,
+                                     static_cast<float>(std::fmod(static_cast<double>(m_timer.elapsed()), 6981.317)));
     // Chao encharca com a chuva (~6 s) e seca devagar quando ela para: o
     // roughness volta ao normal em kSeca segundos, nao de uma vez.
     {
@@ -2806,24 +2811,28 @@ void Engine::render() {
     // esvaziar a fence) em vez de --auto-exit, que pula este caminho de
     // proposito (vazaria o staging buffer - ver o comentario ao lado do
     // scheduleScreenshotFromSwap mais abaixo).
+    // Varias capturas numa execucao: "a.png,600;b.png,660;..." (uma por quadro).
     static const char* swapShot = std::getenv("ERUPTION_TEST_SWAP_SHOT");
     if (swapShot) {
-        static std::string s_path;
-        static uint32_t s_frame = 0;
-        static bool s_parsed = false, s_done = false;
+        static std::vector<std::pair<std::string, uint32_t>> s_shots;
+        static bool s_parsed = false;
         if (!s_parsed) {
             s_parsed = true;
             std::string spec(swapShot);
-            size_t comma = spec.rfind(',');
-            if (comma != std::string::npos) {
-                s_path = spec.substr(0, comma);
-                s_frame = static_cast<uint32_t>(std::atoi(spec.c_str() + comma + 1));
+            size_t start = 0;
+            while (start <= spec.size()) {
+                size_t end = spec.find(';', start);
+                if (end == std::string::npos) end = spec.size();
+                const std::string item = spec.substr(start, end - start);
+                const size_t comma = item.rfind(',');
+                if (comma != std::string::npos)
+                    s_shots.emplace_back(item.substr(0, comma),
+                                         static_cast<uint32_t>(std::atoi(item.c_str() + comma + 1)));
+                start = end + 1;
             }
         }
-        if (!s_done && !s_path.empty() && static_cast<uint32_t>(m_framesCount) == s_frame) {
-            s_done = true;
-            scheduleScreenshotFromSwap(s_path);
-        }
+        for (const auto& shot : s_shots)
+            if (static_cast<uint32_t>(m_framesCount) == shot.second) scheduleScreenshotFromSwap(shot.first);
     }
     // ERUPTION_TEST_WEATHER_TIER=mobile|medium|high (debug): force the weather tier
     // in any mode — headless screenshot runs sit at the default Medium, which
