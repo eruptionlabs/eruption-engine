@@ -987,7 +987,23 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
         Vec3 decPos(0.0f);
         Vec3 skew(0.0f);
         Vec4 perspective(0.0f);
-        glm::decompose(local, decScale, decRot, decPos, skew, perspective);
+        if (!glm::decompose(local, decScale, decRot, decPos, skew, perspective)) {
+            // Escala minuscula (no' de modelo com fator 0,004: det = 6e-8)
+            // fica abaixo do epsilon do decompose, que devolvia escala 1 e
+            // giro nulo - o modelo saia 250x maior e cobria o mapa inteiro.
+            // Decomposicao direta pelas colunas (sinal do det no X, Y, Z).
+            decPos = Vec3(local[3]);
+            const Vec3 c0(local[0]), c1(local[1]), c2(local[2]);
+            decScale = Vec3(glm::length(c0), glm::length(c1), glm::length(c2));
+            if (glm::determinant(glm::mat3(local)) < 0.0f) decScale = -decScale;
+            const bool okScale = std::abs(decScale.x) > 0.0f && std::abs(decScale.y) > 0.0f &&
+                                 std::abs(decScale.z) > 0.0f;
+            // conjugate aqui: a linha abaixo desfaz (mesma convencao do decompose).
+            decRot = okScale ? glm::conjugate(glm::quat_cast(glm::mat3(c0 / decScale.x, c1 / decScale.y,
+                                                                       c2 / decScale.z)))
+                             : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            if (!okScale) decScale = Vec3(1.0f);
+        }
         // glm::decompose might return conjugate rotation depending on GLM version
         decRot = glm::conjugate(decRot);
 
