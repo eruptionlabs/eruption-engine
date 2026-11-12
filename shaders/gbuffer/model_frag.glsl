@@ -1226,7 +1226,8 @@ void main() {
     // Perfil "glow" (cristal): luz de dentro para fora, como os shaders de
     // cristal estilizado fazem - o brilho mora na BORDA (fresnel: face de
     // lado para a camera) e o miolo fica fundo e saturado, sem acender a face
-    // inteira (isso estourava para branco e o bloom virava uma bola). A cor
+    // inteira com a cor clara (isso estourava para branco e o bloom virava uma
+    // bola); o miolo (0,35) usa a cor ao quadrado. A cor
     // e' a da textura com o quadrado (mais saturada e mais escura). O bloom
     // faz o halo a partir da borda.
     const float glowK = float(uint(push._pad + 0.5) >> 3u) / 8.0;
@@ -1235,7 +1236,18 @@ void main() {
         const float borda = pow(1.0 - NoVg, 3.0);
         const vec3 fundo = texColor.rgb * texColor.rgb;
         const float noiteG = 1.0 - smoothstep(0.3, 0.65, u_sunDir.w);
-        emissiveRgb += fundo * glowK * (0.12 + borda) * mix(0.5, 1.0, noiteG);
+        // Cristal "de fantasia": o miolo respira devagar (luz viva por dentro,
+        // fase pela posicao para cada cristal ter a sua) e um brilho de
+        // estrela corre pelas faces - a direcao que ele reflete gira com o
+        // tempo, entao cada face acende de relance quando o reflexo passa.
+        const float fase = dot(floor(inWorldPos.xz / 16.0), vec2(1.7, 2.3));
+        const float respira = 0.8 + 0.2 * sin(u_time * 1.3 + fase);
+        const vec3 Rg = reflect(-normalize(u_cameraPos - inWorldPos), N);
+        const float ang = u_time * 0.6 + fase;
+        const vec3 dirBrilho = normalize(vec3(cos(ang), 0.55, sin(ang)));
+        const float estrela = pow(max(dot(Rg, dirBrilho), 0.0), 90.0);
+        emissiveRgb += fundo * glowK * (0.35 + borda) * respira * mix(0.5, 1.0, noiteG)
+                     + mix(texColor.rgb, vec3(1.0), 0.6) * estrela * glowK * 1.5;
     }
     outEmissive = vec4(emissiveRgb, sunSelfShadow);
 }
