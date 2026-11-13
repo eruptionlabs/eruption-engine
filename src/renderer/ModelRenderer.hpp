@@ -3,6 +3,7 @@
 #include "renderer/VulkanContext.hpp"
 #include <deque>
 #include "renderer/BindlessDescriptor.hpp"
+#include "renderer/TextureStreamer.hpp"
 #include "renderer/MipmapGenerator.hpp"
 #include "renderer/ModelData.hpp"
 #include "utils/MeshLod.hpp"
@@ -76,6 +77,10 @@ struct ModelMeshGPU {
     // pro shader escolher o mip da altura pela grade de vertices (Nyquist) -
     // ver dispMipFloor() em model.vert/model.tese.
     float uvPerUnit = 0.0f;
+    // Texturas que a malha amostra (cor, normal, MRAH-W, mistura, emissiva)
+    // com a densidade de UV de cada uma: o TextureStreamer escolhe o mip
+    // residente por distancia com isto.
+    std::vector<TextureStreamer::SlotUse> streamSlots;
     float roughnessScale = 1.0f;
     bool materialAbsolute = false; // PbrMaterialProfile::absolute
     bool materialFlat = false;     // PbrMaterialProfile::flatNormals
@@ -514,6 +519,20 @@ public:
         for (const auto& m : m_meshes) { ++total; if (m.isGround) ++ground; }
         for (const auto& hot : m_instanceHot)
             if ((hot.flags & 1u) && hot.meshIndex < m_meshes.size() && m_meshes[hot.meshIndex].isGround) ++groundInstances;
+    }
+    // Para o TextureStreamer: cada instancia habilitada com a caixa de mundo,
+    // a escala do transform (a densidade de UV e' do espaco do objeto) e as
+    // texturas da malha.
+    template <class F>
+    void forEachTextureUse(F&& f) const {
+        for (const auto& hot : m_instanceHot) {
+            if (!(hot.flags & 1u) || hot.meshIndex >= m_meshes.size()) continue;
+            const auto& uses = m_meshes[hot.meshIndex].streamSlots;
+            if (uses.empty()) continue;
+            const float scale = std::max({glm::length(Vec3(hot.transform[0])), glm::length(Vec3(hot.transform[1])),
+                                          glm::length(Vec3(hot.transform[2]))});
+            f(hot.transform, scale, uses);
+        }
     }
     // AABB de mundo de todas as instancias habilitadas. false = nenhuma.
     bool sceneBounds(Vec3& outMin, Vec3& outMax) const {

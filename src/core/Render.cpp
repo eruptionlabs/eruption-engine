@@ -1030,6 +1030,11 @@ void Engine::render() {
     // quadro ja' no mapa de sombra (o primeiro, assado, inclusive).
     m_modelRenderer.setGroundLodView(m_camera.position(), static_cast<float>(displayExtent().height) /
                                                               (2.0f * std::tan(glm::radians(m_camera.fov()) * 0.5f)));
+    // Mips por distancia (TextureStreamer): demanda pelas instancias, troca
+    // de slot so' do que ja' chegou na GPU. Sem streaming ligado, retorna ja'.
+    m_textureStreamer.update(m_camera.position(), static_cast<float>(displayExtent().height) /
+                                                      (2.0f * std::tan(glm::radians(m_camera.fov()) * 0.5f)),
+                             [this](auto&& fn) { m_modelRenderer.forEachTextureUse(fn); });
     if (m_shadowRenderer.settings().enabled && shadowUpdate) {
         m_shadowRenderer.setSunAngularRadius(m_deferredLighting.sunAngularRadius());
         // Editor (voo): centro da sombra no chao do centro da tela, nao no

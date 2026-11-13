@@ -83,6 +83,11 @@ public:
         return slot < m_slotOpaque.size() && m_slotOpaque[slot] != 0u;
     }
     void freeSlotSafe(uint32_t slot);
+    // Geracao do slot: muda a cada freeSlot. Quem troca a imagem de um slot
+    // que nao e' seu (TextureStreamer) guarda a geracao do registro e so'
+    // escreve se ela ainda vale - senao o slot ja' e' de outra textura.
+    uint32_t slotGenerationSafe(uint32_t slot);
+    bool updateTextureIfGenerationSafe(uint32_t slot, uint32_t generation, VkImageView view, VkSampler sampler);
     void updateTextureSafe(uint32_t slot, VkImageView view, VkSampler sampler, bool dynamic = false);
     void flushUpdatesSafe();
     // Para trabalho gravado fora do laço de frames (bakes do carregamento):
@@ -121,6 +126,7 @@ private:
     VkSampler m_defaultSampler = VK_NULL_HANDLE;
 
     std::vector<uint32_t> m_freeSlots;
+    std::vector<uint32_t> m_slotGen;  // ver slotGenerationSafe
     uint32_t m_allocated = 0;  // slots entregues e ainda nao devolvidos
     uint32_t m_highWater = 0;  // maximo simultaneo de m_allocated
 

@@ -371,12 +371,15 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
         auto bakedIt = m_embeddedBaked.find(sanitized);
         if (bakedIt != m_embeddedBaked.end() && bakedIt->second.albedo.valid()) {
             const EtexData& e = bakedIt->second.albedo;
+            // Com streaming sobe so' a cauda; os mips de cima vem do TextureStreamer.
+            const uint32_t base = m_textureStreamer.baseMipFor(e);
+            const TextureStreamer::Tail tail = TextureStreamer::tailOf(e, base);
             VkImageCreateInfo imageInfo{};
             imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
             imageInfo.imageType = VK_IMAGE_TYPE_2D;
             imageInfo.format = static_cast<VkFormat>(e.vkFormat);
-            imageInfo.extent = { e.width, e.height, 1 };
-            imageInfo.mipLevels = e.mipCount;
+            imageInfo.extent = { tail.width, tail.height, 1 };
+            imageInfo.mipLevels = tail.mipCount;
             imageInfo.arrayLayers = 1;
             imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
             imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -392,14 +395,14 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
                 PROFILE_VRAM_ALLOC(ProfilerCategory::Textures, m_vulkan.allocationSize(alloc));
                 VkBuffer staging;
                 VmaAllocation stagingAlloc;
-                m_vulkan.createBuffer(e.payload.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                m_vulkan.createBuffer(tail.bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                       VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
                 void* mapped = nullptr;
                 vmaMapMemory(m_vulkan.allocator(), stagingAlloc, &mapped);
-                std::memcpy(mapped, e.payload.data(), e.payload.size());
+                std::memcpy(mapped, tail.data, tail.bytes);
                 vmaUnmapMemory(m_vulkan.allocator(), stagingAlloc);
                 s_pendingUploads.push_back({image, alloc, staging, stagingAlloc,
-                                            e.width, e.height, e.mipCount, e.mipSizes});
+                                            tail.width, tail.height, tail.mipCount, tail.mipSizes});
 
                 VkImageView view;
                 VkImageViewCreateInfo viewInfo{};
@@ -408,7 +411,7 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
                 viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
                 viewInfo.format = static_cast<VkFormat>(e.vkFormat);
                 viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                viewInfo.subresourceRange.levelCount = e.mipCount;
+                viewInfo.subresourceRange.levelCount = tail.mipCount;
                 viewInfo.subresourceRange.layerCount = 1;
                 vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &view);
 
@@ -420,15 +423,16 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
                                                    e.vkFormat == VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK ||
                                                    bakedIt->second.albedoOpaque);
                 if (slot != 0) m_bindless.updateTextureSafe(slot, view, m_defaultSampler);
+                if (slot != 0) m_textureStreamer.registerSlot(slot, e, base, view, m_defaultSampler);
 
                 ModelTextureGPU tex{};
                 tex.image = image;
                 tex.alloc = alloc;
                 tex.view = view;
                 tex.bindlessSlot = slot;
-                tex.width = static_cast<int>(e.width);
-                tex.height = static_cast<int>(e.height);
-                tex.mipLevels = e.mipCount;
+                tex.width = static_cast<int>(tail.width);
+                tex.height = static_cast<int>(tail.height);
+                tex.mipLevels = tail.mipCount;
                 m_assetCache.addModelTexture(sanitized, tex);
                 return slot;
             }

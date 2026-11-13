@@ -1172,6 +1172,12 @@ uint32_t ModelRenderer::splatLayerSlot(const std::string& path, const std::strin
         m_bindless->updateTexture(first, view, m_sampler);
         m_bindless->updateTexture(first + 1, pbr.normal.view, m_sampler);
         m_bindless->updateTexture(first + 2, pbr.mrahw.view, m_sampler);
+        // Com streaming as tres imagens trocam de tamanho: o trio acompanha.
+        if (TextureStreamer* ts = TextureStreamer::active_instance()) {
+            ts->addAlias(color, first);
+            ts->addAlias(pbr.normal.index, first + 1);
+            ts->addAlias(pbr.mrahw.index, first + 2);
+        }
         m_splatRangeColor[first] = color;
         m_pbrByTexSlot.emplace(first, pbr);
         word = first | 0x8000u | 0x4000u;
@@ -3141,6 +3147,50 @@ bool ModelRenderer::remapProxySlots(PreparedNode& pn, const NodeSlots& real) {
     return true;
 }
 
+// Texturas que cada malha amostra, com a densidade de UV e a caixa dos
+// vertices que usam cada uma. O normal e o MRAH-W dividem o UV da cor do
+// mesmo vertice; sem densidade propria a textura usa a mediana da malha.
+// Lido pelo TextureStreamer.
+static std::vector<TextureStreamer::SlotUse> collectStreamSlots(const std::vector<TerrainVertex>& vertices,
+                                                               const std::vector<std::pair<uint32_t, float>>& texUv,
+                                                               float meshUv) {
+    std::unordered_map<uint32_t, float> uvOf(texUv.begin(), texUv.end());
+    std::unordered_map<uint16_t, TextureStreamer::SlotUse> out;
+    auto add = [&](uint16_t slot, float d, const Vec3& p) {
+        if (slot == 0 || d <= 0.0f) return;
+        auto [it, fresh] = out.try_emplace(slot);
+        TextureStreamer::SlotUse& u = it->second;
+        if (fresh) {
+            u.slot = slot;
+            u.uvPerUnit = d;
+            u.boundsMin = u.boundsMax = p;
+            return;
+        }
+        u.uvPerUnit = std::max(u.uvPerUnit, d);
+        u.boundsMin = glm::min(u.boundsMin, p);
+        u.boundsMax = glm::max(u.boundsMax, p);
+    };
+    for (const TerrainVertex& v : vertices) {
+        auto it = uvOf.find(v.texIndex);
+        const float d = it != uvOf.end() ? it->second : meshUv;
+        add(v.texIndex, d, v.position);
+        add(v.pbrIndex, d, v.position);
+        add(v.normalIndex, d, v.position);
+        add(v.emissiveIndex, d, v.position);
+        if (v.blendTexIndex != 0) {
+            auto bt = uvOf.find(v.blendTexIndex);
+            const float bd = bt != uvOf.end() ? bt->second : meshUv;
+            add(v.blendTexIndex, bd, v.position);
+            add(v.blendPbrIndex, bd, v.position);
+            add(v.blendNormalIndex, bd, v.position);
+        }
+    }
+    std::vector<TextureStreamer::SlotUse> r;
+    r.reserve(out.size());
+    for (auto& [slot, u] : out) r.push_back(u);
+    return r;
+}
+
 ModelRenderer::PreparedAsset ModelRenderer::prepareAssetProxy(const ModelAsset& asset) {
     PreparedAsset out;
     out.proxy = true;
@@ -3366,6 +3416,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             // "quebrar" visivelmente - so' ficava mais fraco que devia).
             mesh.dispScale = isGroundMesh ? 1.0f : dispScaleForCategory(profile.category);
             mesh.uvPerUnit = meshUvPerUnit;
+            mesh.streamSlots = collectStreamSlots(vertices, pn->texUvPerUnit, meshUvPerUnit);
 
             // ERUPTION_TEST_SWAY_ALL=<v>: forca o balanco em TODAS as malhas
             // (diagnostico: separa "o vento nao chega" de "a heuristica de

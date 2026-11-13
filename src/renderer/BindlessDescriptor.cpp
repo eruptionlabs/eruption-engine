@@ -204,6 +204,7 @@ void BindlessDescriptor::freeSlot(uint32_t slot) {
     if (slot == 0 || slot >= m_slotCount) return;
     if (m_allocated > 0) --m_allocated;
     m_freeSlots.push_back(slot);
+    if (slot < m_slotGen.size()) ++m_slotGen[slot];
     // Reset slot to default texture so shader doesn't access destroyed image
     if (m_layered) m_pendingUpdates.push_back({slot, VK_NULL_HANDLE, VK_NULL_HANDLE});
     else m_pendingUpdates.push_back({slot, m_defaultView, m_defaultSampler});
@@ -293,6 +294,20 @@ uint32_t BindlessDescriptor::allocateSlotSafe() {
 void BindlessDescriptor::freeSlotSafe(uint32_t slot) {
     std::lock_guard<std::mutex> lock(m_mutex);
     freeSlot(slot);
+}
+
+uint32_t BindlessDescriptor::slotGenerationSafe(uint32_t slot) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_slotGen.size() < m_slotCount) m_slotGen.resize(m_slotCount, 0u);
+    return slot < m_slotGen.size() ? m_slotGen[slot] : 0u;
+}
+
+bool BindlessDescriptor::updateTextureIfGenerationSafe(uint32_t slot, uint32_t generation, VkImageView view,
+                                                       VkSampler sampler) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (slot == 0 || slot >= m_slotGen.size() || m_slotGen[slot] != generation) return false;
+    updateTexture(slot, view, sampler);
+    return true;
 }
 
 void BindlessDescriptor::updateTextureSafe(uint32_t slot, VkImageView view, VkSampler sampler, bool dynamic) {

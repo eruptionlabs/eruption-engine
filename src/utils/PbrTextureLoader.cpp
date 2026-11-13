@@ -1,4 +1,5 @@
 #include "utils/PbrTextureLoader.hpp"
+#include "renderer/TextureStreamer.hpp"
 #include "utils/TextureFormatPolicy.hpp"
 
 #include "core/Project.hpp"
@@ -593,8 +594,12 @@ static PbrTextureSlot uploadPbrTextureSlot(VulkanContext* ctx, BindlessDescripto
     if (!tex.valid() || !ctx || !bindless) return out;
 
     const bool baked = tex.etex.valid();
+    // Cozido em bloco com streaming: sobe so' a cauda (TextureStreamer).
+    TextureStreamer* streamer = baked ? TextureStreamer::active_instance() : nullptr;
+    const uint32_t base = streamer ? streamer->baseMipFor(tex.etex) : 0u;
+    const TextureStreamer::Tail tail = baked ? TextureStreamer::tailOf(tex.etex, base) : TextureStreamer::Tail{};
     const uint32_t mipLevels = baked
-        ? tex.etex.mipCount
+        ? tail.mipCount
         : MipmapGenerator::calculateMipLevels(
               static_cast<uint32_t>(tex.width), static_cast<uint32_t>(tex.height));
     const VkFormat format = baked ? static_cast<VkFormat>(tex.etex.vkFormat)
@@ -604,7 +609,8 @@ static PbrTextureSlot uploadPbrTextureSlot(VulkanContext* ctx, BindlessDescripto
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.format = format;
-    imageInfo.extent = { static_cast<uint32_t>(tex.width), static_cast<uint32_t>(tex.height), 1 };
+    imageInfo.extent = baked ? VkExtent3D{ tail.width, tail.height, 1 }
+                             : VkExtent3D{ static_cast<uint32_t>(tex.width), static_cast<uint32_t>(tex.height), 1 };
     imageInfo.mipLevels = mipLevels;
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -623,8 +629,8 @@ static PbrTextureSlot uploadPbrTextureSlot(VulkanContext* ctx, BindlessDescripto
         return out;
     }
 
-    const uint8_t* srcData = baked ? tex.etex.payload.data() : tex.pixels.data();
-    const size_t srcSize = baked ? tex.etex.payload.size() : tex.pixels.size();
+    const uint8_t* srcData = baked ? tail.data : tex.pixels.data();
+    const size_t srcSize = baked ? tail.bytes : tex.pixels.size();
     VkBuffer stagingBuffer = VK_NULL_HANDLE;
     VmaAllocation stagingAlloc = VK_NULL_HANDLE;
     if (!ctx->createBuffer(srcSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -644,10 +650,10 @@ static PbrTextureSlot uploadPbrTextureSlot(VulkanContext* ctx, BindlessDescripto
     // hundreds of PBR map uploads into one command buffer submit at map-load
     // time, cutting loading stalls dramatically.
     PendingPbrUpload pending{ out.image, stagingBuffer, stagingAlloc,
-                              static_cast<uint32_t>(tex.width),
-                              static_cast<uint32_t>(tex.height),
+                              baked ? tail.width : static_cast<uint32_t>(tex.width),
+                              baked ? tail.height : static_cast<uint32_t>(tex.height),
                               mipLevels, {} };
-    if (baked) pending.mipSizes = tex.etex.mipSizes;
+    if (baked) pending.mipSizes = tail.mipSizes;
     g_pendingPbrUploads.push_back(std::move(pending));
 
     VkImageViewCreateInfo viewInfo{};
@@ -677,6 +683,7 @@ static PbrTextureSlot uploadPbrTextureSlot(VulkanContext* ctx, BindlessDescripto
     }
 
     bindless->updateTexture(out.index, out.view, sampler);
+    if (streamer && base > 0) streamer->registerSlot(out.index, tex.etex, base, out.view, sampler);
     return out;
 }
 

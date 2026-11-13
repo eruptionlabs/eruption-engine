@@ -429,6 +429,19 @@ bool Engine::init(int width, int height, const std::string& title) {
         }
     }
     if (!m_bindless.init(&m_vulkan)) return false;
+    m_textureStreamer.init(&m_vulkan, &m_bindless);
+    // Quanto de textura o mapa traz (pacote das texturas embutidas, que e' o
+    // grosso): se cabe no orcamento, o streamer nem liga.
+    m_textureStreamer.setPlanner([this](uint64_t& key, uint64_t* bytes) {
+        if (m_embeddedBaked.empty()) return false;
+        key = reinterpret_cast<uintptr_t>(m_currentMap.get()) ^ (uint64_t(m_embeddedBaked.size()) << 40);
+        if (bytes) {
+            *bytes = 0;
+            for (const auto& [name, b] : m_embeddedBaked)
+                *bytes += b.albedo.byteSize() + b.mrahw.byteSize() + b.normal.byteSize();
+        }
+        return true;
+    });
     // Sem descriptor indexing a textura nova e' copiada para o array de camadas no
     // inicio do quadro; o envio dela pode ter ficado para depois (vizinho do mundo
     // adia flushPendingUploads um quadro). Sobe antes da copia, senao a copia le' a
@@ -813,12 +826,14 @@ bool Engine::init(int width, int height, const std::string& title) {
             if (!decodeEtexMip0(e, rgba)) return 0;
             return modelTextureFromRgba(name, rgba.data(), int(e.width), int(e.height));
         }
+        const uint32_t base = m_textureStreamer.baseMipFor(e);
+        const TextureStreamer::Tail tail = TextureStreamer::tailOf(e, base);
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
         imageInfo.format = static_cast<VkFormat>(e.vkFormat);
-        imageInfo.extent = {e.width, e.height, 1};
-        imageInfo.mipLevels = e.mipCount;
+        imageInfo.extent = {tail.width, tail.height, 1};
+        imageInfo.mipLevels = tail.mipCount;
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -831,12 +846,12 @@ bool Engine::init(int width, int height, const std::string& title) {
         PROFILE_VRAM_ALLOC(ProfilerCategory::Textures, m_vulkan.allocationSize(alloc));
         VkBuffer staging;
         VmaAllocation stagingAlloc;
-        m_vulkan.createBuffer(e.payload.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
+        m_vulkan.createBuffer(tail.bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
         void* mapped = nullptr;
         vmaMapMemory(m_vulkan.allocator(), stagingAlloc, &mapped);
-        std::memcpy(mapped, e.payload.data(), e.payload.size());
+        std::memcpy(mapped, tail.data, tail.bytes);
         vmaUnmapMemory(m_vulkan.allocator(), stagingAlloc);
-        s_pendingUploads.push_back({image, alloc, staging, stagingAlloc, e.width, e.height, e.mipCount, e.mipSizes});
+        s_pendingUploads.push_back({image, alloc, staging, stagingAlloc, tail.width, tail.height, tail.mipCount, tail.mipSizes});
         VkImageView view;
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -844,19 +859,20 @@ bool Engine::init(int width, int height, const std::string& title) {
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format = static_cast<VkFormat>(e.vkFormat);
         viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.levelCount = e.mipCount;
+        viewInfo.subresourceRange.levelCount = tail.mipCount;
         viewInfo.subresourceRange.layerCount = 1;
         vkc::createImageView(m_vulkan.device(), &viewInfo, nullptr, &view);
         const uint32_t slot = m_bindless.allocateSlotSafe();   // 0 = cheio: idem acima
         if (slot != 0) m_bindless.updateTextureSafe(slot, view, m_defaultSampler);
+        if (slot != 0) m_textureStreamer.registerSlot(slot, e, base, view, m_defaultSampler);
         ModelTextureGPU tex{};
         tex.image = image;
         tex.alloc = alloc;
         tex.view = view;
         tex.bindlessSlot = slot;
-        tex.width = static_cast<int>(e.width);
-        tex.height = static_cast<int>(e.height);
-        tex.mipLevels = e.mipCount;
+        tex.width = static_cast<int>(tail.width);
+        tex.height = static_cast<int>(tail.height);
+        tex.mipLevels = tail.mipCount;
         m_assetCache.addModelTexture(name, tex);
         return slot;
     });
@@ -1570,7 +1586,7 @@ void Engine::shutdown() {
     m_water.clearLavaMesh();
     m_water.shutdown();
     m_waterReflection.shutdown();
-    m_debugLineRenderer.shutdown(); m_overlayLineRenderer.shutdown(); m_gbuffer.shutdown(); m_bindless.shutdown();
+    m_debugLineRenderer.shutdown(); m_overlayLineRenderer.shutdown(); m_gbuffer.shutdown(); m_textureStreamer.shutdown(); m_bindless.shutdown();
 
     // Cleanup player sprites
     if (m_playerController) {
@@ -3053,6 +3069,23 @@ void Engine::applyGraphicsPreset() {
     // parte dos pixels do mapa; o teto é o botão mais direto de VRAM. Vale
     // para as texturas EMBUTIDAS do GLB (é onde estão os sheets grandes).
     m_textureMaxSize = std::clamp<int>(p.value("texture_max_size", 1024), 128, 4096);
+    // Streaming de mips por distancia + orcamento de VRAM (TextureStreamer):
+    // a textura cozida em bloco sobe so' a cauda (<= texture_stream_base) e os
+    // mips de cima chegam conforme a camera se aproxima. texture_budget_mb = 0
+    // e' automatico (metade do que o heap da GPU deixa livre): placa de pouca
+    // memoria perde o mip de cima das texturas maiores em vez de estourar.
+    {
+        TextureStreamer::Settings ts;
+        ts.enabled = p.value("texture_streaming", false);
+        ts.baseSize = static_cast<uint32_t>(std::clamp(p.value("texture_stream_base", 128), 16, 4096));
+        ts.budgetMb = static_cast<uint32_t>(std::max(0, p.value("texture_budget_mb", 0)));
+        ts.uploadMbPerFrame = static_cast<uint32_t>(std::clamp(p.value("texture_stream_upload_mb", 16), 1, 1024));
+        ts.mipBias = p.value("texture_stream_mip_bias", 1.0f);
+        m_textureStreamer.configure(ts);
+        ERUPTION_LOG_WARN("[STREAM] %s: cauda %u px, orcamento %s%u MB, envio %u MB/quadro, folga %.1f mip",
+                          m_textureStreamer.active() ? "ligado" : "desligado", ts.baseSize,
+                          ts.budgetMb ? "" : "auto ", ts.budgetMb, ts.uploadMbPerFrame, ts.mipBias);
+    }
     // Compressao de textura (spec 51): familia e opcoes por preset, sobre a
     // capacidade sondada no init. ERUPTION_TEXTURE_COMPRESSION=auto|off|bc|astc|etc2
     // sobrepoe (A/B na bancada); ERUPTION_NO_TEXTURE_BC=1 continua sendo "off".

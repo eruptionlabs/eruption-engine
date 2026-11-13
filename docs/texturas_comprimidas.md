@@ -140,6 +140,46 @@ foram codificadas; a telemetria tem `sys.layers.kb_per_layer`, `block`,
 cópia desenhou; `ERUPTION_TEX_LAYER_DIRECT=0` força tudo pelo caminho que
 codifica (A/B).
 
+## Streaming de mips por distancia
+
+Para placa com pouca memoria de video (`src/renderer/TextureStreamer.*`).
+Liga com `texture_streaming` nos presets de desktop; no celular (caminho de
+camadas, sem descriptor indexing) fica desligado.
+
+- **So' age quando falta memoria.** O orcamento e' `texture_budget_mb` ou,
+  com 0, metade do que o heap local da GPU ainda deixa usar (minimo 64 MB).
+  Enquanto as texturas do mapa (pacote embutido e o que ja' foi carregado)
+  cabem, tudo sobe inteiro, como sem streaming: mesma imagem, mesma memoria.
+- **Quando nao cabe**, cada textura comprimida sobe so' a cauda da piramide
+  (lado ate' `texture_stream_base`, 128 px). A cada 4 quadros o streamer
+  estima, por textura, o mip mais fino que a tela mostra (densidade de UV da
+  malha contra pixels por unidade na distancia da caixa da textura, menos
+  `texture_stream_mip_bias` de folga) e, se a soma passa do orcamento, tira o
+  mip de cima de quem menos perde. Sobe a imagem nova sem travar o quadro
+  (cerca, ate' `texture_stream_upload_mb` por quadro) e troca o slot bindless;
+  a imagem antiga morre depois dos quadros em voo.
+- Custo quando ligado: uma copia da textura em RAM (de onde os mips sobem)
+  e a cauda duplicada na VRAM (~1/64 do total).
+
+Medido em 45 mapas de teste (1920x1080, preset high, RTX 4090):
+
+| | streaming ligou | VRAM (media onde ligou) | imagem |
+|---|---|---|---|
+| orcamento automatico (24 GB) | 0 de 45 | igual | igual |
+| orcamento 512 MB | 17 de 45 | -61 MB (ate' -289) | perto do ruido entre execucoes |
+| orcamento 128 MB | 38 de 45 | -227 MB (ate' -999) | borra de perto nos mapas grandes |
+
+Carga do mapa: mesma mediana com e sem streaming (1,45 / 1,37 / 1,42 s em
+8 mapas grandes, 3 execucoes intercaladas). Validacao Vulkan sem erro novo.
+
+## RDO (opcional)
+
+`texture_rdo_lambda` > 0 passa os blocos BC1/BC3/BC7 pela transformada de
+reducao de entropia do bc7enc_rdo: o pacote fica do mesmo tamanho bruto, mas
+o zstd encolhe mais. O pacote leva a etiqueta da politica (nao mistura com o
+classico). No mapa de demonstracao, zstd -19: 66,5 MB sem RDO, 55,3 MB com 1
+(-17%, imagem 40-42 dB), 47,1 MB com 3 (-29%, 34-37 dB, ja' visivel).
+
 ## Limites
 
 - A primeira carga de um mapa num modo novo paga o cozimento (na cena de

@@ -15,6 +15,7 @@
 #include "renderer/GBuffer.hpp"
 #include "utils/SplineCurve.hpp"
 #include "renderer/BindlessDescriptor.hpp"
+#include "renderer/TextureStreamer.hpp"
 #include "renderer/SpriteRenderer.hpp"
 #include "renderer/ModelRenderer.hpp"
 #include "utils/EmbeddedTextureBake.hpp"
@@ -1475,6 +1476,7 @@ private:
     VulkanContext m_vulkan;
     Timer m_timer;
     BindlessDescriptor m_bindless;
+    TextureStreamer m_textureStreamer;
     GBuffer m_gbuffer;
     TerrainRenderer m_terrainRenderer;
     ModelRenderer m_modelRenderer;
