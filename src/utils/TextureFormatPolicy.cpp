@@ -283,6 +283,15 @@ uint32_t policyKey(const Caps& caps, const Options& o) {
             h *= 16777619u;
         }
     }
+    // RDO muda os blocos, nao o formato: entra na chave para nao misturar
+    // pacote com e sem (centesimos de lambda).
+    if (o.rdoLambda > 0.0f) {
+        const uint32_t l = static_cast<uint32_t>(o.rdoLambda * 100.0f + 0.5f);
+        for (int b = 0; b < 4; ++b) {
+            h ^= ((l >> (8 * b)) & 0xFFu) ^ 0xA5u;
+            h *= 16777619u;
+        }
+    }
     return h;
 }
 
@@ -331,7 +340,7 @@ bool anyActive() {
 bool classicActive() {
     std::lock_guard<std::mutex> lk(g_mutex);
     return family(g_caps, g_options) == Mode::Bc && !g_options.albedoBc7 && !g_options.alphaBc7 &&
-           !g_options.normalTwoChannel;
+           !g_options.normalTwoChannel && g_options.rdoLambda <= 0.0f;
 }
 
 std::string activeTag() {

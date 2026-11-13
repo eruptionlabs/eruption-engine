@@ -310,7 +310,9 @@ EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind k
         }
         if (cobertura) aplicaCobertura(mipLevel);
         std::vector<uint8_t> enc;
-        if (!texenc::encodeLevel(fmt, level.data(), w, h, enc)) return EtexData{};
+        texenc::Params ep;  // o codificador de sempre; so' o RDO vem do preset
+        ep.rdoLambda = texfmt::options().rdoLambda;
+        if (!texenc::encodeLevel(fmt, level.data(), w, h, enc, ep)) return EtexData{};
         out.mipSizes.push_back(static_cast<uint32_t>(enc.size()));
         out.payload.insert(out.payload.end(), enc.begin(), enc.end());
         if (w == 1 && h == 1) break;

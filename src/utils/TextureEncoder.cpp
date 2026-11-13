@@ -13,6 +13,7 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #include "bc7decomp.h"
 #include "bc7enc.h"
+#include "ert.h"
 #include "rgbcx.h"
 #pragma GCC diagnostic pop
 #endif
@@ -49,6 +50,58 @@ void initBc() {
         rgbcx::init(rgbcx::bc1_approx_mode::cBC1Ideal);
         bc7enc_compress_block_init();
     });
+}
+
+// Desempacota um bloco para a transformada de entropia medir o erro de cada
+// tentativa (o mesmo decodificador da GPU, nos modos que o codificador usou).
+bool unpackForRdo(const void* block, ert::color_rgba* px, uint32_t, void* user) {
+    // unpack_bc1/bc3 devolvem "usou o modo de 3 cores", nao sucesso. Texel
+    // transparente que o original nao tinha viraria buraco no BC1 opaco: sai
+    // com uma cor absurda para a tentativa ser rejeitada pelo erro.
+    switch (*static_cast<const VkFormat*>(user)) {
+    case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
+        rgbcx::unpack_bc1(block, px, true);
+        for (int i = 0; i < 16; ++i)
+            if (px[i].m_c[3] == 0) px[i] = ert::color_rgba{{255, 0, 255, 0}};
+        return true;
+    case VK_FORMAT_BC3_UNORM_BLOCK: rgbcx::unpack_bc3(block, px); return true;
+    case VK_FORMAT_BC7_UNORM_BLOCK: return bc7decomp::unpack_bc7(block, reinterpret_cast<bc7decomp::color_rgba*>(px));
+    default: return false;
+    }
+}
+
+// RDO depois de codificar o nivel: cada bloco tenta copiar trechos dos blocos
+// anteriores (janela de 128 bytes) quando o erro sobe pouco - o zstd do pacote
+// acha essas repeticoes. Os pixels de origem vao em ordem de bloco.
+void reduceEntropy(VkFormat f, const std::vector<uint8_t>& img, int pw, int bw, int bh, std::vector<uint8_t>& out,
+                   float lambda) {
+    const uint32_t bytes = texfmt::blockInfo(f).bytes;
+    std::vector<ert::color_rgba> px(static_cast<size_t>(bw) * bh * 16);
+    bool alpha = false;
+    for (int by = 0; by < bh; ++by)
+        for (int bx = 0; bx < bw; ++bx)
+            for (int y = 0; y < 4; ++y)
+                for (int x = 0; x < 4; ++x) {
+                    ert::color_rgba& c = px[(static_cast<size_t>(by) * bw + bx) * 16 + y * 4 + x];
+                    std::memcpy(c.m_c, &img[(static_cast<size_t>(by * 4 + y) * pw + bx * 4 + x) * 4], 4);
+                    alpha = alpha || c.m_c[3] != 255;
+                }
+    // Parametros do proprio bc7enc_rdo (rdo_bc_encoder.cpp): janela de 128
+    // bytes, duas tentativas por bloco, bloco liso protegido por uma escala de
+    // erro que cresce com o lambda. BC7 sempre medido nos 4 canais.
+    ert::reduce_entropy_params ep;
+    ep.m_lambda = lambda;
+    ep.m_lookback_window_size = 128;
+    ep.m_try_two_matches = true;
+    ep.m_smooth_block_max_mse_scale = f == VK_FORMAT_BC7_UNORM_BLOCK
+                                          ? 15.0f + (50.0f - 15.0f) * std::min(1.0f, lambda / 4.0f)
+                                          : 10.0f + (30.0f - 10.0f) * std::min(1.0f, lambda / 4.0f);
+    const uint32_t comps = (f == VK_FORMAT_BC7_UNORM_BLOCK || alpha) ? 4u : 3u;
+    if (comps == 3) ep.m_color_weights[3] = 0;  // senao o reduce_entropy desiste sem mexer em nada
+    uint32_t modified = 0;
+    VkFormat fmt = f;
+    ert::reduce_entropy(out.data(), static_cast<uint32_t>(bw) * bh, bytes, bytes, 4, 4, comps, px.data(), ep,
+                        modified, unpackForRdo, &fmt);
 }
 
 bool encodeBc(VkFormat f, const uint8_t* rgba, int w, int h, std::vector<uint8_t>& out, const Params& p) {
@@ -96,6 +149,9 @@ bool encodeBc(VkFormat f, const uint8_t* rgba, int w, int h, std::vector<uint8_t
             }
         }
     }
+    if (p.rdoLambda > 0.0f && (f == VK_FORMAT_BC1_RGBA_UNORM_BLOCK || f == VK_FORMAT_BC3_UNORM_BLOCK ||
+                               f == VK_FORMAT_BC7_UNORM_BLOCK))
+        reduceEntropy(f, img, pw, bw, bh, out, p.rdoLambda);
     return true;
 }
 

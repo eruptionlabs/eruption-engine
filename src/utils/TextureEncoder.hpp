@@ -20,6 +20,8 @@ struct Params {
     uint32_t bc7Partitions = 16;
     // ASTC: 0..100 (astcenc: 10 = fast, 60 = medium). Carga x qualidade.
     float astcQuality = 10.0f;
+    // RDO nos blocos BC1/BC3/BC7 (texfmt::Options::rdoLambda); 0 = desligado.
+    float rdoLambda = 0.0f;
 };
 
 // Ha codificador para este formato neste build.

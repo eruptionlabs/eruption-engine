@@ -244,6 +244,7 @@ static texfmt::Options textureOptionsFromPreset(const nlohmann::json& p) {
     o.albedoBc7 = presetFlag(p, "texture_albedo_bc7");
     o.alphaBc7 = presetFlag(p, "texture_alpha_bc7");
     o.astcAlbedo6x6 = presetFlag(p, "texture_astc_albedo_6x6");
+    o.rdoLambda = std::max(0.0f, p.value("texture_rdo_lambda", 0.0f));
     if (const char* e = std::getenv("ERUPTION_TEXTURE_COMPRESSION")) o.mode = texfmt::parseMode(e, o.mode);
     if (const char* e = std::getenv("ERUPTION_NO_TEXTURE_BC"); e && e[0] == '1') o.mode = texfmt::Mode::Off;
     return o;

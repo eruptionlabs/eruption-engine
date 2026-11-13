@@ -72,6 +72,14 @@ struct Options {
     bool alphaBc7 = false;      // BC7 no albedo com alfa em vez de BC3 (mesmo tamanho)
     bool normalTwoChannel = false; // normal em 2 canais (BC5 / EAC RG11), z reconstruido no shader
     bool astcAlbedo6x6 = false; // ASTC 6x6 no albedo opaco (senao 4x4)
+    // RDO (bc7enc_rdo, transformada de reducao de entropia) nos blocos BC1/BC3/
+    // BC7: troca um pouco de erro por blocos mais repetidos, que o compressor
+    // sem perda do pacote (zstd) encolhe muito mais. 0 = desligado (o pacote
+    // continua o mesmo de antes); ~1-4 = o intervalo usual do bc7enc_rdo.
+    // Medido no mapa de demonstracao (pacote 1024, zstd -19): 66,5 MB sem RDO,
+    // 55,3 MB com 1 (-17%, imagem final 40-42 dB) e 47,1 MB com 3 (-29%,
+    // 34-37 dB, ja' visivel). VRAM e tempo de quadro nao mudam.
+    float rdoLambda = 0.0f;
 };
 
 // Familia que o modo usa nesta GPU (Auto: BC > ASTC > ETC2; forcado: so' ela).

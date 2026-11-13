@@ -526,7 +526,8 @@ if(NOT EXISTS "${ERUPTION_BC7ENC_DIR}/rgbcx.cpp" OR NOT EXISTS "${ERUPTION_BC7EN
     endif()
     set(ERUPTION_BC7ENC_DIR "${bc7enc_rdo_SOURCE_DIR}")
 endif()
-if(EXISTS "${ERUPTION_BC7ENC_DIR}/rgbcx.cpp" AND EXISTS "${ERUPTION_BC7ENC_DIR}/bc7enc.cpp")
+if(EXISTS "${ERUPTION_BC7ENC_DIR}/rgbcx.cpp" AND EXISTS "${ERUPTION_BC7ENC_DIR}/bc7enc.cpp"
+   AND EXISTS "${ERUPTION_BC7ENC_DIR}/ert.cpp")
     list(APPEND SOURCES
         "${ERUPTION_BC7ENC_DIR}/rgbcx.cpp"
         "${ERUPTION_BC7ENC_DIR}/bc7enc.cpp"
@@ -542,6 +543,10 @@ if(EXISTS "${ERUPTION_BC7ENC_DIR}/rgbcx.cpp" AND EXISTS "${ERUPTION_BC7ENC_DIR}/
         # Include dir: ja' coberto por target_include_directories(eruption-engine
         # ... ${ERUPTION_BC7ENC_DIR}) mais abaixo - o alvo ainda nao existe aqui.
     endif()
+    # RDO (texture_rdo_lambda): a transformada de entropia do mesmo pacote.
+    list(APPEND SOURCES "${ERUPTION_BC7ENC_DIR}/ert.cpp")
+    # ert.h usa uint8_t/uint32_t sem incluir <cstdint> (fonte de MSVC).
+    set_source_files_properties("${ERUPTION_BC7ENC_DIR}/ert.cpp" PROPERTIES COMPILE_OPTIONS "-w;-include;cstdint")
     set(ERUPTION_HAVE_BC_ENCODER ON)
     message(STATUS "Encoder BC em runtime: bc7enc_rdo em ${ERUPTION_BC7ENC_DIR}")
 else()
@@ -1276,7 +1281,7 @@ if(ERUPTION_BUILD_TESTS)
         src/utils/TextureEncoder.cpp ${ERUPTION_ASTCENC_SOURCES} ${ERUPTION_ETCPAK_SOURCES})
     if(ERUPTION_HAVE_BC_ENCODER)
         list(APPEND ERUPTION_TEXCODEC_TEST_SOURCES "${ERUPTION_BC7ENC_DIR}/rgbcx.cpp" "${ERUPTION_BC7ENC_DIR}/bc7enc.cpp"
-             "${ERUPTION_BC7ENC_DIR}/bc7decomp.cpp")
+             "${ERUPTION_BC7ENC_DIR}/bc7decomp.cpp" "${ERUPTION_BC7ENC_DIR}/ert.cpp")
     endif()
     add_executable(eruption-texture-codec-tests ${ERUPTION_TEXCODEC_TEST_SOURCES})
     target_include_directories(eruption-texture-codec-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

@@ -401,6 +401,47 @@ int main(int argc, char** argv) {
     for (int c = 0; c < kClassCount; ++c) CHECK(choose(static_cast<Class>(c), none, raw) == VK_FORMAT_R8G8B8A8_UNORM);
     CHECK(policyKey(pc, raw) != policyKey(pc, o));
 
+    std::printf("6. RDO (texture_rdo_lambda): blocos mais repetidos, erro limitado, chave propria\n");
+    {
+        Options rdo = o;
+        rdo.rdoLambda = 2.0f;
+        CHECK(policyKey(pc, rdo) != policyKey(pc, o)); // pacote com RDO nao serve sem, e vice-versa
+        // Medida de "compressivel": bytes cobertos por repeticoes de 4 bytes ja'
+        // vistas nos 256 bytes anteriores (a janela do LZ que o RDO mira).
+        auto repeated = [](const std::vector<uint8_t>& b) {
+            size_t cov = 0;
+            for (size_t i = 4; i + 4 <= b.size(); ++i) {
+                const size_t from = i > 256 ? i - 256 : 0;
+                for (size_t j = from; j + 4 <= i; ++j)
+                    if (std::memcmp(&b[i], &b[j], 4) == 0) {
+                        ++cov;
+                        break;
+                    }
+            }
+            return cov;
+        };
+        for (const Case& c : cases) {
+            if (c.f != VK_FORMAT_BC1_RGBA_UNORM_BLOCK && c.f != VK_FORMAT_BC3_UNORM_BLOCK && c.f != VK_FORMAT_BC7_UNORM_BLOCK)
+                continue;
+            if (!texenc::available(c.f)) continue;
+            texenc::Params p0, p1;
+            p0.linear = p1.linear = false;
+            p1.rdoLambda = rdo.rdoLambda;
+            std::vector<uint8_t> b0, b1, back0, back1;
+            CHECK(texenc::encodeLevel(c.f, img.data(), W, H, b0, p0));
+            CHECK(texenc::encodeLevel(c.f, img.data(), W, H, b1, p1));
+            CHECK(b1.size() == b0.size());
+            CHECK(texenc::decodeLevel(c.f, b0.data(), b0.size(), W, H, back0));
+            CHECK(texenc::decodeLevel(c.f, b1.data(), b1.size(), W, H, back1));
+            const double db0 = psnr(img, back0, c.c0, c.n), db1 = psnr(img, back1, c.c0, c.n);
+            const size_t r0 = repeated(b0), r1 = repeated(b1);
+            std::printf("   %-9s sem RDO %.2f dB, %zu B repetidos; RDO %.1f: %.2f dB, %zu B repetidos\n", formatTag(c.f), db0, r0,
+                        rdo.rdoLambda, db1, r1);
+            CHECK(r1 > r0);
+            CHECK(db1 >= c.minDb - 6.0);
+        }
+    }
+
     std::printf(g_falhas ? "HOUVE FALHA (%d)\n" : "OK\n", g_falhas);
     return g_falhas ? 1 : 0;
 }
