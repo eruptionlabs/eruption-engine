@@ -281,12 +281,16 @@ vec3 heatShimmer(vec2 uv, vec3 worldPos, float depth) {
     return color;
 }
 
-// Arco-iris de verdade: anel de 42 graus em volta do ponto antissolar, na
-// DIRECAO de visao (nao na tela). Antes era um anel fixo na tela, desenhado
-// por cima do chao e das casas com o espectro saturado. Agora: vermelho por
-// fora (42,3), violeta por dentro (40,5), ceu mais claro dentro do arco (o
-// secundario 50-53,5 saiu: lia como dois arcos); so' no ceu e nas coisas longe
-// (a cortina de chuva fica atras da cidade), nunca no chao perto.
+// Arco-iris preso ao mundo. O fisico (anel de 42 graus em volta do ponto
+// antissolar, medido a partir da camera) anda junto com a camera: na camera
+// de jogo, que orbita e se desloca, o arco deslizava por cima do chao e das
+// casas e "seguia a tela". Aqui o arco e' pintado numa cortina de chuva
+// vertical fixa: um observador virtual parado no centro do mapa (E) ve o
+// anel de 42 graus, e o anel fica desenhado na cortina, que esta' a uma
+// distancia fixa de E na direcao oposta ao sol. A camera ve essa cortina
+// como um objeto do mundo: paralaxe certa, e casas/arvores na frente tapam
+// o arco pela profundidade. Vermelho por fora (42,3), violeta por dentro
+// (40,5), ceu mais claro dentro do arco; sem secundario (lia como dois arcos).
 vec3 rainbowSpectrum(float t) { // t: 0 = violeta (dentro) .. 1 = vermelho (fora)
     vec3 c = vec3(smoothstep(0.45, 0.9, t) + 0.35 * (1.0 - smoothstep(0.0, 0.15, t)),
                   smoothstep(0.2, 0.5, t) * (1.0 - smoothstep(0.65, 0.95, t)),
@@ -299,22 +303,50 @@ vec3 rainbow(vec2 uv, vec3 worldPos, float depth) {
     if (intensity < 0.001) return vec3(0.0);
     vec3 toSun = normalize(push.params7.xyz);
     if (toSun.y < -0.05) return vec3(0.0); // sol abaixo do horizonte: nao ha arco
-    vec3 view = normalize(worldPos - push.cameraPos.xyz);
-    if (depth >= 1.0) {
-        vec4 far = ubo.invViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
-        view = normalize(far.xyz / far.w - push.cameraPos.xyz);
-    }
-    float ang = degrees(acos(clamp(dot(view, -toSun), -1.0, 1.0)));
-    // Primario 40,5..42,3 com borda macia (um arco so').
+    vec3 anti = -toSun;
+    vec2 aH = anti.xz;
+    float aLen = length(aH);
+    if (aLen < 0.05) return vec3(0.0); // sol a pino: o anel inteiro fica abaixo do chao
+    aH /= aLen;
+
+    // Observador virtual E: centro do mapa (limites do campo de nuvens),
+    // altura 0. Sem limites validos, usa a camera (comportamento antigo).
+    vec2 size = push.cloudWorldBounds.zw;
+    bool hasMap = size.x > 1.0 && size.y > 1.0;
+    vec3 E = hasMap ? vec3(push.cloudWorldBounds.xy + 0.5 * size, 0.0).xzy
+                    : vec3(push.cameraPos.x, 0.0, push.cameraPos.z);
+    E.y = 0.0;
+    // Cortina vertical perpendicular a' direcao antissolar, na borda do mapa.
+    float D = hasMap ? 0.6 * max(size.x, size.y) : 600.0;
+    vec3 n = vec3(aH.x, 0.0, aH.y);
+    vec3 C = push.cameraPos.xyz;
+    // Camera muito afastada (zoom longe, 2700 u) passava para tras da
+    // cortina e o arco sumia/voltava com um giro de 1 grau. A cortina recua
+    // junto com a camera quando ela chega perto, de forma continua: fica
+    // sempre pelo menos 0,5 D a' frente dela.
+    D = max(D, dot(C - E, n) + 0.5 * D);
+    vec3 P0 = E + n * D;
+
+    vec4 farP = ubo.invViewProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+    vec3 view = normalize(farP.xyz / farP.w - C);
+    float vn = dot(view, n);
+    if (vn < 1e-3) return vec3(0.0);           // olhando para longe da cortina
+    float t = dot(P0 - C, n) / vn;
+    if (t <= 0.0) return vec3(0.0);            // camera ja' passou da cortina
+    // Algo do cenario na frente da cortina tapa o arco.
+    if (depth < 1.0 && length(worldPos - C) < t) return vec3(0.0);
+    vec3 H = C + view * t;
+    if (H.y < 0.0) return vec3(0.0);           // abaixo do chao da cortina
+
+    float ang = degrees(acos(clamp(dot(normalize(H - E), anti), -1.0, 1.0)));
     float p = smoothstep(39.8, 40.6, ang) * (1.0 - smoothstep(42.2, 43.0, ang));
     float inner = (1.0 - smoothstep(30.0, 40.5, ang)) * 0.06; // ceu clareia dentro do arco
-    vec3 col = rainbowSpectrum(clamp((ang - 40.5) / 1.8, 0.0, 1.0)) * p
-             + vec3(inner);
-    // So' ceu e longe; some perto do horizonte de baixo (o arco nasce no chao distante).
-    float dist = length(worldPos - push.cameraPos.xyz);
-    float far = depth >= 1.0 ? 1.0 : smoothstep(400.0, 1500.0, dist);
-    float horizon = smoothstep(-0.08, 0.05, view.y);
-    return col * far * horizon * intensity * 0.7;
+    vec3 col = rainbowSpectrum(clamp((ang - 40.5) / 1.8, 0.0, 1.0)) * p + vec3(inner);
+    // Pe' do arco some na base da cortina (chuva mais rala junto ao chao) e o
+    // arco perde forca quando a camera chega perto da cortina.
+    float foot = smoothstep(0.0, 0.08 * D, H.y);
+    float near = smoothstep(0.05 * D, 0.25 * D, t);
+    return col * foot * near * intensity * 0.7;
 }
 
 // Sand/dust atmospheric overlay. The actual 3D depth comes from the
@@ -403,9 +435,11 @@ vec3 shootingStars(vec2 uv, vec3 worldPos, float depth, float t) {
     float intensity = push.params9.x;
     if (intensity < 0.001) return vec3(0.0);
 
-    float sky = smoothstep(0.0, 30.0, worldPos.y - push.cameraPos.y);
-    if (depth >= 1.0) sky = 1.0;
-    if (sky < 0.1) return vec3(0.0);
+    // Only where there is sky (empty depth): the old test (anything 30 u
+    // above the camera counts as sky) drew the streaks over rooftops and
+    // towers whenever the camera was low, e.g. in street-level shots.
+    if (depth < 1.0) return vec3(0.0);
+    float sky = 1.0;
 
     int wt = int(push.params6.x + 0.5);
     bool isMeteor = (wt == 37); // WT_MeteorShower

@@ -131,6 +131,9 @@ public:
         // F2: os valores do spotlight do painel passam por cima dos que o
         // jogo manda por world.set_focus (e ligam o spotlight).
         bool cocSpotPanel = false;
+        // Preset de DoF do painel (F2): -1 = o do jogo / postprocess.json,
+        // 0 = Spotlight, 1 = Adaptive Focal. Exclusivos: um desliga o outro.
+        int dofPreset = -1;
         bool cocEnableForeground = true;
         bool visualizeCoC = false;
 

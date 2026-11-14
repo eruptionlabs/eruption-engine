@@ -157,11 +157,11 @@ void ProceduralSkyBackend::createUBO() {
 
     VkDescriptorPoolSize poolSize = {};
     poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSize.descriptorCount = 1 + kProbeFaces;
+    poolSize.descriptorCount = 1 + kExtraSets;
 
     VkDescriptorPoolCreateInfo poolInfo = {};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 1 + kProbeFaces;
+    poolInfo.maxSets = 1 + kExtraSets;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
     vkCreateDescriptorPool(m_ctx->device(), &poolInfo, nullptr, &m_uboPool);
@@ -190,7 +190,7 @@ void ProceduralSkyBackend::createUBO() {
     // Sonda de ceu (G36): 6 UBOs/sets, um por face - as faces sao gravadas
     // no MESMO command buffer, e um UBO host-mapped so' teria o valor da
     // ultima quando a GPU executasse.
-    for (uint32_t f = 0; f < kProbeFaces; ++f) {
+    for (uint32_t f = 0; f < kExtraSets; ++f) {
         vmaCreateBuffer(m_ctx->allocator(), &bufferInfo, &allocInfo, &m_probeUbo[f], &m_probeUboAlloc[f], nullptr);
         vmaMapMemory(m_ctx->allocator(), m_probeUboAlloc[f], &m_probeUboMapped[f]);
         vkAllocateDescriptorSets(m_ctx->device(), &allocSetInfo, &m_probeSets[f]);
@@ -210,7 +210,7 @@ void ProceduralSkyBackend::destroyUBO() {
         vmaUnmapMemory(m_ctx->allocator(), m_uboAlloc);
         m_uboMapped = nullptr;
     }
-    for (uint32_t f = 0; f < kProbeFaces; ++f) {
+    for (uint32_t f = 0; f < kExtraSets; ++f) {
         if (m_probeUboMapped[f]) { vmaUnmapMemory(m_ctx->allocator(), m_probeUboAlloc[f]); m_probeUboMapped[f] = nullptr; }
         if (m_probeUbo[f] != VK_NULL_HANDLE) { vmaDestroyBuffer(m_ctx->allocator(), m_probeUbo[f], m_probeUboAlloc[f]); m_probeUbo[f] = VK_NULL_HANDLE; }
     }
@@ -329,6 +329,9 @@ void ProceduralSkyBackend::createPipeline() {
 // Parametros do ceu para um frame. Compartilhado entre o skybox de tela, o
 // ceu-para-textura (reflexo da agua) e a sonda de ceu (G36).
 static void fillSkyParams(SkyParamsUBO& ubo, const SkyConfig& cfg, const DayNightCycle& cycle) {
+    // ERUPTION_TEST_NO_SKY_CLOUDS=1 (A/B de captura): ceu sem as nuvens
+    // desenhadas na cupula (p.ex. medir o que elas mudam no reflexo da agua).
+    static const bool kNoSkyClouds = std::getenv("ERUPTION_TEST_NO_SKY_CLOUDS") != nullptr;
     ubo = SkyParamsUBO{};
     Vec3 top = cycle.getSkyTopColor();
     Vec3 hor = cycle.getSkyHorizonColor();
@@ -353,7 +356,7 @@ static void fillSkyParams(SkyParamsUBO& ubo, const SkyConfig& cfg, const DayNigh
                                  cfg.procedural.sunSize);
     ubo.proceduralParams3 = Vec4(cfg.procedural.moonSize,
                                  cfg.procedural.enableStars ? 1.0f : 0.0f,
-                                 cfg.procedural.enableClouds ? 1.0f : 0.0f,
+                                 cfg.procedural.enableClouds && !kNoSkyClouds ? 1.0f : 0.0f,
                                  cfg.procedural.starTwinkleSpeed);
     float moonPhase = cfg.procedural.moonPhaseAuto ? cycle.getMoonPhase() : cfg.procedural.moonPhase;
     ubo.proceduralParams4 = Vec4(cfg.procedural.cloudSoftness,
@@ -385,13 +388,13 @@ size_t ProceduralSkyBackend::skyParams(const DayNightCycle& cycle, const Mat4& i
     return sizeof(ubo);
 }
 
-void ProceduralSkyBackend::updateUBO(const DayNightCycle& cycle, const Mat4& viewProj) {
+void ProceduralSkyBackend::updateUBO(const DayNightCycle& cycle, const Mat4& viewProj, void* dst) {
     SkyParamsUBO ubo;
     fillSkyParams(ubo, m_config, cycle);
     ubo.proceduralParams6.z = m_auroraIntensity; // aurora (setAurora)
     ubo.proceduralParams6.w = m_auroraTime;
     ubo.invViewProj = glm::inverse(viewProj);
-    std::memcpy(m_uboMapped, &ubo, sizeof(ubo));
+    std::memcpy(dst, &ubo, sizeof(ubo));
 }
 
 bool ProceduralSkyBackend::renderProbeFace(VkCommandBuffer cmd, const DayNightCycle& cycle, const Mat4& invViewProj,
@@ -449,11 +452,11 @@ bool ProceduralSkyBackend::renderProbeFace(VkCommandBuffer cmd, const DayNightCy
 }
 
 void ProceduralSkyBackend::render(VkCommandBuffer cmd, const DayNightCycle& cycle, const Mat4& viewProj) {
-    drawSky(cmd, cycle, viewProj, m_width, m_height);
+    drawSky(cmd, cycle, viewProj, m_width, m_height, m_uboSet, m_uboMapped);
 }
 
 void ProceduralSkyBackend::drawSky(VkCommandBuffer cmd, const DayNightCycle& cycle, const Mat4& viewProj,
-                                   uint32_t width, uint32_t height) {
+                                   uint32_t width, uint32_t height, VkDescriptorSet set, void* uboMapped) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
 
     VkViewport vp{};
@@ -470,8 +473,8 @@ void ProceduralSkyBackend::drawSky(VkCommandBuffer cmd, const DayNightCycle& cyc
     scissor.extent = {width, height};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    updateUBO(cycle, viewProj);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &m_uboSet, 0, nullptr);
+    updateUBO(cycle, viewProj, uboMapped);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &set, 0, nullptr);
 
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
@@ -524,7 +527,12 @@ void ProceduralSkyBackend::renderToTexture(VkCommandBuffer cmd, const DayNightCy
     renderingInfo.pDepthAttachment = &depthAttach;
 
     vkc::cmdBeginRendering(cmd, &renderingInfo);
-    drawSky(cmd, cycle, viewProj, m_texWidth, m_texHeight);
+    // Ceu visto da camera ESPELHADA no plano da agua (y -> -y na direcao):
+    // a agua reflete o ceu que esta' atras/acima da camera, que a camera de
+    // jogo (olhando para baixo) nunca ve'. Com a matriz da tela o reflexo so'
+    // achava ceu dentro do quadro e caia no gradiente liso, sem nuvens.
+    const Mat4 mirrored = viewProj * glm::scale(Mat4(1.0f), Vec3(1.0f, -1.0f, 1.0f));
+    drawSky(cmd, cycle, mirrored, m_texWidth, m_texHeight, m_probeSets[kReflSet], m_probeUboMapped[kReflSet]);
     vkc::cmdEndRendering(cmd);
 
     barriers[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;

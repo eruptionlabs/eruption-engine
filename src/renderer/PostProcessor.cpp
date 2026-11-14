@@ -1004,12 +1004,17 @@ if (!m_ctx) return;
     // Weather screen-space overlay (copy + heat shimmer + lens drops + storm tint + lightning flash)
     // Always run when weather is present so m_weatherImage contains a valid copy of the scene.
     // Runs BEFORE DoF/bloom so rain and weather effects receive blur and bloom too.
-    bool weatherActive = weather != nullptr;
-    if (weatherActive) {
-        float cameraUnderCloud = settings.debugRainRegions ? 1.0f : (1.0f - glm::smoothstep(cloudBaseHeight - 15.0f,
-                                                                                            cloudBaseHeight + 15.0f,
-                                                                                            cameraPos.y));
-        if (cameraUnderCloud < 0.001f) weatherActive = false;
+    // Camera acima da base das nuvens: so' a chuva (particulas) sai. Antes o
+    // passe inteiro desligava, e com ele arco-iris, neblina, estrela cadente e
+    // aurora: com a camera afastada (zoom longe) eles sumiam e voltavam com um
+    // giro de 1 grau, quando a altura da camera cruzava a base (~500 u). O
+    // shader ja' apaga gota na lente e escurecimento de chuva por conta propria
+    // (cameraUnderCloud em weather_overlay.frag).
+    const bool weatherActive = weather != nullptr;
+    bool cameraBelowClouds = true;
+    if (weatherActive && !settings.debugRainRegions) {
+        const float under = 1.0f - glm::smoothstep(cloudBaseHeight - 15.0f, cloudBaseHeight + 15.0f, cameraPos.y);
+        cameraBelowClouds = under >= 0.001f;
     }
     // Parcelas em ms deste frame (na verdade do frame anterior deste slot: os
     // resultados de query sao lidos no beginFrame). Todas vem do MESMO buffer
@@ -1085,7 +1090,7 @@ if (!m_ctx) return;
                       w.dustDevilIntensity < kOff && w.tornadoIntensity < kOff &&
                       w.stormTint < kOff && w.lightningFlash < kOff && w.rainIntensity < kOff &&
                       w.effectiveRainSplashIntensity() * 0.5f < kOff;
-        if (overlayIdle && settings.weatherTier != WeatherTier::Mobile && !particlesAfterDof) {
+        if (overlayIdle && cameraBelowClouds && settings.weatherTier != WeatherTier::Mobile && !particlesAfterDof) {
             m_weatherRenderer.setTier(settings.weatherTier);
             m_weatherRenderer.setCloudAltitudeTexture(cloudAltitudeView, cloudAltitudeSampler);
             m_weatherRenderer.setCloudAltitudeRange(cloudBottom, cloudTop);
@@ -1098,7 +1103,8 @@ if (!m_ctx) return;
     // simulacao que o render() faria, aqui antes) a fusao vale; com gota, o
     // passe proprio fica.
     bool afterDofIdle = false;
-    if (lean::postFused() && weatherActive && particlesAfterDof && settings.weatherTier != WeatherTier::Mobile) {
+    if (lean::postFused() && weatherActive && cameraBelowClouds && particlesAfterDof &&
+        settings.weatherTier != WeatherTier::Mobile) {
         m_weatherRenderer.setTier(settings.weatherTier);
         m_weatherRenderer.setCloudAltitudeTexture(cloudAltitudeView, cloudAltitudeSampler);
         m_weatherRenderer.setCloudAltitudeRange(cloudBottom, cloudTop);
@@ -1525,7 +1531,7 @@ if (!m_ctx) return;
         lap(1);
         barrierToShaderRead(cmd, m_ctx, target);
     };
-    const bool drawParticles = weatherActive && settings.weatherTier != WeatherTier::Mobile;
+    const bool drawParticles = weatherActive && cameraBelowClouds && settings.weatherTier != WeatherTier::Mobile;
     if (drawParticles && !particlesAfterDof) {
         if (overlayIdle) {
             m_weatherRenderer.dropPrepared(); // prepare() disse: nada a desenhar
@@ -1612,11 +1618,15 @@ if (!m_ctx) return;
         // fator e' 1 nos 60 graus, entao cena nenhuma de abertura padrao muda.
         // O override de bancada fica de fora: quem passa ERUPTION_TEST_COC_FOCAL
         // esta' varrendo um valor absoluto e quer exatamente aquele.
+        // Preset de DoF escolhido no painel (dofPreset): Adaptive Focal ignora o
+        // foco que o jogo manda (world.set_focus) - os dois presets sao
+        // exclusivos; -1 segue o jogo / postprocess.json.
+        const bool focusOverride = settings.focusOverride && settings.dofPreset != 1;
         float cocFocal = settings.cocFocalDistance;
         // O foco por assunto vence o mapeamento por zoom (ver PostSettings):
         // quem passou um ponto da cena ja' deu a profundidade real, e o fator
         // de lente so' converteria de novo o que ja' esta' convertido.
-        if (settings.focusOverride) {
+        if (focusOverride) {
             cocFocal = settings.focusDistance;
         } else if (settings.cocEnableZoomMapping) {
             static const bool kFocalDeBancada = std::getenv("ERUPTION_TEST_COC_FOCAL") != nullptr;
@@ -1628,27 +1638,28 @@ if (!m_ctx) return;
             if (!kFocalDeBancada) cocFocal *= lente;
         }
         cocPush.focal_distance = cocFocal;
-        const float abertura = (settings.focusOverride && settings.focusAperture >= 0.0f)
+        const float abertura = (focusOverride && settings.focusAperture >= 0.0f)
                                    ? settings.focusAperture
                                    : settings.cocAperture;
         cocPush.aperture = abertura * 0.05f;
-        const float teto = (settings.focusOverride && settings.focusMaxBlur >= 0.0f) ? settings.focusMaxBlur
+        const float teto = (focusOverride && settings.focusMaxBlur >= 0.0f) ? settings.focusMaxBlur
                                                                                       : settings.cocMaxBlur;
         cocPush.max_blur = teto;
-        cocPush.focus_band = (settings.focusOverride && settings.focusBand >= 0.0f) ? settings.focusBand
+        cocPush.focus_band = (focusOverride && settings.focusBand >= 0.0f) ? settings.focusBand
                                                                                    : settings.cocFocusBand;
         cocPush.zoom_factor = settings.cocZoomFactor;
         cocPush.near_plane = nearPlane;
         cocPush.far_plane = farPlane;
-        cocPush.enable_foreground = (settings.focusOverride ? settings.focusForeground
+        cocPush.enable_foreground = (focusOverride ? settings.focusForeground
                                                             : settings.cocEnableForeground) ? 1 : 0;
         cocPush.lens_blur = settings.cocLensBlur;
         cocPush.max_near = settings.cocMaxBlurNear >= 0.0f ? std::min(settings.cocMaxBlurNear, teto) : teto;
         cocPush.max_far = settings.cocMaxBlurFar >= 0.0f ? std::min(settings.cocMaxBlurFar, teto) : teto;
         cocPush.edge = settings.cocEdge;
         int cocModel = settings.cocSpotlight ? 3 : (settings.cocTiltPlane ? 2 : (settings.cocThinLens ? 1 : 0));
-        if (settings.focusOverride && settings.focusModel >= 0) cocModel = std::min(settings.focusModel, 3);
-        if (settings.cocSpotPanel) cocModel = 3;
+        if (focusOverride && settings.focusModel >= 0) cocModel = std::min(settings.focusModel, 3);
+        if (settings.cocSpotPanel || settings.dofPreset == 0) cocModel = 3;
+        if (settings.dofPreset == 1 && cocModel == 3) cocModel = settings.cocTiltPlane ? 2 : (settings.cocThinLens ? 1 : 0);
         cocPush.coc_model = cocModel;
         float cocTetoReal = cocModel == 1 ? std::max(cocPush.max_near, cocPush.max_far) : teto;
         cocPush.ramp_near = cocPush.ramp_far = cocPush.screen_mix = cocPush.focus_uv_y = 0.0f;
@@ -1665,7 +1676,7 @@ if (!m_ctx) return;
         cocPush.inv_p00 = 1.0f / (std::abs(proj[0][0]) > 1e-6f ? proj[0][0] : 1e-6f);
         cocPush.inv_p11 = 1.0f / (std::abs(proj[1][1]) > 1e-6f ? proj[1][1] : 1e-6f);
         if (cocModel == 2) {
-            const bool fo = settings.focusOverride;
+            const bool fo = focusOverride;
             auto pick = [fo](float over, float base) { return fo && over >= 0.0f ? over : base; };
             const float angulo = fo && !std::isnan(settings.focusTiltAngle) ? settings.focusTiltAngle
                                                                              : settings.cocTiltAngle;
@@ -1703,7 +1714,7 @@ if (!m_ctx) return;
             cocPush.max_blur = cocTetoReal;
         }
         if (cocModel == 3) {
-            const bool fo = settings.focusOverride && !settings.cocSpotPanel;
+            const bool fo = focusOverride && !settings.cocSpotPanel;
             auto pick = [fo](float over, float base) { return fo && over >= 0.0f ? over : base; };
             const float escala = float(m_height) / 1080.0f;
             cocPush.max_near = pick(settings.focusTiltMaxNear, settings.cocSpotMaxNear) * escala;

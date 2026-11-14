@@ -60,7 +60,10 @@ float fbm(vec2 p) {
 }
 
 // O(1) Stars with 3x3 neighbor check and twinkling
-float getStars(vec2 uv, float threshold, float time, float twinkleSpeed) {
+// pxCell = tamanho de um pixel em unidades de celula (fwidth do uv): a
+// estrela tem raio de ~1-2 px em qualquer resolucao. Antes o raio era 0,8-3,3%
+// da celula (~9,5 graus de ceu): discos de 10+ px a 1080p, bolas no ceu.
+float getStars(vec2 uv, float threshold, float time, float twinkleSpeed, float pxCell) {
     vec2 id = floor(uv);
     vec2 gv = fract(uv) - 0.5;
     float stars = 0.0;
@@ -72,8 +75,9 @@ float getStars(vec2 uv, float threshold, float time, float twinkleSpeed) {
             if (n < threshold) continue;
             vec2 offset = vec2(hash21(nid + 1.0), hash21(nid + 2.0)) - 0.5;
             float dist = length(gv - neighbor - offset * 0.8);
-            float size = 0.025 * n + 0.008;
-            float star = 1.0 - smoothstep(0.0, size, dist);
+            float forca = clamp((n - threshold) / max(1.0 - threshold, 1e-4), 0.0, 1.0);
+            float size = pxCell * mix(0.8, 1.8, forca);
+            float star = (1.0 - smoothstep(0.0, size, dist)) * mix(0.35, 1.0, forca);
             // Twinkle
             float twinkle = sin(time * twinkleSpeed + hash21(nid + 3.0) * 6.28318) * 0.5 + 0.5;
             twinkle = mix(0.6, 1.0, twinkle);
@@ -337,11 +341,15 @@ void main() {
     // ---- Stars (O(1) Domain Repetition) ----
     if (enableStars) {
         vec2 starUV = vec2(atan(rayDir.z, rayDir.x), asin(clamp(rayDir.y, -1.0, 1.0)));
-        starUV *= vec2(6.0, 12.0);
+        // Grade 3x mais fina (9x mais estrelas): com a estrela de 1-2 px a
+        // grade antiga deixava o ceu quase vazio.
+        starUV *= vec2(18.0, 36.0);
 
         float starDensity = ubo.skyHorizon.w;
         float starThreshold = 1.0 - starDensity;
-        float stars = getStars(starUV, starThreshold, time, starTwinkleSpeed);
+        // Na costura do atan o fwidth explode: limitado a um teto pequeno.
+        float pxCell = clamp(max(fwidth(starUV).x, fwidth(starUV).y), 1e-5, 0.03);
+        float stars = getStars(starUV, starThreshold, time, starTwinkleSpeed, pxCell);
         float starFade = 1.0 - smoothstep(-0.2, 0.1, sunHeight);
         skyColor += vec3(0.9, 0.95, 1.0) * stars * starFade;
     }
@@ -367,8 +375,11 @@ void main() {
         float cloudMask = smoothstep(edge0, edge1, cloudNoise);
         cloudMask = pow(cloudMask, 0.7); // fluffier edges
 
-        // Shading based on noise gradient approximation
-        float cloudShadeVal = smoothstep(edge0, edge1, cloudNoise);
+        // Espessura: a borda e' nuvem fina (clara, a luz atravessa) e so' o
+        // miolo grosso escurece. Antes a sombra usava a mesma rampa da mascara
+        // (com pow 0,7 a mascara chega antes): a borda saia com a cor da base
+        // escura, um contorno escuro em volta de cada nuvem (veias no ceu).
+        float cloudShadeVal = 1.0 - smoothstep(edge0, edge1 + 0.18, cloudNoise) * 0.75;
 
         // Clouds darken the sky, with bright illuminated tops
         float cloudSun = smoothstep(-0.2, 0.5, sunHeight);
@@ -388,8 +399,6 @@ void main() {
         float fadeStart = mix(0.0, -0.18, cloudCoverage);
         float horizonFade = smoothstep(fadeStart, mix(0.05, 0.30, cloudThickness), viewY);
 
-        // Darken the sky behind clouds for readable silhouettes
-        skyColor *= 1.0 - cloudMask * 0.35 * horizonFade;
         skyColor = mix(skyColor, cloudColor, cloudMask * 0.95 * horizonFade);
     }
 

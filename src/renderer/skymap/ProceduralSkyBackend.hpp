@@ -33,12 +33,13 @@ public:
 
 private:
     void createOutputImage();
-    void drawSky(VkCommandBuffer cmd, const DayNightCycle& cycle, const Mat4& viewProj, uint32_t width, uint32_t height);
+    void drawSky(VkCommandBuffer cmd, const DayNightCycle& cycle, const Mat4& viewProj, uint32_t width, uint32_t height,
+                 VkDescriptorSet set, void* uboMapped);
     void createDepthImage();
     void createPipeline();
     void createUBO();
     void destroyUBO();
-    void updateUBO(const DayNightCycle& cycle, const Mat4& viewProj);
+    void updateUBO(const DayNightCycle& cycle, const Mat4& viewProj, void* dst);
 
     VulkanContext* m_ctx = nullptr;
 
@@ -62,10 +63,16 @@ private:
     void* m_uboMapped = nullptr;
     // Sonda de ceu: um UBO + set por face (6 draws no mesmo command buffer).
     static constexpr uint32_t kProbeFaces = 6;
-    VkBuffer m_probeUbo[kProbeFaces] = {};
-    VmaAllocation m_probeUboAlloc[kProbeFaces] = {};
-    void* m_probeUboMapped[kProbeFaces] = {};
-    VkDescriptorSet m_probeSets[kProbeFaces] = {};
+    // Depois das 6 faces da sonda, um UBO/set so' do ceu-para-textura (reflexo
+    // da agua): ele usa a camera ESPELHADA e e' gravado no mesmo command
+    // buffer que o ceu da tela; um UBO host-mapped compartilhado ficaria so'
+    // com a matriz da ultima gravacao.
+    static constexpr uint32_t kReflSet = kProbeFaces;
+    static constexpr uint32_t kExtraSets = kProbeFaces + 1;
+    VkBuffer m_probeUbo[kExtraSets] = {};
+    VmaAllocation m_probeUboAlloc[kExtraSets] = {};
+    void* m_probeUboMapped[kExtraSets] = {};
+    VkDescriptorSet m_probeSets[kExtraSets] = {};
 
     uint32_t m_width = 0;
     uint32_t m_height = 0;
