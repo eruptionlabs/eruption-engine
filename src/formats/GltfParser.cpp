@@ -26,11 +26,14 @@ static bool EruptionLoadImageData(Image* image, const int image_idx, std::string
 }
 } // namespace tinygltf
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iconv.h>
 #include <mutex>
@@ -65,6 +68,52 @@ EncodedBytes shareEncoded(std::vector<uint8_t>&& bytes) {
     auto owned = std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
     s_known.emplace(key, owned);
     return EncodedBytes(std::move(owned));
+}
+
+// Imagem tirada do .glb no build do pacote do mapa (stripEmbeddedImages):
+// no lugar dos bytes, "ERUPSTRP", u64 posicao e u64 tamanho dos bytes no .glb
+// do disco, u64 hash (FNV-1a) deles, u16 + nome do .glb.
+constexpr char kStrippedMagic[8] = {'E', 'R', 'U', 'P', 'S', 'T', 'R', 'P'};
+constexpr size_t kStrippedFixed = 8 + 8 + 8 + 8 + 2;
+
+uint64_t fnv1a64(const uint8_t* p, size_t n) {
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < n; ++i) {
+        h ^= p[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+// Os bytes de uma imagem tirada, lidos do .glb do disco na primeira vez que
+// alguem precisa deles (EncodedBytes adiado). Sem o marcador: bytes vazios.
+EncodedBytes strippedImage(const std::vector<unsigned char>& marker, const std::string& baseDir) {
+    if (marker.size() < kStrippedFixed || std::memcmp(marker.data(), kStrippedMagic, 8) != 0) return {};
+    uint64_t offset = 0, length = 0, hash = 0;
+    uint16_t nameLen = 0;
+    std::memcpy(&offset, marker.data() + 8, 8);
+    std::memcpy(&length, marker.data() + 16, 8);
+    std::memcpy(&hash, marker.data() + 24, 8);
+    std::memcpy(&nameLen, marker.data() + 32, 2);
+    if (marker.size() < kStrippedFixed + nameLen || length == 0) return {};
+    const std::string fileName(reinterpret_cast<const char*>(marker.data()) + kStrippedFixed, nameLen);
+    const std::string path = (std::filesystem::path(baseDir) / fileName).string();
+    return EncodedBytes::deferred(static_cast<size_t>(length), [path, offset, length, hash](std::vector<uint8_t>& out) {
+        std::ifstream f(path, std::ios::binary);
+        out.resize(static_cast<size_t>(length));
+        const bool ok = f && f.seekg(static_cast<std::streamoff>(offset)) &&
+                        f.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(length)) &&
+                        fnv1a64(out.data(), out.size()) == hash;
+        if (!ok) {
+            ERUPTION_LOG_ERROR("GltfParser: imagem fora do pacote do mapa ilegivel em '%s' (%llu bytes em %llu)",
+                               path.c_str(), static_cast<unsigned long long>(length),
+                               static_cast<unsigned long long>(offset));
+            return false;
+        }
+        ERUPTION_LOG_WARN("[MAPBUNDLE] imagem lida do .glb no disco (%.1f KB): '%s'", double(length) / 1024.0,
+                          path.c_str());
+        return true;
+    });
 }
 
 } // namespace
@@ -829,31 +878,19 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
             continue;
         }
 
-        // Imagem com URI = arquivo de verdade ao lado do GLB (fluxo padrão
-        // glTF). Nomear pelo STEM do arquivo, sem o prefixo '#', faz o
-        // material resolver PBR autoral (<stem>_mrahw/_normal) e bake .etex
-        // exatamente como qualquer textura de disco. Só imagem realmente
-        // embutida (sem URI) usa o nome sintético com '#'.
-        std::string name = "#image" + std::to_string(i);
-        if (!img.uri.empty()) {
-            std::string stem = img.uri;
-            size_t slash = stem.find_last_of("/\\");
-            if (slash != std::string::npos) stem = stem.substr(slash + 1);
-            size_t dot = stem.find_last_of('.');
-            if (dot != std::string::npos) stem = stem.substr(0, dot);
-            if (!stem.empty()) name = stem;
-        } else if (!img.name.empty()) {
-            name = "#" + img.name;
-        }
+        const std::string name = embeddedImageName(i, img.uri, img.name);
 
         EmbeddedTexture et;
         et.name = name;
+        // Do pacote do mapa, sem os bytes (o pacote de texturas os cobre):
+        // lidos do .glb do disco so' se alguem pedir.
+        if (img.uri.empty()) et.encodedData = strippedImage(img.image, baseDir);
         // MOVE, nao copia. O carregador de imagem ja' copiou os bytes crus do
         // GLB para img.image (EruptionLoadImageData faz assign); copiar de novo
         // aqui duplicava ~290 MB de PNG no parana_field - dois memcpy enormes
         // por carga. `gltf` e' local a parse() e img.image nao e' lido depois
         // deste ponto, entao mover e' seguro.
-        et.encodedData = shareEncoded(std::move(img.image)); // lazy decode
+        if (!et.encodedData.isDeferred()) et.encodedData = shareEncoded(std::move(img.image)); // lazy decode
         model.embeddedTextures.push_back(std::move(et));
 
         // Global texture list used by the source loader paths.
@@ -998,14 +1035,17 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
             if (glm::determinant(glm::mat3(local)) < 0.0f) decScale = -decScale;
             const bool okScale = std::abs(decScale.x) > 0.0f && std::abs(decScale.y) > 0.0f &&
                                  std::abs(decScale.z) > 0.0f;
-            // conjugate aqui: a linha abaixo desfaz (mesma convencao do decompose).
-            decRot = okScale ? glm::conjugate(glm::quat_cast(glm::mat3(c0 / decScale.x, c1 / decScale.y,
-                                                                       c2 / decScale.z)))
+            decRot = okScale ? glm::quat_cast(glm::mat3(c0 / decScale.x, c1 / decScale.y,
+                                                        c2 / decScale.z))
                              : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
             if (!okScale) decScale = Vec3(1.0f);
         }
-        // glm::decompose might return conjugate rotation depending on GLM version
-        decRot = glm::conjugate(decRot);
+        // Sem conjugate: o glm::decompose desta versao ja' devolve o giro
+        // certo (T*R*S reconstroi a matriz com erro 1e-7; com o conjugate o
+        // erro era 1,9). O conjugate antigo girava ao contrario todo no' cuja
+        // transformacao vem como "matrix" no glTF (e nao como TRS) - e
+        // calculateBoundingBox() refaz a renderMatrix a partir deste TRS, entao
+        // o modelo estatico tombava (bandeiras e postes com escala negativa).
 
         if (!gltfNode.scale.empty()) {
             node.scale = Vec3(static_cast<float>(gltfNode.scale[0]),
@@ -1643,6 +1683,153 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
     model.calculateBoundingBox();
 
     return model;
+}
+
+std::string GltfParser::embeddedImageName(size_t index, const std::string& uri, const std::string& name) {
+    // Imagem com URI = arquivo de verdade ao lado do GLB (fluxo padrão
+    // glTF). Nomear pelo STEM do arquivo, sem o prefixo '#', faz o
+    // material resolver PBR autoral (<stem>_mrahw/_normal) e bake .etex
+    // exatamente como qualquer textura de disco. Só imagem realmente
+    // embutida (sem URI) usa o nome sintético com '#'.
+    std::string out = "#image" + std::to_string(index);
+    if (!uri.empty()) {
+        std::string stem = uri;
+        size_t slash = stem.find_last_of("/\\");
+        if (slash != std::string::npos) stem = stem.substr(slash + 1);
+        size_t dot = stem.find_last_of('.');
+        if (dot != std::string::npos) stem = stem.substr(0, dot);
+        if (!stem.empty()) out = stem;
+    } else if (!name.empty()) {
+        out = "#" + name;
+    }
+    return out;
+}
+
+namespace {
+
+// Todo "bufferView" citado fora de "images" (acessores, esparsos, extensoes
+// como a de malha comprimida): essas vistas ficam como estao.
+void markViewUses(const nlohmann::ordered_json& node, std::vector<int>& state) {
+    if (node.is_object()) {
+        for (auto it = node.begin(); it != node.end(); ++it) {
+            if (it.key() == "bufferView" && it.value().is_number_unsigned()) {
+                const size_t v = it.value().get<size_t>();
+                if (v < state.size()) state[v] = -1;
+            } else {
+                markViewUses(it.value(), state);
+            }
+        }
+    } else if (node.is_array()) {
+        for (const auto& child : node) markViewUses(child, state);
+    }
+}
+
+} // namespace
+
+size_t GltfParser::stripEmbeddedImages(std::vector<uint8_t>& glb, const std::string& fileName,
+                                       const std::function<bool(const std::string&)>& covered) {
+    using ojson = nlohmann::ordered_json;
+    constexpr uint32_t kJson = 0x4E4F534Au, kBin = 0x004E4942u;
+    if (glb.size() < 28 || std::memcmp(glb.data(), "glTF", 4) != 0 || fileName.size() > 0xFFFF) return 0;
+    uint32_t jsonLen = 0, jsonType = 0, binLen = 0, binType = 0;
+    std::memcpy(&jsonLen, glb.data() + 12, 4);
+    std::memcpy(&jsonType, glb.data() + 16, 4);
+    const size_t binHead = 20 + size_t(jsonLen);
+    if (jsonType != kJson || binHead + 8 > glb.size()) return 0;
+    std::memcpy(&binLen, glb.data() + binHead, 4);
+    std::memcpy(&binType, glb.data() + binHead + 4, 4);
+    const size_t binStart = binHead + 8;
+    if (binType != kBin || binStart + binLen > glb.size()) return 0;
+    ojson doc = ojson::parse(glb.begin() + 20, glb.begin() + 20 + jsonLen, nullptr, false);
+    if (doc.is_discarded() || !doc.contains("images") || !doc.contains("bufferViews")) return 0;
+    ojson& views = doc["bufferViews"];
+    if (!views.is_array()) return 0;
+
+    // 1 = tirar (so' imagens cobertas usam a vista), -1 = manter.
+    std::vector<int> state(views.size(), 0);
+    for (auto it = doc.begin(); it != doc.end(); ++it)
+        if (it.key() != "images") markViewUses(it.value(), state);
+    const ojson& images = doc["images"];
+    for (size_t i = 0; i < images.size(); ++i) {
+        const ojson& img = images[i];
+        if (!img.contains("bufferView") || !img["bufferView"].is_number_unsigned()) continue;
+        const size_t v = img["bufferView"].get<size_t>();
+        if (v >= state.size()) continue;
+        const bool ok = !img.contains("uri") && covered(embeddedImageName(i, "", img.value("name", std::string())));
+        state[v] = (ok && state[v] >= 0) ? 1 : -1;
+    }
+    bool any = false;
+    for (size_t v = 0; v < views.size(); ++v) {
+        if (views[v].value("buffer", size_t(0)) != 0) {
+            if (state[v] == 1) state[v] = -1;
+            continue;
+        }
+        const size_t off = views[v].value("byteOffset", size_t(0)), len = views[v].value("byteLength", size_t(0));
+        if (off + len > binLen) return 0;
+        if (state[v] == 1 && len <= kStrippedFixed + fileName.size()) state[v] = -1; // menor que o marcador
+        any = any || state[v] == 1;
+    }
+    if (!any) return 0;
+
+    // Novo bloco binario: as vistas na mesma ordem, cada uma com o mesmo
+    // resto de 16 na posicao (alinhamento dos acessores), as tiradas so' com
+    // o marcador.
+    std::vector<uint8_t> bin;
+    bin.reserve(binLen);
+    for (size_t v = 0; v < views.size(); ++v) {
+        if (views[v].value("buffer", size_t(0)) != 0) continue;
+        const size_t off = views[v].value("byteOffset", size_t(0)), len = views[v].value("byteLength", size_t(0));
+        size_t at = (bin.size() + 15) / 16 * 16 + off % 16;
+        bin.resize(at, 0);
+        const uint8_t* src = glb.data() + binStart + off;
+        if (state[v] == 1) {
+            const uint64_t fileOffset = binStart + off, length = len, hash = fnv1a64(src, len);
+            const uint16_t nameLen = static_cast<uint16_t>(fileName.size());
+            bin.insert(bin.end(), kStrippedMagic, kStrippedMagic + 8);
+            const size_t m = bin.size();
+            bin.resize(m + 26);
+            std::memcpy(bin.data() + m, &fileOffset, 8);
+            std::memcpy(bin.data() + m + 8, &length, 8);
+            std::memcpy(bin.data() + m + 16, &hash, 8);
+            std::memcpy(bin.data() + m + 24, &nameLen, 2);
+            bin.insert(bin.end(), fileName.begin(), fileName.end());
+            views[v]["byteLength"] = bin.size() - at;
+        } else {
+            bin.insert(bin.end(), src, src + len);
+        }
+        views[v]["byteOffset"] = at;
+    }
+    if (doc.contains("buffers") && doc["buffers"].is_array() && !doc["buffers"].empty())
+        doc["buffers"][0]["byteLength"] = bin.size();
+    std::string text = doc.dump();
+    while (text.size() % 4) text.push_back(' ');
+    while (bin.size() % 4) bin.push_back(0);
+
+    // Blocos depois do binario (extensoes): copiados como estao.
+    const size_t restAt = binStart + (size_t(binLen) + 3) / 4 * 4;
+    const size_t rest = restAt < glb.size() ? glb.size() - restAt : 0;
+    std::vector<uint8_t> out;
+    out.reserve(12 + 8 + text.size() + 8 + bin.size() + rest);
+    auto put32 = [&out](uint32_t x) {
+        const size_t o = out.size();
+        out.resize(o + 4);
+        std::memcpy(out.data() + o, &x, 4);
+    };
+    out.insert(out.end(), glb.begin(), glb.begin() + 8); // "glTF" + versao
+    put32(0);
+    put32(static_cast<uint32_t>(text.size()));
+    put32(kJson);
+    out.insert(out.end(), text.begin(), text.end());
+    put32(static_cast<uint32_t>(bin.size()));
+    put32(kBin);
+    out.insert(out.end(), bin.begin(), bin.end());
+    if (rest) out.insert(out.end(), glb.begin() + static_cast<std::ptrdiff_t>(restAt), glb.end());
+    if (out.size() >= glb.size()) return 0;
+    const uint32_t total = static_cast<uint32_t>(out.size());
+    std::memcpy(out.data() + 8, &total, 4);
+    const size_t saved = glb.size() - out.size();
+    glb.swap(out);
+    return saved;
 }
 
 } // namespace eruption

@@ -1381,6 +1381,24 @@ void ModelRenderer::computeMidChain(LodBuild& b) {
     }
 }
 
+// BORDA PRESA NO LOD. O chao (b.ground) ja' prendia: o mapa vizinho encosta
+// na borda aberta. O mesmo vale para o terreno de mapa que nao foi reconhecido
+// como chao: ele vem partido em uma malha por textura (mapa de neve: 9 malhas
+// de ~2900 u de diagonal, 2-39 mil triangulos cada) e cada uma era simplificada
+// sozinha. O "far" (erro livre, teto de ~400 triangulos, com recurso ao sloppy)
+// andava com a divisa de cada malha para um lado e abria buracos do tamanho das
+// manchas de textura no mapa inteiro, a partir de ~1000 u. O erro relatado pelo
+// simplificador (19-110 u) nao ve' isso: a fresta e' entre malhas. No mapa de
+// neve nenhuma outra malha passa de 300 u de diagonal: so' o terreno prende.
+// Custo la' (4090, xvfb): G-buffer 0,15 -> 0,61 ms com o mapa inteiro na tela
+// (o "far" fica maior e os buracos, que eram fundo, viram chao).
+// ERUPTION_TEST_LOD_TERRAIN_LOCK=0 (bancada): so' o chao prende, como antes.
+static bool lodLocksBorder(bool ground, float extent) {
+    constexpr float kTerrainExtent = 600.0f;
+    static const bool kOff = [] { const char* e = std::getenv("ERUPTION_TEST_LOD_TERRAIN_LOCK"); return e && e[0] == '0'; }();
+    return ground || (!kOff && extent >= kTerrainExtent);
+}
+
 void ModelRenderer::computeLodPart(LodBuild& b, int part) {
     if (b.sys == 1) return;   // o LodSystem assumiu a malha (tryLodSystem)
     const std::vector<TerrainVertex>& vertices = b.vertices;
@@ -1388,7 +1406,7 @@ void ModelRenderer::computeLodPart(LodBuild& b, int part) {
     if (part == 0) {
         b.loRes = simplifyMesh(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex), indices, b.p.ratio,
                                b.p.error, b.p.maxTris, offsetof(TerrainVertex, texCoord),
-                               offsetof(TerrainVertex, texIndex), b.sway, 0.6f, b.ground);
+                               offsetof(TerrainVertex, texIndex), b.sway, 0.6f, lodLocksBorder(b.ground, b.extent));
     } else if (part == 1) {
         // LOD DISTANTE: simplificacao "sloppy" - a esta distancia a silhueta
         // grossa e' tudo que a tela resolve. Piso de area proprio em malha de
@@ -1397,7 +1415,7 @@ void ModelRenderer::computeLodPart(LodBuild& b, int part) {
             b.farRes = simplifyMesh(&vertices[0].position.x, vertices.size(), sizeof(TerrainVertex), indices,
                                     std::max(b.p.ratio * 0.25f, 0.02f), 1.0f /* erro livre: o TETO manda */,
                                     b.p.farMaxTris, offsetof(TerrainVertex, texCoord),
-                                    offsetof(TerrainVertex, texIndex), b.sway, kFarCardMinArea, b.ground);
+                                    offsetof(TerrainVertex, texIndex), b.sway, kFarCardMinArea, lodLocksBorder(b.ground, b.extent));
     } else if (part == 3) {
         computeMidChain(b);
     } else if (b.p.shadowMaxTris > 0) {
@@ -2462,6 +2480,12 @@ ModelRenderer::NodeSlots ModelRenderer::resolveNodeSlots(const ModelAsset& asset
         if (bPbrName.empty()) bPbrName = node.textureNames[bLocal];
         if (!bPbrName.empty()) {
             PbrTextureSlots s = resolvePbrTextures(bPbrName);
+            // Mesmo fallback da face: textura embutida no GLB so' tem PBR pelo
+            // nome da imagem. Sem ele a mistura entre texturas do chao fundia
+            // so' a cor; rugosidade, normal e altura paravam secas na divisa
+            // e cada tile de textura virava um retangulo visivel.
+            if (!s.valid() && node.textureNames[bLocal] != bPbrName)
+                s = resolvePbrTextures(node.textureNames[bLocal]);
             br.pbrIdx = s.mrahw.index;
             br.normalIdx = s.normal.index;
         }
@@ -4443,6 +4467,43 @@ static float reliefSizeScale(const ModelMeshGPU& mesh, float amplitude) {
     return std::clamp(std::max(kReliefPerSize * midExt / amplitude, kReliefFloor), 0.0f, 1.0f);
 }
 
+void ModelRenderer::swapViewState() {
+    ViewState& o = m_otherView;
+    std::swap(o.visible, m_visibleInstanceIndices);
+    std::swap(o.lodOfInstance, m_lodOfInstance);
+    std::swap(o.hiLodActive, m_hiLodActive);
+    std::swap(o.loLodActive, m_loLodActive);
+    std::swap(o.screenCulledPrev, m_screenCulledPrev);
+    std::swap(o.lodDistShown, m_lodDistShown);
+    std::swap(o.lodDistFrame, m_lodDistFrame);
+    std::swap(o.groundCellLevel, m_groundCellLevel);
+    std::swap(o.lodFrame, m_lodFrame);
+    std::swap(o.lastCameraPos, m_lastCameraPos);
+    std::swap(o.lastViewProj, m_lastViewProj);
+    std::swap(o.lastScreenCulled, m_lastScreenCulled);
+    std::swap(o.lastDrawnTriangles, m_lastDrawnTriangles);
+    std::swap(o.lastDrawCalls, m_lastDrawCalls);
+    std::swap(o.pixelsPerUnit, m_pixelsPerUnit);
+    std::swap(o.screenW, m_screenW);
+    std::swap(o.screenH, m_screenH);
+}
+
+void ModelRenderer::beginSecondaryView() {
+    if (m_secondaryView) return;
+    swapViewState();
+    m_secondaryView = true;
+    // Sem tesselacao no espelho (a banda e' da camera principal).
+    m_secondaryTessSaved = m_tessEnabled;
+    m_tessEnabled = false;
+}
+
+void ModelRenderer::endSecondaryView() {
+    if (!m_secondaryView) return;
+    swapViewState();
+    m_secondaryView = false;
+    m_tessEnabled = m_secondaryTessSaved;
+}
+
 void ModelRenderer::render(VkCommandBuffer cmd,
                            const Mat4& viewProj, const Frustum& frustum, const Vec3& cameraPos) {
     PROFILE_CPU_SCOPE(ProfilerCategory::Culling);
@@ -4473,7 +4534,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
     // Estatistica so' do passe principal (minimapa passa pixelsPerUnit = 0).
     // MOVIDO para antes da reserva de capacidade (era depois): o pre-passe de
     // crossfade abaixo precisa de m_lodOfInstance, que e' preenchido aqui.
-    sortVisibleByMesh(m_visibleInstanceIndices, true, m_pixelsPerUnit > 0.0f);
+    sortVisibleByMesh(m_visibleInstanceIndices, true, m_pixelsPerUnit > 0.0f && !m_secondaryView);
 
     // CROSSFADE DE LOD (cheio <-> reduzido): pre-passe SO' DE CONTAGEM, sem
     // escrever SSBO ainda - precisa saber quantos slots extras reservar antes
@@ -4664,8 +4725,13 @@ void ModelRenderer::render(VkCommandBuffer cmd,
                       uint32_t firstIndex, uint32_t firstInstance, uint32_t levelCount) {
         // Malha assada (relief_bake "mesh"/"gbuffer"): o relevo ja' esta' nela,
         // entao nem patch nem o deslocamento do model.vert (seria duas vezes).
-        const bool baked = mesh < m_meshes.size() && m_meshes[mesh].reliefInView &&
-                           ib == m_meshes[mesh].reliefIndexBuffer;
+        // Vale tambem para os niveis dela sem o assado (alem de reliefNear,
+        // 900 u): eles saiam lisos porque a curva acabava antes (800 u), mas
+        // com a faixa seguindo a lente (Engine::tessZoomFollow, ate' 2700 u)
+        // o model.vert deslocava os vertices grossos das paredes - predio
+        // serrilhado a ~1200 u no mapa de cidade (auditoria: parede inteira
+        // "deslocada", escada com o deslocamento fora da normal).
+        const bool baked = mesh < m_meshes.size() && m_meshes[mesh].reliefInView;
         DrawRec r{vb, ib, mesh, count, instances, firstIndex, firstInstance, levelCount, tessBound && !baked, false, {}};
         // Chao na banda: niveis em degraus + geomorph (model_ground.tesc/.tese).
         r.geo = r.tess && m_tessGroundGeomorph > 0.0f && m_tessPipelineGeo != VK_NULL_HANDLE &&
@@ -4871,7 +4937,9 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         VkBuffer vb, ib;
         uint32_t drawCount;
         pickBuffers(mesh, lod, vb, ib, drawCount);
-        if (mesh.reliefInView && reliefNear(idx)) reliefSwap(mesh, vb, ib, drawCount);
+        // Relevo assado (malha pre-tesselada) nao entra no espelho: o reflexo
+        // e' de meia resolucao e ondulado, e a malha cheia dobrava o custo dele.
+        if (mesh.reliefInView && reliefNear(idx) && !m_secondaryView) reliefSwap(mesh, vb, ib, drawCount);
         if (m_hiLodActive.size() > idx) m_hiLodActive[idx] = (lod == 0);
         if (m_loLodActive.size() > idx) m_loLodActive[idx] = (lod == 2);
 
@@ -5177,7 +5245,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             VkBuffer vb2, ib2;
             uint32_t drawCount2;
             pickBuffers(mesh, job.lod, vb2, ib2, drawCount2);
-            if (mesh.reliefInView) reliefSwap(mesh, vb2, ib2, drawCount2);
+            if (mesh.reliefInView && !m_secondaryView) reliefSwap(mesh, vb2, ib2, drawCount2);
             const bool sameRun2 = runLen2 > 0 && vb2 == runVb2 && ib2 == runIb2 &&
                                   drawCount2 == runCount2 && job.meshIndex == runMesh2 &&
                                   job.alpha == runAlpha2;
@@ -6253,11 +6321,12 @@ void ModelRenderer::cullInstances(const Frustum& frustum) {
     m_lastScreenCulled = 0;
 
     m_visibleInstanceIndices.reserve(count);
-    if (m_pixelsPerUnit > 0.0f) {
+    // Motivo do descarte (pop-in): so' da camera principal, nao do espelho.
+    const bool why = m_pixelsPerUnit > 0.0f && !m_secondaryView;
+    if (why) {
         std::swap(m_cullWhy, m_cullWhyPrev);
         m_cullWhy.assign(count, 0);
     }
-    const bool why = m_pixelsPerUnit > 0.0f;
     for (uint32_t i = 0; i < count; ++i) {
         const uint8_t byte = visibleMask[i / 8];
         // Desligada conta mesmo fora do frustum: objeto destruido devolve a

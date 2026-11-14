@@ -3,7 +3,9 @@
 #include "utils/BinaryReader.hpp"
 #include "math/Types.hpp"
 #include "renderer/SkinRig.hpp"
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <vector>
 #include <string>
 #include <optional>
@@ -163,16 +165,52 @@ struct ModelAnimation {
 // de novo em cada copia de ModelFile: 120 modelos de um kit somavam 810 MB de
 // heap para 93 MB de arquivos distintos (massif, carga de um mapa com
 // texture_max_size 256). Copiar aqui so' divide o mesmo buffer.
+//
+// Adiado: o .glb do pacote do mapa (.emap) vem sem os bytes das imagens que
+// o pacote de texturas ja' cobre (GltfParser::stripEmbeddedImages). size() e
+// empty() respondem sem ler; o primeiro data() le' os bytes originais do .glb
+// no disco (so' quem precisa mesmo dos pixels: PBR sem pacote valido, LOD,
+// editor). Se a leitura falhar, data() devolve `size` zeros (decodifica como
+// imagem invalida, como um PNG corrompido).
 class EncodedBytes {
 public:
+    using Loader = std::function<bool(std::vector<uint8_t>&)>;
     EncodedBytes() = default;
     explicit EncodedBytes(std::shared_ptr<const std::vector<uint8_t>> bytes) : m_bytes(std::move(bytes)) {}
-    const uint8_t* data() const { return m_bytes ? m_bytes->data() : nullptr; }
-    size_t size() const { return m_bytes ? m_bytes->size() : 0; }
+    static EncodedBytes deferred(size_t size, Loader load) {
+        EncodedBytes e;
+        e.m_lazy = std::make_shared<Lazy>();
+        e.m_lazy->size = size;
+        e.m_lazy->load = std::move(load);
+        return e;
+    }
+    const uint8_t* data() const {
+        if (m_lazy) return m_lazy->get();
+        return m_bytes ? m_bytes->data() : nullptr;
+    }
+    size_t size() const {
+        if (m_lazy) return m_lazy->size;
+        return m_bytes ? m_bytes->size() : 0;
+    }
     bool empty() const { return size() == 0; }
+    bool isDeferred() const { return m_lazy != nullptr; }
 
 private:
+    struct Lazy {
+        size_t size = 0;
+        Loader load;
+        std::once_flag once;
+        std::vector<uint8_t> bytes;
+        const uint8_t* get() {
+            std::call_once(once, [this] {
+                if (!load || !load(bytes) || bytes.size() != size) bytes.assign(size, 0);
+                load = nullptr;
+            });
+            return bytes.data();
+        }
+    };
     std::shared_ptr<const std::vector<uint8_t>> m_bytes;
+    std::shared_ptr<Lazy> m_lazy;
 };
 
 struct EmbeddedTexture {

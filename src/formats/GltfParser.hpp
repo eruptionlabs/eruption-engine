@@ -1,8 +1,10 @@
 #pragma once
 
 #include "formats/ModelFile.hpp"
-#include <vector>
 #include <cstdint>
+#include <functional>
+#include <string>
+#include <vector>
 
 namespace eruption {
 
@@ -19,6 +21,19 @@ public:
                            const std::string& baseDir = std::string()) {
         return parse(data.data(), data.size(), baseDir);
     }
+
+    // Nome que parse da' a' imagem `index` do glTF (o nome das texturas no
+    // pacote .etexpack): o stem da URI, "#" + nome, ou "#image<index>".
+    static std::string embeddedImageName(size_t index, const std::string& uri, const std::string& name);
+
+    // Build do pacote do mapa: tira do .glb (`glb`, em memoria) os bytes das
+    // imagens embutidas cujo nome `covered` aceita - as que o pacote de
+    // texturas ja' traz comprimidas. No lugar fica um marcador com onde ler o
+    // original no .glb do disco (`fileName`, ao lado). O resto sai byte a
+    // byte igual: geometria, materiais, as entradas das imagens (nome, tipo)
+    // e a ordem dos bufferViews. Devolve quantos bytes saíram (0: nada mudou).
+    static size_t stripEmbeddedImages(std::vector<uint8_t>& glb, const std::string& fileName,
+                                      const std::function<bool(const std::string&)>& covered);
 };
 
 } // namespace eruption

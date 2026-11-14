@@ -319,6 +319,18 @@ public:
     // inteiro: la' a "camera" e' um ponto arbitrario acima do centro e a
     // distancia nao tem relacao com o tamanho na tela.
     void setForceBaseLod(bool on) { m_forceBaseLod = on; }
+    // VISTA SECUNDARIA (reflexo espelhado da agua, Engine::renderWaterReflection):
+    // um render() por outra camera no mesmo quadro, antes da cena. O estado
+    // que o render() carrega de um quadro para o outro (histerese de LOD e do
+    // descarte por tela, distancia suavizada, nivel das celulas do chao,
+    // ultima camera, lista visivel e as contagens da telemetria) e' trocado
+    // por um conjunto proprio da vista secundaria - troca de vetores, O(1).
+    // Sem isso o espelho mexia na histerese da cena (o LOD da tela mudava com
+    // o passe ligado) e o m_lodFrame dobrado desligava a suavizacao. A
+    // estatistica e o teto de triangulos continuam so' do passe principal.
+    // Entre begin e end, setScreenMetrics vale so' para a vista secundaria.
+    void beginSecondaryView();
+    void endSecondaryView();
     // Vista de detalhe total (editor): a sombra também usa a malha original.
     void setShadowFullDetail(bool on) { m_shadowFullDetail = on; }
     // Caster de sombra no nivel que a camera escolhe para o objeto, em vez do
@@ -795,6 +807,8 @@ public:
     // entra num quadro seguinte (pollReliefJobs, uma vez por quadro).
     void setReliefDeferred(bool deferred) { m_reliefDeferred = deferred; }
     void pollReliefJobs();
+    // Relevos ainda assando em segundo plano (o build do mapa espera zerar).
+    size_t pendingReliefJobs() const { return m_reliefJobs.size(); }
     // Distancia ao longo do raio (mundo, dir normalizada) ate' o triangulo
     // mais proximo da instancia, ou -1. Usa a malha da CPU do modelo.
     float raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const;
@@ -1452,6 +1466,24 @@ private:
     std::vector<float> m_lodDistShown;
     std::vector<uint32_t> m_lodDistFrame;  // frame em que foi atualizada; != anterior -> reinicia
     uint32_t m_lodFrame = 0;
+    // Estado da vista secundaria (ver beginSecondaryView): fica aqui fora
+    // enquanto a cena desenha e e' trocado com o da cena durante o espelho.
+    struct ViewState {
+        std::vector<uint32_t> visible;
+        std::vector<uint8_t> lodOfInstance, hiLodActive, loLodActive, screenCulledPrev;
+        std::vector<float> lodDistShown;
+        std::vector<uint32_t> lodDistFrame;
+        std::unordered_map<uint32_t, std::vector<uint8_t>> groundCellLevel;
+        uint32_t lodFrame = 0;
+        Vec3 lastCameraPos = Vec3(0.0f);
+        Mat4 lastViewProj{1.0f};
+        uint32_t lastScreenCulled = 0, lastDrawnTriangles = 0, lastDrawCalls = 0;
+        float pixelsPerUnit = 0.0f, screenW = 0.0f, screenH = 0.0f;
+    };
+    ViewState m_otherView;
+    bool m_secondaryView = false;
+    bool m_secondaryTessSaved = false;
+    void swapViewState();
     float advanceLodDistance(uint32_t idx, const ModelInstanceHot& hot, const ModelMeshGPU& mesh);
     float lodDistanceFor(uint32_t idx, const ModelInstanceHot& hot) const;
     std::vector<float> m_lodCoveragePrev;
