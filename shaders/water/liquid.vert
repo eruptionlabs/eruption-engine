@@ -15,7 +15,7 @@ layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 baseColorDeep;
     vec4 baseColorShallow;
     vec4 waterParams;         // x=transparency, y=refractionStrength, z=reflectivity, w=roughness
-    vec4 normalParams;        // x=scale, y=speed, z=strength, w=unused
+    vec4 normalParams;        // x=scale, y=speed, z=strength, w=lamina da praia (1/0)
     vec4 waveParams;          // x=amplitude, y=frequency, z=speed, w=ajuste do nivel (menu)
     vec4 foamParams;          // x=edgeDepth, y=contactStrength, z=enable, w=unused
     vec4 skyTop;
@@ -89,6 +89,18 @@ void main() {
 
     vec3 tangentX = vec3(1.0, 0.0, 0.0);
     vec3 tangentZ = vec3(0.0, 0.0, 1.0);
+
+    // Agua texturada (liquidKind 4, modo classico): uma onda senoidal simples
+    // na altura, sem Gerstner nem normal (a cor vem so' da textura).
+    if (int(ubo.extraParams.w + 0.5) == 4) {
+        pos.y += globalAmp * sin((baseXZ.x + baseXZ.y) * globalFreq + globalSpeed * t);
+        vWorldPos = pos;
+        vNormal = vec3(0.0, 1.0, 0.0);
+        vTangent = vec3(1.0, 0.0, 0.0);
+        vBitangent = vec3(0.0, 0.0, 1.0);
+        gl_Position = pc.viewProj * vec4(pos, 1.0);
+        return;
+    }
 
     for (int i = 0; i < 3; ++i) {
         vec2 dir  = ubo.waveDirAmp[i].xy;

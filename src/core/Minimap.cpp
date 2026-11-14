@@ -242,7 +242,7 @@ void Engine::cacheWaterBounds(const WaterMesh& mesh) {
     // niveis dos mapas (aberto e vizinhos); o ajuste do menu e' somado no
     // momento do teste, porque muda em runtime.
     m_waterBoundsValid = false;
-    if (mesh.vertices.empty()) return;
+    if (mesh.vertices.empty()) { buildShoreMask(mesh); return; }
     Vec3 mn(FLT_MAX), mx(-FLT_MAX);
     for (const auto& v : mesh.vertices) {
         mn = glm::min(mn, v.position);
@@ -251,6 +251,300 @@ void Engine::cacheWaterBounds(const WaterMesh& mesh) {
     m_waterAabbMin = mn;
     m_waterAabbMax = mx;
     m_waterBoundsValid = true;
+    buildShoreMask(mesh);
+}
+
+// GRADE DA BEIRA D'AGUA: 1 onde ha' agua VISIVEL (dentro da malha e com o
+// chao abaixo do nivel), caindo a 0 em kAlcance u. O molhado da onda e a
+// lamina so' valem dentro dela: sem isto todo chao na altura da agua molhava
+// (piscina de um mapa "transbordando" pela cidade inteira).
+void Engine::buildShoreMask(const WaterMesh& mesh) {
+    m_shoreWaterSrc = mesh;
+    rebuildShoreMask();
+}
+
+// A grade e' RGBA16F: R = proximidade (1 no liquido visivel, 0 a kAlcance u),
+// G = QUAL liquido esta' mais perto (0 = agua do mapa, 1 + i = m_lavaLiquids[i]),
+// B = altura da superficie desse liquido ali (a lava de contorno nao e' plana).
+// A beira e' propriedade do plano: o shader le' o nivel, o tipo e o modo
+// daquele liquido (DeferredLighting::setShoreLiquids). Refeita quando a agua
+// ou as lavas sao remontadas.
+void Engine::rebuildShoreMask() {
+    constexpr float kAlcance = 24.0f;
+    constexpr uint32_t kMaxLado = 1024;
+    constexpr uint32_t kMaxLavas = 7; // slots 1..7 (DeferredLighting::kShoreLiquids - 1)
+    const WaterMesh& agua = m_shoreWaterSrc;
+    const bool comAgua = !agua.vertices.empty() && agua.indices.size() >= 3 && !m_waterFullyBuried;
+    const bool comLava = !m_shoreLavaSrc.vertices.empty() && !m_shoreLavaCounts.empty();
+    if (!comAgua && !comLava) {
+        m_deferredLighting.setShoreMask(std::vector<float>(4, 0.0f), 1, 1, Vec2(0.0f), 0.0f);
+        return;
+    }
+    // Retangulo que cobre os dois (mais o alcance).
+    Vec2 mn(FLT_MAX), mx(-FLT_MAX);
+    auto cresce = [&](const WaterMesh& m) {
+        for (const auto& v : m.vertices) {
+            mn = glm::min(mn, Vec2(v.position.x, v.position.z));
+            mx = glm::max(mx, Vec2(v.position.x, v.position.z));
+        }
+    };
+    if (comAgua) cresce(agua);
+    if (comLava) cresce(m_shoreLavaSrc);
+    const Vec2 o = mn - Vec2(kAlcance);
+    const float lado = std::max(mx.x - mn.x, mx.y - mn.y) + 2.0f * kAlcance;
+    const float cel = std::max(2.0f, lado / float(kMaxLado));
+    const uint32_t n = std::min(kMaxLado, uint32_t(std::ceil(lado / cel)));
+    // fonte[k] = 1 + slot da celula que e' liquido visivel (0 = nenhum).
+    std::vector<uint8_t> fonte(size_t(n) * n, 0);
+    // Altura da superficie do liquido na celula: a lava de contorno segue a
+    // altura de cada ponto (o "level" do .env e' so' a media), entao o contato
+    // com o chao tem de ser medido contra ela, nao contra um nivel unico.
+    std::vector<float> altura(size_t(n) * n, 0.0f);
+    auto rasteriza = [&](const WaterMesh& m, size_t i0, size_t i1, float nivel, uint8_t slot) {
+        for (size_t i = i0; i + 2 < i1; i += 3) {
+            const Vec3 a = m.vertices[m.indices[i]].position;
+            const Vec3 b = m.vertices[m.indices[i + 1]].position;
+            const Vec3 c = m.vertices[m.indices[i + 2]].position;
+            const float area = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+            if (std::fabs(area) < 1e-6f) continue;
+            const int x0 = std::max(0, int((std::min({a.x, b.x, c.x}) - o.x) / cel));
+            const int x1 = std::min(int(n) - 1, int((std::max({a.x, b.x, c.x}) - o.x) / cel));
+            const int z0 = std::max(0, int((std::min({a.z, b.z, c.z}) - o.y) / cel));
+            const int z1 = std::min(int(n) - 1, int((std::max({a.z, b.z, c.z}) - o.y) / cel));
+            for (int z = z0; z <= z1; ++z)
+                for (int x = x0; x <= x1; ++x) {
+                    const size_t k = size_t(z) * n + x;
+                    if (fonte[k]) continue;
+                    const float px = o.x + (x + 0.5f) * cel, pz = o.y + (z + 0.5f) * cel;
+                    const float w0 = ((b.x - px) * (c.z - pz) - (c.x - px) * (b.z - pz)) / area;
+                    const float w1 = ((c.x - px) * (a.z - pz) - (a.x - px) * (c.z - pz)) / area;
+                    if (w0 < 0.0f || w1 < 0.0f || w0 + w1 > 1.0f) continue;
+                    const float sup = slot > 0 ? a.y * w0 + b.y * w1 + c.y * (1.0f - w0 - w1) : nivel;
+                    // Agua: visivel onde o chao fica abaixo do nivel (a malha
+                    // dela cobre o mapa inteiro). Lava: o contorno ja' e' a
+                    // margem autorada, e numa caverna a altura do terreno e' a
+                    // do TETO - testar o chao apagava a lava inteira.
+                    if (slot > 0 || sampleTerrainHeight(px, pz, kAnyHeight, false) < nivel - 0.2f) {
+                        fonte[k] = uint8_t(slot + 1);
+                        altura[k] = sup;
+                    }
+                }
+        }
+    };
+    // Lava primeiro: onde as duas se cruzam, quem manda e' a lava (a agua
+    // do mapa costuma passar por baixo da cratera inteira).
+    if (comLava) {
+        size_t i0 = 0;
+        for (size_t s = 0; s < m_shoreLavaCounts.size() && s < kMaxLavas; ++s) {
+            const size_t i1 = i0 + m_shoreLavaCounts[s];
+            const float nivel = s < m_lavaLiquids.size() ? m_lavaLiquids[s].level : -1.0e9f;
+            rasteriza(m_shoreLavaSrc, i0, std::min(i1, m_shoreLavaSrc.indices.size()), nivel, uint8_t(1 + s));
+            i0 = i1;
+        }
+    }
+    if (comAgua) rasteriza(agua, 0, agua.indices.size(), m_mapBaseWaterLevel + m_waterMenu.config.waterLevel, 0);
+
+    // Distancia (chanfro 3-4) a' celula de liquido visivel mais perto, levando
+    // junto QUAL liquido e' (o vizinho que deu a menor distancia).
+    constexpr uint16_t kInf = 60000;
+    std::vector<uint16_t> d(size_t(n) * n, kInf);
+    std::vector<uint8_t> dono(size_t(n) * n, 0);
+    for (size_t k = 0; k < d.size(); ++k)
+        if (fonte[k]) { d[k] = 0; dono[k] = uint8_t(fonte[k] - 1); }
+    // A altura viaja junto com o dono (a da celula de liquido mais perto).
+    auto relax = [&](size_t k, int nx, int nz, uint16_t custo) {
+        if (nx < 0 || nz < 0 || nx >= int(n) || nz >= int(n)) return;
+        const size_t q = size_t(nz) * n + nx;
+        const uint16_t v = d[q];
+        if (v < kInf && uint16_t(v + custo) < d[k]) { d[k] = uint16_t(v + custo); dono[k] = dono[q]; altura[k] = altura[q]; }
+    };
+    for (int z = 0; z < int(n); ++z)
+        for (int x = 0; x < int(n); ++x) {
+            const size_t k = size_t(z) * n + x;
+            relax(k, x - 1, z, 3); relax(k, x, z - 1, 3); relax(k, x - 1, z - 1, 4); relax(k, x + 1, z - 1, 4);
+        }
+    for (int z = int(n) - 1; z >= 0; --z)
+        for (int x = int(n) - 1; x >= 0; --x) {
+            const size_t k = size_t(z) * n + x;
+            relax(k, x + 1, z, 3); relax(k, x, z + 1, 3); relax(k, x + 1, z + 1, 4); relax(k, x - 1, z + 1, 4);
+        }
+    // A = PAREDE: a maior inclinacao (altura/u) do chao entre a celula e a
+    // agua. A lamina media o alcance pela altura do pixel e pela distancia da
+    // grade (celulas de 2 u), e no deck de uma piscina de parede a 90 graus
+    // isso parecia uma praia: a onda subia a parede e invadia o piso. A
+    // inclinacao e' medida em 5x5 pontos por celula (passo cel/4) so' na
+    // margem (ate' 10 u), com o fundo abaixo do nivel achatado no nivel (o
+    // fundo do mar nao e' parede), e propagada da agua para fora pelo mesmo
+    // caminho da distancia: o que esta' atras de uma parede herda a parede.
+    std::vector<float> parede(size_t(n) * n, 0.0f);
+    {
+        const uint16_t limite = uint16_t(std::min(30000.0f, 10.0f / cel * 3.0f));
+        const float passo = cel * 0.25f;
+        auto margem = [&](size_t k, int x, int z) {
+            if (dono[k] != 0 || d[k] > limite) return false; // so' agua (lava tem a beira propria)
+            if (d[k] > 0) return true;
+            for (int dz = -1; dz <= 1; ++dz)          // celula de agua: so' a da borda
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int qx = x + dx, qz = z + dz;
+                    if (qx >= 0 && qz >= 0 && qx < int(n) && qz < int(n) && d[size_t(qz) * n + qx] > 0) return true;
+                }
+            return false;
+        };
+        for (int z = 0; z < int(n); ++z)
+            for (int x = 0; x < int(n); ++x) {
+                const size_t k = size_t(z) * n + x;
+                if (!margem(k, x, z)) continue;
+                const float nivel = altura[k];
+                float h[5][5];
+                for (int j = 0; j < 5; ++j)
+                    for (int i = 0; i < 5; ++i) {
+                        const float hx = o.x + x * cel + (i + 0.5f) * passo * 0.8f;
+                        const float hz = o.y + z * cel + (j + 0.5f) * passo * 0.8f;
+                        h[j][i] = std::max(sampleTerrainHeight(hx, hz, kAnyHeight, false), nivel);
+                    }
+                float s = 0.0f;
+                for (int j = 0; j < 5; ++j)
+                    for (int i = 0; i < 4; ++i) {
+                        s = std::max(s, std::fabs(h[j][i + 1] - h[j][i]));
+                        s = std::max(s, std::fabs(h[i + 1][j] - h[i][j]));
+                    }
+                parede[k] = s / (passo * 0.8f);
+            }
+        // Da agua para fora, em ordem de distancia: cada celula pega o maior
+        // valor do caminho (o vizinho que deu a distancia dela).
+        std::vector<uint32_t> ordem;
+        ordem.reserve(d.size());
+        for (size_t k = 0; k < d.size(); ++k) if (d[k] > 0 && d[k] < kInf) ordem.push_back(uint32_t(k));
+        std::sort(ordem.begin(), ordem.end(), [&](uint32_t a, uint32_t b) { return d[a] < d[b]; });
+        for (uint32_t k : ordem) {
+            const int x = int(k % n), z = int(k / n);
+            float herda = 0.0f;
+            uint16_t melhor = kInf;
+            for (int dz = -1; dz <= 1; ++dz)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int qx = x + dx, qz = z + dz;
+                    if ((dx | dz) == 0 || qx < 0 || qz < 0 || qx >= int(n) || qz >= int(n)) continue;
+                    const size_t q = size_t(qz) * n + qx;
+                    const uint16_t c = uint16_t(d[q] + ((dx && dz) ? 4 : 3));
+                    if (d[q] < kInf && c == d[k] && d[q] < melhor) { melhor = d[q]; herda = parede[q]; }
+                    else if (d[q] < kInf && c == d[k] && d[q] == melhor) herda = std::max(herda, parede[q]);
+                }
+            parede[k] = std::max(parede[k], herda);
+        }
+    }
+    std::vector<float> px(size_t(n) * n * 4, 0.0f);
+    uint32_t visiveis = 0, lava = 0;
+    uint32_t porSlot[8] = {};
+    for (size_t k = 0; k < d.size(); ++k) if (fonte[k]) ++porSlot[std::min<uint32_t>(fonte[k] - 1u, 7u)];
+    for (size_t k = 0; k < d.size(); ++k) {
+        const float dist = d[k] >= kInf ? 1e9f : float(d[k]) / 3.0f * cel;
+        px[4 * k] = std::clamp(1.0f - dist / kAlcance, 0.0f, 1.0f);
+        px[4 * k + 1] = float(dono[k]);
+        px[4 * k + 2] = altura[k];
+        px[4 * k + 3] = std::min(parede[k], 60000.0f);
+        visiveis += d[k] == 0;
+        lava += d[k] == 0 && dono[k] > 0;
+    }
+    m_deferredLighting.setShoreMask(px, n, n, o, 1.0f / (cel * float(n)));
+    // Campo agua -> terra para as ondulacoes da superficie (sempre para a
+    // areia, inclusive em lago e ilha): distancia chanfrada 3-4 de cada
+    // celula de agua do mapa ate' a celula seca mais perto, direcao = menos
+    // o gradiente, depois 10 passes de media 3x3 SEM normalizar: onde duas
+    // margens disputam (canal, meio de baia) as direcoes opostas se anulam e
+    // o comprimento cai a ~0 - o shader usa o comprimento como velocidade,
+    // entao a agua para devagar na divisa em vez de mostrar uma emenda com
+    // ondulacao indo para os dois lados (mapa de praia, canal entre duas margens).
+    if (comAgua) {
+        std::vector<uint16_t> dw(size_t(n) * n, kInf);
+        for (size_t k = 0; k < dw.size(); ++k) if (fonte[k] != 1) dw[k] = 0;
+        auto relaxa = [&](int x, int z, int dx, int dz, uint16_t c) {
+            const int qx = x + dx, qz = z + dz;
+            if (qx < 0 || qz < 0 || qx >= int(n) || qz >= int(n)) return;
+            uint16_t& a = dw[size_t(z) * n + x];
+            const uint16_t b = dw[size_t(qz) * n + qx];
+            if (b < kInf && b + c < a) a = uint16_t(b + c);
+        };
+        for (int z = 0; z < int(n); ++z)
+            for (int x = 0; x < int(n); ++x) {
+                relaxa(x, z, -1, 0, 3); relaxa(x, z, 0, -1, 3); relaxa(x, z, -1, -1, 4); relaxa(x, z, 1, -1, 4);
+            }
+        for (int z = int(n) - 1; z >= 0; --z)
+            for (int x = int(n) - 1; x >= 0; --x) {
+                relaxa(x, z, 1, 0, 3); relaxa(x, z, 0, 1, 3); relaxa(x, z, 1, 1, 4); relaxa(x, z, -1, 1, 4);
+            }
+        std::vector<float> rg(size_t(n) * n * 2, 0.0f), tmp;
+        auto dAt = [&](int x, int z) {
+            x = std::clamp(x, 0, int(n) - 1); z = std::clamp(z, 0, int(n) - 1);
+            return float(dw[size_t(z) * n + x]);
+        };
+        uint32_t comDir = 0;
+        for (int z = 0; z < int(n); ++z)
+            for (int x = 0; x < int(n); ++x) {
+                const size_t k = size_t(z) * n + x;
+                if (fonte[k] != 1 || dw[k] >= kInf) continue;
+                const float gx = dAt(x + 1, z) - dAt(x - 1, z), gz = dAt(x, z + 1) - dAt(x, z - 1);
+                const float l = std::sqrt(gx * gx + gz * gz);
+                if (l < 1e-4f) continue;
+                rg[2 * k] = -gx / l; rg[2 * k + 1] = -gz / l; ++comDir;
+            }
+        for (int passe = 0; passe < 10; ++passe) {
+            tmp = rg;
+            for (int z = 0; z < int(n); ++z)
+                for (int x = 0; x < int(n); ++x) {
+                    const size_t k = size_t(z) * n + x;
+                    if (fonte[k] != 1) continue;
+                    float sx = 0.0f, sz = 0.0f;
+                    for (int dz = -1; dz <= 1; ++dz)
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            const int qx = std::clamp(x + dx, 0, int(n) - 1), qz = std::clamp(z + dz, 0, int(n) - 1);
+                            const size_t q = size_t(qz) * n + qx;
+                            sx += tmp[2 * q]; sz += tmp[2 * q + 1];
+                        }
+                    rg[2 * k] = sx / 9.0f; rg[2 * k + 1] = sz / 9.0f;
+                }
+        }
+        // Contraste da confianca: 0,35 de comprimento (direcoes a ~140 graus)
+        // ja' e' divisa; acima de 0,8 anda a toda.
+        for (size_t k = 0; k < size_t(n) * n; ++k) {
+            const float l = std::sqrt(rg[2 * k] * rg[2 * k] + rg[2 * k + 1] * rg[2 * k + 1]);
+            if (l < 1e-5f) { rg[2 * k] = rg[2 * k + 1] = 0.0f; continue; }
+            const float t = std::clamp((l - 0.35f) / 0.45f, 0.0f, 1.0f);
+            const float c = t * t * (3.0f - 2.0f * t) / l;
+            rg[2 * k] *= c; rg[2 * k + 1] *= c;
+        }
+        // Margem seca: copia a direcao da agua vizinha, para o filtro linear
+        // nao puxar a borda para zero (a borda e' onde a ondulacao mais aparece).
+        tmp = rg;
+        for (int z = 0; z < int(n); ++z)
+            for (int x = 0; x < int(n); ++x) {
+                const size_t k = size_t(z) * n + x;
+                if (fonte[k] == 1) continue;
+                float sx = 0.0f, sz = 0.0f;
+                for (int dz = -1; dz <= 1; ++dz)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int qx = std::clamp(x + dx, 0, int(n) - 1), qz = std::clamp(z + dz, 0, int(n) - 1);
+                        const size_t q = size_t(qz) * n + qx;
+                        if (fonte[q] == 1) { sx += tmp[2 * q]; sz += tmp[2 * q + 1]; }
+                    }
+                const float cont = float((sx != 0.0f) || (sz != 0.0f));
+                if (cont > 0.0f) {
+                    int nAgua = 0;
+                    for (int dz = -1; dz <= 1; ++dz)
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            const int qx = std::clamp(x + dx, 0, int(n) - 1), qz = std::clamp(z + dz, 0, int(n) - 1);
+                            nAgua += fonte[size_t(qz) * n + qx] == 1;
+                        }
+                    rg[2 * k] = sx / float(nAgua); rg[2 * k + 1] = sz / float(nAgua);
+                }
+            }
+        m_water.setShoreField(comDir ? rg : std::vector<float>{}, n, n, o, 1.0f / (cel * float(n)));
+        ERUPTION_LOG_WARN("[WATER] campo agua->terra: %u celulas com direcao (grade %u, %.1f u)", comDir, n, cel);
+    } else {
+        m_water.setShoreField({}, 0, 0, Vec2(0.0f), 0.0f);
+    }
+    ERUPTION_LOG_WARN("[WATER] beira dos liquidos: grade %ux%u (%.1f u/celula), %u celulas de liquido visivel (%u de lava; "
+                      "por liquido %u %u %u %u %u %u %u %u)", n, n, cel, visiveis, lava, porSlot[0], porSlot[1], porSlot[2],
+                      porSlot[3], porSlot[4], porSlot[5], porSlot[6], porSlot[7]);
 }
 
 // Copia os liquidos do mapa (lava, sobretudo) para o buffer que o composite
@@ -551,7 +845,16 @@ void Engine::renderMinimap(VkCommandBuffer cmd) {
         // R8_UINT (altura de mundo) nao tem FILTER_LINEAR no format feature:
         // sampler LINEAR aqui era VUID-vkCmdDraw-magFilter-04553 em todo frame
         // (usampler2D no shader - a leitura ja' era nearest de fato).
-        imgs[3].sampler = m_nearestSampler;
+        if (m_minimapUintSampler == VK_NULL_HANDLE) {
+            VkSamplerCreateInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+            si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            si.maxLod = 0.0f;
+            vkCreateSampler(m_vulkan.device(), &si, nullptr, &m_minimapUintSampler);
+        }
+        imgs[3].sampler = m_minimapUintSampler;
         // Emissivo do G-buffer: lampadas, cristais, qualquer modelo com
         // emissiveStrength/emissiveTextureNames (model_frag.glsl). Ate' aqui o
         // composite nao amostrava este canal de todo.

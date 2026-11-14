@@ -118,6 +118,15 @@ struct LightingUBO {
     // y = 1 se ha' campo de nuvens (sem ele a chuva global molha tudo). No fim.
     alignas(16) Vec4 rainSpots[64];
     alignas(16) Vec4 rainSpotParams;
+    // BEIRA D'AGUA: grade de "perto de agua visivel" (binding 18). xy = canto
+    // XZ, z = 1/lado em u (0 = sem grade: nem molhado de onda nem lamina),
+    // w = lamina: 0 desligada, 1 sem espuma, 2 com espuma na frente. No fim.
+    alignas(16) Vec4 shoreMask;
+    alignas(16) Vec4 shoreWaterColor; // rgb = cor funda da agua, w = clareza (u ate' o vermelho cair a 1/e)
+    // Por liquido da grade da beira (G da grade: 0 = agua do mapa, 1.. = lavas):
+    // x = nivel (< -1e8 = sem), y = modo (0 contato, 1 invade, 2 invade com
+    // espuma), z = tipo (0 agua, 1 lava), w = brilho da lava. No fim.
+    alignas(16) Vec4 shoreLiquids[8];
 };
 
 struct DirectionalLight {
@@ -159,6 +168,8 @@ public:
     void setEnvironment(const LightingEnvironment& env);
     const LightingEnvironment& environment() const { return m_env; }
     void setGlobalIllumination(float intensity, float floor) { m_giIntensity = intensity; m_giAmbientFloor = floor; }
+    float giIntensity() const { return m_giIntensity; }
+    float ambientHemiFloor() const { return m_ambientHemiFloor; }
     void setSunAngularRadius(float radians) { m_sunAngularRadius = radians; }
     // Luz de borda dos sprites do lado do sol: tinta (0..1) e forca (0..2; 0 desliga).
     void setSpriteRim(const Vec3& tint, float strength);
@@ -253,6 +264,19 @@ public:
         m_rainSpotsLocal = local;
     }
     // Beira d'agua molhada pela onda: nivel da agua (sem agua: has = false) e o tempo.
+    // Grade R8 (1 = agua visivel, cai a 0 longe da margem) e a chave da
+    // lamina. Sem grade (invSize 0) a beira d'agua nao molha nada.
+    // Grade da beira: 4 floats por celula (proximidade, liquido, altura da
+    // superficie dele, livre), sobe como RGBA16F.
+    void setShoreMask(const std::vector<float>& px, uint32_t w, uint32_t h, const Vec2& origin, float invSize);
+    // 0 = sem lamina, 1 = lamina, 2 = lamina com espuma na frente.
+    // A lamina absorve como o corpo d'agua (mesma cor funda e clareza): na
+    // linha d'agua o tom da areia coberta emenda com o do fundo visto pela agua.
+    void setShoreSwash(int mode, const Vec3& deepColor, float clarity) {
+        m_shoreSwashMode = mode; m_shoreWaterColor = deepColor; m_shoreClarity = clarity;
+    }
+    static constexpr uint32_t kShoreLiquids = 8;
+    void setShoreLiquid(uint32_t slot, const Vec4& v) { if (slot < kShoreLiquids) m_shoreLiquids[slot] = v; }
     void setShoreWater(bool has, float waterY, float time) {
         m_shoreWaterY = has ? waterY : -1.0e9f;
         m_shoreTime = time;
@@ -369,8 +393,24 @@ private:
     Vec4 m_rainSpots[64] = {};
     uint32_t m_rainSpotCount = 0;
     bool m_rainSpotsLocal = false;
+    VkImage m_shoreImg = VK_NULL_HANDLE;
+    VmaAllocation m_shoreAlloc = VK_NULL_HANDLE;
+    VkImageView m_shoreView = VK_NULL_HANDLE;
+    VkSampler m_shoreSampler = VK_NULL_HANDLE;
+    Vec4 m_shoreMask = Vec4(0.0f);
+    // Copia da ultima grade da beira (setShoreMask): o resize() recria os
+    // descritores e a imagem nasceria vazia (1x1) - a onda, a espuma e o
+    // contato da lava sumiam ao maximizar a janela, ate' algo remontar a grade.
+    std::vector<float> m_shorePx;
+    uint32_t m_shoreW = 0, m_shoreH = 0;
+    Vec2 m_shoreOrigin = Vec2(0.0f);
+    float m_shoreInvSize = 0.0f;
+    int m_shoreSwashMode = 0;
+    Vec3 m_shoreWaterColor = Vec3(0.18f, 0.25f, 0.28f);
+    float m_shoreClarity = 10.0f;
     float m_shoreWaterY = -1.0e9f;
     float m_shoreTime = 0.0f;
+    Vec4 m_shoreLiquids[kShoreLiquids] = {};
     bool  m_ssaoEnabled = true;
     int   m_ssaoTaps = 12; // preset ssao_taps (especializacao do ssao.frag)
     // True while the SSAO targets hold neutral white in SHADER_READ layout,

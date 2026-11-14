@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <stb_image.h>
+#include <glm/gtc/packing.hpp>
 
 namespace eruption {
 
@@ -80,6 +81,8 @@ void WaterRenderer::shutdown() {
     destroyFoamAccumPipeline();
     destroyFoamMaskResources();
     destroyWaterTextureResources();
+    destroyShoreField();
+    clearTexturedFrames();
     destroyUBO();
     destroyPipeline();
     m_ctx = nullptr;
@@ -1095,7 +1098,12 @@ void WaterRenderer::updateUBO(uint32_t frameIndex, uint32_t uboSlot, const Water
     ubo.baseColorDeep    = Vec4(settings.baseColorDeep, 1.0f);
     ubo.baseColorShallow = Vec4(settings.baseColorShallow, 1.0f);
     ubo.waterParams      = Vec4(settings.transparency, settings.refractionStrength, settings.reflectivity, settings.roughness);
-    ubo.normalParams     = Vec4(settings.normalScale, settings.waveSpeed, settings.normalStrength, 0.0f);
+    // w = 1 com a lamina da praia ligada: a agua faz o mesmo repuxo e as
+    // mesmas cristas que a lamina no chao (common/shore_waves.glsl). Com a
+    // lamina a espuma de contato (foamParams.z) fica desligada, e o repuxo do
+    // lado da agua ia junto com ela - a borda do mar nao recuava com a areia.
+    ubo.normalParams     = Vec4(settings.normalScale, settings.waveSpeed, settings.normalStrength,
+                                settings.shoreSwash ? 1.0f : 0.0f);
     ubo.waveParams       = Vec4(settings.waveAmplitude, settings.waveFrequency, settings.waveSpeed, settings.levelOffset);
     ubo.foamParams       = Vec4(settings.foamEdgeDepth, settings.contactFoamStrength,
                                 settings.enableFoam ? 1.0f : 0.0f, rainSplashIntensity);
@@ -1120,13 +1128,27 @@ void WaterRenderer::updateUBO(uint32_t frameIndex, uint32_t uboSlot, const Water
         ubo.waveDirAmp[i] = Vec4(d.x, d.y, settings.waveAmplitude, settings.waveFrequency);
         ubo.waveSpeedSteep[i] = Vec4(settings.waveSpeed, settings.waveSteepness[i], 0.0f, 0.0f);
     }
+    ubo.waveSpeedSteep[0].z = m_skyClouds.x; ubo.waveSpeedSteep[0].w = m_skyClouds.y;
+    ubo.waveSpeedSteep[1].z = m_skyClouds.z; ubo.waveSpeedSteep[1].w = m_skyClouds.w;
+    ubo.waveSpeedSteep[2].z = m_skyCloudTime;
     int waterTex = settings.useProceduralTexture ? -1 : static_cast<int32_t>(m_waterTextureSlot);
+    // Agua texturada: o quadro da vez entra no lugar da textura de normais.
+    const bool texturada = settings.liquidKind == 4 && !m_texFrames.empty();
+    if (texturada) {
+        const double passo = std::floor(static_cast<double>(time) * std::max(settings.texFps, 0.01f));
+        waterTex = static_cast<int32_t>(m_texFrames[static_cast<size_t>(std::fmod(passo, static_cast<double>(m_texFrames.size())))].slot);
+    }
     ubo.textureSlots = IVec4(static_cast<int32_t>(m_refractionSlot[frameIndex]),
                              static_cast<int32_t>(m_depthCopySlot[frameIndex]),
                              static_cast<int32_t>(m_foamMaskSlot),
                              waterTex);
     int skySlot = (m_skyboxSlot != 0xFFFFFFFFu) ? static_cast<int32_t>(m_skyboxSlot) : -1;
-    ubo.skyboxSlot = IVec4(skySlot, 0, 0, 0);
+    const int fieldSlot = m_shoreFieldSlot != 0xFFFFFFFFu ? static_cast<int32_t>(m_shoreFieldSlot) : -1;
+    ubo.skyboxSlot = IVec4(skySlot, static_cast<int32_t>(std::lround(std::clamp(m_style.cloudReflection, 0.0f, 4.0f) * 1000.0f)), m_skyCloudsOn ? 1 : 0, fieldSlot);
+    // Grade do campo agua->terra nos .w livres (liquid.frag shoreFlow).
+    ubo.skyTop.w = m_shoreField.x;
+    ubo.skyHorizon.w = m_shoreField.y;
+    ubo.screenSize.w = m_shoreField.z;
     ubo.invViewProj = m_invViewProj;
     ubo.extraParams = Vec4(0.15f, 10.0f, settings.enableCaustics ? 1.0f : 0.0f,
                            static_cast<float>(settings.liquidKind));
@@ -1142,11 +1164,13 @@ void WaterRenderer::updateUBO(uint32_t frameIndex, uint32_t uboSlot, const Water
                               settings.crustWiden);
     ubo.weatherParams = Vec4(sunOcclusion, moonOcclusion, stormDarken, rainIntensity);
     ubo.lavaCrust = Vec4(settings.crustTint, settings.crustOpen);
+    if (settings.liquidKind == 4) ubo.lavaCrust = Vec4(std::max(settings.texTile, 0.01f), settings.texAlpha, 0.0f, 0.0f);
     const bool hd2d = m_style.hd2d && settings.liquidKind == 0 && !m_ctx->shaderLite();
     ubo.styleParams = Vec4(hd2d ? 1.0f : 0.0f, m_style.reflectionStrength, m_style.sparkle, m_style.rainRipples);
     ubo.styleParams2 = Vec4(m_style.shoreFoam, m_ssprLevel, m_style.reflectionDistortion, std::max(m_style.clarity, 0.1f));
     ubo.styleDeep = Vec4(m_style.deepColor, m_style.waveSlope);
-    ubo.styleSlots = IVec4(hd2d && m_ssprValidThisFrame ? static_cast<int32_t>(m_ssprSlot) : -1, 0, 0, 0);
+    ubo.styleSlots = IVec4(hd2d && m_ssprValidThisFrame ? static_cast<int32_t>(m_ssprSlot) : -1,
+                           hd2d && m_ssprValidThisFrame ? m_mirrorReflSlot : -1, 0, 0);
     if (hd2d) {
         // Diorama: o lago nao ondula a malha. As ondas de Gerstner do vertice,
         // com comprimento de ~3 unidades numa malha de grade larga, viravam
@@ -1185,7 +1209,7 @@ void WaterRenderer::prepareRefraction(VkCommandBuffer cmd,
 
     // Reflexo planar: depois da copia (le' a cor e a profundidade copiadas).
     m_ssprValidThisFrame = false;
-    if (m_style.hd2d && m_style.planarReflection && !m_ctx->shaderLite() && !kNoCopy && m_indexCount > 0) {
+    if (m_style.hd2d && m_style.planarReflection && settings.liquidKind != 4 && !m_ctx->shaderLite() && !kNoCopy && m_indexCount > 0) {
         if (m_ssprColorImage == VK_NULL_HANDLE) createSsprResources();
         if (m_ssprColorImage != VK_NULL_HANDLE && m_ssprPipeline != VK_NULL_HANDLE) {
             m_ssprLevel = m_ssprMeshLevel + settings.levelOffset;
@@ -1742,6 +1766,43 @@ void WaterRenderer::generateBlueNoiseTexture(int size) {
     }
 }
 
+void WaterRenderer::clearTexturedFrames() {
+    if (m_texFrames.empty()) return;
+    vkDeviceWaitIdle(m_ctx->device()); // os quadros podem estar em voo
+    for (TexFrame& f : m_texFrames) {
+        if (f.slot != 0xFFFFFFFFu) m_bindless->freeSlot(f.slot);
+        if (f.sampler) vkDestroySampler(m_ctx->device(), f.sampler, nullptr);
+        if (f.view) vkDestroyImageView(m_ctx->device(), f.view, nullptr);
+        if (f.image) vmaDestroyImage(m_ctx->allocator(), f.image, f.alloc);
+    }
+    m_texFrames.clear();
+}
+
+bool WaterRenderer::setTexturedFrames(const std::vector<std::string>& paths) {
+    clearTexturedFrames();
+    for (const std::string& path : paths) {
+        int w = 0, h = 0, channels = 0;
+        unsigned char* pixels = stbi_load(path.c_str(), &w, &h, &channels, 4);
+        if (!pixels) {
+            ERUPTION_LOG_WARN("Textured water: cannot open %s", path.c_str());
+            clearTexturedFrames();
+            return false;
+        }
+        TexFrame f;
+        const bool ok = createTextureFromPixelsInternal(pixels, w, h, 4, VK_FORMAT_R8G8B8A8_UNORM,
+                                                        f.image, f.alloc, f.view, f.sampler, f.slot);
+        stbi_image_free(pixels);
+        if (!ok) {
+            ERUPTION_LOG_WARN("Textured water: GPU texture failed for %s", path.c_str());
+            clearTexturedFrames();
+            return false;
+        }
+        m_texFrames.push_back(f);
+    }
+    ERUPTION_LOG_INFO("Textured water: %zu frame(s)", m_texFrames.size());
+    return !m_texFrames.empty();
+}
+
 void WaterRenderer::loadWaterTextureFromFile(const char* path) {
     destroyWaterTextureResources();
 
@@ -1938,6 +1999,78 @@ void WaterRenderer::createPipeline() {
 
     vkDestroyShaderModule(m_ctx->device(), vertModule, nullptr);
     vkDestroyShaderModule(m_ctx->device(), fragModule, nullptr);
+}
+
+
+void WaterRenderer::destroyShoreField() {
+    if (!m_ctx) return;
+    if (m_shoreFieldSlot != 0xFFFFFFFFu && m_bindless) { m_bindless->freeSlot(m_shoreFieldSlot); m_shoreFieldSlot = 0xFFFFFFFFu; }
+    if (m_shoreFieldImg != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(m_ctx->device()); // so' na carga do mapa
+        vkDestroyImageView(m_ctx->device(), m_shoreFieldView, nullptr);
+        vmaDestroyImage(m_ctx->allocator(), m_shoreFieldImg, m_shoreFieldAlloc);
+        m_shoreFieldImg = VK_NULL_HANDLE; m_shoreFieldView = VK_NULL_HANDLE; m_shoreFieldAlloc = VK_NULL_HANDLE;
+    }
+    if (m_shoreFieldSampler != VK_NULL_HANDLE) { vkDestroySampler(m_ctx->device(), m_shoreFieldSampler, nullptr); m_shoreFieldSampler = VK_NULL_HANDLE; }
+    m_shoreField = Vec4(0.0f);
+}
+
+void WaterRenderer::setShoreField(const std::vector<float>& rg, uint32_t w, uint32_t h, const Vec2& origin, float invSize) {
+    destroyShoreField();
+    if (!m_ctx || !m_bindless || w == 0 || h == 0 || rg.size() < size_t(w) * h * 2) return;
+    VkDevice dev = m_ctx->device();
+    VkSamplerCreateInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.maxLod = 0.0f;
+    if (vkCreateSampler(dev, &si, nullptr, &m_shoreFieldSampler) != VK_SUCCESS) return;
+    if (!m_ctx->createImage(w, h, VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                            VMA_MEMORY_USAGE_GPU_ONLY, m_shoreFieldImg, m_shoreFieldAlloc)) { destroyShoreField(); return; }
+    VkImageViewCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = m_shoreFieldImg;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = VK_FORMAT_R16G16_SFLOAT;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCreateImageView(dev, &vi, nullptr, &m_shoreFieldView);
+
+    std::vector<uint16_t> half(size_t(w) * h * 2);
+    for (size_t i = 0; i < half.size(); ++i) half[i] = glm::packHalf1x16(rg[i]);
+    const VkDeviceSize n = half.size() * sizeof(uint16_t);
+    VkBuffer staging; VmaAllocation stagingAlloc;
+    m_ctx->createBuffer(n, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
+    void* mapped = nullptr;
+    vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
+    std::memcpy(mapped, half.data(), static_cast<size_t>(n));
+    vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
+    VkImage img = m_shoreFieldImg;
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = img;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+        VkBufferImageCopy c{};
+        c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        c.imageExtent = {w, h, 1};
+        vkCmdCopyBufferToImage(cmd, staging, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    });
+    vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
+    m_shoreFieldSlot = m_bindless->allocateSlot();
+    m_bindless->updateTexture(m_shoreFieldSlot, m_shoreFieldView, m_shoreFieldSampler);
+    m_bindless->flushUpdates();
+    m_shoreField = Vec4(origin.x, origin.y, invSize, 0.0f);
 }
 
 } // namespace eruption

@@ -8,6 +8,7 @@
 #include "core/Logger.hpp"
 
 #include <cstring>
+#include <glm/gtc/packing.hpp>
 #include <cmath>
 #include <algorithm>
 
@@ -104,6 +105,12 @@ bool DeferredLighting::init(VulkanContext* ctx, GBuffer* gbuffer, BindlessDescri
 }
 
 void DeferredLighting::shutdown() {
+    if (m_shoreImg != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_ctx->device(), m_shoreView, nullptr);
+        vmaDestroyImage(m_ctx->allocator(), m_shoreImg, m_shoreAlloc);
+        m_shoreImg = VK_NULL_HANDLE; m_shoreView = VK_NULL_HANDLE;
+    }
+    if (m_shoreSampler != VK_NULL_HANDLE) { vkDestroySampler(m_ctx->device(), m_shoreSampler, nullptr); m_shoreSampler = VK_NULL_HANDLE; }
     if (m_sphereVertexBuffer != VK_NULL_HANDLE) {
         vmaDestroyBuffer(m_ctx->allocator(), m_sphereVertexBuffer, m_sphereVertexAlloc);
         m_sphereVertexBuffer = VK_NULL_HANDLE;
@@ -184,6 +191,10 @@ void DeferredLighting::shutdown() {
 void DeferredLighting::resize(uint32_t width, uint32_t height) {
     const SkyProbeBinding sky = m_skyProbeBinding;
     const ProbeGridBinding grid = m_probeGridBinding;
+    std::vector<float> shorePx = std::move(m_shorePx);
+    const uint32_t shoreW = m_shoreW, shoreH = m_shoreH;
+    const Vec2 shoreOrigin = m_shoreOrigin;
+    const float shoreInvSize = m_shoreInvSize;
     shutdown();
     m_width = width;
     m_height = height;
@@ -192,6 +203,8 @@ void DeferredLighting::resize(uint32_t width, uint32_t height) {
     // irradiância: sem isto o shader lia bindings nunca escritos.
     if (sky.view != VK_NULL_HANDLE) setSkyProbe(sky.view, sky.sampler, sky.sh, sky.shSize, sky.mips);
     if (grid.view != VK_NULL_HANDLE) setIrradianceProbes(grid.view, grid.sampler, grid.min, grid.invExtent, grid.enabled);
+    // E sem a grade da beira (o init a recria vazia).
+    if (!shorePx.empty()) setShoreMask(shorePx, shoreW, shoreH, shoreOrigin, shoreInvSize);
 }
 
 void DeferredLighting::setEnvironment(const LightingEnvironment& env) {
@@ -375,7 +388,10 @@ void DeferredLighting::createPipelines() {
     // 15 = SONDA DE CEU (samplerCube pre-filtrado, G36); 16 = SH9 da sonda
     //      (storage buffer, 9 vec4). Escritos uma vez em setSkyProbe().
     // 17 = PROBES DE IRRADIANCIA (sampler3D, G38) - trocado ao carregar mapa.
-    bindings.resize(18);
+    // 18 = GRADE DA BEIRA DOS LIQUIDOS (sampler2D RGBA16F: proximidade, qual
+    //      liquido, altura da superficie dele)
+    //      - setShoreMask ao carregar mapa e ao remontar as lavas.
+    bindings.resize(19);
     for (uint32_t b = 12; b <= 15; ++b) {
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -390,6 +406,10 @@ void DeferredLighting::createPipelines() {
     bindings[17].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[17].descriptorCount = 1;
     bindings[17].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[18].binding = 18;
+    bindings[18].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[18].descriptorCount = 1;
+    bindings[18].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     // UPDATE_AFTER_BIND: estes sets sao reescritos por frame com as MESMAS
     // views enquanto o CB do frame anterior ainda esta' pendente - sem a flag
@@ -663,7 +683,7 @@ void DeferredLighting::createSsaoPipelines() {
 void DeferredLighting::createDescriptors() {
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 16 * MAX_FRAMES;
+    poolSizes[0].descriptorCount = 18 * MAX_FRAMES;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 8 * MAX_FRAMES;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; // binding 16 (SH da sonda de ceu)
@@ -683,6 +703,8 @@ void DeferredLighting::createDescriptors() {
     allocInfo.descriptorSetCount = MAX_FRAMES;
     allocInfo.pSetLayouts = layouts.data();
     vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, m_descSets);
+    // Binding 18 precisa de imagem valida desde o inicio: grade vazia 1x1.
+    setShoreMask(std::vector<float>(4, 0.0f), 1, 1, Vec2(0.0f), 0.0f);
 
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         // Bind shadow UBO to set
@@ -886,6 +908,86 @@ void DeferredLighting::setSkyProbe(VkImageView cubeView, VkSampler sampler, VkBu
     m_skyProbeBound = true;
 }
 
+void DeferredLighting::setShoreMask(const std::vector<float>& px, uint32_t w, uint32_t h,
+                                    const Vec2& origin, float invSize) {
+    if (w == 0 || h == 0 || px.size() < static_cast<size_t>(w) * h * 4) return; // RGBA
+    VkDevice dev = m_ctx->device();
+    if (m_shoreImg != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(dev); // troca so' na carga do mapa
+        vkDestroyImageView(dev, m_shoreView, nullptr);
+        vmaDestroyImage(m_ctx->allocator(), m_shoreImg, m_shoreAlloc);
+        m_shoreImg = VK_NULL_HANDLE; m_shoreView = VK_NULL_HANDLE;
+    }
+    if (m_shoreSampler == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.maxLod = 0.0f;
+        vkCreateSampler(dev, &si, nullptr, &m_shoreSampler);
+    }
+    if (!m_ctx->createImage(w, h, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                            VMA_MEMORY_USAGE_GPU_ONLY, m_shoreImg, m_shoreAlloc)) return;
+    VkImageViewCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = m_shoreImg;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCreateImageView(dev, &vi, nullptr, &m_shoreView);
+
+    const VkDeviceSize n = static_cast<VkDeviceSize>(w) * h * 4 * sizeof(uint16_t);
+    std::vector<uint16_t> half(static_cast<size_t>(w) * h * 4);
+    for (size_t i = 0; i < half.size(); ++i) half[i] = glm::packHalf1x16(px[i]);
+    VkBuffer staging; VmaAllocation stagingAlloc;
+    m_ctx->createBuffer(n, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc);
+    void* mapped = nullptr;
+    vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
+    std::memcpy(mapped, half.data(), static_cast<size_t>(n));
+    vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
+    VkImage img = m_shoreImg;
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = img;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+        VkBufferImageCopy c{};
+        c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        c.imageExtent = {w, h, 1};
+        vkCmdCopyBufferToImage(cmd, staging, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    });
+    vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
+
+    VkDescriptorImageInfo info{};
+    info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    info.imageView = m_shoreView;
+    info.sampler = m_shoreSampler;
+    for (uint32_t i = 0; i < MAX_FRAMES; ++i) {
+        VkWriteDescriptorSet wd{};
+        wd.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wd.dstSet = m_descSets[i];
+        wd.dstBinding = 18;
+        wd.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wd.descriptorCount = 1;
+        wd.pImageInfo = &info;
+        vkUpdateDescriptorSets(dev, 1, &wd, 0, nullptr);
+    }
+    m_shoreMask = Vec4(origin.x, origin.y, invSize, 0.0f);
+    if (&px != &m_shorePx) m_shorePx = px;
+    m_shoreW = w; m_shoreH = h; m_shoreOrigin = origin; m_shoreInvSize = invSize;
+}
+
 void DeferredLighting::setIrradianceProbes(VkImageView view, VkSampler sampler,
                                            const Vec3& gridMin, const Vec3& gridInvExtent, bool enabled) {
     if (view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE) return;
@@ -990,14 +1092,18 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     // permite validar headless que a leitura nao muda com a hora do dia.
     static const uint32_t kPbrDebugEnv = [] {
         const char* e = std::getenv("ERUPTION_TEST_PBR_DEBUG");
-        // 64 = AO cru, 128 = quanto molha (chuva x nuvem), 256 = sem molhado (A/B)
-        return e ? (static_cast<uint32_t>(std::atoi(e)) & 479u) : 0u;
+        // 64 = AO cru, 128 = quanto molha (chuva x nuvem), 256 = sem molhado (A/B),
+        // 512 = lamina da onda (R cobertura, G faixa clara, B espuma)
+        return e ? (static_cast<uint32_t>(std::atoi(e)) & 991u) : 0u;
     }();
     ubo.pbrDebugMode = m_pbrDebugMode | kFlatAlbedo | kPbrDebugEnv;
     ubo.pbrLightScale = m_pbrLightScale;
     ubo.rainIntensity = m_rainIntensity;
     for (uint32_t i = 0; i < m_rainSpotCount; ++i) ubo.rainSpots[i] = m_rainSpots[i];
     ubo.rainSpotParams = Vec4(static_cast<float>(m_rainSpotCount), m_rainSpotsLocal ? 1.0f : 0.0f, m_shoreWaterY, m_shoreTime);
+    ubo.shoreMask = Vec4(m_shoreMask.x, m_shoreMask.y, m_shoreMask.z, static_cast<float>(m_shoreSwashMode));
+    ubo.shoreWaterColor = Vec4(m_shoreWaterColor, std::max(m_shoreClarity, 0.1f));
+    for (uint32_t i = 0; i < kShoreLiquids; ++i) ubo.shoreLiquids[i] = m_shoreLiquids[i];
     ubo.snowIntensity = m_snowIntensity;
     ubo.temperatureC = m_temperatureC;
     ubo.ambientSky = Vec4(m_env.ambientSkyColor, 0.0f);

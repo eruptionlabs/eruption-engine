@@ -60,8 +60,22 @@ void Engine::syncLiquidMenuFromMap(const LoadedMap* map) {
             e.level = lq.level;
             e.centerX = lq.centerX;
             e.centerZ = lq.centerZ;
+            e.shore = lq.shore >= 0 ? lq.shore : (lq.kind == 1 ? 1 : 0);
             // offsetX/Z/Y e rotationDeg ficam em 0: sao nudge de sessao, nao
             // fazem sentido persistir entre mapas diferentes.
+            m_waterMenu.liquids.push_back(e);
+        }
+        // O plano de agua do mapa nao esta' em map->liquids (vem do terreno);
+        // entra no fim da lista (a ordem 1:1 com map->liquids continua valendo
+        // para os indices acima) para a beira dele ser editada como a das lavas.
+        bool temAgua = false;
+        for (const auto& e : m_waterMenu.liquids) temAgua |= e.kind == 0;
+        if (!temAgua && m_water.hasWater()) {
+            WaterDebugMenu::LiquidEntry e;
+            e.name = "Water (map plane)";
+            e.kind = 0;
+            e.level = m_waterMenu.config.waterLevel;
+            e.shore = m_waterMenu.config.shoreSwash ? (m_waterMenu.config.shoreSwashFoam ? 2 : 1) : 0;
             m_waterMenu.liquids.push_back(e);
         }
     }
@@ -73,7 +87,9 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
     m_water.clearLavaMesh();
     m_lavaLiquids.clear();
     m_lavaSources.clear();
-    if (!map) return;
+    m_shoreLavaSrc = WaterMesh{};
+    m_shoreLavaCounts.clear();
+    if (!map) { rebuildShoreMask(); return; }
 
     // Todas as lavas do mapa numa malha só, uma faixa de índices por lava
     // (antes só a primeira era desenhada).
@@ -197,6 +213,11 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
                               level, centerX, centerZ, lq.radius);
         }
     if (!m_lavaLiquids.empty()) m_water.setLavaMesh(lmesh, surfaceIndexCounts);
+    // A beira de cada lava no chao (subindo o terreno, borda incandescente)
+    // usa a mesma grade da agua: remonta com as lavas novas.
+    m_shoreLavaSrc = std::move(lmesh);
+    m_shoreLavaCounts = std::move(surfaceIndexCounts);
+    rebuildShoreMask();
 }
 
 // Lava subindo durante o jogo: muda só o nível do líquido do mapa. A malha

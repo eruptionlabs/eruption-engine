@@ -185,12 +185,19 @@ struct PbrWetness {
     float film;       // 0..1 how much film this pixel actually carries
 };
 
-// BEIRA D'AGUA: a onda sobe e desce ate' `runup` acima do nivel; a faixa
-// que ela cobre fica encharcada e seca em ~tau s depois que a agua recua.
-// Sem estado: pela fase da onda sabe-se ha' quanto tempo a agua saiu de cada
-// altura. MASCARA: a frente da onda e' recortada por ruido, e acima da linha
-// da agua so' molham as manchas (ruido + cavidade do material): o ponto alto
-// e exposto seca primeiro, a depressao segura a agua. waterY < -1e8 = sem agua.
+// BEIRA D'AGUA: a onda avanca e recua pela praia; a faixa que ela cobre
+// fica encharcada e seca em ~tau s depois que a agua recua. Sem estado: pela
+// fase da onda sabe-se ha' quanto tempo a agua saiu de cada ponto. MASCARA: a
+// frente e' recortada por ruido, e fora d'agua so' molham as manchas (ruido +
+// cavidade do material): o ponto alto seca primeiro, a depressao segura a
+// agua. waterY < -1e8 = sem agua.
+//
+// ALCANCE PELA INCLINACAO: a onda era medida em ALTURA (ate' 5 u acima do
+// nivel). Na praia rasa 5 u de altura sao dezenas de u de chao - a agua ia
+// ate' o fim da grade da beira e era cortada ali; no barranco subia 5 u e
+// andava quase nada. Agora o alcance e' HORIZONTAL e depende da inclinacao
+// media ate' a agua (altura / distancia, a distancia vem da grade da beira:
+// beira = 1 - d / 24): praia rasa ~16 u, barranco ~3 u, gradiente no meio.
 float shoreHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float shoreNoise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
@@ -198,33 +205,221 @@ float shoreNoise(vec2 p) {
     return mix(mix(shoreHash(i), shoreHash(i + vec2(1, 0)), f.x),
                mix(shoreHash(i + vec2(0, 1)), shoreHash(i + vec2(1, 1)), f.x), f.y);
 }
-float shoreWetness(vec3 wp, float waterY, float t, float cavity) {
-    if (waterY < -1.0e8) return 0.0;
-    const float runup = 5.0;   // u acima do nivel que a onda alcanca (1 celula = 5 u)
-    const float omega = 0.9;   // rad/s (onda a cada ~7 s)
-    const float tau = 4.5;     // s para secar
-    float y = wp.y - waterY;
-    if (y < -0.5 || y > runup + 3.0) return 0.0;
-    // Frente recortada: a onda chega mais longe em umas linguas que em outras.
+const float kShoreGridReach = 24.0; // u em que a grade da beira chega a 0 (Engine::buildShoreMask)
+// Onda: periodo medio de 10 s, fase da costa andando 1 volta a cada ~490 u
+// (kShoreOmega, kShoreFase) e a frente em lobos por celula - tudo em
+// common/shore_waves.glsl, o mesmo arquivo que o liquid.frag inclui. O tempo
+// da lamina da' a volta em 10000 s (Render.cpp, multiplo do periodo).
+#include "common/shore_waves.glsl"
+// x = distancia horizontal ate' a agua com ruido na frente, y = alcance da
+// onda nesse ponto (u), z = distancia sem o ruido (para achar o pe' do
+// lobo, shoreOndaChao). beira = valor da grade (1 na agua visivel).
+vec3 shoreReach(vec3 wp, float y, float beira) {
+    float dGrade = (1.0 - clamp(beira, 0.0, 1.0)) * kShoreGridReach;
+    // Perto da agua a distancia sai da altura do proprio pixel (praia de
+    // ~1:8): a grade tem celulas de 2 u marcadas como agua ou nao, e a frente
+    // da lamina seguia o contorno das celulas, em escada. A 6 u da agua volta
+    // 'a grade, que sabe da distancia de verdade.
+    float d = mix(max(y, 0.0) * 8.0, dGrade, smoothstep(2.0, 6.0, dGrade));
+    float inclin = (max(y, 0.0) + 0.2) / (d + 2.0);           // tangente media ate' a agua
+    float alcance = mix(16.0, 3.0, smoothstep(0.05, 0.7, inclin));
     float n1 = shoreNoise(wp.xz * 0.09) * 0.65 + shoreNoise(wp.xz * 0.31) * 0.35;
-    float yr = y - (n1 - 0.5) * 2.5;
-    float ph = omega * t + dot(wp.xz, vec2(0.031, 0.023));
-    float rel = clamp(yr / runup, 0.0, 1.0);
-    // A onda (0..runup) cobre esta altura quando sin(ph) >= 2*rel - 1.
-    float s0 = asin(clamp(2.0 * rel - 1.0, -1.0, 1.0));
-    float since = mod(ph - (3.14159265 - s0), 6.2831853); // radianos desde que a agua saiu
-    bool covered = sin(ph) >= 2.0 * rel - 1.0;
+    return vec3(d + (n1 - 0.5) * 0.4 * alcance, alcance, d);
+}
+// A onda deste ponto de chao, uma vez por pixel: shoreWetness e shoreSwash
+// pedem a mesma (mesmo wp, mesmo tempo) e os 4 lobos custam o dobro se
+// contados duas vezes.
+ShoreOnda g_shoreOnda;
+vec4 g_shoreOndaChave = vec4(1.0e30);
+ShoreOnda shoreOndaChao(vec3 wp, float t, vec3 r, vec2 fora) {
+    vec4 chave = vec4(wp, t);
+    if (chave != g_shoreOndaChave) {
+        g_shoreOndaChave = chave;
+        g_shoreOnda = shoreOndaEm(wp.xz - fora * r.z, t, max(r.x, 0.0) / r.y, vec2(-fora.y, fora.x));
+    }
+    return g_shoreOnda;
+}
+float shoreWetness(vec3 wp, float waterY, float t, float cavity, float beira, vec2 fora) {
+    if (waterY < -1.0e8) return 0.0;
+    // s para secar. Era 4,5 (1,5 a 6 s com a mascara): com periodo de ~7 s a
+    // areia ja' estava seca quando a lamina recuava e nao se via a areia
+    // molhada/brilhante atras dela (A/B com ERUPTION_TEST_PBR_DEBUG=256 igual).
+    const float tau = 9.0;
+    float y = wp.y - waterY;
+    if (y < -0.5 || y > 14.0) return 0.0;
+    vec3 r = shoreReach(wp, y, beira);
+    float rel = clamp(r.x / r.y, 0.0, 1.0);
+    // Tempo desde que a agua saiu: o menor entre os lobos que chegam aqui
+    // (shoreOndaEm). Coberto = 0.
+    float since = shoreOndaChao(wp, t, r, fora).seca;
     // Mascara de retencao: depressao (cavidade) e manchas finas seguram a agua.
     float n2 = shoreNoise(wp.xz * 0.6 + 17.0);
     float hold = clamp(0.55 * clamp(cavity, 0.0, 1.0) + 0.6 * n2 - 0.1, 0.0, 1.0);
     // Seca mais rapido onde segura menos (topo exposto) - 1,5 a 6 s.
     float tauM = tau * mix(0.33, 1.35, hold);
-    float wet = covered ? 1.0 : exp(-(since / omega) / tauM);
-    // Faixa de areia sempre umida rente 'a agua, so' nas manchas que seguram.
-    wet = max(wet, 0.4 * hold * (1.0 - smoothstep(0.0, runup, yr)));
+    float wet = exp(-since / tauM);
+    wet = max(wet, 0.4 * hold * (1.0 - smoothstep(0.0, r.y, r.x)));
     // Fora do alcance da onda a mascara corta (sem faixa uniforme).
-    wet *= mix(hold, 1.0, 1.0 - smoothstep(0.2, 0.8, rel)) ;
-    return wet * (1.0 - smoothstep(runup + 0.5, runup + 3.0, y));
+    wet *= mix(hold, 1.0, 1.0 - smoothstep(0.2, 0.8, rel));
+    // A faixa que a onda varre nunca seca de todo entre uma onda e outra
+    // (areia encharcada, escura e lisa). Depois da mascara: antes dela o piso
+    // era multiplicado pelo hold e a areia molhada lia ~0,3 (quase seca).
+    wet = max(wet, 0.8 * (1.0 - smoothstep(0.6, 1.0, rel)));
+    return wet * (1.0 - smoothstep(r.y + 1.0, r.y + 5.0, r.x));
+}
+
+// LAVA NO CHAO (beira de um plano de lava, mesma grade da agua): x = coberto
+// pela lava que sobe (crosta escura com fendas), y = borda incandescente na
+// linha de contato, z = chao chamuscado acima dela.
+// Medido na VERTICAL (altura acima do nivel), nao na horizontal como a onda:
+// a lava fica em crateras de rocha ingreme, e a distancia horizontal da grade
+// espalhava a borda por pedras inteiras (manchas laranja chapadas). A grade so'
+// diz que ha' lava perto. Lava e' viscosa: sobe ate' ~1,2 u, devagar (~25 s),
+// e nunca recua abaixo do nivel. Sem `invade` fica so' o contato.
+vec3 lavaShore(vec3 wp, float lavaY, float t, float beira, bool invade) {
+    if (lavaY < -1.0e8) return vec3(0.0);
+    float y = wp.y - lavaY;
+    if (y < -2.0 || y > 8.0) return vec3(0.0);
+    float ph = 0.25 * t + dot(wp.xz, vec2(0.017, 0.013)) + shoreNoise(wp.xz * 0.05) * 3.0;
+    float sobe = invade ? 1.2 * (0.5 + 0.5 * sin(ph)) * (0.6 + 0.4 * shoreNoise(wp.xz * 0.21)) : 0.0;
+    float prof = sobe - y;                              // > 0: debaixo da lava
+    float cobre = smoothstep(-0.12, 0.12, prof);
+    float borda = exp(-abs(prof) * 5.0);
+    float queimado = 1.0 - smoothstep(0.0, 4.5 + 2.0 * shoreNoise(wp.xz * 0.3), -prof);
+    return vec3(cobre, borda, queimado) * smoothstep(0.0, 0.2, beira);
+}
+vec3 lavaShoreAlbedo(vec3 albedo, vec3 lv) {
+    vec3 a = mix(albedo, albedo * vec3(0.30, 0.26, 0.24), 0.85 * lv.z); // chamuscado
+    return mix(a, vec3(0.040, 0.032, 0.028), lv.x);                     // crosta
+}
+// Brilho proprio (linear, x brilho do liquido): fendas na crosta que sobe,
+// a borda de contato e um calor fraco no chamuscado.
+vec3 lavaShoreGlow(vec3 lv, vec3 wp, float t) {
+    float n = shoreNoise(wp.xz * 0.8 + vec2(t * 0.04, -t * 0.03)) * 0.6 + shoreNoise(wp.xz * 2.3) * 0.4;
+    float fenda = smoothstep(0.62, 0.78, n);
+    float e = lv.y * 1.5 + lv.x * (0.03 + 0.9 * fenda) + lv.z * lv.z * 0.04;
+    return vec3(1.0, 0.30, 0.05) * e;
+}
+
+// Areia molhada pela onda escurece bem mais que o pbrWetSurface da chuva
+// (~15% na areia do mapa, que some no ruido da textura): areia encharcada
+// reflete cerca de metade da luz difusa da seca. So' no chao virado pra cima.
+vec3 shoreWetAlbedo(vec3 albedo, float molha, float ny) {
+    return albedo * mix(1.0, 0.55, clamp(molha, 0.0, 1.0) * smoothstep(0.35, 0.8, ny));
+}
+
+// LAMINA DA ONDA no chao (mesma onda de shoreWetness). A superficie da agua
+// e' um plano no nivel do mar, entao a onda subindo a praia nao aparecia.
+// x = cobertura (borda nitida: o degrau da agua entrando na areia), y =
+// altura de agua equivalente (cor/absorcao), z = espuma da frente (so' com
+// comEspuma): renda que sobe na frente da lamina e, no recuo, fica em fios
+// que somem.
+// REPUXO: quanto (u de profundidade) a borda do mar desce abaixo do nivel
+// com a onda recuada - 0 com a onda no alto, 0,3 u no fundo do recuo. O
+// plano d'agua e' fixo; sem isso so' a lamina na areia ia e voltava e o mar
+// nunca recuava de verdade. O liquid.frag da' o mesmo valor (shoreRecuoDe
+// com a mesma onda, common/shore_waves.glsl): a agua fica transparente nessa
+// faixa e mostra a areia molhada.
+
+// fora = direcao (XZ) da agua para a terra ali (gradiente da grade da beira).
+vec4 shoreSwash(vec3 wp, float waterY, float t, float ny, bool comEspuma, float beira, vec2 fora) {
+    if (waterY < -1.0e8 || ny < 0.35) return vec4(0.0);
+    float y = wp.y - waterY;
+    // Abaixo do nivel a lamina continua: o fundo visto pela agua parada
+    // recebe a mesma agua a mais (a onda acima do plano). Sem isso o chao
+    // sob a agua voltava sem tom e a linha d'agua virava uma faixa.
+    if (y < -6.0 || y > 14.0) return vec4(0.0);
+    vec3 r = shoreReach(wp, y, beira);
+    ShoreOnda ond = shoreOndaChao(wp, t, r, fora);
+    float frente = r.y * ond.e1;                  // u de chao que a onda cobre agora (lobo maior)
+    float prof = frente - r.x;                    // > 0: debaixo da lamina (u horizontais)
+    float plano = smoothstep(0.35, 0.8, ny);
+    // Debaixo do plano a cor do fundo e' do shader da agua (absorcao pela
+    // profundidade). A lamina so' continua 1,2 u para baixo, apagando em
+    // cor, e so' onde a onda esta' agora: antes havia um piso fixo de agua
+    // sob o plano e o fundo inteiro ficava claro ate' o fim da grade da beira
+    // (em blocos), parado, mesmo com a espuma recuada.
+    // Inteira enquanto a agua ainda e' transparente (0..0,35 u, liquid.frag
+    // g_dioramaAlpha), e so' some depois, ja' coberta: apagando junto com a
+    // agua sobrava no meio areia molhada sem cor (~105 de 255 entre o mar a
+    // ~140 e a lamina, medido num mapa de praia).
+    // Com o repuxo a agua so' fica opaca a recuo + 0,35 u; a lamina segue
+    // inteira ate' la' e some logo depois.
+    float recuo = shoreRecuoDe(ond.e1);
+    float raso = mix(1.0, 1.0 - smoothstep(recuo + 0.3, recuo + 0.45, -y), step(y, 0.0));
+    // Debaixo do plano: coberto onde ainda ha' mar (alem do repuxo) ou onde
+    // a lamina passa; entre os dois, a areia molhada exposta pelo recuo.
+    float cobre = max(smoothstep(0.0, 0.4, prof), smoothstep(recuo, recuo + 0.08, -y)) * plano * raso;
+    // Agua aerada logo atras da frente (o claro da lamina): anda com a
+    // espuma e some em cor para dentro, em direcao 'a agua (2 u ou 30% do
+    // alcance). Antes o claro era fixo em toda a area coberta - e debaixo
+    // do plano ela esta' sempre coberta: ficava uma faixa clara parada sob a
+    // agua que nao acompanhava a espuma no recuo.
+    // Subindo a lamina e' um vagalhao cheio de bolha (claro); descendo as
+    // bolhas estouram e ela vira agua lisa e transparente, com o claro so'
+    // perto do alto. Claro o tempo todo, os lobos grandes liam como placas.
+    float bolha = ond.sobe1 > 0.5 ? 1.0 : 0.3 + 0.7 * smoothstep(0.6, 1.0, ond.ex1);
+    float aerada = step(0.0, prof) * exp(-prof / max(1.5, 0.2 * r.y)) * bolha * plano * raso;
+    // Altura equivalente: cresce para dentro da lamina (0,3 por u, ate' 3) e
+    // afina praia acima (a lamina perde agua subindo; 35% a 1 u do nivel).
+    // Na linha d'agua fica a mesma (o tom tem de bater com o do mar); com os
+    // lobos grandes a lamina inteira saia no tom cheio, uma placa clara.
+    float altura = clamp(prof * 0.3, 0.0, 3.0) * mix(1.0, 0.35, smoothstep(0.1, 1.0, y));
+    float espuma = 0.0;
+    if (comEspuma) {
+        // Renda PRESA NA FRENTE: o desenho anda com a agua, so' para a terra
+        // e de volta (desloca-se `frente` u ao longo de `fora`). Antes a torcao
+        // do dominio girava num circulo (renda se retorcendo no lugar, 18 s por
+        // volta) e, antes disso, andava de lado pela praia - as duas sem
+        // relacao com a onda. Cada onda tem um desenho novo: a semente e' a da
+        // onda do lobo maior e troca com ele no fundo do recuo (espuma ja'
+        // debaixo d'agua, oculta) ou na cuspide, debaixo da linha de encontro.
+        vec2 q = (wp.xz - fora * frente) * 0.5 + ond.semente;
+        q += 1.6 * vec2(shoreNoise(q * 0.7), shoreNoise(q * 0.7 + 9.0));
+        float renda = shoreNoise(q) * 0.6 + shoreNoise(q * 2.3) * 0.4;
+        float fios = smoothstep(0.12, 0.0, abs(renda - 0.5));
+        float massa = smoothstep(0.45, 0.7, renda);
+        bool sobe = ond.sobe1 > 0.5;
+        // A espuma anda SEMPRE com a frente: subindo, faixa cheia de 1,5 u;
+        // descendo, mais fina (0,9 u), so' fios e alguma massa, e vai
+        // rareando conforme a agua escoa. Antes, no recuo, ela ficava largada
+        // na areia (fios parados acima da frente) e nao acompanhava a agua.
+        float o = ond.e1;
+        float faixa = step(0.0, prof) * (1.0 - smoothstep(0.0, sobe ? 1.5 : 0.9, prof));
+        float corpo = sobe ? max(fios, massa * 0.8) : max(fios * 0.85, massa * 0.35);
+        espuma = corpo * faixa * (sobe ? 1.0 : mix(0.2, 0.75, o)) * plano;
+        // Encontro de dois lobos (cuspide): a descida de um bate na subida
+        // do vizinho e sobe uma linha de espuma, da frente para o mar, mais
+        // forte perto da frente. Mesma renda (so' vai e volta com a agua).
+        float encontro = shoreEncontro(ond) * step(0.0, prof) * exp(-prof / 5.0);
+        espuma = max(espuma, encontro * smoothstep(0.25, 0.6, renda + 0.15) * plano);
+        // So' acima do plano: com a onda recuada a frente fica na linha d'agua
+        // e a faixa de espuma logo atras dela caia no fundo, debaixo d'agua
+        // (manchas brancas paradas no raso, vistas com ERUPTION_TEST_PBR_DEBUG=512).
+        espuma *= smoothstep(-0.3, 0.0, y);
+    }
+    return vec4(cobre, cobre * altura, clamp(espuma, 0.0, 1.0), aerada);
+}
+
+// Chao debaixo da lamina: a mesma absorcao do corpo d'agua (liquid.frag,
+// shadeDiorama: o vermelho some primeiro e a cor funda entra no lugar), com a
+// altura da lamina como caminho. Era um escurecimento de 28% com um pouco da
+// cor rasa: a areia ficava so' transparente, sem a cor da agua, e o fundo
+// visto pelo plano d'agua tinha outro tom (a divisa aparecia). O caminho
+// conta o raio inclinado (1,6x a altura). water: rgb = cor funda, w = clareza.
+// Por cima, o ceu que a agua reflete (o azul claro que se ve na agua vem do
+// reflexo, nao da absorcao: a cor funda e' quase preta): forte perto da agua,
+// fraco na frente fina. sky = cor do horizonte do ceu.
+vec3 shoreSwashAlbedo(vec3 albedo, vec4 sw, vec4 water, vec3 sky) {
+    vec3 T = exp(-vec3(1.0, 0.36, 0.22) / max(water.w, 0.1) * sw.y * 1.6);
+    vec3 c = albedo * T + water.rgb * (1.0 - T);
+    vec3 ceu = sky / max(max(sky.r, max(sky.g, sky.b)), 1e-3) * 0.6;
+    // Tom do mar (o ceu refletido) na lamina toda, crescendo com a altura de
+    // agua, e mais na faixa aerada atras da frente: na linha d'agua a lamina
+    // tem de ter o mesmo tom da superficie, senao a divisa vira uma linha.
+    c = mix(c, ceu, max(mix(0.3, 0.55, smoothstep(0.0, 3.0, sw.y)) * step(1e-4, sw.y), 0.4 * sw.w));
+    c = mix(albedo, c, sw.x);
+    return mix(c, vec3(0.85, 0.88, 0.9), 0.85 * sw.z);
 }
 
 // albedoLin : linear-space albedo

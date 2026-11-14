@@ -46,6 +46,9 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     uvec4 tileLights[128];  // (do passe direcional; so' para chegar aos campos abaixo)
     vec4 rainSpots[64];     // chuva local: xy = centro XZ, z = raio
     vec4 rainSpotParams;    // x = quantos, y = 1 com campo de nuvens, z = nivel da agua, w = tempo
+    vec4 shoreMask;         // igual ao directional.frag
+    vec4 shoreWaterColor;
+    vec4 shoreLiquids[8];   // igual ao directional.frag
 } lights;
 
 // PROBES DE IRRADIANCIA (G38): visibilidade do ceu por probe, SH L1 numa
@@ -53,6 +56,43 @@ layout(set = 0, binding = 7) uniform LightingUBO {
 // 1 em ceu aberto e cai embaixo de copa/telhado - o que o SSAO de curto
 // alcance e o AO de textura nao enxergam.
 layout(set = 0, binding = 17) uniform sampler3D probeVis;
+
+// BEIRA D'AGUA (binding 18): 1 sobre agua visivel, cai a 0 longe da margem.
+// Sem ela a onda molhava todo chao na altura da agua (piscina "transbordando").
+layout(set = 0, binding = 18) uniform sampler2D shoreMaskTex;
+vec3 shoreMaskAt(vec3 wp) {
+    // x = proximidade (filtrada); y = QUAL liquido e z = altura da superficie
+    // dele, do texel mais perto e sem filtro (misturar dois indices daria um
+    // terceiro). Grade RGBA16F (Engine::rebuildShoreMask).
+    if (lights.shoreMask.z <= 0.0) return vec3(0.0);
+    vec2 uv = (wp.xz - lights.shoreMask.xy) * lights.shoreMask.z;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec3(0.0);
+    ivec2 sz = textureSize(shoreMaskTex, 0);
+    ivec2 tc = clamp(ivec2(uv * vec2(sz)), ivec2(0), sz - 1);
+    vec4 t = texelFetch(shoreMaskTex, tc, 0);
+    return vec3(textureLod(shoreMaskTex, uv, 0.0).r, clamp(floor(t.g + 0.5), 0.0, 7.0), t.b);
+}
+// 1 onde a onda pode subir, 0 atras de parede: a = maior inclinacao do chao
+// ate' a agua (Engine::rebuildShoreMask). Praia ~0,1; barranco ~0,5; parede
+// de piscina (90 graus) dezenas. A agua nao sobe parede: corta de 35 a 55 graus.
+// Direcao da agua para a terra (XZ): menos o gradiente da proximidade da
+// grade (1 na agua, 0 a 24 u). A espuma da lamina anda ao longo dela.
+vec2 shoreOutward(vec3 wp) {
+    if (lights.shoreMask.z <= 0.0) return vec2(0.0);
+    vec2 uv = (wp.xz - lights.shoreMask.xy) * lights.shoreMask.z;
+    float e = 2.0 * lights.shoreMask.z; // 2 u
+    vec2 g = vec2(textureLod(shoreMaskTex, uv + vec2(e, 0.0), 0.0).r - textureLod(shoreMaskTex, uv - vec2(e, 0.0), 0.0).r,
+                  textureLod(shoreMaskTex, uv + vec2(0.0, e), 0.0).r - textureLod(shoreMaskTex, uv - vec2(0.0, e), 0.0).r);
+    float l = length(g);
+    return l > 1e-5 ? -g / l : vec2(0.0);
+}
+float shoreWallPass(vec3 wp) {
+    if (lights.shoreMask.z <= 0.0) return 1.0;
+    vec2 uv = (wp.xz - lights.shoreMask.xy) * lights.shoreMask.z;
+    return 1.0 - smoothstep(0.7, 1.4, textureLod(shoreMaskTex, uv, 0.0).a);
+}
+// Brilho da lava no chao (beira de lava), somado ao emissivo no fim.
+vec3 g_lavaGlow = vec3(0.0);
 vec3 worldFromDepth(vec2 uv, float d) {
     vec4 ndc = vec4(uv * 2.0 - 1.0, d, 1.0);
     vec4 wp = lights.invViewProj * ndc;
@@ -220,13 +260,35 @@ void main() {
             wetDriveA *= localA;
         }
         // Beira d'agua (espuma/onda): molha e seca sozinha, com ou sem chuva.
-        if (lights.rainSpotParams.z > -1.0e8)
-            wetDriveA = max(wetDriveA, shoreWetness(worldFromDepth(inUV, texture(gbufferDepth, inUV).r), lights.rainSpotParams.z, lights.rainSpotParams.w, pbrA.a));
-        if ((lights.pbrDebugMode & 256u) != 0u) wetDriveA = 0.0; // A/B: sem molhado (bit 256)
+        const vec3 wpA = worldFromDepth(inUV, texture(gbufferDepth, inUV).r);
+        const vec3 beiraGA = shoreMaskAt(wpA);
+        const vec4 liqA = lights.shoreLiquids[int(beiraGA.y)];
+        const bool lavaA = liqA.z > 0.5;
+        const float beiraA = liqA.x > -1.0e8 ? beiraGA.x : 0.0;
+        float molhaBeiraA = 0.0;
+        const vec2 foraA = beiraA > 0.0 && !lavaA ? shoreOutward(wpA) : vec2(0.0); // igual ao directional.frag
+        if (beiraA > 0.0 && !lavaA) {
+            molhaBeiraA = smoothstep(0.0, 0.15, beiraA) * shoreWetness(wpA, liqA.x, lights.rainSpotParams.w, pbrA.a, beiraA, foraA) * shoreWallPass(wpA);
+            wetDriveA = max(wetDriveA, molhaBeiraA);
+        }
+        if ((lights.pbrDebugMode & 256u) != 0u) { wetDriveA = 0.0; molhaBeiraA = 0.0; } // A/B: sem molhado (bit 256)
+        if (abs(pbrA.r - 0.75) < 0.06) molhaBeiraA = 0.0; // sprite nao encharca
         PbrWetness wetA = pbrWetSurface(albedoLinear, pbrA.g, pbrA.b,
                                         abs(pbrA.r - 0.75) < 0.06 ? 0.0 : pbrA.a, N.y,
                                         abs(pbrA.r - 0.75) < 0.06 ? 0.0 : wetDriveA); // sprite nao encharca
-        albedoLinear = wetA.albedo;
+        albedoLinear = shoreWetAlbedo(wetA.albedo, molhaBeiraA, N.y);
+        // Lamina da onda (igual ao directional.frag: as duas passadas concordam).
+        if (abs(pbrA.r - 0.75) >= 0.06 && (lights.pbrDebugMode & 256u) == 0u && lavaA && beiraA > 0.0) {
+            vec3 lvA = lavaShore(wpA, beiraGA.z, lights.rainSpotParams.w, beiraA, liqA.y > 0.5) * smoothstep(0.0, 0.15, beiraA);
+            albedoLinear = lavaShoreAlbedo(albedoLinear, lvA);
+            // 0,25: com o brilho cheio do liquido (emissivo ~4) a borda e as
+            // fendas estouravam o bloom e lavavam a tela inteira.
+            g_lavaGlow = lavaShoreGlow(lvA, wpA, lights.rainSpotParams.w) * max(liqA.w, 0.5) * 0.25;
+        }
+        if (abs(pbrA.r - 0.75) >= 0.06 && (lights.pbrDebugMode & 256u) == 0u && !lavaA && liqA.y > 0.5 && beiraA > 0.0) {
+            vec4 swA = shoreSwash(wpA, liqA.x, lights.rainSpotParams.w, N.y, liqA.y > 1.5, beiraA, foraA) * smoothstep(0.0, 0.15, beiraA) * shoreWallPass(wpA);
+            if (swA.x + swA.z > 0.0) albedoLinear = shoreSwashAlbedo(albedoLinear, swA, lights.shoreWaterColor, lights.skyHorizon.rgb);
+        }
     }
     // FILL LIGHT (fake 3D do diorama): luz de direção FIXA, sem sombra e sem
     // dependência do sol. Sem ela, um pixel na sombra recebe só ambiente
@@ -263,7 +325,7 @@ void main() {
     vec3 finalAmbient = albedoLinear * ambientLinear;
 
     vec4 emissive = texture(gbufferEmissive, inUV);
-    vec3 emissiveLit = srgbToLinear(emissive.rgb) * emissiveIntensity;
+    vec3 emissiveLit = srgbToLinear(emissive.rgb) * emissiveIntensity + g_lavaGlow;
 
     // Keep the lit image in linear space; post_composite.frag applies the final gamma.
     vec3 lit = clamp(finalAmbient + emissiveLit, 0.0, 100.0);

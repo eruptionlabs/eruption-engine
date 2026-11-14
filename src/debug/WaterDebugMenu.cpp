@@ -115,6 +115,8 @@ void WaterDebugMenu::loadConfig() {
         if (j.contains("foam")) {
             const json& f = j["foam"];
             config.enableFoam          = f.value("enable", config.enableFoam);
+            config.shoreSwash          = f.value("shoreSwash", config.shoreSwash);
+            config.shoreSwashFoam      = f.value("shoreSwashFoam", config.shoreSwashFoam);
             config.foamEdgeDepth       = f.value("edgeDepth", config.foamEdgeDepth);
             config.contactFoamStrength = f.value("contactStrength", config.contactFoamStrength);
             config.contactFoamDecay    = f.value("decay", config.contactFoamDecay);
@@ -202,6 +204,8 @@ void WaterDebugMenu::saveConfig() {
 
     j["foam"] = {
         {"enable", config.enableFoam},
+        {"shoreSwash", config.shoreSwash},
+        {"shoreSwashFoam", config.shoreSwashFoam},
         {"edgeDepth", config.foamEdgeDepth},
         {"contactStrength", config.contactFoamStrength},
         {"decay", config.contactFoamDecay},
@@ -280,6 +284,22 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
             config.liquidKind = sel.kind;
             settingsChanged = true;
             saveConfig();
+        }
+        // Beira no chao: propriedade DESTE plano de liquido. Agua: a lamina
+        // subindo a praia (o plano de agua do mapa e' um so', config.shoreSwash);
+        // lava: a lava subindo o terreno. O contato (espuma / borda incandescente)
+        // existe nos dois modos.
+        {
+            const char* shoreNames[3] = { "Contact only", "Invades terrain", "Invades + front foam" };
+            int mode = sel.kind == 0 ? (config.shoreSwash ? (config.shoreSwashFoam ? 2 : 1) : 0) : sel.shore;
+            if (::eruption::fx::Combo("Shore", &mode, shoreNames, sel.kind == 0 ? 3 : 2)) {
+                sel.shore = mode;
+                if (sel.kind == 0) {
+                    config.shoreSwash = mode > 0;
+                    config.shoreSwashFoam = mode == 2;
+                }
+                settingsChanged = true;
+            }
         }
         // "Surface Level" so' faz sentido pra Water: ele escreve em
         // config.waterLevel, que e' o Y do PLANO DE AGUA DO MAPA INTEIRO

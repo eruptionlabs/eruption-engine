@@ -30,6 +30,9 @@ public:
         float offsetZ = 0.0f;
         float offsetY = 0.0f;
         float rotationDeg = 0.0f;
+        // Beira no chao (MapLiquid::shore, ja' resolvido o padrao do tipo):
+        // 0 = so' contato, 1 = invade o terreno, 2 = invade com espuma.
+        int shore = 0;
     };
 
     WaterRenderer::WaterSettings config;

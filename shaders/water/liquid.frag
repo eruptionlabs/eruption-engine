@@ -15,12 +15,13 @@ layout(location = 0) out vec4 fragColor;
 
 #define ERUPTION_SLOT_DIRECT // refração, profundidade e espuma são render targets
 #include "common/slot_textures.glsl"
+#include "common/shore_waves.glsl"
 
 layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 baseColorDeep;
     vec4 baseColorShallow;
     vec4 waterParams;         // x=transparency, y=refractionStrength, z=reflectivity, w=roughness
-    vec4 normalParams;        // x=scale, y=waveSpeed, z=strength, w=unused
+    vec4 normalParams;        // x=scale, y=waveSpeed, z=strength, w=lamina da praia (1/0)
     vec4 waveParams;          // x=amplitude, y=frequency, z=speed, w=unused
     vec4 foamParams;          // x=edgeDepth, y=contactStrength, z=enable, w=unused
     vec4 skyTop;
@@ -32,9 +33,9 @@ layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 waterLevelAndPlanes; // x=waterLevel, y=nearPlane, z=farPlane, w=time
     vec4 screenSize;          // x=viewportW, y=viewportH, z=cameraPitch, w=unused
     vec4 waveDirAmp[3];
-    vec4 waveSpeedSteep[3];
+    vec4 waveSpeedSteep[3];   // x=speed, y=steepness; zw = nuvens do ceu: [0] cobertura, escala; [1] velocidade, maciez; [2] tempo do ceu
     ivec4 textureSlots;       // x=screenTex, y=depthTex, z=foamMask, w=waterTex
-    ivec4 skyboxSlot;         // x=skyboxTex, yzw=unused
+    ivec4 skyboxSlot;         // x=skyboxTex, y=forca das nuvens no reflexo (milesimos), z=nuvens do ceu ligadas, w=unused
     mat4 invViewProj;
     vec4 extraParams;         // x=absorptionCoeff, y=maxPxScale, z=enableCaustics, w=unused
     vec4 foamSurfaceParams;   // x=foamScale, y=foamSpeed, z=foamRoughness, w=enableSurfaceFoam
@@ -45,7 +46,7 @@ layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 styleParams;         // x=diorama (0/1), y=forca do reflexo, z=brilhos, w=aneis de chuva
     vec4 styleParams2;        // x=espuma de margem, y=nivel do SSPR, z=distorcao do reflexo, w=clareza
     vec4 styleDeep;           // xyz=cor funda, w=inclinacao das ondas
-    ivec4 styleSlots;         // x=slot do reflexo planar (-1 = sem)
+    ivec4 styleSlots;         // x=slot do reflexo planar (-1 = sem), y=slot do reflexo espelhado (-1 = sem)
 } ubo;
 
 layout(push_constant) uniform Push {
@@ -313,6 +314,53 @@ vec4 marchReflection(vec3 origin, vec3 ssrDir, int depthTexSlot, int screenTexSl
 
 // Ceu refletido: a imagem do ceu desta camera (ceu-para-textura) onde a
 // direcao cai dentro dela, senao o degrade do ciclo do dia.
+// NUVENS DO CEU NO REFLEXO, calculadas aqui com o mesmo ruido e os mesmos
+// parametros da cupula (skybox.frag, bloco Clouds; o clima muda cobertura e
+// velocidade em Render.cpp e o WaterRenderer repassa). A cupula apaga as
+// nuvens perto do horizonte (horizonFade, ate' ~17 graus com "cloudy"), e com
+// a camera baixa a agua reflete justamente essa faixa: nenhuma nuvem chegava
+// ao reflexo. A textura do ceu tambem so' cobre o que a camera ve. Aqui as
+// nuvens sao uma camada plana a 300 u: cada ponto da agua reflete o ponto da
+// camada onde o raio refletido a cruza (perspectiva certa). Pela direcao
+// apenas, com a camera baixa o lago inteiro via o mesmo pedaco de ceu e o
+// efeito virava um clareado uniforme. x = mascara da nuvem, y = sombreado
+// (1 no topo iluminado, 0,25 na base).
+float nuvemHash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+float nuvemRuido(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    float a = nuvemHash(i);
+    float b = nuvemHash(i + vec2(1.0, 0.0));
+    float c = nuvemHash(i + vec2(0.0, 1.0));
+    float d = nuvemHash(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+float nuvemFbm(vec2 p) {
+    float v = 0.0, amp = 0.5;
+    for (int i = 0; i < 4; i++) { v += amp * nuvemRuido(p); p *= 2.0; amp *= 0.5; }
+    return v;
+}
+vec2 skyCloudsReflected(vec3 R, vec3 wp) {
+    if (ubo.skyboxSlot.z == 0) return vec2(0.0);
+    float cobertura = ubo.waveSpeedSteep[0].z, escala = ubo.waveSpeedSteep[0].w;
+    float veloc = ubo.waveSpeedSteep[1].z, macio = ubo.waveSpeedSteep[1].w;
+    float t = ubo.waveSpeedSteep[2].z;
+    const float kAltura = 300.0;
+    vec2 xz = wp.xz + R.xz * (kAltura / max(R.y, 0.08));
+    vec2 uv = xz * 0.004 + vec2(t * veloc, t * veloc * 0.25);
+    float n = nuvemFbm(uv * escala);
+    float limiar = mix(0.62, 0.40, cobertura);
+    float largura = mix(0.02, 0.12, macio);
+    float mascara = pow(smoothstep(limiar - largura, limiar + largura, n), 0.7);
+    float sombra = 1.0 - smoothstep(limiar - largura, limiar + largura + 0.18, n) * 0.75;
+    return vec2(mascara, sombra);
+}
+
 vec3 skyReflection(vec3 reflectDir, float roughness, float storm, float rainIntensity, float moonOcc, int skyboxTexSlot) {
     float skyT = clamp(reflectDir.y * 0.5 + 0.5, 0.0, 1.0);
     vec3 skyGradient = mix(ubo.skyHorizon.rgb, ubo.skyTop.rgb, skyT);
@@ -323,9 +371,11 @@ vec3 skyReflection(vec3 reflectDir, float roughness, float storm, float rainInte
 
     vec3 reflectionColor = skyGradient;
     if (skyboxTexSlot >= 0) {
-        vec4 skyClip = pc.viewProj * vec4(reflectDir, 0.0);
+        // A textura do ceu e' renderizada pela camera espelhada (y -> -y):
+        // o reflexo para cima cai na tela dela (ProceduralSkyBackend::renderToTexture).
+        vec4 skyClip = pc.viewProj * vec4(reflectDir.x, -reflectDir.y, reflectDir.z, 0.0);
         vec2 skyUV = skyClip.xy / skyClip.w * 0.5 + 0.5;
-        if (all(greaterThanEqual(skyUV, vec2(0.0))) && all(lessThanEqual(skyUV, vec2(1.0)))) {
+        if (skyClip.w > 0.0 && all(greaterThanEqual(skyUV, vec2(0.0))) && all(lessThanEqual(skyUV, vec2(1.0)))) {
             vec3 skyTexColor = slotTexture(skyboxTexSlot, skyUV).rgb;
             // Rough surfaces blur reflection back to gradient
             reflectionColor = mix(skyTexColor, skyGradient, roughness);
@@ -355,7 +405,19 @@ vec3 dioHash32(vec2 p) {
 // abaixo de ~4 pixels: o que sumiu da inclinacao volta como rugosidade (z),
 // entao ao longe a agua fica lisa e o brilho do sol so' alarga, em vez de
 // virar chuvisco de pontos. Retorna (dh/dx, dh/dz, variancia perdida).
-vec3 dioramaWaves(vec2 p, float t, float footprint) {
+// Direcao agua -> terra mais perto no ponto (grade do Engine::rebuildShoreMask,
+// slot em skyboxSlot.w, origem em skyTop.w/skyHorizon.w, 1/lado em
+// screenSize.w), ou zero.
+vec2 shoreFlow(vec2 p) {
+    if (ubo.skyboxSlot.w < 0 || ubo.screenSize.w <= 0.0) return vec2(0.0);
+    vec2 uv = (p - vec2(ubo.skyTop.w, ubo.skyHorizon.w)) * ubo.screenSize.w;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec2(0.0);
+    return slotTextureLod(ubo.skyboxSlot.w, uv, 0.0).rg;
+}
+
+// tTrem: o tempo que faz os trens andarem pelo vento. No flow map (shoreFlow)
+// vai 0 - o desenho fica parado e quem anda e' o deslocamento para a terra.
+vec3 dioramaWaves(vec2 p, float t, float footprint, float tTrem) {
     float scale = max(ubo.normalParams.x, 1e-3);
     float slope = ubo.normalParams.z * ubo.styleDeep.w * 2.6;
     float speed = ubo.waveParams.z;
@@ -376,7 +438,7 @@ vec3 dioramaWaves(vec2 p, float t, float footprint) {
         float ang = baseAng + (fract(fi * 0.618034) - 0.5) * 2.6;
         vec2 d = vec2(cos(ang), sin(ang));
         float omega = speed * sqrt(9.8 * k) * 0.9; // dispersao de agua funda
-        float ph = dot(d, p) * k - omega * t + fi * 1.7;
+        float ph = dot(d, p) * k - omega * tTrem + fi * 1.7;
         float dh = exp(sin(ph) - 1.0) * cos(ph);
         float s = slope * amp;
         float keep = smoothstep(1.5, 4.0, 6.2831853 / (k * footprint));
@@ -452,20 +514,59 @@ float sunSparkle(vec2 p, vec3 n, vec3 V, vec3 L, float t, float footprint) {
 // rente ao chao, rendada por ruido, e faixas que andam para a margem e se
 // desfazem. Vale tambem em volta de tronco, pedra e personagem dentro d'agua:
 // a cena logo atras da superficie fica rasa ali.
-float shoreFoamMask(vec2 p, float depthV, float t, float width) {
+// Onda quebrando (vagalhao que vira a lamina na areia) e o encontro de dois
+// lobos, que continua um pouco mar adentro. Renda parada no chao, semente da
+// onda do lobo maior.
+float shoreBreakFoam(vec2 p, float depthV, ShoreOnda ond) {
+    float d = depthV - shoreRecuoDe(ond.e1);
+    if (d < 0.0 || ond.quebra + ond.e2 <= 0.0) return 0.0;
+    float s = max(ubo.normalParams.x, 1e-3);
+    vec2 semente = ond.semente * 0.77;
+    float lace = (snoise(p * s * 0.9 + semente) * 0.5 + 0.5) * 0.6 + (snoise(p * s * 2.6 - semente.yx) * 0.5 + 0.5) * 0.4;
+    float quebra = clamp(ond.quebra, 0.0, 1.0) * smoothstep(0.2, 0.55, lace + 0.25);
+    float encontro = shoreEncontro(ond) * smoothstep(0.3, 0.6, lace + 0.1) * (1.0 - smoothstep(0.15, 0.6, d));
+    return clamp(max(quebra, encontro * 0.8), 0.0, 1.0);
+}
+// Mesma onda da lamina na areia: os lobos de common/shore_waves.glsl,
+// avaliados no proprio ponto (o pe' do lobo; no chao debaixo d'agua d = 0
+// e o pbr_common.glsl chega no mesmo ponto). Sem isso a espuma do lado da
+// agua andava no seu proprio relogio e o branco na linha d'agua nao
+// acompanhava a espuma da praia. A espuma da linha d'agua aparece com a
+// onda recuada e vai junto com a borda (repuxo, shoreRecuoDe).
+float shoreFoamMask(vec2 p, float depthV, ShoreOnda ond, float width) {
     if (width <= 0.0) return 0.0;
+    depthV -= shoreRecuoDe(ond.e1);
+    if (depthV < 0.0) return 0.0;
+    // 1 com a onda recuada (a espuma esta' na linha d'agua), 0 com ela no
+    // alto da praia (a espuma subiu junto com a lamina).
+    float recuada = 1.0 - smoothstep(0.15, 0.5, ond.e1);
     float x = depthV / width;
     if (x > 2.0) return 0.0;
     float s = max(ubo.normalParams.x, 1e-3);
-    float n1 = snoise(p * s * 0.9 + vec2(t * 0.05, -t * 0.04)) * 0.5 + 0.5;
-    float n2 = snoise(p * s * 2.6 - vec2(t * 0.09, t * 0.07)) * 0.5 + 0.5;
+    // Desenho parado no chao e novo a cada onda (semente da onda do lobo
+    // maior, a mesma da renda na areia): antes o ruido andava 0,05-0,09 u/s
+    // num sentido fixo e a espuma escorria de lado.
+    vec2 semente = ond.semente * 0.77;
+    float n1 = snoise(p * s * 0.9 + semente) * 0.5 + 0.5;
+    float n2 = snoise(p * s * 2.6 - semente.yx) * 0.5 + 0.5;
     float lace = n1 * 0.6 + n2 * 0.4;
     float line = (1.0 - smoothstep(0.05, 0.25 + 0.35 * lace, x)) * smoothstep(0.25, 0.55, lace + 0.2);
-    float bandPh = x * 2.2 + t * 0.35 + lace * 0.8;
-    float band = 1.0 - smoothstep(0.04, 0.16, abs(fract(bandPh) - 0.5));
-    band *= (1.0 - smoothstep(0.4, 1.6, x)) * smoothstep(0.45, 0.7, lace);
-    return clamp(max(line, band * 0.65), 0.0, 1.0);
+    // So' com a crista: a linha branca parada na linha d'agua com a onda
+    // recuada aparecia ANTES da onda (espuma, e a onda chegando depois). Agora
+    // ela estoura no instante em que a crista chega 'a linha d'agua e o lobo
+    // comeca a subir (ond.quebra, shoreCristaEm), e sobe junto com a lamina.
+    line *= clamp(ond.quebra * 2.2, 0.0, 1.0) * (0.4 + 0.6 * recuada);
+    return clamp(max(line, shoreBreakFoam(p, depthV + shoreRecuoDe(ond.e1), ond)), 0.0, 1.0);
 }
+
+// Opacidade da agua de diorama na borda (shadeDiorama): 0 na linha d'agua,
+// 1 a 0,35 u de profundidade (o mesmo trecho em que a lamina do chao some
+// debaixo do plano, pbr_common.glsl shoreSwash: com 1,5 u sobrava uma faixa
+// de areia sem a cor de nenhuma das duas). A malha d'agua e' montada por tile do terreno e
+// o contorno dela e' uma escada; sem refracao (ou com ela fraca) essa escada
+// cortava a beira (lamina, espuma, faixa clara) em blocos. Transparente na
+// borda, quem aparece ali e' o chao com a beira da onda por baixo.
+float g_dioramaAlpha = 1.0;
 
 vec3 shadeDiorama() {
     float time  = ubo.waterLevelAndPlanes.w;
@@ -490,10 +591,82 @@ vec3 shadeDiorama() {
     vec3 floorPos = reconstructWorldPos(suv, sceneDepth);
     float depthV = sceneDepth >= 1.0 ? 1e4 : max(0.0, level - floorPos.y);
     float shoreW = max(ubo.foamParams.x, 0.05) * 6.0 * ubo.styleParams2.x;
-    float edge = smoothstep(0.0, max(shoreW, 0.05) * 0.35, depthV);
+    // Borda do lado da agua: reflexo e brilho entram junto com a opacidade
+    // (g_dioramaAlpha, 0,35 u). Quem faz a transicao para a areia e' a
+    // transparencia + a lamina do chao. Com 2,5 u a agua ja' opaca ficava sem
+    // o ceu refletido perto da borda: uma faixa escura (~105 de 255 contra o
+    // mar a ~140) entre a lamina e o mar.
+    // Onda da praia aqui (lobos + crista chegando), so' no raso: o tempo da
+    // volta em 10000 s como o da lamina (Render.cpp setShoreWater), senao a
+    // onda sorteada de cada lobo nao seria a mesma dos dois lados.
+    ShoreOnda ondaB;
+    ondaB.e1 = 1.0; ondaB.e2 = 0.0; ondaB.sobe1 = 0.0; ondaB.sobe2 = 0.0; ondaB.ex1 = 1.0; ondaB.cuspide = 1.0e4; ondaB.semente = vec2(0.0);
+    ondaB.seca = 0.0; ondaB.crista = 0.0; ondaB.face = 0.0; ondaB.quebra = 0.0;
+    // Com a lamina (normalParams.w) ou com a espuma de contato: lago e
+    // piscina sem nenhuma das duas ficam parados.
+    const bool ondasPraia = ubo.foamParams.z > 0.5 || ubo.normalParams.w > 0.5;
+    // Inclinacao do fundo pela derivada da profundidade na tela, levada ao
+    // mundo pela inversa de [dpx; dpy] (fluxo uniforme). Serve a tres coisas:
+    // a rampa (crista so' sobre fundo em rampa: parede de piscina e fundo
+    // chato nao fazem onda quebrar), e a direcao da costa (a profundidade
+    // cresce para o mar) que da' o eixo das elipses dos lobos.
+    vec2 dDep = vec2(dFdx(depthV), dFdy(depthV));
+    float detF = dpx.x * dpy.y - dpx.y * dpy.x;
+    vec2 gDep = abs(detF) > 1e-8
+        ? vec2(dpy.y * dDep.x - dpx.y * dDep.y, -dpy.x * dDep.x + dpx.x * dDep.y) / detF : vec2(0.0);
+    float rampa = length(gDep);
+    float naPraia = smoothstep(0.02, 0.05, rampa) * (1.0 - smoothstep(0.35, 0.7, rampa));
+    // Terra a partir da agua (o mesmo `fora` da areia) e tangente da costa.
+    vec2 foraA = rampa > 0.01 && depthV < 1.0e3 ? -gDep / rampa : vec2(0.0);
+    vec2 costaA = vec2(-foraA.y, foraA.x);
+    if (ondasPraia && depthV < 2.6) {
+        float tOnda = mod(time, 10000.0);
+        // Perto da linha d'agua (repuxo, espuma de contato) a onda do proprio
+        // ponto, como o fundo debaixo d'agua na areia (d = 0).
+        if (depthV < 0.8) ondaB = shoreOndaEm(vWorldPos.xz, tOnda, -1.0, costaA);
+        // Crista: lobos no pe' do pixel (a linha d'agua para a terra, a ~1:8).
+        shoreCristaEm(ondaB, vWorldPos.xz + foraA * min(8.0 * depthV, 26.0), tOnda, depthV, costaA);
+    }
+    ondaB.crista *= naPraia; ondaB.face *= naPraia; ondaB.quebra *= naPraia;
+    ondaB.e2 *= naPraia; // sem linha de encontro de lobos na parede
+    float recuoBorda = ondasPraia ? shoreRecuoDe(ondaB.e1) : 0.0;
+    float edge = smoothstep(recuoBorda, recuoBorda + 0.35, depthV);
+    // Inclinacao da crista no plano: derivada na tela (fora do if, fluxo
+    // uniforme) levada ao mundo pela inversa de [dpx; dpy]. A crista empina
+    // (0,25 u numa frente de ~1 u) e a face reflete outro pedaco do ceu.
+    float cristaH = ondaB.crista * 0.32;
+    vec2 dCr = vec2(dFdx(cristaH), dFdy(cristaH));
+    vec2 gradCrista = abs(detF) > 1e-8
+        ? vec2(dpy.y * dCr.x - dpx.y * dCr.y, -dpy.x * dCr.x + dpx.x * dCr.y) / detF : vec2(0.0);
+    gradCrista *= 1.0 - smoothstep(0.6, 1.2, length(gradCrista)); // pixel grande: sem degrau
 
     // ---- Normal: ondas + aneis de chuva; a agua rasa da margem acalma ----
-    vec3 w = dioramaWaves(vWorldPos.xz, time, footprint);
+    // Ondulacoes sempre para a areia: flow map de duas fases (o desenho
+    // parado, arrastado pela direcao agua->terra de cada ponto; uma fase
+    // aparece enquanto a outra volta ao zero, meia volta defasadas, com
+    // deslocamento de semente diferente para nao pulsar no mesmo lugar).
+    // Sem o campo (mapa sem terra na grade, lava) segue o vento como antes.
+    // O comprimento do campo cai a 0 na divisa entre duas margens: ali a agua
+    // so' para, sem trocar de ramo (antes um limiar trocava de caminho e
+    // deixava emenda).
+    vec2 fluxo = shoreFlow(vWorldPos.xz);
+    vec3 w;
+    if (ubo.skyboxSlot.w >= 0 && ubo.screenSize.w > 0.0) {
+        const float kCicloFluxo = 3.0; // s
+        float compr = 1.0 / (max(ubo.normalParams.x, 1e-3) * 0.33);
+        // Velocidade amarrada ao repuxo da areia: o alcance maximo (16 u na
+        // praia rasa, pbr_common shoreFront) subido na metade da janela de
+        // subida (kShoreSubida do periodo) - ~2,5 u/s. Antes vinha do
+        // comprimento da ondulacao (~7-13 u/s num mapa de praia) e a agua corria
+        // muito mais forte do que a onda que invade a areia.
+        vec2 vel = fluxo * (16.0 / (kShorePeriodo * kShoreSubida) * 0.5);
+        float f0 = fract(time / kCicloFluxo), f1 = fract(time / kCicloFluxo + 0.5);
+        vec3 w0 = dioramaWaves(vWorldPos.xz - vel * (f0 * kCicloFluxo), time, footprint, 0.0);
+        vec3 w1 = dioramaWaves(vWorldPos.xz - vel * (f1 * kCicloFluxo) + compr * vec2(0.37, 0.61), time, footprint, 0.0);
+        w = mix(w0, w1, abs(1.0 - 2.0 * f0));
+    } else {
+        w = dioramaWaves(vWorldPos.xz, time, footprint, time);
+    }
     vec2 grad = w.xy;
     float splash = 0.0, ringLight = 0.0;
     if (rain > 0.001 && ubo.styleParams.w > 0.0) {
@@ -503,6 +676,7 @@ vec3 shadeDiorama() {
         ringLight = min(rr.w, 1.0) * ubo.styleParams.w;
     }
     grad *= mix(0.35, 1.0, smoothstep(0.0, shoreW * 1.5, depthV));
+    grad += gradCrista;
     vec3 N = normalize(vec3(-grad.x, 1.0, -grad.y));
     float NoV = clamp(dot(N, V), 0.0, 1.0);
 
@@ -563,6 +737,17 @@ vec3 shadeDiorama() {
         }
         if (acc.a > 1e-3) objCol = acc.rgb / acc.a;
         objHit = clamp(acc.a / 2.5, 0.0, 1.0);
+        // Reflexo espelhado (WaterReflectionPass, styleSlots.y): a cena
+        // desenhada pela camera espelhada, com o que esta' fora da tela. Entra
+        // so' onde o SSPR nao cobriu, no mesmo ponto deslocado pela onda.
+        if (ubo.styleSlots.y >= 0 && objHit < 0.999) {
+            vec4 m = slotTextureLod(ubo.styleSlots.y, clamp(puv, vec2(0.0), vec2(1.0)), 0.0);
+            float h = m.a * (1.0 - objHit);
+            if (h > 1e-3) {
+                objCol = (objCol * objHit + m.rgb * h) / (objHit + h);
+                objHit += h;
+            }
+        }
     } else {
         vec4 m = marchReflection(vWorldPos, reflect(-V, normalize(mix(vec3(0.0, 1.0, 0.0), N, 0.25))),
                                  depthTexSlot, screenTexSlot);
@@ -597,17 +782,41 @@ vec3 shadeDiorama() {
     // ---- Espuma: margem/contato, mascara de contato da CPU, respingo ----
     float foam = 0.0;
     if (ubo.foamParams.z > 0.5) {
-        foam = shoreFoamMask(vWorldPos.xz, depthV, time, shoreW);
+        foam = shoreFoamMask(vWorldPos.xz, depthV, ondaB, shoreW);
         vec2 foamUV = (vWorldPos.xz / vec2(128.0, 128.0)) + 0.5;
         foam = max(foam, slotTextureLod(ubo.textureSlots.z, foamUV, 0.0).r * ubo.foamParams.y);
+    } else if (ondasPraia) {
+        // So' a lamina: sem a linha de contato (a agua segue pela areia), mas
+        // a onda quebrando e o encontro dos lobos sao da agua.
+        foam = shoreBreakFoam(vWorldPos.xz, depthV, ondaB);
     }
     foam = max(foam, splash * rain * ubo.foamParams.w);
     foam = clamp(foam, 0.0, 1.0);
     vec3 foamCol = vec3(0.90, 0.95, 0.97) * (amb + sunL * max(L.y, 0.0) * 0.85);
 
     vec3 color = mix(under, refl, F) + sunSpec;
+    // Face da crista antes de quebrar: lamina fina contra a luz, verde-agua
+    // mais clara (a luz atravessa a parede d'agua que esta' rolando).
+    color += inLight * vec3(0.08, 0.22, 0.20) * clamp(ondaB.face, 0.0, 1.0) * edge;
+    // Nuvens do ceu na agua, estilizadas (forca em water_style.cloud_reflection).
+    // Com piso no Fresnel (0,25): olhando de cima o reflexo cai a ~3% e as
+    // nuvens sumiriam de novo.
+    if (ubo.skyboxSlot.y > 0) {
+        // Normal suavizada (30% da onda): com a onda inteira as formas das
+        // nuvens viravam ruido de ondulacao e o efeito lia como um clareado
+        // uniforme. Nuvem clareia, vao entre nuvens escurece (com cobertura
+        // alta a mascara cobre quase tudo e so' clarear nao mostra forma).
+        vec3 Rn = reflect(-V, normalize(mix(vec3(0.0, 1.0, 0.0), N, 0.3)));
+        vec2 nv = skyCloudsReflected(Rn, vWorldPos);
+        float k = max(F, 0.25) * (float(ubo.skyboxSlot.y) * 0.001)
+                * edge * (1.0 - objHit) * (1.0 - rough * 0.5);
+        color = max(color + refl * (nv.x * mix(0.35, 0.95, nv.y) - 0.3) * k, vec3(0.0));
+    }
     // Crista dos aneis de chuva: o ceu refletido mais claro num fio.
     color += skyReflection(vec3(0.0, 1.0, 0.0), rough, storm, rain, ubo.weatherParams.y, -1) * ringLight * 0.35 * edge;
+    // So' pela profundidade: com max(.., espuma) a espuma da linha deixava a
+    // borda opaca e a escada da malha aparecia em branco.
+    g_dioramaAlpha = smoothstep(recuoBorda, recuoBorda + 0.35, depthV);
     return mix(color, foamCol, foam);
 }
 
@@ -812,10 +1021,18 @@ void main() {
         fragColor = vec4(pc.debugMask.y == 1 ? vec3(0.0, 1.0, 0.0) : lavaColor(vWorldPos, vTexCoord.x), 1.0);
         return;
     }
+    // AGUA TEXTURADA (liquidKind 4, modo classico): so' o quadro da animacao
+    // (textureSlots.w), ladrilhado a lavaCrust.x unidades, translucido a
+    // lavaCrust.y. Sem reflexo, refracao, Fresnel, espuma nem causticas.
+    if (int(ubo.extraParams.w + 0.5) == 4 && ubo.textureSlots.w >= 0) {
+        vec3 tex = pow(slotTexture(ubo.textureSlots.w, vWorldPos.xz / ubo.lavaCrust.x).rgb, vec3(2.2));
+        fragColor = vec4(pc.debugMask.y == 1 ? vec3(0.0, 1.0, 0.0) : tex, ubo.lavaCrust.y);
+        return;
+    }
     if (!LITE && ubo.styleParams.x > 0.5) {
         vec3 c = shadeDiorama();
         if (any(isnan(c)) || any(isinf(c))) c = vec3(0.05, 0.1, 0.15);
-        fragColor = vec4(pc.debugMask.y == 1 ? vec3(0.0, 1.0, 0.0) : c, 1.0);
+        fragColor = vec4(pc.debugMask.y == 1 ? vec3(0.0, 1.0, 0.0) : c, pc.debugMask.y == 1 ? 1.0 : g_dioramaAlpha);
         return;
     }
     float time          = ubo.waterLevelAndPlanes.w;

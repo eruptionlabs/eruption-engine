@@ -194,6 +194,33 @@ public:
     void endCloudVolumeAccumApply(VkCommandBuffer cmd, VkImageView litView,
                                   uint32_t width, uint32_t height);
 
+    // Water reflection (WaterReflectionPass): the same volumetric puffs seen
+    // by the camera mirrored in the water plane. The water pass runs before
+    // the cloud pass, so neither the screen-space reflection nor the mirrored
+    // G-buffer ever contained a cloud. The mirror draws go into the volume
+    // accumulation target (same size as the main pass, which clears it again
+    // later in the frame) with their own set-0 copies (mirror camera UBO +
+    // the layer's CloudUBO) and their own depth set, so the bindings of the
+    // main pass are never rewritten mid-frame. The fragment math is the main
+    // pass's own: ray from the mirrored camera through the real cloud box.
+    struct MirrorView {
+        Mat4 viewProj;       // world -> clip of the mirrored view (raster)
+        Mat4 depthViewProj;  // matrix that wrote depthView (unprojection)
+        Mat4 cullViewProj;   // un-jittered viewProj for frustum cull + scissor
+        Vec3 cameraPos;      // mirrored camera position
+        Vec3 sunDir;
+        float sunIntensity = 0.0f;
+        float time = 0.0f;
+        uint32_t frameIndex = 0;
+        VkImageView depthView = VK_NULL_HANDLE; // SHADER_READ_ONLY_OPTIMAL
+    };
+    bool beginMirrorView(VkCommandBuffer cmd, const MirrorView& view, uint32_t accumW, uint32_t accumH);
+    void renderMirrorBillboard(VkCommandBuffer cmd, uint32_t id, float planeY);
+    // Closes the accumulation and leaves it in SHADER_READ_ONLY_OPTIMAL.
+    // Returns the premultiplied RGBA view, or VK_NULL_HANDLE when nothing was
+    // drawn (no begin, or every cloud was culled).
+    VkImageView endMirrorView(VkCommandBuffer cmd);
+
     bool hasShadowMap() const { return m_cfg.castShadows && m_shadowMapView != VK_NULL_HANDLE; }
     VkImageView shadowMapView() const { return m_shadowMapView; }
     VkSampler shadowMapSampler() const { return m_shadowMapSampler; }
@@ -229,6 +256,9 @@ private:
         VkBuffer planeVbo = VK_NULL_HANDLE;
         VmaAllocation planeVboAlloc = VK_NULL_HANDLE;
         VkDescriptorSet set0[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {}; // global UBO (shared) + own CloudUBO, per frame
+        // Same as set0 with the mirror camera UBO (water reflection); null
+        // when the pool had no room (the layer then skips the reflection).
+        VkDescriptorSet mirrorSet0[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
         VkDescriptorSet set1 = VK_NULL_HANDLE; // own coverage + altitude textures
         VkDescriptorSet set3 = VK_NULL_HANDLE; // own local-cloud SSBO (volumetric puff)
         float rainOverride = -1.0f; // >= 0: per-layer rain look instead of global weather
@@ -406,6 +436,23 @@ private:
     VkBuffer m_cloudUboBuffers[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
     VmaAllocation m_cloudUboAllocs[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
     void* m_cloudUboMapped[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
+
+    // Water reflection (see MirrorView): mirror camera UBO per frame, the
+    // depth set for the mirrored G-buffer and the state of the open view.
+    VkBuffer m_mirrorUboBuffers[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
+    VmaAllocation m_mirrorUboAllocs[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
+    void* m_mirrorUboMapped[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
+    VkDescriptorSet m_mirrorDepthSet = VK_NULL_HANDLE; // from m_debugPlaneDepthPool
+    VkImageView m_mirrorDepthViewCached = VK_NULL_HANDLE;
+    VkSampler m_mirrorDepthSampler = VK_NULL_HANDLE;   // nearest: the depth is D32
+    Mat4 m_mirrorCullVp = Mat4(1.0f);
+    Vec3 m_mirrorCamPos = Vec3(0.0f);
+    bool m_mirrorMode = false;
+
+    // One volumetric puff draw (shared by the main and the mirror view).
+    void drawBillboard(VkCommandBuffer cmd, uint32_t id, float planeY, const Mat4& cullVp,
+                       const Vec3& camPos, VkDescriptorSet set0, VkDescriptorSet depthSet,
+                       float tintAltitude);
 
     bool createTargets();
     void destroyTargets();

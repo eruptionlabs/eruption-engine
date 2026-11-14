@@ -91,6 +91,9 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     uvec4 tileLights[128];
     vec4 rainSpots[64];     // chuva local: xy = centro XZ, z = raio
     vec4 rainSpotParams;    // x = quantos, y = 1 com campo de nuvens (so' molha debaixo delas), z = nivel da agua, w = tempo
+    vec4 shoreMask;         // xy = canto XZ da grade, z = 1/lado (0 = sem), w = 1 com lamina
+    vec4 shoreWaterColor;   // rgb = cor funda da agua, w = clareza
+    vec4 shoreLiquids[8];   // por liquido da grade: x nivel, y modo, z tipo (1 lava), w brilho
 } lights;
 // SONDA DE CEU (G36): o proprio skybox.frag em cubemap 32x32 com mips -
 // especular ambiental pre-filtrado (roughness -> lod).
@@ -629,6 +632,43 @@ bool isPbrFallback(vec4 pbr) {
 // Visibilidade do ceu pelas probes de irradiancia (a mesma conta do
 // ambient.frag; no celular a grade vem pronta do <mapa>.glb.probes).
 layout(set = 0, binding = 17) uniform sampler3D probeVis;
+
+// BEIRA D'AGUA (binding 18): 1 sobre agua visivel, cai a 0 longe da margem.
+// Sem ela a onda molhava todo chao na altura da agua (piscina "transbordando").
+layout(set = 0, binding = 18) uniform sampler2D shoreMaskTex;
+// x = proximidade (filtrada), y = QUAL liquido (texel mais perto, sem filtro:
+// misturar dois indices daria um terceiro).
+vec3 shoreMaskAt(vec3 wp) {
+    // x = proximidade (filtrada); y = QUAL liquido e z = altura da superficie
+    // dele, do texel mais perto e sem filtro (misturar dois indices daria um
+    // terceiro). Grade RGBA16F (Engine::rebuildShoreMask).
+    if (lights.shoreMask.z <= 0.0) return vec3(0.0);
+    vec2 uv = (wp.xz - lights.shoreMask.xy) * lights.shoreMask.z;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec3(0.0);
+    ivec2 sz = textureSize(shoreMaskTex, 0);
+    ivec2 tc = clamp(ivec2(uv * vec2(sz)), ivec2(0), sz - 1);
+    vec4 t = texelFetch(shoreMaskTex, tc, 0);
+    return vec3(textureLod(shoreMaskTex, uv, 0.0).r, clamp(floor(t.g + 0.5), 0.0, 7.0), t.b);
+}
+// 1 onde a onda pode subir, 0 atras de parede: a = maior inclinacao do chao
+// ate' a agua (Engine::rebuildShoreMask). Praia ~0,1; barranco ~0,5; parede
+// de piscina (90 graus) dezenas. A agua nao sobe parede: corta de 35 a 55 graus.
+// Direcao da agua para a terra (XZ): menos o gradiente da proximidade da
+// grade (1 na agua, 0 a 24 u). A espuma da lamina anda ao longo dela.
+vec2 shoreOutward(vec3 wp) {
+    if (lights.shoreMask.z <= 0.0) return vec2(0.0);
+    vec2 uv = (wp.xz - lights.shoreMask.xy) * lights.shoreMask.z;
+    float e = 2.0 * lights.shoreMask.z; // 2 u
+    vec2 g = vec2(textureLod(shoreMaskTex, uv + vec2(e, 0.0), 0.0).r - textureLod(shoreMaskTex, uv - vec2(e, 0.0), 0.0).r,
+                  textureLod(shoreMaskTex, uv + vec2(0.0, e), 0.0).r - textureLod(shoreMaskTex, uv - vec2(0.0, e), 0.0).r);
+    float l = length(g);
+    return l > 1e-5 ? -g / l : vec2(0.0);
+}
+float shoreWallPass(vec3 wp) {
+    if (lights.shoreMask.z <= 0.0) return 1.0;
+    vec2 uv = (wp.xz - lights.shoreMask.xy) * lights.shoreMask.z;
+    return 1.0 - smoothstep(0.7, 1.4, textureLod(shoreMaskTex, uv, 0.0).a);
+}
 float probeSkyVisibilityLite(vec3 worldPos, vec3 N) {
     if (lights.probeGridMin.w < 0.5) return 1.0;
     vec3 g = (worldPos - lights.probeGridMin.xyz) * lights.probeGridInvExtent.xyz;
@@ -795,16 +835,52 @@ void main() {
         wetDrive *= local;
     }
     // Beira d'agua (espuma/onda): molha e seca sozinha, com ou sem chuva.
-    wetDrive = max(wetDrive, shoreWetness(worldPos, lights.rainSpotParams.z, lights.rainSpotParams.w, pbr.a));
-    if ((lights.pbrDebugMode & 256u) != 0u) wetDrive = 0.0; // A/B: sem molhado (bit 256)
+    // A beira e' do plano de liquido mais perto (grade: qual liquido; UBO:
+    // nivel, modo e tipo dele). Lava nao molha: tem a beira propria abaixo.
+    const vec3 beiraG = shoreMaskAt(worldPos);
+    const vec4 liq = lights.shoreLiquids[int(beiraG.y)];
+    const bool liqLava = liq.z > 0.5;
+    const float beira = liq.x > -1.0e8 ? beiraG.x : 0.0;
+    float molhaBeira = 0.0;
+    // Direcao agua->terra uma vez por pixel (4 leituras da grade): a areia
+    // molhada e a lamina acham o pe' do lobo da onda com ela.
+    const vec2 foraBeira = beira > 0.0 && !liqLava ? shoreOutward(worldPos) : vec2(0.0);
+    if (beira > 0.0 && !liqLava) {
+        molhaBeira = smoothstep(0.0, 0.15, beira) * shoreWetness(worldPos, liq.x, lights.rainSpotParams.w, pbr.a, beira, foraBeira) * shoreWallPass(worldPos);
+        wetDrive = max(wetDrive, molhaBeira);
+    }
+    if ((lights.pbrDebugMode & 256u) != 0u) { wetDrive = 0.0; molhaBeira = 0.0; } // A/B: sem molhado (bit 256)
+    if (abs(pbr.r - 0.75) < 0.06) molhaBeira = 0.0; // sprite nao encharca
     // Diagnostico (bit 128, ERUPTION_TEST_PBR_DEBUG=128): r = quanto molha
-    // aqui (chuva x nuvem local), g = mascara de poca do material.
-    if ((lights.pbrDebugMode & 128u) != 0u) { outLit = vec4(wetDrive, pbr.a, 0.0, 1.0); return; }
+    // aqui (chuva x nuvem local), g = mascara de poca do material, b = beira
+    // de LAVA (proximidade na grade, so' quando o liquido mais perto e' lava).
+    if ((lights.pbrDebugMode & 128u) != 0u) { outLit = vec4(wetDrive, liqLava && beira > 0.0 ? clamp((worldPos.y - beiraG.z) / 40.0 + 0.5, 0.0, 1.0) : 0.0, liqLava ? beira : 0.0, 1.0); return; }
     PbrWetness wet = pbrWetSurface(albedoLinear, roughness, metallic,
                                    abs(pbr.r - 0.75) < 0.06 ? 0.0 : pbr.a, N.y,
                                    abs(pbr.r - 0.75) < 0.06 ? 0.0 : wetDrive); // sprite nao encharca
-    albedoLinear = wet.albedo;
+    albedoLinear = shoreWetAlbedo(wet.albedo, molhaBeira, N.y);
     roughness    = wet.roughness;
+    // Lamina da onda subindo a praia (opcao do menu de agua): agua rasa lisa.
+    if (abs(pbr.r - 0.75) >= 0.06 && (lights.pbrDebugMode & 256u) == 0u && liqLava && beira > 0.0) {
+        vec3 lv = lavaShore(worldPos, beiraG.z, lights.rainSpotParams.w, beira, liq.y > 0.5) * smoothstep(0.0, 0.15, beira);
+        albedoLinear = lavaShoreAlbedo(albedoLinear, lv);
+        roughness = mix(roughness, 0.85, lv.x);
+    }
+    if (abs(pbr.r - 0.75) >= 0.06 && (lights.pbrDebugMode & 256u) == 0u && !liqLava && liq.y > 0.5 && beira > 0.0) {
+        vec4 sw = shoreSwash(worldPos, liq.x, lights.rainSpotParams.w, N.y, liq.y > 1.5, beira, foraBeira) * smoothstep(0.0, 0.15, beira) * shoreWallPass(worldPos);
+        if ((lights.pbrDebugMode & 512u) != 0u) { outLit = vec4(sw.x, sw.w, sw.z, 1.0); return; }
+        if (sw.x + sw.z > 0.0) {
+            albedoLinear = shoreSwashAlbedo(albedoLinear, sw, lights.shoreWaterColor, lights.skyHorizon.rgb);
+            // Brilho de agua lisa so' na lamina ACIMA do plano. Debaixo do
+            // plano quem reflete e' a superficie da agua; o chao com
+            // rugosidade 0,04 e filme refletia o ceu de novo por baixo dela,
+            // e a faixa clara ficava parada (cortada em blocos pela grade de
+            // beira) em vez de acompanhar a espuma.
+            float lisa = sw.x * smoothstep(-0.4, 0.0, worldPos.y - liq.x);
+            roughness = mix(mix(roughness, 0.04, lisa), 0.55, sw.z);
+            wet.film = max(wet.film, lisa * (1.0 - sw.z));
+        }
+    }
 
     // Full PBR only: when usePbr is enabled every surface uses Cook-Torrance.
     // Fallback values (metallic/roughness from the material profile) are used
@@ -1104,9 +1180,13 @@ void main() {
         vec3 specEnv = F0e * envBRDF.x + envBRDF.y;
         // A pelicula d'agua reflete o ceu como um espelho raso: reforco pela
         // fracao molhada (sem ele, chao quase horizontal visto do alto lia seco).
-        lit += envCol * specEnv * ao
+        // Era 1 + 0,5 x pelicula: a areia molhada pela onda refletia ~20% do
+        // ceu de lado e nao se via a rugosidade mudar (o plano d'agua ao lado
+        // reflete bem mais). 1 + 2,5 x pelicula, e a pelicula nao leva AO
+        // (o filme d'agua fica por cima das frestas).
+        lit += envCol * specEnv * mix(ao, 1.0, wet.film)
                * max(lights.giIntensity, lights.giAmbientFloor)
-               * lights.indirectParams.y * (1.0 + 0.5 * wet.film);
+               * lights.indirectParams.y * (1.0 + 2.5 * wet.film);
     }
 
     // One-bounce GI: sunlight hits the ground, picks up the map's average

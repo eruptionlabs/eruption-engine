@@ -1185,13 +1185,15 @@ void CloudLayerRenderer::destroyBillboardPipeline() {
 }
 
 bool CloudLayerRenderer::createDebugPlaneDepthDescriptor() {
+    // Two sets: the scene depth and the mirrored G-buffer depth of the water
+    // reflection (renderMirrorBillboard), so neither rewrites the other.
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 1;
+    poolSize.descriptorCount = 2;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 1;
+    poolInfo.maxSets = 2;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
     if (vkCreateDescriptorPool(m_ctx->device(), &poolInfo, nullptr, &m_debugPlaneDepthPool) != VK_SUCCESS) {
@@ -1208,6 +1210,20 @@ bool CloudLayerRenderer::createDebugPlaneDepthDescriptor() {
         Logger::error("CloudLayerRenderer: failed to allocate debug plane depth set");
         return false;
     }
+    if (vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, &m_mirrorDepthSet) != VK_SUCCESS) {
+        m_mirrorDepthSet = VK_NULL_HANDLE; // optional: the reflection then has no clouds
+    }
+    m_mirrorDepthViewCached = VK_NULL_HANDLE;
+    if (m_mirrorDepthSampler == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.maxLod = 0.0f;
+        if (vkCreateSampler(m_ctx->device(), &si, nullptr, &m_mirrorDepthSampler) != VK_SUCCESS)
+            m_mirrorDepthSampler = VK_NULL_HANDLE;
+    }
     return true;
 }
 
@@ -1215,6 +1231,12 @@ void CloudLayerRenderer::destroyDebugPlaneDepthDescriptor() {
     if (m_debugPlaneDepthPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_ctx->device(), m_debugPlaneDepthPool, nullptr);
         m_debugPlaneDepthPool = VK_NULL_HANDLE;
+    }
+    m_mirrorDepthSet = VK_NULL_HANDLE;
+    m_mirrorDepthViewCached = VK_NULL_HANDLE;
+    if (m_mirrorDepthSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(m_ctx->device(), m_mirrorDepthSampler, nullptr);
+        m_mirrorDepthSampler = VK_NULL_HANDLE;
     }
     if (m_debugPlaneDepthLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(m_ctx->device(), m_debugPlaneDepthLayout, nullptr);
@@ -2179,6 +2201,14 @@ bool CloudLayerRenderer::createBuffers() {
             return false;
         }
         vmaMapMemory(m_ctx->allocator(), m_cloudUboAllocs[f], &m_cloudUboMapped[f]);
+
+        if (!m_ctx->createBuffer(sizeof(UBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                 VMA_MEMORY_USAGE_CPU_TO_GPU, m_mirrorUboBuffers[f], m_mirrorUboAllocs[f])) {
+            Logger::error("CloudLayerRenderer: failed to create mirror UBO");
+            return false;
+        }
+        vmaMapMemory(m_ctx->allocator(), m_mirrorUboAllocs[f], &m_mirrorUboMapped[f]);
+        std::memset(m_mirrorUboMapped[f], 0, sizeof(UBO));
     }
 
     return true;
@@ -2203,6 +2233,15 @@ void CloudLayerRenderer::destroyBuffers() {
             vmaDestroyBuffer(m_ctx->allocator(), m_cloudUboBuffers[f], m_cloudUboAllocs[f]);
             m_cloudUboBuffers[f] = VK_NULL_HANDLE;
             m_cloudUboAllocs[f] = VK_NULL_HANDLE;
+        }
+        if (m_mirrorUboMapped[f]) {
+            vmaUnmapMemory(m_ctx->allocator(), m_mirrorUboAllocs[f]);
+            m_mirrorUboMapped[f] = nullptr;
+        }
+        if (m_mirrorUboBuffers[f] != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(m_ctx->allocator(), m_mirrorUboBuffers[f], m_mirrorUboAllocs[f]);
+            m_mirrorUboBuffers[f] = VK_NULL_HANDLE;
+            m_mirrorUboAllocs[f] = VK_NULL_HANDLE;
         }
     }
 }
@@ -2268,10 +2307,10 @@ bool CloudLayerRenderer::createDescriptors() {
 
     // Pool sized for the global sets (3 per-frame UBO sets + 1 coverage) plus
     // MAX_CLOUD_LAYERS independent layers (3 per-frame UBO sets + 1 coverage
-    // set each).
+    // set each, plus 3 per-frame mirror UBO sets for the water reflection).
     VkDescriptorPoolSize poolSizes[2] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[0].descriptorCount = 8 + MAX_CLOUD_LAYERS * 6;
+    poolSizes[0].descriptorCount = 8 + MAX_CLOUD_LAYERS * 12;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[1].descriptorCount = 4 + MAX_CLOUD_LAYERS * 2;
 
@@ -2280,7 +2319,7 @@ bool CloudLayerRenderer::createDescriptors() {
     // Mesmo motivo do pool de billboards acima: unregisterCloudLayer() libera
     // os 4 sets de cada camada aqui, o que exige esta flag.
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    poolInfo.maxSets = 4 + MAX_CLOUD_LAYERS * 4;
+    poolInfo.maxSets = 4 + MAX_CLOUD_LAYERS * 7;
     poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(m_ctx->device(), &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
@@ -2918,6 +2957,18 @@ uint32_t CloudLayerRenderer::registerCloudLayer(CloudCoverageArray* array) {
     }
     for (uint32_t f = 0; f < VulkanContext::MAX_FRAMES_IN_FLIGHT; ++f) slot.set0[f] = sets[f];
     slot.set1 = sets[3];
+    // Mirror copies of set 0 (water reflection). Optional: without them the
+    // layer is simply absent from the reflection.
+    {
+        VkDescriptorSetLayout mirrorLayouts[VulkanContext::MAX_FRAMES_IN_FLIGHT];
+        for (uint32_t f = 0; f < VulkanContext::MAX_FRAMES_IN_FLIGHT; ++f) mirrorLayouts[f] = m_descriptorSetLayout;
+        VkDescriptorSetAllocateInfo mirrorAlloc = allocInfo;
+        mirrorAlloc.descriptorSetCount = VulkanContext::MAX_FRAMES_IN_FLIGHT;
+        mirrorAlloc.pSetLayouts = mirrorLayouts;
+        if (vkAllocateDescriptorSets(m_ctx->device(), &mirrorAlloc, slot.mirrorSet0) != VK_SUCCESS) {
+            for (uint32_t f = 0; f < VulkanContext::MAX_FRAMES_IN_FLIGHT; ++f) slot.mirrorSet0[f] = VK_NULL_HANDLE;
+        }
+    }
 
     // Set 0 (per frame): shared GlobalUBO (binding 0) + own CloudUBO (binding 1).
     for (uint32_t f = 0; f < VulkanContext::MAX_FRAMES_IN_FLIGHT; ++f) {
@@ -2943,6 +2994,14 @@ uint32_t CloudLayerRenderer::registerCloudLayer(CloudCoverageArray* array) {
         writes[1].descriptorCount = 1;
         writes[1].pBufferInfo = &cloudUboInfo;
         vkUpdateDescriptorSets(m_ctx->device(), 2, writes, 0, nullptr);
+        if (slot.mirrorSet0[f] != VK_NULL_HANDLE) {
+            VkDescriptorBufferInfo mirrorInfo = uboInfo;
+            mirrorInfo.buffer = m_mirrorUboBuffers[f];
+            writes[0].dstSet = slot.mirrorSet0[f];
+            writes[0].pBufferInfo = &mirrorInfo;
+            writes[1].dstSet = slot.mirrorSet0[f];
+            vkUpdateDescriptorSets(m_ctx->device(), 2, writes, 0, nullptr);
+        }
     }
 
     // Set 1: own coverage + altitude textures.
@@ -3019,6 +3078,10 @@ void CloudLayerRenderer::unregisterCloudLayer(uint32_t id) {
         vkFreeDescriptorSets(m_ctx->device(), m_descriptorPool, 4, sets);
         for (uint32_t f = 0; f < VulkanContext::MAX_FRAMES_IN_FLIGHT; ++f) slot.set0[f] = VK_NULL_HANDLE;
         slot.set1 = VK_NULL_HANDLE;
+    }
+    if (slot.mirrorSet0[0] != VK_NULL_HANDLE) {
+        vkFreeDescriptorSets(m_ctx->device(), m_descriptorPool, VulkanContext::MAX_FRAMES_IN_FLIGHT, slot.mirrorSet0);
+        for (uint32_t f = 0; f < VulkanContext::MAX_FRAMES_IN_FLIGHT; ++f) slot.mirrorSet0[f] = VK_NULL_HANDLE;
     }
     if (slot.set3 != VK_NULL_HANDLE && m_billboardCloudsPool != VK_NULL_HANDLE) {
         vkFreeDescriptorSets(m_ctx->device(), m_billboardCloudsPool, 1, &slot.set3);
@@ -3343,9 +3406,78 @@ void CloudLayerRenderer::renderCloudLayerPlane(VkCommandBuffer cmd, uint32_t id,
 void CloudLayerRenderer::renderCloudLayerBillboard(VkCommandBuffer cmd, uint32_t id, float planeY,
                                                    const Camera& camera, VkImageView depthView,
                                                    float tintAltitude) {
-    if (!m_cfg.enabled || !m_ctx) return;
+    if (!m_cfg.enabled || !m_ctx || id >= m_cloudLayers.size()) return;
+    updateDebugPlaneDepthDescriptor(depthView);
+    drawBillboard(cmd, id, planeY, camera.viewProjNoJitter(), camera.position(),
+                  m_cloudLayers[id].set0[m_ctx->currentFrame()], m_debugPlaneDepthSet, tintAltitude);
+}
+
+bool CloudLayerRenderer::beginMirrorView(VkCommandBuffer cmd, const MirrorView& view,
+                                         uint32_t accumW, uint32_t accumH) {
+    m_mirrorMode = false;
+    if (!m_cfg.enabled || !m_ctx || m_mirrorDepthSet == VK_NULL_HANDLE ||
+        m_mirrorDepthSampler == VK_NULL_HANDLE || view.depthView == VK_NULL_HANDLE)
+        return false;
+    void* mapped = m_mirrorUboMapped[m_ctx->currentFrame()];
+    if (!mapped) return false;
+    // Same fields as updateUBOs, with the mirrored camera. invViewProj undoes
+    // the matrix that wrote the mirrored depth (oblique near plane), which
+    // shares the x/y/w rows with viewProj: same pixel, same ray.
+    UBO ubo{};
+    ubo.viewProj = view.viewProj;
+    ubo.invViewProj = glm::inverse(view.depthViewProj);
+    ubo.cameraPos = view.cameraPos;
+    ubo.time = view.time;
+    ubo.sunDir = view.sunDir;
+    ubo.sunIntensity = view.sunIntensity;
+    ubo.screenSize = Vec2((float)m_width, (float)m_height);
+    ubo.frameIndex = view.frameIndex;
+    std::memcpy(mapped, &ubo, sizeof(ubo));
+
+    // The mirrored depth view only changes when the reflection is resized,
+    // which waits for the GPU (WaterReflectionPass::ensureSize).
+    if (view.depthView != m_mirrorDepthViewCached) {
+        m_mirrorDepthViewCached = view.depthView;
+        VkDescriptorImageInfo depthInfo{m_mirrorDepthSampler, view.depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = m_mirrorDepthSet;
+        write.dstBinding = 0;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo = &depthInfo;
+        vkUpdateDescriptorSets(m_ctx->device(), 1, &write, 0, nullptr);
+    }
+    m_mirrorCullVp = view.cullViewProj;
+    m_mirrorCamPos = view.cameraPos;
+    if (!beginCloudVolumeAccum(cmd, accumW, accumH)) return false;
+    m_mirrorMode = true;
+    return true;
+}
+
+void CloudLayerRenderer::renderMirrorBillboard(VkCommandBuffer cmd, uint32_t id, float planeY) {
+    if (!m_mirrorMode || id >= m_cloudLayers.size()) return;
+    const VkDescriptorSet set0 = m_cloudLayers[id].mirrorSet0[m_ctx->currentFrame()];
+    if (set0 == VK_NULL_HANDLE) return;
+    drawBillboard(cmd, id, planeY, m_mirrorCullVp, m_mirrorCamPos, set0, m_mirrorDepthSet, -1.0f);
+}
+
+VkImageView CloudLayerRenderer::endMirrorView(VkCommandBuffer cmd) {
+    if (!m_mirrorMode) return VK_NULL_HANDLE;
+    m_mirrorMode = false;
+    vkc::cmdEndRendering(cmd);
+    m_volumeAccumMode = false;
+    m_ctx->cmdImageBarrier(cmd, m_volumeAccumImage,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    return m_volumeAccumView;
+}
+
+void CloudLayerRenderer::drawBillboard(VkCommandBuffer cmd, uint32_t id, float planeY, const Mat4& cullVp,
+                                       const Vec3& camPos, VkDescriptorSet set0, VkDescriptorSet depthSet,
+                                       float tintAltitude) {
     if (m_billboardPipeline == VK_NULL_HANDLE || m_billboardCubeVbo == VK_NULL_HANDLE) return;
-    if (id >= m_cloudLayers.size()) return;
     CloudLayerSlot& slot = m_cloudLayers[id];
     // Half-res accumulation: scissor/viewport target dims shrink to the
     // offscreen while the camera math stays in normalized space.
@@ -3408,7 +3540,7 @@ void CloudLayerRenderer::renderCloudLayerBillboard(VkCommandBuffer cmd, uint32_t
     if (kPuffLog) {
         static int s_frame = 0;
         if (++s_frame % 300 == 1) {
-            const Vec3 cp = camera.position();
+            const Vec3 cp = camPos;
             ERUPTION_LOG_WARN("[PUFF] id=%u cam=(%.1f,%.1f,%.1f) box=(%.1f..%.1f, %.1f..%.1f, %.1f..%.1f) blobs=%zu",
                             id, cp.x, cp.y, cp.z, fminX, fmaxX, yBot, yTop, fminZ, fmaxZ,
                             slot.array->localClouds().size());
@@ -3427,10 +3559,10 @@ void CloudLayerRenderer::renderCloudLayerBillboard(VkCommandBuffer cmd, uint32_t
     // ERUPTION_TEST_CLOUD_NO_LOD=1 (debug): restore the pre-optimization paths
     // (no cull, full steps, sun tap) for A/B screenshot diffs.
     static const bool kNoLod = std::getenv("ERUPTION_TEST_CLOUD_NO_LOD") != nullptr;
-    const Mat4 vp = camera.viewProjNoJitter();
+    const Mat4& vp = cullVp;
     const Vec3 boxMin3(fminX, yBot, fminZ), boxMax3(fmaxX, yTop, fmaxZ);
     if (!kNoLod && aabbOutsideFrustum(vp, boxMin3, boxMax3)) return;
-    const float camDist = aabbDistance(camera.position(), boxMin3, boxMax3);
+    const float camDist = aabbDistance(camPos, boxMin3, boxMax3);
     (void)camDist;
     // Angular-size LOD: tier by how BIG the cloud is on screen
     // (boxRadius / distance-to-center), not by raw distance — with the storm
@@ -3439,7 +3571,7 @@ void CloudLayerRenderer::renderCloudLayerBillboard(VkCommandBuffer cmd, uint32_t
     // for clouds that actually fill the view (e.g. directly overhead).
     const Vec3 boxCenter3 = (boxMin3 + boxMax3) * 0.5f;
     const float boxRadius = glm::length(boxMax3 - boxMin3) * 0.5f;
-    const float centerDist = glm::max(glm::distance(camera.position(), boxCenter3), 1.0f);
+    const float centerDist = glm::max(glm::distance(camPos, boxCenter3), 1.0f);
     const float angular = boxRadius / centerDist;
     // Continuous step scale: smooth ramps between the far/mid/near anchors
     // instead of discrete tiers — a tier boundary pops the cloud's march
@@ -3493,15 +3625,13 @@ void CloudLayerRenderer::renderCloudLayerBillboard(VkCommandBuffer cmd, uint32_t
         }
     }
 
-    updateDebugPlaneDepthDescriptor(depthView);
-
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       m_volumeAccumMode ? m_billboardAccumPipeline : m_billboardPipeline);
     {
         VkViewport vp{0, 0, (float)targetW, (float)targetH, 0, 1};
         vkCmdSetViewport(cmd, 0, 1, &vp);
     }
-    VkDescriptorSet sets[4] = {slot.set0[m_ctx->currentFrame()], slot.set1, m_debugPlaneDepthSet, slot.set3};
+    VkDescriptorSet sets[4] = {set0, slot.set1, depthSet, slot.set3};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_billboardPipelineLayout, 0, 4, sets, 0, nullptr);
     VkBuffer vb = m_billboardCubeVbo;
     VkDeviceSize vbOffset = 0;
@@ -3534,6 +3664,15 @@ void CloudLayerRenderer::renderCloudLayerBillboard(VkCommandBuffer cmd, uint32_t
     static const bool kNoDepClip = std::getenv("ERUPTION_TEST_PUFF_NODEPCLIP") != nullptr;
     pc.pad0 = kNoDepClip ? 1.0f : 0.0f;
     pc.marchCap = static_cast<float>(m_marchStepBudget);
+    // Water reflection: half the march budget (shader floor 12) and the far
+    // LOD (no sun tap, no 3rd noise octave). The reflection is seen through
+    // the Fresnel and the wave distortion; at full quality it cost 0.44 ms
+    // of GPU in a storm (test map, grazing view, 4090) while the main pass,
+    // with the clouds off screen, cost 0.01 ms.
+    if (m_mirrorMode) {
+        const float cap = m_marchStepBudget > 0 ? static_cast<float>(m_marchStepBudget) : 48.0f;
+        pc.marchCap = std::max(12.0f, cap * 0.5f);
+    }
     // ERUPTION_TEST_PUFF_SOLID=1 / ERUPTION_TEST_PUFF_DENSITY=1 (debug): box solid / march
     // density visualization in the fragment.
     static const bool kSolid = std::getenv("ERUPTION_TEST_PUFF_SOLID") != nullptr;
@@ -3542,7 +3681,7 @@ void CloudLayerRenderer::renderCloudLayerBillboard(VkCommandBuffer cmd, uint32_t
     static const bool kNoiseViz = std::getenv("ERUPTION_TEST_PUFF_NOISE") != nullptr;
     pc.pad1 = kNoiseViz ? 4.0f : (kMaskViz ? 3.0f : (kDensViz ? 2.0f : (kSolid ? 1.0f : 0.0f)));
     // Ray-march step scale (distance LOD, see above; shader clamps to >= 0.25).
-    pc.pad2 = stepScale;
+    pc.pad2 = m_mirrorMode ? std::min(stepScale, 0.28f) : stepScale;
     pc.targetScale = m_volumeAccumMode
                          ? static_cast<float>(m_volumeAccumWidth) / static_cast<float>(m_width)
                          : 1.0f;

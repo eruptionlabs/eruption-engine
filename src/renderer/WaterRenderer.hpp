@@ -91,11 +91,24 @@ public:
 
         // Edge / Contact Foam
         bool enableFoam = true;
+        // Lamina da onda: a agua sobe pela areia e volta (chao escurece e
+        // brilha ate' a frente, borda nitida). Independe da espuma de contato.
+        bool shoreSwash = false;     // por mapa: .env "shore": "swash" / "swash_foam"
+        bool shoreSwashFoam = false; // espuma na frente da lamina ("swash_foam")
         float foamEdgeDepth = 0.5f;
         float contactFoamStrength = 2.0f;
         Vec2 foamMaskScale = Vec2(256.0f, 256.0f);
         float contactFoamDecay = 0.04f;
         float contactFoamSpread = 0.0f;
+
+        // Agua texturada animada (liquidKind 4, modo classico): plano chato com
+        // uma sequencia de quadros trocados a texFps, translucida (texAlpha),
+        // sem reflexo, refracao nem espuma. Os quadros vem de
+        // setTexturedFrames; a ondulacao do vertice usa waveAmplitude,
+        // waveFrequency (rad/unidade) e waveSpeed (rad/s) como os de Gerstner.
+        float texFps = 20.0f;
+        float texAlpha = 0.6f;
+        float texTile = 10.0f; // unidades de mundo por repeticao da textura
 
         // Debug / map overrides
         bool forceWater = false;
@@ -125,6 +138,7 @@ public:
         float shoreFoam = 1.0f;          // largura da espuma de margem
         float clarity = 10.0f;           // unidades de mundo ate' o vermelho cair a 1/e
         float waveSlope = 1.0f;          // inclinacao das ondas (x normalStrength)
+        float cloudReflection = 0.0f;    // nuvens do ceu no reflexo (liquid.frag skyCloudsReflected); desligado: lia como erro de refracao
         Vec3 deepColor = Vec3(0.012f, 0.06f, 0.075f); // cor da agua funda (espalhamento)
         bool operator==(const StyleConfig& o) const {
             return hd2d == o.hd2d && planarReflection == o.planarReflection && depthWrite == o.depthWrite &&
@@ -134,6 +148,15 @@ public:
         }
     };
     void setStyle(const StyleConfig& style);
+    // Nuvens da cupula para o reflexo (liquid.frag skyCloudsReflected):
+    // a = (cobertura, escala, velocidade, maciez), tempo do ceu (timeOfDay*200).
+    void setSkyClouds(const Vec4& a, float skyTime, bool enabled) { m_skyClouds = a; m_skyCloudTime = skyTime; m_skyCloudsOn = enabled; }
+    // Campo da agua para a terra mais perto (RG = direcao XZ unitaria, ou
+    // zero sem terra), grade n x n a partir de `origin`, 1/lado em invSize.
+    // As ondulacoes da superficie correm por ele para a areia (flow map em
+    // liquid.frag). Vazio apaga. Vem de Engine::rebuildShoreMask.
+    void setShoreField(const std::vector<float>& rg, uint32_t w, uint32_t h, const Vec2& origin, float invSize);
+    void destroyShoreField();
     const StyleConfig& style() const { return m_style; }
     // Sprites no reflexo planar: o alvo PBR do G-buffer (marca o sprite com
     // R = 0,75) e o "cima" do quadro em mundo. Chamar todo quadro, antes de
@@ -142,6 +165,18 @@ public:
         m_spritePbrView = gbufferPbrView;
         m_spriteUp = billboardUp;
     }
+    // Plano do reflexo planar deste quadro (o mesmo nivel que o SSPR usa):
+    // false quando o estilo nao reflete objetos (sem HD-2D, sem reflexo planar,
+    // GPU fraca ou mapa sem agua).
+    bool planarReflectionPlane(const WaterSettings& settings, float& level) const {
+        if (!m_style.hd2d || !m_style.planarReflection || m_indexCount == 0 || !m_ctx || m_ctx->shaderLite())
+            return false;
+        level = m_ssprMeshLevel + settings.levelOffset;
+        return true;
+    }
+    // Slot bindless do reflexo espelhado deste quadro (WaterReflectionPass),
+    // -1 = sem. Chamar todo quadro antes do render da agua.
+    void setMirrorReflectionSlot(int32_t slot) { m_mirrorReflSlot = slot; }
 
     bool init(VulkanContext* ctx, BindlessDescriptor* bindless);
     void shutdown();
@@ -221,6 +256,12 @@ public:
     void loadWaterTextureFromFile(const char* path);
     void clearWaterTexture() { destroyWaterTextureResources(); }
 
+    // Quadros da agua texturada (WaterSettings::liquidKind 4). Substitui os
+    // anteriores; devolve false (e fica sem quadros) se algum nao abrir.
+    bool setTexturedFrames(const std::vector<std::string>& paths);
+    void clearTexturedFrames();
+    bool hasTexturedFrames() const { return !m_texFrames.empty(); }
+
 private:
     VulkanContext* m_ctx = nullptr;
     BindlessDescriptor* m_bindless = nullptr;
@@ -245,7 +286,7 @@ private:
         Vec4 baseColorDeep;       // xyz=cor profunda
         Vec4 baseColorShallow;    // xyz=cor rasa
         Vec4 waterParams;         // x=transparency, y=refractionStrength, z=reflectivity, w=roughness
-        Vec4 normalParams;        // x=scale, y=waveSpeed, z=strength, w=unused
+        Vec4 normalParams;        // x=scale, y=waveSpeed, z=strength, w=lamina da praia (1/0)
         Vec4 waveParams;          // x=amplitude, y=frequency, z=speed, w=unused
         Vec4 foamParams;          // x=edgeDepth, y=contactStrength, z=enable, w=unused
         Vec4 skyTop;
@@ -321,6 +362,15 @@ private:
     VkSampler m_foamMaskSampler = VK_NULL_HANDLE;
     uint32_t m_foamMaskSlot = 0;
     uint32_t m_skyboxSlot = 0xFFFFFFFFu;
+    Vec4 m_skyClouds{0.5f, 1.5f, 0.05f, 0.5f};
+    float m_skyCloudTime = 0.0f;
+    bool m_skyCloudsOn = false;
+    VkImage m_shoreFieldImg = VK_NULL_HANDLE;
+    VmaAllocation m_shoreFieldAlloc = VK_NULL_HANDLE;
+    VkImageView m_shoreFieldView = VK_NULL_HANDLE;
+    VkSampler m_shoreFieldSampler = VK_NULL_HANDLE;
+    uint32_t m_shoreFieldSlot = 0xFFFFFFFFu;
+    Vec4 m_shoreField{0.0f}; // origem xz, 1/lado
 
     std::vector<uint8_t> m_foamMaskData;
     std::vector<float> m_foamBlurTmp;
@@ -340,6 +390,14 @@ private:
     VkImageView m_waterTextureView = VK_NULL_HANDLE;
     VkSampler m_waterTextureSampler = VK_NULL_HANDLE;
     uint32_t m_waterTextureSlot = 0xFFFFFFFFu;
+    struct TexFrame {
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation alloc = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VkSampler sampler = VK_NULL_HANDLE;
+        uint32_t slot = 0xFFFFFFFFu;
+    };
+    std::vector<TexFrame> m_texFrames;
 
     // Underwater RTT resources (prepared for future projective texture use)
     std::array<VkImage, MAX_FRAMES> m_underwaterImage = {};
@@ -382,6 +440,7 @@ private:
     // (o lago do mapa); outra altura cai na marcha de raio.
     float m_ssprMeshLevel = 0.0f;
     float m_ssprLevel = 0.0f;
+    int32_t m_mirrorReflSlot = -1;
     VkImageView m_spritePbrView = VK_NULL_HANDLE;
     Vec3 m_spriteUp = Vec3(0.0f, 1.0f, 0.0f);
     void createSsprPipeline();
