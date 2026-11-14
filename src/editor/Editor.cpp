@@ -143,6 +143,7 @@ bool Editor::init(Engine& engine) {
 
 void Editor::shutdown() {
     shutdownModelViewer();
+    shutdownAssetCreator();
     m_vfxEditor.shutdown();
     stopThumbnails();
     m_remote.stop();
@@ -216,6 +217,12 @@ void Editor::registerCommands() {
     }, "Creates, opens and configures the game project: the folder with every map, sprite, scene and script of one game.");
     add("file.export", "File", "Export Game...", {}, [this] { m_showExport = true; m_export.profileDetected = false; },
         "Copies the maps and only what they use into a folder that runs on its own.");
+    add("file.build_map", "File", "Build Map", {}, [this] { startBuildMap(); },
+        "Saves the scene and bakes everything this map loads (compressed textures, PBR maps, relief, probes, scene "
+        "models) into one file next to it, <map>.emap, so the game opens it almost at once. Runs in a separate window.")
+        .enabled = [this] {
+            return !m_engine->currentMapName().empty() && m_play == PlayState::Editing && !m_buildMapJob.valid();
+        };
     add("file.open_vscode", "File", "Open Project in VS Code", {}, [this] {
         openInExternalEditor(m_projectRoot);
     }, "Opens the project folder in Visual Studio Code (or the system default).");
@@ -390,6 +397,11 @@ void Editor::registerCommands() {
                 m_showModelViewer = open;
             }, "A model alone, with the engine's real rendering: LOD levels, wireframe, normals, UV and animations.");
             mv.checked = [this] { return m_showModelViewer; };
+            auto& ac = add("window.asset_creator", "Window", "Asset Creator", {},
+                           [this] { m_showAssetCreator = !m_showAssetCreator; },
+                           "Load a model, generate normal and MRAH-W maps from each texture's color, adjust, "
+                           "preview and save them where the engine finds them.");
+            ac.checked = [this] { return m_showAssetCreator; };
             auto& fx = add("window.effects", "Window", "Effects", {}, [this] { m_showVfxEditor = !m_showVfxEditor; },
                            "Particle effects: library, isolated live preview and the emitter stack (spawn, shape, "
                            "motion, collision, color and size over lifetime, rendering).");
@@ -543,6 +555,7 @@ void Editor::update(float dt) {
     m_engine->timer().setPaused(m_play == PlayState::Paused && m_stepFrames < 2);
     setUiLanguage(m_lang); // a interface inteira segue o idioma escolhido
     recordFrameTime(dt);
+    pollBuildMap();
     // Vizinho do mundo contínuo entrou ou saiu: camadas Mostrar/Travar valem para ele.
     if (m_engine->worldVersion() != m_worldVersionSeen) {
         m_worldVersionSeen = m_engine->worldVersion();
@@ -555,6 +568,13 @@ void Editor::update(float dt) {
         if (std::string(testAsset) == ":map_textures") openMapTextures();
         else selectAsset(testAsset);
     }
+    // ERUPTION_TEST_ASSET_CREATOR=<modelo.glb>,<pasta> (teste): no frame 40 o
+    // Criador de Assets carrega o modelo pelo mesmo código da janela, gera os
+    // mapas de todas as texturas, grava <stem>_mrahw.png/_normal.png na pasta
+    // (não na do projeto) e escreve o resumo no log. A janela fica aberta com a
+    // primeira textura, para a captura de tela.
+    static const char* testAssetCreator = std::getenv("ERUPTION_TEST_ASSET_CREATOR");
+    if (testAssetCreator && m_frame == 40) assetCreatorTestRun(testAssetCreator);
     // ERUPTION_TEST_EDITOR_SELECT=trecho (teste/prints): seleciona e enquadra o
     // modelo mais perto da câmera cujo nome contém o trecho.
     static const char* testSelect = std::getenv("ERUPTION_TEST_EDITOR_SELECT");
@@ -990,6 +1010,7 @@ void Editor::drawUI() {
     drawExportWindow();
     drawMapGenWindow();
     drawModelViewer();
+    drawAssetCreator();
     m_vfxEditor.draw(&m_showVfxEditor); // fechada: so' para o efeito tocando na cena
     drawGameProjectWindow();
 
@@ -1025,6 +1046,7 @@ void Editor::drawMenuBar() {
         }
         ImGui::Separator();
         m_commands.menuItem("file.game_project");
+        m_commands.menuItem("file.build_map");
         m_commands.menuItem("file.export");
         m_commands.menuItem("file.open_vscode");
         ImGui::Separator();

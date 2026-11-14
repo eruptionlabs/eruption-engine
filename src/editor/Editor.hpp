@@ -174,6 +174,11 @@ private:
     };
     GuiTexture makeTexture(const uint8_t* rgba, int w, int h, bool nearest);
     void releaseTexture(GuiTexture& t);
+    // Imagens RGBA8 para prévia: redução por média de caixa (lado maior =
+    // maxSide), cópia sem alfa (mapas cujo alfa guarda dado) e um canal em cinza.
+    static std::vector<uint8_t> downscale(const uint8_t* src, int w, int h, int maxSide, int& outW, int& outH);
+    static std::vector<uint8_t> opaque(std::vector<uint8_t> rgba);
+    static std::vector<uint8_t> channelImage(const std::vector<uint8_t>& rgba, int channel);
     uint32_t bindTexture(GuiTexture& t);
     void collectTextures(bool all);
     // Miniaturas do painel Projeto
@@ -347,6 +352,12 @@ private:
     } m_ai;
     void drawAiWindow();
     std::string m_pendingAiMessage; // teste
+    // File > Build Map (EditorBuildMap.cpp): o pacote do mapa (.emap) num
+    // processo a parte; o resultado entra no log quando ele termina.
+    void startBuildMap();
+    void pollBuildMap();
+    std::future<int> m_buildMapJob;
+    std::string m_buildMapName;
     // Exportação do jogo (EditorExport.cpp)
     bool m_showExport = false;
     struct ExportState {
@@ -409,6 +420,17 @@ private:
     void shutdownModelViewer();
     bool openModelViewer(const std::string& path, int node);
     void drawModelViewer();
+    // Janela > Criador de Assets (EditorAssetCreator.cpp): carrega um .glb,
+    // gera normal e MRAH-W do albedo de cada textura (a síntese do motor) e
+    // grava onde a busca de PBR do motor acha esses mapas.
+    struct AssetCreatorState; // definido em EditorAssetCreator.cpp
+    std::shared_ptr<AssetCreatorState> m_assetCreator;
+    bool m_showAssetCreator = false;
+    AssetCreatorState& assetCreator();
+    void openAssetCreator(const std::string& path);
+    void drawAssetCreator();
+    void shutdownAssetCreator();
+    void assetCreatorTestRun(const std::string& spec);
     // Janela > Efeitos (VfxEditor.cpp): biblioteca, previa isolada e pilha.
     VfxEditor m_vfxEditor;
     bool m_showVfxEditor = false;

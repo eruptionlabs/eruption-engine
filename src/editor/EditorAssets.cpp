@@ -49,48 +49,6 @@ bool isTextFile(const fs::path& p) {
     return false;
 }
 
-// Redução por média de caixa (mantém a proporção, lado maior = maxSide).
-std::vector<uint8_t> downscale(const uint8_t* src, int w, int h, int maxSide, int& outW, int& outH) {
-    const float s = std::min(1.0f, static_cast<float>(maxSide) / static_cast<float>(std::max(w, h)));
-    outW = std::max(1, static_cast<int>(std::lround(w * s)));
-    outH = std::max(1, static_cast<int>(std::lround(h * s)));
-    std::vector<uint8_t> out(static_cast<size_t>(outW) * outH * 4);
-    if (outW == w && outH == h) {
-        std::memcpy(out.data(), src, out.size());
-        return out;
-    }
-    for (int y = 0; y < outH; ++y) {
-        const int y0 = y * h / outH, y1 = std::max(y0 + 1, (y + 1) * h / outH);
-        for (int x = 0; x < outW; ++x) {
-            const int x0 = x * w / outW, x1 = std::max(x0 + 1, (x + 1) * w / outW);
-            unsigned sum[4] = {0, 0, 0, 0};
-            for (int yy = y0; yy < y1; ++yy)
-                for (int xx = x0; xx < x1; ++xx)
-                    for (int c = 0; c < 4; ++c) sum[c] += src[(static_cast<size_t>(yy) * w + xx) * 4 + c];
-            const unsigned n = static_cast<unsigned>((y1 - y0) * (x1 - x0));
-            for (int c = 0; c < 4; ++c) out[(static_cast<size_t>(y) * outW + x) * 4 + c] = static_cast<uint8_t>(sum[c] / n);
-        }
-    }
-    return out;
-}
-
-// Cópia sem transparência (mapas cujo alfa guarda dado, não recorte).
-std::vector<uint8_t> opaque(std::vector<uint8_t> rgba) {
-    for (size_t i = 3; i < rgba.size(); i += 4) rgba[i] = 255;
-    return rgba;
-}
-
-// Um canal em tons de cinza (opaco).
-std::vector<uint8_t> channelImage(const std::vector<uint8_t>& rgba, int channel) {
-    std::vector<uint8_t> out(rgba.size());
-    for (size_t i = 0; i < rgba.size(); i += 4) {
-        const uint8_t v = rgba[i + static_cast<size_t>(channel)];
-        out[i] = out[i + 1] = out[i + 2] = v;
-        out[i + 3] = 255;
-    }
-    return out;
-}
-
 std::vector<uint8_t> loadImage(const fs::path& p, int& w, int& h, int& channels) {
     unsigned char* px = stbi_load(p.string().c_str(), &w, &h, &channels, 4);
     if (!px) return {};
@@ -129,6 +87,48 @@ void findPbrSiblings(const fs::path& file, fs::path& albedo, fs::path& mrahw, fs
 }
 
 } // namespace
+
+// Redução por média de caixa (mantém a proporção, lado maior = maxSide).
+std::vector<uint8_t> Editor::downscale(const uint8_t* src, int w, int h, int maxSide, int& outW, int& outH) {
+    const float s = std::min(1.0f, static_cast<float>(maxSide) / static_cast<float>(std::max(w, h)));
+    outW = std::max(1, static_cast<int>(std::lround(w * s)));
+    outH = std::max(1, static_cast<int>(std::lround(h * s)));
+    std::vector<uint8_t> out(static_cast<size_t>(outW) * outH * 4);
+    if (outW == w && outH == h) {
+        std::memcpy(out.data(), src, out.size());
+        return out;
+    }
+    for (int y = 0; y < outH; ++y) {
+        const int y0 = y * h / outH, y1 = std::max(y0 + 1, (y + 1) * h / outH);
+        for (int x = 0; x < outW; ++x) {
+            const int x0 = x * w / outW, x1 = std::max(x0 + 1, (x + 1) * w / outW);
+            unsigned sum[4] = {0, 0, 0, 0};
+            for (int yy = y0; yy < y1; ++yy)
+                for (int xx = x0; xx < x1; ++xx)
+                    for (int c = 0; c < 4; ++c) sum[c] += src[(static_cast<size_t>(yy) * w + xx) * 4 + c];
+            const unsigned n = static_cast<unsigned>((y1 - y0) * (x1 - x0));
+            for (int c = 0; c < 4; ++c) out[(static_cast<size_t>(y) * outW + x) * 4 + c] = static_cast<uint8_t>(sum[c] / n);
+        }
+    }
+    return out;
+}
+
+// Cópia sem transparência (mapas cujo alfa guarda dado, não recorte).
+std::vector<uint8_t> Editor::opaque(std::vector<uint8_t> rgba) {
+    for (size_t i = 3; i < rgba.size(); i += 4) rgba[i] = 255;
+    return rgba;
+}
+
+// Um canal em tons de cinza (opaco).
+std::vector<uint8_t> Editor::channelImage(const std::vector<uint8_t>& rgba, int channel) {
+    std::vector<uint8_t> out(rgba.size());
+    for (size_t i = 0; i < rgba.size(); i += 4) {
+        const uint8_t v = rgba[i + static_cast<size_t>(channel)];
+        out[i] = out[i + 1] = out[i + 2] = v;
+        out[i + 3] = 255;
+    }
+    return out;
+}
 
 // ---------------------------------------------------------------- texturas
 
@@ -671,6 +671,8 @@ void Editor::drawAssetPreview() {
             drawMaterialPreview();
             break;
         case AssetPreviewState::Kind::Model:
+            if (ImGui::SmallButton(tr("Open in Asset Creator"))) openAssetCreator(a.path.string());
+            ImGui::SetItemTooltip("%s", tr("Generate and adjust normal and MRAH-W maps for this model's textures."));
             drawModel3D();
             drawModelPreview();
             m_engine->drawEmbeddedTextures(&tr, a.path.string(), true); // so' se o mapa usa este arquivo
