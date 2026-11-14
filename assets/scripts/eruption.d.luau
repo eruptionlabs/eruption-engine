@@ -195,6 +195,15 @@ declare world: {
     -- relief, shadows, GI, bloom, DoF or SSAO, noon and clear sky. Turning it
     -- off restores what was on before; set_dof while on applies afterwards.
     set_classic: (on: boolean) -> (),
+    -- Water of the classic mode: a flat translucent plane at the map's water
+    -- level showing an animated frame sequence. `pattern` is a game path with
+    -- two printf integers (the map's water type, the frame number 0..frames-1),
+    -- e.g. "assets/external/agua/agua%d_%02d.png". Wave height, speed, pitch and
+    -- the animation speed come from the map's water plane. `tile` = world
+    -- units per repeat of a frame (default 10; frames of water types 4 and 6
+    -- repeat every 2 x tile and are opaque). Without frames the classic mode
+    -- keeps the normal water.
+    set_classic_water: (pattern: string, frames: number, alpha: number?, tile: number?) -> (),
     classic: () -> boolean,
     -- World time scale (hit-stop, slow motion): sprite animation, effects,
     -- weather and the scripts' dt run scaled (0 = frozen). `seconds` counts in

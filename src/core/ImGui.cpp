@@ -345,6 +345,16 @@ void Engine::setClassicMode(bool on) {
         m_classic.timeOfDay = m_dayNightCycle.timeOfDay();
         m_classic.timeScale = m_dayNightCycle.timeScale();
         m_classic.weatherType = static_cast<int>(m_weatherSystem.currentType());
+        m_classic.cloudLayers = m_cloudLayersEnabled;
+        m_classic.motionBlur = m_postSettings.enableMotionBlur;
+        m_classic.chromaticAb = m_postSettings.enableChromaticAberration;
+        m_classic.waterReflection = m_waterReflectionOn;
+        m_classic.outlineMode = m_postSettings.outlineMode;
+        m_postSettings.outlineMode = 0; // o original nao tem contorno
+        m_cloudLayersEnabled = false;   // sem nuvens (nem a sombra delas)
+        m_postSettings.enableMotionBlur = false;
+        m_postSettings.enableChromaticAberration = false;
+        m_waterReflectionOn = false;    // sem reflexo espelhado na agua
         for (size_t k = 0; k < std::size(kEffects); ++k)
             m_classic.effects[k] = kEffects[k] < m_renderEffects.size() && m_renderEffects[kEffects[k]]->isEnabled();
         m_deferredLighting.setUsePbr(false);
@@ -368,10 +378,41 @@ void Engine::setClassicMode(bool on) {
         m_dayNightCycle.setTimeOfDay(m_classic.timeOfDay);
         m_dayNightCycle.setTimeScale(m_classic.timeScale);
         applyWeatherTypeFull(static_cast<WeatherType>(m_classic.weatherType), 1.0f);
+        m_cloudLayersEnabled = m_classic.cloudLayers;
+        m_postSettings.enableMotionBlur = m_classic.motionBlur;
+        m_postSettings.enableChromaticAberration = m_classic.chromaticAb;
+        m_waterReflectionOn = m_classic.waterReflection;
+        m_postSettings.outlineMode = m_classic.outlineMode;
         for (size_t k = 0; k < std::size(kEffects); ++k)
             if (kEffects[k] < m_renderEffects.size()) m_renderEffects[kEffects[k]]->setEnabled(m_classic.effects[k]);
     }
     m_classic.on = on;
+}
+
+void Engine::setClassicWater(const std::string& pattern, int count, float alpha, float tile) {
+    m_classicWater.pattern = pattern;
+    m_classicWater.count = std::clamp(count, 0, 256);
+    m_classicWater.alpha = std::clamp(alpha, 0.05f, 1.0f);
+    m_classicWater.tile = std::max(tile, 1.0f);
+    m_classicWater.loadedKey.clear(); // recarrega no proximo quadro do modo classico
+}
+
+void Engine::syncClassicWater() {
+    { static std::string ult; std::string d = std::to_string(m_classicWater.count) + "/" + std::to_string(m_classicWater.pattern.empty()) + "/" + (m_currentMap ? m_currentMapName + "/" + std::to_string(m_currentMap->waterPlanes.size()) : std::string("nomap")) + "/key=" + m_classicWater.loadedKey; if (d != ult) { ult = d; ERUPTION_LOG_WARN("DIAGCW sync %s", d.c_str()); } } // TEMP
+    if (m_classicWater.count <= 0 || m_classicWater.pattern.empty() || !m_currentMap || m_currentMap->waterPlanes.empty())
+        return;
+    const uint32_t tipo = m_currentMap->waterPlanes[0].type;
+    const std::string chave = m_classicWater.pattern + "#" + std::to_string(tipo) + "#" + std::to_string(m_classicWater.count);
+    if (chave == m_classicWater.loadedKey) return;
+    m_classicWater.loadedKey = chave; // mesmo com falha: nao repete a leitura todo quadro
+    std::vector<std::string> caminhos;
+    char buf[1024];
+    for (int q = 0; q < m_classicWater.count; ++q) {
+        std::snprintf(buf, sizeof(buf), m_classicWater.pattern.c_str(), static_cast<int>(tipo), q);
+        caminhos.push_back(project::gameRef(buf).string());
+    }
+    if (!m_water.setTexturedFrames(caminhos))
+        ERUPTION_LOG_WARN("Classic water: frames for type %u not available, keeping the normal water", tipo);
 }
 
 // O ciclo dia/noite parado ao meio-dia punha o sol a pino e o ambiente fraco
@@ -1213,63 +1254,83 @@ void Engine::renderImGui() {
 
                             fx::TextColored(ImVec4(0, 1, 1, 1), "Depth of Field Settings");
                             fx::Checkbox("Debug Mode", &pp.visualizeCoC);
-                            if (fx::CollapsingHeader("Spotlight")) {
-                                // Sem o painel no comando, os sliders mostram o que o jogo esta' mandando.
-                                if (!pp.cocSpotPanel) {
-                                    const bool doJogo = pp.focusOverride && pp.focusModel == 3;
-                                    auto efetivo = [doJogo](float over, float& base) {
-                                        if (doJogo && over >= 0.0f) base = over;
-                                    };
-                                    efetivo(pp.focusBand, pp.cocSpotRadius);
-                                    efetivo(pp.focusRampFar, pp.cocSpotRamp);
-                                    efetivo(pp.focusTiltMaxFar, pp.cocSpotMaxFar);
-                                    efetivo(pp.focusSpotHeight, pp.cocSpotHeight);
-                                    efetivo(pp.focusRampNear, pp.cocSpotHeightRamp);
-                                    efetivo(pp.focusTiltMaxNear, pp.cocSpotMaxNear);
+                            // Preset de DoF: Spotlight OU Adaptive Focal (exclusivos). O
+                            // combo mostra o que esta' valendo agora (o jogo pode pedir o
+                            // spotlight por world.set_focus); escolher aqui passa por cima.
+                            {
+                                const bool spotNow = pp.dofPreset == 0 ||
+                                    (pp.dofPreset != 1 && (pp.cocSpotPanel || pp.cocSpotlight ||
+                                                           (pp.focusOverride && pp.focusModel == 3)));
+                                int preset = spotNow ? 0 : 1;
+                                const char* presetItems[] = {"Spotlight", "Adaptive Focal"};
+                                fx::describe("DoF Preset", "Spotlight: sharp circle around the camera target. Adaptive Focal: focus follows what the camera looks at.");
+                                if (fx::Combo("DoF Preset", &preset, presetItems, IM_ARRAYSIZE(presetItems))) {
+                                    pp.dofPreset = preset;
+                                    pp.cocEnableAdaptiveFocal = preset == 1;
+                                    if (preset == 1) pp.cocSpotPanel = false;
                                 }
-                                fx::describe("Painel no comando", "Spotlight: os valores abaixo passam por cima dos do jogo (world.set_focus).");
-                                fx::Checkbox("Painel no comando", &pp.cocSpotPanel);
-                                fx::SetItemTooltip("Spotlight: os valores abaixo passam por cima dos do jogo (world.set_focus).");
-                                bool mexeu = false;
-                                fx::describe("Raio", "Spotlight: raio nitido no chao em volta do foco (u de mundo).");
-                                mexeu |= fx::SliderFloat("Raio", &pp.cocSpotRadius, 0.0f, 300.0f, "%.0f u");
-                                fx::SetItemTooltip("Spotlight: raio nitido no chao em volta do foco (u de mundo).");
-                                fx::describe("Borda", "Spotlight: suavidade da borda do circulo, u do nitido ao borrao cheio.");
-                                mexeu |= fx::SliderFloat("Borda", &pp.cocSpotRamp, 1.0f, 400.0f, "%.0f u");
-                                fx::SetItemTooltip("Spotlight: suavidade da borda do circulo, u do nitido ao borrao cheio.");
-                                fx::describe("Borrao longe", "Spotlight: teto do borrao fora do circulo (px a 1080p).");
-                                mexeu |= fx::SliderFloat("Borrao longe", &pp.cocSpotMaxFar, 0.0f, 20.0f, "%.1f px");
-                                fx::SetItemTooltip("Spotlight: teto do borrao fora do circulo (px a 1080p).");
-                                fx::describe("Altura", "Spotlight: altura acima do foco em que copa e telhado comecam a desfocar (u).");
-                                mexeu |= fx::SliderFloat("Altura", &pp.cocSpotHeight, 0.0f, 300.0f, "%.0f u");
-                                fx::SetItemTooltip("Spotlight: altura acima do foco em que copa e telhado comecam a desfocar (u).");
-                                fx::describe("Borda da altura", "Spotlight: suavidade do desfoque do que sobe (u).");
-                                mexeu |= fx::SliderFloat("Borda da altura", &pp.cocSpotHeightRamp, 1.0f, 400.0f, "%.0f u");
-                                fx::SetItemTooltip("Spotlight: suavidade do desfoque do que sobe (u).");
-                                fx::describe("Borrao perto", "Spotlight: teto do borrao do que sobe perto da lente (px a 1080p).");
-                                mexeu |= fx::SliderFloat("Borrao perto", &pp.cocSpotMaxNear, 0.0f, 20.0f, "%.1f px");
-                                fx::SetItemTooltip("Spotlight: teto do borrao do que sobe perto da lente (px a 1080p).");
-                                if (mexeu) pp.cocSpotPanel = true;
+                                fx::SetItemTooltip("Spotlight: sharp circle around the camera target. Adaptive Focal: focus follows what the camera looks at.");
+                                if (pp.dofPreset >= 0 && fx::Button("Use game setting")) pp.dofPreset = -1;
+                                if (preset == 0 || fx::active()) {
+                                    // Sem o painel no comando, os sliders mostram o que o jogo esta' mandando.
+                                    if (!pp.cocSpotPanel) {
+                                        const bool doJogo = pp.focusOverride && pp.focusModel == 3;
+                                        auto efetivo = [doJogo](float over, float& base) {
+                                            if (doJogo && over >= 0.0f) base = over;
+                                        };
+                                        efetivo(pp.focusBand, pp.cocSpotRadius);
+                                        efetivo(pp.focusRampFar, pp.cocSpotRamp);
+                                        efetivo(pp.focusTiltMaxFar, pp.cocSpotMaxFar);
+                                        efetivo(pp.focusSpotHeight, pp.cocSpotHeight);
+                                        efetivo(pp.focusRampNear, pp.cocSpotHeightRamp);
+                                        efetivo(pp.focusTiltMaxNear, pp.cocSpotMaxNear);
+                                    }
+                                    const char* kOverride = "Spotlight: the values below override the ones the game sends (world.set_focus).";
+                                    const char* kRadius = "Spotlight: sharp radius on the ground around the focus (world units).";
+                                    const char* kEdge = "Spotlight: softness of the circle edge, from sharp to full blur (world units).";
+                                    const char* kFar = "Spotlight: maximum blur outside the circle (px at 1080p).";
+                                    const char* kHeight = "Spotlight: height above the focus where tree tops and roofs start to blur (world units).";
+                                    const char* kHeightEdge = "Spotlight: softness of the blur on what rises (world units).";
+                                    const char* kNear = "Spotlight: maximum blur of what rises close to the lens (px at 1080p).";
+                                    fx::describe("Override Game Values", kOverride);
+                                    fx::Checkbox("Override Game Values", &pp.cocSpotPanel);
+                                    fx::SetItemTooltip("%s", kOverride);
+                                    bool mexeu = false;
+                                    fx::describe("Radius", kRadius);
+                                    mexeu |= fx::SliderFloat("Radius", &pp.cocSpotRadius, 0.0f, 300.0f, "%.0f u");
+                                    fx::SetItemTooltip("%s", kRadius);
+                                    fx::describe("Edge", kEdge);
+                                    mexeu |= fx::SliderFloat("Edge", &pp.cocSpotRamp, 1.0f, 400.0f, "%.0f u");
+                                    fx::SetItemTooltip("%s", kEdge);
+                                    fx::describe("Far Blur", kFar);
+                                    mexeu |= fx::SliderFloat("Far Blur", &pp.cocSpotMaxFar, 0.0f, 20.0f, "%.1f px");
+                                    fx::SetItemTooltip("%s", kFar);
+                                    fx::describe("Height", kHeight);
+                                    mexeu |= fx::SliderFloat("Height", &pp.cocSpotHeight, 0.0f, 300.0f, "%.0f u");
+                                    fx::SetItemTooltip("%s", kHeight);
+                                    fx::describe("Height Edge", kHeightEdge);
+                                    mexeu |= fx::SliderFloat("Height Edge", &pp.cocSpotHeightRamp, 1.0f, 400.0f, "%.0f u");
+                                    fx::SetItemTooltip("%s", kHeightEdge);
+                                    fx::describe("Near Blur", kNear);
+                                    mexeu |= fx::SliderFloat("Near Blur", &pp.cocSpotMaxNear, 0.0f, 20.0f, "%.1f px");
+                                    fx::SetItemTooltip("%s", kNear);
+                                    if (mexeu) pp.cocSpotPanel = true;
+                                }
+                                if (preset == 1 || fx::active()) {
+                                    const char* methodItems[] = {"Single Ray", "Multi-Ray Grid", "Screen-Space", "Angular Radius"};
+                                    int methodIdx = static_cast<int>(pp.cocAdaptiveFocalMethod);
+                                    if (fx::Combo("Method", &methodIdx, methodItems, IM_ARRAYSIZE(methodItems))) {
+                                        pp.cocAdaptiveFocalMethod = static_cast<PostProcessor::PostSettings::AdaptiveFocalMethod>(methodIdx);
+                                    }
+                                    fx::SliderFloat("Damping", &pp.cocAdaptiveFocalDamping, 0.0f, 1.0f);
+                                    float obs = computeObstruction();
+                                    fx::Text("Obstruction: %.1f%%", obs * 100.0f);
+                                }
                             }
-                            // Com a busca ativa, os blocos atras de um efeito desligado tambem
-                            // aparecem: tudo que o painel tem pode ser achado.
                             // Os dois RadioButton de modo ("Depth + Foreground"
                             // x "Circle of Confusion") sairam junto com o ramo
                             // legado: existe UM caminho de desfoque agora.
                             if (fx::CollapsingHeader("Circle of Confusion Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-                                fx::Checkbox("Enable Adaptive Focal", &pp.cocEnableAdaptiveFocal);
-                                if (pp.cocEnableAdaptiveFocal || fx::active()) {
-                                    if (fx::CollapsingHeader("Adaptive Focal Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-                                        const char* methodItems[] = {"Single Ray", "Multi-Ray Grid", "Screen-Space", "Angular Radius"};
-                                        int methodIdx = static_cast<int>(pp.cocAdaptiveFocalMethod);
-                                        if (fx::Combo("Method", &methodIdx, methodItems, IM_ARRAYSIZE(methodItems))) {
-                                            pp.cocAdaptiveFocalMethod = static_cast<PostProcessor::PostSettings::AdaptiveFocalMethod>(methodIdx);
-                                        }
-                                        fx::SliderFloat("Damping", &pp.cocAdaptiveFocalDamping, 0.0f, 1.0f);
-                                        float obs = computeObstruction();
-                                        fx::Text("Obstruction: %.1f%%", obs * 100.0f);
-                                    }
-                                }
                                 fx::Checkbox("Enable Zoom-Focal Mapping", &pp.cocEnableZoomMapping);
                                 if (pp.cocEnableZoomMapping || fx::active()) {
                                     float adaptiveFocal = pp.cocFocalCurve.evaluate(zoomPercent) + m_playerController->adaptiveFocalOffset();
@@ -2915,6 +2976,21 @@ void Engine::renderImGui() {
             float zpOverlay = m_camera.zoomPercent();
             fx::Text("Zoom: %.1f%%", zpOverlay * 100.0f);
             fx::Text("Visible Chunks: %d", m_visibleChunks);
+            // Mapa, alvo, orbita e hora num texto so': cola num relato de bug e
+            // reproduz o mesmo quadro com ERUPTION_TEST_CAM_POSE / _TIME.
+            if (fx::Button("Copy coordinates")) {
+                const Vec3 ct = m_camera.target();
+                char buf[320];
+                std::snprintf(buf, sizeof(buf),
+                              "map %s | target %.1f, %.1f, %.1f | yaw %.1f pitch %.1f dist %.1f | zoom %.1f%% | time %.4f\n"
+                              "ERUPTION_TEST_CAM_POSE=\"%.1f,%.1f,%.1f,%.1f,%.1f,%.1f\" ERUPTION_TEST_TIME=%.4f",
+                              m_currentMapName.c_str(), ct.x, ct.y, ct.z, glm::degrees(m_camera.orbitYaw()),
+                              glm::degrees(m_camera.orbitPitch()), m_camera.orbitDistance(),
+                              m_camera.zoomPercent() * 100.0f, m_dayNightCycle.timeOfDay(), ct.x, ct.y, ct.z,
+                              glm::degrees(m_camera.orbitYaw()), glm::degrees(m_camera.orbitPitch()),
+                              m_camera.orbitDistance(), m_dayNightCycle.timeOfDay());
+                ImGui::SetClipboardText(buf);
+            }
             fx::Text("Time Control");
             int curT = (int)(m_dayNightCycle.timeOfDay() * 1440.0f);
             char tStr[32]; sprintf(tStr, "%02d:%02d", curT / 60, curT % 60);

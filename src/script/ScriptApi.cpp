@@ -268,7 +268,15 @@ int world_is_weather(lua_State* L) {
     return 1;
 }
 int world_set_weather(lua_State* L) {
-    ScriptBridge::setWeather(weatherTypeFromName(luaL_checkstring(L, 1)));
+    const WeatherType t = weatherTypeFromName(luaL_checkstring(L, 1));
+    // Com o modo classico ligado o clima nao muda (o classico e' sem efeitos):
+    // ele fica guardado e entra quando o HD voltar. Antes o script do mapa
+    // trocava para neve/chuva em cima do classico ao carregar o mapa.
+    if (eng().classicMode()) {
+        eng().setClassicSavedWeather(t);
+        return 0;
+    }
+    ScriptBridge::setWeather(t);
     return 0;
 }
 int world_map(lua_State* L) {
@@ -713,6 +721,13 @@ bool padButton(int button, bool pressed) {
     return false;
 }
 
+// Caixa de texto aberta (console do Enter, campo do editor): as letras sao do
+// texto, nao do jogo. Sem isto WASD andava a camera e H/1/2 mexiam no visor
+// enquanto se digitava. O controle (pad_*) segue valendo.
+bool typingText() {
+    return ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantTextInput;
+}
+
 int input_down(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     const int b = padButtonFromName(name);
@@ -721,7 +736,7 @@ int input_down(lua_State* L) {
         return 1;
     }
     const Key k = scriptKeyFromName(name);
-    lua_pushboolean(L, k != Key::Unknown && Input::isKeyDown(k));
+    lua_pushboolean(L, k != Key::Unknown && !typingText() && Input::isKeyDown(k));
     return 1;
 }
 // Nome do primeiro controle ligado, ou nil: o jogo troca o desenho das
@@ -789,7 +804,7 @@ int input_pressed(lua_State* L) {
         return 1;
     }
     const Key k = scriptKeyFromName(name);
-    lua_pushboolean(L, k != Key::Unknown && Input::isKeyPressed(k));
+    lua_pushboolean(L, k != Key::Unknown && !typingText() && Input::isKeyPressed(k));
     return 1;
 }
 
@@ -1951,6 +1966,28 @@ int world_classic(lua_State* L) {
     lua_pushboolean(L, eng().classicMode());
     return 1;
 }
+// Agua do modo classico: set_classic_water(padrao, quadros, alfa?, ladrilho?).
+// O padrao leva dois %d (tipo da agua do mapa e numero do quadro).
+// So' aceita "%d" e "%0Nd" e exatamente dois: o padrao vai para snprintf.
+bool padraoDoisInteiros(const std::string& p) {
+    int n = 0;
+    for (size_t i = 0; i < p.size(); ++i) {
+        if (p[i] != '%') continue;
+        size_t j = i + 1;
+        while (j < p.size() && p[j] >= '0' && p[j] <= '9') ++j;
+        if (j >= p.size() || p[j] != 'd') return false;
+        ++n;
+        i = j;
+    }
+    return n == 2;
+}
+int world_set_classic_water(lua_State* L) {
+    const std::string padrao = luaL_checkstring(L, 1);
+    luaL_argcheck(L, padraoDoisInteiros(padrao), 1, "pattern needs exactly two %d (water type, frame)");
+    eng().setClassicWater(padrao, int(luaL_checkinteger(L, 2)), float(luaL_optnumber(L, 3, 0.6)),
+                          float(luaL_optnumber(L, 4, 10.0)));
+    return 0;
+}
 int world_set_dof(lua_State* L) {
     eng().setDofEnabled(lua_toboolean(L, 1) != 0);
     return 0;
@@ -2635,7 +2672,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg world[] = {
         {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
         {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
-        {"look", world_look}, {"set_look", world_set_look}, {"set_ambient", world_set_ambient}, {"set_dof", world_set_dof}, {"set_classic", world_set_classic}, {"classic", world_classic}, {"set_fog", world_set_fog}, {"set_border", world_set_border}, {"set_exposure", world_set_exposure}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"set_nav_rules", world_set_nav_rules}, {"nav_rules", world_nav_rules}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
+        {"look", world_look}, {"set_look", world_set_look}, {"set_ambient", world_set_ambient}, {"set_dof", world_set_dof}, {"set_classic", world_set_classic}, {"set_classic_water", world_set_classic_water}, {"classic", world_classic}, {"set_fog", world_set_fog}, {"set_border", world_set_border}, {"set_exposure", world_set_exposure}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"set_nav_rules", world_set_nav_rules}, {"nav_rules", world_nav_rules}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
         {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
         {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend}, {"set_cutaway", world_set_cutaway},
         {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids}, {"set_liquid_level", world_set_liquid_level},

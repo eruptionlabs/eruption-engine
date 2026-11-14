@@ -41,6 +41,7 @@
 #include "formats/Ribbon.hpp"
 #include "renderer/LocalCloud.hpp"
 #include "renderer/WaterRenderer.hpp"
+#include "renderer/WaterReflectionPass.hpp"
 #include "renderer/DebugLineRenderer.hpp"
 #include "renderer/OverlayLineRenderer.hpp"
 #include "renderer/SpriteSystem.hpp"
@@ -227,6 +228,8 @@ public:
     void enableBenchmarkThunderstorm(bool enable) { m_benchmarkThunderstorm = enable; }
     void enableBenchmarkHeavyRain(bool enable) { m_benchmarkHeavyRain = enable; }
     bool isRunning() const { return m_running; }
+    void requestQuit() { m_running = false; }
+    void logMemoryCaches() const; // [MEMCACHE]: tamanho dos caches que atravessam a troca de mapa
     // `preloaded`: mapa já lido do disco numa thread (troca pelo seletor de
     // mapas); o resto é o mesmo carregamento do mapa aberto direto.
     bool loadMap(const std::string& name, std::shared_ptr<LoadedMap> preloaded = nullptr);
@@ -556,6 +559,7 @@ public:
     float m_tessLevelCap = 64.0f;    // chave "tessellation_max_level"
     float m_tessBandScale = 1.0f;    // chave "tessellation_band_scale"
     float m_tessNearDistance = 0.0f;   // chave "tessellation_near_distance" (0 = sem banda perto)
+    float m_tessZoomFollow = 0.0f;     // chave "tessellation_zoom_follow" (Engine::tessZoomFollow)
     float m_tessNearSpacing = 0.25f;   // chave "tessellation_near_spacing"
     float m_tessHeightMinSpacing = 0.0f; // chave "tessellation_height_min_spacing" (0 = so' a grade)
     // Sprites (FrameUBO::spriteParams): chave "sprite_filter" (0 nearest, 1
@@ -605,6 +609,8 @@ public:
     // para cortar o passe de agua pelo frustum da CAMERA no chamador - ver
     // Engine::render. Seguro: a agua nao entra no shadow map.
     void cacheWaterBounds(const struct WaterMesh& mesh);
+    void buildShoreMask(const struct WaterMesh& mesh);
+    void rebuildShoreMask();
     Timer& timer() { return m_timer; }
     bool& showConsole() { return m_showConsole; }
     bool& showDebugOverlay() { return m_showDebugOverlay; }
@@ -690,6 +696,17 @@ public:
     // ambiente), cor x (ambiente + difusa x N.L).
     void applyClassicLight(LightingEnvironment& env) const;
     bool classicMode() const { return m_classic.on; }
+    // Modo classico ligado: o clima pedido (script ao carregar mapa) fica
+    // guardado para a volta ao HD, e o classico continua limpo.
+    void setClassicSavedWeather(WeatherType t) { m_classic.weatherType = static_cast<int>(t); }
+    // Agua do modo classico: plano chato no nivel do mapa, quadros de uma
+    // animacao trocados na velocidade do mapa e translucida, sem reflexo,
+    // refracao, Fresnel nem espuma. `pattern` e' um caminho do jogo com dois
+    // %d (tipo da agua do mapa, numero do quadro de 0 a count-1), p.ex.
+    // "assets/external/agua/agua%d_%02d.png". Altura, velocidade e passo da
+    // onda e a velocidade da animacao vem do plano d'agua do mapa. Sem
+    // pedido (ou sem os arquivos) o modo classico mantem a agua normal.
+    void setClassicWater(const std::string& pattern, int count, float alpha, float tile);
     struct ClassicSaved {
         bool on = false;
         bool usePbr = true, ssao = true;
@@ -697,7 +714,18 @@ public:
         int weatherType = 0;
         bool tess = true, contact = true;
         bool effects[6] = {};
+        bool cloudLayers = true, motionBlur = true, chromaticAb = true, waterReflection = false;
+        int outlineMode = 0;
     } m_classic;
+    struct ClassicWaterRequest {
+        std::string pattern;
+        int count = 0;
+        float alpha = 0.6f, tile = 10.0f;
+        std::string loadedKey; // padrao + tipo ja' carregados (vazio = nenhum)
+    } m_classicWater;
+    // Carrega os quadros da agua classica quando o pedido ou o tipo de agua
+    // do mapa mudou (so' com o modo ligado). Chamado todo quadro.
+    void syncClassicWater();
     std::string m_demoLabel;       // rotulo grande no rodape (ver runDemoTimeline: label=)
     float m_demoLabelUntil = -1.0f;// segundos do roteiro ate' quando o rotulo fica
     RenderEffect* renderEffect(size_t i) { return m_renderEffects[i].get(); }
@@ -1336,6 +1364,7 @@ private:
     // Calibra a escala da cena para target_fps (graphics.json) nos primeiros
     // segundos de cada mapa: uns poucos ajustes, sem oscilar durante o jogo.
     void settleRenderScale();
+    float tessZoomFollow() const; // escala da faixa de tesselacao pela lente (Render.cpp)
     void renderImGui();
     void drawLightingControls();
     uint32_t resolveModelTexture(const std::string& path);
@@ -1360,6 +1389,13 @@ private:
     void shutdownImGui();
     void onWindowResize(int width, int height);
     void renderMinimap(VkCommandBuffer cmd);
+    // Reflexo espelhado da agua HD-2D (src/core/WaterReflection.cpp): a cena
+    // pela camera espelhada no plano d'agua, antes do G-buffer principal.
+    void renderWaterReflection(VkCommandBuffer cmd);
+    // As nuvens volumetricas pela mesma camera espelhada (WaterReflection.cpp).
+    VkImageView renderWaterReflectionClouds(VkCommandBuffer cmd, const Mat4& depthVp, const Mat4& rasterVp,
+                                            const Mat4& cullVp, const Vec3& mirroredCam);
+    bool waterInViewThisFrame() const;
     // Raster da visao na janela da camera e upload; fora de passe de render.
     void updateVision(VkCommandBuffer cmd);
     void setupLavaLiquid(const LoadedMap* map);
@@ -1541,6 +1577,11 @@ private:
     CloudLayerRenderer m_cloudLayerRenderer;
     WeatherSystem m_weatherSystem;
     WaterRenderer m_water;
+    // Passe espelhado do reflexo (preset "water_reflection_pass"); ver
+    // WaterReflectionPass.hpp. m_waterReflectionDiv = divisor da resolucao.
+    WaterReflectionPass m_waterReflection;
+    bool m_waterReflectionOn = false;
+    uint32_t m_waterReflectionDiv = 2;
     DebugLineRenderer m_debugLineRenderer;
     OverlayLineRenderer m_overlayLineRenderer;
     SpriteSystem m_spriteSystem;
@@ -1564,6 +1605,9 @@ private:
     void updateTemporalJitter();
     VkSampler m_defaultSampler = VK_NULL_HANDLE;
     VkSampler m_nearestSampler = VK_NULL_HANDLE;
+    // Altura do minimapa (R8_UINT): sem filtro linear em NADA, nem entre mips
+    // nem anisotropia - o m_nearestSampler mistura mips (VUID-04770).
+    VkSampler m_minimapUintSampler = VK_NULL_HANDLE;
     // Samplers padrao SEM vies de mip, guardados quando o FSR troca os de cena
     // (a UI criada antes continua apontando para eles).
     VkSampler m_uiDefaultSampler = VK_NULL_HANDLE;
@@ -2112,6 +2156,13 @@ private:
         float builtLevel = 0.0f;
     };
     std::vector<LavaSource> m_lavaSources;
+    // Fontes da grade da beira (buildShoreMask): a agua do mapa e as lavas,
+    // uma faixa de indices por lava (mesma ordem de m_lavaLiquids). A grade
+    // guarda, por celula, a proximidade e QUAL liquido esta' mais perto - a
+    // beira (onda, lava subindo, contato) e' propriedade de cada plano.
+    WaterMesh m_shoreWaterSrc;
+    WaterMesh m_shoreLavaSrc;
+    std::vector<uint32_t> m_shoreLavaCounts;
     WaterBenchmark m_waterBenchmark;
     bool m_waterForceWaterPrev = false;
     float m_mapBaseWaterLevel = 0.0f;

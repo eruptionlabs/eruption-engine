@@ -1166,6 +1166,7 @@ bool Engine::init(int width, int height, const std::string& title) {
             cloudCfg.cloudThickness / glm::max(1u, cloudCfg.layerCount - 1));
     }
     if (!m_water.init(&m_vulkan, &m_bindless)) return false;
+    m_waterReflection.init(&m_vulkan, &m_bindless);
     m_water.setSkyTexture(m_skybox.outputView(), m_skybox.outputSampler());
     if (!m_debugLineRenderer.init(&m_vulkan)) return false;
     if (!m_overlayLineRenderer.init(&m_vulkan)) return false;
@@ -1567,6 +1568,7 @@ void Engine::shutdown() {
     // esta chamada vira no-op (clearLavaMesh checa os handles) e pode sair.
     m_water.clearLavaMesh();
     m_water.shutdown();
+    m_waterReflection.shutdown();
     m_debugLineRenderer.shutdown(); m_overlayLineRenderer.shutdown(); m_gbuffer.shutdown(); m_bindless.shutdown();
 
     // Cleanup player sprites
@@ -1577,6 +1579,7 @@ void Engine::shutdown() {
 
     if (m_defaultSampler != VK_NULL_HANDLE) vkDestroySampler(m_vulkan.device(), m_defaultSampler, nullptr);
     if (m_nearestSampler != VK_NULL_HANDLE) vkDestroySampler(m_vulkan.device(), m_nearestSampler, nullptr);
+    if (m_minimapUintSampler != VK_NULL_HANDLE) vkDestroySampler(m_vulkan.device(), m_minimapUintSampler, nullptr);
     if (m_uiDefaultSampler != VK_NULL_HANDLE) vkDestroySampler(m_vulkan.device(), m_uiDefaultSampler, nullptr);
     if (m_uiNearestSampler != VK_NULL_HANDLE) vkDestroySampler(m_vulkan.device(), m_uiNearestSampler, nullptr);
 
@@ -2982,12 +2985,22 @@ void Engine::applyGraphicsPreset() {
             ws.shoreFoam = std::clamp(s.value("shore_foam", ws.shoreFoam), 0.0f, 8.0f);
             ws.clarity = std::clamp(s.value("clarity", ws.clarity), 0.1f, 1000.0f);
             ws.waveSlope = std::clamp(s.value("wave_slope", ws.waveSlope), 0.0f, 8.0f);
+            ws.cloudReflection = std::clamp(s.value("cloud_reflection", ws.cloudReflection), 0.0f, 4.0f);
             if (s.contains("deep_color") && s["deep_color"].is_array() && s["deep_color"].size() == 3)
                 ws.deepColor = Vec3(s["deep_color"][0].get<float>(), s["deep_color"][1].get<float>(),
                                     s["deep_color"][2].get<float>());
         }
         if (const char* e = std::getenv("ERUPTION_TEST_WATER_HD2D")) ws.hd2d = e[0] == '1';
         m_water.setStyle(ws);
+        // Reflexo espelhado (WaterReflectionPass): a cena pela camera espelhada
+        // no plano d'agua, para o reflexo do que esta' fora da tela; so' com o
+        // reflexo planar ligado. "water_reflection_pass_div" = divisor da
+        // resolucao (2 = meia em cada eixo).
+        // ERUPTION_TEST_WATER_REFLECTION_PASS=0|1 (A/B de captura) troca sem
+        // editar o json.
+        m_waterReflectionOn = p.value("water_reflection_pass", false);
+        m_waterReflectionDiv = static_cast<uint32_t>(std::clamp(p.value("water_reflection_pass_div", 2), 1, 4));
+        if (const char* e = std::getenv("ERUPTION_TEST_WATER_REFLECTION_PASS")) m_waterReflectionOn = e[0] == '1';
     }
 
     if (p.contains("pom_height_scale")) m_pomHeightScale = std::clamp<float>(p["pom_height_scale"], 0.0f, 0.1f);
@@ -3076,6 +3089,8 @@ void Engine::applyGraphicsPreset() {
     // geometria (58-72% antes); G-buffer +0,7 a +1,7 ms com a peca enchendo
     // a tela, ~0,1 ms a 400 u.
     m_tessNearDistance = std::clamp(p.value("tessellation_near_distance", 0.0f), 0.0f, 1000.0f);
+    // Faixa da curva e banda perto pela lente da camera (Engine::tessZoomFollow).
+    m_tessZoomFollow = std::clamp(p.value("tessellation_zoom_follow", 0.0f), 0.0f, 1.0f);
     m_tessNearSpacing = std::clamp(p.value("tessellation_near_spacing", m_tessVertexSpacing), 0.01f, 4.0f);
     m_tessNearEdgePixels = std::clamp(p.value("tessellation_near_edge_pixels", 8.0f), 1.0f, 32.0f);
     // PISO DO FILTRO DA ALTURA, em u de mundo. A altura e' lida com o filtro

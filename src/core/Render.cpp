@@ -193,9 +193,6 @@ void Engine::bindFsrInputs(bool write) {
     m_fsrReset = true;
 }
 
-// Fim da faixa de tesselacao: onde a curva chega a 1 (sem subdivisao), com
-// 20% de folga para a malha entrar na faixa antes do primeiro vertice
-// deslocado. Era distMax * 0,12 fixo - a curva ia mais longe e a faixa nao.
 // Caixa de culling de uma coluna de fumaca: base de raio `radius` na boca,
 // topo com raio `radius * (1 + spread)`, mais a folga lateral da adveccao pelo
 // vento (a mesma conta que o passe "Map Smoke" fazia em linha).
@@ -212,6 +209,9 @@ static Vec3 smokeBoxMax(const SmokeEmitter& sm, const Vec2& wdir, float wspd) {
     return Vec3(sm.position.x + folga, sm.position.y + sm.height, sm.position.z + folga);
 }
 
+// Fim da faixa de tesselacao: onde a curva chega a 1 (sem subdivisao), com
+// 20% de folga para a malha entrar na faixa antes do primeiro vertice
+// deslocado. Era distMax * 0,12 fixo - a curva ia mais longe e a faixa nao.
 static float tessBandDistance(const SplineCurve& curve, float distMax) {
     if (curve.evaluate(0.0f) <= 1.001f) return 0.0f;
     constexpr int kSamples = 200;
@@ -220,6 +220,34 @@ static float tessBandDistance(const SplineCurve& curve, float distMax) {
         if (curve.evaluate(x) <= 1.001f) return std::min(x * 1.2f, 1.0f) * distMax;
     }
     return distMax;
+}
+
+// FAIXA DE TESSELACAO PELO ZOOM. A curva e a banda perto sao em u de mundo,
+// medidas numa lente de 60 graus; a camera de orbita do jogo usa ~20 graus e
+// o zoom de 80% poe o chao a ~700 u - alem do fim da curva (800 u, com rampa
+// desde 600) e da banda perto (250 u): o relevo zerava e o chao ficava liso.
+// Aqui as distancias viram as da lente de referencia (a mesma conta de
+// Camera::zoomPercent): com lente mais fechada a faixa estica na proporcao de
+// tan(30)/tan(fov/2), e o que se ve' com o mesmo tamanho na tela recebe a
+// mesma grade. O piso em pixels de aresta (model.tesc) segue limitando a
+// densidade, entao o custo e' por area de tela, nao por u de mundo.
+// Medido (visor de mapas, lente ~20 graus, zoom 80% = orbita de 696 u, 4090
+// sob xvfb, preset high): G-buffer 1,55 -> 1,80 ms (mapa de cidade) e
+// 0,48 -> 0,86 ms (mapa de praia); o chao alem de 800 u, liso antes, desloca,
+// e a grade de 4 px chega ao centro da tela (antes 8 px, ~2,7 u por aresta).
+// "tessellation_zoom_follow" (preset): 0 desliga, 1 a lente inteira. Fora dos
+// mobile_*: la' a banda perto e' 0 e o estagio de patch custa caro.
+// ERUPTION_TEST_TESS_ZOOM=<0..1> (bancada) troca o valor do preset.
+float Engine::tessZoomFollow() const {
+    static const float kEnv = [] {
+        const char* e = std::getenv("ERUPTION_TEST_TESS_ZOOM");
+        return e ? std::clamp(static_cast<float>(std::atof(e)), 0.0f, 1.0f) : -1.0f;
+    }();
+    const float w = kEnv >= 0.0f ? kEnv : m_tessZoomFollow;
+    if (w <= 0.0f || m_camera.isOrthographic()) return 1.0f;
+    const float lens = std::tan(glm::radians(30.0f)) / std::tan(glm::radians(m_camera.fov()) * 0.5f);
+    // Teto 4: 15 graus de lente; mais fechado que isso a faixa ja' cobre o mapa.
+    return std::pow(std::clamp(lens, 1.0f, 4.0f), w);
 }
 
 void Engine::settleRenderScale() {
@@ -353,6 +381,7 @@ void Engine::render() {
         }
         bindFsrInputs();
         m_water.resizeRefraction(w, h);
+        m_waterReflection.resize(w, h);
         m_water.setSkyTexture(m_skybox.outputView(), m_skybox.outputSampler());
         // Mantem a abertura em vigor: redimensionar a janela nao e' motivo pra
         // voltar pro padrao de fabrica (o jogo pode ter pedido outra).
@@ -526,13 +555,32 @@ void Engine::render() {
         }
     }
 
-    // ERUPTION_TEST_CLASSIC=1 (teste): abre ja' no modo classico (ERUPT OFF).
+    // ERUPTION_TEST_CLASSIC=<quadro> (teste): liga o modo classico (ERUPT OFF)
+    // nesse quadro (0 ou 1 = ja' no primeiro). ERUPTION_TEST_CLASSIC_OFF=<quadro>
+    // desliga de novo, para provar que o estado volta igual.
     // Aqui e nao no painel de toque: sem ERUPTION_TOUCH_HUD o painel nao
     // desenha e a captura "original" saia com tudo ligado.
-    static bool s_classicHook = std::getenv("ERUPTION_TEST_CLASSIC") != nullptr;
-    if (s_classicHook) {
-        s_classicHook = false;
-        setClassicMode(true);
+    {
+        static const int kClassicOn = [] { const char* e = std::getenv("ERUPTION_TEST_CLASSIC"); return e ? std::atoi(e) : -1; }();
+        static const int kClassicOff = [] { const char* e = std::getenv("ERUPTION_TEST_CLASSIC_OFF"); return e ? std::atoi(e) : -1; }();
+        const int quadro = static_cast<int>(m_framesCount);
+        if (kClassicOn >= 0 && quadro == (kClassicOn <= 1 ? 0 : kClassicOn)) setClassicMode(true);
+        if (kClassicOff >= 0 && quadro == kClassicOff) setClassicMode(false);
+    }
+    if (m_classic.on) {
+        // O que o carregar de mapa ou um script religam durante o modo.
+        m_cloudLayersEnabled = false;
+        m_postSettings.enableMotionBlur = false;
+        m_postSettings.enableChromaticAberration = false;
+        m_waterReflectionOn = false;
+        syncClassicWater();
+        // Clima do mapa aplicado pelo carregamento (.env) depois de o modo
+        // ligar: guarda para a volta e fica limpo (num mapa de neve nevava por
+        // cima do classico).
+        if (m_weatherSystem.currentType() != WeatherType::Clear) {
+            m_classic.weatherType = static_cast<int>(m_weatherSystem.currentType());
+            applyWeatherTypeFull(WeatherType::Clear, 1.0f);
+        }
     }
 
     LightingEnvironment env;
@@ -630,10 +678,38 @@ void Engine::render() {
         m_deferredLighting.setRainSpots(m_wetTrail, m_useProceduralCloudField && m_autoCloud && m_cloudLayersEnabled);
     }
     // Beira d'agua: a onda molha a faixa da praia (shoreWetness no shader).
-    // O tempo da volta a cada ~2 h (mod) para o float do shader nao perder precisao.
-    m_deferredLighting.setShoreWater(m_water.hasWater() && m_renderEffects.size() > 7 && m_renderEffects[7]->isEnabled(),
+    // O tempo da volta a cada 10000 s (mod) para o float do shader nao perder
+    // precisao: multiplo do periodo de 10 s da onda (pbr_common.glsl kShoreOmega).
+    // "Enable Water" desligado no menu tambem apaga a beira (onda, espuma,
+    // areia molhada): antes a espuma seguia invadindo o chao sem agua.
+    m_deferredLighting.setShoreWater(!m_classic.on && m_water.hasWater() && m_renderEffects.size() > 7 && m_renderEffects[7]->isEnabled() && m_waterMenu.config.enabled,
                                      m_mapBaseWaterLevel + m_waterMenu.config.waterLevel,
-                                     static_cast<float>(std::fmod(static_cast<double>(m_timer.elapsed()), 6981.317)));
+                                     static_cast<float>(std::fmod(static_cast<double>(m_timer.elapsed()), 10000.0)));
+    const bool laminaPraia = m_waterMenu.config.shoreSwash && !m_classic.on; // classico: sem lamina de praia
+    m_deferredLighting.setShoreSwash(laminaPraia ? (m_waterMenu.config.shoreSwashFoam ? 2 : 1) : 0,
+                                     m_water.style().deepColor, m_water.style().clarity);
+    // Beira por plano de liquido (slot = G da grade, Engine::rebuildShoreMask):
+    // 0 = agua do mapa, 1 + i = lava i. Nivel vivo (scripts mudam o da lava).
+    {
+        const bool temAgua = m_water.hasWater() && m_renderEffects.size() > 7 && m_renderEffects[7]->isEnabled() && m_waterMenu.config.enabled;
+        const int modoAgua = laminaPraia ? (m_waterMenu.config.shoreSwashFoam ? 2 : 1) : 0;
+        m_deferredLighting.setShoreLiquid(0, Vec4(temAgua ? m_mapBaseWaterLevel + m_waterMenu.config.waterLevel : -1.0e9f,
+                                                  float(modoAgua), 0.0f, 0.0f));
+        for (uint32_t s = 1; s < DeferredLighting::kShoreLiquids; ++s) {
+            const uint32_t i = s - 1;
+            if (i >= m_lavaLiquids.size() || i >= m_lavaSources.size() || !m_lavaSources[i].map) {
+                m_deferredLighting.setShoreLiquid(s, Vec4(-1.0e9f, 0.0f, 1.0f, 0.0f));
+                continue;
+            }
+            const LavaSource& src = m_lavaSources[i];
+            const auto& lq = src.map->liquids[src.index];
+            const float nivel = m_lavaLiquids[i].level + (lq.level - src.builtLevel);
+            int modo = lq.shore >= 0 ? lq.shore : 1;
+            if (src.map == m_currentMap.get() && src.index < m_waterMenu.liquids.size()) modo = m_waterMenu.liquids[src.index].shore;
+            const float brilho = lq.emissive > 0.0f ? lq.emissive : m_waterMenu.config.emissiveStrength;
+            m_deferredLighting.setShoreLiquid(s, Vec4(nivel, float(modo), 1.0f, brilho));
+        }
+    }
     // Chao encharca com a chuva (~6 s) e seca devagar quando ela para: o
     // roughness volta ao normal em kSeca segundos, nao de uma vez.
     {
@@ -800,7 +876,8 @@ void Engine::render() {
         const char* e = std::getenv("ERUPTION_TEST_TESS_AMP");
         return e ? static_cast<float>(std::atof(e)) : -1.0f;
     }();
-    frameUbo.tessParams = Vec4(distMax, tessOn ? 1.0f : 0.0f,
+    const float tessZoom = tessZoomFollow();
+    frameUbo.tessParams = Vec4(distMax * tessZoom, tessOn ? 1.0f : 0.0f,
                                kTessAmpEnv >= 0.0f ? kTessAmpEnv : m_tessAmplitude, tessMax);
     frameUbo.tessLut0 = tessLo;
     frameUbo.tessLut1 = tessHi;
@@ -839,7 +916,7 @@ void Engine::render() {
     frameUbo.tessParams2 = Vec4(kReliefCos.y, m_tessVertexSpacing, glm::radians(m_normalMaxSlopeDeg), kFoliageTessCap);
     frameUbo.tessHeightBlur = m_tessHeightBlur;
     frameUbo.tessNearEdgePixels = m_tessNearEdgePixels;
-    frameUbo.tessNearDistance = m_tessNearDistance;
+    frameUbo.tessNearDistance = m_tessNearDistance * tessZoom;
     frameUbo.tessNearSpacing = m_tessNearSpacing;
     frameUbo.reliefParams = Vec4(m_tessHeightMinSpacing, 0.0f, 0.0f, 0.0f);
     frameUbo.spriteParams = Vec4(m_spriteFilter, m_spriteNormalStrength, 0.0f, 0.0f);
@@ -850,17 +927,18 @@ void Engine::render() {
         frameUbo.spriteRim = Vec4(m_spriteRimTint, rim);
         m_deferredLighting.setSpriteRim(m_spriteRimTint, rim);
     }
-    m_modelRenderer.setTessellation(tessOn, tessBandDistance(m_tessCurve, distMax) * m_tessBandScale);
+    m_modelRenderer.setTessellation(tessOn, tessBandDistance(m_tessCurve, distMax * tessZoom) * m_tessBandScale);
     m_modelRenderer.setTessAmplitude(frameUbo.tessParams.z);
     // Relevo efetivo no log quando muda (amplitude, banda da curva, banda
     // perto): o patch de graphics.json de um jogo pode trocar tudo isso, e sem
     // o numero no log nao da' para saber qual valeu (a camera de orbita a
     // 250 u fica fora da banda perto de 110 u dos presets de PC). Fazer a
-    // banda perto seguir o foco da camera foi medido e ficou de fora: na
+    // banda perto seguir o FOCO da camera foi medido e ficou de fora: na
     // camera de orbita do mapa base o chao inteiro da tela fica a 200-350 u,
     // entao a grade fina cobre a tela toda - G-buffer 8,0 -> 13,6 ms (xvfb,
     // P3) por 22 dB de diferenca. Jogo que quiser paga pelo preset
-    // (tessellation_near_distance).
+    // (tessellation_near_distance). Seguir a LENTE e' outra conta e ficou
+    // (tessZoomFollow): a distancia cresce, o piso em pixels nao muda.
     {
         static Vec4 s_lastRelief(-1.0f);
         const Vec4 relief(tessOn ? 1.0f : 0.0f, frameUbo.tessParams.z, m_modelRenderer.tessBandDistance(),
@@ -1036,6 +1114,11 @@ void Engine::render() {
     // Depois das luzes de efeito deste quadro: elas tambem projetam sombra de sprite.
     updateSpriteDominantLights();
     m_spriteRenderer.uploadSpriteLights(spriteDominantLights()); // contraluz no sprite.frag (M9)
+    // Reflexo espelhado da agua (G-buffer proprio): antes da cena, que reusa
+    // o estado de LOD do ModelRenderer logo depois.
+    bw::setPass("Water Reflection");
+    renderWaterReflection(cmd);
+    bw::setPass(nullptr);
     m_vulkan.writeTimestamp(cmd, 2, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     bw::setPass("GBuffer"); // medidor de banda: mesmo nome do tempo de GPU
     m_gbuffer.beginPass(cmd);
@@ -1247,12 +1330,7 @@ void Engine::render() {
     // A agua nao entra no shadow map, entao cortar pelo frustum da CAMERA
     // aqui nao apaga sombra de nada - a regra de "sombra e' pelo frustum da
     // LUZ" segue intocada no ShadowRenderer.
-    const bool waterInView = m_renderEffects[7]->isEnabled() && m_water.hasWater() &&
-        !m_waterFullyBuried &&
-        (!m_waterBoundsValid ||
-         m_camera.frustum().intersectsAABB(
-             Vec3(m_waterAabbMin.x, m_waterAabbMin.y + m_waterMenu.config.waterLevel - 2.0f, m_waterAabbMin.z),
-             Vec3(m_waterAabbMax.x, m_waterAabbMax.y + m_waterMenu.config.waterLevel + 2.0f, m_waterAabbMax.z)));
+    const bool waterInView = waterInViewThisFrame();
 
     // Prepare water refraction copies before entering the forward rendering pass,
     // because we cannot transition the active color attachment inside dynamic rendering.
@@ -1295,12 +1373,14 @@ void Engine::render() {
             m_water.setSpriteBillboard(m_gbuffer.pbrView(), glm::length(up) > 1e-5f ? glm::normalize(up) : Vec3(0, 1, 0));
         }
         m_water.updateContactFoam(m_timer.deltaTime(), m_waterMenu.config);
+        WaterRenderer::WaterSettings prepSettings = m_waterMenu.config;
+        if (m_classic.on && m_water.hasTexturedFrames()) prepSettings.liquidKind = 4; // sem reflexo planar (SSPR)
         m_water.prepareRefraction(cmd,
                                   m_deferredLighting.litImage(), m_gbuffer.depthImage(),
                                   m_gbuffer.extent().width, m_gbuffer.extent().height,
                                   m_camera.nearPlane(), m_camera.farPlane(),
                                   inverse(m_camera.viewProjJittered()),
-                                  m_waterMenu.config);
+                                  prepSettings);
     }
 
     m_vulkan.cmdImageBarrier(cmd, m_gbuffer.depthImage(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -1308,6 +1388,35 @@ void Engine::render() {
     m_vulkan.cmdBeginRendering(cmd, {colorAttachment}, &depthAttachment, nullptr, renderExtent());
 
     // Water forward pass (transparent) — BEFORE skybox so depth buffer still has terrain
+    // ERUPTION_TEST_WATER_MASK=<0..255> (teste): o "AB Mask" do menu da agua
+    // (bit 0 refracao, 1 normal, 2 profundidade, 3 reflexo do ceu, 4 espuma,
+    // 5 ondas, 6 Fresnel+brilho, 7 pixel snap) sem tocar o water_config.json.
+    {
+        static const int kMask = [] { const char* e = std::getenv("ERUPTION_TEST_WATER_MASK"); return e ? std::atoi(e) : -1; }();
+        if (kMask >= 0) m_waterMenu.abTestMask = static_cast<uint32_t>(kMask) & 0xFFu;
+    }
+    // ERUPTION_TEST_CLOUD_OVERHEAD=<quadro>[,altitude 0..1[,densidade 0..1]]
+    // (teste): nesse quadro poe UMA nuvem seca no alvo da camera (o
+    // ERUPTION_TEST_CAM_POSE), para ver o reflexo dela na agua logo abaixo.
+    {
+        static float kCloudAt[3] = {-1.0f, 0.55f, 0.8f};
+        static const bool kParsed = [] {
+            const char* e = std::getenv("ERUPTION_TEST_CLOUD_OVERHEAD");
+            if (!e) return false;
+            std::sscanf(e, "%f,%f,%f", &kCloudAt[0], &kCloudAt[1], &kCloudAt[2]);
+            return true;
+        }();
+        if (kParsed && static_cast<int>(m_framesCount) == static_cast<int>(kCloudAt[0]))
+            m_pendingCloudSpawns.push_back({kCloudAt[1], kCloudAt[2], 0.0f, 0.0f, false, 1.0f, false}); // fila: nascer no meio do quadro derrubava o motor
+    }
+    // ERUPTION_TEST_WATER_BLINK=<quadro> (teste): liga "Force Water" nesse
+    // quadro e desliga no seguinte - o mesmo que clicar duas vezes no menu,
+    // para comparar a agua antes e depois da regeneracao.
+    {
+        static const int kBlink = [] { const char* e = std::getenv("ERUPTION_TEST_WATER_BLINK"); return e ? std::atoi(e) : -1; }();
+        if (kBlink >= 0 && (m_framesCount == kBlink || m_framesCount == kBlink + 1))
+            m_waterMenu.config.forceWater = m_framesCount == kBlink;
+    }
     // Regenerate water mesh if forceWater toggle changed
     if (m_currentMap && m_waterForceWaterPrev != m_waterMenu.config.forceWater) {
         m_waterForceWaterPrev = m_waterMenu.config.forceWater;
@@ -1328,6 +1437,9 @@ void Engine::render() {
         WaterRenderer::WaterSettings adjustedSettings = m_waterMenu.config;
         adjustedSettings.waterLevel = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
         adjustedSettings.levelOffset = m_waterMenu.config.waterLevel;
+        // Com a lamina subindo a areia a espuma de contato sai: a agua continua
+        // pelo chao em vez de parar numa linha branca.
+        if (adjustedSettings.shoreSwash) adjustedSettings.enableFoam = false;
         // O plano d'agua do mapa e' SEMPRE agua. Sem esta linha ele herdava
         // config.liquidKind, que WaterDebugMenu::applySelectedLiquid escreve
         // a partir do liquido SELECIONADO na lista - e a selecao comeca em 0,
@@ -1385,6 +1497,28 @@ void Engine::render() {
         // frustum da CAMERA aqui nao pode apagar sombra de nada. A regra de
         // "culling de sombra e' por frustum da LUZ" continua valendo e
         // intocada no ShadowRenderer.
+        // AGUA CLASSICA (modo classico com quadros carregados): textura
+        // animada no nivel do mapa, onda senoidal do plano d'agua (altura,
+        // velocidade e passo do original), sem espuma nem lamina na praia.
+        { static int ult = -2; int d = (m_classic.on ? 1 : 0) | (m_water.hasTexturedFrames() ? 2 : 0) | (m_currentMap && !m_currentMap->waterPlanes.empty() ? 4 : 0); if (d != ult) { ult = d; ERUPTION_LOG_WARN("DIAGCW render %d", d); } } // TEMP
+        if (m_classic.on && m_water.hasTexturedFrames() && m_currentMap && !m_currentMap->waterPlanes.empty()) {
+            const TerrainWaterPlane& wp = m_currentMap->waterPlanes[0];
+            adjustedSettings.liquidKind = 4;
+            adjustedSettings.enableFoam = false;
+            adjustedSettings.shoreSwash = false;
+            // Regras do original: altura = sin(rad(fase + 0,5 * passo * (x + z))) * altura, com x e z
+            // em celulas (5 unidades) e a fase andando `waveSpeed` graus por quadro a 60 Hz; o
+            // quadro da textura troca a cada `textureCycling` quadros a 60 Hz; um quadro de 128 px
+            // cobre uma superficie do terreno (10 unidades), os de 256 px (tipos 4 e 6) cobrem
+            // quatro (20) e esses tipos sao opacos, os demais 0,6.
+            const bool grande = wp.type == 4 || wp.type == 6;
+            adjustedSettings.waveAmplitude = wp.waveHeight;
+            adjustedSettings.waveFrequency = glm::radians(0.5f * wp.wavePitch) / 5.0f;
+            adjustedSettings.waveSpeed = glm::radians(60.0f * wp.waveSpeed);
+            adjustedSettings.texFps = 60.0f / static_cast<float>(std::max<uint32_t>(wp.textureCycling, 1u));
+            adjustedSettings.texAlpha = grande ? 1.0f : m_classicWater.alpha;
+            adjustedSettings.texTile = m_classicWater.tile * (grande ? 2.0f : 1.0f);
+        }
         if (waterInView)
         m_water.render(cmd, m_camera.viewProjJittered(), m_camera.position(),
                        m_dayNightCycle, m_timer.elapsed(),
@@ -1921,6 +2055,8 @@ void Engine::render() {
             bw::setPass(nullptr);
             Profiler::addGpuTime("Map Smoke", m_vulkan.timestampDeltaMs(38, 39));
         }
+    } // fim de m_cloudLayersEnabled: as particulas abaixo nao dependem das nuvens
+    {
         // Particulas: depois da fumaca, no lit com a profundidade so' leitura
         // (teste de profundidade por hardware + borda suave pela amostra).
         if (m_vfx.active()) {
@@ -2052,6 +2188,10 @@ void Engine::render() {
         skyCfg.stormTint = w.stormTint;
         skyCfg.cloudCoverage = w.cloudCoverage;
         skyCfg.cloudSpeed = w.cloudSpeed;
+        // ERUPTION_TEST_NO_SKY_CLOUDS tambem tira as nuvens do reflexo (A/B).
+        static const bool kNoSkyClouds = std::getenv("ERUPTION_TEST_NO_SKY_CLOUDS") != nullptr;
+        m_water.setSkyClouds(Vec4(skyCfg.cloudCoverage, skyCfg.cloudScale, skyCfg.cloudSpeed, skyCfg.cloudSoftness),
+                             m_dayNightCycle.timeOfDay() * 200.0f, skyCfg.enableClouds && !kNoSkyClouds);
         // ERUPTION_TEST_WEATHER_FOG=<escala> (captura): neblina do clima mais
         // fraca/forte sem mexer em data/weather_types.json (neve num mapa de
         // cidade vista de cima vira parede branca com a neblina de fabrica).
@@ -2222,7 +2362,11 @@ void Engine::render() {
     // desmarcar nao mudava um pixel (relatado pelo autor 2026-09-03). O post
     // le' o ajuste, entao e' aqui que a caixa tem que chegar.
     if (m_renderEffects.size() > 2) m_postSettings.enableBloom = m_renderEffects[2]->isEnabled();
-    const WeatherParams* weatherForPost = m_benchmarkThunderstorm ? nullptr : &m_weatherSystem.current();
+    // Modo classico: nenhum efeito de clima na tela. A chuva/neve do clima
+    // regional (pela posicao do jogador) e das nuvens de chuva continuava
+    // caindo com o tempo "limpo" do classico (o mapa de neve nevava inteiro).
+    const WeatherParams* weatherForPost =
+        (m_benchmarkThunderstorm || m_classic.on) ? nullptr : &m_weatherSystem.current();
     Vec3 cloudWorldMin = m_cloudLayerRenderer.coverageArray().worldMin();
     Vec3 cloudWorldMax = m_cloudLayerRenderer.coverageArray().worldMax();
     auto& coverageArray = m_cloudLayerRenderer.coverageArray();
