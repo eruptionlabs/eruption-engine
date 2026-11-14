@@ -7,6 +7,7 @@
 // s_pendingUploads/s_pendingMeshes (core/EngineInternal.hpp) e quem drena e'
 // o MapUpload.cpp, no command buffer do frame.
 
+#include "utils/AssetVfs.hpp"
 #include "core/Engine.hpp"
 #include "core/EngineInternal.hpp"
 #include "core/Logger.hpp"
@@ -545,13 +546,8 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
     if (embeddedSlot != 0) return embeddedSlot;
 
     auto readFileBytes = [](const std::string& p) -> std::vector<uint8_t> {
-        std::ifstream f(p, std::ios::binary);
-        if (!f) return {};
-        f.seekg(0, std::ios::end);
-        size_t size = static_cast<size_t>(f.tellg());
-        f.seekg(0, std::ios::beg);
-        std::vector<uint8_t> d(size);
-        f.read(reinterpret_cast<char*>(d.data()), static_cast<std::streamsize>(size));
+        std::vector<uint8_t> d;
+        vfs::read(p, d); // pacote do mapa (.emap) primeiro
         return d;
     };
 

@@ -1,4 +1,5 @@
 #include "utils/EmbeddedTextureBake.hpp"
+#include "utils/AssetVfs.hpp"
 #include "utils/ReadWholeFile.hpp"
 #include "utils/TextureFormatPolicy.hpp"
 #include "formats/GroundPack.hpp"
@@ -24,6 +25,11 @@
 namespace eruption {
 
 namespace fs = std::filesystem;
+
+std::mutex& diskReadMutex() {
+    static std::mutex m;
+    return m;
+}
 
 namespace {
 
@@ -133,16 +139,47 @@ void logSynthesisLevels(const NeuralPbrStats& before, size_t synthesized, uint64
 // O que o motor faz com a saida da rede tambem muda o pack: a versao do
 // pos-processo entra na chave (1 = altura refinada pelas linhas do albedo,
 // refineHeightWithAlbedoLines; 2 = rede na resolucao da textura ate' 1024,
-// synthesizePbrFromPixels; 3 = mapa PBR do disco antes da rede). Pack de rede
-// antigo e' re-assado uma vez.
-constexpr uint32_t kNeuralPostVersion = 3u;
+// synthesizePbrFromPixels; 3 = mapa PBR do disco antes da rede; 4 = margem
+// circular na entrada da rede, saida emenda na borda). Pack de rede antigo e'
+// re-assado uma vez.
+constexpr uint32_t kNeuralPostVersion = 4u;
+
+// ERUPTION_TEST_PBR_POST_VERSION=<n> (teste): finge que o pos-processo atual
+// e' o n, para os packs de hoje virarem "anteriores" sem mexer no codigo.
+// Nesse modo NADA e' gravado (os packs reais ficam intactos).
+uint32_t postVersion() {
+    static const uint32_t v = [] {
+        const char* e = std::getenv("ERUPTION_TEST_PBR_POST_VERSION");
+        return e ? static_cast<uint32_t>(std::max(1, std::atoi(e))) : kNeuralPostVersion;
+    }();
+    return v;
+}
+bool testNoWrite() { return std::getenv("ERUPTION_TEST_PBR_POST_VERSION") != nullptr; }
+
+uint32_t synthKeyFor(uint32_t net, uint32_t postVersion) {
+    const uint32_t k = (net ^ (postVersion * 0x9E3779B9u)) * 16777619u;
+    return k > 1u ? k : 2u; // 0 e 1 sao "sem sintese" e "sintese classica"
+}
 
 uint32_t synthKey(bool synthPbr) {
     if (!synthPbr) return 0u;
     const uint32_t net = neuralPbrKey();
     if (net <= 1u) return 1u;
-    const uint32_t k = (net ^ (kNeuralPostVersion * 0x9E3779B9u)) * 16777619u;
-    return k > 1u ? k : 2u; // 0 e 1 sao "sem sintese" e "sintese classica"
+    return synthKeyFor(net, postVersion());
+}
+
+// Pack da MESMA rede com um pos-processo anterior: e' usado como esta' (o PBR
+// fica como era). Antes ele era recusado e a primeira visita a cada mapa
+// depois de mudar o pos-processo recomprimia tudo no meio da troca: um mapa
+// de teste 84 s, o maior 4 min (168 texturas de modelos de cena). PBR nao e' gerado com
+// o jogo rodando; o pack novo sai de um bake offline (apagar o .etexpack).
+bool synthKeyStale(uint32_t cached, bool synthPbr) {
+    if (!synthPbr) return false;
+    const uint32_t net = neuralPbrKey();
+    if (net <= 1u) return false;
+    for (uint32_t v = 1; v < postVersion(); ++v)
+        if (cached == synthKeyFor(net, v)) return true;
+    return false;
 }
 
 // Pack assado com a rede numa maquina vale numa maquina SEM rede (ex.: GPU
@@ -181,29 +218,21 @@ uint64_t sourceFingerprint(const std::string& path, uint64_t size) {
 // carga o desempacotou (o .glb desempacotado muda entre maquinas; o .relevo
 // nao - ver GroundPack).
 std::string fingerprintPath(const std::string& glbPath) {
+    // O .glb existe (no pacote do mapa ou no disco): e' ele. Sem esta volta,
+    // groundSourceFor consultava o disco por modelo, mesmo com o .emap montado.
+    if (vfs::exists(glbPath)) return glbPath;
     const std::string relevo = groundSourceFor(glbPath);
     return relevo.empty() ? glbPath : relevo;
 }
 
-bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
-               EmbeddedBakeResult& out) {
-    std::error_code ec;
-    std::string path = packPathFor(glbPath, maxSize, synthPbr);
-    // Sintese desligada: o pack assado com ela tambem serve (synthKeyAccepted).
-    if (!synthPbr && !fs::exists(path, ec) && fs::exists(packPathFor(glbPath, maxSize, true), ec))
-        path = packPathFor(glbPath, maxSize, true);
-    if (!fs::exists(path, ec)) {
-        // Compatibilidade: pack antigo sem sufixo. O cabecalho carrega
-        // maxSize/synthPbr, entao a validacao abaixo rejeita se nao bater.
-        if (!texfmt::classicActive()) return false; // o legado e' sempre BC classico
-        path = legacyPackPathFor(glbPath);
-        if (!fs::exists(path, ec)) return false;
-    }
-
-    std::ifstream f(path, std::ios::binary);
-    if (!f.is_open()) return false;
-    std::vector<uint8_t> buf;
-    readWholeFile(f, buf);
+// Pacote ja' lido (do disco ou do pacote de mapa .emap) -> texturas. Tudo o que
+// valida o pacote fica aqui; `trustSource`: o .glb e o pacote vieram juntos do
+// .emap, que so' os guardou depois de a carga do build valida'-los (valido
+// por construcao) - pula a impressao digital, que sao 64 leituras espalhadas
+// pelo .glb (64 buscas da cabeca por modelo com o disco frio).
+bool parseCacheBytes(const std::vector<uint8_t>& buf, const std::string& glbPath, uint32_t maxSize, bool synthPbr,
+                     bool trustSource, EmbeddedBakeResult& out, bool* stale) {
+    if (stale) *stale = false;
     if (buf.size() < 40) return false;
 
     Reader r{buf.data(), buf.size()};
@@ -214,15 +243,19 @@ bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
     if (!r.u64(srcSize) || !r.u64(srcFingerprint)) return false;
     if (!r.u32(cachedMax) || !r.u32(cachedFmt) || !r.u32(cachedSynth) || !r.u32(count)) return false;
 
-    // Invalida se: o .glb mudou (conteudo, nao data - o pack vale em outra
+    // Invalida se: o .glb mudou (conteudo, nao data - o pacote vale em outra
     // maquina), o teto de resolucao mudou (preset), o conjunto de formatos da
     // GPU mudou, ou a sintese de PBR nao e' aceitavel aqui.
     const std::string source = fingerprintPath(glbPath);
-    const uint64_t realSize = static_cast<uint64_t>(fs::file_size(source, ec));
+    std::error_code ec;
+    const uint64_t realSize = vfs::fileSize(source, ec);
     if (ec || realSize != srcSize) return false;
-    if (sourceFingerprint(source, realSize) != srcFingerprint) return false;
-    if (cachedMax != maxSize || cachedFmt != formatKey() || !synthKeyAccepted(cachedSynth, synthPbr))
-        return false;
+    if (!trustSource && sourceFingerprint(source, realSize) != srcFingerprint) return false;
+    if (cachedMax != maxSize || cachedFmt != formatKey()) return false;
+    if (!synthKeyAccepted(cachedSynth, synthPbr)) {
+        if (!stale || !synthKeyStale(cachedSynth, synthPbr)) return false;
+        *stale = true;
+    }
 
     uint32_t hasGround = 0;
     if (!r.u32(hasGround)) return false;
@@ -245,6 +278,62 @@ bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
         out.textures.emplace(std::move(name), std::move(t));
     }
     out.fromCache = true;
+    return true;
+}
+
+// Build do pacote do mapa: que pacote cada .glb usou e quais imagens ele traz.
+std::mutex g_coverageMutex;
+std::unordered_map<std::string, EmbeddedPackCoverage> g_coverage;
+
+void noteCoverage(const std::string& glbPath, const std::string& packPath, const EmbeddedBakeResult& res) {
+    if (!vfs::recording()) return;
+    EmbeddedPackCoverage c;
+    c.pack = vfs::key(packPath);
+    c.images.reserve(res.textures.size());
+    for (const auto& t : res.textures) c.images.push_back(t.first);
+    std::lock_guard<std::mutex> lock(g_coverageMutex);
+    g_coverage[vfs::key(glbPath)] = std::move(c);
+}
+
+bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
+               EmbeddedBakeResult& out, bool* stale = nullptr) {
+    if (stale) *stale = false;
+    std::string path = packPathFor(glbPath, maxSize, synthPbr);
+    // Sintese desligada: o pack assado com ela tambem serve (synthKeyAccepted).
+    if (!synthPbr && !vfs::exists(path) && vfs::exists(packPathFor(glbPath, maxSize, true)))
+        path = packPathFor(glbPath, maxSize, true);
+    if (!vfs::exists(path)) {
+        // Compatibilidade: pack antigo sem sufixo. O cabecalho carrega
+        // maxSize/synthPbr, entao a validacao abaixo rejeita se nao bater.
+        if (!texfmt::classicActive()) return false; // o legado e' sempre BC classico
+        path = legacyPackPathFor(glbPath);
+        if (!vfs::exists(path)) return false;
+    }
+
+    std::vector<uint8_t> buf;
+    const bool fromBundle = vfs::inBundle(path);
+    {
+        // Do pacote do mapa sem a trava do disco: ela serializava a
+        // descompressao zstd entre os fios do preload.
+        std::unique_lock<std::mutex> disco(diskReadMutex(), std::defer_lock);
+        if (!fromBundle) disco.lock();
+        if (!vfs::read(path, buf)) return false;
+    }
+    const bool trust = fromBundle && vfs::inBundle(fingerprintPath(glbPath));
+    if (parseCacheBytes(buf, glbPath, maxSize, synthPbr, trust, out, stale)) {
+        noteCoverage(glbPath, path, out);
+        return true;
+    }
+    if (!fromBundle) return false;
+    // A copia do pacote de mapa nao serve aqui (outro preset, outra GPU): a
+    // do disco, se houver, ainda pode servir.
+    out = EmbeddedBakeResult{};
+    {
+        std::lock_guard<std::mutex> disco(diskReadMutex());
+        if (!vfs::readDisk(path, buf)) return false;
+    }
+    if (!parseCacheBytes(buf, glbPath, maxSize, synthPbr, false, out, stale)) return false;
+    noteCoverage(glbPath, path, out);
     return true;
 }
 
@@ -300,7 +389,16 @@ void writeCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
                 static_cast<std::streamsize>(buf.size()));
     }
     fs::rename(tmpPath, finalPath, ec);
-    if (ec) fs::remove(tmpPath, ec);
+    if (ec) {
+        fs::remove(tmpPath, ec);
+        return;
+    }
+    // Pacote assado agora no build do mapa: vai inteiro para o .emap (a carga
+    // so' perguntou se ele existia).
+    if (vfs::recording()) {
+        vfs::recordExtra(finalPath);
+        noteCoverage(glbPath, finalPath, res);
+    }
 }
 
 } // namespace
@@ -310,6 +408,26 @@ std::atomic<uint32_t> g_maxSize{1024};
 }
 void setEmbeddedTextureMaxSize(uint32_t maxSize) { g_maxSize.store(maxSize); }
 uint32_t embeddedTextureMaxSize() { return g_maxSize.load(); }
+
+size_t removeEmbeddedBakeCaches(const std::string& glbPath) {
+    // Todos os nomes que packPathFor/legacyPackPathFor geram: "<glb>.etexpack"
+    // e "<glb>.<lado><s|n>[.<formato>].etexpack".
+    const fs::path glb(glbPath);
+    const std::string prefix = glb.filename().string() + ".";
+    const std::string suffix = ".etexpack";
+    size_t removed = 0;
+    std::error_code ec;
+    for (fs::directory_iterator it(glb.parent_path().empty() ? fs::path(".") : glb.parent_path(), ec), end;
+         !ec && it != end; it.increment(ec)) {
+        const std::string name = it->path().filename().string();
+        if (name.size() < prefix.size() + suffix.size() - 1 || name.compare(0, prefix.size(), prefix) != 0 ||
+            name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
+            continue;
+        std::error_code rec;
+        if (fs::remove(it->path(), rec)) ++removed;
+    }
+    return removed;
+}
 
 namespace {
 
@@ -420,6 +538,11 @@ std::unordered_map<std::string, double> computeUpFacingArea(const ModelFile& mod
 
 } // namespace
 
+std::unordered_map<std::string, EmbeddedPackCoverage> recordedPackCoverage() {
+    std::lock_guard<std::mutex> lock(g_coverageMutex);
+    return g_coverage;
+}
+
 bool readEmbeddedBakeCache(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr,
                            EmbeddedBakeResult& out) {
     if (model.embeddedTextures.empty() || model.filePath.empty() || !texfmt::anyActive()) return false;
@@ -451,6 +574,10 @@ bool loadDiskPbrRgba(const std::string& albedoName, PbrTextureData& mrahw, PbrTe
 }
 } // namespace
 
+namespace {
+EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr);
+} // namespace
+
 EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxTextureSize,
                                         bool synthesizePbr) {
     EmbeddedBakeResult res;
@@ -459,20 +586,36 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
         // Nenhum formato de bloco nesta GPU (ou modo off): caminho RGBA8, nada a assar.
         return res;
     }
-    bcCompressorInit();
 
     // ERUPTION_TEST_DUMP_TEX_DIR=<pasta>: pula o cache pra forcar bake FRESCO
     // (o cache so' guarda os bytes ja' comprimidos em BC7, nao da' pra tirar
     // BMP dali sem descomprimir) - ver o dump logo abaixo, ainda dentro do
     // parallelFor, onde mrahw.pixels/normal.pixels ainda sao RGBA cru.
     const bool dumpRequested = std::getenv("ERUPTION_TEST_DUMP_TEX_DIR") != nullptr;
+    bool stale = false;
     if (!model.filePath.empty() && !dumpRequested &&
-        readCache(model.filePath, maxTextureSize, synthesizePbr, res)) {
-        ERUPTION_LOG_WARN("EmbeddedTextureBake: cache HIT '%s' (%zu texturas, %.1f MB comprimidos)",
+        readCache(model.filePath, maxTextureSize, synthesizePbr, res, &stale)) {
+        ERUPTION_LOG_WARN("EmbeddedTextureBake: cache HIT%s '%s' (%zu texturas, %.1f MB comprimidos)",
+                          stale ? " (pos-processo de PBR anterior, usado como esta')" : "",
                           model.filePath.c_str(), res.textures.size(),
                           static_cast<double>(res.bytes) / (1024.0 * 1024.0));
         return res;
     }
+    res = EmbeddedBakeResult{};
+    // Com o pacote de mapa montado isto nao devia acontecer: o build guardou o
+    // pacote de cada modelo que a carga abriu.
+    if (vfs::anyMounted())
+        ERUPTION_LOG_WARN("[MAPBUNDLE] '%s' sem pacote de texturas valido no .emap: comprimindo agora. "
+                          "Reconstrua o mapa (--bake-map)", model.filePath.c_str());
+    return bakeFresh(model, maxTextureSize, synthesizePbr);
+}
+
+namespace {
+// Bake sem cache (o pack falta, ou o .glb/preset/GPU mudou).
+EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr) {
+    EmbeddedBakeResult res;
+    bcCompressorInit();
+    const bool dumpRequested = std::getenv("ERUPTION_TEST_DUMP_TEX_DIR") != nullptr;
 
     // CONTEXTO DE MATERIAL pra' sintese de altura: a imagem e' ORGANICA se
     // algum material que a usa for grama/vegetacao/terra/neve na tabela de
@@ -722,10 +865,12 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
     if (fromDisk.load() > 0)
         ERUPTION_LOG_WARN("EmbeddedTextureBake: %zu de %zu texturas com PBR do disco (sem rede)", fromDisk.load(), n);
 
-    if (!model.filePath.empty() && !res.textures.empty()) {
+    if (!model.filePath.empty() && !res.textures.empty() && !testNoWrite()) {
         writeCache(model.filePath, maxTextureSize, synthesizePbr, res);
     }
     return res;
 }
+
+} // namespace
 
 } // namespace eruption

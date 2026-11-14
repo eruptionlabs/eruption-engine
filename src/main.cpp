@@ -10,6 +10,7 @@
 #endif
 #include "formats/SpriteSheet.hpp"
 #include "game/DefaultApplication.hpp"
+#include "game/MapBundleBaker.hpp"
 #include "utils/BcAlphaSelfTest.hpp"
 #include "utils/GpuAutoSelect.hpp"
 #include <chrono>
@@ -45,7 +46,7 @@ static bool wantsEditor(int argc, char** argv) {
         if (a == "--editor") return true;
         if (a == "--game") return false;
         if (a == "--auto-exit" || a == "--auto-test" || a == "--screenshot" || a == "--dump-frames" ||
-            a == "--telemetry" || a.rfind("--benchmark", 0) == 0)
+            a == "--telemetry" || a.rfind("--benchmark", 0) == 0 || a == "--bake-map")
             automated = true;
     }
     for (char** e = ERUPTION_ENVIRON; e && *e; ++e)
@@ -324,7 +325,7 @@ int eruptionMain(int argc, char** argv) {
     engine.run(app);
 #endif
     ERUPTION_LOG_INFO("[MAIN] App finished, exiting");
-    return 0;
+    return eruption::MapBundleBaker::exitCode(); // 0 fora do build de mapa
 }
 
 #ifndef __ANDROID__

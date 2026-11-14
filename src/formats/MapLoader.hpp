@@ -103,6 +103,10 @@ struct LoadedMap {
         float centerZ = 0.0f;
         float radius = 0.0f;      // raio circular; usado quando shoreRadius esta' vazio
         float emissive = 0.0f;
+        // Beira deste liquido no chao ("shore" na entrada do .env): 0 = so'
+        // contato, 1 = invade o terreno (onda/lava subindo), 2 = invade com
+        // espuma na frente (agua). -1 = padrao do tipo (agua 0, lava 1).
+        int shore = -1;
         // Lava: calor extra perto da margem e no centro (0 = uniforme). Fenda
         // mais larga e quente nessas bordas; o meio-termo fica mais placa fria.
         float shoreHeat = 0.0f, centerHeat = 0.0f;
@@ -253,6 +257,11 @@ struct LoadedMap {
         // ate' world.set_border chamar. Ver WorldBorder.
         WorldBorder worldBorder;
         MapCloudLayer cloudLayer;
+        // BEIRA D'AGUA ("shore" no .env): false = espuma de contato na agua e
+        // faixa molhada no chao (padrao); true = "swash", a agua sobe pela
+        // areia e volta, sem a espuma de contato.
+        bool shoreSwash = false;
+        bool shoreSwashFoam = false; // "swash_foam": a lamina sobe com espuma na frente
     } env;
 
     // Approximate CPU RAM used by this map's raw parsed data

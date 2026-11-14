@@ -222,6 +222,7 @@ private:
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
     VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
+    size_t m_pipelineCacheSavedBytes = 0; // tamanho do que ja' esta' no disco (savePipelineCache)
     static VkPipelineCache s_pipelineCache;
     // Vigia de GPU travada: driver de celular trava dentro de submit/present
     // sem timeout. Se o frame não anda em 6 s, o vigia diz em que chamada a

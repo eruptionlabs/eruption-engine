@@ -3,8 +3,12 @@
 #include "scene/SceneEdits.hpp"
 #include "core/Platform.hpp"
 #include "game/DefaultApplication.hpp"
+#include "game/MapBundleBaker.hpp"
 #include <chrono>
 #include <cstdio>
+#if defined(__linux__) && defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #include <cstdlib>
 #include <sstream>
 #include "game/PlayerController.hpp"
@@ -94,6 +98,12 @@ void DefaultApplication::parseArgs(int argc, char** argv) {
             Logger::setLevel(LogLevel::Trace);
         } else if (arg == "--map" && i + 1 < argc) {
             m_initialMap = argv[++i];
+        } else if (arg == "--bake-map" && i + 1 < argc) {
+            m_bakeMap = argv[++i];
+        } else if (arg == "--bake-raw") {
+            m_bakeCompress = false;
+        } else if (arg == "--bake-level" && i + 1 < argc) {
+            m_bakeLevel = std::max(1, std::min(19, std::atoi(argv[++i])));
         } else if (arg == "--screenshot" && i + 1 < argc) {
             m_screenshotPath = argv[++i];
             m_autoExit = true;
@@ -254,6 +264,11 @@ void DefaultApplication::onInit(Engine& engine) {
             if (m_engine) m_engine->drawGameFx2D(0.0f, 0.0f, ds.x, ds.y, ImGui::GetIO().DeltaTime);
             if (m_scripts) m_scripts->drawMessages(0.0f, 0.0f, ds.x, ds.y);
         });
+    if (!m_bakeMap.empty()) {
+        // Build do mapa: a anotacao comeca antes da carga (MapBundleBaker.hpp).
+        m_initialMap = m_bakeMap;
+        m_baker = std::make_unique<MapBundleBaker>(engine, MapBundleBaker::Options{m_bakeMap, m_bakeCompress, m_bakeLevel});
+    }
     if (!m_initialMap.empty()) {
         // For headless/screenshot runs and large single-file GLB maps, load
         // synchronously so the first rendered frame already has all geometry and
@@ -283,11 +298,41 @@ void DefaultApplication::onInit(Engine& engine) {
     // aplicada (onUpdate): on.start já encontra personagens e objetos acrescentados.
 }
 void DefaultApplication::onUpdate(float deltaTime) {
+    if (m_baker) m_baker->update();
     if (m_engine && !m_mapSequence.empty() && --m_mapSequenceCountdown <= 0) {
         m_mapSequenceCountdown = m_mapSequenceFrames;
-        const std::string& next = m_mapSequence[m_mapSequenceIndex++ % m_mapSequence.size()];
-        ERUPTION_LOG_WARN("[MAPSEQ] carga fria #%zu: %s", m_mapSequenceIndex, next.c_str());
-        m_engine->loadMap(next);
+        static const bool kOnce = std::getenv("ERUPTION_TEST_MAP_SEQUENCE_ONCE") != nullptr;
+        auto lerRss = [] {
+            long kb = 0;
+            if (FILE* f = std::fopen("/proc/self/status", "r")) {
+                char line[256];
+                while (std::fgets(line, sizeof(line), f))
+                    if (std::sscanf(line, "VmRSS: %ld", &kb) == 1) break;
+                std::fclose(f);
+            }
+            return kb;
+        };
+        long rssKb = lerRss();
+#if defined(__linux__) && defined(__GLIBC__)
+        // ERUPTION_TEST_MAP_SEQUENCE_TRIM=1: devolve ao sistema a memoria livre do
+        // malloc antes de medir - separa vazamento de verdade de memoria que o
+        // alocador so' nao devolveu.
+        if (std::getenv("ERUPTION_TEST_MAP_SEQUENCE_TRIM")) {
+            const long antes = rssKb;
+            malloc_trim(0);
+            rssKb = lerRss();
+            ERUPTION_LOG_WARN("[MAPSEQ] malloc_trim: RSS %.0f -> %.0f MB", antes / 1024.0, rssKb / 1024.0);
+        }
+#endif
+        m_engine->logMemoryCaches();
+        if (kOnce && m_mapSequenceIndex >= m_mapSequence.size()) {
+            ERUPTION_LOG_WARN("[MAPSEQ] fim da volta (RSS %.0f MB)", rssKb / 1024.0);
+            m_engine->requestQuit();
+        } else {
+            const std::string& next = m_mapSequence[m_mapSequenceIndex++ % m_mapSequence.size()];
+            ERUPTION_LOG_WARN("[MAPSEQ] troca #%zu: %s (RSS antes %.0f MB)", m_mapSequenceIndex, next.c_str(), rssKb / 1024.0);
+            m_engine->requestMap(next, nullptr);
+        }
     }
     if (m_scripts) m_scripts->poll();
     if (m_editor) {

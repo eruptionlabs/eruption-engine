@@ -8,6 +8,7 @@
 
 #include "core/Engine.hpp"
 #include "utils/ReadWholeFile.hpp"
+#include "utils/AssetVfs.hpp"
 #include "core/Platform.hpp"
 #include "core/EngineInternal.hpp"
 #include "game/PlayerController.hpp"
@@ -244,7 +245,19 @@ static bool hashGlbGeometry(const std::string& glbPath, uint64_t& h) {
     // Le' so' o JSON e passa pelos trechos de geometria em blocos de 1 MB: o
     // GLB inteiro na memoria (68-200 MB) com o mapa anterior ainda carregado
     // travava a GPU do celular de 4 GB na troca de mapa, e custava 2,8 s.
-    std::ifstream f(glbPath, std::ios::binary);
+    // No pacote do mapa (.emap) o .glb ja' passa pela memoria: le' inteiro de
+    // la' (o arquivo solto continua em blocos).
+    std::vector<uint8_t> whole;
+    std::istringstream mem;
+    std::ifstream file;
+    if (vfs::inBundle(glbPath) && vfs::read(glbPath, whole)) {
+        mem.str(std::string(whole.begin(), whole.end()));
+        whole.clear();
+        whole.shrink_to_fit();
+    } else {
+        file.open(glbPath, std::ios::binary);
+    }
+    std::istream& f = file.is_open() ? static_cast<std::istream&>(file) : static_cast<std::istream&>(mem);
     uint32_t head[5] = {};
     if (!f.read(reinterpret_cast<char*>(head), sizeof(head))) return false;
     const uint32_t jsonLen = head[3];
@@ -296,7 +309,7 @@ static uint64_t mapContentKeyRead(const std::string& glbPath, const std::string&
     // Chao vindo de um .relevo: le' o .glb desempacotado no cache (a mesma
     // chave do .glb original, que a normal fica de fora).
     std::filesystem::path source = glbPath;
-    if (const std::string relevo = groundSourceFor(glbPath); !relevo.empty()) {
+    if (const std::string relevo = (vfs::exists(glbPath) ? std::string() : groundSourceFor(glbPath)); !relevo.empty()) {
         std::filesystem::path ter;
         std::string error;
         if (!unpackGroundCached(relevo, source, ter, error)) return 0;
@@ -305,8 +318,8 @@ static uint64_t mapContentKeyRead(const std::string& glbPath, const std::string&
     std::filesystem::path heights = SceneEdits::pathFor(mapName);
     heights.replace_extension();
     heights.replace_extension(".height.bin");
-    std::ifstream hf(heights, std::ios::binary);
-    std::vector<char> hraw((std::istreambuf_iterator<char>(hf)), std::istreambuf_iterator<char>());
+    std::vector<uint8_t> hraw;
+    vfs::read(heights, hraw);
     if (!hraw.empty()) fnvMix(h, hraw.data(), hraw.size());
     return h;
 }
@@ -319,14 +332,13 @@ static uint64_t mapContentKey(const std::string& glbPath, const std::string& map
     std::filesystem::path heights = SceneEdits::pathFor(mapName);
     heights.replace_extension();
     heights.replace_extension(".height.bin");
-    std::error_code ec;
-    auto stamp = [&ec](const std::filesystem::path& p) -> uint64_t {
-        const auto size = std::filesystem::file_size(p, ec);
-        if (ec) return 0;
-        const auto when = std::filesystem::last_write_time(p, ec).time_since_epoch().count();
-        return ec ? 0 : uint64_t(size) * 1099511628211ull ^ uint64_t(when);
+    auto stamp = [](const std::filesystem::path& p) -> uint64_t {
+        uint64_t size = 0;
+        int64_t when = 0;
+        if (!vfs::stat(p.string(), size, when)) return 0;
+        return uint64_t(size) * 1099511628211ull ^ uint64_t(when);
     };
-    const std::string relevo = groundSourceFor(glbPath);
+    const std::string relevo = (vfs::exists(glbPath) ? std::string() : groundSourceFor(glbPath));
     const uint64_t s = stamp(relevo.empty() ? glbPath : relevo) * 31u + stamp(heights);
     static std::mutex mutex;
     static std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> memo; // nome -> (selo, chave)
@@ -910,6 +922,8 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
             m_cloudBoxBaseSaved = true;
             m_cloudShadowsBase = m_cloudLayerRenderer.config().showCloudShadows;
         }
+        m_waterMenu.config.shoreSwash = loadedMap->env.shoreSwash; // por mapa
+        m_waterMenu.config.shoreSwashFoam = loadedMap->env.shoreSwashFoam;
         const MapCloudLayer& cb = loadedMap->env.cloudLayer;
         const bool antes = m_cloudBoxOverride;
         const float antesY = m_cloudBoxBottom;
@@ -1045,6 +1059,13 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
             start = end + 1;
         }
     }
+    // Agua soterrada e grade da beira de novo, com a config FINAL do mapa: na
+    // montagem da malha (la' em cima) o modo da beira do .env, o nivel e o
+    // liquido selecionado ainda eram os do mapa anterior (ou do json), e o
+    // teste podia dar a agua por soterrada ou montar a beira errada. So'
+    // religar a agua pelo menu ("Force Water") refazia isso - parecia que a
+    // agua precisava de um reload.
+    cacheWaterBounds(m_shoreWaterSrc);
     loadPhase("vfx+fim");
     // ERUPTION_TEST_DUMP_RELIEF_AMP=1 (prova, eada502): amplitude registrada
     // (ModelRenderer::m_texReliefAmp) de cada textura de CHAO deste mapa -
@@ -1165,9 +1186,8 @@ bool Engine::loadModelForPreview(const std::string& glbPath) {
     // O caminho do asset continua relativo (e' chave e vai pro arquivo de
     // cena); quem abre o arquivo e' o caminho resolvido no projeto.
     const std::string diskPath = project::gameRef(glbPath).string();
-    std::ifstream f(diskPath, std::ios::binary);
     std::vector<uint8_t> data;
-    readWholeFile(f, data);
+    vfs::read(diskPath, data);
     if (data.size() < 12 || std::memcmp(data.data(), "glTF", 4) != 0) {
         ERUPTION_LOG_ERROR("Preview: not a GLB file: %s", glbPath.c_str());
         return false;
@@ -1198,8 +1218,12 @@ std::shared_ptr<ModelFile> prepareModelFile(const std::string& glbPath, bool par
     const std::string diskPath = project::gameRef(glbPath).string();
     std::vector<uint8_t> data;
     {
-        std::ifstream f(diskPath, std::ios::binary);
-        readWholeFile(f, data);
+        // Um fio lendo por vez no HDD. Do pacote do mapa (.emap) nao: ele ja'
+        // le' em sequencia, e a trava serializava a descompressao (o mapa grande de teste com o
+        // disco quente: espera do preload da cena 1566 ms com a trava).
+        std::unique_lock<std::mutex> disco(diskReadMutex(), std::defer_lock);
+        if (!vfs::inBundle(diskPath)) disco.lock();
+        vfs::read(diskPath, data); // pacote do mapa (.emap) primeiro
     }
     if (data.size() < 12 || std::memcmp(data.data(), "glTF", 4) != 0) return nullptr;
     auto model = std::make_shared<ModelFile>(
@@ -1404,7 +1428,7 @@ void Engine::prepareSceneModels(const std::vector<std::string>& files) {
     if (!m_currentMap) return;
     static const bool kPhases = std::getenv("ERUPTION_TEST_LOAD_PHASES") != nullptr;
     using clk = std::chrono::steady_clock;
-    double msWait = 0.0, msMain = 0.0;
+    double msWait = 0.0, msMain = 0.0, msPbr = 0.0;
     std::vector<std::shared_ptr<ReadyModel>> batch;
     std::unordered_set<std::string> seen;
     // A tela de carga anda com a cena (e a janela segue respondendo): parada
@@ -1444,6 +1468,7 @@ void Engine::prepareSceneModels(const std::vector<std::string>& files) {
                              0.95f + 0.04f * frac, true);
     };
     pump(true);
+    m_modelRenderer.resetResolveStats();
     for (const std::string& f : files) {
         if (f.empty() || !seen.insert(f).second || m_modelRenderer.hasAsset(f) || m_readyModels.count(f)) continue;
         ++k;
@@ -1461,21 +1486,47 @@ void Engine::prepareSceneModels(const std::vector<std::string>& files) {
         ModelFile& model = m_currentMap->models.back();
         applyModelBake(model, f);
         rm->asset = convertModelToAsset(model);
-        rm->slotUse = ModelRenderer::scanSlotUse(rm->asset);
-        rm->slots = m_modelRenderer.resolveSlots(rm->asset, rm->slotUse);
         batch.push_back(std::move(rm));
         msMain += std::chrono::duration<double, std::milli>(clk::now() - t1).count();
     }
     if (batch.empty()) return;
+    // PBR de todas as texturas da cena lido em paralelo ANTES dos slots (o
+    // mesmo prewarm dos modelos do mapa). Um a um no fio principal, a primeira
+    // abertura do mapa lia ~250 PNGs frios do disco: 32-43 s parados em
+    // mapas de porto, 0,2 s na segunda abertura (cache do sistema).
+    {
+        const auto t0 = clk::now();
+        std::vector<std::string> pbrNames;
+        for (const auto& rm : batch)
+            for (const auto& node : rm->asset.nodes) {
+                for (const auto& n : node.pbrTextureNames) if (!n.empty()) pbrNames.push_back(n);
+                for (const auto& n : node.textureNames) if (!n.empty()) pbrNames.push_back(n);
+            }
+        pump(true);
+        eruption::prewarmPbrTextureData(pbrNames, false);
+        msPbr = std::chrono::duration<double, std::milli>(clk::now() - t0).count();
+    }
+    const auto tSlots = clk::now();
+    for (auto& rm : batch) {
+        rm->slotUse = ModelRenderer::scanSlotUse(rm->asset);
+        rm->slots = m_modelRenderer.resolveSlots(rm->asset, rm->slotUse);
+    }
+    eruption::clearPbrTextureDataPrewarm(); // o que sobrou (textura ja' na GPU)
+    msMain += std::chrono::duration<double, std::milli>(clk::now() - tSlots).count();
     const auto tP = clk::now();
     const ModelRenderer::LodParams lod = m_modelRenderer.lodParams();
     JobSystem::instance().parallelFor(static_cast<uint32_t>(batch.size()), [&batch, &lod](uint32_t i) {
         batch[i]->prepared = ModelRenderer::prepareAsset(batch[i]->asset, std::move(batch[i]->slots), lod);
     });
     for (auto& rm : batch) m_readyModels[rm->file] = rm;
+    if (kPhases) {
+        const auto& rs = m_modelRenderer.resolveStats();
+        ERUPTION_LOG_WARN("[SCENEPREP] texturas novas %u em %.0f ms, PBR %u em %.0f ms", rs.tex, rs.texMs, rs.pbr, rs.pbrMs);
+    }
     if (kPhases)
-        ERUPTION_LOG_WARN("[SCENEPREP] %zu modelos: espera preload %.0f ms, texturas+slots %.0f ms, malhas em paralelo %.0f ms",
-                          batch.size(), msWait, msMain, std::chrono::duration<double, std::milli>(clk::now() - tP).count());
+        ERUPTION_LOG_WARN("[SCENEPREP] %zu modelos: espera preload %.0f ms, PBR em paralelo %.0f ms, texturas+slots %.0f ms, "
+                          "malhas em paralelo %.0f ms",
+                          batch.size(), msWait, msPbr, msMain, std::chrono::duration<double, std::milli>(clk::now() - tP).count());
     flushPendingUploads();
 }
 
@@ -1758,4 +1809,32 @@ void Engine::updateWarp() {
     }
 }
 
+} // namespace eruption
+
+namespace eruption {
+// Diagnostico da memoria que atravessa a troca de mapa (ERUPTION_TEST_MAP_SEQUENCE
+// chama a cada troca): quantos itens cada cache guarda e, onde da' para somar,
+// quantos MB de CPU.
+void Engine::logMemoryCaches() const {
+    size_t preloadPronto = 0, preloadMb = 0;
+    for (const auto& kv : m_modelPreloads) {
+        const auto& f = kv.second.model;
+        if (f.valid() && f.wait_for(std::chrono::seconds(0)) == std::future_status::ready && f.get()) {
+            ++preloadPronto;
+            for (const auto& t : f.get()->embeddedTextures) preloadMb += t.pixels.size() + t.encodedData.size();
+        }
+    }
+    size_t readyMb = 0;
+    for (const auto& kv : m_readyModels)
+        if (kv.second && kv.second->model)
+            for (const auto& t : kv.second->model->embeddedTextures) readyMb += t.pixels.size() + t.encodedData.size();
+    size_t splatMb = 0;
+    for (const auto& kv : m_splatDecoded) splatMb += kv.second.pixels.size();
+    ERUPTION_LOG_WARN("[MEMCACHE] preloads %zu (%zu prontos, %.0f MB img) | ready %zu (%.0f MB img) | assetCache tex %zu mesh %zu ter %zu | "
+                      "convertedBakes %zu prepared %zu embeddedBaked %zu | sprites %zu | splat %zu (%.0f MB) | meshes %zu",
+                      m_modelPreloads.size(), preloadPronto, preloadMb / 1048576.0, m_readyModels.size(), readyMb / 1048576.0,
+                      m_assetCache.modelTextures.size(), m_assetCache.modelMeshes.size(), m_assetCache.terrainTextures.size(),
+                      m_convertedBakes.size(), m_convertedPrepared.size(), m_embeddedBaked.size(),
+                      m_characterSpriteCache.size(), m_splatDecoded.size(), splatMb / 1048576.0, m_modelRenderer.meshCount());
+}
 } // namespace eruption

@@ -85,7 +85,10 @@ PbrTextureData loadPbrTextureData(const std::string& path);
 // for the same name then skips the (expensive, serial) PNG decode and only does
 // the GPU upload. Call once at the start of map loading; pair with
 // clearPbrTextureDataPrewarm() when the map is torn down.
-void prewarmPbrTextureData(const std::vector<std::string>& albedoNames);
+// `synthesizeMissing` = false: so' le' os mapas prontos do disco (_mrahw /
+// _normal). Para a cena, onde a textura sem mapa usa o PBR do .etexpack (ou
+// nenhum) e sintetizar aqui trocaria o resultado e custaria 33 s.
+void prewarmPbrTextureData(const std::vector<std::string>& albedoNames, bool synthesizeMissing = true);
 
 // Par mrahw/normal JÁ PRONTO (sintetizado e comprimido em bloco pelo bake de
 // texturas embutidas de GLB). É consultado EXATAMENTE onde a síntese entraria
@@ -113,6 +116,25 @@ bool synthesizePbrFromPixels(const std::vector<uint8_t>& pixels, int width, int 
                              int channels,
                              PbrTextureData& outMrahw, PbrTextureData& outNormal,
                              bool organicHint = false);
+
+// Only the analytic synthesis (height, normal and cavity derived from the
+// albedo; HeightFromAlbedo.hpp): the last level of synthesizePbrFromPixels,
+// called directly where the result must be the albedo-derived one. With
+// normalStrength = 1 the output is byte-identical to that level.
+// normalStrength scales the relief of the normal map only.
+bool synthesizePbrAnalytic(const std::vector<uint8_t>& pixels, int width, int height, int channels,
+                           PbrTextureData& outMrahw, PbrTextureData& outNormal,
+                           bool organicHint = false, float normalStrength = 1.0f);
+
+// File stem (without "_mrahw.png"/"_normal.png") that resolvePbrTexturePaths()
+// matches for this albedo key, for tools that WRITE maps. Embedded GLB keys
+// ("#name", "#image3") lose the leading '#'/'_'. Empty if the key can never
+// resolve to cooked maps.
+std::string pbrMapStemForAlbedoKey(const std::string& albedoKey);
+
+// Forget cached lookups (resolved pairs and the cooked-tree scan) after maps
+// were written to disk while the engine runs.
+void invalidatePbrLookupCaches();
 
 // Last-resort source of albedo pixels for names that exist only inside a GLB
 // (no file on disk). The Engine registers one that searches the current map's

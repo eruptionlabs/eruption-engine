@@ -1,6 +1,7 @@
 #include "EtexLoader.hpp"
 
 #include "core/Logger.hpp"
+#include "utils/AssetVfs.hpp"
 
 #include <cstring>
 #include <filesystem>
@@ -17,21 +18,25 @@ EtexData loadEtexForImage(const std::string& imagePath, const std::string& ext) 
     if (imagePath.empty()) return out;
     const std::string etexPath = imagePath + ext;
 
-    std::error_code ec;
-    if (!fs::exists(etexPath, ec)) return out;
+    // Pacote do mapa (.emap) primeiro: tamanho, data e bytes do build.
+    uint64_t etexSize = 0, srcSize = 0;
+    int64_t bakT = 0, srcT = 0;
+    if (!vfs::stat(etexPath, etexSize, bakT)) return out;
     // Stale bake (source edited after baking): ignore, runtime path decodes.
-    if (fs::exists(imagePath, ec)) {
-        const auto srcT = fs::last_write_time(imagePath, ec);
-        const auto bakT = fs::last_write_time(etexPath, ec);
-        if (!ec && bakT < srcT) return out;
-    }
+    if (vfs::stat(imagePath, srcSize, srcT) && bakT < srcT) return out;
 
-    std::ifstream f(etexPath, std::ios::binary);
-    if (!f.is_open()) return out;
+    std::vector<uint8_t> bytes;
+    if (!vfs::read(etexPath, bytes) || bytes.size() < 20) return out;
+    size_t c = 0;
+    auto take = [&](void* dst, size_t n) {
+        if (c + n > bytes.size()) return false;
+        std::memcpy(dst, bytes.data() + c, n);
+        c += n;
+        return true;
+    };
 
     uint32_t header[5] = {};
-    f.read(reinterpret_cast<char*>(header), sizeof(header));
-    if (!f.good() || header[0] != kEtexMagic) return out;
+    if (!take(header, sizeof(header)) || header[0] != kEtexMagic) return out;
     const uint32_t mipCount = header[4];
     if (mipCount == 0 || mipCount > 16 || header[2] == 0 || header[3] == 0) return out;
 
@@ -43,13 +48,10 @@ EtexData loadEtexForImage(const std::string& imagePath, const std::string& ext) 
     data.mipSizes.reserve(mipCount);
     for (uint32_t i = 0; i < mipCount; ++i) {
         uint32_t sz = 0;
-        f.read(reinterpret_cast<char*>(&sz), sizeof(sz));
-        if (!f.good() || sz == 0 || sz > (256u << 20)) return out;
+        if (!take(&sz, sizeof(sz)) || sz == 0 || sz > (256u << 20)) return out;
         const size_t base = data.payload.size();
         data.payload.resize(base + sz);
-        f.read(reinterpret_cast<char*>(data.payload.data() + base),
-               static_cast<std::streamsize>(sz));
-        if (!f.good()) return out;
+        if (!take(data.payload.data() + base, sz)) return out;
         data.mipSizes.push_back(sz);
     }
     return data;

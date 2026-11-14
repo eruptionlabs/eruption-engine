@@ -103,6 +103,8 @@ void VulkanContext::createPipelineCache() {
         vkCreatePipelineCache(m_device, &info, nullptr, &m_pipelineCache);
     }
     s_pipelineCache = m_pipelineCache;
+    if (!initial.empty() && m_pipelineCache != VK_NULL_HANDLE)
+        vkGetPipelineCacheData(m_device, m_pipelineCache, &m_pipelineCacheSavedBytes, nullptr);
     ERUPTION_LOG_INFO("Pipeline cache ready (%zu bytes warm)", initial.size());
 }
 
@@ -118,6 +120,11 @@ void VulkanContext::savePipelineCache() {
     if (m_pipelineCache == VK_NULL_HANDLE) return;
     size_t size = 0;
     if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, nullptr) == VK_SUCCESS && size > 0) {
+        // Nada compilado desde a ultima gravacao: o mesmo tamanho e' o mesmo
+        // cache. Regravar os 30 MB a cada troca de mapa, com o pacote do mapa
+        // (.emap) sendo lido em sequencia no mesmo HDD (NTFS via FUSE, um
+        // pedido por vez), segurava a troca de um mapa de teste 24 s com o disco frio.
+        if (size == m_pipelineCacheSavedBytes) return;
         std::vector<char> blob(size);
         if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, blob.data()) == VK_SUCCESS) {
             std::error_code ec;
@@ -132,6 +139,7 @@ void VulkanContext::savePipelineCache() {
             }
             if (ok) std::filesystem::rename(tmp, kPipelineCachePath, ec);
             if (!ok || ec) std::filesystem::remove(tmp, ec);
+            else m_pipelineCacheSavedBytes = size;
         }
     }
 }

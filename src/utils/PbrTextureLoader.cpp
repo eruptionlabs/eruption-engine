@@ -24,20 +24,16 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <fstream>
+#include "utils/AssetVfs.hpp"
 
 namespace fs = std::filesystem;
 
 namespace eruption {
 
+// Pacote do mapa (.emap) primeiro, disco depois: ver utils/AssetVfs.hpp.
 static std::vector<uint8_t> readFileBytes(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return {};
-    f.seekg(0, std::ios::end);
-    size_t size = static_cast<size_t>(f.tellg());
-    if (size == 0) return {};
-    f.seekg(0, std::ios::beg);
-    std::vector<uint8_t> data(size);
-    f.read(reinterpret_cast<char*>(data.data()), size);
+    std::vector<uint8_t> data;
+    vfs::read(path, data);
     return data;
 }
 
@@ -71,13 +67,13 @@ bool loadIndustryStandardPbr(const std::string& albedoPath, PbrTextureData& outM
     auto findFile = [&](const std::string& keyword) -> std::string {
         for (const auto& ext : exts) {
             std::string cand1 = dir + "/" + baseStem + keyword + ext;
-            if (fs::exists(cand1)) return cand1;
+            if (vfs::exists(cand1)) return cand1;
             std::string cand2 = dir + "/" + baseStem + keyword + "_4k" + ext;
-            if (fs::exists(cand2)) return cand2;
+            if (vfs::exists(cand2)) return cand2;
             std::string cand3 = dir + "/" + baseStem + keyword + "_2k" + ext;
-            if (fs::exists(cand3)) return cand3;
+            if (vfs::exists(cand3)) return cand3;
             std::string cand4 = dir + "/" + baseStem + keyword + "_1k" + ext;
-            if (fs::exists(cand4)) return cand4;
+            if (vfs::exists(cand4)) return cand4;
         }
         return "";
     };
@@ -189,11 +185,11 @@ static std::string findAlbedoOnDisk(const std::string& name) {
     for (const char* r : roots) {
         for (const char* e : exts) {
             std::string p = std::string(r) + stem + e;
-            if (fs::exists(p)) return p;
+            if (vfs::exists(p)) return p;
         }
         // also the original name verbatim (keeps its own extension)
         std::string p = std::string(r) + n;
-        if (fs::exists(p)) return p;
+        if (vfs::exists(p)) return p;
     }
     return "";
 }
@@ -273,11 +269,6 @@ bool synthesizePbrFromPixels(const std::vector<uint8_t>& pixels, int width, int 
                              PbrTextureData& outMrahw, PbrTextureData& outNormal,
                              bool organicHint) {
     if (pixels.empty() || width < 4 || height < 4 || channels < 3) return false;
-    ImageData src;
-    src.pixels = pixels;
-    src.width = width;
-    src.height = height;
-    src.channels = channels;
     // REDE NA RESOLUCAO DA TEXTURA (ate' kNeuralMaxSide). Ela foi treinada em
     // recortes de 256 na resolucao ORIGINAL; reduzir para 512 antes mudava a
     // escala que ela ve' e entregava a altura com metade da resolucao do
@@ -299,6 +290,18 @@ bool synthesizePbrFromPixels(const std::vector<uint8_t>& pixels, int width, int 
             return true;
     }
 
+    return synthesizePbrAnalytic(pixels, width, height, channels, outMrahw, outNormal, organicHint);
+}
+
+bool synthesizePbrAnalytic(const std::vector<uint8_t>& pixels, int width, int height, int channels,
+                           PbrTextureData& outMrahw, PbrTextureData& outNormal,
+                           bool organicHint, float normalStrength) {
+    if (pixels.empty() || width < 4 || height < 4 || channels < 3) return false;
+    ImageData src;
+    src.pixels = pixels;
+    src.width = width;
+    src.height = height;
+    src.channels = channels;
     // Caminho classico em resolucao modesta: o detalhe derivado do albedo
     // nao precisa de 4k e a sintese fica barata.
     ImageUtils::downscaleRGBA(src.width, src.height, src.pixels, 512);
@@ -313,6 +316,9 @@ bool synthesizePbrFromPixels(const std::vector<uint8_t>& pixels, int width, int 
     // separava rejunte de tinta.
     HeightFromAlbedoParams hp;
     hp.forceOrganic = organicHint;
+    // 1 = a inclinacao de sempre (a do bake e da sintese em runtime); o
+    // Criador de Assets do editor deixa o autor ajustar so' o relevo da normal.
+    hp.normalStrength *= normalStrength;
     const HeightFromAlbedoResult hfa = heightFromAlbedo(rgba.data(), w, h, hp);
     if (hfa.heightMap.empty()) return false;
 
@@ -366,6 +372,27 @@ static std::string normalizePbrStem(const std::string& s) {
     return out;
 }
 
+// Bumped by invalidatePbrLookupCaches(): maps written while the engine runs
+// (editor Asset Creator) must be seen by the next lookup, and both caches
+// below would otherwise keep the old answer for the whole session.
+static std::atomic<uint32_t> g_pbrLookupEpoch{0};
+
+// Embedded GLB images are keyed "#<image name>" or "#image<N>" (GltfParser),
+// often with no image extension. They are still albedo keys: the cooked-map
+// lookup takes the whole file name as the stem instead of rejecting them.
+// Only '#' keys - a bare material name ("Material.001") keeps the old rule, so
+// it never starts matching cooked maps of an unrelated texture by accident.
+static bool albedoStemOf(const fs::path& src, std::string& stem) {
+    if (supportedExt(src.extension())) {
+        stem = src.stem().string();
+        return true;
+    }
+    const std::string name = src.filename().string();
+    if (name.size() < 2 || name[0] != '#') return false;
+    stem = name;
+    return true;
+}
+
 // Fallback lookup: when the albedo directory does not match the cooked PBR
 // layout (e.g. cidade-A/cidade-C/albedo references only a filename, or uses a
 // different folder prefix), scan assets/data/texture once and cache a map from
@@ -380,11 +407,14 @@ static const std::pair<std::string, std::string>* findPbrPairByStem(const std::s
     // pra arquivos de outro jogo.
     static Cache cache;
     static std::string cachedRoot;
+    static uint32_t cachedEpoch = 0;
     static std::mutex cacheMutex;
     const fs::path root = project::game("assets/data/texture");
     std::lock_guard<std::mutex> cacheLock(cacheMutex);
-    if (cachedRoot != root.string()) {
+    const uint32_t epoch = g_pbrLookupEpoch.load();
+    if (cachedRoot != root.string() || cachedEpoch != epoch) {
         cachedRoot = root.string();
+        cachedEpoch = epoch;
         cache = Cache{};
         if (!fs::exists(root) || !fs::is_directory(root)) return nullptr;
         try {
@@ -410,7 +440,7 @@ static const std::pair<std::string, std::string>* findPbrPairByStem(const std::s
                 const std::string name = path.filename().string();
                 std::string originalStem = name.substr(0, name.size() - 10);
                 std::string normalPath = (path.parent_path() / (originalStem + "_normal.png")).string();
-                if (!fs::exists(normalPath)) continue;
+                if (!vfs::exists(normalPath)) continue;
                 std::pair<std::string, std::string> value = { path.string(), normalPath };
 
                 std::string exactKey = toLower(originalStem);
@@ -753,9 +783,14 @@ PbrTexturePathPair resolvePbrTexturePathsImpl(const std::string& albedoPath) {
     // loads (one per model/terrain texture).  Cache the result to avoid
     // thousands of redundant fs::exists calls.
     static std::unordered_map<std::string, PbrTexturePathPair> cache;
+    static uint32_t cacheEpoch = 0;
     static std::mutex cacheMutex;
     {
         std::lock_guard<std::mutex> lock(cacheMutex);
+        if (cacheEpoch != g_pbrLookupEpoch.load()) {
+            cache.clear();
+            cacheEpoch = g_pbrLookupEpoch.load();
+        }
         auto it = cache.find(albedoPath);
         if (it != cache.end()) return it->second;
     }
@@ -789,10 +824,9 @@ PbrTexturePathPair resolvePbrTexturePathsImpl(const std::string& albedoPath) {
         std::replace(raw.begin(), raw.end(), '\\', '/');
         fs::path src = raw;
 
-        if (!supportedExt(src.extension())) return out;
-
+        std::string stem;
+        if (!albedoStemOf(src, stem)) return out;
         fs::path relDir = src.parent_path();
-        std::string stem = src.stem().string();
 
         // Cooked maps are stored under assets/data/texture mirroring the
         // original texture layout. Some albedo paths already include the
@@ -877,14 +911,14 @@ PbrTexturePathPair resolvePbrTexturePathsImpl(const std::string& albedoPath) {
         fs::path mrahwPath, normalPath;
         for (const auto& attempt : pathAttempts) {
             std::tie(mrahwPath, normalPath) = makePaths(project::game("assets/data/texture"), attempt.first, attempt.second);
-            if (fs::exists(mrahwPath) && fs::exists(normalPath)) {
+            if (vfs::exists(mrahwPath) && vfs::exists(normalPath)) {
                 out.mrahw = mrahwPath.string();
                 out.normal = normalPath.string();
                 out.valid = true;
                 return out;
             }
             std::tie(mrahwPath, normalPath) = makePaths(project::game("assets/data"), attempt.first, attempt.second);
-            if (fs::exists(mrahwPath) && fs::exists(normalPath)) {
+            if (vfs::exists(mrahwPath) && vfs::exists(normalPath)) {
                 out.mrahw = mrahwPath.string();
                 out.normal = normalPath.string();
                 out.valid = true;
@@ -930,6 +964,21 @@ PbrTexturePathPair resolvePbrTexturePathsImpl(const std::string& albedoPath) {
     }
     return result;
 }
+
+std::string pbrMapStemForAlbedoKey(const std::string& albedoKey) {
+    std::string raw = albedoKey;
+    std::replace(raw.begin(), raw.end(), '\\', '/');
+    std::string stem;
+    if (!albedoStemOf(fs::path(raw), stem)) return {};
+    // O mesmo corte de collectCandidateStems: sem os '#'/'_' da frente, que o
+    // nome sintetico da imagem embutida carrega (e que nao cabem bem num
+    // nome de arquivo). E' uma das chaves que a busca por arvore tenta.
+    size_t first = 0;
+    while (first < stem.size() && (stem[first] == '#' || stem[first] == '_')) ++first;
+    return first < stem.size() ? stem.substr(first) : stem;
+}
+
+void invalidatePbrLookupCaches() { ++g_pbrLookupEpoch; }
 
 PbrTextureSlots uploadPbrTexturesFromData(VulkanContext* ctx,
                                           BindlessDescriptor* bindless,
@@ -1003,7 +1052,7 @@ bool synthesizePbrForAlbedoKey(const std::string& albedoKey,
     return false;
 }
 
-void prewarmPbrTextureData(const std::vector<std::string>& albedoNames) {
+void prewarmPbrTextureData(const std::vector<std::string>& albedoNames, bool synthesizeMissing) {
     std::vector<std::string> uniq;
     {
         std::unordered_set<std::string> seen;
@@ -1033,6 +1082,7 @@ void prewarmPbrTextureData(const std::vector<std::string>& albedoNames) {
             e.mrahw  = loadPbrTextureData(paths.mrahw);
             e.normal = loadPbrTextureData(paths.normal);
         } else {
+            if (!synthesizeMissing) return;
             // No cooked maps: derive normal + AO from the albedo.
             std::string alb = findAlbedoOnDisk(key);
             if (alb.empty() || !synthesizePbrFromAlbedo(alb, e.mrahw, e.normal)) return;

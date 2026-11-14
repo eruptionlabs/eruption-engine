@@ -198,18 +198,27 @@ std::shared_ptr<const LoadedModel> currentModel() {
 
 int roundUp(int v, int multiple) { return (v + multiple - 1) / multiple * multiple; }
 
-// RGBA8 -> NCHW float RGB, estendido circularmente ate' o multiplo pedido
-// (a textura e' periodica: a borda continua do outro lado).
+// Margem circular de cada lado. Sem ela a rede via a borda da textura solta
+// (padding da convolucao) e a rugosidade/normal/altura saiam diferentes nos
+// dois lados da emenda: o chao que repete a textura mostrava uma grade de
+// retangulos a cada repeticao (areia de mapa de praia, 4 tiles por repeticao),
+// e o relevo assado da altura abria degrau na mesma linha. Com a margem cada
+// borda ve' o outro lado da textura como vizinho e a saida emenda.
+int wrapMargin(int width, int height) { return std::min(64, std::min(width, height) / 4); }
+
+// RGBA8 -> NCHW float RGB com a margem circular dos quatro lados e estendido
+// ate' o multiplo pedido (a textura e' periodica: a borda continua do outro lado).
 NnTensor makeInputTensor(const uint8_t* rgba, int width, int height, const Contract& c) {
-    const int W = roundUp(width, c.padMultiple), H = roundUp(height, c.padMultiple);
+    const int M = wrapMargin(width, height);
+    const int W = roundUp(width + 2 * M, c.padMultiple), H = roundUp(height + 2 * M, c.padMultiple);
     const size_t plane = static_cast<size_t>(W) * H;
     NnTensor t;
     t.shape = {1, 3, H, W};
     t.data.resize(plane * 3);
     for (int y = 0; y < H; ++y) {
-        const uint8_t* row = rgba + static_cast<size_t>(y % height) * width * 4;
+        const uint8_t* row = rgba + static_cast<size_t>((y - M + H * height) % height) * width * 4;
         for (int x = 0; x < W; ++x) {
-            const uint8_t* px = row + static_cast<size_t>(x % width) * 4;
+            const uint8_t* px = row + static_cast<size_t>((x - M + W * width) % width) * 4;
             const size_t i = static_cast<size_t>(y) * W + x;
             for (int k = 0; k < 3; ++k) t.data[k * plane + i] = px[k] * c.inputScale + c.inputBias;
         }
@@ -222,7 +231,8 @@ void copyChannel(const NnTensor& out, int channel, int width, int height, std::v
     dst.clear();
     if (channel < 0 || channel >= out.shape[1]) return;
     const size_t W = static_cast<size_t>(out.shape[3]);
-    const float* src = out.data.data() + static_cast<size_t>(channel) * W * static_cast<size_t>(out.shape[2]);
+    const size_t M = static_cast<size_t>(wrapMargin(width, height));
+    const float* src = out.data.data() + static_cast<size_t>(channel) * W * static_cast<size_t>(out.shape[2]) + M * W + M;
     dst.resize(static_cast<size_t>(width) * height);
     for (int y = 0; y < height; ++y)
         std::copy_n(src + y * W, width, dst.data() + static_cast<size_t>(y) * width);

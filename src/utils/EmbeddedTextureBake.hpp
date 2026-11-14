@@ -1,4 +1,5 @@
 #pragma once
+#include <mutex>
 
 #include "utils/BcCompressor.hpp"
 
@@ -47,8 +48,30 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model,
 // So' o cache (<glb>.etexpack): sem bake, sem GPU, seguro fora da thread
 // principal - a leitura de mapa em segundo plano (preload/warp) adianta o
 // arquivo, e uma falta de cache volta ao bakeEmbeddedTextures na troca.
+// Leitura de arquivo grande do disco, UM fio por vez (o resto do trabalho -
+// parse, decode - segue em paralelo). Em HDD (e NTFS via FUSE) 16 leituras ao
+// mesmo tempo faziam a cabeca pular entre arquivos: 60 modelos de cena, 125
+// MB, em 7,2 s em paralelo contra ~2 s em sequencia (64 MB/s). Foi o grosso
+// dos 97 s de abrir um mapa grande com 94 objetos de cena e o disco disputado.
+std::mutex& diskReadMutex();
+
 bool readEmbeddedBakeCache(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr,
                            EmbeddedBakeResult& out);
+
+// Build do pacote do mapa (com o vfs anotando a carga): o pacote de texturas
+// que cada .glb usou e os nomes das imagens que ele traz, pela chave do vfs
+// do .glb. O build tira essas imagens do .glb que vai no .emap.
+struct EmbeddedPackCoverage {
+    std::string pack; // chave do vfs
+    std::vector<std::string> images;
+};
+std::unordered_map<std::string, EmbeddedPackCoverage> recordedPackCoverage();
+
+// Apaga os pacotes (<glb>*.etexpack) deste GLB. O pacote e' chaveado so' pelo
+// GLB (tamanho e data), entao um _mrahw/_normal novo em disco nao o invalida:
+// sem apagar, a proxima carga usaria o PBR antigo guardado nele (alivio e LOD).
+// Devolve quantos arquivos apagou.
+size_t removeEmbeddedBakeCaches(const std::string& glbPath);
 
 // Teto de resolucao ativo (preset de data/graphics.json). O loader de fundo
 // (warp) nao le' o preset, entao o Engine publica o valor aqui.

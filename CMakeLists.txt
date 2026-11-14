@@ -759,6 +759,18 @@ endif()
 if(ERUPTION_HAVE_MESHOPT)
     target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_MESHOPT=1)
 endif()
+# zstd (opcional): compressao das entradas do pacote de mapa (.emap, ver
+# src/utils/AssetVfs.hpp). Sem a biblioteca (Android, navegador) o pacote e'
+# gravado e lido com entradas cruas.
+if(NOT ANDROID AND NOT EMSCRIPTEN)
+    find_path(ERUPTION_ZSTD_INCLUDE zstd.h)
+    find_library(ERUPTION_ZSTD_LIB zstd)
+    if(ERUPTION_ZSTD_INCLUDE AND ERUPTION_ZSTD_LIB)
+        target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_ZSTD=1)
+        target_include_directories(eruption-engine SYSTEM PRIVATE "${ERUPTION_ZSTD_INCLUDE}")
+        target_link_libraries(eruption-engine PRIVATE "${ERUPTION_ZSTD_LIB}")
+    endif()
+endif()
 if(ERUPTION_HAVE_ORT)
     target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_ORT=1)
     target_include_directories(eruption-engine SYSTEM PRIVATE "${ERUPTION_ORT_DIR}/include")

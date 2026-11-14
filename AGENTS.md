@@ -98,6 +98,7 @@ shader path is chosen before the pipelines exist.
 ./build.sh                                  # Debug build with Vulkan validation
 cmake -S . -B build-rel -DERUPTION_BUILD_TESTS=ON && cmake --build build-rel -j
 tools/android/build_apk.sh <map>[,<map>...] # Android package (needs SDK, NDK and JDK 17)
+./eruption-engine --game --project <dir> --bake-map <map>  # map bundle <map>.emap (src/utils/AssetVfs.hpp)
 ```
 
 `build_apk.sh` finds each map in `assets/external/<map>` or in a game project

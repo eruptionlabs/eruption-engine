@@ -3,6 +3,7 @@
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "core/JobSystem.hpp"
+#include "utils/AssetVfs.hpp"
 #include "utils/Profiler.hpp"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -27,6 +28,15 @@ bool MapLoader::beginLoad(const std::string& mapName) {
     m_loadingMap = std::make_shared<LoadedMap>();
     m_loadingMap->mapName = mapName;
     m_loadProgress = 0.0f;
+    // Pacote do mapa (<mapa>.emap, feito pelo build do mapa): montado antes de
+    // qualquer leitura, para a busca do .glb ja' sair dele.
+    {
+        std::string stem = mapName;
+        std::replace(stem.begin(), stem.end(), '\\', '/');
+        if (stem.size() >= 5 && stem.compare(0, 5, "data/") == 0) stem = stem.substr(5);
+        if (stem.size() > 4 && stem.compare(stem.size() - 4, 4, ".glb") == 0) stem = fs::path(stem).stem().string();
+        vfs::mountMap(stem);
+    }
 
     ERUPTION_LOG_INFO("MapLoader: begin load '%s'", m_loadingMapName.c_str());
     return true;
@@ -38,21 +48,17 @@ bool MapLoader::loadPhaseTextures() {
     return true;
 }
 
+// Pacote do mapa (.emap) primeiro, disco depois: ver utils/AssetVfs.hpp.
 static std::vector<uint8_t> readFileBytes(const fs::path& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return {};
-    f.seekg(0, std::ios::end);
-    size_t size = static_cast<size_t>(f.tellg());
-    f.seekg(0, std::ios::beg);
-    std::vector<uint8_t> data(size);
-    f.read(reinterpret_cast<char*>(data.data()), size);
+    std::vector<uint8_t> data;
+    vfs::read(path, data);
     return data;
 }
 
 static std::string pickGroundTexture(const std::string& mapStem) {
     if (!mapStem.empty()) {
         fs::path candidate = project::game("assets/data/texture") / (mapStem + "_ground.png");
-        if (fs::exists(candidate)) {
+        if (vfs::exists(candidate)) {
             return candidate.filename().string();
         }
     }
@@ -126,17 +132,16 @@ WorldBorder parseWorldBorder(const nlohmann::json& b) {
 }
 
 static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
-    if (!fs::exists(envPath)) return;
+    if (!vfs::exists(envPath)) return;
 
-    std::ifstream f(envPath);
-    if (!f) {
+    std::string text;
+    if (!vfs::readText(envPath.string(), text)) {
         ERUPTION_LOG_WARN("MapLoader: failed to open env '%s'", envPath.string().c_str());
         return;
     }
 
     try {
-        nlohmann::json j;
-        f >> j;
+        nlohmann::json j = nlohmann::json::parse(text);
 
         if (j.contains("sky") && j["sky"].is_boolean()) map.env.hasSky = j["sky"].get<bool>();
         if (j.contains("edge_apron")) {
@@ -161,6 +166,12 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
             ERUPTION_LOG_WARN("MapLoader: borda de mundo do .env (%.0f,%.0f)-(%.0f,%.0f) fusao %.0f u",
                               map.env.worldBorder.x0, map.env.worldBorder.z0, map.env.worldBorder.x1,
                               map.env.worldBorder.z1, map.env.worldBorder.fade);
+        }
+        if (j.contains("shore") && j["shore"].is_string()) {
+            const std::string modo = j["shore"].get<std::string>();
+            map.env.shoreSwash = modo == "swash" || modo == "swash_foam";
+            map.env.shoreSwashFoam = modo == "swash_foam";
+            ERUPTION_LOG_WARN("MapLoader: beira d'agua do .env: %s", modo.c_str());
         }
         if (j.contains("cloud_box") && j["cloud_box"].is_object()) {
             const auto& c = j["cloud_box"];
@@ -314,6 +325,10 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
                 lq.level = e.value("level", 0.0f);
                 lq.radius = e.value("radius", 0.0f);
                 lq.emissive = e.value("emissive", 0.0f);
+                if (e.contains("shore") && e["shore"].is_string()) {
+                    const std::string modo = e["shore"].get<std::string>();
+                    lq.shore = modo == "swash_foam" ? 2 : (modo == "swash" ? 1 : 0);
+                }
                 lq.shoreHeat = std::clamp(e.value("shoreHeat", 0.0f), 0.0f, 4.0f);
                 lq.centerHeat = std::clamp(e.value("centerHeat", 0.0f), 0.0f, 4.0f);
                 lq.flowSpeed = e.value("flowSpeed", 1.0f);
@@ -800,7 +815,7 @@ bool MapLoader::loadFromGlb() {
         };
         glbPath.clear();
         for (const auto& c : candidates) {
-            if (fs::exists(c) || fs::exists(fs::path(c).replace_extension(".relevo"))) {
+            if (vfs::exists(c) || vfs::exists(fs::path(c).replace_extension(".relevo"))) {
                 glbPath = c;
                 break;
             }
@@ -809,7 +824,7 @@ bool MapLoader::loadFromGlb() {
             ERUPTION_LOG_WARN("MapLoader: no GLB candidate found for '%s'", m_loadingMap->mapName.c_str());
             return false;
         }
-    } else if (!fs::exists(glbPath) && !fs::exists(fs::path(glbPath).replace_extension(".relevo"))) {
+    } else if (!vfs::exists(glbPath) && !vfs::exists(fs::path(glbPath).replace_extension(".relevo"))) {
         ERUPTION_LOG_WARN("MapLoader: explicit GLB path not found: '%s'", glbPath.c_str());
         return false;
     }
@@ -820,7 +835,7 @@ bool MapLoader::loadFromGlb() {
     // pacotes assados, .nav, .env).
     std::string readPath = glbPath;
     fs::path relevoTer;
-    if (!fs::exists(glbPath)) {
+    if (!vfs::exists(glbPath)) {
         const fs::path relevo = fs::path(glbPath).replace_extension(".relevo");
         fs::path cachedGlb;
         std::string error;
@@ -867,7 +882,7 @@ bool MapLoader::loadFromGlb() {
     if (m_loadingMap->edgeApronParams.enabled && !m_loadingMap->buildEdgeAprons(m_loadingMap->models.back()))
         ERUPTION_LOG_WARN("MapLoader: edge_apron sem malha de chao em grade em '%s'", glbPath.c_str());
 
-    if (fs::exists(terPath)) {
+    if (vfs::exists(terPath)) {
         auto terData = readFileBytes(terPath);
         if (!terData.empty()) {
             m_loadingMap->terrain = TerrainParser::parse(terData.data(), terData.size());
@@ -879,7 +894,7 @@ bool MapLoader::loadFromGlb() {
         }
     }
 
-    if (fs::exists(navPath)) {
+    if (vfs::exists(navPath)) {
         auto navData = readFileBytes(navPath);
         if (!navData.empty()) {
             m_loadingMap->navGrid = parseNavBinary(navData.data(), navData.size());

@@ -23,6 +23,11 @@ private:
     std::unique_ptr<class PlayerController> m_player;
     std::unique_ptr<class Editor> m_editor;
     std::unique_ptr<class ScriptHost> m_scripts;
+    // --bake-map <mapa>: build do pacote do mapa (.emap) e sai. Ver MapBundleBaker.hpp.
+    std::unique_ptr<class MapBundleBaker> m_baker;
+    std::string m_bakeMap;
+    bool m_bakeCompress = true;
+    int m_bakeLevel = 9;
     bool m_scriptsPlaying = false;
     std::string m_sceneEditsMap; // mapa cujas edições já foram aplicadas (jogo)
     bool m_hasMapSpawn = false;  // troca de mapa pedida pelo jogo: onde o jogador aparece
@@ -37,9 +42,11 @@ private:
     std::string m_screenshotPath;
     std::string m_warpOnLoad;
     // ERUPTION_TEST_MAP_SEQUENCE="vila-A,cidade-A,..." + _FRAMES=N (debug):
-    // a cada N frames chama Engine::loadMap (carga FRIA, nao warp) com o
-    // proximo mapa da lista, em loop. Serve pra vigiar o cache cross-mapa
-    // ([ASSETCACHE] no log) e a VRAM em troca repetida no mesmo processo.
+    // a cada N frames pede o proximo mapa da lista pelo mesmo caminho do
+    // world.load_map dos scripts (Engine::requestMap), em loop. Serve pra
+    // vigiar o cache cross-mapa ([ASSETCACHE] no log), a memoria (VmRSS no
+    // [MAPSEQ]) e a VRAM em troca repetida no mesmo processo.
+    // ERUPTION_TEST_MAP_SEQUENCE_ONCE=1: fecha o motor depois de uma volta.
     std::vector<std::string> m_mapSequence;
     int m_mapSequenceFrames = 0;
     int m_mapSequenceCountdown = 0;
