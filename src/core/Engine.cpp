@@ -3081,6 +3081,9 @@ void Engine::applyGraphicsPreset() {
         ts.budgetMb = static_cast<uint32_t>(std::max(0, p.value("texture_budget_mb", 0)));
         ts.uploadMbPerFrame = static_cast<uint32_t>(std::clamp(p.value("texture_stream_upload_mb", 16), 1, 1024));
         ts.mipBias = p.value("texture_stream_mip_bias", 1.0f);
+        // Quadros por mip quando a textura fica nitida (0 = troca direta):
+        // 6 a 60 fps = 0,1 s por mip, ~0,3 s da cauda de 128 px ao 1024.
+        ts.rampFrames = static_cast<uint32_t>(std::max(0, p.value("texture_stream_ramp_frames", 6)));
         m_textureStreamer.configure(ts);
         ERUPTION_LOG_WARN("[STREAM] %s: cauda %u px, orcamento %s%u MB, envio %u MB/quadro, folga %.1f mip",
                           m_textureStreamer.active() ? "ligado" : "desligado", ts.baseSize,

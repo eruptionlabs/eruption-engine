@@ -46,6 +46,7 @@ public:
         uint32_t budgetMb = 0;        // 0 = automatico (fatia do heap da GPU)
         uint32_t uploadMbPerFrame = 16;
         float mipBias = 1.0f;         // mips a mais de folga (anisotropico pede o mais fino)
+        uint32_t rampFrames = 6;      // quadros por mip ao ficar nitida (0 = troca direta)
     };
     struct Stats {
         uint32_t managed = 0;         // texturas registradas e vivas
@@ -129,6 +130,13 @@ private:
         bool inFlight = false;
         bool seenStatic = false;           // alguma malha estatica usa
         std::vector<std::pair<uint32_t, uint32_t>> aliases;  // (slot, geracao)
+        // Rampa: views da imagem do streamer comecando no mip k (ramp[k-1]).
+        // Uma view com baseMipLevel = k amostra igual a uma textura cujo topo
+        // e' o mip k, entao o slot desce um mip por vez sem mexer em shader.
+        std::vector<VkImageView> ramp;
+        uint32_t rampLevel = 0;            // view atual no slot (0 = imagem inteira)
+        uint64_t rampNext = 0;             // quadro do proximo degrau
+        uint32_t visibleMip = 0;           // mip de cima que o slot mostra agora
     };
     struct Item {
         uint32_t entry = 0;
@@ -145,6 +153,7 @@ private:
         VkBuffer staging = VK_NULL_HANDLE;
         VmaAllocation stagingAlloc = VK_NULL_HANDLE;
         std::vector<Item> items;
+        bool arrival = false;              // primeira passada do mapa: troca direta
     };
 
     void drainRegistrations();
@@ -156,10 +165,14 @@ private:
     uint64_t budgetNow(uint64_t mine) const;
     uint64_t chainBytes(const Entry& e, uint32_t top) const { return e.mipOffset[e.mipCount] - e.mipOffset[top]; }
     bool buildImage(Entry& e, uint32_t top, Item& out);
-    void submitBatch(std::vector<Item>&& items, bool wait);
+    void submitBatch(std::vector<Item>&& items, bool wait, bool arrival);
     void retireBatches(bool wait);
     void releaseImage(VkImage image, VmaAllocation alloc, VkImageView view);
     void dropStreamedImage(Entry& e);
+    void stepRamps();
+    void releaseRamp(Entry& e);
+    VkImageView makeView(VkImage image, VkFormat format, uint32_t baseLevel, uint32_t levels);
+    std::vector<uint32_t> m_ramping;     // entradas com rampa em andamento
 
     VulkanContext* m_vk = nullptr;
     BindlessDescriptor* m_bindless = nullptr;
@@ -208,6 +221,7 @@ void TextureStreamer::update(const Vec3& cameraPos, float pixelsPerUnit, ForEach
     if (!active()) return;
     ++m_frame;
     retireBatches(false);
+    stepRamps();
     drainRegistrations();
     if (m_entries.empty()) return;
     // Muitos registros de uma vez = carga de mapa: o primeiro passe sobe tudo

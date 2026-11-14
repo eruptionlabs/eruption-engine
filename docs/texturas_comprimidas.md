@@ -158,6 +158,14 @@ camadas, sem descriptor indexing) fica desligado.
   mip de cima de quem menos perde. Sobe a imagem nova sem travar o quadro
   (cerca, ate' `texture_stream_upload_mb` por quadro) e troca o slot bindless;
   a imagem antiga morre depois dos quadros em voo.
+- **Sem salto seco ao ficar nitida.** A imagem nova entra mostrando o mesmo
+  mip que ja' estava na tela e desce um mip a cada `texture_stream_ramp_frames`
+  quadros (6 = ~0,1 s por mip a 60 fps), por views com `baseMipLevel` = k, sem
+  mexer em shader. Na chegada ao mapa a troca e' direta: cai nos quadros 2-3,
+  sob o fade do warp e a mudanca da tela inteira na partida (com rampa ali, os
+  degraus apareciam sozinhos nos quadros 7-19: ate' +15% de pixels com
+  |dY| > 8 num quadro, contra +0,9% da troca direta). Ficar mais borrada
+  (orcamento apertado ao chegar um vizinho) continua sendo troca direta.
 - Custo quando ligado: uma copia da textura em RAM (de onde os mips sobem)
   e a cauda duplicada na VRAM (~1/64 do total).
 

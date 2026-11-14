@@ -37,6 +37,8 @@ void TextureStreamer::shutdown() {
     if (!m_vk) return;
     retireBatches(true);
     for (Entry& e : m_entries) {
+        for (VkImageView v : e.ramp) vkDestroyImageView(m_vk->device(), v, nullptr);
+        e.ramp.clear();
         if (e.image != VK_NULL_HANDLE) {
             vkDestroyImageView(m_vk->device(), e.view, nullptr);
             vmaDestroyImage(m_vk->allocator(), e.image, e.alloc);
@@ -166,6 +168,7 @@ void TextureStreamer::drainRegistrations() {
         e.mipCount = r.mipCount;
         e.baseMip = r.baseMip;
         e.residentMip = r.baseMip;
+        e.visibleMip = r.baseMip;
         e.mipOffset.resize(r.mipCount + 1, 0);
         for (uint32_t m = 0; m < r.mipCount; ++m) e.mipOffset[m + 1] = e.mipOffset[m] + r.mipSizes[m];
         e.payload = std::move(r.payload);
@@ -349,7 +352,7 @@ void TextureStreamer::endDemandAndApply() {
     }
     // Nem a primeira passada espera: o primeiro quadro sai com a cauda e as
     // texturas ficam nitidas quando o envio termina (alguns quadros).
-    if (!items.empty()) submitBatch(std::move(items), false);
+    if (!items.empty()) submitBatch(std::move(items), false, prime);
 
     // Resumo periodico no log (ERUPTION_TEST_STREAM_LOG=1): residente,
     // orcamento e quanto a piramide inteira ocuparia.
@@ -378,6 +381,21 @@ void TextureStreamer::endDemandAndApply() {
     }
 }
 
+VkImageView TextureStreamer::makeView(VkImage image, VkFormat format, uint32_t baseLevel, uint32_t levels) {
+    VkImageViewCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = format;
+    vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    vi.subresourceRange.baseMipLevel = baseLevel;
+    vi.subresourceRange.levelCount = levels;
+    vi.subresourceRange.layerCount = 1;
+    VkImageView view = VK_NULL_HANDLE;
+    if (vkCreateImageView(m_vk->device(), &vi, nullptr, &view) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return view;
+}
+
 bool TextureStreamer::buildImage(Entry& e, uint32_t top, Item& out) {
     VkImageCreateInfo ii{};
     ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -392,15 +410,8 @@ bool TextureStreamer::buildImage(Entry& e, uint32_t top, Item& out) {
     VmaAllocationCreateInfo ai{};
     ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
     if (vmaCreateImage(m_vk->allocator(), &ii, &ai, &out.image, &out.alloc, nullptr) != VK_SUCCESS) return false;
-    VkImageViewCreateInfo vi{};
-    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    vi.image = out.image;
-    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vi.format = e.format;
-    vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    vi.subresourceRange.levelCount = ii.mipLevels;
-    vi.subresourceRange.layerCount = 1;
-    if (vkCreateImageView(m_vk->device(), &vi, nullptr, &out.view) != VK_SUCCESS) {
+    out.view = makeView(out.image, e.format, 0, ii.mipLevels);
+    if (out.view == VK_NULL_HANDLE) {
         vmaDestroyImage(m_vk->allocator(), out.image, out.alloc);
         return false;
     }
@@ -413,7 +424,7 @@ bool TextureStreamer::buildImage(Entry& e, uint32_t top, Item& out) {
     return true;
 }
 
-void TextureStreamer::submitBatch(std::vector<Item>&& items, bool wait) {
+void TextureStreamer::submitBatch(std::vector<Item>&& items, bool wait, bool arrival) {
     // Um staging so' para o lote e um envio so', sem esperar: a troca do slot
     // acontece num passe seguinte, quando a cerca ja' sinalizou.
     // Cada textura comeca alinhada a 16 bytes: o bufferOffset de uma copia
@@ -477,6 +488,7 @@ void TextureStreamer::submitBatch(std::vector<Item>&& items, bool wait) {
     vmaUnmapMemory(m_vk->allocator(), b.stagingAlloc);
     vmaFlushAllocation(m_vk->allocator(), b.stagingAlloc, 0, VK_WHOLE_SIZE);
     b.items = std::move(items);
+    b.arrival = arrival;
     vkEndCommandBuffer(b.cmd);
     VkFenceCreateInfo fi{};
     fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -506,11 +518,40 @@ void TextureStreamer::retireBatches(bool wait) {
             Entry& e = m_entries[it.entry];
             e.inFlight = false;
             if (!e.alive || e.generation != it.generation ||
-                !m_bindless->updateTextureIfGenerationSafe(e.slot, e.generation, it.view, e.sampler)) {
+                m_bindless->slotGenerationSafe(e.slot) != e.generation) {
                 releaseImage(it.image, it.alloc, it.view);
                 continue;
             }
-            pointSlot(e, it.view);
+            // Rampa: o slot continua mostrando o mip de cima de agora (mesma
+            // imagem na tela no quadro da troca) e desce um mip a cada
+            // rampFrames quadros ate' a imagem inteira. Ficando mais borrada
+            // (orcamento, camera longe) a troca e' direta.
+            releaseRamp(e);
+            const uint32_t levels = e.mipCount - it.mip;
+            uint32_t start = e.visibleMip > it.mip ? e.visibleMip - it.mip : 0;
+            // Na chegada ao mapa a troca e' direta: cai nos quadros 2-3, junto
+            // com o fade do warp e a mudanca da tela inteira na partida. Medido
+            // em 45 mapas: com rampa ali os degraus caiam sozinhos nos quadros
+            // 7-19 e apareciam (ate' +15% de pixels com |dY| > 8 num quadro).
+            if (m_settings.rampFrames == 0 || b.arrival) start = 0;
+            start = std::min(start, levels - 1);
+            for (uint32_t k = 1; k <= start; ++k) {
+                const VkImageView v = makeView(it.image, e.format, k, levels - k);
+                if (v == VK_NULL_HANDLE) {
+                    start = k - 1;
+                    break;
+                }
+                e.ramp.push_back(v);
+            }
+            const VkImageView shown = start > 0 ? e.ramp[start - 1] : it.view;
+            if (!m_bindless->updateTextureIfGenerationSafe(e.slot, e.generation, shown, e.sampler)) {
+                releaseRamp(e);
+                releaseImage(it.image, it.alloc, it.view);
+                e.alive = false;
+                dropStreamedImage(e);
+                continue;
+            }
+            pointSlot(e, shown);
             if (e.image != VK_NULL_HANDLE) {
                 m_stats.streamedBytes -= e.imageBytes;
                 releaseImage(e.image, e.alloc, e.view);
@@ -520,6 +561,10 @@ void TextureStreamer::retireBatches(bool wait) {
             e.view = it.view;
             e.imageBytes = it.bytes;
             e.residentMip = it.mip;
+            e.rampLevel = start;
+            e.visibleMip = it.mip + start;
+            e.rampNext = m_frame + m_settings.rampFrames;
+            if (start > 0) m_ramping.push_back(it.entry);
             m_stats.streamedBytes += it.bytes;
             swapped = true;
         }
@@ -552,12 +597,57 @@ void TextureStreamer::dropStreamedImage(Entry& e) {
         }
     }
     m_stats.streamedBytes -= e.imageBytes;
+    releaseRamp(e);
     releaseImage(e.image, e.alloc, e.view);
     e.image = VK_NULL_HANDLE;
     e.alloc = VK_NULL_HANDLE;
     e.view = VK_NULL_HANDLE;
     e.imageBytes = 0;
     e.residentMip = e.baseMip;
+    e.visibleMip = e.baseMip;
+}
+
+void TextureStreamer::releaseRamp(Entry& e) {
+    if (e.ramp.empty()) return;
+    // Quadros em voo ainda podem amostrar pela view do degrau.
+    VulkanContext* vk = m_vk;
+    std::vector<VkImageView> views = std::move(e.ramp);
+    e.ramp.clear();
+    e.rampLevel = 0;
+    vk->deferFrameCleanup([vk, views]() {
+        for (VkImageView v : views) vkDestroyImageView(vk->device(), v, nullptr);
+    });
+}
+
+void TextureStreamer::stepRamps() {
+    bool changed = false;
+    for (size_t k = 0; k < m_ramping.size();) {
+        Entry& e = m_entries[m_ramping[k]];
+        if (!e.alive || e.ramp.empty() || e.rampLevel == 0 || e.image == VK_NULL_HANDLE) {
+            m_ramping[k] = m_ramping.back();
+            m_ramping.pop_back();
+            continue;
+        }
+        if (m_frame < e.rampNext) {
+            ++k;
+            continue;
+        }
+        --e.rampLevel;
+        const VkImageView v = e.rampLevel > 0 ? e.ramp[e.rampLevel - 1] : e.view;
+        if (!m_bindless->updateTextureIfGenerationSafe(e.slot, e.generation, v, e.sampler)) {
+            e.alive = false;
+            dropStreamedImage(e);
+            ++k;
+            continue;
+        }
+        pointSlot(e, v);
+        e.visibleMip = e.residentMip + e.rampLevel;
+        e.rampNext = m_frame + m_settings.rampFrames;
+        changed = true;
+        if (e.rampLevel == 0) releaseRamp(e);
+        ++k;
+    }
+    if (changed) m_bindless->flushUpdatesSafe();
 }
 
 } // namespace eruption
