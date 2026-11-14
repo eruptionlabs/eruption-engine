@@ -3,6 +3,8 @@
 // delta entra nos vértices do chão alinhados à grade e na grade .ter (jogo e
 // editor). No editor o pincel muda o delta e envia só os vértices tocados.
 #include "core/Engine.hpp"
+#include "utils/AssetVfs.hpp"
+#include <sstream>
 
 #include "core/EngineInternal.hpp"
 #include "core/Logger.hpp"
@@ -72,8 +74,9 @@ void Engine::applyHeightDelta(LoadedMap& map, std::vector<ModelAsset>& models, H
     h.active = true;
 
     // Retoque salvo?
-    std::ifstream f(heightPathFor(map.mapName), std::ios::binary);
-    if (!f) return;
+    std::vector<uint8_t> raw; // pacote do mapa (.emap) primeiro
+    if (!vfs::read(heightPathFor(map.mapName), raw)) return;
+    std::istringstream f(std::string(raw.begin(), raw.end()));
     char magic[8] = {};
     uint32_t version = 0, w = 0, d = 0;
     float scale = 0, ox = 0, oz = 0;

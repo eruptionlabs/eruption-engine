@@ -1,4 +1,5 @@
 #include "renderer/ReliefSource.hpp"
+#include "utils/AssetVfs.hpp"
 #include "utils/TextureEncoder.hpp"
 
 #include "core/Logger.hpp"
@@ -92,25 +93,34 @@ template <class T> void put(std::FILE* f, const std::vector<T>& v) {
     std::fwrite(&n, sizeof(n), 1, f);
     if (n) std::fwrite(v.data(), sizeof(T), n, f);
 }
-template <class T> bool get(std::FILE* f, std::vector<T>& v) {
-    uint64_t n = 0;
-    if (std::fread(&n, sizeof(n), 1, f) != 1 || n > (uint64_t(1) << 32)) return false;
-    v.resize(n);
-    return n == 0 || std::fread(v.data(), sizeof(T), n, f) == n;
-}
 
 constexpr uint32_t kMagic = 0x31564C52; // "RLV1"
-constexpr uint32_t kVersion = 2; // 2: caixa dupla no Nyquist da grade e leitura bilinear
+constexpr uint32_t kVersion = 3; // 2: caixa dupla no Nyquist da grade e leitura bilinear; 3: borda da malha presa (costura)
+
+// Vetor gravado por put(): u64 de contagem + os elementos.
+template <class T> bool getMem(const std::vector<uint8_t>& b, size_t& c, std::vector<T>& v) {
+    uint64_t n = 0;
+    if (c + 8 > b.size()) return false;
+    std::memcpy(&n, b.data() + c, 8);
+    c += 8;
+    if (n > (uint64_t(1) << 32) || c + n * sizeof(T) > b.size()) return false;
+    v.resize(static_cast<size_t>(n));
+    if (n) std::memcpy(v.data(), b.data() + c, static_cast<size_t>(n) * sizeof(T));
+    c += static_cast<size_t>(n) * sizeof(T);
+    return true;
+}
 
 bool readRecord(const std::string& path, size_t vertsIn, size_t trisIn, ReliefBakeRecord& r) {
-    std::FILE* f = std::fopen(path.c_str(), "rb");
-    if (!f) return false;
+    // Pacote do mapa (.emap) primeiro, disco depois.
+    std::vector<uint8_t> b;
+    if (!vfs::read(path, b) || b.size() < 12) return false;
     uint32_t magic = 0;
     uint64_t nv = 0;
-    bool ok = std::fread(&magic, 4, 1, f) == 1 && magic == kMagic && std::fread(&nv, 8, 1, f) == 1 &&
-              nv == vertsIn && get(f, r.parents) && get(f, r.offset) && get(f, r.dir) && get(f, r.children) &&
-              get(f, r.indices);
-    std::fclose(f);
+    std::memcpy(&magic, b.data(), 4);
+    std::memcpy(&nv, b.data() + 4, 8);
+    size_t c = 12;
+    bool ok = magic == kMagic && nv == vertsIn && getMem(b, c, r.parents) && getMem(b, c, r.offset) &&
+              getMem(b, c, r.dir) && getMem(b, c, r.children) && getMem(b, c, r.indices);
     const size_t total = vertsIn + r.parents.size() / 2;
     ok = ok && r.parents.size() % 2 == 0 && r.offset.size() == total && r.dir.size() == total * 3 &&
          r.children.size() == trisIn && r.indices.size() % 3 == 0;

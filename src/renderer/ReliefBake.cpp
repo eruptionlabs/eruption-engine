@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <unordered_map>
+#include <utility>
 
 namespace eruption {
 
@@ -250,9 +251,49 @@ ReliefBakeStats bakeRelief(std::vector<ReliefVertex>& verts, std::vector<uint32_
             for (int k = 0; k < 3; ++k) acc.n[k] += v.normal[k];
             ++acc.count;
         }
+        // COSTURA: a borda aberta da malha (aresta com um triangulo so', por
+        // posicao - a costura de UV nao conta) encosta na malha vizinha (outra
+        // textura do chao, assada a parte). Cada lado deslocava a borda pela
+        // propria textura e abria uma fresta. Borda fica presa (d = 0) e o
+        // primeiro anel anda a metade: os dois lados se encontram na linha
+        // original, sem degrau.
+        std::unordered_map<PosKey, int, PosHash> pinned; // 0 = borda, 1 = vizinho da borda
+        {
+            struct PairHash {
+                size_t operator()(const std::pair<PosKey, PosKey>& e) const {
+                    return PosHash()(e.first) * 31u ^ PosHash()(e.second);
+                }
+            };
+            struct PairEq {
+                bool operator()(const std::pair<PosKey, PosKey>& a, const std::pair<PosKey, PosKey>& b) const {
+                    return a.first == b.first && a.second == b.second;
+                }
+            };
+            auto ordered = [](PosKey a, PosKey b) {
+                const bool lt = a.x != b.x ? a.x < b.x : (a.y != b.y ? a.y < b.y : a.z < b.z);
+                return lt ? std::make_pair(a, b) : std::make_pair(b, a);
+            };
+            std::unordered_map<std::pair<PosKey, PosKey>, int, PairHash, PairEq> edgeUse;
+            edgeUse.reserve(indices.size());
+            for (size_t t = 0; t + 2 < indices.size(); t += 3)
+                for (int e = 0; e < 3; ++e)
+                    ++edgeUse[ordered(posKey(verts[indices[t + e]]), posKey(verts[indices[t + (e + 1) % 3]]))];
+            for (const auto& [edge, n] : edgeUse)
+                if (n == 1) { pinned[edge.first] = 0; pinned[edge.second] = 0; }
+            if (!pinned.empty())
+                for (size_t t = 0; t + 2 < indices.size(); t += 3)
+                    for (int e = 0; e < 3; ++e) {
+                        const PosKey a = posKey(verts[indices[t + e]]), b = posKey(verts[indices[t + (e + 1) % 3]]);
+                        const auto ia = pinned.find(a), ib = pinned.find(b);
+                        if (ia != pinned.end() && ia->second == 0 && ib == pinned.end()) pinned.emplace(b, 1);
+                        else if (ib != pinned.end() && ib->second == 0 && ia == pinned.end()) pinned.emplace(a, 1);
+                    }
+        }
         for (size_t i = 0; i < verts.size(); ++i) {
             const Acc& acc = byPos[posKey(verts[i])];
             d[i] = acc.d / float(acc.count);
+            if (const auto pin = pinned.find(posKey(verts[i])); pin != pinned.end())
+                d[i] *= pin->second == 0 ? 0.0f : 0.5f;
             const float len = std::sqrt(acc.n[0] * acc.n[0] + acc.n[1] * acc.n[1] + acc.n[2] * acc.n[2]);
             if (len > 1e-6f)
                 for (int k = 0; k < 3; ++k) dir[i * 3 + k] = acc.n[k] / len;

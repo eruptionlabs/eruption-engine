@@ -1,4 +1,5 @@
 #include "renderer/IrradianceProbes.hpp"
+#include "utils/AssetVfs.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/TerrainRenderer.hpp"
 #include "renderer/ModelRenderer.hpp"
@@ -285,18 +286,22 @@ bool IrradianceProbes::saveCache(const std::string& path, const Vec3& sceneMin, 
 
 bool IrradianceProbes::loadCache(const std::string& path, const Vec3& sceneMin, const Vec3& sceneMax,
                                  uint64_t contentKey) {
-    FILE* fp = std::fopen(path.c_str(), "rb");
-    if (!fp) return false;
+    // Pacote do mapa (.emap) primeiro, disco depois.
+    std::vector<uint8_t> file;
+    if (!vfs::read(path, file)) return false;
     ProbeCacheHeader hdr{};
-    bool ok = std::fread(&hdr, sizeof(hdr), 1, fp) == 1 && std::memcmp(hdr.magic, "EPRB", 4) == 0 &&
+    bool ok = file.size() >= sizeof(hdr);
+    if (ok) std::memcpy(&hdr, file.data(), sizeof(hdr));
+    ok = ok && std::memcmp(hdr.magic, "EPRB", 4) == 0 &&
               hdr.version == kProbeCacheVersion && contentKey != 0 && hdr.contentKey == contentKey &&
               sameBox(hdr.sceneMin, sceneMin) && sameBox(hdr.sceneMax, sceneMax) &&
               hdr.dims[0] >= 2 && hdr.dims[1] >= 2 && hdr.dims[2] >= 2 &&
               hdr.dims[0] <= 96 && hdr.dims[1] <= 24 && hdr.dims[2] <= 96;
     const VkDeviceSize bytes = ok ? VkDeviceSize(hdr.dims[0]) * hdr.dims[1] * hdr.dims[2] * 8 : 0;
-    std::vector<uint8_t> texels(bytes);
-    ok = ok && std::fread(texels.data(), bytes, 1, fp) == 1;
-    std::fclose(fp);
+    ok = ok && file.size() >= sizeof(hdr) + bytes;
+    std::vector<uint8_t> texels;
+    if (ok) texels.assign(file.begin() + sizeof(hdr), file.begin() + static_cast<std::ptrdiff_t>(sizeof(hdr) + bytes));
+    file.clear();
     if (!ok) {
         ERUPTION_LOG_WARN("[PROBES] %s nao serve para esta cena (versao %u, conteudo %016llx; esta cena %016llx)",
                           path.c_str(), hdr.version, static_cast<unsigned long long>(hdr.contentKey),

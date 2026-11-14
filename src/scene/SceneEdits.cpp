@@ -1,5 +1,6 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "scene/SceneEdits.hpp"
+#include "utils/AssetVfs.hpp"
 #include <chrono>
 
 #include "core/Engine.hpp"
@@ -176,21 +177,16 @@ fs::path SceneEdits::pathFor(const std::string& map) {
 }
 
 bool SceneEdits::fileMentions(const std::string& map, const char* word) {
-    std::ifstream f(pathFor(map), std::ios::binary);
-    if (!f) return false;
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str().find(word) != std::string::npos;
+    std::string text; // pacote do mapa (.emap) primeiro
+    if (!vfs::readText(pathFor(map).string(), text)) return false;
+    return text.find(word) != std::string::npos;
 }
 
 bool SceneEdits::load(const fs::path& file, std::string& error) {
     *this = SceneEdits{};
-    std::error_code ec;
-    if (!fs::exists(file, ec)) return true;
-    std::ifstream f(file, std::ios::binary);
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    const std::string src = ss.str();
+    if (!vfs::exists(file)) return true;
+    std::string src; // pacote do mapa (.emap) primeiro
+    vfs::readText(file.string(), src);
 
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);

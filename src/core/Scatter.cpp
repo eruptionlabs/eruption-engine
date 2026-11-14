@@ -2,6 +2,7 @@
 // modelo em assets/scenes/<mapa>.scatter.luau, criados em lote e fora da
 // hierarquia de objetos (se editam pelo pincel, não um a um).
 #include "core/Engine.hpp"
+#include "utils/AssetVfs.hpp"
 
 #include "core/Logger.hpp"
 #include "scene/SceneEdits.hpp"
@@ -129,11 +130,8 @@ void Engine::clearScatter() { m_scatter.clear(); }
 
 int Engine::loadScatter(const std::string& map, const Mat4& place) {
     m_scatter.clear();
-    std::ifstream f(scatterPathFor(map), std::ios::binary);
-    if (!f) return 0;
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    const std::string src = ss.str();
+    std::string src; // pacote do mapa (.emap) primeiro
+    if (!vfs::readText(scatterPathFor(map).string(), src)) return 0;
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     luaL_sandbox(L);
@@ -189,14 +187,12 @@ int Engine::loadScatter(const std::string& map, const Mat4& place) {
 
 std::vector<std::string> Engine::scatterFiles(const std::string& map) const {
     std::vector<std::string> out;
-    std::ifstream f(scatterPathFor(map), std::ios::binary);
-    if (!f) return out;
-    std::ostringstream ss;
-    ss << f.rdbuf();
+    std::string src; // pacote do mapa (.emap) primeiro
+    if (!vfs::readText(scatterPathFor(map).string(), src)) return out;
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     luaL_sandbox(L);
-    if (loadLuauChunk(L, "@" + scatterPathFor(map).generic_string(), ss.str()) && lua_pcall(L, 0, 1, 0) == 0 &&
+    if (loadLuauChunk(L, "@" + scatterPathFor(map).generic_string(), src) && lua_pcall(L, 0, 1, 0) == 0 &&
         lua_istable(L, -1)) {
         const int groups = lua_objlen(L, -1);
         for (int gi = 1; gi <= groups; ++gi) {

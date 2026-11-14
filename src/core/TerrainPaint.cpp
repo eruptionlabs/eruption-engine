@@ -4,6 +4,7 @@
 // num mapa sem splat (New Map) os vértices do chão passam a apontar para elas
 // quando a primeira camada é escolhida. Salvas como PNG ao lado da cena.
 #include "core/Engine.hpp"
+#include "utils/AssetVfs.hpp"
 #include "utils/ReadWholeFile.hpp"
 #include <mutex>
 #include <chrono>
@@ -83,9 +84,8 @@ bool createMaskImage(VulkanContext& vk, uint32_t w, uint32_t h, const uint8_t* r
 // PNG sem tratamento (loadPNG aplica chave magenta e corte de alfa, feitos
 // para sprites; numa máscara o alfa é o peso da 4ª camada).
 ImageData loadRawPNG(const fs::path& p) {
-    std::ifstream f(p, std::ios::binary);
     std::vector<uint8_t> bytes;
-    readWholeFile(f, bytes);
+    vfs::read(p, bytes); // pacote do mapa (.emap) primeiro
     if (bytes.empty()) return {};
     return ImageUtils::loadFromMemoryRaw(bytes.data(), bytes.size());
 }
@@ -159,8 +159,7 @@ bool Engine::beginSplatEditing() {
     // Máscaras salvas pelo editor têm prioridade.
     for (int i = 0; i < 2; ++i) {
         const fs::path p = maskPathFor(m_heightEdit.mapName.empty() ? m_currentMapName : m_heightEdit.mapName, i);
-        std::error_code ec;
-        if (!fs::exists(p, ec)) continue;
+        if (!vfs::exists(p)) continue;
         ImageData img = loadRawPNG(p);
         if (img.isValid()) sp.mask[i] = resampleRGBA(img.pixels.data(), img.width, img.height, img.channels, sp.w, sp.d);
     }
@@ -553,8 +552,7 @@ bool Engine::saveSplat(std::string& error) const {
 }
 
 bool Engine::hasSavedSplat(const std::string& map) {
-    std::error_code ec;
-    return fs::exists(maskPathFor(map, 0), ec);
+    return vfs::exists(maskPathFor(map, 0));
 }
 
 std::vector<std::string> Engine::splatLayerFiles() const {

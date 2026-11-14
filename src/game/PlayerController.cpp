@@ -545,7 +545,28 @@ void PlayerController::updateWorld(float dt) {
     auto _lap = [&](float& out) { if (pcMarks) { auto n = _clk::now(); out = _ms(n - _p).count(); _p = n; } };
 
     m_engine->dayNightCycle().update(dt);
-    m_engine->updateNightLights();
+    // ERUPTION_TEST_CLOCK_LOG=1 (teste): a cada 60 chamadas, quanto o relogio do
+    // dia andou (horas de jogo por segundo de dt acumulado) e quantas vezes
+    // este passo rodou no mesmo quadro (deve ser 1).
+    static const bool kClockLog = std::getenv("ERUPTION_TEST_CLOCK_LOG") != nullptr;
+    if (kClockLog) {
+        static float s_hPrev = m_engine->dayNightCycle().timeOfDay() * 24.0f, s_dt = 0.0f;
+        static int s_calls = 0, s_lastFrame = -1, s_perFrame = 0, s_maxPerFrame = 0;
+        const int fr = static_cast<int>(m_engine->timer().frameCount());
+        s_perFrame = (fr == s_lastFrame) ? s_perFrame + 1 : 1;
+        s_lastFrame = fr;
+        s_maxPerFrame = std::max(s_maxPerFrame, s_perFrame);
+        s_dt += dt;
+        if (++s_calls >= 60) {
+            const float h = m_engine->dayNightCycle().timeOfDay() * 24.0f;
+            float d = h - s_hPrev;
+            if (d < -12.0f) d += 24.0f;
+            ERUPTION_LOG_WARN("[CLOCK] map %s scale %.3f hora %.3f avanco %.5f h por s de dt, chamadas/quadro max %d",
+                              m_engine->currentMapName().c_str(), m_engine->dayNightCycle().timeScale(), h,
+                              s_dt > 0.0f ? d / s_dt : 0.0f, s_maxPerFrame);
+            s_hPrev = h; s_dt = 0.0f; s_calls = 0; s_maxPerFrame = 0;
+        }
+    }
     _lap(w_day);
     m_engine->modelRenderer().updateAnimations(m_engine->timer().elapsed() * 1000.0f);
     _lap(w_anim);
