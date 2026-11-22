@@ -4,7 +4,7 @@
 // falou com a sala ou a endereço privado, aceitar pacote repetido do host,
 // amplificar tráfego de origem forjada, mostrar o IP do host ao cliente.
 // Endereços nas faixas de documentação (RFC 5737), tratadas como públicas.
-//   tools/run_tests.sh  (ou o alvo eruption-net-relay-tests)
+//   tests/run_tests.sh  (ou o alvo eruption-net-relay-tests)
 #include "net/NetSession.hpp"
 #include "net/NetValue.hpp"
 #include "net/PacketLink.hpp"

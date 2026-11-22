@@ -2,7 +2,7 @@
 // netcode nem socket: duas conexões ligadas por uma fila com perda, atraso,
 // duplicação e reordenação. Confere entrega completa e na ordem das
 // mensagens confiáveis, fila cheia, pacote hostil e os vetores da RFC 7693.
-//   tools/run_tests.sh  (ou o alvo eruption-net-channels-tests)
+//   tests/run_tests.sh  (ou o alvo eruption-net-channels-tests)
 #include "net/Blake2b.hpp"
 #include "net/Channels.hpp"
 #include "net/Wire.hpp"

@@ -6,7 +6,7 @@
 //
 // DIFERENTE dos outros tres testes deste diretorio (test_surface_wetness,
 // test_climate_fuzzy, test_weather_overrides): este NAO esta' em
-// tools/run_tests.sh. SpriteSystem.cpp puxa VulkanContext/GLFW/X11 mesmo sem
+// tests/run_tests.sh. SpriteSystem.cpp puxa VulkanContext/GLFW/X11 mesmo sem
 // chamar init() (m_mappedInstances fica nullptr e uploadInstances() e' no-op
 // pelo guard ja' existente, entao roda sem GPU nenhuma) - mas o link ainda
 // precisa resolver esses simbolos, o que tornaria a suite rapida lenta.

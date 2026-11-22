@@ -1,5 +1,5 @@
 -- characters.play com `seconds`: a animação inteira dura o pedido. A folha
--- golpe.spr (tools/test_objects.sh) tem "golpe" com 6 quadros de 40 ms:
+-- golpe.spr (tests/test_objects.sh) tem "golpe" com 6 quadros de 40 ms:
 -- sem seconds dura 0,24 s; com 0,6 s, duas vezes e meia, sem ser cortada.
 -- Curto de proposito: o Play do editor no teste dura 90 quadros.
 local q = 0

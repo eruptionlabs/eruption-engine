@@ -114,9 +114,9 @@ Run what applies, in this order:
 1. **Build** with no warnings on desktop. For changes to shared code or
    shaders, build for Android too (`tools/android/build_apk.sh`): the NDK's
    Clang reports warnings GCC does not.
-2. **Fast tests**: `tools/run_tests.sh` (logic only, no GPU) and `ctest` in the
+2. **Fast tests**: `tests/run_tests.sh` (logic only, no GPU) and `ctest` in the
    build directory.
-3. **Engine tests**: `tools/test_objects.sh` runs the real engine headless
+3. **Engine tests**: `tests/test_objects.sh` runs the real engine headless
    (script object API, save/load, editor play/stop round trip).
 4. **Validation**: run once with the Khronos validation layer
    (`VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation`, or

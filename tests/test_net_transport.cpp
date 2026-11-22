@@ -2,7 +2,7 @@
 // conexão, servidor cheio, token vencido, chave e protocolo errados, replay,
 // pacote adulterado, anti-amplificação, rede ruim (5% de perda, 100 ms) e
 // UDP de verdade em 127.0.0.1. Sem GPU nem motor:
-//   tools/run_tests.sh  (ou o alvo eruption-net-tests com ERUPTION_BUILD_TESTS)
+//   tests/run_tests.sh  (ou o alvo eruption-net-tests com ERUPTION_BUILD_TESTS)
 #include "net/LinkSim.hpp"
 #include "net/NetcodeEndpoint.hpp"
 #include "net/PacketLink.hpp"

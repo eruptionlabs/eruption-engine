@@ -1283,7 +1283,7 @@ void DeferredLighting::renderDirectionalPass(VkCommandBuffer cmd, const Camera& 
     // cascata; o teste multiplica pelo atlas do preset) de dois pontos fixos do mundo segundo as matrizes que a luz de fato usa
     // (depois do cache da sombra e da cascata distante guardada). Se a sombra
     // estiver ancorada ao mundo, a parte fracionaria nao muda quando a camera
-    // anda; tools/test_shadow_anchor.sh confere. Uma linha por quadro.
+    // anda; tests/test_shadow_anchor.sh confere. Uma linha por quadro.
     static const bool kAnchorLog = std::getenv("ERUPTION_TEST_SHADOW_ANCHOR_LOG") != nullptr;
     if (kAnchorLog) {
         {

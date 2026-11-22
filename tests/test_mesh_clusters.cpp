@@ -4,7 +4,7 @@
 // dele faz geometria sumir. O teste confere as tres coisas em malhas
 // sorteadas.
 //
-//     ./tools/run_tests.sh
+//     ./tests/run_tests.sh
 
 #include "utils/MeshClusters.hpp"
 

@@ -13,7 +13,7 @@ writing code).
 
 | Item | Status | Where to start | Done when |
 |---|---|---|---|
-| Continuous integration: build on Linux and run `tools/run_tests.sh` and `ctest` on every pull request | open | `.github/workflows/` (today only the CLA check) | A pull request with a warning or a failing test shows a red check |
+| Continuous integration: build on Linux and run `tests/run_tests.sh` and `ctest` on every pull request | open | `.github/workflows/` (today only the CLA check) | A pull request with a warning or a failing test shows a red check |
 | Windows build | open | `CMakeLists.txt` (MSVC flags exist), `src/core/Platform.hpp`; POSIX-only spots: editor remote server, AI client, export scripts | The demo project opens and plays on Windows with no warnings |
 | macOS build (Vulkan through a portability layer) | design | `VulkanContext` instance and device creation | The demo project opens on macOS |
 | Export from the editor to Android and Windows (today the editor exports Linux only) | open | `src/editor/GameExport.cpp`, `tools/android/build_apk.sh` | **File > Export** produces an installable package for each target |

@@ -3,7 +3,7 @@
 // hello) e o servidor tem de fazer exatamente o esperado: aceitar, ou
 // derrubar com o motivo certo, sem nunca entregar ao jogo o que não foi
 // liberado. E o inverso: um servidor hostil contra o nosso cliente.
-//   tools/run_tests.sh  (ou o alvo eruption-net-matrix-tests)
+//   tests/run_tests.sh  (ou o alvo eruption-net-matrix-tests)
 #include "net_hostile_peer.hpp"
 
 #include <cstdio>

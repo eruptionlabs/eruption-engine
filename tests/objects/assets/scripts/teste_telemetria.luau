@@ -1,5 +1,5 @@
 -- Telemetria: abre, grava eventos rasos, recusa tabela aninhada, chave do
--- motor e canal "_", conta e fecha. tools/test_objects.sh le' o arquivo depois.
+-- motor e canal "_", conta e fecha. tests/test_objects.sh le' o arquivo depois.
 local q = 0
 on.start(function() q = 0 end)
 local function falha(m) log("OBJ-FALHOU telemetria: " .. m) end

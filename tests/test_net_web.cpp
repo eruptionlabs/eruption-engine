@@ -4,7 +4,7 @@
 // (WebSocketLink) em vez de UDP, e que uma ponte mínima leva os datagramas
 // opacos entre esse fluxo e o lado UDP do host — tudo em memória, sem rede
 // real. A ponte aqui faz o papel que o relay fará na etapa 1.
-//   tools/run_tests.sh  (ou o alvo eruption-net-web-tests)
+//   tests/run_tests.sh  (ou o alvo eruption-net-web-tests)
 #include "net/Blake2b.hpp"
 #include "net/LinkSim.hpp"
 #include "net/NetSession.hpp"

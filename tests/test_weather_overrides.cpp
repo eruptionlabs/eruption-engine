@@ -7,7 +7,7 @@
 // e nevasca volta a 20 C. Por isso o teste confere tanto que o campo declarado
 // muda quanto que os NAO declarados ficam intactos.
 //
-//     ./tools/run_tests.sh
+//     ./tests/run_tests.sh
 #include "renderer/WeatherSystem.hpp"
 #include <cstdio>
 #include <fstream>

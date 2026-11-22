@@ -3,7 +3,7 @@
 // diferente, evento não liberado, enxurrada de eventos, saída, rede ruim,
 // porta de tokens (amplificação e limite por IP) e UDP de verdade em
 // 127.0.0.1. Também decodifica bytes aleatórios como dados de evento.
-//   tools/run_tests.sh  (ou o alvo eruption-net-session-tests)
+//   tests/run_tests.sh  (ou o alvo eruption-net-session-tests)
 #include "net/LinkSim.hpp"
 #include "net/NetSession.hpp"
 #include "net/NetValue.hpp"

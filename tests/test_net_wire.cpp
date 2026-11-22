@@ -1,6 +1,6 @@
 // Testes do leitor/escritor de bits da rede (src/net/Wire): ida e volta,
 // faixas, quantização, limites do pacote e entrada hostil. Sem socket:
-//   tools/run_tests.sh  (ou o alvo eruption-net-tests com ERUPTION_BUILD_TESTS)
+//   tests/run_tests.sh  (ou o alvo eruption-net-tests com ERUPTION_BUILD_TESTS)
 #include "net/Wire.hpp"
 
 #include <cmath>

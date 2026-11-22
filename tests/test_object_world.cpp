@@ -1,7 +1,7 @@
 // Testes do ObjectWorld (src/scene/ObjectWorld): identidade com geração,
 // hierarquia, transforms com propagação de sujos, nomes, etiquetas, ligado e
 // desligado, e um estresse contra o cálculo ingênuo. Sem GPU nem motor:
-//   tools/run_tests.sh  (ou o alvo eruption-object-tests com ERUPTION_BUILD_TESTS)
+//   tests/run_tests.sh  (ou o alvo eruption-object-tests com ERUPTION_BUILD_TESTS)
 #include "scene/ObjectWorld.hpp"
 
 #include <chrono>

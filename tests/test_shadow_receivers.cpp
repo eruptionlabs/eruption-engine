@@ -5,7 +5,7 @@
 // caixas e luzes sorteadas, se ALGUM ponto da caixa ou da sombra esticada
 // cai dentro da visao, o caster tem de ficar.
 //
-//     ./tools/run_tests.sh
+//     ./tests/run_tests.sh
 
 #include "math/Frustum.hpp"
 
