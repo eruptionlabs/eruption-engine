@@ -197,7 +197,9 @@ void Editor::thumbnailWorker() {
         r.path = path;
         // Cache em disco (.eruption/thumbs): nome pelo caminho e pela data do arquivo.
         std::error_code ec;
-        const auto mtime = fs::last_write_time(path, ec).time_since_epoch().count();
+        // long long: no Emscripten o relogio de arquivo conta em __int128, e
+        // std::to_string nao tem sobrecarga para ele (chamada ambigua).
+        const long long mtime = static_cast<long long>(fs::last_write_time(path, ec).time_since_epoch().count());
         uint64_t hash = 1469598103934665603ull;
         for (char c : path + "#" + std::to_string(mtime) + "#" + std::to_string(kThumbSize)) hash = (hash ^ uint8_t(c)) * 1099511628211ull;
         char name[32];

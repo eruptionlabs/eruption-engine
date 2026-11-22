@@ -9,7 +9,11 @@
 
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
+#include "renderer/ColorGrade.hpp"
+#include "renderer/LookConfig.hpp"
 #include "renderer/SkyProbe.hpp"
+#include "core/Project.hpp"
+#include "math/Frustum.hpp"
 #include "platform/web/WebMirror.hpp"
 #include "platform/web/WebVfxSim.hpp"
 #include "WebGles.hpp" // shaders do desktop em GLSL ES (gerado no build, tools/web/embed_gles.py)
@@ -19,14 +23,20 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <map>
+#include <memory>
+#include <sstream>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace eruption {
+
+constexpr int kWebShadowSize = 2048; // lado de cada cascata do atlas de sombra GL
 
 namespace {
 
@@ -79,12 +89,26 @@ uniform int uSplat;          // 0 = sem splat, 1 = uma mascara, 2 = duas
 uniform vec2 uHasBase;       // x = normal do material, y = MRAH-W do material
 uniform vec4 uMat;           // metallicScale, roughnessScale, rugosidade padrao, inverte Y da normal
 uniform vec3 uCam;
+uniform float uClipY; // passe do reflexo da agua: descarta o que esta abaixo do plano (-1e9 = desligado)
 uniform vec3 uSunL;  // para onde esta' o sol
-uniform vec3 uSun;   // cor x intensidade
+uniform vec3 uSun;   // cor x intensidade x pbrLightScale
+uniform float uSunI; // intensidade do sol (dirLightDir.w)
 uniform vec3 uSky, uHorizon, uGround; // ambiente hemisferico, ja' com a intensidade
 uniform float uHemiFloor;
 uniform vec3 uSH[9];      // sonda de ceu (SH9 de radiancia, como o SkySH do desktop)
 uniform vec4 uProbe;      // x = sonda pronta, z = intensidade x GI
+// Probes de irradiancia (ambient.frag, probeSkyVisibility): SH L1 da visibilidade do ceu numa grade 3D, cozida
+// na CPU aqui (ver Engine::bakeWebProbes). xyz do Min = canto da grade, w = ligada; xyz do Inv = 1/extensao, w = forca.
+uniform highp sampler3D uProbeVis;
+uniform vec4 uProbeMin, uProbeInv;
+float probeSkyVis(vec3 wp, vec3 N) {
+    if (uProbeMin.w < 0.5) return 1.0;
+    vec3 g = (wp - uProbeMin.xyz) * uProbeInv.xyz;
+    if (any(lessThan(g, vec3(0.0))) || any(greaterThan(g, vec3(1.0)))) return 1.0;
+    vec4 sh = texture(uProbeVis, g);
+    float E = 0.886227 * sh.x + 1.023328 * dot(sh.yzw, N);
+    return mix(1.0, clamp(E / 3.14159265, 0.0, 1.0), uProbeInv.w);
+}
 // pbrMultiScatterCompensation do desktop (Karis analitico, Kulla-Conty).
 vec3 multiScatter(vec3 F0, float rough, float NdV) {
     vec4 r = rough * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);
@@ -99,13 +123,113 @@ vec3 shIrradiance(vec3 n) {
          + 2.0 * c1 * (uSH[4] * x * y + uSH[7] * x * z + uSH[5] * y * z)
          + 2.0 * c2 * (uSH[3] * x + uSH[1] * y + uSH[2] * z);
 }
+uniform vec4 uEnvSpec;  // x = intensidade x GI (0 = desligado), y = ambI (desfaz o GI do ceu), z = pbrLightScale
+uniform vec4 uBounce;   // x = rebote do sol ligado, y = forca
+uniform vec3 uEnvGround; // albedo medio do chao do mapa, cru
+uniform float uDbg;   // bancada: ERUPTION_TEST_WEB_DEBUG = so' a sombra do sol; ERUPTION_TEST_WEB_FLAT = albedo ciano em tudo; ERUPTION_TEST_WEB_PBR = rugosidade (r), metal (g), altura (b)
 uniform float uLinear; // 1 = sai linear (HDR) para o pos; 0 = sRGB direto na tela
 // Relevo pela distancia (model_frag.glsl): forca e vies de mip do normal map
 // por tabela de 8 amostras, e a atenuacao na banda tesselada.
 uniform vec4 uNd;        // x = distancia maxima, y = curva ligada, z = forca base, w = vies base
 uniform vec4 uNdScale0, uNdScale1, uNdSmooth0, uNdSmooth1;
-uniform vec4 uTess;      // x = distancia maxima, y = ligada, w = nivel maximo
-uniform vec4 uTessLut0, uTessLut1;
+uniform vec4 uTess;      // x = distancia maxima, y = ligada, z = teto de inclinacao, w = nivel maximo da LUT
+uniform vec4 uTessLut0, uTessLut1; // fator de tesselacao por distancia (curva "Tessellation Factor by Distance")
+// POM (a web nao tem tesselacao: o relevo vem do deslocamento das UVs pela altura do canal A do MRAH-W).
+// x = ligado (preset permite e a curva tem relevo), y = profundidade total em unidades de mundo, w = pico da curva.
+// A forca (0..1) sai da mesma LUT, como a amplitude do desktop: (fator - 1) / (pico - 1); abaixo de 0,01 nao ha' passo.
+uniform vec4 uPom;
+uniform highp sampler2DShadow uShadow; // atlas 2S x S, uma cascata por metade (o mesmo layout do desktop)
+uniform mat4 uShLookup[2];             // mundo -> UV do atlas + profundidade (Vulkan, 0..1)
+uniform vec4 uShParams;                // x = ligada, y = bias, z = offset normal (mundo), w = alcance de profundidade
+uniform vec4 uShParams2;               // x = slope_bias, y = texel da cascata (mundo), z = distancia maxima da curva, w = curva ligada
+uniform vec4 uShLut0, uShLut1;         // opacidade da sombra por distancia (m_shadowOpacitySpline)
+uniform mat4 uShNorm[2];               // transpose(inverse(uShLookup[i])): leva a normal do mundo ao espaco da luz
+uniform highp sampler2D uShadowRaw;    // o mesmo atlas, sem comparacao (sampler object): a busca de bloqueador do PCSS
+uniform vec4 uShPcss;                  // x = kernel (texels), y = taps Poisson, z = tan(raio angular do sol), w = Poisson ligado
+const vec2 kPoisson[16] = vec2[](
+    vec2(-0.94201624, -0.39906216), vec2(0.94558609, -0.76890725), vec2(-0.094184101, -0.92938870), vec2(0.34495938, 0.29387760),
+    vec2(-0.91588581, 0.45771432), vec2(-0.81544232, -0.87912464), vec2(-0.38277543, 0.27676845), vec2(0.97484398, 0.75648379),
+    vec2(0.44323325, -0.97511554), vec2(0.53742981, -0.47373420), vec2(-0.26496911, -0.41893023), vec2(0.79197514, 0.19090188),
+    vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590), vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790));
+// sampleCascade do directional.frag: PCSS (busca de bloqueador -> escala da penumbra) + PCF Poisson/caixa.
+float sampleCascadeWeb(int idx, vec3 pc, float cdepth, vec2 dz) {
+    vec2 ts = 1.0 / vec2(textureSize(uShadow, 0));
+    vec2 base = vec2(pc.x * 0.5 + 0.5 * float(idx), pc.y);
+    vec2 lo = vec2(0.5 * float(idx), 0.0), hi = lo + vec2(0.5, 1.0);
+    float search = max(uShPcss.z * 6.0, ts.x * 2.0);
+    float dC = texture(uShadowRaw, clamp(base, lo, hi)).r;
+    float bsum = dC < cdepth ? dC : 0.0, bcnt = dC < cdepth ? 1.0 : 0.0;
+    for (int i = 0; i < 8; ++i) {
+        float d = texture(uShadowRaw, clamp(base + kPoisson[i] * search, lo, hi)).r;
+        if (d < cdepth) { bsum += d; bcnt += 1.0; }
+    }
+    if (bcnt < 0.5) return 0.0;
+    float pen = clamp(1.0 + uShPcss.z * max(cdepth - bsum / bcnt, 0.0) * 40.0, 1.0, 4.0);
+    float sh = 0.0, n = 0.0;
+    if (uShPcss.w > 0.5) {
+        int taps = int(clamp(uShPcss.y, 1.0, 16.0));
+        for (int i = 0; i < 16; ++i) {
+            if (i >= taps) break;
+            vec2 suv = clamp(base + kPoisson[i] * ts * uShPcss.x * pen, lo, hi);
+            vec2 po = vec2((suv.x - base.x) * 2.0, suv.y - base.y);
+            sh += 1.0 - texture(uShadow, vec3(suv, cdepth + dot(dz, po)));
+        }
+        n = float(taps);
+    } else {
+        int hk = int(uShPcss.x) / 2;
+        for (int y = -3; y <= 3; ++y)
+            for (int x = -3; x <= 3; ++x) {
+                if (abs(x) > hk || abs(y) > hk) continue;
+                vec2 suv = clamp(base + vec2(x, y) * ts * pen, lo, hi);
+                vec2 po = vec2((suv.x - base.x) * 2.0, suv.y - base.y);
+                sh += 1.0 - texture(uShadow, vec3(suv, cdepth + dot(dz, po)));
+                n += 1.0;
+            }
+    }
+    return sh / max(n, 1.0);
+}
+float shadowOf(vec3 worldPos, vec3 Nv, vec3 L) {
+    if (uShParams.x < 0.5) return 0.0;
+    // Normal GEOMETRICA da tela (derivadas da posicao), orientada para o olho, como o directional.frag: a normal
+    // suave do vertice nao e' a do chao facetado e o offset/bias errados auto-sombreiam o terreno.
+    vec3 gN = cross(dFdx(worldPos), dFdy(worldPos));
+    float gLen = length(gN);
+    vec3 N = gLen > 1e-8 ? gN / gLen : Nv;
+    if (dot(N, uCam - worldPos) < 0.0) N = -N;
+    float nl = max(dot(N, L), 0.0);
+    vec3 p = worldPos + N * (uShParams.z * clamp(sqrt(max(1.0 - nl * nl, 0.0)), 0.25, 1.0));
+    vec3 pcs[2];
+    bool ok[2];
+    for (int i = 0; i < 2; ++i) {
+        vec4 ls = uShLookup[i] * vec4(p, 1.0);
+        pcs[i] = ls.xyz / ls.w;
+        ok[i] = !(pcs[i].z > 1.0 || pcs[i].x < 0.0 || pcs[i].x > 1.0 || pcs[i].y < 0.0 || pcs[i].y > 1.0);
+    }
+    int idx = ok[0] ? 0 : (ok[1] ? 1 : -1);
+    if (idx < 0) return 0.0;
+    float tanT = clamp(sqrt(max(1.0 - nl * nl, 0.0)) / max(nl, 0.1), 0.0, 6.0);
+    float sinE = max(abs(L.y), 0.001);
+    float biasK = uShParams.y * (1.0 + uShParams2.x * tanT);
+    float bias = biasK + (uShParams2.y * min(sqrt(max(1.0 - sinE * sinE, 0.0)) / sinE, 5.0) * 0.5) / uShParams.w;
+    // Plano do receptor: o gradiente de profundidade por UV inclina cada amostra do filtro.
+    vec3 nL = (uShNorm[idx] * vec4(N, 0.0)).xyz;
+    float nLz = (nL.z < 0.0 ? -1.0 : 1.0) * max(abs(nL.z), 1e-8);
+    float dzMax = max(uShParams2.y * float(textureSize(uShadow, 0).y) * 5.0 / uShParams.w, 0.1);
+    vec2 dz = clamp(-nL.xy / nLz, vec2(-dzMax), vec2(dzMax));
+    float sh = sampleCascadeWeb(idx, pcs[idx], pcs[idx].z - bias, dz);
+    // Mistura com a c1 na borda da c0 (a costura entre cascatas vira uma banda).
+    if (idx == 0) {
+        float borda = max(abs(pcs[0].x - 0.5), abs(pcs[0].y - 0.5)) * 2.0;
+        float t = smoothstep(0.86, 0.99, borda);
+        if (t > 0.001 && ok[1]) {
+            vec3 nL1 = (uShNorm[1] * vec4(N, 0.0)).xyz;
+            float nLz1 = (nL1.z < 0.0 ? -1.0 : 1.0) * max(abs(nL1.z), 1e-8);
+            vec2 dz1 = clamp(-nL1.xy / nLz1, vec2(-dzMax), vec2(dzMax));
+            sh = mix(sh, sampleCascadeWeb(1, pcs[1], pcs[1].z - bias, dz1), t);
+        }
+    }
+    return sh;
+}
 uniform float uQuebra;   // 1 = amostra sem ladrilho no splat (0 no shader_lite, como o LITE do desktop)
 // Luzes pontuais do mapa e dos efeitos, as mais perto da camera
 // (point_light.frag: atenuacao "cuspid", Cook-Torrance x pbrLightScale).
@@ -177,7 +301,24 @@ mat3 tbn(vec3 N, vec3 p, vec2 uv) {
     T = normalize(cross(up, N));
     return mat3(T, cross(N, T), N);
 }
+// Altura para a micro-sombra: alfa do MRAH-W (255 = sem dado) ou luminancia.
+float alturaEm(vec2 uv, int lay, bool layM, float lod, bool baseM) {
+    const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+    if (lay >= 0) {
+        if (layM) {
+            float h = textureLod(uLayM, vec3(uv, float(lay)), lod).a;
+            if (h < 0.995) return h;
+        }
+        return dot(textureLod(uLayC, vec3(uv, float(lay)), lod).rgb, LUMA);
+    }
+    if (baseM) {
+        float h = textureLod(uBaseM, uv, lod).a;
+        if (h < 0.995) return h;
+    }
+    return dot(textureLod(uBase, uv, lod).rgb, LUMA);
+}
 void main() {
+    if (vWorld.y < uClipY) discard;
     float distCam = length(uCam - vWorld);
     float ndScale = uNd.z, ndSmooth = uNd.w;
     if (uNd.y > 0.5) {
@@ -186,19 +327,79 @@ void main() {
         ndSmooth += lut8(uNdSmooth0, uNdSmooth1, tn);
     }
     float nBlur = exp2(ndSmooth);
-    vec4 base = texture(uBase, vUv);
+    // POM: uvP e' a UV deslocada pela altura; todas as leituras do material usam uvP, com as derivadas de vUv
+    // (textureGrad) para nao abrir costura de mip onde o laco de marcha liga e desliga. Os dFdx/dFdy e o TBN ficam
+    // num bloco de condicao uniforme: so' a marcha em si diverge, e ela usa textureLod.
+    vec2 dxU0 = dFdx(vUv), dyU0 = dFdy(vUv);
+    vec2 uvP = vUv;
+    float pomS = 0.0, pomUvw = 0.0;
+    vec3 pomV = vec3(0.0, 0.0, 1.0);
+    if (uPom.x > 0.5) {
+        float fT = lut8(uTessLut0, uTessLut1, distCam / max(uTess.x, 1.0));
+        pomS = clamp((fT - 1.0) / max(uPom.w - 1.0, 1e-3), 0.0, 1.0);
+        vec3 Ng = length(vNormal) > 1e-8 ? normalize(vNormal) : vec3(0.0, 1.0, 0.0);
+        pomV = normalize(uCam - vWorld) * tbn(Ng, vWorld, vUv);
+        float areaUv = abs(dxU0.x * dyU0.y - dxU0.y * dyU0.x);
+        float areaW = length(cross(dFdx(vWorld), dFdy(vWorld)));
+        pomUvw = sqrt(areaUv / max(areaW, 1e-12)); // UV por unidade de mundo
+    }
+    if (pomS > 0.01 && pomV.z > 0.05) {
+        // Mapa de altura: o MRAH-W da camada que mais pesa na mascara, ou o do material.
+        int hl = -1;
+        bool hOk = false;
+        if (uSplat > 0) {
+            vec4 pw = texture(uMask0, vMaskUv) * step(0.0, uIdx0);
+            vec4 pw2 = uSplat > 1 ? texture(uMask1, vMaskUv) * step(0.0, uIdx1) : vec4(0.0);
+            int q0 = -1, q1 = -1;
+            float r0 = 0.0, r1 = 0.0;
+            for (int i = 0; i < 8; ++i) topDuas(i, pega(pw, pw2, i), q0, r0, q1, r1);
+            if (q0 >= 0 && pega(uHasM0, uHasM1, q0) > 0.5) { hl = int(pega(uIdx0, uIdx1, q0) + 0.5); hOk = true; }
+        }
+        if (hOk || uHasBase.y > 0.5) {
+            float tsz = hOk ? float(textureSize(uLayM, 0).x) : float(textureSize(uBaseM, 0).x);
+            float lodP = max(log2(max(length(dxU0), length(dyU0)) * tsz), 0.0);
+            float vz = max(pomV.z, 0.2);
+            // Deslocamento de UV por profundidade normalizada (0 = topo, 1 = fundo), pivo em 0,5 para o
+            // relevo nao subir nem descer em media; o teto evita saltos em angulo rasante.
+            vec2 dir = clamp(-pomV.xy / vz * (uPom.y * pomS * pomUvw), vec2(-0.25), vec2(0.25));
+            int n = 8 + int(8.0 * (1.0 - vz));
+            float stp = 1.0 / float(n);
+            float lo = 0.0, hi = 1.0;
+            for (int i = 1; i <= 16; ++i) {
+                if (i > n) break;
+                float dd = float(i) * stp;
+                vec2 uvq = vUv + dir * (dd - 0.5);
+                float hq = hOk ? textureLod(uLayM, vec3(uvq, float(hl)), lodP).a : textureLod(uBaseM, uvq, lodP).a;
+                if (hq > 0.995) hq = 0.5; // 255 = sem dado de altura
+                if (dd >= 1.0 - hq) { hi = dd; break; }
+                lo = dd;
+            }
+            for (int i = 0; i < 4; ++i) {
+                float mm = 0.5 * (lo + hi);
+                vec2 uvq = vUv + dir * (mm - 0.5);
+                float hq = hOk ? textureLod(uLayM, vec3(uvq, float(hl)), lodP).a : textureLod(uBaseM, uvq, lodP).a;
+                if (hq > 0.995) hq = 0.5;
+                if (mm >= 1.0 - hq) hi = mm; else lo = mm;
+            }
+            uvP = vUv + dir * (hi - 0.5);
+        }
+    }
+    vec4 base = textureGrad(uBase, uvP, dxU0, dyU0);
     if (base.a < 0.5) discard;
     vec3 c = base.rgb;
-    vec4 nrm = uHasBase.x > 0.5 ? textureGrad(uBaseN, vUv, dFdx(vUv) * nBlur, dFdy(vUv) * nBlur) : vec4(0.5, 0.5, 1.0, 1.0);
-    vec4 mrh = uHasBase.y > 0.5 ? texture(uBaseM, vUv) : vec4(0.0);
+    vec4 nrm = uHasBase.x > 0.5 ? textureGrad(uBaseN, uvP, dxU0 * nBlur, dyU0 * nBlur) : vec4(0.5, 0.5, 1.0, 1.0);
+    vec4 mrh = uHasBase.y > 0.5 ? textureGrad(uBaseM, uvP, dxU0, dyU0) : vec4(0.0);
     bool temN = uHasBase.x > 0.5, temM = uHasBase.y > 0.5;
     float fracN = temN ? 1.0 : 0.0, fracM = temM ? 1.0 : 0.0;
+    int topLay = -1;
+    bool topLayM = false;
     if (uSplat > 0) {
         vec4 w = texture(uMask0, vMaskUv) * step(0.0, uIdx0);
         vec4 w2 = uSplat > 1 ? texture(uMask1, vMaskUv) * step(0.0, uIdx1) : vec4(0.0);
         int s0 = -1, s1 = -1;
         float p0 = 0.0, p1 = 0.0;
         for (int i = 0; i < 8; ++i) topDuas(i, pega(w, w2, i), s0, p0, s1, p1);
+        if (s0 >= 0) { topLay = int(pega(uIdx0, uIdx1, s0) + 0.5); topLayM = pega(uHasM0, uHasM1, s0) > 0.5; }
         vec2 dxUv = dFdx(vUv), dyUv = dFdy(vUv);
         vec3 acc = vec3(0.0);
         vec4 accN = vec4(0.0), accM = vec4(0.0);
@@ -208,10 +409,10 @@ void main() {
             float p = k == 0 ? p0 : p1;
             if (s < 0) continue;
             float l = pega(uIdx0, uIdx1, s);
-            acc += semGrade(uLayC, l, vUv, dxUv, dyUv, true).rgb * p;
+            acc += semGrade(uLayC, l, uvP, dxUv, dyUv, true).rgb * p;
             sum += p;
-            if (pega(uHasN0, uHasN1, s) > 0.5) { accN += semGrade(uLayN, l, vUv, dxUv * nBlur, dyUv * nBlur, false) * p; sumN += p; }
-            if (pega(uHasM0, uHasM1, s) > 0.5) { accM += semGrade(uLayM, l, vUv, dxUv, dyUv, true) * p; sumM += p; }
+            if (pega(uHasN0, uHasN1, s) > 0.5) { accN += semGrade(uLayN, l, uvP, dxUv * nBlur, dyUv * nBlur, false) * p; sumN += p; }
+            if (pega(uHasM0, uHasM1, s) > 0.5) { accM += semGrade(uLayM, l, uvP, dxUv, dyUv, true) * p; sumM += p; }
         }
         float wBase = max(0.0, 1.0 - dot(w, vec4(1.0)) - dot(w2, vec4(1.0)));
         float tot = max(sum + wBase, 1e-4);
@@ -226,17 +427,75 @@ void main() {
         }
     }
     vec3 N = length(vNormal) > 1e-8 ? normalize(vNormal) : vec3(0.0, 1.0, 0.0);
+    float sunSelf = 1.0, fillSelf = 1.0, cavN = 1.0;
     if (temN) {
         // Sem reconstruir z: o acervo tem azul ~239 no plano (model_frag.glsl).
         vec3 t = nrm.xyz * 2.0 - 1.0;
         if (uMat.w > 0.5) t.y = -t.y;
+        // A normal inteira tambem na faixa tesselada (o desktop nao recua mais).
         float strength = clamp(ndScale, 0.0, 3.0);
-        if (uTess.y > 0.5) {
-            float fN = lut8(uTessLut0, uTessLut1, distCam / max(uTess.x, 1.0));
-            strength *= mix(1.0, 0.35, clamp((fN - 1.0) / max(uTess.w - 1.0, 1e-3), 0.0, 1.0));
-        }
         t = mix(vec3(0.0, 0.0, 1.0), t, strength);
-        N = normalize(tbn(N, vWorld, vUv) * t);
+        // Teto de inclinacao: xy limitado a tan(angulo) * z, preserva o desenho.
+        if (uTess.z > 0.001) {
+            float maxSlope = tan(clamp(uTess.z, 0.05, 1.55));
+            float zt = max(abs(t.z), 1e-3);
+            float xyLen = length(t.xy);
+            float lim = maxSlope * zt;
+            if (xyLen > lim) t.xy *= lim / xyLen;
+        }
+        cavN = mix(1.0, clamp(t.z, 0.0, 1.0), 0.7); // cavidade pela inclinacao do normal map
+        mat3 TBN = tbn(N, vWorld, vUv);
+        // Micro-sombra de contato (model_frag.glsl): marcha da altura (alfa do
+        // MRAH-W; sem ela, a luminancia) em direcao ao sol e a uma direcao fixa.
+        float msDist = distCam;
+        float msFade = 1.0 - smoothstep(420.0, 650.0, msDist);
+        float fillFade = 1.0 - smoothstep(150.0, 260.0, msDist);
+        if (uQuebra > 0.5 && strength > 0.01 && msFade > 0.01) {
+            vec2 dxUv = dFdx(vUv), dyUv = dFdy(vUv);
+            float pixelUV = max(length(dxUv), length(dyUv));
+            float msScale = max(0.018, pixelUV * 4.0);
+            int lay = topLay;
+            float lod = 0.0;
+            if (lay >= 0) lod = max(log2(pixelUV * float(textureSize(uLayC, 0).x)), 0.0) + 0.5;
+            else lod = max(log2(pixelUV * float(textureSize(uBase, 0).x)), 0.0) + 0.5;
+            float h0 = alturaEm(uvP, lay, topLayM, lod, uHasBase.y > 0.5);
+            if (uSunI > 0.01) {
+                vec3 Lts = uSunL * TBN;
+                float ll = length(Lts);
+                if (ll > 1e-4 && Lts.z / ll > 0.06) {
+                    Lts /= ll;
+                    float graze = smoothstep(0.06, 0.35, Lts.z);
+                    vec2 dir = Lts.xy / max(Lts.z, 0.25);
+                    float len = min(length(dir), 3.0);
+                    if (length(dir) > 1e-5) dir = normalize(dir) * len;
+                    vec2 dUv = dir * (msScale / 5.0);
+                    float occ = 0.0;
+                    for (int i = 1; i <= 5; ++i) {
+                        float hs = alturaEm(uvP + dUv * float(i), lay, topLayM, lod, uHasBase.y > 0.5);
+                        occ = max(occ, (hs - (h0 + msScale * float(i) / 5.0)) * 4.0);
+                    }
+                    sunSelf = clamp(1.0 - occ * graze * msFade * strength * 0.8, 0.35, 1.0);
+                }
+            }
+            if (fillFade > 0.01) {
+                vec3 Fts = normalize(vec3(0.35, 0.75, 0.55)) * TBN;
+                float fl = length(Fts);
+                if (fl > 1e-4 && Fts.z / fl > 0.15) {
+                    Fts /= fl;
+                    vec2 dir = Fts.xy / max(Fts.z, 0.3);
+                    float len = min(length(dir), 3.0);
+                    if (length(dir) > 1e-5) dir = normalize(dir) * len;
+                    vec2 dUv = dir * (msScale / 5.0);
+                    float occ = 0.0;
+                    for (int i = 1; i <= 5; ++i) {
+                        float hs = alturaEm(uvP + dUv * float(i), lay, topLayM, lod, uHasBase.y > 0.5);
+                        occ = max(occ, (hs - (h0 + msScale * float(i) / 5.0)) * 4.0);
+                    }
+                    fillSelf = clamp(1.0 - occ * fillFade * strength * 0.8, 0.35, 1.0);
+                }
+            }
+        }
+        N = normalize(TBN * t);
     }
     float rough = uMat.z, metal = 0.0, cav = 1.0;
     if (temM) {
@@ -259,6 +518,7 @@ void main() {
     }
     // As texturas sobem em UNORM com valores sRGB (como no desktop): a luz
     // trabalha no linear e a saida volta para sRGB.
+    if (uDbg > 1.5) c = vec3(0.0, 1.0, 1.0);
     vec3 albedo = pow(c, vec3(2.2));
     vec3 V = normalize(uCam - vWorld), L = uSunL, H = normalize(L + V);
     float NdL = max(dot(N, L), 0.0), NdV = max(dot(N, V), 1e-3), NdH = max(dot(N, H), 0.0);
@@ -270,14 +530,51 @@ void main() {
     vec3 F0 = mix(vec3(0.04), albedo, metal);
     vec3 F = F0 + (1.0 - F0) * pow(1.0 - max(dot(H, V), 0.0), 5.0);
     vec3 ms = multiScatter(F0, roughD, NdV);
-    vec3 spec = D * G * F / max(4.0 * NdL * NdV, 1e-4) * ms * 3.14159265;
-    vec3 direto = ((1.0 - F) * (1.0 - metal) * albedo + spec) * uSun * NdL;
+    vec3 spec = D * G * F / max(4.0 * NdL * NdV, 1e-4) * ms; // pbrCookTorrance: difuso/pi + especular, x pbrLightScale (uSun ja' o leva)
+    float sombra = shadowOf(vWorld, length(vNormal) > 1e-8 ? normalize(vNormal) : vec3(0.0, 1.0, 0.0), L);
+    if (uShParams2.w > 0.5) sombra *= lut8(uShLut0, uShLut1, length(uCam - vWorld) / max(uShParams2.z, 1.0)); // opacidade por distancia
+    sombra *= mix(0.45, 1.0, smoothstep(0.0, 0.12, L.y)); // sol baixo: sombra mais fraca, como o directional.frag
+    vec3 direto = ((1.0 - F) * (1.0 - metal) * albedo / 3.14159265 + spec) * uSun * NdL * (1.0 - sombra) * sunSelf;
     float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
     vec3 ceu = uProbe.x > 0.5 ? max(shIrradiance(N), vec3(0.0)) * (uProbe.z / 3.14159265)
                               : mix(uHorizon, uSky, up * up);
     vec3 hemi = mix(uGround, ceu, uHemiFloor + (1.0 - uHemiFloor) * up);
-    vec3 Fa = F0 + (max(vec3(1.0 - rough), F0) - F0) * pow(1.0 - NdV, 5.0);
-    vec3 amb = hemi * cav * ((1.0 - Fa) * (1.0 - metal) * albedo + Fa * (1.0 - rough) * 0.5);
+    hemi *= probeSkyVis(vWorld, N);
+    // ambient.frag: AO do G-buffer = min(cavidade do normal, cavidade cozida) ^ expoente x 1.12,
+    // e o preenchimento de direcao fixa (bounceParams.z = 0.25) que modula o ambiente em
+    // torno de 1 (com a auto-sombra fixa), piso 0.55.
+    float aoT = max(min(cavN, cav), 0.02);
+    float sunI = clamp(uSunI, 0.0, 1.0);
+    float aoShaped = pow(aoT, mix(1.6, 1.35, sunI)) * 1.12;
+    {
+        float fillN = max(dot(N, normalize(vec3(0.35, 0.75, 0.55))), 0.0);
+        fillN = fillN * fillN * (3.0 - 2.0 * fillN);
+        float dirMod = (1.0 + 0.25 * (2.0 * fillN - 1.0)) * mix(1.0, fillSelf, 0.25 * fillN);
+        hemi *= max(dirMod, 0.55);
+    }
+    // ambient.frag: so' o difuso (albedo x ambiente); o especular do ambiente vem do especular analitico abaixo.
+    vec3 amb = hemi * aoShaped * albedo;
+    // Especular analitico do ambiente (directional.frag): o ceu na direcao refletida, alargada pela rugosidade, com a
+    // BRDF de ambiente de Karis; o ceu vem do SH de radiancia (no desktop, da sonda de ceu por mip).
+    if (uEnvSpec.x > 0.0) {
+        vec3 R = reflect(-V, N);
+        vec3 Rr = normalize(mix(R, N, rough * rough));
+        vec3 skyCol;
+        if (uProbe.x > 0.5) {
+            float x = Rr.x, y = Rr.y, z = Rr.z;
+            skyCol = max(0.282095 * uSH[0] + 0.488603 * (y * uSH[1] + z * uSH[2] + x * uSH[3])
+                       + 1.092548 * (x * y * uSH[4] + y * z * uSH[5] + x * z * uSH[7])
+                       + 0.315392 * (3.0 * z * z - 1.0) * uSH[6] + 0.546274 * (x * x - y * y) * uSH[8], vec3(0.0)) * (uProbe.z / max(uEnvSpec.y, 1e-4));
+        } else {
+            skyCol = mix(uHorizon, uSky, smoothstep(0.0, 0.4, Rr.y)) / max(uEnvSpec.y, 1e-4);
+        }
+        vec3 gndCol = uEnvGround * (0.25 + uSun / max(uSunI * uEnvSpec.z, 1e-4) * clamp(uSunI, 0.0, 1.5));
+        vec3 envCol = mix(gndCol, skyCol, smoothstep(-0.15, 0.05, Rr.y));
+        vec4 rr = rough * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);
+        float a004 = min(rr.x * rr.x, exp2(-9.28 * NdV)) * rr.x + rr.y;
+        vec2 envBRDF = vec2(-1.04, 1.04) * a004 + rr.zw;
+        amb += envCol * (F0 * envBRDF.x + envBRDF.y) * aoT * uEnvSpec.x;
+    }
     vec3 kD = (1.0 - metal) * albedo / 3.14159265;
     for (int i = 0; i < kMaxLuzes; ++i) {
         if (i >= uNumLuzes) break;
@@ -297,7 +594,17 @@ void main() {
         vec3 specP = min(a2 / (3.14159265 * dp * dp) * Gp * Fp / (4.0 * NdV * nl + 0.001) * ms, vec3(64.0));
         direto += ((1.0 - Fp) * kD + specP) * uLuzCor[i].rgb * att * nl;
     }
-    vec3 cor = direto + amb;
+    // directional.frag: a luz direta perde com a cavidade onde a face e' rasante ao sol.
+    direto *= mix(1.0, min(aoT, 1.0), clamp(1.0 - NdL, 0.0, 1.0) * 0.8);
+    // Rebote de uma vez do sol no chao (directional.frag): luz de baixo para cima, tambem na sombra (metade).
+    if (uBounce.x > 0.5 && uSunI > 0.02) {
+        float catchUp = clamp(-N.y * 0.5 + 0.5, 0.0, 1.0);
+        vec3 sunCol = uSun / max(uSunI * uEnvSpec.z, 1e-4);
+        direto += albedo * uEnvGround * sunCol * clamp(uSunI, 0.0, 2.0) * catchUp * uBounce.y * min(aoT, 1.0) * (1.0 - sombra * 0.5);
+    }
+    vec3 cor = (direto + amb) * uBounce.z;
+    if (uDbg > 0.5 && uDbg < 1.5) cor = vec3(1.0 - sombra);
+    if (uDbg > 2.5) cor = vec3(rough, metal, mrh.a);
     // NaN/inf vira preto aqui (expoente todo 1, pelos bits: o isnan pode
     // sumir na otimizacao do ANGLE): sem isto um pixel ruim entra no bloom.
     uvec3 eb = floatBitsToUint(cor) & 0x7f800000u;
@@ -463,16 +770,64 @@ uniform vec4 uTone;      // x = exposicao, y = operador, z = nuvem (0..1), w = e
 uniform vec3 uDim;
 uniform sampler2D uBloom;
 uniform float uBloomK;   // intensidade do bloom (0 = desligado)
+uniform float uRaw;      // bancada: 1 = mostra o alvo HDR cru (sem tonemap)
 uniform float uSkyHdr;   // 1 = o ceu ja' esta' no alvo HDR (skybox.frag); 0 = gradiente daqui
 uniform vec4 uGrade;     // x = saturacao, y = contraste, z = forca da vinheta, w = suavidade dela
 uniform vec4 uTintSh, uTintHi; // split-toning: rgb = matiz, a = forca
+uniform highp sampler3D uGradeLut; // cubo 32^3 do ColorGrade (post_composite.frag: applyGradeLut)
+uniform float uLutMix;             // > 0: a LUT substitui saturacao, contraste e split-toning
+// Luz volumetrica do sol (volumetric_sun.frag, aqui sem a meia resolucao nem o borrao): marcha da camera ate' o
+// pixel testando o atlas de sombra a cada passo; ar de altura, fase Henyey-Greenstein, dither IGN.
+uniform vec4 uVolA;   // rgb = sol x intensidade x tinta x forca, w = passos (0 = desligada)
+uniform vec4 uVolB;   // x = densidade, y = altura da nevoa, z = queda, w = distancia maxima
+uniform vec4 uVolC;   // xyz = para o sol, w = anisotropia g
+uniform vec4 uVolD;   // x = vies, y = texel da c0 (mundo), z = texel da c1, w = profundidade real da caixa
+uniform highp sampler2DShadow uVShadow;
+uniform mat4 uVLook[2];
+float volSunVisible(vec3 P) {
+    for (int idx = 0; idx < 2; ++idx) {
+        vec4 ls = uVLook[idx] * vec4(P, 1.0);
+        vec3 c = ls.xyz / ls.w;
+        if (c.z > 1.0 || any(lessThan(c.xy, vec2(0.0))) || any(greaterThan(c.xy, vec2(1.0)))) continue;
+        vec2 uv = clamp(vec2(c.x * 0.5 + 0.5 * float(idx), c.y), vec2(0.5 * float(idx), 0.0),
+                        vec2(0.5 * float(idx) + 0.5, 1.0));
+        float bias = uVolD.x + (idx == 0 ? uVolD.y : uVolD.z) / max(uVolD.w, 100.0);
+        return texture(uVShadow, vec3(uv, c.z - bias));
+    }
+    return 1.0;
+}
+vec3 volumetricSun(vec3 camPos, vec3 dir, float dist, bool sky) {
+    float L = sky ? uVolB.w : min(dist, uVolB.w);
+    int steps = int(uVolA.w);
+    float dt = L / float(steps);
+    float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    float T = 1.0, scat = 0.0;
+    for (int i = 0; i < 128; ++i) {
+        if (i >= steps) break;
+        vec3 X = camPos + dir * ((float(i) + jitter) * dt);
+        float sigma = uVolB.x * exp(-max(X.y - uVolB.y, 0.0) * uVolB.z);
+        scat += T * sigma * volSunVisible(X) * dt;
+        T *= exp(-sigma * dt);
+    }
+    float g = uVolC.w, g2 = g * g;
+    float ph = (1.0 - g2) / (12.566371 * pow(max(1.0 + g2 - 2.0 * g * dot(dir, uVolC.xyz), 1e-4), 1.5));
+    return uVolA.rgb * ph * scat;
+}
 // Grading, split-toning e vinheta do look, na ordem do post_composite.frag
 // (depois do tonemap, antes do gamma).
 vec3 gradeLook(vec3 c, vec2 uv) {
     const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
-    c = mix(vec3(dot(c, kLuma)), c, uGrade.x);
-    c = 0.18 * pow(max(c, vec3(0.0)) / 0.18, vec3(uGrade.y));
-    if (uTintSh.a > 0.0 || uTintHi.a > 0.0) {
+    bool lut = uLutMix > 0.0;
+    if (lut) {
+        const float n = 32.0;
+        vec3 e = pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+        vec3 g = texture(uGradeLut, e * ((n - 1.0) / n) + 0.5 / n).rgb;
+        c = mix(c, pow(g, vec3(2.2)) * 2.0, uLutMix);
+    } else {
+        c = mix(vec3(dot(c, kLuma)), c, uGrade.x);
+        c = 0.18 * pow(max(c, vec3(0.0)) / 0.18, vec3(uGrade.y));
+    }
+    if (!lut && (uTintSh.a > 0.0 || uTintHi.a > 0.0)) {
         float l = dot(c, kLuma);
         float t = smoothstep(0.0, 1.0, clamp(l, 0.0, 1.0));
         vec3 sh = uTintSh.rgb / max(dot(uTintSh.rgb, kLuma), 1e-3);
@@ -528,6 +883,7 @@ float alturaNevoa(float y) {
     return exp(-max(0.0, y - uFog2.z) * uFog2.w);
 }
 void main() {
+    if (uRaw > 0.5) { fragColor = vec4(texture(uHdr, vUv).rgb, 1.0); return; }
     float depth = texture(uDepth, vUv).r;
     vec4 w = uInvViewProj * vec4(vUv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
     vec3 pos = w.xyz / w.w;
@@ -536,6 +892,7 @@ void main() {
     if (depth >= 0.99999 && uSkyHdr > 0.5) {
         // Como o post_composite: o fundo so' recebe exposicao e bloom.
         color = texture(uHdr, vUv).rgb * uTone.x + texture(uBloom, vUv).rgb * uBloomK;
+        if (uVolA.w > 0.5) color += volumetricSun(uCam, dir, 0.0, true) * uTone.x;
     } else if (depth >= 0.99999) {
         float y = clamp(dir.y, 0.0, 1.0);
         vec3 ceu = mix(uSkyHorizon, uSkyTop, sqrt(y));
@@ -547,9 +904,11 @@ void main() {
         vec4 sobre = texture(uHdr, vUv);
         color = color * (1.0 - clamp(sobre.a, 0.0, 1.0)) + sobre.rgb * uTone.x;
         color += texture(uBloom, vUv).rgb * uBloomK;
+        if (uVolA.w > 0.5) color += volumetricSun(uCam, dir, 0.0, true) * uTone.x;
     } else {
         // Como no post_composite: exposicao, bloom somado, depois a nevoa.
         color = texture(uHdr, vUv).rgb * uTone.x + texture(uBloom, vUv).rgb * uBloomK;
+        if (uVolA.w > 0.5) color += volumetricSun(uCam, dir, distance(pos, uCam), false) * uTone.x;
         if (uFog.a > 0.0) {
             float d = distance(pos, uCam);
             float f;
@@ -744,6 +1103,45 @@ void main() {
 }
 )";
 
+// Passe de sombra: profundidade da cena vista pela luz, com o recorte de alfa da folhagem. A matriz e' a do
+// Vulkan (Z 0..1): o Z vai para -1..1 aqui, para o buffer de profundidade guardar o mesmo valor que o lookup espera.
+const char* kShadowVs = R"(#version 300 es
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec2 aUv;
+uniform mat4 uLight;
+uniform mat4 uModel;
+uniform vec4 uUvXform;
+out vec2 vUv;
+void main() {
+    vUv = aUv * uUvXform.xy + uUvXform.zw;
+    vec4 p = uLight * (uModel * vec4(aPos, 1.0));
+    p.z = p.z * 2.0 - p.w;
+    gl_Position = p;
+}
+)";
+const char* kShadowFs = R"(#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uBase;
+void main() {
+    if (texture(uBase, vUv).a < 0.5) discard;
+}
+)";
+
+// Profundidade empacotada em dois bytes (alto = floor(z*255), baixo = fract): o bake dos probes le' o alvo na CPU.
+const char* kProbeFs = R"(#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uBase;
+out vec4 fragColor;
+void main() {
+    if (texture(uBase, vUv).a < 0.5) discard;
+    float v = clamp(gl_FragCoord.z, 0.0, 1.0) * 255.0;
+    float hi = floor(v);
+    fragColor = vec4(hi / 255.0, v - hi, 0.0, 1.0);
+}
+)";
+
 GLuint compile(GLenum type, const char* src) {
     GLuint s = glCreateShader(type);
     glShaderSource(s, 1, &src, nullptr);
@@ -778,6 +1176,13 @@ GLuint link(const char* vs, const char* fs) {
 
 // Projecao do motor (Vulkan: Y para baixo, profundidade 0..1) para o GL
 // (Y para cima, -1..1): y' = -y, z' = 2z - w.
+// Pontos de ligacao dos blocos da agua (o 0 e' o SkyParamsUBO do ceu).
+constexpr GLuint kWaterUboBinding = 1, kWaterPushBinding = 2, kWaterSlotsBinding = 3;
+// Slots que a agua le' e que no navegador sao copias desta cena, nao texturas
+// registradas: valores fora da faixa dos slots do motor.
+constexpr int kWebRefractionSlot = 0x7FFF0001, kWebDepthSlot = 0x7FFF0002, kWebSkySlot = 0x7FFF0003,
+              kWebMirrorSlot = 0x7FFF0004;
+
 Mat4 vulkanToGl(const Mat4& proj) {
     Mat4 m(1.0f);
     m[1][1] = -1.0f;
@@ -808,6 +1213,35 @@ struct DrawSlots {
 
 struct WebSceneGl {
     GLuint model = 0, sprite = 0, post = 0, lava = 0;
+    // Sombras: atlas 2S x S (uma cascata por metade, como o ShadowRenderer) refeito aqui com GL.
+    GLuint shadowProg = 0, shadowTex = 0, shadowFbo = 0;
+    // Probes de irradiancia (grade 3D cozida na CPU quando a cena assenta).
+    GLuint probeProg = 0, probeVis = 0, probeOpen = 0;
+    GLuint shadowRawSampler = 0; // sampler sem comparacao do atlas (unidade 15: so' o passe das malhas usa)
+    GLuint shadowOpen = 0; // atlas 1x1 com comparacao, para o sampler2DShadow nunca ficar sem textura de profundidade
+    size_t probeBaked = ~size_t(0), probeSeen = 0;
+    int probeStable = 0;
+    Vec4 probeMin = Vec4(0.0f), probeInv = Vec4(0.0f);
+    int shadowSize = 0;
+    Mat4 shadowKey[4]{};
+    size_t shadowKeyCount = 0;
+    bool shadowDrawn = false;
+    // LUT 3D de grading (renderer/ColorGrade): a mesma cadeia que o PostProcessor assa no desktop.
+    GLuint gradeLut = 0;
+    uint64_t gradeLutHash = 0;
+    std::string cubePath;
+    std::unique_ptr<CubeLut> cube;
+    // Agua: o liquid.vert/.frag do desktop (variante ERUPTION_SLOT_WEB) com o
+    // WaterUBO do WaterRenderer. Refracao e ceu espelhado sao copias daqui.
+    GLuint water = 0, waterUbo = 0, waterPush = 0, waterSlots = 0;
+    GLuint sceneCopy = 0, sceneCopyFbo = 0, skyRefl = 0, skyReflFbo = 0;
+    int sceneCopyW = 0, sceneCopyH = 0;
+    // Reflexo espelhado (WaterReflectionPass do desktop): a cena desenhada pela camera espelhada no plano da agua,
+    // em meia resolucao (RGBA16F, alfa = cobertura), com o culling pelo frustum espelhado. O SSR de tela so' ve'
+    // o que esta' no quadro: o que estava acima da borda sumia do reflexo e "estalava" de volta ao mover a camera.
+    GLuint mirrorTex = 0, mirrorFbo = 0, mirrorDepth = 0;
+    int mirrorW = 0, mirrorH = 0;
+    bool mirrorOk = false; // o passe espelhado rodou neste quadro
     // Alvo HDR da cena (RGBA16F + profundidade em textura) para o pos; sem
     // EXT_color_buffer_float a cena desenha direto na tela, como antes.
     GLuint hdrFbo = 0, hdrColor = 0, hdrDepth = 0;
@@ -819,6 +1253,10 @@ struct WebSceneGl {
     int lowW = 1, lowH = 1;
     int hdrW = 0, hdrH = 0;
     bool hdrOk = false;
+    GLuint lumFbo = 0;      // leitura do ultimo mip do HDR (luminancia media)
+    float lumMean = -1.0f;  // luminancia media da cena, <0 = sem medida
+    int lumFrame = 0;
+    bool lumSettled = false;
     // Piramide do bloom (RGBA16F), refeita junto com o alvo HDR.
     static constexpr int kBloomMips = 5;
     GLuint bloomProg[3] = {0, 0, 0}; // bright, down, up
@@ -976,6 +1414,7 @@ const WebSceneGl::Splat* splatFor(WebSceneGl& s, const uint32_t (&layer)[8]) {
         glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameterf(GL_TEXTURE_2D_ARRAY, 0x84FE, 16.0f); // anisotropia, como o sampler do desktop
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
     }
@@ -990,6 +1429,30 @@ void bindArray(GLuint program, const char* name, int unit, GLuint tex) {
     glActiveTexture(GL_TEXTURE0 + unit);
     glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
     glUniform1i(glGetUniformLocation(program, name), unit);
+}
+
+// Luminancia media do quadro HDR (o desktop mede por histograma na GPU, o
+// luminance_histogram.comp; a media aritmetica e' a mesma conta). Sem compute
+// no WebGL2: mipmap ate 1x1 e uma leitura de 1 pixel a cada poucos quadros.
+// O vao abaixo do horizonte nao conta, como no desktop (nao ha' aqui).
+void measureHdrLuminance(WebSceneGl& s) {
+    if (s.lumFrame++ % 4 != 0 && s.lumMean >= 0.0f) return;
+    glBindTexture(GL_TEXTURE_2D, s.hdrColor);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    int levels = 0;
+    for (int d = std::max(s.hdrW, s.hdrH); d > 1; d >>= 1) ++levels;
+    GLint prev = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev);
+    if (!s.lumFbo) glGenFramebuffers(1, &s.lumFbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, s.lumFbo);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s.hdrColor, levels);
+    float px[4] = {0, 0, 0, 0};
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, px);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, GLuint(prev));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    const float lum = 0.2126f * px[0] + 0.7152f * px[1] + 0.0722f * px[2];
+    if (lum == lum && lum < 1e6f) s.lumMean = lum;
 }
 
 // (Re)cria o alvo HDR no tamanho da tela. Falso se o navegador nao renderiza
@@ -1280,6 +1743,8 @@ void drawWebParticles(WebSceneGl& s, const Mat4& viewProj, float nearPlane, floa
 
 // As kMaxLuzes (8) luzes que mais pesam perto da camera: as do mapa (ligadas) e
 // as dos efeitos (VfxSystem::collectLights, o mesmo orcamento do desktop).
+static GLuint openShadowTex(WebSceneGl& s);
+
 void Engine::uploadWebLights(unsigned program, const Vec3& eye) {
     constexpr int kMax = 8; // igual a kMaxLuzes do shader: 16 deixou o quadro ~45% mais lento no Chrome sem GPU
     static std::vector<VfxSystem::Light> vfxLights;
@@ -1320,6 +1785,8 @@ void Engine::renderWebScene() {
         s->sprite = link(kSpriteVs, kSpriteFs);
         s->post = link(kPostVs, kPostFs);
         s->lava = link(kLavaVs, kLavaFs);
+        s->shadowProg = link(kShadowVs, kShadowFs);
+        s->probeProg = link(kShadowVs, kProbeFs);
         // Ceu: o skybox.frag do desktop, convertido do SPIR-V no build.
         s->sky = link(kGles_postprocess_fullscreen_vert, kGles_skybox_skybox_frag);
         GLint skyOk = 0;
@@ -1329,6 +1796,24 @@ void Engine::renderWebScene() {
             glGenBuffers(1, &s->skyUbo);
         } else {
             s->sky = 0;
+        }
+        s->water = link(kGles_water_liquid_vert, kGles_water_liquid_frag);
+        GLint waterOk = 0;
+        glGetProgramiv(s->water, GL_LINK_STATUS, &waterOk);
+        if (waterOk) {
+            glUniformBlockBinding(s->water, glGetUniformBlockIndex(s->water, "WaterUBO"), kWaterUboBinding);
+            glUniformBlockBinding(s->water, glGetUniformBlockIndex(s->water, "PushBlock"), kWaterPushBinding);
+            glUniformBlockBinding(s->water, glGetUniformBlockIndex(s->water, "WebSlotBlock"), kWaterSlotsBinding);
+            glUseProgram(s->water);
+            static const char* kUnits[8] = {"u_web0", "u_web1", "u_web2", "u_web3", "u_web4", "u_web5", "u_web6", "u_web7"};
+            for (int u = 0; u < 8; ++u) glUniform1i(glGetUniformLocation(s->water, kUnits[u]), u);
+            glUseProgram(0);
+            glGenBuffers(1, &s->waterUbo);
+            glGenBuffers(1, &s->waterPush);
+            glGenBuffers(1, &s->waterSlots);
+        } else {
+            ERUPTION_LOG_ERROR("[WEB] agua: o liquid.frag convertido nao ligou");
+            s->water = 0;
         }
         s->bloomProg[0] = link(kPostVs, kBloomBrightFs);
         s->bloomProg[1] = link(kPostVs, kBloomDownFs);
@@ -1392,6 +1877,17 @@ void Engine::renderWebScene() {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
 
+    // ERUPTION_TEST_WEB_CAM="dist;pitchGraus" (teste): trava a distancia e a inclinacao da orbita a cada quadro
+    // (o gancho ERUPTION_TEST_CAM_DIST do Render.cpp nao roda na web). Separador ';' porque ',' separa as
+    // variaveis na URL de teste.
+    {
+        static float camDist = 0.0f, camPitch = 0.0f;
+        static const bool camOk = [] {
+            const char* e = std::getenv("ERUPTION_TEST_WEB_CAM");
+            return e && std::sscanf(e, "%f;%f", &camDist, &camPitch) == 2 && camDist > 0.0f;
+        }();
+        if (camOk) m_camera.setOrbit(m_camera.orbitYaw(), glm::radians(camPitch), camDist);
+    }
     const Mat4 view = m_camera.viewMatrix();
     const Mat4 proj = vulkanToGl(m_camera.projNoJitter());
     const Mat4 viewProj = proj * view;
@@ -1402,27 +1898,42 @@ void Engine::renderWebScene() {
     env.sun.color = m_dayNightCycle.getSunColor();
     env.sun.intensity = m_dayNightCycle.getSunIntensity();
     env.ambientColor = m_dayNightCycle.getAmbientColor();
-    env.ambientIntensity = m_ambientIntensity;
+    env.ambientIntensity = m_dayNightCycle.getAmbientIntensity();
     env.ambientSkyColor = m_dayNightCycle.getSkyTopColor();
     env.ambientGroundColor = m_mapGroundAlbedo;
     env.skyHorizonColor = m_dayNightCycle.getSkyHorizonColor();
-    if (m_moonFillEnabled && env.sun.intensity < 0.25f) {
-        const float t = 1.0f - glm::clamp(env.sun.intensity / 0.25f, 0.0f, 1.0f);
-        float moonI = m_dayNightCycle.getMoonIntensity();
-        if (moonI <= 0.0f) moonI = 0.18f;
-        env.sun.direction =
-            glm::normalize(glm::mix(env.sun.direction, -glm::normalize(m_dayNightCycle.getMoonVisualDirection()), t));
-        env.sun.color = glm::mix(env.sun.color, m_dayNightCycle.getMoonColor(), t);
-        env.sun.intensity = glm::mix(env.sun.intensity, moonI * m_moonFillStrength, t);
+    // Luz e ambiente do mapa (.env), igual ao Render.cpp: valem como o meio-dia do mapa e o ciclo escurece e
+    // tinge por cima; depois o ambiente constante do painel e o preenchimento da lua.
+    {
+        const float noon = std::max(m_dayNightCycle.sunIntensityCurve.evaluate(0.5f), 1e-3f);
+        const float k = glm::clamp(m_dayNightCycle.getSunIntensity() / noon, 0.0f, 1.0f);
+        if (m_mapAmbientAuthored) {
+            env.ambientColor = m_mapAmbientColor;
+            env.ambientIntensity = m_mapAmbientIntensity * glm::mix(0.35f, 1.0f, k);
+        }
+        if (m_mapLightAuthored) {
+            const Vec3 cyc = env.sun.color;
+            const Vec3 tint = cyc / std::max(std::max(cyc.x, cyc.y), std::max(cyc.z, 1e-3f));
+            const Vec3 dir = glm::mix(env.sun.direction, m_mapSunDirection, glm::smoothstep(0.0f, 0.6f, k));
+            env.sun.direction = glm::length(dir) > 1e-4f ? glm::normalize(dir) : m_mapSunDirection;
+            env.sun.color = m_mapSunColor * glm::mix(tint, Vec3(1.0f), k);
+            env.sun.intensity = m_mapSunIntensity * k;
+        }
     }
-    if (m_mapAmbientAuthored) {
-        env.ambientColor = m_mapAmbientColor;
-        env.ambientIntensity = m_mapAmbientIntensity;
-    }
-    if (m_mapLightAuthored) {
-        env.sun.direction = m_mapSunDirection;
-        env.sun.color = m_mapSunColor;
-        env.sun.intensity = m_mapSunIntensity;
+    {
+        const float sunI = m_dayNightCycle.getSunIntensity();
+        env.ambientIntensity = m_ambientIntensity;
+        const float fade = 0.25f;
+        if (m_moonFillEnabled && sunI < fade) {
+            const float t = 1.0f - glm::clamp(sunI / fade, 0.0f, 1.0f);
+            const Vec3 moonDir = -glm::normalize(m_dayNightCycle.getMoonVisualDirection());
+            float moonI = m_dayNightCycle.getMoonIntensity();
+            if (moonI <= 0.0f) moonI = 0.18f;
+            moonI *= m_moonFillStrength;
+            env.sun.direction = glm::normalize(glm::mix(env.sun.direction, moonDir, t));
+            env.sun.color = glm::mix(env.sun.color, m_dayNightCycle.getMoonColor(), t);
+            env.sun.intensity = glm::mix(sunI, moonI, t);
+        }
     }
     if (m_classic.on) applyClassicLight(env);
     const float gi = m_classic.on ? 1.0f
@@ -1431,7 +1942,7 @@ void Engine::renderWebScene() {
                                          : 0.0f);
     const float ambI = env.ambientIntensity * gi;
     const Vec3 sunL = -glm::normalize(env.sun.direction);
-    const Vec3 sun = env.sun.color * env.sun.intensity;
+    const Vec3 sun = env.sun.color * env.sun.intensity * m_deferredLighting.pbrLightScale();
     const Vec3 sky = env.ambientSkyColor * ambI, horizon = env.skyHorizonColor * ambI,
                ground = env.ambientGroundColor * ambI;
     const Vec3 ambient = (env.ambientSkyColor + env.skyHorizonColor) * 0.5f * ambI;
@@ -1444,19 +1955,90 @@ void Engine::renderWebScene() {
     glBindVertexArray(s.vao);
 
     if (hdr) updateWebSkyProbe(s);
+    bakeWebProbes(s);
+    // ---- sombras do sol (atlas GL com as cascatas do desktop)
+    const GLint rvp[4] = {hdr ? 0 : viewport[0], hdr ? 0 : viewport[1], viewport[2], viewport[3]};
+    const bool shadowOn = drawWebShadows(s, env, rvp, hdr ? s.hdrFbo : GLuint(screenFb));
     // ---- malhas do mapa (chao e pecas)
     glUseProgram(s.model);
+    {
+        const Mat4* lk = m_shadowRenderer.getCascadeMatrices();
+        glUniformMatrix4fv(glGetUniformLocation(s.model, "uShLookup"), 2, GL_FALSE, &lk[0][0][0]);
+        const Mat4 shNorm[2] = {glm::transpose(glm::inverse(lk[0])), glm::transpose(glm::inverse(lk[1]))};
+        glUniformMatrix4fv(glGetUniformLocation(s.model, "uShNorm"), 2, GL_FALSE, &shNorm[0][0][0]);
+        const auto& cfg = m_shadowRenderer.settings();
+        // O texel do desktop e' o do atlas dele (cfg.atlasSize por cascata); aqui cada cascata tem kShadowSize.
+        const float texel = std::max(m_shadowRenderer.activeTexelWorld(), 0.0f) * float(cfg.atlasSize) / float(kWebShadowSize);
+        glUniform4f(glGetUniformLocation(s.model, "uShParams"), shadowOn ? 1.0f : 0.0f, cfg.biasValue,
+                    std::max(cfg.normalBias, std::min(texel * 1.5f, 2.0f)),
+                    std::max(m_shadowRenderer.activeDepthRange(), 100.0f));
+        Vec4 shLo(1.0f), shHi(1.0f);
+        for (int i = 0; i < 8; ++i) (i < 4 ? shLo : shHi)[i & 3] = m_shadowOpacitySpline.evaluate(float(i) / 7.0f);
+        glUniform4f(glGetUniformLocation(s.model, "uShParams2"), cfg.slopeBias, texel, std::max(m_normalDistMax, 1.0f),
+                    m_shadowOpacityCurve ? 1.0f : 0.0f);
+        glUniform4fv(glGetUniformLocation(s.model, "uShLut0"), 1, &shLo[0]);
+        glUniform4fv(glGetUniformLocation(s.model, "uShLut1"), 1, &shHi[0]);
+        glActiveTexture(GL_TEXTURE9);
+        glBindTexture(GL_TEXTURE_2D, shadowOn ? s.shadowTex : openShadowTex(s));
+        glUniform1i(glGetUniformLocation(s.model, "uShadow"), 9);
+        {
+            // Mesmo atlas na unidade 15 com um sampler sem comparacao: a profundidade crua da busca de bloqueador.
+            if (!s.shadowRawSampler) {
+                glGenSamplers(1, &s.shadowRawSampler);
+                glSamplerParameteri(s.shadowRawSampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glSamplerParameteri(s.shadowRawSampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                glSamplerParameteri(s.shadowRawSampler, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+                glSamplerParameteri(s.shadowRawSampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glSamplerParameteri(s.shadowRawSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            }
+            glActiveTexture(GL_TEXTURE15);
+            glBindTexture(GL_TEXTURE_2D, shadowOn ? s.shadowTex : openShadowTex(s));
+            glBindSampler(15, s.shadowRawSampler);
+            glUniform1i(glGetUniformLocation(s.model, "uShadowRaw"), 15);
+            glUniform4f(glGetUniformLocation(s.model, "uShPcss"), float(cfg.pcfKernelSize < 3 ? 7 : cfg.pcfKernelSize),
+                        float(cfg.poissonTaps), std::tan(m_deferredLighting.sunAngularRadius()), cfg.usePoisson ? 1.0f : 0.0f);
+        }
+        glActiveTexture(GL_TEXTURE10);
+        if (!s.probeOpen) { // ceu aberto 1x1x1 enquanto a grade nao existe: o sampler nunca fica sem textura
+            glGenTextures(1, &s.probeOpen);
+            glBindTexture(GL_TEXTURE_3D, s.probeOpen);
+            const float open[4] = {3.544908f, 0.0f, 0.0f, 0.0f};
+            glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA16F, 1, 1, 1, 0, GL_RGBA, GL_FLOAT, open);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        }
+        const bool probesOn = s.probeVis && s.probeMin.w > 0.5f && m_irradianceProbesEnabled;
+        glBindTexture(GL_TEXTURE_3D, probesOn ? s.probeVis : s.probeOpen);
+        glUniform1i(glGetUniformLocation(s.model, "uProbeVis"), 10);
+        glUniform4f(glGetUniformLocation(s.model, "uProbeMin"), s.probeMin.x, s.probeMin.y, s.probeMin.z, probesOn ? 1.0f : 0.0f);
+        glUniform4f(glGetUniformLocation(s.model, "uProbeInv"), s.probeInv.x, s.probeInv.y, s.probeInv.z,
+                    std::min(m_irradianceProbeStrength, 1.0f));
+        glActiveTexture(GL_TEXTURE0);
+    }
     glUniformMatrix4fv(s.mViewProj, 1, GL_FALSE, &viewProj[0][0]);
     glUniform3fv(s.mSunL, 1, &sunL[0]);
     glUniform3fv(s.mSun, 1, &sun[0]);
+    glUniform1f(glGetUniformLocation(s.model, "uSunI"), env.sun.intensity);
     glUniform3fv(s.mSky, 1, &sky[0]);
     glUniform3fv(s.mHorizon, 1, &horizon[0]);
     glUniform3fv(s.mGround, 1, &ground[0]);
+    glUniform4f(glGetUniformLocation(s.model, "uEnvSpec"), m_envSpecEnabled ? m_envSpecIntensity * ambI : 0.0f,
+                std::max(ambI, 1e-4f), std::max(m_deferredLighting.pbrLightScale(), 1e-4f), 0.0f);
+    glUniform3fv(glGetUniformLocation(s.model, "uEnvGround"), 1, &env.ambientGroundColor[0]);
+    glUniform4f(glGetUniformLocation(s.model, "uBounce"), m_sunBounceEnabled ? 1.0f : 0.0f, m_sunBounceStrength,
+                (std::getenv("ERUPTION_TEST_WEB_GAIN") ? std::atof(std::getenv("ERUPTION_TEST_WEB_GAIN")) : 1.0f), 0.0f);
     glUniform1f(s.mHemiFloor, glm::clamp(m_ambientHemiFloor, 0.0f, 1.0f));
     glUniform3fv(glGetUniformLocation(s.model, "uSH"), 9, &s.sh[0][0]);
     glUniform4f(glGetUniformLocation(s.model, "uProbe"), s.shReady ? 1.0f : 0.0f, 0.0f, m_skyProbeIntensity * ambI, 0.0f);
     glUniform3fv(s.mCam, 1, &camPos[0]);
+    glUniform1f(glGetUniformLocation(s.model, "uClipY"), -1.0e9f);
     glUniform1f(glGetUniformLocation(s.model, "uLinear"), hdr ? 1.0f : 0.0f);
+    {
+        // ERUPTION_TEST_WEB_DEBUG=1 (bancada): o modelo mostra so' a sombra do sol (0 = sombra, 1 = luz).
+        // ERUPTION_TEST_WEB_FLAT=1: albedo ciano em tudo (so' a iluminacao), como no desktop.
+        static const float dbg = std::getenv("ERUPTION_TEST_WEB_FLAT") ? 2.0f : std::getenv("ERUPTION_TEST_WEB_PBR") ? 3.0f : std::getenv("ERUPTION_TEST_WEB_DEBUG") ? 1.0f : 0.0f;
+        glUniform1f(glGetUniformLocation(s.model, "uDbg"), dbg);
+    }
     uploadWebLights(s.model, camPos);
     {
         // Tabelas como o Render.cpp monta o FrameUBO (sampleLut).
@@ -1467,11 +2049,50 @@ void Engine::renderWebScene() {
         Vec4 sc0, sc1, sm0, sm1, ts0, ts1;
         lut(m_normalScaleCurve, sc0, sc1, -1e9f, 1e9f);
         lut(m_normalSmoothCurve, sm0, sm1, -1e9f, 1e9f);
-        lut(m_tessCurve, ts0, ts1, 1.0f, std::min(64.0f, m_tessLevelCap));
+        // Y da curva "Tessellation Factor by Distance" = fator de tesselacao (1..teto), igual ao desktop.
+        const float tessFmax = std::max(1.0f, std::min(64.0f, m_tessLevelCap));
+        lut(m_tessCurve, ts0, ts1, 1.0f, tessFmax);
+        {
+            // ERUPTION_TEST_WEB_POM_F="f0;f1;...;f7" (teste): troca os 8 fatores da curva (separador ';' ou '/').
+            static const std::vector<float> kFTeste = [] {
+                std::vector<float> v;
+                if (const char* e = std::getenv("ERUPTION_TEST_WEB_POM_F")) {
+                    std::string t = e;
+                    for (char& ch : t) if (ch == ';' || ch == '/') ch = ' ';
+                    std::istringstream is(t);
+                    float f;
+                    while (v.size() < 8 && (is >> f)) v.push_back(std::max(f, 1.0f));
+                }
+                return v;
+            }();
+            if (kFTeste.size() == 8) for (int i = 0; i < 8; ++i) (i < 4 ? ts0 : ts1)[i & 3] = std::min(kFTeste[i], tessFmax);
+        }
         float tessMax = 1.0f;
         for (int i = 0; i < 4; ++i) tessMax = std::max({tessMax, ts0[i], ts1[i]});
         const float distMax = std::max(m_normalDistMax, 1.0f);
         const bool tessOn = m_tessEnabled && m_tessPresetAllowed && tessMax > 1.001f;
+        // POM: ligado com a tesselacao do painel e a curva com relevo (fator > 1), e desligado nos degraus fracos do
+        // celular (sem custo: o shader nem le o mapa de altura). Nao da' para usar m_tessPresetAllowed: o assado de
+        // malha ("relief_bake": "mesh") o zera em todo preset, e na web a tesselacao nunca existe. A profundidade e' a
+        // do relevo assado (amplitude x ganho), a mesma que o desktop usa de pico a pico.
+        // ERUPTION_TEST_WEB_NO_POM=1 (teste): desliga o POM para medir antes e depois na mesma build.
+        static const bool kSemPom = std::getenv("ERUPTION_TEST_WEB_NO_POM") != nullptr;
+        const std::string& presetPom = graphicsPresetName();
+        const bool presetFraco = presetPom == "mobile_low" || presetPom == "mobile_medium";
+        // A amplitude assada vale para a malha do chao; a mesma profundidade na UV de um barril ou de um telhado
+        // (textura muito menor no mundo) estoura a marcha em listras, entao o POM usa so' parte dela (em captura a 12 u,
+        // 0,1 u sai limpo e 0,2 u ja' mostra listras; 0,06 x 2,5 = 0,15 u). ERUPTION_TEST_WEB_POM_DEPTH=<u> (teste) troca o valor.
+        static const float kPomDepthTeste = std::getenv("ERUPTION_TEST_WEB_POM_DEPTH") ? float(std::atof(std::getenv("ERUPTION_TEST_WEB_POM_DEPTH"))) : -1.0f;
+        constexpr float kPomEscala = 0.06f;
+        const float pomDepth = kPomDepthTeste >= 0.0f ? kPomDepthTeste
+                               : m_modelRenderer.reliefBake().amplitude * m_modelRenderer.reliefBake().gain * kPomEscala;
+        const bool pomOn = m_tessEnabled && !presetFraco && !kSemPom && tessMax > 1.001f && pomDepth > 0.001f;
+        static bool pomLogado = false;
+        if (!pomLogado) {
+            pomLogado = true;
+            ERUPTION_LOG_WARN("[POM] preset '%s': %s (tesselacao do painel %s, fator max %.2f, profundidade %.2f u)",
+                              presetPom.c_str(), pomOn ? "ligado" : "desligado", m_tessEnabled ? "ligada" : "desligada", tessMax, pomDepth);
+        }
         const GLuint m = s.model;
         glUniform4f(glGetUniformLocation(m, "uNd"), distMax, m_normalDistCurve ? 1.0f : 0.0f, m_normalMapScale,
                     m_normalSmoothing);
@@ -1479,93 +2100,106 @@ void Engine::renderWebScene() {
         glUniform4fv(glGetUniformLocation(m, "uNdScale1"), 1, &sc1[0]);
         glUniform4fv(glGetUniformLocation(m, "uNdSmooth0"), 1, &sm0[0]);
         glUniform4fv(glGetUniformLocation(m, "uNdSmooth1"), 1, &sm1[0]);
-        glUniform4f(glGetUniformLocation(m, "uTess"), distMax, tessOn ? 1.0f : 0.0f, 0.0f, tessMax);
+        glUniform4f(glGetUniformLocation(m, "uTess"), distMax, tessOn ? 1.0f : 0.0f, glm::radians(m_normalMaxSlopeDeg), tessMax);
+        glUniform4f(glGetUniformLocation(m, "uPom"), pomOn ? 1.0f : 0.0f, pomDepth, 0.0f, tessMax);
         glUniform4fv(glGetUniformLocation(m, "uTessLut0"), 1, &ts0[0]);
         glUniform4fv(glGetUniformLocation(m, "uTessLut1"), 1, &ts1[0]);
-        glUniform1f(glGetUniformLocation(m, "uQuebra"), m_vulkan.shaderLite() ? 0.0f : 1.0f);
+        // O navegador marca shaderLite por nao ter descriptor indexing, mas este shader nao precisa dele:
+        // sempre completo (sem ladrilho, micro-sombra), como o desktop.
+        glUniform1f(glGetUniformLocation(m, "uQuebra"), 1.0f);
     }
-    const auto& meshes = m_modelRenderer.getMeshes();
-    for (const ModelInstance& inst : m_modelRenderer.getInstances()) {
-        if (!inst.enabled || inst.viewHidden || inst.meshIndex >= meshes.size()) continue;
-        const ModelMeshGPU& mesh = meshes[inst.meshIndex];
-        if (!mesh.indexCount) continue;
-        const uint8_t* vb = web::bufferBytes(mesh.vertexBuffer);
-        const uint8_t* ib = web::bufferBytes(mesh.indexBuffer);
-        if (!vb || !ib) continue;
-        const GLuint vbo = glBufferFor(s, mesh.vertexBuffer, GL_ARRAY_BUFFER);
-        const GLuint ibo = glBufferFor(s, mesh.indexBuffer, GL_ELEMENT_ARRAY_BUFFER);
-        if (!vbo || !ibo) continue;
+    struct MirrorCull { Frustum frustum; float level; };
+    // O desenho das pecas do mapa (chao e modelos) com o programa `model` ja' configurado; `mirror` (ou nulo) e' o
+    // passe do reflexo, que recorta pelo frustum espelhado.
+    auto drawModels = [&](const MirrorCull* mirror) {
+        const auto& meshes = m_modelRenderer.getMeshes();
+        for (const ModelInstance& inst : m_modelRenderer.getInstances()) {
+            if (!inst.enabled || inst.viewHidden || inst.meshIndex >= meshes.size()) continue;
+            // Passe espelhado: so' o que o frustum espelhado alcanca e que nao fica todo abaixo do plano.
+            static const int mdbg = std::getenv("ERUPTION_TEST_WEB_MIRROR") ? std::atoi(std::getenv("ERUPTION_TEST_WEB_MIRROR")) : 1;
+            if (mirror && (inst.worldAabbMax.y < mirror->level || (mdbg != 2 && !mirror->frustum.intersectsAABB(inst.worldAabbMin, inst.worldAabbMax))))
+                continue;
+            const ModelMeshGPU& mesh = meshes[inst.meshIndex];
+            if (!mesh.indexCount) continue;
+            const uint8_t* vb = web::bufferBytes(mesh.vertexBuffer);
+            const uint8_t* ib = web::bufferBytes(mesh.indexBuffer);
+            if (!vb || !ib) continue;
+            const GLuint vbo = glBufferFor(s, mesh.vertexBuffer, GL_ARRAY_BUFFER);
+            const GLuint ibo = glBufferFor(s, mesh.indexBuffer, GL_ELEMENT_ARRAY_BUFFER);
+            if (!vbo || !ibo) continue;
 
-        uint32_t first = 0;
-        std::memcpy(&first, ib + size_t(mesh.firstIndex) * 4, 4);
-        TerrainVertex v0;
-        std::memcpy(&v0, vb + (size_t(first) + size_t(mesh.vertexOffset)) * sizeof(TerrainVertex), sizeof(v0));
-        DrawSlots d;
-        d.base = v0.texIndex & kTexSlotMask;
-        d.normal = v0.normalIndex;
-        d.pbr = v0.pbrIndex;
-        d.mask0 = v0.blendMaskIndex;
-        d.mask1 = v0.blendMaskIndex2;
-        const uint32_t packed[4] = {v0.splatTex01, v0.splatTex23, v0.splatTex45, v0.splatTex67};
-        for (int l = 0; l < 8; ++l) d.layer[l] = (packed[l / 2] >> (16 * (l % 2))) & 0xFFFFu;
-        const WebSceneGl::Splat* sp = d.mask0 ? splatFor(s, d.layer) : nullptr;
-        const int splat = sp ? (d.mask1 ? 2 : 1) : 0;
+            uint32_t first = 0;
+            std::memcpy(&first, ib + size_t(mesh.firstIndex) * 4, 4);
+            TerrainVertex v0;
+            std::memcpy(&v0, vb + (size_t(first) + size_t(mesh.vertexOffset)) * sizeof(TerrainVertex), sizeof(v0));
+            DrawSlots d;
+            d.base = v0.texIndex & kTexSlotMask;
+            d.normal = v0.normalIndex;
+            d.pbr = v0.pbrIndex;
+            d.mask0 = v0.blendMaskIndex;
+            d.mask1 = v0.blendMaskIndex2;
+            const uint32_t packed[4] = {v0.splatTex01, v0.splatTex23, v0.splatTex45, v0.splatTex67};
+            for (int l = 0; l < 8; ++l) d.layer[l] = (packed[l / 2] >> (16 * (l % 2))) & 0xFFFFu;
+            const WebSceneGl::Splat* sp = d.mask0 ? splatFor(s, d.layer) : nullptr;
+            const int splat = sp ? (d.mask1 ? 2 : 1) : 0;
 
-        bindSlot(s.model, "uBase", 0, d.base, s.white);
-        bindSlot(s.model, "uMask0", 1, d.mask0, s.white);
-        bindSlot(s.model, "uMask1", 2, d.mask1, s.white);
-        bindSlot(s.model, "uBaseN", 4, d.normal, s.white);
-        bindSlot(s.model, "uBaseM", 5, d.pbr, s.white);
-        static const float kSem[8] = {-1, -1, -1, -1, -1, -1, -1, -1}, kZero[8] = {};
-        bindArray(s.model, "uLayC", 6, sp ? sp->arr[0] : s.whiteArray);
-        bindArray(s.model, "uLayN", 7, sp ? sp->arr[1] : s.whiteArray);
-        bindArray(s.model, "uLayM", 8, sp ? sp->arr[2] : s.whiteArray);
-        glUniform4fv(s.mIdx0, 1, sp ? sp->idx : kSem);
-        glUniform4fv(s.mIdx1, 1, (sp ? sp->idx : kSem) + 4);
-        glUniform4fv(s.mHasN0, 1, sp ? sp->hasN : kZero);
-        glUniform4fv(s.mHasN1, 1, (sp ? sp->hasN : kZero) + 4);
-        glUniform4fv(s.mHasM0, 1, sp ? sp->hasM : kZero);
-        glUniform4fv(s.mHasM1, 1, (sp ? sp->hasM : kZero) + 4);
-        glUniform1i(s.mSplat, splat);
-        glUniform4f(s.mMat, mesh.metallicScale, mesh.roughnessScale, m_defaultRoughness,
-                    m_normalMapInvertY ? 1.0f : 0.0f);
-        auto hasBase = [](uint32_t normal, uint32_t pbr) {
-            return Vec2(normal && web::slotTexture(normal) ? 1.0f : 0.0f, pbr && web::slotTexture(pbr) ? 1.0f : 0.0f);
-        };
-        const Vec2 hb = hasBase(d.normal, d.pbr);
-        glUniform2fv(s.mHasBase, 1, &hb[0]);
-        glUniformMatrix4fv(s.mModel, 1, GL_FALSE, &inst.transform[0][0]);
-        glUniform4f(s.mUvXform, inst.uvScale.x, inst.uvScale.y, inst.uvTranslate.x, inst.uvTranslate.y);
+            bindSlot(s.model, "uBase", 0, d.base, s.white);
+            bindSlot(s.model, "uMask0", 1, d.mask0, s.white);
+            bindSlot(s.model, "uMask1", 2, d.mask1, s.white);
+            bindSlot(s.model, "uBaseN", 4, d.normal, s.white);
+            bindSlot(s.model, "uBaseM", 5, d.pbr, s.white);
+            static const float kSem[8] = {-1, -1, -1, -1, -1, -1, -1, -1}, kZero[8] = {};
+            bindArray(s.model, "uLayC", 6, sp ? sp->arr[0] : s.whiteArray);
+            bindArray(s.model, "uLayN", 7, sp ? sp->arr[1] : s.whiteArray);
+            bindArray(s.model, "uLayM", 8, sp ? sp->arr[2] : s.whiteArray);
+            glUniform4fv(s.mIdx0, 1, sp ? sp->idx : kSem);
+            glUniform4fv(s.mIdx1, 1, (sp ? sp->idx : kSem) + 4);
+            glUniform4fv(s.mHasN0, 1, sp ? sp->hasN : kZero);
+            glUniform4fv(s.mHasN1, 1, (sp ? sp->hasN : kZero) + 4);
+            glUniform4fv(s.mHasM0, 1, sp ? sp->hasM : kZero);
+            glUniform4fv(s.mHasM1, 1, (sp ? sp->hasM : kZero) + 4);
+            glUniform1i(s.mSplat, splat);
+            glUniform4f(s.mMat, mesh.metallicScale, mesh.roughnessScale, m_defaultRoughness,
+                        m_normalMapInvertY ? 1.0f : 0.0f);
+            auto hasBase = [](uint32_t normal, uint32_t pbr) {
+                return Vec2(normal && web::slotTexture(normal) ? 1.0f : 0.0f, pbr && web::slotTexture(pbr) ? 1.0f : 0.0f);
+            };
+            const Vec2 hb = hasBase(d.normal, d.pbr);
+            glUniform2fv(s.mHasBase, 1, &hb[0]);
+            glUniformMatrix4fv(s.mModel, 1, GL_FALSE, &inst.transform[0][0]);
+            glUniform4f(s.mUvXform, inst.uvScale.x, inst.uvScale.y, inst.uvTranslate.x, inst.uvTranslate.y);
 
-        // Sem base vertex no GLES 3.0: o deslocamento entra no ponteiro do atributo.
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        const size_t base = size_t(mesh.vertexOffset) * sizeof(TerrainVertex);
-        auto attr = [base](GLuint loc, GLint n, size_t off) {
-            glEnableVertexAttribArray(loc);
-            glVertexAttribPointer(loc, n, GL_FLOAT, GL_FALSE, sizeof(TerrainVertex),
-                                  reinterpret_cast<const void*>(base + off));
-        };
-        attr(0, 3, offsetof(TerrainVertex, position));
-        attr(1, 2, offsetof(TerrainVertex, texCoord));
-        attr(2, 3, offsetof(TerrainVertex, normal));
-        attr(3, 2, offsetof(TerrainVertex, blendMaskUV));
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
-        if (splat) {
-            glDrawElements(GL_TRIANGLES, GLsizei(mesh.indexCount), GL_UNSIGNED_INT,
-                           reinterpret_cast<const void*>(size_t(mesh.firstIndex) * 4));
-            continue;
+            // Sem base vertex no GLES 3.0: o deslocamento entra no ponteiro do atributo.
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            const size_t base = size_t(mesh.vertexOffset) * sizeof(TerrainVertex);
+            auto attr = [base](GLuint loc, GLint n, size_t off) {
+                glEnableVertexAttribArray(loc);
+                glVertexAttribPointer(loc, n, GL_FLOAT, GL_FALSE, sizeof(TerrainVertex),
+                                      reinterpret_cast<const void*>(base + off));
+            };
+            attr(0, 3, offsetof(TerrainVertex, position));
+            attr(1, 2, offsetof(TerrainVertex, texCoord));
+            attr(2, 3, offsetof(TerrainVertex, normal));
+            attr(3, 2, offsetof(TerrainVertex, blendMaskUV));
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+            if (splat) {
+                glDrawElements(GL_TRIANGLES, GLsizei(mesh.indexCount), GL_UNSIGNED_INT,
+                               reinterpret_cast<const void*>(size_t(mesh.firstIndex) * 4));
+                continue;
+            }
+            for (const WebSceneGl::BaseRun& run : baseRunsFor(s, mesh, vb, ib)) {
+                bindSlot(s.model, "uBase", 0, run.tex, s.white);
+                bindSlot(s.model, "uBaseN", 4, run.normal, s.white);
+                bindSlot(s.model, "uBaseM", 5, run.pbr, s.white);
+                const Vec2 rb = hasBase(run.normal, run.pbr);
+                glUniform2fv(s.mHasBase, 1, &rb[0]);
+                glDrawElements(GL_TRIANGLES, GLsizei(run.count), GL_UNSIGNED_INT,
+                               reinterpret_cast<const void*>(size_t(run.first) * 4));
+            }
         }
-        for (const WebSceneGl::BaseRun& run : baseRunsFor(s, mesh, vb, ib)) {
-            bindSlot(s.model, "uBase", 0, run.tex, s.white);
-            bindSlot(s.model, "uBaseN", 4, run.normal, s.white);
-            bindSlot(s.model, "uBaseM", 5, run.pbr, s.white);
-            const Vec2 rb = hasBase(run.normal, run.pbr);
-            glUniform2fv(s.mHasBase, 1, &rb[0]);
-            glDrawElements(GL_TRIANGLES, GLsizei(run.count), GL_UNSIGNED_INT,
-                           reinterpret_cast<const void*>(size_t(run.first) * 4));
-        }
-    }
-    for (GLuint loc = 1; loc < 4; ++loc) glDisableVertexAttribArray(loc);
+        for (GLuint loc = 1; loc < 4; ++loc) glDisableVertexAttribArray(loc);
+    };
+    drawModels(nullptr);
 
     // ---- lava (um desenho por lago, como o laco do Render.cpp)
     if (m_water.m_lavaIndexCount > 0) {
@@ -1663,6 +2297,70 @@ void Engine::renderWebScene() {
         }
     }
 
+    // ---- reflexo espelhado da agua: a cena pela camera espelhada no plano, com o frustum espelhado (o que esta'
+    // fora da tela entra), em meia resolucao. So' com agua visivel e o caminho de diorama (o unico que le' a textura).
+    s.mirrorOk = false;
+    if (hdr && skyInHdr && s.water && m_water.hasWater() && !m_waterFullyBuried && m_renderEffects[7]->isEnabled()) {
+        const WaterRenderer::WaterSettings ws = waterDrawSettings();
+        // ERUPTION_TEST_WEB_MIRROR (bancada): 0 = sem o passe espelhado (SSR de tela, como antes), 2 = sem culling no passe (so' para achar erro de culling).
+        static const int mirrorMode = std::getenv("ERUPTION_TEST_WEB_MIRROR") ? std::atoi(std::getenv("ERUPTION_TEST_WEB_MIRROR")) : 1;
+        if (mirrorMode != 0 && ws.enabled && m_water.style().hd2d && ws.liquidKind == 0) {
+            const int mw = std::max(viewport[2] / 2, 1), mh = std::max(viewport[3] / 2, 1);
+            if (!s.mirrorTex || s.mirrorW != mw || s.mirrorH != mh) {
+                if (!s.mirrorTex) {
+                    glGenTextures(1, &s.mirrorTex);
+                    glGenFramebuffers(1, &s.mirrorFbo);
+                    glGenRenderbuffers(1, &s.mirrorDepth);
+                }
+                glBindTexture(GL_TEXTURE_2D, s.mirrorTex);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, mw, mh, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glBindRenderbuffer(GL_RENDERBUFFER, s.mirrorDepth);
+                glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, mw, mh);
+                glBindFramebuffer(GL_FRAMEBUFFER, s.mirrorFbo);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s.mirrorTex, 0);
+                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, s.mirrorDepth);
+                s.mirrorW = mw;
+                s.mirrorH = mh;
+            }
+            const float level = ws.waterLevel;
+            const Mat4 refl = glm::translate(Mat4(1.0f), Vec3(0.0f, level, 0.0f)) *
+                              glm::scale(Mat4(1.0f), Vec3(1.0f, -1.0f, 1.0f)) *
+                              glm::translate(Mat4(1.0f), Vec3(0.0f, -level, 0.0f));
+            MirrorCull cull;
+            cull.level = level;
+            cull.frustum.extractFromMatrix(m_camera.projNoJitter() * view * refl);
+            const Mat4 mirrorVp = proj * view * refl;
+            const Vec3 mirrorCam(camPos.x, 2.0f * level - camPos.y, camPos.z);
+            glBindFramebuffer(GL_FRAMEBUFFER, s.mirrorFbo);
+            glViewport(0, 0, mw, mh);
+            glDisable(GL_SCISSOR_TEST);
+            glDepthMask(GL_TRUE);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            glClearDepthf(1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL);
+            glDisable(GL_BLEND);
+            glUseProgram(s.model);
+            glBindVertexArray(s.vao);
+            glUniformMatrix4fv(s.mViewProj, 1, GL_FALSE, &mirrorVp[0][0]);
+            glUniform3fv(s.mCam, 1, &mirrorCam[0]);
+            glUniform1f(glGetUniformLocation(s.model, "uClipY"), level);
+            drawModels(&cull);
+            glUniformMatrix4fv(s.mViewProj, 1, GL_FALSE, &viewProj[0][0]);
+            glUniform3fv(s.mCam, 1, &camPos[0]);
+            glUniform1f(glGetUniformLocation(s.model, "uClipY"), -1.0e9f);
+            glBindFramebuffer(GL_FRAMEBUFFER, s.hdrFbo);
+            glViewport(0, 0, viewport[2], viewport[3]);
+            s.mirrorOk = true;
+        }
+    }
+    if (hdr && skyInHdr) drawWebWater(s, view, viewport[2], viewport[3]);
+
     // ---- particulas: o VfxSystem conta quem nasce (como no desktop), a CPU
     // simula e desenha por cima da cena, antes do pos (que expoe e faz nevoa).
     m_vfx.setLighting(Vec4(env.sun.direction, env.sun.intensity), Vec4(env.sun.color, 1.0f),
@@ -1691,6 +2389,7 @@ void Engine::renderWebScene() {
     }
 
     glDisable(GL_DEPTH_TEST);
+    if (hdr) measureHdrLuminance(s);
     if (hdr) renderWebPost(s, viewProj, env, GLuint(screenFb), skyInHdr);
     glBindVertexArray(0);
 }
@@ -1701,6 +2400,479 @@ void Engine::renderWebScene() {
 // Sonda de ceu como a do desktop (Render.cpp: 6 faces de 32x32 a cada 8
 // quadros, SkyProbe): o mesmo skybox.frag desenha cada face com a matriz do
 // SkyProbe, a CPU le as faces e projeta em SH9 pela conta do sky_sh.comp.
+// Agua como o passe do Render.cpp: copia da cena (refracao) e da profundidade,
+// ceu visto pela camera espelhada (ProceduralSkyBackend::renderToTexture) e o
+// liquid.frag do desktop com o WaterUBO do WaterRenderer. O alvo e' o HDR com
+// o ceu ja' desenhado, como no desktop.
+// Desenha as pecas do mapa com o programa de profundidade `prog` (uLight ja' enviada). groundFilter como o
+// ModelRenderer::setShadowGroundFilter: 0 = tudo, 1 = so' chao, 2 = tudo menos o chao; hugeXZ > 0 conta como
+// chao a instancia maior que isso em X ou Z (domo, plano d'agua).
+// Profundidade 1x1 com comparacao: um sampler2DShadow ligado a uma textura de cor invalida o draw inteiro no WebGL2.
+static GLuint openShadowTex(WebSceneGl& s) {
+    if (!s.shadowOpen) {
+        glGenTextures(1, &s.shadowOpen);
+        glBindTexture(GL_TEXTURE_2D, s.shadowOpen);
+        const unsigned int far = 0xffffffffu;
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, 1, 1, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, &far);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+    }
+    return s.shadowOpen;
+}
+
+static void drawCasters(WebSceneGl& s, const ModelRenderer& models, GLuint prog, int groundFilter, float hugeXZ) {
+    const GLint uModel = glGetUniformLocation(prog, "uModel"), uUv = glGetUniformLocation(prog, "uUvXform");
+    const auto& instances = models.getInstances();
+    const auto& meshes = models.getMeshes();
+    glActiveTexture(GL_TEXTURE0);
+    for (const ModelInstance& inst : instances) {
+        if (!inst.enabled || inst.viewHidden || inst.meshIndex >= meshes.size()) continue;
+        const ModelMeshGPU& mesh = meshes[inst.meshIndex];
+        if (groundFilter != 0) {
+            bool ground = mesh.isGround;
+            if (!ground && hugeXZ > 0.0f) {
+                const Vec3 ext = inst.worldAabbMax - inst.worldAabbMin;
+                ground = ext.x > hugeXZ || ext.z > hugeXZ;
+            }
+            if ((groundFilter == 1) != ground) continue;
+        }
+        if (!mesh.indexCount) continue;
+        const uint8_t* vb = web::bufferBytes(mesh.vertexBuffer);
+        const uint8_t* ib = web::bufferBytes(mesh.indexBuffer);
+        if (!vb || !ib) continue;
+        const GLuint vbo = glBufferFor(s, mesh.vertexBuffer, GL_ARRAY_BUFFER);
+        const GLuint ibo = glBufferFor(s, mesh.indexBuffer, GL_ELEMENT_ARRAY_BUFFER);
+        if (!vbo || !ibo) continue;
+        glUniformMatrix4fv(uModel, 1, GL_FALSE, &inst.transform[0][0]);
+        glUniform4f(uUv, inst.uvScale.x, inst.uvScale.y, inst.uvTranslate.x, inst.uvTranslate.y);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        const size_t base = size_t(mesh.vertexOffset) * sizeof(TerrainVertex);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(TerrainVertex),
+                              reinterpret_cast<const void*>(base + offsetof(TerrainVertex, position)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(TerrainVertex),
+                              reinterpret_cast<const void*>(base + offsetof(TerrainVertex, texCoord)));
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+        uint32_t first = 0;
+        std::memcpy(&first, ib + size_t(mesh.firstIndex) * 4, 4);
+        TerrainVertex v0;
+        std::memcpy(&v0, vb + (size_t(first) + size_t(mesh.vertexOffset)) * sizeof(TerrainVertex), sizeof(v0));
+        if (v0.blendMaskIndex) { // chao com splat: sem recorte de alfa
+            glBindTexture(GL_TEXTURE_2D, s.white);
+            glDrawElements(GL_TRIANGLES, GLsizei(mesh.indexCount), GL_UNSIGNED_INT,
+                           reinterpret_cast<const void*>(size_t(mesh.firstIndex) * 4));
+            continue;
+        }
+        for (const WebSceneGl::BaseRun& run : baseRunsFor(s, mesh, vb, ib)) {
+            const GLuint tex = run.tex ? web::slotTexture(run.tex) : 0;
+            glBindTexture(GL_TEXTURE_2D, tex ? tex : s.white);
+            glDrawElements(GL_TRIANGLES, GLsizei(run.count), GL_UNSIGNED_INT,
+                           reinterpret_cast<const void*>(size_t(run.first) * 4));
+        }
+    }
+    glDisableVertexAttribArray(1);
+}
+
+// Sombras do sol como o ShadowRenderer do desktop: as mesmas cascatas (updateCascades) e as mesmas matrizes de
+// luz, desenhadas aqui no atlas GL. Redesenha so' quando a cascata, a luz ou o numero de objetos mudam.
+// Devolve se o modelo deve amostrar a sombra.
+bool Engine::drawWebShadows(WebSceneGl& s, const LightingEnvironment& env, const GLint (&viewport)[4], GLuint fbo) {
+    const auto& cfg = m_shadowRenderer.settings();
+    if (!cfg.enabled || !s.shadowProg || m_classic.on) return false;
+    m_shadowRenderer.setSunAngularRadius(m_deferredLighting.sunAngularRadius());
+    m_shadowRenderer.clearFocus();
+    m_shadowRenderer.updateCascades(env.sun, m_camera, m_camera.zoomPercent(), m_dayNightCycle.timeOfDay());
+    const Mat4* render = m_shadowRenderer.getCascadeRenderMatrices();
+    const Mat4* lookup = m_shadowRenderer.getCascadeMatrices();
+    constexpr int kSize = kWebShadowSize; // o desktop usa o atlas do preset (3072 a 4096); 2048 por cascata cabe no WebGL2 mais fraco
+    if (!s.shadowTex || s.shadowSize != kSize) {
+        if (!s.shadowTex) {
+            glGenTextures(1, &s.shadowTex);
+            glGenFramebuffers(1, &s.shadowFbo);
+        }
+        glBindTexture(GL_TEXTURE_2D, s.shadowTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, 2 * kSize, kSize, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        glBindFramebuffer(GL_FRAMEBUFFER, s.shadowFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s.shadowTex, 0);
+        const GLenum none = GL_NONE;
+        glDrawBuffers(1, &none);
+        glReadBuffer(GL_NONE);
+        s.shadowSize = kSize;
+        s.shadowDrawn = false;
+    }
+    const auto& instances = m_modelRenderer.getInstances();
+    bool changed = !s.shadowDrawn || s.shadowKeyCount != instances.size();
+    for (int i = 0; i < 2; ++i) {
+        changed |= std::memcmp(&s.shadowKey[i], &render[i], sizeof(Mat4)) != 0;
+        changed |= std::memcmp(&s.shadowKey[2 + i], &lookup[i], sizeof(Mat4)) != 0;
+    }
+    if (changed) {
+        for (int i = 0; i < 2; ++i) { s.shadowKey[i] = render[i]; s.shadowKey[2 + i] = lookup[i]; }
+        s.shadowKeyCount = instances.size();
+        s.shadowDrawn = true;
+        glBindFramebuffer(GL_FRAMEBUFFER, s.shadowFbo);
+        glDisable(GL_SCISSOR_TEST);
+        glDepthMask(GL_TRUE);
+        glClearDepthf(1.0f);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
+        glUseProgram(s.shadowProg);
+        glUniform1i(glGetUniformLocation(s.shadowProg, "uBase"), 0);
+        const GLint uLight = glGetUniformLocation(s.shadowProg, "uLight");
+        const int cascades = std::memcmp(&render[0], &render[1], sizeof(Mat4)) == 0 ? 1 : 2;
+        glActiveTexture(GL_TEXTURE0);
+        for (int c = 0; c < cascades; ++c) {
+            glViewport(c * kSize, 0, kSize, kSize);
+            glUniformMatrix4fv(uLight, 1, GL_FALSE, &render[c][0][0]);
+            drawCasters(s, m_modelRenderer, s.shadowProg, 0, 0.0f);
+        }
+        glDisableVertexAttribArray(1);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+    }
+    return true;
+}
+
+void Engine::drawWebWater(WebSceneGl& s, const Mat4& view, int width, int height) {
+    if (!s.water || !m_water.hasWater() || m_waterFullyBuried || !m_renderEffects[7]->isEnabled()) return;
+    const WaterRenderer::WaterSettings settings = waterDrawSettings();
+    if (!settings.enabled) return;
+    const GLuint vb = glBufferFor(s, m_water.waterVertexBuffer(), GL_ARRAY_BUFFER);
+    const GLuint ib = glBufferFor(s, m_water.waterIndexBuffer(), GL_ELEMENT_ARRAY_BUFFER);
+    if (!vb || !ib) return;
+
+    // Copias de cor e profundidade do alvo HDR (ler o alvo preso ao FBO seria
+    // realimentacao no WebGL2).
+    if (!s.sceneCopy || s.sceneCopyW != width || s.sceneCopyH != height) {
+        if (!s.sceneCopy) {
+            glGenTextures(1, &s.sceneCopy);
+            glGenFramebuffers(1, &s.sceneCopyFbo);
+            glGenTextures(1, &s.skyRefl);
+            glGenFramebuffers(1, &s.skyReflFbo);
+        }
+        for (GLuint t : {s.sceneCopy, s.skyRefl}) {
+            glBindTexture(GL_TEXTURE_2D, t);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, s.sceneCopyFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s.sceneCopy, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, s.skyReflFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s.skyRefl, 0);
+        s.sceneCopyW = width;
+        s.sceneCopyH = height;
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, s.hdrFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s.sceneCopyFbo);
+    glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s.depthCopyFbo);
+    glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+
+    // Projecao: a do Vulkan so' com o Y trocado; o --fixup-clipspace do
+    // liquid.vert convertido leva o Z para o do GL. Assim a tela, a inversa e o
+    // ceu espelhado usam a mesma origem (baixo-esquerda) das copias.
+    Mat4 flipY(1.0f);
+    flipY[1][1] = -1.0f;
+    const Mat4 proj = flipY * m_camera.projNoJitter();
+    const Mat4 viewProj = proj * view;
+
+    // Ceu pela camera espelhada no plano da agua (y -> -y), o mesmo skybox.frag.
+    bool skyOk = false;
+    if (s.sky) {
+        alignas(16) unsigned char params[256];
+        const Mat4 rot = Mat4(glm::mat3(view));
+        const Mat4 invMirror = glm::inverse(vulkanToGl(m_camera.projNoJitter()) * rot *
+                                            glm::scale(Mat4(1.0f), Vec3(1.0f, -1.0f, 1.0f)));
+        const size_t n = m_skybox.skyParams(m_dayNightCycle, invMirror, params);
+        if (n) {
+            glBindFramebuffer(GL_FRAMEBUFFER, s.skyReflFbo);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_BLEND);
+            glBindBuffer(GL_UNIFORM_BUFFER, s.skyUbo);
+            glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(n), params, GL_DYNAMIC_DRAW);
+            glBindBufferBase(GL_UNIFORM_BUFFER, 0, s.skyUbo);
+            glUseProgram(s.sky);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            skyOk = true;
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, s.hdrFbo);
+
+    const auto& w = m_weatherSystem.current();
+    const std::vector<uint8_t> ubo = m_water.webUBO(
+        settings, m_camera.nearPlane(), m_camera.farPlane(), m_dayNightCycle, float(m_timer.elapsed()),
+        m_camera.position(), m_camera.orbitPitch(), m_weatherSystem.sunOcclusion(), m_weatherSystem.moonOcclusion(),
+        w.stormTint, w.rainIntensity, w.rainSplashIntensity, glm::inverse(viewProj), float(width), float(height),
+        kWebRefractionSlot, kWebDepthSlot, skyOk ? kWebSkySlot : -1, s.mirrorOk ? kWebMirrorSlot : -1);
+    struct {
+        Mat4 viewProj;
+        int32_t debug[4];
+    } push{viewProj, {0, 0, 0, 0}};
+    // Unidade de cada slot que o shader le' (common/slot_textures.glsl, ERUPTION_SLOT_WEB).
+    const uint32_t texSlot = m_water.waterTextureSlot(), foamSlot = m_water.foamMaskSlot(),
+                   shoreSlot = m_water.shoreFieldSlot();
+    const uint32_t slots[8] = {uint32_t(kWebRefractionSlot), uint32_t(kWebDepthSlot), uint32_t(kWebSkySlot),
+                               texSlot, foamSlot, shoreSlot, s.mirrorOk ? uint32_t(kWebMirrorSlot) : 0xFFFFFFFEu, 0xFFFFFFFEu};
+    const GLuint units[8] = {s.sceneCopy, s.depthCopy, s.skyRefl,
+                             texSlot ? web::slotTexture(texSlot) : 0, foamSlot ? web::slotTexture(foamSlot) : 0,
+                             shoreSlot != 0xFFFFFFFFu ? web::slotTexture(shoreSlot) : 0, s.mirrorOk ? s.mirrorTex : 0, 0};
+    glBindBuffer(GL_UNIFORM_BUFFER, s.waterUbo);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(ubo.size()), ubo.data(), GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_UNIFORM_BUFFER, kWaterUboBinding, s.waterUbo);
+    glBindBuffer(GL_UNIFORM_BUFFER, s.waterPush);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(push), &push, GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_UNIFORM_BUFFER, kWaterPushBinding, s.waterPush);
+    glBindBuffer(GL_UNIFORM_BUFFER, s.waterSlots);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(slots), slots, GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_UNIFORM_BUFFER, kWaterSlotsBinding, s.waterSlots);
+    glUseProgram(s.water);
+    for (int u = 0; u < 8; ++u) {
+        glActiveTexture(GL_TEXTURE0 + GLenum(u));
+        glBindTexture(GL_TEXTURE_2D, units[u] ? units[u] : s.white);
+    }
+    glActiveTexture(GL_TEXTURE0);
+
+    // Estado do pipeline do desktop (WaterRenderer::createPipeline): teste
+    // LEQUAL, escrita de profundidade so' no diorama, mistura por alfa. O alfa
+    // do alvo fica como estava (cobertura de particula sobre o ceu, no pos).
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    const WaterRenderer::StyleConfig& st = m_water.style();
+    glDepthMask(st.hd2d && st.depthWrite ? GL_TRUE : GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+    glBindBuffer(GL_ARRAY_BUFFER, vb);
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(WaterVertex),
+                          reinterpret_cast<const void*>(offsetof(WaterVertex, position)));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(WaterVertex),
+                          reinterpret_cast<const void*>(offsetof(WaterVertex, texCoord)));
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ib);
+    glDrawElements(GL_TRIANGLES, GLsizei(m_water.waterIndexCount()), GL_UNSIGNED_INT, nullptr);
+    glDisableVertexAttribArray(1);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
+// Probes de irradiancia (probe_bake.comp / probe_dilate.comp do desktop) cozidos na CPU: tres mapas de
+// profundidade de cima/de baixo (terreno, topo e base dos modelos) saem do GL empacotados em RGBA8 e a marcha de
+// 64 raios por probe roda aqui, igual ao compute. Coze uma vez quando o numero de instancias assenta (como o
+// Engine::refreshIrradianceProbes) e devolve a grade como textura 3D RGBA16F.
+void Engine::bakeWebProbes(WebSceneGl& s) {
+    constexpr int kSettleFrames = 30;
+    constexpr int K = 2048;
+    if (!s.probeProg || !m_irradianceProbesEnabled || m_classic.on) return;
+    const size_t n = m_modelRenderer.instanceCount();
+    if (n == s.probeBaked) { s.probeStable = 0; return; }
+    if (n != s.probeSeen) { s.probeSeen = n; s.probeStable = 0; return; }
+    if (++s.probeStable < kSettleFrames) return;
+    s.probeBaked = n;
+    s.probeStable = 0;
+
+    Vec3 sceneMin, sceneMax;
+    if (!m_modelRenderer.sceneBounds(sceneMin, sceneMax)) return;
+    sceneMax.y += 40.0f;
+    sceneMin.y -= 20.0f;
+    if (!(sceneMax.x > sceneMin.x && sceneMax.z > sceneMin.z)) return;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Grade e ortho de cima/de baixo: as contas do IrradianceProbes::bake.
+    const Vec3 extent = glm::max(sceneMax - sceneMin, Vec3(1.0f));
+    const float cellXZ = std::clamp(std::max(extent.x, extent.z) / 64.0f, 24.0f, 96.0f);
+    const float cellY = std::clamp(extent.y / 16.0f, 16.0f, 64.0f);
+    const uint32_t dx = std::clamp<uint32_t>(uint32_t(std::ceil(extent.x / cellXZ)) + 1u, 2u, 96u);
+    const uint32_t dz = std::clamp<uint32_t>(uint32_t(std::ceil(extent.z / cellXZ)) + 1u, 2u, 96u);
+    const uint32_t dy = std::clamp<uint32_t>(uint32_t(std::ceil(extent.y / cellY)) + 1u, 2u, 24u);
+    const Vec3 cell(extent.x / float(dx - 1), extent.y / float(dy - 1), extent.z / float(dz - 1));
+    const Vec3 gridMin = sceneMin - cell * 0.5f;
+    const Vec3 gridExtent = cell * Vec3(float(dx), float(dy), float(dz));
+    const Vec3 c = (sceneMin + sceneMax) * 0.5f;
+    const float hx = extent.x * 0.5f + 32.0f, hz = extent.z * 0.5f + 32.0f;
+    const float farD = extent.y + 200.0f;
+    Mat4 proj = glm::ortho(-hx, hx, -hz, hz, 1.0f, farD);
+    proj[1][1] *= -1.0f;
+    const Vec3 eyeTop(c.x, sceneMax.y + 100.0f, c.z), eyeBot(c.x, sceneMin.y - 100.0f, c.z);
+    const Mat4 topVP = proj * glm::lookAt(eyeTop, eyeTop + Vec3(0, -1, 0), Vec3(0, 0, -1));
+    const Mat4 botVP = proj * glm::lookAt(eyeBot, eyeBot + Vec3(0, 1, 0), Vec3(0, 0, -1));
+    const float radius = std::min(cellXZ * 6.0f, 400.0f);
+    const int steps = 24;
+    const float start = cellXZ * 0.1f;
+    const float depthEps = (((radius - start) / float(steps)) * 0.5f) / (farD - 1.0f);
+
+    // Alvo de profundidade empacotada + profundidade real para o teste.
+    GLint prevFb = 0, prevVp[4];
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFb);
+    glGetIntegerv(GL_VIEWPORT, prevVp);
+    GLuint colorTex = 0, depthRb = 0, fbo = 0;
+    glGenTextures(1, &colorTex);
+    glBindTexture(GL_TEXTURE_2D, colorTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, K, K, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenRenderbuffers(1, &depthRb);
+    glBindRenderbuffer(GL_RENDERBUFFER, depthRb);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, K, K);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTex, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthRb);
+    const bool fboOk = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    std::vector<uint16_t> maps[3]; // terreno de cima, modelos de cima, modelos de baixo
+    if (fboOk) {
+        glViewport(0, 0, K, K);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glDepthMask(GL_TRUE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glUseProgram(s.probeProg);
+        glUniform1i(glGetUniformLocation(s.probeProg, "uBase"), 0);
+        const GLint uLight = glGetUniformLocation(s.probeProg, "uLight");
+        const float huge = 0.4f * std::max(extent.x, extent.z);
+        const Mat4* vps[3] = {&topVP, &topVP, &botVP};
+        const int filters[3] = {1, 2, 2};
+        std::vector<uint8_t> px(size_t(K) * K * 4);
+        for (int m = 0; m < 3; ++m) {
+            glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+            glClearDepthf(1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glUniformMatrix4fv(uLight, 1, GL_FALSE, &(*vps[m])[0][0]);
+            drawCasters(s, m_modelRenderer, s.probeProg, filters[m], huge);
+            glReadPixels(0, 0, K, K, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+            maps[m].resize(size_t(K) * K);
+            for (size_t i = 0; i < maps[m].size(); ++i) maps[m][i] = uint16_t(px[i * 4] * 256u + px[i * 4 + 1]);
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prevFb));
+    glViewport(prevVp[0], prevVp[1], prevVp[2], prevVp[3]);
+    glDeleteFramebuffers(1, &fbo);
+    glDeleteRenderbuffers(1, &depthRb);
+    glDeleteTextures(1, &colorTex);
+    if (!fboOk) { ERUPTION_LOG_WARN("[WEB] probes: sem alvo de profundidade"); return; }
+
+    auto depthAt = [&](int m, const Vec2& uv) {
+        const int x = std::clamp(int(uv.x * float(K)), 0, K - 1), y = std::clamp(int(uv.y * float(K)), 0, K - 1);
+        return float(maps[m][size_t(y) * K + x]) / 65280.0f;
+    };
+    auto outside = [](const Vec2& uv) { return uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f; };
+    const float kz = std::max(std::abs(topVP[1][2]), 1e-9f);
+    auto flatBase = [&](const Vec2& uv, float d) {
+        const float o = 4.0f / 2048.0f;
+        const float mx = std::max(std::max(std::abs(depthAt(2, uv + Vec2(o, 0)) - d), std::abs(depthAt(2, uv - Vec2(o, 0)) - d)),
+                                  std::max(std::abs(depthAt(2, uv + Vec2(0, o)) - d), std::abs(depthAt(2, uv - Vec2(0, o)) - d)));
+        return mx / kz < 2.0f;
+    };
+    auto insideModels = [&](const Vec3& p, float eps) {
+        const Vec4 ct = topVP * Vec4(p, 1.0f);
+        const Vec2 uvt = Vec2(ct.x, ct.y) * 0.5f + 0.5f;
+        if (outside(uvt)) return false;
+        const float dTop = depthAt(1, uvt);
+        if (!(ct.z + eps > dTop)) return false;
+        const Vec4 cb = botVP * Vec4(p, 1.0f);
+        const Vec2 uvb = Vec2(cb.x, cb.y) * 0.5f + 0.5f;
+        if (outside(uvb)) return false;
+        const float dBot = depthAt(2, uvb);
+        const float gap = ((dBot - cb.z) + (ct.z - depthAt(0, uvt))) / kz;
+        if (gap < 12.0f && flatBase(uvb, dBot)) return (ct.z - dTop) / kz < 10.0f + eps / kz;
+        return cb.z + eps > dBot;
+    };
+
+    const size_t total = size_t(dx) * dy * dz;
+    std::vector<Vec4> raw(total);
+    constexpr int kDirs = 64;
+    Vec3 dirs[kDirs];
+    for (int i = 0; i < kDirs; ++i) {
+        const float y = 1.0f - (float(i) + 0.5f) * (2.0f / float(kDirs));
+        const float r = std::sqrt(std::max(0.0f, 1.0f - y * y)), a = 2.399963f * float(i);
+        dirs[i] = Vec3(r * std::cos(a), y, r * std::sin(a));
+    }
+    const float wDir = 12.566371f / float(kDirs);
+    for (uint32_t z = 0; z < dz; ++z)
+        for (uint32_t y = 0; y < dy; ++y)
+            for (uint32_t x = 0; x < dx; ++x) {
+                const Vec3 p0 = gridMin + (Vec3(float(x), float(y), float(z)) + 0.5f) * cell;
+                Vec4& out = raw[(size_t(z) * dy + y) * dx + x];
+                const Vec4 ct = topVP * Vec4(p0, 1.0f);
+                const Vec2 uvt = Vec2(ct.x, ct.y) * 0.5f + 0.5f;
+                if ((!outside(uvt) && ct.z + depthEps > depthAt(0, uvt)) || insideModels(p0, 0.0f)) {
+                    out = Vec4(-1.0f, 0.0f, 0.0f, 0.0f);
+                    continue;
+                }
+                float L0 = 0.0f;
+                Vec3 L1(0.0f);
+                for (int i = 0; i < kDirs; ++i) {
+                    float V = 1.0f;
+                    for (int st = 0; st < steps; ++st) {
+                        const float f = float(st) / float(steps - 1);
+                        const float t = start + (radius - start) * f * f;
+                        const float eps = depthEps * std::max(2.0f * f * float(steps) / float(steps - 1), 0.5f);
+                        if (insideModels(p0 + dirs[i] * t, eps)) { V = 0.0f; break; }
+                    }
+                    L0 += V * 0.282095f * wDir;
+                    L1 += V * 0.488603f * dirs[i] * wDir;
+                }
+                out = Vec4(L0, L1);
+            }
+    // Dilatacao: probe invalida recebe a media das 26 vizinhas validas; sem vizinha, ceu aberto.
+    std::vector<float> fin(total * 4);
+    size_t invalid = 0;
+    double sumVis = 0.0;
+    for (int z = 0; z < int(dz); ++z)
+        for (int y = 0; y < int(dy); ++y)
+            for (int x = 0; x < int(dx); ++x) {
+                const size_t i = (size_t(z) * dy + y) * dx + x;
+                Vec4 v = raw[i];
+                if (v.x < 0.0f) {
+                    ++invalid;
+                    Vec4 acc(0.0f);
+                    int cnt = 0;
+                    for (int oz = -1; oz <= 1; ++oz)
+                        for (int oy = -1; oy <= 1; ++oy)
+                            for (int ox = -1; ox <= 1; ++ox) {
+                                const int qx = x + ox, qy = y + oy, qz = z + oz;
+                                if (qx < 0 || qy < 0 || qz < 0 || qx >= int(dx) || qy >= int(dy) || qz >= int(dz)) continue;
+                                const Vec4& q = raw[(size_t(qz) * dy + qy) * dx + qx];
+                                if (q.x >= 0.0f) { acc += q; ++cnt; }
+                            }
+                    v = cnt > 0 ? acc / float(cnt) : Vec4(3.544908f, 0.0f, 0.0f, 0.0f);
+                } else {
+                    sumVis += std::clamp((0.886227f * v.x + 1.023328f * v.z) / 3.14159265f, 0.0f, 1.0f);
+                }
+                std::memcpy(&fin[i * 4], &v[0], sizeof(float) * 4);
+            }
+    if (!s.probeVis) glGenTextures(1, &s.probeVis);
+    glBindTexture(GL_TEXTURE_3D, s.probeVis);
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA16F, GLsizei(dx), GLsizei(dy), GLsizei(dz), 0, GL_RGBA, GL_FLOAT, fin.data());
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    s.probeMin = Vec4(gridMin, 1.0f);
+    s.probeInv = Vec4(1.0f / gridExtent.x, 1.0f / gridExtent.y, 1.0f / gridExtent.z, 1.0f);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    ERUPTION_LOG_WARN("[WEB] probes: grade %ux%ux%u, %zu invalidas, vis media %.3f, %lld ms (%zu instancias)", dx, dy, dz,
+                      invalid, total > invalid ? sumVis / double(total - invalid) : 1.0, (long long)ms, n);
+}
+
 void Engine::updateWebSkyProbe(WebSceneGl& s) {
     constexpr int kFace = 32;
     if (!s.sky || !m_skyProbeEnabled) return;
@@ -1792,6 +2964,8 @@ void Engine::renderWebPost(WebSceneGl& s, const Mat4& viewProj, const LightingEn
     float fogStart = w.fogStart, fogEnd = w.fogEnd, fogOpacity = w.fogDensity;
     float fogHeight = w.fogHeight, fogFalloff = w.fogHeightFalloff;
     bool fogOn = w.fogDensity > 0.001f;
+    static const bool noFog = std::getenv("ERUPTION_TEST_WEB_NOFOG") != nullptr; // bancada: sem nevoa
+
     const MapFog* fog = m_scriptFog.set ? &m_scriptFog
                       : (m_currentMap && m_currentMap->env.fog.set) ? &m_currentMap->env.fog : nullptr;
     if (fog) {
@@ -1812,11 +2986,27 @@ void Engine::renderWebPost(WebSceneGl& s, const Mat4& viewProj, const LightingEn
         m_autoExposureCurrent = lockedExposure;
         exposure *= lockedExposure;
     } else if (m_autoExposureEnabled) {
-        const float level = std::max(env.sun.intensity * 0.7f + m_ambientIntensity * 0.9f +
-                                         (m_moonFillEnabled ? 0.05f : 0.0f), 0.05f);
-        const float target = glm::clamp(m_autoExposureKey / level, m_autoExposureMin, m_autoExposureMax);
+        // Medida: 0.18 / luminancia media, com a chave como no Render.cpp; antes
+        // da primeira leitura, o orcamento de luz.
+        float target;
+        if (s.lumMean >= 0.0f) {
+            // O histograma do desktop le' bem mais que a media deste alvo HDR: medido na vila (mesma camera, horas 3, 8,
+            // 11, 14, 17,5 e 23), o desktop fica em 1,0 de dia e em 2,0 de noite, enquanto a media daqui (0,016 a 0,042
+            // de dia, 0,005 de noite) pediria o teto de 2,0 sempre. Um fator 12 reproduz os dois patamares.
+            constexpr float kLumCalib = 12.0f;
+            target = glm::clamp(0.18f / std::max(s.lumMean * kLumCalib, 0.001f) * (m_autoExposureKey / 1.55f),
+                                m_autoExposureMin, m_autoExposureMax);
+        } else {
+            const float level = std::max(env.sun.intensity * 0.7f + m_ambientIntensity * 0.9f +
+                                             (m_moonFillEnabled ? 0.05f : 0.0f), 0.05f);
+            target = glm::clamp(m_autoExposureKey / level, m_autoExposureMin, m_autoExposureMax);
+        }
         const float rate = 1.0f - std::exp(-m_timer.deltaTime() * m_autoExposureSpeed);
-        m_autoExposureCurrent = glm::mix(m_autoExposureCurrent, target, glm::clamp(rate, 0.0f, 1.0f));
+        // Primeira medida: assenta direto (o desktop mede desde o 1o quadro; aqui a
+        // luz de partida do orcamento seria um salto visivel).
+        const bool primeira = s.lumMean >= 0.0f && !s.lumSettled;
+        if (primeira) s.lumSettled = true;
+        m_autoExposureCurrent = primeira ? target : glm::mix(m_autoExposureCurrent, target, glm::clamp(rate, 0.0f, 1.0f));
         exposure *= m_autoExposureCurrent;
     }
     const Mat4 inv = glm::inverse(viewProj);
@@ -1837,7 +3027,7 @@ void Engine::renderWebPost(WebSceneGl& s, const Mat4& viewProj, const LightingEn
     glUniform1i(u("uDepth"), 1);
     glUniformMatrix4fv(u("uInvViewProj"), 1, GL_FALSE, &inv[0][0]);
     glUniform3fv(u("uCam"), 1, &cam[0]);
-    glUniform4f(u("uFog"), fogColor.r, fogColor.g, fogColor.b, fogOn ? fogEnd : 0.0f);
+    glUniform4f(u("uFog"), fogColor.r, fogColor.g, fogColor.b, fogOn && !noFog ? fogEnd : 0.0f);
     glUniform4f(u("uFog2"), fogStart, fogOpacity, fogHeight, fogFalloff);
     glUniform4f(u("uSunFog"), toSun.x, toSun.y, toSun.z, g);
     glUniform3fv(u("uSkyTop"), 1, &top[0]);
@@ -1851,10 +3041,81 @@ void Engine::renderWebPost(WebSceneGl& s, const Mat4& viewProj, const LightingEn
     glUniform1i(u("uBloom"), 2);
     glUniform1f(u("uBloomK"), bloom ? m_postSettings.bloomIntensity : 0.0f);
     glUniform1f(u("uSkyHdr"), skyInHdr ? 1.0f : 0.0f);
+    glUniform1f(u("uRaw"), std::getenv("ERUPTION_TEST_WEB_PBR") ? 1.0f : 0.0f);
     const LookConfig& look = m_lookConfig;
+    // A LUT do look (ou a do preset do pos, quando o look nao tem a sua), como no PostProcessor.
+    const LookConfig* gradeSrc = &look;
+    LookConfig lutLook;
+    if (!m_postSettings.presetLut ? !look.lutPath.empty()
+                                  : (look.lutPath.empty() && !m_postSettings.colorLut.empty())) {
+        lutLook = look;
+        lutLook.lutPath = m_postSettings.presetLut ? m_postSettings.colorLut : std::string();
+        if (m_postSettings.presetLut) lutLook.lutStrength = m_postSettings.colorLutStrength;
+        gradeSrc = &lutLook;
+    }
+    float lutMix = 0.0f;
+    if (lookWantsGradeLut(*gradeSrc)) {
+        if (gradeSrc->lutPath != s.cubePath) {
+            s.cubePath = gradeSrc->lutPath;
+            s.cube.reset();
+            if (!s.cubePath.empty()) {
+                auto c = std::make_unique<CubeLut>();
+                if (c->load(project::gameRef(s.cubePath).string())) s.cube = std::move(c);
+                else ERUPTION_LOG_WARN("[GRADE] LUT (.cube/.png) nao carregou: %s", s.cubePath.c_str());
+            }
+            s.gradeLutHash = 0;
+        }
+        const uint64_t h = gradeLutHash(*gradeSrc) ^ (s.cube ? 0x9e3779b97f4a7c15ull : 0ull);
+        if (!s.gradeLut) glGenTextures(1, &s.gradeLut);
+        if (h != s.gradeLutHash) {
+            const std::vector<uint32_t> texels = bakeGradeLut(*gradeSrc, s.cube.get(), kGradeLutSize);
+            glBindTexture(GL_TEXTURE_3D, s.gradeLut);
+            glTexImage3D(GL_TEXTURE_3D, 0, GL_RGB10_A2, kGradeLutSize, kGradeLutSize, kGradeLutSize, 0, GL_RGBA,
+                         GL_UNSIGNED_INT_2_10_10_10_REV, texels.data());
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+            s.gradeLutHash = h;
+        }
+        lutMix = 1.0f;
+    }
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_3D, s.gradeLut);
+    glUniform1i(u("uGradeLut"), 3);
+    glUniform1f(u("uLutMix"), lutMix);
     glUniform4f(u("uGrade"), look.saturation, look.contrast, look.vignette, look.vignetteSoftness);
     glUniform4f(u("uTintSh"), look.shadowTint.r, look.shadowTint.g, look.shadowTint.b, look.shadowTintStrength);
     glUniform4f(u("uTintHi"), look.highlightTint.r, look.highlightTint.g, look.highlightTint.b, look.highlightTintStrength);
+    {
+        // Luz volumetrica do sol (Render.cpp: VolumetricLight::Params). Precisa do atlas desenhado neste quadro.
+        static const bool volOff = std::getenv("ERUPTION_TEST_NO_VOLUMETRIC") != nullptr; // o mesmo A/B do desktop
+        const bool volOn = !volOff && m_volumetricMode > 0 && s.shadowTex && s.shadowDrawn && look.volumetricIntensity > 0.0f &&
+                           look.volumetricDensity > 0.0f && m_shadowRenderer.settings().enabled && !m_classic.on;
+        const Vec3 rad = env.sun.color * env.sun.intensity * look.volumetricTint * look.volumetricIntensity;
+        static bool volLog = false;
+        if (!volLog && volOn) {
+            volLog = true;
+            ERUPTION_LOG_WARN("[WEB] volumetrico: dens %.4f int %.3f passos %d dist %.0f altura %.1f queda %.4f g %.2f rad %.2f", look.volumetricDensity,
+                              look.volumetricIntensity, m_volumetricSteps, m_volumetricMaxDist, fogHeight, fogFalloff, look.volumetricAnisotropy, rad.r);
+        }
+        // Calibracao medida contra o desktop (vilarejo, 14 h, PSNR 25,08 -> 27,69 dB): o meio do desktop aparece uniforme em altura
+        // (sem a queda da nevoa baixa) e com ~0,45 da irradiancia; a causa exata no desktop segue sem explicacao.
+        // ERUPTION_TEST_WEB_VOLK / _VOLFALL / _VOLDENS / _VOLBIAS (bancada) trocam K, queda, densidade e bias.
+        const float volK = std::getenv("ERUPTION_TEST_WEB_VOLK") ? float(std::atof(std::getenv("ERUPTION_TEST_WEB_VOLK"))) : 0.45f;
+        glUniform4f(u("uVolA"), rad.r * volK, rad.g * volK, rad.b * volK, volOn ? float(glm::clamp(m_volumetricSteps, 4, 128)) : 0.0f);
+        glUniform4f(u("uVolB"), std::getenv("ERUPTION_TEST_WEB_VOLDENS") ? float(std::atof(std::getenv("ERUPTION_TEST_WEB_VOLDENS"))) : look.volumetricDensity, fogHeight, std::getenv("ERUPTION_TEST_WEB_VOLFALL") ? float(std::atof(std::getenv("ERUPTION_TEST_WEB_VOLFALL"))) : 0.0f,
+                    std::max(m_volumetricMaxDist, 1.0f));
+        glUniform4f(u("uVolC"), toSun.x, toSun.y, toSun.z, glm::clamp(look.volumetricAnisotropy, -0.95f, 0.95f));
+        const float ratio = float(m_shadowRenderer.settings().atlasSize) / float(kWebShadowSize);
+        glUniform4f(u("uVolD"), m_shadowRenderer.settings().biasValue + (std::getenv("ERUPTION_TEST_WEB_VOLBIAS") ? float(std::atof(std::getenv("ERUPTION_TEST_WEB_VOLBIAS"))) : 0.0f), m_shadowRenderer.getWorldTexelSize() * ratio,
+                    m_shadowRenderer.getC1WorldTexelSize() * ratio, std::max(m_shadowRenderer.activeDepthRange(), 100.0f));
+        glUniformMatrix4fv(u("uVLook"), 2, GL_FALSE, &m_shadowRenderer.getCascadeMatrices()[0][0][0]);
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, volOn ? s.shadowTex : openShadowTex(s));
+        glUniform1i(u("uVShadow"), 4);
+    }
     glDisable(GL_DEPTH_TEST);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glActiveTexture(GL_TEXTURE0);

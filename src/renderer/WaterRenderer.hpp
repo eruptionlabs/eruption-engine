@@ -233,6 +233,22 @@ public:
     void addContactFoamTrail(const Vec3& from, const Vec3& to, float radius, float intensity = 1.0f);
 
     bool hasWater() const { return m_indexCount > 0; }
+    // Malha da agua para o desenho WebGL2 (EngineWebScene), que le' o espelho dos buffers.
+    VkBuffer waterVertexBuffer() const { return m_vertexBuffer; }
+    VkBuffer waterIndexBuffer() const { return m_indexBuffer; }
+    uint32_t waterIndexCount() const { return m_indexCount; }
+    // O bloco WaterUBO como o desenho do desktop o monta (updateUBO), para o
+    // liquid.frag convertido do navegador: as texturas de tela (refracao,
+    // profundidade) e o ceu espelhado entram pelos slots dados, e a inversa e o
+    // tamanho sao os da cena WebGL2.
+    std::vector<uint8_t> webUBO(const WaterSettings& settings, float nearPlane, float farPlane,
+                                const DayNightCycle& cycle, float time, const Vec3& cameraPos, float cameraPitch,
+                                float sunOcclusion, float moonOcclusion, float stormDarken, float rainIntensity,
+                                float rainSplashIntensity, const Mat4& invViewProj, float width, float height,
+                                int refractionSlot, int depthSlot, int skySlot, int mirrorSlot = -1);
+    uint32_t shoreFieldSlot() const { return m_shoreFieldSlot; }
+    uint32_t foamMaskSlot() const { return m_foamMaskSlot; }
+    uint32_t waterTextureSlot() const { return m_waterTextureSlot; }
 
     VkBuffer m_lavaVertexBuffer = VK_NULL_HANDLE;
     VmaAllocation m_lavaVertexAlloc = nullptr;
@@ -480,6 +496,10 @@ private:
                    const DayNightCycle& cycle, float time, const Vec3& cameraPos, float cameraPitch = 0.0f,
                    float sunOcclusion = 1.0f, float moonOcclusion = 1.0f, float stormDarken = 0.0f,
                    float rainIntensity = 0.0f, float rainSplashIntensity = 0.0f);
+    void fillUBO(WaterUBO& ubo, uint32_t frameIndex, const WaterSettings& settings, float nearPlane, float farPlane,
+                 const DayNightCycle& cycle, float time, const Vec3& cameraPos, float cameraPitch,
+                 float sunOcclusion, float moonOcclusion, float stormDarken,
+                 float rainIntensity, float rainSplashIntensity);
     void copySceneToRefraction(VkCommandBuffer cmd,
                                VkImage sceneColorImage, VkImage sceneDepthImage,
                                uint32_t width, uint32_t height,

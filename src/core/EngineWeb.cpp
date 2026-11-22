@@ -5,6 +5,7 @@
 // e' a interface sobre um fundo liso.
 #if defined(__EMSCRIPTEN__)
 
+#include <algorithm>
 #include "core/Engine.hpp"
 #include "core/Input.hpp"
 #include "core/Logger.hpp"
@@ -20,14 +21,45 @@
 #include <imgui_impl_opengl3.h>
 #include <stb_image.h>
 
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 // A pagina de teste recebe o quadro da captura (ver ERUPTION_TEST_SCREENSHOT_FRAME).
 EM_JS(void, webTestFrame, (int frame), { if (Module.onTestFrame) Module.onTestFrame(frame); });
+
+// Bancada: "?env=ERUPTION_TEST_FIXED_DT:0.005,ERUPTION_TEST_NO_WIND:1" na URL vira variaveis de ambiente do motor
+// (so' ERUPTION_TEST_*), antes de qualquer init. O navegador nao tem ambiente; sem isto o tempo da camera e do dia
+// depende da velocidade do quadro e a comparacao com o desktop nao se repete.
+EM_JS(char*, webUrlEnv, (), {
+    const v = new URLSearchParams(location.search).get("env") || "";
+    return stringToNewUTF8(v);
+});
+static const int s_webUrlEnv = [] {
+    char* raw = webUrlEnv();
+    std::string list = raw ? raw : "";
+    std::free(raw);
+    size_t pos = 0;
+    while (pos < list.size()) {
+        size_t end = list.find(',', pos);
+        if (end == std::string::npos) end = list.size();
+        const std::string item = list.substr(pos, end - pos);
+        const size_t colon = item.find(':');
+        if (colon != std::string::npos && item.compare(0, 14, "ERUPTION_TEST_") == 0) {
+            // '|' vira ',' no valor: a lista usa a virgula, e ERUPTION_TEST_INPUT ("quadro,acao,...") precisa dela.
+            std::string value = item.substr(colon + 1);
+            std::replace(value.begin(), value.end(), '|', ',');
+            setenv(item.substr(0, colon).c_str(), value.c_str(), 1);
+        }
+        pos = end + 1;
+    }
+    return 0;
+}();
 
 // O GLFW do Emscripten converte so' o primeiro dedo em botao esquerdo: tira
 // esses ouvintes do canvas para o toque passar pelo TouchRouter, como no celular.
@@ -66,6 +98,7 @@ void writeWebScreenshot(const std::string& path, int w, int h) {
 }
 
 std::string s_canvas = "#canvas";
+Engine* s_webEngine = nullptr; // o motor desta pagina, para as funcoes C que a casca chama (slider de hora)
 
 // Os callbacks que o motor registrou na janela (Input): o toque chega neles
 // como o mouse chegaria.
@@ -121,6 +154,7 @@ void Engine::initImGuiWebBackend() {
     ImGui_ImplGlfw_InitForOpenGL(m_window.handle(), false); // como no desktop: Input repassa os eventos ao ImGui
     ImGui_ImplOpenGL3_Init("#version 300 es");
     s_touchWindow = m_window.handle();
+    s_webEngine = this;
     if (char* sel = webCanvasSelector()) {
         s_canvas = sel;
         std::free(sel);
@@ -177,6 +211,15 @@ void Engine::renderWeb() {
     glClearColor(sky.r, sky.g, sky.b, 1.0f);
     glClearDepthf(1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    // Plano proximo pela distancia da orbita (o mesmo que o preset camera_near_scale faz no desktop, Render.cpp). O WebGL2
+    // so' tem profundidade D24 sem Z invertido: com near 0,1 e far 50000 o passo e' de ~0,6 u a 1000 u do olho, e a
+    // linha onde a agua encontra o chao (teste de profundidade, e a profundidade reconstruida da borda) pula em degraus
+    // a cada giro da camera: a beira "treme". Com near = 7,5% da distancia (teto 60 u) o passo cai para ~1 mm a 1000 u.
+    {
+        const float escala = m_cameraNearScale > 0.0f ? m_cameraNearScale : 0.075f;
+        const float want = std::clamp(escala * glm::length(m_camera.position() - m_camera.target()), cameraNear(), 60.0f);
+        if (std::abs(want - m_camera.nearPlane()) > 0.01f) m_camera.setNearPlane(want);
+    }
     if (m_currentMap) renderWebScene();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     if (frame) m_vulkan.endFrame();
@@ -200,6 +243,18 @@ void Engine::renderWeb() {
         if (e && std::atoi(e) > 0) return std::atoi(e);
         return m_screenshotOnLoad.empty() ? 0 : 600;
     }();
+    // ERUPTION_TEST_SEQ=<inicio>|<quantos> (bancada da agua): a pagina recebe Module.onTestFrame em CADA um dos
+    // <quantos> quadros a partir de <inicio> (uma rodada so', camera girando) e o laco para no ultimo.
+    static const std::pair<int, int> seq = [] {
+        const char* e = std::getenv("ERUPTION_TEST_SEQ");
+        int a = 0, n = 0;
+        if (e && std::sscanf(e, "%d,%d", &a, &n) == 2 && n > 0) return std::make_pair(a, n);
+        return std::make_pair(0, 0);
+    }();
+    if (seq.second > 0 && m_framesCount >= seq.first && m_framesCount < seq.first + seq.second) {
+        webTestFrame(m_framesCount);
+        if (m_framesCount == seq.first + seq.second - 1) emscripten_pause_main_loop();
+    }
     if (stopFrame > 0 && m_framesCount == stopFrame) {
         ERUPTION_LOG_WARN("[TEST] quadro %d desenhado, laco parado para a captura", stopFrame);
         if (!m_screenshotOnLoad.empty()) writeWebScreenshot(m_screenshotOnLoad, w, h);
@@ -209,5 +264,25 @@ void Engine::renderWeb() {
 }
 
 } // namespace eruption
+
+// Ponte da pagina (Module._eruption_*): hora do dia em 0..1 e ciclo automatico. O script do jogo le' a hora do mesmo
+// DayNightCycle (world.time), entao os dois lados enxergam o mesmo valor.
+extern "C" {
+EMSCRIPTEN_KEEPALIVE void eruption_set_time_of_day(float t) {
+    if (!eruption::s_webEngine) return;
+    t -= std::floor(t);
+    eruption::s_webEngine->dayNightCycle().setTimeOfDay(t);
+}
+EMSCRIPTEN_KEEPALIVE float eruption_get_time_of_day() {
+    return eruption::s_webEngine ? eruption::s_webEngine->dayNightCycle().timeOfDay() : 0.0f;
+}
+// Horas de jogo por segundo real (0 = parado). O ciclo anda dentro do proprio DayNightCycle::update.
+EMSCRIPTEN_KEEPALIVE void eruption_set_day_cycle(float hoursPerSecond) {
+    if (!eruption::s_webEngine) return;
+    eruption::DayNightCycle& c = eruption::s_webEngine->dayNightCycle();
+    c.setPaused(hoursPerSecond == 0.0f);
+    c.setTimeScale(hoursPerSecond * c.dayDuration() / 24.0f);
+}
+}
 
 #endif

@@ -178,6 +178,11 @@ public:
     }
     VkSampler shadowSampler() const { return m_shadowSampler; }
     const Mat4* getCascadeMatrices() const { return m_cascadeLookupMatrices; }
+    // Para o desenho WebGL2 (EngineWebScene), que refaz o atlas com GL: a matriz com que cada cascata e'
+    // desenhada, o texel e a profundidade real da cascata ativa.
+    const Mat4* getCascadeRenderMatrices() const { return m_cascadeRenderMatrices; }
+    float activeTexelWorld() const { return m_cache.texel; }
+    float activeDepthRange() const { return m_cache.depthRange; }
     const Mat4* getNextCascadeMatrices() const { return m_nextCascadeLookupMatrices; }
     const Vec4& getCascadeSplits() const { return m_cascadeSplitsVec; }
     float getBlendFactor() const { return m_blendFactor; }

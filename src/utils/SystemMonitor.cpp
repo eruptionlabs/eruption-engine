@@ -350,6 +350,7 @@ const SystemMonitor::MemoryDetail& SystemMonitor::memoryDetail() {
     return empty;
 }
 float SystemMonitor::gpuCorePercent() { return 0.0f; }
+float SystemMonitor::gpuMemBusyPercent() { return 0.0f; }
 float SystemMonitor::gpuVramPercent() { return 0.0f; }
 size_t SystemMonitor::gpuVramBytes() { return 0; }
 size_t SystemMonitor::gpuVramTotalBytes() { return 0; }

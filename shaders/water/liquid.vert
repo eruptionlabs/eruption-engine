@@ -11,12 +11,13 @@ layout(location = 4) out vec3 vBitangent;
 // Nivel desta agua (o aberto e cada mapa vizinho tem o seu), para a espessura.
 layout(location = 5) flat out float vLevel;
 
+// Igual ao do liquid.frag, campo a campo: no WebGL2 os dois estagios ligam o mesmo bloco pelo nome.
 layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 baseColorDeep;
     vec4 baseColorShallow;
     vec4 waterParams;         // x=transparency, y=refractionStrength, z=reflectivity, w=roughness
-    vec4 normalParams;        // x=scale, y=speed, z=strength, w=lamina da praia (1/0)
-    vec4 waveParams;          // x=amplitude, y=frequency, z=speed, w=ajuste do nivel (menu)
+    vec4 normalParams;        // x=scale, y=waveSpeed, z=strength, w=lamina da praia (1/0)
+    vec4 waveParams;          // x=amplitude, y=frequency, z=speed, w=unused
     vec4 foamParams;          // x=edgeDepth, y=contactStrength, z=enable, w=unused
     vec4 skyTop;
     vec4 skyHorizon;
@@ -25,22 +26,27 @@ layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 ambientColor;
     vec4 cameraPos;
     vec4 waterLevelAndPlanes; // x=waterLevel, y=nearPlane, z=farPlane, w=time
-    vec4 screenSize;
-    vec4 waveDirAmp[3];       // xy=dir, z=amp, w=freq
-    vec4 waveSpeedSteep[3];   // x=speed, y=steepness, zw=unused
+    vec4 screenSize;          // x=viewportW, y=viewportH, z=cameraPitch, w=unused
+    vec4 waveDirAmp[3];
+    vec4 waveSpeedSteep[3];   // x=speed, y=steepness; zw = nuvens do ceu: [0] cobertura, escala; [1] velocidade, maciez; [2] tempo do ceu
     ivec4 textureSlots;       // x=screenTex, y=depthTex, z=foamMask, w=waterTex
-    ivec4 skyboxSlot;         // x=skyboxTex, yzw=unused
+    ivec4 skyboxSlot;         // x=skyboxTex, y=forca das nuvens no reflexo (milesimos), z=nuvens do ceu ligadas, w=unused
     mat4 invViewProj;
     vec4 extraParams;         // x=absorptionCoeff, y=maxPxScale, z=enableCaustics, w=unused
     vec4 foamSurfaceParams;   // x=foamScale, y=foamSpeed, z=foamRoughness, w=enableSurfaceFoam
-    vec4 normalAdvanced;      // x=normalOctaves, yzw=unused
-    vec4 causticsParams;      // x=intensity, y=depthAttenuation, zw=unused
+    vec4 normalAdvanced;      // x=normalOctaves, y=lavaEmissive, zw=unused
+    vec4 causticsParams;      // x=intensity, y=depthAttenuation, z=lava flowSpeed, w=lava crustWiden
     vec4 weatherParams;       // x=sunOcclusion, y=moonOcclusion, z=stormDarken, w=rainIntensity
     vec4 lavaCrust;           // xyz=tinta da crosta, w=deslocamento da abertura (crustCoverage)
+    vec4 styleParams;         // x=diorama (0/1), y=forca do reflexo, z=brilhos, w=aneis de chuva
+    vec4 styleParams2;        // x=espuma de margem, y=nivel do SSPR, z=distorcao do reflexo, w=clareza
+    vec4 styleDeep;           // xyz=cor funda, w=inclinacao das ondas
+    ivec4 styleSlots;         // x=slot do reflexo planar (-1 = sem), y=slot do reflexo espelhado (-1 = sem)
 } ubo;
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
+    ivec4 debugMask;   // x = bits de A/B do menu, y = diagnostico de cobertura
 } pc;
 
 vec3 gerstnerWave(vec2 pos, vec2 dir, float amp, float freq, float speed, float steepness, float t) {

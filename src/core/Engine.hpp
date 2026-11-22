@@ -1387,6 +1387,7 @@ private:
     // GPU sem bindless: libera as imagens de origem das texturas de modelo que o
     // array de camadas ja' copiou (Textures.cpp). Contadores na telemetria.
     void releaseCopiedTextureSources();
+    WaterRenderer::WaterSettings waterDrawSettings() const;
     uint32_t m_uploadGuardFlushes = 0; // envios adiantados por setBeforeCopies (ver Engine::init)
     uint32_t m_texSourcesReleased = 0;
     double m_texSourcesReleasedMb = 0.0;
@@ -1428,6 +1429,9 @@ private:
                        bool skyInHdr);
     void uploadWebLights(unsigned program, const Vec3& eye);
     void updateWebSkyProbe(struct WebSceneGl& s);
+    void bakeWebProbes(struct WebSceneGl& s);
+    void drawWebWater(struct WebSceneGl& s, const Mat4& view, int width, int height);
+    bool drawWebShadows(struct WebSceneGl& s, const struct LightingEnvironment& env, const int (&viewport)[4], unsigned hdrFbo);
     struct WebSceneGl* m_webScene = nullptr;       // estado GL da cena (vive com o motor estatico)
     bool m_webReady = false; // Module.onReady() ja foi chamado (1o quadro desenhado)
 #endif

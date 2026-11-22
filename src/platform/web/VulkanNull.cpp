@@ -145,6 +145,9 @@ bool ensureTexture(Image& img) {
     glTexParameteri(img.target, GL_TEXTURE_MAG_FILTER, g.filterable ? GL_LINEAR : GL_NEAREST);
     glTexParameteri(img.target, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(img.target, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    // Anisotropia 16x como o sampler do desktop (maxSamplerAnisotropy 16): sem ela o chao visto
+    // de lado (camera de jogo) borra. GL_TEXTURE_MAX_ANISOTROPY_EXT = 0x84FE.
+    if (mip && g.filterable) glTexParameterf(img.target, 0x84FE, 16.0f);
     return true;
 }
 

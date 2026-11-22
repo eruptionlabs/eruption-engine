@@ -441,7 +441,13 @@ vec3 dioramaWaves(vec2 p, float t, float footprint, float tTrem) {
         float ph = dot(d, p) * k - omega * tTrem + fi * 1.7;
         float dh = exp(sin(ph) - 1.0) * cos(ph);
         float s = slope * amp;
+#ifdef ERUPTION_SLOT_WEB
+        // Navegador: sem TAA. Uma onda so' entra com >= ~9 px por ciclo (o desktop aceita 4 px, e o TAA
+        // do desktop apaga o resto); o que some vira rugosidade (lost), como no desktop.
+        float keep = smoothstep(3.5, 9.0, 6.2831853 / (k * footprint));
+#else
         float keep = smoothstep(1.5, 4.0, 6.2831853 / (k * footprint));
+#endif
         g += d * (dh * s * keep);
         lost += 0.25 * s * s * (1.0 - keep);
         k *= 1.42;
@@ -493,6 +499,37 @@ vec4 rainRipples(vec2 p, float t, float footprint, float intensity) {
 // ponto tem no minimo ~1,2 pixel (com a energia dividida), para nao virar
 // chuvisco de 1 pixel que pisca entre quadros.
 float sunSparkle(vec2 p, vec3 n, vec3 V, vec3 L, float t, float footprint) {
+#ifdef ERUPTION_SLOT_WEB
+    // Navegador: o brilho e' do tempo, nao da camera. A faceta do desktop so' acende quando o espelho exato do sol
+    // cai no pixel (um cone de ~0,1 rad): sem TAA isso vira ponto que liga e desliga a cada passo da camera. Aqui
+    // cada celula do MUNDO pisca no proprio ritmo (a fase vem do tempo) e a camera so' escolhe, de forma suave e
+    // larga, em que parte da agua o rastro do sol aparece (normal suavizada, sem a onda fina).
+    vec3 Rs = reflect(-V, normalize(mix(vec3(0.0, 1.0, 0.0), n, 0.3)));
+    float path = smoothstep(0.55, 0.95, dot(Rs, L));
+    float sum = 0.0;
+    // Duas grades giradas uma contra a outra e com posicao sorteada na celula: uma so' dava um tabuleiro de pontos.
+    for (int layer = 0; layer < 2; ++layer) {
+        float cellW = (layer == 0 ? 0.55 : 0.43) / max(ubo.normalParams.x, 1e-3);
+        vec2 pl = layer == 0 ? p : vec2(0.8 * p.x - 0.6 * p.y, 0.6 * p.x + 0.8 * p.y) + 17.3;
+        vec2 qW = pl / cellW;
+        vec2 idW = floor(qW), fW = fract(qW);
+        vec3 hW = dioHash32(idW + float(layer) * 31.7);
+        float ttW = t * (0.35 + 0.5 * hW.z) + hW.x * 10.0;
+        vec3 h2W = dioHash32(idW + floor(ttW) * 7.31 + float(layer) * 31.7);
+        float on = step(0.55, h2W.y);
+        float blinkW = sin(fract(ttW) * 3.14159265);
+        float rW = cellW * 0.05;
+        float rD = max(rW, footprint * 1.6);
+        vec2 c = 0.2 + 0.6 * h2W.zx;
+        float spotW = 1.0 - smoothstep(rD * 0.4, rD, length((fW - c) * cellW));
+        // LOD: com a celula do tamanho do pixel (ou menor) cada pixel cai numa celula sorteada e a grade vira ruido de
+        // pixel que muda a cada passo de giro da camera. Ao longe o brilho tende para a media (energia da faceta
+        // espalhada: ~0,0004 por grade), de forma continua com a distancia.
+        float lodS = smoothstep(2.0, 6.0, cellW / footprint);
+        sum += mix(4.4e-4, on * blinkW * blinkW * spotW * (rW * rW) / (rD * rD), lodS);
+    }
+    return sum * path;
+#endif
     float cell = 0.55 / max(ubo.normalParams.x, 1e-3);
     vec2 q = p / cell;
     vec2 id = floor(q), f = fract(q);
@@ -505,7 +542,11 @@ float sunSparkle(vec2 p, vec3 n, vec3 V, vec3 L, float t, float footprint) {
     float facet = smoothstep(0.9950, 0.9992, a);
     float blink = sin(fract(tt) * 3.14159265);
     float rWorld = cell * 0.07;
+#ifdef ERUPTION_SLOT_WEB
+    float rDraw = max(rWorld, footprint * 1.6); // sem TAA: ponto de ~3 px, nao de 1 px que pisca
+#else
     float rDraw = max(rWorld, footprint * 0.6);
+#endif
     float spot = 1.0 - smoothstep(rDraw * 0.4, rDraw, length((f - (0.25 + 0.5 * h2.zx)) * cell));
     return facet * blink * blink * spot * (rWorld * rWorld) / (rDraw * rDraw);
 }
@@ -585,6 +626,15 @@ vec3 shadeDiorama() {
     // Tamanho do pixel no plano (o maior eixo: conservador no rasante).
     vec2 dpx = dFdx(vWorldPos.xz), dpy = dFdy(vWorldPos.xz);
     float footprint = max(max(length(dpx), length(dpy)), 1e-4);
+#ifdef ERUPTION_SLOT_WEB
+    // Navegador: o mesmo tamanho de pixel no plano, mas analitico (distancia x angulo do pixel / inclinacao do
+    // raio) e nao pela derivada de tela. A derivada e' por bloco de 2x2 pixels e salta de um bloco para o outro;
+    // como ela decide quais ondas entram (keep), a agua tremia a cada movimento da camera.
+    {
+        float pxAng = 2.0 / (length(vec3(pc.viewProj[0][1], pc.viewProj[1][1], pc.viewProj[2][1])) * max(viewport.y, 1.0));
+        footprint = max(viewDist * pxAng / max(V.y, 0.12), 1e-4);
+    }
+#endif
 
     // Profundidade vertical sob este pixel (espuma, calmaria, borda).
     float sceneDepth = slotTextureLod(depthTexSlot, suv, 0.0).r;
@@ -716,6 +766,9 @@ vec3 shadeDiorama() {
     // de verdade) vira micro-rugosidade: a onda ja' espalha o sol.
     float rough = clamp(ubo.waterParams.w, 0.02, 1.0);
     float roughEff = clamp(sqrt(rough * rough * 0.12 + w.z * 2.0 + rain * 0.02), 0.02, 1.0);
+#ifdef ERUPTION_SLOT_WEB
+    roughEff = max(roughEff, 0.16 + 0.25 * clamp(footprint, 0.0, 1.0)); // lobo do sol largo: sem fio de brilho que cintila
+#endif
     vec3 R = reflect(-V, N);
     vec3 refl = skyReflection(R, rough, storm, rain, ubo.weatherParams.y, ubo.skyboxSlot.x);
     vec3 objCol = vec3(0.0);
@@ -724,6 +777,12 @@ vec3 shadeDiorama() {
         // A onda desloca o ponto da superficie de onde o reflexo e' lido;
         // proporcional a' distancia, o desvio na tela nao depende do zoom.
         float D = ubo.styleParams2.z * 0.05 * viewDist;
+#ifdef ERUPTION_SLOT_WEB
+        // Navegador, longe: o desvio em pixels e' fixo (D ~ distancia) e a onda larga o espalha por dezenas de pixels,
+        // e a imagem espelhada tem furos que o ceu preenche: manchas azuis que mudam a cada giro. Cai a 35% ao longe.
+        float longeW = smoothstep(500.0, 1200.0, viewDist);
+        D *= 1.0 - 0.65 * longeW;
+#endif
         vec4 cp = pc.viewProj * vec4(vWorldPos + vec3(N.x, 0.0, N.z) * D, 1.0);
         vec2 puv = cp.xy / cp.w * 0.5 + 0.5;
         vec2 px = 1.0 / viewport;
@@ -732,7 +791,12 @@ vec3 shadeDiorama() {
         vec4 acc = vec4(0.0);
         const vec2 taps[5] = vec2[](vec2(0.0), vec2(0.0, 1.5), vec2(0.0, -1.5), vec2(1.5, 0.0), vec2(-1.5, 0.0));
         for (int i = 0; i < 5; ++i) {
+#ifdef ERUPTION_SLOT_WEB
+            // Longe os furos da imagem espelhada passam de 1,5 px: a cruz alarga junto (3x a 1200 u).
+            vec4 s = slotTextureLod(ubo.styleSlots.x, clamp(puv + taps[i] * px * (1.0 + 2.0 * longeW), vec2(0.0), vec2(1.0)), 0.0);
+#else
             vec4 s = slotTextureLod(ubo.styleSlots.x, clamp(puv + taps[i] * px, vec2(0.0), vec2(1.0)), 0.0);
+#endif
             acc += vec4(s.rgb * s.a, s.a);
         }
         if (acc.a > 1e-3) objCol = acc.rgb / acc.a;

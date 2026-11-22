@@ -24,7 +24,40 @@
 #ifndef ERUPTION_SLOT_TEXTURES_GLSL
 #define ERUPTION_SLOT_TEXTURES_GLSL
 
-#ifndef ERUPTION_NO_BINDLESS
+#if defined(ERUPTION_SLOT_WEB)
+
+// Navegador (WebGL2, convertido pelo spirv-cross no build web): sem array de
+// texturas nem SSBO. O desenho liga ate' 8 texturas e o bloco diz o slot de
+// cada unidade; um slot sem unidade le' zero (como uma espuma vazia).
+layout(set = 0, binding = 0) uniform sampler2D u_web0;
+layout(set = 0, binding = 1) uniform sampler2D u_web1;
+layout(set = 0, binding = 2) uniform sampler2D u_web2;
+layout(set = 0, binding = 3) uniform sampler2D u_web3;
+layout(set = 0, binding = 4) uniform sampler2D u_web4;
+layout(set = 0, binding = 5) uniform sampler2D u_web5;
+layout(set = 0, binding = 6) uniform sampler2D u_web6;
+layout(set = 0, binding = 7) uniform sampler2D u_web7;
+layout(set = 0, binding = 8) uniform WebSlotBlock { uvec4 a; uvec4 b; } u_webSlots;
+#define ERUPTION_WEB_PICK(F, Z) \
+    if (s == u_webSlots.a.x) return F(u_web0); if (s == u_webSlots.a.y) return F(u_web1); \
+    if (s == u_webSlots.a.z) return F(u_web2); if (s == u_webSlots.a.w) return F(u_web3); \
+    if (s == u_webSlots.b.x) return F(u_web4); if (s == u_webSlots.b.y) return F(u_web5); \
+    if (s == u_webSlots.b.z) return F(u_web6); if (s == u_webSlots.b.w) return F(u_web7); \
+    return Z;
+#ifndef ERUPTION_SLOT_NO_FRAGMENT_OPS
+#define ERUPTION_WEB_TEX(t) texture(t, uv)
+#define ERUPTION_WEB_BIAS(t) texture(t, uv, bias)
+vec4 slotTexture(uint s, vec2 uv) { ERUPTION_WEB_PICK(ERUPTION_WEB_TEX, vec4(0.0)) }
+vec4 slotTextureBias(uint s, vec2 uv, float bias) { ERUPTION_WEB_PICK(ERUPTION_WEB_BIAS, vec4(0.0)) }
+#endif
+#define ERUPTION_WEB_LOD(t) textureLod(t, uv, lod)
+#define ERUPTION_WEB_GRAD(t) textureGrad(t, uv, dx, dy)
+#define ERUPTION_WEB_SIZE(t) textureSize(t, lod)
+vec4 slotTextureLod(uint s, vec2 uv, float lod) { ERUPTION_WEB_PICK(ERUPTION_WEB_LOD, vec4(0.0)) }
+vec4 slotTextureGrad(uint s, vec2 uv, vec2 dx, vec2 dy) { ERUPTION_WEB_PICK(ERUPTION_WEB_GRAD, vec4(0.0)) }
+ivec2 slotTextureSize(uint s, int lod) { ERUPTION_WEB_PICK(ERUPTION_WEB_SIZE, ivec2(1)) }
+
+#elif !defined(ERUPTION_NO_BINDLESS)
 
 layout(set = 0, binding = 0) uniform sampler2D u_textures[ERUPTION_TEX_SLOTS];
 #define slotTexture(s, uv) texture(u_textures[nonuniformEXT(s)], uv)

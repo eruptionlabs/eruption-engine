@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/time.h> // timeval (SO_RCVTIMEO); o Emscripten nao o traz por <sys/socket.h>
 #include <unistd.h>
 #endif
 

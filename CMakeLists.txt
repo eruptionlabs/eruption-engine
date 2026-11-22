@@ -1109,7 +1109,7 @@ if(EMSCRIPTEN)
     # eruption_ma_unlocked (src/audio/MiniaudioImpl.cpp).
     target_link_options(eruption-engine PRIVATE -sUSE_GLFW=3 -sUSE_ZLIB=1
         -sMODULARIZE=1 -sEXPORT_NAME=createEruption -sEXPORTED_RUNTIME_METHODS=FS,ENV,HEAPF32
-        -sEXPORTED_FUNCTIONS=_main,_eruption_ma_unlocked
+        -sEXPORTED_FUNCTIONS=_main,_eruption_ma_unlocked,_eruption_set_time_of_day,_eruption_get_time_of_day,_eruption_set_day_cycle
         -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB -sMAX_WEBGL_VERSION=2 -sMIN_WEBGL_VERSION=2
         -sENVIRONMENT=web -sFORCE_FILESYSTEM=1
         # Pilha do desktop (8 MB): o motor tem buffers grandes na pilha; os
@@ -1131,6 +1131,11 @@ if(EMSCRIPTEN)
     # o navegador roda o texto real do shader, nao uma copia feita a mao.
     find_program(ERUPTION_SPIRV_CROSS spirv-cross HINTS $ENV{HOME}/spirv-cross/build REQUIRED)
     set(ERUPTION_WEB_GLES skybox/skybox.frag postprocess/fullscreen.vert)
+    # Shaders que leem textura por slot entram numa variante propria
+    # (-DERUPTION_SLOT_WEB, common/slot_textures.glsl): 8 texturas ligadas e um
+    # bloco com o slot de cada uma, no lugar do array e da tabela (SSBO).
+    set(ERUPTION_WEB_SLOT_GLES water/liquid.frag water/liquid.vert)
+    set(ERUPTION_WEB_SPV_DIR ${CMAKE_BINARY_DIR}/web_gen/spv)
     set(ERUPTION_WEB_GLES_DIR ${CMAKE_BINARY_DIR}/web_gen/gles)
     set(ERUPTION_WEB_GLES_HPP ${CMAKE_BINARY_DIR}/web_gen/WebGles.hpp)
     set(_gles_args "")
@@ -1145,9 +1150,29 @@ if(EMSCRIPTEN)
         list(APPEND _gles_deps ${_spv})
         list(APPEND _gles_args "${_nome}=${ERUPTION_WEB_GLES_DIR}/${sh}.gles")
     endforeach()
+    foreach(sh ${ERUPTION_WEB_SLOT_GLES})
+        string(REGEX REPLACE "[/.]" "_" _nome ${sh})
+        set(_spv ${ERUPTION_WEB_SPV_DIR}/${sh}.spv)
+        get_filename_component(_dir ${_spv} DIRECTORY)
+        file(MAKE_DIRECTORY ${_dir})
+        if(GLSLC_EXECUTABLE)
+            set(_web_cmd ${GLSLC_EXECUTABLE} --target-env=vulkan1.1 -O)
+        else()
+            set(_web_cmd ${GLSLANG_VALIDATOR} -V --target-env vulkan1.1)
+        endif()
+        add_custom_command(OUTPUT ${_spv}
+            COMMAND ${_web_cmd} -I${CMAKE_SOURCE_DIR}/shaders -DERUPTION_SLOT_WEB -DnonuniformEXT=
+                    ${CMAKE_SOURCE_DIR}/shaders/${sh} -o ${_spv}
+            DEPENDS ${CMAKE_SOURCE_DIR}/shaders/${sh} ${SHADER_INCLUDES}
+            COMMENT "Compiling shader (web): ${sh}")
+        list(APPEND _gles_deps ${_spv})
+        list(APPEND _gles_args "${_nome}=${ERUPTION_WEB_GLES_DIR}/${sh}.gles")
+    endforeach()
     add_custom_command(OUTPUT ${ERUPTION_WEB_GLES_HPP}
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/web/shaders_gles.py
                 ${ERUPTION_SPIRV_CROSS} ${CMAKE_SOURCE_DIR}/shaders ${ERUPTION_WEB_GLES_DIR}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/web/shaders_gles.py
+                ${ERUPTION_SPIRV_CROSS} ${ERUPTION_WEB_SPV_DIR} ${ERUPTION_WEB_GLES_DIR}
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/web/embed_gles.py
                 ${ERUPTION_WEB_GLES_HPP} ${_gles_args}
         DEPENDS ${_gles_deps} ${CMAKE_SOURCE_DIR}/tools/web/shaders_gles.py ${CMAKE_SOURCE_DIR}/tools/web/embed_gles.py

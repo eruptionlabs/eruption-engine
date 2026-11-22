@@ -1457,91 +1457,7 @@ void Engine::render() {
     m_vulkan.writeTimestamp(cmd, 10, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     bw::setPass("Water"); // medidor de banda: mesmo nome do tempo de GPU
     if (m_renderEffects[7]->isEnabled()) {
-        WaterRenderer::WaterSettings adjustedSettings = m_waterMenu.config;
-        adjustedSettings.waterLevel = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
-        adjustedSettings.levelOffset = m_waterMenu.config.waterLevel;
-        // Com a lamina subindo a areia a espuma de contato sai: a agua continua
-        // pelo chao em vez de parar numa linha branca.
-        if (adjustedSettings.shoreSwash) adjustedSettings.enableFoam = false;
-        // O plano d'agua do mapa e' SEMPRE agua. Sem esta linha ele herdava
-        // config.liquidKind, que WaterDebugMenu::applySelectedLiquid escreve
-        // a partir do liquido SELECIONADO na lista - e a selecao comeca em 0,
-        // o primeiro liquido do .env. Num mapa cuja lista comeca por lava
-        // (parana_field: o lago da cratera vem primeiro), o plano d'agua do
-        // mapa inteiro passava a ser sombreado como LAVA, sem ninguem ter
-        // clicado em nada. E' a mesma classe de bug que applySelectedLiquid
-        // ja' corrigiu pro waterLevel ("selecionar lava sujava o nivel de
-        // agua global em silencio") - so' que num campo vizinho.
-        //
-        // A superficie de lava NAO depende disto: ela e' desenhada logo
-        // abaixo, num segundo draw, com lavaSettings.liquidKind = 1 proprio.
-        adjustedSettings.liquidKind = 0;
-
-        // Weather affects water surface: agitation, opacity and reflection
-        if (m_weatherAffectsWater) {
-            const auto& w = m_weatherSystem.current();
-            float rain = w.rainIntensity;
-            float storm = w.stormTint;
-            float fog = w.fogDensity;
-            float wind = glm::abs(w.rainWind);
-
-            // Agitation
-            adjustedSettings.normalScale    *= 1.0f + rain * 0.5f + storm * 0.3f;
-            adjustedSettings.normalStrength *= 1.0f + rain * 0.4f + storm * 0.3f;
-            adjustedSettings.waveAmplitude  *= 1.0f + rain * 0.6f + storm * 0.8f;
-            adjustedSettings.waveFrequency  *= 1.0f + rain * 0.2f + storm * 0.2f;
-            adjustedSettings.waveSpeed      *= 1.0f + rain * 0.8f + storm * 1.0f + wind * 0.5f;
-
-            // Roughness increases under rain/storm so highlights spread and dim
-            adjustedSettings.roughness = glm::min(1.0f, adjustedSettings.roughness + rain * 0.25f + storm * 0.35f);
-
-            // Reflectivity drops under rain and storm (less mirror-like, more diffuse)
-            adjustedSettings.reflectivity = glm::max(0.1f, adjustedSettings.reflectivity * (1.0f - rain * 0.3f - storm * 0.5f));
-
-            // Fog makes water more opaque and merges with the atmosphere
-            adjustedSettings.transparency = glm::max(0.15f, adjustedSettings.transparency * (1.0f - fog * 0.5f));
-
-            // Tint water slightly darker under storm so it doesn't look unnaturally bright
-            float darken = 1.0f - storm * 0.15f;
-            adjustedSettings.baseColorDeep *= darken;
-            adjustedSettings.baseColorShallow *= darken;
-        }
-
-        // CULLING DA AGUA POR FRUSTUM DA CAMERA (feito AQUI, no chamador:
-        // WaterRenderer e' de outro agente). O passe de agua nao tinha culling
-        // nenhum - os unicos early-outs sao "efeito desligado" e "malha
-        // vazia". Num mapa onde a agua existe mas esta' fora da vista
-        // (cidade-A), isso custava 0.134 ms de GPU e 2.045 ms de CPU POR
-        // FRAME sem desenhar um pixel visivel - mais que o passe de sombra
-        // inteiro. Reportado pelo autor 2026-09-02.
-        //
-        // Seguro para SOMBRA: a agua nao entra no shadow map (renderCascades
-        // desenha terreno, modelos e sprites - nao a agua), entao cortar pelo
-        // frustum da CAMERA aqui nao pode apagar sombra de nada. A regra de
-        // "culling de sombra e' por frustum da LUZ" continua valendo e
-        // intocada no ShadowRenderer.
-        // AGUA CLASSICA (modo classico com quadros carregados): textura
-        // animada no nivel do mapa, onda senoidal do plano d'agua (altura,
-        // velocidade e passo do original), sem espuma nem lamina na praia.
-        { static int ult = -2; int d = (m_classic.on ? 1 : 0) | (m_water.hasTexturedFrames() ? 2 : 0) | (m_currentMap && !m_currentMap->waterPlanes.empty() ? 4 : 0); if (d != ult) { ult = d; ERUPTION_LOG_WARN("DIAGCW render %d", d); } } // TEMP
-        if (m_classic.on && m_water.hasTexturedFrames() && m_currentMap && !m_currentMap->waterPlanes.empty()) {
-            const TerrainWaterPlane& wp = m_currentMap->waterPlanes[0];
-            adjustedSettings.liquidKind = 4;
-            adjustedSettings.enableFoam = false;
-            adjustedSettings.shoreSwash = false;
-            // Regras do original: altura = sin(rad(fase + 0,5 * passo * (x + z))) * altura, com x e z
-            // em celulas (5 unidades) e a fase andando `waveSpeed` graus por quadro a 60 Hz; o
-            // quadro da textura troca a cada `textureCycling` quadros a 60 Hz; um quadro de 128 px
-            // cobre uma superficie do terreno (10 unidades), os de 256 px (tipos 4 e 6) cobrem
-            // quatro (20) e esses tipos sao opacos, os demais 0,6.
-            const bool grande = wp.type == 4 || wp.type == 6;
-            adjustedSettings.waveAmplitude = wp.waveHeight;
-            adjustedSettings.waveFrequency = glm::radians(0.5f * wp.wavePitch) / 5.0f;
-            adjustedSettings.waveSpeed = glm::radians(60.0f * wp.waveSpeed);
-            adjustedSettings.texFps = 60.0f / static_cast<float>(std::max<uint32_t>(wp.textureCycling, 1u));
-            adjustedSettings.texAlpha = grande ? 1.0f : m_classicWater.alpha;
-            adjustedSettings.texTile = m_classicWater.tile * (grande ? 2.0f : 1.0f);
-        }
+        WaterRenderer::WaterSettings adjustedSettings = waterDrawSettings();
         if (waterInView)
         m_water.render(cmd, m_camera.viewProjJittered(), m_camera.position(),
                        m_dayNightCycle, m_timer.elapsed(),
@@ -3863,6 +3779,98 @@ void Engine::updateVision(VkCommandBuffer cmd) {
     m_vision.rasterShade(Vec2(m_minimapFrame.x - half, m_minimapFrame.y - half), 2.0f * half, kMinimapTexels,
                          m_minimapKeep, m_visionShade);
     m_visionMinimap.upload(cmd, m_visionShade.data(), kMinimapTexels);
+}
+
+// Parametros da agua do mapa para o desenho deste quadro: os do menu, o clima e
+// o modo classico. Os dois desenhos (Vulkan aqui, WebGL2 em EngineWebScene)
+// usam esta mesma conta.
+WaterRenderer::WaterSettings Engine::waterDrawSettings() const {
+    WaterRenderer::WaterSettings adjustedSettings = m_waterMenu.config;
+    adjustedSettings.waterLevel = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
+    adjustedSettings.levelOffset = m_waterMenu.config.waterLevel;
+    // Com a lamina subindo a areia a espuma de contato sai: a agua continua
+    // pelo chao em vez de parar numa linha branca.
+    if (adjustedSettings.shoreSwash) adjustedSettings.enableFoam = false;
+    // O plano d'agua do mapa e' SEMPRE agua. Sem esta linha ele herdava
+    // config.liquidKind, que WaterDebugMenu::applySelectedLiquid escreve
+    // a partir do liquido SELECIONADO na lista - e a selecao comeca em 0,
+    // o primeiro liquido do .env. Num mapa cuja lista comeca por lava
+    // (parana_field: o lago da cratera vem primeiro), o plano d'agua do
+    // mapa inteiro passava a ser sombreado como LAVA, sem ninguem ter
+    // clicado em nada. E' a mesma classe de bug que applySelectedLiquid
+    // ja' corrigiu pro waterLevel ("selecionar lava sujava o nivel de
+    // agua global em silencio") - so' que num campo vizinho.
+    //
+    // A superficie de lava NAO depende disto: ela e' desenhada logo
+    // abaixo, num segundo draw, com lavaSettings.liquidKind = 1 proprio.
+    adjustedSettings.liquidKind = 0;
+
+    // Weather affects water surface: agitation, opacity and reflection
+    if (m_weatherAffectsWater) {
+        const auto& w = m_weatherSystem.current();
+        float rain = w.rainIntensity;
+        float storm = w.stormTint;
+        float fog = w.fogDensity;
+        float wind = glm::abs(w.rainWind);
+
+        // Agitation
+        adjustedSettings.normalScale    *= 1.0f + rain * 0.5f + storm * 0.3f;
+        adjustedSettings.normalStrength *= 1.0f + rain * 0.4f + storm * 0.3f;
+        adjustedSettings.waveAmplitude  *= 1.0f + rain * 0.6f + storm * 0.8f;
+        adjustedSettings.waveFrequency  *= 1.0f + rain * 0.2f + storm * 0.2f;
+        adjustedSettings.waveSpeed      *= 1.0f + rain * 0.8f + storm * 1.0f + wind * 0.5f;
+
+        // Roughness increases under rain/storm so highlights spread and dim
+        adjustedSettings.roughness = glm::min(1.0f, adjustedSettings.roughness + rain * 0.25f + storm * 0.35f);
+
+        // Reflectivity drops under rain and storm (less mirror-like, more diffuse)
+        adjustedSettings.reflectivity = glm::max(0.1f, adjustedSettings.reflectivity * (1.0f - rain * 0.3f - storm * 0.5f));
+
+        // Fog makes water more opaque and merges with the atmosphere
+        adjustedSettings.transparency = glm::max(0.15f, adjustedSettings.transparency * (1.0f - fog * 0.5f));
+
+        // Tint water slightly darker under storm so it doesn't look unnaturally bright
+        float darken = 1.0f - storm * 0.15f;
+        adjustedSettings.baseColorDeep *= darken;
+        adjustedSettings.baseColorShallow *= darken;
+    }
+
+    // CULLING DA AGUA POR FRUSTUM DA CAMERA (feito AQUI, no chamador:
+    // WaterRenderer e' de outro agente). O passe de agua nao tinha culling
+    // nenhum - os unicos early-outs sao "efeito desligado" e "malha
+    // vazia". Num mapa onde a agua existe mas esta' fora da vista
+    // (cidade-A), isso custava 0.134 ms de GPU e 2.045 ms de CPU POR
+    // FRAME sem desenhar um pixel visivel - mais que o passe de sombra
+    // inteiro. Reportado pelo autor 2026-09-02.
+    //
+    // Seguro para SOMBRA: a agua nao entra no shadow map (renderCascades
+    // desenha terreno, modelos e sprites - nao a agua), entao cortar pelo
+    // frustum da CAMERA aqui nao pode apagar sombra de nada. A regra de
+    // "culling de sombra e' por frustum da LUZ" continua valendo e
+    // intocada no ShadowRenderer.
+    // AGUA CLASSICA (modo classico com quadros carregados): textura
+    // animada no nivel do mapa, onda senoidal do plano d'agua (altura,
+    // velocidade e passo do original), sem espuma nem lamina na praia.
+    { static int ult = -2; int d = (m_classic.on ? 1 : 0) | (m_water.hasTexturedFrames() ? 2 : 0) | (m_currentMap && !m_currentMap->waterPlanes.empty() ? 4 : 0); if (d != ult) { ult = d; ERUPTION_LOG_WARN("DIAGCW render %d", d); } } // TEMP
+    if (m_classic.on && m_water.hasTexturedFrames() && m_currentMap && !m_currentMap->waterPlanes.empty()) {
+        const TerrainWaterPlane& wp = m_currentMap->waterPlanes[0];
+        adjustedSettings.liquidKind = 4;
+        adjustedSettings.enableFoam = false;
+        adjustedSettings.shoreSwash = false;
+        // Regras do original: altura = sin(rad(fase + 0,5 * passo * (x + z))) * altura, com x e z
+        // em celulas (5 unidades) e a fase andando `waveSpeed` graus por quadro a 60 Hz; o
+        // quadro da textura troca a cada `textureCycling` quadros a 60 Hz; um quadro de 128 px
+        // cobre uma superficie do terreno (10 unidades), os de 256 px (tipos 4 e 6) cobrem
+        // quatro (20) e esses tipos sao opacos, os demais 0,6.
+        const bool grande = wp.type == 4 || wp.type == 6;
+        adjustedSettings.waveAmplitude = wp.waveHeight;
+        adjustedSettings.waveFrequency = glm::radians(0.5f * wp.wavePitch) / 5.0f;
+        adjustedSettings.waveSpeed = glm::radians(60.0f * wp.waveSpeed);
+        adjustedSettings.texFps = 60.0f / static_cast<float>(std::max<uint32_t>(wp.textureCycling, 1u));
+        adjustedSettings.texAlpha = grande ? 1.0f : m_classicWater.alpha;
+        adjustedSettings.texTile = m_classicWater.tile * (grande ? 2.0f : 1.0f);
+    }
+    return adjustedSettings;
 }
 
 } // namespace eruption

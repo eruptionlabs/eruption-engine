@@ -1,5 +1,7 @@
 #include <cstdlib>
 #include "WaterRenderer.hpp"
+#include "utils/AssetVfs.hpp"
+#include "utils/ImageUtils.hpp"
 #include "core/Logger.hpp"
 #include "renderer/ShaderCompiler.hpp"
 
@@ -1095,6 +1097,54 @@ void WaterRenderer::updateUBO(uint32_t frameIndex, uint32_t uboSlot, const Water
                                float sunOcclusion, float moonOcclusion, float stormDarken,
                                float rainIntensity, float rainSplashIntensity) {
     WaterUBO ubo{};
+    fillUBO(ubo, frameIndex, settings, nearPlane, farPlane, cycle, time, cameraPos, cameraPitch, sunOcclusion,
+            moonOcclusion, stormDarken, rainIntensity, rainSplashIntensity);
+    std::memcpy(m_uboMappeds[uboSlot], &ubo, sizeof(ubo));
+}
+
+std::vector<uint8_t> WaterRenderer::webUBO(const WaterSettings& settings, float nearPlane, float farPlane,
+                                           const DayNightCycle& cycle, float time, const Vec3& cameraPos,
+                                           float cameraPitch, float sunOcclusion, float moonOcclusion,
+                                           float stormDarken, float rainIntensity, float rainSplashIntensity,
+                                           const Mat4& invViewProj, float width, float height,
+                                           int refractionSlot, int depthSlot, int skySlot, int mirrorSlot) {
+    const float w = m_viewportW, h = m_viewportH;
+    m_viewportW = width;
+    m_viewportH = height;
+    WaterUBO ubo{};
+    fillUBO(ubo, 0, settings, nearPlane, farPlane, cycle, time, cameraPos, cameraPitch, sunOcclusion,
+            moonOcclusion, stormDarken, rainIntensity, rainSplashIntensity);
+    m_viewportW = w;
+    m_viewportH = h;
+    // O navegador marca o caminho enxuto (shaderLite) por ser GLES, mas a agua
+    // dele e' o liquid.frag completo (LITE = false): o diorama segue o estilo,
+    // como no desktop.
+    const bool hd2d = m_style.hd2d && settings.liquidKind == 0;
+    ubo.styleParams.x = hd2d ? 1.0f : 0.0f;
+    if (hd2d) {
+        ubo.waveParams.x = 0.0f;
+        for (auto& wv : ubo.waveDirAmp) wv.z = 0.0f;
+    }
+    ubo.invViewProj = invViewProj;
+    ubo.textureSlots.x = refractionSlot;
+    ubo.textureSlots.y = depthSlot;
+    ubo.skyboxSlot.x = skySlot;
+    // Reflexo espelhado do navegador (a cena pela camera espelhada): entra pelo slot do reflexo planar, no nivel d'agua.
+    if (hd2d && mirrorSlot >= 0) {
+        ubo.styleSlots = IVec4(mirrorSlot, -1, 0, 0);
+        ubo.styleParams2.y = settings.waterLevel;
+    }
+    std::vector<uint8_t> bytes(sizeof(ubo));
+    std::memcpy(bytes.data(), &ubo, sizeof(ubo));
+    return bytes;
+}
+
+void WaterRenderer::fillUBO(WaterUBO& ubo, uint32_t frameIndex, const WaterSettings& settings,
+                            float nearPlane, float farPlane,
+                            const DayNightCycle& cycle, float time, const Vec3& cameraPos,
+                            float cameraPitch,
+                            float sunOcclusion, float moonOcclusion, float stormDarken,
+                            float rainIntensity, float rainSplashIntensity) {
     ubo.baseColorDeep    = Vec4(settings.baseColorDeep, 1.0f);
     ubo.baseColorShallow = Vec4(settings.baseColorShallow, 1.0f);
     ubo.waterParams      = Vec4(settings.transparency, settings.refractionStrength, settings.reflectivity, settings.roughness);
@@ -1179,7 +1229,6 @@ void WaterRenderer::updateUBO(uint32_t frameIndex, uint32_t uboSlot, const Water
         ubo.waveParams.x = 0.0f;
         for (auto& w : ubo.waveDirAmp) w.z = 0.0f;
     }
-    std::memcpy(m_uboMappeds[uboSlot], &ubo, sizeof(ubo));
 }
 
 // ============================================================================
@@ -1782,7 +1831,7 @@ bool WaterRenderer::setTexturedFrames(const std::vector<std::string>& paths) {
     clearTexturedFrames();
     for (const std::string& path : paths) {
         int w = 0, h = 0, channels = 0;
-        unsigned char* pixels = stbi_load(path.c_str(), &w, &h, &channels, 4);
+        unsigned char* pixels = ImageUtils::loadRawVfs(path, w, h, channels, 4);
         if (!pixels) {
             ERUPTION_LOG_WARN("Textured water: cannot open %s", path.c_str());
             clearTexturedFrames();
@@ -1807,7 +1856,7 @@ void WaterRenderer::loadWaterTextureFromFile(const char* path) {
     destroyWaterTextureResources();
 
     int w, h, channels;
-    unsigned char* pixels = stbi_load(path, &w, &h, &channels, 4);
+    unsigned char* pixels = ImageUtils::loadRawVfs(path, w, h, channels, 4);
     if (!pixels) {
         ERUPTION_LOG_WARN("Failed to load water texture: %s", path);
         return;
