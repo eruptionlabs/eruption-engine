@@ -732,8 +732,48 @@ bool typingText() {
     return ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantTextInput;
 }
 
+// "mouse_left" / "mouse_right" / "mouse_middle": -1 se nao for botao do mouse.
+int mouseButtonFromName(const char* n) {
+    const std::string s = n;
+    return s == "mouse_left" ? 0 : (s == "mouse_right" ? 1 : (s == "mouse_middle" ? 2 : -1));
+}
+// Botao do mouse para o jogo: um aperto que comecou num botao da interface
+// (CSS) e' da interface, nao do mundo.
+bool mouseForGame(int b, bool onlyPressed) {
+    const auto btn = static_cast<MouseButton>(b);
+    if (Input::pressOnCss()) return false;
+    return onlyPressed ? Input::isMousePressed(btn) : Input::isMouseDown(btn);
+}
+
+// Entrada de texto: text_begin liga (e abre o teclado do celular), text_end
+// desliga, text() devolve o UTF-8 digitado desde o quadro anterior (acento e
+// layout vem do sistema; so' caracteres imprimiveis). As teclas CONTINUAM
+// reportadas em input.down/pressed (o jogo decide ignorar as de acao com
+// text_active()); apagar e Enter ficam por conta de input.pressed.
+int input_text_begin(lua_State*) {
+    Input::textBegin();
+    return 0;
+}
+int input_text_end(lua_State*) {
+    Input::textEnd();
+    return 0;
+}
+int input_text_active(lua_State* L) {
+    lua_pushboolean(L, Input::textActive());
+    return 1;
+}
+int input_text(lua_State* L) {
+    const std::string& t = Input::text();
+    lua_pushlstring(L, t.data(), t.size());
+    return 1;
+}
+
 int input_down(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
+    if (const int mb = mouseButtonFromName(name); mb >= 0) {
+        lua_pushboolean(L, mouseForGame(mb, false));
+        return 1;
+    }
     const int b = padButtonFromName(name);
     if (b >= 0) {
         lua_pushboolean(L, padButton(b, false));
@@ -835,6 +875,10 @@ int input_touches(lua_State* L) {
 }
 int input_pressed(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
+    if (const int mb = mouseButtonFromName(name); mb >= 0) {
+        lua_pushboolean(L, mouseForGame(mb, true));
+        return 1;
+    }
     const int b = padButtonFromName(name);
     if (b >= 0) {
         lua_pushboolean(L, padButton(b, true));
@@ -3386,6 +3430,9 @@ declare fx: {
 
 
 declare input: {
+    -- Mouse buttons: "mouse_left", "mouse_right", "mouse_middle" (a press
+    -- that started on a UI button is the UI's, not reported here); pair with
+    -- input.mouse_position and world.screen_to_ground / characters.at_screen.
     -- Key names as in on.key, or a controller button (any connected
     -- controller, Xbox layout): "pad_a", "pad_b", "pad_x", "pad_y",
     -- "pad_lb", "pad_rb", "pad_back", "pad_start", "pad_guide", "pad_ls",

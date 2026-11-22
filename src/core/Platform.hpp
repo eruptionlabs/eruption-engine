@@ -127,6 +127,15 @@ bool shareFile(const std::string& path, const char* mimeType); // src/platform/a
 inline bool shareFile(const std::string&, const char*) { return false; }
 #endif
 
+// Teclado do sistema para a entrada de texto (input.text_begin/text_end).
+// So' o Android tem teclado na tela (IME); no desktop o teclado fisico ja'
+// entrega os caracteres pelo GLFW e no navegador tambem.
+#if defined(__ANDROID__)
+void setTextInput(bool on); // src/platform/android/AndroidMain.cpp
+#else
+inline void setTextInput(bool) {}
+#endif
+
 // Roda `fn` em outra thread e devolve o futuro (std::async). No navegador a v1
 // nao tem threads (pediria COOP/COEP do servidor): roda aqui e o futuro sai
 // pronto, entao quem consulta com wait_for(0) recebe `ready` na hora.

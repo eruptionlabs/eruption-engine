@@ -623,6 +623,9 @@ declare fx: {
 
 
 declare input: {
+    -- Mouse buttons: "mouse_left", "mouse_right", "mouse_middle" (a press
+    -- that started on a UI button is the UI's, not reported here); pair with
+    -- input.mouse_position and world.screen_to_ground / characters.at_screen.
     -- Key names as in on.key, or a controller button (any connected
     -- controller, Xbox layout): "pad_a", "pad_b", "pad_x", "pad_y",
     -- "pad_lb", "pad_rb", "pad_back", "pad_start", "pad_guide", "pad_ls",

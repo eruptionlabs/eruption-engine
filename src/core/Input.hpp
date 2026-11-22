@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <array>
+#include <string>
 #include <vector>
 #include <glm/glm.hpp>
 
@@ -99,11 +100,25 @@ public:
     static void injectCursor(float x, float y) { cursorPosCallback(s_window, x, y); }
     static void injectButton(int button, int action) { mouseButtonCallback(s_window, button, action, 0); }
     static void injectScroll(float dy) { scrollCallback(s_window, 0.0, dy); }
+    static void injectChar(unsigned int cp) { charCallback(s_window, cp); }
     // Clique sintetico (teste): cursor em (x, y) da janela e um aperto neste quadro.
     static void injectClick(float x, float y) {
         s_mousePos = glm::vec2(x, y);
         s_mouseClicked[0] = true;
     }
+
+    // ENTRADA DE TEXTO (input.text_begin/text_end/text): os caracteres digitados
+    // (UTF-8, acentos e layout vem do sistema) desde o quadro anterior. So'
+    // acumula com a entrada ligada; ligar abre o teclado do celular. As teclas
+    // continuam sendo reportadas normalmente (isKeyDown...): quem edita texto
+    // usa text() e as teclas de edicao (apagar, Enter) pelo input.pressed.
+    static void textBegin();
+    static void textEnd();
+    static bool textActive() { return s_textActive; }
+    static const std::string& text() { return s_textFrame; }
+    // Acrescenta um ponto de codigo ao texto pendente (so' com a entrada ligada;
+    // controles e invalidos sao descartados). Usado pelo callback de caractere.
+    static void pushTextChar(unsigned int cp);
 
     static bool isKeyDown(Key key);
     static bool isKeyPressed(Key key);
@@ -154,6 +169,8 @@ private:
     static std::vector<TouchPoint> s_touches;
     static bool s_pressOnCss;
     static glm::vec2 s_touchOrbit;
+    static bool s_textActive;
+    static std::string s_textPending, s_textFrame;
     static std::array<bool, 8> s_mouse;
     static std::array<bool, 8> s_mousePrev;
     // Apertou neste quadro, mesmo que ja' tenha soltado (toque curto do

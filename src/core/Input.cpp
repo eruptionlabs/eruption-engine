@@ -30,6 +30,8 @@ bool Input::s_touchScreen = false;
 bool Input::s_doubleTap = false;
 bool Input::s_pressOnCss = false;
 glm::vec2 Input::s_touchOrbit{0.0f};
+bool Input::s_textActive = false;
+std::string Input::s_textPending, Input::s_textFrame;
 std::array<bool, 8> Input::s_mouse{};
 std::array<bool, 8> Input::s_mousePrev{};
 std::array<bool, 8> Input::s_mouseClicked{};
@@ -94,6 +96,9 @@ void Input::update() {
     s_mousePosPrev = s_mousePos;
     s_scrollDelta = 0.0f;
     s_touchOrbit = glm::vec2(0.0f);
+    // O texto digitado desde o update anterior vale neste quadro.
+    s_textFrame.swap(s_textPending);
+    s_textPending.clear();
 
     for (int i = 0; i < 4; ++i) {
         if (glfwJoystickPresent(GLFW_JOYSTICK_1 + i)) {
@@ -367,6 +372,45 @@ void Input::scrollCallback(GLFWwindow* window, double xoff, double yoff) {
 
 void Input::charCallback(GLFWwindow* window, unsigned int c) {
     ImGui_ImplGlfw_CharCallback(window, c);
+    pushTextChar(c);
+}
+
+void Input::pushTextChar(unsigned int cp) {
+    if (!s_textActive) return;
+    // Controles (Enter/Tab/apagar chegam como tecla), DEL, substitutos e fora do Unicode.
+    if (cp < 32 || cp == 127 || (cp >= 0x80 && cp < 0xA0) || (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) return;
+    if (s_textPending.size() > 4096) return; // um quadro nao digita isso; protege de laco
+    if (cp < 0x80) {
+        s_textPending.push_back(static_cast<char>(cp));
+    } else if (cp < 0x800) {
+        s_textPending.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        s_textPending.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp < 0x10000) {
+        s_textPending.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        s_textPending.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        s_textPending.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+        s_textPending.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        s_textPending.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        s_textPending.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        s_textPending.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
+
+void Input::textBegin() {
+    if (s_textActive) return;
+    s_textActive = true;
+    s_textPending.clear();
+    s_textFrame.clear();
+    platform::setTextInput(true);
+}
+
+void Input::textEnd() {
+    if (!s_textActive) return;
+    s_textActive = false;
+    s_textPending.clear();
+    s_textFrame.clear();
+    platform::setTextInput(false);
 }
 
 } // namespace eruption

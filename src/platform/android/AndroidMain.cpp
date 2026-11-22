@@ -87,7 +87,7 @@ std::condition_variable g_doneCv;
 
 // Fila de entrada: preenchida pela thread do Android, esvaziada pelo motor.
 struct InputEvent {
-    enum Kind { Cursor, Button, Scroll, Touch } kind;
+    enum Kind { Cursor, Button, Scroll, Touch, Char, Key } kind; // Char: button = ponto de codigo; Key: button = tecla GLFW
     double x = 0.0, y = 0.0;
     int button = 0, action = 0;
     int64_t t = 0; // toque: hora do evento no Android (ns), nao a do quadro
@@ -220,7 +220,48 @@ bool extractAssets(AAssetManager* am, const std::string& root) {
 // areas da interface do quadro.
 enum TouchKind { kTouchDown, kTouchMove, kTouchUp, kTouchCancel };
 
+// Entrada de texto (input.text_begin): com ela ligada o teclado do sistema
+// esta' aberto e as teclas dele chegam aqui como AKEY. Letras viram "char"
+// (ponto de codigo que o Java calcula com a camada do teclado); apagar e
+// Enter viram tecla, como no desktop. Sem texto ligado nada muda (0 = o
+// sistema trata, ex.: Voltar).
+std::atomic<bool> g_textActive{false};
+int unicodeOfKey(int32_t keyCode, int32_t meta) {
+    if (!g_app || !g_app->activity || !g_app->activity->vm) return 0;
+    JavaVM* vm = g_app->activity->vm;
+    JNIEnv* env = nullptr;
+    const bool attached = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK;
+    if (!attached && vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return 0;
+    int cp = 0;
+    jobject activity = g_app->activity->clazz;
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID mid = env->GetMethodID(cls, "unicodeOf", "(II)I");
+    if (mid) cp = env->CallIntMethod(activity, mid, static_cast<jint>(keyCode), static_cast<jint>(meta));
+    else env->ExceptionClear();
+    env->DeleteLocalRef(cls);
+    if (!attached) vm->DetachCurrentThread();
+    return cp;
+}
+int32_t onKeyInput(AInputEvent* ev) {
+    if (!g_textActive.load()) return 0;
+    const int32_t action = AKeyEvent_getAction(ev);
+    const int32_t code = AKeyEvent_getKeyCode(ev);
+    if (action != AKEY_EVENT_ACTION_DOWN && action != AKEY_EVENT_ACTION_UP) return 0;
+    const bool down = action == AKEY_EVENT_ACTION_DOWN;
+    if (code == AKEYCODE_DEL || code == AKEYCODE_ENTER) {
+        const int key = code == AKEYCODE_DEL ? 259 : 257; // GLFW_KEY_BACKSPACE / GLFW_KEY_ENTER
+        pushInput({InputEvent::Key, 0.0, 0.0, key, down ? GLFW_PRESS : GLFW_RELEASE, 0});
+        return 1;
+    }
+    if (down) {
+        const int cp = unicodeOfKey(code, AKeyEvent_getMetaState(ev));
+        if (cp >= 32 && cp != 127) pushInput({InputEvent::Char, 0.0, 0.0, cp, 0, 0});
+    }
+    return 1;
+}
+
 int32_t onInput(android_app*, AInputEvent* ev) {
+    if (AInputEvent_getType(ev) == AINPUT_EVENT_TYPE_KEY) return onKeyInput(ev);
     if (AInputEvent_getType(ev) != AINPUT_EVENT_TYPE_MOTION) return 0;
     const int32_t raw = AMotionEvent_getAction(ev);
     const int32_t action = raw & AMOTION_EVENT_ACTION_MASK;
@@ -368,6 +409,27 @@ bool shareFile(const std::string& path, const char* mimeType) {
     if (!attached) vm->DetachCurrentThread();
     return ok;
 }
+
+// Abre/fecha o teclado do sistema (IME) para a entrada de texto. O Java pede
+// ao InputMethodManager na thread de UI; falha so' vai para o logcat.
+void setTextInput(bool on) {
+    g_textActive = on;
+    if (!g_app || !g_app->activity || !g_app->activity->vm) return;
+    JavaVM* vm = g_app->activity->vm;
+    JNIEnv* env = nullptr;
+    const bool attached = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK;
+    if (!attached && vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
+    jobject activity = g_app->activity->clazz;
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID mid = env->GetMethodID(cls, "setTextInput", "(Z)V");
+    if (mid) env->CallVoidMethod(activity, mid, on ? JNI_TRUE : JNI_FALSE);
+    else {
+        env->ExceptionClear();
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "setTextInput: EruptionActivity.setTextInput nao encontrado");
+    }
+    env->DeleteLocalRef(cls);
+    if (!attached) vm->DetachCurrentThread();
+}
 } // namespace eruption::platform
 
 // ---- GLFW -------------------------------------------------------------------
@@ -487,8 +549,16 @@ void glfwPollEvents() {
         std::lock_guard<std::mutex> lock(g_inputMutex);
         size_t n = 0;
         bool moved = false;
+        std::vector<int> keysDown; // teclas apertadas neste lote
         for (; n < g_inputQueue.size(); ++n) {
             const InputEvent& e = g_inputQueue[n];
+            // O teclado do sistema manda apagar/Enter como aperto e solta quase juntos: no mesmo quadro o
+            // jogo nunca via a tecla apertada (input.pressed e' por estado). O solta fica para o quadro seguinte.
+            if (e.kind == InputEvent::Key) {
+                if (e.action == GLFW_PRESS) keysDown.push_back(e.button);
+                else if (e.action == GLFW_RELEASE &&
+                         std::find(keysDown.begin(), keysDown.end(), e.button) != keysDown.end()) break;
+            }
             if (e.kind == InputEvent::Button && e.action == GLFW_PRESS && moved) break;
             if (e.kind == InputEvent::Touch && e.action == kTouchDown && moved) break;
             if (e.kind == InputEvent::Cursor || (e.kind == InputEvent::Touch && e.action != kTouchDown)) moved = true;
@@ -533,6 +603,12 @@ void glfwPollEvents() {
                 break;
             case InputEvent::Touch:
                 rotearToque(e);
+                break;
+            case InputEvent::Char:
+                if (g_window.charCb) g_window.charCb(&g_window, static_cast<unsigned int>(e.button));
+                break;
+            case InputEvent::Key:
+                if (g_window.keyCb) g_window.keyCb(&g_window, e.button, 0, e.action, 0);
                 break;
         }
     }

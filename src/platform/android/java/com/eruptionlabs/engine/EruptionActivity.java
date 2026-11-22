@@ -5,6 +5,8 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.inputmethod.InputMethodManager;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
 
@@ -35,6 +37,36 @@ public class EruptionActivity extends NativeActivity {
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) immersive();
+    }
+
+    // Teclado do sistema para input.text_begin/text_end (chamado por JNI de
+    // AndroidMain.cpp). A NativeActivity nao tem campo de texto: o teclado e'
+    // aberto sobre a view da janela e as teclas dele chegam ao codigo nativo
+    // como eventos AKEY (unicodeOf converte cada uma no caractere).
+    public void setTextInput(final boolean on) {
+        runOnUiThread(() -> {
+            try {
+                final View v = getWindow().getDecorView();
+                final InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                if (imm == null) return;
+                if (on) {
+                    v.setFocusable(true);
+                    v.setFocusableInTouchMode(true);
+                    v.requestFocus();
+                    imm.showSoftInput(v, InputMethodManager.SHOW_FORCED);
+                } else {
+                    imm.hideSoftInputFromWindow(v.getWindowToken(), 0);
+                }
+            } catch (RuntimeException e) {
+                Log.e("Eruption", "setTextInput falhou: " + e);
+            }
+        });
+    }
+
+    // Caractere de uma tecla com a camada (shift, acento) em 'meta'; 0 se a
+    // tecla nao produz texto.
+    public int unicodeOf(int keyCode, int meta) {
+        return new KeyEvent(KeyEvent.ACTION_DOWN, keyCode).getUnicodeChar(meta);
     }
 
     // Voltar nao fecha o jogo (o toque acidental na barra encerrava a demo).

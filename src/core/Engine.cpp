@@ -1714,7 +1714,8 @@ void Engine::shutdown() {
 // (o mouse anda, sem botao); scroll,dy (a roda); down,id,x,y / move,id,x,y /
 // up,id,x,y (um dedo, pelo mesmo core/TouchRouter do celular e do navegador);
 // key,codigo,1|0 (tecla GLFW apertada/solta, pela tecla virtual do controle
-// de toque: o script a ve' no quadro seguinte).
+// de toque: o script a ve' no quadro seguinte); char,codigo (caractere Unicode
+// digitado, so' conta com input.text_begin ligado).
 // Prova de input.mouse_position, input.scroll, input.touches e das teclas sem tela.
 void Engine::injectTestInput() {
     struct Ev { int frame; std::string act; float a = 0.0f, b = 0.0f, c = 0.0f; };
@@ -1754,6 +1755,7 @@ void Engine::injectTestInput() {
         else if (ev.act == "down") router.down(int(ev.a), ev.b, ev.c, t);
         else if (ev.act == "move") router.move(int(ev.a), ev.b, ev.c);
         else if (ev.act == "up") router.up(int(ev.a), ev.b, ev.c, t, false);
+        else if (ev.act == "char") Input::injectChar(static_cast<unsigned int>(ev.a));
         else if (ev.act == "key") Input::setVirtualKey(static_cast<Key>(static_cast<int>(ev.a)), ev.b != 0.0f);
         else continue;
         ERUPTION_LOG_WARN("ERUPTION_TEST_INPUT: quadro %d %s %.0f %.0f %.0f", ev.frame, ev.act.c_str(), ev.a, ev.b, ev.c);
