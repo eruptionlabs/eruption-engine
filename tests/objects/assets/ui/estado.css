@@ -1,0 +1,9 @@
+:root { --accent: #00ff00; --base: #202020; --pad: 10%; }
+.row { --widget: rect; background-color: var(--base); width: calc(40% - var(--pad, 0%)); height: 10%; }
+.row.selected { background-color: var(--accent); }
+.row:hover { background-color: #0000ff; }
+#r1 { --class: row; left: 5%; top: 5%; }
+#r2 { --class: row; left: 5%; top: 20%; }
+#r3 { --class: row; left: 5%; top: 35%; }
+#r4 { --widget: rect; left: 50%; top: 5%; width: 10%; height: 10%; background-color: var(--nope, #ff0000); }
+rect.pick { border-color: #ffffff; }

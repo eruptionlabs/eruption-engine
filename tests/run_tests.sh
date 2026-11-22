@@ -42,7 +42,8 @@ run test_weather_overrides
 run_src test_shadow_receivers src/math/Frustum.cpp
 run_src test_mesh_clusters src/utils/MeshClusters.cpp
 run_src test_object_world src/scene/ObjectWorld.cpp
-run_src test_css_classes src/utils/CSSParser.cpp
+run_src test_css_classes src/utils/CSSParser.cpp src/utils/AssetVfs.cpp src/core/Project.cpp src/core/Logger.cpp src/core/JobSystem.cpp -pthread -I build/_deps/nlohmann_json-src/include
+run_src test_css_vars src/utils/CSSParser.cpp src/utils/AssetVfs.cpp src/core/Project.cpp src/core/Logger.cpp src/core/JobSystem.cpp -pthread -I build/_deps/nlohmann_json-src/include
 run_src test_shadow_stream
 run_src test_ground_pack src/formats/GroundPack.cpp -I build/_deps/nlohmann_json-src/include
 run_src test_net_wire src/net/Wire.cpp
@@ -78,11 +79,13 @@ run_net test_net_matrix $NET_SESSION
 run_net test_net_relay $NET_SESSION
 run_net test_net_web $NET_SESSION
 run_src test_ribbon src/formats/Ribbon.cpp
+run_src test_pbr_stem
 run_src test_action_index
 run_src test_vision src/core/Vision.cpp
 run_src test_relief_bake src/renderer/ReliefBake.cpp
+run_src test_nav_height
 run_src test_bandwidth_meter src/renderer/BandwidthMeter.cpp src/utils/Profiler.cpp src/core/Logger.cpp -lpthread
-run_src test_minimap_walk src/core/MinimapWalk.cpp -I build/_deps/nlohmann_json-src/include
+run_src test_minimap_walk src/core/MinimapWalk.cpp src/utils/AssetVfs.cpp src/core/Project.cpp src/core/Logger.cpp src/core/JobSystem.cpp -pthread -I build/_deps/nlohmann_json-src/include
 
 # Estabilidade das cascatas de sombra (ancoragem ao mundo, tamanho do texel,
 # sem historia), com o ShadowRenderer::updateCascades de verdade, sem GPU, em

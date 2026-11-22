@@ -1,0 +1,8 @@
+{
+  "name": "Previa do editor (teste)",
+  "description": "Teste dos scripts de editor (tests/test_objects.sh). Usa o mapa de demonstração parana_field_lite.",
+  "startup_map": "parana_field_lite",
+  "version": "0.1.0",
+  "editor_scripts": ["assets/scripts/editor_previa.luau"],
+  "editor_read_paths": ["../extra"]
+}
