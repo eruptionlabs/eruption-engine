@@ -1063,7 +1063,14 @@ declare telemetry: {
     share: (path: string) -> boolean,
 }
 
--- C++ functions of this project (native/*.cpp, include/eruption/native_module.h):
--- native.<name>(...) with numbers in and one number out. Saving a .cpp file
--- rebuilds and reloads them while the game runs.
-declare native: { [string]: (...number) -> number }
+-- C++ functions of this project (native/*.cpp and *.c, include/eruption/native_module.h):
+-- native.<name>(...) takes and returns plain values (numbers, booleans, strings,
+-- buffers, nested tables). native.call("name", ...) is the same by string.
+-- native.on("event", fn) listens to events the module emits (delivered once per
+-- frame, before the scripts' on_update). Saving a .cpp file rebuilds and
+-- reloads the module while the game runs (desktop); Android links it in.
+declare native: {
+    on: (event: string, handler: (any) -> ()) -> (),
+    call: (name: string, ...any) -> any,
+    [string]: (...any) -> any,
+}

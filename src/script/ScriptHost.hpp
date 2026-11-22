@@ -153,6 +153,10 @@ public:
     ScriptDebugger* debugger() { return m_debugger.get(); }
     // Ao voltar de uma pausa do depurador: o vigia de laço infinito recomeça.
     static void resetWatchdog();
+    // Chama a função com `nargs` argumentos já empilhados (função embaixo), sob o
+    // limite de tempo e com a mensagem de erro no log. Para o que o motor dispara
+    // fora dos scripts (ex.: eventos do módulo nativo). Falso se deu erro.
+    static bool protectedCall(lua_State* L, int nargs, const char* what);
 
     // TRABALHO DO MOTOR DENTRO DE UMA CHAMADA DE SCRIPT nao conta no relogio
     // do cao de guarda. Ele existe para pegar laco infinito no script, e nao

@@ -92,6 +92,23 @@ void ScriptHost::resetWatchdog() {
     g_nativeTime = {};
 }
 
+bool ScriptHost::protectedCall(lua_State* L, int nargs, const char* what) {
+    lua_pushcfunction(L, errorHandler, "errorHandler");
+    lua_insert(L, -(nargs + 2));
+    const int errIdx = lua_gettop(L) - nargs - 1;
+    g_callStart = std::chrono::steady_clock::now();
+    g_nativeTime = {};
+    g_inCall = true;
+    const int status = lua_pcall(L, nargs, 0, errIdx);
+    g_inCall = false;
+    if (status != 0) {
+        Logger::error("native.on(\"%s\"): %s", what, lua_tostring(L, -1));
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1); // errorHandler
+    return status == 0;
+}
+
 ScriptHost::NativeWork::NativeWork() : m_t0(std::chrono::steady_clock::now()) {}
 ScriptHost::NativeWork::~NativeWork() { g_nativeTime += std::chrono::steady_clock::now() - m_t0; }
 

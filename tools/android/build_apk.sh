@@ -20,6 +20,10 @@
 #   ERUPTION_APK_TOUCH_PAD="Z,X:Voltar,escape:Menu"  controle de toque do jogo
 #     (ERUPTION_TOUCH_PAD; vazio = so' o analogico; sem ele, o painel de demonstracao)
 #   ERUPTION_APK_TEX_MAX=<px>  reduz as imagens de assets/data/texture maiores que isso
+#   ERUPTION_APK_NATIVE=<pasta>  modulo C++ do jogo (native/: .c/.cpp, include/, link.txt) linkado
+#     ao liberuption.so (sem recarga). Padrao: projects/*/native do projeto do mapa, se existir.
+#   ERUPTION_APK_PERMISSIONS="INTERNET,VIBRATE"  permissoes Android do manifest (sem prefixo).
+#     Padrao: as linhas de native/android_permissions.txt, se existir; senao nenhuma.
 #   ERUPTION_APK_CMAKE_ARGS="-DA=x -DB=y"  flags a mais no configure do build-android
 #     (separadas por espaco; com ela o configure roda tambem sobre um cache existente)
 # Precisa do SDK/NDK do Android (ANDROID_HOME, padrao ~/Android/Sdk) e de um
@@ -44,7 +48,16 @@ B=$ROOT/build-android; [ "$ABI" != "arm64-v8a" ] && B=$ROOT/build-android-$ABI
 STAGE=$B/apk
 OUT=${OUT:-$B/eruption-$MAP.apk}
 
-read -ra CMAKE_EXTRA <<< "${ERUPTION_APK_CMAKE_ARGS:-}"
+# Modulo nativo do projeto (native/): o do projeto do primeiro mapa, ou o pedido.
+NATIVE=${ERUPTION_APK_NATIVE:-}
+if [ -z "$NATIVE" ]; then
+    for d in "$ROOT"/projects/*/assets/external/"$MAP"; do
+        [ -d "$d" ] && [ -d "$d/../../../native" ] && NATIVE=$(cd "$d/../../../native" && pwd)
+    done
+fi
+[ -n "$NATIVE" ] && [ ! -d "$NATIVE" ] && { echo "ERUPTION_APK_NATIVE nao e' pasta: $NATIVE" >&2; exit 1; }
+# Sempre passado (vazio limpa o valor de uma montagem anterior): forca o configure.
+read -ra CMAKE_EXTRA <<< "${ERUPTION_APK_CMAKE_ARGS:-} -DERUPTION_NATIVE_DIR=$NATIVE"
 if [ ! -f "$B/CMakeCache.txt" ] || [ ${#CMAKE_EXTRA[@]} -gt 0 ]; then
     cmake -S "$ROOT" -B "$B" -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
         -DANDROID_ABI=$ABI -DANDROID_PLATFORM=android-28 -DCMAKE_BUILD_TYPE=Release \
@@ -175,6 +188,15 @@ cat > "$STAGE/AndroidManifest.xml" <<XML
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="${ERUPTION_APK_PACKAGE:-com.eruptionlabs.engine}" android:versionCode="1" android:versionName="0.1">
     <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="34"/>
+$(PERMS=${ERUPTION_APK_PERMISSIONS:-}
+if [ -z "$PERMS" ] && [ -n "$NATIVE" ] && [ -f "$NATIVE/android_permissions.txt" ]; then
+    PERMS=$(grep -v '^[[:space:]]*#' "$NATIVE/android_permissions.txt" | tr -s ' \t\r\n' ',')
+fi
+for p in ${PERMS//,/ }; do
+    case "$p" in *[!A-Za-z0-9_.]*) echo "permissao invalida: $p" >&2; exit 1;; esac
+    case "$p" in *.*) ;; *) p="android.permission.$p";; esac
+    echo "    <uses-permission android:name=\"$p\"/>"
+done)
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true"/>
     <application android:label="${ERUPTION_APK_LABEL:-Eruption Engine}" android:icon="@mipmap/ic_launcher" android:hasCode="true" android:extractNativeLibs="true"
         android:appCategory="game" android:isGame="true">
