@@ -481,6 +481,12 @@ declare game: {
     load: (slot: (string | number)?) -> boolean,
     has_save: (slot: (string | number)?) -> boolean,
     delete_save: (slot: (string | number)?) -> boolean,
+    -- Saves a PNG of the screen and returns the path it will write. The file
+    -- appears a frame or two later. Without a path it goes to
+    -- <player data folder>/screenshots/YYYY-MM-DD_HH-MM-SS.png (folder created
+    -- as needed). `ui` (default true) includes the HUD and UI; with ui = false
+    -- the frame is read before the UI pass (one synchronous readback).
+    screenshot: (path: string?, opts: { ui: boolean? }?) -> string,
     -- Starts the game over: scripts from scratch (variables cleared, objects
     -- made by scripts removed) on the project's first map. Happens after the
     -- current frame.

@@ -3103,6 +3103,7 @@ void Engine::render() {
         std::snprintf(path, sizeof(path), "%s_%04u.png", frameDump, m_framesCount);
         takeScreenshot(path);
     }
+    serviceScriptScreenshot();
 
     // ERUPTION_TEST_TIME_SWEEP="startHour,endHour,stepHour" (debug): from ONE
     // engine launch, pin the clock to each hour in turn and screenshot it into

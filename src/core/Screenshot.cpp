@@ -141,6 +141,18 @@ void Engine::scheduleScreenshotFromSwap(const std::string& filename) {
     m_screenshotPendingPath = filename;
 }
 
+void Engine::serviceScriptScreenshot() {
+    if (!m_scriptShotRequested) return;
+    if (m_scriptShotUi) {
+        // Uma captura do swapchain por vez: espera a anterior terminar.
+        if (m_screenshotPending) return;
+        scheduleScreenshotFromSwap(m_scriptShotPath);
+    } else {
+        takeScreenshot(m_scriptShotPath);
+    }
+    m_scriptShotRequested = false;
+}
+
 void Engine::finishPendingScreenshot() {
     if (!m_screenshotPending || m_screenshotStaging == VK_NULL_HANDLE) return;
 

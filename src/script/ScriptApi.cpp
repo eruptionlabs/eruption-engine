@@ -40,6 +40,7 @@
 #include <fstream>
 #include <iterator>
 #include <cstring>
+#include <ctime>
 #include <limits>
 #include <string>
 #include <unordered_map>
@@ -70,6 +71,7 @@ struct ScriptBridge {
     // A lista do quadro copia as dos vizinhos: refazer depois de mexer nelas.
     static void regionLightsChanged() { engine->rebuildWorldLights(); }
     static Window& window() { return engine->m_window; }
+    static void screenshot(const std::string& path, bool ui) { engine->requestScriptScreenshot(path, ui); }
     static PlayerController* player() { return engine->m_playerController; }
     static void setWeather(WeatherType t) { engine->applyWeatherTypeFull(t, 1.0f); }
     // Só nesta execução (não grava data/char_config.json).
@@ -1364,6 +1366,42 @@ int game_save_settings(lua_State* L) {
 }
 int game_settings(lua_State* L) {
     ScriptHost::pushSettings(L);
+    return 1;
+}
+// game.screenshot(path?, {ui = true}) -> caminho. Atendida no fim do quadro;
+// sem caminho grava em <pasta de dados>/screenshots/AAAA-MM-DD_HH-MM-SS.png.
+int game_screenshot(lua_State* L) {
+    bool ui = true;
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "ui");
+        if (!lua_isnil(L, -1)) ui = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+    }
+    std::error_code ec;
+    std::filesystem::path path;
+    if (lua_isstring(L, 1) && *lua_tostring(L, 1)) {
+        path = lua_tostring(L, 1);
+        if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path(), ec);
+    } else {
+        // A pasta de dados do jogo e' a dos jogos salvos, um nivel acima.
+        const std::filesystem::path dir = ScriptHost::saveDir().parent_path() / "screenshots";
+        std::filesystem::create_directories(dir, ec);
+        const std::time_t now = std::time(nullptr);
+        std::tm tm{};
+#ifdef _WIN32
+        localtime_s(&tm, &now);
+#else
+        localtime_r(&now, &tm);
+#endif
+        char stamp[32];
+        std::strftime(stamp, sizeof(stamp), "%Y-%m-%d_%H-%M-%S", &tm);
+        path = dir / (std::string(stamp) + ".png");
+        // Duas capturas no mesmo segundo nao se sobrescrevem.
+        for (int n = 2; std::filesystem::exists(path, ec) && n < 1000; ++n)
+            path = dir / (std::string(stamp) + "_" + std::to_string(n) + ".png");
+    }
+    ScriptBridge::screenshot(path.string(), ui);
+    lua_pushstring(L, path.string().c_str());
     return 1;
 }
 int game_has_save(lua_State* L) {
@@ -3141,7 +3179,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "on", on);
     lib(L, "audio", audio);
     static const luaL_Reg game[] = {ERUPTION_API_FN(game, save), ERUPTION_API_FN(game, load), ERUPTION_API_FN(game, restart), ERUPTION_API_FN(game, save_settings), ERUPTION_API_FN(game, settings), ERUPTION_API_FN(game, has_save),
-                                    ERUPTION_API_FN(game, delete_save), {nullptr, nullptr}};
+                                    ERUPTION_API_FN(game, delete_save), ERUPTION_API_FN(game, screenshot), {nullptr, nullptr}};
     lib(L, "game", game);
     static const luaL_Reg windowLib[] = {ERUPTION_API_FN(window, set_fullscreen), ERUPTION_API_FN(window, is_fullscreen), {nullptr, nullptr}};
     lib(L, "window", windowLib);
@@ -3599,6 +3637,12 @@ declare game: {
     load: (slot: (string | number)?) -> boolean,
     has_save: (slot: (string | number)?) -> boolean,
     delete_save: (slot: (string | number)?) -> boolean,
+    -- Saves a PNG of the screen and returns the path it will write. The file
+    -- appears a frame or two later. Without a path it goes to
+    -- <player data folder>/screenshots/YYYY-MM-DD_HH-MM-SS.png (folder created
+    -- as needed). `ui` (default true) includes the HUD and UI; with ui = false
+    -- the frame is read before the UI pass (one synchronous readback).
+    screenshot: (path: string?, opts: { ui: boolean? }?) -> string,
     -- Starts the game over: scripts from scratch (variables cleared, objects
     -- made by scripts removed) on the project's first map. Happens after the
     -- current frame.

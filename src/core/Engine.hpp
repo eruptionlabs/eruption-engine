@@ -1564,6 +1564,15 @@ private:
     void takeScreenshotLit(const std::string& filename);
     void scheduleScreenshotFromSwap(const std::string& filename);
     void finishPendingScreenshot();
+    // Captura pedida por script (game.screenshot): atendida no fim do quadro.
+    // Com ui, le o swapchain (assincrono, sem esperar a GPU); sem ui, le a
+    // saida do pos-processamento, antes do ImGui (uma leitura sincrona).
+    void requestScriptScreenshot(const std::string& path, bool ui) {
+        m_scriptShotPath = path;
+        m_scriptShotUi = ui;
+        m_scriptShotRequested = true;
+    }
+    void serviceScriptScreenshot();
     float raycastScene(const Vec3& rayOrigin, const Vec3& rayDir, float maxDist, const std::vector<struct VisibleObject>& objects) const;
     float computeObstructionSingleRay() const;
     float computeObstructionMultiRay() const;
@@ -2017,6 +2026,9 @@ private:
     std::unordered_map<std::string, EmbeddedBakeResult> m_convertedBakes;
     // UI-inclusive screenshot capture state.
     bool m_screenshotPending = false;
+    std::string m_scriptShotPath;
+    bool m_scriptShotUi = true;
+    bool m_scriptShotRequested = false;
     uint32_t m_screenshotSubmitFrame = 0;
     VkBuffer m_screenshotStaging = VK_NULL_HANDLE;
     VmaAllocation m_screenshotStagingAlloc = VK_NULL_HANDLE;
