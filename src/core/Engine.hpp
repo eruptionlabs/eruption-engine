@@ -1494,6 +1494,7 @@ private:
     // Reflexo espelhado da agua HD-2D (src/core/WaterReflection.cpp): a cena
     // pela camera espelhada no plano d'agua, antes do G-buffer principal.
     void renderWaterReflection(VkCommandBuffer cmd);
+    void drawWaterReflectionSprites(VkCommandBuffer cmd, const Mat4& drawVp);
     // As nuvens volumetricas pela mesma camera espelhada (WaterReflection.cpp).
     VkImageView renderWaterReflectionClouds(VkCommandBuffer cmd, const Mat4& depthVp, const Mat4& rasterVp,
                                             const Mat4& cullVp, const Vec3& mirroredCam);
@@ -1635,6 +1636,9 @@ private:
     // ERUPTION_SPRITE_LAYER=0 desliga (A/B).
     SpriteLayer m_spriteLayer;
     bool m_spriteLayerActive = false;
+    // Mistura da normal do billboard com +Y (sprite.frag, FrameUBO) e a do
+    // cartao no reflexo espelhado da agua: o mesmo valor, para a luz bater.
+    static constexpr float kSpriteNormalYMix = 0.85f;
     bool m_fsrReset = true;
     Vec4 m_prevWindParams = Vec4(0.0f);
     bool m_hasPrevWindParams = false;

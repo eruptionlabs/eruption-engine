@@ -104,6 +104,33 @@ VkImageView Engine::renderWaterReflectionClouds(VkCommandBuffer cmd, const Mat4&
     return m_cloudLayerRenderer.endMirrorView(cmd);
 }
 
+// PERSONAGENS NO REFLEXO. O sprite e' um quadro virado para a camera (e
+// inclinado com ela); o SSPR nao o reflete (sem oclusao: o personagem numa
+// pedra da margem refletia na agua la' embaixo, flutuando). Aqui cada billboard
+// visivel vira um cartao em pe' na ancora, de frente para a camera na
+// horizontal, desenhado em mundo pela MESMA matriz espelhada, no mesmo
+// G-buffer e com a mesma profundidade e plano de recorte dos modelos: a pedra
+// o esconde como esconde uma arvore, e quem esta' na agua ou na areia reflete
+// colado ao pe', sem desvanecer. Limite: so' entram os sprites visiveis na
+// camera principal (o culling de sprite e' o dela).
+void Engine::drawWaterReflectionSprites(VkCommandBuffer cmd, const Mat4& drawVp) {
+    const uint32_t count = m_spriteSystem.visibleCount();
+    if (count == 0) return;
+    // viewRight de sprite_vert.glsl = -X da camera; na horizontal. O sentido ate'
+    // a camera sai do produto vetorial (vale mesmo olhando reto para baixo).
+    const Mat4 invView = glm::inverse(m_camera.viewMatrix());
+    Vec3 right = -Vec3(invView[0]);
+    right.y = 0.0f;
+    if (glm::dot(right, right) < 1e-8f) return;
+    right = glm::normalize(right);
+    const Vec3 facing = -glm::normalize(glm::cross(right, Vec3(0.0f, 1.0f, 0.0f)));
+    // Altura inteira: a ancora abaixo do nivel sobe ate' ele (sprite_mirror.vert).
+    float level = 0.0f;
+    const bool full = m_water.style().spriteReflectFull && m_water.planarReflectionPlane(m_waterMenu.config, level);
+    m_spriteRenderer.renderMirror(cmd, drawVp, right, facing, kSpriteNormalYMix, m_spriteSystem.instanceBuffer(), count,
+                                  full ? level : -1.0e30f);
+}
+
 // REFLEXO ESPELHADO (WaterReflectionPass). O SSPR so' espelha pixels da tela:
 // a barraca acima da borda de cima nao tem pixel, e o reflexo dela sumia da
 // agua no meio da tela. Aqui a cena e' desenhada de novo pela camera
@@ -165,6 +192,7 @@ void Engine::renderWaterReflection(VkCommandBuffer cmd) {
     gb.beginPass(cmd);
     m_terrainRenderer.render(cmd, drawVp, frustum);
     m_modelRenderer.render(cmd, drawVp, frustum, mirroredCam);
+    drawWaterReflectionSprites(cmd, drawVp);
     gb.endPass(cmd);
     // ERUPTION_TEST_WATER_REFLECTION_LOG=1: o que o passe desenhou (uma linha a cada 60 quadros).
     static const bool kLog = std::getenv("ERUPTION_TEST_WATER_REFLECTION_LOG") != nullptr;

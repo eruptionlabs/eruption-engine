@@ -8,11 +8,12 @@
 // igualou escrever a cor. Pixel sem ninguem fica com alfa 0 (a agua cai no
 // ceu ou na marcha de raio).
 //
-// SPRITE: o quadro do personagem esta' virado para a camera (inclinado para
-// tras com ela). Espelhado como esta', o reflexo dele sai achatado, quase de
-// perfil. O sprite esta' ali no lugar de alguem EM PE', entao ele reflete
-// como um cartao vertical: o pixel desce pelo "cima" do quadro ate' a linha
-// d'agua (F) e o reflexo fica a' mesma distancia abaixo dela, na vertical.
+// SPRITE: o pixel de sprite (pbr.r = 0,75) nao reflete aqui. O personagem e'
+// um quadro virado para a camera, sem oclusao: refletido por este passe ele
+// flutuava na agua abaixo de uma pedra. Ele reflete no passe espelhado
+// (WaterReflectionPass), como um cartao em pe' no mesmo G-buffer espelhado e
+// com a mesma profundidade do cenario, entao a pedra o esconde como esconde
+// uma arvore.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -26,8 +27,7 @@ layout(push_constant) uniform Push {
     mat4 mirrorClip;     // viewProj * espelho * invViewProj
     vec4 invRowY;        // linha y de invViewProj (altura do ponto)
     vec4 invRowW;        // linha w de invViewProj
-    vec4 params;         // x = nivel, y = fase, z = sprites como cartao
-    vec4 spriteDirClip;  // viewProj * (cima do quadro + Y, 0) / cima.y
+    vec4 params;         // x = nivel, y = fase, z = 1 com o pbr do G-buffer no binding 4
 } pc;
 
 void main() {
@@ -42,14 +42,9 @@ void main() {
     // So' o que esta' acima d'agua reflete (a folga evita o proprio chao
     // da margem refletir nele mesmo).
     if (wy <= pc.params.x + 0.05) return;
-    vec4 c;
-    if (pc.params.z > 0.5 && abs(texelFetch(u_gbufPbr, p, 0).r - 0.75) < 0.04) {
-        // recorte(P) = ndc / wp; o reflexo do cartao e' P - s*(cima + Y),
-        // s = (altura - nivel) / cima.y.
-        c = ndc / wp - (wy - pc.params.x) * pc.spriteDirClip;
-    } else {
-        c = pc.mirrorClip * ndc;
-    }
+    // Sprite: reflete no passe espelhado, nao aqui.
+    if (pc.params.z > 0.5 && abs(texelFetch(u_gbufPbr, p, 0).r - 0.75) < 0.04) return;
+    vec4 c = pc.mirrorClip * ndc;
     if (c.w <= 1e-5) return;
     vec3 m = c.xyz / c.w;
     if (m.z < 0.0 || m.z > 1.0) return;

@@ -24,6 +24,8 @@ bool SpriteRenderer::init(VulkanContext* ctx, GBuffer* gbuffer, BindlessDescript
     if (!createDescriptors()) return false;
     if (!createPipeline()) return false;
     if (!createForwardPipeline()) return false;
+    // Opcional: sem ele o reflexo espelhado da agua so' perde os sprites.
+    if (!createMirrorPipeline()) ERUPTION_LOG_WARN("Sprite mirror pipeline unavailable: sprites will not reflect in the planar water pass");
     if (!createShadowPipeline()) return false;
     if (!createPlanarShadowPipeline()) return false;
     if (!createCircleShadowPipeline()) return false;
@@ -103,6 +105,14 @@ void SpriteRenderer::shutdown() {
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_pipeline, nullptr);
         m_pipeline = VK_NULL_HANDLE;
+    }
+    if (m_mirrorPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_ctx->device(), m_mirrorPipeline, nullptr);
+        m_mirrorPipeline = VK_NULL_HANDLE;
+    }
+    if (m_mirrorLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(m_ctx->device(), m_mirrorLayout, nullptr);
+        m_mirrorLayout = VK_NULL_HANDLE;
     }
     if (m_pipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(m_ctx->device(), m_pipelineLayout, nullptr);
@@ -453,6 +463,111 @@ bool SpriteRenderer::createPipeline() {
     if (pipeline == VK_NULL_HANDLE) return false;
     m_pipeline = pipeline;
     return true;
+}
+
+// Sprite no G-buffer do passe espelhado da agua (sprite_mirror.vert/.frag). So'
+// o set bindless (texturas e paleta) e um push de 96 bytes; mesmos formatos de
+// alvo do G-buffer principal.
+bool SpriteRenderer::createMirrorPipeline() {
+    auto vertCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/sprite_mirror.vert.spv");
+    auto fragCode = ShaderCompiler::loadSPIRV("shaders/gbuffer/sprite_mirror.frag.spv");
+    if (vertCode.empty() || fragCode.empty()) return false;
+
+    VkShaderModule vertModule = VK_NULL_HANDLE;
+    VkShaderModule fragModule = VK_NULL_HANDLE;
+    VkShaderModuleCreateInfo smInfo{};
+    smInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smInfo.codeSize = vertCode.size() * sizeof(uint32_t);
+    smInfo.pCode = vertCode.data();
+    vkCreateShaderModule(m_ctx->device(), &smInfo, nullptr, &vertModule);
+    smInfo.codeSize = fragCode.size() * sizeof(uint32_t);
+    smInfo.pCode = fragCode.data();
+    vkCreateShaderModule(m_ctx->device(), &smInfo, nullptr, &fragModule);
+
+    std::vector<VkPipelineShaderStageCreateInfo> stages(2);
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    VkVertexInputBindingDescription bindings[2]{};
+    bindings[0] = {0, sizeof(QuadVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    bindings[1] = {1, sizeof(SpriteInstanceData), VK_VERTEX_INPUT_RATE_INSTANCE};
+    // So' as locations que o vertex shader le' (as mesmas do sprite.vert).
+    VkVertexInputAttributeDescription attributes[12] = {
+        {0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(QuadVertex, position)},
+        {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(QuadVertex, uv)},
+        {2, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SpriteInstanceData, modelMatrix)},
+        {3, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SpriteInstanceData, modelMatrix) + sizeof(Vec4)},
+        {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SpriteInstanceData, modelMatrix) + 2 * sizeof(Vec4)},
+        {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SpriteInstanceData, modelMatrix) + 3 * sizeof(Vec4)},
+        {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SpriteInstanceData, anchorPoint)},
+        {7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SpriteInstanceData, texRect)},
+        {8, 1, VK_FORMAT_R32_UINT, offsetof(SpriteInstanceData, texIndex)},
+        {11, 1, VK_FORMAT_R32_UINT, offsetof(SpriteInstanceData, flags)},
+        {12, 1, VK_FORMAT_R32_UINT, offsetof(SpriteInstanceData, paletteIndex)},
+        {13, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SpriteInstanceData, tintColor)},
+    };
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount = 2;
+    vertexInput.pVertexBindingDescriptions = bindings;
+    vertexInput.vertexAttributeDescriptionCount = 12;
+    vertexInput.pVertexAttributeDescriptions = attributes;
+
+    VkDescriptorSetLayout bindlessLayout = m_bindless->layout();
+    VkPushConstantRange pushRange{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MirrorPush)};
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &bindlessLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
+    VK_CHECK(vkCreatePipelineLayout(m_ctx->device(), &layoutInfo, nullptr, &m_mirrorLayout));
+
+    auto pipeline = PipelineBuilder()
+        .setShaderStages(stages)
+        .setVertexInput(vertexInput)
+        .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+        .setViewport(0, 0, 1.0f, 1.0f) // dinamicos (o GBuffer::beginPass do passe espelhado os poe)
+        .setScissor(0, 0, 1, 1)
+        .setPolygonMode(VK_POLYGON_MODE_FILL)
+        .setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+        .setDepthState(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+        .setBlendState(GBuffer::blendStates(false))
+        .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
+        .setLayout(m_mirrorLayout)
+        .setColorAttachmentFormats(GBuffer::colorAttachmentFormats())
+        .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
+        .build(m_ctx->device());
+
+    vkDestroyShaderModule(m_ctx->device(), vertModule, nullptr);
+    vkDestroyShaderModule(m_ctx->device(), fragModule, nullptr);
+    if (pipeline == VK_NULL_HANDLE) return false;
+    m_mirrorPipeline = pipeline;
+    return true;
+}
+
+void SpriteRenderer::renderMirror(VkCommandBuffer cmd, const Mat4& mirrorViewProj, const Vec3& billboardRight,
+                                  const Vec3& towardCamera, float normalUpMix, VkBuffer instanceBuffer, uint32_t count,
+                                  float minAnchorY) {
+    if (count == 0 || m_mirrorPipeline == VK_NULL_HANDLE) return;
+    MirrorPush push{};
+    push.viewProjection = mirrorViewProj;
+    push.right = Vec4(billboardRight, normalUpMix);
+    push.facing = Vec4(towardCamera, minAnchorY);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_mirrorPipeline);
+    vkCmdPushConstants(cmd, m_mirrorLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
+    VkBuffer vertexBuffers[2] = {m_quadVertexBuffer, instanceBuffer};
+    VkDeviceSize offsets[2] = {0, 0};
+    vkCmdBindVertexBuffers(cmd, 0, 2, vertexBuffers, offsets);
+    VkDescriptorSet set = m_bindless->set();
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_mirrorLayout, 0, 1, &set, 0, nullptr);
+    vkCmdDraw(cmd, 6, count, 0, 0);
 }
 
 bool SpriteRenderer::createForwardPipeline() {

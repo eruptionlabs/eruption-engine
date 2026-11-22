@@ -140,11 +140,19 @@ public:
         float waveSlope = 1.0f;          // inclinacao das ondas (x normalStrength)
         float cloudReflection = 0.0f;    // nuvens do ceu no reflexo (liquid.frag skyCloudsReflected); desligado: lia como erro de refracao
         Vec3 deepColor = Vec3(0.012f, 0.06f, 0.075f); // cor da agua funda (espalhamento)
+        // Reflexo dos personagens (sprites) no espelho d'agua. false = fisico: o
+        // cartao fica na ancora e o plano do espelho corta o que esta' abaixo
+        // d'agua (quem pisa no fundo raso reflete so' o que sai da agua, como
+        // um modelo 3D). true = altura inteira: a ancora abaixo do nivel sobe
+        // ate' ele e o personagem reflete o corpo todo, como se pisasse na
+        // superficie. Preset "water_sprite_reflection": "physical" | "full".
+        bool spriteReflectFull = false;
         bool operator==(const StyleConfig& o) const {
             return hd2d == o.hd2d && planarReflection == o.planarReflection && depthWrite == o.depthWrite &&
                    reflectionStrength == o.reflectionStrength && reflectionDistortion == o.reflectionDistortion &&
                    sparkle == o.sparkle && rainRipples == o.rainRipples && shoreFoam == o.shoreFoam &&
-                   clarity == o.clarity && waveSlope == o.waveSlope && deepColor == o.deepColor;
+                   clarity == o.clarity && waveSlope == o.waveSlope && deepColor == o.deepColor &&
+                   spriteReflectFull == o.spriteReflectFull;
         }
     };
     void setStyle(const StyleConfig& style);
@@ -158,13 +166,10 @@ public:
     void setShoreField(const std::vector<float>& rg, uint32_t w, uint32_t h, const Vec2& origin, float invSize);
     void destroyShoreField();
     const StyleConfig& style() const { return m_style; }
-    // Sprites no reflexo planar: o alvo PBR do G-buffer (marca o sprite com
-    // R = 0,75) e o "cima" do quadro em mundo. Chamar todo quadro, antes de
-    // prepareRefraction.
-    void setSpriteBillboard(VkImageView gbufferPbrView, const Vec3& billboardUp) {
-        m_spritePbrView = gbufferPbrView;
-        m_spriteUp = billboardUp;
-    }
+    // O alvo PBR do G-buffer (marca o sprite com R = 0,75): o SSPR pula o
+    // pixel de sprite, que reflete no passe espelhado. Chamar todo quadro,
+    // antes de prepareRefraction.
+    void setSpritePbr(VkImageView gbufferPbrView) { m_spritePbrView = gbufferPbrView; }
     // Plano do reflexo planar deste quadro (o mesmo nivel que o SSPR usa):
     // false quando o estilo nao reflete objetos (sem HD-2D, sem reflexo planar,
     // GPU fraca ou mapa sem agua).
@@ -458,7 +463,6 @@ private:
     float m_ssprLevel = 0.0f;
     int32_t m_mirrorReflSlot = -1;
     VkImageView m_spritePbrView = VK_NULL_HANDLE;
-    Vec3 m_spriteUp = Vec3(0.0f, 1.0f, 0.0f);
     void createSsprPipeline();
     void destroySsprPipeline();
     void createSsprResources();

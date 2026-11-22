@@ -257,6 +257,14 @@ public:
     void renderSprites(VkCommandBuffer cmd, const FrameUBO& frameUbo);
     void renderSprites(VkCommandBuffer cmd, const FrameUBO& frameUbo, VkBuffer instanceBuffer, uint32_t count);
 
+    // Sprites no G-buffer do passe espelhado da agua (rendering ja' aberto
+    // pelo GBuffer do passe): cada billboard vira um cartao em pe' na ancora,
+    // de frente (na horizontal) para a camera. mirrorViewProj leva o MUNDO ao
+    // recorte espelhado; billboardRight/towardCamera sao horizontais e unitarios.
+    void renderMirror(VkCommandBuffer cmd, const Mat4& mirrorViewProj, const Vec3& billboardRight,
+                      const Vec3& towardCamera, float normalUpMix, VkBuffer instanceBuffer, uint32_t count,
+                      float minAnchorY = -1.0e30f); // ancora abaixo disto sobe ate' aqui (reflexo de altura inteira)
+
     void renderSpritesForward(VkCommandBuffer cmd, const FrameUBO& frameUbo, VkBuffer instanceBuffer, uint32_t count, const ShadowRenderer* shadows);
 
     void renderShadow(VkCommandBuffer cmd, VkPipelineLayout shadowLayout, const Mat4& lightSpaceMatrix, const FrameUBO& frameUbo, VkBuffer instanceBuffer, uint32_t count);
@@ -334,6 +342,14 @@ private:
 
     VkPipeline m_pipeline = VK_NULL_HANDLE;
     VkPipeline m_forwardPipeline = VK_NULL_HANDLE;
+    VkPipeline m_mirrorPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_mirrorLayout = VK_NULL_HANDLE;
+    struct MirrorPush {
+        Mat4 viewProjection;
+        Vec4 right;  // xyz = direita do billboard, w = mistura da normal com +Y
+        Vec4 facing; // xyz = horizontal ate' a camera, w = altura minima da ancora
+    };
+    static_assert(sizeof(MirrorPush) <= 128, "push do sprite espelhado passa de 128 bytes");
     VkPipeline m_maskPipeline = VK_NULL_HANDLE;
     VkPipeline m_layerPipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_layerPipelineLayout = VK_NULL_HANDLE;
@@ -402,6 +418,7 @@ private:
     bool createDescriptors();
     bool createPipeline();
     bool createForwardPipeline();
+    bool createMirrorPipeline();
     bool createShadowPipeline();
     bool createPlanarShadowPipeline();
     bool createCircleShadowPipeline();

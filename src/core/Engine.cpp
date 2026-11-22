@@ -3111,6 +3111,7 @@ void Engine::applyGraphicsPreset() {
         ws.hd2d = p.value("water_hd2d", false);
         ws.planarReflection = p.value("water_planar_reflection", true);
         ws.depthWrite = p.value("water_depth_write", true);
+        ws.spriteReflectFull = p.value("water_sprite_reflection", std::string("physical")) == "full";
         if (root.contains("water_style") && root["water_style"].is_object()) {
             const json& s = root["water_style"];
             ws.reflectionStrength = std::clamp(s.value("reflection_strength", ws.reflectionStrength), 0.0f, 4.0f);

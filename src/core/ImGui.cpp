@@ -1849,6 +1849,18 @@ void Engine::renderImGui() {
             if (ImGui::Begin("A/B Test (F9)", &m_showABTestMenu)) {
                 if (fx::BeginTabBar("ABTestTabs")) {
                     if (fx::BeginTabItem("Water")) {
+                        {
+                            // Reflexo dos personagens: fisico (corta abaixo d'agua, como o 3D)
+                            // ou a altura inteira (preset "water_sprite_reflection").
+                            WaterRenderer::StyleConfig ws = m_water.style();
+                            int mode = ws.spriteReflectFull ? 1 : 0;
+                            const char* modes[] = {"Physical (part above water)", "Full height"};
+                            if (fx::Combo("Character reflection", &mode, modes, IM_ARRAYSIZE(modes))) {
+                                ws.spriteReflectFull = mode == 1;
+                                m_water.setStyle(ws);
+                            }
+                            fx::Separator();
+                        }
                         fx::TextColored(ImVec4(1, 1, 0, 1), "Isolate which water feature causes the black glitch");
                         fx::Separator();
 

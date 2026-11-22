@@ -856,7 +856,7 @@ void Engine::render() {
     
     // diorama Tweaks
     frameUbo.shadowHeightScale = 0.35f; // Squash shadows on Y axis so they lay flat on terrain
-    frameUbo.spriteNormalYMix = 0.85f;  // Heavily bias normals UP so sprites catch sun from above
+    frameUbo.spriteNormalYMix = kSpriteNormalYMix;  // Heavily bias normals UP so sprites catch sun from above
     frameUbo.normalMapScale = m_normalMapScale;
     frameUbo.normalSmoothing = m_normalSmoothing;
     // LUT das curvas por distancia. Oito amostras uniformes em [0, max]: a
@@ -1478,15 +1478,7 @@ void Engine::render() {
     // existia e ninguem consultava. O regen de malha logo abaixo continua
     // rodando, entao ligar forceWater reativa tudo no frame seguinte.
     if (waterInView) {
-        // Reflexo planar: o sprite (quadro virado para a camera) reflete como
-        // um cartao em pe'. O "cima" do quadro e' o da camera inclinado pela
-        // spline do billboard, como em sprite_vert.glsl.
-        {
-            const float tilt = glm::radians(frameUbo.spriteTilt);
-            const Mat4 invView = glm::inverse(m_camera.viewMatrix());
-            const Vec3 up = Vec3(invView * Vec4(0.0f, std::cos(tilt), -std::sin(tilt), 0.0f));
-            m_water.setSpriteBillboard(m_gbuffer.pbrView(), glm::length(up) > 1e-5f ? glm::normalize(up) : Vec3(0, 1, 0));
-        }
+        m_water.setSpritePbr(m_gbuffer.pbrView()); // o SSPR pula o pixel de sprite
         m_water.updateContactFoam(m_timer.deltaTime(), m_waterMenu.config);
         WaterRenderer::WaterSettings prepSettings = m_waterMenu.config;
         if (m_classic.on && m_water.hasTexturedFrames()) prepSettings.liquidKind = 4; // sem reflexo planar (SSPR)

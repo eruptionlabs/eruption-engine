@@ -1288,14 +1288,12 @@ void WaterRenderer::prepareRefraction(VkCommandBuffer cmd,
 // ============================================================================
 // Push do sspr.comp. A matriz leva o ponto de recorte da cena direto ao
 // recorte do ponto espelhado (viewProj * espelho * invViewProj), e as duas
-// linhas de invViewProj dao a altura do ponto. spriteDirClip leva o pixel de
-// sprite ao reflexo de um cartao em pe' (ver sspr.comp). 128 bytes.
+// linhas de invViewProj dao a altura do ponto. 112 bytes.
 struct SsprPushConstants {
     Mat4 mirrorClip;
     Vec4 invRowY;
     Vec4 invRowW;
-    Vec4 params;        // x = nivel, y = fase (0 profundidade, 1 cor), z = sprites como cartao
-    Vec4 spriteDirClip; // viewProj * (cima do quadro + Y, 0) / cima.y
+    Vec4 params;        // x = nivel, y = fase (0 profundidade, 1 cor), z = 1 com o pbr do G-buffer
 };
 static_assert(sizeof(SsprPushConstants) <= 128, "push do SSPR passa de 128 bytes");
 
@@ -1437,7 +1435,7 @@ void WaterRenderer::createSsprResources() {
         VkDescriptorImageInfo color{m_refractionSampler, m_refractionView[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo key{VK_NULL_HANDLE, m_ssprKeyView, VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorImageInfo refl{VK_NULL_HANDLE, m_ssprColorView, VK_IMAGE_LAYOUT_GENERAL};
-        // 4: a copia de cor ate' o G-buffer chegar (setSpriteBillboard); o
+        // 4: a copia de cor ate' o G-buffer chegar (setSpritePbr); o
         // shader so' a le' com params.z ligado.
         const VkDescriptorImageInfo* infos[5] = {&depth, &color, &key, &refl, &color};
         VkWriteDescriptorSet w[5]{};
@@ -1497,7 +1495,7 @@ void WaterRenderer::dispatchSspr(VkCommandBuffer cmd, uint32_t frameIndex, const
 
     // Alvo PBR do quadro (o G-buffer muda de view no resize): o set deste
     // quadro foi usado ha' MAX_FRAMES quadros, ja' terminados.
-    const bool sprites = m_spritePbrView != VK_NULL_HANDLE && std::fabs(m_spriteUp.y) > 0.05f;
+    const bool sprites = m_spritePbrView != VK_NULL_HANDLE;
     if (sprites) {
         VkDescriptorImageInfo pbr{m_depthCopySampler, m_spritePbrView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet w{};
@@ -1520,7 +1518,6 @@ void WaterRenderer::dispatchSspr(VkCommandBuffer cmd, uint32_t frameIndex, const
     pc.invRowY = Vec4(invViewProj[0][1], invViewProj[1][1], invViewProj[2][1], invViewProj[3][1]);
     pc.invRowW = Vec4(invViewProj[0][3], invViewProj[1][3], invViewProj[2][3], invViewProj[3][3]);
     pc.params = Vec4(level, 0.0f, sprites ? 1.0f : 0.0f, 0.0f);
-    if (sprites) pc.spriteDirClip = viewProj * Vec4(m_spriteUp + Vec3(0.0f, 1.0f, 0.0f), 0.0f) / m_spriteUp.y;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssprPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssprLayout, 0, 1, &m_ssprSets[frameIndex], 0, nullptr);
