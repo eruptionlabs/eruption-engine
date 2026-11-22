@@ -1,6 +1,7 @@
 #include "core/Project.hpp"
 
 #include "core/Logger.hpp"
+#include "utils/AssetVfs.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -77,6 +78,16 @@ bool Project::open(const fs::path& dir, std::string* err) {
         m.fastLoad = j.value("fast_load", false);
         readFraming(j, m);
         readLoading(j, m);
+        if (j.contains("packs") && j["packs"].is_array()) {
+            for (const auto& e : j["packs"])
+                if (e.is_string()) m.packs.push_back(e.get<std::string>());
+        }
+        for (const char* key : {"editor_scripts", "editor_read_paths"}) {
+            if (!j.contains(key) || !j[key].is_array()) continue;
+            auto& dst = std::string(key) == "editor_scripts" ? m.editorScripts : m.editorReadPaths;
+            for (const auto& e : j[key])
+                if (e.is_string()) dst.push_back(e.get<std::string>());
+        }
         if (j.contains("export") && j["export"].is_object()) m.icon = j["export"].value("icon", std::string());
     } catch (const std::exception& e) {
         if (err) *err = std::string("project.eruption is not valid JSON: ") + e.what();
@@ -87,6 +98,10 @@ bool Project::open(const fs::path& dir, std::string* err) {
     m_manifest = m;
     m_open = true;
     ERUPTION_LOG_WARN("[PROJECT] \"%s\" aberto em %s", m_manifest.name.c_str(), m_root.string().c_str());
+    // Pacotes .ecp ("packs" no manifesto, ou packs/): montados ja' na abertura,
+    // antes de qualquer leitura de conteudo (jsons de dados, fonte, scripts...).
+    vfs::unmountPacks();
+    if (const std::vector<std::string> packs = packFiles(); !packs.empty()) vfs::mountPacks(packs, m_root.string());
     return true;
 }
 
@@ -158,6 +173,9 @@ bool Project::saveManifest(std::string* err) {
             if (m_manifest.cameraKeepInsideMap) c["keep_inside_map"] = true;
             if (!c.empty()) j["camera"] = c;
         }
+        if (!m_manifest.packs.empty()) j["packs"] = m_manifest.packs;
+        if (!m_manifest.editorScripts.empty()) j["editor_scripts"] = m_manifest.editorScripts;
+        if (!m_manifest.editorReadPaths.empty()) j["editor_read_paths"] = m_manifest.editorReadPaths;
         if (!m_manifest.loadingJson.empty()) j["loading"] = json::parse(m_manifest.loadingJson);
         std::ofstream f(m_root / kManifestName);
         if (!f) {
@@ -173,9 +191,48 @@ bool Project::saveManifest(std::string* err) {
 }
 
 void Project::close() {
+    vfs::unmountPacks();
     m_open = false;
     m_root.clear();
     m_manifest = Manifest{};
+}
+
+std::vector<std::string> Project::packFiles() const {
+    std::vector<std::string> out;
+    if (!m_open) return out;
+    std::error_code ec;
+    auto isEcp = [](const fs::path& p) {
+        std::string e = p.extension().string();
+        std::transform(e.begin(), e.end(), e.begin(), ::tolower);
+        return e == ".ecp" || e == ".tuf";
+    };
+    // .ecp de uma pasta, em ordem alfabetica (so' os arquivos dela).
+    auto inFolder = [&](const fs::path& dir) {
+        std::vector<std::string> v;
+        for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec))
+            if (it->is_regular_file(ec) && isEcp(it->path())) v.push_back(it->path().string());
+        std::sort(v.begin(), v.end());
+        return v;
+    };
+    auto add = [&](const std::vector<std::string>& v) { out.insert(out.end(), v.begin(), v.end()); };
+    if (!m_manifest.packs.empty()) {
+        for (const std::string& e : m_manifest.packs) {
+            const fs::path p = fs::path(e).is_absolute() ? fs::path(e) : m_root / e;
+            if (fs::is_directory(p, ec)) add(inFolder(p));
+            else if (fs::is_regular_file(p, ec)) out.push_back(p.string());
+            else ERUPTION_LOG_WARN("[PROJECT] pacote nao encontrado: %s", p.string().c_str());
+        }
+        return out;
+    }
+    const fs::path dir = m_root / "packs";
+    if (!fs::is_directory(dir, ec)) return out;
+    add(inFolder(dir));
+    std::vector<fs::path> subs;
+    for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec))
+        if (it->is_directory(ec)) subs.push_back(it->path());
+    std::sort(subs.begin(), subs.end());
+    for (const fs::path& s : subs) add(inFolder(s));
+    return out;
 }
 
 std::vector<std::string> Project::maps() const {
@@ -183,12 +240,25 @@ std::vector<std::string> Project::maps() const {
     if (!m_open) return out;
     std::error_code ec;
     const fs::path dir = m_root / "assets" / "external";
+    // Mapas dentro dos pacotes: assets/external/<mapa>/<mapa>.glb
+    {
+        const std::string pre = (dir / "").string();
+        for (const std::string& f : vfs::listPacked(dir.string())) {
+            if (f.size() <= pre.size() + 4 || f.compare(f.size() - 4, 4, ".glb") != 0) continue;
+            const std::string rel = f.substr(pre.size() - 0);
+            const size_t s1 = rel.find('/');
+            if (s1 == std::string::npos) continue;
+            const std::string n = rel.substr(0, s1);
+            if (rel == n + "/" + n + ".glb") out.push_back(n);
+        }
+    }
     for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); ++it) {
         if (!it->is_directory(ec)) continue;
         const std::string n = it->path().filename().string();
         if (fs::is_regular_file(it->path() / (n + ".glb"), ec)) out.push_back(n);
     }
     std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
     return out;
 }
 
@@ -326,7 +396,8 @@ fs::path gameRef(const std::string& path) {
 std::string config(const std::string& rel) {
     const Project& p = Project::instance();
     std::error_code ec;
-    if (p.isOpen() && fs::is_regular_file(p.root() / rel, ec)) return (p.root() / rel).string();
+    if (p.isOpen() && (fs::is_regular_file(p.root() / rel, ec) || vfs::exists(p.root() / rel)))
+        return (p.root() / rel).string(); // no disco ou num pacote .ecp: quem le' usa o vfs
     return rel;
 }
 

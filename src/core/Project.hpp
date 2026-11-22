@@ -88,6 +88,21 @@ public:
         // "export": {"icon": "<png>"}: icone do jogo (relativo a' pasta do
         // projeto), na janela do modo jogo e no export. Vazio = o do motor.
         std::string icon;
+        // "packs": pacotes .ecp do jogo (caminhos relativos a' pasta do
+        // projeto, ou absolutos), na ordem de sobreposicao: o ULTIMO vence.
+        // Uma pasta na lista vale por todos os .ecp dentro dela. Sem a chave,
+        // vale packs/*.ecp em ordem alfabetica e, DEPOIS, packs/<sub>/*.ecp
+        // (ex.: packs/hires/). Arquivo solto no projeto vence o pacote.
+        std::vector<std::string> packs;
+        // "editor_scripts": scripts que rodam so' no editor, em modo de edicao,
+        // para mostrar conteudo de PREVIA no mapa (caminhos relativos a' pasta do
+        // projeto). Tudo o que criam e' transitorio: nao vai para a cena salva,
+        // some ao trocar de mapa e no Play. Ver ScriptHost::runEditorPreview.
+        std::vector<std::string> editorScripts;
+        // "editor_read_paths": pastas extras (relativas ao projeto, ou absolutas)
+        // de onde esses scripts podem LER texto (io.read_text, io.list_dir),
+        // alem da propria pasta do projeto. So' leitura, so' no editor.
+        std::vector<std::string> editorReadPaths;
     };
 
     static Project& instance();
@@ -105,8 +120,12 @@ public:
     Manifest& manifest() { return m_manifest; }
     const Manifest& manifest() const { return m_manifest; }
 
-    // Mapas do projeto (pastas assets/external/<mapa>/<mapa>.glb).
+    // Mapas do projeto (pastas assets/external/<mapa>/<mapa>.glb), soltos ou
+    // dentro dos pacotes montados (vfs::listPacked).
     std::vector<std::string> maps() const;
+    // Os .ecp do projeto, ja' absolutos e na ordem de sobreposicao (ver
+    // Manifest::packs). So' os que existem; vazio sem projeto ou sem pacotes.
+    std::vector<std::string> packFiles() const;
 
     // Pasta do manifesto a partir de --project/ERUPTION_PROJECT/
     // data/launcher_config.json ("project"). Vazio = nenhum pedido.

@@ -775,14 +775,11 @@ bool Prefab::isPrefabPath(const fs::path& p) {
 
 bool Prefab::load(const fs::path& path, std::string& error) {
     *this = Prefab{};
-    std::ifstream f(project::gameRef(path.string()), std::ios::binary);
-    if (!f) {
+    std::string src; // disco ou pacote .ecp do projeto
+    if (!vfs::readText(project::gameRef(path.string()).string(), src)) {
         error = "Prefab not found: " + path.generic_string();
         return false;
     }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    const std::string src = ss.str();
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     luaL_sandbox(L);

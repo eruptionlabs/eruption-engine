@@ -55,6 +55,13 @@ bool read(const std::filesystem::path& path, std::vector<uint8_t>& out);
 bool readText(const std::string& path, std::string& out);
 bool exists(const std::string& path);
 bool exists(const std::filesystem::path& path);
+// Textos fixados na memoria (lidos antes, numa thread): readText e exists
+// respondem por eles sem tocar no disco. O warp fixa a cena e o scatter do
+// mapa de destino; no HD em NTFS (um pedido por vez no driver) uma leitura
+// pequena no fio principal esperava atras das grandes: 5 a 8 s por arquivo.
+// `found` = false fixa a ausencia. clearPinnedText solta todos.
+void pinText(const std::string& path, bool found, std::string text);
+void clearPinnedText();
 // Tamanho e data (marca opaca: so' serve para comparar com outra marca do
 // vfs) do arquivo. Do pacote: os do arquivo de origem no momento do build.
 bool stat(const std::string& path, uint64_t& size, int64_t& mtime);
@@ -64,6 +71,26 @@ bool inBundle(const std::string& path);
 // O arquivo de verdade no disco, mesmo com a entrada no pacote: para o cache
 // cuja copia do pacote nao bateu com a validacao (e anotado no build).
 bool readDisk(const std::string& path, std::vector<uint8_t>& out);
+// O arquivo vem de um .tuf montado cuja entrada tem as texturas prontas para a
+// GPU (tufo kFlagGpuReady): o .glb guardado nao traz as imagens e o pacote
+// <glb>.*.etexpack esta' no mesmo .tuf. Falso se ha' um arquivo solto no disco.
+bool tufGpuReady(const std::string& path);
+
+// ---- pacotes .ecp do projeto (fonte de arquivos, camada abaixo do disco) ----
+
+// Monta os pacotes .ecp (formats/EcpReader.hpp) na ordem dada: um unico sobreposto,
+// o ULTIMO que cita o caminho vence. O caminho dentro do pacote e' relativo a
+// `baseDir` (a pasta do projeto): o arquivo <baseDir>/assets/external/x/x.glb
+// e' a entrada "assets/external/x/x.glb". Disco primeiro: um arquivo solto no
+// projeto vence o pacote (read, exists, stat). Chame na carga, antes de
+// qualquer fio ler. Devolve false (com aviso) se nada abriu; sem pacotes o
+// comportamento e' o de sempre.
+bool mountPacks(const std::vector<std::string>& ecpPaths, const std::string& baseDir);
+void unmountPacks();
+bool packsMounted();
+// Caminhos (baseDir + chave do pacote, em minusculas) dos arquivos de pacote
+// sob a pasta `dir`, recursivo; vazio sem pacotes. E' o "listar pasta" do pacote.
+std::vector<std::string> listPacked(const std::string& dir);
 
 // ---- pacotes -----------------------------------------------------------
 

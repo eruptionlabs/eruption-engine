@@ -287,7 +287,7 @@ std::vector<std::filesystem::path> splatLayerPaths(const std::vector<std::string
         for (const std::filesystem::path& p : {color, std::filesystem::path(base.string() + "_normal" + ext),
                                                std::filesystem::path(base.string() + "_mrahw" + ext)}) {
             std::error_code ec;
-            if (std::filesystem::exists(p, ec)) paths.push_back(p);
+            if (vfs::exists(p)) paths.push_back(p);
         }
     }
     return paths;

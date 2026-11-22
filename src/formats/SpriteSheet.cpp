@@ -1,4 +1,5 @@
 #include "formats/SpriteSheet.hpp"
+#include "utils/AssetVfs.hpp"
 
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
@@ -217,14 +218,14 @@ bool writeEruptSprV2(const SpriteSheetResult& sheet, const std::string& path, st
 bool loadSpriteSheetRecipe(const std::string& jsonPath, SpriteSheetSpec& out, std::string& error) {
     namespace fs = std::filesystem;
     out = SpriteSheetSpec{};
-    std::ifstream f(jsonPath);
-    if (!f) {
+    std::string text;
+    if (!vfs::readText(jsonPath, text)) { // disco ou pacote .ecp
         error = "Could not read " + jsonPath;
         return false;
     }
     nlohmann::json j;
     try {
-        f >> j;
+        j = nlohmann::json::parse(text);
     } catch (const std::exception& e) {
         error = jsonPath + ": " + e.what();
         return false;
@@ -252,9 +253,9 @@ bool loadSpriteSheetRecipe(const std::string& jsonPath, SpriteSheetSpec& out, st
     }
     std::error_code ec;
     const fs::path inProject = project::gameRef(image);
-    out.image = fs::exists(inProject, ec) ? inProject.string()
+    out.image = vfs::exists(inProject) ? inProject.string()
                                           : (fs::path(jsonPath).parent_path() / fs::path(image).filename()).string();
-    if (!fs::exists(out.image, ec)) {
+    if (!vfs::exists(out.image)) {
         error = jsonPath + ": sheet image not found: " + image;
         return false;
     }

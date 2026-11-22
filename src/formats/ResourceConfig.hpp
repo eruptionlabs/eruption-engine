@@ -6,6 +6,7 @@
 #include <sstream>
 #include <algorithm>
 #include "core/Logger.hpp"
+#include "utils/AssetVfs.hpp"
 
 namespace eruption {
 
@@ -27,11 +28,12 @@ public:
         configPath = path;
         entries.clear();
         cleanBoundsPatterns.clear();
-        std::ifstream file(path);
-        if (!file.is_open()) {
+        std::string text; // disco ou pacote .ecp do projeto
+        if (!vfs::readText(path, text)) {
             ERUPTION_LOG_WARN("Resource config not found: %s", path.c_str());
             return false;
         }
+        std::istringstream file(text);
 
         std::string line;
         bool inDataSection = false;

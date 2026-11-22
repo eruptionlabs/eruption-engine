@@ -1,4 +1,5 @@
 #include "renderer/WeatherSystem.hpp"
+#include "utils/AssetVfs.hpp"
 #include "renderer/ClimateFuzzy.hpp"
 
 #include "core/Logger.hpp"
@@ -1176,11 +1177,11 @@ void WeatherSystem::updateCoherence() {
 
 bool WeatherSystem::loadTypeOverrides(const std::string& path) {
     m_overridePath = path;
-    std::ifstream f(path);
-    if (!f.is_open()) return false;
+    std::string text; // disco ou pacote .ecp do projeto
+    if (!vfs::readText(path, text)) return false;
 
     nlohmann::json j;
-    try { f >> j; }
+    try { j = nlohmann::json::parse(text); }
     catch (const std::exception& e) {
         ERUPTION_LOG_WARN("[CLIMA] %s: JSON invalido (%s); templates de C++ mantidos",
                           path.c_str(), e.what());

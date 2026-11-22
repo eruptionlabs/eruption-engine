@@ -1,4 +1,5 @@
 #include "game/HudRenderer.hpp"
+#include "utils/AssetVfs.hpp"
 #include "game/PlayerController.hpp"
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
@@ -31,14 +32,16 @@ void HudRenderer::update() {
 void HudRenderer::reloadIfChanged() {
     namespace fs = std::filesystem;
     try {
-        if (!fs::exists(m_cssPath)) {
+        if (!fs::exists(m_cssPath) && !vfs::exists(m_cssPath)) {
             if (!m_loaded) ERUPTION_LOG_WARN("[HUD] CSS nao encontrado: %s (usando layout padrao)", m_cssPath.c_str());
             m_loaded = true; // nao insistir a cada frame
             return;
         }
-        auto mtime = fs::last_write_time(m_cssPath);
+        std::error_code mec; // do pacote: sem data de arquivo (nao recarrega sozinho)
+        auto mtime = fs::last_write_time(m_cssPath, mec);
         if (m_loaded && mtime == m_cssMTime) return;
         if (m_parser.load(m_cssPath)) {
+            m_parser.resolveRootVars(); // var(--x) com :root
             m_cssMTime = mtime;
             m_loaded = true;
             ERUPTION_LOG_INFO("[HUD] CSS carregado de %s", m_cssPath.c_str());

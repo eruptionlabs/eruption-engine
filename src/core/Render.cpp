@@ -2535,7 +2535,7 @@ void Engine::render() {
         renderLoadingProgress();
     }
 
-    if (!m_benchmarkThunderstorm && !(m_benchmarkHeavyRain && m_benchmarkHideHud) && m_packManager.dirCount() == 0) {
+    if (!m_benchmarkThunderstorm && !(m_benchmarkHeavyRain && m_benchmarkHideHud) && m_packManager.sourceCount() == 0) {
         ImVec2 ws = ImGui::GetIO().DisplaySize;
         ImGui::SetNextWindowPos(ImVec2(ws.x * 0.5f, ws.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::Begin("No Pack Overlay", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove);

@@ -22,6 +22,7 @@
 #include "formats/TerrainParser.hpp"
 #include "game/PlayerController.hpp"
 #include "scene/SceneEdits.hpp"
+#include "utils/AssetVfs.hpp"
 #include "utils/EmbeddedTextureBake.hpp"
 #include "utils/PbrTextureLoader.hpp"
 
@@ -212,7 +213,13 @@ bool Engine::mapGroundArea(const std::string& map, Vec2& lo, Vec2& hi) {
     for (const fs::path& p : {project::game("assets/external") / map / (map + ".ter"),
                               project::game("assets/data") / (map + ".ter"),
                               project::game("assets/models") / (map + ".ter")}) {
-        std::ifstream f(p, std::ios::binary);
+        std::ifstream disk(p, std::ios::binary);
+        std::istringstream packed;
+        if (!disk && vfs::packsMounted()) { // so' num pacote .ecp do projeto
+            std::string blob;
+            if (vfs::readText(p.string(), blob)) packed.str(std::move(blob));
+        }
+        std::istream& f = disk ? static_cast<std::istream&>(disk) : static_cast<std::istream&>(packed);
         if (!f) continue;
         char magic[11] = {};
         uint32_t version = 0, w = 0, d = 0;

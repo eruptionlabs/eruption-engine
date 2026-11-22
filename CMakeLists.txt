@@ -776,6 +776,57 @@ if(NOT ANDROID AND NOT EMSCRIPTEN)
         target_link_libraries(eruption-engine PRIVATE "${ERUPTION_ZSTD_LIB}")
     endif()
 endif()
+# Decodificador zstd para os pacotes .ecp (src/formats/EcpReader.hpp), em TODOS
+# os alvos. Desktop: o do sistema quando existe (acima). Senao (Android, web,
+# Windows sem libzstd): so' a parte que DESCOMPRIME, vendorizada em
+# third_party/zstd (zstd 1.5.6, BSD; sem compressor, sem threads, sem assembly).
+if(NOT ANDROID AND NOT EMSCRIPTEN AND ERUPTION_ZSTD_INCLUDE AND ERUPTION_ZSTD_LIB)
+    target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_ZSTD_DECODER=1)
+else()
+    file(GLOB ERUPTION_ZSTD_DEC_SOURCES
+        "${CMAKE_SOURCE_DIR}/third_party/zstd/common/*.c"
+        "${CMAKE_SOURCE_DIR}/third_party/zstd/decompress/*.c")
+    add_library(eruption-zstd-dec STATIC ${ERUPTION_ZSTD_DEC_SOURCES})
+    target_include_directories(eruption-zstd-dec PUBLIC "${CMAKE_SOURCE_DIR}/third_party/zstd")
+    target_include_directories(eruption-zstd-dec PRIVATE
+        "${CMAKE_SOURCE_DIR}/third_party/zstd/common" "${CMAKE_SOURCE_DIR}/third_party/zstd/decompress")
+    target_compile_definitions(eruption-zstd-dec PRIVATE ZSTD_DISABLE_ASM=1 ZSTD_LEGACY_SUPPORT=0 ZSTD_MULTITHREAD=0)
+    set_target_properties(eruption-zstd-dec PROPERTIES POSITION_INDEPENDENT_CODE ON C_STANDARD 99)
+    target_compile_options(eruption-zstd-dec PRIVATE $<$<NOT:$<C_COMPILER_ID:MSVC>>:-w>) # terceiros, como o netcode
+    target_link_libraries(eruption-engine PRIVATE eruption-zstd-dec)
+    target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_ZSTD_DECODER=1)
+endif()
+# Tufo (tools/tufo, submodulo): o formato .tuf (biblioteca, CLI `tufo` e testes).
+# O motor le' os pacotes pela VFS e o editor tem o painel Pacotes; o codigo do
+# formato mora no repositorio proprio. Sem o submodulo baixado, aponte
+# -DERUPTION_TUFO_DIR=<pasta do tufo> (um checkout local). O zstd e' o mesmo
+# do motor: o de sistema (le e grava) ou so' o decodificador vendorizado
+# (Android, web: le os pacotes, nao grava).
+set(ERUPTION_TUFO_DIR "" CACHE PATH "Pasta do Tufo (vazio: o submodulo tools/tufo, ou um checkout ao lado do motor, ../tufo)")
+if(NOT ERUPTION_TUFO_DIR)
+    foreach(_tufo_try "${CMAKE_SOURCE_DIR}/tools/tufo" "${CMAKE_SOURCE_DIR}/../tufo")
+        if(EXISTS "${_tufo_try}/CMakeLists.txt")
+            set(ERUPTION_TUFO_DIR "${_tufo_try}")
+            break()
+        endif()
+    endforeach()
+endif()
+if(NOT ERUPTION_TUFO_DIR OR NOT EXISTS "${ERUPTION_TUFO_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR "Tufo nao encontrado (tools/tufo, ../tufo ou ERUPTION_TUFO_DIR=${ERUPTION_TUFO_DIR}). Rode `git submodule update --init tools/tufo` "
+                        "ou passe -DERUPTION_TUFO_DIR=<pasta do tufo>.")
+endif()
+if(NOT ANDROID AND NOT EMSCRIPTEN AND ERUPTION_ZSTD_INCLUDE AND ERUPTION_ZSTD_LIB)
+    set(TUFO_ZSTD_INCLUDE "${ERUPTION_ZSTD_INCLUDE}" CACHE PATH "" FORCE)
+    set(TUFO_ZSTD_LIB "${ERUPTION_ZSTD_LIB}" CACHE FILEPATH "" FORCE)
+else()
+    set(TUFO_ZSTD_DECODER_TARGET eruption-zstd-dec CACHE STRING "" FORCE)
+endif()
+enable_testing()
+add_subdirectory("${ERUPTION_TUFO_DIR}" tufo)
+target_link_libraries(eruption-engine PRIVATE tufo::tufo)
+if(TARGET tufo)
+    add_dependencies(eruption-engine tufo) # a CLI sai junto com o motor
+endif()
 if(ERUPTION_HAVE_ORT)
     target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_ORT=1)
     target_include_directories(eruption-engine SYSTEM PRIVATE "${ERUPTION_ORT_DIR}/include")

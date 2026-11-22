@@ -1,4 +1,5 @@
 #include "core/MinimapWalk.hpp"
+#include "utils/AssetVfs.hpp"
 
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -28,9 +29,9 @@ bool parseHexColor(const std::string& text, uint8_t out[3]) {
 
 MinimapWalkConfig MinimapWalkConfig::load(const std::string& path) {
     MinimapWalkConfig cfg;
-    std::ifstream f(path);
-    if (!f) return cfg;
-    nlohmann::json j = nlohmann::json::parse(f, nullptr, false);
+    std::string text; // disco ou pacote .ecp do projeto
+    if (!vfs::readText(path, text)) return cfg;
+    nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
     if (!j.is_object()) return cfg;
     auto color = [&](const char* key, uint8_t out[3]) {
         auto it = j.find(key);

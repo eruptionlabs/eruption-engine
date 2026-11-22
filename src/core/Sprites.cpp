@@ -11,6 +11,7 @@
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "utils/ImageUtils.hpp"
+#include "utils/AssetVfs.hpp"
 #include "utils/Profiler.hpp"
 #include "formats/SpriteTypes.hpp"
 #include "core/JobSystem.hpp"
@@ -27,6 +28,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -294,11 +296,17 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
 
 namespace {
 
+unsigned char* loadImageVfs(const std::string& path, int& w, int& h, int& channels) {
+    return ImageUtils::loadRawVfs(path, w, h, channels, 4);
+}
+
 // Os quadros de uma folha .spr v2/v3 com o mesmo preparo da carga no quadro
 // (corte de alfa do loadEruptSprV2 + dilatacao do createTextureFromSprImage),
 // sem tocar na GPU: roda num job. Nulo se o arquivo nao e' desse formato.
 std::shared_ptr<Engine::PreparedSheet> prepareSpriteSheet(const std::string& sprPath) {
-    std::ifstream f(sprPath, std::ios::binary);
+    std::string blob;
+    vfs::readText(sprPath, blob); // disco ou pacote .ecp do projeto
+    std::istringstream f(blob, std::ios::binary);
     char magic[8] = {};
     f.read(magic, 8);
     if (!f || std::memcmp(magic, "ERUPTSPR", 8) != 0) return nullptr;
@@ -335,8 +343,7 @@ void Engine::preloadCharacterSprite(const std::string& png) {
     spr.replace_extension(".spr");
     const std::string key = spr.string();
     if (m_characterSpriteCache.count(png) || m_spritePreloads.count(key)) return; // ja' na GPU ou a caminho
-    std::error_code ec;
-    if (!std::filesystem::exists(spr, ec)) return; // so' PNG: carga simples, sem preparo caro
+    if (!vfs::exists(spr)) return; // so' PNG: carga simples, sem preparo caro
     m_spritePreloads.emplace(key, JobSystem::instance().submit([key] { return prepareSpriteSheet(key); }).share());
 }
 
@@ -439,8 +446,7 @@ void Engine::loadSpriteNormals(const std::string& path, LoadedSprite& out) {
         return; // a propria folha de normais
     std::filesystem::path np = p;
     np.replace_filename(p.stem().string() + "_normal" + ext);
-    std::error_code ec;
-    if (!std::filesystem::exists(project::gameRef(np.string()), ec)) return;
+    if (!vfs::exists(project::gameRef(np.string()))) return;
     if (ext == ".spr") {
         LoadedSprite tmp;
         if (!loadSpriteFromEruptSpr(np.string(), tmp)) return;
@@ -458,7 +464,7 @@ void Engine::loadSpriteNormals(const std::string& path, LoadedSprite& out) {
     }
     if (out.textures.size() != 1) return;
     int w = 0, h = 0, channels = 0;
-    unsigned char* data = stbi_load(project::gameRef(np.string()).string().c_str(), &w, &h, &channels, 4);
+    unsigned char* data = loadImageVfs(project::gameRef(np.string()).string(), w, h, channels);
     if (!data) return;
     if (uint32_t(w) != out.textures[0].width || uint32_t(h) != out.textures[0].height) {
         ERUPTION_LOG_WARN("Sprite: %s (%dx%d) nao tem o tamanho da folha %s (ignorado)", np.string().c_str(), w, h,
@@ -483,7 +489,7 @@ bool Engine::loadSpriteFromPng(const std::string& path, LoadedSprite& out) {
     // Caminho relativo citado por cena/script: sai da pasta do projeto.
     const std::string disk = project::gameRef(path).string();
     int w = 0, h = 0, channels = 0;
-    unsigned char* data = stbi_load(disk.c_str(), &w, &h, &channels, 4);
+    unsigned char* data = loadImageVfs(disk, w, h, channels);
     if (!data) {
         ERUPTION_LOG_WARN("loadSpriteFromPng: failed to load %s", path.c_str());
         return false;
@@ -549,11 +555,12 @@ bool Engine::loadSpriteFromPng(const std::string& path, LoadedSprite& out) {
 bool Engine::loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out) {
     cleanupSpriteTextures(out);
 
-    std::ifstream f(project::gameRef(path), std::ios::binary);
-    if (!f) {
+    std::string blob;
+    if (!vfs::readText(project::gameRef(path).string(), blob)) { // disco ou pacote .ecp
         ERUPTION_LOG_WARN("loadSpriteFromEruptSpr: failed to open %s", path.c_str());
         return false;
     }
+    std::istringstream f(blob, std::ios::binary);
 
     auto readU32 = [&]() -> uint32_t {
         uint32_t v;
@@ -674,7 +681,7 @@ bool Engine::loadSpriteFromEruptSpr(const std::string& path, LoadedSprite& out) 
     return true;
 }
 
-bool Engine::loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out, uint32_t version) {
+bool Engine::loadEruptSprV2(std::istream& f, const std::string& path, LoadedSprite& out, uint32_t version) {
     // Todos os quadros da folha num envio so': um immediateSubmit por quadro
     // (dezenas a centenas por folha) era o grosso do custo de criar um elenco
     // na chegada a um mapa. O envio sai ao fim desta funcao, por qualquer

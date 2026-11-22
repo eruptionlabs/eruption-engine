@@ -1,4 +1,5 @@
 #include "renderer/vfx/VfxEffect.hpp"
+#include "utils/AssetVfs.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -340,12 +341,12 @@ json toJson(const VfxEffectDesc& fx) {
 } // namespace
 
 bool loadVfxEffect(const std::string& path, VfxEffectDesc& out, std::string* err) {
-    std::ifstream f(path);
-    if (!f) {
+    std::string text; // disco ou pacote .ecp do projeto
+    if (!vfs::readText(path, text)) {
         if (err) *err = "nao abriu " + path;
         return false;
     }
-    return fromJson(json::parse(f, nullptr, false), out, err, path);
+    return fromJson(json::parse(text, nullptr, false), out, err, path);
 }
 
 bool saveVfxEffect(const std::string& path, const VfxEffectDesc& fx, std::string* err) {

@@ -12,6 +12,7 @@
 
 #include "script/NativeModule.hpp"
 #include "core/Project.hpp"
+#include "utils/AssetVfs.hpp"
 #include "utils/EventLog.hpp"
 #include "net/Net.hpp"
 
@@ -63,10 +64,9 @@ int errorHandler(lua_State* L) {
 }
 
 std::string readFile(const fs::path& p) {
-    std::ifstream f(p, std::ios::binary);
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
+    std::string text; // disco primeiro, depois pacote .ecp do projeto
+    vfs::readText(p.string(), text);
+    return text;
 }
 
 // Menor distância de um ponto a uma caixa (zero dentro dela).
@@ -426,13 +426,23 @@ int ScriptHost::moduleRef(const std::string& name, std::string& error) {
         return -1;
     }
 
-    const fs::path target = (m_dir / (want + ".luau")).lexically_normal();
+    fs::path target = (m_dir / (want + ".luau")).lexically_normal();
+    {
+        // O pacote guarda os nomes em minuscula: sem o arquivo no disco, o
+        // require acha o do pacote pelo mesmo nome em minuscula.
+        std::error_code lec;
+        if (vfs::packsMounted() && !fs::is_regular_file(target, lec)) {
+            std::string low = target.generic_string();
+            for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (vfs::exists(fs::path(low))) target = fs::path(low);
+        }
+    }
     auto it = std::find_if(m_scripts.begin(), m_scripts.end(), [&](const Script& s) {
         return s.path.lexically_normal() == target;
     });
     if (it == m_scripts.end()) {
         std::error_code ec;
-        if (!fs::is_regular_file(target, ec)) {
+        if (!fs::is_regular_file(target, ec) && !vfs::exists(target)) {
             error = "require: there is no script " + want + ".luau in " + m_dir.generic_string();
             return -1;
         }
@@ -544,6 +554,21 @@ void ScriptHost::scan() {
             found.push_back(dirIt->path());
     }
     if (ec) listingComplete = false;
+    // Scripts que so' existem num pacote .ecp do projeto (o do disco vence:
+    // mesmo caminho, sem olhar maiuscula, ja' esta' em `found`).
+    if (vfs::packsMounted()) {
+        auto lower = [](std::string t) {
+            for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return t;
+        };
+        std::unordered_set<std::string> have;
+        for (const fs::path& f : found) have.insert(lower(f.lexically_normal().generic_string()));
+        for (const std::string& f : vfs::listPacked(m_dir.string())) {
+            const fs::path pp = fs::path(f).lexically_normal();
+            if (pp.extension() != ".luau" || pp.filename().string().find(".d.luau") != std::string::npos) continue;
+            if (have.insert(lower(pp.generic_string())).second) found.push_back(pp);
+        }
+    }
     std::sort(found.begin(), found.end());
 
     // So' sai quem SUMIU de fato. Antes um script fora da lista era tratado

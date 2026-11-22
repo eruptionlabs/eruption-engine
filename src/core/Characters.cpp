@@ -8,6 +8,7 @@
 #include "core/Logger.hpp"
 #include "core/Platform.hpp"
 #include "core/Project.hpp"
+#include "utils/AssetVfs.hpp"
 #include "game/PlayerController.hpp"
 
 #include <GLFW/glfw3.h>
@@ -42,7 +43,7 @@ bool Engine::loadCharacterSprite(const std::string& png, LoadedSprite& out) {
     std::filesystem::path spr = project::gameRef(png);
     spr.replace_extension(".spr");
     std::error_code ec;
-    bool ok = std::filesystem::exists(spr, ec) && loadSpriteFromEruptSpr(spr.string(), lido);
+    bool ok = vfs::exists(spr) && loadSpriteFromEruptSpr(spr.string(), lido);
     // Normal map autoral da folha (.spr; o PNG ja' procura o dele).
     if (ok) loadSpriteNormals(spr.string(), lido);
     if (!ok) ok = loadSpriteFromPng(png, lido);

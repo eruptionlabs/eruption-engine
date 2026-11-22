@@ -1,4 +1,5 @@
 #include "renderer/ClimateFuzzy.hpp"
+#include "utils/AssetVfs.hpp"
 #include "core/Logger.hpp"
 
 #include <glm/glm.hpp>
@@ -125,11 +126,11 @@ long long fileMtime(const std::string& p) { return platform::fileTime(p); }
 
 bool ClimateFuzzySet::loadFromFile(const std::string& path) {
     m_path = path;
-    std::ifstream f(path);
-    if (!f.is_open()) return false;
+    std::string text; // disco ou pacote .ecp do projeto
+    if (!vfs::readText(path, text)) return false;
 
     nlohmann::json j;
-    try { f >> j; }
+    try { j = nlohmann::json::parse(text); }
     catch (const std::exception& e) {
         ERUPTION_LOG_WARN("[CLIMA] %s: JSON invalido (%s); selecao automatica desligada",
                           path.c_str(), e.what());

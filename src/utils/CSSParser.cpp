@@ -1,4 +1,5 @@
 #include "utils/CSSParser.hpp"
+#include "utils/AssetVfs.hpp"
 #include <fstream>
 #include <sstream>
 #include <cctype>
@@ -32,11 +33,10 @@ std::vector<std::string> CSSParser::split(const std::string& s, char delim) {
 }
 
 bool CSSParser::load(const std::string& path) {
-    std::ifstream file(path);
-    if (!file.is_open()) return false;
-    std::stringstream ss;
-    ss << file.rdbuf();
-    parse(ss.str());
+    std::string text; // disco ou pacote .ecp do projeto
+    if (!vfs::readText(path, text)) return false;
+    parse(text);
+    reindex();
     return true;
 }
 

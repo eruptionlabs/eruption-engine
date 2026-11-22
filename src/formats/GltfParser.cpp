@@ -1,6 +1,7 @@
 #include "formats/GltfParser.hpp"
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
+#include "utils/AssetVfs.hpp"
 #include "utils/ImageUtils.hpp"
 #include <glm/gtx/matrix_decompose.hpp>
 
@@ -160,16 +161,26 @@ static const std::unordered_map<std::string, std::string>& albedoTexturePathCach
         const std::vector<std::string> roots = {project::game("assets/data/texture").string(),
                                                 project::game("assets/pbr/base").string()};
         for (const auto& root : roots) {
-            if (!fs::exists(root) || !fs::is_directory(root)) continue;
-            for (const auto& entry : fs::recursive_directory_iterator(root)) {
-                if (!entry.is_regular_file()) continue;
-                std::string ext = entry.path().extension().string();
+            if (fs::exists(root) && fs::is_directory(root)) {
+                for (const auto& entry : fs::recursive_directory_iterator(root)) {
+                    if (!entry.is_regular_file()) continue;
+                    std::string ext = entry.path().extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                    if (std::find(exts.begin(), exts.end(), ext) == exts.end()) continue;
+                    std::string stem = entry.path().stem().string();
+                    if (cache.find(stem) == cache.end()) {
+                        cache[stem] = entry.path().string();
+                    }
+                }
+            }
+            // Texturas que so' existem num pacote .ecp do projeto entram depois
+            // do disco (o disco vence o pacote, como no vfs).
+            if (!vfs::packsMounted()) continue;
+            for (const std::string& f : vfs::listPacked(root)) {
+                std::string ext = fs::path(f).extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                 if (std::find(exts.begin(), exts.end(), ext) == exts.end()) continue;
-                std::string stem = entry.path().stem().string();
-                if (cache.find(stem) == cache.end()) {
-                    cache[stem] = entry.path().string();
-                }
+                cache.emplace(fs::path(f).stem().string(), f);
             }
         }
     }

@@ -1,6 +1,7 @@
 #include "utils/PbrMaterialProfile.hpp"
 #include "core/Logger.hpp"
 #include "renderer/SpritePickerUI.hpp" // for eucKrToUtf8
+#include "utils/AssetVfs.hpp"
 
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -60,15 +61,14 @@ std::string PbrMaterialProfileManager::normalizeKey(std::string path) {
 void PbrMaterialProfileManager::loadFromFile(const std::string& path) {
     m_profiles.clear();
 
-    std::ifstream file(path);
-    if (!file.is_open()) {
+    std::string text; // disco ou pacote .ecp do projeto
+    if (!vfs::readText(path, text)) {
         ERUPTION_LOG_INFO("PbrMaterialProfile: no profile file at '%s', using defaults.", path.c_str());
         return;
     }
 
     try {
-        nlohmann::json j;
-        file >> j;
+        nlohmann::json j = nlohmann::json::parse(text);
 
         if (!j.is_object()) {
             ERUPTION_LOG_WARN("PbrMaterialProfile: root is not an object in '%s'", path.c_str());

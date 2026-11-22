@@ -61,6 +61,7 @@
 #include <filesystem>
 #include <cctype>
 
+#include "utils/AssetVfs.hpp"
 #include "utils/ImageUtils.hpp"
 #include "utils/TextureCache.hpp"
 #include "renderer/vfx/VfxBuiltins.hpp"
@@ -201,8 +202,8 @@ static nlohmann::json loadMergedGraphicsRoot() {
     static const nlohmann::json cached = [] {
         nlohmann::json gj = nlohmann::json::object();
         try {
-            std::ifstream f("data/graphics.json");
-            if (f) f >> gj;
+            std::string text;
+            if (vfs::readText("data/graphics.json", text)) gj = nlohmann::json::parse(text);
         } catch (...) {}
         mergeProjectGraphics(gj);
         return gj;
@@ -1015,8 +1016,9 @@ bool Engine::init(int width, int height, const std::string& title) {
     // motor, como o graphics.json - o jogo ajusta sol, halo e estrelas sem
     // copiar o arquivo. O jogo exportado leva o arquivo ja' mesclado.
     if (const std::string sky = project::config("data/skybox_config.json"); sky != "data/skybox_config.json") {
-        std::ifstream f(sky);
-        json patch = json::parse(f, nullptr, false);
+        std::string skyText; // disco ou pacote .ecp
+        vfs::readText(sky, skyText);
+        json patch = json::parse(skyText, nullptr, false);
         if (patch.is_object()) {
             mergeGraphicsPatch(m_skyboxConfig.root(), std::move(patch));
             ERUPTION_LOG_WARN("[SKY] %s mesclado sobre data/skybox_config.json", sky.c_str());
@@ -1189,12 +1191,15 @@ bool Engine::init(int width, int height, const std::string& title) {
     if (!m_overlayLineRenderer.init(&m_vulkan)) return false;
 
     presentLoadingScreen("", "Scanning Game Assets", 0.8f, true);
+    // Os pacotes .ecp do projeto ja' foram montados em Project::open (camada
+    // abaixo do disco para tudo que passa pelo vfs).
+
     // Fontes de asset (resources.ini). Com um projeto aberto o arquivo e' o
     // DO PROJETO, e os caminhos relativos dentro dele valem a partir da
     // pasta do projeto - nao do repositorio do motor.
     const std::string defaultIni = project::game("resources.ini").string();
     auto findDataIni = [&]() -> std::string {
-        if (project::isOpen()) return std::filesystem::exists(defaultIni) ? defaultIni : std::string();
+        if (project::isOpen()) return vfs::exists(defaultIni) ? defaultIni : std::string();
         const char* candidates[] = {"resources.ini", "../resources.ini"};
         for (const char* path : candidates) {
             if (std::filesystem::exists(path)) return path;
@@ -1376,6 +1381,10 @@ void Engine::populateMaps() {
 
     scanDir("assets/external");
     scanDir("assets/data");
+    if (project::isOpen()) {
+        const std::vector<std::string> packed = Project::instance().maps();
+        m_availableMaps.insert(m_availableMaps.end(), packed.begin(), packed.end());
+    }
 
     std::sort(m_availableMaps.begin(), m_availableMaps.end());
     m_availableMaps.erase(std::unique(m_availableMaps.begin(), m_availableMaps.end()), m_availableMaps.end());
@@ -1395,9 +1404,9 @@ VfxSystem::InitInfo Engine::vfxInitInfo(VkDescriptorSet frameUboSet) {
         VfxImage img;
         if (!makeVfxBuiltin(path, img)) {
             std::filesystem::path p = project::gameRef(path);
-            if (!std::filesystem::exists(p)) p = project::engine(path);
+            if (!vfs::exists(p)) p = project::engine(path);
             int w = 0, h = 0, n = 0;
-            unsigned char* px = stbi_load(p.string().c_str(), &w, &h, &n, STBI_rgb_alpha);
+            unsigned char* px = ImageUtils::loadRawVfs(p.string(), w, h, n, STBI_rgb_alpha);
             if (!px) {
                 ERUPTION_LOG_WARN("[VFX] textura nao carregou: %s", p.string().c_str());
                 return info;
@@ -1430,7 +1439,7 @@ VfxSystem::InitInfo Engine::vfxInitInfo(VkDescriptorSet frameUboSet) {
         if (name.size() > 5 && name.compare(name.size() - 5, 5, ".json") == 0)
             return project::gameRef(name).string();
         const std::filesystem::path g = project::game("assets/effects/" + name + ".vfx.json");
-        if (std::filesystem::exists(g)) return g.string();
+        if (vfs::exists(g)) return g.string(); // disco ou pacote .ecp
         const std::filesystem::path e = project::engine("data/vfx/" + name + ".vfx.json");
         return std::filesystem::exists(e) ? e.string() : std::string();
     };
@@ -2731,8 +2740,9 @@ void Engine::cycleQualityPreset() {
 static void mergeProjectGraphics(json& root) {
     const std::string path = project::config("data/graphics.json");
     if (path == "data/graphics.json") return; // o projeto nao tem o seu
-    std::ifstream f(path);
-    json patch = json::parse(f, nullptr, false);
+    std::string patchText; // disco ou pacote .ecp
+    vfs::readText(path, patchText);
+    json patch = json::parse(patchText, nullptr, false);
     if (!patch.is_object()) {
         ERUPTION_LOG_WARN("[GRAPHICS] %s: JSON invalido, ignorado", path.c_str());
         return;
@@ -3457,9 +3467,22 @@ double Engine::deviceMemoryMb() const {
 static std::filesystem::path projectFont(const std::string& stem) {
     for (const char* ext : {".ttf", ".otf"}) {
         std::filesystem::path p = project::game("assets/fonts/" + stem + ext);
-        if (std::filesystem::exists(p)) return p;
+        if (vfs::exists(p)) return p; // disco ou pacote .ecp
     }
     return {};
+}
+
+// Fonte do disco, ou da memoria quando o arquivo so' existe num pacote .ecp
+// (o atlas passa a ser dono do buffer, como em AddFontFromFileTTF).
+static ImFont* addFontVfs(ImGuiIO& io, const std::filesystem::path& path, float px, const ImFontConfig* cfg,
+                          const ImWchar* ranges) {
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec)) return io.Fonts->AddFontFromFileTTF(path.string().c_str(), px, cfg, ranges);
+    std::vector<uint8_t> bytes;
+    if (!vfs::read(path, bytes) || bytes.empty()) return nullptr;
+    void* mem = IM_ALLOC(bytes.size());
+    std::memcpy(mem, bytes.data(), bytes.size());
+    return io.Fonts->AddFontFromMemoryTTF(mem, static_cast<int>(bytes.size()), px, cfg, ranges);
 }
 
 static bool addProjectUiFont(ImGuiIO& io) {
@@ -3467,9 +3490,9 @@ static bool addProjectUiFont(ImGuiIO& io) {
     if (main.empty()) return false;
     float size = 14.0f;
     float raster = 0.0f;
-    if (std::ifstream f(project::game("assets/fonts/ui.json")); f) {
+    if (std::string uiJson; vfs::readText(project::game("assets/fonts/ui.json").string(), uiJson)) {
         try {
-            const json j = json::parse(f);
+            const json j = json::parse(uiJson);
             size = std::clamp(j.value("size", size), 8.0f, 64.0f);
             raster = j.value("raster", 0.0f);
         } catch (const std::exception& e) {
@@ -3491,7 +3514,7 @@ static bool addProjectUiFont(ImGuiIO& io) {
     ImFontConfig cfg;
     cfg.OversampleH = cfg.OversampleV = 1;
     cfg.PixelSnapH = true;
-    ImFont* font = io.Fonts->AddFontFromFileTTF(main.string().c_str(), raster, &cfg, s_ranges.Data);
+    ImFont* font = addFontVfs(io, main, raster, &cfg, s_ranges.Data);
     if (!font) {
         ERUPTION_LOG_WARN("[UI] fonte ilegivel: %s", main.string().c_str());
         return false;
@@ -3500,7 +3523,7 @@ static bool addProjectUiFont(ImGuiIO& io) {
     const std::filesystem::path extra = projectFont("ui_extra");
     if (!extra.empty()) {
         cfg.MergeMode = true;
-        if (!io.Fonts->AddFontFromFileTTF(extra.string().c_str(), raster, &cfg, s_ranges.Data))
+        if (!addFontVfs(io, extra, raster, &cfg, s_ranges.Data))
             ERUPTION_LOG_WARN("[UI] fonte ilegivel: %s", extra.string().c_str());
     }
     ERUPTION_LOG_INFO("[UI] fonte do projeto: %s%s, %.0f px (atlas %.0f px)", main.filename().string().c_str(),

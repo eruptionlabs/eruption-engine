@@ -22,6 +22,10 @@
 #ifdef ERUPTION_HAVE_ZSTD
 #include <zstd.h>
 #endif
+#ifdef ERUPTION_HAVE_ZSTD_DECODER
+#include "formats/EcpReader.hpp"
+#include "tufo/Archive.hpp"
+#endif
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -460,12 +464,126 @@ bool diskRead(const std::string& path, std::vector<uint8_t>& out) {
     return ok;
 }
 
+
+// Pacotes .ecp do projeto: abaixo do disco. Aberto na carga e so' lido depois
+// (o leitor nao trava); o shared_ptr deixa trocar sem fio lendo.
+#ifdef ERUPTION_HAVE_ZSTD_DECODER
+std::mutex g_packMutex;
+std::shared_ptr<ecp::Reader> g_packs;
+// Arquivos .tuf (utils/TuffArchive.hpp) do projeto, na ordem de montagem: o
+// ULTIMO que cita o caminho vence. Ficam abaixo do .ecp e do disco.
+std::vector<std::shared_ptr<tufo::Archive>> g_tufs;
+std::string g_packBase; // chave normalizada, sem '/' final
+std::atomic<bool> g_packsOn{false};
+
+std::shared_ptr<ecp::Reader> packReader() {
+    if (!g_packsOn.load(std::memory_order_acquire)) return nullptr;
+    std::lock_guard<std::mutex> lk(g_packMutex);
+    return g_packs;
+}
+
+std::vector<std::shared_ptr<tufo::Archive>> tufMounts() {
+    if (!g_packsOn.load(std::memory_order_acquire)) return {};
+    std::lock_guard<std::mutex> lk(g_packMutex);
+    return g_tufs;
+}
+
+// Chave do pacote para um caminho do disco; vazio se fica fora da pasta base.
+std::string packKey(const std::string& path) {
+    std::string base;
+    {
+        std::lock_guard<std::mutex> lk(g_packMutex);
+        base = g_packBase;
+    }
+    const std::string key = keyOf(path);
+    if (key.size() <= base.size() + 1 || key.compare(0, base.size(), base) != 0 || key[base.size()] != '/') return {};
+    return key.substr(base.size() + 1);
+}
+
+bool packRead(const std::string& path, std::vector<uint8_t>& out) {
+    const auto r = packReader();
+    const auto tufs = tufMounts();
+    if (!r && tufs.empty()) return false;
+    const std::string k = packKey(path);
+    if (k.empty()) return false;
+    State& s = state();
+    if (r && r->ReadInto(k, out)) {
+        s.bundleReads.fetch_add(1, std::memory_order_relaxed);
+        s.bundleBytes.fetch_add(out.size(), std::memory_order_relaxed);
+        return true;
+    }
+    for (auto it = tufs.rbegin(); it != tufs.rend(); ++it) {
+        if (!(*it)->exists(k)) continue;
+        std::string err;
+        if (!(*it)->read(k, out, true, &err)) { // hash nao confere: nunca entrega dado ruim
+            ERUPTION_LOG_ERROR("[VFS] %s: %s: %s", (*it)->path().c_str(), k.c_str(), err.c_str());
+            out.clear();
+            return false;
+        }
+        s.bundleReads.fetch_add(1, std::memory_order_relaxed);
+        s.bundleBytes.fetch_add(out.size(), std::memory_order_relaxed);
+        return true;
+    }
+    return false;
+}
+
+bool packExists(const std::string& path) {
+    const auto r = packReader();
+    const auto tufs = tufMounts();
+    if (!r && tufs.empty()) return false;
+    const std::string k = packKey(path);
+    if (k.empty()) return false;
+    if (r && r->Exists(k)) return true;
+    for (const auto& t : tufs)
+        if (t->exists(k)) return true;
+    return false;
+}
+
+bool packStat(const std::string& path, uint64_t& size, int64_t& mtime) {
+    const auto r = packReader();
+    const auto tufs = tufMounts();
+    if (!r && tufs.empty()) return false;
+    const std::string k = packKey(path);
+    if (k.empty()) return false;
+    ecp::EntryInfo info;
+    if (r && r->Stat(k, &info)) {
+        size = info.rawSize;
+        mtime = static_cast<int64_t>(info.mtime) * 1000000000ll;
+        return true;
+    }
+    for (auto it = tufs.rbegin(); it != tufs.rend(); ++it) {
+        tufo::Info ti;
+        if (!(*it)->stat(k, &ti)) continue;
+        size = ti.rawSize;
+        mtime = ti.mtime * 1000000000ll;
+        return true;
+    }
+    return false;
+}
+bool packGpuReady(const std::string& path) {
+    const auto tufs = tufMounts();
+    if (tufs.empty()) return false;
+    const std::string k = packKey(path);
+    if (k.empty()) return false;
+    for (auto it = tufs.rbegin(); it != tufs.rend(); ++it) {
+        tufo::Info ti;
+        if (!(*it)->stat(k, &ti)) continue;
+        return (ti.flags & tufo::kFlagGpuReady) != 0;
+    }
+    return false;
+}
+#else
+bool packGpuReady(const std::string&) { return false; }
+bool packRead(const std::string&, std::vector<uint8_t>&) { return false; }
+bool packExists(const std::string&) { return false; }
+bool packStat(const std::string&, uint64_t&, int64_t&) { return false; }
+#endif
 } // namespace
 
 // ---- leitura ---------------------------------------------------------------
 
 bool read(const std::string& path, std::vector<uint8_t>& out) {
-    if (fastPath()) return diskRead(path, out);
+    if (fastPath()) return diskRead(path, out) || packRead(path, out);
     const std::string key = keyOf(path);
     note(key, 3);
     Hit hit;
@@ -485,12 +603,50 @@ bool read(const std::string& path, std::vector<uint8_t>& out) {
             ERUPTION_LOG_WARN("[MAPBUNDLE] %s: entrada ilegivel, lendo do disco: %s", hit.bundle->file.c_str(), path.c_str());
         }
     }
-    return diskRead(path, out);
+    return diskRead(path, out) || packRead(path, out);
 }
 
 bool read(const fs::path& path, std::vector<uint8_t>& out) { return read(path.string(), out); }
 
+namespace {
+struct PinnedText {
+    bool found = false;
+    std::string text;
+};
+std::mutex g_pinnedMutex;
+std::unordered_map<std::string, PinnedText> g_pinned;
+std::atomic<bool> g_anyPinned{false};
+
+std::string pinKey(const std::string& path) { return fs::path(path).lexically_normal().generic_string(); }
+
+bool findPinned(const std::string& path, PinnedText& out) {
+    if (!g_anyPinned.load(std::memory_order_relaxed)) return false;
+    std::lock_guard<std::mutex> lk(g_pinnedMutex);
+    const auto it = g_pinned.find(pinKey(path));
+    if (it == g_pinned.end()) return false;
+    out = it->second;
+    return true;
+}
+} // namespace
+
+void pinText(const std::string& path, bool found, std::string text) {
+    std::lock_guard<std::mutex> lk(g_pinnedMutex);
+    g_pinned[pinKey(path)] = PinnedText{found, std::move(text)};
+    g_anyPinned.store(true, std::memory_order_relaxed);
+}
+
+void clearPinnedText() {
+    std::lock_guard<std::mutex> lk(g_pinnedMutex);
+    g_pinned.clear();
+    g_anyPinned.store(false, std::memory_order_relaxed);
+}
+
 bool readText(const std::string& path, std::string& out) {
+    PinnedText pinned;
+    if (findPinned(path, pinned)) {
+        if (pinned.found) out = pinned.text;
+        return pinned.found;
+    }
     std::vector<uint8_t> bytes;
     if (!read(path, bytes)) return false;
     out.assign(bytes.begin(), bytes.end());
@@ -498,10 +654,12 @@ bool readText(const std::string& path, std::string& out) {
 }
 
 bool exists(const std::string& path) {
+    PinnedText pinned;
+    if (findPinned(path, pinned)) return pinned.found;
     State& s = state();
     if (fastPath()) {
         std::error_code ec;
-        return fs::exists(path, ec);
+        return fs::exists(path, ec) || packExists(path);
     }
     const std::string key = keyOf(path);
     note(key, 1);
@@ -513,7 +671,7 @@ bool exists(const std::string& path) {
     s.diskProbes.fetch_add(1, std::memory_order_relaxed);
     logDisk("existe?", path);
     std::error_code ec;
-    return fs::exists(path, ec);
+    return fs::exists(path, ec) || packExists(path);
 }
 
 bool exists(const fs::path& path) { return exists(path.string()); }
@@ -521,7 +679,7 @@ bool exists(const fs::path& path) { return exists(path.string()); }
 bool stat(const std::string& path, uint64_t& size, int64_t& mtime) {
     State& s = state();
     bool isDir = false;
-    if (fastPath()) return diskStat(path, size, mtime, isDir);
+    if (fastPath()) return diskStat(path, size, mtime, isDir) || packStat(path, size, mtime);
     const std::string key = keyOf(path);
     note(key, 2);
     Hit hit;
@@ -534,7 +692,7 @@ bool stat(const std::string& path, uint64_t& size, int64_t& mtime) {
     }
     s.diskProbes.fetch_add(1, std::memory_order_relaxed);
     logDisk("tamanho/data", path);
-    return diskStat(path, size, mtime, isDir);
+    return diskStat(path, size, mtime, isDir) || packStat(path, size, mtime);
 }
 
 uint64_t fileSize(const std::string& path, std::error_code& ec) {
@@ -555,6 +713,104 @@ bool inBundle(const std::string& path) {
 }
 
 bool readDisk(const std::string& path, std::vector<uint8_t>& out) { return diskRead(path, out); }
+
+bool tufGpuReady(const std::string& path) {
+    std::error_code ec;
+    if (fs::exists(path, ec)) return false; // o arquivo solto vence o pacote
+    return packGpuReady(path);
+}
+
+// ---- pacotes .ecp do projeto ---------------------------------------------------
+
+#ifdef ERUPTION_HAVE_ZSTD_DECODER
+bool mountPacks(const std::vector<std::string>& ecpPaths, const std::string& baseDir) {
+    unmountPacks();
+    if (ecpPaths.empty()) return false;
+    // .ecp e .tuf podem vir juntos na lista: cada um vai para o seu leitor.
+    std::vector<std::string> ecps;
+    std::vector<std::shared_ptr<tufo::Archive>> tufs;
+    std::string err;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (const std::string& p : ecpPaths) {
+        if (p.size() > 4 && p.compare(p.size() - 4, 4, ".tuf") == 0) {
+            auto t = std::make_shared<tufo::Archive>();
+            if (!t->open(p, &err)) {
+                ERUPTION_LOG_WARN("[VFS] arquivo .tuf nao abriu: %s", err.c_str());
+                continue;
+            }
+            tufs.push_back(std::move(t));
+        } else {
+            ecps.push_back(p);
+        }
+    }
+    std::shared_ptr<ecp::Reader> reader;
+    if (!ecps.empty()) {
+        reader = std::make_shared<ecp::Reader>();
+        if (!reader->Open(ecps, &err)) {
+            ERUPTION_LOG_WARN("[VFS] pacotes .ecp do projeto nao abriram: %s", err.c_str());
+            reader.reset();
+        }
+    }
+    if (!reader && tufs.empty()) return false;
+    std::string base = keyOf(baseDir);
+    while (base.size() > 1 && base.back() == '/') base.pop_back();
+    {
+        std::lock_guard<std::mutex> lk(g_packMutex);
+        g_packs = std::move(reader);
+        g_tufs = std::move(tufs);
+        g_packBase = base;
+    }
+    g_packsOn.store(true, std::memory_order_release);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    size_t files = packReader() ? packReader()->FileCount() : 0;
+    for (const auto& t : tufMounts()) files += t->fileCount();
+    ERUPTION_LOG_WARN("[VFS] %zu pacote(s) .ecp/.tuf, %zu arquivos, abertos em %.1f ms (base %s)", ecpPaths.size(), files,
+                      ms, base.c_str());
+    return true;
+}
+
+void unmountPacks() {
+    g_packsOn.store(false, std::memory_order_release);
+    std::lock_guard<std::mutex> lk(g_packMutex);
+    g_packs.reset();
+    g_tufs.clear();
+    g_packBase.clear();
+}
+
+bool packsMounted() { return g_packsOn.load(std::memory_order_acquire); }
+
+std::vector<std::string> listPacked(const std::string& dir) {
+    std::vector<std::string> out;
+    const auto r = packReader();
+    const auto tufs = tufMounts();
+    if (!r && tufs.empty()) return out;
+    std::string base;
+    {
+        std::lock_guard<std::mutex> lk(g_packMutex);
+        base = g_packBase;
+    }
+    std::string key = packKey((fs::path(dir) / "x").string()); // chave de uma filha: tira a pasta
+    if (key.empty()) return out;
+    key.resize(key.size() - 1); // "pasta/" (ou "" para a propria base nao existe: precisa de filha)
+    if (r)
+        for (const std::string& f : r->List(key)) out.push_back(base + "/" + f);
+    for (const auto& t : tufs)
+        for (const std::string& f : t->list(key)) out.push_back(base + "/" + f);
+    if (!tufs.empty()) {
+        std::sort(out.begin(), out.end());
+        out.erase(std::unique(out.begin(), out.end()), out.end());
+    }
+    return out;
+}
+#else
+bool mountPacks(const std::vector<std::string>&, const std::string&) {
+    ERUPTION_LOG_WARN("[VFS] pacotes .ecp pedidos, mas esta build nao tem o decodificador zstd");
+    return false;
+}
+void unmountPacks() {}
+bool packsMounted() { return false; }
+std::vector<std::string> listPacked(const std::string&) { return {}; }
+#endif
 
 // ---- pacotes ---------------------------------------------------------------
 
@@ -759,6 +1015,7 @@ WriteReport writeBundle(const fs::path& emapPath, const std::vector<Recorded>& f
     const auto t0 = std::chrono::steady_clock::now();
 #ifndef ERUPTION_HAVE_ZSTD
     compress = false;
+    (void)compress; // sem zstd o valor so' e' escrito, nunca lido
     (void)level;
 #endif
     // Raizes: a pasta do .emap (o mapa), o projeto, o motor e a pasta de
@@ -858,7 +1115,21 @@ WriteReport writeBundle(const fs::path& emapPath, const std::vector<Recorded>& f
     for (const PackItem& it : items) tocSize += 2 + it.rel.size() + kEntryFixed;
     const uint64_t dataBegin = kHeaderSize + tocSize;
 
-    const fs::path tmp = emapPath.string() + ".tmp";
+    // Pacote em outro disco: <mapa>.emap pode ser um link para o arquivo de
+    // verdade. Grava no destino do link (o rename por cima do link o trocaria
+    // por um arquivo neste disco). Num disco cheio o pacote nasce picotado e
+    // a leitura "em sequencia" sai a 10-12 MB/s num HD que faz 112 MB/s; o
+    // link deixa o pacote num disco com espaco, onde ele sai continuo. As
+    // raizes do indice continuam relativas a' pasta do link.
+    fs::path dest = emapPath;
+    {
+        std::error_code lec;
+        if (fs::is_symlink(emapPath, lec)) {
+            const fs::path target = fs::read_symlink(emapPath, lec);
+            if (!lec) dest = target.is_absolute() ? target : emapPath.parent_path() / target;
+        }
+    }
+    const fs::path tmp = dest.string() + ".tmp";
     std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
     if (!f) {
         rep.error = "nao consegui criar " + tmp.string();
@@ -970,10 +1241,10 @@ WriteReport writeBundle(const fs::path& emapPath, const std::vector<Recorded>& f
         return rep;
     }
     std::error_code ec;
-    fs::rename(tmp, emapPath, ec);
+    fs::rename(tmp, dest, ec);
     if (ec) {
-        fs::remove(emapPath, ec);
-        fs::rename(tmp, emapPath, ec);
+        fs::remove(dest, ec);
+        fs::rename(tmp, dest, ec);
     }
     if (ec) {
         rep.error = "nao consegui trocar " + emapPath.string() + ": " + ec.message();

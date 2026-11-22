@@ -1,4 +1,5 @@
 #include "renderer/ClimateField.hpp"
+#include "utils/AssetVfs.hpp"
 #include "core/Logger.hpp"
 
 #include <glm/glm.hpp>
@@ -51,12 +52,12 @@ WeatherSignature ClimateField::sampleAt(const Vec3& worldPos) const {
 }
 
 bool ClimateField::loadFromFile(const std::string& path) {
-    std::ifstream f(path);
-    if (!f.is_open()) return false;
+    std::string text; // disco ou pacote .ecp do projeto
+    if (!vfs::readText(path, text)) return false;
 
     nlohmann::json j;
     try {
-        f >> j;
+        j = nlohmann::json::parse(text);
     } catch (const std::exception& e) {
         ERUPTION_LOG_WARN("[CLIMATE] %s: JSON invalido (%s); mapa fica com clima global",
                           path.c_str(), e.what());

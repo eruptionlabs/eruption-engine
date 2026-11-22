@@ -1,5 +1,6 @@
 #include "utils/ImageUtils.hpp"
 #include "core/Logger.hpp"
+#include "utils/AssetVfs.hpp"
 
 #include <algorithm>
 
@@ -14,6 +15,13 @@ namespace eruption {
 ImageData ImageUtils::loadPNG(const std::string& filepath) {
     ImageData result;
     uint8_t* data = stbi_load(filepath.c_str(), &result.width, &result.height, &result.channels, 4);
+    if (!data && vfs::packsMounted()) {
+        // Nao esta' no disco: pode estar num pacote .ecp do projeto.
+        std::vector<uint8_t> bytes;
+        if (vfs::read(filepath, bytes) && !bytes.empty())
+            data = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &result.width, &result.height,
+                                         &result.channels, 4);
+    }
     if (!data) {
         ERUPTION_LOG_ERROR("Failed to load image: %s", filepath.c_str());
         return result;
@@ -99,6 +107,14 @@ void ImageUtils::dilate(int width, int height, std::vector<uint8_t>& pixels) {
     }
 }
 
+uint8_t* ImageUtils::loadRawVfs(const std::string& path, int& w, int& h, int& channels, int desired) {
+    uint8_t* data = stbi_load(path.c_str(), &w, &h, &channels, desired);
+    if (data || !vfs::packsMounted()) return data;
+    std::vector<uint8_t> bytes;
+    if (!vfs::read(path, bytes) || bytes.empty()) return nullptr;
+    return stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, &channels, desired);
+}
+
 ImageData ImageUtils::loadFromMemory(const uint8_t* data, size_t size) {
     ImageData result;
     uint8_t* pixels = stbi_load_from_memory(data, static_cast<int>(size), &result.width, &result.height, &result.channels, 4);
@@ -138,6 +154,15 @@ bool ImageUtils::writePNG(const std::string& filepath, int width, int height, in
     int stride = width * channels;
     int result = stbi_write_png(filepath.c_str(), width, height, channels, data, stride);
     return result != 0;
+}
+
+bool ImageUtils::encodePNG(int width, int height, int channels, const uint8_t* data, std::vector<uint8_t>& out) {
+    out.clear();
+    auto sink = [](void* ctx, void* bytes, int n) {
+        auto* v = static_cast<std::vector<uint8_t>*>(ctx);
+        v->insert(v->end(), static_cast<const uint8_t*>(bytes), static_cast<const uint8_t*>(bytes) + n);
+    };
+    return stbi_write_png_to_func(sink, &out, width, height, channels, data, width * channels) != 0 && !out.empty();
 }
 
 bool ImageUtils::downscaleRGBA(int& width, int& height, std::vector<uint8_t>& pixels, int maxDimension) {

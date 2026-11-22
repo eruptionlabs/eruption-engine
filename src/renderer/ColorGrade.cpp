@@ -1,4 +1,5 @@
 #include "renderer/ColorGrade.hpp"
+#include "utils/AssetVfs.hpp"
 #include "renderer/LookConfig.hpp"
 #include "utils/SplineCurve.hpp"
 #include <algorithm>
@@ -81,6 +82,11 @@ float decode(float v) { return std::pow(std::max(v, 0.0f), 2.2f); }
 bool CubeLut::loadStrip(const std::string& path) {
     int w = 0, h = 0, n = 0;
     unsigned char* px = stbi_load(path.c_str(), &w, &h, &n, STBI_rgb);
+    if (!px) { // fora do disco: pacote .ecp do projeto
+        std::vector<uint8_t> bytes;
+        if (vfs::read(path, bytes) && !bytes.empty())
+            px = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, &n, STBI_rgb);
+    }
     if (!px) return false;
     const bool ok = h >= 2 && h <= 128 && w == h * h;
     if (ok) {
@@ -100,8 +106,9 @@ bool CubeLut::loadStrip(const std::string& path) {
 bool CubeLut::load(const std::string& path) {
     const std::string ext = path.size() >= 4 ? path.substr(path.size() - 4) : std::string();
     if (ext == ".png" || ext == ".PNG") return loadStrip(path);
-    std::ifstream f(path);
-    if (!f) return false;
+    std::string text; // disco ou pacote .ecp
+    if (!vfs::readText(path, text)) return false;
+    std::istringstream f(text);
     size = 0;
     data.clear();
     std::string line;

@@ -154,6 +154,13 @@ bool Engine::createTextureFromFile(const char* path, Engine::TextureResource& ou
     int w, h, channels;
     unsigned char* pixels = stbi_load(path, &w, &h, &channels, STBI_rgb_alpha);
     if (!pixels) {
+        // Fora do disco: pacote .ecp do projeto (ou do mapa), pelo vfs.
+        std::vector<uint8_t> bytes;
+        if (vfs::read(std::string(path), bytes) && !bytes.empty())
+            pixels = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, &channels,
+                                           STBI_rgb_alpha);
+    }
+    if (!pixels) {
         ERUPTION_LOG_WARN("Failed to load texture file: %s", path);
         return false;
     }
@@ -584,6 +591,18 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
             if (entry.is_directory()) {
                 addWithExtensions(entry.path().string() + "/" + filename);
             }
+        }
+    }
+
+    // Subpastas de texturas que so' existem num pacote .ecp do projeto.
+    if (vfs::packsMounted()) {
+        std::string lowName = filename;
+        std::replace(lowName.begin(), lowName.end(), '\\', '/');
+        std::transform(lowName.begin(), lowName.end(), lowName.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        for (const std::string& f : vfs::listPacked(texRoot.string())) {
+            const std::string name = fs::path(f).filename().string();
+            const std::string stem = fs::path(f).stem().string();
+            if (name == lowName || stem == lowName) fsSearchPaths.push_back(f);
         }
     }
 

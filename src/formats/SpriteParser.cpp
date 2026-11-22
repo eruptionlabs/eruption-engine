@@ -1,5 +1,6 @@
 #include "formats/SpriteParser.hpp"
 #include "core/Logger.hpp"
+#include "utils/AssetVfs.hpp"
 #include <cstring>
 #include <fstream>
 
@@ -153,16 +154,11 @@ SpriteParser::Result SpriteParser::parse(const uint8_t* data, size_t size) {
 }
 
 SpriteParser::Result SpriteParser::parseFile(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
+    std::vector<uint8_t> data;
+    if (!vfs::read(path, data)) { // disco ou pacote .ecp
         ERUPTION_LOG_WARN("SpriteParser: failed to open %s", path.c_str());
         return Result{};
     }
-    f.seekg(0, std::ios::end);
-    size_t size = static_cast<size_t>(f.tellg());
-    f.seekg(0, std::ios::beg);
-    std::vector<uint8_t> data(size);
-    f.read(reinterpret_cast<char*>(data.data()), size);
     return parse(data.data(), data.size());
 }
 

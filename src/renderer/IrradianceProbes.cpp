@@ -267,6 +267,10 @@ bool IrradianceProbes::saveCache(const std::string& path, const Vec3& sceneMin, 
         // reescrever no lugar mudava o arquivo de todas as copias. De quebra,
         // um processo que morre no meio nao deixa grade pela metade.
         const std::string tmp = path + ".tmp";
+        if (vfs::packsMounted()) { // mapa so' de pacote: a pasta do .glb pode nao existir no disco
+            std::error_code dec;
+            std::filesystem::create_directories(std::filesystem::path(path).parent_path(), dec);
+        }
         if (FILE* fp = std::fopen(tmp.c_str(), "wb")) {
             ok = std::fwrite(&hdr, sizeof(hdr), 1, fp) == 1 && std::fwrite(mp, bytes, 1, fp) == 1;
             ok = (std::fclose(fp) == 0) && ok;
