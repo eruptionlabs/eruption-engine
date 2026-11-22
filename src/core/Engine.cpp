@@ -2988,6 +2988,19 @@ void Engine::applyGraphicsPreset() {
         int taps = p.value("ssao_taps", 12);
         if (const char* e = std::getenv("ERUPTION_TEST_SSAO_TAPS")) taps = std::atoi(e);
         m_deferredLighting.setSsaoTaps(taps);
+        // Escala curta (medium): raio em u e direcoes; 0 desliga e o shader e' o de sempre.
+        // ERUPTION_TEST_SSAO_RADIUS_SHORT / ERUPTION_TEST_SSAO_TAPS_SHORT (teste) vencem o preset.
+        float rShort = p.value("ssao_radius_short", 0.0f);
+        int tShort = p.value("ssao_taps_short", 0);
+        if (const char* e = std::getenv("ERUPTION_TEST_SSAO_RADIUS_SHORT")) rShort = std::strtof(e, nullptr);
+        if (const char* e = std::getenv("ERUPTION_TEST_SSAO_TAPS_SHORT")) tShort = std::atoi(e);
+        m_deferredLighting.setSsaoShort(rShort, tShort);
+        // SSAO em resolucao cheia (high): ERUPTION_TEST_SSAO_FULL_RES=0|1 (teste) vence o preset.
+        bool fullRes = false;
+        if (p.contains("ssao_full_res")) // true/false, ou 0/1 (ERUPTION_TEST_PRESET_SET passa numero)
+            fullRes = p["ssao_full_res"].is_boolean() ? p["ssao_full_res"].get<bool>() : p["ssao_full_res"].get<float>() != 0.0f;
+        if (const char* e = std::getenv("ERUPTION_TEST_SSAO_FULL_RES")) fullRes = std::atoi(e) != 0;
+        m_deferredLighting.setSsaoFullRes(fullRes);
     }
     // FXAA no fim do post + upscale bicubico/nitidez, no lugar do bilinear
     // cru. `aa_sharpen` 0 = so' o upscale, sem nitidez (equivalente visual ao

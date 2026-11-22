@@ -91,7 +91,7 @@ struct LightingUBO {
     uint32_t spriteRim;
     alignas(16) Vec4 ambientSky;        // xyz=skyColor, w=unused
     alignas(16) Vec4 ambientGround;     // xyz=groundColor, w=unused
-    alignas(16) Vec4 ssaoParams;        // x=enabled(0/1), y=strength, z=radius, w=unused
+    alignas(16) Vec4 ssaoParams;        // x=enabled(0/1), y=strength, z=radius, w=raio da escala curta (0 = so' a larga)
     alignas(16) Vec4 indirectParams;   // x=envSpecEnabled, y=envSpecIntensity, z=nightAoPow, w=ambientHemiFloor
     alignas(16) Mat4 viewProj;         // camera view-projection (SSAO reprojection, contact shadows)
     alignas(16) Vec4 bounceParams;     // x=sunBounceEnabled, y=sunBounceStrength, z=fillLightIntensity, w=unused
@@ -230,6 +230,13 @@ public:
     // ambient shaping). Driven by the Lighting tab.
     // Direcoes do kernel do SSAO (4..12); refaz o pipeline se mudar.
     void setSsaoTaps(int taps);
+    // Segunda escala do SSAO, curta (chaves "ssao_radius_short"/"ssao_taps_short"):
+    // raio em u (0 desliga) e direcoes (0 = sem o laco; refaz o pipeline se mudar).
+    void setSsaoShort(float radius, int taps);
+    // SSAO em resolucao cheia (chave "ssao_full_res"; padrao meia resolucao): o raio
+    // curto enxerga as frestas da tesselacao, que a meia resolucao dilui. Refaz os
+    // alvos do SSAO e o pipeline se mudar.
+    void setSsaoFullRes(bool fullRes);
     void setIndirectParams(bool ssao, float ssaoStrength, float ssaoRadius,
                            bool envSpec, float envSpecIntensity,
                            float nightAoPow, float ambientHemiFloor) {
@@ -244,6 +251,10 @@ public:
     // normal map legível onde o sol não bate ("fake 3D" na sombra).
     void setShadowSoft(int taps) { m_shadowSoft = static_cast<float>(taps); }
     void setFillLight(float intensity) { m_fillLightIntensity = intensity; }
+    // Microsombra (pbr_common.glsl): forca 0..1 e expoente do AO.
+    void setMicroShadow(float strength, float contrast, float floorV) {
+        m_microShadow = strength; m_microShadowContrast = contrast; m_microShadowFloor = floorV;
+    }
     // Curva de opacidade da sombra (ver ShadowUBO::shadowOpacityKnots).
     void setShadowOpacityCurve(const Vec4& params, const Vec4& lut0, const Vec4& lut1) {
         m_shadowOpacityParams = params;
@@ -413,6 +424,9 @@ private:
     Vec4 m_shoreLiquids[kShoreLiquids] = {};
     bool  m_ssaoEnabled = true;
     int   m_ssaoTaps = 12; // preset ssao_taps (especializacao do ssao.frag)
+    int   m_ssaoShortTaps = 0;     // preset ssao_taps_short (especializacao 1 do ssao.frag)
+    float m_ssaoShortRadius = 0.0f; // preset ssao_radius_short (u)
+    bool  m_ssaoFullRes = false;    // preset ssao_full_res (alvos do SSAO do tamanho da tela)
     // True while the SSAO targets hold neutral white in SHADER_READ layout,
     // letting the per-frame chain be skipped entirely when SSAO is off.
     bool  m_ssaoNeutralCleared = false;
@@ -423,6 +437,9 @@ private:
     float m_nightAoPow = 1.6f;
     float m_ambientHemiFloor = 0.35f;
     float m_fillLightIntensity = 0.25f;
+    float m_microShadow = 1.0f;
+    float m_microShadowContrast = 1.5f;
+    float m_microShadowFloor = 0.35f;
     bool  m_sunBounceEnabled = true;
     float m_sunBounceStrength = 0.6f;
     bool  m_contactShadowEnabled = true;

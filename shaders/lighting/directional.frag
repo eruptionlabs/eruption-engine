@@ -715,7 +715,7 @@ vec3 shadeLite(vec4 albedo) {
     }
     float sunVis = (1.0 - max(shadow, calcCloudShadow(worldPos))) * texture(gbufferEmissive, inUV).a;
     vec3 lit = albedoLinear * lights.dirLightColor.rgb * (NdotL * lights.dirLightDir.w * sunVis);
-    lit *= mix(1.0, ao, (1.0 - NdotL) * 0.8);
+    if (!g_spritePixel) lit *= pbrMicroShadow(NdotL, ao, lights.bounceParams.w, lights.contactParams.z, lights.contactParams.w); // microsombra, igual ao caminho completo
     // Enxuto medio: brilho do sol que depende da vista e da normal (GGX +
     // Smith-Schlick + Fresnel de Schlick), sem IBL, chuva nem sonda. Sprite
     // fica fora, como no caminho cheio.
@@ -1117,22 +1117,24 @@ void main() {
     // e os pesos 0,35/0,6 nao vinham de lugar nenhum.
     //
     // Fisicamente, oclusao de curto alcance nao atenua a luz direta de forma
-    // uniforme: ela modula a VISIBILIDADE DO DISCO SOLAR. Numa face voltada
-    // para o sol o disco esta' quase todo a vista mesmo dentro de uma cavidade;
-    // numa face rasante a mesma cavidade fecha quase tudo. Por isso o peso
-    // agora e' (1 - NdotL): a fenda escurece onde a fenda de fato bloqueia.
+    // uniforme: ela modula a VISIBILIDADE DO DISCO SOLAR. A cavidade vira um
+    // cone de visibilidade e a luz passa se N.L sai pela boca dele - a
+    // MICROSOMBRA de pbr_common.glsl (Chan 2018). Antes o peso era
+    // mix(1, cavity, (1 - N.L) * 0,8): com o sol alto (N.L ~ 1) ia a zero e o AO
+    // sumia da imagem ao meio-dia (SSAO ligado/desligado: 1,5% da tela).
     //
     // Efeito colateral desejado: e' este termo que da' o "contact darkening"
     // de objeto pousado (a base do prop encosta em superficie rasante), que a
-    // pesquisa de percepcao de miniatura aponta como pista forte de escala.
-    // Custo zero - uma busca de textura a menos que antes.
+    // pesquisa de percepcao de miniatura aponta como pista forte de escala -
+    // por isso entra `cavity` (min do SSAO com o AO), nao so' o AO da textura.
     // `ao` segue nomeado porque o especular AMBIENTAL (mais abaixo) tambem o
     // usa - e la' a atenuacao cheia esta' certa: aquilo e' luz de hemisferio,
     // nao disco solar.
     float ao = albedo.a;
     float NdotLsun = max(dot(N, L), 0.0);
     float cavity = min(texture(ssaoTex, inUV).r, ao);
-    lit *= mix(1.0, cavity, clamp(1.0 - NdotLsun, 0.0, 1.0) * 0.8);
+    // Sprite fica fora: o alfa do G-buffer dele nao e' AO de material.
+    if (!g_spritePixel) lit *= pbrMicroShadow(NdotLsun, cavity, lights.bounceParams.w, lights.contactParams.z, lights.contactParams.w);
 
     // NOTE: the hemispheric ambient DIFFUSE is handled once by ambient.frag.
     // This pass only ADDS the directional (sun/moon) contribution + the ambient

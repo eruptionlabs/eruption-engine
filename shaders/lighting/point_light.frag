@@ -30,6 +30,11 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     uint pad1;
     vec4 ambientSky;
     vec4 ambientGround;
+    vec4 ssaoParams;
+    vec4 indirectParams;
+    mat4 viewProj;
+    vec4 bounceParams;      // w = micro_shadow (forca)
+    vec4 contactParams;     // z = micro_shadow_contrast, w = micro_shadow_floor
 } lights;
 
 // Bloco por draw no set 1 (PushRing, UBO de offset dinamico): passa de 128 B.
@@ -141,6 +146,8 @@ void main() {
         vec3 radiance = (pbrSpriteDiffuseOnly(pbr)
             ? albedoLinear / PBR_PI * lightColor * intensity * att * max(dot(N, L), 0.0)
             : pbrCookTorrance(N, viewDir, L, albedoLinear, metallic, roughness, lightColor, intensity * att)) * lights.pbrLightScale;
+        // Microsombra (pbr_common.glsl), como no sol; sprite fica fora.
+        if (abs(pbr.r - 0.75) >= 0.06) radiance *= pbrMicroShadow(dot(N, L), albedo.a, lights.bounceParams.w, lights.contactParams.z, lights.contactParams.w);
         // Keep the lit image in linear space; post_composite.frag applies the final gamma.
         lit = max(radiance, vec3(0.0));
     }

@@ -256,8 +256,9 @@ void DeferredLighting::createLitImage() {
     vkc::createImageView(m_ctx->device(), &viewInfo, nullptr, &m_litView);
 
     // Half-resolution SSAO chain (raw + bilateral-blurred), R8.
-    m_ssaoWidth  = std::max(1u, m_width / 2);
-    m_ssaoHeight = std::max(1u, m_height / 2);
+    const uint32_t aoDiv = m_ssaoFullRes ? 1u : 2u;
+    m_ssaoWidth  = std::max(1u, m_width / aoDiv);
+    m_ssaoHeight = std::max(1u, m_height / aoDiv);
     auto makeAoImage = [&](VkImage& img, VmaAllocation& alloc, VkImageView& view) {
         VkImageCreateInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -670,9 +671,9 @@ void DeferredLighting::createSsaoPipelines() {
         };
         // Numero de direcoes do SSAO (preset ssao_taps): especializacao so' no
         // fragment (regra dos GPUs moveis).
-        const int32_t taps = m_ssaoTaps;
-        const VkSpecializationMapEntry tapEntry{0, 0, sizeof(int32_t)};
-        VkSpecializationInfo tapSpec{1, &tapEntry, sizeof(int32_t), &taps};
+        const int32_t taps[2] = {m_ssaoTaps, m_ssaoShortTaps};
+        const VkSpecializationMapEntry tapEntry[2] = {{0, 0, sizeof(int32_t)}, {1, sizeof(int32_t), sizeof(int32_t)}};
+        VkSpecializationInfo tapSpec{2, tapEntry, sizeof(taps), taps};
         if (m_ssaoPipeline == VK_NULL_HANDLE)
             buildAoPipeline("shaders/lighting/ssao.frag.spv", m_ssaoPipeline, &tapSpec);
         if (m_ssaoBlurPipeline == VK_NULL_HANDLE)
@@ -1108,13 +1109,15 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     ubo.temperatureC = m_temperatureC;
     ubo.ambientSky = Vec4(m_env.ambientSkyColor, 0.0f);
     ubo.ambientGround = Vec4(m_env.ambientGroundColor, 0.0f);
-    ubo.ssaoParams = Vec4(m_ssaoEnabled ? 1.0f : 0.0f, m_ssaoStrength, m_ssaoRadius, 0.0f);
+    ubo.ssaoParams = Vec4(m_ssaoEnabled ? 1.0f : 0.0f, m_ssaoStrength, m_ssaoRadius, m_ssaoShortRadius);
     ubo.indirectParams = Vec4(m_envSpecEnabled ? 1.0f : 0.0f, m_envSpecIntensity,
                               m_nightAoPow, m_ambientHemiFloor);
     ubo.viewProj = camera.viewProjJittered();
     ubo.invViewProj = glm::inverse(camera.viewProjJittered());
-    ubo.bounceParams = Vec4(m_sunBounceEnabled ? 1.0f : 0.0f, m_sunBounceStrength, m_fillLightIntensity, 0.0f);
-    ubo.contactParams = Vec4(m_contactShadowEnabled ? 1.0f : 0.0f, m_contactShadowLength, 0.0f, 0.0f);
+    // bounceParams.w = micro_shadow (forca), contactParams.z/w = micro_shadow_contrast/floor
+    // (campos que estavam livres no UBO; todos os shaders de luz declaram os dois vec4).
+    ubo.bounceParams = Vec4(m_sunBounceEnabled ? 1.0f : 0.0f, m_sunBounceStrength, m_fillLightIntensity, m_microShadow);
+    ubo.contactParams = Vec4(m_contactShadowEnabled ? 1.0f : 0.0f, m_contactShadowLength, m_microShadowContrast, m_microShadowFloor);
     ubo.skyHorizon = Vec4(m_env.skyHorizonColor, 0.0f);
     ubo.skyProbeParams = Vec4((m_skyProbeEnabled && m_skyProbeBound) ? 1.0f : 0.0f,
                               m_skyProbeMaxMip, m_skyProbeIntensity, 0.0f);
@@ -1536,6 +1539,26 @@ void DeferredLighting::setSsaoTaps(int taps) {
     vkDestroyPipeline(m_ctx->device(), m_ssaoPipeline, nullptr);
     m_ssaoPipeline = VK_NULL_HANDLE;
     createSsaoPipelines();
+}
+
+void DeferredLighting::setSsaoShort(float radius, int taps) {
+    m_ssaoShortRadius = std::max(radius, 0.0f);
+    taps = m_ssaoShortRadius > 0.0f ? std::clamp(taps, 0, 12) : 0;
+    if (taps == m_ssaoShortTaps) return;
+    m_ssaoShortTaps = taps;
+    if (m_ssaoPipeline == VK_NULL_HANDLE) return;
+    vkDeviceWaitIdle(m_ctx->device());
+    vkDestroyPipeline(m_ctx->device(), m_ssaoPipeline, nullptr);
+    m_ssaoPipeline = VK_NULL_HANDLE;
+    createSsaoPipelines();
+}
+
+void DeferredLighting::setSsaoFullRes(bool fullRes) {
+    if (fullRes == m_ssaoFullRes) return;
+    m_ssaoFullRes = fullRes;
+    // Antes do init nao ha alvo nem pipeline: o init ja le a flag.
+    if (m_width == 0 || m_height == 0 || m_ssaoPipeline == VK_NULL_HANDLE) return;
+    resize(m_width, m_height);
 }
 
 } // namespace eruption

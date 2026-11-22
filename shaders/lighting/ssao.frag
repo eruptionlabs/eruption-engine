@@ -31,7 +31,7 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     uint pad1;
     vec4 ambientSky;
     vec4 ambientGround;
-    vec4 ssaoParams;        // x=enabled, y=strength, z=radius, w=unused
+    vec4 ssaoParams;        // x=enabled, y=strength, z=radius, w=raio da escala curta (0 = so' a larga)
     vec4 indirectParams;
     mat4 viewProj;
     // Cauda do LightingUBO, antes truncada aqui. invViewProj foi ACRESCENTADO
@@ -61,6 +61,11 @@ const vec2 kDisc[KERNEL] = vec2[](
 // Quantas direcoes do kernel usar (preset "ssao_taps", 4..12). Constante de
 // especializacao (so' no fragment: regra dos GPUs moveis); 12 = o de sempre.
 layout(constant_id = 0) const int SSAO_TAPS = 12;
+// Direcoes da segunda escala, CURTA (preset "ssao_taps_short", raio em
+// ssaoParams.w): enxerga as frestas entre pedras e o contato de objeto, que o
+// raio largo (12 u) nao ve. 0 = nao existe (presets low e high: o shader e' o
+// de antes, instrucao por instrucao).
+layout(constant_id = 1) const int SSAO_SHORT_TAPS = 0;
 
 float ign(vec2 px) {
     return fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
@@ -117,5 +122,43 @@ void main() {
     }
     if (used > 0.5) occ /= used;
 
-    outAO = clamp(1.0 - occ * lights.ssaoParams.y * 2.2, 0.0, 1.0);
+    float ao = clamp(1.0 - occ * lights.ssaoParams.y * 2.2, 0.0, 1.0);
+
+    // ESCALA CURTA, somada a larga por produto (a larga guarda parede e quina,
+    // esta ganha a fresta). Mesmo kernel, raio de ~1 u e rotacao propria. Some
+    // quando o pixel de meia resolucao fica maior que o raio (de longe seria
+    // so' ruido).
+    if (SSAO_SHORT_TAPS > 0 && lights.ssaoParams.w > 0.0) {
+        float rS = max(lights.ssaoParams.w, 0.02);
+        vec2 texel = 1.0 / vec2(textureSize(gbufferDepth, 0));
+        vec3 Pn = worldFromDepth(inUV + vec2(texel.x * 2.0, 0.0), texture(gbufferDepth, inUV + vec2(texel.x * 2.0, 0.0)).r);
+        float footprint = length(Pn - P);
+        float fade = clamp(1.0 - (footprint / rS - 1.0) * 0.5, 0.0, 1.0);
+        if (fade > 0.0 && !any(isnan(Pn))) {
+            float aS = (ign(px + vec2(17.0, 31.0))) * 6.2831853;
+            mat2 rotS = mat2(cos(aS), -sin(aS), sin(aS), cos(aS));
+            float occS = 0.0, usedS = 0.0;
+            for (int i = 0; i < SSAO_SHORT_TAPS && i < KERNEL; ++i) {
+                vec2 d = rotS * kDisc[i];
+                float lift = 0.35 + 0.4 * float(i) / float(SSAO_SHORT_TAPS);
+                vec3 dir = normalize(T * d.x + B * d.y + N * lift);
+                vec3 sw = P + dir * rS * (0.25 + 0.75 * float(i + 1) / float(SSAO_SHORT_TAPS));
+                vec4 clip = lights.viewProj * vec4(sw, 1.0);
+                if (clip.w <= 0.0) continue;
+                vec2 suv = clip.xy / clip.w * 0.5 + 0.5;
+                if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) continue;
+                vec3 sp = worldFromDepth(suv, texture(gbufferDepth, suv).r);
+                if (any(isnan(sp)) || any(isinf(sp))) continue;
+                usedS += 1.0;
+                vec3 dv = sp - P;
+                float dist = length(dv);
+                if (dist < 0.01 || dist > rS) continue;
+                float ndl = dot(dv / dist, N);
+                if (ndl > 0.15) occS += (ndl - 0.15) * (1.0 - dist / rS);
+            }
+            if (usedS > 0.5) occS /= usedS;
+            ao *= mix(1.0, clamp(1.0 - occS * lights.ssaoParams.y * 2.2, 0.0, 1.0), fade);
+        }
+    }
+    outAO = ao;
 }

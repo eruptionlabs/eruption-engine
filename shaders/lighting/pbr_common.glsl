@@ -100,6 +100,27 @@ vec3 pbrMultiScatterCompensation(vec3 F0, float roughness, float NdotV) {
     return vec3(1.0) + F0 * (1.0 / Ess - 1.0);
 }
 
+// MICROSOMBRA ("Micro Shadows", Brinck & Maximov, "The Technical Art of
+// Uncharted 4", SIGGRAPH 2016 Advances). O AO da textura vira um cone de
+// visibilidade e a luz passa se N.L sai pela boca dele; forma fechada:
+//   micro = saturate(|N.L| + 2 ao^2 - 1)
+// ao = 1 nao muda nada; ao = 0,5 com N.L = 0,7 cai a 0,2 - a fresta escurece
+// SOB O SOL, que o AO (so' na luz ambiente, ~14% do brilho ao meio-dia) nao
+// fazia. A versao do Chan (CoD WWII, SIGGRAPH 2018, eq. 58: cos = sqrt(1 - ao),
+// vis = saturate(N.L / cos)^2) e' a mesma ideia mais branda: com o sol alto o
+// disco cabe no cone e quase nada escurece - por isso esta.
+// strength (0..1) mistura com "sem efeito"; contrast eleva o AO a esse expoente
+// antes do cone (1 = AO como vem); floor e' a fracao da luz direta que a fresta
+// mais fechada ainda recebe. O clamp seco da formula zera a luz (preto puro de
+// borda dura: a junta vira linha); a curva suave + o piso mantem gradacao.
+// Presets micro_shadow / micro_shadow_contrast / micro_shadow_floor.
+float pbrMicroShadow(float NdotL, float ao, float strength, float contrast, float floorV) {
+    float a = pow(clamp(ao, 0.0, 1.0), max(contrast, 1.0));
+    float m = smoothstep(0.0, 1.0, clamp(abs(NdotL) + 2.0 * a * a - 1.0, 0.0, 1.0));
+    m = mix(clamp(floorV, 0.0, 1.0), 1.0, m);
+    return mix(1.0, m, clamp(strength, 0.0, 1.0));
+}
+
 // Full energy-conserving Cook-Torrance BRDF.
 // albedo is expected to be in linear space.
 // Returns radiance already multiplied by NdotL.

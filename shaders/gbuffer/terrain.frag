@@ -30,38 +30,10 @@ layout(push_constant) uniform PushConstants {
     float stochasticTiling; // 0 = amostra direta; >0 = quebra a repeticao (ver amostraSemGrade)
 };
 
-layout(set = 1, binding = 0) uniform FrameUBO {
-    mat4 u_view;
-    mat4 u_projection;
-    mat4 u_viewProjection;
-    mat4 u_inverseView;
-    mat4 u_inverseProjection;
-    vec3 u_cameraPos;
-    float u_time;
-    vec2 u_screenResolution;
-    float u_nearPlane;
-    float u_farPlane;
-    uint u_frameIndex;
-    uint u_debugMode;
-    float u_spriteExposure;
-    float u_giIntensity;
-    float u_giAmbientFloor;
-    float u_spriteTilt;
-    float u_shadowHeightScale;
-    float u_spriteNormalYMix;
-    float u_normalMapScale;
-    float u_normalMapInvertY;
-    float u_normalSmoothing;
-    float u_defaultRoughness;
-    float u_defaultMetallic;
-    // Same buffer as sprite_forward.frag - the sun data is already here.
-    vec4 u_sunDir;        // xyz=travel dir, w=intensity
-    vec4 u_sunColor;
-    vec4 u_ambientSky;
-    vec4 u_ambientGround;
-    // POM: x=heightScale, y=maxSteps, z=minSteps, w=wetness global.
-    vec4 u_pomParams;
-};
+// Bloco inteiro do FrameUBO (como o sprite.frag): a calibracao de albedo mora
+// na cauda, e um prefixo declarado a mao nao a alcancaria.
+#include "gbuffer/model_frame_ubo.glsl"
+#include "gbuffer/albedo_calib.glsl"
 
 // --------------------------------------------------- repeticao do ladrilho
 //
@@ -247,7 +219,7 @@ void main() {
 
     // Alpha from terrain used as static occlusion (vertexAO)
     float vertexAO = inColor.a;
-    outAlbedo = vec4(albedo, vertexAO);
+    outAlbedo = vec4(albedoCalibrate(albedo, u_albedoCalib.xy), vertexAO);
 
     // AO term: vertex AO * normal-map cavity (* light MRAH-W AO). 1.0 = none.
     // vertexAO e' oclusao MACRO (assada na geometria do mapa) e continua
@@ -409,8 +381,8 @@ void main() {
         // itself, so the G-buffer carries pure MATERIAL data again. (IGNIS G3)
         wetness   = mrahw.a;
         sourceFlag = 1.0; // real PBR map
-        // Light touch of the cooked MRAH-W AO on top of the normal-map cavity.
-        aoCavityBaked = mix(1.0, mrahw.b, 0.5); // cavidade ESTAVEL no ambiente (nao depende do sol)
+        // AO cozido inteiro (era mix(1, b, 0,5), ver model_frag.glsl).
+        aoCavityBaked = mrahw.b;
     }
     // Floor at 0.02: the lighting passes treat albedo.a < 0.001 as an empty
     // G-buffer pixel and early-out to black.

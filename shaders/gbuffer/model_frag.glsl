@@ -69,6 +69,7 @@ layout(push_constant) uniform PushConstants {
 } push;
 
 #include "gbuffer/model_frame_ubo.glsl"
+#include "gbuffer/albedo_calib.glsl"
 #include "gbuffer/see_through.glsl"
 #include "gbuffer/alpha_hash.glsl"
 
@@ -998,7 +999,7 @@ void main() {
 
     // .a carries ambient occlusion (consumed by ambient.frag). Filled from the
     // PBR map's blue channel below; 1.0 = no occlusion for un-cooked meshes.
-    outAlbedo = vec4(albedo, 1.0);
+    outAlbedo = vec4(albedoCalibrate(albedo, u_albedoCalib.xy), 1.0);
 
     // Ambient-occlusion term written into outAlbedo.a (consumed by ambient.frag).
     // Primary source is a cavity term derived from the normal map itself (see
