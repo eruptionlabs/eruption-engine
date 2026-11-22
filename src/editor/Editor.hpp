@@ -431,6 +431,14 @@ private:
     void drawAssetCreator();
     void shutdownAssetCreator();
     void assetCreatorTestRun(const std::string& spec);
+    // Janela > Pacotes (.tuf) (EditorTuf.cpp): navegar, prever, extrair,
+    // acrescentar, remover, verificar e compactar um arquivo .tuf.
+    struct TufState; // definido em EditorTuf.cpp
+    std::shared_ptr<TufState> m_tuf;
+    bool m_showTuf = false;
+    TufState& tufState();
+    void drawTufPanel();
+    void shutdownTuf();
     // Janela > Efeitos (VfxEditor.cpp): biblioteca, previa isolada e pilha.
     VfxEditor m_vfxEditor;
     bool m_showVfxEditor = false;

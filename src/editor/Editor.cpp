@@ -144,6 +144,7 @@ bool Editor::init(Engine& engine) {
 void Editor::shutdown() {
     shutdownModelViewer();
     shutdownAssetCreator();
+    shutdownTuf();
     m_vfxEditor.shutdown();
     stopThumbnails();
     m_remote.stop();
@@ -402,6 +403,9 @@ void Editor::registerCommands() {
                            "Load a model, generate normal and MRAH-W maps from each texture's color, adjust, "
                            "preview and save them where the engine finds them.");
             ac.checked = [this] { return m_showAssetCreator; };
+            auto& tf = add("window.packages", "Window", "Packages (.tuf)", {}, [this] { m_showTuf = !m_showTuf; },
+                           "Browse a .tuf package: folder tree, preview, extract, add, remove, verify and repack.");
+            tf.checked = [this] { return m_showTuf; };
             auto& fx = add("window.effects", "Window", "Effects", {}, [this] { m_showVfxEditor = !m_showVfxEditor; },
                            "Particle effects: library, isolated live preview and the emitter stack (spawn, shape, "
                            "motion, collision, color and size over lifetime, rendering).");
@@ -1011,6 +1015,7 @@ void Editor::drawUI() {
     drawMapGenWindow();
     drawModelViewer();
     drawAssetCreator();
+    drawTufPanel();
     m_vfxEditor.draw(&m_showVfxEditor); // fechada: so' para o efeito tocando na cena
     drawGameProjectWindow();
 
