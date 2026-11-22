@@ -203,6 +203,34 @@ VfxImage makeLeaf() {
     return img;
 }
 
+// Marca de sola (pegada): ponta para cima (v = 0), branca com alfa; a cor vem
+// do efeito. Assimetrica de proposito (a cava do arco so' de um lado), para o
+// pe' esquerdo e o direito (a textura espelhada) se distinguirem.
+VfxImage makeFoot() {
+    VfxImage img;
+    img.width = img.height = 128;
+    img.rgba.assign(size_t(img.width) * img.height * 4, 0);
+    auto ellipse = [](float x, float y, float cx, float cy, float rx, float ry) {
+        const float dx = (x - cx) / rx, dy = (y - cy) / ry;
+        return 1.0f - std::sqrt(dx * dx + dy * dy); // >0 dentro
+    };
+    for (int py = 0; py < int(img.height); ++py)
+        for (int px = 0; px < int(img.width); ++px) {
+            const float x = (float(px) + 0.5f) / float(img.width) * 2.0f - 1.0f;
+            const float y = 1.0f - (float(py) + 0.5f) / float(img.height) * 2.0f; // +1 = ponta
+            float d = ellipse(x, y, 0.04f, 0.38f, 0.42f, 0.5f);                  // ante-pe'
+            d = std::max(d, ellipse(x, y, -0.02f, -0.62f, 0.3f, 0.34f));         // calcanhar
+            // O meio do pe': so' uma faixa estreita do lado de fora (x > 0).
+            const float ponte = ellipse(x, y, 0.2f, -0.1f, 0.2f, 0.3f);
+            d = std::max(d, ponte);
+            const float cava = 0.3f * std::exp(-std::pow((x + 0.5f) * 3.0f, 2.0f)) * std::exp(-std::pow((y + 0.1f) * 3.5f, 2.0f));
+            const float a = std::clamp((d - cava) * 9.0f, 0.0f, 1.0f);
+            const float grao = 0.88f + 0.12f * hash2(px / 3, py / 3, 7);
+            put(img, px, py, grao, grao, grao, a);
+        }
+    return img;
+}
+
 } // namespace
 
 void computeVfxCutout(const uint8_t* rgba, uint32_t w, uint32_t h, uint32_t cols, uint32_t rows, float out[8]) {
@@ -240,13 +268,14 @@ bool makeVfxBuiltin(const std::string& name, VfxImage& out) {
     else if (name == "builtin:ring") out = makeRing();
     else if (name == "builtin:star") out = makeStar();
     else if (name == "builtin:leaf") out = makeLeaf();
+    else if (name == "builtin:foot") out = makeFoot();
     else return false;
     return true;
 }
 
 const std::vector<std::string>& vfxBuiltinNames() {
     static const std::vector<std::string> names = {"builtin:puff", "builtin:flame", "builtin:spark", "builtin:ring",
-                                                   "builtin:star", "builtin:leaf"};
+                                                   "builtin:star", "builtin:leaf", "builtin:foot"};
     return names;
 }
 

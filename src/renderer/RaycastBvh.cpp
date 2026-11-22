@@ -19,19 +19,19 @@ void RaycastBvh::build(const std::vector<ModelVertex>& vertices, const std::vect
     if (triCount == 0) return;
     m_tris.reserve(triCount);
     m_centroid.reserve(triCount);
-    auto addTri = [&](const Vec3& a, const Vec3& b, const Vec3& c) {
-        m_tris.push_back({a, b, c});
+    auto addTri = [&](const Vec3& a, const Vec3& b, const Vec3& c, uint32_t id) {
+        m_tris.push_back({a, b, c, id});
         m_centroid.push_back((a + b + c) * (1.0f / 3.0f));
     };
     if (!indices.empty()) {
         for (size_t i = 0; i + 2 < indices.size(); i += 3) {
             const uint32_t a = indices[i], b = indices[i + 1], c = indices[i + 2];
             if (a < vertices.size() && b < vertices.size() && c < vertices.size())
-                addTri(vertices[a].position, vertices[b].position, vertices[c].position);
+                addTri(vertices[a].position, vertices[b].position, vertices[c].position, uint32_t(i / 3));
         }
     } else {
         for (size_t i = 0; i + 2 < vertices.size(); i += 3)
-            addTri(vertices[i].position, vertices[i + 1].position, vertices[i + 2].position);
+            addTri(vertices[i].position, vertices[i + 1].position, vertices[i + 2].position, uint32_t(i / 3));
     }
     if (m_tris.empty()) return;
     m_order.resize(m_tris.size());
@@ -116,11 +116,12 @@ bool rayTri(const Vec3& o, const Vec3& d, const Vec3& a, const Vec3& b, const Ve
 }
 }  // namespace
 
-float RaycastBvh::raycastClosest(const Vec3& origin, const Vec3& dir) const {
+float RaycastBvh::raycastClosest(const Vec3& origin, const Vec3& dir, uint32_t* triOut) const {
     if (m_nodes.empty()) return -1.0f;
     const Vec3 invDir(dir.x != 0.0f ? 1.0f / dir.x : FLT_MAX, dir.y != 0.0f ? 1.0f / dir.y : FLT_MAX,
                       dir.z != 0.0f ? 1.0f / dir.z : FLT_MAX);
     float best = FLT_MAX;
+    uint32_t bestId = 0;
     // Pilha fixa: a arvore e' balanceada por mediana (profundidade ~log2(N)); 64 cobre ate' malhas gigantes.
     int32_t stack[64];
     int sp = 0;
@@ -133,13 +134,17 @@ float RaycastBvh::raycastClosest(const Vec3& origin, const Vec3& dir) const {
             for (uint32_t i = n.start; i < n.start + n.count; ++i) {
                 const Tri& t = m_tris[m_order[i]];
                 float hit;
-                if (rayTri(origin, dir, t.a, t.b, t.c, hit) && hit < best) best = hit;
+                if (rayTri(origin, dir, t.a, t.b, t.c, hit) && hit < best) {
+                    best = hit;
+                    bestId = t.id;
+                }
             }
             continue;
         }
         stack[sp++] = n.left;
         stack[sp++] = n.right;
     }
+    if (triOut && best != FLT_MAX) *triOut = bestId;
     return best == FLT_MAX ? -1.0f : best;
 }
 

@@ -45,6 +45,8 @@ declare graphics: {
 -- A model is referenced by its name (string) or its index (number, from 1).
 type Model = string | number
 
+type StepGround = { material: string, texture: string, node: string, uv: vector, in_water: boolean, foot: number, direction: vector }
+
 -- Events. Call these at the top level of a script, not inside functions.
 declare on: {
     start: (fn: () -> ()) -> (),
@@ -60,6 +62,16 @@ declare on: {
     -- Fires when the player walks into / out of a trigger area (Add > Trigger Area).
     enter: (area: string, fn: () -> ()) -> (),
     leave: (area: string, fn: () -> ()) -> (),
+    -- Fires for every footstep of a character (characters.add + set_stride;
+    -- same as characters.on_step). `position` is the foot on the ground.
+    -- `ground` describes the ground triangle under the foot: material = the
+    -- glTF material name ("" when none; on tiled grounds it is the original
+    -- texture path), texture = the colour image name, uv = TEXCOORD_0 at the
+    -- foot wrapped to 0..1 (u, v, 0; row 0 is the top of the image, as
+    -- sampled when drawing), in_water = a water surface covers the foot (the
+    -- other fields are then empty). Decide the effect here with world.dust
+    -- and world.footprint; the engine has no surface table.
+    step: (fn: (name: string, position: vector, ground: StepGround) -> ()) -> (),
 }
 
 -- Variables shared by every script. They reset when the game starts.
@@ -296,6 +308,17 @@ declare world: {
     -- over lava has none): {kind = "water" | "lava", level, index} or nil.
     -- index is the map's liquid (1-based), 0 for the global water plane.
     liquid_at: (x: number, z: number) -> { kind: string, level: number, index: number, map: string? }?,
+    -- A footprint decal on the ground at `position`, tip of the texture toward
+    -- `direction` (x and z used). Sizes are in metres. texture: PNG of the
+    -- project (default: a built-in sole print, white with alpha, tinted by
+    -- `color`); mirror flips it (right foot); life: seconds until it has
+    -- faded; at most 64 stay alive (the oldest go first). Call it from
+    -- on.step / characters.on_step.
+    footprint: (position: vector, direction: vector, opts: { texture: string?, size: number?, life: number?, alpha: number?, color: { number }?, mirror: boolean? }?) -> (),
+    -- A puff of dust at `position`: size (m, per grain), count (particles,
+    -- 1..64), life (s), rise (m/s2 upward), alpha, color {r, g, b} (linear).
+    -- At most 24 puffs stay alive.
+    dust: (position: vector, opts: { color: { number }?, size: number?, count: number?, life: number?, rise: number?, alpha: number? }?) -> (),
     -- A whole nx * nz grid from (x0, z0) with spacing `step`, x varying
     -- fastest: heights (f32 per point) and flags (u8 per point: 1 walkable,
     -- 2 water, 4 lava, 8 on an object; when not walkable, 16 wall (steep
@@ -528,6 +551,9 @@ declare player: {
 }
 
 declare characters: {
+    -- Same as on.step (top level of a script): fn(name, position, ground),
+    -- see on.step for the `ground` fields.
+    on_step: (fn: (name: string, position: vector, ground: StepGround) -> ()) -> (),
     -- Reads and prepares sprite sheets off the frame, so a character added
     -- later with one of them only uploads it. One file or a list; still valid
     -- on the next map (call it with world.preload_map).

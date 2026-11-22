@@ -215,6 +215,10 @@ int on_near(lua_State* L) {
 int on_hour(lua_State* L) { return addEvent(L, ScriptHost::EventKind::Hour, 2, luaL_checknumber(L, 1), nullptr); }
 int on_enter(lua_State* L) { return addEvent(L, ScriptHost::EventKind::Enter, 2, 0.0, luaL_checkstring(L, 1)); }
 int on_leave(lua_State* L) { return addEvent(L, ScriptHost::EventKind::Leave, 2, 0.0, luaL_checkstring(L, 1)); }
+// on.step / characters.on_step(fn(name, position, ground)): cada passo de
+// personagem (ver ScriptHost::dispatch).
+int on_step(lua_State* L) { return addEvent(L, ScriptHost::EventKind::Step, 1, 0.0, nullptr); }
+int characters_on_step(lua_State* L) { return on_step(L); }
 
 // ---------------------------------------------------------------- vars
 
@@ -2329,6 +2333,63 @@ int world_floor_walkable(lua_State* L) {
                                            float(luaL_optnumber(L, 3, 0.0)), fromYArg(L, 4), moveCaps(L, 5)));
     return 1;
 }
+// Opcoes de world.footprint / world.dust: campo numerico opcional e cor {r,g,b}.
+float optField(lua_State* L, int idx, const char* key, float def) {
+    if (!lua_istable(L, idx)) return def;
+    lua_getfield(L, idx, key);
+    const float v = lua_isnumber(L, -1) ? float(lua_tonumber(L, -1)) : def;
+    lua_pop(L, 1);
+    return v;
+}
+Vec3 optColor(lua_State* L, int idx, const char* key, const Vec3& def) {
+    if (!lua_istable(L, idx)) return def;
+    lua_getfield(L, idx, key);
+    Vec3 c = def;
+    if (lua_istable(L, -1)) {
+        for (int i = 0; i < 3; ++i) {
+            lua_rawgeti(L, -1, i + 1);
+            if (lua_isnumber(L, -1)) c[i] = float(lua_tonumber(L, -1));
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    return c;
+}
+// world.footprint(pos, dir, {texture, size, life, alpha, color, mirror}): marca
+// no chao deitada e projetada, com a ponta da textura para `dir` (x e z).
+int world_footprint(lua_State* L) {
+    const Vec3 pos = checkVec3(L, 1);
+    const Vec3 dir = checkVec3(L, 2);
+    Engine::FootprintParams p;
+    if (lua_istable(L, 3)) {
+        lua_getfield(L, 3, "texture");
+        if (lua_isstring(L, -1)) p.texture = lua_tostring(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, 3, "mirror");
+        p.mirror = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+    }
+    p.size = std::clamp(optField(L, 3, "size", p.size), 0.01f, 4.0f);
+    p.life = std::clamp(optField(L, 3, "life", p.life), 0.5f, 600.0f);
+    p.alpha = std::clamp(optField(L, 3, "alpha", p.alpha), 0.0f, 1.0f);
+    p.color = optColor(L, 3, "color", p.color);
+    const float len = std::sqrt(dir.x * dir.x + dir.z * dir.z);
+    eng().spawnFootprint(pos, len > 1e-6f ? Vec2(dir.x / len, dir.z / len) : Vec2(0.0f, 1.0f), p);
+    return 0;
+}
+// world.dust(pos, {color, size, count, life, rise, alpha}): sopro de poeira.
+int world_dust(lua_State* L) {
+    const Vec3 pos = checkVec3(L, 1);
+    Engine::DustParams p;
+    p.size = std::clamp(optField(L, 2, "size", p.size), 0.01f, 4.0f);
+    p.count = std::clamp(optField(L, 2, "count", p.count), 1.0f, 64.0f);
+    p.life = std::clamp(optField(L, 2, "life", p.life), 0.1f, 30.0f);
+    p.rise = optField(L, 2, "rise", p.rise);
+    p.alpha = std::clamp(optField(L, 2, "alpha", p.alpha), 0.0f, 1.0f);
+    p.color = optColor(L, 2, "color", p.color);
+    eng().spawnDust(pos, p);
+    return 0;
+}
 int world_liquid_at(lua_State* L) {
     Engine::LiquidAt at;
     if (!eng().liquidAt(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2)), at)) {
@@ -3101,7 +3162,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
 
     static const luaL_Reg on[] = {
         ERUPTION_API_FN(on, start), ERUPTION_API_FN(on, update), ERUPTION_API_FN(on, every), ERUPTION_API_FN(on, key),
-        ERUPTION_API_FN(on, near), ERUPTION_API_FN(on, hour), ERUPTION_API_FN(on, enter), ERUPTION_API_FN(on, leave), {nullptr, nullptr}};
+        ERUPTION_API_FN(on, near), ERUPTION_API_FN(on, hour), ERUPTION_API_FN(on, enter), ERUPTION_API_FN(on, leave), ERUPTION_API_FN(on, step), {nullptr, nullptr}};
     static const luaL_Reg vars[] = {ERUPTION_API_FN(vars, get), ERUPTION_API_FN(vars, set), ERUPTION_API_FN(vars, add), {nullptr, nullptr}};
     static const luaL_Reg ui[] = {ERUPTION_API_FN(ui, message), ERUPTION_API_FN(ui, minimap_label), ERUPTION_API_FN(ui, minimap_frame), ERUPTION_API_FN(ui, show_hud), ERUPTION_API_FN(ui, show_minimap),
                                   ERUPTION_API_FN(ui, load), ERUPTION_API_FN(ui, place), ERUPTION_API_FN(ui, image_rect), ERUPTION_API_FN(ui, text), ERUPTION_API_FN(ui, value), ERUPTION_API_FN(ui, image),
@@ -3111,7 +3172,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg world[] = {
         ERUPTION_API_FN(world, time), ERUPTION_API_FN(world, set_time), ERUPTION_API_FN(world, time_between),
         ERUPTION_API_FN(world, weather), ERUPTION_API_FN(world, is_weather), ERUPTION_API_FN(world, set_weather),
-        ERUPTION_API_FN(world, look), ERUPTION_API_FN(world, set_look), ERUPTION_API_FN(world, set_ambient), ERUPTION_API_FN(world, set_dof), ERUPTION_API_FN(world, set_classic), ERUPTION_API_FN(world, set_sky), ERUPTION_API_FN(world, sky), ERUPTION_API_FN(world, set_classic_water), ERUPTION_API_FN(world, classic), ERUPTION_API_FN(world, set_fog), ERUPTION_API_FN(world, set_border), ERUPTION_API_FN(world, set_exposure), ERUPTION_API_FN(world, set_time_scale), ERUPTION_API_FN(world, time_scale), ERUPTION_API_FN(world, walkable), ERUPTION_API_FN(world, set_nav_rules), ERUPTION_API_FN(world, nav_rules), ERUPTION_API_FN(world, path), ERUPTION_API_FN(world, floor_height), ERUPTION_API_FN(world, screen_to_ground), ERUPTION_API_FN(world, floor_walkable), ERUPTION_API_FN(world, liquid_at), ERUPTION_API_FN(world, ground_grid), ERUPTION_API_FN(world, set_motion_blur),
+        ERUPTION_API_FN(world, look), ERUPTION_API_FN(world, set_look), ERUPTION_API_FN(world, set_ambient), ERUPTION_API_FN(world, set_dof), ERUPTION_API_FN(world, set_classic), ERUPTION_API_FN(world, set_sky), ERUPTION_API_FN(world, sky), ERUPTION_API_FN(world, set_classic_water), ERUPTION_API_FN(world, classic), ERUPTION_API_FN(world, set_fog), ERUPTION_API_FN(world, set_border), ERUPTION_API_FN(world, set_exposure), ERUPTION_API_FN(world, set_time_scale), ERUPTION_API_FN(world, time_scale), ERUPTION_API_FN(world, walkable), ERUPTION_API_FN(world, set_nav_rules), ERUPTION_API_FN(world, nav_rules), ERUPTION_API_FN(world, path), ERUPTION_API_FN(world, floor_height), ERUPTION_API_FN(world, screen_to_ground), ERUPTION_API_FN(world, floor_walkable), ERUPTION_API_FN(world, liquid_at), ERUPTION_API_FN(world, footprint), ERUPTION_API_FN(world, dust), ERUPTION_API_FN(world, ground_grid), ERUPTION_API_FN(world, set_motion_blur),
         ERUPTION_API_FN(world, set_chromatic_aberration), ERUPTION_API_FN(world, set_effect_radius),
         ERUPTION_API_FN(world, set_focus), ERUPTION_API_FN(world, set_ground_blend),
         ERUPTION_API_FN(world, set_cutaway),
@@ -3163,7 +3224,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         ERUPTION_API_FN(characters, hide), ERUPTION_API_FN(characters, ring), ERUPTION_API_FN(characters, set_sprite),
         ERUPTION_API_FN(characters, add), ERUPTION_API_FN(characters, remove), ERUPTION_API_FN(characters, release_sheet),
         ERUPTION_API_FN(characters, flash), ERUPTION_API_FN(characters, shake), ERUPTION_API_FN(characters, lunge),
-        ERUPTION_API_FN(characters, pop), ERUPTION_API_FN(characters, fade), ERUPTION_API_FN(characters, set_scale), ERUPTION_API_FN(characters, head_screen), ERUPTION_API_FN(characters, at_screen),
+        ERUPTION_API_FN(characters, pop), ERUPTION_API_FN(characters, fade), ERUPTION_API_FN(characters, set_scale), ERUPTION_API_FN(characters, head_screen), ERUPTION_API_FN(characters, at_screen), ERUPTION_API_FN(characters, on_step),
         {nullptr, nullptr}};
     static const luaL_Reg lights[] = {
         ERUPTION_API_FN(lights, count), ERUPTION_API_FN(lights, position), ERUPTION_API_FN(lights, set_position),
@@ -3264,6 +3325,8 @@ declare graphics: {
 -- A model is referenced by its name (string) or its index (number, from 1).
 type Model = string | number
 
+type StepGround = { material: string, texture: string, node: string, uv: vector, in_water: boolean, foot: number, direction: vector }
+
 -- Events. Call these at the top level of a script, not inside functions.
 declare on: {
     start: (fn: () -> ()) -> (),
@@ -3279,6 +3342,16 @@ declare on: {
     -- Fires when the player walks into / out of a trigger area (Add > Trigger Area).
     enter: (area: string, fn: () -> ()) -> (),
     leave: (area: string, fn: () -> ()) -> (),
+    -- Fires for every footstep of a character (characters.add + set_stride;
+    -- same as characters.on_step). `position` is the foot on the ground.
+    -- `ground` describes the ground triangle under the foot: material = the
+    -- glTF material name ("" when none; on tiled grounds it is the original
+    -- texture path), texture = the colour image name, uv = TEXCOORD_0 at the
+    -- foot wrapped to 0..1 (u, v, 0; row 0 is the top of the image, as
+    -- sampled when drawing), in_water = a water surface covers the foot (the
+    -- other fields are then empty). Decide the effect here with world.dust
+    -- and world.footprint; the engine has no surface table.
+    step: (fn: (name: string, position: vector, ground: StepGround) -> ()) -> (),
 }
 
 -- Variables shared by every script. They reset when the game starts.
@@ -3515,6 +3588,17 @@ declare world: {
     -- over lava has none): {kind = "water" | "lava", level, index} or nil.
     -- index is the map's liquid (1-based), 0 for the global water plane.
     liquid_at: (x: number, z: number) -> { kind: string, level: number, index: number, map: string? }?,
+    -- A footprint decal on the ground at `position`, tip of the texture toward
+    -- `direction` (x and z used). Sizes are in metres. texture: PNG of the
+    -- project (default: a built-in sole print, white with alpha, tinted by
+    -- `color`); mirror flips it (right foot); life: seconds until it has
+    -- faded; at most 64 stay alive (the oldest go first). Call it from
+    -- on.step / characters.on_step.
+    footprint: (position: vector, direction: vector, opts: { texture: string?, size: number?, life: number?, alpha: number?, color: { number }?, mirror: boolean? }?) -> (),
+    -- A puff of dust at `position`: size (m, per grain), count (particles,
+    -- 1..64), life (s), rise (m/s2 upward), alpha, color {r, g, b} (linear).
+    -- At most 24 puffs stay alive.
+    dust: (position: vector, opts: { color: { number }?, size: number?, count: number?, life: number?, rise: number?, alpha: number? }?) -> (),
     -- A whole nx * nz grid from (x0, z0) with spacing `step`, x varying
     -- fastest: heights (f32 per point) and flags (u8 per point: 1 walkable,
     -- 2 water, 4 lava, 8 on an object; when not walkable, 16 wall (steep
@@ -3684,6 +3768,9 @@ declare player: {
 }
 
 declare characters: {
+    -- Same as on.step (top level of a script): fn(name, position, ground),
+    -- see on.step for the `ground` fields.
+    on_step: (fn: (name: string, position: vector, ground: StepGround) -> ()) -> (),
     -- Reads and prepares sprite sheets off the frame, so a character added
     -- later with one of them only uploads it. One file or a list; still valid
     -- on the next map (call it with world.preload_map).

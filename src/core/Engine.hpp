@@ -36,6 +36,7 @@
 #include "renderer/skymap/SkyConfig.hpp"
 #include "renderer/CloudLayerRenderer.hpp"
 #include "renderer/vfx/VfxSystem.hpp"
+#include "core/FootstepEffects.hpp"
 #include "renderer/vfx/AmbientParticles.hpp"
 #include "renderer/VisionMap.hpp"
 #include "core/Vision.hpp"
@@ -403,6 +404,12 @@ public:
     struct SceneCharacter {
         std::string name, sprite;
         Vec3 position{0.0f};
+        // Passos (CharacterStep): ultima posicao medida, distancia andada desde
+        // o ultimo passo e o pe' do proximo (0 = esquerdo, 1 = direito).
+        Vec3 stepLastPos{0.0f};
+        float stepOdometer = 0.0f;
+        int stepFoot = 0;
+        bool stepTracked = false;
         float facing = 0.0f; // graus; 0 = olhando para +Z
         bool visible = true;
         bool removed = false; // apagado no editor (desfazer traz de volta)
@@ -2604,6 +2611,69 @@ private:
     float m_walkStride = 0.0f;         // characters.set_stride global (0 = desligado)
     std::unordered_map<std::string, float> m_walkStrideByName;
     float walkStrideFor(const SceneCharacter& c) const;
+public:
+    // PASSOS. updateCharacters registra aqui cada passo dado no quadro (meia
+    // passada andada no chao; teleporte nao conta). Quem consome (ondinha na
+    // agua, efeito de pisar no chao) le' depois do update; a lista e' refeita
+    // todo quadro.
+    struct CharacterStep {
+        std::string name;
+        Vec3 pos{0.0f};  // ponto do pe' no chao (ancora deslocada para o lado do pe')
+        Vec2 dir{0.0f, 1.0f}; // direcao horizontal do andar (unitaria)
+        int foot = 0;    // 0 = esquerdo, 1 = direito
+        float speed = 0.0f; // u/s no passo
+    };
+    const std::vector<CharacterStep>& characterSteps() const { return m_characterSteps; }
+    // Agua de superficie no ponto (x, z): true com o nivel em *level quando ha'
+    // agua ali acima de p.y - kFolga (o pe' na agua ou na lamina dela). A agua
+    // vence o chao embaixo: efeito de pisar no chao nao sai onde isto e' true.
+    bool waterSurfaceAt(const Vec3& p, float* level) const;
+    // Passo com o chao sob o pe' (FootstepEffects.cpp), para o on_step do
+    // script. Sem tabela de tipos no motor: quem decide o que cada material faz
+    // e' o jogo, que chama world.footprint / world.dust.
+    struct FootstepEvent {
+        std::string name;
+        Vec3 pos{0.0f};
+        Vec2 dir{0.0f, 1.0f};
+        int foot = 0;
+        float speed = 0.0f;
+        // Triangulo de chao embaixo do pe': material do glTF (o caminho original
+        // da textura nos mapas em ladrilhos), imagem de cor, no', e TEXCOORD_0
+        // no ponto (com o wrap em 0..1).
+        std::string material, texture, node;
+        Vec2 uv{0.0f};
+        bool hasGround = false;
+        bool inWater = false; // waterSurfaceAt no pe'
+    };
+    // Calculado na primeira chamada do quadro (sem script que leia, nada roda).
+    const std::vector<FootstepEvent>& footstepEvents();
+    // Efeitos genericos com os parametros na mao (world.footprint / world.dust).
+    // Tamanhos em metros do VFX; a cor e' linear.
+    struct FootprintParams {
+        std::string texture;   // vazio = a marca embutida (builtin:foot)
+        Vec3 color{0.12f, 0.09f, 0.06f};
+        float size = 0.16f;    // m, comprimento da marca
+        float life = 10.0f;    // s ate' sumir (suave nos ultimos 30%)
+        float alpha = 0.6f;
+        bool mirror = false;   // textura espelhada (pe' direito)
+    };
+    struct DustParams {
+        Vec3 color{0.6f, 0.52f, 0.4f};
+        float size = 0.35f;    // m, diametro do grao
+        float count = 6.0f;    // particulas
+        float life = 0.8f;     // s
+        float rise = 0.25f;    // m/s2 para cima
+        float alpha = 0.5f;
+    };
+    void spawnFootprint(const Vec3& pos, const Vec2& dir, const FootprintParams& p);
+    void spawnDust(const Vec3& pos, const DustParams& p);
+private:
+    std::vector<CharacterStep> m_characterSteps;
+    std::vector<FootstepEvent> m_footstepEvents;
+    bool m_footstepEventsReady = false;
+    FootstepEffects m_footsteps;
+    bool footSurfaceAt(const Vec3& pos, ModelRenderer::SurfaceHit& hit);
+    void trackCharacterStep(SceneCharacter& c, float dt);
     struct WalkRate { float cell = 0.0f, refMs = 150.0f; };
     WalkRate m_walkRate;
     std::unordered_map<std::string, WalkRate> m_walkRateByName;

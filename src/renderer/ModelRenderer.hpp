@@ -831,6 +831,16 @@ public:
     // Distancia ao longo do raio (mundo, dir normalizada) ate' o triangulo
     // mais proximo da instancia, ou -1. Usa a malha da CPU do modelo.
     float raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const;
+    // Superficie sob o raio: distancia, nome do no', nome do MATERIAL do glTF
+    // (o identificador estavel: no chao em ladrilhos e' o caminho original da
+    // textura) e nome da imagem de cor (efeitos de pisar no chao por superficie).
+    struct SurfaceHit {
+        float t = -1.0f;
+        std::string node, material, texture;
+        Vec2 uv{0.0f}; // TEXCOORD_0 interpolada no ponto atingido (sem o wrap)
+        bool hasUv = false;
+    };
+    bool surfaceTextureAt(uint32_t index, const Vec3& origin, const Vec3& dir, SurfaceHit& out) const;
 
     // Terreno grande: dispara em segundo plano o RaycastBvh dos nos grandes
     // (acima de kRaycastBvhWarmTris triangulos) usados por instancias atuais
@@ -1211,6 +1221,8 @@ private:
         std::future<RaycastBvh> future;
     };
     mutable std::vector<RaycastBvhJob> m_raycastBvhJobs;
+    const RaycastBvh* raycastTree(uint32_t index, const Vec3& origin, const Vec3& dir, Vec3& o, Vec3& d,
+                                  const ModelAsset*& assetOut, uint32_t& geoOut) const;
 
     VkBuffer m_globalVertexBuffer = VK_NULL_HANDLE;
     VmaAllocation m_globalVertexAlloc = VK_NULL_HANDLE;

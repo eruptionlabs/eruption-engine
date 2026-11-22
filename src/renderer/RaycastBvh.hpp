@@ -24,11 +24,14 @@ public:
     // t positivo mais proximo entre os dois lados de qualquer triangulo (o
     // mesmo criterio do raycastInstance original: Moller-Trumbore sem culling
     // de face), ou -1 se nenhum.
-    float raycastClosest(const Vec3& origin, const Vec3& dir) const;
+    // `triOut` (opcional) recebe o numero do triangulo atingido na ordem de
+    // `indices` (indice / 3), para quem precisa do material dele.
+    float raycastClosest(const Vec3& origin, const Vec3& dir, uint32_t* triOut = nullptr) const;
 
 private:
     struct Tri {
         Vec3 a, b, c;
+        uint32_t id = 0; // numero do triangulo na malha de origem
     };
     struct Node {
         Vec3 bmin{0.0f}, bmax{0.0f};

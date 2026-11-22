@@ -1492,9 +1492,13 @@ VfxSystem::InitInfo Engine::vfxInitInfo(VkDescriptorSet frameUboSet) {
     vi.resolveTexture = [this](const std::string& path, uint32_t cols, uint32_t rows) -> VfxTextureInfo {
         VfxTextureInfo info;
         VfxImage img;
-        if (!makeVfxBuiltin(path, img)) {
-            std::filesystem::path p = project::gameRef(path);
-            if (!vfs::exists(p)) p = project::engine(path);
+        // "mirror:<textura>": a mesma imagem espelhada na horizontal (a marca
+        // do pe' direito, ver FootstepEffects).
+        const bool mirror = path.rfind("mirror:", 0) == 0;
+        const std::string srcPath = mirror ? path.substr(7) : path;
+        if (!makeVfxBuiltin(srcPath, img)) {
+            std::filesystem::path p = project::gameRef(srcPath);
+            if (!vfs::exists(p)) p = project::engine(srcPath);
             int w = 0, h = 0, n = 0;
             unsigned char* px = ImageUtils::loadRawVfs(p.string(), w, h, n, STBI_rgb_alpha);
             if (!px) {
@@ -1506,6 +1510,11 @@ VfxSystem::InitInfo Engine::vfxInitInfo(VkDescriptorSet frameUboSet) {
             img.rgba.assign(px, px + size_t(w) * size_t(h) * 4);
             stbi_image_free(px);
         }
+        if (mirror)
+            for (uint32_t y = 0; y < img.height; ++y) {
+                uint32_t* row = reinterpret_cast<uint32_t*>(img.rgba.data()) + size_t(y) * img.width;
+                std::reverse(row, row + img.width);
+            }
         computeVfxCutout(img.rgba.data(), img.width, img.height, cols, rows, info.cutout);
         // Uma textura por arquivo, mesmo usada com grades diferentes.
         auto it = m_vfxTextureSlots.find(path);

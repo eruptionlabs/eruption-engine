@@ -209,6 +209,10 @@ public:
                            const Mat4& invViewProj,
                            const WaterSettings& settings);
 
+    // Um passo na agua: anel que abre em (x, z) no instante `time` (o mesmo
+    // relogio do render). `strength` ~1 num passo normal.
+    void addStepRipple(float x, float z, float time, float strength = 1.0f);
+
     void render(VkCommandBuffer cmd, const Mat4& viewProj, const Vec3& cameraPos,
                 const DayNightCycle& cycle, float time,
                 float nearPlane, float farPlane,
@@ -303,6 +307,13 @@ private:
     VkDescriptorPool m_uboPool = VK_NULL_HANDLE;
     VkDescriptorSet m_uboSets[MAX_FRAMES * UBO_BANKS] = {};
 
+    // Fila circular de ondinhas de passo (fontes explicitas, somadas aos aneis
+    // de chuva procedurais). Cada uma vive ~1,3 s no shader; 16 cobrem varios
+    // personagens andando juntos.
+    static constexpr uint32_t kMaxStepRipples = 16;
+    Vec4 m_stepRipples[kMaxStepRipples] = {};
+    uint32_t m_stepRippleNext = 0;
+
     struct WaterUBO {
         Vec4 baseColorDeep;       // xyz=cor profunda
         Vec4 baseColorShallow;    // xyz=cor rasa
@@ -333,6 +344,7 @@ private:
         Vec4 styleParams2;        // x=espuma de margem, y=nivel do SSPR, z=distorcao do reflexo, w=clareza
         Vec4 styleDeep;           // xyz=cor funda, w=inclinacao das ondas
         IVec4 styleSlots;         // x=slot do SSPR (-1 = sem)
+        Vec4 stepRipples[kMaxStepRipples]; // ondinhas de passo: xy=(x,z), z=nascimento (s), w=forca (0 = vazio)
     };
     static_assert(sizeof(WaterUBO) <= 1024, "WaterUBO too large");
 

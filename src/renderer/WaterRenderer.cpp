@@ -1139,6 +1139,11 @@ std::vector<uint8_t> WaterRenderer::webUBO(const WaterSettings& settings, float 
     return bytes;
 }
 
+void WaterRenderer::addStepRipple(float x, float z, float time, float strength) {
+    m_stepRipples[m_stepRippleNext] = Vec4(x, z, time, strength);
+    m_stepRippleNext = (m_stepRippleNext + 1) % kMaxStepRipples;
+}
+
 void WaterRenderer::fillUBO(WaterUBO& ubo, uint32_t frameIndex, const WaterSettings& settings,
                             float nearPlane, float farPlane,
                             const DayNightCycle& cycle, float time, const Vec3& cameraPos,
@@ -1236,6 +1241,8 @@ void WaterRenderer::fillUBO(WaterUBO& ubo, uint32_t frameIndex, const WaterSetti
     ubo.styleDeep = Vec4(m_style.deepColor, m_style.waveSlope);
     ubo.styleSlots = IVec4(hd2d && m_ssprValidThisFrame ? static_cast<int32_t>(m_ssprSlot) : -1,
                            hd2d && m_ssprValidThisFrame ? m_mirrorReflSlot : -1, 0, 0);
+    if (settings.liquidKind == 0)
+        for (uint32_t i = 0; i < kMaxStepRipples; ++i) ubo.stepRipples[i] = m_stepRipples[i];
     if (hd2d) {
         // Diorama: o lago nao ondula a malha. As ondas de Gerstner do vertice,
         // com comprimento de ~3 unidades numa malha de grade larga, viravam

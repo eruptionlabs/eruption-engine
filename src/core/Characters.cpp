@@ -338,7 +338,46 @@ void Engine::releaseCharacterSpriteCache(uint32_t keepGenerations) {
     }
 }
 
+// Passo = meia passada andada (set_stride; sem ela, kPassoPadrao). Mede o
+// deslocamento horizontal real do quadro, venha do caminho ou do script
+// (set_position com andar). Um salto maior que kSaltoTeleporte e' teleporte:
+// so' reposiciona, sem passo. O pe' alterna e sai kPeLado para o lado.
+void Engine::trackCharacterStep(SceneCharacter& c, float dt) {
+    constexpr float kPassoPadrao = 6.0f;
+    constexpr float kSaltoTeleporte = 20.0f;
+    constexpr float kPeLado = 1.2f;
+    if (!c.stepTracked) {
+        c.stepLastPos = c.position;
+        c.stepTracked = true;
+        return;
+    }
+    const Vec2 d(c.position.x - c.stepLastPos.x, c.position.z - c.stepLastPos.z);
+    const float dist = glm::length(d);
+    c.stepLastPos = c.position;
+    if (dist < 1e-4f) return;
+    if (dist > kSaltoTeleporte) { c.stepOdometer = 0.0f; return; }
+    const float passada = walkStrideFor(c);
+    const float passo = passada > 0.0f ? passada * 0.5f : kPassoPadrao;
+    c.stepOdometer += dist;
+    if (c.stepOdometer < passo) return;
+    c.stepOdometer = std::fmod(c.stepOdometer, passo);
+    CharacterStep s;
+    s.name = c.name;
+    s.dir = d / dist;
+    const Vec2 lado(s.dir.y, -s.dir.x);
+    const float sinal = c.stepFoot == 0 ? -1.0f : 1.0f;
+    s.pos = c.position + Vec3(lado.x, 0.0f, lado.y) * (kPeLado * sinal);
+    s.foot = c.stepFoot;
+    s.speed = dt > 0.0f ? dist / dt : 0.0f;
+    c.stepFoot ^= 1;
+    // Passo na agua: anel na superficie, no instante do relogio do render.
+    float nivel = 0.0f;
+    if (waterSurfaceAt(s.pos, &nivel)) m_water.addStepRipple(s.pos.x, s.pos.z, m_timer.elapsed(), 1.0f);
+    m_characterSteps.push_back(std::move(s));
+}
+
 void Engine::updateCharacters(float dt, bool moveAlongPaths) {
+    m_characterSteps.clear();
     m_groundRings.clear();
     for (const auto& area : m_groundAreas) m_groundRings.push_back(area.second); // debaixo dos aneis
     m_portraitDt += dt;
@@ -429,9 +468,12 @@ void Engine::updateCharacters(float dt, bool moveAlongPaths) {
             if (c.pathIndex >= c.path.size()) c.walking = false;
         }
         if (c.sayTime > 0.0f) c.sayTime = std::max(0.0f, c.sayTime - dt);
+        if (!c.removed && c.visible) trackCharacterStep(c, dt);
         tickCharacterFx(c, dt);
         if (c.visible && !c.removed && !hideCharactersInView) drawCharacter(c, dt);
     }
+    m_footstepEventsReady = false; // footstepEvents() refaz sob demanda
+    m_footsteps.tick(dt);
 }
 
 // Cada efeito e' um temporizador que desce; o desenho le' o estado. Nada de

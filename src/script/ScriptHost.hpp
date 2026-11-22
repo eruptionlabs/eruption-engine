@@ -74,7 +74,7 @@ public:
     static void setWatchdogMs(int ms) { s_watchdogMs = ms < 50 ? 50 : (ms > 10000 ? 10000 : ms); }
 
     // ---- usado pela API (ScriptApi.cpp)
-    enum class EventKind { Start, Update, Every, Key, Near, Hour, Enter, Leave, Net };
+    enum class EventKind { Start, Update, Every, Key, Near, Hour, Enter, Leave, Net, Step };
     struct Handler {
         EventKind kind = EventKind::Start;
         int fnRef = -1;

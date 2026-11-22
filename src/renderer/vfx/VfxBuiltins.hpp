@@ -3,7 +3,7 @@
 // Texturas de particula que vem com o motor, geradas na hora (sem arquivo):
 // "builtin:puff" (fumaca, 4x4 variacoes), "builtin:flame" (chama, 4x4
 // quadros), "builtin:spark", "builtin:ring", "builtin:star" e "builtin:leaf"
-// (folha, 2x2 variacoes). Servem de
+// (folha, 2x2 variacoes) e "builtin:foot" (marca de sola, ponta para cima). Servem de
 // ponto de partida; o jogo usa as proprias folhas de quadros em PNG.
 
 #include <cstdint>

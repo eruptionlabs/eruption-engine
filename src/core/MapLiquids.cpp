@@ -235,3 +235,21 @@ bool Engine::setLiquidLevel(int index, float level, LoadedMap* map) {
 }
 
 } // namespace eruption
+
+namespace eruption {
+// Ver Engine.hpp. Agua de superficie = o plano global (o mesmo nivel que a
+// malha desenha: nivel do mapa mais o ajuste do menu), dentro da malha e com o
+// pe' no maximo kFolga acima da superficie. Lava nao conta; em terra seca ao
+// lado da agua o piso fica acima do nivel e da' falso.
+bool Engine::waterSurfaceAt(const Vec3& p, float* level) const {
+    constexpr float kFolga = 0.5f;
+    if (!m_waterOn || m_waterFullyBuried || !m_currentMap) return false;
+    const float surface = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
+    if (p.y - kFolga >= surface) return false;
+    if (m_waterBoundsValid &&
+        (p.x < m_waterAabbMin.x || p.x > m_waterAabbMax.x || p.z < m_waterAabbMin.z || p.z > m_waterAabbMax.z))
+        return false;
+    if (level) *level = surface;
+    return true;
+}
+} // namespace eruption

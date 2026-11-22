@@ -765,6 +765,7 @@ static std::string handlerLabel(const ScriptHost::Handler& h, size_t index) {
         case K::Hour: std::snprintf(buf, sizeof(buf), "on.hour %.3g #%zu", h.number, index); break;
         case K::Enter: std::snprintf(buf, sizeof(buf), "on.enter %.40s #%zu", h.text.c_str(), index); break;
         case K::Leave: std::snprintf(buf, sizeof(buf), "on.leave %.40s #%zu", h.text.c_str(), index); break;
+        case K::Step: std::snprintf(buf, sizeof(buf), "on.step #%zu", index); break;
         case K::Net: std::snprintf(buf, sizeof(buf), "on.net %.40s #%zu", h.text.c_str(), index); break;
         default: std::snprintf(buf, sizeof(buf), "on.start #%zu", index); break;
     }
@@ -786,6 +787,32 @@ void ScriptHost::dispatch(Script& s, float dt, float prevHour, float hour) {
             case EventKind::Update:
                 lua_pushnumber(L, dt);
                 run(s, h, 1);
+                break;
+            case EventKind::Step:
+                // Um passo por chamada: nome, posicao do pe' e o chao embaixo
+                // (material, imagem, UV com wrap, agua). O motor so' entrega
+                // os dados; o efeito e' do jogo (world.dust / world.footprint).
+                for (const auto& ev : m_engine->footstepEvents()) {
+                    if (s.failed) break;
+                    lua_pushstring(L, ev.name.c_str());
+                    lua_pushvector(L, ev.pos.x, ev.pos.y, ev.pos.z);
+                    lua_createtable(L, 0, 7);
+                    lua_pushstring(L, ev.material.c_str());
+                    lua_setfield(L, -2, "material");
+                    lua_pushstring(L, ev.texture.c_str());
+                    lua_setfield(L, -2, "texture");
+                    lua_pushstring(L, ev.node.c_str());
+                    lua_setfield(L, -2, "node");
+                    lua_pushvector(L, ev.uv.x, ev.uv.y, 0.0f);
+                    lua_setfield(L, -2, "uv");
+                    lua_pushboolean(L, ev.inWater ? 1 : 0);
+                    lua_setfield(L, -2, "in_water");
+                    lua_pushnumber(L, ev.foot);
+                    lua_setfield(L, -2, "foot");
+                    lua_pushvector(L, ev.dir.x, 0.0f, ev.dir.y);
+                    lua_setfield(L, -2, "direction");
+                    run(s, h, 3);
+                }
                 break;
             case EventKind::Every:
                 h.timer += dt;

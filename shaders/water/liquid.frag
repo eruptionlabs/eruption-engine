@@ -47,6 +47,7 @@ layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 styleParams2;        // x=espuma de margem, y=nivel do SSPR, z=distorcao do reflexo, w=clareza
     vec4 styleDeep;           // xyz=cor funda, w=inclinacao das ondas
     ivec4 styleSlots;         // x=slot do reflexo planar (-1 = sem), y=slot do reflexo espelhado (-1 = sem)
+    vec4 stepRipples[16];     // ondinhas de passo: xy=ponto no mundo (x,z), z=instante do nascimento (s), w=forca (0 = vazio)
 } ubo;
 
 layout(push_constant) uniform Push {
@@ -494,6 +495,41 @@ vec4 rainRipples(vec2 p, float t, float footprint, float intensity) {
     return acc;
 }
 
+// Ondinhas de passo: cada passo na agua (fila de 16 fontes no UBO) abre um
+// anel que cresce, amortece e some em ~1,3 s, com um segundo anel mais fraco
+// logo atras. Entra na normal como os aneis de chuva (que seguem aleatorios);
+// o teste de distancia/idade sai cedo para as fontes vazias, velhas ou longe
+// do pixel. Retorna (dh/dx, dh/dz, 0, crista).
+const float kPassoVida = 1.3;   // s
+const float kPassoRaio = 3.5;   // u, raio final do anel
+vec4 stepRipples(vec2 p, float t, float footprint) {
+    vec4 acc = vec4(0.0);
+    for (int i = 0; i < 16; ++i) {
+        vec4 s = ubo.stepRipples[i];
+        float age = t - s.z;
+        if (s.w <= 0.0 || age < 0.0 || age > kPassoVida) continue;
+        vec2 v = p - s.xy;
+        float d2 = dot(v, v);
+        float rmax = kPassoRaio + 1.0;
+        if (d2 > rmax * rmax) continue;
+        float life = age / kPassoVida;
+        float r = kPassoRaio * (1.0 - (1.0 - life) * (1.0 - life)); // abre rapido, depois desacelera
+        float d = sqrt(d2);
+        float lam = 0.55;
+        float w = 0.28;
+        float x = d - r;
+        float x2 = d - r * 0.6; // segundo anel, mais fraco, atras do primeiro
+        float env = exp(-(x * x) / (w * w * 2.0)) + 0.4 * exp(-(x2 * x2) / (w * w * 2.0));
+        float fade = (1.0 - life) * (1.0 - life) * smoothstep(0.0, 0.06, life);
+        env *= fade * s.w / sqrt(1.0 + 2.0 * d);
+        float keep = smoothstep(1.5, 4.0, lam / footprint);
+        float wave = sin(x * 6.2831853 / lam);
+        acc.xy += (v / max(d, 1e-4)) * (wave * env * keep);
+        acc.w += max(cos(x * 6.2831853 / lam), 0.0) * env * keep;
+    }
+    return acc;
+}
+
 // Brilhos do sol: cada celula tem uma faceta de inclinacao sorteada (troca
 // num ciclo proprio); acende onde a faceta manda o sol para a camera. O
 // ponto tem no minimo ~1,2 pixel (com a energia dividida), para nao virar
@@ -724,6 +760,11 @@ vec3 shadeDiorama() {
         grad += rr.xy * 0.5 * ubo.styleParams.w;
         splash = rr.z;
         ringLight = min(rr.w, 1.0) * ubo.styleParams.w;
+    }
+    {
+        vec4 sr = stepRipples(vWorldPos.xz, time, footprint);
+        grad += sr.xy * 5.0;
+        ringLight += min(sr.w, 1.0) * 0.5;
     }
     grad *= mix(0.35, 1.0, smoothstep(0.0, shoreW * 1.5, depthV));
     grad += gradCrista;
@@ -1164,6 +1205,12 @@ void main() {
         vec3 pn = localN.x * vTangent + localN.y * vNormal + localN.z * vBitangent;
         float pnLen = length(pn);
         perturbedNormal = (pnLen > 1e-5) ? (pn / pnLen) : vNormal;
+    }
+    {
+        // Ondinhas de passo tambem na agua sem o estilo diorama (normal no mundo).
+        vec2 fp = vec2(length(dFdx(vWorldPos.xz)), length(dFdy(vWorldPos.xz)));
+        vec4 sr = stepRipples(vWorldPos.xz, time, max(max(fp.x, fp.y), 1e-3));
+        perturbedNormal = normalize(perturbedNormal + vec3(-sr.x, 0.0, -sr.y) * 5.0);
     }
     if (!validVec3(perturbedNormal)) perturbedNormal = vNormal;
 

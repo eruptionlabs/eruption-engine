@@ -4078,13 +4078,16 @@ bool ModelRenderer::footprint(uint32_t index, Vec2 out[4]) const {
     return true;
 }
 
-float ModelRenderer::raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const {
-    if (index >= m_instances.size()) return -1.0f;
+// A arvore de raios do no' da instancia, com o raio ja' no espaco do modelo
+// (ver raycastInstance). nullptr = instancia sem malha na CPU.
+const RaycastBvh* ModelRenderer::raycastTree(uint32_t index, const Vec3& origin, const Vec3& dir, Vec3& o, Vec3& d,
+                                             const ModelAsset*& assetOut, uint32_t& geoOut) const {
+    if (index >= m_instances.size()) return nullptr;
     const ModelInstance& inst = m_instances[index];
     const ModelAsset* asset = nullptr;
     for (const auto& m : m_lastModels)
         if (m.filePath == inst.assetPath) { asset = &m; break; }
-    if (!asset || inst.nodeIndex >= asset->nodes.size()) return -1.0f;
+    if (!asset || inst.nodeIndex >= asset->nodes.size()) return nullptr;
     // No' que compartilha geometria (instancia de mesh repetida ou duplicata
     // byte-a-byte) nao guarda vertices: a malha esta' no dono. Sem seguir o
     // dono, so' a 1a instancia de cada mesh tinha raio e as demais nunca
@@ -4093,12 +4096,14 @@ float ModelRenderer::raycastInstance(uint32_t index, const Vec3& origin, const V
     const int32_t share = asset->nodes[geoIndex].geometryShareIndex;
     if (share >= 0 && size_t(share) < asset->nodes.size()) geoIndex = uint32_t(share);
     const auto& node = asset->nodes[geoIndex];
-    if (node.vertices.empty()) return -1.0f;
+    if (node.vertices.empty()) return nullptr;
     // Raio no espaco do modelo; t continua valendo no mundo porque a direcao
     // local nao e' normalizada.
     const Mat4 inv = glm::inverse(inst.transform);
-    const Vec3 o = Vec3(inv * Vec4(origin, 1.0f));
-    const Vec3 d = Vec3(inv * Vec4(dir, 0.0f));
+    o = Vec3(inv * Vec4(origin, 1.0f));
+    d = Vec3(inv * Vec4(dir, 0.0f));
+    assetOut = asset;
+    geoOut = geoIndex;
     // E-PISO-GRANDE (spec 12): BVH por no', construida uma vez e reusada -
     // antes disto era triangulo por triangulo A CADA chamada (world.floor_*
     // e world.path chamam isto centenas de vezes por consulta; custava
@@ -4123,7 +4128,74 @@ float ModelRenderer::raycastInstance(uint32_t index, const Vec3& origin, const V
             it = m_raycastBvh.emplace(key, std::move(bvh)).first;
         }
     }
-    return it->second.raycastClosest(o, d);
+    return &it->second;
+}
+
+float ModelRenderer::raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const {
+    Vec3 o, d;
+    const ModelAsset* asset = nullptr;
+    uint32_t geo = 0;
+    const RaycastBvh* bvh = raycastTree(index, origin, dir, o, d, asset, geo);
+    return bvh ? bvh->raycastClosest(o, d) : -1.0f;
+}
+
+// Textura de cor do triangulo que o raio atinge: o nome que o glTF da' a ela
+// (o mesmo de textureNames do no'). Com a tabela por vertice (malha pequena)
+// vale o canto mais perto do ponto atingido; o chao grande perde a tabela
+// depois do envio (compactUploadedNode), e ai' vale a textura do no' (o chao
+// em ladrilhos tem um no' por textura).
+bool ModelRenderer::surfaceTextureAt(uint32_t index, const Vec3& origin, const Vec3& dir, SurfaceHit& out) const {
+    Vec3 o, d;
+    const ModelAsset* asset = nullptr;
+    uint32_t geo = 0;
+    const RaycastBvh* bvh = raycastTree(index, origin, dir, o, d, asset, geo);
+    if (!bvh) return false;
+    uint32_t tri = 0;
+    const float t = bvh->raycastClosest(o, d, &tri);
+    if (t < 0.0f) return false;
+    const ModelNode& node = asset->nodes[geo];
+    out.t = t;
+    out.node = node.name;
+    out.texture.clear();
+    out.material.clear();
+    if (node.textureNames.empty()) return true;
+    size_t local = 0;
+    const size_t base = size_t(tri) * 3;
+    out.hasUv = false;
+    if (!node.indices.empty() && base + 2 < node.indices.size()) {
+        // UV no ponto: coordenadas baricentricas no triangulo, em espaco local.
+        const uint32_t i0 = node.indices[base], i1 = node.indices[base + 1], i2 = node.indices[base + 2];
+        if (i0 < node.vertices.size() && i1 < node.vertices.size() && i2 < node.vertices.size()) {
+            const Vec3 p = o + d * t;
+            const Vec3 a = node.vertices[i0].position, b = node.vertices[i1].position, c = node.vertices[i2].position;
+            const Vec3 e1 = b - a, e2 = c - a, e3 = p - a;
+            const float d11 = glm::dot(e1, e1), d12 = glm::dot(e1, e2), d22 = glm::dot(e2, e2);
+            const float d31 = glm::dot(e3, e1), d32 = glm::dot(e3, e2);
+            const float den = d11 * d22 - d12 * d12;
+            if (std::fabs(den) > 1e-12f) {
+                const float v = (d22 * d31 - d12 * d32) / den, w = (d11 * d32 - d12 * d31) / den, u = 1.0f - v - w;
+                out.uv = node.vertices[i0].texCoord * u + node.vertices[i1].texCoord * v + node.vertices[i2].texCoord * w;
+                out.hasUv = true;
+            }
+        }
+    }
+    if (!node.perVertexTexIds.empty() && !node.indices.empty() && base + 2 < node.indices.size()) {
+        const Vec3 p = o + d * t;
+        float best = 1e30f;
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t v = node.indices[base + size_t(k)];
+            if (v >= node.vertices.size() || v >= node.perVertexTexIds.size()) continue;
+            const float dist = glm::distance(p, node.vertices[v].position);
+            if (dist < best) {
+                best = dist;
+                local = node.perVertexTexIds[v];
+            }
+        }
+    }
+    if (local >= node.textureNames.size()) local = 0;
+    out.texture = node.textureNames[local];
+    if (local < node.pbrTextureNames.size()) out.material = node.pbrTextureNames[local];
+    return true;
 }
 
 namespace {
