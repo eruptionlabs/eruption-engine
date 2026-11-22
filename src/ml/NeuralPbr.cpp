@@ -45,7 +45,10 @@ std::string configPath() {
     return (e && *e) ? e : "data/launcher_config.json";
 }
 
+std::atomic<bool> g_enabled{true};
+
 bool disabledByEnv() {
+    if (!g_enabled.load(std::memory_order_relaxed)) return true;
     const char* e = std::getenv("ERUPTION_NEURAL_PBR");
     return e && std::string(e) == "0";
 }
@@ -271,6 +274,8 @@ bool outputMatches(const NnTensor& out, const NnTensor& in) {
 }
 
 } // namespace
+
+void neuralPbrSetEnabled(bool enabled) { g_enabled.store(enabled, std::memory_order_relaxed); }
 
 bool neuralPbrAvailable() { return currentModel() != nullptr; }
 

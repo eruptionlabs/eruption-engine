@@ -4,6 +4,7 @@
 
 namespace eruption {
 
+void neuralPbrSetEnabled(bool) {}
 bool neuralPbrAvailable() { return false; }
 NeuralPbrStats neuralPbrStats() { return {}; }
 uint32_t neuralPbrKey() { return 0; }

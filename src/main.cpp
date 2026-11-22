@@ -11,6 +11,7 @@
 #include "formats/SpriteSheet.hpp"
 #include "game/DefaultApplication.hpp"
 #include "game/MapBundleBaker.hpp"
+#include "ml/NeuralPbr.hpp"
 #include "utils/BcAlphaSelfTest.hpp"
 #include "utils/GpuAutoSelect.hpp"
 #include "tufo/Cli.hpp"
@@ -55,6 +56,20 @@ static bool wantsEditor(int argc, char** argv) {
     for (char** e = ERUPTION_ENVIRON; e && *e; ++e)
         if (std::string(*e).rfind("ERUPTION_TEST_", 0) == 0) automated = true;
     return !automated;
+}
+
+// Jogo de verdade (--game ou jogo exportado): o PBR vem pronto do pacote, a
+// rede nao sobe (ver neuralPbrSetEnabled). O assador de mapa (--bake-map)
+// continua com ela, e as execucoes automaticas sem --game tambem, para as
+// capturas de teste nao mudarem.
+static bool playsWithoutPbrNet(int argc, char** argv) {
+    bool game = !ERUPTION_EDITOR;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--bake-map" || a == "--editor") return false;
+        if (a == "--game") game = true;
+    }
+    return game;
 }
 
 #if ERUPTION_EDITOR
@@ -317,6 +332,7 @@ int eruptionMain(int argc, char** argv) {
     eruption::Engine engine;
 #endif
     engine.setEditorMode(eruption::wantsEditor(argc, argv));
+    if (eruption::playsWithoutPbrNet(argc, argv)) eruption::neuralPbrSetEnabled(false);
     eruption::setLoadingScreenEditor(engine.editorMode());
     ERUPTION_LOG_INFO("[MAIN] Engine init starting...");
     // ERUPTION_WINDOW_SIZE=<L>x<A>: tamanho da janela (capturas em alta resolução).

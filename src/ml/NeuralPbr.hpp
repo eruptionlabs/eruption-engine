@@ -41,6 +41,11 @@ struct NeuralPbrMaps {
 };
 
 bool neuralPbrAvailable();
+// O jogo (--game, jogo exportado) nao sobe a rede: o PBR vem pronto no pacote
+// e a rede so' custava memoria e tempo de carga para calcular a chave do
+// cache. Desligada, a chave e' 0 e o cache assado com rede continua aceito
+// (synthKeyAccepted); textura sem PBR pronto cai na sintese analitica.
+void neuralPbrSetEnabled(bool enabled);
 
 // Inferencias acumuladas por nivel (GPU > CPU), pra log e metrica; o que
 // nao passou por nenhum dos dois foi pra sintese analitica.
