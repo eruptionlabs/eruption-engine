@@ -2547,14 +2547,17 @@ int camera_see_through(lua_State* L) {
     static const char* const kCenters[] = {"player", "focus", nullptr};
     const bool atFocus = luaL_checkoption(L, 3, "player", kCenters) == 1;
     // {band = margem}: tambem a faixa da tela abaixo do centro (Engine::setSeeThrough).
-    float band = 0.0f;
+    float band = 0.0f, minHidden = 0.0f;
     if (lua_istable(L, 4)) {
         lua_getfield(L, 4, "band");
         band = static_cast<float>(luaL_optnumber(L, -1, 0.0));
         lua_pop(L, 1);
+        lua_getfield(L, 4, "min_hidden");
+        minHidden = static_cast<float>(luaL_optnumber(L, -1, 0.0));
+        lua_pop(L, 1);
     }
     eng().setSeeThrough(static_cast<float>(luaL_optnumber(L, 1, 0.0)), static_cast<float>(luaL_optnumber(L, 2, 0.25)),
-                        atFocus, band);
+                        atFocus, band, minHidden);
     return 0;
 }
 // Camera nao entra no relevo (Engine::setCameraCollide).
@@ -3747,8 +3750,12 @@ declare camera: {
     -- screen below the center, down to the edge, cutting what is more than
     -- `band` world units in front of it (a low camera looking past rocks);
     -- painted ground meshes and floors at foot height stay.
+    -- options.min_hidden (0..1, default 0 = always on): the cut only engages
+    -- once at least that fraction of the focused character's sprite is hidden
+    -- behind map models (a 4x6 ray grid, once per frame); it turns off below
+    -- min_hidden - 0.1 and fades in and out over about 0.2 s.
     see_through: (radius: number, opacity: number?, center: ("player" | "focus")?,
-                  options: { band: number? }?) -> (),
+                  options: { band: number?, min_hidden: number? }?) -> (),
     -- Map and model geometry closer than `start` world units to the camera
     -- disappears as a dither pattern and comes back fully by `end` (default
     -- 1.5 x start), so a fence brushing the lens no longer covers the screen.

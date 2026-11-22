@@ -875,7 +875,10 @@ public:
     // dither ate' `opacity` no centro. radius 0 desliga. `atFocus`: o centro e'
     // o ponto de world.set_focus (o grupo), nao o jogador. `band` > 0: tambem
     // a faixa da tela abaixo do centro, ate' `band` u antes dele.
-    void setSeeThrough(float radius, float opacity, bool atFocus = false, float band = 0.0f);
+    // minHidden > 0: o corte so' liga quando essa fracao do sprite em foco esta'
+    // escondida atras de modelos do mapa (liga em >= minHidden, desliga abaixo
+    // de minHidden - 0,1) e entra/sai em ~0,2 s. 0 = sempre ligado.
+    void setSeeThrough(float radius, float opacity, bool atFocus = false, float band = 0.0f, float minHidden = 0.0f);
     // Ponto de world.set_focus (nullptr: foco automatico de novo).
     void setFocusPoint(const Vec3* point);
     // Perto da camera (camera.near_fade): o que fica a menos de `start` da
@@ -2459,6 +2462,12 @@ private:
     float m_seeThroughOpacity = 0.25f;
     bool m_seeThroughAtFocus = false;
     float m_seeThroughBand = 0.0f;
+    float m_seeThroughMinHidden = 0.0f;
+    bool m_seeThroughOn = false;       // histerese do min_hidden
+    float m_seeThroughGate = 1.0f;     // forca do corte, 0..1 (fade de ~0,2 s)
+    float m_seeThroughHidden = 0.0f;   // ultima fracao medida
+    void updateSeeThroughGate(float dt);
+    float measureSpriteHidden() const;
     bool m_cameraCollide = false;
     float m_cameraCollideMargin = 6.0f;
     float m_cameraCollideDist = -1.0f; // distancia atual (< 0 = sem colisao)

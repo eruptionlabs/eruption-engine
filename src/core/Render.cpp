@@ -1012,6 +1012,7 @@ void Engine::render() {
     frameUbo.prevWindParams = m_prevWindParams;
     m_prevWindParams = frameUbo.windParams;
     m_hasPrevWindParams = true;
+    updateSeeThroughGate(m_timer.deltaTime());
     fillSeeThrough(frameUbo);
     fillGroundBlend(frameUbo);
     // ERUPTION_TEST_WIND_DEBUG=1: o vetor que de fato chega ao vertex shader.
@@ -3501,11 +3502,96 @@ void Engine::toggleWireframe() {
     ERUPTION_LOG_INFO("Wireframe %s (F8)", wireframeMode() ? "ligado" : "desligado");
 }
 
-void Engine::setSeeThrough(float radius, float opacity, bool atFocus, float band) {
+void Engine::setSeeThrough(float radius, float opacity, bool atFocus, float band, float minHidden) {
+    m_seeThroughMinHidden = glm::clamp(minHidden, 0.0f, 1.0f);
     m_seeThroughRadius = std::max(0.0f, radius);
     m_seeThroughOpacity = glm::clamp(opacity, 0.0f, 1.0f);
     m_seeThroughAtFocus = atFocus;
     m_seeThroughBand = std::max(0.0f, band);
+}
+
+// Fracao do quadro do sprite em foco escondida por modelos do mapa: grade de
+// 4 x 6 amostras sobre o quadro (largura ~0,5 h, plano da camera), cada uma um
+// raio camera -> amostra contra o BVH de CPU de cada instancia (raycastInstance)
+// e contra o relevo. Os raios saem todos de um mesmo ponto, entao as instancias
+// candidatas vem de UM filtro por caixa (a piramide camera-quadro), antes dos 24
+// raios. Uma vez por quadro, so' quando min_hidden > 0 e o corte esta' ligado.
+float Engine::measureSpriteHidden() const {
+    const bool atFocus = m_seeThroughAtFocus && m_focusPointSet;
+    if (m_playerController == nullptr && !atFocus) return 1.0f;
+    const Vec3 feet = atFocus ? m_focusPoint : m_playerController->pos();
+    float h = m_playerController ? m_playerController->spriteHeight() : 0.0f;
+    if (atFocus) {
+        // o foco e' um ponto do grupo: a altura e' a do personagem mais perto dele
+        float best = 1e30f;
+        for (const SceneCharacter& sc : m_characters) {
+            if (!sc.visible || sc.removed || sc.parked || sc.head.y <= 0.0f) continue;
+            const float d = glm::length(sc.position - feet);
+            if (d < best) { best = d; h = sc.head.y; }
+        }
+    }
+    if (h <= 0.0f) return 1.0f; // sem tamanho conhecido: nao decide, deixa cortar
+    const Mat4& view = m_camera.viewMatrix();
+    const Vec3 right(view[0][0], view[1][0], view[2][0]);
+    const Vec3 cam = m_camera.position();
+    constexpr int kCols = 4, kRows = 6;
+    Vec3 pts[kCols * kRows];
+    Vec3 lo = cam, hi = cam;
+    for (int j = 0; j < kRows; ++j)
+        for (int i = 0; i < kCols; ++i) {
+            const float u = ((i + 0.5f) / kCols - 0.5f) * 0.5f * h;
+            // sem amostra rente ao chao: o proprio chao do pe' contaria como parede
+            const float v = (j + 0.5f) / kRows * h;
+            const Vec3 p = feet + right * u + Vec3(0.0f, v, 0.0f);
+            pts[j * kCols + i] = p;
+            lo = glm::min(lo, p);
+            hi = glm::max(hi, p);
+        }
+    std::vector<uint32_t> cand;
+    const auto& insts = m_modelRenderer.getInstances();
+    for (uint32_t k = 0; k < insts.size(); ++k) {
+        const ModelInstance& in = insts[k];
+        if (glm::any(glm::lessThan(in.worldAabbMax, lo)) || glm::any(glm::greaterThan(in.worldAabbMin, hi))) continue;
+        cand.push_back(k);
+    }
+    int hidden = 0;
+    for (const Vec3& p : pts) {
+        const Vec3 to = p - cam;
+        const float dist = glm::length(to);
+        if (dist < 1e-3f) continue;
+        const Vec3 dir = to / dist;
+        const float limit = dist - 0.05f * h; // o que esta' atras do sprite nao tapa
+        bool hit = false;
+        for (uint32_t k : cand) {
+            const ModelInstance& in = insts[k];
+            if (Frustum::rayIntersectAABB(cam, dir, in.worldAabbMin, in.worldAabbMax) < 0.0f) continue;
+            const float t = m_modelRenderer.raycastInstance(k, cam, dir);
+            if (t >= 0.0f && t < limit) { hit = true; break; }
+        }
+        float tt;
+        if (!hit && raycastTerrain(cam, dir, limit, tt)) hit = true;
+        if (hit) ++hidden;
+    }
+    return float(hidden) / float(kCols * kRows);
+}
+
+// Porta do corte: histerese (liga >= min_hidden, desliga < min_hidden - 0,1) e
+// fade da forca em ~0,2 s. Sem min_hidden a forca e' sempre 1 (comportamento
+// antigo). A medida so' roda com o corte pedido pelo script.
+void Engine::updateSeeThroughGate(float dt) {
+    if (m_seeThroughMinHidden <= 0.0f || m_seeThroughRadius <= 0.0f) {
+        m_seeThroughGate = 1.0f;
+        m_seeThroughOn = false;
+        return;
+    }
+    m_seeThroughHidden = measureSpriteHidden();
+    if (m_seeThroughOn) {
+        if (m_seeThroughHidden < m_seeThroughMinHidden - 0.1f) m_seeThroughOn = false;
+    } else if (m_seeThroughHidden >= m_seeThroughMinHidden) {
+        m_seeThroughOn = true;
+    }
+    const float step = glm::clamp(dt, 0.0f, 0.1f) / 0.2f;
+    m_seeThroughGate = glm::clamp(m_seeThroughGate + (m_seeThroughOn ? step : -step), 0.0f, 1.0f);
 }
 
 void Engine::setFocusPoint(const Vec3* point) {
@@ -3554,7 +3640,10 @@ void Engine::fillSeeThrough(FrameUBO& ubo) const {
     ubo.seeThrough3.z = m_nearFadeStart;
     ubo.seeThrough3.w = m_nearFadeEnd;
     const float r = kEnv.x >= 0.0f ? kEnv.x : m_seeThroughRadius;
-    const float opacity = kEnv.x >= 0.0f ? kEnv.y : m_seeThroughOpacity;
+    const float baseOpacity = kEnv.x >= 0.0f ? kEnv.y : m_seeThroughOpacity;
+    // min_hidden: a opacidade do corte sobe de 1 (sem corte) ate' a pedida com a porta.
+    const float opacity = glm::mix(1.0f, baseOpacity, m_seeThroughGate);
+    if (m_seeThroughGate <= 0.0f) return;
     const bool atFocus = m_seeThroughAtFocus && m_focusPointSet;
     if (r <= 0.0f || (m_playerController == nullptr && !atFocus)) return;
     const float h = m_playerController ? m_playerController->spriteHeight() : 0.0f;
