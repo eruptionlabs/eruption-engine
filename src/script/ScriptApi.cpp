@@ -3529,6 +3529,34 @@ declare world: {
     -- uploads. Call it when the next area becomes likely. False if the map
     -- does not exist.
     preload_map: (map: string) -> boolean,
+    -- Immediate drawing of textured geometry in the world, for effects the
+    -- engine has no primitive for (portals, energy rings, trails). Call it
+    -- EVERY frame: the list is cleared after each frame, so stop calling to
+    -- make it disappear. Drawn after the lighting and the particles, tested
+    -- against the scene depth, in linear/HDR colour (rgb may exceed 1). The
+    -- texture is a project PNG (sRGB), loaded once and cached by path; a file
+    -- that fails to open only logs one warning. At most 32768 vertices per
+    -- frame (the rest is dropped); at most 64 different textures.
+    -- verts: array of { pos: vector, u: number?, v: number?, r: number?, g: number?,
+    -- b: number?, a: number? } (u, v default 0; r, g, b, a default 1). U wraps
+    -- (repeat), so a "rolling" U is just u + time.
+    -- opts: blend = "additive" (SRC_ALPHA, ONE; default) | "alpha" (SRC_ALPHA,
+    -- ONE_MINUS_SRC_ALPHA); topology = "strip" (default; triangle strip, ONE
+    -- strip per call) | "quads" (4 vertices per quad in perimeter order, like a
+    -- GL quad: 0-1-2-3, the remainder is ignored); depth_test = true (default);
+    -- depth_write = false (the only supported value: the scene depth is read-only
+    -- here, true is ignored with a warning); cull = false (default; true culls
+    -- back faces, counter-clockwise is the front).
+    draw_strip: (texture: string, verts: { { pos: vector, u: number?, v: number?, r: number?, g: number?, b: number?, a: number? } }, opts: { blend: string?, topology: string?, depth_test: boolean?, depth_write: boolean?, cull: boolean? }?) -> (),
+    -- Billboard facing the camera, for particles. Call it every frame (see
+    -- draw_strip; same texture rules). size: a number (square) or a vector
+    -- (x = width, y = height), in WORLD UNITS (meters) by default; with
+    -- opts.pixels = true it is in window pixels instead (fixed on-screen size,
+    -- whatever the distance). rgba: { r, g, b, a } (array or named fields) or a
+    -- vector (alpha 1); default white, linear/HDR. blend: "additive" (default) |
+    -- "alpha". opts: pixels = false, depth_test = true, rotation = 0 (radians,
+    -- on the screen plane).
+    draw_sprite: (texture: string, pos: vector, size: number | vector, rgba: { [any]: number } | vector | nil, blend: string?, opts: { pixels: boolean?, depth_test: boolean?, rotation: number? }?) -> (),
 )" + ribbonApiDefinitions() + R"(}
 )" + netApiDefinitions() + R"(
 
