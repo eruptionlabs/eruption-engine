@@ -854,6 +854,29 @@ void main() {
     // Keep albedo in sRGB so the legacy path matches the pre-PBR branch.
     // The PBR lighting pass converts to linear itself.
     vec3 albedo = texColor.rgb;
+    // COLOR_0 do glTF (cor por vertice do chao: cor da superficie, media nas quinas).
+    // O carregador marca o primitivo utilizavel com alfa 254/255; sem marca (modelos
+    // de cena, props sem cor, COLOR_0 todo zero) o albedo fica como estava.
+    if (inColor.a < 0.999) albedo *= inColor.rgb;
+    // DEBUG DE SPLINE (F2, "Debug Mode" no widget da spline): tinge a cena com a
+    // cor da spline na posicao x da entrada (distancia / eixo maximo), em degrade
+    // entre as cores dos pontos vizinhos. So' REGIAO: opacidade fixa, nao
+    // segue o Y da curva - com Y baixo a faixa tem de aparecer igual,
+    // senao o fim da curva some do mapa. Mistura translucida, a cena continua
+    // visivel.
+    // Desligado: u_splineDbg[0].x = 0, um teste de uniforme; nao existe no LITE.
+    if (!LITE && u_splineDbg[0].x > 0.5) {
+        const float dbgX = distance(inWorldPos, u_cameraPos) / max(u_splineDbg[0].w, 1.0);
+        const int dbgN = int(u_splineDbg[0].y + 0.5);
+        vec3 dbgCol = u_splineDbg[5].rgb;
+        for (int k = 0; k + 1 < dbgN; ++k) {
+            const float x0 = u_splineDbg[1 + (k >> 2)][k & 3];
+            const float x1 = u_splineDbg[1 + ((k + 1) >> 2)][(k + 1) & 3];
+            if (dbgX >= x0) dbgCol = mix(u_splineDbg[5 + k].rgb, u_splineDbg[6 + k].rgb,
+                                         clamp((dbgX - x0) / max(x1 - x0, 1e-4), 0.0, 1.0));
+        }
+        albedo = mix(albedo, dbgCol, 0.45);
+    }
 
     // .a carries ambient occlusion (consumed by ambient.frag). Filled from the
     // PBR map's blue channel below; 1.0 = no occlusion for un-cooked meshes.

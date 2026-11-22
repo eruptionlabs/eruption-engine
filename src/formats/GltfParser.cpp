@@ -1335,6 +1335,19 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
             std::vector<Vec4> colors = (itCol != prim.attributes.end())
                                            ? readColorAccessor(gltf, itCol->second)
                                            : std::vector<Vec4>(positions.size(), Vec4(1.0f));
+            // COLOR_0 multiplica o albedo so' no chao do mapa (no "terrain_*", a mesma
+            // convencao do MapLoad): la' o conversor grava a cor da superficie, media nas
+            // quinas. Em props o COLOR_0 e' tintura de autor (ou zero, "sem cor"), que
+            // o motor nunca aplicou - mudaria todo mapa existente. Todo zero = ausente.
+            // Primitivo utilizavel leva alfa 254/255 no vertice (o fragment do modelo le'
+            // < 1 como "multiplica o albedo"; o alfa do COLOR_0 nao e' lido no caminho dos modelos).
+            if (itCol != prim.attributes.end()) {
+                const bool isGround = node.name.compare(0, 8, "terrain_") == 0;
+                const bool usable = isGround &&
+                    std::any_of(colors.begin(), colors.end(),
+                                [](const Vec4& c) { return c.x > 0.0f || c.y > 0.0f || c.z > 0.0f; });
+                for (Vec4& c : colors) c.w = usable ? 254.0f / 255.0f : 1.0f;
+            }
 
             std::vector<uint32_t> blendTex = (itBlendTex != prim.attributes.end())
                                            ? readIndexAccessor(gltf, itBlendTex->second)

@@ -1,5 +1,6 @@
 #include "formats/MapLoader.hpp"
 #include "formats/GroundPack.hpp"
+#include "formats/GroundTileBlend.hpp"
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "core/JobSystem.hpp"
@@ -760,7 +761,7 @@ static NavGridFile parseNavBinary(const uint8_t* data, size_t size) {
         return nav;
     }
 
-    (void)readU32(4); // version
+    const uint32_t version = readU32(4); // v2+: alturas de canto reais (NavGridTypes.hpp)
     nav.width = readU32(8);
     nav.height = readU32(12);
     uint32_t cellCount = readU32(16);
@@ -862,6 +863,7 @@ bool MapLoader::loadFromGlb() {
         return false;
     }
     model.filePath = glbPath;
+    applyGroundTileBlend(model); // so' age em chao de casas quadradas (GroundTileBlend.hpp)
 
     // GLB maps are authored in world space; keep authored coordinates.
     model.skipMainOffset = true;
