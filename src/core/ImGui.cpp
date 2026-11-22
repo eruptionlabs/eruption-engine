@@ -2831,7 +2831,7 @@ void Engine::renderImGui() {
                         fx::Separator();
                         if (fx::CollapsingHeader("Loaded Source Info")) {
                             for (const auto& src : m_packManager.getSources()) {
-                                fx::Text("[DIR] %s (%u files)", src.path.c_str(), src.fileCount);
+                                fx::Text("[%s] %s (%u files)", src.isDirectory ? "DIR" : "PACK", src.path.c_str(), src.fileCount);
                             }
                         }
                         if (fx::CollapsingHeader("Statistics")) {

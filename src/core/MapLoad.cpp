@@ -255,7 +255,12 @@ static bool hashGlbGeometry(const std::string& glbPath, uint64_t& h) {
     std::vector<uint8_t> whole;
     std::istringstream mem;
     std::ifstream file;
-    if (vfs::inBundle(glbPath) && vfs::read(glbPath, whole)) {
+    bool fromMemory = vfs::inBundle(glbPath);
+    if (!fromMemory && vfs::packsMounted()) { // so' num pacote .ecp do projeto
+        std::error_code pec;
+        fromMemory = !std::filesystem::exists(glbPath, pec);
+    }
+    if (fromMemory && vfs::read(glbPath, whole)) {
         mem.str(std::string(whole.begin(), whole.end()));
         whole.clear();
         whole.shrink_to_fit();

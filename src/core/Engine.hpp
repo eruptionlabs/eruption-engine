@@ -820,7 +820,7 @@ public:
     // ui.minimap_label: um texto so' no #minimap-info, no lugar de
     // "mapa [x, z]" + relogio; vazio volta ao padrao.
     void setMinimapLabel(const std::string& text) { m_minimapLabel = text; }
-    bool loadEruptSprV2(std::ifstream& f, const std::string& path, LoadedSprite& out, uint32_t version = 2);
+    bool loadEruptSprV2(std::istream& f, const std::string& path, LoadedSprite& out, uint32_t version = 2);
     // `preCleaned`: os pixels ja' vem com corte de alfa e dilatacao (preload
     // de folha, characters.preload) - so' sobem.
     uint32_t createTextureFromSprImage(const SprImage& img, const uint8_t* palette, bool usePalette, std::vector<TextureResource>& outResources, bool swapRB = false, const std::string& sourcePath = "", bool preCleaned = false);

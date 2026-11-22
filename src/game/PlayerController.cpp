@@ -5,6 +5,7 @@
 #include "renderer/skymap/SkyConfig.hpp"
 #include "formats/TerrainParser.hpp"
 #include "core/Logger.hpp"
+#include "utils/AssetVfs.hpp"
 #include "core/Project.hpp"
 
 #include <filesystem>
@@ -567,6 +568,8 @@ void PlayerController::updateWorld(float dt) {
             s_hPrev = h; s_dt = 0.0f; s_calls = 0; s_maxPerFrame = 0;
         }
     }
+    // Postes, janelas e efeitos noturnos acendem pela luz do sol.
+    m_engine->updateNightLights();
     _lap(w_day);
     m_engine->modelRenderer().updateAnimations(m_engine->timer().elapsed() * 1000.0f);
     _lap(w_anim);
@@ -844,7 +847,7 @@ void PlayerController::loadBodySprite() {
         // and the player showed up as the whole sheet stretched over the screen.
         const std::string sprPath =
             project::gameRef(configJob.substr(0, configJob.size() - 4) + ".spr").string();
-        if (std::ifstream(sprPath, std::ios::binary)) {
+        if (vfs::exists(sprPath)) {
             ERUPTION_LOG_WARN("Loading body sprite from ERUPTSPR: %s", sprPath.c_str());
             if (m_engine->loadSpriteFromEruptSpr(sprPath, m_bodySprite)) {
                 m_bodyFrame = 0;
@@ -871,7 +874,7 @@ void PlayerController::loadBodySprite() {
     // um boneco em vez de nada.
     std::error_code defEc;
     const std::string defaultSprite =
-        std::filesystem::exists(project::game("assets/sprites/default.png"), defEc)
+        vfs::exists(project::game("assets/sprites/default.png"))
             ? std::string("assets/sprites/default.png")
             : project::engine("assets/sprites/default.png").string();
     if (m_engine->loadSpriteFromPng(defaultSprite, m_bodySprite)) {

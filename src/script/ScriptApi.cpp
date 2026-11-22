@@ -1736,8 +1736,7 @@ int ui_load(lua_State* L) {
     const std::string rel = luaL_checkstring(L, 1);
     std::string err;
     std::filesystem::path p = project::gameRef(rel);
-    std::error_code ec;
-    if (!std::filesystem::exists(p, ec)) p = project::engine(rel);
+    if (!vfs::exists(p)) p = project::engine(rel); // disco ou pacote .ecp
     if (!eng().uiDocument().load(p, &err)) {
         ERUPTION_LOG_WARN("ui.load: %s", err.c_str());
         lua_pushboolean(L, 0);
