@@ -232,6 +232,14 @@ bool Engine::embeddedTextureIdentity(const std::string& name, bool surface, uint
                                        (uint64_t(et.width) << 32) ^ (uint64_t(et.height) << 8) ^ uint64_t(et.channels));
                 return true;
             }
+            if (et.encodedData.isDeferred() && vfs::tufGpuReady(project::gameRef(model.filePath).string())) {
+                // .glb de um .tuf com texturas prontas: a identidade e' a do BC do pacote
+                const auto baked = m_embeddedBaked.find(sanitized);
+                if (baked == m_embeddedBaked.end() || !baked->second.albedo.valid()) return false;
+                const EtexData& e = baked->second.albedo;
+                id = lodBridgeFastHash(e.payload.data(), e.payload.size(), (uint64_t(e.width) << 32) | e.height);
+                return true;
+            }
             if (et.encodedData.empty()) return false;
             // Uma vez por textura: as malhas de um modelo repetem as mesmas, e
             // cada uma pedia o hash de novo (alguns MB por pedido). Chave pelo
@@ -273,6 +281,17 @@ bool Engine::findEmbeddedAlbedoPixels(const std::string& name, std::vector<uint8
                 outW = et.width;
                 outH = et.height;
                 outChannels = et.channels > 0 ? et.channels : 4;
+                return true;
+            }
+            // .glb de um .tuf com texturas prontas: a imagem original nao existe mais; a
+            // cor vem do BC do pacote (mip 0, no teto do preset). Quem precisa de pixels
+            // (altura do relevo sem PBR sintetizado, LOD, mascaras) recebe esses.
+            if (et.encodedData.isDeferred() && vfs::tufGpuReady(project::gameRef(model.filePath).string())) {
+                const auto baked = m_embeddedBaked.find(sanitized);
+                if (baked == m_embeddedBaked.end() || !decodeEtexMip0(baked->second.albedo, outPixels)) return false;
+                outW = static_cast<int>(baked->second.albedo.width);
+                outH = static_cast<int>(baked->second.albedo.height);
+                outChannels = 4;
                 return true;
             }
             if (!et.encodedData.empty()) {
@@ -317,6 +336,11 @@ bool Engine::reliefAlphaFromAlbedo(const std::string& name, bool pixels, std::ve
                     a->w = et.width;
                     a->h = et.height;
                     a->channels = et.channels > 0 ? et.channels : 4;
+                } else if (et.encodedData.isDeferred() && vfs::tufGpuReady(project::gameRef(model.filePath).string())) {
+                    // .glb de um .tuf com texturas prontas: o albedo vem do BC do pacote
+                    int ch = 0;
+                    if (!findEmbeddedAlbedoPixels(et.name, a->bytes, a->w, a->h, ch)) return false;
+                    a->channels = ch;
                 } else if (!et.encodedData.empty()) {
                     a->bytes.assign(et.encodedData.data(), et.encodedData.data() + et.encodedData.size());
                 } else {

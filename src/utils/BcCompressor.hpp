@@ -101,4 +101,16 @@ bool decodeEtexMip0(const EtexData& e, std::vector<uint8_t>& rgba);
 void appendEtexBytes(const EtexData& e, std::vector<uint8_t>& out);
 bool readEtexBytes(const uint8_t* data, size_t size, size_t& cursor, EtexData& out);
 
+// So' o cabecalho de um bloco etex (20 bytes), sem o payload: formato,
+// tamanho e tamanhos dos mips (calculados pela geometria do bloco, o mesmo
+// que o codificador grava) e o total de bytes que o bloco ocupa no pacote
+// (cabecalho + palavras de tamanho + dados). false = formato sem geometria de
+// bloco conhecida ou cabecalho invalido (quem chama le' o bloco inteiro).
+// Serve a leitura em duas fases do pacote (PBR adiado, ver PbrDeferred.hpp).
+bool readEtexHeaderBytes(const uint8_t* data, size_t size, EtexData& hdrOut, uint64_t& blockBytes);
+// O mesmo cabecalho calculado, sem ler nada: formato e tamanho conhecidos
+// (previsao do bloco PBR a partir do albedo; quem usa confere o resultado).
+bool etexBlockGeometry(uint32_t vkFormat, uint32_t width, uint32_t height, uint32_t mipCount, EtexData& hdrOut,
+                       uint64_t& blockBytes);
+
 } // namespace eruption

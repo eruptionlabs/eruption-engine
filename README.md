@@ -101,11 +101,13 @@ The demo is a game project, `projects/parana_field` (the same layout described b
 | `data/` | Graphics, weather, water and shadow settings |
 | `tools/` | PBR cooker, normal map generator and build scripts |
 | `tools/caldera/` | Caldera, the visual HUD editor (submodule) |
+| `tools/tufo/` | Tufo, the `.tuf` package format: library and `tufo` command line (submodule) |
 | `tests/` | Unit and regression tests |
 
 ## Related repositories
 
 - [caldera](https://github.com/eruptionlabs/caldera): visual HUD editor.
+- [tufo](https://github.com/eruptionlabs/tufo): the `.tuf` package format (library and command line).
 
 ## Contributing
 

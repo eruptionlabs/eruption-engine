@@ -36,6 +36,7 @@ contributing (CLA, licensing, what we do not accept) is in
 | `data/` | Engine defaults: graphics presets, weather, water, shadows, editor UI languages |
 | `projects/parana_field/` | The demo game project |
 | `tools/` | Build scripts, Android packaging, PBR and normal-map tools, test drivers |
+| `tools/tufo/` | Tufo, the `.tuf` package format (submodule): library, `tufo` CLI and its tests; the editor's Packages panel is `src/editor/EditorTuf.cpp` (see [docs/tuf.md](docs/tuf.md)) |
 | `tests/` | Unit and regression tests |
 | `docs/aulas/` | Step-by-step tutorials (Portuguese) |
 

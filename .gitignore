@@ -105,6 +105,8 @@ eruption-pbr-tests
 eruption-object-tests
 eruption-ground-pack-tests
 eruption-ribbon-tests
+/tufo
+/tufo-tests
 !tools/pbr_cooker/
 !tools/pbr_extractor/
 tools/venv

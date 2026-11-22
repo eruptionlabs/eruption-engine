@@ -149,7 +149,19 @@ bool Engine::beginSplatEditing() {
             for (auto& et : model.embeddedTextures) {
                 if (et.name != name) continue;
                 ImageData img;
-                if (et.hasEncodedData()) img = ImageUtils::loadFromMemoryRaw(et.encodedData.data(), et.encodedData.size());
+                if (et.encodedData.isDeferred() && vfs::tufGpuReady(project::gameRef(model.filePath).string())) {
+                    // .glb de um .tuf com texturas prontas: a mascara vem do BC do pacote (sem a imagem original)
+                    std::vector<uint8_t> px;
+                    int pw = 0, ph = 0, pc = 0;
+                    if (findEmbeddedAlbedoPixels(name, px, pw, ph, pc)) {
+                        img.pixels = std::move(px);
+                        img.width = pw;
+                        img.height = ph;
+                        img.channels = pc;
+                    }
+                } else if (et.hasEncodedData()) {
+                    img = ImageUtils::loadFromMemoryRaw(et.encodedData.data(), et.encodedData.size());
+                }
                 if (img.isValid())
                     sp.mask[i] = resampleRGBA(img.pixels.data(), img.width, img.height, img.channels, sp.w, sp.d);
                 else if (et.isDecoded())

@@ -1,4 +1,5 @@
 #include "core/Engine.hpp"
+#include "utils/TufGpuReady.hpp"
 #include "script/ScriptHost.hpp"
 #include "core/EngineInternal.hpp"
 #include "renderer/LeanFormats.hpp"
@@ -246,6 +247,8 @@ static texfmt::Options textureOptionsFromPreset(const nlohmann::json& p) {
     o.alphaBc7 = presetFlag(p, "texture_alpha_bc7");
     o.astcAlbedo6x6 = presetFlag(p, "texture_astc_albedo_6x6");
     o.rdoLambda = std::max(0.0f, p.value("texture_rdo_lambda", 0.0f));
+    // So' normal e MRAH-W (BC7); ausente = segue texture_rdo_lambda.
+    o.rdoLambdaData = p.value("texture_rdo_lambda_data", -1.0f);
     if (const char* e = std::getenv("ERUPTION_TEXTURE_COMPRESSION")) o.mode = texfmt::parseMode(e, o.mode);
     if (const char* e = std::getenv("ERUPTION_NO_TEXTURE_BC"); e && e[0] == '1') o.mode = texfmt::Mode::Off;
     return o;
@@ -264,6 +267,41 @@ static nlohmann::json presetObject(const std::string& preset) {
     } catch (...) {
         return nlohmann::json::object();
     }
+}
+
+// Toda combinacao (teto, sintese de PBR, opcoes de compressao) que algum preset de
+// data/graphics.json (mais o patch do projeto) pode escolher, sem subir o motor:
+// o empacotamento .tuf com texturas prontas (utils/TufGpuReady) assa uma
+// companheira por combinacao, para todo preset funcionar com o mapa migrado.
+// Familia BC (a do PC); ASTC/ETC2 de celular sem BC tem outra etiqueta e nao entra.
+std::vector<TextureVariant> engineTextureVariants() {
+    std::vector<TextureVariant> out;
+    try {
+        const nlohmann::json gj = loadMergedGraphicsRoot();
+        if (!gj.is_object() || !gj.contains("presets")) return out;
+        for (auto it = gj["presets"].begin(); it != gj["presets"].end(); ++it) {
+            const nlohmann::json p = presetObject(it.key());
+            if (!p.is_object()) continue;
+            TextureVariant v;
+            v.preset = it.key();
+            v.maxSize = static_cast<uint32_t>(std::clamp<int>(p.value("texture_max_size", 1024), 128, 4096));
+            v.synthPbr = p.value("pbr_synthesis", true);
+            v.options = textureOptionsFromPreset(p);
+            if (v.options.mode == texfmt::Mode::Off) continue;
+            bool dup = false;
+            for (TextureVariant& o : out) {
+                if (o.maxSize == v.maxSize && o.synthPbr == v.synthPbr &&
+                    texfmt::policyKey(texfmt::deviceCaps(), o.options) == texfmt::policyKey(texfmt::deviceCaps(), v.options)) {
+                    o.preset += "," + v.preset;
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) out.push_back(std::move(v));
+        }
+    } catch (...) {
+    }
+    return out;
 }
 
 static bool presetBool(const std::string& preset, const char* key, bool fallback) {

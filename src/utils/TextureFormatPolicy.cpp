@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <sstream>
 
@@ -292,6 +293,15 @@ uint32_t policyKey(const Caps& caps, const Options& o) {
             h *= 16777619u;
         }
     }
+    // Lambda dos dados: so' entra quando difere do geral (a chave de quem so'
+    // usa texture_rdo_lambda nao muda).
+    if (dataRdoLambda(o) != o.rdoLambda) {
+        const uint32_t l = static_cast<uint32_t>(dataRdoLambda(o) * 100.0f + 0.5f);
+        for (int b = 0; b < 4; ++b) {
+            h ^= ((l >> (8 * b)) & 0xFFu) ^ 0x5Au;
+            h *= 16777619u;
+        }
+    }
     return h;
 }
 
@@ -315,6 +325,9 @@ void setDeviceCaps(const Caps& c) {
 void setOptions(const Options& o) {
     std::lock_guard<std::mutex> lk(g_mutex);
     g_options = o;
+    // ERUPTION_TEST_RDO_LAMBDA_DATA=<lambda>: so' para teste, sobrepoe o lambda
+    // das texturas de dados (normal, MRAH-W) sem editar o preset.
+    if (const char* e = std::getenv("ERUPTION_TEST_RDO_LAMBDA_DATA"); e && e[0]) g_options.rdoLambdaData = std::strtof(e, nullptr);
 }
 Caps deviceCaps() {
     std::lock_guard<std::mutex> lk(g_mutex);
@@ -340,7 +353,7 @@ bool anyActive() {
 bool classicActive() {
     std::lock_guard<std::mutex> lk(g_mutex);
     return family(g_caps, g_options) == Mode::Bc && !g_options.albedoBc7 && !g_options.alphaBc7 &&
-           !g_options.normalTwoChannel && g_options.rdoLambda <= 0.0f;
+           !g_options.normalTwoChannel && g_options.rdoLambda <= 0.0f && dataRdoLambda(g_options) <= 0.0f;
 }
 
 std::string activeTag() {

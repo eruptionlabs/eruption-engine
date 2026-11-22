@@ -80,7 +80,14 @@ struct Options {
     // 55,3 MB com 1 (-17%, imagem final 40-42 dB) e 47,1 MB com 3 (-29%,
     // 34-37 dB, ja' visivel). VRAM e tempo de quadro nao mudam.
     float rdoLambda = 0.0f;
+    // Lambda so' das texturas de dados (normal e MRAH-W, BC7): elas sao 76% do
+    // pacote e aguentam RDO mais forte que o albedo. Negativo = segue rdoLambda
+    // (comportamento de antes); 0 = sem RDO nos dados mesmo com rdoLambda > 0.
+    float rdoLambdaData = -1.0f;
 };
+
+// Lambda efetivo das texturas de dados (normal, MRAH-W).
+inline float dataRdoLambda(const Options& o) { return o.rdoLambdaData >= 0.0f ? o.rdoLambdaData : o.rdoLambda; }
 
 // Familia que o modo usa nesta GPU (Auto: BC > ASTC > ETC2; forcado: so' ela).
 // Off ou nenhuma = Mode::Off.

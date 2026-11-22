@@ -311,7 +311,8 @@ EtexData compressRgbaToEtex(const uint8_t* rgba, int width, int height, BcKind k
         if (cobertura) aplicaCobertura(mipLevel);
         std::vector<uint8_t> enc;
         texenc::Params ep;  // o codificador de sempre; so' o RDO vem do preset
-        ep.rdoLambda = texfmt::options().rdoLambda;
+        const texfmt::Options topt = texfmt::options();
+        ep.rdoLambda = kind == BcKind::Albedo ? topt.rdoLambda : texfmt::dataRdoLambda(topt);
         if (!texenc::encodeLevel(fmt, level.data(), w, h, enc, ep)) return EtexData{};
         out.mipSizes.push_back(static_cast<uint32_t>(enc.size()));
         out.payload.insert(out.payload.end(), enc.begin(), enc.end());
@@ -420,6 +421,37 @@ bool readEtexBytes(const uint8_t* data, size_t size, size_t& cursor, EtexData& o
         e.mipSizes.push_back(sz);
     }
     out = std::move(e);
+    return true;
+}
+
+bool readEtexHeaderBytes(const uint8_t* data, size_t size, EtexData& hdrOut, uint64_t& blockBytes) {
+    if (size < 20) return false;
+    uint32_t h[5];
+    std::memcpy(h, data, 20);
+    if (h[0] != kEtexMagic) return false;
+    return etexBlockGeometry(h[1], h[2], h[3], h[4], hdrOut, blockBytes);
+}
+
+bool etexBlockGeometry(uint32_t vkFormat, uint32_t width, uint32_t height, uint32_t mipCount, EtexData& hdrOut,
+                       uint64_t& blockBytes) {
+    EtexData e;
+    e.vkFormat = vkFormat;
+    e.width = width;
+    e.height = height;
+    e.mipCount = mipCount;
+    if (e.mipCount == 0 || e.mipCount > 16 || e.width == 0 || e.height == 0) return false;
+    const texfmt::BlockInfo bi = texfmt::blockInfo(static_cast<VkFormat>(e.vkFormat));
+    if (bi.bytes == 0 || bi.w == 0 || bi.h == 0) return false;
+    uint64_t total = 20;
+    for (uint32_t i = 0; i < e.mipCount; ++i) {
+        const uint64_t bw = (std::max(1u, e.width >> i) + bi.w - 1) / bi.w;
+        const uint64_t bh = (std::max(1u, e.height >> i) + bi.h - 1) / bi.h;
+        const uint64_t sz = bw * bh * bi.bytes;
+        e.mipSizes.push_back(static_cast<uint32_t>(sz));
+        total += 4 + sz;
+    }
+    hdrOut = std::move(e);
+    blockBytes = total;
     return true;
 }
 

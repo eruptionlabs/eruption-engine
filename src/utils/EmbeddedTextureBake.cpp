@@ -9,6 +9,7 @@
 #include "formats/ModelFile.hpp"
 #include "utils/ImageUtils.hpp"
 #include "utils/PbrMaterialProfile.hpp"
+#include "utils/PbrDeferred.hpp"
 #include "utils/PbrTextureLoader.hpp"
 #include "ml/NeuralPbr.hpp"
 
@@ -19,8 +20,16 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <mutex>
 #include <unordered_map>
+
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace eruption {
 
@@ -124,6 +133,64 @@ std::string packPathFor(const std::string& glbPath, uint32_t maxSize, bool synth
 // derivado, mas re-gerar custa 24 s num mapa grande.
 std::string legacyPackPathFor(const std::string& glbPath) { return glbPath + ".etexpack"; }
 
+
+// ---- Fonte alternativa para a sintese de PBR (ferramenta de empacotamento) --------------------
+// ERUPTION_TUF_PBR_SOURCE=<pasta>: para cada imagem embutida, se existir <pasta>/<sha1 dos bytes da
+// imagem>.png com a mesma largura e altura, a rede de PBR roda nessa imagem; o albedo continua a
+// original. Serve para o albedo ser o original e o PBR sair de uma versao limpa da mesma imagem.
+// So' vale onde o assador roda (o motor em jogo nao le' esta variavel).
+std::string sha1Hex(const uint8_t* d, size_t n) {
+    uint32_t h[5] = {0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u, 0xC3D2E1F0u};
+    std::vector<uint8_t> m(d, d + n);
+    m.push_back(0x80);
+    while (m.size() % 64 != 56) m.push_back(0);
+    const uint64_t bits = static_cast<uint64_t>(n) * 8;
+    for (int i = 7; i >= 0; --i) m.push_back(static_cast<uint8_t>(bits >> (i * 8)));
+    const auto rol = [](uint32_t x, int c) { return (x << c) | (x >> (32 - c)); };
+    for (size_t o = 0; o < m.size(); o += 64) {
+        uint32_t w[80];
+        for (int i = 0; i < 16; ++i)
+            w[i] = (uint32_t(m[o + i * 4]) << 24) | (uint32_t(m[o + i * 4 + 1]) << 16) | (uint32_t(m[o + i * 4 + 2]) << 8) | m[o + i * 4 + 3];
+        for (int i = 16; i < 80; ++i) w[i] = rol(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+        uint32_t a = h[0], b = h[1], c = h[2], dd = h[3], e = h[4];
+        for (int i = 0; i < 80; ++i) {
+            uint32_t fx, k;
+            if (i < 20) { fx = (b & c) | (~b & dd); k = 0x5A827999u; }
+            else if (i < 40) { fx = b ^ c ^ dd; k = 0x6ED9EBA1u; }
+            else if (i < 60) { fx = (b & c) | (b & dd) | (c & dd); k = 0x8F1BBCDCu; }
+            else { fx = b ^ c ^ dd; k = 0xCA62C1D6u; }
+            const uint32_t t = rol(a, 5) + fx + e + k + w[i];
+            e = dd; dd = c; c = rol(b, 30); b = a; a = t;
+        }
+        h[0] += a; h[1] += b; h[2] += c; h[3] += dd; h[4] += e;
+    }
+    char out[41];
+    for (int i = 0; i < 5; ++i) std::snprintf(out + i * 8, 9, "%08x", h[i]);
+    return std::string(out, 40);
+}
+
+const std::string& pbrSourceDir() {
+    static const std::string dir = [] {
+        const char* e = std::getenv("ERUPTION_TUF_PBR_SOURCE");
+        return std::string(e ? e : "");
+    }();
+    return dir;
+}
+
+// Pixels RGBA da imagem alternativa (mesmo tamanho da original) ou vazio.
+std::vector<uint8_t> pbrSourcePixels(const EmbeddedTexture& et, int w, int h) {
+    std::vector<uint8_t> out;
+    if (pbrSourceDir().empty() || !et.hasEncodedData()) return out;
+    const std::string path = pbrSourceDir() + "/" + sha1Hex(et.encodedData.data(), et.encodedData.size()) + ".png";
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) return out;
+    std::ifstream f(path, std::ios::binary);
+    const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    ImageData img = ImageUtils::loadFromMemoryRaw(bytes.data(), bytes.size());
+    if (!img.isValid() || img.width != w || img.height != h || img.channels != 4) return out;
+    return std::move(img.pixels);
+}
+
 // Quantas texturas cada nivel da cadeia (GPU > CPU > analitica) sintetizou.
 void logSynthesisLevels(const NeuralPbrStats& before, size_t synthesized, uint64_t micros) {
     const NeuralPbrStats after = neuralPbrStats();
@@ -196,8 +263,14 @@ bool synthKeyAccepted(uint32_t cached, bool synthPbr) {
 // o arquivo pra outra maquina e invalidava um pack identico.
 uint64_t sourceFingerprint(const std::string& path, uint64_t size) {
     constexpr uint64_t kChunks = 64, kChunkBytes = 64 * 1024;
-    std::ifstream f(path, std::ios::binary);
-    if (!f.is_open()) return 0;
+    std::ifstream disk(path, std::ios::binary);
+    std::istringstream packed;
+    if (!disk.is_open()) { // .glb so' num pacote .ecp do projeto: mesmos trechos, da memoria
+        std::vector<uint8_t> bytes;
+        if (!vfs::packsMounted() || !vfs::read(path, bytes)) return 0;
+        packed.str(std::string(bytes.begin(), bytes.end()));
+    }
+    std::istream& f = disk.is_open() ? static_cast<std::istream&>(disk) : static_cast<std::istream&>(packed);
     uint64_t h = 1469598103934665603ull; // FNV-1a 64
     std::vector<char> chunk(kChunkBytes);
     const uint64_t step = size > kChunkBytes ? (size - kChunkBytes) / (kChunks - 1) : 0;
@@ -230,13 +303,14 @@ std::string fingerprintPath(const std::string& glbPath) {
 // .emap, que so' os guardou depois de a carga do build valida'-los (valido
 // por construcao) - pula a impressao digital, que sao 64 leituras espalhadas
 // pelo .glb (64 buscas da cabeca por modelo com o disco frio).
-bool parseCacheBytes(const std::vector<uint8_t>& buf, const std::string& glbPath, uint32_t maxSize, bool synthPbr,
-                     bool trustSource, EmbeddedBakeResult& out, bool* stale) {
+// Cabecalho do pacote (ate' a cor de bounce do chao): valida o pacote contra o
+// .glb, o preset e a GPU. Compartilhado pela leitura inteira e pela adiada.
+bool parsePackHeader(Reader& r, const std::string& glbPath, uint32_t maxSize, bool synthPbr, bool trustSource,
+                     EmbeddedBakeResult& out, bool* stale, uint32_t& count) {
     if (stale) *stale = false;
-    if (buf.size() < 40) return false;
+    if (r.n < 40) return false;
 
-    Reader r{buf.data(), buf.size()};
-    uint32_t magic = 0, version = 0, cachedMax = 0, cachedFmt = 0, cachedSynth = 0, count = 0;
+    uint32_t magic = 0, version = 0, cachedMax = 0, cachedFmt = 0, cachedSynth = 0;
     uint64_t srcSize = 0, srcFingerprint = 0;
     if (!r.u32(magic) || magic != kPackMagic) return false;
     if (!r.u32(version) || version != kPackVersion) return false;
@@ -247,10 +321,16 @@ bool parseCacheBytes(const std::vector<uint8_t>& buf, const std::string& glbPath
     // maquina), o teto de resolucao mudou (preset), o conjunto de formatos da
     // GPU mudou, ou a sintese de PBR nao e' aceitavel aqui.
     const std::string source = fingerprintPath(glbPath);
-    std::error_code ec;
-    const uint64_t realSize = vfs::fileSize(source, ec);
-    if (ec || realSize != srcSize) return false;
-    if (!trustSource && sourceFingerprint(source, realSize) != srcFingerprint) return false;
+    // .glb de um .tuf com texturas prontas (kFlagGpuReady): o guardado no pacote
+    // nao tem as imagens, entao tamanho e impressao digital do original nao
+    // existem mais; o pacote de texturas foi gravado junto com ele, no mesmo
+    // arquivo .tuf, e vale por construcao (como no .emap).
+    if (!vfs::tufGpuReady(source)) {
+        std::error_code ec;
+        const uint64_t realSize = vfs::fileSize(source, ec);
+        if (ec || realSize != srcSize) return false;
+        if (!trustSource && sourceFingerprint(source, realSize) != srcFingerprint) return false;
+    }
     if (cachedMax != maxSize || cachedFmt != formatKey()) return false;
     if (!synthKeyAccepted(cachedSynth, synthPbr)) {
         if (!stale || !synthKeyStale(cachedSynth, synthPbr)) return false;
@@ -263,6 +343,16 @@ bool parseCacheBytes(const std::vector<uint8_t>& buf, const std::string& glbPath
         if (!r.f32(out.groundAlbedo[i])) return false;
     }
     out.hasGroundAlbedo = hasGround != 0;
+    return true;
+}
+
+bool parseCacheBytes(const std::vector<uint8_t>& buf, const std::string& glbPath, uint32_t maxSize, bool synthPbr,
+                     bool trustSource, EmbeddedBakeResult& out, bool* stale) {
+    if (stale) *stale = false;
+    if (buf.size() < 40) return false;
+    Reader r{buf.data(), buf.size()};
+    uint32_t count = 0;
+    if (!parsePackHeader(r, glbPath, maxSize, synthPbr, trustSource, out, stale, count)) return false;
 
     for (uint32_t i = 0; i < count; ++i) {
         std::string name;
@@ -318,10 +408,14 @@ bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
         std::unique_lock<std::mutex> disco(diskReadMutex(), std::defer_lock);
         if (!fromBundle) disco.lock();
         if (!vfs::read(path, buf)) return false;
+        if (!fromBundle) testDiskThrottle(buf.size(), true);
     }
     const bool trust = fromBundle && vfs::inBundle(fingerprintPath(glbPath));
     if (parseCacheBytes(buf, glbPath, maxSize, synthPbr, trust, out, stale)) {
         noteCoverage(glbPath, path, out);
+        if (vfs::tufGpuReady(glbPath))
+            ERUPTION_LOG_WARN("[TUFGPU] '%s': %zu texturas prontas do pacote .tuf (%.1f MB), sem compressao",
+                              glbPath.c_str(), out.textures.size(), static_cast<double>(out.bytes) / 1048576.0);
         return true;
     }
     if (!fromBundle) return false;
@@ -337,13 +431,262 @@ bool readCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
     return true;
 }
 
-void writeCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
-                const EmbeddedBakeResult& res) {
+// Fracao do arquivo que ja' esta' no cache do sistema (mincore). 1 onde nao da'
+// para saber: sem a medida o adiamento nao liga.
+double residentFraction(const std::string& path) {
+#if defined(__linux__) && !defined(__ANDROID__)
+    const int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) return 1.0;
+    struct stat st{};
+    if (::fstat(fd, &st) != 0 || st.st_size <= 0) {
+        ::close(fd);
+        return 1.0;
+    }
+    const size_t len = static_cast<size_t>(st.st_size);
+    void* map = ::mmap(nullptr, len, PROT_READ, MAP_SHARED, fd, 0);
+    ::close(fd);
+    if (map == MAP_FAILED) return 1.0;
+    const size_t page = static_cast<size_t>(::sysconf(_SC_PAGESIZE));
+    std::vector<unsigned char> vec((len + page - 1) / page);
+    double frac = 1.0;
+    if (::mincore(map, len, vec.data()) == 0) {
+        size_t resident = 0;
+        for (unsigned char v : vec) resident += v & 1u;
+        frac = static_cast<double>(resident) / static_cast<double>(vec.size());
+    }
+    ::munmap(map, len);
+    return frac;
+#else
+    (void)path;
+    return 1.0;
+#endif
+}
+
+// LEITURA EM DUAS FASES (PBR adiado, ver PbrDeferred.hpp). Medido a frio num
+// mapa de 390 MB de pacote (HD): 12,7 s de 17,8 s da carga eram a leitura, e
+// 75% dos bytes sao normal e MRAH-W. Aqui le' so' o albedo de cada textura e,
+// dos blocos PBR, o cabecalho de 20 bytes (os tamanhos dos mips saem da
+// geometria do bloco), sem tocar nos dados. O formato do pacote nao muda: os
+// pacotes que ja' existem valem como estao.
+//
+// So' compensa em pacote grande e fora do cache: cada bloco pulado custa uma
+// busca (medido: 580 leituras em 1,6 s num pacote de 24 MB, que le' inteiro em
+// 0,7 s), entao pacote pequeno ou ja' no cache do sistema segue o caminho de
+// sempre. Qualquer surpresa no formato (formato sem geometria conhecida, bloco
+// que nao fecha, arquivo que nao termina onde o ultimo bloco termina) devolve
+// false e a leitura inteira roda.
+constexpr uint64_t kDeferMinPackBytes = 96ull << 20;
+
+// ignoreResident: na troca de mapa o pacote no cache do sistema tambem adia o PBR. Sem
+// disco a esperar, o custo que sobra e' o do fio principal (copia e envio de centenas
+// de MB de normal/MRAH-W no quadro da troca: 0,3 a 0,5 s num mapa de 500 MB); adiado,
+// o envio anda por quadro (PbrDeferred::pump) e a troca so' leva o albedo.
+bool readCacheDeferred(const std::string& glbPath, uint32_t maxSize, bool synthPbr, EmbeddedBakeResult& out,
+                       bool* stale, bool ignoreResident = false) {
+    if (stale) *stale = false;
+    std::string path = packPathFor(glbPath, maxSize, synthPbr);
+    if (!synthPbr && !vfs::exists(path) && vfs::exists(packPathFor(glbPath, maxSize, true)))
+        path = packPathFor(glbPath, maxSize, true);
+    if (!vfs::exists(path)) {
+        if (!texfmt::classicActive()) return false;
+        path = legacyPackPathFor(glbPath);
+        if (!vfs::exists(path)) return false;
+    }
+    if (vfs::inBundle(path)) return false; // entrada comprimida do .emap: sem leitura parcial
+    std::error_code ec;
+    if (!fs::is_regular_file(path, ec)) return false;
+    const uint64_t fileSize = fs::file_size(path, ec);
+    if (ec || fileSize < 64) return false;
+    // Pacote pequeno: cada bloco pulado custa uma busca, e le' inteiro e' mais rapido (mapa interno pequeno, 14 MB,
+    // disco lento: 0,7 s inteiro contra 2 s adiado). Na troca de mapa (ignoreResident) o limite vale
+    // ate' com o override de teste, que so' forca o adiamento da carga a frio.
+    if (ignoreResident && fileSize < kDeferMinPackBytes) return false;
+    if (PbrDeferred::testOverride() < 1) {
+        if (fileSize < kDeferMinPackBytes) return false;
+        if (!ignoreResident && residentFraction(path) > 0.9) return false;
+    }
+
+    const auto t0 = std::chrono::steady_clock::now();
+    auto bail = [&](const char* why) {
+        ERUPTION_LOG_WARN("[PBRDEFER] '%s': %s; leitura inteira", path.c_str(), why);
+        out = EmbeddedBakeResult{};
+        return false;
+    };
+    std::lock_guard<std::mutex> disco(diskReadMutex());
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) return false;
+    uint64_t lastOff = 0, lastEnd = 0;
+    auto readAt = [&](uint64_t off, void* dst, size_t n) -> size_t {
+        f.clear();
+        f.seekg(static_cast<std::streamoff>(off));
+        f.read(static_cast<char*>(dst), static_cast<std::streamsize>(n));
+        // Teste de disco lento: o que cai dentro da leitura anterior nao toca o disco; so'
+        // conta a busca quando o arquivo nao segue em sequencia.
+        if (!(off >= lastOff && off + n <= lastEnd)) {
+            const bool seek = off > lastEnd || off < lastOff;
+            testDiskThrottle(off + n - (seek ? off : lastEnd), seek);
+            if (seek) lastOff = off;
+            lastEnd = off + n;
+        }
+        return static_cast<size_t>(f.gcount());
+    };
+
+    uint8_t head[64];
+    const size_t headGot = readAt(0, head, sizeof head);
+    Reader r{head, headGot};
+    uint32_t count = 0;
+    if (!parsePackHeader(r, glbPath, maxSize, synthPbr, false, out, stale, count)) {
+        out = EmbeddedBakeResult{};
+        return false;
+    }
+
+    uint64_t pos = r.c;
+    uint64_t albedoBytes = 0, deferredBytes = 0, retries = 0;
+    std::vector<uint8_t> scratch;
+    // Formato do normal e do MRAH-W, aprendido nos cabecalhos lidos: o tamanho do
+    // bloco PBR e' previsto pelo formato e pelas dimensoes do albedo, e assim a
+    // cabeca nao busca o cabecalho de cada bloco (435 buscas num mapa de 145
+    // texturas; com a previsao, 145). A previsao erra quando o PBR tem outra
+    // dimensao que o albedo (medido: 0 a 7% das texturas); o erro aparece no
+    // nome da textura seguinte (tamanho absurdo, byte de controle, mascara
+    // desconhecida) e a textura anterior e' refeita lendo os cabecalhos de verdade.
+    uint32_t learnedFmt[2] = {0, 0};
+
+    struct Parsed {
+        std::string name;
+        BakedEmbeddedTexture tex;
+        uint64_t start = 0, end = 0;
+        bool predicted = false; // algum bloco PBR teve o tamanho previsto
+        uint64_t albedoBytes = 0, deferredBytes = 0;
+    };
+    enum Rc { kOk, kBadName, kFatal, kOverflow };
+    // Le' uma textura em `at`; `verify` = le' os cabecalhos PBR em vez de prever o tamanho.
+    auto parseOne = [&](uint64_t at, bool verify, Parsed& o) -> Rc {
+        uint8_t nb[512];
+        const size_t g = readAt(at, nb, sizeof nb);
+        uint32_t nameLen = 0;
+        if (g < 8) return kBadName;
+        std::memcpy(&nameLen, nb, 4);
+        if (nameLen > 400 || 4u + nameLen + 4u > g) return kBadName;
+        o = Parsed{};
+        o.name.assign(reinterpret_cast<const char*>(nb + 4), nameLen);
+        // Nome com bytes de controle ou mascara com bits desconhecidos = lemos o meio de um bloco.
+        for (const char c : o.name)
+            if (static_cast<unsigned char>(c) < 0x20) return kBadName;
+        uint32_t mask = 0;
+        std::memcpy(&mask, nb + 4 + nameLen, 4);
+        if ((mask & ~0xFu) != 0 || nameLen == 0) return kBadName;
+        o.start = at;
+        uint64_t p = at + 8 + nameLen;
+        if (mask & 1u) {
+            uint8_t h20[20];
+            EtexData hdr;
+            uint64_t bytes = 0;
+            // O cabecalho do albedo costuma estar na leitura do nome (evita uma chamada).
+            const bool inName = 8u + nameLen + 20u <= g;
+            if (inName) std::memcpy(h20, nb + 8 + nameLen, 20);
+            if ((!inName && readAt(p, h20, 20) != 20) || !readEtexHeaderBytes(h20, 20, hdr, bytes) ||
+                p + bytes > fileSize)
+                return kFatal;
+            scratch.resize(static_cast<size_t>(bytes));
+            std::memcpy(scratch.data(), h20, 20); // o resto vem em sequencia ao cabecalho
+            if (readAt(p + 20, scratch.data() + 20, scratch.size() - 20) != scratch.size() - 20) return kFatal;
+            size_t cur = 0;
+            if (!readEtexBytes(scratch.data(), scratch.size(), cur, o.tex.albedo) || cur != scratch.size() ||
+                o.tex.albedo.mipSizes != hdr.mipSizes)
+                return kFatal;
+            o.albedoBytes = bytes;
+            p += bytes;
+        }
+        for (const uint32_t bit : {2u, 4u}) {
+            if (!(mask & bit)) continue;
+            const int k = bit == 2u ? 0 : 1;
+            auto src = std::make_shared<PbrDeferredSource>();
+            const bool predict = (mask & 1u) && learnedFmt[k] != 0 && !verify;
+            if (predict) {
+                if (!etexBlockGeometry(learnedFmt[k], o.tex.albedo.width, o.tex.albedo.height,
+                                       o.tex.albedo.mipCount, src->header, src->bytes))
+                    return kFatal;
+                if (p + src->bytes > fileSize) return kOverflow;
+                o.predicted = true;
+            } else {
+                uint8_t h20[20];
+                if (readAt(p, h20, 20) != 20 || !readEtexHeaderBytes(h20, 20, src->header, src->bytes) ||
+                    p + src->bytes > fileSize)
+                    return kFatal;
+                learnedFmt[k] = src->header.vkFormat;
+            }
+            src->path = path;
+            src->offset = p;
+            (bit == 2u ? o.tex.normal : o.tex.mrahw) = src->header;
+            o.deferredBytes += src->bytes;
+            p += src->bytes;
+            (bit == 2u ? o.tex.normalSrc : o.tex.mrahwSrc) = std::move(src);
+        }
+        o.tex.albedoOpaque = (mask & 8u) != 0;
+        o.end = p;
+        return kOk;
+    };
+    auto commit = [&](Parsed& o) {
+        albedoBytes += o.albedoBytes;
+        deferredBytes += o.deferredBytes;
+        out.bytes += o.tex.albedo.byteSize();
+        out.textures.emplace(std::move(o.name), std::move(o.tex));
+    };
+
+    Parsed last;
+    bool haveLast = false;
+    for (uint32_t i = 0; i < count; ++i) {
+        Parsed cur;
+        Rc rc = parseOne(pos, false, cur);
+        if ((rc == kBadName || rc == kFatal) && haveLast && last.predicted) {
+            // A previsao do bloco anterior errou: ele e' refeito lendo os cabecalhos.
+            ++retries;
+            Parsed redo;
+            if (parseOne(last.start, true, redo) != kOk) return bail("textura anterior nao leu");
+            last = std::move(redo);
+            pos = last.end;
+            rc = parseOne(pos, false, cur);
+        }
+        if (rc == kOverflow) {
+            ++retries;
+            rc = parseOne(pos, true, cur);
+        }
+        if (rc == kBadName) return bail("nome de textura fora do esperado");
+        if (rc != kOk) return bail("bloco do pacote desconhecido");
+        if (haveLast) commit(last);
+        last = std::move(cur);
+        haveLast = true;
+        pos = last.end;
+    }
+    if (haveLast && last.end != fileSize && last.predicted) { // a ultima tambem pode ter sido mal prevista
+        ++retries;
+        Parsed redo;
+        if (parseOne(last.start, true, redo) != kOk) return bail("ultima textura nao leu");
+        last = std::move(redo);
+        pos = last.end;
+    }
+    if (haveLast) commit(last);
+    if (pos != fileSize) return bail("o ultimo bloco nao termina no fim do arquivo");
+    out.bytes += deferredBytes;
+    out.fromCache = true;
+    noteCoverage(glbPath, path, out);
+    ERUPTION_LOG_WARN("[PBRDEFER] '%s': albedo lido (%.1f MB), PBR adiado (%.1f MB em %zu texturas, %llu refeitas) em %.0f ms",
+                      path.c_str(), static_cast<double>(albedoBytes) / 1048576.0,
+                      static_cast<double>(deferredBytes) / 1048576.0, out.textures.size(),
+                      static_cast<unsigned long long>(retries),
+                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    return true;
+}
+
+// O pacote (.etexpack) em memoria. false se a origem nao tem tamanho.
+bool serializePack(const std::string& glbPath, uint32_t maxSize, bool synthPbr, const EmbeddedBakeResult& res,
+                   std::vector<uint8_t>& buf) {
     std::error_code ec;
     const std::string source = fingerprintPath(glbPath);
-    const uint64_t srcSize = static_cast<uint64_t>(fs::file_size(source, ec));
-    if (ec) return;
-    std::vector<uint8_t> buf;
+    const uint64_t srcSize = vfs::fileSize(source, ec); // disco ou pacote .ecp
+    if (ec) return false;
+    buf.clear();
     buf.reserve(res.bytes + 4096);
     put32(buf, kPackMagic);
     put32(buf, kPackVersion);
@@ -374,11 +717,21 @@ void writeCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
         if (mask & 2u) appendEtexBytes(t.normal, buf);
         if (mask & 4u) appendEtexBytes(t.mrahw, buf);
     }
+    return true;
+}
 
+void writeCache(const std::string& glbPath, uint32_t maxSize, bool synthPbr,
+                const EmbeddedBakeResult& res) {
+    std::error_code ec;
+    std::vector<uint8_t> buf;
+    if (!serializePack(glbPath, maxSize, synthPbr, res, buf)) return;
     // Write to a temp file and rename: a crash mid-bake must not leave a
     // truncated cache that the next run would happily read.
     const std::string finalPath = packPathFor(glbPath, maxSize, synthPbr);
     const std::string tmpPath = finalPath + ".tmp";
+    // Projeto so' de pacotes: a pasta do .glb nao existe no disco; o cache (que
+    // e' escrito pelo motor) nasce la', sem conteudo do jogo.
+    if (vfs::packsMounted()) fs::create_directories(fs::path(finalPath).parent_path(), ec);
     {
         std::ofstream f(tmpPath, std::ios::binary | std::ios::trunc);
         if (!f.is_open()) {
@@ -544,9 +897,11 @@ std::unordered_map<std::string, EmbeddedPackCoverage> recordedPackCoverage() {
 }
 
 bool readEmbeddedBakeCache(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr,
-                           EmbeddedBakeResult& out) {
+                           EmbeddedBakeResult& out, bool allowDeferredPbr) {
     if (model.embeddedTextures.empty() || model.filePath.empty() || !texfmt::anyActive()) return false;
     if (std::getenv("ERUPTION_TEST_DUMP_TEX_DIR")) return false; // o dump quer bake fresco
+    if (allowDeferredPbr && readCacheDeferred(model.filePath, maxTextureSize, synthesizePbr, out, nullptr, true)) return true;
+    out = EmbeddedBakeResult{};
     return readCache(model.filePath, maxTextureSize, synthesizePbr, out);
 }
 
@@ -575,11 +930,60 @@ bool loadDiskPbrRgba(const std::string& albedoName, PbrTextureData& mrahw, PbrTe
 } // namespace
 
 namespace {
-EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr);
+EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr, bool writeCacheFile);
 } // namespace
 
+bool buildEmbeddedBakePack(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr,
+                           std::vector<uint8_t>& packBytes, std::string& packPath,
+                           std::vector<std::string>* imageNames, bool* fromDiskCache) {
+    if (fromDiskCache) *fromDiskCache = false;
+    if (model.embeddedTextures.empty() || model.filePath.empty() || !texfmt::anyActive()) return false;
+    EmbeddedBakeResult res;
+    // Um pacote em disco valido para este .glb, preset e GPU e' reaproveitado:
+    // os bytes saem exatamente os que o motor ja' usa.
+    bool stale = false;
+    if (readCache(model.filePath, maxTextureSize, synthesizePbr, res, &stale) && !stale) {
+        if (fromDiskCache) *fromDiskCache = true;
+    } else {
+        res = bakeFresh(model, maxTextureSize, synthesizePbr, false);
+    }
+    if (res.textures.empty()) return false;
+    if (!serializePack(model.filePath, maxTextureSize, synthesizePbr, res, packBytes)) return false;
+    packPath = packPathFor(model.filePath, maxTextureSize, synthesizePbr);
+    if (imageNames) {
+        imageNames->clear();
+        for (const auto& t : res.textures) imageNames->push_back(t.first);
+    }
+    return true;
+}
+
+bool parseEmbeddedBakePackBytes(const std::vector<uint8_t>& buf, EmbeddedBakeResult& out) {
+    Reader r{buf.data(), buf.size()};
+    uint32_t magic = 0, version = 0, count = 0, skip = 0, hasGround = 0;
+    uint64_t skip64 = 0;
+    if (!r.u32(magic) || magic != kPackMagic || !r.u32(version) || version != kPackVersion) return false;
+    if (!r.u64(skip64) || !r.u64(skip64) || !r.u32(skip) || !r.u32(skip) || !r.u32(skip) || !r.u32(count)) return false;
+    if (!r.u32(hasGround)) return false;
+    for (int i = 0; i < 3; ++i)
+        if (!r.f32(out.groundAlbedo[i])) return false;
+    out.hasGroundAlbedo = hasGround != 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        std::string name;
+        uint32_t mask = 0;
+        if (!r.str(name) || !r.u32(mask)) return false;
+        BakedEmbeddedTexture t;
+        if ((mask & 1u) && !readEtexBytes(r.d, r.n, r.c, t.albedo)) return false;
+        if ((mask & 2u) && !readEtexBytes(r.d, r.n, r.c, t.normal)) return false;
+        if ((mask & 4u) && !readEtexBytes(r.d, r.n, r.c, t.mrahw)) return false;
+        t.albedoOpaque = (mask & 8u) != 0;
+        out.bytes += t.albedo.byteSize() + t.normal.byteSize() + t.mrahw.byteSize();
+        out.textures.emplace(std::move(name), std::move(t));
+    }
+    return true;
+}
+
 EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxTextureSize,
-                                        bool synthesizePbr) {
+                                        bool synthesizePbr, bool allowDeferredPbr) {
     EmbeddedBakeResult res;
     if (model.embeddedTextures.empty()) return res;
     if (!texfmt::anyActive()) {
@@ -593,6 +997,11 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
     // parallelFor, onde mrahw.pixels/normal.pixels ainda sao RGBA cru.
     const bool dumpRequested = std::getenv("ERUPTION_TEST_DUMP_TEX_DIR") != nullptr;
     bool stale = false;
+    if (allowDeferredPbr && !model.filePath.empty() && !dumpRequested &&
+        readCacheDeferred(model.filePath, maxTextureSize, synthesizePbr, res, &stale)) {
+        return res;
+    }
+    res = EmbeddedBakeResult{};
     if (!model.filePath.empty() && !dumpRequested &&
         readCache(model.filePath, maxTextureSize, synthesizePbr, res, &stale)) {
         ERUPTION_LOG_WARN("EmbeddedTextureBake: cache HIT%s '%s' (%zu texturas, %.1f MB comprimidos)",
@@ -607,12 +1016,21 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
     if (vfs::anyMounted())
         ERUPTION_LOG_WARN("[MAPBUNDLE] '%s' sem pacote de texturas valido no .emap: comprimindo agora. "
                           "Reconstrua o mapa (--bake-map)", model.filePath.c_str());
-    return bakeFresh(model, maxTextureSize, synthesizePbr);
+    // .glb de um .tuf com texturas prontas cujo pacote nao serve aqui (outro
+    // preset ou GPU): as imagens nao estao no .glb, entao nao ha o que comprimir.
+    // Nada de assar nem de gravar cache em disco: o erro diz o que refazer.
+    if (vfs::tufGpuReady(model.filePath)) {
+        ERUPTION_LOG_ERROR("[TUFGPU] '%s': o pacote .tuf traz as texturas prontas, mas nao as deste preset/GPU "
+                           "(teto %u, formatos). Reempacote com --gpu-ready para este preset", model.filePath.c_str(),
+                           maxTextureSize);
+        return EmbeddedBakeResult{};
+    }
+    return bakeFresh(model, maxTextureSize, synthesizePbr, true);
 }
 
 namespace {
 // Bake sem cache (o pack falta, ou o .glb/preset/GPU mudou).
-EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr) {
+EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr, bool writeCacheFile) {
     EmbeddedBakeResult res;
     bcCompressorInit();
     const bool dumpRequested = std::getenv("ERUPTION_TEST_DUMP_TEX_DIR") != nullptr;
@@ -627,6 +1045,22 @@ EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bo
             const std::string& cat = getPbrProfile(node.pbrTextureNames[k]).category;
             if (cat == "grass" || cat == "vegetation" || cat == "dirt" || cat == "snow")
                 organicImage[node.textureNames[k]] = true;
+        }
+    }
+
+    // Imagem cujo material ja' acha o PBR entregue em disco pelo NOME DO
+    // MATERIAL ("Tr-wood6.png" -> Tr-wood6_mrahw.png): o desenho usa esse mapa
+    // (ModelRenderer: o nome do material vence o da imagem), entao sintetizar
+    // a partir da cor so' gastava tempo no primeiro carregamento. O nome da
+    // imagem embutida ("#modelo_slot_crc") nunca acha arquivo. Medido no
+    // vilarejo (lpkit, 39 modelos): ~150 imagens sintetizadas, ~20 s de CPU.
+    std::unordered_map<std::string, bool> materialHasDiskPbr;
+    for (const auto& node : model.nodes) {
+        for (size_t k = 0; k < node.textureNames.size() && k < node.pbrTextureNames.size(); ++k) {
+            const std::string& mat = node.pbrTextureNames[k];
+            if (mat.empty() || mat == node.textureNames[k]) continue;
+            bool& has = materialHasDiskPbr[node.textureNames[k]];
+            if (!has) has = resolvePbrTexturePaths(mat).valid;
         }
     }
 
@@ -660,6 +1094,7 @@ EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bo
     std::atomic<uint64_t> synthMicros{0};
     std::atomic<size_t> synthesized{0};
     std::atomic<size_t> fromDisk{0};
+    std::atomic<size_t> pbrFromAlt{0};
     const NeuralPbrStats statsBefore = neuralPbrStats();
 
     JobSystem::instance().parallelFor(static_cast<uint32_t>(n), [&](uint32_t i) {
@@ -681,6 +1116,7 @@ EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bo
         }
         if (ch != 4 || w <= 0 || h <= 0) return;
 
+        const int origW = w, origH = h; // antes do teto: a fonte alternativa de PBR tem o tamanho original
         // Resolution cap (preset): the 2048^2 sheets are most of the pixels.
         ImageUtils::downscaleRGBA(w, h, pixels, static_cast<int>(maxTextureSize));
 
@@ -727,9 +1163,21 @@ EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bo
             // Mapa PBR pronto no disco (_mrahw/_normal ao lado do albedo
             // original) vence: a rede so' roda para a textura que nao tem.
             const bool doDisco = loadDiskPbrRgba(et.name, mrahw, normal);
+            const auto itMat = materialHasDiskPbr.find(et.name);
+            const bool porMaterial = !doDisco && itMat != materialHasDiskPbr.end() && itMat->second;
             bool synthOk = doDisco;
-            if (doDisco) ++fromDisk;
-            else if (synthesizePbr) synthOk = synthesizePbrFromPixels(pixels, w, h, 4, mrahw, normal, organic);
+            if (doDisco || porMaterial) ++fromDisk;
+            else if (synthesizePbr) {
+                std::vector<uint8_t> alt = pbrSourcePixels(et, origW, origH);
+                if (!alt.empty()) {
+                    int aw = origW, ah = origH;
+                    ImageUtils::downscaleRGBA(aw, ah, alt, static_cast<int>(maxTextureSize));
+                    ++pbrFromAlt;
+                    synthOk = synthesizePbrFromPixels(alt, w, h, 4, mrahw, normal, organic);
+                } else {
+                    synthOk = synthesizePbrFromPixels(pixels, w, h, 4, mrahw, normal, organic);
+                }
+            }
             synthMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - synthStart).count());
             if (synthOk && !doDisco) ++synthesized;
@@ -862,10 +1310,12 @@ EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bo
                       static_cast<double>(res.bytes) / (1024.0 * 1024.0),
                       texfmt::modeName(texfmt::family(texfmt::deviceCaps(), texfmt::options())), maxTextureSize);
     if (synthesizePbr) logSynthesisLevels(statsBefore, synthesized.load(), synthMicros.load());
+    if (pbrFromAlt.load() > 0)
+        ERUPTION_LOG_WARN("EmbeddedTextureBake: PBR sintetizado de fonte alternativa (ERUPTION_TUF_PBR_SOURCE) em %zu texturas", pbrFromAlt.load());
     if (fromDisk.load() > 0)
         ERUPTION_LOG_WARN("EmbeddedTextureBake: %zu de %zu texturas com PBR do disco (sem rede)", fromDisk.load(), n);
 
-    if (!model.filePath.empty() && !res.textures.empty() && !testNoWrite()) {
+    if (writeCacheFile && !model.filePath.empty() && !res.textures.empty() && !testNoWrite()) {
         writeCache(model.filePath, maxTextureSize, synthesizePbr, res);
     }
     return res;

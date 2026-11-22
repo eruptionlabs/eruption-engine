@@ -13,8 +13,11 @@
 #include "game/MapBundleBaker.hpp"
 #include "utils/BcAlphaSelfTest.hpp"
 #include "utils/GpuAutoSelect.hpp"
+#include "tufo/Cli.hpp"
+#include "utils/TufGpuReady.hpp"
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -121,6 +124,31 @@ int runExportGameCli(int argc, char** argv, const std::filesystem::path& outDir)
 
 // No Android quem chama e' a NativeActivity (src/platform/android/AndroidMain.cpp).
 int eruptionMain(int argc, char** argv) {
+    // --tuf-*: ferramenta do arquivo .tuf (Tufo, tools/tufo): atalho para os comandos do `tufo`; nao abre nada do motor.
+    for (int i = 1; i < argc; ++i)
+        if (std::strncmp(argv[i], "--tuf-", 6) == 0) {
+            // Codec das texturas prontas para a GPU (so' o motor sabe assar BC e
+            // remontar o .glb); --gpu-ready no pack/add liga o assador offline.
+            eruption::registerTufGpuReadyCodec();
+            for (int k = 1; k < argc; ++k)
+                if (std::strcmp(argv[k], "--gpu-ready") == 0) {
+                    eruption::Logger::init();
+                    // ERUPTION_PROJECT=<pasta>: o patch de data/graphics.json do jogo entra na
+                    // lista de combinacoes de textura (como no motor em execucao).
+                    if (const char* proj = std::getenv("ERUPTION_PROJECT"); proj && *proj) {
+                        std::string perr;
+                        if (!eruption::Project::instance().open(proj, &perr))
+                            std::fprintf(stderr, "aviso: projeto %s nao abriu: %s\n", proj, perr.c_str());
+                    }
+                    if (!eruption::setupOfflineTextureBake()) {
+                        std::fprintf(stderr, "erro: o compressor BC nao esta' disponivel neste build\n");
+                        return 1;
+                    }
+                }
+            return tufo::runCli(argc, argv);
+        }
+
+    eruption::registerTufGpuReadyCodec(); // painel Pacotes do editor: extrair .glb com texturas prontas
     eruption::Logger::init();
 
     // ERUPTION_TEST_BC7_ALPHA=1: teste isolado do compressor de altura, sai

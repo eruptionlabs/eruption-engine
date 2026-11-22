@@ -835,8 +835,103 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
         return model;
     }
 
+    // Imagens (uri) que o .tuf com texturas prontas nao guarda: o .glb as marca
+    // (extras.eruption_bc_only) e a falta do arquivo nao e' erro, o pacote de
+    // texturas as cobre. Entra uma imagem de 1 pixel no lugar para o carregador
+    // seguir; o dado de verdade nunca e' pedido (EncodedBytes adiado que falha).
+    struct BcOnly {
+        std::vector<std::string> uris;
+        std::vector<std::string> served;
+        std::vector<uint8_t> placeholder;
+        static bool endsWith(const std::string& path, const std::string& uri) {
+            return !uri.empty() && path.size() >= uri.size() && path.compare(path.size() - uri.size(), uri.size(), uri) == 0;
+        }
+        bool matches(const std::string& path) const {
+            for (const std::string& u : uris)
+                if (endsWith(path, u)) return true;
+            return false;
+        }
+    } bcOnly;
+    {
+        const std::string marker = "eruption_bc_only";
+        uint32_t jl = 0;
+        if (size >= 20) std::memcpy(&jl, data + 12, 4);
+        if (size >= 20 + size_t(jl) &&
+            std::search(data + 20, data + 20 + jl, marker.begin(), marker.end()) != data + 20 + jl) {
+            const std::vector<uint8_t> whole(data, data + size);
+            for (const auto& u : bcOnlyUriImages(whole)) bcOnly.uris.push_back(u.first);
+            const uint8_t px[4] = {255, 255, 255, 255};
+            if (!bcOnly.uris.empty()) ImageUtils::encodePNG(1, 1, 4, px, bcOnly.placeholder);
+        }
+    }
+
     tinygltf::TinyGLTF loader;
     loader.SetImageLoader(tinygltf::EruptionLoadImageData, nullptr);
+    {
+        // Imagens externas (uri): disco primeiro, pacote .tuf/.ecp depois e, se
+        // o arquivo nao esta ao lado do .glb, a pasta de texturas do projeto
+        // (assets/data/texture/<nome>). Assim o .glb do mapa nao carrega pixels
+        // e a textura mora so' no caminho dela, lida pelo VFS.
+        struct TexFs {
+            static std::string texturaDoProjeto(const std::string& path) {
+                const size_t cut = path.find_last_of("/\\");
+                const std::string nome = cut == std::string::npos ? path : path.substr(cut + 1);
+                if (nome.empty()) return {};
+                return (project::game("assets/data/texture") / nome).string();
+            }
+            static bool existe(const std::string& p) { return tinygltf::FileExists(p, nullptr) || vfs::exists(p); }
+            static bool tamanho(const std::string& p, size_t* size) {
+                if (tinygltf::GetFileSizeInBytes(size, nullptr, p, nullptr)) return true;
+                std::error_code ec;
+                const uint64_t n = vfs::fileSize(p, ec);
+                if (ec) return false;
+                *size = static_cast<size_t>(n);
+                return true;
+            }
+            static bool le(const std::string& p, std::vector<unsigned char>* out) {
+                std::string err;
+                if (tinygltf::ReadWholeFile(out, &err, p, nullptr)) return true;
+                return vfs::read(p, *out);
+            }
+        };
+        tinygltf::FsCallbacks fs;
+        fs.FileExists = [](const std::string& path, void* ud) {
+            return TexFs::existe(path) || TexFs::existe(TexFs::texturaDoProjeto(path)) ||
+                   static_cast<BcOnly*>(ud)->matches(path);
+        };
+        fs.ExpandFilePath = [](const std::string& path, void*) { return path; };
+        fs.ReadWholeFile = [](std::vector<unsigned char>* out, std::string* err, const std::string& path, void* ud) {
+            if (!TexFs::le(path, out)) {
+                const std::string alt = TexFs::texturaDoProjeto(path);
+                if (alt.empty() || !TexFs::le(alt, out)) {
+                    BcOnly* b = static_cast<BcOnly*>(ud);
+                    if (!b->matches(path)) return false;
+                    out->assign(b->placeholder.begin(), b->placeholder.end());
+                    b->served.push_back(path);
+                }
+            }
+            if (err) err->clear();
+            return true;
+        };
+        fs.WriteWholeFile = [](std::string*, const std::string&, const std::vector<unsigned char>&, void*) {
+            return false;
+        };
+        fs.GetFileSizeInBytes = [](size_t* size, std::string* err, const std::string& path, void* ud) {
+            if (TexFs::tamanho(path, size)) { if (err) err->clear(); return true; }
+            const std::string alt = TexFs::texturaDoProjeto(path);
+            if (alt.empty() || !TexFs::tamanho(alt, size)) {
+                const BcOnly* b = static_cast<BcOnly*>(ud);
+                if (!b->matches(path)) return false;
+                *size = b->placeholder.size();
+                if (err) err->clear();
+                return true;
+            }
+            if (err) err->clear();
+            return true;
+        };
+        fs.user_data = &bcOnly;
+        loader.SetFsCallbacks(fs);
+    }
 
     tinygltf::Model gltf;
     std::string err;
@@ -896,6 +991,9 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
         // Do pacote do mapa, sem os bytes (o pacote de texturas os cobre):
         // lidos do .glb do disco so' se alguem pedir.
         if (img.uri.empty()) et.encodedData = strippedImage(img.image, baseDir);
+        else if (std::any_of(bcOnly.served.begin(), bcOnly.served.end(),
+                             [&img](const std::string& p) { return BcOnly::endsWith(p, img.uri); }))
+            et.encodedData = EncodedBytes::deferred(1, [](std::vector<uint8_t>&) { return false; });
         // MOVE, nao copia. O carregador de imagem ja' copiou os bytes crus do
         // GLB para img.image (EruptionLoadImageData faz assign); copiar de novo
         // aqui duplicava ~290 MB de PNG no parana_field - dois memcpy enormes
