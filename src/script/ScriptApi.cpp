@@ -2333,6 +2333,17 @@ int world_set_classic(lua_State* L) {
     eng().setClassicMode(lua_toboolean(L, 1) != 0);
     return 0;
 }
+// Liga/desliga o ceu (cupula do fundo) como o "sky": false do .env: cavernas e
+// interiores. Dura ate trocar de mapa; a carga do mapa volta ao valor do .env.
+int world_set_sky(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TBOOLEAN);
+    eng().setSkyEnabled(lua_toboolean(L, 1) != 0);
+    return 0;
+}
+int world_sky(lua_State* L) {
+    lua_pushboolean(L, eng().skyEnabled());
+    return 1;
+}
 int world_classic(lua_State* L) {
     lua_pushboolean(L, eng().classicMode());
     return 1;

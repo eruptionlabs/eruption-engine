@@ -760,6 +760,10 @@ public:
     // ambiente), cor x (ambiente + difusa x N.L).
     void applyClassicLight(LightingEnvironment& env) const;
     bool classicMode() const { return m_classic.on; }
+    // Ceu (cupula do fundo) em tempo de execucao: o mesmo efeito de "sky": false
+    // no .env. Vale ate trocar de mapa (a carga volta ao valor do .env).
+    void setSkyEnabled(bool on) { m_mapHasSky = on; }
+    bool skyEnabled() const { return m_mapHasSky; }
     // Modo classico ligado: o clima pedido (script ao carregar mapa) fica
     // guardado para a volta ao HD, e o classico continua limpo.
     void setClassicSavedWeather(WeatherType t) { m_classic.weatherType = static_cast<int>(t); }
