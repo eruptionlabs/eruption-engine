@@ -214,7 +214,8 @@ bool Engine::embeddedTextureIdentity(const std::string& name, bool surface, uint
             if (it == m_embeddedBaked.end() && !n.empty() && n[0] == '/') it = m_embeddedBaked.find(n.substr(1));
             if (it == m_embeddedBaked.end()) return false;
         }
-        const EtexData& e = it->second.mrahw;
+        if (!it->second.hasMrahw()) return false;
+        const EtexData& e = it->second.mrahwData(); // PBR adiado: le' o bloco agora
         if (!e.valid()) return false;
         id = lodBridgeFastHash(e.payload.data(), e.payload.size(), (uint64_t(e.width) << 32) | e.height);
         return true;

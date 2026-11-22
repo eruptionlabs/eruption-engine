@@ -18,6 +18,7 @@
 #include "utils/Profiler.hpp"
 #include "utils/TelemetryExporter.hpp"
 #include "utils/PbrTextureLoader.hpp"
+#include "utils/PbrDeferred.hpp"
 #include <unordered_map>
 #include <unordered_set>
 #include <functional>
@@ -623,7 +624,9 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
                 ERUPTION_LOG_WARN("EmbeddedTextureBake: '%s' lido antes da troca (%zu texturas)",
                                   model.filePath.c_str(), bake.textures.size());
             } else {
-                bake = bakeEmbeddedTextures(model, static_cast<uint32_t>(m_textureMaxSize), pbrSynthesisEnabled());
+                // Pacote grande a frio: so' o albedo agora, o PBR chega depois (PbrDeferred.hpp).
+                bake = bakeEmbeddedTextures(model, static_cast<uint32_t>(m_textureMaxSize), pbrSynthesisEnabled(),
+                                            !m_editorMode && PbrDeferred::enabled(&m_bindless));
             }
             // OVERRIDE do .env tem prioridade sobre a media automatica. A
             // media e' tirada de TODAS as texturas embutidas do GLB (no
@@ -1007,6 +1010,20 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
 
     loadPhase("probes: bake");
     TelemetryExporter::recordLoadEnd(name);
+    {
+        // O chao primeiro: normal e MRAH-W (altura do relevo) das texturas de chao saem do
+        // pacote antes do resto (PbrDeferred::prioritize).
+        std::vector<uint32_t> groundPbr, groundNormal;
+        for (const auto& [texName, slot] : m_modelRenderer.getTextureCache()) {
+            if (m_modelRenderer.groundRoleForSlot(slot) == 0) continue;
+            const PbrTextureSlots pbr = m_modelRenderer.pbrForTexSlot(slot);
+            if (pbr.mrahw.deferred) groundPbr.push_back(pbr.mrahw.index);
+            if (pbr.normal.deferred) groundNormal.push_back(pbr.normal.index);
+        }
+        if (!groundPbr.empty() || !groundNormal.empty()) PbrDeferred::instance().prioritize(groundPbr, groundNormal);
+    }
+    PbrDeferred::instance().release(); // a leitura do PBR adiado so' comeca com o mapa jogavel
+    if (PbrDeferred::testOverride() == 2) PbrDeferred::instance().drainBlocking(&m_vulkan, &m_bindless);
     // Estado do cache cross-mapa depois desta carga. E' o detector do
     // vazamento que existia ate 2026-09-05 (carga fria nunca expulsava nada):
     // em loop de troca de mapa, model/terrain/meshes e usedSlots tem que
@@ -1214,7 +1231,7 @@ namespace {
 // (so' do fio principal: dentro de um job o parallelFor esperaria a si mesmo).
 std::shared_ptr<ModelFile> prepareModelFile(const std::string& glbPath, bool parallel,
                                             const std::function<bool(const std::string&)>& wanted,
-                                            int bakeMaxSize = 0) {
+                                            int bakeMaxSize = 0, bool deferPbr = false) {
     const std::string diskPath = project::gameRef(glbPath).string();
     std::vector<uint8_t> data;
     {
@@ -1240,9 +1257,9 @@ std::shared_ptr<ModelFile> prepareModelFile(const std::string& glbPath, bool par
         // antes se refazia inteira a cada mapa aberto (cena de 1058 objetos:
         // 90 s parados).
         model->filePath = diskPath;
-        bool ok = readEmbeddedBakeCache(*model, static_cast<uint32_t>(bakeMaxSize), pbrSynthesisEnabled(), bake);
+        bool ok = readEmbeddedBakeCache(*model, static_cast<uint32_t>(bakeMaxSize), pbrSynthesisEnabled(), bake, deferPbr);
         if (!ok) {
-            bake = bakeEmbeddedTextures(*model, static_cast<uint32_t>(bakeMaxSize), pbrSynthesisEnabled());
+            bake = bakeEmbeddedTextures(*model, static_cast<uint32_t>(bakeMaxSize), pbrSynthesisEnabled(), deferPbr);
             ok = !bake.textures.empty();
         }
         model->filePath = glbPath;
@@ -1268,7 +1285,15 @@ std::shared_ptr<ModelFile> prepareModelFile(const std::string& glbPath, bool par
         // No preload, o PBR tambem sai daqui: a mesma sintese, com os mesmos
         // pixels em resolucao cheia, que o quadro faria (findEmbeddedAlbedoPixels
         // decodifica o original); ja' roda em threads no bake do mapa.
-        if (synthesizePbr && pbrSynthesisEnabled()) {
+        // Textura com _mrahw/_normal em disco: o PBR autoral vence a sintese (setBakedPbrProvider),
+        // entao sintetizar aqui era trabalho jogado fora - no navegador (sem fios, sem cache de bloco)
+        // eram ~8 s da carga de uma vila.
+        bool temPbrEmDisco = false;
+        if (synthesizePbr) {
+            const PbrTexturePathPair par = resolvePbrTexturePaths(et.name);
+            temPbrEmDisco = par.valid && !par.mrahw.empty() && !par.normal.empty();
+        }
+        if (synthesizePbr && !temPbrEmDisco && pbrSynthesisEnabled()) {
             std::pair<PbrTextureData, PbrTextureData> pbr;
             if (synthesizePbrFromPixels(img.pixels, img.width, img.height, img.channels > 0 ? img.channels : 4,
                                         pbr.first, pbr.second)) {
@@ -1309,9 +1334,10 @@ void Engine::preloadModel(const std::string& glbPath) {
     // volta a ser montado no proximo, e o PBR sintetizado dele nao fica (a
     // escada do mapa de origem custava ~270 ms na chegada, com ou sem preload).
     const int maxSize = m_textureMaxSize;
+    const bool defer = !m_editorMode && PbrDeferred::enabled(&m_bindless);
     ModelPreload p;
     p.model = JobSystem::instance()
-                  .submit([glbPath, maxSize] { return prepareModelFile(glbPath, false, claimPreloadTexture, maxSize); })
+                  .submit([glbPath, maxSize, defer] { return prepareModelFile(glbPath, false, claimPreloadTexture, maxSize, defer); })
                   .share();
     p.gen = m_modelPreloadGen;
     m_modelPreloads.emplace(glbPath, std::move(p));
@@ -1609,7 +1635,7 @@ struct Engine::PreparedMap {
 
 // Leitura de um mapa fora da thread principal: os arquivos (MapLoader) e a
 // conversao dos modelos, que nao dependem da GPU.
-std::shared_ptr<Engine::PreparedMap> Engine::readPreparedMap(const std::string& name) {
+std::shared_ptr<Engine::PreparedMap> Engine::readPreparedMap(const std::string& name, bool deferPbr) {
     MapLoader loader;
     auto out = std::make_shared<PreparedMap>();
     out->name = name;
@@ -1622,8 +1648,16 @@ std::shared_ptr<Engine::PreparedMap> Engine::readPreparedMap(const std::string& 
     // era lido na troca, na thread principal (137 ms num mapa de cidade).
     for (const auto& model : out->map->models) {
         EmbeddedBakeResult bake;
-        if (readEmbeddedBakeCache(model, embeddedTextureMaxSize(), pbrSynthesisEnabled(), bake))
+        if (readEmbeddedBakeCache(model, embeddedTextureMaxSize(), pbrSynthesisEnabled(), bake, deferPbr)) {
             out->bakes.emplace(model.filePath, std::move(bake));
+        } else if (!model.embeddedTextures.empty()) {
+            // Sem pacote (mapa nunca aberto, ou o .glb mudou depois dele): comprime e
+            // sintetiza AQUI, na thread de fundo, com o mapa antigo ainda jogavel. Antes
+            // isso rodava na troca, no fio principal: 2,2 s parados num mapa de 154
+            // texturas (medido pelo teste de 15 warps).
+            bake = bakeEmbeddedTextures(model, embeddedTextureMaxSize(), pbrSynthesisEnabled(), deferPbr);
+            if (!bake.textures.empty()) out->bakes.emplace(model.filePath, std::move(bake));
+        }
     }
     out->models.reserve(out->map->models.size());
     for (auto& model : out->map->models) out->models.push_back(convertModelToAssetReleasing(model));
@@ -1700,7 +1734,9 @@ void Engine::updatePreload() {
     if (!m_preloadJob.valid() && !m_preloadWanted.empty() && !haveWanted) {
         m_preloaded.reset();
         const std::string map = m_preloadWanted;
-        m_preloadJob = platform::runAsync([map] { return readPreparedMap(map); });
+        const bool defer = !m_editorMode && PbrDeferred::enabled(&m_bindless);
+        m_preloadJob = platform::runAsync([map, defer] { return readPreparedMap(map, defer); });
+        m_preloadJobMap = map;
         ERUPTION_LOG_WARN("Preload: reading %s in the background", map.c_str());
     }
 }
@@ -1756,6 +1792,7 @@ void Engine::updateWarp() {
         m_pendingMapWarp.clear();
         m_warpJobActive = true;
         const std::string map = m_warpJobMap;
+        const bool defer = !m_editorMode && PbrDeferred::enabled(&m_bindless);
         if (m_preloaded && m_preloaded->name == map) {
             std::promise<std::shared_ptr<PreparedMap>> ready;
             ready.set_value(std::move(m_preloaded));

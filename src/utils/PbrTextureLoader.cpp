@@ -1,4 +1,5 @@
 #include "utils/PbrTextureLoader.hpp"
+#include "utils/PbrStem.hpp"
 #include "renderer/TextureStreamer.hpp"
 #include "utils/TextureFormatPolicy.hpp"
 
@@ -6,6 +7,7 @@
 #include "utils/HeightFromAlbedo.hpp"
 #include "ml/NeuralPbr.hpp"
 #include "utils/BcCompressor.hpp"
+#include "utils/PbrDeferred.hpp"
 #include <chrono>
 #include <atomic>
 #include <cmath>
@@ -21,8 +23,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <string_view>
 #include <unordered_set>
 #include <fstream>
 #include "utils/AssetVfs.hpp"
@@ -305,7 +309,15 @@ bool synthesizePbrAnalytic(const std::vector<uint8_t>& pixels, int width, int he
     src.channels = channels;
     // Caminho classico em resolucao modesta: o detalhe derivado do albedo
     // nao precisa de 4k e a sintese fica barata.
-    ImageUtils::downscaleRGBA(src.width, src.height, src.pixels, 512);
+#ifdef __EMSCRIPTEN__
+    // Navegador: um fio so' e sem o pacote de bloco do desktop, a sintese de cada textura do modelo
+    // rodava a 512 (~8 s na carga de uma vila, medido no wasm). A 256 custa ~1/4 e o mapa so' perde
+    // o grao mais fino; o desktop segue a 512.
+    constexpr int kAnalyticMaxSide = 256;
+#else
+    constexpr int kAnalyticMaxSide = 512;
+#endif
+    ImageUtils::downscaleRGBA(src.width, src.height, src.pixels, kAnalyticMaxSide);
     const int w = src.width, h = src.height, ch = src.channels;
     if (w < 4 || h < 4) return false;
     std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4, 255);
@@ -345,11 +357,6 @@ static std::string toLower(std::string s) {
     return s;
 }
 
-static bool supportedExt(const fs::path& ext) {
-    const std::string e = toLower(ext.string());
-    return e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".bmp" || e == ".tga";
-}
-
 // Normalise a stem for fuzzy matching.  The GLB converter replaces non-ASCII
 // characters and pads fields with underscores, so a stem with non-ASCII
 // characters and its padded twin "#_____________abc_______06_0001" should both
@@ -378,22 +385,6 @@ static std::string normalizePbrStem(const std::string& s) {
 // below would otherwise keep the old answer for the whole session.
 static std::atomic<uint32_t> g_pbrLookupEpoch{0};
 
-// Embedded GLB images are keyed "#<image name>" or "#image<N>" (GltfParser),
-// often with no image extension. They are still albedo keys: the cooked-map
-// lookup takes the whole file name as the stem instead of rejecting them.
-// Only '#' keys - a bare material name ("Material.001") keeps the old rule, so
-// it never starts matching cooked maps of an unrelated texture by accident.
-static bool albedoStemOf(const fs::path& src, std::string& stem) {
-    if (supportedExt(src.extension())) {
-        stem = src.stem().string();
-        return true;
-    }
-    const std::string name = src.filename().string();
-    if (name.size() < 2 || name[0] != '#') return false;
-    stem = name;
-    return true;
-}
-
 // Fallback lookup: when the albedo directory does not match the cooked PBR
 // layout (e.g. cidade-A/cidade-C/albedo references only a filename, or uses a
 // different folder prefix), scan assets/data/texture once and cache a map from
@@ -417,7 +408,9 @@ static const std::pair<std::string, std::string>* findPbrPairByStem(const std::s
         cachedRoot = root.string();
         cachedEpoch = epoch;
         cache = Cache{};
-        if (!fs::exists(root) || !fs::is_directory(root)) return nullptr;
+        const bool rootOnDisk = fs::exists(root) && fs::is_directory(root);
+        const std::vector<std::string> packedFiles = vfs::listPacked(root.string());
+        if (!rootOnDisk && packedFiles.empty()) return nullptr;
         try {
             // Collect + SORT before populating: first-wins on ambiguous
             // (normalized) stems must be deterministic. The raw directory
@@ -426,15 +419,22 @@ static const std::pair<std::string, std::string>* findPbrPairByStem(const std::s
             // silently swapped which cooked pair ambiguous stems resolved to
             // (two stems differing in one non-ASCII character on parana_field).
             std::vector<fs::path> mrahwFiles;
-            for (const auto& entry : fs::recursive_directory_iterator(root)) {
-                if (!entry.is_regular_file()) continue;
-                const std::string name = entry.path().filename().string();
-                constexpr const char* mrahwSuffix = "_mrahw.png";
-                constexpr size_t mrahwLen = 10; // strlen("_mrahw.png")
-                if (name.size() > mrahwLen &&
-                    std::memcmp(name.data() + name.size() - mrahwLen, mrahwSuffix, mrahwLen) == 0) {
-                    mrahwFiles.push_back(entry.path());
+            constexpr const char* mrahwSuffix = "_mrahw.png";
+            constexpr size_t mrahwLen = 10; // strlen("_mrahw.png")
+            auto isMrahw = [&](const std::string& name) {
+                return name.size() > mrahwLen &&
+                       std::memcmp(name.data() + name.size() - mrahwLen, mrahwSuffix, mrahwLen) == 0;
+            };
+            if (rootOnDisk) {
+                for (const auto& entry : fs::recursive_directory_iterator(root)) {
+                    if (entry.is_regular_file() && isMrahw(entry.path().filename().string()))
+                        mrahwFiles.push_back(entry.path());
                 }
+            }
+            // Pares dentro dos pacotes .ecp do projeto (o vfs le' o do disco
+            // antes do pacote, entao um par solto de mesmo nome ainda vence).
+            for (const std::string& f : packedFiles) {
+                if (isMrahw(fs::path(f).filename().string())) mrahwFiles.push_back(fs::path(f));
             }
             std::sort(mrahwFiles.begin(), mrahwFiles.end());
             for (const auto& path : mrahwFiles) {
@@ -589,9 +589,32 @@ void cancelPendingPbrUploadsForImage(VulkanContext* ctx, VkImage image) {
 }
 
 static PbrTextureSlot uploadPbrTextureSlot(VulkanContext* ctx, BindlessDescriptor* bindless,
-                                           VkSampler sampler, const PbrTextureData& tex) {
+                                           VkSampler sampler, const PbrTextureData& tex, bool isNormal) {
     PbrTextureSlot out;
     if (!tex.valid() || !ctx || !bindless) return out;
+
+    // PBR adiado: o bloco ainda esta' no arquivo do pacote.
+    if (tex.deferred) {
+        const TextureStreamer* st = TextureStreamer::active_instance();
+        const bool streaming = st && st->engaged();
+        // Ja' lido por quem precisou do payload (alivio do chao): sobe de verdade agora.
+        if (!tex.deferred->loaded() && !streaming && PbrDeferred::enabled(bindless)) {
+            out.index = bindless->allocateSlot();
+            if (out.index == 0) return out;
+            out.deferred = true;
+            PbrDeferred::instance().registerSlot(ctx, bindless, sampler, out.index, isNormal, tex.deferred);
+            return out;
+        }
+        // Streaming por distancia (ou sem descriptor indexing): le' o bloco agora e segue o caminho de sempre.
+        const EtexData& real = tex.deferred->load();
+        if (!real.valid()) return out;
+        PbrTextureData full;
+        full.etex = real;
+        full.width = static_cast<int>(real.width);
+        full.height = static_cast<int>(real.height);
+        full.channels = 4;
+        return uploadPbrTextureSlot(ctx, bindless, sampler, full, isNormal);
+    }
 
     const bool baked = tex.etex.valid();
     // Cozido em bloco com streaming: sobe so' a cauda (TextureStreamer).
@@ -832,7 +855,7 @@ PbrTexturePathPair resolvePbrTexturePathsImpl(const std::string& albedoPath) {
         fs::path src = raw;
 
         std::string stem;
-        if (!albedoStemOf(src, stem)) return out;
+        if (!pbr::albedoStemOf(src, stem)) return out;
         fs::path relDir = src.parent_path();
 
         // Cooked maps are stored under assets/data/texture mirroring the
@@ -976,7 +999,7 @@ std::string pbrMapStemForAlbedoKey(const std::string& albedoKey) {
     std::string raw = albedoKey;
     std::replace(raw.begin(), raw.end(), '\\', '/');
     std::string stem;
-    if (!albedoStemOf(fs::path(raw), stem)) return {};
+    if (!pbr::albedoStemOf(fs::path(raw), stem)) return {};
     // O mesmo corte de collectCandidateStems: sem os '#'/'_' da frente, que o
     // nome sintetico da imagem embutida carrega (e que nao cabem bem num
     // nome de arquivo). E' uma das chaves que a busca por arvore tenta.
@@ -995,13 +1018,14 @@ PbrTextureSlots uploadPbrTexturesFromData(VulkanContext* ctx,
     PbrTextureSlots slots;
     if (!ctx || !bindless) return slots;
 
-    slots.mrahw = uploadPbrTextureSlot(ctx, bindless, sampler, mrahw);
-    slots.normal = uploadPbrTextureSlot(ctx, bindless, sampler, normal);
+    slots.mrahw = uploadPbrTextureSlot(ctx, bindless, sampler, mrahw, false);
+    slots.normal = uploadPbrTextureSlot(ctx, bindless, sampler, normal, true);
 
     if (!slots.valid()) {
         // Partial failure: release anything that was allocated so the shader
         // falls back to constants.
         slots.reset(ctx, bindless);
+        return slots;
     }
 
     return slots;
@@ -1017,6 +1041,11 @@ namespace {
 struct PrewarmEntry { PbrTextureData mrahw; PbrTextureData normal; };
 std::mutex g_prewarmMutex;
 std::unordered_map<std::string, PrewarmEntry> g_prewarmCache;
+// Nomes para os quais a cadeia inteira de loadPbrTexturesForAlbedo ja' deu "nada" (nome de
+// material sem textura cozida, sem albedo em disco e sem imagem embutida): o carregamento
+// nao repete as sondas de arquivo no fio principal (291 de 583 nomes no mapa de 1674 nos,
+// ~50 ms da troca de mapa).
+std::unordered_set<std::string> g_prewarmMiss;
 
 std::string sanitizePbrKey(std::string s) {
     std::replace(s.begin(), s.end(), '/', '\\');
@@ -1063,16 +1092,35 @@ void prewarmPbrTextureData(const std::vector<std::string>& albedoNames, bool syn
     std::vector<std::string> uniq;
     {
         std::unordered_set<std::string> seen;
+        // O mesmo nome repetido (cada no do mapa traz o seu): pula antes de alocar a chave.
+        std::unordered_set<std::string_view> rawSeen;
+        rawSeen.reserve(albedoNames.size());
         uniq.reserve(albedoNames.size());
         for (const auto& raw : albedoNames) {
-            if (raw.empty()) continue;
+            if (raw.empty() || !rawSeen.insert(raw).second) continue;
             std::string k = sanitizePbrKey(raw);
             if (k.empty()) continue;
             {
                 std::lock_guard<std::mutex> lk(g_prewarmMutex);
                 if (g_prewarmCache.count(k)) continue;
             }
-            if (seen.insert(k).second) uniq.push_back(std::move(k));
+            if (!seen.insert(k).second) continue;
+            // O pack do modelo (.etexpack) ja' traz o PBR desta textura: o bake
+            // grava nele o _mrahw/_normal do disco quando existe (e a rede so'
+            // quando nao existe), comprimido. Ler os dois arquivos soltos de
+            // novo era a mesma coisa em dobro, e no HD custava caro: um mapa urbano grande a
+            // frio, 258 arquivos de 1,4 MB numa pasta de ~15 mil, 31,7 s de 38 s
+            // da cena; com o do pack, 0,9 s. Aqui no fio que chamou, porque o
+            // provedor pode consumir o par (models.preload).
+            PrewarmEntry e;
+            if (g_bakedPbrProvider && (g_bakedPbrProvider(raw, e.mrahw, e.normal) ||
+                                       g_bakedPbrProvider(k, e.mrahw, e.normal)) &&
+                e.mrahw.valid() && e.normal.valid()) {
+                std::lock_guard<std::mutex> lk(g_prewarmMutex);
+                g_prewarmCache.emplace(k, std::move(e));
+                continue;
+            }
+            uniq.push_back(std::move(k));
         }
     }
     if (uniq.empty()) return;
@@ -1092,7 +1140,27 @@ void prewarmPbrTextureData(const std::vector<std::string>& albedoNames, bool syn
             if (!synthesizeMissing) return;
             // No cooked maps: derive normal + AO from the albedo.
             std::string alb = findAlbedoOnDisk(key);
-            if (alb.empty() || !synthesizePbrFromAlbedo(alb, e.mrahw, e.normal)) return;
+            if (!alb.empty()) {
+                if (!synthesizePbrFromAlbedo(alb, e.mrahw, e.normal)) return;
+            } else if (!paths.valid) {
+                // Nada em disco: o resto da cadeia do carregamento (PBR de outro conjunto e imagem
+                // embutida). Se ela tambem nao der nada, o nome fica registrado como "sem PBR".
+                PbrTextureData ia, ib;
+                if (loadIndustryStandardPbr(key, ia, ib)) return; // o carregamento le' como sempre
+                bool embedded = false;
+                if (g_embeddedAlbedoProvider) {
+                    std::vector<uint8_t> px;
+                    int w = 0, h = 0, ch = 0;
+                    embedded = g_embeddedAlbedoProvider(key, px, w, h, ch);
+                }
+                if (!embedded) {
+                    std::lock_guard<std::mutex> lk(g_prewarmMutex);
+                    g_prewarmMiss.insert(key);
+                }
+                return;
+            } else {
+                return;
+            }
         }
         if (!e.mrahw.valid() || !e.normal.valid()) return;
         std::lock_guard<std::mutex> lk(g_prewarmMutex);
@@ -1103,6 +1171,7 @@ void prewarmPbrTextureData(const std::vector<std::string>& albedoNames, bool syn
 void clearPbrTextureDataPrewarm() {
     std::lock_guard<std::mutex> lk(g_prewarmMutex);
     g_prewarmCache.clear();
+    g_prewarmMiss.clear();
 }
 
 PbrTextureSlots loadPbrTexturesForAlbedo(VulkanContext* ctx,
@@ -1123,6 +1192,8 @@ PbrTextureSlots loadPbrTexturesForAlbedo(VulkanContext* ctx,
             lk.unlock();
             return uploadPbrTexturesFromData(ctx, bindless, sampler, e.mrahw, e.normal);
         }
+        // A cadeia inteira ja' foi tentada no prewarm (em paralelo) e nao deu nada.
+        if (g_prewarmMiss.count(key)) return slots;
     }
 
     PbrTexturePathPair paths = resolvePbrTexturePaths(albedoPath);

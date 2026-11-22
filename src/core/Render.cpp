@@ -10,6 +10,7 @@
 // deterministico (RMS 0.0 contra o binario anterior).
 
 #include "core/Engine.hpp"
+#include "utils/PbrDeferred.hpp"
 #include "core/EngineInternal.hpp"
 #include "renderer/BandwidthMeter.hpp"
 #include "renderer/LeanFormats.hpp"
@@ -1030,6 +1031,8 @@ void Engine::render() {
     // quadro ja' no mapa de sombra (o primeiro, assado, inclusive).
     m_modelRenderer.setGroundLodView(m_camera.position(), static_cast<float>(displayExtent().height) /
                                                               (2.0f * std::tan(glm::radians(m_camera.fov()) * 0.5f)));
+    // PBR adiado da carga a frio: sobe o que a leitura de fundo ja' trouxe.
+    PbrDeferred::instance().pump(&m_vulkan, &m_bindless);
     // Mips por distancia (TextureStreamer): demanda pelas instancias, troca
     // de slot so' do que ja' chegou na GPU. Sem streaming ligado, retorna ja'.
     m_textureStreamer.update(m_camera.position(), static_cast<float>(displayExtent().height) /

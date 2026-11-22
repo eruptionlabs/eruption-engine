@@ -4,6 +4,7 @@
 #include <limits>
 #include <cmath>
 #include "renderer/ModelRenderer.hpp"
+#include "utils/PbrDeferred.hpp"
 #include "core/Platform.hpp"
 #include "core/JobSystem.hpp"
 
@@ -707,6 +708,7 @@ void ModelRenderer::shutdown() {
         m_sampler = VK_NULL_HANDLE;
     }
 
+    PbrDeferred::instance().shutdown(m_ctx, m_bindless); // imagens do PBR adiado, antes dos slots
     for (auto& entry : m_pbrTextureCache) {
         entry.second.reset(m_ctx, m_bindless);
     }
@@ -717,6 +719,8 @@ void ModelRenderer::shutdown() {
 
 void ModelRenderer::clear() {
     dropReliefJobs(nullptr); // as tarefas escrevem em malhas que vao sair
+    // PBR adiado: a leitura de fundo e as imagens que ela subiu sao do mapa que sai.
+    PbrDeferred::instance().cancelAll(m_ctx, m_bindless);
     // Trios das camadas do splat: as views sao de outros donos (cache de
     // texturas e m_pbrTextureCache, liberado abaixo); so' os slots sao nossos.
     if (m_bindless)
@@ -764,6 +768,7 @@ void ModelRenderer::clear() {
     m_texReliefGrid.clear();
     m_groundTexRole.clear();
     m_pbrByTexSlot.clear();
+    m_pbrNameByTexSlot.clear();
     m_lastModels.clear();
     m_lastInstances.clear();
     m_prepared.clear();
@@ -1169,9 +1174,15 @@ uint32_t ModelRenderer::splatLayerSlot(const std::string& path, const std::strin
     const VkImageView view = pbr.valid() ? m_textureViewResolver(key) : VK_NULL_HANDLE;
     const uint32_t first = view != VK_NULL_HANDLE ? m_bindless->allocateRange(3) : 0;
     if (first != 0 && first + 2 <= 0x3FFFu) {
+        // PBR adiado: a copia mostra a imagem neutra e acompanha a troca do slot de origem.
+        VkImageView normalView = pbr.normal.view, mrahwView = pbr.mrahw.view;
+        if (pbr.normal.deferred) normalView = PbrDeferred::instance().placeholderView(m_ctx, true);
+        if (pbr.mrahw.deferred) mrahwView = PbrDeferred::instance().placeholderView(m_ctx, false);
         m_bindless->updateTexture(first, view, m_sampler);
-        m_bindless->updateTexture(first + 1, pbr.normal.view, m_sampler);
-        m_bindless->updateTexture(first + 2, pbr.mrahw.view, m_sampler);
+        m_bindless->updateTexture(first + 1, normalView, m_sampler);
+        m_bindless->updateTexture(first + 2, mrahwView, m_sampler);
+        if (pbr.normal.deferred) PbrDeferred::instance().addAlias(m_bindless, pbr.normal.index, first + 1);
+        if (pbr.mrahw.deferred) PbrDeferred::instance().addAlias(m_bindless, pbr.mrahw.index, first + 2);
         // Com streaming as tres imagens trocam de tamanho: o trio acompanha.
         if (TextureStreamer* ts = TextureStreamer::active_instance()) {
             ts->addAlias(color, first);
@@ -2473,6 +2484,10 @@ ModelRenderer::NodeSlots ModelRenderer::resolveNodeSlots(const ModelAsset& asset
         // pelo nome do MATERIAL, e a lista do F1 so' tem o nome
         // sintetico da imagem embutida - o preview nunca achava.
         if (texSlot != 0 && pbrSlots.valid()) m_pbrByTexSlot.emplace(texSlot, pbrSlots);
+        // Material com PBR entregue em disco: o relevo assado le' a altura
+        // dele, nao a sintetizada da cor (ver applyReliefs).
+        if (texSlot != 0 && !pbrName.empty() && pbrName != texName && resolvePbrTexturePaths(pbrName).valid)
+            m_pbrNameByTexSlot.emplace(texSlot, pbrName);
         if (out.firstTexName.empty() && !texName.empty()) out.firstTexName = texName;
     }
     const size_t nt = node.textureNames.size();
@@ -3642,6 +3657,15 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             std::unordered_map<uint32_t, std::string> slotNames;
             for (size_t t = 0; t < asset.textures.size(); ++t)
                 if (assetTexIndexToBindlessSlot[t] != 0) slotNames.emplace(assetTexIndexToBindlessSlot[t], asset.textures[t]);
+            // A textura de cor cujo material tem PBR em disco vai pelo nome do
+            // material: a fonte do relevo le' o _mrahw.png entregue. Pelo nome
+            // da imagem embutida ela nao o acha e sintetizava a altura pela
+            // rede (fila num mutex, ~10 s na vila fria, e outro relevo que o
+            // do mapa entregue).
+            for (auto& [slot, name] : slotNames) {
+                auto it = m_pbrNameByTexSlot.find(slot);
+                if (it != m_pbrNameByTexSlot.end()) name = it->second;
+            }
             applyReliefs(reliefTasks, asset.filePath, slotNames);
         }
         // Nós que compartilham geometria (geometryShareIndex >= 0) não

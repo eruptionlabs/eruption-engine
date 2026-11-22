@@ -1864,7 +1864,7 @@ private:
     // caminho de montagem, sem LOD, sem soldar vértices, sem GI nem chão).
     // Mapa lido em segundo plano, com os modelos ja' convertidos (MapLoad.cpp).
     struct PreparedMap;
-    static std::shared_ptr<PreparedMap> readPreparedMap(const std::string& name);
+    static std::shared_ptr<PreparedMap> readPreparedMap(const std::string& name, bool deferPbr);
     std::future<std::shared_ptr<PreparedMap>> m_warpJob;
     std::string m_warpJobMap;
     bool m_warpJobActive = false;

@@ -771,7 +771,7 @@ void Engine::logChunkStats(const WorldRegion& r, const WorldRegionLoad& load) {
                 pixB += et.pixels.size();
             }
     for (const auto& [name, b] : m_embeddedBaked)
-        bakedB += b.albedo.payload.size() + b.normal.payload.size() + b.mrahw.payload.size();
+        bakedB += b.albedo.payload.size() + b.normalBytes() + b.mrahwBytes();
     ERUPTION_LOG_WARN("[CHUNK] %s: heap em uso +%.1f MB; grade %.1f, malha do chão na CPU %.1f, nav %.1f MB "
                       "(do vizinho); no mapa aberto: imagens embutidas %.1f codificadas + %.1f RGBA, pacotes BC %.1f MB",
                       r.map.c_str(), heapMb() - r.heapAtLoad, mb(gridB), mb(chunkB), mb(navB), mb(imgB), mb(pixB),

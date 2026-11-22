@@ -56,6 +56,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <chrono>
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <cfloat>
 #include <unordered_map>
@@ -75,6 +76,37 @@
 // (movido para core/EngineInternal.hpp - o painel F3 tambem usa)
 
 namespace eruption {
+
+namespace {
+
+// Altura do relevo assado pelo MRAH-W entregue em disco (<nome>_mrahw.png,
+// canal A). `name` e' o nome do material (ModelRenderer::applyReliefs troca a
+// textura embutida por ele). Antes de ler o disco o relevo sintetizava a altura
+// da cor pela rede, uma textura por vez num mutex: na vila fria, ~10 s de
+// assado e um relevo diferente do mapa que o material usa no shader.
+bool reliefAlphaFromDisk(const std::string& name, bool pixels, std::vector<uint8_t>& alpha, int& w, int& h,
+                         uint64_t& id) {
+    if (name.empty() || name[0] == '#') return false;
+    const PbrTexturePathPair paths = resolvePbrTexturePaths(name);
+    if (!paths.valid || paths.mrahw.empty()) return false;
+    std::vector<uint8_t> bytes;
+    if (!vfs::read(paths.mrahw, bytes) || bytes.empty()) return false;
+    if (!pixels) {
+        id = reliefContentHash(bytes.data(), bytes.size());
+        return true;
+    }
+    const ImageData img = ImageUtils::loadFromMemoryRaw(bytes.data(), bytes.size());
+    if (!img.isValid() || img.channels != 4) return false;
+    w = img.width;
+    h = img.height;
+    const size_t n = size_t(w) * size_t(h);
+    if (img.pixels.size() < n * 4) return false;
+    alpha.resize(n);
+    for (size_t i = 0; i < n; ++i) alpha[i] = img.pixels[i * 4 + 3];
+    return true;
+}
+
+} // namespace
 
 // (PendingMesh/PendingUpload e as filas foram para core/EngineInternal.hpp)
 
@@ -477,7 +509,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         if (bytes) {
             *bytes = 0;
             for (const auto& [name, b] : m_embeddedBaked)
-                *bytes += b.albedo.byteSize() + b.mrahw.byteSize() + b.normal.byteSize();
+                *bytes += b.albedo.byteSize() + b.mrahwBytes() + b.normalBytes(); // adiado: os bytes do arquivo (mesma decisao de streaming)
         }
         return true;
     });
@@ -779,6 +811,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_modelRenderer.setReliefSource([this](const std::string& texture, bool pixels, std::vector<uint8_t>& alpha, int& w,
                                            int& h, uint64_t& id) {
         if (texture.empty()) return false;
+        if (reliefAlphaFromDisk(texture, pixels, alpha, w, h, id)) return true;
         std::string name = texture;
         auto it = m_embeddedBaked.find(name);
         if (it == m_embeddedBaked.end()) {
@@ -786,9 +819,11 @@ bool Engine::init(int width, int height, const std::string& title) {
             it = m_embeddedBaked.find(name);
             if (it == m_embeddedBaked.end() && !name.empty() && name[0] == '/') it = m_embeddedBaked.find(name.substr(1));
         }
-        if (it == m_embeddedBaked.end() || !it->second.mrahw.valid())
+        if (it == m_embeddedBaked.end() || !it->second.hasMrahw())
             return reliefAlphaFromAlbedo(texture, pixels, alpha, w, h, id);
-        const EtexData& e = it->second.mrahw;
+        // PBR adiado: o alivio do chao precisa dos bytes agora; le' so' este bloco.
+        const EtexData& e = it->second.mrahwData();
+        if (!e.valid()) return reliefAlphaFromAlbedo(texture, pixels, alpha, w, h, id);
         if (!pixels) {
             id = reliefContentHash(e.payload.data(), e.payload.size());
             return true;
@@ -825,8 +860,10 @@ bool Engine::init(int width, int height, const std::string& title) {
             if (it == m_embeddedBaked.end() && !name.empty() && name[0] == '/') it = m_embeddedBaked.find(name.substr(1));
             if (it == m_embeddedBaked.end()) return false;
         }
-        if (!it->second.mrahw.valid() || !decodeEtexMip0(it->second.mrahw, rgba)) return false;
-        w = int(it->second.mrahw.width); h = int(it->second.mrahw.height);
+        if (!it->second.hasMrahw()) return false;
+        const EtexData& mr = it->second.mrahwData(); // adiado: le' o bloco agora
+        if (!mr.valid() || !decodeEtexMip0(mr, rgba)) return false;
+        w = int(mr.width); h = int(mr.height);
         return true;
     });
     lodBridgeSetSlotIdentity([this](uint32_t slot, bool surface, uint64_t& id) {
@@ -939,7 +976,20 @@ bool Engine::init(int width, int height, const std::string& title) {
             it = m_embeddedBaked.find(alt);
             if (it == m_embeddedBaked.end()) return false;
         }
-        if (!it->second.mrahw.valid() || !it->second.normal.valid()) return false;
+        if (!it->second.hasMrahw() || !it->second.hasNormal()) return false;
+        if (it->second.pbrDeferred()) {
+            // PBR adiado (PbrDeferred.hpp): o bloco fica no arquivo; o slot nasce
+            // neutro e a imagem final entra no mesmo indice depois.
+            mrahw.deferred = it->second.mrahwSrc;
+            mrahw.width = static_cast<int>(it->second.mrahw.width);
+            mrahw.height = static_cast<int>(it->second.mrahw.height);
+            mrahw.channels = 4;
+            normal.deferred = it->second.normalSrc;
+            normal.width = static_cast<int>(it->second.normal.width);
+            normal.height = static_cast<int>(it->second.normal.height);
+            normal.channels = 4;
+            return true;
+        }
         mrahw.etex = it->second.mrahw;
         mrahw.width = static_cast<int>(mrahw.etex.width);
         mrahw.height = static_cast<int>(mrahw.etex.height);

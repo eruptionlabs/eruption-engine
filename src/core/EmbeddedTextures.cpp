@@ -181,13 +181,14 @@ bool Engine::embeddedMaterialImages(const std::string& image, std::vector<uint8_
     w[0] = pw;
     h[0] = ph;
     auto it = m_embeddedBaked.find(image);
-    if (it != m_embeddedBaked.end() && it->second.mrahw.valid() && it->second.normal.valid()) {
+    if (it != m_embeddedBaked.end() && it->second.hasMrahw() && it->second.hasNormal() &&
+        it->second.mrahwData().valid() && it->second.normalData().valid()) {
         w[1] = int(it->second.mrahw.width);
         h[1] = int(it->second.mrahw.height);
         w[2] = int(it->second.normal.width);
         h[2] = int(it->second.normal.height);
-        etexToRgba(it->second.mrahw, rgba[1]);
-        etexToRgba(it->second.normal, rgba[2]);
+        etexToRgba(it->second.mrahwData(), rgba[1]);
+        etexToRgba(it->second.normalData(), rgba[2]);
     } else {
         PbrTextureData mrahw, normal;
         if (synthesizePbrFromPixels(px, pw, ph, ch, mrahw, normal)) {

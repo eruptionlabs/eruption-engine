@@ -3,9 +3,11 @@
 #include "renderer/VulkanContext.hpp"
 #include "renderer/BindlessDescriptor.hpp"
 #include "utils/EtexLoader.hpp"
+#include "utils/PbrDeferredSource.hpp"
 #include <string>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace eruption {
@@ -21,14 +23,22 @@ struct PbrTextureSlot {
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation alloc = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
+    // PBR adiado (PbrDeferred.hpp): o slot mostra uma imagem neutra e a de
+    // verdade entra depois, no mesmo indice. image/view ficam nulos aqui: as
+    // imagens (a neutra e a final) sao do PbrDeferred, nao do slot.
+    bool deferred = false;
 
-    bool valid() const { return index != 0 && image != VK_NULL_HANDLE && view != VK_NULL_HANDLE; }
+    bool valid() const { return index != 0 && (deferred || (image != VK_NULL_HANDLE && view != VK_NULL_HANDLE)); }
 
     void reset(VulkanContext* ctx, BindlessDescriptor* bindless) {
         if (!ctx) return;
         if (bindless && index != 0) {
             bindless->freeSlot(index);
             index = 0;
+        }
+        if (deferred) {
+            deferred = false;
+            return;
         }
         if (view != VK_NULL_HANDLE) {
             vkDestroyImageView(ctx->device(), view, nullptr);
@@ -60,10 +70,13 @@ struct PbrTextureSlots {
 struct PbrTextureData {
     std::vector<uint8_t> pixels;
     EtexData etex; // baked BC1/BC3 (preferred over pixels when valid)
+    // Bloco ainda no arquivo do pacote (PBR adiado): sem pixels nem etex; o
+    // upload liga o slot a uma imagem neutra e o PbrDeferred traz o resto.
+    std::shared_ptr<PbrDeferredSource> deferred;
     int width = 0;
     int height = 0;
     int channels = 0;
-    bool valid() const { return (!pixels.empty() || etex.valid()) && width > 0 && height > 0; }
+    bool valid() const { return (!pixels.empty() || etex.valid() || deferred) && width > 0 && height > 0; }
 };
 
 struct PbrTexturePathPair {

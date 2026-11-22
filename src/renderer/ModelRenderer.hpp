@@ -1166,6 +1166,9 @@ private:
     std::unordered_map<uint32_t, std::unordered_map<std::string, ReliefGridInfo>> m_texReliefGrid; // slot -> arquivo
     std::unordered_map<uint32_t, int> m_groundTexRole;
     std::unordered_map<uint32_t, PbrTextureSlots> m_pbrByTexSlot;
+    // Slot de cor -> nome do material cujo PBR veio do disco (<nome>_mrahw.png).
+    // O relevo assado le' a altura por este nome (ver applyReliefs).
+    std::unordered_map<uint32_t, std::string> m_pbrNameByTexSlot;
     // Camadas do splat do chao com PBR: trio cor/normal/MRAH-W em s, s+1, s+2
     // (o mesmo contrato do TerrainPaint, kSplatHasNormal/kSplatHasMrahw).
     uint32_t splatLayerSlot(const std::string& path, const std::string& pbrName);
