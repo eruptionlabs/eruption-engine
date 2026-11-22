@@ -29,12 +29,17 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <set>
+#include <sstream>
 #if defined(__linux__)
 #include <malloc.h>
 #include <unistd.h>
@@ -56,6 +61,57 @@ constexpr double kAttachBudgetMs = 6.0;
 // mesmos nomes e o cache de texturas é por nome.
 std::string embeddedName(const std::string& n, const std::string& map) {
     return !n.empty() && n[0] == '#' ? "#" + map + "|" + n.substr(1) : n;
+}
+
+// Vizinhos declarados em cada arquivo de cena, guardados por (tamanho, data)
+// do arquivo. O grafo do mundo era refeito a cada troca relendo e rodando as
+// ~43 cenas do projeto: warp a frio pelo console, "mundo" 7,0 s parado no fio
+// principal (mapa urbano grande). Com o cache, so' o arquivo que mudou e' relido.
+struct NeighborCacheEntry {
+    uint64_t size = 0;
+    int64_t time = 0;
+    std::vector<SceneEdits::Neighbor> neighbors;
+};
+std::mutex g_neighborCacheMutex;
+std::map<std::string, NeighborCacheEntry> g_neighborCache;
+// Logo depois de um warp, o cache acabou de ser lido (warmWorldGraphCache,
+// numa thread): vale sem conferir o disco. Conferir era um stat por arquivo
+// no fio principal, e no NTFS cada um esperava na fila do driver.
+std::atomic<bool> g_worldCacheTrusted{false};
+std::atomic<bool> g_worldCacheComplete{false};
+struct GroundAreaEntry {
+    bool ok = false;
+    Vec2 lo{0.0f}, hi{0.0f};
+};
+std::mutex g_groundAreaMutex;
+std::map<std::string, GroundAreaEntry> g_groundAreaCache;
+
+std::vector<SceneEdits::Neighbor> cachedSceneNeighbors(const fs::path& file, const std::string& map) {
+    if (g_worldCacheTrusted.load()) {
+        std::lock_guard<std::mutex> lk(g_neighborCacheMutex);
+        const auto it = g_neighborCache.find(file.lexically_normal().generic_string());
+        if (it != g_neighborCache.end()) return it->second.neighbors;
+    }
+    // vfs::stat: o arquivo no disco ou, sem ele, a entrada do pacote .ecp.
+    uint64_t size = 0;
+    int64_t time = 0;
+    const bool ec = !vfs::stat(file.string(), size, time);
+    const std::string key = file.lexically_normal().generic_string();
+    {
+        std::lock_guard<std::mutex> lk(g_neighborCacheMutex);
+        const auto it = g_neighborCache.find(key);
+        if (!ec && it != g_neighborCache.end() && it->second.size == size && it->second.time == time)
+            return it->second.neighbors;
+    }
+    NeighborCacheEntry e;
+    e.size = size;
+    e.time = time;
+    SceneEdits edits;
+    std::string error;
+    if (SceneEdits::fileMentions(map, "neighbors") && edits.load(file, error)) e.neighbors = edits.neighbors;
+    std::lock_guard<std::mutex> lk(g_neighborCacheMutex);
+    g_neighborCache[key] = e;
+    return e.neighbors;
 }
 
 void namespaceEmbedded(ModelFile& model, const std::string& map) {
@@ -209,6 +265,25 @@ void keepTexSlots(std::map<std::pair<std::string, uint32_t>, std::vector<uint32_
 } // namespace
 
 bool Engine::mapGroundArea(const std::string& map, Vec2& lo, Vec2& hi) {
+    if (g_worldCacheTrusted.load()) {
+        std::lock_guard<std::mutex> lk(g_groundAreaMutex);
+        const auto it = g_groundAreaCache.find(map);
+        if (it != g_groundAreaCache.end()) {
+            lo = it->second.lo;
+            hi = it->second.hi;
+            return it->second.ok;
+        }
+    }
+    GroundAreaEntry e;
+    e.ok = readMapGroundArea(map, e.lo, e.hi);
+    lo = e.lo;
+    hi = e.hi;
+    std::lock_guard<std::mutex> lk(g_groundAreaMutex);
+    g_groundAreaCache[map] = e;
+    return e.ok;
+}
+
+bool Engine::readMapGroundArea(const std::string& map, Vec2& lo, Vec2& hi) {
     // Só o cabeçalho do .ter (o mesmo lugar onde o MapLoader procura).
     for (const fs::path& p : {project::game("assets/external") / map / (map + ".ter"),
                               project::game("assets/data") / (map + ".ter"),
@@ -283,7 +358,7 @@ void Engine::restartWorld() {
             }
     for (auto& o : old) {
         if (o.map.empty()) continue;
-        if (o.job.valid()) o.job.wait();
+        if (o.job.valid()) m_retiredRegionJobs.push_back(std::move(o.job));
         // Mapa que saiu do mundo: instâncias ficam desligadas para sempre.
         for (auto& c : m_characters)
             if (std::find(o.characters.begin(), o.characters.end(), c.name) != o.characters.end()) c.removed = true;
@@ -292,13 +367,68 @@ void Engine::restartWorld() {
 }
 
 void Engine::startWorld() {
+    static const bool kPhases = std::getenv("ERUPTION_TEST_LOAD_PHASES") != nullptr;
+    const auto t0 = std::chrono::steady_clock::now();
     m_worldNeighbors.clear();
-    SceneEdits e;
-    std::string error;
-    if (e.load(SceneEdits::pathFor(m_currentMapName), error))
-        m_worldNeighbors = e.neighbors;
+    m_worldNeighbors = cachedSceneNeighbors(SceneEdits::pathFor(m_currentMapName), m_currentMapName);
+    const auto t1 = std::chrono::steady_clock::now();
     if (m_worldStarted) restartWorld(); // arquivo de cena relido
     else buildWorldGraph();
+    // A chegada do warp acabou: dai' em diante (editor salvando a cena) o
+    // cache volta a conferir o disco, e os textos fixados saem.
+    setWorldCacheTrusted(false);
+    vfs::clearPinnedText();
+    if (kPhases) {
+        using ms = std::chrono::duration<double, std::milli>;
+        ERUPTION_LOG_WARN("[WORLDPHASE] cena do mapa %.1f ms, grafo %.1f ms", ms(t1 - t0).count(),
+                          ms(std::chrono::steady_clock::now() - t1).count());
+    }
+}
+
+// Arquivos de cena do projeto: os do disco e os que so' existem em pacote .ecp.
+void appendPackedScenes(std::vector<fs::path>& files, const fs::path& dir) {
+    if (!vfs::packsMounted()) return;
+    const std::string suffix = ".scene.luau";
+    std::set<std::string> have;
+    for (const fs::path& f : files) {
+        std::string n = f.filename().string();
+        for (char& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        have.insert(n);
+    }
+    for (const std::string& f : vfs::listPacked(dir.string())) {
+        const fs::path p(f);
+        const std::string fn = p.filename().string();
+        if (p.parent_path().lexically_normal() != dir.lexically_normal()) continue; // so' a pasta, sem subpastas
+        if (fn.size() <= suffix.size() || fn.compare(fn.size() - suffix.size(), suffix.size(), suffix) != 0) continue;
+        if (have.insert(fn).second) files.push_back(p);
+    }
+}
+
+// Le' (no cache acima) os vizinhos de todas as cenas, fora do fio principal:
+// o warp chama isto enquanto a tela esta' escura, e o buildWorldGraph da
+// chegada so' confere tamanho e data que o sistema ja' tem na memoria.
+void Engine::warmWorldGraphCache() {
+    std::error_code ec;
+    const fs::path dir = SceneEdits::pathFor("x").parent_path();
+    const std::string suffix = ".scene.luau";
+    std::vector<fs::path> files;
+    for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); ++it)
+        files.push_back(it->path());
+    if (ec && vfs::packsMounted()) ec.clear(); // projeto so' de pacotes: sem a pasta no disco
+    appendPackedScenes(files, dir);
+    for (const fs::path& file : files) {
+        const std::string fn = file.filename().string();
+        if (fn.size() <= suffix.size() || fn.compare(fn.size() - suffix.size(), suffix.size(), suffix) != 0) continue;
+        for (const auto& n : cachedSceneNeighbors(file, fn.substr(0, fn.size() - suffix.size()))) {
+            Vec2 lo, hi; // guardado no cache de mapGroundArea
+            mapGroundArea(n.map, lo, hi);
+        }
+    }
+    g_worldCacheComplete.store(!ec);
+}
+
+void Engine::setWorldCacheTrusted(bool trusted) {
+    g_worldCacheTrusted.store(trusted && g_worldCacheComplete.load());
 }
 
 void Engine::buildWorldGraph() {
@@ -320,18 +450,24 @@ void Engine::buildWorldGraph() {
                                                   Vec3(0.0f, 1.0f, 0.0f)));
         return Vec3(inv[3]);
     };
-    std::error_code ec;
-    const fs::path dir = SceneEdits::pathFor("x").parent_path();
-    for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); ++it) {
-        const std::string fn = it->path().filename().string();
+    std::vector<fs::path> sceneFiles;
+    if (g_worldCacheTrusted.load()) {
+        std::lock_guard<std::mutex> lk(g_neighborCacheMutex);
+        for (const auto& [key, entry] : g_neighborCache) sceneFiles.emplace_back(key);
+    } else {
+        std::error_code ec;
+        const fs::path dir = SceneEdits::pathFor("x").parent_path();
+        for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); ++it)
+            sceneFiles.push_back(it->path());
+        appendPackedScenes(sceneFiles, dir);
+    }
+    for (const fs::path& file : sceneFiles) {
+        const std::string fn = file.filename().string();
         const std::string suffix = ".scene.luau";
         if (fn.size() <= suffix.size() || fn.compare(fn.size() - suffix.size(), suffix.size(), suffix) != 0) continue;
         const std::string map = fn.substr(0, fn.size() - suffix.size());
         if (map == m_currentMapName) continue; // o aberto vale pelo que está na memória
-        SceneEdits e;
-        std::string error;
-        if (!SceneEdits::fileMentions(map, "neighbors") || !e.load(it->path(), error)) continue;
-        for (const auto& n : e.neighbors) {
+        for (const auto& n : cachedSceneNeighbors(file, map)) {
             addLink(map, n.map, n.offset, n.yaw);
             addLink(n.map, map, back(n), -n.yaw);
         }
@@ -375,6 +511,9 @@ void Engine::buildWorldGraph() {
 void Engine::updateWorld() {
     m_modelRenderer.pollReliefJobs();
     m_modelRenderer.pollRaycastBvhJobs();
+    m_retiredRegionJobs.erase(std::remove_if(m_retiredRegionJobs.begin(), m_retiredRegionJobs.end(),
+                                             [](auto& j) { return j.wait_for(std::chrono::seconds(0)) == std::future_status::ready; }),
+                              m_retiredRegionJobs.end());
     if (!m_worldStarted || m_regions.empty() || !m_currentMap) return;
     // Perto de quem: do jogador no jogo; da câmera no editor.
     Vec3 focus = m_camera.position();

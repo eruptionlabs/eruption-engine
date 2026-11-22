@@ -1364,6 +1364,7 @@ public:
     // Vizinhos declarados pelo mapa aberto (o editor grava no scene.luau).
     const std::vector<WorldNeighbor>& worldNeighbors() const { return m_worldNeighbors; }
     void setWorldNeighbors(std::vector<WorldNeighbor> neighbors);
+    static void warmWorldGraphCache(); // vizinhos de todas as cenas, para o warp (World.cpp)
     // Monta o mundo a partir do mapa aberto (depois de a cena dele estar aplicada).
     void startWorld();
     // Esconde os vizinhos e monta de novo (o arquivo de cena mudou).
@@ -1393,6 +1394,8 @@ public:
     bool worldBounds(Vec2& outMin, Vec2& outMax) const;
     // Lado e área de um mapa pela grade de altura (.ter); falso se não tem.
     static bool mapGroundArea(const std::string& map, Vec2& outMin, Vec2& outMax);
+    static bool readMapGroundArea(const std::string& map, Vec2& outMin, Vec2& outMax); // sem cache
+    static void setWorldCacheTrusted(bool trusted); // chegada de warp: cache do mundo sem conferir o disco
     float worldLoadDistance = 300.0f; // distância da borda em que o vizinho entra
     float worldReleaseSeconds = 30.0f; // fora de cena por tanto tempo: memória devolvida
     uint32_t worldVersion() const { return m_worldVersion; } // muda quando um vizinho entra/sai
@@ -1971,6 +1974,7 @@ private:
     void updateWarp();
     // preloadMap: leitura em curso, ultimo pedido e o mapa pronto para o warp.
     std::future<std::shared_ptr<PreparedMap>> m_preloadJob;
+    std::string m_preloadJobMap; // mapa que m_preloadJob realmente le' (m_preloadWanted pode ja' ser outro)
     // Arquivos que a cena e o scatter do mapa pedido acrescentam (modelos e
     // camadas de terreno), lidos fora do quadro: interpretar a cena de um mapa
     // de 12,7 mil pecas custava ~150 ms dentro do world.preload_map.
@@ -1978,6 +1982,26 @@ private:
         std::vector<std::string> models, layers;
     };
     std::future<PreloadLists> m_preloadListJob;
+    // Mapa da lista acima e os modelos da cena dele: o warp so' troca quando
+    // esses modelos ja' foram lidos (updateWarp), com a tela escura e os
+    // quadros andando, em vez de parar o fio principal na chegada lendo do HD.
+    std::string m_preloadListMap;
+    std::vector<std::string> m_preloadListModels;
+    // Leitura dos PBR soltos desses modelos (so' para o cache do sistema),
+    // antes da troca: na chegada eram 2,4 s de PBR lido do HD no fio principal.
+    std::future<void> m_warpPbrWarm;
+    // Futuros de std::async bloqueiam quem os destroi ate o job acabar. Job de um
+    // warp abandonado (outro pedido chegou) vai para ca e e' solto quando pronto,
+    // sem segurar o fio principal nem a carga do warp mais novo.
+    std::vector<std::function<bool()>> m_abandonedJobs;
+    template <class T> void parkJob(std::future<T>& f) {
+        if (!f.valid()) return;
+        auto held = std::make_shared<std::future<T>>(std::move(f));
+        m_abandonedJobs.emplace_back([held] { return held->wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
+    }
+    void reapAbandonedJobs();
+    void abandonWarp();
+    std::string m_warpPbrWarmMap;
     PreloadLists readPreloadLists(const std::string& name) const;
     std::string m_preloadWanted;
     std::shared_ptr<PreparedMap> m_preloaded;
@@ -2684,6 +2708,11 @@ private:
     uint32_t uploadSplatLayer(TextureResource& colorTex, TextureResource& normalTex, TextureResource& mrahwTex,
                               const std::filesystem::path& colorPath, const ImageData& color);
     std::vector<WorldRegion> m_regions;
+    // Leituras de vizinho de um mundo que saiu (restartWorld): terminam sozinhas
+    // e o resultado e' descartado em updateWorld. Esperar por elas na troca de
+    // mapa segurava o visor 3,6 s (de um mapa de porto para um mapa de floresta, pela tecla); o futuro de
+    // std::async bloqueia no destrutor, por isso fica guardado ate' ficar pronto.
+    std::vector<std::future<std::shared_ptr<WorldRegionLoad>>> m_retiredRegionJobs;
     void logChunkStats(const WorldRegion& r, const WorldRegionLoad& load); // ERUPTION_TEST_CHUNK_STATS (World.cpp)
     std::vector<TriggerArea> m_areas;
     std::vector<SceneRibbon> m_ribbons;

@@ -1150,6 +1150,25 @@ void Engine::renderImGui() {
             } ImGui::End();
         }
 
+        // ERUPTION_TEST_CONSOLE_FILE=<arquivo> (teste): quando o arquivo aparece,
+        // a linha dele roda como um comando digitado no console (so' "warp
+        // <mapa>"), pelo mesmo caminho do Enter, e o arquivo e' apagado. Mede a
+        // troca pelo console sem roubar o foco da janela de quem usa o PC.
+        if (static const char* e = std::getenv("ERUPTION_TEST_CONSOLE_FILE"); e && *e) {
+            static auto lastCheck = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            if (now - lastCheck > std::chrono::milliseconds(250)) {
+                lastCheck = now;
+                std::ifstream in(e);
+                std::string cmdStr;
+                if (in && std::getline(in, cmdStr)) {
+                    in.close();
+                    std::error_code ec;
+                    std::filesystem::remove(e, ec);
+                    if (cmdStr.find("warp ") == 0) m_pendingMapWarp = cmdStr.substr(5);
+                }
+            }
+        }
         // ERUPTION_TEST_F2_FILTER=<texto> (teste): abre o F2 ja' com a busca preenchida.
         if (static const char* e = std::getenv("ERUPTION_TEST_F2_FILTER"); e && *e) {
             static bool feito = false;

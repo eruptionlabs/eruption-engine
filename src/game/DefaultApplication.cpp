@@ -298,6 +298,22 @@ void DefaultApplication::onInit(Engine& engine) {
     // aplicada (onUpdate): on.start já encontra personagens e objetos acrescentados.
 }
 void DefaultApplication::onUpdate(float deltaTime) {
+    // ERUPTION_TEST_LONG_FRAMES=<ms> (teste): registra todo intervalo entre
+    // quadros acima do limite ("[QUADRO] N ms"), para medir quanto a janela
+    // fica parada numa troca de mapa feita pela interface (console, warp).
+    {
+        static const double kLimit = [] {
+            const char* e = std::getenv("ERUPTION_TEST_LONG_FRAMES");
+            return e ? std::atof(e) : 0.0;
+        }();
+        if (kLimit > 0.0) {
+            static auto last = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            const double ms = std::chrono::duration<double, std::milli>(now - last).count();
+            if (ms > kLimit) ERUPTION_LOG_WARN("[QUADRO] %.0f ms", ms);
+            last = now;
+        }
+    }
     if (m_baker) m_baker->update();
     if (m_engine && !m_mapSequence.empty() && --m_mapSequenceCountdown <= 0) {
         m_mapSequenceCountdown = m_mapSequenceFrames;
@@ -370,8 +386,17 @@ void DefaultApplication::onUpdate(float deltaTime) {
         if (m_engine && m_engine->takeMapRequest(request)) {
             m_hasMapSpawn = request.hasSpawn;
             m_mapSpawn = request.spawn;
-            m_sceneEditsMap.clear(); // mesmo mapa de novo também reaplica a cena
-            m_engine->loadMap(request.map);
+            if (request.map == m_engine->currentMapName()) {
+                m_sceneEditsMap.clear(); // mesmo mapa de novo também reaplica a cena
+                m_engine->loadMap(request.map);
+            } else {
+                // Outro mapa: pelo warp (leitura numa thread, tela escurece e
+                // volta). O loadMap aqui lia tudo no fio principal com a janela
+                // parada; no visor (world.load_map pela tecla) a primeira visita
+                // a um mapa congelava a janela pelo tempo inteiro da leitura do
+                // HD. A cena do mapa novo entra abaixo quando ele vira o atual.
+                m_engine->setPendingMapWarp(request.map);
+            }
         }
         // Edições feitas no editor (assets/scenes/<mapa>.scene.luau) valem no
         // jogo: aplicadas uma vez, depois que o jogador nasce no mapa.

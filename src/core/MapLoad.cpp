@@ -784,7 +784,13 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
                                           SceneEdits::fileMentions(name, "terrain") ||
                                           SceneEdits::fileMentions(name, "neighbors")); // bordas costuradas
     m_modelRenderer.resetResolveStats();
+    // Relevo do chao em segundo plano (pollReliefJobs), como nos vizinhos do
+    // mundo continuo: no fio principal ele segurava a troca de mapa 0,6-0,8 s
+    // mesmo vindo do cache do relevo (441 MB num mapa de porto, 158 MB num de floresta); assim
+    // ele corre junto com a montagem dos modelos da cena, que vem logo depois.
+    m_modelRenderer.setReliefDeferred(true);
     m_modelRenderer.loadMapModels(std::move(genericModels), genericInstances, modelCenterX, modelCenterZ);
+    m_modelRenderer.setReliefDeferred(false);
     {
         const auto& rs = m_modelRenderer.resolveStats();
         ERUPTION_LOG_WARN("Engine::loadMap: texturas novas %u em %.0f ms, PBR %u em %.0f ms", rs.tex, rs.texMs, rs.pbr,
@@ -1729,8 +1735,14 @@ bool Engine::preloadMap(const std::string& name) {
     updatePreload();
     // O que a cena e o scatter do destino acrescentam, lido numa thread; o
     // updatePreload dispara os preloads quando a lista chega.
-    if (!m_preloadListJob.valid())
+    if (m_preloadListJob.valid() && m_preloadListMap != name &&
+        m_preloadListJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        parkJob(m_preloadListJob); // lista de outro mapa ainda lendo: solta, nao trava a deste
+    if (!m_preloadListJob.valid() && m_preloadListMap != name) {
+        m_preloadListMap = name;
+        m_preloadListModels.clear();
         m_preloadListJob = platform::runAsync([this, name] { return readPreloadLists(name); });
+    }
     return true;
 }
 
@@ -1763,6 +1775,7 @@ void Engine::updatePreload() {
         const PreloadLists lists = m_preloadListJob.get();
         if (!lists.layers.empty()) preloadSplatLayers(lists.layers);
         for (const std::string& f : lists.models) preloadModel(f);
+        m_preloadListModels = lists.models;
     }
     if (m_preloadJob.valid() && m_preloadJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         std::shared_ptr<PreparedMap> done = m_preloadJob.get();
@@ -1822,11 +1835,56 @@ void Engine::endWarpFade() {
     m_warpFading = false;
 }
 
+void Engine::reapAbandonedJobs() {
+    for (size_t i = 0; i < m_abandonedJobs.size();) {
+        if (m_abandonedJobs[i]()) m_abandonedJobs.erase(m_abandonedJobs.begin() + static_cast<std::ptrdiff_t>(i));
+        else ++i;
+    }
+}
+
+// O warp mais novo sempre ganha: o anterior perde o resultado e os jobs dele
+// vao para o cemiterio (nao se espera um mapa pesado so' para descarta-lo).
+void Engine::abandonWarp() {
+    ERUPTION_LOG_WARN("Warp: %s abandoned, %s requested", m_warpJobMap.c_str(), m_pendingMapWarp.c_str());
+    parkJob(m_warpJob);
+    parkJob(m_warpPbrWarm);
+    parkJob(m_preloadListJob);
+    m_warpJobActive = false;
+    m_preloadListMap.clear();
+    m_preloadListModels.clear();
+    m_warpPbrWarmMap.clear();
+    setWorldCacheTrusted(false);
+}
+
 void Engine::updateWarp() {
+    reapAbandonedJobs();
+    if (m_warpJobActive && !m_pendingMapWarp.empty()) abandonWarp();
     if (!m_warpJobActive && m_pendingMapWarp.empty()) {
         const std::string next = testPreloadTarget(m_currentMapName);
         if (!next.empty() && next != m_preloadWanted && !(m_preloaded && m_preloaded->name == next)) preloadMap(next);
     }
+#ifndef ERUPTION_DEV_DISABLED
+    // ERUPTION_TEST_PRELOAD_WARP="A,B[,C]" (teste; fora do build final): no primeiro
+    // quadro pre-carrega o mapa A e logo pede o warp para B (e, com C, 30 quadros depois para C, com o warp de B em voo), a corrida
+    // da tela de login (servidor manda o personagem para outro mapa).
+    static const char* const kRace = std::getenv("ERUPTION_TEST_PRELOAD_WARP");
+    static bool s_raceDone = false;
+    static std::string s_raceLast;
+    static int s_raceFrames = 0;
+    if (kRace && !s_raceDone && !m_currentMapName.empty()) {
+        s_raceDone = true;
+        const std::string spec = kRace;
+        const size_t comma = spec.find(',');
+        if (comma != std::string::npos) {
+            preloadMap(spec.substr(0, comma));
+            const size_t c2 = spec.find(',', comma + 1);
+            m_pendingMapWarp = spec.substr(comma + 1, c2 == std::string::npos ? c2 : c2 - comma - 1);
+            // "C,A,B": B (o ultimo) e' pedido s_raceFrames quadros depois, com o warp de A em voo.
+            if (c2 != std::string::npos) { s_raceLast = spec.substr(c2 + 1); s_raceFrames = 30; }
+        }
+    }
+    if (s_raceFrames > 0 && --s_raceFrames == 0) m_pendingMapWarp = s_raceLast;
+#endif
     updatePreload();
     // Um pedido por vez: outro pedido durante a leitura espera ela acabar e
     // o resultado velho é jogado fora. O que o preloadMap ja' leu (ou esta'
@@ -1843,18 +1901,84 @@ void Engine::updateWarp() {
             m_warpJob = ready.get_future();
             m_preloadWanted.clear();
             ERUPTION_LOG_WARN("Warp: %s already read by preload", map.c_str());
-        } else if (m_preloadJob.valid() && m_preloadWanted == map) {
+        } else if (m_preloadJob.valid() && m_preloadJobMap == map) {
+            // So' adota a leitura que e' deste mapa: com a pre-carga de outro
+            // mapa ainda rodando (preset lento), adotar trazia o terreno errado.
             m_warpJob = std::move(m_preloadJob);
             m_preloadWanted.clear();
             ERUPTION_LOG_WARN("Warp: waiting for the preload of %s", map.c_str());
+        } else if (preloadMap(map) && m_preloadJob.valid() && m_preloadJobMap == map) {
+            // Warp sem preload antes (console, world.load_map): vira um preload
+            // agora, que le' o mapa E os modelos da cena dele numa thread.
+            m_warpJob = std::move(m_preloadJob);
+            m_preloadWanted.clear();
+            ERUPTION_LOG_WARN("Warp: reading %s and its scene in the background", map.c_str());
         } else {
-            m_warpJob = platform::runAsync([map] { return readPreparedMap(map); });
+            // Pre-carga de outro mapa em curso: o warp le' o seu, e o pedido
+            // da pre-carga (agora do mapa do warp) sai para nao reler depois.
+            if (m_preloadWanted == map) m_preloadWanted.clear();
+            m_warpJob = platform::runAsync([map, defer] { return readPreparedMap(map, defer); });
             ERUPTION_LOG_WARN("Warp: reading %s in the background", map.c_str());
         }
         beginWarpFade();
         return;
     }
     if (!m_warpJobActive || m_warpJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    // Modelos da cena do destino ainda no disco: espera aqui, com os quadros
+    // andando. Na chegada a cena esperava por eles parada no fio principal:
+    // warp a frio pelo console, um quadro de 39,7 s (mapa urbano grande).
+    if (m_preloadListMap == m_warpJobMap) {
+        if (m_preloadListJob.valid()) return;
+        for (const std::string& f : m_preloadListModels) {
+            const auto it = m_modelPreloads.find(f);
+            if (it != m_modelPreloads.end() && it->second.model.valid() &&
+                it->second.model.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                return;
+        }
+        if (m_warpPbrWarmMap != m_warpJobMap) {
+            m_warpPbrWarmMap = m_warpJobMap;
+            parkJob(m_warpPbrWarm);
+            std::vector<std::string> names;
+            for (const std::string& f : m_preloadListModels) {
+                const auto it = m_modelPreloads.find(f);
+                if (it == m_modelPreloads.end() || !it->second.model.valid()) continue;
+                const std::shared_ptr<ModelFile> model = it->second.model.get();
+                if (!model) continue;
+                for (const auto& node : model->nodes) {
+                    for (const auto& n : node.pbrTextureNames) if (!n.empty()) names.push_back(n);
+                    for (const auto& n : node.textureNames) if (!n.empty()) names.push_back(n);
+                }
+            }
+            // Cena e scatter do destino lidos aqui e fixados no vfs: a chegada
+            // (SceneEdits, loadScatter, startWorld) os acha na memoria.
+            const std::string scenePath = SceneEdits::pathFor(m_warpJobMap).string();
+            std::filesystem::path scatterPath = SceneEdits::pathFor(m_warpJobMap);
+            scatterPath.replace_extension();
+            scatterPath.replace_extension(".scatter.luau");
+            m_warpPbrWarm = platform::runAsync([names, scenePath, scatterPath = scatterPath.string()] {
+                vfs::clearPinnedText();
+                for (const std::string& file : {scenePath, scatterPath}) {
+                    std::string text;
+                    const bool found = vfs::readText(file, text);
+                    vfs::pinText(file, found, std::move(text));
+                }
+                warmWorldGraphCache();
+                std::vector<char> buf(1 << 20);
+                for (const std::string& n : names) {
+                    const PbrTexturePathPair paths = resolvePbrTexturePaths(n);
+                    if (!paths.valid) continue;
+                    // O que a carga abre e' o .etex ao lado (o PNG e' a fonte).
+                    for (const std::string& file : {paths.mrahw + ".etex", paths.normal + ".etex"}) {
+                        std::ifstream in(file, std::ios::binary);
+                        while (in.read(buf.data(), static_cast<std::streamsize>(buf.size()))) {}
+                    }
+                }
+            });
+            return;
+        }
+        if (m_warpPbrWarm.valid() && m_warpPbrWarm.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+        setWorldCacheTrusted(true); // desliga no fim do startWorld
+    }
     if (m_warpFading && m_uiCanvas.fading()) return; // troca so' com a tela ja' preta
     std::shared_ptr<PreparedMap> prepared = m_warpJob.get();
     m_warpJobActive = false;
@@ -1862,6 +1986,11 @@ void Engine::updateWarp() {
     if (!m_pendingMapWarp.empty()) return; // pediram outro mapa no meio: começa no próximo frame
     if (!prepared) {
         ERUPTION_LOG_ERROR("Warp: could not read map %s", name.c_str());
+        return;
+    }
+    // Nenhum resultado de carga vale se o mapa dele nao e' o alvo do warp.
+    if (prepared->name != name) {
+        ERUPTION_LOG_ERROR("Warp: result is for %s, target is %s; discarded", prepared->name.c_str(), name.c_str());
         return;
     }
     if (m_preloaded && m_preloaded->name == name) m_preloaded.reset();
@@ -1879,6 +2008,10 @@ void Engine::updateWarp() {
         return;
     }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (m_preloadListMap == name) { // lista usada; a proxima ida a este mapa le' de novo
+        m_preloadListMap.clear();
+        m_preloadListModels.clear();
+    }
     TelemetryExporter::recordMapSwap(name, ms);
     ERUPTION_LOG_WARN("Warp: %s in place (%.0f ms on the main thread)", name.c_str(), ms);
     m_framesAfterSwap = 0;

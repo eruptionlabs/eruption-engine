@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <chrono>
 #include <sstream>
 
 namespace eruption {
@@ -148,12 +149,15 @@ int Engine::loadScatter(const std::string& map, const Mat4& place) {
         return v;
     };
     int total = 0;
+    double groupMs = 0.0, addMs = 0.0; // ERUPTION_TEST_LOAD_PHASES
     const int groups = lua_objlen(L, -1);
     for (int gi = 1; gi <= groups; ++gi) {
         lua_rawgeti(L, -1, gi);
         const int t = lua_gettop(L);
         if (lua_istable(L, t)) {
+            const auto tg = std::chrono::steady_clock::now();
             const int group = scatterGroup(str(t, "file"), str(t, "node"), str(t, "prefab"));
+            groupMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tg).count();
             std::vector<Mat4> roots;
             lua_getfield(L, t, "items");
             if (group >= 0 && lua_istable(L, -1)) {
@@ -175,11 +179,15 @@ int Engine::loadScatter(const std::string& map, const Mat4& place) {
                 }
             }
             lua_pop(L, 1);
+            const auto ta = std::chrono::steady_clock::now();
             total += int(scatterAdd(group, roots).size());
+            addMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - ta).count();
         }
         lua_pop(L, 1);
     }
     lua_close(L);
+    if (std::getenv("ERUPTION_TEST_LOAD_PHASES"))
+        ERUPTION_LOG_WARN("[SCATTERPHASE] modelos dos grupos %.1f ms, instancias %.1f ms", groupMs, addMs);
     ERUPTION_LOG_WARN("Scatter: %d painted objects in %zu groups (%s)", total, m_scatter.size(),
                       scatterPathFor(map).string().c_str());
     return total;
