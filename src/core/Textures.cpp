@@ -15,6 +15,7 @@
 #include "core/JobSystem.hpp"
 #include "utils/Profiler.hpp"
 #include "utils/EtexLoader.hpp"
+#include "utils/BcCompressor.hpp"
 #include "utils/TextureFormatPolicy.hpp"
 #include "renderer/LodSystemBridge.hpp"
 #include "utils/ImageUtils.hpp"

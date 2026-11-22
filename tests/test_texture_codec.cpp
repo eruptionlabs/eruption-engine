@@ -442,6 +442,27 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Geometria do bloco (leitura em duas fases do pacote, PbrDeferred): o tamanho
+    // de cada mip que a formula (blockInfo) da e' o que o codificador grava, nas
+    // dimensoes que nao sao multiplo do bloco e nos mips de 1 a 3 texels.
+    std::printf("== geometria de bloco x codificador ==\n");
+    {
+        const VkFormat fs[] = {VK_FORMAT_BC1_RGBA_UNORM_BLOCK, VK_FORMAT_BC3_UNORM_BLOCK, VK_FORMAT_BC7_UNORM_BLOCK,
+                               VK_FORMAT_ASTC_4x4_UNORM_BLOCK, VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK};
+        const int dims[][2] = {{64, 64}, {300, 200}, {17, 5}, {4, 4}, {3, 2}, {1, 1}, {1024, 1024}};
+        for (VkFormat f : fs) {
+            if (!texenc::available(f)) continue;
+            const texfmt::BlockInfo bi = texfmt::blockInfo(f);
+            CHECK(bi.bytes > 0);
+            for (const auto& d : dims) {
+                std::vector<uint8_t> img = synth(d[0], d[1], 5), blocks;
+                CHECK(texenc::encodeLevel(f, img.data(), d[0], d[1], blocks));
+                const size_t expect = size_t((d[0] + int(bi.w) - 1) / int(bi.w)) * size_t((d[1] + int(bi.h) - 1) / int(bi.h)) * bi.bytes;
+                CHECK(blocks.size() == expect);
+            }
+        }
+    }
+
     std::printf(g_falhas ? "HOUVE FALHA (%d)\n" : "OK\n", g_falhas);
     return g_falhas ? 1 : 0;
 }

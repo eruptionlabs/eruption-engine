@@ -34,6 +34,23 @@ public:
     // e a ordem dos bufferViews. Devolve quantos bytes saíram (0: nada mudou).
     static size_t stripEmbeddedImages(std::vector<uint8_t>& glb, const std::string& fileName,
                                       const std::function<bool(const std::string&)>& covered);
+
+    // O inverso de stripEmbeddedImages, para o extrator do .tuf: cada imagem
+    // que ainda e' so' o marcador (ERUPSTRP) volta a ter bytes, os que
+    // `bytesFor(nome da imagem)` devolve (vazio = continua o marcador). As
+    // imagens passam a declarar "image/png". Devolve quantas foram repostas.
+    static size_t restoreEmbeddedImages(std::vector<uint8_t>& glb,
+                                        const std::function<std::vector<uint8_t>(const std::string&)>& bytesFor);
+
+    // Imagens em arquivo (uri) cujo nome `covered` aceita: o pacote de texturas
+    // as traz em formato de bloco, entao o arquivo nao precisa ir no .tuf. Marca
+    // cada uma no JSON do .glb (extras.eruption_bc_only) para o parse aceitar a
+    // falta do arquivo, e devolve as uris em `uris`. Devolve quantas marcou.
+    static size_t markBcOnlyUriImages(std::vector<uint8_t>& glb, const std::function<bool(const std::string&)>& covered,
+                                      std::vector<std::string>* uris);
+    // Reescreve as imagens marcadas por markBcOnlyUriImages como PNG (uri -> bytes), para extrair.
+    // Devolve as uris marcadas com o nome que embeddedImageName da' a cada uma.
+    static std::vector<std::pair<std::string, std::string>> bcOnlyUriImages(const std::vector<uint8_t>& glb);
 };
 
 } // namespace eruption

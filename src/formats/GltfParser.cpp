@@ -1954,4 +1954,153 @@ size_t GltfParser::stripEmbeddedImages(std::vector<uint8_t>& glb, const std::str
     return saved;
 }
 
+namespace {
+
+// Bloco JSON de um .glb (nullptr: invalido).
+bool glbJsonRange(const std::vector<uint8_t>& glb, size_t& jsonLen) {
+    constexpr uint32_t kJson = 0x4E4F534Au;
+    uint32_t len = 0, type = 0;
+    if (glb.size() < 28 || std::memcmp(glb.data(), "glTF", 4) != 0) return false;
+    std::memcpy(&len, glb.data() + 12, 4);
+    std::memcpy(&type, glb.data() + 16, 4);
+    if (type != kJson || 20 + size_t(len) > glb.size()) return false;
+    jsonLen = len;
+    return true;
+}
+
+} // namespace
+
+size_t GltfParser::markBcOnlyUriImages(std::vector<uint8_t>& glb, const std::function<bool(const std::string&)>& covered,
+                                       std::vector<std::string>* uris) {
+    using ojson = nlohmann::ordered_json;
+    size_t jsonLen = 0;
+    if (!glbJsonRange(glb, jsonLen)) return 0;
+    ojson doc = ojson::parse(glb.begin() + 20, glb.begin() + 20 + jsonLen, nullptr, false);
+    if (doc.is_discarded() || !doc.contains("images") || !doc["images"].is_array()) return 0;
+    size_t n = 0;
+    ojson& images = doc["images"];
+    for (size_t i = 0; i < images.size(); ++i) {
+        ojson& img = images[i];
+        if (!img.contains("uri") || !img["uri"].is_string()) continue;
+        const std::string uri = img["uri"].get<std::string>();
+        if (uri.compare(0, 5, "data:") == 0 || !covered(embeddedImageName(i, uri, img.value("name", std::string())))) continue;
+        img["extras"]["eruption_bc_only"] = true;
+        if (uris) uris->push_back(uri);
+        ++n;
+    }
+    if (n == 0) return 0;
+    std::string text = doc.dump();
+    while (text.size() % 4) text.push_back(' ');
+    std::vector<uint8_t> out;
+    out.reserve(glb.size() + text.size());
+    out.insert(out.end(), glb.begin(), glb.begin() + 12);
+    const uint32_t tl = static_cast<uint32_t>(text.size());
+    out.resize(out.size() + 4);
+    std::memcpy(out.data() + 12, &tl, 4);
+    out.insert(out.end(), glb.begin() + 16, glb.begin() + 20);
+    out.insert(out.end(), text.begin(), text.end());
+    out.insert(out.end(), glb.begin() + 20 + static_cast<std::ptrdiff_t>(jsonLen), glb.end());
+    const uint32_t total = static_cast<uint32_t>(out.size());
+    std::memcpy(out.data() + 8, &total, 4);
+    glb.swap(out);
+    return n;
+}
+
+std::vector<std::pair<std::string, std::string>> GltfParser::bcOnlyUriImages(const std::vector<uint8_t>& glb) {
+    using ojson = nlohmann::ordered_json;
+    std::vector<std::pair<std::string, std::string>> out;
+    size_t jsonLen = 0;
+    if (!glbJsonRange(glb, jsonLen)) return out;
+    const ojson doc = ojson::parse(glb.begin() + 20, glb.begin() + 20 + jsonLen, nullptr, false);
+    if (doc.is_discarded() || !doc.contains("images") || !doc["images"].is_array()) return out;
+    const ojson& images = doc["images"];
+    for (size_t i = 0; i < images.size(); ++i) {
+        const ojson& img = images[i];
+        if (!img.contains("uri") || !img["uri"].is_string() || !img.contains("extras") || !img["extras"].value("eruption_bc_only", false)) continue;
+        const std::string uri = img["uri"].get<std::string>();
+        out.emplace_back(uri, embeddedImageName(i, uri, img.value("name", std::string())));
+    }
+    return out;
+}
+
+size_t GltfParser::restoreEmbeddedImages(std::vector<uint8_t>& glb,
+                                         const std::function<std::vector<uint8_t>(const std::string&)>& bytesFor) {
+    using ojson = nlohmann::ordered_json;
+    constexpr uint32_t kJson = 0x4E4F534Au, kBin = 0x004E4942u;
+    if (glb.size() < 28 || std::memcmp(glb.data(), "glTF", 4) != 0) return 0;
+    uint32_t jsonLen = 0, jsonType = 0, binLen = 0, binType = 0;
+    std::memcpy(&jsonLen, glb.data() + 12, 4);
+    std::memcpy(&jsonType, glb.data() + 16, 4);
+    const size_t binHead = 20 + size_t(jsonLen);
+    if (jsonType != kJson || binHead + 8 > glb.size()) return 0;
+    std::memcpy(&binLen, glb.data() + binHead, 4);
+    std::memcpy(&binType, glb.data() + binHead + 4, 4);
+    const size_t binStart = binHead + 8;
+    if (binType != kBin || binStart + binLen > glb.size()) return 0;
+    ojson doc = ojson::parse(glb.begin() + 20, glb.begin() + 20 + jsonLen, nullptr, false);
+    if (doc.is_discarded() || !doc.contains("images") || !doc.contains("bufferViews")) return 0;
+    ojson& views = doc["bufferViews"];
+    ojson& images = doc["images"];
+    if (!views.is_array() || !images.is_array()) return 0;
+
+    // Vista -> bytes que a substituem (so' as imagens cujo conteudo e' o marcador).
+    std::vector<std::vector<uint8_t>> repl(views.size());
+    size_t restored = 0;
+    for (size_t i = 0; i < images.size(); ++i) {
+        ojson& img = images[i];
+        if (!img.contains("bufferView") || !img["bufferView"].is_number_unsigned()) continue;
+        const size_t v = img["bufferView"].get<size_t>();
+        if (v >= views.size() || views[v].value("buffer", size_t(0)) != 0) continue;
+        const size_t off = views[v].value("byteOffset", size_t(0)), len = views[v].value("byteLength", size_t(0));
+        if (off + len > binLen || len < kStrippedFixed || std::memcmp(glb.data() + binStart + off, kStrippedMagic, 8) != 0) continue;
+        std::vector<uint8_t> bytes = bytesFor(embeddedImageName(i, "", img.value("name", std::string())));
+        if (bytes.empty()) continue;
+        repl[v] = std::move(bytes);
+        img["mimeType"] = "image/png";
+        ++restored;
+    }
+    if (restored == 0) return 0;
+
+    std::vector<uint8_t> bin;
+    bin.reserve(binLen);
+    for (size_t v = 0; v < views.size(); ++v) {
+        if (views[v].value("buffer", size_t(0)) != 0) continue;
+        const size_t off = views[v].value("byteOffset", size_t(0)), len = views[v].value("byteLength", size_t(0));
+        const size_t at = (bin.size() + 15) / 16 * 16 + off % 16;
+        bin.resize(at, 0);
+        if (!repl[v].empty()) bin.insert(bin.end(), repl[v].begin(), repl[v].end());
+        else bin.insert(bin.end(), glb.data() + binStart + off, glb.data() + binStart + off + len);
+        views[v]["byteOffset"] = at;
+        views[v]["byteLength"] = bin.size() - at;
+    }
+    if (doc.contains("buffers") && doc["buffers"].is_array() && !doc["buffers"].empty())
+        doc["buffers"][0]["byteLength"] = bin.size();
+    std::string text = doc.dump();
+    while (text.size() % 4) text.push_back(' ');
+    while (bin.size() % 4) bin.push_back(0);
+
+    const size_t restAt = binStart + (size_t(binLen) + 3) / 4 * 4;
+    const size_t rest = restAt < glb.size() ? glb.size() - restAt : 0;
+    std::vector<uint8_t> out;
+    out.reserve(12 + 8 + text.size() + 8 + bin.size() + rest);
+    auto put32 = [&out](uint32_t x) {
+        const size_t o = out.size();
+        out.resize(o + 4);
+        std::memcpy(out.data() + o, &x, 4);
+    };
+    out.insert(out.end(), glb.begin(), glb.begin() + 8);
+    put32(0);
+    put32(static_cast<uint32_t>(text.size()));
+    put32(kJson);
+    out.insert(out.end(), text.begin(), text.end());
+    put32(static_cast<uint32_t>(bin.size()));
+    put32(kBin);
+    out.insert(out.end(), bin.begin(), bin.end());
+    if (rest) out.insert(out.end(), glb.begin() + static_cast<std::ptrdiff_t>(restAt), glb.end());
+    const uint32_t total = static_cast<uint32_t>(out.size());
+    std::memcpy(out.data() + 8, &total, 4);
+    glb.swap(out);
+    return restored;
+}
+
 } // namespace eruption
