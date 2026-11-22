@@ -4066,7 +4066,14 @@ float ModelRenderer::raycastInstance(uint32_t index, const Vec3& origin, const V
     for (const auto& m : m_lastModels)
         if (m.filePath == inst.assetPath) { asset = &m; break; }
     if (!asset || inst.nodeIndex >= asset->nodes.size()) return -1.0f;
-    const auto& node = asset->nodes[inst.nodeIndex];
+    // No' que compartilha geometria (instancia de mesh repetida ou duplicata
+    // byte-a-byte) nao guarda vertices: a malha esta' no dono. Sem seguir o
+    // dono, so' a 1a instancia de cada mesh tinha raio e as demais nunca
+    // tapavam nada (see_through, camera.collide, piso).
+    uint32_t geoIndex = inst.nodeIndex;
+    const int32_t share = asset->nodes[geoIndex].geometryShareIndex;
+    if (share >= 0 && size_t(share) < asset->nodes.size()) geoIndex = uint32_t(share);
+    const auto& node = asset->nodes[geoIndex];
     if (node.vertices.empty()) return -1.0f;
     // Raio no espaco do modelo; t continua valendo no mundo porque a direcao
     // local nao e' normalizada.
@@ -4078,7 +4085,7 @@ float ModelRenderer::raycastInstance(uint32_t index, const Vec3& origin, const V
     // e world.path chamam isto centenas de vezes por consulta; custava
     // ~1,2 ms por chamada numa malha de dezenas de milhares de triangulos,
     // como uma montanha de terreno grande).
-    const std::string key = inst.assetPath + "#" + std::to_string(inst.nodeIndex);
+    const std::string key = inst.assetPath + "#" + std::to_string(geoIndex);
     auto it = m_raycastBvh.find(key);
     if (it == m_raycastBvh.end()) {
         // Terreno grande: se warmRaycastBvh ja' pos esta chave pra construir em
@@ -4112,11 +4119,15 @@ void ModelRenderer::warmRaycastBvh() {
         for (const auto& m : m_lastModels)
             if (m.filePath == inst.assetPath) { asset = &m; break; }
         if (!asset || inst.nodeIndex >= asset->nodes.size()) continue;
-        const ModelNode& node = asset->nodes[inst.nodeIndex];
+        // geometria compartilhada: aquece o BVH do dono (ver raycastInstance)
+        uint32_t geoIndex = inst.nodeIndex;
+        const int32_t share = asset->nodes[geoIndex].geometryShareIndex;
+        if (share >= 0 && size_t(share) < asset->nodes.size()) geoIndex = uint32_t(share);
+        const ModelNode& node = asset->nodes[geoIndex];
         if (node.vertices.empty()) continue;
         const size_t triCount = node.indices.empty() ? node.vertices.size() / 3 : node.indices.size() / 3;
         if (triCount < kRaycastBvhWarmTris) continue;
-        const std::string key = inst.assetPath + "#" + std::to_string(inst.nodeIndex);
+        const std::string key = inst.assetPath + "#" + std::to_string(geoIndex);
         if (m_raycastBvh.count(key)) continue;
         if (std::any_of(m_raycastBvhJobs.begin(), m_raycastBvhJobs.end(),
                         [&](const RaycastBvhJob& j) { return j.key == key; }))
