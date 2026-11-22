@@ -2,6 +2,9 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <cfloat>
 #include "script/ScriptApi.hpp"
+#include "script/ApiFilter.hpp"
+#include "core/Platform.hpp"
+#include "utils/AssetVfs.hpp"
 
 #include "script/ScriptHost.hpp"
 #include "script/NativeModule.hpp"
@@ -2596,10 +2599,24 @@ int perf_bandwidth(lua_State* L) {
     return 1;
 }
 
+// Funcao que o export cortou (ERUPTION_API_FILTER, src/script/ApiFilter.hpp):
+// o script que a chama recebe um erro claro. O upvalue e' "global.funcao".
+int api_not_exported(lua_State* L) {
+    luaL_error(L, "funcao nao exportada: %s (este jogo foi exportado so' com a API que os scripts usam; "
+                  "para mante-la, liste-a em export_keep.json)",
+               lua_tostring(L, lua_upvalueindex(1)));
+    return 0;
+}
+
 void lib(lua_State* L, const char* name, const luaL_Reg* fns) {
     lua_newtable(L);
     for (const luaL_Reg* f = fns; f->name; ++f) {
-        lua_pushcfunction(L, f->func, f->name);
+        if (f->func) {
+            lua_pushcfunction(L, f->func, f->name);
+        } else {
+            lua_pushstring(L, (std::string(name) + "." + f->name).c_str());
+            lua_pushcclosurek(L, api_not_exported, f->name, 1, nullptr);
+        }
         lua_setfield(L, -2, f->name);
     }
     lua_setreadonly(L, -1, 1);
@@ -2661,84 +2678,86 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lua_setglobal(L, "print");
 
     static const luaL_Reg on[] = {
-        {"start", on_start}, {"update", on_update}, {"every", on_every}, {"key", on_key},
-        {"near", on_near}, {"hour", on_hour}, {"enter", on_enter}, {"leave", on_leave}, {nullptr, nullptr}};
-    static const luaL_Reg vars[] = {{"get", vars_get}, {"set", vars_set}, {"add", vars_add}, {nullptr, nullptr}};
-    static const luaL_Reg ui[] = {{"message", ui_message}, {"minimap_label", ui_minimap_label}, {"minimap_frame", ui_minimap_frame}, {"show_hud", ui_show_hud}, {"show_minimap", ui_show_minimap},
-                                  {"load", ui_load}, {"place", ui_place}, {"image_rect", ui_image_rect}, {"text", ui_text}, {"value", ui_value}, {"image", ui_image},
-                                  {"visible", ui_visible}, {"color", ui_color}, {"has", ui_has}, {"clicked", ui_clicked}, {"dragged", ui_dragged}, {"size", ui_size}, {"held", ui_held}, {"released", ui_released},
-                                  {"reset", ui_reset}, {"anchor", ui_anchor}, {"portrait", ui_portrait}, {"badge", ui_badge},
-                                  {"graph", ui_graph}, {"graph_clicked", ui_graph_clicked}, {"graph_held", ui_graph_held}, {nullptr, nullptr}};
+        ERUPTION_API_FN(on, start), ERUPTION_API_FN(on, update), ERUPTION_API_FN(on, every), ERUPTION_API_FN(on, key),
+        ERUPTION_API_FN(on, near), ERUPTION_API_FN(on, hour), ERUPTION_API_FN(on, enter), ERUPTION_API_FN(on, leave), {nullptr, nullptr}};
+    static const luaL_Reg vars[] = {ERUPTION_API_FN(vars, get), ERUPTION_API_FN(vars, set), ERUPTION_API_FN(vars, add), {nullptr, nullptr}};
+    static const luaL_Reg ui[] = {ERUPTION_API_FN(ui, message), ERUPTION_API_FN(ui, minimap_label), ERUPTION_API_FN(ui, minimap_frame), ERUPTION_API_FN(ui, show_hud), ERUPTION_API_FN(ui, show_minimap),
+                                  ERUPTION_API_FN(ui, load), ERUPTION_API_FN(ui, place), ERUPTION_API_FN(ui, image_rect), ERUPTION_API_FN(ui, text), ERUPTION_API_FN(ui, value), ERUPTION_API_FN(ui, image),
+                                  ERUPTION_API_FN(ui, visible), ERUPTION_API_FN(ui, color), ERUPTION_API_FN(ui, has), ERUPTION_API_FN(ui, clicked), ERUPTION_API_FN(ui, hovered), ERUPTION_API_FN(ui, state), ERUPTION_API_FN(ui, dragged), ERUPTION_API_FN(ui, size), ERUPTION_API_FN(ui, held), ERUPTION_API_FN(ui, released),
+                                  ERUPTION_API_FN(ui, reset), ERUPTION_API_FN(ui, anchor), ERUPTION_API_FN(ui, portrait), ERUPTION_API_FN(ui, badge),
+                                  ERUPTION_API_FN(ui, graph), ERUPTION_API_FN(ui, graph_clicked), ERUPTION_API_FN(ui, graph_held), {nullptr, nullptr}};
     static const luaL_Reg world[] = {
-        {"time", world_time}, {"set_time", world_set_time}, {"time_between", world_time_between},
-        {"weather", world_weather}, {"is_weather", world_is_weather}, {"set_weather", world_set_weather},
-        {"look", world_look}, {"set_look", world_set_look}, {"set_ambient", world_set_ambient}, {"set_dof", world_set_dof}, {"set_classic", world_set_classic}, {"set_classic_water", world_set_classic_water}, {"classic", world_classic}, {"set_fog", world_set_fog}, {"set_border", world_set_border}, {"set_exposure", world_set_exposure}, {"set_time_scale", world_set_time_scale}, {"time_scale", world_time_scale}, {"walkable", world_walkable}, {"set_nav_rules", world_set_nav_rules}, {"nav_rules", world_nav_rules}, {"path", world_path}, {"floor_height", world_floor_height}, {"floor_walkable", world_floor_walkable}, {"liquid_at", world_liquid_at}, {"ground_grid", world_ground_grid}, {"set_motion_blur", world_set_motion_blur},
-        {"set_chromatic_aberration", world_set_chromatic_aberration}, {"set_effect_radius", world_set_effect_radius},
-        {"set_focus", world_set_focus}, {"set_ground_blend", world_set_ground_blend}, {"set_cutaway", world_set_cutaway},
-        {"ground_height", world_ground_height}, {"ground_layers", world_ground_layers}, {"liquids", world_liquids}, {"set_liquid_level", world_set_liquid_level},
-        {"block_slopes", world_block_slopes}, {"set_walk_cost", world_set_walk_cost}, {"walk_cost", world_walk_cost},
-        {"map", world_map}, {"load_map", world_load_map}, {"set_load_distance", world_set_load_distance},
-        {"load_distance", world_load_distance},
-        {"warp_map", world_warp_map}, {"warping", world_warping},
-        {"preload_map", world_preload_map}, {nullptr, nullptr}};
+        ERUPTION_API_FN(world, time), ERUPTION_API_FN(world, set_time), ERUPTION_API_FN(world, time_between),
+        ERUPTION_API_FN(world, weather), ERUPTION_API_FN(world, is_weather), ERUPTION_API_FN(world, set_weather),
+        ERUPTION_API_FN(world, look), ERUPTION_API_FN(world, set_look), ERUPTION_API_FN(world, set_ambient), ERUPTION_API_FN(world, set_dof), ERUPTION_API_FN(world, set_classic), ERUPTION_API_FN(world, set_sky), ERUPTION_API_FN(world, sky), ERUPTION_API_FN(world, set_classic_water), ERUPTION_API_FN(world, classic), ERUPTION_API_FN(world, set_fog), ERUPTION_API_FN(world, set_border), ERUPTION_API_FN(world, set_exposure), ERUPTION_API_FN(world, set_time_scale), ERUPTION_API_FN(world, time_scale), ERUPTION_API_FN(world, walkable), ERUPTION_API_FN(world, set_nav_rules), ERUPTION_API_FN(world, nav_rules), ERUPTION_API_FN(world, path), ERUPTION_API_FN(world, floor_height), ERUPTION_API_FN(world, screen_to_ground), ERUPTION_API_FN(world, floor_walkable), ERUPTION_API_FN(world, liquid_at), ERUPTION_API_FN(world, ground_grid), ERUPTION_API_FN(world, set_motion_blur),
+        ERUPTION_API_FN(world, set_chromatic_aberration), ERUPTION_API_FN(world, set_effect_radius),
+        ERUPTION_API_FN(world, set_focus), ERUPTION_API_FN(world, set_ground_blend),
+        ERUPTION_API_FN(world, set_cutaway),
+        ERUPTION_API_FN(world, ground_height), ERUPTION_API_FN(world, nav_height), ERUPTION_API_FN(world, ground_layers), ERUPTION_API_FN(world, liquids), ERUPTION_API_FN(world, set_liquid_level),
+        ERUPTION_API_FN(world, block_slopes), ERUPTION_API_FN(world, set_walk_cost), ERUPTION_API_FN(world, walk_cost),
+        ERUPTION_API_FN(world, map), ERUPTION_API_FN(world, load_map), ERUPTION_API_FN(world, set_load_distance),
+        ERUPTION_API_FN(world, load_distance),
+        ERUPTION_API_FN(world, warp_map), ERUPTION_API_FN(world, warping),
+        ERUPTION_API_FN(world, preload_map),
+        ERUPTION_API_FN(world, draw_strip), ERUPTION_API_FN(world, draw_sprite), {nullptr, nullptr}};
     static const luaL_Reg player[] = {
-        {"position", player_position}, {"set_position", player_set_position}, {"set_sprite", player_set_sprite}, {"near", player_near},
-        {"inside", player_inside}, {"say", player_say}, {"play", player_play}, {"animation", player_animation},
-        {"freeze", player_freeze}, {"frozen", player_frozen}, {"hide", player_hide}, {"set_run", player_set_run},
+        ERUPTION_API_FN(player, position), ERUPTION_API_FN(player, set_position), ERUPTION_API_FN(player, set_sprite), ERUPTION_API_FN(player, near),
+        ERUPTION_API_FN(player, inside), ERUPTION_API_FN(player, say), ERUPTION_API_FN(player, play), ERUPTION_API_FN(player, animation),
+        ERUPTION_API_FN(player, freeze), ERUPTION_API_FN(player, frozen), ERUPTION_API_FN(player, hide), ERUPTION_API_FN(player, set_run),
         {nullptr, nullptr}};
     static const luaL_Reg camera[] = {
-        {"target", camera_target}, {"set_target", camera_set_target},
-        {"orbit", camera_orbit}, {"set_orbit", camera_set_orbit}, {"basis", camera_basis},
-        {"view", camera_view},
-        {"free", camera_free}, {"keep_inside_map", camera_keep_inside_map},
-        {"see_through", camera_see_through}, {"near_fade", camera_near_fade}, {"set_orbit_input", camera_set_orbit_input},
-        {"collide", camera_collide}, {nullptr, nullptr}};
+        ERUPTION_API_FN(camera, target), ERUPTION_API_FN(camera, set_target),
+        ERUPTION_API_FN(camera, orbit), ERUPTION_API_FN(camera, set_orbit), ERUPTION_API_FN(camera, basis),
+        ERUPTION_API_FN(camera, view),
+        ERUPTION_API_FN(camera, free), ERUPTION_API_FN(camera, keep_inside_map),
+        ERUPTION_API_FN(camera, see_through), ERUPTION_API_FN(camera, near_fade), ERUPTION_API_FN(camera, set_orbit_input),
+        ERUPTION_API_FN(camera, collide), {nullptr, nullptr}};
     static const luaL_Reg fx[] = {
-        {"shake_camera", fx_shake_camera}, {"number", fx_number}, {"fade", fx_fade}, {"flash", fx_flash}, {"dim", fx_dim},
-        {"fading", fx_fading}, {nullptr, nullptr}};
-    static const luaL_Reg input[] = {{"down", input_down}, {"pressed", input_pressed}, {"touch", input_touch}, {"touch_pad", input_touch_pad}, {"double_tapped", input_double_tapped}, {"gamepad", input_gamepad}, {"mouse_position", input_mouse_position}, {"scroll", input_scroll}, {"touches", input_touches}, {nullptr, nullptr}};
+        ERUPTION_API_FN(fx, shake_camera), ERUPTION_API_FN(fx, number), ERUPTION_API_FN(fx, fade), ERUPTION_API_FN(fx, flash), ERUPTION_API_FN(fx, dim),
+        ERUPTION_API_FN(fx, fading), {nullptr, nullptr}};
+    static const luaL_Reg input[] = {ERUPTION_API_FN(input, down), ERUPTION_API_FN(input, pressed), ERUPTION_API_FN(input, text_begin), ERUPTION_API_FN(input, text_end), ERUPTION_API_FN(input, text_active), ERUPTION_API_FN(input, text), ERUPTION_API_FN(input, touch), ERUPTION_API_FN(input, touch_pad), ERUPTION_API_FN(input, double_tapped), ERUPTION_API_FN(input, gamepad), ERUPTION_API_FN(input, mouse_position), ERUPTION_API_FN(input, scroll), ERUPTION_API_FN(input, touches), ERUPTION_API_FN(input, set_cursor), {nullptr, nullptr}};
     static const luaL_Reg models[] = {
-        {"count", models_count}, {"preload", models_preload}, {"find", models_find}, {"name", models_name},
-        {"position", models_position}, {"set_position", models_set_position}, {"near", models_near},
-        {"file", models_file}, {"scale", models_scale},
-        {"set_rotation", models_set_rotation}, {"set_scale", models_set_scale},
-        {"move_by", models_move_by}, {"rotate_by", models_rotate_by},
-        {"visible", models_visible}, {"set_visible", models_set_visible},
-        {"show", models_show}, {"hide", models_hide}, {"solid", models_solid}, {"set_solid", models_set_solid},
-        {"set_solid_file", models_set_solid_file}, {"surface", models_surface}, {"set_surface", models_set_surface},
-        {"set_surface_file", models_set_surface_file},
-        {"play", models_play}, {"animation", models_animation}, {"animations", models_animations},
-        {"morphs", models_morphs}, {"set_morph", models_set_morph},
+        ERUPTION_API_FN(models, count), ERUPTION_API_FN(models, preload), ERUPTION_API_FN(models, find), ERUPTION_API_FN(models, name),
+        ERUPTION_API_FN(models, position), ERUPTION_API_FN(models, set_position), ERUPTION_API_FN(models, near),
+        ERUPTION_API_FN(models, file), ERUPTION_API_FN(models, scale),
+        ERUPTION_API_FN(models, set_rotation), ERUPTION_API_FN(models, set_scale),
+        ERUPTION_API_FN(models, move_by), ERUPTION_API_FN(models, rotate_by),
+        ERUPTION_API_FN(models, visible), ERUPTION_API_FN(models, set_visible),
+        ERUPTION_API_FN(models, show), ERUPTION_API_FN(models, hide), ERUPTION_API_FN(models, solid), ERUPTION_API_FN(models, set_solid),
+        ERUPTION_API_FN(models, set_solid_file), ERUPTION_API_FN(models, surface), ERUPTION_API_FN(models, set_surface),
+        ERUPTION_API_FN(models, set_surface_file),
+        ERUPTION_API_FN(models, play), ERUPTION_API_FN(models, animation), ERUPTION_API_FN(models, animations),
+        ERUPTION_API_FN(models, morphs), ERUPTION_API_FN(models, set_morph),
         {nullptr, nullptr}};
     static const luaL_Reg characters[] = {
-        {"exists", characters_exists}, {"preload", characters_preload}, {"preload_ready", characters_preload_ready},
-        {"position", characters_position},
-        {"set_position", characters_set_position}, {"walk_to", characters_walk_to},
-        {"walking", characters_walking}, {"face", characters_face}, {"show", characters_show}, {"say", characters_say}, {"play", characters_play}, {"animation", characters_animation},
-        {"follow", characters_follow}, {"patrol", characters_patrol}, {"stop", characters_stop},
-        {"set_shadow", characters_set_shadow}, {"set_sink", characters_set_sink},
-        {"set_rim", characters_set_rim},
-        {"set_anim_fps", characters_set_anim_fps},
-        {"hide", characters_hide}, {"ring", characters_ring}, {"set_sprite", characters_set_sprite},
-        {"add", characters_add}, {"remove", characters_remove}, {"release_sheet", characters_release_sheet},
-        {"flash", characters_flash}, {"shake", characters_shake}, {"lunge", characters_lunge},
-        {"pop", characters_pop}, {"fade", characters_fade}, {"set_scale", characters_set_scale}, {"head_screen", characters_head_screen},
+        ERUPTION_API_FN(characters, exists), ERUPTION_API_FN(characters, preload), ERUPTION_API_FN(characters, preload_ready),
+        ERUPTION_API_FN(characters, position),
+        ERUPTION_API_FN(characters, set_position), ERUPTION_API_FN(characters, walk_to),
+        ERUPTION_API_FN(characters, walking), ERUPTION_API_FN(characters, face), ERUPTION_API_FN(characters, show), ERUPTION_API_FN(characters, say), ERUPTION_API_FN(characters, play), ERUPTION_API_FN(characters, animation),
+        ERUPTION_API_FN(characters, follow), ERUPTION_API_FN(characters, patrol), ERUPTION_API_FN(characters, stop),
+        ERUPTION_API_FN(characters, set_shadow), ERUPTION_API_FN(characters, set_sink),
+        ERUPTION_API_FN(characters, set_rim),
+        ERUPTION_API_FN(characters, set_anim_fps), ERUPTION_API_FN(characters, set_stride), ERUPTION_API_FN(characters, set_walk_rate),
+        ERUPTION_API_FN(characters, hide), ERUPTION_API_FN(characters, ring), ERUPTION_API_FN(characters, set_sprite),
+        ERUPTION_API_FN(characters, add), ERUPTION_API_FN(characters, remove), ERUPTION_API_FN(characters, release_sheet),
+        ERUPTION_API_FN(characters, flash), ERUPTION_API_FN(characters, shake), ERUPTION_API_FN(characters, lunge),
+        ERUPTION_API_FN(characters, pop), ERUPTION_API_FN(characters, fade), ERUPTION_API_FN(characters, set_scale), ERUPTION_API_FN(characters, head_screen), ERUPTION_API_FN(characters, at_screen),
         {nullptr, nullptr}};
     static const luaL_Reg lights[] = {
-        {"count", lights_count}, {"position", lights_position}, {"set_position", lights_set_position},
-        {"color", lights_color}, {"set_color", lights_set_color}, {"intensity", lights_intensity},
-        {"set_intensity", lights_set_intensity}, {"enabled", lights_enabled},
-        {"set_enabled", lights_set_enabled}, {"turn_on", lights_turn_on}, {"turn_off", lights_turn_off},
-        {"set_sprite_shadow", lights_set_sprite_shadow}, {nullptr, nullptr}};
+        ERUPTION_API_FN(lights, count), ERUPTION_API_FN(lights, position), ERUPTION_API_FN(lights, set_position),
+        ERUPTION_API_FN(lights, color), ERUPTION_API_FN(lights, set_color), ERUPTION_API_FN(lights, intensity),
+        ERUPTION_API_FN(lights, set_intensity), ERUPTION_API_FN(lights, enabled),
+        ERUPTION_API_FN(lights, set_enabled), ERUPTION_API_FN(lights, turn_on), ERUPTION_API_FN(lights, turn_off),
+        ERUPTION_API_FN(lights, set_sprite_shadow), {nullptr, nullptr}};
     static const luaL_Reg audio[] = {
-        {"play", audio_play}, {"play_at", audio_play_at}, {"loop", audio_loop}, {"loop_at", audio_loop_at},
-        {"stop", audio_stop}, {"playing", audio_playing}, {"music", audio_music}, {"stop_music", audio_stop_music},
-        {"set_volume", audio_set_volume}, {"set_pitch", audio_set_pitch}, {"music_volume", audio_music_volume},
-        {"group_volume", audio_group_volume}, {"preload", audio_preload}, {nullptr, nullptr}};
+        ERUPTION_API_FN(audio, play), ERUPTION_API_FN(audio, play_at), ERUPTION_API_FN(audio, loop), ERUPTION_API_FN(audio, loop_at),
+        ERUPTION_API_FN(audio, stop), ERUPTION_API_FN(audio, playing), ERUPTION_API_FN(audio, music), ERUPTION_API_FN(audio, stop_music),
+        ERUPTION_API_FN(audio, set_volume), ERUPTION_API_FN(audio, set_pitch), ERUPTION_API_FN(audio, music_volume),
+        ERUPTION_API_FN(audio, group_volume), ERUPTION_API_FN(audio, preload), {nullptr, nullptr}};
     lib(L, "on", on);
     lib(L, "audio", audio);
-    static const luaL_Reg game[] = {{"save", game_save}, {"load", game_load}, {"restart", game_restart}, {"save_settings", game_save_settings}, {"settings", game_settings}, {"has_save", game_has_save},
-                                    {"delete_save", game_delete_save}, {nullptr, nullptr}};
+    static const luaL_Reg game[] = {ERUPTION_API_FN(game, save), ERUPTION_API_FN(game, load), ERUPTION_API_FN(game, restart), ERUPTION_API_FN(game, save_settings), ERUPTION_API_FN(game, settings), ERUPTION_API_FN(game, has_save),
+                                    ERUPTION_API_FN(game, delete_save), {nullptr, nullptr}};
     lib(L, "game", game);
     lib(L, "vars", vars);
     lib(L, "ui", ui);
@@ -2751,15 +2770,15 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lua_pushcfunction(L, api_require, "require");
     lua_setglobal(L, "require");
     static const luaL_Reg perf[] = {
-        {"fps", perf_fps}, {"frame", perf_frame}, {"resolution", perf_resolution},
-        {"fps_cap", perf_fps_cap}, {"set_fps_cap", perf_set_fps_cap}, {"system", perf_system},
-        {"bandwidth", perf_bandwidth}, {nullptr, nullptr}};
+        ERUPTION_API_FN(perf, fps), ERUPTION_API_FN(perf, frame), ERUPTION_API_FN(perf, resolution),
+        ERUPTION_API_FN(perf, fps_cap), ERUPTION_API_FN(perf, set_fps_cap), ERUPTION_API_FN(perf, system),
+        ERUPTION_API_FN(perf, bandwidth), {nullptr, nullptr}};
     lib(L, "characters", characters);
     lib(L, "fx", fx);
     lib(L, "perf", perf);
     static const luaL_Reg loading[] = {
-        {"hold", loading_hold}, {"release", loading_release}, {"held", loading_held}, {"progress", loading_progress},
-        {"game_progress", loading_game_progress}, {nullptr, nullptr}};
+        ERUPTION_API_FN(loading, hold), ERUPTION_API_FN(loading, release), ERUPTION_API_FN(loading, held), ERUPTION_API_FN(loading, progress),
+        ERUPTION_API_FN(loading, game_progress), {nullptr, nullptr}};
     lib(L, "loading", loading);
     registerVfxApi(L, engine);
     registerObjectsApi(L, engine);

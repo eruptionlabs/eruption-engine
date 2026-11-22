@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 #ifdef ERUPTION_MODULE_COMPAT
@@ -120,11 +121,39 @@ int runExportGameCli(int argc, char** argv, const std::filesystem::path& outDir)
                               "para o enxuto, recompile com o perfil acima",
                               profileCMakeFlags(table, built).c_str());
     }
+    for (int k = 1; k + 1 < argc; ++k)
+        if (std::string(argv[k]) == "--export-binary") o.binary = argv[k + 1]; // programa enxuto de outro build dir
+    // API de script que o projeto usa: header para o proximo build LEAN e relatorio.
+    ExportReportInfo info;
+    info.api = analyzeApiUse(engineRoot, o.projectRoot);
+    std::filesystem::path apiHeader = lean.parent_path() / "eruption_api_used.h";
+    for (int k = 1; k + 1 < argc; ++k)
+        if (std::string(argv[k]) == "--export-api-header") apiHeader = argv[k + 1]; // build/<perfil>/eruption_api_used.h
+    if (info.api.valid && !writeApiUsedHeader(info.api, apiHeader))
+        ERUPTION_LOG_WARN("[EXPORT] nao gravou %s", apiHeader.string().c_str());
+    for (int k = 1; k + 1 < argc; ++k) {
+        const std::string a = argv[k];
+        if (a == "--export-baseline") info.baselineBinary = argv[k + 1];
+        if (a == "--export-link-log") info.linkLog = argv[k + 1];
+    }
+    {
+        std::ifstream cache(o.binary.parent_path() / "CMakeCache.txt");
+        std::string line;
+        while (std::getline(cache, line))
+            if (line.rfind("ERUPTION_API_HEADER:", 0) == 0 && line.back() != '=') info.apiFiltered = true;
+    }
     const ExportReport r = exportGame(o);
     if (!r.error.empty()) {
         ERUPTION_LOG_FATAL("--export-game: %s", r.error.c_str());
         return 1;
     }
+    info.modules = table;
+    info.profile = profile;
+    for (const ModuleInfo& m : table) info.moduleUsed.push_back(m.exportable && moduleUsedByProject(m, o.projectRoot));
+    info.binary = o.binary;
+    info.blocked = r.blocked;
+    writeExportReport(outDir, info);
+    ERUPTION_LOG_WARN("[EXPORT] relatorio: %s", (outDir / "export_report.txt").string().c_str());
     ERUPTION_LOG_WARN("[EXPORT] %zu arquivos (%zu scripts compilados, %zu mapas vizinhos, %zu excluidos), %.1f MB em %s",
                       r.files, r.compiled, r.neighbors, r.excluded, double(r.bytes) / (1024.0 * 1024.0),
                       outDir.string().c_str());

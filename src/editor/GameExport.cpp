@@ -441,10 +441,24 @@ std::set<fs::path> packGrounds(const ExportOptions& o, const ExportGraph& graph,
     return packed;
 }
 
+// Arquivos de modelo nunca saem no jogo exportado (regra do projeto).
+bool isBlockedModelFile(const fs::path& p) {
+    std::string name = p.filename().string();
+    for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    static const char* const kExt[] = {".onnx", ".pt", ".pth", ".safetensors", ".ckpt", ".tflite", ".mnn"};
+    for (const char* e : kExt)
+        if (endsWith(name, e)) return true;
+    return name.find(".ncnn.") != std::string::npos;
+}
+
 bool copyGameFiles(const ExportOptions& o, const ExportGraph& graph, ExportReport& report) {
     const std::set<fs::path> packed = packGrounds(o, graph, report);
     for (const auto& rel : graph.files()) {
         if (packed.count(rel)) continue;
+        if (isBlockedModelFile(rel)) {
+            report.blocked.push_back(rel.generic_string());
+            continue;
+        }
         std::error_code ec;
         const fs::path dst = o.outDir / rel;
         fs::create_directories(dst.parent_path(), ec);
@@ -565,13 +579,17 @@ bool copyProgram(const ExportOptions& o, ExportReport& report) {
     fs::permissions(exe, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec, fs::perm_options::add, ec);
     report.bytes += fs::file_size(exe, ec);
     ++report.files;
-    for (fs::directory_iterator it(o.binary.parent_path(), ec), end; !ec && it != end; it.increment(ec)) {
-        const std::string n = it->path().filename().string();
-        if (n.rfind("libonnxruntime.so", 0) != 0) continue;
-        std::error_code copyEc;
-        fs::copy_file(it->path(), o.outDir / n, fs::copy_options::overwrite_existing, copyEc);
-        report.bytes += fs::file_size(o.outDir / n, copyEc);
-        ++report.files;
+    // A biblioteca do executor so' vai se o programa a carrega (o enxuto, com o
+    // modulo neural_pbr desligado, nao tem a dependencia).
+    if (readText(o.binary).find("libonnxruntime.so") != std::string::npos) {
+        for (fs::directory_iterator it(o.binary.parent_path(), ec), end; !ec && it != end; it.increment(ec)) {
+            const std::string n = it->path().filename().string();
+            if (n.rfind("libonnxruntime.so", 0) != 0) continue;
+            std::error_code copyEc;
+            fs::copy_file(it->path(), o.outDir / n, fs::copy_options::overwrite_existing, copyEc);
+            report.bytes += fs::file_size(o.outDir / n, copyEc);
+            ++report.files;
+        }
     }
     std::ofstream run(o.outDir / "run.sh");
     run << "#!/bin/sh\n# Starts the game from its own folder.\ncd \"$(dirname \"$0\")\" && exec ./"
@@ -752,6 +770,8 @@ std::vector<ModuleInfo> loadModuleTable(const fs::path& engineRoot, std::string*
         info.exportable = jsonBool(m, "export", true);
         if (m.contains("detect") && m["detect"].is_object()) {
             info.scriptGlobals = stringList(m["detect"], "script_globals");
+            info.glbExtensions = stringList(m["detect"], "glb_extensions");
+            info.scriptCalls = stringList(m["detect"], "script_calls");
             info.sceneFields = stringList(m["detect"], "scene_fields");
         }
         if (!info.option.empty()) table.push_back(std::move(info));
@@ -761,9 +781,51 @@ std::vector<ModuleInfo> loadModuleTable(const fs::path& engineRoot, std::string*
 
 // Detecção pela API de script (`global.` ou `global:` fora de comentário) e
 // pelos campos de cena (`campo =` nas cenas Luau, `"campo":` nos .env/.json).
+namespace {
+// Algum .glb/.gltf da pasta declara uma das extensoes? So' le' o trecho JSON do
+// .glb (cabecalho de 12 bytes + tamanho do 1o trecho), nao o arquivo inteiro.
+bool anyGltfDeclares(const fs::path& dir, const std::vector<std::string>& extensions) {
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        const std::string ext = it->path().extension().string();
+        std::string json;
+        if (ext == ".gltf") {
+            json = readText(it->path());
+        } else if (ext == ".glb") {
+            std::ifstream f(it->path(), std::ios::binary);
+            unsigned char head[20] = {};
+            f.read(reinterpret_cast<char*>(head), 20);
+            if (f.gcount() < 20) continue;
+            const uint32_t len = head[12] | (head[13] << 8) | (head[14] << 16) | (uint32_t(head[15]) << 24);
+            json.resize(std::min<uint32_t>(len, 64u << 20));
+            f.read(json.data(), std::streamsize(json.size()));
+        } else {
+            continue;
+        }
+        for (const auto& e : extensions)
+            if (json.find("\"" + e + "\"") != std::string::npos) return true;
+    }
+    return false;
+}
+} // namespace
+
 bool moduleUsedByProject(const ModuleInfo& m, const fs::path& root) {
+    if (!m.glbExtensions.empty() && anyGltfDeclares(root / "assets", m.glbExtensions)) return true;
     if (!m.scriptGlobals.empty()) {
         const std::regex call("(^|[^A-Za-z0-9_.])(" + regexAlternatives(m.scriptGlobals) + ")\\s*[.:]");
+        if (anyFileMatches(root / "assets" / "scripts", {".luau"}, call) ||
+            anyFileMatches(root / "assets" / "scenes", {".luau"}, call))
+            return true;
+    }
+    if (!m.scriptCalls.empty()) {
+        std::string alt;
+        for (const auto& c : m.scriptCalls) {
+            const size_t dot = c.find('.');
+            alt += (alt.empty() ? "" : "|") + regexAlternatives({c.substr(0, dot)}) + "\\s*[.:]\\s*" +
+                   regexAlternatives({dot == std::string::npos ? "" : c.substr(dot + 1)});
+        }
+        const std::regex call("(^|[^A-Za-z0-9_.])(" + alt + ")(?![A-Za-z0-9_])");
         if (anyFileMatches(root / "assets" / "scripts", {".luau"}, call) ||
             anyFileMatches(root / "assets" / "scenes", {".luau"}, call))
             return true;
@@ -801,6 +863,243 @@ std::string profileCMakeFlags(const std::vector<ModuleInfo>& table, const BuildP
         flags += (flags.empty() ? "" : " ") + std::string("-D") + m.option + (on ? "=ON" : "=OFF");
     }
     return flags;
+}
+
+// ---------------------------------------------------------------------------
+// Filtro da API de script
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Entradas ERUPTION_API_FN(global, funcao) dos fontes de script do motor.
+std::map<std::string, std::vector<std::string>> apiUniverse(const fs::path& engineRoot) {
+    std::map<std::string, std::vector<std::string>> out;
+    static const std::regex entry("ERUPTION_API_FN\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)");
+    std::error_code ec;
+    for (fs::directory_iterator it(engineRoot / "src" / "script", ec), end; !ec && it != end; it.increment(ec)) {
+        if (it->path().extension() != ".cpp") continue;
+        const std::string text = readText(it->path());
+        for (std::sregex_iterator m(text.begin(), text.end(), entry), e; m != e; ++m) {
+            auto& v = out[(*m)[1].str()];
+            if (std::find(v.begin(), v.end(), (*m)[2].str()) == v.end()) v.push_back((*m)[2].str());
+        }
+    }
+    return out;
+}
+
+void markGlobal(ApiUsage& u, const std::string& g) {
+    for (const auto& f : u.universe[g]) u.used.insert(g + "." + f);
+}
+
+// export_keep.json: {"keep": ["world.nav_height", "audio.*", "input"]}
+void applyKeepFile(ApiUsage& u, const fs::path& projectRoot) {
+    std::ifstream f(projectRoot / "export_keep.json");
+    if (!f) return;
+    const nlohmann::json j = nlohmann::json::parse(f, nullptr, false);
+    if (!j.is_object()) {
+        u.notes.push_back("export_keep.json invalido: ignorado");
+        return;
+    }
+    for (const auto& item : stringList(j, "keep")) {
+        const size_t dot = item.find('.');
+        const std::string g = item.substr(0, dot);
+        if (!u.universe.count(g)) {
+            u.notes.push_back("export_keep.json: global desconhecida '" + item + "'");
+            continue;
+        }
+        if (dot == std::string::npos || item.substr(dot + 1) == "*") {
+            markGlobal(u, g);
+        } else {
+            const auto& fns = u.universe[g];
+            if (std::find(fns.begin(), fns.end(), item.substr(dot + 1)) == fns.end())
+                u.notes.push_back("export_keep.json: funcao desconhecida '" + item + "'");
+            else
+                u.used.insert(item);
+        }
+        u.notes.push_back("mantida por export_keep.json: " + item);
+    }
+}
+
+void scanLuauForApi(ApiUsage& u, const std::string& file, const std::string& source) {
+    // Texto entre aspas simples/duplas nao e' codigo (a interpolacao com crase fica).
+    static const std::regex quoted("\"[^\"\n]*\"|'[^'\n]*'");
+    const std::string text = std::regex_replace(source, quoted, "\"\"");
+    for (const auto& [g, fns] : u.universe) {
+        const std::string name = regexAlternatives({g});
+        // global.campo / global:metodo
+        const std::regex member("(^|[^A-Za-z0-9_.:])" + name + "\\s*[.:]\\s*([A-Za-z_][A-Za-z0-9_]*)");
+        for (std::sregex_iterator m(text.begin(), text.end(), member), e; m != e; ++m) {
+            const std::string f = (*m)[2].str();
+            if (std::find(fns.begin(), fns.end(), f) != fns.end()) {
+                u.used.insert(g + "." + f);
+            } else if (!u.used.count(g + ".*unknown:" + f)) {
+                u.used.insert(g + ".*unknown:" + f); // acesso a campo que a API nao tem (so' relatorio)
+            }
+        }
+        // global[expr]: acesso dinamico
+        const std::regex dyn("(^|[^A-Za-z0-9_.:])" + name + "\\s*\\[");
+        if (std::regex_search(text, dyn)) {
+            markGlobal(u, g);
+            u.notes.push_back(file + ": acesso dinamico " + g + "[...]: global '" + g + "' inteira mantida");
+            continue;
+        }
+        // global sozinha (passada adiante, alias): nao seguida de . : [ nem de = (chave, atribuicao),
+        // nem precedida de "local" ou de ponto.
+        const std::regex bare("(^|[^A-Za-z0-9_.:])" + name + "(?![A-Za-z0-9_])(?!\\s*[.:\\[])(?!\\s*=[^=])");
+        for (std::sregex_iterator m(text.begin(), text.end(), bare), e; m != e; ++m) {
+            const size_t pos = size_t(m->position(0)) + size_t((*m)[1].length());
+            const std::string before = text.substr(pos > 12 ? pos - 12 : 0, pos > 12 ? 12 : pos);
+            // "f(world)" e "x = world" passam a global; "local world" e "function world" nao.
+            if (std::regex_search(before, std::regex("(local|function)\\s+$"))) continue;
+            markGlobal(u, g);
+            u.notes.push_back(file + ": global '" + g + "' usada como valor (passada adiante): inteira mantida");
+            break;
+        }
+    }
+}
+
+} // namespace
+
+ApiUsage analyzeApiUse(const fs::path& engineRoot, const fs::path& projectRoot) {
+    ApiUsage u;
+    u.universe = apiUniverse(engineRoot);
+    if (u.universe.empty()) {
+        u.notes.push_back("fontes da API (src/script) nao encontrados: nada e' cortado");
+        return u;
+    }
+    u.valid = true;
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(projectRoot / "assets", ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_regular_file(ec) || it->path().extension() != ".luau") continue;
+        if (endsWith(it->path().filename().string(), ".d.luau")) continue; // tipos citam tudo
+        const std::string rel = fs::relative(it->path(), projectRoot, ec).generic_string();
+        scanLuauForApi(u, rel, withoutLuauComments(readText(it->path())));
+    }
+    // Chamadas a campos que a API nao tem: tirar das usadas, virar nota.
+    for (auto it = u.used.begin(); it != u.used.end();) {
+        const size_t k = it->find(".*unknown:");
+        if (k == std::string::npos) {
+            ++it;
+            continue;
+        }
+        u.notes.push_back("campo desconhecido (ignorado): " + it->substr(0, k) + "." + it->substr(k + 10));
+        it = u.used.erase(it);
+    }
+    applyKeepFile(u, projectRoot);
+    return u;
+}
+
+bool writeApiUsedHeader(const ApiUsage& usage, const fs::path& header) {
+    std::error_code ec;
+    fs::create_directories(header.parent_path(), ec);
+    std::string text = "// Gerado pelo export do jogo (nao editar): a API de script que o projeto usa.\n"
+                       "// Cada #define liga uma entrada ERUPTION_API_FN (src/script/ApiFilter.hpp).\n#pragma once\n";
+    for (const auto& s : usage.used) {
+        std::string d = s;
+        std::replace(d.begin(), d.end(), '.', '_');
+        text += "#define ERUPTION_API_USE_" + d + " 1\n";
+    }
+    // So' reescreve se mudou (o CMake nao recompila ScriptApi.cpp a toa).
+    if (readText(header) == text) return true;
+    std::ofstream f(header, std::ios::trunc);
+    f << text;
+    return bool(f);
+}
+
+namespace {
+
+std::string mb(uint64_t bytes) {
+    char b[48];
+    std::snprintf(b, sizeof(b), "%.2f MB (%llu bytes)", double(bytes) / (1024.0 * 1024.0), (unsigned long long)bytes);
+    return b;
+}
+
+// Resumo do --print-gc-sections: secoes descartadas por tipo e as funcoes da
+// API que sairam (nome apos o prefixo do namespace anonimo).
+void gcSummary(std::ostream& out, const fs::path& log) {
+    std::ifstream f(log);
+    if (!f) return;
+    std::map<std::string, size_t> kinds;
+    std::set<std::string> apiFns;
+    std::string line;
+    static const std::regex anon("_ZN8eruption12_GLOBAL__N_1(\\d+)([A-Za-z0-9_]+)");
+    size_t total = 0;
+    while (std::getline(f, line)) {
+        // O ld escreve na lingua do ambiente ("removing unused section" / "a remover secção"); o build usa LC_ALL=C.
+        if (line.find("unused section") == std::string::npos && line.find("a remover sec") == std::string::npos) continue;
+        ++total;
+        const size_t q = line.find_first_of("'\"");
+        const std::string name = q == std::string::npos ? "" : line.substr(q + 1);
+        size_t kindEnd = 1;
+        while (kindEnd < name.size() && (std::isalpha(static_cast<unsigned char>(name[kindEnd])) || name[kindEnd] == '_')) ++kindEnd;
+        ++kinds[name.substr(0, kindEnd)];
+        std::smatch m;
+        if (std::regex_search(name, m, anon)) {
+            const size_t n = std::stoul(m[1].str());
+            const std::string id = m[2].str().substr(0, n);
+            if (std::regex_match(id, std::regex("(world|input|camera|models|characters|lights|audio|player|ui|fx|perf|game|vars|loading|on|io)_[a-z0-9_]+")))
+                apiFns.insert(id);
+        }
+    }
+    out << "\n== Linker: -Wl,--print-gc-sections (" << log.filename().string() << ") ==\n";
+    out << total << " secoes descartadas\n";
+    for (const auto& [k, n] : kinds) out << "  " << k << ": " << n << "\n";
+    out << apiFns.size() << " funcoes da API descartadas pelo linker (as que o compilador ja' tirou antes nao aparecem aqui):\n";
+    for (const auto& n : apiFns) out << "  " << n << "\n";
+}
+
+} // namespace
+
+void writeExportReport(const fs::path& outDir, const ExportReportInfo& info) {
+    std::ofstream out(outDir / "export_report.txt", std::ios::trunc);
+    out << "Eruption export report\n\n== Modulos ==\n";
+    for (size_t i = 0; i < info.modules.size(); ++i) {
+        const ModuleInfo& m = info.modules[i];
+        const auto it = info.profile.modules.find(m.option);
+        const bool on = it != info.profile.modules.end() && it->second;
+        const bool used = i < info.moduleUsed.size() && info.moduleUsed[i];
+        out << (on ? "LIGADO    " : "DESLIGADO ") << m.name << ": ";
+        if (!m.exportable) out << "nunca vai no jogo exportado (modulo " << m.name << " desligado no export)";
+        else if (used) out << "o projeto usa (script/cena)";
+        else out << "nenhum script nem cena do projeto usa";
+        out << "\n";
+    }
+    out << "\n== API de script ==\n";
+    if (!info.api.valid) {
+        out << "filtro inativo: " << (info.api.notes.empty() ? "" : info.api.notes[0]) << "\n";
+    } else {
+        out << (info.apiFiltered ? "programa compilado COM o filtro" : "programa compilado SEM o filtro (a API inteira esta no binario)") << "\n";
+        size_t kept = 0, cut = 0;
+        std::string keptList, cutList;
+        for (const auto& [g, fns] : info.api.universe)
+            for (const auto& f : fns) {
+                const std::string k = g + "." + f;
+                if (info.api.used.count(k)) { ++kept; keptList += "  " + k + "\n"; }
+                else { ++cut; cutList += "  " + k + "\n"; }
+            }
+        out << kept << " funcoes mantidas, " << cut << " cortadas\n\n-- mantidas --\n" << keptList << "\n-- cortadas --\n" << cutList;
+        if (!info.api.notes.empty()) {
+            out << "\n-- avisos --\n";
+            for (const auto& n : info.api.notes) out << "  " << n << "\n";
+        }
+    }
+    if (!info.blocked.empty()) {
+        out << "\n== Arquivos de modelo recusados (nao copiados) ==\n";
+        for (const auto& b : info.blocked) out << "  " << b << "\n";
+    }
+    out << "\n== Tamanho do programa ==\n";
+    std::error_code ec;
+    if (!info.binary.empty() && fs::exists(info.binary, ec)) out << "depois: " << mb(fs::file_size(info.binary, ec)) << "  " << info.binary.string() << "\n";
+    if (!info.baselineBinary.empty() && fs::exists(info.baselineBinary, ec)) {
+        out << "antes:  " << mb(fs::file_size(info.baselineBinary, ec)) << "  " << info.baselineBinary.string() << "\n";
+        if (!info.binary.empty() && fs::exists(info.binary, ec)) {
+            const double a = double(fs::file_size(info.baselineBinary, ec)), d = double(fs::file_size(info.binary, ec));
+            char b[64];
+            std::snprintf(b, sizeof(b), "diferenca: %.1f%%\n", a > 0 ? (d - a) * 100.0 / a : 0.0);
+            out << b;
+        }
+    }
+    if (!info.linkLog.empty()) gcSummary(out, info.linkLog);
 }
 
 } // namespace eruption

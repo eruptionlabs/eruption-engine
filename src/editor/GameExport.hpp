@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -43,6 +44,7 @@ struct ExportReport {
     size_t excluded = 0;               // tirados por export.exclude do projeto
     size_t groundPacked = 0;           // chao de mapa (.glb + .ter) que foi como .relevo
     std::vector<std::string> groundKept; // chao que nao empacotou: "<arquivo>: motivo"
+    std::vector<std::string> blocked;  // arquivo de modelo pedido pelo grafo: recusado, nao copiado
     std::string error;
 };
 
@@ -56,6 +58,8 @@ struct ModuleInfo {
     bool defaultOn = true;
     bool exportable = true; // false: o jogo exportado nunca leva (ex.: modelo não exportado)
     std::vector<std::string> scriptGlobals; // API de script que liga o módulo (`audio.play`)
+    std::vector<std::string> glbExtensions; // extensao glTF que liga o modulo (declarada no JSON do .glb/.gltf)
+    std::vector<std::string> scriptCalls;   // chamada especifica que liga o modulo (`world.set_ambient`)
     std::vector<std::string> sceneFields;   // campo de cena que liga o módulo (`sounds = {...}`)
 };
 std::vector<ModuleInfo> loadModuleTable(const std::filesystem::path& engineRoot, std::string* error = nullptr);
@@ -68,5 +72,36 @@ struct BuildProfile {
 // Perfil com que build-export/ foi configurado (false se ainda não existe).
 bool builtProfile(const std::filesystem::path& buildDir, const std::vector<ModuleInfo>& table, BuildProfile& out);
 std::string profileCMakeFlags(const std::vector<ModuleInfo>& table, const BuildProfile& p);
+
+// ---------------------------------------------------------------------------
+// Filtro da API de script (ver src/script/ApiFilter.hpp)
+// ---------------------------------------------------------------------------
+
+// Funcoes da API que os scripts do projeto usam. `universe` e' o que o motor
+// registra (as entradas ERUPTION_API_FN dos fontes de src/script/), `used` o que
+// o projeto chama ("global.funcao"), mais o que o export_keep.json forca.
+struct ApiUsage {
+    std::map<std::string, std::vector<std::string>> universe; // global -> funcoes
+    std::set<std::string> used;
+    std::vector<std::string> notes; // acesso dinamico, globais passadas adiante, export_keep.json
+    bool valid = false;             // false: nao achou os fontes do motor (nada e' cortado)
+};
+ApiUsage analyzeApiUse(const std::filesystem::path& engineRoot, const std::filesystem::path& projectRoot);
+// build/<perfil>/eruption_api_used.h: um #define ERUPTION_API_USE_<global>_<funcao> 1 por funcao usada.
+bool writeApiUsedHeader(const ApiUsage& usage, const std::filesystem::path& header);
+
+struct ExportReportInfo {
+    ApiUsage api;
+    std::vector<ModuleInfo> modules;
+    BuildProfile profile;
+    std::vector<bool> moduleUsed;
+    std::filesystem::path binary;        // o que foi exportado
+    std::filesystem::path baselineBinary; // para "antes" (vazio = nao informado)
+    std::filesystem::path linkLog;       // saida do linker com --print-gc-sections (opcional)
+    std::vector<std::string> blocked;    // arquivos de modelo recusados
+    bool apiFiltered = false;            // o programa foi compilado com o filtro
+};
+// Grava <outDir>/export_report.txt.
+void writeExportReport(const std::filesystem::path& outDir, const ExportReportInfo& info);
 
 } // namespace eruption

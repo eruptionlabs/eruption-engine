@@ -14,6 +14,23 @@ option(ERUPTION_DEBUG "Debug build with validation layers" ON)
 # Exportação do jogo (File > Export Game): sem o editor e com o binário enxuto.
 option(ERUPTION_EDITOR "Build the editor into the executable" ON)
 option(ERUPTION_LEAN "Size-optimized game build: LTO, dead code removal, no symbols" OFF)
+# Codigo de desenvolvimento (ERUPTION_TEST_*, depuracao): ligado no build normal,
+# desligado no LEAN (o jogo exportado). Define a macro ERUPTION_DEV como 1 ou 0.
+if(ERUPTION_LEAN)
+    set(ERUPTION_DEV OFF CACHE BOOL "Codigo de teste e depuracao no binario (sempre OFF no LEAN)" FORCE)
+else()
+    option(ERUPTION_DEV "Codigo de teste e depuracao no binario (sempre OFF no LEAN)" ON)
+endif()
+# Export so' do que o jogo usa: header gerado pelo export (eruption_api_used.h,
+# com um #define ERUPTION_API_USE_<global>_<funcao> 1 por funcao da API de
+# script que o projeto chama). So' vale no LEAN; vazio = a API inteira.
+set(ERUPTION_API_HEADER "" CACHE FILEPATH "eruption_api_used.h do export (so' com ERUPTION_LEAN)")
+set(ERUPTION_LEAN_OPT "O3" CACHE STRING "LEAN: nivel de otimizacao do compilador (O3, O2, Os)")
+option(ERUPTION_LEAN_HIDDEN "LEAN: -fvisibility=hidden" OFF)
+option(ERUPTION_LEAN_ICF "LEAN: ld.gold --icf=safe" OFF)
+option(ERUPTION_LEAN_SYMBOLS "LEAN: nao tira os simbolos (so' para medir)" OFF)
+option(ERUPTION_LEAN_MAP "LEAN: grava o mapa do linker" OFF)
+option(ERUPTION_PRINT_GC "LEAN: o linker lista o que descartou (-Wl,--print-gc-sections)" OFF)
 # ccache e' pre-requisito: o motor e' recompilado por varias pastas de build
 # (PC, Android, copias de teste) e o mesmo arquivo nao precisa compilar duas
 # vezes. -DERUPTION_CCACHE=OFF compila sem ele.
@@ -157,12 +174,18 @@ if(ANDROID AND TARGET Luau.CodeGen)
 endif()
 
 # Avoid stb_image conflicts with the engine's own ImageUtils.cpp implementation.
+# Modulo "draco" (cmake/modules.json, sem fontes proprias): malhas .glb com
+# KHR_draco_mesh_compression. Desligado (o export detecta que nenhum .glb do
+# jogo usa), o tinygltf nao leva o decodificador.
+option(ERUPTION_MODULE_DRACO "Draco-compressed glTF meshes" ON)
 target_compile_definitions(tinygltf PRIVATE
     TINYGLTF_NO_STB_IMAGE
     TINYGLTF_NO_STB_IMAGE_WRITE
-    TINYGLTF_ENABLE_DRACO
 )
-target_link_libraries(tinygltf PRIVATE draco::draco)
+if(ERUPTION_MODULE_DRACO)
+    target_compile_definitions(tinygltf PRIVATE TINYGLTF_ENABLE_DRACO)
+    target_link_libraries(tinygltf PRIVATE draco::draco)
+endif()
 target_include_directories(tinygltf PRIVATE
     ${draco_SOURCE_DIR}/src
     ${CMAKE_BINARY_DIR}
@@ -748,7 +771,41 @@ if(ERUPTION_LEAN)
     endif()
     target_compile_options(eruption-engine PRIVATE -ffunction-sections -fdata-sections)
     # -flto=auto: a etapa final do LTO em paralelo (sem ela o GCC avisa e roda em serie).
-    target_link_options(eruption-engine PRIVATE -Wl,--gc-sections -s -flto=auto)
+    target_link_options(eruption-engine PRIVATE -Wl,--gc-sections -flto=auto)
+    # Sem simbolos (menor); ERUPTION_LEAN_SYMBOLS=ON mantem a tabela para medir por simbolo (nm).
+    if(NOT ERUPTION_LEAN_SYMBOLS)
+        target_link_options(eruption-engine PRIVATE -s)
+    endif()
+    # Passos de reducao de tamanho, cada um medido sozinho.
+    if(ERUPTION_LEAN_HIDDEN)
+        target_compile_options(eruption-engine PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+    endif()
+    if(ERUPTION_LEAN_ICF)
+        # Funcoes identicas viram uma (ld.gold --icf=safe).
+        target_link_options(eruption-engine PRIVATE -fuse-ld=gold -Wl,--icf=safe)
+    endif()
+    if(ERUPTION_LEAN_MAP)
+        target_link_options(eruption-engine PRIVATE "-Wl,-Map=${CMAKE_BINARY_DIR}/eruption-engine.map")
+    endif()
+    if(ERUPTION_PRINT_GC)
+        target_link_options(eruption-engine PRIVATE -Wl,--print-gc-sections)
+    endif()
+    if(ERUPTION_API_HEADER)
+        if(EXISTS "${ERUPTION_API_HEADER}")
+            get_filename_component(ERUPTION_API_HEADER_DIR "${ERUPTION_API_HEADER}" DIRECTORY)
+            target_compile_definitions(eruption-engine PRIVATE ERUPTION_API_FILTER=1)
+            target_include_directories(eruption-engine PRIVATE "${ERUPTION_API_HEADER_DIR}")
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ERUPTION_API_HEADER}")
+            message(STATUS "Filtro da API de script: ${ERUPTION_API_HEADER}")
+        else()
+            message(FATAL_ERROR "ERUPTION_API_HEADER nao existe: ${ERUPTION_API_HEADER}")
+        endif()
+    endif()
+endif()
+if(ERUPTION_DEV)
+    target_compile_definitions(eruption-engine PRIVATE ERUPTION_DEV=1)
+else()
+    target_compile_definitions(eruption-engine PRIVATE ERUPTION_DEV=0)
 endif()
 if(ERUPTION_HAVE_BC_ENCODER)
     target_compile_definitions(eruption-engine PRIVATE ERUPTION_HAVE_BC_ENCODER=1)
@@ -1078,11 +1135,15 @@ if(EMSCRIPTEN)
 endif()
 
 # Compiler flags
+set(ERUPTION_RELEASE_OPT O3)
+if(ERUPTION_LEAN)
+    set(ERUPTION_RELEASE_OPT ${ERUPTION_LEAN_OPT})
+endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(eruption-engine PRIVATE
         -Wall -Wextra -Wpedantic -Wno-unused-parameter ${ERUPTION_CPU_FLAGS}
         $<$<CONFIG:Debug>:-g -O0>
-        $<$<CONFIG:Release>:-O3>
+        $<$<CONFIG:Release>:-${ERUPTION_RELEASE_OPT}>
     )
 elseif(MSVC)
     target_compile_options(eruption-engine PRIVATE

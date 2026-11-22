@@ -16,6 +16,32 @@
       }
     },
     {
+      "name": "vfx",
+      "option": "ERUPTION_MODULE_VFX",
+      "label": "Particle effects",
+      "summary": "GPU particle effects: vfx.*, map effects, ambient particles",
+      "default": true,
+      "export": true,
+      "sources": ["src/renderer/vfx/VfxSystem.cpp"],
+      "null_sources": ["src/renderer/vfx/VfxSystemNull.cpp"],
+      "detect": {
+        "script_globals": ["vfx"],
+        "script_calls": ["world.set_ambient"],
+        "scene_fields": ["effects"]
+      }
+    },
+    {
+      "name": "draco",
+      "option": "ERUPTION_MODULE_DRACO",
+      "label": "Draco meshes",
+      "summary": "decoder for glTF meshes compressed with KHR_draco_mesh_compression (~0.5 MB)",
+      "default": true,
+      "export": true,
+      "detect": {
+        "glb_extensions": ["KHR_draco_mesh_compression"]
+      }
+    },
+    {
       "name": "neural_pbr",
       "option": "ERUPTION_MODULE_NEURAL_PBR",
       "label": "Neural PBR",

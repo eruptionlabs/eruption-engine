@@ -62,10 +62,15 @@ void Editor::buildLeanBinary() {
     ex.buildStatus = "Building the game program (several minutes)...";
     // O programa sai dos fontes do motor (o projeto do jogo não tem CMake).
     const std::filesystem::path root = m_engineRoot;
-    const std::string moduleFlags = profileCMakeFlags(ex.modules, ex.profile);
+    std::string moduleFlags = profileCMakeFlags(ex.modules, ex.profile);
+    // So' a API de script que o projeto usa (build-export/eruption_api_used.h).
+    const ApiUsage api = analyzeApiUse(m_engineRoot, m_projectRoot);
+    const std::filesystem::path apiHeader = m_engineRoot / "build-export" / "eruption_api_used.h";
+    if (api.valid && writeApiUsedHeader(api, apiHeader))
+        moduleFlags += " -DERUPTION_API_HEADER=\"" + apiHeader.string() + "\" -DERUPTION_PRINT_GC=ON";
     std::thread([this, root, moduleFlags] {
         const std::string dir = (root / "build-export").string();
-        const std::string cmd = "cmake -S \"" + root.string() + "\" -B \"" + dir +
+        const std::string cmd = "export LC_ALL=C; cmake -S \"" + root.string() + "\" -B \"" + dir +
                                 "\" -DCMAKE_BUILD_TYPE=Release -DERUPTION_EDITOR=OFF -DERUPTION_LEAN=ON -DERUPTION_ONNX=OFF "
                                 "-DERUPTION_DEBUG=OFF " + moduleFlags + " > \"" + dir +
                                 ".log\" 2>&1 && cmake --build \"" + dir +

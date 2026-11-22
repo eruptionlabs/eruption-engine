@@ -1,6 +1,8 @@
 // Módulo de rede desligado (ERUPTION_MODULE_NET=OFF): o jogo não abre socket
 // nem leva a cripto. Mesma interface; nada conecta.
 #include "net/Net.hpp"
+// NetValue e' o valor que a API de script (net.*) monta; a tabela net existe mesmo sem o modulo.
+#include "net/NetValue.cpp"
 
 namespace eruption {
 
