@@ -134,6 +134,9 @@ public:
 
     static void setCursorVisible(bool visible);
     static void setCursorLocked(bool locked);
+    // Cursor escolhido pelo jogo (input.set_cursor); path vazio = do sistema.
+    static void setCustomCursor(const std::string& path, int hotX, int hotY, float scale, int frameW, int frameH,
+                                int frames, float fps, bool software = false);
 
     static void resetDeltas();
 

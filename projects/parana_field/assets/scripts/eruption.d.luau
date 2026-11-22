@@ -622,6 +622,15 @@ declare input: {
     -- stick), in window pixels: {id, x, y}. Two fingers make a pan or a
     -- pinch; the game reads them and decides.
     touches: () -> { { id: number, x: number, y: number } },
+    -- Cursor do mouse do jogo (PC; no celular e no navegador nao faz nada).
+    -- Sem chamar, vale o cursor do sistema. path e' um PNG do jogo; hotspot
+    -- e' o pixel da imagem que aponta (a ponta da seta), em pixels da imagem
+    -- original. opcoes: frame_w/frame_h (tamanho de um quadro da folha),
+    -- frames (quantos), fps (animacao, padrao 8), scale (multiplica a escala
+    -- da janela/DPI, padrao 1), software (true: o motor desenha o cursor, sem
+    -- cursor de hardware; tambem vale se o sistema recusar o de hardware). Pode chamar todo quadro: a mesma chamada nao
+    -- recarrega nem recria nada. set_cursor(nil) volta ao cursor do sistema.
+    set_cursor: (path: string?, hotspot_x: number?, hotspot_y: number?, options: { frame_w: number?, frame_h: number?, frames: number?, fps: number?, scale: number?, software: boolean? }?) -> (),
 }
 
 -- Models placed in the map.

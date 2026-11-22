@@ -1,4 +1,7 @@
 #include "core/Input.hpp"
+#include "core/Platform.hpp"
+#include "core/CustomCursor.hpp"
+#include "core/Window.hpp"
 #include <algorithm>
 #include <chrono>
 #include <vector>
@@ -59,6 +62,7 @@ void Input::init(GLFWwindow* window) {
 
 void Input::shutdown() {
     if (s_window) {
+        customcursor::shutdown(s_window);
         glfwSetKeyCallback(s_window, nullptr);
         glfwSetCharCallback(s_window, nullptr);
         glfwSetMouseButtonCallback(s_window, nullptr);
@@ -68,7 +72,16 @@ void Input::shutdown() {
     s_window = nullptr;
 }
 
+void Input::setCustomCursor(const std::string& path, int hotX, int hotY, float scale, int frameW, int frameH,
+                            int frames, float fps, bool software) {
+    CursorOptions o;
+    o.software = software;
+    o.frameW = frameW; o.frameH = frameH; o.frames = frames; o.fps = fps; o.scale = scale;
+    customcursor::set(s_window, path, hotX, hotY, o);
+}
+
 void Input::update() {
+    customcursor::tick(s_window);
     s_keysPrev = s_keys;
     for (size_t k = 0; k < s_keys.size(); ++k) s_keys[k] = s_keysPhys[k] || s_keysVirt[k];
     s_mouseClicked.fill(false);

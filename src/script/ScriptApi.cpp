@@ -783,6 +783,39 @@ int input_scroll(lua_State* L) {
     lua_pushnumber(L, Input::mouseScrollDelta());
     return 1;
 }
+// Cursor do mouse do jogo: set_cursor(caminho, hotspot_x, hotspot_y, opcoes) ou
+// set_cursor(nil). Cache por caminho em core/CustomCursor.cpp: chamar todo
+// quadro com os mesmos argumentos custa uma comparacao de string.
+int input_set_cursor(lua_State* L) {
+    if (lua_isnoneornil(L, 1)) {
+        Input::setCustomCursor("", 0, 0, 1.0f, 0, 0, 1, 8.0f);
+        return 0;
+    }
+    const char* path = luaL_checkstring(L, 1);
+    const int hx = int(luaL_optnumber(L, 2, 0));
+    const int hy = int(luaL_optnumber(L, 3, 0));
+    int fw = 0, fh = 0, frames = 1;
+    float fps = 8.0f, scale = 1.0f;
+    bool software = false;
+    if (lua_istable(L, 4)) {
+        auto num = [L](const char* k, double def) {
+            lua_getfield(L, 4, k);
+            const double v = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : def;
+            lua_pop(L, 1);
+            return v;
+        };
+        fw = int(num("frame_w", 0));
+        fh = int(num("frame_h", 0));
+        frames = int(num("frames", 1));
+        fps = float(num("fps", 8.0));
+        scale = float(num("scale", 1.0));
+        lua_getfield(L, 4, "software");
+        software = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+    }
+    Input::setCustomCursor(path, hx, hy, scale, fw, fh, frames, fps, software);
+    return 0;
+}
 // Dedos no mundo (fora da interface e do controle de toque): {id, x, y}.
 int input_touches(lua_State* L) {
     const auto& ts = Input::touches();
@@ -3358,6 +3391,15 @@ declare input: {
     -- stick), in window pixels: {id, x, y}. Two fingers make a pan or a
     -- pinch; the game reads them and decides.
     touches: () -> { { id: number, x: number, y: number } },
+    -- Cursor do mouse do jogo (PC; no celular e no navegador nao faz nada).
+    -- Sem chamar, vale o cursor do sistema. path e' um PNG do jogo; hotspot
+    -- e' o pixel da imagem que aponta (a ponta da seta), em pixels da imagem
+    -- original. opcoes: frame_w/frame_h (tamanho de um quadro da folha),
+    -- frames (quantos), fps (animacao, padrao 8), scale (multiplica a escala
+    -- da janela/DPI, padrao 1), software (true: o motor desenha o cursor, sem
+    -- cursor de hardware; tambem vale se o sistema recusar o de hardware). Pode chamar todo quadro: a mesma chamada nao
+    -- recarrega nem recria nada. set_cursor(nil) volta ao cursor do sistema.
+    set_cursor: (path: string?, hotspot_x: number?, hotspot_y: number?, options: { frame_w: number?, frame_h: number?, frames: number?, fps: number?, scale: number?, software: boolean? }?) -> (),
 }
 
 -- Models placed in the map.
