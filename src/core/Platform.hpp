@@ -136,6 +136,16 @@ void setTextInput(bool on); // src/platform/android/AndroidMain.cpp
 inline void setTextInput(bool) {}
 #endif
 
+// Dica de taxa de quadros ao compositor (Android 11+: ANativeWindow_setFrameRate, fonte fixa). Com o limite de
+// FPS do jogo (fps_cap), a tela de 120 Hz passa a apresentar em passo fixo (30 fps = cada 4 vblanks) em vez de
+// depender so' do sleep do limitador. 0 = sem dica. No-op fora do Android.
+#if defined(__ANDROID__)
+void setFrameRateHint(int fps); // src/platform/android/AndroidMain.cpp
+void applyFrameRateHintIfNew();
+#else
+inline void setFrameRateHint(int) {}
+#endif
+
 // Roda `fn` em outra thread e devolve o futuro (std::async). No navegador a v1
 // nao tem threads (pediria COOP/COEP do servidor): roda aqui e o futuro sai
 // pronto, entao quem consulta com wait_for(0) recebe `ready` na hora.

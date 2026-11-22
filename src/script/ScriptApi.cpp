@@ -2422,6 +2422,7 @@ int perf_fps_cap(lua_State* L) {
 }
 int perf_set_fps_cap(lua_State* L) {
     ScriptBridge::fpsCap() = std::clamp(static_cast<int>(luaL_checknumber(L, 1)), 0, 1000);
+    platform::setFrameRateHint(ScriptBridge::fpsCap());
     return 0;
 }
 

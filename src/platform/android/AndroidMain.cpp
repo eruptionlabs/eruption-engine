@@ -22,6 +22,7 @@
 #include "core/Platform.hpp"
 #include "core/TouchRouter.hpp"
 
+#include <dlfcn.h>
 #include <android/asset_manager.h>
 #include <android/log.h>
 #include <android/native_window.h>
@@ -410,6 +411,38 @@ bool shareFile(const std::string& path, const char* mimeType) {
     return ok;
 }
 
+namespace {
+int g_fpsHint = 0;
+ANativeWindow* g_hintWindow = nullptr;
+int g_hintApplied = -1;
+// ANativeWindow_setFrameRate existe desde a API 30; o APK mira a 28, entao resolve por dlsym.
+void applyFrameRateHint() {
+    if (!g_app || !g_app->window) return;
+    if (g_hintWindow == g_app->window && g_hintApplied == g_fpsHint) return;
+    using Fn = int32_t (*)(ANativeWindow*, float, int8_t);
+    static Fn fn = [] {
+        void* h = dlopen("libandroid.so", RTLD_NOW);
+        return h ? reinterpret_cast<Fn>(dlsym(h, "ANativeWindow_setFrameRate")) : nullptr;
+    }();
+    g_hintWindow = g_app->window;
+    g_hintApplied = g_fpsHint;
+    if (!fn) {
+        __android_log_print(ANDROID_LOG_WARN, "Eruption", "frame rate hint: ANativeWindow_setFrameRate indisponivel (API < 30)");
+        return;
+    }
+    // compatibilidade 1 = FIXED_SOURCE: o conteudo e' de taxa fixa, o compositor escolhe um multiplo da tela.
+    const int32_t r = fn(g_app->window, static_cast<float>(g_fpsHint), 1);
+    __android_log_print(ANDROID_LOG_WARN, "Eruption", "frame rate hint %d fps -> %d", g_fpsHint, r);
+}
+} // namespace
+void setFrameRateHint(int fps) {
+    g_fpsHint = fps;
+    __android_log_print(ANDROID_LOG_WARN, "Eruption", "frame rate hint pedido: %d fps (janela %s)", fps,
+                        g_app && g_app->window ? "pronta" : "ainda nao");
+    applyFrameRateHint();
+}
+void applyFrameRateHintIfNew() { applyFrameRateHint(); } // janela nova (volta da pausa): reaplica
+
 // Abre/fecha o teclado do sistema (IME) para a entrada de texto. O Java pede
 // ao InputMethodManager na thread de UI; falha so' vai para o logcat.
 void setTextInput(bool on) {
@@ -511,6 +544,7 @@ void rotearToque(const InputEvent& e) {
 } // namespace
 
 void glfwPollEvents() {
+    eruption::platform::applyFrameRateHintIfNew();
     // Pausa (thread do motor): solta a superficie, avisa a thread do Android e
     // espera a janela nova; ao voltar recria e segue no mesmo ponto do jogo.
     if (g_surfaceLost && !g_surfaceReleased) {
