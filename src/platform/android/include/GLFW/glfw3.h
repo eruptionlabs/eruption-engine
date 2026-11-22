@@ -35,6 +35,7 @@ typedef void (*GLFWcharfun)(GLFWwindow*, unsigned int);
 typedef void (*GLFWmousebuttonfun)(GLFWwindow*, int, int, int);
 typedef void (*GLFWcursorposfun)(GLFWwindow*, double, double);
 typedef void (*GLFWscrollfun)(GLFWwindow*, double, double);
+typedef void (*GLFWwindowfocusfun)(GLFWwindow*, int);
 typedef void (*GLFWframebuffersizefun)(GLFWwindow*, int, int);
 
 int glfwInit();
@@ -64,6 +65,7 @@ GLFWcharfun glfwSetCharCallback(GLFWwindow* window, GLFWcharfun cb);
 GLFWmousebuttonfun glfwSetMouseButtonCallback(GLFWwindow* window, GLFWmousebuttonfun cb);
 GLFWcursorposfun glfwSetCursorPosCallback(GLFWwindow* window, GLFWcursorposfun cb);
 GLFWscrollfun glfwSetScrollCallback(GLFWwindow* window, GLFWscrollfun cb);
+GLFWwindowfocusfun glfwSetWindowFocusCallback(GLFWwindow* window, GLFWwindowfocusfun cb);
 GLFWframebuffersizefun glfwSetFramebufferSizeCallback(GLFWwindow* window, GLFWframebuffersizefun cb);
 int glfwJoystickPresent(int jid);
 int glfwJoystickIsGamepad(int jid);

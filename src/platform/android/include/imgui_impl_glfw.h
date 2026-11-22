@@ -10,3 +10,4 @@ void ImGui_ImplGlfw_MouseButtonCallback(GLFWwindow* window, int button, int acti
 void ImGui_ImplGlfw_CursorPosCallback(GLFWwindow* window, double x, double y);
 void ImGui_ImplGlfw_ScrollCallback(GLFWwindow* window, double xoffset, double yoffset);
 void ImGui_ImplGlfw_CharCallback(GLFWwindow* window, unsigned int c);
+void ImGui_ImplGlfw_WindowFocusCallback(GLFWwindow* window, int focused);

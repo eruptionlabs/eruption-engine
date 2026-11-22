@@ -58,6 +58,7 @@ void Input::init(GLFWwindow* window) {
     glfwSetMouseButtonCallback(window, mouseButtonCallback);
     glfwSetCursorPosCallback(window, cursorPosCallback);
     glfwSetScrollCallback(window, scrollCallback);
+    glfwSetWindowFocusCallback(window, focusCallback);
 }
 
 void Input::shutdown() {
@@ -68,6 +69,7 @@ void Input::shutdown() {
         glfwSetMouseButtonCallback(s_window, nullptr);
         glfwSetCursorPosCallback(s_window, nullptr);
         glfwSetScrollCallback(s_window, nullptr);
+        glfwSetWindowFocusCallback(s_window, nullptr);
     }
     s_window = nullptr;
 }
@@ -245,6 +247,20 @@ void Input::setCursorVisible(bool visible) {
 void Input::setCursorLocked(bool locked) {
     s_cursorLocked = locked;
     if (s_window) glfwSetInputMode(s_window, GLFW_CURSOR, locked ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+}
+
+// PERDA DE FOCO: com a janela sem foco o sistema entrega o soltar das teclas
+// a outra janela. Alt+Tab deixava o Alt "apertado" para sempre (o soltar
+// nunca chegava) e o jogo, que so' anda com WASD sem Alt/Ctrl, travava o
+// movimento ate' a tecla ser apertada de novo. Ao perder o foco tudo solta,
+// teclas e botoes, e o ImGui recebe o mesmo aviso (ele foi iniciado sem os
+// callbacks proprios, entao so' sabe do foco por aqui).
+void Input::focusCallback(GLFWwindow* window, int focused) {
+    ImGui_ImplGlfw_WindowFocusCallback(window, focused);
+    if (focused) return;
+    s_keysPhys.fill(false);
+    for (size_t k = 0; k < s_keys.size(); ++k) s_keys[k] = s_keysVirt[k];
+    s_mouse.fill(false);
 }
 
 void Input::keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {

@@ -565,6 +565,8 @@ GLFWcharfun glfwSetCharCallback(GLFWwindow* w, GLFWcharfun cb) { std::swap(w->ch
 GLFWmousebuttonfun glfwSetMouseButtonCallback(GLFWwindow* w, GLFWmousebuttonfun cb) { std::swap(w->mouseCb, cb); return cb; }
 GLFWcursorposfun glfwSetCursorPosCallback(GLFWwindow* w, GLFWcursorposfun cb) { std::swap(w->cursorCb, cb); return cb; }
 GLFWscrollfun glfwSetScrollCallback(GLFWwindow* w, GLFWscrollfun cb) { std::swap(w->scrollCb, cb); return cb; }
+// Sem teclado fisico a soltar no Android: o foco nunca prende tecla, nada a avisar.
+GLFWwindowfocusfun glfwSetWindowFocusCallback(GLFWwindow*, GLFWwindowfocusfun) { return nullptr; }
 GLFWframebuffersizefun glfwSetFramebufferSizeCallback(GLFWwindow* w, GLFWframebuffersizefun cb) {
     std::swap(w->sizeCb, cb);
     return cb;
@@ -608,6 +610,7 @@ void ImGui_ImplGlfw_NewFrame() {
     g_lastFrame = now;
 }
 void ImGui_ImplGlfw_KeyCallback(GLFWwindow*, int, int, int, int) {}
+void ImGui_ImplGlfw_WindowFocusCallback(GLFWwindow*, int) {}
 void ImGui_ImplGlfw_MouseButtonCallback(GLFWwindow*, int button, int action, int) {
     // Para o motor, um dedo e' o botao direito (gira a camera); para o ImGui,
     // qualquer toque de um dedo e' o esquerdo, senao nenhum controle da tela

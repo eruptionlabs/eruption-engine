@@ -180,6 +180,7 @@ private:
     static void mouseButtonCallback(GLFWwindow* w, int button, int action, int mods);
     static void cursorPosCallback(GLFWwindow* w, double x, double y);
     static void scrollCallback(GLFWwindow* w, double xoff, double yoff);
+    static void focusCallback(GLFWwindow* w, int focused);
 };
 
 } // namespace eruption
