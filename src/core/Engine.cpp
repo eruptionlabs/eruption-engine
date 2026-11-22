@@ -1828,6 +1828,7 @@ float Engine::advanceFrame() {
     SystemMonitor::update();
 
     updateWarp(); // troca de mapa pelo seletor (leitura em thread, montagem pelo loadMap)
+    pollShoreMask(); // grade da beira montada em segundo plano na troca de mapa
     updateTestTour(m_frameDt);
     updateWorld(); // vizinhos do mundo contínuo entram e saem
     refreshIrradianceProbes(); // depois deles: a grade ve o que entrou

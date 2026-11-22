@@ -60,6 +60,10 @@ struct LoadedMap {
     // Single-file GLB maps bring their own ground geometry and models.
     // The generated flat terrain is kept only as a hidden collision/walkable fallback.
     bool isGlbMap = true;
+    // Chao mais baixo da geometria do .glb (Y de mundo), medido enquanto os
+    // nos ainda tem malha: a pre-carga converte os modelos e libera os
+    // vertices antes da troca. 3.4e38 = ainda nao medido.
+    float geometryMinY = 3.4e38f;
 
     std::vector<ModelFile> models;
     std::vector<TerrainMesh> terrainChunks;

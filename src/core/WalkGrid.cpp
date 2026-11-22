@@ -398,8 +398,12 @@ void Engine::setWaterLevel(bool enabled, float level) {
     auto mesh = TerrainParser::generateWaterMesh(m_currentMap->terrain, 0, 0, m_currentMap->terrain.width,
                                                  m_currentMap->terrain.height, level, 0.0f, true, false);
     m_water.setWaterMesh(mesh);
-    cacheWaterBounds(mesh);
+    // O nivel antes do cacheWaterBounds: ele decide se a agua esta' soterrada
+    // pelo m_mapBaseWaterLevel. Na ordem inversa, a agua posta pela cena
+    // (environment.water) num mapa sem agua propria era julgada pelo nivel
+    // antigo (-1e6) e o passe de agua ficava desligado.
     m_mapBaseWaterLevel = level;
+    cacheWaterBounds(mesh);
     m_waterOn = !mesh.vertices.empty();
 }
 

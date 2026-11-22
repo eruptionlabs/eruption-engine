@@ -150,6 +150,10 @@ void Engine::uploadVfxGround() {
     m_vfx.setGroundHeights(h, vw, vd, Vec2(t.offsetX, t.offsetZ), t.scale > 0.0f ? t.scale : 10.0f);
 }
 
+float Engine::sampleOpenMapHeight(const LoadedMap& map, float x, float z) {
+    return sampleGlbOrTerrainHeight(map, x, z);
+}
+
 float Engine::sampleTerrainHeight(float x, float z, float y, bool withRelief) const {
     const LoadedMap* map = mapAt(x, z, y); // o aberto ou um vizinho em cena
     if (!map) return 0.0f;
@@ -354,6 +358,29 @@ static uint64_t mapContentKey(const std::string& glbPath, const std::string& map
     return key;
 }
 
+// Y de mundo mais baixo da geometria dos modelos do mapa (teste de agua
+// soterrada). Pelos vertices quando o no ainda os tem; senao pela caixa local
+// (a do dono, em geometria compartilhada), nos 8 cantos pela matriz do no.
+static float glbGeometryMinY(const LoadedMap& map) {
+    float minY = 3.4e38f;
+    for (const auto& model : map.models)
+        for (const auto& node : model.nodes) {
+            if (!node.vertices.empty()) {
+                for (const auto& v : node.vertices) minY = std::min(minY, (node.renderMatrix * Vec4(v, 1.0f)).y);
+                continue;
+            }
+            const bool shared = node.geometryShareIndex >= 0 &&
+                                node.geometryShareIndex < static_cast<int32_t>(model.nodes.size());
+            const BoundingBox& b = shared ? model.nodes[node.geometryShareIndex].box : node.box;
+            if (b.min.x > b.max.x) continue; // caixa vazia
+            for (int c = 0; c < 8; ++c) {
+                const Vec3 q((c & 1) ? b.max.x : b.min.x, (c & 2) ? b.max.y : b.min.y, (c & 4) ? b.max.z : b.min.z);
+                minY = std::min(minY, (node.renderMatrix * Vec4(q, 1.0f)).y);
+            }
+        }
+    return minY;
+}
+
 static uint64_t mapGeometryKey(const std::vector<ModelAsset>& models) {
     uint64_t h = 1469598103934665603ull;
     for (const ModelAsset& model : models) {
@@ -478,6 +505,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     m_vfx.clear(); // efeitos pertencem ao mapa que saiu
 
     // Configure water mesh from map data
+    m_shoreBuildDeferred = true; // a grade da beira sai uma vez so', no fim da carga
     m_water.clearWaterMesh();
     if (loadedMap) {
         float wl, wh;
@@ -488,6 +516,13 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
         m_mapBaseWaterLevel = wl;
         m_waterOn = !wmesh.vertices.empty();
         m_water.setWaterMesh(wmesh);
+        // Chao mais baixo da geometria do .glb. O .ter que acompanha o mapa
+        // pode ser mais raso que o chao de verdade: num mapa com .ter ate' -5
+        // e o chao do .glb ate' -40, a agua em -28 era dada por soterrada e
+        // nao aparecia em modo nenhum. A pre-carga ja' mediu antes de liberar
+        // a malha (readPreparedMap); na carga direta os nos ainda a tem.
+        if (loadedMap->geometryMinY >= 3.0e38f) loadedMap->geometryMinY = glbGeometryMinY(*loadedMap);
+        m_mapGeometryMinY = loadedMap->geometryMinY;
         cacheWaterBounds(wmesh);
         // MAPA SEM AGUA NAO TEM NIVEL DE AGUA. getMapWaterParams devolve 0
         // quando nao ha plano (e' a sentinela de "desligado" da geracao da
@@ -1082,7 +1117,10 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     // teste podia dar a agua por soterrada ou montar a beira errada. So'
     // religar a agua pelo menu ("Force Water") refazia isso - parecia que a
     // agua precisava de um reload.
+    m_shoreBuildDeferred = false;
+    m_shoreAsyncOnce = true; // a grade da beira sai em segundo plano (pollShoreMask)
     cacheWaterBounds(m_shoreWaterSrc);
+    m_shoreAsyncOnce = false;
     loadPhase("vfx+fim");
     // ERUPTION_TEST_DUMP_RELIEF_AMP=1 (prova, eada502): amplitude registrada
     // (ModelRenderer::m_texReliefAmp) de cada textura de CHAO deste mapa -
@@ -1659,6 +1697,7 @@ std::shared_ptr<Engine::PreparedMap> Engine::readPreparedMap(const std::string& 
             if (!bake.textures.empty()) out->bakes.emplace(model.filePath, std::move(bake));
         }
     }
+    out->map->geometryMinY = glbGeometryMinY(*out->map); // antes de a conversao liberar a malha
     out->models.reserve(out->map->models.size());
     for (auto& model : out->map->models) out->models.push_back(convertModelToAssetReleasing(model));
     // Vertices, solda, celulas do chao e costuras: so' CPU, sem textura

@@ -259,6 +259,8 @@ public:
     // withRelief = false: o chao sem o desnivel do relevo assado na tela
     // (ModelRenderer::reliefFloorDelta) - a inclinacao do anel no chao.
     float sampleTerrainHeight(float x, float z, float y = kAnyHeight, bool withRelief = true) const;
+    // Altura do chao de UM mapa (sem vizinhos nem relevo): so' le', qualquer thread.
+    static float sampleOpenMapHeight(const LoadedMap& map, float x, float z);
     // Raio contra a grade de altura do mapa (.ter); falso se o mapa não tem uma.
     bool raycastTerrain(const Vec3& origin, const Vec3& dir, float maxT, float& hitT) const;
     // Distancia da camera ao chao no centro da tela (marcador das curvas por distancia).
@@ -625,6 +627,9 @@ public:
     void cacheWaterBounds(const struct WaterMesh& mesh);
     void buildShoreMask(const struct WaterMesh& mesh);
     void rebuildShoreMask();
+    void rebuildShoreMaskAsync(); // na troca de mapa: monta em segundo plano
+    void pollShoreMask();         // entrega a grade pronta (a cada quadro)
+    void applyShoreMask(struct ShoreOut& r);
     Timer& timer() { return m_timer; }
     bool& showConsole() { return m_showConsole; }
     bool& showDebugOverlay() { return m_showDebugOverlay; }
@@ -1682,6 +1687,7 @@ private:
     // true quando o nivel da agua esta' abaixo de TODO o terreno (plano
     // global soterrado, caso de cidade-A) - a agua nunca pode ser vista.
     bool m_waterFullyBuried = false;
+    float m_mapGeometryMinY = 3.4e38f; // chao mais baixo do .glb do mapa (teste de agua soterrada)
     // Escala do balanco da vegetacao (graphics.json wind_sway_scale).
     float m_windSwayScale = 0.15f;
     // Mapa de sombra refeito a cada N quadros (graphics.json shadow_update_interval).
@@ -2204,6 +2210,13 @@ private:
     // beira (onda, lava subindo, contato) e' propriedade de cada plano.
     WaterMesh m_shoreWaterSrc;
     WaterMesh m_shoreLavaSrc;
+    // Durante o loadMap a grade da beira so' e' montada uma vez, no fim, com a
+    // config final (antes eram tres montagens, uma de ~75 ms cada num mapa grande).
+    bool m_shoreBuildDeferred = false;
+    bool m_shoreAsyncOnce = false;    // a proxima montagem sai em segundo plano (fim do loadMap)
+    uint32_t m_shoreGen = 0;          // sobe a cada montagem; descarta resultado velho
+    uint32_t m_shoreAsyncGen = 0;
+    std::future<std::shared_ptr<struct ShoreOut>> m_shoreJob;
     std::vector<uint32_t> m_shoreLavaCounts;
     WaterBenchmark m_waterBenchmark;
     bool m_waterForceWaterPrev = false;

@@ -16,6 +16,7 @@
 #include "renderer/ShaderCompiler.hpp"
 #include "formats/MapLoader.hpp"
 #include "core/Project.hpp"
+#include "core/Platform.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <vk_mem_alloc.h>
 #include <imgui.h>
@@ -25,6 +26,8 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <functional>
+#include <future>
 
 namespace eruption {
 
@@ -225,6 +228,7 @@ void Engine::cacheWaterBounds(const WaterMesh& mesh) {
             terrainMinY = std::min({terrainMinY, c.height[0], c.height[1],
                                     c.height[2], c.height[3]});
         }
+        terrainMinY = std::min(terrainMinY, m_mapGeometryMinY);
         const float waterY = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
         // Agua de mapa vizinho em cena tem nivel e chao proprios: a do aberto
         // soterrada nao apaga a deles.
@@ -269,17 +273,35 @@ void Engine::buildShoreMask(const WaterMesh& mesh) {
 // A beira e' propriedade do plano: o shader le' o nivel, o tipo e o modo
 // daquele liquido (DeferredLighting::setShoreLiquids). Refeita quando a agua
 // ou as lavas sao remontadas.
-void Engine::rebuildShoreMask() {
+// Entradas e saidas da grade da beira: so' dados, para montar fora do fio principal.
+struct ShoreIn {
+    WaterMesh agua, lava;
+    std::vector<uint32_t> lavaCounts;
+    std::vector<float> lavaLevels;
+    float nivelAgua = 0.0f;
+    bool comAgua = false, comLava = false;
+    std::function<float(float, float)> alturaChao; // chao do mapa aberto, sem relevo
+};
+struct ShoreOut {
+    bool vazia = true;
+    std::vector<float> px;
+    uint32_t n = 0;
+    Vec2 o{0.0f};
+    float invExtent = 0.0f;
+    float cel = 0.0f;
+    bool temCampo = false;
+    uint32_t comDir = 0, visiveis = 0, lava = 0;
+    uint32_t porSlot[8] = {};
+    std::vector<float> rg;
+};
+
+static ShoreOut computeShoreMask(const ShoreIn& in) {
     constexpr float kAlcance = 24.0f;
     constexpr uint32_t kMaxLado = 1024;
     constexpr uint32_t kMaxLavas = 7; // slots 1..7 (DeferredLighting::kShoreLiquids - 1)
-    const WaterMesh& agua = m_shoreWaterSrc;
-    const bool comAgua = !agua.vertices.empty() && agua.indices.size() >= 3 && !m_waterFullyBuried;
-    const bool comLava = !m_shoreLavaSrc.vertices.empty() && !m_shoreLavaCounts.empty();
-    if (!comAgua && !comLava) {
-        m_deferredLighting.setShoreMask(std::vector<float>(4, 0.0f), 1, 1, Vec2(0.0f), 0.0f);
-        return;
-    }
+    const WaterMesh& agua = in.agua;
+    const bool comAgua = in.comAgua, comLava = in.comLava;
+    ShoreOut out;
     // Retangulo que cobre os dois (mais o alcance).
     Vec2 mn(FLT_MAX), mx(-FLT_MAX);
     auto cresce = [&](const WaterMesh& m) {
@@ -289,7 +311,7 @@ void Engine::rebuildShoreMask() {
         }
     };
     if (comAgua) cresce(agua);
-    if (comLava) cresce(m_shoreLavaSrc);
+    if (comLava) cresce(in.lava);
     const Vec2 o = mn - Vec2(kAlcance);
     const float lado = std::max(mx.x - mn.x, mx.y - mn.y) + 2.0f * kAlcance;
     const float cel = std::max(2.0f, lado / float(kMaxLado));
@@ -324,7 +346,7 @@ void Engine::rebuildShoreMask() {
                     // dela cobre o mapa inteiro). Lava: o contorno ja' e' a
                     // margem autorada, e numa caverna a altura do terreno e' a
                     // do TETO - testar o chao apagava a lava inteira.
-                    if (slot > 0 || sampleTerrainHeight(px, pz, kAnyHeight, false) < nivel - 0.2f) {
+                    if (slot > 0 || in.alturaChao(px, pz) < nivel - 0.2f) {
                         fonte[k] = uint8_t(slot + 1);
                         altura[k] = sup;
                     }
@@ -335,14 +357,14 @@ void Engine::rebuildShoreMask() {
     // do mapa costuma passar por baixo da cratera inteira).
     if (comLava) {
         size_t i0 = 0;
-        for (size_t s = 0; s < m_shoreLavaCounts.size() && s < kMaxLavas; ++s) {
-            const size_t i1 = i0 + m_shoreLavaCounts[s];
-            const float nivel = s < m_lavaLiquids.size() ? m_lavaLiquids[s].level : -1.0e9f;
-            rasteriza(m_shoreLavaSrc, i0, std::min(i1, m_shoreLavaSrc.indices.size()), nivel, uint8_t(1 + s));
+        for (size_t s = 0; s < in.lavaCounts.size() && s < kMaxLavas; ++s) {
+            const size_t i1 = i0 + in.lavaCounts[s];
+            const float nivel = s < in.lavaLevels.size() ? in.lavaLevels[s] : -1.0e9f;
+            rasteriza(in.lava, i0, std::min(i1, in.lava.indices.size()), nivel, uint8_t(1 + s));
             i0 = i1;
         }
     }
-    if (comAgua) rasteriza(agua, 0, agua.indices.size(), m_mapBaseWaterLevel + m_waterMenu.config.waterLevel, 0);
+    if (comAgua) rasteriza(agua, 0, agua.indices.size(), in.nivelAgua, 0);
 
     // Distancia (chanfro 3-4) a' celula de liquido visivel mais perto, levando
     // junto QUAL liquido e' (o vizinho que deu a menor distancia).
@@ -400,7 +422,7 @@ void Engine::rebuildShoreMask() {
                     for (int i = 0; i < 5; ++i) {
                         const float hx = o.x + x * cel + (i + 0.5f) * passo * 0.8f;
                         const float hz = o.y + z * cel + (j + 0.5f) * passo * 0.8f;
-                        h[j][i] = std::max(sampleTerrainHeight(hx, hz, kAnyHeight, false), nivel);
+                        h[j][i] = std::max(in.alturaChao(hx, hz), nivel);
                     }
                 float s = 0.0f;
                 for (int j = 0; j < 5; ++j)
@@ -434,7 +456,7 @@ void Engine::rebuildShoreMask() {
     }
     std::vector<float> px(size_t(n) * n * 4, 0.0f);
     uint32_t visiveis = 0, lava = 0;
-    uint32_t porSlot[8] = {};
+    uint32_t (&porSlot)[8] = out.porSlot;
     for (size_t k = 0; k < d.size(); ++k) if (fonte[k]) ++porSlot[std::min<uint32_t>(fonte[k] - 1u, 7u)];
     for (size_t k = 0; k < d.size(); ++k) {
         const float dist = d[k] >= kInf ? 1e9f : float(d[k]) / 3.0f * cel;
@@ -445,7 +467,14 @@ void Engine::rebuildShoreMask() {
         visiveis += d[k] == 0;
         lava += d[k] == 0 && dono[k] > 0;
     }
-    m_deferredLighting.setShoreMask(px, n, n, o, 1.0f / (cel * float(n)));
+    out.vazia = false;
+    out.px = std::move(px);
+    out.n = n;
+    out.o = o;
+    out.cel = cel;
+    out.invExtent = 1.0f / (cel * float(n));
+    out.visiveis = visiveis;
+    out.lava = lava;
     // Campo agua -> terra para as ondulacoes da superficie (sempre para a
     // areia, inclusive em lago e ilha): distancia chanfrada 3-4 de cada
     // celula de agua do mapa ate' a celula seca mais perto, direcao = menos
@@ -537,15 +566,87 @@ void Engine::rebuildShoreMask() {
                     rg[2 * k] = sx / float(nAgua); rg[2 * k + 1] = sz / float(nAgua);
                 }
             }
-        m_water.setShoreField(comDir ? rg : std::vector<float>{}, n, n, o, 1.0f / (cel * float(n)));
-        ERUPTION_LOG_WARN("[WATER] campo agua->terra: %u celulas com direcao (grade %u, %.1f u)", comDir, n, cel);
+        out.temCampo = true;
+        out.comDir = comDir;
+        if (comDir) out.rg = std::move(rg);
+    }
+    return out;
+}
+
+// Entrega a grade pronta a GPU (fio principal).
+void Engine::applyShoreMask(ShoreOut& r) {
+    if (r.vazia) {
+        m_deferredLighting.setShoreMask(std::vector<float>(4, 0.0f), 1, 1, Vec2(0.0f), 0.0f);
+        return;
+    }
+    const uint32_t n = r.n;
+    m_deferredLighting.setShoreMask(r.px, n, n, r.o, r.invExtent);
+    if (r.temCampo) {
+        m_water.setShoreField(r.comDir ? r.rg : std::vector<float>{}, n, n, r.o, r.invExtent);
+        ERUPTION_LOG_WARN("[WATER] campo agua->terra: %u celulas com direcao (grade %u, %.1f u)", r.comDir, n, r.cel);
     } else {
         m_water.setShoreField({}, 0, 0, Vec2(0.0f), 0.0f);
     }
     ERUPTION_LOG_WARN("[WATER] beira dos liquidos: grade %ux%u (%.1f u/celula), %u celulas de liquido visivel (%u de lava; "
-                      "por liquido %u %u %u %u %u %u %u %u)", n, n, cel, visiveis, lava, porSlot[0], porSlot[1], porSlot[2],
-                      porSlot[3], porSlot[4], porSlot[5], porSlot[6], porSlot[7]);
+                      "por liquido %u %u %u %u %u %u %u %u)", n, n, r.cel, r.visiveis, r.lava, r.porSlot[0], r.porSlot[1],
+                      r.porSlot[2], r.porSlot[3], r.porSlot[4], r.porSlot[5], r.porSlot[6], r.porSlot[7]);
 }
+
+void Engine::rebuildShoreMask() {
+    if (m_shoreBuildDeferred) { ++m_shoreGen; return; } // o loadMap refaz no fim, uma vez so'
+    // ERUPTION_TEST_SHORE_SYNC=1 (teste): monta a grade no quadro da troca, como antes
+    // (compara a imagem da montagem em segundo plano com a sincrona).
+    static const bool kSync = std::getenv("ERUPTION_TEST_SHORE_SYNC") != nullptr;
+    if (m_shoreAsyncOnce && !kSync) { m_shoreAsyncOnce = false; rebuildShoreMaskAsync(); return; }
+    m_shoreAsyncOnce = false;
+    ++m_shoreGen; // um resultado montado em segundo plano antes desta montagem ja' nao vale
+    ShoreIn in;
+    in.agua = m_shoreWaterSrc;
+    in.comAgua = !in.agua.vertices.empty() && in.agua.indices.size() >= 3 && !m_waterFullyBuried;
+    in.comLava = !m_shoreLavaSrc.vertices.empty() && !m_shoreLavaCounts.empty();
+    if (!in.comAgua && !in.comLava) {
+        ShoreOut vazio;
+        applyShoreMask(vazio);
+        return;
+    }
+    if (in.comLava) in.lava = m_shoreLavaSrc;
+    in.lavaCounts = m_shoreLavaCounts;
+    for (const auto& l : m_lavaLiquids) in.lavaLevels.push_back(l.level);
+    in.nivelAgua = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
+    in.alturaChao = [this](float x, float z) { return sampleTerrainHeight(x, z, kAnyHeight, false); };
+    ShoreOut r = computeShoreMask(in);
+    applyShoreMask(r);
+}
+
+// Troca de mapa: a grade da beira (~80-100 ms num mapa grande) sai do quadro da
+// troca. Monta em segundo plano com o chao do mapa aberto (a troca zera os vizinhos
+// antes, entao e' o mesmo chao que o sincrono leria) e entra num quadro seguinte.
+void Engine::rebuildShoreMaskAsync() {
+    ++m_shoreGen;
+    ShoreIn in;
+    in.agua = m_shoreWaterSrc;
+    in.comAgua = !in.agua.vertices.empty() && in.agua.indices.size() >= 3 && !m_waterFullyBuried;
+    in.comLava = !m_shoreLavaSrc.vertices.empty() && !m_shoreLavaCounts.empty();
+    if ((!in.comAgua && !in.comLava) || !m_currentMap) {
+        rebuildShoreMask();
+        return;
+    }
+    if (in.comLava) in.lava = m_shoreLavaSrc;
+    in.lavaCounts = m_shoreLavaCounts;
+    for (const auto& l : m_lavaLiquids) in.lavaLevels.push_back(l.level);
+    in.nivelAgua = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
+    std::shared_ptr<const LoadedMap> map = m_currentMap;
+    in.alturaChao = [map](float x, float z) { return sampleOpenMapHeight(*map, x, z); };
+    m_shoreAsyncGen = m_shoreGen;
+    m_shoreJob = platform::runAsync([in = std::move(in)]() mutable { return std::make_shared<ShoreOut>(computeShoreMask(in)); });
+}
+
+void Engine::pollShoreMask() {
+    if (!m_shoreJob.valid() || m_shoreJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    std::shared_ptr<ShoreOut> r = m_shoreJob.get();
+    if (r && m_shoreAsyncGen == m_shoreGen) applyShoreMask(*r);
+}
+
 
 // Copia os liquidos do mapa (lava, sobretudo) para o buffer que o composite
 // le' (binding 5, std430: um cabecalho de 16 B com a contagem, depois 2 vec4
