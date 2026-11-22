@@ -45,6 +45,11 @@ GLFWmonitor* glfwGetPrimaryMonitor();
 const GLFWvidmode* glfwGetVideoMode(GLFWmonitor* monitor);
 GLFWwindow* glfwCreateWindow(int width, int height, const char* title, GLFWmonitor* monitor, GLFWwindow* share);
 void glfwDestroyWindow(GLFWwindow* window);
+// Android: a janela e' sempre a tela cheia do sistema; estas so' existem para o
+// codigo de tela cheia em tempo de execucao compilar (nao fazem nada).
+GLFWmonitor* glfwGetWindowMonitor(GLFWwindow* window);
+void glfwSetWindowMonitor(GLFWwindow* window, GLFWmonitor* monitor, int x, int y, int w, int h, int refreshRate);
+void glfwGetWindowPos(GLFWwindow* window, int* x, int* y);
 void glfwSetWindowPos(GLFWwindow* window, int x, int y);
 void glfwSetWindowSize(GLFWwindow* window, int w, int h);
 void glfwSetWindowTitle(GLFWwindow* window, const char* title);

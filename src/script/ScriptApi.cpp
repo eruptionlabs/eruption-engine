@@ -65,6 +65,7 @@ struct ScriptBridge {
     }
     // A lista do quadro copia as dos vizinhos: refazer depois de mexer nelas.
     static void regionLightsChanged() { engine->rebuildWorldLights(); }
+    static Window& window() { return engine->m_window; }
     static PlayerController* player() { return engine->m_playerController; }
     static void setWeather(WeatherType t) { engine->applyWeatherTypeFull(t, 1.0f); }
     // Só nesta execução (não grava data/char_config.json).
@@ -1095,6 +1096,18 @@ int game_has_save(lua_State* L) {
 }
 int game_delete_save(lua_State* L) {
     lua_pushboolean(L, ScriptHost::deleteSave(slotArg(L, 1)));
+    return 1;
+}
+
+// ---------------------------------------------------------------- window
+
+// Tela cheia em tempo de execucao (a mesma troca do Alt+Enter).
+int window_set_fullscreen(lua_State* L) {
+    ScriptBridge::window().setFullscreen(lua_toboolean(L, 1) != 0);
+    return 0;
+}
+int window_is_fullscreen(lua_State* L) {
+    lua_pushboolean(L, ScriptBridge::window().isFullscreen());
     return 1;
 }
 
@@ -2792,6 +2805,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg game[] = {ERUPTION_API_FN(game, save), ERUPTION_API_FN(game, load), ERUPTION_API_FN(game, restart), ERUPTION_API_FN(game, save_settings), ERUPTION_API_FN(game, settings), ERUPTION_API_FN(game, has_save),
                                     ERUPTION_API_FN(game, delete_save), {nullptr, nullptr}};
     lib(L, "game", game);
+    static const luaL_Reg windowLib[] = {ERUPTION_API_FN(window, set_fullscreen), ERUPTION_API_FN(window, is_fullscreen), {nullptr, nullptr}};
+    lib(L, "window", windowLib);
     lib(L, "vars", vars);
     lib(L, "ui", ui);
     lib(L, "world", world);
@@ -3171,6 +3186,13 @@ declare game: {
     save_settings: (settings: { [string]: any }) -> boolean,
     -- The table last saved with save_settings, or an empty table.
     settings: () -> { [string]: any },
+}
+
+-- The game window. Alt+Enter does the same toggle.
+declare window: {
+    -- Fullscreen at the monitor's native mode, or back to the previous window.
+    set_fullscreen: (on: boolean) -> (),
+    is_fullscreen: () -> boolean,
 }
 
 declare player: {

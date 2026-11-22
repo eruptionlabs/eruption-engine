@@ -23,6 +23,13 @@ public:
     // PNG do icone (antes de init); vazio ou ilegivel = o icone do motor.
     void setIconFile(const std::string& path) { m_iconFile = path; }
     void maximize();
+    // Tela cheia em tempo de execucao (Alt+Enter, window.set_fullscreen). Liga:
+    // guarda posicao/tamanho da janela e vai para o modo nativo do monitor
+    // primario; desliga: volta ao que foi guardado. A troca dispara o callback
+    // de framebuffer, que recria a swapchain pelo caminho normal de resize.
+    void setFullscreen(bool on);
+    void toggleFullscreen() { setFullscreen(!isFullscreen()); }
+    bool isFullscreen() const;
     void shutdown();
 
     bool shouldClose() const;
@@ -49,6 +56,8 @@ private:
     ResizeCallback m_resizeCb;
     CloseCallback m_closeCb;
     float m_scrollOffset = 0.0f;
+    // Janela a que voltar ao sair da tela cheia (ver setFullscreen).
+    int m_winX = 100, m_winY = 100, m_winW = 1280, m_winH = 720;
 
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
     static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);

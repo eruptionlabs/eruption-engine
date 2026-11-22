@@ -404,6 +404,13 @@ declare game: {
     settings: () -> { [string]: any },
 }
 
+-- The game window. Alt+Enter does the same toggle.
+declare window: {
+    -- Fullscreen at the monitor's native mode, or back to the previous window.
+    set_fullscreen: (on: boolean) -> (),
+    is_fullscreen: () -> boolean,
+}
+
 declare player: {
     position: () -> vector,
     set_position: (position: vector) -> (),

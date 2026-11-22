@@ -385,6 +385,9 @@ GLFWwindow* glfwCreateWindow(int, int, const char*, GLFWmonitor*, GLFWwindow*) {
     return g_app && g_app->window ? &g_window : nullptr;
 }
 void glfwDestroyWindow(GLFWwindow*) {}
+GLFWmonitor* glfwGetWindowMonitor(GLFWwindow*) { return reinterpret_cast<GLFWmonitor*>(&g_mode); }
+void glfwSetWindowMonitor(GLFWwindow*, GLFWmonitor*, int, int, int, int, int) {}
+void glfwGetWindowPos(GLFWwindow*, int* x, int* y) { if (x) *x = 0; if (y) *y = 0; }
 void glfwSetWindowPos(GLFWwindow*, int, int) {}
 void glfwSetWindowSize(GLFWwindow*, int, int) {}
 void glfwSetWindowTitle(GLFWwindow*, const char*) {}

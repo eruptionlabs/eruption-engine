@@ -264,6 +264,17 @@ void Input::focusCallback(GLFWwindow* window, int focused) {
 }
 
 void Input::keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+#if !defined(__ANDROID__) // Android: sempre tela cheia, sem teclado fisico para isso
+    // Alt+Enter alterna tela cheia, antes de ImGui e dos scripts (jogo e editor).
+    // So' PRESS: o REPEAT de Enter segurado nao alterna de novo.
+    // O soltar passa adiante, para nao deixar a tecla presa.
+    if ((key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) && (mods & GLFW_MOD_ALT) && action != GLFW_RELEASE) {
+        if (action == GLFW_PRESS) {
+            if (Window* w = static_cast<Window*>(glfwGetWindowUserPointer(window))) w->toggleFullscreen();
+        }
+        return;
+    }
+#endif
     ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mods);
     if (key >= 0 && key < 512) {
         if (action == GLFW_PRESS) s_keysPhys[key] = true;

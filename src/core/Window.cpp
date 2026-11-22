@@ -73,6 +73,11 @@ bool Window::init(int width, int height, const std::string& title) {
     if (m_window && monitor && !wantFullscreen) {
         glfwSetWindowPos(m_window, 0, 0);
     }
+    if (wantFullscreen && nativeW > m_winW && nativeH > m_winH) {
+        // Iniciou em tela cheia: volta para uma janela centrada.
+        m_winX = (nativeW - m_winW) / 2;
+        m_winY = (nativeH - m_winH) / 2;
+    }
     if (wantFullscreen) {
         ERUPTION_LOG_WARN("Janela em TELA CHEIA exclusiva (ERUPTION_FULLSCREEN)");
     }
@@ -135,6 +140,34 @@ bool Window::init(int width, int height, const std::string& title) {
 
 void Window::maximize() {
     if (m_window) glfwMaximizeWindow(m_window);
+}
+
+bool Window::isFullscreen() const {
+#if defined(__EMSCRIPTEN__)
+    return false;
+#else
+    return m_window && glfwGetWindowMonitor(m_window) != nullptr;
+#endif
+}
+
+void Window::setFullscreen(bool on) {
+#if defined(__EMSCRIPTEN__)
+    (void)on;
+#else
+    if (!m_window || on == isFullscreen()) return;
+    if (on) {
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+        if (!mode) return; // sem monitor (tela desligada): fica como esta
+        glfwGetWindowPos(m_window, &m_winX, &m_winY);
+        glfwGetWindowSize(m_window, &m_winW, &m_winH);
+        glfwSetWindowMonitor(m_window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+        ERUPTION_LOG_INFO("[WINDOW] tela cheia %dx%d@%d", mode->width, mode->height, mode->refreshRate);
+    } else {
+        glfwSetWindowMonitor(m_window, nullptr, m_winX, m_winY, m_winW, m_winH, 0);
+        ERUPTION_LOG_INFO("[WINDOW] janela %dx%d", m_winW, m_winH);
+    }
+#endif
 }
 
 void Window::shutdown() {

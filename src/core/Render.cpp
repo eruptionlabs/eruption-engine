@@ -335,8 +335,22 @@ void Engine::render() {
     }
 
     settleRenderScale();
+#if ERUPTION_DEV
+    // ERUPTION_TEST_FULLSCREEN=N,M (so' desenvolvimento): liga a tela cheia no
+    // quadro N e desliga no M, para provar a troca de swapchain com a validacao.
+    {
+        static const std::pair<int, int> s_fs = [] {
+            int a = 0, b = 0;
+            if (const char* e = std::getenv("ERUPTION_TEST_FULLSCREEN")) std::sscanf(e, "%d,%d", &a, &b);
+            return std::pair<int, int>{a, b};
+        }();
+        if (s_fs.first > 0 && m_framesCount == s_fs.first) m_window.setFullscreen(true);
+        if (s_fs.second > 0 && m_framesCount == s_fs.second) m_window.setFullscreen(false);
+    }
+#endif
     if (m_resized) {
         m_vulkan.recreateSwapchain();
+        ERUPTION_LOG_INFO("[WINDOW] swapchain %ux%u", m_vulkan.swapExtent().width, m_vulkan.swapExtent().height);
         const VkExtent2D disp = displayExtent();
         uint32_t w = disp.width, h = disp.height;
         const uint32_t prevDispW = m_displayW ? m_displayW : disp.width;
