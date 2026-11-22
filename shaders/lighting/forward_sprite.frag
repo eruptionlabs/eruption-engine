@@ -46,7 +46,7 @@ layout(set = 1, binding = 0) uniform FrameUBO {
 
 void main() {
     vec4 texColor = slotTexture(inTexIndex, inUV);
-    if (texColor.a < 0.01) discard;
+    if (texColor.a < 0.5) discard; // 0,5 como no sprite.frag
 
     vec3 albedo = texColor.rgb * inTint.rgb;
     

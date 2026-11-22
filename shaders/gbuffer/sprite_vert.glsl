@@ -146,6 +146,22 @@ void main() {
             float hit = abs(across) > 1e-5 ? dot(groundN, anchorView.xyz) / across : 0.0;
             if (hit > 0.0 && hit < 1.0) depthScale = hit * 0.999;
         }
+        // Simetrico, acima da ancora: com a camera inclinada o topo do quadro
+        // (plano da tela, na profundidade da ancora) recua no mundo e uma
+        // parede logo atras do personagem cobria a cabeca. O vertice acima da
+        // ancora toma a profundidade do plano VERTICAL pela ancora (normal =
+        // frente horizontal da camera): o raio por ele corta esse plano mais
+        // perto da lente. So' profundidade, como no caso de baixo.
+        if (upBelow > 0.0 && (i_flags & 2048u) != 0u) {
+            vec3 fwdW = (u_inverseView * vec4(0.0, 0.0, -1.0, 0.0)).xyz;
+            vec3 fwdH = vec3(fwdW.x, 0.0, fwdW.z);
+            if (dot(fwdH, fwdH) > 1e-6) {
+                vec3 wallN = (u_view * vec4(normalize(fwdH), 0.0)).xyz;
+                float acrossW = dot(wallN, viewPos.xyz);
+                float hitW = abs(acrossW) > 1e-5 ? dot(wallN, anchorView.xyz) / acrossW : 0.0;
+                if (hitW > 0.0 && hitW < 1.0) depthScale = hitW * 0.999;
+            }
+        }
         // Acima do relevo da tesselacao (sprite_relief.glsl).
         float reliefLift = spriteReliefLift(i_anchorPoint.xyz, u_cameraPos, u_tessParams, u_tessLut0, u_tessLut1);
         depthScale *= spriteReliefPull(length(viewPos.xyz) * depthScale, reliefLift);

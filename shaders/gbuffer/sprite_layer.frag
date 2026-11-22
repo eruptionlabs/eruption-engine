@@ -80,7 +80,7 @@ void main() {
         albedo = slotTexture(v_paletteIndex, vec2(u, 0.5));
         albedo.a = 1.0;
     }
-    if (albedo.a < 0.01 || fadeCut(v_tint.a)) discard;
+    if (albedo.a < 0.5 || fadeCut(v_tint.a)) discard; // 0,5 como no sprite.frag
     albedo.a = 1.0;
     }
     albedo.rgb *= v_tint.rgb;

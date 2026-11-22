@@ -123,7 +123,10 @@ void main() {
         albedo.a = 1.0;
     }
 
-    if (albedo.a < 0.01 || fadeCut(v_tint.a)) discard;
+    // 0,5: sprite de 1 texel por pixel tem alfa 0 ou 1 (indiferente); o
+    // ampliado 4x, lido linear com mip, so' conta onde a cobertura passa da
+    // metade (com 0,01 a silhueta engordava ate' um pixel).
+    if (albedo.a < 0.5 || fadeCut(v_tint.a)) discard;
     }
 
     // Keep albedo in sRGB for both legacy and PBR paths so the base brightness

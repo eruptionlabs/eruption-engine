@@ -62,7 +62,7 @@ void main() {
         if (idx < 0.001) discard; 
     }
 
-    if (albedo.a < 0.01) discard;
+    if (albedo.a < 0.5) discard; // 0,5 como no sprite.frag
     albedo.rgb *= v_tint.rgb;
 
     // --- Exact Map Lighting Rules ---

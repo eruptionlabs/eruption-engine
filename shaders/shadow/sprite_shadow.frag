@@ -37,5 +37,5 @@ void main() {
     }
     
     // Mesmo pontilhado do sprite: a sombra do sol some junto com ele.
-    if (albedo.a < 0.01 || fadeCut(v_fade)) discard;
+    if (albedo.a < 0.5 || fadeCut(v_fade)) discard; // 0,5 como no sprite.frag
 }

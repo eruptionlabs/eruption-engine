@@ -25,6 +25,6 @@ void main() {
         if (idx < 0.5) discard;
         albedo.a = 1.0;
     }
-    if (albedo.a < 0.01) discard;
+    if (albedo.a < 0.5) discard; // 0,5 como no sprite.frag
     o_mask = 1.0;
 }

@@ -64,4 +64,26 @@ struct AnimFile {
     std::vector<float> delays;
 };
 
+// Folha desenhada a no maximo meia escala em toda camada (quadros ampliados 4x
+// e desenhados a 0,25): o fator de escala de cada ActSprite e' o que diz. O
+// motor le essas folhas com filtro linear e mip, para a reducao nao serrilhar.
+inline bool spriteSheetOversampled(const AnimFile& anim) {
+    bool any = false;
+    for (const auto& action : anim.actions)
+        for (const auto& frame : action.frames)
+            for (const auto& spr : frame.sprites) {
+                if (spr.scaleX > 0.5f || spr.scaleY > 0.5f) return false;
+                any = true;
+            }
+    return any;
+}
+
+// Tamanho de uma normal embutida (bloco "NRMS" do ERUPTSPR v4): o do quadro
+// dividido pelo divisor (1 = mesmo tamanho, o bloco "NRML"), nunca menor que 1.
+inline void spriteNormalSize(uint32_t w, uint32_t h, uint32_t divisor, uint32_t& nw, uint32_t& nh) {
+    const uint32_t d = divisor < 1 ? 1 : divisor;
+    nw = w / d < 1 ? 1 : w / d;
+    nh = h / d < 1 ? 1 : h / d;
+}
+
 } // namespace eruption

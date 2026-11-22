@@ -832,18 +832,26 @@ bool Engine::loadEruptSprV2(std::istream& f, const std::string& path, LoadedSpri
     // v4: NORMAL MAP EMBUTIDO. Depois das animações, "NRML", a contagem e, por
     // imagem (mesma ordem e tamanho das de cor), os pixels RGBA crus da normal
     // (OpenGL, verde para cima). Folha sem o bloco fica com a normal abaulada.
+    // "NRMS" e' o mesmo bloco com um divisor depois da contagem: cada normal
+    // tem o tamanho do quadro / divisor (folha de cor ampliada 4x, normal no
+    // tamanho original; o filtro linear a suaviza).
     out.normalTextures.clear();
     if (version >= 4) {
         char tag[4] = {};
         f.read(tag, 4);
         const uint32_t count = u32();
-        if (f && std::memcmp(tag, "NRML", 4) == 0 && count == sizes.size()) {
+        uint32_t divisor = 1;
+        const bool reduced = f && std::memcmp(tag, "NRMS", 4) == 0;
+        if (reduced) divisor = std::clamp(u32(), 1u, 16u);
+        if (f && (reduced || std::memcmp(tag, "NRML", 4) == 0) && count == sizes.size()) {
             for (uint32_t i = 0; i < count && f; ++i) {
                 SprImage img;
-                img.width = static_cast<uint16_t>(sizes[i].first);
-                img.height = static_cast<uint16_t>(sizes[i].second);
+                uint32_t nw = 0, nh = 0;
+                spriteNormalSize(sizes[i].first, sizes[i].second, divisor, nw, nh);
+                img.width = static_cast<uint16_t>(nw);
+                img.height = static_cast<uint16_t>(nh);
                 img.isIndexed = false;
-                img.pixels.resize(size_t(sizes[i].first) * sizes[i].second * 4);
+                img.pixels.resize(size_t(nw) * nh * 4);
                 f.read(reinterpret_cast<char*>(img.pixels.data()), static_cast<std::streamsize>(img.pixels.size()));
                 if (f) createTextureFromSprImage(img, nullptr, false, out.normalTextures, false, "", true);
             }
@@ -853,6 +861,15 @@ bool Engine::loadEruptSprV2(std::istream& f, const std::string& path, LoadedSpri
                 out.normalTextures.clear();
             }
         }
+    }
+    // Folha ampliada (toda camada desenhada a no maximo meia escala: o quadro
+    // tem >= 2 texels por pixel do tamanho original): filtro linear com mip,
+    // para a reducao nao serrilhar. As de tamanho original seguem em nearest.
+    if (spriteSheetOversampled(anim)) {
+        for (const auto& tex : out.textures)
+            if (tex.view != VK_NULL_HANDLE) m_bindless.updateTexture(tex.slot, tex.view, m_defaultSampler);
+        for (const auto& tex : out.normalTextures)
+            if (tex.view != VK_NULL_HANDLE) m_bindless.updateTexture(tex.slot, tex.view, m_defaultSampler);
     }
     out.act = std::move(anim);
     out.indexedTextureCount = 0;
