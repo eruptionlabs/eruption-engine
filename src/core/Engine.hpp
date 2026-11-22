@@ -45,6 +45,7 @@
 #include "renderer/WaterReflectionPass.hpp"
 #include "renderer/DebugLineRenderer.hpp"
 #include "renderer/OverlayLineRenderer.hpp"
+#include "renderer/ImmediateDraw.hpp"
 #include "renderer/SpriteSystem.hpp"
 #include "renderer/TextureAtlas.hpp"
 #include "renderer/ChunkManager.hpp"
@@ -604,6 +605,8 @@ public:
     SpriteSystem& spriteSystem() { return m_spriteSystem; }
     DebugLineRenderer& debugLineRenderer() { return m_debugLineRenderer; }
     OverlayLineRenderer& overlayLineRenderer() { return m_overlayLineRenderer; }
+    // Desenho imediato de script (world.draw_strip / world.draw_sprite).
+    ImmediateDraw& immediateDraw() { return m_immediateDraw; }
     bool& debugModelPivots() { return m_debugModelPivots; }
     PackManager& packManager() { return m_packManager; }
     float& fps() { return m_fps; }
@@ -1591,6 +1594,7 @@ private:
     uint32_t m_waterReflectionDiv = 2;
     DebugLineRenderer m_debugLineRenderer;
     OverlayLineRenderer m_overlayLineRenderer;
+    ImmediateDraw m_immediateDraw;
     SpriteSystem m_spriteSystem;
     TextureAtlas m_textureAtlas;
     ChunkManager m_chunkManager;

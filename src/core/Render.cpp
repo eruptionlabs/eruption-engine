@@ -2093,6 +2093,26 @@ void Engine::render() {
             Profiler::addGpuTime("VFX Draw", m_vulkan.timestampDeltaMs(14, 15));
         }
         m_vfx.endFrame(cmd); // sem particula: zera a mascara reativa uma vez
+        // Desenho imediato de script (world.draw_strip/draw_sprite): depois das
+        // particulas, no lit, profundidade so' leitura, com o mesmo jitter da cena.
+        if (m_immediateDraw.hasWork()) {
+            ImmediateDraw::View iv;
+            iv.colorView = m_deferredLighting.litImageView();
+            iv.colorImage = m_deferredLighting.litImage();
+            iv.depthView = m_gbuffer.depthView();
+            iv.extent = renderExtent();
+            iv.viewProj = m_camera.viewProjJittered();
+            iv.camRight = m_camera.right();
+            iv.camUp = m_camera.up();
+            iv.proj11 = m_camera.projNoJitter()[1][1];
+            iv.screenHeightPx = float(m_vulkan.swapExtent().height);
+            m_vulkan.writeTimestamp(cmd, 18, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            bw::setPass("Script Draw"); // medidor de banda: mesmo nome do tempo de GPU
+            const bool drew = m_immediateDraw.render(cmd, iv);
+            m_vulkan.writeTimestamp(cmd, 19, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            bw::setPass(nullptr);
+            if (drew) Profiler::addGpuTime("Script Draw", m_vulkan.timestampDeltaMs(18, 19));
+        }
         cpuMark(10);
     }
 

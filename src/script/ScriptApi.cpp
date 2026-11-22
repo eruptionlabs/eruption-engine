@@ -13,6 +13,7 @@
 #include "core/Project.hpp"
 #include "game/PlayerController.hpp"
 #include "renderer/BandwidthMeter.hpp"
+#include "renderer/ImmediateDraw.hpp"
 #include "renderer/UiCanvas.hpp"
 #include "renderer/WeatherTypes.hpp"
 #include "utils/Profiler.hpp"
@@ -937,6 +938,142 @@ int input_set_cursor(lua_State* L) {
         lua_pop(L, 1);
     }
     Input::setCustomCursor(path, hx, hy, scale, fw, fh, frames, fps, software);
+    return 0;
+}
+// ---------------------------------------------------------------------------
+// Desenho imediato (world.draw_strip, world.draw_sprite): a lista e' do quadro,
+// o passe de efeitos (renderer/ImmediateDraw) a esvazia ao desenhar. Chamar todo
+// quadro; parar de chamar apaga o efeito.
+// ---------------------------------------------------------------------------
+namespace {
+ImmediateDraw::Blend drawBlend(lua_State* L, const char* name) {
+    if (std::strcmp(name, "additive") == 0) return ImmediateDraw::Blend::Additive;
+    if (std::strcmp(name, "alpha") == 0) return ImmediateDraw::Blend::Alpha;
+    luaL_error(L, "blend must be \"additive\" or \"alpha\" (got \"%s\")", name);
+    return ImmediateDraw::Blend::Additive;
+}
+bool tableBool(lua_State* L, int t, const char* k, bool def) {
+    lua_getfield(L, t, k);
+    const bool v = lua_isnil(L, -1) ? def : lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    return v;
+}
+// Le uma cor RGBA: tabela {r,g,b,a} (campos ou posicoes 1..4), vetor (alfa 1) ou nil (branco).
+Vec4 drawColor(lua_State* L, int idx) {
+    Vec4 c(1.0f);
+    if (lua_isvector(L, idx)) {
+        const float* v = lua_tovector(L, idx);
+        return Vec4(v[0], v[1], v[2], 1.0f);
+    }
+    if (!lua_istable(L, idx)) return c;
+    static const char* const names[4] = {"r", "g", "b", "a"};
+    for (int i = 0; i < 4; ++i) {
+        lua_rawgeti(L, idx, i + 1);
+        if (!lua_isnumber(L, -1)) {
+            lua_pop(L, 1);
+            lua_getfield(L, idx, names[i]);
+        }
+        if (lua_isnumber(L, -1)) c[i] = float(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+    }
+    return c;
+}
+} // namespace
+
+// world.draw_strip(texture, verts, opts?)
+int world_draw_strip(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    ImmediateDraw::Flags flags;
+    ImmediateDraw::Topology topo = ImmediateDraw::Topology::Strip;
+    if (lua_istable(L, 3)) {
+        lua_getfield(L, 3, "blend");
+        if (lua_isstring(L, -1)) flags.blend = drawBlend(L, lua_tostring(L, -1));
+        lua_pop(L, 1);
+        lua_getfield(L, 3, "topology");
+        if (lua_isstring(L, -1)) {
+            const char* t = lua_tostring(L, -1);
+            if (std::strcmp(t, "quads") == 0) topo = ImmediateDraw::Topology::Quads;
+            else if (std::strcmp(t, "strip") != 0) luaL_error(L, "topology must be \"strip\" or \"quads\" (got \"%s\")", t);
+        }
+        lua_pop(L, 1);
+        flags.depthTest = tableBool(L, 3, "depth_test", true);
+        flags.cull = tableBool(L, 3, "cull", false);
+        // O passe le a profundidade da cena em somente-leitura: depth_write nao existe.
+        static bool warned = false;
+        if (!warned && tableBool(L, 3, "depth_write", false)) {
+            warned = true;
+            ERUPTION_LOG_WARN("world.draw_strip: depth_write = true nao e' suportado (efeitos nao escrevem profundidade); ignorado");
+        }
+    }
+    ImmediateDraw& dr = eng().immediateDraw();
+    if (!dr.ready()) return 0;
+    const int n = int(lua_objlen(L, 2));
+    if (n <= 0) return 0;
+    const int tex = dr.textureId(path);
+    if (tex < 0) return 0;
+
+    // Chaves internadas uma vez: rawget por chave empilhada evita o hash da string a cada campo.
+    static const char* const keyNames[7] = {"pos", "u", "v", "r", "g", "b", "a"};
+    luaL_checkstack(L, 12, "draw_strip");
+    const int k0 = lua_gettop(L) + 1;
+    for (const char* k : keyNames) lua_pushstring(L, k);
+    static thread_local std::vector<ImmediateDraw::Vertex> scratch;
+    scratch.resize(size_t(n));
+    for (int i = 0; i < n; ++i) {
+        lua_rawgeti(L, 2, i + 1);
+        if (!lua_istable(L, -1)) luaL_error(L, "verts[%d] must be a table {pos, u, v, r, g, b, a}", i + 1);
+        const int vi = lua_gettop(L);
+        ImmediateDraw::Vertex& out = scratch[size_t(i)];
+        lua_pushvalue(L, k0);
+        lua_rawget(L, vi);
+        if (!lua_isvector(L, -1)) luaL_error(L, "verts[%d].pos must be a vector", i + 1);
+        const float* p = lua_tovector(L, -1);
+        out.x = p[0]; out.y = p[1]; out.z = p[2];
+        lua_pop(L, 1);
+        float* dst[6] = {&out.u, &out.v, &out.r, &out.g, &out.b, &out.a};
+        for (int f = 0; f < 6; ++f) {
+            lua_pushvalue(L, k0 + 1 + f);
+            lua_rawget(L, vi);
+            *dst[f] = lua_isnumber(L, -1) ? float(lua_tonumber(L, -1)) : (f < 2 ? 0.0f : 1.0f);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1); // verts[i]
+    }
+    lua_pop(L, 7); // chaves
+    if (ImmediateDraw::Vertex* w = dr.addGeometry(tex, topo, flags, uint32_t(n)))
+        std::memcpy(w, scratch.data(), size_t(topo == ImmediateDraw::Topology::Quads ? (uint32_t(n) & ~3u) : uint32_t(n)) * sizeof(ImmediateDraw::Vertex));
+    return 0;
+}
+
+// world.draw_sprite(texture, pos, size, rgba?, blend?, opts?)
+int world_draw_sprite(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    const Vec3 pos = checkVec3(L, 2);
+    float w = 1.0f, h = 1.0f;
+    if (lua_isvector(L, 3)) {
+        const float* v = lua_tovector(L, 3);
+        w = v[0];
+        h = v[1];
+    } else {
+        w = h = float(luaL_checknumber(L, 3));
+    }
+    const Vec4 rgba = drawColor(L, 4);
+    ImmediateDraw::Flags flags;
+    if (lua_isstring(L, 5)) flags.blend = drawBlend(L, lua_tostring(L, 5));
+    bool pixels = false;
+    float rot = 0.0f;
+    if (lua_istable(L, 6)) {
+        pixels = tableBool(L, 6, "pixels", false);
+        flags.depthTest = tableBool(L, 6, "depth_test", true);
+        lua_getfield(L, 6, "rotation");
+        if (lua_isnumber(L, -1)) rot = float(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+    }
+    ImmediateDraw& dr = eng().immediateDraw();
+    if (!dr.ready()) return 0;
+    const int tex = dr.textureId(path);
+    if (tex >= 0) dr.addSprite(tex, pos, w, h, rgba, flags, pixels, rot);
     return 0;
 }
 // Dedos no mundo (fora da interface e do controle de toque): {id, x, y}.
