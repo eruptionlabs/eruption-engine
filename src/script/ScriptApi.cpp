@@ -1656,6 +1656,16 @@ int characters_head_screen(lua_State* L) {
     lua_pushboolean(L, on);
     return 3;
 }
+// Personagem sob o pixel (espaco de input.mouse_position), o mais perto da camera.
+int characters_at_screen(lua_State* L) {
+    const int idx = eng().characterAtScreen(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2)));
+    if (idx < 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushstring(L, eng().characters()[static_cast<size_t>(idx)].name.c_str());
+    return 1;
+}
 int characters_set_scale(lua_State* L) {
     const int idx = eng().findCharacter(luaL_checkstring(L, 1));
     if (idx < 0) luaL_error(L, "no character named '%s' in this map", lua_tostring(L, 1));
@@ -1796,6 +1806,18 @@ int ui_dragged(lua_State* L) {
 int ui_clicked(lua_State* L) {
     lua_pushboolean(L, eng().uiClicked(luaL_checkstring(L, 1)));
     return 1;
+}
+// Mouse sobre o retangulo desenhado de algum elemento que casa (#id, .classe,
+// tag ou composto), como ui.clicked mede o toque.
+int ui_hovered(lua_State* L) {
+    lua_pushboolean(L, eng().uiHovered(luaL_checkstring(L, 1)));
+    return 1;
+}
+// Liga ou desliga a classe `name` nos elementos que casam: o .css decide o que
+// ela muda (`#id.name`, `.linha.name`).
+int ui_state(lua_State* L) {
+    eng().uiDocument().setState(luaL_checkstring(L, 1), luaL_checkstring(L, 2), lua_toboolean(L, 3) != 0);
+    return 0;
 }
 int ui_has(lua_State* L) {
     lua_pushboolean(L, eng().uiDocument().has(luaL_checkstring(L, 1)));
@@ -2240,6 +2262,17 @@ int world_floor_height(lua_State* L) {
     if (instance >= 0) lua_pushinteger(L, instance + 1);
     else lua_pushnil(L);
     return 3;
+}
+// Raio da camera pelo pixel (espaco de input.mouse_position) ate' o chao.
+int world_screen_to_ground(lua_State* L) {
+    Vec3 hit;
+    if (!eng().screenToGround(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2)), hit,
+                              float(luaL_optnumber(L, 3, 8000.0)))) {
+        lua_pushnil(L);
+        return 1;
+    }
+    pushVec3(L, hit);
+    return 1;
 }
 int world_floor_walkable(lua_State* L) {
     lua_pushboolean(L, eng().floorWalkable(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2)),
@@ -3274,6 +3307,15 @@ declare ui: {
     -- Tapped (phone) or clicked (mouse) this frame: an element of the file
     -- that is on screen, or "minimap". Makes any element a button.
     clicked: (selector: string) -> boolean,
+    -- The mouse is over the drawn box of any element matching the selector
+    -- (#id, .class, tag or compound such as .row.selected), measured like
+    -- clicked. Always false on a phone until a finger is down. For looks, prefer
+    -- :hover in the .css; use this when the script must react (a tooltip).
+    hovered: (selector: string) -> boolean,
+    -- Adds or removes the class `name` on every element matching the selector
+    -- (#id, .class, tag or compound), so the .css can style it: `#id.name`,
+    -- `.row.name`, `.name`. Survives a reload of the file; reset() drops it.
+    state: (selector: string, name: string, on: boolean) -> (),
     -- Finger or mouse movement this frame, in screen pixels, for a drag that
     -- started on the element (0, 0 until it moves past a small slop): scroll
     -- a list by it.
@@ -3390,6 +3432,11 @@ declare world: {
     -- Floor under (x, z) counting solid objects (bridges, walkways, kit
     -- slabs): the highest top below `fromY` (default: anywhere). Second value:
     -- true when it is an object, not the terrain.
+    -- Ray from the camera through the pixel (x, y) to the ground: terrain or
+    -- the top of a solid object, like floor_height. (x, y) are window pixels,
+    -- the same space as input.mouse_position. nil when the ray hits nothing
+    -- within maxDist (default 8000) or the camera is under the ground.
+    screen_to_ground: (x: number, y: number, maxDist: number?) -> vector?,
     floor_height: (x: number, z: number, fromY: number?) -> (number, boolean),
     -- Whether a character of `radius` can stand on that floor: the walk grid
     -- on the terrain, the piece itself on an object, no other solid in the body.
@@ -3634,6 +3681,10 @@ declare characters: {
     -- Top of the character's sprite on screen, in UI pixels (those of
     -- ui.size), and whether it is on screen this frame.
     head_screen: (name: string) -> (number, number, boolean),
+    -- Name of the character whose drawn sprite box is under the pixel (x, y)
+    -- (window pixels, the space of input.mouse_position); the one nearest to
+    -- the camera when several overlap; nil if none.
+    at_screen: (x: number, y: number) -> string?,
     -- A ring on the ground under the character's feet, lying on the relief.
     -- It follows hide/show, fade and team vision. width defaults to 15% of
     -- the radius (at least 1), color to white, alpha to 0.8. nil removes it.

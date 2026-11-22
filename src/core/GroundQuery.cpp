@@ -6,6 +6,8 @@
 // (0 embaixo de uma passarela a 48).
 #include "core/Engine.hpp"
 #include "formats/MapLoader.hpp"
+#include <GLFW/glfw3.h>
+#include <imgui.h>
 
 #include <algorithm>
 #include <cmath>
@@ -181,6 +183,62 @@ float Engine::floorHeight(float x, float z, float fromY, bool* onModel, int* ins
     if (onModel) *onModel = f.instance >= 0;
     if (instance) *instance = f.instance;
     return f.y;
+}
+
+// Raio da camera pelo pixel da janela. Usa dois pontos do raio (profundidade 0
+// e 0,5 do clip) e orienta pela frente da camera: vale com Z normal ou
+// invertido e nao depende de qual e' o plano proximo.
+bool Engine::screenRay(float x, float y, Vec3& origin, Vec3& dir) const {
+    int winW = 0, winH = 0;
+    glfwGetWindowSize(m_window.handle(), &winW, &winH);
+    if (winW <= 0 || winH <= 0) return false;
+    const ImGuiIO& io = ImGui::GetIO();
+    // Pixel da janela -> interface (a mesma escala de uiCursor) -> clip.
+    const float ux = x * io.DisplaySize.x / float(winW), uy = y * io.DisplaySize.y / float(winH);
+    const Vec4 area = m_uiArea.z > 0.0f ? m_uiArea : Vec4(0.0f, 0.0f, io.DisplaySize.x, io.DisplaySize.y);
+    if (area.z <= 0.0f || area.w <= 0.0f) return false;
+    const float nx = (ux - area.x) / area.z * 2.0f - 1.0f, ny = (uy - area.y) / area.w * 2.0f - 1.0f;
+    const Mat4 inv = glm::inverse(m_camera.viewProjNoJitter());
+    auto ponto = [&](float z) {
+        const Vec4 w = inv * Vec4(nx, ny, z, 1.0f);
+        return Vec3(w) / w.w;
+    };
+    const Vec3 a = ponto(0.0f), b = ponto(0.5f);
+    Vec3 d = b - a;
+    if (glm::dot(d, d) < 1e-12f) return false;
+    d = glm::normalize(d);
+    if (glm::dot(d, m_camera.forward()) < 0.0f) d = -d;
+    origin = a;
+    dir = d;
+    return true;
+}
+
+bool Engine::screenToGround(float x, float y, Vec3& out, float maxDist) const {
+    Vec3 o, d;
+    if (!m_currentMap || !screenRay(x, y, o, d)) return false;
+    // Altura do raio sobre o piso em t; a folga de baixo deixa a ponte valer
+    // quando o raio chega por cima dela.
+    auto acima = [&](float t) {
+        const Vec3 p = o + d * t;
+        return p.y - floorHeight(p.x, p.z, p.y + 0.25f);
+    };
+    float t0 = 0.0f, d0 = acima(0.0f);
+    if (d0 < 0.0f) return false; // a camera ja' esta' abaixo do chao
+    // Passo de 1% da distancia (no minimo meia unidade): fino perto, onde se clica.
+    for (float t1 = 0.5f; t1 <= maxDist; t1 += std::max(0.5f, t1 * 0.01f)) {
+        const float d1 = acima(t1);
+        if (d1 <= 0.0f) {
+            for (int i = 0; i < 24; ++i) {
+                const float tm = 0.5f * (t0 + t1);
+                if (acima(tm) > 0.0f) t0 = tm; else t1 = tm;
+            }
+            const Vec3 p = o + d * t1;
+            out = Vec3(p.x, floorHeight(p.x, p.z, p.y + 0.25f), p.z);
+            return true;
+        }
+        t0 = t1;
+    }
+    return false;
 }
 
 // Líquido sobre o piso na altura floorY em (x, z). Lava antes da água: o

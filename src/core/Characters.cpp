@@ -679,6 +679,7 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
     // No sprite_vert.glsl o topo da parte e' -yOff + 0,5 h - centerY, com
     // centerY = -h/2; a faixa transparente de cima (opaqueTop) nao conta.
     float headTop = -1e9f, headSide = 0.0f;
+    Vec4 caixa(1e9f, -1e9f, 1e9f, -1e9f); // lado min/max, altura min/max do desenho
     const float peFolha = footMedianPx(ls);
 
     for (const auto& spr : action.frames[static_cast<size_t>(quadroMostrado)].sprites) {
@@ -705,6 +706,8 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         s.texRect = Vec4(xOff * kPixelToWorld, spr.offsetY * kPixelToWorld + sink, spriteYaw, -h * 0.5f);
         s.size = Vec2(w, h);
         const float topo = -s.texRect.y + h - static_cast<float>(tex.opaqueTop) * kPixelToWorld * spr.scaleY * fxScale;
+        caixa = Vec4(std::min(caixa.x, s.texRect.x - w * 0.5f), std::max(caixa.y, s.texRect.x + w * 0.5f),
+                     std::min(caixa.z, -s.texRect.y), std::max(caixa.w, topo));
         if (topo > headTop) {
             headTop = topo;
             headSide = s.texRect.x;
@@ -743,6 +746,7 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
     }
     if (headTop > -1e8f) {
         c.head = Vec2(headSide, headTop);
+        c.hitBox = caixa;
         c.headAnchor = c.position + fxOffset;
         c.headFrame = m_framesCount;
     }
@@ -796,22 +800,65 @@ void Engine::drawSpeechBubbles(float x, float y, float w, float h, float dt) {
         bubble(m_playerController->pos() + Vec3(0.0f, 30.0f, 0.0f), m_playerSay, m_playerSayTime);
 }
 
+// Pixel da interface de um ponto do billboard (lado, altura acima do pe'),
+// sem o teste de limites. Falso atras da camera.
+static bool billboardPixel(const Camera& cam, const CharConfig& cfg, const Vec4& area, const Vec3& anchor,
+                           float side, float up, Vec2& out) {
+    // A mesma conta do sprite_vert.glsl: no espaco de visao, direita = -x e
+    // o "cima" inclinado pela spline do billboard (frameUbo.spriteTilt).
+    const float pitchNorm = glm::degrees(cam.orbitPitch()) / 89.0f;
+    const float tilt = glm::radians(cfg.billboardTiltSpline.evaluate(pitchNorm));
+    Vec4 v = cam.viewMatrix() * Vec4(anchor, 1.0f);
+    v += Vec4(-side, up * std::cos(tilt), -up * std::sin(tilt), 0.0f);
+    const Vec4 clip = cam.projNoJitter() * v;
+    if (clip.w <= 1e-3f) return false;
+    out = Vec2(area.x + (clip.x / clip.w * 0.5f + 0.5f) * area.z, area.y + (clip.y / clip.w * 0.5f + 0.5f) * area.w);
+    return true;
+}
+
 bool Engine::characterHeadScreen(int index, Vec2& out) const {
     if (index < 0 || index >= static_cast<int>(m_characters.size())) return false;
     const SceneCharacter& c = m_characters[static_cast<size_t>(index)];
     if (c.headFrame + 1 < m_framesCount || m_uiArea.z <= 0.0f) return false;
-    // A mesma conta do sprite_vert.glsl: no espaco de visao, direita = -x e
-    // o "cima" inclinado pela spline do billboard (frameUbo.spriteTilt).
-    const float pitchNorm = glm::degrees(m_camera.orbitPitch()) / 89.0f;
-    const float tilt = glm::radians(m_charConfig.billboardTiltSpline.evaluate(pitchNorm));
-    Vec4 v = m_camera.viewMatrix() * Vec4(c.headAnchor, 1.0f);
-    v += Vec4(-c.head.x, c.head.y * std::cos(tilt), -c.head.y * std::sin(tilt), 0.0f);
-    const Vec4 clip = m_camera.projNoJitter() * v;
-    if (clip.w <= 1e-3f) return false;
-    out = Vec2(m_uiArea.x + (clip.x / clip.w * 0.5f + 0.5f) * m_uiArea.z,
-               m_uiArea.y + (clip.y / clip.w * 0.5f + 0.5f) * m_uiArea.w);
+    if (!billboardPixel(m_camera, m_charConfig, m_uiArea, c.headAnchor, c.head.x, c.head.y, out)) return false;
     return out.x >= m_uiArea.x && out.x <= m_uiArea.x + m_uiArea.z &&
            out.y >= m_uiArea.y && out.y <= m_uiArea.y + m_uiArea.w;
+}
+
+// Pixel da janela -> coordenada da interface (inversa de uiCursor).
+static Vec2 janelaParaInterface(const Window& win, float x, float y) {
+    int winW = 0, winH = 0;
+    glfwGetWindowSize(win.handle(), &winW, &winH);
+    const ImGuiIO& io = ImGui::GetIO();
+    return {winW > 0 ? x * io.DisplaySize.x / float(winW) : x, winH > 0 ? y * io.DisplaySize.y / float(winH) : y};
+}
+
+int Engine::characterAtScreen(float x, float y) const {
+    if (m_uiArea.z <= 0.0f) return -1;
+    const Vec2 p = janelaParaInterface(m_window, x, y);
+    int best = -1;
+    float bestDepth = 1e30f;
+    for (size_t i = 0; i < m_characters.size(); ++i) {
+        const SceneCharacter& c = m_characters[i];
+        if (c.headFrame + 1 < m_framesCount || !c.visible || c.removed || c.hitBox.y < c.hitBox.x) continue;
+        // A caixa do billboard na tela: quatro cantos, limites alinhados aos eixos.
+        Vec2 lo(1e30f), hi(-1e30f);
+        bool ok = true;
+        for (int k = 0; k < 4 && ok; ++k) {
+            Vec2 q;
+            ok = billboardPixel(m_camera, m_charConfig, m_uiArea, c.headAnchor, (k & 1) ? c.hitBox.y : c.hitBox.x,
+                                (k & 2) ? c.hitBox.w : c.hitBox.z, q);
+            lo = glm::min(lo, q);
+            hi = glm::max(hi, q);
+        }
+        if (!ok || p.x < lo.x || p.x > hi.x || p.y < lo.y || p.y > hi.y) continue;
+        const float depth = -(m_camera.viewMatrix() * Vec4(c.headAnchor, 1.0f)).z;
+        if (depth < bestDepth) {
+            bestDepth = depth;
+            best = static_cast<int>(i);
+        }
+    }
+    return best;
 }
 
 void Engine::setUiAnchor(const std::string& selector, const std::string& character, float dyPx) {
@@ -957,6 +1004,12 @@ void Engine::updateUiPortraits() {
     }
 }
 
+// Sem mouse de verdade (celular sem dedo na tela) nada fica em :hover.
+static bool ponteiroPresente() {
+    if (!Input::touchScreen()) return true;
+    return Input::isMouseDown(MouseButton::Left) || Input::isMouseDown(MouseButton::Right);
+}
+
 void Engine::drawGameFx2D(float x, float y, float w, float h, float dt) {
     // Desenho 2D do jogo por cima da cena. O canvas e' do jogo (o script
     // monta os nos); o motor so' atualiza os tempos e desenha.
@@ -980,6 +1033,10 @@ void Engine::drawGameFx2D(float x, float y, float w, float h, float dt) {
         m_uiDocument.setAnchor(a.selector, p.x - x, p.y - y - a.dyPx, on);
     }
     updateUiPortraits();
+    {
+        const glm::vec2 c = uiCursor();
+        m_uiDocument.updateHover(x, y, w, h, Vec2(c.x, c.y), ponteiroPresente());
+    }
     m_uiDocument.draw(dl, x, y, w, h);
     m_uiCanvas.update(dt);
     m_uiCanvas.draw(dl, x, y, w, h, m_camera.viewProjNoJitter());
@@ -1038,6 +1095,12 @@ bool Engine::uiClicked(const std::string& selector) {
     const glm::vec2 m = Input::mousePosition();
     if (Input::inUiTouchRect(m.x, m.y)) return false; // analogico do controle de toque
     return uiHit(selector, r, uiCursor());
+}
+
+bool Engine::uiHovered(const std::string& selector) {
+    if (!ponteiroPresente()) return false;
+    const glm::vec2 c = uiCursor();
+    return m_uiDocument.hoveredAt(selector, m_uiArea.x, m_uiArea.y, m_uiArea.z, m_uiArea.w, Vec2(c.x, c.y));
 }
 
 std::string Engine::uiGraphClicked(const std::string& selector) {

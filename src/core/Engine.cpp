@@ -1924,6 +1924,10 @@ float Engine::advanceFrame() {
         s_testHoldUntil = 0.0;
     }
     injectTestInput();
+    // Toque longo da interface acompanhado todo quadro, antes dos scripts: so'
+    // quem chamasse ui.held no quadro exato do aperto via o inicio, e o arrasto
+    // que comecava em ui.dragged "soltava" no primeiro quadro.
+    updateUiHold();
 
     // Auto heat-shimmer ground height from terrain under the player.
     if (m_currentMap) {

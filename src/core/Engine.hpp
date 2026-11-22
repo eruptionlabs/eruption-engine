@@ -473,6 +473,9 @@ public:
         // longo do "cima" inclinado; headAnchor = o pe' com o suco. headFrame
         // = quadro em que foi desenhado (velho = fora de cena).
         Vec2 head{0.0f};
+        // Caixa do desenho no mesmo espaco: x = lado min/max, y = altura min/max
+        // (characters.at_screen).
+        Vec4 hitBox{0.0f};
         Vec3 headAnchor{0.0f};
         int headFrame = -10;
         // characters.ring: raio 0 = sem anel; cor com o alfa em a.
@@ -816,6 +819,16 @@ public:
     // ui.size), projetado com a camera e a inclinacao do billboard deste
     // quadro. Falso quando o personagem nao foi desenhado ou cai fora da tela.
     bool characterHeadScreen(int index, Vec2& out) const;
+    // Raio da camera pelo pixel (x, y) da JANELA (o espaco de Input::mousePosition).
+    // Falso sem camera/area valida. origin/dir em coordenadas de mundo, dir unitario.
+    bool screenRay(float x, float y, Vec3& origin, Vec3& dir) const;
+    // O chao (terreno ou topo de objeto solido, como floorHeight) sob o pixel;
+    // falso se o raio nao o atinge em ate' `maxDist`. Marcha com passo que
+    // cresce com a distancia e refina o cruzamento por bisseção.
+    bool screenToGround(float x, float y, Vec3& out, float maxDist = 8000.0f) const;
+    // Personagem desenhado cuja caixa na tela contem o pixel (janela); o mais
+    // perto da camera em empate. -1 se nenhum.
+    int characterAtScreen(float x, float y) const;
     // Elemento de UI preso ao topo de um personagem (ui.anchor); `dyPx` sobe.
     // Recalculado em drawGameFx2D, no mesmo quadro do render.
     void setUiAnchor(const std::string& selector, const std::string& character, float dyPx);
@@ -958,6 +971,9 @@ public:
     // Tocado/clicado neste quadro (ui.clicked): um elemento do CSS que esta' na
     // tela, ou "minimap". Toque que comeca no controle de toque nao conta.
     bool uiClicked(const std::string& selector);
+    // O mouse esta' sobre o retangulo desenhado de algum elemento que casa
+    // com `selector` (ui.hovered); no celular so' com o dedo na tela.
+    bool uiHovered(const std::string& selector);
     // Arrasto (ui.dragged): deslocamento do dedo/mouse neste quadro, em pixels
     // da interface, se o toque comecou dentro do elemento; 0,0 ate' passar da
     // folga, para um toque parado nao rolar nada.
