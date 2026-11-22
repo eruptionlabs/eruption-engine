@@ -149,6 +149,22 @@ public:
         m_resumeVars = varsJson;
     }
 
+    // SCRIPTS DE EDITOR (manifesto "editor_scripts"): rodam so' no editor, em
+    // modo de edicao, para pôr conteudo de PREVIA no mapa. Ciclo de vida:
+    //   - o arquivo e' carregado (o topo roda) na primeira previa e fica na VM;
+    //   - a cada mapa pronto em edicao (e a cada Stop) o editor chama
+    //     runEditorPreview: limpa a previa anterior e chama on_map_loaded(mapa);
+    //   - antes de a previa sumir (Play, troca de mapa) chama on_preview_clear();
+    //   - no Play nenhum script de editor roda; o Stop refaz a previa.
+    // O que eles criam (characters.add, objects.spawn) e' transitorio.
+    void runEditorPreview();
+    void clearEditorPreview();
+    // Verdadeiro enquanto um script de editor roda: a API marca o que cria como
+    // transitorio e libera io.read_text / io.list_dir.
+    static bool editorPreviewActive() { return s_previewActive; }
+    // Esta pasta/arquivo e' de um script de editor (o scan de scripts de jogo pula).
+    bool isEditorScript(const std::filesystem::path& path) const;
+
     // Depurador (VS Code, protocolo DAP): só no build com o editor.
     ScriptDebugger* debugger() { return m_debugger.get(); }
     // Ao voltar de uma pausa do depurador: o vigia de laço infinito recomeça.
@@ -236,6 +252,10 @@ private:
     void writeTypeDefinitions();
 
     static ScriptHost* s_current;
+    static inline bool s_previewActive = false;
+    std::deque<Script> m_editorScripts;
+    bool m_previewLoaded = false;
+    bool m_previewHasContent = false;
     Engine* m_engine = nullptr;
     lua_State* L = nullptr;
     std::filesystem::path m_dir;

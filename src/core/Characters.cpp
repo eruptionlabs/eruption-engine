@@ -118,6 +118,22 @@ bool Engine::removeCharacter(const std::string& name) {
     return true;
 }
 
+int Engine::removeTransientCharacters() {
+    int n = 0;
+    std::vector<std::string> sheets;
+    for (SceneCharacter& c : m_characters) {
+        if (!c.transient || c.removed) continue;
+        sheets.push_back(c.sprite);
+        cleanupSpriteTextures(c.look);
+        c.removed = true;
+        c.visible = false;
+        c.name.clear();
+        ++n;
+    }
+    for (const std::string& s : sheets) releaseCharacterSheet(s);
+    return n;
+}
+
 bool Engine::releaseCharacterSheet(const std::string& sprite) {
     const auto it = m_characterSpriteCache.find(sprite);
     if (it == m_characterSpriteCache.end() || !it->second.loaded) return false;

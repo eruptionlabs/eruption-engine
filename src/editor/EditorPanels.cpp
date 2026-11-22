@@ -514,14 +514,14 @@ void Editor::drawHierarchy() {
 
     const auto& chars = m_engine->characters();
     size_t liveChars = 0;
-    for (const auto& c : chars) liveChars += c.removed || c.fromNeighbor ? 0 : 1;
+    for (const auto& c : chars) liveChars += c.removed || c.fromNeighbor || c.transient ? 0 : 1;
     if (liveChars) {
         char chdr[64];
         std::snprintf(chdr, sizeof(chdr), "%s (%zu)###characters", tr("Characters"), liveChars);
         ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
         if (ImGui::TreeNodeEx(chdr, ImGuiTreeNodeFlags_SpanAvailWidth)) {
             for (size_t i = 0; i < chars.size(); ++i) {
-                if (chars[i].removed || chars[i].fromNeighbor || !icontains(chars[i].name, m_hierarchyFilter)) continue;
+                if (chars[i].removed || chars[i].fromNeighbor || chars[i].transient || !icontains(chars[i].name, m_hierarchyFilter)) continue;
                 ImGui::PushID(static_cast<int>(i) + 1000000);
                 row({SelectionKind::Character, static_cast<int>(i)}, chars[i].name, chars[i].visible);
                 ImGui::PopID();

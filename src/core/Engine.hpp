@@ -405,6 +405,9 @@ public:
         bool removed = false; // apagado no editor (desfazer traz de volta)
         bool fromNeighbor = false; // de um mapa vizinho (não se edita nem se salva aqui)
         bool parked = false;       // o mapa vizinho dele saiu de cena
+        // Previa dos scripts de editor (ScriptHost::runEditorPreview): existe so'
+        // em modo de edicao, nao entra na cena salva nem no Play.
+        bool transient = false;
         // `ground = true` da cena: assenta no chão ao carregar (o editor
         // salva). O assentar espera o primeiro updateCharacters: o vizinho só
         // vira Shown (e entra em mapAt) depois de criar os personagens dele.
@@ -797,6 +800,8 @@ public:
     // Tira o personagem da cena e devolve a folha de sprite dele se mais ninguem a usa
     // (GPU sem bindless: cada quadro ocupa uma camada de textura). Falso se nao existe.
     bool removeCharacter(const std::string& name);
+    // Tira os personagens transitorios (previa do editor); devolve quantos.
+    int removeTransientCharacters();
     // Solta uma folha da cache sem personagem usando; falso se ainda ha' quem a use
     // ou ela nao esta carregada.
     bool releaseCharacterSheet(const std::string& sprite);

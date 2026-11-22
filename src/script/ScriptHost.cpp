@@ -1,5 +1,6 @@
 #include "script/ScriptHost.hpp"
 #include <unordered_map>
+#include <unordered_set>
 #include <cstdio>
 
 #include "script/ScriptApi.hpp"
@@ -141,11 +142,15 @@ bool ScriptHost::createState() {
 void ScriptHost::reboot() {
     if (!L) return;
     if (m_running) stop();
+    clearEditorPreview(); // a VM vai fechar: a previa sai com o on_preview_clear dela
     // Estado de módulo (locais do topo de cada .luau, tabelas de require)
     // vive na VM: só uma VM nova volta ao que era no boot. O depurador e o
     // módulo C++ ficam; eles não guardam nada da VM entre chamadas.
     for (auto& s : m_scripts) unload(s);
     m_scripts.clear();
+    for (auto& s : m_editorScripts) unload(s);
+    m_editorScripts.clear();
+    m_previewLoaded = m_previewHasContent = false;
     m_behaviors.clear();
     lua_close(L);
     L = nullptr;
@@ -192,6 +197,8 @@ void ScriptHost::shutdown() {
     NativeModule::instance().shutdown();
     for (auto& s : m_scripts) unload(s);
     m_scripts.clear();
+    for (auto& s : m_editorScripts) unload(s);
+    m_editorScripts.clear();
     m_behaviors.clear();
     if (L) lua_close(L);
     L = nullptr;
@@ -567,7 +574,7 @@ void ScriptHost::scan() {
         const bool regular = dirIt->is_regular_file(fileEc);
         if (fileEc) listingComplete = false;
         if (regular && dirIt->path().extension() == ".luau" &&
-            dirIt->path().filename().string().find(".d.luau") == std::string::npos)
+            dirIt->path().filename().string().find(".d.luau") == std::string::npos && !isEditorScript(dirIt->path()))
             found.push_back(dirIt->path());
     }
     if (ec) listingComplete = false;
@@ -639,6 +646,71 @@ void ScriptHost::scan() {
         }
         if (keptOld >= 0) lua_unref(L, keptOld);
     }
+}
+
+// ---------------------------------------------------------------- previa do editor
+
+namespace {
+fs::path normalPath(const fs::path& p) {
+    std::error_code ec;
+    fs::path r = fs::weakly_canonical(fs::absolute(p, ec), ec);
+    return ec ? p.lexically_normal() : r;
+}
+} // namespace
+
+bool ScriptHost::isEditorScript(const fs::path& path) const {
+    if (!project::isOpen()) return false;
+    const auto& list = Project::instance().manifest().editorScripts;
+    if (list.empty()) return false;
+    const fs::path me = normalPath(path);
+    for (const std::string& s : list)
+        if (normalPath(project::root() / s) == me) return true;
+    return false;
+}
+
+void ScriptHost::clearEditorPreview() {
+    if (!L || !m_engine || !m_previewHasContent) return;
+    m_previewHasContent = false;
+    s_previewActive = true;
+    for (Script& s : m_editorScripts) call(s, "on_preview_clear", 0);
+    s_previewActive = false;
+    // Objetos que a previa criou saem; personagens transitorios idem.
+    releaseScriptObjects();
+    m_engine->removeTransientCharacters();
+}
+
+void ScriptHost::runEditorPreview() {
+    if (!L || !m_engine || m_running || !project::isOpen()) return;
+    const auto& list = Project::instance().manifest().editorScripts;
+    if (list.empty()) return;
+    clearEditorPreview();
+    if (!m_previewLoaded) {
+        m_previewLoaded = true;
+        s_previewActive = true; // o topo do arquivo ja' pode ler arquivos
+        for (const std::string& rel : list) {
+            m_editorScripts.emplace_back();
+            Script& s = m_editorScripts.back();
+            s.path = project::root() / rel;
+            std::error_code ec;
+            if (!fs::is_regular_file(s.path, ec)) {
+                Logger::warning("editor_scripts: %s not found", s.path.generic_string().c_str());
+                s.failed = true;
+                continue;
+            }
+            if (!load(s, false)) s.failed = true;
+        }
+        s_previewActive = false;
+    }
+    const std::string map = m_engine->currentMapName();
+    s_previewActive = true;
+    for (Script& s : m_editorScripts) {
+        if (s.moduleRef < 0) continue;
+        s.failed = false; // um erro anterior nao desliga a previa do mapa seguinte
+        lua_pushstring(L, map.c_str());
+        call(s, "on_map_loaded", 1);
+    }
+    s_previewActive = false;
+    m_previewHasContent = true;
 }
 
 void ScriptHost::poll() {

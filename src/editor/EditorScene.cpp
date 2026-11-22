@@ -9,6 +9,7 @@
 #include <imgui.h>
 #include "renderer/WeatherTypes.hpp"
 #include "script/ScriptApi.hpp"
+#include "script/ScriptHost.hpp"
 
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -53,6 +54,9 @@ void Editor::onMapReady() {
     applySceneFile();
     applyLayerVisibility();
     ++m_mapReadyCount;
+    // Previa dos scripts de editor (manifesto "editor_scripts"): so' em edicao;
+    // no Play (inclusive a troca de mapa do jogo) o jogo e' quem cria as coisas.
+    if (m_scripts && m_play == PlayState::Editing && !m_playResume.active) m_scripts->runEditorPreview();
 }
 
 void Editor::applySceneFile() {
@@ -184,7 +188,7 @@ SceneEdits Editor::currentEdits() const {
         e.copies.push_back({it->second, insts[i].name, SceneEdits::Transform::from(insts[i].transform)});
     }
     for (const auto& c : m_engine->characters()) {
-        if (c.removed || c.fromNeighbor) continue;
+        if (c.removed || c.fromNeighbor || c.transient) continue; // previa de script nao vai para a cena
         Vec3 pos = c.position;
         if (c.ground) pos.y = c.groundFromY; // o assentado sai do Y escrito
         e.characters.push_back({c.name, c.sprite, pos, c.facing, !c.visible, c.ground});

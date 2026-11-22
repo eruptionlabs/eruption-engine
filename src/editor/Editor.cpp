@@ -1468,6 +1468,8 @@ void Editor::handleGameMapRequest() {
 
 void Editor::play() {
     if (m_play != PlayState::Editing) return;
+    // A previa dos scripts de editor sai ANTES da foto: no Play so' existe o que o jogo cria.
+    if (m_scripts) m_scripts->clearEditorPreview();
     m_engine->setSoundEmittersActive(true); // sons da cena tocam no Play
     const auto& insts = m_engine->modelRenderer().getInstances();
     m_snapshot.transforms.resize(insts.size());
@@ -1566,6 +1568,8 @@ void Editor::stop() {
     m_play = PlayState::Editing;
     m_stepFrames = 0;
     log(LogLevel::Info, "Stop: scene restored");
+    // A previa volta (a menos que o jogo esteja so' trocando de mapa: o mapa novo a refaz).
+    if (m_scripts && !m_playResume.active) m_scripts->runEditorPreview();
 }
 
 void Editor::togglePause() {

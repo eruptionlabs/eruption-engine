@@ -35,6 +35,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -824,6 +826,86 @@ int input_scroll(lua_State* L) {
     lua_pushnumber(L, Input::mouseScrollDelta());
     return 1;
 }
+// ---------------------------------------------------------------- io (so' leitura, so' no editor)
+
+// Caminho permitido a um script de editor: a pasta do projeto e as pastas de
+// "editor_read_paths" do manifesto. Relativo = a partir da pasta do projeto.
+// Resolve ".." e links antes de comparar, para nao escapar da lista.
+bool editorReadAllowed(const std::string& raw, std::filesystem::path& resolved) {
+    namespace fs = std::filesystem;
+    if (!project::isOpen() || raw.empty()) return false;
+    std::error_code ec;
+    auto canon = [&](const fs::path& p) {
+        std::error_code e;
+        fs::path r = fs::weakly_canonical(p.is_absolute() ? p : project::root() / p, e);
+        return e ? fs::path() : r;
+    };
+    resolved = canon(fs::path(raw));
+    if (resolved.empty()) return false;
+    auto inside = [&](const fs::path& base) {
+        const fs::path b = canon(base);
+        if (b.empty()) return false;
+        auto bi = b.begin();
+        auto ri = resolved.begin();
+        for (; bi != b.end(); ++bi, ++ri)
+            if (ri == resolved.end() || *bi != *ri) return false;
+        return true;
+    };
+    if (inside(project::root())) return true;
+    for (const std::string& extra : Project::instance().manifest().editorReadPaths)
+        if (inside(fs::path(extra))) return true;
+    return false;
+}
+
+// io.read_text(path) -> (text) | (nil, reason)
+int io_read_text(lua_State* L) {
+    const std::string raw = luaL_checkstring(L, 1);
+    auto fail = [&](const char* why) {
+        lua_pushnil(L);
+        lua_pushstring(L, why);
+        return 2;
+    };
+    if (!ScriptHost::editorPreviewActive()) return fail("io.read_text only works in editor scripts");
+    std::filesystem::path p;
+    if (!editorReadAllowed(raw, p)) return fail("path not allowed (project folder and editor_read_paths only)");
+    ScriptHost::NativeWork trabalho;
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(p, ec)) return fail("file not found");
+    constexpr std::uintmax_t kMaxBytes = 16u * 1024u * 1024u;
+    if (std::filesystem::file_size(p, ec) > kMaxBytes) return fail("file too large (16 MB limit)");
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return fail("could not open file");
+    std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    lua_pushlstring(L, text.data(), text.size());
+    return 1;
+}
+
+// io.list_dir(path) -> ({names}) | (nil, reason): nomes das entradas, em ordem.
+int io_list_dir(lua_State* L) {
+    const std::string raw = luaL_checkstring(L, 1);
+    auto fail = [&](const char* why) {
+        lua_pushnil(L);
+        lua_pushstring(L, why);
+        return 2;
+    };
+    if (!ScriptHost::editorPreviewActive()) return fail("io.list_dir only works in editor scripts");
+    std::filesystem::path p;
+    if (!editorReadAllowed(raw, p)) return fail("path not allowed (project folder and editor_read_paths only)");
+    ScriptHost::NativeWork trabalho;
+    std::error_code ec;
+    std::vector<std::string> names;
+    for (std::filesystem::directory_iterator it(p, ec), end; !ec && it != end; it.increment(ec))
+        names.push_back(it->path().filename().string());
+    if (ec) return fail("could not list directory");
+    std::sort(names.begin(), names.end());
+    lua_createtable(L, static_cast<int>(names.size()), 0);
+    for (size_t i = 0; i < names.size(); ++i) {
+        lua_pushlstring(L, names[i].data(), names[i].size());
+        lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    return 1;
+}
+
 // Cursor do mouse do jogo: set_cursor(caminho, hotspot_x, hotspot_y, opcoes) ou
 // set_cursor(nil). Cache por caminho em core/CustomCursor.cpp: chamar todo
 // quadro com os mesmos argumentos custa uma comparacao de string.
@@ -2336,6 +2418,7 @@ int characters_add(lua_State* L) {
     // a segunda tentativa.
     if (idx >= 0) {
         auto& c = eng().characters()[static_cast<size_t>(idx)];
+        c.transient = ScriptHost::editorPreviewActive(); // previa do editor: nao entra na cena
         if (!c.look.loaded) {
             c.removed = true;
             c.name.clear();
@@ -2858,6 +2941,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "player", player);
     lib(L, "camera", camera);
     lib(L, "input", input);
+    static const luaL_Reg ioLib[] = {ERUPTION_API_FN(io, read_text), ERUPTION_API_FN(io, list_dir), {nullptr, nullptr}};
+    lib(L, "io", ioLib);
     lib(L, "models", models);
     lib(L, "lights", lights);
     lua_pushcfunction(L, api_require, "require");
@@ -2893,6 +2978,39 @@ declare function log(...: any): ()
 -- folder: require("data") or require("battle/tables"). Scripts that only hold
 -- data (tables of classes, enemies, items) live in their own file this way.
 declare function require(module: string): any
+
+-- EDITOR SCRIPTS. Files listed in project.eruption under "editor_scripts" run
+-- only in the editor, in edit mode, to put PREVIEW content on the map (for
+-- example characters a server would create in the real game). Lifecycle:
+-- the file loads once (the top level runs); after every map load, and after
+-- every Stop, the engine calls `on_map_loaded(map_name)`; before the preview
+-- goes away (Play, map change) it calls `on_preview_clear()`. During Play no
+-- editor script runs. Whatever they create with characters.add and
+-- objects.spawn is transient: not saved in the scene, gone on Play and on map
+-- change, rebuilt on Stop. Editor scripts are not run by the game.
+--   "editor_scripts": ["assets/scripts/editor_preview.luau"]
+--   "editor_read_paths": ["../server/maps"]   (extra folders io may read)
+-- Read-only file access, available only inside editor scripts. Allowed paths:
+-- the project folder and the folders of "editor_read_paths" (relative paths
+-- start at the project folder; ".." and links are resolved before checking).
+-- Both return nil plus a reason when the path is denied or does not exist.
+declare io: {
+    -- Whole text file (up to 16 MB).
+    read_text: (path: string) -> (string?, string?),
+    -- Names of the entries of a folder, sorted.
+    list_dir: (path: string) -> ({string}?, string?),
+}
+
+-- Graphics presets (data/graphics.json). info() describes the GPU and the
+-- active preset; values(name) returns a preset's keys (nil if it does not
+-- exist); apply(base, overrides) switches live to a preset plus overrides and
+-- returns false if the preset does not exist. Keys decided at startup
+-- (post_format, shader_lite, texture_layer_*) only change on the next launch.
+declare graphics: {
+    info: () -> { gpu: string, vram_total_mb: number?, preset: string },
+    values: (name: string) -> { [string]: any }?,
+    apply: (base_preset: string, overrides: { [string]: boolean | number | string }?) -> boolean,
+}
 
 -- A model is referenced by its name (string) or its index (number, from 1).
 type Model = string | number

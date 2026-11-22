@@ -9,6 +9,39 @@ declare function log(...: any): ()
 -- data (tables of classes, enemies, items) live in their own file this way.
 declare function require(module: string): any
 
+-- EDITOR SCRIPTS. Files listed in project.eruption under "editor_scripts" run
+-- only in the editor, in edit mode, to put PREVIEW content on the map (for
+-- example characters a server would create in the real game). Lifecycle:
+-- the file loads once (the top level runs); after every map load, and after
+-- every Stop, the engine calls `on_map_loaded(map_name)`; before the preview
+-- goes away (Play, map change) it calls `on_preview_clear()`. During Play no
+-- editor script runs. Whatever they create with characters.add and
+-- objects.spawn is transient: not saved in the scene, gone on Play and on map
+-- change, rebuilt on Stop. Editor scripts are not run by the game.
+--   "editor_scripts": ["assets/scripts/editor_preview.luau"]
+--   "editor_read_paths": ["../server/maps"]   (extra folders io may read)
+-- Read-only file access, available only inside editor scripts. Allowed paths:
+-- the project folder and the folders of "editor_read_paths" (relative paths
+-- start at the project folder; ".." and links are resolved before checking).
+-- Both return nil plus a reason when the path is denied or does not exist.
+declare io: {
+    -- Whole text file (up to 16 MB).
+    read_text: (path: string) -> (string?, string?),
+    -- Names of the entries of a folder, sorted.
+    list_dir: (path: string) -> ({string}?, string?),
+}
+
+-- Graphics presets (data/graphics.json). info() describes the GPU and the
+-- active preset; values(name) returns a preset's keys (nil if it does not
+-- exist); apply(base, overrides) switches live to a preset plus overrides and
+-- returns false if the preset does not exist. Keys decided at startup
+-- (post_format, shader_lite, texture_layer_*) only change on the next launch.
+declare graphics: {
+    info: () -> { gpu: string, vram_total_mb: number?, preset: string },
+    values: (name: string) -> { [string]: any }?,
+    apply: (base_preset: string, overrides: { [string]: boolean | number | string }?) -> boolean,
+}
+
 -- A model is referenced by its name (string) or its index (number, from 1).
 type Model = string | number
 

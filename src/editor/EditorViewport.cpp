@@ -481,7 +481,7 @@ void Editor::pickAt(float u, float v) {
     const auto& chars = m_engine->characters();
     const bool charsClickable = m_layerShow[LayerCharacters] && !m_layerLock[LayerCharacters];
     for (size_t i = 0; charsClickable && i < chars.size(); ++i) {
-        if (chars[i].removed || chars[i].parked || (chars[i].fromNeighbor && m_layerLock[LayerNeighbors])) continue;
+        if (chars[i].removed || chars[i].parked || chars[i].transient || (chars[i].fromNeighbor && m_layerLock[LayerNeighbors])) continue;
         const Vec3 base = chars[i].position;
         const float radius = 6.0f, height = 28.0f;
         // Ponto do raio mais perto do eixo vertical (no plano XZ).
@@ -578,7 +578,7 @@ void Editor::boxSelect(const ImVec2& a, const ImVec2& b, float x, float y, float
     const auto& chars = m_engine->characters();
     if (m_layerShow[LayerCharacters] && !m_layerLock[LayerCharacters])
         for (size_t i = 0; i < chars.size(); ++i)
-            if (!chars[i].removed && !chars[i].fromNeighbor && !chars[i].parked && inside(chars[i].position))
+            if (!chars[i].removed && !chars[i].fromNeighbor && !chars[i].transient && !chars[i].parked && inside(chars[i].position))
                 hits.push_back({SelectionKind::Character, static_cast<int>(i)});
     if (m_layerShow[LayerMarkers] && !m_layerLock[LayerMarkers]) {
         const auto& areas = m_engine->areas();
