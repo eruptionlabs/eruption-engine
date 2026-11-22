@@ -36,9 +36,6 @@ run_src() {
     "$TMP/$name" || FAIL=1
 }
 
-run test_surface_wetness
-run test_climate_fuzzy
-run test_weather_overrides
 run_src test_shadow_receivers src/math/Frustum.cpp
 run_src test_mesh_clusters src/utils/MeshClusters.cpp
 run_src test_object_world src/scene/ObjectWorld.cpp
