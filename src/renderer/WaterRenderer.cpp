@@ -1154,7 +1154,22 @@ void WaterRenderer::fillUBO(WaterUBO& ubo, uint32_t frameIndex, const WaterSetti
     // lado da agua ia junto com ela - a borda do mar nao recuava com a areia.
     ubo.normalParams     = Vec4(settings.normalScale, settings.waveSpeed, settings.normalStrength,
                                 settings.shoreSwash ? 1.0f : 0.0f);
-    ubo.waveParams       = Vec4(settings.waveAmplitude, settings.waveFrequency, settings.waveSpeed, settings.levelOffset);
+    // Ondas de Gerstner do vertice (liquid.vert): o uniforme global (amplitude,
+    // frequencia, velocidade) multiplica o fator POR onda, e os dois traziam o
+    // mesmo valor - o ajuste valia ao quadrado (1,39 virava 1,9 de altura e
+    // 3,06 virava 9,4 rad/u, ondas de 0,7 unidade). Sem o estilo diorama, que
+    // zera as ondas do vertice, a agua saia como uma folha branca serrilhada.
+    // Agora a malha leva o valor uma vez so' (fator por onda = 1) e a amplitude
+    // e' limitada para a crista nao dobrar: a soma de Q*amp*freq das tres ondas
+    // fica em 0,8 no maximo (acima de 1 a onda de Gerstner se auto-intersecta).
+    // A agua texturada (liquidKind 4) usa a amplitude como seno simples: sem limite.
+    float waveAmp = settings.waveAmplitude;
+    if (settings.liquidKind != 4) {
+        const float qSum = settings.waveSteepness[0] + settings.waveSteepness[1] + settings.waveSteepness[2];
+        const float limit = 0.8f / (std::max(settings.waveFrequency, 1e-3f) * std::max(qSum, 1.0f));
+        waveAmp = std::min(waveAmp, limit);
+    }
+    ubo.waveParams       = Vec4(waveAmp, settings.waveFrequency, settings.waveSpeed, settings.levelOffset);
     ubo.foamParams       = Vec4(settings.foamEdgeDepth, settings.contactFoamStrength,
                                 settings.enableFoam ? 1.0f : 0.0f, rainSplashIntensity);
     Vec3 skyTop = cycle.getSkyTopColor();
@@ -1175,8 +1190,8 @@ void WaterRenderer::fillUBO(WaterUBO& ubo, uint32_t frameIndex, const WaterSetti
         Vec2 d = settings.waveDirections[i];
         float len = glm::length(d);
         if (len > 0.0001f) d /= len;
-        ubo.waveDirAmp[i] = Vec4(d.x, d.y, settings.waveAmplitude, settings.waveFrequency);
-        ubo.waveSpeedSteep[i] = Vec4(settings.waveSpeed, settings.waveSteepness[i], 0.0f, 0.0f);
+        ubo.waveDirAmp[i] = Vec4(d.x, d.y, 1.0f, 1.0f); // fator por onda; o valor vem de waveParams
+        ubo.waveSpeedSteep[i] = Vec4(1.0f, settings.waveSteepness[i], 0.0f, 0.0f);
     }
     ubo.waveSpeedSteep[0].z = m_skyClouds.x; ubo.waveSpeedSteep[0].w = m_skyClouds.y;
     ubo.waveSpeedSteep[1].z = m_skyClouds.z; ubo.waveSpeedSteep[1].w = m_skyClouds.w;

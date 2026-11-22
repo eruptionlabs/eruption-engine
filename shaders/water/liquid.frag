@@ -1261,7 +1261,11 @@ void main() {
     // A) Surface foam (Worley) — only on wave crests
     if (!LITE && enableSurfaceFoam) {
         float surfaceFoam = foamSurface(vWorldPos.xz, foamScale, foamSpeed, time);
-        float crest = waveCrestMask(perturbedNormal, 0.75);
+        // Crista = ponto alto da onda de Gerstner do vertice. A mascara pela
+        // normal (waveCrestMask) dava 1 em toda superficie quase plana, e a
+        // espuma cobria o lago inteiro de branco; sem ondas de vertice, sem crista.
+        float crestAmp = ubo.waveParams.x * 1.5;
+        float crest = crestAmp > 1e-3 ? smoothstep(0.45, 0.9, (vWorldPos.y - vLevel) / crestAmp) : 0.0;
         totalFoam = max(totalFoam, surfaceFoam * crest);
     }
     // B) Edge foam (depth-based)
