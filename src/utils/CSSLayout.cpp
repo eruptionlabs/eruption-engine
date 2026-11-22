@@ -10,11 +10,9 @@ namespace eruption {
 CSSLayout::CSSLayout(const CSSParser* parser) : m_parser(parser) {}
 
 const CSSRule* CSSLayout::rule(const std::string& selector) const {
-    if (!m_parser) return nullptr;
-    static CSSRule merged;
-    merged = m_parser->mergedRule(selector);
-    if (merged.properties.empty()) return nullptr;
-    return &merged;
+    // Indice do parser, sem copia: antes cada consulta varria e copiava as
+    // regras (ver CSSParser::m_merged).
+    return m_parser ? m_parser->mergedRulePtr(selector) : nullptr;
 }
 
 ImU32 CSSLayout::parseColor(const std::string& value, ImU32 fallback) {

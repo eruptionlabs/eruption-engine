@@ -143,6 +143,15 @@ public:
     // imagem maior (minimapa, creditos rolando). clearImageRect volta ao todo.
     void setImageRect(const std::string& selector, float u0, float v0, float u1, float v1);
     void clearImageRect(const std::string& selector);
+    // Classe de estado posta pelo script (ui.state): `.nome` passa a casar no
+    // elemento, e `#id.nome`, `.linha.nome` etc. valem. `selector` pode ser
+    // `#id`, `.classe`, `tag` ou composto; vale para todos que casam.
+    void setState(const std::string& selector, const std::string& name, bool on);
+    // :hover. Chamar uma vez por quadro com o cursor na mesma escala de
+    // rectOf; refaz o estilo so' quando alguem entra ou sai do mouse.
+    void updateHover(float x, float y, float w, float h, const Vec2& cursor, bool valid);
+    // O cursor esta' sobre o retangulo desenhado de algum elemento que casa.
+    bool hoveredAt(const std::string& selector, float x, float y, float w, float h, const Vec2& cursor) const;
     // Volta tudo o que o script mexeu para o que o arquivo diz.
     void resetOverrides();
 
@@ -168,7 +177,12 @@ private:
         bool visibleCss = true;
         std::string textCss;
         float valueCss = 1.0f;
-        std::string image;
+        std::string image, imageCss;
+        bool hasImage = false;
+        // Classes do `--class` (arquivo) e as postas por ui.state; `hovered`
+        // vem de updateHover. Entram no casamento de seletores.
+        std::vector<std::string> cssClasses, userClasses;
+        bool hovered = false;
         uint8_t align = 0;      // 0 esquerda, 1 centro, 2 direita
         float fontSize = 0.03f; // fração da altura da área
         // O que o script mandou (vence o CSS enquanto estiver posto).
@@ -232,6 +246,13 @@ private:
                     ImU32 edge) const;
 
     void build();
+    // Estilo vivo (regras que casam agora, var() resolvido) e os campos que
+    // dele saem: ver restyle em UiDocument.cpp.
+    void restyle();
+    void applyStyle(Element& e);
+    bool matches(const Element& e, const CSSSelector& s, bool considerHover, bool plainClassIsDynamic) const;
+    std::vector<Element*> matching(const std::string& selector);
+    std::vector<const Element*> matching(const std::string& selector) const;
     static void drawArcBar(ImDrawList* dl, const CSSRect& r, const Element& e, float value, uint32_t rail, uint32_t fill);
     Element* find(const std::string& selector);
     const Element* find(const std::string& selector) const;
@@ -241,8 +262,11 @@ private:
     // setPlace. A cadeia de pais passa por aqui, entao os filhos acompanham.
     CSSRect ownRect(const Element& e, const ImVec2& display, const CSSRect& parent) const;
 
-    CSSParser m_parser;
-    CSSLayout m_layout{&m_parser};
+    CSSParser m_parser;                  // o arquivo, como escrito
+    CSSParser m_view;                    // uma regra por elemento: o estilo de agora
+    CSSLayout m_layout{&m_view};
+    std::vector<CSSSelector> m_ruleSel;  // m_parser.rules() ja' analisadas
+    std::unordered_map<std::string, std::string> m_rootVars;
     std::filesystem::path m_path;
     std::filesystem::file_time_type m_mtime{};
     bool m_loaded = false;

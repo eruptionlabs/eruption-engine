@@ -42,6 +42,7 @@ bool CSSParser::load(const std::string& path) {
 
 bool CSSParser::loadFromString(const std::string& content) {
     parse(content);
+    reindex();
     return true;
 }
 
@@ -66,15 +67,38 @@ void CSSParser::parse(const std::string& content) {
         size_t blockStart = s.find('{', pos);
         if (blockStart == std::string::npos) break;
 
-        std::string selector = trim(s.substr(pos, blockStart - pos));
+        std::string selectorList = trim(s.substr(pos, blockStart - pos));
         size_t blockEnd = s.find('}', blockStart + 1);
         if (blockEnd == std::string::npos) break;
 
         std::string body = s.substr(blockStart + 1, blockEnd - blockStart - 1);
         CSSRule rule;
-        rule.selector = selector;
 
-        std::vector<std::string> decls = split(body, ';');
+        // Declaracoes: o `;` dentro de parenteses ou aspas (url(...), var(--a, x))
+        // nao separa nada.
+        std::vector<std::string> decls;
+        {
+            std::string cur;
+            int paren = 0;
+            char quote = 0;
+            for (char c : body) {
+                if (quote) {
+                    if (c == quote) quote = 0;
+                } else if (c == '"' || c == '\'') {
+                    quote = c;
+                } else if (c == '(') {
+                    ++paren;
+                } else if (c == ')' && paren > 0) {
+                    --paren;
+                } else if (c == ';' && paren == 0) {
+                    decls.push_back(trim(cur));
+                    cur.clear();
+                    continue;
+                }
+                cur += c;
+            }
+            decls.push_back(trim(cur));
+        }
         for (const std::string& decl : decls) {
             size_t colon = decl.find(':');
             if (colon == std::string::npos) continue;
@@ -85,8 +109,14 @@ void CSSParser::parse(const std::string& content) {
             }
         }
 
-        if (!rule.selector.empty() && !rule.properties.empty()) {
-            m_rules.push_back(std::move(rule));
+        // `.a, .b { ... }`: uma regra por seletor da lista.
+        if (!rule.properties.empty()) {
+            for (const std::string& selector : split(selectorList, ',')) {
+                if (selector.empty()) continue;
+                CSSRule one = rule;
+                one.selector = selector;
+                m_rules.push_back(std::move(one));
+            }
         }
 
         pos = blockEnd + 1;
@@ -121,7 +151,7 @@ void CSSParser::parse(const std::string& content) {
 void CSSParser::expandClasses() {
     std::unordered_map<std::string, std::unordered_map<std::string, std::string>> classes;
     for (const auto& rule : m_rules) {
-        if (rule.selector.size() < 2 || rule.selector[0] != '.') continue;
+        if (rule.selector.size() < 2 || rule.selector[0] != '.' || rule.selector.find_first_of(".:# ", 1) != std::string::npos) continue;
         auto& dst = classes[rule.selector.substr(1)];
         for (const auto& kv : rule.properties) dst[kv.first] = kv.second;
     }
@@ -131,7 +161,7 @@ void CSSParser::expandClasses() {
     std::vector<std::string> ordem;
     std::unordered_map<std::string, std::string> pedido;
     for (const auto& rule : m_rules) {
-        if (rule.selector.empty() || rule.selector[0] != '#') continue;
+        if (rule.selector.empty() || rule.selector[0] != '#' || rule.selector.find_first_of(".:# ", 1) != std::string::npos) continue;
         const auto it = rule.properties.find("--class");
         if (it == rule.properties.end()) continue;
         if (pedido.find(rule.selector) == pedido.end()) ordem.push_back(rule.selector);
@@ -144,6 +174,7 @@ void CSSParser::expandClasses() {
     for (const std::string& selector : ordem) {
         CSSRule rule;
         rule.selector = selector;
+        rule.specificity = 100; // pesa como classe: o id e os estados da classe a vencem
         std::string lista = pedido[selector];
         // Aceita `--class: barra-hp` e `--class: "barra-hp"`, porque o resto
         // do arquivo usa aspas em `--image` e o autor vai misturar.
@@ -172,6 +203,133 @@ void CSSParser::expandClasses() {
     m_rules = std::move(saida);
 }
 
+int CSSSelector::specificity() const {
+    return (id.empty() ? 0 : 10000) + int(classes.size() + (hover ? 1 : 0)) * 100 + (tag.empty() ? 0 : 1);
+}
+
+CSSSelector CSSParser::parseSelector(const std::string& selector) {
+    CSSSelector out;
+    auto ident = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_'; };
+    size_t i = 0;
+    const size_t n = selector.size();
+    auto readIdent = [&](std::string& dst) {
+        const size_t b = i;
+        while (i < n && ident(selector[i])) ++i;
+        dst = selector.substr(b, i - b);
+        return i > b;
+    };
+    if (n == 0) return out;
+    if (ident(selector[0])) {
+        if (!readIdent(out.tag)) return out;
+    }
+    while (i < n) {
+        const char c = selector[i++];
+        std::string name;
+        if (c == '#') {
+            if (!readIdent(out.id)) return out;
+        } else if (c == '.') {
+            if (!readIdent(name)) return out;
+            out.classes.push_back(name);
+        } else if (c == ':') {
+            if (!readIdent(name) || name != "hover") return out;
+            out.hover = true;
+        } else {
+            return out;
+        }
+    }
+    out.valid = true;
+    return out;
+}
+
+// Troca de texto, com o cuidado de achar o `)` certo: a reserva pode ter
+// parenteses (`var(--a, calc(1px + 2px))`). `depth` corta ciclo (a: var(--b),
+// b: var(--a)) e cadeias absurdas.
+bool CSSParser::resolveVars(const std::string& value, const CSSVarLookup& lookup, std::string& out, int depth) {
+    if (depth > 8) return false;
+    if (value.find("var(") == std::string::npos) {
+        out = value;
+        return true;
+    }
+    std::string res;
+    size_t i = 0;
+    while (i < value.size()) {
+        const size_t at = value.find("var(", i);
+        if (at == std::string::npos) {
+            res.append(value, i, std::string::npos);
+            break;
+        }
+        // "var(" no meio de um nome (ex.: "xvar(") nao e' funcao.
+        if (at > 0 && (std::isalnum(static_cast<unsigned char>(value[at - 1])) || value[at - 1] == '-' || value[at - 1] == '_')) {
+            res.append(value, i, at + 4 - i);
+            i = at + 4;
+            continue;
+        }
+        res.append(value, i, at - i);
+        size_t j = at + 4;
+        int paren = 1;
+        size_t comma = std::string::npos;
+        while (j < value.size() && paren > 0) {
+            if (value[j] == '(') ++paren;
+            else if (value[j] == ')') --paren;
+            else if (value[j] == ',' && paren == 1 && comma == std::string::npos) comma = j;
+            if (paren > 0) ++j;
+        }
+        if (paren != 0) return false; // sem fechar
+        const size_t nameEnd = comma == std::string::npos ? j : comma;
+        const std::string name = trim(value.substr(at + 4, nameEnd - at - 4));
+        const std::string* found = name.size() > 2 && name[0] == '-' && name[1] == '-' ? lookup(name) : nullptr;
+        std::string sub;
+        bool ok = false;
+        if (found) {
+            ok = resolveVars(*found, lookup, sub, depth + 1);
+        }
+        if (!ok && comma != std::string::npos) {
+            ok = resolveVars(trim(value.substr(comma + 1, j - comma - 1)), lookup, sub, depth + 1);
+        }
+        if (!ok) return false;
+        res += sub;
+        i = j + 1;
+    }
+    out = std::move(res);
+    return true;
+}
+
+std::unordered_map<std::string, std::string> CSSParser::rootVars() const {
+    std::unordered_map<std::string, std::string> vars;
+    for (const CSSRule& r : m_rules) {
+        if (r.selector != ":root") continue;
+        for (const auto& kv : r.properties) {
+            if (kv.first.compare(0, 2, "--") == 0) vars[kv.first] = kv.second;
+        }
+    }
+    return vars;
+}
+
+void CSSParser::resolveRootVars() {
+    const auto root = rootVars();
+    for (CSSRule& r : m_rules) {
+        const auto own = r.properties;
+        const CSSVarLookup lookup = [&](const std::string& n) -> const std::string* {
+            auto it = own.find(n);
+            if (it != own.end()) return &it->second;
+            it = root.find(n);
+            return it != root.end() ? &it->second : nullptr;
+        };
+        for (auto it = r.properties.begin(); it != r.properties.end();) {
+            std::string out;
+            if (it->second.find("var(") == std::string::npos) {
+                ++it;
+            } else if (resolveVars(it->second, lookup, out)) {
+                it->second = std::move(out);
+                ++it;
+            } else {
+                it = r.properties.erase(it);
+            }
+        }
+    }
+    reindex();
+}
+
 const CSSRule* CSSParser::findRule(const std::string& selector) const {
     const CSSRule* last = nullptr;
     for (const auto& rule : m_rules) {
@@ -189,16 +347,25 @@ std::vector<const CSSRule*> CSSParser::findRules(const std::string& selector) co
 }
 
 CSSRule CSSParser::mergedRule(const std::string& selector) const {
+    if (const CSSRule* r = mergedRulePtr(selector)) return *r;
     CSSRule merged;
     merged.selector = selector;
-    for (const auto& rule : m_rules) {
-        if (rule.selector == selector) {
-            for (const auto& kv : rule.properties) {
-                merged.properties[kv.first] = kv.second;
-            }
-        }
-    }
     return merged;
+}
+
+const CSSRule* CSSParser::mergedRulePtr(const std::string& selector) const {
+    auto it = m_merged.find(selector);
+    return it == m_merged.end() ? nullptr : &it->second;
+}
+
+void CSSParser::reindex() {
+    m_merged.clear();
+    for (const auto& rule : m_rules) {
+        if (rule.properties.empty()) continue;
+        CSSRule& merged = m_merged[rule.selector];
+        merged.selector = rule.selector;
+        for (const auto& kv : rule.properties) merged.properties[kv.first] = kv.second;
+    }
 }
 
 } // namespace eruption

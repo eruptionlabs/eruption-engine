@@ -1,4 +1,6 @@
 #include "renderer/UiDocument.hpp"
+#include "utils/AssetVfs.hpp"
+#include <functional>
 #include <unordered_set>
 
 #include "core/Logger.hpp"
@@ -84,7 +86,7 @@ float glowPx(float num, uint8_t unit, const Vec2& area) {
 
 bool UiDocument::load(const std::filesystem::path& cssPath, std::string* error) {
     std::error_code ec;
-    if (!std::filesystem::is_regular_file(cssPath, ec)) {
+    if (!std::filesystem::is_regular_file(cssPath, ec) && !vfs::exists(cssPath)) {
         if (error) *error = "interface file not found: " + cssPath.generic_string();
         return false;
     }
@@ -117,17 +119,22 @@ void UiDocument::reloadIfChanged() {
         e->hasText = o.hasText; e->text = o.text;
         e->hasValue = o.hasValue; e->value = o.value;
         e->hasVisible = o.hasVisible; e->visible = o.visible;
+        e->hasImage = o.hasImage; e->image = o.image;
+        e->userClasses = o.userClasses;
+        e->hovered = o.hovered;
         for (int i = 0; i < 2; ++i) {
             e->hasColor[i] = o.hasColor[i];
             e->color[i] = o.color[i];
         }
     }
+    restyle(); // classes e :hover do script voltam a valer sobre o arquivo novo
     ERUPTION_LOG_WARN("[UI] %s recarregado", m_path.filename().string().c_str());
 }
 
 void UiDocument::clear() {
     m_elements.clear();
     m_byId.clear();
+    m_view.setRules({});
     m_loaded = false;
     m_path.clear();
 }
@@ -140,9 +147,17 @@ void UiDocument::build() {
     // marcado AGORA. Duas regras com o mesmo id são cascata, não dois
     // elementos — e desde que `--class` existe o id repetido é a regra, não a
     // exceção, porque a classe entra como mais uma regra do mesmo id.
+    m_ruleSel.clear();
+    m_ruleSel.reserve(m_parser.rules().size());
+    for (const CSSRule& r : m_parser.rules()) m_ruleSel.push_back(CSSParser::parseSelector(r.selector));
+    m_rootVars = m_parser.rootVars();
+
     std::unordered_set<std::string> criados;
-    for (const CSSRule& r : m_parser.rules()) {
-        if (r.selector.empty() || r.selector[0] != '#') continue;
+    for (size_t ri = 0; ri < m_parser.rules().size(); ++ri) {
+        const CSSRule& r = m_parser.rules()[ri];
+        // So' `#id` puro cria elemento: `#id:hover` e `#id.cls` sao estilo.
+        const CSSSelector& cs = m_ruleSel[ri];
+        if (!cs.valid || cs.id.empty() || !cs.tag.empty() || !cs.classes.empty() || cs.hover) continue;
         if (!criados.insert(r.selector).second) continue; // a cascata já foi resolvida na leitura
         const CSSRule merged = m_parser.mergedRule(r.selector);
         auto prop = [&](const char* name) -> const std::string* {
@@ -162,44 +177,13 @@ void UiDocument::build() {
         } else if (prop("content")) {
             e.widget = Widget::Text; // tem texto e não disse o tipo: é texto
         }
-        if (auto v = prop("content")) {
-            std::string t = CSSParser::trim(*v);
-            if (t.size() >= 2 && (t.front() == '"' || t.front() == '\'')) t = t.substr(1, t.size() - 2);
-            e.textCss = t;
+        if (auto v = prop("--class")) {
+            std::string lista = *v;
+            lista.erase(std::remove(lista.begin(), lista.end(), '"'), lista.end());
+            e.cssClasses = CSSParser::split(lista, ' ');
         }
-        if (auto v = prop("--image")) {
-            std::string t = CSSParser::trim(*v);
-            if (t.size() >= 2 && (t.front() == '"' || t.front() == '\'')) t = t.substr(1, t.size() - 2);
-            e.image = t;
-        }
-        if (auto v = prop("--image-tint")) e.tintCss = CSSLayout::parseColor(*v, IM_COL32_WHITE);
-        if (auto v = prop("--bar-shape")) e.arc = CSSParser::trim(*v) == "arc";
-        if (auto v = prop("--arc-start")) e.arcStart = CSSLayout::parseFloat(*v, e.arcStart);
-        if (auto v = prop("--arc-end")) e.arcEnd = CSSLayout::parseFloat(*v, e.arcEnd);
-        if (auto v = prop("--arc-thickness")) e.arcThickness = CSSLayout::parseFloat(*v, 15.0f) / 100.0f;
-        if (auto v = prop("--value")) e.valueCss = CSSLayout::parseFloat(*v, 1.0f);
-        if (auto v = prop("text-align")) {
-            const std::string a = CSSParser::trim(*v);
-            e.align = a == "center" ? 1 : (a == "right" ? 2 : 0);
-        }
-        if (auto v = prop("transform")) e.rotate = parseRotate(*v);
-        if (auto v = prop("clip-path")) CSSLayout::parsePolygon(*v, e.clip);
-        if (auto v = prop("border-radius")) {
-            CSSLayout::parseCornerRadii(*v, e.radii, e.radiiPct);
-            e.corners = e.radiiPct != 0 || e.radii[1] != e.radii[0] || e.radii[2] != e.radii[0] ||
-                        e.radii[3] != e.radii[0];
-        }
-        if (auto v = prop("--glow")) {
-            parseGlow(*v, e.glowColor, e.glowNum, e.glowUnit);
-        } else if (auto s = prop("box-shadow")) {
-            parseGlow(*s, e.glowColor, e.glowNum, e.glowUnit);
-            e.glowShadow = true;
-        }
-        e.z = m_layout.zIndex(r.selector, 0);
-        e.visibleCss = m_layout.displayVisible(r.selector);
-        e.text = e.textCss;
-        e.value = e.valueCss;
-        e.visible = e.visibleCss;
+        // z-index: do arquivo, sem estado (a ordem de desenho nao muda com o mouse).
+        e.z = CSSLayout(&m_parser).zIndex(r.selector, 0);
         m_elements.push_back(std::move(e));
     }
 
@@ -207,6 +191,281 @@ void UiDocument::build() {
     std::stable_sort(m_elements.begin(), m_elements.end(),
                      [](const Element& a, const Element& b) { return a.z < b.z; });
     for (size_t i = 0; i < m_elements.size(); ++i) m_byId[m_elements[i].selector] = i;
+    restyle();
+}
+
+namespace {
+const char* widgetTag(UiDocument::Widget w) {
+    switch (w) {
+    case UiDocument::Widget::Text: return "text";
+    case UiDocument::Widget::Bar: return "bar";
+    case UiDocument::Widget::Image: return "image";
+    default: return "rect";
+    }
+}
+} // namespace
+
+bool UiDocument::matches(const Element& e, const CSSSelector& s, bool considerHover, bool plainClassIsDynamic) const {
+    if (!s.valid) return false;
+    if (!s.id.empty() && e.selector.compare(1, std::string::npos, s.id) != 0) return false;
+    if (!s.tag.empty() && s.tag != widgetTag(e.widget)) return false;
+    if (considerHover && s.hover && !e.hovered) return false;
+    const bool plainClass = s.id.empty() && s.tag.empty() && !s.hover && s.classes.size() == 1;
+    for (const std::string& c : s.classes) {
+        const bool user = std::find(e.userClasses.begin(), e.userClasses.end(), c) != e.userClasses.end();
+        const bool stat = std::find(e.cssClasses.begin(), e.cssClasses.end(), c) != e.cssClasses.end();
+        // `.nome` sozinho ja' entrou no id pelo `--class` (CSSParser::expandClasses):
+        // casar de novo poria a regra da classe por cima do que o id escreveu.
+        if (plainClass && plainClassIsDynamic) {
+            if (!user || stat) return false;
+        } else if (!user && !stat) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Monta o estilo vivo: para cada elemento, as regras que casam com ele agora
+// (id, classes do arquivo e do script, tag, :hover), na ordem da cascata
+// (especificidade, depois ordem de leitura), com as variaveis `--x`
+// resolvidas pela arvore de --parent. Roda so' quando um estado muda.
+void UiDocument::restyle() {
+    const auto& rules = m_parser.rules();
+    const size_t n = m_elements.size();
+    std::vector<std::unordered_map<std::string, std::string>> merged(n);
+    std::vector<int> par(n, -1);
+    // Regra com id so' casa com o elemento daquele id: separar por id tira o
+    // produto elementos x regras (~1500 x ~1600 numa HUD real, ~140 ms a cada
+    // :hover que mudava). A ordem final vem do sort por (especificidade, regra).
+    std::unordered_map<std::string, std::vector<size_t>> byId;
+    std::vector<size_t> semId;
+    for (size_t r = 0; r < rules.size() && r < m_ruleSel.size(); ++r) {
+        if (m_ruleSel[r].id.empty()) semId.push_back(r);
+        else byId[m_ruleSel[r].id].push_back(r);
+    }
+    std::vector<std::pair<int, size_t>> hit;
+    for (size_t i = 0; i < n; ++i) {
+        const Element& e = m_elements[i];
+        hit.clear();
+        auto consider = [&](size_t r) {
+            if (!matches(e, m_ruleSel[r], true, true)) return;
+            const int spec = rules[r].specificity >= 0 ? rules[r].specificity : m_ruleSel[r].specificity();
+            hit.emplace_back(spec, r);
+        };
+        if (e.selector.size() > 1) {
+            auto it = byId.find(e.selector.substr(1));
+            if (it != byId.end()) for (size_t r : it->second) consider(r);
+        }
+        for (size_t r : semId) consider(r);
+        std::sort(hit.begin(), hit.end());
+        for (const auto& h : hit) {
+            for (const auto& kv : rules[h.second].properties) merged[i][kv.first] = kv.second;
+        }
+        if (!e.parent.empty()) {
+            auto it = m_byId.find(e.parent);
+            if (it != m_byId.end() && it->second != i) par[i] = int(it->second);
+        }
+    }
+
+    // Variaveis: :root, depois cada nivel da arvore, resolvidas onde foram
+    // declaradas e herdadas pelos filhos.
+    using Env = std::unordered_map<std::string, std::string>;
+    Env root;
+    for (const auto& kv : m_rootVars) {
+        const CSSVarLookup lk = [&](const std::string& k) -> const std::string* {
+            auto it = m_rootVars.find(k);
+            return it == m_rootVars.end() ? nullptr : &it->second;
+        };
+        std::string out;
+        if (CSSParser::resolveVars(kv.second, lk, out)) root[kv.first] = std::move(out);
+    }
+    std::vector<Env> env(n);
+    std::vector<uint8_t> state(n, 0); // 0 pendente, 1 em curso, 2 pronto
+    std::function<const Env&(size_t)> envOf = [&](size_t i) -> const Env& {
+        if (state[i] == 2) return env[i];
+        state[i] = 1;
+        Env e = (par[i] >= 0 && state[size_t(par[i])] != 1) ? envOf(size_t(par[i])) : root;
+        const auto& own = merged[i];
+        for (const auto& kv : own) {
+            if (kv.first.compare(0, 2, "--") != 0) continue;
+            const CSSVarLookup lk = [&](const std::string& k) -> const std::string* {
+                auto it = own.find(k);
+                if (it != own.end()) return &it->second;
+                auto ie = e.find(k);
+                return ie == e.end() ? nullptr : &ie->second;
+            };
+            std::string out;
+            if (CSSParser::resolveVars(kv.second, lk, out)) e[kv.first] = std::move(out);
+            else e.erase(kv.first);
+        }
+        env[i] = std::move(e);
+        state[i] = 2;
+        return env[i];
+    };
+
+    std::vector<CSSRule> view;
+    view.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        const Env& ev = envOf(i);
+        CSSRule rule;
+        rule.selector = m_elements[i].selector;
+        for (const auto& kv : merged[i]) {
+            if (kv.first.compare(0, 2, "--") == 0) {
+                auto it = ev.find(kv.first);
+                if (it != ev.end() && kv.second.find("var(") != std::string::npos) rule.properties[kv.first] = it->second;
+                else if (kv.second.find("var(") == std::string::npos) rule.properties[kv.first] = kv.second;
+                continue;
+            }
+            if (kv.second.find("var(") == std::string::npos) {
+                rule.properties[kv.first] = kv.second;
+                continue;
+            }
+            const CSSVarLookup lk = [&](const std::string& k) -> const std::string* {
+                auto it = ev.find(k);
+                return it == ev.end() ? nullptr : &it->second;
+            };
+            std::string out;
+            if (CSSParser::resolveVars(kv.second, lk, out)) rule.properties[kv.first] = std::move(out);
+        }
+        view.push_back(std::move(rule));
+    }
+    m_view.setRules(std::move(view));
+    for (Element& e : m_elements) applyStyle(e);
+}
+
+// Campos de estilo do elemento a partir do estilo vivo. Tudo volta ao padrao
+// antes de ler: um estado (:hover) que acaba precisa devolver o que ele mexeu.
+void UiDocument::applyStyle(Element& e) {
+    const CSSRule merged = m_view.mergedRule(e.selector);
+    auto prop = [&](const char* name) -> const std::string* {
+        auto it = merged.properties.find(name);
+        return it != merged.properties.end() ? &it->second : nullptr;
+    };
+    e.textCss.clear();
+    e.valueCss = 1.0f;
+    e.imageCss.clear();
+    e.align = 0;
+    e.tintCss = 0xFFFFFFFFu;
+    e.arc = false;
+    e.arcStart = -70.0f;
+    e.arcEnd = 70.0f;
+    e.arcThickness = 0.15f;
+    e.rotate = 0.0f;
+    e.clip.clear();
+    e.corners = false;
+    for (int k = 0; k < 4; ++k) {
+        e.radii[k] = 0.0f;
+        e.glowNum[k] = 0.0f;
+        e.glowUnit[k] = 0;
+    }
+    e.radiiPct = 0;
+    e.glowColor = 0;
+    e.glowShadow = false;
+
+    if (auto v = prop("content")) {
+        std::string t = CSSParser::trim(*v);
+        if (t.size() >= 2 && (t.front() == '"' || t.front() == '\'')) t = t.substr(1, t.size() - 2);
+        e.textCss = t;
+    }
+    if (auto v = prop("--image")) {
+        std::string t = CSSParser::trim(*v);
+        if (t.size() >= 2 && (t.front() == '"' || t.front() == '\'')) t = t.substr(1, t.size() - 2);
+        e.imageCss = t;
+    }
+    if (auto v = prop("--image-tint")) e.tintCss = CSSLayout::parseColor(*v, IM_COL32_WHITE);
+    if (auto v = prop("--bar-shape")) e.arc = CSSParser::trim(*v) == "arc";
+    if (auto v = prop("--arc-start")) e.arcStart = CSSLayout::parseFloat(*v, e.arcStart);
+    if (auto v = prop("--arc-end")) e.arcEnd = CSSLayout::parseFloat(*v, e.arcEnd);
+    if (auto v = prop("--arc-thickness")) e.arcThickness = CSSLayout::parseFloat(*v, 15.0f) / 100.0f;
+    if (auto v = prop("--value")) e.valueCss = CSSLayout::parseFloat(*v, 1.0f);
+    if (auto v = prop("text-align")) {
+        const std::string a = CSSParser::trim(*v);
+        e.align = a == "center" ? 1 : (a == "right" ? 2 : 0);
+    }
+    if (auto v = prop("transform")) e.rotate = parseRotate(*v);
+    if (auto v = prop("clip-path")) CSSLayout::parsePolygon(*v, e.clip);
+    if (auto v = prop("border-radius")) {
+        CSSLayout::parseCornerRadii(*v, e.radii, e.radiiPct);
+        e.corners = e.radiiPct != 0 || e.radii[1] != e.radii[0] || e.radii[2] != e.radii[0] ||
+                    e.radii[3] != e.radii[0];
+    }
+    if (auto v = prop("--glow")) {
+        parseGlow(*v, e.glowColor, e.glowNum, e.glowUnit);
+    } else if (auto s = prop("box-shadow")) {
+        parseGlow(*s, e.glowColor, e.glowNum, e.glowUnit);
+        e.glowShadow = true;
+    }
+    e.visibleCss = m_layout.displayVisible(e.selector);
+    if (!e.hasText) e.text = e.textCss;
+    if (!e.hasValue) e.value = e.valueCss;
+    if (!e.hasVisible) e.visible = e.visibleCss;
+    if (!e.hasImage) e.image = e.imageCss;
+}
+
+std::vector<UiDocument::Element*> UiDocument::matching(const std::string& selector) {
+    std::vector<Element*> out;
+    const CSSSelector s = CSSParser::parseSelector(selector);
+    for (Element& e : m_elements) {
+        if (matches(e, s, false, false)) out.push_back(&e);
+    }
+    return out;
+}
+
+std::vector<const UiDocument::Element*> UiDocument::matching(const std::string& selector) const {
+    std::vector<const Element*> out;
+    const CSSSelector s = CSSParser::parseSelector(selector);
+    for (const Element& e : m_elements) {
+        if (matches(e, s, false, false)) out.push_back(&e);
+    }
+    return out;
+}
+
+// ui.state: o estado "classe" vive no elemento, nao no arquivo, e sobrevive
+// a recarregar o .css. So' refaz o estilo se algo mudou.
+void UiDocument::setState(const std::string& selector, const std::string& name, bool on) {
+    if (name.empty()) return;
+    bool changed = false;
+    for (Element* e : matching(selector)) {
+        auto it = std::find(e->userClasses.begin(), e->userClasses.end(), name);
+        if (on && it == e->userClasses.end()) {
+            e->userClasses.push_back(name);
+            changed = true;
+        } else if (!on && it != e->userClasses.end()) {
+            e->userClasses.erase(it);
+            changed = true;
+        }
+    }
+    if (changed) restyle();
+}
+
+bool UiDocument::hoveredAt(const std::string& selector, float x, float y, float w, float h, const Vec2& p) const {
+    if (!m_loaded || w <= 0.0f) return false;
+    for (const Element* e : matching(selector)) {
+        if (chainHidden(*e)) continue;
+        CSSRect r;
+        if (!rectOf(e->selector, x, y, w, h, r)) continue;
+        if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) return true;
+    }
+    return false;
+}
+
+// :hover por quadro: o mesmo retangulo de ui.clicked/ui.hovered. `valid` falso
+// (sem mouse, celular sem dedo na tela) apaga todos.
+void UiDocument::updateHover(float x, float y, float w, float h, const Vec2& p, bool valid) {
+    if (!m_loaded) return;
+    bool changed = false;
+    for (Element& e : m_elements) {
+        bool now = false;
+        if (valid && w > 0.0f && !chainHidden(e)) {
+            CSSRect r;
+            if (rectOf(e.selector, x, y, w, h, r)) now = p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+        }
+        if (now != e.hovered) {
+            e.hovered = now;
+            changed = true;
+        }
+    }
+    if (changed) restyle();
 }
 
 UiDocument::Element* UiDocument::find(const std::string& selector) {
@@ -227,7 +486,10 @@ void UiDocument::setText(const std::string& selector, const std::string& text) {
 }
 
 void UiDocument::setImage(const std::string& selector, const std::string& png) {
-    if (Element* e = find(selector)) e->image = png;
+    if (Element* e = find(selector)) {
+        e->hasImage = true;
+        e->image = png;
+    }
 }
 
 void UiDocument::setValue(const std::string& selector, float value01) {
@@ -598,7 +860,9 @@ void UiDocument::resetOverrides() {
         e.text = e.textCss;
         e.value = e.valueCss;
         e.visible = e.visibleCss;
+        e.userClasses.clear(); // ui.state volta ao que o arquivo diz
     }
+    restyle();
 }
 
 CSSRect UiDocument::resolveRect(const Element& e, const Vec2& area) const {
