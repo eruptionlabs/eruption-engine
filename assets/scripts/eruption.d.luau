@@ -238,20 +238,6 @@ declare world: {
     set_ambient: (layers: { { type: string, density: number?, radius: number?, height: number?,
         size: number?, color: vector?, time: string? } }?) -> (),
     set_dof: (on: boolean) -> (),
-    -- Classic mode (the ERUPT button off): old diffuse-only light, no PBR,
-    -- relief, shadows, GI, bloom, DoF or SSAO, noon and clear sky. Turning it
-    -- off restores what was on before; set_dof while on applies afterwards.
-    set_classic: (on: boolean) -> (),
-    -- Water of the classic mode: a flat translucent plane at the map's water
-    -- level showing an animated frame sequence. `pattern` is a game path with
-    -- two printf integers (the map's water type, the frame number 0..frames-1),
-    -- e.g. "assets/external/agua/agua%d_%02d.png". Wave height, speed, pitch and
-    -- the animation speed come from the map's water plane. `tile` = world
-    -- units per repeat of a frame (default 10; frames of water types 4 and 6
-    -- repeat every 2 x tile and are opaque). Without frames the classic mode
-    -- keeps the normal water.
-    set_classic_water: (pattern: string, frames: number, alpha: number?, tile: number?) -> (),
-    classic: () -> boolean,
     -- World time scale (hit-stop, slow motion): sprite animation, effects,
     -- weather and the scripts' dt run scaled (0 = frozen). `seconds` counts in
     -- full time and goes back to 1 by itself (0 or none = until the next call).
@@ -1050,6 +1036,26 @@ declare vision: {
     -- The exact rule, anywhere on the map (no edge, no fade): the radius of a
     -- source is the line. Always true while vision is off.
     visible: (position: vector) -> boolean,
+}
+
+-- Graphics quality, for a game's own options screen.
+declare graphics: {
+    -- The machine's GPU name, the size of its device-local memory in MB (a
+    -- quick tier hint; perf.system().vram_mb is what is allocated right now)
+    -- and the name of the active preset.
+    info: () -> { gpu: string, vram_total_mb: number?, preset: string },
+    -- The keys of a preset of data/graphics.json (project patch included), or
+    -- nil when it does not exist.
+    values: (name: string) -> { [string]: any }?,
+    -- Switches quality live: the active preset becomes a copy of preset `base`
+    -- with `overrides` (preset keys; numbers, booleans, strings) on top, and
+    -- the scene resolution follows "render_scale". "present_mode" ("fifo" or
+    -- "immediate") sets vsync. Returns false when `base` does not exist.
+    -- Keys decided before the pipelines exist (shader_lite, post_format,
+    -- texture_layer_*, texture compression) only take effect on the next
+    -- start; so do mesh relief bakes of meshes already loaded and the texture
+    -- cap of textures already loaded.
+    apply: (base: string, overrides: { [string]: any }?) -> boolean,
 }
 
 -- An object of the scene: every model and character of the map is one, and

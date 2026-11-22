@@ -3162,6 +3162,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     registerObjectsApi(L, engine);
     registerRibbonApi(L, engine);
     registerVisionApi(L, engine);
+    registerGraphicsApi(L, engine);
     registerTelemetryApi(L, engine);
     registerNetApi(L, engine);
     NativeModule::registerApi(L);
@@ -4084,7 +4085,7 @@ declare loading: {
     -- runs long; it shows 100% on the frame of release.
     game_progress: (done: number, total: number) -> (),
 }
-)" + std::string(vfxApiDefinitions()) + visionApiDefinitions() + objectsApiDefinitions() + telemetryApiDefinitions() +
+)" + std::string(vfxApiDefinitions()) + visionApiDefinitions() + graphicsApiDefinitions() + objectsApiDefinitions() + telemetryApiDefinitions() +
            NativeModule::apiDefinitions();
 }
 

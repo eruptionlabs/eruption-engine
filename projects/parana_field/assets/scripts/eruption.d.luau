@@ -221,7 +221,11 @@ declare world: {
     -- the preset's sun lens flare; 0 hides it), lens_flare_rays (lines of
     -- the flare's star; 1 = a single streak), vignette (strength,
     -- 0 = off), vignette_softness, shadow_tint / highlight_tint (a color as
-    -- vector or {r, g, b}) with shadow_tint_strength / highlight_tint_strength.
+    -- vector or {r, g, b}) with shadow_tint_strength / highlight_tint_strength,
+    -- lut (a .cube or a 32^3 strip .png in the project) with lut_strength 0..1,
+    -- halation_intensity / halation_threshold / halation_tint, bokeh_intensity /
+    -- bokeh_threshold / bokeh_shape (0 disc, 1 hexagon), grain_intensity /
+    -- grain_size (px at 1080p). These last ones override data/postprocess.json.
     set_look: (preset: string | { [string]: any }) -> boolean,
     -- Ambient particles around the camera focus: a list of layers, each
     -- {type = "dust" (motes lit by the sun through the shadow map: they
@@ -333,10 +337,13 @@ declare world: {
     -- full resolution (default 3; above it a cheap wide blur takes over). No
     -- point at all gives the lens back to the automatic focus. The second
     -- argument may also be a table: {aperture, foreground, band, max_blur,
-    -- model = \"linear\" | \"thin_lens\" | \"tilt_plane\", tilt_angle (degrees,
+    -- model = \"linear\" | \"thin_lens\" | \"tilt_plane\" | \"spotlight\", tilt_angle (degrees,
     -- 0 = upright plane facing the camera, 90 = level plane), ramp_near,
     -- ramp_far (world units after the band), max_near, max_far (pixels at
     -- 1080p), screen_mix (0..1, mixes in a screen-height band)}.
+    -- model = \"spotlight\": a sharp circle ON THE GROUND around the
+    -- point; band = radius, ramp_far = ramp after it, max_far = blur outside;
+    -- height + ramp_near + max_near blur what rises above the point.
     set_focus: (point: vector?, aperture: (number | {[string]: any})?, foreground: boolean?, band: number?, max_blur: number?) -> (),
     -- Hides map and model geometry inside a volume (a mountain or a wall
     -- between the camera and the action) as a dither pattern. `slot` is 1..4;
@@ -1029,6 +1036,26 @@ declare vision: {
     -- The exact rule, anywhere on the map (no edge, no fade): the radius of a
     -- source is the line. Always true while vision is off.
     visible: (position: vector) -> boolean,
+}
+
+-- Graphics quality, for a game's own options screen.
+declare graphics: {
+    -- The machine's GPU name, the size of its device-local memory in MB (a
+    -- quick tier hint; perf.system().vram_mb is what is allocated right now)
+    -- and the name of the active preset.
+    info: () -> { gpu: string, vram_total_mb: number?, preset: string },
+    -- The keys of a preset of data/graphics.json (project patch included), or
+    -- nil when it does not exist.
+    values: (name: string) -> { [string]: any }?,
+    -- Switches quality live: the active preset becomes a copy of preset `base`
+    -- with `overrides` (preset keys; numbers, booleans, strings) on top, and
+    -- the scene resolution follows "render_scale". "present_mode" ("fifo" or
+    -- "immediate") sets vsync. Returns false when `base` does not exist.
+    -- Keys decided before the pipelines exist (shader_lite, post_format,
+    -- texture_layer_*, texture compression) only take effect on the next
+    -- start; so do mesh relief bakes of meshes already loaded and the texture
+    -- cap of textures already loaded.
+    apply: (base: string, overrides: { [string]: any }?) -> boolean,
 }
 
 -- An object of the scene: every model and character of the map is one, and

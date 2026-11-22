@@ -572,6 +572,14 @@ public:
     // atlas, SSAO, post toggles, cloud/rain budgets). Only keys present in
     // the preset are applied; safe to call at init and on F5 hot-reload.
     void applyGraphicsPreset();
+    // Live switch for the quality screen of a game (script `graphics.apply`):
+    // the active preset becomes a copy of preset `base` with `overrides` on top
+    // (the top-level key "present_mode" goes to the file root), then it is
+    // applied again and the scene resolution follows its "render_scale".
+    // False when `base` does not exist. Keys decided before the pipelines
+    // exist (shader_lite, post_format, texture_layer_*, relief_bake modes of
+    // meshes already loaded) only take effect on the next start.
+    bool applyGraphicsLive(const std::string& base, const json& overrides);
     const json* activeGraphicsPreset();
     const std::string& graphicsPresetName();
     std::string m_graphicsPreset; // resolvido uma vez (graphicsPresetName)

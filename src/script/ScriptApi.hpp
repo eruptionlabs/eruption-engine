@@ -40,6 +40,9 @@ const char* visionApiDefinitions();
 void registerTelemetryApi(lua_State* L, Engine& engine);
 const char* telemetryApiDefinitions();
 void openTelemetryFromEnv();
+// Tabela `graphics` (ScriptApiGraphics.cpp): troca de qualidade ao vivo.
+void registerGraphicsApi(lua_State* L, Engine& engine);
+const char* graphicsApiDefinitions();
 // Tabela `net` (ScriptApiNet.cpp): partida em rede. ScriptHost entrega os
 // eventos da rede aos net.on* pela chave ("@join", "@leave", "@fail" ou o
 // nome do evento); scriptPushNetEvent empilha os argumentos e diz quantos.

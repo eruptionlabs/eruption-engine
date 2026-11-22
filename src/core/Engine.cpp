@@ -3541,6 +3541,7 @@ void Engine::applyGraphicsPreset() {
     // Top-level battery/present controls; a preset may set its own fps_cap
     // (phones: 30, so the GPU rests between frames instead of heating up).
     m_fpsCap = std::clamp<int>(p.value("fps_cap", root.value("fps_cap", m_fpsCap)), 0, 1000);
+    platform::setFrameRateHint(m_fpsCap);
     const std::string pm = root.value("present_mode", "auto");
     const bool wantFifo = (pm == "fifo" || pm == "vsync");
     const bool wantImmediate = (pm == "immediate");
@@ -3551,6 +3552,36 @@ void Engine::applyGraphicsPreset() {
                       active.c_str(), static_cast<int>(m_postSettings.weatherTier),
                       m_shadowRenderer.settings().atlasSize, m_ssaoEnabled ? 1 : 0,
                       m_maxRainFollowers, m_maxFieldClouds);
+}
+
+bool Engine::applyGraphicsLive(const std::string& base, const json& overrides) {
+    json& root = m_graphicsConfig.root();
+    if (!root.is_object() || !root.contains("presets") || !root["presets"].contains(base)) return false;
+    // A preset the script defines must come from the same file the engine reads: the
+    // active name stays (start-time decisions already used it), only its content changes.
+    const std::string active = graphicsPresetName();
+    json merged = root["presets"][base];
+    if (overrides.is_object()) {
+        for (auto it = overrides.begin(); it != overrides.end(); ++it) {
+            if (it.key() == "present_mode") root["present_mode"] = it.value();
+            else merged[it.key()] = it.value();
+        }
+    }
+    root["presets"][active] = std::move(merged);
+    applyGraphicsPreset();
+    // applyGraphicsPreset only stores the scale for the start-up path; follow it live
+    // like settleRenderScale does (not with a fixed ERUPTION_RENDER_SCALE or an upscaler).
+    if (!std::getenv("ERUPTION_RENDER_SCALE") && !fsrActive() && m_displayW > 0) {
+        const float rs = std::clamp<float>(root["presets"][active].value("render_scale", 1.0f), 0.25f, 1.0f);
+        const uint32_t w = std::max(64u, static_cast<uint32_t>(static_cast<float>(m_displayW) * rs));
+        const uint32_t h = std::max(64u, static_cast<uint32_t>(static_cast<float>(displayExtent().height) * rs));
+        if (w != m_renderW || h != m_renderH) {
+            m_renderW = w;
+            m_renderH = h;
+            m_resized = true;
+        }
+    }
+    return true;
 }
 
 void Engine::recordTelemetry() {
