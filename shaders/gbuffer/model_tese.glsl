@@ -128,10 +128,7 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     // z = teto de inclinacao da normal (radianos), w = teto de tesselacao da
     // folhagem. Ver model.frag / model.tesc.
     vec4 u_tessParams2;
-    // Filtro passa-baixa (blur) sobre o height map, em niveis de mip
-    // somados ao mip "perto" (2.0) que heightUv() usa - 0 = sem blur extra
-    // (comportamento de antes). Slider "Height Blur".
-    float u_tessHeightBlur;
+    float u_framePad0; // reservado (era o vies de mip da altura; o blur esta' nos mips)
     // Banda perto da grade fina (FrameUBO::tessNear*, presets de PC): ate'
     // u_tessNearDistance a grade usa u_tessNearSpacing e o piso de
     // u_tessNearEdgePixels; dali em diante a de antes (u_tessParams2.y e
@@ -160,6 +157,13 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_seeThroughExtra[12];
     vec4 u_alphaHash;
     vec4 u_reliefParams;
+    // Ate' u_reliefPom2 (mesma ordem de model_frame_ubo.glsl); z de u_reliefPom2 =
+    // fator do filtro da altura pelo espacamento REAL da grade (chave tessellation_height_grid_filter).
+    vec4 u_spriteParams;
+    vec4 u_spriteRim;
+    vec4 u_splineDbg[13];
+    vec4 u_reliefPom;
+    vec4 u_reliefPom2;
 };
 
 
@@ -199,6 +203,7 @@ layout(set = 1, binding = 0) uniform FrameUBO {
 // O espacamento usado e' o que a grade REALMENTE tem no vertice (ver
 // dispSpacingAt), nao so' o alvo do preset.
 float g_dispSpacing = 0.0; // dispSpacingAt() do vertice; 0 = so' o alvo
+float g_dispDetail = 1.0;  // curveDetail() do vertice (dispSpacingAt)
 
 // GRADE POR DISTANCIA (presets de PC, u_tessNearDistance > 0). Ate' a
 // distancia da banda perto a grade e' a fina (u_tessNearSpacing e piso de
@@ -208,7 +213,7 @@ float g_dispSpacing = 0.0; // dispSpacingAt() do vertice; 0 = so' o alvo
 // pelo ponto medio da aresta).
 float tessNearWeight(float d) {
     float n = u_tessNearDistance;
-    return n > 0.0 ? 1.0 - smoothstep(n, 1.2 * n, d) : 0.0;
+    return n > 0.0 ? 1.0 - smoothstep(0.0, n, d) : 0.0; // degrade, IDENTICO ao model.tesc
 }
 
 // Espacamento real da grade no ponto: o alvo ou o piso em pixels de aresta
@@ -217,13 +222,55 @@ float tessNearWeight(float d) {
 // 8 px mandando, grade medida de 0,25-0,28 u). Depende so' da posicao e da
 // camera: os dois patches de uma aresta e o model.vert chegam ao mesmo
 // numero. Sem banda perto (celular) fica so' o alvo, como antes.
+// DETALHE DA CURVA. "Tessellation Factor by Distance" e' a quantidade de
+// triangulos: acima de 8 (o pico da curva padrao, que da' o comportamento de
+// antes) ela divide os pisos que paravam a subdivisao antes do teto - o
+// tamanho minimo do triangulo na tela e o espacamento minimo da altura. Sem
+// isto o piso em pixels cortava em ~8 subdivisoes e 64 ficava igual a 8.
+// IDENTICO em model.tesc/model.vert/model.tese.
+float tessLut16(vec4 a, vec4 b, float t);
+float curveDetail(float d) {
+    return max(tessLut16(u_tessLut0, u_tessLut1, d / max(u_tessParams.x, 1.0)) / 8.0, 1.0);
+}
+
+// PISO DO TRIANGULO EM PIXELS PELA DISTANCIA (causa do "1 px custa o dobro de 3 px",
+// medido num mapa urbano grande no high: 10,8 M de primitivas a 1 px contra 3,8 M a 3 px).
+// Perto da camera vale u_tessNearEdgePixels (o piso do preset); com a distancia
+// ele cresce depressa ate' kTessFarEdgePx (curva quadratica da banda perto),
+// porque a grade fina so' paga perto - longe o triangulo de 1 px e' quad
+// overshading puro. A curva "Tessellation Factor by Distance" e' so' o TETO do
+// fator por aresta (e a amplitude do relevo): ela nao divide mais o piso, que
+// chegava a 0,2 px com a curva em 50 - triangulo sub-pixel que o relevo nao
+// precisa, porque o brilho e a normal da altura saem da textura, por pixel,
+// no model.frag.
+// IDENTICO em model.tesc/model.vert/model.tese.
+const float kTessFarEdgePx = 8.0;
+float tessBasePx(float d) {
+    float n = u_tessNearDistance;
+    if (n <= 0.0) return u_tessNearEdgePixels;
+    float k = 1.0 - smoothstep(0.0, n, d);
+    return mix(kTessFarEdgePx, u_tessNearEdgePixels, k * k);
+}
 float dispSpacingAt(vec3 p) {
     float s = u_tessParams2.y;
-    if (s <= 0.0 || u_tessNearDistance <= 0.0) return s;
     float d = max(distance(p, u_cameraPos), 1e-3);
+    g_dispDetail = curveDetail(d);
+    if (s <= 0.0 || u_tessNearDistance <= 0.0) return s / g_dispDetail;
     float k = tessNearWeight(d);
     float pxPerU = 0.5 * u_screenResolution.y * abs(u_projection[1][1]) / d;
-    return max(mix(s, u_tessNearSpacing, k), mix(8.0, u_tessNearEdgePixels, k) / max(pxPerU, 1e-6));
+    return max(mix(s, u_tessNearSpacing, k) / g_dispDetail, tessBasePx(d) / max(pxPerU, 1e-6));
+}
+// Espacamento so' para SOMBREAR (normal da altura): o ideal de 1 px dividido
+// pelo detalhe da curva, sem o piso grosso de longe - o mip da normal nao pode
+// subir so' porque a malha ficou mais grossa (o relevo e o brilho do topo da
+// pedra saem da textura, nao do tamanho do triangulo).
+float dispSpacingShadeAt(vec3 p) {
+    float s = u_tessParams2.y;
+    float d = max(distance(p, u_cameraPos), 1e-3);
+    if (s <= 0.0 || u_tessNearDistance <= 0.0) return s;
+    float k = tessNearWeight(d);
+    float pxPerU = 0.5 * u_screenResolution.y * abs(u_projection[1][1]) / d;
+    return max(mix(s, u_tessNearSpacing, k), min(u_tessNearEdgePixels, 1.0) / max(pxPerU, 1e-6));
 }
 
 #ifdef ERUPTION_TESS_GEOMORPH
@@ -248,7 +295,7 @@ float dispMipFloor(uint texIdx) {
     float spacing = g_dispSpacing > 0.0 ? g_dispSpacing : u_tessParams2.y;
     // Piso em u de mundo (tessellation_height_min_spacing): a forma do relevo
     // nao muda com a distancia da camera. IDENTICO em model.vert/model.tese.
-    spacing = max(spacing, u_reliefParams.x);
+    spacing = max(spacing, u_reliefParams.x / g_dispDetail);
     float uvPerU = push.uvScale.z;
     if (spacing <= 0.0 || uvPerU <= 0.0) return 0.0;
     float texels = float(slotTextureSize(texIdx, 0).x);
@@ -267,9 +314,11 @@ float dispMipFloor(uint texIdx) {
 // Luminancia crua do albedo (chao com splat), sem grade conhecida ou sem
 // banda perto (celular): o mip 2/5 de antes. IDENTICO em model.vert/model.tese.
 float heightNearMip(uint texIdx, bool useAlpha) {
-    bool fineGrid = u_tessNearDistance > 0.0 && u_tessParams2.y > 0.0 && push.uvScale.z > 0.0;
-    if (useAlpha && fineGrid) return dispMipFloor(texIdx) + max(u_tessHeightBlur, 0.0);
-    return max(2.0 + u_tessHeightBlur, dispMipFloor(texIdx));
+    // Altura cozida: so' o piso de Nyquist, sem blur (mip 2 fixo saiu - era
+    // media 4x4 por cima da altura). A luminancia do albedo (passa-alta
+    // near - far) segue com o piso 2: abaixo dele o grao da cor vira ruido.
+    if (useAlpha) return dispMipFloor(texIdx);
+    return max(2.0, dispMipFloor(texIdx));
 }
 
 // Linha de base do contraste = media da textura inteira. O mip 8 so' e' a
@@ -281,9 +330,6 @@ float heightBaseMip(uint texIdx) {
 }
 
 float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
-    // Blur (slider "Height Blur") sobe os mips de leitura da altura - mip
-    // maior = media de mais texels = ruido de alta frequencia sumindo antes
-    // do ganho/contraste amplificar ele. 0 = mip 2/5 originais.
     float nearMip = heightNearMip(texIdx, useAlpha);
     float farMip = nearMip + 3.0;
     if (useAlpha) {
@@ -349,6 +395,21 @@ vec4 weldTexel(uint slot, int i) {
     return slotTextureLod(slot, (vec2(float(i % 4096), float(i / 4096)) + 0.5) / vec2(4096.0, max(push.weld.z, 1.0)), 0.0);
 }
 
+
+// Curva do fator em 16 amostras de meia precisao (2 por float, nos mesmos 8
+// floats da LUT de antes: o UBO nao muda). Nos em t = (i/15)^1.5: mais
+// densos perto da camera, onde a curva importa (8 amostras uniformes davam um
+// no a cada 470 u e achatavam a curva do editor). Linear entre nos: continua.
+float tessLut16(vec4 a, vec4 b, float t) {
+    float x = pow(clamp(t, 0.0, 1.0), 0.6666667) * 15.0;
+    int i = int(floor(x));
+    float f = x - float(i);
+    float v[8] = float[8](a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w);
+    int i0 = min(i, 15), i1 = min(i + 1, 15);
+    vec2 p0 = unpackHalf2x16(floatBitsToUint(v[i0 >> 1]));
+    vec2 p1 = unpackHalf2x16(floatBitsToUint(v[i1 >> 1]));
+    return mix(((i0 & 1) == 0) ? p0.x : p0.y, ((i1 & 1) == 0) ? p1.x : p1.y, f);
+}
 float lut8(vec4 a, vec4 b, float t) {
     float x = clamp(t, 0.0, 1.0) * 7.0;
     int i = int(floor(x));
@@ -500,6 +561,47 @@ vec3 geomorphCoord() {
 
 #define BARY(attr_) (TESS_BC.x * attr_[0] + TESS_BC.y * attr_[1] + TESS_BC.z * attr_[2])
 
+// ESPACAMENTO REAL DA GRADE no ponto (chave tessellation_height_grid_filter).
+// dispSpacingAt() supoe a grade ideal (alvo / detalhe da curva), mas o nivel
+// que o model.tesc de fato emite segue a curva "Tessellation Factor by
+// Distance" (teto de 50, 20 a 616 u...), e em ladrilho grande a grade real e'
+// MAIS GROSSA que a ideal (medido no cubo: dentes de ~8 px na borda da pedra
+// com a grade ideal em 1 px). O piso de Nyquist do mip da altura lia entao um
+// degrau mais fino que os vertices e a borda saia em escadinha. Aqui o
+// espacamento vem dos niveis do patch: na aresta, so' dela (comprimento /
+// nivel externo: os dois patches vizinhos veem o mesmo numero, a junta
+// fecha); no miolo, o do nivel interno; no canto devolve 0 (fica o ideal,
+// que so' depende da posicao, igual ao model.vert).
+// Largura maxima, em unidades de mundo, da faixa em que a solda leva a altura
+// para o valor da aresta (0,25 do menor lado, ate' aqui). Sem o teto, num
+// triangulo grande (tabuleiro, rampa: lados de 80 u) a faixa tinha 20 u e a
+// aresta travada em altura neutra (borda aberta de malha, quina) virava uma
+// listra lisa e escura, sem relevo, de ponta a ponta do tabuleiro. A altura
+// na propria aresta nao muda (as duas pontas continuam iguais, sem rachadura);
+// so' a transicao fica mais estreita. 1,5 u e' ~2,5x a faixa da costura antiga
+// (kSeamR); no mapa de teste as listras do tabuleiro somem e o miolo fora das
+// arestas nao muda (PSNR, ver mensagem de commit).
+const float kWeldBand = 1.5;
+
+float tessGridSpacing() {
+    vec3 bc = TESS_BC;
+    float len0 = distance(inWorldPos[1], inWorldPos[2]);
+    float len1 = distance(inWorldPos[2], inWorldPos[0]);
+    float len2 = distance(inWorldPos[0], inWorldPos[1]);
+    float we0 = bc.y * bc.z, we1 = bc.z * bc.x, we2 = bc.x * bc.y;
+    float wsum = we0 + we1 + we2;
+    if (wsum < 1e-7) return 0.0;
+    float sEdge = (we0 * len0 / max(gl_TessLevelOuter[0], 1.0) + we1 * len1 / max(gl_TessLevelOuter[1], 1.0)
+                 + we2 * len2 / max(gl_TessLevelOuter[2], 1.0)) / wsum;
+    float sIn = (len0 + len1 + len2) / (3.0 * max(gl_TessLevelInner[0], 1.0));
+    // Mesma faixa do miolo da solda (0,25 do menor lado): so' dentro dela vale o nivel interno.
+    float dEdge = min(min(distToSegment(BARY(inWorldPos), inWorldPos[1], inWorldPos[2]),
+                          distToSegment(BARY(inWorldPos), inWorldPos[2], inWorldPos[0])),
+                      distToSegment(BARY(inWorldPos), inWorldPos[0], inWorldPos[1]));
+    float rT = min(0.25 * min(min(len0, len1), len2), kWeldBand);
+    return mix(sEdge, sIn, smoothstep(0.0, max(rT, 1e-3), dEdge));
+}
+
 void main() {
 #ifdef ERUPTION_TESS_GEOMORPH
     g_bc = geomorphCoord();
@@ -517,6 +619,11 @@ void main() {
     outEmissiveStrength = BARY(inEmissiveStrength);
     outSway = BARY(inSway);
     outDispInfo = vec4(1.0, 0.0, 0.0, 0.0);
+    // Depuracao do mapa de calor (ERUPTION_TEST_TESS_HEATMAP, lido em Render.cpp):
+    // u_framePad0 = modo 1 amp, 2 pom, 3 altura, 4 nivel (5 e 6: so' o frag). O valor 0..1 sai em
+    // outDispInfo.x no fim do main; com o modo 0 nada disto muda o resultado.
+    float dbgVal = 0.0;
+    if (u_framePad0 > 3.5 && u_framePad0 < 4.5) dbgVal = clamp(gl_TessLevelInner[0] / max(u_tessParams.w, 1.0), 0.0, 1.0);
     // Atributos 'flat' vem do primeiro vertice do patch: interpolar indice de
     // textura nao significa nada, e o triangulo inteiro compartilha o material.
     outTexIndex = inTexIndex[0];
@@ -542,10 +649,12 @@ void main() {
     // altura suave o bastante para nao serrilhar a silhueta e barata como VTF.
     if (u_tessParams.y > 0.5 && u_tessParams.z > 1e-5) {
         float d = distance(wp, u_cameraPos);
-        float f = lut8(u_tessLut0, u_tessLut1, d / max(u_tessParams.x, 1.0));
+        float f = tessLut16(u_tessLut0, u_tessLut1, d / max(u_tessParams.x, 1.0));
         float amp = clamp((f - 1.0) / max(u_tessParams.w - 1.0, 1e-3), 0.0, 1.0);
         if (amp > 0.0) {
             g_dispSpacing = dispSpacingAt(wp);
+            const float shadeSpacing = max(dispSpacingShadeAt(wp) * max(u_reliefPom2.z, 1.0), u_reliefParams.x / g_dispDetail);
+            if (u_reliefPom2.z > 0.0) g_dispSpacing = max(g_dispSpacing, u_reliefPom2.z * tessGridSpacing());
             // FONTE DE ALTURA.
             // 1) alfa do MRAH-W, que e' a altura cozida no load (PbrMapGen
             //    escreve height em .a; .b e' a cavidade/AO).
@@ -640,7 +749,7 @@ void main() {
                         float s = bc[a] + bc[b];
                         float t = s > 1e-6 ? bc[b] / s : 0.5;
                         float len = distance(inWorldPos[a], inWorldPos[b]);
-                        float R = max(0.25 * len, 1e-3);
+                        float R = max(min(0.25 * len, kWeldBand), 1e-3);
                         float type = mod(codes[e], 4.0);
                         float He = h;
                         vec3 De = nrm;
@@ -661,8 +770,8 @@ void main() {
                         dE += w * De;
                         wsumE += w;
                     }
-                    float rT = 0.25 * min(min(distance(inWorldPos[0], inWorldPos[1]), distance(inWorldPos[1], inWorldPos[2])),
-                                          distance(inWorldPos[2], inWorldPos[0]));
+                    float rT = min(0.25 * min(min(distance(inWorldPos[0], inWorldPos[1]), distance(inWorldPos[1], inWorldPos[2])),
+                                              distance(inWorldPos[2], inWorldPos[0])), kWeldBand);
                     float mIn = smoothstep(0.0, max(rT, 1e-3), dEdge);
                     float hB = h;
                     vec3 dB = nrm;
@@ -683,6 +792,17 @@ void main() {
                 if (hSrc < 1.5) ampW *= 1.0 - reliefPomWeight(abs(dot(dispDir, normalize(u_cameraPos - wp))));
                 vec3 dsp = dispDir * ((h - 0.5) * ampW);
                 wp += dsp;
+                if (u_framePad0 > 6.5) {
+                    // 7 = mip da altura (/10), 8 = pixels entre vertices da grade real (/8)
+                    if (u_framePad0 < 7.5) dbgVal = clamp(heightNearMip(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0], hSrc < 1.5) / 10.0, 0.0, 1.0);
+                    else dbgVal = clamp(tessGridSpacing() * 0.5 * u_screenResolution.y * abs(u_projection[1][1]) / max(distance(wp, u_cameraPos), 1e-3) / 8.0, 0.0, 1.0);
+                }
+                if (u_framePad0 > 0.5 && u_framePad0 < 3.5) {
+                    if (u_framePad0 < 1.5) dbgVal = clamp(ampW / max(u_tessParams.z, 1e-6), 0.0, 1.0);
+                    else if (u_framePad0 < 2.5)
+                        dbgVal = hSrc < 1.5 ? reliefPomWeight(abs(dot(dispDir, normalize(u_cameraPos - wp)))) : 0.0;
+                    else dbgVal = clamp(h, 0.0, 1.0);
+                }
 
                 // NORMAL ANALITICA DO RELEVO, no lugar da derivada de tela.
                 // A derivada e' plana por quad de pixel: com deslocamento
@@ -691,6 +811,15 @@ void main() {
                 // que deslocou o vertice, entao a luz descreve a superficie
                 // real e o resultado e' liso. So' roda na banda perto.
                 float reliefMark = 0.0; // 10 = a normal daqui e' a do relevo
+                // 20 = a normal do RELEVO sai por PIXEL no model.frag (altura do MRAH-W lida na
+                // textura, gradiente no fragmento): a normal por vertice so' carrega o que a grade
+                // enxerga, e com triangulo de 3-4 px o brilho do topo da pedra sumia (o relevo
+                // dependia do tamanho do triangulo). Aqui vai a normal da malha (soldada na
+                // costura) e, em outDispInfo.w, a amplitude efetiva em u. So' onde o frag tem como
+                // refazer: MRAH-W sem splat nem crossfade e com normal map (o frag soma la').
+                const bool fragNormal = hSrc < 1.5 && (inSplatTex[0].x | inSplatTex[0].y) == 0u && gBlendW <= 0.0
+                                        && inNormalIndex[0] != 0u && u_tessNearDistance > 0.0;
+                float dispW = h;
                 if (u_tessNearDistance > 0.0) {
                     // Com a grade por distancia (PC): os eixos sao dP/du e
                     // dP/dv do proprio triangulo (inversa da matriz de UV das
@@ -700,6 +829,9 @@ void main() {
                     // U e V: o gradiente saia girado. Passo = 1 texel do mip
                     // que heightUv le' (menor que isso so' interpola o mesmo
                     // texel).
+                    // A normal le' a altura no mip do espacamento de SOMBREAR, nao no da
+                    // malha: o deslocamento usa o grosso (Nyquist da grade real).
+                    g_dispSpacing = shadeSpacing;
                     uint hTex = hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0];
                     bool hAlpha = hSrc < 1.5;
                     vec3 e1 = inWorldPos[1] - inWorldPos[0], e2 = inWorldPos[2] - inWorldPos[0];
@@ -710,6 +842,16 @@ void main() {
                         vec3 dPdv = (e2 * t1.x - e1 * t2.x) / det;
                         dPdu -= nrm * dot(dPdu, nrm);
                         dPdv -= nrm * dot(dPdv, nrm);
+                        if (fragNormal) {
+                            // Sombreamento SEMPRE pela normal da malha (nrm): dispDir e' a
+                            // direcao soldada (media dos dois lados) e so' serve ao
+                            // DESLOCAMENTO, onde as duas pontas precisam coincidir. Numa
+                            // quina (tabuleiro/rampa, cantos de casa) ela inclina a luz na
+                            // faixa da aresta e aparece como uma linha escura/clara.
+                            outNormal = nrm;
+                            reliefMark = 20.0;
+                            dispW = ampW * weldInner;
+                        } else {
                         float dUv = exp2(heightNearMip(hTex, hAlpha)) / float(slotTextureSize(hTex, 0).x);
                         // Mesma fonte que deslocou: chao com splat le' a mistura
                         // das camadas (a mascara muda devagar, fica no ponto).
@@ -741,11 +883,13 @@ void main() {
                             // UV espelhada inverte o produto vetorial inteiro.
                             if (dot(nD, nrm) < 0.0) nD = -nD;
                             // Solda: na faixa da aresta (weldInner < 1) a altura
-                            // e a direcao vem misturadas dos dois lados; a normal
-                            // vai junto pra direcao soldada, a mesma dos dois.
-                            vec3 nRel = normalize(mix(dispDir, nD, weldInner));
+                            // vem misturada dos dois lados, mas a normal de
+                            // sombreamento volta pra da malha (nrm), nao pra
+                            // direcao soldada: ver o comentario no ramo fragNormal.
+                            vec3 nRel = normalize(mix(nrm, nD, weldInner));
                             outNormal = normalize(mix(nrm, nRel, clamp(amp, 0.0, 1.0)));
                             reliefMark = 10.0;
+                        }
                         }
                     }
                 } else {
@@ -785,12 +929,13 @@ void main() {
                 // nao refazer pela derivada de tela. (Antes o +10 era somado
                 // antes desta linha, que o apagava: o frag nunca via a normal
                 // daqui.)
-                outDispInfo = vec4(dl > 1e-6 ? abs(dot(dsp / dl, nrm)) : 1.0, dl, hSrc + reliefMark, h);
+                outDispInfo = vec4(dl > 1e-6 ? abs(dot(dsp / dl, nrm)) : 1.0, dl, hSrc + reliefMark, dispW);
             }
 
         }
     }
 
+    if (u_framePad0 > 0.5) outDispInfo.x = dbgVal;
     outWorldPos = wp;
 #ifndef ERUPTION_NO_VELOCITY
     outPrevWorldPos = BARY(inPrevWorldPos) + (wp - wpBase);

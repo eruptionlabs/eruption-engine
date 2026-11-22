@@ -21,6 +21,54 @@ struct SplineCurve {
     std::vector<InterpolationMode> modes;
     float m_maxY = 1.0f;
 
+    // DEBUG DESTA SPLINE (cada spline tem o seu, independente das outras). Ligado,
+    // o editor pinta cada bolinha com a cor do SEU PONTO e o traco entre dois
+    // pontos como degrade da cor de um para a do proximo; se a spline muda algo
+    // no mundo, o mapa tinge a cena com essa mesma cor, na posicao x da entrada.
+    // Nao e' salvo no JSON nem copiado de preset: e' so' de quem esta' olhando.
+    bool debug = false;
+
+    // Paleta fixa dos pontos, na ordem do dono. A cor vem do INDICE do ponto na
+    // spline (ponto 0 = azul, 1 = roxo...), entao e' a mesma em toda spline e em
+    // todo quadro. Passada a oitava volta ao azul: com 8 cores distintas o
+    // vizinho nunca repete a cor (o 7o e' laranja, o 8o volta azul).
+    static constexpr int kDebugPaletteSize = 8;
+    static glm::vec3 debugPointColor(size_t index) {
+        static const glm::vec3 kPalette[kDebugPaletteSize] = {
+            {0.20f, 0.45f, 1.00f},  // azul
+            {0.65f, 0.30f, 1.00f},  // roxo
+            {1.00f, 0.15f, 0.15f},  // vermelho
+            {0.15f, 0.85f, 0.25f},  // verde
+            {1.00f, 0.92f, 0.15f},  // amarelo
+            {1.00f, 0.20f, 0.90f},  // magenta
+            {0.15f, 0.92f, 0.96f},  // ciano
+            {1.00f, 0.58f, 0.12f},  // laranja
+        };
+        return kPalette[index % kDebugPaletteSize];
+    }
+
+    // Cor do debug na posicao x do eixo de entrada: degrade linear entre as cores
+    // dos dois pontos vizinhos (antes do primeiro e depois do ultimo, a do ponto).
+    glm::vec3 debugColorAt(float x) const {
+        if (pointsX.empty()) return debugPointColor(0);
+        if (x <= pointsX.front()) return debugPointColor(0);
+        for (size_t k = 0; k + 1 < pointsX.size(); ++k) {
+            if (x <= pointsX[k + 1]) {
+                const float d = pointsX[k + 1] - pointsX[k];
+                const float f = d > 0.0001f ? (x - pointsX[k]) / d : 0.0f;
+                return glm::mix(debugPointColor(k), debugPointColor(k + 1), f);
+            }
+        }
+        return debugPointColor(pointsX.size() - 1);
+    }
+
+    // Maior valor (y) dos pontos: o que normaliza a intensidade do tingimento.
+    float debugMaxValue() const {
+        float m = 0.0001f;
+        for (float y : pointsY) m = std::max(m, y);
+        return m;
+    }
+
     SplineCurve() = default;
     SplineCurve(const std::vector<float>& x, const std::vector<float>& y, InterpolationMode defaultMode = InterpolationMode::Linear)
         : pointsX(x), pointsY(y) {

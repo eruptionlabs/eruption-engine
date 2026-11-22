@@ -9,6 +9,7 @@
 // traducao. Nenhuma logica mudou: recorta-e-cola verificado por screenshot
 // deterministico (RMS 0.0 contra o binario anterior).
 
+#include <cstdio>
 #include "core/Engine.hpp"
 #include "utils/PbrDeferred.hpp"
 #include "core/EngineInternal.hpp"
@@ -33,6 +34,8 @@
 #include "renderer/skymap/SkyConfig.hpp"
 #include "renderer/WeatherTypes.hpp"
 #include <cfloat>
+#include <cstring>
+#include <glm/gtc/packing.hpp>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
@@ -210,9 +213,9 @@ static Vec3 smokeBoxMax(const SmokeEmitter& sm, const Vec2& wdir, float wspd) {
     return Vec3(sm.position.x + folga, sm.position.y + sm.height, sm.position.z + folga);
 }
 
-// Fim da faixa de tesselacao: onde a curva chega a 1 (sem subdivisao), com
-// 20% de folga para a malha entrar na faixa antes do primeiro vertice
-// deslocado. Era distMax * 0,12 fixo - a curva ia mais longe e a faixa nao.
+// Fim da faixa de tesselacao: onde o blur da curva chega a 1 (fator 1, sem
+// subdivisao), com 20% de folga para a malha entrar na faixa antes do primeiro
+// vertice deslocado. Era distMax * 0,12 fixo - a curva ia mais longe e a faixa nao.
 static float tessBandDistance(const SplineCurve& curve, float distMax) {
     if (curve.evaluate(0.0f) <= 1.001f) return 0.0f;
     constexpr int kSamples = 200;
@@ -249,6 +252,34 @@ float Engine::tessZoomFollow() const {
     const float lens = std::tan(glm::radians(30.0f)) / std::tan(glm::radians(m_camera.fov()) * 0.5f);
     // Teto 4: 15 graus de lente; mais fechado que isso a faixa ja' cobre o mapa.
     return std::pow(std::clamp(lens, 1.0f, 4.0f), w);
+}
+
+// EIXO X DA CURVA "Tessellation Factor by Distance", em u de mundo. Antes era
+// o das curvas de normal (max_distance) x lente: 1000 x 3,27 = 3274 u com fov
+// 20, quando a camera do jogo ve' o chao a 130-330 u (medido, ver
+// data/graphics.json do projeto), ou seja so' 4-10% do eixo - quase todos os
+// pontos da curva ficavam fora da imagem e o fator ficava no maximo. Agora:
+//  - tessellation_axis_mip_octaves > 0: o mip da altura comeca a subir onde o
+//    espacamento da grade do piso em pixels iguala tessellation_height_min_
+//    spacing (d0 = minSp x 0,5 x H x |P11| / px, a mesma conta de
+//    dispSpacingAt() nos shaders) e sobe 1 nivel por oitava (x2). O eixo
+//    termina em d0 x 2^oitavas / 0,85, deixando 15% de margem; os nos da
+//    curva ficam em d0 x 2^k = uma distancia por troca de mip.
+//  - senao tessellation_max_distance (u), se > 0;
+//  - senao o de antes (max_distance x lente), para os outros projetos.
+float Engine::tessAxis() const {
+    if (m_tessAxisMipOct > 0.0f && m_tessHeightMinSpacing > 0.0f && !m_camera.isOrthographic() && m_displayW > 0) {
+        const float p11 = std::abs(m_camera.projJittered()[1][1]);
+        const float h = static_cast<float>(renderExtent().height);
+        // Referencia FIXA de 1 px: com o piso do preset (tessellation_near_edge_pixels) aqui, subir o
+        // piso de 1 para 3 px dividia o eixo por 3 (banda 7206 -> 2402 u num mapa urbano grande no high) e a
+        // curva inteira - fator, amplitude do relevo, POM - encolhia junto: a imagem mudava, nao so' o custo.
+        constexpr float kAxisRefPx = 1.0f;
+        const float d0 = m_tessHeightMinSpacing * 0.5f * h * p11 / kAxisRefPx;
+        if (d0 > 1.0f) return d0 * std::exp2(m_tessAxisMipOct) / 0.85f;
+    }
+    if (m_tessAxisDist > 0.0f) return m_tessAxisDist;
+    return std::max(m_normalDistMax, 1.0f) * tessZoomFollow();
 }
 
 void Engine::settleRenderScale() {
@@ -853,20 +884,30 @@ void Engine::render() {
     }();
     // Tesselacao: mesma tabela de 8 amostras. O maximo da curva vai no .w
     // para o shader normalizar a atenuacao da amplitude.
-    Vec4 tessLo(1.0f), tessHi(1.0f);
-    sampleLut(m_tessCurve, tessLo, tessHi);
+    // LUT do fator: 16 amostras de meia precisao em t = (i/15)^1.5, 2 por float
+    // nos mesmos 8 floats de antes (o UBO nao muda; ver tessLut16 nos shaders).
+    // 8 amostras uniformes davam um no a cada 1/7 do eixo (~470 u no zoom do
+    // jogo) e achatavam a curva do editor; estes nos sao ~3x mais densos ate'
+    // 0,3 do eixo, onde ela importa.
     // TETO DO DEVICE. A curva do F2 vai a 16 e a do JSON a qualquer coisa, mas
     // quem manda e' limits.maxTessellationGenerationLevel - todo o resto do
     // VulkanContext checa feature bit e limite, este era o unico lugar que
     // confiava. Num alvo onde o tessellator e' o estagio pior suportado
     // (930M, driver velho) confiar sai caro. Tefra 2026-09-06, G2.
     const float tessCap = std::min(static_cast<float>(std::max(m_vulkan.maxTessellationLevel(), 1u)), m_tessLevelCap);
-    for (int i = 0; i < 4; ++i) {
-        tessLo[i] = glm::clamp(tessLo[i], 1.0f, tessCap);
-        tessHi[i] = glm::clamp(tessHi[i], 1.0f, tessCap);
-    }
+    Vec4 tessLo(1.0f), tessHi(1.0f);
     float tessMax = 1.0f;
-    for (int i = 0; i < 4; ++i) tessMax = std::max({tessMax, tessLo[i], tessHi[i]});
+    for (int j = 0; j < 8; ++j) {
+        Vec2 pair;
+        for (int k = 0; k < 2; ++k) {
+            const float t = std::pow(static_cast<float>(2 * j + k) / 15.0f, 1.5f);
+            // Y da curva = fator de tesselacao (triangulos por aresta), 1..teto.
+            pair[k] = glm::clamp(m_tessCurve.evaluate(t), 1.0f, tessCap);
+            tessMax = std::max(tessMax, pair[k]);
+        }
+        const uint32_t bits = glm::packHalf2x16(pair);
+        std::memcpy(&(j < 4 ? tessLo : tessHi)[j & 3], &bits, sizeof(bits));
+    }
     // ERUPTION_TEST_TESS=0|1 (bancada): A/B da tesselacao da banda perto.
     static const int kTessEnv = [] {
         const char* e = std::getenv("ERUPTION_TEST_TESS");
@@ -892,7 +933,8 @@ void Engine::render() {
         return e ? static_cast<float>(std::atof(e)) : -1.0f;
     }();
     const float tessZoom = tessZoomFollow();
-    frameUbo.tessParams = Vec4(distMax * tessZoom, tessOn ? 1.0f : 0.0f,
+    const float tessAxisU = tessAxis();
+    frameUbo.tessParams = Vec4(tessAxisU, tessOn ? 1.0f : 0.0f,
                                kTessAmpEnv >= 0.0f ? kTessAmpEnv : m_tessAmplitude, tessMax);
     frameUbo.tessLut0 = tessLo;
     frameUbo.tessLut1 = tessHi;
@@ -928,12 +970,62 @@ void Engine::render() {
         }
         return c;
     }();
-    frameUbo.tessParams2 = Vec4(kReliefCos.y, m_tessVertexSpacing, glm::radians(m_normalMaxSlopeDeg), kFoliageTessCap);
-    frameUbo.tessHeightBlur = m_tessHeightBlur;
+    // GRADE NUNCA MAIS FINA QUE A ALTURA: com tessellation_height_min_spacing o
+    // mip da altura ja' filtra em >= esse espacamento (dispMipFloor), entao
+    // vertice mais fino so' le' o mesmo valor - triangulo gasto.
+    const float minSp = std::max(m_tessHeightMinSpacing, 0.0f);
+    const float vertexSpacing = m_tessVertexSpacing > 0.0f ? std::max(m_tessVertexSpacing, minSp) : 0.0f;
+    frameUbo.tessParams2 = Vec4(kReliefCos.y, vertexSpacing, glm::radians(m_normalMaxSlopeDeg), kFoliageTessCap);
+    // ERUPTION_TEST_TESS_HEATMAP=amp|pom|height|level (depuracao; ramp e mask calibram a leitura): mapa de calor da
+    // tesselacao 0..1 pintado pelo model.frag. amp = deslocamento efetivo
+    // (|ampW| / amplitude), pom = peso de reducao pelo POM, height = altura
+    // amostrada, level = nivel do patch / fator maximo. Desligado = 0, sem efeito.
+    static const float kTessHeatmap = [] {
+        const char* e = std::getenv("ERUPTION_TEST_TESS_HEATMAP");
+        if (!e) return 0.0f;
+        if (std::strcmp(e, "amp") == 0) return 1.0f;
+        if (std::strcmp(e, "pom") == 0) return 2.0f;
+        if (std::strcmp(e, "height") == 0) return 3.0f;
+        if (std::strcmp(e, "level") == 0) return 4.0f;
+        if (std::strcmp(e, "ramp") == 0) return 5.0f;   // calibracao: rampa pela coluna da tela
+        if (std::strcmp(e, "mask") == 0) return 6.0f;   // calibracao: faces viradas para cima
+        if (std::strcmp(e, "mip") == 0) return 7.0f;    // mip da altura lido pelo vertice (/10)
+        if (std::strcmp(e, "px") == 0) return 8.0f;     // espacamento da grade real em pixels (/8)
+        return 0.0f;
+    }();
+    frameUbo.framePad0 = kTessHeatmap;
     frameUbo.tessNearEdgePixels = m_tessNearEdgePixels;
     frameUbo.tessNearDistance = m_tessNearDistance * tessZoom;
-    frameUbo.tessNearSpacing = m_tessNearSpacing;
-    frameUbo.reliefParams = Vec4(m_tessHeightMinSpacing, 0.0f, 0.0f, 0.0f);
+    frameUbo.tessNearSpacing = std::max(m_tessNearSpacing, minSp);
+    {
+        // "Debug Mode" da spline (F2, no proprio widget): a primeira das splines de
+        // mundo com o debug ligado vai ao shader. Todas tem a distancia por eixo.
+        const SplineCurve* dbgCurve = nullptr;
+        float dbgAxis = distMax;
+        // ERUPTION_TEST_TESS_DEBUG=1 (bancada): liga o Debug Mode da curva de
+        // tesselacao sem o checkbox do F2, para capturas A/B por script.
+        static const bool kTessDebugEnv = std::getenv("ERUPTION_TEST_TESS_DEBUG") != nullptr;
+        if (m_tessCurve.debug || kTessDebugEnv) { dbgCurve = &m_tessCurve; dbgAxis = tessAxisU; }
+        else if (m_normalScaleCurve.debug) dbgCurve = &m_normalScaleCurve;
+        else if (m_normalSmoothCurve.debug) dbgCurve = &m_normalSmoothCurve;
+        if (dbgCurve && dbgCurve->pointsX.size() >= 2) {
+            const int n = static_cast<int>(std::min<size_t>(dbgCurve->pointsX.size(), 8));
+            Vec4* d = frameUbo.splineDbg;
+            d[0] = Vec4(1.0f, static_cast<float>(n), dbgCurve->debugMaxValue(), dbgAxis);
+            for (int i = 0; i < 8; ++i) {
+                const int k = std::min(i, n - 1);
+                d[1 + (i >> 2)][i & 3] = dbgCurve->pointsX[k];
+                d[5 + i] = Vec4(SplineCurve::debugPointColor(static_cast<size_t>(k)), 0.0f);
+            }
+            sampleLut(*dbgCurve, d[3], d[4]);
+        }
+    }
+    frameUbo.reliefParams = Vec4(m_tessHeightMinSpacing, m_reliefCavity, m_reliefCavityContrast, m_presetNormalStrength);
+    frameUbo.reliefPom = Vec4(m_reliefPomDepth, m_reliefPomMaxSteps, m_reliefPomMinSteps, m_reliefPomDistance);
+    frameUbo.reliefPom2 = Vec4(m_reliefPomContrast, m_reliefPomAo, m_tessHeightGridFilter, m_reliefSunEmboss);
+    frameUbo.reliefPom3 = Vec4(m_reliefHeightNormal, m_reliefSelfShadow, m_reliefSelfShadowSteps, m_reliefFragmentDistance);
+    frameUbo.reliefPom4 = Vec4(m_reliefPomNearBoost, m_reliefPomNearDistance, m_reliefSelfShadowHeight, m_reliefSelfShadowLength);
+    frameUbo.albedoCalib = Vec4(m_albedoKnee, m_albedoCeiling, 0.0f, 0.0f);
     frameUbo.spriteParams = Vec4(m_spriteFilter, m_spriteNormalStrength, 0.0f, 0.0f);
     {
         // Luz de borda (characters.set_rim x preset sprite_rim): a das luzes
@@ -942,7 +1034,7 @@ void Engine::render() {
         frameUbo.spriteRim = Vec4(m_spriteRimTint, rim);
         m_deferredLighting.setSpriteRim(m_spriteRimTint, rim);
     }
-    m_modelRenderer.setTessellation(tessOn, tessBandDistance(m_tessCurve, distMax * tessZoom) * m_tessBandScale);
+    m_modelRenderer.setTessellation(tessOn, tessBandDistance(m_tessCurve, tessAxisU) * m_tessBandScale);
     m_modelRenderer.setTessAmplitude(frameUbo.tessParams.z);
     // Relevo efetivo no log quando muda (amplitude, banda da curva, banda
     // perto): o patch de graphics.json de um jogo pode trocar tudo isso, e sem

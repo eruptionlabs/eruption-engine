@@ -869,9 +869,10 @@ void Engine::drawLightingControls() {
 
     fx::Separator();
     fx::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Bump / Normal");
-    fx::describe("Normal Map Scale", "Strength of the normal-map detail (0 = flat, 1 = full, >1 = exaggerated).");
-    fx::SliderFloat("Normal Map Scale", &m_normalMapScale, 0.0f, 3.0f, "%.2f");
-    if (fx::IsItemHovered()) fx::SetTooltip("Strength of the normal-map detail (0 = flat, 1 = full, >1 = exaggerated).");
+    // Sem slider "Normal Map Scale": a forca do normal map e' a curva "Normal
+    // Map Scale by Distance" abaixo (o slider so' a multiplicava, e com os dois
+    // o valor real nao aparecia em lugar nenhum). m_normalMapScale fica em 1,
+    // vindo do preset "normal_strength"; o modo classico ainda o zera.
     fx::SliderFloat("Normal Smoothing", &m_normalSmoothing, 0.0f, 5.0f, "%.2f");
     fx::describe("Max normal slope (deg)", "Caps how far the normal map may tilt the surface. 0 = no cap; past ~70 deg the normal field saturates and the surface reads as crumpled foil instead of relief.");
     fx::SliderFloat("Max normal slope (deg)", &m_normalMaxSlopeDeg, 0.0f, 89.0f, "%.0f");
@@ -932,11 +933,9 @@ void Engine::drawLightingControls() {
         fx::describe("Height contrast", "Gain on the high-passed height. The baked height comes from albedo luminance, so the low band is painted shading - this only amplifies the grain.");
         fx::SliderFloat("Height contrast", &m_tessHeightGain, 0.1f, 8.0f, "%.2f");
         if (fx::IsItemHovered()) fx::SetTooltip("Gain on the high-passed height. The baked height comes from albedo luminance, so the low band is painted shading - this only amplifies the grain.");
-        fx::SliderFloat("Height blur (low-pass)", &m_tessHeightBlur, 0.0f, 4.0f, "%.2f");
         fx::describe("Vertex spacing (u)", "Target distance between tessellated vertices near the camera. Smaller = more detail (stones get their shape), more triangles. 0 = distance curve only (old behavior, max 8 per edge).");
         fx::SliderFloat("Vertex spacing (u)", &m_tessVertexSpacing, 0.0f, 2.0f, "%.2f");
         if (fx::IsItemHovered()) fx::SetTooltip("Target distance between tessellated vertices near the camera. Smaller = more detail (stones get their shape), more triangles. 0 = distance curve only (old behavior, max 8 per edge).");
-        if (fx::IsItemHovered()) fx::SetTooltip("Blurs the height map before displacement (raises the mip level it's sampled from). 0 = off. Use it to kill high-frequency noise in the relief without touching Height contrast's gain.");
         fx::describe("Near band (u)", "Up to this distance the tessellation uses the near grid below; beyond it, Vertex spacing and 8 px edges. 0 = no near band.");
         fx::SliderFloat("Near band (u)", &m_tessNearDistance, 0.0f, 400.0f, "%.0f");
         if (fx::IsItemHovered()) fx::SetTooltip("Up to this distance the tessellation uses the near grid below; beyond it, Vertex spacing and 8 px edges. 0 = no near band.");
@@ -944,10 +943,14 @@ void Engine::drawLightingControls() {
         fx::describe("Near min edge (px)", "Shortest tessellated edge on screen inside the near band. Lower = finer relief up close, more triangles and quad overshading.");
         fx::SliderFloat("Near min edge (px)", &m_tessNearEdgePixels, 1.0f, 16.0f, "%.1f");
         if (fx::IsItemHovered()) fx::SetTooltip("Shortest tessellated edge on screen inside the near band. Lower = finer relief up close, more triangles and quad overshading.");
+        // Eixo PROPRIO da tesselacao (Engine::tessAxis): em u de mundo reais, o
+        // que o shader usa (antes mostrava max_distance e o shader usava x lente).
+        const float tessAxisU = std::max(tessAxis(), 1.0f);
+        // Y = fator de tesselacao (triangulos por aresta) pela distancia.
         SplineEditorUI::draw("Tessellation Factor by Distance", m_tessCurve,
-                             0.0f, m_normalDistMax, 1.0f, 16.0f, camDist,
-                             m_tessCurve.evaluate(camDist / std::max(m_normalDistMax, 1.0f)),
-                             false, "Distance (u)");
+                             0.0f, tessAxisU, 1.0f, m_tessLevelCap, camDist,
+                             m_tessCurve.evaluate(camDist / tessAxisU),
+                             false, "Distance (u)", false, "Factor");
             ImGui::EndDisabled();
     }
     fx::Separator();

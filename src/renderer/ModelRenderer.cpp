@@ -2279,6 +2279,7 @@ void ModelRenderer::applyReliefs(std::vector<ReliefTask>& tasks, const std::stri
 }
 
 void ModelRenderer::pollReliefJobs() {
+    pollWeldJobs();
     // Uma por quadro: a subida de um chao assado sao 10-25 ms.
     for (size_t k = 0; k < m_reliefJobs.size(); ++k) {
         ReliefJob& j = m_reliefJobs[k];
@@ -2296,6 +2297,14 @@ void ModelRenderer::pollReliefJobs() {
 // grandes, esperar o assado inteiro segurou o processo por mais de uma hora
 // (grade fina de teste num paredao); agora espera so' as malhas ja' em curso.
 void ModelRenderer::dropReliefJobs(const std::string* label) {
+    for (size_t k = 0; k < m_weldJobs.size();) {
+        if (label && m_weldJobs[k].label != *label) {
+            ++k;
+            continue;
+        }
+        m_weldJobs[k].done.wait(); // so' calcula em memoria propria; nada a subir
+        m_weldJobs.erase(m_weldJobs.begin() + static_cast<std::ptrdiff_t>(k));
+    }
     for (ReliefJob& j : m_reliefJobs)
         if (!label || j.label == *label) j.stop->store(true, std::memory_order_relaxed);
     for (size_t k = 0; k < m_reliefJobs.size();) {
@@ -3282,6 +3291,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
         size_t dbgReidxOk = 0, dbgReidxFail = 0, dbgVertsBefore = 0, dbgVertsAfter = 0;
         std::vector<LodBuild> lodBuilds;
         std::vector<ReliefTask> reliefTasks;
+        std::vector<WeldTask> weldTasks; // soldas da costura, calculadas depois do laco
 
         std::vector<uint32_t> assetTexIndexToBindlessSlot(asset.textures.size(), 0);
         for (size_t t = 0; t < asset.textures.size(); ++t) {
@@ -3490,8 +3500,10 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             // textura RGBA32F viraria camada de 8 bits. Antes do LOD, que
             // pode levar os vertices.
             // No relief_bake "gbuffer" a malha que vai assada (mesmo criterio
-            // do bloco seguinte) nao passa pela tesselacao: sem solda. Ela
-            // levava 60-87 ms do quadro de entrada de cada vizinho.
+            // do bloco seguinte) nao passa pela tesselacao: sem solda. A solda
+            // custava 60-87 ms por vizinho no quadro de entrada; agora roda em
+            // segundo plano e o pico do quadro caiu de 99 para 39 ms (medido
+            // num mapa de deserto, com vizinho).
             const bool bakedInView = m_reliefBake.mode == 3 && m_reliefBake.amplitude > 0.0f;
             // HIBRIDO (relief_bake "gbuffer"): o chao nao assa, fica na
             // tesselacao ao vivo - o assado de um chao grande abria a grade
@@ -3503,7 +3515,13 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                 bool baked = false;
                 for (const auto& v : vertices)
                     if (v.pbrIndex != 0) { baked = true; break; }
-                if (baked) createSeamWeld(mesh, vertices, *useIndices);
+                if (baked && useIndices->size() / 3 <= kWeldMaxTris) {
+                    WeldTask w;
+                    w.mesh = static_cast<uint32_t>(m_meshes.size());
+                    w.vertices = vertices; // o LOD logo abaixo pode levar os vertices
+                    w.indices = *useIndices;
+                    weldTasks.push_back(std::move(w));
+                }
             }
 
             // Motivo de a malha NAO assar relevo, por textura (so' para o painel de material).
@@ -3653,6 +3671,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                               lodBuilds.size(), std::chrono::duration<double, std::milli>(lt1 - lt0).count(),
                               std::chrono::duration<double, std::milli>(lt2 - lt1).count());
         }
+        applySeamWelds(weldTasks, asset.filePath);
         if (!reliefTasks.empty()) {
             std::unordered_map<uint32_t, std::string> slotNames;
             for (size_t t = 0; t < asset.textures.size(); ++t)
@@ -7265,12 +7284,11 @@ void ModelRenderer::sortVisibleByMesh(std::vector<uint32_t>& list, bool useLod, 
 // Watertight displacement (Castano, NVIDIA 2008), por textura de dados de
 // 160 B por triangulo; teto de 400 mil triangulos por malha e de 256 MB no
 // total (o que passar fica com a costura presa, como antes).
-void ModelRenderer::createSeamWeld(ModelMeshGPU& mesh, const std::vector<TerrainVertex>& vertices,
-                                   const std::vector<uint32_t>& indices) {
+void ModelRenderer::computeSeamWeld(WeldTask& task) {
+    const std::vector<TerrainVertex>& vertices = task.vertices;
+    const std::vector<uint32_t>& indices = task.indices;
     const size_t nv = vertices.size(), nt = indices.size() / 3;
-    constexpr size_t kMaxTris = 400000;
-    constexpr size_t kMaxBytes = size_t(256) << 20;
-    if (nv == 0 || nt == 0 || nt > kMaxTris || m_weldBytes + nt * 160 > kMaxBytes || m_weldSampler == VK_NULL_HANDLE) return;
+    if (nv == 0 || nt == 0) return;
     // Grupo de posicao de cada vertice (mesma chave do marcador de costura).
     struct PosRef { int64_t x, y, z; uint32_t vi; };
     std::vector<PosRef> pos(nv);
@@ -7370,65 +7388,134 @@ void ModelRenderer::createSeamWeld(ModelMeshGPU& mesh, const std::vector<Terrain
         }
         put(base + 9, codes[0], codes[1], codes[2], 0.0f);
     }
-    const VkDeviceSize bytes = data.size() * sizeof(float);
+    task.data = std::move(data);
+    task.rows = rows;
+    task.tris = static_cast<uint32_t>(nt);
+    task.ok = true;
+}
+
+// Sobe as soldas calculadas numa unica submissao. Medido no vizinho de 84 malhas
+// do mapa de teste: o calculo na CPU somava 28 ms, o resto dos 130 ms era uma
+// submissao com espera de fence por malha.
+void ModelRenderer::uploadSeamWelds(std::vector<WeldTask>& tasks) {
+    constexpr size_t kMaxBytes = size_t(256) << 20;
+    struct Staged { WeldTask* t; VkImage image; VmaAllocation alloc; VkImageView view; VkDeviceSize offset; };
+    std::vector<Staged> staged;
+    VkDeviceSize total = 0;
+    for (WeldTask& t : tasks) {
+        if (!t.ok || t.mesh >= m_meshes.size() || m_meshes[t.mesh].weldSlot != 0 || m_weldSampler == VK_NULL_HANDLE) continue;
+        const VkDeviceSize bytes = t.data.size() * sizeof(float);
+        if (m_weldBytes + total + bytes > kMaxBytes) continue; // passou do teto: costura presa, como antes
+        const uint32_t kW = 4096;
+        Staged st{&t, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, total};
+        const VkFormat fmt = VK_FORMAT_R32G32B32A32_SFLOAT;
+        if (m_ctx->createImage(kW, t.rows, fmt, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                               VMA_MEMORY_USAGE_GPU_ONLY, st.image, st.alloc)) {
+            VkImageViewCreateInfo vi{};
+            vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image = st.image;
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = fmt;
+            vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vi.subresourceRange.levelCount = 1;
+            vi.subresourceRange.layerCount = 1;
+            if (vkc::createImageView(m_ctx->device(), &vi, nullptr, &st.view) != VK_SUCCESS) st.view = VK_NULL_HANDLE;
+        }
+        if (st.view == VK_NULL_HANDLE) {
+            if (st.image != VK_NULL_HANDLE) vmaDestroyImage(m_ctx->allocator(), st.image, st.alloc);
+            continue;
+        }
+        total += (bytes + 15) & ~VkDeviceSize(15);
+        staged.push_back(st);
+    }
+    if (staged.empty()) return;
     VkBuffer staging = VK_NULL_HANDLE;
     VmaAllocation stagingAlloc = VK_NULL_HANDLE;
-    if (!m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc))
+    if (!m_ctx->createBuffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc)) {
+        for (Staged& st : staged) {
+            vkDestroyImageView(m_ctx->device(), st.view, nullptr);
+            vmaDestroyImage(m_ctx->allocator(), st.image, st.alloc);
+        }
         return;
+    }
     void* mapped = nullptr;
     vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
-    std::memcpy(mapped, data.data(), bytes);
+    for (const Staged& st : staged)
+        std::memcpy(static_cast<uint8_t*>(mapped) + st.offset, st.t->data.data(), st.t->data.size() * sizeof(float));
     vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
-    VkImage image = VK_NULL_HANDLE;
-    VmaAllocation alloc = VK_NULL_HANDLE;
-    VkImageView view = VK_NULL_HANDLE;
-    const VkFormat fmt = VK_FORMAT_R32G32B32A32_SFLOAT;
-    if (m_ctx->createImage(kW, rows, fmt, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                           VMA_MEMORY_USAGE_GPU_ONLY, image, alloc)) {
-        VkImageViewCreateInfo vi{};
-        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        vi.image = image;
-        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vi.format = fmt;
-        vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        vi.subresourceRange.levelCount = 1;
-        vi.subresourceRange.layerCount = 1;
-        if (vkc::createImageView(m_ctx->device(), &vi, nullptr, &view) != VK_SUCCESS) view = VK_NULL_HANDLE;
-    }
-    if (view == VK_NULL_HANDLE) {
-        if (image != VK_NULL_HANDLE) vmaDestroyImage(m_ctx->allocator(), image, alloc);
-        vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
-        return;
-    }
     m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
-        m_ctx->cmdImageBarrier(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                               VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                               VK_ACCESS_TRANSFER_WRITE_BIT);
-        VkBufferImageCopy copy{};
-        copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copy.imageSubresource.layerCount = 1;
-        copy.imageExtent = {kW, rows, 1};
-        vkCmdCopyBufferToImage(cmd, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-        m_ctx->cmdImageBarrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                               VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-                               VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+        for (const Staged& st : staged) {
+            m_ctx->cmdImageBarrier(cmd, st.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                   VK_ACCESS_TRANSFER_WRITE_BIT);
+            VkBufferImageCopy copy{};
+            copy.bufferOffset = st.offset;
+            copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copy.imageSubresource.layerCount = 1;
+            copy.imageExtent = {4096, st.t->rows, 1};
+            vkCmdCopyBufferToImage(cmd, staging, st.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            m_ctx->cmdImageBarrier(cmd, st.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                   VK_ACCESS_SHADER_READ_BIT);
+        }
     });
     vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
-    mesh.weldSlot = m_bindless->allocateSlot();
-    if (mesh.weldSlot == 0) {
-        vkDestroyImageView(m_ctx->device(), view, nullptr);
-        vmaDestroyImage(m_ctx->allocator(), image, alloc);
+    for (Staged& st : staged) {
+        ModelMeshGPU& mesh = m_meshes[st.t->mesh];
+        mesh.weldSlot = m_bindless->allocateSlot();
+        if (mesh.weldSlot == 0) {
+            vkDestroyImageView(m_ctx->device(), st.view, nullptr);
+            vmaDestroyImage(m_ctx->allocator(), st.image, st.alloc);
+            continue;
+        }
+        m_bindless->updateTexture(mesh.weldSlot, st.view, m_weldSampler);
+        mesh.weldImage = st.image;
+        mesh.weldView = st.view;
+        mesh.weldAlloc = st.alloc;
+        mesh.weldRows = st.t->rows;
+        mesh.weldTris = st.t->tris;
+        const VkDeviceSize bytes = st.t->data.size() * sizeof(float);
+        m_weldBytes += static_cast<size_t>(bytes);
+        PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, bytes);
+    }
+    m_bindless->flushUpdates();
+}
+
+// Calcula as soldas das malhas deste asset em paralelo e as sobe juntas. Com
+// m_reliefDeferred (vizinho entrando) o calculo roda em segundo plano e a
+// subida fica para pollWeldJobs: a malha desenha com a costura presa nos
+// quadros entre uma coisa e outra.
+void ModelRenderer::applySeamWelds(std::vector<WeldTask>& tasks, const std::string& label) {
+    if (tasks.empty()) return;
+    std::sort(tasks.begin(), tasks.end(),
+              [](const WeldTask& a, const WeldTask& b) { return a.indices.size() > b.indices.size(); });
+    auto tasksPtr = std::make_shared<std::vector<WeldTask>>(std::move(tasks));
+    tasks.clear();
+    auto job = platform::runAsync([tasksPtr] {
+        std::vector<WeldTask>& ts = *tasksPtr;
+        JobSystem::instance().parallelFor(static_cast<uint32_t>(ts.size()),
+                                          [&](uint32_t k) { computeSeamWeld(ts[k]); });
+    });
+    if (m_reliefDeferred) {
+        m_weldJobs.push_back({label, tasksPtr, std::move(job)});
         return;
     }
-    m_bindless->updateTexture(mesh.weldSlot, view, m_weldSampler);
-    m_bindless->flushUpdates();
-    mesh.weldImage = image;
-    mesh.weldView = view;
-    mesh.weldAlloc = alloc;
-    mesh.weldRows = rows;
-    mesh.weldTris = static_cast<uint32_t>(nt);
-    m_weldBytes += static_cast<size_t>(bytes);
-    PROFILE_VRAM_ALLOC(ProfilerCategory::Meshes, bytes);
+    while (job.wait_for(std::chrono::milliseconds(16)) != std::future_status::ready) loadPump();
+    job.get();
+    uploadSeamWelds(*tasksPtr);
+}
+
+void ModelRenderer::pollWeldJobs() {
+    for (size_t k = 0; k < m_weldJobs.size(); ++k) {
+        WeldJob& j = m_weldJobs[k];
+        if (j.done.wait_for(std::chrono::seconds(0)) != std::future_status::ready) continue;
+        j.done.get();
+        WeldJob job = std::move(j);
+        m_weldJobs.erase(m_weldJobs.begin() + static_cast<std::ptrdiff_t>(k));
+        uploadSeamWelds(*job.tasks);
+        return;
+    }
 }
 
 void ModelRenderer::releaseSeamWeld(ModelMeshGPU& mesh, bool deferred) {

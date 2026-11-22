@@ -7,23 +7,23 @@
     "_comment": "Curvas por distancia da camera, editaveis no F2 (Lighting > Bump/Normal). X normalizado 0..1 = 0..max_distance unidades de mundo. Nos padrao = mapeamento focal do DoF: 35, 100, 180 e 1000 u.",
     "scale_curve": [
       {
-        "x": 0.035,
-        "y": 0.33,
+        "x": 0.0,
+        "y": 0.0,
         "interpolation": "Smoothstep"
       },
       {
-        "x": 0.1,
-        "y": 0.6,
+        "x": 0.09,
+        "y": 1.2,
         "interpolation": "Smoothstep"
       },
       {
-        "x": 0.18,
-        "y": 1.0,
+        "x": 0.2,
+        "y": 2.2,
         "interpolation": "Smoothstep"
       },
       {
         "x": 1.0,
-        "y": 1.0,
+        "y": 2.2,
         "interpolation": "Smoothstep"
       }
     ],
@@ -35,17 +35,17 @@
       },
       {
         "x": 0.1,
-        "y": 0.3,
+        "y": 0.0,
         "interpolation": "Smoothstep"
       },
       {
-        "x": 0.18,
-        "y": 0.3,
+        "x": 0.24,
+        "y": 1.0,
         "interpolation": "Smoothstep"
       },
       {
         "x": 1.0,
-        "y": 0.3,
+        "y": 1.0,
         "interpolation": "Smoothstep"
       }
     ],
@@ -72,36 +72,41 @@
       }
     ],
     "tessellation_enabled": true,
-    "tessellation_amplitude": 1.25,
+    "tessellation_amplitude": 3.0,
+    "_tessellation_curve_comment": "Y = fator de tesselacao (triangulos por aresta) pela distancia, 1 ate' tessellation_max_level. X = fracao do eixo de tesselacao. O relevo segue o fator: inteiro no pico, zero onde o fator volta a 1.",
     "tessellation_curve": [
       {
         "x": 0.0,
-        "y": 8.0,
-        "interpolation": "Smoothstep"
+        "y": 50.0,
+        "interpolation": "Linear"
       },
       {
-        "x": 0.12,
-        "y": 6.0,
-        "interpolation": "Smoothstep"
+        "x": 0.14528,
+        "y": 20.0,
+        "interpolation": "Linear"
       },
       {
-        "x": 0.28,
-        "y": 3.0,
-        "interpolation": "Smoothstep"
+        "x": 0.23606,
+        "y": 10.0,
+        "interpolation": "Linear"
       },
       {
-        "x": 0.42,
+        "x": 0.47995,
+        "y": 5.0,
+        "interpolation": "Linear"
+      },
+      {
+        "x": 0.84906,
         "y": 1.0,
-        "interpolation": "Smoothstep"
+        "interpolation": "Linear"
       },
       {
         "x": 1.0,
         "y": 1.0,
-        "interpolation": "Smoothstep"
+        "interpolation": "Linear"
       }
     ],
     "tessellation_height_gain": 1.5,
-    "tessellation_height_blur": 0.15,
     "tessellation_vertex_spacing": 0.25
   },
   "water_style": {
@@ -113,10 +118,14 @@
     "shore_foam": 1.0,
     "clarity": 10.0,
     "wave_slope": 1.0,
-    "deep_color": [0.003, 0.028, 0.042]
+    "deep_color": [
+      0.003,
+      0.028,
+      0.042
+    ]
   },
   "fps_cap": 0,
-  "present_mode": "auto",
+  "present_mode": "fifo",
   "presets": {
     "mobile_low": {
       "post_halation": false,
@@ -415,7 +424,7 @@
       "geo_lod_budget_mb": 0,
       "pbr_synthesis": false,
       "contact_shadows": false,
-      "sky_probe": false,
+      "sky_probe": true,
       "sky_probe_intensity": 1.0,
       "irradiance_probes": false,
       "irradiance_probe_strength": 1.0,
@@ -448,16 +457,25 @@
       "mesh_lod_min_distance": 300.0,
       "tessellation_seam_weld": true,
       "tessellation_near_distance": 110.0,
-      "tessellation_near_spacing": 0.12,
-      "tessellation_near_edge_pixels": 4.0,
+      "tessellation_near_spacing": 0.15,
+      "tessellation_near_edge_pixels": 1.0,
       "tessellation_zoom_follow": 1.0,
       "tessellation_ground_geomorph": 0.7,
-      "tessellation_amplitude": 12.0,
+      "tessellation_amplitude": 3.0,
       "relief_bake": "mesh",
       "relief_bake_spacing": 4.0,
       "relief_bake_max_tris": 75000,
       "relief_bake_amplitude": 2.5,
       "relief_bake_height_gain": 1.0,
+      "relief_cavity": 0.5,
+      "relief_cavity_contrast": 2.5,
+      "relief_sun_emboss": 0.5,
+      "relief_height_normal": 0.1,
+      "relief_self_shadow": 0.5,
+      "relief_self_shadow_steps": 3,
+      "relief_self_shadow_height": 0.35,
+      "relief_self_shadow_length": 1.5,
+      "relief_fragment_distance": 300,
       "water_hd2d": true,
       "water_reflection_pass": true
     },
@@ -530,16 +548,22 @@
       "mesh_lod_min_distance": 300.0,
       "tessellation_seam_weld": true,
       "tessellation_near_distance": 110.0,
-      "tessellation_near_spacing": 0.12,
-      "tessellation_near_edge_pixels": 4.0,
+      "tessellation_near_spacing": 0.15,
+      "tessellation_near_edge_pixels": 1.0,
       "tessellation_zoom_follow": 1.0,
       "tessellation_ground_geomorph": 0.7,
-      "tessellation_amplitude": 12.0,
+      "tessellation_amplitude": 3.0,
       "relief_bake": "mesh",
       "relief_bake_spacing": 2.0,
       "relief_bake_max_tris": 150000,
       "relief_bake_amplitude": 2.5,
       "relief_bake_height_gain": 1.0,
+      "relief_pom": 0.35,
+      "relief_pom_steps": 12,
+      "relief_pom_min_steps": 4,
+      "relief_pom_distance": 150.0,
+      "relief_pom_contrast": 3.5,
+      "relief_pom_ao": 0.5,
       "water_hd2d": true,
       "water_reflection_pass": true
     },
@@ -611,11 +635,11 @@
       "mesh_lod_min_distance": 250.0,
       "tessellation_seam_weld": true,
       "tessellation_near_distance": 110.0,
-      "tessellation_near_spacing": 0.12,
-      "tessellation_near_edge_pixels": 4.0,
+      "tessellation_near_spacing": 0.15,
+      "tessellation_near_edge_pixels": 3.0,
       "tessellation_zoom_follow": 1.0,
       "tessellation_ground_geomorph": 0.7,
-      "tessellation_amplitude": 12.0,
+      "tessellation_amplitude": 3.0,
       "relief_bake": "mesh",
       "relief_bake_spacing": 1.0,
       "relief_bake_max_tris": 1500000,

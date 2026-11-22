@@ -132,7 +132,7 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     // ver densityFactor()), z = inclinacao maxima da normal,
     // w = TETO DE FATOR PARA FOLHAGEM.
     vec4 u_tessParams2;
-    float u_tessHeightBlur;
+    float u_framePad0; // reservado (era o vies de mip da altura; o blur esta' nos mips)
     // Banda perto da grade fina (FrameUBO::tessNear*, presets de PC): ate'
     // u_tessNearDistance o piso e' u_tessNearEdgePixels e o espacamento alvo
     // u_tessNearSpacing; dali em diante 8 px e u_tessParams2.y, como antes.
@@ -153,13 +153,28 @@ float lut8(vec4 a, vec4 b, float t) {
     return mix(v0, v1, f);
 }
 
+
+// Curva do fator em 16 amostras de meia precisao (2 por float, nos mesmos 8
+// floats da LUT de antes: o UBO nao muda). Nos em t = (i/15)^1.5: mais
+// densos perto da camera, onde a curva importa (8 amostras uniformes davam um
+// no a cada 470 u e achatavam a curva do editor). Linear entre nos: continua.
+float tessLut16(vec4 a, vec4 b, float t) {
+    float x = pow(clamp(t, 0.0, 1.0), 0.6666667) * 15.0;
+    int i = int(floor(x));
+    float f = x - float(i);
+    float v[8] = float[8](a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w);
+    int i0 = min(i, 15), i1 = min(i + 1, 15);
+    vec2 p0 = unpackHalf2x16(floatBitsToUint(v[i0 >> 1]));
+    vec2 p1 = unpackHalf2x16(floatBitsToUint(v[i1 >> 1]));
+    return mix(((i0 & 1) == 0) ? p0.x : p0.y, ((i1 & 1) == 0) ? p1.x : p1.y, f);
+}
 // Fator do VERTICE pela sua propria distancia. Usar o vertice (e nao o centro
 // do patch) e' o que garante que dois patches vizinhos calculem o MESMO fator
 // para a aresta que compartilham - se cada um usasse o proprio centro, os
 // fatores divergiriam e abriria fenda entre eles.
 float tessAt(int v) {
     float d = distance(inWorldPos[v], u_cameraPos);
-    return max(lut8(u_tessLut0, u_tessLut1, d / max(u_tessParams.x, 1.0)), 1.0);
+    return max(tessLut16(u_tessLut0, u_tessLut1, d / max(u_tessParams.x, 1.0)), 1.0);
 }
 
 // PISO EM PIXELS (quad overshading). A GPU sombreia em blocos 2x2: um triangulo
@@ -191,10 +206,35 @@ float edgeNearWeight(int a, int b) {
     float n = u_tessNearDistance;
     if (n <= 0.0) return 0.0;
     float d = distance(0.5 * (inWorldPos[a] + inWorldPos[b]), u_cameraPos);
-    return 1.0 - smoothstep(n, 1.2 * n, d);
+    // Degrade da camera (1) ate' o raio (0): a banda nao e' mais liga/desliga.
+    return 1.0 - smoothstep(0.0, n, d);
 }
 
-float targetEdgePixels(int a, int b) { return mix(8.0, u_tessNearEdgePixels, edgeNearWeight(a, b)); }
+// Curva acima de 8 = mais triangulos: o piso em pixels cai na mesma razao
+// (8 = o de antes). Ver curveDetail em model.tese/model.vert.
+
+// PISO DO TRIANGULO EM PIXELS PELA DISTANCIA (causa do "1 px custa o dobro de 3 px",
+// medido num mapa urbano grande no high: 10,8 M de primitivas a 1 px contra 3,8 M a 3 px).
+// Perto da camera vale u_tessNearEdgePixels (o piso do preset); com a distancia
+// ele cresce depressa ate' kTessFarEdgePx (curva quadratica da banda perto),
+// porque a grade fina so' paga perto - longe o triangulo de 1 px e' quad
+// overshading puro. A curva "Tessellation Factor by Distance" e' so' o TETO do
+// fator por aresta (e a amplitude do relevo): ela nao divide mais o piso, que
+// chegava a 0,2 px com a curva em 50 - triangulo sub-pixel que o relevo nao
+// precisa, porque o brilho e a normal da altura saem da textura, por pixel,
+// no model.frag.
+// IDENTICO em model.tesc/model.vert/model.tese.
+const float kTessFarEdgePx = 8.0;
+float tessBasePx(float d) {
+    float n = u_tessNearDistance;
+    if (n <= 0.0) return max(u_tessNearEdgePixels, 1.0);
+    float k = 1.0 - smoothstep(0.0, n, d);
+    return mix(kTessFarEdgePx, max(u_tessNearEdgePixels, 1.0), k * k);
+}
+
+float targetEdgePixels(int a, int b) {
+    return tessBasePx(distance(0.5 * (inWorldPos[a] + inWorldPos[b]), u_cameraPos));
+}
 
 float edgePixels(int a, int b) {
     vec3 pa = inWorldPos[a];
@@ -262,6 +302,9 @@ float edgeFactor(int a, int b) {
     float fromCurve = max(max(tessAt(a), tessAt(b)), densityFactor(a, b));
     float fromPixels = max(edgePixels(a, b) / targetEdgePixels(a, b), 1.0);
     float f = max(min(min(fromCurve, fromPixels), foliageCap(a, b)), 1.0);
+    // PISO RIGIDO: nenhuma aresta fica abaixo de 1 px na tela, venha o piso do preset, do
+    // slider ou da curva (mais de um triangulo por pixel arruina o visual e o custo).
+    f = min(f, max(edgePixels(a, b), 1.0));
     // Relevo hibrido (model_tese/model_frag): onde o POM fica com o relevo
     // (vista de frente) a geometria nao desloca, entao nao subdivide. So' em
     // material com MRAH-W - o chao de splat continua todo na tesselacao. O
@@ -361,12 +404,19 @@ void main() {
         float e1 = edgeFactor(2, 0);
         float e2 = edgeFactor(0, 1);
 #ifdef ERUPTION_TESS_GEOMORPH
+        const vec3 hardCap = vec3(max(edgePixels(1, 2), 1.0), max(edgePixels(2, 0), 1.0), max(edgePixels(0, 1), 1.0));
+#endif
+#ifdef ERUPTION_TESS_GEOMORPH
         {
             vec4 m;
             float ei = max(max(e0, e1), e2);
             e0 = geomorphLevel(e0, m.x);
             e1 = geomorphLevel(e1, m.y);
             e2 = geomorphLevel(e2, m.z);
+            // O arredondamento para potencia de 2 sobe ate' 1,4x: nao deixa passar do piso de 1 px.
+            e0 = e0 > hardCap.x ? exp2(floor(log2(hardCap.x))) : e0;
+            e1 = e1 > hardCap.y ? exp2(floor(log2(hardCap.y))) : e1;
+            e2 = e2 > hardCap.z ? exp2(floor(log2(hardCap.z))) : e2;
             // Mesmo degrau que max(e0, e1, e2) (a quantizacao e' monotona) e
             // peso tirado do continuo do maior, entao o interior troca de
             // degrau no mesmo instante em que os vertices novos nascem colados.

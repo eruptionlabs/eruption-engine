@@ -111,22 +111,46 @@ static void testaSubdivisao() {
 
 static void testaDeslocamento() {
     std::printf("deslocamento\n");
-    std::vector<ReliefVertex> vs;
-    std::vector<uint32_t> is;
-    quadrado(4.0f, vs, is);
-    // Costura: o vertice 1 duplicado com outro UV, num triangulo a parte.
-    vs.push_back(vtx(4, 0, 0.25f, 0.25f));
-    vs.push_back(vtx(5, 0, 0.5f, 0.0f));
-    vs.push_back(vtx(5, 1, 0.5f, 0.5f));
-    is.insert(is.end(), {4, 6, 5});
+    // Grade de 5x5 vertices: a borda aberta fica presa (d = 0) e o primeiro
+    // anel anda metade (costura com a malha vizinha), entao so' o centro, a 2
+    // vertices da borda, anda o deslocamento inteiro. Um quadrado solto tem
+    // todos os vertices na borda e nao se mexe.
+    const int n = 5;
+    const float passo = 1.0f; // menor que o espacamento: nao parte nada
+    auto grade = [&](std::vector<ReliefVertex>& vs, std::vector<uint32_t>& is) {
+        vs.clear();
+        is.clear();
+        for (int z = 0; z < n; ++z)
+            for (int x = 0; x < n; ++x) vs.push_back(vtx(x * passo, z * passo, x / float(n - 1), z / float(n - 1)));
+        for (int z = 0; z + 1 < n; ++z)
+            for (int x = 0; x + 1 < n; ++x) {
+                const uint32_t a = z * n + x, b = a + 1, c = a + n, d = c + 1;
+                is.insert(is.end(), {a, d, b, a, c, d});
+            }
+    };
+    const uint32_t centro = 2 * n + 2;
     ReliefBakeParams p;
     p.spacing = 100.0f;
     p.amplitude = 8.0f;
-    auto h = [](uint32_t, float u, float) { return u; }; // altura = u
-    bakeRelief(vs, is, p, h);
-    checa(std::fabs(vs[0].pos[1] - (0.0f - 0.5f) * 8.0f) < 1e-4f, "h = 0 desce meia amplitude");
-    checa(std::fabs(vs[2].pos[1] - (1.0f - 0.5f) * 8.0f) < 1e-4f, "h = 1 sobe meia amplitude");
-    checa(std::fabs(vs[1].pos[1] - vs[4].pos[1]) < 1e-5f, "costura de UV anda junta");
+    // Peca grossa (aqui, sem face oposta: lamina): meia amplitude cheia.
+    for (int alto = 0; alto < 2; ++alto) {
+        std::vector<ReliefVertex> vs;
+        std::vector<uint32_t> is;
+        grade(vs, is);
+        // Costura: o centro duplicado com outro UV num dos triangulos.
+        vs.push_back(vs[centro]);
+        vs.back().uv[0] = 0.9f;
+        for (size_t k = 0; k < is.size(); ++k)
+            if (is[k] == centro) { is[k] = uint32_t(vs.size() - 1); break; }
+        auto h = [alto](uint32_t, float, float) { return alto ? 1.0f : 0.0f; };
+        bakeRelief(vs, is, p, h);
+        const float esperado = (alto ? 0.5f : -0.5f) * 8.0f;
+        checa(std::fabs(vs[centro].pos[1] - esperado) < 1e-4f,
+              alto ? "h = 1 sobe meia amplitude" : "h = 0 desce meia amplitude");
+        checa(std::fabs(vs[centro].pos[1] - vs.back().pos[1]) < 1e-5f, "costura de UV anda junta");
+        checa(std::fabs(vs[0].pos[1]) < 1e-6f && std::fabs(vs[1 * n + 1].pos[1] - esperado * 0.5f) < 1e-4f,
+              "borda presa, primeiro anel anda metade");
+    }
 }
 
 static void testaTeto() {
@@ -261,7 +285,44 @@ static void testaPiso() {
     checa(reliefFloorGrid(pa, isAntes, pa, isAntes, 0.5f).empty(), "piso: sem desnivel, sem grade");
 }
 
+// Peca fina (toldo de 0,4 u) com afundamento de 1,25 u nas duas faces: sem o
+// limite pela espessura a face de cima atravessava a de baixo.
+static void testaPecaFina() {
+    std::printf("peca fina\n");
+    const float L = 8.0f, esp = 0.4f;
+    std::vector<ReliefVertex> vs;
+    std::vector<uint32_t> is;
+    quadrado(L, vs, is);
+    for (auto& v : vs) v.pos[1] = esp; // face de cima, normal +y
+    std::vector<ReliefVertex> baixo;
+    std::vector<uint32_t> ib;
+    quadrado(L, baixo, ib);
+    for (auto& v : baixo) v.normal[1] = -1.0f; // face de baixo, normal -y
+    const uint32_t base = uint32_t(vs.size());
+    vs.insert(vs.end(), baixo.begin(), baixo.end());
+    for (size_t k = 0; k < ib.size(); k += 3) is.insert(is.end(), {base + ib[k], base + ib[k + 2], base + ib[k + 1]});
+    ReliefBakeParams p;
+    p.spacing = 1.0f;
+    p.amplitude = 2.5f;
+    auto h = [](uint32_t, float, float) { return 0.0f; }; // tudo afunda meia amplitude
+    bakeRelief(vs, is, p, h);
+    float cimaMin = 1e9f, baixoMax = -1e9f;
+    for (const auto& v : vs) {
+        if (v.normal[1] > 0.0f) cimaMin = std::min(cimaMin, v.pos[1]);
+        else baixoMax = std::max(baixoMax, v.pos[1]);
+    }
+    checa(cimaMin > baixoMax, "face de cima continua acima da de baixo");
+    checa(cimaMin > esp * 0.5f, "afundamento preso a menos da metade da espessura");
+    // Lamina sem face oposta (chao): afunda inteira, como antes.
+    quadrado(L, vs, is);
+    bakeRelief(vs, is, p, h);
+    float minY = 1e9f;
+    for (const auto& v : vs) minY = std::min(minY, v.pos[1]);
+    checa(std::fabs(minY + 1.25f) < 1e-4f, "lamina unica afunda a meia amplitude inteira");
+}
+
 int main() {
+    testaPecaFina();
     testaMediana();
     testaFiltroGrade();
     testaSubdivisao();

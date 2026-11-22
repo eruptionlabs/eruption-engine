@@ -99,10 +99,9 @@ struct FrameUBO {
     //     curva, como antes) - ver densityFactor() em model.tesc.
     // z, w = slope cap (model.frag) / foliage cap (model.tesc).
     alignas(16) Vec4 tessParams2;
-    // Filtro passa-baixa (blur) sobre o height map - slider "Height Blur"
-    // (F2). Somado ao mip "perto" que heightUv() le' em model.vert/model.tese
-    // (2.0 -> 2.0+blur). 0 = sem blur extra.
-    float tessHeightBlur;
+    // Reservado (era o vies de mip fixo da altura, "Height Blur", que saiu).
+    // Mantem o layout.
+    float framePad0;
     // GRADE POR DISTANCIA da tesselacao (model.tesc/model.vert/model.tese):
     // ate' tessNearDistance u a grade usa tessNearSpacing e o piso de
     // tessNearEdgePixels px de aresta; dali em diante a de antes
@@ -168,6 +167,8 @@ struct FrameUBO {
     alignas(16) Vec4 alphaHash;
     // x = espacamento minimo (u) do filtro da altura da tesselacao (chave
     // tessellation_height_min_spacing; 0 = so' a grade). model.vert/model.tese.
+    // y = relief_cavity, z = relief_cavity_contrast, w = normal_strength
+    // (ilusao barata de relevo, model.frag).
     alignas(16) Vec4 reliefParams;
     // SPRITES (gbuffer/sprite.frag, sprite_layer.frag): x = filtro (chave de
     // preset sprite_filter: 0 nearest, 1 bilinear nitido), y = forca do normal
@@ -176,6 +177,34 @@ struct FrameUBO {
     // LUZ DE BORDA do lado da luz (gbuffer/sprite.frag + lighting/directional.frag):
     // rgb = tinta, w = forca efetiva (characters.set_rim x preset sprite_rim; 0 desliga).
     alignas(16) Vec4 spriteRim;
+    // DEBUG DE SPLINE NO MAPA (SplineCurve::debug; gbuffer/model_frag.glsl). Uma
+    // spline de mundo com "Debug Mode" ligado por vez (a primeira da ordem do
+    // Render.cpp). [0] = x liga (0 = desligado: nenhum tingimento), y = numero
+    // de pontos (<= 8), z = maior valor da curva, w = eixo x maximo em unidades
+    // de mundo. [1], [2] = x normalizado de cada ponto. [3], [4] = a curva em 8
+    // amostras (como as LUTs acima). [5..12] = cor de cada ponto (rgb).
+    alignas(16) Vec4 splineDbg[13];
+    // POM DO CHAO POR PRESET (gbuffer/model_frag.glsl, reliefPomPreset; chaves
+    // "relief_pom*"; independe da tesselacao ao vivo, entao vale com
+    // relief_bake "mesh"). reliefPom: x = espessura da camada (u; 0 desliga),
+    // y = passos maximos, z = passos minimos, w = distancia onde o POM some (u).
+    alignas(16) Vec4 reliefPom;
+    // x = contraste da altura em volta da media local, y = forca do
+    // escurecimento da fresta pela profundidade do POM (0 desliga), z = fator do
+    // filtro da altura pela grade real da tesselacao (model.tese).
+    alignas(16) Vec4 reliefPom2;
+    // Relevo sem tesselacao (model_frag.glsl; 0 = desliga). reliefPom3: x =
+    // espessura da altura que vira normal, y = forca da auto-sombra ao sol,
+    // z = passos da marcha, w = distancia onde some. reliefPom4: x = reforco
+    // do POM perto da camera, y = distancia desse reforco, z = espessura da
+    // camada da auto-sombra, w = alcance maximo da sombra (u).
+    alignas(16) Vec4 reliefPom3;
+    alignas(16) Vec4 reliefPom4;
+    // Calibracao de albedo na escrita do G-buffer (gbuffer/albedo_calib.glsl):
+    // x = albedo_knee (luminancia linear onde a compressao comeca; <= 0
+    // desliga), y = albedo_ceiling (teto da luminancia). Anexado no fim: nenhum
+    // offset antigo muda e UBO zerado = desligado.
+    alignas(16) Vec4 albedoCalib;
 };
 
 // Luz pontual dominante de um sprite (Engine::spriteDominantLights), por

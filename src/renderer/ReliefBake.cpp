@@ -131,6 +131,69 @@ float reliefSampleBilinear(const std::vector<uint8_t>& map, int w, int h, float 
     return (a + (b - a) * ty) / 255.0f;
 }
 
+namespace {
+
+// PECA FINA. O vertice anda ate' amplitude/2 para dentro (h = 0), e uma peca
+// mais fina que isso - toldo, tabua, placa, deck de ponte - tinha a face de
+// cima atravessando a de baixo: a de baixo aparecia por cima em triangulos
+// escuros que mudavam a cada carga (vilarejo de teste: toldo de 0,4 u contra
+// 1,25 u de afundamento). O afundamento fica preso a uma fracao da espessura
+// medida para dentro, ao longo da direcao do deslocamento, contra a face
+// oposta da propria malha de entrada; com as duas faces presas a menos da
+// metade elas nunca se cruzam. So' para dentro: para fora nao ha' o que
+// atravessar. Malha grande (chao: uma lamina so', sem face oposta) fica de
+// fora pelo teto de triangulos - o teste e' vertice x triangulo.
+constexpr size_t kThicknessMaxTris = 4096;
+constexpr float kThicknessFraction = 0.4f;
+
+void limitToThickness(const std::vector<float>& inPos, const std::vector<uint32_t>& inIdx,
+                      const std::vector<ReliefVertex>& verts, const std::vector<float>& dir, std::vector<float>& d) {
+    const size_t tris = inIdx.size() / 3;
+    if (tris == 0 || tris > kThicknessMaxTris) return;
+    struct Tri {
+        float a[3], e1[3], e2[3], n[3];
+    };
+    std::vector<Tri> tv(tris);
+    for (size_t t = 0; t < tris; ++t) {
+        Tri& r = tv[t];
+        const float* a = &inPos[size_t(inIdx[t * 3]) * 3];
+        const float* b = &inPos[size_t(inIdx[t * 3 + 1]) * 3];
+        const float* c = &inPos[size_t(inIdx[t * 3 + 2]) * 3];
+        for (int k = 0; k < 3; ++k) { r.a[k] = a[k]; r.e1[k] = b[k] - a[k]; r.e2[k] = c[k] - a[k]; }
+        r.n[0] = r.e1[1] * r.e2[2] - r.e1[2] * r.e2[1];
+        r.n[1] = r.e1[2] * r.e2[0] - r.e1[0] * r.e2[2];
+        r.n[2] = r.e1[0] * r.e2[1] - r.e1[1] * r.e2[0];
+    }
+    for (size_t i = 0; i < verts.size(); ++i) {
+        if (d[i] >= 0.0f) continue;
+        const float* p = verts[i].pos;
+        const float rd[3] = {-dir[i * 3], -dir[i * 3 + 1], -dir[i * 3 + 2]}; // para dentro
+        float best = std::numeric_limits<float>::max();
+        for (const Tri& r : tv) {
+            // So' a face oposta (normal contra a do vertice, i.e. a favor do raio).
+            if (r.n[0] * rd[0] + r.n[1] * rd[1] + r.n[2] * rd[2] <= 0.0f) continue;
+            // Moller-Trumbore.
+            const float h[3] = {rd[1] * r.e2[2] - rd[2] * r.e2[1], rd[2] * r.e2[0] - rd[0] * r.e2[2],
+                                rd[0] * r.e2[1] - rd[1] * r.e2[0]};
+            const float det = r.e1[0] * h[0] + r.e1[1] * h[1] + r.e1[2] * h[2];
+            if (std::fabs(det) < 1e-12f) continue;
+            const float inv = 1.0f / det;
+            const float s[3] = {p[0] - r.a[0], p[1] - r.a[1], p[2] - r.a[2]};
+            const float u = (s[0] * h[0] + s[1] * h[1] + s[2] * h[2]) * inv;
+            if (u < 0.0f || u > 1.0f) continue;
+            const float q[3] = {s[1] * r.e1[2] - s[2] * r.e1[1], s[2] * r.e1[0] - s[0] * r.e1[2],
+                                s[0] * r.e1[1] - s[1] * r.e1[0]};
+            const float v = (rd[0] * q[0] + rd[1] * q[1] + rd[2] * q[2]) * inv;
+            if (v < 0.0f || u + v > 1.0f) continue;
+            const float t = (r.e2[0] * q[0] + r.e2[1] * q[1] + r.e2[2] * q[2]) * inv;
+            if (t > 1e-5f && t < best) best = t;
+        }
+        if (best < std::numeric_limits<float>::max()) d[i] = std::max(d[i], -kThicknessFraction * best);
+    }
+}
+
+} // namespace
+
 ReliefBakeStats bakeRelief(std::vector<ReliefVertex>& verts, std::vector<uint32_t>& indices,
                            const ReliefBakeParams& params, const ReliefHeightSampler& height,
                            ReliefBakeRecord* record) {
@@ -142,6 +205,12 @@ ReliefBakeStats bakeRelief(std::vector<ReliefVertex>& verts, std::vector<uint32_
     // Triangulo de entrada de cada triangulo atual (a ordem se mantem).
     std::vector<uint32_t> origin(st.trianglesIn);
     for (size_t t = 0; t < origin.size(); ++t) origin[t] = uint32_t(t);
+    // Triangulos de ENTRADA (antes de partir): a espessura da peca e' medida
+    // contra eles, que ainda sao poucos e descrevem a mesma superficie.
+    const std::vector<uint32_t> inIdx = indices;
+    std::vector<float> inPos(verts.size() * 3);
+    for (size_t i = 0; i < verts.size(); ++i)
+        for (int k = 0; k < 3; ++k) inPos[i * 3 + k] = verts[i].pos[k];
 
     // Rodadas de partir: toda aresta maior que `spacing` ganha o ponto medio
     // (um so', pela chave da aresta) e cada triangulo vira 2, 3 ou 4 conforme
@@ -298,6 +367,7 @@ ReliefBakeStats bakeRelief(std::vector<ReliefVertex>& verts, std::vector<uint32_
             if (len > 1e-6f)
                 for (int k = 0; k < 3; ++k) dir[i * 3 + k] = acc.n[k] / len;
         }
+        limitToThickness(inPos, inIdx, verts, dir, d);
         for (size_t i = 0; i < verts.size(); ++i)
             for (int k = 0; k < 3; ++k) verts[i].pos[k] += dir[i * 3 + k] * d[i];
     }

@@ -73,6 +73,21 @@ layout(push_constant) uniform PushConstants {
 #include "gbuffer/alpha_hash.glsl"
 
 // Tabela de 8 valores com interpolacao linear. t em 0..1.
+
+// Curva do fator em 16 amostras de meia precisao (2 por float, nos mesmos 8
+// floats da LUT de antes: o UBO nao muda). Nos em t = (i/15)^1.5: mais
+// densos perto da camera, onde a curva importa (8 amostras uniformes davam um
+// no a cada 470 u e achatavam a curva do editor). Linear entre nos: continua.
+float tessLut16(vec4 a, vec4 b, float t) {
+    float x = pow(clamp(t, 0.0, 1.0), 0.6666667) * 15.0;
+    int i = int(floor(x));
+    float f = x - float(i);
+    float v[8] = float[8](a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w);
+    int i0 = min(i, 15), i1 = min(i + 1, 15);
+    vec2 p0 = unpackHalf2x16(floatBitsToUint(v[i0 >> 1]));
+    vec2 p1 = unpackHalf2x16(floatBitsToUint(v[i1 >> 1]));
+    return mix(((i0 & 1) == 0) ? p0.x : p0.y, ((i1 & 1) == 0) ? p1.x : p1.y, f);
+}
 float lut8(vec4 a, vec4 b, float t) {
     float x = clamp(t, 0.0, 1.0) * 7.0;
     int i = int(floor(x));
@@ -93,11 +108,12 @@ float reliefPomWeight(float NdotV) {
 }
 
 float reliefHeight(uint texIdx, vec2 uvIn) {
-    float nearMip = 2.0 + u_tessHeightBlur;
+    // So' o piso de Nyquist da grade, sem o mip 2 fixo (media 4x4 = blur).
+    float nearMip = 0.0;
     float spacing = u_tessParams2.y;
     if (spacing > 0.0 && push.uvScale.z > 0.0) {
         float texels = float(slotTextureSize(texIdx, 0).x);
-        nearMip = max(nearMip, log2(max(texels * push.uvScale.z * spacing * 2.0, 1.0)));
+        nearMip = log2(max(texels * push.uvScale.z * spacing * 2.0, 1.0));
     }
     float a = slotTextureLod(texIdx, uvIn, nearMip).a;
     if (a > 0.999) return 0.5;
@@ -113,7 +129,7 @@ vec2 reliefPomUv(vec2 uv, mat3 TBN, vec3 N) {
     vec3 V = normalize(u_cameraPos - inWorldPos);
     float w = reliefPomWeight(abs(dot(N, V)));
     if (w <= 0.0) return uv;
-    float f = lut8(u_tessLut0, u_tessLut1, distance(inWorldPos, u_cameraPos) / max(u_tessParams.x, 1.0));
+    float f = tessLut16(u_tessLut0, u_tessLut1, distance(inWorldPos, u_cameraPos) / max(u_tessParams.x, 1.0));
     float amp = clamp((f - 1.0) / max(u_tessParams.w - 1.0, 1e-3), 0.0, 1.0);
     float A = u_tessParams.z * amp * push.uvScale.w * w;
     if (A <= 1e-4 || slotTextureLod(inPbrIndex, uv, 0.0).a > 0.999) return uv;
@@ -138,6 +154,77 @@ vec2 reliefPomUv(vec2 uv, mat3 TBN, vec3 N) {
         sPrev = s;
         p = q;
     }
+    return p;
+}
+
+// POM DO CHAO POR PRESET (chaves relief_pom*, FrameUBO::reliefPom). Nao depende
+// da tesselacao ao vivo: o preset "mesh" assa so' o relevo grosso na malha
+// (grade de 2 u) e este passe devolve o grao fino do MRAH-W sem geometria nova.
+// A altura e' o alfa menos a media local (mip 8, lida uma vez por pixel),
+// esticada por relief_pom_contrast (a faixa util do PBR e' estreita: 90% do
+// alfa entre 0,17 e 0,32); a camada de espessura A fica centrada na superficie,
+// como no relevo da tesselacao. Custo limitado: a espessura e os passos caem
+// com a distancia (zero em relief_pom_distance) e o angulo de vista (o rasante
+// e' a zona ruim do parallax), 1 busca por passo com o gradiente do UV original
+// (o mip acompanha o pixel, nao o UV deslocado). hHit devolve a altura 0..1 no
+// ponto achado (0,5 = a media) para escurecer a fresta pela profundidade.
+vec2 reliefPomPreset(vec2 uv, vec2 ddx, vec2 ddy, mat3 TBN, vec3 N, out float hHit) {
+    hHit = 0.5;
+    if (u_reliefPom.x <= 1e-4 || push.uvScale.z <= 0.0) return uv;
+    vec3 Vw = u_cameraPos - inWorldPos;
+    float dist = length(Vw);
+    vec3 V = Vw / max(dist, 1e-4);
+    float wd = 1.0 - smoothstep(0.5 * u_reliefPom.w, u_reliefPom.w, dist);
+    float nv = abs(dot(N, V));
+    float wv = smoothstep(0.08, 0.3, nv);
+    float A = u_reliefPom.x * wd * wv;
+    // RELEVO SEM TESSELACAO, peca 2 (relief_pom_near_boost; 0 = como antes):
+    // espessura extra colada na camera, caindo a zero em relief_pom_near_distance
+    // (e os passos caem com a distancia: perto forte, longe o POM de sempre).
+    float nearK = 0.0;
+    if (u_reliefPom4.x > 0.0) {
+        nearK = 1.0 - smoothstep(0.0, max(u_reliefPom4.y, 1.0), dist);
+        A *= 1.0 + u_reliefPom4.x * nearK;
+    }
+    if (A <= 1e-4) return uv;
+    uint tex = inPbrIndex;
+    float a0 = slotTextureGrad(tex, uv, ddx, ddy).a;
+    if (a0 > 0.999) return uv; // sem altura no material
+    float base = slotTextureLod(tex, uv, 8.0).a;
+    float contrast = u_reliefPom2.x;
+    vec3 vTS = transpose(TBN) * V;
+    vec2 duvPerDescent = -vTS.xy / max(vTS.z, 0.2) * push.uvScale.z;
+    float z0 = 0.5 * A;
+    vec2 uvTop = uv - duvPerDescent * z0;
+    int steps = int(mix(u_reliefPom.y, u_reliefPom.z, nv) + 0.5);
+    if (u_reliefPom4.x > 0.0) steps = int(float(steps) * mix(1.0, 1.35, nearK) + 0.5); // perto: mais passos (A maior)
+    steps = clamp(steps, 2, 16);
+    float dz = A / float(steps);
+    float zPrev = z0;
+    vec2 p = uvTop;
+    for (int i = 1; i <= steps; ++i) {
+        float z = z0 - dz * float(i);
+        vec2 q = uvTop + duvPerDescent * (z0 - z);
+        float s = (clamp(0.5 + (slotTextureGrad(tex, q, ddx, ddy).a - base) * contrast, 0.0, 1.0) - 0.5) * A;
+        if (z <= s) {
+            // Refino por bisseccao entre o passo de cima (acima da altura) e o
+            // de baixo (dentro): a borda da pedra e' um degrau de altura, e so'
+            // a interpolacao linear serrilhava o contorno.
+            float zA = zPrev, zB = z;
+            for (int k = 0; k < 3; ++k) {
+                float zM = 0.5 * (zA + zB);
+                vec2 m = uvTop + duvPerDescent * (z0 - zM);
+                float sM = (clamp(0.5 + (slotTextureGrad(tex, m, ddx, ddy).a - base) * contrast, 0.0, 1.0) - 0.5) * A;
+                if (zM <= sM) zB = zM; else zA = zM;
+            }
+            float zH = 0.5 * (zA + zB);
+            hHit = clamp(zH / A + 0.5, 0.0, 1.0);
+            return uvTop + duvPerDescent * (z0 - zH);
+        }
+        zPrev = z;
+        p = q;
+    }
+    hHit = 0.0;
     return p;
 }
 
@@ -409,6 +496,8 @@ void camadaSplat(uint s, float w, vec2 uv, vec2 ddxUV, vec2 ddyUV, bool quebrar,
 
 #include "gbuffer/ground_blend.glsl"
 
+bool g_heatOn = false;
+vec3 g_heat = vec3(0.0);
 void main() {
 #ifndef ERUPTION_NO_VELOCITY
     {
@@ -489,7 +578,7 @@ void main() {
     // cima do chao e da pedra, e os dentes claros na base da pedra assada.
     if (u_tessParams.y > 0.5 && u_tessNearDistance <= 0.0 && inDispInfo.z < 9.0 && inDispInfo.y > 1e-5) {
         float dT = distance(inWorldPos, u_cameraPos);
-        float fT = lut8(u_tessLut0, u_tessLut1, dT / max(u_tessParams.x, 1.0));
+        float fT = tessLut16(u_tessLut0, u_tessLut1, dT / max(u_tessParams.x, 1.0));
         if (fT > 1.001) {
             vec3 gN = cross(dFdx(inWorldPos), dFdy(inWorldPos));
             float gLen = length(gN);
@@ -647,6 +736,14 @@ void main() {
     // ficam as do UV original (o deslocado salta entre pixels e o mip piscaria).
     vec2 uvBase = uv;
     if (hasPbr) uv = reliefPomUv(uv, TBN, N);
+    // POM por preset (relief_pom): derivadas do UV original tiradas aqui, antes
+    // de qualquer desvio por pixel. Sem tile estocastico (a altura lida aqui
+    // nao passaria pela mesma remontagem de UV do albedo).
+    float pomHit = 0.5;
+    if (hasPbr && u_reliefPom.x > 1e-4 && (inSplatTex.x | inSplatTex.y) == 0u) {
+        vec2 pdx = dFdx(uv), pdy = dFdy(uv);
+        uv = reliefPomPreset(uv, pdx, pdy, TBN, N, pomHit);
+    }
 
     // Quebrar a repeticao vale SO' no chao com splat (ver amostraChao).
     // Calculado aqui em cima porque a amostra base ja' precisa dele.
@@ -839,6 +936,27 @@ void main() {
         return;
     }
 
+    // Mapa de calor da tesselacao (ERUPTION_TEST_TESS_HEATMAP, modos em
+    // model.tese): o valor 0..1 vem em inDispInfo.x. Azul -> verde -> amarelo
+    // -> vermelho, no albedo e no emissivo, como o bloco magenta acima.
+    if (u_framePad0 > 0.5) {
+        // 5 = rampa pela coluna da tela e 6 = mascara das faces viradas para cima
+        // (1) ou nao (0): calibram a leitura numerica das capturas.
+        float v = inDispInfo.x;
+        if (u_framePad0 > 5.5 && u_framePad0 < 6.5) v = inNormal.y > 0.7 ? 1.0 : 0.0;
+        else if (u_framePad0 > 4.5 && u_framePad0 < 5.5) v = gl_FragCoord.x / u_screenResolution.x;
+        v = clamp(v, 0.0, 1.0);
+        const vec3 azul = vec3(0.0, 0.0, 1.0), verde = vec3(0.0, 1.0, 0.0);
+        const vec3 amarelo = vec3(1.0, 1.0, 0.0), verm = vec3(1.0, 0.0, 0.0);
+        const vec3 heat = v < 1.0 / 3.0 ? mix(azul, verde, v * 3.0)
+                        : v < 2.0 / 3.0 ? mix(verde, amarelo, v * 3.0 - 1.0)
+                        : mix(amarelo, verm, v * 3.0 - 2.0);
+        // Por cima da textura e com a luz normal: o calor tinge o albedo no fim
+        // do main, mantendo o desenho da textura e o relevo iluminado.
+        g_heatOn = true;
+        g_heat = heat;
+    }
+
     // Juncao malha x terreno: peca perto do chao puxa o material dele.
     GroundSample gb;
     gb.w = 0.0;
@@ -912,7 +1030,7 @@ void main() {
     // o albedo) e cheio na distancia media, onde o texel ja' nao resolve.
     // Os sliders do F2 continuam valendo como trim: forca multiplica, vies soma.
     float distCam = length(u_cameraPos - inWorldPos);
-    float ndScale  = u_normalMapScale;
+    float ndScale  = u_normalMapScale * u_reliefParams.w; // .w = normal_strength do preset (1 = nada)
     float ndSmooth = u_normalSmoothing;
     if (u_normalDistParams.y > 0.5) {
         float t = distCam / max(u_normalDistParams.x, 1.0);
@@ -971,6 +1089,60 @@ void main() {
         // O teto e' um ANGULO, nao um fator: xy fica limitado a
         // tan(anguloMax) * z, entao a inclinacao para de crescer mas o
         // DESENHO do relevo (a direcao de xy) e' preservado.
+        // RELEVO SEM TESSELACAO, peca 1 (relief_height_normal; 0 = nao entra):
+        // a normal do TOPO ARREDONDADO da pedra vem da altura do MRAH-W (alfa),
+        // nao do normal map (fraco, azul ~239). Diferenca adiante em 2 buscas
+        // alem do centro, com passo e mip de >= 2 texels: a altura suavizada
+        // faz o topo curvo (a borda em degrau do texel viraria so' uma aresta).
+        // A inclinacao e' em unidades de mundo: dh = (h - media) * contraste *
+        // espessura(u); UV por u = push.uvScale.z. Soma-se a inclinacao do
+        // normal map (xy += grad * z; o V da textura do acervo cresce para baixo, medido: o sinal oposto acendia o lado errado da pedra) antes do teto, e some com a distancia
+        // com a distancia (relief_fragment_distance, a mesma da auto-sombra).
+        if (u_reliefPom3.x > 0.0 && hasPbr && push.uvScale.z > 0.0) {
+            float hnFade = 1.0 - smoothstep(0.5 * u_reliefPom3.w, u_reliefPom3.w, distCam);
+            if (hnFade > 0.0) {
+                uint hnIdx = nonuniformEXT(inPbrIndex);
+                float texN = float(slotTextureSize(hnIdx, 0).x);
+                float pegHn = max(length(ddxUV), length(ddyUV));
+                float eHn = max(2.0 / texN, pegHn);          // passo em UV (>= 2 texels)
+                float kHn = max(1.0, eHn * texN * 0.5);       // pegada >= o passo
+                vec2 gdx = ddxUV * kHn, gdy = ddyUV * kHn;
+                float h0 = slotTextureGrad(hnIdx, uv, gdx, gdy).a;
+                if (h0 < 0.995) {
+                    float hU = slotTextureGrad(hnIdx, uv + vec2(eHn, 0.0), gdx, gdy).a;
+                    float hV = slotTextureGrad(hnIdx, uv + vec2(0.0, eHn), gdx, gdy).a;
+                    vec2 grad = vec2(hU - h0, hV - h0) * (u_reliefPom2.x * u_reliefPom3.x * push.uvScale.z / eHn);
+                    grad = clamp(grad, vec2(-1.5), vec2(1.5)) * hnFade;
+                    tangentNormal.xy += grad * abs(tangentNormal.z);
+                }
+            }
+        }
+        // NORMAL DO RELEVO POR PIXEL (model_tese.glsl, fragNormal: z >= 19.5, w = amplitude efetiva
+        // em u). Gradiente da MESMA altura que desloca a malha (alfa do MRAH-W com o contraste de
+        // heightUv), lido no texel/pegada do pixel - nao no espacamento da grade: com triangulo de
+        // 3-4 px o relevo fino e o brilho do topo da pedra seguem iguais ao de 1 px.
+        if (inDispInfo.z > 19.5 && hasPbr && push.uvScale.z > 0.0 && inDispInfo.w > 1e-5) {
+            uint hfIdx = nonuniformEXT(inPbrIndex);
+            float texF = float(slotTextureSize(hfIdx, 0).x);
+            // Mesmo mip do model_tese (dispSpacingShadeAt + dispMipFloor): o filtro da altura e'
+            // o da grade FINA de referencia (espacamento alvo / 1 px x filtro da grade), em u de
+            // mundo, e nao o do triangulo desenhado.
+            float dF = max(distCam, 1e-3);
+            float pxPerUF = 0.5 * u_screenResolution.y * abs(u_projection[1][1]) / dF;
+            float kNear = u_tessNearDistance > 0.0 ? 1.0 - smoothstep(0.0, u_tessNearDistance, dF) : 0.0;
+            float spF = max(mix(u_tessParams2.y, u_tessNearSpacing, kNear), min(u_tessNearEdgePixels, 1.0) / max(pxPerUF, 1e-6));
+            float detF = max(tessLut16(u_tessLut0, u_tessLut1, dF / max(u_tessParams.x, 1.0)) / 8.0, 1.0);
+            spF = max(spF * max(u_reliefPom2.z, 1.0), u_reliefParams.x / detF);
+            float mipF = log2(max(texF * push.uvScale.z * spF * 2.0, 1.0));
+            float eF = exp2(mipF) / texF;
+            float a0 = slotTextureLod(hfIdx, uv, mipF).a;
+            if (a0 < 0.995) {
+                float aU = slotTextureLod(hfIdx, uv + vec2(eF, 0.0), mipF).a;
+                float aV = slotTextureLod(hfIdx, uv + vec2(0.0, eF), mipF).a;
+                vec2 gF = vec2(aU - a0, aV - a0) * (max(u_normalDistParams.w, 0.1) * inDispInfo.w * push.uvScale.z / eF);
+                tangentNormal.xy += (-1.0) * clamp(gF, vec2(-1.5), vec2(1.5)) * abs(tangentNormal.z);
+            }
+        }
         if (u_tessParams2.z > 0.001) {
             float maxSlope = tan(clamp(u_tessParams2.z, 0.05, 1.55));
             float z = max(abs(tangentNormal.z), 1e-3);
@@ -1099,6 +1271,48 @@ void main() {
 
         if (!facetado) N = normalize(TBN * normalize(tangentNormal));
     }
+    // RELEVO SEM TESSELACAO, peca 3 (relief_self_shadow; 0 = nao entra):
+    // sombra do relevo ao sol, a partir do ponto ja' deslocado pelo POM (uv).
+    // Marcha no espaco tangente na direcao horizontal do sol; o raio sobe
+    // Lts.z/|Lts.xy| por unidade andada (sol rasante = raio baixo = sombra
+    // comprida, ate' relief_self_shadow_length; sol a pino = nada). Em cada
+    // passo a altura (alfa - media mip 8, esticada pelo contraste do POM) vezes a
+    // espessura da camada e' comparada com o raio; a oclusao e' graduada por
+    // uma penumbra que cresce com o passo (suave perto do pe' da pedra, larga
+    // longe). Vai MULTIPLICADA em sunSelfShadow = outEmissive.a, o canal que o
+    // deferred (directional.frag) ja' multiplica na luz DIRETA: custo no
+    // deferred zero, nenhum canal novo no G-buffer. As buscas usam a pegada
+    // do pixel com piso de 2 texels, como a normal da altura.
+    if (u_reliefPom3.y > 0.0 && hasPbr && push.uvScale.z > 0.0 && u_sunDir.w > 0.01) {
+        float ssFade = 1.0 - smoothstep(0.5 * u_reliefPom3.w, u_reliefPom3.w, distCam);
+        vec3 Lss = transpose(TBN) * normalize(-u_sunDir.xyz);
+        float lxy = length(Lss.xy);
+        float T = u_reliefPom4.z;
+        float tanEl = Lss.z / max(lxy, 1e-4);
+        float dMax = min(u_reliefPom4.w, T * 1.2 / max(tanEl, 1e-3));
+        if (ssFade > 0.0 && Lss.z > 0.03 && dMax > 0.02) {
+            uint ssIdx = nonuniformEXT(inPbrIndex);
+            float texS = float(slotTextureSize(ssIdx, 0).x);
+            float kS = max(1.0, 2.0 * max(length(ddxUV), length(ddyUV)) * texS * 0.5);
+            vec2 sdx = ddxUV * kS, sdy = ddyUV * kS;
+            float hRaw = slotTextureGrad(ssIdx, uv, sdx, sdy).a;
+            if (hRaw < 0.995) {
+                float baseS = slotTextureLod(ssIdx, uv, 8.0).a;
+                float zP = (clamp(0.5 + (hRaw - baseS) * u_reliefPom2.x, 0.0, 1.0) - 0.5) * T;
+                vec2 dirS = (Lss.xy / max(lxy, 1e-4)) * push.uvScale.z;
+                int nS = int(clamp(u_reliefPom3.z, 2.0, 12.0) + 0.5);
+                float occS = 0.0;
+                for (int i = 1; i <= nS; ++i) {
+                    float d = dMax * float(i) / float(nS);
+                    float hs = slotTextureGrad(ssIdx, uv + dirS * d, sdx, sdy).a;
+                    float zS = (clamp(0.5 + (hs - baseS) * u_reliefPom2.x, 0.0, 1.0) - 0.5) * T;
+                    float rayZ = zP + d * tanEl;
+                    occS = max(occS, clamp((zS - rayZ) / (0.08 * T + 0.5 * d * tanEl), 0.0, 1.0));
+                }
+                sunSelfShadow *= 1.0 - u_reliefPom3.y * ssFade * occS * smoothstep(0.03, 0.12, Lss.z);
+            }
+        }
+    }
     if (gb.w > 0.0) N = normalize(mix(N, gb.normal, gb.w * gb.nPeso));
     outNormal = vec4(N * 0.5 + 0.5, fillSelfShadow); // .a = auto-sombra constante (ambiente)
     // ERUPTION_TEST_MICRO_SHADOW bit 8 (diagnostico): compara o TBN de eixo de
@@ -1147,15 +1361,76 @@ void main() {
         // itself, so the G-buffer carries pure MATERIAL data again. (IGNIS G3)
         wetness   = mrahw.a;
         sourceFlag = 1.0; // real PBR map
-        // Light touch of the cooked MRAH-W AO on top of the normal-map cavity.
-        aoCavityBaked = mix(1.0, mrahw.b, 0.5); // cavidade ESTAVEL no ambiente (nao depende do sol)
+        // AO cozido inteiro. Era mix(1, b, 0,5) sem medida que justificasse: a
+        // cavidade chegava pela metade e, so' na luz ambiente, sumia de dia.
+        aoCavityBaked = mrahw.b;
+        // ILUSAO BARATA DE RELEVO (preset low, chave relief_cavity; sem passe novo).
+        // O AO do MRAH-W so' entra na luz ambiente e e' quase branco (90% entre
+        // 0,78 e 0,98), e a altura usa pouca faixa (pedras no mesmo nivel, so' o
+        // rejunte desce): ao sol a fresta nao aparecia. Aqui a fresta e' o desvio
+        // da altura e do AO abaixo da MEDIA LOCAL, lida num mip 3 niveis mais
+        // grosso do mesmo texel (uma busca a mais, na mesma textura e quase sempre
+        // em cache: nao ha referencia de faixa por textura, e a media local da' o
+        // "platô" de qualquer material). O desvio e' esticado por
+        // relief_cavity_contrast e escurece o ALBEDO, que vale no sol e na sombra.
+        // Uniforme zero = nao entra; LITE nao le MRAH-W, entao nem passa por aqui.
+        if (u_reliefParams.y > 0.0 || u_reliefPom2.w > 0.0) {
+            // Pegada do pixel com piso em UV: de perto o pixel e' menor que um
+            // texel e a media 4x/16x sairia do mesmo mip 0 (sem fresta nenhuma).
+            float pegada = max(length(ddxUV), length(ddyUV));
+            float kA = max(4.0, 0.004 / max(pegada, 1e-7));
+            float kB = max(16.0, 0.016 / max(pegada, 1e-7));
+            vec4 mA = amostraChao(pIdx, uv, ddxUV * kA, ddyUV * kA, quebraLadrilho, true);
+            vec4 mB = u_reliefParams.y > 0.0 ? amostraChao(pIdx, uv, ddxUV * kB, ddyUV * kB, quebraLadrilho, true) : mA;
+            bool temAltura = mrahw.a < 0.995 && mA.a < 0.995 && mB.a < 0.995;
+            // So' superficie quase horizontal (|N.y|, o eixo vertical do mundo): parede e
+            // lateral de objeto mantem o albedo autoral.
+            // (normal pela derivada da posicao: a do vertice nao e' confiavel no chao
+            // assado/tesselado; medido: |inNormal.y| ~ 0 no cubo de teste).
+            vec3 nGeo = cross(gbDpdx, gbDpdy);
+            float chao = smoothstep(0.55, 0.85, abs(nGeo.y) * inversesqrt(max(dot(nGeo, nGeo), 1e-20)));
+            if (u_reliefParams.y > 0.0) {
+                // fresta fina: texel abaixo da media de 4x4; halo largo: a media de
+                // 4x4 abaixo da de 16x16 (a borda da pedra junto do rejunte).
+                float fino = max(mA.b - mrahw.b, 0.0) + (temAltura ? max(mA.a - mrahw.a, 0.0) : 0.0);
+                float halo = max(mB.b - mA.b, 0.0) + (temAltura ? max(mB.a - mA.a, 0.0) : 0.0);
+                float cav = clamp((fino + halo) * u_reliefParams.z, 0.0, 1.0);
+                cav = cav * cav * (3.0 - 2.0 * cav);
+                outAlbedo.rgb *= 1.0 - u_reliefParams.y * cav * chao;
+            }
+            // RELEVO AO SOL (relief_sun_emboss; sem tap novo): a altura acima da
+            // media local (mA, ja' lida) e' esticada pelo contraste e derivada na
+            // tela; a derivada vira inclinacao POR UNIDADE DE MUNDO (inversa 2x2 da
+            // posicao do pixel no plano xz) e e' projetada na direcao horizontal do
+            // sol. Lado virado para o sol = altura caindo na direcao dele = mais
+            // claro; o oposto, mais escuro. |L.xz| = cos(elevacao): ao meio-dia
+            // (sol a pino) o termo some sozinho e so' o rasante o liga.
+            float hd = mA.a * u_reliefParams.z; // media 4x4: campo liso, sem o ruido do texel
+            vec2 gx = vec2(dFdx(hd), dFdy(hd)); // fora do if: derivada em fluxo uniforme
+            if (u_reliefPom2.w > 0.0 && temAltura) {
+                float det = gbDpdx.x * gbDpdy.z - gbDpdx.z * gbDpdy.x;
+                // dh/dL = a*dh/dx_tela + b*dh/dy_tela, com L.xz = a*dP/dx + b*dP/dy
+                vec2 Lxz = -u_sunDir.xz;
+                vec2 ab = vec2(Lxz.x * gbDpdy.z - Lxz.y * gbDpdy.x,
+                               Lxz.y * gbDpdx.x - Lxz.x * gbDpdx.z) / (abs(det) > 1e-9 ? det : 1e-9);
+                float lado = clamp(-dot(ab, gx) * 3.0, -1.0, 1.0) * chao * smoothstep(0.02, 0.3, u_sunDir.w);
+                outAlbedo.rgb *= 1.0 + u_reliefPom2.w * lado;
+            }
+        }
+        // Fresta do POM (relief_pom_ao): escurece o albedo pela profundidade do
+        // ponto achado na marcha (abaixo da media local = dentro do sulco). Vale
+        // no sol e na sombra, porque o SSAO nao enxerga o que o POM so' finge:
+        // ele nao escreve profundidade.
+        if (u_reliefPom2.y > 0.0 && pomHit < 0.5) {
+            outAlbedo.rgb *= 1.0 - u_reliefPom2.y * smoothstep(0.5, 0.0, pomHit);
+        }
     } else if (splatMrahwW > 0.0) {
         // Chao sem MRAH-W proprio: o das camadas entra pela fracao delas e o
         // resto fica no padrao de antes (a base sem camada nao muda).
         roughness  = mix(roughness, push.roughnessScale * splatMrahw.g, splatMrahwW);
         metallic   = mix(metallic, push.metallicScale * splatMrahw.r, splatMrahwW);
         wetness    = splatMrahw.a * splatMrahwW;
-        aoCavityBaked = mix(1.0, mix(1.0, splatMrahw.b, 0.5), splatMrahwW);
+        aoCavityBaked = mix(1.0, splatMrahw.b, splatMrahwW);
         sourceFlag = splatMrahwW > 0.5 ? 1.0 : 0.5;
     }
     // COMBINACAO DOS DOIS TERMOS DE CAVIDADE: min(), nao produto.
@@ -1273,4 +1548,8 @@ void main() {
                      + mix(texColor.rgb, vec3(1.0), 0.6) * estrela * glowK * 1.5;
     }
     outEmissive = vec4(emissiveRgb, sunSelfShadow);
+    if (g_heatOn) {
+        float lum = dot(outAlbedo.rgb, vec3(0.2126, 0.7152, 0.0722));
+        outAlbedo.rgb = g_heat * (0.25 + 1.5 * lum);
+    }
 }

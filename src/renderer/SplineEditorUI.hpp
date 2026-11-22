@@ -18,11 +18,20 @@ public:
 
     // Flexible draw with real X range. X values are still stored normalized 0..1 in the curve,
     // but the UI displays and edits them in [minX, maxX] units.
-    static void draw(const char* label, SplineCurve& curve, float minX, float maxX, float minY, float maxY, float currentXReal, float currentY, bool isAperture = false, const char* xLabel = "X", bool displayAsPercent = false) {
+    // yLabel: rotulo do valor de cada ponto (nullptr = "Val", ou "Apt %" na abertura).
+    static void draw(const char* label, SplineCurve& curve, float minX, float maxX, float minY, float maxY, float currentXReal, float currentY, bool isAperture = false, const char* xLabel = "X", bool displayAsPercent = false, const char* yLabel = nullptr) {
         if (::eruption::fx::skip(label)) return; // busca do F2: o grafico so' aparece se o nome bater
         ImGui::PushID(label);
         ::eruption::fx::Text("%s", label);
-        
+        // Debug desta spline (SplineCurve::debug): bolinhas coloridas por ponto e
+        // traco em degrade; se ela muda algo no mundo, o mapa tambem mostra.
+        // ImGui direto: o grafico ja' passou pela busca do F2, o checkbox vai com ele.
+        ImGui::Checkbox("Debug Mode", &curve.debug);
+        const bool dbg = curve.debug;
+        auto toU32 = [](const glm::vec3& c) {
+            return IM_COL32(int(c.r * 255.0f + 0.5f), int(c.g * 255.0f + 0.5f), int(c.b * 255.0f + 0.5f), 255);
+        };
+
         // Use curve's own m_maxY if it's larger than provided maxY to ensure points are visible
         float effectiveMaxY = std::max(maxY, curve.m_maxY);
         
@@ -47,9 +56,12 @@ public:
         for (int i = 0; i < 100; i++) {
             float t0 = (float)i / 100.0f;
             float t1 = (float)(i + 1) / 100.0f;
+            // Debug: a cor do traco e' o degrade das cores dos dois pontos vizinhos.
+            const ImU32 lineCol = dbg ? toU32(curve.debugColorAt(0.5f * (t0 + t1)))
+                                      : (isAperture ? IM_COL32(0, 200, 255, 255) : IM_COL32(0, 255, 100, 255));
             draw_list->AddLine(to_canvas(t0, curve.evaluate(t0)), 
                                to_canvas(t1, curve.evaluate(t1)), 
-                               isAperture ? IM_COL32(0, 200, 255, 255) : IM_COL32(0, 255, 100, 255), 2.0f);
+                               lineCol, 2.0f);
         }
 
         // Draggable points
@@ -79,6 +91,7 @@ public:
             }
 
             ImU32 col = (active || hovered) ? IM_COL32(255, 255, 0, 255) : IM_COL32(0, 120, 255, 255);
+            if (dbg && !(active || hovered)) col = toU32(SplineCurve::debugPointColor(i));
             draw_list->AddCircleFilled(p_pos, 6.0f, col);
             draw_list->AddCircle(p_pos, 7.0f, IM_COL32(255, 255, 255, 200));
             ImGui::PopID();
@@ -110,7 +123,7 @@ public:
             ::eruption::fx::SameLine();
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.20f);
             float vVal = curve.pointsY[i];
-            if (::eruption::fx::DragFloat(isAperture ? "Apt %" : "Val", &vVal, 0.001f, minY, effectiveMaxY, "%.2f")) {
+            if (::eruption::fx::DragFloat(yLabel ? yLabel : (isAperture ? "Apt %" : "Val"), &vVal, 0.001f, minY, effectiveMaxY, "%.2f")) {
                 curve.pointsY[i] = vVal;
                 curve.m_maxY = std::max(curve.m_maxY, curve.pointsY[i]);
             }

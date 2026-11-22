@@ -95,7 +95,7 @@ template <class T> void put(std::FILE* f, const std::vector<T>& v) {
 }
 
 constexpr uint32_t kMagic = 0x31564C52; // "RLV1"
-constexpr uint32_t kVersion = 3; // 2: caixa dupla no Nyquist da grade e leitura bilinear; 3: borda da malha presa (costura)
+constexpr uint32_t kVersion = 4; // 2: caixa dupla no Nyquist da grade e leitura bilinear; 3: borda da malha presa (costura); 4: afundamento preso pela espessura (peca fina)
 
 // Vetor gravado por put(): u64 de contagem + os elementos.
 template <class T> bool getMem(const std::vector<uint8_t>& b, size_t& c, std::vector<T>& v) {

@@ -378,8 +378,25 @@ void Engine::updateCharacters(float dt, bool moveAlongPaths) {
             // Procura o piso a partir de um degrau acima do Y escrito: o
             // terreno ou o topo de uma peça sólida, o mesmo chão de quem
             // anda. Um Y 0 debaixo de uma montanha cai no relevo.
-            c.position.y = floorHeight(c.position.x, c.position.z, c.position.y + kDegrauAoAssentar);
-            c.groundPending = false;
+            // O relevo assa em segundo plano e, ao entrar, muda o piso (0,07 u
+            // no mapa de teste): reassenta a cada quadro, sempre do Y de
+            // partida, até o assado acabar. Se o script mexeu na altura nesse
+            // meio tempo, o que ele escreveu vale.
+            if (!c.groundSettled) {
+                c.groundStartY = c.position.y;
+                c.groundSettled = true;
+            } else if (c.position.y != c.groundSettledY) {
+                c.groundPending = false;
+                c.groundSettled = false;
+            }
+            if (c.groundPending) {
+                c.position.y = floorHeight(c.position.x, c.position.z, c.groundStartY + kDegrauAoAssentar);
+                c.groundSettledY = c.position.y;
+                if (m_modelRenderer.pendingReliefJobs() == 0) {
+                    c.groundPending = false;
+                    c.groundSettled = false;
+                }
+            }
         }
         if (c.scriptStep > 1e-3f && dt > 0.0f) {
             // O script moveu com andar desde o último tick: a velocidade é a

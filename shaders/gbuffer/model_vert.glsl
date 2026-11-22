@@ -121,8 +121,7 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     // z = teto de inclinacao da normal (radianos), w = teto de tesselacao da
     // folhagem. Ver model.frag / model.tesc.
     vec4 u_tessParams2;
-    // Filtro passa-baixa (blur) sobre o height map - ver model.tese.
-    float u_tessHeightBlur;
+    float u_framePad0; // reservado (era o vies de mip da altura; o blur esta' nos mips)
     // Banda perto da grade fina (ver model_tese.glsl / FrameUBO::tessNear*).
     float u_tessNearEdgePixels;
     float u_tessNearDistance;
@@ -315,6 +314,7 @@ vec2 applyUvAnimation(vec2 uv) {
 // O espacamento usado e' o que a grade REALMENTE tem no vertice (ver
 // dispSpacingAt), nao so' o alvo do preset.
 float g_dispSpacing = 0.0; // dispSpacingAt() do vertice; 0 = so' o alvo
+float g_dispDetail = 1.0;  // curveDetail() do vertice (dispSpacingAt)
 
 // GRADE POR DISTANCIA (presets de PC, u_tessNearDistance > 0). Ate' a
 // distancia da banda perto a grade e' a fina (u_tessNearSpacing e piso de
@@ -324,7 +324,7 @@ float g_dispSpacing = 0.0; // dispSpacingAt() do vertice; 0 = so' o alvo
 // pelo ponto medio da aresta).
 float tessNearWeight(float d) {
     float n = u_tessNearDistance;
-    return n > 0.0 ? 1.0 - smoothstep(n, 1.2 * n, d) : 0.0;
+    return n > 0.0 ? 1.0 - smoothstep(0.0, n, d) : 0.0; // degrade, IDENTICO ao model.tesc
 }
 
 // Espacamento real da grade no ponto: o alvo ou o piso em pixels de aresta
@@ -333,13 +333,56 @@ float tessNearWeight(float d) {
 // 8 px mandando, grade medida de 0,25-0,28 u). Depende so' da posicao e da
 // camera: os dois patches de uma aresta e o model.vert chegam ao mesmo
 // numero. Sem banda perto (celular) fica so' o alvo, como antes.
+// DETALHE DA CURVA. "Tessellation Factor by Distance" e' a quantidade de
+// triangulos: acima de 8 (o pico da curva padrao, que da' o comportamento de
+// antes) ela divide os pisos que paravam a subdivisao antes do teto - o
+// tamanho minimo do triangulo na tela e o espacamento minimo da altura. Sem
+// isto o piso em pixels cortava em ~8 subdivisoes e 64 ficava igual a 8.
+// IDENTICO em model.tesc/model.vert/model.tese.
+float tessLut16(vec4 a, vec4 b, float t);
+float curveDetail(float d) {
+    return max(tessLut16(u_tessLut0, u_tessLut1, d / max(u_tessParams.x, 1.0)) / 8.0, 1.0);
+}
+
+// PISO DO TRIANGULO EM PIXELS PELA DISTANCIA (causa do "1 px custa o dobro de 3 px",
+// medido num mapa urbano grande no high: 10,8 M de primitivas a 1 px contra 3,8 M a 3 px).
+// Perto da camera vale u_tessNearEdgePixels (o piso do preset); com a distancia
+// ele cresce depressa ate' kTessFarEdgePx (curva quadratica da banda perto),
+// porque a grade fina so' paga perto - longe o triangulo de 1 px e' quad
+// overshading puro. A curva "Tessellation Factor by Distance" e' so' o TETO do
+// fator por aresta (e a amplitude do relevo): ela nao divide mais o piso, que
+// chegava a 0,2 px com a curva em 50 - triangulo sub-pixel que o relevo nao
+// precisa, porque o brilho e a normal da altura saem da textura, por pixel,
+// no model.frag.
+// IDENTICO em model.tesc/model.vert/model.tese.
+const float kTessFarEdgePx = 8.0;
+float tessBasePx(float d) {
+    float n = u_tessNearDistance;
+    if (n <= 0.0) return u_tessNearEdgePixels;
+    float k = 1.0 - smoothstep(0.0, n, d);
+    return mix(kTessFarEdgePx, u_tessNearEdgePixels, k * k);
+}
 float dispSpacingAt(vec3 p) {
     float s = u_tessParams2.y;
-    if (s <= 0.0 || u_tessNearDistance <= 0.0) return s;
     float d = max(distance(p, u_cameraPos), 1e-3);
+    g_dispDetail = curveDetail(d);
+    if (s <= 0.0 || u_tessNearDistance <= 0.0) return s / g_dispDetail;
     float k = tessNearWeight(d);
     float pxPerU = 0.5 * u_screenResolution.y * abs(u_projection[1][1]) / d;
-    return max(mix(s, u_tessNearSpacing, k), mix(8.0, u_tessNearEdgePixels, k) / max(pxPerU, 1e-6));
+    return max(mix(s, u_tessNearSpacing, k) / g_dispDetail, tessBasePx(d) / max(pxPerU, 1e-6));
+}
+// Espacamento so' para SOMBREAR (normal da altura): o ideal de 1 px dividido
+// pelo detalhe da curva, sem o piso grosso de longe - o mip da normal nao pode
+// subir so' porque a malha ficou mais grossa (o relevo e o brilho do topo da
+// pedra saem da textura, nao do tamanho do triangulo).
+float dispSpacingShadeAt(vec3 p) {
+    float s = u_tessParams2.y;
+    float d = max(distance(p, u_cameraPos), 1e-3);
+    float detail = curveDetail(d);
+    if (s <= 0.0 || u_tessNearDistance <= 0.0) return s / detail;
+    float k = tessNearWeight(d);
+    float pxPerU = 0.5 * u_screenResolution.y * abs(u_projection[1][1]) / d;
+    return max(mix(s, u_tessNearSpacing, k), min(u_tessNearEdgePixels, 1.0) / max(pxPerU, 1e-6)) / detail;
 }
 
 // MIP DA ALTURA EM DEGRAUS (chao com geomorph, push.weld.w > 0 - ver
@@ -362,7 +405,7 @@ float dispMipFloor(uint texIdx) {
     float spacing = g_dispSpacing > 0.0 ? g_dispSpacing : u_tessParams2.y;
     // Piso em u de mundo (tessellation_height_min_spacing): a forma do relevo
     // nao muda com a distancia da camera. IDENTICO em model.vert/model.tese.
-    spacing = max(spacing, u_reliefParams.x);
+    spacing = max(spacing, u_reliefParams.x / g_dispDetail);
     float uvPerU = push.uvScale.z;
     if (spacing <= 0.0 || uvPerU <= 0.0) return 0.0;
     float texels = float(slotTextureSize(texIdx, 0).x);
@@ -377,9 +420,11 @@ float dispMipFloor(uint texIdx) {
 // Luminancia crua do albedo (chao com splat), sem grade conhecida ou sem
 // banda perto (celular): o mip 2/5 de antes. IDENTICO em model.vert/model.tese.
 float heightNearMip(uint texIdx, bool useAlpha) {
-    bool fineGrid = u_tessNearDistance > 0.0 && u_tessParams2.y > 0.0 && push.uvScale.z > 0.0;
-    if (useAlpha && fineGrid) return dispMipFloor(texIdx) + max(u_tessHeightBlur, 0.0);
-    return max(2.0 + u_tessHeightBlur, dispMipFloor(texIdx));
+    // Altura cozida: so' o piso de Nyquist, sem blur (mip 2 fixo saiu - era
+    // media 4x4 por cima da altura). A luminancia do albedo (passa-alta
+    // near - far) segue com o piso 2: abaixo dele o grao da cor vira ruido.
+    if (useAlpha) return dispMipFloor(texIdx);
+    return max(2.0, dispMipFloor(texIdx));
 }
 
 // Linha de base do contraste = media da textura inteira. O mip 8 so' e' a
@@ -391,7 +436,6 @@ float heightBaseMip(uint texIdx) {
 }
 
 float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
-    // Blur (slider "Height Blur") - ver o comentario igual em model.tese.
     float nearMip = heightNearMip(texIdx, useAlpha);
     float farMip = nearMip + 3.0;
     if (useAlpha) {
@@ -414,6 +458,21 @@ float heightUv(uint texIdx, vec2 uvIn, float gain, bool useAlpha) {
     return clamp(0.5 + (hn - hf) * gain, 0.0, 1.0);
 }
 
+
+// Curva do fator em 16 amostras de meia precisao (2 por float, nos mesmos 8
+// floats da LUT de antes: o UBO nao muda). Nos em t = (i/15)^1.5: mais
+// densos perto da camera, onde a curva importa (8 amostras uniformes davam um
+// no a cada 470 u e achatavam a curva do editor). Linear entre nos: continua.
+float tessLut16(vec4 a, vec4 b, float t) {
+    float x = pow(clamp(t, 0.0, 1.0), 0.6666667) * 15.0;
+    int i = int(floor(x));
+    float f = x - float(i);
+    float v[8] = float[8](a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w);
+    int i0 = min(i, 15), i1 = min(i + 1, 15);
+    vec2 p0 = unpackHalf2x16(floatBitsToUint(v[i0 >> 1]));
+    vec2 p1 = unpackHalf2x16(floatBitsToUint(v[i1 >> 1]));
+    return mix(((i0 & 1) == 0) ? p0.x : p0.y, ((i1 & 1) == 0) ? p1.x : p1.y, f);
+}
 float lut8(vec4 a, vec4 b, float t) {
     float x = clamp(t, 0.0, 1.0) * 7.0;
     int i = int(floor(x));
@@ -560,7 +619,7 @@ void main() {
     // detalhe ENTRE elas.
     if (u_tessParams.y > 0.5 && u_tessParams.z > 1e-5 && push.uvScale.w > 1e-4) {
         float dTess = distance(worldPos.xyz, u_cameraPos);
-        float fTess = lut8(u_tessLut0, u_tessLut1, dTess / max(u_tessParams.x, 1.0));
+        float fTess = tessLut16(u_tessLut0, u_tessLut1, dTess / max(u_tessParams.x, 1.0));
         float ampTess = clamp((fTess - 1.0) / max(u_tessParams.w - 1.0, 1e-3), 0.0, 1.0);
         if (ampTess > 0.0) {
             g_dispSpacing = dispSpacingAt(worldPos.xyz);

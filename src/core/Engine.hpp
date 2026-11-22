@@ -416,6 +416,12 @@ public:
         // vira Shown (e entra em mapAt) depois de criar os personagens dele.
         bool ground = false;
         bool groundPending = false;
+        // O relevo assa em segundo plano e muda o piso quando entra: enquanto
+        // houver assado pendente o assentar se repete a partir do mesmo Y de
+        // partida (groundStartY), e solta se o script mexeu na altura.
+        float groundStartY = 0.0f;
+        float groundSettledY = 0.0f;
+        bool groundSettled = false;
         // Y escrito na cena: o editor salva este, não o assentado, para abrir
         // e salvar uma cena não mudar o arquivo.
         float groundFromY = 0.0f;
@@ -570,12 +576,43 @@ public:
     const std::string& graphicsPresetName();
     std::string m_graphicsPreset; // resolvido uma vez (graphicsPresetName)
     bool m_tessPresetAllowed = true; // chave "tessellation" do preset
-    float m_tessLevelCap = 64.0f;    // chave "tessellation_max_level"
+    // chave "tessellation_max_level" = teto do fator de tesselacao na banda
+    // (curva "Tessellation Factor by Distance"); o teto do device vale por cima.
+    float m_tessLevelCap = 64.0f;
     float m_tessBandScale = 1.0f;    // chave "tessellation_band_scale"
     float m_tessNearDistance = 0.0f;   // chave "tessellation_near_distance" (0 = sem banda perto)
     float m_tessZoomFollow = 0.0f;     // chave "tessellation_zoom_follow" (Engine::tessZoomFollow)
-    float m_tessNearSpacing = 0.25f;   // chave "tessellation_near_spacing"
+    float m_tessAxisDist = 0.0f;       // chave "tessellation_max_distance" (u; 0 = normal_distance.max_distance x lente)
+    float m_tessAxisMipOct = 0.0f;     // chave "tessellation_axis_mip_octaves" (0 = usa m_tessAxisDist; Engine::tessAxis)
+    float m_tessNearSpacing = 0.15f;   // chave "tessellation_near_spacing"
     float m_tessHeightMinSpacing = 0.0f; // chave "tessellation_height_min_spacing" (0 = so' a grade)
+    // Ilusao barata de relevo no chao (preset low; FrameUBO::reliefParams.yzw).
+    float m_reliefCavity = 0.0f;         // chave "relief_cavity" (forca do escurecimento de fresta; 0 desliga)
+    float m_reliefCavityContrast = 1.0f; // chave "relief_cavity_contrast" (estica o desvio da altura/AO)
+    float m_presetNormalStrength = 1.0f; // chave "normal_strength" (multiplica o normal map; 1 = como sempre)
+    float m_reliefSunEmboss = 0.0f;      // chave "relief_sun_emboss" (lado do sol da pedra mais claro, o oposto mais escuro; 0 desliga)
+    // POM do chao por preset (medium; FrameUBO::reliefPom/reliefPom2, model_frag reliefPomPreset).
+    float m_reliefPomDepth = 0.0f;       // chave "relief_pom" (espessura da camada em u; 0 desliga)
+    float m_reliefPomMaxSteps = 12.0f;   // chave "relief_pom_steps"
+    float m_reliefPomMinSteps = 4.0f;    // chave "relief_pom_min_steps"
+    float m_reliefPomDistance = 150.0f;  // chave "relief_pom_distance" (u onde o POM some)
+    float m_reliefPomContrast = 6.0f;    // chave "relief_pom_contrast"
+    float m_tessHeightGridFilter = 0.0f; // chave "tessellation_height_grid_filter" (filtro da altura pelo espacamento real da grade; 0 = desliga)
+    float m_reliefPomAo = 0.0f;          // chave "relief_pom_ao" (fresta pela profundidade do POM)
+    // Relevo sem tesselacao, so' no fragmento (FrameUBO::reliefPom3/reliefPom4; 0 desliga).
+    float m_reliefHeightNormal = 0.0f;   // chave "relief_height_normal" (espessura u da altura que vira normal)
+    float m_reliefSelfShadow = 0.0f;     // chave "relief_self_shadow" (forca da auto-sombra ao sol)
+    float m_reliefSelfShadowSteps = 6.0f;    // chave "relief_self_shadow_steps"
+    float m_reliefFragmentDistance = 120.0f; // chave "relief_fragment_distance"
+    float m_reliefSelfShadowHeight = 0.35f;  // chave "relief_self_shadow_height"
+    float m_reliefSelfShadowLength = 1.0f;   // chave "relief_self_shadow_length"
+    float m_reliefPomNearBoost = 0.0f;   // chave "relief_pom_near_boost"
+    float m_reliefPomNearDistance = 60.0f;   // chave "relief_pom_near_distance"
+    // Calibracao de albedo na escrita do G-buffer (gbuffer/albedo_calib.glsl;
+    // FrameUBO::albedoCalib): chaves "albedo_knee" (luminancia linear onde a
+    // compressao comeca, 0 desliga) e "albedo_ceiling" (teto da luminancia).
+    float m_albedoKnee = 0.0f;
+    float m_albedoCeiling = 0.40f;
     // Sprites (FrameUBO::spriteParams): chave "sprite_filter" (0 nearest, 1
     // bilinear nitido) e "sprite_normal_strength" (normal map autoral, 0 = sem).
     float m_spriteFilter = 0.0f;
@@ -1411,6 +1448,7 @@ private:
     // segundos de cada mapa: uns poucos ajustes, sem oscilar durante o jogo.
     void settleRenderScale();
     float tessZoomFollow() const; // escala da faixa de tesselacao pela lente (Render.cpp)
+    float tessAxis() const;       // eixo X da curva de tesselacao em u de mundo (Render.cpp)
     void renderImGui();
     void drawLightingControls();
     uint32_t resolveModelTexture(const std::string& path);
@@ -2379,17 +2417,12 @@ private:
     // patch sai identico ao triangulo original e a malha atual continua
     // valendo. So' o CHAO entra na banda (ver ModelRenderer::render).
     bool  m_tessEnabled = true;
-    float m_tessAmplitude = 2.5f;   // unidades de mundo, pico do deslocamento (autor: default 2.5)
+    float m_tessAmplitude = 3.0f;   // unidades de mundo, pico do deslocamento (autor: default 3)
     // Ganho da altura em passa-alta. A altura cozida vem da LUMINANCIA do
     // albedo (PbrMapGen), entao a banda baixa dela e' a sombra pintada da
     // textura; o shader usa mip2-mip5 e este ganho devolve a faixa util. Alto
     // demais e o chao vira papel amassado.
     float m_tessHeightGain = 1.5f;   // autor: default 1.5
-    // Filtro passa-baixa (blur) sobre o height map - soma em mip no
-    // heightUv() (model.vert/model.tese). 0 = sem blur extra, so' os mips
-    // 2/5 originais. Slider pedido pelo autor pra' tirar ruido de alta
-    // frequencia do relevo sem mexer no ganho/contraste. Default 0.15 (autor).
-    float m_tessHeightBlur = 0.15f;
     // Espacamento alvo entre vertices da tesselacao (u). A curva sozinha tem
     // teto 8 por aresta, e o triangulo do chao tem ~10-12 u: ~1,3 u entre
     // vertices, grosso demais pra desenhar paralelepipedo. 0 = so' a curva.
@@ -2398,7 +2431,9 @@ private:
     // Acima de ~65 graus a normal deita e a superficie le' como papel
     // amassado - ver o bloco em model.frag.
     float m_normalMaxSlopeDeg = 62.0f;
-    SplineCurve m_tessCurve{{0.0f, 0.05f, 0.10f, 1.0f}, {8.0f, 4.0f, 1.0f, 1.0f}, InterpolationMode::Smoothstep};
+    // "Tessellation Factor by Distance" (chave normal_distance.tessellation_curve).
+    // Y = fator de tesselacao (triangulos por aresta) pela distancia, 1..teto.
+    SplineCurve m_tessCurve{{0.0f, 0.14528f, 0.23606f, 0.47995f, 0.84906f, 1.0f}, {50.0f, 20.0f, 10.0f, 5.0f, 1.0f, 1.0f}, InterpolationMode::Linear};
     // MODO DE AUDITORIA DO DESLOCAMENTO (model.frag, bloco "AUDITORIA DO
     // DESLOCAMENTO"): 0 desliga, 1 deslocamento x normal, 2 luz x relevo,
     // 4 origem da altura - so' alcancaveis por ERUPTION_TEST_TESS_AUDIT (env

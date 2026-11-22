@@ -51,7 +51,7 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     // x = reservado, y = espacamento alvo entre vertices da tesselacao (ver model.tesc).
     // z = teto de inclinacao da normal em radianos (0 desliga)
     vec4 u_tessParams2;
-    float u_tessHeightBlur;
+    float u_framePad0; // reservado (era o vies de mip da altura; o blur esta' nos mips)
     // Banda perto da grade fina (model.tesc/model.tese, FrameUBO::tessNear*).
     float u_tessNearEdgePixels;
     float u_tessNearDistance;
@@ -84,7 +84,8 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_seeThroughExtra[12];
     // x = forca do alfa-teste por hash (gbuffer/alpha_hash.glsl), 0 desliga.
     vec4 u_alphaHash;
-    // x = espacamento minimo (u) do filtro da altura (FrameUBO::reliefParams).
+    // x = espacamento minimo (u) do filtro da altura (FrameUBO::reliefParams);
+    // y = relief_cavity, z = relief_cavity_contrast, w = normal_strength.
     vec4 u_reliefParams;
     // Sprites (FrameUBO::spriteParams): x = sprite_filter (0 nearest, 1
     // bilinear nitido), y = sprite_normal_strength (normal map autoral).
@@ -92,4 +93,25 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     // Luz de borda do lado do sol (FrameUBO::spriteRim): rgb = tinta, w =
     // forca (0 desliga; characters.set_rim vezes a chave sprite_rim do preset).
     vec4 u_spriteRim;
+    // Debug de spline no mapa (FrameUBO::splineDbg): [0] = liga, n pontos,
+    // maior valor, eixo maximo; [1..2] = x dos pontos; [3..4] = curva em 8
+    // amostras; [5..12] = cor de cada ponto.
+    vec4 u_splineDbg[13];
+    // POM do chao por preset (FrameUBO::reliefPom/reliefPom2): x = espessura
+    // da camada (u; 0 desliga), y = passos maximos, z = minimos, w = distancia
+    // onde some. reliefPom2: x = contraste da altura, y = escurecimento da fresta,
+    // z = filtro da grade, w = relief_sun_emboss (lado do sol claro, oposto escuro).
+    vec4 u_reliefPom;
+    vec4 u_reliefPom2;
+    // Relevo sem tesselacao (so' fragmento; 0 = desliga, saida identica):
+    // u_reliefPom3: x = relief_height_normal (espessura u da altura que vira
+    // normal), y = relief_self_shadow (forca), z = passos da marcha ao sol,
+    // w = relief_fragment_distance (u onde a normal da altura e a auto-sombra somem).
+    // u_reliefPom4: x = relief_pom_near_boost (espessura extra do POM colado na
+    // camera), y = relief_pom_near_distance (u), z = relief_self_shadow_height
+    // (espessura u da camada), w = relief_self_shadow_length (alcance maximo u).
+    vec4 u_reliefPom3;
+    vec4 u_reliefPom4;
+    // Calibracao de albedo (FrameUBO::albedoCalib, gbuffer/albedo_calib.glsl).
+    vec4 u_albedoCalib;
 };

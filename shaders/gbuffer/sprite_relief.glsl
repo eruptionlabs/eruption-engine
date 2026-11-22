@@ -13,12 +13,19 @@
 // distancia: o relevo continua igual e nao esconde mais o pe'. Sem
 // tesselacao o resultado e' zero e nada muda.
 
+// Curva do fator em 16 amostras de meia precisao (2 por float, nos mesmos 8
+// floats da LUT de antes: o UBO nao muda). Nos em t = (i/15)^1.5: mais
+// densos perto da camera, onde a curva importa (8 amostras uniformes davam um
+// no a cada 470 u e achatavam a curva do editor). Linear entre nos: continua.
 float spriteReliefLut8(vec4 a, vec4 b, float t) {
-    float x = clamp(t, 0.0, 1.0) * 7.0;
+    float x = pow(clamp(t, 0.0, 1.0), 0.6666667) * 15.0;
     int i = int(floor(x));
     float f = x - float(i);
     float v[8] = float[8](a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w);
-    return mix(v[min(i, 7)], v[min(i + 1, 7)], f);
+    int i0 = min(i, 15), i1 = min(i + 1, 15);
+    vec2 p0 = unpackHalf2x16(floatBitsToUint(v[i0 >> 1]));
+    vec2 p1 = unpackHalf2x16(floatBitsToUint(v[i1 >> 1]));
+    return mix(((i0 & 1) == 0) ? p0.x : p0.y, ((i1 & 1) == 0) ? p1.x : p1.y, f);
 }
 
 // Distancia, ao longo do raio da camera, que a crista do relevo pode tomar

@@ -2932,14 +2932,12 @@ void Engine::applyGraphicsPreset() {
         m_tessEnabled = nd.value("tessellation_enabled", m_tessEnabled);
         m_tessAmplitude = std::clamp(nd.value("tessellation_amplitude", m_tessAmplitude), 0.0f, 10.0f);
         m_tessHeightGain = std::clamp(nd.value("tessellation_height_gain", m_tessHeightGain), 0.1f, 8.0f);
-        m_tessHeightBlur = std::clamp(nd.value("tessellation_height_blur", m_tessHeightBlur), 0.0f, 4.0f);
         m_tessVertexSpacing = std::clamp(nd.value("tessellation_vertex_spacing", m_tessVertexSpacing), 0.0f, 4.0f);
     }
     envOverrideBool("ERUPTION_TEST_NORMAL_DIST", m_normalDistCurve);
     // Overrides de bancada da tesselacao DEPOIS do graphics.json - no
     // construtor eles eram sobrescritos pelo JSON e o teste nao valia nada.
     if (const char* e = std::getenv("ERUPTION_TEST_TESS_HEIGHT_GAIN")) m_tessHeightGain = std::stof(e);
-    if (const char* e = std::getenv("ERUPTION_TEST_TESS_HEIGHT_BLUR")) m_tessHeightBlur = std::stof(e);
     if (const char* e = std::getenv("ERUPTION_TEST_TESS_SPACING")) m_tessVertexSpacing = std::stof(e);
 
     // Clima parado sem copia de tela (PostProcessor, "Weather Overlay"): preset
@@ -3235,6 +3233,14 @@ void Engine::applyGraphicsPreset() {
     m_tessNearDistance = std::clamp(p.value("tessellation_near_distance", 0.0f), 0.0f, 1000.0f);
     // Faixa da curva e banda perto pela lente da camera (Engine::tessZoomFollow).
     m_tessZoomFollow = std::clamp(p.value("tessellation_zoom_follow", 0.0f), 0.0f, 1.0f);
+    // EIXO PROPRIO DA CURVA DE TESSELACAO (Engine::tessAxis), separado do eixo
+    // das curvas de normal (normal_distance.max_distance). 0 = o de antes
+    // (max_distance x lente). > 0 = u de mundo direto. "..._mip_octaves" > 0
+    // deriva o eixo da distancia em que o mip da altura comeca a subir
+    // (piso de aresta em pixels x tessellation_height_min_spacing) + essas
+    // oitavas, e o valor acima fica de reserva.
+    m_tessAxisDist = std::clamp(p.value("tessellation_max_distance", 0.0f), 0.0f, 50000.0f);
+    m_tessAxisMipOct = std::clamp(p.value("tessellation_axis_mip_octaves", 0.0f), 0.0f, 8.0f);
     m_tessNearSpacing = std::clamp(p.value("tessellation_near_spacing", m_tessVertexSpacing), 0.01f, 4.0f);
     m_tessNearEdgePixels = std::clamp(p.value("tessellation_near_edge_pixels", 8.0f), 1.0f, 32.0f);
     // PISO DO FILTRO DA ALTURA, em u de mundo. A altura e' lida com o filtro
@@ -3244,6 +3250,85 @@ void Engine::applyGraphicsPreset() {
     // piso a forma do relevo fica a mesma em toda a banda perto; a grade fina
     // continua, so' deixa a superficie mais lisa. 0 = como antes.
     m_tessHeightMinSpacing = std::clamp(p.value("tessellation_height_min_spacing", 0.0f), 0.0f, 16.0f);
+    // ILUSAO BARATA DE RELEVO (preset low, sem passe novo): o frag do G-buffer
+    // escurece o ALBEDO onde a altura e o AO do MRAH-W caem abaixo da media
+    // local (um mip mais grosso do mesmo texel), com o desvio esticado por
+    // "relief_cavity_contrast". Albedo, e nao so' o canal de AO, porque o AO
+    // so' entra na luz ambiente e ao sol a fresta nao aparecia.
+    // "normal_strength" multiplica a forca do normal map so' neste preset.
+    m_reliefCavity = std::clamp(p.value("relief_cavity", 0.0f), 0.0f, 1.0f);
+    m_reliefCavityContrast = std::clamp(p.value("relief_cavity_contrast", 1.0f), 0.0f, 16.0f);
+    // "normal_strength" e' o valor INICIAL do slider "Normal Map Scale" do F2.
+    // Antes ele multiplicava o slider por fora (uniforme a parte): o slider
+    // mostrava 1 com a forca real em 2,2 e mexer nele nao batia com o preset.
+    // ERUPTION_TEST_NORMAL_SCALE continua vencendo, como antes.
+    m_normalMapScale = std::clamp(p.value("normal_strength", 1.0f), 0.0f, 3.0f);
+    if (const char* e = std::getenv("ERUPTION_TEST_NORMAL_SCALE")) m_normalMapScale = std::stof(e);
+    m_presetNormalStrength = 1.0f;
+    // RELEVO QUE REAGE AO SOL SEM GEOMETRIA ("relief_sun_emboss", 0 desliga):
+    // o normal map do chao do acervo e' brando e a tesselacao so' existe nos
+    // presets caros, entao no low a pedra ficava chapada com o sol rasante. O
+    // frag do G-buffer tira a inclinacao da altura (MRAH-W) na direcao do sol e
+    // clareia o lado virado para ele / escurece o oposto (model_frag, junto da
+    // cavidade). Valor = excursao maxima do brilho do albedo (0,5 = +-50%).
+    m_reliefSunEmboss = std::clamp(p.value("relief_sun_emboss", 0.0f), 0.0f, 1.0f);
+    // POM DO CHAO POR PRESET (medium): o shader do G-buffer marcha o raio de
+    // vista pela altura do MRAH-W (model_frag reliefPomPreset), sem geometria
+    // nova nem tesselacao ao vivo - o "mesh" assa so' o relevo grosso (grade de
+    // 2 u). "relief_pom" = espessura da camada em u (0 desliga), "_steps" /
+    // "_min_steps" = passos de frente / no rasante (laco limitado a 16),
+    // "_distance" = u em que some (comeca em metade), "_contrast" = estica a
+    // altura em volta da media local (a faixa util do PBR e' estreita),
+    // "_ao" = escurece a fresta pela profundidade achada.
+    // ERUPTION_TEST_RELIEF_POM=<u> (teste) troca a espessura.
+    m_reliefPomDepth = std::clamp(p.value("relief_pom", 0.0f), 0.0f, 4.0f);
+    if (const char* e = std::getenv("ERUPTION_TEST_RELIEF_POM")) m_reliefPomDepth = std::clamp(std::strtof(e, nullptr), 0.0f, 4.0f);
+    m_reliefPomMaxSteps = std::clamp(p.value("relief_pom_steps", 12.0f), 2.0f, 16.0f);
+    m_reliefPomMinSteps = std::clamp(p.value("relief_pom_min_steps", 4.0f), 2.0f, 16.0f);
+    m_reliefPomDistance = std::clamp(p.value("relief_pom_distance", 150.0f), 1.0f, 2000.0f);
+    m_reliefPomContrast = std::clamp(p.value("relief_pom_contrast", 6.0f), 0.5f, 32.0f);
+    m_reliefPomAo = std::clamp(p.value("relief_pom_ao", 0.0f), 0.0f, 1.0f);
+    // RELEVO SEM TESSELACAO (so' fragmento; 0 desliga, a saida fica identica):
+    // "relief_height_normal" = espessura (u) da altura do MRAH-W que vira
+    // normal, somada ao normal map (topo arredondado que acende com o sol);
+    // "relief_pom_near_boost" / "_near_distance" = espessura extra do POM
+    // colada na camera, caindo a zero na distancia; "relief_self_shadow" =
+    // forca da sombra do relevo ao sol (marcha no espaco tangente, na luz
+    // direta, pelo canal emissive.a que o deferred ja' le'), "_steps" =
+    // passos, "relief_fragment_distance" = u onde a normal da altura e a sombra somem, "_height" = espessura da camada (u),
+    // "_length" = alcance maximo da sombra no chao (u).
+    m_reliefHeightNormal = std::clamp(p.value("relief_height_normal", 0.0f), 0.0f, 4.0f);
+    m_reliefSelfShadow = std::clamp(p.value("relief_self_shadow", 0.0f), 0.0f, 1.0f);
+    m_reliefSelfShadowSteps = std::clamp(p.value("relief_self_shadow_steps", 6.0f), 2.0f, 12.0f);
+    m_reliefFragmentDistance = std::clamp(p.value("relief_fragment_distance", 120.0f), 1.0f, 2000.0f);
+    m_reliefSelfShadowHeight = std::clamp(p.value("relief_self_shadow_height", 0.35f), 0.01f, 4.0f);
+    m_reliefSelfShadowLength = std::clamp(p.value("relief_self_shadow_length", 1.0f), 0.05f, 8.0f);
+    m_reliefPomNearBoost = std::clamp(p.value("relief_pom_near_boost", 0.0f), 0.0f, 8.0f);
+    m_reliefPomNearDistance = std::clamp(p.value("relief_pom_near_distance", 60.0f), 1.0f, 2000.0f);
+    // CALIBRACAO DE ALBEDO (gbuffer/albedo_calib.glsl): textura com a luz
+    // pintada dentro (calcada de albedo linear ~0,9) comprime a luminancia
+    // acima de "albedo_knee" ate' "albedo_ceiling"; knee 0 desliga. Medido na
+    // cena de teste ao meio-dia: media do albedo linear 0,61, p90 0,96.
+    m_albedoKnee = std::clamp(p.value("albedo_knee", 0.0f), 0.0f, 1.0f);
+    m_albedoCeiling = std::clamp(p.value("albedo_ceiling", 0.40f), m_albedoKnee + 0.01f, 1.0f);
+    // MICROSOMBRA (lighting/pbr_common.glsl, pbrMicroShadow): "micro_shadow" =
+    // forca 0..1 (0 desliga), "micro_shadow_contrast" = expoente aplicado ao AO
+    // antes do cone (1 = o AO como vem). O AO de textura e' quase branco (media
+    // 0,96) e com 1 a fresta nao aparece sob o sol; 4 escurece 22% e suja. 1,5 com
+    // piso 0,35 (cena de teste, meio-dia): preto chapado (<12/255) 1,7% -> 0,9%,
+    // p99 da luma 189 -> 180, sem linha preta de borda dura nas juntas. "micro_shadow_floor" = fracao da luz direta que a fresta mais
+    // fechada ainda recebe (0 = preto puro de borda dura, a "linha" da junta).
+    m_deferredLighting.setMicroShadow(std::clamp(p.value("micro_shadow", 0.6f), 0.0f, 1.0f),
+                                      std::clamp(p.value("micro_shadow_contrast", 1.5f), 1.0f, 8.0f),
+                                      std::clamp(p.value("micro_shadow_floor", 0.35f), 0.0f, 1.0f));
+    // FILTRO DA ALTURA PELA GRADE REAL (preset high): a altura e' lida com o
+    // filtro do espacamento que a grade tem de fato (niveis do patch), nao o
+    // ideal; sem isso a borda da pedra sai em dentes. 1 = Nyquist da grade
+    // real, 0 = como antes. Ver tessGridSpacing() em model_tese.glsl.
+    m_tessHeightGridFilter = std::clamp(p.value("tessellation_height_grid_filter", 0.0f), 0.0f, 4.0f);
+    // ERUPTION_TEST_HEIGHT_GRID_FILTER=<f> (teste): troca a chave do preset.
+    if (const char* e = std::getenv("ERUPTION_TEST_HEIGHT_GRID_FILTER"))
+        m_tessHeightGridFilter = std::clamp(std::strtof(e, nullptr), 0.0f, 4.0f);
     m_spriteFilter = std::clamp(p.value("sprite_filter", 0.0f), 0.0f, 1.0f);
     // Luz volumetrica do sol: 0 desliga, 1 meia resolucao, 2 um quarto.
     m_volumetricMode = std::clamp(p.value("volumetric_light", 0), 0, 2);

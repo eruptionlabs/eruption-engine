@@ -827,7 +827,7 @@ public:
     void setReliefDeferred(bool deferred) { m_reliefDeferred = deferred; }
     void pollReliefJobs();
     // Relevos ainda assando em segundo plano (o build do mapa espera zerar).
-    size_t pendingReliefJobs() const { return m_reliefJobs.size(); }
+    size_t pendingReliefJobs() const { return m_reliefJobs.size() + m_weldJobs.size(); }
     // Distancia ao longo do raio (mundo, dir normalizada) ate' o triangulo
     // mais proximo da instancia, ou -1. Usa a malha da CPU do modelo.
     float raycastInstance(uint32_t index, const Vec3& origin, const Vec3& dir) const;
@@ -1091,8 +1091,27 @@ private:
                                     bool computeLod);
     static bool wantsLod(const LodParams& lod, bool skinned, size_t indexCount, size_t vertexCount);
     // Solda da costura do deslocamento (preset "tessellation_seam_weld").
-    void createSeamWeld(ModelMeshGPU& mesh, const std::vector<struct TerrainVertex>& vertices,
-                        const std::vector<uint32_t>& indices);
+    // Uma tarefa por malha: calcula na CPU (computeSeamWeld, sem estado, roda em
+    // paralelo) e sobe numa submissao so' por asset (uploadSeamWelds).
+    static constexpr size_t kWeldMaxTris = 400000;
+    struct WeldTask {
+        uint32_t mesh = 0;
+        std::vector<TerrainVertex> vertices;
+        std::vector<uint32_t> indices;
+        std::vector<float> data;
+        uint32_t rows = 0, tris = 0;
+        bool ok = false;
+    };
+    static void computeSeamWeld(WeldTask& task);
+    void uploadSeamWelds(std::vector<WeldTask>& tasks);
+    void applySeamWelds(std::vector<WeldTask>& tasks, const std::string& label);
+    void pollWeldJobs();
+    struct WeldJob {
+        std::string label;
+        std::shared_ptr<std::vector<WeldTask>> tasks;
+        std::future<void> done;
+    };
+    std::vector<WeldJob> m_weldJobs;
     // deferred: a GPU ainda pode estar lendo (descarga de asset no meio do jogo).
     void releaseSeamWeld(ModelMeshGPU& mesh, bool deferred);
 
