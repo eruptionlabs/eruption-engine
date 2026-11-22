@@ -145,6 +145,18 @@ bool Engine::releaseCharacterSheet(const std::string& sprite) {
     return true;
 }
 
+// Atraso por quadro (ms) para que `quadros` quadros cubram `passada` unidades
+// a `velocidade` u/s.
+static float strideDelayMs(float passada, float velocidade, int quadros) {
+    return passada * 1000.0f / (std::max(velocidade, 1e-3f) * static_cast<float>(std::max(quadros, 1)));
+}
+
+// Atraso por quadro (ms) da regra "tempo por celula": o atraso da folha
+// escalado por (ms por celula na velocidade atual) / refMs.
+static float walkRateDelayMs(float sheetDelay, float cell, float refMs, float velocidade) {
+    return sheetDelay * (cell / std::max(velocidade, 1e-3f) * 1000.0f) / refMs;
+}
+
 // Velocidade padrao de walkCharacter quando ninguem pede um tempo.
 static constexpr float kPassoNormal = 60.0f;
 // Ritmo em que a animacao de andar de uma folha casa com o chao: ~1,1 altura
@@ -491,6 +503,27 @@ float Engine::spriteStepFpsFor(const SceneCharacter& c) const {
     return m_spriteStepFps;
 }
 
+void Engine::setWalkStride(const std::string& key, float units) {
+    if (key.empty()) m_walkStride = std::max(0.0f, units);
+    else m_walkStrideByName[key] = units; // <= 0 vale como "desligado" so' para ele
+}
+
+void Engine::setWalkRate(const std::string& key, float cellUnits, float refMs) {
+    const WalkRate r{std::max(0.0f, cellUnits), refMs > 0.0f ? refMs : 150.0f};
+    if (key.empty()) m_walkRate = r;
+    else m_walkRateByName[key] = r;
+}
+
+Engine::WalkRate Engine::walkRateFor(const SceneCharacter& c) const {
+    const auto it = m_walkRateByName.find(c.name);
+    return it != m_walkRateByName.end() ? it->second : m_walkRate;
+}
+
+float Engine::walkStrideFor(const SceneCharacter& c) const {
+    const auto it = m_walkStrideByName.find(c.name);
+    return it != m_walkStrideByName.end() ? std::max(0.0f, it->second) : m_walkStride;
+}
+
 void Engine::drawCharacter(SceneCharacter& c, float dt) {
     if (!m_playerSpawnedOnActiveMap) return;
     LoadedSprite& ls = c.look;
@@ -541,7 +574,31 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         const float passo = altura > 1.0f ? kAlturasPorSegundo * altura : kPassoNormal;
         // Piso 0,15: um bicho baixo a 100 u/s pede 0,2 (com 0,25 saia 26% lento).
         delay *= std::clamp(passo / speed, 0.15f, 2.0f);
+        // PASSADA (set_stride): o ciclo inteiro (quadros x atraso) dura
+        // passada / velocidade, ou seja, um ciclo por `passada` unidades
+        // andadas. Usa a velocidade medida, suavizada (~80 ms) para a
+        // diagonal ou um quadro torto nao sacudir o ritmo.
+        const float passada = walkStrideFor(c);
+        const WalkRate ritmo = walkRateFor(c);
+        if (passada > 0.0f || ritmo.cell > 0.0f) {
+            c.strideSpeed = c.strideSpeed > 0.0f
+                                ? glm::mix(c.strideSpeed, speed, 1.0f - std::exp(-dt / 0.08f))
+                                : speed;
+            // set_walk_rate vence set_stride: cada quadro dura o atraso da
+            // folha x (ms por celula) / referencia, sem formula de altura.
+            if (ritmo.cell > 0.0f)
+                delay = std::clamp(walkRateDelayMs(action.delay > 0 ? action.delay : 150.0f, ritmo.cell, ritmo.refMs, c.strideSpeed),
+                                   5.0f, 2000.0f);
+            else
+                delay = std::clamp(strideDelayMs(passada, c.strideSpeed, static_cast<int>(action.frames.size())), 5.0f, 2000.0f);
+        }
+    } else {
+        c.strideSpeed = 0.0f;
     }
+    // Troca de atraso (velocidade variou): a fase do quadro em curso fica
+    // proporcional, sem pulo de quadro.
+    if (c.lastDelay > 0.0f && std::abs(delay - c.lastDelay) > 1e-3f) c.timer *= delay / c.lastDelay;
+    c.lastDelay = delay;
     // A sobra fica no relogio e passa mais de um quadro se preciso: zerar
     // arredondava cada quadro para cima, a um numero inteiro de quadros de
     // tela. A 60 Hz, 39,7 ms viravam 50 (o pe' deslizava); a 25 Hz, um parado

@@ -1575,6 +1575,20 @@ int characters_set_anim_fps(lua_State* L) {
     eng().setSpriteStepFps(luaL_optstring(L, 2, ""), static_cast<float>(luaL_optnumber(L, 1, 0.0)));
     return 0;
 }
+// Passada (Engine::setWalkStride): unidades por ciclo de andar e, opcional,
+// o nome de um personagem; nil como nome = padrao de todos.
+int characters_set_stride(lua_State* L) {
+    const char* name = lua_isnoneornil(L, 1) ? "" : luaL_checkstring(L, 1);
+    eng().setWalkStride(name, static_cast<float>(luaL_checknumber(L, 2)));
+    return 0;
+}
+// Ritmo de andar (Engine::setWalkRate): unidades por celula, referencia em ms
+// (150 por padrao) e, opcional, o nome; nil = padrao de todos.
+int characters_set_walk_rate(lua_State* L) {
+    const char* name = lua_isnoneornil(L, 1) ? "" : luaL_checkstring(L, 1);
+    eng().setWalkRate(name, static_cast<float>(luaL_checknumber(L, 2)), static_cast<float>(luaL_optnumber(L, 3, 150.0)));
+    return 0;
+}
 int characters_set_shadow(lua_State* L) {
     const char* k = luaL_optstring(L, 1, "");
     const int kind = std::strcmp(k, "planar") == 0 ? 0 : std::strcmp(k, "circle") == 0 ? 1
@@ -3552,6 +3566,19 @@ declare characters: {
     -- only for it and wins over the global one; fps < 0 removes it. The
     -- preset's "sprite_step" = false turns every rule off.
     set_anim_fps: (fps: number?, key: string?) -> (),
+    -- Stride: distance in units that one full walk cycle covers. While a
+    -- character walks (set_position with walk = true, or a path), the frame
+    -- delay becomes stride / speed / frame count, using the measured speed
+    -- (smoothed), so the feet match the ground; the phase stays continuous.
+    -- name = nil sets the default for all characters; a name sets just that
+    -- one (it wins). units <= 0 restores the default pace (by body height).
+    set_stride: (name: string?, units: number) -> (),
+    -- Walk rate: while walking, each frame lasts sheet delay x (ms per cell at
+    -- the current speed) / ref_ms, where a cell is `cell_units` units long and
+    -- ref_ms defaults to 150. The whole cycle is frames x delay x ms-per-cell /
+    -- ref_ms. name = nil is the default for all; cell_units <= 0 turns it off.
+    -- Wins over set_stride when both are set.
+    set_walk_rate: (name: string?, cell_units: number, ref_ms: number?) -> (),
     -- Puts a new character in the scene (sprite PNG or .spr of the project).
     -- False if the sprite could not be read.
     add: (name: string, sprite: string, position: vector, facing: number?) -> boolean,

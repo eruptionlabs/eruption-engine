@@ -423,6 +423,10 @@ public:
         float scriptStep = 0.0f;
         float scriptWalkLeft = 0.0f;
         float scriptSpeed = 0.0f;
+        // set_stride: velocidade suavizada que rege o ciclo (0 = parado) e o
+        // ultimo atraso por quadro, para manter a fase ao trocar de atraso.
+        float strideSpeed = 0.0f;
+        float lastDelay = 0.0f;
         LoadedSprite look;
         int frame = 0;
         float timer = 0.0f;
@@ -896,6 +900,14 @@ public:
     // `key` vazio = global; senao o nome de um personagem ou o arquivo de
     // uma folha (.spr), que vencem o global; fps < 0 apaga a regra da chave.
     void setSpriteStepFps(const std::string& key, float fps);
+    // PASSADA (characters.set_stride): distancia, em unidades, que um ciclo
+    // completo de andar cobre. `key` vazio = padrao de todos; senao o nome de
+    // um personagem (vence o padrao). units <= 0 volta ao ritmo por altura.
+    void setWalkStride(const std::string& key, float units);
+    // RITMO DE ANDAR (characters.set_walk_rate): cada quadro dura
+    // action.delay x (ms por celula na velocidade atual) / refMs, com a celula
+    // de `cellUnits` unidades. Vence a passada. cellUnits <= 0 desliga.
+    void setWalkRate(const std::string& key, float cellUnits, float refMs);
     // PARTICULAS DE AMBIENTE (world.set_ambient): camadas presas ao foco.
     void setAmbientLayers(const std::vector<AmbientLayer>& layers) { m_ambient.setLayers(m_vfx, layers); }
     // Amplitude do relevo que o chao VISIVEL tem: o da tesselacao ou o da
@@ -2460,6 +2472,13 @@ private:
     bool m_spriteStepAllowed = true;   // chave "sprite_step" do preset (false desliga)
     double m_spriteStepClock = 0.0;    // s; relogio comum dos degraus
     float spriteStepFpsFor(const SceneCharacter& c) const;
+    float m_walkStride = 0.0f;         // characters.set_stride global (0 = desligado)
+    std::unordered_map<std::string, float> m_walkStrideByName;
+    float walkStrideFor(const SceneCharacter& c) const;
+    struct WalkRate { float cell = 0.0f, refMs = 150.0f; };
+    WalkRate m_walkRate;
+    std::unordered_map<std::string, WalkRate> m_walkRateByName;
+    WalkRate walkRateFor(const SceneCharacter& c) const;
     AmbientParticles m_ambient;
     float m_ambientPreset = 1.0f;      // chave "ambient_particles" (densidade; 0 desliga)
     int spriteShadowKind() const;
