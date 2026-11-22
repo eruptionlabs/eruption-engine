@@ -3,6 +3,7 @@
 // o editor pinta células bloqueadas e o resultado fica em
 // assets/scenes/<mapa>.walk.png (branco = bloqueado).
 #include "core/Engine.hpp"
+#include "core/NavHeight.hpp"
 #include "utils/AssetVfs.hpp"
 #include "utils/ReadWholeFile.hpp"
 
@@ -85,6 +86,26 @@ bool cellWalkable(const LoadedMap& m, int gx, int gz) {
 }
 
 } // namespace
+
+bool navGridCoords(const LoadedMap& m, float x, float z, float& u, float& v) {
+    if (m.navGrid.width == 0 || m.navGrid.height == 0) return false;
+    const TerrainFile& t = m.terrain;
+    if (followsTerrain(m)) {
+        const Vec2 p = t.toMap(x, z);
+        u = (p.x - t.offsetX) / t.scale + 0.5f;
+        v = (p.y - t.offsetZ) / t.scale + 0.5f;
+    } else {
+        const Vec2 p = legacyLocal(t, x, z);
+        u = p.x / 5.0f;
+        v = p.y / 5.0f;
+    }
+    return true;
+}
+
+bool navHeightAt(const LoadedMap& m, float x, float z, float& y) {
+    float u = 0.0f, v = 0.0f;
+    return navGridCoords(m, x, z, u, v) && m.navGrid.cornerHeightAt(u, v, y);
+}
 
 bool Engine::navFollowsTerrain() const { return m_currentMap && followsTerrain(*m_currentMap); }
 

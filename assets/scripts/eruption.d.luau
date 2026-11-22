@@ -191,6 +191,11 @@ declare world: {
     set_weather: (name: string) -> (),
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
+    -- Walkable-path height (Y) at a world position, from the corner heights of
+    -- the navigation grid cell: bilinear over the 4 corners. Follows stairs,
+    -- bridges and ramps, unlike ground_height. nil if the map has no corner
+    -- heights or (x, z) is outside the grid.
+    nav_height: (x: number, z: number) -> number?,
     -- Painted ground layers around (x, z): average weight of each layer in
     -- a disc of `radius` (0 or nil: the nearest grid point), keyed by the
     -- layer's texture file. Empty if the map has no painted layers.

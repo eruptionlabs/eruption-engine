@@ -109,7 +109,7 @@ static NavGridFile parseNavBinary(const uint8_t* data, size_t size) {
         return nav;
     }
 
-    (void)readU32(4); // version
+    const uint32_t version = readU32(4); // v2+: alturas de canto reais (NavGridTypes.hpp)
     nav.width = readU32(8);
     nav.height = readU32(12);
     uint32_t cellCount = readU32(16);
@@ -120,6 +120,7 @@ static NavGridFile parseNavBinary(const uint8_t* data, size_t size) {
         return nav;
     }
 
+    nav.cornerHeights = version >= kNavFileVersionCornerHeights;
     nav.cells.resize(cellCount);
     size_t off = 20;
     for (uint32_t i = 0; i < cellCount; ++i) {

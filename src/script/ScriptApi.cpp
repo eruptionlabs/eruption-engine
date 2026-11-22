@@ -9,6 +9,7 @@
 #include "script/ScriptHost.hpp"
 #include "script/NativeModule.hpp"
 #include "core/Engine.hpp"
+#include "core/NavHeight.hpp"
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "game/PlayerController.hpp"
@@ -335,6 +336,18 @@ int world_warping(lua_State* L) {
 int world_ground_height(lua_State* L) {
     lua_pushnumber(L, eng().sampleTerrainHeight(static_cast<float>(luaL_checknumber(L, 1)),
                                                 static_cast<float>(luaL_checknumber(L, 2))));
+    return 1;
+}
+
+// Altura (Y) do caminho andavel pelas alturas de canto da grade de navegacao
+// do mapa em (x, z); nil sem alturas (.nav antigo) ou fora da grade.
+int world_nav_height(lua_State* L) {
+    const float x = static_cast<float>(luaL_checknumber(L, 1));
+    const float z = static_cast<float>(luaL_checknumber(L, 2));
+    float y = 0.0f;
+    const LoadedMap* map = eng().mapAt(x, z);
+    if (map && navHeightAt(*map, x, z, y)) lua_pushnumber(L, y);
+    else lua_pushnil(L);
     return 1;
 }
 
@@ -3348,6 +3361,11 @@ declare world: {
     set_weather: (name: string) -> (),
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
+    -- Walkable-path height (Y) at a world position, from the corner heights of
+    -- the navigation grid cell: bilinear over the 4 corners. Follows stairs,
+    -- bridges and ramps, unlike ground_height. nil if the map has no corner
+    -- heights or (x, z) is outside the grid.
+    nav_height: (x: number, z: number) -> number?,
     -- Painted ground layers around (x, z): average weight of each layer in
     -- a disc of `radius` (0 or nil: the nearest grid point), keyed by the
     -- layer's texture file. Empty if the map has no painted layers.

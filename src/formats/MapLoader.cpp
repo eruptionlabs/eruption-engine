@@ -771,6 +771,7 @@ static NavGridFile parseNavBinary(const uint8_t* data, size_t size) {
         return nav;
     }
 
+    nav.cornerHeights = version >= kNavFileVersionCornerHeights;
     nav.cells.resize(cellCount);
     size_t off = 20;
     for (uint32_t i = 0; i < cellCount; ++i) {
