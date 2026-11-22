@@ -61,6 +61,11 @@ static int sourceTextureCap(const BindlessDescriptor& bindless, int cap) {
 // em LoadedSprite e a interface le' a vista deles direto.
 // ERUPTION_KEEP_TEXTURE_SOURCES=1 desliga (A/B).
 void Engine::releaseCopiedTextureSources() {
+#if defined(__EMSCRIPTEN__)
+    // No navegador o desenho WebGL2 le' a textura pela imagem do slot (WebMirror), nao pela camada:
+    // destruir a origem deixava os modelos brancos (sem cor) depois do primeiro quadro.
+    return;
+#endif
     static const bool kKeep = std::getenv("ERUPTION_KEEP_TEXTURE_SOURCES") != nullptr;
     if (kKeep || m_bindless.layerSize() == 0) return;
     // Uma origem so' pode ser destruida depois do envio dela: o vkCmdCopyBufferToImage do envio gravaria numa

@@ -2360,7 +2360,10 @@ float PostProcessor::updateGradeLut(VkCommandBuffer cmd, const LookConfig* look)
         if (!m_cubeLutPath.empty()) {
             auto cube = std::make_unique<CubeLut>();
             const std::string disk = project::gameRef(m_cubeLutPath).string();
-            if (cube->load(disk)) m_cubeLut = std::move(cube);
+            if (cube->load(disk)) {
+                ERUPTION_LOG_WARN("[GRADE] LUT carregada: %s (%d^3)", disk.c_str(), cube->size);
+                m_cubeLut = std::move(cube);
+            }
             else ERUPTION_LOG_WARN("[GRADE] LUT (.cube/.png) nao carregou: %s", disk.c_str());
         }
     }
