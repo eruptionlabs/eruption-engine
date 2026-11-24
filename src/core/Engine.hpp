@@ -1578,6 +1578,7 @@ private:
     // Hash da textura embutida como esta' no arquivo (cor: os bytes do PNG/JPEG;
     // surface: o MRAH-W ja' comprimido), sem decodificar - a chave rapida do LOD.
     bool embeddedTextureIdentity(const std::string& name, bool surface, uint64_t& id) const;
+    std::string modelTextureCacheKey(const std::string& sanitized) const; // nome + conteudo (Textures.cpp)
     bool findEmbeddedAlbedoPixels(const std::string& name, std::vector<uint8_t>& outPixels,
                                   int& outW, int& outH, int& outChannels);
     // Altura do relevo assado sintetizada do albedo embutido, para a textura

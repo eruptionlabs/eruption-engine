@@ -1428,7 +1428,7 @@ bool Engine::modelTextureOnGpu(const std::string& name) {
     std::replace(key.begin(), key.end(), '/', '\\');
     if (!key.empty() && key[0] == '\\') key.erase(0, 1);
     ModelTextureGPU cached;
-    return m_assetCache.getModelTexture(key, cached);
+    return m_assetCache.getModelTexture(modelTextureCacheKey(key), cached);
 }
 
 // O ModelFile de um .glb pedido antes por preloadModel (copia do pronto, com

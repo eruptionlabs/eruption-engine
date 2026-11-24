@@ -393,13 +393,28 @@ bool Engine::reliefAlphaFromAlbedo(const std::string& name, bool pixels, std::ve
     return true;
 }
 
+// Chave do cache global de texturas de modelo. O nome de uma imagem embutida
+// vem do .glb e dois mapas diferentes repetem o mesmo nome com pixels
+// diferentes (nomes saneados + indice: 4 dos 65 de um mapa de campo caiam em
+// imagens da cidade ja' no cache, e o chao saia com a textura errada depois
+// de um warp). Embutida: o nome mais a identidade do conteudo; as demais
+// (arquivo em disco) seguem so' pelo nome.
+std::string Engine::modelTextureCacheKey(const std::string& sanitized) const {
+    uint64_t id = 0;
+    if (!embeddedTextureIdentity(sanitized, false, id)) return sanitized;
+    char hex[20];
+    std::snprintf(hex, sizeof(hex), "#%016llx", static_cast<unsigned long long>(id));
+    return sanitized + hex;
+}
+
 uint32_t Engine::resolveModelTexture(const std::string& path) {
     std::string sanitized = path;
     std::replace(sanitized.begin(), sanitized.end(), '/', '\\');
     if (!sanitized.empty() && sanitized[0] == '\\') sanitized = sanitized.substr(1);
+    const std::string cacheKey = modelTextureCacheKey(sanitized);
 
     ModelTextureGPU gpuTex;
-    if (m_assetCache.getModelTexture(sanitized, gpuTex)) {
+    if (m_assetCache.getModelTexture(cacheKey, gpuTex)) {
         return gpuTex.bindlessSlot;
     }
 
@@ -471,7 +486,7 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
                 tex.width = static_cast<int>(tail.width);
                 tex.height = static_cast<int>(tail.height);
                 tex.mipLevels = tail.mipCount;
-                m_assetCache.addModelTexture(sanitized, tex);
+                m_assetCache.addModelTexture(cacheKey, tex);
                 return slot;
             }
         }
@@ -579,7 +594,7 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
                 tex.width = decodedWidth;
                 tex.height = decodedHeight;
                 tex.mipLevels = mipLevels;
-                m_assetCache.addModelTexture(sanitized, tex);
+                m_assetCache.addModelTexture(cacheKey, tex);
                 return slot;
             }
         }
@@ -671,7 +686,7 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
 
     if (texData.empty()) {
         ERUPTION_LOG_WARN("Engine::resolveModelTexture: failed to find '%s'", sanitized.c_str());
-        m_assetCache.addModelTexture(sanitized, ModelTextureGPU{}); // cache miss to avoid repeated lookups
+        m_assetCache.addModelTexture(cacheKey, ModelTextureGPU{}); // cache miss to avoid repeated lookups
         return 0;
     }
 
@@ -682,7 +697,7 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
     ImageData img = ImageUtils::loadFromMemory(texData.data(), texData.size());
     if (!img.isValid()) {
         ERUPTION_LOG_WARN("Engine::resolveModelTexture: failed to decode '%s'", sanitized.c_str());
-        m_assetCache.addModelTexture(sanitized, ModelTextureGPU{});
+        m_assetCache.addModelTexture(cacheKey, ModelTextureGPU{});
         return 0;
     }
     ImageUtils::downscaleRGBA(img.width, img.height, img.pixels, sourceTextureCap(m_bindless, 1 << 16));
@@ -748,7 +763,7 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
     tex.width = img.width;
     tex.height = img.height;
     tex.mipLevels = mipLevels;
-    m_assetCache.addModelTexture(sanitized, tex);
+    m_assetCache.addModelTexture(cacheKey, tex);
     return slot;
 }
 
