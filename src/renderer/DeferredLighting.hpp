@@ -43,6 +43,9 @@ struct PointLight {
     // Projeta sombra de sprite (Engine::collectSpritePointShadows). O jogo
     // desliga na luz que ele move junto com o grupo (lights.set_sprite_shadow).
     bool spriteShadow = true;
+    // Solta raios no passe de god rays (PostProcessor::renderGodRays). Luz de
+    // efeito so' com "godRays": true no .vfx.json.
+    bool godRays = true;
 };
 
 struct ShadowUBO {

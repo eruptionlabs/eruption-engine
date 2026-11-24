@@ -793,7 +793,7 @@ VkImageView PostProcessor::renderGodRays(VkCommandBuffer cmd, const Mat4& viewPr
     uint32_t count = 0;
     const float aspect = float(m_width) / float(std::max(1u, m_height));
     if (rays && m_godRaySource && m_godRayMaxLights > 0) for (const PointLight& l : *m_godRaySource) {
-        if (!l.enabled || l.intensity <= 0.0f || l.shadowCubemapIndex == kPlayerLightTag) continue;
+        if (!l.enabled || !l.godRays || l.intensity <= 0.0f || l.shadowCubemapIndex == kPlayerLightTag) continue;
         const Vec4 clip = viewProj * Vec4(l.position, 1.0f);
         if (clip.w <= 1.0f) continue;
         const Vec2 uv = Vec2(clip.x, clip.y) / clip.w * 0.5f + 0.5f;

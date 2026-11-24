@@ -159,6 +159,7 @@
       "emissive": 1.4,
       "texture": "builtin:spark",
       "light": {
+        "godRays": true,
         "enabled": true,
         "color": [
           1,

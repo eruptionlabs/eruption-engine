@@ -198,6 +198,7 @@ public:
         Vec3 color;
         float intensity;
         float steadyIntensity; // sem o tremor: para a forca de sombra, que nao deve piscar
+        bool godRays = false;  // VfxEmitterDesc::lightGodRays (no grupo: se alguma fonte liga)
     };
     void collectLights(const Vec3& eye, size_t max, std::vector<Light>& out) const;
     // Previa sem G-buffer: as malhas saem em draw(), com luz simples.

@@ -140,6 +140,7 @@
       "emissive": 3.0,
       "softDistance": 0.0,
       "light": {
+        "godRays": true,
         "enabled": true,
         "color": [
           1.0,

@@ -1213,6 +1213,7 @@ void Engine::render() {
             p.color = l.color;
             p.intensity = l.intensity;
             p.steadyIntensity = l.steadyIntensity;
+            p.godRays = l.godRays;
             pls.push_back(p);
         }
         m_deferredLighting.setVfxPointLights(pls);

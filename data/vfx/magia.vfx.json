@@ -63,6 +63,7 @@
       "softDistance": 0.2,
       "texture": "builtin:star",
       "light": {
+        "godRays": true,
         "enabled": true,
         "color": [
           0.45,

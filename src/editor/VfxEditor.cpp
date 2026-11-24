@@ -511,6 +511,7 @@ bool VfxEditor::drawEmitter(VfxEmitterDesc& e) {
             c |= ImGui::DragFloat(tr("Light radius (m)"), &e.lightRadius, 0.05f, 0.1f, 100.0f);
             c |= ImGui::SliderFloat(tr("Flicker"), &e.lightFlicker, 0.0f, 1.0f);
             c |= ImGui::DragFloat3(tr("Light offset (m)"), &e.lightOffset.x, 0.02f);
+            c |= ImGui::Checkbox(tr("Light shafts (god rays)"), &e.lightGodRays);
         }
     }
     if (ImGui::CollapsingHeader(tr("Sub-emitters"))) {

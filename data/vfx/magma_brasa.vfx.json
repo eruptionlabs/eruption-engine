@@ -80,6 +80,7 @@
       "emissive": 1.2,
       "texture": "builtin:spark",
       "light": {
+        "godRays": true,
         "enabled": true,
         "color": [
           1,

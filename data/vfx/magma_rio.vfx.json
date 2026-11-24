@@ -233,6 +233,7 @@
       "flipMode": "random",
       "lowRes": true,
       "light": {
+        "godRays": true,
         "enabled": true,
         "color": [
           1,

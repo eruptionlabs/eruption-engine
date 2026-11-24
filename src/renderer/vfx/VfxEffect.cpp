@@ -176,6 +176,7 @@ void readEmitter(const json& j, VfxEmitterDesc& e) {
         e.lightRadius = std::max(0.01f, num(o, "radius", e.lightRadius));
         e.lightFlicker = std::clamp(num(o, "flicker", e.lightFlicker), 0.0f, 1.0f);
         e.lightOffset = v3(o, "offset", e.lightOffset);
+        e.lightGodRays = o.value("godRays", false);
     }
     if (j.contains("graph") && j["graph"].is_object()) {
         const json& g = j["graph"];
@@ -279,7 +280,8 @@ json writeEmitter(const VfxEmitterDesc& e) {
     writeSub("onCollision", e.onCollision);
     if (e.light)
         j["light"] = {{"enabled", true},          {"color", arr(e.lightColor)}, {"intensity", e.lightIntensity},
-                      {"radius", e.lightRadius},   {"flicker", e.lightFlicker}, {"offset", arr(e.lightOffset)}};
+                      {"radius", e.lightRadius},   {"flicker", e.lightFlicker}, {"offset", arr(e.lightOffset)},
+                      {"godRays", e.lightGodRays}};
     if (!e.graph.empty()) {
         json g;
         json nodes = json::array();

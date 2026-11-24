@@ -159,6 +159,12 @@ struct VfxEmitterDesc {
     float lightRadius = 6.0f;    // m
     float lightFlicker = 0.3f;   // 0 = fixa, 1 = tremula forte
     Vec3 lightOffset{0.0f, 0.5f, 0.0f}; // m, no espaco do efeito
+    // A luz solta raios (god rays) como uma tocha do mapa? Desligado por
+    // padrao: o passe de raios espalha o brilho HDR em volta da luz, e o
+    // nucleo aditivo de um projetil em cima dela virava uma bola branca
+    // cobrindo meia tela (luz 0,175, a 8 u do chao, de dia). Fogo e magma
+    // do motor ligam ("godRays": true).
+    bool lightGodRays = false;
 
     // --- Grafo (expressoes por particula; vazio = so' os modulos acima) ---
     VfxGraph graph;

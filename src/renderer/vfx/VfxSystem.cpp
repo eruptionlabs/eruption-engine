@@ -2144,6 +2144,7 @@ void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& o
             const float steady = e.lightIntensity * alive;
             l.intensity = steady * std::max(0.0f, 1.0f + e.lightFlicker * 0.5f * w);
             l.steadyIntensity = steady;
+            l.godRays = e.lightGodRays;
             const Vec3 d = l.position - eye;
             all.push_back({glm::dot(d, d), l, steady});
         }
@@ -2164,6 +2165,7 @@ void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& o
         Vec3 pos{0.0f}, color{0.0f};
         float weight = 0.0f, radius = 0.0f, intensity = 0.0f;
         float count = 0.0f; // fontes somadas, fracionario (parte de uma luz conta parte)
+        bool godRays = false;
     };
     std::vector<Cluster> clusters;
     auto add = [](Cluster& c, const Light& l, float steady, float part) {
@@ -2180,6 +2182,7 @@ void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& o
         c.weight += w;
         c.intensity += l.intensity * part;
         c.count += part;
+        c.godRays = c.godRays || l.godRays;
     };
     for (const Gathered& g : all) {
         const Light& l = g.light;
@@ -2224,6 +2227,7 @@ void VfxSystem::collectLights(const Vec3& eye, size_t max, std::vector<Light>& o
         l.position = c.pos / c.weight;
         l.color = c.color / c.weight;
         l.radius = c.radius;
+        l.godRays = c.godRays;
         // A soma cresce mais devagar que o numero de fontes: dez fogueiras
         // juntas clareiam mais que uma, mas nao dez vezes (some saturando).
         // Ate' uma fonte nao divide: as duas partes de uma luz em transicao
