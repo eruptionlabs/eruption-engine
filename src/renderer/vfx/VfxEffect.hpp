@@ -88,6 +88,9 @@ struct VfxEmitterDesc {
     Vec2 rotation{0.0f, 360.0f};      // graus
     Vec2 angularVelocity{0.0f, 0.0f}; // graus/s
     float inheritVelocity = 0.0f;     // herda a velocidade do efeito
+    // "sortLayer" 0..3: desempate da ordenacao no mesmo lugar (maior desenha
+    // por cima). -1 = a ordem do emissor no efeito.
+    int sortLayer = -1;
 
     // --- Movimento ---
     Vec3 gravity{0.0f};

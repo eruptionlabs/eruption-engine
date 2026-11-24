@@ -1,7 +1,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 // ORDENACAO (1/3): conta quantas particulas visiveis caem em cada balde de
-// profundidade. Ordenacao por contagem em 256 baldes: para fumaca basta, e
+// profundidade. Ordenacao por contagem em 256 baldes x 4 camadas: para fumaca basta, e
 // sao 3 passes curtos em vez de um sort completo.
 #define VFX_WRITABLE
 #include "vfx/vfx_common.glsl"
@@ -14,5 +14,5 @@ void main() {
     if (i >= counters[VFXC_RENDER + pc.list]) return;
     uint idx = renderList[pc.list * frame.counts.y + i];
     if (idx >= frame.counts.y) return; // ver vfx_finish.comp
-    atomicAdd(sortData[pc.list * 512u + depthBucket(particles[idx].pos)], 1u);
+    atomicAdd(sortData[pc.list * VFX_SORT_STRIDE + sortKey(particles[idx])], 1u);
 }

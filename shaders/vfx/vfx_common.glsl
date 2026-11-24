@@ -76,6 +76,7 @@ const uint VFXF_HIDDEN       = 1u << 15; // fora da visao de equipe: simula, nao
 const uint VFXF_MESH_SHIFT   = 16u;     // 6 bits (16..21): malha da particula + 1 (0 = sprite)
 // A versao de longe da malha (+ 1, 0 = nao tem) fica em flags.w, bits 16..21.
 const uint VFXW_MESHLO_SHIFT = 16u;
+const uint VFXW_LAYER_SHIFT  = 24u;     // 2 bits (24..25): camada de ordenacao
 const uint VFXF_DECAL        = 1u << 24; // deitada e projetada na profundidade da cena
 const uint VFXF_SHADOWED     = 1u << 25; // termo do sol passa pelo mapa de sombra do sol
 const uint VFXF_DISTORT      = 1u << 26; // escreve no buffer de distorcao da tela, nao na cor
@@ -149,6 +150,13 @@ struct VfxEvent {
 // Listas de desenho no mesmo buffer: [0,cap) cheia, [cap,2cap) meia
 // resolucao; ordenadas em [2cap,3cap) e [3cap,4cap).
 #define VFX_SORT_BUCKETS 256u
+// Camadas por balde: duas camadas transparentes no mesmo lugar (queimado alfa
+// sob brasa aditiva, decal sobre decal) caem no mesmo balde, e o atomico do
+// espalhamento trocava a ordem delas a cada frame (pisca). A chave e'
+// balde * camadas + camada: a profundidade manda e a camada desempata, estavel.
+#define VFX_SORT_LAYERS 4u
+#define VFX_SORT_KEYS (VFX_SORT_BUCKETS * VFX_SORT_LAYERS)
+#define VFX_SORT_STRIDE (2u * VFX_SORT_KEYS) // por lista: contagens, depois inicios
 
 layout(std430, set = VFX_SET, binding = 0) VFX_RW buffer ParticleBuf { Particle particles[]; };
 layout(std430, set = VFX_SET, binding = 1) VFX_RW buffer DeadBuf { uint deadList[]; };
@@ -193,6 +201,14 @@ uint depthBucket(vec3 pos) {
     // atomico travava a GPU ate' o reboot, na chegada a um mapa com fumaca.
     uint b = uint(max(t, 0.0) * float(VFX_SORT_BUCKETS - 1u));
     return VFX_SORT_BUCKETS - 1u - min(b, VFX_SORT_BUCKETS - 1u);
+}
+
+// Chave de ordenacao (0 = desenha primeiro): profundidade, e no mesmo balde a
+// camada do emissor. min() no fim: a chave indexa o buffer com atomico (ver o
+// NaN do depthBucket), fora dele trava GPU fraca.
+uint sortKey(Particle p) {
+    uint layer = (emitters[p.slotGen & 0xFFFFu].flags.w >> VFXW_LAYER_SHIFT) & (VFX_SORT_LAYERS - 1u);
+    return min(depthBucket(p.pos) * VFX_SORT_LAYERS + layer, VFX_SORT_KEYS - 1u);
 }
 
 // Aleatorio sem estado (PCG hash): o mesmo resultado em qualquer ordem de

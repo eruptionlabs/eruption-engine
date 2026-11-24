@@ -30,7 +30,7 @@ layout(std140, set = 3, binding = 0) uniform Push {
     mat4 viewProjNoJitter;
     mat4 prevViewProjNoJitter;
     uint listOffset;
-    uint translucent; // 0: passe opaco (G-buffer), 1: passe translucido
+    uint translucent; // 0: passe opaco (G-buffer), 1: translucido, 2: aditivo
 } pc;
 
 mat3 axisAngle(vec3 a, float ang) {
@@ -43,8 +43,9 @@ mat3 axisAngle(vec3 a, float ang) {
 void main() {
     uint idx = renderList[pc.listOffset + gl_InstanceIndex];
     RenderRec r = recs[idx];
-    // Cada malha num passe so': fora do dela, o triangulo cai fora da tela.
-    if ((r.cutout.x != 0u) != (pc.translucent != 0u)) {
+    // Cada malha num passe so' (cutout.x: 0 opaca, 1 translucida, 2 aditiva):
+    // fora do dela, o triangulo cai fora da tela.
+    if (r.cutout.x != pc.translucent) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         return;
     }

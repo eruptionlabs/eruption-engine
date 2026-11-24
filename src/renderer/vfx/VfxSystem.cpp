@@ -31,6 +31,8 @@ constexpr uint32_t kCRender = 3;
 constexpr uint32_t kCDispatch = 8;
 constexpr uint32_t kCDraw = 12;        // 5 uints por lista (indexado)
 constexpr uint32_t kCSortDispatch = 24;
+// Ordenacao: 256 baldes de profundidade x 4 camadas, contagens + inicios por lista (vfx_common.glsl).
+constexpr uint32_t kSortStride = 2 * 256 * 4;
 constexpr uint32_t kCounterCount = 228;
 constexpr uint32_t kCEventDispatch = 32;
 constexpr uint32_t kRecordBytes = 64;
@@ -46,7 +48,7 @@ struct MeshPush {
     Mat4 viewProjNoJitter;
     Mat4 prevViewProjNoJitter;
     uint32_t listOffset;
-    uint32_t translucent; // 0: so' as opacas (G-buffer); 1: so' as translucidas
+    uint32_t translucent; // 0: so' as opacas (G-buffer); 1: so' as translucidas; 2: so' as aditivas
     uint32_t pad[2];
 };
 // Sombra: sem a matriz do quadro anterior, cabe em push constant.
@@ -117,7 +119,7 @@ bool VfxSystem::createBuffers() {
               createBuf(m_dead, cap * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_alive, cap * 8, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_render, cap * 20, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
-              createBuf(m_sort, 2 * 512 * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
+              createBuf(m_sort, 2 * kSortStride * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_events, VkDeviceSize(kMaxEvents) * 32, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_recs, cap * kRecordBytes, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
               createBuf(m_ribbonRing, VkDeviceSize(kRibbonRingTotal) * 4, ssbo, VMA_MEMORY_USAGE_GPU_ONLY, false) &&
@@ -596,6 +598,14 @@ bool VfxSystem::createPipelines() {
         VkShaderModule mice = r == VK_SUCCESS && (fp16.optimalTilingFeatures & blitNeeds) == blitNeeds
                                   ? loadModule(dev, "vfx/vfx_mesh_ice.frag.spv")
                                   : VK_NULL_HANDLE;
+        // Aditiva: mesmos alvos e mistura da previa, fragmento sem luz.
+        VkShaderModule madd = r == VK_SUCCESS ? loadModule(dev, "vfx/vfx_mesh_add.frag.spv") : VK_NULL_HANDLE;
+        if (madd) {
+            st[1].module = madd;
+            if (vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_meshAddPipe) != VK_SUCCESS)
+                m_meshAddPipe = VK_NULL_HANDLE;
+            vkDestroyShaderModule(dev, madd, nullptr);
+        }
         if (mice) {
             st[1].module = mice;
             if (vkc::createGraphicsPipelines(dev, m_ctx->pipelineCache(), 1, &gi, nullptr, &m_meshIcePipe) != VK_SUCCESS)
@@ -782,7 +792,7 @@ void VfxSystem::shutdown() {
     destroyGround(false);
     for (VkPipeline* p : {&m_emitPipe, &m_argsPipe, &m_simPipe, &m_finishPipe, &m_drawPipe, &m_drawLowPipe, &m_distortPipe,
                           &m_compositePipe, &m_sortHistPipe, &m_sortScanPipe, &m_sortScatterPipe, &m_eventPipe,
-                          &m_meshPipe, &m_meshFwdPipe, &m_meshIcePipe, &m_meshShadowPipe})
+                          &m_meshPipe, &m_meshFwdPipe, &m_meshIcePipe, &m_meshAddPipe, &m_meshShadowPipe})
         if (*p) vkDestroyPipeline(dev, *p, nullptr), *p = VK_NULL_HANDLE;
     destroyReactive();
     destroyDistortion();
@@ -1138,7 +1148,10 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     const Vec3 off = e.offset + (k < inst.offsets.size() ? inst.offsets[k] : Vec3(0.0f));
     const Vec3 pos = Vec3(t * Vec4(off, 1.0f));
     o.posTime = Vec4(pos, inst.time);
-    o.prevPos = Vec4(inst.firstFrame ? pos : inst.prevPos, 0.0f);
+    // O extremo anterior do caminho de nascimento passa pela mesma transformacao com o mesmo
+    // deslocamento: com a origem crua do efeito, um emissor deslocado para cima nascia numa
+    // coluna da origem (no chao) ate' o ponto deslocado, todo frame.
+    o.prevPos = Vec4(inst.firstFrame ? pos : Vec3(inst.prevTransform * Vec4(off, 1.0f)), 0.0f);
     o.rot0 = Vec4(c0, scale);
     o.rot1 = Vec4(c1, 0.0f);
     o.rot2 = Vec4(c2, 0.0f);
@@ -1179,7 +1192,13 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
         if (lo) m_meshMask |= 1u << (lo - 1);
     }
     const VfxTextureInfo& tex = texture(e.texture, e.flipCols, e.flipRows);
-    o.flags = glm::uvec4(flags, m_slotGen[slot], tex.slot, (e.flipCols & 0xFFu) | ((e.flipRows & 0xFFu) << 8) | (meshLo << 16));
+    // Camada de ordenacao (flags.w bits 24..25): "sortLayer" do arquivo, ou a
+    // ordem do emissor no efeito, para dois emissores do mesmo efeito no mesmo
+    // lugar nao trocarem de ordem a cada frame.
+    const size_t emitterIndex = size_t(&e - inst.desc->emitters.data());
+    const uint32_t layer = uint32_t(e.sortLayer >= 0 ? e.sortLayer : int(std::min<size_t>(emitterIndex, 3))) & 3u;
+    o.flags = glm::uvec4(flags, m_slotGen[slot], tex.slot,
+                         (e.flipCols & 0xFFu) | ((e.flipRows & 0xFFu) << 8) | (meshLo << 16) | (layer << 24));
     for (int k = 0; k < 4; ++k)
         o.cutout[k] = glm::packHalf2x16(glm::vec2(tex.cutout[2 * k], tex.cutout[2 * k + 1]));
     // Malha nao usa o poligono da textura: o campo leva o material
@@ -1190,6 +1209,10 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
             o.cutout.x = 1u;
             o.cutout.y = glm::packHalf2x16(glm::vec2(e.refraction, e.absorption / m_unitsPerMeter));
             m_anyTranslucent = true;
+        } else if (e.blend == VfxBlend::Additive && m_meshAddPipe) {
+            // x = 2: malha aditiva, desenhada no passe das particulas (vfx_mesh_add.frag).
+            o.cutout.x = 2u;
+            m_anyAdditiveMesh = true;
         }
         // z,w: escala por eixo (3 halfs) e modo no w alto: bit 0 = orientacao
         // fixa, bit 1 = escala fixa (vfx_mesh.vert / vfx_sim.comp).
@@ -1263,7 +1286,7 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     for (int i = 0; i < 8; ++i)
         o.sizeLut[i] = glm::packHalf2x16(
             glm::vec2(e.sizeOverLife.sample(float(2 * i) / 15.0f), e.sizeOverLife.sample(float(2 * i + 1) / 15.0f)));
-    if (o.cutout.x != 0u) {
+    if (o.cutout.x == 1u) {
         // Alcance das particulas (mundo): a copia do lit cobre so' o
         // retangulo da tela onde elas podem estar. A copia inteira custava
         // 0,17 ms em 1080p na 4060, mais que o desenho do gelo.
@@ -1321,6 +1344,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     m_spawnTotal = 0;
     m_anyLowRes = false;
     m_anyTranslucent = false;
+    m_anyAdditiveMesh = false;
     m_anyDistortion = false;
     m_distortWritten = false;
     m_iceBounds.clear();
@@ -1982,6 +2006,9 @@ void VfxSystem::draw(VkCommandBuffer cmd, VkImage litImage, VkImageView litView,
         recordMeshes(cmd, m_meshFwdPipe, extent, m_viewProjNoJitter, m_viewProjNoJitter, 0u);
     // Gelo antes das particulas: fumaca e faisca na frente dele continuam por cima.
     if (ice) recordMeshes(cmd, m_meshIcePipe, extent, m_viewProjNoJitter, m_viewProjNoJitter, 1u);
+    // Malha aditiva: soma luz como a particula aditiva, na mesma ordem do gelo.
+    if (m_anyAdditiveMesh && m_meshAddPipe && m_meshMaskSimulated)
+        recordMeshes(cmd, m_meshAddPipe, extent, m_viewProjNoJitter, m_viewProjNoJitter, 2u);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_drawPipe);
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc);

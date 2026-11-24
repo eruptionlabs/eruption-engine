@@ -485,6 +485,9 @@ bool VfxEditor::drawEmitter(VfxEmitterDesc& e) {
         c |= range(tr("Rotation (deg)"), e.rotation, 1.0f, -3600.0f, 3600.0f, "%.0f");
         c |= range(tr("Spin (deg/s)"), e.angularVelocity, 1.0f, -3600.0f, 3600.0f, "%.0f");
         c |= ImGui::SliderFloat(tr("Inherit velocity"), &e.inheritVelocity, 0.0f, 1.0f, "%.2f");
+        c |= ImGui::SliderInt(tr("Sort layer"), &e.sortLayer, -1, 3, e.sortLayer < 0 ? tr("auto") : "%d");
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("%s", tr("Order among transparent layers at the same spot (higher draws on top). Auto = emitter order."));
     }
     if (ImGui::CollapsingHeader(tr("Motion"), ImGuiTreeNodeFlags_DefaultOpen)) {
         c |= ImGui::DragFloat3(tr("Gravity (m/s2)"), &e.gravity.x, 0.05f, -100.0f, 100.0f, "%.2f");

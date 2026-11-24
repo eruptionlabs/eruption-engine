@@ -111,6 +111,7 @@ void readEmitter(const json& j, VfxEmitterDesc& e) {
     }
     e.angularVelocity = v2(j, "angularVelocity", e.angularVelocity);
     e.inheritVelocity = num(j, "inheritVelocity", e.inheritVelocity);
+    if (j.contains("sortLayer") && j["sortLayer"].is_number()) e.sortLayer = std::clamp(j["sortLayer"].get<int>(), 0, 3);
     e.gravity = v3(j, "gravity", e.gravity);
     if (j.contains("gravitySpace") && j["gravitySpace"].is_string()) e.gravityLocal = j["gravitySpace"].get<std::string>() == "local";
     if (j.contains("space") && j["space"].is_string()) e.localSpace = j["space"].get<std::string>() == "local";
@@ -237,6 +238,7 @@ json writeEmitter(const VfxEmitterDesc& e) {
     if (e.hasScale3) j["scale3"] = arr(e.scale3);
     j["angularVelocity"] = arr(e.angularVelocity);
     j["inheritVelocity"] = e.inheritVelocity;
+    if (e.sortLayer >= 0) j["sortLayer"] = e.sortLayer;
     j["gravity"] = arr(e.gravity);
     if (e.gravityLocal) j["gravitySpace"] = "local";
     if (e.localSpace) j["space"] = "local";

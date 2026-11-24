@@ -24,6 +24,11 @@ mat3 axisAngle(vec3 a, float ang) {
 void main() {
     uint idx = renderList[pc.listOffset + gl_InstanceIndex];
     RenderRec r = recs[idx];
+    // Malha aditiva e' luz: nao faz sombra.
+    if (r.cutout.x == 2u) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        return;
+    }
     uint seed = r.sheet.w;
     mat3 R = axisAngle(unpackOct(r.look.w), unpackHalf2x16(r.look.z).x);
     vec3 sc = vfxMeshScale(r.cutout, seed);

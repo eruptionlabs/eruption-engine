@@ -1,19 +1,24 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// ORDENACAO (2/3): soma prefixada das contagens (256 baldes, um workgroup)
-// -> posicao inicial de escrita de cada balde.
+// ORDENACAO (2/3): soma prefixada das contagens (VFX_SORT_KEYS chaves, um
+// workgroup de 256: cada thread soma as suas 4 chaves seguidas)
+// -> posicao inicial de escrita de cada chave.
 #define VFX_WRITABLE
 #include "vfx/vfx_common.glsl"
 
 layout(local_size_x = 256) in;
 layout(push_constant) uniform Push { uint list; } pc;
 
+#define PER_THREAD (VFX_SORT_KEYS / 256u)
 shared uint sums[256];
 
 void main() {
     uint b = gl_LocalInvocationIndex;
-    uint base = pc.list * 512u;
-    sums[b] = sortData[base + b];
+    uint base = pc.list * VFX_SORT_STRIDE;
+    uint first = b * PER_THREAD;
+    uint local = 0u;
+    for (uint k = 0u; k < PER_THREAD; ++k) local += sortData[base + first + k];
+    sums[b] = local;
     barrier();
     // Hillis-Steele inclusiva em memoria compartilhada (256 = 8 passos).
     for (uint off = 1u; off < 256u; off <<= 1) {
@@ -22,5 +27,14 @@ void main() {
         sums[b] += v;
         barrier();
     }
-    sortData[base + 256u + b] = sums[b] - sortData[base + b]; // exclusiva
+    uint run = sums[b] - local; // exclusiva: inicio das chaves desta thread
+    for (uint k = 0u; k < PER_THREAD; ++k) {
+        uint n = sortData[base + first + k];
+        sortData[base + VFX_SORT_KEYS + first + k] = run;
+        // Zera a contagem ja' lida para o proximo histograma: o scan sempre roda
+        // logo depois dele, e assim o vfx_args (uma thread so') nao precisa
+        // limpar 2 x 1024 chaves por frame. O buffer nasce zerado (VfxSystem::init).
+        sortData[base + first + k] = 0u;
+        run += n;
+    }
 }

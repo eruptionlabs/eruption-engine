@@ -1,7 +1,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 // ORDENACAO (3/3): cada particula vai para a faixa do seu balde, de tras
-// para frente. Dentro do balde a ordem e' livre (mesma profundidade).
+// para frente. Mesma chave (profundidade e camada): ordem livre.
 #define VFX_WRITABLE
 #include "vfx/vfx_common.glsl"
 
@@ -14,6 +14,6 @@ void main() {
     uint cap = frame.counts.y;
     uint idx = renderList[pc.list * cap + i];
     if (idx >= cap) return; // ver vfx_finish.comp
-    uint pos = atomicAdd(sortData[pc.list * 512u + 256u + depthBucket(particles[idx].pos)], 1u);
+    uint pos = atomicAdd(sortData[pc.list * VFX_SORT_STRIDE + VFX_SORT_KEYS + sortKey(particles[idx])], 1u);
     renderList[(2u + pc.list) * cap + pos] = idx;
 }

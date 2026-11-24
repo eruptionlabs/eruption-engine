@@ -332,6 +332,7 @@ private:
     VkPipeline m_meshPipe = VK_NULL_HANDLE;    // malha no G-buffer
     VkPipeline m_meshFwdPipe = VK_NULL_HANDLE; // malha na previa (forward)
     VkPipeline m_meshIcePipe = VK_NULL_HANDLE; // malha translucida, no lit depois da luz
+    VkPipeline m_meshAddPipe = VK_NULL_HANDLE; // malha aditiva: soma luz, sem luz da cena
     // Sombra das malhas: set proprio so' com a lista e os registros (o set de
     // desenho pode ser reescrito depois do passe de sombra, no mesmo frame).
     VkDescriptorSetLayout m_shadowSetLayout = VK_NULL_HANDLE;
@@ -465,6 +466,7 @@ private:
     bool m_active = false;
     bool m_anyLowRes = false;   // algum emissor lowRes tocando (CPU sabe)
     bool m_anyTranslucent = false; // alguma malha translucida tocando
+    bool m_anyAdditiveMesh = false; // alguma malha aditiva tocando
     struct IceBox {
         Vec3 center, half; // caixa alinhada aos eixos do mundo
     };
