@@ -7,6 +7,7 @@
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "script/ScriptApi.hpp"
+#include "utils/ImageUtils.hpp"
 
 #include <lua.h>
 #include <lualib.h>
@@ -112,6 +113,73 @@ std::vector<std::string> readStrList(lua_State* L, int idx, const char* field) {
     }
     lua_pop(L, 1);
     return out;
+}
+
+std::vector<float> readNumList(lua_State* L, int idx, const char* field) {
+    std::vector<float> out;
+    lua_getfield(L, idx, field);
+    if (lua_istable(L, -1)) {
+        const int n = lua_objlen(L, -1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            out.push_back(static_cast<float>(lua_tonumber(L, -1)));
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    return out;
+}
+
+const char* shapeName(texregion::Shape s) {
+    switch (s) {
+        case texregion::Shape::Poly: return "poly";
+        case texregion::Shape::Rect: return "rect";
+        case texregion::Shape::Ellipse: return "ellipse";
+        case texregion::Shape::All: return "all";
+        case texregion::Shape::Bitmap: return "bitmap";
+    }
+    return "poly";
+}
+
+texregion::Shape shapeFrom(const std::string& n) {
+    if (n == "rect") return texregion::Shape::Rect;
+    if (n == "ellipse") return texregion::Shape::Ellipse;
+    if (n == "all") return texregion::Shape::All;
+    if (n == "bitmap") return texregion::Shape::Bitmap;
+    return texregion::Shape::Poly;
+}
+
+const char* glowName(texregion::Glow g) {
+    switch (g) {
+        case texregion::Glow::Dark: return "dark";
+        case texregion::Glow::Light: return "light";
+        case texregion::Glow::Paper: return "paper";
+        case texregion::Glow::Uniform: return "uniform";
+    }
+    return "dark";
+}
+
+texregion::Glow glowFrom(const std::string& n) {
+    if (n == "light") return texregion::Glow::Light;
+    if (n == "paper") return texregion::Glow::Paper;
+    if (n == "uniform") return texregion::Glow::Uniform;
+    return texregion::Glow::Dark;
+}
+
+// Bitmap de uma regiao: PNG de 1 canal ao lado da cena (<mapa>.reg_<i>_<j>.png).
+void loadRegionBitmap(const fs::path& sceneFile, texregion::Region& r) {
+    if (r.bitmapFile.empty()) return;
+    std::vector<uint8_t> bytes;
+    vfs::read((sceneFile.parent_path() / r.bitmapFile).string(), bytes);
+    if (bytes.empty()) return;
+    ImageData img = ImageUtils::loadFromMemoryRaw(bytes.data(), bytes.size());
+    if (!img.isValid()) return;
+    const int ch = std::max(1, img.channels);
+    r.bw = img.width;
+    r.bh = img.height;
+    r.bitmap.resize(size_t(r.bw) * r.bh);
+    for (size_t i = 0; i < r.bitmap.size(); ++i) r.bitmap[i] = img.pixels[i * ch];
+    r.shape = texregion::Shape::Bitmap;
 }
 
 SceneEdits::Transform readTransform(lua_State* L, int idx, bool& any) {
@@ -273,12 +341,69 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
                 l.range = readNum(L, t, "range", 10.0f);
                 l.enabled = readBool(L, t, "enabled", true);
                 l.night = readBool(L, t, "night", false);
+                l.onHour = readNum(L, t, "on_hour", -1.0f);
+                l.offHour = readNum(L, t, "off_hour", -1.0f);
+                l.flicker = readNum(L, t, "flicker", 0.0f);
+                l.flickerSpeed = readNum(L, t, "flicker_speed", 6.0f);
+                l.glowRadius = readNum(L, t, "glow_radius", 0.0f);
+                l.glowStrength = readNum(L, t, "glow_strength", 0.0f);
                 lights.push_back(l);
             }
             lua_pop(L, 1);
         }
     }
     lua_pop(L, 1);
+
+    lua_getfield(L, root, "texture_regions");
+    if (lua_istable(L, -1)) {
+        const int n = lua_objlen(L, -1);
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_istable(L, -1)) {
+                const int t = lua_gettop(L);
+                texregion::ImageRegions ir;
+                ir.image = readStr(L, t, "image");
+                ir.enabled = readBool(L, t, "enabled", true);
+                lua_getfield(L, t, "regions");
+                if (lua_istable(L, -1)) {
+                    const int m = lua_objlen(L, -1);
+                    for (int j = 1; j <= m; ++j) {
+                        lua_rawgeti(L, -1, j);
+                        if (lua_istable(L, -1)) {
+                            const int rt = lua_gettop(L);
+                            texregion::Region r;
+                            r.type = readStr(L, rt, "type");
+                            if (r.type.empty()) r.type = texregion::kTypeWindow;
+                            r.shape = shapeFrom(readStr(L, rt, "shape"));
+                            r.pts = readNumList(L, rt, "pts");
+                            r.bitmapFile = readStr(L, rt, "bitmap");
+                            Vec3 c(r.color[0], r.color[1], r.color[2]);
+                            readVec(L, rt, "color", c);
+                            r.color[0] = c.x; r.color[1] = c.y; r.color[2] = c.z;
+                            r.intensity = readNum(L, rt, "intensity", 1.0f);
+                            r.glow = glowFrom(readStr(L, rt, "glow"));
+                            r.onHour = readNum(L, rt, "on_hour", -1.0f);
+                            r.offHour = readNum(L, rt, "off_hour", -1.0f);
+                            r.flicker = readNum(L, rt, "flicker", 0.0f);
+                            r.flickerSpeed = readNum(L, rt, "flicker_speed", 6.0f);
+                            r.lightRadius = readNum(L, rt, "light_radius", 40.0f);
+                            r.lightIntensity = readNum(L, rt, "light_intensity", 3.0f);
+                            r.glowRadius = readNum(L, rt, "glow_radius", 0.0f);
+                            r.glowStrength = readNum(L, rt, "glow_strength", 0.0f);
+                            loadRegionBitmap(file, r);
+                            ir.regions.push_back(std::move(r));
+                        }
+                        lua_pop(L, 1);
+                    }
+                }
+                lua_pop(L, 1);
+                if (!ir.image.empty()) textureRegions.push_back(std::move(ir));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    emissiveOffNodes = readStrList(L, root, "emissive_off_nodes");
 
     lua_getfield(L, root, "characters");
     if (lua_istable(L, -1)) {
@@ -439,6 +564,28 @@ bool SceneEdits::load(const fs::path& file, std::string& error) {
     return true;
 }
 
+void SceneEdits::nameRegionBitmaps(const std::string& map) {
+    for (size_t i = 0; i < textureRegions.size(); ++i)
+        for (size_t j = 0; j < textureRegions[i].regions.size(); ++j) {
+            texregion::Region& r = textureRegions[i].regions[j];
+            if (r.shape == texregion::Shape::Bitmap && !r.bitmap.empty())
+                r.bitmapFile = map + ".reg_" + std::to_string(i) + "_" + std::to_string(j) + ".png";
+        }
+}
+
+bool SceneEdits::writeRegionBitmaps(const std::string& map) const {
+    bool ok = true;
+    const fs::path dir = pathFor(map).parent_path();
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    for (const auto& ir : textureRegions)
+        for (const auto& r : ir.regions) {
+            if (r.shape != texregion::Shape::Bitmap || r.bitmap.empty() || r.bitmapFile.empty()) continue;
+            ok &= ImageUtils::writePNG((dir / r.bitmapFile).string(), r.bw, r.bh, 1, r.bitmap.data());
+        }
+    return ok;
+}
+
 std::string SceneEdits::serialize(const std::string& map) const {
     std::ostringstream o;
     o << "-- Edits of the map \"" << map << "\", written by the editor (Ctrl+S).\n"
@@ -492,9 +639,45 @@ std::string SceneEdits::serialize(const std::string& map) const {
         for (const auto& l : lights)
             o << "        [" << l.index << "] = { position = " << vec(l.position) << ", color = " << vec(l.color)
               << ", intensity = " << num(l.intensity) << ", range = " << num(l.range)
-              << ", enabled = " << (l.enabled ? "true" : "false") << (l.night ? ", night = true" : "") << " },\n";
+              << ", enabled = " << (l.enabled ? "true" : "false") << (l.night ? ", night = true" : "")
+              << (l.onHour >= 0.0f ? ", on_hour = " + num(l.onHour) : std::string())
+              << (l.offHour >= 0.0f ? ", off_hour = " + num(l.offHour) : std::string())
+              << (l.flicker > 0.0f ? ", flicker = " + num(l.flicker) + ", flicker_speed = " + num(l.flickerSpeed) : std::string())
+              << (l.glowRadius > 0.0f ? ", glow_radius = " + num(l.glowRadius) + ", glow_strength = " + num(l.glowStrength) : std::string())
+              << " },\n";
         o << "    },\n";
     }
+    if (!textureRegions.empty()) {
+        o << "    texture_regions = {\n";
+        for (const auto& ir : textureRegions) {
+            o << "        { image = " << quoted(ir.image) << ", enabled = " << (ir.enabled ? "true" : "false") << ", regions = {\n";
+            for (const auto& r : ir.regions) {
+                o << "            { type = " << quoted(r.type) << ", shape = " << quoted(shapeName(r.shape));
+                if (r.shape == texregion::Shape::Bitmap) {
+                    o << ", bitmap = " << quoted(r.bitmapFile);
+                } else if (!r.pts.empty()) {
+                    o << ", pts = {";
+                    for (size_t k = 0; k < r.pts.size(); ++k) o << (k ? ", " : "") << exact(r.pts[k]);
+                    o << "}";
+                }
+                if (texregion::isGlowType(r.type)) {
+                    o << ", color = {" << num(r.color[0]) << ", " << num(r.color[1]) << ", " << num(r.color[2]) << "}"
+                      << ", intensity = " << num(r.intensity) << ", glow = " << quoted(glowName(r.glow));
+                    if (r.onHour >= 0.0f) o << ", on_hour = " << num(r.onHour);
+                    if (r.offHour >= 0.0f) o << ", off_hour = " << num(r.offHour);
+                    if (r.flicker > 0.0f) o << ", flicker = " << num(r.flicker) << ", flicker_speed = " << num(r.flickerSpeed);
+                }
+                if (r.type == texregion::kTypeLamp) {
+                    o << ", light_radius = " << num(r.lightRadius) << ", light_intensity = " << num(r.lightIntensity);
+                    if (r.glowRadius > 0.0f) o << ", glow_radius = " << num(r.glowRadius) << ", glow_strength = " << num(r.glowStrength);
+                }
+                o << " },\n";
+            }
+            o << "        } },\n";
+        }
+        o << "    },\n";
+    }
+    if (!emissiveOffNodes.empty()) o << "    emissive_off_nodes = " << quotedList(emissiveOffNodes) << ",\n";
     if (!characters.empty()) {
         o << "    characters = {\n";
         for (const auto& c : characters) {
@@ -705,8 +888,15 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
         p.radius = l.range;
         // Luz noturna: Engine::updateNightLights liga e desliga pela hora;
         // nasce apagada e o primeiro quadro decide. Apagada na cena fica apagada.
-        p.nightOnly = l.night && l.enabled;
-        p.enabled = l.enabled && !l.night;
+        const bool scheduled = l.onHour >= 0.0f && l.offHour >= 0.0f;
+        p.nightOnly = (l.night || scheduled) && l.enabled;
+        p.enabled = l.enabled && !(l.night || scheduled);
+        p.onHour = l.onHour;
+        p.offHour = l.offHour;
+        p.flickerAmp = l.flicker;
+        p.flickerSpeed = l.flickerSpeed;
+        p.glowRadius = l.glowRadius;
+        p.glowStrength = l.glowStrength;
         ++applied;
     }
     phase("luzes", lights.size());

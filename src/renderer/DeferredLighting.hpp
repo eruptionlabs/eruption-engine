@@ -36,6 +36,16 @@ struct PointLight {
     // When true, Engine toggles `enabled` off/on by time of day instead of
     // leaving it always on (lamp/lantern props: lit only at night).
     bool nightOnly = false;
+    // Horario proprio de uma luz noturna (hora do dia 0..24, negativo = pela
+    // curva do sol) e cintilacao: intensidade*(1 - amp*ruido) a flickerSpeed Hz.
+    // A intensidade de autoria fica em `intensity`; o motor escreve o fator do
+    // quadro em `flickerMul` (Engine::updateNightLights) e o desenho multiplica.
+    float onHour = -1.0f, offHour = -1.0f;
+    float flickerAmp = 0.0f, flickerSpeed = 6.0f;
+    float flickerMul = 1.0f;
+    // Brilho do objeto: superficies a ate' glowRadius da luz (unidades) ganham a
+    // cor dela vezes glowStrength (model_frag.glsl, FrameUBO::glow*). 0 = nao.
+    float glowRadius = 0.0f, glowStrength = 0.0f;
     // Spot: direcao (normalizada) e cosseno da metade da abertura. Direcao
     // zero = luz pontual (o padrao). Luz de janela cai para fora e para baixo.
     Vec3 spotDir = Vec3(0.0f);

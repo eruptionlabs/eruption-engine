@@ -742,9 +742,41 @@ void Engine::updateNightLights() {
         const float r = static_cast<float>(h & 0xFFFFu) / 65535.0f;
         return 0.3f + 0.35f * r; // kLightsOutLo = 0,30 / kLightsOutHi = 0,65
     };
-    for (auto& pl : m_deferredLighting.getPointLights()) {
-        if (pl.nightOnly) pl.enabled = sun < threshold(pl.position);
+    // Luz com horario proprio (on/off em hora do dia) ignora a curva do sol:
+    // quem desenhou o poste disse quando ele acende. Cintilacao: fator por
+    // luz (fase pela posicao, para duas luzes nao piscarem juntas) escrito em
+    // flickerMul; a luz sem cintilacao fica em 1.
+    const float hour = m_dayNightCycle.timeOfDay() * 24.0f;
+    const float now = static_cast<float>(m_timer.elapsed()); // o mesmo relogio do shader (repete com ERUPTION_TEST_FIXED_DT)
+    auto stepLight = [&](PointLight& pl) {
+        if (pl.nightOnly) {
+            if (pl.onHour >= 0.0f && pl.offHour >= 0.0f)
+                pl.enabled = pl.onHour <= pl.offHour ? (hour >= pl.onHour && hour < pl.offHour)
+                                                     : (hour >= pl.onHour || hour < pl.offHour);
+            else pl.enabled = sun < threshold(pl.position);
+        }
+        if (pl.flickerAmp > 0.0f) {
+            const float ph = (pl.position.x * 12.9898f + pl.position.z * 78.233f);
+            const float a = std::sin(now * pl.flickerSpeed * 6.2831853f + ph);
+            const float b = std::sin(now * pl.flickerSpeed * 14.9f + ph * 1.7f);
+            pl.flickerMul = 1.0f - pl.flickerAmp * (0.5f + 0.3f * a + 0.2f * b);
+        } else {
+            pl.flickerMul = 1.0f;
+        }
+    };
+    for (auto& pl : m_deferredLighting.getPointLights()) stepLight(pl);
+    // Luzes dos postes desenhados nas texturas (aba Regions): lista propria,
+    // que entra no desenho junto com as dos vizinhos.
+    if (!m_regionLampLights.empty()) {
+        bool changed = false;
+        for (auto& pl : m_regionLampLights) {
+            const bool was = pl.enabled;
+            stepLight(pl);
+            changed |= was != pl.enabled || pl.flickerAmp > 0.0f;
+        }
+        if (changed) rebuildWorldLights();
     }
+    if (!m_texRegions.empty()) updateRegionSchedule();
     // Luzes dos vizinhos (mundo contínuo): a mesma regra. A lista do quadro
     // copia as deles, então só é refeita quando alguma muda.
     bool regionChanged = false;

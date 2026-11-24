@@ -45,7 +45,7 @@ declare graphics: {
 -- A model is referenced by its name (string) or its index (number, from 1).
 type Model = string | number
 
-type StepGround = { material: string, texture: string, node: string, uv: vector, in_water: boolean, foot: number, direction: vector, contact: string, shape: string, width: number }
+type StepGround = { material: string, texture: string, node: string, surface: string, uv: vector, in_water: boolean, foot: number, direction: vector, contact: string, shape: string, width: number }
 
 -- Events. Call these at the top level of a script, not inside functions.
 declare on: {
@@ -68,7 +68,9 @@ declare on: {
     -- glTF material name ("" when none; on tiled grounds it is the original
     -- texture path), texture = the colour image name, uv = TEXCOORD_0 at the
     -- foot wrapped to 0..1 (u, v, 0; row 0 is the top of the image, as
-    -- sampled when drawing), in_water = a water surface covers the foot (the
+    -- sampled when drawing), surface = the surface type drawn on that texture
+    -- with the editor's Regions tab ("sand", "snow"; "" when none),
+    -- in_water = a water surface covers the foot (the
     -- other fields are then empty). Decide the effect here with world.dust
     -- and world.footprint; the engine has no surface table.
     -- A character with a sprite steps by its own pixels: `contact` is "strike"

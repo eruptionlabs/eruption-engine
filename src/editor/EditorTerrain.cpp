@@ -25,6 +25,12 @@ void Editor::terrainBrushInput(float x, float y, float w, float h) {
     TerrainBrush& b = m_brush;
     const ImGuiIO& io = ImGui::GetIO();
     b.hasCursor = false;
+    if (m_play == PlayState::Editing && m_tool == Tool::Terrain && b.regions) {
+        // Aba Regions: o clique no viewport escolhe a textura e a regiao sob o cursor.
+        if (m_viewportHovered && !io.KeyAlt && !io.WantTextInput && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            regionPickAt((io.MousePos.x - x) / w, (io.MousePos.y - y) / h);
+        return;
+    }
     if (m_play != PlayState::Editing || m_tool != Tool::Terrain) return;
     // Tamanho com [ e ] (como em programas de pintura).
     if (m_viewportHovered && !io.WantTextInput) {
@@ -159,7 +165,7 @@ void Editor::endTerrainStroke() {
 
 void Editor::drawTerrainBrush(float x, float y, float w, float h) {
     const TerrainBrush& b = m_brush;
-    if (m_tool != Tool::Terrain || !b.hasCursor || m_play != PlayState::Editing) return;
+    if (m_tool != Tool::Terrain || !b.hasCursor || m_play != PlayState::Editing || b.regions) return;
     const Mat4 vp = m_engine->camera().viewProjNoJitter();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     auto ring = [&](float radius, ImU32 col, float thick) {
@@ -278,6 +284,7 @@ void Editor::drawWalkOverlay(float x, float y, float w, float h) {
 void Editor::drawTerrainPanel() {
     TerrainBrush& b = m_brush;
     ImGui::SeparatorText(tr("Terrain brush"));
+    b.regions = false; // a aba Regions liga de novo se estiver aberta
     const bool editable = m_engine->terrainEditable();
     auto notEditable = [] {
         ImGui::TextWrapped("%s", tr("This map has no editable ground. Maps made with File > New Map, or with a height "
@@ -315,8 +322,21 @@ void Editor::drawTerrainPanel() {
             drawWalkPanel();
             ImGui::EndTabItem();
         }
+        ImGuiTabItemFlags regionsFlags = ImGuiTabItemFlags_None;
+#if ERUPTION_DEV
+        // ERUPTION_TEST_EDITOR_REGIONS (Editor.cpp): a aba ja' vem aberta.
+        static const bool kForceRegions = std::getenv("ERUPTION_TEST_EDITOR_REGIONS") != nullptr;
+        if (kForceRegions && m_frame < 400) regionsFlags = ImGuiTabItemFlags_SetSelected;
+#endif
+        if (ImGui::BeginTabItem(trw("Regions"), nullptr, regionsFlags)) {
+            b.paint = b.objects = b.walk = false;
+            b.regions = true;
+            drawRegionPanel();
+            ImGui::EndTabItem();
+        }
         ImGui::EndTabBar();
     }
+    if (b.regions) return;
     ImGui::DragFloat(tr("Size"), &b.size, 0.5f, 2.0f, 2000.0f, "%.0f");
     ImGui::SetItemTooltip("%s", tr("Radius on the ground. [ and ] change it in the Scene."));
     ImGui::SliderFloat(tr("Strength"), &b.strength, 1.0f, 200.0f, "%.0f");

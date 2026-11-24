@@ -850,6 +850,45 @@ void Editor::drawInspector() {
             ImGui::Checkbox("##night", &light.nightOnly);
             if (ImGui::IsItemDeactivatedAfterEdit()) { activated = finished = true; }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", tr("Lit only at night (lamps, lanterns)"));
+            // Horario proprio (hora do dia, 0..24): ligado, ignora a curva do sol.
+            {
+                bool sched = light.onHour >= 0.0f && light.offHour >= 0.0f;
+                propertyLabel("Own schedule");
+                if (ImGui::Checkbox("##sched", &sched)) {
+                    light.onHour = sched ? 18.0f : -1.0f;
+                    light.offHour = sched ? 6.0f : -1.0f;
+                    light.nightOnly = light.nightOnly || sched;
+                    activated = finished = true;
+                }
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                    ImGui::SetTooltip("%s", tr("Off: lit with the engine's night curve (follows the sun)."));
+                if (sched) {
+                    propertyLabel("On hour");
+                    ImGui::SliderFloat("##onh", &light.onHour, 0.0f, 24.0f, "%.1f h");
+                    track();
+                    propertyLabel("Off hour");
+                    ImGui::SliderFloat("##offh", &light.offHour, 0.0f, 24.0f, "%.1f h");
+                    track();
+                }
+            }
+            propertyLabel("Flicker");
+            ImGui::SliderFloat("##flk", &light.flickerAmp, 0.0f, 1.0f, "%.2f");
+            track();
+            if (light.flickerAmp > 0.0f) {
+                propertyLabel("Flicker speed");
+                ImGui::SliderFloat("##flks", &light.flickerSpeed, 0.5f, 20.0f, "%.1f Hz");
+                track();
+            }
+            propertyLabel("Object glow");
+            ImGui::DragFloat("##glr", &light.glowRadius, 0.1f, 0.0f, 100.0f, "%.1f");
+            track();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("%s", tr("Surfaces within this radius of the light glow with its color (0 = off)."));
+            if (light.glowRadius > 0.0f) {
+                propertyLabel("Glow strength");
+                ImGui::DragFloat("##gls", &light.glowStrength, 0.01f, 0.0f, 10.0f, "%.2f");
+                track();
+            }
             if (activated && !editing) { editing = true; before = snapshot; }
             if (finished && editing) {
                 editing = false;

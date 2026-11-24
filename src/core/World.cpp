@@ -1281,6 +1281,7 @@ void Engine::rebuildWorldLights() {
     std::vector<PointLight> extra;
     for (const auto& r : m_regions)
         if (r.state == WorldRegion::State::Shown) extra.insert(extra.end(), r.lights.begin(), r.lights.end());
+    extra.insert(extra.end(), m_regionLampLights.begin(), m_regionLampLights.end());
     m_deferredLighting.setExtraPointLights(std::move(extra));
 }
 

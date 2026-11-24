@@ -585,6 +585,31 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
         }
     }
     m_convertedModels.clear();
+    // Regioes por textura do arquivo da cena: trocam a emissiva das imagens com
+    // regiao antes de a malha subir (o slot emissivo vai no vertice).
+    loadRegionsForMap(name);
+    for (auto& g : genericModels) patchRegionEmissive(g);
+    finishRegionLoad();
+#if ERUPTION_DEV
+    // ERUPTION_TEST_LIST_REGION_IMAGES=1: lista no log as imagens e os nos que o
+    // painel Regions oferece (para montar um arquivo de cena de teste a mao).
+    if (std::getenv("ERUPTION_TEST_LIST_REGION_IMAGES")) {
+        for (const auto& img : m_regionImageNames) ERUPTION_LOG_WARN("[REGION_IMAGE] %s", img.c_str());
+        for (const auto& n : m_regionNodeNames) ERUPTION_LOG_WARN("[REGION_NODE] %s", n.c_str());
+    }
+    // ERUPTION_TEST_REGION_SURFACE=<imagem>,<u>,<v>: loga o tipo de superficie
+    // (o que characters.on_step entrega em ground.surface) nesse ponto da imagem.
+    if (const char* q = std::getenv("ERUPTION_TEST_REGION_SURFACE")) {
+        std::string spec = q;
+        const size_t c2 = spec.rfind(','), c1 = c2 == std::string::npos ? c2 : spec.rfind(',', c2 - 1);
+        if (c1 != std::string::npos) {
+            const float u = static_cast<float>(std::atof(spec.substr(c1 + 1, c2 - c1 - 1).c_str()));
+            const float v = static_cast<float>(std::atof(spec.substr(c2 + 1).c_str()));
+            ERUPTION_LOG_WARN("[REGION_SURFACE] (%.2f, %.2f) -> '%s'", u, v,
+                              regionSurfaceAt(spec.substr(0, c1), Vec2(u, v)).c_str());
+        }
+    }
+#endif
 
     std::vector<ModelInstanceDesc> genericInstances;
     for (const auto& m : loadedMap->models) {

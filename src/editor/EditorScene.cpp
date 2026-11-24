@@ -32,7 +32,9 @@ bool sameMatrix(const Mat4& a, const Mat4& b) {
 
 bool sameLight(const PointLight& a, const PointLight& b) {
     return a.position == b.position && a.color == b.color && a.intensity == b.intensity && a.radius == b.radius &&
-           a.enabled == b.enabled && a.nightOnly == b.nightOnly;
+           a.enabled == b.enabled && a.nightOnly == b.nightOnly && a.onHour == b.onHour && a.offHour == b.offHour &&
+           a.flickerAmp == b.flickerAmp && a.flickerSpeed == b.flickerSpeed && a.glowRadius == b.glowRadius &&
+           a.glowStrength == b.glowStrength;
 }
 
 } // namespace
@@ -268,8 +270,19 @@ SceneEdits Editor::currentEdits() const {
         l.range = ls[i].radius;
         l.enabled = ls[i].nightOnly || ls[i].enabled;
         l.night = ls[i].nightOnly;
+        l.onHour = ls[i].onHour;
+        l.offHour = ls[i].offHour;
+        l.flicker = ls[i].flickerAmp;
+        l.flickerSpeed = ls[i].flickerSpeed;
+        l.glowRadius = ls[i].glowRadius;
+        l.glowStrength = ls[i].glowStrength;
         e.lights.push_back(l);
     }
+    // Imagem aberta no painel sem nada desenhado nao entra no arquivo.
+    for (const auto& ir : m_engine->textureRegions())
+        if (!ir.regions.empty() || !ir.enabled) e.textureRegions.push_back(ir);
+    e.emissiveOffNodes = m_engine->emissiveOffNodes();
+    e.nameRegionBitmaps(m_engine->currentMapName());
     if (m_envEdited) {
         e.hasEnvironment = true;
         e.time = m_engine->dayNightCycle().timeOfDay() * 24.0f;
@@ -290,11 +303,13 @@ bool Editor::saveScene() {
         log(LogLevel::Warning, "Stop the game before saving: changes made while playing are thrown away.");
         return false;
     }
-    const std::string text = currentEdits().serialize(map);
+    const SceneEdits edits = currentEdits();
+    const std::string text = edits.serialize(map);
     const auto file = SceneEdits::pathFor(map);
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
     std::ofstream(file, std::ios::binary) << text;
+    if (!edits.writeRegionBitmaps(map)) log(LogLevel::Error, "Could not write the region bitmaps next to the scene file.");
     std::string terrainError;
     if (!m_engine->saveHeightDelta(terrainError)) log(LogLevel::Error, terrainError);
     if (!m_engine->saveSplat(terrainError)) log(LogLevel::Error, terrainError);

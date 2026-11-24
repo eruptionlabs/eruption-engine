@@ -1158,7 +1158,7 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
         ubo.pointLights[activeLights] = Vec4(pl.position, pl.radius);
         
         float animFactor = getAnimationFactor(pl.animType, totalTime);
-        float finalIntensity = pl.intensity * artificialMod * animFactor;
+        float finalIntensity = pl.intensity * pl.flickerMul * artificialMod * animFactor;
         ubo.pointColors[activeLights] = Vec4(pl.color, finalIntensity);
         activeLights++;
     }
@@ -1604,7 +1604,7 @@ void DeferredLighting::renderPointLights(VkCommandBuffer cmd, const Camera& came
         push.lightPos = light.position;
         push.radius = light.radius;
         push.lightColor = light.color;
-        push.intensity = light.intensity;
+        push.intensity = light.intensity * light.flickerMul;
         push.shadowCubemapIndex = light.shadowCubemapIndex;
         push.cameraPos = camera.position();
         push.invViewProj = invViewProj;

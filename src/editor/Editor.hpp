@@ -480,6 +480,7 @@ private:
         bool paint = false; // aba Paint: pinta camadas em vez de esculpir
         bool objects = false; // aba Objects: espalha modelos
         bool walk = false;    // aba Walk: grade de caminhada
+        bool regions = false; // aba Regions: regioes por textura (sem pincel no chao)
         bool walkBlock = true;
         float maxSlope = 40.0f;
         std::vector<uint8_t> walkSnapshot;
@@ -492,6 +493,46 @@ private:
         std::vector<float> snapshot; // delta (ou pesos) inteiro no começo do traço (desfazer)
     } m_brush;
     bool m_terrainDirty = false;
+    // Regioes por textura (EditorRegions.cpp): estado da aba Regions.
+    struct RegionUi {
+        std::string image;           // imagem aberta
+        int sel = -1;                // regiao selecionada
+        int tool = 1;                // ver kRegionTools
+        int newType = 0;             // tipo das regioes novas
+        float brush = 0.02f;         // raio do pincel, fracao da largura
+        int wandTolerance = 24;
+        bool wandContiguous = true;
+        bool showGlow = false;       // previa do brilho no lugar das regioes
+        std::vector<float> draft;    // poligono/laco em andamento (UV)
+        std::vector<float> livePath; // laco: caminho da semente ao cursor
+        bool dragging = false;
+        float drag[4] = {0, 0, 0, 0}; // retangulo/elipse: u0,v0,u1,v1
+        float lastU = 0, lastV = 0;
+        bool stroking = false;
+        bool editing = false;         // um controle de propriedade esta' sendo arrastado
+        texregion::ImageRegions before; // estado antes do gesto (desfazer)
+        // Imagem mostrada (RGBA, no maximo 1024) e as duas texturas da tela.
+        std::vector<uint8_t> rgba;
+        int w = 0, h = 0;
+        GuiTexture albedoTex, overlayTex;
+        bool overlayDirty = true;
+        float overlayAt = 0.0f;
+        std::string loadedImage;      // de qual imagem `rgba`/`wire` vieram
+        texregion::LiveWire wire;
+        int wireCell = -1;
+        bool hasPick = false;         // ultimo clique no viewport: ponto (UV) na imagem aberta
+        float pickU = 0, pickV = 0;
+        std::string pickNode;         // no' da malha do ultimo clique
+    } m_reg;
+    void drawRegionPanel();
+    void regionOpenImage(const std::string& image);
+    void regionRebuildOverlay();
+    texregion::ImageRegions& regionEdit();
+    void regionCommit(const std::string& label);
+    void regionAddLight(const texregion::Region& r);
+    // Clique no viewport com a aba Regions aberta: acha a superficie sob o
+    // cursor, abre a imagem dela e seleciona a regiao que cobre o ponto.
+    bool regionPickAt(float u, float v);
     bool m_waterEdited = false; // nível da água mudado no Inspetor (vai para o scene.luau)
     // Camadas da vista: o que aparece e o que dá para clicar (só no editor).
     enum ViewLayer { LayerMap, LayerAdded, LayerPainted, LayerCharacters, LayerMarkers, LayerNeighbors, LayerCount };

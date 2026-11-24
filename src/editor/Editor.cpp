@@ -154,6 +154,8 @@ void Editor::shutdown() {
         m_thumbs.clear();
         releaseTexture(m_spriteImport.sheetTex);
         releaseTexture(m_mapgen.previewTex);
+        releaseTexture(m_reg.albedoTex);
+        releaseTexture(m_reg.overlayTex);
         m_engine->vulkan().waitIdle();
         collectTextures(true);
     }
@@ -579,6 +581,30 @@ void Editor::update(float dt) {
     // primeira textura, para a captura de tela.
     static const char* testAssetCreator = std::getenv("ERUPTION_TEST_ASSET_CREATOR");
     if (testAssetCreator && m_frame == 40) assetCreatorTestRun(testAssetCreator);
+#if ERUPTION_DEV
+    // ERUPTION_TEST_EDITOR_LIGHT=<n>: no frame 120 seleciona a luz de indice n
+    // (o Inspector dela mostra horario, cintilacao e brilho do objeto).
+    static const char* testLight = std::getenv("ERUPTION_TEST_EDITOR_LIGHT");
+    if (testLight && m_frame == 120) {
+        auto& lights = m_engine->m_deferredLighting.getPointLights();
+        int n = std::atoi(testLight);
+        if (n < 0 || n >= static_cast<int>(lights.size())) {
+            // Sem a luz pedida: cria uma noturna com horario, cintilacao e brilho.
+            PointLight l;
+            l.position = m_engine->camera().target() + Vec3(0.0f, 15.0f, 0.0f);
+            l.nightOnly = true;
+            l.enabled = false;
+            l.onHour = 19.0f;
+            l.offHour = 5.0f;
+            l.flickerAmp = 0.3f;
+            l.glowRadius = 12.0f;
+            l.glowStrength = 0.4f;
+            lights.push_back(l);
+            n = static_cast<int>(lights.size()) - 1;
+        }
+        select({SelectionKind::Light, n});
+    }
+#endif
     // ERUPTION_TEST_EDITOR_SELECT=trecho (teste/prints): seleciona e enquadra o
     // modelo mais perto da câmera cujo nome contém o trecho.
     static const char* testSelect = std::getenv("ERUPTION_TEST_EDITOR_SELECT");
@@ -807,6 +833,75 @@ void Editor::update(float dt) {
         at = std::strchr(at, ';');
         if (at) ++at;
     }
+#if ERUPTION_DEV
+    // ERUPTION_TEST_EDITOR_REGIONS=<imagem>: no frame 190 abre a aba Regions
+    // nessa imagem e desenha, pelo mesmo caminho do mouse (regionEdit e
+    // regionCommit), uma janela retangular, um lampiao elíptico e uma janela
+    // poligonal; poe a hora em 22 h. Com ERUPTION_TEST_EDITOR_SAVE grava a cena.
+    static const char* testRegions = std::getenv("ERUPTION_TEST_EDITOR_REGIONS");
+    if (testRegions && m_frame == 190) {
+        m_tool = Tool::Terrain;
+        regionOpenImage(testRegions);
+        auto add = [&](texregion::Region r) {
+            m_reg.sel = static_cast<int>(regionEdit().regions.size());
+            regionEdit().regions.push_back(std::move(r));
+            regionCommit("Add region");
+        };
+        texregion::Region win;
+        win.shape = texregion::Shape::Rect;
+        win.pts = {0.1f, 0.1f, 0.6f, 0.6f};
+        add(win);
+        texregion::Region lamp;
+        lamp.type = texregion::kTypeLamp;
+        lamp.shape = texregion::Shape::Ellipse;
+        lamp.pts = {0.75f, 0.3f, 0.15f, 0.2f};
+        lamp.glow = texregion::Glow::Light;
+        lamp.onHour = 18.0f;
+        lamp.offHour = 6.0f;
+        lamp.glowRadius = 20.0f;
+        lamp.glowStrength = 0.2f;
+        add(lamp);
+        texregion::Region poly;
+        poly.shape = texregion::Shape::Poly;
+        poly.pts = {0.1f, 0.7f, 0.5f, 0.65f, 0.6f, 0.95f, 0.15f, 0.9f};
+        poly.glow = texregion::Glow::Uniform;
+        poly.color[0] = 0.4f; poly.color[1] = 0.8f; poly.color[2] = 1.0f;
+        add(poly);
+        // Traco de pincel: vira bitmap e vai para um PNG ao lado da cena.
+        texregion::Region brush;
+        brush.shape = texregion::Shape::Bitmap;
+        brush.bw = m_reg.w;
+        brush.bh = m_reg.h;
+        brush.bitmap.assign(size_t(m_reg.w) * m_reg.h, 0);
+        brush.glow = texregion::Glow::Uniform;
+        brush.color[0] = 1.0f; brush.color[1] = 0.3f; brush.color[2] = 0.3f;
+        texregion::strokeLine(brush, m_reg.w * 0.65f, m_reg.h * 0.7f, m_reg.w * 0.9f, m_reg.h * 0.9f, m_reg.w * 0.03f, true);
+        add(brush);
+        m_engine->dayNightCycle().setTimeOfDay(22.0f / 24.0f);
+        m_engine->dayNightCycle().setPaused(true);
+    }
+    // ERUPTION_TEST_REGION_PICK=<u>,<v>: no frame 200 faz o clique do viewport
+    // (aba Regions) nesse ponto da tela (0..1) e loga a imagem e a regiao achadas.
+    static const char* testPick = std::getenv("ERUPTION_TEST_REGION_PICK");
+    if (testPick && m_frame == 200) {
+        float u = 0.5f, v = 0.5f;
+        std::sscanf(testPick, "%f,%f", &u, &v);
+        m_tool = Tool::Terrain;
+        ERUPTION_LOG_WARN("[REGION_PICK] %s | no %s", regionPickAt(u, v) ? m_reg.image.c_str() : "(nada)", m_reg.pickNode.c_str());
+    }
+    // ERUPTION_TEST_NODE_EMISSIVE=<no'>[,on]: no frame 200 desliga (ou liga, com
+    // ",on") a emissiva desse no' pelo mesmo caminho da caixa do painel.
+    static const char* testNode = std::getenv("ERUPTION_TEST_NODE_EMISSIVE");
+    if (testNode && m_frame == 200) {
+        std::string spec = testNode;
+        bool on = false;
+        if (spec.size() > 3 && spec.compare(spec.size() - 3, 3, ",on") == 0) {
+            on = true;
+            spec.resize(spec.size() - 3);
+        }
+        m_engine->setRegionNodeEmissive(spec, on);
+    }
+#endif
     // ERUPTION_TEST_EDITOR_UNDO=<frame>: Ctrl+Z nesse frame.
     static const char* testUndo = std::getenv("ERUPTION_TEST_EDITOR_UNDO");
     if (testUndo && static_cast<long>(m_frame) == std::atol(testUndo)) m_commands.run("edit.undo");

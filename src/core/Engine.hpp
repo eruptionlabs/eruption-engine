@@ -39,6 +39,7 @@
 #include "core/FootstepEffects.hpp"
 #include "core/SpriteContact.hpp"
 #include "renderer/vfx/AmbientParticles.hpp"
+#include "formats/TextureRegions.hpp"
 #include "renderer/VisionMap.hpp"
 #include "core/Vision.hpp"
 #include "formats/Ribbon.hpp"
@@ -1572,7 +1573,79 @@ private:
 public:
     bool createTextureFromFile(const char* path, TextureResource& out);
     bool createTextureFromPixels(const unsigned char* pixels, int w, int h, TextureResource& out);
+
+    // REGIOES POR TEXTURA (formats/TextureRegions.hpp, docs/regioes_de_textura.md).
+    // O motor monta a emissiva das imagens do mapa a partir das regioes do
+    // arquivo da cena, por cima do que veio do pacote: sem regioes o mapa carrega
+    // exatamente como antes. RegionEmissive.cpp.
+    std::vector<texregion::ImageRegions>& textureRegions() { return m_texRegions; }
+    std::vector<std::string>& emissiveOffNodes() { return m_emissiveOffNodes; }
+    // Le as regioes da cena do mapa e troca, nos nos ja convertidos, o nome da
+    // textura emissiva das imagens com regiao (antes de subir para a GPU).
+    void loadRegionsForMap(const std::string& map);
+    void patchRegionEmissive(ModelAsset& model);
+    // Imagens de cor usadas pelo mapa e nos com malha (para a lista do editor).
+    const std::vector<std::string>& regionImages() const { return m_regionImageNames; }
+    const std::vector<std::string>& regionNodes() const { return m_regionNodeNames; }
+    // A emissiva da imagem passa por uma textura do motor (da' para refazer
+    // na hora)? Falso: o mapa precisa ser recarregado para a regiao valer.
+    bool regionLive(const std::string& image) const;
+    // Pixels do albedo da imagem (RGBA/RGB), com cache ate' trocar de mapa.
+    bool regionAlbedo(const std::string& image, const uint8_t*& px, int& w, int& h, int& ch);
+    // Refaz a mascara da imagem e sobe so' essa textura (sem recarregar o mapa).
+    void refreshRegionEmissive(const std::string& image);
+    // Hora do dia (0..24) que a mascara usa para os horarios das regioes.
+    float regionHour() const { return m_dayNightCycle.timeOfDay() * 24.0f; }
+    // Tipo de superficie ("sand", "snow", ...) da regiao sob o ponto (UV 0..1)
+    // da imagem; "" fora de qualquer regiao de superficie. E' o dado que o passo
+    // (characters.on_step, ground.surface) entrega ao jogo.
+    std::string regionSurfaceAt(const std::string& image, const Vec2& uv);
+    // Fim da carga das regioes (depois de patchRegionEmissive em todas as
+    // malhas): acha os postes e, fora do editor, larga o que so' a carga usava.
+    void finishRegionLoad();
+    // Liga/desliga a emissiva de um no' (editor: vale na hora, sem recarregar).
+    void setRegionNodeEmissive(const std::string& node, bool on);
+    // Cintilacao da emissiva e brilho dos objetos no UBO do quadro.
+    void fillEmissiveFrame(FrameUBO& ubo);
 private:
+    struct RegionLampSite { Vec3 pos{0.0f}; std::string image; int region = 0; };
+    // Triangulo de uma superficie com a imagem: centro do UV (0..1) e do mundo.
+    // O editor guarda os de todas as imagens (o ModelAsset e' liberado depois
+    // da carga), para a regiao "lamp" nova achar os postes na hora.
+    struct RegionTri { Vec2 uv; Vec3 pos; };
+    void gatherRegionTris(const ModelNode& node);
+    void rebuildRegionLampSites(const std::string& onlyImage);
+    void syncRegionLamps();
+    void updateEmissiveFlicker();
+    void rebindRegionAliases(const std::string& image);
+    VkImageView regionBlackView();
+    std::unordered_map<std::string, std::vector<RegionTri>> m_regionTris;
+    std::unordered_map<std::string, uint64_t> m_regionLampSig;
+    size_t m_regionTriCount = 0;
+    // Editor: cada (imagem, no') tem um slot proprio que aponta para a mesma
+    // imagem emissiva ou para uma preta - ligar/desligar o no' e' so' trocar o
+    // descritor, sem memoria de imagem nova nem recarregar a malha.
+    struct RegionAlias { std::string image, node; uint32_t slot = 0; };
+    std::unordered_map<std::string, RegionAlias> m_regionAliases;
+    std::unordered_map<std::string, std::string> m_regionPack; // imagem -> nome da emissiva que veio no pacote
+    VkImageView regionAliasView(const std::string& image, const std::string& node);
+    std::unordered_map<std::string, std::vector<uint32_t>> m_regionSlots; // slots de cada imagem (cintilacao)
+    std::vector<std::pair<uint32_t, float>> m_emiFlicker;                  // (slot, fator) do quadro
+    struct RegionSurfaceMap { int w = 0, h = 0; std::vector<uint8_t> id; std::vector<std::string> types; };
+    std::unordered_map<std::string, RegionSurfaceMap> m_regionSurface;
+    std::vector<RegionLampSite> m_regionLampSites;
+    std::vector<PointLight> m_regionLampLights;
+    texregion::ImageRegions* regionEntry(const std::string& image);
+    uint32_t resolveRegionEmissive(const std::string& key);
+    uint32_t uploadRegionEmissive(const std::string& key, const uint8_t* rgba, int w, int h);
+    void updateRegionSchedule();
+    std::vector<texregion::ImageRegions> m_texRegions;
+    std::vector<std::string> m_emissiveOffNodes;
+    std::vector<std::string> m_regionImageNames, m_regionNodeNames;
+    std::unordered_set<std::string> m_regionLive;              // imagens roteadas por textura do motor
+    std::unordered_map<std::string, uint64_t> m_regionSig;     // horarios ativos na ultima mascara
+    struct RegionAlbedo { std::vector<uint8_t> px; int w = 0, h = 0, ch = 4; bool ok = false; };
+    std::unordered_map<std::string, RegionAlbedo> m_regionAlbedo;
     // Decodes a GLB-embedded albedo by name so PBR synthesis can run on
     // textures that have no file on disk. Returns false when not found.
     // Hash da textura embutida como esta' no arquivo (cor: os bytes do PNG/JPEG;
@@ -2685,6 +2758,9 @@ public:
         // da textura nos mapas em ladrilhos), imagem de cor, no', e TEXCOORD_0
         // no ponto (com o wrap em 0..1).
         std::string material, texture, node;
+        // Tipo de superficie da regiao desenhada na textura sob o pe' (areia,
+        // neve, ...; editor, aba Regions). "" = nenhuma regiao de superficie.
+        std::string surface;
         Vec2 uv{0.0f};
         bool hasGround = false;
         bool inWater = false; // waterSurfaceAt no pe'

@@ -251,6 +251,7 @@ const std::vector<Engine::FootstepEvent>& Engine::footstepEvents() {
             ev.texture = std::move(hit.texture);
             ev.node = std::move(hit.node);
             if (hit.hasUv) ev.uv = Vec2(hit.uv.x - std::floor(hit.uv.x), hit.uv.y - std::floor(hit.uv.y));
+            if (hit.hasUv) ev.surface = regionSurfaceAt(ev.texture, ev.uv);
         }
         m_footstepEvents.push_back(std::move(ev));
     }

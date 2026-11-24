@@ -1,5 +1,6 @@
 #pragma once
 
+#include "formats/TextureRegions.hpp"
 #include "math/Types.hpp"
 
 #include <filesystem>
@@ -30,6 +31,15 @@ class Engine;
 //       },
 //       lights = { [3] = { position = {...}, color = {r, g, b}, intensity = 2, range = 40, enabled = true } },
 //                  (night = true: acende so' de noite, como as luzes "nightOnly" do mapa)
+//                  (on_hour/off_hour = hora de acender/apagar, flicker + flicker_speed = cintilacao,
+//                   glow_radius + glow_strength = brilho dos objetos a ate' esse raio da luz)
+//       texture_regions = {   -- regioes desenhadas sobre as texturas do mapa (docs/regioes_de_textura.md)
+//           { image = "nome_da_imagem", enabled = true, regions = {
+//               { type = "window", shape = "rect", pts = {0.2, 0.3, 0.4, 0.5}, color = {1, 0.7, 0.4},
+//                 intensity = 1, glow = "dark", on_hour = 18, off_hour = 6 },
+//           } },
+//       },
+//       emissive_off_nodes = { "no_sem_brilho" },
 //       characters = {
 //           { name = "guarda", sprite = "assets/sprites/guarda.png", position = {...}, facing = 90 },
 //       },
@@ -101,12 +111,25 @@ struct SceneEdits {
         bool enabled = true;
         // Acende so' de noite (PointLight::nightOnly): lampiao, poste, tocha.
         bool night = false;
+        // Horario proprio (hora do dia 0..24; negativo = pela curva do sol) e
+        // cintilacao (amplitude 0..1 da intensidade, velocidade em Hz).
+        float onHour = -1.0f, offHour = -1.0f;
+        float flicker = 0.0f, flickerSpeed = 6.0f;
+        float glowRadius = 0.0f, glowStrength = 0.0f; // brilho do objeto em volta da luz
     };
 
     std::vector<Added> added;
     std::vector<Object> objects;
     std::vector<Copy> copies;
     std::vector<Light> lights;
+    // Regioes por textura (formats/TextureRegions.hpp), por nome de imagem, e os
+    // nos do mapa cuja emissiva fica desligada.
+    std::vector<texregion::ImageRegions> textureRegions;
+    std::vector<std::string> emissiveOffNodes;
+    // Bitmaps (pincel, borracha, varinha): o nome do PNG ao lado do arquivo da
+    // cena e' decidido aqui (antes de serialize) e gravado em writeRegionBitmaps.
+    void nameRegionBitmaps(const std::string& map);
+    bool writeRegionBitmaps(const std::string& map) const;
     // Personagem (NPC): sprite do importador, posição e para onde olha (graus).
     struct Character {
         std::string name, sprite;
@@ -164,7 +187,7 @@ struct SceneEdits {
     bool empty() const {
         return added.empty() && objects.empty() && copies.empty() && lights.empty() && characters.empty() &&
                !hasEnvironment && !hasSpawn && terrainLayers.empty() && !hasWater && neighbors.empty() && areas.empty() && sounds.empty() &&
-               ribbons.empty();
+               ribbons.empty() && textureRegions.empty() && emissiveOffNodes.empty();
     }
 
     static std::filesystem::path pathFor(const std::string& map);

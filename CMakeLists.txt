@@ -1390,6 +1390,13 @@ if(ERUPTION_BUILD_TESTS)
     endif()
     add_test(NAME RibbonTests COMMAND eruption-ribbon-tests)
 
+    add_executable(eruption-texture-regions-tests tests/test_texture_regions.cpp src/formats/TextureRegions.cpp)
+    target_include_directories(eruption-texture-regions-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-texture-regions-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME TextureRegionsTests COMMAND eruption-texture-regions-tests)
+
     add_executable(eruption-spline-debug-tests tests/test_spline_debug.cpp)
     target_include_directories(eruption-spline-debug-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_include_directories(eruption-spline-debug-tests SYSTEM PRIVATE ${glm_SOURCE_DIR})

@@ -1017,6 +1017,7 @@ void Engine::render() {
     frameUbo.reliefPom3 = Vec4(m_reliefHeightNormal, m_reliefSelfShadow, m_reliefSelfShadowSteps, m_reliefFragmentDistance);
     frameUbo.reliefPom4 = Vec4(m_reliefPomNearBoost, m_reliefPomNearDistance, m_reliefSelfShadowHeight, m_reliefSelfShadowLength);
     frameUbo.albedoCalib = Vec4(m_albedoKnee, m_albedoCeiling, 0.0f, 0.0f);
+    fillEmissiveFrame(frameUbo);
     frameUbo.spriteParams = Vec4(m_spriteFilter, m_spriteNormalStrength, 0.0f, 0.0f);
     {
         // Luz de borda (characters.set_rim x preset sprite_rim): a das luzes

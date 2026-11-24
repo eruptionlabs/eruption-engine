@@ -418,6 +418,9 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
         return gpuTex.bindlessSlot;
     }
 
+    // Emissiva montada a partir das regioes do mapa (RegionEmissive.cpp).
+    if (sanitized.rfind("emissive_regions:", 0) == 0) return resolveRegionEmissive(sanitized);
+
     // Textura embutida JA' COMPRIMIDA pelo bake (BC1/BC3 + mips prontos):
     // sobe direto do payload, sem decode, sem blit chain, 4-8x menos VRAM.
     {

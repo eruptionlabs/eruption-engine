@@ -1519,8 +1519,27 @@ void main() {
         uint h = uint(cell.x) * 73856093u ^ uint(cell.y) * 19349663u ^ uint(cell.z) * 83492791u;
         h ^= h >> 13u; h *= 0x5bd1e995u; h ^= h >> 15u;
         const float thr = 0.3 + 0.35 * float(h & 0xFFFFu) / 65535.0;
-        if (u_sunDir.w < thr)
-            emissiveRgb += slotTexture(emissiveIdx, uv).rgb * 2.5;
+        if (u_sunDir.w < thr) {
+            // Cintilacao da imagem (regioes com flicker): o fator da textura vem
+            // por slot de uma tabela curta do UBO, atualizada a cada quadro na
+            // CPU - sem refazer a textura. 0 pares = nada acontece.
+            float flick = 1.0;
+            const uint nPairs = uint(u_emiFlickerInfo.x);
+            for (uint k = 0u; k < nPairs; ++k) {
+                const vec4 pr = u_emiFlicker[k >> 1u];
+                const vec2 e = (k & 1u) == 0u ? pr.xy : pr.zw;
+                if (uint(e.x + 0.5) == emissiveIdx) { flick = e.y; break; }
+            }
+            emissiveRgb += slotTexture(emissiveIdx, uv).rgb * (2.5 * flick);
+        }
+    }
+    // Brilho do objeto perto de uma luz (raio de brilho da luz noturna): a cor
+    // da luz tinge o albedo da superficie com queda quadratica ate' o raio. As
+    // luzes ja vem com horario e cintilacao aplicados; sem nenhuma, o laco nao roda.
+    const uint nGlow = uint(u_glowInfo.x);
+    for (uint k = 0u; k < nGlow; ++k) {
+        const float f = 1.0 - length(inWorldPos - u_glowPos[k].xyz) / u_glowPos[k].w;
+        if (f > 0.0) emissiveRgb += texColor.rgb * u_glowColor[k].rgb * (u_glowColor[k].w * f * f);
     }
     // Perfil "glow" (cristal): luz de dentro para fora, como os shaders de
     // cristal estilizado fazem - o brilho mora na BORDA (fresnel: face de

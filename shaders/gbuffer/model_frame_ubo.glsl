@@ -114,4 +114,13 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_reliefPom4;
     // Calibracao de albedo (FrameUBO::albedoCalib, gbuffer/albedo_calib.glsl).
     vec4 u_albedoCalib;
+    // Brilho dos objetos perto de luzes (FrameUBO::glow*): u_glowInfo.x = quantas
+    // das 8 valem (0 desliga), u_glowPos = xyz + raio, u_glowColor = rgb + forca.
+    vec4 u_glowInfo;
+    vec4 u_glowPos[8];
+    vec4 u_glowColor[8];
+    // Cintilacao da emissiva das regioes (FrameUBO::emiFlicker): pares (slot,
+    // fator), dois por vec4; u_emiFlickerInfo.x = quantos pares valem.
+    vec4 u_emiFlickerInfo;
+    vec4 u_emiFlicker[32];
 };

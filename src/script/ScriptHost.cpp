@@ -796,7 +796,9 @@ void ScriptHost::dispatch(Script& s, float dt, float prevHour, float hour) {
                     if (s.failed) break;
                     lua_pushstring(L, ev.name.c_str());
                     lua_pushvector(L, ev.pos.x, ev.pos.y, ev.pos.z);
-                    lua_createtable(L, 0, 10);
+                    lua_createtable(L, 0, 11);
+                    lua_pushstring(L, ev.surface.c_str());
+                    lua_setfield(L, -2, "surface");
                     lua_pushstring(L, ev.material.c_str());
                     lua_setfield(L, -2, "material");
                     lua_pushstring(L, ev.texture.c_str());

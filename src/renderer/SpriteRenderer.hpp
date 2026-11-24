@@ -205,7 +205,19 @@ struct FrameUBO {
     // desliga), y = albedo_ceiling (teto da luminancia). Anexado no fim: nenhum
     // offset antigo muda e UBO zerado = desligado.
     alignas(16) Vec4 albedoCalib;
+    // Brilho dos objetos perto de luzes (model_frag.glsl): glowInfo.x = quantas
+    // das 8 luzes valem (0 = desligado, saida identica); glowPos = xyz posicao,
+    // w raio; glowColor = rgb cor, w forca (ja com cintilacao e horario).
+    alignas(16) Vec4 glowInfo;
+    alignas(16) Vec4 glowPos[8];
+    alignas(16) Vec4 glowColor[8];
+    // Cintilacao das texturas emissivas das regioes: ate' 64 pares (slot da
+    // textura emissiva, fator); emiFlickerInfo.x = quantos pares valem.
+    alignas(16) Vec4 emiFlickerInfo;
+    alignas(16) Vec4 emiFlicker[32]; // xy = par 2k, zw = par 2k+1
 };
+// 16 KiB e' o minimo que a Vulkan garante para um UBO (maxUniformBufferRange).
+static_assert(sizeof(FrameUBO) <= 16384, "FrameUBO passou do UBO minimo garantido");
 
 // Luz pontual dominante de um sprite (Engine::spriteDominantLights), por
 // instancia do buffer de sprites. 32 B, o mesmo layout std430 do lado da GPU.
