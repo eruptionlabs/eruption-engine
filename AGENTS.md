@@ -92,6 +92,15 @@ to `mobile_beauty` (the desktop look at a lower output resolution); the choice
 is stored in `preset_override.txt` and applies on the next launch, because the
 shader path is chosen before the pipelines exist.
 
+The analytic PBR synthesis (`pbr_synthesis`) scales its relief per texture at
+bake time (`src/utils/PbrSynthStrength.hpp`): indexed-palette, low-resolution
+painted textures come out nearly flat, photographic ones keep full relief. A
+preset may set `pbr_synthesis_strength` (0..1, default 1) to scale all of it,
+and a model may carry `<model>.pbr.json` next to the `.glb`:
+`{"strength": 0..1, "materials": {"name": 0..1}}` (values replace the
+automatic strength; material over model over automatic). Both are part of the
+baked pack key.
+
 ## Building
 
 ```bash

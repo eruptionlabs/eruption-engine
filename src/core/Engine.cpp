@@ -21,6 +21,7 @@
 #include "utils/ImGuiEx.hpp"
 #include "utils/PbrMaterialProfile.hpp"
 #include "utils/PbrTextureLoader.hpp"
+#include "utils/PbrSynthStrength.hpp"
 #include <stb_image.h>
 #include "renderer/LodSystemBridge.hpp"
 #include "utils/BcCompressor.hpp"
@@ -3205,6 +3206,10 @@ void Engine::applyGraphicsPreset() {
     // Carga rapida (projeto "fast_load" ou ERUPTION_FAST_LOAD=1): sem PBR
     // neural; os mapas PBR do disco e os pacotes ja' assados continuam.
     setPbrSynthesisEnabled(p.value("pbr_synthesis", true) && !fastLoadEnabled() && !std::getenv("ERUPTION_TEST_NO_PBR_SYNTH"));
+    // Botao global da forca do relevo sintetizado (0..1, padrao 1): multiplica a
+    // forca medida em cada textura (utils/PbrSynthStrength.hpp). Muda o pacote
+    // assado (entra na chave), por isso vale a partir da proxima carga de mapa.
+    setPbrSynthesisStrength(p.value("pbr_synthesis_strength", 1.0f));
 
     // Teto de resolução de textura. Os 20 sheets 2048² do parana são a maior
     // parte dos pixels do mapa; o teto é o botão mais direto de VRAM. Vale

@@ -125,19 +125,25 @@ bool synthesizePbrForAlbedoKey(const std::string& albedoKey,
 // materials). Safe to call from worker threads.
 // organicHint: a imagem e' usada por material organico (grama, vegetacao,
 // terra, neve) - a altura nao tenta achar rede de rejunte nela.
+// strengthOverride (0..1, < 0 = automatico): forca do relevo sintetizado; ver
+// PbrSynthStrength.hpp. Sem ele a forca e' medida na propria textura
+// (pbrAutoStrength) e multiplicada pelo botao global.
 bool synthesizePbrFromPixels(const std::vector<uint8_t>& pixels, int width, int height,
                              int channels,
                              PbrTextureData& outMrahw, PbrTextureData& outNormal,
-                             bool organicHint = false);
+                             bool organicHint = false, float strengthOverride = -1.0f);
 
 // Only the analytic synthesis (height, normal and cavity derived from the
 // albedo; HeightFromAlbedo.hpp): the last level of synthesizePbrFromPixels,
 // called directly where the result must be the albedo-derived one. With
 // normalStrength = 1 the output is byte-identical to that level.
 // normalStrength scales the relief of the normal map only.
+// detailStrength (0..1) scales normal slope, height amplitude and cavity
+// darkening together (0 = flat, albedo untouched); 1 = byte-identical.
 bool synthesizePbrAnalytic(const std::vector<uint8_t>& pixels, int width, int height, int channels,
                            PbrTextureData& outMrahw, PbrTextureData& outNormal,
-                           bool organicHint = false, float normalStrength = 1.0f);
+                           bool organicHint = false, float normalStrength = 1.0f,
+                           float detailStrength = 1.0f);
 
 // File stem (without "_mrahw.png"/"_normal.png") that resolvePbrTexturePaths()
 // matches for this albedo key, for tools that WRITE maps. Embedded GLB keys

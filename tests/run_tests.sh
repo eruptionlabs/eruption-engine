@@ -78,6 +78,7 @@ run_net test_net_web $NET_SESSION
 run_src test_ribbon src/formats/Ribbon.cpp
 run_src test_texture_regions src/formats/TextureRegions.cpp
 run_src test_pbr_stem
+run_src test_pbr_strength src/utils/PbrSynthStrength.cpp -I build/_deps/nlohmann_json-src/single_include
 run_src test_action_index
 run_src test_vision src/core/Vision.cpp
 run_src test_sprite_contact src/core/SpriteContact.cpp

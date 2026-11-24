@@ -5,6 +5,7 @@
 
 #include "core/Project.hpp"
 #include "utils/HeightFromAlbedo.hpp"
+#include "utils/PbrSynthStrength.hpp"
 #include "ml/NeuralPbr.hpp"
 #include "utils/BcCompressor.hpp"
 #include "utils/PbrDeferred.hpp"
@@ -272,7 +273,7 @@ static bool fillPbrFromNeural(const NeuralPbrMaps& nn, const uint8_t* rgba,
 bool synthesizePbrFromPixels(const std::vector<uint8_t>& pixels, int width, int height,
                              int channels,
                              PbrTextureData& outMrahw, PbrTextureData& outNormal,
-                             bool organicHint) {
+                             bool organicHint, float strengthOverride) {
     if (pixels.empty() || width < 4 || height < 4 || channels < 3) return false;
     // REDE NA RESOLUCAO DA TEXTURA (ate' kNeuralMaxSide). Ela foi treinada em
     // recortes de 256 na resolucao ORIGINAL; reduzir para 512 antes mudava a
@@ -295,12 +296,29 @@ bool synthesizePbrFromPixels(const std::vector<uint8_t>& pixels, int width, int 
             return true;
     }
 
-    return synthesizePbrAnalytic(pixels, width, height, channels, outMrahw, outNormal, organicHint);
+    // Forca do relevo derivado do albedo: medida na textura (PbrSynthStrength.hpp)
+    // ou imposta pelo autor, vezes o botao global.
+    PbrSynthSignals sig;
+    const float base = strengthOverride >= 0.0f ? std::min(strengthOverride, 1.0f)
+                                                : pbrAutoStrength(pixels.data(), width, height, channels, &sig);
+    const float strength = base * pbrSynthesisStrength();
+#if ERUPTION_DEV
+    // ERUPTION_TEST_PBR_STRENGTH_LOG=1 (teste): uma linha por textura com os
+    // sinais e a forca resultante (a tabela do relatorio de calibracao).
+    static const bool kLog = [] {
+        const char* e = std::getenv("ERUPTION_TEST_PBR_STRENGTH_LOG");
+        return e && *e && *e != '0';
+    }();
+    if (kLog)
+        ERUPTION_LOG_WARN("[PBRSTR] lado=%d cores=%d foto=%.2f res=%.2f auto=%.3f override=%.2f final=%.3f",
+                          sig.side, sig.colors, sig.photo, sig.resolution, sig.strength, strengthOverride, strength);
+#endif
+    return synthesizePbrAnalytic(pixels, width, height, channels, outMrahw, outNormal, organicHint, 1.0f, strength);
 }
 
 bool synthesizePbrAnalytic(const std::vector<uint8_t>& pixels, int width, int height, int channels,
                            PbrTextureData& outMrahw, PbrTextureData& outNormal,
-                           bool organicHint, float normalStrength) {
+                           bool organicHint, float normalStrength, float detailStrength) {
     if (pixels.empty() || width < 4 || height < 4 || channels < 3) return false;
     ImageData src;
     src.pixels = pixels;
@@ -332,8 +350,17 @@ bool synthesizePbrAnalytic(const std::vector<uint8_t>& pixels, int width, int he
     // 1 = a inclinacao de sempre (a do bake e da sintese em runtime); o
     // Criador de Assets do editor deixa o autor ajustar so' o relevo da normal.
     hp.normalStrength *= normalStrength;
-    const HeightFromAlbedoResult hfa = heightFromAlbedo(rgba.data(), w, h, hp);
+    detailStrength = std::clamp(detailStrength, 0.0f, 1.0f);
+    hp.normalStrength *= detailStrength;
+    HeightFromAlbedoResult hfa = heightFromAlbedo(rgba.data(), w, h, hp);
     if (hfa.heightMap.empty()) return false;
+    if (detailStrength < 1.0f) {
+        // Altura em torno do neutro (0.5) e cavidade em torno de 1 (sem oclusao)
+        // encolhem juntas com a normal: textura sem detalhe confiavel fica
+        // chapada, sem o escurecimento da AO.
+        for (float& v : hfa.heightMap) v = 0.5f + (v - 0.5f) * detailStrength;
+        for (float& v : hfa.cavity) v = 1.0f - (1.0f - v) * detailStrength;
+    }
 
     const size_t np = static_cast<size_t>(w) * h;
     outNormal.width = w; outNormal.height = h; outNormal.channels = 4;

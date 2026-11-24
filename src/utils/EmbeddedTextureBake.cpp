@@ -11,10 +11,12 @@
 #include "utils/PbrMaterialProfile.hpp"
 #include "utils/PbrDeferred.hpp"
 #include "utils/PbrTextureLoader.hpp"
+#include "utils/PbrSynthStrength.hpp"
 #include "ml/NeuralPbr.hpp"
 
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <chrono>
 #include <cstring>
@@ -54,7 +56,10 @@ constexpr uint32_t kPackMagic = 0x504b5445; // 'ETKP'
 // 10: histerese na mascara de rejunte.
 // 11: raio do chanfro medido so' na regiao estrutural.
 // 14: normal cru (RGBA8) no pacote quando a GPU nao tem BC7.
-constexpr uint32_t kPackVersion = 14;
+// 15: forca da sintese por textura (PbrSynthStrength.hpp): textura pintada em
+//     baixa resolucao sai quase chapada, foto mantem o relevo. Pacote 14 tinha
+//     o relevo cheio em tudo.
+constexpr uint32_t kPackVersion = 15;
 
 void put32(std::vector<uint8_t>& v, uint32_t x) {
     const size_t o = v.size();
@@ -228,10 +233,22 @@ uint32_t synthKeyFor(uint32_t net, uint32_t postVersion) {
     return k > 1u ? k : 2u; // 0 e 1 sao "sem sintese" e "sintese classica"
 }
 
-uint32_t synthKey(bool synthPbr) {
+// Sintese classica com botoes do autor (botao global em graphics.json ou o
+// sidecar do modelo): o pacote depende deles, entao a chave leva um tag (byte
+// alto 0xC1) e o hash dos valores. Sem botao: 1, como sempre.
+bool isPolicyKey(uint32_t k) { return (k >> 24) == 0xC1u; }
+uint32_t policyKey(const std::string& glbPath) {
+    const PbrSidecar sc = glbPath.empty() ? PbrSidecar{} : loadPbrSidecar(glbPath);
+    const float g = pbrSynthesisStrength();
+    if (!sc.present && g >= 1.0f) return 1u;
+    uint32_t h = sc.hash * 16777619u ^ static_cast<uint32_t>(std::lround(g * 1000.0f));
+    return 0xC1000000u | ((h * 2654435761u) >> 8);
+}
+
+uint32_t synthKey(bool synthPbr, const std::string& glbPath) {
     if (!synthPbr) return 0u;
     const uint32_t net = neuralPbrKey();
-    if (net <= 1u) return 1u;
+    if (net <= 1u) return policyKey(glbPath);
     return synthKeyFor(net, postVersion());
 }
 
@@ -252,10 +269,12 @@ bool synthKeyStale(uint32_t cached, bool synthPbr) {
 // Pack assado com a rede numa maquina vale numa maquina SEM rede (ex.: GPU
 // fraca com o PBR vindo pronto) e com a sintese desligada (carga rapida): o
 // trabalho ja' esta' feito. Com rede aqui, so' o pack da mesma rede.
-bool synthKeyAccepted(uint32_t cached, bool synthPbr) {
-    const uint32_t local = synthKey(synthPbr);
+bool synthKeyAccepted(uint32_t cached, bool synthPbr, const std::string& glbPath) {
+    const uint32_t local = synthKey(synthPbr, glbPath);
     if (cached == local) return true;
-    return local <= 1u && cached > 1u;
+    if (local == 0u) return cached > 1u;
+    // Sem rede aqui: vale o pacote de rede, nao o de outra politica de forca.
+    return neuralPbrKey() <= 1u && cached > 1u && !isPolicyKey(cached);
 }
 
 // Impressao digital do .glb: hash de 64 trechos de 64 KB espalhados pelo
@@ -332,7 +351,7 @@ bool parsePackHeader(Reader& r, const std::string& glbPath, uint32_t maxSize, bo
         if (!trustSource && sourceFingerprint(source, realSize) != srcFingerprint) return false;
     }
     if (cachedMax != maxSize || cachedFmt != formatKey()) return false;
-    if (!synthKeyAccepted(cachedSynth, synthPbr)) {
+    if (!synthKeyAccepted(cachedSynth, synthPbr, glbPath)) {
         if (!stale || !synthKeyStale(cachedSynth, synthPbr)) return false;
         *stale = true;
     }
@@ -694,7 +713,7 @@ bool serializePack(const std::string& glbPath, uint32_t maxSize, bool synthPbr, 
     put64(buf, sourceFingerprint(source, srcSize));
     put32(buf, maxSize);
     put32(buf, formatKey());
-    put32(buf, synthKey(synthPbr));
+    put32(buf, synthKey(synthPbr, glbPath));
     put32(buf, static_cast<uint32_t>(res.textures.size()));
     put32(buf, res.hasGroundAlbedo ? 1u : 0u);
     for (int i = 0; i < 3; ++i) {
@@ -1049,6 +1068,16 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
     return bakeFresh(model, maxTextureSize, synthesizePbr, true);
 }
 
+// Em EmbeddedTextureBake (e nao em PbrSynthStrength.cpp) para o teste de parse
+// linkar sem o VFS.
+PbrSidecar loadPbrSidecar(const std::string& glbPath) {
+    std::filesystem::path p(glbPath);
+    p.replace_extension(".pbr.json");
+    std::string text;
+    if (!vfs::readText(p.generic_string(), text)) return {};
+    return parsePbrSidecar(text);
+}
+
 namespace {
 // Bake sem cache (o pack falta, ou o .glb/preset/GPU mudou).
 EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bool synthesizePbr, bool writeCacheFile) {
@@ -1068,6 +1097,27 @@ EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bo
                 organicImage[node.textureNames[k]] = true;
         }
     }
+
+    // Forca da sintese imposta pelo autor (<modelo>.pbr.json): por imagem, pelo
+    // nome do material que a usa (o material vence o modelo; varios materiais
+    // na mesma imagem: vale o menor, o mais conservador). Vazio = automatico.
+    const PbrSidecar sidecar = loadPbrSidecar(model.filePath);
+    std::unordered_map<std::string, float> strengthOverride;
+    if (sidecar.present) {
+        for (const auto& node : model.nodes) {
+            for (size_t k = 0; k < node.textureNames.size() && k < node.pbrTextureNames.size(); ++k) {
+                const float v = sidecar.forMaterial(node.pbrTextureNames[k]);
+                if (v < 0.0f) continue;
+                auto it = strengthOverride.find(node.textureNames[k]);
+                if (it == strengthOverride.end()) strengthOverride[node.textureNames[k]] = v;
+                else it->second = std::min(it->second, v);
+            }
+        }
+    }
+    auto overrideFor = [&](const std::string& image) -> float {
+        const auto it = strengthOverride.find(image);
+        return it != strengthOverride.end() ? it->second : sidecar.strength;
+    };
 
     // Imagem cujo material ja' acha o PBR entregue em disco pelo NOME DO
     // MATERIAL ("Tr-wood6.png" -> Tr-wood6_mrahw.png): o desenho usa esse mapa
@@ -1194,9 +1244,9 @@ EmbeddedBakeResult bakeFresh(const ModelFile& model, uint32_t maxTextureSize, bo
                     int aw = origW, ah = origH;
                     ImageUtils::downscaleRGBA(aw, ah, alt, static_cast<int>(maxTextureSize));
                     ++pbrFromAlt;
-                    synthOk = synthesizePbrFromPixels(alt, w, h, 4, mrahw, normal, organic);
+                    synthOk = synthesizePbrFromPixels(alt, w, h, 4, mrahw, normal, organic, overrideFor(et.name));
                 } else {
-                    synthOk = synthesizePbrFromPixels(pixels, w, h, 4, mrahw, normal, organic);
+                    synthOk = synthesizePbrFromPixels(pixels, w, h, 4, mrahw, normal, organic, overrideFor(et.name));
                 }
             }
             synthMicros += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
