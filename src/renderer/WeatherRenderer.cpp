@@ -1077,6 +1077,8 @@ void WeatherRenderer::updateHeightmap(VkCommandBuffer cmd, VkImageView depthView
                      hmAnchor.z - worldHalf,
                      worldSize,
                      worldSize);
+    m_heightmapOrigin = Vec2(pc.params.x, pc.params.y);
+    ++m_heightmapSerial;
     pc.screenSize = Vec4((float)HEIGHTMAP_SIZE, (float)HEIGHTMAP_SIZE,
                          1.0f / (float)HEIGHTMAP_SIZE, 1.0f / (float)HEIGHTMAP_SIZE);
 

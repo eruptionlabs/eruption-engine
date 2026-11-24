@@ -94,7 +94,11 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     vec4 shoreMask;         // xy = canto XZ da grade, z = 1/lado (0 = sem), w = 1 com lamina
     vec4 shoreWaterColor;   // rgb = cor funda da agua, w = clareza
     vec4 shoreLiquids[8];   // por liquido da grade: x nivel, y modo, z tipo (1 lava), w brilho
+    vec4 rainCover;         // chuva so' onde chega (binding 19): xy canto XZ, z 1/lado (0 = sem), w borda
+    vec4 wetAreas[32];      // world.wet_area: xy centro XZ, z raio, w quanto
+    vec4 wetAreaParams;     // x = quantas
 } lights;
+#include "lighting/wet_cover.glsl"
 // SONDA DE CEU (G36): o proprio skybox.frag em cubemap 32x32 com mips -
 // especular ambiental pre-filtrado (roughness -> lod).
 layout(set = 0, binding = 15) uniform samplerCube skyProbe;
@@ -822,6 +826,9 @@ void main() {
     // brightness, so convert once here and reuse everywhere below.
     vec3 albedoLinear = srgbToLinear(albedo.rgb);
     float wetDrive = lights.rainIntensity * smoothstep(-1.0, 2.0, lights.temperatureC);
+    // So' onde a chuva chega: debaixo de telhado, marquise e copa fica seco
+    // (a mesma grade que tira a gota e o respingo de la').
+    if (wetDrive > 0.0) wetDrive *= rainReachAt(worldPos);
     // Chuva local: com o campo de nuvens, so' molha debaixo das que chovem
     // (borda suave de 70% a 120% do raio do blob).
     if (lights.rainSpotParams.y > 0.5 && wetDrive > 0.0) {
@@ -834,6 +841,9 @@ void main() {
         }
         wetDrive *= local;
     }
+    // Area molhada pelo script (world.wet_area, skill de agua): com ou sem
+    // chuva, coberta ou nao; seca no tempo que o script deu.
+    wetDrive = max(wetDrive, wetAreasAt(worldPos));
     // Beira d'agua (espuma/onda): molha e seca sozinha, com ou sem chuva.
     // A beira e' do plano de liquido mais perto (grade: qual liquido; UBO:
     // nivel, modo e tipo dele). Lava nao molha: tem a beira propria abaixo.

@@ -127,6 +127,15 @@ struct LightingUBO {
     // x = nivel (< -1e8 = sem), y = modo (0 contato, 1 invade, 2 invade com
     // espuma), z = tipo (0 agua, 1 lava), w = brilho da lava. No fim.
     alignas(16) Vec4 shoreLiquids[8];
+    // CHUVA SO' ONDE ELA CHEGA (binding 19, a grade de cima da chuva do
+    // WeatherRenderer: a altura do que esta' mais alto em cada ponto): xy =
+    // canto XZ, z = 1/lado (0 = sem grade: molha tudo), w = borda suave (u).
+    // Telhado, marquise e copa ficam secos por baixo. No fim.
+    alignas(16) Vec4 rainCover;
+    // MOLHADO LOCAL (world.wet_area: skill de agua, balde...): xy = centro XZ,
+    // z = raio, w = quanto (0..1, ja' secando). wetAreaParams.x = quantas.
+    alignas(16) Vec4 wetAreas[32];
+    alignas(16) Vec4 wetAreaParams;
 };
 
 struct DirectionalLight {
@@ -292,6 +301,15 @@ public:
         m_shoreWaterY = has ? waterY : -1.0e9f;
         m_shoreTime = time;
     }
+    // Grade da cobertura da chuva (R32_UINT, a do WeatherRenderer) e onde ela
+    // fica: canto XZ, lado, borda suave. view nula ou lado 0: sem grade (a
+    // chuva molha tudo, como antes).
+    void setRainCover(VkImageView view, const Vec2& origin, float size, float softness);
+    static constexpr uint32_t kWetAreas = 32;
+    void setWetAreas(const std::vector<Vec4>& areas) {
+        m_wetAreaCount = static_cast<uint32_t>(std::min<size_t>(areas.size(), kWetAreas));
+        for (uint32_t i = 0; i < m_wetAreaCount; ++i) m_wetAreas[i] = areas[i];
+    }
     void setWeatherState(float rainIntensity, float snowIntensity, float temperatureC) {
         m_rainIntensity = rainIntensity;
         m_snowIntensity = snowIntensity;
@@ -404,6 +422,18 @@ private:
     Vec4 m_rainSpots[64] = {};
     uint32_t m_rainSpotCount = 0;
     bool m_rainSpotsLocal = false;
+    // Cobertura da chuva: a grade emprestada do WeatherRenderer, ou a 1x1
+    // zerada (nada cobre) enquanto ela nao existe.
+    VkImage m_rainCoverFallbackImg = VK_NULL_HANDLE;
+    VmaAllocation m_rainCoverFallbackAlloc = VK_NULL_HANDLE;
+    VkImageView m_rainCoverFallbackView = VK_NULL_HANDLE;
+    VkSampler m_rainCoverSampler = VK_NULL_HANDLE;
+    VkImageView m_rainCoverBound = VK_NULL_HANDLE; // o que esta' escrito no binding 19
+    VkImageView m_rainCoverView = VK_NULL_HANDLE;  // o pedido (nulo = a reserva)
+    Vec4 m_rainCover = Vec4(0.0f);
+    void bindRainCover();
+    Vec4 m_wetAreas[kWetAreas] = {};
+    uint32_t m_wetAreaCount = 0;
     VkImage m_shoreImg = VK_NULL_HANDLE;
     VmaAllocation m_shoreAlloc = VK_NULL_HANDLE;
     VkImageView m_shoreView = VK_NULL_HANDLE;

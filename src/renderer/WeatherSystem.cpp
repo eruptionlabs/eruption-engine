@@ -1267,22 +1267,23 @@ void WeatherSystem::updateSurfaceWetness(float dt) {
         //    WindField::evaporationFactor() ja' existia e ninguem consumia.
         //  - UMIDADE: ar ja' saturado nao aceita mais vapor. Sob ceu fechado e
         //    umido a poca demora; no deserto some. Vem da assinatura fisica.
-        const float tempC = m_current.temperatureC;
-        const float thermal = glm::clamp(tempC / 30.0f, 0.0f, 1.5f);
-        const float wind = m_wind.evaporationFactor();
-        const float airCanAccept = 1.0f - glm::clamp(m_signature.humidity, 0.0f, 1.0f) * 0.8f;
-
-        // Calibrado por teste (tests/test_surface_wetness.cpp), NAO por
-        // estimativa: o valor anterior (0.035) secava a superficie em ~15 s, e
-        // o comentario afirmava um minuto. Asfalto molhado nao seca em quinze
-        // segundos. 0.014 da' ~60 s a 20 C com ar seco e calmo, e ~40 s num
-        // dia limpo de 30 C - a ordem de grandeza certa para uma pancada.
-        const float kBaseDryPerSecond = 0.014f;
-        const float dry = kBaseDryPerSecond * thermal * wind * airCanAccept;
-        m_surfaceWetness -= dry * dt;
+        m_surfaceWetness -= dryingRate() * dt;
     }
 
     m_surfaceWetness = glm::clamp(m_surfaceWetness, 0.0f, 1.0f);
+}
+
+float WeatherSystem::dryingRate() const {
+    const float tempC = m_current.temperatureC;
+    const float thermal = glm::clamp(tempC / 30.0f, 0.0f, 1.5f);
+    const float wind = m_wind.evaporationFactor();
+    const float airCanAccept = 1.0f - glm::clamp(m_signature.humidity, 0.0f, 1.0f) * 0.8f;
+    // O valor anterior (0.035) secava a superficie em ~15 s, e o comentario
+    // afirmava um minuto. Asfalto molhado nao seca em quinze segundos. 0.014
+    // da' ~60 s a 20 C com ar seco e calmo, e ~40 s num dia limpo de 30 C - a
+    // ordem de grandeza certa para uma pancada.
+    const float kBaseDryPerSecond = 0.014f;
+    return kBaseDryPerSecond * thermal * wind * airCanAccept;
 }
 
 void WeatherSystem::updateLightning(float dt) {

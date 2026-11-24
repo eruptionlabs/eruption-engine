@@ -210,6 +210,23 @@ declare world: {
     is_weather: (name: string) -> boolean,
     -- Weather by name, e.g. "clear", "rainy", "stormy".
     set_weather: (name: string) -> (),
+    -- Wet ground (darker, smoother, puddles in cavities). By default it follows
+    -- the weather: rain soaks the ground in a few seconds, only where the rain
+    -- reaches (roofs, awnings and tree crowns keep it dry underneath), and it
+    -- dries by the air afterwards (heat, wind and dry air speed it up; about a
+    -- minute at 20 C; below freezing it does not dry). set_wetness(target)
+    -- holds it at target (0..1), moving there over `seconds` for a full 0 to
+    -- 1 change (default 5, 0 = at once); set_wetness(nil) goes back to the
+    -- weather. Classic mode is always dry.
+    set_wetness: (target: number?, seconds: number?) -> (),
+    -- Current wet level of the ground (0..1).
+    wetness: () -> number,
+    -- Wets a disc of ground (a water skill, a splash): center `position`,
+    -- `radius` in world units (as the position), amount 0..1 (default 1),
+    -- drying linearly over dry_seconds (default 30). With or without rain,
+    -- covered or not; overlapping areas keep the wettest; at most 32 at once
+    -- (the driest goes first). Cleared on map change.
+    wet_area: (position: vector, radius: number, amount: number?, dry_seconds: number?) -> (),
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
     -- Walkable-path height (Y) at a world position, from the corner heights of

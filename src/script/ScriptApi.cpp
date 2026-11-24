@@ -293,6 +293,26 @@ int world_set_weather(lua_State* L) {
     ScriptBridge::setWeather(t);
     return 0;
 }
+// world.set_wetness(target?, seconds?): fixa o chao molhado (0..1), andando
+// ate' ele em `seconds` de 0 a 1; nil volta ao automatico (chuva e clima).
+int world_set_wetness(lua_State* L) {
+    const float target = lua_isnoneornil(L, 1) ? -1.0f : std::clamp(float(luaL_checknumber(L, 1)), 0.0f, 1.0f);
+    eng().setWetness(target, float(luaL_optnumber(L, 2, 5.0)));
+    return 0;
+}
+int world_wetness(lua_State* L) {
+    lua_pushnumber(L, eng().wetness());
+    return 1;
+}
+// world.wet_area(pos, radius, amount?, dry_seconds?): molha um disco do chao.
+int world_wet_area(lua_State* L) {
+    const Vec3 p = checkVec3(L, 1);
+    const float radius = float(luaL_checknumber(L, 2));
+    const float amount = std::clamp(float(luaL_optnumber(L, 3, 1.0)), 0.0f, 1.0f);
+    const float dry = std::clamp(float(luaL_optnumber(L, 4, 30.0)), 0.1f, 3600.0f);
+    eng().wetArea(p, radius, amount, dry);
+    return 0;
+}
 int world_map(lua_State* L) {
     lua_pushstring(L, eng().currentMapName().c_str());
     return 1;
@@ -3184,6 +3204,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     static const luaL_Reg world[] = {
         ERUPTION_API_FN(world, time), ERUPTION_API_FN(world, set_time), ERUPTION_API_FN(world, time_between),
         ERUPTION_API_FN(world, weather), ERUPTION_API_FN(world, is_weather), ERUPTION_API_FN(world, set_weather),
+        ERUPTION_API_FN(world, set_wetness), ERUPTION_API_FN(world, wetness), ERUPTION_API_FN(world, wet_area),
         ERUPTION_API_FN(world, look), ERUPTION_API_FN(world, set_look), ERUPTION_API_FN(world, set_ambient), ERUPTION_API_FN(world, set_dof), ERUPTION_API_FN(world, set_classic), ERUPTION_API_FN(world, set_sky), ERUPTION_API_FN(world, sky), ERUPTION_API_FN(world, set_classic_water), ERUPTION_API_FN(world, classic), ERUPTION_API_FN(world, set_fog), ERUPTION_API_FN(world, set_border), ERUPTION_API_FN(world, set_exposure), ERUPTION_API_FN(world, set_time_scale), ERUPTION_API_FN(world, time_scale), ERUPTION_API_FN(world, walkable), ERUPTION_API_FN(world, set_nav_rules), ERUPTION_API_FN(world, nav_rules), ERUPTION_API_FN(world, path), ERUPTION_API_FN(world, floor_height), ERUPTION_API_FN(world, screen_to_ground), ERUPTION_API_FN(world, floor_walkable), ERUPTION_API_FN(world, liquid_at), ERUPTION_API_FN(world, footprint), ERUPTION_API_FN(world, dust), ERUPTION_API_FN(world, ground_grid), ERUPTION_API_FN(world, set_motion_blur),
         ERUPTION_API_FN(world, set_chromatic_aberration), ERUPTION_API_FN(world, set_effect_radius),
         ERUPTION_API_FN(world, set_focus), ERUPTION_API_FN(world, set_ground_blend),
@@ -3502,6 +3523,23 @@ declare world: {
     is_weather: (name: string) -> boolean,
     -- Weather by name, e.g. "clear", "rainy", "stormy".
     set_weather: (name: string) -> (),
+    -- Wet ground (darker, smoother, puddles in cavities). By default it follows
+    -- the weather: rain soaks the ground in a few seconds, only where the rain
+    -- reaches (roofs, awnings and tree crowns keep it dry underneath), and it
+    -- dries by the air afterwards (heat, wind and dry air speed it up; about a
+    -- minute at 20 C; below freezing it does not dry). set_wetness(target)
+    -- holds it at target (0..1), moving there over `seconds` for a full 0 to
+    -- 1 change (default 5, 0 = at once); set_wetness(nil) goes back to the
+    -- weather. Classic mode is always dry.
+    set_wetness: (target: number?, seconds: number?) -> (),
+    -- Current wet level of the ground (0..1).
+    wetness: () -> number,
+    -- Wets a disc of ground (a water skill, a splash): center `position`,
+    -- `radius` in world units (as the position), amount 0..1 (default 1),
+    -- drying linearly over dry_seconds (default 30). With or without rain,
+    -- covered or not; overlapping areas keep the wettest; at most 32 at once
+    -- (the driest goes first). Cleared on map change.
+    wet_area: (position: vector, radius: number, amount: number?, dry_seconds: number?) -> (),
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
     -- Walkable-path height (Y) at a world position, from the corner heights of

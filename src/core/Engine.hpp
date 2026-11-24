@@ -761,7 +761,14 @@ public:
     float m_demoStartTime = -1.0f;
     bool m_demoPinStats = false;   // painel F3 fixo no canto direito (video)
     std::vector<Vec4> m_wetTrail; // chuva local: x,z,raio,forca (seca devagar)
-    float m_groundWet = 0.0f;      // 0..1: encharca na chuva, seca em ~90 s
+    float m_groundWet = 0.0f;      // 0..1: encharca na chuva (~6 s), seca pelo clima (WeatherSystem::dryingRate)
+    float m_wetForced = -1.0f;     // world.set_wetness: alvo 0..1; < 0 = segue o clima
+    float m_wetForcedSeconds = 5.0f; // segundos de 0 a 1 ate' o alvo forcado
+    struct WetArea { Vec2 xz; float radius, amount, dry, age; };
+    std::vector<WetArea> m_wetAreas; // world.wet_area, secando
+    const void* m_wetMap = nullptr;  // mapa das areas e da grade de cobertura
+    uint64_t m_wetCoverSerial = 0;   // grade de cobertura so' a partir desta atualizacao (a do mapa de antes nao vale)
+    void updateWetness(float dt);
     bool m_demoHidePanels = false; // esconde Shortcuts/Control Panel/minimapa (video)
     // Painel de toque (ERUPTION_TOUCH_HUD=<px>): hora e clima sem teclado, para
     // celular. Fonte propria no tamanho pedido; nullptr = desligado.
@@ -781,6 +788,15 @@ public:
     // e ceu limpo - para comparar com tudo ligado. Desligar restaura o estado
     // de antes.
     void setClassicMode(bool on);
+    // CHAO MOLHADO. Automatico: encharca com a chuva (so' onde ela chega:
+    // DeferredLighting::setRainCover) e seca pelo clima depois. target 0..1
+    // fixa o molhado (seconds = de 0 a 1 ate' ele); target < 0 volta ao
+    // automatico. No modo classico fica seco.
+    void setWetness(float target, float seconds);
+    float wetness() const { return m_groundWet; }
+    // Molha um disco do chao (skill de agua, balde): amount 0..1, seca em
+    // drySeconds. Coberto ou nao, com ou sem chuva; varios: vale o maior.
+    void wetArea(const Vec3& pos, float radius, float amount, float drySeconds);
     // Luz do modo classico: a do proprio mapa (direcao e cor do sol, cor do
     // ambiente), cor x (ambiente + difusa x N.L).
     void applyClassicLight(LightingEnvironment& env) const;

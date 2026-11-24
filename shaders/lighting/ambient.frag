@@ -49,7 +49,11 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     vec4 shoreMask;         // igual ao directional.frag
     vec4 shoreWaterColor;
     vec4 shoreLiquids[8];   // igual ao directional.frag
+    vec4 rainCover;         // chuva so' onde chega (binding 19): xy canto XZ, z 1/lado (0 = sem), w borda
+    vec4 wetAreas[32];      // world.wet_area: xy centro XZ, z raio, w quanto
+    vec4 wetAreaParams;     // x = quantas
 } lights;
+#include "lighting/wet_cover.glsl"
 
 // PROBES DE IRRADIANCIA (G38): visibilidade do ceu por probe, SH L1 numa
 // textura 3D (lighting/probe_bake.comp). E(N) = c4*L0 + 2*c2*(L1.N); /pi da'
@@ -247,10 +251,12 @@ void main() {
     // inputs as directional.frag -- the two passes must agree.
     {
         vec4 pbrA = texture(gbufferPBR, inUV);
+        const vec3 wpA = worldFromDepth(inUV, texture(gbufferDepth, inUV).r);
         float wetDriveA = lights.rainIntensity * smoothstep(-1.0, 2.0, lights.temperatureC);
+        // So' onde a chuva chega (igual ao directional.frag).
+        if (wetDriveA > 0.0) wetDriveA *= rainReachAt(wpA);
         // Chuva local (igual ao directional.frag): so' debaixo das nuvens que chovem.
         if (lights.rainSpotParams.y > 0.5 && wetDriveA > 0.0) {
-            vec3 wpA = worldFromDepth(inUV, texture(gbufferDepth, inUV).r);
             float localA = 0.0;
             int nA = int(lights.rainSpotParams.x);
             for (int i = 0; i < nA; ++i) {
@@ -259,8 +265,9 @@ void main() {
             }
             wetDriveA *= localA;
         }
+        // Area molhada pelo script (skill de agua): com ou sem chuva, coberta ou nao.
+        wetDriveA = max(wetDriveA, wetAreasAt(wpA));
         // Beira d'agua (espuma/onda): molha e seca sozinha, com ou sem chuva.
-        const vec3 wpA = worldFromDepth(inUV, texture(gbufferDepth, inUV).r);
         const vec3 beiraGA = shoreMaskAt(wpA);
         const vec4 liqA = lights.shoreLiquids[int(beiraGA.y)];
         const bool lavaA = liqA.z > 0.5;

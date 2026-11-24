@@ -62,6 +62,9 @@ public:
     // deve consumir. Molhar e' rapido; secar e' lento e depende de temperatura,
     // vento e umidade do ar.
     float surfaceWetness() const { return m_surfaceWetness; }
+    // Quanto uma superficie molhada seca por segundo agora (0..~0,03): calor,
+    // vento e ar seco aceleram; abaixo de zero nao seca. ~60 s de 1 a 0 a 20 C.
+    float dryingRate() const;
 
     // Approximate ambient temperature in Celsius from the active weather category
     // and intensity. Used by the PBR semantic material system.

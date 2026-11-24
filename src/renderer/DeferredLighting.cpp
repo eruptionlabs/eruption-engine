@@ -111,6 +111,13 @@ void DeferredLighting::shutdown() {
         m_shoreImg = VK_NULL_HANDLE; m_shoreView = VK_NULL_HANDLE;
     }
     if (m_shoreSampler != VK_NULL_HANDLE) { vkDestroySampler(m_ctx->device(), m_shoreSampler, nullptr); m_shoreSampler = VK_NULL_HANDLE; }
+    if (m_rainCoverFallbackImg != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_ctx->device(), m_rainCoverFallbackView, nullptr);
+        vmaDestroyImage(m_ctx->allocator(), m_rainCoverFallbackImg, m_rainCoverFallbackAlloc);
+        m_rainCoverFallbackImg = VK_NULL_HANDLE; m_rainCoverFallbackView = VK_NULL_HANDLE;
+    }
+    if (m_rainCoverSampler != VK_NULL_HANDLE) { vkDestroySampler(m_ctx->device(), m_rainCoverSampler, nullptr); m_rainCoverSampler = VK_NULL_HANDLE; }
+    m_rainCoverBound = VK_NULL_HANDLE;
     if (m_sphereVertexBuffer != VK_NULL_HANDLE) {
         vmaDestroyBuffer(m_ctx->allocator(), m_sphereVertexBuffer, m_sphereVertexAlloc);
         m_sphereVertexBuffer = VK_NULL_HANDLE;
@@ -205,6 +212,36 @@ void DeferredLighting::resize(uint32_t width, uint32_t height) {
     if (grid.view != VK_NULL_HANDLE) setIrradianceProbes(grid.view, grid.sampler, grid.min, grid.invExtent, grid.enabled);
     // E sem a grade da beira (o init a recria vazia).
     if (!shorePx.empty()) setShoreMask(shorePx, shoreW, shoreH, shoreOrigin, shoreInvSize);
+    // A cobertura da chuva: o init escreveu a reserva; volta a grade pedida.
+    bindRainCover();
+}
+
+void DeferredLighting::setRainCover(VkImageView view, const Vec2& origin, float size, float softness) {
+    m_rainCoverView = size > 0.0f ? view : VK_NULL_HANDLE;
+    m_rainCover = m_rainCoverView != VK_NULL_HANDLE ? Vec4(origin.x, origin.y, 1.0f / size, std::max(softness, 0.01f)) : Vec4(0.0f);
+    bindRainCover();
+}
+
+// Escreve o binding 19 so' quando a view muda (o set e' UPDATE_AFTER_BIND,
+// mas reescrever igual todo quadro e' trabalho a toa).
+void DeferredLighting::bindRainCover() {
+    VkImageView view = m_rainCoverView != VK_NULL_HANDLE ? m_rainCoverView : m_rainCoverFallbackView;
+    if (view == VK_NULL_HANDLE || view == m_rainCoverBound || m_rainCoverSampler == VK_NULL_HANDLE) return;
+    VkDescriptorImageInfo info{};
+    info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    info.imageView = view;
+    info.sampler = m_rainCoverSampler;
+    for (uint32_t i = 0; i < MAX_FRAMES; ++i) {
+        VkWriteDescriptorSet wd{};
+        wd.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wd.dstSet = m_descSets[i];
+        wd.dstBinding = 19;
+        wd.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wd.descriptorCount = 1;
+        wd.pImageInfo = &info;
+        vkUpdateDescriptorSets(m_ctx->device(), 1, &wd, 0, nullptr);
+    }
+    m_rainCoverBound = view;
 }
 
 void DeferredLighting::setEnvironment(const LightingEnvironment& env) {
@@ -392,7 +429,9 @@ void DeferredLighting::createPipelines() {
     // 18 = GRADE DA BEIRA DOS LIQUIDOS (sampler2D RGBA16F: proximidade, qual
     //      liquido, altura da superficie dele)
     //      - setShoreMask ao carregar mapa e ao remontar as lavas.
-    bindings.resize(19);
+    // 19 = COBERTURA DA CHUVA (usampler2D R32_UINT, a grade de cima do
+    //      WeatherRenderer; reserva 1x1 zerada) - setRainCover.
+    bindings.resize(20);
     for (uint32_t b = 12; b <= 15; ++b) {
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -411,6 +450,10 @@ void DeferredLighting::createPipelines() {
     bindings[18].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[18].descriptorCount = 1;
     bindings[18].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[19].binding = 19;
+    bindings[19].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[19].descriptorCount = 1;
+    bindings[19].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     // UPDATE_AFTER_BIND: estes sets sao reescritos por frame com as MESMAS
     // views enquanto o CB do frame anterior ainda esta' pendente - sem a flag
@@ -684,7 +727,7 @@ void DeferredLighting::createSsaoPipelines() {
 void DeferredLighting::createDescriptors() {
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 18 * MAX_FRAMES;
+    poolSizes[0].descriptorCount = 19 * MAX_FRAMES;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 8 * MAX_FRAMES;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; // binding 16 (SH da sonda de ceu)
@@ -706,6 +749,49 @@ void DeferredLighting::createDescriptors() {
     vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, m_descSets);
     // Binding 18 precisa de imagem valida desde o inicio: grade vazia 1x1.
     setShoreMask(std::vector<float>(4, 0.0f), 1, 1, Vec2(0.0f), 0.0f);
+    // Binding 19 tambem: grade de cobertura 1x1 zerada (nada cobre).
+    {
+        VkDevice dev = m_ctx->device();
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = si.minFilter = VK_FILTER_NEAREST; // inteiro: sem filtro
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.maxLod = 0.0f;
+        vkCreateSampler(dev, &si, nullptr, &m_rainCoverSampler);
+        if (m_ctx->createImage(1, 1, VK_FORMAT_R32_UINT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                               VMA_MEMORY_USAGE_GPU_ONLY, m_rainCoverFallbackImg, m_rainCoverFallbackAlloc)) {
+            VkImageViewCreateInfo vi{};
+            vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image = m_rainCoverFallbackImg;
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = VK_FORMAT_R32_UINT;
+            vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCreateImageView(dev, &vi, nullptr, &m_rainCoverFallbackView);
+            VkImage img = m_rainCoverFallbackImg;
+            m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+                VkImageMemoryBarrier b{};
+                b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image = img;
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+                b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+            });
+        }
+        m_rainCoverBound = VK_NULL_HANDLE;
+        bindRainCover();
+    }
 
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         // Bind shadow UBO to set
@@ -1105,6 +1191,9 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     ubo.shoreMask = Vec4(m_shoreMask.x, m_shoreMask.y, m_shoreMask.z, static_cast<float>(m_shoreSwashMode));
     ubo.shoreWaterColor = Vec4(m_shoreWaterColor, std::max(m_shoreClarity, 0.1f));
     for (uint32_t i = 0; i < kShoreLiquids; ++i) ubo.shoreLiquids[i] = m_shoreLiquids[i];
+    ubo.rainCover = m_rainCover;
+    for (uint32_t i = 0; i < m_wetAreaCount; ++i) ubo.wetAreas[i] = m_wetAreas[i];
+    ubo.wetAreaParams = Vec4(static_cast<float>(m_wetAreaCount), 0.0f, 0.0f, 0.0f);
     ubo.snowIntensity = m_snowIntensity;
     ubo.temperatureC = m_temperatureC;
     ubo.ambientSky = Vec4(m_env.ambientSkyColor, 0.0f);

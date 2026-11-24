@@ -756,16 +756,7 @@ void Engine::render() {
             m_deferredLighting.setShoreLiquid(s, Vec4(nivel, float(modo), 1.0f, brilho));
         }
     }
-    // Chao encharca com a chuva (~6 s) e seca devagar quando ela para: o
-    // roughness volta ao normal em kSeca segundos, nao de uma vez.
-    {
-        constexpr float kSeca = 90.0f;
-        const float dtw = std::min(m_timer.deltaTime(), 0.1f);
-        const float rain = m_weatherSystem.current().rainIntensity;
-        const float alvo = rain > 0.02f ? std::min(1.0f, 0.4f + rain) : 0.0f;
-        if (alvo > m_groundWet) m_groundWet += (alvo - m_groundWet) * (1.0f - std::exp(-dtw / 6.0f));
-        else m_groundWet = std::max(alvo, m_groundWet - dtw / kSeca);
-    }
+    updateWetness(std::min(m_timer.deltaTime(), 0.1f));
     m_deferredLighting.setWeatherState(m_groundWet,
                                        m_weatherSystem.current().snowIntensity,
                                        m_weatherSystem.temperatureC());

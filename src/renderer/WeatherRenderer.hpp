@@ -127,6 +127,13 @@ public:
 
     // Returns the blurred heightmap written this frame.  Valid after updateHeightmapOnly().
     VkImageView heightmapView() const { return m_heightmapBlurView; }
+    // Onde a grade da ultima atualizacao fica (canto XZ, lado), e se ja'
+    // houve alguma: a iluminacao a le' no quadro seguinte para molhar so'
+    // onde a chuva chega.
+    bool heightmapWritten() const { return m_heightmapSerial > 0; }
+    uint64_t heightmapSerial() const { return m_heightmapSerial; } // atualizacoes ate' agora
+    Vec2 heightmapOrigin() const { return m_heightmapOrigin; }
+    float heightmapWorldSize() const { return HEIGHTMAP_WORLD_SIZE; }
     VkSampler heightmapSampler() const { return m_heightmapSampler; }
 
     // Top-down orthographic depth pass (always looks straight down).
@@ -244,6 +251,8 @@ public:
     // texel goes 0.94m -> 1.88m (roof/terrain rain occlusion unaffected —
     // buildings are many meters across).
     static constexpr float HEIGHTMAP_WORLD_SIZE = 960.0f;
+    uint64_t m_heightmapSerial = 0;
+    Vec2 m_heightmapOrigin = Vec2(0.0f);
 
     // Max rain followers / cross-cloud occluders. The Engine cap is
     // category-driven: every spawned rainy cloud in the Rain/Extreme group
