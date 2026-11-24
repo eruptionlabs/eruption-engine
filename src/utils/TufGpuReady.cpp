@@ -3,6 +3,7 @@
 #include "core/JobSystem.hpp"
 #include "core/Logger.hpp"
 #include "formats/GltfParser.hpp"
+#include "utils/AssetVfs.hpp"
 #include "utils/BcCompressor.hpp"
 #include "utils/EmbeddedTextureBake.hpp"
 #include "utils/ImageUtils.hpp"
@@ -170,6 +171,14 @@ bool unpackExtras(const std::string& key, const std::vector<uint8_t>& stored, co
 } // namespace
 
 bool setupOfflineTextureBake() {
+    // Sem o data/graphics.json do motor (executado de outra pasta) so' o patch do jogo entra na lista de
+    // combinacoes: sai uma companheira com a etiqueta errada, que o motor nao acha ou, pior, um .tuf que
+    // mantem a companheira velha. Melhor parar aqui.
+    std::string graphicsText;
+    if (!vfs::readText("data/graphics.json", graphicsText)) {
+        ERUPTION_LOG_ERROR("[TUFGPU] data/graphics.json nao encontrado: rode --gpu-ready na pasta do motor");
+        return false;
+    }
     bcCompressorInit();
     BcFormatSupport s;
     s.bc1 = s.bc3 = s.bc5 = s.bc7 = true;

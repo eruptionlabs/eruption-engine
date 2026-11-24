@@ -185,7 +185,7 @@ int eruptionMain(int argc, char** argv) {
                             std::fprintf(stderr, "aviso: projeto %s nao abriu: %s\n", proj, perr.c_str());
                     }
                     if (!eruption::setupOfflineTextureBake()) {
-                        std::fprintf(stderr, "erro: o compressor BC nao esta' disponivel neste build\n");
+                        std::fprintf(stderr, "erro: o assador de texturas nao esta' disponivel (compressor BC deste build, ou data/graphics.json fora da pasta atual)\n");
                         return 1;
                     }
                 }

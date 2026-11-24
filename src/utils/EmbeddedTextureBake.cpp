@@ -982,6 +982,25 @@ bool parseEmbeddedBakePackBytes(const std::vector<uint8_t>& buf, EmbeddedBakeRes
     return true;
 }
 
+namespace {
+// .glb de um .tuf com texturas prontas: as imagens tiradas dele so' existem no pacote de texturas. Um
+// pacote de outro conteudo do .glb (companheira velha que o .tuf manteve ao reempacotar o mapa) nao as tem,
+// e sem este aviso a falha aparece so' como "failed to decode" por imagem.
+void warnStrippedNotInPack(const ModelFile& model, const EmbeddedBakeResult& res) {
+    if (!vfs::tufGpuReady(model.filePath)) return;
+    size_t missing = 0;
+    std::string first;
+    for (const EmbeddedTexture& et : model.embeddedTextures) {
+        if (!et.encodedData.isDeferred() || res.textures.count(et.name)) continue;
+        if (missing++ == 0) first = et.name;
+    }
+    if (missing)
+        ERUPTION_LOG_ERROR("[TUFGPU] '%s': %zu imagens tiradas do .glb nao estao no pacote de texturas (ex.: '%s'): "
+                           "o pacote e' de outro conteudo do .glb. Reempacote o mapa com --gpu-ready",
+                           model.filePath.c_str(), missing, first.c_str());
+}
+} // namespace
+
 EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxTextureSize,
                                         bool synthesizePbr, bool allowDeferredPbr) {
     EmbeddedBakeResult res;
@@ -999,6 +1018,7 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
     bool stale = false;
     if (allowDeferredPbr && !model.filePath.empty() && !dumpRequested &&
         readCacheDeferred(model.filePath, maxTextureSize, synthesizePbr, res, &stale)) {
+        warnStrippedNotInPack(model, res);
         return res;
     }
     res = EmbeddedBakeResult{};
@@ -1008,6 +1028,7 @@ EmbeddedBakeResult bakeEmbeddedTextures(const ModelFile& model, uint32_t maxText
                           stale ? " (pos-processo de PBR anterior, usado como esta')" : "",
                           model.filePath.c_str(), res.textures.size(),
                           static_cast<double>(res.bytes) / (1024.0 * 1024.0));
+        warnStrippedNotInPack(model, res);
         return res;
     }
     res = EmbeddedBakeResult{};
