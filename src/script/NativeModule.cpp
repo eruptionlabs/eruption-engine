@@ -563,6 +563,14 @@ bool NativeModule::activate(const EruptionModule* mod, const fs::path& file, voi
     }
     Logger::warning("[native] %s %s (%zu function(s) for the scripts)", reloading ? "reloaded" : "loaded",
                     file.filename().string().c_str(), m_exposed.size() + m_exposedV.size());
+    // Recarga com o jogo rodando: os scripts ficam sabendo (native.on("reloaded")).
+    // Uma conexao que o modulo nao passou pelo state (socket, thread) morre em
+    // silencio com a biblioteca velha; o evento deixa o script reconectar ou
+    // voltar a uma tela limpa em vez de esperar pacotes que nao chegam.
+    if (reloading) {
+        const EruptionValue kept = eruption_bool(reloaded ? 1 : 0);
+        queueEvent("reloaded", &kept);
+    }
     // Recarregado com o jogo rodando: continua de onde estava (sem start de novo).
     return true;
 }
@@ -756,6 +764,9 @@ const char* NativeModule::apiDefinitions() {
 -- native.on("event", fn) listens to events the module emits (delivered once per
 -- frame, before the scripts' on_update). Saving a .cpp file rebuilds and
 -- reloads the module while the game runs (desktop); Android links it in.
+-- After such a reload the engine sends native.on("reloaded", fn(stateKept)):
+-- anything the module did not keep in host->state (an open socket, a thread)
+-- is gone, so this is the place to reconnect or go back to a clean screen.
 declare native: {
     on: (event: string, handler: (any) -> ()) -> (),
     call: (name: string, ...any) -> any,

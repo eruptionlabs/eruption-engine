@@ -19,6 +19,14 @@
  * own globals do not). Changing the layout of that state is the module's job:
  * `reloaded` tells load() it is getting the previous bytes back.
  *
+ * Connections across a reload: the old library is closed (dlclose) before the
+ * new one loads, so a socket, a thread or a handle kept in a global dies with
+ * it, silently. Keep the descriptor in host->state and do not close it in
+ * unload(host, 1); stop and join any thread there (its code is about to be
+ * unmapped) and start it again in load(host, 1). After every reload the engine
+ * sends the scripts the event "reloaded" (value: true when state was kept), so
+ * a script can reconnect or return to a clean screen.
+ *
  * Scripts call the functions the module exposes as native.<name>(...), with
  * numbers in and one number out (API 1), or with any EruptionValue in and out
  * (API 2: expose_value). A module can also push events to the scripts with
