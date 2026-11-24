@@ -37,6 +37,7 @@
 #include "renderer/CloudLayerRenderer.hpp"
 #include "renderer/vfx/VfxSystem.hpp"
 #include "core/FootstepEffects.hpp"
+#include "core/SpriteContact.hpp"
 #include "renderer/vfx/AmbientParticles.hpp"
 #include "renderer/VisionMap.hpp"
 #include "core/Vision.hpp"
@@ -367,6 +368,9 @@ public:
         // largura do quadro; largura 0 = sem medida. Vao nos bits 16-31 das
         // flags do sprite (SpriteFlags::footBits) para o disco de contato.
         uint8_t footWidth = 0, footCenter = 128;
+        // As ultimas linhas opacas, em bits (SpriteContact.hpp): a silhueta de
+        // contato dos passos. Nulo = quadro vazio ou textura de outra origem.
+        std::shared_ptr<const SpriteContactRows> contact;
     };
     struct LoadedSprite {
         AnimFile act;
@@ -399,6 +403,9 @@ public:
                 if (a.name == n) return &a;
             return nullptr;
         }
+        // Contato dos pes por acao (indice da acao), montado na primeira vez
+        // que ela anda: a forma que toca o chao, lida dos pixels.
+        std::unordered_map<int, std::shared_ptr<contact::Action>> contactActions;
     };
     // Personagem da cena (NPC): ver core/Characters.cpp.
     struct SceneCharacter {
@@ -410,6 +417,17 @@ public:
         float stepOdometer = 0.0f;
         int stepFoot = 0;
         bool stepTracked = false;
+        // Passo por pixel (trackContactSteps): medida do quadro (distancia
+        // andada, direcao, velocidade), se o sprite manda nos passos, o ultimo
+        // quadro mostrado (acao, quadro) e a distancia andada arrastando.
+        float stepDist = 0.0f, stepSpeed = 0.0f;
+        Vec2 stepDir{0.0f, 1.0f};
+        bool contactDriven = false;
+        int contactAction = -1, contactFrame = -1;
+        float dragOdometer = 0.0f;
+        // Direcao sem 2 pisadas por ciclo detectadas: passada, mas com a forma do sprite.
+        std::string strideShape;
+        float strideWidth = 0.0f;
         float facing = 0.0f; // graus; 0 = olhando para +Z
         bool visible = true;
         bool removed = false; // apagado no editor (desfazer traz de volta)
@@ -2622,6 +2640,12 @@ public:
         Vec2 dir{0.0f, 1.0f}; // direcao horizontal do andar (unitaria)
         int foot = 0;    // 0 = esquerdo, 1 = direito
         float speed = 0.0f; // u/s no passo
+        // Origem do passo: 0 = passada (sem sprite: modelo 3D), 1 = pe' que
+        // pisou (strike), 2 = corpo arrastando (drag). Com 1 e 2 `shape` e' a
+        // textura gerada da forma que toca o chao e `width` a largura dela.
+        int contact = 0;
+        std::string shape;
+        float width = 0.0f;
     };
     const std::vector<CharacterStep>& characterSteps() const { return m_characterSteps; }
     // Agua de superficie no ponto (x, z): true com o nivel em *level quando ha'
@@ -2637,6 +2661,9 @@ public:
         Vec2 dir{0.0f, 1.0f};
         int foot = 0;
         float speed = 0.0f;
+        int contact = 0;       // CharacterStep::contact
+        std::string shape;     // textura da forma de contato ("" = passada)
+        float width = 0.0f;    // largura da forma, em metros (o `size` do world.footprint)
         // Triangulo de chao embaixo do pe': material do glTF (o caminho original
         // da textura nos mapas em ladrilhos), imagem de cor, no', e TEXCOORD_0
         // no ponto (com o wrap em 0..1).
@@ -2656,6 +2683,15 @@ public:
         float life = 10.0f;    // s ate' sumir (suave nos ultimos 30%)
         float alpha = 0.6f;
         bool mirror = false;   // textura espelhada (pe' direito)
+        // Forma de contato (CharacterStep::shape): vale no lugar de `texture`,
+        // com a ponta para a direcao do andar. `size`, se dado, e' a largura
+        // da forma; sem ele, a estimada das 8 direcoes do sprite. Sem `color`,
+        // preta: a marca so' escurece o chao, que guarda o proprio tom (cor
+        // somada ganha a luz de ceu das particulas e sai cinza-azulada).
+        std::string shape;
+        bool sizeGiven = false;
+        bool colorGiven = false;
+        std::string owner;     // de quem e' a marca (o rastro tem teto por dono)
     };
     struct DustParams {
         Vec3 color{0.6f, 0.52f, 0.4f};
@@ -2674,6 +2710,11 @@ private:
     FootstepEffects m_footsteps;
     bool footSurfaceAt(const Vec3& pos, ModelRenderer::SurfaceHit& hit);
     void trackCharacterStep(SceneCharacter& c, float dt);
+    // Passos pelos pixels do sprite (FootstepEffects.cpp): chamado por
+    // drawCharacter com a acao e o quadro mostrados.
+    Vec3 groundUnderSpritePoint(const Vec3& anchor, float sx, float up) const;
+    void trackContactSteps(SceneCharacter& c, int actionIdx, int shownFrame, bool moving, const Vec3& anchor);
+    void pushCharacterStep(const SceneCharacter& c, const Vec3& pos, int contact, const std::string& shape, float width);
     struct WalkRate { float cell = 0.0f, refMs = 150.0f; };
     WalkRate m_walkRate;
     std::unordered_map<std::string, WalkRate> m_walkRateByName;

@@ -79,6 +79,7 @@ run_src test_ribbon src/formats/Ribbon.cpp
 run_src test_pbr_stem
 run_src test_action_index
 run_src test_vision src/core/Vision.cpp
+run_src test_sprite_contact src/core/SpriteContact.cpp
 run_src test_relief_bake src/renderer/ReliefBake.cpp
 run_src test_nav_height
 run_src test_bandwidth_meter src/renderer/BandwidthMeter.cpp src/utils/Profiler.cpp src/core/Logger.cpp -lpthread

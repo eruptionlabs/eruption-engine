@@ -796,7 +796,7 @@ void ScriptHost::dispatch(Script& s, float dt, float prevHour, float hour) {
                     if (s.failed) break;
                     lua_pushstring(L, ev.name.c_str());
                     lua_pushvector(L, ev.pos.x, ev.pos.y, ev.pos.z);
-                    lua_createtable(L, 0, 7);
+                    lua_createtable(L, 0, 10);
                     lua_pushstring(L, ev.material.c_str());
                     lua_setfield(L, -2, "material");
                     lua_pushstring(L, ev.texture.c_str());
@@ -811,6 +811,15 @@ void ScriptHost::dispatch(Script& s, float dt, float prevHour, float hour) {
                     lua_setfield(L, -2, "foot");
                     lua_pushvector(L, ev.dir.x, 0.0f, ev.dir.y);
                     lua_setfield(L, -2, "direction");
+                    // Como o passo nasceu: "stride" (passada, sem sprite), "strike" (um
+                    // pe' desenhado pisou) ou "drag" (o corpo desliza); com os dois
+                    // ultimos, `shape` e' a forma que toca o chao e `width` a largura.
+                    lua_pushstring(L, ev.contact == 1 ? "strike" : ev.contact == 2 ? "drag" : "stride");
+                    lua_setfield(L, -2, "contact");
+                    lua_pushstring(L, ev.shape.c_str());
+                    lua_setfield(L, -2, "shape");
+                    lua_pushnumber(L, ev.width);
+                    lua_setfield(L, -2, "width");
                     run(s, h, 3);
                 }
                 break;

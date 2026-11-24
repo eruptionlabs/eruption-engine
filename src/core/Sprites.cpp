@@ -192,6 +192,7 @@ uint32_t Engine::createTextureFromSprImage(const SprImage& img, const uint8_t* p
     }
     res.opaqueTop = opaqueTopRow(img);
     footSpan(img, res.opaqueTop, res.footWidth, res.footCenter);
+    res.contact = extractContactRows(img);
 
     uint32_t mipLevels = m_mipmapMenu.config.enabled ? MipmapGenerator::calculateMipLevels(img.width, img.height) : 1;
 

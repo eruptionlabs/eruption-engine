@@ -1496,7 +1496,13 @@ VfxSystem::InitInfo Engine::vfxInitInfo(VkDescriptorSet frameUboSet) {
         // do pe' direito, ver FootstepEffects).
         const bool mirror = path.rfind("mirror:", 0) == 0;
         const std::string srcPath = mirror ? path.substr(7) : path;
-        if (!makeVfxBuiltin(srcPath, img)) {
+        // "contact:<hash>": forma de contato gerada dos pixels do sprite
+        // (SpriteContact.hpp), guardada em m_footsteps.masks.
+        const auto mask = srcPath.rfind("contact:", 0) == 0 ? m_footsteps.masks.find(srcPath) : m_footsteps.masks.end();
+        if (mask != m_footsteps.masks.end()) {
+            img.width = img.height = uint32_t(mask->second.size);
+            img.rgba = mask->second.rgba;
+        } else if (!makeVfxBuiltin(srcPath, img)) {
             std::filesystem::path p = project::gameRef(srcPath);
             if (!vfs::exists(p)) p = project::engine(srcPath);
             int w = 0, h = 0, n = 0;

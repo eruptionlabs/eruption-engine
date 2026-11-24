@@ -23,7 +23,7 @@ namespace eruption {
 
 namespace {
 
-constexpr float kPixelToWorld = 0.15f; // mesma escala do sprite do jogador
+constexpr float kPixelToWorld = contact::kPixelToWorld; // mesma escala do sprite do jogador
 
 } // namespace
 
@@ -354,8 +354,15 @@ void Engine::trackCharacterStep(SceneCharacter& c, float dt) {
     const Vec2 d(c.position.x - c.stepLastPos.x, c.position.z - c.stepLastPos.z);
     const float dist = glm::length(d);
     c.stepLastPos = c.position;
+    // A medida do quadro, para o passo pelos pixels (trackContactSteps, no
+    // desenho): teleporte nao conta como andar.
+    c.stepDist = (dist > 1e-4f && dist <= kSaltoTeleporte) ? dist : 0.0f;
+    c.stepSpeed = dt > 0.0f ? c.stepDist / dt : 0.0f;
+    if (dist > 1e-4f) c.stepDir = d / dist;
     if (dist < 1e-4f) return;
     if (dist > kSaltoTeleporte) { c.stepOdometer = 0.0f; return; }
+    // Sprite com pixels no chao: quem manda no passo e' o desenho.
+    if (c.contactDriven) { c.stepOdometer = 0.0f; return; }
     const float passada = walkStrideFor(c);
     const float passo = passada > 0.0f ? passada * 0.5f : kPassoPadrao;
     c.stepOdometer += dist;
@@ -369,6 +376,8 @@ void Engine::trackCharacterStep(SceneCharacter& c, float dt) {
     s.pos = c.position + Vec3(lado.x, 0.0f, lado.y) * (kPeLado * sinal);
     s.foot = c.stepFoot;
     s.speed = dt > 0.0f ? dist / dt : 0.0f;
+    s.shape = c.strideShape; // sprite de sola sem ritmo detectado: passada com a forma dele
+    s.width = c.strideWidth;
     c.stepFoot ^= 1;
     // Passo na agua: anel na superficie, no instante do relogio do render.
     float nivel = 0.0f;
@@ -696,6 +705,7 @@ void Engine::drawCharacter(SceneCharacter& c, float dt) {
         c.shownAction = -1;
     }
 
+    trackContactSteps(c, actionIdx, quadroMostrado, moving && !named, c.position);
     const Vec3 toCam = m_camera.position() - m_camera.target();
     const float spriteYaw = std::atan2(toCam.x, toCam.z);
     // ERUPTION_TEST_SPRITE_TRACE=1 (teste): por quadro, posicao no mundo e na tela (pixels do alvo de render,

@@ -45,7 +45,7 @@ declare graphics: {
 -- A model is referenced by its name (string) or its index (number, from 1).
 type Model = string | number
 
-type StepGround = { material: string, texture: string, node: string, uv: vector, in_water: boolean, foot: number, direction: vector }
+type StepGround = { material: string, texture: string, node: string, uv: vector, in_water: boolean, foot: number, direction: vector, contact: string, shape: string, width: number }
 
 -- Events. Call these at the top level of a script, not inside functions.
 declare on: {
@@ -71,6 +71,15 @@ declare on: {
     -- sampled when drawing), in_water = a water surface covers the foot (the
     -- other fields are then empty). Decide the effect here with world.dust
     -- and world.footprint; the engine has no surface table.
+    -- A character with a sprite steps by its own pixels: `contact` is "strike"
+    -- (a foot that was drawn landing on the ground), "drag" (a body that slides
+    -- on the ground, stamped every stretch walked) or "stride" (no sprite, a
+    -- step every half stride). The pixels decide when, how many and the
+    -- shape: `shape` is the print of the sprite, estimated from its 8 walking
+    -- directions (seen from the side a foot gives its length, from the front
+    -- its width; the print is what fits all of them), the same for every
+    -- step of that sprite, `width` its width in metres. Pass shape to
+    -- world.footprint.
     step: (fn: (name: string, position: vector, ground: StepGround) -> ()) -> (),
 }
 
@@ -312,9 +321,15 @@ declare world: {
     -- `direction` (x and z used). Sizes are in metres. texture: PNG of the
     -- project (default: a built-in sole print, white with alpha, tinted by
     -- `color`); mirror flips it (right foot); life: seconds until it has
-    -- faded; at most 64 stay alive (the oldest go first). Call it from
+    -- faded; at most 64 stay alive (the oldest go first). shape: the
+    -- `ground.shape` of a step: the print is that mask, at the sprite's size
+    -- (size, if given, is the print's width), its front along `direction`;
+    -- texture is ignored. Without `color` it only darkens the ground, which
+    -- keeps its own tone (a pressed print); a color tints it. Trail pieces
+    -- (drag steps) live in their own pool of 128, at most 48 per `owner`
+    -- (the character's name). Call it from
     -- on.step / characters.on_step.
-    footprint: (position: vector, direction: vector, opts: { texture: string?, size: number?, life: number?, alpha: number?, color: { number }?, mirror: boolean? }?) -> (),
+    footprint: (position: vector, direction: vector, opts: { texture: string?, shape: string?, owner: string?, size: number?, life: number?, alpha: number?, color: { number }?, mirror: boolean? }?) -> (),
     -- A puff of dust at `position`: size (m, per grain), count (particles,
     -- 1..64), life (s), rise (m/s2 upward), alpha, color {r, g, b} (linear).
     -- At most 24 puffs stay alive.

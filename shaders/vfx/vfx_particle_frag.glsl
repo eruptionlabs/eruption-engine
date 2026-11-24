@@ -50,9 +50,17 @@ void main() {
         vec2 rc = L.xz / s;
         corner = vec2(rc.x * v_decalRot.x + rc.y * v_decalRot.y, rc.y * v_decalRot.x - rc.x * v_decalRot.y);
         if (any(greaterThan(abs(corner), vec2(1.0)))) cover = 0.0;
-        // So' o chao: o ponto fica dentro de um cone de ~35 graus a partir do
-        // centro. Parede, tronco e o corpo de quem esta' em cima ficam de fora.
-        if (abs(L.y) > 0.7 * length(L.xz) + 0.1 * s) cover = 0.0;
+        // So' o chao: a superficie (normal pela derivada da posicao) virada
+        // para cima e a ate' um raio de altura da marca, mais o cone de ~35
+        // graus. Parede e tronco saem pela normal; o relevo ondulado sob uma
+        // marca pequena fica (antes, so' o cone com 0,1 do raio de folga
+        // cortava a marca em pontinhos), e o corpo de quem esta' em cima sai
+        // pela altura.
+        vec3 wp = L + v_decal.xyz;
+        vec3 nrm = cross(dFdx(wp), dFdy(wp));
+        float nl = length(nrm);
+        if (nl > 1e-8 && abs(nrm.y) / nl < 0.5) cover = 0.0;
+        if (abs(L.y) > 0.7 * length(L.xz) + s) cover = 0.0;
         corner = clamp(corner, vec2(-1.0), vec2(1.0));
         vec2 uv = vec2(corner.x * 0.5 + 0.5, 0.5 - corner.y * 0.5) * v_decalRot.zw;
         uv0 += uv;
