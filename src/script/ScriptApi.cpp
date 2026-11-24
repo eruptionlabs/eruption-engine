@@ -770,6 +770,14 @@ bool padButton(int button, bool pressed) {
 // Caixa de texto aberta (console do Enter, campo do editor): as letras sao do
 // texto, nao do jogo. Sem isto WASD andava a camera e H/1/2 mexiam no visor
 // enquanto se digitava. O controle (pad_*) segue valendo.
+// "0".."9" sao a fileira de cima e o teclado numerico: os menus numerados
+// do jogo esperam as duas (GLFW da' codigos diferentes, 48.. e 320..).
+bool scriptKey(Key k, bool pressed) {
+    const auto test = [pressed](Key key) { return pressed ? Input::isKeyPressed(key) : Input::isKeyDown(key); };
+    if (test(k)) return true;
+    const int c = static_cast<int>(k);
+    return c >= '0' && c <= '9' && test(static_cast<Key>(320 + c - '0'));
+}
 bool typingText() {
     return ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantTextInput;
 }
@@ -822,7 +830,7 @@ int input_down(lua_State* L) {
         return 1;
     }
     const Key k = scriptKeyFromName(name);
-    lua_pushboolean(L, k != Key::Unknown && !typingText() && Input::isKeyDown(k));
+    lua_pushboolean(L, k != Key::Unknown && !typingText() && scriptKey(k, false));
     return 1;
 }
 // Nome do primeiro controle ligado, ou nil: o jogo troca o desenho das
@@ -1143,7 +1151,7 @@ int input_pressed(lua_State* L) {
         return 1;
     }
     const Key k = scriptKeyFromName(name);
-    lua_pushboolean(L, k != Key::Unknown && !typingText() && Input::isKeyPressed(k));
+    lua_pushboolean(L, k != Key::Unknown && !typingText() && scriptKey(k, true));
     return 1;
 }
 
@@ -3365,7 +3373,7 @@ declare on: {
     start: (fn: () -> ()) -> (),
     update: (fn: (dt: number) -> ()) -> (),
     every: (seconds: number, fn: () -> ()) -> (),
-    -- Key names: "A".."Z", "0".."9", "space", "enter", "escape", "tab",
+    -- Key names: "A".."Z", "0".."9" (top row or keypad), "space", "enter", "escape", "tab",
     -- "left", "right", "up", "down", "shift", "ctrl", "alt", "f1".."f12".
     key: (key: string, fn: () -> ()) -> (),
     -- Fires when the player gets within `distance` of the model.
@@ -4034,6 +4042,16 @@ declare input: {
     down: (key: string) -> boolean,
     -- True only on the frame the key went down.
     pressed: (key: string) -> boolean,
+    -- Text entry (a chat line, a name field). text_begin() turns it on (and
+    -- opens the phone keyboard), text_end() turns it off. While it is on,
+    -- text() returns the UTF-8 typed since the last frame (layout and accents
+    -- come from the system, printable characters only); with it off, text()
+    -- is always "". Keys keep reporting in down/pressed, so a game ignores its
+    -- action keys while text_active(); backspace and enter come from pressed.
+    text_begin: () -> (),
+    text_end: () -> (),
+    text_active: () -> boolean,
+    text: () -> string,
     -- The screen is a touch screen (phone): hide drawn key hints.
     touch: () -> boolean,
     -- Shows or hides the on-screen touch stick (phone builds with a touch

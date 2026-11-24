@@ -52,7 +52,7 @@ declare on: {
     start: (fn: () -> ()) -> (),
     update: (fn: (dt: number) -> ()) -> (),
     every: (seconds: number, fn: () -> ()) -> (),
-    -- Key names: "A".."Z", "0".."9", "space", "enter", "escape", "tab",
+    -- Key names: "A".."Z", "0".."9" (top row or keypad), "space", "enter", "escape", "tab",
     -- "left", "right", "up", "down", "shift", "ctrl", "alt", "f1".."f12".
     key: (key: string, fn: () -> ()) -> (),
     -- Fires when the player gets within `distance` of the model.
@@ -784,6 +784,16 @@ declare input: {
     down: (key: string) -> boolean,
     -- True only on the frame the key went down.
     pressed: (key: string) -> boolean,
+    -- Text entry (a chat line, a name field). text_begin() turns it on (and
+    -- opens the phone keyboard), text_end() turns it off. While it is on,
+    -- text() returns the UTF-8 typed since the last frame (layout and accents
+    -- come from the system, printable characters only); with it off, text()
+    -- is always "". Keys keep reporting in down/pressed, so a game ignores its
+    -- action keys while text_active(); backspace and enter come from pressed.
+    text_begin: () -> (),
+    text_end: () -> (),
+    text_active: () -> boolean,
+    text: () -> string,
     -- The screen is a touch screen (phone): hide drawn key hints.
     touch: () -> boolean,
     -- Shows or hides the on-screen touch stick (phone builds with a touch
