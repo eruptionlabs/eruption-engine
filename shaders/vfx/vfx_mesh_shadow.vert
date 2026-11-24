@@ -26,7 +26,7 @@ void main() {
     RenderRec r = recs[idx];
     uint seed = r.sheet.w;
     mat3 R = axisAngle(unpackOct(r.look.w), unpackHalf2x16(r.look.z).x);
-    vec3 sc = vec3(1.0, mix(0.55, 1.0, rand01(seed, 51u)), mix(0.7, 1.1, rand01(seed, 52u)));
+    vec3 sc = vfxMeshScale(r.cutout, seed);
     // Encolhe junto com a malha (fim da vida).
     float a = unpackHalf2x16(r.look.y).y;
     // Encolhe pelo ponto de apoio (a casca de baixo), nao pelo centro: a

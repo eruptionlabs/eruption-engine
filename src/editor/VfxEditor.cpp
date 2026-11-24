@@ -442,12 +442,16 @@ bool VfxEditor::drawEmitter(VfxEmitterDesc& e) {
             }
         ImGui::EndCombo();
     }
+    // Malha modelada: "mesh": "assets/effects/<pasta>/mesh/<nome>.glb" no .vfx.json (ate 4096 vertices).
     if (!e.mesh.empty()) {
         c |= ImGui::Checkbox(tr("Translucent (ice, glass)"), &e.translucent);
         if (e.translucent) {
             c |= ImGui::DragFloat(tr("Refraction"), &e.refraction, 0.002f, 0.0f, 0.2f, "%.3f");
             c |= ImGui::DragFloat(tr("Absorption (per m)"), &e.absorption, 0.05f, 0.0f, 20.0f, "%.2f");
         }
+        c |= ImGui::Checkbox(tr("Fixed orientation (no random spin)"), &e.meshFixed);
+        if (ImGui::Checkbox(tr("Fixed scale per axis"), &e.hasScale3)) c = true;
+        if (e.hasScale3) c |= ImGui::DragFloat3(tr("Scale (x, y, z)"), &e.scale3.x, 0.01f, 0.01f, 100.0f, "%.2f");
     }
 
     if (ImGui::CollapsingHeader(tr("Spawning"), ImGuiTreeNodeFlags_DefaultOpen)) {

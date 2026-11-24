@@ -1548,6 +1548,13 @@ VfxSystem::InitInfo Engine::vfxInitInfo(VkDescriptorSet frameUboSet) {
         const std::filesystem::path e = project::engine("data/vfx/" + name + ".vfx.json");
         return std::filesystem::exists(e) ? e.string() : std::string();
     };
+    // Malha .glb de emissor: relativo ao projeto, como as texturas.
+    vi.resolveMeshFile = [](const std::string& path) -> std::string {
+        std::filesystem::path p = project::gameRef(path);
+        if (vfs::exists(p)) return p.string();
+        p = project::engine(path);
+        return vfs::exists(p) ? p.string() : std::string();
+    };
     return vi;
 }
 

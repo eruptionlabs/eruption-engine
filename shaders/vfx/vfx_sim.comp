@@ -103,7 +103,7 @@ void main() {
         alive = alive && p.age < p.life;
         bool collided = false;
         float impact = 0.0; // velocidade contra a superficie na batida
-        uint meshE = (e.flags.x >> VFXF_MESH_SHIFT) & 0xFu;
+        uint meshE = (e.flags.x >> VFXF_MESH_SHIFT) & 0x3Fu;
         if (alive) {
             // Forcas
             // Efeito descrito em metros; a escala da instancia (rot0.w)
@@ -255,7 +255,7 @@ void main() {
             // Distorcao vai na lista cheia: o passe dela tem o teste de
             // profundidade por hardware.
             lowRes = (e.flags.x & (VFXF_LOWRES | VFXF_DISTORT)) == VFXF_LOWRES;
-            uint meshId = (e.flags.x >> VFXF_MESH_SHIFT) & 0xFu;
+            uint meshId = (e.flags.x >> VFXF_MESH_SHIFT) & 0x3Fu;
             if (visible && meshId != 0u) {
                 // MALHA: opaca no G-buffer (luz da cena de verdade). Registro
                 // com cor-base (albedo), eixo/angulo do giro, deslocamento do
@@ -263,16 +263,22 @@ void main() {
                 vec4 col = unpackColorLut(e, t);
                 if (e.graphB.y > 0u) col *= max(vfxRunGraph(e.graphB.x, e.graphB.y, p, e), vec4(0.0));
                 vec3 axis = normalize(vec3(rand01(p.seed, 41u), rand01(p.seed, 42u), rand01(p.seed, 43u)) - 0.5 + 1e-4);
+                float meshAng = sr.y;
+                if (((e.cutout.w >> 16) & 1u) != 0u) {
+                    // "rotation": "fixed": orientacao modelada, so' o rumo do efeito (em Y).
+                    axis = vec3(0.0, 1.0, 0.0);
+                    meshAng = atan(-e.rot0.z, e.rot0.x);
+                }
                 vec3 disp = p.vel * dt;
                 RenderRec rec;
                 rec.posSize = vec4(p.pos, size);
-                rec.look = uvec4(packHalf2x16(col.rg), packHalf2x16(col.ba), packHalf2x16(vec2(sr.y, 0.0)), packOct(axis));
+                rec.look = uvec4(packHalf2x16(col.rg), packHalf2x16(col.ba), packHalf2x16(vec2(meshAng, 0.0)), packOct(axis));
                 rec.sheet = uvec4(e.flags.z, packHalf2x16(vec2(disp.z, e.render.x)), packHalf2x16(disp.xy), p.seed);
                 rec.cutout = e.cutout; // malha: x = translucida, y = refracao/absorcao
                 recs[idx] = rec;
                 // LOD: pequena na tela (raio < 24 px) usa a versao de longe
                 // (80 triangulos ainda fecham a silhueta), que nao faz sombra.
-                uint lo = (e.flags.x >> VFXF_MESHLO_SHIFT) & 0xFu;
+                uint lo = (e.flags.w >> VFXW_MESHLO_SHIFT) & 0x3Fu;
                 float rpx = size * frame.viewInfo.x / max(viewZ, 1e-3) * frame.depthInfo.y * 0.5;
                 if (lo != 0u && rpx < 24.0) meshId = lo;
                 uint m = meshId - 1u;

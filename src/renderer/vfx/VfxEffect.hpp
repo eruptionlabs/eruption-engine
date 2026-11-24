@@ -122,7 +122,10 @@ struct VfxEmitterDesc {
     float maxScreenSize = 0.6f;// teto de tamanho na tela (fracao da altura)
     float nearFade = 0.5f;     // some perto da camera (m)
     std::string mesh;          // malha no lugar do sprite ("builtin:rock"...):
-                               // opaca, no G-buffer, com a luz da cena
+                               // opaca, no G-buffer, com a luz da cena.
+                               // "<caminho>.glb" (relativo ao projeto, ate 4096
+                               // vertices): 1a malha do arquivo; "#lo" usa o
+                               // irmao "<nome>_lo.glb" se existir.
     bool lowRes = false;       // desenha em meia resolucao (fumaca, poeira:
                                // 1/4 dos pixels; o ganho maior em GPU fraca)
     bool shadowed = false;     // com lit > 0: o termo do sol passa pelo mapa
@@ -138,6 +141,13 @@ struct VfxEmitterDesc {
                                // Fresnel e brilho do sol
     float refraction = 0.04f;  // desvio da cena atras (fracao da tela)
     float absorption = 1.0f;   // tinta por metro de espessura (0 = incolor)
+    // Malha modelada (so' com "mesh"): "rotation": "fixed" mantem a orientacao
+    // modelada (sem eixo e giro sorteados, so' o rumo do efeito); "scale3":
+    // [x, y, z] e' uma escala fixa por eixo que multiplica a curva de tamanho
+    // (sem ela, "fixed" nao deforma e o padrao segue sorteando y/z).
+    bool meshFixed = false;
+    bool hasScale3 = false;
+    Vec3 scale3{1.0f};
     // DISTORCAO DE TELA (calor, agua, onda de choque): > 0 o emissor nao
     // desenha cor; escreve um deslocamento no buffer de distorcao, que o pos
     // usa para entortar a cena atras (fracao da altura da tela, vezes o alfa

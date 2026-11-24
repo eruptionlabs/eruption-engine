@@ -1068,6 +1068,10 @@ declare vfx: {
     -- team vision only dims, never hides. The table may also come after a
     -- number scale: play(name, pos, 2, {vision = false}).
     play: (name: string, position: vector, options: (number | { [string]: any })?, yaw: (number | { [string]: any })?) -> number,
+    -- Does the first play's work ahead of time (loads the effect, its
+    -- textures and meshes) without spawning anything, so the first real play
+    -- does not hitch the frame. Returns false if the effect is not found.
+    preload: (name: string) -> boolean,
     -- Stops spawning (the live particles finish); `immediate` clears them now.
     stop: (id: number, immediate: boolean?) -> (),
     -- Moves a playing effect (a trail follows the object this way).

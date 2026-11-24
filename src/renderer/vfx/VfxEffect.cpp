@@ -100,7 +100,15 @@ void readEmitter(const json& j, VfxEmitterDesc& e) {
     e.direction = v3(j, "direction", e.direction);
     e.spread = std::clamp(num(j, "spread", e.spread), 0.0f, 1.0f);
     e.size = glm::max(v2(j, "size", e.size), Vec2(0.0f));
-    e.rotation = v2(j, "rotation", e.rotation);
+    // "rotation": [min, max] graus (padrao) ou "fixed" (malha sem giro sorteado).
+    if (j.contains("rotation") && j["rotation"].is_string())
+        e.meshFixed = j["rotation"].get<std::string>() == "fixed";
+    else
+        e.rotation = v2(j, "rotation", e.rotation);
+    if (j.contains("scale3") && j["scale3"].is_array() && j["scale3"].size() == 3) {
+        e.scale3 = v3(j, "scale3", e.scale3);
+        e.hasScale3 = true;
+    }
     e.angularVelocity = v2(j, "angularVelocity", e.angularVelocity);
     e.inheritVelocity = num(j, "inheritVelocity", e.inheritVelocity);
     e.gravity = v3(j, "gravity", e.gravity);
@@ -222,7 +230,9 @@ json writeEmitter(const VfxEmitterDesc& e) {
     j["direction"] = arr(e.direction);
     j["spread"] = e.spread;
     j["size"] = arr(e.size);
-    j["rotation"] = arr(e.rotation);
+    if (e.meshFixed) j["rotation"] = "fixed";
+    else j["rotation"] = arr(e.rotation);
+    if (e.hasScale3) j["scale3"] = arr(e.scale3);
     j["angularVelocity"] = arr(e.angularVelocity);
     j["inheritVelocity"] = e.inheritVelocity;
     j["gravity"] = arr(e.gravity);

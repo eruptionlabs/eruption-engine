@@ -70,8 +70,9 @@ const uint VFXF_KILLED       = 1u << 12; // emissor removido: particulas morrem 
 const uint VFXF_SPAWNING     = 1u << 13;
 const uint VFXF_LOWRES       = 1u << 14; // desenha em meia resolucao (fumaca)
 const uint VFXF_HIDDEN       = 1u << 15; // fora da visao de equipe: simula, nao desenha
-const uint VFXF_MESH_SHIFT   = 16u;     // 4 bits: malha da particula + 1 (0 = sprite)
-const uint VFXF_MESHLO_SHIFT = 20u;     // 4 bits: versao de longe da malha + 1 (0 = nao tem)
+const uint VFXF_MESH_SHIFT   = 16u;     // 6 bits (16..21): malha da particula + 1 (0 = sprite)
+// A versao de longe da malha (+ 1, 0 = nao tem) fica em flags.w, bits 16..21.
+const uint VFXW_MESHLO_SHIFT = 16u;
 const uint VFXF_DECAL        = 1u << 24; // deitada e projetada na profundidade da cena
 const uint VFXF_SHADOWED     = 1u << 25; // termo do sol passa pelo mapa de sombra do sol
 const uint VFXF_DISTORT      = 1u << 26; // escreve no buffer de distorcao da tela, nao na cor
@@ -100,7 +101,7 @@ struct FrameParams {
     vec4 sunColor;
     vec4 ambient;       // xyz cor do ceu, w intensidade
     vec4 viewInfo;      // x proj[1][1] (teto de tamanho na tela)
-    uvec4 meshIndexCount[2]; // indices de cada malha de particula (8)
+    uvec4 meshIndexCount[8]; // indices de cada malha de particula (32)
     vec4 groundInfo;    // xy origem da grade de altura, z 1/celula, w 1 = ha grade
     vec4 groundSize;    // xy texels (vertices da grade)
 };
@@ -128,11 +129,11 @@ struct RenderRec {
 #define VFXC_DRAW      12
 #define VFXC_SORTDISP  24 // 24..26: ordenar lista cheia; 28..30: meia resolucao
 #define VFXC_EVENTDISP 32 // 32..34: dispatch indireto das filhas (um grupo por evento)
-#define VFXC_MESH      36 // 36..43: particulas de cada malha (8 malhas)
-#define VFXC_MESHDRAW  44 // 44..83: draw indexado de cada malha (5 uints cada)
-#define VFXC_COUNT     84
-#define VFX_MESH_TYPES 8u
-// Lista da malha m no buffer de desenho: cap/8 vagas a partir de 4*cap + m*cap/8.
+#define VFXC_MESH      36 // 36..67: particulas de cada malha (32 malhas)
+#define VFXC_MESHDRAW  68 // 68..227: draw indexado de cada malha (5 uints cada)
+#define VFXC_COUNT     228
+#define VFX_MESH_TYPES 32u
+// Lista da malha m no buffer de desenho: cap/32 vagas a partir de 4*cap + m*cap/8.
 #define VFX_MAX_EVENTS 16384u
 
 // Evento de sub-emissor: onde e com que velocidade herdada nascem as filhas.
@@ -217,3 +218,14 @@ float sampleSizeLut(Emitter e, float t) {
 }
 
 mat3 emitterRot(Emitter e) { return mat3(e.rot0.xyz, e.rot1.xyz, e.rot2.xyz); }
+
+// Escala por eixo da malha de particula: sorteada da semente (padrao),
+// fixa ("scale3") ou sem deformar ("rotation": "fixed" sozinho).
+// Modo em cutout.w alto: bit 0 orientacao fixa, bit 1 escala fixa.
+vec3 vfxMeshScale(uvec4 cutout, uint seed) {
+    uint mode = cutout.w >> 16;
+    if ((mode & 2u) != 0u)
+        return vec3(unpackHalf2x16(cutout.z), unpackHalf2x16(cutout.w & 0xFFFFu).x);
+    if ((mode & 1u) != 0u) return vec3(1.0);
+    return vec3(1.0, mix(0.55, 1.0, rand01(seed, 51u)), mix(0.7, 1.1, rand01(seed, 52u)));
+}

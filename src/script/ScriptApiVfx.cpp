@@ -83,6 +83,14 @@ int vfx_play(lua_State* L) {
     return 1;
 }
 
+// preload(nome): faz antes o trabalho do primeiro play (arquivo, texturas,
+// malhas, alvos) para o play de verdade nao travar o quadro.
+int vfx_preload(lua_State* L) {
+    ScriptHost::NativeWork trabalho;
+    lua_pushboolean(L, g_engine->vfx().preload(luaL_checkstring(L, 1)) ? 1 : 0);
+    return 1;
+}
+
 int vfx_stop(lua_State* L) {
     const uint32_t id = static_cast<uint32_t>(luaL_checknumber(L, 1));
     g_engine->vfx().stop(id, lua_toboolean(L, 2) != 0);
@@ -181,6 +189,7 @@ void registerVfxApi(lua_State* L, Engine& engine) {
     g_owned.clear();
     engine.clearGroundAreas(); // o script novo nao conhece os ids do antigo
     static const luaL_Reg fns[] = {{"play", vfx_play},
+                                   {"preload", vfx_preload},
                                    {"stop", vfx_stop},
                                    {"move", vfx_move},
                                    {"playing", vfx_playing},
@@ -212,6 +221,10 @@ declare vfx: {
     -- team vision only dims, never hides. The table may also come after a
     -- number scale: play(name, pos, 2, {vision = false}).
     play: (name: string, position: vector, options: (number | { [string]: any })?, yaw: (number | { [string]: any })?) -> number,
+    -- Does the first play's work ahead of time (loads the effect, its
+    -- textures and meshes) without spawning anything, so the first real play
+    -- does not hitch the frame. Returns false if the effect is not found.
+    preload: (name: string) -> boolean,
     -- Stops spawning (the live particles finish); `immediate` clears them now.
     stop: (id: number, immediate: boolean?) -> (),
     -- Moves a playing effect (a trail follows the object this way).

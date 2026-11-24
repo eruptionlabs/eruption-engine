@@ -84,7 +84,7 @@ struct VfxFrameParamsGpu {
     Vec4 sunColor;
     Vec4 ambient;
     Vec4 viewInfo;
-    glm::uvec4 meshIndexCount[2];
+    glm::uvec4 meshIndexCount[8]; // 32 malhas
     Vec4 groundInfo; // xy origem da grade de altura, z 1/celula, w 1 = ha grade
     Vec4 groundSize; // xy texels (vertices da grade)
 };
@@ -102,6 +102,9 @@ public:
         std::function<VfxTextureInfo(const std::string&, uint32_t cols, uint32_t rows)> resolveTexture;
         // Nome do efeito -> arquivo .vfx.json (projeto primeiro, motor depois).
         std::function<std::string(const std::string&)> resolveEffectPath;
+        // "mesh": "<caminho>.glb" -> arquivo existente (projeto primeiro, motor
+        // depois); vazio se nao existe.
+        std::function<std::string(const std::string&)> resolveMeshFile;
     };
 
     struct Stats {
@@ -140,6 +143,10 @@ public:
 
     // --- Instancias ---
     uint32_t spawn(const std::string& effectName, const Mat4& transform); // 0 = falhou
+    // Faz antes o que o primeiro spawn faria (le o efeito, sobe texturas e
+    // malhas, compila grafos, cria os alvos de meia resolucao/translucidos)
+    // sem criar instancia: o primeiro play deixa de travar o quadro.
+    bool preload(const std::string& effectName);
     // Cor por chamada: `recolor` troca o matiz mantendo o brilho de cada chave
     // do gradiente (variantes de cor sem um arquivo por cor); sem ele, multiplica.
     void setColor(uint32_t id, const Vec3& color, bool recolor);
@@ -299,6 +306,7 @@ private:
     VkDescriptorSet m_frameUboSet = VK_NULL_HANDLE;
     std::function<VfxTextureInfo(const std::string&, uint32_t, uint32_t)> m_resolveTexture;
     std::function<std::string(const std::string&)> m_resolveEffectPath;
+    std::function<std::string(const std::string&)> m_resolveMeshFile;
     std::unordered_map<std::string, VfxTextureInfo> m_textures; // "caminho#colsxrows" 
 
     // Pipelines
@@ -327,6 +335,8 @@ private:
     std::array<VkDescriptorSet, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_shadowSets{};
     std::array<bool, VulkanContext::MAX_FRAMES_IN_FLIGHT> m_shadowSetWritten{};
     uint32_t meshId(const std::string& name);
+    static bool isGlbMesh(const std::string& name);
+    static std::string glbLoPath(const std::string& name);
     void recordMeshes(VkCommandBuffer cmd, VkPipeline pipe, VkExtent2D extent, const Mat4& vp, const Mat4& prevVp,
                       uint32_t translucent);
     uint32_t m_meshMask = 0;          // malhas em uso neste frame (CPU)

@@ -15,7 +15,7 @@ void main() {
     // Uma malha de particula por draw indexado (indices vindos da CPU).
     for (uint m = 0u; m < VFX_MESH_TYPES; ++m) {
         uint base = VFXC_MESHDRAW + m * 5u;
-        counters[base + 0u] = frame.meshIndexCount[m >> 2][m & 3u];
+        counters[base + 0u] = frame.meshIndexCount[m >> 2u][m & 3u];
         counters[base + 1u] = min(counters[VFXC_MESH + m], frame.counts.y / VFX_MESH_TYPES);
         counters[base + 2u] = 0u;
         counters[base + 3u] = 0u;

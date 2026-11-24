@@ -52,7 +52,7 @@ void main() {
     mat3 R = axisAngle(unpackOct(r.look.w), unpackHalf2x16(r.look.z).x);
     // Cada particula com a sua forma e o seu tom: escala por eixo e brilho
     // sorteados da semente (a mesma malha vira pedras diferentes).
-    vec3 sc = vec3(1.0, mix(0.55, 1.0, rand01(seed, 51u)), mix(0.7, 1.1, rand01(seed, 52u)));
+    vec3 sc = vfxMeshScale(r.cutout, seed);
     // Fim da vida: a pedra encolhe ate' sumir (o alfa da cor manda). Mais
     // limpo que pontilhado, que vira xadrez quando o TAA nao resolve.
     float a = unpackHalf2x16(r.look.y).y;

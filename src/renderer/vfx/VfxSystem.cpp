@@ -1,6 +1,8 @@
 #include "renderer/vfx/VfxSystem.hpp"
 #include "renderer/GBuffer.hpp"
 #include "renderer/vfx/VfxBuiltins.hpp"
+#include "formats/GltfParser.hpp"
+#include "utils/AssetVfs.hpp"
 
 #include "core/Logger.hpp"
 #include "math/Camera.hpp"
@@ -16,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <numeric>
 
 namespace eruption {
@@ -28,7 +31,7 @@ constexpr uint32_t kCRender = 3;
 constexpr uint32_t kCDispatch = 8;
 constexpr uint32_t kCDraw = 12;        // 5 uints por lista (indexado)
 constexpr uint32_t kCSortDispatch = 24;
-constexpr uint32_t kCounterCount = 84;
+constexpr uint32_t kCounterCount = 228;
 constexpr uint32_t kCEventDispatch = 32;
 constexpr uint32_t kRecordBytes = 64;
 constexpr uint32_t kMaxEvents = 16384;
@@ -52,8 +55,8 @@ struct MeshShadowPush {
     uint32_t listOffset;
     uint32_t pad[3];
 };
-constexpr uint32_t kMeshTypes = 8;
-constexpr uint32_t kCMeshDraw = 44; // 5 uints por malha
+constexpr uint32_t kMeshTypes = 32; // com "#lo" cada malha ocupa 2; ids de 6 bits no emissor
+constexpr uint32_t kCMeshDraw = 68; // 5 uints por malha
 constexpr uint32_t kParticleBytes = 48;
 
 uint32_t hash32(uint32_t v) {
@@ -666,6 +669,7 @@ bool VfxSystem::init(const InitInfo& info) {
     m_frameUboSet = info.frameUboSet;
     m_resolveTexture = info.resolveTexture;
     m_resolveEffectPath = info.resolveEffectPath;
+    m_resolveMeshFile = info.resolveMeshFile;
     // setBudget() pode ter vindo antes (preset aplicado antes do init).
     m_capacity = std::max<uint32_t>(m_capacity ? m_capacity : info.capacity, 1024u);
     m_slotData.assign(kMaxSlots, VfxEmitterGpu{});
@@ -969,6 +973,30 @@ uint32_t VfxSystem::spawn(const std::string& effectName, const Mat4& transform) 
     return m_instances.back().id;
 }
 
+bool VfxSystem::preload(const std::string& effectName) {
+    if (!m_ready) return false;
+    const VfxEffectDesc* d = effect(effectName);
+    if (!d) return false;
+    for (const VfxEmitterDesc& e : d->emitters) {
+        texture(e.texture, e.flipCols, e.flipRows);
+        if (!e.graph.empty()) graphFor(e.graph);
+        if (!e.mesh.empty()) {
+            const bool glb = isGlbMesh(e.mesh);
+            meshId(e.mesh);
+            if (e.mesh.rfind("builtin:", 0) == 0 ||
+                (glb && m_resolveMeshFile && !m_resolveMeshFile(glbLoPath(e.mesh)).empty()))
+                meshId(e.mesh + "#lo");
+        }
+        // Alvos que o desenho cria so' quando o primeiro emissor deles aparece
+        // (o tamanho vem do ultimo quadro; antes do primeiro, o desenho cria).
+        if (m_renderSize.width && m_renderSize.height) {
+            if (e.lowRes) ensureLowResTarget(m_renderSize);
+            if (e.translucent && !e.mesh.empty() && m_meshIcePipe) ensureIceTarget(m_renderSize);
+        }
+    }
+    return true;
+}
+
 void VfxSystem::setColor(uint32_t id, const Vec3& color, bool recolor) {
     for (Instance& inst : m_instances)
         if (inst.id == id) inst.color = Vec4(color, recolor ? 1.0f : 2.0f);
@@ -1135,18 +1163,23 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
         m_anyDistortion = true;
     }
     uint32_t mesh = 0;
+    uint32_t meshLo = 0; // vai em flags.w, bits 16..21
     if (!e.mesh.empty()) {
         const uint32_t id = meshId(e.mesh);
         mesh = id;
-        flags |= (id & 0xFu) << 16;
+        flags |= (id & 0x3Fu) << 16;
         if (id) m_meshMask |= 1u << (id - 1);
         // Versao de longe (so' as embutidas tem).
-        const uint32_t lo = id && e.mesh.rfind("builtin:", 0) == 0 ? meshId(e.mesh + "#lo") : 0u;
-        flags |= (lo & 0xFu) << 20;
+        // Para .glb, so' se o irmao "<nome>_lo.glb" existe.
+        const bool glb = isGlbMesh(e.mesh);
+        const bool wantLo = e.mesh.rfind("builtin:", 0) == 0 ||
+                            (glb && m_resolveMeshFile && !m_resolveMeshFile(glbLoPath(e.mesh)).empty());
+        const uint32_t lo = id && wantLo ? meshId(e.mesh + "#lo") : 0u;
+        meshLo = lo & 0x3Fu;
         if (lo) m_meshMask |= 1u << (lo - 1);
     }
     const VfxTextureInfo& tex = texture(e.texture, e.flipCols, e.flipRows);
-    o.flags = glm::uvec4(flags, m_slotGen[slot], tex.slot, (e.flipCols & 0xFFu) | ((e.flipRows & 0xFFu) << 8));
+    o.flags = glm::uvec4(flags, m_slotGen[slot], tex.slot, (e.flipCols & 0xFFu) | ((e.flipRows & 0xFFu) << 8) | (meshLo << 16));
     for (int k = 0; k < 4; ++k)
         o.cutout[k] = glm::packHalf2x16(glm::vec2(tex.cutout[2 * k], tex.cutout[2 * k + 1]));
     // Malha nao usa o poligono da textura: o campo leva o material
@@ -1158,6 +1191,12 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
             o.cutout.y = glm::packHalf2x16(glm::vec2(e.refraction, e.absorption / m_unitsPerMeter));
             m_anyTranslucent = true;
         }
+        // z,w: escala por eixo (3 halfs) e modo no w alto: bit 0 = orientacao
+        // fixa, bit 1 = escala fixa (vfx_mesh.vert / vfx_sim.comp).
+        const Vec3 sc3 = e.hasScale3 ? e.scale3 : Vec3(1.0f);
+        o.cutout.z = glm::packHalf2x16(glm::vec2(sc3.x, sc3.y));
+        o.cutout.w = (glm::packHalf2x16(glm::vec2(sc3.z, 0.0f)) & 0xFFFFu) |
+                     ((e.meshFixed ? 1u : 0u) | (e.hasScale3 ? 2u : 0u)) << 16;
     }
     // Sub-emissores: o filho e' outro emissor desta mesma instancia (pelo nome).
     o.events = glm::uvec4(0u);
@@ -1298,14 +1337,22 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
         const float prevTime = inst.time;
         inst.time += dt;
         // Efeito com duracao: em laco recomeca as rajadas; sem laco para de nascer.
+        // Uma rajada unica com atraso maior que a duracao do efeito nunca
+        // disparava (o laco recomecava, ou o efeito parava, antes do atraso):
+        // a duracao cobre o atraso da ultima rajada.
+        float fxDuration = fx.duration;
+        if (fxDuration > 0.0f)
+            for (const VfxEmitterDesc& e : fx.emitters)
+                if (e.enabled && e.burstCount > 0)
+                    fxDuration = std::max(fxDuration, e.startDelay + 0.25f);
         float effTime = inst.time;
         bool wrapped = false;
-        if (fx.duration > 0.0f) {
+        if (fxDuration > 0.0f) {
             if (fx.loop) {
-                effTime = std::fmod(inst.time, fx.duration);
-                wrapped = std::floor(inst.time / fx.duration) != std::floor(prevTime / fx.duration);
-            } else if (inst.time >= fx.duration && inst.stopTime < 0.0f) {
-                inst.stopTime = fx.duration;
+                effTime = std::fmod(inst.time, fxDuration);
+                wrapped = std::floor(inst.time / fxDuration) != std::floor(prevTime / fxDuration);
+            } else if (inst.time >= fxDuration && inst.stopTime < 0.0f) {
+                inst.stopTime = fxDuration;
             }
         }
         const bool stopped = inst.killed || inst.stopTime >= 0.0f;
@@ -2014,6 +2061,83 @@ void VfxSystem::destroyDistortion() {
     m_distortWritten = false;
 }
 
+namespace {
+// Teto de vertices de uma malha .glb (indices de 16 bits, lista por emissor).
+constexpr size_t kMaxGlbMeshVertices = 4096;
+
+// Carrega a primeira malha com triangulos do .glb para o mesmo vertice das
+// malhas embutidas. A cor de vertice (se houver) vira a oclusao `ao`
+// (media RGB; branco = 1, sem efeito); `fresh` fica 0.
+bool loadGlbMesh(const std::string& file, VfxMeshData& out) {
+    std::vector<uint8_t> bytes;
+    if (!vfs::read(file, bytes)) {
+        ERUPTION_LOG_WARN("[VFX] malha .glb nao abriu: %s (desenha como sprite)", file.c_str());
+        return false;
+    }
+    ModelFile mf;
+    try {
+        mf = GltfParser::parse(bytes, std::filesystem::path(file).parent_path().string());
+    } catch (...) {
+        ERUPTION_LOG_WARN("[VFX] malha .glb invalida: %s (desenha como sprite)", file.c_str());
+        return false;
+    }
+    for (const ModelFileNode& n : mf.nodes) {
+        if (n.vertices.empty() || n.indices.size() < 3) continue;
+        if (n.vertices.size() > kMaxGlbMeshVertices) {
+            ERUPTION_LOG_WARN("[VFX] malha .glb com %zu vertices (maximo %zu): %s (desenha como sprite)",
+                              n.vertices.size(), kMaxGlbMeshVertices, file.c_str());
+            return false;
+        }
+        const size_t count = n.vertices.size();
+        out.vertices.resize(count);
+        for (size_t i = 0; i < count; ++i) {
+            VfxMeshVertex& v = out.vertices[i];
+            v.pos[0] = n.vertices[i].x;
+            v.pos[1] = n.vertices[i].y;
+            v.pos[2] = n.vertices[i].z;
+            const Vec3 nm = i < n.normals.size() ? n.normals[i] : Vec3(0.0f, 1.0f, 0.0f);
+            v.normal[0] = nm.x;
+            v.normal[1] = nm.y;
+            v.normal[2] = nm.z;
+            v.uv[0] = i < n.texCoords.size() ? n.texCoords[i].x : 0.0f;
+            v.uv[1] = i < n.texCoords.size() ? n.texCoords[i].y : 0.0f;
+            v.ao = 1.0f;
+            if (i < n.colors.size()) {
+                const uint32_t c = n.colors[i]; // BGRA
+                v.ao = (float(c & 0xFFu) + float((c >> 8) & 0xFFu) + float((c >> 16) & 0xFFu)) / (3.0f * 255.0f);
+            }
+            v.fresh = 0.0f;
+        }
+        const size_t tris = n.indices.size() / 3;
+        for (size_t i = 0; i < tris * 3; ++i) {
+            if (n.indices[i] >= count) { // indice fora: malha corrompida
+                out.vertices.clear();
+                out.indices.clear();
+                ERUPTION_LOG_WARN("[VFX] malha .glb com indice invalido: %s (desenha como sprite)", file.c_str());
+                return false;
+            }
+            out.indices.push_back(uint16_t(n.indices[i]));
+        }
+        return true;
+    }
+    ERUPTION_LOG_WARN("[VFX] malha .glb sem triangulos: %s (desenha como sprite)", file.c_str());
+    return false;
+}
+} // namespace
+
+bool VfxSystem::isGlbMesh(const std::string& name) {
+    std::string base = name;
+    if (base.size() > 3 && base.compare(base.size() - 3, 3, "#lo") == 0) base.resize(base.size() - 3);
+    return base.size() > 4 && base.compare(base.size() - 4, 4, ".glb") == 0;
+}
+
+// "a/b.glb" (com ou sem "#lo") -> "a/b_lo.glb".
+std::string VfxSystem::glbLoPath(const std::string& name) {
+    std::string base = name;
+    if (base.size() > 3 && base.compare(base.size() - 3, 3, "#lo") == 0) base.resize(base.size() - 3);
+    return base.substr(0, base.size() - 4) + "_lo.glb";
+}
+
 uint32_t VfxSystem::meshId(const std::string& name) {
     for (size_t i = 0; i < m_meshes.size(); ++i)
         if (m_meshes[i].name == name) return m_meshes[i].indexCount ? uint32_t(i) + 1 : 0u;
@@ -2022,8 +2146,24 @@ uint32_t VfxSystem::meshId(const std::string& name) {
     gm.name = name;
     gm.lod = name.size() > 3 && name.compare(name.size() - 3, 3, "#lo") == 0;
     VfxMeshData data;
-    if (!makeVfxBuiltinMesh(name, data)) {
-        ERUPTION_LOG_WARN("[VFX] malha de particula desconhecida: %s (desenha como sprite)", name.c_str());
+    bool ok;
+    if (isGlbMesh(name)) {
+        // Cache por caminho; "#lo" usa o irmao "_lo.glb" e, sem ele, a mesma malha.
+        std::string rel = gm.lod ? glbLoPath(name) : name;
+        std::string file = m_resolveMeshFile ? m_resolveMeshFile(rel) : std::string();
+        if (file.empty() && gm.lod) {
+            rel = name.substr(0, name.size() - 3);
+            file = m_resolveMeshFile ? m_resolveMeshFile(rel) : std::string();
+        }
+        if (file.empty())
+            ERUPTION_LOG_WARN("[VFX] malha .glb nao encontrada: %s (desenha como sprite)", rel.c_str());
+        ok = !file.empty() && loadGlbMesh(file, data);
+    } else {
+        ok = makeVfxBuiltinMesh(name, data);
+        if (!ok) ERUPTION_LOG_WARN("[VFX] malha de particula desconhecida: %s (desenha como sprite)", name.c_str());
+    }
+    if (!ok) {
+        // sem malha: o emissor desenha sprite
     } else if (createBuf(gm.vb, data.vertices.size() * sizeof(VfxMeshVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                          VMA_MEMORY_USAGE_CPU_TO_GPU, true) &&
                createBuf(gm.ib, data.indices.size() * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
