@@ -57,8 +57,12 @@ struct VfxEmitterGpu {
     glm::uvec4 graphB; // grafo: cor, tamanho
     glm::uvec4 ribbon; // fita: inicio e tamanho do anel
     glm::uvec4 events; // sub-emissores (ver vfx_common.glsl)
+    // Emissor em "space": "local": a mudanca da transformacao do efeito neste
+    // frame (nova * anterior^-1). Colunas da parte linear (giro x escala) em
+    // xyz e a translacao em w: d0 = (col0, t.x), d1 = (col1, t.y), d2 = (col2, t.z).
+    Vec4 delta0, delta1, delta2;
 };
-static_assert(sizeof(VfxEmitterGpu) == 448, "VfxEmitterGpu precisa bater com o std430 do shader");
+static_assert(sizeof(VfxEmitterGpu) == 496, "VfxEmitterGpu precisa bater com o std430 do shader");
 
 // Textura de uma folha de quadros pronta para o desenho.
 struct VfxTextureInfo {
@@ -270,6 +274,7 @@ private:
         std::shared_ptr<const VfxEffectDesc> desc;
         Mat4 transform{1.0f};
         Vec3 prevPos{0.0f};
+        Mat4 prevTransform{1.0f}; // transformacao do frame anterior (emissores "space": "local")
         Vec3 velocity{0.0f};
         float time = 0.0f;
         float stopTime = -1.0f; // >= 0: parou de nascer neste tempo

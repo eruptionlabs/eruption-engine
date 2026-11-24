@@ -108,6 +108,19 @@ void main() {
             // Forcas
             // Efeito descrito em metros; a escala da instancia (rot0.w)
             // leva para a unidade do mundo: forcas e turbulencia escalam junto.
+            // Emissor local: a particula viva acompanha a mudanca de transformacao
+            // do efeito (posicao, giro e escala de vfx.move/setTransform).
+            if ((e.flags.x & VFXF_LOCAL) != 0u) {
+                mat3 dl = vfxDeltaLin(e);
+                p.pos = dl * p.pos + vfxDeltaPos(e);
+                p.vel = dl * p.vel;
+                float ds = length(dl[0]);
+                if (abs(ds - 1.0) > 1e-5) {
+                    vec2 sz = unpackHalf2x16(p.sizeRot);
+                    sz.x *= ds;
+                    p.sizeRot = packHalf2x16(sz);
+                }
+            }
             float scale = e.rot0.w;
             vec3 acc = e.gravityDrag.xyz * scale;
             if (e.noise.x != 0.0)

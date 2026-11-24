@@ -1240,7 +1240,18 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
     o.dirSpread = Vec4(dir, e.spread);
     o.sizeRot = Vec4(e.size.x, e.size.y, glm::radians(e.rotation.x), glm::radians(e.rotation.y));
     o.angVel = Vec4(glm::radians(e.angularVelocity.x), glm::radians(e.angularVelocity.y), e.stretch, e.softDistance);
-    o.gravityDrag = Vec4(e.gravity, e.drag);
+    // "gravitySpace": "local": a gravidade gira com o efeito (a escala entra no shader).
+    const Vec3 grav = e.gravityLocal ? c0 * e.gravity.x + c1 * e.gravity.y + c2 * e.gravity.z : e.gravity;
+    o.gravityDrag = Vec4(grav, e.drag);
+    // "space": "local": mudanca de transformacao do frame (identidade no 1o).
+    Mat4 delta(1.0f);
+    if (e.localSpace) {
+        o.flags.x |= 1u << 27; // VFXF_LOCAL
+        if (!inst.firstFrame) delta = t * glm::inverse(inst.prevTransform);
+    }
+    o.delta0 = Vec4(delta[0].x, delta[0].y, delta[0].z, delta[3].x);
+    o.delta1 = Vec4(delta[1].x, delta[1].y, delta[1].z, delta[3].y);
+    o.delta2 = Vec4(delta[2].x, delta[2].y, delta[2].z, delta[3].z);
     o.noise = Vec4(e.noiseStrength, e.noiseFrequency, e.noiseSpeed, e.bounce);
     o.collide = Vec4(e.planeY, e.friction, e.collisionLifeLoss, distort ? e.distortion : 0.0f);
     o.render = Vec4(e.emissive, e.lit, e.maxScreenSize, e.nearFade);
@@ -1325,7 +1336,10 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
         const Vec3 pos = Vec3(inst.transform[3]);
         const bool segueVisao = inst.vision < 0 ? fx.vision : inst.vision != 0;
         inst.hidden = segueVisao && m_hideTest && m_hideTest(pos);
-        if (inst.firstFrame) inst.prevPos = pos;
+        if (inst.firstFrame) {
+            inst.prevPos = pos;
+            inst.prevTransform = inst.transform;
+        }
         inst.velocity = dt > 1e-6f ? (pos - inst.prevPos) / dt : Vec3(0.0f);
         // Rastro (ratePerMeter) em metros DO EFEITO: a distancia vem em
         // unidades do mapa e a escala da instancia ja' traz as unidades por
@@ -1343,7 +1357,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
         float fxDuration = fx.duration;
         if (fxDuration > 0.0f)
             for (const VfxEmitterDesc& e : fx.emitters)
-                if (e.enabled && e.burstCount > 0)
+                if (e.enabled && e.burstCount > 0 && e.startDelay >= fx.duration)
                     fxDuration = std::max(fxDuration, e.startDelay + 0.25f);
         float effTime = inst.time;
         bool wrapped = false;
@@ -1370,6 +1384,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
             const float local = effTime - e.startDelay;
             const bool emitting = e.enabled && !stopped && local >= 0.0f && (e.duration <= 0.0f || local < e.duration);
             uint32_t n = 0;
+            bool fireBurst = false;
             if (emitting) {
                 anySpawning = true;
                 es.spawnAccum += (e.rate * dt + e.ratePerMeter * moved) * m_spawnScale * inst.rateScale;
@@ -1379,8 +1394,11 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
                 if (e.burstCount > 0) {
                     const uint32_t burst = static_cast<uint32_t>(std::ceil(float(e.burstCount) * m_spawnScale * inst.rateScale));
                     if (es.burstsDone == 0) {
+                        // So' conta como disparada quando o pedido sai (abaixo): com o
+                        // emissor cheio (capacidade) ou a fila de pedidos cheia, a
+                        // rajada tenta de novo no quadro seguinte em vez de se perder.
                         n += burst;
-                        es.burstsDone = 1;
+                        fireBurst = true;
                         es.burstTimer = 0.0f;
                     } else if (e.burstInterval > 0.0f) {
                         es.burstTimer += dt;
@@ -1402,6 +1420,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
                 m_requests.push_back({es.slot, n, m_spawnTotal, hash32(m_frameSeed * 7919u + es.slot * 104729u),
                                       es.seq, 0u, 0u, 0u});
                 es.seq += n;
+                if (fireBurst) es.burstsDone = 1;
                 m_spawnTotal += n;
                 es.liveEstimate += n;
                 es.livePeak = std::max(es.livePeak, es.liveEstimate);
@@ -1421,6 +1440,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
             ++emitterCount;
         }
         inst.prevPos = pos;
+        inst.prevTransform = inst.transform;
         inst.firstFrame = false;
 
         // Fim: morto agora, ou parou de nascer e a ultima particula ja' morreu.

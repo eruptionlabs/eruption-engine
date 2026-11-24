@@ -34,8 +34,21 @@ void main() {
     // Nascimento interpolado: a k-esima nasce no ponto e no instante certos
     // do caminho do efeito neste frame (rastro continuo mesmo rapido).
     float f = (float(k) + rand01(seed, 1u)) / float(max(req.count, 1u));
-    vec3 origin = mix(e.prevPos.xyz, e.posTime.xyz, f);
+    bool local = (e.flags.x & VFXF_LOCAL) != 0u;
+    // Emissor local nasce no ponto atual do efeito (nao no caminho do frame).
+    vec3 origin = local ? e.posTime.xyz : mix(e.prevPos.xyz, e.posTime.xyz, f);
     Particle p = vfxMakeParticle(e, req.slot, origin, e.velInherit.xyz * e.velInherit.w, seed, (1.0 - f) * dt);
+    if (local) {
+        // A simulacao deste mesmo frame aplica a mudanca de transformacao em
+        // toda particula viva: a nova nasce ja' com o inverso, para cair certa.
+        mat3 dl = vfxDeltaLin(e);
+        mat3 inv = inverse(dl);
+        p.pos = inv * (p.pos - vfxDeltaPos(e));
+        p.vel = inv * p.vel;
+        vec2 sz = unpackHalf2x16(p.sizeRot);
+        sz.x /= max(length(dl[0]), 1e-6);
+        p.sizeRot = packHalf2x16(sz);
+    }
     if (e.ribbon.y > 0u) {
         // Ponto de fita: guarda o numero de sequencia (no lugar do giro, que a
         // fita nao usa) e se registra no anel do emissor.

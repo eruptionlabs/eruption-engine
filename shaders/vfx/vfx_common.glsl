@@ -55,6 +55,9 @@ struct Emitter {
     uvec4 events;     // sub-emissores: x filho na morte (slot+1), y filho na batida,
                       // z quantidades (8 bits cada) e herancas (8 bits, /255),
                       // w probabilidades (8 bits cada, /255)
+    vec4 delta0;      // "space": "local": mudanca da transformacao neste frame:
+    vec4 delta1;      // colunas da parte linear em xyz e a translacao em w
+    vec4 delta2;
 };
 
 // Bits de Emitter.flags.x
@@ -76,6 +79,7 @@ const uint VFXW_MESHLO_SHIFT = 16u;
 const uint VFXF_DECAL        = 1u << 24; // deitada e projetada na profundidade da cena
 const uint VFXF_SHADOWED     = 1u << 25; // termo do sol passa pelo mapa de sombra do sol
 const uint VFXF_DISTORT      = 1u << 26; // escreve no buffer de distorcao da tela, nao na cor
+const uint VFXF_LOCAL        = 1u << 27; // particulas presas ao efeito: seguem a mudanca de transformacao
 
 // Pedido de nascimento (CPU -> GPU): `count` particulas do emissor `slot`,
 // ocupando [first, first+count) da fila de nascimento deste frame.
@@ -229,3 +233,7 @@ vec3 vfxMeshScale(uvec4 cutout, uint seed) {
     if ((mode & 1u) != 0u) return vec3(1.0);
     return vec3(1.0, mix(0.55, 1.0, rand01(seed, 51u)), mix(0.7, 1.1, rand01(seed, 52u)));
 }
+
+// Emissor local: a mudanca de transformacao do efeito neste frame.
+mat3 vfxDeltaLin(Emitter e) { return mat3(e.delta0.xyz, e.delta1.xyz, e.delta2.xyz); }
+vec3 vfxDeltaPos(Emitter e) { return vec3(e.delta0.w, e.delta1.w, e.delta2.w); }

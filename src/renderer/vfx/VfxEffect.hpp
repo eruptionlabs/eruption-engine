@@ -91,6 +91,10 @@ struct VfxEmitterDesc {
 
     // --- Movimento ---
     Vec3 gravity{0.0f};
+    bool gravityLocal = false;   // "gravitySpace": "local": a gravidade gira com o efeito (yaw/rotacao);
+                                 // "world" (padrao): eixos do mundo
+    bool localSpace = false;     // "space": "local": as particulas vivas ficam presas ao efeito (posicao,
+                                 // giro e escala seguem vfx.move, sem renascer); "world" (padrao): soltas
     float drag = 0.0f;
     float noiseStrength = 0.0f;  // turbulencia (campo de rotacional, sem divergencia)
     float noiseFrequency = 0.25f;

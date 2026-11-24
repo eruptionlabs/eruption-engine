@@ -488,6 +488,8 @@ bool VfxEditor::drawEmitter(VfxEmitterDesc& e) {
     }
     if (ImGui::CollapsingHeader(tr("Motion"), ImGuiTreeNodeFlags_DefaultOpen)) {
         c |= ImGui::DragFloat3(tr("Gravity (m/s2)"), &e.gravity.x, 0.05f, -100.0f, 100.0f, "%.2f");
+        c |= ImGui::Checkbox(tr("Gravity turns with the effect"), &e.gravityLocal);
+        c |= ImGui::Checkbox(tr("Local space (particles follow the effect)"), &e.localSpace);
         c |= ImGui::DragFloat(tr("Drag"), &e.drag, 0.01f, 0.0f, 50.0f, "%.2f");
         c |= ImGui::DragFloat(tr("Turbulence"), &e.noiseStrength, 0.05f, 0.0f, 500.0f, "%.2f");
         c |= ImGui::DragFloat(tr("Turbulence scale (1/m)"), &e.noiseFrequency, 0.005f, 0.0f, 50.0f, "%.3f");

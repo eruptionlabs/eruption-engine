@@ -112,6 +112,8 @@ void readEmitter(const json& j, VfxEmitterDesc& e) {
     e.angularVelocity = v2(j, "angularVelocity", e.angularVelocity);
     e.inheritVelocity = num(j, "inheritVelocity", e.inheritVelocity);
     e.gravity = v3(j, "gravity", e.gravity);
+    if (j.contains("gravitySpace") && j["gravitySpace"].is_string()) e.gravityLocal = j["gravitySpace"].get<std::string>() == "local";
+    if (j.contains("space") && j["space"].is_string()) e.localSpace = j["space"].get<std::string>() == "local";
     e.drag = std::max(0.0f, num(j, "drag", e.drag));
     e.noiseStrength = num(j, "noiseStrength", e.noiseStrength);
     e.noiseFrequency = num(j, "noiseFrequency", e.noiseFrequency);
@@ -236,6 +238,8 @@ json writeEmitter(const VfxEmitterDesc& e) {
     j["angularVelocity"] = arr(e.angularVelocity);
     j["inheritVelocity"] = e.inheritVelocity;
     j["gravity"] = arr(e.gravity);
+    if (e.gravityLocal) j["gravitySpace"] = "local";
+    if (e.localSpace) j["space"] = "local";
     j["drag"] = e.drag;
     j["noiseStrength"] = e.noiseStrength;
     j["noiseFrequency"] = e.noiseFrequency;
