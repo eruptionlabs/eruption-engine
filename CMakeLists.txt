@@ -1328,6 +1328,15 @@ if(ERUPTION_BUILD_TESTS)
     endif()
     add_test(NAME GroundPackTests COMMAND eruption-ground-pack-tests)
 
+    # Afeccoes do lugar: a tabela data/affects.json, a escolha da reacao e os aneis (sem GPU).
+    add_executable(eruption-affects-tests tests/test_affects.cpp src/core/Affects.cpp)
+    target_include_directories(eruption-affects-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(eruption-affects-tests PRIVATE nlohmann_json::nlohmann_json)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-affects-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME AffectsTests COMMAND eruption-affects-tests ${CMAKE_SOURCE_DIR}/data/affects.json)
+
     if(ERUPTION_MODULE_NET)
         add_executable(eruption-net-tests tests/test_net_wire.cpp src/net/Wire.cpp)
         target_include_directories(eruption-net-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

@@ -1,0 +1,3803 @@
+{
+ "_comment": [
+  "AFECCOES DO LUGAR (world.affect): matriz elemento x superficie -> reacao. Nada de efeito fica no codigo.",
+  "A reacao e' uma lista de blocos: decal (marca projetada no chao), particles (VFX por cima), raise (relevo que",
+  "sobe e assenta, so' em quality >= min_quality), wet (molhado, world.wet_area; mud = lama) e wind (rajada local).",
+  "Medidas dos blocos em FRACAO DO RAIO do pedido (size, scatter, area, speed, size das particulas), tempos de",
+  "decal/wet/wind em FRACAO DA DURACAO do pedido; life das particulas em segundos. Cor linear.",
+  "min_quality / max_quality: 0 = low, 1 = medium, 2 = high (data/graphics.json, affect_quality).",
+  "A superficie vem da regiao de textura (ground.surface), do nome do material/textura do chao (surface_hints,",
+  "trechos em minuscula) ou 'default'; agua vem de waterSurfaceAt. O projeto do jogo sobrescreve este arquivo",
+  "com assets/data/affects.json no proprio projeto."
+ ],
+ "elements": [
+  "fire",
+  "earth",
+  "lightning",
+  "water",
+  "impact",
+  "wind",
+  "ice",
+  "poison",
+  "holy",
+  "shadow"
+ ],
+ "surfaces": [
+  "grass",
+  "dirt",
+  "sand",
+  "stone",
+  "snow",
+  "water",
+  "wood",
+  "default"
+ ],
+ "surface_hints": {
+  "grass": [
+   "grass",
+   "grama",
+   "mato",
+   "moss",
+   "musgo",
+   "lawn",
+   "meadow",
+   "fern",
+   "leaf",
+   "forest",
+   "floresta",
+   "mata",
+   "woodland"
+  ],
+  "dirt": [
+   "dirt",
+   "terra",
+   "soil",
+   "mud",
+   "lama",
+   "earth",
+   "ground",
+   "trail",
+   "path"
+  ],
+  "sand": [
+   "sand",
+   "areia",
+   "beach",
+   "praia",
+   "dune"
+  ],
+  "stone": [
+   "stone",
+   "rock",
+   "pedra",
+   "brick",
+   "tijolo",
+   "cobble",
+   "concrete",
+   "pave",
+   "cliff",
+   "slate",
+   "basalt",
+   "lava",
+   "asphalt"
+  ],
+  "snow": [
+   "snow",
+   "neve",
+   "ice",
+   "gelo"
+  ],
+  "wood": [
+   "wood",
+   "madeira",
+   "plank",
+   "tabua",
+   "timber",
+   "deck",
+   "board",
+   "log"
+  ]
+ },
+ "matrix": {
+  "fire": {
+   "default": "scorch",
+   "grass": "scorch_grass",
+   "sand": "scorch_sand",
+   "snow": "melt_snow",
+   "water": "steam"
+  },
+  "earth": {
+   "default": "quake",
+   "grass": "quake_grass",
+   "dirt": "quake_grass",
+   "sand": "quake_sand",
+   "stone": "quake_stone",
+   "snow": "quake_snow",
+   "water": "quake_water"
+  },
+  "lightning": {
+   "default": "bolt",
+   "grass": "bolt_grass",
+   "sand": "bolt_sand",
+   "wood": "bolt_wood",
+   "snow": "bolt_snow",
+   "water": "bolt_water"
+  },
+  "water": {
+   "default": "soak",
+   "dirt": "soak_dirt",
+   "sand": "soak_sand",
+   "snow": "soak_snow",
+   "grass": "soak_grass",
+   "water": "soak_water"
+  },
+  "impact": {
+   "default": "impact",
+   "grass": "impact_grass",
+   "dirt": "impact_dirt",
+   "sand": "impact_sand",
+   "snow": "impact_snow",
+   "water": "impact_water"
+  },
+  "wind": {
+   "default": "gust",
+   "grass": "gust_grass",
+   "sand": "gust_sand",
+   "dirt": "gust_dirt",
+   "snow": "gust_snow",
+   "water": "gust_water"
+  },
+  "ice": {
+   "default": "frost",
+   "snow": "frost_snow",
+   "water": "frost_water"
+  },
+  "poison": {
+   "default": "toxin",
+   "grass": "toxin_grass",
+   "water": "toxin_water"
+  },
+  "holy": {
+   "default": "bless",
+   "water": "bless_water"
+  },
+  "shadow": {
+   "default": "dusk",
+   "water": "dusk_water"
+  }
+ },
+ "reactions": {
+  "scorch": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_scorch",
+     "color": [
+      0.03,
+      0.0188,
+      0.0104
+     ],
+     "alpha": 0.97,
+     "size": 1.5,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.7,
+     "fade_in": 0.03
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_embers",
+     "color": [
+      1.0,
+      0.36,
+      0.07
+     ],
+     "alpha": 0.9,
+     "size": 1.5,
+     "atlas": 2,
+     "blend": "add",
+     "color_end": [
+      0.3,
+      0.03,
+      0.0
+     ],
+     "life": 0.3,
+     "hold": 0.12,
+     "fade_in": 0.03,
+     "lit": 0.0,
+     "strength_alpha": 0.6
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.22,
+      0.2,
+      0.19
+     ],
+     "texture": "builtin:puff",
+     "count": 6,
+     "life": [
+      1.5,
+      3.0
+     ],
+     "speed": [
+      0.05,
+      0.25
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.0,
+     "gravity": 0.15,
+     "drag": 0.6,
+     "alpha": 0.3,
+     "area": 0.4,
+     "lit": 0.8
+    },
+    {
+     "type": "particles",
+     "color": [
+      1.0,
+      0.6,
+      0.2
+     ],
+     "texture": "builtin:spark",
+     "blend": "add",
+     "count": 10,
+     "life": [
+      0.6,
+      1.6
+     ],
+     "speed": [
+      0.3,
+      1.1
+     ],
+     "size": [
+      0.015,
+      0.03
+     ],
+     "size_end": 0.3,
+     "gravity": -0.6,
+     "drag": 0.4,
+     "alpha": 0.9,
+     "area": 0.5,
+     "lit": 0.0,
+     "min_quality": 1
+    }
+   ]
+  },
+  "scorch_grass": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_scorch",
+     "color": [
+      0.024,
+      0.0176,
+      0.008
+     ],
+     "alpha": 0.97,
+     "size": 1.575,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.7,
+     "fade_in": 0.03
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_streak",
+     "color": [
+      0.016,
+      0.012,
+      0.0056
+     ],
+     "alpha": 0.55,
+     "size": 1.8,
+     "atlas": 2,
+     "count": 5,
+     "scatter": 0.5,
+     "life": 0.9,
+     "hold": 0.6
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_embers",
+     "color": [
+      1.0,
+      0.36,
+      0.07
+     ],
+     "alpha": 0.9,
+     "size": 1.5,
+     "atlas": 2,
+     "blend": "add",
+     "color_end": [
+      0.3,
+      0.03,
+      0.0
+     ],
+     "life": 0.3,
+     "hold": 0.12,
+     "fade_in": 0.03,
+     "lit": 0.0,
+     "strength_alpha": 0.6
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.22,
+      0.2,
+      0.19
+     ],
+     "texture": "builtin:puff",
+     "count": 6,
+     "life": [
+      1.5,
+      3.0
+     ],
+     "speed": [
+      0.05,
+      0.25
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.0,
+     "gravity": 0.15,
+     "drag": 0.6,
+     "alpha": 0.3,
+     "area": 0.4,
+     "lit": 0.8
+    },
+    {
+     "type": "particles",
+     "color": [
+      1.0,
+      0.6,
+      0.2
+     ],
+     "texture": "builtin:spark",
+     "blend": "add",
+     "count": 10,
+     "life": [
+      0.6,
+      1.6
+     ],
+     "speed": [
+      0.3,
+      1.1
+     ],
+     "size": [
+      0.015,
+      0.03
+     ],
+     "size_end": 0.3,
+     "gravity": -0.6,
+     "drag": 0.4,
+     "alpha": 0.9,
+     "area": 0.5,
+     "lit": 0.0,
+     "min_quality": 1
+    }
+   ]
+  },
+  "scorch_sand": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_scorch",
+     "color": [
+      0.06,
+      0.044,
+      0.026
+     ],
+     "alpha": 0.75,
+     "size": 1.5,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.6
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_embers",
+     "color": [
+      1.0,
+      0.36,
+      0.07
+     ],
+     "alpha": 0.9,
+     "size": 1.5,
+     "atlas": 2,
+     "blend": "add",
+     "color_end": [
+      0.3,
+      0.03,
+      0.0
+     ],
+     "life": 0.3,
+     "hold": 0.12,
+     "fade_in": 0.03,
+     "lit": 0.0,
+     "strength_alpha": 0.6
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.5,
+      0.42,
+      0.3
+     ],
+     "count": 5,
+     "life": [
+      0.6,
+      1.2
+     ],
+     "speed": [
+      0.1,
+      0.4
+     ],
+     "size": [
+      0.2,
+      0.35
+     ],
+     "gravity": 0.0,
+     "alpha": 0.25,
+     "area": 0.4
+    }
+   ]
+  },
+  "melt_snow": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_puddle",
+     "color": [
+      0.045,
+      0.05,
+      0.055
+     ],
+     "alpha": 0.75,
+     "size": 1.225,
+     "atlas": 2,
+     "size_start": 0.55,
+     "size_end": 1.15,
+     "life": 1.0,
+     "hold": 0.6,
+     "fade_in": 0.08
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_scorch",
+     "color": [
+      0.024,
+      0.022,
+      0.02
+     ],
+     "alpha": 0.6,
+     "size": 0.9,
+     "atlas": 2,
+     "life": 0.8,
+     "hold": 0.5
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.9,
+      0.93,
+      0.97
+     ],
+     "texture": "builtin:puff",
+     "count": 10,
+     "life": [
+      1.2,
+      2.6
+     ],
+     "speed": [
+      0.1,
+      0.35
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.4,
+     "gravity": 0.3,
+     "drag": 0.5,
+     "alpha": 0.35,
+     "area": 0.5,
+     "lit": 1.0
+    },
+    {
+     "type": "wet",
+     "amount": 0.8,
+     "radius": 1.0,
+     "dry": 1.0
+    }
+   ]
+  },
+  "steam": {
+   "blocks": [
+    {
+     "type": "particles",
+     "color": [
+      0.92,
+      0.95,
+      0.98
+     ],
+     "texture": "builtin:puff",
+     "count": 14,
+     "life": [
+      1.2,
+      2.8
+     ],
+     "speed": [
+      0.15,
+      0.5
+     ],
+     "size": [
+      0.3,
+      0.55
+     ],
+     "size_end": 2.6,
+     "gravity": 0.4,
+     "drag": 0.5,
+     "alpha": 0.4,
+     "area": 0.6,
+     "lit": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.9,
+      0.95,
+      1.0
+     ],
+     "texture": "builtin:puff",
+     "count": 0,
+     "rate": 6,
+     "duration": 0.5,
+     "life": [
+      1.0,
+      2.0
+     ],
+     "speed": [
+      0.1,
+      0.3
+     ],
+     "size": [
+      0.3,
+      0.5
+     ],
+     "size_end": 2.0,
+     "gravity": 0.35,
+     "drag": 0.5,
+     "alpha": 0.25,
+     "area": 0.4,
+     "lit": 1.0,
+     "min_quality": 1
+    }
+   ]
+  },
+  "quake": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_stain",
+     "color": [
+      0.03,
+      0.022,
+      0.015
+     ],
+     "alpha": 0.92,
+     "size": 1.488,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.6,
+     "fade_in": 0.04
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_crack",
+     "color": [
+      0.0048,
+      0.004,
+      0.0032
+     ],
+     "alpha": 0.95,
+     "size": 1.0,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.55,
+     "fade_in": 0.05
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_crack",
+     "color": [
+      0.012,
+      0.01,
+      0.008
+     ],
+     "alpha": 0.6,
+     "size": 0.7,
+     "atlas": 2,
+     "count": 2,
+     "scatter": 0.5,
+     "life": 0.9,
+     "hold": 0.5,
+     "min_quality": 1
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.25,
+      0.2,
+      0.14
+     ],
+     "texture": "builtin:puff",
+     "count": 5,
+     "life": [
+      0.9,
+      1.9
+     ],
+     "speed": [
+      0.15,
+      0.6
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.2,
+     "gravity": 0.05,
+     "drag": 0.9,
+     "alpha": 0.09,
+     "area": 0.6,
+     "outward": true,
+     "lit": 0.9
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.4,
+      0.36,
+      0.3
+     ],
+     "mesh": "builtin:rock",
+     "count": 8,
+     "life": [
+      0.8,
+      1.5
+     ],
+     "speed": [
+      0.6,
+      1.8
+     ],
+     "size": [
+      0.025,
+      0.06
+     ],
+     "size_end": 1.0,
+     "gravity": -3.0,
+     "drag": 0.2,
+     "alpha": 1.0,
+     "area": 0.3,
+     "collide": true,
+     "spread": 0.5,
+     "lit": 1.0,
+     "min_quality": 1
+    },
+    {
+     "type": "raise",
+     "count": 7,
+     "ring": 0.55,
+     "size": 0.2,
+     "rise": 0.14,
+     "rise_time": 0.12,
+     "life": 0.5,
+     "color": [
+      0.35,
+      0.32,
+      0.28
+     ]
+    }
+   ]
+  },
+  "quake_grass": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_crack",
+     "color": [
+      0.012,
+      0.0088,
+      0.0048
+     ],
+     "alpha": 0.95,
+     "size": 1.0,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.55,
+     "fade_in": 0.05
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_stain",
+     "color": [
+      0.028,
+      0.02,
+      0.012
+     ],
+     "alpha": 0.92,
+     "size": 1.575,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.6
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.22,
+      0.17,
+      0.1
+     ],
+     "texture": "builtin:puff",
+     "count": 5,
+     "life": [
+      0.9,
+      1.9
+     ],
+     "speed": [
+      0.15,
+      0.6
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.2,
+     "gravity": 0.05,
+     "drag": 0.9,
+     "alpha": 0.09,
+     "area": 0.6,
+     "outward": true,
+     "lit": 0.9
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.35,
+      0.28,
+      0.2
+     ],
+     "mesh": "builtin:rock",
+     "count": 6,
+     "life": [
+      0.8,
+      1.5
+     ],
+     "speed": [
+      0.6,
+      1.8
+     ],
+     "size": [
+      0.025,
+      0.06
+     ],
+     "size_end": 1.0,
+     "gravity": -3.0,
+     "drag": 0.2,
+     "alpha": 1.0,
+     "area": 0.3,
+     "collide": true,
+     "spread": 0.5,
+     "lit": 1.0,
+     "min_quality": 1
+    },
+    {
+     "type": "raise",
+     "count": 8,
+     "ring": 0.55,
+     "size": 0.22,
+     "rise": 0.15,
+     "rise_time": 0.12,
+     "life": 0.5,
+     "color": [
+      0.25,
+      0.2,
+      0.1
+     ]
+    }
+   ]
+  },
+  "quake_sand": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_blast",
+     "color": [
+      0.056,
+      0.044,
+      0.028
+     ],
+     "alpha": 0.6,
+     "size": 1.5,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.5
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_crack",
+     "color": [
+      0.048,
+      0.036,
+      0.02
+     ],
+     "alpha": 0.5,
+     "size": 0.8,
+     "atlas": 2,
+     "life": 0.8,
+     "hold": 0.4
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.72,
+      0.6,
+      0.38
+     ],
+     "texture": "builtin:puff",
+     "count": 10,
+     "life": [
+      0.9,
+      1.9
+     ],
+     "speed": [
+      0.15,
+      0.6
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.2,
+     "gravity": 0.05,
+     "drag": 0.9,
+     "alpha": 0.22,
+     "area": 0.6,
+     "outward": true,
+     "lit": 0.9
+    },
+    {
+     "type": "raise",
+     "count": 6,
+     "ring": 0.5,
+     "size": 0.28,
+     "rise": 0.1,
+     "rise_time": 0.12,
+     "life": 0.5,
+     "color": [
+      0.62,
+      0.5,
+      0.3
+     ]
+    }
+   ]
+  },
+  "quake_stone": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_stain",
+     "color": [
+      0.07,
+      0.065,
+      0.06
+     ],
+     "alpha": 0.7,
+     "size": 1.4,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.6,
+     "fade_in": 0.04
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_crack",
+     "color": [
+      0.008,
+      0.008,
+      0.0088
+     ],
+     "alpha": 0.9,
+     "size": 1.0,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.55,
+     "fade_in": 0.05
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_crack",
+     "color": [
+      0.012,
+      0.012,
+      0.0128
+     ],
+     "alpha": 0.7,
+     "size": 0.8,
+     "atlas": 2,
+     "count": 2,
+     "scatter": 0.45,
+     "life": 0.9,
+     "hold": 0.5
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.3,
+      0.3,
+      0.31
+     ],
+     "texture": "builtin:puff",
+     "count": 6,
+     "life": [
+      0.9,
+      1.9
+     ],
+     "speed": [
+      0.15,
+      0.6
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.2,
+     "gravity": 0.05,
+     "drag": 0.9,
+     "alpha": 0.18,
+     "area": 0.6,
+     "outward": true,
+     "lit": 0.9
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.45,
+      0.45,
+      0.47
+     ],
+     "mesh": "builtin:rock",
+     "count": 12,
+     "life": [
+      0.8,
+      1.5
+     ],
+     "speed": [
+      0.6,
+      1.8
+     ],
+     "size": [
+      0.025,
+      0.06
+     ],
+     "size_end": 1.0,
+     "gravity": -3.0,
+     "drag": 0.2,
+     "alpha": 1.0,
+     "area": 0.3,
+     "collide": true,
+     "spread": 0.5,
+     "lit": 1.0,
+     "min_quality": 1
+    },
+    {
+     "type": "raise",
+     "count": 9,
+     "ring": 0.6,
+     "size": 0.18,
+     "rise": 0.16,
+     "rise_time": 0.1,
+     "life": 0.55,
+     "mesh": "builtin:shard",
+     "color": [
+      0.4,
+      0.4,
+      0.42
+     ]
+    }
+   ]
+  },
+  "quake_snow": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_crack",
+     "color": [
+      0.032,
+      0.036,
+      0.044
+     ],
+     "alpha": 0.7,
+     "size": 1.0,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.55,
+     "fade_in": 0.05
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.95,
+      0.97,
+      1.0
+     ],
+     "texture": "builtin:puff",
+     "count": 14,
+     "life": [
+      1.0,
+      2.2
+     ],
+     "speed": [
+      0.15,
+      0.55
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.4,
+     "gravity": 0.05,
+     "drag": 0.9,
+     "alpha": 0.5,
+     "area": 0.6,
+     "outward": true,
+     "lit": 1.0
+    },
+    {
+     "type": "raise",
+     "count": 6,
+     "ring": 0.55,
+     "size": 0.22,
+     "rise": 0.12,
+     "rise_time": 0.12,
+     "life": 0.5,
+     "color": [
+      0.8,
+      0.85,
+      0.92
+     ]
+    }
+   ]
+  },
+  "quake_water": {
+   "blocks": [
+    {
+     "type": "particles",
+     "color": [
+      0.85,
+      0.92,
+      1.0
+     ],
+     "texture": "builtin:puff",
+     "count": 14,
+     "life": [
+      0.6,
+      1.3
+     ],
+     "speed": [
+      0.3,
+      1.0
+     ],
+     "size": [
+      0.12,
+      0.25
+     ],
+     "size_end": 1.8,
+     "gravity": -0.8,
+     "drag": 0.8,
+     "alpha": 0.45,
+     "area": 0.4,
+     "lit": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.8,
+      0.95,
+      1.0
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 12,
+     "life": [
+      0.7,
+      1.6
+     ],
+     "speed": [
+      0.05,
+      0.25
+     ],
+     "size": [
+      0.02,
+      0.05
+     ],
+     "size_end": 1.4,
+     "gravity": 0.12,
+     "drag": 1.5,
+     "alpha": 0.7,
+     "area": 0.6,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.85,
+      0.92,
+      1.0
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 3,
+     "life": [
+      0.8,
+      1.4
+     ],
+     "speed": [
+      0.0,
+      0.0
+     ],
+     "size": [
+      0.2,
+      0.25
+     ],
+     "size_end": 4.0,
+     "alpha": 0.35,
+     "area": 0.0,
+     "lit": 0.0
+    }
+   ]
+  },
+  "bolt": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_bolt",
+     "color": [
+      0.55,
+      0.75,
+      1.0
+     ],
+     "alpha": 0.9,
+     "size": 1.1,
+     "atlas": 2,
+     "blend": "add",
+     "color_end": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "life": 0.12,
+     "hold": 0.2,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_bolt",
+     "color": [
+      0.015,
+      0.013,
+      0.012
+     ],
+     "alpha": 0.95,
+     "size": 1.1,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.5,
+     "fade_in": 0.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_scorch",
+     "color": [
+      0.02,
+      0.0144,
+      0.0096
+     ],
+     "alpha": 0.85,
+     "size": 0.675,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.6
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_glow",
+     "color": [
+      0.75,
+      0.85,
+      1.0
+     ],
+     "alpha": 0.8,
+     "size": 1.4,
+     "blend": "add",
+     "life": 0.03,
+     "hold": 0.0,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.85,
+      1.0
+     ],
+     "texture": "builtin:spark",
+     "blend": "add",
+     "count": 12,
+     "life": [
+      0.2,
+      0.6
+     ],
+     "speed": [
+      0.6,
+      2.0
+     ],
+     "size": [
+      0.012,
+      0.03
+     ],
+     "size_end": 0.2,
+     "gravity": -2.0,
+     "drag": 0.5,
+     "alpha": 1.0,
+     "area": 0.2,
+     "lit": 0.0
+    }
+   ]
+  },
+  "bolt_grass": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_bolt",
+     "color": [
+      0.55,
+      0.75,
+      1.0
+     ],
+     "alpha": 0.9,
+     "size": 1.1,
+     "atlas": 2,
+     "blend": "add",
+     "color_end": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "life": 0.12,
+     "hold": 0.2,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_bolt",
+     "color": [
+      0.02,
+      0.018,
+      0.01
+     ],
+     "alpha": 0.95,
+     "size": 1.1,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.5,
+     "fade_in": 0.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_scorch",
+     "color": [
+      0.022,
+      0.016,
+      0.008
+     ],
+     "alpha": 0.9,
+     "size": 0.9,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.65
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_glow",
+     "color": [
+      0.75,
+      0.85,
+      1.0
+     ],
+     "alpha": 0.8,
+     "size": 1.4,
+     "blend": "add",
+     "life": 0.03,
+     "hold": 0.0,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.85,
+      1.0
+     ],
+     "texture": "builtin:spark",
+     "blend": "add",
+     "count": 12,
+     "life": [
+      0.2,
+      0.6
+     ],
+     "speed": [
+      0.6,
+      2.0
+     ],
+     "size": [
+      0.012,
+      0.03
+     ],
+     "size_end": 0.2,
+     "gravity": -2.0,
+     "drag": 0.5,
+     "alpha": 1.0,
+     "area": 0.2,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.25,
+      0.24,
+      0.22
+     ],
+     "texture": "builtin:puff",
+     "count": 5,
+     "life": [
+      1.2,
+      2.4
+     ],
+     "speed": [
+      0.05,
+      0.2
+     ],
+     "size": [
+      0.2,
+      0.35
+     ],
+     "size_end": 2.0,
+     "gravity": 0.2,
+     "drag": 0.6,
+     "alpha": 0.3,
+     "area": 0.2
+    }
+   ]
+  },
+  "bolt_sand": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_bolt",
+     "color": [
+      0.1,
+      0.08,
+      0.05
+     ],
+     "alpha": 0.6,
+     "size": 1.1,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.5,
+     "fade_in": 0.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_bolt",
+     "color": [
+      0.6,
+      0.8,
+      0.9
+     ],
+     "alpha": 0.4,
+     "size": 1.15,
+     "atlas": 2,
+     "blend": "add",
+     "color_end": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "life": 0.12,
+     "hold": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_glow",
+     "color": [
+      0.75,
+      0.85,
+      1.0
+     ],
+     "alpha": 0.8,
+     "size": 1.4,
+     "blend": "add",
+     "life": 0.03,
+     "hold": 0.0,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.85,
+      1.0
+     ],
+     "texture": "builtin:spark",
+     "blend": "add",
+     "count": 12,
+     "life": [
+      0.2,
+      0.6
+     ],
+     "speed": [
+      0.6,
+      2.0
+     ],
+     "size": [
+      0.012,
+      0.03
+     ],
+     "size_end": 0.2,
+     "gravity": -2.0,
+     "drag": 0.5,
+     "alpha": 1.0,
+     "area": 0.2,
+     "lit": 0.0
+    }
+   ]
+  },
+  "bolt_wood": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_bolt",
+     "color": [
+      0.55,
+      0.75,
+      1.0
+     ],
+     "alpha": 0.9,
+     "size": 1.1,
+     "atlas": 2,
+     "blend": "add",
+     "color_end": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "life": 0.12,
+     "hold": 0.2,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_bolt",
+     "color": [
+      0.015,
+      0.013,
+      0.012
+     ],
+     "alpha": 0.95,
+     "size": 1.1,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.5,
+     "fade_in": 0.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_scorch",
+     "color": [
+      0.018,
+      0.0136,
+      0.0088
+     ],
+     "alpha": 0.95,
+     "size": 0.825,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.7
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_embers",
+     "color": [
+      1.0,
+      0.3,
+      0.05
+     ],
+     "alpha": 0.9,
+     "size": 0.675,
+     "atlas": 2,
+     "blend": "add",
+     "color_end": [
+      0.2,
+      0.02,
+      0.0
+     ],
+     "life": 0.25,
+     "hold": 0.1,
+     "lit": 0.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_glow",
+     "color": [
+      0.75,
+      0.85,
+      1.0
+     ],
+     "alpha": 0.8,
+     "size": 1.4,
+     "blend": "add",
+     "life": 0.03,
+     "hold": 0.0,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.85,
+      1.0
+     ],
+     "texture": "builtin:spark",
+     "blend": "add",
+     "count": 12,
+     "life": [
+      0.2,
+      0.6
+     ],
+     "speed": [
+      0.6,
+      2.0
+     ],
+     "size": [
+      0.012,
+      0.03
+     ],
+     "size_end": 0.2,
+     "gravity": -2.0,
+     "drag": 0.5,
+     "alpha": 1.0,
+     "area": 0.2,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.25,
+      0.24,
+      0.22
+     ],
+     "texture": "builtin:puff",
+     "count": 5,
+     "life": [
+      1.2,
+      2.4
+     ],
+     "speed": [
+      0.05,
+      0.2
+     ],
+     "size": [
+      0.2,
+      0.35
+     ],
+     "size_end": 2.0,
+     "gravity": 0.2,
+     "drag": 0.6,
+     "alpha": 0.3,
+     "area": 0.2
+    }
+   ]
+  },
+  "bolt_snow": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_bolt",
+     "color": [
+      0.55,
+      0.75,
+      1.0
+     ],
+     "alpha": 0.9,
+     "size": 1.1,
+     "atlas": 2,
+     "blend": "add",
+     "color_end": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "life": 0.12,
+     "hold": 0.2,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_bolt",
+     "color": [
+      0.05,
+      0.055,
+      0.065
+     ],
+     "alpha": 0.95,
+     "size": 1.1,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.5,
+     "fade_in": 0.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_puddle",
+     "color": [
+      0.04,
+      0.045,
+      0.05
+     ],
+     "alpha": 0.6,
+     "size": 0.787,
+     "atlas": 2,
+     "size_start": 0.5,
+     "size_end": 1.0,
+     "life": 1.0,
+     "hold": 0.6
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_glow",
+     "color": [
+      0.75,
+      0.85,
+      1.0
+     ],
+     "alpha": 0.8,
+     "size": 1.4,
+     "blend": "add",
+     "life": 0.03,
+     "hold": 0.0,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.85,
+      1.0
+     ],
+     "texture": "builtin:spark",
+     "blend": "add",
+     "count": 12,
+     "life": [
+      0.2,
+      0.6
+     ],
+     "speed": [
+      0.6,
+      2.0
+     ],
+     "size": [
+      0.012,
+      0.03
+     ],
+     "size_end": 0.2,
+     "gravity": -2.0,
+     "drag": 0.5,
+     "alpha": 1.0,
+     "area": 0.2,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.92,
+      0.95,
+      1.0
+     ],
+     "texture": "builtin:puff",
+     "count": 6,
+     "life": [
+      1.0,
+      2.0
+     ],
+     "speed": [
+      0.1,
+      0.3
+     ],
+     "size": [
+      0.2,
+      0.35
+     ],
+     "size_end": 2.2,
+     "gravity": 0.3,
+     "drag": 0.5,
+     "alpha": 0.35,
+     "area": 0.3,
+     "lit": 1.0
+    }
+   ]
+  },
+  "bolt_water": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_glow",
+     "color": [
+      0.75,
+      0.85,
+      1.0
+     ],
+     "alpha": 0.8,
+     "size": 1.4,
+     "blend": "add",
+     "life": 0.03,
+     "hold": 0.0,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.85,
+      1.0
+     ],
+     "texture": "builtin:spark",
+     "blend": "add",
+     "count": 12,
+     "life": [
+      0.2,
+      0.6
+     ],
+     "speed": [
+      0.6,
+      2.0
+     ],
+     "size": [
+      0.012,
+      0.03
+     ],
+     "size_end": 0.2,
+     "gravity": -2.0,
+     "drag": 0.5,
+     "alpha": 1.0,
+     "area": 0.2,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.85,
+      1.0
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 8,
+     "life": [
+      0.7,
+      1.6
+     ],
+     "speed": [
+      0.05,
+      0.25
+     ],
+     "size": [
+      0.02,
+      0.05
+     ],
+     "size_end": 1.4,
+     "gravity": 0.12,
+     "drag": 1.5,
+     "alpha": 0.8,
+     "area": 0.6,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.8,
+      0.9,
+      1.0
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 2,
+     "life": [
+      0.8,
+      1.4
+     ],
+     "speed": [
+      0.0,
+      0.0
+     ],
+     "size": [
+      0.2,
+      0.25
+     ],
+     "size_end": 4.5,
+     "alpha": 0.5,
+     "area": 0.0,
+     "lit": 0.0
+    }
+   ]
+  },
+  "soak": {
+   "blocks": [
+    {
+     "type": "wet",
+     "amount": 1.0,
+     "radius": 1.1,
+     "dry": 1.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_puddle",
+     "color": [
+      0.008,
+      0.011,
+      0.015
+     ],
+     "alpha": 0.75,
+     "size": 1.488,
+     "atlas": 2,
+     "size_start": 0.4,
+     "size_end": 1.0,
+     "life": 1.0,
+     "hold": 0.55,
+     "fade_in": 0.05
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.5,
+      0.56,
+      0.62
+     ],
+     "texture": "builtin:puff",
+     "count": 4,
+     "life": [
+      0.3,
+      0.7
+     ],
+     "speed": [
+      0.2,
+      0.6
+     ],
+     "size": [
+      0.05,
+      0.1
+     ],
+     "size_end": 1.2,
+     "gravity": -1.5,
+     "drag": 0.6,
+     "alpha": 0.1,
+     "area": 0.3,
+     "lit": 1.0
+    }
+   ]
+  },
+  "soak_dirt": {
+   "blocks": [
+    {
+     "type": "wet",
+     "amount": 1.0,
+     "radius": 1.1,
+     "dry": 1.0,
+     "mud": true
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_mud",
+     "color": [
+      0.014,
+      0.0088,
+      0.0048
+     ],
+     "alpha": 0.8,
+     "size": 1.5,
+     "atlas": 2,
+     "size_start": 0.5,
+     "size_end": 1.0,
+     "life": 1.0,
+     "hold": 0.65,
+     "fade_in": 0.05
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_puddle",
+     "color": [
+      0.04,
+      0.036,
+      0.032
+     ],
+     "alpha": 0.65,
+     "size": 1.137,
+     "atlas": 2,
+     "size_start": 0.4,
+     "size_end": 0.9,
+     "life": 0.8,
+     "hold": 0.5,
+     "fade_in": 0.05
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.2,
+      0.14,
+      0.09
+     ],
+     "texture": "builtin:puff",
+     "count": 4,
+     "life": [
+      0.3,
+      0.7
+     ],
+     "speed": [
+      0.2,
+      0.6
+     ],
+     "size": [
+      0.05,
+      0.1
+     ],
+     "size_end": 1.2,
+     "gravity": -1.5,
+     "drag": 0.6,
+     "alpha": 0.15,
+     "area": 0.3,
+     "lit": 1.0
+    }
+   ]
+  },
+  "soak_sand": {
+   "blocks": [
+    {
+     "type": "wet",
+     "amount": 0.9,
+     "radius": 1.1,
+     "dry": 0.8
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_puddle",
+     "color": [
+      0.14,
+      0.1,
+      0.065
+     ],
+     "alpha": 0.55,
+     "size": 1.662,
+     "atlas": 2,
+     "size_start": 0.5,
+     "size_end": 1.0,
+     "life": 0.9,
+     "hold": 0.55,
+     "fade_in": 0.05
+    }
+   ]
+  },
+  "soak_snow": {
+   "blocks": [
+    {
+     "type": "wet",
+     "amount": 0.7,
+     "radius": 1.0,
+     "dry": 1.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_puddle",
+     "color": [
+      0.16,
+      0.18,
+      0.21
+     ],
+     "alpha": 0.6,
+     "size": 1.662,
+     "atlas": 2,
+     "size_start": 0.5,
+     "size_end": 1.05,
+     "life": 1.0,
+     "hold": 0.55,
+     "fade_in": 0.05
+    }
+   ]
+  },
+  "soak_grass": {
+   "blocks": [
+    {
+     "type": "wet",
+     "amount": 1.0,
+     "radius": 1.1,
+     "dry": 1.0
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_puddle",
+     "color": [
+      0.007,
+      0.01,
+      0.006
+     ],
+     "alpha": 0.75,
+     "size": 1.4,
+     "atlas": 2,
+     "size_start": 0.4,
+     "size_end": 0.95,
+     "life": 0.9,
+     "hold": 0.5,
+     "fade_in": 0.05
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.5,
+      0.56,
+      0.62
+     ],
+     "texture": "builtin:puff",
+     "count": 4,
+     "life": [
+      0.3,
+      0.7
+     ],
+     "speed": [
+      0.2,
+      0.6
+     ],
+     "size": [
+      0.05,
+      0.1
+     ],
+     "size_end": 1.2,
+     "gravity": -1.5,
+     "drag": 0.6,
+     "alpha": 0.1,
+     "area": 0.3,
+     "lit": 1.0
+    }
+   ]
+  },
+  "soak_water": {
+   "blocks": [
+    {
+     "type": "particles",
+     "color": [
+      0.85,
+      0.92,
+      1.0
+     ],
+     "texture": "builtin:puff",
+     "count": 8,
+     "life": [
+      0.6,
+      1.3
+     ],
+     "speed": [
+      0.3,
+      1.0
+     ],
+     "size": [
+      0.12,
+      0.25
+     ],
+     "size_end": 1.8,
+     "gravity": -0.8,
+     "drag": 0.8,
+     "alpha": 0.45,
+     "area": 0.4,
+     "lit": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.8,
+      0.95,
+      1.0
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 6,
+     "life": [
+      0.7,
+      1.6
+     ],
+     "speed": [
+      0.05,
+      0.25
+     ],
+     "size": [
+      0.02,
+      0.05
+     ],
+     "size_end": 1.4,
+     "gravity": 0.12,
+     "drag": 1.5,
+     "alpha": 0.7,
+     "area": 0.6,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.85,
+      0.92,
+      1.0
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 3,
+     "life": [
+      0.8,
+      1.4
+     ],
+     "speed": [
+      0.0,
+      0.0
+     ],
+     "size": [
+      0.2,
+      0.25
+     ],
+     "size_end": 4.0,
+     "alpha": 0.3,
+     "area": 0.0,
+     "lit": 0.0
+    }
+   ]
+  },
+  "impact": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_crater",
+     "color": [
+      0.024,
+      0.0168,
+      0.012
+     ],
+     "alpha": 0.95,
+     "size": 1.0,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.6,
+     "fade_in": 0.02
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_wave",
+     "color": [
+      0.9,
+      0.88,
+      0.82
+     ],
+     "alpha": 0.5,
+     "size": 1.0,
+     "atlas": 2,
+     "blend": "add",
+     "size_start": 0.25,
+     "size_end": 1.35,
+     "life": 0.06,
+     "hold": 0.0,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.3,
+      0.24,
+      0.17
+     ],
+     "texture": "builtin:puff",
+     "count": 6,
+     "life": [
+      0.9,
+      1.9
+     ],
+     "speed": [
+      0.15,
+      0.6
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.2,
+     "gravity": 0.05,
+     "drag": 0.9,
+     "alpha": 0.09,
+     "area": 0.6,
+     "outward": true,
+     "lit": 0.9
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.4,
+      0.34,
+      0.28
+     ],
+     "mesh": "builtin:rock",
+     "count": 10,
+     "life": [
+      0.8,
+      1.5
+     ],
+     "speed": [
+      0.6,
+      1.8
+     ],
+     "size": [
+      0.025,
+      0.06
+     ],
+     "size_end": 1.0,
+     "gravity": -3.0,
+     "drag": 0.2,
+     "alpha": 1.0,
+     "area": 0.3,
+     "collide": true,
+     "spread": 0.5,
+     "lit": 1.0,
+     "min_quality": 1
+    },
+    {
+     "type": "raise",
+     "count": 8,
+     "ring": 0.7,
+     "size": 0.16,
+     "rise": 0.1,
+     "rise_time": 0.08,
+     "life": 0.35,
+     "color": [
+      0.3,
+      0.24,
+      0.18
+     ]
+    },
+    {
+     "type": "wind",
+     "strength": 0.8,
+     "radius": 1.4,
+     "duration": 0.05,
+     "duration_min": 0.6
+    }
+   ]
+  },
+  "impact_grass": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_crater",
+     "color": [
+      0.024,
+      0.0168,
+      0.012
+     ],
+     "alpha": 0.95,
+     "size": 1.0,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.7,
+     "fade_in": 0.02
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_wave",
+     "color": [
+      0.9,
+      0.88,
+      0.82
+     ],
+     "alpha": 0.5,
+     "size": 1.0,
+     "atlas": 2,
+     "blend": "add",
+     "size_start": 0.25,
+     "size_end": 1.35,
+     "life": 0.06,
+     "hold": 0.0,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.3,
+      0.24,
+      0.17
+     ],
+     "texture": "builtin:puff",
+     "count": 6,
+     "life": [
+      0.9,
+      1.9
+     ],
+     "speed": [
+      0.15,
+      0.6
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.2,
+     "gravity": 0.05,
+     "drag": 0.9,
+     "alpha": 0.09,
+     "area": 0.6,
+     "outward": true,
+     "lit": 0.9
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.35,
+      0.28,
+      0.2
+     ],
+     "mesh": "builtin:rock",
+     "count": 8,
+     "life": [
+      0.8,
+      1.5
+     ],
+     "speed": [
+      0.6,
+      1.8
+     ],
+     "size": [
+      0.025,
+      0.06
+     ],
+     "size_end": 1.0,
+     "gravity": -3.0,
+     "drag": 0.2,
+     "alpha": 1.0,
+     "area": 0.3,
+     "collide": true,
+     "spread": 0.5,
+     "lit": 1.0,
+     "min_quality": 1
+    },
+    {
+     "type": "wind",
+     "strength": 1.0,
+     "radius": 1.6,
+     "duration": 0.06,
+     "duration_min": 0.7
+    }
+   ]
+  },
+  "impact_dirt": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_crater",
+     "color": [
+      0.024,
+      0.0168,
+      0.012
+     ],
+     "alpha": 0.95,
+     "size": 1.0,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.6,
+     "fade_in": 0.02
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_wave",
+     "color": [
+      0.9,
+      0.88,
+      0.82
+     ],
+     "alpha": 0.5,
+     "size": 1.0,
+     "atlas": 2,
+     "blend": "add",
+     "size_start": 0.25,
+     "size_end": 1.35,
+     "life": 0.06,
+     "hold": 0.0,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.5,
+      0.38,
+      0.26
+     ],
+     "texture": "builtin:puff",
+     "count": 8,
+     "life": [
+      0.9,
+      1.9
+     ],
+     "speed": [
+      0.15,
+      0.6
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.2,
+     "gravity": 0.05,
+     "drag": 0.9,
+     "alpha": 0.12,
+     "area": 0.6,
+     "outward": true,
+     "lit": 0.9
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.35,
+      0.28,
+      0.2
+     ],
+     "mesh": "builtin:rock",
+     "count": 10,
+     "life": [
+      0.8,
+      1.5
+     ],
+     "speed": [
+      0.6,
+      1.8
+     ],
+     "size": [
+      0.025,
+      0.06
+     ],
+     "size_end": 1.0,
+     "gravity": -3.0,
+     "drag": 0.2,
+     "alpha": 1.0,
+     "area": 0.3,
+     "collide": true,
+     "spread": 0.5,
+     "lit": 1.0,
+     "min_quality": 1
+    },
+    {
+     "type": "raise",
+     "count": 8,
+     "ring": 0.7,
+     "size": 0.18,
+     "rise": 0.11,
+     "rise_time": 0.08,
+     "life": 0.35,
+     "color": [
+      0.3,
+      0.22,
+      0.14
+     ]
+    },
+    {
+     "type": "wind",
+     "strength": 0.8,
+     "radius": 1.4,
+     "duration": 0.05,
+     "duration_min": 0.6
+    }
+   ]
+  },
+  "impact_sand": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_crater",
+     "color": [
+      0.08,
+      0.06,
+      0.036
+     ],
+     "alpha": 0.9,
+     "size": 1.0,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.5,
+     "fade_in": 0.02
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_wave",
+     "color": [
+      0.9,
+      0.88,
+      0.82
+     ],
+     "alpha": 0.5,
+     "size": 1.0,
+     "atlas": 2,
+     "blend": "add",
+     "size_start": 0.25,
+     "size_end": 1.35,
+     "life": 0.06,
+     "hold": 0.0,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.75,
+      0.63,
+      0.4
+     ],
+     "texture": "builtin:puff",
+     "count": 12,
+     "life": [
+      0.9,
+      1.9
+     ],
+     "speed": [
+      0.15,
+      0.6
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.2,
+     "gravity": 0.05,
+     "drag": 0.9,
+     "alpha": 0.22,
+     "area": 0.6,
+     "outward": true,
+     "lit": 0.9
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.65,
+      0.55,
+      0.35
+     ],
+     "mesh": "builtin:rock",
+     "count": 6,
+     "life": [
+      0.8,
+      1.5
+     ],
+     "speed": [
+      0.6,
+      1.8
+     ],
+     "size": [
+      0.025,
+      0.06
+     ],
+     "size_end": 1.0,
+     "gravity": -3.0,
+     "drag": 0.2,
+     "alpha": 1.0,
+     "area": 0.3,
+     "collide": true,
+     "spread": 0.5,
+     "lit": 1.0,
+     "min_quality": 1
+    },
+    {
+     "type": "wind",
+     "strength": 0.8,
+     "radius": 1.4,
+     "duration": 0.05,
+     "duration_min": 0.6
+    }
+   ]
+  },
+  "impact_snow": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_crater",
+     "color": [
+      0.08,
+      0.088,
+      0.108
+     ],
+     "alpha": 0.8,
+     "size": 1.0,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.55,
+     "fade_in": 0.02
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_wave",
+     "color": [
+      0.9,
+      0.88,
+      0.82
+     ],
+     "alpha": 0.5,
+     "size": 1.0,
+     "atlas": 2,
+     "blend": "add",
+     "size_start": 0.25,
+     "size_end": 1.35,
+     "life": 0.06,
+     "hold": 0.0,
+     "fade_in": 0.0,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.95,
+      0.97,
+      1.0
+     ],
+     "texture": "builtin:puff",
+     "count": 12,
+     "life": [
+      1.0,
+      2.2
+     ],
+     "speed": [
+      0.2,
+      0.8
+     ],
+     "size": [
+      0.22,
+      0.42
+     ],
+     "size_end": 2.4,
+     "gravity": -0.05,
+     "drag": 0.9,
+     "alpha": 0.3,
+     "area": 0.6,
+     "outward": true,
+     "lit": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.85,
+      0.9,
+      0.97
+     ],
+     "mesh": "builtin:rock",
+     "count": 8,
+     "life": [
+      0.8,
+      1.5
+     ],
+     "speed": [
+      0.6,
+      1.8
+     ],
+     "size": [
+      0.025,
+      0.06
+     ],
+     "size_end": 1.0,
+     "gravity": -3.0,
+     "drag": 0.2,
+     "alpha": 1.0,
+     "area": 0.3,
+     "collide": true,
+     "spread": 0.5,
+     "lit": 1.0,
+     "min_quality": 1
+    },
+    {
+     "type": "wind",
+     "strength": 0.8,
+     "radius": 1.4,
+     "duration": 0.05,
+     "duration_min": 0.6
+    }
+   ]
+  },
+  "impact_water": {
+   "blocks": [
+    {
+     "type": "particles",
+     "color": [
+      0.85,
+      0.92,
+      1.0
+     ],
+     "texture": "builtin:puff",
+     "count": 18,
+     "life": [
+      0.6,
+      1.3
+     ],
+     "speed": [
+      0.3,
+      1.0
+     ],
+     "size": [
+      0.12,
+      0.25
+     ],
+     "size_end": 1.8,
+     "gravity": -0.8,
+     "drag": 0.8,
+     "alpha": 0.45,
+     "area": 0.4,
+     "lit": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.8,
+      0.95,
+      1.0
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 10,
+     "life": [
+      0.7,
+      1.6
+     ],
+     "speed": [
+      0.05,
+      0.25
+     ],
+     "size": [
+      0.02,
+      0.05
+     ],
+     "size_end": 1.4,
+     "gravity": 0.12,
+     "drag": 1.5,
+     "alpha": 0.7,
+     "area": 0.6,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.85,
+      0.92,
+      1.0
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 3,
+     "life": [
+      0.8,
+      1.4
+     ],
+     "speed": [
+      0.0,
+      0.0
+     ],
+     "size": [
+      0.2,
+      0.25
+     ],
+     "size_end": 5.0,
+     "alpha": 0.4,
+     "area": 0.0,
+     "lit": 0.0
+    }
+   ]
+  },
+  "gust": {
+   "blocks": [
+    {
+     "type": "wind",
+     "strength": 1.0,
+     "radius": 1.6,
+     "duration": 1.0,
+     "duration_min": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.55,
+      0.52,
+      0.47
+     ],
+     "texture": "builtin:puff",
+     "count": 6,
+     "life": [
+      0.9,
+      1.9
+     ],
+     "speed": [
+      0.15,
+      0.6
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.2,
+     "gravity": 0.05,
+     "drag": 0.9,
+     "alpha": 0.18,
+     "area": 0.6,
+     "outward": true,
+     "lit": 0.9
+    }
+   ]
+  },
+  "gust_grass": {
+   "blocks": [
+    {
+     "type": "wind",
+     "strength": 1.0,
+     "radius": 1.6,
+     "duration": 1.0,
+     "duration_min": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.35,
+      0.5,
+      0.15
+     ],
+     "texture": "builtin:leaf",
+     "count": 8,
+     "life": [
+      1.0,
+      2.0
+     ],
+     "speed": [
+      0.4,
+      1.2
+     ],
+     "size": [
+      0.05,
+      0.1
+     ],
+     "size_end": 1.0,
+     "gravity": -0.1,
+     "drag": 0.5,
+     "alpha": 1.0,
+     "area": 0.5,
+     "spread": 0.7,
+     "outward": true,
+     "lit": 1.0,
+     "min_quality": 1
+    }
+   ]
+  },
+  "gust_sand": {
+   "blocks": [
+    {
+     "type": "wind",
+     "strength": 1.0,
+     "radius": 1.6,
+     "duration": 1.0,
+     "duration_min": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.75,
+      0.63,
+      0.4
+     ],
+     "texture": "builtin:puff",
+     "count": 14,
+     "life": [
+      0.9,
+      1.9
+     ],
+     "speed": [
+      0.15,
+      0.6
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.2,
+     "gravity": 0.05,
+     "drag": 0.9,
+     "alpha": 0.35,
+     "area": 0.6,
+     "outward": true,
+     "lit": 0.9
+    }
+   ]
+  },
+  "gust_dirt": {
+   "blocks": [
+    {
+     "type": "wind",
+     "strength": 1.0,
+     "radius": 1.6,
+     "duration": 1.0,
+     "duration_min": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.5,
+      0.38,
+      0.26
+     ],
+     "texture": "builtin:puff",
+     "count": 12,
+     "life": [
+      0.9,
+      1.9
+     ],
+     "speed": [
+      0.15,
+      0.6
+     ],
+     "size": [
+      0.25,
+      0.45
+     ],
+     "size_end": 2.2,
+     "gravity": 0.05,
+     "drag": 0.9,
+     "alpha": 0.3,
+     "area": 0.6,
+     "outward": true,
+     "lit": 0.9
+    }
+   ]
+  },
+  "gust_snow": {
+   "blocks": [
+    {
+     "type": "wind",
+     "strength": 1.0,
+     "radius": 1.6,
+     "duration": 1.0,
+     "duration_min": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.95,
+      0.97,
+      1.0
+     ],
+     "texture": "builtin:puff",
+     "count": 14,
+     "life": [
+      1.0,
+      2.2
+     ],
+     "speed": [
+      0.3,
+      0.9
+     ],
+     "size": [
+      0.2,
+      0.36
+     ],
+     "size_end": 2.2,
+     "gravity": 0.0,
+     "drag": 0.8,
+     "alpha": 0.4,
+     "area": 0.6,
+     "outward": true,
+     "lit": 1.0
+    }
+   ]
+  },
+  "gust_water": {
+   "blocks": [
+    {
+     "type": "wind",
+     "strength": 1.0,
+     "radius": 1.6,
+     "duration": 1.0,
+     "duration_min": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.85,
+      0.92,
+      1.0
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 3,
+     "life": [
+      0.8,
+      1.4
+     ],
+     "speed": [
+      0.0,
+      0.0
+     ],
+     "size": [
+      0.2,
+      0.25
+     ],
+     "size_end": 5.0,
+     "alpha": 0.25,
+     "area": 0.0,
+     "lit": 0.0
+    }
+   ]
+  },
+  "frost": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_frost",
+     "color": [
+      0.75,
+      0.88,
+      0.98
+     ],
+     "alpha": 0.7,
+     "size": 1.575,
+     "atlas": 2,
+     "size_start": 0.6,
+     "size_end": 1.0,
+     "life": 1.0,
+     "hold": 0.4,
+     "fade_in": 0.05,
+     "lit": 0.9
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_puddle",
+     "color": [
+      0.04,
+      0.046,
+      0.055
+     ],
+     "alpha": 0.55,
+     "size": 1.488,
+     "atlas": 2,
+     "size_start": 0.5,
+     "size_end": 1.0,
+     "delay": 0.55,
+     "life": 0.45,
+     "hold": 0.3,
+     "fade_in": 0.05
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.8,
+      0.93,
+      1.0
+     ],
+     "texture": "builtin:star",
+     "blend": "add",
+     "count": 8,
+     "life": [
+      0.8,
+      1.8
+     ],
+     "speed": [
+      0.02,
+      0.12
+     ],
+     "size": [
+      0.02,
+      0.04
+     ],
+     "size_end": 0.5,
+     "gravity": 0.02,
+     "drag": 1.0,
+     "alpha": 0.8,
+     "area": 0.7,
+     "lit": 0.0,
+     "min_quality": 1
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.85,
+      0.95,
+      1.0
+     ],
+     "texture": "builtin:puff",
+     "count": 6,
+     "life": [
+      0.9,
+      1.8
+     ],
+     "speed": [
+      0.05,
+      0.25
+     ],
+     "size": [
+      0.2,
+      0.35
+     ],
+     "size_end": 2.0,
+     "gravity": -0.05,
+     "drag": 0.8,
+     "alpha": 0.25,
+     "area": 0.5,
+     "lit": 1.0
+    }
+   ]
+  },
+  "frost_snow": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_frost",
+     "color": [
+      0.55,
+      0.8,
+      1.0
+     ],
+     "alpha": 0.55,
+     "size": 1.575,
+     "atlas": 2,
+     "size_start": 0.6,
+     "size_end": 1.0,
+     "life": 1.0,
+     "hold": 0.4,
+     "fade_in": 0.05,
+     "lit": 0.9
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.8,
+      0.93,
+      1.0
+     ],
+     "texture": "builtin:star",
+     "blend": "add",
+     "count": 8,
+     "life": [
+      0.8,
+      1.8
+     ],
+     "speed": [
+      0.02,
+      0.12
+     ],
+     "size": [
+      0.02,
+      0.04
+     ],
+     "size_end": 0.5,
+     "gravity": 0.02,
+     "drag": 1.0,
+     "alpha": 0.8,
+     "area": 0.7,
+     "lit": 0.0,
+     "min_quality": 1
+    }
+   ]
+  },
+  "frost_water": {
+   "blocks": [
+    {
+     "type": "particles",
+     "color": [
+      0.8,
+      0.93,
+      1.0
+     ],
+     "texture": "builtin:star",
+     "blend": "add",
+     "count": 8,
+     "life": [
+      0.8,
+      1.8
+     ],
+     "speed": [
+      0.02,
+      0.12
+     ],
+     "size": [
+      0.02,
+      0.04
+     ],
+     "size_end": 0.5,
+     "gravity": 0.02,
+     "drag": 1.0,
+     "alpha": 0.8,
+     "area": 0.7,
+     "lit": 0.0,
+     "min_quality": 1
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.85,
+      0.95,
+      1.0
+     ],
+     "texture": "builtin:puff",
+     "count": 8,
+     "life": [
+      0.9,
+      1.8
+     ],
+     "speed": [
+      0.05,
+      0.25
+     ],
+     "size": [
+      0.2,
+      0.35
+     ],
+     "size_end": 2.0,
+     "gravity": -0.05,
+     "drag": 0.8,
+     "alpha": 0.3,
+     "area": 0.6,
+     "lit": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.8,
+      0.93,
+      1.0
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 2,
+     "life": [
+      0.8,
+      1.4
+     ],
+     "speed": [
+      0.0,
+      0.0
+     ],
+     "size": [
+      0.2,
+      0.25
+     ],
+     "size_end": 3.0,
+     "alpha": 0.3,
+     "area": 0.0,
+     "lit": 0.0
+    }
+   ]
+  },
+  "toxin": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_stain",
+     "color": [
+      0.18,
+      0.34,
+      0.06
+     ],
+     "alpha": 0.7,
+     "size": 1.75,
+     "atlas": 2,
+     "size_start": 0.5,
+     "size_end": 1.0,
+     "life": 1.0,
+     "hold": 0.6,
+     "fade_in": 0.05
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_stain",
+     "color": [
+      0.5,
+      0.9,
+      0.2
+     ],
+     "alpha": 0.18,
+     "size": 1.575,
+     "atlas": 2,
+     "blend": "add",
+     "size_start": 0.5,
+     "size_end": 1.0,
+     "life": 0.8,
+     "hold": 0.5,
+     "fade_in": 0.05,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.45,
+      0.85,
+      0.2
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 0,
+     "rate": 7,
+     "duration": 0.8,
+     "life": [
+      0.6,
+      1.4
+     ],
+     "speed": [
+      0.04,
+      0.18
+     ],
+     "size": [
+      0.03,
+      0.07
+     ],
+     "size_end": 1.5,
+     "gravity": 0.1,
+     "drag": 1.5,
+     "alpha": 0.8,
+     "area": 0.7,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.35,
+      0.6,
+      0.15
+     ],
+     "texture": "builtin:puff",
+     "count": 0,
+     "rate": 2,
+     "duration": 0.7,
+     "life": [
+      1.6,
+      3.0
+     ],
+     "speed": [
+      0.03,
+      0.12
+     ],
+     "size": [
+      0.25,
+      0.4
+     ],
+     "size_end": 2.0,
+     "gravity": 0.12,
+     "drag": 0.6,
+     "alpha": 0.2,
+     "area": 0.5,
+     "lit": 0.8,
+     "min_quality": 1
+    }
+   ]
+  },
+  "toxin_grass": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_stain",
+     "color": [
+      0.14,
+      0.12,
+      0.03
+     ],
+     "alpha": 0.75,
+     "size": 1.838,
+     "atlas": 2,
+     "size_start": 0.5,
+     "size_end": 1.0,
+     "life": 1.0,
+     "hold": 0.7,
+     "fade_in": 0.05
+    },
+    {
+     "type": "decal",
+     "texture": "builtin:mk_stain",
+     "color": [
+      0.45,
+      0.8,
+      0.18
+     ],
+     "alpha": 0.16,
+     "size": 1.575,
+     "atlas": 2,
+     "blend": "add",
+     "size_start": 0.5,
+     "size_end": 1.0,
+     "life": 0.8,
+     "hold": 0.5,
+     "fade_in": 0.05,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.45,
+      0.85,
+      0.2
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 0,
+     "rate": 7,
+     "duration": 0.8,
+     "life": [
+      0.6,
+      1.4
+     ],
+     "speed": [
+      0.04,
+      0.18
+     ],
+     "size": [
+      0.03,
+      0.07
+     ],
+     "size_end": 1.5,
+     "gravity": 0.1,
+     "drag": 1.5,
+     "alpha": 0.8,
+     "area": 0.7,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.35,
+      0.6,
+      0.15
+     ],
+     "texture": "builtin:puff",
+     "count": 0,
+     "rate": 2,
+     "duration": 0.7,
+     "life": [
+      1.6,
+      3.0
+     ],
+     "speed": [
+      0.03,
+      0.12
+     ],
+     "size": [
+      0.25,
+      0.4
+     ],
+     "size_end": 2.0,
+     "gravity": 0.12,
+     "drag": 0.6,
+     "alpha": 0.2,
+     "area": 0.5,
+     "lit": 0.8,
+     "min_quality": 1
+    }
+   ]
+  },
+  "toxin_water": {
+   "blocks": [
+    {
+     "type": "particles",
+     "color": [
+      0.45,
+      0.85,
+      0.2
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 0,
+     "rate": 7,
+     "duration": 0.8,
+     "life": [
+      0.6,
+      1.4
+     ],
+     "speed": [
+      0.04,
+      0.18
+     ],
+     "size": [
+      0.03,
+      0.07
+     ],
+     "size_end": 1.5,
+     "gravity": 0.1,
+     "drag": 1.5,
+     "alpha": 0.8,
+     "area": 0.7,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.35,
+      0.6,
+      0.15
+     ],
+     "texture": "builtin:puff",
+     "count": 0,
+     "rate": 2,
+     "duration": 0.7,
+     "life": [
+      1.6,
+      3.0
+     ],
+     "speed": [
+      0.03,
+      0.12
+     ],
+     "size": [
+      0.25,
+      0.4
+     ],
+     "size_end": 2.0,
+     "gravity": 0.12,
+     "drag": 0.6,
+     "alpha": 0.2,
+     "area": 0.5,
+     "lit": 0.8,
+     "min_quality": 1
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.3,
+      0.6,
+      0.1
+     ],
+     "texture": "builtin:puff",
+     "count": 6,
+     "life": [
+      1.2,
+      2.4
+     ],
+     "speed": [
+      0.03,
+      0.12
+     ],
+     "size": [
+      0.3,
+      0.5
+     ],
+     "size_end": 2.0,
+     "gravity": 0.0,
+     "drag": 0.6,
+     "alpha": 0.3,
+     "area": 0.6,
+     "lit": 0.8
+    }
+   ]
+  },
+  "bless": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_holy",
+     "color": [
+      1.0,
+      0.82,
+      0.4
+     ],
+     "alpha": 0.9,
+     "size": 1.1,
+     "atlas": 2,
+     "blend": "add",
+     "color_end": [
+      0.5,
+      0.38,
+      0.12
+     ],
+     "size_start": 1.15,
+     "size_end": 0.95,
+     "life": 1.0,
+     "hold": 0.2,
+     "fade_in": 0.04,
+     "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      1.0,
+      0.9,
+      0.55
+     ],
+     "texture": "builtin:star",
+     "blend": "add",
+     "count": 10,
+     "life": [
+      1.2,
+      2.6
+     ],
+     "speed": [
+      0.05,
+      0.2
+     ],
+     "size": [
+      0.02,
+      0.045
+     ],
+     "size_end": 0.4,
+     "gravity": -0.05,
+     "drag": 0.7,
+     "alpha": 0.9,
+     "area": 0.7,
+     "lit": 0.0,
+     "min_quality": 1
+    }
+   ]
+  },
+  "bless_water": {
+   "blocks": [
+    {
+     "type": "particles",
+     "color": [
+      1.0,
+      0.9,
+      0.55
+     ],
+     "texture": "builtin:star",
+     "blend": "add",
+     "count": 10,
+     "life": [
+      1.2,
+      2.6
+     ],
+     "speed": [
+      0.05,
+      0.2
+     ],
+     "size": [
+      0.02,
+      0.045
+     ],
+     "size_end": 0.4,
+     "gravity": -0.05,
+     "drag": 0.7,
+     "alpha": 0.9,
+     "area": 0.7,
+     "lit": 0.0,
+     "min_quality": 1
+    },
+    {
+     "type": "particles",
+     "color": [
+      1.0,
+      0.9,
+      0.6
+     ],
+     "texture": "builtin:ring",
+     "blend": "add",
+     "count": 3,
+     "life": [
+      0.8,
+      1.4
+     ],
+     "speed": [
+      0.0,
+      0.0
+     ],
+     "size": [
+      0.2,
+      0.25
+     ],
+     "size_end": 4.0,
+     "alpha": 0.4,
+     "area": 0.0,
+     "lit": 0.0
+    }
+   ]
+  },
+  "dusk": {
+   "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_fade",
+     "color": [
+      0.02,
+      0.018,
+      0.035
+     ],
+     "alpha": 0.95,
+     "size": 1.0,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.55,
+     "fade_in": 0.05,
+     "lit": 0.5
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.07,
+      0.06,
+      0.1
+     ],
+     "texture": "builtin:puff",
+     "count": 6,
+     "life": [
+      1.5,
+      3.0
+     ],
+     "speed": [
+      0.03,
+      0.15
+     ],
+     "size": [
+      0.25,
+      0.4
+     ],
+     "size_end": 2.0,
+     "gravity": 0.08,
+     "drag": 0.6,
+     "alpha": 0.2,
+     "area": 0.5,
+     "lit": 0.3
+    }
+   ]
+  },
+  "dusk_water": {
+   "blocks": [
+    {
+     "type": "particles",
+     "color": [
+      0.07,
+      0.06,
+      0.1
+     ],
+     "texture": "builtin:puff",
+     "count": 10,
+     "life": [
+      1.5,
+      3.0
+     ],
+     "speed": [
+      0.03,
+      0.15
+     ],
+     "size": [
+      0.3,
+      0.5
+     ],
+     "size_end": 2.0,
+     "gravity": 0.05,
+     "drag": 0.6,
+     "alpha": 0.4,
+     "area": 0.6,
+     "lit": 0.3
+    }
+   ]
+  }
+ }
+}

@@ -757,6 +757,7 @@ void Engine::render() {
         }
     }
     updateWetness(std::min(m_timer.deltaTime(), 0.1f));
+    updateAffects(std::min(m_timer.deltaTime(), 0.1f));
     m_deferredLighting.setWeatherState(m_groundWet,
                                        m_weatherSystem.current().snowIntensity,
                                        m_weatherSystem.temperatureC());
@@ -1096,6 +1097,7 @@ void Engine::render() {
     frameUbo.prevWindParams = m_prevWindParams;
     m_prevWindParams = frameUbo.windParams;
     m_hasPrevWindParams = true;
+    fillGusts(frameUbo);
     updateSeeThroughGate(m_timer.deltaTime());
     fillSeeThrough(frameUbo);
     fillGroundBlend(frameUbo);

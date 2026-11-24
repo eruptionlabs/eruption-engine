@@ -680,6 +680,17 @@ ExportReport exportGame(const ExportOptions& o) {
             std::ofstream(o.outDir / "data" / name) << merged.dump(2) << "\n";
         }
     }
+    // Tabela das afeccoes do lugar (data/affects.json): a do projeto, senao a do
+    // motor; o jogo exportado abre sem projeto e le' data/affects.json da raiz.
+    {
+        const fs::path engineTable = (o.engineRoot.empty() ? o.projectRoot : o.engineRoot) / "data" / "affects.json";
+        const fs::path projectTable = o.projectRoot / "data" / "affects.json";
+        const fs::path table = fs::exists(projectTable, ec) ? projectTable : engineTable;
+        if (fs::exists(table, ec)) {
+            fs::create_directories(o.outDir / "data", ec);
+            fs::copy_file(table, o.outDir / "data" / "affects.json", fs::copy_options::overwrite_existing, ec);
+        }
+    }
     // Configuração de partida: o mapa inicial, o enquadramento do jogo
     // ("spawn" e "camera" do project.eruption - sem eles o exportado abria com
     // a abertura padrão do motor em vez da do jogo) e a tela de carga

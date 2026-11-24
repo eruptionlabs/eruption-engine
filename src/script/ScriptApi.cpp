@@ -2430,6 +2430,64 @@ int world_dust(lua_State* L) {
     eng().spawnDust(pos, p);
     return 0;
 }
+// Texto opcional de um campo da tabela de opcoes.
+std::string optString(lua_State* L, int idx, const char* key) {
+    std::string out;
+    if (!lua_istable(L, idx)) return out;
+    lua_getfield(L, idx, key);
+    if (lua_isstring(L, -1)) out = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    return out;
+}
+// world.affect{x, z, radius, kind, strength, duration, dir}: uma afeccao do
+// lugar (elemento + forca + area + duracao); a reacao sai de data/affects.json
+// pela superficie do chao. Devolve o id (nil se o elemento nao existe).
+int world_affect(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    Engine::AffectRequest r;
+    r.kind = optString(L, 1, "kind");
+    if (r.kind.empty()) luaL_errorL(L, "world.affect: 'kind' is required");
+    lua_getfield(L, 1, "x");
+    const bool hasX = lua_isnumber(L, -1) != 0;
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "z");
+    const bool hasZ = lua_isnumber(L, -1) != 0;
+    lua_pop(L, 1);
+    if (!hasX || !hasZ) luaL_errorL(L, "world.affect: 'x' and 'z' are required");
+    r.x = optField(L, 1, "x", 0.0f);
+    r.z = optField(L, 1, "z", 0.0f);
+    r.radius = optField(L, 1, "radius", r.radius);
+    r.strength = optField(L, 1, "strength", r.strength);
+    r.duration = optField(L, 1, "duration", r.duration);
+    lua_getfield(L, 1, "dir");
+    if (lua_isvector(L, -1)) {
+        const Vec3 d = checkVec3(L, -1);
+        const float len = std::sqrt(d.x * d.x + d.z * d.z);
+        if (len > 1e-6f) {
+            r.dir = Vec2(d.x / len, d.z / len);
+            r.hasDir = true;
+        }
+    }
+    lua_pop(L, 1);
+    const uint32_t id = eng().affect(r);
+    if (id == 0) lua_pushnil(L);
+    else lua_pushinteger(L, int(id));
+    return 1;
+}
+// world.affect_stop(id): corta a afeccao (ou a rajada) agora; true se ainda vivia.
+int world_affect_stop(lua_State* L) {
+    lua_pushboolean(L, eng().affectStop(uint32_t(luaL_checkinteger(L, 1))));
+    return 1;
+}
+// world.wind_burst{x, z, radius, strength, duration}: rajada radial local.
+int world_wind_burst(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const float x = optField(L, 1, "x", 0.0f), z = optField(L, 1, "z", 0.0f);
+    const uint32_t id = eng().windBurst(x, z, optField(L, 1, "radius", 0.0f), optField(L, 1, "strength", 1.0f),
+                                        optField(L, 1, "duration", 1.5f));
+    lua_pushinteger(L, int(id));
+    return 1;
+}
 int world_liquid_at(lua_State* L) {
     Engine::LiquidAt at;
     if (!eng().liquidAt(float(luaL_checknumber(L, 1)), float(luaL_checknumber(L, 2)), at)) {
@@ -3213,7 +3271,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         ERUPTION_API_FN(world, time), ERUPTION_API_FN(world, set_time), ERUPTION_API_FN(world, time_between),
         ERUPTION_API_FN(world, weather), ERUPTION_API_FN(world, is_weather), ERUPTION_API_FN(world, set_weather),
         ERUPTION_API_FN(world, set_wetness), ERUPTION_API_FN(world, wetness), ERUPTION_API_FN(world, wet_area),
-        ERUPTION_API_FN(world, look), ERUPTION_API_FN(world, set_look), ERUPTION_API_FN(world, set_ambient), ERUPTION_API_FN(world, set_dof), ERUPTION_API_FN(world, set_classic), ERUPTION_API_FN(world, set_sky), ERUPTION_API_FN(world, sky), ERUPTION_API_FN(world, set_classic_water), ERUPTION_API_FN(world, classic), ERUPTION_API_FN(world, set_fog), ERUPTION_API_FN(world, set_border), ERUPTION_API_FN(world, set_exposure), ERUPTION_API_FN(world, set_time_scale), ERUPTION_API_FN(world, time_scale), ERUPTION_API_FN(world, walkable), ERUPTION_API_FN(world, set_nav_rules), ERUPTION_API_FN(world, nav_rules), ERUPTION_API_FN(world, path), ERUPTION_API_FN(world, floor_height), ERUPTION_API_FN(world, screen_to_ground), ERUPTION_API_FN(world, floor_walkable), ERUPTION_API_FN(world, liquid_at), ERUPTION_API_FN(world, footprint), ERUPTION_API_FN(world, dust), ERUPTION_API_FN(world, ground_grid), ERUPTION_API_FN(world, set_motion_blur),
+        ERUPTION_API_FN(world, look), ERUPTION_API_FN(world, set_look), ERUPTION_API_FN(world, set_ambient), ERUPTION_API_FN(world, set_dof), ERUPTION_API_FN(world, set_classic), ERUPTION_API_FN(world, set_sky), ERUPTION_API_FN(world, sky), ERUPTION_API_FN(world, set_classic_water), ERUPTION_API_FN(world, classic), ERUPTION_API_FN(world, set_fog), ERUPTION_API_FN(world, set_border), ERUPTION_API_FN(world, set_exposure), ERUPTION_API_FN(world, set_time_scale), ERUPTION_API_FN(world, time_scale), ERUPTION_API_FN(world, walkable), ERUPTION_API_FN(world, set_nav_rules), ERUPTION_API_FN(world, nav_rules), ERUPTION_API_FN(world, path), ERUPTION_API_FN(world, floor_height), ERUPTION_API_FN(world, screen_to_ground), ERUPTION_API_FN(world, floor_walkable), ERUPTION_API_FN(world, liquid_at), ERUPTION_API_FN(world, footprint), ERUPTION_API_FN(world, dust), ERUPTION_API_FN(world, affect), ERUPTION_API_FN(world, affect_stop), ERUPTION_API_FN(world, wind_burst), ERUPTION_API_FN(world, ground_grid), ERUPTION_API_FN(world, set_motion_blur),
         ERUPTION_API_FN(world, set_chromatic_aberration), ERUPTION_API_FN(world, set_effect_radius),
         ERUPTION_API_FN(world, set_focus), ERUPTION_API_FN(world, set_ground_blend),
         ERUPTION_API_FN(world, set_cutaway),
@@ -3550,6 +3608,36 @@ declare world: {
     -- covered or not; overlapping areas keep the wettest; at most 32 at once
     -- (the driest goes first). Cleared on map change.
     wet_area: (position: vector, radius: number, amount: number?, dry_seconds: number?) -> (),
+    -- AFFECTIONS OF A PLACE: an effect (action) with an element (quality), a
+    -- strength and an area (quantity) and a duration (time) leaves a mark on
+    -- the ground and around it. The reaction depends on the surface under the
+    -- point (substance) and comes from the table data/affects.json (a project
+    -- can replace it with its own data/affects.json): element x surface ->
+    -- a list of reusable blocks (ground decal, particles, raised ground, wet
+    -- ground or mud, a wind gust). Nothing per element lives in the engine.
+    -- kind: "fire", "earth", "lightning", "water", "impact", "wind", "ice",
+    -- "poison", "holy", "shadow" (the table lists them). x, z: world position
+    -- (the height is the floor there). radius: world units (default 3 m =
+    -- 3 x the map's units per meter); the mark fills about that radius. strength: 0..1
+    -- (default 1). duration: seconds the mark takes to fade (default 20).
+    -- dir: optional vector (x and z used) for marks with a direction.
+    -- The surface is, in order: water at the point, the texture region under
+    -- it (ground.surface: grass, dirt, sand, stone, snow, wood), the ground
+    -- material/texture name, the painted terrain layer, else "default".
+    -- Returns an id (nil if the kind is unknown or has no reaction). The
+    -- preset (data/graphics.json affect_*) sets the quality, the cap of live
+    -- affections (the oldest goes first) and the particle amount. Visual and
+    -- local: nothing is saved or sent over the network. Cleared on map change.
+    affect: (opts: { kind: string, x: number, z: number, radius: number?, strength: number?, duration: number?, dir: vector? }) -> number?,
+    -- Stops an affection (or a wind burst) now, with its particles. true if
+    -- the id was still alive.
+    affect_stop: (id: number) -> boolean,
+    -- Local radial wind gust: grass and trees bend away from the centre, the
+    -- front travels outward and the force fades with distance and time. radius
+    -- in world units (default 3 m), strength 0..1 (default 1), duration in seconds (default
+    -- 1.5). At most 8 at once (fewer on weak presets; the oldest goes first).
+    -- Returns an id for world.affect_stop.
+    wind_burst: (opts: { x: number, z: number, radius: number?, strength: number?, duration: number? }) -> number,
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
     -- Walkable-path height (Y) at a world position, from the corner heights of

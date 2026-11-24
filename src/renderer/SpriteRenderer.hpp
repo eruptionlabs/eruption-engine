@@ -215,6 +215,12 @@ struct FrameUBO {
     // textura emissiva, fator); emiFlickerInfo.x = quantos pares valem.
     alignas(16) Vec4 emiFlickerInfo;
     alignas(16) Vec4 emiFlicker[32]; // xy = par 2k, zw = par 2k+1
+    // Rajadas locais de vento (world.wind_burst / afeccoes, core/Affects.hpp):
+    // gustInfo.x = quantas das 8 valem (0 = o shader sai antes, imagem identica);
+    // gusts[2k] = (x, z, raio, forca de agora), gusts[2k+1] = (frente 0..1 do
+    // raio, largura da frente, 0, 0). Lidas so' pelo vertex shader de vegetacao.
+    alignas(16) Vec4 gustInfo;
+    alignas(16) Vec4 gusts[16];
 };
 // 16 KiB e' o minimo que a Vulkan garante para um UBO (maxUniformBufferRange).
 static_assert(sizeof(FrameUBO) <= 16384, "FrameUBO passou do UBO minimo garantido");

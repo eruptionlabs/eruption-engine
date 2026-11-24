@@ -53,7 +53,10 @@ void blur(std::vector<float>& plane, int w, int h) {
 } // namespace
 
 bool isGlowType(const std::string& type) { return type == kTypeWindow || type == kTypeLamp; }
-bool isSurfaceType(const std::string& type) { return type == kTypeSand || type == kTypeSnow; }
+bool isSurfaceType(const std::string& type) {
+    return type == kTypeSand || type == kTypeSnow || type == kTypeGrass || type == kTypeDirt || type == kTypeStone ||
+           type == kTypeWood;
+}
 
 float luminance(const uint8_t* px) { return (0.299f * px[0] + 0.587f * px[1] + 0.114f * px[2]) / 255.0f; }
 

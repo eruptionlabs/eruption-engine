@@ -36,6 +36,7 @@
 #include "renderer/skymap/SkyConfig.hpp"
 #include "renderer/CloudLayerRenderer.hpp"
 #include "renderer/vfx/VfxSystem.hpp"
+#include "core/Affects.hpp"
 #include "core/FootstepEffects.hpp"
 #include "core/SpriteContact.hpp"
 #include "renderer/vfx/AmbientParticles.hpp"
@@ -2796,7 +2797,48 @@ public:
     };
     void spawnFootprint(const Vec3& pos, const Vec2& dir, const FootprintParams& p);
     void spawnDust(const Vec3& pos, const DustParams& p);
+
+    // AFECCOES DO LUGAR (core/AffectsEngine.cpp, logica em core/Affects.hpp):
+    // um elemento (kind) com forca 0..1, area (radius, unidades do mundo) e
+    // duracao (s) marca o chao e o entorno; a reacao sai da tabela
+    // data/affects.json pela superficie do lugar. Devolve um id (0 = pedido
+    // recusado: elemento desconhecido ou sem reacao na tabela).
+    struct AffectRequest {
+        std::string kind;
+        float x = 0.0f, z = 0.0f;
+        float radius = 0.0f; // 0 = padrao: 3 m (3 x unidades por metro do mapa)
+        float strength = 1.0f;
+        float duration = 20.0f;
+        Vec2 dir{0.0f, 1.0f};
+        bool hasDir = false;
+    };
+    uint32_t affect(const AffectRequest& r);
+    // Para a afeccao (e as particulas dela) agora; false se o id nao vive mais.
+    // Vale tambem para o id de uma rajada.
+    bool affectStop(uint32_t id);
+    // Rajada radial local de vento: a vegetacao se curva para fora, a frente
+    // anda e a forca decai com a distancia e o tempo. Teto fixo de rajadas.
+    uint32_t windBurst(float x, float z, float radius, float strength, float duration);
+    // Superficie do lugar (regiao de textura, material do chao, agua) pela tabela.
+    std::string affectSurfaceAt(const Vec3& pos);
+    const affects::Table& affectTable();
+    size_t affectsAlive() const { return m_affectRing.size(); }
+    size_t gustsAlive() const { return m_gustRing.size(); }
+    void updateAffects(float dt);                   // 1x por quadro, Render.cpp
+    void affectsOnMapLoaded();                      // o VFX foi limpo: as afeccoes e as rajadas caducam
+    void fillGusts(FrameUBO& ubo) const;            // rajadas do quadro para o UBO
+
 private:
+    affects::Table m_affectTable;
+    bool m_affectTableLoaded = false;
+    affects::AffectRing m_affectRing;
+    affects::GustRing m_gustRing;
+    affects::Quality m_affectQuality;
+    uint32_t m_affectNextId = 0;
+    double m_affectClock = 0.0;
+    std::unordered_map<std::string, std::string> m_affectEffects; // chave da variante -> efeito do VFX
+    void loadAffectTable();
+    void affectApplyPreset(const json& preset);
     std::vector<CharacterStep> m_characterSteps;
     std::vector<FootstepEvent> m_footstepEvents;
     bool m_footstepEventsReady = false;

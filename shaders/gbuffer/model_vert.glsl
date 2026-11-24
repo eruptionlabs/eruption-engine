@@ -149,6 +149,27 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_seeThroughExtra[12];
     vec4 u_alphaHash;
     vec4 u_reliefParams;
+    // Resto do FrameUBO ate' as rajadas (mesma ordem de model_frame_ubo.glsl):
+    // o vertex shader so' le o fim, e para alcanca-lo todos os campos antes
+    // precisam existir com os mesmos offsets.
+    vec4 u_spriteParams;
+    vec4 u_spriteRim;
+    vec4 u_splineDbg[13];
+    vec4 u_reliefPom;
+    vec4 u_reliefPom2;
+    vec4 u_reliefPom3;
+    vec4 u_reliefPom4;
+    vec4 u_albedoCalib;
+    vec4 u_glowInfo;
+    vec4 u_glowPos[8];
+    vec4 u_glowColor[8];
+    vec4 u_emiFlickerInfo;
+    vec4 u_emiFlicker[32];
+    // Rajadas locais de vento (core/Affects.hpp): x = quantas valem (0 = nada
+    // muda, imagem identica); u_gusts[2k] = (x, z, raio, forca de agora),
+    // u_gusts[2k+1] = (frente 0..1 do raio, largura da frente, 0, 0).
+    vec4 u_gustInfo;
+    vec4 u_gusts[16];
 };
 
 // -----------------------------------------------------------------------------
@@ -221,8 +242,31 @@ vec3 applyWindSwayWith(vec4 windParams, vec3 worldPos, float localHeight, float 
     return worldPos;
 }
 
+// RAJADAS LOCAIS (world.wind_burst, afeccoes): empurra a vegetacao para FORA do
+// centro da rajada. O mesmo modelo de haste engastada do vento (topo anda, base
+// nao, teto de 65% da altura), com a forca que decai com a distancia ao centro
+// e uma frente de onda que se afasta no tempo. Sem rajada, sai antes de tudo.
+vec3 applyGusts(vec3 worldPos, float localHeight, float sway) {
+    const int n = int(u_gustInfo.x);
+    if (n == 0 || sway <= 1e-4) return worldPos;
+    const float h = max(localHeight, 0.0);
+    for (int i = 0; i < n; ++i) {
+        const vec4 a = u_gusts[2 * i];
+        const vec4 b = u_gusts[2 * i + 1];
+        const vec2 d = worldPos.xz - a.xy;
+        const float dist = length(d);
+        const float fall = 1.0 - smoothstep(0.0, a.z, dist);
+        const float front = (dist / a.z - b.x) / max(b.y, 1e-3);
+        const float k = a.w * fall * (0.35 + 0.65 * exp(-front * front));
+        const float bend = min(h * h * sway * 0.6, h * sway * 0.39) * k;
+        worldPos.xz += (dist > 1e-3 ? d / dist : vec2(0.0)) * bend;
+        worldPos.y -= bend * 0.25;
+    }
+    return worldPos;
+}
+
 vec3 applyWindSway(vec3 worldPos, float localHeight, float sway) {
-    return applyWindSwayWith(u_windParams, worldPos, localHeight, sway);
+    return applyGusts(applyWindSwayWith(u_windParams, worldPos, localHeight, sway), localHeight, sway);
 }
 
 // Dados POR INSTANCIA (SIMT). Antes, cada instancia visivel era um
@@ -559,8 +603,9 @@ void main() {
 #ifndef ERUPTION_NO_VELOCITY
     const mat4 prevModel = u_inst[gl_InstanceIndex].prevModel;
     const vec4 prevPos = prevModel * vec4(inPrevPosition, 1.0);
-    const vec3 prevSway = applyWindSwayWith(u_prevWindParams, prevPos.xyz, prevPos.y - prevModel[3].y,
-                                            u_inst[gl_InstanceIndex].uvScaleDisp.w);
+    const vec3 prevSway = applyGusts(applyWindSwayWith(u_prevWindParams, prevPos.xyz, prevPos.y - prevModel[3].y,
+                                                       u_inst[gl_InstanceIndex].uvScaleDisp.w),
+                                     prevPos.y - prevModel[3].y, u_inst[gl_InstanceIndex].uvScaleDisp.w);
 #endif
     worldPos.xyz = applyWindSway(worldPos.xyz, worldPos.y - instBaseY,
                                  u_inst[gl_InstanceIndex].uvScaleDisp.w);

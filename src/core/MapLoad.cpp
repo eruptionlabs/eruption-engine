@@ -1111,6 +1111,7 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
     // o mapa diz quantas unidades do mundo tem um metro (padrao do motor:
     // kVfxUnitsPerMeter, medido no tamanho dos personagens e das arvores).
     m_footsteps.onMapLoaded(); // o VFX foi limpo: os ids vivos e a lista do chao caducam
+    affectsOnMapLoaded();
     m_vfx.setUnitsPerMeter(m_currentMap->vfxUnitsPerMeter > 0.0f ? m_currentMap->vfxUnitsPerMeter : kVfxUnitsPerMeter);
     uploadVfxGround();
     if (const char* u = std::getenv("ERUPTION_TEST_VFX_UNITS")) m_vfx.setUnitsPerMeter(std::strtof(u, nullptr));

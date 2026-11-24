@@ -123,4 +123,7 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     // fator), dois por vec4; u_emiFlickerInfo.x = quantos pares valem.
     vec4 u_emiFlickerInfo;
     vec4 u_emiFlicker[32];
+    // Rajadas locais de vento (so' o vertex shader de vegetacao le).
+    vec4 u_gustInfo;
+    vec4 u_gusts[16];
 };

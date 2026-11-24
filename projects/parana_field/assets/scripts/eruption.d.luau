@@ -229,6 +229,36 @@ declare world: {
     -- covered or not; overlapping areas keep the wettest; at most 32 at once
     -- (the driest goes first). Cleared on map change.
     wet_area: (position: vector, radius: number, amount: number?, dry_seconds: number?) -> (),
+    -- AFFECTIONS OF A PLACE: an effect (action) with an element (quality), a
+    -- strength and an area (quantity) and a duration (time) leaves a mark on
+    -- the ground and around it. The reaction depends on the surface under the
+    -- point (substance) and comes from the table data/affects.json (a project
+    -- can replace it with its own data/affects.json): element x surface ->
+    -- a list of reusable blocks (ground decal, particles, raised ground, wet
+    -- ground or mud, a wind gust). Nothing per element lives in the engine.
+    -- kind: "fire", "earth", "lightning", "water", "impact", "wind", "ice",
+    -- "poison", "holy", "shadow" (the table lists them). x, z: world position
+    -- (the height is the floor there). radius: world units (default 3 m =
+    -- 3 x the map's units per meter); the mark fills about that radius. strength: 0..1
+    -- (default 1). duration: seconds the mark takes to fade (default 20).
+    -- dir: optional vector (x and z used) for marks with a direction.
+    -- The surface is, in order: water at the point, the texture region under
+    -- it (ground.surface: grass, dirt, sand, stone, snow, wood), the ground
+    -- material/texture name, the painted terrain layer, else "default".
+    -- Returns an id (nil if the kind is unknown or has no reaction). The
+    -- preset (data/graphics.json affect_*) sets the quality, the cap of live
+    -- affections (the oldest goes first) and the particle amount. Visual and
+    -- local: nothing is saved or sent over the network. Cleared on map change.
+    affect: (opts: { kind: string, x: number, z: number, radius: number?, strength: number?, duration: number?, dir: vector? }) -> number?,
+    -- Stops an affection (or a wind burst) now, with its particles. true if
+    -- the id was still alive.
+    affect_stop: (id: number) -> boolean,
+    -- Local radial wind gust: grass and trees bend away from the centre, the
+    -- front travels outward and the force fades with distance and time. radius
+    -- in world units (default 3 m), strength 0..1 (default 1), duration in seconds (default
+    -- 1.5). At most 8 at once (fewer on weak presets; the oldest goes first).
+    -- Returns an id for world.affect_stop.
+    wind_burst: (opts: { x: number, z: number, radius: number?, strength: number?, duration: number? }) -> number,
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
     -- Walkable-path height (Y) at a world position, from the corner heights of

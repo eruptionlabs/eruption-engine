@@ -43,6 +43,7 @@ run_src test_css_classes src/utils/CSSParser.cpp src/utils/AssetVfs.cpp src/core
 run_src test_css_vars src/utils/CSSParser.cpp src/utils/AssetVfs.cpp src/core/Project.cpp src/core/Logger.cpp src/core/JobSystem.cpp -pthread -I build/_deps/nlohmann_json-src/include
 run_src test_shadow_stream
 run_src test_ground_pack src/formats/GroundPack.cpp -I build/_deps/nlohmann_json-src/include
+run_src test_affects src/core/Affects.cpp -I build/_deps/nlohmann_json-src/include
 run_src test_net_wire src/net/Wire.cpp
 
 # Rede: netcode, libsodium, reliable e Monocypher (C, terceiros) compilam a parte, sem avisos.

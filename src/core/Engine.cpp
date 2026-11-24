@@ -2963,6 +2963,11 @@ void Engine::applyGraphicsPreset() {
     if (const char* e = std::getenv("ERUPTION_TEST_TESS_HEIGHT_GAIN")) m_tessHeightGain = std::stof(e);
     if (const char* e = std::getenv("ERUPTION_TEST_TESS_SPACING")) m_tessVertexSpacing = std::stof(e);
 
+    // Afeccoes do lugar (core/AffectsEngine.cpp): qualidade 0 low (decal simples
+    // e vento) a 2 high (relevo de verdade, poca com brilho), teto de afeccoes
+    // e de rajadas vivas e fator das particulas.
+    affectApplyPreset(p);
+
     // Clima parado sem copia de tela (PostProcessor, "Weather Overlay"): preset
     // "weather_skip_idle" ou ERUPTION_WEATHER_SKIP_IDLE=1|0. Padrao LIGADO: a
     // imagem sai identica (PSNR 99 em clear, cloudy, rainy, heat_haze,

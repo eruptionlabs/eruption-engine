@@ -33,6 +33,10 @@ inline constexpr const char* kTypeWindow = "window"; // janela com luz
 inline constexpr const char* kTypeLamp = "lamp";     // poste / lampiao / tocha
 inline constexpr const char* kTypeSand = "sand";     // superficie: areia
 inline constexpr const char* kTypeSnow = "snow";     // superficie: neve
+inline constexpr const char* kTypeGrass = "grass";   // superficie: grama
+inline constexpr const char* kTypeDirt = "dirt";     // superficie: terra
+inline constexpr const char* kTypeStone = "stone";   // superficie: pedra
+inline constexpr const char* kTypeWood = "wood";     // superficie: madeira
 
 bool isGlowType(const std::string& type);
 bool isSurfaceType(const std::string& type);

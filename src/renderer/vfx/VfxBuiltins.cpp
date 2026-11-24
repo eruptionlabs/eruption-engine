@@ -231,6 +231,368 @@ VfxImage makeFoot() {
     return img;
 }
 
+
+// MARCAS DO CHAO das afeccoes (data/affects.json, "texture": "builtin:mk_*"):
+// cada textura e' um ATLAS 2x2 (256x256, quadros de 128) com 4 desenhos
+// diferentes do mesmo tipo; o efeito sorteia o quadro (flipMode Random) e o
+// giro por instancia, entao duas marcas seguidas nunca saem iguais. Cinza
+// com alfa (a cor vem do efeito: cinza escuro = miolo mais fechado). Nenhuma
+// forma e' um disco: a borda e' deformada por ruido e por lobulos. O relevo
+// das rachaduras e do gelo ja' vem sombreado no proprio cinza (luz de cima e
+// da esquerda): e' o "normal no decal" do preset low, sem tesselacao.
+float sstep(float a, float b, float x) {
+    const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+float markNoise(float x, float y, int seed, float freq, int oct = 3) {
+    return fbm((x + 1.0f) * freq, (y + 1.0f) * freq, 64, seed, oct);
+}
+
+constexpr int kMarkCell = 128;
+constexpr int kMarkVariants = 4;
+
+// Atlas 2x2: f(variante, x, y, r, ang, cinza, alfa), x e y em [-1, 1].
+template <class F>
+VfxImage makeAtlas(F f) {
+    VfxImage img;
+    img.width = img.height = kMarkCell * 2;
+    img.rgba.assign(size_t(img.width) * img.height * 4, 0);
+    for (int v = 0; v < kMarkVariants; ++v) {
+        const int ox = (v % 2) * kMarkCell, oy = (v / 2) * kMarkCell;
+        for (int py = 0; py < kMarkCell; ++py)
+            for (int px = 0; px < kMarkCell; ++px) {
+                const float x = (float(px) + 0.5f) / float(kMarkCell) * 2.0f - 1.0f;
+                const float y = 1.0f - (float(py) + 0.5f) / float(kMarkCell) * 2.0f;
+                const float r = std::sqrt(x * x + y * y);
+                float g = 1.0f, a = 0.0f;
+                if (r < 1.0f) f(v, x, y, r, std::atan2(y, x), g, a);
+                // Borda sempre apagada: o decal nunca mostra o recorte do quadro.
+                a *= 1.0f - sstep(0.86f, 1.0f, r);
+                put(img, ox + px, oy + py, g, g, g, std::clamp(a, 0.0f, 1.0f));
+            }
+    }
+    return img;
+}
+
+// Raio deformado: ruido de baixa frequencia (golfos grandes), de alta (serrilhado)
+// e lobulos angulares; amp = quanto a borda foge do circulo.
+float wobbleR(int v, float x, float y, float r, float ang, int seed, float amp) {
+    const int s = seed + v * 101;
+    const float big = markNoise(x, y, s, 2.2f, 3) - 0.5f;
+    const float fine = markNoise(x, y, s + 7, 7.0f, 2) - 0.5f;
+    const float lobes = std::sin(ang * float(2 + (v + seed) % 3) + float(v) * 1.7f) * 0.5f + std::sin(ang * 5.0f + float(s)) * 0.25f;
+    // Lobulos so' fora do centro: no ponto o angulo nao existe (sem beliscao).
+    return r + big * amp * 1.3f + fine * amp * 0.45f + lobes * amp * 0.25f * std::min(r * 3.0f, 1.0f);
+}
+
+// Linhas (raios, ramos, cristais): lista de segmentos com largura.
+struct Seg {
+    float ax, ay, bx, by, w;
+};
+
+uint32_t markRand(uint32_t& s) {
+    s = s * 1664525u + 1013904223u;
+    return s >> 8;
+}
+
+float markRand01(uint32_t& s) {
+    return float(markRand(s) & 0xffff) / 65535.0f;
+}
+
+// Ramo que oscila: de (x, y) no angulo ang, n passos de tamanho step.
+void addWobblyBranch(std::vector<Seg>& segs, uint32_t& rs, float x, float y, float ang, int n, float step, float w, float wob, float branchChance, float branchAng, int depth) {
+    for (int i = 0; i < n; ++i) {
+        const float t = float(i) / float(n);
+        ang += (markRand01(rs) - 0.5f) * 2.0f * wob;
+        const float nx = x + std::cos(ang) * step, ny = y + std::sin(ang) * step;
+        segs.push_back({x, y, nx, ny, w * (1.0f - 0.65f * t)});
+        if (depth > 0 && i > 0 && markRand01(rs) < branchChance) {
+            const float side = markRand01(rs) < 0.5f ? -1.0f : 1.0f;
+            addWobblyBranch(segs, rs, nx, ny, ang + side * branchAng * (0.7f + 0.6f * markRand01(rs)), std::max(2, (n - i) / 2), step * 0.8f, w * 0.65f, wob, branchChance * 0.6f, branchAng, depth - 1);
+        }
+        x = nx;
+        y = ny;
+    }
+}
+
+// Menor distancia (ponderada pela largura) do ponto aos segmentos: 0 = em cima.
+float segsCoverage(const std::vector<Seg>& segs, float px, float py, float halo) {
+    float best = 0.0f;
+    for (const Seg& s : segs) {
+        const float dx = s.bx - s.ax, dy = s.by - s.ay;
+        const float l2 = dx * dx + dy * dy;
+        float t = l2 > 1e-8f ? ((px - s.ax) * dx + (py - s.ay) * dy) / l2 : 0.0f;
+        t = std::clamp(t, 0.0f, 1.0f);
+        const float ex = px - (s.ax + dx * t), ey = py - (s.ay + dy * t);
+        const float d = std::sqrt(ex * ex + ey * ey);
+        const float core = sstep(s.w, s.w * 0.3f, d);
+        const float soft = halo * sstep(s.w * 5.0f, s.w, d);
+        best = std::max(best, std::max(core, soft));
+    }
+    return best;
+}
+
+// ---- fogo: chao queimado. Miolo quase carvao, chamuscado marrom ate' a borda
+// irregular; o cinza e' a profundidade do escuro (a cor do efeito e' o marrom).
+VfxImage makeMarkScorch() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        const float d = wobbleR(v, x, y, r, ang, 31, 0.55f);
+        const float body = sstep(0.82f, 0.46f, d);
+        const float core = sstep(0.62f, 0.05f, d);
+        const float mott = markNoise(x, y, 47 + v, 6.0f, 3);
+        g = std::clamp(1.0f - std::pow(core, 0.7f) * 0.93f + (mott - 0.5f) * 0.25f * (1.0f - core * 0.6f), 0.04f, 1.0f);
+        // Borda esburacada: o chamusco rala em manchas antes de acabar.
+        const float rim = 0.7f + 0.3f * sstep(0.35f, 0.62f, markNoise(x, y, 59 + v * 13, 9.0f, 2));
+        a = body * (0.45f + 0.55f * sstep(0.78f, 0.25f, d)) * (core > 0.3f ? 1.0f : rim);
+    });
+}
+
+// Brasas: pontos e fendas emissivas dentro do miolo (soma luz; apagam primeiro).
+VfxImage makeMarkEmbers() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        const float d = wobbleR(v, x, y, r, ang, 31, 0.55f);
+        const float zone = sstep(0.62f, 0.12f, d);
+        // Fendas: onde um ruido de crista passa perto de 0,5.
+        const float ridge = std::abs(markNoise(x, y, 203 + v * 17, 4.5f, 3) - 0.5f);
+        const float crack = (1.0f - sstep(0.004f, 0.022f, ridge)) * sstep(0.7f, 0.3f, d);
+        // Pontos: picos raros de ruido de alta frequencia.
+        const float spot = sstep(0.74f, 0.84f, markNoise(x, y, 211 + v * 5, 13.0f, 2)) * zone;
+        const float heat = std::clamp(crack * 0.9f + spot, 0.0f, 1.0f);
+        a = heat * (0.4f + 0.6f * sstep(0.7f, 0.1f, d));
+        g = 0.55f + 0.45f * markNoise(x, y, 217, 8.0f, 2);
+    });
+}
+
+// Folhas e capim torrados em estrias curtas saindo do ponto.
+VfxImage makeMarkStreak() {
+    return makeAtlas([](int v, float x, float y, float, float, float& g, float& a) {
+        const float n = markNoise(x, y, 61 + v * 7, 4.0f);
+        const float w = 0.10f + 0.10f * markNoise(x, y, 67 + v, 3.0f, 2);
+        a = sstep(w, w * 0.2f, std::abs(x - (n - 0.5f) * 0.34f)) * sstep(1.0f, 0.45f, std::abs(y)) * (0.6f + 0.4f * n);
+        g = 0.7f + 0.3f * n;
+    });
+}
+
+// Rachadura: fendas de ruido de crista, com labio claro e fundo escuro.
+VfxImage makeMarkCrack() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        const float d = wobbleR(v, x, y, r, ang, 77, 0.4f);
+        const float n1 = markNoise(x, y, 83 + v * 19, 3.4f, 3);
+        const float n2 = markNoise(x + 0.31f, y - 0.17f, 89 + v * 23, 5.5f, 2);
+        const float edge = std::min(std::abs(n1 - 0.5f), std::abs(n2 - 0.5f) * 1.3f);
+        const float w = 0.05f * (1.0f - 0.45f * std::min(r, 1.0f));
+        const float crack = 1.0f - sstep(0.0f, w, edge);
+        const float mask = sstep(0.95f, 0.5f, d);
+        const float lip = sstep(w, w * 2.6f, edge) * (1.0f - sstep(w * 2.6f, w * 4.2f, edge));
+        const float dust = 0.35f * mask * sstep(0.8f, 0.2f, d) * markNoise(x, y, 97, 6.0f, 2);
+        a = std::clamp(crack * mask + lip * mask * 0.45f + dust, 0.0f, 1.0f);
+        const float shade = (x * -0.5f + y * 0.5f) * 0.5f + 0.5f;
+        g = crack > 0.4f ? 0.12f : 0.55f + 0.4f * lip * shade;
+    });
+}
+
+// Relampago: estrias finas e ramificadas saindo do ponto, miolo mais escuro.
+VfxImage makeMarkBolt() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        static std::vector<Seg> segs[kMarkVariants];
+        if (segs[v].empty()) {
+            uint32_t rs = 9001u + uint32_t(v) * 7919u;
+            const int rays = 7 + v % 3;
+            for (int k = 0; k < rays; ++k) {
+                const float a0 = 6.2831853f * (float(k) + markRand01(rs) * 0.6f) / float(rays);
+                const float len = 0.62f + 0.3f * markRand01(rs);
+                const int n = 9 + int(markRand(rs) % 3u);
+                addWobblyBranch(segs[v], rs, std::cos(a0) * 0.05f, std::sin(a0) * 0.05f, a0, n, len / float(n), 0.026f, 0.38f, 0.42f, 0.75f, 2);
+            }
+        }
+        const float line = segsCoverage(segs[v], x, y, 0.4f);
+        const float d = wobbleR(v, x, y, r, ang, 91, 0.3f);
+        const float core = sstep(0.3f, 0.02f, d);
+        const float halo = 0.35f * sstep(0.75f, 0.2f, d) * (0.5f + 0.5f * markNoise(x, y, 99, 5.0f, 2));
+        a = std::clamp(std::max(line, core * 0.95f) + halo * 0.5f, 0.0f, 1.0f);
+        g = 0.12f + 0.88f * (1.0f - core) * (0.55f + 0.45f * line);
+    });
+}
+
+// Molhado: o chao escurece em manchas de bordas moles (sem disco chapado).
+VfxImage makeMarkPuddle() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        const float d = wobbleR(v, x, y, r, ang, 111, 0.6f);
+        const float body = sstep(0.78f, 0.3f, d);
+        // Mais escuro e fundo no meio, com veios de umidade ate' a borda.
+        const float vein = markNoise(x, y, 119 + v, 5.0f, 3);
+        a = body * (0.45f + 0.55f * sstep(0.7f, 0.15f, d)) * (0.75f + 0.25f * vein);
+        g = 0.35f + 0.65f * sstep(0.1f, 0.7f, d) * (0.6f + 0.4f * vein);
+    });
+}
+
+// Brilho molhado (reflexo): fios claros e um crescente, luz de cima.
+VfxImage makeMarkSheen() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        const float d = wobbleR(v, x, y, r, ang, 141, 0.6f);
+        const float body = sstep(0.3f, 0.5f, d) * sstep(0.85f, 0.62f, d); // so' na borda
+        const float stripe = sstep(0.55f, 0.8f, markNoise(x * 1.0f, y * 2.4f, 147 + v * 5, 3.0f, 3));
+        const float crescent = sstep(0.0f, 0.5f, -x * 0.6f + y * 0.8f + 0.1f);
+        a = body * (0.25f + 0.75f * stripe) * (0.35f + 0.65f * crescent);
+        g = 1.0f;
+    });
+}
+
+// Geada: manchas de graos brancos com cristais ramificados passando da borda.
+VfxImage makeMarkFrost() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        static std::vector<Seg> segs[kMarkVariants];
+        if (segs[v].empty()) {
+            uint32_t rs = 4242u + uint32_t(v) * 6007u;
+            for (int k = 0; k < 6; ++k) {
+                const float a0 = 6.2831853f * (float(k) + (markRand01(rs) - 0.5f) * 0.35f) / 6.0f;
+                const float len = 0.55f + 0.38f * markRand01(rs);
+                addWobblyBranch(segs[v], rs, 0.0f, 0.0f, a0, 8, len / 8.0f, 0.012f, 0.1f, 0.75f, 1.05f, 2);
+            }
+        }
+        const float d = wobbleR(v, x, y, r, ang, 131, 0.5f);
+        const float patch = sstep(0.62f, 0.2f, d);
+        const float grain = sstep(0.42f, 0.66f, markNoise(x, y, 137 + v * 3, 14.0f, 3) + (0.5f - d) * 0.25f);
+        const float line = segsCoverage(segs[v], x, y, 0.2f);
+        const float spike = sstep(0.55f, 0.82f, r) * line;
+        a = std::clamp(patch * (0.28f + 0.5f * grain) + line * 0.85f + spike * 0.2f, 0.0f, 1.0f);
+        g = 0.82f + 0.18f * markNoise(x, y, 141, 9.0f, 2);
+    });
+}
+
+// Mancha viscosa (veneno): gotas satelite e bordas lobuladas.
+VfxImage makeMarkStain() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        const float d = wobbleR(v, x, y, r, ang, 151, 0.7f);
+        const float base = sstep(0.7f, 0.38f, d);
+        const float drops = sstep(0.56f, 0.72f, markNoise(x, y, 161 + v * 3, 9.0f, 3) + (0.62f - r) * 0.2f) * sstep(0.95f, 0.6f, r);
+        a = std::clamp(base * (0.6f + 0.4f * sstep(0.6f, 0.1f, d)) + drops * 0.8f, 0.0f, 1.0f);
+        g = 0.55f + 0.45f * markNoise(x, y, 167 + v, 5.0f, 2);
+    });
+}
+
+// Brilho suave (flash e halo): o unico quadro simetrico, 1 desenho.
+VfxImage makeMarkGlow() {
+    VfxImage img;
+    img.width = img.height = kMarkCell;
+    img.rgba.assign(size_t(img.width) * img.height * 4, 0);
+    for (int py = 0; py < kMarkCell; ++py)
+        for (int px = 0; px < kMarkCell; ++px) {
+            const float x = (float(px) + 0.5f) / float(kMarkCell) * 2.0f - 1.0f;
+            const float y = 1.0f - (float(py) + 0.5f) / float(kMarkCell) * 2.0f;
+            const float r = std::sqrt(x * x + y * y);
+            const float n = markNoise(x, y, 181, 4.0f, 2);
+            const float a = std::exp(-r * r * 3.2f) * sstep(1.0f, 0.7f, r + (n - 0.5f) * 0.2f);
+            put(img, px, py, 1.0f, 1.0f, 1.0f, a);
+        }
+    return img;
+}
+
+VfxImage makeMarkMud() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        const float d = wobbleR(v, x, y, r, ang, 171, 0.6f);
+        const float body = sstep(0.7f, 0.36f, d);
+        const float drops = sstep(0.66f, 0.74f, markNoise(x, y, 181 + v * 3, 9.0f, 2) + (0.9f - r) * 0.12f) * sstep(1.0f, 0.55f, r);
+        a = std::clamp(body * (0.7f + 0.3f * markNoise(x, y, 187, 5.0f, 2)) + drops * 0.7f, 0.0f, 1.0f);
+        g = 0.65f + 0.35f * markNoise(x, y, 191 + v, 6.0f);
+    });
+}
+
+// Sombra: tentaculos curvos saindo de um nucleo pequeno; o miolo nao e' um
+// disco cheio, e a borda e' a ponta fina de cada tentaculo.
+VfxImage makeMarkFade() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        static std::vector<Seg> segs[kMarkVariants];
+        if (segs[v].empty()) {
+            uint32_t rs = 7771u + uint32_t(v) * 4099u;
+            const int arms = 8 + v % 3;
+            for (int k = 0; k < arms; ++k) {
+                const float a0 = 6.2831853f * (float(k) + (markRand01(rs) - 0.5f) * 0.5f) / float(arms);
+                const float len = 0.55f + 0.4f * markRand01(rs);
+                const int n = 10;
+                addWobblyBranch(segs[v], rs, std::cos(a0) * 0.08f, std::sin(a0) * 0.08f, a0, n, len / float(n), 0.06f, 0.3f, 0.22f, 0.8f, 1);
+            }
+        }
+        const float line = segsCoverage(segs[v], x, y, 0.12f);
+        const float d = wobbleR(v, x, y, r, ang, 221, 0.35f);
+        const float core = sstep(0.28f, 0.12f, d);
+        a = std::clamp(std::max(line, core) * (0.8f + 0.2f * markNoise(x, y, 233 + v, 6.0f, 2)), 0.0f, 1.0f);
+        g = 0.6f + 0.4f * markNoise(x, y, 239 + v, 4.0f, 2);
+    });
+}
+
+// Pancada: poeira em leque irregular, raios curtos.
+VfxImage makeMarkBlast() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        const float d = wobbleR(v, x, y, r, ang, 231, 0.55f);
+        const float n = markNoise(x, y, 239 + v * 5, 3.0f);
+        const float spokes = 0.45f + 0.55f * std::pow(std::abs(std::sin(ang * float(5 + v) * 0.5f + n * 5.0f)), 0.6f);
+        a = std::pow(sstep(0.95f, 0.1f, d), 0.9f) * spokes;
+        g = 0.55f + 0.45f * sstep(0.2f, 0.9f, r);
+    });
+}
+
+// Sagrado: so' aneis quebrados e runas entre eles; o interior fica vazio
+// (o chao aparece), nada de disco, raio ou halo cheio.
+VfxImage makeMarkHoly() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        const float n = markNoise(x, y, 251 + v * 7, 3.0f, 2);
+        const float cx = std::cos(ang) * 1.3f, cy = std::sin(ang) * 1.3f;
+        const float rr = r + (n - 0.5f) * 0.12f + (markNoise(cx, cy, 255 + v, 3.0f, 2) - 0.5f) * 0.08f;
+        const float ring1 = std::exp(-std::pow((rr - 0.34f) / 0.022f, 2.0f)) * sstep(0.42f, 0.55f, markNoise(cx, cy, 257 + v * 3, 5.0f, 3));
+        const float ring2 = std::exp(-std::pow((rr - 0.80f) / 0.026f, 2.0f)) * sstep(0.40f, 0.52f, markNoise(cx, cy, 261 + v * 5, 4.0f, 3));
+        // Runas: 16 celulas angulares entre os aneis, cada uma com um tracado.
+        const float u = (ang + 3.14159265f) / 6.2831853f * 16.0f;
+        const int cell = int(std::floor(u));
+        const float la = (u - float(cell)) - 0.5f;
+        const float lt = (rr - 0.46f) / 0.26f; // 0..1 entre os aneis
+        const float h = hash2(cell, v, 91);
+        const bool in = lt > 0.0f && lt < 1.0f && h > 0.3f;
+        float rune = 0.0f;
+        if (in) {
+            const int kind = int(h * 10.0f) % 3;
+            const float bar = sstep(0.09f, 0.05f, std::abs(la)) * sstep(0.05f, 0.1f, lt) * sstep(0.95f, 0.88f, lt);
+            const float cross = sstep(0.07f, 0.04f, std::abs(lt - 0.5f)) * sstep(0.32f, 0.26f, std::abs(la));
+            const float diag = sstep(0.08f, 0.05f, std::abs(la - (lt - 0.5f) * 0.5f)) * sstep(0.1f, 0.15f, lt) * sstep(0.9f, 0.85f, lt);
+            rune = kind == 0 ? bar : (kind == 1 ? std::max(bar * 0.9f, cross) : diag);
+        }
+        a = std::clamp(ring1 + ring2 + rune * 0.9f, 0.0f, 1.0f);
+        g = 1.0f;
+    });
+}
+
+// Onda de choque: arco quebrado de raio ondulado e espessura variavel, nunca
+// um anel fechado (cada instancia gira um dos 4 desenhos).
+VfxImage makeMarkWave() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        const float wob = (markNoise(std::cos(ang) * 1.3f, std::sin(ang) * 1.3f, 263 + v * 9, 3.0f, 3) - 0.5f) * 0.3f;
+        const float thick = 0.07f + 0.08f * markNoise(std::cos(ang) * 1.1f, std::sin(ang) * 1.1f, 269 + v * 5, 4.0f, 2);
+        const float dd = (r - 0.74f + wob) / thick;
+        const float gap = sstep(0.38f, 0.55f, markNoise(std::cos(ang) * 1.2f, std::sin(ang) * 1.2f, 271 + v * 3, 3.0f, 3));
+        a = std::exp(-dd * dd) * gap * (0.6f + 0.4f * markNoise(x, y, 277, 8.0f, 2));
+        g = 1.0f;
+    });
+}
+
+// Cratera: fundo escuro irregular, labio claro erguido, raios de entulho de
+// comprimentos diferentes e pedacos soltos fora (impacto).
+VfxImage makeMarkCrater() {
+    return makeAtlas([](int v, float x, float y, float r, float ang, float& g, float& a) {
+        const float d = wobbleR(v, x, y, r, ang, 281, 0.5f);
+        const float floorM = sstep(0.5f, 0.28f, d);
+        const float lip = std::exp(-std::pow((d - 0.5f) / 0.09f, 2.0f));
+        const float cx = std::cos(ang) * 1.6f, cy = std::sin(ang) * 1.6f;
+        const float ray = sstep(0.5f, 0.7f, markNoise(cx, cy, 283 + v * 7, 6.0f, 3));
+        const float reach = 0.6f + 0.38f * markNoise(cx, cy, 289 + v * 11, 3.0f, 2);
+        const float rays = ray * sstep(0.42f, 0.55f, r) * sstep(reach, reach * 0.6f, r) * (0.5f + 0.5f * markNoise(x, y, 293, 10.0f, 2));
+        const float chunks = sstep(0.72f, 0.82f, markNoise(x, y, 297 + v * 3, 12.0f, 2)) * sstep(0.5f, 0.6f, r) * sstep(0.95f, 0.7f, r) * (0.4f + 0.6f * ray);
+        a = std::clamp(floorM * 0.95f + lip * 0.65f + rays * 0.7f + chunks, 0.0f, 1.0f);
+        // Fundo escuro (cinza baixo), labio e entulho mais claros.
+        g = std::clamp(0.3f + 0.7f * std::max(lip, std::max(rays, chunks)) + 0.1f * (1.0f - floorM), 0.1f, 1.0f);
+    });
+}
+
 } // namespace
 
 void computeVfxCutout(const uint8_t* rgba, uint32_t w, uint32_t h, uint32_t cols, uint32_t rows, float out[8]) {
@@ -269,13 +631,34 @@ bool makeVfxBuiltin(const std::string& name, VfxImage& out) {
     else if (name == "builtin:star") out = makeStar();
     else if (name == "builtin:leaf") out = makeLeaf();
     else if (name == "builtin:foot") out = makeFoot();
+    else if (name == "builtin:mk_scorch") out = makeMarkScorch();
+    else if (name == "builtin:mk_streak") out = makeMarkStreak();
+    else if (name == "builtin:mk_crack") out = makeMarkCrack();
+    else if (name == "builtin:mk_bolt") out = makeMarkBolt();
+    else if (name == "builtin:mk_puddle") out = makeMarkPuddle();
+    else if (name == "builtin:mk_frost") out = makeMarkFrost();
+    else if (name == "builtin:mk_stain") out = makeMarkStain();
+    else if (name == "builtin:mk_glow") out = makeMarkGlow();
+    else if (name == "builtin:mk_mud") out = makeMarkMud();
+    else if (name == "builtin:mk_embers") out = makeMarkEmbers();
+    else if (name == "builtin:mk_fade") out = makeMarkFade();
+    else if (name == "builtin:mk_blast") out = makeMarkBlast();
+    else if (name == "builtin:mk_wave") out = makeMarkWave();
+    else if (name == "builtin:mk_sheen") out = makeMarkSheen();
+    else if (name == "builtin:mk_crater") out = makeMarkCrater();
+    else if (name == "builtin:mk_holy") out = makeMarkHoly();
     else return false;
     return true;
 }
 
 const std::vector<std::string>& vfxBuiltinNames() {
     static const std::vector<std::string> names = {"builtin:puff", "builtin:flame", "builtin:spark", "builtin:ring",
-                                                   "builtin:star", "builtin:leaf", "builtin:foot"};
+                                                   "builtin:star", "builtin:leaf", "builtin:foot",
+                                                   "builtin:mk_scorch", "builtin:mk_streak", "builtin:mk_crack",
+                                                   "builtin:mk_bolt", "builtin:mk_puddle", "builtin:mk_frost",
+                                                   "builtin:mk_stain", "builtin:mk_glow", "builtin:mk_mud",
+                                                   "builtin:mk_embers", "builtin:mk_fade", "builtin:mk_blast",
+                                                   "builtin:mk_wave", "builtin:mk_sheen", "builtin:mk_holy", "builtin:mk_crater"};
     return names;
 }
 

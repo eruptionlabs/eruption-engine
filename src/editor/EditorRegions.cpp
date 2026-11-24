@@ -32,8 +32,8 @@ const char* kToolNames[ToolCount] = {"Select",  "Polygon",         "Rectangle", 
                                      "Brush",   "Eraser",          "Magnetic lasso", "Magic wand"};
 
 // Lista extensivel: um tipo novo entra aqui e em isGlowType/isSurfaceType.
-const char* kTypeIds[] = {kTypeWindow, kTypeLamp, kTypeSand, kTypeSnow};
-const char* kTypeLabels[] = {"Lit window", "Lamp / post / torch", "Sand", "Snow"};
+const char* kTypeIds[] = {kTypeWindow, kTypeLamp, kTypeSand, kTypeSnow, kTypeGrass, kTypeDirt, kTypeStone, kTypeWood};
+const char* kTypeLabels[] = {"Lit window", "Lamp / post / torch", "Sand", "Snow", "Grass", "Dirt", "Stone", "Wood"};
 const char* kGlowLabels[] = {"Dark glows (window glass)", "Light glows (lantern glass)", "Paper (light glows)",
                              "Uniform"};
 
@@ -49,6 +49,10 @@ ImU32 typeColor(const std::string& type, bool selected) {
     if (type == kTypeLamp) return IM_COL32(255, 230, 90, 255);
     if (type == kTypeSand) return IM_COL32(220, 190, 120, 255);
     if (type == kTypeSnow) return IM_COL32(200, 225, 255, 255);
+    if (type == kTypeGrass) return IM_COL32(110, 200, 90, 255);
+    if (type == kTypeDirt) return IM_COL32(150, 105, 70, 255);
+    if (type == kTypeStone) return IM_COL32(160, 160, 170, 255);
+    if (type == kTypeWood) return IM_COL32(190, 140, 80, 255);
     return IM_COL32(180, 180, 180, 255);
 }
 
