@@ -55,6 +55,7 @@ uint32_t Engine::groundState(const GroundStateRequest& r) {
     s.z = r.z;
     s.radius = std::clamp(r.radius > 0.0f ? r.radius : 3.0f * upm, 0.05f * upm, 2000.0f);
     s.square = r.square;
+    s.walkable = r.walkable && kind == ground::Kind::IceWater;
     s.strength = std::clamp(r.strength, 0.0f, 1.0f);
     const KindDefaults d = defaultsFor(kind);
     s.duration = std::clamp(r.duration > 0.0f ? r.duration : d.duration, 0.1f, 36000.0f);
@@ -63,11 +64,11 @@ uint32_t Engine::groundState(const GroundStateRequest& r) {
     s.born = m_affectClock;
     if (++m_affectNextId == 0) ++m_affectNextId;
     const uint32_t id = m_affectNextId;
-    const float y0 = floorHeight(r.x, r.z, FLT_MAX);
+    const float y0 = floorHeight(r.x, r.z, FLT_MAX, nullptr, nullptr, true, false);
     const float from = y0 + 2.5f * upm;
     // So' o chao rente (terreno e modelos de chao): o que fica a mais de 2,5 m
     // acima do centro (telhado, ponte) nao entra na altura de referencia.
-    auto groundY = [this, from](float x, float z) { return floorHeight(x, z, from); };
+    auto groundY = [this, from](float x, float z) { return floorHeight(x, z, from, nullptr, nullptr, true, false); };
     m_groundField.add(std::move(s), id, groundY, m_groundCap);
     m_groundDirty = true;
     m_groundNextRaster = 0.0; // sobe ja' no proximo quadro

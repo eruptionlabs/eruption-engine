@@ -2,6 +2,7 @@
 // perfil, rasterizacao e janela. Sem GPU.
 #include "core/GroundState.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -115,6 +116,66 @@ int main() {
     float areas[kMaxIceAreas][4];
     CHECK(field.iceAreas(3.0, areas, kMaxIceAreas) == 1);
     CHECK(areas[0][0] == 10.0f && areas[0][1] == 20.0f && areas[0][3] > 0.9f);
+
+    // Gelo que aguenta peso: sem gelo vivo nada levanta; congelado = 1 no miolo,
+    // 0 fora do disco; histerese; afundar suave no degelo; walkable=false e strength baixa.
+    {
+        Field f;
+        f.configure(Params{64, 8.0f});
+        CHECK(!f.hasIce() && f.iceLift(0.0f, 0.0f) == 0.0f);
+        State g = make(Kind::IceWater, 100.0f, 40.0f, 20.0f); // segura ate' 20 s, degela ate' 40
+        g.born = 0.0;
+        f.add(g, 1, [](float, float) { return 0.0f; }, 8);
+        CHECK(f.hasIce());
+        f.tick(0.0);
+        CHECK(f.iceLift(0.0f, 0.0f) == 0.0f); // recem-criado: ainda nao solido
+        f.tick(2.0);
+        CHECK(f.iceLift(0.0f, 0.0f) == 1.0f);   // miolo congelado
+        CHECK(f.iceLift(300.0f, 0.0f) == 0.0f); // fora do disco: agua
+        // A borda: o perfil cai de 1 (0,45 r) a 0 (r); em 0,6 do perfil o gelo entra.
+        float edgeIn = -1.0f, edgeOut = -1.0f;
+        for (float d = 0.0f; d <= 100.0f; d += 0.5f) {
+            const float v = lifeAmount(f.states()[0], 2.0) * profile(f.states()[0], d, 0.0f);
+            if (v >= kIceSolidOff) edgeIn = d;
+            if (v >= kIceSolidOn) edgeOut = d;
+        }
+        CHECK(edgeIn > edgeOut);                       // a solida (histerese) vai mais longe do que a de entrada
+        CHECK(f.iceLift(edgeOut - 1.0f, 0.0f) == 1.0f);
+        CHECK(f.iceLift(edgeIn + 3.0f, 0.0f) < 1.0f);  // alem da borda solida: nao sustenta
+        // Histerese no tempo: um ponto na faixa entre kIceSolidOff e kIceSolidOn fica
+        // congelado enquanto o estado esta' solido, mas nao entra num estado que nunca foi.
+        const float dMid = 0.5f * (edgeIn + edgeOut);
+        CHECK(f.iceLift(dMid, 0.0f) == 1.0f);
+        Field h;
+        h.configure(Params{64, 8.0f});
+        State g2 = g;
+        g2.strength = 0.5f; // nunca chega a kIceSolidOn
+        h.add(g2, 2, [](float, float) { return 0.0f; }, 8);
+        h.tick(2.0);
+        CHECK(h.iceLift(0.0f, 0.0f) == 0.0f);
+        // Degelo: cai de 1 a 0 sem salto, monotono, so' enquanto ha' gelo.
+        float prev = 1.0f, worst = 0.0f;
+        bool anySink = false;
+        for (double t = 20.0; t <= 40.0; t += 0.05) {
+            f.tick(t);
+            const float l = f.iceLift(0.0f, 0.0f);
+            CHECK(l <= prev + 1e-6f);
+            worst = std::max(worst, prev - l);
+            anySink |= l > 0.01f && l < 0.99f;
+            prev = l;
+        }
+        CHECK(anySink);       // passa por valores intermediarios: afunda suave
+        CHECK(worst < 0.1f);  // nenhum quadro de 0,05 s derruba mais de 10%
+        CHECK(prev == 0.0f || f.size() == 0);
+        // walkable = false: so' visual.
+        Field v;
+        v.configure(Params{64, 8.0f});
+        State g3 = g;
+        g3.walkable = false;
+        v.add(g3, 3, [](float, float) { return 0.0f; }, 8);
+        v.tick(2.0);
+        CHECK(!v.hasIce() && v.iceLift(0.0f, 0.0f) == 0.0f);
+    }
 
     // A janela anda com o foco, em passos.
     Field w;

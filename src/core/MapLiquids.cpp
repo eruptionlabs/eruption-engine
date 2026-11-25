@@ -308,6 +308,8 @@ namespace eruption {
 bool Engine::waterSurfaceAt(const Vec3& p, float* level) const {
     constexpr float kFolga = 0.5f;
     if (!m_currentMap) return false;
+    // Lago congelado: o pe' pisa no gelo, nao na agua (sem ondinha de passo).
+    if (m_groundField.iceLift(p.x, p.z) >= 1.0f) return false;
     // Água de contorno (canal, lago): a superfície sob o ponto, no nível dela.
     // Primeiro: é a mais específica, e pode estar acima do plano do mapa.
     LiquidAt contour;

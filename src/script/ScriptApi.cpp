@@ -2504,7 +2504,7 @@ int world_wind_burst(lua_State* L) {
     lua_pushinteger(L, int(id));
     return 1;
 }
-// world.ground_state{x, z, radius, kind, strength, duration, fade, square}: estado
+// world.ground_state{x, z, radius, kind, strength, duration, fade, square, walkable}: estado
 // do chao por celula (queimado, geada, molhado, neve, gelo sobre a agua); devolve o id.
 int world_ground_state(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -2526,6 +2526,9 @@ int world_ground_state(lua_State* L) {
     r.fade = optField(L, 1, "fade", r.fade);
     lua_getfield(L, 1, "square");
     r.square = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "walkable");
+    if (!lua_isnil(L, -1)) r.walkable = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
     const uint32_t id = eng().groundState(r);
     if (id == 0) lua_pushnil(L);
@@ -3475,7 +3478,7 @@ declare graphics: {
 -- A model is referenced by its name (string) or its index (number, from 1).
 type Model = string | number
 
-type StepGround = { material: string, texture: string, node: string, surface: string, uv: vector, in_water: boolean, foot: number, direction: vector, contact: string, shape: string, width: number }
+type StepGround = { material: string, texture: string, node: string, surface: string, uv: vector, in_water: boolean, on_ice: boolean, foot: number, direction: vector, contact: string, shape: string, width: number }
 
 -- Events. Call these at the top level of a script, not inside functions.
 declare on: {
@@ -3502,7 +3505,8 @@ declare on: {
     -- with the editor's Regions tab ("sand", "snow"; "" when none),
     -- in_water = a water surface covers the foot (any water of the map,
     -- canals included; the
-    -- other fields are then empty). Decide the effect here with world.dust
+    -- other fields are then empty). on_ice = the foot is on a frozen lake
+    -- (ground_state ice_water): in_water is false, material is "ice". Decide the effect here with world.dust
     -- and world.footprint; the engine has no surface table.
     -- A character with a sprite steps by its own pixels: `contact` is "strike"
     -- (a foot that was drawn landing on the ground), "drag" (a body that slides
@@ -3726,8 +3730,19 @@ declare world: {
     -- (presets ground_state_texels, ground_state_texel_m). Overlapping states of
     -- the same kind keep the stronger. Visual and local: not saved or sent over
     -- the network. Cleared on map change. Costs nothing while none is alive.
+    -- ICE YOU CAN WALK ON (ice_water, automatic; walkable = false keeps it
+    -- visual only): where the lid is thick enough (state strength x edge
+    -- profile >= 0.6 to become solid, and it stays solid down to 0.35, so the
+    -- rim does not flicker) the water counts as ground: floor_height, path,
+    -- the player and characters.* stand at the water surface level instead of
+    -- the lake bed, navigation and walkable/floor_walkable treat the cell as
+    -- walkable even when the painted grid or a walk cost blocked it, liquid_at
+    -- returns nil there, the foot makes no step ripple and the step event has
+    -- ground.on_ice = true (material "ice"). While it thaws, below 0.35 the
+    -- floor sinks smoothly back to the bed (no teleport) and the cell is water
+    -- again (swim rules apply). strength < 0.6 never holds weight.
     ground_state: (opts: { kind: string, x: number, z: number, radius: number?, strength: number?,
-        duration: number?, fade: number?, square: boolean? }) -> number?,
+        duration: number?, fade: number?, square: boolean?, walkable: boolean? }) -> number?,
     -- Removes a ground state now. true if it was still alive.
     ground_state_stop: (id: number) -> boolean,
     -- Terrain height at a world position.

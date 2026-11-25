@@ -244,8 +244,14 @@ const std::vector<Engine::FootstepEvent>& Engine::footstepEvents() {
         ev.width = st.width / m_vfx.unitsPerMeter(); // metros, como o `size` do world.footprint
         float level = 0.0f;
         ev.inWater = waterSurfaceAt(st.pos, &level);
+        ev.onIce = m_groundField.iceLift(st.pos.x, st.pos.z) >= 1.0f;
         ModelRenderer::SurfaceHit hit;
-        if (!ev.inWater && footSurfaceAt(st.pos, hit)) {
+        if (ev.onIce) {
+            // Passo no gelo: o material e' "ice" (o jogo escolhe som e marca); o leito
+            // do lago nao conta.
+            ev.hasGround = true;
+            ev.material = "ice";
+        } else if (!ev.inWater && footSurfaceAt(st.pos, hit)) {
             ev.hasGround = true;
             ev.material = hit.material.empty() ? hit.texture : hit.material;
             ev.texture = std::move(hit.texture);

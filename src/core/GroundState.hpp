@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace eruption::ground {
@@ -48,7 +49,25 @@ struct State {
     std::vector<float> heights;
     int nx = 0, nz = 0;
     float x0 = 0.0f, z0 = 0.0f, step = 1.0f;
+    // Gelo sobre a agua (ice_water): quem anda por cima fica na superficie da
+    // agua enquanto a celula estiver congelada. `walkable` = false deixa so'
+    // o visual. `solid` e' a trava com histerese (liga em kIceSolidOn, solta em
+    // kIceSolidOff, sobre a forca do estado), `everSolid` = ja' aguentou gente
+    // (so' entao ha' o afundar suave no degelo).
+    bool walkable = true;
+    bool solid = false;
+    bool everSolid = false;
 };
+
+// Limiares do gelo que aguenta peso, sobre v = lifeAmount * perfil (0..1).
+// Entra congelado em v >= kIceSolidOn; depois de solido, so' solta abaixo de
+// kIceSolidOff (histerese: a borda nao pula quando v oscila em volta de um
+// valor so'). Abaixo de kIceSolidOff e ate' kIceSinkLow o chao desce suave de
+// volta ao leito (afundar no degelo, sem teleporte).
+inline constexpr float kIceSolidOn = 0.6f;
+inline constexpr float kIceSolidOff = 0.35f;
+inline constexpr float kIceSinkLow = 0.05f;
+inline constexpr float kIceBucket = 256.0f;
 
 // Quanto do estado vale agora (forca x ciclo de vida), 0..1: sobe em ~0,5 s,
 // segura ate' duration - fade e some em suavizado ate' duration.
@@ -111,6 +130,12 @@ public:
     // Alguma coisa para o shader ler? (estado vivo, ou ainda a limpar)
     bool lit() const { return !m_states.empty() || m_dirtyLeft; }
 
+    // Quanto o gelo sob (x, z) sustenta, 0..1, com o relogio do ultimo tick: 1 =
+    // congelado (ande na superficie da agua), entre 0 e 1 = afundando no degelo,
+    // 0 = agua. So' conta ice_water com `walkable`. Custo zero sem gelo vivo.
+    float iceLift(float x, float z) const;
+    bool hasIce() const { return m_iceLive > 0; }
+
     // Areas de gelo para a agua: (x, z, raio, quanto) das "ice_water" vivas.
     uint32_t iceAreas(double now, float out[][4], uint32_t cap) const;
 
@@ -123,6 +148,12 @@ private:
     float m_hBase = 0.0f, m_hRange = 1.0f;
     Rect m_prevDirty;
     bool m_dirtyLeft = false;
+    double m_now = 0.0;
+    uint32_t m_iceLive = 0; // ice_water com walkable
+    // Grade grossa (celulas de kIceBucket u) com os indices dos gelos que a cobrem:
+    // iceLift custa o mesmo com 1 ou 400 lagos congelados (so' olha a celula).
+    std::unordered_map<uint64_t, std::vector<uint16_t>> m_iceGrid;
+    void countIce(); // refaz a contagem e a grade
 };
 
 } // namespace eruption::ground

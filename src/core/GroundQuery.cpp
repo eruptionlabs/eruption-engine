@@ -175,14 +175,25 @@ float Engine::floorAmong(const std::vector<uint32_t>& cand, float terrainY, floa
     return f.y;
 }
 
-float Engine::floorHeight(float x, float z, float fromY, bool* onModel, int* instance, bool withRelief) const {
+float Engine::floorHeight(float x, float z, float fromY, bool* onModel, int* instance, bool withRelief, bool withIce) const {
     std::vector<uint32_t> cand;
     solidsIn(m_solid, m_modelRenderer.getInstances(), x, z, x, z, cand);
     const Floor f = floorOver(m_modelRenderer, cand, sampleTerrainHeight(x, z, fromY, withRelief), x, z, fromY,
                               withRelief);
     if (onModel) *onModel = f.instance >= 0;
     if (instance) *instance = f.instance;
+    // Lago congelado: o piso e' a superficie do gelo (so' sobre o terreno, a
+    // ponte sobre o lago ja' tem o piso dela).
+    if (withIce && f.instance < 0) return iceRaise(x, z, f.y);
     return f.y;
+}
+
+float Engine::iceRaise(float x, float z, float floorY) const {
+    const float lift = m_groundField.iceLift(x, z);
+    if (lift <= 0.0f) return floorY;
+    LiquidAt lq;
+    if (!liquidOverRaw(x, z, floorY, lq) || lq.kind != 0 || lq.level <= floorY) return floorY;
+    return floorY + (lq.level - floorY) * lift;
 }
 
 // Raio da camera pelo pixel da janela. Usa dois pontos do raio (profundidade 0
@@ -266,6 +277,12 @@ bool Engine::contourWaterAt(float x, float z, float floorY, LiquidAt& out) const
 }
 
 bool Engine::liquidOver(float x, float z, float floorY, LiquidAt& out) const {
+    if (!liquidOverRaw(x, z, floorY, out)) return false;
+    // Agua congelada nao e' liquido: quem pisa nao nada nem afunda, anda.
+    return !(out.kind == 0 && m_groundField.iceLift(x, z) >= 1.0f);
+}
+
+bool Engine::liquidOverRaw(float x, float z, float floorY, LiquidAt& out) const {
     float surface = 0.0f;
     int lava = lavaAt(m_currentMap.get(), x, z, floorY, surface);
     if (lava >= 0) {
@@ -363,7 +380,7 @@ void Engine::sampleGround(float x0, float z0, float step, int nx, int nz, float 
             LiquidAt lq;
             if (liquidOver(x, z, f.y, lq)) fl |= lq.kind == 1 ? kGroundLava : kGroundWater;
             const size_t o = size_t(iz) * size_t(nx) + size_t(ix);
-            heights[o] = f.y;
+            heights[o] = f.instance < 0 ? iceRaise(x, z, f.y) : f.y;
             flags[o] = fl;
         }
     }

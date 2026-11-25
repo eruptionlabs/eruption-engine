@@ -139,6 +139,7 @@ uint32_t Field::add(State s, uint32_t id, const std::function<float(float, float
         s.y = groundAt(s, s.x, s.z);
     }
     m_states.push_back(std::move(s));
+    countIce();
     return id;
 }
 
@@ -146,6 +147,7 @@ bool Field::stop(uint32_t id) {
     for (size_t i = 0; i < m_states.size(); ++i)
         if (m_states[i].id == id) {
             m_states.erase(m_states.begin() + long(i));
+            countIce();
             return true;
         }
     return false;
@@ -153,6 +155,26 @@ bool Field::stop(uint32_t id) {
 
 void Field::clear() {
     m_states.clear();
+    m_iceLive = 0;
+    m_iceGrid.clear();
+}
+
+namespace {
+uint64_t iceKey(int cx, int cz) { return (uint64_t(uint32_t(cx)) << 32) | uint64_t(uint32_t(cz)); }
+int iceCell(float v) { return int(std::floor(v / kIceBucket)); }
+} // namespace
+
+void Field::countIce() {
+    m_iceLive = 0;
+    m_iceGrid.clear();
+    for (size_t i = 0; i < m_states.size(); ++i) {
+        const State& s = m_states[i];
+        if (s.kind != Kind::IceWater || !s.walkable) continue;
+        ++m_iceLive;
+        for (int cz = iceCell(s.z - s.radius); cz <= iceCell(s.z + s.radius); ++cz)
+            for (int cx = iceCell(s.x - s.radius); cx <= iceCell(s.x + s.radius); ++cx)
+                m_iceGrid[iceKey(cx, cz)].push_back(uint16_t(i));
+    }
 }
 
 bool Field::animating(double now) const {
@@ -166,10 +188,34 @@ bool Field::animating(double now) const {
 }
 
 bool Field::tick(double now) {
+    m_now = now;
     const size_t before = m_states.size();
     m_states.erase(std::remove_if(m_states.begin(), m_states.end(), [now](const State& s) { return expired(s, now); }),
                    m_states.end());
+    // A trava do gelo (histerese sobre a forca do estado).
+    for (State& s : m_states) {
+        if (s.kind != Kind::IceWater || !s.walkable) continue;
+        const float a = lifeAmount(s, now);
+        if (!s.solid && a >= kIceSolidOn) s.solid = s.everSolid = true;
+        else if (s.solid && a < kIceSolidOff) s.solid = false;
+    }
+    if (m_states.size() != before) countIce();
     return m_states.size() != before;
+}
+
+float Field::iceLift(float x, float z) const {
+    if (m_iceLive == 0) return 0.0f;
+    float lift = 0.0f;
+    const auto it = m_iceGrid.find(iceKey(iceCell(x), iceCell(z)));
+    if (it == m_iceGrid.end()) return 0.0f;
+    for (const uint16_t idx : it->second) {
+        const State& s = m_states[idx];
+        if (std::fabs(x - s.x) > s.radius || std::fabs(z - s.z) > s.radius) continue;
+        const float v = lifeAmount(s, m_now) * profile(s, x, z);
+        if (v >= (s.solid ? kIceSolidOff : kIceSolidOn)) return 1.0f;
+        if (s.everSolid) lift = std::max(lift, smooth01(kIceSinkLow, kIceSolidOff, v));
+    }
+    return lift;
 }
 
 bool Field::follow(float fx, float fz) {

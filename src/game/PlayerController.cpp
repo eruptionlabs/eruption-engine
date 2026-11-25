@@ -363,12 +363,12 @@ void PlayerController::updateMovement(float dt) {
                         if (finalPos.x == m_pos.x && finalPos.z == m_pos.z) m_isMoving = false;
                     }
                     if (m_engine->currentMap()->isGlbMap) {
-                        finalPos.y = m_engine->sampleTerrainHeight(finalPos.x, finalPos.z);
+                        finalPos.y = m_engine->iceRaise(finalPos.x, finalPos.z, m_engine->sampleTerrainHeight(finalPos.x, finalPos.z));
                     } else {
                         int fgx = (int)(finalPos.x / gatCellSize);
                         int fgz = (int)(finalPos.z / gatCellSize);
                         if (fgx >= 0 && fgz >= 0 && fgx < (int)m_engine->currentMap()->navGrid.width && fgz < (int)m_engine->currentMap()->navGrid.height)
-                            finalPos.y = m_engine->currentMap()->navGrid.at(fgx, fgz).worldY();
+                            finalPos.y = m_engine->iceRaise(finalPos.x, finalPos.z, m_engine->currentMap()->navGrid.at(fgx, fgz).worldY());
                     }
                     m_pos = finalPos;
                 } else {

@@ -525,6 +525,11 @@ public:
         // partida (groundStartY), e solta se o script mexeu na altura.
         float groundStartY = 0.0f;
         float groundSettledY = 0.0f;
+        // Em cima de um lago congelado (ground_state ice_water): o motor mantem o
+        // Y na superficie do gelo e afunda junto com ele no degelo. iceY = o Y que
+        // o motor escreveu; se o script mexer na altura, a regra solta.
+        bool iceRide = false;
+        float iceY = 0.0f;
         bool groundSettled = false;
         // Y escrito na cena: o editor salva este, não o assentado, para abrir
         // e salvar uma cena não mudar o arquivo.
@@ -1445,7 +1450,7 @@ public:
     // terreno ou o topo de um objeto sólido (passarela, ponte, laje de kit):
     // floorHeight devolve o mais alto abaixo de `fromY`.
     float floorHeight(float x, float z, float fromY, bool* onModel = nullptr, int* instance = nullptr,
-                      bool withRelief = true) const;
+                      bool withRelief = true, bool withIce = true) const;
     // Dá para ficar de pé em (x, z) sobre o piso: grade de caminhada (só no
     // terreno; sobre um objeto sólido vale a peça), nenhum outro sólido
     // ocupando o corpo acima do piso, no raio, e no máximo um degrau de
@@ -1487,7 +1492,11 @@ public:
     // terrainY); `instance` = o sólido do piso ou -1.
     float floorAmong(const std::vector<uint32_t>& cand, float terrainY, float x, float z, float fromY,
                      int& instance, bool withRelief = true) const;
+    // O liquido sem o gelo (o lago congelado deixa de ser liquido em liquidOver).
+    bool liquidOverRaw(float x, float z, float floorY, LiquidAt& out) const;
     bool liquidOver(float x, float z, float floorY, LiquidAt& out) const;
+    bool navWalkableBase(float x, float z, float y) const;
+    bool iceWalkable(float x, float z) const;
     // Agua de contorno (kind water com polygon) do mapa aberto ou de um vizinho
     // em cena em (x, z) com o piso em floorY abaixo da superficie: a de
     // superficie mais alta. `surface` = altura dela ali, com o nivel vivo.
@@ -2929,6 +2938,7 @@ public:
         Vec2 uv{0.0f};
         bool hasGround = false;
         bool inWater = false; // waterSurfaceAt no pe'
+        bool onIce = false;   // o pe' pisa no gelo de um lago congelado (ground_state ice_water)
     };
     // Calculado na primeira chamada do quadro (sem script que leia, nada roda).
     const std::vector<FootstepEvent>& footstepEvents();
@@ -3000,10 +3010,21 @@ public:
         float duration = 0.0f;  // s ate' sumir; 0 = o padrao do tipo
         float fade = -1.0f;     // s do fim gastos sumindo; < 0 = o padrao do tipo
         bool square = false;    // uma celula quadrada no lugar do disco
+        // ice_water: o gelo aguenta quem anda (fica na superficie da agua, a
+        // celula vira andavel). false = so' o visual. Ignorado nos outros tipos.
+        bool walkable = true;
     };
     uint32_t groundState(const GroundStateRequest& r);
     bool groundStateStop(uint32_t id);
     size_t groundStatesAlive() const { return m_groundField.size(); }
+    // Gelo sobre a agua que aguenta peso (ice_water com walkable): 0..1, 1 =
+    // congelado em (x, z), entre 0 e 1 = afundando no degelo. Custo zero sem gelo.
+    float iceLift(float x, float z) const { return m_groundField.iceLift(x, z); }
+    // `floorY` (o leito: terreno ou topo de solido) levantado ate' a superficie
+    // da agua onde ha' gelo, na proporcao de iceLift; sem gelo devolve `floorY`.
+    // E' a altura de quem anda no lago congelado (jogador, characters.*, caminho).
+    float iceRaise(float x, float z, float floorY) const;
+    void settleOnIce(SceneCharacter& c, float dt);
     // Superficie do lugar (regiao de textura, material do chao, agua) pela tabela.
     std::string affectSurfaceAt(const Vec3& pos);
     const affects::Table& affectTable();

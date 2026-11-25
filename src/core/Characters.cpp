@@ -473,9 +473,10 @@ void Engine::updateCharacters(float dt, bool moveAlongPaths) {
                     left = 0.0f;
                 }
             }
-            c.position.y = sampleTerrainHeight(c.position.x, c.position.z);
+            c.position.y = iceRaise(c.position.x, c.position.z, sampleTerrainHeight(c.position.x, c.position.z));
             if (c.pathIndex >= c.path.size()) c.walking = false;
         }
+        if (!c.removed) settleOnIce(c, dt);
         if (c.sayTime > 0.0f) c.sayTime = std::max(0.0f, c.sayTime - dt);
         if (!c.removed && c.visible) trackCharacterStep(c, dt);
         tickCharacterFx(c, dt);
@@ -483,6 +484,35 @@ void Engine::updateCharacters(float dt, bool moveAlongPaths) {
     }
     m_footstepEventsReady = false; // footstepEvents() refaz sob demanda
     m_footsteps.tick(dt);
+}
+
+// Personagem em cima de um lago congelado: o Y fica na superficie do gelo
+// (nivel da agua) e acompanha o degelo ate' o leito, sem teleporte (sobe no
+// maximo kRise u/s ao ser pego na coluna d'agua; desce com o proprio gelo, que
+// ja' afunda suave em iceLift). Quem mexe no Y por script sai da regra.
+void Engine::settleOnIce(SceneCharacter& c, float dt) {
+    constexpr float kRise = 80.0f;
+    if (!c.iceRide && !m_groundField.hasIce()) return;
+    const float x = c.position.x, z = c.position.z;
+    if (c.iceRide && std::fabs(c.position.y - c.iceY) > 1e-3f) c.iceRide = false; // o script moveu
+    const float lift = iceLift(x, z);
+    if (!c.iceRide && lift < 1.0f) return;
+    bool onModel = false;
+    const float bed = floorHeight(x, z, c.position.y + 4.0f, &onModel, nullptr, true, false);
+    if (onModel) {
+        c.iceRide = false;
+        return;
+    }
+    const float target = iceRaise(x, z, bed);
+    if (!c.iceRide) {
+        // So' quem esta' na coluna d'agua (do leito a um palmo acima do gelo).
+        if (c.position.y < bed - 1.0f || c.position.y > target + 1.5f) return;
+        c.iceRide = true;
+    }
+    const float d = target - c.position.y;
+    c.position.y += d > 0.0f ? std::min(d, kRise * dt) : d; // sobe suave, desce com o gelo
+    c.iceY = c.position.y;
+    if (lift <= 0.0f && std::fabs(d) < 1e-3f) c.iceRide = false; // agua de novo, regra normal
 }
 
 // Cada efeito e' um temporizador que desce; o desenho le' o estado. Nada de

@@ -195,6 +195,19 @@ int Engine::navCellKind(float x, float z, float y) const {
 }
 
 bool Engine::navWalkable(float x, float z, float y) const {
+    if (navWalkableBase(x, z, y)) return true;
+    return iceWalkable(x, z); // a celula de agua congelada anda mesmo que a grade bloqueasse
+}
+
+// Lago congelado (ground_state ice_water): agua sob gelo que aguenta. So' vale
+// onde ha' agua de verdade e sem lava; custo zero sem gelo vivo.
+bool Engine::iceWalkable(float x, float z) const {
+    if (!m_groundField.hasIce() || m_groundField.iceLift(x, z) < 1.0f) return false;
+    LiquidAt lq;
+    return liquidOverRaw(x, z, sampleTerrainHeight(x, z), lq) && lq.kind == 0;
+}
+
+bool Engine::navWalkableBase(float x, float z, float y) const {
     const LoadedMap* map = mapAt(x, z, y);
     int gx = 0, gz = 0;
     if (m_navRules.on) {

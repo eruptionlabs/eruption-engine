@@ -809,6 +809,8 @@ void ScriptHost::dispatch(Script& s, float dt, float prevHour, float hour) {
                     lua_setfield(L, -2, "uv");
                     lua_pushboolean(L, ev.inWater ? 1 : 0);
                     lua_setfield(L, -2, "in_water");
+                    lua_pushboolean(L, ev.onIce ? 1 : 0);
+                    lua_setfield(L, -2, "on_ice");
                     lua_pushnumber(L, ev.foot);
                     lua_setfield(L, -2, "foot");
                     lua_pushvector(L, ev.dir.x, 0.0f, ev.dir.y);
