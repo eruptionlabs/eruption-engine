@@ -1005,20 +1005,6 @@
      "min_quality": 1
     },
     {
-     "type": "raise",
-     "count": 7,
-     "ring": 0.55,
-     "size": 0.2,
-     "rise": 0.14,
-     "rise_time": 0.12,
-     "life": 0.5,
-     "color": [
-      0.35,
-      0.32,
-      0.28
-     ]
-    },
-    {
      "type": "wind",
      "strength": 0.7,
      "radius": 1.4,
@@ -1123,20 +1109,6 @@
      "min_quality": 1
     },
     {
-     "type": "raise",
-     "count": 8,
-     "ring": 0.55,
-     "size": 0.22,
-     "rise": 0.15,
-     "rise_time": 0.12,
-     "life": 0.5,
-     "color": [
-      0.25,
-      0.2,
-      0.1
-     ]
-    },
-    {
      "type": "wind",
      "strength": 0.7,
      "radius": 1.4,
@@ -1151,6 +1123,21 @@
   },
   "quake_sand": {
    "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_stain",
+     "color": [
+      0.03,
+      0.025,
+      0.02
+     ],
+     "alpha": 0.45,
+     "size": 1.4,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.6,
+     "fade_in": 0.04
+    },
     {
      "type": "decal",
      "texture": "builtin:mk_blast",
@@ -1207,20 +1194,6 @@
      "area": 0.6,
      "outward": true,
      "lit": 0.9
-    },
-    {
-     "type": "raise",
-     "count": 6,
-     "ring": 0.5,
-     "size": 0.28,
-     "rise": 0.1,
-     "rise_time": 0.12,
-     "life": 0.5,
-     "color": [
-      0.62,
-      0.5,
-      0.3
-     ]
     },
     {
      "type": "wind",
@@ -1344,21 +1317,6 @@
      "min_quality": 1
     },
     {
-     "type": "raise",
-     "count": 9,
-     "ring": 0.6,
-     "size": 0.18,
-     "rise": 0.16,
-     "rise_time": 0.1,
-     "life": 0.55,
-     "mesh": "builtin:shard",
-     "color": [
-      0.4,
-      0.4,
-      0.42
-     ]
-    },
-    {
      "type": "wind",
      "strength": 0.7,
      "radius": 1.4,
@@ -1373,6 +1331,21 @@
   },
   "quake_snow": {
    "blocks": [
+    {
+     "type": "decal",
+     "texture": "builtin:mk_stain",
+     "color": [
+      0.03,
+      0.025,
+      0.02
+     ],
+     "alpha": 0.45,
+     "size": 1.4,
+     "atlas": 2,
+     "life": 1.0,
+     "hold": 0.6,
+     "fade_in": 0.04
+    },
     {
      "type": "decal",
      "texture": "builtin:mk_crack",
@@ -1416,20 +1389,6 @@
      "area": 0.6,
      "outward": true,
      "lit": 1.0
-    },
-    {
-     "type": "raise",
-     "count": 6,
-     "ring": 0.55,
-     "size": 0.22,
-     "rise": 0.12,
-     "rise_time": 0.12,
-     "life": 0.5,
-     "color": [
-      0.8,
-      0.85,
-      0.92
-     ]
     },
     {
      "type": "wind",
