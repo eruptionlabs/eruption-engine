@@ -38,7 +38,25 @@ void readVec(lua_State* L, int idx, const char* name, Vec3& out, bool required) 
 int vfx_bolt(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     BoltSpec b;
-    readVec(L, 1, "from", b.from, true);
+    float cloud = 0.0f;
+    readNum(L, 1, "cloud", cloud);
+    b.cloudId = cloud >= 1.0f ? static_cast<uint32_t>(cloud) : 0u;
+    // Com `cloud` o `from` e' opcional: sem ele (ou com from_inside = true) o raio
+    // nasce num ponto sorteado dentro da base da nuvem.
+    lua_getfield(L, 1, "from");
+    const bool hasFrom = !lua_isnil(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "from_inside");
+    if (!lua_isnil(L, -1)) {
+        if (!lua_isboolean(L, -1)) luaL_error(L, "campo 'from_inside' deve ser booleano");
+        b.fromInside = lua_toboolean(L, -1) != 0;
+    }
+    lua_pop(L, 1);
+    if (b.cloudId && !hasFrom) b.fromInside = true;
+    if (!b.fromInside || !b.cloudId) {
+        b.fromInside = false;
+        readVec(L, 1, "from", b.from, true);
+    }
     readVec(L, 1, "to", b.to, true);
     readNum(L, 1, "width", b.width);
     float branches = static_cast<float>(b.branches);
@@ -52,9 +70,7 @@ int vfx_bolt(lua_State* L) {
     readNum(L, 1, "intensity", b.intensity);
     readNum(L, 1, "light_radius", b.lightRadius);
     readNum(L, 1, "light_intensity", b.lightIntensity);
-    float cloud = 0.0f;
-    readNum(L, 1, "cloud", cloud);
-    b.cloudId = cloud >= 1.0f ? static_cast<uint32_t>(cloud) : 0u;
+    readNum(L, 1, "inner_rate", b.innerRate);
     const uint32_t id = g_engine->startBolt(b);
     if (id == 0) lua_pushnil(L);
     else lua_pushnumber(L, static_cast<double>(id));
@@ -93,7 +109,7 @@ std::string boltApiDefinitions() {
     -- ponto medio) com galhos que afinam e somem, a largura afina ate' a ponta e
     -- tudo e' sorteado de novo a cada flicker_ms (o raio treme). Desenho aditivo
     -- em fita virada para a camera por segmento, com nucleo quente e halo; o
-    -- cenario tapa o que esta' atras. Campos (todos opcionais menos from e to):
+    -- cenario tapa o que esta' atras. Campos (todos opcionais menos to e, sem cloud, from):
     --   from, to          vector: o ponto de saida (cloud_point da nuvem) e o impacto
     --   width             largura na raiz em metros (1.2); o nucleo e' fino (~12% dela, nunca
     --                     abaixo de ~1 pixel na tela) e o halo ~6x o nucleo
@@ -108,8 +124,13 @@ std::string boltApiDefinitions() {
     --   light_radius, light_intensity   luz pontual curta na saida e no impacto
     --                     (60 m, 8); light_radius = 0 desliga
     --   cloud             id de weather.cloud_spawn: o trecho dentro da nuvem fica
-    --                     difuso e cada sorteio chama weather.cloud_flash nela
-    bolt: (spec: { from: vector, to: vector, width: number?, branches: number?, jitter: number?,
+    --                     difuso, apagado pela profundidade na massa, e cada sorteio chama
+    --                     weather.cloud_flash nela. Com cloud, `from` e' opcional: sem ele o
+    --                     raio nasce num ponto sorteado DENTRO da base da massa
+    --   from_inside       true: com cloud, ignora `from` e nasce dentro da massa (false)
+    --   inner_rate        mini-filamentos por sorteio (3), SO' dentro da massa e apagados
+    --                     por ela (0 desliga); exige cloud
+    bolt: (spec: { from: vector?, from_inside: boolean?, inner_rate: number?, to: vector, width: number?, branches: number?, jitter: number?,
         flicker_ms: number?, life: number?, color: vector?, core_color: vector?, intensity: number?,
         light_radius: number?, light_intensity: number?, cloud: number? }) -> number?,
     -- Apaga o raio na hora. false se o id ja' acabou.

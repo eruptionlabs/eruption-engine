@@ -81,13 +81,21 @@ float Engine::scriptCloudThickness(const ScriptCloudSpec& s) const {
 // recuar a massa essa distancia a faz aparecer centrada em cima do alvo.
 Vec2 Engine::scriptCloudCenter(const ScriptCloudSpec& s) const {
     Vec2 c(s.x, s.z);
-    if (s.frame <= 0.0f) return c;
+    if (s.frame <= 0.0f && !s.frameFit) return c;
     const Vec3 cam = m_camera.position();
     const Vec3 tgt = m_camera.target();
     const Vec2 h(cam.x - tgt.x, cam.z - tgt.z);
     const float len = glm::length(h);
     const float dy = cam.y - tgt.y;
     if (len < 1e-3f || dy < 1.0f) return c;
+    if (s.frameFit) {
+        // A visada do alvo cruza a altura da base a altitude * len / dy do ponto de
+        // baixo dela; recuar so' essa distancia menos meio raio visivel deixa a
+        // base no terco superior da tela em vez de em cima do alvo.
+        const float vis = 0.7f * std::max(s.radiusX, s.radiusZ) / std::max(s.falloff, 0.01f);
+        const float d = std::max(0.0f, s.altitude * len / dy - vis * 0.5f);
+        return c + (h / len) * d;
+    }
     const float hext = scriptCloudThickness(s) / std::max(s.falloff, 0.01f);
     const float midH = s.altitude + 0.4f * hext;
     return c + (h / len) * (midH * len / dy) * s.frame;
@@ -295,6 +303,7 @@ bool Engine::setScriptCloud(uint32_t id, const ScriptCloudSpec& in, uint32_t fie
         if (fields & ScriptCloudSpec::FClimate) s.climate = in.climate;
         if (fields & ScriptCloudSpec::FThickness) s.thickness = in.thickness;
         if (fields & ScriptCloudSpec::FFrame) s.frame = in.frame;
+        if (fields & ScriptCloudSpec::FFrameFit) s.frameFit = in.frameFit;
         if (fields & ScriptCloudSpec::FArea) {
             s.areaRadius = in.areaRadius;
             if (!(fields & (ScriptCloudSpec::FRadiusX | ScriptCloudSpec::FRadiusZ))) deriveRadiiFromArea(s);
@@ -308,7 +317,7 @@ bool Engine::setScriptCloud(uint32_t id, const ScriptCloudSpec& in, uint32_t fie
         // e tingir e' parametro de shader e nao custa nada.
         const bool shapeChanged = s.x != o.x || s.z != o.z || s.radiusX != o.radiusX || s.radiusZ != o.radiusZ ||
                                   s.density != o.density || s.coverage != o.coverage || s.falloff != o.falloff ||
-                                  s.thickness != o.thickness || s.frame != o.frame;
+                                  s.thickness != o.thickness || s.frame != o.frame || s.frameFit != o.frameFit;
         if (shapeChanged) {
             // Com drift ligado o vento desloca a nuvem pelo offset de UV: a bolha
             // guarda a posicao menos esse deslocamento para (x, z) valer como dito.
@@ -464,11 +473,34 @@ uint32_t Engine::startBolt(BoltSpec spec) {
         for (const IndependentCloudLayer& l : m_independentCloudLayers) {
             if (l.fromScript && l.scriptId == spec.cloudId) {
                 spec.cloudBaseY = l.planeY;
+                const Vec3 wsz = l.array->worldMax() - l.array->worldMin();
+                const Vec2 wc = l.centerXZ + l.array->windOffset() * Vec2(wsz.x, wsz.z);
+                const float fall = std::max(l.spec.falloff, 0.01f);
+                // Miolo solido: ~0,6 do semi-eixo nominal na horizontal; a altura e' o
+                // domo (espessura / falloff).
+                spec.cloudCenter = Vec3(wc.x, l.planeY, wc.y);
+                spec.cloudRadii = Vec3(0.6f * l.spec.radiusX / fall, scriptCloudThickness(l.spec) / fall,
+                                       0.6f * l.spec.radiusZ / fall);
+                if (spec.fromInside) {
+                    auto rnd = [this]() {
+                        m_scriptCloudRng ^= m_scriptCloudRng << 13;
+                        m_scriptCloudRng ^= m_scriptCloudRng >> 17;
+                        m_scriptCloudRng ^= m_scriptCloudRng << 5;
+                        return float(m_scriptCloudRng & 0xFFFFFFu) / float(0x1000000u);
+                    };
+                    // Ponto sorteado dentro da base da massa (disco uniforme, logo acima do plano).
+                    const float a = rnd() * 6.2831853f;
+                    const float rr = std::sqrt(rnd()) * 0.55f;
+                    spec.from = Vec3(spec.cloudCenter.x + std::cos(a) * rr * spec.cloudRadii.x,
+                                     l.planeY + spec.cloudRadii.y * (0.06f + 0.14f * rnd()),
+                                     spec.cloudCenter.z + std::sin(a) * rr * spec.cloudRadii.z);
+                }
                 found = true;
                 break;
             }
         }
         if (!found) spec.cloudId = 0;
+        if (!found) spec.fromInside = false;
     }
     return m_bolts.start(spec);
 }

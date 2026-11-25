@@ -67,6 +67,13 @@ uint32_t readSpec(lua_State* L, int idx, Spec& s, bool allowPreset) {
         mask |= Spec::FTint;
     }
     lua_pop(L, 1);
+    lua_getfield(L, idx, "frame_fit");
+    if (!lua_isnil(L, -1)) {
+        if (!lua_isboolean(L, -1)) luaL_error(L, "campo 'frame_fit' deve ser booleano");
+        s.frameFit = lua_toboolean(L, -1) != 0;
+        mask |= Spec::FFrameFit;
+    }
+    lua_pop(L, 1);
     lua_getfield(L, idx, "drift");
     if (!lua_isnil(L, -1)) {
         if (!lua_isboolean(L, -1)) luaL_error(L, "campo 'drift' deve ser booleano");
@@ -234,6 +241,8 @@ declare weather: {
     --   frame                 0..1: desloca a massa para o lado da camera para que
     --                         apareca centrada em cima de (x, z) na tela (0 = fica
     --                         em cima do ponto no mundo, acima do alvo na tela)
+    --   frame_fit             true: posiciona pela BASE (raio e altitude) para ela
+    --                         aparecer no terco superior da tela (false; independe de frame)
     --   fade_in               segundos para condensar (0.7)
     --   life                  segundos formada; <= 0 fica ate' cloud_remove (6)
     --   fade_out              segundos para dispersar no fim da vida (1.5)
@@ -255,7 +264,7 @@ declare weather: {
     cloud_spawn: (spec: {
         preset: string?, area_radius: number?, x: number?, z: number?, radius_x: number?, radius_z: number?,
         thickness: number?, density: number?, coverage: number?, altitude: number?, falloff: number?,
-        darkness: number?, tint: vector?, frame: number?, fade_in: number?, life: number?, fade_out: number?,
+        darkness: number?, tint: vector?, frame: number?, frame_fit: boolean?, fade_in: number?, life: number?, fade_out: number?,
         drift: boolean?, precip: boolean?, climate: boolean?,
     }?) -> number?,
     -- Leva a nuvem para (x, z); a altitude segue o chao dali. Devolve false se o
@@ -270,7 +279,7 @@ declare weather: {
     cloud_set: (id: number, fields: {
         area_radius: number?, x: number?, z: number?, radius_x: number?, radius_z: number?, thickness: number?,
         density: number?, coverage: number?, altitude: number?, falloff: number?, darkness: number?,
-        tint: vector?, frame: number?, fade_in: number?, life: number?, fade_out: number?, drift: boolean?,
+        tint: vector?, frame: number?, frame_fit: boolean?, fade_in: number?, life: number?, fade_out: number?, drift: boolean?,
         precip: boolean?, climate: boolean?,
     }) -> boolean,
     -- Dispersa a nuvem em `fade_out` segundos (padrao: o fade_out dela) e a

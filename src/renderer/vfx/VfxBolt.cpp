@@ -114,6 +114,17 @@ bool VfxBolt::stop(uint32_t id) {
     return false;
 }
 
+float VfxBolt::depthInside(const BoltSpec& s, const Vec3& p) {
+    if (!s.cloudId) return 0.0f;
+    if (s.cloudRadii.x <= 0.0f) return glm::smoothstep(s.cloudBaseY, s.cloudBaseY + 8.0f, p.y);
+    if (p.y < s.cloudBaseY) return 0.0f;
+    const float dx = (p.x - s.cloudCenter.x) / s.cloudRadii.x;
+    const float dz = (p.z - s.cloudCenter.z) / s.cloudRadii.z;
+    const float dy = (p.y - s.cloudBaseY) / s.cloudRadii.y;
+    const float q = std::sqrt(dx * dx + dz * dz + dy * dy);
+    return glm::smoothstep(0.0f, 0.55f, 1.0f - q);
+}
+
 // Novo trajeto: tronco por deslocamento do ponto medio (5 niveis = 32 segmentos)
 // e galhos que saem do tronco abaixo da nuvem, apontando para fora e para baixo,
 // afinando ate' zero na ponta.
@@ -124,7 +135,8 @@ void VfxBolt::roll(Bolt& b) {
     b.gain = r.range(0.6f, 1.0f);
     const BoltSpec& s = b.spec;
     const float baseY = s.cloudBaseY;
-    auto diffuseAt = [&](float y) { return s.cloudId ? glm::smoothstep(baseY, baseY + 8.0f, y) : 0.0f; };
+    (void)baseY;
+    auto diffuseAt = [&](const Vec3& p) { return depthInside(s, p); };
 
     Poly trunk;
     const std::vector<Vec3> path = midpointDisplace(s.from, s.to, s.jitter, levelsFor(glm::length(s.to - s.from)), r);
@@ -134,7 +146,7 @@ void VfxBolt::roll(Bolt& b) {
     for (size_t i = 0; i < path.size(); ++i) {
         if (i) run += glm::length(path[i] - path[i - 1]);
         const float t = total > 1e-4f ? run / total : 0.0f;
-        trunk.pts.push_back({path[i], std::max(0.02f, s.width * (1.0f - 0.7f * t)), diffuseAt(path[i].y)});
+        trunk.pts.push_back({path[i], std::max(0.02f, s.width * (1.0f - 0.7f * t)), diffuseAt(path[i])});
     }
     b.polys.push_back(trunk);
 
@@ -180,6 +192,27 @@ void VfxBolt::roll(Bolt& b) {
             b.polys.push_back(std::move(child));
         }
         b.polys.push_back(std::move(br));
+    }
+    // Mini-filamentos: faiscas curtas que se espalham do ponto de saida SO' por
+    // dentro da massa. Cada um e' cortado no primeiro ponto fora do miolo, entao
+    // nunca sai da nuvem como um risco solto; a profundidade os apaga como o resto.
+    if (s.cloudId && s.cloudRadii.x > 0.0f) {
+        const int n = int(s.innerRate + r.next());
+        for (int k = 0; k < n; ++k) {
+            Vec3 o = s.from;
+            Vec3 dir = glm::normalize(Vec3(r.range(-1.0f, 1.0f), r.range(-0.3f, 0.8f), r.range(-1.0f, 1.0f)) + Vec3(1e-3f));
+            const float len = r.range(0.25f, 0.6f) * std::min(s.cloudRadii.x, s.cloudRadii.z);
+            const std::vector<Vec3> fp = midpointDisplace(o, o + dir * len, s.jitter * 1.4f, levelsFor(len), r);
+            Poly f;
+            f.inten = 0.7f;
+            for (size_t i = 0; i < fp.size(); ++i) {
+                const float d = depthInside(s, fp[i]);
+                if (d < 0.25f) break; // chegou na borda da massa: o filamento acaba aqui
+                const float t = float(i) / float(fp.size() - 1);
+                f.pts.push_back({fp[i], std::max(0.02f, s.width * 0.3f * (1.0f - t)), std::max(d, 0.6f)});
+            }
+            if (f.pts.size() >= 2) b.polys.push_back(std::move(f));
+        }
     }
     b.nextRoll = b.age + s.flickerMs * 0.001f;
     if (onFlash && s.cloudId)
@@ -253,6 +286,10 @@ void VfxBolt::submit(ImmediateDraw& draw, const Vec3& camPos) {
                             hw[e] = core * (1.0f - 0.8f * pt.diffuse);
                             k[e] = (1.0f - 0.9f * pt.diffuse);
                         }
+                        // A massa tapa o canal: quanto mais fundo, mais fraco (so' um
+                        // clarao difuso do miolo; o brilho que sobra acende a nuvem por
+                        // onFlash, nao pelo traco).
+                        k[e] *= 1.0f - 0.85f * pt.diffuse;
                     }
                     const Vec3 a0 = p.pts[i].p, a1 = p.pts[i + 1].p;
                     const Vec3 c[4] = {a0 - side[i] * hw[0], a1 - side[i + 1] * hw[1], a1 + side[i + 1] * hw[1],

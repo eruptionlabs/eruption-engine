@@ -305,7 +305,7 @@ public:
             FX = 1u << 0, FZ = 1u << 1, FRadiusX = 1u << 2, FRadiusZ = 1u << 3, FDensity = 1u << 4,
             FCoverage = 1u << 5, FAltitude = 1u << 6, FFalloff = 1u << 7, FDarkness = 1u << 8,
             FTint = 1u << 9, FFadeIn = 1u << 10, FLife = 1u << 11, FFadeOut = 1u << 12, FDrift = 1u << 13,
-            FThickness = 1u << 14, FFrame = 1u << 15, FArea = 1u << 16, FPrecip = 1u << 17, FClimate = 1u << 18,
+            FThickness = 1u << 14, FFrame = 1u << 15, FArea = 1u << 16, FPrecip = 1u << 17, FClimate = 1u << 18, FFrameFit = 1u << 19,
         };
         float x = 0.0f, z = 0.0f;
         float radiusX = 80.0f, radiusZ = 60.0f;  // semi-eixos em metros
@@ -328,6 +328,10 @@ public:
         // CENTRADA em cima do alvo (x, z) na tela. 0 = fica exatamente em cima do
         // ponto no mundo (aparece acima do alvo na tela).
         float frame = 0.0f;
+        // Opcional (false por padrao: frame se comporta como sempre). true: a posicao
+        // e' calculada para a BASE da nuvem aparecer no terco superior da tela, pelo
+        // raio e pela altitude (nao pela altura media do domo). Nao usa `frame`.
+        bool frameFit = false;
         // Raio da area da habilidade (m), 0 = nao usado. Quando vem sem radius_x/z, a
         // nuvem fica com a borda visivel em 1,3x essa area (raios = 1,3 * area * falloff).
         float areaRadius = 0.0f;

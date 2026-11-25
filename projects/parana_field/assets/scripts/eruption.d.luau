@@ -1175,7 +1175,7 @@ declare vfx: {
     -- ponto medio) com galhos que afinam e somem, a largura afina ate' a ponta e
     -- tudo e' sorteado de novo a cada flicker_ms (o raio treme). Desenho aditivo
     -- em fita virada para a camera por segmento, com nucleo quente e halo; o
-    -- cenario tapa o que esta' atras. Campos (todos opcionais menos from e to):
+    -- cenario tapa o que esta' atras. Campos (todos opcionais menos to e, sem cloud, from):
     --   from, to          vector: o ponto de saida (cloud_point da nuvem) e o impacto
     --   width             largura na raiz em metros (1.2); o nucleo e' fino (~12% dela, nunca
     --                     abaixo de ~1 pixel na tela) e o halo ~6x o nucleo
@@ -1190,8 +1190,13 @@ declare vfx: {
     --   light_radius, light_intensity   luz pontual curta na saida e no impacto
     --                     (60 m, 8); light_radius = 0 desliga
     --   cloud             id de weather.cloud_spawn: o trecho dentro da nuvem fica
-    --                     difuso e cada sorteio chama weather.cloud_flash nela
-    bolt: (spec: { from: vector, to: vector, width: number?, branches: number?, jitter: number?,
+    --                     difuso, apagado pela profundidade na massa, e cada sorteio chama
+    --                     weather.cloud_flash nela. Com cloud, `from` e' opcional: sem ele o
+    --                     raio nasce num ponto sorteado DENTRO da base da massa
+    --   from_inside       true: com cloud, ignora `from` e nasce dentro da massa (false)
+    --   inner_rate        mini-filamentos por sorteio (3), SO' dentro da massa e apagados
+    --                     por ela (0 desliga); exige cloud
+    bolt: (spec: { from: vector?, from_inside: boolean?, inner_rate: number?, to: vector, width: number?, branches: number?, jitter: number?,
         flicker_ms: number?, life: number?, color: vector?, core_color: vector?, intensity: number?,
         light_radius: number?, light_intensity: number?, cloud: number? }) -> number?,
     -- Apaga o raio na hora. false se o id ja' acabou.
@@ -1268,6 +1273,8 @@ declare weather: {
     --   frame                 0..1: desloca a massa para o lado da camera para que
     --                         apareca centrada em cima de (x, z) na tela (0 = fica
     --                         em cima do ponto no mundo, acima do alvo na tela)
+    --   frame_fit             true: posiciona pela BASE (raio e altitude) para ela
+    --                         aparecer no terco superior da tela (false; independe de frame)
     --   fade_in               segundos para condensar (0.7)
     --   life                  segundos formada; <= 0 fica ate' cloud_remove (6)
     --   fade_out              segundos para dispersar no fim da vida (1.5)
@@ -1289,7 +1296,7 @@ declare weather: {
     cloud_spawn: (spec: {
         preset: string?, area_radius: number?, x: number?, z: number?, radius_x: number?, radius_z: number?,
         thickness: number?, density: number?, coverage: number?, altitude: number?, falloff: number?,
-        darkness: number?, tint: vector?, frame: number?, fade_in: number?, life: number?, fade_out: number?,
+        darkness: number?, tint: vector?, frame: number?, frame_fit: boolean?, fade_in: number?, life: number?, fade_out: number?,
         drift: boolean?, precip: boolean?, climate: boolean?,
     }?) -> number?,
     -- Leva a nuvem para (x, z); a altitude segue o chao dali. Devolve false se o
@@ -1304,7 +1311,7 @@ declare weather: {
     cloud_set: (id: number, fields: {
         area_radius: number?, x: number?, z: number?, radius_x: number?, radius_z: number?, thickness: number?,
         density: number?, coverage: number?, altitude: number?, falloff: number?, darkness: number?,
-        tint: vector?, frame: number?, fade_in: number?, life: number?, fade_out: number?, drift: boolean?,
+        tint: vector?, frame: number?, frame_fit: boolean?, fade_in: number?, life: number?, fade_out: number?, drift: boolean?,
         precip: boolean?, climate: boolean?,
     }) -> boolean,
     -- Dispersa a nuvem em `fade_out` segundos (padrao: o fade_out dela) e a

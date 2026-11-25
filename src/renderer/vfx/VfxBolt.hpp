@@ -34,6 +34,12 @@ struct BoltSpec {
     float lightIntensity = 8.0f;
     uint32_t cloudId = 0;        // nuvem de script em que o raio nasce (0 = nenhuma)
     float cloudBaseY = -1e30f;   // altura da base dessa nuvem (acima dela e' "dentro")
+    // Massa da nuvem como elipsoide solido (centro na base): o trecho do raio dentro
+    // dela e' atenuado pela profundidade. Preenchido por Engine::startBolt.
+    Vec3 cloudCenter = Vec3(0.0f);
+    Vec3 cloudRadii = Vec3(0.0f);  // 0 = sem massa conhecida (so' a altura da base)
+    bool fromInside = false;       // nasce num ponto sorteado dentro da base da massa
+    float innerRate = 3.0f;        // mini-filamentos internos por sorteio (so' dentro da massa)
 };
 
 class VfxBolt {
@@ -76,6 +82,8 @@ private:
         std::vector<Poly> polys; // tronco primeiro
     };
     void roll(Bolt& b);
+    // 0 fora da massa .. 1 no miolo (elipsoide da nuvem; sem massa, so' pela base).
+    static float depthInside(const BoltSpec& s, const Vec3& p);
     float envelope(const Bolt& b) const;
 
     int m_texHalo = -1, m_texCore = -1;
