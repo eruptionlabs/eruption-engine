@@ -18,6 +18,6 @@ void main() {
     counters[VFXC_RENDER] = 0u;
     counters[VFXC_RENDER + 1] = 0u;
     counters[VFXC_EVENTS] = 0u;
-    for (uint m = 0u; m < VFX_MESH_TYPES; ++m) counters[VFXC_MESH + m] = 0u;
+    for (uint m = 0u; m < min(max(frame.counts.w, 1u), VFX_MESH_TYPES); ++m) counters[VFXC_MESH + m] = 0u;
     // As contagens da ordenacao sao zeradas pelo proprio vfx_sort_scan.comp.
 }

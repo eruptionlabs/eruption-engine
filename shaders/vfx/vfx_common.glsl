@@ -73,8 +73,8 @@ const uint VFXF_KILLED       = 1u << 12; // emissor removido: particulas morrem 
 const uint VFXF_SPAWNING     = 1u << 13;
 const uint VFXF_LOWRES       = 1u << 14; // desenha em meia resolucao (fumaca)
 const uint VFXF_HIDDEN       = 1u << 15; // fora da visao de equipe: simula, nao desenha
-const uint VFXF_MESH_SHIFT   = 16u;     // 6 bits (16..21): malha da particula + 1 (0 = sprite)
-// A versao de longe da malha (+ 1, 0 = nao tem) fica em flags.w, bits 16..21.
+const uint VFXF_MESH_SHIFT   = 16u;     // 8 bits (16..23): malha da particula + 1 (0 = sprite)
+// A versao de longe da malha (+ 1, 0 = nao tem) fica em flags.w, bits 16..23.
 const uint VFXW_MESHLO_SHIFT = 16u;
 const uint VFXW_LAYER_SHIFT  = 24u;     // 2 bits (24..25): camada de ordenacao
 const uint VFXF_DECAL        = 1u << 24; // deitada e projetada na profundidade da cena
@@ -101,12 +101,12 @@ struct FrameParams {
     vec4 camPos;        // xyz camera, w dt
     vec4 timeInfo;      // x tempo, y total de pedidos, z total a nascer, w perto
     vec4 depthInfo;     // x largura, y altura, z longe, w 1 = profundidade valida
-    uvec4 counts;       // x lista atual (0/1), y capacidade total, z ordenar (0/1)
+    uvec4 counts;       // x lista atual (0/1), y capacidade total, z ordenar (0/1), w malhas registradas (divisor das listas)
     vec4 sunDir;        // xyz direcao em que a luz viaja, w intensidade
     vec4 sunColor;
     vec4 ambient;       // xyz cor do ceu, w intensidade
     vec4 viewInfo;      // x proj[1][1] (teto de tamanho na tela)
-    uvec4 meshIndexCount[8]; // indices de cada malha de particula (32)
+    uvec4 meshIndexCount[64]; // indices de cada malha de particula (256)
     vec4 groundInfo;    // xy origem da grade de altura, z 1/celula, w 1 = ha grade
     vec4 groundSize;    // xy texels (vertices da grade)
     // Rajadas locais de vento (world.wind_burst, afeccoes): x = quantas valem (0 =
@@ -140,10 +140,10 @@ struct RenderRec {
 #define VFXC_DRAW      12
 #define VFXC_SORTDISP  24 // 24..26: ordenar lista cheia; 28..30: meia resolucao
 #define VFXC_EVENTDISP 32 // 32..34: dispatch indireto das filhas (um grupo por evento)
-#define VFXC_MESH      36 // 36..67: particulas de cada malha (32 malhas)
-#define VFXC_MESHDRAW  68 // 68..227: draw indexado de cada malha (5 uints cada)
-#define VFXC_COUNT     228
-#define VFX_MESH_TYPES 32u
+#define VFXC_MESH      36 // 36..291: particulas de cada malha (256 malhas)
+#define VFXC_MESHDRAW  292 // 292..1571: draw indexado de cada malha (5 uints cada)
+#define VFXC_COUNT     1572
+#define VFX_MESH_TYPES 256u
 // Lista da malha m no buffer de desenho: cap/32 vagas a partir de 4*cap + m*cap/8.
 #define VFX_MAX_EVENTS 16384u
 

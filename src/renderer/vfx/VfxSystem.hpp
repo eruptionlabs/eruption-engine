@@ -88,7 +88,7 @@ struct VfxFrameParamsGpu {
     Vec4 sunColor;
     Vec4 ambient;
     Vec4 viewInfo;
-    glm::uvec4 meshIndexCount[8]; // 32 malhas
+    glm::uvec4 meshIndexCount[64]; // 256 malhas
     Vec4 groundInfo; // xy origem da grade de altura, z 1/celula, w 1 = ha grade
     Vec4 groundSize; // xy texels (vertices da grade)
     Vec4 gustInfo;   // x = quantas rajadas valem
@@ -204,7 +204,7 @@ public:
     void drawMeshes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent, const Mat4& viewProjNoJitter,
                     const Mat4& prevViewProjNoJitter);
     // Ha' malha simulada para o G-buffer (o chamador so' reabre o passe se sim).
-    bool meshesPending() const { return m_ready && m_active && m_meshMaskSimulated != 0 && !m_forwardMeshes; }
+    bool meshesPending() const { return m_ready && m_active && m_meshMaskSimulated.any() && !m_forwardMeshes; }
     // Sombra das malhas na cascata `lightViewProj` (dentro do passe de sombra,
     // viewport ja' posto). Le' a simulacao do frame anterior.
     void drawMeshShadows(VkCommandBuffer cmd, const Mat4& lightViewProj);
@@ -354,8 +354,22 @@ private:
     static std::string glbLoPath(const std::string& name);
     void recordMeshes(VkCommandBuffer cmd, VkPipeline pipe, VkExtent2D extent, const Mat4& vp, const Mat4& prevVp,
                       uint32_t translucent);
-    uint32_t m_meshMask = 0;          // malhas em uso neste frame (CPU)
-    uint32_t m_meshMaskSimulated = 0; // malhas que a ultima simulacao listou
+    // Bitset das malhas (ids de 8 bits no emissor, ate' 256).
+    struct MeshMask {
+        std::array<uint32_t, 8> w{};
+        void set(uint32_t i) { w[(i >> 5) & 7u] |= 1u << (i & 31u); }
+        bool test(uint32_t i) const { return (w[(i >> 5) & 7u] >> (i & 31u)) & 1u; }
+        bool any() const {
+            for (uint32_t v : w)
+                if (v) return true;
+            return false;
+        }
+        void clear() { w.fill(0u); }
+    };
+    MeshMask m_meshMask;          // malhas em uso neste frame (CPU)
+    MeshMask m_meshMaskSimulated; // malhas que a ultima simulacao listou
+    uint32_t m_meshSlots = 1;          // divisor do pool de listas de malha (registradas, >= 1)
+    uint32_t m_meshSlotsSimulated = 1; // o mesmo, o da ultima simulacao (o desenho usa este)
     bool m_forwardMeshes = false;
     uint32_t m_lightBudget = 16;
     Mat4 m_viewProjNoJitter{1.0f};

@@ -103,7 +103,7 @@ void main() {
         alive = alive && p.age < p.life;
         bool collided = false;
         float impact = 0.0; // velocidade contra a superficie na batida
-        uint meshE = (e.flags.x >> VFXF_MESH_SHIFT) & 0x3Fu;
+        uint meshE = (e.flags.x >> VFXF_MESH_SHIFT) & 0xFFu;
         if (alive) {
             // Forcas
             // Efeito descrito em metros; a escala da instancia (rot0.w)
@@ -282,7 +282,7 @@ void main() {
             // Distorcao vai na lista cheia: o passe dela tem o teste de
             // profundidade por hardware.
             lowRes = (e.flags.x & (VFXF_LOWRES | VFXF_DISTORT)) == VFXF_LOWRES;
-            uint meshId = (e.flags.x >> VFXF_MESH_SHIFT) & 0x3Fu;
+            uint meshId = (e.flags.x >> VFXF_MESH_SHIFT) & 0xFFu;
             if (visible && meshId != 0u) {
                 // MALHA: opaca no G-buffer (luz da cena de verdade). Registro
                 // com cor-base (albedo), eixo/angulo do giro, deslocamento do
@@ -305,12 +305,14 @@ void main() {
                 recs[idx] = rec;
                 // LOD: pequena na tela (raio < 24 px) usa a versao de longe
                 // (80 triangulos ainda fecham a silhueta), que nao faz sombra.
-                uint lo = (e.flags.w >> VFXW_MESHLO_SHIFT) & 0x3Fu;
+                uint lo = (e.flags.w >> VFXW_MESHLO_SHIFT) & 0xFFu;
                 float rpx = size * frame.viewInfo.x / max(viewZ, 1e-3) * frame.depthInfo.y * 0.5;
                 if (lo != 0u && rpx < 24.0) meshId = lo;
                 uint m = meshId - 1u;
-                uint per = cap / VFX_MESH_TYPES;
-                uint ms = atomicAdd(counters[VFXC_MESH + m], 1u);
+                uint slots = max(frame.counts.w, 1u);
+                uint per = cap / slots;
+                // m >= slots: malha registrada depois de montado o quadro; nao desenha.
+                uint ms = m < slots ? atomicAdd(counters[VFXC_MESH + m], 1u) : per;
                 if (ms < per) renderList[4u * cap + m * per + ms] = idx;
                 visible = false; // nao entra nas listas de sprite
             }

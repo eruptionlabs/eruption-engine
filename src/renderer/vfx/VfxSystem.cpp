@@ -33,7 +33,7 @@ constexpr uint32_t kCDraw = 12;        // 5 uints por lista (indexado)
 constexpr uint32_t kCSortDispatch = 24;
 // Ordenacao: 256 baldes de profundidade x 4 camadas, contagens + inicios por lista (vfx_common.glsl).
 constexpr uint32_t kSortStride = 2 * 256 * 4;
-constexpr uint32_t kCounterCount = 228;
+constexpr uint32_t kCounterCount = 1572; // 36 + 256 contagens de malha + 256 * 5 de draw
 constexpr uint32_t kCEventDispatch = 32;
 constexpr uint32_t kRecordBytes = 64;
 constexpr uint32_t kMaxEvents = 16384;
@@ -57,8 +57,8 @@ struct MeshShadowPush {
     uint32_t listOffset;
     uint32_t pad[3];
 };
-constexpr uint32_t kMeshTypes = 32; // com "#lo" cada malha ocupa 2; ids de 6 bits no emissor
-constexpr uint32_t kCMeshDraw = 68; // 5 uints por malha
+constexpr uint32_t kMeshTypes = 256; // com "#lo" cada malha ocupa 2; ids de 8 bits no emissor
+constexpr uint32_t kCMeshDraw = 292; // 36 + kMeshTypes; 5 uints por malha
 constexpr uint32_t kParticleBytes = 48;
 
 uint32_t hash32(uint32_t v) {
@@ -536,7 +536,7 @@ bool VfxSystem::createPipelines() {
     // PARTICULAS DE MALHA: vertice de 32 bytes, opacas, profundidade escrita.
     {
         // 144 B passa dos 128 de push constant garantidos: set 3 pelo PushRing.
-        if (!m_meshPushRing.init(m_ctx, VK_SHADER_STAGE_VERTEX_BIT, sizeof(MeshPush), 8 * 1024)) return false;
+        if (!m_meshPushRing.init(m_ctx, VK_SHADER_STAGE_VERTEX_BIT, sizeof(MeshPush), 256 * 1024)) return false;
         const VkDescriptorSetLayout meshSets[4] = {drawSets[0], drawSets[1], drawSets[2], m_meshPushRing.layout()};
         const VkPushConstantRange meshPush{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshShadowPush)};
         pl.setLayoutCount = 4;
@@ -1091,7 +1091,7 @@ void VfxSystem::clear() {
                 freeRibbon(es);
             }
     m_instances.clear();
-    m_meshMaskSimulated = 0;
+    m_meshMaskSimulated.clear();
     // Troca de mapa: a GPU comeca do zero, como numa carga fria. Sem isto as
     // listas do mapa anterior seguiam vivas e, no PowerVR GE8320, a ordenacao
     // da lista de meia resolucao travava a GPU no primeiro quadro do mapa novo.
@@ -1176,20 +1176,20 @@ void VfxSystem::fillEmitterGpu(const Instance& inst, const VfxEmitterDesc& e, ui
         m_anyDistortion = true;
     }
     uint32_t mesh = 0;
-    uint32_t meshLo = 0; // vai em flags.w, bits 16..21
+    uint32_t meshLo = 0; // vai em flags.w, bits 16..23
     if (!e.mesh.empty()) {
         const uint32_t id = meshId(e.mesh);
         mesh = id;
-        flags |= (id & 0x3Fu) << 16;
-        if (id) m_meshMask |= 1u << (id - 1);
+        flags |= (id & 0xFFu) << 16;
+        if (id) m_meshMask.set(id - 1);
         // Versao de longe (so' as embutidas tem).
         // Para .glb, so' se o irmao "<nome>_lo.glb" existe.
         const bool glb = isGlbMesh(e.mesh);
         const bool wantLo = e.mesh.rfind("builtin:", 0) == 0 ||
                             (glb && m_resolveMeshFile && !m_resolveMeshFile(glbLoPath(e.mesh)).empty());
         const uint32_t lo = id && wantLo ? meshId(e.mesh + "#lo") : 0u;
-        meshLo = lo & 0x3Fu;
-        if (lo) m_meshMask |= 1u << (lo - 1);
+        meshLo = lo & 0xFFu;
+        if (lo) m_meshMask.set(lo - 1);
     }
     const VfxTextureInfo& tex = texture(e.texture, e.flipCols, e.flipRows);
     // Camada de ordenacao (flags.w bits 24..25): "sortLayer" do arquivo, ou a
@@ -1328,6 +1328,15 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
             ERUPTION_LOG_WARN("[VFXC] cap %u vivas %u/%u mortas %u desenho %u/%u ordena %u/%u eventos %u",
                               m_capacity, c[0], c[1], c[kCDead], c[kCRender], c[kCRender + 1], c[kCSortDispatch],
                               c[kCSortDispatch + 4], c[5]);
+        if (kLogCounters) {
+            uint32_t drawn = 0, total = 0;
+            for (uint32_t m = 0; m < kMeshTypes; ++m) {
+                drawn += c[kCMeshDraw + m * 5 + 1] != 0;
+                total += c[kCMeshDraw + m * 5 + 1];
+            }
+            ERUPTION_LOG_WARN("[VFXC] malhas: %zu registradas, %u com particulas desenhadas (%u particulas), vagas por malha %u",
+                              m_meshes.size(), drawn, total, m_capacity / std::max(m_meshSlotsSimulated, 1u));
+        }
         m_stats.rendered = c[kCRender] + c[kCRender + 1];
         for (uint32_t m = 0; m < kMeshTypes; ++m) m_stats.rendered += c[kCMeshDraw + m * 5 + 1];
         m_readbackPending[frame] = false;
@@ -1349,7 +1358,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     m_distortWritten = false;
     m_iceBounds.clear();
     m_iceRefraction = 0.0f;
-    m_meshMask = 0;
+    m_meshMask.clear();
     m_sortThisFrame = false;
     m_anyEvents = false;
     float maxLife = 0.0f;
@@ -1524,7 +1533,11 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     fp.camPos = Vec4(camera.position(), dt);
     fp.timeInfo = Vec4(m_time += dt, float(m_requests.size()), float(m_spawnTotal), camera.nearPlane());
     fp.depthInfo = Vec4(float(renderSize.width), float(renderSize.height), camera.farPlane(), 1.0f);
-    fp.counts = glm::uvec4(m_cur, m_capacity, m_sortThisFrame ? 1u : 0u, 0u);
+    // Vagas da lista de desenho de malha: o pool e' dividido entre as malhas
+    // REGISTRADAS (nao entre as 256 possiveis), senao cada uma ficaria com
+    // cap/256 e uma nuvem de particulas de uma malha so' seria cortada cedo.
+    m_meshSlots = std::max<uint32_t>(uint32_t(m_meshes.size()), 1u);
+    fp.counts = glm::uvec4(m_cur, m_capacity, m_sortThisFrame ? 1u : 0u, m_meshSlots);
     for (uint32_t m = 0; m < kMeshTypes; ++m)
         fp.meshIndexCount[m >> 2][m & 3] = m < m_meshes.size() ? m_meshes[m].indexCount : 0u;
     fp.sunDir = m_sunDir;
@@ -1546,10 +1559,11 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
 
 void VfxSystem::simulate(VkCommandBuffer cmd, VkImageView depthView) {
     if (!m_ready || !m_active) {
-        m_meshMaskSimulated = 0;
+        m_meshMaskSimulated.clear();
         return;
     }
     m_meshMaskSimulated = m_meshMask;
+    m_meshSlotsSimulated = m_meshSlots;
     const uint32_t frame = m_ctx->currentFrame();
     // O alvo de meia resolucao nasce/muda ANTES de qualquer set ser ligado
     // neste command buffer (reescrever um set ja' ligado invalida a gravacao).
@@ -1959,7 +1973,7 @@ void VfxSystem::draw(VkCommandBuffer cmd, VkImage litImage, VkImageView litView,
     writeDescriptors(frame, depthView);
     // O alvo ja' existe (simulate): aqui so' a copia, fora do rendering.
     const VkRect2D iceRect = m_anyTranslucent ? iceCopyRect(extent) : VkRect2D{};
-    const bool ice = m_anyTranslucent && m_meshMaskSimulated && m_iceView && litImage && iceRect.extent.width;
+    const bool ice = m_anyTranslucent && m_meshMaskSimulated.any() && m_iceView && litImage && iceRect.extent.width;
     if (ice) copyLitForRefraction(cmd, litImage, iceRect);
     m_ctx->cmdImageBarrier(cmd, m_reactiveImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -2003,12 +2017,12 @@ void VfxSystem::draw(VkCommandBuffer cmd, VkImage litImage, VkImageView litView,
                                 nullptr);
         vkCmdDraw(cmd, 3, 1, 0, 0);
     }
-    if (m_forwardMeshes && m_meshMaskSimulated)
+    if (m_forwardMeshes && m_meshMaskSimulated.any())
         recordMeshes(cmd, m_meshFwdPipe, extent, m_viewProjNoJitter, m_viewProjNoJitter, 0u);
     // Gelo antes das particulas: fumaca e faisca na frente dele continuam por cima.
     if (ice) recordMeshes(cmd, m_meshIcePipe, extent, m_viewProjNoJitter, m_viewProjNoJitter, 1u);
     // Malha aditiva: soma luz como a particula aditiva, na mesma ordem do gelo.
-    if (m_anyAdditiveMesh && m_meshAddPipe && m_meshMaskSimulated)
+    if (m_anyAdditiveMesh && m_meshAddPipe && m_meshMaskSimulated.any())
         recordMeshes(cmd, m_meshAddPipe, extent, m_viewProjNoJitter, m_viewProjNoJitter, 2u);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_drawPipe);
     vkCmdSetViewport(cmd, 0, 1, &vp);
@@ -2189,7 +2203,16 @@ std::string VfxSystem::glbLoPath(const std::string& name) {
 uint32_t VfxSystem::meshId(const std::string& name) {
     for (size_t i = 0; i < m_meshes.size(); ++i)
         if (m_meshes[i].name == name) return m_meshes[i].indexCount ? uint32_t(i) + 1 : 0u;
-    if (m_meshes.size() >= kMeshTypes) return 0;
+    if (m_meshes.size() >= kMeshTypes) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            ERUPTION_LOG_WARN("[VFX] limite de %u malhas de particula (cada \"#lo\" conta uma): \"%s\" e as "
+                              "seguintes desenham como sprite",
+                              kMeshTypes, name.c_str());
+        }
+        return 0;
+    }
     GpuMesh gm;
     gm.name = name;
     gm.lod = name.size() > 3 && name.compare(name.size() - 3, 3, "#lo") == 0;
@@ -2240,9 +2263,9 @@ void VfxSystem::recordMeshes(VkCommandBuffer cmd, VkPipeline pipe, VkExtent2D ex
     push.viewProjNoJitter = vp;
     push.prevViewProjNoJitter = prevVp;
     push.translucent = translucent;
-    const uint32_t per = m_capacity / kMeshTypes;
+    const uint32_t per = m_capacity / m_meshSlotsSimulated;
     for (uint32_t m = 0; m < m_meshes.size(); ++m) {
-        if (!(m_meshMaskSimulated & (1u << m)) || !m_meshes[m].indexCount) continue;
+        if (!m_meshMaskSimulated.test(m) || !m_meshes[m].indexCount) continue;
         push.listOffset = 4u * m_capacity + m * per;
         m_meshPushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshLayout, 3, &push, sizeof(push));
         const VkDeviceSize off = 0;
@@ -2254,7 +2277,7 @@ void VfxSystem::recordMeshes(VkCommandBuffer cmd, VkPipeline pipe, VkExtent2D ex
 
 void VfxSystem::drawMeshes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent, const Mat4& viewProjNoJitter,
                            const Mat4& prevViewProjNoJitter) {
-    if (!m_ready || !m_active || !m_meshMaskSimulated || m_forwardMeshes) return;
+    if (!m_ready || !m_active || !m_meshMaskSimulated.any() || m_forwardMeshes) return;
     // Os sets sao (re)escritos aqui, antes de ligar: a simulacao deste frame
     // encontra tudo igual e nao reescreve um set ja' ligado.
     if (m_anyLowRes && !ensureLowResTarget(m_renderSize)) m_anyLowRes = false;
@@ -2285,10 +2308,10 @@ void VfxSystem::drawMeshShadows(VkCommandBuffer cmd, const Mat4& lightViewProj) 
                             nullptr);
     MeshShadowPush push{};
     push.viewProjNoJitter = lightViewProj;
-    const uint32_t per = m_capacity / kMeshTypes;
+    const uint32_t per = m_capacity / m_meshSlotsSimulated;
     for (uint32_t m = 0; m < m_meshes.size(); ++m) {
         // A versao de longe (pedra de poucos pixels) nao faz sombra.
-        if (!(m_meshMaskSimulated & (1u << m)) || !m_meshes[m].indexCount || m_meshes[m].lod) continue;
+        if (!m_meshMaskSimulated.test(m) || !m_meshes[m].indexCount || m_meshes[m].lod) continue;
         push.listOffset = 4u * m_capacity + m * per;
         vkCmdPushConstants(cmd, m_meshShadowLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
         const VkDeviceSize off = 0;
