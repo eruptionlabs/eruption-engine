@@ -3164,6 +3164,7 @@ void Engine::applyGraphicsPreset() {
         // editar o json.
         m_waterReflectionOn = p.value("water_reflection_pass", false);
         m_waterReflectionDiv = static_cast<uint32_t>(std::clamp(p.value("water_reflection_pass_div", 2), 1, 4));
+        m_waterContourPlanar = p.value("water_contour_planar", true);
         if (const char* e = std::getenv("ERUPTION_TEST_WATER_REFLECTION_PASS")) m_waterReflectionOn = e[0] == '1';
     }
 

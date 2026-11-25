@@ -14,6 +14,9 @@ public:
     struct LiquidEntry {
         std::string name;
         int kind = 0;
+        // Agua de contorno (polygon no .env): superficie propria, nao o plano do
+        // mapa; o nivel e a beira dela nao mexem em config.waterLevel/shoreSwash.
+        bool contour = false;
         float level = 0.0f;
         // Centro AUTORADO no .env (nao e' editavel aqui - so' pra saber
         // onde o gizmo comeca; o nudge de posicao soma offsetX/Z em cima

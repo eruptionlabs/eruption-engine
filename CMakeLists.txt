@@ -1460,6 +1460,15 @@ if(ERUPTION_BUILD_TESTS)
     endif()
     add_test(NAME NavHeightTests COMMAND eruption-nav-height-tests)
 
+    add_executable(eruption-liquid-look-tests tests/test_liquid_look.cpp src/formats/LiquidLook.cpp)
+    target_include_directories(eruption-liquid-look-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(eruption-liquid-look-tests SYSTEM PRIVATE ${glm_SOURCE_DIR})
+    target_link_libraries(eruption-liquid-look-tests PRIVATE nlohmann_json::nlohmann_json)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-liquid-look-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME LiquidLookTests COMMAND eruption-liquid-look-tests)
+
     # Terreno grande: prova do pico da 1a consulta de piso numa malha grande e
     # de que aquecer o RaycastBvh em segundo plano resolve. Logica pura
     # (RaycastBvh + std::async), sem GPU nem motor.

@@ -278,6 +278,7 @@ struct ShoreIn {
     WaterMesh agua, lava;
     std::vector<uint32_t> lavaCounts;
     std::vector<float> lavaLevels;
+    std::vector<uint8_t> lavaWater; // por faixa: 1 = agua de contorno (a beira e' de agua, nao de lava)
     float nivelAgua = 0.0f;
     bool comAgua = false, comLava = false;
     std::function<float(float, float)> alturaChao; // chao do mapa aberto, sem relevo
@@ -403,7 +404,8 @@ static ShoreOut computeShoreMask(const ShoreIn& in) {
         const uint16_t limite = uint16_t(std::min(30000.0f, 10.0f / cel * 3.0f));
         const float passo = cel * 0.25f;
         auto margem = [&](size_t k, int x, int z) {
-            if (dono[k] != 0 || d[k] > limite) return false; // so' agua (lava tem a beira propria)
+            const bool agua = dono[k] == 0 || (size_t(dono[k] - 1) < in.lavaWater.size() && in.lavaWater[size_t(dono[k] - 1)]);
+            if (!agua || d[k] > limite) return false; // so' agua (lava tem a beira propria)
             if (d[k] > 0) return true;
             for (int dz = -1; dz <= 1; ++dz)          // celula de agua: so' a da borda
                 for (int dx = -1; dx <= 1; ++dx) {
@@ -611,7 +613,10 @@ void Engine::rebuildShoreMask() {
     }
     if (in.comLava) in.lava = m_shoreLavaSrc;
     in.lavaCounts = m_shoreLavaCounts;
-    for (const auto& l : m_lavaLiquids) in.lavaLevels.push_back(l.level);
+    for (const auto& l : m_lavaLiquids) {
+        in.lavaLevels.push_back(l.level);
+        in.lavaWater.push_back(l.kind == 0 ? 1 : 0);
+    }
     in.nivelAgua = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
     in.alturaChao = [this](float x, float z) { return sampleTerrainHeight(x, z, kAnyHeight, false); };
     ShoreOut r = computeShoreMask(in);
@@ -633,7 +638,10 @@ void Engine::rebuildShoreMaskAsync() {
     }
     if (in.comLava) in.lava = m_shoreLavaSrc;
     in.lavaCounts = m_shoreLavaCounts;
-    for (const auto& l : m_lavaLiquids) in.lavaLevels.push_back(l.level);
+    for (const auto& l : m_lavaLiquids) {
+        in.lavaLevels.push_back(l.level);
+        in.lavaWater.push_back(l.kind == 0 ? 1 : 0);
+    }
     in.nivelAgua = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
     std::shared_ptr<const LoadedMap> map = m_currentMap;
     in.alturaChao = [map](float x, float z) { return sampleOpenMapHeight(*map, x, z); };

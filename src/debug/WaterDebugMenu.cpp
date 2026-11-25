@@ -251,7 +251,7 @@ void WaterDebugMenu::applySelectedLiquid() {
     // silencio, sem nenhum clique do usuario - foi assim que
     // data/water_config.json pegou um waterLevel de 399 numa sessao de
     // teste que nunca tocou o slider de agua.
-    if (e.kind == 0) {
+    if (e.kind == 0 && !e.contour) {
         config.waterLevel = e.level;
     }
 }
@@ -291,10 +291,11 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
         // existe nos dois modos.
         {
             const char* shoreNames[3] = { "Contact only", "Invades terrain", "Invades + front foam" };
-            int mode = sel.kind == 0 ? (config.shoreSwash ? (config.shoreSwashFoam ? 2 : 1) : 0) : sel.shore;
+            const bool plane = sel.kind == 0 && !sel.contour; // o plano d'agua do mapa
+            int mode = plane ? (config.shoreSwash ? (config.shoreSwashFoam ? 2 : 1) : 0) : sel.shore;
             if (::eruption::fx::Combo("Shore", &mode, shoreNames, sel.kind == 0 ? 3 : 2)) {
                 sel.shore = mode;
-                if (sel.kind == 0) {
+                if (plane) {
                     config.shoreSwash = mode > 0;
                     config.shoreSwashFoam = mode == 2;
                 }
@@ -310,7 +311,7 @@ void WaterDebugMenu::drawUI(const Mat4& view, const Mat4& proj, float screenW, f
         // na area da cratera ("restou o espaco da lava"). A altura de
         // verdade da lava e' Height Offset, na secao Shape abaixo - o
         // draw da lava sempre le m_lavaLiquid.level, nunca config.waterLevel.
-        if (sel.kind == 0) {
+        if (sel.kind == 0 && !sel.contour) {
             if (::eruption::fx::DragFloat("Surface Level", &sel.level, 0.5f)) {
                 config.waterLevel = sel.level;
                 settingsChanged = true;

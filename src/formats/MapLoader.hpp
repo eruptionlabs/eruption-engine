@@ -1,6 +1,7 @@
 #pragma once
 
 #include "formats/GltfParser.hpp"
+#include "formats/LiquidLook.hpp"
 #include "formats/TerrainParser.hpp"
 #include "formats/NavGridTypes.hpp"
 #include "formats/SmokeEmitter.hpp"
@@ -147,6 +148,9 @@ struct LoadedMap {
         // 146 ms num contorno de 1135 pontos, e a lava e' remontada a cada
         // vizinho que entra ou sai. Quem desenha copia e desloca.
         std::shared_ptr<const WaterMesh> contourMesh;
+        // Agua de contorno (kind "water" com polygon): aparencia propria por
+        // cima do menu de agua do mapa (formats/LiquidLook.hpp).
+        WaterLook look;
     };
     std::vector<MapLiquid> liquids;
     // Triangula os poligonos de um liquido (orelhas no plano XZ) e resume

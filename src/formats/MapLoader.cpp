@@ -339,6 +339,8 @@ static void loadMapEnv(LoadedMap& map, const fs::path& envPath) {
                 if (e.contains("crustTint") && e["crustTint"].is_array() && e["crustTint"].size() >= 3)
                     lq.crustTint = Vec3(e["crustTint"][0].get<float>(), e["crustTint"][1].get<float>(),
                                         e["crustTint"][2].get<float>());
+                // Agua de contorno: aparencia propria (docs/agua_contorno.md).
+                lq.look = parseWaterLook(e);
                 if (e.contains("center") && e["center"].is_array() && e["center"].size() >= 2) {
                     lq.centerX = e["center"][0].get<float>();
                     lq.centerZ = e["center"][1].get<float>();

@@ -110,6 +110,13 @@ public:
         float texAlpha = 0.6f;
         float texTile = 10.0f; // unidades de mundo por repeticao da textura
 
+        // Agua de contorno (WaterLook): ajustes do diorama so' desta
+        // superficie. Negativo / false = o do estilo (StyleConfig).
+        float clarityOverride = -1.0f;
+        float shoreFoamOverride = -1.0f;
+        bool hasScatterOverride = false;
+        Vec3 scatterOverride = Vec3(0.0f);
+
         // Debug / map overrides
         bool forceWater = false;
     };
@@ -174,10 +181,26 @@ public:
     // false quando o estilo nao reflete objetos (sem HD-2D, sem reflexo planar,
     // GPU fraca ou mapa sem agua).
     bool planarReflectionPlane(const WaterSettings& settings, float& level) const {
-        if (!m_style.hd2d || !m_style.planarReflection || m_indexCount == 0 || !m_ctx || m_ctx->shaderLite())
+        if (!m_style.hd2d || !m_style.planarReflection || !hasPlanarSurface() || !m_ctx || m_ctx->shaderLite())
             return false;
-        level = m_ssprMeshLevel + settings.levelOffset;
+        level = planarLevel(settings);
         return true;
+    }
+    // Varias aguas no mapa, UM so' plano de reflexo planar (o SSPR e o passe
+    // espelhado custam um passe cada, nao um por superficie): o plano e' o da
+    // maior agua (area em XZ), a do mapa (malha do terreno) ou a maior de
+    // contorno. As outras refletem pela marcha de raio em espaco de tela, com
+    // o ceu de fundo (liquid.frag, `abs(level - ssprLevel) < 0.5`). O motor
+    // diz a maior de contorno a cada quadro (nivel vivo incluido); area <= 0
+    // = nenhuma.
+    void setContourPlane(float level, float area) {
+        m_contourPlaneLevel = level;
+        m_contourPlaneArea = area;
+    }
+    bool hasPlanarSurface() const { return m_indexCount > 0 || m_contourPlaneArea > 0.0f; }
+    bool contourPlaneWins() const { return m_contourPlaneArea > 0.0f && (m_indexCount == 0 || m_contourPlaneArea > m_waterArea); }
+    float planarLevel(const WaterSettings& settings) const {
+        return contourPlaneWins() ? m_contourPlaneLevel : m_ssprMeshLevel + settings.levelOffset;
     }
     // Slot bindless do reflexo espelhado deste quadro (WaterReflectionPass),
     // -1 = sem. Chamar todo quadro antes do render da agua.
@@ -472,6 +495,9 @@ private:
     // Altura do plano espelhado: a mais comum entre os vertices da malha
     // (o lago do mapa); outra altura cai na marcha de raio.
     float m_ssprMeshLevel = 0.0f;
+    float m_waterArea = 0.0f;          // area XZ da malha do mapa (disputa o plano com a maior de contorno)
+    float m_contourPlaneLevel = 0.0f;
+    float m_contourPlaneArea = 0.0f;
     float m_ssprLevel = 0.0f;
     int32_t m_mirrorReflSlot = -1;
     VkImageView m_spritePbrView = VK_NULL_HANDLE;

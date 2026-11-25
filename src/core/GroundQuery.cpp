@@ -242,7 +242,29 @@ bool Engine::screenToGround(float x, float y, Vec3& out, float maxDist) const {
 }
 
 // Líquido sobre o piso na altura floorY em (x, z). Lava antes da água: o
-// plano de água é global e a lava fica numa bacia.
+// plano de água é global e a lava fica numa bacia; a água de contorno (canal)
+// vem antes do plano.
+bool Engine::contourWaterAt(float x, float z, float floorY, LiquidAt& out) const {
+    bool found = false;
+    auto scan = [&](const LoadedMap* map) {
+        if (!map) return;
+        for (size_t i = 0; i < map->liquids.size(); ++i) {
+            const auto& lq = map->liquids[i];
+            if (lq.kind != 0 || lq.triangles.empty()) continue;
+            float surface = 0.0f;
+            if (!contourSurfaceAt(lq, x, z, surface) || floorY >= surface) continue;
+            if (!found || surface > out.level) {
+                out = {int(i), 0, surface, map};
+                found = true;
+            }
+        }
+    };
+    scan(m_currentMap.get());
+    for (const auto& r : m_regions)
+        if (r.state == WorldRegion::State::Shown && r.data) scan(r.data.get());
+    return found;
+}
+
 bool Engine::liquidOver(float x, float z, float floorY, LiquidAt& out) const {
     float surface = 0.0f;
     int lava = lavaAt(m_currentMap.get(), x, z, floorY, surface);
@@ -259,6 +281,8 @@ bool Engine::liquidOver(float x, float z, float floorY, LiquidAt& out) const {
             return true;
         }
     }
+    // Água de contorno (canal, lago em outra altura): antes do plano do mapa.
+    if (contourWaterAt(x, z, floorY, out)) return true;
     if (m_waterOn && floorY < m_mapBaseWaterLevel) {
         out = {-1, 0, m_mapBaseWaterLevel};
         return true;

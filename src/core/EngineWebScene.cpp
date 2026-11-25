@@ -2220,6 +2220,7 @@ void Engine::renderWebScene() {
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, lib);
             for (uint32_t li = 0; li < m_lavaLiquids.size() && li < m_water.lavaSurfaceCount(); ++li) {
                 const LoadedMap::MapLiquid& lava = m_lavaLiquids[li];
+                if (lava.kind != 1) continue; // agua de contorno: so' no Vulkan por enquanto
                 float lift = 0.0f;
                 if (li < m_lavaSources.size() && m_lavaSources[li].map &&
                     m_lavaSources[li].index < m_lavaSources[li].map->liquids.size())

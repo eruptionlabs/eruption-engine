@@ -734,6 +734,7 @@ void Engine::render() {
     const bool laminaPraia = m_waterMenu.config.shoreSwash && !m_classic.on; // classico: sem lamina de praia
     m_deferredLighting.setShoreSwash(laminaPraia ? (m_waterMenu.config.shoreSwashFoam ? 2 : 1) : 0,
                                      m_water.style().deepColor, m_water.style().clarity);
+    updateContourWater(); // plano do reflexo planar (antes do passe espelhado)
     // Beira por plano de liquido (slot = G da grade, Engine::rebuildShoreMask):
     // 0 = agua do mapa, 1 + i = lava i. Nivel vivo (scripts mudam o da lava).
     {
@@ -750,10 +751,11 @@ void Engine::render() {
             const LavaSource& src = m_lavaSources[i];
             const auto& lq = src.map->liquids[src.index];
             const float nivel = m_lavaLiquids[i].level + (lq.level - src.builtLevel);
-            int modo = lq.shore >= 0 ? lq.shore : 1;
+            const bool agua = m_lavaLiquids[i].kind == 0; // agua de contorno: beira de agua (tipo 0)
+            int modo = lq.shore >= 0 ? lq.shore : (agua ? 0 : 1);
             if (src.map == m_currentMap.get() && src.index < m_waterMenu.liquids.size()) modo = m_waterMenu.liquids[src.index].shore;
             const float brilho = lq.emissive > 0.0f ? lq.emissive : m_waterMenu.config.emissiveStrength;
-            m_deferredLighting.setShoreLiquid(s, Vec4(nivel, float(modo), 1.0f, brilho));
+            m_deferredLighting.setShoreLiquid(s, Vec4(nivel, float(modo), agua ? 0.0f : 1.0f, agua ? 0.0f : brilho));
         }
     }
     updateWetness(std::min(m_timer.deltaTime(), 0.1f));
@@ -1441,6 +1443,9 @@ void Engine::render() {
     // aqui nao apaga sombra de nada - a regra de "sombra e' pelo frustum da
     // LUZ" segue intocada no ShadowRenderer.
     const bool waterInView = waterInViewThisFrame();
+    // O plano d'agua do mapa e as aguas de contorno se cortam separado: o passe
+    // do plano so' roda com ele na vista (como sempre), cada contorno pela caixa dele.
+    const bool waterPlaneVisible = waterInView && waterPlaneInView();
 
     // Prepare water refraction copies before entering the forward rendering pass,
     // because we cannot transition the active color attachment inside dynamic rendering.
@@ -1537,7 +1542,7 @@ void Engine::render() {
     bw::setPass("Water"); // medidor de banda: mesmo nome do tempo de GPU
     if (m_renderEffects[7]->isEnabled()) {
         WaterRenderer::WaterSettings adjustedSettings = waterDrawSettings();
-        if (waterInView)
+        if (waterPlaneVisible)
         m_water.render(cmd, m_camera.viewProjJittered(), m_camera.position(),
                        m_dayNightCycle, m_timer.elapsed(),
                        m_camera.nearPlane(), m_camera.farPlane(),
@@ -1549,8 +1554,40 @@ void Engine::render() {
                        m_weatherSystem.current().rainIntensity,
                        m_weatherSystem.current().rainSplashIntensity);
 
+        // Aguas de contorno (canais, lagos em outras alturas): a agua inteira, com o
+        // nivel vivo da superficie e a aparencia propria dela.
+        if (waterInView) {
+            for (const ContourWater& cw : m_contourWater) {
+                const uint32_t li = cw.drawn;
+                if (li >= m_lavaLiquids.size() || li >= m_water.lavaSurfaceCount()) continue;
+                const float lift = contourLift(li);
+                if (!m_camera.frustum().intersectsAABB(cw.mn + Vec3(0.0f, lift - 2.0f, 0.0f),
+                                                       cw.mx + Vec3(0.0f, lift + 2.0f, 0.0f)))
+                    continue;
+                const LoadedMap::MapLiquid& wl = m_lavaLiquids[li];
+                int shore = wl.shore >= 0 ? wl.shore : 0;
+                if (li < m_lavaSources.size() && m_lavaSources[li].map == m_currentMap.get() &&
+                    m_lavaSources[li].index < m_waterMenu.liquids.size())
+                    shore = m_waterMenu.liquids[m_lavaSources[li].index].shore;
+                WaterRenderer::WaterSettings ws = waterDrawSettings(&wl, shore);
+                ws.waterLevel = wl.level + lift;
+                ws.levelOffset = lift;
+                m_water.render(cmd, m_camera.viewProjJittered(), m_camera.position(),
+                               m_dayNightCycle, m_timer.elapsed(),
+                               m_camera.nearPlane(), m_camera.farPlane(),
+                               ws, m_waterMenu.abTestMask,
+                               m_camera.orbitPitch(),
+                               m_weatherSystem.sunOcclusion(),
+                               m_weatherSystem.moonOcclusion(),
+                               m_weatherSystem.current().stormTint,
+                               m_weatherSystem.current().rainIntensity,
+                               m_weatherSystem.current().rainSplashIntensity, true, li);
+            }
+        }
+
         for (uint32_t li = 0; li < m_lavaLiquids.size() && li < m_water.lavaSurfaceCount(); ++li) {
             const LoadedMap::MapLiquid& lava = m_lavaLiquids[li];
+            if (lava.kind != 1) continue; // as aguas de contorno saem acima
             WaterRenderer::WaterSettings lavaSettings = adjustedSettings;
             lavaSettings.liquidKind = lava.lavaClassic ? 3 : 1; // 3 = lava classica (liquid.frag)
             // Nível vivo (setLiquidLevel) menos o da malha: a superfície sobe no shader.
@@ -3864,8 +3901,36 @@ void Engine::updateVision(VkCommandBuffer cmd) {
 // Parametros da agua do mapa para o desenho deste quadro: os do menu, o clima e
 // o modo classico. Os dois desenhos (Vulkan aqui, WebGL2 em EngineWebScene)
 // usam esta mesma conta.
-WaterRenderer::WaterSettings Engine::waterDrawSettings() const {
+WaterRenderer::WaterSettings Engine::waterDrawSettings(const LoadedMap::MapLiquid* contour, int contourShore) const {
     WaterRenderer::WaterSettings adjustedSettings = m_waterMenu.config;
+    if (contour) {
+        // Agua de contorno: o que o .env autorou nesta superficie vale no lugar do
+        // menu, antes do clima (a chuva agita e escurece a agua do canal tambem).
+        const auto& lk = contour->look;
+        if (lk.hasDeep) adjustedSettings.baseColorDeep = lk.deep;
+        if (lk.hasShallow) adjustedSettings.baseColorShallow = lk.shallow;
+        if (lk.transparency >= 0.0f) adjustedSettings.transparency = lk.transparency;
+        if (lk.refraction >= 0.0f) adjustedSettings.refractionStrength = lk.refraction;
+        if (lk.reflectivity >= 0.0f) adjustedSettings.reflectivity = lk.reflectivity;
+        if (lk.roughness >= 0.0f) adjustedSettings.roughness = lk.roughness;
+        if (lk.waveAmplitude >= 0.0f) adjustedSettings.waveAmplitude = lk.waveAmplitude;
+        if (lk.waveFrequency >= 0.0f) adjustedSettings.waveFrequency = lk.waveFrequency;
+        if (lk.waveSpeed >= 0.0f) adjustedSettings.waveSpeed = lk.waveSpeed;
+        if (lk.caustics >= 0.0f) {
+            adjustedSettings.enableCaustics = lk.caustics > 0.0f;
+            if (lk.caustics > 0.0f) adjustedSettings.causticsIntensity = lk.caustics;
+        }
+        if (lk.foam >= 0) adjustedSettings.enableFoam = lk.foam == 1;
+        adjustedSettings.clarityOverride = lk.clarity;
+        adjustedSettings.shoreFoamOverride = lk.shoreFoam;
+        // No diorama a cor da agua funda e' a do espalhamento (o shader nao le'
+        // baseColorDeep): deepColor vale ali quando scatterColor nao foi dado.
+        adjustedSettings.hasScatterOverride = lk.hasScatter || lk.hasDeep;
+        adjustedSettings.scatterOverride = lk.hasScatter ? lk.scatter : lk.deep;
+        // A beira e' desta superficie, nao a do plano do mapa.
+        adjustedSettings.shoreSwash = contourShore > 0;
+        adjustedSettings.shoreSwashFoam = contourShore == 2;
+    }
     adjustedSettings.waterLevel = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
     adjustedSettings.levelOffset = m_waterMenu.config.waterLevel;
     // Com a lamina subindo a areia a espuma de contato sai: a agua continua

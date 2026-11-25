@@ -40,12 +40,7 @@ bool obliqueNearPlane(Mat4& clip, const Vec4& planeWorld) {
 } // namespace
 
 bool Engine::waterInViewThisFrame() const {
-    return m_renderEffects[7]->isEnabled() && m_water.hasWater() &&
-        !m_waterFullyBuried &&
-        (!m_waterBoundsValid ||
-         m_camera.frustum().intersectsAABB(
-             Vec3(m_waterAabbMin.x, m_waterAabbMin.y + m_waterMenu.config.waterLevel - 2.0f, m_waterAabbMin.z),
-             Vec3(m_waterAabbMax.x, m_waterAabbMax.y + m_waterMenu.config.waterLevel + 2.0f, m_waterAabbMax.z)));
+    return m_renderEffects[7]->isEnabled() && (waterPlaneInView() || contourWaterInView());
 }
 
 // NUVENS NO REFLEXO. A agua roda antes do passe das nuvens: o SSPR copia a

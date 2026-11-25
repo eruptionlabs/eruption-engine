@@ -1372,7 +1372,8 @@ public:
     // Nível de uma lava do mapa (índice em currentMap()->liquids, ou nos de
     // `map`, um vizinho em cena, com o nível no mundo) durante o jogo: a
     // superfície sobe no shader (a malha fica) e liquidAt/sampleGround usam o
-    // nível novo no mesmo quadro. Falso para água ou índice inválido.
+    // nível novo no mesmo quadro. Vale para lava e para água de contorno
+    // (polygon); falso para o plano de água do mapa ou índice inválido.
     bool setLiquidLevel(int index, float level, LoadedMap* map = nullptr);
     // Wall: célula íngreme (regras de terreno) ou corpo barrado por sólido;
     // Blocked: fora da grade, célula pintada ou objeto Blocked; Hazard: piso
@@ -1396,6 +1397,10 @@ public:
     float floorAmong(const std::vector<uint32_t>& cand, float terrainY, float x, float z, float fromY,
                      int& instance, bool withRelief = true) const;
     bool liquidOver(float x, float z, float floorY, LiquidAt& out) const;
+    // Agua de contorno (kind water com polygon) do mapa aberto ou de um vizinho
+    // em cena em (x, z) com o piso em floorY abaixo da superficie: a de
+    // superficie mais alta. `surface` = altura dela ali, com o nivel vivo.
+    bool contourWaterAt(float x, float z, float floorY, LiquidAt& out) const;
     bool walkableOver(const std::vector<uint32_t>& cand, int floorInstance, float floorY, float x, float z,
                       float radius, uint8_t caps = 0) const;
 
@@ -1482,7 +1487,10 @@ private:
     // GPU sem bindless: libera as imagens de origem das texturas de modelo que o
     // array de camadas ja' copiou (Textures.cpp). Contadores na telemetria.
     void releaseCopiedTextureSources();
-    WaterRenderer::WaterSettings waterDrawSettings() const;
+    // `contour` != nullptr: os ajustes de uma agua de contorno (MapLiquid::look e a
+    // beira `contourShore`, 0..2) por cima dos do menu; o nivel o chamador poe.
+    WaterRenderer::WaterSettings waterDrawSettings(const LoadedMap::MapLiquid* contour = nullptr,
+                                                   int contourShore = 0) const;
     uint32_t m_uploadGuardFlushes = 0; // envios adiantados por setBeforeCopies (ver Engine::init)
     uint32_t m_texSourcesReleased = 0;
     double m_texSourcesReleasedMb = 0.0;
@@ -1813,6 +1821,10 @@ private:
     // WaterReflectionPass.hpp. m_waterReflectionDiv = divisor da resolucao.
     WaterReflectionPass m_waterReflection;
     bool m_waterReflectionOn = false;
+    // "water_contour_planar" (preset): a maior agua de contorno pode ser o plano
+    // do reflexo planar (SSPR + passe espelhado, um so' para o mapa todo). Falso:
+    // as aguas de contorno refletem so' pela marcha de raio, com o ceu de fundo.
+    bool m_waterContourPlanar = true;
     uint32_t m_waterReflectionDiv = 2;
     DebugLineRenderer m_debugLineRenderer;
     OverlayLineRenderer m_overlayLineRenderer;
@@ -2414,6 +2426,24 @@ private:
         float builtLevel = 0.0f;
     };
     std::vector<LavaSource> m_lavaSources;
+    // As superficies desenhadas pelo caminho de contorno sao lavas (kind 1) e
+    // aguas de contorno (kind 0, polygon no .env). Estas ultimas: caixa (no
+    // nivel da malha) e area em XZ de cada uma, para o culling e para a
+    // escolha do plano do reflexo planar (WaterRenderer::setContourPlane).
+    struct ContourWater {
+        uint32_t drawn = 0;     // indice em m_lavaLiquids
+        Vec3 mn{0.0f}, mx{0.0f};
+        float area = 0.0f;
+    };
+    std::vector<ContourWater> m_contourWater;
+    // Quanto o nivel vivo (setLiquidLevel) andou desde que a malha da superficie
+    // desenhada `drawn` foi montada; vira deslocamento em Y no shader.
+    float contourLift(uint32_t drawn) const;
+    // Plano do reflexo e visibilidade das aguas de contorno; a cada quadro,
+    // antes do passe espelhado.
+    void updateContourWater();
+    bool contourWaterInView() const;
+    bool waterPlaneInView() const;
     // Fontes da grade da beira (buildShoreMask): a agua do mapa e as lavas,
     // uma faixa de indices por lava (mesma ordem de m_lavaLiquids). A grade
     // guarda, por celula, a proximidade e QUAL liquido esta' mais perto - a

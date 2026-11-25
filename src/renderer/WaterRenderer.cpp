@@ -107,6 +107,7 @@ void WaterRenderer::clearWaterMesh() {
     releaseMeshBuffer(m_ctx, m_vertexBuffer, m_vertexAlloc);
     releaseMeshBuffer(m_ctx, m_indexBuffer, m_indexAlloc);
     m_indexCount = 0;
+    m_waterArea = 0.0f;
 }
 
 void WaterRenderer::clearLavaMesh() {
@@ -193,6 +194,17 @@ void WaterRenderer::setWaterMesh(const WaterMesh& mesh) {
             i = j;
         }
         m_ssprMeshLevel = static_cast<float>(melhor) * 0.01f;
+    }
+    // Area em XZ da malha: quem disputa o plano do reflexo com as aguas de contorno.
+    {
+        double area = 0.0;
+        for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+            const Vec3& a = mesh.vertices[mesh.indices[i]].position;
+            const Vec3& b = mesh.vertices[mesh.indices[i + 1]].position;
+            const Vec3& c = mesh.vertices[mesh.indices[i + 2]].position;
+            area += 0.5 * std::fabs(double(b.x - a.x) * double(c.z - a.z) - double(c.x - a.x) * double(b.z - a.z));
+        }
+        m_waterArea = static_cast<float>(area);
     }
 
     if (!m_ctx->createBuffer(vertexSize,
@@ -1237,8 +1249,11 @@ void WaterRenderer::fillUBO(WaterUBO& ubo, uint32_t frameIndex, const WaterSetti
     if (settings.liquidKind == 4) ubo.lavaCrust = Vec4(std::max(settings.texTile, 0.01f), settings.texAlpha, 0.0f, 0.0f);
     const bool hd2d = m_style.hd2d && settings.liquidKind == 0 && !m_ctx->shaderLite();
     ubo.styleParams = Vec4(hd2d ? 1.0f : 0.0f, m_style.reflectionStrength, m_style.sparkle, m_style.rainRipples);
-    ubo.styleParams2 = Vec4(m_style.shoreFoam, m_ssprLevel, m_style.reflectionDistortion, std::max(m_style.clarity, 0.1f));
-    ubo.styleDeep = Vec4(m_style.deepColor, m_style.waveSlope);
+    // Agua de contorno: clareza, espuma de margem e cor funda proprias.
+    const float shoreFoam = settings.shoreFoamOverride >= 0.0f ? settings.shoreFoamOverride : m_style.shoreFoam;
+    const float clarity = settings.clarityOverride > 0.0f ? settings.clarityOverride : m_style.clarity;
+    ubo.styleParams2 = Vec4(shoreFoam, m_ssprLevel, m_style.reflectionDistortion, std::max(clarity, 0.1f));
+    ubo.styleDeep = Vec4(settings.hasScatterOverride ? settings.scatterOverride : m_style.deepColor, m_style.waveSlope);
     ubo.styleSlots = IVec4(hd2d && m_ssprValidThisFrame ? static_cast<int32_t>(m_ssprSlot) : -1,
                            hd2d && m_ssprValidThisFrame ? m_mirrorReflSlot : -1, 0, 0);
     if (settings.liquidKind == 0)
@@ -1280,10 +1295,10 @@ void WaterRenderer::prepareRefraction(VkCommandBuffer cmd,
 
     // Reflexo planar: depois da copia (le' a cor e a profundidade copiadas).
     m_ssprValidThisFrame = false;
-    if (m_style.hd2d && m_style.planarReflection && settings.liquidKind != 4 && !m_ctx->shaderLite() && !kNoCopy && m_indexCount > 0) {
+    if (m_style.hd2d && m_style.planarReflection && settings.liquidKind != 4 && !m_ctx->shaderLite() && !kNoCopy && hasPlanarSurface()) {
         if (m_ssprColorImage == VK_NULL_HANDLE) createSsprResources();
         if (m_ssprColorImage != VK_NULL_HANDLE && m_ssprPipeline != VK_NULL_HANDLE) {
-            m_ssprLevel = m_ssprMeshLevel + settings.levelOffset;
+            m_ssprLevel = planarLevel(settings);
             dispatchSspr(cmd, frameIndex, invViewProj, m_ssprLevel);
             m_ssprValidThisFrame = true;
         }

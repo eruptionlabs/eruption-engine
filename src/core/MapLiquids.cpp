@@ -57,6 +57,7 @@ void Engine::syncLiquidMenuFromMap(const LoadedMap* map) {
                    ? (lq.kind == 1 ? "Lava" : "Water")
                    : lq.name;
             e.kind = lq.kind;
+            e.contour = lq.kind == 0 && !lq.triangles.empty();
             e.level = lq.level;
             e.centerX = lq.centerX;
             e.centerZ = lq.centerZ;
@@ -69,7 +70,7 @@ void Engine::syncLiquidMenuFromMap(const LoadedMap* map) {
         // entra no fim da lista (a ordem 1:1 com map->liquids continua valendo
         // para os indices acima) para a beira dele ser editada como a das lavas.
         bool temAgua = false;
-        for (const auto& e : m_waterMenu.liquids) temAgua |= e.kind == 0;
+        for (const auto& e : m_waterMenu.liquids) temAgua |= e.kind == 0 && !e.contour;
         if (!temAgua && m_water.hasWater()) {
             WaterDebugMenu::LiquidEntry e;
             e.name = "Water (map plane)";
@@ -87,12 +88,15 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
     m_water.clearLavaMesh();
     m_lavaLiquids.clear();
     m_lavaSources.clear();
+    m_contourWater.clear();
     m_shoreLavaSrc = WaterMesh{};
     m_shoreLavaCounts.clear();
     if (!map) { rebuildShoreMask(); return; }
 
     // Todas as lavas do mapa numa malha só, uma faixa de índices por lava
-    // (antes só a primeira era desenhada).
+    // (antes só a primeira era desenhada). As águas de contorno (kind water com
+    // polygon) vão na mesma malha, cada uma com a sua faixa: o desenho as
+    // distingue por MapLiquid::kind.
     WaterMesh lmesh;
     std::vector<uint32_t> surfaceIndexCounts;
 
@@ -104,9 +108,10 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
         for (const WorldLiquid& src : all) {
             const size_t idx = src.index;
             const auto& lq = src.map->liquids[idx];
-            if (lq.kind != 1 || lq.radius <= 0.0f) continue;
+            // Água só com contorno: a sem polygon é o plano do terreno.
+            if (lq.kind == 0 ? lq.triangles.empty() : (lq.kind != 1 || lq.radius <= 0.0f)) continue;
             if (m_lavaLiquids.size() == WaterRenderer::kMaxLavaSurfaces) {
-                ERUPTION_LOG_WARN("Lava surface '%s' skipped: at most %u per map", lq.name.c_str(),
+                ERUPTION_LOG_WARN("Liquid surface '%s' skipped: at most %u per map", lq.name.c_str(),
                                   WaterRenderer::kMaxLavaSurfaces);
                 break;
             }
@@ -137,8 +142,27 @@ void Engine::setupLavaLiquid(const LoadedMap* map) {
                 drawn.level = level;
                 m_lavaLiquids.push_back(drawn);
                 m_lavaSources.push_back({src.map, uint32_t(idx), lq.level});
-                ERUPTION_LOG_INFO("Lava surface '%s': outline with %zu triangle(s)", lq.name.c_str(),
-                                  lq.triangles.size() / 3);
+                if (lq.kind == 0) {
+                    // Caixa e área da água de contorno (nível da malha, sem o giro: o
+                    // nudge do menu só mexe na lava).
+                    ContourWater cw;
+                    cw.drawn = uint32_t(m_lavaLiquids.size() - 1);
+                    cw.mn = Vec3(1e30f);
+                    cw.mx = Vec3(-1e30f);
+                    double area = 0.0;
+                    for (size_t t = 0; t + 2 < lq.triangles.size(); t += 3) {
+                        const Vec3 &a = lq.triangles[t], &b = lq.triangles[t + 1], &c = lq.triangles[t + 2];
+                        area += 0.5 * std::fabs(double(b.x - a.x) * double(c.z - a.z) - double(c.x - a.x) * double(b.z - a.z));
+                        for (const Vec3* p : {&a, &b, &c}) {
+                            cw.mn = glm::min(cw.mn, *p + Vec3(offX, level - lq.contourLevel, offZ));
+                            cw.mx = glm::max(cw.mx, *p + Vec3(offX, level - lq.contourLevel, offZ));
+                        }
+                    }
+                    cw.area = float(area);
+                    m_contourWater.push_back(cw);
+                }
+                ERUPTION_LOG_INFO("%s surface '%s': outline with %zu triangle(s)", lq.kind == 0 ? "Water" : "Lava",
+                                  lq.name.c_str(), lq.triangles.size() / 3);
                 continue;
             }
             const uint32_t base = uint32_t(lmesh.vertices.size());
@@ -229,9 +253,49 @@ bool Engine::setLiquidLevel(int index, float level, LoadedMap* map) {
     if (!map || index < 0 || size_t(index) >= map->liquids.size() || !std::isfinite(level))
         return false;
     LoadedMap::MapLiquid& lq = map->liquids[size_t(index)];
-    if (lq.kind != 1) return false; // água: o plano global (setWaterLevel)
+    // Água sem contorno: o plano global (setWaterLevel).
+    if (lq.kind != 1 && lq.triangles.empty()) return false;
     lq.level = level;
     return true;
+}
+
+float Engine::contourLift(uint32_t drawn) const {
+    if (drawn >= m_lavaSources.size() || !m_lavaSources[drawn].map ||
+        m_lavaSources[drawn].index >= m_lavaSources[drawn].map->liquids.size())
+        return 0.0f;
+    return m_lavaSources[drawn].map->liquids[m_lavaSources[drawn].index].level - m_lavaSources[drawn].builtLevel;
+}
+
+// Visibilidade do plano d'agua do mapa (malha do terreno), a mesma conta de
+// antes das aguas de contorno.
+bool Engine::waterPlaneInView() const {
+    return m_water.hasWater() && !m_waterFullyBuried &&
+        (!m_waterBoundsValid ||
+         m_camera.frustum().intersectsAABB(
+             Vec3(m_waterAabbMin.x, m_waterAabbMin.y + m_waterMenu.config.waterLevel - 2.0f, m_waterAabbMin.z),
+             Vec3(m_waterAabbMax.x, m_waterAabbMax.y + m_waterMenu.config.waterLevel + 2.0f, m_waterAabbMax.z)));
+}
+
+bool Engine::contourWaterInView() const {
+    for (const ContourWater& cw : m_contourWater) {
+        const float lift = contourLift(cw.drawn);
+        if (m_camera.frustum().intersectsAABB(cw.mn + Vec3(0.0f, lift - 2.0f, 0.0f), cw.mx + Vec3(0.0f, lift + 2.0f, 0.0f)))
+            return true;
+    }
+    return false;
+}
+
+// A cada quadro: o plano do reflexo planar. A maior água de contorno (área) é
+// a candidata; o WaterRenderer a compara com a malha do mapa (setContourPlane).
+void Engine::updateContourWater() {
+    float level = 0.0f, area = 0.0f;
+    if (m_waterMenu.config.enabled && m_waterContourPlanar)
+        for (const ContourWater& cw : m_contourWater)
+            if (cw.area > area && cw.drawn < m_lavaLiquids.size()) {
+                area = cw.area;
+                level = m_lavaLiquids[cw.drawn].level + contourLift(cw.drawn);
+            }
+    m_water.setContourPlane(level, area);
 }
 
 } // namespace eruption
@@ -243,7 +307,15 @@ namespace eruption {
 // lado da agua o piso fica acima do nivel e da' falso.
 bool Engine::waterSurfaceAt(const Vec3& p, float* level) const {
     constexpr float kFolga = 0.5f;
-    if (!m_waterOn || m_waterFullyBuried || !m_currentMap) return false;
+    if (!m_currentMap) return false;
+    // Água de contorno (canal, lago): a superfície sob o ponto, no nível dela.
+    // Primeiro: é a mais específica, e pode estar acima do plano do mapa.
+    LiquidAt contour;
+    if (contourWaterAt(p.x, p.z, p.y - kFolga, contour)) {
+        if (level) *level = contour.level;
+        return true;
+    }
+    if (!m_waterOn || m_waterFullyBuried) return false;
     const float surface = m_mapBaseWaterLevel + m_waterMenu.config.waterLevel;
     if (p.y - kFolga >= surface) return false;
     if (m_waterBoundsValid &&

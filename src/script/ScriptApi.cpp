@@ -3449,7 +3449,8 @@ declare on: {
     -- foot wrapped to 0..1 (u, v, 0; row 0 is the top of the image, as
     -- sampled when drawing), surface = the surface type drawn on that texture
     -- with the editor's Regions tab ("sand", "snow"; "" when none),
-    -- in_water = a water surface covers the foot (the
+    -- in_water = a water surface covers the foot (any water of the map,
+    -- canals included; the
     -- other fields are then empty). Decide the effect here with world.dust
     -- and world.footprint; the engine has no surface table.
     -- A character with a sprite steps by its own pixels: `contact` is "strike"
@@ -3649,14 +3650,16 @@ declare world: {
     -- a disc of `radius` (0 or nil: the nearest grid point), keyed by the
     -- layer's texture file. Empty if the map has no painted layers.
     ground_layers: (x: number, z: number, radius: number?) -> { [string]: number },
-    -- Liquids the map declares (lakes): kind is "water" or "lava", center is
-    -- at the liquid's level, radius is the farthest shore. `map` names a
-    -- neighbor map in the scene: its liquids, in world coordinates.
+    -- Liquids the map declares (lakes, canals): kind is "water" or "lava",
+    -- center is at the liquid's level, radius is the farthest shore, level is
+    -- the surface now (each liquid has its own). `map` names a neighbor map in
+    -- the scene: its liquids, in world coordinates.
     liquids: (map: string?) -> { { name: string, kind: string, level: number, center: vector, radius: number } },
-    -- Moves a lava of the map (1-based index in liquids(), or its name) to
-    -- `level` during play: the surface, liquid_at and walkable follow in the
-    -- same frame. False for water or an unknown liquid. With `map`, a lava of
-    -- that neighbor, `level` in world coordinates.
+    -- Moves a lava or a water surface with a polygon outline (1-based index
+    -- in liquids(), or its name) to `level` during play: the surface,
+    -- liquid_at and walkable follow in the same frame. False for the map's
+    -- own water plane (a water liquid without polygon) or an unknown liquid.
+    -- With `map`, a liquid of that neighbor, `level` in world coordinates.
     set_liquid_level: (liquid: number | string, level: number, map: string?) -> boolean,
     -- Blocks walking on every ground point steeper than `degrees` (this run
     -- only; the saved walk grid is untouched). Returns how many were blocked.
@@ -3743,7 +3746,9 @@ declare world: {
     floor_walkable: (x: number, z: number, radius: number?, fromY: number?, caps: { swim: boolean?, protected: boolean? }?) -> boolean,
     -- Liquid showing at (x, z) (inside its shore and above the floor: a bridge
     -- over lava has none): {kind = "water" | "lava", level, index} or nil.
-    -- index is the map's liquid (1-based), 0 for the global water plane.
+    -- level is the surface of that liquid there (a canal above the sea gives
+    -- its own). index is the map's liquid (1-based), 0 for the global water
+    -- plane.
     liquid_at: (x: number, z: number) -> { kind: string, level: number, index: number, map: string? }?,
     -- A footprint decal on the ground at `position`, tip of the texture toward
     -- `direction` (x and z used). Sizes are in metres. texture: PNG of the
