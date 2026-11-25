@@ -60,6 +60,12 @@ constexpr uint32_t kPackMagic = 0x504b5445; // 'ETKP'
 //     baixa resolucao sai quase chapada, foto mantem o relevo. Pacote 14 tinha
 //     o relevo cheio em tudo.
 constexpr uint32_t kPackVersion = 15;
+// O layout do 14 e' o mesmo do 15 (so' o relevo calculado mudou). Pacote 14
+// vale "como esta'" onde o chamador aceita pacote antigo: o de um .tuf com
+// texturas prontas nao tem as imagens para refazer, e recusar deixava o mapa
+// inteiro sem textura. O cache local em disco (chamador sem `stale`) e' refeito.
+constexpr uint32_t kPackVersionCompat = 14;
+bool packVersionReadable(uint32_t v) { return v == kPackVersion || v == kPackVersionCompat; }
 
 void put32(std::vector<uint8_t>& v, uint32_t x) {
     const size_t o = v.size();
@@ -332,7 +338,8 @@ bool parsePackHeader(Reader& r, const std::string& glbPath, uint32_t maxSize, bo
     uint32_t magic = 0, version = 0, cachedMax = 0, cachedFmt = 0, cachedSynth = 0;
     uint64_t srcSize = 0, srcFingerprint = 0;
     if (!r.u32(magic) || magic != kPackMagic) return false;
-    if (!r.u32(version) || version != kPackVersion) return false;
+    if (!r.u32(version) || !packVersionReadable(version)) return false;
+    if (version != kPackVersion && !stale) return false;
     if (!r.u64(srcSize) || !r.u64(srcFingerprint)) return false;
     if (!r.u32(cachedMax) || !r.u32(cachedFmt) || !r.u32(cachedSynth) || !r.u32(count)) return false;
 
@@ -355,6 +362,7 @@ bool parsePackHeader(Reader& r, const std::string& glbPath, uint32_t maxSize, bo
         if (!stale || !synthKeyStale(cachedSynth, synthPbr)) return false;
         *stale = true;
     }
+    if (version != kPackVersion) *stale = true;
 
     uint32_t hasGround = 0;
     if (!r.u32(hasGround)) return false;
@@ -980,7 +988,7 @@ bool parseEmbeddedBakePackBytes(const std::vector<uint8_t>& buf, EmbeddedBakeRes
     Reader r{buf.data(), buf.size()};
     uint32_t magic = 0, version = 0, count = 0, skip = 0, hasGround = 0;
     uint64_t skip64 = 0;
-    if (!r.u32(magic) || magic != kPackMagic || !r.u32(version) || version != kPackVersion) return false;
+    if (!r.u32(magic) || magic != kPackMagic || !r.u32(version) || !packVersionReadable(version)) return false;
     if (!r.u64(skip64) || !r.u64(skip64) || !r.u32(skip) || !r.u32(skip) || !r.u32(skip) || !r.u32(count)) return false;
     if (!r.u32(hasGround)) return false;
     for (int i = 0; i < 3; ++i)
