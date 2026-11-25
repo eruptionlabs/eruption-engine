@@ -1280,6 +1280,12 @@ bool Engine::init(int width, int height, const std::string& title) {
     if (!m_overlayLineRenderer.init(&m_vulkan)) return false;
     if (!m_immediateDraw.init(&m_vulkan, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT))
         ERUPTION_LOG_WARN("ImmediateDraw nao iniciou: world.draw_strip/draw_sprite viram no-op");
+    else {
+        if (!m_bolts.init(m_immediateDraw) || !m_precip.init(m_immediateDraw))
+            ERUPTION_LOG_WARN("Texturas de raio/precipitacao nao iniciaram: vfx.bolt e weather.cloud_precip viram no-op");
+        // Cada sorteio do raio acende a nuvem por dentro.
+        m_bolts.onFlash = [this](uint32_t cloud, float intensity, float dur) { flashScriptCloud(cloud, intensity, dur); };
+    }
 
     presentLoadingScreen("", "Scanning Game Assets", 0.8f, true);
     // Os pacotes .ecp do projeto ja' foram montados em Project::open (camada
@@ -2085,11 +2091,16 @@ float Engine::advanceFrame() {
             m_cloudDebugLogTimer += m_timer.deltaTime();
             bool logCloudsNow = m_cloudDebugLogTimer >= 2.0f;
             if (logCloudsNow && !m_independentCloudLayers.empty()) m_cloudDebugLogTimer = 0.0f;
+            // Nuvens de script: vida (fade_in, life, dispersao) e aparencia, antes do
+            // laco que atualiza o UBO de cada camada.
+            updateScriptClouds(m_timer.deltaTime());
             for (auto& icl : m_independentCloudLayers) {
                 Vec3 wsz = icl.array->worldMax() - icl.array->worldMin();
                 float worldSize = glm::max(1.0f, std::min(std::abs(wsz.x), std::abs(wsz.z)));
-                icl.array->updateWind(m_timer.deltaTime(), windDir, windSpeed,
-                                      20.0f / (worldSize * glm::max(icl.weight, 0.25f)));
+                // drift=false: o vento nao leva a nuvem de script (o offset de vento fica em 0).
+                if (!icl.fromScript || icl.spec.drift)
+                    icl.array->updateWind(m_timer.deltaTime(), windDir, windSpeed,
+                                          20.0f / (worldSize * glm::max(icl.weight, 0.25f)));
                 m_cloudLayerRenderer.updateCloudLayerUBO(icl.rendererId);
                 // Weather-field clouds that drifted off the map respawn at the
                 // upwind edge (relative to the player, with perpendicular
@@ -2144,7 +2155,15 @@ float Engine::advanceFrame() {
                     if (m_currentMap)
                         groundY = TerrainParser::getTerrainHeightAt(m_currentMap->terrain, cx, cz);
                     float h = glm::max(icl.planeY - groundY, 0.0f);
-                    if (L.y > 0.01f && h > 0.0f) {
+                    // Nuvem de script com area: a chuva e' um cilindro reto sobre a pegada
+                    // da area (sem deslocar pela direcao do sol).
+                    float cylR = 0.0f;
+                    if (icl.fromScript && icl.spec.kind > 0) {
+                        const float fall = std::max(icl.spec.falloff, 0.01f);
+                        cylR = icl.spec.areaRadius > 0.0f ? icl.spec.areaRadius
+                                                          : 0.7f * std::max(icl.spec.radiusX, icl.spec.radiusZ) / fall;
+                    }
+                    if (cylR <= 0.0f && L.y > 0.01f && h > 0.0f) {
                         float tanAngle = glm::min(glm::length(Vec2(L.x, L.z)) / L.y, 4.0f);
                         Vec2 n = glm::normalize(Vec2(L.x, L.z) + Vec2(0.0001f));
                         cx += n.x * h * tanAngle;
@@ -2178,13 +2197,20 @@ float Engine::advanceFrame() {
                         // are 3D volumes, not from the bottom plane (2D era).
                         puffRy = std::max(puffRy, glm::clamp(std::fmax(lc.radius.x, lc.radius.y) * invF * 0.6f, 6.0f, 100.0f));
                     }
+                    if (cylR > 0.0f) boxHalf = Vec2(cylR);
                     const float cloudMidY = icl.planeY + puffRy;
                     Vec3 wmn = icl.array->worldMin();
                     // Rain rate from loadedness: density already drives the
                     // cloud's rain/storm darkness (see spawnIndependentCloud),
                     // so reuse it as the "how heavy is this cloud" signal.
                     // density 0 -> 0.8x, density 1 -> 1.5x drop intensity.
-                    const float rainRate = glm::clamp(0.8f + 0.7f * icl.density, 0.6f, 1.8f);
+                    float rainRate = glm::clamp(0.8f + 0.7f * icl.density, 0.6f, 1.8f);
+                    // Nuvem de script: a chuva acompanha a formacao e a dispersao dela.
+                    const float scriptFade = icl.fromScript ? 1.0f - glm::smoothstep(0.1f, 0.7f, icl.dispersal) : 1.0f;
+                    rainRate *= scriptFade;
+                    // A chuva da nuvem de tempestade tem a densidade e o brilho da chuva
+                    // do clima Stormy (a mesma que o clima global desenharia).
+                    const float matchRain = icl.fromScript ? std::max(m_weatherSystem.templateFor(WeatherType::Stormy).rainIntensity * scriptFade, 1e-3f) : 0.0f;
                     rainFollowers.push_back({Vec3(cx, cloudMidY, cz),
                                              Vec4(cloudCX, cloudCZ, occRadius + 30.0f, 0.0f),
                                              Vec4(wmn.x, wmn.z, wsz.x, wsz.z),
@@ -2192,7 +2218,7 @@ float Engine::advanceFrame() {
                                              boxHalf * 2.0f,
                                              icl.array->imageView(),
                                              icl.array->sampler(),
-                                             rainRate});
+                                             rainRate, matchRain, std::max(icl.planeY - groundY, 1.0f), cylR});
                 }
                 // Each follower redraws the full rain particle pool, so cap
                 // the draws to the nearest clouds: far rain is barely visible

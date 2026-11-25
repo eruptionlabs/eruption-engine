@@ -454,7 +454,7 @@ void PostProcessor::createDescriptors() {
     // composicao cresceu alem do antigo teto de 352 B.
     // + 32 B (gradeParams2 da LUT 3D de grading, volumetricParams).
     // + 48 B (halation e grao).
-    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 512, 16 * 1024);
+    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 768, 64 * 1024);
     const VkDescriptorSetLayout setLayouts[2] = {m_descriptorSetLayout, m_pushRing.layout()};
 
     VkPipelineLayoutCreateInfo plInfo{};
@@ -2087,6 +2087,13 @@ if (!m_ctx) return;
         Vec4 halationParams;   // x=forca (0 = nao le' o binding 16), y=limiar exposto, z=1/niveis somados
         Vec4 halationTint;     // rgb=tinta normalizada pela luminancia
         Vec4 grainParams;      // x=forca (0 desliga), y=graos na altura da tela, z=semente do quadro
+        // Clima local das nuvens de script (PostSettings::localClimate). Bloco do PushRing de 704 B.
+        Vec4 climateInfo;      // x=quantas nuvens (0 = nao le')
+        Vec4 climateCloud[PostSettings::kMaxLocalClimate];
+        Vec4 climateHeight;
+        Vec4 climateGrade[2];
+        Vec4 climateFog[2];
+        Vec4 climateChroma[2];
     } push;
     // Debug/test overrides for fog parameters (useful for headless screenshots).
     float fogStart = settings.fogStart;
@@ -2174,7 +2181,9 @@ if (!m_ctx) return;
                               std::max(0.5f, settings.outlineThickness * static_cast<float>(m_height) / 1080.0f),
                               nearPlane, farPlane);
     push.outlineColor = settings.outlineColor;
-    push.outlineParams2 = Vec4(std::max(settings.outlineThreshold, 1e-4f), settings.outlineSprites ? 1.0f : 0.0f, 0.0f, 0.0f);
+    push.outlineParams2 = Vec4(std::max(settings.outlineThreshold, 1e-4f), settings.outlineSprites ? 1.0f : 0.0f,
+                               settings.outlineCloudCover ? 1.0f : 0.0f,
+                               settings.cloudAfterDof ? 1.0f : 0.0f);
     push.gradeParams2 = Vec4(gradeLutMix, 0.0f, 0.0f, 0.0f);
     push.volumetricParams = Vec4(m_volumetricView != VK_NULL_HANDLE && m_volumetricOn ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
     push.halationParams = Vec4(halationView != VK_NULL_HANDLE ? hd2d.halation : 0.0f, hd2d.halationThreshold,
@@ -2183,7 +2192,15 @@ if (!m_ctx) return;
     // Semente por quadro (o quadro do pos, deterministico com
     // ERUPTION_TEST_FIXED_DT): o grao anda a cada quadro.
     push.grainParams = Vec4(hd2d.grain, 1080.0f / hd2d.grainSize, float(m_postFrame % 4096u), 0.0f);
-    static_assert(sizeof(push) <= 512, "bloco da composicao passou do maxBlock do PushRing (512 B)");
+    push.climateInfo = Vec4(static_cast<float>(settings.localClimate.count), 0.0f, 0.0f, 0.0f);
+    for (int i = 0; i < PostSettings::kMaxLocalClimate; ++i) push.climateCloud[i] = settings.localClimate.cloud[i];
+    push.climateHeight = settings.localClimate.height;
+    for (int k = 0; k < 2; ++k) {
+        push.climateGrade[k] = settings.localClimate.grade[k];
+        push.climateFog[k] = settings.localClimate.fog[k];
+        push.climateChroma[k] = settings.localClimate.chroma[k];
+    }
+    static_assert(sizeof(push) <= 768, "bloco da composicao passou do maxBlock do PushRing (768 B)");
     m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, &push, sizeof(push));
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkc::cmdEndRendering(cmd);

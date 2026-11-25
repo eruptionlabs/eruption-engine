@@ -597,7 +597,19 @@ void Engine::render() {
     // Independent cloud layers regenerate their own coverage textures.
     if (m_cloudLayersEnabled) {
         for (auto& icl : m_independentCloudLayers) {
-            if (icl.array->isDirty()) icl.array->recordComputeGeneration(cmd);
+            if (!icl.array->isDirty()) continue;
+#if ERUPTION_DEV
+            // ERUPTION_TEST_CLOUD_GEN_LOG=1: tempo de CPU para gravar (ou enviar) a geracao
+            // de cada nuvem de script suja, em ms.
+            static const bool kGenLog = std::getenv("ERUPTION_TEST_CLOUD_GEN_LOG") != nullptr;
+            const auto genT0 = std::chrono::steady_clock::now();
+#endif
+            icl.array->recordComputeGeneration(cmd);
+#if ERUPTION_DEV
+            if (kGenLog && icl.fromScript)
+                ERUPTION_LOG_WARN("[NUVEM-GEN] id=%u %.3f ms", icl.scriptId,
+                                  std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - genT0).count());
+#endif
         }
     }
 
@@ -1221,6 +1233,10 @@ void Engine::render() {
             p.godRays = l.godRays;
             pls.push_back(p);
         }
+        // Raios de script (vfx.bolt) e a precipitacao das nuvens de script: sorteio,
+        // avanco e as luzes curtas de saida e impacto.
+        updateScriptFx(m_timer.deltaTime());
+        m_bolts.collectLights(pls, pls.size() + 4);
         m_deferredLighting.setVfxPointLights(pls);
     }
     // Depois das luzes de efeito deste quadro: elas tambem projetam sombra de sprite.
@@ -1810,6 +1826,7 @@ void Engine::render() {
     // this frame's fluff occlusion (screen-space alpha) for the weather
     // overlay's crown/splash occlusion (author feedback 2026-08-10).
     bool cloudVolOccReady = false;
+    bool cloudVolScriptDeferred = false; // o acumulo guardado e' so' o das nuvens de script
     if (m_cloudLayersEnabled) {
         VkRenderingAttachmentInfo planeColorAttach{};
         planeColorAttach.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -2019,25 +2036,45 @@ void Engine::render() {
             // the dominant GPU cost at zoom-out by ~6x per dimension.
             const uint32_t vhW = (renderExtent().width + 5) / 6;
             const uint32_t vhH = (renderExtent().height + 5) / 6;
-            if (m_cloudLayerRenderer.beginCloudVolumeAccum(cmd, vhW, vhH)) {
-                for (const auto& [icl, tint] : pendingBillboards) {
-                    m_cloudLayerRenderer.renderCloudLayerBillboard(cmd, icl->rendererId,
-                                                                   icl->planeY,
-                                                                   m_camera, m_gbuffer.depthView(), tint);
-                }
-                m_cloudLayerRenderer.endCloudVolumeAccumApply(cmd, m_deferredLighting.litImageView(),
-                                                              renderExtent().width, renderExtent().height);
-                cloudVolOccReady = true;
-            } else {
-                // Fallback: redraw direct into the lit image at full res.
-                vkc::cmdBeginRendering(cmd, &planeInfo);
-                for (const auto& [icl, tint] : pendingBillboards) {
-                    m_cloudLayerRenderer.renderCloudLayerBillboard(cmd, icl->rendererId,
-                                                                   icl->planeY,
-                                                                   m_camera, m_gbuffer.depthView(), tint);
-                }
-                vkc::cmdEndRendering(cmd);
+            // As nuvens de script saem do acumulo do campo: o campo entra na cena
+            // ANTES do DoF (borra com o resto, como sem nuvem de script), e so' as
+            // de script ficam para depois do DoF (nitidas, ver cloudAfterDof). Juntas
+            // num so' acumulo, o campo inteiro perdia o DoF enquanto havia uma.
+            static std::vector<std::pair<const IndependentCloudLayer*, float>> scriptBillboards;
+            scriptBillboards.clear();
+            if (m_scriptCloudCount > 0) {
+                auto isScript = [](const std::pair<const IndependentCloudLayer*, float>& e) { return e.first->fromScript; };
+                std::copy_if(pendingBillboards.begin(), pendingBillboards.end(), std::back_inserter(scriptBillboards), isScript);
+                pendingBillboards.erase(std::remove_if(pendingBillboards.begin(), pendingBillboards.end(), isScript),
+                                        pendingBillboards.end());
             }
+            auto accumulate = [&](const std::vector<std::pair<const IndependentCloudLayer*, float>>& list, bool apply) -> bool {
+                if (list.empty()) return false;
+                if (m_cloudLayerRenderer.beginCloudVolumeAccum(cmd, vhW, vhH)) {
+                    for (const auto& [icl, tint] : list) {
+                        m_cloudLayerRenderer.renderCloudLayerBillboard(cmd, icl->rendererId,
+                                                                       icl->planeY,
+                                                                       m_camera, m_gbuffer.depthView(), tint);
+                    }
+                    m_cloudLayerRenderer.endCloudVolumeAccumApply(cmd, m_deferredLighting.litImageView(),
+                                                                  renderExtent().width, renderExtent().height, apply);
+                    cloudVolOccReady = true;
+                    return true;
+                }
+                {
+                    // Fallback: redraw direct into the lit image at full res.
+                    vkc::cmdBeginRendering(cmd, &planeInfo);
+                    for (const auto& [icl, tint] : list) {
+                        m_cloudLayerRenderer.renderCloudLayerBillboard(cmd, icl->rendererId,
+                                                                       icl->planeY,
+                                                                       m_camera, m_gbuffer.depthView(), tint);
+                    }
+                    vkc::cmdEndRendering(cmd);
+                }
+                return false;
+            };
+            accumulate(pendingBillboards, true);
+            cloudVolScriptDeferred = accumulate(scriptBillboards, false);
         }
         m_vulkan.writeTimestamp(cmd, 37, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         bw::setPass(nullptr);
@@ -2128,6 +2165,7 @@ void Engine::render() {
         m_vfx.endFrame(cmd); // sem particula: zera a mascara reativa uma vez
         // Desenho imediato de script (world.draw_strip/draw_sprite): depois das
         // particulas, no lit, profundidade so' leitura, com o mesmo jitter da cena.
+        submitScriptFx();
         if (m_immediateDraw.hasWork()) {
             ImmediateDraw::View iv;
             iv.colorView = m_deferredLighting.litImageView();
@@ -2213,6 +2251,15 @@ void Engine::render() {
     m_vulkan.cmdImageBarrier(cmd, m_vulkan.swapImage(imageIndex), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
 
     PostProcessor::PostSettings postSettings = m_postSettings;
+    // A nuvem de script cobre o contorno do cenario (so' quando ha' uma viva e o
+    // acumulado do volume esta' pronto). ERUPTION_TEST_NO_OUTLINE_COVER=1 (so' em
+    // ERUPTION_DEV) desliga, para o antes e depois do print.
+    postSettings.outlineCloudCover = cloudVolScriptDeferred;
+    postSettings.cloudAfterDof = cloudVolScriptDeferred;
+    fillLocalClimate(postSettings);
+#if ERUPTION_DEV
+    if (std::getenv("ERUPTION_TEST_NO_OUTLINE_COVER")) postSettings.outlineCloudCover = false;
+#endif
     postSettings.fogColor = m_dayNightCycle.getFogColor();
     postSettings.sceneDim = m_uiCanvas.sceneDimNow();
 

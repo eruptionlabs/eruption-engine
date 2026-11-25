@@ -50,6 +50,8 @@
 #include "renderer/DebugLineRenderer.hpp"
 #include "renderer/OverlayLineRenderer.hpp"
 #include "renderer/ImmediateDraw.hpp"
+#include "renderer/vfx/CloudPrecip.hpp"
+#include "renderer/vfx/VfxBolt.hpp"
 #include "renderer/SpriteSystem.hpp"
 #include "renderer/TextureAtlas.hpp"
 #include "renderer/ChunkManager.hpp"
@@ -294,6 +296,76 @@ public:
         m_localCloudRadiusZ = radiusZ;
         m_localCloudFalloff = falloff;
     }
+    // Nuvens de script (tabela weather do Luau). Cada campo de ScriptCloudSpec
+    // tem padrao sensato; ScriptCloudSpec::Field diz quais campos um cloud_set
+    // traz. Implementado em ScriptCloud.cpp.
+    struct ScriptCloudSpec {
+        enum Field : uint32_t {
+            FX = 1u << 0, FZ = 1u << 1, FRadiusX = 1u << 2, FRadiusZ = 1u << 3, FDensity = 1u << 4,
+            FCoverage = 1u << 5, FAltitude = 1u << 6, FFalloff = 1u << 7, FDarkness = 1u << 8,
+            FTint = 1u << 9, FFadeIn = 1u << 10, FLife = 1u << 11, FFadeOut = 1u << 12, FDrift = 1u << 13,
+            FThickness = 1u << 14, FFrame = 1u << 15, FArea = 1u << 16, FPrecip = 1u << 17, FClimate = 1u << 18,
+        };
+        float x = 0.0f, z = 0.0f;
+        float radiusX = 80.0f, radiusZ = 60.0f;  // semi-eixos em metros
+        float density = 0.9f;                    // 0..1
+        float coverage = 0.7f;                   // 0..1, limiar do ruido interno
+        // Metros acima do chao em (x, z): a altura das nuvens do clima (as de campo
+        // ficam em 39 + 780 x altitude acima do alvo). Nada rente ao personagem.
+        float altitude = 230.0f;
+        float falloff = 1.2f;                    // suavidade da borda
+        float darkness = 0.0f;                   // 0..1, base escurecida
+        Vec3 tint = Vec3(1.0f);                  // cor (multiplica)
+        float fadeIn = 0.7f;                     // s para condensar
+        float life = 6.0f;                       // s formada; <= 0: ate' cloud_remove
+        float fadeOut = 1.5f;                    // s para dispersar ao fim da vida
+        bool drift = false;                      // o vento leva a nuvem
+        // Espessura vertical do domo em metros; 0 = automatica (metade do maior raio,
+        // entre 14 e 90). O topo fica em espessura / falloff acima da base.
+        float thickness = 0.0f;
+        // 0..1: quanto a massa e' deslocada para o lado da camera para aparecer
+        // CENTRADA em cima do alvo (x, z) na tela. 0 = fica exatamente em cima do
+        // ponto no mundo (aparece acima do alvo na tela).
+        float frame = 0.0f;
+        // Raio da area da habilidade (m), 0 = nao usado. Quando vem sem radius_x/z, a
+        // nuvem fica com a borda visivel em 1,3x essa area (raios = 1,3 * area * falloff).
+        float areaRadius = 0.0f;
+        // Clima local: o preset diz que clima a nuvem traz (1 = tempestade, 2 = neve,
+        // 0 = nenhum, nuvem so' visual). `climate` liga a gradacao local (luz, cor,
+        // neblina) e `precip` a chuva/neve; as duas valem so' com kind > 0.
+        int kind = 0;
+        bool climate = true;
+        bool precip = true;
+    };
+    // Raios da nuvem a partir da area da habilidade e do falloff atual.
+    static void deriveRadiiFromArea(ScriptCloudSpec& s);
+    // Valores iniciais de um preset ("storm", "snow"); false se o nome nao existe.
+    // Os campos que o script passar sobrescrevem o preset.
+    static bool scriptCloudPreset(const std::string& name, ScriptCloudSpec& spec);
+    // Ponto aleatorio na base da nuvem (para o script saber de onde o raio sai);
+    // false se o id nao existe.
+    bool scriptCloudPoint(uint32_t id, Vec3& out);
+    // Relampago por dentro da massa: intensidade (0..8) e duracao em segundos.
+    bool flashScriptCloud(uint32_t id, float intensity, float duration);
+    // Precipitacao da nuvem: snow/rain na area; on = false a desliga.
+    bool setScriptCloudPrecip(uint32_t id, bool on, bool snow, float rate, float radius);
+    // Raio 3D (vfx.bolt) e fita de precipitacao: ver renderer/vfx/VfxBolt.hpp e CloudPrecip.hpp.
+    uint32_t startBolt(BoltSpec spec);
+    bool stopBolt(uint32_t id) { return m_bolts.stop(id); }
+    // Por quadro: sorteia/avanca raios e precipitacao e entrega a geometria ao ImmediateDraw.
+    void updateScriptFx(float dt);
+    void submitScriptFx();
+    // Clima local das nuvens de script no composite (gradacao pelo mundo em volta de cada uma).
+    void fillLocalClimate(PostProcessor::PostSettings& out) const;
+    VfxBolt& bolts() { return m_bolts; }
+    CloudPrecip& cloudPrecip() { return m_precip; }
+    // Devolve o id (> 0) ou 0 quando recusada (cota cheia, nuvens desligadas).
+    uint32_t spawnScriptCloud(const ScriptCloudSpec& spec);
+    bool moveScriptCloud(uint32_t id, float x, float z);
+    bool setScriptCloud(uint32_t id, const ScriptCloudSpec& spec, uint32_t fields);
+    // Dispersa a nuvem em `fadeOut` segundos (< 0: o fade_out dela) e a remove.
+    bool removeScriptCloud(uint32_t id, float fadeOut);
+    uint32_t scriptCloudCount() const { return m_scriptCloudCount; }
     // Test hook: force the weather type by name (e.g. "stormy"); the cloud
     // field respawns for it on the next update tick.
     void setInitialWeatherType(const std::string& name);
@@ -1829,6 +1901,8 @@ private:
     DebugLineRenderer m_debugLineRenderer;
     OverlayLineRenderer m_overlayLineRenderer;
     ImmediateDraw m_immediateDraw;
+    VfxBolt m_bolts;       // vfx.bolt: raios 3D
+    CloudPrecip m_precip;  // weather.cloud_precip: chuva e neve de nuvem de script
     SpriteSystem m_spriteSystem;
     TextureAtlas m_textureAtlas;
     ChunkManager m_chunkManager;
@@ -1984,7 +2058,45 @@ private:
         bool hasRain = false;       // cloud carries its own rain that follows it
         bool fromField = false;     // weather-field cloud: respawns upwind when it leaves the map
         uint32_t rendererId = UINT32_MAX;
+        // Nuvem de script (weather.cloud_spawn): o clima nao a apaga, e ela
+        // tem uma vida propria (ScriptCloud.cpp).
+        bool fromScript = false;
+        uint32_t scriptId = 0;
+        ScriptCloudSpec spec;       // parametros atuais (cloud_set muda ao vivo)
+        float age = 0.0f;           // s desde o nascimento
+        float dispersal = 1.0f;     // 1 = nao formada / dispersa .. 0 = formada
+        bool removing = false;
+        float removeT = 0.0f, removeDur = 1.0f, removeFrom = 0.0f;
+        float flashPeak = 0.0f, flashDur = 0.0f, flashT = 0.0f; // relampago em curso (flashDur > 0)
+        bool precipOn = false, precipSnow = true;   // weather.cloud_precip
+        bool precipExplicit = false; // cloud_precip foi chamado: vence a precipitacao automatica do preset
+        float precipRate = 1.0f, precipRadius = 0.0f; // 0 = deriva da nuvem
     };
+    // Camadas retiradas (remocao de script, nuvem de campo cedida): a GPU ainda
+    // pode ler os recursos dos quadros em voo, entao o destruir espera alguns
+    // quadros em vez de um waitIdle.
+    struct RetiredCloudLayer {
+        std::unique_ptr<CloudCoverageArray> array;
+        uint32_t rendererId = UINT32_MAX;
+        int framesLeft = 0;
+    };
+    std::vector<RetiredCloudLayer> m_retiredCloudLayers;
+    uint32_t m_scriptCloudCount = 0;   // nuvens de script vivas (fora de m_independentCloudCount)
+    uint32_t m_nextScriptCloudId = 1;
+    // Arrays de cobertura ja' criados e ociosos para o proximo cloud_spawn. Criar
+    // um (imagens, buffer, pipeline de compute) custa de 0,3 a 4 ms (alocacao de
+    // memoria da GPU), mais do que um spawn pode gastar; o spawn pega um daqui e
+    // quem repoe e' o quadro (um por 0,1 s), so' depois do primeiro cloud_spawn.
+    std::vector<std::unique_ptr<CloudCoverageArray>> m_spareCloudArrays;
+    bool m_scriptCloudsUsed = false;
+    uint32_t m_scriptCloudRng = 0x9E3779B9u; // sorteio de cloud_point (xorshift)
+    Vec2 scriptCloudCenter(const ScriptCloudSpec& s) const; // (x, z) + deslocamento da camera (frame)
+    float scriptCloudThickness(const ScriptCloudSpec& s) const;
+    float m_spareRefillCooldown = 0.0f;
+    std::unique_ptr<CloudCoverageArray> makeScriptCloudArray(float planeY);
+    void retireCloudLayer(size_t index);
+    void updateScriptClouds(float dt);
+    void applyScriptCloudLook(IndependentCloudLayer& layer);
     std::vector<IndependentCloudLayer> m_independentCloudLayers;
     // Last frame's painter order (rendererIds, back-to-front). Kept across
     // frames so the distance sort can apply hysteresis (see the render loop).
@@ -1995,7 +2107,7 @@ private:
     std::unordered_map<uint32_t, CloudOrderEntry> m_cloudOrderScratch;
     std::vector<const IndependentCloudLayer*> m_cloudSortScratch;
     std::vector<uint32_t> m_cloudOrderIds;
-    uint32_t m_independentCloudCount = 0; // total clouds across all layers (max MAX_CLOUD_LAYERS)
+    uint32_t m_independentCloudCount = 0; // clima + manuais (as de script contam em m_scriptCloudCount; juntas <= LocalCloud::MAX_COUNT)
     // Spawns an independent cloud at the player position (plus an optional XZ
     // jitter) with the given altitude. Always adds; never replaces existing
     // clouds. density < 0 uses the current Local Density slider value.
@@ -2004,7 +2116,8 @@ private:
     void spawnIndependentCloud(float altitude, float density = -1.0f,
                                Vec2 jitterXZ = Vec2(0.0f), bool hasRain = false,
                                float radiusScale = 1.0f, bool fromField = false);
-    void clearIndependentClouds();
+    // keepScript: o clima trocou, as nuvens de script ficam (so' o fim do mapa as leva).
+    void clearIndependentClouds(bool keepScript = false);
     float independentCloudPlaneY(float altitude, bool rain = false) const;
     bool cloudBoxFor(bool rain) const;
 

@@ -3367,10 +3367,12 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         ERUPTION_API_FN(loading, game_progress), {nullptr, nullptr}};
     lib(L, "loading", loading);
     registerVfxApi(L, engine);
+    registerBoltApi(L, engine);
     registerObjectsApi(L, engine);
     registerRibbonApi(L, engine);
     registerVisionApi(L, engine);
     registerGraphicsApi(L, engine);
+    registerWeatherApi(L, engine);
     registerTelemetryApi(L, engine);
     registerNetApi(L, engine);
     NativeModule::registerApi(L);
@@ -4404,7 +4406,7 @@ declare loading: {
     -- runs long; it shows 100% on the frame of release.
     game_progress: (done: number, total: number) -> (),
 }
-)" + std::string(vfxApiDefinitions()) + visionApiDefinitions() + graphicsApiDefinitions() + objectsApiDefinitions() + telemetryApiDefinitions() +
+)" + std::string(vfxApiDefinitions()) + visionApiDefinitions() + graphicsApiDefinitions() + weatherApiDefinitions() + objectsApiDefinitions() + telemetryApiDefinitions() +
            NativeModule::apiDefinitions();
 }
 

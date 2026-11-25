@@ -153,20 +153,25 @@ bool ImmediateDraw::loadTexture(const std::string& path, Texture& out) {
         stbi_image_free(px);
         return false;
     }
+    const bool ok = uploadTexture(px, w, h, out);
+    stbi_image_free(px);
+    return ok;
+}
+
+// Envia pixels RGBA8 ja' decodificados (arquivo ou procedurais) e monta o descritor.
+bool ImmediateDraw::uploadTexture(const uint8_t* px, int w, int h, Texture& out) {
     const VkFormat format = VK_FORMAT_R8G8B8A8_SRGB;
     const uint32_t mips = MipmapGenerator::calculateMipLevels(uint32_t(w), uint32_t(h));
     const VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
     VkBuffer staging = VK_NULL_HANDLE;
     VmaAllocation stagingAlloc = VK_NULL_HANDLE;
     if (!m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging, stagingAlloc)) {
-        stbi_image_free(px);
         return false;
     }
     void* mapped = nullptr;
     vmaMapMemory(m_ctx->allocator(), stagingAlloc, &mapped);
     std::memcpy(mapped, px, size_t(bytes));
     vmaUnmapMemory(m_ctx->allocator(), stagingAlloc);
-    stbi_image_free(px);
 
     if (!m_ctx->createImage(uint32_t(w), uint32_t(h), format,
                             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -241,6 +246,22 @@ int ImmediateDraw::textureId(const std::string& path) {
         }
     }
     m_texIds.emplace(path, id); // a falha tambem fica em cache: sem reabrir todo quadro
+    return id;
+}
+
+int ImmediateDraw::addTexture(const std::string& key, const uint8_t* rgba, int w, int h) {
+    if (!m_ready) return -1;
+    auto it = m_texIds.find(key);
+    if (it != m_texIds.end()) return it->second;
+    int id = -1;
+    if (m_textures.size() < kMaxTextures && w > 0 && h > 0) {
+        Texture t;
+        if (uploadTexture(rgba, w, h, t)) {
+            id = int(m_textures.size());
+            m_textures.push_back(t);
+        }
+    }
+    m_texIds.emplace(key, id);
     return id;
 }
 

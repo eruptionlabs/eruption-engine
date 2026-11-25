@@ -58,6 +58,9 @@ public:
     // Local cloud patches. They are blended on top of procedural coverage.
     void addLocalCloud(const LocalCloud& cloud);
     void clearLocalClouds();
+    // Troca os dados de uma nuvem ja' adicionada (nuvem de script: mover, mudar
+    // densidade ao vivo). So' marca sujo; o envio entra no comando do quadro.
+    void setLocalCloud(size_t index, const LocalCloud& cloud);
     void updateLocalClouds(float dt, const Vec3& windDirection, float windSpeed);
     const std::vector<LocalCloud>& localClouds() const { return m_localClouds; }
 
@@ -156,6 +159,9 @@ private:
     bool createLocalCloudBuffer();
     void destroyLocalCloudBuffer();
     void updateLocalCloudBuffer();
+    // Mesmo envio, mas gravado no comando do quadro (vkCmdUpdateBuffer): sem
+    // immediateSubmit, entao nao espera a GPU. Fora de um render pass.
+    void recordLocalCloudBuffer(VkCommandBuffer cmd);
 
     // Vertical amplitude profile.  t in [0,1], return in [0,1].
     static float layerProfile(float t);

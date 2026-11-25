@@ -1130,6 +1130,32 @@ declare vfx: {
     area: (id: string | number, area: { shape: string?, position: vector, radius: number?, inner: number?,
         length: number?, width: number?, angle: number?, direction: vector?, yaw: number?, fill: number?,
         fill_alpha: number?, border: number?, color: vector?, alpha: number? }?) -> (),
+    -- Raio 3D entre dois pontos do mundo; devolve um id (nil se ha' raios demais
+    -- ao mesmo tempo: o teto e' 16). O trajeto e' gerado em 3D (deslocamento do
+    -- ponto medio) com galhos que afinam e somem, a largura afina ate' a ponta e
+    -- tudo e' sorteado de novo a cada flicker_ms (o raio treme). Desenho aditivo
+    -- em fita virada para a camera por segmento, com nucleo quente e halo; o
+    -- cenario tapa o que esta' atras. Campos (todos opcionais menos from e to):
+    --   from, to          vector: o ponto de saida (cloud_point da nuvem) e o impacto
+    --   width             largura na raiz em metros (1.2); o nucleo e' fino (~12% dela, nunca
+    --                     abaixo de ~1 pixel na tela) e o halo ~6x o nucleo
+    --   branches          numero de galhos (3, ate' 12)
+    --   jitter            0..1, quanto o trajeto desvia (0.35); o numero de segmentos cresce
+    --                     com o comprimento (~1 a cada 2,5 m: 230 m = 128), entao o zigue-zague
+    --                     aparece em qualquer tamanho. Os galhos tem sub-galhos
+    --   flicker_ms        intervalo do novo sorteio em ms (70)
+    --   life              segundos de vida; <= 0 fica ate' bolt_stop (0.45)
+    --   color, core_color vector rgb do halo e do nucleo (azulado, quase branco)
+    --   intensity         brilho (1)
+    --   light_radius, light_intensity   luz pontual curta na saida e no impacto
+    --                     (60 m, 8); light_radius = 0 desliga
+    --   cloud             id de weather.cloud_spawn: o trecho dentro da nuvem fica
+    --                     difuso e cada sorteio chama weather.cloud_flash nela
+    bolt: (spec: { from: vector, to: vector, width: number?, branches: number?, jitter: number?,
+        flicker_ms: number?, life: number?, color: vector?, core_color: vector?, intensity: number?,
+        light_radius: number?, light_intensity: number?, cloud: number? }) -> number?,
+    -- Apaga o raio na hora. false se o id ja' acabou.
+    bolt_stop: (id: number) -> boolean,
 }
 
 -- Team vision. The map is never closed: outside the vision of the sources it
@@ -1171,6 +1197,94 @@ declare graphics: {
     -- start; so do mesh relief bakes of meshes already loaded and the texture
     -- cap of textures already loaded.
     apply: (base: string, overrides: { [string]: any }?) -> boolean,
+}
+
+-- Nuvens volumetricas locais, para efeitos (tempestade, neve, raio) criarem
+-- uma massa de nuvem no ceu em cima de um alvo. Nao dependem do clima do mapa e
+-- a troca de clima nao as apaga. Dividem o teto de 100 nuvens com as do clima:
+-- ate' 24 nuvens de script vivas ao mesmo tempo (cota garantida; se o teto esta'
+-- cheio, a nuvem do clima mais longe cede o lugar). Acima da cota cloud_spawn
+-- devolve nil e avisa no log.
+declare weather: {
+    -- Cria uma nuvem e devolve o id, ou nil se a cota esta' cheia. Todos os
+    -- campos sao opcionais:
+    --   preset                "storm" (massa escura e densa, darkness 0,95) ou "snow" (clara e
+    --                         volumosa); os campos abaixo sobrescrevem o preset
+    --   area_radius           raio da area da habilidade em metros; os raios da
+    --                         nuvem derivam dele (a borda visivel fica em 1,5x a area;
+    --                         o chao escurece num disco de 1,3x a area).
+    --                         radius_x/radius_z explicitos ganham
+    --   x, z                  centro no mundo (padrao 0, 0)
+    --   radius_x, radius_z    semi-eixos em metros (80, 60); a borda visivel fica
+    --                         em radius / falloff
+    --   thickness             sem efeito (a nuvem tem a forma das do clima)
+    --   density               0..1 (0.9)
+    --   coverage              0..1, quanto do ruido interno vira nuvem (0.7)
+    --   altitude              metros do chao ate' a BASE da nuvem (230, a altura das
+    --                         nuvens do clima)
+    --   falloff               suavidade da borda, menor = mais larga e mais densa (1.2)
+    --   darkness              0..1, base escurecida de tempestade (0)
+    --   tint                  vector(r, g, b) que multiplica a cor (1, 1, 1)
+    --   frame                 0..1: desloca a massa para o lado da camera para que
+    --                         apareca centrada em cima de (x, z) na tela (0 = fica
+    --                         em cima do ponto no mundo, acima do alvo na tela)
+    --   fade_in               segundos para condensar (0.7)
+    --   life                  segundos formada; <= 0 fica ate' cloud_remove (6)
+    --   fade_out              segundos para dispersar no fim da vida (1.5)
+    --   drift                 true: o vento leva a nuvem (false)
+    --   precip                true (padrao): a nuvem de preset traz a chuva do clima
+    --                         ("storm": as mesmas gotas e fitas da chuva) ou os flocos
+    --                         ("snow"), so' na area, formando e dispersando com ela.
+    --                         false desliga. cloud_precip, se chamado, manda no lugar
+    --   climate               true (padrao): com preset, o clima de chuva/neve vale so'
+    --                         em volta da nuvem (raio de influencia de 2x area_radius,
+    --                         borda bem suave, pelo mundo e nao pela tela): a luz cai, a
+    --                         cena fica cinza e fria e a neblina sobe, o mesmo que o
+    --                         clima de chuva faz ao mundo todo (parametros do clima
+    --                         Stormy / Snowy). Segue a formacao e a dispersao da nuvem.
+    --                         false deixa so' o visual. Ate' 4 nuvens com clima ao mesmo
+    --                         tempo
+    -- E' uma nuvem do mesmo desenho das do clima, so' escura e localizada. Nasce
+    -- condensando (aberta e rala, fecha em fade_in) e, ao fim da vida, se dispersa.
+    cloud_spawn: (spec: {
+        preset: string?, area_radius: number?, x: number?, z: number?, radius_x: number?, radius_z: number?,
+        thickness: number?, density: number?, coverage: number?, altitude: number?, falloff: number?,
+        darkness: number?, tint: vector?, frame: number?, fade_in: number?, life: number?, fade_out: number?,
+        drift: boolean?, precip: boolean?, climate: boolean?,
+    }?) -> number?,
+    -- Leva a nuvem para (x, z); a altitude segue o chao dali. Devolve false se o
+    -- id nao existe mais.
+    cloud_move: (id: number, x: number, z: number) -> boolean,
+    -- Muda ao vivo qualquer campo de cloud_spawn (so' os que vierem na tabela;
+    -- "preset" nao). Pode ser chamada todo quadro: density, coverage, radius,
+    -- thickness e falloff refazem a bolha (uma atualizacao de 48 bytes no comando
+    -- do quadro e a cobertura da sombra); darkness, tint e altitude nao custam
+    -- nada. fade_in so' vale enquanto a nuvem ainda se forma. Devolve false se o
+    -- id nao existe mais.
+    cloud_set: (id: number, fields: {
+        area_radius: number?, x: number?, z: number?, radius_x: number?, radius_z: number?, thickness: number?,
+        density: number?, coverage: number?, altitude: number?, falloff: number?, darkness: number?,
+        tint: vector?, frame: number?, fade_in: number?, life: number?, fade_out: number?, drift: boolean?,
+        precip: boolean?, climate: boolean?,
+    }) -> boolean,
+    -- Dispersa a nuvem em `fade_out` segundos (padrao: o fade_out dela) e a
+    -- remove: ela se abre, esgarca e afina (cobertura cai, borda erodida,
+    -- raio se espalha, densidade vai a zero). No meio do fade_in ela dispersa a
+    -- partir do estado em que esta, sem pular nem voltar a crescer. Devolve
+    -- false se o id nao existe mais.
+    cloud_remove: (id: number, fade_out: number?) -> boolean,
+    -- Um ponto aleatorio na BASE da nuvem (no ceu, na altura do clima);
+    -- e' de la' que um raio desce. nil se o id nao existe mais.
+    cloud_point: (id: number) -> vector?,
+    -- Relampago por dentro da massa: a nuvem brilha azulada com `intensity`
+    -- (0..8, padrao 2) por `duration` segundos (padrao 0.25), subindo rapido e
+    -- caindo com tremulo. vfx.bolt com cloud = id chama isto a cada sorteio.
+    cloud_flash: (id: number, intensity: number?, duration: number?) -> boolean,
+    -- Precipitacao da base da nuvem ate' o chao, so' na area (radius, padrao a
+    -- area da habilidade ou 70% da borda). kind: "snow" (padrao) ou "rain"; rate:
+    -- multiplicador da quantidade (0..3, padrao 1). Acompanha cloud_move, some com
+    -- a dispersao e com cloud_remove. cloud_precip(id, nil) a desliga.
+    cloud_precip: (id: number, opts: { kind: string?, rate: number?, radius: number? }?) -> boolean,
 }
 
 -- An object of the scene: every model and character of the map is one, and

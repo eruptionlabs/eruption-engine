@@ -204,7 +204,7 @@ void registerVfxApi(lua_State* L, Engine& engine) {
 }
 
 const char* vfxApiDefinitions() {
-    return R"(
+    static const std::string defs = std::string(R"(
 -- Particle effects (Window > Effects). `name` is an effect of the game
 -- (assets/effects/<name>.vfx.json) or an engine template (data/vfx: fogo,
 -- faiscas, fumaca, chamine, magia, detritos, rastro, lanterna, janela, and
@@ -246,8 +246,8 @@ declare vfx: {
     area: (id: string | number, area: { shape: string?, position: vector, radius: number?, inner: number?,
         length: number?, width: number?, angle: number?, direction: vector?, yaw: number?, fill: number?,
         fill_alpha: number?, border: number?, color: vector?, alpha: number? }?) -> (),
-}
-)";
+)") + boltApiDefinitions() + "}\n";
+    return defs.c_str();
 }
 
 } // namespace eruption

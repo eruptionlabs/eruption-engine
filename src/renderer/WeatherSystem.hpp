@@ -104,6 +104,15 @@ public:
     ClimateFuzzySet& climateTypes() { return m_climateTypes; }
     const ClimateFuzzySet& climateTypes() const { return m_climateTypes; }
 
+    // Template do tipo COMO o clima o aplica: o padrao de C++ mais a sobreposicao de
+    // data/weather_types.json (a mesma que o clima inteiro usa). O clima local das
+    // nuvens de script le' daqui para casar com o clima de chuva/neve de verdade.
+    WeatherParams templateFor(WeatherType type) const {
+        WeatherParams p = getWeatherTypeInfo(type).baseParams;
+        applyTypeOverride(type, p);
+        return p;
+    }
+
     // Clima que MELHOR corresponde ao estado atmosferico corrente, junto da
     // confianca (1 = dentro do nucleo). Util para dirigir o clima pelo estado
     // do mundo em vez de escolher o tipo na mao.

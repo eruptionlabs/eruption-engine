@@ -126,6 +126,8 @@ void main() {
     vec2 occCenter = vec2(0.0);
     float occRadius = 0.0;
     bool followerBox = push.rainBoxCenter.w > 0.5;
+    // w = 2: coluna cilindrica (nuvem de script), ver RainFollower::cylinderRadius.
+    bool cylinderBox = push.rainBoxCenter.w > 1.5;
     if (followerBox) {
         cloudBase = push.cloudRange.x;
         occCenter = push.occluder.xy;
@@ -296,7 +298,17 @@ void main() {
     // — rain falls straight down). In the lit region (1 - shadow, coverage below
     // the cloud threshold) the rain is invisible: same fate as the debug-blue
     // occluded case (reason 5). Feathered edge so the boundary doesn't pop.
-    if (!isParticle && followerBox && push.cloudWorldBounds.z > 0.0 && push.cloudWorldBounds.w > 0.0) {
+    if (!isParticle && cylinderBox) {
+        // Disco exato no MUNDO (distancia horizontal ao eixo da coluna), nao a silhueta da
+        // cobertura amostrada ao longo do raio da camera: o recorte nao depende da
+        // perspectiva e a coluna fica com bordas verticais. Penumbra curta so' contra serrilhado.
+        const float dCol = distance(iWorldPos.xz, push.rainBoxCenter.xz) / max(push.cloudRange.y * 0.5, 1.0);
+        alpha *= 1.0 - smoothstep(0.97, 1.0, dCol);
+        if (alpha <= 0.003) {
+            if (debugOcclusion) { if (reason < 0.5) reason = 5.0; }
+            else discard;
+        }
+    } else if (!isParticle && followerBox && push.cloudWorldBounds.z > 0.0 && push.cloudWorldBounds.w > 0.0) {
         vec2 rainCovUV = (iWorldPos.xz - push.cloudWorldBounds.xy) / push.cloudWorldBounds.zw
                          - push.params5.zw;
         float cov = 0.0;
@@ -383,6 +395,10 @@ void main() {
         } else {
             color = vec3(0.78, 0.81, 0.85);
         }
+        // Chuva da coluna de uma nuvem de script (cylinderBox): gota d'agua em contraluz sob
+        // nuvem escura, cinza-azulada fosca e translucida. Com a cor do clima aberto (0,8)
+        // ela saia luminosa, mais clara que a propria nuvem.
+        if (cylinderBox && !isHail && !isFreezingRain) color = vec3(0.27, 0.33, 0.42);
         if (debugRainRegions) {
             outColor = vec4(color * 0.5, 0.15);
         } else {

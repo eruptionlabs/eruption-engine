@@ -137,6 +137,11 @@ public:
     uint32_t cloudLayerCount() const;
     // Per-layer rain look (push constants only; negative = use global weather).
     void setCloudLayerWeather(uint32_t id, float rainIntensity, float stormTint);
+    // Aparencia de uma nuvem de script (so' parametros de shader, sem refazer a
+    // cobertura): tint multiplica a cor, darkness (0..1) escurece a base e
+    // dispersal (0..1) abre, esgarca e afina o volume (0 = formada). O padrao
+    // (1,1,1 / 0 / 0) deixa o desenho identico ao das nuvens do clima.
+    void setCloudLayerLook(uint32_t id, const Vec3& tint, float darkness, float dispersal, float flash = 0.0f);
 
     // Render one independent layer as its own plane at planeY, and its ground
     // shadow. tintAltitude >= 0 enables the debug test tint (blue=low, red=high).
@@ -192,7 +197,7 @@ public:
     // single composite pass blends the result over the scene.
     bool beginCloudVolumeAccum(VkCommandBuffer cmd, uint32_t width, uint32_t height);
     void endCloudVolumeAccumApply(VkCommandBuffer cmd, VkImageView litView,
-                                  uint32_t width, uint32_t height);
+                                  uint32_t width, uint32_t height, bool apply = true);
 
     // Water reflection (WaterReflectionPass): the same volumetric puffs seen
     // by the camera mirrored in the water plane. The water pass runs before
@@ -263,6 +268,11 @@ private:
         VkDescriptorSet set3 = VK_NULL_HANDLE; // own local-cloud SSBO (volumetric puff)
         float rainOverride = -1.0f; // >= 0: per-layer rain look instead of global weather
         float stormOverride = -1.0f;
+        Vec3 lookTint = Vec3(1.0f);  // nuvem de script: cor
+        bool isScript = false;       // setCloudLayerLook foi chamado: nuvem de habilidade
+        float lookDarkness = 0.0f;   // nuvem de script: base escurecida
+        float lookDispersal = 0.0f;  // nuvem de script: 0 formada .. 1 dispersa
+        float lookFlash = 0.0f;      // nuvem de script: relampago por dentro (0 apagado)
         bool inUse = false;
     };
     std::vector<CloudLayerSlot> m_cloudLayers;

@@ -79,6 +79,13 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec4 halationParams;   // x=forca (0 = nao le'), y=limiar exposto, z=1/niveis somados
     vec4 halationTint;     // rgb=tinta normalizada pela luminancia
     vec4 grainParams;      // x=forca (0 desliga), y=graos na altura da tela, z=semente. Bloco de 512 B.
+    // Clima local das nuvens de script. Bloco de 704 B.
+    vec4 climateInfo;      // x=quantas nuvens (0 = nao le')
+    vec4 climateCloud[4];  // xy=centro (x,z), z=raio de influencia (< 0: neve), w=forca 0..1
+    vec4 climateHeight;    // altura da base de cada nuvem
+    vec4 climateGrade[2];  // [tempestade, neve]: x=fator de exposicao, y=dessaturacao, z=mistura de humor, w=neblina
+    vec4 climateFog[2];    // x=inicio, y=fim da neblina
+    vec4 climateChroma[2]; // rgb=cor do ceu coberto, normalizada pela luminancia
 } push;
 
 // HALATION: soma o borrao largo do excesso e tira o excesso do proprio pixel
@@ -330,6 +337,53 @@ float outlineAt(vec2 uv, float depth) {
     return e;
 }
 
+// CLIMA LOCAL das nuvens de script: o que o clima de chuva/neve faz ao mundo todo (a luz
+// direta some, o que sobra e' a do ceu coberto: mais escura, mais cinza e fria; mais
+// neblina), so' que pesado pela posicao no MUNDO em volta de cada nuvem e nao por um
+// disco na tela. O ponto avaliado e' o do chao atras do pixel; no ceu (sem profundidade)
+// e' onde a visada cruza a altura da base da nuvem, para o ceu em volta dela fechar junto.
+// Antes da exposicao e do volume da nuvem: a nuvem tem a propria escuridao.
+vec3 localClimate(vec3 color, vec3 worldPos, float depth) {
+    const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
+    const vec3 kMood = vec3(0.18, 0.18, 0.22); // o mesmo humor do weather_overlay
+    vec3 camPos = push.cameraPos.xyz;
+    vec3 ray = worldPos - camPos;
+    float dist = length(ray);
+    vec3 dir = ray / max(dist, 1e-4);
+    bool sky = depth >= 0.99999;
+    float w[2] = float[2](0.0, 0.0);
+    float wLight[2] = float[2](0.0, 0.0); // peso da queda de luz (so' fora da sombra da nuvem)
+    float fogDist = sky ? 1.0e4 : dist;
+    for (int i = 0; i < int(push.climateInfo.x); ++i) {
+        vec4 c = push.climateCloud[i];
+        vec2 p = worldPos.xz;
+        if (sky) {
+            float t = dir.y > 0.02 ? (push.climateHeight[i] - camPos.y) / dir.y : 4000.0;
+            p = camPos.xz + dir.xz * clamp(t, 0.0, 4000.0);
+        }
+        float R = max(abs(c.z), 1.0);
+        float k = c.w * (1.0 - smoothstep(0.25 * R, R, distance(p, c.xy)));
+        int kind = c.z < 0.0 ? 1 : 0;
+        w[kind] = 1.0 - (1.0 - w[kind]) * (1.0 - k);
+        // A sombra da nuvem (disco de 1,3x a area = 0,65 R) ja' tira a luz direta do chao
+        // dentro dela; a queda de exposicao so' entra fora dela, senao a luz some duas vezes.
+        float kl = k * smoothstep(0.3 * R, 0.65 * R, distance(p, c.xy));
+        wLight[kind] = 1.0 - (1.0 - wLight[kind]) * (1.0 - kl);
+    }
+    for (int kind = 0; kind < 2; ++kind) {
+        if (w[kind] <= 0.0) continue;
+        vec4 g = push.climateGrade[kind];
+        color *= mix(1.0, g.x, wLight[kind]);
+        float l = dot(color, kLuma);
+        color = mix(color, l * push.climateChroma[kind].rgb, g.y * w[kind]);
+        color = mix(color, kMood, g.z * w[kind]);
+        vec2 fe = push.climateFog[kind].xy;
+        float f = w[kind] * g.w * clamp((fogDist - fe.x) / max(fe.y - fe.x, 1.0), 0.0, 1.0);
+        color = mix(color, push.fogParams.xyz, f);
+    }
+    return color;
+}
+
 void main() {
     float depth = texture(depthTexture, fragUV).r;
     // O contorno so' precisa da profundidade: os taps saem ja' aqui para a latencia da leitura se esconder atras
@@ -417,6 +471,17 @@ void main() {
     // Luz volumetrica do sol: antes da exposicao (mesmas unidades da cena) e
     // da nevoa, que a cobre no longe como cobre o resto.
     if (push.volumetricParams.x > 0.0) color += texture(volumetricTexture, fragUV).rgb * push.volumetricParams.x;
+
+    if (push.climateInfo.x > 0.5) color = localClimate(color, worldPos, depth);
+
+    // Nuvem de script POR CIMA do DoF: o volume e' acumulado em meia resolucao e o
+    // DoF mede o desfoque pela profundidade do chao atras dela; aplicada antes, a
+    // nuvem borrava junto com o campo e virava mancha. Aqui entra nitida, com o
+    // mesmo "over" premultiplicado do apply (outlineParams2.w = 1).
+    if (push.outlineParams2.w > 0.5) {
+        vec4 cv = texture(cloudVolumeCoverageTexture, fragUV);
+        color = color * (1.0 - cv.a) + cv.rgb;
+    }
 
     // Exposure
     color *= push.exposureBloom.x;
@@ -595,7 +660,13 @@ void main() {
         color = max(color + grainNoise(fragUV, vec2(textureSize(hdrTexture, 0))) * push.grainParams.x * w, vec3(0.0));
     }
     // Contorno: depois do tonemap/grading/vinheta (cor de tela), antes da visao e do escurecimento.
-    color = mix(color, push.outlineColor.rgb, push.outlineColor.a * outlineEdge);
+    // O contorno e' de profundidade e a nuvem de script nao escreve profundidade: sem isto
+    // a linha do cenario saia POR CIMA da nuvem. A cobertura da nuvem naquele pixel
+    // (o mesmo acumulado que ja' tira a neblina do chao) a apaga na mesma proporcao.
+    float outlineVis = outlineEdge;
+    if (outlineVis > 0.0 && push.outlineParams2.z > 0.5)
+        outlineVis *= 1.0 - clamp(texture(cloudVolumeCoverageTexture, fragUV).a, 0.0, 1.0);
+    color = mix(color, push.outlineColor.rgb, push.outlineColor.a * outlineVis);
 
     // Visao de equipe depois do gamma, como o fx.dim: dim 0,35 e' 35% do
     // brilho que se ve'. O ceu nao escurece; fora da janela e' sem visao.

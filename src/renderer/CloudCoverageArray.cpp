@@ -3,6 +3,7 @@
 #include "core/Logger.hpp"
 #include <glm/glm.hpp>
 #include <cstring>
+#include <cstdlib>
 #include <algorithm>
 
 namespace eruption {
@@ -182,7 +183,16 @@ void CloudCoverageArray::recordComputeGeneration(VkCommandBuffer cmd) {
                            srcStage, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                            srcAccess, VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 
-    updateLocalCloudBuffer();
+    // No comando do quadro, nao por immediateSubmit: cada nuvem nova ou mexida
+    // (nuvem de script, que muda ao vivo) esperava a GPU so' para subir 4,8 KB.
+#if ERUPTION_DEV
+    // ERUPTION_TEST_CLOUD_OLD_UPLOAD=1: envio antigo (immediateSubmit, espera a GPU),
+    // para medir o custo antes/depois do envio no comando do quadro.
+    static const bool kOldUpload = std::getenv("ERUPTION_TEST_CLOUD_OLD_UPLOAD") != nullptr;
+    if (kOldUpload) updateLocalCloudBuffer();
+    else
+#endif
+    recordLocalCloudBuffer(cmd);
     dispatchCompute(cmd, 0, m_layerCount, 0, (m_size + 15) / 16);
 
     // Transition back to shader-read for the fragment passes in the same frame.
@@ -231,6 +241,13 @@ void CloudCoverageArray::addLocalCloud(const LocalCloud& cloud) {
         m_localCloudsDirty = true;
         m_coverageDirty = true;
     }
+}
+
+void CloudCoverageArray::setLocalCloud(size_t index, const LocalCloud& cloud) {
+    if (index >= m_localClouds.size()) return;
+    m_localClouds[index] = cloud;
+    m_localCloudsDirty = true;
+    m_coverageDirty = true;
 }
 
 void CloudCoverageArray::clearLocalClouds() {
@@ -538,6 +555,37 @@ void CloudCoverageArray::updateLocalCloudBuffer() {
     });
 
     vmaDestroyBuffer(m_ctx->allocator(), staging, stagingAlloc);
+}
+
+void CloudCoverageArray::recordLocalCloudBuffer(VkCommandBuffer cmd) {
+    if (!m_ctx || !m_localCloudsDirty) return;
+    m_localCloudsDirty = false;
+
+    LocalCloud buffer[LocalCloud::MAX_COUNT] = {};
+    const uint32_t count = static_cast<uint32_t>(glm::min(m_localClouds.size(), size_t(LocalCloud::MAX_COUNT)));
+    for (uint32_t i = 0; i < count; ++i) buffer[i] = m_localClouds[i];
+    static_assert(sizeof(buffer) <= 65536 && sizeof(buffer) % 4 == 0, "vkCmdUpdateBuffer: ate' 64 KB, multiplo de 4");
+
+    // O quadro anterior ainda pode estar lendo o SSBO (volume e geracao):
+    // espera essas leituras antes de sobrescrever.
+    VkBufferMemoryBarrier toTransfer{};
+    toTransfer.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    toTransfer.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toTransfer.buffer = m_localCloudBuffer;
+    toTransfer.offset = 0;
+    toTransfer.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &toTransfer, 0, nullptr);
+    vkCmdUpdateBuffer(cmd, m_localCloudBuffer, 0, sizeof(buffer), buffer);
+    VkBufferMemoryBarrier toRead = toTransfer;
+    toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                         1, &toRead, 0, nullptr);
 }
 
 bool CloudCoverageArray::createComputePipeline() {

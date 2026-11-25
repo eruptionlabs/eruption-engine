@@ -93,6 +93,19 @@ layout(push_constant) uniform PushConstants {
     // Teto de passos da marcha, vindo do preset (cloud_march_steps em
     // data/graphics.json). 0 = usa o maximo do shader (48).
     float marchCap;
+    // Nuvem de script (valores padrao = sem efeito, imagem identica):
+    // darkness escurece a base, tint multiplica a cor, dispersal 0..1 abre,
+    // esgarca e afina o volume (formacao e remocao usam o mesmo parametro).
+    float darkness;
+    float tintR;
+    float tintG;
+    float tintB;
+    float dispersal;
+    // Relampago por dentro (0 = apagado) e numero de amostras da luz do sol.
+    // taps > 0 liga a luz com varias amostras das nuvens de script (volume com
+    // espessura); 0 = nuvem do clima, imagem identica a de antes.
+    float flash;
+    float taps;
 } pc;
 
 int positiveMod(int v, int m) {
@@ -183,17 +196,98 @@ float blobDensity(LocalCloud b, vec3 p, vec2 drift, float planeY, int idx) {
     vec2 q = p.xz - (b.center + drift);
     float cr = cos(-b.rotation);
     float sr = sin(-b.rotation);
-    vec2 rp = vec2(q.x * cr - q.y * sr, q.x * sr + q.y * cr);
+    // Dispersao: o raio abre ate' 30% (a nuvem se espalha), a base fica no
+    // plano. Com dispersal = 0 todas as contas abaixo valem exatamente as de
+    // antes (fatores 1.0 e somas de 0.0).
+    float spread = 1.0 + 0.3 * pc.dispersal;
+    vec2 rp = vec2(q.x * cr - q.y * sr, q.x * sr + q.y * cr) / spread;
 
-    // Vertical semi-axis ~0.6x the horizontal one (squat puff), clamped so
-    // tiny blobs stay puffy and huge ones stay cloud-like.
-    float ry = clamp(max(b.radius.x, b.radius.y) / falloff * 0.6, 6.0, 100.0);
-    float cy = planeY + ry;
+    // Nuvem de script: a espessura (m) vem em _pad (float em bits); 0 = nuvem do clima.
+    float thick = uintBitsToFloat(b._pad);
+    float v;
+    float baseEro = 0.0;
+    float coreSolid = 0.0; // nuvem de script: 1 = miolo que o ruido nao corroi
+    float shellEro = 0.0;  // nuvem de script: erosao extra na casca (couve-flor)
+    if (thick > 0.0) {
+        // Domo de base irregular: a base e' ondulada por ruido em xz (ate' +-25%
+        // da altura), o topo e' uma cupula e a silhueta e' deslocada por ruido
+        // 3D de baixa frequencia (couve-flor). Abaixo da base a densidade cai
+        // 2,5x mais rapido e a erosao sobe, entao a base fica esfiapada e fofa.
+        vec2 nr = vec2(b.radius.x, b.radius.y);
+        float dxz = length(rp / nr);
+        if (dxz * falloff > 1.3) return 0.0; // fora do maior deslocamento possivel
+        float hext = thick * spread / falloff;
+        float fq = 2.2 / max(0.5 * (nr.x + nr.y), 4.0);
+        uint zs = uint(pc.seed) + 4242u;
+        float bn = valueNoise3D(q.x * fq * 1.3, q.y * fq * 1.3, 7.7, zs, 4096.0);
+        float bn2 = valueNoise3D(q.x * fq * 3.7, q.y * fq * 3.7, 3.3, zs + 5u, 8192.0);
+        // Base irregular: onda larga (+-30% da altura) mais uma ondulacao fina
+        // que rasga o contorno da barriga da nuvem.
+        float baseY = planeY + ((bn - 0.5) * 0.6 + (bn2 - 0.5) * 0.25) * hext;
+        float hy = (p.y - baseY) / (thick * spread);
+        float vy = hy >= 0.0 ? hy : -hy * 2.5;
+        float w1 = valueNoise3D(q.x * fq, p.y * fq * 1.4, q.y * fq, zs + 17u, 8192.0);
+        float w2 = valueNoise3D(q.x * fq * 2.1, p.y * fq * 2.9, q.y * fq * 2.1, zs + 31u, 16384.0);
+        float w3 = valueNoise3D(q.x * fq * 4.6, p.y * fq * 5.5, q.y * fq * 4.6, zs + 53u, 32768.0);
+        // Couve-flor: tres oitavas de deslocamento; a terceira (bolhas pequenas)
+        // so' pesa na casca, onde a silhueta aparece.
+        float w = 0.5 * w1 + 0.32 * w2 + 0.18 * w3 - 0.5;
+        float d = length(vec2(dxz, vy)) * (1.0 + 0.8 * w);
+        // Platô no miolo e queda firme na casca: com o smoothstep desde 0 a massa
+        // virava um disco macio sem borda (visto a 700 m).
+        v = 1.0 - smoothstep(0.3, 1.0, d * falloff);
+        if (v <= 0.0) return 0.0;
+        baseEro = 0.3 * (1.0 - smoothstep(0.0, 0.45, hy));
+        // O ruido de erosao muda de lugar com a semente e o centro: numa regiao de ruido
+        // baixo a nuvem inteira sumia (um spawn com a semente "azarada" nao aparecia,
+        // o seguinte sim). O miolo fica fora do alcance do ruido; so' a casca (d alto)
+        // e' esgarcada, e a dispersao reabre o miolo para a nuvem se desfazer.
+        // Miolo menor que antes (0,75): a casca e o topo ganham o ruido de erosao e a
+        // silhueta deixa de ser lisa, sem que o miolo possa sumir (o conserto do respawn).
+        coreSolid = 1.0 - smoothstep(0.15 * (1.0 - pc.dispersal), 0.5, d * falloff);
+        shellEro = 0.28 * smoothstep(0.45, 1.0, d * falloff);
+    } else if (pc.taps > 0.5) {
+        // Nuvem de script (mesmo bolha do clima, forma propria): o ruido so' EMPURRA a
+        // silhueta para dentro (d cresce), entao a densidade chega a zero antes das
+        // paredes da caixa de desenho e o contorno vem do ruido, nunca do corte da
+        // caixa. A base e' achatada (cai 1,8x mais rapido abaixo do centro) e erguida
+        // por ruido, entao fica irregular em vez de cortada reta no plano.
+        const float kLow = 1.8;
+        // Metade da altura da nuvem do clima (0,3 em vez de 0,6, teto 50): de cima, na
+        // camera de jogo (~265 m de altura), a massa tem de ficar abaixo da lente. A
+        // caixa de desenho usa a mesma conta (CloudLayerRenderer, puffTop).
+        float ry = clamp(max(b.radius.x, b.radius.y) / falloff * 0.3, 6.0, 50.0) * spread;
+        // Centro acima do plano: a parte de baixo cabe na caixa (que comeca no plano).
+        float cy = planeY + ry * (1.0 / (falloff * kLow) + 0.05);
+        vec2 nr = vec2(b.radius.x, b.radius.y);
+        float fq = 2.2 / max(0.5 * (nr.x + nr.y), 4.0);
+        uint zs = uint(pc.seed) + 4242u;
+        float bn = valueNoise3D(q.x * fq * 1.3, q.y * fq * 1.3, 7.7, zs, 4096.0);
+        float bn2 = valueNoise3D(q.x * fq * 3.7, q.y * fq * 3.7, 3.3, zs + 5u, 8192.0);
+        float ty = (p.y - cy) / ry;
+        float tl = (ty < 0.0 ? ty * kLow : ty) - (0.5 * bn + 0.25 * bn2) / falloff * 0.6;
+        float dxz = length(rp / nr);
+        float w1 = valueNoise3D(q.x * fq, p.y * fq * 1.4, q.y * fq, zs + 17u, 8192.0);
+        float w2 = valueNoise3D(q.x * fq * 2.1, p.y * fq * 2.9, q.y * fq * 2.1, zs + 31u, 16384.0);
+        float w3 = valueNoise3D(q.x * fq * 4.6, p.y * fq * 5.5, q.y * fq * 4.6, zs + 53u, 32768.0);
+        float w = 0.5 * w1 + 0.32 * w2 + 0.18 * w3;
+        w = clamp((w - 0.5) * 2.4 + 0.5, 0.0, 1.0); // a soma de oitavas fica perto de 0,5: abre o contraste
+        float d = length(vec2(dxz, tl)) * (1.0 + 0.6 * (1.0 - w)); // so' para dentro
+        v = 1.0 - smoothstep(0.55, 1.0, d * falloff); // queda curta: borda firme, o ruido da' a forma
+        if (v <= 0.0) return 0.0;
+        coreSolid = 1.0 - smoothstep(0.15 * (1.0 - pc.dispersal), 0.5, d * falloff);
+        shellEro = 0.38 * smoothstep(0.4, 1.0, d * falloff);
+    } else {
+        // Vertical semi-axis ~0.6x the horizontal one (squat puff), clamped so
+        // tiny blobs stay puffy and huge ones stay cloud-like.
+        float ry = clamp(max(b.radius.x, b.radius.y) / falloff * 0.6, 6.0, 100.0) * spread;
+        float cy = planeY + ry;
 
-    vec3 d3 = vec3(rp.x / b.radius.x, (p.y - cy) / ry, rp.y / b.radius.y);
-    float d = length(d3);
-    float v = 1.0 - smoothstep(0.0, 1.0, d * falloff);
-    if (v <= 0.0) return 0.0;
+        vec3 d3 = vec3(rp.x / b.radius.x, (p.y - cy) / ry, rp.y / b.radius.y);
+        float d = length(d3);
+        v = 1.0 - smoothstep(0.0, 1.0, d * falloff);
+        if (v <= 0.0) return 0.0;
+    }
 
     float noiseZ = float(idx) * 3.97 + 11.13; // localNoiseZ (coverage_gen)
     // LOD band-limiting: coarse marches alias the periodic coverage fbm into
@@ -205,8 +299,11 @@ float blobDensity(LocalCloud b, vec3 p, vec2 drift, float planeY, int idx) {
     // the same factor is exact at both ends and smooth in between — and
     // costs the 3rd noise eval only when the fade is active; pad2 is a push
     // constant, so the branch is coherent for the whole draw).
-    float freq = mix(0.01, 0.02, smoothstep(0.14, 0.28, pc.pad2));
+    float freq = mix(0.01, 0.02, smoothstep(0.14, 0.28, pc.pad2)) * (1.0 + 0.8 * pc.dispersal);
     float detail = smoothstep(0.28, 0.9, pc.pad2);
+    // Nuvem de script: sem o LOD de detalhe por distancia, senao a 700 m a casca
+    // perde a oitava fina e vira um disco liso.
+    if (pc.taps > 0.5) { freq = 0.02 * (1.0 + 0.8 * pc.dispersal); detail = max(detail, 0.8); }
     float fx = q.x * freq + b.center.x;
     float fy = q.y * freq + b.center.y;
     float fz = p.y * freq + noiseZ;
@@ -217,10 +314,13 @@ float blobDensity(LocalCloud b, vec3 p, vec2 drift, float planeY, int idx) {
     if (detail > 0.0)
         o3 = valueNoise3D(fx * 4.0, fy * 4.0, fz * 4.0, nseed + 262u, 16384.0);
     float n = (o1 + 0.5 * o2 + 0.25 * detail * o3) / (1.5 + 0.25 * detail);
-    float th = 1.0 - b.coverage;
-    n = smoothstep(th, th + 0.35, n);
+    // Dispersao: a cobertura cai (limiar sobe), a faixa da erosao estreita (a
+    // borda fica rendada) e a densidade vai a zero.
+    float th = 1.0 - b.coverage + 0.55 * pc.dispersal + baseEro + shellEro;
+    n = smoothstep(th, th + 0.35 - 0.2 * pc.dispersal, n);
+    n = mix(n, 1.0, coreSolid);
 
-    return v * b.density * n;
+    return v * b.density * n * (1.0 - pc.dispersal);
 }
 
 float cloudDensity(vec3 p, vec2 drift, float planeY) {
@@ -330,6 +430,11 @@ void main() {
         if (tScene <= tEnter) discard; // cloud fully behind terrain
     }
     tExit = min(tExit, tScene);
+    // Nuvem de script: a camera dentro ou colada no volume nao pode ver neblina de tela
+    // cheia. A marcha comeca depois da zona de corte (40 m) e a densidade sobe em rampa
+    // ate' 120 m de distancia da camera ao longo do raio.
+    const float kNearCut = 40.0, kNearFull = 120.0;
+    if (pc.taps > 0.5) tEnter = max(tEnter, kNearCut);
     if (tExit <= tEnter) discard;
     float fadeLen = max(8.0, tScene * 0.01);
 
@@ -362,9 +467,13 @@ void main() {
     float jitter = interleavedGradientNoise(fullResCoord, frameIndex);
     float invBoxH = 1.0 / max(pc.boxMax.y - pc.boxMin.y, 1.0);
     vec2 drift = windOffset.xz * (worldMax.xz - worldMin.xz);
-    float planeY = pc.boxMin.y;
+    float planeY = pc.boxMin.w; // altura do plano (a caixa pode descer abaixo dele)
     float sunStepLen = max(pc.boxMax.y - pc.boxMin.y, 1.0) * 0.3;
     vec3 sunStep = normalize(sunDir) * sunStepLen;
+    vec3 sunDirN = normalize(sunDir);
+    // Alcance da luz pela massa (nuvem de script): a altura do volume, sem
+    // passar do tamanho dela de lado.
+    float sunReach = max(pc.boxMax.y - pc.boxMin.y, 1.0) * 0.9;
 
     vec4 accum = vec4(0.0);
     for (int i = 0; i < steps; ++i) {
@@ -373,6 +482,7 @@ void main() {
         float dens = cloudDensity(p, drift, planeY);
         // Soft occlusion: thin the density out approaching the scene surface.
         dens *= clamp((tScene - t) / fadeLen, 0.0, 1.0);
+        if (pc.taps > 0.5) dens *= smoothstep(kNearCut, kNearFull, t);
         if (dens > 0.001) {
             // Cheap directional shading: one density tap toward the sun, plus
             // a vertical gradient so tops read brighter than bottoms.
@@ -381,13 +491,54 @@ void main() {
             // the lighting model never flips on a single frame mid-zoom.
             float sunFade = smoothstep(0.7, 0.95, pc.pad2);
             float sunT = exp(-dens * 2.0);
-            if (sunFade > 0.0) {
+            if (pc.taps > 0.5) {
+                // Nuvem de script: profundidade optica ate' o sol em `taps`
+                // amostras (passos crescentes). E' o que da' o relevo: o topo
+                // iluminado, as dobras e a base em sombra. O numero de amostras
+                // vem do preset (cloud_march_steps), menos nos presets baixos.
+                float tau = dens * 0.5 * sunReach / pc.taps;
+                float sPrev = 0.0;
+                for (int k = 1; k <= int(pc.taps); ++k) {
+                    float sk = sunReach * float(k * k) / (pc.taps * pc.taps);
+                    tau += cloudDensity(p + sunDirN * sk, drift, planeY) * (sk - sPrev);
+                    sPrev = sk;
+                }
+                sunT = exp(-(tau / sunReach) * 3.0); // sem escala fixa: uma nuvem de 300 m nao fica toda na sombra
+            } else if (sunFade > 0.0) {
                 float realT = exp(-cloudDensity(p + sunStep, drift, planeY) * 3.0);
                 sunT = mix(sunT, realT, sunFade);
             }
             float hFrac = clamp((p.y - pc.boxMin.y) * invBoxH, 0.0, 1.0);
             float lit = clamp(sunT * (0.45 + 0.55 * hFrac) + 0.10, 0.0, 1.0);
             vec3 base = mix(cloudDark, mix(cloudMid, cloudBright, lit), lit);
+            // Nuvem de script: base escurecida (mais embaixo, menos no topo) e cor.
+            // Acima de ~0.5 de darkness a curva se fecha (f*f): 0.95 chega a preto de
+            // verdade (medido: sem isto a massa saia cinza medio contra o mar escuro).
+            float dk = 1.0 - pc.darkness * (0.98 - 0.1 * hFrac);
+            vec3 tintV = vec3(pc.tintR, pc.tintG, pc.tintB);
+            vec3 lit0 = base;
+            base *= mix(dk, dk * dk, smoothstep(0.82, 1.0, pc.darkness)) * tintV;
+            // Topo e dobras de frente para o sol voltam a ser claros: a barriga fica
+            // escura e o relevo aparece mesmo com darkness 0,8 (sem isto a massa
+            // inteira era um disco da mesma cor). Proporcional a darkness, entao
+            // darkness 0 nao muda nada.
+            float sunFace = smoothstep(0.5, 0.97, sunT) * (0.4 + 0.6 * hFrac);
+            // So' as cristas pegam a luz cheia: vista de cima o sol bate em todo o topo e a
+            // massa saia esbranquicada. Ruido de bolhas (duas escalas) escolhe quais
+            // protuberancias estao expostas; o resto fica na cor escura da tempestade.
+            float crestN = 0.6 * valueNoise3D(p.x * 0.045, p.y * 0.045, p.z * 0.045, 61u, 4096.0)
+                         + 0.4 * valueNoise3D(p.x * 0.11, p.y * 0.11, p.z * 0.11, 67u, 4096.0);
+            sunFace *= mix(0.12, 1.0, smoothstep(0.42, 0.72, crestN));
+            base += lit0 * tintV * pc.darkness * 0.95 * sunFace * sunFace;
+            // Relampago dentro da massa: brilho azulado somado depois do
+            // escurecimento, mais forte no miolo denso e na metade de baixo, com
+            // ruido para nao ficar uma lampada uniforme.
+            if (pc.flash > 0.0) {
+                float nz = valueNoise3D(p.x * 0.05, p.y * 0.05, p.z * 0.05, 91u, 4096.0);
+                float g = 0.15 + 0.85 * nz * nz; // bolsas claras e vazios: nao vira uma lampada uniforme
+                float core = smoothstep(0.25, 0.9, dens);
+                base += vec3(0.70, 0.82, 1.0) * pc.flash * 0.45 * g * core * core * (0.5 + 0.5 * (1.0 - hFrac));
+            }
 
             float a = 1.0 - exp(-dens * dt * 0.12);
             accum.rgb += (1.0 - accum.a) * base * a;

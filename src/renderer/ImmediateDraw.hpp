@@ -49,6 +49,9 @@ public:
     // Id da textura (PNG do projeto, em cache por caminho, carregado uma vez);
     // -1 se o arquivo nao abriu (o aviso sai uma vez por caminho).
     int textureId(const std::string& path);
+    // Textura procedural (RGBA8, em cache pela chave): perfis suaves de feixe e
+    // ponto dos efeitos do motor (raio, precipitacao). -1 se nao coube.
+    int addTexture(const std::string& key, const uint8_t* rgba, int w, int h);
 
     // Reserva `count` vertices de uma strip/lista de quads e devolve onde
     // escreve-los (nulo se nao cabe no quadro). A chamada e' do tamanho certo
@@ -110,6 +113,7 @@ private:
     static uint8_t packFlags(Flags f) { return uint8_t((f.blend == Blend::Alpha ? 1 : 0) | (f.depthTest ? 2 : 0) | (f.cull ? 4 : 0)); }
     VkPipeline pipelineFor(uint8_t flags);
     bool loadTexture(const std::string& path, Texture& out);
+    bool uploadTexture(const uint8_t* px, int w, int h, Texture& out);
     void destroyTexture(Texture& t);
     void warnOnce(const char* what);
 

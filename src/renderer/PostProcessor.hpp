@@ -307,6 +307,25 @@ public:
         Vec4 outlineColor = Vec4(0.10f, 0.10f, 0.10f, 0.60f);
         float outlineThickness = 1.0f;
         float outlineThreshold = 0.02f;
+        // Ha' nuvem de script no quadro: o contorno do cenario e' atenuado pela
+        // opacidade da nuvem naquele pixel (a nuvem o cobre). Desligado = igual a antes.
+        bool outlineCloudCover = false;
+        // Volume de nuvem ainda nao aplicado na cena: o composite o poe depois do DoF.
+        bool cloudAfterDof = false;
+
+        // Clima local das nuvens de script (tempestade, neve): a mesma gradacao que o clima
+        // de chuva/neve aplica ao mundo todo, so' que pesada pela POSICAO NO MUNDO ao
+        // redor de cada nuvem (ScriptCloud.cpp). Ate' kMaxLocalClimate nuvens; as outras
+        // ficam so' com o visual. count = 0 desliga (o composite nao le' nada disto).
+        static constexpr int kMaxLocalClimate = 4;
+        struct LocalClimate {
+            int count = 0;
+            Vec4 cloud[kMaxLocalClimate];  // x,z do centro, raio de influencia (< 0: neve), forca 0..1
+            Vec4 height = Vec4(0.0f);      // altura da base de cada nuvem (o ceu e' pesado ali)
+            Vec4 grade[2];                 // [tempestade, neve]: exposicao, dessaturacao, mistura de humor, neblina
+            Vec4 fog[2];                   // inicio e fim da neblina do clima de referencia
+            Vec4 chroma[2];                // rgb = cor do ceu coberto (normalizada pela luminancia)
+        } localClimate;
 
         void loadFromJson(const nlohmann::json& j);
     };

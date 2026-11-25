@@ -202,6 +202,20 @@ public:
         // particles (the cheap, FPS-friendly lever; the shared particle pool
         // cannot be resized per cloud anyway).
         float rainRate = 1.0f;
+        // > 0: a chuva desta nuvem tem a densidade (gotas por m2) e o brilho que o clima
+        // GLOBAL de chuva teria com esta intensidade (0..1). A nuvem de script usa isto
+        // para a chuva local ser a mesma do clima de chuva e nao a "pancada" densa das
+        // nuvens do campo. 0 = a densidade das nuvens do campo.
+        float matchGlobalIntensity = 0.0f;
+        // Altura da coluna de chuva (da base da nuvem ao chao, m). A chuva global cai numa
+        // caixa de ~cloudBase x 0,95 (min. 60 m); numa coluna de 230 m as mesmas gotas por
+        // m3 deixam 4x mais gotas na linha de visao, entao a densidade encolhe na razao.
+        float columnHeight = 0.0f;
+        // > 0: coluna de chuva CILINDRICA (nuvem de script): o recorte e' um disco de
+        // raio cylinderRadius em torno de boxCenter.xz, no mundo, com bordas verticais.
+        // Sem recorte pela silhueta da cobertura (que depende do raio da camera e dava a
+        // chuva em cone) e sem deslocamento pelo sol. 0 = caixa/silhueta das nuvens do campo.
+        float cylinderRadius = 0.0f;
     };
     void setRainFollowers(const std::vector<RainFollower>& followers) { m_rainFollowers = followers; }
     const std::vector<RainFollower>& rainFollowers() const { return m_rainFollowers; }

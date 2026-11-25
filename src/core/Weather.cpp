@@ -145,7 +145,8 @@ void Engine::spawnIndependentCloud(float altitude, float density, Vec2 jitterXZ,
     altitude = glm::clamp(altitude, 0.0f, 1.0f);
     if (density < 0.0f) density = m_localCloudDensity;
     density = glm::clamp(density, 0.0f, 1.0f);
-    if (m_independentCloudCount >= LocalCloud::MAX_COUNT) {
+    // O teto de 100 e' dividido com as nuvens de script (LocalCloud::SCRIPT_QUOTA).
+    if (m_independentCloudCount + m_scriptCloudCount >= LocalCloud::MAX_COUNT) {
         ERUPTION_LOG_WARN("Independent cloud limit reached (%u)", LocalCloud::MAX_COUNT);
         return;
     }
@@ -278,8 +279,17 @@ void Engine::spawnIndependentCloud(float altitude, float density, Vec2 jitterXZ,
     const float darkness = std::min(0.55f * rain + 0.35f * storm, 0.75f);
     const float weight = 1.0f + 2.5f * density + 12.0f * areaFrac + 1.5f * darkness;
 
-    m_independentCloudLayers.push_back({std::move(array), altitude, planeY,
-                                        spawnCenter, density, weight, hasRain, fromField, id});
+    IndependentCloudLayer newLayer;
+    newLayer.array = std::move(array);
+    newLayer.altitude = altitude;
+    newLayer.planeY = planeY;
+    newLayer.centerXZ = spawnCenter;
+    newLayer.density = density;
+    newLayer.weight = weight;
+    newLayer.hasRain = hasRain;
+    newLayer.fromField = fromField;
+    newLayer.rendererId = id;
+    m_independentCloudLayers.push_back(std::move(newLayer));
     ++m_independentCloudCount;
     ERUPTION_LOG_WARN("Independent cloud layer SPAWNED: alt=%.2f planeY=%.1f density=%.2f area=%.1f%% weight=%.2f rain=%d blobs=%zu at (%.1f, %.1f) uv=(%.2f, %.2f) world=[(%.0f,%.0f)-(%.0f,%.0f)] (total=%u, layers=%zu) spawnMs init=%.1f add=%.1f bake=%.1f reg=%.1f measure=%.1f total=%.1f",
                     altitude, planeY, density, areaFrac * 100.0f, weight, hasRain ? 1 : 0,
@@ -293,17 +303,29 @@ void Engine::spawnIndependentCloud(float altitude, float density, Vec2 jitterXZ,
                     msInit, msAdd, msBake, msReg, msMeasure, phaseMs());
 }
 
-void Engine::clearIndependentClouds() {
-    if (m_independentCloudLayers.empty()) return;
+void Engine::clearIndependentClouds(bool keepScript) {
+    if (m_independentCloudLayers.empty() && m_retiredCloudLayers.empty() && m_spareCloudArrays.empty()) return;
     m_vulkan.waitIdle();
+    // Com waitIdle as camadas aposentadas ja' podem ir embora.
+    for (auto& r : m_retiredCloudLayers) m_cloudLayerRenderer.unregisterCloudLayer(r.rendererId);
+    m_retiredCloudLayers.clear();
+    // Troca de clima (keepScript): as nuvens de script sobrevivem; so' o campo
+    // do clima e as manuais saem.
+    std::vector<IndependentCloudLayer> kept;
     for (auto& layer : m_independentCloudLayers) {
+        if (keepScript && layer.fromScript) {
+            kept.push_back(std::move(layer));
+            continue;
+        }
         m_cloudLayerRenderer.unregisterCloudLayer(layer.rendererId);
     }
-    m_independentCloudLayers.clear();
+    m_independentCloudLayers = std::move(kept);
     m_cloudLayerDrawOrder.clear();
     m_independentCloudCount = 0;
+    m_scriptCloudCount = static_cast<uint32_t>(m_independentCloudLayers.size());
+    if (!keepScript) m_spareCloudArrays.clear(); // so' com a GPU parada (waitIdle acima)
     m_postProcessor.weatherRenderer().setRainFollowers({});
-    ERUPTION_LOG_WARN("Independent clouds cleared");
+    ERUPTION_LOG_WARN("Independent clouds cleared (script clouds kept: %u)", m_scriptCloudCount);
 }
 
 void Engine::applyWeatherTypeFull(WeatherType type, float intensity) {
@@ -388,7 +410,8 @@ void Engine::spawnWeatherCloudField(WeatherType type) {
         spec.scaleMax *= sizeBoost;
     }
 
-    clearIndependentClouds();
+    // As nuvens de script nao somem com a troca de clima.
+    clearIndependentClouds(true);
     m_pendingCloudSpawns.clear();
 
     // ERUPTION_TEST_CLOUDS_NO_RAIN=1 (debug): spawn the field without rain followers

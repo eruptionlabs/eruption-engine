@@ -1297,7 +1297,7 @@ bool CloudLayerRenderer::createCloudShadowsPipeline() {
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset = 0;
-    pcRange.size = sizeof(float) * 6;
+    pcRange.size = sizeof(float) * 12; // 7 da cobertura + area da nuvem de script (centro, raios, forca)
 
     VkDescriptorSetLayout layouts[3] = {m_descriptorSetLayout, m_compositeDescriptorSetLayout, m_cloudShadowsDepthLayout};
     VkPipelineLayoutCreateInfo layoutInfo{};
@@ -2092,7 +2092,7 @@ bool CloudLayerRenderer::beginCloudVolumeAccum(VkCommandBuffer cmd, uint32_t wid
 }
 
 void CloudLayerRenderer::endCloudVolumeAccumApply(VkCommandBuffer cmd, VkImageView litView,
-                                                  uint32_t width, uint32_t height) {
+                                                  uint32_t width, uint32_t height, bool apply) {
     if (!m_volumeAccumMode) return;
     vkc::cmdEndRendering(cmd);
 
@@ -2100,6 +2100,8 @@ void CloudLayerRenderer::endCloudVolumeAccumApply(VkCommandBuffer cmd, VkImageVi
                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    if (!apply) { m_volumeAccumMode = false; return; } // o post compoe depois do DoF
 
     VkRenderingAttachmentInfo litAttach{};
     litAttach.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -2887,7 +2889,8 @@ void CloudLayerRenderer::renderCloudShadows(VkCommandBuffer cmd,
     // Push layout: layer, shadowIntensity, coveragePlaneHeight, threshold, weatherCoverage, noRepeat.
     // Distance fade was removed; shadows now cover the whole world until the
     // cloud coverage texture bounds (sampler set to CLAMP_TO_BORDER black).
-    float pcData[6] = {pcLayer, m_cfg.cloudShadowOpacity, m_cfg.cloudBottom, cloudShadowBaseStrength(), m_weatherCoverage, 0.0f};
+    float pcData[12] = {pcLayer, m_cfg.cloudShadowOpacity, m_cfg.cloudBottom, cloudShadowBaseStrength(), m_weatherCoverage, 0.0f, 1.0f,
+                        0.0f, 0.0f, 1.0f, 1.0f, 0.0f};
     vkCmdPushConstants(cmd, m_cloudShadowsPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pcData), pcData);
 
     // Fullscreen triangle, no vertex buffer.
@@ -3119,6 +3122,17 @@ void CloudLayerRenderer::setCloudLayerWeather(uint32_t id, float rainIntensity, 
     if (!slot.inUse) return;
     slot.rainOverride = rainIntensity;
     slot.stormOverride = stormTint;
+}
+
+void CloudLayerRenderer::setCloudLayerLook(uint32_t id, const Vec3& tint, float darkness, float dispersal, float flash) {
+    if (id >= m_cloudLayers.size()) return;
+    CloudLayerSlot& slot = m_cloudLayers[id];
+    if (!slot.inUse) return;
+    slot.isScript = true;
+    slot.lookTint = tint;
+    slot.lookDarkness = glm::clamp(darkness, 0.0f, 1.0f);
+    slot.lookDispersal = glm::clamp(dispersal, 0.0f, 1.0f);
+    slot.lookFlash = glm::clamp(flash, 0.0f, 8.0f);
 }
 
 void CloudLayerRenderer::updateCloudLayerUBO(uint32_t id) {
@@ -3503,11 +3517,17 @@ void CloudLayerRenderer::drawBillboard(VkCommandBuffer cmd, uint32_t id, float p
     const Vec2 drift(windUv.x * (wmax.x - wmin.x), windUv.y * (wmax.z - wmin.z));
     float fminX = 1e30f, fmaxX = -1e30f, fminZ = 1e30f, fmaxZ = -1e30f;
     float puffTop = 0.0f;
+    float puffTopScript = 0.0f; // nuvem de script: altura da forma propria
+    float baseDip = 0.0f;       // quanto a base ondulada pode descer abaixo do plano
+    // Dispersao (nuvem de script): o shader alarga o raio por este fator em
+    // volta do centro de cada bolha e a bolha cresce para cima (a base fica no
+    // plano); a caixa de desenho tem de acompanhar ou o corte a mostraria.
+    const float spread = 1.0f + 0.3f * slot.lookDispersal;
     for (const LocalCloud& lc : slot.array->localClouds()) {
         if (!lc.alive) continue;
         const float invF = 1.0f / std::max(lc.falloff, 0.01f);
-        const float hx = lc.radius.x * invF;
-        const float hz = lc.radius.y * invF;
+        const float hx = lc.radius.x * invF * spread;
+        const float hz = lc.radius.y * invF * spread;
         const float cr = std::cos(lc.rotation), sr = std::sin(lc.rotation);
         const float ex = std::sqrt(hx * hx * cr * cr + hz * hz * sr * sr);
         const float ez = std::sqrt(hx * hx * sr * sr + hz * hz * cr * cr);
@@ -3520,7 +3540,13 @@ void CloudLayerRenderer::drawBillboard(VkCommandBuffer cmd, uint32_t id, float p
         // top is still on screen (the pop-in/out at the frame edges).
         // Y extent of the ellipsoid mask: center planeY+ry, half-height ry/falloff.
         const float ry = glm::clamp(std::fmax(lc.radius.x, lc.radius.y) * invF * 0.6f, 6.0f, 100.0f);
-        puffTop = std::max(puffTop, ry * (1.0f + invF));
+        puffTop = std::max(puffTop, ry * spread * (1.0f + invF));
+        if (slot.isScript) {
+            // Forma propria da nuvem de script (cloud_billboard.frag, ramo taps > 0): metade da
+            // altura, centro erguido pela base achatada (kLow = 1,8 la'). Esta e' a que vale (bodyH).
+            const float rys = glm::clamp(std::fmax(lc.radius.x, lc.radius.y) * invF * 0.3f, 6.0f, 50.0f) * spread;
+            puffTopScript = std::max(puffTopScript, rys * (1.0f / (1.8f * std::max(lc.falloff, 0.01f)) + 0.05f + invF) * 1.04f);
+        }
     }
     if (fminX > fmaxX) {
         if (kPuffLogEarly) { static int f2 = 0; if (++f2 % 60 == 0) ERUPTION_LOG_WARN("[PUFF] id=%u SKIP no alive blobs (total=%zu)", id, slot.array->localClouds().size()); }
@@ -3530,16 +3556,16 @@ void CloudLayerRenderer::drawBillboard(VkCommandBuffer cmd, uint32_t id, float p
     // Vertical body rising from the plane (never hanging below it): tall
     // enough to contain every puff in the layer, with a floor so tiny blobs
     // still have room for the noise to breathe.
-    const float bodyH = std::max(puffTop, 12.0f);
-    const float yBot = planeY;
+    const float bodyH = std::max(slot.isScript ? puffTopScript : puffTop, 12.0f);
+    const float yBot = planeY - baseDip;
     const float yTop = planeY + bodyH;
 
     // ERUPTION_TEST_PUFF_LOG=1 (debug): dump every layer's draw decision once per
     // second, to chase the pitch/zoom pop.
     static const bool kPuffLog = std::getenv("ERUPTION_TEST_PUFF_LOG") != nullptr;
     if (kPuffLog) {
-        static int s_frame = 0;
-        if (++s_frame % 300 == 1) {
+        static int s_frame[256] = {};
+        if (++s_frame[id & 255u] % 300 == 1) {
             const Vec3 cp = camPos;
             ERUPTION_LOG_WARN("[PUFF] id=%u cam=(%.1f,%.1f,%.1f) box=(%.1f..%.1f, %.1f..%.1f, %.1f..%.1f) blobs=%zu",
                             id, cp.x, cp.y, cp.z, fminX, fmaxX, yBot, yTop, fminZ, fmaxZ,
@@ -3561,7 +3587,10 @@ void CloudLayerRenderer::drawBillboard(VkCommandBuffer cmd, uint32_t id, float p
     static const bool kNoLod = std::getenv("ERUPTION_TEST_CLOUD_NO_LOD") != nullptr;
     const Mat4& vp = cullVp;
     const Vec3 boxMin3(fminX, yBot, fminZ), boxMax3(fmaxX, yTop, fmaxZ);
-    if (!kNoLod && aabbOutsideFrustum(vp, boxMin3, boxMax3)) return;
+    if (!kNoLod && aabbOutsideFrustum(vp, boxMin3, boxMax3)) {
+        if (kPuffLog) ERUPTION_LOG_WARN("[PUFF] id=%u CULL pelo frustum", id);
+        return;
+    }
     const float camDist = aabbDistance(camPos, boxMin3, boxMax3);
     (void)camDist;
     // Angular-size LOD: tier by how BIG the cloud is on screen
@@ -3590,6 +3619,12 @@ void CloudLayerRenderer::drawBillboard(VkCommandBuffer cmd, uint32_t id, float p
             stepScale = glm::mix(0.28f, 1.0f, glm::smoothstep(2.0f, 3.5f, angular));
         }
     }
+
+    // Nuvem de script: sempre a qualidade cheia (3a oitava de ruido e 2a amostra do sol).
+    // A massa e' grande e escura e quase sempre vista de longe; com o LOD angular (0,28) ela
+    // saia um balao liso, sem as dobras que as nuvens do clima tem. Os passos da marcha nao
+    // dependem deste fator, so' a oitava e a amostra do sol.
+    if (slot.isScript) stepScale = 1.0f;
 
     // Scissor to the box projection (the march is not free).
     // ERUPTION_TEST_PUFF_FULLSCISSOR=1 (debug): always full-screen, to isolate
@@ -3650,8 +3685,18 @@ void CloudLayerRenderer::drawBillboard(VkCommandBuffer cmd, uint32_t id, float p
         float pad2;
         float targetScale;
         float marchCap;   // teto de passos da marcha (preset cloud_march_steps)
+        // Nuvem de script (padrao: sem efeito). 92 bytes no total; o range do
+        // pipeline tem 112 e o limite do motor e' 128.
+        float darkness;
+        float tintR, tintG, tintB;
+        float dispersal;
+        float flash;      // relampago por dentro (0 = apagado)
+        float taps;       // amostras da luz do sol (0 = nuvem do clima)
     } pc;
-    pc.boxMin = glm::vec4(fminX, yBot, fminZ, 1.0f);
+    // boxMin.w leva a altura do plano da nuvem: a base ondulada de uma nuvem de
+    // script pode descer abaixo dele, entao o shader nao a tira mais de boxMin.y
+    // (nas nuvens do clima yBot == planeY, o mesmo valor de antes).
+    pc.boxMin = glm::vec4(fminX, yBot, fminZ, planeY);
     pc.boxMax = glm::vec4(fmaxX, yTop, fmaxZ, 1.0f);
     pc.seed = static_cast<float>(slot.array->seed());
     pc.rainIntensity = (slot.rainOverride >= 0.0f) ? slot.rainOverride : m_rainIntensity;
@@ -3664,6 +3709,17 @@ void CloudLayerRenderer::drawBillboard(VkCommandBuffer cmd, uint32_t id, float p
     static const bool kNoDepClip = std::getenv("ERUPTION_TEST_PUFF_NODEPCLIP") != nullptr;
     pc.pad0 = kNoDepClip ? 1.0f : 0.0f;
     pc.marchCap = static_cast<float>(m_marchStepBudget);
+    // Nuvem de script vista de longe: com poucos passos (12..24 sobre centenas de metros) a
+    // densidade sai em degraus e a massa ganha aneis de contorno; piso de 48 passos nela.
+    if (slot.isScript) pc.marchCap = std::max(pc.marchCap, 48.0f);
+    pc.darkness = slot.lookDarkness;
+    pc.tintR = slot.lookTint.x; pc.tintG = slot.lookTint.y; pc.tintB = slot.lookTint.z;
+    pc.dispersal = slot.lookDispersal;
+    pc.flash = slot.lookFlash;
+    // Nuvem de script: amostras da luz do sol proporcionais ao teto de passos do
+    // preset (24 -> 4, 12 -> 2, sem teto -> 6), de 2 a 6; 0 = nuvem do clima. E' o
+    // que liga a forma e o sombreamento de relevo da nuvem de script no shader.
+    pc.taps = slot.isScript ? glm::clamp(std::floor(pc.marchCap / 6.0f), 2.0f, 6.0f) : 0.0f;
     // Water reflection: half the march budget (shader floor 12) and the far
     // LOD (no sun tap, no 3rd noise octave). The reflection is seen through
     // the Fresnel and the wave distortion; at full quality it cost 0.44 ms
@@ -3673,6 +3729,9 @@ void CloudLayerRenderer::drawBillboard(VkCommandBuffer cmd, uint32_t id, float p
         const float cap = m_marchStepBudget > 0 ? static_cast<float>(m_marchStepBudget) : 48.0f;
         pc.marchCap = std::max(12.0f, cap * 0.5f);
     }
+    // Nuvem de script: amostras da luz do sol proporcionais ao teto de passos do
+    // preset (24 -> 4, 12 -> 2, sem teto -> 6), de 2 a 6. A forma em domo e a
+    // marcha sao as mesmas em todos os presets; so' o custo da luz muda.
     // ERUPTION_TEST_PUFF_SOLID=1 / ERUPTION_TEST_PUFF_DENSITY=1 (debug): box solid / march
     // density visualization in the fragment.
     static const bool kSolid = std::getenv("ERUPTION_TEST_PUFF_SOLID") != nullptr;
@@ -3844,8 +3903,34 @@ void CloudLayerRenderer::renderCloudLayerShadow(VkCommandBuffer cmd, uint32_t id
     VkDescriptorSet sets[3] = {slot.set0[m_ctx->currentFrame()], slot.set1, m_cloudShadowsDepthSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudShadowsPipelineLayout, 0, 3, sets, 0, nullptr);
 
-    // Push layout: layer, shadowIntensity, coveragePlaneHeight, threshold, weatherCoverage, noRepeat.
-    float pcData[6] = {0.0f, m_cfg.cloudShadowOpacity, planeY, cloudShadowBaseStrength(), m_weatherCoverage, 1.0f};
+    // Push layout: layer, shadowIntensity, coveragePlaneHeight, threshold, weatherCoverage, noRepeat,
+    // layerFade. A sombra de uma nuvem de script some junto com ela: a cobertura
+    // assada nao encolhe na dispersao, so' a forca da sombra cai.
+    const float layerFade = std::pow(1.0f - slot.lookDispersal, 1.5f);
+    // Area de escurecimento (nuvem de script): o chao embaixo escurece por um disco
+    // suave do tamanho da borda visivel da nuvem. "O ceu fechou" e' o chao
+    // escurecendo; a cobertura assada (128^2 sobre o mapa todo, ~30 m por texel) nao
+    // da' sombra forte nem nitida, entao a area vai analitica por push constant.
+    // A forca cresce com o darkness: a storm (0,95) deixa o chao a ~30%.
+    float areaCx = 0.0f, areaCz = 0.0f, areaRx = 1.0f, areaRz = 1.0f, areaStr = 0.0f;
+    {
+        const Vec3 wmin = slot.array->worldMin();
+        const Vec3 wmax = slot.array->worldMax();
+        const Vec2 windUv = slot.array->windOffset();
+        for (const LocalCloud& lc : slot.array->localClouds()) {
+            if (!lc.alive || !slot.isScript) continue;
+            const float invF = 1.0f / std::max(lc.falloff, 0.01f);
+            areaCx = lc.center.x + windUv.x * (wmax.x - wmin.x);
+            areaCz = lc.center.y + windUv.y * (wmax.z - wmin.z);
+            const float g = kScriptCloudGroundScale / kScriptCloudAreaScale; // borda do chao / borda da nuvem
+            areaRx = std::max(lc.radius.x * invF * g, 1.0f);
+            areaRz = std::max(lc.radius.y * invF * g, 1.0f);
+            areaStr = glm::clamp((0.20f + 0.72f * slot.lookDarkness) * lc.density, 0.0f, 0.95f);
+            break;
+        }
+    }
+    float pcData[12] = {0.0f, m_cfg.cloudShadowOpacity, planeY, cloudShadowBaseStrength(), m_weatherCoverage, 1.0f, layerFade,
+                        areaCx, areaCz, areaRx, areaRz, areaStr};
     vkCmdPushConstants(cmd, m_cloudShadowsPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pcData), pcData);
 
     vkCmdDraw(cmd, 3, 1, 0, 0);

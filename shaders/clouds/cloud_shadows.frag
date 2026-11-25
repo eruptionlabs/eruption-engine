@@ -56,6 +56,12 @@ layout(push_constant) uniform PushConstants {
     float baseShadowStrength; // scene base shadow darkening: sun/(sun+ambient), baked on CPU
     float weatherCoverage;
     float noRepeat; // > 0.5: independent cloud layer, do not tile the UVs
+    float layerFade; // 1 = sombra inteira; nuvem de script em dispersao < 1
+    float areaCx;    // nuvem de script: centro da area escurecida (xz)
+    float areaCz;
+    float areaRx;    // semi-eixos da borda do chao escurecido (m)
+    float areaRz;
+    float areaStrength; // 0 = sem area; senao quanto o chao escurece no miolo (0..1)
 } pc;
 
 float sampleShadow(vec2 uv) {
@@ -179,8 +185,17 @@ void main() {
     // geometry shadows (base = sun/(sun+ambient), baked on CPU); thinner
     // clouds scale down linearly with their density. pc.shadowIntensity
     // (Cloud Shadow Opacity slider) stays as a global trim, default 1.0.
-    float shadowAlpha = shadow * pc.baseShadowStrength * pc.shadowIntensity * altitudeSoftening;
+    float shadowAlpha = shadow * pc.baseShadowStrength * pc.shadowIntensity * altitudeSoftening * pc.layerFade;
 
     // Black shadow, alpha driven by coverage.
+    // Area da nuvem de script: disco suave (miolo cheio ate' ~55% do raio, some na
+    // borda) que escurece luz direta e ambiente do chao embaixo. Preto com alfa
+    // sobre a imagem iluminada, como a sombra de cobertura, mas sem o teto do
+    // sol/(sol+ambiente): o ceu fechado tira tambem a ambiente.
+    if (pc.areaStrength > 0.0) {
+        float d = length((worldPos.xz - vec2(pc.areaCx, pc.areaCz)) / vec2(pc.areaRx, pc.areaRz));
+        float area = (1.0 - smoothstep(0.55, 1.0, d)) * pc.areaStrength * pc.layerFade;
+        shadowAlpha = max(shadowAlpha, area);
+    }
     outColor = vec4(0.0, 0.0, 0.0, shadowAlpha);
 }

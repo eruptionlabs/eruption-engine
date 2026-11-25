@@ -24,6 +24,23 @@ static const float kRainNearScale = [] {
     return v > 1.0f ? v : 300.0f;
 }();
 
+// Densidade de gotas por m2 de um seguidor em relacao a das nuvens do campo (1). A do
+// campo e' 3 x 1,5 gotas de referencia por m2 x o multiplicador de fatias (3, no minimo):
+// ~13 gotas/m2. O clima global desenha intensidade x 5 x 6144 gotas na caixa de 80 x 80:
+// ~4,8 x intensidade por m2. O seguidor que pede a intensidade do clima global recebe a
+// razao entre as duas, para a chuva local ter a densidade da chuva de verdade.
+static float followerDensityScale(const WeatherRenderer::RainFollower& f, float globalBoxHeight) {
+    if (f.matchGlobalIntensity <= 0.0f) return 1.0f;
+    const float global = f.matchGlobalIntensity * 5.0f * 6144.0f / (80.0f * 80.0f);
+    const float field = 3.0f * 1.5f * (6144.0f / (80.0f * 80.0f)) * 3.0f;
+    const float heightRatio = f.columnHeight > 1.0f ? glm::clamp(globalBoxHeight / f.columnHeight, 0.1f, 1.0f) : 1.0f;
+    // A chuva global enche uma caixa de 80 m em volta da camera; a visada atravessa ~80 m dela.
+    // Na coluna da nuvem a visada atravessa a pegada inteira, entao a mesma densidade por m2
+    // deixaria muito mais gotas na imagem: encolhe na razao dos comprimentos.
+    const float chord = 0.5f * (f.boxSizeXZ.x + f.boxSizeXZ.y);
+    const float pathRatio = glm::clamp(80.0f / std::max(chord, 1.0f), 0.1f, 1.0f);
+    return glm::clamp(global / field * heightRatio * pathRatio, 0.02f, 1.0f);
+}
 
 namespace {
 
@@ -1386,6 +1403,15 @@ void WeatherRenderer::updateParticlesForWeather(const WeatherParams& weather, co
         // "minimum rain" once the box grew to the whole cloud footprint).
         const float areaScale = maxArea / (80.0f * 80.0f);
         followerPoolScale = glm::clamp(3.0f * 1.5f * areaScale, 1.5f, 80.0f);
+        // Seguidor que pede a densidade do clima global: o pool encolhe pela media (por
+        // area) das densidades pedidas.
+        float areaSum = 0.0f, areaDens = 0.0f;
+        for (const RainFollower& f : m_rainFollowers) {
+            const float a = std::max(f.boxSizeXZ.x * f.boxSizeXZ.y, 1.0f);
+            areaSum += a;
+            areaDens += a * followerDensityScale(f, glm::max(m_cloudBaseHeight * 0.95f, 60.0f));
+        }
+        if (areaSum > 0.0f) followerPoolScale *= areaDens / areaSum;
     }
     const float followerPool = m_rainFollowers.empty() ? 0.0f : followerPoolScale;
     const float baseDensityParticles = 6144.0f; // reference visual density for the 80x80 m box
@@ -1420,7 +1446,7 @@ void WeatherRenderer::updateParticlesForWeather(const WeatherParams& weather, co
     // intensity=1.0 reference; the total pool cap has headroom.
     uint32_t snowCount = uint32_t(cameraUnderCloud * weather.snowIntensity * 8.0f * float(MAX_SNOW_PARTICLES));
     // A neve tambem cai nas caixas debaixo de cada nuvem (followers), como a
-    // chuva: com 40 nuvens o mesmo pool se espalhava por todas e a nevasca
+    // chuva: com 40 nuvens o mesmo pool se espalhava por todas e a neve forte
     // chegava rala na camera. Mesmo multiplicador da chuva, ate' 4x.
     if (!m_rainFollowers.empty() && snowCount > 0) {
         const uint32_t effFollowers = glm::max(static_cast<uint32_t>(m_rainFollowers.size()),
@@ -1518,7 +1544,14 @@ void WeatherRenderer::updateParticlesForWeather(const WeatherParams& weather, co
 
     // Grow (or shrink) the GPU buffer when the dynamic particle count changes.
     if (m_particleCount > m_particleBufferCapacity) {
-        if (m_particleBuffer) vmaDestroyBuffer(m_ctx->allocator(), m_particleBuffer, m_particleAlloc);
+        // Os quadros em voo ainda leem o buffer antigo. Antes quem esperava a GPU
+        // era a geracao de cada nuvem nova (immediateSubmit, logo antes do
+        // render); sem essa espera escondida, o crescimento do pool espera aqui.
+        // Acontece so' quando o pool cresce (troca de clima), nunca por quadro.
+        if (m_particleBuffer) {
+            m_ctx->waitIdle();
+            vmaDestroyBuffer(m_ctx->allocator(), m_particleBuffer, m_particleAlloc);
+        }
         m_particleBufferCapacity = m_particleCount;
         VkDeviceSize newSize = m_particleBufferCapacity * sizeof(WeatherParticleGPU);
         if (!m_ctx->createBuffer(newSize,
@@ -2190,7 +2223,7 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
             // a chuva ficava rala em qualquer camera que visse o campo todo
             // ("nao ta aparecendo os pingos", autor 2026-09-06).
             const float dn = 1.0f + dist / kRainNearScale;
-            const float w = area * std::max(1.0f / (dn * dn), 0.02f);
+            const float w = area * followerDensityScale(f, glm::max(m_cloudBaseHeight * 0.95f, 60.0f)) * std::max(1.0f / (dn * dn), 0.02f);
             weights[i] = w;
             wSum += w;
         }
@@ -2204,7 +2237,9 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
             // z stays > 0 for the altitude-map gate.
             push.cloudRange = Vec4(f.boxCenter.y, f.boxSizeXZ.x,
                                    m_cloudTop - m_cloudBottom, f.boxSizeXZ.y);
-            push.rainBoxCenter = Vec4(f.boxCenter.x, 0.0f, f.boxCenter.z, 1.0f);
+            // w = 2: coluna cilindrica (ver RainFollower::cylinderRadius); 1: caixa do campo.
+            push.rainBoxCenter = Vec4(f.boxCenter.x, 0.0f, f.boxCenter.z, f.cylinderRadius > 0.0f ? 2.0f : 1.0f);
+            if (f.cylinderRadius > 0.0f) push.cloudRange.y = push.cloudRange.w = 2.0f * f.cylinderRadius;
             // ERUPTION_TEST_RAIN_TINT=1 (debug): occluder.w = 2 + follower index, the
             // fragment shader paints each cloud's rain a distinct color.
             static const bool kRainTint = std::getenv("ERUPTION_TEST_RAIN_TINT") != nullptr;
@@ -2216,7 +2251,9 @@ void WeatherRenderer::render(VkCommandBuffer cmd,
             push.params5.w = f.covWind.y;
             // Scale the forced rain intensity by this cloud's loadedness so a
             // small but dark/heavy cloud pours harder than a big light one.
-            push.params.y = std::max(weather.rainIntensity, m_followerRainIntensity * f.rainRate);
+            push.params.y = f.matchGlobalIntensity > 0.0f
+                                ? std::max(weather.rainIntensity, f.matchGlobalIntensity)
+                                : std::max(weather.rainIntensity, m_followerRainIntensity * f.rainRate);
             push.cloudParams.y = static_cast<float>(fi); // own index in the occluder UBO
             if (fi < followerSets.size()) {
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1,
