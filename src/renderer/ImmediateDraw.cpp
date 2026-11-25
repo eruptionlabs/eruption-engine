@@ -65,12 +65,13 @@ bool ImmediateDraw::init(VulkanContext* ctx, VkFormat colorFormat, VkFormat dept
     if (vkCreateDescriptorSetLayout(dev, &dl, nullptr, &m_depthLayout) != VK_SUCCESS) return false;
 
     constexpr uint32_t kFrames = VulkanContext::MAX_FRAMES_IN_FLIGHT;
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxTextures + kFrames};
+    VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxTextures + kFrames},
+                                  {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFrames}};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = kMaxTextures + kFrames;
-    pi.poolSizeCount = 1;
-    pi.pPoolSizes = &ps;
+    pi.maxSets = kMaxTextures + 2 * kFrames;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(dev, &pi, nullptr, &m_pool) != VK_SUCCESS) return false;
 
     {
@@ -84,13 +85,59 @@ bool ImmediateDraw::init(VulkanContext* ctx, VkFormat colorFormat, VkFormat dept
         if (vkAllocateDescriptorSets(dev, &dai, m_depthSets) != VK_SUCCESS) return false;
     }
 
+    // Set 3: luz da cena.
+    {
+        VkDescriptorSetLayoutBinding lb{};
+        lb.binding = 0;
+        lb.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        lb.descriptorCount = 1;
+        lb.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo ll{};
+        ll.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        ll.bindingCount = 1;
+        ll.pBindings = &lb;
+        if (vkCreateDescriptorSetLayout(dev, &ll, nullptr, &m_lightLayout) != VK_SUCCESS) return false;
+        VkDescriptorSetLayout lls[kFrames];
+        for (auto& l : lls) l = m_lightLayout;
+        VkDescriptorSetAllocateInfo dai{};
+        dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dai.descriptorPool = m_pool;
+        dai.descriptorSetCount = kFrames;
+        dai.pSetLayouts = lls;
+        if (vkAllocateDescriptorSets(dev, &dai, m_lightSets) != VK_SUCCESS) return false;
+        for (uint32_t f = 0; f < kFrames; ++f) {
+            VkBufferCreateInfo bi{};
+            bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            bi.size = sizeof(Mat4); // 4 x vec4
+            bi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            VmaAllocationCreateInfo ai{};
+            ai.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+            ai.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            VmaAllocationInfo info{};
+            if (vmaCreateBuffer(ctx->allocator(), &bi, &ai, &m_lightBuf[f], &m_lightAlloc[f], &info) != VK_SUCCESS ||
+                !info.pMappedData)
+                return false;
+            m_lightMap[f] = info.pMappedData;
+            std::memset(m_lightMap[f], 0, sizeof(Mat4));
+            VkDescriptorBufferInfo db{m_lightBuf[f], 0, sizeof(Mat4)};
+            VkWriteDescriptorSet wr{};
+            wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr.dstSet = m_lightSets[f];
+            wr.descriptorCount = 1;
+            wr.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            wr.pBufferInfo = &db;
+            vkUpdateDescriptorSets(dev, 1, &wr, 0, nullptr);
+        }
+    }
+
     // Vertice: viewProj (64 B). Fragmento: material (64 B). Total 128 B, o teto.
     VkPushConstantRange pc[2] = {{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Mat4)},
                                  {VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(Mat4), 16 * sizeof(float)}};
-    const VkDescriptorSetLayout setLayouts[3] = {m_setLayout, m_setLayout, m_depthLayout};
+    const VkDescriptorSetLayout setLayouts[4] = {m_setLayout, m_setLayout, m_depthLayout, m_lightLayout};
     VkPipelineLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    li.setLayoutCount = 3;
+    li.setLayoutCount = 4;
     li.pSetLayouts = setLayouts;
     li.pushConstantRangeCount = 2;
     li.pPushConstantRanges = pc;
@@ -163,6 +210,13 @@ void ImmediateDraw::shutdown() {
     }
     if (m_sampler) vkDestroySampler(dev, m_sampler, nullptr);
     if (m_depthSampler) vkDestroySampler(dev, m_depthSampler, nullptr);
+    for (uint32_t f = 0; f < VulkanContext::MAX_FRAMES_IN_FLIGHT; ++f) {
+        if (m_lightBuf[f]) vmaDestroyBuffer(m_ctx->allocator(), m_lightBuf[f], m_lightAlloc[f]);
+        m_lightBuf[f] = VK_NULL_HANDLE;
+        m_lightMap[f] = nullptr;
+    }
+    if (m_lightLayout) vkDestroyDescriptorSetLayout(dev, m_lightLayout, nullptr);
+    m_lightLayout = VK_NULL_HANDLE;
     if (m_depthLayout) vkDestroyDescriptorSetLayout(dev, m_depthLayout, nullptr);
     m_depthSampler = VK_NULL_HANDLE;
     m_depthLayout = VK_NULL_HANDLE;
@@ -361,6 +415,32 @@ bool ImmediateDraw::loadMesh(const std::string& path, MeshData& out) {
     }
     for (const ModelFileNode& n : mf.nodes) {
         if (n.vertices.empty() || n.indices.size() < 3) continue;
+        // Cor base do material (a 1a textura do no): a imagem do .glb ou o pixel solido
+        // que o parser sintetiza do baseColorFactor.
+        if (!n.textureNames.empty()) {
+            for (const EmbeddedTexture& et : mf.embeddedTextures) {
+                if (et.name != n.textureNames[0]) continue;
+                int w = et.width, h = et.height;
+                std::vector<uint8_t> px;
+                if (et.isDecoded() && et.channels == 4) {
+                    px = et.pixels;
+                } else if (et.hasEncodedData()) {
+                    ImageData img = ImageUtils::loadFromMemory(et.encodedData.data(), et.encodedData.size());
+                    if (img.isValid() && img.channels == 4) {
+                        w = img.width;
+                        h = img.height;
+                        px = std::move(img.pixels);
+                    }
+                }
+                if (!px.empty() && w > 0 && h > 0) {
+                    ImageUtils::downscaleRGBA(w, h, px, 512);
+                    out.baseRgba = std::move(px);
+                    out.baseW = w;
+                    out.baseH = h;
+                }
+                break;
+            }
+        }
         if (n.vertices.size() > kMaxMeshVertices) {
             ERUPTION_LOG_WARN("ImmediateDraw: malha '%s' com %zu vertices (maximo %u)", path.c_str(), n.vertices.size(),
                               kMaxMeshVertices);
@@ -399,6 +479,7 @@ int ImmediateDraw::meshId(const std::string& path) {
         ERUPTION_LOG_WARN("ImmediateDraw: mais de %u malhas diferentes, '%s' ignorada", kMaxMeshes, path.c_str());
     } else if (loadMesh(path, md)) {
         id = int(m_meshData.size());
+        md.path = path;
         m_meshData.push_back(std::move(md));
     } else {
         ERUPTION_LOG_WARN("ImmediateDraw: malha '%s' nao abriu", path.c_str());
@@ -409,12 +490,20 @@ int ImmediateDraw::meshId(const std::string& path) {
 
 void ImmediateDraw::addMesh(int mesh, int tex, const Mat4& xf, const Vec4& tint, Flags flags, const Material* mat) {
     if (!m_ready || mesh < 0 || size_t(mesh) >= m_meshData.size()) return;
+    MeshData& md = m_meshData[size_t(mesh)];
+    // Com luz e sem textura pedida, a cor base do proprio .glb (sobe uma vez por malha).
+    if (tex < 0 && mat && mat->lit) {
+        if (md.baseTex == -2) {
+            md.baseTex = md.baseRgba.empty() ? -1 : addTexture(md.path + "#base", md.baseRgba.data(), md.baseW, md.baseH);
+            std::vector<uint8_t>().swap(md.baseRgba);
+        }
+        tex = md.baseTex;
+    }
     if (tex < 0) {
         static const uint8_t kWhite[4] = {255, 255, 255, 255};
         tex = addTexture("__white", kWhite, 1, 1);
         if (tex < 0) return;
     }
-    const MeshData& md = m_meshData[size_t(mesh)];
     const uint32_t count = uint32_t(md.verts.size());
     if (m_pending + count > kMaxVertices) {
         warnOnce("quadro cheio");
@@ -648,6 +737,13 @@ bool ImmediateDraw::render(VkCommandBuffer cmd, const View& v) {
     const uint32_t frameIdx = m_ctx->currentFrame() % VulkanContext::MAX_FRAMES_IN_FLIGHT;
     writeDepthSet(frameIdx, v.depthView);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 2, 1, &m_depthSets[frameIdx], 0, nullptr);
+    {
+        // Luz da cena (so' le' quem pediu Material::lit; sempre valida).
+        const Vec4 ld[4] = {v.light.sunDir, v.light.sunColor, v.light.ambientSky, v.light.ambientGround};
+        std::memcpy(m_lightMap[frameIdx], ld, sizeof(ld));
+        vmaFlushAllocation(m_ctx->allocator(), m_lightAlloc[frameIdx], 0, sizeof(ld));
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 3, 1, &m_lightSets[frameIdx], 0, nullptr);
+    }
     // Material: flags = 0 (o desenho de sempre) ate' um lote pedir outro.
     auto pushMaterial = [&](uint32_t id) {
         float f[16] = {};
@@ -658,7 +754,7 @@ bool ImmediateDraw::render(VkCommandBuffer cmd, const View& v) {
             f[0] = m.fresnelPower;
             f[1] = m.invert ? 1.0f : 0.0f;
             f[2] = m.softDepth;
-            f[3] = float((m.fresnel ? 1 : 0) | (noise ? 2 : 0) | (m.softDepth > 0.0f ? 4 : 0));
+            f[3] = float((m.fresnel ? 1 : 0) | (noise ? 2 : 0) | (m.softDepth > 0.0f ? 4 : 0) | (m.lit ? 8 : 0));
             f[4] = float(std::fmod(double(m.scrollU) * t, 1.0));
             f[5] = float(std::fmod(double(m.scrollV) * t, 1.0));
             f[6] = m.tileU;

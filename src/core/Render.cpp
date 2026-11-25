@@ -2267,6 +2267,11 @@ void Engine::render() {
             iv.camPos = m_camera.position();
             iv.depthProj = Vec3(pj[2][2], pj[3][2], pj[2][3]);
             iv.time = m_timer.elapsed();
+            // Luz de Material::lit: os mesmos numeros que o deferred le no FrameUBO.
+            iv.light.sunDir = frameUbo.sunDir;
+            iv.light.sunColor = frameUbo.sunColor;
+            iv.light.ambientSky = Vec4(env.ambientSkyColor, frameUbo.giIntensity);
+            iv.light.ambientGround = frameUbo.ambientGround;
             m_vulkan.writeTimestamp(cmd, 18, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             bw::setPass("Script Draw"); // medidor de banda: mesmo nome do tempo de GPU
             const bool drew = m_immediateDraw.render(cmd, iv);

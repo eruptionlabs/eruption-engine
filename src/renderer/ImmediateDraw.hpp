@@ -43,11 +43,15 @@ public:
         float tileU = 1.0f, tileV = 1.0f;
         float erode = 0.0f, erodeSoft = 0.1f;
         float softDepth = 0.0f;            // > 0 liga o fade contra a cena (unidades do mundo)
-        bool any() const { return fresnel || noiseTex >= 0 || softDepth > 0.0f; }
+        // Com luz: sol da cena (cor e direcao) e ambiente hemisferico pela normal da malha,
+        // como o chao iluminado do deferred. Sem sombra e sem IBL/sondas (ver View::Light).
+        bool lit = false;
+        bool any() const { return fresnel || noiseTex >= 0 || softDepth > 0.0f || lit; }
         bool operator==(const Material& o) const {
             return fresnel == o.fresnel && invert == o.invert && fresnelPower == o.fresnelPower &&
                    noiseTex == o.noiseTex && scrollU == o.scrollU && scrollV == o.scrollV && tileU == o.tileU &&
-                   tileV == o.tileV && erode == o.erode && erodeSoft == o.erodeSoft && softDepth == o.softDepth;
+                   tileV == o.tileV && erode == o.erode && erodeSoft == o.erodeSoft && softDepth == o.softDepth &&
+                   lit == o.lit;
         }
     };
 
@@ -104,6 +108,13 @@ public:
         Vec3 camRight{1, 0, 0}, camUp{0, 1, 0};
         float proj11 = 1.0f;      // proj[1][1] sem jitter (cot(fov/2)), para tamanho em pixels
         float screenHeightPx = 1.0f;
+        // Luz da cena para Material::lit (os mesmos numeros do FrameUBO que o deferred usa).
+        struct Light {
+            Vec4 sunDir{0.0f, -1.0f, 0.0f, 0.0f};  // xyz = para onde a luz viaja, w = intensidade
+            Vec4 sunColor{1.0f};                   // rgb
+            Vec4 ambientSky{0.0f};                 // rgb = ceu (zenite), w = intensidade do GI
+            Vec4 ambientGround{0.0f};              // rgb = chao
+        } light;
     };
     // Desenha tudo o que foi pedido e esvazia a lista. Chamar com o rendering
     // fechado. Devolve false se nao desenhou nada.
@@ -134,6 +145,12 @@ private:
     struct MeshData {
         std::vector<Vertex> verts; // modelo (cor branca)
         std::vector<uint16_t> idx;
+        // Cor base do material do .glb (RGBA8, no maximo 512 px); so' sobe para a GPU
+        // no primeiro desenho com `lit` e sem textura pedida.
+        std::vector<uint8_t> baseRgba;
+        int baseW = 0, baseH = 0;
+        int baseTex = -2; // -2 = ainda nao subiu, -1 = sem textura base
+        std::string path;
     };
     struct SpriteCmd {
         Vec3 pos;
@@ -164,6 +181,13 @@ private:
 
     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_depthLayout = VK_NULL_HANDLE; // set 2: profundidade da cena (sempre escrito)
+    // Set 3: luz da cena (UBO de 64 B por quadro em voo), escrito a cada render()
+    // mesmo sem nenhum desenho com luz. Nao cabe em push constant: o material ja' usa os 128 B.
+    VkDescriptorSetLayout m_lightLayout = VK_NULL_HANDLE;
+    VkBuffer m_lightBuf[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
+    VmaAllocation m_lightAlloc[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
+    void* m_lightMap[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
+    VkDescriptorSet m_lightSets[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
     VkSampler m_depthSampler = VK_NULL_HANDLE;
     VkDescriptorSet m_depthSets[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
     VkImageView m_depthSetView[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};

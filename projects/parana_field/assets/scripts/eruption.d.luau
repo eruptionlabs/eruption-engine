@@ -567,7 +567,12 @@ declare world: {
     -- opts: everything draw_strip takes except topology, plus color = { r, g, b, a } |
     -- vector (multiplies the mesh, HDR, default white) and texture = path (default:
     -- plain white, so the material alone shapes it). Also no depth write.
-    draw_mesh: (path: string, transform: (vector | { pos: vector?, rotation: vector?, scale: (number | vector)? }), opts: { blend: string?, depth_test: boolean?, cull: boolean?, color: ({ [any]: number } | vector)?, texture: string?, fresnel: boolean?, fresnel_power: number?, fresnel_invert: boolean?, noise: string?, scroll: vector?, noise_scale: (number | vector)?, erode: number?, erode_soft: number?, soft_depth: number? }?) -> (),
+    -- lit = false: true shades the mesh like a prop instead of drawing it unlit: the
+    -- scene sun (colour, direction, time of day) times N.L plus the hemispheric
+    -- ambient, using the smooth model normals; with no `texture` the .glb's own base
+    -- colour is used (colour then tints it). No shadows, no IBL and no probes on it,
+    -- and the colour stays linear HDR (>1 glows). Without lit nothing changes.
+    draw_mesh: (path: string, transform: (vector | { pos: vector?, rotation: vector?, scale: (number | vector)? }), opts: { blend: string?, depth_test: boolean?, cull: boolean?, color: ({ [any]: number } | vector)?, texture: string?, fresnel: boolean?, fresnel_power: number?, fresnel_invert: boolean?, noise: string?, scroll: vector?, noise_scale: (number | vector)?, erode: number?, erode_soft: number?, soft_depth: number?, lit: boolean? }?) -> (),
     -- Billboard facing the camera, for particles. Call it every frame (see
     -- draw_strip; same texture rules). size: a number (square) or a vector
     -- (x = width, y = height), in WORLD UNITS (meters) by default; with
