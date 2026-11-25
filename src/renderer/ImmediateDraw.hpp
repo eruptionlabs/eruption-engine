@@ -23,11 +23,32 @@ public:
     enum class Blend : uint8_t { Additive = 0, Alpha = 1 };
     enum class Topology : uint8_t { Strip = 0, Quads = 1 };
 
-    // 36 bytes, tudo float32 (nenhum formato de 16 bits: regra dos celulares fracos).
+    // 48 bytes, tudo float32 (nenhum formato de 16 bits: regra dos celulares fracos).
+    // A normal so' conta no fresnel do material; zero = usa a da face.
     struct Vertex {
         float x, y, z;
         float u, v;
         float r, g, b, a;
+        float nx = 0.0f, ny = 0.0f, nz = 0.0f;
+    };
+
+    // Material opcional de um comando (so' mexe no alfa; o padrao e' o desenho
+    // de sempre). Fresnel pela normal, erosao por um ruido rolando em UV e
+    // fade suave contra a profundidade da cena.
+    struct Material {
+        bool fresnel = false, invert = false;
+        float fresnelPower = 2.0f;
+        int noiseTex = -1;                 // textura de ruido (canal R); >= 0 liga a erosao
+        float scrollU = 0.0f, scrollV = 0.0f; // UV por segundo
+        float tileU = 1.0f, tileV = 1.0f;
+        float erode = 0.0f, erodeSoft = 0.1f;
+        float softDepth = 0.0f;            // > 0 liga o fade contra a cena (unidades do mundo)
+        bool any() const { return fresnel || noiseTex >= 0 || softDepth > 0.0f; }
+        bool operator==(const Material& o) const {
+            return fresnel == o.fresnel && invert == o.invert && fresnelPower == o.fresnelPower &&
+                   noiseTex == o.noiseTex && scrollU == o.scrollU && scrollV == o.scrollV && tileU == o.tileU &&
+                   tileV == o.tileV && erode == o.erode && erodeSoft == o.erodeSoft && softDepth == o.softDepth;
+        }
     };
 
     struct Flags {
@@ -39,8 +60,10 @@ public:
     // Teto por quadro (indices de 16 bits). O que passar disso e' descartado,
     // com um aviso por execucao.
     static constexpr uint32_t kMaxVertices = 32768;
-    static constexpr uint32_t kMaxIndices = kMaxVertices * 3;
+    static constexpr uint32_t kMaxIndices = kMaxVertices * 6; // malhas: ~2 triangulos por vertice
     static constexpr uint32_t kMaxTextures = 64;
+    static constexpr uint32_t kMaxMeshVertices = 16384;
+    static constexpr uint32_t kMaxMeshes = 32;
 
     bool init(VulkanContext* ctx, VkFormat colorFormat, VkFormat depthFormat);
     void shutdown();
@@ -56,7 +79,13 @@ public:
     // Reserva `count` vertices de uma strip/lista de quads e devolve onde
     // escreve-los (nulo se nao cabe no quadro). A chamada e' do tamanho certo
     // ou nada: nunca deixa a lista pela metade.
-    Vertex* addGeometry(int tex, Topology topo, Flags flags, uint32_t count);
+    Vertex* addGeometry(int tex, Topology topo, Flags flags, uint32_t count, const Material* mat = nullptr);
+    // Malha .glb do projeto (cache por caminho, a primeira malha com triangulos;
+    // teto de kMaxMeshVertices); -1 se nao abriu (um aviso por caminho).
+    int meshId(const std::string& path);
+    // Desenha a malha `mesh` com `xf` (modelo -> mundo) e a cor `tint` (HDR) a cada
+    // quadro; a normal vai junto para o fresnel.
+    void addMesh(int mesh, int tex, const Mat4& xf, const Vec4& tint, Flags flags, const Material* mat);
     // Billboard: `size` em unidades do mundo, ou em pixels da janela com
     // `pixels`. `rot` em radianos, no plano da tela.
     void addSprite(int tex, const Vec3& pos, float w, float h, const Vec4& rgba, Flags flags, bool pixels, float rot);
@@ -68,6 +97,9 @@ public:
         VkImage colorImage = VK_NULL_HANDLE;
         VkImageView depthView = VK_NULL_HANDLE; // profundidade da cena (DEPTH_STENCIL_READ_ONLY_OPTIMAL)
         VkExtent2D extent{};
+        Vec3 camPos{0.0f};        // fresnel
+        Vec3 depthProj{0.0f};     // P[2][2], P[3][2], P[2][3] da projecao sem jitter (soft contra a cena)
+        double time = 0.0;        // segundos, para o scroll do ruido
         Mat4 viewProj{1.0f};      // a mesma (com jitter) da geometria que escreveu a profundidade
         Vec3 camRight{1, 0, 0}, camUp{0, 1, 0};
         float proj11 = 1.0f;      // proj[1][1] sem jitter (cot(fov/2)), para tamanho em pixels
@@ -77,7 +109,7 @@ public:
     // fechado. Devolve false se nao desenhou nada.
     bool render(VkCommandBuffer cmd, const View& view);
     // Esvazia sem desenhar (quadro sem passe de cena).
-    void discard() { m_cmds.clear(); m_verts.clear(); m_sprites.clear(); m_pending = 0; }
+    void discard() { m_cmds.clear(); m_verts.clear(); m_sprites.clear(); m_idx.clear(); m_mats.clear(); m_pending = 0; }
 
     // Contagens do ultimo render() (telemetria/teste).
     uint32_t lastDraws() const { return m_lastDraws; }
@@ -93,9 +125,15 @@ private:
     struct Cmd {
         int tex;
         uint8_t flags;      // bit0 alpha, bit1 depthTest, bit2 cull
-        uint8_t kind;       // 0 strip, 1 quads, 2 sprite
+        uint8_t kind;       // 0 strip, 1 quads, 2 sprite, 3 malha indexada
         uint32_t first;     // indice em m_verts (geometria) ou m_sprites (sprite)
         uint32_t count;     // vertices (geometria)
+        uint32_t mat = 0;   // 0 = sem material; senao 1 + indice em m_mats
+        uint32_t idxFirst = 0, idxCount = 0; // malha: faixa em m_idx (indices locais ao comando)
+    };
+    struct MeshData {
+        std::vector<Vertex> verts; // modelo (cor branca)
+        std::vector<uint16_t> idx;
     };
     struct SpriteCmd {
         Vec3 pos;
@@ -112,6 +150,9 @@ private:
 
     static uint8_t packFlags(Flags f) { return uint8_t((f.blend == Blend::Alpha ? 1 : 0) | (f.depthTest ? 2 : 0) | (f.cull ? 4 : 0)); }
     VkPipeline pipelineFor(uint8_t flags);
+    uint32_t materialIndex(const Material* mat);
+    bool loadMesh(const std::string& path, MeshData& out);
+    void writeDepthSet(uint32_t frame, VkImageView depthView);
     bool loadTexture(const std::string& path, Texture& out);
     bool uploadTexture(const uint8_t* px, int w, int h, Texture& out);
     void destroyTexture(Texture& t);
@@ -122,6 +163,10 @@ private:
     bool m_ready = false;
 
     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_depthLayout = VK_NULL_HANDLE; // set 2: profundidade da cena (sempre escrito)
+    VkSampler m_depthSampler = VK_NULL_HANDLE;
+    VkDescriptorSet m_depthSets[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
+    VkImageView m_depthSetView[VulkanContext::MAX_FRAMES_IN_FLIGHT] = {};
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     VkPipelineLayout m_layout = VK_NULL_HANDLE;
     VkSampler m_sampler = VK_NULL_HANDLE;
@@ -135,6 +180,10 @@ private:
     std::vector<Cmd> m_cmds;
     std::vector<Vertex> m_verts;
     std::vector<SpriteCmd> m_sprites;
+    std::vector<uint16_t> m_idx;     // indices das malhas do quadro (locais a cada comando)
+    std::vector<Material> m_mats;    // materiais distintos do quadro
+    std::vector<MeshData> m_meshData;
+    std::unordered_map<std::string, int> m_meshIds;
     uint32_t m_pending = 0; // vertices dos comandos da lista (sprites contam 4)
     bool m_warned = false;
     uint32_t m_lastDraws = 0, m_lastVertices = 0;

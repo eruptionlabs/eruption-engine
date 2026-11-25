@@ -542,7 +542,32 @@ declare world: {
     -- depth_write = false (the only supported value: the scene depth is read-only
     -- here, true is ignored with a warning); cull = false (default; true culls
     -- back faces, counter-clockwise is the front).
-    draw_strip: (texture: string, verts: { { pos: vector, u: number?, v: number?, r: number?, g: number?, b: number?, a: number? } }, opts: { blend: string?, topology: string?, depth_test: boolean?, depth_write: boolean?, cull: boolean? }?) -> (),
+    -- MATERIAL (optional, same fields for draw_strip and draw_mesh; all absent =
+    -- the plain drawing above, pixel for pixel). It only changes the alpha, so it
+    -- works with both blends; colour stays HDR (r, g, b may pass 1). Fade in/out
+    -- over a lifetime = scale the vertex alpha (or colour) yourself per frame.
+    --   fresnel = false: alpha *= (1 - |N.V|)^fresnel_power, bright at the
+    --     silhouette (veils, auras); fresnel_invert = true: |N.V|^power, bright
+    --     in the core instead. fresnel_power = 2. Strips have no vertex normal,
+    --     the face normal is used (flat); draw_mesh uses the smooth model normals.
+    --   noise = texture path (red channel), scroll = vector(u per second, v per
+    --     second), noise_scale = number | vector (tiling, default 1), erode = 0..1
+    --     (0 keeps everything, 1 removes everything; animate it for a dissolve),
+    --     erode_soft = 0.1 (width of the soft edge). The noise is sampled with the
+    --     vertex UV, so the UV must run across the surface. Needs `noise`.
+    --   soft_depth = metres: alpha fades to 0 where the effect gets within that
+    --     distance (along the view) of the scene behind it, so there is no hard
+    --     cut at the ground or at a wall. 0 = off.
+    draw_strip: (texture: string, verts: { { pos: vector, u: number?, v: number?, r: number?, g: number?, b: number?, a: number? } }, opts: { blend: string?, topology: string?, depth_test: boolean?, depth_write: boolean?, cull: boolean?, fresnel: boolean?, fresnel_power: number?, fresnel_invert: boolean?, noise: string?, scroll: vector?, noise_scale: (number | vector)?, erode: number?, erode_soft: number?, soft_depth: number? }?) -> (),
+    -- Draws a .glb mesh of the project (the first mesh with triangles, up to 16384
+    -- vertices, 32 different meshes, cached by path) once, THIS frame: call it
+    -- every frame, stop calling it and it is gone (same rules as draw_strip, same
+    -- 32768-vertex budget). transform: a vector (position only) or { pos: vector?,
+    -- rotation: vector? (degrees, like models.set_rotation), scale: number | vector? }.
+    -- opts: everything draw_strip takes except topology, plus color = { r, g, b, a } |
+    -- vector (multiplies the mesh, HDR, default white) and texture = path (default:
+    -- plain white, so the material alone shapes it). Also no depth write.
+    draw_mesh: (path: string, transform: (vector | { pos: vector?, rotation: vector?, scale: (number | vector)? }), opts: { blend: string?, depth_test: boolean?, cull: boolean?, color: ({ [any]: number } | vector)?, texture: string?, fresnel: boolean?, fresnel_power: number?, fresnel_invert: boolean?, noise: string?, scroll: vector?, noise_scale: (number | vector)?, erode: number?, erode_soft: number?, soft_depth: number? }?) -> (),
     -- Billboard facing the camera, for particles. Call it every frame (see
     -- draw_strip; same texture rules). size: a number (square) or a vector
     -- (x = width, y = height), in WORLD UNITS (meters) by default; with

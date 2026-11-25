@@ -2261,6 +2261,12 @@ void Engine::render() {
             iv.camUp = m_camera.up();
             iv.proj11 = m_camera.projNoJitter()[1][1];
             iv.screenHeightPx = float(m_vulkan.swapExtent().height);
+            // Material dos efeitos de script: posicao da camera (fresnel), a projecao
+            // sem jitter (profundidade de vista da cena no soft) e o relogio (scroll do ruido).
+            const Mat4& pj = m_camera.projNoJitter();
+            iv.camPos = m_camera.position();
+            iv.depthProj = Vec3(pj[2][2], pj[3][2], pj[2][3]);
+            iv.time = m_timer.elapsed();
             m_vulkan.writeTimestamp(cmd, 18, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             bw::setPass("Script Draw"); // medidor de banda: mesmo nome do tempo de GPU
             const bool drew = m_immediateDraw.render(cmd, iv);

@@ -1025,6 +1025,43 @@ Vec4 drawColor(lua_State* L, int idx) {
     }
     return c;
 }
+// Material opcional de um efeito (draw_strip / draw_mesh): fresnel, ruido rolando
+// com erosao e fade suave contra a cena. Tudo ausente = o desenho de sempre.
+// Devolve true se algum campo de material veio.
+bool readDrawMaterial(lua_State* L, int t, ImmediateDraw& dr, ImmediateDraw::Material& m) {
+    auto num = [&](const char* k, float def) {
+        lua_getfield(L, t, k);
+        const float v = lua_isnumber(L, -1) ? float(lua_tonumber(L, -1)) : def;
+        lua_pop(L, 1);
+        return v;
+    };
+    m.fresnel = tableBool(L, t, "fresnel", false);
+    m.invert = tableBool(L, t, "fresnel_invert", false);
+    m.fresnelPower = std::max(num("fresnel_power", 2.0f), 0.01f);
+    m.erode = std::clamp(num("erode", 0.0f), 0.0f, 1.0f);
+    m.erodeSoft = std::clamp(num("erode_soft", 0.1f), 0.001f, 1.0f);
+    m.softDepth = std::max(num("soft_depth", 0.0f), 0.0f);
+    lua_getfield(L, t, "scroll");
+    if (lua_isvector(L, -1)) {
+        const float* v = lua_tovector(L, -1);
+        m.scrollU = v[0];
+        m.scrollV = v[1];
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, t, "noise_scale");
+    if (lua_isvector(L, -1)) {
+        const float* v = lua_tovector(L, -1);
+        m.tileU = v[0];
+        m.tileV = v[1];
+    } else if (lua_isnumber(L, -1)) {
+        m.tileU = m.tileV = float(lua_tonumber(L, -1));
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, t, "noise");
+    if (lua_isstring(L, -1)) m.noiseTex = dr.textureId(lua_tostring(L, -1)); // -1 se nao abriu: sem erosao
+    lua_pop(L, 1);
+    return m.any();
+}
 } // namespace
 
 // world.draw_strip(texture, verts, opts?)
@@ -1033,7 +1070,10 @@ int world_draw_strip(lua_State* L) {
     luaL_checktype(L, 2, LUA_TTABLE);
     ImmediateDraw::Flags flags;
     ImmediateDraw::Topology topo = ImmediateDraw::Topology::Strip;
+    ImmediateDraw::Material material;
+    bool hasMaterial = false;
     if (lua_istable(L, 3)) {
+        hasMaterial = readDrawMaterial(L, 3, eng().immediateDraw(), material);
         lua_getfield(L, 3, "blend");
         if (lua_isstring(L, -1)) flags.blend = drawBlend(L, lua_tostring(L, -1));
         lua_pop(L, 1);
@@ -1085,11 +1125,65 @@ int world_draw_strip(lua_State* L) {
             *dst[f] = lua_isnumber(L, -1) ? float(lua_tonumber(L, -1)) : (f < 2 ? 0.0f : 1.0f);
             lua_pop(L, 1);
         }
+        out.nx = out.ny = out.nz = 0.0f; // sem normal: o fresnel usa a da face
         lua_pop(L, 1); // verts[i]
     }
     lua_pop(L, 7); // chaves
-    if (ImmediateDraw::Vertex* w = dr.addGeometry(tex, topo, flags, uint32_t(n)))
+    if (ImmediateDraw::Vertex* w = dr.addGeometry(tex, topo, flags, uint32_t(n), hasMaterial ? &material : nullptr))
         std::memcpy(w, scratch.data(), size_t(topo == ImmediateDraw::Topology::Quads ? (uint32_t(n) & ~3u) : uint32_t(n)) * sizeof(ImmediateDraw::Vertex));
+    return 0;
+}
+
+// world.draw_mesh(path, transform, opts?)
+// transform: vector (so' a posicao) ou { pos, rotation (graus, como models.set_rotation), scale }.
+int world_draw_mesh(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    Vec3 pos(0.0f), rotDeg(0.0f), scale(1.0f);
+    if (lua_isvector(L, 2)) {
+        pos = checkVec3(L, 2);
+    } else if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "pos");
+        if (lua_isvector(L, -1)) pos = checkVec3(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, 2, "rotation");
+        if (lua_isvector(L, -1)) rotDeg = checkVec3(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, 2, "scale");
+        if (lua_isvector(L, -1)) scale = checkVec3(L, -1);
+        else if (lua_isnumber(L, -1)) scale = Vec3(float(lua_tonumber(L, -1)));
+        lua_pop(L, 1);
+    } else {
+        luaL_error(L, "transform must be a vector or { pos, rotation, scale }");
+    }
+    ImmediateDraw::Flags flags;
+    ImmediateDraw::Material material;
+    bool hasMaterial = false;
+    Vec4 tint(1.0f);
+    const char* texPath = nullptr;
+    ImmediateDraw& dr = eng().immediateDraw();
+    if (lua_istable(L, 3)) {
+        lua_getfield(L, 3, "blend");
+        if (lua_isstring(L, -1)) flags.blend = drawBlend(L, lua_tostring(L, -1));
+        lua_pop(L, 1);
+        flags.depthTest = tableBool(L, 3, "depth_test", true);
+        flags.cull = tableBool(L, 3, "cull", false);
+        lua_getfield(L, 3, "color");
+        if (!lua_isnil(L, -1)) tint = drawColor(L, lua_gettop(L));
+        lua_pop(L, 1);
+        lua_getfield(L, 3, "texture");
+        if (lua_isstring(L, -1)) texPath = lua_tostring(L, -1);
+        lua_pop(L, 1);
+        if (dr.ready()) hasMaterial = readDrawMaterial(L, 3, dr, material);
+    }
+    if (!dr.ready()) return 0;
+    const int mesh = dr.meshId(path);
+    if (mesh < 0) return 0;
+    const int tex = texPath ? dr.textureId(texPath) : -1;
+    if (texPath && tex < 0) return 0;
+    Mat4 m = glm::translate(Mat4(1.0f), pos);
+    m *= glm::eulerAngleYXZ(glm::radians(rotDeg.y), glm::radians(rotDeg.x), glm::radians(rotDeg.z));
+    m = glm::scale(m, scale);
+    dr.addMesh(mesh, tex, m, tint, flags, hasMaterial ? &material : nullptr);
     return 0;
 }
 
@@ -3333,7 +3427,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         ERUPTION_API_FN(world, load_distance),
         ERUPTION_API_FN(world, warp_map), ERUPTION_API_FN(world, warping),
         ERUPTION_API_FN(world, preload_map),
-        ERUPTION_API_FN(world, draw_strip), ERUPTION_API_FN(world, draw_sprite), {nullptr, nullptr}};
+        ERUPTION_API_FN(world, draw_strip), ERUPTION_API_FN(world, draw_mesh), ERUPTION_API_FN(world, draw_sprite), {nullptr, nullptr}};
     static const luaL_Reg player[] = {
         ERUPTION_API_FN(player, position), ERUPTION_API_FN(player, set_position), ERUPTION_API_FN(player, set_sprite), ERUPTION_API_FN(player, near),
         ERUPTION_API_FN(player, inside), ERUPTION_API_FN(player, say), ERUPTION_API_FN(player, play), ERUPTION_API_FN(player, animation),
@@ -3975,7 +4069,32 @@ declare world: {
     -- depth_write = false (the only supported value: the scene depth is read-only
     -- here, true is ignored with a warning); cull = false (default; true culls
     -- back faces, counter-clockwise is the front).
-    draw_strip: (texture: string, verts: { { pos: vector, u: number?, v: number?, r: number?, g: number?, b: number?, a: number? } }, opts: { blend: string?, topology: string?, depth_test: boolean?, depth_write: boolean?, cull: boolean? }?) -> (),
+    -- MATERIAL (optional, same fields for draw_strip and draw_mesh; all absent =
+    -- the plain drawing above, pixel for pixel). It only changes the alpha, so it
+    -- works with both blends; colour stays HDR (r, g, b may pass 1). Fade in/out
+    -- over a lifetime = scale the vertex alpha (or colour) yourself per frame.
+    --   fresnel = false: alpha *= (1 - |N.V|)^fresnel_power, bright at the
+    --     silhouette (veils, auras); fresnel_invert = true: |N.V|^power, bright
+    --     in the core instead. fresnel_power = 2. Strips have no vertex normal,
+    --     the face normal is used (flat); draw_mesh uses the smooth model normals.
+    --   noise = texture path (red channel), scroll = vector(u per second, v per
+    --     second), noise_scale = number | vector (tiling, default 1), erode = 0..1
+    --     (0 keeps everything, 1 removes everything; animate it for a dissolve),
+    --     erode_soft = 0.1 (width of the soft edge). The noise is sampled with the
+    --     vertex UV, so the UV must run across the surface. Needs `noise`.
+    --   soft_depth = metres: alpha fades to 0 where the effect gets within that
+    --     distance (along the view) of the scene behind it, so there is no hard
+    --     cut at the ground or at a wall. 0 = off.
+    draw_strip: (texture: string, verts: { { pos: vector, u: number?, v: number?, r: number?, g: number?, b: number?, a: number? } }, opts: { blend: string?, topology: string?, depth_test: boolean?, depth_write: boolean?, cull: boolean?, fresnel: boolean?, fresnel_power: number?, fresnel_invert: boolean?, noise: string?, scroll: vector?, noise_scale: (number | vector)?, erode: number?, erode_soft: number?, soft_depth: number? }?) -> (),
+    -- Draws a .glb mesh of the project (the first mesh with triangles, up to 16384
+    -- vertices, 32 different meshes, cached by path) once, THIS frame: call it
+    -- every frame, stop calling it and it is gone (same rules as draw_strip, same
+    -- 32768-vertex budget). transform: a vector (position only) or { pos: vector?,
+    -- rotation: vector? (degrees, like models.set_rotation), scale: number | vector? }.
+    -- opts: everything draw_strip takes except topology, plus color = { r, g, b, a } |
+    -- vector (multiplies the mesh, HDR, default white) and texture = path (default:
+    -- plain white, so the material alone shapes it). Also no depth write.
+    draw_mesh: (path: string, transform: (vector | { pos: vector?, rotation: vector?, scale: (number | vector)? }), opts: { blend: string?, depth_test: boolean?, cull: boolean?, color: ({ [any]: number } | vector)?, texture: string?, fresnel: boolean?, fresnel_power: number?, fresnel_invert: boolean?, noise: string?, scroll: vector?, noise_scale: (number | vector)?, erode: number?, erode_soft: number?, soft_depth: number? }?) -> (),
     -- Billboard facing the camera, for particles. Call it every frame (see
     -- draw_strip; same texture rules). size: a number (square) or a vector
     -- (x = width, y = height), in WORLD UNITS (meters) by default; with

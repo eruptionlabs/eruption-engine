@@ -5,12 +5,16 @@
 #include "core/Logger.hpp"
 #include "core/Project.hpp"
 #include "utils/ImageUtils.hpp"
+#include "utils/AssetVfs.hpp"
+#include "formats/GltfParser.hpp"
 
 #include <stb_image.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <glm/gtc/matrix_inverse.hpp>
 
 namespace eruption {
 
@@ -55,21 +59,41 @@ bool ImmediateDraw::init(VulkanContext* ctx, VkFormat colorFormat, VkFormat dept
     dl.pBindings = &bind;
     if (vkCreateDescriptorSetLayout(dev, &dl, nullptr, &m_setLayout) != VK_SUCCESS) return false;
 
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxTextures};
+    // Set 2: profundidade da cena para o soft do material. Existe e e' escrito a
+    // cada quadro mesmo sem nenhum material (regra do AGENTS.md: todo descritor
+    // que o pipeline usa fica valido).
+    if (vkCreateDescriptorSetLayout(dev, &dl, nullptr, &m_depthLayout) != VK_SUCCESS) return false;
+
+    constexpr uint32_t kFrames = VulkanContext::MAX_FRAMES_IN_FLIGHT;
+    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxTextures + kFrames};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = kMaxTextures;
+    pi.maxSets = kMaxTextures + kFrames;
     pi.poolSizeCount = 1;
     pi.pPoolSizes = &ps;
     if (vkCreateDescriptorPool(dev, &pi, nullptr, &m_pool) != VK_SUCCESS) return false;
 
-    VkPushConstantRange pc{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Mat4)}; // 64 bytes
+    {
+        VkDescriptorSetLayout dls[kFrames];
+        for (auto& l : dls) l = m_depthLayout;
+        VkDescriptorSetAllocateInfo dai{};
+        dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dai.descriptorPool = m_pool;
+        dai.descriptorSetCount = kFrames;
+        dai.pSetLayouts = dls;
+        if (vkAllocateDescriptorSets(dev, &dai, m_depthSets) != VK_SUCCESS) return false;
+    }
+
+    // Vertice: viewProj (64 B). Fragmento: material (64 B). Total 128 B, o teto.
+    VkPushConstantRange pc[2] = {{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Mat4)},
+                                 {VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(Mat4), 16 * sizeof(float)}};
+    const VkDescriptorSetLayout setLayouts[3] = {m_setLayout, m_setLayout, m_depthLayout};
     VkPipelineLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    li.setLayoutCount = 1;
-    li.pSetLayouts = &m_setLayout;
-    li.pushConstantRangeCount = 1;
-    li.pPushConstantRanges = &pc;
+    li.setLayoutCount = 3;
+    li.pSetLayouts = setLayouts;
+    li.pushConstantRangeCount = 2;
+    li.pPushConstantRanges = pc;
     if (vkCreatePipelineLayout(dev, &li, nullptr, &m_layout) != VK_SUCCESS) return false;
 
     // REPEAT: o U de um disco "rolando" passa de 1. Linear + mip linear, sem anisotropia.
@@ -80,6 +104,13 @@ bool ImmediateDraw::init(VulkanContext* ctx, VkFormat colorFormat, VkFormat dept
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     si.maxLod = VK_LOD_CLAMP_NONE;
     if (vkCreateSampler(dev, &si, nullptr, &m_sampler) != VK_SUCCESS) return false;
+    // Profundidade: vizinho mais proximo (D32 nao aceita linear em PowerVR) e sem repeticao.
+    VkSamplerCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    ds.magFilter = ds.minFilter = VK_FILTER_NEAREST;
+    ds.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    ds.addressModeU = ds.addressModeV = ds.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(dev, &ds, nullptr, &m_depthSampler) != VK_SUCCESS) return false;
 
     // Anel: um par vertices/indices por quadro em voo, mapeado de forma
     // persistente. Nada e' alocado depois daqui.
@@ -131,6 +162,13 @@ void ImmediateDraw::shutdown() {
         f = FrameBuf{};
     }
     if (m_sampler) vkDestroySampler(dev, m_sampler, nullptr);
+    if (m_depthSampler) vkDestroySampler(dev, m_depthSampler, nullptr);
+    if (m_depthLayout) vkDestroyDescriptorSetLayout(dev, m_depthLayout, nullptr);
+    m_depthSampler = VK_NULL_HANDLE;
+    m_depthLayout = VK_NULL_HANDLE;
+    for (auto& v : m_depthSetView) v = VK_NULL_HANDLE;
+    m_meshData.clear();
+    m_meshIds.clear();
     if (m_pool) vkDestroyDescriptorPool(dev, m_pool, nullptr);
     if (m_layout) vkDestroyPipelineLayout(dev, m_layout, nullptr);
     if (m_setLayout) vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
@@ -271,7 +309,16 @@ void ImmediateDraw::warnOnce(const char* what) {
     ERUPTION_LOG_WARN("ImmediateDraw: %s (teto de %u vertices por quadro); o excesso e' descartado", what, kMaxVertices);
 }
 
-ImmediateDraw::Vertex* ImmediateDraw::addGeometry(int tex, Topology topo, Flags flags, uint32_t count) {
+uint32_t ImmediateDraw::materialIndex(const Material* mat) {
+    if (!mat || !mat->any()) return 0;
+    for (size_t i = 0; i < m_mats.size(); ++i)
+        if (m_mats[i] == *mat) return uint32_t(i) + 1;
+    m_mats.push_back(*mat);
+    return uint32_t(m_mats.size());
+}
+
+ImmediateDraw::Vertex* ImmediateDraw::addGeometry(int tex, Topology topo, Flags flags, uint32_t count,
+                                                  const Material* mat) {
     if (!m_ready || tex < 0) return nullptr;
     if (topo == Topology::Quads) count &= ~3u;
     if (count < (topo == Topology::Quads ? 4u : 3u)) return nullptr;
@@ -281,7 +328,7 @@ ImmediateDraw::Vertex* ImmediateDraw::addGeometry(int tex, Topology topo, Flags 
     }
     const uint32_t first = uint32_t(m_verts.size());
     m_verts.resize(m_verts.size() + count);
-    m_cmds.push_back({tex, packFlags(flags), uint8_t(topo == Topology::Quads ? 1 : 0), first, count});
+    m_cmds.push_back({tex, packFlags(flags), uint8_t(topo == Topology::Quads ? 1 : 0), first, count, materialIndex(mat), 0, 0});
     m_pending += count;
     return m_verts.data() + first;
 }
@@ -295,8 +342,113 @@ void ImmediateDraw::addSprite(int tex, const Vec3& pos, float w, float h, const 
     }
     const uint32_t first = uint32_t(m_sprites.size());
     m_sprites.push_back({pos, w, h, rot, rgba, pixels});
-    m_cmds.push_back({tex, packFlags(flags), 2, first, 4});
+    m_cmds.push_back({tex, packFlags(flags), 2, first, 4, 0, 0, 0});
     m_pending += 4;
+}
+
+// Primeira malha com triangulos do .glb (como as malhas de emissor do VFX: nos
+// sem hierarquia, cor de vertice ignorada).
+bool ImmediateDraw::loadMesh(const std::string& path, MeshData& out) {
+    std::filesystem::path p = project::gameRef(path);
+    if (!vfs::exists(p)) p = project::engine(path);
+    std::vector<uint8_t> bytes;
+    if (!vfs::read(p.string(), bytes)) return false;
+    ModelFile mf;
+    try {
+        mf = GltfParser::parse(bytes, p.parent_path().string());
+    } catch (...) {
+        return false;
+    }
+    for (const ModelFileNode& n : mf.nodes) {
+        if (n.vertices.empty() || n.indices.size() < 3) continue;
+        if (n.vertices.size() > kMaxMeshVertices) {
+            ERUPTION_LOG_WARN("ImmediateDraw: malha '%s' com %zu vertices (maximo %u)", path.c_str(), n.vertices.size(),
+                              kMaxMeshVertices);
+            return false;
+        }
+        out.verts.resize(n.vertices.size());
+        for (size_t i = 0; i < n.vertices.size(); ++i) {
+            Vertex& v = out.verts[i];
+            v = Vertex{};
+            v.x = n.vertices[i].x; v.y = n.vertices[i].y; v.z = n.vertices[i].z;
+            if (i < n.texCoords.size()) { v.u = n.texCoords[i].x; v.v = n.texCoords[i].y; }
+            if (i < n.normals.size()) { v.nx = n.normals[i].x; v.ny = n.normals[i].y; v.nz = n.normals[i].z; }
+            v.r = v.g = v.b = v.a = 1.0f;
+        }
+        const size_t tris = n.indices.size() / 3;
+        for (size_t i = 0; i < tris * 3; ++i) {
+            if (n.indices[i] >= n.vertices.size()) {
+                out.verts.clear();
+                out.idx.clear();
+                return false;
+            }
+            out.idx.push_back(uint16_t(n.indices[i]));
+        }
+        return true;
+    }
+    return false;
+}
+
+int ImmediateDraw::meshId(const std::string& path) {
+    if (!m_ready) return -1;
+    auto it = m_meshIds.find(path);
+    if (it != m_meshIds.end()) return it->second;
+    int id = -1;
+    MeshData md;
+    if (m_meshData.size() >= kMaxMeshes) {
+        ERUPTION_LOG_WARN("ImmediateDraw: mais de %u malhas diferentes, '%s' ignorada", kMaxMeshes, path.c_str());
+    } else if (loadMesh(path, md)) {
+        id = int(m_meshData.size());
+        m_meshData.push_back(std::move(md));
+    } else {
+        ERUPTION_LOG_WARN("ImmediateDraw: malha '%s' nao abriu", path.c_str());
+    }
+    m_meshIds.emplace(path, id); // a falha tambem fica em cache
+    return id;
+}
+
+void ImmediateDraw::addMesh(int mesh, int tex, const Mat4& xf, const Vec4& tint, Flags flags, const Material* mat) {
+    if (!m_ready || mesh < 0 || size_t(mesh) >= m_meshData.size()) return;
+    if (tex < 0) {
+        static const uint8_t kWhite[4] = {255, 255, 255, 255};
+        tex = addTexture("__white", kWhite, 1, 1);
+        if (tex < 0) return;
+    }
+    const MeshData& md = m_meshData[size_t(mesh)];
+    const uint32_t count = uint32_t(md.verts.size());
+    if (m_pending + count > kMaxVertices) {
+        warnOnce("quadro cheio");
+        return;
+    }
+    const Mat3 nm = glm::transpose(glm::inverse(Mat3(xf)));
+    const uint32_t first = uint32_t(m_verts.size());
+    m_verts.resize(m_verts.size() + count);
+    for (uint32_t i = 0; i < count; ++i) {
+        const Vertex& s = md.verts[i];
+        Vertex& d = m_verts[first + i];
+        const Vec3 p = Vec3(xf * Vec4(s.x, s.y, s.z, 1.0f));
+        Vec3 n = nm * Vec3(s.nx, s.ny, s.nz);
+        const float nl = glm::length(n);
+        n = nl > 1e-6f ? n / nl : Vec3(0.0f);
+        d = {p.x, p.y, p.z, s.u, s.v, tint.r, tint.g, tint.b, tint.a, n.x, n.y, n.z};
+    }
+    const uint32_t idxFirst = uint32_t(m_idx.size());
+    m_idx.insert(m_idx.end(), md.idx.begin(), md.idx.end());
+    m_cmds.push_back({tex, packFlags(flags), 3, first, count, materialIndex(mat), idxFirst, uint32_t(md.idx.size())});
+    m_pending += count;
+}
+
+void ImmediateDraw::writeDepthSet(uint32_t frame, VkImageView depthView) {
+    if (m_depthSetView[frame] == depthView) return;
+    VkDescriptorImageInfo ii{m_depthSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet wr{};
+    wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr.dstSet = m_depthSets[frame];
+    wr.descriptorCount = 1;
+    wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wr.pImageInfo = &ii;
+    vkUpdateDescriptorSets(m_ctx->device(), 1, &wr, 0, nullptr);
+    m_depthSetView[frame] = depthView;
 }
 
 VkPipeline ImmediateDraw::pipelineFor(uint8_t flags) {
@@ -314,16 +466,17 @@ VkPipeline ImmediateDraw::pipelineFor(uint8_t flags) {
     stages[1].pName = "main";
 
     VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription attrs[3] = {
+    VkVertexInputAttributeDescription attrs[4] = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, x)},
         {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, u)},
         {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, r)},
+        {3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, nx)},
     };
     VkPipelineVertexInputStateCreateInfo vin{};
     vin.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vin.vertexBindingDescriptionCount = 1;
     vin.pVertexBindingDescriptions = &binding;
-    vin.vertexAttributeDescriptionCount = 3;
+    vin.vertexAttributeDescriptionCount = 4;
     vin.pVertexAttributeDescriptions = attrs;
 
     VkPipelineColorBlendAttachmentState blend{};
@@ -358,7 +511,7 @@ VkPipeline ImmediateDraw::pipelineFor(uint8_t flags) {
 }
 
 bool ImmediateDraw::render(VkCommandBuffer cmd, const View& v) {
-    struct Batch { int tex; uint8_t flags; uint32_t firstIndex, indexCount; };
+    struct Batch { int tex; uint8_t flags; uint32_t mat, firstIndex, indexCount; };
     static thread_local std::vector<Batch> batches;
     batches.clear();
     m_lastDraws = m_lastVertices = 0;
@@ -381,7 +534,8 @@ bool ImmediateDraw::render(VkCommandBuffer cmd, const View& v) {
             const Cmd& ca = m_cmds[a];
             const Cmd& cb = m_cmds[b];
             if (ca.tex != cb.tex) return ca.tex < cb.tex;
-            return ca.flags < cb.flags;
+            if (ca.flags != cb.flags) return ca.flags < cb.flags;
+            return ca.mat < cb.mat;
         });
         i = j;
     }
@@ -398,6 +552,7 @@ bool ImmediateDraw::render(VkCommandBuffer cmd, const View& v) {
         const Cmd& c = m_cmds[oi];
         const uint32_t need = c.kind == 2 ? 4u : c.count;
         if (nv + need > kMaxVertices) continue;
+        if (ni + (c.kind == 3 ? c.idxCount : (c.kind == 2 ? 6u : c.count * 3u)) > kMaxIndices) continue;
         const uint32_t base = nv;
         uint32_t idxStart = ni;
         if (c.kind == 2) {
@@ -423,7 +578,9 @@ bool ImmediateDraw::render(VkCommandBuffer cmd, const View& v) {
         } else {
             std::memcpy(vout + nv, m_verts.data() + c.first, size_t(c.count) * sizeof(Vertex));
             nv += c.count;
-            if (c.kind == 1) {
+            if (c.kind == 3) {
+                for (uint32_t k = 0; k < c.idxCount; ++k) iout[ni++] = uint16_t(base + m_idx[c.idxFirst + k]);
+            } else if (c.kind == 1) {
                 for (uint32_t q = 0; q + 4 <= c.count; q += 4) {
                     const uint16_t b = uint16_t(base + q);
                     iout[ni++] = b; iout[ni++] = uint16_t(b + 1); iout[ni++] = uint16_t(b + 2);
@@ -439,16 +596,20 @@ bool ImmediateDraw::render(VkCommandBuffer cmd, const View& v) {
             }
         }
         if (!batches.empty() && batches.back().tex == c.tex && batches.back().flags == c.flags &&
-            batches.back().firstIndex + batches.back().indexCount == idxStart)
+            batches.back().mat == c.mat && batches.back().firstIndex + batches.back().indexCount == idxStart)
             batches.back().indexCount += ni - idxStart;
         else
-            batches.push_back({c.tex, c.flags, idxStart, ni - idxStart});
+            batches.push_back({c.tex, c.flags, c.mat, idxStart, ni - idxStart});
     }
     m_cmds.clear();
     m_verts.clear();
     m_sprites.clear();
+    m_idx.clear();
     m_pending = 0;
-    if (batches.empty() || ni == 0) return false;
+    if (batches.empty() || ni == 0) {
+        m_mats.clear();
+        return false;
+    }
     vmaFlushAllocation(m_ctx->allocator(), fb.vbAlloc, 0, VkDeviceSize(nv) * sizeof(Vertex));
     vmaFlushAllocation(m_ctx->allocator(), fb.ibAlloc, 0, VkDeviceSize(ni) * sizeof(uint16_t));
 
@@ -484,6 +645,38 @@ bool ImmediateDraw::render(VkCommandBuffer cmd, const View& v) {
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Mat4), &v.viewProj);
+    const uint32_t frameIdx = m_ctx->currentFrame() % VulkanContext::MAX_FRAMES_IN_FLIGHT;
+    writeDepthSet(frameIdx, v.depthView);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 2, 1, &m_depthSets[frameIdx], 0, nullptr);
+    // Material: flags = 0 (o desenho de sempre) ate' um lote pedir outro.
+    auto pushMaterial = [&](uint32_t id) {
+        float f[16] = {};
+        if (id != 0) {
+            const Material& m = m_mats[id - 1];
+            const bool noise = m.noiseTex >= 0;
+            const double t = v.time;
+            f[0] = m.fresnelPower;
+            f[1] = m.invert ? 1.0f : 0.0f;
+            f[2] = m.softDepth;
+            f[3] = float((m.fresnel ? 1 : 0) | (noise ? 2 : 0) | (m.softDepth > 0.0f ? 4 : 0));
+            f[4] = float(std::fmod(double(m.scrollU) * t, 1.0));
+            f[5] = float(std::fmod(double(m.scrollV) * t, 1.0));
+            f[6] = m.tileU;
+            f[7] = m.tileV;
+            f[8] = m.erode;
+            f[9] = m.erodeSoft;
+            f[10] = v.depthProj.x;
+            f[11] = v.depthProj.y;
+            f[12] = v.depthProj.z;
+            f[13] = v.camPos.x;
+            f[14] = v.camPos.y;
+            f[15] = v.camPos.z;
+        }
+        vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(Mat4), sizeof(f), f);
+    };
+    pushMaterial(0);
+    uint32_t boundMat = 0;
+    int boundNoise = -2;
     const VkDeviceSize zero = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &fb.vb, &zero);
     vkCmdBindIndexBuffer(cmd, fb.ib, 0, VK_INDEX_TYPE_UINT16);
@@ -501,10 +694,25 @@ bool ImmediateDraw::render(VkCommandBuffer cmd, const View& v) {
                                     nullptr);
             boundTex = b.tex;
         }
+        if (b.mat != boundMat) {
+            pushMaterial(b.mat);
+            boundMat = b.mat;
+        }
+        // Set 1 (ruido) sempre valido: sem ruido, a propria textura do lote.
+        const int noiseTex = b.mat != 0 && m_mats[b.mat - 1].noiseTex >= 0 &&
+                                     size_t(m_mats[b.mat - 1].noiseTex) < m_textures.size()
+                                 ? m_mats[b.mat - 1].noiseTex
+                                 : b.tex;
+        if (noiseTex != boundNoise) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, 1, &m_textures[size_t(noiseTex)].set,
+                                    0, nullptr);
+            boundNoise = noiseTex;
+        }
         vkCmdDrawIndexed(cmd, b.indexCount, 1, b.firstIndex, 0, 0);
         ++m_lastDraws;
     }
     vkc::cmdEndRendering(cmd);
+    m_mats.clear();
     m_lastVertices = nv;
     return true;
 }
