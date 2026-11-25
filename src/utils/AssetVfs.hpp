@@ -123,6 +123,9 @@ size_t recordedCount();
 struct Recorded {
     std::string path; // absoluto, normalizado
     uint8_t access = 0; // 1 existe?, 2 tamanho/data, 3 conteudo
+    // Vazio: o conteudo sai do proprio `path`. Preenchido: sai deste arquivo e entra no pacote
+    // com a chave `path` (a grade de sondas cozida no cache do usuario vai como <mapa>.glb.probes).
+    std::string source;
 };
 std::vector<Recorded> endRecord();
 // Acrescenta um arquivo ao que o build anotou (gerado fora do vfs).

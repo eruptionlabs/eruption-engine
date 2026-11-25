@@ -50,6 +50,10 @@ public:
         // deixa de fora e sai limpo, como o exportado.
         bool devTools = false;
         bool fastLoad = false; // "fast_load": sem PBR neural nem tela de "compiling shaders"
+        // "probe_cache": "beside" - a grade de sondas cozida vai ao lado do .glb do mapa
+        // (<mapa>.glb.probes, dentro dos assets do projeto). Vazio: o cache do usuario
+        // (utils/ProbeCachePath.hpp). A leitura aceita os dois nos dois casos.
+        std::string probeCache;
         // TELA DE CARGA (bloco "loading", todas as chaves opcionais). Com o
         // bloco, o motor mostra so' a barra padrao assim ajustada, do primeiro
         // quadro do boot ao fim de cada carga de mapa - sem o logo do motor e

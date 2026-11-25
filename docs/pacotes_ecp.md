@@ -80,6 +80,12 @@ continuam entrando no `PackManager` (texturas de modelo antigas).
   o pacote traz uma copia (`.etexpack`, `.probes`), ela e' lida e validada como
   sempre (impressao digital do `.glb` lido do pacote); sem copia, o motor gera
   e grava como sempre.
+  Excecao: a grade de sondas (`.probes`) o PC grava por padrao no cache do
+  usuario (`$XDG_CACHE_HOME/eruption/probes`, ou `ERUPTION_PROBE_CACHE_DIR`), nao
+  dentro dos assets do projeto; `"probe_cache": "beside"` no `project.eruption`
+  volta a gravar ao lado do `.glb`. A leitura olha o `.glb.probes` ao lado (e o
+  do pacote) primeiro e o cache depois; `--bake-map` e `build_apk.sh` levam a
+  grade para o pacote de onde quer que ela esteja.
 - Saves, `preset_override.txt`, `editor_layout.ini`, telemetria e saidas de teste.
 - `project.eruption` (o manifesto) e o proprio `packs/`: ficam soltos.
 - Audio (`audio.*`, modulo opcional que toca por caminho de arquivo) e o icone

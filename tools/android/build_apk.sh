@@ -104,6 +104,14 @@ else
         # .glb.probes: grade de visibilidade do ceu cozida no PC (o celular so' le').
         find -L "$src" -maxdepth 1 -type f \( -name '*.glb' -o -name '*.ter' -o -name '*.nav' -o -name '*.env' -o -name '*.glb.probes' -o -name '*.relevo' \) |
             while read -r f; do printf 'assets/external/%s/%s\t%s\n' "$m" "$(basename "$f")" "$f"; done
+        # Sem .glb.probes ao lado (o PC grava no cache do usuario por padrao): o mais novo de
+        # <cache>/eruption/probes/<mapa>.glb-*.probes, que e' o que a carga do PC gravou.
+        if [ ! -f "$src/$m.glb.probes" ]; then
+            pc="${ERUPTION_PROBE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/eruption/probes}"
+            newest=$(ls -t "$pc/$m.glb-"*.probes 2>/dev/null | head -n1 || true)
+            if [ -n "$newest" ]; then printf 'assets/external/%s/%s.glb.probes\t%s\n' "$m" "$m" "$newest"
+            else echo "aviso: sem grade de sondas para $m (rode o PC com este mapa uma vez; o celular fica sem sondas)" >&2; fi
+        fi
         # Pacote de texturas assado para o celular (tools/android/bake_mobile_pack.sh):
         # PBR da rede neural, que o celular nao roda. So' vale com o .glb original.
         if [ "${ERUPTION_APK_JPEG:-1}" = "0" ] && [ -f "$src/$m.glb.1024s.mobile.etexpack" ]; then

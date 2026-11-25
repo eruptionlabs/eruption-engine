@@ -27,6 +27,7 @@
 #include "formats/GroundPack.hpp"
 #include "formats/MapLoader.hpp"
 #include "core/LoadPump.hpp"
+#include "utils/ProbeCachePath.hpp"
 #include <future>
 #include "formats/ModelDataConverter.hpp"
 #include "scene/SceneEdits.hpp"
@@ -1045,12 +1046,21 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
             mx = glm::max(mx, imx);
         }
         const bool haveBounds = mx.x > mn.x && mx.z > mn.z;
-        // Grade em disco ao lado do GLB do mapa: quem coze grava, quem nao
-        // coze (celular) so' le'.
-        const std::string probeCache = m_currentMap && !m_currentMap->models.empty()
-            ? project::gameRef(m_currentMap->models.front().filePath).string() + ".probes" : std::string();
-        const uint64_t contentKey = (m_irradianceProbesEnabled && !probeCache.empty())
-            ? mapContentKey(probeCache.substr(0, probeCache.size() - 7), m_currentMapName) : 0;
+        // Grade em disco: quem coze grava, quem nao coze (celular) so' le'. Leitura:
+        // ao lado do GLB do mapa (o que vai em pacotes e APKs) e, se nao serve, o
+        // cache do usuario. Escrita: o cache do usuario, a menos que o projeto peca
+        // "probe_cache": "beside" (utils/ProbeCachePath.hpp) - o motor nao escreve
+        // dentro dos assets do projeto sem ser pedido.
+        const std::string glbPath = m_currentMap && !m_currentMap->models.empty()
+            ? project::gameRef(m_currentMap->models.front().filePath).string() : std::string();
+        const std::string probeBeside = glbPath.empty() ? std::string() : probecache::besideFile(glbPath);
+        const std::string probeUser = probecache::userFile(glbPath);
+        const bool probeWriteBeside = probecache::writePolicy(project::isOpen() ? Project::instance().manifest().probeCache
+                                                                                 : std::string()) ==
+                                      probecache::WritePolicy::Beside;
+        const std::string probeWrite = probeWriteBeside || probeUser.empty() ? probeBeside : probeUser;
+        const uint64_t contentKey = (m_irradianceProbesEnabled && !glbPath.empty())
+            ? mapContentKey(glbPath, m_currentMapName) : 0;
         loadPhase("probes: chave");
         bool ready = false;
         m_probeBakedInstances = SIZE_MAX;
@@ -1062,10 +1072,17 @@ bool Engine::loadMap(const std::string& name, std::shared_ptr<LoadedMap> preload
                                                 m_shadowRenderer.shadowPipeline(), m_shadowRenderer.shadowLayout(),
                                                 m_shadowRenderer.shadowInstPipeline(), m_shadowRenderer.shadowInstLayout(),
                                                 &m_bindless, mn, mx);
-                if (ready && !probeCache.empty()) m_irradianceProbes.saveCache(probeCache, mn, mx, contentKey);
+                if (ready && !probeWrite.empty()) {
+                    if (probeWrite == probeUser) {
+                        std::error_code dec;
+                        std::filesystem::create_directories(std::filesystem::path(probeUser).parent_path(), dec);
+                    }
+                    m_irradianceProbes.saveCache(probeWrite, mn, mx, contentKey);
+                }
                 if (ready) m_probeBakedInstances = m_modelRenderer.instanceCount();
-            } else if (!probeCache.empty()) {
-                ready = m_irradianceProbes.loadCache(probeCache, mn, mx, contentKey);
+            } else if (!probeBeside.empty()) {
+                ready = m_irradianceProbes.loadCache(probeBeside, mn, mx, contentKey);
+                if (!ready && !probeUser.empty()) ready = m_irradianceProbes.loadCache(probeUser, mn, mx, contentKey);
             }
             if (ready) {
                 m_deferredLighting.setIrradianceProbes(m_irradianceProbes.view(), m_irradianceProbes.sampler(),

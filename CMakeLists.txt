@@ -1345,6 +1345,14 @@ if(ERUPTION_BUILD_TESTS)
     endif()
     add_test(NAME GroundStateTests COMMAND eruption-ground-state-tests)
 
+    # Onde a grade de sondas cozida fica: cache do usuario ou ao lado do .glb (sem GPU).
+    add_executable(eruption-probe-cache-path-tests tests/test_probe_cache_path.cpp src/utils/ProbeCachePath.cpp)
+    target_include_directories(eruption-probe-cache-path-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-probe-cache-path-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME ProbeCachePathTests COMMAND eruption-probe-cache-path-tests)
+
     if(ERUPTION_MODULE_NET)
         add_executable(eruption-net-tests tests/test_net_wire.cpp src/net/Wire.cpp)
         target_include_directories(eruption-net-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

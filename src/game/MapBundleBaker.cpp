@@ -6,6 +6,7 @@
 #include "renderer/ModelRenderer.hpp"
 #include "utils/AssetVfs.hpp"
 #include "utils/EmbeddedTextureBake.hpp"
+#include "utils/ProbeCachePath.hpp"
 
 #include <atomic>
 #include <filesystem>
@@ -56,14 +57,24 @@ void MapBundleBaker::update() {
 void MapBundleBaker::finish(bool timedOut) {
     m_done = true;
     if (timedOut) ERUPTION_LOG_WARN("[BAKEMAP] %s: a carga nao assentou em 30 min; gravando o que foi anotado", m_opt.map.c_str());
-    // Sondas: no PC a carga as coze (e grava ao lado do .glb) em vez de ler; o
-    // celular so' le' - entram no pacote junto do .glb do mapa.
+    // Sondas: no PC a carga as coze (e grava no cache do usuario, ou ao lado do .glb se o
+    // projeto pede) em vez de ler; o celular so' le' - entram no pacote como
+    // <mapa>.glb.probes, saindo de onde a carga as gravou.
     std::vector<vfs::Recorded> files = vfs::endRecord();
     const std::string glbTail = "/" + m_opt.map + ".glb";
     std::vector<vfs::Recorded> extra;
     for (const vfs::Recorded& r : files)
-        if (r.path.size() > glbTail.size() && r.path.compare(r.path.size() - glbTail.size(), glbTail.size(), glbTail) == 0)
-            extra.push_back({r.path + ".probes", 3});
+        if (r.path.size() > glbTail.size() && r.path.compare(r.path.size() - glbTail.size(), glbTail.size(), glbTail) == 0) {
+            vfs::Recorded probes{r.path + ".probes", 3, std::string()};
+            std::error_code ec;
+            // O mais novo dos dois (uma grade velha ao lado do .glb nao cobre a que a carga acabou de gravar).
+            const std::string user = probecache::userFile(r.path);
+            if (!user.empty() && std::filesystem::exists(user, ec) &&
+                (!std::filesystem::exists(probes.path, ec) ||
+                 std::filesystem::last_write_time(user, ec) > std::filesystem::last_write_time(probes.path, ec)))
+                probes.source = user;
+            extra.push_back(std::move(probes));
+        }
     files.insert(files.end(), extra.begin(), extra.end());
 
     // Sem imagem duplicada: a imagem embutida que o pacote de texturas do

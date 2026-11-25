@@ -424,7 +424,7 @@ void note(const std::string& key, uint8_t access) {
     auto it = s.recIndex.find(key);
     if (it == s.recIndex.end()) {
         s.recIndex.emplace(key, s.recList.size());
-        s.recList.push_back({key, access});
+        s.recList.push_back({key, access, std::string()});
     } else if (s.recList[it->second].access < access) {
         s.recList[it->second].access = access;
     }
@@ -1057,11 +1057,11 @@ WriteReport writeBundle(const fs::path& emapPath, const std::vector<Recorded>& f
         PackItem it;
         it.rel = key.substr(roots[size_t(best)].base.size());
         it.root = static_cast<uint8_t>(best);
-        it.source = key;
+        it.source = r.source.empty() ? key : r.source;
         uint64_t size = 0;
         int64_t mtime = 0;
         bool isDir = false;
-        if (!diskStat(key, size, mtime, isDir)) {
+        if (!diskStat(it.source, size, mtime, isDir)) {
             it.e.kind = kAbsent;
             uint64_t ds = 0;
             bool dd = false;
