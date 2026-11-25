@@ -221,6 +221,8 @@ struct FrameUBO {
     // raio, largura da frente, 0, 0). Lidas so' pelo vertex shader de vegetacao.
     alignas(16) Vec4 gustInfo;
     alignas(16) Vec4 gusts[16];
+    // Tempo de cada rajada, para a mola da copa: (duracao s, idade s, 0, 0).
+    alignas(16) Vec4 gustsT[8];
 };
 // 16 KiB e' o minimo que a Vulkan garante para um UBO (maxUniformBufferRange).
 static_assert(sizeof(FrameUBO) <= 16384, "FrameUBO passou do UBO minimo garantido");

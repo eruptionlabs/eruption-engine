@@ -8,7 +8,11 @@
   "min_quality / max_quality: 0 = low, 1 = medium, 2 = high (data/graphics.json, affect_quality).",
   "A superficie vem da regiao de textura (ground.surface), do nome do material/textura do chao (surface_hints,",
   "trechos em minuscula) ou 'default'; agua vem de waterSurfaceAt. O projeto do jogo sobrescreve este arquivo",
-  "com assets/data/affects.json no proprio projeto."
+  "com assets/data/affects.json no proprio projeto.",
+  "Blocos novos: ripple (aneis na agua: radius, life, strength, rings), ground (estado do chao por celula: kind =",
+  "scorch/frost/wet/snow/ice_water, amount, radius, duration e fade em fracao da duracao do pedido), wind com forma",
+  "(front_width, floor, shake, lift), particles com distortion (+ distortion_radial) e light {color, intensity,",
+  "radius, flicker, height}. 'aliases' mapeia nomes de categoria para elementos (heat -> fire...)."
  ],
  "elements": [
   "fire",
@@ -264,6 +268,86 @@
      "area": 0.5,
      "lit": 0.0,
      "min_quality": 1
+    },
+    {
+     "type": "ground",
+     "kind": "scorch",
+     "amount": 1.0,
+     "radius": 0.9,
+     "duration": 3.0,
+     "fade": 0.75
+    },
+    {
+     "type": "wind",
+     "strength": 0.35,
+     "radius": 1.3,
+     "duration": 0.4,
+     "duration_min": 0.8,
+     "front_width": 0.5,
+     "floor": 0.6,
+     "lift": 0.6
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      1,
+      1
+     ],
+     "count": 4,
+     "life": [
+      1.2,
+      2.0
+     ],
+     "speed": [
+      0.2,
+      0.5
+     ],
+     "size": [
+      0.5,
+      0.8
+     ],
+     "size_end": 1.5,
+     "gravity": -0.3,
+     "drag": 0.5,
+     "alpha": 1.0,
+     "area": 0.5,
+     "distortion": 0.006,
+     "min_quality": 1
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      0.5,
+      0.2
+     ],
+     "count": 1,
+     "life": [
+      0.5,
+      0.9
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      0.05,
+      0.05
+     ],
+     "alpha": 0.0,
+     "area": 0.0,
+     "light": {
+      "color": [
+       1.0,
+       0.55,
+       0.22
+      ],
+      "intensity": 6.0,
+      "radius": 1.6,
+      "flicker": 0.5,
+      "height": 0.4
+     }
     }
    ]
   },
@@ -380,6 +464,86 @@
      "area": 0.5,
      "lit": 0.0,
      "min_quality": 1
+    },
+    {
+     "type": "ground",
+     "kind": "scorch",
+     "amount": 1.0,
+     "radius": 0.9,
+     "duration": 3.0,
+     "fade": 0.75
+    },
+    {
+     "type": "wind",
+     "strength": 0.35,
+     "radius": 1.3,
+     "duration": 0.4,
+     "duration_min": 0.8,
+     "front_width": 0.5,
+     "floor": 0.6,
+     "lift": 0.6
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      1,
+      1
+     ],
+     "count": 4,
+     "life": [
+      1.2,
+      2.0
+     ],
+     "speed": [
+      0.2,
+      0.5
+     ],
+     "size": [
+      0.5,
+      0.8
+     ],
+     "size_end": 1.5,
+     "gravity": -0.3,
+     "drag": 0.5,
+     "alpha": 1.0,
+     "area": 0.5,
+     "distortion": 0.006,
+     "min_quality": 1
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      0.5,
+      0.2
+     ],
+     "count": 1,
+     "life": [
+      0.5,
+      0.9
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      0.05,
+      0.05
+     ],
+     "alpha": 0.0,
+     "area": 0.0,
+     "light": {
+      "color": [
+       1.0,
+       0.55,
+       0.22
+      ],
+      "intensity": 6.0,
+      "radius": 1.6,
+      "flicker": 0.5,
+      "height": 0.4
+     }
     }
    ]
   },
@@ -445,6 +609,86 @@
      "gravity": 0.0,
      "alpha": 0.25,
      "area": 0.4
+    },
+    {
+     "type": "ground",
+     "kind": "scorch",
+     "amount": 1.0,
+     "radius": 0.9,
+     "duration": 3.0,
+     "fade": 0.75
+    },
+    {
+     "type": "wind",
+     "strength": 0.35,
+     "radius": 1.3,
+     "duration": 0.4,
+     "duration_min": 0.8,
+     "front_width": 0.5,
+     "floor": 0.6,
+     "lift": 0.6
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      1,
+      1
+     ],
+     "count": 4,
+     "life": [
+      1.2,
+      2.0
+     ],
+     "speed": [
+      0.2,
+      0.5
+     ],
+     "size": [
+      0.5,
+      0.8
+     ],
+     "size_end": 1.5,
+     "gravity": -0.3,
+     "drag": 0.5,
+     "alpha": 1.0,
+     "area": 0.5,
+     "distortion": 0.006,
+     "min_quality": 1
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      0.5,
+      0.2
+     ],
+     "count": 1,
+     "life": [
+      0.5,
+      0.9
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      0.05,
+      0.05
+     ],
+     "alpha": 0.0,
+     "area": 0.0,
+     "light": {
+      "color": [
+       1.0,
+       0.55,
+       0.22
+      ],
+      "intensity": 6.0,
+      "radius": 1.6,
+      "flicker": 0.5,
+      "height": 0.4
+     }
     }
    ]
   },
@@ -514,6 +758,42 @@
      "amount": 0.8,
      "radius": 1.0,
      "dry": 1.0
+    },
+    {
+     "type": "ground",
+     "kind": "wet",
+     "amount": 0.9,
+     "radius": 1.0,
+     "duration": 1.5,
+     "fade": 0.8
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      1,
+      1
+     ],
+     "count": 4,
+     "life": [
+      1.2,
+      2.0
+     ],
+     "speed": [
+      0.2,
+      0.5
+     ],
+     "size": [
+      0.5,
+      0.8
+     ],
+     "size_end": 1.5,
+     "gravity": -0.3,
+     "drag": 0.5,
+     "alpha": 1.0,
+     "area": 0.5,
+     "distortion": 0.006,
+     "min_quality": 1
     }
    ]
   },
@@ -576,6 +856,41 @@
      "alpha": 0.25,
      "area": 0.4,
      "lit": 1.0,
+     "min_quality": 1
+    },
+    {
+     "type": "ripple",
+     "radius": 0.8,
+     "life": 1.4,
+     "strength": 0.6,
+     "rings": 2
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      1,
+      1
+     ],
+     "count": 4,
+     "life": [
+      1.2,
+      2.0
+     ],
+     "speed": [
+      0.2,
+      0.5
+     ],
+     "size": [
+      0.5,
+      0.8
+     ],
+     "size_end": 1.5,
+     "gravity": -0.3,
+     "drag": 0.5,
+     "alpha": 1.0,
+     "area": 0.5,
+     "distortion": 0.006,
      "min_quality": 1
     }
    ]
@@ -702,6 +1017,17 @@
       0.32,
       0.28
      ]
+    },
+    {
+     "type": "wind",
+     "strength": 0.7,
+     "radius": 1.4,
+     "duration": 0.05,
+     "duration_min": 0.6,
+     "front_width": 0.14,
+     "floor": 0.1,
+     "shake": 0.5,
+     "lift": 0.5
     }
    ]
   },
@@ -809,6 +1135,17 @@
       0.2,
       0.1
      ]
+    },
+    {
+     "type": "wind",
+     "strength": 0.7,
+     "radius": 1.4,
+     "duration": 0.05,
+     "duration_min": 0.6,
+     "front_width": 0.14,
+     "floor": 0.1,
+     "shake": 0.5,
+     "lift": 0.5
     }
    ]
   },
@@ -884,6 +1221,17 @@
       0.5,
       0.3
      ]
+    },
+    {
+     "type": "wind",
+     "strength": 0.7,
+     "radius": 1.4,
+     "duration": 0.05,
+     "duration_min": 0.6,
+     "front_width": 0.14,
+     "floor": 0.1,
+     "shake": 0.5,
+     "lift": 0.5
     }
    ]
   },
@@ -1009,6 +1357,17 @@
       0.4,
       0.42
      ]
+    },
+    {
+     "type": "wind",
+     "strength": 0.7,
+     "radius": 1.4,
+     "duration": 0.05,
+     "duration_min": 0.6,
+     "front_width": 0.14,
+     "floor": 0.1,
+     "shake": 0.5,
+     "lift": 0.5
     }
    ]
   },
@@ -1071,6 +1430,17 @@
       0.85,
       0.92
      ]
+    },
+    {
+     "type": "wind",
+     "strength": 0.7,
+     "radius": 1.4,
+     "duration": 0.05,
+     "duration_min": 0.6,
+     "front_width": 0.14,
+     "floor": 0.1,
+     "shake": 0.5,
+     "lift": 0.5
     }
    ]
   },
@@ -1159,6 +1529,13 @@
      "alpha": 0.35,
      "area": 0.0,
      "lit": 0.0
+    },
+    {
+     "type": "ripple",
+     "radius": 1.0,
+     "life": 1.6,
+     "strength": 1.0,
+     "rings": 3
     }
    ]
   },
@@ -1259,6 +1636,40 @@
      "alpha": 1.0,
      "area": 0.2,
      "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.8,
+      1
+     ],
+     "count": 1,
+     "life": [
+      0.25,
+      0.4
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      0.05,
+      0.05
+     ],
+     "alpha": 0.0,
+     "area": 0.0,
+     "light": {
+      "color": [
+       0.7,
+       0.8,
+       1.0
+      ],
+      "intensity": 30.0,
+      "radius": 3.0,
+      "flicker": 0.8,
+      "height": 1.2
+     }
     }
    ]
   },
@@ -1386,6 +1797,40 @@
      "drag": 0.6,
      "alpha": 0.3,
      "area": 0.2
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.8,
+      1
+     ],
+     "count": 1,
+     "life": [
+      0.25,
+      0.4
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      0.05,
+      0.05
+     ],
+     "alpha": 0.0,
+     "area": 0.0,
+     "light": {
+      "color": [
+       0.7,
+       0.8,
+       1.0
+      ],
+      "intensity": 30.0,
+      "radius": 3.0,
+      "flicker": 0.8,
+      "height": 1.2
+     }
     }
    ]
   },
@@ -1471,6 +1916,40 @@
      "alpha": 1.0,
      "area": 0.2,
      "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.8,
+      1
+     ],
+     "count": 1,
+     "life": [
+      0.25,
+      0.4
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      0.05,
+      0.05
+     ],
+     "alpha": 0.0,
+     "area": 0.0,
+     "light": {
+      "color": [
+       0.7,
+       0.8,
+       1.0
+      ],
+      "intensity": 30.0,
+      "radius": 3.0,
+      "flicker": 0.8,
+      "height": 1.2
+     }
     }
    ]
   },
@@ -1619,6 +2098,40 @@
      "drag": 0.6,
      "alpha": 0.3,
      "area": 0.2
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.8,
+      1
+     ],
+     "count": 1,
+     "life": [
+      0.25,
+      0.4
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      0.05,
+      0.05
+     ],
+     "alpha": 0.0,
+     "area": 0.0,
+     "light": {
+      "color": [
+       0.7,
+       0.8,
+       1.0
+      ],
+      "intensity": 30.0,
+      "radius": 3.0,
+      "flicker": 0.8,
+      "height": 1.2
+     }
     }
    ]
   },
@@ -1749,6 +2262,40 @@
      "alpha": 0.35,
      "area": 0.3,
      "lit": 1.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.8,
+      1
+     ],
+     "count": 1,
+     "life": [
+      0.25,
+      0.4
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      0.05,
+      0.05
+     ],
+     "alpha": 0.0,
+     "area": 0.0,
+     "light": {
+      "color": [
+       0.7,
+       0.8,
+       1.0
+      ],
+      "intensity": 30.0,
+      "radius": 3.0,
+      "flicker": 0.8,
+      "height": 1.2
+     }
     }
    ]
   },
@@ -1854,6 +2401,47 @@
      "alpha": 0.5,
      "area": 0.0,
      "lit": 0.0
+    },
+    {
+     "type": "ripple",
+     "radius": 1.0,
+     "life": 1.6,
+     "strength": 1.0,
+     "rings": 3
+    },
+    {
+     "type": "particles",
+     "color": [
+      0.7,
+      0.8,
+      1
+     ],
+     "count": 1,
+     "life": [
+      0.25,
+      0.4
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      0.05,
+      0.05
+     ],
+     "alpha": 0.0,
+     "area": 0.0,
+     "light": {
+      "color": [
+       0.7,
+       0.8,
+       1.0
+      ],
+      "intensity": 30.0,
+      "radius": 3.0,
+      "flicker": 0.8,
+      "height": 1.2
+     }
     }
    ]
   },
@@ -1909,6 +2497,14 @@
      "alpha": 0.1,
      "area": 0.3,
      "lit": 1.0
+    },
+    {
+     "type": "ground",
+     "kind": "wet",
+     "amount": 1.0,
+     "radius": 1.0,
+     "duration": 1.5,
+     "fade": 0.8
     }
    ]
   },
@@ -1982,6 +2578,14 @@
      "alpha": 0.15,
      "area": 0.3,
      "lit": 1.0
+    },
+    {
+     "type": "ground",
+     "kind": "wet",
+     "amount": 1.0,
+     "radius": 1.0,
+     "duration": 1.5,
+     "fade": 0.8
     }
    ]
   },
@@ -2009,6 +2613,14 @@
      "life": 0.9,
      "hold": 0.55,
      "fade_in": 0.05
+    },
+    {
+     "type": "ground",
+     "kind": "wet",
+     "amount": 1.0,
+     "radius": 1.0,
+     "duration": 1.5,
+     "fade": 0.8
     }
    ]
   },
@@ -2036,6 +2648,14 @@
      "life": 1.0,
      "hold": 0.55,
      "fade_in": 0.05
+    },
+    {
+     "type": "ground",
+     "kind": "wet",
+     "amount": 1.0,
+     "radius": 1.0,
+     "duration": 1.5,
+     "fade": 0.8
     }
    ]
   },
@@ -2091,6 +2711,14 @@
      "alpha": 0.1,
      "area": 0.3,
      "lit": 1.0
+    },
+    {
+     "type": "ground",
+     "kind": "wet",
+     "amount": 1.0,
+     "radius": 1.0,
+     "duration": 1.5,
+     "fade": 0.8
     }
    ]
   },
@@ -2179,6 +2807,13 @@
      "alpha": 0.3,
      "area": 0.0,
      "lit": 0.0
+    },
+    {
+     "type": "ripple",
+     "radius": 1.0,
+     "life": 1.6,
+     "strength": 1.0,
+     "rings": 3
     }
    ]
   },
@@ -2297,7 +2932,38 @@
      "strength": 0.8,
      "radius": 1.4,
      "duration": 0.05,
-     "duration_min": 0.6
+     "duration_min": 0.6,
+     "front_width": 0.14,
+     "floor": 0.1,
+     "shake": 0.5,
+     "lift": 0.5
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      1,
+      1
+     ],
+     "count": 1,
+     "life": [
+      0.5,
+      0.5
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      3.0,
+      3.0
+     ],
+     "alpha": 1.0,
+     "area": 0.0,
+     "burst_time": 0.0,
+     "distortion": 0.02,
+     "distortion_radial": 1.0,
+     "min_quality": 1
     }
    ]
   },
@@ -2402,7 +3068,38 @@
      "strength": 1.0,
      "radius": 1.6,
      "duration": 0.06,
-     "duration_min": 0.7
+     "duration_min": 0.7,
+     "front_width": 0.14,
+     "floor": 0.1,
+     "shake": 0.5,
+     "lift": 0.5
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      1,
+      1
+     ],
+     "count": 1,
+     "life": [
+      0.5,
+      0.5
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      3.0,
+      3.0
+     ],
+     "alpha": 1.0,
+     "area": 0.0,
+     "burst_time": 0.0,
+     "distortion": 0.02,
+     "distortion_radial": 1.0,
+     "min_quality": 1
     }
    ]
   },
@@ -2521,7 +3218,38 @@
      "strength": 0.8,
      "radius": 1.4,
      "duration": 0.05,
-     "duration_min": 0.6
+     "duration_min": 0.6,
+     "front_width": 0.14,
+     "floor": 0.1,
+     "shake": 0.5,
+     "lift": 0.5
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      1,
+      1
+     ],
+     "count": 1,
+     "life": [
+      0.5,
+      0.5
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      3.0,
+      3.0
+     ],
+     "alpha": 1.0,
+     "area": 0.0,
+     "burst_time": 0.0,
+     "distortion": 0.02,
+     "distortion_radial": 1.0,
+     "min_quality": 1
     }
    ]
   },
@@ -2626,7 +3354,38 @@
      "strength": 0.8,
      "radius": 1.4,
      "duration": 0.05,
-     "duration_min": 0.6
+     "duration_min": 0.6,
+     "front_width": 0.14,
+     "floor": 0.1,
+     "shake": 0.5,
+     "lift": 0.5
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      1,
+      1
+     ],
+     "count": 1,
+     "life": [
+      0.5,
+      0.5
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      3.0,
+      3.0
+     ],
+     "alpha": 1.0,
+     "area": 0.0,
+     "burst_time": 0.0,
+     "distortion": 0.02,
+     "distortion_radial": 1.0,
+     "min_quality": 1
     }
    ]
   },
@@ -2731,7 +3490,38 @@
      "strength": 0.8,
      "radius": 1.4,
      "duration": 0.05,
-     "duration_min": 0.6
+     "duration_min": 0.6,
+     "front_width": 0.14,
+     "floor": 0.1,
+     "shake": 0.5,
+     "lift": 0.5
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      1,
+      1
+     ],
+     "count": 1,
+     "life": [
+      0.5,
+      0.5
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      3.0,
+      3.0
+     ],
+     "alpha": 1.0,
+     "area": 0.0,
+     "burst_time": 0.0,
+     "distortion": 0.02,
+     "distortion_radial": 1.0,
+     "min_quality": 1
     }
    ]
   },
@@ -2820,6 +3610,24 @@
      "alpha": 0.4,
      "area": 0.0,
      "lit": 0.0
+    },
+    {
+     "type": "ripple",
+     "radius": 1.0,
+     "life": 1.6,
+     "strength": 1.0,
+     "rings": 3
+    },
+    {
+     "type": "wind",
+     "strength": 0.7,
+     "radius": 1.4,
+     "duration": 0.05,
+     "duration_min": 0.6,
+     "front_width": 0.14,
+     "floor": 0.1,
+     "shake": 0.5,
+     "lift": 0.5
     }
    ]
   },
@@ -3060,6 +3868,13 @@
      "alpha": 0.25,
      "area": 0.0,
      "lit": 0.0
+    },
+    {
+     "type": "ripple",
+     "radius": 1.0,
+     "life": 1.6,
+     "strength": 1.0,
+     "rings": 3
     }
    ]
   },
@@ -3158,6 +3973,14 @@
      "alpha": 0.25,
      "area": 0.5,
      "lit": 1.0
+    },
+    {
+     "type": "ground",
+     "kind": "frost",
+     "amount": 1.0,
+     "radius": 1.0,
+     "duration": 1.5,
+     "fade": 0.6
     }
    ]
   },
@@ -3210,6 +4033,22 @@
      "area": 0.7,
      "lit": 0.0,
      "min_quality": 1
+    },
+    {
+     "type": "ground",
+     "kind": "frost",
+     "amount": 1.0,
+     "radius": 1.0,
+     "duration": 1.5,
+     "fade": 0.6
+    },
+    {
+     "type": "ground",
+     "kind": "snow",
+     "amount": 0.7,
+     "radius": 0.9,
+     "duration": 3.0,
+     "fade": 0.5
     }
    ]
   },
@@ -3299,6 +4138,14 @@
      "alpha": 0.3,
      "area": 0.0,
      "lit": 0.0
+    },
+    {
+     "type": "ground",
+     "kind": "ice_water",
+     "amount": 1.0,
+     "radius": 1.0,
+     "duration": 2.2,
+     "fade": 0.45
     }
    ]
   },
@@ -3655,6 +4502,40 @@
      "area": 0.7,
      "lit": 0.0,
      "min_quality": 1
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      0.95,
+      0.7
+     ],
+     "count": 1,
+     "life": [
+      0.8,
+      1.2
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      0.05,
+      0.05
+     ],
+     "alpha": 0.0,
+     "area": 0.0,
+     "light": {
+      "color": [
+       1.0,
+       0.92,
+       0.65
+      ],
+      "intensity": 14.0,
+      "radius": 3.0,
+      "flicker": 0.1,
+      "height": 1.2
+     }
     }
    ]
   },
@@ -3716,6 +4597,40 @@
      "alpha": 0.4,
      "area": 0.0,
      "lit": 0.0
+    },
+    {
+     "type": "particles",
+     "color": [
+      1,
+      0.95,
+      0.7
+     ],
+     "count": 1,
+     "life": [
+      0.8,
+      1.2
+     ],
+     "speed": [
+      0,
+      0
+     ],
+     "size": [
+      0.05,
+      0.05
+     ],
+     "alpha": 0.0,
+     "area": 0.0,
+     "light": {
+      "color": [
+       1.0,
+       0.92,
+       0.65
+      ],
+      "intensity": 14.0,
+      "radius": 3.0,
+      "flicker": 0.1,
+      "height": 1.2
+     }
     }
    ]
   },
@@ -3799,5 +4714,12 @@
     }
    ]
   }
+ },
+ "aliases": {
+  "heat": "fire",
+  "cold": "ice",
+  "electric": "lightning",
+  "light": "holy",
+  "force": "impact"
  }
 }

@@ -123,6 +123,20 @@ void main() {
             }
             float scale = e.rot0.w;
             vec3 acc = e.gravityDrag.xyz * scale;
+            // Rajadas locais: empurram para fora do centro e, no impacto, para
+            // cima. Mesmo perfil do vegetal (model_vert.glsl applyGusts); 12 m/s2
+            // por unidade de forca, vezes a escala do efeito como a gravidade.
+            for (int gi = 0; gi < int(frame.gustInfo.x); ++gi) {
+                vec4 ga = frame.gusts[2 * gi];
+                vec4 gb = frame.gusts[2 * gi + 1];
+                vec2 gd = p.pos.xz - ga.xy;
+                float gdist = length(gd);
+                float gfall = 1.0 - smoothstep(0.0, ga.z, gdist);
+                float gf = (gdist / ga.z - gb.x) / max(gb.y, 1e-3);
+                float gk = ga.w * gfall * (gb.w + (1.0 - gb.w) * exp(-gf * gf));
+                acc.xz += (gdist > 1e-3 ? gd / gdist : vec2(0.0)) * gk * 12.0 * scale;
+                acc.y += gk * gb.z * 14.0 * scale;
+            }
             if (e.noise.x != 0.0)
                 acc += curlNoise(p.pos * (e.noise.y / scale), frame.timeInfo.x * e.noise.z) * e.noise.x * scale;
             // Grafo: forca extra (m/s2, escalada para o mundo).

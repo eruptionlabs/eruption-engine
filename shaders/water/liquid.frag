@@ -48,6 +48,8 @@ layout(set = 1, binding = 0) uniform WaterUBO {
     vec4 styleDeep;           // xyz=cor funda, w=inclinacao das ondas
     ivec4 styleSlots;         // x=slot do reflexo planar (-1 = sem), y=slot do reflexo espelhado (-1 = sem)
     vec4 stepRipples[16];     // ondinhas de passo: xy=ponto no mundo (x,z), z=instante do nascimento (s), w=forca (0 = vazio)
+    vec4 areaRipples[16];     // aneis de afeccao: [2k] = (x, z, nascimento (s), forca; 0 = vazio), [2k+1] = (alcance (u), vida (s), aneis, 0)
+    vec4 iceAreas[8];         // gelo sobre a agua (ice_water): x, z, raio (u), quanto 0..1 (0 = vazio)
 } ubo;
 
 layout(push_constant) uniform Push {
@@ -530,6 +532,88 @@ vec4 stepRipples(vec2 p, float t, float footprint) {
     return acc;
 }
 
+// Aneis de uma afeccao (world.affect com bloco "ripple": impacto, agua, raio):
+// ate' 4 aneis seguidos abrem de um ponto ate' o alcance e amortecem. O
+// comprimento de onda cresce com o alcance (um anel de 5 m nao pode ter as
+// ondinhas de um passo). Retorna (dh/dx, dh/dz, 0, crista) como stepRipples.
+vec4 areaRipples(vec2 p, float t, float footprint) {
+    vec4 acc = vec4(0.0);
+    for (int i = 0; i < 8; ++i) {
+        vec4 s = ubo.areaRipples[2 * i];
+        vec4 q = ubo.areaRipples[2 * i + 1];
+        float age = t - s.z;
+        if (s.w <= 0.0 || age < 0.0 || age > q.y) continue;
+        vec2 v = p - s.xy;
+        float d2 = dot(v, v);
+        float rmax = q.x * 1.1 + 1.0;
+        if (d2 > rmax * rmax) continue;
+        float life = age / q.y;
+        float front = q.x * (1.0 - (1.0 - life) * (1.0 - life));
+        float d = sqrt(d2);
+        float lam = max(0.55, q.x * 0.09);
+        float w = lam * 0.55;
+        float fade = (1.0 - life) * (1.0 - life) * smoothstep(0.0, 0.05, life);
+        float keep = smoothstep(1.5, 4.0, lam / footprint);
+        float dist = 1.0 / sqrt(1.0 + 3.0 * d / max(q.x, 1e-3));
+        for (int k = 0; k < 4; ++k) {
+            if (float(k) >= q.z) break;
+            float rk = front * (1.0 - 0.2 * float(k));
+            float x = d - rk;
+            float env = exp(-(x * x) / (w * w * 2.0)) * pow(0.62, float(k)) * fade * s.w * dist;
+            acc.xy += (v / max(d, 1e-4)) * (sin(x * 6.2831853 / lam) * env * 0.5 * keep);
+            acc.w += max(cos(x * 6.2831853 / lam), 0.0) * env * keep;
+        }
+    }
+    return acc;
+}
+
+// fbm de 5 oitavas de snoise (0..1): borda organica, sem periodo visivel.
+float iceFbm(vec2 p) {
+    float a = 0.5, v = 0.0;
+    for (int i = 0; i < 5; ++i) { v += a * (snoise(p) * 0.5 + 0.5); p = p * 2.03 + 11.7; a *= 0.5; }
+    return v / 0.96875;
+}
+
+// Gelo sobre a agua: cobertura 0..1 (miolo cheio, borda rasgada por fbm com o
+// dominio deformado; cresce do centro para fora ao congelar e recua em
+// fragmentos ao degelar), `thick` = espessura (0 na borda fina, onde se ve a agua
+// por baixo; ~0,75 no miolo), rachaduras grossas em dois tamanhos e bolhas.
+float iceCover(vec2 p, out float crack, out float bubble, out float thick) {
+    crack = 0.0; bubble = 0.0; thick = 0.0;
+    float a = 0.0;
+    float rad = 100.0;
+    for (int i = 0; i < 8; ++i) {
+        vec4 s = ubo.iceAreas[i];
+        if (s.w <= 0.0) continue;
+        // Borda deformada em escala do raio: ruido grosso empurra a distancia.
+        vec2 q = p + (vec2(snoise(p / (0.35 * s.z)), snoise(p / (0.35 * s.z) + 8.1))) * 0.22 * s.z;
+        float k = 1.0 - smoothstep(0.35 * s.z, s.z, length(q - s.xy));
+        a = max(a, s.w * k);
+        rad = s.z;
+    }
+    if (a <= 0.0) return 0.0;
+    float n = iceFbm(p / (0.16 * rad));
+    float k = smoothstep(n * 0.7, n * 0.7 + 0.3, a);
+    thick = smoothstep(0.1, 0.85, k) * smoothstep(0.2, 0.9, a);
+    float c1 = 1.0 - smoothstep(0.0, 0.11, abs(snoise(p * 0.05 + 3.7)));
+    float c2 = 1.0 - smoothstep(0.0, 0.2, abs(snoise(p * 0.13 + 11.3)));
+    crack = max(c1, c2 * 0.7) * k * thick;
+    bubble = smoothstep(0.76, 0.80, snoise(p * 0.4 + 5.1) * 0.5 + 0.5) * k * thick;
+    return k;
+}
+
+// Cor e opacidade do gelo: branco-azulado translucido com manchas, rachaduras
+// azul-escuras e grossas, bolhas claras; o miolo ainda deixa ver a agua escura.
+vec3 iceColor(vec2 p, float crack, float bubble, float thick, vec3 inL, out float opacity) {
+    float v = snoise(p * 0.02 + 7.0) * 0.5 + 0.5;
+    vec3 col = mix(vec3(0.30, 0.50, 0.72), vec3(0.62, 0.78, 0.92), v);
+    col = mix(col, vec3(0.02, 0.08, 0.20), crack);
+    col = mix(col, vec3(0.97, 0.99, 1.0), bubble * 0.8);
+    opacity = mix(0.3, 0.55, thick);
+    opacity = mix(opacity, 0.92, max(crack * 0.5, bubble));
+    return col * inL;
+}
+
 // Brilhos do sol: cada celula tem uma faceta de inclinacao sorteada (troca
 // num ciclo proprio); acende onde a faceta manda o sol para a camera. O
 // ponto tem no minimo ~1,2 pixel (com a energia dividida), para nao virar
@@ -765,7 +849,13 @@ vec3 shadeDiorama() {
         vec4 sr = stepRipples(vWorldPos.xz, time, footprint);
         grad += sr.xy * 5.0;
         ringLight += min(sr.w, 1.0) * 0.5;
+        vec4 ar = areaRipples(vWorldPos.xz, time, footprint);
+        grad += ar.xy * 3.0;
+        ringLight += min(ar.w, 1.0) * 0.6;
     }
+    float iceCrack, iceBubble, iceThick;
+    const float ice = iceCover(vWorldPos.xz, iceCrack, iceBubble, iceThick);
+    grad *= 1.0 - 0.94 * ice; // a tampa de gelo nao ondula
     grad *= mix(0.35, 1.0, smoothstep(0.0, shoreW * 1.5, depthV));
     grad += gradCrista;
     vec3 N = normalize(vec3(-grad.x, 1.0, -grad.y));
@@ -922,6 +1012,15 @@ vec3 shadeDiorama() {
     // So' pela profundidade: com max(.., espuma) a espuma da linha deixava a
     // borda opaca e a escada da malha aparecia em branco.
     g_dioramaAlpha = smoothstep(recuoBorda, recuoBorda + 0.35, depthV);
+    if (ice > 0.0) {
+        // Tampa de gelo: textura, rachaduras e bolhas; fina na borda (a agua aparece).
+        float iceOp;
+        vec3 iceCol = iceColor(vWorldPos.xz, iceCrack, iceBubble, iceThick, inLight, iceOp);
+        iceCol = iceCol * (1.0 - 0.15 * F) + refl * F * 0.25 + sunSpec * 0.15;
+        color = mix(color, iceCol, ice * iceOp);
+        foam *= 1.0 - ice;
+        g_dioramaAlpha = mix(g_dioramaAlpha, 1.0, ice * iceThick);
+    }
     return mix(color, foamCol, foam);
 }
 
@@ -1211,7 +1310,12 @@ void main() {
         vec2 fp = vec2(length(dFdx(vWorldPos.xz)), length(dFdy(vWorldPos.xz)));
         vec4 sr = stepRipples(vWorldPos.xz, time, max(max(fp.x, fp.y), 1e-3));
         perturbedNormal = normalize(perturbedNormal + vec3(-sr.x, 0.0, -sr.y) * 5.0);
+        vec4 ar = areaRipples(vWorldPos.xz, time, max(max(fp.x, fp.y), 1e-3));
+        perturbedNormal = normalize(perturbedNormal + vec3(-ar.x, 0.0, -ar.y) * 3.0);
     }
+    float iceCrackG, iceBubbleG, iceThickG;
+    const float iceG = iceCover(vWorldPos.xz, iceCrackG, iceBubbleG, iceThickG);
+    perturbedNormal = normalize(mix(perturbedNormal, vNormal, 0.94 * iceG)); // a tampa de gelo nao ondula
     if (!validVec3(perturbedNormal)) perturbedNormal = vNormal;
 
     // ---- View & Light ----
@@ -1385,6 +1489,14 @@ void main() {
         vec3 lava = mix(crustCol, hotCol, heat);
         lava = mix(lava, coreCol, pow(heat, 4.0));
         color = lava + hotCol * heat * 1.9 + sunSpecular * 0.15;
+    }
+
+    if (iceG > 0.0) { // tampa de gelo (igual a do diorama)
+        vec3 inL = max(ubo.ambientColor.rgb * ubo.ambientColor.w, vec3(0.1)) + ubo.sunColor.rgb * sunIntensity * 0.45;
+        float iceOpG;
+        vec3 iceCol = iceColor(vWorldPos.xz, iceCrackG, iceBubbleG, iceThickG, inL, iceOpG);
+        iceCol = iceCol * 0.9 + reflectionColor * 0.05 + sunSpecular * 0.1;
+        color = mix(color, iceCol, iceG * iceOpG);
     }
 
     // NaN/Inf final guard

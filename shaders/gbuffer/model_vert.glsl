@@ -167,9 +167,11 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_emiFlicker[32];
     // Rajadas locais de vento (core/Affects.hpp): x = quantas valem (0 = nada
     // muda, imagem identica); u_gusts[2k] = (x, z, raio, forca de agora),
-    // u_gusts[2k+1] = (frente 0..1 do raio, largura da frente, 0, 0).
+    // u_gusts[2k+1] = (frente 0..1 do raio, largura da frente, forca que sobra
+    // atras da frente 0..1, tremor da copa 0..1).
     vec4 u_gustInfo;
     vec4 u_gusts[16];
+    vec4 u_gustsT[8]; // (duracao s, idade s, 0, 0) por rajada: a mola da copa
 };
 
 // -----------------------------------------------------------------------------
@@ -242,31 +244,56 @@ vec3 applyWindSwayWith(vec4 windParams, vec3 worldPos, float localHeight, float 
     return worldPos;
 }
 
-// RAJADAS LOCAIS (world.wind_burst, afeccoes): empurra a vegetacao para FORA do
-// centro da rajada. O mesmo modelo de haste engastada do vento (topo anda, base
-// nao, teto de 65% da altura), com a forca que decai com a distancia ao centro
-// e uma frente de onda que se afasta no tempo. Sem rajada, sai antes de tudo.
-vec3 applyGusts(vec3 worldPos, float localHeight, float sway) {
+// RAJADAS LOCAIS (world.wind_burst, afeccoes): inclina a vegetacao para FORA do
+// centro da rajada. A planta GIRA em torno da base (nao cisalha): o vertice a
+// altura h sobe/desce como numa haste de comprimento h inclinada de theta, o
+// que preserva o comprimento; o angulo cresce com a altura (1 - e^(-h/12)), a
+// base fica fixa e a copa se mexe mais. A direcao e a forca vem da ORIGEM da
+// instancia (a arvore inteira gira junto, as folhas nao se espalham). `sway` so'
+// diz se o material e' vegetacao. strength 1 = ~10 graus de pico, e com a mola
+// (vai para fora, passa do ponto, assenta) chega a ~17.
+// A forca decai com a distancia ao centro; a frente de onda se afasta no tempo.
+// Sem rajada, sai antes de tudo.
+vec3 applyGusts(vec3 worldPos, float localHeight, float sway, vec2 origin) {
     const int n = int(u_gustInfo.x);
     if (n == 0 || sway <= 1e-4) return worldPos;
     const float h = max(localHeight, 0.0);
     for (int i = 0; i < n; ++i) {
         const vec4 a = u_gusts[2 * i];
         const vec4 b = u_gusts[2 * i + 1];
-        const vec2 d = worldPos.xz - a.xy;
+        const vec2 d = origin - a.xy;
         const float dist = length(d);
         const float fall = 1.0 - smoothstep(0.0, a.z, dist);
         const float front = (dist / a.z - b.x) / max(b.y, 1e-3);
-        const float k = a.w * fall * (0.35 + 0.65 * exp(-front * front));
-        const float bend = min(h * h * sway * 0.6, h * sway * 0.39) * k;
-        worldPos.xz += (dist > 1e-3 ? d / dist : vec2(0.0)) * bend;
-        worldPos.y -= bend * 0.25;
+        const float onFront = exp(-front * front);
+        // Mola amortecida: depois que a frente passa pela planta, ela balanca em
+        // torno do repouso (para fora, passa do ponto para dentro, assenta). tau =
+        // segundos desde a chegada da frente (anda como t^0,6, gustFront em
+        // core/Affects.cpp).
+        const vec4 tt = u_gustsT[i];
+        const float tNow = tt.y / max(tt.x, 1e-3);
+        const float tArr = pow(min(dist / a.z, 1.0), 1.6667);
+        const float tau = max(tNow - tArr, 0.0) * tt.x;
+        const float behind = smoothstep(0.0, 0.04, tNow - tArr);
+        const float spring = behind * exp(-tau * 1.3) * sin(tau * 9.0);
+        const float k = a.w * fall * ((b.z + (1.0 - b.z) * onFront) + 0.7 * spring);
+        const float theta = clamp(k, -1.7, 1.7) * 0.3 * (1.0 - exp(-h / 12.0));
+        const vec2 dir = dist > 1e-3 ? d / dist : vec2(0.0);
+        worldPos.xz += dir * (h * sin(theta));
+        worldPos.y += h * (cos(theta) - 1.0);
+        if (b.w > 0.0) {
+            // Tremor da copa (onda de impacto): oscila rapido so' enquanto a
+            // frente passa; a fase vem do lugar, cada galho no seu tempo.
+            const float ph = dot(worldPos.xz, vec2(0.113, 0.171));
+            const float amp = h * 0.02 * b.w * a.w * fall * onFront * (1.0 - exp(-h / 12.0));
+            worldPos.xz += vec2(sin(u_time * 31.0 + ph * 5.0), sin(u_time * 23.0 + ph * 3.0 + 1.3)) * amp;
+        }
     }
     return worldPos;
 }
 
-vec3 applyWindSway(vec3 worldPos, float localHeight, float sway) {
-    return applyGusts(applyWindSwayWith(u_windParams, worldPos, localHeight, sway), localHeight, sway);
+vec3 applyWindSway(vec3 worldPos, float localHeight, float sway, vec2 origin) {
+    return applyGusts(applyWindSwayWith(u_windParams, worldPos, localHeight, sway), localHeight, sway, origin);
 }
 
 // Dados POR INSTANCIA (SIMT). Antes, cada instancia visivel era um
@@ -605,10 +632,10 @@ void main() {
     const vec4 prevPos = prevModel * vec4(inPrevPosition, 1.0);
     const vec3 prevSway = applyGusts(applyWindSwayWith(u_prevWindParams, prevPos.xyz, prevPos.y - prevModel[3].y,
                                                        u_inst[gl_InstanceIndex].uvScaleDisp.w),
-                                     prevPos.y - prevModel[3].y, u_inst[gl_InstanceIndex].uvScaleDisp.w);
+                                     prevPos.y - prevModel[3].y, u_inst[gl_InstanceIndex].uvScaleDisp.w, prevModel[3].xz);
 #endif
     worldPos.xyz = applyWindSway(worldPos.xyz, worldPos.y - instBaseY,
-                                 u_inst[gl_InstanceIndex].uvScaleDisp.w);
+                                 u_inst[gl_InstanceIndex].uvScaleDisp.w, u_inst[gl_InstanceIndex].model[3].xz);
 #ifndef ERUPTION_NO_VELOCITY
     const vec3 curSway = worldPos.xyz;
 #endif

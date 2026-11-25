@@ -166,6 +166,23 @@ VfxEmitterDesc buildParticles(const ParticleBlock& p, float strength, float part
         e.lit = p.additive ? 0.0f : p.lit;
         e.collideDepth = p.collide;
     }
+    // Distorcao de tela (ar quente, onda de choque): sem cor, entorta a cena atras.
+    if (p.distortion > 0.0f && p.mesh.empty()) {
+        e.name = "distorcao";
+        e.texture.clear();
+        e.distortion = p.distortion;
+        e.distortionRadial = p.distortionRadial;
+        e.lit = 0.0f;
+    }
+    // Luz pontual do emissor (clarao): o chao e a copa em volta acendem junto.
+    if (p.light) {
+        e.light = true;
+        e.lightColor = Vec3(p.lightColor[0], p.lightColor[1], p.lightColor[2]);
+        e.lightIntensity = p.lightIntensity * (0.5f + 0.5f * strength);
+        e.lightRadius = p.lightRadius; // o efeito e' descrito em raios da afeccao
+        e.lightFlicker = p.lightFlicker;
+        e.lightOffset = Vec3(0.0f, p.lightHeight, 0.0f);
+    }
     return e;
 }
 
@@ -217,6 +234,8 @@ float reactionExtent(const Reaction& r, float dur) {
             break;
         }
         case Block::Type::Wind: break;
+        case Block::Type::Ripple: ext = std::max(ext, b.ripple.life / std::max(dur, 0.1f)); break;
+        case Block::Type::Ground: break; // o estado do chao tem o ciclo dele; nao segura a afeccao
         }
     }
     return std::max(ext, 0.05f);
@@ -265,6 +284,7 @@ void Engine::affectApplyPreset(const json& p) {
 void Engine::affectsOnMapLoaded() {
     m_affectRing.clear();
     m_gustRing.clear();
+    groundStateOnMapLoaded();
     m_affectEffects.clear();
 }
 
@@ -394,7 +414,21 @@ uint32_t Engine::affect(const AffectRequest& r) {
             wetArea(pos, radius * b.wet.radius, b.wet.amount * (0.5f + 0.5f * strength), dry);
         } else if (b.type == Block::Type::Wind) {
             const float wd = std::max(b.wind.durationMin, b.wind.duration * duration);
-            live.gusts.push_back(windBurst(r.x, r.z, radius * b.wind.radius, b.wind.strength * strength, wd));
+            live.gusts.push_back(windBurst(r.x, r.z, radius * b.wind.radius, b.wind.strength * strength, wd, b.wind.shape));
+        } else if (b.type == Block::Type::Ripple) {
+            // Aneis na agua dentro do raio (nada se nao ha' agua no mapa).
+            m_water.addAreaRipple(r.x, r.z, m_timer.elapsed(), strength * b.ripple.strength, radius * b.ripple.radius,
+                                  b.ripple.life, b.ripple.rings);
+        } else if (b.type == Block::Type::Ground) {
+            GroundStateRequest g;
+            g.kind = b.ground.kind;
+            g.x = r.x;
+            g.z = r.z;
+            g.radius = radius * b.ground.radius;
+            g.strength = strength * b.ground.amount;
+            g.duration = duration * b.ground.duration;
+            g.fade = g.duration * b.ground.fade;
+            if (const uint32_t gid = groundState(g)) live.grounds.push_back(gid);
         }
     }
 
@@ -424,16 +458,22 @@ bool Engine::affectStop(uint32_t id) {
     if (m_affectRing.stop(id, &a)) {
         for (uint32_t v : a.vfx) m_vfx.stop(v, true);
         for (uint32_t g : a.gusts) m_gustRing.stop(g);
+        for (uint32_t g : a.grounds) m_groundField.stop(g);
+        m_groundDirty = true;
+        return true;
+    }
+    if (m_groundField.stop(id)) {
+        m_groundDirty = true;
         return true;
     }
     return m_gustRing.stop(id);
 }
 
-uint32_t Engine::windBurst(float x, float z, float radius, float strength, float duration) {
+uint32_t Engine::windBurst(float x, float z, float radius, float strength, float duration, const affects::GustShape& shape) {
     if (++m_affectNextId == 0) ++m_affectNextId;
     const uint32_t id = m_affectNextId;
     m_gustRing.add(id, x, z, std::clamp(radius > 0.0f ? radius : 3.0f * m_vfx.unitsPerMeter(), 0.05f, 2000.0f), std::clamp(strength, 0.0f, 1.0f),
-                   std::clamp(duration, 0.05f, 600.0f), m_affectQuality.maxGusts);
+                   std::clamp(duration, 0.05f, 600.0f), m_affectQuality.maxGusts, nullptr, shape);
     return id;
 }
 
@@ -443,6 +483,16 @@ void Engine::updateAffects(float dt) {
     // que ja' passou do prazo (o teto conta afeccoes visivelmente vivas).
     (void)m_affectRing.tick(m_affectClock);
     m_gustRing.tick(dt);
+    // As particulas (folha, poeira, brasa) tambem sao levadas pelas rajadas.
+    affects::GustPacked packed[affects::kMaxGusts];
+    const uint32_t n = m_gustRing.pack(packed);
+    Vec4 v[2 * affects::kMaxGusts];
+    for (uint32_t i = 0; i < n; ++i) {
+        v[2 * i] = Vec4(packed[i].a[0], packed[i].a[1], packed[i].a[2], packed[i].a[3]);
+        v[2 * i + 1] = Vec4(packed[i].b[0], packed[i].b[1], packed[i].c[0], packed[i].b[2]);
+    }
+    m_vfx.setGusts(v, n);
+    updateGroundState(dt);
 }
 
 void Engine::fillGusts(FrameUBO& ubo) const {
@@ -453,6 +503,7 @@ void Engine::fillGusts(FrameUBO& ubo) const {
         const bool on = i < n;
         ubo.gusts[2 * i] = on ? Vec4(packed[i].a[0], packed[i].a[1], packed[i].a[2], packed[i].a[3]) : Vec4(0.0f);
         ubo.gusts[2 * i + 1] = on ? Vec4(packed[i].b[0], packed[i].b[1], packed[i].b[2], packed[i].b[3]) : Vec4(0.0f);
+        ubo.gustsT[i] = on ? Vec4(packed[i].c[1], packed[i].c[2], 0.0f, 0.0f) : Vec4(0.0f);
     }
 }
 

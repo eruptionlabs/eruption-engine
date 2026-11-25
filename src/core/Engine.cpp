@@ -3009,6 +3009,7 @@ void Engine::applyGraphicsPreset() {
     // e vento) a 2 high (relevo de verdade, poca com brilho), teto de afeccoes
     // e de rajadas vivas e fator das particulas.
     affectApplyPreset(p);
+    groundStateApplyPreset(p);
 
     // Clima parado sem copia de tela (PostProcessor, "Weather Overlay"): preset
     // "weather_skip_idle" ou ERUPTION_WEATHER_SKIP_IDLE=1|0. Padrao LIGADO: a

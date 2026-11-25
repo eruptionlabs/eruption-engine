@@ -1156,6 +1156,18 @@ void WaterRenderer::addStepRipple(float x, float z, float time, float strength) 
     m_stepRippleNext = (m_stepRippleNext + 1) % kMaxStepRipples;
 }
 
+void WaterRenderer::addAreaRipple(float x, float z, float time, float strength, float radius, float life, uint32_t rings) {
+    m_areaRipples[2 * m_areaRippleNext] = Vec4(x, z, time, std::clamp(strength, 0.0f, 2.0f));
+    m_areaRipples[2 * m_areaRippleNext + 1] = Vec4(std::max(radius, 0.01f), std::max(life, 0.1f), float(std::clamp(rings, 1u, 4u)), 0.0f);
+    m_areaRippleNext = (m_areaRippleNext + 1) % kMaxAreaRipples;
+}
+
+void WaterRenderer::setIceAreas(const float* xzrk, uint32_t n) {
+    n = xzrk ? std::min(n, kMaxIceAreas) : 0u;
+    for (uint32_t i = 0; i < kMaxIceAreas; ++i)
+        m_iceAreas[i] = i < n ? Vec4(xzrk[4 * i], xzrk[4 * i + 1], xzrk[4 * i + 2], xzrk[4 * i + 3]) : Vec4(0.0f);
+}
+
 void WaterRenderer::fillUBO(WaterUBO& ubo, uint32_t frameIndex, const WaterSettings& settings,
                             float nearPlane, float farPlane,
                             const DayNightCycle& cycle, float time, const Vec3& cameraPos,
@@ -1256,8 +1268,11 @@ void WaterRenderer::fillUBO(WaterUBO& ubo, uint32_t frameIndex, const WaterSetti
     ubo.styleDeep = Vec4(settings.hasScatterOverride ? settings.scatterOverride : m_style.deepColor, m_style.waveSlope);
     ubo.styleSlots = IVec4(hd2d && m_ssprValidThisFrame ? static_cast<int32_t>(m_ssprSlot) : -1,
                            hd2d && m_ssprValidThisFrame ? m_mirrorReflSlot : -1, 0, 0);
-    if (settings.liquidKind == 0)
+    if (settings.liquidKind == 0) {
         for (uint32_t i = 0; i < kMaxStepRipples; ++i) ubo.stepRipples[i] = m_stepRipples[i];
+        for (uint32_t i = 0; i < kMaxAreaRipples * 2; ++i) ubo.areaRipples[i] = m_areaRipples[i];
+        for (uint32_t i = 0; i < kMaxIceAreas; ++i) ubo.iceAreas[i] = m_iceAreas[i];
+    }
     if (hd2d) {
         // Diorama: o lago nao ondula a malha. As ondas de Gerstner do vertice,
         // com comprimento de ~3 unidades numa malha de grade larga, viravam

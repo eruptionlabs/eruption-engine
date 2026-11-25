@@ -1533,6 +1533,7 @@ void VfxSystem::update(float dt, const Camera& camera, VkExtent2D renderSize) {
     fp.viewInfo = Vec4(std::abs(camera.projNoJitter()[1][1]), 0.0f, 0.0f, 0.0f);
     fp.groundInfo = m_groundView ? m_groundInfo : Vec4(0.0f);
     fp.groundSize = m_groundSize;
+    // fp.gustInfo e fp.gusts ficam como o motor os deixou (setGusts).
 
     std::memcpy(m_emitterBuf[frame].mapped, m_slotData.data(), size_t(m_slotHighWater) * sizeof(VfxEmitterGpu));
     if (!m_requests.empty())

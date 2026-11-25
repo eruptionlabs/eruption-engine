@@ -99,8 +99,11 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     vec4 rainCover;         // chuva so' onde chega (binding 19): xy canto XZ, z 1/lado (0 = sem), w borda
     vec4 wetAreas[32];      // world.wet_area: xy centro XZ, z raio, w quanto
     vec4 wetAreaParams;     // x = quantas
+    vec4 groundStateWin;    // estado do chao (binding 20): xy canto XZ da janela, z 1/lado (u), w 1 = ligado
+    vec4 groundStateH;      // x altura base da mascara, y faixa, z acima do chao (u), w abaixo (u)
 } lights;
 #include "lighting/wet_cover.glsl"
+#include "lighting/ground_state.glsl"
 // SONDA DE CEU (G36): o proprio skybox.frag em cubemap 32x32 com mips -
 // especular ambiental pre-filtrado (roughness -> lod).
 layout(set = 0, binding = 15) uniform samplerCube skyProbe;
@@ -708,6 +711,13 @@ vec3 shadeLite(vec4 albedo) {
     vec3 worldPos = worldFromDepth(inUV, texture(gbufferDepth, inUV).r);
     vec3 c = albedo.rgb;
     vec3 albedoLinear = c * (c * (c * 0.305306011 + 0.682171111) + 0.012522878);
+    if (lights.groundStateWin.w > 0.0) { // estado do chao por celula (o caminho enxuto nao tem o passe de ambiente)
+        vec4 pbrG = texture(gbufferPBR, inUV);
+        vec4 gsL = groundStateAt(worldPos);
+        float rL = pbrG.g, mL = pbrG.b;
+        albedoLinear *= 1.0 - 0.45 * groundStateWet(gsL, worldPos);
+        groundStateCover(albedoLinear, rL, mL, N, gsL, worldPos, albedo.a);
+    }
     vec3 L = normalize(-lights.dirLightDir.xyz);
     float NdotL = max(dot(N, L), 0.0);
     float ao = albedo.a;
@@ -858,6 +868,9 @@ void main() {
     // Area molhada pelo script (world.wet_area, skill de agua): com ou sem
     // chuva, coberta ou nao; seca no tempo que o script deu.
     wetDrive = max(wetDrive, wetAreasAt(worldPos));
+    // Estado do chao por celula (world.ground_state): molhado entra aqui, o resto depois.
+    const vec4 gs = groundStateAt(worldPos); // cartoes de folha no chao tambem queimam e gelam
+    wetDrive = max(wetDrive, groundStateWet(gs, worldPos));
     // Beira d'agua (espuma/onda): molha e seca sozinha, com ou sem chuva.
     // A beira e' do plano de liquido mais perto (grade: qual liquido; UBO:
     // nivel, modo e tipo dele). Lava nao molha: tem a beira propria abaixo.
@@ -884,6 +897,10 @@ void main() {
                                    abs(pbr.r - 0.75) < 0.06 ? 0.0 : wetDrive); // sprite nao encharca
     albedoLinear = shoreWetAlbedo(wet.albedo, molhaBeira, N.y);
     roughness    = wet.roughness;
+    const vec3 gsAlbedo0 = albedoLinear;
+    groundStateCover(albedoLinear, roughness, metallic, N, gs, worldPos, albedo.a);
+    // O quanto o estado do chao mudou o albedo: a transmissao da folha (abaixo) le' o albedo cru.
+    const vec3 gsMul = (gs.x + gs.y + gs.w) > 0.0 ? albedoLinear / max(gsAlbedo0, vec3(1e-4)) : vec3(1.0);
     // Lamina da onda subindo a praia (opcao do menu de agua): agua rasa lisa.
     if (abs(pbr.r - 0.75) >= 0.06 && (lights.pbrDebugMode & 256u) == 0u && liqLava && beira > 0.0) {
         vec3 lv = lavaShore(worldPos, beiraG.z, lights.rainSpotParams.w, beira, liq.y > 0.5) * smoothstep(0.0, 0.15, beira);
@@ -1090,7 +1107,7 @@ void main() {
     // tronco da mesma malha 35%. Um telhado verde nao ganha mais wrap.
     // Aditivo e fora do pbr_common (arquivo de outro agente).
     {
-        vec3 aLin = srgbToLinear(albedo.rgb);
+        vec3 aLin = srgbToLinear(albedo.rgb) * gsMul;
         float greenness = clamp((aLin.g - max(aLin.r, aLin.b)) * 5.0, 0.0, 1.0);
         const bool foliage = abs(fract(pbr.r * 4.0) - 0.5) < 0.15;
         float leafGate = (foliage && !LITE) ? mix(0.35, 1.0, greenness) : 0.0;

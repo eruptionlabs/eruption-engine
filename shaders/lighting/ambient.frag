@@ -52,8 +52,11 @@ layout(set = 0, binding = 7) uniform LightingUBO {
     vec4 rainCover;         // chuva so' onde chega (binding 19): xy canto XZ, z 1/lado (0 = sem), w borda
     vec4 wetAreas[32];      // world.wet_area: xy centro XZ, z raio, w quanto
     vec4 wetAreaParams;     // x = quantas
+    vec4 groundStateWin;    // estado do chao (binding 20): xy canto XZ da janela, z 1/lado (u), w 1 = ligado
+    vec4 groundStateH;      // x altura base da mascara, y faixa, z acima do chao (u), w abaixo (u)
 } lights;
 #include "lighting/wet_cover.glsl"
+#include "lighting/ground_state.glsl"
 
 // PROBES DE IRRADIANCIA (G38): visibilidade do ceu por probe, SH L1 numa
 // textura 3D (lighting/probe_bake.comp). E(N) = c4*L0 + 2*c2*(L1.N); /pi da'
@@ -267,6 +270,9 @@ void main() {
         }
         // Area molhada pelo script (skill de agua): com ou sem chuva, coberta ou nao.
         wetDriveA = max(wetDriveA, wetAreasAt(wpA));
+        // Estado do chao por celula (world.ground_state): molhado entra aqui, o resto depois.
+        const vec4 gsA = groundStateAt(wpA); // cartoes de folha no chao tambem queimam e gelam
+        wetDriveA = max(wetDriveA, groundStateWet(gsA, wpA));
         // Beira d'agua (espuma/onda): molha e seca sozinha, com ou sem chuva.
         const vec3 beiraGA = shoreMaskAt(wpA);
         const vec4 liqA = lights.shoreLiquids[int(beiraGA.y)];
@@ -284,6 +290,10 @@ void main() {
                                         abs(pbrA.r - 0.75) < 0.06 ? 0.0 : pbrA.a, N.y,
                                         abs(pbrA.r - 0.75) < 0.06 ? 0.0 : wetDriveA); // sprite nao encharca
         albedoLinear = shoreWetAlbedo(wetA.albedo, molhaBeiraA, N.y);
+        {
+            float rGs = pbrA.g, mGs = pbrA.b;
+            groundStateCover(albedoLinear, rGs, mGs, N, gsA, wpA, albedo.a);
+        }
         // Lamina da onda (igual ao directional.frag: as duas passadas concordam).
         if (abs(pbrA.r - 0.75) >= 0.06 && (lights.pbrDebugMode & 256u) == 0u && lavaA && beiraA > 0.0) {
             vec3 lvA = lavaShore(wpA, beiraGA.z, lights.rainSpotParams.w, beiraA, liqA.y > 0.5) * smoothstep(0.0, 0.15, beiraA);

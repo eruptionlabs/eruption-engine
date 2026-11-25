@@ -235,6 +235,14 @@ public:
     // Um passo na agua: anel que abre em (x, z) no instante `time` (o mesmo
     // relogio do render). `strength` ~1 num passo normal.
     void addStepRipple(float x, float z, float time, float strength = 1.0f);
+    // Aneis de uma afeccao (skill, impacto): `rings` aneis seguidos que abrem de
+    // (x, z) ate' `radius` (unidades do mundo) em `life` s, a partir de `time`.
+    // Fila de kMaxAreaRipples; o mais velho sai.
+    void addAreaRipple(float x, float z, float time, float strength, float radius, float life, uint32_t rings);
+    // Gelo sobre a agua (world.ground_state "ice_water"): `n` discos de 4 floats
+    // (x, z, raio, quanto 0..1); nullptr/0 limpa. Vale so' para a agua, nao a lava.
+    static constexpr uint32_t kMaxIceAreas = 8;
+    void setIceAreas(const float* xzrk, uint32_t n);
 
     void render(VkCommandBuffer cmd, const Mat4& viewProj, const Vec3& cameraPos,
                 const DayNightCycle& cycle, float time,
@@ -336,6 +344,11 @@ private:
     static constexpr uint32_t kMaxStepRipples = 16;
     Vec4 m_stepRipples[kMaxStepRipples] = {};
     uint32_t m_stepRippleNext = 0;
+    // Aneis de afeccao: por fonte, (x, z, nascimento, forca) e (alcance, vida, aneis, 0).
+    static constexpr uint32_t kMaxAreaRipples = 8;
+    Vec4 m_areaRipples[kMaxAreaRipples * 2] = {};
+    uint32_t m_areaRippleNext = 0;
+    Vec4 m_iceAreas[kMaxIceAreas] = {};
 
     struct WaterUBO {
         Vec4 baseColorDeep;       // xyz=cor profunda
@@ -368,8 +381,10 @@ private:
         Vec4 styleDeep;           // xyz=cor funda, w=inclinacao das ondas
         IVec4 styleSlots;         // x=slot do SSPR (-1 = sem)
         Vec4 stepRipples[kMaxStepRipples]; // ondinhas de passo: xy=(x,z), z=nascimento (s), w=forca (0 = vazio)
+        Vec4 areaRipples[kMaxAreaRipples * 2]; // aneis de afeccao: [2k] = (x, z, nascimento, forca), [2k+1] = (alcance, vida, aneis, 0)
+        Vec4 iceAreas[kMaxIceAreas];           // gelo sobre a agua: x, z, raio, quanto (0 = vazio)
     };
-    static_assert(sizeof(WaterUBO) <= 1024, "WaterUBO too large");
+    static_assert(sizeof(WaterUBO) <= 2048, "WaterUBO too large");
 
     VkBuffer m_uboBuffers[MAX_FRAMES * UBO_BANKS] = {};
     VmaAllocation m_uboAllocs[MAX_FRAMES * UBO_BANKS] = {};

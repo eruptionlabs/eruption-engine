@@ -106,6 +106,16 @@ bool parseBlock(const json& j, Block& b, std::string* err) {
         p.collide = flag(j, "collide", p.collide);
         p.lit = std::clamp(num(j, "lit", p.lit), 0.0f, 1.0f);
         p.outward = flag(j, "outward", p.outward);
+        p.distortion = std::clamp(num(j, "distortion", p.distortion), 0.0f, 0.25f);
+        p.distortionRadial = std::clamp(num(j, "distortion_radial", p.distortionRadial), 0.0f, 1.0f);
+        if (auto lj = j.find("light"); lj != j.end() && lj->is_object()) {
+            p.light = flag(*lj, "enabled", true);
+            rgb(*lj, "color", p.lightColor);
+            p.lightIntensity = std::clamp(num(*lj, "intensity", p.lightIntensity), 0.0f, 40.0f);
+            p.lightRadius = std::clamp(num(*lj, "radius", p.lightRadius), 0.05f, 8.0f);
+            p.lightFlicker = std::clamp(num(*lj, "flicker", p.lightFlicker), 0.0f, 1.0f);
+            p.lightHeight = std::clamp(num(*lj, "height", p.lightHeight), 0.0f, 4.0f);
+        }
         if (p.life[0] <= 0.0f || p.life[1] < p.life[0]) { if (err) *err = "particles: life invalido"; return false; }
         quality(j, p.minQuality, p.maxQuality);
     } else if (type == "raise") {
@@ -135,6 +145,29 @@ bool parseBlock(const json& j, Block& b, std::string* err) {
         w.radius = std::clamp(num(j, "radius", w.radius), 0.1f, 8.0f);
         w.duration = std::clamp(num(j, "duration", w.duration), 0.001f, 2.0f);
         w.durationMin = std::clamp(num(j, "duration_min", w.durationMin), 0.1f, 30.0f);
+        w.shape.width = std::clamp(num(j, "front_width", w.shape.width), 0.03f, 1.0f);
+        w.shape.floor = std::clamp(num(j, "floor", w.shape.floor), 0.0f, 1.0f);
+        w.shape.shake = std::clamp(num(j, "shake", w.shape.shake), 0.0f, 1.0f);
+        w.shape.lift = std::clamp(num(j, "lift", w.shape.lift), 0.0f, 1.0f);
+    } else if (type == "ripple") {
+        b.type = Block::Type::Ripple;
+        RippleBlock& r = b.ripple;
+        r.radius = std::clamp(num(j, "radius", r.radius), 0.05f, 4.0f);
+        r.life = std::clamp(num(j, "life", r.life), 0.2f, 6.0f);
+        r.strength = std::clamp(num(j, "strength", r.strength), 0.0f, 2.0f);
+        r.rings = uint32_t(std::clamp(num(j, "rings", float(r.rings)), 1.0f, 4.0f));
+    } else if (type == "ground") {
+        b.type = Block::Type::Ground;
+        GroundBlock& g = b.ground;
+        g.kind = text(j, "kind", g.kind);
+        if (g.kind != "scorch" && g.kind != "frost" && g.kind != "wet" && g.kind != "snow" && g.kind != "ice_water") {
+            if (err) *err = "ground: kind desconhecido '" + g.kind + "'";
+            return false;
+        }
+        g.amount = std::clamp(num(j, "amount", g.amount), 0.0f, 1.0f);
+        g.radius = std::clamp(num(j, "radius", g.radius), 0.05f, 4.0f);
+        g.duration = std::clamp(num(j, "duration", g.duration), 0.02f, 20.0f);
+        g.fade = std::clamp(num(j, "fade", g.fade), 0.0f, 1.0f);
     } else {
         if (err) *err = "bloco de tipo desconhecido: '" + type + "'";
         return false;
@@ -174,6 +207,10 @@ bool Table::parse(const std::string& jsonText, std::string* err) {
         for (const json& v : *it)
             if (v.is_string()) out.push_back(v.get<std::string>());
     };
+    if (auto al = root.find("aliases"); al != root.end() && al->is_object())
+        for (auto it = al->begin(); it != al->end(); ++it)
+            if (!it.key().empty() && it.key()[0] != '_' && it.value().is_string())
+                t.m_aliases[it.key()] = it.value().get<std::string>();
     strings("elements", t.m_elements);
     strings("surfaces", t.m_surfaces);
     if (t.m_elements.empty() || t.m_surfaces.empty()) {
@@ -249,11 +286,17 @@ bool Table::parse(const std::string& jsonText, std::string* err) {
 }
 
 bool Table::hasElement(const std::string& e) const {
-    return std::find(m_elements.begin(), m_elements.end(), e) != m_elements.end();
+    const std::string c = canonical(e);
+    return std::find(m_elements.begin(), m_elements.end(), c) != m_elements.end();
+}
+
+std::string Table::canonical(const std::string& e) const {
+    auto it = m_aliases.find(e);
+    return it == m_aliases.end() ? e : it->second;
 }
 
 const Reaction* Table::select(const std::string& element, const std::string& surface) const {
-    auto el = m_matrix.find(element);
+    auto el = m_matrix.find(canonical(element));
     if (el == m_matrix.end()) return nullptr;
     auto cell = el->second.find(surface);
     if (cell == el->second.end()) cell = el->second.find("default");
@@ -321,7 +364,8 @@ float gustEnvelope(float t) {
 
 float gustFront(float t) { return std::pow(std::clamp(t, 0.0f, 1.0f), 0.6f); }
 
-void GustRing::add(uint32_t id, float x, float z, float radius, float strength, float duration, uint32_t cap, bool* dropped) {
+void GustRing::add(uint32_t id, float x, float z, float radius, float strength, float duration, uint32_t cap, bool* dropped,
+                   const GustShape& shape) {
     cap = std::clamp<uint32_t>(cap, 1u, kMaxGusts);
     if (dropped) *dropped = false;
     while (m_gusts.size() >= cap) {
@@ -335,6 +379,11 @@ void GustRing::add(uint32_t id, float x, float z, float radius, float strength, 
     g.radius = std::max(radius, 1e-3f);
     g.strength = std::clamp(strength, 0.0f, 1.0f);
     g.duration = std::max(duration, 0.05f);
+    g.shape = shape;
+    g.shape.width = std::clamp(g.shape.width, 0.03f, 1.0f);
+    g.shape.floor = std::clamp(g.shape.floor, 0.0f, 1.0f);
+    g.shape.shake = std::clamp(g.shape.shake, 0.0f, 1.0f);
+    g.shape.lift = std::clamp(g.shape.lift, 0.0f, 1.0f);
     m_gusts.push_back(g);
 }
 
@@ -364,8 +413,13 @@ uint32_t GustRing::pack(GustPacked* out) const {
         p.a[2] = g.radius;
         p.a[3] = g.strength * gustEnvelope(t);
         p.b[0] = gustFront(t);
-        p.b[1] = 0.35f; // largura da frente, em fracao do raio
-        p.b[2] = p.b[3] = 0.0f;
+        p.b[1] = g.shape.width;
+        p.b[2] = g.shape.floor;
+        p.b[3] = g.shape.shake;
+        p.c[0] = g.shape.lift;
+        p.c[1] = g.duration;
+        p.c[2] = g.age;
+        p.c[3] = 0.0f;
     }
     return n;
 }

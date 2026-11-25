@@ -105,6 +105,7 @@ bool DeferredLighting::init(VulkanContext* ctx, GBuffer* gbuffer, BindlessDescri
 }
 
 void DeferredLighting::shutdown() {
+    destroyGroundStateImage();
     if (m_shoreImg != VK_NULL_HANDLE) {
         vkDestroyImageView(m_ctx->device(), m_shoreView, nullptr);
         vmaDestroyImage(m_ctx->allocator(), m_shoreImg, m_shoreAlloc);
@@ -431,7 +432,7 @@ void DeferredLighting::createPipelines() {
     //      - setShoreMask ao carregar mapa e ao remontar as lavas.
     // 19 = COBERTURA DA CHUVA (usampler2D R32_UINT, a grade de cima do
     //      WeatherRenderer; reserva 1x1 zerada) - setRainCover.
-    bindings.resize(20);
+    bindings.resize(21);
     for (uint32_t b = 12; b <= 15; ++b) {
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -454,6 +455,12 @@ void DeferredLighting::createPipelines() {
     bindings[19].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[19].descriptorCount = 1;
     bindings[19].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // 20 = ESTADO DO CHAO POR CELULA (sampler2D RGBA8 2W x W: queimado, geada,
+    //      molhado, neve + alturas; core/GroundState.hpp) - configureGroundState.
+    bindings[20].binding = 20;
+    bindings[20].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[20].descriptorCount = 1;
+    bindings[20].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     // UPDATE_AFTER_BIND: estes sets sao reescritos por frame com as MESMAS
     // views enquanto o CB do frame anterior ainda esta' pendente - sem a flag
@@ -727,7 +734,7 @@ void DeferredLighting::createSsaoPipelines() {
 void DeferredLighting::createDescriptors() {
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 19 * MAX_FRAMES;
+    poolSizes[0].descriptorCount = 20 * MAX_FRAMES;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 8 * MAX_FRAMES;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; // binding 16 (SH da sonda de ceu)
@@ -749,6 +756,8 @@ void DeferredLighting::createDescriptors() {
     vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, m_descSets);
     // Binding 18 precisa de imagem valida desde o inicio: grade vazia 1x1.
     setShoreMask(std::vector<float>(4, 0.0f), 1, 1, Vec2(0.0f), 0.0f);
+    // Binding 20: a imagem do estado do chao (vazia; o Engine a recria no tamanho do preset).
+    createGroundStateImage(m_gsTexels);
     // Binding 19 tambem: grade de cobertura 1x1 zerada (nada cobre).
     {
         VkDevice dev = m_ctx->device();
@@ -1075,6 +1084,169 @@ void DeferredLighting::setShoreMask(const std::vector<float>& px, uint32_t w, ui
     m_shoreW = w; m_shoreH = h; m_shoreOrigin = origin; m_shoreInvSize = invSize;
 }
 
+// ---------------------------------------------------------------- estado do chao
+
+void DeferredLighting::destroyGroundStateImage() {
+    VkDevice dev = m_ctx->device();
+    for (uint32_t i = 0; i < MAX_FRAMES; ++i) {
+        if (m_gsStaging[i] == VK_NULL_HANDLE) continue;
+        vmaUnmapMemory(m_ctx->allocator(), m_gsStagingAlloc[i]);
+        vmaDestroyBuffer(m_ctx->allocator(), m_gsStaging[i], m_gsStagingAlloc[i]);
+        m_gsStaging[i] = VK_NULL_HANDLE;
+        m_gsMapped[i] = nullptr;
+    }
+    if (m_gsImg != VK_NULL_HANDLE) {
+        vkDestroyImageView(dev, m_gsView, nullptr);
+        vmaDestroyImage(m_ctx->allocator(), m_gsImg, m_gsAlloc);
+        m_gsImg = VK_NULL_HANDLE;
+        m_gsView = VK_NULL_HANDLE;
+    }
+    if (m_gsSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(dev, m_gsSampler, nullptr);
+        m_gsSampler = VK_NULL_HANDLE;
+    }
+    m_gsPending = false;
+}
+
+// Imagem RGBA8 de 2W x W (esquerda: estados; direita: alturas), zerada, mais um
+// buffer de subida por quadro em voo. Escreve o binding 20 em todos os sets.
+bool DeferredLighting::createGroundStateImage(uint32_t texels) {
+    VkDevice dev = m_ctx->device();
+    texels = std::clamp<uint32_t>(texels, 64u, 1024u);
+    if (m_gsImg != VK_NULL_HANDLE) vkDeviceWaitIdle(dev); // troca so' ao configurar o preset
+    destroyGroundStateImage();
+    m_gsTexels = texels;
+    m_gsLost = true;
+    VkSamplerCreateInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.magFilter = si.minFilter = VK_FILTER_LINEAR; // RGBA8: linear e' obrigatorio em qualquer GPU
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.maxLod = 0.0f;
+    vkCreateSampler(dev, &si, nullptr, &m_gsSampler);
+    const uint32_t w = texels * 2, h = texels;
+    if (!m_ctx->createImage(w, h, VK_FORMAT_R8G8B8A8_UNORM,
+                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY,
+                            m_gsImg, m_gsAlloc))
+        return false;
+    VkImageViewCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image = m_gsImg;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCreateImageView(dev, &vi, nullptr, &m_gsView);
+    VkImage img = m_gsImg;
+    m_ctx->immediateSubmit([&](VkCommandBuffer cmd) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = img;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+        VkClearColorValue zero{};
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    });
+    const VkDeviceSize bytes = VkDeviceSize(w) * h * 4;
+    for (uint32_t i = 0; i < MAX_FRAMES; ++i) {
+        if (!m_ctx->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, m_gsStaging[i], m_gsStagingAlloc[i])) {
+            m_gsStaging[i] = VK_NULL_HANDLE;
+            continue;
+        }
+        void* mapped = nullptr;
+        vmaMapMemory(m_ctx->allocator(), m_gsStagingAlloc[i], &mapped);
+        m_gsMapped[i] = static_cast<uint8_t*>(mapped);
+    }
+    VkDescriptorImageInfo info{};
+    info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    info.imageView = m_gsView;
+    info.sampler = m_gsSampler;
+    for (uint32_t i = 0; i < MAX_FRAMES; ++i) {
+        if (m_descSets[i] == VK_NULL_HANDLE) continue;
+        VkWriteDescriptorSet wd{};
+        wd.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wd.dstSet = m_descSets[i];
+        wd.dstBinding = 20;
+        wd.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wd.descriptorCount = 1;
+        wd.pImageInfo = &info;
+        vkUpdateDescriptorSets(dev, 1, &wd, 0, nullptr);
+    }
+    return m_gsView != VK_NULL_HANDLE;
+}
+
+void DeferredLighting::configureGroundState(uint32_t texels) {
+    texels = std::clamp<uint32_t>(texels, 64u, 1024u);
+    if (texels == m_gsTexels && m_gsImg != VK_NULL_HANDLE) return;
+    createGroundStateImage(texels);
+}
+
+void DeferredLighting::queueGroundStateUpload(const uint8_t* px, int x0, int y0, int x1, int y1) {
+    if (!px || x1 < x0 || y1 < y0) return;
+    if (m_gsPending) { // dois pedidos antes de um render(): a uniao dos retangulos
+        x0 = std::min(x0, m_gsRect[0]);
+        y0 = std::min(y0, m_gsRect[1]);
+        x1 = std::max(x1, m_gsRect[2]);
+        y1 = std::max(y1, m_gsRect[3]);
+    }
+    m_gsSrc = px;
+    m_gsRect[0] = x0; m_gsRect[1] = y0; m_gsRect[2] = x1; m_gsRect[3] = y1;
+    m_gsPending = true;
+}
+
+// Sobe o retangulo sujo (esquerda e direita da imagem) pelo buffer do quadro em
+// voo. Fora de qualquer passe de renderizacao, antes das luzes lerem a imagem.
+void DeferredLighting::recordGroundStateUpload(VkCommandBuffer cmd, uint32_t frameIndex) {
+    if (!m_gsPending) return;
+    m_gsPending = false;
+    if (m_gsImg == VK_NULL_HANDLE || !m_gsSrc || !m_gsMapped[frameIndex]) return;
+    const int W = int(m_gsTexels);
+    const int x0 = std::clamp(m_gsRect[0], 0, W - 1), x1 = std::clamp(m_gsRect[2], 0, W - 1);
+    const int y0 = std::clamp(m_gsRect[1], 0, W - 1), y1 = std::clamp(m_gsRect[3], 0, W - 1);
+    if (x1 < x0 || y1 < y0) return;
+    const size_t rowBytes = size_t(x1 - x0 + 1) * 4;
+    const size_t stride = size_t(W) * 2 * 4;
+    for (int y = y0; y <= y1; ++y) {
+        std::memcpy(m_gsMapped[frameIndex] + size_t(y) * stride + size_t(x0) * 4, m_gsSrc + size_t(y) * stride + size_t(x0) * 4, rowBytes);
+        std::memcpy(m_gsMapped[frameIndex] + size_t(y) * stride + (size_t(W) + size_t(x0)) * 4,
+                    m_gsSrc + size_t(y) * stride + (size_t(W) + size_t(x0)) * 4, rowBytes);
+    }
+    VkImageMemoryBarrier b{};
+    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = m_gsImg;
+    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    b.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    VkBufferImageCopy c[2]{};
+    for (int k = 0; k < 2; ++k) {
+        c[k].bufferOffset = (VkDeviceSize(y0) * stride) + (VkDeviceSize(k * W + x0) * 4);
+        c[k].bufferRowLength = uint32_t(W) * 2;
+        c[k].bufferImageHeight = uint32_t(W);
+        c[k].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        c[k].imageOffset = {k * W + x0, y0, 0};
+        c[k].imageExtent = {uint32_t(x1 - x0 + 1), uint32_t(y1 - y0 + 1), 1};
+    }
+    vkCmdCopyBufferToImage(cmd, m_gsStaging[frameIndex], m_gsImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, c);
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+}
+
 void DeferredLighting::setIrradianceProbes(VkImageView view, VkSampler sampler,
                                            const Vec3& gridMin, const Vec3& gridInvExtent, bool enabled) {
     if (view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE) return;
@@ -1122,6 +1294,7 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
                               VkImageView rainOcclusionView, VkSampler rainOcclusionSampler,
                               float totalTime) {
     uint32_t frameIndex = m_ctx->currentFrame();
+    recordGroundStateUpload(cmd, frameIndex); // estado do chao: antes dos passes que o leem
 
     // Fill Lighting UBO. SEM `{}`: sizeof(LightingUBO) passa de 4 KB (era
     // 4416 bytes, 69 cache lines), e `ubo{}` zerava esse total todo frame - incluindo pointLights[128]
@@ -1194,6 +1367,8 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     ubo.rainCover = m_rainCover;
     for (uint32_t i = 0; i < m_wetAreaCount; ++i) ubo.wetAreas[i] = m_wetAreas[i];
     ubo.wetAreaParams = Vec4(static_cast<float>(m_wetAreaCount), 0.0f, 0.0f, 0.0f);
+    ubo.groundStateWin = m_gsWin;
+    ubo.groundStateH = m_gsH;
     ubo.snowIntensity = m_snowIntensity;
     ubo.temperatureC = m_temperatureC;
     ubo.ambientSky = Vec4(m_env.ambientSkyColor, 0.0f);

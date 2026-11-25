@@ -480,7 +480,7 @@ void ShadowRenderer::createShadowPipeline() {
             VkPushConstantRange pcRangeInst{};
             pcRangeInst.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
             pcRangeInst.offset = 0;
-            pcRangeInst.size = sizeof(Mat4) + sizeof(Vec4) + sizeof(float);
+            pcRangeInst.size = sizeof(Mat4) + sizeof(Vec4) + sizeof(float) + 10 * sizeof(uint32_t); // + 2 rajadas (124 B)
 
             VkDescriptorSetLayout instSets[2] = { bindlessLayout, m_shadowInstSetLayout };
             VkPipelineLayoutCreateInfo il{};
@@ -1513,6 +1513,7 @@ void ShadowRenderer::drawCascade(VkCommandBuffer cmd, const CasterSources& src, 
         // menor que o texel da cascata tambem entra.
         static const bool kNoSizeCull = std::getenv("ERUPTION_TEST_NO_SIZE_CULL") != nullptr;
         if (kNoSizeCull) minSize = 0.0f;
+        models->setShadowGusts(src.frameUbo.gusts, src.frameUbo.gustsT, uint32_t(src.frameUbo.gustInfo.x));
         models->setShadowCasterFilter(which == Casters::All ? 0 : which == Casters::Static ? 1 : 2);
         // Texel desta cascata em unidades do mundo: o nivel de cada caster sai
         // do tamanho dele NESTA cascata (ModelRenderer::shadowLevelFor).
@@ -1556,7 +1557,11 @@ void ShadowRenderer::renderCascades(VkCommandBuffer cmd, TerrainRenderer* terrai
 
     if (!terrain || !terrain->isInitialized()) return;
     const CasterSources src{terrain, models, sprites, frameUbo, spriteInstanceBuffer, spriteCount};
-    if (staticCacheActive() && !m_settings.enableTemporalBlend && ensureCacheImage()) {
+    // Rajada local ativa: a copa gira, entao o conjunto "parado" deixa de ser
+    // parado. Sai da sombra pre-assada (tudo e' desenhado todo quadro) e a
+    // imagem assada e' dada por perdida: assenta de novo depois da rajada.
+    if (src.frameUbo.gustInfo.x > 0.0f) m_cache.valid = false;
+    if (staticCacheActive() && !m_settings.enableTemporalBlend && src.frameUbo.gustInfo.x <= 0.0f && ensureCacheImage()) {
         renderWithStaticCache(cmd, src);
         return;
     }

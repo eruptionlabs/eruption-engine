@@ -2446,6 +2446,7 @@ int world_affect(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     Engine::AffectRequest r;
     r.kind = optString(L, 1, "kind");
+    if (r.kind.empty()) r.kind = optString(L, 1, "element"); // "element" = o mesmo que "kind"
     if (r.kind.empty()) luaL_errorL(L, "world.affect: 'kind' is required");
     lua_getfield(L, 1, "x");
     const bool hasX = lua_isnumber(L, -1) != 0;
@@ -2479,13 +2480,61 @@ int world_affect_stop(lua_State* L) {
     lua_pushboolean(L, eng().affectStop(uint32_t(luaL_checkinteger(L, 1))));
     return 1;
 }
-// world.wind_burst{x, z, radius, strength, duration}: rajada radial local.
+// world.wind_burst{x, z, radius, strength, duration, ring, lift, shake, front_width, floor}:
+// rajada radial local. `ring` = onda de impacto (frente fina, quase nada atras,
+// a copa treme, as particulas sobem); os outros campos mudam a forma por conta.
 int world_wind_burst(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     const float x = optField(L, 1, "x", 0.0f), z = optField(L, 1, "z", 0.0f);
+    affects::GustShape shape;
+    lua_getfield(L, 1, "ring");
+    if (lua_toboolean(L, -1)) {
+        shape.width = 0.14f;
+        shape.floor = 0.1f;
+        shape.shake = 0.5f;
+        shape.lift = 0.5f;
+    }
+    lua_pop(L, 1);
+    shape.width = optField(L, 1, "front_width", shape.width);
+    shape.floor = optField(L, 1, "floor", shape.floor);
+    shape.shake = optField(L, 1, "shake", shape.shake);
+    shape.lift = optField(L, 1, "lift", shape.lift);
     const uint32_t id = eng().windBurst(x, z, optField(L, 1, "radius", 0.0f), optField(L, 1, "strength", 1.0f),
-                                        optField(L, 1, "duration", 1.5f));
+                                        optField(L, 1, "duration", 1.5f), shape);
     lua_pushinteger(L, int(id));
+    return 1;
+}
+// world.ground_state{x, z, radius, kind, strength, duration, fade, square}: estado
+// do chao por celula (queimado, geada, molhado, neve, gelo sobre a agua); devolve o id.
+int world_ground_state(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    Engine::GroundStateRequest r;
+    r.kind = optString(L, 1, "kind");
+    if (r.kind.empty()) luaL_errorL(L, "world.ground_state: 'kind' is required");
+    lua_getfield(L, 1, "x");
+    const bool hasX = lua_isnumber(L, -1) != 0;
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "z");
+    const bool hasZ = lua_isnumber(L, -1) != 0;
+    lua_pop(L, 1);
+    if (!hasX || !hasZ) luaL_errorL(L, "world.ground_state: 'x' and 'z' are required");
+    r.x = optField(L, 1, "x", 0.0f);
+    r.z = optField(L, 1, "z", 0.0f);
+    r.radius = optField(L, 1, "radius", r.radius);
+    r.strength = optField(L, 1, "strength", r.strength);
+    r.duration = optField(L, 1, "duration", r.duration);
+    r.fade = optField(L, 1, "fade", r.fade);
+    lua_getfield(L, 1, "square");
+    r.square = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    const uint32_t id = eng().groundState(r);
+    if (id == 0) lua_pushnil(L);
+    else lua_pushinteger(L, int(id));
+    return 1;
+}
+// world.ground_state_stop(id): tira o estado agora; true se ainda vivia.
+int world_ground_state_stop(lua_State* L) {
+    lua_pushboolean(L, eng().groundStateStop(uint32_t(luaL_checkinteger(L, 1))));
     return 1;
 }
 int world_liquid_at(lua_State* L) {
@@ -3271,7 +3320,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         ERUPTION_API_FN(world, time), ERUPTION_API_FN(world, set_time), ERUPTION_API_FN(world, time_between),
         ERUPTION_API_FN(world, weather), ERUPTION_API_FN(world, is_weather), ERUPTION_API_FN(world, set_weather),
         ERUPTION_API_FN(world, set_wetness), ERUPTION_API_FN(world, wetness), ERUPTION_API_FN(world, wet_area),
-        ERUPTION_API_FN(world, look), ERUPTION_API_FN(world, set_look), ERUPTION_API_FN(world, set_ambient), ERUPTION_API_FN(world, set_dof), ERUPTION_API_FN(world, set_classic), ERUPTION_API_FN(world, set_sky), ERUPTION_API_FN(world, sky), ERUPTION_API_FN(world, set_classic_water), ERUPTION_API_FN(world, classic), ERUPTION_API_FN(world, set_fog), ERUPTION_API_FN(world, set_border), ERUPTION_API_FN(world, set_exposure), ERUPTION_API_FN(world, set_time_scale), ERUPTION_API_FN(world, time_scale), ERUPTION_API_FN(world, walkable), ERUPTION_API_FN(world, set_nav_rules), ERUPTION_API_FN(world, nav_rules), ERUPTION_API_FN(world, path), ERUPTION_API_FN(world, floor_height), ERUPTION_API_FN(world, screen_to_ground), ERUPTION_API_FN(world, floor_walkable), ERUPTION_API_FN(world, liquid_at), ERUPTION_API_FN(world, footprint), ERUPTION_API_FN(world, dust), ERUPTION_API_FN(world, affect), ERUPTION_API_FN(world, affect_stop), ERUPTION_API_FN(world, wind_burst), ERUPTION_API_FN(world, ground_grid), ERUPTION_API_FN(world, set_motion_blur),
+        ERUPTION_API_FN(world, look), ERUPTION_API_FN(world, set_look), ERUPTION_API_FN(world, set_ambient), ERUPTION_API_FN(world, set_dof), ERUPTION_API_FN(world, set_classic), ERUPTION_API_FN(world, set_sky), ERUPTION_API_FN(world, sky), ERUPTION_API_FN(world, set_classic_water), ERUPTION_API_FN(world, classic), ERUPTION_API_FN(world, set_fog), ERUPTION_API_FN(world, set_border), ERUPTION_API_FN(world, set_exposure), ERUPTION_API_FN(world, set_time_scale), ERUPTION_API_FN(world, time_scale), ERUPTION_API_FN(world, walkable), ERUPTION_API_FN(world, set_nav_rules), ERUPTION_API_FN(world, nav_rules), ERUPTION_API_FN(world, path), ERUPTION_API_FN(world, floor_height), ERUPTION_API_FN(world, screen_to_ground), ERUPTION_API_FN(world, floor_walkable), ERUPTION_API_FN(world, liquid_at), ERUPTION_API_FN(world, footprint), ERUPTION_API_FN(world, dust), ERUPTION_API_FN(world, affect), ERUPTION_API_FN(world, affect_stop), ERUPTION_API_FN(world, wind_burst), ERUPTION_API_FN(world, ground_state), ERUPTION_API_FN(world, ground_state_stop), ERUPTION_API_FN(world, ground_grid), ERUPTION_API_FN(world, set_motion_blur),
         ERUPTION_API_FN(world, set_chromatic_aberration), ERUPTION_API_FN(world, set_effect_radius),
         ERUPTION_API_FN(world, set_focus), ERUPTION_API_FN(world, set_ground_blend),
         ERUPTION_API_FN(world, set_cutaway),
@@ -3617,9 +3666,13 @@ declare world: {
     -- point (substance) and comes from the table data/affects.json (a project
     -- can replace it with its own data/affects.json): element x surface ->
     -- a list of reusable blocks (ground decal, particles, raised ground, wet
-    -- ground or mud, a wind gust). Nothing per element lives in the engine.
-    -- kind: "fire", "earth", "lightning", "water", "impact", "wind", "ice",
-    -- "poison", "holy", "shadow" (the table lists them). x, z: world position
+    -- ground or mud, a wind gust that bends trees and grass and carries leaves
+    -- and dust, a ripple on water, a ground state, heat haze, a light flash).
+    -- Nothing per element lives in the engine.
+    -- kind (or element): "fire", "earth", "lightning", "water", "impact", "wind",
+    -- "ice", "poison", "holy", "shadow" (the table lists them), plus the aliases
+    -- the table declares: "heat" = fire, "cold" = ice, "electric" = lightning,
+    -- "light" = holy. x, z: world position
     -- (the height is the floor there). radius: world units (default 3 m =
     -- 3 x the map's units per meter); the mark fills about that radius. strength: 0..1
     -- (default 1). duration: seconds the mark takes to fade (default 20).
@@ -3631,16 +3684,52 @@ declare world: {
     -- preset (data/graphics.json affect_*) sets the quality, the cap of live
     -- affections (the oldest goes first) and the particle amount. Visual and
     -- local: nothing is saved or sent over the network. Cleared on map change.
-    affect: (opts: { kind: string, x: number, z: number, radius: number?, strength: number?, duration: number?, dir: vector? }) -> number?,
-    -- Stops an affection (or a wind burst) now, with its particles. true if
-    -- the id was still alive.
+    affect: (opts: { kind: string?, element: string?, x: number, z: number, radius: number?, strength: number?, duration: number?, dir: vector? }) -> number?,
+    -- Stops an affection (or a wind burst, or a ground state) now, with its
+    -- particles and the ground states it left. true if the id was still alive.
     affect_stop: (id: number) -> boolean,
     -- Local radial wind gust: grass and trees bend away from the centre, the
     -- front travels outward and the force fades with distance and time. radius
     -- in world units (default 3 m), strength 0..1 (default 1), duration in seconds (default
     -- 1.5). At most 8 at once (fewer on weak presets; the oldest goes first).
     -- Returns an id for world.affect_stop.
-    wind_burst: (opts: { x: number, z: number, radius: number?, strength: number?, duration: number? }) -> number,
+    -- Optional shape: ring = true makes it an impact wave (thin front, almost
+    -- nothing behind it, the crowns shake while the front passes, leaves and
+    -- dust lift); or set the parts yourself: front_width (0.03..1 of the
+    -- radius, default 0.35), floor (0..1, the force left behind the front,
+    -- default 0.35), shake (0..1, canopy tremor, default 0), lift (0..1, the
+    -- push up on particles, default 0.3). Particles (falling leaves, dust,
+    -- embers, smoke) are pushed by the gust too. The trees' shadows do not
+    -- follow the local gust.
+    wind_burst: (opts: { x: number, z: number, radius: number?, strength: number?, duration: number?,
+        ring: boolean?, front_width: number?, floor: number?, shake: number?, lift: number? }) -> number,
+    -- GROUND STATE PER CELL: kind "scorch" (black charcoal core, brown rim with
+    -- pale ash specks, low plants turn dark brown), "frost" (matte blue-white
+    -- film with fine crystals, rough, the normal nearly flat), "wet" (darker and
+    -- glossy like rain wetness, stronger in the middle, drying from the edges),
+    -- "snow" (matte soft white cover, filling the hollows first) or "ice_water"
+    -- (a lid of ice over water inside the area: cracks, trapped bubbles, an
+    -- irregular rim thin enough to see the water through; it grows from the
+    -- centre while freezing and shrinks while thawing). It modulates the
+    -- MATERIAL of what is already on the ground (albedo, roughness, normal)
+    -- for the terrain and any ground model, with an irregular soft edge, only
+    -- up to 2 m above the ground (crowns and roofs are untouched).
+    -- x, z: world position. radius: world units (default
+    -- 3 m; half the side if square). strength 0..1 (default 1). duration:
+    -- seconds until it is gone (default by kind: scorch 60, frost 30, wet 30,
+    -- snow 90, ice_water 45). fade: seconds at the end spent fading out
+    -- (default by kind: 45, 18, 24, 45, 20, scaled with duration; 0 = vanishes
+    -- at the end). square: true for a square cell instead of a disc. Frost,
+    -- snow and ice leave wet ground while they melt. Returns an id (nil if the
+    -- kind is unknown). At most 400 at once (the oldest goes first; preset
+    -- ground_state_max), about 512 cells of half a meter around the camera
+    -- (presets ground_state_texels, ground_state_texel_m). Overlapping states of
+    -- the same kind keep the stronger. Visual and local: not saved or sent over
+    -- the network. Cleared on map change. Costs nothing while none is alive.
+    ground_state: (opts: { kind: string, x: number, z: number, radius: number?, strength: number?,
+        duration: number?, fade: number?, square: boolean? }) -> number?,
+    -- Removes a ground state now. true if it was still alive.
+    ground_state_stop: (id: number) -> boolean,
     -- Terrain height at a world position.
     ground_height: (x: number, z: number) -> number,
     -- Walkable-path height (Y) at a world position, from the corner heights of

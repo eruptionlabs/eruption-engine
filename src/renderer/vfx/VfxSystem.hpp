@@ -91,6 +91,8 @@ struct VfxFrameParamsGpu {
     glm::uvec4 meshIndexCount[8]; // 32 malhas
     Vec4 groundInfo; // xy origem da grade de altura, z 1/celula, w 1 = ha grade
     Vec4 groundSize; // xy texels (vertices da grade)
+    Vec4 gustInfo;   // x = quantas rajadas valem
+    Vec4 gusts[16];  // 2 por rajada, ver FrameParams em vfx_common.glsl
 };
 
 class VfxSystem {
@@ -180,6 +182,13 @@ public:
     // Mapa de sombra do sol + ShadowUBO (emissores "shadowed"). Chamar antes
     // de simulate(); VK_NULL_HANDLE = sem sombra (acesas).
     void setSunShadow(VkImageView atlas, VkBuffer ubo) { m_sunShadowView = atlas; m_sunShadowUbo = ubo; }
+    // Rajadas locais de vento do quadro (ate' 8): `v` leva 2 vec4 por rajada, como
+    // FrameParams::gusts. As particulas vivas sao empurradas por elas.
+    void setGusts(const Vec4* v, uint32_t n) {
+        n = std::min(n, 8u);
+        m_frameParams.gustInfo = Vec4(float(n), 0.0f, 0.0f, 0.0f);
+        for (uint32_t i = 0; i < 16; ++i) m_frameParams.gusts[i] = i < n * 2 ? v[i] : Vec4(0.0f);
+    }
     // Camada de meia resolucao (fumaca): FORA de qualquer rendering, antes de
     // draw(). Sem emissor lowRes ativo nao faz nada.
     void drawLowRes(VkCommandBuffer cmd, VkImageView depthView, VkExtent2D extent);

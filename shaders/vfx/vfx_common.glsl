@@ -109,6 +109,12 @@ struct FrameParams {
     uvec4 meshIndexCount[8]; // indices de cada malha de particula (32)
     vec4 groundInfo;    // xy origem da grade de altura, z 1/celula, w 1 = ha grade
     vec4 groundSize;    // xy texels (vertices da grade)
+    // Rajadas locais de vento (world.wind_burst, afeccoes): x = quantas valem (0 =
+    // nada muda). gusts[2k] = (x, z, raio, forca de agora), gusts[2k+1] = (frente
+    // 0..1 do raio, largura da frente, sopro para cima 0..1, forca atras da
+    // frente 0..1): as particulas (folha, poeira, brasa) sao levadas por elas.
+    vec4 gustInfo;
+    vec4 gusts[16];
 };
 
 // REGISTRO DE DESENHO (64 bytes, um por particula visivel, no indice dela):

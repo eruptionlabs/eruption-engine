@@ -126,4 +126,6 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     // Rajadas locais de vento (so' o vertex shader de vegetacao le).
     vec4 u_gustInfo;
     vec4 u_gusts[16];
+    // Tempo de cada rajada, para a mola da copa: (duracao s, idade s, 0, 0).
+    vec4 u_gustsT[8];
 };

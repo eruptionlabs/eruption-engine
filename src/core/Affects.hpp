@@ -75,6 +75,17 @@ struct ParticleBlock {
     bool collide = false;             // quica no plano do chao
     float lit = 0.8f;
     bool outward = false;             // sai do centro para fora, rente ao chao
+    // Distorcao de tela (calor, onda de choque): > 0 o emissor nao desenha cor,
+    // entorta a cena atras (fracao da altura da tela, ver VfxEmitterDesc).
+    float distortion = 0.0f;
+    float distortionRadial = 0.0f;    // 0 = ondulacao de calor, 1 = anel que empurra para fora
+    // Luz pontual do emissor (clarao): acende o chao e a copa em volta.
+    bool light = false;
+    float lightColor[3] = {1.0f, 0.9f, 0.6f};
+    float lightIntensity = 2.0f;
+    float lightRadius = 1.5f;         // em raios da afeccao
+    float lightFlicker = 0.3f;
+    float lightHeight = 0.6f;         // altura da luz, em raios
     int minQuality = 0, maxQuality = 2;
 };
 
@@ -100,20 +111,50 @@ struct WetBlock {
     bool mud = false;            // marca de lama no lugar de so' molhar
 };
 
+// Forma da rajada (os valores de antes = rajada de vento comum). Uma onda de
+// impacto e' a mesma rajada com a frente fina e quase nada atras dela.
+struct GustShape {
+    float width = 0.35f;   // largura da frente, em fracao do raio
+    float floor = 0.35f;   // fracao da forca que sobra atras da frente (0..1)
+    float shake = 0.0f;    // tremor da copa quando a frente passa (0..1)
+    float lift = 0.3f;     // sopro para cima nas particulas (0..1)
+};
+
 struct WindBlock {
     float strength = 1.0f;       // multiplica a forca do pedido
     float radius = 1.5f;         // em fracao do raio
     float duration = 0.1f;       // em fracao da duracao (a rajada e' curta)
     float durationMin = 0.8f;    // s
+    GustShape shape;
+};
+
+// Aneis na superficie da agua dentro do raio (so' vale onde ha' agua).
+struct RippleBlock {
+    float radius = 1.0f;         // alcance final do anel, em fracao do raio
+    float life = 1.6f;           // s
+    float strength = 1.0f;       // 0..2, vezes a forca do pedido
+    uint32_t rings = 3;          // aneis seguidos (1..4)
+};
+
+// Estado do chao (core/GroundState.hpp): queimado, geada, molhado, neve, gelo
+// sobre a agua. Modula o material do chao por celula; some por conta propria.
+struct GroundBlock {
+    std::string kind = "scorch"; // scorch, frost, wet, snow, ice_water
+    float amount = 1.0f;         // vezes a forca do pedido
+    float radius = 1.0f;         // em fracao do raio
+    float duration = 1.0f;       // vezes a duracao do pedido
+    float fade = 0.7f;           // fracao da duracao do estado gasta sumindo
 };
 
 struct Block {
-    enum class Type { Decal, Particles, Raise, Wet, Wind } type = Type::Decal;
+    enum class Type { Decal, Particles, Raise, Wet, Wind, Ripple, Ground } type = Type::Decal;
     DecalBlock decal;
     ParticleBlock particles;
     RaiseBlock raise;
     WetBlock wet;
     WindBlock wind;
+    RippleBlock ripple;
+    GroundBlock ground;
 };
 
 struct Reaction {
@@ -133,6 +174,9 @@ public:
     const std::vector<std::string>& elements() const { return m_elements; }
     const std::vector<std::string>& surfaces() const { return m_surfaces; }
     bool hasElement(const std::string& e) const;
+    // Elemento da matriz para um nome ou apelido ("aliases" do JSON: heat -> fire,
+    // cold -> ice...); o proprio nome se nao e' apelido.
+    std::string canonical(const std::string& e) const;
 
     // Reacao do par; se o elemento nao tem a superficie, usa a "default" dele.
     // nullptr: elemento desconhecido ou sem reacao nenhuma.
@@ -149,6 +193,7 @@ public:
 
 private:
     std::vector<std::string> m_elements, m_surfaces;
+    std::unordered_map<std::string, std::string> m_aliases;
     std::unordered_map<std::string, Reaction> m_reactions;
     // element -> surface -> nome da reacao
     std::unordered_map<std::string, std::unordered_map<std::string, std::string>> m_matrix;
@@ -164,6 +209,7 @@ struct LiveAffect {
     double born = 0.0, expire = 0.0;
     std::vector<uint32_t> vfx;   // instancias do VFX
     std::vector<uint32_t> gusts; // rajadas de vento que a afeccao soltou
+    std::vector<uint32_t> grounds; // estados do chao (world.ground_state) que a afeccao deixou
     std::string element, surface;
     float x = 0.0f, z = 0.0f;
 };
@@ -190,13 +236,18 @@ struct Gust {
     uint32_t id = 0;
     float x = 0.0f, z = 0.0f, radius = 1.0f, strength = 1.0f, duration = 1.0f;
     float age = 0.0f;
+    GustShape shape;
 };
 
-// Um vec4 x2 por rajada, como o shader le (FrameUBO::gusts):
-//   a = (x, z, raio, forca agora)   b = (frente 0..1, largura da frente, 0, 0)
+// Dois vec4 por rajada no FrameUBO dos modelos (FrameUBO::gusts):
+//   a = (x, z, raio, forca agora)
+//   b = (frente 0..1, largura da frente, forca atras da frente 0..1, tremor 0..1)
+// As particulas (VfxFrameParams::gusts) leem a e (b.x, b.y, c.x, b.z): o sopro
+// para cima no lugar do tremor.
 struct GustPacked {
     float a[4];
     float b[4];
+    float c[4];
 };
 
 // Forca da rajada no tempo t = idade/duracao: sobe rapido e cai (1-t)^1.5.
@@ -209,7 +260,7 @@ public:
     // Insere com o id dado (o mesmo contador das afeccoes, para world.affect_stop
     // valer para os dois); *dropped = true se uma mais velha saiu pelo teto.
     void add(uint32_t id, float x, float z, float radius, float strength, float duration, uint32_t cap,
-             bool* dropped = nullptr);
+             bool* dropped = nullptr, const GustShape& shape = GustShape());
     void tick(float dt);
     bool stop(uint32_t id);
     void clear() { m_gusts.clear(); }

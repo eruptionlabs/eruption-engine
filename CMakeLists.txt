@@ -1337,6 +1337,14 @@ if(ERUPTION_BUILD_TESTS)
     endif()
     add_test(NAME AffectsTests COMMAND eruption-affects-tests ${CMAKE_SOURCE_DIR}/data/affects.json)
 
+    # Estado do chao por celula: ciclo de vida, perfil, imagem e janela (sem GPU).
+    add_executable(eruption-ground-state-tests tests/test_ground_state.cpp src/core/GroundState.cpp)
+    target_include_directories(eruption-ground-state-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-ground-state-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME GroundStateTests COMMAND eruption-ground-state-tests)
+
     if(ERUPTION_MODULE_NET)
         add_executable(eruption-net-tests tests/test_net_wire.cpp src/net/Wire.cpp)
         target_include_directories(eruption-net-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

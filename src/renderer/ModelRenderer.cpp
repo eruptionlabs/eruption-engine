@@ -31,6 +31,7 @@
 #include "renderer/ShadowStreamPack.hpp"
 
 #include <cstring>
+#include <glm/gtc/packing.hpp>
 #include <algorithm>
 #include <future>
 #include <fstream>
@@ -5585,6 +5586,39 @@ bool ModelRenderer::shadowMissesReceivers(const Frustum& receivers, const Vec3& 
     return receivers.sweptBoxOutside(mn, mx, lightTravel, margin);
 }
 
+void ModelRenderer::setShadowGusts(const Vec4* gusts, const Vec4* gustsT, uint32_t n) {
+    std::memset(m_shadowGust, 0, sizeof(m_shadowGust));
+    int best[2] = {-1, -1};
+    for (uint32_t i = 0; i < n && i < 8; ++i) {
+        if (gusts[2 * i].w <= 0.002f) continue;
+        if (best[0] < 0 || gusts[2 * i].w > gusts[2 * size_t(best[0])].w) {
+            best[1] = best[0];
+            best[0] = int(i);
+        } else if (best[1] < 0 || gusts[2 * i].w > gusts[2 * size_t(best[1])].w) {
+            best[1] = int(i);
+        }
+    }
+    // Palavras: [a, b, c, x, z] da primeira em 0..4 e da segunda em 5..9 na ordem
+    // do push: a0 b0 c0 x0 z0 x1 z1 a1 b1 c1.
+    for (int s = 0; s < 2; ++s) {
+        if (best[s] < 0) continue;
+        const Vec4& a = gusts[2 * size_t(best[s])];
+        const Vec4& b = gusts[2 * size_t(best[s]) + 1];
+        const Vec4& t = gustsT[best[s]];
+        const uint32_t pa = glm::packHalf2x16(Vec2(a.z, a.w));
+        const uint32_t pb = glm::packHalf2x16(Vec2(b.x, t.x));
+        const uint32_t pc = glm::packUnorm4x8(Vec4(b.y, b.z, t.x > 1e-3f ? std::clamp(t.y / t.x, 0.0f, 1.0f) : 0.0f, 0.0f));
+        uint32_t xb, zb;
+        std::memcpy(&xb, &a.x, 4);
+        std::memcpy(&zb, &a.y, 4);
+        if (s == 0) {
+            m_shadowGust[0] = pa; m_shadowGust[1] = pb; m_shadowGust[2] = pc; m_shadowGust[3] = xb; m_shadowGust[4] = zb;
+        } else {
+            m_shadowGust[5] = xb; m_shadowGust[6] = zb; m_shadowGust[7] = pa; m_shadowGust[8] = pb; m_shadowGust[9] = pc;
+        }
+    }
+}
+
 void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline, VkPipelineLayout shadowLayout,
                                  const Mat4& cascadeMatrix, const Frustum& shadowFrustum,
                                  float minSizeThreshold, bool enableCulling, bool instanced,
@@ -5820,6 +5854,9 @@ void ModelRenderer::renderShadow(VkCommandBuffer cmd, VkPipeline shadowPipeline,
     // shadow_inst.vert - ver comentario la'.
     vkCmdPushConstants(cmd, shadowLayout, VK_SHADER_STAGE_VERTEX_BIT,
                        sizeof(Mat4), sizeof(Vec4), &windParams);
+    // Rajadas locais (offset 84, 40 B): a sombra gira com a copa.
+    vkCmdPushConstants(cmd, shadowLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                       sizeof(Mat4) + sizeof(Vec4) + sizeof(float), sizeof(m_shadowGust), m_shadowGust);
     Mat4* dst = static_cast<Mat4*>(m_shadowMapped[fi]) + m_shadowCursor;
 
     // ERUPTION_SHADOW_FULL_DETAIL=1 volta a desenhar a malha cheia na sombra.

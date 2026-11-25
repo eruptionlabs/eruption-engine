@@ -1669,7 +1669,12 @@ private:
     // Escala do balanco ao vento (windParams.y do quadro): folga das caixas
     // dos pedacos. Vem do passe de sombra e de setWindSwayScale.
     float m_windSwayScale = 0.15f;
+    // Rajadas locais na sombra: 10 palavras empurradas em offset 84 do push da
+    // sombra instanciada (shadow_gust.glsl). Zero = sem rajada.
+    uint32_t m_shadowGust[10] = {};
+    // `gusts`/`gustsT` = FrameUBO::gusts / gustsT, `n` = quantas valem. Guarda as 2 mais fortes.
 public:
+    void setShadowGusts(const Vec4* gusts, const Vec4* gustsT, uint32_t n);
     void setWindSwayScale(float s) { m_windSwayScale = s; }
 private:
     float m_geoDispAmplitude = 0.0f;

@@ -149,6 +149,12 @@ struct LightingUBO {
     // z = raio, w = quanto (0..1, ja' secando). wetAreaParams.x = quantas.
     alignas(16) Vec4 wetAreas[32];
     alignas(16) Vec4 wetAreaParams;
+    // ESTADO DO CHAO POR CELULA (binding 20, core/GroundState.hpp): xy = canto XZ
+    // da janela, z = 1/lado (u), w = 1 se ha' algo a ler (0 = o shader nem le' a
+    // textura: imagem identica). groundStateH: x = altura base da mascara, y =
+    // faixa, z = ate' quanto acima do chao o estado vale (u), w = abaixo (u).
+    alignas(16) Vec4 groundStateWin;
+    alignas(16) Vec4 groundStateH;
 };
 
 struct DirectionalLight {
@@ -318,6 +324,19 @@ public:
     // fica: canto XZ, lado, borda suave. view nula ou lado 0: sem grade (a
     // chuva molha tudo, como antes).
     void setRainCover(VkImageView view, const Vec2& origin, float size, float softness);
+    // Estado do chao por celula (binding 20): a imagem 2W x W RGBA8 em espaco de
+    // mundo que o Engine escreve (core/GroundState.hpp). configureGroundState
+    // (re)cria a imagem com W celulas; queueGroundStateUpload agenda a subida do
+    // retangulo (celulas da metade esquerda; a de alturas vai junto) no proximo
+    // render(); `px` precisa viver ate' la'. setGroundStateParams: os dois vec4
+    // do UBO (w de `win` em 0 = desligado).
+    void configureGroundState(uint32_t texels);
+    void queueGroundStateUpload(const uint8_t* px, int x0, int y0, int x1, int y1);
+    void setGroundStateParams(const Vec4& win, const Vec4& h) { m_gsWin = win; m_gsH = h; }
+    uint32_t groundStateTexels() const { return m_gsTexels; }
+    // true uma vez depois que a imagem foi recriada vazia (resize da janela):
+    // quem a escreve precisa subir tudo de novo.
+    bool takeGroundStateLost() { const bool v = m_gsLost; m_gsLost = false; return v; }
     static constexpr uint32_t kWetAreas = 32;
     void setWetAreas(const std::vector<Vec4>& areas) {
         m_wetAreaCount = static_cast<uint32_t>(std::min<size_t>(areas.size(), kWetAreas));
@@ -447,6 +466,24 @@ private:
     void bindRainCover();
     Vec4 m_wetAreas[kWetAreas] = {};
     uint32_t m_wetAreaCount = 0;
+    // Estado do chao (binding 20).
+    VkImage m_gsImg = VK_NULL_HANDLE;
+    VmaAllocation m_gsAlloc = VK_NULL_HANDLE;
+    VkImageView m_gsView = VK_NULL_HANDLE;
+    VkSampler m_gsSampler = VK_NULL_HANDLE;
+    VkBuffer m_gsStaging[MAX_FRAMES] = {};
+    VmaAllocation m_gsStagingAlloc[MAX_FRAMES] = {};
+    uint8_t* m_gsMapped[MAX_FRAMES] = {};
+    uint32_t m_gsTexels = 64;  // sobrevive ao shutdown(): o resize() recria a imagem com o mesmo lado
+    const uint8_t* m_gsSrc = nullptr;
+    int m_gsRect[4] = {0, 0, -1, -1};
+    bool m_gsPending = false;
+    bool m_gsLost = false;
+    Vec4 m_gsWin = Vec4(0.0f);
+    Vec4 m_gsH = Vec4(0.0f);
+    bool createGroundStateImage(uint32_t texels);
+    void destroyGroundStateImage();
+    void recordGroundStateUpload(VkCommandBuffer cmd, uint32_t frameIndex);
     VkImage m_shoreImg = VK_NULL_HANDLE;
     VmaAllocation m_shoreAlloc = VK_NULL_HANDLE;
     VkImageView m_shoreView = VK_NULL_HANDLE;

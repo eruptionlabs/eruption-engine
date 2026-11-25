@@ -37,6 +37,7 @@
 #include "renderer/CloudLayerRenderer.hpp"
 #include "renderer/vfx/VfxSystem.hpp"
 #include "core/Affects.hpp"
+#include "core/GroundState.hpp"
 #include "core/FootstepEffects.hpp"
 #include "core/SpriteContact.hpp"
 #include "renderer/vfx/AmbientParticles.hpp"
@@ -2977,7 +2978,28 @@ public:
     bool affectStop(uint32_t id);
     // Rajada radial local de vento: a vegetacao se curva para fora, a frente
     // anda e a forca decai com a distancia e o tempo. Teto fixo de rajadas.
-    uint32_t windBurst(float x, float z, float radius, float strength, float duration);
+    // `shape`: largura da frente, o que sobra atras dela, tremor da copa e sopro
+    // das particulas (os padroes sao a rajada de vento comum).
+    uint32_t windBurst(float x, float z, float radius, float strength, float duration,
+                       const affects::GustShape& shape = affects::GustShape());
+
+    // ESTADO DO CHAO POR CELULA (core/GroundStateEngine.cpp, logica em
+    // core/GroundState.hpp): queimado, geada, molhado, neve ou gelo sobre a agua
+    // numa area, com forca, duracao e um tempo de sumir. Modula o material do
+    // chao (albedo, rugosidade, normal) no passe de luz. Devolve um id (0 =
+    // tipo desconhecido).
+    struct GroundStateRequest {
+        std::string kind;       // scorch, frost, wet, snow, ice_water
+        float x = 0.0f, z = 0.0f;
+        float radius = 0.0f;    // 0 = 3 m; meio lado se `square`
+        float strength = 1.0f;  // 0..1
+        float duration = 0.0f;  // s ate' sumir; 0 = o padrao do tipo
+        float fade = -1.0f;     // s do fim gastos sumindo; < 0 = o padrao do tipo
+        bool square = false;    // uma celula quadrada no lugar do disco
+    };
+    uint32_t groundState(const GroundStateRequest& r);
+    bool groundStateStop(uint32_t id);
+    size_t groundStatesAlive() const { return m_groundField.size(); }
     // Superficie do lugar (regiao de textura, material do chao, agua) pela tabela.
     std::string affectSurfaceAt(const Vec3& pos);
     const affects::Table& affectTable();
@@ -2986,6 +3008,9 @@ public:
     void updateAffects(float dt);                   // 1x por quadro, Render.cpp
     void affectsOnMapLoaded();                      // o VFX foi limpo: as afeccoes e as rajadas caducam
     void fillGusts(FrameUBO& ubo) const;            // rajadas do quadro para o UBO
+    void updateGroundState(float dt);               // 1x por quadro (updateAffects chama)
+    void groundStateApplyPreset(const json& preset);
+    void groundStateOnMapLoaded();
 
 private:
     affects::Table m_affectTable;
@@ -2996,6 +3021,12 @@ private:
     uint32_t m_affectNextId = 0;
     double m_affectClock = 0.0;
     std::unordered_map<std::string, std::string> m_affectEffects; // chave da variante -> efeito do VFX
+    ground::Field m_groundField;
+    uint32_t m_groundTexels = 512;   // preset ground_state_texels
+    float m_groundTexelM = 0.5f;     // preset ground_state_texel_m (metros por celula)
+    uint32_t m_groundCap = 400;      // preset ground_state_max
+    double m_groundNextRaster = 0.0;
+    bool m_groundDirty = true;
     void loadAffectTable();
     void affectApplyPreset(const json& preset);
     std::vector<CharacterStep> m_characterSteps;

@@ -7,6 +7,18 @@ layout(push_constant) uniform PushConstants {
     layout(offset = 0)  mat4 cascadeVP;
     layout(offset = 64) vec4 windParams;
     layout(offset = 80) float swayAmount;
+    // Rajadas locais (ModelRenderer::setShadowGusts): as duas mais fortes, ver
+    // shadow_gust.glsl. Escalares de proposito (sem alinhamento de vec).
+    layout(offset = 84)  uint gA0;
+    layout(offset = 88)  uint gB0;
+    layout(offset = 92)  uint gC0;
+    layout(offset = 96)  float gX0;
+    layout(offset = 100) float gZ0;
+    layout(offset = 104) float gX1;
+    layout(offset = 108) float gZ1;
+    layout(offset = 112) uint gA1;
+    layout(offset = 116) uint gB1;
+    layout(offset = 120) uint gC1;
 };
 
 layout(location = 6) in vec4 inModel0;
@@ -43,10 +55,17 @@ vec3 applyWindSway(vec3 worldPos, float localHeight, float sway) {
     return worldPos;
 }
 
+#include "shadow/shadow_gust.glsl"
+
 vec4 shadowClipPos(vec3 position) {
     mat4 model = mat4(inModel0, inModel1, inModel2, inModel3);
     vec4 worldPos = model * vec4(position, 1.0);
     float instBaseY = (model * vec4(0.0, 0.0, 0.0, 1.0)).y;
     worldPos.xyz = applyWindSway(worldPos.xyz, worldPos.y - instBaseY, swayAmount);
+    if (swayAmount > 1e-4) {
+        const float hG = max(worldPos.y - instBaseY, 0.0);
+        worldPos.xyz = shadowGustOne(worldPos.xyz, hG, inModel3.xz, gA0, gB0, gC0, gX0, gZ0);
+        worldPos.xyz = shadowGustOne(worldPos.xyz, hG, inModel3.xz, gA1, gB1, gC1, gX1, gZ1);
+    }
     return cascadeVP * worldPos;
 }
