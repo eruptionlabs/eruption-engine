@@ -12,7 +12,7 @@ struct UpscalePush {
     Vec2 invSrcSize;
     Vec2 invDstSize;
     float sharpenAmount;
-    float _pad;
+    float nearestMode;
 };
 
 bool UpscaleAA::init(VulkanContext* ctx, uint32_t renderWidth, uint32_t renderHeight, VkFormat renderFormat) {
@@ -113,17 +113,21 @@ void UpscaleAA::render(VkCommandBuffer cmd, VkImageView source, VkImage sourceIm
     if (!m_fxaaPipeline || !m_upscalePipeline || !m_fxaaGroup || !m_upscaleGroup) return;
 
     rhi::CommandList cl(cmd);
-    rhi::RenderPassDesc fxaa;
-    fxaa.colors = {{m_fxaaTarget, rhi::LoadOp::DontCare, rhi::StoreOp::Store, {}}};
-    fxaa.width = m_renderWidth;
-    fxaa.height = m_renderHeight;
-    cl.beginRenderPass(fxaa);
-    cl.setPipeline(m_fxaaPipeline);
-    cl.setBindGroup(0, m_fxaaGroup);
-    const FxaaPush fxaaPush{Vec2(1.0f / m_renderWidth, 1.0f / m_renderHeight)};
-    cl.setPush(&fxaaPush, sizeof(fxaaPush));
-    cl.draw(3);
-    cl.endRenderPass();
+    // Fator inteiro: sem o FXAA (ele borra a borda que a amostra pontual quer
+    // nitida) e o upscale le' a imagem de render direto.
+    if (!m_nearest) {
+        rhi::RenderPassDesc fxaa;
+        fxaa.colors = {{m_fxaaTarget, rhi::LoadOp::DontCare, rhi::StoreOp::Store, {}}};
+        fxaa.width = m_renderWidth;
+        fxaa.height = m_renderHeight;
+        cl.beginRenderPass(fxaa);
+        cl.setPipeline(m_fxaaPipeline);
+        cl.setBindGroup(0, m_fxaaGroup);
+        const FxaaPush fxaaPush{Vec2(1.0f / m_renderWidth, 1.0f / m_renderHeight)};
+        cl.setPush(&fxaaPush, sizeof(fxaaPush));
+        cl.draw(3);
+        cl.endRenderPass();
+    }
 
     // O chamador deixa a swapchain em COLOR_ATTACHMENT_OPTIMAL e espera ela
     // assim na volta, pro ImGui desenhar em cima: e' o repouso do embrulho.
@@ -135,12 +139,13 @@ void UpscaleAA::render(VkCommandBuffer cmd, VkImageView source, VkImage sourceIm
     up.height = dstExtent.height;
     cl.beginRenderPass(up);
     cl.setPipeline(m_upscalePipeline);
-    cl.setBindGroup(0, m_upscaleGroup);
+    cl.setBindGroup(0, m_nearest ? m_fxaaGroup : m_upscaleGroup);
     UpscalePush push{};
     push.srcSize = Vec2((float)m_renderWidth, (float)m_renderHeight);
     push.invSrcSize = Vec2(1.0f / m_renderWidth, 1.0f / m_renderHeight);
     push.invDstSize = Vec2(1.0f / dstExtent.width, 1.0f / dstExtent.height);
-    push.sharpenAmount = sharpenAmount;
+    push.sharpenAmount = m_nearest ? 0.0f : sharpenAmount;
+    push.nearestMode = m_nearest ? 1.0f : 0.0f;
     cl.setPush(&push, sizeof(push));
     cl.draw(3);
     cl.endRenderPass();

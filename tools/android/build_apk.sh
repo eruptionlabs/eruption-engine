@@ -93,7 +93,7 @@ else
     {
         find data -type f
         find shaders -type f -name '*.spv'
-        find assets/data assets/scripts assets/sprites assets/icon -type f 2>/dev/null
+        find assets/data assets/scripts assets/sprites assets/icon -type f 2>/dev/null || true   # pasta ausente (clone limpo) nao e' erro com set -e
         # LOD de celular montado no PC (perfil mobile do sistema de LOD): o motor
         # le' desta pasta se ela existir, sem montar nada no aparelho.
         find assets/lodcache/mobile -type f 2>/dev/null || true

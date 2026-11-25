@@ -685,7 +685,7 @@ void Engine::drawTouchHud() {
         static const char* const kLabels[3] = {"Qualidade: Baixa", "Qualidade: Media", "Qualidade: Alta"};
         const std::string& shown = m_presetChoiceNext.empty() ? m_graphicsPreset : m_presetChoiceNext;
         int level = 0;
-        while (level < 2 && shown != kQualityPresets[level]) ++level;
+        while (level < 2 && shown != kQualityPresets[qualityBase() + level]) ++level;
         if (fx::Button(kLabels[level], ImVec2(bw, 0.0f))) cycleQualityPreset();
         if (!m_presetChoiceNext.empty() && m_presetChoiceNext != m_graphicsPreset)
             ImGui::TextUnformatted("Reabra o app");

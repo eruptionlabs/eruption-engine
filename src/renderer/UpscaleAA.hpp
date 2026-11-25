@@ -47,6 +47,11 @@ public:
     // muda em uso normal; so' teoricamente se o PostProcessor for recriado).
     void bindSource(VkImageView source);
 
+    // Escala inteira (preset integer_scale): amostra pontual, sem FXAA e sem
+    // nitidez; so' vale quando a imagem de render e' divisor exato da saida.
+    void setNearest(bool on) { m_nearest = on; }
+    bool nearest() const { return m_nearest; }
+
 private:
     // Primeiro renderer na RHI (rhi/Rhi.hpp): o mesmo codigo serve o alvo web.
     rhi::RenderPipeline* createFxaaPipeline();
@@ -58,6 +63,7 @@ private:
     std::unique_ptr<rhi::Device> m_device;
     uint32_t m_renderWidth = 0, m_renderHeight = 0;
     rhi::Format m_renderFormat = rhi::Format::Undefined;
+    bool m_nearest = false;
 
     rhi::Sampler* m_sampler = nullptr; // linear, clamp-to-edge, sem comparacao
     // Um layout so' (os dois passes tem a mesma forma: 1 textura amostrada).

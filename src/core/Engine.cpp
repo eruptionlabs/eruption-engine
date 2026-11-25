@@ -561,7 +561,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         if (const char* e = std::getenv("ERUPTION_FSR_MODE")) fsrMode = e;
         const bool fsrWanted = upscaler == "fsr" || upscaler == "fsr_post";
         if (const char* e = std::getenv("ERUPTION_RENDER_SCALE")) {
-            rs = std::clamp(std::strtof(e, nullptr), 0.25f, 1.0f);
+            rs = std::clamp(std::strtof(e, nullptr), 0.0625f, 1.0f);
         } else if (fsrWanted) {
             const float ratio = fsrMode == "native" ? 1.0f : fsrMode == "balanced" ? 1.7f
                               : fsrMode == "performance" ? 2.0f : fsrMode == "ultra" ? 3.0f : 1.5f;
@@ -572,12 +572,21 @@ bool Engine::init(int width, int height, const std::string& title) {
                     nlohmann::json gj = loadMergedGraphicsRoot();
                     const std::string& pr = graphicsPresetName();
                     if (gj.contains("presets") && gj["presets"].contains(pr)) {
-                        rs = std::clamp<float>(gj["presets"][pr].value("render_scale", 1.0f), 0.25f, 1.0f);
+                        rs = std::clamp<float>(gj["presets"][pr].value("render_scale", 1.0f), 0.0625f, 1.0f);
                     }
                 }
             } catch (...) { rs = 1.0f; }
         }
-        if (rs < 0.999f) {
+        // integer_scale: a cena e' 1/n da tela (n divisor exato), nunca uma
+        // fracao que o upscale tenha de interpolar.
+        m_integerScale = !fsrWanted && presetBool(graphicsPresetName(), "integer_scale", false);
+        if (m_integerScale && rs < 0.999f) {
+            const uint32_t n = integerScaleDivisor(rs, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+            width /= static_cast<int>(n);
+            height /= static_cast<int>(n);
+            rs = 1.0f / static_cast<float>(n);
+            ERUPTION_LOG_WARN("Render scale inteiro 1/%u: cena em %dx%d", n, width, height);
+        } else if (rs < 0.999f) {
             width  = std::max(64, static_cast<int>(width * rs));
             height = std::max(64, static_cast<int>(height * rs));
             ERUPTION_LOG_WARN("Render scale %.2f: cena em %dx%d", rs, width, height);
@@ -591,6 +600,12 @@ bool Engine::init(int width, int height, const std::string& title) {
     if (presetBool(graphicsPresetName(), "shader_lite", false)) m_vulkan.setShaderLite(true);
     // Enxuto medio (normal map + especular simples), so' com o enxuto ligado.
     m_vulkan.setShaderLiteRelevo(presetBool(graphicsPresetName(), "shader_lite_relevo", false));
+    m_vulkan.setSkyLite(presetBool(graphicsPresetName(), "sky_lite", false));
+    m_vulkan.setPostLite(presetBool(graphicsPresetName(), "post_lite", false));
+    m_vulkan.setSmokeLite(presetBool(graphicsPresetName(), "smoke_lite", false));
+    m_vulkan.setLightingMin(presetBool(graphicsPresetName(), "lighting_min", false));
+    m_vulkan.setModelShaderMin(presetBool(graphicsPresetName(), "model_shader_min", false));
+    m_vulkan.setGroundShaderMin(presetBool(graphicsPresetName(), "ground_shader_min", false));
     // Formatos enxutos (spec 50, LeanFormats.hpp): preset, env forca, GPU decide.
     {
         bool d16 = presetBool(graphicsPresetName(), "shadow_depth16", false);
@@ -2866,13 +2881,14 @@ void Engine::setDofEnabled(bool on) {
 // Botao Qualidade do painel de toque: Baixa -> Media -> Alta -> Baixa. Vale
 // na proxima abertura: o caminho enxuto dos shaders e' decidido antes das
 // pipelines nascerem. Onde a tabela escolheu mobile_low o ciclo para em Media
-// (no PowerVR GE8320 o preset alto passa de 1 s de GPU e trava o aparelho).
+// (no PowerVR GE8320 o preset alto passa de 1 s de GPU e trava o aparelho);
+// onde escolheu mobile_legacy (GE8xxx de 4 GB) a escada e' legacy -> low.
 void Engine::cycleQualityPreset() {
-    const size_t levels = m_graphicsPresetAuto == kQualityPresets[0] ? 2 : 3;
+    const size_t base = qualityBase(), levels = qualityLevels();
     const std::string& now = m_presetChoiceNext.empty() ? m_graphicsPreset : m_presetChoiceNext;
     size_t level = 0;
-    while (level < levels && now != kQualityPresets[level]) ++level;
-    const char* next = kQualityPresets[level >= levels ? 0 : (level + 1) % levels];
+    while (level < levels && now != kQualityPresets[base + level]) ++level;
+    const char* next = kQualityPresets[base + (level >= levels ? 0 : (level + 1) % levels)];
     if (std::ofstream f(kPresetOverrideFile); f) f << next << '\n';
     m_presetChoiceNext = next;
 }
@@ -3111,7 +3127,13 @@ void Engine::applyGraphicsPreset() {
     }
     // Saida do celular: fracao da tela do swapchain (o compositor estica o
     // resto). Aparelho forte usa a tela inteira; fraco, metade.
-    if (p.contains("display_scale")) platform::setDisplayScale(p["display_scale"].get<float>());
+    if (p.contains("display_scale")) {
+        float ds = p["display_scale"].get<float>();
+        // integer_scale: a saida tambem e' 1/n da tela do aparelho (o compositor
+        // sobe com fator inteiro).
+        if (m_integerScale && ds > 0.0f) ds = 1.0f / std::max(1.0f, std::round(1.0f / ds));
+        platform::setDisplayScale(ds);
+    }
     m_deferredLighting.setPointLightMax(static_cast<uint32_t>(std::max(0, p.value("point_light_max", 0))));
     m_deferredLighting.setTileLightMax(static_cast<uint32_t>(std::max(1, p.value("point_light_tile_max", 16))));
     // Texel maximo do mapa unico (unidades de mundo): com o atlas, decide a
@@ -3134,10 +3156,11 @@ void Engine::applyGraphicsPreset() {
     // ERUPTION_RENDER_SCALE fixa a escala e desliga a calibracao.
     m_scaleTuning = {};
     if (!std::getenv("ERUPTION_RENDER_SCALE")) {
-        const float start = std::clamp<float>(p.value("render_scale", 1.0f), 0.25f, 1.0f);
+        const float start = std::clamp<float>(p.value("render_scale", 1.0f), 0.0625f, 1.0f);
         m_scaleTuning.targetFps = std::max(0.0f, p.value("target_fps", 0.0f));
-        m_scaleTuning.minScale = std::clamp<float>(p.value("render_scale_min", start), 0.25f, start);
+        m_scaleTuning.minScale = std::clamp<float>(p.value("render_scale_min", start), 0.0625f, start);
         m_scaleTuning.maxScale = std::clamp<float>(p.value("render_scale_max", start), start, 1.0f);
+        m_scaleTuning.integer = m_integerScale;
     }
     m_maxRainFollowers = std::clamp<int>(
         p.value("max_rain_followers", m_maxRainFollowers), 1,
@@ -3152,9 +3175,12 @@ void Engine::applyGraphicsPreset() {
     // desligada por completo ("smoke": false) ou só barateada: menos passos
     // de ray-march, sem a amostra extra na direção do sol e sem a 3a oitava.
     m_smokeEnabled = p.value("smoke", true);
-    m_smokeMaxSteps = std::clamp<int>(p.value("smoke_steps", 32), 6, 96);
+    m_smokeMaxSteps = std::clamp<int>(p.value("smoke_steps", 32), 4, 96);
     m_smokeSunTap = p.value("smoke_sun_tap", true);
     m_smokeDetail = p.value("smoke_detail", true);
+    // Fracao da resolucao da cena em que a coluna e' rastreada (1 = cheia). O custo e' por pixel
+    // coberto; a fumaca e' macia e a composicao e' bilinear (premultiplicada).
+    m_smokeScale = std::clamp<float>(p.value("smoke_scale", 1.0f), 0.125f, 1.0f);
 
     // AGUA DE DIORAMA (WaterRenderer::StyleConfig). Liga por preset
     // ("water_hd2d"; sem a chave, a agua de antes); a aparencia vem do bloco
@@ -3632,7 +3658,7 @@ bool Engine::applyGraphicsLive(const std::string& base, const json& overrides) {
     // applyGraphicsPreset only stores the scale for the start-up path; follow it live
     // like settleRenderScale does (not with a fixed ERUPTION_RENDER_SCALE or an upscaler).
     if (!std::getenv("ERUPTION_RENDER_SCALE") && !fsrActive() && m_displayW > 0) {
-        const float rs = std::clamp<float>(root["presets"][active].value("render_scale", 1.0f), 0.25f, 1.0f);
+        const float rs = std::clamp<float>(root["presets"][active].value("render_scale", 1.0f), 0.0625f, 1.0f);
         const uint32_t w = std::max(64u, static_cast<uint32_t>(static_cast<float>(m_displayW) * rs));
         const uint32_t h = std::max(64u, static_cast<uint32_t>(static_cast<float>(displayExtent().height) * rs));
         if (w != m_renderW || h != m_renderH) {

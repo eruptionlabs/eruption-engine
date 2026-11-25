@@ -178,6 +178,9 @@ public:
                           const Camera& camera, VkImageView depthView,
                           const Vec2& windXZ, const SmokeQuality& quality);
     bool hasSmokePipeline() const { return m_smokePipeline != VK_NULL_HANDLE; }
+    // Preset "smoke_scale" (< 1): a coluna vai para o alvo de acumulo em baixa resolucao
+    // (beginCloudVolumeAccum) e e' composta sobre o lit no fim (endCloudVolumeAccumApply).
+    bool hasSmokeAccumPipeline() const { return m_smokeAccumPipeline != VK_NULL_HANDLE; }
 
     // Half-res shadow accumulation (Frostbite-style): the per-cloud shadow
     // passes render into a half-resolution offscreen that accumulates the
@@ -307,6 +310,8 @@ private:
     VkPipeline m_debugPlanePipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_debugPlanePipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_smokePipeline = VK_NULL_HANDLE; // coluna de fumaça (reusa m_billboardPipelineLayout)
+    // Mesma coluna para o alvo de acumulo em baixa resolucao (sem anexo de profundidade).
+    VkPipeline m_smokeAccumPipeline = VK_NULL_HANDLE;
     VkPipeline m_billboardPipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_billboardPipelineLayout = VK_NULL_HANDLE; // same 3 set layouts as debug plane + SSBO set, bigger push block
     // Set-3 layout/pool for the per-layer local-cloud SSBO the volumetric

@@ -1,5 +1,9 @@
 #version 450
 
+// Variante enxuta do preset "post_lite" (so no fragmento): medido num PowerVR GE8320, o pos
+// completo custava ~8 ms em 800x360.
+layout(constant_id = 0) const bool LITE = false;
+
 layout(location = 0) in vec2 fragUV;
 layout(location = 0) out vec4 outColor;
 
@@ -385,6 +389,22 @@ vec3 localClimate(vec3 color, vec3 worldPos, float depth) {
 }
 
 void main() {
+    if (LITE) {
+        float d = texture(depthTexture, fragUV).r;
+        vec3 c = texture(hdrTexture, fragUV).rgb * push.exposureBloom.x;
+        float fogEnd = push.fogParams.w;
+        if (fogEnd > 0.0 && d < 0.99999) {
+            vec4 h = push.invViewProj * vec4(fragUV * 2.0 - 1.0, d, 1.0);
+            vec3 wp = h.xyz / max(h.w, 1e-6);
+            float f = clamp((distance(wp, push.cameraPos.xyz) - push.cameraPos.w) / (fogEnd - push.cameraPos.w), 0.0, 1.0)
+                      * push.exposureBloom.y;
+            c = mix(c, push.fogParams.xyz * push.exposureBloom.x, clamp(f, 0.0, 1.0));
+        }
+        c = applyToneMapping(max(c, vec3(0.0)), push.motionBlurParams.z);
+        c = applyGrading(c, push.gradingParams.x, push.gradingParams.y);
+        outColor = vec4(pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+        return;
+    }
     float depth = texture(depthTexture, fragUV).r;
     // O contorno so' precisa da profundidade: os taps saem ja' aqui para a latencia da leitura se esconder atras
     // do resto do shader (lido so' no fim, depois do gamma).

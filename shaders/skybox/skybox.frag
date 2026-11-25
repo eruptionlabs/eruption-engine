@@ -1,5 +1,9 @@
 #version 450
 
+// Ceu barato do preset "sky_lite" (so no fragmento): sem estrelas, nuvens de ruido, aurora
+// nem coroa do sol. Medido num PowerVR GE8320: o ceu inteiro custava 22 ms em 800x360.
+layout(constant_id = 0) const bool LITE = false;
+
 layout(location = 0) in vec2 fragUV;
 layout(location = 0) out vec4 outColor;
 
@@ -322,6 +326,23 @@ void main() {
     float twilight = smoothstep(-0.3, -0.05, sunHeight) * (1.0 - smoothstep(-0.05, 0.1, sunHeight));
     vec3 twilightColor = vec3(0.25, 0.15, 0.35);
     skyColor = mix(skyColor, twilightColor, twilight * smoothstep(-0.1, 0.2, viewY) * 0.25);
+
+    if (LITE) {
+        float sunAbove = smoothstep(-0.06, 0.01, sunHeight);
+        float sd = dot(rayDir, sunDir);
+        float ar = 1.0 - 0.003 * sunSize;
+        skyColor += ubo.sunColor.rgb * sunIntensity * sunAbove *
+                    (smoothstep(ar, ar + 0.0004 * sunSize, sd) + 0.25 * smoothstep(1.0 - 0.03 * sunSize, ar, sd));
+        float md = dot(rayDir, moonDir);
+        float mr = 1.0 - 0.004 * moonSize;
+        skyColor += ubo.moonColor.rgb * moonIntensity * smoothstep(-0.06, 0.01, moonDir.y) *
+                    smoothstep(mr, mr + 0.0004 * moonSize, md);
+        float gf = smoothstep(-0.02, -0.35, viewY);
+        skyColor = mix(skyColor, ubo.skyHorizon.rgb * mix(0.12, 0.05, cloudCoverage), gf);
+        skyColor = skyColor / (1.0 + skyColor * 0.5);
+        outColor = vec4(skyColor, 1.0);
+        return;
+    }
 
     // ---- Sun ----
     // Nada de sol abaixo do horizonte: disco, coroa e raios de difracao somem

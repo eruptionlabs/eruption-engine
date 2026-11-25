@@ -30,6 +30,8 @@ public class EruptionActivity extends NativeActivity {
         WindowManager.LayoutParams lp = getWindow().getAttributes();
         lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         getWindow().setAttributes(lp);
+        // Jogo: a tela nao apaga no meio da partida (sem toque por minutos, ex.: so' camera).
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         immersive();
     }
 

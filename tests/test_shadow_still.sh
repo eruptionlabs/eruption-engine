@@ -9,7 +9,7 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 PY="${PYTHON:-$HOME/miniconda3/bin/python}"
 LIMITE="${LIMITE:-0.2}"
-PRESETS="${PRESETS:-high medium low mobile_high mobile_medium mobile_low}"
+PRESETS="${PRESETS:-high medium low mobile_high mobile_medium mobile_low mobile_legacy}"
 TMP=$(mktemp -d); FAIL=0
 roda() { # preset pasta [VAR=val ...]
     local p=$1 d=$2; shift 2

@@ -738,8 +738,22 @@ public:
     std::string m_graphicsPresetAuto; // o que a tabela auto_presets escolheu (vazio fora do auto)
     std::string m_presetChoiceNext;   // escolha do botao Qualidade, vale na proxima abertura
     static constexpr const char* kPresetOverrideFile = "preset_override.txt";
-    static constexpr const char* kQualityPresets[3] = {"mobile_low", "mobile_medium", "mobile_high"};
+    // Escada do botao Qualidade. mobile_legacy so' entra onde a tabela a escolheu
+    // (GPU de entrada): ela e' o degrau Baixa ali, e o ciclo para em mobile_low.
+    static constexpr const char* kQualityPresets[4] = {"mobile_legacy", "mobile_low", "mobile_medium", "mobile_high"};
+    size_t qualityBase() const { return m_graphicsPresetAuto == kQualityPresets[0] ? 0 : 1; }
+    size_t qualityLevels() const {
+        return (m_graphicsPresetAuto == kQualityPresets[0] || m_graphicsPresetAuto == kQualityPresets[1]) ? 2 : 3;
+    }
     void cycleQualityPreset();
+    // integer_scale: n de 1..kMaxIntegerDivisor tal que n divide a largura e a altura da tela, o
+    // mais perto de 1/scale (render = tela / n, exato). 1 se nenhum outro serve.
+    // Ate 1/8 da tela (os presets seguram o piso em render_scale_min; 1/2 e o piso dos mobile_*).
+    static constexpr uint32_t kMaxIntegerDivisor = 16;
+    // Copia a saida do pos para o swapchain por blit NEAREST (escala inteira exata).
+    void blitSceneToSwap(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t sw, uint32_t sh);
+    static uint32_t integerScaleDivisor(float scale, uint32_t dispW, uint32_t dispH);
+    bool m_integerScale = false;
     void syncUiFramebufferScale();
     bool m_presetOverridesApplied = false; // ERUPTION_TEST_PRESET_SET, uma vez
     void applyPresetEffects();
@@ -1971,6 +1985,7 @@ private:
         float maxScale = 1.0f;
         int frames = 0;
         int steps = 0;
+        bool integer = false; // preset integer_scale: so' 1/n da tela, n divisor exato
         std::array<float, 90> frameMs{}; // janela medida
     } m_scaleTuning;
     bool m_showDebugOverlay = true;
@@ -2587,6 +2602,7 @@ private:
     int m_smokeMaxSteps = 32;
     bool m_smokeSunTap = true;   // 2a amostra de densidade (auto-sombra)
     bool m_smokeDetail = true;   // 3a oitava do fbm
+    float m_smokeScale = 1.0f;   // chave "smoke_scale": < 1 desenha a coluna em baixa resolucao e compoe
     // Battery: frame limiter (0 = uncapped) applied in run().
     // Cache da oclusao para o foco adaptativo do DoF - ver computeObstruction().
     mutable float m_obstructionCached = 0.0f;

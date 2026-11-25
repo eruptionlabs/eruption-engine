@@ -1312,7 +1312,14 @@ void DeferredLighting::render(VkCommandBuffer cmd, const Camera& camera, const S
     if (!singlePass) renderAmbientPass(cmd);
 
     // Pass 2: Directional light + Point Lights (Combined in the same pipeline now)
-    if (shadows) {
+#if ERUPTION_DEV
+    // ERUPTION_TEST_SKIP_LIGHT=1 (bancada de celular): nao desenha o passe do sol (sem luz na
+    // imagem); separa o custo da iluminacao do custo de gravar o G-buffer.
+    static const bool kSkipLight = std::getenv("ERUPTION_TEST_SKIP_LIGHT") != nullptr;
+#else
+    constexpr bool kSkipLight = false;
+#endif
+    if (shadows && !kSkipLight) {
         renderDirectionalPass(cmd, camera, shadows, cloudShadowView, cloudShadowSampler,
                               cloudWorldMin, cloudWorldMax, cloudShadowIntensity,
                               rainOcclusionView, rainOcclusionSampler, totalTime);

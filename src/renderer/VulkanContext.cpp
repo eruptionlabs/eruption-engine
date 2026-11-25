@@ -1776,6 +1776,14 @@ void VulkanContext::destroyTimestampPools() {
     m_timestampResults.clear();
 }
 
+bool VulkanContext::formatCanBlit(VkFormat src) const {
+    VkFormatProperties ps{}, pd{};
+    vkGetPhysicalDeviceFormatProperties(m_physicalDevice, src, &ps);
+    vkGetPhysicalDeviceFormatProperties(m_physicalDevice, m_swapFormat, &pd);
+    return (ps.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) &&
+           (pd.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT);
+}
+
 VkFilter VulkanContext::filterFor(VkFormat format) const {
     VkFormatProperties props{};
     vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &props);

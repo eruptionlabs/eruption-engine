@@ -225,6 +225,8 @@ void PostProcessor::resize(uint32_t width, uint32_t height) {
     }
 }
 
+VkFormat PostProcessor::outputFormat() const { return postColorFormat(m_ctx->physicalDevice()); }
+
 void PostProcessor::createImages() {
     // Um so' formato para toda a cadeia intermediaria - ver PostFormat.hpp.
     const VkFormat postFmt = postColorFormat(m_ctx->physicalDevice());
@@ -542,7 +544,8 @@ VkPipeline PostProcessor::createFullscreenPipeline(const std::vector<uint32_t>& 
                                                     uint32_t w, uint32_t h,
                                                     bool needDepth,
                                                     VkFormat colorFormat,
-                                                    bool enableBlend) {
+                                                    bool enableBlend,
+                                                    const VkSpecializationInfo* fragSpec) {
     if (colorFormat == VK_FORMAT_UNDEFINED) colorFormat = postColorFormat(m_ctx->physicalDevice());
     auto vert = ShaderCompiler::loadSPIRV("postprocess/fullscreen.vert.spv");
 
@@ -566,6 +569,7 @@ VkPipeline PostProcessor::createFullscreenPipeline(const std::vector<uint32_t>& 
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = fragModule;
     stages[1].pName = "main";
+    stages[1].pSpecializationInfo = fragSpec;
 
     VkPipelineVertexInputStateCreateInfo vertInput{};
     vertInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -686,7 +690,12 @@ void PostProcessor::createPipelines() {
     }
     auto distortFrag = ShaderCompiler::loadSPIRV("postprocess/distortion.frag.spv");
     if (!distortFrag.empty()) m_distortPipeline = createFullscreenPipeline(distortFrag, m_width, m_height);
-    m_compositePipeline = createFullscreenPipeline(compositeFrag, m_width, m_height);
+    // constant_id 0 = LITE do post_composite.frag (preset "post_lite"): so exposicao, nevoa linear,
+    // tonemap, contraste/saturacao e gama.
+    const VkBool32 postLite = m_ctx->postLite() ? VK_TRUE : VK_FALSE;
+    const VkSpecializationMapEntry liteEntry{0, 0, sizeof(VkBool32)};
+    const VkSpecializationInfo liteSpec{1, &liteEntry, sizeof(VkBool32), &postLite};
+    m_compositePipeline = createFullscreenPipeline(compositeFrag, m_width, m_height, false, VK_FORMAT_UNDEFINED, false, &liteSpec);
     m_copyPipeline = createFullscreenPipeline(copyFrag, m_width, m_height, false, m_ctx->swapFormat());
 
     m_brightPassPipeline = createFullscreenPipeline(brightPassFrag, m_width / 2, m_height / 2);

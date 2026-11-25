@@ -16,7 +16,7 @@ cat > "$TMP/path.txt" <<'P'
 11 2906.83 0 2739.04 -82 55 1000
 P
 FAIL=0
-for pr in "high 3072" "medium 1024" "low 1024" "mobile_high 3072" "mobile_medium 1024" "mobile_low 1024"; do
+for pr in "high 3072" "medium 1024" "low 1024" "mobile_high 3072" "mobile_medium 1024" "mobile_low 1024" "mobile_legacy 512"; do
     set -- $pr
     echo "== $1"
     env ERUPTION_AUDIO=null ERUPTION_NO_VALIDATION=1 ERUPTION_TEST_GRAPHICS_PRESET=$1 ERUPTION_TEST_FIXED_DT=0.0333333 \

@@ -360,6 +360,7 @@ public:
     void setSpriteMark(VkImageView view) { m_spriteMarkView = view; }
     void resize(uint32_t width, uint32_t height);
     uint32_t width() const { return m_width; }
+    VkFormat outputFormat() const; // formato dos alvos de pos (PostFormat.hpp)
     uint32_t height() const { return m_height; }
 
     void render(VkCommandBuffer cmd, VkImageView hdrInput, VkImageView depthInput,
@@ -658,7 +659,8 @@ private:
                                          uint32_t w, uint32_t h,
                                          bool needDepth = false,
                                          VkFormat colorFormat = VK_FORMAT_UNDEFINED,
-                                         bool enableBlend = false);
+                                         bool enableBlend = false,
+                                         const VkSpecializationInfo* fragSpec = nullptr);
 };
 
 } // namespace eruption

@@ -16,6 +16,8 @@ layout(constant_id = 0) const bool LITE = false;
 // Enxuto MEDIO (VulkanContext::shaderLiteRelevo): no passe unico do LITE soma
 // um especular GGX simples do sol (rugosidade/metal do G-buffer, F0 0,04).
 layout(constant_id = 4) const bool LITE_RELEVO = false;
+// Luz minima (preset "lighting_min"): so no passe unico do LITE, ver shadeLite.
+layout(constant_id = 5) const bool LITE_MIN = false;
 
 // G-Buffer samplers
 layout(set = 0, binding = 0) uniform sampler2D gbufferAlbedo;
@@ -709,6 +711,18 @@ vec3 shadeLite(vec4 albedo) {
     vec3 L = normalize(-lights.dirLightDir.xyz);
     float NdotL = max(dot(N, L), 0.0);
     float ao = albedo.a;
+
+    if (LITE_MIN) {
+        float shadowM = calcShadow(worldPos, nTex.rgb) * mix(0.45, 1.0, smoothstep(0.0, 0.12, L.y));
+        float visM = (1.0 - shadowM) * texture(gbufferEmissive, inUV).a;
+        vec3 litM = albedoLinear * lights.dirLightColor.rgb * (NdotL * lights.dirLightDir.w * visM);
+        float upM = N.y * 0.5 + 0.5;
+        vec3 hemiM = mix(lights.ambientGround.rgb, lights.ambientSky.rgb, upM);
+        litM += albedoLinear * max(hemiM * lights.giIntensity, vec3(lights.giAmbientFloor)) * (ao * 1.12);
+        vec3 eM = texture(gbufferEmissive, inUV).rgb;
+        litM += eM * (eM * (eM * 0.305306011 + 0.682171111) + 0.012522878);
+        return clamp(litM, 0.0, 100.0);
+    }
 
     vec4 pbrLite = texture(gbufferPBR, inUV);
     g_spritePixel = abs(pbrLite.r - 0.75) < 0.06;

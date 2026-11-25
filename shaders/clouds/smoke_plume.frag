@@ -14,6 +14,10 @@
 //
 // Sem textura, sem SSBO, sem bake de compute: 1 draw + 1 scissor por emissor.
 
+// Fumaca enxuta do preset "smoke_lite" (so no fragmento): 1 oitava de ruido, sem fagulhas, passos
+// a partir de 4. Medido num PowerVR GE8320: a coluna do mapa leve custava ~75 ms em 800x360.
+layout(constant_id = 0) const bool SMOKE_LITE = false;
+
 layout(location = 0) in vec3 v_worldPos;
 
 layout(location = 0) out vec4 outColor;
@@ -103,6 +107,7 @@ float octaveWeight(float cellStep) {
 float fbmSmoke(vec3 p, uint seed, bool detail, float stepCells) {
     float w0 = octaveWeight(stepCells) / 1.5;
     float w1 = 0.5 * octaveWeight(stepCells * 2.03) / 1.5;
+    if (SMOKE_LITE) return clamp(0.5 + w0 * (valueNoise3D(p, seed) - 0.5), 0.0, 1.0);
     float n = 0.5 + w0 * (valueNoise3D(p, seed) - 0.5)
                  + w1 * (valueNoise3D(p * 2.03, seed + 131u) - 0.5);
     if (detail) {
@@ -223,7 +228,8 @@ void main() {
     // estourar o custo: no maximo aproveita melhor os passos que ja' existem.
     float cell = 1.0 / max(pc.wind.z, 1e-4);
     float stepTarget = max(min(pc.shape.x * 0.04, cell * 0.5), 1.5);
-    int steps = int(clamp(marchLen / stepTarget, 8.0, max(pc.misc.y, 8.0)));
+    float minSteps = SMOKE_LITE ? 4.0 : 8.0;
+    int steps = int(clamp(marchLen / stepTarget, minSteps, max(pc.misc.y, minSteps)));
     float dt = marchLen / float(steps);
     // Fagulhas e chama tem celula bem menor que a fumaça (1/0,157 = 6,4 u e
     // 1/0,34 = 2,9 u contra 40 u): com passo grande elas nao viram brasa, viram
@@ -285,12 +291,14 @@ void main() {
                 base += fireCol * heat * (3.2 + 4.0 * core);
             }
 
-            vec3 sp = p - vec3(0.0, time * sparkRise, 0.0);
-            float s1 = valueNoise3D(sp * 0.085, uint(pc.misc.x) + 977u);
-            float s2 = valueNoise3D(sp * 0.230, uint(pc.misc.x) + 613u);
-            float spark = smoothstep(0.74, 0.95, s1 * 0.5 + s2 * 0.5);
-            spark *= exp(-h * 2.6) * clamp(dens * 3.0, 0.0, 1.0) * sparkFade;
-            base += sparkTint * spark * 5.5;
+            if (!SMOKE_LITE) {
+                vec3 sp = p - vec3(0.0, time * sparkRise, 0.0);
+                float s1 = valueNoise3D(sp * 0.085, uint(pc.misc.x) + 977u);
+                float s2 = valueNoise3D(sp * 0.230, uint(pc.misc.x) + 613u);
+                float spark = smoothstep(0.74, 0.95, s1 * 0.5 + s2 * 0.5);
+                spark *= exp(-h * 2.6) * clamp(dens * 3.0, 0.0, 1.0) * sparkFade;
+                base += sparkTint * spark * 5.5;
+            }
 
             float a = 1.0 - exp(-dens * dt * 0.45);
             accum.rgb += (1.0 - accum.a) * base * a;

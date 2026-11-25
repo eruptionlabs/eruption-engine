@@ -52,7 +52,7 @@ std::vector<Case> loadCases() {
     nlohmann::json j;
     try { f >> j; } catch (...) { std::printf("ERRO: graphics.json invalido\n"); ++g_fail; return out; }
     const auto& presets = j.contains("presets") ? j["presets"] : j;
-    for (const char* name : {"high", "medium", "low", "mobile_high", "mobile_medium", "mobile_low"}) {
+    for (const char* name : {"high", "medium", "low", "mobile_high", "mobile_medium", "mobile_low", "mobile_legacy"}) {
         if (!presets.contains(name)) continue;
         const auto& p = presets[name];
         Case c{name, p.value("shadow_mode", std::string("csm")), static_cast<uint32_t>(p.value("shadow_atlas", 1024)),

@@ -235,11 +235,19 @@ private:
     bool m_shaderLite = false;
     // [0] = LITE (constant_id 0), [1] = LITE_RELEVO (constant_id 4). Shader que
     // nao declara um id ignora a entrada dele (regra da especializacao Vulkan).
-    VkBool32 m_liteValues[2] = {VK_FALSE, VK_FALSE};
-    VkSpecializationMapEntry m_liteSpecEntries[2] = {{0, 0, sizeof(VkBool32)},
-                                                    {4, sizeof(VkBool32), sizeof(VkBool32)}};
-    VkSpecializationInfo m_liteSpecInfo{2, m_liteSpecEntries, sizeof(m_liteValues), m_liteValues};
+    // [2] = LITE_MIN (constant_id 5, preset "lighting_min").
+    // [3] = MODEL_MIN (constant_id 6, preset "model_shader_min").
+    VkBool32 m_liteValues[5] = {VK_FALSE, VK_FALSE, VK_FALSE, VK_FALSE, VK_FALSE};
+    VkSpecializationMapEntry m_liteSpecEntries[5] = {{0, 0, sizeof(VkBool32)},
+                                                    {4, sizeof(VkBool32), sizeof(VkBool32)},
+                                                    {5, 2 * sizeof(VkBool32), sizeof(VkBool32)},
+                                                    {6, 3 * sizeof(VkBool32), sizeof(VkBool32)},
+                                                    {7, 4 * sizeof(VkBool32), sizeof(VkBool32)}};
+    VkSpecializationInfo m_liteSpecInfo{5, m_liteSpecEntries, sizeof(m_liteValues), m_liteValues};
     bool m_shaderLiteRelevo = false;
+    bool m_skyLite = false;
+    bool m_postLite = false;
+    bool m_smokeLite = false;
     void watchdogLoop();
     void createPipelineCache();
     void destroyPipelineCache();
@@ -310,6 +318,24 @@ public:
     // desligado. GPU sem descriptor indexing fica no enxuto puro.
     void setShaderLiteRelevo(bool on);
     bool shaderLiteRelevo() const { return m_shaderLiteRelevo; }
+    // Ceu analitico barato (preset "sky_lite"): gradiente + disco do sol/lua, sem estrelas,
+    // nuvens de ruido nem aurora. Constante de especializacao so' no fragmento do ceu.
+    bool skyLite() const { return m_skyLite; }
+    void setSkyLite(bool on) { m_skyLite = on; }
+    // Pos enxuto (preset "post_lite"): ver post_composite.frag, constant_id 0.
+    bool postLite() const { return m_postLite; }
+    void setPostLite(bool on) { m_postLite = on; }
+    // Fumaca de mapa enxuta (preset "smoke_lite"): smoke_plume.frag, constant_id 0.
+    bool smokeLite() const { return m_smokeLite; }
+    void setSmokeLite(bool on) { m_smokeLite = on; }
+    // Luz minima do passe unico (preset "lighting_min", so vale com o enxuto): sol com UMA
+    // amostra de sombra + hemisferio, sem sonda, nuvem, micro-sombra, luzes de ponto.
+    void setLightingMin(bool on) { m_liteValues[2] = on ? VK_TRUE : VK_FALSE; }
+    // Modelo minimo no G-buffer (preset "model_shader_min", so' vale com o enxuto): 1 amostra de
+    // albedo + alpha-test, normal do vertice, material constante; o chao com splat segue completo.
+    void setModelShaderMin(bool on) { m_liteValues[3] = on ? VK_TRUE : VK_FALSE; }
+    // Chao com splat minimo no G-buffer (preset "ground_shader_min"; so' vale com o enxuto).
+    void setGroundShaderMin(bool on) { m_liteValues[4] = on ? VK_TRUE : VK_FALSE; }
     const VkSpecializationInfo* liteSpecialization() const { return &m_liteSpecInfo; }
     // Pode gravar neste formato como storage image (imageStore com o
     // qualificador de formato). Fora do conjunto básico (r32f, rgba8, rgba16f...)
@@ -318,6 +344,8 @@ public:
     // Filtro para um sampler que lê este formato: LINEAR se o aparelho filtra,
     // senão NEAREST (D32/R32F em GPU de celular: linear ali é indefinido).
     VkFilter filterFor(VkFormat format) const;
+    // Origem de vkCmdBlitImage com NEAREST (BLIT_SRC) e swapchain como destino (BLIT_DST).
+    bool formatCanBlit(VkFormat src) const;
     // Filtro anisotrópico até `wanted`, dentro do limite do aparelho. GPU sem
     // samplerAnisotropy (PowerVR de celular barato) fica com o filtro comum.
     void applyAnisotropy(VkSamplerCreateInfo& info, float wanted) const {

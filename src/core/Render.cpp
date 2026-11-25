@@ -282,6 +282,42 @@ float Engine::tessAxis() const {
     return std::max(m_normalDistMax, 1.0f) * tessZoomFollow();
 }
 
+void Engine::blitSceneToSwap(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t sw, uint32_t sh) {
+    const VkImage src = m_postProcessor.outputImage();
+    const VkImage dst = m_vulkan.swapImage(imageIndex);
+    m_vulkan.cmdImageBarrier(cmd, src, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    m_vulkan.cmdImageBarrier(cmd, dst, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkImageBlit blit{};
+    blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    blit.srcOffsets[1] = {static_cast<int32_t>(m_postProcessor.width()), static_cast<int32_t>(m_postProcessor.height()), 1};
+    blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    blit.dstOffsets[1] = {static_cast<int32_t>(sw), static_cast<int32_t>(sh), 1};
+    vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                   VK_FILTER_NEAREST);
+    m_vulkan.cmdImageBarrier(cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT);
+    m_vulkan.cmdImageBarrier(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT);
+}
+
+uint32_t Engine::integerScaleDivisor(float scale, uint32_t dispW, uint32_t dispH) {
+    const float want = 1.0f / std::clamp(scale, 0.0625f, 1.0f);
+    uint32_t best = 1;
+    float bestDist = std::abs(want - 1.0f);
+    for (uint32_t n = 2; n <= kMaxIntegerDivisor; ++n) {
+        if (dispW % n != 0 || dispH % n != 0) continue; // render exato: tela = n x render
+        const float d = std::abs(want - static_cast<float>(n));
+        if (d < bestDist) { best = n; bestDist = d; }
+    }
+    return best;
+}
+
 void Engine::settleRenderScale() {
     RenderScaleTuning& t = m_scaleTuning;
     // Aquecimento longo: no primeiro lancamento os shaders ainda compilam.
@@ -306,6 +342,36 @@ void Engine::settleRenderScale() {
     const float targetMs = 1000.0f / t.targetFps;
     const float scale = float(m_renderW) / float(m_displayW);
     float next = scale;
+    if (t.integer) {
+        // Escada inteira 1/n (n divisor exato da tela). Desce um degrau quando
+        // o quadro passa da meta; sobe um degrau so' se o quadro, escalado pelos
+        // pixels do degrau (metade do tempo e' fixa), ainda cabe na meta.
+        const uint32_t dispH = displayExtent().height;
+        const uint32_t cur = std::max(1u, static_cast<uint32_t>(std::lround(1.0f / scale)));
+        const uint32_t nMax = integerScaleDivisor(t.minScale, m_displayW, dispH); // piso: mais perto de 1/min
+        const uint32_t nMin = integerScaleDivisor(t.maxScale, m_displayW, dispH);
+        auto stepFrom = [&](uint32_t from, int dir) { // proximo n valido no sentido dir
+            for (int n = static_cast<int>(from) + dir; n >= 1 && n <= static_cast<int>(kMaxIntegerDivisor); n += dir)
+                if (m_displayW % n == 0 && dispH % n == 0) return static_cast<uint32_t>(n);
+            return from;
+        };
+        uint32_t nNext = cur;
+        if (frameMs > targetMs * 0.97f) {
+            nNext = std::min(stepFrom(cur, +1), nMax);
+        } else if (frameMs < targetMs * 0.7f) {
+            const uint32_t up = std::max(stepFrom(cur, -1), nMin);
+            const float ratio = float(cur) / float(up);
+            if (up < cur && frameMs * (0.5f + 0.5f * ratio * ratio) < targetMs * 0.9f) nNext = up;
+        }
+        t.frames = 0;
+        if (nNext == cur) { t.steps = kMaxSteps; return; }
+        ++t.steps;
+        ERUPTION_LOG_WARN("Escala da cena: 1/%u -> 1/%u (%.1f ms por quadro, alvo %.0f FPS)", cur, nNext, frameMs, t.targetFps);
+        m_renderW = m_displayW / nNext;
+        m_renderH = dispH / nNext;
+        m_resized = true;
+        return;
+    }
     // Pixels ~ escala ao quadrado, mas boa parte do quadro nao depende deles:
     // a descida e' linear no tempo (chega em um passo, cada passo e' uma
     // travada de redimensionar) e a subida, pela raiz, fica abaixo do ponto.
@@ -387,7 +453,10 @@ void Engine::render() {
         const uint32_t prevDispW = m_displayW ? m_displayW : disp.width;
         if (m_renderW && m_renderH && prevDispW) {
             const float rs = float(m_renderW) / float(prevDispW);
-            if (rs < 0.999f) { w = std::max(64u, uint32_t(w * rs)); h = std::max(64u, uint32_t(h * rs)); }
+            if (rs < 0.999f && m_integerScale) {
+                const uint32_t n = integerScaleDivisor(rs, w, h);
+                w /= n; h /= n;
+            } else if (rs < 0.999f) { w = std::max(64u, uint32_t(w * rs)); h = std::max(64u, uint32_t(h * rs)); }
         }
         m_renderW = w; m_renderH = h;
         m_displayW = disp.width;
@@ -2109,7 +2178,17 @@ void Engine::render() {
                 m_currentMap->smokeEmitters.begin(), m_currentMap->smokeEmitters.end(),
                 [&](const SmokeEmitter& sm) { return m_camera.frustum().intersectsAABB(
                     smokeBoxMin(sm, wdir, wspd), smokeBoxMax(sm, wdir, wspd)); });
-            if (openSmoke) vkc::cmdBeginRendering(cmd, &planeInfo);
+            // smoke_scale < 1: acumula as colunas num alvo menor e compoe uma vez sobre o lit.
+            bool smokeAccum = false;
+            // O alvo de acumulo e' o mesmo das nuvens volumetricas: com elas no frame, a coluna
+            // fica em resolucao cheia.
+            if (openSmoke && m_smokeScale < 0.999f && m_cloudLayerRenderer.hasSmokeAccumPipeline() &&
+                !(wantVolAccum && !pendingBillboards.empty())) {
+                const uint32_t sw = std::max(1u, static_cast<uint32_t>(renderExtent().width * m_smokeScale + 0.5f));
+                const uint32_t sh = std::max(1u, static_cast<uint32_t>(renderExtent().height * m_smokeScale + 0.5f));
+                smokeAccum = m_cloudLayerRenderer.beginCloudVolumeAccum(cmd, sw, sh);
+            }
+            if (openSmoke && !smokeAccum) vkc::cmdBeginRendering(cmd, &planeInfo);
             if (openSmoke) {
                 // Scratch estatico (varredura 2026-09-02): reserve evitava
                 // realocacao, nao a alocacao+free por frame.
@@ -2142,7 +2221,12 @@ void Engine::render() {
                                                           wdir * wspd * 20.0f * sm->windScale, sq);
                 }
             }
-            if (openSmoke) vkc::cmdEndRendering(cmd);
+            if (smokeAccum) {
+                m_cloudLayerRenderer.endCloudVolumeAccumApply(cmd, m_deferredLighting.litImageView(),
+                                                              renderExtent().width, renderExtent().height);
+            } else if (openSmoke) {
+                vkc::cmdEndRendering(cmd);
+            }
             m_vulkan.writeTimestamp(cmd, 39, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             bw::setPass(nullptr);
             Profiler::addGpuTime("Map Smoke", m_vulkan.timestampDeltaMs(38, 39));
@@ -2525,6 +2609,12 @@ void Engine::render() {
         m_postProcessor.setVolumetric(m_volumetric.outputView(), m_volumetric.active());
     }
     m_postProcessor.setDistortion(m_vfx.distortionView(), m_distortionStrength);
+#if ERUPTION_DEV
+    // ERUPTION_TEST_SKIP_POST=1 (bancada de celular): nao grava o post-processamento
+    // (a imagem final fica sem o quadro); separa o custo do post do resto.
+    static const bool kSkipPost = std::getenv("ERUPTION_TEST_SKIP_POST") != nullptr;
+    if (!kSkipPost)
+#endif
     m_postProcessor.render(cmd, postHdrInput, m_gbuffer.depthView(), m_gbuffer.normalView(),
                            m_gbuffer.normalView(), m_shadowRenderer.shadowAtlasView(), m_camera.viewMatrix(),
                            m_camera.projNoJitter(), glm::inverse(m_camera.viewProjNoJitter()), m_prevViewProjNoJitter,
@@ -2576,10 +2666,36 @@ void Engine::render() {
     // o UpscaleAA so' copia (FXAA desligado, Catmull-Rom 1:1, sem nitidez).
     const bool upscaleFromFsr = m_upscalerMode == UpscalerMode::FsrAfterPost;
     bw::setPass("AA/Upscale");
-    m_upscaleAA.render(cmd, upscaleFromFsr ? m_fsr.outputView() : m_postProcessor.outputView(),
-                       upscaleFromFsr ? m_fsr.outputImage() : m_postProcessor.outputImage(),
-                       sceneView, sceneImage,
-                       {sw, sh}, fsrActive() ? false : m_enableFXAA, fsrActive() ? 0.0f : m_aaSharpenAmount);
+    // Escala inteira: amostra pontual (sem FXAA nem nitidez) quando a imagem de
+    // render e' divisor exato da saida; senao, o upscale de sempre.
+    m_upscaleAA.setNearest(m_integerScale && !upscaleFromFsr && sw > m_postProcessor.width() &&
+                           sw % m_postProcessor.width() == 0 && sh % m_postProcessor.height() == 0);
+    // Escala inteira exata: copia por blit NEAREST em vez do passe do UpscaleAA (mede-se
+    // pelo ERUPTION_TEST_NO_UPSCALE_BLIT=1 em DEV). Nao vale no editor (imagem do painel).
+    bool blitUpscale = m_upscaleAA.nearest() && !toViewport && !upscaleFromFsr &&
+                       m_vulkan.formatCanBlit(m_postProcessor.outputFormat());
+#if ERUPTION_DEV
+    // ERUPTION_TEST_NO_UPSCALE_BLIT=1 (bancada de celular): volta ao passe do UpscaleAA.
+    static const bool kNoBlit = std::getenv("ERUPTION_TEST_NO_UPSCALE_BLIT") != nullptr;
+    if (kNoBlit) blitUpscale = false;
+#endif
+#if ERUPTION_DEV
+    // ERUPTION_TEST_SKIP_UPSCALE=1 (bancada de celular): nao desenha o upscale/AA;
+    // o swapchain fica sem o quadro. Serve para separar o custo desse passe do
+    // resto do quadro quando a GPU nao da' tempo por passe.
+    static const bool kSkipUpscale = std::getenv("ERUPTION_TEST_SKIP_UPSCALE") != nullptr;
+    if (!kSkipUpscale)
+#endif
+    {
+        if (blitUpscale) {
+            blitSceneToSwap(cmd, imageIndex, sw, sh);
+        } else {
+            m_upscaleAA.render(cmd, upscaleFromFsr ? m_fsr.outputView() : m_postProcessor.outputView(),
+                               upscaleFromFsr ? m_fsr.outputImage() : m_postProcessor.outputImage(),
+                               sceneView, sceneImage,
+                               {sw, sh}, fsrActive() ? false : m_enableFXAA, fsrActive() ? 0.0f : m_aaSharpenAmount);
+        }
+    }
     if (toViewport) {
         m_vulkan.cmdImageBarrier(cmd, sceneImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
     }
@@ -2643,7 +2759,14 @@ void Engine::render() {
     swapAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     swapAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
     bw::setPass("UI");
-    m_vulkan.cmdBeginRendering(cmd, {swapAttachment}, nullptr, nullptr, m_vulkan.swapExtent());
+#if ERUPTION_DEV
+    // ERUPTION_TEST_SKIP_UI=1 (bancada de celular): nao abre o passe da interface
+    // (nem o desenha); separa o custo do passe de UI no swapchain.
+    static const bool kSkipUi = std::getenv("ERUPTION_TEST_SKIP_UI") != nullptr;
+#else
+    constexpr bool kSkipUi = false;
+#endif
+    if (!kSkipUi) m_vulkan.cmdBeginRendering(cmd, {swapAttachment}, nullptr, nullptr, m_vulkan.swapExtent());
 
     if (!m_benchmarkThunderstorm && !(m_benchmarkHeavyRain && m_benchmarkHideHud)) {
         renderImGui();
@@ -2662,7 +2785,7 @@ void Engine::render() {
 
     if (!m_benchmarkThunderstorm && !(m_benchmarkHeavyRain && m_benchmarkHideHud)) {
         ImGui::Render();
-        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+        if (!kSkipUi) ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
     } else {
         // Benchmarks that skip the UI still call ImGui::NewFrame above: close
         // the frame so the frame bookkeeping stays balanced (a stray mid-frame
@@ -2671,7 +2794,7 @@ void Engine::render() {
         ImGui::EndFrame();
     }
 
-    m_vulkan.cmdEndRendering(cmd);
+    if (!kSkipUi) m_vulkan.cmdEndRendering(cmd);
     bw::setPass(nullptr);
     // CAPTURA DE TELA, com a interface junto. Fica DEPOIS do cmdEndRendering
     // de proposito: copiar a imagem enquanto ela ainda e' alvo de cor do

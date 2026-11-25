@@ -40,6 +40,7 @@ layout(push_constant) uniform PushConstants {
     vec2 invSrcSize;  // 1/srcSize
     vec2 invDstSize;  // 1/(largura,altura da imagem de SAIDA, o swapchain)
     float sharpenAmount; // 0 = so' upscale; ~0.35 e' um bom padrao
+    float nearestMode;   // > 0.5: fator inteiro (integer_scale), um texel de origem por bloco, sem borrar
 } push;
 
 float catmullRomWeight0(float t) { return -0.5*t*t*t + t*t - 0.5*t; }
@@ -118,6 +119,15 @@ vec3 clampToFootprint(vec3 c, vec2 uv) {
 }
 
 void main() {
+    // Escala inteira (preset integer_scale): a imagem de render e' um divisor
+    // exato da saida, entao cada texel vira um bloco n x n. Amostra pontual:
+    // borda nitida, sem o borrao e sem a franja do bicubico num fator que nao
+    // cai em cima dos texels.
+    if (push.nearestMode > 0.5) {
+        ivec2 t = min(ivec2(inUV * push.srcSize), ivec2(push.srcSize) - 1);
+        outColor = vec4(texelFetch(u_input, t, 0).rgb, 1.0);
+        return;
+    }
     vec3 center = LITE ? catmullRomBilinear(inUV) : catmullRomSample(inUV);
     center = clampToFootprint(center, inUV);
 

@@ -922,6 +922,11 @@ bool CloudLayerRenderer::createSmokePipeline() {
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = fsModule;
     stages[1].pName = "main";
+    // constant_id 0 = SMOKE_LITE do smoke_plume.frag (preset "smoke_lite").
+    const VkBool32 smokeLite = m_ctx->smokeLite() ? VK_TRUE : VK_FALSE;
+    const VkSpecializationMapEntry smokeEntry{0, 0, sizeof(VkBool32)};
+    const VkSpecializationInfo smokeSpec{1, &smokeEntry, sizeof(VkBool32), &smokeLite};
+    stages[1].pSpecializationInfo = &smokeSpec;
 
     VkVertexInputBindingDescription binding{};
     binding.binding = 0;
@@ -1022,6 +1027,15 @@ bool CloudLayerRenderer::createSmokePipeline() {
 
     VkResult result = vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo,
                                                 nullptr, &m_smokePipeline);
+    // Variante do alvo de acumulo (preset "smoke_scale"): igual, sem anexo de profundidade
+    // (a oclusao e' analitica no fragment).
+    VkPipelineRenderingCreateInfo riAccum = ri;
+    riAccum.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+    pipeInfo.pNext = &riAccum;
+    if (vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr,
+                                     &m_smokeAccumPipeline) != VK_SUCCESS) {
+        m_smokeAccumPipeline = VK_NULL_HANDLE; // opcional: sem ela a fumaca desenha em resolucao cheia
+    }
     vkDestroyShaderModule(m_ctx->device(), vsModule, nullptr);
     vkDestroyShaderModule(m_ctx->device(), fsModule, nullptr);
     if (result != VK_SUCCESS) {
@@ -1037,6 +1051,10 @@ void CloudLayerRenderer::renderSmokePlume(VkCommandBuffer cmd, const SmokeEmitte
     if (!m_cfg.enabled || !m_ctx) return;
     if (m_smokePipeline == VK_NULL_HANDLE || m_billboardCubeVbo == VK_NULL_HANDLE) return;
     if (!e.enabled || e.density <= 0.0f) return;
+    // Em acumulo (baixa resolucao) o alvo e' o do volume; a matematica de camera segue normalizada.
+    const bool accum = m_volumeAccumMode && m_smokeAccumPipeline != VK_NULL_HANDLE;
+    const uint32_t tW = accum ? m_volumeAccumWidth : m_width;
+    const uint32_t tH = accum ? m_volumeAccumHeight : m_height;
 
     // AABB da pluma: a coluna nasce em `position`, sobe `height` e é
     // arrastada pelo vento durante a subida — a caixa precisa cobrir a
@@ -1075,28 +1093,28 @@ void CloudLayerRenderer::renderSmokePlume(VkCommandBuffer cmd, const SmokeEmitte
             sy0 = std::min(sy0, p.y / p.w); sy1 = std::max(sy1, p.y / p.w);
         }
         if (!crossesNear) {
-            const float W = static_cast<float>(m_width), H = static_cast<float>(m_height);
+            const float W = static_cast<float>(tW), H = static_cast<float>(tH);
             int ix0 = static_cast<int>(std::floor((sx0 * 0.5f + 0.5f) * W)) - 2;
             int iy0 = static_cast<int>(std::floor((sy0 * 0.5f + 0.5f) * H)) - 2;
             int ix1 = static_cast<int>(std::ceil((sx1 * 0.5f + 0.5f) * W)) + 2;
             int iy1 = static_cast<int>(std::ceil((sy1 * 0.5f + 0.5f) * H)) + 2;
             ix0 = std::max(ix0, 0); iy0 = std::max(iy0, 0);
-            ix1 = std::min(ix1, static_cast<int>(m_width));
-            iy1 = std::min(iy1, static_cast<int>(m_height));
+            ix1 = std::min(ix1, static_cast<int>(tW));
+            iy1 = std::min(iy1, static_cast<int>(tH));
             if (ix0 >= ix1 || iy0 >= iy1) return; // fora da tela
             VkRect2D tight{{ix0, iy0}, {static_cast<uint32_t>(ix1 - ix0), static_cast<uint32_t>(iy1 - iy0)}};
             vkCmdSetScissor(cmd, 0, 1, &tight);
         } else {
-            VkRect2D full{{0, 0}, {m_width, m_height}};
+            VkRect2D full{{0, 0}, {tW, tH}};
             vkCmdSetScissor(cmd, 0, 1, &full);
         }
     }
 
     updateDebugPlaneDepthDescriptor(depthView);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_smokePipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, accum ? m_smokeAccumPipeline : m_smokePipeline);
     {
-        const VkViewport vpFull{0, 0, (float)m_width, (float)m_height, 0, 1};
+        const VkViewport vpFull{0, 0, (float)tW, (float)tH, 0, 1};
         vkCmdSetViewport(cmd, 0, 1, &vpFull);
     }
     // O shader só usa set 0 (UBOs globais) e set 2 (profundidade da cena);
@@ -1140,9 +1158,11 @@ void CloudLayerRenderer::renderSmokePlume(VkCommandBuffer cmd, const SmokeEmitte
     if (kNoDepthClip) flags |= 2;
     if (quality.detail) flags |= 4;
     if (e.fire > 0.5f) flags |= 8;
+    // Piso de passos = min(smoke_steps, 8): preset com smoke_steps >= 8 fica como antes; o legacy
+    // (smoke_steps 4) deixa de pagar 8 passos (medido no mapa leve: -21 ms a escala cheia).
     pc.misc = glm::vec4(seed,
-                        std::max(8.0f, static_cast<float>(quality.maxSteps) * lod),
-                        1.0f,
+                        std::max(static_cast<float>(std::min(quality.maxSteps, 8)), static_cast<float>(quality.maxSteps) * lod),
+                        accum ? static_cast<float>(tW) / static_cast<float>(m_width) : 1.0f,
                         static_cast<float>(flags));
 
     vkCmdPushConstants(cmd, m_billboardPipelineLayout,
@@ -1152,6 +1172,10 @@ void CloudLayerRenderer::renderSmokePlume(VkCommandBuffer cmd, const SmokeEmitte
 
 void CloudLayerRenderer::destroyBillboardPipeline() {
     destroyVolumeApplyPipeline();
+    if (m_smokeAccumPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_ctx->device(), m_smokeAccumPipeline, nullptr);
+        m_smokeAccumPipeline = VK_NULL_HANDLE;
+    }
     if (m_smokePipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_smokePipeline, nullptr);
         m_smokePipeline = VK_NULL_HANDLE;

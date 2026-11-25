@@ -250,6 +250,11 @@ void ProceduralSkyBackend::createPipeline() {
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = fragModule;
     stages[1].pName = "main";
+    // constant_id 0 = LITE do skybox.frag (preset "sky_lite").
+    const VkBool32 skyLite = m_ctx->skyLite() ? VK_TRUE : VK_FALSE;
+    const VkSpecializationMapEntry liteEntry{0, 0, sizeof(VkBool32)};
+    VkSpecializationInfo liteSpec{1, &liteEntry, sizeof(VkBool32), &skyLite};
+    stages[1].pSpecializationInfo = &liteSpec;
 
     VkPipelineVertexInputStateCreateInfo vertInput = {};
     vertInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;

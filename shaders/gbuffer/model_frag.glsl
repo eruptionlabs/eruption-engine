@@ -423,6 +423,12 @@ layout(constant_id = 0) const bool LITE = false;
 // Enxuto MEDIO (VulkanContext::shaderLiteRelevo, so' com LITE): o normal map
 // da malha e das camadas do splat volta; MRAH-W, POM e micro-sombra seguem fora.
 layout(constant_id = 4) const bool LITE_RELEVO = false;
+// Modelo minimo (preset "model_shader_min", so com LITE): fora do chao com splat, escreve o G-buffer
+// com 1 amostra de albedo (+ alpha-test), a normal do vertice e material constante.
+layout(constant_id = 6) const bool MODEL_MIN = false;
+// Chao com splat minimo (preset "ground_shader_min", so com LITE): mascara + as 2 camadas de maior peso,
+// so' o albedo de cada uma, normal do vertice e material constante.
+layout(constant_id = 7) const bool GROUND_MIN = false;
 
 // Bits altos do slot de 16 bits da camada do splat (o slot cabe em 12): a
 // camada traz normal em slot+1 e/ou MRAH-W em slot+2 (TerrainPaint.cpp).
@@ -765,6 +771,50 @@ void main() {
     // abaixo do limiar e abria buracos). O teste de MAGENTA continua embaixo,
     // porque le' o rgb ja' misturado.
     if (texColor.a < alphaCutoff()) discard;
+    if (MODEL_MIN && !((inSplatTex.x | inSplatTex.y) != 0u && inBlendMaskIndex != 0u)) {
+        vec3 aMin = texColor.rgb;
+        if (inColor.a < 0.999) aMin *= inColor.rgb;
+        outAlbedo = vec4(aMin, 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, 1.0);
+        outPBR = vec4(0.5, 0.85, 0.0, 0.0);
+        outMaterialID = uint(clamp((inWorldPos.y + 500.0) / 2000.0, 0.0, 1.0) * 255.0 + 0.5);
+        outEmissive = vec4(aMin * inEmissiveStrength, 1.0);
+        return;
+    }
+    if (GROUND_MIN && (inSplatTex.x | inSplatTex.y) != 0u && inBlendMaskIndex != 0u) {
+        vec3 aG = texColor.rgb;
+        {
+            vec4 wg = slotTexture(inBlendMaskIndex, inBlendMaskUV);
+            uint g0 = 0u, g1 = 0u;
+            float q0 = 0.0, q1 = 0.0;
+            topDuas( inSplatTex.x        & 0xFFFFu, wg.r, g0, q0, g1, q1);
+            topDuas((inSplatTex.x >> 16) & 0xFFFFu, wg.g, g0, q0, g1, q1);
+            topDuas( inSplatTex.y        & 0xFFFFu, wg.b, g0, q0, g1, q1);
+            topDuas((inSplatTex.y >> 16) & 0xFFFFu, wg.a, g0, q0, g1, q1);
+            float wgSum = wg.r + wg.g + wg.b + wg.a;
+            vec4 wg2 = inBlendMaskIndex2 != 0u ? slotTexture(inBlendMaskIndex2, inBlendMaskUV) : vec4(0.0);
+            topDuas( inSplatTex2.x        & 0xFFFFu, wg2.r, g0, q0, g1, q1);
+            topDuas((inSplatTex2.x >> 16) & 0xFFFFu, wg2.g, g0, q0, g1, q1);
+            topDuas( inSplatTex2.y        & 0xFFFFu, wg2.b, g0, q0, g1, q1);
+            topDuas((inSplatTex2.y >> 16) & 0xFFFFu, wg2.a, g0, q0, g1, q1);
+            wgSum += wg2.r + wg2.g + wg2.b + wg2.a;
+            vec3 accG = vec3(0.0);
+            float sumG = 0.0;
+            if (g0 != 0u) { accG += amostraChao(nonuniformEXT(g0 & 0x3FFFu), uv, ddxUV, ddyUV, false, true).rgb * q0; sumG += q0; }
+            if (g1 != 0u) { accG += amostraChao(nonuniformEXT(g1 & 0x3FFFu), uv, ddxUV, ddyUV, false, true).rgb * q1; sumG += q1; }
+            float wB = max(0.0, 1.0 - wgSum);
+            accG += texColor.rgb * wB;
+            sumG += wB;
+            aG = accG / max(sumG, 1e-4);
+        }
+        if (inColor.a < 0.999) aG *= inColor.rgb;
+        outAlbedo = vec4(aG, 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, 1.0);
+        outPBR = vec4(0.5, 0.85, 0.0, 0.0);
+        outMaterialID = uint(clamp((inWorldPos.y + 500.0) / 2000.0, 0.0, 1.0) * 255.0 + 0.5);
+        outEmissive = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
     // Ground crossfade. `inBlendWeight` is a per-vertex weight (0 when the mesh
     // carries no _BLEND_* attributes, so untagged maps are untouched). A plain
     // mix() of that weight interpolates linearly across each mesh triangle, so
