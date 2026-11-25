@@ -2282,6 +2282,11 @@ void Engine::render() {
                     tp.touchdown = TornadoField::touchdown(*t);
                     tp.age = t->age;
                     tp.dust = t->spec.dust;
+                    tp.color = t->spec.color;
+                    tp.cloudColor = t->spec.cloudColor;
+                    tp.cloud = t->spec.cloud;
+                    tp.density = t->spec.density;
+                    tp.opacity = t->spec.opacity;
                     m_cloudLayerRenderer.renderTornado(cmd, tp, m_camera, m_gbuffer.depthView(), tq);
                 }
                 if (tornAccum) {

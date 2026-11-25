@@ -33,9 +33,58 @@ void readBool(lua_State* L, int idx, const char* name, bool& out) {
     lua_pop(L, 1);
 }
 
+void readVec3(lua_State* L, int idx, const char* name, Vec3& out) {
+    lua_getfield(L, idx, name);
+    if (lua_isvector(L, -1)) {
+        const float* v = lua_tovector(L, -1);
+        out = Vec3(v[0], v[1], v[2]);
+    } else if (!lua_isnil(L, -1)) {
+        luaL_error(L, "vfx.tornado: field '%s' must be a vector (r, g, b)", name);
+    }
+    lua_pop(L, 1);
+}
+
+// Le o campo texto; devolve "" se ausente.
+std::string readString(lua_State* L, int idx, const char* name, bool& present) {
+    std::string out;
+    present = false;
+    lua_getfield(L, idx, name);
+    if (!lua_isnil(L, -1)) {
+        if (lua_type(L, -1) != LUA_TSTRING) luaL_error(L, "vfx.tornado: field '%s' must be a string", name);
+        out = lua_tostring(L, -1);
+        present = true;
+    }
+    lua_pop(L, 1);
+    return out;
+}
+
+// `style` so' preenche os padroes; qualquer campo explicito vence.
+void applyStyle(lua_State* L, const std::string& style, TornadoSpec& s) {
+    if (style.empty() || style == "storm") return;
+    if (style == "whirl") { // redemoinho de poeira e folhas, de efeito de nivel
+        s.height = 22.0f; s.radiusTop = 3.2f; s.radiusBottom = 0.9f; s.spin = 2.2f;
+        s.cloud = 0.0f; s.grow = 0.5f; s.fade = 0.8f; s.life = 3.0f;
+        s.color = Vec3(0.85f, 0.72f, 0.55f); s.dust = Vec3(0.62f, 0.50f, 0.34f);
+        s.density = 2.0f; s.opacity = 0.9f; s.wind = 0.2f;
+        s.debrisKind = TornadoDebrisKind::Leaves; s.debrisSize = 4.5f;
+        s.trailKind.clear();
+    } else if (style == "blizzard") { // vortice de neve: branco-azulado, frio, translucido
+        s.color = Vec3(0.95f, 1.10f, 1.35f); s.cloudColor = Vec3(0.78f, 0.86f, 1.0f);
+        s.dust = Vec3(0.80f, 0.90f, 1.0f);
+        s.density = 0.7f; s.opacity = 0.85f; s.cloud = 0.8f;
+        s.debrisKind = TornadoDebrisKind::Snow; s.debrisSize = 0.6f;
+        s.snowfall = 1.0f;
+        s.trailKind = "snow"; s.trailStrength = 0.6f;
+    } else {
+        luaL_error(L, "vfx.tornado: style must be \"storm\", \"whirl\" or \"blizzard\"");
+    }
+}
+
 int vfx_tornado(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     TornadoSpec s;
+    bool has = false;
+    applyStyle(L, readString(L, 1, "style", has), s);
     lua_getfield(L, 1, "pos");
     if (!lua_isvector(L, -1)) luaL_error(L, "vfx.tornado: field 'pos' must be a vector (x, y, z)");
     {
@@ -50,14 +99,31 @@ int vfx_tornado(lua_State* L) {
     readNum(L, 1, "life", s.life);
     readNum(L, 1, "fade", s.fade);
     readBool(L, 1, "debris", s.debris);
-    lua_getfield(L, 1, "dust");
-    if (lua_isvector(L, -1)) {
-        const float* v = lua_tovector(L, -1);
-        s.dust = Vec3(v[0], v[1], v[2]);
-    } else if (!lua_isnil(L, -1)) {
-        luaL_error(L, "vfx.tornado: field 'dust' must be a vector (r, g, b)");
+    readVec3(L, 1, "dust", s.dust);
+    readVec3(L, 1, "color", s.color);
+    readVec3(L, 1, "cloud_color", s.cloudColor);
+    readNum(L, 1, "cloud", s.cloud);
+    readNum(L, 1, "density", s.density);
+    readNum(L, 1, "opacity", s.opacity);
+    readNum(L, 1, "wind", s.wind);
+    readNum(L, 1, "grow", s.grow);
+    readNum(L, 1, "debris_size", s.debrisSize);
+    readNum(L, 1, "snowfall", s.snowfall);
+    readNum(L, 1, "trail_strength", s.trailStrength);
+    {
+        const std::string kind = readString(L, 1, "debris_kind", has);
+        if (has) {
+            if (kind == "debris") s.debrisKind = TornadoDebrisKind::Debris;
+            else if (kind == "leaves") s.debrisKind = TornadoDebrisKind::Leaves;
+            else if (kind == "dust") s.debrisKind = TornadoDebrisKind::Dust;
+            else if (kind == "snow") s.debrisKind = TornadoDebrisKind::Snow;
+            else if (kind == "none") s.debris = false;
+            else luaL_error(L, "vfx.tornado: debris_kind must be \"debris\", \"leaves\", \"dust\", \"snow\" or \"none\"");
+            if (kind != "none") s.debris = true;
+        }
+        const std::string trail = readString(L, 1, "trail_kind", has);
+        if (has) s.trailKind = (trail == "none") ? std::string() : trail;
     }
-    lua_pop(L, 1);
     const uint32_t id = g_engine->startTornado(s);
     if (id == 0) lua_pushnil(L);
     else lua_pushnumber(L, static_cast<double>(id));
@@ -109,6 +175,9 @@ std::string tornadoApiDefinitions() {
     -- vento (world.wind_burst) se curva em volta e o chao por onde passa escurece. Devolve um id
     -- (nil se o preset nao permite ou o teto de tornados simultaneos foi atingido: chaves
     -- tornado, tornado_max, tornado_steps, tornado_sun_taps, tornado_scale, tornado_debris).
+    -- O teto de tornados vivos ao mesmo tempo e' a chave tornado_max do preset (1 ou 2 nos
+    -- presets de fabrica, no maximo 8): acima dele vfx.tornado devolve nil; confira o retorno
+    -- quando criar varios (redemoinhos).
     -- Campos (so' pos e' obrigatorio):
     --   pos           vector: o pe, em coordenadas de mundo (y = chao)
     --   height        do chao ate' a base da nuvem-mae, em unidades do mundo (200)
@@ -119,8 +188,30 @@ std::string tornadoApiDefinitions() {
     --   debris        pedras, folhas e tabuas em espiral (true)
     --   life          segundos ate' comecar a sair; <= 0 fica ate' tornado_stop (0)
     --   fade          segundos da saida (3)
-    tornado: (spec: { pos: vector, height: number?, radius_top: number?, radius_bottom: number?,
-        spin: number?, dust: vector?, debris: boolean?, life: number?, fade: number? }) -> number?,
+    -- Variacoes (o motor so' desenha; o jogo escolhe o visual). `style` preenche os padroes
+    -- abaixo e qualquer campo explicito vence:
+    --   style         "storm" (o padrao acima), "whirl" (redemoinho pequeno: 22 de altura, sem nuvem,
+    --                 folhas, vida de 3 s, vento fraco, sem rastro) ou "blizzard" (vortice de neve:
+    --                 branco-azulado, translucido, flocos, rastro de neve)
+    --   cloud         escala da nuvem-mae; 0 = sem nuvem (o funil afina sozinho no topo) (1)
+    --   color         vector rgb do funil (condensacao) (0.34, 0.38, 0.47)
+    --   cloud_color   vector rgb da nuvem-mae (0.30, 0.31, 0.36)
+    --   density       multiplica a densidade/espessura, 0.05..4 (1)
+    --   opacity       multiplica o alfa final, 0..1 (1)
+    --   debris_kind   "debris" (pedras, folhas, tabuas), "leaves", "dust" (pontos macios),
+    --                 "snow" (flocos e cristais) ou "none" ("debris")
+    --   debris_size   multiplica o tamanho dos destrocos (1)
+    --   snowfall      0..1: neve fina caindo em volta do tornado (flocos baratos, ate' 100); 0 = nenhuma (0; 1 no blizzard)
+    --   wind          multiplica a rajada de world.wind_burst em volta; 0 = nenhuma (1)
+    --   grow          segundos para a corda descer ate' o chao (6)
+    --   trail_kind    world.ground_state deixado onde o pe passa: "scorch", "frost", "snow"...
+    --                 ou "none" ("scorch")
+    --   trail_strength intensidade do rastro, 0..1 (0.3)
+    tornado: (spec: { pos: vector, style: string?, height: number?, radius_top: number?,
+        radius_bottom: number?, spin: number?, dust: vector?, debris: boolean?, life: number?,
+        fade: number?, cloud: number?, color: vector?, cloud_color: vector?, density: number?,
+        opacity: number?, debris_kind: string?, debris_size: number?, snowfall: number?, wind: number?, grow: number?,
+        trail_kind: string?, trail_strength: number? }) -> number?,
     -- Move o pe do tornado (o funil e os destrocos seguem). false se o id ja' acabou.
     tornado_move: (id: number, position: vector) -> boolean,
     -- Comeca a saida (a corda sobe e a poeira baixa em `fade` s). false se o id ja' acabou.

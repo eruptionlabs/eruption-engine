@@ -30,10 +30,17 @@ uint32_t TornadoField::start(const TornadoSpec& spec, size_t maxCount) {
     Tornado t;
     t.id = m_nextId++;
     t.spec = spec;
-    t.spec.height = std::max(spec.height, 10.0f);
-    t.spec.radiusTop = std::max(spec.radiusTop, 1.0f);
-    t.spec.radiusBottom = std::clamp(spec.radiusBottom, 0.5f, t.spec.radiusTop);
+    t.spec.height = std::max(spec.height, 1.5f);
+    t.spec.radiusTop = std::max(spec.radiusTop, 0.3f);
+    t.spec.radiusBottom = std::clamp(spec.radiusBottom, 0.1f, t.spec.radiusTop);
     t.spec.fade = std::max(spec.fade, 0.05f);
+    t.spec.grow = std::max(spec.grow, 0.05f);
+    t.spec.cloud = std::max(spec.cloud, 0.0f);
+    t.spec.density = std::clamp(spec.density, 0.05f, 4.0f);
+    t.spec.opacity = std::clamp(spec.opacity, 0.0f, 1.0f);
+    t.spec.wind = std::clamp(spec.wind, 0.0f, 4.0f);
+    t.spec.debrisSize = std::clamp(spec.debrisSize, 0.05f, 20.0f);
+    t.spec.snowfall = std::clamp(spec.snowfall, 0.0f, 1.0f);
     // Direcao da inclinacao e fase do balanco: por id, para dois tornados nao serem gemeos.
     t.seed = hash01(t.id, 7u, 3u) * 6.2831853f;
     t.lastTrail = spec.pos;
@@ -78,7 +85,7 @@ float TornadoField::intensity(const Tornado& t) {
 }
 
 float TornadoField::touchdown(const Tornado& t) {
-    const float u = std::clamp(t.age / 6.0f, 0.0f, 1.0f);
+    const float u = std::clamp(t.age / std::max(t.spec.grow, 0.05f), 0.0f, 1.0f);
     return u * u * (3.0f - 2.0f * u);
 }
 
@@ -104,9 +111,15 @@ TornadoField::Piece TornadoField::pieceAt(const Tornado& t, uint32_t i) {
 
     Piece out;
     const float pick = hash01(t.id, k, 3u);
-    out.kind = pick < 0.6f ? 0 : (pick < 0.88f ? 1 : 2);
-    out.size = s.height * (out.kind == 0 ? 0.0030f + 0.0050f * hash01(t.id, k, 4u)
-                                         : 0.0040f + 0.0060f * hash01(t.id, k, 4u));
+    switch (t.spec.debrisKind) {
+        case TornadoDebrisKind::Leaves: out.kind = 1; break;
+        case TornadoDebrisKind::Dust: out.kind = 3; break;
+        case TornadoDebrisKind::Snow: out.kind = pick < 0.75f ? 3 : 4; break; // flocos e cristais
+        default: out.kind = pick < 0.6f ? 0 : (pick < 0.88f ? 1 : 2); break;
+    }
+    const bool rounded = out.kind == 0 || out.kind >= 3;
+    out.size = s.height * (rounded ? 0.0030f + 0.0050f * hash01(t.id, k, 4u)
+                                   : 0.0040f + 0.0060f * hash01(t.id, k, 4u)) * t.spec.debrisSize;
     if (hash01(t.id, k, 11u) < 0.08f) out.size *= 2.4f; // alguns pedacos grandes
     out.rot = hash01(t.id, k, 5u) * 6.2831853f + t.age * (1.5f + 3.0f * hash01(t.id, k, 6u));
 

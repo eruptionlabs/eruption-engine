@@ -1251,6 +1251,9 @@ declare vfx: {
     -- vento (world.wind_burst) se curva em volta e o chao por onde passa escurece. Devolve um id
     -- (nil se o preset nao permite ou o teto de tornados simultaneos foi atingido: chaves
     -- tornado, tornado_max, tornado_steps, tornado_sun_taps, tornado_scale, tornado_debris).
+    -- O teto de tornados vivos ao mesmo tempo e' a chave tornado_max do preset (1 ou 2 nos
+    -- presets de fabrica, no maximo 8): acima dele vfx.tornado devolve nil; confira o retorno
+    -- quando criar varios (redemoinhos).
     -- Campos (so' pos e' obrigatorio):
     --   pos           vector: o pe, em coordenadas de mundo (y = chao)
     --   height        do chao ate' a base da nuvem-mae, em unidades do mundo (200)
@@ -1261,8 +1264,30 @@ declare vfx: {
     --   debris        pedras, folhas e tabuas em espiral (true)
     --   life          segundos ate' comecar a sair; <= 0 fica ate' tornado_stop (0)
     --   fade          segundos da saida (3)
-    tornado: (spec: { pos: vector, height: number?, radius_top: number?, radius_bottom: number?,
-        spin: number?, dust: vector?, debris: boolean?, life: number?, fade: number? }) -> number?,
+    -- Variacoes (o motor so' desenha; o jogo escolhe o visual). `style` preenche os padroes
+    -- abaixo e qualquer campo explicito vence:
+    --   style         "storm" (o padrao acima), "whirl" (redemoinho pequeno: 22 de altura, sem nuvem,
+    --                 folhas, vida de 3 s, vento fraco, sem rastro) ou "blizzard" (vortice de neve:
+    --                 branco-azulado, translucido, flocos, rastro de neve)
+    --   cloud         escala da nuvem-mae; 0 = sem nuvem (o funil afina sozinho no topo) (1)
+    --   color         vector rgb do funil (condensacao) (0.34, 0.38, 0.47)
+    --   cloud_color   vector rgb da nuvem-mae (0.30, 0.31, 0.36)
+    --   density       multiplica a densidade/espessura, 0.05..4 (1)
+    --   opacity       multiplica o alfa final, 0..1 (1)
+    --   debris_kind   "debris" (pedras, folhas, tabuas), "leaves", "dust" (pontos macios),
+    --                 "snow" (flocos e cristais) ou "none" ("debris")
+    --   debris_size   multiplica o tamanho dos destrocos (1)
+    --   snowfall      0..1: neve fina caindo em volta do tornado (flocos baratos, ate' 100); 0 = nenhuma (0; 1 no blizzard)
+    --   wind          multiplica a rajada de world.wind_burst em volta; 0 = nenhuma (1)
+    --   grow          segundos para a corda descer ate' o chao (6)
+    --   trail_kind    world.ground_state deixado onde o pe passa: "scorch", "frost", "snow"...
+    --                 ou "none" ("scorch")
+    --   trail_strength intensidade do rastro, 0..1 (0.3)
+    tornado: (spec: { pos: vector, style: string?, height: number?, radius_top: number?,
+        radius_bottom: number?, spin: number?, dust: vector?, debris: boolean?, life: number?,
+        fade: number?, cloud: number?, color: vector?, cloud_color: vector?, density: number?,
+        opacity: number?, debris_kind: string?, debris_size: number?, snowfall: number?, wind: number?, grow: number?,
+        trail_kind: string?, trail_strength: number? }) -> number?,
     -- Move o pe do tornado (o funil e os destrocos seguem). false se o id ja' acabou.
     tornado_move: (id: number, position: vector) -> boolean,
     -- Comeca a saida (a corda sobe e a poeira baixa em `fade` s). false se o id ja' acabou.

@@ -195,6 +195,11 @@ public:
         float touchdown = 1.0f;              // 0..1 (a corda desce da nuvem)
         float age = 0.0f;                    // relogio do tornado (s)
         Vec3 dust = Vec3(0.46f, 0.38f, 0.29f);
+        Vec3 color = Vec3(0.34f, 0.38f, 0.47f);      // albedo do funil
+        Vec3 cloudColor = Vec3(0.30f, 0.31f, 0.36f); // albedo da nuvem-mae
+        float cloud = 1.0f;                  // escala da nuvem-mae (0 = sem)
+        float density = 1.0f;
+        float opacity = 1.0f;
     };
     void renderTornado(VkCommandBuffer cmd, const TornadoParams& params, const Camera& camera,
                        VkImageView depthView, const TornadoQuality& quality);

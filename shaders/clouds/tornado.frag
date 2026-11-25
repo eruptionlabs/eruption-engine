@@ -48,7 +48,8 @@ layout(push_constant) uniform PushConstants {
     vec4 shape;    // x = raio topo, y = raio base, z = giro, w = intensidade (saida)
     vec4 dust;     // rgb = cor da poeira, w = idade (s)
     vec4 misc;     // x = semente, y = iteracoes maximas, z = targetScale, w = descida (0..1)
-    vec4 extra;    // x = raio da nuvem-mae, y = raio da saia de poeira
+    vec4 extra;    // x = raio da nuvem-mae, y = raio da saia de poeira, z = densidade, w = opacidade
+    vec4 look;     // rgb = albedo do funil, w = albedo da nuvem-mae empacotado (24 bits + 1; 0 = padrao)
 } pc;
 
 const float kPeriod = 3.4; // s de cada fluxo antes de reiniciar o cisalhamento
@@ -248,7 +249,8 @@ float funnelDensity(vec3 p, float age, float lod, bool detail, float fine, out f
     d *= tipMask;
     d *= mix(2.0, 1.0, smooth01(0.0, 0.55, h)); // a corda embaixo e' mais densa
     // Encontro com a nuvem-mae: some suavemente acima da base dela.
-    d *= 1.0 - smooth01(1.10, 1.20, h) * ((int(pc.boxMin.w + 0.5) & 4) != 0 ? 1.0 : 0.0);
+    // Sem nuvem-mae o topo afina sozinho (o funil nao acaba num corte seco).
+    d *= (int(pc.boxMin.w + 0.5) & 4) != 0 ? 1.0 - smooth01(1.10, 1.20, h) : 1.0 - smooth01(0.82, 1.02, h);
     return d;
 }
 
@@ -261,7 +263,7 @@ float skirtDensity(vec3 p, float age, bool detail, float fine, out float gOut) {
     gOut = g;
     float hs = Rs * 0.42; // saia rente ao chao: mais larga que alta
     float gTop = Rs * 0.95; // dentro do envelope de salto do laco principal (Rs * 1.7)
-    if (g < -2.0 || g > gTop) return 0.0;
+    if (g < -min(2.0, pc.origin.w * 0.01) || g > gTop) return 0.0;
     float grow = smooth01(0.55, 1.0, pc.misc.w) * pc.shape.w; // so' depois da corda tocar o chao
     if (grow <= 0.0) return 0.0;
     vec2 q = p.xz - pc.origin.xz;
@@ -411,14 +413,15 @@ void main() {
     }
     tExit = min(tExit, tScene);
     if (tExit <= tEnter) discard;
-    float fadeLen = max(6.0, tScene * 0.01);
+    float fadeLen = max(min(6.0, pc.origin.w * 0.03), tScene * 0.01);
 
     float age = pc.dust.w;
     float H = pc.origin.w;
     float maxIter = max(pc.misc.y, 8.0);
     // Fracao do passo em raios locais: poucas iteracoes -> passo maior dentro do funil.
     float kStep = clamp(4.5 / maxIter, 0.07, 0.40);
-    float minStep = max(H * 0.0012, 0.4);
+    float unitFloor = min(1.0, H * 0.005); // 1 m para H >= 200; menor nos redemoinhos
+    float minStep = max(H * 0.002, 0.01); // 0,4 para H = 200; proporcional nos redemoinhos pequenos
 
     vec2 fullResCoord = floor(gl_FragCoord.xy * max(1.0, 1.0 / pc.misc.z));
     // Ruido branco (hash PCG) em vez do gradiente intercalado: este tem estrutura em diagonais
@@ -432,10 +435,17 @@ void main() {
     float sunLevel = clamp(sunIntensity, 0.15, 1.5);
     // Paleta: o cinza de nuvem recebe sol com a auto-sombra; o miolo e' escuro. Os
     // fatores sao baixos como os da fumaca: a exposicao automatica estoura perto de 1.
-    vec3 cloudAlb = vec3(0.34, 0.38, 0.47); // condensacao: cinza-azulado escuro
+    vec3 cloudAlb = pc.look.rgb; // condensacao (padrao: cinza-azulado escuro)
     vec3 motherAlb = vec3(0.30, 0.31, 0.36);
+    if (pc.look.w > 0.5) {
+        float pk = pc.look.w - 1.0;
+        motherAlb = vec3(floor(pk / 65536.0), mod(floor(pk / 256.0), 256.0), mod(pk, 256.0)) / 255.0;
+    }
     vec3 dustCol = pc.dust.rgb;
-    vec3 ambient = vec3(0.56, 0.56, 0.60) * (0.060 + 0.070 * sunLevel);
+    // Cor clara (neve): espalha como nuvem branca, nao como condensacao escura: mais ambiente,
+    // menos auto-sombra e mais luz para a frente. Escuro (padrao) e poeira nao entram (0).
+    float snow = smooth01(0.90, 1.05, dot(pc.look.rgb, vec3(0.30, 0.50, 0.20)));
+    vec3 ambient = vec3(0.56, 0.56, 0.60) * (0.060 + 0.070 * sunLevel) * mix(1.0, 3.2, snow);
     vec3 sunCol = vec3(1.0, 0.92, 0.80) * (0.090 + 0.30 * sunLevel);
 
     // Intervalo do raio dentro da nuvem-mae: cilindro vertical x laje.
@@ -484,7 +494,7 @@ void main() {
         float distFun = length(p.xz - axisE) - rEnv;
         float distSkirt = length(p.xz - pc.origin.xz) - pc.extra.y * 1.7;
         float yAbove = p.y - pc.origin.y;
-        float dSkirtY = max(yAbove - pc.extra.y * 1.7, -yAbove - 2.0);
+        float dSkirtY = max(yAbove - pc.extra.y * 1.7, -yAbove - min(2.0, H * 0.01));
         // O funil e a saia saltam o vazio pela distancia ao envelope; a nuvem-mae e' um intervalo
         // exato do raio (cilindro x laje, calculado antes do laco): um salto por distancia ate'
         // um plano horizontal converge para ele sem nunca chegar (linhas horizontais na imagem).
@@ -513,7 +523,10 @@ void main() {
         float dF = funnelDensity(p, age, 1.0, detail, fine, h, rrF);
         float dS = skirtDensity(p, age, detail, fine, gS);
         float dM = motherOn ? motherDensity(p, age, detail, fine, uM, rrM) * mFade * smooth01(0.50 * H, 1.10 * H, t) : 0.0; // nada de nevoa colada na camera
-        float dens = dF + dS + dM;
+        // Pesos dos termos pela soma bruta: `dens` leva o fade de profundidade e a densidade do
+        // usuario, e dividir por ele estourava os pesos (mancha branca no pe do redemoinho).
+        float dRaw = max(dF + dS + dM, 1e-4);
+        float dens = (dF + dS + dM) * pc.extra.z;
         float coreF = gCore;
         float upF = smooth01(0.30, 0.65, hh); // em cima a condensacao e' lisa: o ruido pesa menos
         float nF = mix(smooth01(0.30, 0.70, gNoiseF), 0.55, 0.60 * upF), nS = smooth01(0.30, 0.70, gNoiseS), nM = smooth01(0.30, 0.70, gNoiseM); // as amostras de sombra abaixo sobrescrevem os globais
@@ -527,19 +540,20 @@ void main() {
                 float s = stepL * (0.5 + float(k) * 0.9);
                 occl += totalDensityCheap(p + toSun * s, age, fine, motherOn) * s;
             }
-            float sunT = exp(-occl * (sunTaps > 0 ? 5.5 / max(rLocal, 1.0) : 0.0));
+            float sunT = exp(-occl * (sunTaps > 0 ? 5.5 / max(rLocal, unitFloor) : 0.0));
             if (sunTaps == 0) sunT = exp(-dens * 1.6) * 0.8 + 0.2;
+            sunT = mix(sunT, 1.0, 0.65 * snow);
             // Borda clara, miolo escuro (com gradacao): o interior recebe menos luz mesmo sem sombra.
-            float coreDark = mix(0.11, 1.0, smooth01(0.05, 0.95, rrF));
+            float coreDark = mix(mix(0.11, 1.0, smooth01(0.05, 0.95, rrF)), 1.0, 0.7 * snow);
             // Lado do sol claro, lado oposto escuro: a normal da parede e' a direcao radial.
             vec2 radial = normalize(p.xz - (pc.origin.xz + axisOffset(clamp(h, 0.0, 1.2), age)) + vec2(1e-3));
             float side = 0.5 + 0.5 * dot(radial, normalize(toSun.xz + vec2(1e-4)));
-            float sideLit = mix(1.0, mix(0.14, 1.12, side * side), smooth01(0.20, 0.85, rrF));
+            float sideLit = mix(1.0, mix(mix(0.14, 0.75, snow), 1.12, side * side), smooth01(0.20, 0.85, rrF));
             // Poeira do chao embaixo (marrom), cinza de nuvem em cima.
             float dustAmt = 0.05 + 0.95 * (1.0 - smooth01(0.06, 0.38, max(h, 0.0)));
             vec3 alb = mix(cloudAlb, dustCol * 1.3, clamp(dustAmt * 0.85, 0.0, 1.0));
-            alb *= mix(1.0, 0.42, (1.0 - smooth01(0.0, 0.55, h)) * (dF / max(dens, 1e-4)));
-            float wF = dF / max(dens, 1e-4), wS = dS / max(dens, 1e-4), wM = dM / max(dens, 1e-4);
+            alb *= mix(1.0, 0.42, (1.0 - smooth01(0.0, 0.55, h)) * (dF / dRaw));
+            float wF = dF / dRaw, wS = dS / dRaw, wM = dM / dRaw;
             // Relevo: as bolhas do proprio ruido ficam claras na crista e escuras no vale.
             float relief = wF * mix(0.28, 1.65, nF) + wS * mix(0.18, 1.80, nS) + wM * mix(0.12, 1.90, nM);
             // A saia fica mais escura embaixo (sombra do proprio rolo) e clara no alto.
@@ -550,7 +564,7 @@ void main() {
             lit *= mix(1.0, 0.10 + 1.15 * smooth01(-0.6, 0.65, uM), wM);
             vec3 col = albedo * (ambient * mix(0.7, 1.2, relief * 0.5) + sunCol * sunT * lit) * relief;
             // Brilho na borda iluminada: contra-luz fino quando a densidade e' baixa.
-            col += albedo * sunCol * (0.10 + 0.9 * pow(max(dot(rd, toSun), 0.0), 3.0)) * sunT * (1.0 - smooth01(0.0, 0.6, dens)) * wF;
+            col += albedo * sunCol * (0.10 + (0.9 + 2.5 * snow) * pow(max(dot(rd, toSun), 0.0), 3.0)) * sunT * (1.0 + snow) * (1.0 - smooth01(0.0, 0.6, dens)) * wF;
 
             // Borda fina contra o ceu: um brilho frio e discreto onde a parede e' rasa, mais forte no lado do sol.
             float rimF = smooth01(0.62, 1.0, rrF) * wF;
@@ -561,7 +575,7 @@ void main() {
             float lowF = 1.0 - smooth01(0.0, 0.55, h); // a corda perto do chao e' mais densa e escura (terra no ar)
             float kExt = (1.8 * (1.0 - coreF) + 8.0 * coreF) * (1.0 + 0.9 * lowF);
             float k = kExt * wF + 3.0 * wS + 3.2 * wM;
-            float a = 1.0 - exp(-dens * dt * (k / max(mix(rLocal, pc.extra.y * 0.5, wS), 1.0)));
+            float a = (1.0 - exp(-dens * dt * (k / max(mix(rLocal, pc.extra.y * 0.5, wS), unitFloor)))) * pc.extra.w;
             accum.rgb += (1.0 - accum.a) * col * a;
             accum.a += (1.0 - accum.a) * a;
             if (accum.a > 0.985) break;

@@ -780,7 +780,7 @@ bool CloudLayerRenderer::createBillboardPipeline() {
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset = 0;
-    pcRange.size = 112;
+    pcRange.size = 128; // o funil de tornado usa 8 vec4 (o limite de push constant do projeto)
 
     VkDescriptorSetLayout layouts[4] = {m_descriptorSetLayout, m_compositeDescriptorSetLayout,
                                         m_debugPlaneDepthLayout, m_billboardCloudsLayout};
@@ -1199,7 +1199,7 @@ void CloudLayerRenderer::renderTornado(VkCommandBuffer cmd, const TornadoParams&
 
     const tornado_shape::Shape& sh = tp.shape;
     const float H = sh.height;
-    const float rMother = tornado_shape::motherRadius(sh);
+    const float rMother = tornado_shape::motherRadius(sh) * std::max(tp.cloud, 0.0f);
     const float rSkirt = tornado_shape::skirtRadius(sh);
     // Caixa: o eixo e o raio em amostras de altura (o funil pode pender e balancar).
     float minX = tp.base.x - rSkirt * 1.7f, maxX = tp.base.x + rSkirt * 1.7f;
@@ -1211,7 +1211,7 @@ void CloudLayerRenderer::renderTornado(VkCommandBuffer cmd, const TornadoParams&
         minX = std::min(minX, tp.base.x + a.x - r); maxX = std::max(maxX, tp.base.x + a.x + r);
         minZ = std::min(minZ, tp.base.z + a.y - r); maxZ = std::max(maxZ, tp.base.z + a.y + r);
     }
-    const bool mother = quality.mother;
+    const bool mother = quality.mother && tp.cloud > 0.0f;
     float yTop = tp.base.y + H * 1.13f;
     if (mother) {
         const Vec2 a = tornado_shape::axisOffset(sh, 1.0f, tp.age);
@@ -1219,7 +1219,7 @@ void CloudLayerRenderer::renderTornado(VkCommandBuffer cmd, const TornadoParams&
         minZ = std::min(minZ, tp.base.z + a.y - rMother * 1.3f); maxZ = std::max(maxZ, tp.base.z + a.y + rMother * 1.3f);
         yTop = tp.base.y + H * 1.32f;
     }
-    const float yBot = tp.base.y - 1.0f;
+    const float yBot = tp.base.y - std::min(1.0f, H * 0.005f);
 
     const Mat4 vp = camera.viewProjNoJitter();
     const Vec3 boxMin3(minX, yBot, minZ), boxMax3(maxX, yTop, maxZ);
@@ -1289,6 +1289,7 @@ void CloudLayerRenderer::renderTornado(VkCommandBuffer cmd, const TornadoParams&
         glm::vec4 dust;
         glm::vec4 misc;
         glm::vec4 extra;
+        glm::vec4 look;
     } pc;
     static const bool kNoDepthClip = std::getenv("ERUPTION_TEST_SMOKE_NODEPCLIP") != nullptr;
     int flags = 0;
@@ -1302,7 +1303,14 @@ void CloudLayerRenderer::renderTornado(VkCommandBuffer cmd, const TornadoParams&
     pc.dust = glm::vec4(tp.dust, tp.age);
     pc.misc = glm::vec4(sh.seed, std::max(12.0f, static_cast<float>(quality.maxSteps) * lod),
                         accum ? static_cast<float>(tW) / static_cast<float>(m_width) : 1.0f, tp.touchdown);
-    pc.extra = glm::vec4(rMother, rSkirt, 0.0f, 0.0f);
+    pc.extra = glm::vec4(rMother, rSkirt, tp.density, tp.opacity);
+    // A cor da nuvem-mae vai empacotada em 24 bits dentro de um float (inteiro exato); 0 = a padrao.
+    float cloudPacked = 0.0f;
+    if (glm::distance(tp.cloudColor, Vec3(0.30f, 0.31f, 0.36f)) > 1e-4f) {
+        auto q = [](float v) { return static_cast<float>(static_cast<int>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f)); };
+        cloudPacked = q(tp.cloudColor.r) * 65536.0f + q(tp.cloudColor.g) * 256.0f + q(tp.cloudColor.b) + 1.0f;
+    }
+    pc.look = glm::vec4(tp.color, cloudPacked);
     vkCmdPushConstants(cmd, m_billboardPipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
     vkCmdDraw(cmd, 36, 1, 0, 0);

@@ -4,6 +4,7 @@
 #include "renderer/vfx/TornadoShape.hpp"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace eruption {
@@ -15,6 +16,9 @@ namespace eruption {
 // mesmo eixo e raio que o shader usa (TornadoShape.hpp). Sem script, nada aqui custa.
 class ImmediateDraw;
 
+// Tipo dos destrocos em espiral: o motor e' generico, o jogo escolhe o material.
+enum class TornadoDebrisKind : int { Debris = 0, Leaves = 1, Dust = 2, Snow = 3 };
+
 struct TornadoSpec {
     Vec3 pos = Vec3(0.0f);          // pe do tornado, em coordenadas de mundo (y = chao)
     float height = 200.0f;          // do chao ate' a base da nuvem-mae
@@ -25,6 +29,19 @@ struct TornadoSpec {
     bool debris = true;             // pedras, folhas e tabuas em espiral
     float life = 0.0f;              // s ate' comecar a sumir; <= 0 fica ate' tornado_stop
     float fade = 3.0f;              // s da saida (a corda sobe e a poeira baixa)
+    // Variacoes (o padrao e' o tornado de tempestade):
+    float grow = 6.0f;              // s para a corda descer ate' o chao
+    float cloud = 1.0f;             // escala da nuvem-mae; 0 = sem nuvem
+    Vec3 color = Vec3(0.34f, 0.38f, 0.47f);      // cor do funil (condensacao)
+    Vec3 cloudColor = Vec3(0.30f, 0.31f, 0.36f); // cor da nuvem-mae
+    float density = 1.0f;           // multiplica a densidade (espessura)
+    float opacity = 1.0f;           // multiplica o alfa final
+    float wind = 1.0f;              // multiplica a rajada de vento em volta
+    TornadoDebrisKind debrisKind = TornadoDebrisKind::Debris;
+    float debrisSize = 1.0f;        // multiplica o tamanho dos destrocos
+    float snowfall = 0.0f;          // 0..1: neve fina caindo em volta (flocos baratos); 0 = nenhuma
+    std::string trailKind = "scorch"; // world.ground_state deixado no rastro; "" = nenhum
+    float trailStrength = 0.30f;
 };
 
 class TornadoField {
@@ -40,7 +57,8 @@ public:
         float burstTimer = 0.0f;
     };
 
-    static constexpr size_t kMaxTornados = 4;
+    static constexpr size_t kMaxTornados = 8;
+    static constexpr uint32_t kSnowfallMax = 100; // flocos da neve em volta, por tornado
 
     bool init(ImmediateDraw& draw);
     // Devolve o id (> 0) ou 0 se o teto de tornados simultaneos foi atingido.
@@ -73,14 +91,14 @@ public:
         float rot = 0.0f;
         float alpha = 1.0f;
         float height01 = 0.0f;  // altura relativa (cor: poeira embaixo)
-        int kind = 0;           // 0 pedra, 1 folha, 2 tabua
+        int kind = 0;           // 0 pedra, 1 folha, 2 tabua, 3 floco/ponto macio, 4 cristal
     };
     static Piece pieceAt(const Tornado& t, uint32_t i);
 
 private:
     std::vector<Tornado> m_list;
     uint32_t m_nextId = 1;
-    int m_tex[3] = {-1, -1, -1};
+    int m_tex[5] = {-1, -1, -1, -1, -1};
     uint32_t m_lastPieces = 0;
 };
 

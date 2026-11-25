@@ -84,6 +84,32 @@ int main() {
     }
     CHECK(ok && id != 0);
 
+    // Variacoes: redemoinho pequeno (sem nuvem, desce rapido) e vortice de neve (flocos e cristais).
+    TornadoField w;
+    TornadoSpec ws;
+    ws.height = 22.0f; ws.radiusTop = 3.2f; ws.radiusBottom = 0.9f; ws.cloud = 0.0f;
+    ws.grow = 0.5f; ws.life = 3.0f; ws.fade = 0.8f;
+    ws.debrisKind = TornadoDebrisKind::Leaves;
+    CHECK(w.start(ws, 8) != 0);
+    CHECK(w.all()[0].spec.height == 22.0f && w.all()[0].spec.radiusBottom == 0.9f); // nao e' mais forcado a 10 / 0,5
+    for (int i = 0; i < 40; ++i) w.update(1.0f / 60.0f);
+    CHECK(TornadoField::touchdown(w.all()[0]) > 0.99f); // grow = 0,5 s
+    for (int i = 0; i < 60 * 5; ++i) w.update(1.0f / 60.0f);
+    CHECK(w.all().empty()); // life 3 s + fade 0,8 s
+    for (int n = 0; n < 8; ++n) CHECK(w.start(ws, 8) != 0);
+    CHECK(w.start(ws, 8) == 0); // teto de 8
+    w.clear();
+    TornadoSpec sn;
+    sn.debrisKind = TornadoDebrisKind::Snow;
+    w.start(sn, 8);
+    for (int i = 0; i < 600; ++i) w.update(1.0f / 60.0f);
+    bool snowKinds = true;
+    for (uint32_t i = 0; i < 64; ++i) {
+        const auto p = TornadoField::pieceAt(w.all()[0], i);
+        snowKinds = snowKinds && (p.kind == 3 || p.kind == 4) && std::isfinite(p.pos.y);
+    }
+    CHECK(snowKinds);
+
     if (g_fail == 0) std::printf("OK tornado\n");
     return g_fail == 0 ? 0 : 1;
 }

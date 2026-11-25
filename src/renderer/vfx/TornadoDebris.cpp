@@ -82,6 +82,43 @@ std::vector<uint8_t> makePlank(int w, int h) {
     return px;
 }
 
+// Floco / ponto macio: disco com borda suave (neve, poeira fina).
+std::vector<uint8_t> makeFlake(int n) {
+    std::vector<uint8_t> px(size_t(n) * n * 4, 255);
+    for (int y = 0; y < n; ++y) {
+        for (int x = 0; x < n; ++x) {
+            const float fx = (float(x) + 0.5f) / float(n) * 2.0f - 1.0f;
+            const float fy = (float(y) + 0.5f) / float(n) * 2.0f - 1.0f;
+            const float r = std::sqrt(fx * fx + fy * fy);
+            const float a = std::clamp((0.95f - r) / 0.55f, 0.0f, 1.0f);
+            uint8_t* p = &px[(size_t(y) * n + x) * 4];
+            p[0] = p[1] = p[2] = uint8_t(255.0f * (0.80f + 0.20f * (1.0f - r)));
+            p[3] = uint8_t(a * a * 255.0f + 0.5f);
+        }
+    }
+    return px;
+}
+
+// Cristal de gelo: estrela de seis pontas fina.
+std::vector<uint8_t> makeCrystal(int n) {
+    std::vector<uint8_t> px(size_t(n) * n * 4, 255);
+    for (int y = 0; y < n; ++y) {
+        for (int x = 0; x < n; ++x) {
+            const float fx = (float(x) + 0.5f) / float(n) * 2.0f - 1.0f;
+            const float fy = (float(y) + 0.5f) / float(n) * 2.0f - 1.0f;
+            const float r = std::sqrt(fx * fx + fy * fy);
+            const float th = std::atan2(fy, fx);
+            const float arm = std::pow(std::max(std::cos(3.0f * th), 0.0f), 6.0f); // 6 pontas
+            const float reach = 0.92f * arm + 0.22f;
+            const float a = std::clamp((reach - r) * 7.0f, 0.0f, 1.0f);
+            uint8_t* p = &px[(size_t(y) * n + x) * 4];
+            p[0] = p[1] = p[2] = uint8_t(255.0f * (0.75f + 0.25f * (1.0f - r)));
+            p[3] = uint8_t(a * 255.0f + 0.5f);
+        }
+    }
+    return px;
+}
+
 } // namespace
 
 bool TornadoField::init(ImmediateDraw& draw) {
@@ -91,7 +128,11 @@ bool TornadoField::init(ImmediateDraw& draw) {
     m_tex[0] = draw.addTexture("engine:tornado_rock", rock.data(), 32, 32);
     m_tex[1] = draw.addTexture("engine:tornado_leaf", leaf.data(), 12, 32);
     m_tex[2] = draw.addTexture("engine:tornado_plank", plank.data(), 10, 32);
-    return m_tex[0] >= 0 && m_tex[1] >= 0 && m_tex[2] >= 0;
+    const auto flake = makeFlake(16);
+    const auto crystal = makeCrystal(24);
+    m_tex[3] = draw.addTexture("engine:tornado_flake", flake.data(), 16, 16);
+    m_tex[4] = draw.addTexture("engine:tornado_crystal", crystal.data(), 24, 24);
+    return m_tex[0] >= 0 && m_tex[1] >= 0 && m_tex[2] >= 0 && m_tex[3] >= 0 && m_tex[4] >= 0;
 }
 
 void TornadoField::submitDebris(ImmediateDraw& draw, uint32_t maxPieces, float lit) {
@@ -102,20 +143,59 @@ void TornadoField::submitDebris(ImmediateDraw& draw, uint32_t maxPieces, float l
     flags.depthTest = true;
     uint32_t withDebris = 0;
     for (const Tornado& t : m_list) withDebris += t.spec.debris ? 1u : 0u;
+    // Neve fina em volta: flocos em queda por caminho analitico (sem estado), num cilindro em
+    // torno do pe; ate' `kSnowfallMax` por tornado, so' para quem pediu `snowfall`.
+    for (const Tornado& t : m_list) {
+        if (t.spec.snowfall <= 0.0f) continue;
+        const uint32_t n = uint32_t(float(kSnowfallMax) * t.spec.snowfall);
+        const float reach = std::max(t.spec.radiusTop * 3.0f, t.spec.height * 0.25f);
+        const float top = std::max(t.spec.height * 0.45f, 4.0f);
+        const float flake = std::max(t.spec.height * 0.0016f, 0.05f);
+        for (uint32_t i = 0; i < n; ++i) {
+            const float a = hash01(t.id, i, 201u) * 6.2831853f;
+            const float rad = reach * std::sqrt(hash01(t.id, i, 202u));
+            const float fall = top * (0.35f + 0.25f * hash01(t.id, i, 203u)); // altura por segundo
+            float yy = hash01(t.id, i, 204u) * top - t.age * fall;
+            yy -= std::floor(yy / top) * top;
+            const float swirl = a + t.age * (0.15f + 0.25f * hash01(t.id, i, 205u)) / (0.3f + rad / reach);
+            const Vec3 pos(t.spec.pos.x + rad * std::cos(swirl), t.spec.pos.y + yy, t.spec.pos.z + rad * std::sin(swirl));
+            const float edge = std::min(yy / (top * 0.1f), (top - yy) / (top * 0.1f));
+            const float alpha = std::clamp(edge, 0.0f, 1.0f) * intensity(t) * 0.85f;
+            if (alpha <= 0.01f) continue;
+            const float sz = flake * (0.6f + 0.8f * hash01(t.id, i, 206u));
+            draw.addSprite(m_tex[3], pos, sz, sz, Vec4(0.9f, 0.95f, 1.0f, alpha) * Vec4(Vec3(0.65f + 0.45f * lit), 1.0f), flags, false, 0.0f);
+            ++m_lastPieces;
+        }
+    }
     if (withDebris == 0) return;
     const uint32_t each = std::max(1u, maxPieces / 3u / withDebris); // ~1/3 dos antigos
     static const Vec3 kBase[3] = {Vec3(0.42f, 0.34f, 0.26f), Vec3(0.40f, 0.38f, 0.20f), Vec3(0.62f, 0.48f, 0.30f)};
+    static const Vec3 kLeaf[3] = {Vec3(0.34f, 0.40f, 0.16f), Vec3(0.46f, 0.34f, 0.14f), Vec3(0.30f, 0.30f, 0.12f)};
+    static const Vec3 kSnow = Vec3(0.86f, 0.93f, 1.0f);
     for (const Tornado& t : m_list) {
         if (!t.spec.debris) continue;
-        for (uint32_t i = 0; i < each; ++i) {
+        // Tornado pequeno: menos pecas (a quantidade acompanha o porte; 200 de altura = todas).
+        uint32_t count = t.spec.height >= 60.0f ? each : std::max(6u, uint32_t(float(each) * std::max(t.spec.height / 60.0f, 0.15f)));
+        if (t.spec.debrisKind == TornadoDebrisKind::Snow) count *= 2; // flocos sao pequenos: mais deles
+        for (uint32_t i = 0; i < count; ++i) {
             const Piece pc = pieceAt(t, i);
             if (pc.alpha <= 0.01f) continue;
             // Perto do chao a peca se confunde com a poeira; no alto fica escura contra o ceu.
             const float dustMix = std::exp(-pc.height01 * 5.0f) * 0.55f;
             const float jitter = 0.75f + 0.5f * hash01(t.id, i, 77u);
-            const Vec3 col = glm::mix(glm::mix(kBase[pc.kind], t.spec.dust * 0.8f, 0.35f), t.spec.dust * 0.8f, dustMix) * jitter * (0.30f + 0.55f * lit);
-            const float w = pc.kind == 0 ? pc.size : pc.size * 0.45f;
-            const float h = pc.kind == 0 ? pc.size : pc.size * 1.5f;
+            Vec3 col;
+            if (pc.kind >= 3) {
+                // Neve: branco-azulado claro (nao escurece como a terra); poeira fina: a cor da poeira.
+                const bool snow = t.spec.debrisKind == TornadoDebrisKind::Snow;
+                col = (snow ? kSnow : t.spec.dust) * (0.65f + 0.45f * lit) * (0.85f + 0.3f * hash01(t.id, i, 77u));
+            } else if (t.spec.debrisKind == TornadoDebrisKind::Leaves) {
+                col = kLeaf[(i + t.id) % 3] * jitter * (0.30f + 0.65f * lit);
+            } else {
+                col = glm::mix(glm::mix(kBase[pc.kind], t.spec.dust * 0.8f, 0.35f), t.spec.dust * 0.8f, dustMix) * jitter * (0.30f + 0.55f * lit);
+            }
+            const bool rounded = pc.kind == 0 || pc.kind >= 3;
+            const float w = rounded ? pc.size : pc.size * 0.45f;
+            const float h = rounded ? pc.size : pc.size * 1.5f;
             draw.addSprite(m_tex[pc.kind], pc.pos, w, h, Vec4(col, pc.alpha), flags, false, pc.rot);
             ++m_lastPieces;
         }
