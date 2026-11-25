@@ -1353,6 +1353,15 @@ if(ERUPTION_BUILD_TESTS)
     endif()
     add_test(NAME ProbeCachePathTests COMMAND eruption-probe-cache-path-tests)
 
+    # Tornado (vfx.tornado): estado, fade, curva do funil e caminho dos destrocos (sem GPU).
+    add_executable(eruption-tornado-tests tests/test_tornado.cpp src/renderer/vfx/TornadoField.cpp)
+    target_include_directories(eruption-tornado-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(eruption-tornado-tests SYSTEM PRIVATE ${glm_SOURCE_DIR})
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-tornado-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME TornadoTests COMMAND eruption-tornado-tests)
+
     if(ERUPTION_MODULE_NET)
         add_executable(eruption-net-tests tests/test_net_wire.cpp src/net/Wire.cpp)
         target_include_directories(eruption-net-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

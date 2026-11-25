@@ -2231,6 +2231,70 @@ void Engine::render() {
             bw::setPass(nullptr);
             Profiler::addGpuTime("Map Smoke", m_vulkan.timestampDeltaMs(38, 39));
         }
+        // Tornado de script (vfx.tornado): funil, saia de poeira e nuvem-mae num ray-march por
+        // tornado, depois da fumaca. Sem tornado vivo o passe nem abre.
+        // ERUPTION_TEST_NO_TORNADO=1 (debug): isola o custo do passe.
+        static const bool kNoTornado = std::getenv("ERUPTION_TEST_NO_TORNADO") != nullptr;
+        if (m_tornadoEnabled && !kNoTornado && m_tornados.active() && m_cloudLayerRenderer.hasTornadoPipeline()) {
+            // Culling por frustum com uma caixa folgada (o shader recorta a exata).
+            auto tornadoVisible = [&](const TornadoField::Tornado& t) {
+                const float H = t.spec.height;
+                const float rad = 0.5f * H + tornado_shape::motherRadius(TornadoField::shapeOf(t)) * 1.3f;
+                return m_camera.frustum().intersectsAABB(
+                    Vec3(t.spec.pos.x - rad, t.spec.pos.y - 2.0f, t.spec.pos.z - rad),
+                    Vec3(t.spec.pos.x + rad, t.spec.pos.y + 1.35f * H, t.spec.pos.z + rad));
+            };
+            static std::vector<const TornadoField::Tornado*> tornOrder;
+            tornOrder.clear();
+            for (const TornadoField::Tornado& t : m_tornados.all())
+                if (TornadoField::intensity(t) > 0.001f && tornadoVisible(t)) tornOrder.push_back(&t);
+            if (!tornOrder.empty()) {
+                m_vulkan.writeTimestamp(cmd, 64, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+                bw::setPass("Tornado");
+                const Vec3 eye = m_camera.position();
+                std::sort(tornOrder.begin(), tornOrder.end(),
+                          [&eye](const TornadoField::Tornado* a, const TornadoField::Tornado* b) {
+                              const Vec3 da = a->spec.pos - eye, db = b->spec.pos - eye;
+                              return glm::dot(da, da) > glm::dot(db, db);
+                          });
+                CloudLayerRenderer::TornadoQuality tq;
+                tq.maxSteps = m_tornadoSteps;
+                tq.sunTaps = m_tornadoSunTaps;
+                tq.detail = m_tornadoDetail;
+                tq.mother = m_tornadoMother;
+                bool tornAccum = false;
+                // O alvo de acumulo e' o das nuvens. Os puffs do campo ja' foram compostos no lit
+                // (apply) antes daqui, e o funil tem alvo proprio (beginTornadoAccum): a escala
+                // reduzida vale com nuvens no quadro, tambem com nuvem de script guardada para
+                // depois do DoF (o alvo dela nao e' tocado).
+                if (m_tornadoScale < 0.999f && m_cloudLayerRenderer.hasTornadoAccumPipeline()) {
+                    const uint32_t tw = std::max(1u, static_cast<uint32_t>(renderExtent().width * m_tornadoScale + 0.5f));
+                    const uint32_t th = std::max(1u, static_cast<uint32_t>(renderExtent().height * m_tornadoScale + 0.5f));
+                    tornAccum = m_cloudLayerRenderer.beginTornadoAccum(cmd, tw, th);
+                }
+                if (!tornAccum) vkc::cmdBeginRendering(cmd, &planeInfo);
+                for (const TornadoField::Tornado* t : tornOrder) {
+                    CloudLayerRenderer::TornadoParams tp;
+                    tp.base = t->spec.pos;
+                    tp.shape = TornadoField::shapeOf(*t);
+                    tp.spin = t->spec.spin;
+                    tp.intensity = TornadoField::intensity(*t);
+                    tp.touchdown = TornadoField::touchdown(*t);
+                    tp.age = t->age;
+                    tp.dust = t->spec.dust;
+                    m_cloudLayerRenderer.renderTornado(cmd, tp, m_camera, m_gbuffer.depthView(), tq);
+                }
+                if (tornAccum) {
+                    m_cloudLayerRenderer.endTornadoAccumApply(cmd, m_deferredLighting.litImageView(),
+                                                              renderExtent().width, renderExtent().height);
+                } else {
+                    vkc::cmdEndRendering(cmd);
+                }
+                m_vulkan.writeTimestamp(cmd, 65, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+                bw::setPass(nullptr);
+                Profiler::addGpuTime("Tornado", m_vulkan.timestampDeltaMs(64, 65));
+            }
+        }
     } // fim de m_cloudLayersEnabled: as particulas abaixo nao dependem das nuvens
     {
         // Particulas: depois da fumaca, no lit com a profundidade so' leitura

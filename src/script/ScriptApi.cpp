@@ -3519,6 +3519,8 @@ void registerScriptApi(lua_State* L, Engine& engine) {
     lib(L, "loading", loading);
     registerVfxApi(L, engine);
     registerBoltApi(L, engine);
+    registerTornadoApi(L, engine);
+    registerTornadoApi(L, engine);
     registerObjectsApi(L, engine);
     registerRibbonApi(L, engine);
     registerVisionApi(L, engine);

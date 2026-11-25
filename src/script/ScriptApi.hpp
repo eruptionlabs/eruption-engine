@@ -48,6 +48,9 @@ void registerWeatherApi(lua_State* L, Engine& engine);
 // vfx.bolt / vfx.bolt_stop (entram na tabela vfx); as linhas do .d.luau vao dentro do `declare vfx`.
 void registerBoltApi(lua_State* L, Engine& engine);
 std::string boltApiDefinitions();
+// vfx.tornado / tornado_move / tornado_stop (ScriptApiTornado.cpp), idem.
+void registerTornadoApi(lua_State* L, Engine& engine);
+std::string tornadoApiDefinitions();
 const char* weatherApiDefinitions();
 // Tabela `net` (ScriptApiNet.cpp): partida em rede. ScriptHost entrega os
 // eventos da rede aos net.on* pela chave ("@join", "@leave", "@fail" ou o

@@ -2434,6 +2434,7 @@ void Engine::renderImGui() {
                                         { "Cloud Volumes (field)", "Ray-march of the field clouds. Inside it the density function walks up\nto 100 blobs PER STEP. Step cap comes from cloud_march_steps in the preset." },
                                         { "Cloud Shadows (field)", "Ground shadow cast by each field cloud." },
                                         { "Cloud Layers", "Flat cloud layers." },
+                                        { "Tornado", "vfx.tornado: funnel, dust skirt and mother cloud in one analytic ray-march (reduced target). Cost comes from tornado_steps and tornado_scale in the preset." },
                                         { "CloudFluff Render", "Cloud puffs (billboards)." },
                                         { "Cloud Debug Overlay", "Coverage diagnostic overlay (normally 0)." },
                                         { "Map Smoke", "Map smoke plumes (volcano). One ray-march per plume;\nsmoke_steps and smoke_detail in the preset drive the cost." },

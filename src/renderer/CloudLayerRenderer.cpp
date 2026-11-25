@@ -1,6 +1,7 @@
 #include "renderer/CloudLayerRenderer.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "core/Logger.hpp"
+#include "renderer/vfx/TornadoShape.hpp"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -880,6 +881,9 @@ bool CloudLayerRenderer::createBillboardPipeline() {
     if (!createSmokePipeline()) {
         Logger::error("CloudLayerRenderer: smoke plume pipeline unavailable (map smoke disabled)");
     }
+    if (!createTornadoPipeline()) {
+        Logger::error("CloudLayerRenderer: tornado pipeline unavailable (vfx.tornado disabled)");
+    }
     return true;
 }
 
@@ -888,12 +892,22 @@ bool CloudLayerRenderer::createBillboardPipeline() {
 // shaders muda. Blend premultiplicado correto (ONE / 1-SRC_ALPHA): o shader
 // já emite cor premultiplicada.
 bool CloudLayerRenderer::createSmokePipeline() {
+    return createPlumePipelines("clouds/smoke_plume.frag.spv", m_smokePipeline, m_smokeAccumPipeline);
+}
+
+// O funil do tornado usa o mesmo vertex shader, o mesmo layout e o mesmo estado; so' o
+// fragment muda.
+bool CloudLayerRenderer::createTornadoPipeline() {
+    return createPlumePipelines("clouds/tornado.frag.spv", m_tornadoPipeline, m_tornadoAccumPipeline);
+}
+
+bool CloudLayerRenderer::createPlumePipelines(const char* fragSpv, VkPipeline& outFull, VkPipeline& outAccum) {
     if (m_billboardPipelineLayout == VK_NULL_HANDLE) return false;
 
     auto vert = ShaderCompiler::loadSPIRV("clouds/smoke_plume.vert.spv");
-    auto frag = ShaderCompiler::loadSPIRV("clouds/smoke_plume.frag.spv");
+    auto frag = ShaderCompiler::loadSPIRV(fragSpv);
     if (vert.empty() || frag.empty()) {
-        Logger::error("CloudLayerRenderer: failed to load smoke plume shaders");
+        Logger::error("CloudLayerRenderer: failed to load plume shaders (%s)", fragSpv);
         return false;
     }
 
@@ -1026,20 +1040,20 @@ bool CloudLayerRenderer::createSmokePipeline() {
     pipeInfo.layout = m_billboardPipelineLayout;
 
     VkResult result = vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo,
-                                                nullptr, &m_smokePipeline);
+                                                nullptr, &outFull);
     // Variante do alvo de acumulo (preset "smoke_scale"): igual, sem anexo de profundidade
     // (a oclusao e' analitica no fragment).
     VkPipelineRenderingCreateInfo riAccum = ri;
     riAccum.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
     pipeInfo.pNext = &riAccum;
     if (vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr,
-                                     &m_smokeAccumPipeline) != VK_SUCCESS) {
-        m_smokeAccumPipeline = VK_NULL_HANDLE; // opcional: sem ela a fumaca desenha em resolucao cheia
+                                     &outAccum) != VK_SUCCESS) {
+        outAccum = VK_NULL_HANDLE; // opcional: sem ela a fumaca desenha em resolucao cheia
     }
     vkDestroyShaderModule(m_ctx->device(), vsModule, nullptr);
     vkDestroyShaderModule(m_ctx->device(), fsModule, nullptr);
     if (result != VK_SUCCESS) {
-        m_smokePipeline = VK_NULL_HANDLE;
+        outFull = VK_NULL_HANDLE;
         return false;
     }
     return true;
@@ -1170,8 +1184,138 @@ void CloudLayerRenderer::renderSmokePlume(VkCommandBuffer cmd, const SmokeEmitte
     vkCmdDraw(cmd, 36, 1, 0, 0);
 }
 
+// Funil de tornado: um ray-march de densidade analitica (shaders/clouds/tornado.frag)
+// com o funil, a saia de poeira e a nuvem-mae num so' draw, no mesmo cubo, layout e
+// estado da coluna de fumaca. A caixa vem das MESMAS curvas do shader
+// (vfx/TornadoShape.hpp), entao nunca corta nem infla a toa.
+void CloudLayerRenderer::renderTornado(VkCommandBuffer cmd, const TornadoParams& tp, const Camera& camera,
+                                       VkImageView depthView, const TornadoQuality& quality) {
+    if (!m_cfg.enabled || !m_ctx) return;
+    if (m_tornadoPipeline == VK_NULL_HANDLE || m_billboardCubeVbo == VK_NULL_HANDLE) return;
+    if (tp.intensity <= 0.001f) return;
+    const bool accum = m_volumeAccumMode && m_tornadoAccumPipeline != VK_NULL_HANDLE;
+    const uint32_t tW = accum ? m_volumeAccumWidth : m_width;
+    const uint32_t tH = accum ? m_volumeAccumHeight : m_height;
+
+    const tornado_shape::Shape& sh = tp.shape;
+    const float H = sh.height;
+    const float rMother = tornado_shape::motherRadius(sh);
+    const float rSkirt = tornado_shape::skirtRadius(sh);
+    // Caixa: o eixo e o raio em amostras de altura (o funil pode pender e balancar).
+    float minX = tp.base.x - rSkirt * 1.7f, maxX = tp.base.x + rSkirt * 1.7f;
+    float minZ = tp.base.z - rSkirt * 1.7f, maxZ = tp.base.z + rSkirt * 1.7f;
+    for (int i = 0; i <= 28; ++i) {
+        const float h = 1.12f * float(i) / 28.0f;
+        const Vec2 a = tornado_shape::axisOffset(sh, h, tp.age);
+        const float r = tornado_shape::radiusAt(sh, h, tp.age) * 1.8f;
+        minX = std::min(minX, tp.base.x + a.x - r); maxX = std::max(maxX, tp.base.x + a.x + r);
+        minZ = std::min(minZ, tp.base.z + a.y - r); maxZ = std::max(maxZ, tp.base.z + a.y + r);
+    }
+    const bool mother = quality.mother;
+    float yTop = tp.base.y + H * 1.13f;
+    if (mother) {
+        const Vec2 a = tornado_shape::axisOffset(sh, 1.0f, tp.age);
+        minX = std::min(minX, tp.base.x + a.x - rMother * 1.3f); maxX = std::max(maxX, tp.base.x + a.x + rMother * 1.3f);
+        minZ = std::min(minZ, tp.base.z + a.y - rMother * 1.3f); maxZ = std::max(maxZ, tp.base.z + a.y + rMother * 1.3f);
+        yTop = tp.base.y + H * 1.32f;
+    }
+    const float yBot = tp.base.y - 1.0f;
+
+    const Mat4 vp = camera.viewProjNoJitter();
+    const Vec3 boxMin3(minX, yBot, minZ), boxMax3(maxX, yTop, maxZ);
+    if (aabbOutsideFrustum(vp, boxMin3, boxMax3)) return;
+
+    // Scissor na projecao da caixa (o mesmo da coluna de fumaca).
+    {
+        float sx0 = 1e30f, sy0 = 1e30f, sx1 = -1e30f, sy1 = -1e30f;
+        bool crossesNear = false;
+        for (int i = 0; i < 8; ++i) {
+            const float x = (i & 1) ? maxX : minX;
+            const float y = (i & 2) ? yTop : yBot;
+            const float z = (i & 4) ? maxZ : minZ;
+            const Vec4 p = vp * Vec4(x, y, z, 1.0f);
+            if (p.w <= 0.0f) { crossesNear = true; break; }
+            sx0 = std::min(sx0, p.x / p.w); sx1 = std::max(sx1, p.x / p.w);
+            sy0 = std::min(sy0, p.y / p.w); sy1 = std::max(sy1, p.y / p.w);
+        }
+        if (!crossesNear) {
+            const float W = static_cast<float>(tW), Hh = static_cast<float>(tH);
+            int ix0 = static_cast<int>(std::floor((sx0 * 0.5f + 0.5f) * W)) - 2;
+            int iy0 = static_cast<int>(std::floor((sy0 * 0.5f + 0.5f) * Hh)) - 2;
+            int ix1 = static_cast<int>(std::ceil((sx1 * 0.5f + 0.5f) * W)) + 2;
+            int iy1 = static_cast<int>(std::ceil((sy1 * 0.5f + 0.5f) * Hh)) + 2;
+            ix0 = std::max(ix0, 0); iy0 = std::max(iy0, 0);
+            ix1 = std::min(ix1, static_cast<int>(tW));
+            iy1 = std::min(iy1, static_cast<int>(tH));
+            if (ix0 >= ix1 || iy0 >= iy1) return;
+            VkRect2D tight{{ix0, iy0}, {static_cast<uint32_t>(ix1 - ix0), static_cast<uint32_t>(iy1 - iy0)}};
+            vkCmdSetScissor(cmd, 0, 1, &tight);
+        } else {
+            VkRect2D full{{0, 0}, {tW, tH}};
+            vkCmdSetScissor(cmd, 0, 1, &full);
+        }
+    }
+
+    // O descritor de profundidade (set 2) e' sempre escrito antes do draw, tambem com
+    // o efeito barato: o shader le a profundidade em qualquer qualidade.
+    updateDebugPlaneDepthDescriptor(depthView);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, accum ? m_tornadoAccumPipeline : m_tornadoPipeline);
+    {
+        const VkViewport vpFull{0, 0, (float)tW, (float)tH, 0, 1};
+        vkCmdSetViewport(cmd, 0, 1, &vpFull);
+    }
+    VkDescriptorSet set0 = m_descriptorSets[m_ctx->currentFrame()];
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_billboardPipelineLayout,
+                            0, 1, &set0, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_billboardPipelineLayout,
+                            2, 1, &m_debugPlaneDepthSet, 0, nullptr);
+    VkBuffer vb = m_billboardCubeVbo;
+    VkDeviceSize vbOffset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &vbOffset);
+
+    // Distancia -> passos: um tornado longe ocupa poucos pixels e precisa de menos amostras.
+    const Vec3 boxCenter3 = (boxMin3 + boxMax3) * 0.5f;
+    const float boxRadius = glm::length(boxMax3 - boxMin3) * 0.5f;
+    const float centerDist = glm::max(glm::distance(camera.position(), boxCenter3), 1.0f);
+    const float angular = boxRadius / centerDist;
+    const float lod = glm::mix(0.5f, 1.0f, glm::smoothstep(0.05f, 0.30f, angular));
+
+    struct {
+        glm::vec4 boxMin;
+        glm::vec4 boxMax;
+        glm::vec4 origin;
+        glm::vec4 shape;
+        glm::vec4 dust;
+        glm::vec4 misc;
+        glm::vec4 extra;
+    } pc;
+    static const bool kNoDepthClip = std::getenv("ERUPTION_TEST_SMOKE_NODEPCLIP") != nullptr;
+    int flags = 0;
+    if (kNoDepthClip) flags |= 1;
+    if (quality.detail) flags |= 2;
+    if (mother) flags |= 4;
+    pc.boxMin = glm::vec4(boxMin3, static_cast<float>(flags));
+    pc.boxMax = glm::vec4(boxMax3, static_cast<float>(std::clamp(quality.sunTaps, 0, 3)));
+    pc.origin = glm::vec4(tp.base, H);
+    pc.shape = glm::vec4(sh.radiusTop, sh.radiusBottom, tp.spin, tp.intensity);
+    pc.dust = glm::vec4(tp.dust, tp.age);
+    pc.misc = glm::vec4(sh.seed, std::max(12.0f, static_cast<float>(quality.maxSteps) * lod),
+                        accum ? static_cast<float>(tW) / static_cast<float>(m_width) : 1.0f, tp.touchdown);
+    pc.extra = glm::vec4(rMother, rSkirt, 0.0f, 0.0f);
+    vkCmdPushConstants(cmd, m_billboardPipelineLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 36, 1, 0, 0);
+}
+
 void CloudLayerRenderer::destroyBillboardPipeline() {
     destroyVolumeApplyPipeline();
+    for (VkPipeline* pl : {&m_tornadoAccumPipeline, &m_tornadoPipeline}) {
+        if (*pl != VK_NULL_HANDLE) {
+            vkDestroyPipeline(m_ctx->device(), *pl, nullptr);
+            *pl = VK_NULL_HANDLE;
+        }
+    }
     if (m_smokeAccumPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_smokeAccumPipeline, nullptr);
         m_smokeAccumPipeline = VK_NULL_HANDLE;
@@ -1181,6 +1325,9 @@ void CloudLayerRenderer::destroyBillboardPipeline() {
         m_smokePipeline = VK_NULL_HANDLE;
     }
     destroyVolumeAccumTarget();
+    swapAccumSlots();
+    destroyVolumeAccumTarget();
+    swapAccumSlots();
     if (m_billboardAccumPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_billboardAccumPipeline, nullptr);
         m_billboardAccumPipeline = VK_NULL_HANDLE;
@@ -1970,7 +2117,8 @@ bool CloudLayerRenderer::createVolumeApplyPipeline() {
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 1;
+    poolSize.descriptorCount = 2;
+    poolInfo.maxSets = 2; // alvo das nuvens + alvo do funil
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
     if (vkCreateDescriptorPool(m_ctx->device(), &poolInfo, nullptr, &m_volumeApplyPool) != VK_SUCCESS) {
@@ -1985,6 +2133,10 @@ bool CloudLayerRenderer::createVolumeApplyPipeline() {
     allocInfo.pSetLayouts = &m_volumeApplyLayout;
     if (vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, &m_volumeApplySet) != VK_SUCCESS) {
         Logger::error("CloudLayerRenderer: failed to allocate cloud volume apply set");
+        return false;
+    }
+    if (vkAllocateDescriptorSets(m_ctx->device(), &allocInfo, &m_accumAlt.applySet) != VK_SUCCESS) {
+        Logger::error("CloudLayerRenderer: failed to allocate tornado apply set");
         return false;
     }
     return true;
@@ -2003,6 +2155,7 @@ void CloudLayerRenderer::destroyVolumeApplyPipeline() {
         vkDestroyDescriptorPool(m_ctx->device(), m_volumeApplyPool, nullptr);
         m_volumeApplyPool = VK_NULL_HANDLE;
         m_volumeApplySet = VK_NULL_HANDLE;
+        m_accumAlt.applySet = VK_NULL_HANDLE;
     }
     if (m_volumeApplyLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(m_ctx->device(), m_volumeApplyLayout, nullptr);
@@ -2113,6 +2266,28 @@ bool CloudLayerRenderer::beginCloudVolumeAccum(VkCommandBuffer cmd, uint32_t wid
     vkc::cmdBeginRendering(cmd, &accumInfo);
     m_volumeAccumMode = true;
     return true;
+}
+
+void CloudLayerRenderer::swapAccumSlots() {
+    std::swap(m_volumeAccumImage, m_accumAlt.image);
+    std::swap(m_volumeAccumAlloc, m_accumAlt.alloc);
+    std::swap(m_volumeAccumView, m_accumAlt.view);
+    std::swap(m_volumeAccumWidth, m_accumAlt.width);
+    std::swap(m_volumeAccumHeight, m_accumAlt.height);
+    std::swap(m_volumeAccumFirstUse, m_accumAlt.firstUse);
+    std::swap(m_volumeApplySet, m_accumAlt.applySet);
+}
+
+bool CloudLayerRenderer::beginTornadoAccum(VkCommandBuffer cmd, uint32_t width, uint32_t height) {
+    swapAccumSlots();
+    if (beginCloudVolumeAccum(cmd, width, height)) return true;
+    swapAccumSlots();
+    return false;
+}
+
+void CloudLayerRenderer::endTornadoAccumApply(VkCommandBuffer cmd, VkImageView litView, uint32_t width, uint32_t height) {
+    endCloudVolumeAccumApply(cmd, litView, width, height, true);
+    swapAccumSlots();
 }
 
 void CloudLayerRenderer::endCloudVolumeAccumApply(VkCommandBuffer cmd, VkImageView litView,

@@ -246,7 +246,7 @@ declare vfx: {
     area: (id: string | number, area: { shape: string?, position: vector, radius: number?, inner: number?,
         length: number?, width: number?, angle: number?, direction: vector?, yaw: number?, fill: number?,
         fill_alpha: number?, border: number?, color: vector?, alpha: number? }?) -> (),
-)") + boltApiDefinitions() + "}\n";
+)") + boltApiDefinitions() + tornadoApiDefinitions() + "}\n";
     return defs.c_str();
 }
 

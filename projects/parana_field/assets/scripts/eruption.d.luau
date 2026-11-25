@@ -1243,6 +1243,30 @@ declare vfx: {
         light_radius: number?, light_intensity: number?, cloud: number? }) -> number?,
     -- Apaga o raio na hora. false se o id ja' acabou.
     bolt_stop: (id: number) -> boolean,
+    -- TORNADO: funil volumetrico (parede turbulenta torcendo, corda que balanca,
+    -- mais densa na parede que no miolo, escura por dentro e clara na borda, com auto-sombra
+    -- do sol), saia de poeira rolando na base, nuvem-mae escura girando em cima e destrocos
+    -- (pedras, folhas, tabuas) em espiral. Um so' ray-march analitico, sem simulacao nem
+    -- textura. A corda desce da nuvem nos primeiros ~6 s e sobe de volta ao sair. Perto, o
+    -- vento (world.wind_burst) se curva em volta e o chao por onde passa escurece. Devolve um id
+    -- (nil se o preset nao permite ou o teto de tornados simultaneos foi atingido: chaves
+    -- tornado, tornado_max, tornado_steps, tornado_sun_taps, tornado_scale, tornado_debris).
+    -- Campos (so' pos e' obrigatorio):
+    --   pos           vector: o pe, em coordenadas de mundo (y = chao)
+    --   height        do chao ate' a base da nuvem-mae, em unidades do mundo (200)
+    --   radius_top    raio da parede sob a nuvem (36)
+    --   radius_bottom raio da corda no chao (6)
+    --   spin          1 = giro tipico; multiplica a velocidade angular (1)
+    --   dust          vector rgb da poeira do chao (0.46, 0.38, 0.29)
+    --   debris        pedras, folhas e tabuas em espiral (true)
+    --   life          segundos ate' comecar a sair; <= 0 fica ate' tornado_stop (0)
+    --   fade          segundos da saida (3)
+    tornado: (spec: { pos: vector, height: number?, radius_top: number?, radius_bottom: number?,
+        spin: number?, dust: vector?, debris: boolean?, life: number?, fade: number? }) -> number?,
+    -- Move o pe do tornado (o funil e os destrocos seguem). false se o id ja' acabou.
+    tornado_move: (id: number, position: vector) -> boolean,
+    -- Comeca a saida (a corda sobe e a poeira baixa em `fade` s). false se o id ja' acabou.
+    tornado_stop: (id: number) -> boolean,
 }
 
 -- Team vision. The map is never closed: outside the vision of the sources it

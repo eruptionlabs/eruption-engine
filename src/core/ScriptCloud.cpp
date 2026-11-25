@@ -507,6 +507,7 @@ uint32_t Engine::startBolt(BoltSpec spec) {
 
 void Engine::updateScriptFx(float dt) {
     m_bolts.update(dt);
+    updateTornados(dt);
     static std::vector<CloudPrecip::Params> emitters;
     emitters.clear();
     for (const IndependentCloudLayer& l : m_independentCloudLayers) {
@@ -590,6 +591,10 @@ void Engine::fillLocalClimate(PostProcessor::PostSettings& out) const {
 void Engine::submitScriptFx() {
     if (!m_immediateDraw.ready()) return;
     m_bolts.submit(m_immediateDraw, m_camera.position());
+    if (m_tornados.active() && m_tornadoDebris > 0) {
+        const float level = m_dayNightCycle.getSunIntensity() * 0.7f + m_ambientIntensity * 0.9f;
+        m_tornados.submitDebris(m_immediateDraw, uint32_t(m_tornadoDebris), glm::clamp(level / 1.55f, 0.1f, 1.0f));
+    }
     // Floco iluminado: albedo de neve x o nivel de luz da cena (a mesma conta da exposicao
     // automatica), reduzido pela mesma queda de luz do clima local da neve.
     const float level = m_dayNightCycle.getSunIntensity() * 0.7f + m_ambientIntensity * 0.9f;

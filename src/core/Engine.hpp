@@ -53,6 +53,7 @@
 #include "renderer/ImmediateDraw.hpp"
 #include "renderer/vfx/CloudPrecip.hpp"
 #include "renderer/vfx/VfxBolt.hpp"
+#include "renderer/vfx/TornadoField.hpp"
 #include "renderer/SpriteSystem.hpp"
 #include "renderer/TextureAtlas.hpp"
 #include "renderer/ChunkManager.hpp"
@@ -357,6 +358,12 @@ public:
     // Raio 3D (vfx.bolt) e fita de precipitacao: ver renderer/vfx/VfxBolt.hpp e CloudPrecip.hpp.
     uint32_t startBolt(BoltSpec spec);
     bool stopBolt(uint32_t id) { return m_bolts.stop(id); }
+    // Tornado (vfx.tornado): funil, saia de poeira e nuvem-mae ray-marchados + destrocos; ver
+    // renderer/vfx/TornadoField.hpp e shaders/clouds/tornado.frag. 0 = recusado (teto do preset).
+    uint32_t startTornado(const TornadoSpec& spec);
+    bool moveTornado(uint32_t id, const Vec3& pos) { return m_tornados.move(id, pos); }
+    bool stopTornado(uint32_t id) { return m_tornados.stop(id); }
+    TornadoField& tornados() { return m_tornados; }
     // Por quadro: sorteia/avanca raios e precipitacao e entrega a geometria ao ImmediateDraw.
     void updateScriptFx(float dt);
     void submitScriptFx();
@@ -1930,6 +1937,8 @@ private:
     OverlayLineRenderer m_overlayLineRenderer;
     ImmediateDraw m_immediateDraw;
     VfxBolt m_bolts;       // vfx.bolt: raios 3D
+    TornadoField m_tornados; // vfx.tornado
+    void updateTornados(float dt);
     CloudPrecip m_precip;  // weather.cloud_precip: chuva e neve de nuvem de script
     SpriteSystem m_spriteSystem;
     TextureAtlas m_textureAtlas;
@@ -2616,6 +2625,15 @@ private:
     int m_smokeMaxSteps = 32;
     bool m_smokeSunTap = true;   // 2a amostra de densidade (auto-sombra)
     bool m_smokeDetail = true;   // 3a oitava do fbm
+    // Tornado (chaves "tornado*" do preset): custo do funil por preset.
+    bool m_tornadoEnabled = true;
+    int m_tornadoMax = 2;          // tornados simultaneos
+    int m_tornadoSteps = 48;       // iteracoes do ray-march
+    int m_tornadoSunTaps = 2;      // amostras de auto-sombra
+    bool m_tornadoDetail = true;   // 3a oitava
+    bool m_tornadoMother = true;   // nuvem-mae escura
+    float m_tornadoScale = 0.5f;   // fracao da resolucao em que o funil e' rastreado
+    int m_tornadoDebris = 120;     // destrocos no total (0 = sem)
     float m_smokeScale = 1.0f;   // chave "smoke_scale": < 1 desenha a coluna em baixa resolucao e compoe
     // Battery: frame limiter (0 = uncapped) applied in run().
     // Cache da oclusao para o foco adaptativo do DoF - ver computeObstruction().

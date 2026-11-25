@@ -285,6 +285,7 @@ void Engine::affectsOnMapLoaded() {
     m_affectRing.clear();
     m_gustRing.clear();
     groundStateOnMapLoaded();
+    m_tornados.clear();
     m_affectEffects.clear();
 }
 

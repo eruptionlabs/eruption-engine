@@ -1298,6 +1298,8 @@ bool Engine::init(int width, int height, const std::string& title) {
     else {
         if (!m_bolts.init(m_immediateDraw) || !m_precip.init(m_immediateDraw))
             ERUPTION_LOG_WARN("Texturas de raio/precipitacao nao iniciaram: vfx.bolt e weather.cloud_precip viram no-op");
+        if (!m_tornados.init(m_immediateDraw))
+            ERUPTION_LOG_WARN("Texturas dos destrocos nao iniciaram: vfx.tornado fica sem destrocos");
         // Cada sorteio do raio acende a nuvem por dentro.
         m_bolts.onFlash = [this](uint32_t cloud, float intensity, float dur) { flashScriptCloud(cloud, intensity, dur); };
     }
@@ -3182,6 +3184,16 @@ void Engine::applyGraphicsPreset() {
     // Fracao da resolucao da cena em que a coluna e' rastreada (1 = cheia). O custo e' por pixel
     // coberto; a fumaca e' macia e a composicao e' bilinear (premultiplicada).
     m_smokeScale = std::clamp<float>(p.value("smoke_scale", 1.0f), 0.125f, 1.0f);
+    // Tornado (vfx.tornado): o custo e' o do ray-march, por pixel coberto; a escala reduz o
+    // alvo (a parede e' macia, a composicao e' bilinear) e os passos/sombras mantem a forma.
+    m_tornadoEnabled = p.value("tornado", true);
+    m_tornadoMax = std::clamp<int>(p.value("tornado_max", 2), 0, int(TornadoField::kMaxTornados));
+    m_tornadoSteps = std::clamp<int>(p.value("tornado_steps", 48), 12, 96);
+    m_tornadoSunTaps = std::clamp<int>(p.value("tornado_sun_taps", 2), 0, 3);
+    m_tornadoDetail = p.value("tornado_detail", true);
+    m_tornadoMother = p.value("tornado_mother", true);
+    m_tornadoScale = std::clamp<float>(p.value("tornado_scale", 0.5f), 0.125f, 1.0f);
+    m_tornadoDebris = std::clamp<int>(p.value("tornado_debris", 120), 0, 400);
 
     // AGUA DE DIORAMA (WaterRenderer::StyleConfig). Liga por preset
     // ("water_hd2d"; sem a chave, a agua de antes); a aparencia vem do bloco

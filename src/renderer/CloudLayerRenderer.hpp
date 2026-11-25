@@ -3,6 +3,7 @@
 #include "renderer/VulkanContext.hpp"
 #include "renderer/CloudCoverageArray.hpp"
 #include "formats/SmokeEmitter.hpp"
+#include "renderer/vfx/TornadoShape.hpp"
 #include "math/Camera.hpp"
 #include "math/Types.hpp"
 
@@ -177,6 +178,28 @@ public:
     void renderSmokePlume(VkCommandBuffer cmd, const SmokeEmitter& emitter,
                           const Camera& camera, VkImageView depthView,
                           const Vec2& windXZ, const SmokeQuality& quality);
+    // Funil de tornado (vfx.tornado): densidade analitica de funil + saia de poeira + nuvem-mae num
+    // so' ray-march (shaders/clouds/tornado.frag), no mesmo alvo reduzido da fumaca quando o preset
+    // pede (tornado_scale). Quanto custa vem do preset: passos, amostras de sombra, 3a oitava.
+    struct TornadoQuality {
+        int maxSteps = 48;     // teto de iteracoes do ray-march (saltos no vazio contam)
+        int sunTaps = 2;       // 0..3 amostras de auto-sombra na direcao do sol
+        bool detail = true;    // 3a oitava do ruido
+        bool mother = true;    // nuvem-mae escura em cima
+    };
+    struct TornadoParams {
+        Vec3 base = Vec3(0.0f);              // pe, em coordenadas de mundo
+        tornado_shape::Shape shape;
+        float spin = 1.0f;
+        float intensity = 1.0f;              // 0..1 (saida)
+        float touchdown = 1.0f;              // 0..1 (a corda desce da nuvem)
+        float age = 0.0f;                    // relogio do tornado (s)
+        Vec3 dust = Vec3(0.46f, 0.38f, 0.29f);
+    };
+    void renderTornado(VkCommandBuffer cmd, const TornadoParams& params, const Camera& camera,
+                       VkImageView depthView, const TornadoQuality& quality);
+    bool hasTornadoPipeline() const { return m_tornadoPipeline != VK_NULL_HANDLE; }
+    bool hasTornadoAccumPipeline() const { return m_tornadoAccumPipeline != VK_NULL_HANDLE; }
     bool hasSmokePipeline() const { return m_smokePipeline != VK_NULL_HANDLE; }
     // Preset "smoke_scale" (< 1): a coluna vai para o alvo de acumulo em baixa resolucao
     // (beginCloudVolumeAccum) e e' composta sobre o lit no fim (endCloudVolumeAccumApply).
@@ -201,6 +224,10 @@ public:
     bool beginCloudVolumeAccum(VkCommandBuffer cmd, uint32_t width, uint32_t height);
     void endCloudVolumeAccumApply(VkCommandBuffer cmd, VkImageView litView,
                                   uint32_t width, uint32_t height, bool apply = true);
+    // O funil usa um alvo proprio (escala propria): o alvo das nuvens e' de 1/6 e redimensionar
+    // um alvo no meio do quadro invalidaria o que ja' foi gravado. Mesmo uso do par acima.
+    bool beginTornadoAccum(VkCommandBuffer cmd, uint32_t width, uint32_t height);
+    void endTornadoAccumApply(VkCommandBuffer cmd, VkImageView litView, uint32_t width, uint32_t height);
 
     // Water reflection (WaterReflectionPass): the same volumetric puffs seen
     // by the camera mirrored in the water plane. The water pass runs before
@@ -312,6 +339,8 @@ private:
     VkPipeline m_smokePipeline = VK_NULL_HANDLE; // coluna de fumaça (reusa m_billboardPipelineLayout)
     // Mesma coluna para o alvo de acumulo em baixa resolucao (sem anexo de profundidade).
     VkPipeline m_smokeAccumPipeline = VK_NULL_HANDLE;
+    VkPipeline m_tornadoPipeline = VK_NULL_HANDLE;      // funil de tornado (mesmo layout da fumaca)
+    VkPipeline m_tornadoAccumPipeline = VK_NULL_HANDLE;
     VkPipeline m_billboardPipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_billboardPipelineLayout = VK_NULL_HANDLE; // same 3 set layouts as debug plane + SSBO set, bigger push block
     // Set-3 layout/pool for the per-layer local-cloud SSBO the volumetric
@@ -371,6 +400,17 @@ private:
     VkDescriptorSetLayout m_volumeApplyLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_volumeApplyPool = VK_NULL_HANDLE;
     VkDescriptorSet m_volumeApplySet = VK_NULL_HANDLE;
+    // Segundo alvo (do funil): trocado com o primeiro durante o passe do funil (swapAccumSlots).
+    struct AccumSlot {
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation alloc = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        uint32_t width = 0, height = 0;
+        bool firstUse = true;
+        VkDescriptorSet applySet = VK_NULL_HANDLE;
+    };
+    AccumSlot m_accumAlt;
+    void swapAccumSlots();
 
     // Ray-march pipeline.
     VkPipeline m_raymarchPipeline = VK_NULL_HANDLE;
@@ -482,6 +522,8 @@ private:
     bool createBillboardPipeline();
     void destroyBillboardPipeline();
     bool createSmokePipeline();
+    bool createTornadoPipeline();
+    bool createPlumePipelines(const char* fragSpv, VkPipeline& outFull, VkPipeline& outAccum);
     bool createDebugPlaneDepthDescriptor();
     void destroyDebugPlaneDepthDescriptor();
     void updateDebugPlaneDepthDescriptor(VkImageView depthView);

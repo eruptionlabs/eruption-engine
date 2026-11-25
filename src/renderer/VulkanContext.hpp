@@ -271,7 +271,7 @@ private:
     VmaAllocator m_allocator = VK_NULL_HANDLE;
 
     // Per-frame resources (triplo buffering)
-    static constexpr uint32_t TIMESTAMP_QUERY_COUNT = 64;
+    static constexpr uint32_t TIMESTAMP_QUERY_COUNT = 66; // 64 e 65: passe do tornado
     std::vector<VkCommandPool> m_commandPools;
     std::vector<VkCommandBuffer> m_commandBuffers;
     std::vector<VkFence> m_frameFences;
