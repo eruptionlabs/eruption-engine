@@ -7,6 +7,8 @@
 // Com marcas vivas: a CPU refaz so' as caixas delas e sobe o retangulo sujo.
 #include "core/Engine.hpp"
 #include "core/Logger.hpp"
+#include "core/Project.hpp"
+#include "utils/AssetVfs.hpp"
 
 #include <algorithm>
 #include <cfloat>
@@ -40,6 +42,47 @@ void Engine::groundStateApplyPreset(const json& p) {
 void Engine::groundStateOnMapLoaded() {
     m_groundField.clear();
     m_groundDirty = true;
+    m_modelRenderer.clearGroundVegetation();
+    m_groundVegActive = false;
+}
+
+// Tabela por tipo (data/ground_state.json): o do motor primeiro e o do projeto do
+// jogo por cima, chave a chave.
+void Engine::loadGroundVegetation() {
+    if (m_groundVegLoaded) return;
+    m_groundVegLoaded = true;
+    const std::filesystem::path candidates[2] = {project::engine("data/ground_state.json"), project::game("data/ground_state.json")};
+    for (const auto& c : candidates) {
+        std::string text;
+        if (!vfs::exists(c) || !vfs::readText(c.string(), text)) continue;
+        if (!m_groundVeg.loadFromJson(text)) ERUPTION_LOG_WARN("[CHAO] %s: JSON invalido", c.string().c_str());
+    }
+}
+
+namespace {
+struct VegCtx {
+    const ground::Field* field;
+    const ground::VegetationTable* table;
+};
+// Cobertura na raiz da instancia -> efeito (uma leitura da imagem do estado).
+ModelRenderer::GroundVegSample sampleVegetation(void* ctx, float x, float z) {
+    const VegCtx& c = *static_cast<const VegCtx*>(ctx);
+    float cover[ground::kVegChannels];
+    c.field->coverAt(x, z, cover);
+    const ground::VegEffect e = c.table->blend(cover);
+    return {e.ampScale, e.freqScale, e.densityBoost, e.albedoLift};
+}
+} // namespace
+
+// 1x por quadro, depois de a imagem do estado ser refeita. Sem estado vivo e sem
+// instancia ainda afetada, nao varre nada.
+void Engine::updateGroundVegetation(float dt) {
+    loadGroundVegetation();
+    if (m_groundVeg.neutral()) return;
+    const bool live = m_groundField.size() > 0 || m_groundField.lit();
+    if (!live && !m_groundVegActive) return;
+    VegCtx ctx{&m_groundField, &m_groundVeg};
+    m_groundVegActive = m_modelRenderer.updateGroundVegetation(&sampleVegetation, &ctx, dt);
 }
 
 uint32_t Engine::groundState(const GroundStateRequest& r) {
@@ -82,7 +125,6 @@ bool Engine::groundStateStop(uint32_t id) {
 }
 
 void Engine::updateGroundState(float dt) {
-    (void)dt;
     ground::Field& f = m_groundField;
     const float upm = std::max(m_vfx.unitsPerMeter(), 1e-4f);
     const ground::Params want{m_groundTexels, m_groundTexelM * upm};
@@ -102,6 +144,7 @@ void Engine::updateGroundState(float dt) {
     if (idle) {
         m_deferredLighting.setGroundStateParams(Vec4(0.0f), Vec4(0.0f));
         m_water.setIceAreas(nullptr, 0);
+        updateGroundVegetation(dt); // devolve ao normal o que ainda estava coberto
         return;
     }
     // Marcas novas sobem depressa (a rampa de entrada dura 0,5 s); o resto, so'
@@ -124,6 +167,7 @@ void Engine::updateGroundState(float dt) {
     float areas[ground::kMaxIceAreas][4];
     const uint32_t n = f.iceAreas(m_affectClock, areas, ground::kMaxIceAreas);
     m_water.setIceAreas(&areas[0][0], n);
+    updateGroundVegetation(dt);
 }
 
 } // namespace eruption

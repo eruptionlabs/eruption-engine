@@ -31,6 +31,7 @@ layout(location = 15) in flat uvec2 inSplatTex;
 layout(location = 16) in flat uvec2 inSplatTex2;
 layout(location = 17) in flat uint inBlendMaskIndex2;
 layout(location = 18) in flat float inSway;
+layout(location = 22) in flat uint inGroundVeg;
 layout(location = 19) in vec4 inDispInfo;
 
 #include "common/slot_textures.glsl"
@@ -68,7 +69,7 @@ void main() {
     if (seeThroughDiscard(inWorldPos, inNormal,
                           ((inSplatTex.x | inSplatTex.y) != 0u && inBlendMaskIndex != 0u) || inSway < -0.5)) discard;
     vec4 texColor = slotTexture(inTexIndex, inTexCoord);
-    if (texColor.a < alphaCutoff()) discard;
+    if (texColor.a < alphaCutoff(groundDense(inGroundVeg))) discard;
     if (inBlendWeight > 0.0) {
         vec4 bColor = slotTexture(inBlendTexIndex, inTexCoord);
         float blendT = inBlendWeight;

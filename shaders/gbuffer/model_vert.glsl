@@ -61,6 +61,11 @@ layout(location = 18) out flat float outSway;
 // fonte da altura (1 MRAH-W, 2 albedo); w = altura CRUA h (0..1), antes de
 // virar deslocamento - o modo de auditoria 5 mostra isto em cinza.
 layout(location = 19) out vec4 outDispInfo;
+// ESTADO DO CHAO SOBRE A VEGETACAO (neve, geada, molhado, queimado; ver
+// core/GroundVegetation.hpp), so' o que o fragment precisa, em 16 bits: byte 0 =
+// densidade da copa em centesimos com sinal (baixa o limiar do alfa-teste; negativo =
+// rarefeita), byte 1 = clareamento em centesimos. 0 = vegetacao como sempre.
+layout(location = 22) out flat uint outGroundVeg;
 // Posicao no mundo do MESMO vertice no frame anterior (vento anterior + o
 // mesmo deslocamento): vira a velocidade de objeto no model.frag.
 #ifndef ERUPTION_NO_VELOCITY
@@ -189,7 +194,10 @@ layout(set = 1, binding = 0) uniform FrameUBO {
 //
 // A fase vem da posicao no mundo, entao cada moita anda no seu tempo. Sem isso
 // um campo inteiro balanca em unissono, que le como animacao e nao como vento.
-vec3 applyWindSwayWith(vec4 windParams, vec3 worldPos, float localHeight, float sway) {
+// `ampScale` e `tOff` vem do estado do chao na raiz da instancia (neve segura o
+// galho: amplitude menor; `tOff` e' o deslocamento do relogio que a CPU integra
+// para a frequencia mudar SEM saltar a fase quando a cobertura sobe ou derrete).
+vec3 applyWindSwayWith(vec4 windParams, vec3 worldPos, float localHeight, float sway, float ampScale, float tOff) {
     if (sway <= 1e-4) return worldPos;
 
     vec3 wind = windParams.xyz;
@@ -202,7 +210,7 @@ vec3 applyWindSwayWith(vec4 windParams, vec3 worldPos, float localHeight, float 
     if (strength <= 1e-4 || swayScale <= 0.0) return worldPos;
     vec3 windDir = wind / strength;   // SO' a direcao daqui pra frente
 
-    float t = windParams.w;
+    float t = windParams.w + tOff;
 
     // Fase por posicao: numeros irracionais evitam que a moita caia em
     // ressonancia com a grade do terreno e apareca um padrao regular.
@@ -232,7 +240,7 @@ vec3 applyWindSwayWith(vec4 windParams, vec3 worldPos, float localHeight, float 
     // altura por unidade de escala. Sem teto o h*h faz uma arvore de 20
     // unidades deslocar 60 e ela sai do chao. Medido no parana com o teto em
     // 0.20: 76% dos pixels mudavam e a copa DESLIZAVA em vez de balancar.
-    float bend = min(h * h * sway * swayScale, h * sway * swayScale * 0.65) * response;
+    float bend = min(h * h * sway * swayScale, h * sway * swayScale * 0.65) * response * ampScale;
 
     // A parcela que OSCILA passa a ser a maior parte (0,45 contra 0,25): a
     // inclinacao fixa nao le' como vento, e' so' um objeto numa posicao
@@ -255,12 +263,13 @@ vec3 applyWindSwayWith(vec4 windParams, vec3 worldPos, float localHeight, float 
 // (vai para fora, passa do ponto, assenta) chega a ~17.
 // A forca decai com a distancia ao centro; a frente de onda se afasta no tempo.
 // Sem rajada, sai antes de tudo.
-vec3 applyGusts(vec3 worldPos, float localHeight, float sway, vec2 origin) {
+vec3 applyGusts(vec3 worldPos, float localHeight, float sway, vec2 origin, float ampScale) {
     const int n = int(u_gustInfo.x);
     if (n == 0 || sway <= 1e-4) return worldPos;
     const float h = max(localHeight, 0.0);
     for (int i = 0; i < n; ++i) {
-        const vec4 a = u_gusts[2 * i];
+        vec4 a = u_gusts[2 * i];
+        a.w *= ampScale; // galho carregado de neve cede menos a rajada
         const vec4 b = u_gusts[2 * i + 1];
         const vec2 d = origin - a.xy;
         const float dist = length(d);
@@ -303,8 +312,8 @@ vec3 applyGusts(vec3 worldPos, float localHeight, float sway, vec2 origin) {
     return worldPos;
 }
 
-vec3 applyWindSway(vec3 worldPos, float localHeight, float sway, vec2 origin) {
-    return applyGusts(applyWindSwayWith(u_windParams, worldPos, localHeight, sway), localHeight, sway, origin);
+vec3 applyWindSway(vec3 worldPos, float localHeight, float sway, vec2 origin, float ampScale, float tOff) {
+    return applyGusts(applyWindSwayWith(u_windParams, worldPos, localHeight, sway, ampScale, tOff), localHeight, sway, origin, ampScale);
 }
 
 // Dados POR INSTANCIA (SIMT). Antes, cada instancia visivel era um
@@ -624,7 +633,8 @@ float heightSplatUv(vec2 uvIn, vec2 maskUv, uint baseTex, uvec2 splat, uvec2 spl
 }
 
 void main() {
-    vec4 worldPos = u_inst[gl_InstanceIndex].model * vec4(inPosition, 1.0);
+    // w = 1 explicito: a linha w de `model` carrega o estado do chao (ver gvPk abaixo).
+    vec4 worldPos = vec4((u_inst[gl_InstanceIndex].model * vec4(inPosition, 1.0)).xyz, 1.0);
 
     // Balanco ao vento. A altura vem do espaco de MODELO (inPosition.y), onde a
     // base da planta e' y=0 - e' o unico lugar onde "altura acima da base" e'
@@ -636,21 +646,30 @@ void main() {
     // mesmo com o vento chegando ao shader. A altura acima da ORIGEM da
     // instancia e' o que interessa - a base do objeto e' o engaste.
     float instBaseY = (u_inst[gl_InstanceIndex].model * vec4(0.0, 0.0, 0.0, 1.0)).y;
+    // Estado do chao (core/GroundVegetation.hpp) guardado na linha w da matriz `model`, que
+    // numa matriz afim e' (0, 0, 0, 1) e o shader nao le': model[0].w = deslocamento do
+    // relogio do vento; model[1].w = bits (byte 0 amplitude-1 em 1/32 com sinal, 1 densidade,
+    // 2 clareamento). Zero = sem estado: amp 1, relogio 0. Nao cresce o buffer de instancias.
+    const uint gvPk = floatBitsToUint(u_inst[gl_InstanceIndex].model[1].w) & 0xFFFFFFu;
+    const float gvAmp = 1.0 + float(int(gvPk << 24u) >> 24) * (1.0 / 32.0);
+    const float gvClock = u_inst[gl_InstanceIndex].model[0].w;
     // Onde o vertice estava: a matriz e o vento do frame anterior (objeto
     // movido por script ou animacao de no' e o balanco das folhas).
 #ifndef ERUPTION_NO_VELOCITY
     const mat4 prevModel = u_inst[gl_InstanceIndex].prevModel;
     const vec4 prevPos = prevModel * vec4(inPrevPosition, 1.0);
     const vec3 prevSway = applyGusts(applyWindSwayWith(u_prevWindParams, prevPos.xyz, prevPos.y - prevModel[3].y,
-                                                       u_inst[gl_InstanceIndex].uvScaleDisp.w),
-                                     prevPos.y - prevModel[3].y, u_inst[gl_InstanceIndex].uvScaleDisp.w, prevModel[3].xz);
+                                                       u_inst[gl_InstanceIndex].uvScaleDisp.w, gvAmp, gvClock),
+                                     prevPos.y - prevModel[3].y, u_inst[gl_InstanceIndex].uvScaleDisp.w, prevModel[3].xz, gvAmp);
 #endif
     worldPos.xyz = applyWindSway(worldPos.xyz, worldPos.y - instBaseY,
-                                 u_inst[gl_InstanceIndex].uvScaleDisp.w, u_inst[gl_InstanceIndex].model[3].xz);
+                                 u_inst[gl_InstanceIndex].uvScaleDisp.w, u_inst[gl_InstanceIndex].model[3].xz,
+                                 gvAmp, gvClock);
 #ifndef ERUPTION_NO_VELOCITY
     const vec3 curSway = worldPos.xyz;
 #endif
     outSway = u_inst[gl_InstanceIndex].uvScaleDisp.w;
+    outGroundVeg = (gvPk >> 8u) & 0xFFFFu;
     outDispInfo = vec4(0.0);
 
     vec2 animUv = applyUvAnimation(inTexCoord);

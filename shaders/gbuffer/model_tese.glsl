@@ -38,6 +38,7 @@ layout(location = 15) in flat uvec2 inSplatTex[];
 layout(location = 16) in flat uvec2 inSplatTex2[];
 layout(location = 17) in flat uint inBlendMaskIndex2[];
 layout(location = 18) in flat float inSway[];
+layout(location = 22) in flat uint inGroundVeg[];
 // location 19: o TCS nao repassa mais (varying morto, tipo divergente - G1).
 
 layout(location = 0) out vec3 outWorldPos;
@@ -59,6 +60,7 @@ layout(location = 15) out flat uvec2 outSplatTex;
 layout(location = 16) out flat uvec2 outSplatTex2;
 layout(location = 17) out flat uint outBlendMaskIndex2;
 layout(location = 18) out flat float outSway;
+layout(location = 22) out flat uint outGroundVeg;
 layout(location = 19) out vec4 outDispInfo;
 #ifndef ERUPTION_NO_VELOCITY
 layout(location = 20) in vec3 inPrevWorldPos[];
@@ -618,6 +620,7 @@ void main() {
     outBlendMaskUV = BARY(inBlendMaskUV);
     outEmissiveStrength = BARY(inEmissiveStrength);
     outSway = BARY(inSway);
+    outGroundVeg = inGroundVeg[0];
     outDispInfo = vec4(1.0, 0.0, 0.0, 0.0);
     // Depuracao do mapa de calor (ERUPTION_TEST_TESS_HEATMAP, lido em Render.cpp):
     // u_framePad0 = modo 1 amp, 2 pom, 3 altura, 4 nivel (5 e 6: so' o frag). O valor 0..1 sai em

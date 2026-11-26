@@ -38,6 +38,7 @@
 #include "renderer/vfx/VfxSystem.hpp"
 #include "core/Affects.hpp"
 #include "core/GroundState.hpp"
+#include "core/GroundVegetation.hpp"
 #include "core/FootstepEffects.hpp"
 #include "core/SpriteContact.hpp"
 #include "renderer/vfx/AmbientParticles.hpp"
@@ -3099,6 +3100,12 @@ private:
     uint32_t m_groundCap = 400;      // preset ground_state_max
     double m_groundNextRaster = 0.0;
     bool m_groundDirty = true;
+    // Estado do chao sobre a vegetacao (data/ground_state.json, GroundVegetation.hpp).
+    ground::VegetationTable m_groundVeg;
+    bool m_groundVegLoaded = false;
+    bool m_groundVegActive = false; // alguma instancia ainda com efeito: precisa de um passe que a devolva ao normal
+    void loadGroundVegetation();
+    void updateGroundVegetation(float dt);
     void loadAffectTable();
     void affectApplyPreset(const json& preset);
     std::vector<CharacterStep> m_characterSteps;

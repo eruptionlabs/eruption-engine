@@ -1339,6 +1339,7 @@ private:
     ImpPick impostorPick(const ModelInstanceHot& hot, const ModelMeshGPU& mesh, const Vec3& cam) const;
 
     Vec3 m_lastCameraPos = Vec3(0.0f);
+    std::vector<Vec4> m_instGroundVeg; // por instancia (indice de m_instanceHot); vazio = tudo normal
 
     // ---- Instancing (SIMT) ----
     // Espelho C++ do EngInstance do model.vert (std430). NAO reordenar.
@@ -1348,6 +1349,13 @@ private:
         Vec4 uvScaleDisp;
         Mat4 prevModel; // frame anterior: vetor de movimento de objeto que se move
     };
+    // Estado do chao nos dados da instancia SEM crescer o struct (cada byte a mais e' lido por
+    // vertice; o G-buffer do celular e' de geometria): o ultimo componente das colunas 0 e 1
+    // da matriz `model` (a linha w, sempre 0 numa matriz afim; o shader so' usa .xyz) leva o
+    // deslocamento do relogio do vento (float) e (amplitude, densidade, clareamento) em 3
+    // bytes: ver gbuffer/model_vert.glsl. Tudo zero = vegetacao como sempre. Chamar DEPOIS de
+    // impostorData (que refaz a matriz).
+    void applyGroundVeg(GpuModelInstance& d, uint32_t idx) const;
     // Matriz (modelo x ladrilho) e UV do ladrilho do impostor nos dados da instancia.
     static void impostorData(GpuModelInstance& d, const Mat4& model, const Mat4* prevModel,
                              const ModelMeshGPU& mesh, uint32_t tile);
@@ -1676,6 +1684,18 @@ private:
 public:
     void setShadowGusts(const Vec4* gusts, const Vec4* gustsT, uint32_t n);
     void setWindSwayScale(float s) { m_windSwayScale = s; }
+
+    // ESTADO DO CHAO SOBRE A VEGETACAO (core/GroundVegetation.hpp). A cada quadro com
+    // estado vivo, o motor pergunta `fn` (cobertura -> efeito) na raiz de cada
+    // instancia de vegetacao (swayAmount > 0): amplitude e frequencia do balanco,
+    // densidade da copa e clareamento. A frequencia vira um DESLOCAMENTO DO RELOGIO
+    // integrado aqui (acumula (freq - 1) * dt): trocar a escala direto saltaria a fase
+    // do balanco a cada mudanca de cobertura. Devolve true se alguma instancia ficou
+    // com efeito (false = tudo normal, o motor pode parar de chamar).
+    struct GroundVegSample { float amp, freq, density, lift; };
+    using GroundVegSampler = GroundVegSample (*)(void* ctx, float x, float z);
+    bool updateGroundVegetation(GroundVegSampler fn, void* ctx, float dt);
+    void clearGroundVegetation() { m_instGroundVeg.clear(); }
 private:
     float m_geoDispAmplitude = 0.0f;
     float m_geoDispDistance = 0.0f;

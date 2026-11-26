@@ -237,6 +237,16 @@ bool Field::follow(float fx, float fz) {
     return changed;
 }
 
+void Field::coverAt(float x, float z, float out[4]) const {
+    out[0] = out[1] = out[2] = out[3] = 0.0f;
+    const int W = int(m_p.texels);
+    if (!m_haveWindow || m_px.size() != size_t(W) * 2 * size_t(W) * 4) return;
+    const float fx = std::floor((x - m_ox) / m_p.texelWorld), fz = std::floor((z - m_oz) / m_p.texelWorld);
+    if (!(fx >= 0.0f && fz >= 0.0f && fx < float(W) && fz < float(W))) return; // tambem barra NaN
+    const uint8_t* p = &m_px[(size_t(fz) * 2 * size_t(W) + size_t(fx)) * 4];
+    for (int c = 0; c < 4; ++c) out[c] = float(p[c]) * (1.0f / 255.0f);
+}
+
 Rect Field::rasterize(double now) {
     const int W = int(m_p.texels);
     const float tw = m_p.texelWorld;

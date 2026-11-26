@@ -45,6 +45,7 @@ run_src test_shadow_stream
 run_src test_ground_pack src/formats/GroundPack.cpp -I build/_deps/nlohmann_json-src/include
 run_src test_affects src/core/Affects.cpp -I build/_deps/nlohmann_json-src/include
 run_src test_ground_state src/core/GroundState.cpp
+run_src test_ground_vegetation src/core/GroundState.cpp src/core/GroundVegetation.cpp -I build/_deps/nlohmann_json-src/include
 run_src test_probe_cache_path src/utils/ProbeCachePath.cpp
 run_src test_tornado src/renderer/vfx/TornadoField.cpp
 run_src test_net_wire src/net/Wire.cpp

@@ -36,6 +36,7 @@ layout(location = 15) in flat uvec2 inSplatTex;
 layout(location = 16) in flat uvec2 inSplatTex2;
 layout(location = 17) in flat uint inBlendMaskIndex2;
 layout(location = 18) in flat float inSway;
+layout(location = 22) in flat uint inGroundVeg; // x = densidade da copa, y = clareamento (estado do chao)
 layout(location = 19) in vec4 inDispInfo; // x=alinhamento, y=modulo, z=origem, w=altura crua (0..1) // ver auditoria abaixo // G32: > 0 = vegetacao (flag de folhagem)
 
 layout(location = 0) out vec4 outAlbedo;
@@ -770,7 +771,7 @@ void main() {
     // altera so' o .rgb, de proposito - misturar o alfa puxava texColor.a
     // abaixo do limiar e abria buracos). O teste de MAGENTA continua embaixo,
     // porque le' o rgb ja' misturado.
-    if (texColor.a < alphaCutoff()) discard;
+    if (texColor.a < alphaCutoff(groundDense(inGroundVeg))) discard;
     if (MODEL_MIN && !((inSplatTex.x | inSplatTex.y) != 0u && inBlendMaskIndex != 0u)) {
         vec3 aMin = texColor.rgb;
         if (inColor.a < 0.999) aMin *= inColor.rgb;
@@ -972,9 +973,11 @@ void main() {
     }
 
     float magentaness = min(texColor.r, texColor.b) - texColor.g;
-    if (texColor.a < alphaCutoff() || magentaness > 0.6) { // 0,6: ver model_depth.frag
+    if (texColor.a < alphaCutoff(groundDense(inGroundVeg)) || magentaness > 0.6) { // 0,6: ver model_depth.frag
         discard;
     }
+    // Copa coberta (neve, geada): folha mais clara. y = 0 sem estado do chao.
+    if (inGroundVeg != 0u) texColor.rgb = mix(texColor.rgb, vec3(0.80, 0.83, 0.88), groundLift(inGroundVeg));
 
     // ERUPTION_TEST_MAGENTA_DEBUG=1: green=clean, cyan=residual magenta bleed
     if ((uint(push._pad + 0.5) & 1u) != 0u) {

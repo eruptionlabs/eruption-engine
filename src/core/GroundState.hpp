@@ -127,6 +127,11 @@ public:
     // Algum estado esta' mudando de valor agora (subindo, sumindo ou derretendo)?
     // Em regime (segurando) a imagem nao muda e nao precisa ser refeita.
     bool animating(double now) const;
+    // Cobertura (0..1) de cada canal da imagem em (x, z): R queimado, G geada, B molhado,
+    // A neve - a mesma metade esquerda que o shader de luz le', sem a mascara de altura
+    // (quem pergunta aqui e' a base de uma planta, rente ao chao). Celula mais proxima,
+    // uma leitura: custa quase nada por arvore. Fora da janela ou sem imagem: tudo 0.
+    void coverAt(float x, float z, float out[4]) const;
     // Alguma coisa para o shader ler? (estado vivo, ou ainda a limpar)
     bool lit() const { return !m_states.empty() || m_dirtyLeft; }
 

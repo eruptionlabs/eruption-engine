@@ -36,6 +36,7 @@ layout(location = 15) in flat uvec2 inSplatTex[];
 layout(location = 16) in flat uvec2 inSplatTex2[];
 layout(location = 17) in flat uint inBlendMaskIndex2[];
 layout(location = 18) in flat float inSway[];
+layout(location = 22) in flat uint inGroundVeg[];
 layout(location = 19) in vec4 inDispInfo[];
 
 layout(location = 0) out vec3 outWorldPos[];
@@ -57,6 +58,7 @@ layout(location = 15) out flat uvec2 outSplatTex[];
 layout(location = 16) out flat uvec2 outSplatTex2[];
 layout(location = 17) out flat uint outBlendMaskIndex2[];
 layout(location = 18) out flat float outSway[];
+layout(location = 22) out flat uint outGroundVeg[];
 #ifndef ERUPTION_NO_VELOCITY
 layout(location = 20) in vec3 inPrevWorldPos[];
 layout(location = 20) out vec3 outPrevWorldPos[];
@@ -394,6 +396,7 @@ void main() {
     outSplatTex2[gl_InvocationID] = inSplatTex2[gl_InvocationID];
     outBlendMaskIndex2[gl_InvocationID] = inBlendMaskIndex2[gl_InvocationID];
     outSway[gl_InvocationID] = inSway[gl_InvocationID];
+    outGroundVeg[gl_InvocationID] = inGroundVeg[gl_InvocationID];
 #ifndef ERUPTION_NO_VELOCITY
     outPrevWorldPos[gl_InvocationID] = inPrevWorldPos[gl_InvocationID];
 #endif

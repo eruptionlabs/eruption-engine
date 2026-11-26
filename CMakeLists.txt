@@ -1345,6 +1345,15 @@ if(ERUPTION_BUILD_TESTS)
     endif()
     add_test(NAME GroundStateTests COMMAND eruption-ground-state-tests)
 
+    # Estado do chao sobre a vegetacao: tabela data/ground_state.json, mistura pela cobertura, degelo (sem GPU).
+    add_executable(eruption-ground-vegetation-tests tests/test_ground_vegetation.cpp src/core/GroundState.cpp src/core/GroundVegetation.cpp)
+    target_include_directories(eruption-ground-vegetation-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(eruption-ground-vegetation-tests PRIVATE nlohmann_json::nlohmann_json)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(eruption-ground-vegetation-tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME GroundVegetationTests COMMAND eruption-ground-vegetation-tests ${CMAKE_SOURCE_DIR}/data/ground_state.json)
+
     # Onde a grade de sondas cozida fica: cache do usuario ou ao lado do .glb (sem GPU).
     add_executable(eruption-probe-cache-path-tests tests/test_probe_cache_path.cpp src/utils/ProbeCachePath.cpp)
     target_include_directories(eruption-probe-cache-path-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

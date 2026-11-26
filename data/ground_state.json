@@ -1,0 +1,13 @@
+{
+  "_doc": "Estado do chao sobre a vegetacao (core/GroundVegetation.hpp). O estado de uma celula e' uma QUALIDADE: muda a substancia de arvore, arbusto e capim, nao so' a cor. Cada tipo vale com COBERTURA CHEIA; com cobertura parcial (borda da marca, subindo ou derretendo) o efeito entra na mesma proporcao, entao o degelo devolve o balanco aos poucos. sway_amp_scale multiplica a amplitude do balanco (vento do clima, rajadas, world.wind_burst com swirl/inward); sway_freq_scale a frequencia; density_boost (ate' 0,95; negativo = rarefeita) baixa o limiar do alfa-teste da copa (mais cheia, menos vazada); albedo_lift (0..1) clareia a folha rumo ao branco. Varios tipos juntos: fatores multiplicam, densidade e clareamento somam. ice_water (gelo sobre a agua) divide o canal da geada e nao tem planta por cima: vale a linha de frost. Neutro = amp 1, freq 1, density 0, lift 0.",
+  "vegetation": {
+    "_snow": "Neve em cima do galho: carga e rigidez. Massa extra baixa a frequencia propria (f ~ 1/sqrt(m)) e a copa carregada cede pouco; a neve tambem preenche os vazios entre folhas.",
+    "snow": { "sway_amp_scale": 0.25, "sway_freq_scale": 0.55, "density_boost": 0.60, "albedo_lift": 0.55 },
+    "_frost": "Geada: filme de gelo que enrijece folha e graveto, mas pesa bem menos que neve.",
+    "frost": { "sway_amp_scale": 0.55, "sway_freq_scale": 0.80, "density_boost": 0.25, "albedo_lift": 0.25 },
+    "_wet": "Molhado: galho encharcado, um pouco mais pesado e amortecido; quase nao muda a copa.",
+    "wet": { "sway_amp_scale": 0.90, "sway_freq_scale": 0.92, "density_boost": 0.08, "albedo_lift": 0.0 },
+    "_scorch": "Queimado: seco e quebradico, mais leve e mais rapido; a copa vaza (folha seca cai).",
+    "scorch": { "sway_amp_scale": 1.10, "sway_freq_scale": 1.25, "density_boost": -0.15, "albedo_lift": 0.0 }
+  }
+}

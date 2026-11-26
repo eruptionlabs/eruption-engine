@@ -5152,6 +5152,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             ip = impostorPick(hot, mesh, cameraPos);
             impostorData(d, hot.transform, velocity ? &prevInst : nullptr, mesh, ip.a);
         }
+        applyGroundVeg(d, idx);
 
         // Realce do editor: instancia destacada opaca, resto a 20%. Alpha e'
         // por RUN (push), entao runs quebram por alpha - so' no modo realce.
@@ -5224,12 +5225,15 @@ void ModelRenderer::render(VkCommandBuffer cmd,
                     if (velocity) base.prevModel = prevInst;
                     base.uvTranslateRot = m_instUvTranslateRot[idx];
                     base.uvScaleDisp = Vec4(m_instUvScale[idx], 0.0f, sway);
+                    applyGroundVeg(base, idx);
                     // o impostor do par entra com o ladrilho mais proximo
                     auto dados = [&](uint8_t level) {
                         GpuModelInstance g = base;
-                        if (level == 3 && mesh.impViews)
+                        if (level == 3 && mesh.impViews) {
                             impostorData(g, hot.transform, velocity ? &prevInst : nullptr, mesh,
                                          impostorPick(hot, mesh, cameraPos).a);
+                            applyGroundVeg(g, idx);
+                        }
                         return g;
                     };
                     job.lod = pair.nearLevel; job.alpha = threshold; job.data = dados(job.lod);
@@ -6652,6 +6656,39 @@ ModelRenderer::ImpPick ModelRenderer::impostorPick(const ModelInstanceHot& hot, 
     r.a = k[a]; r.b = k[b];
     r.t = w[b] / std::max(w[a] + w[b], 1e-6f);   // <= 0,5
     return r;
+}
+
+void ModelRenderer::applyGroundVeg(GpuModelInstance& d, uint32_t idx) const {
+    if (idx >= m_instGroundVeg.size()) return;
+    const Vec4& v = m_instGroundVeg[idx]; // amp, relogio, densidade, clareamento
+    const int amp = std::clamp(int(std::lround((v.x - 1.0f) * 32.0f)), -128, 127);
+    const int dens = std::clamp(int(std::lround(v.z * 100.0f)), -128, 127);
+    const int lift = std::clamp(int(std::lround(v.w * 100.0f)), 0, 100);
+    uint32_t pk = uint32_t(amp & 0xFF) | (uint32_t(dens & 0xFF) << 8) | (uint32_t(lift) << 16);
+    // Bit 30 ligado quando ha' algo: o float resultante e' normal (nunca denormal, que a GPU pode zerar).
+    if (pk != 0u) pk |= 0x40000000u;
+    float f;
+    std::memcpy(&f, &pk, sizeof f);
+    d.model[0][3] = v.y;
+    d.model[1][3] = f;
+}
+
+bool ModelRenderer::updateGroundVegetation(GroundVegSampler fn, void* ctx, float dt) {
+    const size_t n = m_instanceHot.size();
+    if (m_instGroundVeg.size() != n) m_instGroundVeg.assign(n, Vec4(1.0f, 0.0f, 0.0f, 0.0f));
+    bool any = false;
+    for (size_t i = 0; i < n; ++i) {
+        const ModelInstanceHot& hot = m_instanceHot[i];
+        if (hot.meshIndex >= m_meshes.size() || m_meshes[hot.meshIndex].swayAmount <= 0.0f) continue;
+        const GroundVegSample s = fn(ctx, hot.transform[3].x, hot.transform[3].z);
+        Vec4& v = m_instGroundVeg[i];
+        v.x = s.amp;
+        v.y += (s.freq - 1.0f) * dt; // y NAO volta a 0: o relogio so' anda, a fase fica continua
+        v.z = s.density;
+        v.w = s.lift;
+        if (s.amp != 1.0f || s.density != 0.0f || s.lift != 0.0f) any = true;
+    }
+    return any;
 }
 
 void ModelRenderer::impostorData(GpuModelInstance& d, const Mat4& model, const Mat4* prevModel,

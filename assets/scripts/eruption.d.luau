@@ -291,6 +291,15 @@ declare world: {
     -- MATERIAL of what is already on the ground (albedo, roughness, normal)
     -- for the terrain and any ground model, with an irregular soft edge, only
     -- up to 2 m above the ground (crowns and roofs are untouched).
+    -- PLANTS TAKE THE QUALITY TOO: trees, bushes and grass rooted where the
+    -- state covers them change in substance, in proportion to the cover (so
+    -- they go back to normal smoothly while it melts). Snow makes the crown
+    -- dense and nearly still (sway and wind gusts, swirl and inward included,
+    -- at a quarter of the amplitude and a slower beat, grass nearly frozen);
+    -- frost is a milder version, wet is slightly heavier, scorch is dry and
+    -- brittle (livelier, thinner). The numbers per kind are in
+    -- data/ground_state.json (sway_amp_scale, sway_freq_scale, density_boost,
+    -- albedo_lift); a game project can override them key by key.
     -- x, z: world position. radius: world units (default
     -- 3 m; half the side if square). strength 0..1 (default 1). duration:
     -- seconds until it is gone (default by kind: scorch 60, frost 30, wet 30,
