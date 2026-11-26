@@ -956,6 +956,22 @@ public:
     // Nevoa por script (world.set_fog): vence a do mapa (.env) e a do clima;
     // set=false devolve o comando para eles.
     void setScriptFog(const MapFog& fog) { m_scriptFog = fog; }
+    // NEVOA LOCAL (world.fog_volume, FogVolume.cpp): cilindro vertical de nevoa analitica.
+    // Posicao e medidas em unidades de mundo; `density` e' a extincao por METRO no centro.
+    struct FogVolumeSpec {
+        Vec3 pos = Vec3(0.0f);       // centro da base (y = chao)
+        float radius = 200.0f;       // unidades de mundo
+        float height = 60.0f;        // unidades de mundo (a nevoa afina para o topo)
+        float density = 1.0f;        // extincao por metro no centro (1 = ~63% opaca em 1 m)
+        Vec3 color = Vec3(1.1f, 1.25f, 1.5f); // cor da nevoa (antes da exposicao; > 1 clareia em tempo nublado)
+        float duration = 0.0f;       // s ate' comecar a sair; <= 0 fica ate' fog_volume_stop
+        float grow = 1.0f;           // s da entrada
+        float fade = 2.0f;           // s da saida
+    };
+    static constexpr size_t kMaxFogVolumes = 4;
+    uint32_t fogVolumeStart(const FogVolumeSpec& spec); // 0 = recusada (teto)
+    bool fogVolumeMove(uint32_t id, const Vec3& pos);
+    bool fogVolumeStop(uint32_t id);
     // Borda de mundo por script (world.set_border): vence a "world_border" do
     // .env; set=false devolve o comando para ela (ou desliga, sem mapa).
     void setScriptBorder(const WorldBorder& b) { m_scriptBorder = b; }
@@ -2195,6 +2211,18 @@ private:
     // QUALQUER objeto da cena, nao so' a lava. -1 = nada selecionado.
     int m_selectedModelInstance = -1;
     PostProcessor::PostSettings m_postSettings;
+    struct FogVolumeState {
+        uint32_t id = 0;
+        FogVolumeSpec spec;
+        float age = 0.0f;
+        float endAge = -1.0f;
+    };
+    std::vector<FogVolumeState> m_fogVolumes;
+    uint32_t m_fogVolumeNext = 1;
+    float m_fogVolumeClock = 0.0f;
+    static float fogVolumeLevel(const FogVolumeState& v);
+    void updateFogVolumes(float dt);                        // 1x por quadro (updateAffects chama)
+    void fillFogVolumes(PostProcessor::PostSettings& out) const;
     int m_lookPreset = 2;
     bool m_showMapSelector = false;
     bool m_enableAutoExit = false;

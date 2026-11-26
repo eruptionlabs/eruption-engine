@@ -327,6 +327,17 @@ public:
             Vec4 chroma[2];                // rgb = cor do ceu coberto (normalizada pela luminancia)
         } localClimate;
 
+        // Nevoa local de script (world.fog_volume, core/FogVolume.cpp): cilindros verticais
+        // de nevoa analitica no composite. count = 0 -> o shader nem os le'.
+        static constexpr int kMaxFogVolumes = 4;
+        struct FogVolumes {
+            int count = 0;
+            float time = 0.0f;           // s, anima as bandas de densidade
+            Vec4 shape[kMaxFogVolumes];  // xyz = centro da base, w = raio
+            Vec4 color[kMaxFogVolumes];  // rgb = cor, w = extincao por metro (ja' com o fade)
+            float height[kMaxFogVolumes] = {0.0f, 0.0f, 0.0f, 0.0f}; // altura (unidades de mundo)
+        } fogVolumes;
+
         void loadFromJson(const nlohmann::json& j);
     };
 

@@ -118,6 +118,14 @@ struct GustShape {
     float floor = 0.35f;   // fracao da forca que sobra atras da frente (0..1)
     float shake = 0.0f;    // tremor da copa quando a frente passa (0..1)
     float lift = 0.3f;     // sopro para cima nas particulas (0..1)
+    // Giro em volta do centro (nevasca, redemoinho de area): `swirl` e' a forca
+    // tangencial (+ anti-horario visto de cima, - horario), `inward` puxa para o
+    // centro (+) ou empurra (-), ambos sem frente de onda (valem o raio todo, com a
+    // mesma queda). `radial` escala o empurrao para fora da rajada comum (1 = como
+    // sempre, 0 = so' o giro). Com 0, 0 e 1 a rajada e a imagem ficam como eram.
+    float swirl = 0.0f;    // -1..1
+    float inward = 0.0f;   // -1..1
+    float radial = 1.0f;   // 0..1
 };
 
 struct WindBlock {
@@ -248,6 +256,7 @@ struct GustPacked {
     float a[4];
     float b[4];
     float c[4];
+    float d[4];   // (giro, para dentro, escala radial, 0): so' as particulas e o vegetal leem
 };
 
 // Forca da rajada no tempo t = idade/duracao: sobe rapido e cai (1-t)^1.5.

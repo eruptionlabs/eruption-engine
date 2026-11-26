@@ -133,9 +133,13 @@ void main() {
                 float gdist = length(gd);
                 float gfall = 1.0 - smoothstep(0.0, ga.z, gdist);
                 float gf = (gdist / ga.z - gb.x) / max(gb.y, 1e-3);
-                float gk = ga.w * gfall * (gb.w + (1.0 - gb.w) * exp(-gf * gf));
-                acc.xz += (gdist > 1e-3 ? gd / gdist : vec2(0.0)) * gk * 12.0 * scale;
+                vec4 gx = frame.gustsX[gi];
+                float gk = ga.w * gfall * (gb.w + (1.0 - gb.w) * exp(-gf * gf)) * gx.z;
+                vec2 gdir = gdist > 1e-3 ? gd / gdist : vec2(0.0);
+                acc.xz += gdir * gk * 12.0 * scale;
                 acc.y += gk * gb.z * 14.0 * scale;
+                // Giro em volta do centro e puxao para dentro (GustShape swirl, inward).
+                acc.xz += (vec2(gdir.y, -gdir.x) * gx.x - gdir * gx.y) * (ga.w * gfall) * 12.0 * scale;
             }
             if (e.noise.x != 0.0)
                 acc += curlNoise(p.pos * (e.noise.y / scale), frame.timeInfo.x * e.noise.z) * e.noise.x * scale;

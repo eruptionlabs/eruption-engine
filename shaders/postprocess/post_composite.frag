@@ -90,7 +90,91 @@ layout(std140, set = 1, binding = 0) uniform PushConstants {
     vec4 climateGrade[2];  // [tempestade, neve]: x=fator de exposicao, y=dessaturacao, z=mistura de humor, w=neblina
     vec4 climateFog[2];    // x=inicio, y=fim da neblina
     vec4 climateChroma[2]; // rgb=cor do ceu coberto, normalizada pela luminancia
+    // Nevoa local de script (world.fog_volume). Bloco de 864 B.
+    vec4 fogVolInfo;       // x=quantos volumes (0 = nao le'), y=tempo (s)
+    vec4 fogVolHeight;     // altura de cada volume
+    vec4 fogVolShape[4];   // xyz=centro da base, w=raio
+    vec4 fogVolColor[4];   // rgb=cor, w=extincao por unidade de mundo (com o fade)
 } push;
+
+// Direcao do raio de um pixel de ceu: o plano distante (z = 1) tem w ~ 0 e a posicao reconstruida
+// dali perde precisao (degrau no meio da tela); um ponto no meio do frustum esta no mesmo raio.
+vec3 fogVolSkyDir(vec2 uv) {
+    vec4 h = push.invViewProj * vec4(uv * 2.0 - 1.0, 0.5, 1.0);
+    return normalize(h.xyz / max(abs(h.w), 1e-6) * sign(h.w + 1e-9) - push.cameraPos.xyz);
+}
+
+// NEVOA LOCAL: cilindros verticais de nevoa. Por pixel, o trecho do raio camera->ponto
+// dentro do cilindro (intersecao analitica circulo x faixa de altura) vezes a extincao,
+// com o perfil (mais densa no centro, afina na borda e no topo) avaliado no meio do
+// trecho. Sem volume (fogVolInfo.x = 0) nao roda nada.
+vec3 applyFogVolumes(vec3 color, vec3 camPos, vec3 endPos, float exposure) {
+    vec3 ray = endPos - camPos;
+    float tmax = length(ray);
+    vec3 dir = ray / max(tmax, 1e-4);
+    for (int i = 0; i < int(push.fogVolInfo.x); ++i) {
+        vec4 s = push.fogVolShape[i];
+        vec4 c = push.fogVolColor[i];
+        float R = s.w;
+        float y0 = s.y;
+        float y1 = s.y + push.fogVolHeight[i];
+        vec2 oc = camPos.xz - s.xz;
+        float a = dot(dir.xz, dir.xz);
+        float b = dot(oc, dir.xz);
+        float cc = dot(oc, oc) - R * R;
+        float ta = 0.0, tb = tmax;
+        if (a > 1e-8) {
+            float disc = b * b - a * cc;
+            if (disc <= 0.0) continue;
+            float sq = sqrt(disc);
+            ta = max(ta, (-b - sq) / a);
+            tb = min(tb, (-b + sq) / a);
+        } else if (cc > 0.0) {
+            continue;
+        }
+        if (abs(dir.y) > 1e-5) {
+            float t0 = (y0 - camPos.y) / dir.y;
+            float t1 = (y1 - camPos.y) / dir.y;
+            ta = max(ta, min(t0, t1));
+            tb = min(tb, max(t0, t1));
+        } else if (camPos.y < y0 || camPos.y > y1) {
+            continue;
+        }
+        float len = tb - ta;
+        if (len <= 0.0) continue;
+        vec3 m = camPos + dir * (0.5 * (ta + tb));
+        // Bordas e densidade variam no espaco e no tempo: bandas em espiral que giram (rajadas
+        // mais densas passando) e uma borda ondulada, para a nevoa nao ser um disco chapado.
+        vec2 rel = m.xz - s.xz;
+        float rr = length(rel);
+        float t = push.fogVolInfo.y;
+        // Harmonicos do angulo por potencias de um numero complexo (sem atan: sem costura em +-pi).
+        vec2 z1 = rel / max(rr, 1e-3);
+        vec2 z2 = vec2(z1.x * z1.x - z1.y * z1.y, 2.0 * z1.x * z1.y);
+        vec2 z3 = vec2(z2.x * z1.x - z2.y * z1.y, z2.x * z1.y + z2.y * z1.x);
+        vec2 z4 = vec2(z2.x * z2.x - z2.y * z2.y, 2.0 * z2.x * z2.y);
+        vec2 z5 = vec2(z4.x * z1.x - z4.y * z1.y, z4.x * z1.y + z4.y * z1.x);
+        vec2 z7 = vec2(z4.x * z3.x - z4.y * z3.y, z4.x * z3.y + z4.y * z3.x);
+        vec2 z10 = vec2(z5.x * z5.x - z5.y * z5.y, 2.0 * z5.x * z5.y);
+        vec2 z11 = vec2(z10.x * z1.x - z10.y * z1.y, z10.x * z1.y + z10.y * z1.x);
+        float p3 = -rr / (0.22 * R) + t * 0.9 + float(i) * 1.7;
+        float p7 = rr / (0.11 * R) - t * 1.7;
+        float p5 = t * 0.35, p11 = -t * 0.6;
+        float s3 = z3.y * cos(p3) + z3.x * sin(p3);
+        float s7 = z7.y * cos(p7) + z7.x * sin(p7);
+        float s5 = z5.y * cos(p5) + z5.x * sin(p5);
+        float s11 = z11.y * cos(p11) + z11.x * sin(p11);
+        float band = 0.5 + 0.5 * s3;
+        float band2 = 0.5 + 0.5 * s7;
+        float mod1 = mix(0.35, 1.25, band) * mix(0.8, 1.2, band2);
+        float Re = R * (1.0 + 0.07 * s5 + 0.04 * s11);
+        float wr = 1.0 - smoothstep(0.15 * Re, Re, rr);
+        float wh = 1.0 - smoothstep(0.2 * (y1 - y0), y1 - y0, m.y - y0 + 0.15 * (y1 - y0) * (band2 - 0.5));
+        float tau = c.w * wr * wh * mod1 * len;
+        color = mix(color, c.rgb * exposure, 1.0 - exp(-tau));
+    }
+    return color;
+}
 
 // HALATION: soma o borrao largo do excesso e tira o excesso do proprio pixel
 // (a mesma conta do halation_prefilter.frag). A energia acima do limiar sai
@@ -400,6 +484,11 @@ void main() {
                       * push.exposureBloom.y;
             c = mix(c, push.fogParams.xyz * push.exposureBloom.x, clamp(f, 0.0, 1.0));
         }
+        if (push.fogVolInfo.x > 0.5) {
+            vec4 h = push.invViewProj * vec4(fragUV * 2.0 - 1.0, d, 1.0);
+            vec3 wp = h.xyz / max(h.w, 1e-6);
+            c = applyFogVolumes(c, push.cameraPos.xyz, d >= 0.99999 ? push.cameraPos.xyz + fogVolSkyDir(fragUV) * 4000.0 : wp, push.exposureBloom.x);
+        }
         c = applyToneMapping(max(c, vec3(0.0)), push.motionBlurParams.z);
         c = applyGrading(c, push.gradingParams.x, push.gradingParams.y);
         outColor = vec4(pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
@@ -587,6 +676,9 @@ void main() {
         }
         color = mix(color, finalFogColor, fogFactor);
     }
+
+    if (push.fogVolInfo.x > 0.5)
+        color = applyFogVolumes(color, camPos, depth >= 0.99999 ? camPos + fogVolSkyDir(fragUV) * 4000.0 : worldPos, push.exposureBloom.x);
 
     // FUNDO ABAIXO DO HORIZONTE ("background" do .env): sem geometria e com o
     // raio descendo, o ceu (claro e HDR) virava um vao na borda do mundo. Sai

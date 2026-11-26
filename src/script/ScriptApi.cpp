@@ -2272,6 +2272,50 @@ int world_set_fog(lua_State* L) {
     eng().setScriptFog(parseMapFog(j));
     return 0;
 }
+// world.fog_volume{pos, radius, height, density, color, duration, grow, fade}: nevoa local
+// (cilindro vertical, core/FogVolume.cpp); devolve o id ou nil se o teto de volumes acabou.
+int world_fog_volume(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    Engine::FogVolumeSpec s;
+    auto num = [&](const char* k, float& out) {
+        lua_getfield(L, 1, k);
+        if (lua_type(L, -1) == LUA_TNUMBER) out = float(lua_tonumber(L, -1));
+        else if (!lua_isnil(L, -1)) luaL_error(L, "world.fog_volume: field '%s' must be a number", k);
+        lua_pop(L, 1);
+    };
+    lua_getfield(L, 1, "pos");
+    if (lua_type(L, -1) != LUA_TVECTOR) luaL_error(L, "world.fog_volume: field 'pos' must be a vector");
+    {
+        const float* v = lua_tovector(L, -1);
+        s.pos = Vec3(v[0], v[1], v[2]);
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "color");
+    if (lua_type(L, -1) == LUA_TVECTOR) {
+        const float* v = lua_tovector(L, -1);
+        s.color = Vec3(v[0], v[1], v[2]);
+    }
+    lua_pop(L, 1);
+    num("radius", s.radius);
+    num("height", s.height);
+    num("density", s.density);
+    num("duration", s.duration);
+    num("grow", s.grow);
+    num("fade", s.fade);
+    const uint32_t id = eng().fogVolumeStart(s);
+    if (id == 0) lua_pushnil(L);
+    else lua_pushinteger(L, int(id));
+    return 1;
+}
+int world_fog_volume_move(lua_State* L) {
+    const float* v = luaL_checkvector(L, 2);
+    lua_pushboolean(L, eng().fogVolumeMove(uint32_t(luaL_checkinteger(L, 1)), Vec3(v[0], v[1], v[2])));
+    return 1;
+}
+int world_fog_volume_stop(lua_State* L) {
+    lua_pushboolean(L, eng().fogVolumeStop(uint32_t(luaL_checkinteger(L, 1))));
+    return 1;
+}
 // Borda de mundo (E-BORDA-VAZIO, spec 12): { x0, z0, x1, z1, fade, color }
 // vence o bloco "world_border" do .env; nil devolve o comando para ele (ou
 // desliga, sem mapa). Fora do retangulo a tela funde para `color` (preto por
@@ -2598,6 +2642,9 @@ int world_wind_burst(lua_State* L) {
     shape.floor = optField(L, 1, "floor", shape.floor);
     shape.shake = optField(L, 1, "shake", shape.shake);
     shape.lift = optField(L, 1, "lift", shape.lift);
+    shape.swirl = optField(L, 1, "swirl", shape.swirl);
+    shape.inward = optField(L, 1, "inward", shape.inward);
+    shape.radial = optField(L, 1, "radial", shape.radial);
     const uint32_t id = eng().windBurst(x, z, optField(L, 1, "radius", 0.0f), optField(L, 1, "strength", 1.0f),
                                         optField(L, 1, "duration", 1.5f), shape);
     lua_pushinteger(L, int(id));
@@ -3422,7 +3469,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         ERUPTION_API_FN(world, time), ERUPTION_API_FN(world, set_time), ERUPTION_API_FN(world, time_between),
         ERUPTION_API_FN(world, weather), ERUPTION_API_FN(world, is_weather), ERUPTION_API_FN(world, set_weather),
         ERUPTION_API_FN(world, set_wetness), ERUPTION_API_FN(world, wetness), ERUPTION_API_FN(world, wet_area),
-        ERUPTION_API_FN(world, look), ERUPTION_API_FN(world, set_look), ERUPTION_API_FN(world, set_ambient), ERUPTION_API_FN(world, set_dof), ERUPTION_API_FN(world, set_classic), ERUPTION_API_FN(world, set_sky), ERUPTION_API_FN(world, sky), ERUPTION_API_FN(world, set_classic_water), ERUPTION_API_FN(world, classic), ERUPTION_API_FN(world, set_fog), ERUPTION_API_FN(world, set_border), ERUPTION_API_FN(world, set_exposure), ERUPTION_API_FN(world, set_time_scale), ERUPTION_API_FN(world, time_scale), ERUPTION_API_FN(world, walkable), ERUPTION_API_FN(world, set_nav_rules), ERUPTION_API_FN(world, nav_rules), ERUPTION_API_FN(world, path), ERUPTION_API_FN(world, floor_height), ERUPTION_API_FN(world, screen_to_ground), ERUPTION_API_FN(world, floor_walkable), ERUPTION_API_FN(world, liquid_at), ERUPTION_API_FN(world, footprint), ERUPTION_API_FN(world, dust), ERUPTION_API_FN(world, affect), ERUPTION_API_FN(world, affect_stop), ERUPTION_API_FN(world, wind_burst), ERUPTION_API_FN(world, ground_state), ERUPTION_API_FN(world, ground_state_stop), ERUPTION_API_FN(world, ground_grid), ERUPTION_API_FN(world, set_motion_blur),
+        ERUPTION_API_FN(world, look), ERUPTION_API_FN(world, set_look), ERUPTION_API_FN(world, set_ambient), ERUPTION_API_FN(world, set_dof), ERUPTION_API_FN(world, set_classic), ERUPTION_API_FN(world, set_sky), ERUPTION_API_FN(world, sky), ERUPTION_API_FN(world, set_classic_water), ERUPTION_API_FN(world, classic), ERUPTION_API_FN(world, set_fog), ERUPTION_API_FN(world, fog_volume), ERUPTION_API_FN(world, fog_volume_move), ERUPTION_API_FN(world, fog_volume_stop), ERUPTION_API_FN(world, set_border), ERUPTION_API_FN(world, set_exposure), ERUPTION_API_FN(world, set_time_scale), ERUPTION_API_FN(world, time_scale), ERUPTION_API_FN(world, walkable), ERUPTION_API_FN(world, set_nav_rules), ERUPTION_API_FN(world, nav_rules), ERUPTION_API_FN(world, path), ERUPTION_API_FN(world, floor_height), ERUPTION_API_FN(world, screen_to_ground), ERUPTION_API_FN(world, floor_walkable), ERUPTION_API_FN(world, liquid_at), ERUPTION_API_FN(world, footprint), ERUPTION_API_FN(world, dust), ERUPTION_API_FN(world, affect), ERUPTION_API_FN(world, affect_stop), ERUPTION_API_FN(world, wind_burst), ERUPTION_API_FN(world, ground_state), ERUPTION_API_FN(world, ground_state_stop), ERUPTION_API_FN(world, ground_grid), ERUPTION_API_FN(world, set_motion_blur),
         ERUPTION_API_FN(world, set_chromatic_aberration), ERUPTION_API_FN(world, set_effect_radius),
         ERUPTION_API_FN(world, set_focus), ERUPTION_API_FN(world, set_ground_blend),
         ERUPTION_API_FN(world, set_cutaway),
@@ -3805,9 +3852,15 @@ declare world: {
     -- default 0.35), shake (0..1, canopy tremor, default 0), lift (0..1, the
     -- push up on particles, default 0.3). Particles (falling leaves, dust,
     -- embers, smoke) are pushed by the gust too. The trees' shadows do not
-    -- follow the local gust.
+    -- follow the local gust. swirl (-1..1) is a push AROUND the centre
+    -- (+ counter-clockwise seen from above, - clockwise), inward (-1..1) pulls
+    -- toward the centre (+) or away (-); both ignore the wavefront and last the
+    -- whole radius with the same falloff. radial (0..1, default 1) scales the
+    -- usual outward push, so swirl = 1, radial = 0 is a pure whirl of wind.
+    -- Swirl and inward also bend plants and push particles; 0 changes nothing.
     wind_burst: (opts: { x: number, z: number, radius: number?, strength: number?, duration: number?,
-        ring: boolean?, front_width: number?, floor: number?, shake: number?, lift: number? }) -> number,
+        ring: boolean?, front_width: number?, floor: number?, shake: number?, lift: number?,
+        swirl: number?, inward: number?, radial: number? }) -> number,
     -- GROUND STATE PER CELL: kind "scorch" (black charcoal core, brown rim with
     -- pale ash specks, low plants turn dark brown), "frost" (matte blue-white
     -- film with fine crystals, rough, the normal nearly flat), "wet" (darker and
@@ -3985,6 +4038,19 @@ declare world: {
     -- height, falloff} (the map .env "fog" block fields). Wins over the map's
     -- and the weather's fog until the next map change; nil gives control back.
     set_fog: (fog: { [string]: any }?) -> (),
+    -- LOCAL FOG: a vertical cylinder of fog (analytic, no particles), denser at
+    -- the centre and thinner toward the rim and the top. pos = centre of the
+    -- base (y = ground), radius and height in world units, density = extinction
+    -- per METER at the centre (1 = about 63% opaque over 1 m; 0.15 is a thick
+    -- haze, 0.6 a whiteout), color = vector rgb (default a pale blue-white),
+    -- duration (s until it starts leaving; <= 0 stays until fog_volume_stop),
+    -- grow (s, default 1) and fade (s, default 2). Up to 4 at once; returns
+    -- the id, or nil when the limit is reached. Without any volume the
+    -- renderer reads nothing (the image is identical).
+    fog_volume: (opts: { pos: vector, radius: number?, height: number?, density: number?, color: vector?,
+        duration: number?, grow: number?, fade: number? }) -> number?,
+    fog_volume_move: (id: number, pos: vector) -> boolean,
+    fog_volume_stop: (id: number) -> boolean,
     -- World edge void (E-BORDA-VAZIO, spec 12): {x0, z0, x1, z1, fade, color}.
     -- Outside the [x0,z0]-[x1,z1] rectangle the screen fades to `color`
     -- (black by default) over `fade` world units (default 200). Wins over

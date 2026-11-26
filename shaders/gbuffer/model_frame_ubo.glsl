@@ -128,4 +128,5 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_gusts[16];
     // Tempo de cada rajada, para a mola da copa: (duracao s, idade s, 0, 0).
     vec4 u_gustsT[8];
+    vec4 u_gustsX[8]; // (giro, para dentro, escala radial, 0) por rajada
 };

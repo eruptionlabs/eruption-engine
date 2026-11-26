@@ -199,6 +199,23 @@ int main(int argc, char** argv) {
     h.tick(1.0f);
     checa(h.size() == 0 && h.pack(p) == 0, "a rajada some quando acaba o tempo");
 
+    // 8. Giro da rajada (swirl, inward, radial): o padrao nao muda nada e os limites valem.
+    std::printf("giro da rajada\n");
+    GustRing w;
+    w.add(1, 0.0f, 0.0f, 5.0f, 1.0f, 2.0f, 4);
+    checa(w.pack(p) == 1 && p[0].d[0] == 0.0f && p[0].d[1] == 0.0f && p[0].d[2] == 1.0f, "sem pedido: giro 0, para dentro 0, radial 1");
+    GustShape giro;
+    giro.swirl = 5.0f;
+    giro.inward = -5.0f;
+    giro.radial = -1.0f;
+    w.add(2, 0.0f, 0.0f, 5.0f, 1.0f, 2.0f, 4, nullptr, giro);
+    checa(w.pack(p) == 2 && p[1].d[0] == 1.0f && p[1].d[1] == -1.0f && p[1].d[2] == 0.0f, "swirl e inward ficam em -1..1 e radial em 0..1");
+    giro.swirl = 0.4f;
+    giro.inward = 0.2f;
+    giro.radial = 0.0f;
+    w.add(3, 0.0f, 0.0f, 5.0f, 1.0f, 2.0f, 4, nullptr, giro);
+    checa(w.pack(p) == 3 && p[2].d[0] == 0.4f && p[2].d[1] == 0.2f && p[2].d[2] == 0.0f, "valores dentro dos limites passam como estao");
+
     std::printf(g_falhas ? "\n%d FALHA(S)\n" : "\ntudo certo\n", g_falhas);
     return g_falhas ? 1 : 0;
 }

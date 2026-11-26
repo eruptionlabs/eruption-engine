@@ -2421,6 +2421,7 @@ void Engine::render() {
     postSettings.outlineCloudCover = cloudVolScriptDeferred;
     postSettings.cloudAfterDof = cloudVolScriptDeferred;
     fillLocalClimate(postSettings);
+    fillFogVolumes(postSettings);
 #if ERUPTION_DEV
     if (std::getenv("ERUPTION_TEST_NO_OUTLINE_COVER")) postSettings.outlineCloudCover = false;
 #endif

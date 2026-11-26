@@ -456,7 +456,7 @@ void PostProcessor::createDescriptors() {
     // composicao cresceu alem do antigo teto de 352 B.
     // + 32 B (gradeParams2 da LUT 3D de grading, volumetricParams).
     // + 48 B (halation e grao).
-    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 768, 64 * 1024);
+    m_pushRing.init(m_ctx, VK_SHADER_STAGE_FRAGMENT_BIT, 1024, 64 * 1024);
     const VkDescriptorSetLayout setLayouts[2] = {m_descriptorSetLayout, m_pushRing.layout()};
 
     VkPipelineLayoutCreateInfo plInfo{};
@@ -2103,6 +2103,11 @@ if (!m_ctx) return;
         Vec4 climateGrade[2];
         Vec4 climateFog[2];
         Vec4 climateChroma[2];
+        // Nevoa local (PostSettings::fogVolumes). Bloco de 864 B.
+        Vec4 fogVolInfo;       // x=quantos volumes (0 = nao le')
+        Vec4 fogVolHeight;     // altura de cada volume
+        Vec4 fogVolShape[PostSettings::kMaxFogVolumes];
+        Vec4 fogVolColor[PostSettings::kMaxFogVolumes];
     } push;
     // Debug/test overrides for fog parameters (useful for headless screenshots).
     float fogStart = settings.fogStart;
@@ -2209,7 +2214,13 @@ if (!m_ctx) return;
         push.climateFog[k] = settings.localClimate.fog[k];
         push.climateChroma[k] = settings.localClimate.chroma[k];
     }
-    static_assert(sizeof(push) <= 768, "bloco da composicao passou do maxBlock do PushRing (768 B)");
+    push.fogVolInfo = Vec4(float(settings.fogVolumes.count), settings.fogVolumes.time, 0.0f, 0.0f);
+    push.fogVolHeight = Vec4(settings.fogVolumes.height[0], settings.fogVolumes.height[1], settings.fogVolumes.height[2], settings.fogVolumes.height[3]);
+    for (int i = 0; i < PostSettings::kMaxFogVolumes; ++i) {
+        push.fogVolShape[i] = settings.fogVolumes.shape[i];
+        push.fogVolColor[i] = settings.fogVolumes.color[i];
+    }
+    static_assert(sizeof(push) <= 1024, "bloco da composicao passou do maxBlock do PushRing (1024 B)");
     m_pushRing.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, &push, sizeof(push));
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkc::cmdEndRendering(cmd);

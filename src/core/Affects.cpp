@@ -384,6 +384,9 @@ void GustRing::add(uint32_t id, float x, float z, float radius, float strength, 
     g.shape.floor = std::clamp(g.shape.floor, 0.0f, 1.0f);
     g.shape.shake = std::clamp(g.shape.shake, 0.0f, 1.0f);
     g.shape.lift = std::clamp(g.shape.lift, 0.0f, 1.0f);
+    g.shape.swirl = std::clamp(g.shape.swirl, -1.0f, 1.0f);
+    g.shape.inward = std::clamp(g.shape.inward, -1.0f, 1.0f);
+    g.shape.radial = std::clamp(g.shape.radial, 0.0f, 1.0f);
     m_gusts.push_back(g);
 }
 
@@ -420,6 +423,10 @@ uint32_t GustRing::pack(GustPacked* out) const {
         p.c[1] = g.duration;
         p.c[2] = g.age;
         p.c[3] = 0.0f;
+        p.d[0] = g.shape.swirl;
+        p.d[1] = g.shape.inward;
+        p.d[2] = g.shape.radial;
+        p.d[3] = 0.0f;
     }
     return n;
 }

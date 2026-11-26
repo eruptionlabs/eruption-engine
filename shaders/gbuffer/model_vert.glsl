@@ -172,6 +172,7 @@ layout(set = 1, binding = 0) uniform FrameUBO {
     vec4 u_gustInfo;
     vec4 u_gusts[16];
     vec4 u_gustsT[8]; // (duracao s, idade s, 0, 0) por rajada: a mola da copa
+    vec4 u_gustsX[8]; // (giro, para dentro, escala radial, 0) por rajada
 };
 
 // -----------------------------------------------------------------------------
@@ -276,11 +277,21 @@ vec3 applyGusts(vec3 worldPos, float localHeight, float sway, vec2 origin) {
         const float tau = max(tNow - tArr, 0.0) * tt.x;
         const float behind = smoothstep(0.0, 0.04, tNow - tArr);
         const float spring = behind * exp(-tau * 1.3) * sin(tau * 9.0);
-        const float k = a.w * fall * ((b.z + (1.0 - b.z) * onFront) + 0.7 * spring);
+        const vec4 gx = u_gustsX[i];
+        const float k = a.w * fall * ((b.z + (1.0 - b.z) * onFront) + 0.7 * spring) * gx.z;
         const float theta = clamp(k, -1.7, 1.7) * 0.3 * (1.0 - exp(-h / 12.0));
         const vec2 dir = dist > 1e-3 ? d / dist : vec2(0.0);
         worldPos.xz += dir * (h * sin(theta));
         worldPos.y += h * (cos(theta) - 1.0);
+        if (gx.x != 0.0 || gx.y != 0.0) {
+            // Giro: tangente ao centro (anti-horario visto de cima com swirl > 0) e
+            // puxao para dentro, sem frente de onda; a mesma queda e o mesmo peso
+            // por altura do empurrao.
+            const float kb = a.w * fall * 0.3 * (1.0 - exp(-h / 12.0));
+            const vec2 tang = vec2(dir.y, -dir.x);
+            worldPos.xz += tang * (h * sin(clamp(kb * gx.x, -1.2, 1.2)));
+            worldPos.xz -= dir * (h * sin(clamp(kb * gx.y, -1.2, 1.2)));
+        }
         if (b.w > 0.0) {
             // Tremor da copa (onda de impacto): oscila rapido so' enquanto a
             // frente passa; a fase vem do lugar, cada galho no seu tempo.

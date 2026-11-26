@@ -484,15 +484,18 @@ void Engine::updateAffects(float dt) {
     // que ja' passou do prazo (o teto conta afeccoes visivelmente vivas).
     (void)m_affectRing.tick(m_affectClock);
     m_gustRing.tick(dt);
+    updateFogVolumes(dt);
     // As particulas (folha, poeira, brasa) tambem sao levadas pelas rajadas.
     affects::GustPacked packed[affects::kMaxGusts];
     const uint32_t n = m_gustRing.pack(packed);
     Vec4 v[2 * affects::kMaxGusts];
+    Vec4 vx[affects::kMaxGusts];
     for (uint32_t i = 0; i < n; ++i) {
+        vx[i] = Vec4(packed[i].d[0], packed[i].d[1], packed[i].d[2], 0.0f);
         v[2 * i] = Vec4(packed[i].a[0], packed[i].a[1], packed[i].a[2], packed[i].a[3]);
         v[2 * i + 1] = Vec4(packed[i].b[0], packed[i].b[1], packed[i].c[0], packed[i].b[2]);
     }
-    m_vfx.setGusts(v, n);
+    m_vfx.setGusts(v, n, vx);
     updateGroundState(dt);
 }
 
@@ -505,6 +508,7 @@ void Engine::fillGusts(FrameUBO& ubo) const {
         ubo.gusts[2 * i] = on ? Vec4(packed[i].a[0], packed[i].a[1], packed[i].a[2], packed[i].a[3]) : Vec4(0.0f);
         ubo.gusts[2 * i + 1] = on ? Vec4(packed[i].b[0], packed[i].b[1], packed[i].b[2], packed[i].b[3]) : Vec4(0.0f);
         ubo.gustsT[i] = on ? Vec4(packed[i].c[1], packed[i].c[2], 0.0f, 0.0f) : Vec4(0.0f);
+        ubo.gustsX[i] = on ? Vec4(packed[i].d[0], packed[i].d[1], packed[i].d[2], 0.0f) : Vec4(0.0f, 0.0f, 1.0f, 0.0f);
     }
 }
 

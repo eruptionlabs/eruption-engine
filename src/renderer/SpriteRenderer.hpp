@@ -223,6 +223,8 @@ struct FrameUBO {
     alignas(16) Vec4 gusts[16];
     // Tempo de cada rajada, para a mola da copa: (duracao s, idade s, 0, 0).
     alignas(16) Vec4 gustsT[8];
+    // Giro da rajada (core/Affects.hpp GustShape): (swirl, inward, escala radial, 0).
+    alignas(16) Vec4 gustsX[8];
 };
 // 16 KiB e' o minimo que a Vulkan garante para um UBO (maxUniformBufferRange).
 static_assert(sizeof(FrameUBO) <= 16384, "FrameUBO passou do UBO minimo garantido");

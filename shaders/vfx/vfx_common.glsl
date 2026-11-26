@@ -115,6 +115,7 @@ struct FrameParams {
     // frente 0..1): as particulas (folha, poeira, brasa) sao levadas por elas.
     vec4 gustInfo;
     vec4 gusts[16];
+    vec4 gustsX[8];     // por rajada: (giro, para dentro, escala radial, 0), ver GustShape
 };
 
 // REGISTRO DE DESENHO (64 bytes, um por particula visivel, no indice dela):

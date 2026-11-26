@@ -271,9 +271,15 @@ declare world: {
     -- default 0.35), shake (0..1, canopy tremor, default 0), lift (0..1, the
     -- push up on particles, default 0.3). Particles (falling leaves, dust,
     -- embers, smoke) are pushed by the gust too. The trees' shadows do not
-    -- follow the local gust.
+    -- follow the local gust. swirl (-1..1) is a push AROUND the centre
+    -- (+ counter-clockwise seen from above, - clockwise), inward (-1..1) pulls
+    -- toward the centre (+) or away (-); both ignore the wavefront and last the
+    -- whole radius with the same falloff. radial (0..1, default 1) scales the
+    -- usual outward push, so swirl = 1, radial = 0 is a pure whirl of wind.
+    -- Swirl and inward also bend plants and push particles; 0 changes nothing.
     wind_burst: (opts: { x: number, z: number, radius: number?, strength: number?, duration: number?,
-        ring: boolean?, front_width: number?, floor: number?, shake: number?, lift: number? }) -> number,
+        ring: boolean?, front_width: number?, floor: number?, shake: number?, lift: number?,
+        swirl: number?, inward: number?, radial: number? }) -> number,
     -- GROUND STATE PER CELL: kind "scorch" (black charcoal core, brown rim with
     -- pale ash specks, low plants turn dark brown), "frost" (matte blue-white
     -- film with fine crystals, rough, the normal nearly flat), "wet" (darker and
@@ -451,6 +457,19 @@ declare world: {
     -- height, falloff} (the map .env "fog" block fields). Wins over the map's
     -- and the weather's fog until the next map change; nil gives control back.
     set_fog: (fog: { [string]: any }?) -> (),
+    -- LOCAL FOG: a vertical cylinder of fog (analytic, no particles), denser at
+    -- the centre and thinner toward the rim and the top. pos = centre of the
+    -- base (y = ground), radius and height in world units, density = extinction
+    -- per METER at the centre (1 = about 63% opaque over 1 m; 0.15 is a thick
+    -- haze, 0.6 a whiteout), color = vector rgb (default a pale blue-white),
+    -- duration (s until it starts leaving; <= 0 stays until fog_volume_stop),
+    -- grow (s, default 1) and fade (s, default 2). Up to 4 at once; returns
+    -- the id, or nil when the limit is reached. Without any volume the
+    -- renderer reads nothing (the image is identical).
+    fog_volume: (opts: { pos: vector, radius: number?, height: number?, density: number?, color: vector?,
+        duration: number?, grow: number?, fade: number? }) -> number?,
+    fog_volume_move: (id: number, pos: vector) -> boolean,
+    fog_volume_stop: (id: number) -> boolean,
     -- World edge void (E-BORDA-VAZIO, spec 12): {x0, z0, x1, z1, fade, color}.
     -- Outside the [x0,z0]-[x1,z1] rectangle the screen fades to `color`
     -- (black by default) over `fade` world units (default 200). Wins over
@@ -1182,7 +1201,9 @@ declare vfx: {
     -- `scale` multiplies size, speed and forces; `yaw` turns it in degrees.
     -- As a table: {scale, yaw, color = vector (recolors, keeping each key's
     -- brightness), tint = vector (multiplies), offsets = {emitter = vector}
-    -- (meters, effect space)} - color variants without one file per color.
+    -- (meters, effect space), rate = number (multiplies every emitter's spawn
+    -- rate, 0..: a game scales an effect to the quality preset)} - color
+    -- variants without one file per color.
     -- vision = false (also "vision": false in the .vfx.json): scenery that
     -- team vision only dims, never hides. The table may also come after a
     -- number scale: play(name, pos, 2, {vision = false}).

@@ -62,6 +62,9 @@ int vfx_play(lua_State* L) {
         lua_getfield(L, 3, "vision");
         if (lua_isboolean(L, -1)) g_engine->vfx().setVision(id, lua_toboolean(L, -1) != 0);
         lua_pop(L, 1);
+        lua_getfield(L, 3, "rate");
+        if (lua_isnumber(L, -1)) g_engine->vfx().setRateScale(id, std::max(0.0f, float(lua_tonumber(L, -1))));
+        lua_pop(L, 1);
         for (const char* k : {"color", "tint"}) {
             lua_getfield(L, 3, k);
             if (lua_isvector(L, -1)) g_engine->vfx().setColor(id, vec3Arg(L, -1), k[0] == 'c');
@@ -216,7 +219,9 @@ declare vfx: {
     -- `scale` multiplies size, speed and forces; `yaw` turns it in degrees.
     -- As a table: {scale, yaw, color = vector (recolors, keeping each key's
     -- brightness), tint = vector (multiplies), offsets = {emitter = vector}
-    -- (meters, effect space)} - color variants without one file per color.
+    -- (meters, effect space), rate = number (multiplies every emitter's spawn
+    -- rate, 0..: a game scales an effect to the quality preset)} - color
+    -- variants without one file per color.
     -- vision = false (also "vision": false in the .vfx.json): scenery that
     -- team vision only dims, never hides. The table may also come after a
     -- number scale: play(name, pos, 2, {vision = false}).
