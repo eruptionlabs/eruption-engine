@@ -53,6 +53,7 @@ uint32_t readSpec(lua_State* L, int idx, Spec& s, bool allowPreset) {
     readNumber(L, idx, "altitude", s.altitude, Spec::FAltitude, mask);
     readNumber(L, idx, "falloff", s.falloff, Spec::FFalloff, mask);
     readNumber(L, idx, "darkness", s.darkness, Spec::FDarkness, mask);
+    readNumber(L, idx, "ragged", s.ragged, Spec::FRagged, mask);
     readNumber(L, idx, "fade_in", s.fadeIn, Spec::FFadeIn, mask);
     readNumber(L, idx, "life", s.life, Spec::FLife, mask);
     readNumber(L, idx, "fade_out", s.fadeOut, Spec::FFadeOut, mask);
@@ -237,6 +238,7 @@ declare weather: {
     --                         nuvens do clima)
     --   falloff               suavidade da borda, menor = mais larga e mais densa (1.2)
     --   darkness              0..1, base escurecida de tempestade (0)
+    --   ragged                0..1, base esfiapada: ondula mais e pendura trapos abaixo da base (0)
     --   tint                  vector(r, g, b) que multiplica a cor (1, 1, 1)
     --   frame                 0..1: desloca a massa para o lado da camera para que
     --                         apareca centrada em cima de (x, z) na tela (0 = fica
@@ -263,7 +265,7 @@ declare weather: {
     -- condensando (aberta e rala, fecha em fade_in) e, ao fim da vida, se dispersa.
     cloud_spawn: (spec: {
         preset: string?, area_radius: number?, x: number?, z: number?, radius_x: number?, radius_z: number?,
-        thickness: number?, density: number?, coverage: number?, altitude: number?, falloff: number?,
+        thickness: number?, density: number?, coverage: number?, altitude: number?, falloff: number?, ragged: number?,
         darkness: number?, tint: vector?, frame: number?, frame_fit: boolean?, fade_in: number?, life: number?, fade_out: number?,
         drift: boolean?, precip: boolean?, climate: boolean?,
     }?) -> number?,
@@ -278,7 +280,7 @@ declare weather: {
     -- id nao existe mais.
     cloud_set: (id: number, fields: {
         area_radius: number?, x: number?, z: number?, radius_x: number?, radius_z: number?, thickness: number?,
-        density: number?, coverage: number?, altitude: number?, falloff: number?, darkness: number?,
+        density: number?, coverage: number?, altitude: number?, falloff: number?, ragged: number?, darkness: number?,
         tint: vector?, frame: number?, frame_fit: boolean?, fade_in: number?, life: number?, fade_out: number?, drift: boolean?,
         precip: boolean?, climate: boolean?,
     }) -> boolean,

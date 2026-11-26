@@ -306,7 +306,7 @@ public:
             FX = 1u << 0, FZ = 1u << 1, FRadiusX = 1u << 2, FRadiusZ = 1u << 3, FDensity = 1u << 4,
             FCoverage = 1u << 5, FAltitude = 1u << 6, FFalloff = 1u << 7, FDarkness = 1u << 8,
             FTint = 1u << 9, FFadeIn = 1u << 10, FLife = 1u << 11, FFadeOut = 1u << 12, FDrift = 1u << 13,
-            FThickness = 1u << 14, FFrame = 1u << 15, FArea = 1u << 16, FPrecip = 1u << 17, FClimate = 1u << 18, FFrameFit = 1u << 19,
+            FThickness = 1u << 14, FFrame = 1u << 15, FArea = 1u << 16, FPrecip = 1u << 17, FClimate = 1u << 18, FFrameFit = 1u << 19, FRagged = 1u << 20,
         };
         float x = 0.0f, z = 0.0f;
         float radiusX = 80.0f, radiusZ = 60.0f;  // semi-eixos em metros
@@ -317,6 +317,7 @@ public:
         float altitude = 230.0f;
         float falloff = 1.2f;                    // suavidade da borda
         float darkness = 0.0f;                   // 0..1, base escurecida
+        float ragged = 0.0f;                     // 0..1, base esfiapada (trapos pendurados, ver cloud_billboard.frag)
         Vec3 tint = Vec3(1.0f);                  // cor (multiplica)
         float fadeIn = 0.7f;                     // s para condensar
         float life = 6.0f;                       // s formada; <= 0: ate' cloud_remove

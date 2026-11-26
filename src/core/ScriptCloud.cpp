@@ -35,6 +35,7 @@ void clampSpec(Engine::ScriptCloudSpec& s) {
     s.altitude = glm::clamp(s.altitude, 0.0f, 2000.0f);
     s.falloff = glm::clamp(s.falloff, 0.3f, 4.0f);
     s.darkness = glm::clamp(s.darkness, 0.0f, 1.0f);
+    s.ragged = glm::clamp(s.ragged, 0.0f, 1.0f);
     s.tint = glm::clamp(s.tint, Vec3(0.0f), Vec3(4.0f));
     s.fadeIn = glm::clamp(s.fadeIn, 0.0f, 60.0f);
     s.fadeOut = glm::clamp(s.fadeOut, 0.05f, 60.0f);
@@ -278,7 +279,7 @@ uint32_t Engine::spawnScriptCloud(const ScriptCloudSpec& in) {
 void Engine::applyScriptCloudLook(IndependentCloudLayer& layer) {
     const float flash = layer.flashPeak * flashEnvelope(layer.flashT, layer.flashDur);
     m_cloudLayerRenderer.setCloudLayerLook(layer.rendererId, layer.spec.tint, layer.spec.darkness, layer.dispersal,
-                                           flash);
+                                           flash, layer.spec.ragged);
 }
 
 bool Engine::setScriptCloud(uint32_t id, const ScriptCloudSpec& in, uint32_t fields) {
@@ -294,6 +295,7 @@ bool Engine::setScriptCloud(uint32_t id, const ScriptCloudSpec& in, uint32_t fie
         if (fields & ScriptCloudSpec::FAltitude) s.altitude = in.altitude;
         if (fields & ScriptCloudSpec::FFalloff) s.falloff = in.falloff;
         if (fields & ScriptCloudSpec::FDarkness) s.darkness = in.darkness;
+        if (fields & ScriptCloudSpec::FRagged) s.ragged = in.ragged;
         if (fields & ScriptCloudSpec::FTint) s.tint = in.tint;
         if (fields & ScriptCloudSpec::FFadeIn) s.fadeIn = in.fadeIn;
         if (fields & ScriptCloudSpec::FLife) s.life = in.life;

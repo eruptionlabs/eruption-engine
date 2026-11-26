@@ -69,7 +69,7 @@ out += struct.pack("<I", 0)
 open(sys.argv[1], "wb").write(out)
 PY
 
-TESTS="api cena comportamento salvar prefab luz personagem robusto faixa terreno_vivo andar_script visao cabeca anel retrato telemetria duracao distancia banda pick texto_ceu cursor desenho passada ui_estado"
+TESTS="api cena comportamento salvar prefab luz personagem robusto faixa terreno_vivo andar_script visao cabeca anel retrato telemetria duracao distancia banda pick texto_ceu cursor desenho passada ui_estado nuvem"
 
 # Confere um log: cada teste com OBJ-OK pelo menos $2 vezes, nenhum OBJ-FALHOU,
 # nenhum script parado por erro.

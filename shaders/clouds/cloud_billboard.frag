@@ -106,6 +106,7 @@ layout(push_constant) uniform PushConstants {
     // espessura); 0 = nuvem do clima, imagem identica a de antes.
     float flash;
     float taps;
+    float ragged;
 } pc;
 
 int positiveMod(int v, int m) {
@@ -223,9 +224,9 @@ float blobDensity(LocalCloud b, vec3 p, vec2 drift, float planeY, int idx) {
         float bn2 = valueNoise3D(q.x * fq * 3.7, q.y * fq * 3.7, 3.3, zs + 5u, 8192.0);
         // Base irregular: onda larga (+-30% da altura) mais uma ondulacao fina
         // que rasga o contorno da barriga da nuvem.
-        float baseY = planeY + ((bn - 0.5) * 0.6 + (bn2 - 0.5) * 0.25) * hext;
+        float baseY = planeY + ((bn - 0.5) * 0.6 + (bn2 - 0.5) * 0.25) * hext * (1.0 + 2.0 * pc.ragged);
         float hy = (p.y - baseY) / (thick * spread);
-        float vy = hy >= 0.0 ? hy : -hy * 2.5;
+        float vy = hy >= 0.0 ? hy : -hy * (2.5 - 1.6 * pc.ragged);
         float w1 = valueNoise3D(q.x * fq, p.y * fq * 1.4, q.y * fq, zs + 17u, 8192.0);
         float w2 = valueNoise3D(q.x * fq * 2.1, p.y * fq * 2.9, q.y * fq * 2.1, zs + 31u, 16384.0);
         float w3 = valueNoise3D(q.x * fq * 4.6, p.y * fq * 5.5, q.y * fq * 4.6, zs + 53u, 32768.0);
@@ -237,7 +238,7 @@ float blobDensity(LocalCloud b, vec3 p, vec2 drift, float planeY, int idx) {
         // virava um disco macio sem borda (visto a 700 m).
         v = 1.0 - smoothstep(0.3, 1.0, d * falloff);
         if (v <= 0.0) return 0.0;
-        baseEro = 0.3 * (1.0 - smoothstep(0.0, 0.45, hy));
+        baseEro = (0.3 + 0.25 * pc.ragged) * (1.0 - smoothstep(0.0, 0.45, hy));
         // O ruido de erosao muda de lugar com a semente e o centro: numa regiao de ruido
         // baixo a nuvem inteira sumia (um spawn com a semente "azarada" nao aparecia,
         // o seguinte sim). O miolo fica fora do alcance do ruido; so' a casca (d alto)

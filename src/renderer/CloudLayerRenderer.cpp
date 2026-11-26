@@ -876,6 +876,9 @@ bool CloudLayerRenderer::createBillboardPipeline() {
         return false;
     }
     if (!createVolumeApplyPipeline()) return false;
+    // Opcional: sem ele o funil compoe com a bilinear simples de antes.
+    if (m_cloudShadowsDepthLayout != VK_NULL_HANDLE && !createTornadoApplyPipeline())
+        Logger::error("CloudLayerRenderer: depth-aware tornado apply unavailable (plain upsample)");
     // Fumaça: mesma família de passe (cubo + ray-march), pipeline própria.
     // Falha aqui não é fatal: o mapa só fica sem fumaça.
     if (!createSmokePipeline()) {
@@ -1984,6 +1987,140 @@ void CloudLayerRenderer::endCloudShadowAccumApply(VkCommandBuffer cmd, VkImageVi
     m_shadowAccumMode = false;
 }
 
+// Composicao do funil sobre o lit com upsample ciente da profundidade (tornado_apply.frag): o alvo do
+// funil e' reduzido e a bilinear simples misturava, nas bordas de profundidade, o texel do fundo com o
+// do primeiro plano (linha escura em volta das copas). Usa os layouts do apply das nuvens mais o da
+// profundidade (o das sombras de nuvem) e 16 bytes de push (near, far, 1/largura baixa, 1/altura baixa).
+bool CloudLayerRenderer::createTornadoApplyPipeline() {
+    auto vert = ShaderCompiler::loadSPIRV("postprocess/fullscreen.vert.spv");
+    auto frag = ShaderCompiler::loadSPIRV("clouds/tornado_apply.frag.spv");
+    if (vert.empty() || frag.empty()) {
+        Logger::error("CloudLayerRenderer: failed to load tornado apply shaders");
+        return false;
+    }
+    VkDescriptorSetLayout setLayouts[2] = {m_volumeApplyLayout, m_cloudShadowsDepthLayout};
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.size = sizeof(float) * 4;
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 2;
+    layoutInfo.pSetLayouts = setLayouts;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
+    if (vkCreatePipelineLayout(m_ctx->device(), &layoutInfo, nullptr, &m_tornadoApplyPipelineLayout) != VK_SUCCESS) {
+        Logger::error("CloudLayerRenderer: failed to create tornado apply pipeline layout");
+        return false;
+    }
+
+    VkShaderModuleCreateInfo vsInfo{};
+    vsInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    vsInfo.codeSize = vert.size() * sizeof(uint32_t);
+    vsInfo.pCode = vert.data();
+    VkShaderModule vsModule = VK_NULL_HANDLE;
+    vkCreateShaderModule(m_ctx->device(), &vsInfo, nullptr, &vsModule);
+
+    VkShaderModuleCreateInfo fsInfo{};
+    fsInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    fsInfo.codeSize = frag.size() * sizeof(uint32_t);
+    fsInfo.pCode = frag.data();
+    VkShaderModule fsModule = VK_NULL_HANDLE;
+    vkCreateShaderModule(m_ctx->device(), &fsInfo, nullptr, &fsModule);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vsModule;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fsModule;
+    stages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewport{};
+    viewport.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport.viewportCount = 1;
+    viewport.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_FALSE;
+    ds.depthWriteEnable = VK_FALSE;
+
+    // Premultiplied "over": the accum target already stores premultiplied rgb.
+    VkPipelineColorBlendAttachmentState blend{};
+    blend.blendEnable = VK_TRUE;
+    blend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.colorBlendOp = VK_BLEND_OP_ADD;
+    blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.alphaBlendOp = VK_BLEND_OP_ADD;
+    blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo cb{};
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &blend;
+
+    VkPipelineRenderingCreateInfo ri{};
+    ri.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    VkFormat colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachmentFormats = &colorFormat;
+
+    VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{};
+    dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn.dynamicStateCount = 2;
+    dyn.pDynamicStates = dynStates;
+
+    VkGraphicsPipelineCreateInfo pipeInfo{};
+    pipeInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeInfo.pNext = &ri;
+    pipeInfo.stageCount = 2;
+    pipeInfo.pStages = stages;
+    pipeInfo.pVertexInputState = &vi;
+    pipeInfo.pInputAssemblyState = &ia;
+    pipeInfo.pViewportState = &viewport;
+    pipeInfo.pRasterizationState = &rs;
+    pipeInfo.pMultisampleState = &ms;
+    pipeInfo.pDepthStencilState = &ds;
+    pipeInfo.pColorBlendState = &cb;
+    pipeInfo.pDynamicState = &dyn;
+    pipeInfo.layout = m_tornadoApplyPipelineLayout;
+
+    VkResult result = vkc::createGraphicsPipelines(m_ctx->device(), m_ctx->pipelineCache(), 1, &pipeInfo, nullptr, &m_tornadoApplyPipeline);
+
+    vkDestroyShaderModule(m_ctx->device(), vsModule, nullptr);
+    vkDestroyShaderModule(m_ctx->device(), fsModule, nullptr);
+
+    if (result != VK_SUCCESS) {
+        Logger::error("CloudLayerRenderer: failed to create tornado apply pipeline");
+        return false;
+    }
+
+    return true;
+}
+
 bool CloudLayerRenderer::createVolumeApplyPipeline() {
     auto vert = ShaderCompiler::loadSPIRV("postprocess/fullscreen.vert.spv");
     auto frag = ShaderCompiler::loadSPIRV("clouds/cloud_volume_apply.frag.spv");
@@ -2153,6 +2290,14 @@ bool CloudLayerRenderer::createVolumeApplyPipeline() {
 }
 
 void CloudLayerRenderer::destroyVolumeApplyPipeline() {
+    if (m_tornadoApplyPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_ctx->device(), m_tornadoApplyPipeline, nullptr);
+        m_tornadoApplyPipeline = VK_NULL_HANDLE;
+    }
+    if (m_tornadoApplyPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(m_ctx->device(), m_tornadoApplyPipelineLayout, nullptr);
+        m_tornadoApplyPipelineLayout = VK_NULL_HANDLE;
+    }
     if (m_volumeApplyPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_volumeApplyPipeline, nullptr);
         m_volumeApplyPipeline = VK_NULL_HANDLE;
@@ -2295,8 +2440,18 @@ bool CloudLayerRenderer::beginTornadoAccum(VkCommandBuffer cmd, uint32_t width, 
     return false;
 }
 
-void CloudLayerRenderer::endTornadoAccumApply(VkCommandBuffer cmd, VkImageView litView, uint32_t width, uint32_t height) {
+void CloudLayerRenderer::endTornadoAccumApply(VkCommandBuffer cmd, VkImageView litView, uint32_t width, uint32_t height,
+                                              VkImageView depthView, float nearZ, float farZ) {
+    // Upsample ciente da profundidade quando o pipeline existe; o descritor de profundidade e' o das sombras.
+    m_tornadoApplyDepth = false;
+    if (m_tornadoApplyPipeline != VK_NULL_HANDLE && depthView != VK_NULL_HANDLE && m_cloudShadowsDepthSet != VK_NULL_HANDLE) {
+        updateCloudShadowsDepthDescriptor(depthView);
+        m_tornadoApplyDepth = true;
+        m_tornadoApplyNear = nearZ;
+        m_tornadoApplyFar = farZ;
+    }
     endCloudVolumeAccumApply(cmd, litView, width, height, true);
+    m_tornadoApplyDepth = false;
     swapAccumSlots();
 }
 
@@ -2327,10 +2482,24 @@ void CloudLayerRenderer::endCloudVolumeAccumApply(VkCommandBuffer cmd, VkImageVi
     litInfo.pColorAttachments = &litAttach;
 
     vkc::cmdBeginRendering(cmd, &litInfo);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeApplyPipeline);
     VkViewport vp{0, 0, (float)width, (float)height, 0, 1};
-    vkCmdSetViewport(cmd, 0, 1, &vp);
     VkRect2D scissor{{0, 0}, {width, height}};
+    if (m_tornadoApplyDepth) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tornadoApplyPipeline);
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        VkDescriptorSet sets[2] = {m_volumeApplySet, m_cloudShadowsDepthSet};
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tornadoApplyPipelineLayout, 0, 2, sets, 0, nullptr);
+        const float push[4] = {m_tornadoApplyNear, m_tornadoApplyFar, 1.0f / static_cast<float>(m_volumeAccumWidth),
+                               1.0f / static_cast<float>(m_volumeAccumHeight)};
+        vkCmdPushConstants(cmd, m_tornadoApplyPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkc::cmdEndRendering(cmd);
+        m_volumeAccumMode = false;
+        return;
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeApplyPipeline);
+    vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeApplyPipelineLayout,
                           0, 1, &m_volumeApplySet, 0, nullptr);
@@ -3333,7 +3502,7 @@ void CloudLayerRenderer::setCloudLayerWeather(uint32_t id, float rainIntensity, 
     slot.stormOverride = stormTint;
 }
 
-void CloudLayerRenderer::setCloudLayerLook(uint32_t id, const Vec3& tint, float darkness, float dispersal, float flash) {
+void CloudLayerRenderer::setCloudLayerLook(uint32_t id, const Vec3& tint, float darkness, float dispersal, float flash, float ragged) {
     if (id >= m_cloudLayers.size()) return;
     CloudLayerSlot& slot = m_cloudLayers[id];
     if (!slot.inUse) return;
@@ -3342,6 +3511,7 @@ void CloudLayerRenderer::setCloudLayerLook(uint32_t id, const Vec3& tint, float 
     slot.lookDarkness = glm::clamp(darkness, 0.0f, 1.0f);
     slot.lookDispersal = glm::clamp(dispersal, 0.0f, 1.0f);
     slot.lookFlash = glm::clamp(flash, 0.0f, 8.0f);
+    slot.lookRagged = glm::clamp(ragged, 0.0f, 1.0f);
 }
 
 void CloudLayerRenderer::updateCloudLayerUBO(uint32_t id) {
@@ -3766,6 +3936,9 @@ void CloudLayerRenderer::drawBillboard(VkCommandBuffer cmd, uint32_t id, float p
     // enough to contain every puff in the layer, with a floor so tiny blobs
     // still have room for the noise to breathe.
     const float bodyH = std::max(slot.isScript ? puffTopScript : puffTop, 12.0f);
+    // Base esfiapada (ragged): a ondulacao e os trapos descem abaixo do plano; sem folga a caixa os
+    // cortaria reto. Com ragged = 0 a caixa e' a de antes (a base plana das nuvens ja' aprovadas).
+    if (slot.isScript) baseDip = bodyH * (0.35f + 0.75f * slot.lookRagged) * slot.lookRagged;
     const float yBot = planeY - baseDip;
     const float yTop = planeY + bodyH;
 
@@ -3901,6 +4074,7 @@ void CloudLayerRenderer::drawBillboard(VkCommandBuffer cmd, uint32_t id, float p
         float dispersal;
         float flash;      // relampago por dentro (0 = apagado)
         float taps;       // amostras da luz do sol (0 = nuvem do clima)
+        float ragged;     // base esfiapada (0 = igual a antes); 96 bytes
     } pc;
     // boxMin.w leva a altura do plano da nuvem: a base ondulada de uma nuvem de
     // script pode descer abaixo dele, entao o shader nao a tira mais de boxMin.y
@@ -3925,6 +4099,7 @@ void CloudLayerRenderer::drawBillboard(VkCommandBuffer cmd, uint32_t id, float p
     pc.tintR = slot.lookTint.x; pc.tintG = slot.lookTint.y; pc.tintB = slot.lookTint.z;
     pc.dispersal = slot.lookDispersal;
     pc.flash = slot.lookFlash;
+    pc.ragged = slot.lookRagged;
     // Nuvem de script: amostras da luz do sol proporcionais ao teto de passos do
     // preset (24 -> 4, 12 -> 2, sem teto -> 6), de 2 a 6; 0 = nuvem do clima. E' o
     // que liga a forma e o sombreamento de relevo da nuvem de script no shader.

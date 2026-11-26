@@ -142,7 +142,8 @@ public:
     // cobertura): tint multiplica a cor, darkness (0..1) escurece a base e
     // dispersal (0..1) abre, esgarca e afina o volume (0 = formada). O padrao
     // (1,1,1 / 0 / 0) deixa o desenho identico ao das nuvens do clima.
-    void setCloudLayerLook(uint32_t id, const Vec3& tint, float darkness, float dispersal, float flash = 0.0f);
+    void setCloudLayerLook(uint32_t id, const Vec3& tint, float darkness, float dispersal, float flash = 0.0f,
+                           float ragged = 0.0f);
 
     // Render one independent layer as its own plane at planeY, and its ground
     // shadow. tintAltitude >= 0 enables the debug test tint (blue=low, red=high).
@@ -233,7 +234,9 @@ public:
     // O funil usa um alvo proprio (escala propria): o alvo das nuvens e' de 1/6 e redimensionar
     // um alvo no meio do quadro invalidaria o que ja' foi gravado. Mesmo uso do par acima.
     bool beginTornadoAccum(VkCommandBuffer cmd, uint32_t width, uint32_t height);
-    void endTornadoAccumApply(VkCommandBuffer cmd, VkImageView litView, uint32_t width, uint32_t height);
+    // Com depthView (profundidade da cena) o upsample respeita as bordas de profundidade; near/far da camera.
+    void endTornadoAccumApply(VkCommandBuffer cmd, VkImageView litView, uint32_t width, uint32_t height,
+                              VkImageView depthView = VK_NULL_HANDLE, float nearZ = 0.1f, float farZ = 1000.0f);
 
     // Water reflection (WaterReflectionPass): the same volumetric puffs seen
     // by the camera mirrored in the water plane. The water pass runs before
@@ -308,6 +311,7 @@ private:
         bool isScript = false;       // setCloudLayerLook foi chamado: nuvem de habilidade
         float lookDarkness = 0.0f;   // nuvem de script: base escurecida
         float lookDispersal = 0.0f;  // nuvem de script: 0 formada .. 1 dispersa
+        float lookRagged = 0.0f;     // nuvem de script: base esfiapada (0..1)
         float lookFlash = 0.0f;      // nuvem de script: relampago por dentro (0 apagado)
         bool inUse = false;
     };
@@ -402,6 +406,10 @@ private:
     bool m_volumeAccumMode = false;
     VkPipeline m_billboardAccumPipeline = VK_NULL_HANDLE;
     VkPipeline m_volumeApplyPipeline = VK_NULL_HANDLE;
+    VkPipeline m_tornadoApplyPipeline = VK_NULL_HANDLE;           // apply do funil ciente da profundidade
+    VkPipelineLayout m_tornadoApplyPipelineLayout = VK_NULL_HANDLE;
+    bool m_tornadoApplyDepth = false;
+    float m_tornadoApplyNear = 0.1f, m_tornadoApplyFar = 1000.0f;
     VkPipelineLayout m_volumeApplyPipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_volumeApplyLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_volumeApplyPool = VK_NULL_HANDLE;
@@ -545,6 +553,7 @@ private:
     bool createVolumeAccumTarget(uint32_t width, uint32_t height);
     void destroyVolumeAccumTarget();
     bool createVolumeApplyPipeline();
+    bool createTornadoApplyPipeline();
     void destroyVolumeApplyPipeline();
     bool createDescriptors();
     void destroyDescriptors();

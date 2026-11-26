@@ -2292,7 +2292,8 @@ void Engine::render() {
                 }
                 if (tornAccum) {
                     m_cloudLayerRenderer.endTornadoAccumApply(cmd, m_deferredLighting.litImageView(),
-                                                              renderExtent().width, renderExtent().height);
+                                                              renderExtent().width, renderExtent().height,
+                                                              m_gbuffer.depthView(), m_camera.nearPlane(), m_camera.farPlane());
                 } else {
                     vkc::cmdEndRendering(cmd);
                 }

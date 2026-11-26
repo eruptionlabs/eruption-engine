@@ -142,7 +142,11 @@ vec3 applyFogVolumes(vec3 color, vec3 camPos, vec3 endPos, float exposure) {
         }
         float len = tb - ta;
         if (len <= 0.0) continue;
-        vec3 m = camPos + dir * (0.5 * (ta + tb));
+        float dens = 0.0;
+        // Media de 4 amostras no trecho (antes 1 no ponto medio): o ponto medio muda com a linha da tela e as
+        // bandas viravam listras horizontais em objetos dentro da nevoa (troncos, copas).
+        for (int k = 0; k < 4; ++k) {
+        vec3 m = camPos + dir * mix(ta, tb, (float(k) + 0.5) * 0.25);
         // Bordas e densidade variam no espaco e no tempo: bandas em espiral que giram (rajadas
         // mais densas passando) e uma borda ondulada, para a nevoa nao ser um disco chapado.
         vec2 rel = m.xz - s.xz;
@@ -158,7 +162,7 @@ vec3 applyFogVolumes(vec3 color, vec3 camPos, vec3 endPos, float exposure) {
         vec2 z10 = vec2(z5.x * z5.x - z5.y * z5.y, 2.0 * z5.x * z5.y);
         vec2 z11 = vec2(z10.x * z1.x - z10.y * z1.y, z10.x * z1.y + z10.y * z1.x);
         float p3 = -rr / (0.22 * R) + t * 0.9 + float(i) * 1.7;
-        float p7 = rr / (0.11 * R) - t * 1.7;
+        float p7 = rr / (0.3 * R) - t * 1.7;
         float p5 = t * 0.35, p11 = -t * 0.6;
         float s3 = z3.y * cos(p3) + z3.x * sin(p3);
         float s7 = z7.y * cos(p7) + z7.x * sin(p7);
@@ -174,7 +178,9 @@ vec3 applyFogVolumes(vec3 color, vec3 camPos, vec3 endPos, float exposure) {
         float Re = R * (1.0 + 0.07 * s5 + 0.04 * s11);
         float wr = 1.0 - smoothstep(0.15 * Re, Re, rr);
         float wh = 1.0 - smoothstep(0.2 * (y1 - y0), y1 - y0, m.y - y0 + 0.15 * (y1 - y0) * (band2 - 0.5));
-        float tau = c.w * wr * wh * mod1 * len;
+        dens += wr * wh * mod1;
+        }
+        float tau = c.w * 0.25 * dens * len;
         color = mix(color, c.rgb * exposure, 1.0 - exp(-tau));
     }
     return color;
