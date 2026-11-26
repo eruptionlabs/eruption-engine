@@ -1362,7 +1362,10 @@ std::shared_ptr<ModelFile> prepareModelFile(const std::string& glbPath, bool par
             s_preloadBakes[glbPath] = std::move(bake);
         }
     }
-    constexpr int kEmbeddedMaxSize = 1024; // o mesmo teto do resolveModelTexture
+    // Teto do preset (texture_max_size) tambem aqui: com 1024 fixo, o caminho RGBA8
+    // (GPU sem BC) guardava 16x mais pixels que o pedido em mobile_low (256).
+    // Nunca passa de 1024, o mesmo teto do resolveModelTexture.
+    const int kEmbeddedMaxSize = std::min(1024, static_cast<int>(std::max<uint32_t>(embeddedTextureMaxSize(), 128)));
     // Quem decodificar decide-se aqui, no fio que chamou (`wanted` pode olhar
     // o cache de texturas, que so' o fio principal le).
     std::vector<uint32_t> todo;
@@ -1371,7 +1374,7 @@ std::shared_ptr<ModelFile> prepareModelFile(const std::string& glbPath, bool par
         if (!et.isDecoded() && et.hasEncodedData() && !baked.count(et.name) && wanted(et.name)) todo.push_back(i);
     }
     const bool synthesizePbr = !parallel; // so' no job do preload, fora do quadro
-    auto decode = [&model, &todo, synthesizePbr](uint32_t k) {
+    auto decode = [&model, &todo, synthesizePbr, kEmbeddedMaxSize](uint32_t k) {
         EmbeddedTexture& et = model->embeddedTextures[todo[k]];
         ImageData img = ImageUtils::loadFromMemoryRaw(et.encodedData.data(), et.encodedData.size());
         if (!img.isValid()) return; // o envio tenta de novo e avisa

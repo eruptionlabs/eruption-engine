@@ -515,7 +515,10 @@ uint32_t Engine::resolveModelTexture(const std::string& path) {
                 size_t pixelSize = 0;
                 int decodedWidth = et.width;
                 int decodedHeight = et.height;
-                constexpr int EMBEDDED_TEXTURE_MAX_SIZE = 1024;
+                // Teto do preset (texture_max_size) tambem no caminho RGBA8 (GPU sem
+                // BC, ex.: celular com modo "bc"): com 1024 fixo, mobile_low (256)
+                // guardava 16x mais pixels que o pedido. Nunca passa de 1024.
+                const int EMBEDDED_TEXTURE_MAX_SIZE = std::min(1024, m_textureMaxSize);
                 if (!et.isDecoded() && et.hasEncodedData()) {
                     ImageData img = ImageUtils::loadFromMemoryRaw(et.encodedData.data(), et.encodedData.size());
                     if (!img.isValid()) {
