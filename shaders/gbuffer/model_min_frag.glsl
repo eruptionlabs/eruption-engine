@@ -12,11 +12,12 @@
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in vec3 inNormal;
-layout(location = 3) in flat uint inTexIndex;
+layout(location = 3) in flat uint inTexIndexPk; // bits 0..15 = indice da textura, 16..31 = estado do chao (vegetacao)
+#define inTexIndex (inTexIndexPk & 0xFFFFu)
+#define inGroundVeg (inTexIndexPk >> 16u)
 layout(location = 5) in vec4 inColor;
 layout(location = 14) in float inEmissiveStrength;
 layout(location = 18) in flat float inSway;
-layout(location = 22) in flat uint inGroundVeg;
 
 layout(location = 0) out vec4 outAlbedo;
 layout(location = 1) out vec4 outNormal;

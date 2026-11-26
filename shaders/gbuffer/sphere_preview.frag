@@ -14,7 +14,7 @@
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in vec3 inNormal;
-layout(location = 3) in flat uint inTexIndex;
+layout(location = 3) in flat uint inTexIndex; // bits 16..31: estado do chao (model.vert), mascarado
 layout(location = 4) in flat uint inMatId;
 layout(location = 5) in vec4 inColor;
 layout(location = 6) in flat uint inPbrIndex;
@@ -98,8 +98,8 @@ void main() {
         N = normalize(tbnFromDerivatives(N, inWorldPos, inTexCoord) * normalize(tn));
     }
     vec3 albedo = vec3(0.8);
-    if (inTexIndex != 0u) {
-        albedo = slotTexture(inTexIndex, inTexCoord).rgb;
+    if ((inTexIndex & 0xFFFFu) != 0u) {
+        albedo = slotTexture((inTexIndex & 0xFFFFu), inTexCoord).rgb;
     }
     vec3 L = normalize(-kLightDir);
     vec3 lightColor = kLightColor;

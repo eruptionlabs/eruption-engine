@@ -61,11 +61,9 @@ layout(location = 18) out flat float outSway;
 // fonte da altura (1 MRAH-W, 2 albedo); w = altura CRUA h (0..1), antes de
 // virar deslocamento - o modo de auditoria 5 mostra isto em cinza.
 layout(location = 19) out vec4 outDispInfo;
-// ESTADO DO CHAO SOBRE A VEGETACAO (neve, geada, molhado, queimado; ver
-// core/GroundVegetation.hpp), so' o que o fragment precisa, em 16 bits: byte 0 =
-// densidade da copa em centesimos com sinal (baixa o limiar do alfa-teste; negativo =
-// rarefeita), byte 1 = clareamento em centesimos. 0 = vegetacao como sempre.
-layout(location = 22) out flat uint outGroundVeg;
+// ESTADO DO CHAO SOBRE A VEGETACAO (neve, geada, molhado, queimado; ver core/GroundVegetation.hpp): vai
+// nos 16 bits ALTOS de outTexIndex (location 3), que o fragment mascara. Um varying a mais (location 22)
+// custava ~7 ms por quadro no PowerVR GE8320 (mobile_legacy, 114 -> 107 ms sem ele).
 // Posicao no mundo do MESMO vertice no frame anterior (vento anterior + o
 // mesmo deslocamento): vira a velocidade de objeto no model.frag.
 #ifndef ERUPTION_NO_VELOCITY
@@ -669,7 +667,6 @@ void main() {
     const vec3 curSway = worldPos.xyz;
 #endif
     outSway = u_inst[gl_InstanceIndex].uvScaleDisp.w;
-    outGroundVeg = (gvPk >> 8u) & 0xFFFFu;
     outDispInfo = vec4(0.0);
 
     vec2 animUv = applyUvAnimation(inTexCoord);
@@ -787,7 +784,7 @@ void main() {
 
     outNormal = worldNormal;
     
-    outTexIndex = inTexIndex;
+    outTexIndex = inTexIndex | (((gvPk >> 8u) & 0xFFFFu) << 16u); // 16 bits: densidade (byte 0) e clareamento (byte 1)
     // matId usa 16 bits (bit 15 = costura); os 16 de cima levam o slot da
     // textura emissiva ate' o fragment sem gastar mais uma varying.
     outMatId = inMatId | (inEmissiveIndex << 16u);

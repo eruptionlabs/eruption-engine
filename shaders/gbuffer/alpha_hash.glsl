@@ -6,7 +6,7 @@
 // `dense` = densidade da copa por estado do chao (neve enche a folhagem): reduz o
 // limiar proporcionalmente (0 = igual a antes; negativo = copa rarefeita, limiar maior).
 // Pre-passe e G-buffer passam o MESMO valor (vem do mesmo varying flat).
-// Estado do chao sobre a copa (varying inGroundVeg, 16 bits do model.vert): densidade (byte 0, com
+// Estado do chao sobre a copa (inGroundVeg = 16 bits altos do varying inTexIndexPk, do model.vert): densidade (byte 0, com
 // sinal, centesimos) e clareamento (byte 1).
 float groundDense(uint g) { return float(int(g << 24u) >> 24) * 0.01; }
 float groundLift(uint g) { return float((g >> 8u) & 0xFFu) * 0.01; }

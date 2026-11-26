@@ -12,7 +12,9 @@ layout(early_fragment_tests) in;
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in vec3 inNormal;
-layout(location = 3) in flat uint inTexIndex;
+layout(location = 3) in flat uint inTexIndexPk; // bits 0..15 = indice da textura, 16..31 = estado do chao (vegetacao)
+#define inTexIndex (inTexIndexPk & 0xFFFFu)
+#define inGroundVeg (inTexIndexPk >> 16u)
 layout(location = 4) in flat uint inMatId;
 layout(location = 5) in vec4 inColor;
 layout(location = 6) in flat uint inPbrIndex;
@@ -36,7 +38,6 @@ layout(location = 15) in flat uvec2 inSplatTex;
 layout(location = 16) in flat uvec2 inSplatTex2;
 layout(location = 17) in flat uint inBlendMaskIndex2;
 layout(location = 18) in flat float inSway;
-layout(location = 22) in flat uint inGroundVeg; // x = densidade da copa, y = clareamento (estado do chao)
 layout(location = 19) in vec4 inDispInfo; // x=alinhamento, y=modulo, z=origem, w=altura crua (0..1) // ver auditoria abaixo // G32: > 0 = vegetacao (flag de folhagem)
 
 layout(location = 0) out vec4 outAlbedo;

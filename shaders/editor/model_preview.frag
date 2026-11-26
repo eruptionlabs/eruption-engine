@@ -10,7 +10,7 @@
 layout(location = 0) in vec3 inWorldPos;
 layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in vec3 inNormal;
-layout(location = 3) in flat uint inTexIndex;
+layout(location = 3) in flat uint inTexIndex; // bits 16..31: estado do chao (model.vert), mascarado
 layout(location = 4) in flat uint inMatId;
 layout(location = 5) in vec4 inColor;
 layout(location = 6) in flat uint inPbrIndex;
@@ -71,7 +71,7 @@ mat3 tbnFromDerivatives(vec3 N, vec3 p, vec2 uv) {
 void main() {
     const int mode = int(push.lightMode.w + 0.5);
     vec4 tex = vec4(0.8, 0.8, 0.8, 1.0);
-    if (inTexIndex != 0u) tex = slotTexture(inTexIndex, inTexCoord);
+    if ((inTexIndex & 0xFFFFu) != 0u) tex = slotTexture((inTexIndex & 0xFFFFu), inTexCoord);
     if (mode == 4) { // aramado: cor sólida
         outColor = vec4(push.wireCut.rgb, 1.0);
         return;

@@ -38,7 +38,6 @@ layout(location = 15) in flat uvec2 inSplatTex[];
 layout(location = 16) in flat uvec2 inSplatTex2[];
 layout(location = 17) in flat uint inBlendMaskIndex2[];
 layout(location = 18) in flat float inSway[];
-layout(location = 22) in flat uint inGroundVeg[];
 // location 19: o TCS nao repassa mais (varying morto, tipo divergente - G1).
 
 layout(location = 0) out vec3 outWorldPos;
@@ -60,7 +59,6 @@ layout(location = 15) out flat uvec2 outSplatTex;
 layout(location = 16) out flat uvec2 outSplatTex2;
 layout(location = 17) out flat uint outBlendMaskIndex2;
 layout(location = 18) out flat float outSway;
-layout(location = 22) out flat uint outGroundVeg;
 layout(location = 19) out vec4 outDispInfo;
 #ifndef ERUPTION_NO_VELOCITY
 layout(location = 20) in vec3 inPrevWorldPos[];
@@ -620,7 +618,6 @@ void main() {
     outBlendMaskUV = BARY(inBlendMaskUV);
     outEmissiveStrength = BARY(inEmissiveStrength);
     outSway = BARY(inSway);
-    outGroundVeg = inGroundVeg[0];
     outDispInfo = vec4(1.0, 0.0, 0.0, 0.0);
     // Depuracao do mapa de calor (ERUPTION_TEST_TESS_HEATMAP, lido em Render.cpp):
     // u_framePad0 = modo 1 amp, 2 pom, 3 altura, 4 nivel (5 e 6: so' o frag). O valor 0..1 sai em
@@ -678,13 +675,13 @@ void main() {
             if (inPbrIndex[0] != 0u) {
                 // Base com MRAH-W: no chao com splat as camadas entram na
                 // mistura (cada uma pelo proprio MRAH-W quando tiver).
-                h = heightSplatMix(uv, outBlendMaskUV, inTexIndex[0], inPbrIndex[0], inSplatTex[0], inSplatTex2[0],
+                h = heightSplatMix(uv, outBlendMaskUV, (inTexIndex[0] & 0xFFFFu), inPbrIndex[0], inSplatTex[0], inSplatTex2[0],
                                    inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
                 hSrc = 1.0;
-            } else if (inTexIndex[0] != 0u) {
+            } else if ((inTexIndex[0] & 0xFFFFu) != 0u) {
                 // CHAO COM SPLAT: la' embaixo pode ter ate' 8 camadas por cima
                 // da base - ver heightSplatUv acima.
-                h = heightSplatUv(uv, outBlendMaskUV, inTexIndex[0], inSplatTex[0], inSplatTex2[0],
+                h = heightSplatUv(uv, outBlendMaskUV, (inTexIndex[0] & 0xFFFFu), inSplatTex[0], inSplatTex2[0],
                                     inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
                 hSrc = 2.0;
             }
@@ -797,7 +794,7 @@ void main() {
                 wp += dsp;
                 if (u_framePad0 > 6.5) {
                     // 7 = mip da altura (/10), 8 = pixels entre vertices da grade real (/8)
-                    if (u_framePad0 < 7.5) dbgVal = clamp(heightNearMip(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0], hSrc < 1.5) / 10.0, 0.0, 1.0);
+                    if (u_framePad0 < 7.5) dbgVal = clamp(heightNearMip(hSrc > 1.5 ? (inTexIndex[0] & 0xFFFFu) : inPbrIndex[0], hSrc < 1.5) / 10.0, 0.0, 1.0);
                     else dbgVal = clamp(tessGridSpacing() * 0.5 * u_screenResolution.y * abs(u_projection[1][1]) / max(distance(wp, u_cameraPos), 1e-3) / 8.0, 0.0, 1.0);
                 }
                 if (u_framePad0 > 0.5 && u_framePad0 < 3.5) {
@@ -835,7 +832,7 @@ void main() {
                     // A normal le' a altura no mip do espacamento de SOMBREAR, nao no da
                     // malha: o deslocamento usa o grosso (Nyquist da grade real).
                     g_dispSpacing = shadeSpacing;
-                    uint hTex = hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0];
+                    uint hTex = hSrc > 1.5 ? (inTexIndex[0] & 0xFFFFu) : inPbrIndex[0];
                     bool hAlpha = hSrc < 1.5;
                     vec3 e1 = inWorldPos[1] - inWorldPos[0], e2 = inWorldPos[2] - inWorldPos[0];
                     vec2 t1 = inTexCoord[1] - inTexCoord[0], t2 = inTexCoord[2] - inTexCoord[0];
@@ -860,18 +857,18 @@ void main() {
                         // das camadas (a mascara muda devagar, fica no ponto).
                         float h0, hU, hV;
                         if (hAlpha) {
-                            h0 = heightSplatMix(uv, outBlendMaskUV, inTexIndex[0], hTex, inSplatTex[0], inSplatTex2[0],
+                            h0 = heightSplatMix(uv, outBlendMaskUV, (inTexIndex[0] & 0xFFFFu), hTex, inSplatTex[0], inSplatTex2[0],
                                                 inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
-                            hU = heightSplatMix(uv + vec2(dUv, 0.0), outBlendMaskUV, inTexIndex[0], hTex, inSplatTex[0],
+                            hU = heightSplatMix(uv + vec2(dUv, 0.0), outBlendMaskUV, (inTexIndex[0] & 0xFFFFu), hTex, inSplatTex[0],
                                                 inSplatTex2[0], inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
-                            hV = heightSplatMix(uv + vec2(0.0, dUv), outBlendMaskUV, inTexIndex[0], hTex, inSplatTex[0],
+                            hV = heightSplatMix(uv + vec2(0.0, dUv), outBlendMaskUV, (inTexIndex[0] & 0xFFFFu), hTex, inSplatTex[0],
                                                 inSplatTex2[0], inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
                         } else {
-                            h0 = heightSplatUv(uv, outBlendMaskUV, inTexIndex[0], inSplatTex[0], inSplatTex2[0],
+                            h0 = heightSplatUv(uv, outBlendMaskUV, (inTexIndex[0] & 0xFFFFu), inSplatTex[0], inSplatTex2[0],
                                                inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
-                            hU = heightSplatUv(uv + vec2(dUv, 0.0), outBlendMaskUV, inTexIndex[0], inSplatTex[0],
+                            hU = heightSplatUv(uv + vec2(dUv, 0.0), outBlendMaskUV, (inTexIndex[0] & 0xFFFFu), inSplatTex[0],
                                                inSplatTex2[0], inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
-                            hV = heightSplatUv(uv + vec2(0.0, dUv), outBlendMaskUV, inTexIndex[0], inSplatTex[0],
+                            hV = heightSplatUv(uv + vec2(0.0, dUv), outBlendMaskUV, (inTexIndex[0] & 0xFFFFu), inSplatTex[0],
                                                inSplatTex2[0], inBlendMaskIndex[0], inBlendMaskIndex2[0], gainH);
                         }
                         // Mesma escala do deslocamento (ampW, com mascara de
@@ -909,9 +906,9 @@ void main() {
                     vec2 duv = (inTexCoord[1] - inTexCoord[0]);
                     vec3 dwp = (inWorldPos[1] - inWorldPos[0]);
                     float sc = length(duv) / max(length(dwp), 1e-4);
-                    hA = heightUv(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0],
+                    hA = heightUv(hSrc > 1.5 ? (inTexIndex[0] & 0xFFFFu) : inPbrIndex[0],
                                   uv + vec2(eps * sc, 0.0), gainH, hSrc < 1.5);
-                    hB = heightUv(hSrc > 1.5 ? inTexIndex[0] : inPbrIndex[0],
+                    hB = heightUv(hSrc > 1.5 ? (inTexIndex[0] & 0xFFFFu) : inPbrIndex[0],
                                   uv + vec2(0.0, eps * sc), gainH, hSrc < 1.5);
                     vec3 pA = tA * eps + nrm * ((hA - 0.5) * ampW);
                     vec3 pB = tB * eps + nrm * ((hB - 0.5) * ampW);
