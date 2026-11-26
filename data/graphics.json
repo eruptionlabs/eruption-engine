@@ -338,6 +338,7 @@
       "smoke_lite": true,
       "smoke_scale": 0.5,
       "model_shader_min": true,
+      "model_frag_min_module": true,
       "ground_shader_min": true,
       "shadow_update_interval": 1,
       "target_fps": 30,

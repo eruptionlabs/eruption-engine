@@ -687,7 +687,7 @@ void ModelRenderer::shutdown() {
         vkDestroyPipeline(m_ctx->device(), m_tessPipeline, nullptr);
         m_tessPipeline = VK_NULL_HANDLE;
     }
-    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineGroundLast, &m_tessPipelineGroundLast,
+    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineMin, &m_pipelineGroundLast, &m_tessPipelineGroundLast,
                           &m_tessPipelineGeo, &m_tessPipelineGeoGroundLast}) {
         if (*p != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
@@ -1039,6 +1039,45 @@ void ModelRenderer::createPipeline() {
                 .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
                 .build(m_ctx->device());
             if (earlyModule != VK_NULL_HANDLE) vkDestroyShaderModule(m_ctx->device(), earlyModule, nullptr);
+        }
+    }
+
+    // MODULO MINIMO (preset "model_frag_min_module", ver VulkanContext): o G-buffer da malha que nao e'
+    // chao com splat com model_min.frag (so' o caminho MODEL_MIN, sem spec constantes) e o vertex de
+    // sempre. O pipeline e' o mesmo; so' muda o modulo de fragmento. Pixel-igual ao caminho MODEL_MIN
+    // do model_frag.glsl. Precisa do SPIR-V; sem ele fica NULL (caminho de sempre).
+    // PowerVR GE8320 (Moto G22), mobile_legacy a 1/2: G-buffer 145 -> 107 ms.
+    if (!GBuffer::velocityEnabled() && !wireframeMode() && m_ctx->modelFragMinModule()) {
+        auto fMin = ShaderCompiler::loadSPIRV("shaders/gbuffer/model_min.frag.spv");
+        if (fMin.empty()) {
+            ERUPTION_LOG_WARN("ModelRenderer: sem SPIR-V do modulo minimo, usando o shader completo");
+        } else {
+            VkShaderModuleCreateInfo msi{};
+            msi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            msi.codeSize = fMin.size() * sizeof(uint32_t);
+            msi.pCode = fMin.data();
+            VkShaderModule fMod = VK_NULL_HANDLE;
+            vkCreateShaderModule(m_ctx->device(), &msi, nullptr, &fMod);
+            std::vector<VkPipelineShaderStageCreateInfo> st = stages;
+            st[1].module = fMod;
+            st[1].pSpecializationInfo = nullptr; // o modulo minimo nao tem spec constantes
+            m_pipelineMin = PipelineBuilder()
+                .setShaderStages(st)
+                .setVertexInput(vertexInput)
+                .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+                .setViewport(0, 0, 1280, 720)
+                .setScissor(0, 0, 1280, 720)
+                .setPolygonMode(VK_POLYGON_MODE_FILL)
+                .setCullMode(gbufferCullMode(), VK_FRONT_FACE_COUNTER_CLOCKWISE)
+                .setDepthState(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+                .setBlendState(blends)
+                .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
+                .setLayout(m_pipelineLayout)
+                .setColorAttachmentFormats(GBuffer::colorAttachmentFormats())
+                .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
+                .build(m_ctx->device());
+            if (fMod != VK_NULL_HANDLE) vkDestroyShaderModule(m_ctx->device(), fMod, nullptr);
+            ERUPTION_LOG_WARN("[MODEL_MIN] modulo minimo dos modelos ligado");
         }
     }
 
@@ -3487,6 +3526,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
                 for (const auto& v : vertices)
                     if (v.splatTex01 != 0u || v.splatTex23 != 0u) { splat = true; break; }
                 mesh.depthPrepass = !allOpaque && !mesh.isGround && !splat && m_bindless != nullptr;
+                mesh.minModel = !mesh.isGround && !splat;
                 if (std::getenv("ERUPTION_TEST_SHADOW_OPAQUE_CENSUS")) {
                     static int nTot = 0, nOpaque = 0;
                     ++nTot;
@@ -4401,7 +4441,7 @@ void ModelRenderer::recreatePipeline() {
         vkDestroyPipeline(m_ctx->device(), m_tessPipeline, nullptr);
         m_tessPipeline = VK_NULL_HANDLE;
     }
-    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineGroundLast, &m_tessPipelineGroundLast,
+    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineMin, &m_pipelineGroundLast, &m_tessPipelineGroundLast,
                           &m_tessPipelineGeo, &m_tessPipelineGeoGroundLast}) {
         if (*p != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
@@ -5519,9 +5559,12 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         return groundLast && m_meshes[r.mesh].isGround &&
                (!r.tess || (r.geo ? m_tessPipelineGeoGroundLast : m_tessPipelineGroundLast) != VK_NULL_HANDLE);
     };
+    // Modulo minimo: so' sem tesselacao (a normal por derivada de tela da banda perto fica no shader completo).
+    const bool useMin = m_pipelineMin != VK_NULL_HANDLE && !m_tessEnabled && !wireframeMode();
     for (const DrawRec& r : m_drawRecs) {
         if (last(r)) continue;
         VkPipeline pipe = r.tess ? (r.geo ? m_tessPipelineGeo : m_tessPipeline) : m_pipeline;
+        if (useMin && !r.tess && m_meshes[r.mesh].minModel) pipe = m_pipelineMin;
         if (pre(r)) pipe = m_pipelineNoDepthWrite;
         play(r, pipe);
     }

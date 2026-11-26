@@ -217,6 +217,8 @@ struct ModelMeshGPU {
     // Recorte por alfa SEM splat nem chao: entra no pre-passe de profundidade
     // do G-buffer (ver ModelRenderer::render e model_depth.frag).
     bool depthPrepass = false;
+    // Nao e' chao nem tem splat: pode usar o modulo minimo (model_min.frag, ver createPipeline).
+    bool minModel = false;
 
     void shutdown(VulkanContext* ctx);
     // Libera TODOS os buffers da malha (vertex, index, hi/lo/far x2, sh),
@@ -1656,6 +1658,9 @@ private:
     // de profundidade, para a mesma folhagem no G-buffer logo depois.
     VkPipeline m_depthPipeline = VK_NULL_HANDLE;
     VkPipeline m_pipelineNoDepthWrite = VK_NULL_HANDLE;
+    // Modulo minimo (preset "model_frag_min_module"/"model_vert_min"): o G-buffer da malha que nao e' chao
+    // com splat. NULL = desligado (o m_pipeline de sempre).
+    VkPipeline m_pipelineMin = VK_NULL_HANDLE;
     VkPipeline m_pipelineGroundLast = VK_NULL_HANDLE; // m_pipeline com teste <, ver render()
     VkPipeline m_tessPipelineGroundLast = VK_NULL_HANDLE; // idem, o de tesselacao
     // Chao com niveis em degraus + geomorph (model_ground.tesc/.tese): so' as

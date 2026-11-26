@@ -605,6 +605,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_vulkan.setSmokeLite(presetBool(graphicsPresetName(), "smoke_lite", false));
     m_vulkan.setLightingMin(presetBool(graphicsPresetName(), "lighting_min", false));
     m_vulkan.setModelShaderMin(presetBool(graphicsPresetName(), "model_shader_min", false));
+    m_vulkan.setModelFragMinModule(presetBool(graphicsPresetName(), "model_frag_min_module", false));
     m_vulkan.setGroundShaderMin(presetBool(graphicsPresetName(), "ground_shader_min", false));
     // Formatos enxutos (spec 50, LeanFormats.hpp): preset, env forca, GPU decide.
     {

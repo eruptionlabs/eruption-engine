@@ -233,6 +233,7 @@ private:
     std::atomic<const char*> m_phase{"init"};
     bool m_inImmediateSubmit = false;
     bool m_shaderLite = false;
+    bool m_modelFragMinModule = false;
     // [0] = LITE (constant_id 0), [1] = LITE_RELEVO (constant_id 4). Shader que
     // nao declara um id ignora a entrada dele (regra da especializacao Vulkan).
     // [2] = LITE_MIN (constant_id 5, preset "lighting_min").
@@ -334,6 +335,12 @@ public:
     // Modelo minimo no G-buffer (preset "model_shader_min", so' vale com o enxuto): 1 amostra de
     // albedo + alpha-test, normal do vertice, material constante; o chao com splat segue completo.
     void setModelShaderMin(bool on) { m_liteValues[3] = on ? VK_TRUE : VK_FALSE; }
+    // Modulo de fragmento MINIMO dos modelos (preset "model_frag_min_module", so' vale com
+    // model_shader_min): a malha fora do chao com splat usa model_min.frag, so' o caminho MODEL_MIN,
+    // em vez do model_frag.glsl inteiro com a spec constante ligada. Mesma imagem; o driver deixa de
+    // reservar registradores pelo pior caminho. PowerVR GE8320, 1/2: G-buffer 145 -> 107 ms.
+    void setModelFragMinModule(bool on) { m_modelFragMinModule = on; }
+    bool modelFragMinModule() const { return m_modelFragMinModule && m_shaderLite && m_liteValues[3] == VK_TRUE; }
     // Chao com splat minimo no G-buffer (preset "ground_shader_min"; so' vale com o enxuto).
     void setGroundShaderMin(bool on) { m_liteValues[4] = on ? VK_TRUE : VK_FALSE; }
     const VkSpecializationInfo* liteSpecialization() const { return &m_liteSpecInfo; }
