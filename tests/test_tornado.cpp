@@ -27,6 +27,17 @@ int main() {
     CHECK(a != 0 && b != 0 && a != b);
     CHECK(f.start(s, 2) == 0);
     CHECK(f.all().size() == 2);
+    // funnel: o padrao e 1 (sem mudar nada) e o valor pedido fica em 0..1
+    CHECK(f.all()[0].spec.funnel == 1.0f);
+    {
+        TornadoField g;
+        TornadoSpec t = s;
+        t.funnel = -3.0f;
+        const uint32_t lo = g.start(t, 2);
+        t.funnel = 7.0f;
+        const uint32_t hi = g.start(t, 2);
+        CHECK(lo != 0 && hi != 0 && g.all()[0].spec.funnel == 0.0f && g.all()[1].spec.funnel == 1.0f);
+    }
 
     // Mover e parar.
     CHECK(f.move(a, Vec3(1.0f, 2.0f, 3.0f)));

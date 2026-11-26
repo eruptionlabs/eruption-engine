@@ -164,6 +164,10 @@ vec3 applyFogVolumes(vec3 color, vec3 camPos, vec3 endPos, float exposure) {
         float s7 = z7.y * cos(p7) + z7.x * sin(p7);
         float s5 = z5.y * cos(p5) + z5.x * sin(p5);
         float s11 = z11.y * cos(p11) + z11.x * sin(p11);
+        // O angulo nao existe no eixo: o ponto medio de um raio que passa pelo centro troca de lado de
+        // repente (era a costura vertical no meio da tela). A modulacao angular some perto do eixo.
+        float aw = smoothstep(0.04 * R, 0.4 * R, rr);
+        s3 *= aw; s7 *= aw; s5 *= aw; s11 *= aw;
         float band = 0.5 + 0.5 * s3;
         float band2 = 0.5 + 0.5 * s7;
         float mod1 = mix(0.35, 1.25, band) * mix(0.8, 1.2, band2);

@@ -36,6 +36,7 @@ struct TornadoSpec {
     Vec3 cloudColor = Vec3(0.30f, 0.31f, 0.36f); // cor da nuvem-mae
     float density = 1.0f;           // multiplica a densidade (espessura)
     float opacity = 1.0f;           // multiplica o alfa final
+    float funnel = 1.0f;            // 0..1: densidade do funil e da saia (0 = so a nuvem-mae e os destrocos)
     float wind = 1.0f;              // multiplica a rajada de vento em volta
     TornadoDebrisKind debrisKind = TornadoDebrisKind::Debris;
     float debrisSize = 1.0f;        // multiplica o tamanho dos destrocos

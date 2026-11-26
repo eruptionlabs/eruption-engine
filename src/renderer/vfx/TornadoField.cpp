@@ -38,6 +38,7 @@ uint32_t TornadoField::start(const TornadoSpec& spec, size_t maxCount) {
     t.spec.cloud = std::max(spec.cloud, 0.0f);
     t.spec.density = std::clamp(spec.density, 0.05f, 4.0f);
     t.spec.opacity = std::clamp(spec.opacity, 0.0f, 1.0f);
+    t.spec.funnel = std::clamp(spec.funnel, 0.0f, 1.0f);
     t.spec.wind = std::clamp(spec.wind, 0.0f, 4.0f);
     t.spec.debrisSize = std::clamp(spec.debrisSize, 0.05f, 20.0f);
     t.spec.snowfall = std::clamp(spec.snowfall, 0.0f, 1.0f);

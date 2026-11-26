@@ -1296,6 +1296,8 @@ void CloudLayerRenderer::renderTornado(VkCommandBuffer cmd, const TornadoParams&
     if (kNoDepthClip) flags |= 1;
     if (quality.detail) flags |= 2;
     if (mother) flags |= 4;
+    // Bits 4..7: 15 x (1 - funnel); 0 (funil inteiro) deixa o valor de sempre.
+    flags |= static_cast<int>(std::lround((1.0f - std::clamp(tp.funnel, 0.0f, 1.0f)) * 15.0f)) << 4;
     pc.boxMin = glm::vec4(boxMin3, static_cast<float>(flags));
     pc.boxMax = glm::vec4(boxMax3, static_cast<float>(std::clamp(quality.sunTaps, 0, 3)));
     pc.origin = glm::vec4(tp.base, H);

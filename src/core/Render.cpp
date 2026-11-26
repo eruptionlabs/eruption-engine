@@ -2287,6 +2287,7 @@ void Engine::render() {
                     tp.cloud = t->spec.cloud;
                     tp.density = t->spec.density;
                     tp.opacity = t->spec.opacity;
+                    tp.funnel = t->spec.funnel;
                     m_cloudLayerRenderer.renderTornado(cmd, tp, m_camera, m_gbuffer.depthView(), tq);
                 }
                 if (tornAccum) {

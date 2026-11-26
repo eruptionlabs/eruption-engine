@@ -1310,6 +1310,8 @@ declare vfx: {
     --   cloud_color   vector rgb da nuvem-mae (0.30, 0.31, 0.36)
     --   density       multiplica a densidade/espessura, 0.05..4 (1)
     --   opacity       multiplica o alfa final, 0..1 (1)
+    --   funnel        0..1: densidade do funil e da saia de poeira; 0 deixa so a nuvem-mae girando
+    --                 (e os destrocos), com cloud e radius_top largos viram um teto de nuvem (1)
     --   debris_kind   "debris" (pedras, folhas, tabuas), "leaves", "dust" (pontos macios),
     --                 "snow" (flocos e cristais) ou "none" ("debris")
     --   debris_size   multiplica o tamanho dos destrocos (1)
@@ -1322,7 +1324,7 @@ declare vfx: {
     tornado: (spec: { pos: vector, style: string?, height: number?, radius_top: number?,
         radius_bottom: number?, spin: number?, dust: vector?, debris: boolean?, life: number?,
         fade: number?, cloud: number?, color: vector?, cloud_color: vector?, density: number?,
-        opacity: number?, debris_kind: string?, debris_size: number?, snowfall: number?, wind: number?, grow: number?,
+        opacity: number?, funnel: number?, debris_kind: string?, debris_size: number?, snowfall: number?, wind: number?, grow: number?,
         trail_kind: string?, trail_strength: number? }) -> number?,
     -- Move o pe do tornado (o funil e os destrocos seguem). false se o id ja' acabou.
     tornado_move: (id: number, position: vector) -> boolean,

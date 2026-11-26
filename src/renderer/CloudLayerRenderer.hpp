@@ -200,6 +200,7 @@ public:
         float cloud = 1.0f;                  // escala da nuvem-mae (0 = sem)
         float density = 1.0f;
         float opacity = 1.0f;
+        float funnel = 1.0f;   // 0..1: multiplica a densidade do funil e da saia (1 = como sempre; 0 = so a nuvem-mae)
     };
     void renderTornado(VkCommandBuffer cmd, const TornadoParams& params, const Camera& camera,
                        VkImageView depthView, const TornadoQuality& quality);

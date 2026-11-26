@@ -396,6 +396,7 @@ void main() {
     bool noDepthClip = (flags & 1) != 0;
     bool detail = (flags & 2) != 0;
     bool motherOn = (flags & 4) != 0;
+    float funnelK = 1.0 - float((flags >> 4) & 15) / 15.0; // 1 = funil inteiro
     int sunTaps = int(pc.boxMax.w + 0.5);
     // Camera acima da base da nuvem-mae (vista de cima): ela some, para o funil aparecer.
     // Vista de cima fica translucida (o topo da tempestade), nao some.
@@ -520,8 +521,8 @@ void main() {
         float fine = 1.0 - smooth01(0.45, 1.1, cellFine);
 
         float h, rrF, uM, rrM, gS;
-        float dF = funnelDensity(p, age, 1.0, detail, fine, h, rrF);
-        float dS = skirtDensity(p, age, detail, fine, gS);
+        float dF = funnelDensity(p, age, 1.0, detail, fine, h, rrF) * funnelK;
+        float dS = skirtDensity(p, age, detail, fine, gS) * funnelK;
         float dM = motherOn ? motherDensity(p, age, detail, fine, uM, rrM) * mFade * smooth01(0.50 * H, 1.10 * H, t) : 0.0; // nada de nevoa colada na camera
         // Pesos dos termos pela soma bruta: `dens` leva o fade de profundidade e a densidade do
         // usuario, e dividir por ele estourava os pesos (mancha branca no pe do redemoinho).
