@@ -65,7 +65,10 @@ public:
     // com um aviso por execucao.
     static constexpr uint32_t kMaxVertices = 32768;
     static constexpr uint32_t kMaxIndices = kMaxVertices * 6; // malhas: ~2 triangulos por vertice
-    static constexpr uint32_t kMaxTextures = 64;
+    // Texturas (arquivos, procedurais e a cor base de cada malha) dividem o mesmo
+    // conjunto de descritores: 64 estourava num jogo com ~140 PNGs de efeito (as
+    // novas, a partir da 65a, nao desenhavam). Cada uma custa so' o set e a imagem.
+    static constexpr uint32_t kMaxTextures = 256;
     static constexpr uint32_t kMaxMeshVertices = 16384;
     static constexpr uint32_t kMaxMeshes = 32;
 
@@ -74,7 +77,9 @@ public:
     bool ready() const { return m_ready; }
 
     // Id da textura (PNG do projeto, em cache por caminho, carregado uma vez);
-    // -1 se o arquivo nao abriu (o aviso sai uma vez por caminho).
+    // -1 se o arquivo nao abriu (o aviso, com o caminho resolvido e o motivo, sai
+    // uma vez por caminho). Regra do caminho: relativo a raiz do PROJETO aberto
+    // (ou do motor, sem projeto); absoluto vale como esta'.
     int textureId(const std::string& path);
     // Textura procedural (RGBA8, em cache pela chave): perfis suaves de feixe e
     // ponto dos efeitos do motor (raio, precipitacao). -1 se nao coube.

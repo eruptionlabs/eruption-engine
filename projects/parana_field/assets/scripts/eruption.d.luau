@@ -561,6 +561,21 @@ declare world: {
     -- depth_write = false (the only supported value: the scene depth is read-only
     -- here, true is ignored with a warning); cull = false (default; true culls
     -- back faces, counter-clockwise is the front).
+    -- TEXTURE RULES (draw_strip, draw_mesh `texture` and draw_sprite alike): the
+    -- path is relative to the root of the open project (the folder with
+    -- project.eruption, e.g. "assets/effects/fx/tex/glow.png"; without a project,
+    -- the engine folder) or absolute; it also reads files inside a mounted .ecp
+    -- package. Any size up to 4096 x 4096 works, square or not, power of two or
+    -- not (mipmaps are generated). Any PNG/JPG/TGA/BMP stb_image reads is fine:
+    -- RGBA, RGB, grey, indexed (palette, with or without tRNS) and 16 bit are all
+    -- converted to RGBA8; colour is sRGB and the alpha is STRAIGHT (not
+    -- premultiplied). The vertex/rgba colour multiplies the texel; U/V wrap
+    -- (repeat). The default blend is "additive" (alpha scales the colour); pass
+    -- blend = "alpha" for a shape that should cover what is behind it. The file
+    -- is loaded the first time it is used (a hitch of one frame) and cached by
+    -- path; up to 256 different textures. If it does not load, NOTHING is drawn
+    -- (no placeholder) and the log gets ONE warning per path with the full path
+    -- tried and the reason.
     -- MATERIAL (optional, same fields for draw_strip and draw_mesh; all absent =
     -- the plain drawing above, pixel for pixel). It only changes the alpha, so it
     -- works with both blends; colour stays HDR (r, g, b may pass 1). Fade in/out

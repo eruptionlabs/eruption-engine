@@ -334,7 +334,13 @@ int ImmediateDraw::textureId(const std::string& path) {
             id = int(m_textures.size());
             m_textures.push_back(t);
         } else {
-            ERUPTION_LOG_WARN("ImmediateDraw: textura '%s' nao abriu", path.c_str());
+            // Diz o caminho que foi mesmo tentado (a raiz do projeto muda com --project) e
+            // por que falhou: sem arquivo, ou arquivo que o decodificador nao leu / > 4096.
+            const std::filesystem::path full = project::gameRef(path);
+            std::error_code ec;
+            const bool found = std::filesystem::exists(full, ec) || vfs::exists(full);
+            ERUPTION_LOG_WARN("ImmediateDraw: textura '%s' nao abriu (tentado: %s; %s)", path.c_str(), full.string().c_str(),
+                              found ? "o arquivo existe mas nao decodificou, ou passa de 4096 px" : "arquivo inexistente");
         }
     }
     m_texIds.emplace(path, id); // a falha tambem fica em cache: sem reabrir todo quadro
