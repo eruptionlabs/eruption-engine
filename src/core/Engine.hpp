@@ -1335,6 +1335,12 @@ public:
     bool beginSplatEditing();
     int splatLayerCount() const;
     bool addSplatLayer(const std::string& png);
+    // Camada cinza neutra (sem normal nem MRAH-W) na vaga de uma camada que nao
+    // carregou: o canal da mascara e' a posicao na lista, entao pular a vaga
+    // deslocaria as seguintes e o canal sem camada sairia preto. `name` e' o
+    // que a cena salva continua referenciando (ver SceneEdits::apply).
+    bool addNeutralSplatLayer(const std::string& name);
+    bool installSplatLayer(int l, uint32_t packedSlot, const std::string& name);
     // Decodifica em paralelo as imagens das camadas (cor, _normal, _mrahw) que
     // o addSplatLayer vai pedir em seguida (as da cena chegam juntas).
     void prefetchSplatLayers(const std::vector<std::string>& layers);

@@ -924,8 +924,14 @@ int SceneEdits::apply(Engine& engine, std::vector<AddedInstance>* addedOut) cons
     for (const auto& layer : terrainLayers) {
         if (std::find(present.begin(), present.end(), layer) != present.end()) continue; // recarga da cena
         if (engine.splatLayerCount() >= 8) break;
-        if (engine.addSplatLayer(layer)) ++applied;
-        else ERUPTION_LOG_WARN("Terrain layer %s could not be loaded", layer.c_str());
+        if (engine.addSplatLayer(layer)) { ++applied; continue; }
+        ERUPTION_LOG_WARN("Terrain layer %s could not be loaded", layer.c_str());
+        // A posicao da camada e' o canal da mascara de pintura. Pular a que
+        // falhou deslocava todas as seguintes um canal para tras e deixava os
+        // ultimos canais sem camada (preto puro nos texels pintados com eles).
+        // A vaga fica com uma camada cinza neutra, gravada com o nome da que
+        // faltou para a cena salva nao perder a referencia.
+        if (engine.addNeutralSplatLayer(layer)) ++applied;
     }
     phase("camadas", terrainLayers.size());
     if (hasEnvironment) {

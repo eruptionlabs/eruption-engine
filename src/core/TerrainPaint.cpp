@@ -400,12 +400,35 @@ bool Engine::addSplatLayer(const std::string& png) {
     if (!img.isValid()) return false;
     const uint32_t packedSlot = uploadSplatLayer(sp.layerTex[l], sp.layerNormal[l], sp.layerMrahw[l], path, img);
     if (packedSlot == 0) return false;
+    return installSplatLayer(l, packedSlot, png);
+}
+
+bool Engine::addNeutralSplatLayer(const std::string& name) {
+    if (!beginSplatEditing()) return false;
+    SplatEdit& sp = m_splatEdit;
+    const int l = splatLayerCount();
+    if (l >= 8) return false;
+    const uint32_t slot = m_bindless.allocateSlot();
+    if (slot == 0) return false;
+    std::vector<uint8_t> gray(4 * 4 * 4, 128);
+    for (size_t i = 3; i < gray.size(); i += 4) gray[i] = 255;
+    if (!createTextureFromPixels(gray.data(), 4, 4, sp.layerTex[l])) {
+        m_bindless.freeSlot(slot);
+        return false;
+    }
+    sp.layerTex[l].slot = slot;
+    m_bindless.updateTexture(slot, sp.layerTex[l].view, m_defaultSampler);
+    return installSplatLayer(l, slot, name);
+}
+
+bool Engine::installSplatLayer(int l, uint32_t packedSlot, const std::string& name) {
+    SplatEdit& sp = m_splatEdit;
     m_bindless.flushUpdates();
     const TextureResource& tex = sp.layerTex[l];
     sp.layerSlot[l] = packedSlot;
-    sp.layerNames[l] = png;
-    sp.layerFiles[l] = png;
-    ERUPTION_LOG_WARN("Terrain layer %d: %s (%ux%u) no slot %u%s%s", l, png.c_str(), tex.width, tex.height, tex.slot,
+    sp.layerNames[l] = name;
+    sp.layerFiles[l] = name;
+    ERUPTION_LOG_WARN("Terrain layer %d: %s (%ux%u) no slot %u%s%s", l, name.c_str(), tex.width, tex.height, tex.slot,
                       (packedSlot & kSplatHasNormal) ? " +normal" : "", (packedSlot & kSplatHasMrahw) ? " +mrahw" : "");
     // Os vértices do chão passam a ler as máscaras e as camadas.
     const uint32_t packed[4] = {sp.layerSlot[0] | (sp.layerSlot[1] << 16), sp.layerSlot[2] | (sp.layerSlot[3] << 16),
