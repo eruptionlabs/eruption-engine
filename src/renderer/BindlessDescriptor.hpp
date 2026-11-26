@@ -109,6 +109,8 @@ public:
     uint32_t slotCount() const { return m_slotCount; }
     // Lado das camadas (0 = com descriptor indexing, sem camadas). Textura
     // maior que isto só ocupa memória: a cópia reamostra para este lado.
+    // Sem camadas (descriptor indexing) todo slot vale; com camadas, so' o que ganhou lugar.
+    bool slotPlaced(uint32_t slot) const { return !m_layered || m_layers.placed(slot); }
     uint32_t layerSize() const { return m_layered ? m_layers.layerSize() : 0; }
 
 private:

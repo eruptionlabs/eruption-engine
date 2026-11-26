@@ -219,6 +219,9 @@ struct ModelMeshGPU {
     bool depthPrepass = false;
     // Nao e' chao nem tem splat: pode usar o modulo minimo (model_min.frag, ver createPipeline).
     bool minModel = false;
+    // CHAO ASSADO (preset ground_bake): slot da imagem de albedo do chao,
+    // assada de cima (ModelRenderer::updateGroundBake). 0 = desenho de sempre.
+    uint32_t bakeSlot = 0;
 
     void shutdown(VulkanContext* ctx);
     // Libera TODOS os buffers da malha (vertex, index, hi/lo/far x2, sh),
@@ -500,6 +503,18 @@ public:
         m_groundLodCam = cameraPos;
         m_groundLodPpu = pixelsPerUnit;
     }
+    // CHAO ASSADO (preset ground_bake, so' mobile enxuto: LITE + GROUND_MIN): o
+    // albedo final do chao com splat (base, mascaras, camadas) e' desenhado UMA
+    // vez numa imagem em espaco da mascara (px x px, RGBA8 sRGB, com mips) e o
+    // fragment do chao le' so' ela (1 leitura em vez de 5). Refeito quando o splat
+    // muda (patchGroundVertices) e uma vez depois da carga (as texturas chegam por
+    // streaming). O assado roda em ladrilhos de tilePx pixels por quadro (um
+    // quadro de GPU fraca nao passa de ~1 s) e a imagem velha segue em uso ate' o fim.
+    // Vale para malhas criadas/pipelines montados depois da chamada.
+    void setGroundBake(bool on, uint32_t px, uint32_t tilePx);
+    bool groundBakeOn() const { return m_groundBakeOn; }
+    // Fora de qualquer passe, com o cmd do quadro (depois de flushVertexPatches).
+    void updateGroundBake(VkCommandBuffer cmd);
     float lodBudgetScale() const { return m_lodBudgetScale; }
     // Filtro de CHAO para renderShadow (G38, bake das probes): 0 = tudo,
     // 1 = so' malhas isGround, 2 = tudo menos isGround. Sem mexer na
@@ -1458,6 +1473,31 @@ private:
     float m_groundLodPx = 0.0f;        // ver setGroundLodPx
     Vec3 m_groundLodCam = Vec3(0.0f);  // ver setGroundLodView
     float m_groundLodPpu = 0.0f;
+    // Chao assado (ver setGroundBake).
+    struct GroundBakeState {
+        VkImage image = VK_NULL_HANDLE;       // em uso (o slot aponta para ela)
+        VmaAllocation alloc = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;    // todos os mips, para ler
+        VkImage backImage = VK_NULL_HANDLE;   // sendo assada
+        VmaAllocation backAlloc = VK_NULL_HANDLE;
+        VkImageView backView = VK_NULL_HANDLE;    // todos os mips
+        VkImageView backTarget = VK_NULL_HANDLE;  // mip 0, para escrever
+        uint32_t slot = 0, nextRow = 0;
+        int wait = 0;      // quadros ate' comecar (o splat chega em etapas)
+        int redo = 0;      // quadros ate' assar de novo depois de publicar
+        int activate = 0;  // quadros ate' o desenho passar a ler a imagem
+        bool building = false, restart = false;
+    };
+    bool m_groundBakeOn = false;
+    uint32_t m_groundBakePx = 2048, m_groundBakeTilePx = 65536;
+    std::unordered_map<uint32_t, GroundBakeState> m_groundBakes;
+    VkPipeline m_pipelineGroundBake = VK_NULL_HANDLE; // desenho: model_ground_baked.frag
+    VkPipeline m_bakePipeline = VK_NULL_HANDLE;       // passe de assar
+    VkPipelineLayout m_bakeLayout = VK_NULL_HANDLE;
+    VkSampler m_bakeSampler = VK_NULL_HANDLE;
+    void markGroundBakeDirty(uint32_t mesh);
+    void destroyGroundBakes(bool immediate);
+    void destroyBakeImage(VkImage& image, VmaAllocation& alloc, VkImageView& view, VkImageView& target, bool immediate);
     // Nivel atual de cada celula do chao, por malha (a histerese precisa dele;
     // a sombra desenha o que o passe principal escolheu).
     mutable std::unordered_map<uint32_t, std::vector<uint8_t>> m_groundCellLevel;

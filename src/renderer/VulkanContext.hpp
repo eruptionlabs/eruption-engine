@@ -343,6 +343,7 @@ public:
     bool modelFragMinModule() const { return m_modelFragMinModule && m_shaderLite && m_liteValues[3] == VK_TRUE; }
     // Chao com splat minimo no G-buffer (preset "ground_shader_min"; so' vale com o enxuto).
     void setGroundShaderMin(bool on) { m_liteValues[4] = on ? VK_TRUE : VK_FALSE; }
+    bool groundShaderMin() const { return m_shaderLite && m_liteValues[4] == VK_TRUE; }
     const VkSpecializationInfo* liteSpecialization() const { return &m_liteSpecInfo; }
     // Pode gravar neste formato como storage image (imageStore com o
     // qualificador de formato). Fora do conjunto básico (r32f, rgba8, rgba16f...)

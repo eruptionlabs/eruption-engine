@@ -687,7 +687,7 @@ void ModelRenderer::shutdown() {
         vkDestroyPipeline(m_ctx->device(), m_tessPipeline, nullptr);
         m_tessPipeline = VK_NULL_HANDLE;
     }
-    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineMin, &m_pipelineGroundLast, &m_tessPipelineGroundLast,
+    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineMin, &m_pipelineGroundLast, &m_pipelineGroundBake, &m_bakePipeline, &m_tessPipelineGroundLast,
                           &m_tessPipelineGeo, &m_tessPipelineGeoGroundLast}) {
         if (*p != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
@@ -695,6 +695,10 @@ void ModelRenderer::shutdown() {
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_pipeline, nullptr);
         m_pipeline = VK_NULL_HANDLE;
+    }
+    if (m_bakeLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(m_ctx->device(), m_bakeLayout, nullptr);
+        m_bakeLayout = VK_NULL_HANDLE;
     }
     if (m_pipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(m_ctx->device(), m_pipelineLayout, nullptr);
@@ -709,6 +713,11 @@ void ModelRenderer::shutdown() {
         m_sampler = VK_NULL_HANDLE;
     }
 
+    destroyGroundBakes(true);
+    if (m_bakeSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(m_ctx->device(), m_bakeSampler, nullptr);
+        m_bakeSampler = VK_NULL_HANDLE;
+    }
     PbrDeferred::instance().shutdown(m_ctx, m_bindless); // imagens do PBR adiado, antes dos slots
     for (auto& entry : m_pbrTextureCache) {
         entry.second.reset(m_ctx, m_bindless);
@@ -751,6 +760,7 @@ void ModelRenderer::clear() {
     m_touchedMark.clear();
     m_footprintCache.clear();
     m_textureSlots.clear();
+    destroyGroundBakes(false);
     m_groundCpu.clear();
     m_vertexPatches.clear();
     m_animatedNodes.clear();
@@ -1078,6 +1088,89 @@ void ModelRenderer::createPipeline() {
                 .build(m_ctx->device());
             if (fMod != VK_NULL_HANDLE) vkDestroyShaderModule(m_ctx->device(), fMod, nullptr);
             ERUPTION_LOG_WARN("[MODEL_MIN] modulo minimo dos modelos ligado");
+        }
+    }
+
+    // CHAO ASSADO (preset "ground_bake", ver setGroundBake): o desenho do chao com 1 leitura
+    // (model_ground_baked.frag) e o passe que assa a imagem (model_ground_bake.vert/.frag).
+    // So' sem velocidade (FSR): o desenho usa o vertex model_novel.
+    if (m_groundBakeOn && !GBuffer::velocityEnabled() && !wireframeMode()) {
+        auto fBaked = ShaderCompiler::loadSPIRV("shaders/gbuffer/model_ground_baked.frag.spv");
+        auto vBake = ShaderCompiler::loadSPIRV("shaders/gbuffer/model_ground_bake.vert.spv");
+        auto fBake = ShaderCompiler::loadSPIRV("shaders/gbuffer/model_ground_bake.frag.spv");
+        auto makeModule = [&](const std::vector<uint32_t>& code) {
+            VkShaderModuleCreateInfo ci{};
+            ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            ci.codeSize = code.size() * sizeof(uint32_t);
+            ci.pCode = code.data();
+            VkShaderModule m = VK_NULL_HANDLE;
+            vkCreateShaderModule(m_ctx->device(), &ci, nullptr, &m);
+            return m;
+        };
+        if (fBaked.empty() || vBake.empty() || fBake.empty()) {
+            ERUPTION_LOG_WARN("ModelRenderer: sem o SPIR-V do chao assado, desenho de sempre");
+        } else {
+            VkShaderModule mBaked = makeModule(fBaked), mVert = makeModule(vBake), mFrag = makeModule(fBake);
+            std::vector<VkPipelineShaderStageCreateInfo> st = stages;
+            st[1].module = mBaked;
+            st[1].pSpecializationInfo = nullptr;
+            m_pipelineGroundBake = PipelineBuilder()
+                .setShaderStages(st)
+                .setVertexInput(vertexInput)
+                .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+                .setViewport(0, 0, 1280, 720)
+                .setScissor(0, 0, 1280, 720)
+                .setPolygonMode(VK_POLYGON_MODE_FILL)
+                .setCullMode(gbufferCullMode(), VK_FRONT_FACE_COUNTER_CLOCKWISE)
+                .setDepthState(true, true, VK_COMPARE_OP_LESS)
+                .setBlendState(blends)
+                .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
+                .setLayout(m_pipelineLayout)
+                .setColorAttachmentFormats(GBuffer::colorAttachmentFormats())
+                .setDepthAttachmentFormat(VK_FORMAT_D32_SFLOAT)
+                .build(m_ctx->device());
+            // Passe de assar: so' o set 0 (as texturas), sem push, um alvo RGBA8 sRGB, sem profundidade.
+            VkDescriptorSetLayout setLayout = m_bindless->layout();
+            VkPipelineLayoutCreateInfo bl{};
+            bl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            bl.setLayoutCount = 1;
+            bl.pSetLayouts = &setLayout;
+            vkCreatePipelineLayout(m_ctx->device(), &bl, nullptr, &m_bakeLayout);
+            std::vector<VkPipelineShaderStageCreateInfo> bst(2);
+            bst[0] = {};
+            bst[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            bst[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+            bst[0].module = mVert;
+            bst[0].pName = "main";
+            bst[1] = {};
+            bst[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            bst[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+            bst[1].module = mFrag;
+            bst[1].pName = "main";
+            VkPipelineColorBlendAttachmentState opaque{};
+            opaque.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                                    VK_COLOR_COMPONENT_A_BIT;
+            m_bakePipeline = PipelineBuilder()
+                .setShaderStages(bst)
+                .setVertexInput(vertexInput)
+                .setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+                .setViewport(0, 0, 1280, 720)
+                .setScissor(0, 0, 1280, 720)
+                .setPolygonMode(VK_POLYGON_MODE_FILL)
+                .setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+                .setDepthState(false, false, VK_COMPARE_OP_ALWAYS)
+                .setBlendState({opaque})
+                .setDynamicState({VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR})
+                .setLayout(m_bakeLayout)
+                .setColorAttachmentFormats({VK_FORMAT_R8G8B8A8_SRGB})
+                .build(m_ctx->device());
+            vkDestroyShaderModule(m_ctx->device(), mBaked, nullptr);
+            vkDestroyShaderModule(m_ctx->device(), mVert, nullptr);
+            vkDestroyShaderModule(m_ctx->device(), mFrag, nullptr);
+            if (m_pipelineGroundBake == VK_NULL_HANDLE || m_bakePipeline == VK_NULL_HANDLE)
+                ERUPTION_LOG_WARN("ModelRenderer: pipeline do chao assado nao criada, desenho de sempre");
+            else
+                ERUPTION_LOG_WARN("[GROUND_BAKE] chao assado ligado (%u px)", m_groundBakePx);
         }
     }
 
@@ -3683,6 +3776,7 @@ void ModelRenderer::appendAssetInstances(uint32_t assetIndex, const ModelInstanc
             if (skinned) registerSkinBase(meshIndices[n], asset, node, vertices);
             // Editor: o chão fica com cópia na CPU para o pincel de terreno.
             if (m_keepGroundVertices && mesh.isGround) m_groundCpu[meshIndices[n]] = vertices;
+            if (mesh.isGround && splatGround) markGroundBakeDirty(meshIndices[n]); // splat ja' nos vertices
         }
         flushShadowStreams(); // streams das malhas cheias deste asset (spec 52)
         if (!lodBuilds.empty() || !readyLods.empty()) {
@@ -3881,6 +3975,230 @@ std::vector<TerrainVertex>* ModelRenderer::groundVertices(uint32_t mesh) {
     return it == m_groundCpu.end() ? nullptr : &it->second;
 }
 
+// ---------------------------------------------------------------------------
+// CHAO ASSADO (preset ground_bake). Ver setGroundBake e os shaders
+// model_ground_bake.* / model_ground_baked.frag.
+void ModelRenderer::setGroundBake(bool on, uint32_t px, uint32_t tilePx) {
+    px = std::clamp<uint32_t>(px, 256u, 8192u);
+    tilePx = std::clamp<uint32_t>(tilePx, 4096u, 16777216u);
+    const bool changed = on != m_groundBakeOn || (on && px != m_groundBakePx);
+    m_groundBakeOn = on;
+    m_groundBakePx = px;
+    m_groundBakeTilePx = tilePx;
+    // Pipelines ja' montadas sem (ou com outro tamanho): remonta.
+    if (changed && m_initialized) {
+        if (!on) destroyGroundBakes(false);
+        recreatePipeline();
+    }
+}
+
+void ModelRenderer::markGroundBakeDirty(uint32_t mesh) {
+    if (!m_groundBakeOn) return;
+    GroundBakeState& b = m_groundBakes[mesh];
+    // O splat chega em ate' 8 etapas: espera uns quadros sem novidade antes de assar.
+    b.wait = 4;
+    b.redo = 0;
+    if (b.building) b.restart = true;
+}
+
+void ModelRenderer::destroyBakeImage(VkImage& image, VmaAllocation& alloc, VkImageView& view, VkImageView& target,
+                                     bool immediate) {
+    if (image == VK_NULL_HANDLE) return;
+    VkDevice dev = m_ctx->device();
+    VmaAllocator allocator = m_ctx->allocator();
+    VkImage img = image;
+    VmaAllocation al = alloc;
+    VkImageView v = view, t = target;
+    auto kill = [dev, allocator, img, al, v, t]() {
+        if (v != VK_NULL_HANDLE) vkDestroyImageView(dev, v, nullptr);
+        if (t != VK_NULL_HANDLE) vkDestroyImageView(dev, t, nullptr);
+        vmaDestroyImage(allocator, img, al);
+    };
+    if (immediate) kill();
+    else m_ctx->deferSlotImageCleanup(kill);
+    image = VK_NULL_HANDLE;
+    alloc = VK_NULL_HANDLE;
+    view = VK_NULL_HANDLE;
+    target = VK_NULL_HANDLE;
+}
+
+void ModelRenderer::destroyGroundBakes(bool immediate) {
+    for (auto& [mesh, b] : m_groundBakes) {
+        if (b.slot != 0 && m_bindless) m_bindless->freeSlot(b.slot);
+        b.slot = 0;
+        VkImageView none = VK_NULL_HANDLE;
+        destroyBakeImage(b.image, b.alloc, b.view, none, immediate);
+        destroyBakeImage(b.backImage, b.backAlloc, b.backView, b.backTarget, immediate);
+    }
+    m_groundBakes.clear();
+    for (ModelMeshGPU& m : m_meshes) m.bakeSlot = 0;
+}
+
+void ModelRenderer::updateGroundBake(VkCommandBuffer cmd) {
+    if (!m_groundBakeOn || m_bakePipeline == VK_NULL_HANDLE || m_pipelineGroundBake == VK_NULL_HANDLE ||
+        m_groundBakes.empty() || !m_bindless)
+        return;
+    const uint32_t px = m_groundBakePx;
+    const uint32_t mips = [px] { uint32_t n = 1; for (uint32_t s = px; s > 1; s >>= 1) ++n; return n; }();
+    const uint32_t rows = std::max<uint32_t>(1u, m_groundBakeTilePx / px);
+    bool tileDone = false; // um ladrilho por quadro, no total
+    for (auto& [mesh, b] : m_groundBakes) {
+        if (mesh >= m_meshes.size() || !m_meshes[mesh].isGround) continue;
+        ModelMeshGPU& mm = m_meshes[mesh];
+        // Publicada: o desenho passa a ler a imagem quando o descritor ja' vale em todos os quadros.
+        if (b.activate > 0 && --b.activate == 0) {
+            // Sem ligacao direta livre (caminho sem bindless) o slot mostraria a textura padrao: fica o chao de sempre.
+            if (m_bindless && m_bindless->slotPlaced(b.slot)) mm.bakeSlot = b.slot;
+            else ERUPTION_LOG_WARN("[GROUND_BAKE] malha %u: sem ligacao direta livre, segue o chao sem assado", mesh);
+        }
+        if (!b.building) {
+            if (b.wait > 0 && --b.wait == 0) {
+                b.building = true;
+                b.restart = false;
+                b.nextRow = 0;
+            } else if (b.redo > 0 && --b.redo == 0) {
+                b.wait = 1;
+            }
+            if (!b.building) continue;
+        }
+        if (tileDone || mm.vertexBuffer == VK_NULL_HANDLE || mm.indexBuffer == VK_NULL_HANDLE || mm.indexCount == 0) continue;
+        VkDevice dev = m_ctx->device();
+        if (b.backImage == VK_NULL_HANDLE) {
+            if (!m_ctx->createImage(px, px, VK_FORMAT_R8G8B8A8_SRGB,
+                                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                    VMA_MEMORY_USAGE_GPU_ONLY, b.backImage, b.backAlloc, mips)) {
+                b.building = false;
+                continue;
+            }
+            VkImageViewCreateInfo vi{};
+            vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image = b.backImage;
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = VK_FORMAT_R8G8B8A8_SRGB;
+            vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1};
+            vkc::createImageView(dev, &vi, nullptr, &b.backView);
+            vi.subresourceRange.levelCount = 1;
+            vkc::createImageView(dev, &vi, nullptr, &b.backTarget);
+            m_ctx->cmdImageBarrier(cmd, b.backImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                   VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+                                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        }
+        // Ladrilho: faixa de linhas [nextRow, nextRow + rows).
+        const uint32_t y0 = b.nextRow, h = std::min(rows, px - y0);
+        VkRenderingAttachmentInfo color{};
+        color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        color.imageView = b.backTarget;
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.clearValue.color = {{0.12f, 0.10f, 0.08f, 1.0f}};
+        VkRenderingInfo ri{};
+        ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea = {{0, int32_t(y0)}, {px, h}};
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments = &color;
+        vkc::cmdBeginRendering(cmd, &ri);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bakePipeline);
+        VkDescriptorSet set0 = m_bindless->set();
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bakeLayout, 0, 1, &set0, 0, nullptr);
+        const VkViewport vp{0.0f, 0.0f, float(px), float(px), 0.0f, 1.0f};
+        const VkRect2D sc{{0, int32_t(y0)}, {px, h}};
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+        const VkDeviceSize off = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &mm.vertexBuffer, &off);
+        vkCmdBindIndexBuffer(cmd, mm.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, mm.indexCount, 1, 0, 0, 0);
+        vkc::cmdEndRendering(cmd);
+        tileDone = true;
+        b.nextRow += h;
+        if (b.restart) { // o splat mudou no meio: descarta o que foi assado e recomeca depois
+            b.building = false;
+            b.restart = false;
+            destroyBakeImage(b.backImage, b.backAlloc, b.backView, b.backTarget, false);
+            continue;
+        }
+        if (b.nextRow < px) continue;
+
+        // Terminou: mips (blit com filtro linear, em espaco linear pelo formato sRGB) e publica.
+        const VkImage bakeImage = b.backImage;
+        auto barrier = [&](uint32_t mip, uint32_t count, VkImageLayout from, VkImageLayout to, VkPipelineStageFlags2 srcS,
+                           VkAccessFlags2 srcA, VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
+            VkImageMemoryBarrier2 br{};
+            br.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            br.srcStageMask = srcS; br.srcAccessMask = srcA; br.dstStageMask = dstS; br.dstAccessMask = dstA;
+            br.oldLayout = from; br.newLayout = to;
+            br.srcQueueFamilyIndex = br.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            br.image = bakeImage;
+            br.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mip, count, 0, 1};
+            m_ctx->cmdImageBarriers(cmd, {br});
+        };
+        barrier(0, 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        if (mips > 1)
+            barrier(1, mips - 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        int32_t sw = int32_t(px);
+        for (uint32_t i = 1; i < mips; ++i) {
+            const int32_t dw = std::max(1, sw / 2);
+            VkImageBlit blit{};
+            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, 1};
+            blit.srcOffsets[1] = {sw, sw, 1};
+            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1};
+            blit.dstOffsets[1] = {dw, dw, 1};
+            vkCmdBlitImage(cmd, b.backImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.backImage,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+            if (i + 1 < mips)
+                barrier(i, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                        VK_ACCESS_2_TRANSFER_READ_BIT);
+            sw = dw;
+        }
+        if (mips > 1)
+            barrier(0, mips - 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_READ_BIT);
+        else
+            barrier(0, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_READ_BIT);
+        barrier(mips - 1, 1, mips > 1 ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+
+        if (m_bakeSampler == VK_NULL_HANDLE) {
+            VkSamplerCreateInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            si.magFilter = VK_FILTER_LINEAR;
+            si.minFilter = VK_FILTER_LINEAR;
+            si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            si.maxLod = VK_LOD_CLAMP_NONE;
+            vkCreateSampler(dev, &si, nullptr, &m_bakeSampler);
+        }
+        const bool firstPublish = b.slot == 0;
+        if (firstPublish) b.slot = m_bindless->allocateSlot();
+        m_bindless->updateTexture(b.slot, b.backView, m_bakeSampler, true);
+        VkImageView noTarget = VK_NULL_HANDLE;
+        destroyBakeImage(b.image, b.alloc, b.view, noTarget, false);
+        b.image = b.backImage; b.alloc = b.backAlloc; b.view = b.backView;
+        if (b.backTarget != VK_NULL_HANDLE) { // a vista de escrita ja' foi gravada neste cmd: some depois
+            VkImageView t = b.backTarget;
+            m_ctx->deferSlotImageCleanup([dev, t] { vkDestroyImageView(dev, t, nullptr); });
+        }
+        b.backImage = VK_NULL_HANDLE; b.backAlloc = VK_NULL_HANDLE; b.backView = VK_NULL_HANDLE; b.backTarget = VK_NULL_HANDLE;
+        b.building = false;
+        if (firstPublish) {
+            b.activate = 4;
+            b.redo = 120; // as texturas de camada podem ter chegado em resolucao menor
+        }
+        ERUPTION_LOG_WARN("[GROUND_BAKE] malha %u assada: %u px, %u mips, slot %u", mesh, px, mips, b.slot);
+    }
+}
+
 void ModelRenderer::patchGroundVertices(uint32_t mesh, const std::vector<uint32_t>& vertexIndices) {
     auto it = m_groundCpu.find(mesh);
     if (it == m_groundCpu.end() || mesh >= m_meshes.size()) return;
@@ -3902,6 +4220,7 @@ void ModelRenderer::patchGroundVertices(uint32_t mesh, const std::vector<uint32_
     // fase de camadas da chegada). So' marca; groundBlend() captura quando
     // for preciso.
     m_groundBlendPending = mesh;
+    markGroundBakeDirty(mesh);
 }
 
 const ModelRenderer::GroundBlendInfo& ModelRenderer::groundBlend(bool wantHeights) {
@@ -4441,7 +4760,7 @@ void ModelRenderer::recreatePipeline() {
         vkDestroyPipeline(m_ctx->device(), m_tessPipeline, nullptr);
         m_tessPipeline = VK_NULL_HANDLE;
     }
-    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineMin, &m_pipelineGroundLast, &m_tessPipelineGroundLast,
+    for (VkPipeline* p : {&m_depthPipeline, &m_pipelineNoDepthWrite, &m_pipelineMin, &m_pipelineGroundLast, &m_pipelineGroundBake, &m_bakePipeline, &m_tessPipelineGroundLast,
                           &m_tessPipelineGeo, &m_tessPipelineGeoGroundLast}) {
         if (*p != VK_NULL_HANDLE) vkDestroyPipeline(m_ctx->device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
@@ -4449,6 +4768,10 @@ void ModelRenderer::recreatePipeline() {
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device(), m_pipeline, nullptr);
         m_pipeline = VK_NULL_HANDLE;
+    }
+    if (m_bakeLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(m_ctx->device(), m_bakeLayout, nullptr);
+        m_bakeLayout = VK_NULL_HANDLE;
     }
     if (m_pipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(m_ctx->device(), m_pipelineLayout, nullptr);
@@ -4960,6 +5283,10 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         // limita a faixa a uma fracao dela, para pedra baixa nao sumir inteira.
         push.uvScale.y = mesh < m_meshes.size() ? m_meshes[mesh].aabbMax.y - m_meshes[mesh].aabbMin.y : 0.0f;
         push.weld = Vec4(0.0f);
+        // Chao assado: o slot da imagem vai em uvScale.x (livre fora do chao
+        // com splat; o ladrilhamento estocastico nao existe no caminho enxuto).
+        const float stochKeep = push.uvScale.x;
+        if (mesh < m_meshes.size() && m_meshes[mesh].bakeSlot != 0) push.uvScale.x = static_cast<float>(m_meshes[mesh].bakeSlot);
         if (mesh < m_meshes.size()) {
             const ModelMeshGPU& wm = m_meshes[mesh];
             if (tessBound && wm.weldSlot != 0 && ib == wm.indexBuffer && firstIndex / 3 < wm.weldTris)
@@ -4974,6 +5301,7 @@ void ModelRenderer::render(VkCommandBuffer cmd,
             push.weld.w = m_tessGroundGeomorph;
         std::memcpy(r.push, &push, sizeof(push));
         push.uvScale.w = dispKeep;
+        push.uvScale.x = stochKeep;
         m_drawRecs.push_back(r);
     };
 
@@ -5569,8 +5897,12 @@ void ModelRenderer::render(VkCommandBuffer cmd,
         play(r, pipe);
     }
     for (const DrawRec& r : m_drawRecs)
-        if (last(r))
-            play(r, r.tess ? (r.geo ? m_tessPipelineGeoGroundLast : m_tessPipelineGroundLast) : m_pipelineGroundLast);
+        if (last(r)) {
+            VkPipeline gp = r.tess ? (r.geo ? m_tessPipelineGeoGroundLast : m_tessPipelineGroundLast) : m_pipelineGroundLast;
+            // Chao assado: so' sem patch (a banda de tesselacao fica com o shader completo).
+            if (!r.tess && m_pipelineGroundBake != VK_NULL_HANDLE && m_meshes[r.mesh].bakeSlot != 0) gp = m_pipelineGroundBake;
+            play(r, gp);
+        }
     // ERUPTION_DEBUG_LODFADE=1: um log por frame com jobs>0 - diagnostico
     // pontual pra confirmar que a banda de transicao esta' sendo cruzada
     // (o log periodico do ERUPTION_DEBUG_DRAWSTATS so' imprime a cada 120

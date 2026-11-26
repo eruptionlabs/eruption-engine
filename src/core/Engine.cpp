@@ -3594,6 +3594,18 @@ void Engine::applyGraphicsPreset() {
     float groundLodPx = std::max(0.0f, p.value("ground_lod_px", 0.0f));
     if (const char* g = std::getenv("ERUPTION_TEST_GROUND_LOD_PX")) groundLodPx = std::max(0.0f, std::strtof(g, nullptr));
     m_modelRenderer.setGroundLodPx(groundLodPx);
+    // Chao assado (ModelRenderer::setGroundBake): so' com ground_shader_min (shader_lite). ground_bake_px = lado da imagem, ground_bake_tile_px = pixels
+    // assados por quadro. ERUPTION_TEST_GROUND_BAKE=0/1 sobrepoe o preset.
+    bool groundBake = p.value("ground_bake", false);
+    if (const char* g = std::getenv("ERUPTION_TEST_GROUND_BAKE")) groundBake = std::atoi(g) != 0;
+    // O assado reproduz o albedo do GROUND_MIN (base + 2 camadas de maior peso, normal do vertice):
+    // sem ground_shader_min o chao de hoje tem mais camadas e normal map, e assar mudaria o visual.
+    if (groundBake && !m_vulkan.groundShaderMin()) {
+        ERUPTION_LOG_WARN("ground_bake ignorado: o preset nao liga ground_shader_min");
+        groundBake = false;
+    }
+    m_modelRenderer.setGroundBake(groundBake, static_cast<uint32_t>(std::max(256, p.value("ground_bake_px", 2048))),
+                                  static_cast<uint32_t>(std::max(4096, p.value("ground_bake_tile_px", 65536))));
     // Nivel do caster de sombra (ModelRenderer::setShadowLodView): 0 = LOD fixo de
     // sombra, 1 = o da camera para o objeto, 2 = pelo tamanho em texels da cascata.
     // ERUPTION_TEST_SHADOW_LOD_VIEW=<0|1|2> sobrepoe o preset.

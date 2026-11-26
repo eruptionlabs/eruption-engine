@@ -166,6 +166,10 @@ private:
         VkSampler sampler = VK_NULL_HANDLE;
     };
     static constexpr uint32_t kNone = UINT32_MAX;
+public:
+    // O slot tem lugar (camada ou ligacao direta)? Falso quando as ligacoes diretas acabaram.
+    bool placed(uint32_t slot) const { return slot < m_places.size() && m_places[slot].kind != kNone; }
+private:
     static constexpr uint32_t kDirectKind = 4;
     // Camada do 2o array: kBKind + os bits de sempre (sRGB, sem filtro). allocLayer
     // devolve a camada com kBLayerFlag somado quando ela e' do 2o array.

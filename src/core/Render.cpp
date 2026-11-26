@@ -626,6 +626,8 @@ void Engine::render() {
     m_modelRenderer.beginFrame();
     // Vértices do chão mudados pelo pincel de terreno (editor).
     m_modelRenderer.flushVertexPatches(cmd);
+    // Chao assado: um ladrilho por quadro, fora de qualquer passe (depois dos vertices do splat).
+    m_modelRenderer.updateGroundBake(cmd);
     // Animação por esqueleto: matrizes dos ossos e vértices animados (compute).
     m_modelRenderer.updateSkinning(cmd, m_frameDt);
     flushSplatUploads(cmd);

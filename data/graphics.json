@@ -129,6 +129,9 @@
   "present_mode": "fifo",
   "presets": {
     "mobile_low": {
+      "ground_bake": true,
+      "ground_bake_px": 2048,
+      "ground_bake_tile_px": 65536,
       "post_halation": false,
       "post_grain": false,
       "post_bokeh_highlights": false,
@@ -241,6 +244,9 @@
       "god_ray_lights": 0
     },
     "mobile_legacy": {
+      "ground_bake": true,
+      "ground_bake_px": 2048,
+      "ground_bake_tile_px": 65536,
       "post_halation": false,
       "post_grain": false,
       "post_bokeh_highlights": false,
@@ -355,6 +361,9 @@
       "god_ray_lights": 0
     },
     "mobile_medium": {
+      "ground_bake": true,
+      "ground_bake_px": 4096,
+      "ground_bake_tile_px": 65536,
       "post_halation": false,
       "post_grain": true,
       "post_bokeh_highlights": false,
