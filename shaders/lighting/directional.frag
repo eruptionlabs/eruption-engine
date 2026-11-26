@@ -713,7 +713,7 @@ vec3 shadeLite(vec4 albedo) {
     vec3 albedoLinear = c * (c * (c * 0.305306011 + 0.682171111) + 0.012522878);
     if (lights.groundStateWin.w > 0.0) { // estado do chao por celula (o caminho enxuto nao tem o passe de ambiente)
         vec4 pbrG = texture(gbufferPBR, inUV);
-        vec4 gsL = groundStateAt(worldPos);
+        vec4 gsL = abs(pbrG.r - 0.75) < 0.06 ? vec4(0.0) : groundStateAt(worldPos); // sprite fica fora: o estado vale so' para chao e vegetacao
         float rL = pbrG.g, mL = pbrG.b;
         albedoLinear *= 1.0 - 0.45 * groundStateWet(gsL, worldPos);
         groundStateCover(albedoLinear, rL, mL, N, gsL, worldPos, albedo.a);
@@ -869,7 +869,8 @@ void main() {
     // chuva, coberta ou nao; seca no tempo que o script deu.
     wetDrive = max(wetDrive, wetAreasAt(worldPos));
     // Estado do chao por celula (world.ground_state): molhado entra aqui, o resto depois.
-    const vec4 gs = groundStateAt(worldPos); // cartoes de folha no chao tambem queimam e gelam
+    // Sprite (pbr.r = 0,75) fica fora: o estado vale so' para chao e vegetacao, nao para o personagem.
+    const vec4 gs = abs(pbr.r - 0.75) < 0.06 ? vec4(0.0) : groundStateAt(worldPos); // cartoes de folha no chao tambem queimam e gelam
     wetDrive = max(wetDrive, groundStateWet(gs, worldPos));
     // Beira d'agua (espuma/onda): molha e seca sozinha, com ou sem chuva.
     // A beira e' do plano de liquido mais perto (grade: qual liquido; UBO:

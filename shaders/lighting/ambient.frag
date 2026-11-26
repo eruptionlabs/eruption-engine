@@ -271,7 +271,8 @@ void main() {
         // Area molhada pelo script (skill de agua): com ou sem chuva, coberta ou nao.
         wetDriveA = max(wetDriveA, wetAreasAt(wpA));
         // Estado do chao por celula (world.ground_state): molhado entra aqui, o resto depois.
-        const vec4 gsA = groundStateAt(wpA); // cartoes de folha no chao tambem queimam e gelam
+        // Sprite (pbr.r = 0,75) fica fora: o estado vale so' para chao e vegetacao (igual ao directional.frag).
+        const vec4 gsA = abs(pbrA.r - 0.75) < 0.06 ? vec4(0.0) : groundStateAt(wpA); // cartoes de folha no chao tambem queimam e gelam
         wetDriveA = max(wetDriveA, groundStateWet(gsA, wpA));
         // Beira d'agua (espuma/onda): molha e seca sozinha, com ou sem chuva.
         const vec3 beiraGA = shoreMaskAt(wpA);
