@@ -1,3 +1,4 @@
+#include "utils/BootMark.hpp"
 #include <cstdlib>
 #include "renderer/DeferredLighting.hpp"
 #include "renderer/ShadowRenderer.hpp"
@@ -70,7 +71,9 @@ bool DeferredLighting::init(VulkanContext* ctx, GBuffer* gbuffer, BindlessDescri
 
     createLitImage();
     createLightVolumeGeometry();
+    bootMark("  deferred: imagem/volumes");
     createPipelines();
+    bootMark("  deferred: pipelines");
     
     // Create UBOs and descriptor sets per frame
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
@@ -84,6 +87,7 @@ bool DeferredLighting::init(VulkanContext* ctx, GBuffer* gbuffer, BindlessDescri
     }
 
     createDescriptors();
+    bootMark("  deferred: descritores");
 
     // Create a plain linear sampler for G-Buffer sampling. O mesmo sampler lê a
     // profundidade (D32): sem filtro linear nesse formato (celular), nearest.

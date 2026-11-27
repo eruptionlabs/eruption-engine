@@ -32,6 +32,7 @@ public:
     void setMaterial(uint32_t texIndex, uint32_t pbrIndex, float dispScale, uint32_t normalIndex = 0);
 
     bool active() const { return m_active; }
+    bool ready() const { return m_initialized; } // init() ja' deu certo
     void setActive(bool on) { m_active = on; }
     void toggle() { m_active = !m_active; }
 

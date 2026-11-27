@@ -37,6 +37,9 @@ bool viewInfo(VkImageView view, ViewInfo& out);
 VkResult createGraphicsPipelines(VkDevice device, VkPipelineCache cache, uint32_t count,
                                  const VkGraphicsPipelineCreateInfo* infos,
                                  const VkAllocationCallbacks* alloc, VkPipeline* pipelines);
+#if ERUPTION_DEV
+void pipelineStats(uint32_t& count, double& seconds); // so' bancada
+#endif
 void cmdBeginRendering(VkCommandBuffer cmd, const VkRenderingInfo* info);
 void cmdEndRendering(VkCommandBuffer cmd);
 void cmdPipelineBarrier2(VkCommandBuffer cmd, const VkDependencyInfo* dep);

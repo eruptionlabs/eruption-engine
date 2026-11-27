@@ -4,6 +4,7 @@
 #include "renderer/BandwidthMeter.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -218,6 +219,16 @@ VkRenderPass compatibleRenderPass(const std::vector<VkFormat>& colors, VkFormat 
     return renderPassFor(atts, colors.size(), ds != VK_FORMAT_UNDEFINED);
 }
 
+#if ERUPTION_DEV
+// Pipelines graficas criadas e tempo gasto no driver (log [BOOT] do Engine::init).
+static uint32_t g_pipeCount = 0;
+static double g_pipeSeconds = 0.0;
+void pipelineStats(uint32_t& count, double& seconds) {
+    count = g_pipeCount;
+    seconds = g_pipeSeconds;
+}
+#endif
+
 VkResult createGraphicsPipelines(VkDevice device, VkPipelineCache cache, uint32_t count,
                                  const VkGraphicsPipelineCreateInfo* infos, const VkAllocationCallbacks* alloc,
                                  VkPipeline* pipelines) {
@@ -241,7 +252,14 @@ VkResult createGraphicsPipelines(VkDevice device, VkPipelineCache cache, uint32_
         if (!prev) ci.pNext = node->pNext;
         else ERUPTION_LOG_WARN("vkc: VkPipelineRenderingCreateInfo no meio da cadeia pNext; mantida");
     }
+#if ERUPTION_DEV
+    const auto t0 = std::chrono::steady_clock::now();
+#endif
     const VkResult r = vkCreateGraphicsPipelines(device, cache, count, fixed.data(), alloc, pipelines);
+#if ERUPTION_DEV
+    g_pipeCount += count;
+    g_pipeSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+#endif
     // Driver de celular recusa pipeline que o do PC aceita: o código de erro
     // no log é o ponto de partida.
     if (r != VK_SUCCESS) ERUPTION_LOG_ERROR("vkc: vkCreateGraphicsPipelines failed (%d)", static_cast<int>(r));

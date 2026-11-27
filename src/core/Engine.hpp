@@ -690,6 +690,10 @@ public:
     // atlas, SSAO, post toggles, cloud/rain budgets). Only keys present in
     // the preset are applied; safe to call at init and on F5 hot-reload.
     void applyGraphicsPreset();
+    // Chao assado do preset (chamado tambem no init, antes da pipeline dos modelos nascer).
+    void applyGroundBake(const json& p);
+    // Cria o popup de preview de textura na primeira vez que e' usado (o jogo nao o abre).
+    bool ensureSpherePreview();
     // Live switch for the quality screen of a game (script `graphics.apply`):
     // the active preset becomes a copy of preset `base` with `overrides` on top
     // (the top-level key "present_mode" goes to the file root), then it is
@@ -1701,6 +1705,8 @@ private:
     // A barra anda enquanto o driver compila shaders (vkc::PipelineHookScope):
     // cada pipeline conta, e a tela é redesenhada a cada 200 ms.
     static void onPipelineCompiled(void* engine);
+    // Comeca numa thread a parte de CPU do splash (silhueta e halo do logo); initSplashLogo recolhe.
+    static void prefetchSplashPixels();
     void showShaderProgress();
     std::string m_loadingMap;
     std::string m_loadingTask;
@@ -2048,6 +2054,7 @@ private:
     bool m_showResourceManager = false; 
     bool m_showABTestMenu = false;
     SpherePreview m_spherePreview;
+    bool m_spherePreviewTried = false;
     struct EmbeddedPreview {
         const void* map = nullptr; // m_currentMap quando abriu
         std::string key, image, label;

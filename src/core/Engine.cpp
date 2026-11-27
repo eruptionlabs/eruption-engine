@@ -32,8 +32,11 @@
 #include "renderer/skymap/SkyConfig.hpp"
 #include "renderer/WeatherTypes.hpp"
 #include "renderer/ReliefSource.hpp"
+#include "utils/BootMark.hpp"
 #include <cfloat>
 #include <cstdlib>
+#include <map>
+#include <mutex>
 #include <fstream>
 #include <limits>
 #include <numeric>
@@ -232,7 +235,7 @@ static void mergeProjectGraphics(nlohmann::json& root);
 // applyGraphicsPreset (lean_ops, camera_near_scale, texture_layers_compressed,
 // shadow_depth16, shader_lite...) tambem tem de respeitar o jogo, que assim
 // consegue desligar o que o motor liga por padrao.
-static nlohmann::json loadMergedGraphicsRoot() {
+static const nlohmann::json& loadMergedGraphicsRoot() {
     static const nlohmann::json cached = [] {
         nlohmann::json gj = nlohmann::json::object();
         try {
@@ -245,16 +248,39 @@ static nlohmann::json loadMergedGraphicsRoot() {
     return cached;
 }
 
+// "present_mode" do graphics.json (auto, fifo/vsync, immediate) como as duas preferencias do VulkanContext.
+static void presentPreferenceFromRoot(const nlohmann::json& root, bool& fifo, bool& immediate) {
+    std::string pm = "auto";
+    if (root.is_object()) {
+        const auto it = root.find("present_mode");
+        if (it != root.end() && it->is_string()) pm = it->get<std::string>();
+    }
+    fifo = (pm == "fifo" || pm == "vsync");
+    immediate = (pm == "immediate");
+}
+
+// Preset inteiro com o ERUPTION_TEST_PRESET_SET por cima, resolvido UMA vez por nome (era refeito, com copia
+// do preset e uma linha de log por chave, a cada presetBool/presetNumber: dezenas de vezes no init). Objeto
+// vazio se o preset faltar. Referencias de std::map nao se invalidam.
+static const nlohmann::json& resolvedPreset(const std::string& preset) {
+    static std::mutex mutex;
+    static std::map<std::string, nlohmann::json> cache;
+    static const nlohmann::json kEmpty = nlohmann::json::object();
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto hit = cache.find(preset);
+    if (hit != cache.end()) return hit->second;
+    const nlohmann::json& gj = loadMergedGraphicsRoot();
+    if (!gj.is_object() || !gj.contains("presets") || !gj["presets"].contains(preset)) return kEmpty;
+    nlohmann::json p = gj["presets"][preset];
+    applyPresetOverrides(p);
+    return cache.emplace(preset, std::move(p)).first->second;
+}
+
 // Valor numerico de uma chave do preset (mesmas regras de presetBool, inclusive
 // ERUPTION_TEST_PRESET_SET); `fallback` quando a chave nao existe.
 static double presetNumber(const std::string& preset, const char* key, double fallback) {
     try {
-        const nlohmann::json gj = loadMergedGraphicsRoot();
-        if (!gj.is_object()) return fallback;
-        if (!gj.contains("presets") || !gj["presets"].contains(preset)) return fallback;
-        nlohmann::json p = gj["presets"][preset];
-        applyPresetOverrides(p);
-        return p.value(key, fallback);
+        return resolvedPreset(preset).value(key, fallback);
     } catch (...) {
         return fallback;
     }
@@ -290,16 +316,7 @@ static texfmt::Options textureOptionsFromPreset(const nlohmann::json& p) {
 // O preset inteiro (data/graphics.json + ERUPTION_TEST_PRESET_SET), para o que
 // e' decidido antes de applyGraphicsPreset; objeto vazio se faltar.
 static nlohmann::json presetObject(const std::string& preset) {
-    try {
-        const nlohmann::json gj = loadMergedGraphicsRoot();
-        if (!gj.is_object()) return nlohmann::json::object();
-        if (!gj.contains("presets") || !gj["presets"].contains(preset)) return nlohmann::json::object();
-        nlohmann::json p = gj["presets"][preset];
-        applyPresetOverrides(p);
-        return p;
-    } catch (...) {
-        return nlohmann::json::object();
-    }
+    return resolvedPreset(preset);
 }
 
 // Toda combinacao (teto, sintese de PBR, opcoes de compressao) que algum preset de
@@ -310,7 +327,7 @@ static nlohmann::json presetObject(const std::string& preset) {
 std::vector<TextureVariant> engineTextureVariants() {
     std::vector<TextureVariant> out;
     try {
-        const nlohmann::json gj = loadMergedGraphicsRoot();
+        const nlohmann::json& gj = loadMergedGraphicsRoot();
         if (!gj.is_object() || !gj.contains("presets")) return out;
         for (auto it = gj["presets"].begin(); it != gj["presets"].end(); ++it) {
             const nlohmann::json p = presetObject(it.key());
@@ -338,16 +355,11 @@ std::vector<TextureVariant> engineTextureVariants() {
 }
 
 static bool presetBool(const std::string& preset, const char* key, bool fallback) {
+    // ERUPTION_TEST_PRESET_SET vale tambem para o que e' decidido antes dos
+    // pipelines (shader_lite): sem isso a bancada do celular nao isola o
+    // shader enxuto sem refazer o pacote.
     try {
-        const nlohmann::json gj = loadMergedGraphicsRoot();
-        if (!gj.is_object()) return fallback;
-        if (!gj.contains("presets") || !gj["presets"].contains(preset)) return fallback;
-        // ERUPTION_TEST_PRESET_SET vale tambem para o que e' decidido antes dos
-        // pipelines (shader_lite): sem isso a bancada do celular nao isola o
-        // shader enxuto sem refazer o pacote.
-        nlohmann::json p = gj["presets"][preset];
-        applyPresetOverrides(p);
-        return p.value(key, fallback);
+        return resolvedPreset(preset).value(key, fallback);
     } catch (...) {
         return fallback;
     }
@@ -355,6 +367,9 @@ static bool presetBool(const std::string& preset, const char* key, bool fallback
 
 bool Engine::init(int width, int height, const std::string& title) {
     Logger::init();
+    bootMark("inicio");
+    VulkanContext::prefetchPipelineCache();
+    prefetchSplashPixels();
     
     if (!m_editorMode) m_window.setIconFile(Project::gameIcon().string());
     if (!m_window.init(width, height, title)) return false;
@@ -367,7 +382,16 @@ bool Engine::init(int width, int height, const std::string& title) {
     if (std::getenv("ERUPTION_PREFER_IMMEDIATE") != nullptr) {
         m_vulkan.preferImmediatePresentMode(true);
     }
+    // Modo de apresentacao do preset ANTES do swapchain nascer: applyGraphicsPreset so' o
+    // reconstrui quando a preferencia muda, e com "fifo" no preset a primeira (auto) era
+    // sempre refeita logo depois (um swapchain a toa no arranque).
+    {
+        bool fifo = false, immediate = false;
+        presentPreferenceFromRoot(loadMergedGraphicsRoot(), fifo, immediate);
+        m_vulkan.setPresentPreference(fifo, immediate);
+    }
     if (!m_vulkan.init(m_window.handle())) return false;
+    bootMark("vulkan");
 
     // Load PBR material profiles if the agy-generated file exists.
     // This is done early so every renderer can query profiles during map load.
@@ -402,6 +426,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     postPackedPreference() = presetObject(graphicsPresetName()).value("post_format", std::string("rgba16f")) == "packed";
     initImGui();
     initSplashLogo();
+    bootMark("imgui+splash");
 
     // Force progress to 0 initially
     presentLoadingScreen("", "Initializing Engine", 0.0f, true);
@@ -501,6 +526,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         }
     }
     if (!m_bindless.init(&m_vulkan)) return false;
+    bootMark("bindless");
     m_textureStreamer.init(&m_vulkan, &m_bindless);
     // Quanto de textura o mapa traz (pacote das texturas embutidas, que e' o
     // grosso): se cabe no orcamento, o streamer nem liga.
@@ -547,7 +573,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         std::string upscaler = "fxaa", fsrMode = "quality";
         try {
             {
-                nlohmann::json gj = loadMergedGraphicsRoot();
+                const nlohmann::json& gj = loadMergedGraphicsRoot();
                 const std::string& pr = graphicsPresetName();
                 if (gj.contains("presets") && gj["presets"].contains(pr)) {
                     upscaler = gj["presets"][pr].value("upscaler", upscaler);
@@ -569,7 +595,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         } else {
             try {
                 {
-                    nlohmann::json gj = loadMergedGraphicsRoot();
+                    const nlohmann::json& gj = loadMergedGraphicsRoot();
                     const std::string& pr = graphicsPresetName();
                     if (gj.contains("presets") && gj["presets"].contains(pr)) {
                         rs = std::clamp<float>(gj["presets"][pr].value("render_scale", 1.0f), 0.0625f, 1.0f);
@@ -644,7 +670,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         bool objectVelocity = true;
         try {
             {
-                nlohmann::json gj = loadMergedGraphicsRoot();
+                const nlohmann::json& gj = loadMergedGraphicsRoot();
                 const std::string& pr = graphicsPresetName();
                 if (gj.contains("presets") && gj["presets"].contains(pr)) {
                     mode = gj["presets"][pr].value("upscaler", mode);
@@ -668,10 +694,12 @@ bool Engine::init(int width, int height, const std::string& title) {
         GBuffer::setVelocityEnabled(fsrActive() && objectVelocity);
     }
     if (!m_gbuffer.init(&m_vulkan, width, height)) return false;
+    bootMark("gbuffer");
     if (!m_cameraMotion.init(&m_vulkan, width, height)) return false;
     m_cameraMotion.bindDepth(m_gbuffer.depthView());
     m_cameraMotion.bindObjectVelocity(m_gbuffer.velocityView());
     if (!m_deferredLighting.init(&m_vulkan, &m_gbuffer, &m_bindless, width, height)) return false;
+    bootMark("deferred");
     if (std::getenv("ERUPTION_TEST_FORCE_LEGACY") != nullptr) {
         m_deferredLighting.setUsePbr(false);
     }
@@ -725,7 +753,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     } else {
         try {
             {
-                nlohmann::json gj = loadMergedGraphicsRoot();
+                const nlohmann::json& gj = loadMergedGraphicsRoot();
                 // Respeita o override de preset dos testes: sem isto o
                 // post_scale sempre vinha do preset gravado no JSON, e
                 // ERUPTION_TEST_GRAPHICS_PRESET=low nao mudava nada.
@@ -741,6 +769,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     uint32_t postH = std::max(64u, static_cast<uint32_t>(height * m_postScale));
     if (m_upscalerMode == UpscalerMode::FsrBeforePost) { postW = displayExt.width; postH = displayExt.height; }
     if (!m_postProcessor.init(&m_vulkan, postW, postH)) return false;
+    bootMark("post");
     // Modo 0 ate' o preset ser lido (applyGraphicsPreset chama setMode).
     if (!m_volumetric.init(&m_vulkan, static_cast<uint32_t>(width), static_cast<uint32_t>(height), 0))
         ERUPTION_LOG_WARN("Luz volumetrica: pipelines nao criadas, efeito desligado");
@@ -810,8 +839,12 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_mipmapMenu.loadConfig();
     m_waterMenu.loadConfig();
     if (!m_terrainRenderer.init(&m_vulkan, &m_bindless)) return false;
+    bootMark("terrain");
     m_terrainRenderer.setMipmapsEnabled(m_mipmapMenu.config.enabled, m_mipmapMenu.config.mode);
+    // Chao assado antes da pipeline dos modelos (nasce em setFrameUboSet): depois dela, refazia tudo.
+    applyGroundBake(presetObject(graphicsPresetName()));
     if (!m_modelRenderer.init(&m_vulkan, &m_bindless)) return false;
+    bootMark("model");
     m_modelRenderer.setMipmapsEnabled(m_mipmapMenu.config.enabled);
     m_modelRenderer.setTextureResolver([this](const std::string& path) {
         return this->resolveModelTexture(path);
@@ -1029,6 +1062,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         return this->resolveModelMesh(legacyModelPath, nodeIdx, vertices, indices);
     });
     if (!m_spriteRenderer.init(&m_vulkan, &m_gbuffer, &m_bindless)) return false;
+    bootMark("  sprites: SpriteRenderer");
     if (fsrActive()) {
         const char* sl = std::getenv("ERUPTION_SPRITE_LAYER");
         if (!(sl && sl[0] == '0')) {
@@ -1042,14 +1076,12 @@ bool Engine::init(int width, int height, const std::string& title) {
     // so their fragment shaders can access camera position, time and POM params.
     m_modelRenderer.setFrameUboSet(m_spriteRenderer.frameUboLayout(), m_spriteRenderer.frameUboSet());
     m_terrainRenderer.setFrameUboSet(m_spriteRenderer.frameUboLayout(), m_spriteRenderer.frameUboSet());
+    bootMark("  sprites: pipelines modelo/terreno");
     m_spriteSystem.init(&m_vulkan, &m_spriteRenderer);
-    // Popup de preview de textura em esfera (F1 -> Object Manager ->
-    // Textures) - ver debug/SpherePreview.hpp. Mesmo FrameUBO compartilhado
-    // acima, so' que aqui e' pra' pegar sol/tempo pro fragment PROPRIO do
-    // popup (nao model.frag, que escreve no G-buffer da cena principal).
-    if (!m_spherePreview.init(&m_vulkan, &m_bindless, m_spriteRenderer.frameUboLayout(), m_spriteRenderer.frameUboSet())) {
-        ERUPTION_LOG_WARN("[SPHEREPREVIEW] falhou ao inicializar - popup de preview ficara indisponivel.");
-    }
+    bootMark("sprites+ubo");
+    // Popup de preview de textura em esfera (F1 -> Object Manager -> Textures): so' sob demanda
+    // (ensureSpherePreview). No jogo ele nunca abre, e criar o alvo 384x384 e a pipeline no arranque
+    // custava tempo de carga no celular.
     if (!m_vfx.init(vfxInitInfo())) ERUPTION_LOG_WARN("[VFX] indisponivel: efeitos de particula desligados.");
     else {
         m_vfx.resize(renderExtent().width, renderExtent().height);
@@ -1058,11 +1090,13 @@ bool Engine::init(int width, int height, const std::string& title) {
     }
 
     presentLoadingScreen("", "Loading Configuration", 0.3f, true);
+    bootMark("vfx");
     // Shadow settings load BEFORE ShadowRenderer::init so atlas_size from
     // data/shadows.json decides the atlas allocation.
     m_shadowConfig.load("data/shadows.json");
     m_shadowRenderer.settings().loadFromJson(m_shadowConfig.root());
     if (!m_shadowRenderer.init(&m_vulkan, &m_bindless)) return false;
+    bootMark("shadow");
     // Particulas de malha fazem sombra nas duas cascatas de perto (nas de
     // longe uma pedra de palmo nao chega a um texel).
     m_shadowRenderer.setExtraCasters([this](VkCommandBuffer cmd, const Mat4& m, uint32_t cascade) {
@@ -1095,6 +1129,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_graphicsConfig.load("data/graphics.json");
     mergeProjectGraphics(m_graphicsConfig.root());
     applyGraphicsPreset();
+    bootMark("preset");
     // Respect postprocess.json for DoF/Tilt-Shift; users can toggle it via the
     // effects UI or config file instead of having it forced on at startup.
     // m_postSettings.enableDoF = true;
@@ -1196,6 +1231,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_skybox.loadConfig(skyConfig);
     // SONDA DE CEU (G36): cubemap do ceu -> SH9 + mips para o ambiente.
     if (!m_skyProbe.init(&m_vulkan, 32)) return false;
+    bootMark("sky");
     m_deferredLighting.setSkyProbe(m_skyProbe.cubeView(), m_skyProbe.sampler(), m_skyProbe.shBuffer(),
                                    m_skyProbe.shBufferSize(), m_skyProbe.mipCount());
     // PROBES DE IRRADIANCIA (G38): fallback 1x1x1 ate' o primeiro mapa bakear.
@@ -1253,6 +1289,7 @@ bool Engine::init(int width, int height, const std::string& title) {
 
         m_cloudLayersEnabled = cloudCfg.enabled;
         if (!m_cloudLayerRenderer.init(&m_vulkan, width, height, cloudCfg)) return false;
+    bootMark("nuvens");
         // cloudAmount thresholds the coverage texture on the CPU; the shaders read
         // the thresholded result directly. Regeneration is triggered from the UI
         // when the slider is released to avoid per-frame stalls.
@@ -1291,6 +1328,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     }
     if (!m_water.init(&m_vulkan, &m_bindless)) return false;
     m_waterReflection.init(&m_vulkan, &m_bindless);
+    bootMark("agua");
     m_water.setSkyTexture(m_skybox.outputView(), m_skybox.outputSampler());
     if (!m_debugLineRenderer.init(&m_vulkan)) return false;
     if (!m_overlayLineRenderer.init(&m_vulkan)) return false;
@@ -1334,6 +1372,7 @@ bool Engine::init(int width, int height, const std::string& title) {
 
     m_mapLoader = std::make_unique<MapLoader>();
     populateMaps();
+    bootMark("mapas");
 
     JobSystem::instance().init();
     initMinimap();
@@ -1446,6 +1485,7 @@ bool Engine::init(int width, int height, const std::string& title) {
         if (m_renderEffects.size() > 7) m_renderEffects[7]->setEnabled(false); // Water
     }
 
+    bootMark("fim");
     m_initialized = true;
     m_running = true;
 
@@ -2814,7 +2854,7 @@ static void envOverrideBool(const char* name, bool& out) {
 // "gpu" aparece no nome do aparelho ("*" casa com qualquer um).
 const std::string& Engine::graphicsPresetName() {
     if (!m_graphicsPreset.empty()) return m_graphicsPreset;
-    json gj = loadMergedGraphicsRoot();
+    const json& gj = loadMergedGraphicsRoot();
     std::string name = gj.is_object() ? gj.value("preset", "high") : "high";
     if (const char* e = std::getenv("ERUPTION_TEST_GRAPHICS_PRESET"); e && *e) name = e;
     if (name == "auto") {
@@ -2931,6 +2971,39 @@ static void applyPresetOverrides(json& preset) {
         preset[key] = json::parse(value, nullptr, false).is_discarded() ? json(value) : json::parse(value);
         ERUPTION_LOG_WARN("[GRAPHICS] preset: %s = %s (ERUPTION_TEST_PRESET_SET)", key.c_str(), value.c_str());
     }
+}
+
+// Chao assado do preset (ver o comentario abaixo). Separado de applyGraphicsPreset para o init poder
+// aplicar ANTES de a pipeline dos modelos nascer: ligar o assado depois a refazia inteira (0,6 s no
+// PowerVR GE8320, o MODEL_MIN aparecia duas vezes no log).
+void Engine::applyGroundBake(const json& p) {
+    // Chao assado (ModelRenderer::setGroundBake): so' com ground_shader_min (shader_lite). ground_bake_px = lado da imagem, ground_bake_tile_px = pixels
+    // assados por quadro. ERUPTION_TEST_GROUND_BAKE=0/1 sobrepoe o preset.
+    // Nos presets mobile_*: 1048576 (2048 px em 4 quadros). No PowerVR GE8320 o assado terminou 1,5 s depois
+    // dos objetos, contra 8,7 s com 65536, sem piorar o pior quadro da abertura (172 contra 167 ms).
+    bool groundBake = p.value("ground_bake", false);
+    if (const char* g = std::getenv("ERUPTION_TEST_GROUND_BAKE")) groundBake = std::atoi(g) != 0;
+    // O assado reproduz o albedo do GROUND_MIN (base + 2 camadas de maior peso, normal do vertice):
+    // sem ground_shader_min o chao de hoje tem mais camadas e normal map, e assar mudaria o visual.
+    if (groundBake && !m_vulkan.groundShaderMin()) {
+        ERUPTION_LOG_WARN("ground_bake ignorado: o preset nao liga ground_shader_min");
+        groundBake = false;
+    }
+    m_modelRenderer.setGroundBake(groundBake, static_cast<uint32_t>(std::max(256, p.value("ground_bake_px", 2048))),
+                                  static_cast<uint32_t>(std::max(4096, p.value("ground_bake_tile_px", 65536))));
+}
+
+// Cria o popup de preview de textura (debug/SpherePreview.hpp) na primeira vez que alguem o usa. Usa o
+// mesmo FrameUBO compartilhado do SpriteRenderer, so' para pegar sol/tempo no fragment proprio do popup
+// (nao model.frag, que escreve no G-buffer da cena principal).
+bool Engine::ensureSpherePreview() {
+    if (m_spherePreviewTried) return m_spherePreview.ready();
+    m_spherePreviewTried = true;
+    if (!m_spherePreview.init(&m_vulkan, &m_bindless, m_spriteRenderer.frameUboLayout(), m_spriteRenderer.frameUboSet())) {
+        ERUPTION_LOG_WARN("[SPHEREPREVIEW] falhou ao inicializar - popup de preview ficara indisponivel.");
+        return false;
+    }
+    return true;
 }
 
 const json* Engine::activeGraphicsPreset() {
@@ -3594,20 +3667,7 @@ void Engine::applyGraphicsPreset() {
     float groundLodPx = std::max(0.0f, p.value("ground_lod_px", 0.0f));
     if (const char* g = std::getenv("ERUPTION_TEST_GROUND_LOD_PX")) groundLodPx = std::max(0.0f, std::strtof(g, nullptr));
     m_modelRenderer.setGroundLodPx(groundLodPx);
-    // Chao assado (ModelRenderer::setGroundBake): so' com ground_shader_min (shader_lite). ground_bake_px = lado da imagem, ground_bake_tile_px = pixels
-    // assados por quadro. ERUPTION_TEST_GROUND_BAKE=0/1 sobrepoe o preset.
-    // Nos presets mobile_*: 1048576 (2048 px em 4 quadros). No PowerVR GE8320 o assado terminou 1,5 s depois
-    // dos objetos, contra 8,7 s com 65536, sem piorar o pior quadro da abertura (172 contra 167 ms).
-    bool groundBake = p.value("ground_bake", false);
-    if (const char* g = std::getenv("ERUPTION_TEST_GROUND_BAKE")) groundBake = std::atoi(g) != 0;
-    // O assado reproduz o albedo do GROUND_MIN (base + 2 camadas de maior peso, normal do vertice):
-    // sem ground_shader_min o chao de hoje tem mais camadas e normal map, e assar mudaria o visual.
-    if (groundBake && !m_vulkan.groundShaderMin()) {
-        ERUPTION_LOG_WARN("ground_bake ignorado: o preset nao liga ground_shader_min");
-        groundBake = false;
-    }
-    m_modelRenderer.setGroundBake(groundBake, static_cast<uint32_t>(std::max(256, p.value("ground_bake_px", 2048))),
-                                  static_cast<uint32_t>(std::max(4096, p.value("ground_bake_tile_px", 65536))));
+    applyGroundBake(p);
     // Nivel do caster de sombra (ModelRenderer::setShadowLodView): 0 = LOD fixo de
     // sombra, 1 = o da camera para o objeto, 2 = pelo tamanho em texels da cascata.
     // ERUPTION_TEST_SHADOW_LOD_VIEW=<0|1|2> sobrepoe o preset.
@@ -3656,9 +3716,8 @@ void Engine::applyGraphicsPreset() {
     // (phones: 30, so the GPU rests between frames instead of heating up).
     m_fpsCap = std::clamp<int>(p.value("fps_cap", root.value("fps_cap", m_fpsCap)), 0, 1000);
     platform::setFrameRateHint(m_fpsCap);
-    const std::string pm = root.value("present_mode", "auto");
-    const bool wantFifo = (pm == "fifo" || pm == "vsync");
-    const bool wantImmediate = (pm == "immediate");
+    bool wantFifo = false, wantImmediate = false;
+    presentPreferenceFromRoot(root, wantFifo, wantImmediate);
     if (m_vulkan.setPresentPreference(wantFifo, wantImmediate)) {
         m_vulkan.recreateSwapchain();
     }
@@ -3942,7 +4001,9 @@ void Engine::initImGui() {
         io.Fonts->AddFontDefault(&bigCfg);
     }
     const auto buildStart = std::chrono::steady_clock::now();
+    bootMark("  imgui: pool/contexto");
     io.Fonts->Build();
+    bootMark("  imgui: atlas de fontes");
     // Atlas da fonte do projeto: com o japones e' o que pesa no inicio e na
     // memoria do celular, entao sai no log de toda partida.
     if (gameFont)
@@ -3961,6 +4022,7 @@ void Engine::initImGui() {
     initInfo.RenderPass = vkc::compatibleRenderPass({m_vulkan.swapFormat()}, VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED);
     initInfo.Subpass = 0;
     ImGui_ImplVulkan_Init(&initInfo);
+    bootMark("  imgui: backend");
 #endif
 }
 

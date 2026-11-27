@@ -268,6 +268,7 @@ void Engine::openEmbeddedPreview(const std::string& key, const std::string& imag
     if (!img[1].empty())
         for (int c = 0; c < 4; ++c) upload(2 + c, channelGray(img[1], c), w[1], h[1]);
 
+    ensureSpherePreview();
     const PbrTextureSlots pbr = m_modelRenderer.pbrForTexSlot(slot);
     m_spherePreview.setMaterial(slot, pbr.mrahw.index, 0.0f, pbr.normal.index);
     m_spherePreview.setMaterialLabel(key);

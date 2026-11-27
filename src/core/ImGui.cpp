@@ -2033,6 +2033,7 @@ void Engine::renderImGui() {
                                 // mesmo dado que o mundo. dispScale 1.0 fixo: sem
                                 // distincao por categoria aqui, so' no chao de
                                 // verdade (ModelRenderer.cpp).
+                                ensureSpherePreview();
                                 {
                                     const PbrTextureSlots pbr = m_modelRenderer.pbrForTexSlot(slot);
                                     m_spherePreview.setMaterial(slot, pbr.mrahw.index, 1.0f, pbr.normal.index);

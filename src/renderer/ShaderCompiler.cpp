@@ -1,5 +1,8 @@
 #include "renderer/ShaderCompiler.hpp"
 #include "core/Logger.hpp"
+#include "utils/VkTrace.hpp"
+
+#include <atomic>
 
 #include <cstdio>
 #include <cstdlib>
@@ -36,6 +39,7 @@ std::vector<uint32_t> ShaderCompiler::loadSPIRV(const std::string& filepath) {
 }
 
 std::vector<uint32_t> ShaderCompiler::loadSPIRVExact(const std::string& filepath, bool quiet) {
+    ERUPTION_BOOT_SCOPE(SpvFile);
     // Try multiple paths: build/shaders/<subdir>/<file>, build/shaders/<file>, build/<filepath>, <filepath>
     size_t lastSlash = filepath.find_last_of("/\\");
     std::string filename = (lastSlash != std::string::npos) ? filepath.substr(lastSlash + 1) : filepath;
@@ -65,13 +69,25 @@ std::vector<uint32_t> ShaderCompiler::loadSPIRVExact(const std::string& filepath
         filepath
     };
 
+    // Quase todo shader vem do mesmo prefixo ("shaders/"): tenta primeiro o que deu certo da ultima vez. Antes
+    // cada shader gastava 4 a 5 aberturas que falhavam (build/..., build/shaders/...) ate' achar o arquivo, e
+    // com o .nb.spv ausente (ele e' tentado antes) as 15 falhavam: centenas de chamadas ao sistema no init.
+    static std::atomic<int> s_lastHit{-1};
     std::ifstream file;
     std::string tryPath;
-    for (const auto& p : tryPaths) {
-        file = std::ifstream(p, std::ios::ate | std::ios::binary);
-        if (file.is_open()) {
-            tryPath = p;
-            break;
+    const int hint = s_lastHit.load(std::memory_order_relaxed);
+    if (hint >= 0 && hint < static_cast<int>(tryPaths.size())) {
+        file = std::ifstream(tryPaths[hint], std::ios::ate | std::ios::binary);
+        if (file.is_open()) tryPath = tryPaths[hint];
+    }
+    if (!file.is_open()) {
+        for (size_t i = 0; i < tryPaths.size(); ++i) {
+            file = std::ifstream(tryPaths[i], std::ios::ate | std::ios::binary);
+            if (file.is_open()) {
+                tryPath = tryPaths[i];
+                s_lastHit.store(static_cast<int>(i), std::memory_order_relaxed);
+                break;
+            }
         }
     }
     if (!file.is_open()) {

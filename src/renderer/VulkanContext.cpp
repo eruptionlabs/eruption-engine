@@ -11,6 +11,8 @@
 #include "core/Logger.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/BandwidthMeter.hpp"
+#include "utils/BootMark.hpp"
+#include "utils/VkTrace.hpp"
 #include <nlohmann/json.hpp>
 #include <map>
 
@@ -22,6 +24,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <set>
 #include <utility>
@@ -36,6 +39,7 @@ static const char* storageLabel(const VkFormatProperties& props) {
 bool VulkanContext::init(GLFWwindow* window) {
     m_window = window;
     if (!createInstance()) return false;
+    bootMark("  vk: instancia");
     if (!setupDebugMessenger()) return false;
     if (!createSurface(window)) return false;
 #ifdef __ANDROID__
@@ -44,15 +48,20 @@ bool VulkanContext::init(GLFWwindow* window) {
         [](void* u) { return static_cast<VulkanContext*>(u)->restoreSurface() ? 1 : 0; }, this);
 #endif
     if (!pickPhysicalDevice()) return false;
+    bootMark("  vk: superficie/GPU");
     if (!createLogicalDevice()) return false;
+    bootMark("  vk: dispositivo");
     if (!createSwapchain()) return false;
     if (!createImageViews()) return false;
+    bootMark("  vk: swapchain");
     if (!createAllocator()) return false;
     if (!createSyncObjects()) return false;
     if (!createCommandPools()) return false;
     if (!createTimestampPools()) return false;
     if (!createPipelineStatsPools()) return false;
+    bootMark("  vk: alocador/sync/pools");
     createPipelineCache();
+    bootMark("  vk: cache de pipelines");
     markPhase("idle");
 #if !defined(__EMSCRIPTEN__) // navegador sem threads (v1) e sem GPU para travar
     m_watchdog = std::thread(&VulkanContext::watchdogLoop, this);
@@ -66,15 +75,60 @@ VkPipelineCache VulkanContext::s_pipelineCache = VK_NULL_HANDLE;
 
 static const char* kPipelineCachePath = ".cache/eruption/pipeline_cache.bin";
 
-void VulkanContext::createPipelineCache() {
-    std::vector<char> initial;
+// Cache de pipelines em disco: um unico arquivo que o driver so' faz crescer (cada pipeline nova de cada
+// versao dos shaders entra e nada sai). Num celular onde o pacote foi reinstalado dezenas de vezes ele chegou
+// a 50 MB, e lele-lo + o driver digeri-lo custava ~0,4 s em TODA abertura, contra ~55 ms para criar todas as
+// pipelines com o cache valendo. Dois limites seguram isso: (1) o carimbo do pacote (.stamp, muda a cada APK;
+// so' existe no Android) fica ao lado do cache, e cache de outro pacote e' descartado: os shaders mudaram e as
+// entradas velhas nunca mais acertam; (2) teto de tamanho, para o pior caso sem carimbo.
+static const char* kPipelineCacheStampPath = ".cache/eruption/pipeline_cache.stamp";
+static constexpr size_t kPipelineCacheMaxBytes = 96u * 1024u * 1024u;
+
+static std::string readSmallFile(const char* path) {
+    std::ifstream in(path, std::ios::binary);
+    std::string text;
+    std::getline(in, text, '\0');
+    return text;
+}
+
+static std::vector<char> readPipelineCacheFile() {
+    std::vector<char> data;
     std::ifstream in(kPipelineCachePath, std::ios::binary | std::ios::ate);
-    if (in.is_open()) {
-        const auto size = static_cast<size_t>(in.tellg());
-        if (size > 32) { // VkPipelineCacheHeaderVersionOne is 32 bytes
-            initial.resize(size);
-            in.seekg(0);
-            in.read(initial.data(), size);
+    if (!in.is_open()) return data;
+    const auto size = static_cast<size_t>(in.tellg());
+    if (size <= 32) return data; // VkPipelineCacheHeaderVersionOne is 32 bytes
+    data.resize(size);
+    in.seekg(0);
+    in.read(data.data(), static_cast<std::streamsize>(size));
+    return data;
+}
+
+// A leitura do arquivo (dezenas de MB na flash do celular) corre em outra thread enquanto a janela, a
+// instancia e o dispositivo Vulkan nascem; createPipelineCache recolhe o resultado.
+static std::future<std::vector<char>> s_cachePrefetch;
+
+void VulkanContext::prefetchPipelineCache() {
+    if (s_cachePrefetch.valid()) return;
+    s_cachePrefetch = std::async(std::launch::async, readPipelineCacheFile);
+}
+
+void VulkanContext::createPipelineCache() {
+#if ERUPTION_DEV
+    const auto readStart = std::chrono::steady_clock::now();
+#endif
+    std::vector<char> initial = s_cachePrefetch.valid() ? s_cachePrefetch.get() : readPipelineCacheFile();
+#if ERUPTION_DEV
+    const double readMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - readStart).count();
+#endif
+    if (!initial.empty()) {
+        const std::string stampNow = readSmallFile(".stamp");
+        if (!stampNow.empty() && readSmallFile(kPipelineCacheStampPath) != stampNow) {
+            ERUPTION_LOG_INFO("Pipeline cache on disk is from another package build, starting fresh");
+            initial.clear();
+        } else if (initial.size() > kPipelineCacheMaxBytes) {
+            ERUPTION_LOG_WARN("Pipeline cache on disk has %zu bytes (limit %zu), starting fresh", initial.size(),
+                              kPipelineCacheMaxBytes);
+            initial.clear();
         }
     }
     // Only feed data written by this exact GPU/driver back to the driver.
@@ -106,6 +160,11 @@ void VulkanContext::createPipelineCache() {
     if (!initial.empty() && m_pipelineCache != VK_NULL_HANDLE)
         vkGetPipelineCacheData(m_device, m_pipelineCache, &m_pipelineCacheSavedBytes, nullptr);
     ERUPTION_LOG_INFO("Pipeline cache ready (%zu bytes warm)", initial.size());
+#if ERUPTION_DEV
+    // O log do celular so' mostra WARN: sem isto nao da' para saber se o cache em disco foi lido.
+    ERUPTION_LOG_WARN("[BOOT] cache de pipelines: %zu bytes lidos de %s (leitura %.1f ms)", initial.size(), kPipelineCachePath,
+                      readMs);
+#endif
 }
 
 void VulkanContext::destroyPipelineCache() {
@@ -125,6 +184,9 @@ void VulkanContext::savePipelineCache() {
         // (.emap) sendo lido em sequencia no mesmo HDD (NTFS via FUSE, um
         // pedido por vez), segurava a troca de um mapa de teste 24 s com o disco frio.
         if (size == m_pipelineCacheSavedBytes) return;
+#if ERUPTION_DEV
+        const auto saveStart = std::chrono::steady_clock::now();
+#endif
         std::vector<char> blob(size);
         if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, blob.data()) == VK_SUCCESS) {
             std::error_code ec;
@@ -139,7 +201,17 @@ void VulkanContext::savePipelineCache() {
             }
             if (ok) std::filesystem::rename(tmp, kPipelineCachePath, ec);
             if (!ok || ec) std::filesystem::remove(tmp, ec);
-            else m_pipelineCacheSavedBytes = size;
+            else {
+                m_pipelineCacheSavedBytes = size;
+                // Carimbo do pacote que gerou este cache (so' no Android; ver createPipelineCache).
+                if (const std::string stamp = readSmallFile(".stamp"); !stamp.empty())
+                    std::ofstream(kPipelineCacheStampPath, std::ios::binary | std::ios::trunc) << stamp;
+            }
+#if ERUPTION_DEV
+            ERUPTION_LOG_WARN("[BOOT] cache de pipelines: %zu bytes gravados em %.1f ms (%s)", size,
+                              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - saveStart).count(),
+                              ok && !ec ? "ok" : "FALHOU");
+#endif
         }
     }
 }
@@ -581,6 +653,7 @@ static const char* baseName(const char* path) {
 }
 
 void VulkanContext::immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& fn, const char* file, int line) {
+    ERUPTION_BOOT_SCOPE(Upload); // inclui o submit e a espera da cerca contados a parte
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -1292,8 +1365,19 @@ static VKAPI_ATTR void VKAPI_CALL auditDestroyImage(VkDevice device, VkImage ima
     vkDestroyImage(device, image, alloc);
 }
 
+#if ERUPTION_DEV
+// O VMA chama vkAllocateMemory por ponteiro (nao passa pelo medidor do VkTrace): este intermediario o poe de volta.
+static VKAPI_ATTR VkResult VKAPI_CALL tracedAllocateMemory(VkDevice device, const VkMemoryAllocateInfo* info,
+                                                           const VkAllocationCallbacks* alloc, VkDeviceMemory* memory) {
+    return vkAllocateMemory(device, info, alloc, memory);
+}
+#endif
+
 bool VulkanContext::createAllocator() {
     VmaVulkanFunctions vulkanFunctions = {};
+#if ERUPTION_DEV
+    vulkanFunctions.vkAllocateMemory = &tracedAllocateMemory;
+#endif
     vulkanFunctions.vkGetInstanceProcAddr = &vkGetInstanceProcAddr;
     vulkanFunctions.vkGetDeviceProcAddr = &vkGetDeviceProcAddr;
     vulkanFunctions.vkCreateImage = &auditCreateImage;

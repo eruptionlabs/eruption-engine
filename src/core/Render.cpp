@@ -1402,6 +1402,7 @@ void Engine::render() {
                 if (path.find(kForcePreview) != std::string::npos) {
                     // pbrIndex do cache (so' leitura - upload no meio do frame
                     // quebrava o preview), dispScale 1.0 fixo.
+                    ensureSpherePreview();
                     {
                         const PbrTextureSlots pbr = m_modelRenderer.pbrForTexSlot(slot);
                         m_spherePreview.setMaterial(slot, pbr.mrahw.index, 1.0f, pbr.normal.index);

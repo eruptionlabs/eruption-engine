@@ -300,6 +300,8 @@ public:
     // Grava o cache de pipelines no disco. Também roda no shutdown, mas o
     // celular mata o app sem shutdown: o motor grava depois de cada carga.
     void savePipelineCache();
+    // Comeca a ler o cache de pipelines do disco numa thread; chamar o quanto antes (antes de init()).
+    static void prefetchPipelineCache();
     // Um immediateSubmit ou um frame está sendo gravado: desenhar outra tela
     // agora (barra de carregamento) misturaria os comandos.
     bool busyRecording() const { return m_inImmediateSubmit || m_isFrameRecording; }

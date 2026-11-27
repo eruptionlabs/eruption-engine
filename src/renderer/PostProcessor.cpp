@@ -1,3 +1,4 @@
+#include "utils/BootMark.hpp"
 #include <chrono>
 #include "renderer/PostProcessor.hpp"
 #include "renderer/CameraMotion.hpp"
@@ -109,6 +110,7 @@ bool PostProcessor::init(VulkanContext* ctx, uint32_t width, uint32_t height) {
         Logger::error("PostProcessor: failed to initialize WeatherRenderer");
         return false;
     }
+    bootMark("  post: clima");
 
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -127,12 +129,15 @@ bool PostProcessor::init(VulkanContext* ctx, uint32_t width, uint32_t height) {
     vkCreateSampler(m_ctx->device(), &samplerInfo, nullptr, &m_pointSampler);
 
     createImages();
+    bootMark("  post: imagens");
     createDescriptors();
     createWeatherUbo();
     createLensDropBuffer();
+    bootMark("  post: descritores/ubo");
     createLensDropCompute();
     createAutoExposure();
     createGradeLut();
+    bootMark("  post: compute/lut");
     createPipelines();
     return true;
 }

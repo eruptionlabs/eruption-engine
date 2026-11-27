@@ -26,8 +26,11 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <future>
 #include <string>
 #include <vector>
+
+#include "utils/VkTrace.hpp"
 
 namespace eruption {
 
@@ -61,12 +64,13 @@ void Engine::showShaderProgress() {
     static const bool kOff = std::getenv("ERUPTION_TEST_NO_SHADER_PROGRESS") != nullptr || fastLoadEnabled();
     if (kOff) return;
     const auto now = std::chrono::steady_clock::now();
-    // Com o logo na tela, 30 Hz: o halo pulsa num ciclo de 1 s. O intervalo
+    // No Engine::init (m_isInitialBoot) cada pipeline que acerta o cache era um redesenho (um por etapa, 15 a 35 ms
+    // cada no PC por causa do vsync, bem mais no celular) so' para animar a barra: 300 ms. Com o logo na tela, 30 Hz: o halo pulsa num ciclo de 1 s. O intervalo
     // nunca fica abaixo de 4x o custo do ultimo redesenho: onde apresentar e'
     // caro (xvfb, ~0,3 s por quadro) a tela gastava mais que a compilacao.
     static std::chrono::steady_clock::duration s_lastCost{};
     const auto interval = std::max<std::chrono::steady_clock::duration>(
-        std::chrono::milliseconds((m_isInitialBoot || s_bootSplash) ? 33 : 200), s_lastCost * 4);
+        std::chrono::milliseconds(m_isInitialBoot ? 300 : s_bootSplash ? 33 : 200), s_lastCost * 4);
     if (now - m_lastShaderProgress < interval) return;
     m_lastShaderProgress = now;
     // O total não é conhecido: a barra avança cada vez menos, sem passar da
@@ -80,6 +84,7 @@ void Engine::showShaderProgress() {
 }
 
 void Engine::presentLoadingScreen(const std::string& mapName, const std::string& task, float progress, bool clear) {
+    ERUPTION_BOOT_SCOPE(Redraw);
     if (!m_drawingShaderProgress) {
         m_loadingMap = mapName;
         m_loadingTask = task;
@@ -316,6 +321,110 @@ void Engine::renderLoadingProgress() {
 
 
 
+// Parte de CPU do splash (PNG do logo -> silhueta e halo borrado). Sao ~35 milhoes de multiplicacoes dos dois
+// desfoques: 38 ms no PC e perto de 0,2 s no celular, na linha de frente da abertura. Nao depende de Vulkan,
+// entao corre numa thread desde o inicio do Engine::init e initSplashLogo so' recolhe o resultado.
+struct SplashPixels {
+    bool ok = false;
+    int w = 0, h = 0;
+    std::vector<unsigned char> silhouette; // w x h, RGBA
+    int gw = 0, gh = 0;
+    std::vector<unsigned char> glow; // gw x gh, RGBA
+};
+
+static SplashPixels buildSplashPixels() {
+    SplashPixels out;
+    int w, h, channels;
+    unsigned char* pixels = stbi_load("assets/icon/eruption_v3_512.png", &w, &h, &channels, STBI_rgb_alpha);
+    if (!pixels) return out;
+    std::vector<unsigned char>& silhouette_pixels = out.silhouette;
+    silhouette_pixels.assign(static_cast<size_t>(w) * h * 4, 0);
+    for (int i = 0; i < w * h; ++i) {
+        if (pixels[i * 4 + 3] > 20) {
+            silhouette_pixels[i * 4 + 0] = 255;
+            silhouette_pixels[i * 4 + 1] = 255;
+            silhouette_pixels[i * 4 + 2] = 255;
+            silhouette_pixels[i * 4 + 3] = 255;
+        }
+    }
+    stbi_image_free(pixels);
+    out.w = w;
+    out.h = h;
+    {
+        const int gw = w / 2 + 2 * kSplashGlowPad;
+        const int gh = h / 2 + 2 * kSplashGlowPad;
+        std::vector<float> mask(static_cast<size_t>(gw) * gh, 0.0f);
+        for (int y = 0; y < h / 2; ++y) {
+            for (int x = 0; x < w / 2; ++x) {
+                float acc = 0.0f;
+                for (int dy = 0; dy < 2; ++dy)
+                    for (int dx = 0; dx < 2; ++dx)
+                        acc += silhouette_pixels[(static_cast<size_t>(2 * y + dy) * w + (2 * x + dx)) * 4 + 3];
+                mask[static_cast<size_t>(y + kSplashGlowPad) * gw + (x + kSplashGlowPad)] = acc / (4.0f * 255.0f);
+            }
+        }
+
+        auto blur = [&](const std::vector<float>& in, float sigma) {
+            const int radius = static_cast<int>(std::ceil(sigma * 3.0f));
+            std::vector<float> kernel(2 * radius + 1);
+            float sum = 0.0f;
+            for (int i = -radius; i <= radius; ++i) {
+                kernel[i + radius] = std::exp(-static_cast<float>(i * i) / (2.0f * sigma * sigma));
+                sum += kernel[i + radius];
+            }
+            for (float& v : kernel) v /= sum;
+            // Fora da textura e' zero (a margem garante que nada se perde).
+            std::vector<float> tmp(in.size()), out(in.size());
+            for (int y = 0; y < gh; ++y)
+                for (int x = 0; x < gw; ++x) {
+                    float acc = 0.0f;
+                    for (int k = std::max(-radius, -x); k <= std::min(radius, gw - 1 - x); ++k)
+                        acc += in[static_cast<size_t>(y) * gw + (x + k)] * kernel[k + radius];
+                    tmp[static_cast<size_t>(y) * gw + x] = acc;
+                }
+            for (int y = 0; y < gh; ++y)
+                for (int x = 0; x < gw; ++x) {
+                    float acc = 0.0f;
+                    for (int k = std::max(-radius, -y); k <= std::min(radius, gh - 1 - y); ++k)
+                        acc += tmp[static_cast<size_t>(y + k) * gw + x] * kernel[k + radius];
+                    out[static_cast<size_t>(y) * gw + x] = acc;
+                }
+            return out;
+        };
+        const std::vector<float> tight = blur(mask, 5.0f);
+        const std::vector<float> wide = blur(mask, 18.0f);
+
+        std::vector<unsigned char> glow_pixels(static_cast<size_t>(gw) * gh * 4);
+        for (int i = 0; i < gw * gh; ++i) {
+            const float g = std::min(1.0f, 0.5f * tight[i] + 1.1f * wide[i]);
+            // Calor: 0 na ponta do halo, 1 colado no logo.
+            const float heat = std::clamp(g * 1.6f, 0.0f, 1.0f);
+            // Dither triangular de +-1 nivel (hash inteiro, estavel).
+            uint32_t hsh = static_cast<uint32_t>(i) * 2654435761u;
+            hsh ^= hsh >> 15; hsh *= 2246822519u; hsh ^= hsh >> 13;
+            const float dither = (static_cast<float>(hsh & 0xFFu) + static_cast<float>((hsh >> 8) & 0xFFu)) / 255.0f - 1.0f;
+            // Fora do halo fica zero exato: o dither nao suja o resto do quad.
+            const float a = g < 1.0f / 255.0f ? 0.0f : std::clamp(g * 255.0f + dither, 0.0f, 255.0f);
+            glow_pixels[i * 4 + 0] = 255;
+            glow_pixels[i * 4 + 1] = static_cast<unsigned char>(70.0f + 100.0f * heat);
+            glow_pixels[i * 4 + 2] = static_cast<unsigned char>(15.0f + 45.0f * heat * heat);
+            glow_pixels[i * 4 + 3] = static_cast<unsigned char>(a + 0.5f);
+        }
+
+        out.gw = gw;
+        out.gh = gh;
+        out.glow = std::move(glow_pixels);
+    }
+    out.ok = true;
+    return out;
+}
+
+static std::future<SplashPixels> s_splashPixels;
+
+void Engine::prefetchSplashPixels() {
+    if (!s_splashPixels.valid()) s_splashPixels = std::async(std::launch::async, buildSplashPixels);
+}
+
 void Engine::initSplashLogo() {
     s_splashStart = std::chrono::steady_clock::now();
     // Enquanto o logo estiver na tela, espera longa redesenha (o halo segue pulsando).
@@ -330,101 +439,14 @@ void Engine::initSplashLogo() {
         ERUPTION_LOG_ERROR("Failed to load splash logo assets/icon/eruption_v3_512.png");
     }
 
-    // 2. Create silhouette from main logo's pixels
-    int w, h, channels;
-    unsigned char* pixels = stbi_load("assets/icon/eruption_v3_512.png", &w, &h, &channels, STBI_rgb_alpha);
-    if (pixels) {
-        std::vector<unsigned char> silhouette_pixels(w * h * 4);
-        for (int i = 0; i < w * h; ++i) {
-            if (pixels[i * 4 + 3] > 20) {
-                silhouette_pixels[i * 4 + 0] = 255;
-                silhouette_pixels[i * 4 + 1] = 255;
-                silhouette_pixels[i * 4 + 2] = 255;
-                silhouette_pixels[i * 4 + 3] = 255;
-            } else {
-                silhouette_pixels[i * 4 + 0] = 0;
-                silhouette_pixels[i * 4 + 1] = 0;
-                silhouette_pixels[i * 4 + 2] = 0;
-                silhouette_pixels[i * 4 + 3] = 0;
-            }
-        }
-        stbi_image_free(pixels);
-
-        if (createTextureFromPixels(silhouette_pixels.data(), w, h, m_splashSilhouette)) {
+    // 2. Silhueta e halo do logo (CPU, ja' prontos: ver buildSplashPixels).
+    SplashPixels splash = s_splashPixels.valid() ? s_splashPixels.get() : buildSplashPixels();
+    if (splash.ok) {
+        if (createTextureFromPixels(splash.silhouette.data(), splash.w, splash.h, m_splashSilhouette)) {
             m_splashSilhouetteDescriptorSet = ImGui_ImplVulkan_AddTexture(m_defaultSampler, m_splashSilhouette.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
-
-        // 2b. Halo do logo. O logo aparece a 0.5x, entao a silhueta desce a
-        // meia resolucao (media 2x2, ja' com borda suave) e ganha margem: o
-        // halo morre dentro da textura, sem corte reto na borda do quad.
-        // Duas larguras de desfoque: uma justa (calor colado ao logo) e uma
-        // larga (o halo). A cor vai pre-assada, laranja claro perto do logo e
-        // vermelho na ponta, e o alpha leva dither para nao bandear.
-        // O desenho so' anima a intensidade (renderLoadingUI).
-        {
-            const int gw = w / 2 + 2 * kSplashGlowPad;
-            const int gh = h / 2 + 2 * kSplashGlowPad;
-            std::vector<float> mask(static_cast<size_t>(gw) * gh, 0.0f);
-            for (int y = 0; y < h / 2; ++y) {
-                for (int x = 0; x < w / 2; ++x) {
-                    float acc = 0.0f;
-                    for (int dy = 0; dy < 2; ++dy)
-                        for (int dx = 0; dx < 2; ++dx)
-                            acc += silhouette_pixels[(static_cast<size_t>(2 * y + dy) * w + (2 * x + dx)) * 4 + 3];
-                    mask[static_cast<size_t>(y + kSplashGlowPad) * gw + (x + kSplashGlowPad)] = acc / (4.0f * 255.0f);
-                }
-            }
-
-            auto blur = [&](const std::vector<float>& in, float sigma) {
-                const int radius = static_cast<int>(std::ceil(sigma * 3.0f));
-                std::vector<float> kernel(2 * radius + 1);
-                float sum = 0.0f;
-                for (int i = -radius; i <= radius; ++i) {
-                    kernel[i + radius] = std::exp(-static_cast<float>(i * i) / (2.0f * sigma * sigma));
-                    sum += kernel[i + radius];
-                }
-                for (float& v : kernel) v /= sum;
-                // Fora da textura e' zero (a margem garante que nada se perde).
-                std::vector<float> tmp(in.size()), out(in.size());
-                for (int y = 0; y < gh; ++y)
-                    for (int x = 0; x < gw; ++x) {
-                        float acc = 0.0f;
-                        for (int k = std::max(-radius, -x); k <= std::min(radius, gw - 1 - x); ++k)
-                            acc += in[static_cast<size_t>(y) * gw + (x + k)] * kernel[k + radius];
-                        tmp[static_cast<size_t>(y) * gw + x] = acc;
-                    }
-                for (int y = 0; y < gh; ++y)
-                    for (int x = 0; x < gw; ++x) {
-                        float acc = 0.0f;
-                        for (int k = std::max(-radius, -y); k <= std::min(radius, gh - 1 - y); ++k)
-                            acc += tmp[static_cast<size_t>(y + k) * gw + x] * kernel[k + radius];
-                        out[static_cast<size_t>(y) * gw + x] = acc;
-                    }
-                return out;
-            };
-            const std::vector<float> tight = blur(mask, 5.0f);
-            const std::vector<float> wide = blur(mask, 18.0f);
-
-            std::vector<unsigned char> glow_pixels(static_cast<size_t>(gw) * gh * 4);
-            for (int i = 0; i < gw * gh; ++i) {
-                const float g = std::min(1.0f, 0.5f * tight[i] + 1.1f * wide[i]);
-                // Calor: 0 na ponta do halo, 1 colado no logo.
-                const float heat = std::clamp(g * 1.6f, 0.0f, 1.0f);
-                // Dither triangular de +-1 nivel (hash inteiro, estavel).
-                uint32_t hsh = static_cast<uint32_t>(i) * 2654435761u;
-                hsh ^= hsh >> 15; hsh *= 2246822519u; hsh ^= hsh >> 13;
-                const float dither = (static_cast<float>(hsh & 0xFFu) + static_cast<float>((hsh >> 8) & 0xFFu)) / 255.0f - 1.0f;
-                // Fora do halo fica zero exato: o dither nao suja o resto do quad.
-                const float a = g < 1.0f / 255.0f ? 0.0f : std::clamp(g * 255.0f + dither, 0.0f, 255.0f);
-                glow_pixels[i * 4 + 0] = 255;
-                glow_pixels[i * 4 + 1] = static_cast<unsigned char>(70.0f + 100.0f * heat);
-                glow_pixels[i * 4 + 2] = static_cast<unsigned char>(15.0f + 45.0f * heat * heat);
-                glow_pixels[i * 4 + 3] = static_cast<unsigned char>(a + 0.5f);
-            }
-
-            if (createTextureFromPixels(glow_pixels.data(), gw, gh, m_splashGlow)) {
-                m_splashGlowDescriptorSet = ImGui_ImplVulkan_AddTexture(m_defaultSampler, m_splashGlow.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            }
+        if (createTextureFromPixels(splash.glow.data(), splash.gw, splash.gh, m_splashGlow)) {
+            m_splashGlowDescriptorSet = ImGui_ImplVulkan_AddTexture(m_defaultSampler, m_splashGlow.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
     }
 

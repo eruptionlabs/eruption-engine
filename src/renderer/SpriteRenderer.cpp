@@ -1,3 +1,4 @@
+#include "utils/BootMark.hpp"
 #include "renderer/GBuffer.hpp"
 #include "renderer/SpriteRenderer.hpp"
 #include "renderer/LeanFormats.hpp"
@@ -21,15 +22,20 @@ bool SpriteRenderer::init(VulkanContext* ctx, GBuffer* gbuffer, BindlessDescript
 
     if (!createQuadBuffer()) return false;
     if (!createBuffers()) return false;
+    bootMark("  sprites: buffers");
     if (!createDescriptors()) return false;
+    bootMark("  sprites: descritores");
     if (!createPipeline()) return false;
+    bootMark("  sprites: pipeline");
     if (!createForwardPipeline()) return false;
     // Opcional: sem ele o reflexo espelhado da agua so' perde os sprites.
     if (!createMirrorPipeline()) ERUPTION_LOG_WARN("Sprite mirror pipeline unavailable: sprites will not reflect in the planar water pass");
+    bootMark("  sprites: forward/mirror");
     if (!createShadowPipeline()) return false;
     if (!createPlanarShadowPipeline()) return false;
     if (!createCircleShadowPipeline()) return false;
     if (!createRingPipeline()) return false;
+    bootMark("  sprites: sombras/anel");
 
     // Create palette sampler (Nearest)
     VkSamplerCreateInfo samplerInfo{};
