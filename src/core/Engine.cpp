@@ -3596,6 +3596,8 @@ void Engine::applyGraphicsPreset() {
     m_modelRenderer.setGroundLodPx(groundLodPx);
     // Chao assado (ModelRenderer::setGroundBake): so' com ground_shader_min (shader_lite). ground_bake_px = lado da imagem, ground_bake_tile_px = pixels
     // assados por quadro. ERUPTION_TEST_GROUND_BAKE=0/1 sobrepoe o preset.
+    // Nos presets mobile_*: 1048576 (2048 px em 4 quadros). No PowerVR GE8320 o assado terminou 1,5 s depois
+    // dos objetos, contra 8,7 s com 65536, sem piorar o pior quadro da abertura (172 contra 167 ms).
     bool groundBake = p.value("ground_bake", false);
     if (const char* g = std::getenv("ERUPTION_TEST_GROUND_BAKE")) groundBake = std::atoi(g) != 0;
     // O assado reproduz o albedo do GROUND_MIN (base + 2 camadas de maior peso, normal do vertice):

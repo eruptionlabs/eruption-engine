@@ -131,7 +131,7 @@
     "mobile_low": {
       "ground_bake": true,
       "ground_bake_px": 2048,
-      "ground_bake_tile_px": 65536,
+      "ground_bake_tile_px": 1048576,
       "post_halation": false,
       "post_grain": false,
       "post_bokeh_highlights": false,
@@ -246,7 +246,7 @@
     "mobile_legacy": {
       "ground_bake": true,
       "ground_bake_px": 2048,
-      "ground_bake_tile_px": 65536,
+      "ground_bake_tile_px": 1048576,
       "post_halation": false,
       "post_grain": false,
       "post_bokeh_highlights": false,
@@ -363,7 +363,7 @@
     "mobile_medium": {
       "ground_bake": true,
       "ground_bake_px": 4096,
-      "ground_bake_tile_px": 65536,
+      "ground_bake_tile_px": 1048576,
       "post_halation": false,
       "post_grain": true,
       "post_bokeh_highlights": false,
